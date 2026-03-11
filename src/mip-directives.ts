@@ -17,7 +17,14 @@ export {
   type MipDirectiveResult,
 } from "./mip-directives-core.js";
 
-export function processMipLoad(packageName: string): string[] {
+export function processMipLoad(
+  packageName: string,
+  _visited?: Set<string>
+): string[] {
+  const visited = _visited ?? new Set<string>();
+  if (visited.has(packageName)) return [];
+  visited.add(packageName);
+
   const mipDir = process.env.MIP_DIR || join(homedir(), ".mip");
   const pkgDir = join(mipDir, "packages", packageName);
   const loadScript = join(pkgDir, "load_package.m");
@@ -26,6 +33,28 @@ export function processMipLoad(packageName: string): string[] {
     throw new Error(
       `mip load ${packageName}: package not found (expected ${loadScript})`
     );
+  }
+
+  // Load dependencies first by reading mip.json
+  const allPaths: string[] = [];
+  const mipJsonPath = join(pkgDir, "mip.json");
+  if (existsSync(mipJsonPath)) {
+    try {
+      const mipJson = JSON.parse(readFileSync(mipJsonPath, "utf-8"));
+      const deps: string[] = mipJson.dependencies ?? [];
+      for (const dep of deps) {
+        const depPkgDir = join(mipDir, "packages", dep);
+        if (!existsSync(depPkgDir)) {
+          console.warn(
+            `Warning: dependency "${dep}" of "${packageName}" is not installed; skipping`
+          );
+          continue;
+        }
+        allPaths.push(...processMipLoad(dep, visited));
+      }
+    } catch {
+      // If mip.json is malformed, continue without dependencies
+    }
   }
 
   const source = readFileSync(loadScript, "utf-8");
@@ -70,5 +99,7 @@ export function processMipLoad(packageName: string): string[] {
 
   executeCode(source, { customBuiltins }, [], loadScript);
 
-  return collectedPaths;
+  // Dependencies first, then this package's paths
+  allPaths.push(...collectedPaths);
+  return allPaths;
 }
