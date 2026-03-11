@@ -218,13 +218,19 @@ export class StatementParser extends ClassParser {
     while (true) {
       if (this.consume(Token.LParen)) {
         const args: Expr[] = [];
+        const parenSave = this.pos;
+        let parenOk = true;
         if (!this.consume(Token.RParen)) {
           args.push(this.parseExpr());
           while (this.consume(Token.Comma)) {
             args.push(this.parseExpr());
           }
           if (!this.consume(Token.RParen)) {
-            throw this.errorWithExpected("expected ')' after indices", ")");
+            // Could be Name=Value syntax inside a function call, not
+            // a subscripted assignment.  Backtrack to let the expression
+            // parser handle it with Name=Value desugaring.
+            this.pos = save;
+            return null;
           }
         }
         const end = this.lastTokenEnd();
