@@ -503,7 +503,8 @@ export function ProjectListPage() {
               Get started
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-              Create a project to start writing and running code in your browser.
+              Create a project to start writing and running code in your
+              browser.
             </Typography>
             <Button
               variant="contained"

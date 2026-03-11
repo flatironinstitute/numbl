@@ -48,7 +48,7 @@
     "test:float64": "NUMBL_USE_FLOAT32=false vitest run",
     "test:coverage": "vitest run --coverage",
     "test:octave": "tsx test/octave-comparison.ts",
-    "test:lapack": "vitest run --config vitest.lapack.config.ts",
+    "test:lapack": "git submodule update --init --remote numbl_test_scripts && vitest run --config vitest.lapack.config.ts",
     "test:scripts": "git submodule update --init --remote numbl_test_scripts && bash numbl_test_scripts/run_all.sh",
     "prepublishOnly": "npm run build:cli && npm run build:plot-viewer",
     "prepare": "husky"
