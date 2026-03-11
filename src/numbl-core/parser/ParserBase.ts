@@ -4,7 +4,13 @@
  */
 
 import { Token, KEYWORDS } from "../lexer/index.js";
-import { Span, TokenInfo, Expr, BinaryOperation, UnaryOperation } from "./types.js";
+import {
+  Span,
+  TokenInfo,
+  Expr,
+  BinaryOperation,
+  UnaryOperation,
+} from "./types.js";
 import { SyntaxError } from "./errors.js";
 import { offsetToLine } from "../runtime/index.js";
 
@@ -101,7 +107,11 @@ export class ParserBase {
     return { type: "Binary", left, op, right, span };
   }
 
-  protected makeUnary(op: UnaryOperation, operand: Expr, opStart: number): Expr {
+  protected makeUnary(
+    op: UnaryOperation,
+    operand: Expr,
+    opStart: number
+  ): Expr {
     const span = this.spanFrom(opStart, operand.span.end);
     return { type: "Unary", op, operand, span };
   }

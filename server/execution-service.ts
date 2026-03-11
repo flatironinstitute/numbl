@@ -84,8 +84,7 @@ interface ExecutionRequest {
 const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://localhost:5174",
-  "https://magland.github.io",
-  "https://flatironinstitute.github.io",
+  "https://numbl.org",
 ];
 
 const app = express();

@@ -82,17 +82,32 @@ describe("sub2ind", () => {
 
 describe("tensorSize2D", () => {
   it("returns [1,1] for empty shape", () => {
-    const t = { kind: "tensor" as const, data: new FloatXArray(1), shape: [], _rc: 1 };
+    const t = {
+      kind: "tensor" as const,
+      data: new FloatXArray(1),
+      shape: [],
+      _rc: 1,
+    };
     expect(tensorSize2D(t)).toEqual([1, 1]);
   });
 
   it("returns [1,n] for 1D shape", () => {
-    const t = { kind: "tensor" as const, data: new FloatXArray(3), shape: [3], _rc: 1 };
+    const t = {
+      kind: "tensor" as const,
+      data: new FloatXArray(3),
+      shape: [3],
+      _rc: 1,
+    };
     expect(tensorSize2D(t)).toEqual([1, 3]);
   });
 
   it("returns shape for 2D", () => {
-    const t = { kind: "tensor" as const, data: new FloatXArray(6), shape: [2, 3], _rc: 1 };
+    const t = {
+      kind: "tensor" as const,
+      data: new FloatXArray(6),
+      shape: [2, 3],
+      _rc: 1,
+    };
     expect(tensorSize2D(t)).toEqual([2, 3]);
   });
 });

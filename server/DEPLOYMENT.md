@@ -35,7 +35,7 @@ apt install -y libopenblas-dev libfftw3-dev
 gh auth login
 
 # Clone the repo
-gh repo clone magland/numbl
+gh repo clone flatironinstitute/numbl
 cd numbl
 
 # Install npm dependencies

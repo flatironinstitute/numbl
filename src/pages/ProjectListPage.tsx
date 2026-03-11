@@ -26,6 +26,8 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
+import GitHubIcon from "@mui/icons-material/GitHub";
+import TerminalIcon from "@mui/icons-material/Terminal";
 import { useNavigate } from "react-router-dom";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import {
@@ -313,17 +315,27 @@ export function ProjectListPage() {
       }}
     >
       {/* Hero */}
-      <Box sx={{ mb: 4, textAlign: "center" }}>
+      <Box sx={{ mb: 5, textAlign: "center" }}>
         <Typography
           variant="h3"
           component="h1"
-          sx={{ fontWeight: 700, letterSpacing: "-0.02em", mb: 0.5 }}
+          sx={{
+            fontWeight: 700,
+            letterSpacing: "-0.02em",
+            mb: 0.5,
+            background: "linear-gradient(135deg, #1976d2 0%, #9c27b0 100%)",
+            backgroundClip: "text",
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+          }}
         >
           numbl
         </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 1 }}>
-          A numerical computing environment
+        <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+          A numerical computing environment for the browser and command line
         </Typography>
+
+        {/* Links row */}
         <Box
           sx={{
             display: "flex",
@@ -331,6 +343,7 @@ export function ProjectListPage() {
             justifyContent: "center",
             gap: 2,
             mb: 1,
+            flexWrap: "wrap",
           }}
         >
           <Box
@@ -347,6 +360,48 @@ export function ProjectListPage() {
           >
             <InfoOutlinedIcon sx={{ fontSize: 14 }} />
             <Typography variant="caption">Learn more</Typography>
+          </Box>
+          <Typography variant="caption" color="text.disabled">
+            |
+          </Typography>
+          <Box
+            component="a"
+            href="https://github.com/flatironinstitute/numbl"
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.5,
+              color: "text.secondary",
+              textDecoration: "none",
+              "&:hover": { color: "text.primary" },
+              transition: "color 0.15s",
+            }}
+          >
+            <GitHubIcon sx={{ fontSize: 14 }} />
+            <Typography variant="caption">GitHub</Typography>
+          </Box>
+          <Typography variant="caption" color="text.disabled">
+            |
+          </Typography>
+          <Box
+            component="a"
+            href="https://www.npmjs.com/package/numbl"
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 0.5,
+              color: "text.secondary",
+              textDecoration: "none",
+              "&:hover": { color: "text.primary" },
+              transition: "color 0.15s",
+            }}
+          >
+            <TerminalIcon sx={{ fontSize: 14 }} />
+            <Typography variant="caption">npm install -g numbl</Typography>
           </Box>
           <Typography variant="caption" color="text.disabled">
             |
@@ -436,17 +491,22 @@ export function ProjectListPage() {
           <Box
             sx={{
               textAlign: "center",
-              py: 5,
+              py: 6,
+              px: 3,
               border: "1px dashed",
               borderColor: "divider",
-              borderRadius: 1,
+              borderRadius: 2,
+              bgcolor: "action.hover",
             }}
           >
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-              No projects yet
+            <Typography variant="body1" sx={{ mb: 0.5 }}>
+              Get started
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+              Create a project to start writing and running code in your browser.
             </Typography>
             <Button
-              variant="outlined"
+              variant="contained"
               size="small"
               startIcon={<AddIcon />}
               onClick={() => setCreateDialogOpen(true)}

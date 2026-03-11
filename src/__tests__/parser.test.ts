@@ -171,7 +171,7 @@ describe("parseMFile - control flow", () => {
     const ast = parseMFile("for i=1:10\n  break;\nend");
     const forStmt = ast.body[0];
     if (forStmt.type === "For") {
-      expect(forStmt.body.some((s) => s.type === "Break")).toBe(true);
+      expect(forStmt.body.some(s => s.type === "Break")).toBe(true);
     }
   });
 
@@ -179,14 +179,14 @@ describe("parseMFile - control flow", () => {
     const ast = parseMFile("for i=1:10\n  continue;\nend");
     const forStmt = ast.body[0];
     if (forStmt.type === "For") {
-      expect(forStmt.body.some((s) => s.type === "Continue")).toBe(true);
+      expect(forStmt.body.some(s => s.type === "Continue")).toBe(true);
     }
   });
 
   it("parses return", () => {
     const ast = parseMFile("function foo()\n  return;\nend");
     if (ast.body[0].type === "Function") {
-      expect(ast.body[0].body.some((s) => s.type === "Return")).toBe(true);
+      expect(ast.body[0].body.some(s => s.type === "Return")).toBe(true);
     }
   });
 });
@@ -251,9 +251,7 @@ describe("parseMFile - functions", () => {
   });
 
   it("parses function with varargout", () => {
-    const stmt = parseFirst(
-      "function [a, varargout] = foo(x)\n  a = x;\nend"
-    );
+    const stmt = parseFirst("function [a, varargout] = foo(x)\n  a = x;\nend");
     if (stmt.type === "Function") {
       expect(stmt.outputs).toEqual(["a", "varargout"]);
     }
@@ -799,7 +797,7 @@ describe("parseMFile - classdef", () => {
       "classdef MyClass\n  methods\n    function foo(obj)\n    end\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       expect(methods).toBeDefined();
     }
   });
@@ -833,7 +831,7 @@ describe("parseMFile - classdef", () => {
       "classdef MyClass\n  events\n    MyEvent\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const events = stmt.members.find((m) => m.type === "Events");
+      const events = stmt.members.find(m => m.type === "Events");
       expect(events).toBeDefined();
     }
   });
@@ -843,7 +841,7 @@ describe("parseMFile - classdef", () => {
       "classdef MyEnum\n  enumeration\n    Red\n    Green\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const enums = stmt.members.find((m) => m.type === "Enumeration");
+      const enums = stmt.members.find(m => m.type === "Enumeration");
       expect(enums).toBeDefined();
     }
   });
@@ -929,7 +927,7 @@ describe("parseMFile - arguments blocks", () => {
       "function y = foo(x)\n  arguments (Output)\n    y\n  end\n  y = x;\nend"
     );
     if (stmt.type === "Function") {
-      const block = stmt.argumentsBlocks.find((b) => b.kind === "Output");
+      const block = stmt.argumentsBlocks.find(b => b.kind === "Output");
       expect(block).toBeDefined();
     }
   });
@@ -1024,7 +1022,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass\n  methods (Abstract)\n    result = doSomething(obj, x)\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       expect(methods).toBeDefined();
       if (methods?.type === "Methods") {
         expect(methods.body).toHaveLength(0);
@@ -1041,7 +1039,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass\n  methods (Abstract)\n    doIt(obj)\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       if (methods?.type === "Methods") {
         expect(methods.signatures![0].name).toBe("doIt");
         expect(methods.signatures![0].outputs).toEqual([]);
@@ -1054,7 +1052,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass\n  methods (Abstract)\n    [a, b] = compute(obj)\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       if (methods?.type === "Methods") {
         expect(methods.signatures![0].outputs).toEqual(["a", "b"]);
       }
@@ -1066,7 +1064,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass\n  methods\n    function foo(obj)\n    end\n    bar(obj)\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       if (methods?.type === "Methods") {
         expect(methods.body).toHaveLength(1);
         expect(methods.signatures).toBeDefined();
@@ -1080,7 +1078,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass\n  methods\n    function val = get.Name(obj)\n      val = obj.Name;\n    end\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       if (methods?.type === "Methods") {
         const fn = methods.body[0];
         if (fn.type === "Function") {
@@ -1107,11 +1105,9 @@ describe("parseMFile - classdef advanced", () => {
   });
 
   it("parses classdef with arguments block member", () => {
-    const stmt = parseFirst(
-      "classdef MyClass\n  arguments\n    x\n  end\nend"
-    );
+    const stmt = parseFirst("classdef MyClass\n  arguments\n    x\n  end\nend");
     if (stmt.type === "ClassDef") {
-      const args = stmt.members.find((m) => m.type === "Arguments");
+      const args = stmt.members.find(m => m.type === "Arguments");
       expect(args).toBeDefined();
     }
   });
@@ -1130,7 +1126,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass\n  methods (Abstract)\n    get.Prop(obj)\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const methods = stmt.members.find((m) => m.type === "Methods");
+      const methods = stmt.members.find(m => m.type === "Methods");
       if (methods?.type === "Methods") {
         expect(methods.signatures![0].name).toBe("get.Prop");
       }
@@ -1350,15 +1346,15 @@ describe("parseMFile - expressions advanced", () => {
 
 describe("parseMFile - functions advanced", () => {
   it("throws if varargin is not last param", () => {
-    expect(() =>
-      parseMFile("function foo(varargin, x)\nend")
-    ).toThrow(/varargin.*last/);
+    expect(() => parseMFile("function foo(varargin, x)\nend")).toThrow(
+      /varargin.*last/
+    );
   });
 
   it("throws if varargout is not last output", () => {
-    expect(() =>
-      parseMFile("function [varargout, x] = foo()\nend")
-    ).toThrow(/varargout.*last/);
+    expect(() => parseMFile("function [varargout, x] = foo()\nend")).toThrow(
+      /varargout.*last/
+    );
   });
 
   it("parses function with get. accessor name", () => {
@@ -1609,9 +1605,7 @@ describe("parseMFile - error paths", () => {
   });
 
   it("throws on unclosed paren in function params", () => {
-    expect(() => parseMFile("function foo(a, b\nend")).toThrow(
-      /expected '\)'/
-    );
+    expect(() => parseMFile("function foo(a, b\nend")).toThrow(/expected '\)'/);
   });
 
   it("throws on adjacency ambiguity", () => {
@@ -1802,7 +1796,7 @@ describe("parseMFile - classdef edge cases", () => {
       "classdef C\n  events\n    EventA\n    EventB\n    EventC\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      const events = stmt.members.find((m) => m.type === "Events");
+      const events = stmt.members.find(m => m.type === "Events");
       if (events?.type === "Events") {
         expect(events.names).toEqual(["EventA", "EventB", "EventC"]);
       }

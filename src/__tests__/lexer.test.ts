@@ -32,7 +32,7 @@ describe("tokenize", () => {
   it("tokenizes arithmetic operators", () => {
     const tokens = tokenize("a + b - c * d / e");
     const ops = tokens.filter(
-      (t) =>
+      t =>
         t === Token.Plus ||
         t === Token.Minus ||
         t === Token.Star ||
@@ -174,14 +174,14 @@ describe("tokenizeDetailed", () => {
 
   it("captures correct lexemes", () => {
     const tokens = tokenizeDetailed("myVar = 99");
-    const identToken = tokens.find((t) => t.token === Token.Ident);
+    const identToken = tokens.find(t => t.token === Token.Ident);
     expect(identToken).toBeDefined();
     expect(identToken!.lexeme).toBe("myVar");
   });
 
   it("captures span positions correctly", () => {
     const tokens = tokenizeDetailed("abc");
-    const tok = tokens.find((t) => t.token === Token.Ident);
+    const tok = tokens.find(t => t.token === Token.Ident);
     expect(tok).toBeDefined();
     expect(tok!.start).toBe(0);
     expect(tok!.end).toBe(3);
@@ -189,109 +189,109 @@ describe("tokenizeDetailed", () => {
 
   it("includes newline tokens", () => {
     const tokens = tokenizeDetailed("a\nb");
-    expect(tokens.some((t) => t.token === Token.Newline)).toBe(true);
+    expect(tokens.some(t => t.token === Token.Newline)).toBe(true);
   });
 
   it("coalesces multiple newlines", () => {
     const tokens = tokenizeDetailed("a\n\n\nb");
-    const newlines = tokens.filter((t) => t.token === Token.Newline);
+    const newlines = tokens.filter(t => t.token === Token.Newline);
     expect(newlines).toHaveLength(1);
   });
 
   it("handles line comments", () => {
     const tokens = tokenizeDetailed("x = 1 % this is a comment\ny = 2");
-    const idents = tokens.filter((t) => t.token === Token.Ident);
-    expect(idents.map((t) => t.lexeme)).toEqual(["x", "y"]);
+    const idents = tokens.filter(t => t.token === Token.Ident);
+    expect(idents.map(t => t.lexeme)).toEqual(["x", "y"]);
   });
 
   it("handles block comments", () => {
     const tokens = tokenizeDetailed("x = 1\n%{\nblock comment\n%}\ny = 2");
-    const idents = tokens.filter((t) => t.token === Token.Ident);
-    expect(idents.map((t) => t.lexeme)).toEqual(["x", "y"]);
+    const idents = tokens.filter(t => t.token === Token.Ident);
+    expect(idents.map(t => t.lexeme)).toEqual(["x", "y"]);
   });
 
   it("handles %{ with content on same line as line comment", () => {
     const tokens = tokenizeDetailed("x = 1\n%{ not a block comment\ny = 2");
-    const idents = tokens.filter((t) => t.token === Token.Ident);
-    expect(idents.map((t) => t.lexeme)).toEqual(["x", "y"]);
+    const idents = tokens.filter(t => t.token === Token.Ident);
+    expect(idents.map(t => t.lexeme)).toEqual(["x", "y"]);
   });
 
   it("handles ellipsis (line continuation)", () => {
     const tokens = tokenizeDetailed("x = 1 + ...\n2");
-    const ellipsis = tokens.find((t) => t.token === Token.Ellipsis);
+    const ellipsis = tokens.find(t => t.token === Token.Ellipsis);
     expect(ellipsis).toBeDefined();
   });
 
   it("handles ellipsis at end of file", () => {
     const tokens = tokenizeDetailed("x ...");
-    const ellipsis = tokens.find((t) => t.token === Token.Ellipsis);
+    const ellipsis = tokens.find(t => t.token === Token.Ellipsis);
     expect(ellipsis).toBeDefined();
   });
 
   it("handles section markers %%", () => {
     const tokens = tokenizeDetailed("%% Section Title\nx = 1");
-    const section = tokens.find((t) => t.token === Token.Section);
+    const section = tokens.find(t => t.token === Token.Section);
     expect(section).toBeDefined();
     expect(section!.lexeme).toContain("Section Title");
   });
 
   it("section marker not at line start treated as comment", () => {
     const tokens = tokenizeDetailed("x = 1 %% not a section");
-    const section = tokens.find((t) => t.token === Token.Section);
+    const section = tokens.find(t => t.token === Token.Section);
     expect(section).toBeUndefined();
   });
 
   it("tokenizes transpose as Transpose after value token", () => {
     const tokens = tokenizeDetailed("x'");
-    const transpose = tokens.find((t) => t.token === Token.Transpose);
+    const transpose = tokens.find(t => t.token === Token.Transpose);
     expect(transpose).toBeDefined();
   });
 
   it("tokenizes single quote as Char when not adjacent to value", () => {
     const tokens = tokenizeDetailed("x = 'hello'");
-    expect(tokens.some((t) => t.token === Token.Char)).toBe(true);
+    expect(tokens.some(t => t.token === Token.Char)).toBe(true);
   });
 
   it("handles escaped quotes in strings", () => {
     const tokens = tokenizeDetailed("'it''s'");
-    const charTok = tokens.find((t) => t.token === Token.Char);
+    const charTok = tokens.find(t => t.token === Token.Char);
     expect(charTok).toBeDefined();
     expect(charTok!.lexeme).toBe("'it''s'");
   });
 
   it("handles escaped double quotes in strings", () => {
     const tokens = tokenizeDetailed('"say ""hi"""');
-    const strTok = tokens.find((t) => t.token === Token.Str);
+    const strTok = tokens.find(t => t.token === Token.Str);
     expect(strTok).toBeDefined();
   });
 
   it("produces Error token for unterminated string", () => {
     const tokens = tokenizeDetailed("'unterminated\n");
-    expect(tokens.some((t) => t.token === Token.Error)).toBe(true);
+    expect(tokens.some(t => t.token === Token.Error)).toBe(true);
   });
 
   it("produces Error token for unknown character", () => {
     const tokens = tokenizeDetailed("$");
-    expect(tokens.some((t) => t.token === Token.Error)).toBe(true);
+    expect(tokens.some(t => t.token === Token.Error)).toBe(true);
   });
 
   it("tokenizes leading decimal point as float (.5)", () => {
     const tokens = tokenizeDetailed(".5");
-    const floatTok = tokens.find((t) => t.token === Token.Float);
+    const floatTok = tokens.find(t => t.token === Token.Float);
     expect(floatTok).toBeDefined();
     expect(floatTok!.lexeme).toBe(".5");
   });
 
   it("tokenizes scientific notation", () => {
     const tokens = tokenizeDetailed("1e10");
-    const tok = tokens.find((t) => t.token === Token.Float);
+    const tok = tokens.find(t => t.token === Token.Float);
     expect(tok).toBeDefined();
     expect(tok!.lexeme).toBe("1e10");
   });
 
   it("tokenizes scientific notation with sign", () => {
     const tokens = tokenizeDetailed("2.5e-3");
-    const tok = tokens.find((t) => t.token === Token.Float);
+    const tok = tokens.find(t => t.token === Token.Float);
     expect(tok).toBeDefined();
     expect(tok!.lexeme).toBe("2.5e-3");
   });
@@ -318,7 +318,7 @@ describe("tokenizeDetailed", () => {
 
   it("handles semicolon followed by string", () => {
     const tokens = tokenizeDetailed("x; 'hello'");
-    expect(tokens.some((t) => t.token === Token.Char)).toBe(true);
+    expect(tokens.some(t => t.token === Token.Char)).toBe(true);
   });
 
   it("handles unclosed block comment", () => {

@@ -362,7 +362,12 @@ export class ExpressionParser extends ParserBase {
       } else if (this.consume(Token.Transpose)) {
         const end = this.lastTokenEnd();
         const span = this.spanFrom(expr.span.start, end);
-        expr = { type: "Unary", op: UnaryOperation.Transpose, operand: expr, span };
+        expr = {
+          type: "Unary",
+          op: UnaryOperation.Transpose,
+          operand: expr,
+          span,
+        };
       } else {
         break;
       }

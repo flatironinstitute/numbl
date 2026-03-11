@@ -946,7 +946,8 @@ async function main() {
       await cmdEval(rest);
       break;
     case "run-tests": {
-      const dir = rest.length > 0 ? rest[0] : join(packageDir, "numbl_test_scripts");
+      const dir =
+        rest.length > 0 ? rest[0] : join(packageDir, "numbl_test_scripts");
       await runTests(dir);
       break;
     }
