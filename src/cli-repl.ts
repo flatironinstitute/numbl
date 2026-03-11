@@ -1,4 +1,7 @@
 import { createInterface } from "readline";
+import { readFileSync, writeFileSync, appendFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import { WorkspaceFile } from "./numbl-core/workspace/types.js";
@@ -6,6 +9,43 @@ import { PlotInstruction } from "./numbl-core/executor/types.js";
 import { executeCode } from "./numbl-core/executeCode.js";
 import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
 import { scanMFiles } from "./cli.js";
+
+const HISTORY_FILE = join(homedir(), ".numbl_history");
+const HISTORY_MAX = 1000;
+
+/** Load history entries from disk. Returns empty array on any error. */
+function loadHistory(): string[] {
+  try {
+    const content = readFileSync(HISTORY_FILE, "utf8");
+    // Each entry is stored as a single line with literal \n for multi-line commands
+    return content
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => line.replace(/\\n/g, "\n").replace(/\\\\/g, "\\"));
+  } catch {
+    return [];
+  }
+}
+
+/** Append a single history entry to disk, trimming if over the limit. */
+function saveHistoryEntry(entry: string, hist: string[]) {
+  try {
+    if (hist.length <= HISTORY_MAX) {
+      // Encode newlines so each entry is one line in the file
+      const encoded = entry.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
+      appendFileSync(HISTORY_FILE, encoded + "\n", "utf8");
+    } else {
+      // Over limit — rewrite the file with the last HISTORY_MAX entries
+      const trimmed = hist.slice(-HISTORY_MAX);
+      const content = trimmed
+        .map((e) => e.replace(/\\/g, "\\\\").replace(/\n/g, "\\n"))
+        .join("\n") + "\n";
+      writeFileSync(HISTORY_FILE, content, "utf8");
+    }
+  } catch {
+    // Silently ignore write errors
+  }
+}
 
 /**
  * Interactive multi-line REPL with bracketed paste and Alt+Enter support.
@@ -120,9 +160,10 @@ export async function runRepl(
   let row = 0;
   let col = 0;
   let sRow = 0; // cursor screen-row relative to first displayed line
-  const hist: string[] = [];
+  const hist: string[] = loadHistory();
   let hIdx = -1;
   let hStash = "";
+  let hPrefix = ""; // prefix for prefix-based history search
   let pasting = false;
   let pasteBuf: string[] = [];
   let busy = false;
@@ -148,6 +189,7 @@ export async function runRepl(
     row = col = sRow = 0;
     hIdx = -1;
     hStash = "";
+    hPrefix = "";
     stdout.write(PS1);
   }
 
@@ -187,7 +229,9 @@ export async function runRepl(
       process.exit(0);
     }
 
-    hist.push(buf.join("\n"));
+    const entry = buf.join("\n");
+    hist.push(entry);
+    saveHistoryEntry(entry, hist);
     hIdx = -1;
 
     busy = true;
@@ -247,26 +291,56 @@ export async function runRepl(
     display();
   }
 
-  /** Navigate command history. */
+  /** Navigate command history, with prefix-based search. */
   function navHistory(dir: number) {
     if (hist.length === 0) return;
     if (hIdx === -1 && dir > 0) return;
     if (hIdx === -1) {
       hStash = buf.join("\n");
-      hIdx = hist.length - 1;
-    } else {
-      hIdx += dir;
-      if (hIdx < 0) {
-        hIdx = 0;
-        return;
+      // Use current input as prefix for searching
+      hPrefix = hStash;
+      // Find the first matching entry from the end
+      if (hPrefix.length > 0) {
+        // Prefix search: find the last entry starting with the prefix
+        for (let k = hist.length - 1; k >= 0; k--) {
+          if (hist[k].startsWith(hPrefix)) {
+            hIdx = k;
+            break;
+          }
+        }
+        if (hIdx === -1) return; // no match found
+      } else {
+        hIdx = hist.length - 1;
       }
-      if (hIdx >= hist.length) {
-        buf = hStash.split("\n");
-        hIdx = -1;
-        row = buf.length - 1;
-        col = buf[row].length;
-        display();
-        return;
+    } else {
+      // Continue searching in the given direction
+      let found = false;
+      if (dir < 0) {
+        for (let k = hIdx - 1; k >= 0; k--) {
+          if (hPrefix.length === 0 || hist[k].startsWith(hPrefix)) {
+            hIdx = k;
+            found = true;
+            break;
+          }
+        }
+        if (!found) return; // already at oldest match
+      } else {
+        for (let k = hIdx + 1; k < hist.length; k++) {
+          if (hPrefix.length === 0 || hist[k].startsWith(hPrefix)) {
+            hIdx = k;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          // Restore stashed input
+          buf = hStash.split("\n");
+          hIdx = -1;
+          row = buf.length - 1;
+          col = buf[row].length;
+          display();
+          return;
+        }
       }
     }
     buf = hist[hIdx].split("\n");
