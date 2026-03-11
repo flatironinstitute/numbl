@@ -206,6 +206,25 @@ export function registerMiscFunctions(): void {
   register("fields", fieldnamesApply);
 
   register(
+    "namedargs2cell",
+    builtinSingle(args => {
+      if (args.length !== 1)
+        throw new RuntimeError("namedargs2cell requires 1 argument");
+      const v = args[0];
+      if (!isRuntimeStruct(v))
+        throw new RuntimeError("namedargs2cell: argument must be a struct");
+      const names = [...v.fields.keys()];
+      const result: RuntimeValue[] = [];
+      for (const name of names) {
+        result.push(RTV.string(name));
+        result.push(v.fields.get(name)!);
+      }
+      return RTV.cell(result, [1, 2 * names.length]);
+    }),
+    1
+  );
+
+  register(
     "isfield",
     builtinSingle(args => {
       if (args.length !== 2)
