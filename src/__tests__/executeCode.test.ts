@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
-import { isRuntimeNumber, isRuntimeTensor } from "../numbl-core/runtime/types.js";
+import { isRuntimeTensor } from "../numbl-core/runtime/types.js";
 
 describe("executeCode", () => {
   it("executes a simple assignment and returns variable", () => {
