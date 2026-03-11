@@ -29,6 +29,15 @@ export function PlotViewerApp() {
       case "surf":
         dispatch({ type: "add_surf", trace: instruction.trace });
         break;
+      case "close":
+        dispatch({ type: "close" });
+        break;
+      case "close_all":
+        dispatch({ type: "close_all" });
+        break;
+      case "clf":
+        dispatch({ type: "clf" });
+        break;
     }
   }, []);
 
