@@ -1,0 +1,3 @@
+[submodule "numbl_test_scripts"]
+	path = numbl_test_scripts
+	url = https://github.com/magland/numbl_test_scripts.git
