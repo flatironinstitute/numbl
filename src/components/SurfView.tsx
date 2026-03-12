@@ -21,9 +21,14 @@ const TRACE_COLORS = [
 interface SurfViewProps {
   surfTraces: SurfTrace[];
   plot3Traces?: Plot3Trace[];
+  shading?: "faceted" | "flat" | "interp";
 }
 
-export function SurfView({ surfTraces, plot3Traces = [] }: SurfViewProps) {
+export function SurfView({
+  surfTraces,
+  plot3Traces = [],
+  shading,
+}: SurfViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
     renderer: THREE.WebGLRenderer;
@@ -242,6 +247,10 @@ export function SurfView({ surfTraces, plot3Traces = [] }: SurfViewProps) {
       geometry.setIndex(indices);
       geometry.computeVertexNormals();
 
+      // Determine effective shading mode
+      const shadingMode = shading ?? "faceted";
+      const useFlat = shadingMode === "faceted" || shadingMode === "flat";
+
       // Face material
       const showFaces = trace.faceColor !== "none";
       if (showFaces) {
@@ -250,6 +259,7 @@ export function SurfView({ surfTraces, plot3Traces = [] }: SurfViewProps) {
           const [r, g, b] = trace.faceColor;
           faceMaterial = new THREE.MeshPhongMaterial({
             color: new THREE.Color(r, g, b),
+            flatShading: useFlat,
             opacity: alpha,
             transparent: alpha < 1,
             side: THREE.DoubleSide,
@@ -257,6 +267,7 @@ export function SurfView({ surfTraces, plot3Traces = [] }: SurfViewProps) {
         } else {
           faceMaterial = new THREE.MeshPhongMaterial({
             vertexColors: true,
+            flatShading: useFlat,
             opacity: alpha,
             transparent: alpha < 1,
             side: THREE.DoubleSide,
@@ -265,8 +276,9 @@ export function SurfView({ surfTraces, plot3Traces = [] }: SurfViewProps) {
         scene.add(new THREE.Mesh(geometry, faceMaterial));
       }
 
-      // Edge wireframe
-      if (trace.edgeColor !== "none") {
+      // Edge wireframe — hidden for "flat" and "interp" shading modes
+      const showEdges = trace.edgeColor !== "none" && shadingMode === "faceted";
+      if (showEdges) {
         const edgePositions: number[] = [];
         const edgeColors: number[] = [];
         for (let i = 0; i < rows; i++) {
@@ -463,7 +475,7 @@ export function SurfView({ surfTraces, plot3Traces = [] }: SurfViewProps) {
       cyData,
       czData
     );
-  }, [surfTraces, plot3Traces]);
+  }, [surfTraces, plot3Traces, shading]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 }

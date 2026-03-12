@@ -13,6 +13,7 @@ interface FigureViewProps {
   title?: string;
   xlabel?: string;
   ylabel?: string;
+  shading?: "faceted" | "flat" | "interp";
 }
 
 const TRACE_COLORS = [
@@ -32,6 +33,7 @@ export function FigureView({
   title,
   xlabel,
   ylabel,
+  shading,
 }: FigureViewProps) {
   const has3D =
     (surfTraces && surfTraces.length > 0) ||
@@ -39,7 +41,11 @@ export function FigureView({
 
   if (has3D) {
     return (
-      <SurfView surfTraces={surfTraces ?? []} plot3Traces={plot3Traces ?? []} />
+      <SurfView
+        surfTraces={surfTraces ?? []}
+        plot3Traces={plot3Traces ?? []}
+        shading={shading}
+      />
     );
   }
 

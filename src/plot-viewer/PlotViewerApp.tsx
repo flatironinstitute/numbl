@@ -1,7 +1,11 @@
 import { useReducer, useEffect, useRef, useState, useCallback } from "react";
 import type { PlotInstruction } from "../numbl-core/executor/types.js";
 import { FigureView } from "../components/FigureView";
-import { figuresReducer, initialFiguresState } from "../shared/figuresReducer";
+import {
+  figuresReducer,
+  initialFiguresState,
+  plotInstructionToAction,
+} from "../shared/figuresReducer";
 
 export function PlotViewerApp() {
   const [figures, dispatch] = useReducer(figuresReducer, initialFiguresState);
@@ -10,46 +14,16 @@ export function PlotViewerApp() {
   const activeFigureRef = useRef(activeFigure);
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    switch (instruction.type) {
-      case "set_figure_handle":
-        dispatch({ type: "set_current_handle", handle: instruction.handle });
-        // Auto-switch to the figure that was just selected
-        activeFigureRef.current = instruction.handle;
-        setActiveFigure(instruction.handle);
-        break;
-      case "set_hold":
-        dispatch({ type: "set_hold", value: instruction.value });
-        break;
-      case "plot":
-        dispatch({ type: "add_plot", traces: instruction.traces });
-        break;
-      case "plot3":
-        dispatch({ type: "add_plot3", traces: instruction.traces });
-        break;
-      case "surf":
-        dispatch({ type: "add_surf", trace: instruction.trace });
-        break;
-      case "close":
-        dispatch({ type: "close" });
-        // activeFigure may have been removed; sync will happen via useEffect below
-        break;
-      case "close_all":
-        dispatch({ type: "close_all" });
-        activeFigureRef.current = 1;
-        setActiveFigure(1);
-        break;
-      case "set_title":
-        dispatch({ type: "set_title", text: instruction.text });
-        break;
-      case "set_xlabel":
-        dispatch({ type: "set_xlabel", text: instruction.text });
-        break;
-      case "set_ylabel":
-        dispatch({ type: "set_ylabel", text: instruction.text });
-        break;
-      case "clf":
-        dispatch({ type: "clf" });
-        break;
+    const action = plotInstructionToAction(instruction);
+    if (action) dispatch(action);
+
+    // Side-effects for active tab tracking
+    if (instruction.type === "set_figure_handle") {
+      activeFigureRef.current = instruction.handle;
+      setActiveFigure(instruction.handle);
+    } else if (instruction.type === "close_all") {
+      activeFigureRef.current = 1;
+      setActiveFigure(1);
     }
   }, []);
 
@@ -143,6 +117,7 @@ export function PlotViewerApp() {
               title={currentFig.title}
               xlabel={currentFig.xlabel}
               ylabel={currentFig.ylabel}
+              shading={currentFig.shading}
             />
           </div>
         ) : (

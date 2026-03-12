@@ -751,6 +751,8 @@ function genFuncCall(
     return `$rt.plot_instr({type: "set_xlabel", text: ${args[0] ?? '""'}})`;
   if (kind.name === "ylabel")
     return `$rt.plot_instr({type: "set_ylabel", text: ${args[0] ?? '""'}})`;
+  if (kind.name === "shading")
+    return `$rt.plot_instr({type: "set_shading", shading: ${args[0] ?? '"faceted"'}})`;
   if (kind.name === "close") {
     if (args.length > 0) {
       return `$rt.plot_instr({type: "close_all"})`;
