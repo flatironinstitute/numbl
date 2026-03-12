@@ -177,7 +177,11 @@ export function EmbedPage() {
   }, [setupWorkerHandler]);
 
   const handleEditorMount: OnMount = (_, monaco) => {
-    if (!monaco.languages.getLanguages().some(l => l.id === "matlab")) {
+    if (
+      !monaco.languages
+        .getLanguages()
+        .some((l: { id: string }) => l.id === "matlab")
+    ) {
       monaco.languages.register({ id: "matlab" });
       monaco.languages.setLanguageConfiguration("matlab", numblLanguageConfig);
       monaco.languages.setMonarchTokensProvider(
