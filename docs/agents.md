@@ -20,6 +20,10 @@ npm test              # unit tests (Vitest)
 npm run test:scripts  # integration tests (.m scripts)
 ```
 
+### Increasing coverage
+
+Run `npm run test:coverage:all` to see the merged coverage report. To increase coverage, either add unit tests in `src/__tests__/` or add integration scripts in `numbl_test_scripts/` — whichever makes more sense for the code under test. Both count toward coverage.
+
 ### Integration test scripts
 
 Test scripts live in `numbl_test_scripts/` organized by category (e.g., `builtins/`, `arithmetic/`, `linear_algebra/`). Each test must end with `disp('SUCCESS')` if all assertions pass.
