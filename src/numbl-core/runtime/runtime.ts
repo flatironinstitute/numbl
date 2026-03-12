@@ -108,6 +108,7 @@ import {
   pause as _pause,
 } from "./runtimePlot.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
+import { toString as _toString } from "./convert.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -274,7 +275,7 @@ export class Runtime {
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
         const rv = ensureRuntimeValue(args[0]);
-        const name = toString(rv).replace(/^"|"$/g, "");
+        const name = _toString(rv).replace(/^"|"$/g, "");
         _plotInstr(this.plotInstructions, { type: "set_colormap", name });
       }
     };
@@ -291,12 +292,15 @@ export class Runtime {
     };
     this.builtins["colorbar"] = (_nargout: number, args: unknown[]) => {
       const val =
-        args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "on";
+        args.length > 0 ? _toString(ensureRuntimeValue(args[0])) : "on";
       _plotInstr(this.plotInstructions, { type: "set_colorbar", value: val });
     };
     this.builtins["axis"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
-        const val = toString(ensureRuntimeValue(args[0])).replace(/^"|"$/g, "");
+        const val = _toString(ensureRuntimeValue(args[0])).replace(
+          /^"|"$/g,
+          ""
+        );
         _plotInstr(this.plotInstructions, { type: "set_axis", value: val });
       }
     };
