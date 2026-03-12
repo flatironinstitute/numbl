@@ -289,7 +289,7 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
       break;
 
     case "Import":
-      // Not supported yet
+      // Declarative; imports are collected by buildFunctionIndex()
       break;
   }
 }

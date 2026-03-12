@@ -240,7 +240,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       return lowerFunction(ctx, stmt);
 
     case "Import":
-      // Not supported yet in alt method
+      // Declarative; imports are collected by buildFunctionIndex()
       return {
         type: "ExprStmt",
         expr: { kind: { type: "Number", value: "0" }, span },
