@@ -757,7 +757,11 @@ export class ExpressionParser extends ParserBase {
       this.pos++; // consume the identifier
       this.pos++; // consume the '='
       // Push the name as a string literal
-      args.push({ type: "Char", value: `'${nameToken.lexeme}'`, span: nameSpan });
+      args.push({
+        type: "Char",
+        value: `'${nameToken.lexeme}'`,
+        span: nameSpan,
+      });
       // Push the value expression
       args.push(this.parseExpr());
     } else {
