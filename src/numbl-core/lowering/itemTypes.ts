@@ -234,7 +234,6 @@ export const IType = {
         }
         case "Cell": {
           if (b.kind === "Cell") {
-            // TODO: check this carefully
             const elementType =
               a.elementType === b.elementType
                 ? a.elementType
@@ -251,10 +250,9 @@ export const IType = {
           break;
         }
         case "Function": {
-          // TODO: check this carefully
           if (b.kind === "Function") {
             if (a.params.length !== b.params.length) {
-              return IType.Unknown;
+              return IType.union([a, b]);
             }
             const params = a.params.map((p, i) => IType.unify(p, b.params[i]));
             const returns = IType.unify(a.returns, b.returns);
@@ -267,7 +265,6 @@ export const IType = {
           break;
         }
         case "Struct": {
-          // TODO: check this carefully
           if (b.kind === "Struct") {
             const knownFields = a.knownFields.filter(f =>
               b.knownFields.includes(f)
@@ -277,9 +274,16 @@ export const IType = {
           break;
         }
         case "Union": {
-          // TODO: check this carefully
           if (b.kind === "Union") {
-            const types = Array.from(new Set([...a.types, ...b.types]));
+            const seen = new Set<string>();
+            const types: ItemType[] = [];
+            for (const t of [...a.types, ...b.types]) {
+              const key = typeToString(t);
+              if (!seen.has(key)) {
+                seen.add(key);
+                types.push(t);
+              }
+            }
             return { kind: "Union", types };
           }
           break;
