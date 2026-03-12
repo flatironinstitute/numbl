@@ -29,7 +29,7 @@ jobs:
       - name: Bundle stdlib
         run: npm run bundle:stdlib
 
-      - name: Build WASM modules
+      - name: Build WASM modules (simple)
         run: npm run build:wasm
 
       - name: Run WASM tests

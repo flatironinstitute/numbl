@@ -72,7 +72,7 @@ function resolveDeps(
 async function fetchAndExtractPackage(
   entry: PackageIndexEntry,
   onProgress?: (msg: string) => void
-): Promise<{ path: string; source: string }[]> {
+): Promise<{ path: string; source: string; data?: Uint8Array }[]> {
   onProgress?.(`Downloading ${entry.name}...`);
   const resp = await fetch(entry.mhl_url);
   if (!resp.ok) {
@@ -84,14 +84,17 @@ async function fetchAndExtractPackage(
   onProgress?.(`Extracting ${entry.name}...`);
   const extracted = unzipSync(zipData);
 
-  const files: { path: string; source: string }[] = [];
+  const files: { path: string; source: string; data?: Uint8Array }[] = [];
   for (const [path, data] of Object.entries(extracted)) {
     // Skip directories (empty entries ending with /)
     if (path.endsWith("/")) continue;
-    // Only extract .m files and load_package.m
-    if (!path.endsWith(".m")) continue;
-    const source = new TextDecoder().decode(data);
-    files.push({ path, source });
+    if (path.endsWith(".wasm")) {
+      // Binary file — store raw bytes
+      files.push({ path, source: "", data: new Uint8Array(data) });
+    } else if (path.endsWith(".m") || path.endsWith(".js")) {
+      const source = new TextDecoder().decode(data);
+      files.push({ path, source });
+    }
   }
   return files;
 }
@@ -174,7 +177,7 @@ function isOnSearchPath(relativePath: string): boolean {
  * under those directories as WorkspaceFile[].
  */
 function filterFilesByPaths(
-  files: { path: string; source: string }[],
+  files: { path: string; source: string; data?: Uint8Array }[],
   loadPaths: string[],
   packageName: string
 ): WorkspaceFile[] {
@@ -196,10 +199,12 @@ function filterFilesByPaths(
       // addpath only adds the specific directory, not arbitrary subdirs.
       // But @class, +package, and private dirs are always recursed into.
       if (!isOnSearchPath(rest)) continue;
-      result.push({
+      const wsFile: WorkspaceFile = {
         name: `${virtualPkgDir}/${file.path}`,
         source: file.source,
-      });
+      };
+      if (file.data) wsFile.data = file.data;
+      result.push(wsFile);
     }
   }
 

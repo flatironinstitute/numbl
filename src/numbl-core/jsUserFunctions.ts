@@ -77,7 +77,32 @@ export function loadJsUserFunctions(
       const wasmData = wasmMap.get(funcName);
       if (wasmData) {
         const wasmModule = new WebAssembly.Module(wasmData);
-        wasmInstance = new WebAssembly.Instance(wasmModule);
+        // Check if module needs WASI imports (complex modules built with Emscripten)
+        const moduleImports = WebAssembly.Module.imports(wasmModule);
+        const importObject: WebAssembly.Imports = {};
+        // Provide stubs for all imported modules (WASI + Emscripten env)
+        const neededModules = new Set(moduleImports.map(i => i.module));
+        if (neededModules.has("wasi_snapshot_preview1")) {
+          importObject.wasi_snapshot_preview1 = {
+            fd_write: () => 0,
+            fd_read: () => 0,
+            fd_close: () => 0,
+            fd_seek: () => 0,
+            fd_fdstat_get: () => 0,
+            proc_exit: () => {},
+            environ_sizes_get: () => 0,
+            environ_get: () => 0,
+            clock_time_get: () => 0,
+            args_sizes_get: () => 0,
+            args_get: () => 0,
+          };
+        }
+        if (neededModules.has("env")) {
+          importObject.env = {
+            emscripten_notify_memory_growth: () => {},
+          };
+        }
+        wasmInstance = new WebAssembly.Instance(wasmModule, importObject);
       }
 
       const factory = new Function(
