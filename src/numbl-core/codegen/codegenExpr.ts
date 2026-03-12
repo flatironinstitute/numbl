@@ -23,6 +23,7 @@ import {
 
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { resolveFunction } from "../functionResolve.js";
+import { isBuiltin } from "../builtins/index.js";
 
 // ── Public entry ────────────────────────────────────────────────────────
 
@@ -722,18 +723,51 @@ function genFuncCall(
     return `$rt.makeString('"${typeStr}"')`;
   }
   if (kind.name === "isa") return `$rt.isa(${args[0]}, ${args[1]})`;
-  if (kind.name === "exist" && kind.args.length === 2) {
-    const arg0 = kind.args[0].kind;
-    const arg1 = kind.args[1].kind;
-    if (arg0.type === "Char" && arg1.type === "Char") {
-      const varName = arg0.value.replace(/^'|'$/g, "");
-      const typeArg = arg1.value.replace(/^'|'$/g, "");
-      if (typeArg === "var") {
-        const variable = cg.loweringCtx.allVariables.find(
-          v => v.name === varName
-        );
+  if (kind.name === "exist") {
+    const fnIndex = cg.loweringCtx.functionIndex;
+    if (kind.args.length === 2) {
+      const arg0 = kind.args[0].kind;
+      const arg1 = kind.args[1].kind;
+      if (arg0.type === "Char" && arg1.type === "Char") {
+        const name = arg0.value.replace(/^'|'$/g, "");
+        const typeArg = arg1.value.replace(/^'|'$/g, "");
+        if (typeArg === "var") {
+          const variable = cg.loweringCtx.allVariables.find(
+            v => v.name === name
+          );
+          if (variable) {
+            return `(${cg.varRef(variable.id.id)} !== undefined ? 1 : 0)`;
+          }
+          return "0";
+        }
+        if (typeArg === "builtin") {
+          return isBuiltin(name) ? "5" : "0";
+        }
+        if (typeArg === "file") {
+          return fnIndex.workspaceFunctions.has(name) ? "2" : "0";
+        }
+        if (typeArg === "class") {
+          return fnIndex.workspaceClasses.has(name) ? "8" : "0";
+        }
+        if (typeArg === "dir") {
+          return "0";
+        }
+      }
+    }
+    if (kind.args.length === 1) {
+      const arg0 = kind.args[0].kind;
+      if (arg0.type === "Char") {
+        const name = arg0.value.replace(/^'|'$/g, "");
+        // Priority: variable → builtin → workspace function → 0
+        const variable = cg.loweringCtx.allVariables.find(v => v.name === name);
         if (variable) {
           return `(${cg.varRef(variable.id.id)} !== undefined ? 1 : 0)`;
+        }
+        if (isBuiltin(name)) {
+          return "5";
+        }
+        if (fnIndex.workspaceFunctions.has(name)) {
+          return "2";
         }
         return "0";
       }
