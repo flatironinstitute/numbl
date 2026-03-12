@@ -17,10 +17,15 @@ export {
   type MipDirectiveResult,
 } from "./mip-directives-core.js";
 
+export interface MipLoadResult {
+  packageName: string;
+  paths: string[];
+}
+
 export function processMipLoad(
   packageName: string,
   _visited?: Set<string>
-): string[] {
+): MipLoadResult[] {
   const visited = _visited ?? new Set<string>();
   if (visited.has(packageName)) return [];
   visited.add(packageName);
@@ -36,7 +41,7 @@ export function processMipLoad(
   }
 
   // Load dependencies first by reading mip.json
-  const allPaths: string[] = [];
+  const allResults: MipLoadResult[] = [];
   const mipJsonPath = join(pkgDir, "mip.json");
   if (existsSync(mipJsonPath)) {
     try {
@@ -50,7 +55,7 @@ export function processMipLoad(
           );
           continue;
         }
-        allPaths.push(...processMipLoad(dep, visited));
+        allResults.push(...processMipLoad(dep, visited));
       }
     } catch {
       // If mip.json is malformed, continue without dependencies
@@ -100,6 +105,6 @@ export function processMipLoad(
   executeCode(source, { customBuiltins }, [], loadScript);
 
   // Dependencies first, then this package's paths
-  allPaths.push(...collectedPaths);
-  return allPaths;
+  allResults.push({ packageName, paths: collectedPaths });
+  return allResults;
 }
