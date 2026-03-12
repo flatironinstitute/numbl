@@ -272,6 +272,15 @@ export function IDEWorkspace({
           trace: instruction.trace,
         });
         break;
+      case "close":
+        figuresDispatch({ type: "close" });
+        break;
+      case "close_all":
+        figuresDispatch({ type: "close_all" });
+        break;
+      case "clf":
+        figuresDispatch({ type: "clf" });
+        break;
     }
   }, []);
 

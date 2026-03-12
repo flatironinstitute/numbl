@@ -744,6 +744,13 @@ function genFuncCall(
   if (kind.name === "hold")
     return `$rt.plot_instr({type: "set_hold", value: ${args[0]}})`;
   if (kind.name === "ishold") return `$rt.ishold()`;
+  if (kind.name === "clf") return `$rt.plot_instr({type: "clf"})`;
+  if (kind.name === "close") {
+    if (args.length > 0) {
+      return `$rt.plot_instr({type: "close_all"})`;
+    }
+    return `$rt.plot_instr({type: "close"})`;
+  }
 
   // Nested function: call directly via closure (not through registry)
   if (cg.nestedFunctionNames.has(kind.name)) {

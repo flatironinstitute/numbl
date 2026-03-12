@@ -15,7 +15,10 @@ export type PlotInstruction =
   | { type: "plot"; traces: PlotTrace[] }
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "surf"; trace: SurfTrace }
-  | { type: "set_hold"; value: boolean };
+  | { type: "set_hold"; value: boolean }
+  | { type: "close" }
+  | { type: "close_all" }
+  | { type: "clf" };
 
 // ── Exec Options ────────────────────────────────────────────────────────
 

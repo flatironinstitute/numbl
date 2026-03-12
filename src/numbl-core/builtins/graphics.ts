@@ -49,6 +49,18 @@ export function registerGraphicsFunctions(): void {
     builtinSingle(() => RTV.num(0))
   );
 
+  // clf — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "clf",
+    builtinSingle(() => RTV.num(0))
+  );
+
+  // close — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "close",
+    builtinSingle(() => RTV.num(0))
+  );
+
   // drawnow
   register(
     "drawnow",

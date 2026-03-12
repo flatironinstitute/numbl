@@ -19,6 +19,9 @@ export function plotInstr(
     | { type: "set_figure_handle"; handle: unknown }
     | { type: "plot"; x: unknown; y: unknown }
     | { type: "set_hold"; value: unknown }
+    | { type: "close" }
+    | { type: "close_all" }
+    | { type: "clf" }
 ): void {
   if (instr.type === "set_figure_handle") {
     plotInstructions.push({
@@ -47,6 +50,12 @@ export function plotInstr(
       on = toString(mv) === "on";
     }
     plotInstructions.push({ type: "set_hold", value: on });
+  } else if (instr.type === "close") {
+    plotInstructions.push({ type: "close" });
+  } else if (instr.type === "close_all") {
+    plotInstructions.push({ type: "close_all" });
+  } else if (instr.type === "clf") {
+    plotInstructions.push({ type: "clf" });
   }
 }
 
