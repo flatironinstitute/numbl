@@ -8,17 +8,33 @@ import type { FileIOAdapter } from "../fileIOAdapter.js";
 
 // ── Plot Instructions ───────────────────────────────────────────────────
 
-export type { PlotTrace, Plot3Trace, SurfTrace } from "../runtime/plotUtils.js";
+export type {
+  PlotTrace,
+  Plot3Trace,
+  SurfTrace,
+  ImagescTrace,
+  ContourTrace,
+} from "../runtime/plotUtils.js";
 
 export type PlotInstruction =
   | { type: "set_figure_handle"; handle: number }
   | { type: "plot"; traces: PlotTrace[] }
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "surf"; trace: SurfTrace }
+  | {
+      type: "imagesc";
+      trace: import("../runtime/plotUtils.js").ImagescTrace;
+    }
+  | {
+      type: "contour";
+      trace: import("../runtime/plotUtils.js").ContourTrace;
+    }
+  | { type: "mesh"; trace: SurfTrace }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }
   | { type: "set_ylabel"; text: string }
+  | { type: "set_zlabel"; text: string }
   | { type: "set_shading"; shading: "faceted" | "flat" | "interp" }
   | { type: "close" }
   | { type: "close_all" }
@@ -26,7 +42,11 @@ export type PlotInstruction =
   | { type: "set_subplot"; rows: number; cols: number; index: number }
   | { type: "set_legend"; labels: string[] }
   | { type: "set_sgtitle"; text: string }
-  | { type: "set_grid"; value: boolean };
+  | { type: "set_grid"; value: boolean }
+  | { type: "set_colorbar"; value: string }
+  | { type: "set_colormap"; name: string }
+  | { type: "set_axis"; value: string }
+  | { type: "set_view"; az: number; el: number };
 
 // ── Exec Options ────────────────────────────────────────────────────────
 

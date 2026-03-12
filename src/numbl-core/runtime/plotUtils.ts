@@ -72,6 +72,36 @@ export interface SurfTrace {
   faceAlpha?: number;
 }
 
+// ── ImagescTrace type ────────────────────────────────────────────────────
+
+export interface ImagescTrace {
+  /** X limits [xmin, xmax] */
+  x: [number, number];
+  /** Y limits [ymin, ymax] */
+  y: [number, number];
+  /** Z data: flat array (column-major), rows × cols */
+  z: number[];
+  rows: number;
+  cols: number;
+}
+
+// ── ContourTrace type ────────────────────────────────────────────────────
+
+export interface ContourTrace {
+  /** X coordinates: flat array (column-major) */
+  x: number[];
+  /** Y coordinates: flat array (column-major) */
+  y: number[];
+  /** Z values: flat array (column-major) */
+  z: number[];
+  rows: number;
+  cols: number;
+  /** Number of contour levels */
+  nLevels: number;
+  /** Whether this is a filled contour (contourf) */
+  filled: boolean;
+}
+
 // ── Color mapping ───────────────────────────────────────────────────────
 
 const COLOR_SHORT: Record<string, [number, number, number]> = {
@@ -888,6 +918,125 @@ function getStringValueIfString(v: RuntimeValue): string | undefined {
   return undefined;
 }
 
+// ── Scatter argument parser ──────────────────────────────────────────────
+
+/**
+ * Parse scatter() arguments.
+ *
+ * Supported forms:
+ *   scatter(X, Y)
+ *   scatter(X, Y, sz)
+ *   scatter(X, Y, sz, c)
+ *   scatter(X, Y, ..., 'filled')
+ *   scatter(X, Y, ..., mkr)
+ *   scatter(X, Y, ..., Name, Value)
+ */
+export function parseScatterArgs(args: RuntimeValue[]): PlotTrace[] {
+  if (args.length < 2) throw new Error("scatter requires at least 2 arguments");
+
+  const xData = toNumberArray(args[0]);
+  const yData = toNumberArray(args[1]);
+
+  const trace: PlotTrace = {
+    x: xData,
+    y: yData,
+    marker: "o",
+    lineStyle: "none",
+  };
+
+  let pos = 2;
+  let filled = false;
+
+  // Check for size argument (numeric, 3rd positional arg)
+  if (pos < args.length && isNumericArg(args[pos])) {
+    const sz = args[pos];
+    // In MATLAB, sz is area in points^2. We convert to markerSize (diameter-like).
+    if (isRuntimeNumber(sz)) {
+      trace.markerSize = Math.sqrt(sz as number) * 0.5;
+    } else if (isRuntimeTensor(sz)) {
+      // If scalar size, use it; if vector, just use the first value for now
+      const sArr = toNumberArray(sz);
+      if (sArr.length === 1 || new Set(sArr).size === 1) {
+        trace.markerSize = Math.sqrt(sArr[0]) * 0.5;
+      }
+    }
+    pos++;
+  }
+
+  // Check for color argument (4th positional: string color spec or RGB matrix)
+  if (pos < args.length && !isNameValueKey(args[pos])) {
+    if (isStringArg(args[pos])) {
+      const s = getStringValue(args[pos]);
+      if (s === "filled") {
+        filled = true;
+        pos++;
+      } else {
+        // Could be a color short name or marker spec
+        const c = resolveColor(s);
+        if (c) {
+          trace.color = c;
+          pos++;
+        } else {
+          const spec = parseLineSpec(s);
+          if (spec?.marker) {
+            trace.marker = spec.marker;
+            if (spec.color) trace.color = COLOR_SHORT[spec.color];
+            pos++;
+          }
+        }
+      }
+    } else if (isNumericArg(args[pos])) {
+      // RGB color matrix or color vector
+      const c = resolveColor(args[pos]);
+      if (c) {
+        trace.color = c;
+        pos++;
+      }
+    }
+  }
+
+  // Check for 'filled' or marker string in remaining positional args
+  while (
+    pos < args.length &&
+    isStringArg(args[pos]) &&
+    !isNameValueKey(args[pos])
+  ) {
+    const s = getStringValue(args[pos]);
+    if (s === "filled") {
+      filled = true;
+      pos++;
+    } else {
+      const spec = parseLineSpec(s);
+      if (spec?.marker) {
+        trace.marker = spec.marker;
+        if (spec.color) trace.color = COLOR_SHORT[spec.color];
+        pos++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  // Apply 'filled': set markerFaceColor to match edge color
+  if (filled) {
+    // Will be resolved at render time if color not set yet
+    trace.markerFaceColor = trace.color || [0, 0, 1]; // default blue
+  }
+
+  // Name-Value pairs
+  while (pos < args.length) {
+    const key = isNameValueKey(args[pos]);
+    if (!key) break;
+    pos++;
+    if (pos >= args.length) break;
+    const value = args[pos];
+    pos++;
+    applyNameValue([trace], key, value);
+  }
+
+  return [trace];
+}
+
 function applyNameValue(
   traces: PlotTrace[],
   key: string,
@@ -935,4 +1084,141 @@ function applyNameValue(
       break;
     }
   }
+}
+
+// ── Imagesc argument parser ──────────────────────────────────────────────
+
+/**
+ * Parse imagesc() arguments.
+ *
+ * Supported forms:
+ *   imagesc(C)         — C is m×n matrix
+ *   imagesc(x, y, C)   — x and y are vectors defining axis limits
+ */
+export function parseImagescArgs(args: RuntimeValue[]): ImagescTrace {
+  if (args.length === 1) {
+    const info = getMatrixInfo(args[0]);
+    return {
+      x: [1, info.cols],
+      y: [1, info.rows],
+      z: info.data,
+      rows: info.rows,
+      cols: info.cols,
+    };
+  }
+  if (args.length >= 3) {
+    const xArr = toNumberArray(args[0]);
+    const yArr = toNumberArray(args[1]);
+    const info = getMatrixInfo(args[2]);
+    return {
+      x: [xArr[0], xArr[xArr.length - 1]],
+      y: [yArr[0], yArr[yArr.length - 1]],
+      z: info.data,
+      rows: info.rows,
+      cols: info.cols,
+    };
+  }
+  throw new Error("imagesc requires 1 or 3+ arguments");
+}
+
+// ── Contour argument parser ──────────────────────────────────────────────
+
+/**
+ * Parse contour()/contourf() arguments.
+ *
+ * Supported forms:
+ *   contour(Z)
+ *   contour(Z, N)
+ *   contour(X, Y, Z)
+ *   contour(X, Y, Z, N)
+ *   contour(..., Name, Value)
+ */
+export function parseContourArgs(
+  args: RuntimeValue[],
+  filled: boolean
+): ContourTrace {
+  let pos = 0;
+
+  // Count leading numeric args
+  let numericCount = 0;
+  for (let i = pos; i < args.length; i++) {
+    if (isNumericArg(args[i])) numericCount++;
+    else break;
+  }
+
+  let xData: number[];
+  let yData: number[];
+  let zData: number[];
+  let rows: number;
+  let cols: number;
+  let nLevels = 10;
+
+  if (numericCount === 1) {
+    // contour(Z)
+    const info = getMatrixInfo(args[pos++]);
+    rows = info.rows;
+    cols = info.cols;
+    zData = info.data;
+    const gen = generateMeshgrid(rows, cols);
+    xData = gen.x;
+    yData = gen.y;
+  } else if (numericCount === 2) {
+    // contour(Z, N)
+    const info = getMatrixInfo(args[pos++]);
+    rows = info.rows;
+    cols = info.cols;
+    zData = info.data;
+    nLevels =
+      typeof args[pos] === "number"
+        ? (args[pos] as number)
+        : toNumber(args[pos]);
+    pos++;
+    const gen = generateMeshgrid(rows, cols);
+    xData = gen.x;
+    yData = gen.y;
+  } else if (numericCount === 3) {
+    // contour(X, Y, Z)
+    const x = args[pos++];
+    const y = args[pos++];
+    const zInfo = getMatrixInfo(args[pos++]);
+    rows = zInfo.rows;
+    cols = zInfo.cols;
+    zData = zInfo.data;
+    const expanded = expandXY(x, y, rows, cols);
+    xData = expanded.x;
+    yData = expanded.y;
+  } else if (numericCount >= 4) {
+    // contour(X, Y, Z, N)
+    const x = args[pos++];
+    const y = args[pos++];
+    const zInfo = getMatrixInfo(args[pos++]);
+    rows = zInfo.rows;
+    cols = zInfo.cols;
+    zData = zInfo.data;
+    nLevels =
+      typeof args[pos] === "number"
+        ? (args[pos] as number)
+        : toNumber(args[pos]);
+    pos++;
+    const expanded = expandXY(x, y, rows, cols);
+    xData = expanded.x;
+    yData = expanded.y;
+  } else {
+    throw new Error("contour requires at least 1 argument");
+  }
+
+  // Skip name-value pairs
+  return { x: xData, y: yData, z: zData, rows, cols, nLevels, filled };
+}
+
+// ── Mesh argument parser ─────────────────────────────────────────────────
+
+/**
+ * Parse mesh() arguments — same as surf but with different default rendering.
+ */
+export function parseMeshArgs(args: RuntimeValue[]): SurfTrace {
+  const trace = parseSurfArgs(args);
+  if (!trace.edgeColor) trace.edgeColor = "flat";
+  if (!trace.faceColor) trace.faceColor = "none";
+  return trace;
 }

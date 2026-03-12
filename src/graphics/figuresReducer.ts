@@ -2,6 +2,8 @@ import type {
   PlotTrace,
   Plot3Trace,
   SurfTrace,
+  ImagescTrace,
+  ContourTrace,
 } from "../numbl-core/runtime/plotUtils.js";
 import type { PlotInstruction } from "../numbl-core/executor/types.js";
 
@@ -10,12 +12,19 @@ export type AxesState = {
   traces: PlotTrace[];
   plot3Traces: Plot3Trace[];
   surfTraces: SurfTrace[];
+  imagescTrace?: ImagescTrace;
+  contourTraces: ContourTrace[];
   title?: string;
   xlabel?: string;
   ylabel?: string;
+  zlabel?: string;
   shading?: "faceted" | "flat" | "interp";
   legend?: string[];
   gridOn?: boolean;
+  colorbar?: boolean;
+  colormap?: string;
+  view?: { az: number; el: number };
+  axisMode?: string;
 };
 
 export type FigureState = {
@@ -37,6 +46,7 @@ const defaultAxes: AxesState = {
   traces: [],
   plot3Traces: [],
   surfTraces: [],
+  contourTraces: [],
 };
 
 function getAxes(fig: FigureState): AxesState {
@@ -56,18 +66,26 @@ export type FiguresStateAction =
   | { type: "add_plot"; traces: PlotTrace[] }
   | { type: "add_plot3"; traces: Plot3Trace[] }
   | { type: "add_surf"; trace: SurfTrace }
+  | { type: "add_imagesc"; trace: ImagescTrace }
+  | { type: "add_contour"; trace: ContourTrace }
+  | { type: "add_mesh"; trace: SurfTrace }
   | { type: "close" }
   | { type: "close_all" }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }
   | { type: "set_ylabel"; text: string }
+  | { type: "set_zlabel"; text: string }
   | { type: "set_shading"; shading: "faceted" | "flat" | "interp" }
   | { type: "clf" }
   | { type: "clear" }
   | { type: "set_subplot"; rows: number; cols: number; index: number }
   | { type: "set_legend"; labels: string[] }
   | { type: "set_sgtitle"; text: string }
-  | { type: "set_grid"; value: boolean };
+  | { type: "set_grid"; value: boolean }
+  | { type: "set_colorbar"; value: string }
+  | { type: "set_colormap"; name: string }
+  | { type: "set_view"; az: number; el: number }
+  | { type: "set_axis"; value: string };
 
 export const initialFiguresState: FiguresState = {
   currentHandle: 1,
@@ -158,6 +176,65 @@ export const figuresReducer = (
             surfTraces: axes.holdOn
               ? [...axes.surfTraces, action.trace]
               : [action.trace],
+          }),
+        },
+      };
+    }
+
+    case "add_imagesc": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            imagescTrace: action.trace,
+            traces: axes.holdOn ? axes.traces : [],
+            plot3Traces: axes.holdOn ? axes.plot3Traces : [],
+            surfTraces: axes.holdOn ? axes.surfTraces : [],
+            contourTraces: axes.holdOn ? axes.contourTraces : [],
+          }),
+        },
+      };
+    }
+
+    case "add_contour": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            contourTraces: axes.holdOn
+              ? [...axes.contourTraces, action.trace]
+              : [action.trace],
+            traces: axes.holdOn ? axes.traces : [],
+            plot3Traces: axes.holdOn ? axes.plot3Traces : [],
+            surfTraces: axes.holdOn ? axes.surfTraces : [],
+          }),
+        },
+      };
+    }
+
+    case "add_mesh": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            traces: axes.holdOn ? axes.traces : [],
+            plot3Traces: axes.holdOn ? axes.plot3Traces : [],
+            surfTraces: axes.holdOn
+              ? [...axes.surfTraces, action.trace]
+              : [action.trace],
+            contourTraces: axes.holdOn ? axes.contourTraces : [],
           }),
         },
       };
@@ -306,6 +383,81 @@ export const figuresReducer = (
       };
     }
 
+    case "set_zlabel": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            zlabel: action.text,
+          }),
+        },
+      };
+    }
+
+    case "set_colorbar": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            colorbar: action.value !== "off",
+          }),
+        },
+      };
+    }
+
+    case "set_colormap": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            colormap: action.name,
+          }),
+        },
+      };
+    }
+
+    case "set_view": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            view: { az: action.az, el: action.el },
+          }),
+        },
+      };
+    }
+
+    case "set_axis": {
+      const fig = ensureFig(state);
+      const axes = getAxes(fig);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, {
+            ...axes,
+            axisMode: action.value,
+          }),
+        },
+      };
+    }
+
     default:
       return state;
   }
@@ -356,6 +508,22 @@ export function plotInstructionToAction(
       return { type: "set_sgtitle", text: instruction.text };
     case "set_grid":
       return { type: "set_grid", value: instruction.value };
+    case "imagesc":
+      return { type: "add_imagesc", trace: instruction.trace };
+    case "contour":
+      return { type: "add_contour", trace: instruction.trace };
+    case "mesh":
+      return { type: "add_mesh", trace: instruction.trace };
+    case "set_zlabel":
+      return { type: "set_zlabel", text: instruction.text };
+    case "set_colorbar":
+      return { type: "set_colorbar", value: instruction.value };
+    case "set_colormap":
+      return { type: "set_colormap", name: instruction.name };
+    case "set_view":
+      return { type: "set_view", az: instruction.az, el: instruction.el };
+    case "set_axis":
+      return { type: "set_axis", value: instruction.value };
     default:
       return undefined;
   }

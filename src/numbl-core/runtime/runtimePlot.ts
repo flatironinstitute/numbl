@@ -9,6 +9,10 @@ import {
   parsePlotArgs,
   parsePlot3Args,
   parseSurfArgs,
+  parseScatterArgs,
+  parseImagescArgs,
+  parseContourArgs,
+  parseMeshArgs,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -29,6 +33,10 @@ export function plotInstr(
     | { type: "set_subplot"; rows: unknown; cols: unknown; index: unknown }
     | { type: "set_sgtitle"; text: unknown }
     | { type: "set_grid"; value: unknown }
+    | { type: "set_zlabel"; text: unknown }
+    | { type: "set_colorbar"; value: unknown }
+    | { type: "set_colormap"; name: unknown }
+    | { type: "set_axis"; value: unknown }
 ): void {
   if (instr.type === "set_figure_handle") {
     let handle: number;
@@ -124,7 +132,63 @@ export function plotInstr(
       on = toString(mv) === "on";
     }
     plotInstructions.push({ type: "set_grid", value: on });
+  } else if (instr.type === "set_zlabel") {
+    const text =
+      typeof instr.text === "string"
+        ? instr.text
+        : toString(ensureRuntimeValue(instr.text));
+    plotInstructions.push({ type: "set_zlabel", text });
+  } else if (instr.type === "set_colorbar") {
+    const val =
+      typeof instr.value === "string"
+        ? instr.value
+        : toString(ensureRuntimeValue(instr.value));
+    plotInstructions.push({ type: "set_colorbar", value: val });
+  } else if (instr.type === "set_colormap") {
+    const name =
+      typeof instr.name === "string"
+        ? instr.name
+        : toString(ensureRuntimeValue(instr.name));
+    plotInstructions.push({
+      type: "set_colormap",
+      name: name.replace(/^"|"$/g, ""),
+    });
+  } else if (instr.type === "set_axis") {
+    const val =
+      typeof instr.value === "string"
+        ? instr.value
+        : toString(ensureRuntimeValue(instr.value));
+    plotInstructions.push({
+      type: "set_axis",
+      value: val.replace(/^"|"$/g, ""),
+    });
   }
+}
+
+export function viewCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  let az: number;
+  let el: number;
+  if (args.length === 1) {
+    // view(3) → default 3D view: az=-37.5, el=30
+    // view(2) → default 2D view: az=0, el=90
+    const n = typeof args[0] === "number" ? args[0] : toNumber(args[0]);
+    if (n === 2) {
+      az = 0;
+      el = 90;
+    } else {
+      az = -37.5;
+      el = 30;
+    }
+  } else if (args.length >= 2) {
+    az = typeof args[0] === "number" ? args[0] : toNumber(args[0]);
+    el = typeof args[1] === "number" ? args[1] : toNumber(args[1]);
+  } else {
+    return;
+  }
+  plotInstructions.push({ type: "set_view", az, el });
 }
 
 export function plotCall(
@@ -153,6 +217,41 @@ export function surfCall(
 ): void {
   const trace = parseSurfArgs(args);
   plotInstructions.push({ type: "surf", trace });
+}
+
+export function imagescCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseImagescArgs(args);
+  plotInstructions.push({ type: "imagesc", trace });
+}
+
+export function contourCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[],
+  filled: boolean
+): void {
+  const trace = parseContourArgs(args, filled);
+  plotInstructions.push({ type: "contour", trace });
+}
+
+export function meshCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseMeshArgs(args);
+  plotInstructions.push({ type: "mesh", trace });
+}
+
+export function scatterCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseScatterArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
 }
 
 export function legendCall(

@@ -197,6 +197,30 @@ export function dispatch(
       if (name === "surf") {
         return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
       }
+      if (name === "scatter") {
+        return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
+      }
+      if (name === "imagesc") {
+        return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
+      }
+      if (name === "contour") {
+        return rt.contour_call(
+          args.map(a => ensureRuntimeValue(a)),
+          false
+        );
+      }
+      if (name === "contourf") {
+        return rt.contour_call(
+          args.map(a => ensureRuntimeValue(a)),
+          true
+        );
+      }
+      if (name === "mesh") {
+        return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+      }
+      if (name === "waterfall") {
+        return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+      }
     }
 
     // 2. JIT compile on demand (local → class method → workspace).
@@ -261,6 +285,30 @@ export function callBuiltin(
   if (name === "surf") {
     return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
   }
+  if (name === "scatter") {
+    return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "imagesc") {
+    return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "contour") {
+    return rt.contour_call(
+      args.map(a => ensureRuntimeValue(a)),
+      false
+    );
+  }
+  if (name === "contourf") {
+    return rt.contour_call(
+      args.map(a => ensureRuntimeValue(a)),
+      true
+    );
+  }
+  if (name === "mesh") {
+    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "waterfall") {
+    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+  }
   const builtin = rt.builtins[name];
   if (builtin) return builtin(nargout, args);
   throw new RuntimeError(`'${name}' is not a builtin function`);
@@ -281,6 +329,30 @@ export function callBuiltinSync(
   }
   if (name === "surf") {
     return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "scatter") {
+    return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "imagesc") {
+    return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "contour") {
+    return rt.contour_call(
+      args.map(a => ensureRuntimeValue(a)),
+      false
+    );
+  }
+  if (name === "contourf") {
+    return rt.contour_call(
+      args.map(a => ensureRuntimeValue(a)),
+      true
+    );
+  }
+  if (name === "mesh") {
+    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+  }
+  if (name === "waterfall") {
+    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
   }
   const builtin = rt.builtins[name];
   if (builtin) return builtin(nargout, args);

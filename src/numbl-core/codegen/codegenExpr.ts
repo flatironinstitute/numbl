@@ -766,6 +766,15 @@ function genFuncCall(
     return `$rt.plot_instr({type: "set_sgtitle", text: ${args[0] ?? '""'}})`;
   if (kind.name === "grid")
     return `$rt.plot_instr({type: "set_grid", value: ${args[0] ?? "true"}})`;
+  if (kind.name === "zlabel")
+    return `$rt.plot_instr({type: "set_zlabel", text: ${args[0] ?? '""'}})`;
+  if (kind.name === "colorbar")
+    return `$rt.plot_instr({type: "set_colorbar", value: ${args[0] ?? '"on"'}})`;
+  if (kind.name === "colormap")
+    return `$rt.plot_instr({type: "set_colormap", name: ${args[0] ?? '"parula"'}})`;
+  if (kind.name === "axis")
+    return `$rt.plot_instr({type: "set_axis", value: ${args[0] ?? '"auto"'}})`;
+  if (kind.name === "view") return `$rt.view_call([${args.join(", ")}])`;
 
   // Nested function: call directly via closure (not through registry)
   if (cg.nestedFunctionNames.has(kind.name)) {

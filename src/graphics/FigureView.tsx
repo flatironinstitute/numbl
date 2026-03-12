@@ -109,6 +109,10 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       ylabel={axes.ylabel}
       legend={axes.legend}
       gridOn={axes.gridOn}
+      imagescTrace={axes.imagescTrace}
+      contourTraces={axes.contourTraces}
+      colormap={axes.colormap}
+      axisMode={axes.axisMode}
     />
   );
 }
@@ -120,6 +124,10 @@ function PlotCanvas({
   ylabel,
   legend,
   gridOn,
+  imagescTrace,
+  contourTraces,
+  colormap,
+  axisMode,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -127,6 +135,10 @@ function PlotCanvas({
   ylabel?: string;
   legend?: string[];
   gridOn?: boolean;
+  imagescTrace?: AxesState["imagescTrace"];
+  contourTraces?: AxesState["contourTraces"];
+  colormap?: string;
+  axisMode?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -134,8 +146,31 @@ function PlotCanvas({
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    drawPlot(canvas, traces, title, xlabel, ylabel, legend, gridOn);
-  }, [traces, title, xlabel, ylabel, legend, gridOn]);
+    drawPlot(
+      canvas,
+      traces,
+      title,
+      xlabel,
+      ylabel,
+      legend,
+      gridOn,
+      imagescTrace,
+      contourTraces,
+      colormap,
+      axisMode
+    );
+  }, [
+    traces,
+    title,
+    xlabel,
+    ylabel,
+    legend,
+    gridOn,
+    imagescTrace,
+    contourTraces,
+    colormap,
+    axisMode,
+  ]);
 
   useEffect(() => {
     const canvas = canvasRef.current;

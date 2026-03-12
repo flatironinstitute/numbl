@@ -1,7 +1,12 @@
 import { Expr } from "./types.js";
 
 export type CommandArgKind =
-  | { type: "Keyword"; allowed?: string[]; optional: boolean }
+  | {
+      type: "Keyword";
+      allowed?: string[];
+      optional: boolean;
+      multiKeyword?: boolean;
+    }
   | { type: "Any" };
 
 export interface CommandVerb {
@@ -66,6 +71,7 @@ export const COMMAND_VERBS: CommandVerb[] = [
         "vis3d",
       ],
       optional: false,
+      multiKeyword: true,
     },
   },
   { name: "clear", argKind: { type: "Any" } },

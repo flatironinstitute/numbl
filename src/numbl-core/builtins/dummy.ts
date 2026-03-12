@@ -45,7 +45,7 @@ function registerDummyStringFunctions(): void {
   }
 }
 
-const returnEmptyArrayFunctions = ["who", "xlim", "ylim", "jet", "hot"];
+const returnEmptyArrayFunctions = ["who", "xlim", "ylim"];
 
 function registerDummyArrayFunctions(): void {
   const fn = builtinSingle(() => RTV.tensor([], [0, 0]), {

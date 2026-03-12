@@ -98,6 +98,11 @@ import {
   plotCall as _plotCall,
   plot3Call as _plot3Call,
   surfCall as _surfCall,
+  scatterCall as _scatterCall,
+  imagescCall as _imagescCall,
+  contourCall as _contourCall,
+  meshCall as _meshCall,
+  viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
   pause as _pause,
@@ -241,6 +246,59 @@ export class Runtime {
     };
     this.builtins["surf"] = (_nargout: number, args: unknown[]) => {
       this.surf_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["scatter"] = (_nargout: number, args: unknown[]) => {
+      this.scatter_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["imagesc"] = (_nargout: number, args: unknown[]) => {
+      this.imagesc_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["contour"] = (_nargout: number, args: unknown[]) => {
+      this.contour_call(
+        args.map(a => ensureRuntimeValue(a)),
+        false
+      );
+    };
+    this.builtins["contourf"] = (_nargout: number, args: unknown[]) => {
+      this.contour_call(
+        args.map(a => ensureRuntimeValue(a)),
+        true
+      );
+    };
+    this.builtins["mesh"] = (_nargout: number, args: unknown[]) => {
+      this.mesh_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["waterfall"] = (_nargout: number, args: unknown[]) => {
+      this.mesh_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
+      if (args.length > 0) {
+        const rv = ensureRuntimeValue(args[0]);
+        const name = toString(rv).replace(/^"|"$/g, "");
+        _plotInstr(this.plotInstructions, { type: "set_colormap", name });
+      }
+    };
+    this.builtins["view"] = (_nargout: number, args: unknown[]) => {
+      this.view_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["zlabel"] = (_nargout: number, args: unknown[]) => {
+      if (args.length > 0) {
+        _plotInstr(this.plotInstructions, {
+          type: "set_zlabel",
+          text: args[0],
+        });
+      }
+    };
+    this.builtins["colorbar"] = (_nargout: number, args: unknown[]) => {
+      const val =
+        args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "on";
+      _plotInstr(this.plotInstructions, { type: "set_colorbar", value: val });
+    };
+    this.builtins["axis"] = (_nargout: number, args: unknown[]) => {
+      if (args.length > 0) {
+        const val = toString(ensureRuntimeValue(args[0])).replace(/^"|"$/g, "");
+        _plotInstr(this.plotInstructions, { type: "set_axis", value: val });
+      }
     };
   }
 
@@ -1040,6 +1098,26 @@ export class Runtime {
 
   public surf_call(args: RuntimeValue[]): void {
     _surfCall(this.plotInstructions, args);
+  }
+
+  public scatter_call(args: RuntimeValue[]): void {
+    _scatterCall(this.plotInstructions, args);
+  }
+
+  public imagesc_call(args: RuntimeValue[]): void {
+    _imagescCall(this.plotInstructions, args);
+  }
+
+  public contour_call(args: RuntimeValue[], filled: boolean): void {
+    _contourCall(this.plotInstructions, args, filled);
+  }
+
+  public mesh_call(args: RuntimeValue[]): void {
+    _meshCall(this.plotInstructions, args);
+  }
+
+  public view_call(args: RuntimeValue[]): void {
+    _viewCall(this.plotInstructions, args);
   }
 
   public legend_call(args: RuntimeValue[]): void {

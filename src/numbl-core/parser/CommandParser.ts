@@ -161,28 +161,37 @@ export class CommandParser extends ExpressionParser {
         }
         return args;
       }
-      if (args.length > 1) {
+      if (args.length > 1 && !command.argKind.multiKeyword) {
         throw this.error(
           `'${command.name}' command syntax accepts only one argument`
         );
       }
-      const keyword = extractKeyword(args[0]);
-      if (!keyword) {
-        throw this.error(
-          `'${command.name}' command syntax expects a keyword argument`
-        );
+      // Validate and normalize all keyword args
+      const keywords: string[] = [];
+      for (const arg of args) {
+        const keyword = extractKeyword(arg);
+        if (!keyword) {
+          throw this.error(
+            `'${command.name}' command syntax expects a keyword argument`
+          );
+        }
+        if (
+          allowed !== undefined &&
+          !allowed.some(a => a.toLowerCase() === keyword.toLowerCase())
+        ) {
+          throw this.error(
+            `'${command.name}' command syntax does not support '${keyword}'`
+          );
+        }
+        keywords.push(keyword);
       }
-      if (
-        allowed === undefined ||
-        allowed.some(a => a.toLowerCase() === keyword.toLowerCase())
-      ) {
+      if (keywords.length === 1) {
         const span = args[0].span;
-        return [{ type: "String", value: `"${keyword}"`, span }];
-      } else {
-        throw this.error(
-          `'${command.name}' command syntax does not support '${keyword}'`
-        );
+        return [{ type: "String", value: `"${keywords[0]}"`, span }];
       }
+      // Multiple keywords: join with space (e.g. "axis equal tight")
+      const span = args[0].span;
+      return [{ type: "String", value: `"${keywords.join(" ")}"`, span }];
     }
     return args;
   }
