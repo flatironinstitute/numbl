@@ -89,6 +89,13 @@ export function scanMFiles(
           name: fullPath,
           source,
         });
+      } else if (stat.isFile() && entry.endsWith(".wasm")) {
+        const data = readFileSync(fullPath);
+        files.push({
+          name: fullPath,
+          source: "",
+          data: new Uint8Array(data),
+        });
       }
     }
   } catch {
@@ -131,7 +138,11 @@ function findTestFiles(dir: string): string[] {
         continue;
       }
       if (stat.isDirectory()) {
-        if (!entry.startsWith("@") && !entry.startsWith("+")) {
+        if (
+          !entry.startsWith("@") &&
+          !entry.startsWith("+") &&
+          entry !== "wasm"
+        ) {
           walk(fullPath);
         }
       } else if (stat.isFile() && entry.endsWith(".m")) {

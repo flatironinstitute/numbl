@@ -50,6 +50,8 @@
     "test:coverage": "vitest run --coverage",
     "test:coverage:all": "bash scripts/coverage-all.sh",
     "test:scripts": "bash numbl_test_scripts/run_all.sh",
+    "test:wasm": "npx tsx src/cli.ts run-tests numbl_test_scripts/wasm",
+    "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
     "prepublishOnly": "npm run build:cli && npm run build:plot-viewer",
     "prepare": "husky"
   },

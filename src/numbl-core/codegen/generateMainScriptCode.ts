@@ -85,13 +85,16 @@ export function generateMainScriptCode(
   // ── 2. Set up lowering context ──────────────────────────────────────
   // source and mainFileName are stored for error reporting and workspace class detection
   const ctx = new LoweringContext(source, mainFileName);
-  // Separate .js user function files from .m workspace files
+  // Separate .js user function files, .wasm files, and .m workspace files
   const mWorkspaceFiles: WorkspaceFile[] = [];
   const jsWorkspaceFiles: WorkspaceFile[] = [];
+  const wasmWorkspaceFiles: WorkspaceFile[] = [];
   if (workspaceFiles) {
     for (const f of workspaceFiles) {
       if (f.name.endsWith(".js")) {
         jsWorkspaceFiles.push(f);
+      } else if (f.name.endsWith(".wasm")) {
+        wasmWorkspaceFiles.push(f);
       } else {
         mWorkspaceFiles.push(f);
       }
@@ -116,7 +119,10 @@ export function generateMainScriptCode(
 
   // Load .js user functions
   _t0 = performance.now();
-  const jsUserFunctions = loadJsUserFunctions(jsWorkspaceFiles);
+  const jsUserFunctions = loadJsUserFunctions(
+    jsWorkspaceFiles,
+    wasmWorkspaceFiles
+  );
   const _loadJsUserFunctionsMs = performance.now() - _t0;
 
   // Pre-parse all .m workspace files into the shared AST cache (each file parsed exactly once)

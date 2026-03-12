@@ -27,6 +27,9 @@ server/dist
 .env
 server/.env
 
+# WebAssembly build artifacts
+numbl_test_scripts/**/*.wasm
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

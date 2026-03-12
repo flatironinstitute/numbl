@@ -26,12 +26,33 @@ const defaultCheck = (_argTypes: ItemType[], nargout: number) => ({
 });
 
 /**
+ * Build a map of base name → Uint8Array from .wasm workspace files.
+ * E.g., "/path/to/myfunc.wasm" → "myfunc" → Uint8Array
+ */
+function buildWasmMap(wasmFiles: WorkspaceFile[]): Map<string, Uint8Array> {
+  const map = new Map<string, Uint8Array>();
+  for (const f of wasmFiles) {
+    if (!f.data) continue;
+    const base = f.name
+      .split("/")
+      .pop()!
+      .replace(/\.wasm$/, "");
+    map.set(base, f.data);
+  }
+  return map;
+}
+
+/**
  * Load .js user function files and return them as a map of function name → BuiltinFn.
+ * If wasmFiles are provided, matching .wasm modules are compiled and exposed as `wasm`
+ * in the .js function's execution context.
  */
 export function loadJsUserFunctions(
-  jsFiles: WorkspaceFile[]
+  jsFiles: WorkspaceFile[],
+  wasmFiles?: WorkspaceFile[]
 ): Map<string, BuiltinFn> {
   const result = new Map<string, BuiltinFn>();
+  const wasmMap = wasmFiles ? buildWasmMap(wasmFiles) : new Map();
 
   for (const file of jsFiles) {
     const funcName = funcNameFromFile(file.name);
@@ -51,15 +72,24 @@ export function loadJsUserFunctions(
         });
       };
 
+      // Compile matching .wasm module if available
+      let wasmInstance: WebAssembly.Instance | null = null;
+      const wasmData = wasmMap.get(funcName);
+      if (wasmData) {
+        const wasmModule = new WebAssembly.Module(wasmData);
+        wasmInstance = new WebAssembly.Instance(wasmModule);
+      }
+
       const factory = new Function(
         "RTV",
         "RuntimeError",
         "FloatXArray",
         "IType",
         "register",
+        "wasm",
         file.source
       );
-      factory(RTV, RuntimeError, FloatXArray, IType, registerFn);
+      factory(RTV, RuntimeError, FloatXArray, IType, registerFn, wasmInstance);
 
       if (branches.length === 0) {
         throw new Error(
