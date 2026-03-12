@@ -68,6 +68,17 @@ function createWorkspaceRegistry(): WorkspaceRegistry {
   };
 }
 
+// ── Import Entries ─────────────────────────────────────────────────────
+
+export type ImportEntry =
+  | {
+      wildcard: false;
+      qualifiedName: string;
+      shortName: string;
+      staticMethod?: { className: string; methodName: string };
+    }
+  | { wildcard: true; namespace: string };
+
 // ── Function Index ──────────────────────────────────────────────────────
 // A complete, upfront index mapping function names to where they exist.
 // Built once after workspace files are registered; enables definitive
@@ -121,6 +132,9 @@ export interface FunctionIndex {
 
   /** Absolute fileName → resolved function name (e.g. "pkg.func") */
   fileToFuncName: Map<string, string>;
+
+  /** Per-file import entries: fileName → ImportEntry[] */
+  fileImports: Map<string, ImportEntry[]>;
 }
 
 // ── Scope ───────────────────────────────────────────────────────────────
@@ -1092,6 +1106,62 @@ export class LoweringContext {
       }
     }
 
+    // 12. File imports — collect import statements from all file ASTs
+    const fileImports = new Map<string, ImportEntry[]>();
+    const collectImportsFromBody = (body: Stmt[], fileName: string): void => {
+      const entries: ImportEntry[] = [];
+      for (const stmt of body) {
+        if (stmt.type !== "Import") continue;
+        if (stmt.wildcard) {
+          entries.push({ wildcard: true, namespace: stmt.path.join(".") });
+        } else {
+          const qualifiedName = stmt.path.join(".");
+          const shortName = stmt.path[stmt.path.length - 1];
+          // Check if this is a static method import (e.g. import pkg.MyClass.method)
+          // by seeing if the prefix is a known class with a matching static method.
+          const prefix = stmt.path.slice(0, -1).join(".");
+          const isStaticMethod =
+            prefix.length > 0 && classStaticMethods.get(prefix)?.has(shortName);
+          entries.push({
+            wildcard: false,
+            qualifiedName,
+            shortName,
+            ...(isStaticMethod
+              ? { staticMethod: { className: prefix, methodName: shortName } }
+              : {}),
+          });
+        }
+      }
+      if (entries.length > 0) {
+        fileImports.set(fileName, entries);
+      }
+    };
+
+    // Main script
+    try {
+      const mainAst = this.getCachedAST(this.mainFileName);
+      collectImportsFromBody(mainAst.body, this.mainFileName);
+    } catch {
+      // Main file may not be in cache (e.g. JIT context)
+    }
+    // Workspace files
+    for (const [, entry] of this.registry.filesByFuncName) {
+      const ast = this.getCachedAST(entry.fileName);
+      collectImportsFromBody(ast.body, entry.fileName);
+    }
+    // Class files
+    for (const [, info] of this.registry.classesByName) {
+      const ast = this.getCachedAST(info.fileName);
+      collectImportsFromBody(ast.body, info.fileName);
+    }
+    // Private files
+    for (const [, entries] of this.registry.privateFilesByDir) {
+      for (const [, entry] of entries) {
+        const ast = this.getCachedAST(entry.fileName);
+        collectImportsFromBody(ast.body, entry.fileName);
+      }
+    }
+
     const index: FunctionIndex = {
       builtins,
       mainFileName: this.mainFileName,
@@ -1109,6 +1179,7 @@ export class LoweringContext {
       classInferiorClasses,
       searchPaths: this.registry.searchPaths,
       fileToFuncName: this.registry.fileToFuncName,
+      fileImports,
     };
     this.registry.functionIndex = index;
     return index;

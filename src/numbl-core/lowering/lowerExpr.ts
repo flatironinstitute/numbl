@@ -101,13 +101,18 @@ function resolveFuncCall(
       ]);
 
     case "workspaceFunction":
-      return makeFuncCallExpr(ctx, name, args, nargout, span, [
-        { type: "userFunction", functionId: name },
+      return makeFuncCallExpr(ctx, target.name, args, nargout, span, [
+        { type: "userFunction", functionId: target.name },
       ]);
 
     case "workspaceClassConstructor":
       return {
-        kind: { type: "ClassInstantiation", className: name, args, nargout },
+        kind: {
+          type: "ClassInstantiation",
+          className: target.className,
+          args,
+          nargout,
+        },
         span,
       };
 

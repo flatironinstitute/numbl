@@ -80,6 +80,78 @@ function getEffectiveDir(fileName: string, searchPaths: string[]): string {
 }
 
 /**
+ * Try to resolve a name via import entries for the calling file.
+ * @param wildcardOnly - if true, only check wildcard imports; if false, only explicit.
+ */
+function resolveViaImports(
+  name: string,
+  argTypes: ItemType[],
+  callSite: CallSite,
+  index: FunctionIndex,
+  wildcardOnly: boolean
+): ResolvedTarget | null {
+  const imports = index.fileImports.get(callSite.file);
+  if (!imports) return null;
+
+  for (const imp of imports) {
+    if (imp.wildcard !== wildcardOnly) continue;
+
+    if (imp.wildcard) {
+      // import pkg.* → try "pkg.<name>"
+      const candidateName = `${imp.namespace}.${name}`;
+      if (index.workspaceFunctions.has(candidateName)) {
+        return { kind: "workspaceFunction", name: candidateName, argTypes };
+      }
+      if (index.workspaceClasses.has(candidateName)) {
+        return {
+          kind: "workspaceClassConstructor",
+          className: candidateName,
+          argTypes,
+        };
+      }
+      // Check if namespace is a class and name is a static method
+      if (index.classStaticMethods.get(imp.namespace)?.has(name)) {
+        return {
+          kind: "classMethod",
+          className: imp.namespace,
+          methodName: name,
+          compileArgTypes: argTypes,
+          stripInstance: false,
+        };
+      }
+    } else {
+      // Explicit: import pkg.foo → only matches if name === shortName
+      if (name !== imp.shortName) continue;
+
+      if (imp.staticMethod) {
+        return {
+          kind: "classMethod",
+          className: imp.staticMethod.className,
+          methodName: imp.staticMethod.methodName,
+          compileArgTypes: argTypes,
+          stripInstance: false,
+        };
+      }
+      if (index.workspaceFunctions.has(imp.qualifiedName)) {
+        return {
+          kind: "workspaceFunction",
+          name: imp.qualifiedName,
+          argTypes,
+        };
+      }
+      if (index.workspaceClasses.has(imp.qualifiedName)) {
+        return {
+          kind: "workspaceClassConstructor",
+          className: imp.qualifiedName,
+          argTypes,
+        };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Definitively resolve a function name to a single target using the FunctionIndex.
  * Returns null only if the function is truly not found.
  *
@@ -112,6 +184,12 @@ export function resolveFunction(
       compileArgTypes,
       stripInstance,
     };
+  }
+
+  // 0.5. Explicit (non-wildcard) imports — higher priority than local functions
+  {
+    const imported = resolveViaImports(name, argTypes, callSite, index, false);
+    if (imported) return imported;
   }
 
   // 1. Local functions in the calling file
@@ -189,6 +267,12 @@ export function resolveFunction(
         };
       }
     }
+  }
+
+  // 1.5. Wildcard imports — after local functions, before private functions
+  {
+    const imported = resolveViaImports(name, argTypes, callSite, index, true);
+    if (imported) return imported;
   }
 
   // 2. Private functions (scoped to caller's directory)

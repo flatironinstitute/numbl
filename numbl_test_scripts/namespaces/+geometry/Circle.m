@@ -16,4 +16,10 @@ classdef Circle
       c = 2 * pi * obj.radius;
     end
   end
+
+  methods (Static)
+    function r = unit_radius()
+      r = 1;
+    end
+  end
 end
