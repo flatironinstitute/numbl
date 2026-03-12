@@ -262,6 +262,11 @@ export function resolveFunction(
     };
   }
 
+  // 4b. JS user function (same priority tier as workspace, but .m wins)
+  if (index.jsUserFunctions.has(name)) {
+    return { kind: "builtin", name };
+  }
+
   // 5. Workspace class constructor
   if (index.workspaceClasses.has(name)) {
     return {

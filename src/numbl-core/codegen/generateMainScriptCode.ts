@@ -13,7 +13,12 @@ import { Codegen } from "./codegen.js";
 import { collectStmtVarIdsOne } from "../lowering/varIdCollect.js";
 import { typeToString } from "../lowering/itemTypes.js";
 import type { IRVariable } from "../lowering/loweringTypes.js";
-import { register, unregister, type BuiltinFn } from "../builtins/registry.js";
+import {
+  register,
+  unregister,
+  getBuiltin,
+  type BuiltinFn,
+} from "../builtins/registry.js";
 import { loadJsUserFunctions } from "../jsUserFunctions.js";
 import { stdlibFiles, shimFiles } from "../stdlib-bundle.js";
 
@@ -150,7 +155,10 @@ export function generateMainScriptCode(
   // and are available during lowering (for type inference via check()).
   // They are unregistered at the end to avoid polluting the global singleton.
   const jsUserFuncNames = [...jsUserFunctions.keys()];
+  const savedBuiltins = new Map<string, BuiltinFn>();
   for (const name of jsUserFuncNames) {
+    const existing = getBuiltin(name);
+    if (existing) savedBuiltins.set(name, existing);
     register(name, jsUserFunctions.get(name)!);
   }
   const _registrationMs = performance.now() - _t0;
@@ -158,7 +166,7 @@ export function generateMainScriptCode(
   // Built after workspace/local function registration, before lowering so that
   // the resolver is available during both lowering and code generation.
   _t0 = performance.now();
-  const functionIndex = ctx.buildFunctionIndex();
+  const functionIndex = ctx.buildFunctionIndex(jsUserFuncNames);
   const _buildFunctionIndexMs = performance.now() - _t0;
 
   // ── 3. Lower main body ─────────────────────────────────────────────
@@ -273,10 +281,15 @@ export function generateMainScriptCode(
 
   const _codegenMs = performance.now() - _t0;
 
-  // Unregister .js user functions from the global builtin registry
-  // (they are registered on rt.builtins at runtime in executeCode)
+  // Restore original builtins that were temporarily overwritten by .js user functions
+  // (the js user functions are registered on rt.builtins at runtime in executeCode)
   for (const name of jsUserFuncNames) {
-    unregister(name);
+    const original = savedBuiltins.get(name);
+    if (original) {
+      register(name, original);
+    } else {
+      unregister(name);
+    }
   }
 
   return {
