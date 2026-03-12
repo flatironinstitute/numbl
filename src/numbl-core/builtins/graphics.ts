@@ -79,6 +79,12 @@ export function registerGraphicsFunctions(): void {
     builtinSingle(() => RTV.num(0))
   );
 
+  // shading(type) — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "shading",
+    builtinSingle(() => RTV.num(0))
+  );
+
   // drawnow
   register(
     "drawnow",

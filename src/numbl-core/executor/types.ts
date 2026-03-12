@@ -19,6 +19,7 @@ export type PlotInstruction =
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }
   | { type: "set_ylabel"; text: string }
+  | { type: "set_shading"; shading: "faceted" | "flat" | "interp" }
   | { type: "close" }
   | { type: "close_all" }
   | { type: "clf" };

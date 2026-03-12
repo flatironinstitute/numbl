@@ -22,6 +22,7 @@ export function plotInstr(
     | { type: "set_title"; text: unknown }
     | { type: "set_xlabel"; text: unknown }
     | { type: "set_ylabel"; text: unknown }
+    | { type: "set_shading"; shading: unknown }
     | { type: "close" }
     | { type: "close_all" }
     | { type: "clf" }
@@ -71,6 +72,13 @@ export function plotInstr(
         ? instr.text
         : toString(ensureRuntimeValue(instr.text));
     plotInstructions.push({ type: "set_ylabel", text });
+  } else if (instr.type === "set_shading") {
+    const raw =
+      typeof instr.shading === "string"
+        ? instr.shading
+        : toString(ensureRuntimeValue(instr.shading));
+    const shading = raw.replace(/^'|'$/g, "") as "faceted" | "flat" | "interp";
+    plotInstructions.push({ type: "set_shading", shading });
   } else if (instr.type === "close") {
     plotInstructions.push({ type: "close" });
   } else if (instr.type === "close_all") {

@@ -40,7 +40,11 @@ import {
 } from "../numblLanguage.js";
 import { parseMFile } from "../numbl-core/parser/index.js";
 import type { PlotInstruction } from "../numbl-core/executor/types.js";
-import { figuresReducer, initialFiguresState } from "../shared/figuresReducer";
+import {
+  figuresReducer,
+  initialFiguresState,
+  plotInstructionToAction,
+} from "../shared/figuresReducer";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { Splitter } from "./Splitter";
 import { FileBrowser } from "./FileBrowser";
@@ -244,53 +248,8 @@ export function IDEWorkspace({
   }, [figures.figs, figures.currentHandle]);
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    switch (instruction.type) {
-      case "set_figure_handle":
-        figuresDispatch({
-          type: "set_current_handle",
-          handle: instruction.handle,
-        });
-        break;
-      case "set_hold":
-        figuresDispatch({ type: "set_hold", value: instruction.value });
-        break;
-      case "plot":
-        figuresDispatch({
-          type: "add_plot",
-          traces: instruction.traces,
-        });
-        break;
-      case "plot3":
-        figuresDispatch({
-          type: "add_plot3",
-          traces: instruction.traces,
-        });
-        break;
-      case "surf":
-        figuresDispatch({
-          type: "add_surf",
-          trace: instruction.trace,
-        });
-        break;
-      case "close":
-        figuresDispatch({ type: "close" });
-        break;
-      case "close_all":
-        figuresDispatch({ type: "close_all" });
-        break;
-      case "set_title":
-        figuresDispatch({ type: "set_title", text: instruction.text });
-        break;
-      case "set_xlabel":
-        figuresDispatch({ type: "set_xlabel", text: instruction.text });
-        break;
-      case "set_ylabel":
-        figuresDispatch({ type: "set_ylabel", text: instruction.text });
-        break;
-      case "clf":
-        figuresDispatch({ type: "clf" });
-        break;
-    }
+    const action = plotInstructionToAction(instruction);
+    if (action) figuresDispatch(action);
   }, []);
 
   // Initialize script worker
@@ -981,6 +940,7 @@ export function IDEWorkspace({
             title={figures.figs[sortedFigureHandles[figureTab]]?.title}
             xlabel={figures.figs[sortedFigureHandles[figureTab]]?.xlabel}
             ylabel={figures.figs[sortedFigureHandles[figureTab]]?.ylabel}
+            shading={figures.figs[sortedFigureHandles[figureTab]]?.shading}
           />
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
@@ -1220,6 +1180,10 @@ export function IDEWorkspace({
                             ylabel={
                               figures.figs[sortedFigureHandles[figureTab]]
                                 ?.ylabel
+                            }
+                            shading={
+                              figures.figs[sortedFigureHandles[figureTab]]
+                                ?.shading
                             }
                           />
                         </>

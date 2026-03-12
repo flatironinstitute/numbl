@@ -3,6 +3,7 @@ import type {
   Plot3Trace,
   SurfTrace,
 } from "../numbl-core/runtime/plotUtils.js";
+import type { PlotInstruction } from "../numbl-core/executor/types.js";
 
 export type FiguresState = {
   currentHandle: number;
@@ -15,6 +16,7 @@ export type FiguresState = {
       title?: string;
       xlabel?: string;
       ylabel?: string;
+      shading?: "faceted" | "flat" | "interp";
     };
   };
 };
@@ -57,6 +59,10 @@ export type FiguresStateAction =
   | {
       type: "set_ylabel";
       text: string;
+    }
+  | {
+      type: "set_shading";
+      shading: "faceted" | "flat" | "interp";
     }
   | {
       type: "clf";
@@ -226,6 +232,21 @@ export const figuresReducer = (
         },
       };
     }
+    case "set_shading": {
+      const currentFig = state.figs[state.currentHandle] || {
+        holdOn: false,
+        traces: [],
+        plot3Traces: [],
+        surfTraces: [],
+      };
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: { ...currentFig, shading: action.shading },
+        },
+      };
+    }
     case "clf": {
       // Clear the current figure (remove traces but keep the tab)
       const currentFig = state.figs[state.currentHandle];
@@ -242,6 +263,7 @@ export const figuresReducer = (
             title: undefined,
             xlabel: undefined,
             ylabel: undefined,
+            shading: undefined,
           },
         },
       };
@@ -253,3 +275,40 @@ export const figuresReducer = (
       return state;
   }
 };
+
+/**
+ * Convert a PlotInstruction into the corresponding FiguresStateAction.
+ * Returns `undefined` for instruction types that have no reducer equivalent.
+ */
+export function plotInstructionToAction(
+  instruction: PlotInstruction
+): FiguresStateAction | undefined {
+  switch (instruction.type) {
+    case "set_figure_handle":
+      return { type: "set_current_handle", handle: instruction.handle };
+    case "set_hold":
+      return { type: "set_hold", value: instruction.value };
+    case "plot":
+      return { type: "add_plot", traces: instruction.traces };
+    case "plot3":
+      return { type: "add_plot3", traces: instruction.traces };
+    case "surf":
+      return { type: "add_surf", trace: instruction.trace };
+    case "close":
+      return { type: "close" };
+    case "close_all":
+      return { type: "close_all" };
+    case "set_title":
+      return { type: "set_title", text: instruction.text };
+    case "set_xlabel":
+      return { type: "set_xlabel", text: instruction.text };
+    case "set_ylabel":
+      return { type: "set_ylabel", text: instruction.text };
+    case "set_shading":
+      return { type: "set_shading", shading: instruction.shading };
+    case "clf":
+      return { type: "clf" };
+    default:
+      return undefined;
+  }
+}
