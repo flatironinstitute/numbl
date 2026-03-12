@@ -4,7 +4,16 @@
  */
 
 import { openSync, closeSync, readSync, writeSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
+
+function expandTilde(filepath: string): string {
+  if (filepath.startsWith("~/")) {
+    return join(homedir(), filepath.slice(2));
+  }
+  return filepath;
+}
 
 interface OpenFile {
   fd: number;
@@ -42,7 +51,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
   fopen(filename: string, permission: string): number {
     try {
       const flags = permissionToFlags(permission);
-      const fd = openSync(filename, flags);
+      const fd = openSync(expandTilde(filename), flags);
       const fid = this.nextFid++;
       this.openFiles.set(fid, {
         fd,
@@ -93,7 +102,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
   }
 
   fileread(filename: string): string {
-    return readFileSync(filename, "utf-8");
+    return readFileSync(expandTilde(filename), "utf-8");
   }
 
   feof(fid: number): number {
