@@ -47,7 +47,7 @@
     "test:float32": "NUMBL_USE_FLOAT32=true vitest run",
     "test:float64": "NUMBL_USE_FLOAT32=false vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:scripts": "git submodule update --init --remote numbl_test_scripts && bash numbl_test_scripts/run_all.sh",
+    "test:scripts": "bash numbl_test_scripts/run_all.sh",
     "prepublishOnly": "npm run build:cli && npm run build:plot-viewer",
     "prepare": "husky"
   },
