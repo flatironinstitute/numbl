@@ -29,8 +29,31 @@ export function PlotViewerApp() {
       case "surf":
         dispatch({ type: "add_surf", trace: instruction.trace });
         break;
+      case "close":
+        dispatch({ type: "close" });
+        // activeFigure may have been removed; sync will happen via useEffect below
+        break;
+      case "close_all":
+        dispatch({ type: "close_all" });
+        activeFigureRef.current = 1;
+        setActiveFigure(1);
+        break;
+      case "clf":
+        dispatch({ type: "clf" });
+        break;
     }
   }, []);
+
+  // Sync activeFigure when the active figure is removed (e.g., by close)
+  useEffect(() => {
+    const handles = Object.keys(figures.figs).map(Number);
+    if (handles.length > 0 && !figures.figs[activeFigure]) {
+      const sorted = handles.sort((a, b) => a - b);
+      const next = sorted[sorted.length - 1];
+      activeFigureRef.current = next;
+      setActiveFigure(next);
+    }
+  }, [figures.figs, activeFigure]);
 
   useEffect(() => {
     const evtSource = new EventSource("/events");
