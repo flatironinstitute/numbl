@@ -50,4 +50,4 @@ Apache 2.0.
 
 ## Acknowledgements
 
-See [ACKNOWLEDGEMENTS.md](ACKNOWLEDGEMENTS.md).
+See [acknowledgements.md](docs/acknowledgements.md).
