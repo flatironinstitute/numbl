@@ -166,6 +166,29 @@ function complexComparisonOp(
 }
 
 /** Complex binary operation supporting scalars and tensors */
+function signedInf(x: number): number {
+  return x > 0 ? Infinity : x < 0 ? -Infinity : 0;
+}
+
+function complexDivide(
+  aRe: number,
+  aIm: number,
+  bRe: number,
+  bIm: number
+): { re: number; im: number } {
+  const denom = bRe * bRe + bIm * bIm;
+  if (denom === 0) {
+    if (aRe === 0 && aIm === 0) {
+      return { re: NaN, im: 0 };
+    }
+    return { re: signedInf(aRe), im: signedInf(aIm) };
+  }
+  return {
+    re: (aRe * bRe + aIm * bIm) / denom,
+    im: (aIm * bRe - aRe * bIm) / denom,
+  };
+}
+
 function complexBinaryOp(
   a: RuntimeValue,
   b: RuntimeValue,
@@ -326,13 +349,7 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   }
   // Scalar or element-wise division
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => {
-      const denom = bRe * bRe + bIm * bIm;
-      return {
-        re: (aRe * bRe + aIm * bIm) / denom,
-        im: (aIm * bRe - aRe * bIm) / denom,
-      };
-    });
+    return complexBinaryOp(a, b, complexDivide);
   }
   return binaryOp(a, b, (x, y) => x / y);
 }
@@ -340,13 +357,7 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 /** Element-wise divide */
 export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => {
-      const denom = bRe * bRe + bIm * bIm;
-      return {
-        re: (aRe * bRe + aIm * bIm) / denom,
-        im: (aIm * bRe - aRe * bIm) / denom,
-      };
-    });
+    return complexBinaryOp(a, b, complexDivide);
   }
   return binaryOp(a, b, (x, y) => x / y);
 }
