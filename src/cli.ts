@@ -60,16 +60,22 @@ export function scanMFiles(
 ): WorkspaceFile[] {
   const files: WorkspaceFile[] = [];
 
+  let entries: string[];
   try {
-    const entries = readdirSync(dirPath);
+    entries = readdirSync(dirPath);
+  } catch {
+    // Can't read directory (e.g. permission denied) — skip it
+    return files;
+  }
 
-    for (const entry of entries) {
-      const fullPath = join(dirPath, entry);
+  for (const entry of entries) {
+    const fullPath = join(dirPath, entry);
 
-      if (excludeFile && fullPath === excludeFile) {
-        continue;
-      }
+    if (excludeFile && fullPath === excludeFile) {
+      continue;
+    }
 
+    try {
       const stat = statSync(fullPath);
 
       if (stat.isDirectory()) {
@@ -97,9 +103,11 @@ export function scanMFiles(
           data: new Uint8Array(data),
         });
       }
+    } catch (err) {
+      console.warn(
+        `Warning: could not read ${fullPath}: ${err instanceof Error ? err.message : String(err)}`
+      );
     }
-  } catch {
-    // Silently skip directories we can't read
   }
 
   return files;
