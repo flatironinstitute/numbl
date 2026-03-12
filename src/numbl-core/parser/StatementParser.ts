@@ -224,7 +224,11 @@ export class StatementParser extends ClassParser {
             args.push(this.parseExpr());
           }
           if (!this.consume(Token.RParen)) {
-            throw this.errorWithExpected("expected ')' after indices", ")");
+            // Could be Name=Value syntax inside a function call, not
+            // a subscripted assignment.  Backtrack to let the expression
+            // parser handle it with Name=Value desugaring.
+            this.pos = save;
+            return null;
           }
         }
         const end = this.lastTokenEnd();

@@ -1007,6 +1007,9 @@ export class Runtime {
       | { type: "set_figure_handle"; handle: unknown }
       | { type: "plot"; x: unknown; y: unknown }
       | { type: "set_hold"; value: unknown }
+      | { type: "close" }
+      | { type: "close_all" }
+      | { type: "clf" }
   ): void {
     _plotInstr(this.plotInstructions, instr);
     if (instr.type === "set_hold") {

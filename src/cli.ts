@@ -391,7 +391,9 @@ async function cmdRun(args: string[]) {
   const mipPaths: string[] = [];
   for (const d of directives) {
     if (d.type === "load") {
-      mipPaths.push(...processMipLoad(d.packageName));
+      for (const result of processMipLoad(d.packageName)) {
+        mipPaths.push(...result.paths);
+      }
     }
   }
 
