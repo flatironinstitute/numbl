@@ -134,7 +134,10 @@ export const COMMAND_VERBS: CommandVerb[] = [
   { name: "subplot", argKind: { type: "Any" } },
   { name: "clf", argKind: { type: "Any" } },
   { name: "cla", argKind: { type: "Any" } },
-  { name: "close", argKind: { type: "Any" } },
+  {
+    name: "close",
+    argKind: { type: "Keyword", allowed: ["all"], optional: true },
+  },
 ];
 
 export function extractKeyword(expr: Expr): string | null {

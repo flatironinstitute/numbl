@@ -38,6 +38,15 @@ export type FiguresStateAction =
       trace: SurfTrace;
     }
   | {
+      type: "close";
+    }
+  | {
+      type: "close_all";
+    }
+  | {
+      type: "clf";
+    }
+  | {
       type: "clear";
     };
 
@@ -133,6 +142,39 @@ export const figuresReducer = (
             surfTraces: currentFig.holdOn
               ? [...currentFig.surfTraces, action.trace]
               : [action.trace],
+          },
+        },
+      };
+    }
+    case "close": {
+      // Close the current figure (remove it from figs)
+      const { [state.currentHandle]: _removed, ...remainingFigs } = state.figs;
+      const handles = Object.keys(remainingFigs)
+        .map(Number)
+        .sort((a, b) => a - b);
+      return {
+        ...state,
+        currentHandle: handles.length > 0 ? handles[handles.length - 1] : 1,
+        figs: remainingFigs,
+      };
+    }
+    case "close_all": {
+      // Close all figures
+      return initialFiguresState;
+    }
+    case "clf": {
+      // Clear the current figure (remove traces but keep the tab)
+      const currentFig = state.figs[state.currentHandle];
+      if (!currentFig) return state;
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: {
+            ...currentFig,
+            traces: [],
+            plot3Traces: [],
+            surfTraces: [],
           },
         },
       };
