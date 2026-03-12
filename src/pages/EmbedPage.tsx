@@ -26,6 +26,8 @@ import { formatDiagnostic } from "../numbl-core/diagnostics";
 import type { PlotInstruction } from "../numbl-core/executor/types.js";
 import { FigureView } from "../components/FigureView";
 import { figuresReducer, initialFiguresState } from "../shared/figuresReducer";
+import { extractMipDirectives } from "../mip-directives-core";
+import { loadMipPackageBrowser } from "../mip/browser-backend";
 
 const DEFAULT_SCRIPT = `% Welcome to numbl!
 % Try running some MATLAB code:
@@ -148,18 +150,53 @@ export function EmbedPage() {
     };
   }, [setupWorkerHandler]);
 
-  const handleRun = useCallback(() => {
+  const handleRun = useCallback(async () => {
     if (!workerRef.current) return;
     setIsRunning(true);
     setOutput("");
     figuresDispatch({ type: "clear" });
+
+    // Extract mip directives and load packages before execution
+    let codeToRun = code;
+    const mipWorkspaceFiles: { name: string; source: string }[] = [];
+    const mipSearchPaths: string[] = [];
+    try {
+      const { directives, cleanedSource } = extractMipDirectives(
+        code,
+        "script.m"
+      );
+      if (directives.length > 0) {
+        codeToRun = cleanedSource;
+        for (const d of directives) {
+          if (d.type === "load") {
+            setOutput(
+              prev => prev + `Loading mip package: ${d.packageName}...\n`
+            );
+            const result = await loadMipPackageBrowser(d.packageName, msg => {
+              setOutput(prev => prev + `  ${msg}\n`);
+            });
+            mipWorkspaceFiles.push(...result.workspaceFiles);
+            mipSearchPaths.push(...result.searchPaths);
+          }
+        }
+      }
+    } catch (error) {
+      setOutput(
+        prev =>
+          prev +
+          `\nMIP load error: ${error instanceof Error ? error.message : "Unknown error"}\n`
+      );
+      setIsRunning(false);
+      return;
+    }
+
     workerRef.current.postMessage({
       type: "run",
-      code,
+      code: codeToRun,
       options: { displayResults: true, maxIterations: 10000000 },
-      workspaceFiles: [],
+      workspaceFiles: mipWorkspaceFiles,
       mainFileName: "script.m",
-      searchPaths: [],
+      searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
     });
   }, [code]);
 
