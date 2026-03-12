@@ -56,7 +56,7 @@ function parseWasmDirective(source: string): string | null {
  * WASI and Emscripten stubs as needed.
  */
 function instantiateWasm(wasmData: Uint8Array): WebAssembly.Instance {
-  const wasmModule = new WebAssembly.Module(wasmData);
+  const wasmModule = new WebAssembly.Module(wasmData as BufferSource);
   const moduleImports = WebAssembly.Module.imports(wasmModule);
   const importObject: WebAssembly.Imports = {};
   const neededModules = new Set(moduleImports.map(i => i.module));
