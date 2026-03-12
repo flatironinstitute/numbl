@@ -361,12 +361,8 @@ describe("displayValue", () => {
     const fn: RuntimeFunction = {
       kind: "function",
       name: "sin",
-      jsFn: null,
-      jsFnExpectsNargout: false,
-      body: null,
-      params: [],
-      captures: new Map(),
-      file: null,
+      captures: [],
+      impl: "builtin",
     };
     expect(displayValue(fn)).toBe("@sin");
   });
@@ -397,7 +393,6 @@ describe("displayValue", () => {
       className: "MyClass",
       fields: new Map([["val", 42]]),
       isHandleClass: false,
-      classDef: null!,
     };
     const s = displayValue(inst);
     expect(s).toContain("MyClass");
