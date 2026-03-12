@@ -10,3 +10,47 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for the development guide.
 ## Workflow
 
 - After creating a PR, switch back to `main`.
+
+## Testing
+
+Run both test suites before considering work complete:
+
+```bash
+npm test              # unit tests (Vitest)
+npm run test:scripts  # integration tests (.m scripts)
+```
+
+### Integration test scripts
+
+Test scripts live in `numbl_test_scripts/` organized by category (e.g., `builtins/`, `arithmetic/`, `linear_algebra/`). Each test must end with `disp('SUCCESS')` if all assertions pass.
+
+Run a single test in numbl:
+
+```bash
+npx tsx src/cli.ts run numbl_test_scripts/<category>/<test>.m
+```
+
+Run the same test in MATLAB:
+
+```bash
+matlab -batch "run('numbl_test_scripts/<category>/<test>.m')"
+```
+
+MATLAB may segfault on exit — this is a known MATLAB issue and not related to the test. Check for `SUCCESS` in the output before the crash.
+
+## Formatting
+
+Do **not** run `npm run format` manually. Prettier runs automatically via a pre-commit hook (Husky + lint-staged), so formatting is handled at commit time.
+
+## Adding builtins
+
+Builtins are registered in `src/numbl-core/builtins/`. Most math/special functions go in `math.ts` inside `registerMathFunctions()`. Key patterns:
+
+- `register("name", builtinSingle((args, nargout) => { ... }))` for general functions
+- `complexElemwise(realFn, complexFn, outKind)` for element-wise math
+- `elemwise(fn)` for real-only element-wise math
+- `binaryScalar(fn)` for two-argument scalar functions
+
+Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, `RTV.logical()`. Use `toNumber(arg)` to extract a scalar. Check types with `isRuntimeNumber()`, `isRuntimeTensor()`, `isRuntimeChar()`, etc.
+
+Tensors use column-major (Fortran) storage order — element `(i, j)` of an `[m, n]` matrix is at index `j * m + i`.

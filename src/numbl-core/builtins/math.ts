@@ -1784,4 +1784,180 @@ export function registerMathFunctions(): void {
       return buildResult(snArr, cnArr, dnArr, uT.shape);
     })
   );
+
+  // ── legendre: Associated Legendre functions ──────────────────────────
+  register(
+    "legendre",
+    builtinSingle(args => {
+      if (args.length < 2 || args.length > 3) {
+        throw new RuntimeError("legendre requires 2 or 3 arguments");
+      }
+
+      const n = Math.round(toNumber(args[0]));
+      if (n < 0 || !isFinite(n)) {
+        throw new RuntimeError("Degree n must be a non-negative integer");
+      }
+
+      // Parse normalization
+      let normalization = "unnorm";
+      if (args.length === 3) {
+        const normArg = args[2];
+        if (isRuntimeChar(normArg)) {
+          normalization = normArg.value;
+        } else if (typeof normArg === "string") {
+          normalization = normArg;
+        } else {
+          throw new RuntimeError(
+            "Third argument must be a normalization string"
+          );
+        }
+        if (
+          normalization !== "unnorm" &&
+          normalization !== "sch" &&
+          normalization !== "norm"
+        ) {
+          throw new RuntimeError(
+            "Normalization must be 'unnorm', 'sch', or 'norm'"
+          );
+        }
+      }
+
+      // Get x values as flat array and determine output shape
+      const xArg = args[1];
+      let xValues: number[];
+      let xShape: number[];
+      if (isRuntimeNumber(xArg)) {
+        xValues = [xArg as number];
+        xShape = [1, 1];
+      } else if (isRuntimeLogical(xArg)) {
+        xValues = [xArg ? 1 : 0];
+        xShape = [1, 1];
+      } else if (isRuntimeTensor(xArg)) {
+        const t = xArg as RuntimeTensor;
+        xValues = Array.from(t.data);
+        xShape = t.shape;
+      } else {
+        throw new RuntimeError("X must be a numeric value");
+      }
+
+      const numX = xValues.length;
+      const numOrders = n + 1; // m = 0, 1, ..., n
+
+      // Compute associated Legendre functions using recurrence
+      // Output shape: (n+1) x [xShape...]
+      const outSize = numOrders * numX;
+      const result = new FloatXArray(outSize);
+
+      for (let xi = 0; xi < numX; xi++) {
+        const x = xValues[xi];
+        // Compute P_m^n(x) for m = 0..n using recurrence in degree
+        // We use upward recurrence on the degree l for each order m
+        const pmn = legendreAllOrders(n, x);
+
+        for (let m = 0; m <= n; m++) {
+          let val = pmn[m];
+
+          // Apply normalization
+          if (normalization === "sch") {
+            if (m > 0) {
+              // S_n^m = (-1)^m * sqrt(2*(n-m)!/(n+m)!) * P_n^m
+              const scale =
+                Math.pow(-1, m) *
+                Math.sqrt((2 * factorialVal(n - m)) / factorialVal(n + m));
+              val = scale * val;
+            }
+          } else if (normalization === "norm") {
+            // N_n^m = (-1)^m * sqrt((n+0.5)*(n-m)!/(n+m)!) * P_n^m
+            const scale =
+              Math.pow(-1, m) *
+              Math.sqrt(
+                ((n + 0.5) * factorialVal(n - m)) / factorialVal(n + m)
+              );
+            val = scale * val;
+          }
+
+          result[xi * numOrders + m] = val;
+        }
+      }
+
+      // If x was scalar, output is column vector of size (n+1) x 1
+      if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
+        return RTV.tensor(result, [numOrders, 1]);
+      }
+      // If x is a vector, output is (n+1) x length(X)
+      // If x is a matrix/nd-array, output has one more dimension: (n+1) x size(X)
+      if (xShape.length === 2 && (xShape[0] === 1 || xShape[1] === 1)) {
+        // Vector case
+        return RTV.tensor(result, [numOrders, numX]);
+      }
+      // General nd case
+      return RTV.tensor(result, [numOrders, ...xShape]);
+    })
+  );
+}
+
+// Compute factorial for small integers
+function factorialVal(n: number): number {
+  if (n <= 1) return 1;
+  let r = 1;
+  for (let i = 2; i <= n; i++) r *= i;
+  return r;
+}
+
+// Compute associated Legendre functions P_n^m(x) for all m = 0..n
+// Uses the standard recurrence relations with Condon-Shortley phase
+function legendreAllOrders(n: number, x: number): number[] {
+  const result = new Array<number>(n + 1);
+
+  if (n === 0) {
+    result[0] = 1;
+    return result;
+  }
+
+  // Start with sectoral harmonics P_m^m using:
+  // P_0^0 = 1
+  // P_m^m = (-1)^m * (2m-1)!! * (1-x^2)^(m/2)
+  // Then use recurrence to get P_n^m from P_m^m and P_{m+1}^{m+1}
+
+  const sqrtFactor = Math.sqrt(1 - x * x);
+
+  // Compute P_l^m(x) for each m using recurrence on l
+  for (let m = 0; m <= n; m++) {
+    // P_m^m(x) = (-1)^m * (2m-1)!! * (1-x^2)^(m/2)
+    let pmm = 1.0;
+    if (m > 0) {
+      // (2m-1)!! = 1*3*5*...*(2m-1)
+      let dblFact = 1.0;
+      for (let i = 1; i <= m; i++) {
+        dblFact *= 2 * i - 1;
+      }
+      pmm = Math.pow(-1, m) * dblFact * Math.pow(sqrtFactor, m);
+    }
+
+    if (m === n) {
+      result[m] = pmm;
+      continue;
+    }
+
+    // P_{m+1}^m(x) = x * (2m+1) * P_m^m(x)
+    const pmm1 = x * (2 * m + 1) * pmm;
+
+    if (m + 1 === n) {
+      result[m] = pmm1;
+      continue;
+    }
+
+    // Recurrence: (l-m)*P_l^m = x*(2l-1)*P_{l-1}^m - (l+m-1)*P_{l-2}^m
+    let pPrev2 = pmm;
+    let pPrev1 = pmm1;
+    let pCurr = 0;
+    for (let l = m + 2; l <= n; l++) {
+      pCurr = (x * (2 * l - 1) * pPrev1 - (l + m - 1) * pPrev2) / (l - m);
+      pPrev2 = pPrev1;
+      pPrev1 = pCurr;
+    }
+    result[m] = pCurr;
+  }
+
+  return result;
 }
