@@ -44,16 +44,15 @@ export function PlotViewerApp() {
     }
   }, []);
 
-  // Sync activeFigure when the active figure is removed (e.g., by close)
-  useEffect(() => {
+  // When the active figure is removed (e.g., by close), fall back to the
+  // highest remaining handle so that a valid figure is always displayed.
+  const effectiveActiveFigure = (() => {
+    if (figures.figs[activeFigure]) return activeFigure;
     const handles = Object.keys(figures.figs).map(Number);
-    if (handles.length > 0 && !figures.figs[activeFigure]) {
-      const sorted = handles.sort((a, b) => a - b);
-      const next = sorted[sorted.length - 1];
-      activeFigureRef.current = next;
-      setActiveFigure(next);
-    }
-  }, [figures.figs, activeFigure]);
+    if (handles.length === 0) return activeFigure;
+    const next = handles.sort((a, b) => a - b)[handles.length - 1];
+    return next;
+  })();
 
   useEffect(() => {
     const evtSource = new EventSource("/events");
@@ -100,7 +99,7 @@ export function PlotViewerApp() {
   const handles = Object.keys(figures.figs)
     .map(Number)
     .sort((a, b) => a - b);
-  const currentFig = figures.figs[activeFigure];
+  const currentFig = figures.figs[effectiveActiveFigure];
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
@@ -111,7 +110,7 @@ export function PlotViewerApp() {
             <button
               key={h}
               onClick={() => setActiveFigure(h)}
-              style={h === activeFigure ? activeTabStyle : tabStyle}
+              style={h === effectiveActiveFigure ? activeTabStyle : tabStyle}
             >
               Figure {h}
             </button>

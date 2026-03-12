@@ -218,8 +218,6 @@ export class StatementParser extends ClassParser {
     while (true) {
       if (this.consume(Token.LParen)) {
         const args: Expr[] = [];
-        const parenSave = this.pos;
-        let parenOk = true;
         if (!this.consume(Token.RParen)) {
           args.push(this.parseExpr());
           while (this.consume(Token.Comma)) {

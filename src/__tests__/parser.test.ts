@@ -1835,7 +1835,7 @@ describe("parseMFile - Name=Value syntax", () => {
       // LineWidth desugared to 'LineWidth' string literal
       expect(expr.args[2].type).toBe("Char");
       if (expr.args[2].type === "Char") {
-        expect(expr.args[2].value).toBe("LineWidth");
+        expect(expr.args[2].value).toBe("'LineWidth'");
       }
       expect(expr.args[3].type).toBe("Number");
     }
@@ -1848,12 +1848,12 @@ describe("parseMFile - Name=Value syntax", () => {
       expect(expr.args).toHaveLength(4);
       expect(expr.args[0].type).toBe("Char");
       if (expr.args[0].type === "Char") {
-        expect(expr.args[0].value).toBe("Color");
+        expect(expr.args[0].value).toBe("'Color'");
       }
       expect(expr.args[1].type).toBe("Char");
       expect(expr.args[2].type).toBe("Char");
       if (expr.args[2].type === "Char") {
-        expect(expr.args[2].value).toBe("Size");
+        expect(expr.args[2].value).toBe("'Size'");
       }
       expect(expr.args[3].type).toBe("Number");
     }
@@ -1868,7 +1868,7 @@ describe("parseMFile - Name=Value syntax", () => {
       expect(expr.args[1].type).toBe("Number");
       expect(expr.args[2].type).toBe("Char");
       if (expr.args[2].type === "Char") {
-        expect(expr.args[2].value).toBe("Opt");
+        expect(expr.args[2].value).toBe("'Opt'");
       }
       expect(expr.args[3].type).toBe("Number");
     }
