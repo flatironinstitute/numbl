@@ -3,7 +3,6 @@ tmp*
 coverage
 build
 
-CLAUDE.md*
 CLAUDE.*.md
 .claude/
 
