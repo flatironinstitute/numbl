@@ -785,6 +785,14 @@ export function registerMiscFunctions(): void {
   );
 
   register(
+    "clc",
+    builtinSingle(() => {
+      // No-op: console clearing is not meaningful in compiled mode
+      return RTV.num(0);
+    })
+  );
+
+  register(
     "clf",
     builtinSingle(() => {
       // No-op: figure clearing is not meaningful in this context

@@ -44,11 +44,11 @@ import {
   figuresReducer,
   initialFiguresState,
   plotInstructionToAction,
-} from "../shared/figuresReducer";
+} from "../graphics/figuresReducer.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { Splitter } from "./Splitter";
 import { FileBrowser } from "./FileBrowser";
-import { FigureView } from "./FigureView";
+import { FigureView } from "../graphics/FigureView.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
 import { MipPackageManager } from "./MipPackageManager";
@@ -915,19 +915,7 @@ export function IDEWorkspace({
       </Tabs>
       <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
         {sortedFigureHandles.length > 0 ? (
-          <FigureView
-            traces={figures.figs[sortedFigureHandles[figureTab]]?.traces || []}
-            plot3Traces={
-              figures.figs[sortedFigureHandles[figureTab]]?.plot3Traces || []
-            }
-            surfTraces={
-              figures.figs[sortedFigureHandles[figureTab]]?.surfTraces || []
-            }
-            title={figures.figs[sortedFigureHandles[figureTab]]?.title}
-            xlabel={figures.figs[sortedFigureHandles[figureTab]]?.xlabel}
-            ylabel={figures.figs[sortedFigureHandles[figureTab]]?.ylabel}
-            shading={figures.figs[sortedFigureHandles[figureTab]]?.shading}
-          />
+          <FigureView figure={figures.figs[sortedFigureHandles[figureTab]]} />
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
             No figures
@@ -1136,33 +1124,8 @@ export function IDEWorkspace({
                             </Tabs>
                           )}
                           <FigureView
-                            traces={
+                            figure={
                               figures.figs[sortedFigureHandles[figureTab]]
-                                ?.traces || []
-                            }
-                            plot3Traces={
-                              figures.figs[sortedFigureHandles[figureTab]]
-                                ?.plot3Traces || []
-                            }
-                            surfTraces={
-                              figures.figs[sortedFigureHandles[figureTab]]
-                                ?.surfTraces || []
-                            }
-                            title={
-                              figures.figs[sortedFigureHandles[figureTab]]
-                                ?.title
-                            }
-                            xlabel={
-                              figures.figs[sortedFigureHandles[figureTab]]
-                                ?.xlabel
-                            }
-                            ylabel={
-                              figures.figs[sortedFigureHandles[figureTab]]
-                                ?.ylabel
-                            }
-                            shading={
-                              figures.figs[sortedFigureHandles[figureTab]]
-                                ?.shading
                             }
                           />
                         </>

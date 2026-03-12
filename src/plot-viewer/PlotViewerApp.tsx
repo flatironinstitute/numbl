@@ -1,11 +1,11 @@
 import { useReducer, useEffect, useRef, useState, useCallback } from "react";
 import type { PlotInstruction } from "../numbl-core/executor/types.js";
-import { FigureView } from "../components/FigureView";
+import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
   plotInstructionToAction,
-} from "../shared/figuresReducer";
+} from "../graphics/figuresReducer.js";
 
 export function PlotViewerApp() {
   const [figures, dispatch] = useReducer(figuresReducer, initialFiguresState);
@@ -110,15 +110,7 @@ export function PlotViewerApp() {
               inset: 0,
             }}
           >
-            <FigureView
-              traces={currentFig.traces}
-              plot3Traces={currentFig.plot3Traces}
-              surfTraces={currentFig.surfTraces}
-              title={currentFig.title}
-              xlabel={currentFig.xlabel}
-              ylabel={currentFig.ylabel}
-              shading={currentFig.shading}
-            />
+            <FigureView figure={currentFig} />
           </div>
         ) : (
           <div

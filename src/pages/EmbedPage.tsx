@@ -24,8 +24,12 @@ import {
 } from "../numblLanguage.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import type { PlotInstruction } from "../numbl-core/executor/types.js";
-import { FigureView } from "../components/FigureView";
-import { figuresReducer, initialFiguresState } from "../shared/figuresReducer";
+import { FigureView } from "../graphics/FigureView.js";
+import {
+  figuresReducer,
+  initialFiguresState,
+  plotInstructionToAction,
+} from "../graphics/figuresReducer.js";
 import { extractMipDirectives } from "../mip-directives-core";
 import { loadMipPackageBrowser } from "../mip/browser-backend";
 
@@ -64,46 +68,16 @@ export function EmbedPage() {
   );
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    switch (instruction.type) {
-      case "set_figure_handle":
-        figuresDispatch({
-          type: "set_current_handle",
-          handle: instruction.handle,
-        });
-        break;
-      case "set_hold":
-        figuresDispatch({ type: "set_hold", value: instruction.value });
-        break;
-      case "plot":
-        figuresDispatch({ type: "add_plot", traces: instruction.traces });
-        setOutputTab(1);
-        break;
-      case "plot3":
-        figuresDispatch({ type: "add_plot3", traces: instruction.traces });
-        setOutputTab(1);
-        break;
-      case "surf":
-        figuresDispatch({ type: "add_surf", trace: instruction.trace });
-        setOutputTab(1);
-        break;
-      case "close":
-        figuresDispatch({ type: "close" });
-        break;
-      case "close_all":
-        figuresDispatch({ type: "close_all" });
-        break;
-      case "set_title":
-        figuresDispatch({ type: "set_title", text: instruction.text });
-        break;
-      case "set_xlabel":
-        figuresDispatch({ type: "set_xlabel", text: instruction.text });
-        break;
-      case "set_ylabel":
-        figuresDispatch({ type: "set_ylabel", text: instruction.text });
-        break;
-      case "clf":
-        figuresDispatch({ type: "clf" });
-        break;
+    const action = plotInstructionToAction(instruction);
+    if (action) figuresDispatch(action);
+
+    // Switch to figure tab when plot data arrives
+    if (
+      instruction.type === "plot" ||
+      instruction.type === "plot3" ||
+      instruction.type === "surf"
+    ) {
+      setOutputTab(1);
     }
   }, []);
 
@@ -342,16 +316,7 @@ export function EmbedPage() {
               bgcolor: "#fff",
             }}
           >
-            {currentFig && (
-              <FigureView
-                traces={currentFig.traces}
-                plot3Traces={currentFig.plot3Traces}
-                surfTraces={currentFig.surfTraces}
-                title={currentFig.title}
-                xlabel={currentFig.xlabel}
-                ylabel={currentFig.ylabel}
-              />
-            )}
+            {currentFig && <FigureView figure={currentFig} />}
           </Box>
         )}
       </Box>

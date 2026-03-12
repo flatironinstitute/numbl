@@ -85,6 +85,24 @@ export function registerGraphicsFunctions(): void {
     builtinSingle(() => RTV.num(0))
   );
 
+  // subplot(rows, cols, index) — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "subplot",
+    builtinSingle(() => RTV.num(0))
+  );
+
+  // legend(labels...) — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "legend",
+    builtinSingle(() => RTV.num(0))
+  );
+
+  // sgtitle(text) — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "sgtitle",
+    builtinSingle(() => RTV.num(0))
+  );
+
   // drawnow
   register(
     "drawnow",

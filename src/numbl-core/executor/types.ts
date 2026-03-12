@@ -22,7 +22,11 @@ export type PlotInstruction =
   | { type: "set_shading"; shading: "faceted" | "flat" | "interp" }
   | { type: "close" }
   | { type: "close_all" }
-  | { type: "clf" };
+  | { type: "clf" }
+  | { type: "set_subplot"; rows: number; cols: number; index: number }
+  | { type: "set_legend"; labels: string[] }
+  | { type: "set_sgtitle"; text: string }
+  | { type: "set_grid"; value: boolean };
 
 // ── Exec Options ────────────────────────────────────────────────────────
 

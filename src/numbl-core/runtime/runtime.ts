@@ -98,6 +98,7 @@ import {
   plotCall as _plotCall,
   plot3Call as _plot3Call,
   surfCall as _surfCall,
+  legendCall as _legendCall,
   drawnow as _drawnow,
   pause as _pause,
 } from "./runtimePlot.js";
@@ -1010,6 +1011,9 @@ export class Runtime {
       | { type: "close" }
       | { type: "close_all" }
       | { type: "clf" }
+      | { type: "set_subplot"; rows: unknown; cols: unknown; index: unknown }
+      | { type: "set_sgtitle"; text: unknown }
+      | { type: "set_grid"; value: unknown }
   ): void {
     _plotInstr(this.plotInstructions, instr);
     if (instr.type === "set_hold") {
@@ -1036,6 +1040,10 @@ export class Runtime {
 
   public surf_call(args: RuntimeValue[]): void {
     _surfCall(this.plotInstructions, args);
+  }
+
+  public legend_call(args: RuntimeValue[]): void {
+    _legendCall(this.plotInstructions, args);
   }
 
   // ── Drawnow / Pause ─────────────────────────────────────────────────

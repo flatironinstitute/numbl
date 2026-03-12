@@ -759,6 +759,13 @@ function genFuncCall(
     }
     return `$rt.plot_instr({type: "close"})`;
   }
+  if (kind.name === "subplot")
+    return `$rt.plot_instr({type: "set_subplot", rows: ${args[0] ?? "1"}, cols: ${args[1] ?? "1"}, index: ${args[2] ?? "1"}})`;
+  if (kind.name === "legend") return `$rt.legend_call([${args.join(", ")}])`;
+  if (kind.name === "sgtitle")
+    return `$rt.plot_instr({type: "set_sgtitle", text: ${args[0] ?? '""'}})`;
+  if (kind.name === "grid")
+    return `$rt.plot_instr({type: "set_grid", value: ${args[0] ?? "true"}})`;
 
   // Nested function: call directly via closure (not through registry)
   if (cg.nestedFunctionNames.has(kind.name)) {
