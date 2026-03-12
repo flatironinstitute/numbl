@@ -57,11 +57,12 @@ class NumblEmbed extends HTMLElement {
 
     const defaultNumblUrl = "https://numbl.org";
     const numblUrl = this.attributes["numbl-url"]?.value || defaultNumblUrl;
+    const cacheBust = `_cb=${Date.now()}`;
 
     if (scriptBase64) {
-      this.iframe.src = `${numblUrl}/embed?script=${scriptBase64}`;
+      this.iframe.src = `${numblUrl}/embed?script=${scriptBase64}&${cacheBust}`;
     } else {
-      this.iframe.src = `${numblUrl}/embed`;
+      this.iframe.src = `${numblUrl}/embed?${cacheBust}`;
     }
   }
 
@@ -84,7 +85,8 @@ class NumblEmbed extends HTMLElement {
       const defaultNumblUrl = "https://numbl.org";
       const numblUrl = this.attributes["numbl-url"]?.value || defaultNumblUrl;
 
-      this.iframe.src = `${numblUrl}/embed?script=${scriptBase64}`;
+      const cacheBust = `_cb=${Date.now()}`;
+      this.iframe.src = `${numblUrl}/embed?script=${scriptBase64}&${cacheBust}`;
     } catch (error) {
       console.error("Error loading MATLAB script:", error);
       this.iframe.srcdoc = `
