@@ -22,7 +22,7 @@ npm run test:scripts  # integration tests (.m scripts)
 
 ### Increasing coverage
 
-Run `npm run test:coverage:all` to see the merged coverage report. To increase coverage, either add unit tests in `src/__tests__/` or add integration scripts in `numbl_test_scripts/` — whichever makes more sense for the code under test. Both count toward coverage.
+Run `npm run test:coverage:all` to see the unified coverage report. Both test suites run under vitest (integration scripts are wrapped by `src/__tests__/test-scripts.test.ts`), so coverage is collected in a single pass. To increase coverage, either add unit tests in `src/__tests__/` or add integration scripts in `numbl_test_scripts/` — whichever makes more sense for the code under test.
 
 ### Integration test scripts
 

@@ -101,19 +101,20 @@ The pre-commit hook (Husky) runs `lint-staged` (Prettier on staged files) and ES
 
 ## Tests
 
-### Unit Tests
+There are two test suites. Both count toward coverage, so use whichever is more appropriate for the code under test.
+
+### Unit Tests (`src/__tests__/`)
 
 ```bash
 npm test                # run tests with float64 precision
 npm run test:float32    # run tests with float32 precision
-npm run test:coverage   # run with coverage report
 ```
 
-Unit tests live in `src/__tests__/` and use [Vitest](https://vitest.dev/).
+Unit tests use [Vitest](https://vitest.dev/) and are best for testing individual functions, edge cases, and internal logic.
 
-### Integration Tests (`numbl_test_scripts`)
+### Integration Tests (`numbl_test_scripts/`)
 
-The integration test suite lives in [`numbl_test_scripts/`](numbl_test_scripts/). Each test is a `.m` script that prints `SUCCESS` as its last line of output if all assertions pass.
+The integration test suite lives in [`numbl_test_scripts/`](numbl_test_scripts/). Each test is a `.m` script that prints `SUCCESS` as its last line of output if all assertions pass. These are best for testing end-to-end behavior and MATLAB compatibility.
 
 Run all integration tests:
 
@@ -126,6 +127,16 @@ Or run a single test directly from source:
 ```bash
 npx tsx src/cli.ts run numbl_test_scripts/arithmetic/basic_ops.m
 ```
+
+### Coverage
+
+Both test suites run under vitest (integration scripts are wrapped by `src/__tests__/test-scripts.test.ts`), so a single command produces a unified coverage report:
+
+```bash
+npm run test:coverage:all
+```
+
+When working to increase test coverage, either add unit tests in `src/__tests__/` or integration scripts in `numbl_test_scripts/` — whichever makes more sense for the code being tested.
 
 ## Filing an Issue and Adding a Test
 
