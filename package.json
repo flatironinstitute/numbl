@@ -28,7 +28,7 @@
     "binding.gyp"
   ],
   "scripts": {
-    "dev": "vite",
+    "dev": "npm run bundle:stdlib && vite",
     "build": "npm run build:web && npm run build:cli && npm run build:plot-viewer",
     "build:plot-viewer": "vite build --config vite.plot-viewer.config.ts",
     "bundle:stdlib": "tsx scripts/bundle-stdlib.ts",
@@ -42,7 +42,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc -b",
     "preview": "vite preview",
     "test": "npm run test:float64",
     "test:float32": "NUMBL_USE_FLOAT32=true vitest run",
