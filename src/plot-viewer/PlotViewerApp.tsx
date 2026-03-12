@@ -38,6 +38,15 @@ export function PlotViewerApp() {
         activeFigureRef.current = 1;
         setActiveFigure(1);
         break;
+      case "set_title":
+        dispatch({ type: "set_title", text: instruction.text });
+        break;
+      case "set_xlabel":
+        dispatch({ type: "set_xlabel", text: instruction.text });
+        break;
+      case "set_ylabel":
+        dispatch({ type: "set_ylabel", text: instruction.text });
+        break;
       case "clf":
         dispatch({ type: "clf" });
         break;
@@ -131,6 +140,9 @@ export function PlotViewerApp() {
               traces={currentFig.traces}
               plot3Traces={currentFig.plot3Traces}
               surfTraces={currentFig.surfTraces}
+              title={currentFig.title}
+              xlabel={currentFig.xlabel}
+              ylabel={currentFig.ylabel}
             />
           </div>
         ) : (

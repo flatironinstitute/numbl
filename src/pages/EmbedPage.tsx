@@ -92,6 +92,15 @@ export function EmbedPage() {
       case "close_all":
         figuresDispatch({ type: "close_all" });
         break;
+      case "set_title":
+        figuresDispatch({ type: "set_title", text: instruction.text });
+        break;
+      case "set_xlabel":
+        figuresDispatch({ type: "set_xlabel", text: instruction.text });
+        break;
+      case "set_ylabel":
+        figuresDispatch({ type: "set_ylabel", text: instruction.text });
+        break;
       case "clf":
         figuresDispatch({ type: "clf" });
         break;
@@ -338,6 +347,9 @@ export function EmbedPage() {
                 traces={currentFig.traces}
                 plot3Traces={currentFig.plot3Traces}
                 surfTraces={currentFig.surfTraces}
+                title={currentFig.title}
+                xlabel={currentFig.xlabel}
+                ylabel={currentFig.ylabel}
               />
             )}
           </Box>

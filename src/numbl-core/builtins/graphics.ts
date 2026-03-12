@@ -61,6 +61,24 @@ export function registerGraphicsFunctions(): void {
     builtinSingle(() => RTV.num(0))
   );
 
+  // title('text') — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "title",
+    builtinSingle(() => RTV.num(0))
+  );
+
+  // xlabel('text') — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "xlabel",
+    builtinSingle(() => RTV.num(0))
+  );
+
+  // ylabel('text') — placeholder; real work is done via $rt.plot_instr in codegen
+  register(
+    "ylabel",
+    builtinSingle(() => RTV.num(0))
+  );
+
   // drawnow
   register(
     "drawnow",

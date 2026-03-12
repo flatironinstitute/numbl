@@ -278,6 +278,15 @@ export function IDEWorkspace({
       case "close_all":
         figuresDispatch({ type: "close_all" });
         break;
+      case "set_title":
+        figuresDispatch({ type: "set_title", text: instruction.text });
+        break;
+      case "set_xlabel":
+        figuresDispatch({ type: "set_xlabel", text: instruction.text });
+        break;
+      case "set_ylabel":
+        figuresDispatch({ type: "set_ylabel", text: instruction.text });
+        break;
       case "clf":
         figuresDispatch({ type: "clf" });
         break;
@@ -969,6 +978,9 @@ export function IDEWorkspace({
             surfTraces={
               figures.figs[sortedFigureHandles[figureTab]]?.surfTraces || []
             }
+            title={figures.figs[sortedFigureHandles[figureTab]]?.title}
+            xlabel={figures.figs[sortedFigureHandles[figureTab]]?.xlabel}
+            ylabel={figures.figs[sortedFigureHandles[figureTab]]?.ylabel}
           />
         ) : (
           <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
@@ -1196,6 +1208,18 @@ export function IDEWorkspace({
                             surfTraces={
                               figures.figs[sortedFigureHandles[figureTab]]
                                 ?.surfTraces || []
+                            }
+                            title={
+                              figures.figs[sortedFigureHandles[figureTab]]
+                                ?.title
+                            }
+                            xlabel={
+                              figures.figs[sortedFigureHandles[figureTab]]
+                                ?.xlabel
+                            }
+                            ylabel={
+                              figures.figs[sortedFigureHandles[figureTab]]
+                                ?.ylabel
                             }
                           />
                         </>

@@ -10,6 +10,9 @@ interface FigureViewProps {
   traces: PlotTrace[];
   plot3Traces?: Plot3Trace[];
   surfTraces?: SurfTrace[];
+  title?: string;
+  xlabel?: string;
+  ylabel?: string;
 }
 
 const TRACE_COLORS = [
@@ -26,6 +29,9 @@ export function FigureView({
   traces,
   plot3Traces,
   surfTraces,
+  title,
+  xlabel,
+  ylabel,
 }: FigureViewProps) {
   const has3D =
     (surfTraces && surfTraces.length > 0) ||
@@ -37,18 +43,30 @@ export function FigureView({
     );
   }
 
-  return <PlotCanvas traces={traces} />;
+  return (
+    <PlotCanvas traces={traces} title={title} xlabel={xlabel} ylabel={ylabel} />
+  );
 }
 
-function PlotCanvas({ traces }: { traces: PlotTrace[] }) {
+function PlotCanvas({
+  traces,
+  title,
+  xlabel,
+  ylabel,
+}: {
+  traces: PlotTrace[];
+  title?: string;
+  xlabel?: string;
+  ylabel?: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    drawPlot(canvas, traces);
-  }, [traces]);
+    drawPlot(canvas, traces, title, xlabel, ylabel);
+  }, [traces, title, xlabel, ylabel]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -344,7 +362,13 @@ function drawStar(
 
 // ── Main draw function ──────────────────────────────────────────────────
 
-function drawPlot(canvas: HTMLCanvasElement, traces: PlotTrace[]) {
+function drawPlot(
+  canvas: HTMLCanvasElement,
+  traces: PlotTrace[],
+  title?: string,
+  xlabel?: string,
+  ylabel?: string
+) {
   const ctx = canvas.getContext("2d");
   if (!ctx || traces.length === 0) return;
 
@@ -360,8 +384,13 @@ function drawPlot(canvas: HTMLCanvasElement, traces: PlotTrace[]) {
   ctx.fillStyle = "#fff";
   ctx.fillRect(0, 0, cw, ch);
 
-  // Margins
-  const margin = { top: 20, right: 20, bottom: 40, left: 60 };
+  // Margins — expand to accommodate labels
+  const margin = {
+    top: title ? 40 : 20,
+    right: 20,
+    bottom: xlabel ? 56 : 40,
+    left: ylabel ? 76 : 60,
+  };
   const plotW = cw - margin.left - margin.right;
   const plotH = ch - margin.top - margin.bottom;
 
@@ -451,6 +480,31 @@ function drawPlot(canvas: HTMLCanvasElement, traces: PlotTrace[]) {
   ctx.textBaseline = "middle";
   for (const ty of yTicks) {
     ctx.fillText(formatTick(ty), margin.left - 5, toCanvasY(ty));
+  }
+
+  // Labels
+  ctx.fillStyle = "#222";
+  if (title) {
+    ctx.font = "bold 13px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(title, margin.left + plotW / 2, margin.top / 2);
+  }
+  if (xlabel) {
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(xlabel, margin.left + plotW / 2, ch - 4);
+  }
+  if (ylabel) {
+    ctx.font = "12px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.save();
+    ctx.translate(14, margin.top + plotH / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.fillText(ylabel, 0, 0);
+    ctx.restore();
   }
 
   // Data lines — clip to plot area

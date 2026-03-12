@@ -12,6 +12,9 @@ export type FiguresState = {
       traces: PlotTrace[];
       plot3Traces: Plot3Trace[];
       surfTraces: SurfTrace[];
+      title?: string;
+      xlabel?: string;
+      ylabel?: string;
     };
   };
 };
@@ -42,6 +45,18 @@ export type FiguresStateAction =
     }
   | {
       type: "close_all";
+    }
+  | {
+      type: "set_title";
+      text: string;
+    }
+  | {
+      type: "set_xlabel";
+      text: string;
+    }
+  | {
+      type: "set_ylabel";
+      text: string;
     }
   | {
       type: "clf";
@@ -166,6 +181,51 @@ export const figuresReducer = (
       // Close all figures
       return initialFiguresState;
     }
+    case "set_title": {
+      const currentFig = state.figs[state.currentHandle] || {
+        holdOn: false,
+        traces: [],
+        plot3Traces: [],
+        surfTraces: [],
+      };
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: { ...currentFig, title: action.text },
+        },
+      };
+    }
+    case "set_xlabel": {
+      const currentFig = state.figs[state.currentHandle] || {
+        holdOn: false,
+        traces: [],
+        plot3Traces: [],
+        surfTraces: [],
+      };
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: { ...currentFig, xlabel: action.text },
+        },
+      };
+    }
+    case "set_ylabel": {
+      const currentFig = state.figs[state.currentHandle] || {
+        holdOn: false,
+        traces: [],
+        plot3Traces: [],
+        surfTraces: [],
+      };
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: { ...currentFig, ylabel: action.text },
+        },
+      };
+    }
     case "clf": {
       // Clear the current figure (remove traces but keep the tab)
       const currentFig = state.figs[state.currentHandle];
@@ -179,6 +239,9 @@ export const figuresReducer = (
             traces: [],
             plot3Traces: [],
             surfTraces: [],
+            title: undefined,
+            xlabel: undefined,
+            ylabel: undefined,
           },
         },
       };

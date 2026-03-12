@@ -745,6 +745,12 @@ function genFuncCall(
     return `$rt.plot_instr({type: "set_hold", value: ${args[0]}})`;
   if (kind.name === "ishold") return `$rt.ishold()`;
   if (kind.name === "clf") return `$rt.plot_instr({type: "clf"})`;
+  if (kind.name === "title")
+    return `$rt.plot_instr({type: "set_title", text: ${args[0] ?? '""'}})`;
+  if (kind.name === "xlabel")
+    return `$rt.plot_instr({type: "set_xlabel", text: ${args[0] ?? '""'}})`;
+  if (kind.name === "ylabel")
+    return `$rt.plot_instr({type: "set_ylabel", text: ${args[0] ?? '""'}})`;
   if (kind.name === "close") {
     if (args.length > 0) {
       return `$rt.plot_instr({type: "close_all"})`;

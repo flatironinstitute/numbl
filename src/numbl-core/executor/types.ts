@@ -16,6 +16,9 @@ export type PlotInstruction =
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "surf"; trace: SurfTrace }
   | { type: "set_hold"; value: boolean }
+  | { type: "set_title"; text: string }
+  | { type: "set_xlabel"; text: string }
+  | { type: "set_ylabel"; text: string }
   | { type: "close" }
   | { type: "close_all" }
   | { type: "clf" };

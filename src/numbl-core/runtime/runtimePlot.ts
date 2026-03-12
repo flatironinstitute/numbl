@@ -19,6 +19,9 @@ export function plotInstr(
     | { type: "set_figure_handle"; handle: unknown }
     | { type: "plot"; x: unknown; y: unknown }
     | { type: "set_hold"; value: unknown }
+    | { type: "set_title"; text: unknown }
+    | { type: "set_xlabel"; text: unknown }
+    | { type: "set_ylabel"; text: unknown }
     | { type: "close" }
     | { type: "close_all" }
     | { type: "clf" }
@@ -50,6 +53,24 @@ export function plotInstr(
       on = toString(mv) === "on";
     }
     plotInstructions.push({ type: "set_hold", value: on });
+  } else if (instr.type === "set_title") {
+    const text =
+      typeof instr.text === "string"
+        ? instr.text
+        : toString(ensureRuntimeValue(instr.text));
+    plotInstructions.push({ type: "set_title", text });
+  } else if (instr.type === "set_xlabel") {
+    const text =
+      typeof instr.text === "string"
+        ? instr.text
+        : toString(ensureRuntimeValue(instr.text));
+    plotInstructions.push({ type: "set_xlabel", text });
+  } else if (instr.type === "set_ylabel") {
+    const text =
+      typeof instr.text === "string"
+        ? instr.text
+        : toString(ensureRuntimeValue(instr.text));
+    plotInstructions.push({ type: "set_ylabel", text });
   } else if (instr.type === "close") {
     plotInstructions.push({ type: "close" });
   } else if (instr.type === "close_all") {
