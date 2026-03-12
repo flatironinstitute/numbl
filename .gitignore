@@ -1,6 +1,8 @@
 tmp
 tmp*
 coverage
+/coverage-*/
+.nyc_output
 build
 
 CLAUDE.*.md
