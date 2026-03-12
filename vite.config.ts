@@ -29,5 +29,18 @@ export default defineConfig({
   },
   test: {
     exclude: ["**/node_modules/**", "**/dist/**"],
+    coverage: {
+      exclude: [
+        "**/node_modules/**",
+        "**/dist/**",
+        "**/ts-lapack/**",
+        "src/cli*.ts",
+        "src/components/**",
+        "src/db/**",
+        "src/hooks/**",
+        "src/mip/**",
+        "src/mip-directives*.ts",
+      ],
+    },
   },
 });
