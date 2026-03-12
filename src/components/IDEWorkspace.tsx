@@ -51,6 +51,7 @@ import { FileBrowser } from "./FileBrowser";
 import { FigureView } from "./FigureView";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
+import { MipPackageManager } from "./MipPackageManager";
 import type { WorkspaceFile } from "../hooks/useProjectFiles";
 import {
   isRemoteExecutionEnabled,
@@ -136,15 +137,6 @@ export function IDEWorkspace({
     return obj;
   }, [allFilesRep]);
 
-  const irProgramData = useMemo(() => {
-    if (allFilesRep.length === 0) return null;
-    if (allFilesRep.length === 1) return allFilesRep[0].irProgram;
-    const obj: Record<string, unknown> = {};
-    for (const f of allFilesRep) {
-      if (f.irProgram != null) obj[f.name] = f.irProgram;
-    }
-    return Object.keys(obj).length > 0 ? obj : null;
-  }, [allFilesRep]);
   const [fileSources, setFileSources] = useState<Map<string, string> | null>(
     null
   );
@@ -865,7 +857,7 @@ export function IDEWorkspace({
         />
         <Tab label="AST" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
         <Tab
-          label="Lowered IR"
+          label="Packages"
           sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
         />
       </Tabs>
@@ -899,13 +891,7 @@ export function IDEWorkspace({
         {outputTab === 2 && (
           <TreeViewer data={astData} label="ast" fileSources={fileSources} />
         )}
-        {outputTab === 3 && (
-          <TreeViewer
-            data={irProgramData}
-            label="ir"
-            fileSources={fileSources}
-          />
-        )}
+        {outputTab === 3 && <MipPackageManager />}
       </Box>
     </Box>
   );
@@ -1070,7 +1056,7 @@ export function IDEWorkspace({
                     }}
                   />
                   <Tab
-                    label="IR"
+                    label="Figures"
                     sx={{
                       minHeight: 32,
                       py: 0,
@@ -1080,7 +1066,7 @@ export function IDEWorkspace({
                     }}
                   />
                   <Tab
-                    label="Figures"
+                    label="Packages"
                     sx={{
                       minHeight: 32,
                       py: 0,
@@ -1125,13 +1111,6 @@ export function IDEWorkspace({
                     />
                   )}
                   {mobileOutputTab === 3 && (
-                    <TreeViewer
-                      data={irProgramData}
-                      label="ir"
-                      fileSources={fileSources}
-                    />
-                  )}
-                  {mobileOutputTab === 4 && (
                     <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
                       {sortedFigureHandles.length > 0 ? (
                         <>
@@ -1194,6 +1173,7 @@ export function IDEWorkspace({
                       )}
                     </Box>
                   )}
+                  {mobileOutputTab === 4 && <MipPackageManager />}
                 </Box>
               </Box>
             </Splitter>
