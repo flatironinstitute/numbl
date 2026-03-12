@@ -1,0 +1,326 @@
+import Editor, { OnMount } from "@monaco-editor/react";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import StopIcon from "@mui/icons-material/Stop";
+import {
+  Box,
+  Button,
+  CircularProgress,
+  Link,
+  Tab,
+  Tabs,
+  Typography,
+} from "@mui/material";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+} from "react";
+import {
+  numblLanguageConfig,
+  createNumblTokensProvider,
+} from "../numblLanguage.js";
+import { formatDiagnostic } from "../numbl-core/diagnostics";
+import type { PlotInstruction } from "../numbl-core/executor/types.js";
+import { FigureView } from "../components/FigureView";
+import { figuresReducer, initialFiguresState } from "../shared/figuresReducer";
+
+const DEFAULT_SCRIPT = `% Welcome to numbl!
+% Try running some MATLAB code:
+
+x = 1:10;
+y = x.^2;
+disp('Hello from numbl!')
+disp(['Sum of squares: ', num2str(sum(y))])
+`;
+
+function getInitialScript(): string {
+  const params = new URLSearchParams(window.location.search);
+  const scriptParam = params.get("script");
+  if (scriptParam) {
+    try {
+      return atob(scriptParam);
+    } catch {
+      console.error("Failed to decode script parameter");
+      return DEFAULT_SCRIPT;
+    }
+  }
+  return DEFAULT_SCRIPT;
+}
+
+export function EmbedPage() {
+  const [code, setCode] = useState<string>(getInitialScript);
+  const [output, setOutput] = useState("");
+  const [isRunning, setIsRunning] = useState(false);
+  const [outputTab, setOutputTab] = useState(0); // 0=Console, 1=Figure
+  const workerRef = useRef<Worker | null>(null);
+  const [figures, figuresDispatch] = useReducer(
+    figuresReducer,
+    initialFiguresState
+  );
+
+  const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
+    switch (instruction.type) {
+      case "set_figure_handle":
+        figuresDispatch({
+          type: "set_current_handle",
+          handle: instruction.handle,
+        });
+        break;
+      case "set_hold":
+        figuresDispatch({ type: "set_hold", value: instruction.value });
+        break;
+      case "plot":
+        figuresDispatch({ type: "add_plot", traces: instruction.traces });
+        setOutputTab(1);
+        break;
+      case "plot3":
+        figuresDispatch({ type: "add_plot3", traces: instruction.traces });
+        setOutputTab(1);
+        break;
+      case "surf":
+        figuresDispatch({ type: "add_surf", trace: instruction.trace });
+        setOutputTab(1);
+        break;
+      case "close":
+        figuresDispatch({ type: "close" });
+        break;
+      case "close_all":
+        figuresDispatch({ type: "close_all" });
+        break;
+      case "clf":
+        figuresDispatch({ type: "clf" });
+        break;
+    }
+  }, []);
+
+  const currentFig = useMemo(() => {
+    const handles = Object.keys(figures.figs)
+      .map(Number)
+      .sort((a, b) => a - b);
+    if (handles.length === 0) return null;
+    const handle = handles[handles.length - 1];
+    return figures.figs[handle];
+  }, [figures.figs]);
+
+  const hasFigures = currentFig !== null;
+
+  const setupWorkerHandler = useCallback(
+    (worker: Worker) => {
+      worker.onmessage = e => {
+        const msg = e.data;
+        if (msg.type === "output") {
+          setOutput(prev => prev + msg.text);
+        } else if (msg.type === "drawnow") {
+          if (msg.plotInstructions?.length) {
+            for (const instr of msg.plotInstructions) {
+              handlePlotInstruction(instr);
+            }
+          }
+        } else if (msg.type === "done") {
+          setIsRunning(false);
+          if (msg.plotInstructions?.length) {
+            for (const instr of msg.plotInstructions) {
+              handlePlotInstruction(instr);
+            }
+          }
+        } else if (msg.type === "error") {
+          setIsRunning(false);
+          setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
+        }
+      };
+    },
+    [handlePlotInstruction]
+  );
+
+  // Initialize worker
+  useEffect(() => {
+    workerRef.current = new Worker(
+      new URL("../numbl-worker.ts", import.meta.url),
+      { type: "module" }
+    );
+    setupWorkerHandler(workerRef.current);
+
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, [setupWorkerHandler]);
+
+  const handleRun = useCallback(() => {
+    if (!workerRef.current) return;
+    setIsRunning(true);
+    setOutput("");
+    figuresDispatch({ type: "clear" });
+    workerRef.current.postMessage({
+      type: "run",
+      code,
+      options: { displayResults: true, maxIterations: 10000000 },
+      workspaceFiles: [],
+      mainFileName: "script.m",
+      searchPaths: [],
+    });
+  }, [code]);
+
+  const handleStop = useCallback(() => {
+    if (workerRef.current) {
+      workerRef.current.terminate();
+      workerRef.current = new Worker(
+        new URL("../numbl-worker.ts", import.meta.url),
+        { type: "module" }
+      );
+      setupWorkerHandler(workerRef.current);
+      setIsRunning(false);
+      setOutput(prev => prev + "\n--- Execution stopped ---\n");
+    }
+  }, [setupWorkerHandler]);
+
+  const handleEditorMount: OnMount = (_, monaco) => {
+    if (!monaco.languages.getLanguages().some(l => l.id === "matlab")) {
+      monaco.languages.register({ id: "matlab" });
+      monaco.languages.setLanguageConfiguration("matlab", numblLanguageConfig);
+      monaco.languages.setMonarchTokensProvider(
+        "matlab",
+        createNumblTokensProvider()
+      );
+    }
+  };
+
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+      {/* Header */}
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          px: 1,
+          py: 0.5,
+          bgcolor: "grey.100",
+          borderBottom: 1,
+          borderColor: "divider",
+          minHeight: 36,
+        }}
+      >
+        <Button
+          variant="contained"
+          size="small"
+          color={isRunning ? "error" : "success"}
+          startIcon={isRunning ? <StopIcon /> : <PlayArrowIcon />}
+          onClick={isRunning ? handleStop : handleRun}
+          sx={{ textTransform: "none", fontSize: "0.75rem", py: 0.25 }}
+        >
+          {isRunning ? "Stop" : "Run"}
+        </Button>
+      </Box>
+
+      {/* Editor (top half) */}
+      <Box sx={{ flex: 1, overflow: "hidden", minHeight: 0 }}>
+        <Editor
+          height="100%"
+          defaultLanguage="matlab"
+          value={code}
+          onChange={value => setCode(value || "")}
+          theme="vs-dark"
+          onMount={handleEditorMount}
+          options={{
+            minimap: { enabled: false },
+            fontSize: 14,
+            wordWrap: "on",
+            automaticLayout: true,
+          }}
+        />
+      </Box>
+
+      {/* Output panel (bottom half) */}
+      <Box
+        sx={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          minHeight: 0,
+          borderTop: 1,
+          borderColor: "divider",
+        }}
+      >
+        <Tabs
+          value={outputTab}
+          onChange={(_, v) => setOutputTab(v)}
+          sx={{ borderBottom: 1, borderColor: "divider", minHeight: 32 }}
+        >
+          <Tab label="Console" sx={{ minHeight: 32, py: 0 }} />
+          {hasFigures && <Tab label="Figure" sx={{ minHeight: 32, py: 0 }} />}
+        </Tabs>
+
+        {/* Console */}
+        <Box
+          sx={{
+            flexGrow: 1,
+            overflow: "auto",
+            display: outputTab === 0 ? "block" : "none",
+            p: 1,
+            bgcolor: "#1e1e1e",
+            fontFamily: "monospace",
+            fontSize: 13,
+            color: "#d4d4d4",
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
+          {isRunning && !output && (
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <CircularProgress size={14} sx={{ color: "#d4d4d4" }} />
+              <span>Running...</span>
+            </Box>
+          )}
+          {output ||
+            (!isRunning && (
+              <span style={{ opacity: 0.5 }}>Press Run to execute</span>
+            ))}
+        </Box>
+
+        {/* Figure */}
+        {hasFigures && (
+          <Box
+            sx={{
+              flexGrow: 1,
+              overflow: "hidden",
+              display: outputTab === 1 ? "flex" : "none",
+              justifyContent: "center",
+              alignItems: "center",
+              bgcolor: "#fff",
+            }}
+          >
+            {currentFig && (
+              <FigureView
+                traces={currentFig.traces}
+                plot3Traces={currentFig.plot3Traces}
+                surfTraces={currentFig.surfTraces}
+              />
+            )}
+          </Box>
+        )}
+      </Box>
+
+      {/* Footer */}
+      <Box
+        sx={{
+          px: 1,
+          py: 0.5,
+          bgcolor: "grey.50",
+          borderTop: 1,
+          borderColor: "divider",
+          textAlign: "center",
+        }}
+      >
+        <Typography variant="caption" color="text.secondary">
+          Powered by{" "}
+          <Link href="https://numbl.org" target="_blank" rel="noopener">
+            numbl
+          </Link>
+        </Typography>
+      </Box>
+    </Box>
+  );
+}
