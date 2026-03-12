@@ -148,7 +148,11 @@ export const figuresReducer = (
     }
     case "close": {
       // Close the current figure (remove it from figs)
-      const { [state.currentHandle]: _removed, ...remainingFigs } = state.figs;
+      const remainingFigs = Object.fromEntries(
+        Object.entries(state.figs).filter(
+          ([k]) => Number(k) !== state.currentHandle
+        )
+      ) as typeof state.figs;
       const handles = Object.keys(remainingFigs)
         .map(Number)
         .sort((a, b) => a - b);

@@ -20,8 +20,8 @@ function loadHistory(): string[] {
     // Each entry is stored as a single line with literal \n for multi-line commands
     return content
       .split("\n")
-      .filter((line) => line.length > 0)
-      .map((line) => line.replace(/\\n/g, "\n").replace(/\\\\/g, "\\"));
+      .filter(line => line.length > 0)
+      .map(line => line.replace(/\\n/g, "\n").replace(/\\\\/g, "\\"));
   } catch {
     return [];
   }
@@ -37,9 +37,10 @@ function saveHistoryEntry(entry: string, hist: string[]) {
     } else {
       // Over limit — rewrite the file with the last HISTORY_MAX entries
       const trimmed = hist.slice(-HISTORY_MAX);
-      const content = trimmed
-        .map((e) => e.replace(/\\/g, "\\\\").replace(/\n/g, "\\n"))
-        .join("\n") + "\n";
+      const content =
+        trimmed
+          .map(e => e.replace(/\\/g, "\\\\").replace(/\n/g, "\\n"))
+          .join("\n") + "\n";
       writeFileSync(HISTORY_FILE, content, "utf8");
     }
   } catch {

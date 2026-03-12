@@ -219,9 +219,9 @@ export class ExpressionParser extends ParserBase {
         const priorMatrix = this.inMatrixExpr;
         this.inMatrixExpr = false;
         if (!this.consume(Token.RParen)) {
-          args.push(this.parseExpr());
+          this.parseFuncArg(args);
           while (this.consume(Token.Comma)) {
-            args.push(this.parseExpr());
+            this.parseFuncArg(args);
           }
           if (!this.consume(Token.RParen)) {
             this.inMatrixExpr = priorMatrix;
@@ -737,5 +737,31 @@ export class ExpressionParser extends ParserBase {
       rows,
       span: { file: this.fileName, start: 0, end: 0 },
     };
+  }
+
+  // ── Name=Value Argument Desugaring ──────────────────────────────────
+
+  /**
+   * Parse a single function call argument, handling MATLAB's Name=Value
+   * syntax. `foo(x, y, LineWidth=2)` is desugared to
+   * `foo(x, y, 'LineWidth', 2)` by pushing two args into the array.
+   */
+  private parseFuncArg(args: Expr[]): void {
+    // Check for Name=Value pattern: Ident followed by Assign token
+    if (
+      this.peekToken() === Token.Ident &&
+      this.peekTokenAt(1) === Token.Assign
+    ) {
+      const nameToken = this.tokens[this.pos];
+      const nameSpan = this.spanFrom(nameToken.position, nameToken.end);
+      this.pos++; // consume the identifier
+      this.pos++; // consume the '='
+      // Push the name as a string literal
+      args.push({ type: "Char", value: `'${nameToken.lexeme}'`, span: nameSpan });
+      // Push the value expression
+      args.push(this.parseExpr());
+    } else {
+      args.push(this.parseExpr());
+    }
   }
 }

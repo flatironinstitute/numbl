@@ -1820,3 +1820,67 @@ describe("parseMFile - classdef edge cases", () => {
     }
   });
 });
+
+// ── Name=Value syntax in function calls ──────────────────────────────
+
+describe("parseMFile - Name=Value syntax", () => {
+  it("desugars Name=Value to string and value args", () => {
+    const expr = parseExpr("plot(x, y, LineWidth=2)");
+    expect(expr.type).toBe("FuncCall");
+    if (expr.type === "FuncCall") {
+      expect(expr.name).toBe("plot");
+      expect(expr.args).toHaveLength(4);
+      expect(expr.args[0].type).toBe("Ident");
+      expect(expr.args[1].type).toBe("Ident");
+      // LineWidth desugared to 'LineWidth' string literal
+      expect(expr.args[2].type).toBe("Char");
+      if (expr.args[2].type === "Char") {
+        expect(expr.args[2].value).toBe("'LineWidth'");
+      }
+      expect(expr.args[3].type).toBe("Number");
+    }
+  });
+
+  it("handles multiple Name=Value pairs", () => {
+    const expr = parseExpr("foo(Color='red', Size=10)");
+    expect(expr.type).toBe("FuncCall");
+    if (expr.type === "FuncCall") {
+      expect(expr.args).toHaveLength(4);
+      expect(expr.args[0].type).toBe("Char");
+      if (expr.args[0].type === "Char") {
+        expect(expr.args[0].value).toBe("'Color'");
+      }
+      expect(expr.args[1].type).toBe("Char");
+      expect(expr.args[2].type).toBe("Char");
+      if (expr.args[2].type === "Char") {
+        expect(expr.args[2].value).toBe("'Size'");
+      }
+      expect(expr.args[3].type).toBe("Number");
+    }
+  });
+
+  it("mixes positional and Name=Value args", () => {
+    const expr = parseExpr("bar(1, 2, Opt=3)");
+    expect(expr.type).toBe("FuncCall");
+    if (expr.type === "FuncCall") {
+      expect(expr.args).toHaveLength(4);
+      expect(expr.args[0].type).toBe("Number");
+      expect(expr.args[1].type).toBe("Number");
+      expect(expr.args[2].type).toBe("Char");
+      if (expr.args[2].type === "Char") {
+        expect(expr.args[2].value).toBe("'Opt'");
+      }
+      expect(expr.args[3].type).toBe("Number");
+    }
+  });
+
+  it("does not confuse == comparison with Name=Value", () => {
+    const expr = parseExpr("foo(x == 1)");
+    expect(expr.type).toBe("FuncCall");
+    if (expr.type === "FuncCall") {
+      // x == 1 is a single comparison expression, not Name=Value
+      expect(expr.args).toHaveLength(1);
+      expect(expr.args[0].type).toBe("Binary");
+    }
+  });
+});
