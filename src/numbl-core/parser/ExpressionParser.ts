@@ -181,22 +181,45 @@ export class ExpressionParser extends ParserBase {
   }
 
   private parsePow(): Expr {
-    const node = this.parsePostfix();
-    const tok = this.peekToken();
-    let op: BinaryOperation | undefined;
-    if (tok === Token.Caret) {
-      op = BinaryOperation.Pow;
-    } else if (tok === Token.DotCaret) {
-      op = BinaryOperation.ElemPow;
-    } else {
-      return node;
+    let node = this.parsePostfix();
+    while (true) {
+      const tok = this.peekToken();
+      let op: BinaryOperation | undefined;
+      if (tok === Token.Caret) {
+        op = BinaryOperation.Pow;
+      } else if (tok === Token.DotCaret) {
+        op = BinaryOperation.ElemPow;
+      } else {
+        return node;
+      }
+      this.pos++;
+      // Parse a unary-prefixed postfix expr for the RHS so that 2^-3 works,
+      // but do NOT recurse into parsePow — this keeps ^ left-associative:
+      // 2^3^2 parses as (2^3)^2 = 64, matching MATLAB.
+      const rhs = this.parsePowRHS();
+      node = this.makeBinary(node, op, rhs);
     }
-    this.pos++;
-    // Call parseUnary (not parsePow) to allow unary operators in the exponent
-    // (e.g., 2^-3, 1i.^-nu). Right-associativity is preserved because
-    // parseUnary calls parsePow for non-unary cases.
-    const rhs = this.parseUnary();
-    return this.makeBinary(node, op, rhs);
+  }
+
+  /** Parse the right-hand side of a ^ or .^ operator: unary prefixes then postfix. */
+  private parsePowRHS(): Expr {
+    if (this.peekToken() === Token.Plus) {
+      const start = this.tokens[this.pos].position;
+      this.pos++;
+      const expr = this.parsePowRHS();
+      return this.makeUnary(UnaryOperation.Plus, expr, start);
+    } else if (this.peekToken() === Token.Minus) {
+      const start = this.tokens[this.pos].position;
+      this.pos++;
+      const expr = this.parsePowRHS();
+      return this.makeUnary(UnaryOperation.Minus, expr, start);
+    } else if (this.peekToken() === Token.Tilde) {
+      const start = this.tokens[this.pos].position;
+      this.pos++;
+      const expr = this.parsePowRHS();
+      return this.makeUnary(UnaryOperation.Not, expr, start);
+    }
+    return this.parsePostfix();
   }
 
   private parsePostfixWithBase(expr: Expr): Expr {
