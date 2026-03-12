@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-      
+
       - name: Bundle stdlib
         run: npm run bundle:stdlib
 
