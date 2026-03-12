@@ -5,7 +5,7 @@
  */
 
 import type { BuiltinFn, BuiltinFnBranch } from "./builtins/registry.js";
-import type { ItemType } from "./lowering/itemTypes.js";
+import { type ItemType, IType } from "./lowering/itemTypes.js";
 import type { WorkspaceFile } from "./workspace/index.js";
 import { RTV, RuntimeError } from "./runtime/index.js";
 import { FloatXArray } from "./runtime/types.js";
@@ -55,10 +55,11 @@ export function loadJsUserFunctions(
         "RTV",
         "RuntimeError",
         "FloatXArray",
+        "IType",
         "register",
         file.source
       );
-      factory(RTV, RuntimeError, FloatXArray, registerFn);
+      factory(RTV, RuntimeError, FloatXArray, IType, registerFn);
 
       if (branches.length === 0) {
         throw new Error(

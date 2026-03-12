@@ -86,6 +86,9 @@ export interface FunctionIndex {
   /** Primary workspace functions (filename-derived names) */
   workspaceFunctions: Set<string>;
 
+  /** JS user functions (resolved at workspace-function priority, not builtin) */
+  jsUserFunctions: Set<string>;
+
   /** Workspace classes (classdef files) */
   workspaceClasses: Set<string>;
 
@@ -927,9 +930,20 @@ export class LoweringContext {
    * Should be called once after registerWorkspaceFiles() and registerLocalFunctionAST().
    * Parses all workspace files eagerly to discover subfunctions.
    */
-  buildFunctionIndex(): FunctionIndex {
+  buildFunctionIndex(jsUserFunctionNames?: string[]): FunctionIndex {
     // 1. Builtins
     const builtins = new Set(getAllBuiltinNames());
+
+    // Separate JS user functions from builtins — they resolve at workspace priority
+    const jsUserFunctions = new Set<string>();
+    if (jsUserFunctionNames) {
+      for (const name of jsUserFunctionNames) {
+        if (builtins.has(name)) {
+          builtins.delete(name);
+          jsUserFunctions.add(name);
+        }
+      }
+    }
 
     // 2. Main script local functions
     const mainLocalFunctions = new Set(this.localFunctionASTs.keys());
@@ -1083,6 +1097,7 @@ export class LoweringContext {
       mainFileName: this.mainFileName,
       mainLocalFunctions,
       workspaceFunctions,
+      jsUserFunctions,
       workspaceClasses,
       workspaceFileSubfunctions,
       classFileSubfunctions,

@@ -897,13 +897,19 @@ function genFuncCall(
       }
 
       case "builtin": {
-        const nativeMath = tryNativeMathCodegen(
-          kind.name,
-          kind.nargout,
-          kind.args,
-          args
+        // Skip native math inlining for JS user functions — they override the builtin.
+        const isJsUserFunc = cg.loweringCtx.functionIndex.jsUserFunctions.has(
+          kind.name
         );
-        if (nativeMath !== null) return nativeMath;
+        if (!isJsUserFunc) {
+          const nativeMath = tryNativeMathCodegen(
+            kind.name,
+            kind.nargout,
+            kind.args,
+            args
+          );
+          if (nativeMath !== null) return nativeMath;
+        }
         // Defer to runtime when any arg type is unknown — the argument
         // might be a class instance that overrides this builtin.
         if (hasUnknown) {
