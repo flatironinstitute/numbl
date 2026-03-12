@@ -5,9 +5,12 @@
  * across both test suites.
  */
 
+/// <reference types="node" />
+
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync, statSync } from "fs";
-import { join, dirname, relative, resolve } from "path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, dirname, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { executeCode } from "../numbl-core/executeCode.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/types.js";
 
@@ -87,12 +90,13 @@ function findTestFiles(dir: string): string[] {
 
 // ── discover and register tests ──────────────────────────────────────
 
-const testDir = resolve(__dirname, "../../numbl_test_scripts");
+const thisDir = dirname(fileURLToPath(import.meta.url));
+const testDir = resolve(thisDir, "../../numbl_test_scripts");
 const testFiles = findTestFiles(testDir);
 
 describe("integration test scripts", () => {
   for (const filepath of testFiles) {
-    const rel = relative(resolve(__dirname, "../.."), filepath);
+    const rel = relative(resolve(thisDir, "../.."), filepath);
 
     it(rel, () => {
       const source = readFileSync(filepath, "utf-8");
