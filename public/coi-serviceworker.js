@@ -39,35 +39,24 @@ if (typeof window === "undefined") {
   });
 } else {
   // --- Window scope (registration) ---
-  (() => {
-    // Already cross-origin isolated — nothing to do.
-    if (window.crossOriginIsolated) return;
 
-    const register = () =>
-      navigator.serviceWorker
-        .register(window.document.currentScript.src)
-        .then(reg => {
-          // If a new service worker installed and is waiting, reload once
-          // so that it can intercept requests with the right headers.
-          if (reg.installing || reg.waiting) {
-            const sw = reg.installing || reg.waiting;
-            sw.addEventListener("statechange", () => {
-              if (sw.state === "activated") window.location.reload();
-            });
-          } else if (reg.active && !navigator.serviceWorker.controller) {
-            // Service worker is active but not controlling the page (first load).
-            window.location.reload();
-          }
-        });
+  // Capture currentScript synchronously — it becomes null after script runs.
+  const scriptUrl = document.currentScript && document.currentScript.src;
 
-    if (navigator.serviceWorker.controller) {
-      // Already controlled — SW is active but isolation might not be in effect
-      // yet (e.g. after a deploy with new headers). Check & reload if needed.
-      // crossOriginIsolated was already checked above, so if we're here
-      // the SW isn't adding headers. Re-register in case the SW code changed.
-      register();
-    } else {
-      register();
-    }
-  })();
+  if (!window.crossOriginIsolated && navigator.serviceWorker) {
+    navigator.serviceWorker.register(scriptUrl || "/coi-serviceworker.js").then(
+      reg => {
+        if (reg.installing || reg.waiting) {
+          const sw = reg.installing || reg.waiting;
+          sw.addEventListener("statechange", () => {
+            if (sw.state === "activated") window.location.reload();
+          });
+        } else if (reg.active && !navigator.serviceWorker.controller) {
+          // Active but not yet controlling — reload to let it intercept.
+          window.location.reload();
+        }
+      },
+      err => console.error("COI service worker registration failed:", err)
+    );
+  }
 }
