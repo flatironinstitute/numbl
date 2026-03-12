@@ -20,7 +20,7 @@ export interface ProjectFile {
 export interface MipPackageCache {
   name: string; // Primary key - package name
   version: string; // For cache invalidation against index
-  files: { path: string; source: string }[]; // All extracted .m files
+  files: { path: string; source: string; data?: Uint8Array }[]; // Extracted files (.m, .js, .wasm)
   loadPaths: string[]; // Resolved addpath paths from load_package.m
   fetchedAt: number; // Timestamp
 }
