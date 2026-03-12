@@ -77,14 +77,16 @@ export async function runRepl(
     for (const d of directives) {
       if (d.type === "load") {
         console.log(`Loading mip package: ${d.packageName}...`);
-        const paths = processMipLoad(d.packageName);
-        for (const p of paths) {
-          searchPaths.push(p);
-          workspaceFiles.push(...scanMFiles(p));
+        const results = processMipLoad(d.packageName);
+        for (const result of results) {
+          for (const p of result.paths) {
+            searchPaths.push(p);
+            workspaceFiles.push(...scanMFiles(p));
+          }
+          console.log(
+            `  Loaded ${result.packageName} (${result.paths.length} path(s) added)`
+          );
         }
-        console.log(
-          `  Loaded ${d.packageName} (${paths.length} path(s) added)`
-        );
       }
     }
     const trimmedClean = cleanedSource.trim();
