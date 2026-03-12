@@ -104,6 +104,6 @@
       "prettier --write",
       "eslint"
     ],
-    "*.{json,css,md}": "prettier --write"
+    "*.{json,css,md,yml}": "prettier --write"
   }
 }

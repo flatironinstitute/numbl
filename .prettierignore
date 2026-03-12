@@ -6,3 +6,4 @@ coverage
 *.bundle.js
 build
 .cache
+src/numbl-core/stdlib-bundle.ts
