@@ -8,6 +8,10 @@ Numbl is an open-source numerical computing environment that aims to be compatib
 
 You can try numbl directly in the browser at <https://numbl.org> — no installation required. All execution happens locally in your browser. Note that the browser version has limited functionality and is slower than the desktop/command-line version.
 
+## Embedding in web pages
+
+Numbl scripts can be embedded in HTML and Markdown pages (including GitHub Pages). See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage info and a [live demo](https://magland.github.io/numbl-embed-example/example1).
+
 ## Installation
 
 ```bash
