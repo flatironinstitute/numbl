@@ -19,7 +19,9 @@ export function resolveDependencies(
 
     const entry = findPackageEntry(index, name, arch);
     if (!entry) {
-      throw new Error(`Package "${name}" not found for architecture "${arch}"`);
+      throw new Error(
+        `Package "${name}" not found for architecture "${arch}" (tried ${arch}, wasm, all)`
+      );
     }
 
     for (const dep of entry.dependencies) {
