@@ -30,10 +30,14 @@ function findEntry(
   index: PackageIndex,
   packageName: string
 ): PackageIndexEntry | undefined {
-  // In the browser we can only use architecture "any"
-  return index.packages.find(
-    p => p.name === packageName && p.architecture === "any"
-  );
+  // In the browser, prefer wasm packages, then fall back to "all"
+  for (const candidate of ["wasm", "all"]) {
+    const entry = index.packages.find(
+      p => p.name === packageName && p.architecture === candidate
+    );
+    if (entry) return entry;
+  }
+  return undefined;
 }
 
 /**
@@ -52,9 +56,7 @@ function resolveDeps(
     visited.add(name);
     const entry = findEntry(index, name);
     if (!entry) {
-      throw new Error(
-        `MIP package "${name}" not found (only architecture "any" packages are available in the browser)`
-      );
+      throw new Error(`MIP package "${name}" not found (tried wasm, all)`);
     }
     for (const dep of entry.dependencies) {
       visit(dep);
