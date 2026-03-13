@@ -14,19 +14,20 @@ export async function fetchPackageIndex(
   return backend.fetchJson<PackageIndex>(indexUrl);
 }
 
-/** Find the best entry for a package on the given architecture (prefers exact match over "any") */
+/** Find the best entry for a package on the given architecture.
+ *  Priority: exact native match → wasm → all */
 export function findPackageEntry(
   index: PackageIndex,
   packageName: string,
   arch: MipArchitecture
 ): PackageIndexEntry | undefined {
-  const exact = index.packages.find(
-    p => p.name === packageName && p.architecture === arch
-  );
-  if (exact) return exact;
-  return index.packages.find(
-    p => p.name === packageName && p.architecture === "any"
-  );
+  for (const candidate of [arch, "wasm", "all"]) {
+    const entry = index.packages.find(
+      p => p.name === packageName && p.architecture === candidate
+    );
+    if (entry) return entry;
+  }
+  return undefined;
 }
 
 export function listAvailablePackages(
@@ -34,6 +35,9 @@ export function listAvailablePackages(
   arch: MipArchitecture
 ): PackageIndexEntry[] {
   return index.packages.filter(
-    p => p.architecture === arch || p.architecture === "any"
+    p =>
+      p.architecture === arch ||
+      p.architecture === "wasm" ||
+      p.architecture === "all"
   );
 }

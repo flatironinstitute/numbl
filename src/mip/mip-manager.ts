@@ -7,13 +7,13 @@ import {
 import { resolveDependencies, computeRequiredPackages } from "./dependency.js";
 
 function packagesDir(mipDir: string): string {
-  return `${mipDir}/packages`;
+  return `${mipDir}/numbl_packages`;
 }
 function packageDir(mipDir: string, name: string): string {
-  return `${mipDir}/packages/${name}`;
+  return `${mipDir}/numbl_packages/${name}`;
 }
 function directlyInstalledPath(mipDir: string): string {
-  return `${mipDir}/packages/directly_installed.txt`;
+  return `${mipDir}/numbl_packages/directly_installed.txt`;
 }
 
 export interface InstallResult {
