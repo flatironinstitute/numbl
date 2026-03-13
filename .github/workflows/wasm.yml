@@ -33,4 +33,4 @@ jobs:
         run: npm run build:wasm
 
       - name: Run WASM tests
-        run: npm run test:wasm
+        run: npm run test
