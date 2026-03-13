@@ -216,6 +216,29 @@ export function loadJsUserFunctions(
         );
       }
 
+      // Build binding status message (only if directives were present)
+      if (directives.native || directives.wasm) {
+        const parts: string[] = [];
+        if (directives.native) {
+          parts.push(nativeLib ? "native: loaded" : "native: not found");
+        }
+        if (directives.wasm) {
+          parts.push(wasmInstance ? "wasm: loaded" : "wasm: not found");
+        }
+        const statusMsg = `${funcName}: ${parts.join(", ")}`;
+        let logged = false;
+        for (const branch of branches) {
+          const origApply = branch.apply;
+          branch.apply = (...applyArgs) => {
+            if (!logged) {
+              logged = true;
+              console.log(statusMsg);
+            }
+            return origApply(...applyArgs);
+          };
+        }
+      }
+
       result.set(funcName, branches);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

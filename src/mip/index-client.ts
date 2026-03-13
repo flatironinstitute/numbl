@@ -21,7 +21,7 @@ export function findPackageEntry(
   packageName: string,
   arch: MipArchitecture
 ): PackageIndexEntry | undefined {
-  for (const candidate of [arch, "wasm", "all"]) {
+  for (const candidate of ["numbl_" + arch, "numbl_wasm", "all"]) {
     const entry = index.packages.find(
       p => p.name === packageName && p.architecture === candidate
     );
