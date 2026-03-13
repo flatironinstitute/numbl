@@ -31,7 +31,7 @@ export function processMipLoad(
   visited.add(packageName);
 
   const mipDir = process.env.MIP_DIR || join(homedir(), ".mip");
-  const pkgDir = join(mipDir, "packages", packageName);
+  const pkgDir = join(mipDir, "numbl_packages", packageName);
   const loadScript = join(pkgDir, "load_package.m");
 
   if (!existsSync(loadScript)) {
@@ -48,7 +48,7 @@ export function processMipLoad(
       const mipJson = JSON.parse(readFileSync(mipJsonPath, "utf-8"));
       const deps: string[] = mipJson.dependencies ?? [];
       for (const dep of deps) {
-        const depPkgDir = join(mipDir, "packages", dep);
+        const depPkgDir = join(mipDir, "numbl_packages", dep);
         if (!existsSync(depPkgDir)) {
           console.warn(
             `Warning: dependency "${dep}" of "${packageName}" is not installed; skipping`
