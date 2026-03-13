@@ -21,12 +21,20 @@ if (typeof window === "undefined") {
     if (request.cache === "only-if-cached" && request.mode !== "same-origin") {
       return; // Chrome bug workaround
     }
+
+    // Only add isolation headers to same-origin responses.
+    // Wrapping cross-origin responses in a new Response strips CORS
+    // internal flags, which breaks cross-origin fetch requests.
+    if (new URL(request.url).origin !== self.location.origin) {
+      return; // let the browser handle cross-origin requests normally
+    }
+
     event.respondWith(
       fetch(request).then(response => {
         if (response.status === 0) return response; // opaque response
 
         const headers = new Headers(response.headers);
-        headers.set("Cross-Origin-Embedder-Policy", "require-corp");
+        headers.set("Cross-Origin-Embedder-Policy", "credentialless");
         headers.set("Cross-Origin-Opener-Policy", "same-origin");
 
         return new Response(response.body, {
