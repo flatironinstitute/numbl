@@ -2,11 +2,14 @@
  * Loader for .js user functions.
  *
  * Evaluates .js files that define branches via register({ check, apply }).
+ * Supports optional WASM and native shared library bindings via directives:
+ *   // wasm: <name>
+ *   // native: <name>
  */
 
 import type { BuiltinFn, BuiltinFnBranch } from "./builtins/registry.js";
 import { type ItemType, IType } from "./lowering/itemTypes.js";
-import type { WorkspaceFile } from "./workspace/index.js";
+import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
 import { RTV, RuntimeError } from "./runtime/index.js";
 import { FloatXArray } from "./runtime/types.js";
 
@@ -42,13 +45,47 @@ function buildWasmMap(wasmFiles: WorkspaceFile[]): Map<string, Uint8Array> {
   return map;
 }
 
+/** Parsed directives from the top of a .js user function file. */
+interface JsDirectives {
+  wasm?: string;
+  native?: string;
+}
+
 /**
- * Parse a `// wasm: <name>` directive from the top of a .js source file.
- * Returns the wasm module name, or null if no directive is found.
+ * Parse YAML-compatible directives from consecutive comment lines at the top
+ * of a .js source file. Supported keys: wasm, native.
+ *
+ * Example:
+ *   // wasm: wadd
+ *   // native: wadd
  */
-function parseWasmDirective(source: string): string | null {
-  const match = source.match(/^\s*\/\/\s*wasm:\s*(\S+)/);
-  return match ? match[1] : null;
+function parseDirectives(source: string): JsDirectives {
+  const directives: JsDirectives = {};
+  const lines = source.split("\n");
+  for (const line of lines) {
+    const match = line.match(/^\s*\/\/\s*(\w+):\s*(\S+)/);
+    if (!match) break; // stop at first non-directive line
+    const key = match[1];
+    const value = match[2];
+    if (key === "wasm") directives.wasm = value;
+    else if (key === "native") directives.native = value;
+  }
+  return directives;
+}
+
+/**
+ * Resolve a platform-appropriate shared library filename from a base name.
+ * E.g., "wadd" → "wadd.so" (Linux), "wadd.dll" (Windows), "wadd.dylib" (macOS)
+ */
+function nativeLibFilename(baseName: string): string {
+  switch (process.platform) {
+    case "win32":
+      return `${baseName}.dll`;
+    case "darwin":
+      return `${baseName}.dylib`;
+    default:
+      return `${baseName}.so`;
+  }
 }
 
 /**
@@ -85,27 +122,30 @@ function instantiateWasm(wasmData: Uint8Array): WebAssembly.Instance {
 
 /**
  * Load .js user function files and return them as a map of function name → BuiltinFn.
- * If wasmFiles are provided, matching .wasm modules are compiled and exposed as `wasm`
- * in the .js function's execution context.
  *
- * A .js file can specify which .wasm to use via a `// wasm: <name>` directive
- * on its first line. Multiple .js files referencing the same .wasm share one instance.
- * Without a directive, the loader falls back to matching by function name.
+ * A .js file can specify bindings via directives at the top of the file:
+ *   // wasm: <name>    — load a WASM module (looked up by name in wasmFiles)
+ *   // native: <name>  — load a native shared library (resolved relative to .js file)
+ *
+ * The `wasm` and `native` parameters are passed to the .js function context.
+ * They are `undefined` when the corresponding directive is absent or the binary
+ * is not found.
  */
 export function loadJsUserFunctions(
   jsFiles: WorkspaceFile[],
-  wasmFiles?: WorkspaceFile[]
+  wasmFiles?: WorkspaceFile[],
+  nativeBridge?: NativeBridge
 ): Map<string, BuiltinFn> {
   const result = new Map<string, BuiltinFn>();
   const wasmMap = wasmFiles ? buildWasmMap(wasmFiles) : new Map();
   // Cache compiled WASM instances so multiple .js files can share one module
   const wasmInstanceCache = new Map<string, WebAssembly.Instance>();
 
-  function getWasmInstance(name: string): WebAssembly.Instance | null {
+  function getWasmInstance(name: string): WebAssembly.Instance | undefined {
     const cached = wasmInstanceCache.get(name);
     if (cached) return cached;
     const data = wasmMap.get(name);
-    if (!data) return null;
+    if (!data) return undefined;
     const instance = instantiateWasm(data);
     wasmInstanceCache.set(name, instance);
     return instance;
@@ -129,9 +169,26 @@ export function loadJsUserFunctions(
         });
       };
 
-      // Resolve WASM: check for directive, fall back to function name
-      const wasmName = parseWasmDirective(file.source) ?? funcName;
-      const wasmInstance = getWasmInstance(wasmName);
+      // Parse directives from the top of the .js file
+      const directives = parseDirectives(file.source);
+
+      // Resolve WASM: only if directive is present
+      const wasmInstance = directives.wasm
+        ? getWasmInstance(directives.wasm)
+        : undefined;
+
+      // Resolve native: only if directive is present and bridge is available
+      let nativeLib: unknown;
+      if (directives.native && nativeBridge) {
+        const libFile = nativeLibFilename(directives.native);
+        const dir = file.name.substring(0, file.name.lastIndexOf("/") + 1);
+        const libPath = dir + libFile;
+        try {
+          nativeLib = nativeBridge.load(libPath);
+        } catch {
+          // Native library not found or failed to load — leave undefined
+        }
+      }
 
       const factory = new Function(
         "RTV",
@@ -140,9 +197,18 @@ export function loadJsUserFunctions(
         "IType",
         "register",
         "wasm",
+        "native",
         file.source
       );
-      factory(RTV, RuntimeError, FloatXArray, IType, registerFn, wasmInstance);
+      factory(
+        RTV,
+        RuntimeError,
+        FloatXArray,
+        IType,
+        registerFn,
+        wasmInstance,
+        nativeLib
+      );
 
       if (branches.length === 0) {
         throw new Error(

@@ -4,7 +4,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
-import { WorkspaceFile } from "./numbl-core/workspace/types.js";
+import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { PlotInstruction } from "./numbl-core/executor/types.js";
 import { executeCode } from "./numbl-core/executeCode.js";
 import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
@@ -60,7 +60,8 @@ function saveHistoryEntry(entry: string, hist: string[]) {
 export async function runRepl(
   initialWorkspaceFiles: WorkspaceFile[],
   onDrawnow?: (instructions: PlotInstruction[]) => void,
-  initialSearchPaths?: string[]
+  initialSearchPaths?: string[],
+  nativeBridge?: NativeBridge
 ): Promise<void> {
   let variableValues: Record<string, RuntimeValue> = {};
   let holdState = false;
@@ -129,7 +130,8 @@ export async function runRepl(
           },
           workspaceFiles,
           "repl",
-          searchPaths
+          searchPaths,
+          nativeBridge
         );
         variableValues = result.variableValues;
         holdState = result.holdState;
@@ -258,7 +260,8 @@ export async function runRepl(
         },
         workspaceFiles,
         "repl",
-        searchPaths
+        searchPaths,
+        nativeBridge
       );
       variableValues = result.variableValues;
       holdState = result.holdState;

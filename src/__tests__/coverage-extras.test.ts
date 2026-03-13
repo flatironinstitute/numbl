@@ -74,6 +74,107 @@ describe("jsUserFunctions", () => {
     const fns = loadJsUserFunctions(jsFiles);
     expect(fns.has("myFunc")).toBe(true);
   });
+
+  it("does not provide wasm without directive (no fallback by name)", () => {
+    const jsFiles = [
+      {
+        name: "myfunc.js",
+        source: `register({ apply: () => wasm });`,
+      },
+    ];
+    // Even though there's a matching wasm file by name, wasm should be undefined
+    // without a directive
+    const wasmFiles = [
+      { name: "myfunc.wasm", source: "", data: new Uint8Array([]) },
+    ];
+    const fns = loadJsUserFunctions(jsFiles, wasmFiles);
+    const branch = fns.get("myfunc")![0];
+    expect(branch.apply([], 1)).toBeUndefined();
+  });
+
+  it("provides wasm when directive is present and wasm file exists", () => {
+    // Build a minimal valid wasm module (empty module: magic + version + no sections)
+    const wasmBytes = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ]);
+    const jsFiles = [
+      {
+        name: "/path/to/myfunc.js",
+        source: `// wasm: mymod\nregister({ apply: () => (wasm !== undefined) });`,
+      },
+    ];
+    const wasmFiles = [
+      { name: "/path/to/mymod.wasm", source: "", data: wasmBytes },
+    ];
+    const fns = loadJsUserFunctions(jsFiles, wasmFiles);
+    const branch = fns.get("myfunc")![0];
+    expect(branch.apply([], 1)).toBe(true);
+  });
+
+  it("passes native as undefined when no directive", () => {
+    const jsFiles = [
+      {
+        name: "/path/to/myfunc.js",
+        source: `register({ apply: () => (typeof native === 'undefined') });`,
+      },
+    ];
+    const mockBridge = { load: () => ({ fake: true }) };
+    const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
+    const branch = fns.get("myfunc")![0];
+    expect(branch.apply([], 1)).toBe(true);
+  });
+
+  it("passes native library when directive and bridge are present", () => {
+    const mockLib = { myFunction: () => 42 };
+    const mockBridge = { load: () => mockLib };
+    const jsFiles = [
+      {
+        name: "/path/to/myfunc.js",
+        source: `// native: mylib\nregister({ apply: () => native });`,
+      },
+    ];
+    const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
+    const branch = fns.get("myfunc")![0];
+    expect(branch.apply([], 1)).toBe(mockLib);
+  });
+
+  it("leaves native undefined when bridge load fails", () => {
+    const mockBridge = {
+      load: () => {
+        throw new Error("not found");
+      },
+    };
+    const jsFiles = [
+      {
+        name: "/path/to/myfunc.js",
+        source: `// native: mylib\nregister({ apply: () => (typeof native === 'undefined') });`,
+      },
+    ];
+    const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
+    const branch = fns.get("myfunc")![0];
+    expect(branch.apply([], 1)).toBe(true);
+  });
+
+  it("parses both wasm and native directives", () => {
+    const wasmBytes = new Uint8Array([
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+    ]);
+    const mockLib = { fn: () => 1 };
+    const mockBridge = { load: () => mockLib };
+    const jsFiles = [
+      {
+        name: "/path/to/myfunc.js",
+        source: `// wasm: mymod\n// native: mylib\nregister({ apply: () => [wasm !== undefined, native !== undefined] });`,
+      },
+    ];
+    const wasmFiles = [
+      { name: "/path/to/mymod.wasm", source: "", data: wasmBytes },
+    ];
+    const fns = loadJsUserFunctions(jsFiles, wasmFiles, mockBridge);
+    const branch = fns.get("myfunc")![0];
+    const result = branch.apply([], 1);
+    expect(result).toEqual([true, true]);
+  });
 });
 
 // ── Parser edge cases ────────────────────────────────────────────────

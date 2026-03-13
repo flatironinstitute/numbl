@@ -1,4 +1,4 @@
-% Test that a .js user function can call into a .wasm module
+% Test .js user function with wasm binding and JS fallback
 result = wadd(3, 4);
 assert(result == 7, 'Expected wadd(3, 4) == 7');
 

@@ -1,6 +1,6 @@
 import { AbstractSyntaxTree, parseMFile, type Stmt } from "../parser/index.js";
 import { SyntaxError } from "../parser/errors.js";
-import type { WorkspaceFile } from "../workspace/index.js";
+import type { WorkspaceFile, NativeBridge } from "../workspace/index.js";
 import { offsetToLine } from "../runtime/index.js";
 import { SemanticError } from "../lowering/errors.js";
 import {
@@ -41,7 +41,7 @@ export function generateMainScriptCode(
   workspaceFiles?: WorkspaceFile[],
   initialVariableNames?: string[],
   searchPaths?: string[],
-  opts?: { noLineTracking?: boolean }
+  opts?: { noLineTracking?: boolean; nativeBridge?: NativeBridge }
 ): {
   jsCode: string;
   ctx: LoweringContext;
@@ -121,7 +121,8 @@ export function generateMainScriptCode(
   _t0 = performance.now();
   const jsUserFunctions = loadJsUserFunctions(
     jsWorkspaceFiles,
-    wasmWorkspaceFiles
+    wasmWorkspaceFiles,
+    opts?.nativeBridge
   );
   const _loadJsUserFunctionsMs = performance.now() - _t0;
 

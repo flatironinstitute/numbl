@@ -6,7 +6,10 @@
  */
 
 import { type ExecOptions, type ExecResult } from "./executor/types.js";
-import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
+import type {
+  WorkspaceFile,
+  NativeBridge,
+} from "../numbl-core/workspace/index.js";
 import { Runtime } from "./runtime/runtime.js";
 import { wrapReturnValue } from "./executor/helpers.js";
 import {
@@ -27,7 +30,8 @@ export function executeCode(
   options: ExecOptions = {},
   workspaceFiles?: WorkspaceFile[],
   mainFileName: string = "script.m",
-  searchPaths?: string[]
+  searchPaths?: string[],
+  nativeBridge?: NativeBridge
 ): ExecResult {
   const initialVariableNames = options.initialVariableValues
     ? Object.keys(options.initialVariableValues)
@@ -47,7 +51,7 @@ export function executeCode(
     workspaceFiles,
     initialVariableNames,
     searchPaths,
-    { noLineTracking: options.noLineTracking }
+    { noLineTracking: options.noLineTracking, nativeBridge }
   );
   const codegenTimeMs = performance.now() - codegenStart;
 

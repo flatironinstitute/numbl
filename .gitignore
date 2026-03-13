@@ -27,8 +27,11 @@ server/dist
 .env
 server/.env
 
-# WebAssembly build artifacts
+# Build artifacts (wasm, native shared libraries)
 numbl_test_scripts/**/*.wasm
+numbl_test_scripts/**/*.so
+numbl_test_scripts/**/*.dll
+numbl_test_scripts/**/*.dylib
 
 # Editor directories and files
 .vscode/*

@@ -42,6 +42,12 @@ function scanMFiles(dirPath: string, excludeFile?: string): WorkspaceFile[] {
         (entry.endsWith(".m") || entry.endsWith(".js"))
       ) {
         files.push({ name: fullPath, source: readFileSync(fullPath, "utf-8") });
+      } else if (stat.isFile() && entry.endsWith(".wasm")) {
+        files.push({
+          name: fullPath,
+          source: "",
+          data: new Uint8Array(readFileSync(fullPath)),
+        });
       }
     } catch {
       continue;
@@ -69,11 +75,7 @@ function findTestFiles(dir: string): string[] {
         continue;
       }
       if (stat.isDirectory()) {
-        if (
-          !entry.startsWith("@") &&
-          !entry.startsWith("+") &&
-          entry !== "wasm"
-        ) {
+        if (!entry.startsWith("@") && !entry.startsWith("+")) {
           walk(fullPath);
         }
       } else if (stat.isFile() && entry.endsWith(".m")) {

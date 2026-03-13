@@ -108,5 +108,8 @@
       "eslint"
     ],
     "*.{json,css,md,yml}": "prettier --write"
+  },
+  "optionalDependencies": {
+    "koffi": "^2.15.2"
   }
 }

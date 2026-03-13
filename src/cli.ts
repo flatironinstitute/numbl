@@ -27,7 +27,7 @@ import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 
 import { executeCode, generateCode } from "./numbl-core/executeCode.js";
-import { WorkspaceFile } from "./numbl-core/workspace/types.js";
+import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { PlotInstruction } from "./numbl-core/executor/types.js";
 
 // ── Package directory & native addon paths ───────────────────────────────────
@@ -48,6 +48,17 @@ try {
   nativeAddonLoaded = true;
 } catch {
   // Native addon not available — JS fallbacks will be used
+}
+
+// ── Try to load koffi for native FFI bridge ───────────────────────────────────
+
+let nativeBridge: NativeBridge | undefined;
+try {
+  const req = createRequire(import.meta.url);
+  const koffi = req("koffi");
+  nativeBridge = { load: (path: string) => koffi.load(path) };
+} catch {
+  // koffi not installed — native shared library support disabled
 }
 
 /**
@@ -193,7 +204,8 @@ async function runTests(dir: string) {
         { displayResults: true },
         workspaceFiles,
         mainFileName,
-        searchPaths
+        searchPaths,
+        nativeBridge
       );
 
       const outputText = result.output.join("");
@@ -567,7 +579,8 @@ async function executeWithOptions(
           },
           workspaceFiles,
           mainFileName,
-          searchPaths
+          searchPaths,
+          nativeBridge
         );
         if (result.plotInstructions.length > 0) {
           streamLine({
@@ -615,7 +628,8 @@ async function executeWithOptions(
         },
         workspaceFiles,
         mainFileName,
-        searchPaths
+        searchPaths,
+        nativeBridge
       );
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
@@ -646,7 +660,8 @@ async function executeWithOptions(
         },
         workspaceFiles,
         mainFileName,
-        searchPaths
+        searchPaths,
+        nativeBridge
       );
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
@@ -760,7 +775,7 @@ async function cmdRepl(args: string[]) {
     !opts.plot,
     replPlotOpts
   );
-  await runRepl(replFiles, replDrawnow, replSearchPaths);
+  await runRepl(replFiles, replDrawnow, replSearchPaths, nativeBridge);
 }
 
 // ── Plot handler ─────────────────────────────────────────────────────────────

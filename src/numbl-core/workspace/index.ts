@@ -3,4 +3,4 @@
  */
 
 // Re-export types
-export type { WorkspaceFile } from "./types.js";
+export type { WorkspaceFile, NativeBridge } from "./types.js";
