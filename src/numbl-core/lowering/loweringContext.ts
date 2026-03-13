@@ -540,14 +540,10 @@ export class LoweringContext {
     // Second pass: register @folder class groups
     for (const [className, group] of classFolderGroups) {
       if (!group.classDefFile) {
-        // No classdef file — treat method files as regular workspace files
-        for (const mf of group.methodFiles) {
-          const baseName = mf.name.split("/").pop()!.replace(/\.m$/, "");
-          this.registry.filesByFuncName.set(baseName, {
-            fileName: mf.name,
-            source: mf.source,
-          });
-        }
+        // No classdef file — skip. In MATLAB, @ClassName methods without a
+        // classdef are only dispatched on instances of that class. Registering
+        // them as regular workspace functions would incorrectly shadow
+        // same-named functions from other directories.
         continue;
       }
 
@@ -728,7 +724,10 @@ export class LoweringContext {
       file.name,
       file.source
     );
-    this.registry.classesByName.set(qualifiedName, info);
+    // First-wins: earlier search paths take priority (same as workspace functions)
+    if (!this.registry.classesByName.has(qualifiedName)) {
+      this.registry.classesByName.set(qualifiedName, info);
+    }
   }
 
   /**
