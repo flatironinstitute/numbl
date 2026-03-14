@@ -12,11 +12,6 @@ import {
 import { register, builtinSingle } from "../registry.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 
-/** Absolute value of a complex element given real and imaginary parts */
-function complexAbs(re: number, im: number): number {
-  return Math.sqrt(re * re + im * im);
-}
-
 export function registerNorm(): void {
   register(
     "norm",
@@ -26,7 +21,7 @@ export function registerNorm(): void {
           throw new RuntimeError("norm requires at least 1 argument");
         const v = args[0];
         if (isRuntimeNumber(v)) return RTV.num(Math.abs(v));
-        if (isRuntimeComplexNumber(v)) return RTV.num(complexAbs(v.re, v.im));
+        if (isRuntimeComplexNumber(v)) return RTV.num(Math.hypot(v.re, v.im));
         if (!isRuntimeTensor(v))
           throw new RuntimeError("norm: argument must be numeric");
         // Determine if vector or matrix
@@ -58,7 +53,7 @@ export function registerNorm(): void {
             let m = 0;
             for (let i = 0; i < v.data.length; i++) {
               const a = imag
-                ? complexAbs(v.data[i], imag[i])
+                ? Math.hypot(v.data[i], imag[i])
                 : Math.abs(v.data[i]);
               m = Math.max(m, a);
             }
@@ -68,7 +63,7 @@ export function registerNorm(): void {
             let m = Infinity;
             for (let i = 0; i < v.data.length; i++) {
               const a = imag
-                ? complexAbs(v.data[i], imag[i])
+                ? Math.hypot(v.data[i], imag[i])
                 : Math.abs(v.data[i]);
               m = Math.min(m, a);
             }
@@ -77,7 +72,7 @@ export function registerNorm(): void {
           let s = 0;
           for (let i = 0; i < v.data.length; i++) {
             const a = imag
-              ? complexAbs(v.data[i], imag[i])
+              ? Math.hypot(v.data[i], imag[i])
               : Math.abs(v.data[i]);
             s += Math.pow(a, vp);
           }
@@ -102,7 +97,7 @@ export function registerNorm(): void {
             for (let i = 0; i < rows; i++) {
               const idx = j * rows + i; // column-major
               colSum += imag
-                ? complexAbs(v.data[idx], imag[idx])
+                ? Math.hypot(v.data[idx], imag[idx])
                 : Math.abs(v.data[idx]);
             }
             maxColSum = Math.max(maxColSum, colSum);
@@ -117,7 +112,7 @@ export function registerNorm(): void {
             for (let j = 0; j < cols; j++) {
               const idx = j * rows + i; // column-major
               rowSum += imag
-                ? complexAbs(v.data[idx], imag[idx])
+                ? Math.hypot(v.data[idx], imag[idx])
                 : Math.abs(v.data[idx]);
             }
             maxRowSum = Math.max(maxRowSum, rowSum);

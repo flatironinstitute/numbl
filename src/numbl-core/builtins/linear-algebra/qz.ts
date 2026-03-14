@@ -8,7 +8,6 @@
  */
 
 import {
-  colMajorIndex,
   RTV,
   RuntimeError,
   RuntimeValue,
@@ -17,16 +16,16 @@ import {
 import {
   FloatXArray,
   RuntimeTensor,
-  isRuntimeChar,
-  isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
+  buildEigenvectorMatrix,
   out,
   isMatrixLike,
   isOptionalStringArg,
+  parseStringArgLower,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
@@ -191,13 +190,7 @@ export function registerQz(): void {
         // Parse optional mode argument
         let mode: "real" | "complex" = "complex";
         if (args.length >= 3) {
-          const modeArg = args[2];
-          let modeStr = "";
-          if (isRuntimeString(modeArg)) {
-            modeStr = modeArg.replace(/^['"]|['"]$/g, "").toLowerCase();
-          } else if (isRuntimeChar(modeArg)) {
-            modeStr = modeArg.value.replace(/^['"]|['"]$/g, "").toLowerCase();
-          }
+          const modeStr = parseStringArgLower(args[2]);
           if (modeStr === "complex") mode = "complex";
           else if (modeStr === "real") mode = "real";
           else throw new RuntimeError(`qz: unknown mode '${modeStr}'`);
@@ -229,49 +222,4 @@ export function registerQz(): void {
       },
     },
   ]);
-}
-
-/**
- * Build a (possibly complex) eigenvector matrix from LAPACK's packed real format.
- *
- * For complex conjugate eigenvalue pairs, LAPACK stores eigenvectors as:
- *   Column j:   real part
- *   Column j+1: imaginary part
- * Eigenvector for eigenvalue j   is V(:,j) + i*V(:,j+1)
- * Eigenvector for eigenvalue j+1 is V(:,j) - i*V(:,j+1)
- */
-function buildEigenvectorMatrix(
-  packedV: Float64Array,
-  wi: Float64Array,
-  n: number,
-  hasComplex: boolean
-) {
-  if (!hasComplex) {
-    return RTV.tensor(new FloatXArray(packedV), [n, n]);
-  }
-
-  const realPart = new FloatXArray(n * n);
-  const imagPart = new FloatXArray(n * n);
-
-  let j = 0;
-  while (j < n) {
-    if (Math.abs(wi[j]) === 0) {
-      for (let i = 0; i < n; i++) {
-        realPart[colMajorIndex(i, j, n)] = packedV[colMajorIndex(i, j, n)];
-      }
-      j++;
-    } else {
-      for (let i = 0; i < n; i++) {
-        const re = packedV[colMajorIndex(i, j, n)];
-        const im = packedV[colMajorIndex(i, j + 1, n)];
-        realPart[colMajorIndex(i, j, n)] = re;
-        imagPart[colMajorIndex(i, j, n)] = im;
-        realPart[colMajorIndex(i, j + 1, n)] = re;
-        imagPart[colMajorIndex(i, j + 1, n)] = -im;
-      }
-      j += 2;
-    }
-  }
-
-  return RTV.tensor(realPart, [n, n], imagPart);
 }

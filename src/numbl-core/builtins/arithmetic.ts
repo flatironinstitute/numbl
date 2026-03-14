@@ -26,7 +26,7 @@ import {
   linsolveLapack,
   linsolveComplexLapack,
 } from "./linear-algebra/linsolve.js";
-import { applyBuiltin as applyBuiltinFn } from "./linear-algebra/applyBuiltin.js";
+import { applyBuiltin as applyBuiltinFn } from "./linear-algebra/check-helpers.js";
 import { coerceToTensor } from "./shape-utils.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────

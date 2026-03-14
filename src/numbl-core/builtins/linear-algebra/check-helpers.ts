@@ -13,7 +13,16 @@ import {
   isString,
   isChar,
 } from "../../lowering/itemTypes.js";
-import type { FloatXArrayType } from "../../runtime/types.js";
+import {
+  FloatXArray,
+  type FloatXArrayType,
+  isRuntimeChar,
+  isRuntimeNumber,
+  isRuntimeString,
+} from "../../runtime/types.js";
+import { colMajorIndex, RTV, RuntimeValue } from "../../runtime/index.js";
+import { RuntimeError } from "../../runtime/index.js";
+import { getBuiltin } from "../registry.js";
 
 /**
  * Returns true when A is a plausible numeric/matrix input
@@ -86,4 +95,88 @@ export function parseStringArgLower(arg: unknown): string {
       .toLowerCase();
   }
   return String(arg).toLowerCase();
+}
+
+/**
+ * Parse runtime economy-mode argument (0 or 'econ') used by qr, svd, etc.
+ * Returns true for economy mode, false otherwise.
+ */
+export function parseEconArgRuntime(arg: RuntimeValue | undefined): boolean {
+  if (arg === undefined) return false;
+  if (isRuntimeNumber(arg) && arg === 0) return true;
+  if (isRuntimeString(arg) && arg.toLowerCase() === "econ") return true;
+  if (isRuntimeChar(arg) && arg.value.toLowerCase() === "econ") return true;
+  return false;
+}
+
+/**
+ * Build a (possibly complex) eigenvector matrix from LAPACK's packed real format.
+ *
+ * For complex conjugate eigenvalue pairs, LAPACK stores eigenvectors as:
+ *   Column j:   real part
+ *   Column j+1: imaginary part
+ * Eigenvector for eigenvalue j   is V(:,j) + i*V(:,j+1)
+ * Eigenvector for eigenvalue j+1 is V(:,j) - i*V(:,j+1)
+ */
+export function buildEigenvectorMatrix(
+  packedV: Float64Array,
+  wi: Float64Array,
+  n: number,
+  hasComplex: boolean
+) {
+  if (!hasComplex) {
+    return RTV.tensor(new FloatXArray(packedV), [n, n]);
+  }
+
+  const realPart = new FloatXArray(n * n);
+  const imagPart = new FloatXArray(n * n);
+
+  let j = 0;
+  while (j < n) {
+    if (Math.abs(wi[j]) === 0) {
+      for (let i = 0; i < n; i++) {
+        realPart[colMajorIndex(i, j, n)] = packedV[colMajorIndex(i, j, n)];
+      }
+      j++;
+    } else {
+      for (let i = 0; i < n; i++) {
+        const re = packedV[colMajorIndex(i, j, n)];
+        const im = packedV[colMajorIndex(i, j + 1, n)];
+        realPart[colMajorIndex(i, j, n)] = re;
+        imagPart[colMajorIndex(i, j, n)] = im;
+        realPart[colMajorIndex(i, j + 1, n)] = re;
+        imagPart[colMajorIndex(i, j + 1, n)] = -im;
+      }
+      j += 2;
+    }
+  }
+
+  return RTV.tensor(realPart, [n, n], imagPart);
+}
+
+/**
+ * Call a registered builtin from within another builtin's apply().
+ * Convenience wrapper that includes the caller name in error messages.
+ */
+export function applyBuiltin(
+  caller: string,
+  name: string,
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue {
+  const branches = getBuiltin(name);
+  if (!branches)
+    throw new RuntimeError(`${caller}: builtin '${name}' not found`);
+  for (const branch of branches) {
+    const result = branch.apply(args, nargout);
+    if (result !== undefined) {
+      if (result instanceof Promise)
+        throw new RuntimeError(
+          `${caller}: builtin '${name}' returned async result`
+        );
+      if (Array.isArray(result)) return result[0];
+      return result;
+    }
+  }
+  throw new RuntimeError(`${caller}: builtin '${name}' returned no result`);
 }

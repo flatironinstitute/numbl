@@ -12,7 +12,6 @@ import {
   FloatXArray,
   FloatXArrayType,
   isRuntimeNumber,
-  isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
@@ -21,6 +20,7 @@ import {
   out,
   isMatrixLike,
   parseEconArg,
+  parseEconArgRuntime,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
@@ -103,17 +103,7 @@ export function registerQr(): void {
         if (!isRuntimeTensor(A))
           throw new RuntimeError("qr: argument must be numeric");
 
-        // Determine if economy mode is requested
-        let econ = false;
-        if (args.length >= 2) {
-          const opt = args[1];
-          if (isRuntimeNumber(opt) && opt === 0) econ = true;
-          else if (
-            isRuntimeString(opt) &&
-            opt.replace(/^['"]|['"]$/g, "").toLowerCase() === "econ"
-          )
-            econ = true;
-        }
+        const econ = parseEconArgRuntime(args[1]);
 
         const [m, n] = tensorSize2D(A);
         const k = Math.min(m, n);

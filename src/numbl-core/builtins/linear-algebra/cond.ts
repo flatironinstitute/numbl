@@ -13,13 +13,17 @@ import {
   toNumber,
 } from "../../runtime/index.js";
 import {
+  isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { register, builtinSingle } from "../registry.js";
-import { applyBuiltin as _applyBuiltin } from "./applyBuiltin.js";
+import {
+  applyBuiltin as _applyBuiltin,
+  parseStringArgLower,
+} from "./check-helpers.js";
 
 function applyBuiltin(
   name: string,
@@ -54,8 +58,8 @@ export function registerCond(): void {
         let p: number | string = 2;
         if (args.length >= 2) {
           const pArg = args[1];
-          if (isRuntimeString(pArg)) {
-            const pStr = pArg.replace(/^['"]|['"]$/g, "").toLowerCase();
+          if (isRuntimeString(pArg) || isRuntimeChar(pArg)) {
+            const pStr = parseStringArgLower(pArg);
             if (pStr === "fro") {
               p = "fro";
             } else {

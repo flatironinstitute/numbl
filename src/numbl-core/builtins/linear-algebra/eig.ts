@@ -19,6 +19,7 @@ import {
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
+  buildEigenvectorMatrix,
   isMatrixLike,
   isOptionalStringArg,
   out,
@@ -343,54 +344,4 @@ export function registerEig(): void {
       },
     },
   ]);
-}
-
-/**
- * Build a complex eigenvector matrix from DGEEV's packed real format.
- *
- * DGEEV stores eigenvectors for complex conjugate pairs as:
- *   Column j:   real part of eigenvector for eigenvalue j
- *   Column j+1: imaginary part of eigenvector for eigenvalue j
- * The eigenvector for eigenvalue j is   V(:,j) + i*V(:,j+1)
- * The eigenvector for eigenvalue j+1 is V(:,j) - i*V(:,j+1)
- */
-function buildEigenvectorMatrix(
-  packedV: Float64Array,
-  wi: Float64Array,
-  n: number,
-  hasComplex: boolean
-) {
-  if (!hasComplex) {
-    return RTV.tensor(new FloatXArray(packedV), [n, n]);
-  }
-
-  const realPart = new FloatXArray(n * n);
-  const imagPart = new FloatXArray(n * n);
-
-  let j = 0;
-  while (j < n) {
-    if (Math.abs(wi[j]) === 0) {
-      // Real eigenvalue — column j is real
-      for (let i = 0; i < n; i++) {
-        realPart[colMajorIndex(i, j, n)] = packedV[colMajorIndex(i, j, n)];
-        // imagPart stays 0
-      }
-      j++;
-    } else {
-      // Complex conjugate pair at j and j+1
-      for (let i = 0; i < n; i++) {
-        const re = packedV[colMajorIndex(i, j, n)];
-        const im = packedV[colMajorIndex(i, j + 1, n)];
-        // Eigenvector for eigenvalue j: re + i*im
-        realPart[colMajorIndex(i, j, n)] = re;
-        imagPart[colMajorIndex(i, j, n)] = im;
-        // Eigenvector for eigenvalue j+1: re - i*im
-        realPart[colMajorIndex(i, j + 1, n)] = re;
-        imagPart[colMajorIndex(i, j + 1, n)] = -im;
-      }
-      j += 2;
-    }
-  }
-
-  return RTV.tensor(realPart, [n, n], imagPart);
 }

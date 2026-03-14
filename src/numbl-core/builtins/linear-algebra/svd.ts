@@ -11,9 +11,7 @@ import {
 import {
   FloatXArray,
   FloatXArrayType,
-  isRuntimeChar,
   isRuntimeNumber,
-  isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
@@ -23,6 +21,7 @@ import {
   isMatrixLike,
   out,
   parseEconArg,
+  parseEconArgRuntime,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
@@ -110,16 +109,7 @@ export function registerSvd(): void {
         if (!isRuntimeTensor(A))
           throw new RuntimeError("svd: argument must be numeric");
 
-        // Determine if economy mode is requested
-        let econ = false;
-        if (args.length >= 2) {
-          const opt = args[1];
-          if (isRuntimeNumber(opt) && opt === 0) econ = true;
-          else if (isRuntimeString(opt) && opt.toLowerCase() === "econ")
-            econ = true;
-          else if (isRuntimeChar(opt) && opt.value.toLowerCase() === "econ")
-            econ = true;
-        }
+        const econ = parseEconArgRuntime(args[1]);
 
         const [m, n] = tensorSize2D(A);
         const k = Math.min(m, n);
