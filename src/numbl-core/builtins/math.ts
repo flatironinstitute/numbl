@@ -408,7 +408,36 @@ function elemwiseComplex(
   return ret;
 }
 
-// ── Math (binary scalar) ────────────────────────────────────────────────
+// ── Binary scalar/tensor dispatch ────────────────────────────────────────
+
+/** Apply a binary (a, b) -> number function across scalar/tensor combinations. */
+function binaryApply(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  fn: (x: number, y: number) => number
+): RuntimeValue {
+  const aIsT = isRuntimeTensor(a);
+  const bIsT = isRuntimeTensor(b);
+  if (aIsT && bIsT) {
+    const result = new FloatXArray(a.data.length);
+    for (let i = 0; i < a.data.length; i++)
+      result[i] = fn(a.data[i], b.data[i]);
+    return RTV.tensor(result, a.shape);
+  }
+  if (aIsT) {
+    const bv = toNumber(b);
+    const result = new FloatXArray(a.data.length);
+    for (let i = 0; i < a.data.length; i++) result[i] = fn(a.data[i], bv);
+    return RTV.tensor(result, a.shape);
+  }
+  if (bIsT) {
+    const av = toNumber(a);
+    const result = new FloatXArray(b.data.length);
+    for (let i = 0; i < b.data.length; i++) result[i] = fn(av, b.data[i]);
+    return RTV.tensor(result, b.shape);
+  }
+  return RTV.num(fn(toNumber(a), toNumber(b)));
+}
 
 function binaryScalar(
   fn: (a: number, b: number) => number,
@@ -417,32 +446,7 @@ function binaryScalar(
   const ret: BuiltinFnBranch[] = [];
   const apply = (args: RuntimeValue[]) => {
     if (args.length !== 2) throw new RuntimeError(`Expected 2 arguments`);
-    const a = args[0];
-    const b = args[1];
-    const aIsT = isRuntimeTensor(a);
-    const bIsT = isRuntimeTensor(b);
-    if (aIsT && bIsT) {
-      // tensor-tensor: must have same shape
-      const result = new FloatXArray(a.data.length);
-      for (let i = 0; i < a.data.length; i++)
-        result[i] = fn(a.data[i], b.data[i]);
-      return RTV.tensor(result, a.shape);
-    }
-    if (aIsT) {
-      // tensor-scalar
-      const bv = toNumber(b);
-      const result = new FloatXArray(a.data.length);
-      for (let i = 0; i < a.data.length; i++) result[i] = fn(a.data[i], bv);
-      return RTV.tensor(result, a.shape);
-    }
-    if (bIsT) {
-      // scalar-tensor
-      const av = toNumber(a);
-      const result = new FloatXArray(b.data.length);
-      for (let i = 0; i < b.data.length; i++) result[i] = fn(av, b.data[i]);
-      return RTV.tensor(result, b.shape);
-    }
-    return RTV.num(fn(toNumber(a), toNumber(b)));
+    return binaryApply(args[0], args[1], fn);
   };
   if (o?.nativeJs) {
     ret.push({
@@ -464,43 +468,6 @@ function binaryScalar(
     apply,
   });
   return ret;
-}
-
-// ── Bessel helper (scalar/tensor dispatch) ──────────────────────────────
-
-/**
- * Apply a binary (nu, z) -> number function across scalar/tensor combinations.
- */
-function applyBesselBinary(
-  nuArg: RuntimeValue,
-  zArg: RuntimeValue,
-  fn: (nu: number, z: number) => number
-): RuntimeValue {
-  const nuIsT = isRuntimeTensor(nuArg);
-  const zIsT = isRuntimeTensor(zArg);
-  if (!nuIsT && !zIsT) {
-    return RTV.num(fn(toNumber(nuArg), toNumber(zArg)));
-  }
-  if (!nuIsT && zIsT) {
-    const nu = toNumber(nuArg);
-    const result = new FloatXArray(zArg.data.length);
-    for (let i = 0; i < zArg.data.length; i++) result[i] = fn(nu, zArg.data[i]);
-    return RTV.tensor(result, zArg.shape);
-  }
-  if (nuIsT && !zIsT) {
-    const z = toNumber(zArg);
-    const result = new FloatXArray(nuArg.data.length);
-    for (let i = 0; i < nuArg.data.length; i++)
-      result[i] = fn(nuArg.data[i], z);
-    return RTV.tensor(result, nuArg.shape);
-  }
-  // both tensors
-  const nut = nuArg as RuntimeTensor;
-  const zt = zArg as RuntimeTensor;
-  const result = new FloatXArray(nut.data.length);
-  for (let i = 0; i < nut.data.length; i++)
-    result[i] = fn(nut.data[i], zt.data[i]);
-  return RTV.tensor(result, nut.shape);
 }
 
 export function registerMathFunctions(): void {
@@ -762,109 +729,19 @@ export function registerMathFunctions(): void {
   );
   register(
     "sqrt",
-    [
-      // Num branch: returns Num if value is known and non-negative, otherwise Complex
-      {
-        check: (argTypes: ItemType[]) => {
-          if (argTypes.length !== 1 || argTypes[0].kind !== "Number")
-            return null;
-          return { outputTypes: [{ kind: "ComplexNumber" }] };
-        },
-        apply: (args: RuntimeValue[]) => {
-          if (args.length !== 1) throw new RuntimeError("Expected 1 argument");
-          const v = args[0];
-          if (isRuntimeNumber(v)) {
-            if (v < 0) return RTV.complex(0, Math.sqrt(-v));
-            return RTV.num(Math.sqrt(v));
-          }
-          if (isRuntimeComplexNumber(v)) {
-            const r = Math.sqrt(v.re * v.re + v.im * v.im);
-            const theta = Math.atan2(v.im, v.re);
-            const sqrtR = Math.sqrt(r);
-            const reim = {
-              re: sqrtR * Math.cos(theta / 2),
-              im: sqrtR * Math.sin(theta / 2),
-            };
-            return reim.im === 0
-              ? RTV.num(reim.re)
-              : RTV.complex(reim.re, reim.im);
-          }
-          return RTV.num(Math.sqrt(toNumber(v)));
-        },
+    complexElemwise(
+      Math.sqrt,
+      (re, im) => {
+        const r = Math.sqrt(re * re + im * im);
+        const theta = Math.atan2(im, re);
+        const sqrtR = Math.sqrt(r);
+        return {
+          re: sqrtR * Math.cos(theta / 2),
+          im: sqrtR * Math.sin(theta / 2),
+        };
       },
-      // Complex input branch
-      {
-        check: (argTypes: ItemType[]) => {
-          if (argTypes.length !== 1 || argTypes[0].kind !== "ComplexNumber")
-            return null;
-          return { outputTypes: [{ kind: "ComplexNumber" }] };
-        },
-        apply: (args: RuntimeValue[]) => {
-          if (args.length !== 1) throw new RuntimeError("Expected 1 argument");
-          const v = args[0];
-          if (isRuntimeComplexNumber(v)) {
-            const r = Math.sqrt(v.re * v.re + v.im * v.im);
-            const theta = Math.atan2(v.im, v.re);
-            const sqrtR = Math.sqrt(r);
-            const re = sqrtR * Math.cos(theta / 2),
-              im = sqrtR * Math.sin(theta / 2);
-            return im === 0 ? RTV.num(re) : RTV.complex(re, im);
-          }
-          if (isRuntimeNumber(v)) {
-            if (v < 0) return RTV.complex(0, Math.sqrt(-v));
-            return RTV.num(Math.sqrt(v));
-          }
-          return RTV.num(Math.sqrt(toNumber(v)));
-        },
-      },
-      // Fallback
-      {
-        check: elemwiseCheck,
-        apply: (args: RuntimeValue[]) => {
-          if (args.length !== 1) throw new RuntimeError("Expected 1 argument");
-          const v = args[0];
-          if (isRuntimeNumber(v)) {
-            if (v < 0) return RTV.complex(0, Math.sqrt(-v));
-            return RTV.num(Math.sqrt(v));
-          }
-          if (isRuntimeTensor(v)) {
-            let hasNeg = false;
-            for (let i = 0; i < v.data.length; i++) {
-              if (v.data[i] < 0) {
-                hasNeg = true;
-                break;
-              }
-            }
-            if (hasNeg || v.imag) {
-              const re = new FloatXArray(v.data.length);
-              const im = new FloatXArray(v.data.length);
-              for (let i = 0; i < v.data.length; i++) {
-                const rePart = v.data[i];
-                const imPart = v.imag ? v.imag[i] : 0;
-                const r = Math.sqrt(rePart * rePart + imPart * imPart);
-                const theta = Math.atan2(imPart, rePart);
-                const sqrtR = Math.sqrt(r);
-                re[i] = sqrtR * Math.cos(theta / 2);
-                im[i] = sqrtR * Math.sin(theta / 2);
-              }
-              let allRealZeroIm = true;
-              for (let i = 0; i < im.length; i++) {
-                if (im[i] !== 0) {
-                  allRealZeroIm = false;
-                  break;
-                }
-              }
-              return RTV.tensor(re, v.shape, allRealZeroIm ? undefined : im);
-            }
-            const result = new FloatXArray(v.data.length);
-            for (let i = 0; i < v.data.length; i++)
-              result[i] = Math.sqrt(v.data[i]);
-            return RTV.tensor(result, v.shape);
-          }
-          return RTV.num(Math.sqrt(toNumber(v)));
-        },
-      },
-    ] as BuiltinFnBranch[],
+      "ComplexNumber"
+    ),
     1
   );
   register(
@@ -1491,7 +1368,7 @@ export function registerMathFunctions(): void {
         if (args.length < 2 || args.length > 3)
           throw new RuntimeError(`${name} requires 2 or 3 arguments`);
         const scale = args.length === 3 ? toNumber(args[2]) : 0;
-        return applyBesselBinary(args[0], args[1], (nu, z) => {
+        return binaryApply(args[0], args[1], (nu, z) => {
           const val = fn(nu, z);
           return scale === 1 ? val * scaleFn(z) : val;
         });

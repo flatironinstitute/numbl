@@ -27,7 +27,11 @@ import {
   RuntimeStruct,
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
-import { parseShapeArgs } from "./shape-utils.js";
+import {
+  parseShapeArgs,
+  coerceToTensor,
+  toNumericVector,
+} from "./shape-utils.js";
 import { sprintfFormat } from "./string.js";
 import {
   mAdd,
@@ -275,21 +279,15 @@ export function registerMiscFunctions(): void {
 
       let A = args[0];
 
+      const distVec = (v: RuntimeValue) =>
+        toNumericVector(v, "mat2cell").map(x => Math.round(x));
+
       // Handle char arrays: split into cell of char substrings
       if (isRuntimeChar(A)) {
         const str = A.value;
-        const getDistVector = (v: RuntimeValue): number[] => {
-          if (isRuntimeNumber(v)) return [Math.round(v)];
-          if (isRuntimeTensor(v))
-            return Array.from(v.data).map(x => Math.round(x));
-          throw new RuntimeError(
-            "mat2cell: distribution arguments must be numeric vectors"
-          );
-        };
         // rowDist (args[1]) is consumed but not used for 1-row char arrays
-        getDistVector(args[1]);
-        const colDist =
-          args.length >= 3 ? getDistVector(args[2]) : [str.length];
+        distVec(args[1]);
+        const colDist = args.length >= 3 ? distVec(args[2]) : [str.length];
         const nCellCols = colDist.length;
         const cellData: RuntimeValue[] = [];
         let pos = 0;
@@ -300,36 +298,19 @@ export function registerMiscFunctions(): void {
         return RTV.cell(cellData, [1, nCellCols]);
       }
 
-      // Convert scalar to 1x1 tensor
-      if (isRuntimeNumber(A)) {
-        A = RTV.tensor(new FloatXArray([A]), [1, 1]);
-      }
-      if (!isRuntimeTensor(A))
-        throw new RuntimeError(
-          "mat2cell: first argument must be a numeric array"
-        );
+      A = coerceToTensor(A, "mat2cell");
 
       const rows = A.shape[0];
       const cols = A.shape.length >= 2 ? A.shape[1] : 1;
 
-      // Parse a distribution vector from a runtime value
-      const getDistVector = (v: RuntimeValue): number[] => {
-        if (isRuntimeNumber(v)) return [Math.round(v)];
-        if (isRuntimeTensor(v))
-          return Array.from(v.data).map(x => Math.round(x));
-        throw new RuntimeError(
-          "mat2cell: distribution arguments must be numeric vectors"
-        );
-      };
-
-      const rowDist = getDistVector(args[1]);
+      const rowDist = distVec(args[1]);
 
       // If only rowDist provided, split by rows only (n-by-1 cell)
       let colDist: number[];
       if (args.length === 2) {
         colDist = [cols];
       } else {
-        colDist = getDistVector(args[2]);
+        colDist = distVec(args[2]);
       }
 
       // Validate distributions sum to array dimensions

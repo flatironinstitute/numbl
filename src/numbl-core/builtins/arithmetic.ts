@@ -27,6 +27,7 @@ import {
   linsolveComplexLapack,
 } from "./linear-algebra/linsolve.js";
 import { applyBuiltin as applyBuiltinFn } from "./linear-algebra/applyBuiltin.js";
+import { coerceToTensor } from "./shape-utils.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────
 
@@ -336,18 +337,16 @@ export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Divide */
 export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Matrix / matrix: A / B = (B' \ A')' (uses mldivide)
-  if (isRuntimeTensor(b) && !isRuntimeNumber(a) && !isRuntimeLogical(a)) {
-    const at = mConjugateTranspose(
-      isRuntimeNumber(a) || isRuntimeLogical(a)
-        ? RTV.tensor(new FloatXArray([toNumber(a)]), [1, 1])
-        : a
-    );
+  // Matrix right division: A / B = (B' \ A')' (uses mldivide)
+  // When B is a matrix, always use matrix division (scalar A is promoted);
+  // mLeftDiv will error on dimension mismatch, matching MATLAB behaviour.
+  if (isRuntimeTensor(b)) {
+    const at = mConjugateTranspose(coerceToTensor(a, "mrdivide"));
     const bt = mConjugateTranspose(b);
     const result = mLeftDiv(bt, at);
     return mConjugateTranspose(result);
   }
-  // Scalar or element-wise division
+  // Scalar or element-wise division (b is not a tensor)
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, complexDivide);
   }

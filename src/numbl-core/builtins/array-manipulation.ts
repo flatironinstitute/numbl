@@ -26,6 +26,7 @@ import {
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
 import { mTranspose, mConjugateTranspose } from "./arithmetic.js";
+import { coerceToTensor } from "./shape-utils.js";
 
 /** Flip a tensor along a specific dimension (0-based dimIdx). N-D safe. */
 function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
@@ -723,19 +724,7 @@ export function registerArrayManipulationFunctions(): void {
     builtinSingle(args => {
       if (args.length !== 2)
         throw new RuntimeError("permute requires 2 arguments");
-      let v = args[0];
-      // Promote scalars to 1x1 tensors so permute can operate on them
-      if (isRuntimeNumber(v)) {
-        v = RTV.tensor(new FloatXArray([v]), [1, 1]);
-      } else if (isRuntimeComplexNumber(v)) {
-        v = RTV.tensor(
-          new FloatXArray([v.re]),
-          [1, 1],
-          new FloatXArray([v.im])
-        );
-      } else if (!isRuntimeTensor(v)) {
-        throw new RuntimeError("permute: first argument must be a tensor");
-      }
+      const v = coerceToTensor(args[0], "permute");
       const orderArg = args[1];
       let order: number[];
       if (isRuntimeTensor(orderArg)) {
@@ -778,19 +767,7 @@ export function registerArrayManipulationFunctions(): void {
     builtinSingle(args => {
       if (args.length !== 2)
         throw new RuntimeError("ipermute requires 2 arguments");
-      let v = args[0];
-      // Promote scalars to 1x1 tensors
-      if (isRuntimeNumber(v)) {
-        v = RTV.tensor(new FloatXArray([v]), [1, 1]);
-      } else if (isRuntimeComplexNumber(v)) {
-        v = RTV.tensor(
-          new FloatXArray([v.re]),
-          [1, 1],
-          new FloatXArray([v.im])
-        );
-      } else if (!isRuntimeTensor(v)) {
-        throw new RuntimeError("ipermute: first argument must be a tensor");
-      }
+      const v = coerceToTensor(args[0], "ipermute");
       const orderArg = args[1];
       let order: number[];
       if (isRuntimeTensor(orderArg)) {
