@@ -126,6 +126,48 @@ export function determineReturnType(
     return IType.struct();
   }
 
+  // arrayfun/cellfun: infer return type from the function argument's return type
+  if (
+    candidate.type === "builtin" &&
+    (name === "arrayfun" || name === "cellfun")
+  ) {
+    if (args.length >= 2) {
+      const funcArgType = itemTypeForExprKind(args[0].kind);
+      if (
+        funcArgType.kind === "Function" &&
+        funcArgType.returns.kind !== "Unknown"
+      ) {
+        // Check for 'UniformOutput', false in remaining args
+        let uniformOutput = true;
+        for (let i = 2; i < args.length; i++) {
+          const a = args[i].kind;
+          if (
+            a.type === "Char" &&
+            a.value.replace(/^'|'$/g, "").toLowerCase() === "uniformoutput"
+          ) {
+            if (i + 1 < args.length) {
+              const val = args[i + 1].kind;
+              if (val.type === "Number" && val.value === "0") {
+                uniformOutput = false;
+              }
+            }
+          }
+        }
+        if (!uniformOutput) {
+          return IType.cell("unknown");
+        }
+        const retKind = funcArgType.returns.kind;
+        if (retKind === "Number" || retKind === "ComplexNumber") {
+          return { kind: "Tensor", isComplex: retKind === "ComplexNumber" };
+        }
+        if (retKind === "Boolean") {
+          return { kind: "Tensor", isLogical: true };
+        }
+      }
+    }
+    return { kind: "Unknown" };
+  }
+
   // Builtin: try to infer from arg types.
   // But if any arg is Unknown, the call may be dispatched to a class method
   // at runtime instead of the builtin, so we can't trust the builtin's type.

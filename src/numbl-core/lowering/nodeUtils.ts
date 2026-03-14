@@ -223,6 +223,7 @@ function _computeItemType(
       }
       if (baseType.kind === "String") return { kind: "String" };
       if (baseType.kind === "Cell") return baseType;
+      if (baseType.kind === "Function") return baseType.returns;
       return { kind: "Unknown" };
     }
     case "IndexCell": {
@@ -252,12 +253,15 @@ function _computeItemType(
     case "FuncCall": {
       return kind.returnType;
     }
-    case "AnonFunc":
-      // TODO
-      return { kind: "Function", params: [], returns: { kind: "Unknown" } };
+    case "AnonFunc": {
+      const paramTypes = kind.params.map(
+        p => p.ty ?? ({ kind: "Unknown" } as ItemType)
+      );
+      const returnType = itemTypeForExprKind(kind.body.kind);
+      return { kind: "Function", params: paramTypes, returns: returnType };
+    }
     case "FuncHandle":
-      // TODO
-      return { kind: "Unknown" };
+      return { kind: "Function", params: [], returns: { kind: "Unknown" } };
     case "MetaClass":
       // TODO
       return { kind: "Unknown" };
