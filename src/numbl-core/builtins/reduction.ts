@@ -27,6 +27,97 @@ import {
 import { getBroadcastShape, broadcastIterate } from "./arithmetic.js";
 import { rstr } from "../runtime/runtime.js";
 
+/** Advance subscripts in column-major order, optionally skipping a dimension.
+ * Returns true if there are more elements to visit. */
+function nextSubscripts(
+  subs: number[],
+  shape: number[],
+  skipDim?: number
+): boolean {
+  for (let d = 0; d < subs.length; d++) {
+    if (skipDim !== undefined && d === skipDim) continue;
+    subs[d]++;
+    if (subs[d] < shape[d]) return true;
+    subs[d] = 0;
+  }
+  return false;
+}
+
+/** Squeeze trailing singleton dimensions, keeping at least 2. Mutates in place. */
+function squeezeTrailing(shape: number[]): void {
+  while (shape.length > 2 && shape[shape.length - 1] === 1) {
+    shape.pop();
+  }
+}
+
+/** Scan tensor elements for logical reduction (any/all).
+ * mode 'any': returns true if any element is nonzero.
+ * mode 'all': returns true if all elements are nonzero (true for empty). */
+function scanLogical(
+  data: ArrayLike<number>,
+  imag: ArrayLike<number> | undefined,
+  mode: "any" | "all"
+): boolean {
+  const defaultResult = mode === "all";
+  for (let i = 0; i < data.length; i++) {
+    const isNonZero = data[i] !== 0 || (imag !== undefined && imag[i] !== 0);
+    if (isNonZero !== defaultResult) return !defaultResult;
+  }
+  return defaultResult;
+}
+
+/** Reduce a tensor along a dimension using a logical test (any/all). */
+function logicalAlongDim(
+  v: RuntimeTensor,
+  dim: number,
+  mode: "any" | "all"
+): RuntimeValue {
+  const shape = v.shape;
+  const dimIdx = dim - 1;
+
+  if (dimIdx >= shape.length) {
+    const result = new FloatXArray(v.data.length);
+    for (let i = 0; i < v.data.length; i++)
+      result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
+    const t = RTV.tensor(result, [...shape]);
+    t._isLogical = true;
+    return t;
+  }
+
+  const reduceDimSize = shape[dimIdx];
+  const resultShape = [...shape];
+  resultShape[dimIdx] = 1;
+  const totalElems = resultShape.reduce((a, b) => a * b, 1);
+  const result = new FloatXArray(totalElems);
+
+  const outSubs = new Array(shape.length).fill(0);
+  for (let i = 0; i < totalElems; i++) {
+    let val: boolean = mode === "all";
+    for (let k = 0; k < reduceDimSize; k++) {
+      const srcSubs = [...outSubs];
+      srcSubs[dimIdx] = k;
+      const srcIdx = sub2ind(shape, srcSubs);
+      const isNonZero =
+        v.data[srcIdx] !== 0 || (v.imag !== undefined && v.imag[srcIdx] !== 0);
+      if (mode === "any" && isNonZero) {
+        val = true;
+        break;
+      }
+      if (mode === "all" && !isNonZero) {
+        val = false;
+        break;
+      }
+    }
+    result[i] = val ? 1 : 0;
+    nextSubscripts(outSubs, resultShape, dimIdx);
+  }
+
+  squeezeTrailing(resultShape);
+  const t = RTV.tensor(result, resultShape);
+  t._isLogical = true;
+  return t;
+}
+
 /**
  * Helper for N-dimensional reduction operations (sum, prod, mean, etc.)
  * @param v The tensor to reduce
@@ -82,19 +173,10 @@ function dimReduce(
     if (resultImag)
       resultImag[i] = finalizeFn ? finalizeFn(accIm, reduceDimSize) : accIm;
 
-    // Increment output subscripts in column-major order (skip reduced dim)
-    for (let d = 0; d < outSubs.length; d++) {
-      if (d === dimIdx) continue; // reduced dim is always 0
-      outSubs[d]++;
-      if (outSubs[d] < resultShape[d]) break;
-      outSubs[d] = 0;
-    }
+    nextSubscripts(outSubs, resultShape, dimIdx);
   }
 
-  // Squeeze trailing singleton dimensions (keep at least 2)
-  while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1) {
-    resultShape.pop();
-  }
+  squeezeTrailing(resultShape);
 
   // Drop imaginary part if all zeros
   const imOut =
@@ -155,15 +237,9 @@ function complexProd(v: RuntimeTensor, dim?: number): RuntimeValue {
       }
       resultRe[i] = accRe;
       resultIm[i] = accIm;
-      for (let d = 0; d < outSubs.length; d++) {
-        if (d === dimIdx) continue;
-        outSubs[d]++;
-        if (outSubs[d] < resultShape[d]) break;
-        outSubs[d] = 0;
-      }
+      nextSubscripts(outSubs, resultShape, dimIdx);
     }
-    while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1)
-      resultShape.pop();
+    squeezeTrailing(resultShape);
     const imOut = resultIm.some(x => x !== 0) ? resultIm : undefined;
     return RTV.tensor(resultRe, resultShape, imOut);
   }
@@ -267,122 +343,6 @@ function preserveTypeCheck(
   return null;
 }
 
-/**
- * Reduce a tensor along a single dimension using the any (nonzero) test.
- * Result shape: same as input but with the reduced dimension set to 1.
- * Trailing singleton dims beyond 2 are squeezed.
- */
-function anyAlongDim(v: RuntimeTensor, dim: number): RuntimeValue {
-  const shape = v.shape;
-  const dimIdx = dim - 1; // 0-based
-
-  // If dim exceeds tensor's dimensions, no reduction — return logical copy
-  if (dimIdx >= shape.length) {
-    const result = new FloatXArray(v.data.length);
-    for (let i = 0; i < v.data.length; i++)
-      result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
-    const t = RTV.tensor(result, [...shape]);
-    t._isLogical = true;
-    return t;
-  }
-
-  const reduceDimSize = shape[dimIdx];
-  const resultShape = [...shape];
-  resultShape[dimIdx] = 1;
-  const totalElems = resultShape.reduce((a, b) => a * b, 1);
-  const result = new FloatXArray(totalElems);
-
-  const outSubs = new Array(shape.length).fill(0);
-  for (let i = 0; i < totalElems; i++) {
-    let found = false;
-    for (let k = 0; k < reduceDimSize; k++) {
-      const srcSubs = [...outSubs];
-      srcSubs[dimIdx] = k;
-      const srcIdx = sub2ind(shape, srcSubs);
-      if (v.data[srcIdx] !== 0 || (v.imag && v.imag[srcIdx] !== 0)) {
-        found = true;
-        break;
-      }
-    }
-    result[i] = found ? 1 : 0;
-
-    // Increment output subscripts in column-major order (skip reduced dim)
-    for (let d = 0; d < outSubs.length; d++) {
-      if (d === dimIdx) continue;
-      outSubs[d]++;
-      if (outSubs[d] < resultShape[d]) break;
-      outSubs[d] = 0;
-    }
-  }
-
-  // Squeeze trailing singleton dimensions (keep at least 2)
-  while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1) {
-    resultShape.pop();
-  }
-
-  const t = RTV.tensor(result, resultShape);
-  t._isLogical = true;
-  return t;
-}
-
-/**
- * Reduce a tensor along a single dimension using the all (all-nonzero) test.
- * Result shape: same as input but with the reduced dimension set to 1.
- * Trailing singleton dims beyond 2 are squeezed.
- */
-function allAlongDim(v: RuntimeTensor, dim: number): RuntimeValue {
-  const shape = v.shape;
-  const dimIdx = dim - 1; // 0-based
-
-  // If dim exceeds tensor's dimensions, no reduction — return logical copy
-  if (dimIdx >= shape.length) {
-    const result = new FloatXArray(v.data.length);
-    for (let i = 0; i < v.data.length; i++)
-      result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
-    const t = RTV.tensor(result, [...shape]);
-    t._isLogical = true;
-    return t;
-  }
-
-  const reduceDimSize = shape[dimIdx];
-  const resultShape = [...shape];
-  resultShape[dimIdx] = 1;
-  const totalElems = resultShape.reduce((a, b) => a * b, 1);
-  const result = new FloatXArray(totalElems);
-
-  const outSubs = new Array(shape.length).fill(0);
-  for (let i = 0; i < totalElems; i++) {
-    let allNonZero = true;
-    for (let k = 0; k < reduceDimSize; k++) {
-      const srcSubs = [...outSubs];
-      srcSubs[dimIdx] = k;
-      const srcIdx = sub2ind(shape, srcSubs);
-      if (v.data[srcIdx] === 0 && (!v.imag || v.imag[srcIdx] === 0)) {
-        allNonZero = false;
-        break;
-      }
-    }
-    result[i] = allNonZero ? 1 : 0;
-
-    // Increment output subscripts in column-major order (skip reduced dim)
-    for (let d = 0; d < outSubs.length; d++) {
-      if (d === dimIdx) continue;
-      outSubs[d]++;
-      if (outSubs[d] < resultShape[d]) break;
-      outSubs[d] = 0;
-    }
-  }
-
-  // Squeeze trailing singleton dimensions (keep at least 2)
-  while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1) {
-    resultShape.pop();
-  }
-
-  const t = RTV.tensor(result, resultShape);
-  t._isLogical = true;
-  return t;
-}
-
 export function registerReductionFunctions(): void {
   /** Default dim for reductions: reduce along first non-singleton dimension.
    *  Vectors (at most one non-singleton dim) → scalar. Otherwise → dimReduce. */
@@ -472,15 +432,9 @@ export function registerReductionFunctions(): void {
         slice[k] = v.data[sub2ind(shape, srcSubs)];
       }
       result[i] = sliceFn(slice);
-      for (let d = 0; d < outSubs.length; d++) {
-        if (d === dimIdx) continue;
-        outSubs[d]++;
-        if (outSubs[d] < resultShape[d]) break;
-        outSubs[d] = 0;
-      }
+      nextSubscripts(outSubs, resultShape, dimIdx);
     }
-    while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1)
-      resultShape.pop();
+    squeezeTrailing(resultShape);
     return RTV.tensor(result, resultShape);
   };
 
@@ -830,21 +784,10 @@ export function registerReductionFunctions(): void {
             resultIm[i] = mIm;
             if (indices) indices[i] = mIdx + 1;
 
-            for (let d = 0; d < outSubsC.length; d++) {
-              if (d === dimIdx) continue;
-              outSubsC[d]++;
-              if (outSubsC[d] < resultShape[d]) break;
-              outSubsC[d] = 0;
-            }
+            nextSubscripts(outSubsC, resultShape, dimIdx);
           }
 
-          // Squeeze trailing singleton dimensions (keep at least 2)
-          while (
-            resultShape.length > 2 &&
-            resultShape[resultShape.length - 1] === 1
-          ) {
-            resultShape.pop();
-          }
+          squeezeTrailing(resultShape);
 
           const hasImag = resultIm.some(x => x !== 0);
           const outTensorC = RTV.tensor(
@@ -881,22 +824,10 @@ export function registerReductionFunctions(): void {
           result[i] = m;
           if (indices) indices[i] = mIdx + 1;
 
-          // Increment output subscripts in column-major order (skip reduced dim)
-          for (let d = 0; d < outSubs.length; d++) {
-            if (d === dimIdx) continue;
-            outSubs[d]++;
-            if (outSubs[d] < resultShape[d]) break;
-            outSubs[d] = 0;
-          }
+          nextSubscripts(outSubs, resultShape, dimIdx);
         }
 
-        // Squeeze trailing singleton dimensions (keep at least 2)
-        while (
-          resultShape.length > 2 &&
-          resultShape[resultShape.length - 1] === 1
-        ) {
-          resultShape.pop();
-        }
+        squeezeTrailing(resultShape);
 
         const outTensor3 = RTV.tensor(result, resultShape);
         if (v._isLogical) outTensor3._isLogical = true;
@@ -992,197 +923,98 @@ export function registerReductionFunctions(): void {
     },
   ]);
 
-  register("any", [
-    {
-      check: (argTypes, nargout) => {
-        if (nargout !== 1) return null;
-        if (argTypes.length === 1) {
+  /** Factory for any/all logical reductions. */
+  const makeAnyAll = (name: string, mode: "any" | "all") => {
+    const anyAllCheck = (
+      argTypes: ItemType[],
+      nargout: number
+    ): { outputTypes: ItemType[] } | null => {
+      if (nargout !== 1) return null;
+      if (argTypes.length === 1) {
+        return { outputTypes: [{ kind: "Boolean" }] };
+      }
+      if (argTypes.length === 2) {
+        const arg2 = argTypes[1];
+        if (arg2.kind === "Char" || arg2.kind === "String") {
           return { outputTypes: [{ kind: "Boolean" }] };
         }
-        if (argTypes.length === 2) {
-          const arg2 = argTypes[1];
-          if (arg2.kind === "Char" || arg2.kind === "String") {
-            return { outputTypes: [{ kind: "Boolean" }] };
-          }
-          return {
-            outputTypes: [
-              { kind: "Tensor", ndim: 2, shape: "unknown" as const },
-            ],
-          };
-        }
-        return null;
-      },
-      apply: args => {
+        return {
+          outputTypes: [{ kind: "Tensor" }],
+        };
+      }
+      return null;
+    };
+
+    const scalarLogical = (v: RuntimeValue): RuntimeValue | null => {
+      if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
+      if (isRuntimeLogical(v)) return RTV.logical(v);
+      if (isRuntimeComplexNumber(v))
+        return RTV.logical(v.re !== 0 || v.im !== 0);
+      return null;
+    };
+
+    return {
+      check: anyAllCheck,
+      apply: (args: RuntimeValue[]) => {
         if (args.length < 1)
-          throw new RuntimeError("any requires at least 1 argument");
+          throw new RuntimeError(`${name} requires at least 1 argument`);
         const v = args[0];
 
-        // any(A) — reduce along first non-singleton dimension
         if (args.length === 1) {
-          if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-          if (isRuntimeLogical(v)) return RTV.logical(v);
-          if (isRuntimeComplexNumber(v))
-            return RTV.logical(v.re !== 0 || v.im !== 0);
+          const scalar = scalarLogical(v);
+          if (scalar !== null) return scalar;
           if (isRuntimeTensor(v)) {
-            if (v.data.length === 0) return RTV.logical(false);
-            const shape = v.shape;
-            // Row vector: reduce all elements to scalar
-            if (shape[0] === 1) {
-              for (let i = 0; i < v.data.length; i++) {
-                if (v.data[i] !== 0) return RTV.logical(true);
-                if (v.imag && v.imag[i] !== 0) return RTV.logical(true);
-              }
-              return RTV.logical(false);
-            }
-            // Matrix/N-D: reduce along dim 1
-            return anyAlongDim(v, 1);
+            if (v.data.length === 0) return RTV.logical(mode === "all");
+            if (v.shape[0] === 1)
+              return RTV.logical(scanLogical(v.data, v.imag, mode));
+            return logicalAlongDim(v, 1, mode);
           }
-          throw new RuntimeError("any: argument must be numeric or logical");
+          throw new RuntimeError(
+            `${name}: argument must be numeric or logical`
+          );
         }
 
         const arg2 = args[1];
 
-        // any(A, 'all') — reduce over all elements to a scalar
+        // any/all(A, 'all') — reduce over all elements to a scalar
         if (
           (isRuntimeString(arg2) || isRuntimeChar(arg2)) &&
           rstr(arg2).toLowerCase() === "all"
         ) {
-          if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-          if (isRuntimeLogical(v)) return RTV.logical(v);
-          if (isRuntimeComplexNumber(v))
-            return RTV.logical(v.re !== 0 || v.im !== 0);
-          if (isRuntimeTensor(v)) {
-            for (let i = 0; i < v.data.length; i++) {
-              if (v.data[i] !== 0) return RTV.logical(true);
-              if (v.imag && v.imag[i] !== 0) return RTV.logical(true);
-            }
-            return RTV.logical(false);
-          }
-          throw new RuntimeError("any: argument must be numeric or logical");
+          const scalar = scalarLogical(v);
+          if (scalar !== null) return scalar;
+          if (isRuntimeTensor(v))
+            return RTV.logical(scanLogical(v.data, v.imag, mode));
+          throw new RuntimeError(
+            `${name}: argument must be numeric or logical`
+          );
         }
 
-        // any(A, dim) — reduce along a single dimension
-        // any(A, vecdim) — reduce along multiple dimensions
-        if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-        if (isRuntimeLogical(v)) return RTV.logical(v);
-        if (isRuntimeComplexNumber(v))
-          return RTV.logical(v.re !== 0 || v.im !== 0);
+        // any/all(A, dim) or any/all(A, vecdim)
+        const scalar = scalarLogical(v);
+        if (scalar !== null) return scalar;
         if (isRuntimeTensor(v)) {
           if (isRuntimeNumber(arg2)) {
-            return anyAlongDim(v, Math.round(arg2));
+            return logicalAlongDim(v, Math.round(arg2), mode);
           }
           if (isRuntimeTensor(arg2)) {
-            // vecdim: reduce iteratively along each specified dimension
             const dims = Array.from(arg2.data).map(d => Math.round(d));
             let result: RuntimeValue = v;
             for (const dim of dims) {
               if (isRuntimeTensor(result)) {
-                result = anyAlongDim(result, dim);
+                result = logicalAlongDim(result, dim, mode);
               }
             }
             return result;
           }
         }
-        throw new RuntimeError("any: invalid arguments");
+        throw new RuntimeError(`${name}: invalid arguments`);
       },
-    },
-  ]);
+    };
+  };
 
-  register("all", [
-    {
-      check: (argTypes, nargout) => {
-        if (nargout !== 1) return null;
-        if (argTypes.length === 1) {
-          return { outputTypes: [{ kind: "Boolean" }] };
-        }
-        if (argTypes.length === 2) {
-          const arg2 = argTypes[1];
-          if (arg2.kind === "Char" || arg2.kind === "String") {
-            return { outputTypes: [{ kind: "Boolean" }] };
-          }
-          return {
-            outputTypes: [
-              { kind: "Tensor", ndim: 2, shape: "unknown" as const },
-            ],
-          };
-        }
-        return null;
-      },
-      apply: args => {
-        if (args.length < 1)
-          throw new RuntimeError("all requires at least 1 argument");
-        const v = args[0];
-
-        // all(A) — reduce along first non-singleton dimension
-        if (args.length === 1) {
-          if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-          if (isRuntimeLogical(v)) return RTV.logical(v);
-          if (isRuntimeComplexNumber(v))
-            return RTV.logical(v.re !== 0 || v.im !== 0);
-          if (isRuntimeTensor(v)) {
-            if (v.data.length === 0) return RTV.logical(true);
-            const shape = v.shape;
-            // Row vector: reduce all elements to scalar
-            if (shape[0] === 1) {
-              for (let i = 0; i < v.data.length; i++) {
-                if (v.data[i] === 0 && (!v.imag || v.imag[i] === 0))
-                  return RTV.logical(false);
-              }
-              return RTV.logical(v.data.length > 0);
-            }
-            // Matrix/N-D: reduce along dim 1
-            return allAlongDim(v, 1);
-          }
-          throw new RuntimeError("all: argument must be numeric or logical");
-        }
-
-        const arg2 = args[1];
-
-        // all(A, 'all') — reduce over all elements to a scalar
-        if (
-          (isRuntimeString(arg2) || isRuntimeChar(arg2)) &&
-          rstr(arg2).toLowerCase() === "all"
-        ) {
-          if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-          if (isRuntimeLogical(v)) return RTV.logical(v);
-          if (isRuntimeComplexNumber(v))
-            return RTV.logical(v.re !== 0 || v.im !== 0);
-          if (isRuntimeTensor(v)) {
-            for (let i = 0; i < v.data.length; i++) {
-              if (v.data[i] === 0 && (!v.imag || v.imag[i] === 0))
-                return RTV.logical(false);
-            }
-            return RTV.logical(v.data.length > 0);
-          }
-          throw new RuntimeError("all: argument must be numeric or logical");
-        }
-
-        // all(A, dim) — reduce along a single dimension
-        // all(A, vecdim) — reduce along multiple dimensions
-        if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-        if (isRuntimeLogical(v)) return RTV.logical(v);
-        if (isRuntimeComplexNumber(v))
-          return RTV.logical(v.re !== 0 || v.im !== 0);
-        if (isRuntimeTensor(v)) {
-          if (isRuntimeNumber(arg2)) {
-            return allAlongDim(v, Math.round(arg2));
-          }
-          if (isRuntimeTensor(arg2)) {
-            // vecdim: reduce iteratively along each specified dimension
-            const dims = Array.from(arg2.data).map(d => Math.round(d));
-            let result: RuntimeValue = v;
-            for (const dim of dims) {
-              if (isRuntimeTensor(result)) {
-                result = allAlongDim(result, dim);
-              }
-            }
-            return result;
-          }
-        }
-        throw new RuntimeError("all: invalid arguments");
-      },
-    },
-  ]);
+  register("any", [makeAnyAll("any", "any")]);
+  register("all", [makeAnyAll("all", "all")]);
 
   register(
     "xor",
@@ -1489,12 +1321,7 @@ export function registerReductionFunctions(): void {
                   resultIm[fiberFlatIdx[r]] = im![fiberFlatIdx[order[r]]];
                 if (resultIdx) resultIdx[fiberFlatIdx[r]] = order[r] + 1;
               }
-              // Increment fiber subscripts in column-major order
-              for (let d = 0; d < fiberSubs.length; d++) {
-                fiberSubs[d]++;
-                if (fiberSubs[d] < fiberShape[d]) break;
-                fiberSubs[d] = 0;
-              }
+              nextSubscripts(fiberSubs, fiberShape);
             }
           }
 
@@ -1967,12 +1794,7 @@ export function registerReductionFunctions(): void {
             }
           }
 
-          // Increment fiber subscripts in column-major order
-          for (let d = 0; d < fiberSubs.length; d++) {
-            fiberSubs[d]++;
-            if (fiberSubs[d] < fiberShape[d]) break;
-            fiberSubs[d] = 0;
-          }
+          nextSubscripts(fiberSubs, fiberShape);
         }
       }
 
