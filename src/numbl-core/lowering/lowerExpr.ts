@@ -20,9 +20,6 @@ export type FunctionCandidate =
   | { type: "userFunction"; functionId: string }
   | { type: "builtin"; builtin: true };
 
-// Re-export for use by lowerStmt.ts
-export { IType, itemTypeForExprKind };
-
 // ── Shared function resolution ──────────────────────────────────────────
 
 /**

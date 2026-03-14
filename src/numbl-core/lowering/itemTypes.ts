@@ -144,6 +144,14 @@ export function isScalarNumeric(t: ItemType): boolean | undefined {
   return false;
 }
 
+/** True for scalar numeric types (Number, Boolean, ComplexNumber). */
+export const isScalarType = (t: ItemType): boolean =>
+  t.kind === "Number" || t.kind === "Boolean" || t.kind === "ComplexNumber";
+
+/** True for complex-valued types (ComplexNumber or complex Tensor). */
+export const isComplexType = (t: ItemType): boolean =>
+  t.kind === "ComplexNumber" || (t.kind === "Tensor" && !!t.isComplex);
+
 export const IType = {
   Num: { kind: "Number" } as ItemType,
   Complex: { kind: "ComplexNumber" } as ItemType,
@@ -279,7 +287,16 @@ export const IType = {
         case "Union": {
           // TODO: check this carefully
           if (b.kind === "Union") {
-            const types = Array.from(new Set([...a.types, ...b.types]));
+            // Deduplicate by structural equality (typeToString), not reference
+            const seen = new Set<string>();
+            const types: ItemType[] = [];
+            for (const t of [...a.types, ...b.types]) {
+              const key = typeToString(t);
+              if (!seen.has(key)) {
+                seen.add(key);
+                types.push(t);
+              }
+            }
             return { kind: "Union", types };
           }
           break;

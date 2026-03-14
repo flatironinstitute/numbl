@@ -4,16 +4,11 @@
 
 import { BinaryOperation } from "../parser/index.js";
 import { getConstantType } from "../builtins";
-import { ItemType } from "./itemTypes.js";
+import { ItemType, isScalarType, isComplexType } from "./itemTypes.js";
 import { IRExpr, IRExprKind } from "./nodes.js";
 
-/** True for scalar numeric types (Number, Boolean, ComplexNumber). */
-export const isScalarType = (t: ItemType): boolean =>
-  t.kind === "Number" || t.kind === "Boolean" || t.kind === "ComplexNumber";
-
-/** True for complex-valued types (ComplexNumber or complex Tensor). */
-export const isComplexType = (t: ItemType): boolean =>
-  t.kind === "ComplexNumber" || (t.kind === "Tensor" && !!t.isComplex);
+// Re-export for consumers that import from nodeUtils
+export { isScalarType, isComplexType } from "./itemTypes.js";
 
 /** Visit every expression in the tree (pre-order), calling fn for each. */
 export function walkExpr(expr: IRExpr, fn: (e: IRExpr) => void): void {
@@ -125,14 +120,9 @@ function _computeItemType(
         if (isScalarType(leftType) && isScalarType(rightType))
           return { kind: "Boolean" };
         if (leftType.kind === "Tensor" || rightType.kind === "Tensor") {
-          return {
-            kind: "Tensor",
-            isLogical: true,
-            isComplex:
-              isComplexType(leftType) || isComplexType(rightType)
-                ? true
-                : undefined,
-          };
+          // Comparison and logical operators always produce real logical tensors,
+          // even when the operands are complex.
+          return { kind: "Tensor", isLogical: true };
         }
         return { kind: "Unknown" };
       }
@@ -151,45 +141,15 @@ function _computeItemType(
         return { kind: "Unknown" };
       }
 
-      if (kind.op === BinaryOperation.Mul) {
-        // Matrix multiply
-        if (leftType.kind === "Tensor" && rightType.kind === "Tensor") {
-          return {
-            kind: "Tensor",
-            isComplex:
-              isComplexType(leftType) || isComplexType(rightType)
-                ? true
-                : undefined,
-          };
-        }
-      }
-
-      // Tensor operations take precedence - check for Tensor involvement first
+      // Arithmetic with at least one Tensor operand → Tensor result.
+      // Arithmetic on logical tensors produces numeric (non-logical) results,
+      // so we never preserve isLogical here (unlike comparison operators above).
       if (leftType.kind === "Tensor" || rightType.kind === "Tensor") {
-        // Determine if result should be complex
         const resultIsComplex =
           isComplexType(leftType) || isComplexType(rightType)
             ? true
             : undefined;
-
-        // Scalar op Tensor → return Tensor with isComplex flag
-        if (isScalarType(leftType) && rightType.kind === "Tensor") {
-          return { ...rightType, isComplex: resultIsComplex };
-        }
-        if (leftType.kind === "Tensor" && isScalarType(rightType)) {
-          return { ...leftType, isComplex: resultIsComplex };
-        }
-        // Tensor op Tensor: use unify for proper merging
-        if (leftType.kind === "Tensor" && rightType.kind === "Tensor") {
-          return {
-            kind: "Tensor",
-            isComplex: resultIsComplex,
-          };
-        }
-        return {
-          kind: "Tensor",
-          isComplex: resultIsComplex,
-        };
+        return { kind: "Tensor", isComplex: resultIsComplex };
       }
 
       // Scalar arithmetic

@@ -14,10 +14,7 @@ import { type LoweringContext } from "./loweringContext.js";
 import { lowerExpr } from "./lowerExpr.js";
 import { lowerLValue } from "./lowerLValue.js";
 import { preDefineBodyVars } from "./loweringHelpers.js";
-import { isScalarType } from "./nodeUtils.js";
-
-// Re-export lowerLValue for backwards compatibility
-export { lowerLValue } from "./lowerLValue.js";
+import { isScalarType } from "./itemTypes.js";
 
 // ── Public API ──────────────────────────────────────────────────────────
 
