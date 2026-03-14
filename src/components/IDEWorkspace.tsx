@@ -43,7 +43,6 @@ import type { PlotInstruction } from "../numbl-core/executor/types.js";
 import {
   figuresReducer,
   initialFiguresState,
-  plotInstructionToAction,
 } from "../graphics/figuresReducer.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { Splitter } from "./Splitter";
@@ -240,8 +239,7 @@ export function IDEWorkspace({
   }, [figures.figs, figures.currentHandle]);
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    const action = plotInstructionToAction(instruction);
-    if (action) figuresDispatch(action);
+    figuresDispatch(instruction);
   }, []);
 
   // Initialize script worker

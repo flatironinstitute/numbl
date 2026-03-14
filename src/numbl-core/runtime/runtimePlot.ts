@@ -17,6 +17,27 @@ import {
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
 
+/** Resolve an unknown value (possibly a RuntimeValue) to a string. */
+function resolveStr(val: unknown): string {
+  return typeof val === "string" ? val : toString(ensureRuntimeValue(val));
+}
+
+/** Resolve an unknown value to a number, with a fallback. */
+function resolveNum(val: unknown, fallback?: number): number {
+  if (typeof val === "number") return val;
+  try {
+    return toNumber(ensureRuntimeValue(val));
+  } catch {
+    return fallback ?? 0;
+  }
+}
+
+/** Resolve an on/off value to a boolean. */
+function resolveOnOff(val: unknown): boolean {
+  if (typeof val === "boolean") return val;
+  return resolveStr(val) === "on";
+}
+
 export function plotInstr(
   plotInstructions: PlotInstruction[],
   instr:
@@ -38,130 +59,82 @@ export function plotInstr(
     | { type: "set_colormap"; name: unknown }
     | { type: "set_axis"; value: unknown }
 ): void {
-  if (instr.type === "set_figure_handle") {
-    let handle: number;
-    if (typeof instr.handle === "number") {
-      handle = instr.handle;
-    } else {
-      // figure() may be called with name-value pairs like figure('Name', '...')
-      // In that case the first arg is a string — just use default handle 1.
-      try {
-        handle = toNumber(ensureRuntimeValue(instr.handle));
-      } catch {
-        handle = 1;
-      }
+  switch (instr.type) {
+    case "set_figure_handle":
+      plotInstructions.push({
+        type: "set_figure_handle",
+        handle: resolveNum(instr.handle, 1),
+      });
+      break;
+    case "plot":
+      plotInstructions.push({
+        type: "plot",
+        traces: [
+          {
+            x: runtimeValueToNumberArray(ensureRuntimeValue(instr.x)),
+            y: runtimeValueToNumberArray(ensureRuntimeValue(instr.y)),
+          },
+        ],
+      });
+      break;
+    case "set_hold":
+      plotInstructions.push({
+        type: "set_hold",
+        value: resolveOnOff(instr.value),
+      });
+      break;
+    case "set_title":
+    case "set_xlabel":
+    case "set_ylabel":
+    case "set_zlabel":
+    case "set_sgtitle":
+      plotInstructions.push({ type: instr.type, text: resolveStr(instr.text) });
+      break;
+    case "set_shading": {
+      const shading = resolveStr(instr.shading).replace(/^'|'$/g, "") as
+        | "faceted"
+        | "flat"
+        | "interp";
+      plotInstructions.push({ type: "set_shading", shading });
+      break;
     }
-    plotInstructions.push({ type: "set_figure_handle", handle });
-  } else if (instr.type === "plot") {
-    plotInstructions.push({
-      type: "plot",
-      traces: [
-        {
-          x: runtimeValueToNumberArray(ensureRuntimeValue(instr.x)),
-          y: runtimeValueToNumberArray(ensureRuntimeValue(instr.y)),
-        },
-      ],
-    });
-  } else if (instr.type === "set_hold") {
-    const val = instr.value;
-    let on: boolean;
-    if (typeof val === "string") on = val === "on";
-    else {
-      const mv = ensureRuntimeValue(val);
-      on = toString(mv) === "on";
-    }
-    plotInstructions.push({ type: "set_hold", value: on });
-  } else if (instr.type === "set_title") {
-    const text =
-      typeof instr.text === "string"
-        ? instr.text
-        : toString(ensureRuntimeValue(instr.text));
-    plotInstructions.push({ type: "set_title", text });
-  } else if (instr.type === "set_xlabel") {
-    const text =
-      typeof instr.text === "string"
-        ? instr.text
-        : toString(ensureRuntimeValue(instr.text));
-    plotInstructions.push({ type: "set_xlabel", text });
-  } else if (instr.type === "set_ylabel") {
-    const text =
-      typeof instr.text === "string"
-        ? instr.text
-        : toString(ensureRuntimeValue(instr.text));
-    plotInstructions.push({ type: "set_ylabel", text });
-  } else if (instr.type === "set_shading") {
-    const raw =
-      typeof instr.shading === "string"
-        ? instr.shading
-        : toString(ensureRuntimeValue(instr.shading));
-    const shading = raw.replace(/^'|'$/g, "") as "faceted" | "flat" | "interp";
-    plotInstructions.push({ type: "set_shading", shading });
-  } else if (instr.type === "close") {
-    plotInstructions.push({ type: "close" });
-  } else if (instr.type === "close_all") {
-    plotInstructions.push({ type: "close_all" });
-  } else if (instr.type === "clf") {
-    plotInstructions.push({ type: "clf" });
-  } else if (instr.type === "set_subplot") {
-    const rows =
-      typeof instr.rows === "number"
-        ? instr.rows
-        : toNumber(ensureRuntimeValue(instr.rows));
-    const cols =
-      typeof instr.cols === "number"
-        ? instr.cols
-        : toNumber(ensureRuntimeValue(instr.cols));
-    const index =
-      typeof instr.index === "number"
-        ? instr.index
-        : toNumber(ensureRuntimeValue(instr.index));
-    plotInstructions.push({ type: "set_subplot", rows, cols, index });
-  } else if (instr.type === "set_sgtitle") {
-    const text =
-      typeof instr.text === "string"
-        ? instr.text
-        : toString(ensureRuntimeValue(instr.text));
-    plotInstructions.push({ type: "set_sgtitle", text });
-  } else if (instr.type === "set_grid") {
-    const val = instr.value;
-    let on: boolean;
-    if (typeof val === "string") on = val === "on";
-    else if (typeof val === "boolean") on = val;
-    else {
-      const mv = ensureRuntimeValue(val);
-      on = toString(mv) === "on";
-    }
-    plotInstructions.push({ type: "set_grid", value: on });
-  } else if (instr.type === "set_zlabel") {
-    const text =
-      typeof instr.text === "string"
-        ? instr.text
-        : toString(ensureRuntimeValue(instr.text));
-    plotInstructions.push({ type: "set_zlabel", text });
-  } else if (instr.type === "set_colorbar") {
-    const val =
-      typeof instr.value === "string"
-        ? instr.value
-        : toString(ensureRuntimeValue(instr.value));
-    plotInstructions.push({ type: "set_colorbar", value: val });
-  } else if (instr.type === "set_colormap") {
-    const name =
-      typeof instr.name === "string"
-        ? instr.name
-        : toString(ensureRuntimeValue(instr.name));
-    plotInstructions.push({
-      type: "set_colormap",
-      name: name.replace(/^"|"$/g, ""),
-    });
-  } else if (instr.type === "set_axis") {
-    const val =
-      typeof instr.value === "string"
-        ? instr.value
-        : toString(ensureRuntimeValue(instr.value));
-    plotInstructions.push({
-      type: "set_axis",
-      value: val.replace(/^"|"$/g, ""),
-    });
+    case "close":
+    case "close_all":
+    case "clf":
+      plotInstructions.push({ type: instr.type });
+      break;
+    case "set_subplot":
+      plotInstructions.push({
+        type: "set_subplot",
+        rows: resolveNum(instr.rows),
+        cols: resolveNum(instr.cols),
+        index: resolveNum(instr.index),
+      });
+      break;
+    case "set_grid":
+      plotInstructions.push({
+        type: "set_grid",
+        value: resolveOnOff(instr.value),
+      });
+      break;
+    case "set_colorbar":
+      plotInstructions.push({
+        type: "set_colorbar",
+        value: resolveStr(instr.value),
+      });
+      break;
+    case "set_colormap":
+      plotInstructions.push({
+        type: "set_colormap",
+        name: resolveStr(instr.name).replace(/^"|"$/g, ""),
+      });
+      break;
+    case "set_axis":
+      plotInstructions.push({
+        type: "set_axis",
+        value: resolveStr(instr.value).replace(/^"|"$/g, ""),
+      });
+      break;
   }
 }
 

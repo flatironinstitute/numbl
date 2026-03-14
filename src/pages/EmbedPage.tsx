@@ -28,7 +28,6 @@ import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
-  plotInstructionToAction,
 } from "../graphics/figuresReducer.js";
 import { extractMipDirectives } from "../mip-directives-core";
 import { loadMipPackageBrowser } from "../mip/browser-backend";
@@ -68,8 +67,7 @@ export function EmbedPage() {
   );
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    const action = plotInstructionToAction(instruction);
-    if (action) figuresDispatch(action);
+    figuresDispatch(instruction);
 
     // Switch to figure tab when plot data arrives
     if (

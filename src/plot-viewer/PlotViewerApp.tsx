@@ -4,8 +4,40 @@ import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
-  plotInstructionToAction,
 } from "../graphics/figuresReducer.js";
+
+/** Restore NaN/Infinity values that were converted to null by JSON serialization. */
+function restoreNullsToNaN(arr: number[]): void {
+  for (let i = 0; i < arr.length; i++) {
+    if (arr[i] === null) (arr as number[])[i] = NaN;
+  }
+}
+
+function restoreNaNs(instr: PlotInstruction): void {
+  if (instr.type === "plot") {
+    for (const t of instr.traces) {
+      restoreNullsToNaN(t.x);
+      restoreNullsToNaN(t.y);
+    }
+  } else if (instr.type === "plot3") {
+    for (const t of instr.traces) {
+      restoreNullsToNaN(t.x);
+      restoreNullsToNaN(t.y);
+      restoreNullsToNaN(t.z);
+    }
+  } else if (instr.type === "surf" || instr.type === "mesh") {
+    restoreNullsToNaN(instr.trace.x);
+    restoreNullsToNaN(instr.trace.y);
+    restoreNullsToNaN(instr.trace.z);
+    if (instr.trace.c) restoreNullsToNaN(instr.trace.c);
+  } else if (instr.type === "imagesc") {
+    restoreNullsToNaN(instr.trace.z);
+  } else if (instr.type === "contour") {
+    restoreNullsToNaN(instr.trace.x);
+    restoreNullsToNaN(instr.trace.y);
+    restoreNullsToNaN(instr.trace.z);
+  }
+}
 
 export function PlotViewerApp() {
   const [figures, dispatch] = useReducer(figuresReducer, initialFiguresState);
@@ -14,8 +46,7 @@ export function PlotViewerApp() {
   const activeFigureRef = useRef(activeFigure);
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
-    const action = plotInstructionToAction(instruction);
-    if (action) dispatch(action);
+    dispatch(instruction);
 
     // Side-effects for active tab tracking
     if (instruction.type === "set_figure_handle") {
@@ -45,29 +76,7 @@ export function PlotViewerApp() {
       // JSON.stringify converts NaN/Infinity to null; restore them so the
       // renderer can skip non-finite points instead of drawing them at 0.
       for (const instr of instructions) {
-        if (instr.type === "plot") {
-          for (const trace of instr.traces) {
-            for (let i = 0; i < trace.x.length; i++) {
-              if (trace.x[i] === null) (trace.x as number[])[i] = NaN;
-            }
-            for (let i = 0; i < trace.y.length; i++) {
-              if (trace.y[i] === null) (trace.y as number[])[i] = NaN;
-            }
-          }
-        }
-        if (instr.type === "plot3") {
-          for (const trace of instr.traces) {
-            for (let i = 0; i < trace.x.length; i++) {
-              if (trace.x[i] === null) (trace.x as number[])[i] = NaN;
-            }
-            for (let i = 0; i < trace.y.length; i++) {
-              if (trace.y[i] === null) (trace.y as number[])[i] = NaN;
-            }
-            for (let i = 0; i < trace.z.length; i++) {
-              if (trace.z[i] === null) (trace.z as number[])[i] = NaN;
-            }
-          }
-        }
+        restoreNaNs(instr);
         handlePlotInstruction(instr);
       }
     };
