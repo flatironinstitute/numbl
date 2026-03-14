@@ -23,6 +23,7 @@ import {
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
+import { linsolveLapack } from "./linear-algebra/linsolve.js";
 
 /** Convert a runtime value to a Float64 array (vector). */
 function toFloatArray(v: RuntimeValue): FloatXArrayType {
@@ -196,6 +197,12 @@ export function registerNumericalFunctions(): void {
 
       const ncols = n + 1;
 
+      if (ncols > m) {
+        console.warn(
+          "Warning: Polynomial is not unique; degree >= number of data points."
+        );
+      }
+
       // Build Vandermonde matrix V (m x ncols) in column-major
       // V[i, j] = x[i]^(n-j), so highest power first
       const V = new FloatXArray(m * ncols);
@@ -206,77 +213,40 @@ export function registerNumericalFunctions(): void {
         }
       }
 
-      // Solve V * p = y using normal equations: V'V * p = V'y
-      // Compute V'V (ncols x ncols)
-      const VTV = new FloatXArray(ncols * ncols);
+      // Solve V * p = y via linsolve (uses QR/LQ via LAPACK for non-square)
+      const B = new FloatXArray(m);
+      for (let i = 0; i < m; i++) B[i] = yArr[i];
+
+      const X = linsolveLapack(V, m, ncols, B, 1);
+      if (!X) throw new RuntimeError("polyfit: LAPACK bridge unavailable");
+
+      // Check for badly conditioned result (any NaN/Inf in output)
+      let badlyConditioned = false;
       for (let i = 0; i < ncols; i++) {
-        for (let j = 0; j < ncols; j++) {
-          let sum = 0;
-          for (let k = 0; k < m; k++) {
-            sum += V[i * m + k] * V[j * m + k];
-          }
-          VTV[j * ncols + i] = sum;
+        if (!isFinite(X[i])) {
+          badlyConditioned = true;
+          break;
         }
       }
-
-      // Compute V'y (ncols x 1)
-      const VTy = new FloatXArray(ncols);
-      for (let i = 0; i < ncols; i++) {
-        let sum = 0;
-        for (let k = 0; k < m; k++) {
-          sum += V[i * m + k] * yArr[k];
-        }
-        VTy[i] = sum;
+      if (!badlyConditioned) {
+        // Estimate condition: check if residuals are suspiciously large
+        // relative to the data, indicating ill-conditioning
+        let maxX = 0;
+        for (let i = 0; i < ncols; i++) maxX = Math.max(maxX, Math.abs(X[i]));
+        let maxY = 0;
+        for (let i = 0; i < m; i++) maxY = Math.max(maxY, Math.abs(yArr[i]));
+        if (maxY > 0 && maxX / maxY > 1e10) badlyConditioned = true;
       }
 
-      // Solve VTV * p = VTy using Gauss-Jordan
-      const aug = new FloatXArray(ncols * (ncols + 1));
-      for (let i = 0; i < ncols; i++) {
-        for (let j = 0; j < ncols; j++) {
-          aug[j * ncols + i] = VTV[j * ncols + i];
-        }
-        aug[ncols * ncols + i] = VTy[i];
-      }
-
-      for (let col = 0; col < ncols; col++) {
-        // Partial pivoting
-        let maxVal = Math.abs(aug[col * ncols + col]);
-        let maxRow = col;
-        for (let row = col + 1; row < ncols; row++) {
-          const val = Math.abs(aug[col * ncols + row]);
-          if (val > maxVal) {
-            maxVal = val;
-            maxRow = row;
-          }
-        }
-        if (maxRow !== col) {
-          for (let j = 0; j <= ncols; j++) {
-            const tmp = aug[j * ncols + col];
-            aug[j * ncols + col] = aug[j * ncols + maxRow];
-            aug[j * ncols + maxRow] = tmp;
-          }
-        }
-
-        const pivot = aug[col * ncols + col];
-        if (Math.abs(pivot) < 1e-14) continue;
-
-        for (let j = 0; j <= ncols; j++) {
-          aug[j * ncols + col] /= pivot;
-        }
-
-        for (let row = 0; row < ncols; row++) {
-          if (row === col) continue;
-          const factor = aug[col * ncols + row];
-          for (let j = 0; j <= ncols; j++) {
-            aug[j * ncols + row] -= factor * aug[j * ncols + col];
-          }
-        }
+      if (badlyConditioned) {
+        console.warn(
+          "Warning: Polynomial is badly conditioned. Add points with distinct X values, " +
+            "reduce the degree of the polynomial, or try centering and scaling as described in HELP POLYFIT."
+        );
       }
 
       const result = new FloatXArray(ncols);
-      for (let i = 0; i < ncols; i++) {
-        result[i] = aug[ncols * ncols + i];
-      }
+      for (let i = 0; i < ncols; i++) result[i] = X[i];
 
       return RTV.tensor(result, [1, ncols]);
     })

@@ -183,38 +183,43 @@ export function registerPrngFunctions(): void {
     })
   );
 
-  register("rand", [
-    // Legacy: rand('seed', s) — prefer rng(s) instead
-    {
-      check: argTypes =>
-        argTypes.length === 2 &&
-        (argTypes[0].kind === "Char" || argTypes[0].kind === "String") &&
-        (argTypes[1].kind === "Number" || argTypes[1].kind === "Unknown")
-          ? { outputTypes: [{ kind: "Number" }] }
-          : null,
-      apply: args => {
-        const s = args[0];
-        if ((!isRuntimeString(s) && !isRuntimeChar(s)) || rstr(s) !== "seed")
-          throw new RuntimeError(
-            "rand: only 'seed' string option is supported"
-          );
-        seedRng(Math.round(toNumber(args[1])));
-        return RTV.num(0);
+  // Shared helper for rand/randn: legacy 'seed' branch + array constructor
+  function registerRandFn(name: string, gen: () => number): void {
+    register(name, [
+      {
+        check: argTypes =>
+          argTypes.length === 2 &&
+          (argTypes[0].kind === "Char" || argTypes[0].kind === "String") &&
+          (argTypes[1].kind === "Number" || argTypes[1].kind === "Unknown")
+            ? { outputTypes: [{ kind: "Number" }] }
+            : null,
+        apply: args => {
+          const s = args[0];
+          if ((!isRuntimeString(s) && !isRuntimeChar(s)) || rstr(s) !== "seed")
+            throw new RuntimeError(
+              `${name}: only 'seed' string option is supported`
+            );
+          seedRng(Math.round(toNumber(args[1])));
+          return RTV.num(0);
+        },
       },
-    },
-    {
-      check: realArrayConstructorCheck,
-      apply: args => {
-        if (args.length === 0) return RTV.num(rngRandom());
-        const shape = parseShapeArgs(args);
-        if (shape.length === 1) shape.push(shape[0]);
-        const n = numel(shape);
-        const data = new FloatXArray(n);
-        for (let i = 0; i < n; i++) data[i] = rngRandom();
-        return RTV.tensor(data, shape);
+      {
+        check: realArrayConstructorCheck,
+        apply: args => {
+          if (args.length === 0) return RTV.num(gen());
+          const shape = parseShapeArgs(args);
+          if (shape.length === 1) shape.push(shape[0]);
+          const n = numel(shape);
+          const data = new FloatXArray(n);
+          for (let i = 0; i < n; i++) data[i] = gen();
+          return RTV.tensor(data, shape);
+        },
       },
-    },
-  ]);
+    ]);
+  }
+
+  registerRandFn("rand", rngRandom);
+  registerRandFn("randn", boxMullerRandom);
 
   // randi(imax), randi(imax, n), randi(imax, m, n, ...), randi([imin imax], ...)
   register(
@@ -278,37 +283,4 @@ export function registerPrngFunctions(): void {
       return RTV.tensor(perm.slice(0, k), [1, k]);
     })
   );
-
-  register("randn", [
-    // Legacy: randn('seed', s) — prefer rng(s) instead
-    {
-      check: argTypes =>
-        argTypes.length === 2 &&
-        (argTypes[0].kind === "Char" || argTypes[0].kind === "String") &&
-        (argTypes[1].kind === "Number" || argTypes[1].kind === "Unknown")
-          ? { outputTypes: [{ kind: "Number" }] }
-          : null,
-      apply: args => {
-        const s = args[0];
-        if ((!isRuntimeString(s) && !isRuntimeChar(s)) || rstr(s) !== "seed")
-          throw new RuntimeError(
-            "randn: only 'seed' string option is supported"
-          );
-        seedRng(Math.round(toNumber(args[1])));
-        return RTV.num(0);
-      },
-    },
-    {
-      check: realArrayConstructorCheck,
-      apply: args => {
-        if (args.length === 0) return RTV.num(boxMullerRandom());
-        const shape = parseShapeArgs(args);
-        if (shape.length === 1) shape.push(shape[0]);
-        const n = numel(shape);
-        const data = new FloatXArray(n);
-        for (let i = 0; i < n; i++) data[i] = boxMullerRandom();
-        return RTV.tensor(data, shape);
-      },
-    },
-  ]);
 }

@@ -99,7 +99,7 @@ export function registerArrayFunctions(): void {
     "linspace",
     builtinSingle(args => {
       if (args.length < 2 || args.length > 3)
-        throw new Error("linspace requires 2 or 3 arguments");
+        throw new RuntimeError("linspace requires 2 or 3 arguments");
       const start = toNumber(args[0]);
       const end = toNumber(args[1]);
       const n = args.length === 3 ? Math.round(toNumber(args[2])) : 100;
@@ -120,7 +120,7 @@ export function registerArrayFunctions(): void {
         return mRange(toNumber(args[0]), 1, toNumber(args[1]));
       if (args.length === 3)
         return mRange(toNumber(args[0]), toNumber(args[1]), toNumber(args[2]));
-      throw new Error("colon requires 2 or 3 arguments");
+      throw new RuntimeError("colon requires 2 or 3 arguments");
     })
   );
 
