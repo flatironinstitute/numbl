@@ -10,7 +10,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { register } from "../registry.js";
-import { out } from "./check-helpers.js";
+import { out, toF64 } from "./check-helpers.js";
 import {
   IType,
   isNum,
@@ -169,17 +169,11 @@ export function registerDet(): void {
         const [m, n] = tensorSize2D(A);
         if (m !== n) throw new RuntimeError("det: matrix must be square");
         if (A.imag) {
-          const dataRe =
-            A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
-          const dataIm =
-            A.imag instanceof Float64Array ? A.imag : new Float64Array(A.imag);
-          const [detRe, detIm] = detComplexJS(dataRe, dataIm, n);
+          const [detRe, detIm] = detComplexJS(toF64(A.data), toF64(A.imag), n);
           if (Math.abs(detIm) < 1e-15) return RTV.num(detRe);
           return RTV.complex(detRe, detIm);
         }
-        const data =
-          A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
-        return RTV.num(detJS(data, n));
+        return RTV.num(detJS(toF64(A.data), n));
       },
     },
   ]);

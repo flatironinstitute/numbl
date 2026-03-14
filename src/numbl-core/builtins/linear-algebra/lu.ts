@@ -12,13 +12,18 @@ import {
   FloatXArray,
   FloatXArrayType,
   isRuntimeNumber,
-  isRuntimeString,
   isRuntimeTensor,
   RuntimeValue,
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { matrix, out, unknownMatrix } from "./check-helpers.js";
+import {
+  matrix,
+  out,
+  parseStringArgLower,
+  toF64,
+  unknownMatrix,
+} from "./check-helpers.js";
 import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
@@ -30,8 +35,7 @@ function luLapack(
 ): { LU: Float64Array; ipiv: Int32Array } | null {
   const bridge = getEffectiveBridge("lu", "lu");
   if (!bridge?.lu) return null;
-  const f64 = data instanceof Float64Array ? data : new Float64Array(data);
-  return bridge.lu(f64, m, n);
+  return bridge.lu(toF64(data), m, n);
 }
 
 function luLapackComplex(
@@ -42,9 +46,7 @@ function luLapackComplex(
 ): { LURe: Float64Array; LUIm: Float64Array; ipiv: Int32Array } | null {
   const bridge = getEffectiveBridge("lu", "luComplex");
   if (!bridge?.luComplex) return null;
-  const re = dataRe instanceof Float64Array ? dataRe : new Float64Array(dataRe);
-  const im = dataIm instanceof Float64Array ? dataIm : new Float64Array(dataIm);
-  return bridge.luComplex(re, im, m, n);
+  return bridge.luComplex(toF64(dataRe), toF64(dataIm), m, n);
 }
 
 /**
@@ -73,19 +75,9 @@ function parseOutputForm(
   arg: RuntimeValue | undefined
 ): "matrix" | "vector" | null {
   if (arg === undefined) return "matrix";
-  let s: string | undefined;
-  if (isRuntimeString(arg)) {
-    s = (arg as string).replace(/^['"]|['"]$/g, "").toLowerCase();
-  } else if (
-    typeof arg === "object" &&
-    arg !== null &&
-    (arg as { kind?: string }).kind === "char"
-  ) {
-    s = (arg as { value: string }).value.toLowerCase();
-  }
+  const s = parseStringArgLower(arg);
   if (s === "vector") return "vector";
   if (s === "matrix") return "matrix";
-  if (s !== undefined) return null;
   return null;
 }
 

@@ -19,7 +19,13 @@ import {
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { matrix, out, parseEconArg, unknownMatrix } from "./check-helpers.js";
+import {
+  matrix,
+  out,
+  parseEconArg,
+  toF64,
+  unknownMatrix,
+} from "./check-helpers.js";
 import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
@@ -37,8 +43,7 @@ function svdLapack(
 ): { U?: Float64Array; S: Float64Array; V?: Float64Array } | null {
   const bridge = getEffectiveBridge("svd", "svd");
   if (!bridge || !bridge.svd) return null;
-  const f64 = data instanceof Float64Array ? data : new Float64Array(data);
-  return bridge.svd(f64, m, n, econ, computeUV);
+  return bridge.svd(toF64(data), m, n, econ, computeUV);
 }
 
 /**
@@ -60,11 +65,7 @@ function svdLapackComplex(
 } | null {
   const bridge = getLapackBridge();
   if (!bridge || !bridge.svdComplex) return null;
-  const f64Re =
-    dataRe instanceof Float64Array ? dataRe : new Float64Array(dataRe);
-  const f64Im =
-    dataIm instanceof Float64Array ? dataIm : new Float64Array(dataIm);
-  return bridge.svdComplex(f64Re, f64Im, m, n, econ, computeUV);
+  return bridge.svdComplex(toF64(dataRe), toF64(dataIm), m, n, econ, computeUV);
 }
 
 export function registerSvd(): void {

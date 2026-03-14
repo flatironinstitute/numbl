@@ -739,42 +739,41 @@ function genFuncCall(
       }
     }
   }
-  if (kind.name === "figure")
-    return `$rt.plot_instr({type: "set_figure_handle", handle: ${args[0] ?? "1"}})`;
-  if (kind.name === "hold")
-    return `$rt.plot_instr({type: "set_hold", value: ${args[0]}})`;
-  if (kind.name === "ishold") return `$rt.ishold()`;
-  if (kind.name === "clf") return `$rt.plot_instr({type: "clf"})`;
-  if (kind.name === "title")
-    return `$rt.plot_instr({type: "set_title", text: ${args[0] ?? '""'}})`;
-  if (kind.name === "xlabel")
-    return `$rt.plot_instr({type: "set_xlabel", text: ${args[0] ?? '""'}})`;
-  if (kind.name === "ylabel")
-    return `$rt.plot_instr({type: "set_ylabel", text: ${args[0] ?? '""'}})`;
-  if (kind.name === "shading")
-    return `$rt.plot_instr({type: "set_shading", shading: ${args[0] ?? '"faceted"'}})`;
-  if (kind.name === "close") {
-    if (args.length > 0) {
-      return `$rt.plot_instr({type: "close_all"})`;
+  // ── Plot/graphics intrinsics (dispatch table) ──────────────────────────
+  {
+    // Simple plot_instr calls: name → [instrType, paramName, defaultValue]
+    const plotInstrTable: Record<string, [string, string, string]> = {
+      figure: ["set_figure_handle", "handle", "1"],
+      hold: ["set_hold", "value", "true"],
+      clf: ["clf", "", ""],
+      title: ["set_title", "text", '""'],
+      xlabel: ["set_xlabel", "text", '""'],
+      ylabel: ["set_ylabel", "text", '""'],
+      zlabel: ["set_zlabel", "text", '""'],
+      shading: ["set_shading", "shading", '"faceted"'],
+      sgtitle: ["set_sgtitle", "text", '""'],
+      grid: ["set_grid", "value", "true"],
+      colorbar: ["set_colorbar", "value", '"on"'],
+      colormap: ["set_colormap", "name", '"parula"'],
+      axis: ["set_axis", "value", '"auto"'],
+    };
+    const entry = plotInstrTable[kind.name];
+    if (entry) {
+      const [instrType, paramName, defaultVal] = entry;
+      if (!paramName) return `$rt.plot_instr({type: "${instrType}"})`;
+      return `$rt.plot_instr({type: "${instrType}", ${paramName}: ${args[0] ?? defaultVal}})`;
     }
-    return `$rt.plot_instr({type: "close"})`;
+    if (kind.name === "ishold") return `$rt.ishold()`;
+    if (kind.name === "close") {
+      return args.length > 0
+        ? `$rt.plot_instr({type: "close_all"})`
+        : `$rt.plot_instr({type: "close"})`;
+    }
+    if (kind.name === "subplot")
+      return `$rt.plot_instr({type: "set_subplot", rows: ${args[0] ?? "1"}, cols: ${args[1] ?? "1"}, index: ${args[2] ?? "1"}})`;
+    if (kind.name === "legend") return `$rt.legend_call([${args.join(", ")}])`;
+    if (kind.name === "view") return `$rt.view_call([${args.join(", ")}])`;
   }
-  if (kind.name === "subplot")
-    return `$rt.plot_instr({type: "set_subplot", rows: ${args[0] ?? "1"}, cols: ${args[1] ?? "1"}, index: ${args[2] ?? "1"}})`;
-  if (kind.name === "legend") return `$rt.legend_call([${args.join(", ")}])`;
-  if (kind.name === "sgtitle")
-    return `$rt.plot_instr({type: "set_sgtitle", text: ${args[0] ?? '""'}})`;
-  if (kind.name === "grid")
-    return `$rt.plot_instr({type: "set_grid", value: ${args[0] ?? "true"}})`;
-  if (kind.name === "zlabel")
-    return `$rt.plot_instr({type: "set_zlabel", text: ${args[0] ?? '""'}})`;
-  if (kind.name === "colorbar")
-    return `$rt.plot_instr({type: "set_colorbar", value: ${args[0] ?? '"on"'}})`;
-  if (kind.name === "colormap")
-    return `$rt.plot_instr({type: "set_colormap", name: ${args[0] ?? '"parula"'}})`;
-  if (kind.name === "axis")
-    return `$rt.plot_instr({type: "set_axis", value: ${args[0] ?? '"auto"'}})`;
-  if (kind.name === "view") return `$rt.view_call([${args.join(", ")}])`;
 
   // Nested function: call directly via closure (not through registry)
   if (cg.nestedFunctionNames.has(kind.name)) {

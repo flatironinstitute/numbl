@@ -17,7 +17,13 @@ import {
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { matrix, out, parseEconArg, unknownMatrix } from "./check-helpers.js";
+import {
+  matrix,
+  out,
+  parseEconArg,
+  toF64,
+  unknownMatrix,
+} from "./check-helpers.js";
 import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
@@ -35,8 +41,7 @@ function qrLapack(
 ): { Q: Float64Array; R: Float64Array } | null {
   const bridge = getEffectiveBridge("qr", "qr");
   if (!bridge?.qr) return null;
-  const f64 = data instanceof Float64Array ? data : new Float64Array(data);
-  return bridge.qr(f64, m, n, econ, wantQ);
+  return bridge.qr(toF64(data), m, n, econ, wantQ);
 }
 
 function qrLapackComplex(
@@ -54,9 +59,7 @@ function qrLapackComplex(
 } | null {
   const bridge = getEffectiveBridge("qr", "qrComplex");
   if (!bridge?.qrComplex) return null;
-  const re = dataRe instanceof Float64Array ? dataRe : new Float64Array(dataRe);
-  const im = dataIm instanceof Float64Array ? dataIm : new Float64Array(dataIm);
-  return bridge.qrComplex(re, im, m, n, econ, wantQ);
+  return bridge.qrComplex(toF64(dataRe), toF64(dataIm), m, n, econ, wantQ);
 }
 
 export function registerQr(): void {

@@ -11,6 +11,7 @@ import {
   isString,
   isChar,
 } from "../../lowering/itemTypes.js";
+import type { FloatXArrayType } from "../../runtime/types.js";
 
 /** Wraps output types into the check-function return value. */
 export function out(...types: ItemType[]): { outputTypes: ItemType[] } {
@@ -56,4 +57,26 @@ export function parseEconArg(
   if (isNum(argType) === true) return "unknown"; // value tracking removed
   if (isString(argType) === true || isChar(argType) === true) return "unknown"; // value tracking removed
   return null;
+}
+
+/** Ensure data is Float64Array (needed by LAPACK bridges). */
+export function toF64(data: FloatXArrayType): Float64Array {
+  return data instanceof Float64Array ? data : new Float64Array(data);
+}
+
+/**
+ * Extract and normalize a string argument at runtime.
+ * Strips surrounding quotes and lowercases the result.
+ * Works with both raw string args and RuntimeChar/RuntimeString values.
+ */
+export function parseStringArgLower(arg: unknown): string {
+  if (typeof arg === "string") {
+    return arg.replace(/^['"]|['"]$/g, "").toLowerCase();
+  }
+  if (arg && typeof arg === "object" && "value" in arg) {
+    return String((arg as { value: unknown }).value)
+      .replace(/^['"]|['"]$/g, "")
+      .toLowerCase();
+  }
+  return String(arg).toLowerCase();
 }

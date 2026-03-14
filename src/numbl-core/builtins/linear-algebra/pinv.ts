@@ -11,6 +11,7 @@ import {
 } from "../../runtime/types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { register, builtinSingle } from "../registry.js";
+import { toF64 } from "./check-helpers.js";
 
 export function registerPinv(): void {
   register(
@@ -40,10 +41,7 @@ export function registerPinv(): void {
         return pinvFallback(A.data, m, n);
       }
 
-      const f64 =
-        A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
-
-      const svdResult = bridge.svd(f64 as Float64Array, m, n, true, true);
+      const svdResult = bridge.svd(toF64(A.data), m, n, true, true);
       if (!svdResult || !svdResult.U || !svdResult.V)
         throw new RuntimeError("pinv: SVD computation failed");
 

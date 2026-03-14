@@ -18,7 +18,13 @@ import {
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { matrix, out, unknownMatrix } from "./check-helpers.js";
+import {
+  matrix,
+  out,
+  parseStringArgLower,
+  toF64,
+  unknownMatrix,
+} from "./check-helpers.js";
 import {
   type ItemType,
   isNum,
@@ -68,14 +74,8 @@ function parseEigOptionsRuntime(args: RuntimeValue[]): {
 
   for (let i = 1; i < args.length; i++) {
     const arg = args[i];
-    if (isRuntimeString(arg)) {
-      const val = arg.replace(/^['"]|['"]$/g, "").toLowerCase();
-      if (val === "nobalance") balance = false;
-      else if (val === "balance") balance = true;
-      else if (val === "vector") outputForm = "vector";
-      else if (val === "matrix") outputForm = "matrix";
-    } else if (isRuntimeChar(arg)) {
-      const val = arg.value.replace(/^['"]|['"]$/g, "").toLowerCase();
+    if (isRuntimeString(arg) || isRuntimeChar(arg)) {
+      const val = parseStringArgLower(arg);
       if (val === "nobalance") balance = false;
       else if (val === "balance") balance = true;
       else if (val === "vector") outputForm = "vector";
@@ -228,14 +228,9 @@ export function registerEig(): void {
 
         // ── Complex input path ───────────────────────────────────────────
         if (A.imag) {
-          const f64Re =
-            A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
-          const f64Im =
-            A.imag instanceof Float64Array ? A.imag : new Float64Array(A.imag);
-
           const result = eigLapackComplex(
-            f64Re,
-            f64Im,
+            toF64(A.data),
+            toF64(A.imag),
             n,
             computeVL,
             computeVR
@@ -336,10 +331,13 @@ export function registerEig(): void {
         }
 
         // ── Real input path ──────────────────────────────────────────────
-        const f64 =
-          A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
-
-        const result = eigLapack(f64, n, computeVL, computeVR, balance);
+        const result = eigLapack(
+          toF64(A.data),
+          n,
+          computeVL,
+          computeVR,
+          balance
+        );
         if (!result) {
           throw new RuntimeError("eig: LAPACK bridge not available");
         }

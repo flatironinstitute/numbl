@@ -13,7 +13,7 @@ import {
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, unknownMatrix } from "./check-helpers.js";
+import { out, toF64, unknownMatrix } from "./check-helpers.js";
 import {
   isNum,
   isTensor,
@@ -30,8 +30,7 @@ import {
  */
 function invLapack(data: FloatXArrayType, n: number): Float64Array {
   const bridge = getEffectiveBridge("inv");
-  const f64 = data instanceof Float64Array ? data : new Float64Array(data);
-  return bridge.inv(f64, n);
+  return bridge.inv(toF64(data), n);
 }
 
 /**
@@ -46,12 +45,7 @@ function invLapackComplex(
 ): { re: Float64Array; im: Float64Array } | null {
   const bridge = getLapackBridge();
   if (!bridge || !bridge.invComplex) return null;
-  // Ensure Float64 for LAPACK
-  const f64Re =
-    dataRe instanceof Float64Array ? dataRe : new Float64Array(dataRe);
-  const f64Im =
-    dataIm instanceof Float64Array ? dataIm : new Float64Array(dataIm);
-  return bridge.invComplex(f64Re, f64Im, n);
+  return bridge.invComplex(toF64(dataRe), toF64(dataIm), n);
 }
 
 /**
