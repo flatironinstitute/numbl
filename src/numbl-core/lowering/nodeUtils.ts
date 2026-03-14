@@ -7,6 +7,14 @@ import { getConstantType } from "../builtins";
 import { ItemType } from "./itemTypes.js";
 import { IRExpr, IRExprKind } from "./nodes.js";
 
+/** True for scalar numeric types (Number, Boolean, ComplexNumber). */
+export const isScalarType = (t: ItemType): boolean =>
+  t.kind === "Number" || t.kind === "Boolean" || t.kind === "ComplexNumber";
+
+/** True for complex-valued types (ComplexNumber or complex Tensor). */
+export const isComplexType = (t: ItemType): boolean =>
+  t.kind === "ComplexNumber" || (t.kind === "Tensor" && !!t.isComplex);
+
 /** Visit every expression in the tree (pre-order), calling fn for each. */
 export function walkExpr(expr: IRExpr, fn: (e: IRExpr) => void): void {
   fn(expr);
@@ -93,12 +101,7 @@ function _computeItemType(
     case "Unary": {
       const operandType = itemTypeForExprKind(kind.operand.kind);
       if (kind.op === "Not") {
-        if (
-          operandType.kind === "Number" ||
-          operandType.kind === "Boolean" ||
-          operandType.kind === "ComplexNumber"
-        )
-          return { kind: "Boolean" };
+        if (isScalarType(operandType)) return { kind: "Boolean" };
         if (operandType.kind === "Tensor") return operandType;
         return { kind: "Unknown" };
       }
@@ -108,12 +111,6 @@ function _computeItemType(
     case "Binary": {
       const leftType = itemTypeForExprKind(kind.left.kind);
       const rightType = itemTypeForExprKind(kind.right.kind);
-      const isScalar = (t: ItemType) =>
-        t.kind === "Number" ||
-        t.kind === "Boolean" ||
-        t.kind === "ComplexNumber";
-      const isComplex = (t: ItemType) =>
-        t.kind === "ComplexNumber" || (t.kind === "Tensor" && t.isComplex);
       // Comparison operators → Logical for scalars, Tensor for tensors
       if (
         kind.op === BinaryOperation.Equal ||
@@ -125,14 +122,16 @@ function _computeItemType(
         kind.op === BinaryOperation.BitAnd ||
         kind.op === BinaryOperation.BitOr
       ) {
-        if (isScalar(leftType) && isScalar(rightType))
+        if (isScalarType(leftType) && isScalarType(rightType))
           return { kind: "Boolean" };
         if (leftType.kind === "Tensor" || rightType.kind === "Tensor") {
           return {
             kind: "Tensor",
             isLogical: true,
             isComplex:
-              isComplex(leftType) || isComplex(rightType) ? true : undefined,
+              isComplexType(leftType) || isComplexType(rightType)
+                ? true
+                : undefined,
           };
         }
         return { kind: "Unknown" };
@@ -158,7 +157,9 @@ function _computeItemType(
           return {
             kind: "Tensor",
             isComplex:
-              isComplex(leftType) || isComplex(rightType) ? true : undefined,
+              isComplexType(leftType) || isComplexType(rightType)
+                ? true
+                : undefined,
           };
         }
       }
@@ -167,13 +168,15 @@ function _computeItemType(
       if (leftType.kind === "Tensor" || rightType.kind === "Tensor") {
         // Determine if result should be complex
         const resultIsComplex =
-          isComplex(leftType) || isComplex(rightType) ? true : undefined;
+          isComplexType(leftType) || isComplexType(rightType)
+            ? true
+            : undefined;
 
         // Scalar op Tensor → return Tensor with isComplex flag
-        if (isScalar(leftType) && rightType.kind === "Tensor") {
+        if (isScalarType(leftType) && rightType.kind === "Tensor") {
           return { ...rightType, isComplex: resultIsComplex };
         }
-        if (leftType.kind === "Tensor" && isScalar(rightType)) {
+        if (leftType.kind === "Tensor" && isScalarType(rightType)) {
           return { ...leftType, isComplex: resultIsComplex };
         }
         // Tensor op Tensor: use unify for proper merging

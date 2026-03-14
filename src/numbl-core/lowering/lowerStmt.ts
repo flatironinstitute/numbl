@@ -14,6 +14,7 @@ import { type LoweringContext } from "./loweringContext.js";
 import { lowerExpr } from "./lowerExpr.js";
 import { lowerLValue } from "./lowerLValue.js";
 import { preDefineBodyVars } from "./loweringHelpers.js";
+import { isScalarType } from "./nodeUtils.js";
 
 // Re-export lowerLValue for backwards compatibility
 export { lowerLValue } from "./lowerLValue.js";
@@ -134,8 +135,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         irLv.base.kind.type === "Var"
       ) {
         const v = irLv.base.kind.variable;
-        const k = v.ty?.kind;
-        if (k === "Number" || k === "Boolean" || k === "ComplexNumber") {
+        if (v.ty && isScalarType(v.ty)) {
           v.ty = IType.Unknown;
         }
       }

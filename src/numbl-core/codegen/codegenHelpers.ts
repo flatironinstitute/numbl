@@ -5,18 +5,15 @@
  * JS reserved words, variable ID collection, and expression analysis.
  */
 
-import {
-  type IRExpr,
-  type IRLValue,
-  type IRStmt,
-  walkExpr,
-} from "../lowering/index.js";
+import { type IRExpr } from "../lowering/index.js";
 import type { LoweringContext } from "../lowering/loweringContext.js";
 import type { Expr } from "../parser/index.js";
 import { lowerExpr } from "../lowering/lowerExpr.js";
 import type { Codegen } from "./codegen.js";
 // Re-export specialization key utilities from shared module
 export { computeSpecKey, hashForJsId } from "../lowering/specKey.js";
+// Re-export canonical varId collection from lowering
+export { collectVarIds } from "../lowering/varIdCollect.js";
 
 // ── JS reserved words ───────────────────────────────────────────────────
 
@@ -150,84 +147,6 @@ export function exprContainsEndShallow(expr: IRExpr): boolean {
   return found;
 }
 
-// ── Variable ID collection ──────────────────────────────────────────────
-
-/** Collect VarIds referenced in IR statements (non-recursive into nested Functions). */
-export function collectVarIds(stmts: IRStmt[], out: Set<string>): void {
-  for (const stmt of stmts) {
-    if (stmt.type === "Function") continue; // Don't recurse into nested functions
-    collectVarIdsFromStmt(stmt, out);
-  }
-}
-
-function collectVarIdsFromStmt(stmt: IRStmt, out: Set<string>): void {
-  switch (stmt.type) {
-    case "Assign":
-      out.add(stmt.variable.id.id);
-      collectVarIdsFromExpr(stmt.expr, out);
-      break;
-    case "ExprStmt":
-      collectVarIdsFromExpr(stmt.expr, out);
-      break;
-    case "MultiAssign":
-      collectVarIdsFromExpr(stmt.expr, out);
-      for (const lv of stmt.lvalues) {
-        if (lv) collectVarIdsFromLValue(lv, out);
-      }
-      break;
-    case "AssignLValue":
-      collectVarIdsFromLValue(stmt.lvalue, out);
-      collectVarIdsFromExpr(stmt.expr, out);
-      break;
-    case "If":
-      collectVarIdsFromExpr(stmt.cond, out);
-      collectVarIds(stmt.thenBody, out);
-      for (const b of stmt.elseifBlocks) {
-        collectVarIdsFromExpr(b.cond, out);
-        collectVarIds(b.body, out);
-      }
-      if (stmt.elseBody) collectVarIds(stmt.elseBody, out);
-      break;
-    case "While":
-      collectVarIdsFromExpr(stmt.cond, out);
-      collectVarIds(stmt.body, out);
-      break;
-    case "For":
-      out.add(stmt.variable.id.id);
-      collectVarIdsFromExpr(stmt.expr, out);
-      collectVarIds(stmt.body, out);
-      break;
-    case "Switch":
-      collectVarIdsFromExpr(stmt.expr, out);
-      for (const c of stmt.cases) {
-        collectVarIdsFromExpr(c.value, out);
-        collectVarIds(c.body, out);
-      }
-      if (stmt.otherwise) collectVarIds(stmt.otherwise, out);
-      break;
-    case "TryCatch":
-      collectVarIds(stmt.tryBody, out);
-      if (stmt.catchVar) out.add(stmt.catchVar.id.id);
-      collectVarIds(stmt.catchBody, out);
-      break;
-    case "Global":
-    case "Persistent":
-      for (const v of stmt.vars) out.add(v.variable.id.id);
-      break;
-    case "Return":
-    case "Break":
-    case "Continue":
-      break;
-    // Function: handled at top level of collectVarIds
-  }
-}
-
-function collectVarIdsFromExpr(expr: IRExpr, out: Set<string>): void {
-  walkExpr(expr, e => {
-    if (e.kind.type === "Var") out.add(e.kind.variable.id.id);
-  });
-}
-
 // ── Class property helpers ────────────────────────────────────────────────
 
 /**
@@ -280,16 +199,4 @@ export function genPropertyDefaults(
     entries.push(`${JSON.stringify(propName)}: ${jsExpr}`);
   }
   return `{${entries.join(", ")}}`;
-}
-
-function collectVarIdsFromLValue(lv: IRLValue, out: Set<string>): void {
-  if (lv.type === "Var") {
-    out.add(lv.variable.id.id);
-  } else if (lv.type === "Member" || lv.type === "MemberDynamic") {
-    collectVarIdsFromExpr(lv.base, out);
-    if (lv.type === "MemberDynamic") collectVarIdsFromExpr(lv.nameExpr, out);
-  } else if (lv.type === "Index" || lv.type === "IndexCell") {
-    collectVarIdsFromExpr(lv.base, out);
-    for (const i of lv.indices) collectVarIdsFromExpr(i, out);
-  }
 }

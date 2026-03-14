@@ -11,7 +11,7 @@ import {
   itemTypeForExprKind,
 } from "../lowering/index.js";
 import type { Codegen } from "./codegen.js";
-import { hasSubsasgn } from "./codegenExpr.js";
+import { hasClassMethod } from "./codegenExpr.js";
 
 /**
  * Generate JS code for an LValue assignment.
@@ -207,7 +207,7 @@ function genMemberAssign(
 
       if (
         rootType.kind === "ClassInstance" &&
-        hasSubsasgn(cg, rootType.className) &&
+        hasClassMethod(cg, rootType.className, "subsasgn") &&
         cg.loweringCtx.ownerClassName !== rootType.className
       ) {
         cg.emit(

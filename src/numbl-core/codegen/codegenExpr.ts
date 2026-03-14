@@ -15,11 +15,7 @@ import {
 } from "../lowering/index.js";
 import { type ItemType, typeToString } from "../lowering/itemTypes.js";
 import type { Codegen } from "./codegen.js";
-import {
-  exprContainsEndShallow,
-  collectClassProperties,
-  genPropertyDefaults,
-} from "./codegenHelpers.js";
+import { exprContainsEndShallow } from "./codegenHelpers.js";
 
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { resolveFunction } from "../functionResolve.js";
@@ -499,7 +495,7 @@ function genMember(
   const rootType = itemTypeForExprKind(current.kind);
   if (
     rootType.kind === "ClassInstance" &&
-    hasSubsref(cg, rootType.className) &&
+    hasClassMethod(cg, rootType.className, "subsref") &&
     cg.loweringCtx.ownerClassName !== rootType.className
   ) {
     const rootCode = genExpr(cg, current);
@@ -513,7 +509,7 @@ function genMember(
       info &&
       info.propertyNames.includes(kind.name) &&
       !cg.loweringCtx.classHasMethod(baseType.className, `get.${kind.name}`) &&
-      !hasSubsref(cg, baseType.className)
+      !hasClassMethod(cg, baseType.className, "subsref")
     ) {
       const base = genExpr(cg, kind.base);
       return `${base}.fields.get(${JSON.stringify(kind.name)})`;
@@ -999,14 +995,7 @@ function genClassInstantiation(
   // Ensure all class methods (including getters/setters) are registered
   cg.ensureClassRegistered(className);
 
-  // Collect properties from the full inheritance chain
-  const {
-    propertyNames: allPropertyNames,
-    propertyDefaults: allPropertyDefaults,
-  } = collectClassProperties(cg.loweringCtx, className);
-  const propsJson = JSON.stringify(allPropertyNames);
-  const isHandleClass = cg.isHandleClass(classInfo);
-  const defaultsArg = genPropertyDefaults(cg, className, allPropertyDefaults);
+  const createExpr = cg.genCreateClassInstanceExpr(className, classInfo);
 
   if (classInfo.constructorName) {
     // Specialize and generate the constructor
@@ -1023,15 +1012,13 @@ function genClassInstantiation(
     if (jsId) {
       // Create instance, then call constructor with it
       const instVar = cg.freshTemp("$inst");
-      cg.emit(
-        `var ${instVar} = $rt.createClassInstance(${JSON.stringify(className)}, ${propsJson}, ${defaultsArg}, ${isHandleClass});`
-      );
+      cg.emit(`var ${instVar} = ${createExpr};`);
       return `${jsId}(1, ${instVar}, ${args.join(", ")})`;
     }
   }
 
   // No constructor — just create instance with default properties
-  return `$rt.createClassInstance(${JSON.stringify(className)}, ${propsJson}, ${defaultsArg}, ${isHandleClass})`;
+  return createExpr;
 }
 
 // ── Native math code generation ─────────────────────────────────────────
@@ -1101,16 +1088,13 @@ export function isOutputFunction(expr: IRExpr): boolean {
   return outputFunctions.includes(expr.kind.name);
 }
 
-/** Check if a class defines a subsref method. */
-export function hasSubsref(cg: Codegen, className: string): boolean {
+/** Check if a class defines a given method. */
+export function hasClassMethod(
+  cg: Codegen,
+  className: string,
+  methodName: string
+): boolean {
   const info = cg.loweringCtx.getClassInfo(className);
   if (!info) return false;
-  return info.methodNames.has("subsref");
-}
-
-/** Check if a class defines a subsasgn method. */
-export function hasSubsasgn(cg: Codegen, className: string): boolean {
-  const info = cg.loweringCtx.getClassInfo(className);
-  if (!info) return false;
-  return info.methodNames.has("subsasgn");
+  return info.methodNames.has(methodName);
 }

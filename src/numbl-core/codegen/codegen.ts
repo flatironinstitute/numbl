@@ -234,6 +234,29 @@ export class Codegen {
     return false;
   }
 
+  /**
+   * Build a `$rt.createClassInstance(...)` JS expression for a class,
+   * including property names, defaults, and handle-class flag.
+   * Used by both genClassInstantiation and ensureWorkspaceClassConstructorGenerated.
+   */
+  genCreateClassInstanceExpr(
+    className: string,
+    classInfo: { superClass: string | null }
+  ): string {
+    const {
+      propertyNames: allPropertyNames,
+      propertyDefaults: allPropertyDefaults,
+    } = collectClassProperties(this.loweringCtx, className);
+    const propsJson = JSON.stringify(allPropertyNames);
+    const isHandleClass = this.isHandleClass(classInfo);
+    const defaultsArg = genPropertyDefaults(
+      this,
+      className,
+      allPropertyDefaults
+    );
+    return `$rt.createClassInstance(${JSON.stringify(className)}, ${propsJson}, ${defaultsArg}, ${isHandleClass})`;
+  }
+
   getCode(): string {
     // Emit hoisted builtin lookups before everything else
     const builtinDecls: string[] = [];
@@ -579,58 +602,32 @@ export class Codegen {
     const hash = hashForJsId(argTypes);
     const jsId = `$fn_${this.sanitizeName(className)}$$ctor$${hash}`;
 
-    // Collect properties from the full inheritance chain
-    const {
-      propertyNames: allPropertyNames,
-      propertyDefaults: allPropertyDefaults,
-    } = collectClassProperties(this.loweringCtx, className);
-    const propsJson = JSON.stringify(allPropertyNames);
-    const isHandleClass = this.isHandleClass(classInfo);
-    const defaultsArg = genPropertyDefaults(
-      this,
-      className,
-      allPropertyDefaults
-    );
+    const createExpr = this.genCreateClassInstanceExpr(className, classInfo);
 
-    // Generate constructor wrapper function
-    this.pushEmitCapture();
-
+    // Try to compile the constructor method
+    let ctorJsId: string | null = null;
     if (classInfo.constructorName) {
       const selfType: ItemType = { kind: "ClassInstance", className };
       const ctorArgTypes: ItemType[] = [selfType, ...argTypes];
-      const ctorJsId = this.ensureClassMethodGenerated(
+      ctorJsId = this.ensureClassMethodGenerated(
         className,
         classInfo.constructorName,
         ctorArgTypes
       );
-      if (ctorJsId) {
-        this.emit(`function ${jsId}($nargout, ...args) {`);
-        this.pushIndent();
-        this.emit(
-          `var $inst = $rt.createClassInstance(${JSON.stringify(className)}, ${propsJson}, ${defaultsArg}, ${isHandleClass});`
-        );
-        this.emit(`return ${ctorJsId}(1, $inst, ...args);`);
-        this.popIndent();
-        this.emit(`}`);
-      } else {
-        this.emit(`function ${jsId}($nargout, ...args) {`);
-        this.pushIndent();
-        this.emit(
-          `return $rt.createClassInstance(${JSON.stringify(className)}, ${propsJson}, ${defaultsArg}, ${isHandleClass});`
-        );
-        this.popIndent();
-        this.emit(`}`);
-      }
-    } else {
-      this.emit(`function ${jsId}($nargout, ...args) {`);
-      this.pushIndent();
-      this.emit(
-        `return $rt.createClassInstance(${JSON.stringify(className)}, ${propsJson}, ${defaultsArg}, ${isHandleClass});`
-      );
-      this.popIndent();
-      this.emit(`}`);
     }
 
+    // Generate constructor wrapper function
+    this.pushEmitCapture();
+    this.emit(`function ${jsId}($nargout, ...args) {`);
+    this.pushIndent();
+    if (ctorJsId) {
+      this.emit(`var $inst = ${createExpr};`);
+      this.emit(`return ${ctorJsId}(1, $inst, ...args);`);
+    } else {
+      this.emit(`return ${createExpr};`);
+    }
+    this.popIndent();
+    this.emit(`}`);
     this.popEmitCaptureToDefinitions();
 
     this.generatedFunctions.set(specKey, {

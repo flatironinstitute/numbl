@@ -1,14 +1,19 @@
 /**
  * Helpers that collect all VarIds referenced in IR nodes.
  * Used by lowering (to compute script-level var sets) and by codegen
- * (to generate var-save/restore frames around function calls).
+ * (to generate var declarations for function bodies).
+ *
+ * This is the single canonical implementation — codegenHelpers.ts
+ * re-exports from here.
  */
 
 import { IRExpr, IRLValue, IRStmt } from "./nodes.js";
 import { walkExpr } from "./nodeUtils.js";
 
-function collectStmtVarIds(stmts: IRStmt[], out: Set<string>): void {
+/** Collect VarIds from a list of statements (non-recursive into nested Functions). */
+export function collectVarIds(stmts: IRStmt[], out: Set<string>): void {
   for (const s of stmts) {
+    if (s.type === "Function") continue;
     collectStmtVarIdsOne(s, out);
   }
 }
@@ -34,59 +39,52 @@ export function collectStmtVarIdsOne(s: IRStmt, out: Set<string>): void {
       break;
     case "If":
       collectExprVarIds(s.cond, out);
-      collectStmtVarIds(s.thenBody, out);
+      collectVarIds(s.thenBody, out);
       for (const b of s.elseifBlocks) {
         collectExprVarIds(b.cond, out);
-        collectStmtVarIds(b.body, out);
+        collectVarIds(b.body, out);
       }
-      if (s.elseBody) collectStmtVarIds(s.elseBody, out);
+      if (s.elseBody) collectVarIds(s.elseBody, out);
       break;
     case "While":
       collectExprVarIds(s.cond, out);
-      collectStmtVarIds(s.body, out);
+      collectVarIds(s.body, out);
       break;
     case "For":
       out.add(s.variable.id.id);
       collectExprVarIds(s.expr, out);
-      collectStmtVarIds(s.body, out);
+      collectVarIds(s.body, out);
       break;
     case "Switch":
       collectExprVarIds(s.expr, out);
       for (const c of s.cases) {
         collectExprVarIds(c.value, out);
-        collectStmtVarIds(c.body, out);
+        collectVarIds(c.body, out);
       }
-      if (s.otherwise) collectStmtVarIds(s.otherwise, out);
+      if (s.otherwise) collectVarIds(s.otherwise, out);
       break;
     case "TryCatch":
-      collectStmtVarIds(s.tryBody, out);
+      collectVarIds(s.tryBody, out);
       if (s.catchVar) out.add(s.catchVar.id.id);
-      collectStmtVarIds(s.catchBody, out);
+      collectVarIds(s.catchBody, out);
       break;
     case "Function":
       // Don't recurse into nested function definitions
       break;
-    case "Global": {
-      const vars = s.vars;
-      vars.forEach(v => out.add(v.variable.id.id)); // is this the right thing to do? I think we don't handle globals yet
+    case "Global":
+    case "Persistent":
+      for (const v of s.vars) out.add(v.variable.id.id);
       break;
-    }
     case "Return":
     case "Break":
     case "Continue":
-    case "Persistent":
       break;
-    default:
-      throw new Error(`Unhandled statement type: ${(s as IRStmt).type}`);
   }
 }
 
 function collectExprVarIds(e: IRExpr, out: Set<string>): void {
   walkExpr(e, sub => {
     if (sub.kind.type === "Var") out.add(sub.kind.variable.id.id);
-    else if (sub.kind.type === "AnonFunc") {
-      for (const p of sub.kind.params) out.add(p.id.id);
-    }
   });
 }
 
@@ -96,8 +94,11 @@ function collectLValueVarIds(lv: IRLValue, out: Set<string>): void {
       out.add(lv.variable.id.id);
       break;
     case "Member":
+      collectExprVarIds(lv.base, out);
+      break;
     case "MemberDynamic":
       collectExprVarIds(lv.base, out);
+      collectExprVarIds(lv.nameExpr, out);
       break;
     case "Index":
     case "IndexCell":

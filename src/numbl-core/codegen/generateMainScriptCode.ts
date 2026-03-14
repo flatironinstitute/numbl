@@ -10,7 +10,7 @@ import {
 } from "../lowering/loweringContext.js";
 import { lowerStmts } from "../lowering/lowerStmt.js";
 import { Codegen } from "./codegen.js";
-import { collectStmtVarIdsOne } from "../lowering/varIdCollect.js";
+import { collectVarIds } from "../lowering/varIdCollect.js";
 import { typeToString } from "../lowering/itemTypes.js";
 import type { IRVariable } from "../lowering/loweringTypes.js";
 import {
@@ -224,9 +224,7 @@ export function generateMainScriptCode(
 
   // Collect script-level VarIds
   const scriptVarIds = new Set<string>();
-  for (const stmt of irBody) {
-    collectStmtVarIdsOne(stmt, scriptVarIds);
-  }
+  collectVarIds(irBody, scriptVarIds);
   // Include initial variable VarIds so they get declared and exported
   for (const v of initialVarIRVars) {
     scriptVarIds.add(v.id.id);
