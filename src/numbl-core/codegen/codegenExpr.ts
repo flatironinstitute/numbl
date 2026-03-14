@@ -757,7 +757,9 @@ function genFuncCall(
       colormap: ["set_colormap", "name", '"parula"'],
       axis: ["set_axis", "value", '"auto"'],
     };
-    const entry = plotInstrTable[kind.name];
+    const entry = Object.hasOwn(plotInstrTable, kind.name)
+      ? plotInstrTable[kind.name]
+      : undefined;
     if (entry) {
       const [instrType, paramName, defaultVal] = entry;
       if (!paramName) return `$rt.plot_instr({type: "${instrType}"})`;
