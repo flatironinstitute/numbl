@@ -8,9 +8,6 @@
  *       A is an m×k matrix stored in column-major order
  *       B is a  k×n matrix stored in column-major order
  *       C is an m×n matrix returned in column-major order
- *
- *     Uses BLAS dgemm for high-performance computation.
- *     Equivalent to MATLAB: C = A * B
  */
 
 #include "lapack_common.h"
@@ -42,9 +39,9 @@ Napi::Value Matmul(const Napi::CallbackInfo& info) {
     return env.Null();
   }
 
-  int m = info[1].As<Napi::Number>().Int32Value(); // rows of A and C
-  int k = info[2].As<Napi::Number>().Int32Value(); // cols of A, rows of B
-  int n = info[4].As<Napi::Number>().Int32Value(); // cols of B and C
+  int m = info[1].As<Napi::Number>().Int32Value();
+  int k = info[2].As<Napi::Number>().Int32Value();
+  int n = info[4].As<Napi::Number>().Int32Value();
 
   if (m < 0 || k < 0 || n < 0) {
     Napi::RangeError::New(env, "matmul: m, k, n must be non-negative")
@@ -53,11 +50,8 @@ Napi::Value Matmul(const Napi::CallbackInfo& info) {
   }
 
   // Handle empty-dimension multiply without calling dgemm.
-  // BLAS requires ldb >= max(1, k), so k=0 would be invalid (ldb=0 < 1).
   if (m == 0 || k == 0 || n == 0) {
-    auto result = Napi::Float64Array::New(env, static_cast<size_t>(m * n));
-    // Zero-initialized by default in V8.
-    return result;
+    return Napi::Float64Array::New(env, static_cast<size_t>(m * n));
   }
   if (static_cast<int>(arrA.ElementLength()) != m * k) {
     Napi::RangeError::New(env, "matmul: A.length must equal m*k")
@@ -73,17 +67,10 @@ Napi::Value Matmul(const Napi::CallbackInfo& info) {
   auto float64A = info[0].As<Napi::Float64Array>();
   auto float64B = info[3].As<Napi::Float64Array>();
 
-  // ── Compute C = A * B via dgemm ───────────────────────────────────────────
-  // dgemm computes: C = alpha * op(A) * op(B) + beta * C
-  // With transa='N', transb='N', alpha=1, beta=0 this gives C = A * B.
   char transa = 'N';
   char transb = 'N';
   double alpha = 1.0;
   double beta  = 0.0;
-
-  // dgemm args: lda = leading dim of A = m (column-major)
-  //             ldb = leading dim of B = k
-  //             ldc = leading dim of C = m
   int lda = m;
   int ldb = k;
   int ldc = m;
@@ -96,8 +83,5 @@ Napi::Value Matmul(const Napi::CallbackInfo& info) {
                  float64B.Data(), &ldb,
          &beta,  c.data(),        &ldc);
 
-  // ── Return result as a new Float64Array ───────────────────────────────────
-  auto result = Napi::Float64Array::New(env, static_cast<size_t>(m * n));
-  std::memcpy(result.Data(), c.data(), m * n * sizeof(double));
-  return result;
+  return vecToF64(env, c);
 }

@@ -15,7 +15,31 @@
 #include "lapack_common.h"
 #include <fftw3.h>
 
-// ── fft1d() ─────────────────────────────────────────────────────────────────────
+// Shared core: run FFTW on pre-filled input, return {re, im} result object.
+static Napi::Value fftCore(Napi::Env env, fftw_complex* in, int n, bool inverse) {
+  fftw_complex* out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
+
+  int sign = inverse ? FFTW_BACKWARD : FFTW_FORWARD;
+  fftw_plan plan = fftw_plan_dft_1d(n, in, out, sign, FFTW_ESTIMATE);
+  fftw_execute(plan);
+  fftw_destroy_plan(plan);
+  fftw_free(in);
+
+  auto resultRe = Napi::Float64Array::New(env, static_cast<size_t>(n));
+  auto resultIm = Napi::Float64Array::New(env, static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    resultRe[i] = out[i][0];
+    resultIm[i] = out[i][1];
+  }
+  fftw_free(out);
+
+  auto result = Napi::Object::New(env);
+  result.Set("re", resultRe);
+  result.Set("im", resultIm);
+  return result;
+}
+
+// ── fft1d() ───────────────────────────────────────────────────────────────────
 
 Napi::Value Fft1d(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
@@ -48,41 +72,16 @@ Napi::Value Fft1d(const Napi::CallbackInfo& info) {
 
   auto float64arr = info[0].As<Napi::Float64Array>();
 
-  // Allocate FFTW-aligned buffers
-  fftw_complex* in  = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
-  fftw_complex* out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
-
-  // Copy real input, imaginary = 0
+  fftw_complex* in = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
   for (int i = 0; i < n; ++i) {
     in[i][0] = float64arr[i];
     in[i][1] = 0.0;
   }
 
-  // Create plan and execute
-  int sign = inverse ? FFTW_BACKWARD : FFTW_FORWARD;
-  fftw_plan plan = fftw_plan_dft_1d(n, in, out, sign, FFTW_ESTIMATE);
-  fftw_execute(plan);
-  fftw_destroy_plan(plan);
-  fftw_free(in);
-
-  // Deinterleave output into separate re/im arrays
-  auto resultRe = Napi::Float64Array::New(env, static_cast<size_t>(n));
-  auto resultIm = Napi::Float64Array::New(env, static_cast<size_t>(n));
-
-  for (int i = 0; i < n; ++i) {
-    resultRe[i] = out[i][0];
-    resultIm[i] = out[i][1];
-  }
-
-  fftw_free(out);
-
-  auto result = Napi::Object::New(env);
-  result.Set("re", resultRe);
-  result.Set("im", resultIm);
-  return result;
+  return fftCore(env, in, n, inverse);
 }
 
-// ── fft1dComplex() ──────────────────────────────────────────────────────────────
+// ── fft1dComplex() ──────────────────────────────────────────────────────────
 
 Napi::Value Fft1dComplex(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
@@ -124,36 +123,11 @@ Napi::Value Fft1dComplex(const Napi::CallbackInfo& info) {
   auto float64arrRe = info[0].As<Napi::Float64Array>();
   auto float64arrIm = info[1].As<Napi::Float64Array>();
 
-  // Allocate FFTW-aligned buffers
-  fftw_complex* in  = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
-  fftw_complex* out = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
-
-  // Interleave split re/im into fftw_complex
+  fftw_complex* in = (fftw_complex*)fftw_malloc(sizeof(fftw_complex) * n);
   for (int i = 0; i < n; ++i) {
     in[i][0] = float64arrRe[i];
     in[i][1] = float64arrIm[i];
   }
 
-  // Create plan and execute
-  int sign = inverse ? FFTW_BACKWARD : FFTW_FORWARD;
-  fftw_plan plan = fftw_plan_dft_1d(n, in, out, sign, FFTW_ESTIMATE);
-  fftw_execute(plan);
-  fftw_destroy_plan(plan);
-  fftw_free(in);
-
-  // Deinterleave output into separate re/im arrays
-  auto resultRe = Napi::Float64Array::New(env, static_cast<size_t>(n));
-  auto resultIm = Napi::Float64Array::New(env, static_cast<size_t>(n));
-
-  for (int i = 0; i < n; ++i) {
-    resultRe[i] = out[i][0];
-    resultIm[i] = out[i][1];
-  }
-
-  fftw_free(out);
-
-  auto result = Napi::Object::New(env);
-  result.Set("re", resultRe);
-  result.Set("im", resultIm);
-  return result;
+  return fftCore(env, in, n, inverse);
 }

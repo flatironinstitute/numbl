@@ -69,7 +69,7 @@ Napi::Value Linsolve(const Napi::CallbackInfo& info) {
   int info_val = 0;
 
   if (m == n) {
-    // ── Square: dgesv (LU + solve) ────────────────────────────────────────────
+    // ── Square: dgesv (LU + solve) ──────────────────────────────────────────
     std::vector<double> a(n * n), b(n * nrhs);
     std::memcpy(a.data(), fA.Data(), n * n * sizeof(double));
     std::memcpy(b.data(), fB.Data(), n * nrhs * sizeof(double));
@@ -77,29 +77,18 @@ Napi::Value Linsolve(const Napi::CallbackInfo& info) {
     std::vector<int> ipiv(n);
     dgesv_(&n, &nrhs, a.data(), &n, ipiv.data(), b.data(), &n, &info_val);
 
-    if (info_val > 0) {
-      Napi::Error::New(env, "linsolve: matrix is singular (dgesv)")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "linsolve", "dgesv",
+        "matrix is singular (dgesv)"))
       return env.Null();
-    }
-    if (info_val < 0) {
-      Napi::Error::New(env, "linsolve: illegal argument passed to dgesv")
-          .ThrowAsJavaScriptException();
-      return env.Null();
-    }
 
-    auto result = Napi::Float64Array::New(env, static_cast<size_t>(n * nrhs));
-    std::memcpy(result.Data(), b.data(), n * nrhs * sizeof(double));
-    return result;
+    return ptrToF64(env, b.data(), n * nrhs);
 
   } else {
-    // ── Non-square: dgels (QR / LQ least-squares / min-norm solve) ───────────
-    // dgels needs B with ldb = max(m, n) rows so the solution fits in place.
+    // ── Non-square: dgels (QR / LQ least-squares / min-norm solve) ─────────
     int ldb = m > n ? m : n;
     std::vector<double> a(m * n), b(ldb * nrhs, 0.0);
     std::memcpy(a.data(), fA.Data(), m * n * sizeof(double));
 
-    // Copy each column of B into the top m rows of the extended buffer
     for (int c = 0; c < nrhs; c++) {
       std::memcpy(b.data() + c * ldb, fB.Data() + c * m, m * sizeof(double));
     }
@@ -120,19 +109,11 @@ Napi::Value Linsolve(const Napi::CallbackInfo& info) {
            a.data(), &m, b.data(), &ldb,
            work.data(), &lwork, &info_val);
 
-    if (info_val < 0) {
-      Napi::Error::New(env, "linsolve: illegal argument passed to dgels")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "linsolve", "dgels",
+        "A does not have full rank (dgels)"))
       return env.Null();
-    }
-    if (info_val > 0) {
-      Napi::Error::New(env,
-        "linsolve: A does not have full rank (dgels)")
-          .ThrowAsJavaScriptException();
-      return env.Null();
-    }
 
-    // Solution is in the first n rows of b (column-major, ldb rows per column)
+    // Solution is in the first n rows of b
     auto result = Napi::Float64Array::New(env, static_cast<size_t>(n * nrhs));
     for (int c = 0; c < nrhs; c++) {
       std::memcpy(result.Data() + c * n, b.data() + c * ldb,
@@ -200,43 +181,27 @@ Napi::Value LinsolveComplex(const Napi::CallbackInfo& info) {
   int info_val = 0;
 
   if (m == n) {
-    // ── Square: zgesv (LU + solve) ────────────────────────────────────────────
-    std::vector<lapack_complex_double> a(n * n), b(n * nrhs);
-    for (int i = 0; i < n * n; ++i) { a[i].real = fARe[i]; a[i].imag = fAIm[i]; }
-    for (int i = 0; i < n * nrhs; ++i) { b[i].real = fBRe[i]; b[i].imag = fBIm[i]; }
+    // ── Square: zgesv (LU + solve) ──────────────────────────────────────────
+    auto a = splitToInterleaved(fARe, fAIm, n * n);
+    auto b = splitToInterleaved(fBRe, fBIm, n * nrhs);
 
     std::vector<int> ipiv(n);
     zgesv_(&n, &nrhs, a.data(), &n, ipiv.data(), b.data(), &n, &info_val);
 
-    if (info_val > 0) {
-      Napi::Error::New(env, "linsolveComplex: matrix is singular (zgesv)")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "linsolveComplex", "zgesv",
+        "matrix is singular (zgesv)"))
       return env.Null();
-    }
-    if (info_val < 0) {
-      Napi::Error::New(env, "linsolveComplex: illegal argument passed to zgesv")
-          .ThrowAsJavaScriptException();
-      return env.Null();
-    }
-
-    auto resultRe = Napi::Float64Array::New(env, static_cast<size_t>(n * nrhs));
-    auto resultIm = Napi::Float64Array::New(env, static_cast<size_t>(n * nrhs));
-    for (int i = 0; i < n * nrhs; ++i) { resultRe[i] = b[i].real; resultIm[i] = b[i].imag; }
 
     auto result = Napi::Object::New(env);
-    result.Set("re", resultRe);
-    result.Set("im", resultIm);
+    setSplitComplex(env, result, "re", "im", b.data(), n * nrhs);
     return result;
 
   } else {
-    // ── Non-square: zgels (QR / LQ least-squares / min-norm solve) ───────────
-    // zgels needs B with ldb = max(m, n) rows so the solution fits in place.
+    // ── Non-square: zgels (QR / LQ least-squares / min-norm solve) ─────────
     int ldb = m > n ? m : n;
-    std::vector<lapack_complex_double> a(m * n), b(ldb * nrhs);
-    for (int i = 0; i < m * n; ++i) { a[i].real = fARe[i]; a[i].imag = fAIm[i]; }
-    for (int i = 0; i < ldb * nrhs; ++i) { b[i].real = 0.0; b[i].imag = 0.0; }
+    auto a = splitToInterleaved(fARe, fAIm, m * n);
+    std::vector<lapack_complex_double> b(ldb * nrhs, {0.0, 0.0});
 
-    // Copy each column of B into the top m rows of the extended buffer
     for (int c = 0; c < nrhs; ++c) {
       for (int r = 0; r < m; ++r) {
         b[r + c * ldb].real = fBRe[r + c * m];
@@ -260,19 +225,11 @@ Napi::Value LinsolveComplex(const Napi::CallbackInfo& info) {
            a.data(), &m, b.data(), &ldb,
            work.data(), &lwork, &info_val);
 
-    if (info_val < 0) {
-      Napi::Error::New(env, "linsolveComplex: illegal argument passed to zgels")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "linsolveComplex", "zgels",
+        "A does not have full rank (zgels)"))
       return env.Null();
-    }
-    if (info_val > 0) {
-      Napi::Error::New(env,
-        "linsolveComplex: A does not have full rank (zgels)")
-          .ThrowAsJavaScriptException();
-      return env.Null();
-    }
 
-    // Solution is in the first n rows of b (column-major, ldb rows per column)
+    // Solution is in the first n rows of b
     auto resultRe = Napi::Float64Array::New(env, static_cast<size_t>(n * nrhs));
     auto resultIm = Napi::Float64Array::New(env, static_cast<size_t>(n * nrhs));
     for (int c = 0; c < nrhs; ++c) {

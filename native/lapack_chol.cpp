@@ -15,6 +15,20 @@
 
 #include "lapack_common.h"
 
+// Zero out the opposite triangle of an n×n column-major matrix.
+template<typename T>
+static void zeroOppositeTriangle(T* a, int n, bool upper) {
+  if (upper) {
+    for (int j = 0; j < n; j++)
+      for (int i = j + 1; i < n; i++)
+        a[i + j * n] = T{};
+  } else {
+    for (int j = 0; j < n; j++)
+      for (int i = 0; i < j; i++)
+        a[i + j * n] = T{};
+  }
+}
+
 // ── chol() ───────────────────────────────────────────────────────────────────
 
 Napi::Value Chol(const Napi::CallbackInfo& info) {
@@ -48,7 +62,6 @@ Napi::Value Chol(const Napi::CallbackInfo& info) {
 
   auto float64arr = info[0].As<Napi::Float64Array>();
 
-  // Copy input (dpotrf overwrites in-place)
   std::vector<double> a(n * n);
   std::memcpy(a.data(), float64arr.Data(), n * n * sizeof(double));
 
@@ -58,27 +71,14 @@ Napi::Value Chol(const Napi::CallbackInfo& info) {
   dpotrf_(&uplo, &n, a.data(), &n, &info_val);
 
   if (info_val < 0) {
-    Napi::Error::New(env, "chol: illegal argument passed to dpotrf")
-        .ThrowAsJavaScriptException();
+    checkLapackInfo(env, info_val, "chol", "dpotrf");
     return env.Null();
   }
 
-  // Zero out the opposite triangle
-  if (upper) {
-    for (int j = 0; j < n; j++)
-      for (int i = j + 1; i < n; i++)
-        a[i + j * n] = 0.0;
-  } else {
-    for (int j = 0; j < n; j++)
-      for (int i = 0; i < j; i++)
-        a[i + j * n] = 0.0;
-  }
-
-  auto R_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  std::memcpy(R_arr.Data(), a.data(), n * n * sizeof(double));
+  zeroOppositeTriangle(a.data(), n, upper);
 
   auto result = Napi::Object::New(env);
-  result.Set("R", R_arr);
+  result.Set("R", vecToF64(env, a));
   result.Set("info", Napi::Number::New(env, info_val));
   return result;
 }
@@ -122,15 +122,9 @@ Napi::Value CholComplex(const Napi::CallbackInfo& info) {
     return env.Null();
   }
 
-  auto float64arrRe = info[0].As<Napi::Float64Array>();
-  auto float64arrIm = info[1].As<Napi::Float64Array>();
-
-  // Convert to interleaved complex format
-  std::vector<lapack_complex_double> a(n * n);
-  for (int i = 0; i < n * n; ++i) {
-    a[i].real = float64arrRe[i];
-    a[i].imag = float64arrIm[i];
-  }
+  auto a = splitToInterleaved(
+      info[0].As<Napi::Float64Array>(),
+      info[1].As<Napi::Float64Array>(), n * n);
 
   char uplo = upper ? 'U' : 'L';
   int info_val = 0;
@@ -138,36 +132,14 @@ Napi::Value CholComplex(const Napi::CallbackInfo& info) {
   zpotrf_(&uplo, &n, a.data(), &n, &info_val);
 
   if (info_val < 0) {
-    Napi::Error::New(env, "cholComplex: illegal argument passed to zpotrf")
-        .ThrowAsJavaScriptException();
+    checkLapackInfo(env, info_val, "cholComplex", "zpotrf");
     return env.Null();
   }
 
-  // Zero out the opposite triangle
-  if (upper) {
-    for (int j = 0; j < n; j++)
-      for (int i = j + 1; i < n; i++) {
-        a[i + j * n].real = 0.0;
-        a[i + j * n].imag = 0.0;
-      }
-  } else {
-    for (int j = 0; j < n; j++)
-      for (int i = 0; i < j; i++) {
-        a[i + j * n].real = 0.0;
-        a[i + j * n].imag = 0.0;
-      }
-  }
-
-  auto RRe_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  auto RIm_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  for (int i = 0; i < n * n; ++i) {
-    RRe_arr[i] = a[i].real;
-    RIm_arr[i] = a[i].imag;
-  }
+  zeroOppositeTriangle(a.data(), n, upper);
 
   auto result = Napi::Object::New(env);
-  result.Set("RRe", RRe_arr);
-  result.Set("RIm", RIm_arr);
+  setSplitComplex(env, result, "RRe", "RIm", a.data(), n * n);
   result.Set("info", Napi::Number::New(env, info_val));
   return result;
 }

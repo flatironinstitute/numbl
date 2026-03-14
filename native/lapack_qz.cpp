@@ -49,22 +49,15 @@ Napi::Value Qz(const Napi::CallbackInfo& info) {
   auto f64A = info[0].As<Napi::Float64Array>();
   auto f64B = info[1].As<Napi::Float64Array>();
 
-  // Copy inputs (dgges overwrites A and B)
   std::vector<double> a(n * n), b(n * n);
   std::memcpy(a.data(), f64A.Data(), n * n * sizeof(double));
   std::memcpy(b.data(), f64B.Data(), n * n * sizeof(double));
 
-  // Output arrays
   std::vector<double> alphar(n), alphai(n), beta(n);
   std::vector<double> vsl(n * n), vsr(n * n);
 
-  char jobvsl = 'V';
-  char jobvsr = 'V';
-  char sort = 'N';  // no eigenvalue sorting
-  int sdim = 0;
-  int info_val = 0;
-
-  // BWORK not referenced when sort='N', but allocate anyway
+  char jobvsl = 'V', jobvsr = 'V', sort = 'N';
+  int sdim = 0, info_val = 0;
   std::vector<int> bwork(n);
 
   // Workspace query
@@ -84,76 +77,37 @@ Napi::Value Qz(const Napi::CallbackInfo& info) {
   std::memcpy(a.data(), f64A.Data(), n * n * sizeof(double));
   std::memcpy(b.data(), f64B.Data(), n * n * sizeof(double));
 
-  // Compute generalized Schur decomposition
   dgges_(&jobvsl, &jobvsr, &sort, nullptr,
          &n, a.data(), &n, b.data(), &n,
          &sdim, alphar.data(), alphai.data(), beta.data(),
          vsl.data(), &n, vsr.data(), &n,
          work.data(), &lwork, bwork.data(), &info_val);
 
-  if (info_val != 0) {
-    if (info_val > 0) {
-      Napi::Error::New(env, "qz: QZ iteration failed to converge in dgges")
-          .ThrowAsJavaScriptException();
-    } else {
-      Napi::Error::New(env, "qz: illegal argument in dgges")
-          .ThrowAsJavaScriptException();
-    }
+  if (!checkLapackInfo(env, info_val, "qz", "dgges",
+      "QZ iteration failed to converge in dgges"))
     return env.Null();
-  }
 
-  // Build result object
   auto result = Napi::Object::New(env);
+  result.Set("AA", vecToF64(env, a));
+  result.Set("BB", vecToF64(env, b));
 
-  // AA = a (overwritten by dgges with the quasi-triangular Schur form of A)
-  auto aa_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  std::memcpy(aa_arr.Data(), a.data(), n * n * sizeof(double));
-  result.Set("AA", aa_arr);
-
-  // BB = b (overwritten by dgges with the triangular Schur form of B)
-  auto bb_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  std::memcpy(bb_arr.Data(), b.data(), n * n * sizeof(double));
-  result.Set("BB", bb_arr);
-
-  // Q = VSL^T  (MATLAB convention: Q*A*Z = AA, so Q = VSL')
+  // Q = VSL^T (MATLAB convention: Q*A*Z = AA)
   auto q_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  {
-    double* q = q_arr.Data();
-    for (int i = 0; i < n; i++)
-      for (int j = 0; j < n; j++)
-        q[i + j * n] = vsl[j + i * n];  // Q(i,j) = VSL(j,i)
-  }
+  for (int i = 0; i < n; i++)
+    for (int j = 0; j < n; j++)
+      q_arr[i + j * n] = vsl[j + i * n];
   result.Set("Q", q_arr);
 
-  // Z = VSR (right Schur vectors, no transpose needed)
-  auto z_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  std::memcpy(z_arr.Data(), vsr.data(), n * n * sizeof(double));
-  result.Set("Z", z_arr);
+  result.Set("Z", vecToF64(env, vsr));
+  result.Set("alphar", vecToF64(env, alphar));
+  result.Set("alphai", vecToF64(env, alphai));
+  result.Set("beta", vecToF64(env, beta));
 
-  // Generalized eigenvalue components
-  auto alphar_arr = Napi::Float64Array::New(env, static_cast<size_t>(n));
-  std::memcpy(alphar_arr.Data(), alphar.data(), n * sizeof(double));
-  result.Set("alphar", alphar_arr);
-
-  auto alphai_arr = Napi::Float64Array::New(env, static_cast<size_t>(n));
-  std::memcpy(alphai_arr.Data(), alphai.data(), n * sizeof(double));
-  result.Set("alphai", alphai_arr);
-
-  auto beta_arr = Napi::Float64Array::New(env, static_cast<size_t>(n));
-  std::memcpy(beta_arr.Data(), beta.data(), n * sizeof(double));
-  result.Set("beta", beta_arr);
-
-  // Optionally compute generalized eigenvectors via dtgevc
   if (computeEigvecs) {
-    // Copy Schur vectors for backtransform
-    std::vector<double> vr(vsr);   // right: start with VSR
-    std::vector<double> vl(vsl);   // left: start with VSL
-
-    char side = 'B';     // both left and right
-    char howmny = 'B';   // backtransform using input VL/VR
-    std::vector<int> select(n);  // not referenced when howmny='B'
-    int mm = n;
-    int m_out = 0;
+    std::vector<double> vr(vsr), vl(vsl);
+    char side = 'B', howmny = 'B';
+    std::vector<int> select(n);
+    int mm = n, m_out = 0;
     std::vector<double> work_tgevc(6 * n);
 
     dtgevc_(&side, &howmny, select.data(), &n,
@@ -161,21 +115,12 @@ Napi::Value Qz(const Napi::CallbackInfo& info) {
             vl.data(), &n, vr.data(), &n,
             &mm, &m_out, work_tgevc.data(), &info_val);
 
-    if (info_val != 0) {
-      Napi::Error::New(env, "qz: dtgevc failed to compute eigenvectors")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "qz", "dtgevc",
+        "dtgevc failed to compute eigenvectors"))
       return env.Null();
-    }
 
-    // V = right generalized eigenvectors (packed format, like dgeev)
-    auto v_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-    std::memcpy(v_arr.Data(), vr.data(), n * n * sizeof(double));
-    result.Set("V", v_arr);
-
-    // W = left generalized eigenvectors (packed format, like dgeev)
-    auto w_arr = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-    std::memcpy(w_arr.Data(), vl.data(), n * n * sizeof(double));
-    result.Set("W", w_arr);
+    result.Set("V", vecToF64(env, vr));
+    result.Set("W", vecToF64(env, vl));
   }
 
   return result;
@@ -218,25 +163,14 @@ Napi::Value QzComplex(const Napi::CallbackInfo& info) {
     return env.Null();
   }
 
-  // Convert to interleaved complex format
-  std::vector<lapack_complex_double> a(n * n), b(n * n);
-  for (int i = 0; i < n * n; ++i) {
-    a[i].real = f64ARe[i];
-    a[i].imag = f64AIm[i];
-    b[i].real = f64BRe[i];
-    b[i].imag = f64BIm[i];
-  }
+  auto a = splitToInterleaved(f64ARe, f64AIm, n * n);
+  auto b = splitToInterleaved(f64BRe, f64BIm, n * n);
 
-  // Output arrays (for complex zgges, both alpha and beta are complex)
-  std::vector<lapack_complex_double> alpha(n);
-  std::vector<lapack_complex_double> beta_c(n);
+  std::vector<lapack_complex_double> alpha(n), beta_c(n);
   std::vector<lapack_complex_double> vsl(n * n), vsr(n * n);
 
-  char jobvsl = 'V';
-  char jobvsr = 'V';
-  char sort = 'N';
-  int sdim = 0;
-  int info_val = 0;
+  char jobvsl = 'V', jobvsr = 'V', sort = 'N';
+  int sdim = 0, info_val = 0;
   std::vector<int> bwork(n);
 
   // Workspace query
@@ -254,61 +188,30 @@ Napi::Value QzComplex(const Napi::CallbackInfo& info) {
   std::vector<lapack_complex_double> work(lwork);
 
   // Reset a and b
-  for (int i = 0; i < n * n; ++i) {
-    a[i].real = f64ARe[i];
-    a[i].imag = f64AIm[i];
-    b[i].real = f64BRe[i];
-    b[i].imag = f64BIm[i];
-  }
+  a = splitToInterleaved(f64ARe, f64AIm, n * n);
+  b = splitToInterleaved(f64BRe, f64BIm, n * n);
 
-  // Compute
   zgges_(&jobvsl, &jobvsr, &sort, nullptr,
          &n, a.data(), &n, b.data(), &n,
          &sdim, alpha.data(), beta_c.data(),
          vsl.data(), &n, vsr.data(), &n,
          work.data(), &lwork, rwork.data(), bwork.data(), &info_val);
 
-  if (info_val != 0) {
-    if (info_val > 0) {
-      Napi::Error::New(env, "qzComplex: QZ iteration failed to converge in zgges")
-          .ThrowAsJavaScriptException();
-    } else {
-      Napi::Error::New(env, "qzComplex: illegal argument in zgges")
-          .ThrowAsJavaScriptException();
-    }
+  if (!checkLapackInfo(env, info_val, "qzComplex", "zgges",
+      "QZ iteration failed to converge in zgges"))
     return env.Null();
-  }
 
   auto result = Napi::Object::New(env);
   size_t nn = static_cast<size_t>(n * n);
-  size_t sn = static_cast<size_t>(n);
 
-  // AA (complex) = a after zgges
-  auto aaRe = Napi::Float64Array::New(env, nn);
-  auto aaIm = Napi::Float64Array::New(env, nn);
-  for (int i = 0; i < n * n; ++i) {
-    aaRe[i] = a[i].real;
-    aaIm[i] = a[i].imag;
-  }
-  result.Set("AARe", aaRe);
-  result.Set("AAIm", aaIm);
+  setSplitComplex(env, result, "AARe", "AAIm", a.data(), n * n);
+  setSplitComplex(env, result, "BBRe", "BBIm", b.data(), n * n);
 
-  // BB (complex) = b after zgges
-  auto bbRe = Napi::Float64Array::New(env, nn);
-  auto bbIm = Napi::Float64Array::New(env, nn);
-  for (int i = 0; i < n * n; ++i) {
-    bbRe[i] = b[i].real;
-    bbIm[i] = b[i].imag;
-  }
-  result.Set("BBRe", bbRe);
-  result.Set("BBIm", bbIm);
-
-  // Q = VSL^H (conjugate transpose) for MATLAB convention Q*A*Z = AA
+  // Q = VSL^H (conjugate transpose) for MATLAB convention
   auto qRe = Napi::Float64Array::New(env, nn);
   auto qIm = Napi::Float64Array::New(env, nn);
   for (int i = 0; i < n; i++) {
     for (int j = 0; j < n; j++) {
-      // Q(i,j) = conj(VSL(j,i))
       qRe[i + j * n] =  vsl[j + i * n].real;
       qIm[i + j * n] = -vsl[j + i * n].imag;
     }
@@ -316,42 +219,15 @@ Napi::Value QzComplex(const Napi::CallbackInfo& info) {
   result.Set("QRe", qRe);
   result.Set("QIm", qIm);
 
-  // Z = VSR (no transpose)
-  auto zRe = Napi::Float64Array::New(env, nn);
-  auto zIm = Napi::Float64Array::New(env, nn);
-  for (int i = 0; i < n * n; ++i) {
-    zRe[i] = vsr[i].real;
-    zIm[i] = vsr[i].imag;
-  }
-  result.Set("ZRe", zRe);
-  result.Set("ZIm", zIm);
+  setSplitComplex(env, result, "ZRe", "ZIm", vsr.data(), n * n);
+  setSplitComplex(env, result, "alphaRe", "alphaIm", alpha.data(), n);
+  setSplitComplex(env, result, "betaRe", "betaIm", beta_c.data(), n);
 
-  // Alpha (complex) and beta (complex)
-  auto alphaRe = Napi::Float64Array::New(env, sn);
-  auto alphaIm = Napi::Float64Array::New(env, sn);
-  auto betaRe = Napi::Float64Array::New(env, sn);
-  auto betaIm = Napi::Float64Array::New(env, sn);
-  for (int i = 0; i < n; ++i) {
-    alphaRe[i] = alpha[i].real;
-    alphaIm[i] = alpha[i].imag;
-    betaRe[i] = beta_c[i].real;
-    betaIm[i] = beta_c[i].imag;
-  }
-  result.Set("alphaRe", alphaRe);
-  result.Set("alphaIm", alphaIm);
-  result.Set("betaRe", betaRe);
-  result.Set("betaIm", betaIm);
-
-  // Optionally compute generalized eigenvectors via ztgevc
   if (computeEigvecs) {
-    std::vector<lapack_complex_double> vr(vsr);  // start with VSR
-    std::vector<lapack_complex_double> vl(vsl);  // start with VSL
-
-    char side = 'B';
-    char howmny = 'B';
+    std::vector<lapack_complex_double> vr(vsr), vl(vsl);
+    char side = 'B', howmny = 'B';
     std::vector<int> select(n);
-    int mm = n;
-    int m_out = 0;
+    int mm = n, m_out = 0;
     std::vector<lapack_complex_double> work_tgevc(2 * n);
     std::vector<double> rwork_tgevc(2 * n);
 
@@ -360,29 +236,11 @@ Napi::Value QzComplex(const Napi::CallbackInfo& info) {
             vl.data(), &n, vr.data(), &n,
             &mm, &m_out, work_tgevc.data(), rwork_tgevc.data(), &info_val);
 
-    if (info_val != 0) {
-      Napi::Error::New(env, "qzComplex: ztgevc failed")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "qzComplex", "ztgevc"))
       return env.Null();
-    }
 
-    auto vRe = Napi::Float64Array::New(env, nn);
-    auto vIm = Napi::Float64Array::New(env, nn);
-    for (int i = 0; i < n * n; ++i) {
-      vRe[i] = vr[i].real;
-      vIm[i] = vr[i].imag;
-    }
-    result.Set("VRe", vRe);
-    result.Set("VIm", vIm);
-
-    auto wRe = Napi::Float64Array::New(env, nn);
-    auto wIm = Napi::Float64Array::New(env, nn);
-    for (int i = 0; i < n * n; ++i) {
-      wRe[i] = vl[i].real;
-      wIm[i] = vl[i].imag;
-    }
-    result.Set("WRe", wRe);
-    result.Set("WIm", wIm);
+    setSplitComplex(env, result, "VRe", "VIm", vr.data(), n * n);
+    setSplitComplex(env, result, "WRe", "WIm", vl.data(), n * n);
   }
 
   return result;
