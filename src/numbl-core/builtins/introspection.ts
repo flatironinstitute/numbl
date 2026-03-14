@@ -2,7 +2,14 @@
  * Introspection builtin functions
  */
 
-import { RuntimeValue, RTV, toNumber, RuntimeError } from "../runtime/index.js";
+import {
+  RuntimeValue,
+  RTV,
+  toNumber,
+  RuntimeError,
+  colMajorIndex,
+  tensorSize2D,
+} from "../runtime/index.js";
 import {
   FloatXArray,
   isRuntimeNumber,
@@ -531,6 +538,136 @@ export function registerIntrospectionFunctions(): void {
     "subsasgn",
     builtinSingle(() => {
       throw new RuntimeError("subsasgn: should be handled by runtime override");
+    })
+  );
+
+  // issymmetric(A) — true if A == A.' (within tolerance)
+  // issymmetric(A, 'skew') — true if A == -A.'
+  register(
+    "issymmetric",
+    builtinSingle(args => {
+      if (args.length < 1 || args.length > 2)
+        throw new RuntimeError("issymmetric requires 1 or 2 arguments");
+
+      const A = args[0];
+
+      // Scalar is always symmetric
+      if (isRuntimeNumber(A) || isRuntimeLogical(A)) return RTV.logical(true);
+      if (isRuntimeComplexNumber(A)) return RTV.logical(true);
+
+      if (!isRuntimeTensor(A))
+        throw new RuntimeError("issymmetric: argument must be numeric");
+
+      const [m, n] = tensorSize2D(A);
+      if (m !== n) return RTV.logical(false);
+
+      // Parse optional 'skew' flag
+      let skew = false;
+      if (args.length === 2) {
+        const opt = args[1];
+        let s: string | undefined;
+        if (isRuntimeString(opt)) s = opt.toLowerCase();
+        else if (isRuntimeChar(opt)) s = opt.value.toLowerCase();
+        if (s === "skew") skew = true;
+        else if (s !== "nonskew")
+          throw new RuntimeError(
+            "issymmetric: second argument must be 'skew' or 'nonskew'"
+          );
+      }
+
+      // Check A(i,j) == A(j,i) or A(i,j) == -A(j,i)
+      for (let i = 0; i < n; i++) {
+        for (let j = i; j < n; j++) {
+          const aij = A.data[colMajorIndex(i, j, m)];
+          const aji = A.data[colMajorIndex(j, i, m)];
+          if (skew) {
+            if (aij !== -aji) return RTV.logical(false);
+          } else {
+            if (aij !== aji) return RTV.logical(false);
+          }
+          // Also check imaginary parts if complex
+          if (A.imag) {
+            const aijIm = A.imag[colMajorIndex(i, j, m)];
+            const ajiIm = A.imag[colMajorIndex(j, i, m)];
+            if (skew) {
+              if (aijIm !== -ajiIm) return RTV.logical(false);
+            } else {
+              if (aijIm !== ajiIm) return RTV.logical(false);
+            }
+          }
+        }
+      }
+      return RTV.logical(true);
+    })
+  );
+
+  // ishermitian(A) — true if A == A' (conjugate transpose, within tolerance)
+  // ishermitian(A, 'skew') — true if A == -A'
+  register(
+    "ishermitian",
+    builtinSingle(args => {
+      if (args.length < 1 || args.length > 2)
+        throw new RuntimeError("ishermitian requires 1 or 2 arguments");
+
+      const A = args[0];
+
+      // Scalar is always Hermitian
+      if (isRuntimeNumber(A) || isRuntimeLogical(A)) return RTV.logical(true);
+      if (isRuntimeComplexNumber(A)) {
+        // Hermitian scalar: im == 0; skew-Hermitian: re == 0
+        let skew = false;
+        if (args.length === 2) {
+          const opt = args[1];
+          let s: string | undefined;
+          if (isRuntimeString(opt)) s = opt.toLowerCase();
+          else if (isRuntimeChar(opt)) s = opt.value.toLowerCase();
+          if (s === "skew") skew = true;
+        }
+        if (skew) return RTV.logical(A.re === 0);
+        return RTV.logical(A.im === 0);
+      }
+
+      if (!isRuntimeTensor(A))
+        throw new RuntimeError("ishermitian: argument must be numeric");
+
+      const [m, n] = tensorSize2D(A);
+      if (m !== n) return RTV.logical(false);
+
+      // Parse optional 'skew' flag
+      let skew = false;
+      if (args.length === 2) {
+        const opt = args[1];
+        let s: string | undefined;
+        if (isRuntimeString(opt)) s = opt.toLowerCase();
+        else if (isRuntimeChar(opt)) s = opt.value.toLowerCase();
+        if (s === "skew") skew = true;
+        else if (s !== "nonskew")
+          throw new RuntimeError(
+            "ishermitian: second argument must be 'skew' or 'nonskew'"
+          );
+      }
+
+      // Check A(i,j) == conj(A(j,i)) or A(i,j) == -conj(A(j,i))
+      const hasImag = A.imag !== undefined;
+      for (let i = 0; i < n; i++) {
+        for (let j = i; j < n; j++) {
+          const aijRe = A.data[colMajorIndex(i, j, m)];
+          const ajiRe = A.data[colMajorIndex(j, i, m)];
+          const aijIm = hasImag ? A.imag![colMajorIndex(i, j, m)] : 0;
+          const ajiIm = hasImag ? A.imag![colMajorIndex(j, i, m)] : 0;
+          // conj(A(j,i)) = (ajiRe, -ajiIm)
+          if (skew) {
+            // Check A(i,j) == -conj(A(j,i)) => aijRe == -ajiRe, aijIm == ajiIm
+            if (aijRe !== -ajiRe) return RTV.logical(false);
+            if (aijIm !== ajiIm) return RTV.logical(false);
+          } else {
+            // Check A(i,j) == conj(A(j,i)) => aijRe == ajiRe, aijIm == -ajiIm
+            if (aijRe !== ajiRe) return RTV.logical(false);
+            if (aijIm !== -ajiIm) return RTV.logical(false);
+          }
+        }
+      }
+      return RTV.logical(true);
     })
   );
 }
