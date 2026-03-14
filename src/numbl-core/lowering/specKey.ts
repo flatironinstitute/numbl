@@ -5,25 +5,15 @@
  * of specialized function versions by (name, argTypes).
  */
 
-import { type ItemType } from "../lowering/itemTypes.js";
-
-/** Convert a type to a JSON-serializable descriptor for specialization keys. */
-function typeToDescriptor(
-  ty: ItemType | undefined
-): { kind: string } | { kind: "ClassInstance"; className: string } {
-  if (!ty) return { kind: "Unknown" };
-  if (ty.kind === "ClassInstance") {
-    return { kind: "ClassInstance", className: ty.className };
-  }
-  return { kind: ty.kind };
-}
+import { type ItemType, typeToString } from "../lowering/itemTypes.js";
 
 /**
  * Compute a specialization cache key as a deterministic JSON string.
- * Captures full type info including class names for ClassInstance.
+ * Uses typeToString to capture full type info (isComplex, isLogical,
+ * className, knownFields, etc.) so that distinct types get distinct keys.
  */
 export function computeSpecKey(name: string, argTypes: ItemType[]): string {
-  const args = argTypes.map(t => typeToDescriptor(t));
+  const args = argTypes.map(t => typeToString(t));
   return JSON.stringify({ name, args });
 }
 
@@ -32,7 +22,7 @@ export function computeSpecKey(name: string, argTypes: ItemType[]): string {
  * Uses FNV-1a to produce an 8-character hex string.
  */
 export function hashForJsId(argTypes: ItemType[]): string {
-  const args = argTypes.map(t => typeToDescriptor(t));
+  const args = argTypes.map(t => typeToString(t));
   const input = JSON.stringify(args);
   let hash = 0x811c9dc5; // FNV offset basis
   for (let i = 0; i < input.length; i++) {
