@@ -50,46 +50,27 @@ Napi::Value Inv(const Napi::CallbackInfo& info) {
   std::vector<int> ipiv(n);
   int info_val = 0;
 
-  // ── Step 1: LU factorisation ─────────────────────────────────────────────
+  // Step 1: LU factorisation
   dgetrf_(&n, &n, a.data(), &n, ipiv.data(), &info_val);
-
-  if (info_val > 0) {
-    Napi::Error::New(env, "inv: matrix is singular (dgetrf)")
-        .ThrowAsJavaScriptException();
+  if (!checkLapackInfo(env, info_val, "inv", "dgetrf",
+      "matrix is singular (dgetrf)"))
     return env.Null();
-  }
-  if (info_val < 0) {
-    Napi::Error::New(env, "inv: illegal argument passed to dgetrf")
-        .ThrowAsJavaScriptException();
-    return env.Null();
-  }
 
-  // ── Step 2: Query optimal workspace size ─────────────────────────────────
+  // Step 2: Query optimal workspace size
   int lwork = -1;
   double work_query = 0.0;
   dgetri_(&n, a.data(), &n, ipiv.data(), &work_query, &lwork, &info_val);
   lwork = static_cast<int>(work_query);
-  if (lwork < 1) lwork = n; // conservative fallback
+  if (lwork < 1) lwork = n;
 
-  // ── Step 3: Compute inverse ───────────────────────────────────────────────
+  // Step 3: Compute inverse
   std::vector<double> work(lwork);
   dgetri_(&n, a.data(), &n, ipiv.data(), work.data(), &lwork, &info_val);
-
-  if (info_val > 0) {
-    Napi::Error::New(env, "inv: matrix is singular (dgetri)")
-        .ThrowAsJavaScriptException();
+  if (!checkLapackInfo(env, info_val, "inv", "dgetri",
+      "matrix is singular (dgetri)"))
     return env.Null();
-  }
-  if (info_val < 0) {
-    Napi::Error::New(env, "inv: illegal argument passed to dgetri")
-        .ThrowAsJavaScriptException();
-    return env.Null();
-  }
 
-  // ── Return result as a new Float64Array ───────────────────────────────────
-  auto result = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  std::memcpy(result.Data(), a.data(), n * n * sizeof(double));
-  return result;
+  return vecToF64(env, a);
 }
 
 // ── invComplex() ──────────────────────────────────────────────────────────────
@@ -128,66 +109,34 @@ Napi::Value InvComplex(const Napi::CallbackInfo& info) {
     return env.Null();
   }
 
-  auto float64arrRe = info[0].As<Napi::Float64Array>();
-  auto float64arrIm = info[1].As<Napi::Float64Array>();
-
-  // Copy into working buffer with interleaved format (LAPACK complex convention)
-  std::vector<lapack_complex_double> a(n * n);
-  for (int i = 0; i < n * n; ++i) {
-    a[i].real = float64arrRe[i];
-    a[i].imag = float64arrIm[i];
-  }
+  auto a = splitToInterleaved(
+      info[0].As<Napi::Float64Array>(),
+      info[1].As<Napi::Float64Array>(), n * n);
 
   std::vector<int> ipiv(n);
   int info_val = 0;
 
-  // ── Step 1: Complex LU factorisation ──────────────────────────────────────
+  // Step 1: Complex LU factorisation
   zgetrf_(&n, &n, a.data(), &n, ipiv.data(), &info_val);
-
-  if (info_val > 0) {
-    Napi::Error::New(env, "invComplex: matrix is singular (zgetrf)")
-        .ThrowAsJavaScriptException();
+  if (!checkLapackInfo(env, info_val, "invComplex", "zgetrf",
+      "matrix is singular (zgetrf)"))
     return env.Null();
-  }
-  if (info_val < 0) {
-    Napi::Error::New(env, "invComplex: illegal argument passed to zgetrf")
-        .ThrowAsJavaScriptException();
-    return env.Null();
-  }
 
-  // ── Step 2: Query optimal workspace size ─────────────────────────────────
+  // Step 2: Query optimal workspace size
   int lwork = -1;
   lapack_complex_double work_query;
   zgetri_(&n, a.data(), &n, ipiv.data(), &work_query, &lwork, &info_val);
   lwork = static_cast<int>(work_query.real);
-  if (lwork < 1) lwork = n; // conservative fallback
+  if (lwork < 1) lwork = n;
 
-  // ── Step 3: Compute inverse ───────────────────────────────────────────────
+  // Step 3: Compute inverse
   std::vector<lapack_complex_double> work(lwork);
   zgetri_(&n, a.data(), &n, ipiv.data(), work.data(), &lwork, &info_val);
-
-  if (info_val > 0) {
-    Napi::Error::New(env, "invComplex: matrix is singular (zgetri)")
-        .ThrowAsJavaScriptException();
+  if (!checkLapackInfo(env, info_val, "invComplex", "zgetri",
+      "matrix is singular (zgetri)"))
     return env.Null();
-  }
-  if (info_val < 0) {
-    Napi::Error::New(env, "invComplex: illegal argument passed to zgetri")
-        .ThrowAsJavaScriptException();
-    return env.Null();
-  }
-
-  // ── Return result as {re, im} with separate Float64Arrays ─────────────────
-  auto resultRe = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-  auto resultIm = Napi::Float64Array::New(env, static_cast<size_t>(n * n));
-
-  for (int i = 0; i < n * n; ++i) {
-    resultRe[i] = a[i].real;
-    resultIm[i] = a[i].imag;
-  }
 
   auto result = Napi::Object::New(env);
-  result.Set("re", resultRe);
-  result.Set("im", resultIm);
+  setSplitComplex(env, result, "re", "im", a.data(), n * n);
   return result;
 }

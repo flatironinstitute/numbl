@@ -6,12 +6,11 @@
  *
  *   qrComplex(dataRe: Float64Array, dataIm: Float64Array, m: number, n: number,
  *             econ: boolean, wantQ: boolean):
- *             {QRe?: Float64Array, QIm?: Float64Array, RRe: Float64Array, RIm: Float64Array}
+ *             {QRe?, QIm?, RRe, RIm}
  *
- *     QR decomposition of an m×n matrix stored in column-major order.
  *     econ=true:   economy/thin QR — Q is m×k, R is k×n  (k = min(m,n))
  *     econ=false:  full QR         — Q is m×m, R is m×n
- *     wantQ=false: skips Q generation; Q properties are absent from the returned object.
+ *     wantQ=false: skips Q generation.
  */
 
 #include "lapack_common.h"
@@ -52,17 +51,15 @@ Napi::Value Qr(const Napi::CallbackInfo& info) {
   }
 
   auto float64arr = info[0].As<Napi::Float64Array>();
-  int k = m < n ? m : n; // k = min(m, n)
+  int k = m < n ? m : n;
 
-  // ── Step 1: QR factorisation (dgeqrf) ─────────────────────────────────────
-  // Copy input into working buffer (dgeqrf overwrites A in-place)
+  // Step 1: QR factorisation (dgeqrf)
   std::vector<double> a(m * n);
   std::memcpy(a.data(), float64arr.Data(), m * n * sizeof(double));
 
   std::vector<double> tau(k);
   int info_val = 0;
 
-  // Query optimal workspace for dgeqrf
   int lwork = -1;
   double work_query = 0.0;
   dgeqrf_(&m, &n, a.data(), &m, tau.data(), &work_query, &lwork, &info_val);
@@ -72,41 +69,32 @@ Napi::Value Qr(const Napi::CallbackInfo& info) {
   std::vector<double> work(lwork);
   dgeqrf_(&m, &n, a.data(), &m, tau.data(), work.data(), &lwork, &info_val);
 
-  if (info_val != 0) {
-    Napi::Error::New(env, "qr: dgeqrf failed")
-        .ThrowAsJavaScriptException();
+  if (!checkLapackInfo(env, info_val, "qr", "dgeqrf"))
     return env.Null();
-  }
 
-  // ── Step 2: Extract R from the upper triangle of the factored matrix ───────
-  // Economy R: k×n   Full R: m×n (rows k..m-1 are zero)
+  // Step 2: Extract R from the upper triangle
   int r_rows = econ ? k : m;
   std::vector<double> R(r_rows * n, 0.0);
   for (int j = 0; j < n; j++) {
-    int ilim = j < k ? j : k - 1; // min(j, k-1)
+    int ilim = j < k ? j : k - 1;
     for (int i = 0; i <= ilim; i++) {
       R[i + j * r_rows] = a[i + j * m];
     }
   }
 
-  // ── Step 3: Generate Q via dorgqr (only if wantQ) ─────────────────────────
-  // Economy Q: m×k   Full Q: m×m
+  // Step 3: Generate Q via dorgqr (only if wantQ)
   int q_cols = econ ? k : m;
-
   auto result = Napi::Object::New(env);
 
   if (wantQ) {
-    // Build a buffer of size m×q_cols containing the first q_cols columns of
-    // the factored matrix (remaining columns are zero — dorgqr extends Q).
     std::vector<double> q_buf(m * q_cols, 0.0);
-    int cols_to_copy = n < q_cols ? n : q_cols; // min(n, q_cols)
+    int cols_to_copy = n < q_cols ? n : q_cols;
     for (int j = 0; j < cols_to_copy; j++) {
       for (int i = 0; i < m; i++) {
         q_buf[i + j * m] = a[i + j * m];
       }
     }
 
-    // Query optimal workspace for dorgqr
     lwork = -1;
     dorgqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
             &work_query, &lwork, &info_val);
@@ -117,21 +105,13 @@ Napi::Value Qr(const Napi::CallbackInfo& info) {
     dorgqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
             work.data(), &lwork, &info_val);
 
-    if (info_val != 0) {
-      Napi::Error::New(env, "qr: dorgqr failed")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "qr", "dorgqr"))
       return env.Null();
-    }
 
-    auto Q_arr = Napi::Float64Array::New(env, static_cast<size_t>(m * q_cols));
-    std::memcpy(Q_arr.Data(), q_buf.data(), m * q_cols * sizeof(double));
-    result.Set("Q", Q_arr);
+    result.Set("Q", vecToF64(env, q_buf));
   }
 
-  auto R_arr = Napi::Float64Array::New(env, static_cast<size_t>(r_rows * n));
-  std::memcpy(R_arr.Data(), R.data(), r_rows * n * sizeof(double));
-  result.Set("R", R_arr);
-
+  result.Set("R", vecToF64(env, R));
   return result;
 }
 
@@ -178,21 +158,16 @@ Napi::Value QrComplex(const Napi::CallbackInfo& info) {
     return env.Null();
   }
 
-  auto float64arrRe = info[0].As<Napi::Float64Array>();
-  auto float64arrIm = info[1].As<Napi::Float64Array>();
   int k = m < n ? m : n;
 
-  // ── Step 1: Convert to interleaved complex format ──────────────────────────
-  std::vector<lapack_complex_double> a(m * n);
-  for (int i = 0; i < m * n; ++i) {
-    a[i].real = float64arrRe[i];
-    a[i].imag = float64arrIm[i];
-  }
+  auto a = splitToInterleaved(
+      info[0].As<Napi::Float64Array>(),
+      info[1].As<Napi::Float64Array>(), m * n);
 
   std::vector<lapack_complex_double> tau(k);
   int info_val = 0;
 
-  // ── Step 2: QR factorisation (zgeqrf) ──────────────────────────────────────
+  // Step 1: QR factorisation (zgeqrf)
   int lwork = -1;
   lapack_complex_double work_query;
   zgeqrf_(&m, &n, a.data(), &m, tau.data(), &work_query, &lwork, &info_val);
@@ -202,13 +177,10 @@ Napi::Value QrComplex(const Napi::CallbackInfo& info) {
   std::vector<lapack_complex_double> work(lwork);
   zgeqrf_(&m, &n, a.data(), &m, tau.data(), work.data(), &lwork, &info_val);
 
-  if (info_val != 0) {
-    Napi::Error::New(env, "qrComplex: zgeqrf failed")
-        .ThrowAsJavaScriptException();
+  if (!checkLapackInfo(env, info_val, "qrComplex", "zgeqrf"))
     return env.Null();
-  }
 
-  // ── Step 3: Extract R from the upper triangle ──────────────────────────────
+  // Step 2: Extract R from the upper triangle
   int r_rows = econ ? k : m;
   std::vector<double> R_re(r_rows * n, 0.0);
   std::vector<double> R_im(r_rows * n, 0.0);
@@ -220,9 +192,8 @@ Napi::Value QrComplex(const Napi::CallbackInfo& info) {
     }
   }
 
-  // ── Step 4: Generate Q via zungqr (only if wantQ) ─────────────────────────
+  // Step 3: Generate Q via zungqr (only if wantQ)
   int q_cols = econ ? k : m;
-
   auto result = Napi::Object::New(env);
 
   if (wantQ) {
@@ -244,28 +215,14 @@ Napi::Value QrComplex(const Napi::CallbackInfo& info) {
     zungqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
             work.data(), &lwork, &info_val);
 
-    if (info_val != 0) {
-      Napi::Error::New(env, "qrComplex: zungqr failed")
-          .ThrowAsJavaScriptException();
+    if (!checkLapackInfo(env, info_val, "qrComplex", "zungqr"))
       return env.Null();
-    }
 
-    auto QRe_arr = Napi::Float64Array::New(env, static_cast<size_t>(m * q_cols));
-    auto QIm_arr = Napi::Float64Array::New(env, static_cast<size_t>(m * q_cols));
-    for (int i = 0; i < m * q_cols; ++i) {
-      QRe_arr[i] = q_buf[i].real;
-      QIm_arr[i] = q_buf[i].imag;
-    }
-    result.Set("QRe", QRe_arr);
-    result.Set("QIm", QIm_arr);
+    setSplitComplex(env, result, "QRe", "QIm", q_buf.data(), m * q_cols);
   }
 
-  auto RRe_arr = Napi::Float64Array::New(env, static_cast<size_t>(r_rows * n));
-  auto RIm_arr = Napi::Float64Array::New(env, static_cast<size_t>(r_rows * n));
-  std::memcpy(RRe_arr.Data(), R_re.data(), r_rows * n * sizeof(double));
-  std::memcpy(RIm_arr.Data(), R_im.data(), r_rows * n * sizeof(double));
-  result.Set("RRe", RRe_arr);
-  result.Set("RIm", RIm_arr);
-
+  // R uses pre-extracted real arrays (not interleaved), set directly
+  result.Set("RRe", vecToF64(env, R_re));
+  result.Set("RIm", vecToF64(env, R_im));
   return result;
 }

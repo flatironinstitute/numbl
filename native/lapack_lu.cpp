@@ -48,7 +48,6 @@ Napi::Value Lu(const Napi::CallbackInfo& info) {
   auto float64arr = info[0].As<Napi::Float64Array>();
   int k = m < n ? m : n;
 
-  // Copy input (dgetrf overwrites A in-place)
   std::vector<double> a(m * n);
   std::memcpy(a.data(), float64arr.Data(), m * n * sizeof(double));
 
@@ -58,19 +57,13 @@ Napi::Value Lu(const Napi::CallbackInfo& info) {
   dgetrf_(&m, &n, a.data(), &m, ipiv.data(), &info_val);
 
   if (info_val < 0) {
-    Napi::Error::New(env, "lu: illegal argument passed to dgetrf")
-        .ThrowAsJavaScriptException();
+    checkLapackInfo(env, info_val, "lu", "dgetrf");
     return env.Null();
   }
-  auto LU_arr = Napi::Float64Array::New(env, static_cast<size_t>(m * n));
-  std::memcpy(LU_arr.Data(), a.data(), m * n * sizeof(double));
-
-  auto ipiv_arr = Napi::Int32Array::New(env, static_cast<size_t>(k));
-  std::memcpy(ipiv_arr.Data(), ipiv.data(), k * sizeof(int));
 
   auto result = Napi::Object::New(env);
-  result.Set("LU", LU_arr);
-  result.Set("ipiv", ipiv_arr);
+  result.Set("LU", vecToF64(env, a));
+  result.Set("ipiv", vecToI32(env, ipiv));
   return result;
 }
 
@@ -113,16 +106,11 @@ Napi::Value LuComplex(const Napi::CallbackInfo& info) {
     return env.Null();
   }
 
-  auto float64arrRe = info[0].As<Napi::Float64Array>();
-  auto float64arrIm = info[1].As<Napi::Float64Array>();
   int k = m < n ? m : n;
 
-  // Convert to interleaved complex format
-  std::vector<lapack_complex_double> a(m * n);
-  for (int i = 0; i < m * n; ++i) {
-    a[i].real = float64arrRe[i];
-    a[i].imag = float64arrIm[i];
-  }
+  auto a = splitToInterleaved(
+      info[0].As<Napi::Float64Array>(),
+      info[1].As<Napi::Float64Array>(), m * n);
 
   std::vector<int> ipiv(k);
   int info_val = 0;
@@ -130,23 +118,12 @@ Napi::Value LuComplex(const Napi::CallbackInfo& info) {
   zgetrf_(&m, &n, a.data(), &m, ipiv.data(), &info_val);
 
   if (info_val < 0) {
-    Napi::Error::New(env, "luComplex: illegal argument passed to zgetrf")
-        .ThrowAsJavaScriptException();
+    checkLapackInfo(env, info_val, "luComplex", "zgetrf");
     return env.Null();
   }
-  auto LURe_arr = Napi::Float64Array::New(env, static_cast<size_t>(m * n));
-  auto LUIm_arr = Napi::Float64Array::New(env, static_cast<size_t>(m * n));
-  for (int i = 0; i < m * n; ++i) {
-    LURe_arr[i] = a[i].real;
-    LUIm_arr[i] = a[i].imag;
-  }
-
-  auto ipiv_arr = Napi::Int32Array::New(env, static_cast<size_t>(k));
-  std::memcpy(ipiv_arr.Data(), ipiv.data(), k * sizeof(int));
 
   auto result = Napi::Object::New(env);
-  result.Set("LURe", LURe_arr);
-  result.Set("LUIm", LUIm_arr);
-  result.Set("ipiv", ipiv_arr);
+  setSplitComplex(env, result, "LURe", "LUIm", a.data(), m * n);
+  result.Set("ipiv", vecToI32(env, ipiv));
   return result;
 }

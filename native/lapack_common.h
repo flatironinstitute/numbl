@@ -8,6 +8,7 @@
 #include <napi.h>
 #include <algorithm>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // ── Complex number type used by LAPACK (interleaved real and imaginary parts) ─
@@ -173,6 +174,72 @@ extern "C" {
                lapack_complex_double* vr, int* ldvr,
                int* mm, int* m,
                lapack_complex_double* work, double* rwork, int* info);
+}
+
+// ── Common helpers to reduce boilerplate across LAPACK wrappers ───────────────
+
+// Convert split real/imag Float64Arrays into interleaved complex vector.
+inline std::vector<lapack_complex_double> splitToInterleaved(
+    const Napi::Float64Array& re, const Napi::Float64Array& im, int n) {
+  std::vector<lapack_complex_double> out(n);
+  for (int i = 0; i < n; ++i) {
+    out[i].real = re[i];
+    out[i].imag = im[i];
+  }
+  return out;
+}
+
+// Create a new Float64Array from a std::vector<double>.
+inline Napi::Float64Array vecToF64(Napi::Env env, const std::vector<double>& v) {
+  auto arr = Napi::Float64Array::New(env, v.size());
+  std::memcpy(arr.Data(), v.data(), v.size() * sizeof(double));
+  return arr;
+}
+
+// Create a new Float64Array from raw pointer + count.
+inline Napi::Float64Array ptrToF64(Napi::Env env, const double* data, size_t n) {
+  auto arr = Napi::Float64Array::New(env, n);
+  std::memcpy(arr.Data(), data, n * sizeof(double));
+  return arr;
+}
+
+// Create a new Int32Array from a std::vector<int>.
+inline Napi::Int32Array vecToI32(Napi::Env env, const std::vector<int>& v) {
+  auto arr = Napi::Int32Array::New(env, v.size());
+  std::memcpy(arr.Data(), v.data(), v.size() * sizeof(int));
+  return arr;
+}
+
+// Deinterleave complex vector into separate re/im Float64Arrays and set on obj.
+inline void setSplitComplex(Napi::Env env, Napi::Object& obj,
+    const char* reKey, const char* imKey,
+    const lapack_complex_double* data, int n) {
+  auto re = Napi::Float64Array::New(env, static_cast<size_t>(n));
+  auto im = Napi::Float64Array::New(env, static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    re[i] = data[i].real;
+    im[i] = data[i].imag;
+  }
+  obj.Set(reKey, re);
+  obj.Set(imKey, im);
+}
+
+// Check LAPACK info value and throw on error. Returns true if info == 0.
+inline bool checkLapackInfo(Napi::Env env, int info_val,
+    const char* func, const char* routine,
+    const char* singularMsg = nullptr) {
+  if (info_val == 0) return true;
+  std::string msg = std::string(func) + ": ";
+  if (info_val < 0) {
+    msg += "illegal argument passed to ";
+    msg += routine;
+  } else if (singularMsg) {
+    msg += singularMsg;
+  } else {
+    msg += std::string(routine) + " failed (info=" + std::to_string(info_val) + ")";
+  }
+  Napi::Error::New(env, msg).ThrowAsJavaScriptException();
+  return false;
 }
 
 // ── Function prototypes (implemented in their respective .cpp files) ──────────
