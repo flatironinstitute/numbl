@@ -30,8 +30,8 @@ function findEntry(
   index: PackageIndex,
   packageName: string
 ): PackageIndexEntry | undefined {
-  // In the browser, prefer wasm packages, then fall back to "all"
-  for (const candidate of ["wasm", "all"]) {
+  // In the browser, prefer wasm packages, then fall back to "any"
+  for (const candidate of ["numbl_wasm", "any"]) {
     const entry = index.packages.find(
       p => p.name === packageName && p.architecture === candidate
     );

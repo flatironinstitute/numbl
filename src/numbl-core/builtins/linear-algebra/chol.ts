@@ -14,13 +14,18 @@ import {
   FloatXArray,
   FloatXArrayType,
   isRuntimeNumber,
-  isRuntimeString,
   isRuntimeTensor,
   RuntimeValue,
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { matrix, out, unknownMatrix } from "./check-helpers.js";
+import {
+  matrix,
+  out,
+  parseStringArgLower,
+  toF64,
+  unknownMatrix,
+} from "./check-helpers.js";
 import {
   IType,
   isNum,
@@ -37,8 +42,7 @@ function cholLapack(
 ): { R: Float64Array; info: number } | null {
   const bridge = getEffectiveBridge("chol", "chol");
   if (!bridge?.chol) return null;
-  const f64 = data instanceof Float64Array ? data : new Float64Array(data);
-  return bridge.chol(f64, n, upper);
+  return bridge.chol(toF64(data), n, upper);
 }
 
 function cholLapackComplex(
@@ -49,9 +53,7 @@ function cholLapackComplex(
 ): { RRe: Float64Array; RIm: Float64Array; info: number } | null {
   const bridge = getEffectiveBridge("chol", "cholComplex");
   if (!bridge?.cholComplex) return null;
-  const re = dataRe instanceof Float64Array ? dataRe : new Float64Array(dataRe);
-  const im = dataIm instanceof Float64Array ? dataIm : new Float64Array(dataIm);
-  return bridge.cholComplex(re, im, n, upper);
+  return bridge.cholComplex(toF64(dataRe), toF64(dataIm), n, upper);
 }
 
 /**
@@ -62,16 +64,7 @@ function parseTriangleArg(
   arg: RuntimeValue | undefined
 ): "upper" | "lower" | null {
   if (arg === undefined) return "upper";
-  let s: string | undefined;
-  if (isRuntimeString(arg)) {
-    s = (arg as string).replace(/^['"]|['"]$/g, "").toLowerCase();
-  } else if (
-    typeof arg === "object" &&
-    arg !== null &&
-    (arg as { kind?: string }).kind === "char"
-  ) {
-    s = (arg as { value: string }).value.toLowerCase();
-  }
+  const s = parseStringArgLower(arg);
   if (s === "upper") return "upper";
   if (s === "lower") return "lower";
   return null;

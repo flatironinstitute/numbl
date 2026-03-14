@@ -19,7 +19,7 @@ import {
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, unknownMatrix } from "./check-helpers.js";
+import { out, toF64, unknownMatrix } from "./check-helpers.js";
 import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helpers ────────────────────────────────────────────────────────────
@@ -39,9 +39,7 @@ export function linsolveLapack(
   const bridge = getEffectiveBridge("linsolve", "linsolve");
   if (!bridge?.linsolve) return null;
 
-  const f64A = A instanceof Float64Array ? A : new Float64Array(A);
-  const f64B = B instanceof Float64Array ? B : new Float64Array(B);
-  return bridge.linsolve(f64A, m, n, f64B, nrhs);
+  return bridge.linsolve(toF64(A), m, n, toF64(B), nrhs);
 }
 
 /**
@@ -63,11 +61,15 @@ export function linsolveComplexLapack(
       "linsolveComplex: no bridge available (should not happen)"
     );
 
-  const f64ARe = ARe instanceof Float64Array ? ARe : new Float64Array(ARe);
-  const f64AIm = AIm instanceof Float64Array ? AIm : new Float64Array(AIm);
-  const f64BRe = BRe instanceof Float64Array ? BRe : new Float64Array(BRe);
-  const f64BIm = BIm instanceof Float64Array ? BIm : new Float64Array(BIm);
-  return bridge.linsolveComplex(f64ARe, f64AIm, m, n, f64BRe, f64BIm, nrhs);
+  return bridge.linsolveComplex(
+    toF64(ARe),
+    toF64(AIm),
+    m,
+    n,
+    toF64(BRe),
+    toF64(BIm),
+    nrhs
+  );
 }
 
 // ── Builtin registration ──────────────────────────────────────────────────────

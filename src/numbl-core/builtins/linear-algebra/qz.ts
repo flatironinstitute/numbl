@@ -23,7 +23,7 @@ import {
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, unknownMatrix } from "./check-helpers.js";
+import { out, toF64, unknownMatrix } from "./check-helpers.js";
 import { isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helpers ───────────────────────────────────────────────────────────
@@ -60,10 +60,6 @@ function qzComplexLapack(
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-
-function toF64(data: Float32Array | Float64Array): Float64Array {
-  return data instanceof Float64Array ? data : new Float64Array(data);
-}
 
 function zeroF64(n: number): Float64Array {
   return new Float64Array(n);

@@ -40,6 +40,91 @@ import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 
+// ── Plot dispatch helper ─────────────────────────────────────────────────
+
+/**
+ * Dispatches plot/graphics function calls.
+ * Returns the result if `name` is a plotting function, or `undefined` otherwise.
+ */
+function dispatchPlotCall(
+  rt: Runtime,
+  name: string,
+  args: unknown[]
+): unknown | undefined {
+  switch (name) {
+    case "plot":
+      return rt.plot_call(args.map(a => ensureRuntimeValue(a)));
+    case "plot3":
+      return rt.plot3_call(args.map(a => ensureRuntimeValue(a)));
+    case "surf":
+      return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
+    case "scatter":
+      return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
+    case "imagesc":
+      return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
+    case "contour":
+      return rt.contour_call(
+        args.map(a => ensureRuntimeValue(a)),
+        false
+      );
+    case "contourf":
+      return rt.contour_call(
+        args.map(a => ensureRuntimeValue(a)),
+        true
+      );
+    case "mesh":
+    case "waterfall":
+      return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+    default:
+      return undefined;
+  }
+}
+
+// ── arrayfun/cellfun result packing ──────────────────────────────────────
+
+/** Pack uniform-output results into a tensor (if all scalar) or a cell. */
+function packResults(results: RuntimeValue[], shape: number[]): RuntimeValue {
+  const allScalar = results.every(
+    r =>
+      isRuntimeNumber(r) ||
+      isRuntimeLogical(r) ||
+      (isRuntimeTensor(r) && r.data.length === 1)
+  );
+  if (allScalar) {
+    const data = new FloatXArray(results.length);
+    const allLogical = results.every(r => isRuntimeLogical(r));
+    for (let i = 0; i < results.length; i++) {
+      data[i] = toNumber(results[i]);
+    }
+    const result = RTV.tensor(data, [...shape]);
+    if (allLogical) result._isLogical = true;
+    return result;
+  }
+  return RTV.cell(results, [...shape]);
+}
+
+// ── Scalar/complex → tensor coercion ─────────────────────────────────────
+
+/** Coerce a scalar number or complex number to a 1x1 tensor, pass tensors through. */
+function coerceToTensor(
+  v: RuntimeValue,
+  fnName: string,
+  which: string
+): RuntimeTensor {
+  if (isRuntimeNumber(v)) {
+    return RTV.tensor(new FloatXArray([v]), [1, 1]);
+  }
+  if (isRuntimeComplexNumber(v)) {
+    return RTV.tensor(new FloatXArray([v.re]), [1, 1], new FloatXArray([v.im]));
+  }
+  if (isRuntimeTensor(v)) {
+    return v;
+  }
+  throw new RuntimeError(
+    `${fnName}: unsupported type for ${which} input argument: ${kstr(v)}`
+  );
+}
+
 // ── Function handles ────────────────────────────────────────────────────
 
 export function getFuncHandle(name: string): RuntimeFunction {
@@ -188,39 +273,8 @@ export function dispatch(
   try {
     // 1. Special: plot, surf (only for general dispatch, not class method calls)
     if (!targetClassName) {
-      if (name === "plot") {
-        return rt.plot_call(args.map(a => ensureRuntimeValue(a)));
-      }
-      if (name === "plot3") {
-        return rt.plot3_call(args.map(a => ensureRuntimeValue(a)));
-      }
-      if (name === "surf") {
-        return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
-      }
-      if (name === "scatter") {
-        return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
-      }
-      if (name === "imagesc") {
-        return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
-      }
-      if (name === "contour") {
-        return rt.contour_call(
-          args.map(a => ensureRuntimeValue(a)),
-          false
-        );
-      }
-      if (name === "contourf") {
-        return rt.contour_call(
-          args.map(a => ensureRuntimeValue(a)),
-          true
-        );
-      }
-      if (name === "mesh") {
-        return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-      }
-      if (name === "waterfall") {
-        return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-      }
+      const plotResult = dispatchPlotCall(rt, name, args);
+      if (plotResult !== undefined) return plotResult;
     }
 
     // 2. JIT compile on demand (local → class method → workspace).
@@ -275,40 +329,8 @@ export function callBuiltin(
   nargout: number,
   args: unknown[]
 ): unknown {
-  // 3. Special: plot, surf
-  if (name === "plot") {
-    return rt.plot_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "plot3") {
-    return rt.plot3_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "surf") {
-    return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "scatter") {
-    return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "imagesc") {
-    return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "contour") {
-    return rt.contour_call(
-      args.map(a => ensureRuntimeValue(a)),
-      false
-    );
-  }
-  if (name === "contourf") {
-    return rt.contour_call(
-      args.map(a => ensureRuntimeValue(a)),
-      true
-    );
-  }
-  if (name === "mesh") {
-    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "waterfall") {
-    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-  }
+  const plotResult = dispatchPlotCall(rt, name, args);
+  if (plotResult !== undefined) return plotResult;
   const builtin = rt.builtins[name];
   if (builtin) return builtin(nargout, args);
   throw new RuntimeError(`'${name}' is not a builtin function`);
@@ -321,39 +343,8 @@ export function callBuiltinSync(
   nargout: number,
   args: unknown[]
 ): unknown {
-  if (name === "plot") {
-    return rt.plot_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "plot3") {
-    return rt.plot3_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "surf") {
-    return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "scatter") {
-    return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "imagesc") {
-    return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "contour") {
-    return rt.contour_call(
-      args.map(a => ensureRuntimeValue(a)),
-      false
-    );
-  }
-  if (name === "contourf") {
-    return rt.contour_call(
-      args.map(a => ensureRuntimeValue(a)),
-      true
-    );
-  }
-  if (name === "mesh") {
-    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-  }
-  if (name === "waterfall") {
-    return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-  }
+  const plotResult = dispatchPlotCall(rt, name, args);
+  if (plotResult !== undefined) return plotResult;
   const builtin = rt.builtins[name];
   if (builtin) return builtin(nargout, args);
   throw new RuntimeError(`'${name}' is not a builtin function`);
@@ -623,26 +614,7 @@ export function arrayfunCellfunImpl(
         );
         return outputs;
       }
-      const outputs = allResults.map(results => {
-        const allScalar = results.every(
-          r =>
-            isRuntimeNumber(r) ||
-            isRuntimeLogical(r) ||
-            (isRuntimeTensor(r) && r.data.length === 1)
-        );
-        if (allScalar) {
-          const data = new FloatXArray(results.length);
-          const allLogical = results.every(r => isRuntimeLogical(r));
-          for (let j = 0; j < results.length; j++) {
-            data[j] = toNumber(results[j]);
-          }
-          const result = RTV.tensor(data, [...shape]);
-          if (allLogical) result._isLogical = true;
-          return result;
-        }
-        return RTV.cell(results, [...shape]);
-      });
-      return outputs;
+      return allResults.map(results => packResults(results, shape));
     }
 
     const results: RuntimeValue[] = [];
@@ -653,23 +625,7 @@ export function arrayfunCellfunImpl(
     if (!uniformOutput) {
       return RTV.cell(results, [...shape]);
     }
-    const allScalar = results.every(
-      r =>
-        isRuntimeNumber(r) ||
-        isRuntimeLogical(r) ||
-        (isRuntimeTensor(r) && r.data.length === 1)
-    );
-    if (allScalar) {
-      const data = new FloatXArray(results.length);
-      const allLogical = results.every(r => isRuntimeLogical(r));
-      for (let i = 0; i < results.length; i++) {
-        data[i] = toNumber(results[i]);
-      }
-      const result = RTV.tensor(data, [...shape]);
-      if (allLogical) result._isLogical = true;
-      return result;
-    }
-    return RTV.cell(results, [...shape]);
+    return packResults(results, shape);
   }
   // Scalar input
   const r = callFn(collectArgs(0));
@@ -822,38 +778,8 @@ export function bsxfunImpl(
 
   const rawA = ensureRuntimeValue(args[1]);
   const rawB = ensureRuntimeValue(args[2]);
-  let a: RuntimeTensor;
-  let b: RuntimeTensor;
-  if (isRuntimeNumber(rawA)) {
-    a = RTV.tensor(new FloatXArray([rawA]), [1, 1]);
-  } else if (isRuntimeComplexNumber(rawA)) {
-    a = RTV.tensor(
-      new FloatXArray([rawA.re]),
-      [1, 1],
-      new FloatXArray([rawA.im])
-    );
-  } else if (isRuntimeTensor(rawA)) {
-    a = rawA;
-  } else {
-    throw new RuntimeError(
-      `bsxfun: unsupported type for first input argument: ${kstr(rawA)}`
-    );
-  }
-  if (isRuntimeNumber(rawB)) {
-    b = RTV.tensor(new FloatXArray([rawB]), [1, 1]);
-  } else if (isRuntimeComplexNumber(rawB)) {
-    b = RTV.tensor(
-      new FloatXArray([rawB.re]),
-      [1, 1],
-      new FloatXArray([rawB.im])
-    );
-  } else if (isRuntimeTensor(rawB)) {
-    b = rawB;
-  } else {
-    throw new RuntimeError(
-      `bsxfun: unsupported type for second input argument: ${kstr(rawB)}`
-    );
-  }
+  const a = coerceToTensor(rawA, "bsxfun", "first");
+  const b = coerceToTensor(rawB, "bsxfun", "second");
 
   const outShape = getBroadcastShape(a.shape, b.shape);
   if (!outShape)
@@ -963,6 +889,28 @@ function extractSubsIndices(subs: unknown): unknown[] {
   return [subs];
 }
 
+/** Apply a single subscript entry (shared by subsref and subsasgn). */
+function applySubsEntry(
+  rt: Runtime,
+  entry: { type: string; subs: RuntimeValue },
+  target: unknown,
+  nargout: number,
+  fnName: string
+): unknown {
+  if (entry.type === ".") {
+    return rt.getMember(target, extractSubsType(entry.subs));
+  }
+  if (entry.type === "()") {
+    return rt.index(target, extractSubsIndices(entry.subs), nargout);
+  }
+  if (entry.type === "{}") {
+    return rt.indexCell(target, extractSubsIndices(entry.subs));
+  }
+  throw new RuntimeError(
+    `${fnName}: unsupported subscript type '${entry.type}'`
+  );
+}
+
 export function subsrefBuiltin(
   rt: Runtime,
   nargout: number,
@@ -997,20 +945,7 @@ export function subsrefBuiltin(
 
   let result: unknown = obj;
   for (const entry of elements) {
-    if (entry.type === ".") {
-      const fieldName = extractSubsType(entry.subs);
-      result = rt.getMember(result, fieldName);
-    } else if (entry.type === "()") {
-      const indices = extractSubsIndices(entry.subs);
-      result = rt.index(result, indices, nargout);
-    } else if (entry.type === "{}") {
-      const indices = extractSubsIndices(entry.subs);
-      result = rt.indexCell(result, indices);
-    } else {
-      throw new RuntimeError(
-        `subsref: unsupported subscript type '${entry.type}'`
-      );
-    }
+    result = applySubsEntry(rt, entry, result, nargout, "subsref");
   }
   return result;
 }
@@ -1054,21 +989,7 @@ export function subsasgnBuiltin(
   const intermediates: unknown[] = [obj];
   let current: unknown = obj;
   for (let i = 0; i < elements.length - 1; i++) {
-    const entry = elements[i];
-    if (entry.type === ".") {
-      const fieldName = extractSubsType(entry.subs);
-      current = rt.getMember(current, fieldName);
-    } else if (entry.type === "()") {
-      const indices = extractSubsIndices(entry.subs);
-      current = rt.index(current, indices, 1);
-    } else if (entry.type === "{}") {
-      const indices = extractSubsIndices(entry.subs);
-      current = rt.indexCell(current, indices);
-    } else {
-      throw new RuntimeError(
-        `subsasgn: unsupported subscript type '${entry.type}'`
-      );
-    }
+    current = applySubsEntry(rt, elements[i], current, 1, "subsasgn");
     intermediates.push(current);
   }
 
