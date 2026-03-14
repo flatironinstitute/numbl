@@ -751,54 +751,36 @@ export function registerMiscFunctions(): void {
 
   // ── Misc ────────────────────────────────────────────────────────────────
 
-  register(
-    "true",
-    builtinSingle(args => {
-      if (args.length === 0) return RTV.logical(true);
-      const shape = parseShapeArgs(args);
-      const rows = shape[0];
-      const cols = shape[1] ?? rows;
-      const t = RTV.tensor(new FloatXArray(rows * cols).fill(1), [rows, cols]);
-      t._isLogical = true;
-      return t;
-    })
-  );
-  register(
-    "false",
-    builtinSingle(args => {
-      if (args.length === 0) return RTV.logical(false);
-      const shape = parseShapeArgs(args);
-      const rows = shape[0];
-      const cols = shape[1] ?? rows;
-      const t = RTV.tensor(new FloatXArray(rows * cols), [rows, cols]);
-      t._isLogical = true;
-      return t;
-    })
-  );
+  for (const [name, scalarVal, fillVal] of [
+    ["true", true, 1],
+    ["false", false, 0],
+  ] as const) {
+    register(
+      name,
+      builtinSingle(args => {
+        if (args.length === 0) return RTV.logical(scalarVal);
+        const shape = parseShapeArgs(args);
+        const rows = shape[0];
+        const cols = shape[1] ?? rows;
+        const t = RTV.tensor(
+          fillVal
+            ? new FloatXArray(rows * cols).fill(1)
+            : new FloatXArray(rows * cols),
+          [rows, cols]
+        );
+        t._isLogical = true;
+        return t;
+      })
+    );
+  }
 
-  register(
-    "clear",
-    builtinSingle(() => {
-      // No-op: variable clearing is not meaningful in compiled mode
-      return RTV.num(0);
-    })
-  );
-
-  register(
-    "clc",
-    builtinSingle(() => {
-      // No-op: console clearing is not meaningful in compiled mode
-      return RTV.num(0);
-    })
-  );
-
-  register(
-    "clf",
-    builtinSingle(() => {
-      // No-op: figure clearing is not meaningful in this context
-      return RTV.num(0);
-    })
-  );
+  // No-ops: these commands are not meaningful in compiled mode
+  for (const name of ["clear", "clc", "clf"]) {
+    register(
+      name,
+      builtinSingle(() => RTV.num(0))
+    );
+  }
 
   register(
     "exist",
@@ -867,12 +849,16 @@ export function registerMiscFunctions(): void {
   // arrayfun / cellfun — actual implementation is in Runtime.call() where raw
   // JS function args are still accessible.  These registrations let the
   // codegen know the functions exist.
-  register(
-    "feval",
-    builtinSingle(() => {
-      throw new RuntimeError("feval: should be handled by runtime");
-    })
-  );
+  // Runtime-handled placeholders: these are intercepted by the runtime;
+  // the registrations let codegen know they exist.
+  for (const name of ["feval", "arrayfun", "cellfun", "structfun", "bsxfun"]) {
+    register(
+      name,
+      builtinSingle(() => {
+        throw new RuntimeError(`${name}: should be handled by runtime`);
+      })
+    );
+  }
 
   register(
     "deal",
@@ -903,34 +889,6 @@ export function registerMiscFunctions(): void {
       if (!isRuntimeFunction(v))
         throw new RuntimeError("func2str: argument must be a function handle");
       return RTV.string(v.name);
-    })
-  );
-
-  register(
-    "arrayfun",
-    builtinSingle(() => {
-      throw new RuntimeError("arrayfun: should be handled by runtime");
-    })
-  );
-
-  register(
-    "cellfun",
-    builtinSingle(() => {
-      throw new RuntimeError("cellfun: should be handled by runtime");
-    })
-  );
-
-  register(
-    "structfun",
-    builtinSingle(() => {
-      throw new RuntimeError("structfun: should be handled by runtime");
-    })
-  );
-
-  register(
-    "bsxfun",
-    builtinSingle(() => {
-      throw new RuntimeError("bsxfun: should be handled by runtime");
     })
   );
 
@@ -986,24 +944,14 @@ export function registerMiscFunctions(): void {
     })
   );
 
-  // narginchk / nargoutchk — these are handled specially by codegen which
-  // passes the actual argument count. The builtin registration just lets
-  // the compiler know they exist.
-  register(
-    "narginchk",
-    builtinSingle(() => {
-      // Handled by codegen/runtime
-      return RTV.num(0);
-    })
-  );
-
-  register(
-    "nargoutchk",
-    builtinSingle(() => {
-      // Handled by codegen/runtime
-      return RTV.num(0);
-    })
-  );
+  // narginchk / nargoutchk — handled specially by codegen; registrations
+  // let the compiler know they exist.
+  for (const name of ["narginchk", "nargoutchk"]) {
+    register(
+      name,
+      builtinSingle(() => RTV.num(0))
+    );
+  }
 
   // This runtime implementation is just a placeholder that should never be called.
   register(
@@ -1018,227 +966,93 @@ export function registerMiscFunctions(): void {
     )
   );
 
-  // cart2sph: Transform Cartesian coordinates to spherical
-  register(
-    "cart2sph",
-    builtinSingle((args, nargout) => {
-      if (args.length !== 3)
-        throw new RuntimeError("cart2sph requires 3 arguments");
-      const x = args[0];
-      const y = args[1];
-      const z = args[2];
-      const xIsT = isRuntimeTensor(x);
-      const yIsT = isRuntimeTensor(y);
-      const zIsT = isRuntimeTensor(z);
-      if (xIsT || yIsT || zIsT) {
-        // Tensor case: element-wise
-        const xd = xIsT ? x.data : null;
-        const yd = yIsT ? y.data : null;
-        const zd = zIsT ? z.data : null;
-        const shape = xIsT ? x.shape : yIsT ? y.shape : (z as any).shape;
-        const len = xIsT ? xd!.length : yIsT ? yd!.length : zd!.length;
-        const azData = new FloatXArray(len);
-        const elData = new FloatXArray(len);
-        const rData = new FloatXArray(len);
-        for (let i = 0; i < len; i++) {
-          const xi = xd ? xd[i] : toNumber(x);
-          const yi = yd ? yd[i] : toNumber(y);
-          const zi = zd ? zd[i] : toNumber(z);
-          const hypotxy = Math.sqrt(xi * xi + yi * yi);
-          azData[i] = Math.atan2(yi, xi);
-          elData[i] = Math.atan2(zi, hypotxy);
-          rData[i] = Math.sqrt(xi * xi + yi * yi + zi * zi);
-        }
-        if (nargout <= 1) return RTV.tensor(azData, shape);
-        return [
-          RTV.tensor(azData, shape),
-          RTV.tensor(elData, shape),
-          RTV.tensor(rData, shape),
-        ];
-      }
-      // Scalar case
-      const xv = toNumber(x);
-      const yv = toNumber(y);
-      const zv = toNumber(z);
-      const hypotxy = Math.sqrt(xv * xv + yv * yv);
-      const az = Math.atan2(yv, xv);
-      const el = Math.atan2(zv, hypotxy);
-      const r = Math.sqrt(xv * xv + yv * yv + zv * zv);
-      if (nargout <= 1) return RTV.num(az);
-      return [RTV.num(az), RTV.num(el), RTV.num(r)];
-    }),
-    3
-  );
+  // ── Coordinate transform helper ──────────────────────────────────────
+  // Shared element-wise dispatch for 2-or-3-arg coordinate transforms
+  // that return up to 3 outputs.
 
-  // sph2cart: Transform spherical coordinates to Cartesian
-  register(
-    "sph2cart",
-    builtinSingle((args, nargout) => {
-      if (args.length !== 3)
-        throw new RuntimeError("sph2cart requires 3 arguments");
-      const az = args[0];
-      const el = args[1];
-      const r = args[2];
-      const azIsT = isRuntimeTensor(az);
-      const elIsT = isRuntimeTensor(el);
-      const rIsT = isRuntimeTensor(r);
-      if (azIsT || elIsT || rIsT) {
-        const azd = azIsT ? az.data : null;
-        const eld = elIsT ? el.data : null;
-        const rd = rIsT ? r.data : null;
-        const shape = azIsT ? az.shape : elIsT ? el.shape : (r as any).shape;
-        const len = azIsT ? azd!.length : elIsT ? eld!.length : rd!.length;
-        const xData = new FloatXArray(len);
-        const yData = new FloatXArray(len);
-        const zData = new FloatXArray(len);
-        for (let i = 0; i < len; i++) {
-          const a = azd ? azd[i] : toNumber(az);
-          const e = eld ? eld[i] : toNumber(el);
-          const rv = rd ? rd[i] : toNumber(r);
-          const rcosel = rv * Math.cos(e);
-          xData[i] = rcosel * Math.cos(a);
-          yData[i] = rcosel * Math.sin(a);
-          zData[i] = rv * Math.sin(e);
-        }
-        if (nargout <= 1) return RTV.tensor(xData, shape);
-        return [
-          RTV.tensor(xData, shape),
-          RTV.tensor(yData, shape),
-          RTV.tensor(zData, shape),
-        ];
-      }
-      const av = toNumber(az);
-      const ev = toNumber(el);
-      const rv = toNumber(r);
-      const rcosel = rv * Math.cos(ev);
-      const xv = rcosel * Math.cos(av);
-      const yv = rcosel * Math.sin(av);
-      const zv = rv * Math.sin(ev);
-      if (nargout <= 1) return RTV.num(xv);
-      return [RTV.num(xv), RTV.num(yv), RTV.num(zv)];
-    }),
-    3
-  );
+  function coordTransform(
+    name: string,
+    nArgs: 2 | 3 | "2or3",
+    nOut: number,
+    fn: (...vals: number[]) => number[]
+  ): void {
+    register(
+      name,
+      builtinSingle((args, nargout) => {
+        const minArgs = nArgs === "2or3" ? 2 : nArgs;
+        const maxArgs = nArgs === "2or3" ? 3 : nArgs;
+        if (args.length < minArgs || args.length > maxArgs)
+          throw new RuntimeError(
+            `${name} requires ${nArgs === "2or3" ? "2 or 3" : nArgs} arguments`
+          );
 
-  // cart2pol: Transform Cartesian coordinates to polar/cylindrical
-  register(
-    "cart2pol",
-    builtinSingle((args, nargout) => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("cart2pol requires 2 or 3 arguments");
-      const x = args[0];
-      const y = args[1];
-      const hasZ = args.length === 3;
-      const z = hasZ ? args[2] : undefined;
-      const xIsT = isRuntimeTensor(x);
-      const yIsT = isRuntimeTensor(y);
-      const zIsT = z !== undefined && isRuntimeTensor(z);
-      if (xIsT || yIsT || zIsT) {
-        const xd = xIsT ? x.data : null;
-        const yd = yIsT ? y.data : null;
-        const zd = zIsT ? (z as any).data : null;
-        const shape = xIsT ? x.shape : yIsT ? y.shape : (z as any).shape;
-        const len = xIsT ? xd!.length : yIsT ? yd!.length : zd!.length;
-        const thData = new FloatXArray(len);
-        const rhoData = new FloatXArray(len);
-        for (let i = 0; i < len; i++) {
-          const xi = xd ? xd[i] : toNumber(x);
-          const yi = yd ? yd[i] : toNumber(y);
-          thData[i] = Math.atan2(yi, xi);
-          rhoData[i] = Math.sqrt(xi * xi + yi * yi);
-        }
-        if (!hasZ) {
-          if (nargout <= 1) return RTV.tensor(thData, shape);
-          return [RTV.tensor(thData, shape), RTV.tensor(rhoData, shape)];
-        }
-        const zOutData = new FloatXArray(len);
-        for (let i = 0; i < len; i++) {
-          zOutData[i] = zd ? zd[i] : toNumber(z!);
-        }
-        if (nargout <= 1) return RTV.tensor(thData, shape);
-        if (nargout === 2)
-          return [RTV.tensor(thData, shape), RTV.tensor(rhoData, shape)];
-        return [
-          RTV.tensor(thData, shape),
-          RTV.tensor(rhoData, shape),
-          RTV.tensor(zOutData, shape),
-        ];
-      }
-      const xv = toNumber(x);
-      const yv = toNumber(y);
-      const th = Math.atan2(yv, xv);
-      const rho = Math.sqrt(xv * xv + yv * yv);
-      if (!hasZ) {
-        if (nargout <= 1) return RTV.num(th);
-        return [RTV.num(th), RTV.num(rho)];
-      }
-      const zv = toNumber(z!);
-      if (nargout <= 1) return RTV.num(th);
-      if (nargout === 2) return [RTV.num(th), RTV.num(rho)];
-      return [RTV.num(th), RTV.num(rho), RTV.num(zv)];
-    })
-  );
+        const n = args.length;
+        const tensors = args.map(a => (isRuntimeTensor(a) ? a : null));
+        const anyTensor = tensors.some(t => t !== null);
 
-  // pol2cart: Transform polar/cylindrical coordinates to Cartesian
-  register(
-    "pol2cart",
-    builtinSingle((args, nargout) => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("pol2cart requires 2 or 3 arguments");
-      const theta = args[0];
-      const rho = args[1];
-      const hasZ = args.length === 3;
-      const z = hasZ ? args[2] : undefined;
-      const thIsT = isRuntimeTensor(theta);
-      const rhoIsT = isRuntimeTensor(rho);
-      const zIsT = z !== undefined && isRuntimeTensor(z);
-      if (thIsT || rhoIsT || zIsT) {
-        const thd = thIsT ? theta.data : null;
-        const rhod = rhoIsT ? rho.data : null;
-        const zd = zIsT ? (z as any).data : null;
-        const shape = thIsT
-          ? theta.shape
-          : rhoIsT
-            ? rho.shape
-            : (z as any).shape;
-        const len = thIsT ? thd!.length : rhoIsT ? rhod!.length : zd!.length;
-        const xData = new FloatXArray(len);
-        const yData = new FloatXArray(len);
-        for (let i = 0; i < len; i++) {
-          const t = thd ? thd[i] : toNumber(theta);
-          const rv = rhod ? rhod[i] : toNumber(rho);
-          xData[i] = rv * Math.cos(t);
-          yData[i] = rv * Math.sin(t);
+        if (anyTensor) {
+          const refT = tensors.find(t => t !== null)!;
+          const shape = refT.shape;
+          const len = refT.data.length;
+          const datas = tensors.map(t => (t ? t.data : null));
+          const scalars = args.map((a, i) => (datas[i] ? 0 : toNumber(a)));
+          const outArrays = Array.from(
+            { length: nOut },
+            () => new FloatXArray(len)
+          );
+          for (let i = 0; i < len; i++) {
+            const vals = datas.map((d, j) => (d ? d[i] : scalars[j]));
+            const result = fn(...vals);
+            for (let k = 0; k < nOut; k++) outArrays[k][i] = result[k];
+          }
+          // For 2or3 with 3 args, pass-through the 3rd arg as 3rd output
+          const effOut = nArgs === "2or3" && n === 3 ? 3 : nOut;
+          const outTensors = outArrays.map(d => RTV.tensor(d, shape));
+          if (nArgs === "2or3" && n === 3 && nOut === 2) {
+            const zd = datas[2];
+            const zOut = new FloatXArray(len);
+            for (let i = 0; i < len; i++) zOut[i] = zd ? zd[i] : scalars[2];
+            outTensors.push(RTV.tensor(zOut, shape));
+          }
+          if (nargout <= 1) return outTensors[0];
+          return outTensors.slice(0, Math.min(nargout, effOut));
         }
-        if (!hasZ) {
-          if (nargout <= 1) return RTV.tensor(xData, shape);
-          return [RTV.tensor(xData, shape), RTV.tensor(yData, shape)];
+
+        const vals = args.map(a => toNumber(a));
+        const result = fn(...vals);
+        const effOut = nArgs === "2or3" && n === 3 ? 3 : nOut;
+        const outVals = result.map(v => RTV.num(v));
+        if (nArgs === "2or3" && n === 3 && nOut === 2) {
+          outVals.push(RTV.num(vals[2]));
         }
-        const zOutData = new FloatXArray(len);
-        for (let i = 0; i < len; i++) {
-          zOutData[i] = zd ? zd[i] : toNumber(z!);
-        }
-        if (nargout <= 1) return RTV.tensor(xData, shape);
-        if (nargout === 2)
-          return [RTV.tensor(xData, shape), RTV.tensor(yData, shape)];
-        return [
-          RTV.tensor(xData, shape),
-          RTV.tensor(yData, shape),
-          RTV.tensor(zOutData, shape),
-        ];
-      }
-      const tv = toNumber(theta);
-      const rv = toNumber(rho);
-      const xv = rv * Math.cos(tv);
-      const yv = rv * Math.sin(tv);
-      if (!hasZ) {
-        if (nargout <= 1) return RTV.num(xv);
-        return [RTV.num(xv), RTV.num(yv)];
-      }
-      const zv = toNumber(z!);
-      if (nargout <= 1) return RTV.num(xv);
-      if (nargout === 2) return [RTV.num(xv), RTV.num(yv)];
-      return [RTV.num(xv), RTV.num(yv), RTV.num(zv)];
-    })
-  );
+        if (nargout <= 1) return outVals[0];
+        return outVals.slice(0, Math.min(nargout, effOut));
+      }),
+      nOut
+    );
+  }
+
+  coordTransform("cart2sph", 3, 3, (x, y, z) => {
+    const hypotxy = Math.sqrt(x * x + y * y);
+    return [
+      Math.atan2(y, x),
+      Math.atan2(z, hypotxy),
+      Math.sqrt(x * x + y * y + z * z),
+    ];
+  });
+
+  coordTransform("sph2cart", 3, 3, (az, el, r) => {
+    const rcosel = r * Math.cos(el);
+    return [rcosel * Math.cos(az), rcosel * Math.sin(az), r * Math.sin(el)];
+  });
+
+  coordTransform("cart2pol", "2or3", 2, (x, y) => [
+    Math.atan2(y, x),
+    Math.sqrt(x * x + y * y),
+  ]);
+
+  coordTransform("pol2cart", "2or3", 2, (theta, rho) => [
+    rho * Math.cos(theta),
+    rho * Math.sin(theta),
+  ]);
 }

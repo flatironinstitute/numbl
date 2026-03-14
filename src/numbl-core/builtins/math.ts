@@ -1070,82 +1070,50 @@ export function registerMathFunctions(): void {
     1
   );
 
-  register(
-    "isnan",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isnan requires 1 argument");
-      const v = args[0];
-      if (isRuntimeNumber(v)) return RTV.logical(Number.isNaN(v));
-      if (isRuntimeLogical(v)) return RTV.logical(false);
-      if (isRuntimeComplexNumber(v))
-        return RTV.logical(Number.isNaN(v.re) || Number.isNaN(v.im));
-      if (isRuntimeTensor(v)) {
-        const result = new FloatXArray(v.data.length);
-        for (let i = 0; i < v.data.length; i++) {
-          const reNaN = Number.isNaN(v.data[i]);
-          const imNaN = v.imag ? Number.isNaN(v.imag[i]) : false;
-          result[i] = reNaN || imNaN ? 1 : 0;
+  // Shared factory for numeric predicate builtins (isnan, isinf, isfinite)
+  function numericPredicate(
+    name: string,
+    scalarTest: (x: number) => boolean,
+    logicalDefault: boolean,
+    combineReIm: "or" | "and"
+  ): void {
+    register(
+      name,
+      builtinSingle(args => {
+        if (args.length !== 1)
+          throw new RuntimeError(`${name} requires 1 argument`);
+        const v = args[0];
+        if (isRuntimeNumber(v)) return RTV.logical(scalarTest(v));
+        if (isRuntimeLogical(v)) return RTV.logical(logicalDefault);
+        if (isRuntimeComplexNumber(v)) {
+          const re = scalarTest(v.re),
+            im = scalarTest(v.im);
+          return RTV.logical(combineReIm === "or" ? re || im : re && im);
         }
-        const t = RTV.tensor(result, v.shape);
-        t._isLogical = true;
-        return t;
-      }
-      throw new RuntimeError("Expected numeric argument");
-    }),
-    1
-  );
-  register(
+        if (isRuntimeTensor(v)) {
+          const result = new FloatXArray(v.data.length);
+          for (let i = 0; i < v.data.length; i++) {
+            const re = scalarTest(v.data[i]);
+            const im = v.imag ? scalarTest(v.imag[i]) : logicalDefault;
+            result[i] = (combineReIm === "or" ? re || im : re && im) ? 1 : 0;
+          }
+          const t = RTV.tensor(result, v.shape);
+          t._isLogical = true;
+          return t;
+        }
+        throw new RuntimeError("Expected numeric argument");
+      }),
+      1
+    );
+  }
+  numericPredicate("isnan", Number.isNaN, false, "or");
+  numericPredicate(
     "isinf",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isinf requires 1 argument");
-      const v = args[0];
-      const isInf = (x: number) => !Number.isFinite(x) && !Number.isNaN(x);
-      if (isRuntimeNumber(v)) return RTV.logical(isInf(v));
-      if (isRuntimeLogical(v)) return RTV.logical(false);
-      if (isRuntimeComplexNumber(v))
-        return RTV.logical(isInf(v.re) || isInf(v.im));
-      if (isRuntimeTensor(v)) {
-        const result = new FloatXArray(v.data.length);
-        for (let i = 0; i < v.data.length; i++) {
-          const reInf = isInf(v.data[i]);
-          const imInf = v.imag ? isInf(v.imag[i]) : false;
-          result[i] = reInf || imInf ? 1 : 0;
-        }
-        const t = RTV.tensor(result, v.shape);
-        t._isLogical = true;
-        return t;
-      }
-      throw new RuntimeError("Expected numeric argument");
-    }),
-    1
+    x => !Number.isFinite(x) && !Number.isNaN(x),
+    false,
+    "or"
   );
-  register(
-    "isfinite",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isfinite requires 1 argument");
-      const v = args[0];
-      if (isRuntimeNumber(v)) return RTV.logical(Number.isFinite(v));
-      if (isRuntimeLogical(v)) return RTV.logical(true);
-      if (isRuntimeComplexNumber(v))
-        return RTV.logical(Number.isFinite(v.re) && Number.isFinite(v.im));
-      if (isRuntimeTensor(v)) {
-        const result = new FloatXArray(v.data.length);
-        for (let i = 0; i < v.data.length; i++) {
-          const reFin = Number.isFinite(v.data[i]);
-          const imFin = v.imag ? Number.isFinite(v.imag[i]) : true;
-          result[i] = reFin && imFin ? 1 : 0;
-        }
-        const t = RTV.tensor(result, v.shape);
-        t._isLogical = true;
-        return t;
-      }
-      throw new RuntimeError("Expected numeric argument");
-    }),
-    1
-  );
+  numericPredicate("isfinite", Number.isFinite, true, "and");
 
   // ── Complex-specific builtins ─────────────────────────────────────────
 
@@ -1504,57 +1472,32 @@ export function registerMathFunctions(): void {
 
   // ── Bessel functions ──────────────────────────────────────────────────
 
-  register(
-    "besselj",
-    builtinSingle(args => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("besselj requires 2 or 3 arguments");
-      const scale = args.length === 3 ? toNumber(args[2]) : 0;
-      return applyBesselBinary(args[0], args[1], (nu, z) => {
-        const val = besselj(nu, z);
-        return scale === 1 ? val * Math.exp(-Math.abs(z)) : val;
-      });
-    })
-  );
-
-  register(
-    "bessely",
-    builtinSingle(args => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("bessely requires 2 or 3 arguments");
-      const scale = args.length === 3 ? toNumber(args[2]) : 0;
-      return applyBesselBinary(args[0], args[1], (nu, z) => {
-        const val = bessely(nu, z);
-        return scale === 1 ? val * Math.exp(-Math.abs(z)) : val;
-      });
-    })
-  );
-
-  register(
-    "besseli",
-    builtinSingle(args => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("besseli requires 2 or 3 arguments");
-      const scale = args.length === 3 ? toNumber(args[2]) : 0;
-      return applyBesselBinary(args[0], args[1], (nu, z) => {
-        const val = besseli(nu, z);
-        return scale === 1 ? val * Math.exp(-Math.abs(z)) : val;
-      });
-    })
-  );
-
-  register(
-    "besselk",
-    builtinSingle(args => {
-      if (args.length < 2 || args.length > 3)
-        throw new RuntimeError("besselk requires 2 or 3 arguments");
-      const scale = args.length === 3 ? toNumber(args[2]) : 0;
-      return applyBesselBinary(args[0], args[1], (nu, z) => {
-        const val = besselk(nu, z);
-        return scale === 1 ? val * Math.exp(z) : val;
-      });
-    })
-  );
+  // Bessel functions share the same registration pattern; only the
+  // underlying function and scaling factor differ.
+  const besselDefs: [
+    string,
+    (nu: number, z: number) => number,
+    (z: number) => number,
+  ][] = [
+    ["besselj", besselj, z => Math.exp(-Math.abs(z))],
+    ["bessely", bessely, z => Math.exp(-Math.abs(z))],
+    ["besseli", besseli, z => Math.exp(-Math.abs(z))],
+    ["besselk", besselk, z => Math.exp(z)],
+  ];
+  for (const [name, fn, scaleFn] of besselDefs) {
+    register(
+      name,
+      builtinSingle(args => {
+        if (args.length < 2 || args.length > 3)
+          throw new RuntimeError(`${name} requires 2 or 3 arguments`);
+        const scale = args.length === 3 ? toNumber(args[2]) : 0;
+        return applyBesselBinary(args[0], args[1], (nu, z) => {
+          const val = fn(nu, z);
+          return scale === 1 ? val * scaleFn(z) : val;
+        });
+      })
+    );
+  }
 
   // ── Airy functions ──────────────────────────────────────────────────
 
