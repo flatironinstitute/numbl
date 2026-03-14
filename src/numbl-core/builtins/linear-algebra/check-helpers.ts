@@ -7,11 +7,34 @@ import {
   type ItemType,
   IType,
   isNum,
+  isComplex,
+  isTensor,
   isFullyUnknown,
   isString,
   isChar,
 } from "../../lowering/itemTypes.js";
 import type { FloatXArrayType } from "../../runtime/types.js";
+
+/**
+ * Returns true when A is a plausible numeric/matrix input
+ * (unknown, scalar, complex scalar, logical, or tensor).
+ * Use this to replace the repeated triple-check pattern in LA check functions.
+ */
+export function isMatrixLike(A: ItemType): boolean {
+  return (
+    isFullyUnknown(A) ||
+    isNum(A) === true ||
+    isComplex(A) === true ||
+    A.kind === "Boolean" ||
+    isTensor(A) === true
+  );
+}
+
+/** Validates an optional string argument (e.g., triangle flag, output format). */
+export function isOptionalStringArg(arg: ItemType | undefined): boolean {
+  if (arg === undefined) return true;
+  return isFullyUnknown(arg) || arg.kind === "String" || arg.kind === "Char";
+}
 
 /** Wraps output types into the check-function return value. */
 export function out(...types: ItemType[]): { outputTypes: ItemType[] } {
@@ -20,22 +43,6 @@ export function out(...types: ItemType[]): { outputTypes: ItemType[] } {
 
 /** A 2-D matrix type. */
 export function unknownMatrix(isComplex?: boolean): ItemType {
-  return IType.tensor({ isComplex: isComplex || undefined });
-}
-
-/** Alias for unknownMatrix — shape tracking was removed. */
-export function matrix(
-  _shapeOrComplex?:
-    | (number | "unknown")[]
-    | "unknown"
-    | boolean
-    | [number | "unknown", number | "unknown"],
-  isComplex?: boolean
-): ItemType {
-  // If first arg is boolean, it's the isComplex flag
-  if (typeof _shapeOrComplex === "boolean") {
-    return IType.tensor({ isComplex: _shapeOrComplex || undefined });
-  }
   return IType.tensor({ isComplex: isComplex || undefined });
 }
 

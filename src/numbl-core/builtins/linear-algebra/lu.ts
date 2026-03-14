@@ -18,13 +18,13 @@ import {
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
-  matrix,
+  isMatrixLike,
+  isOptionalStringArg,
   out,
   parseStringArgLower,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
-import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
 
@@ -87,46 +87,19 @@ export function registerLu(): void {
       check: (argTypes, nargout) => {
         if (nargout < 1 || nargout > 3) return null;
         if (argTypes.length < 1 || argTypes.length > 2) return null;
-
-        const A = argTypes[0];
-
-        // Validate optional outputForm arg (only meaningful for nargout >= 3)
-        if (argTypes.length === 2) {
-          const fmt = argTypes[1];
-          if (
-            !isFullyUnknown(fmt) &&
-            fmt.kind !== "String" &&
-            fmt.kind !== "Char"
-          )
-            return null;
-        }
-
-        if (nargout === 1) {
-          // Single output not standard for lu — but MATLAB returns packed LU.
-          // We'll support it as returning the packed matrix (same shape as A).
-          if (isFullyUnknown(A)) return out(unknownMatrix());
-          if (isNum(A) === true) return out(matrix([1, 1]));
-          if (isTensor(A) !== true) return null;
-          return out(unknownMatrix());
-        }
-
-        if (nargout === 2) {
-          // [L, U] = lu(A)
-          if (isFullyUnknown(A)) return out(unknownMatrix(), unknownMatrix());
-          if (isNum(A) === true) return out(matrix([1, 1]), matrix([1, 1]));
-          if (isTensor(A) !== true) return null;
-          return out(unknownMatrix(), unknownMatrix());
-        }
-
-        // nargout === 3: [L, U, P] = lu(A) or lu(A, 'vector')
-        if (isFullyUnknown(A))
-          return out(unknownMatrix(), unknownMatrix(), unknownMatrix());
-        if (isNum(A) === true)
-          return out(matrix([1, 1]), matrix([1, 1]), matrix([1, 1]));
-        if (isTensor(A) !== true || (A.kind === "Tensor" && A.isComplex))
+        if (!isOptionalStringArg(argTypes[1])) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
+        // nargout === 3 rejects complex inputs
+        if (
+          nargout === 3 &&
+          argTypes[0].kind === "Tensor" &&
+          argTypes[0].isComplex
+        )
           return null;
-        // P is m×m (matrix form) or 1×m / m×1 (vector form) — use unknown for simplicity
-        return out(unknownMatrix(), unknownMatrix(), unknownMatrix());
+        const m = unknownMatrix();
+        if (nargout === 1) return out(m);
+        if (nargout === 2) return out(m, m);
+        return out(m, m, m);
       },
 
       apply: (args, nargout) => {

@@ -10,13 +10,8 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { register } from "../registry.js";
-import { out, toF64 } from "./check-helpers.js";
-import {
-  IType,
-  isNum,
-  isTensor,
-  isFullyUnknown,
-} from "../../lowering/itemTypes.js";
+import { out, toF64, isMatrixLike } from "./check-helpers.js";
+import { IType } from "../../lowering/itemTypes.js";
 
 /**
  * Compute determinant via LU decomposition with partial pivoting.
@@ -152,10 +147,7 @@ export function registerDet(): void {
     {
       check: (argTypes, nargout) => {
         if (argTypes.length !== 1 || nargout !== 1) return null;
-        const A = argTypes[0];
-        if (isFullyUnknown(A)) return out(IType.num());
-        if (isNum(A) === true || A.kind === "Boolean") return out(IType.num());
-        if (isTensor(A) !== true) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
         return out(IType.num());
       },
       apply: args => {
@@ -182,10 +174,7 @@ export function registerDet(): void {
     {
       check: (argTypes, nargout) => {
         if (argTypes.length !== 1 || nargout !== 1) return null;
-        const A = argTypes[0];
-        if (isFullyUnknown(A)) return out(IType.num());
-        if (isNum(A) === true || A.kind === "Boolean") return out(IType.num());
-        if (isTensor(A) !== true) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
         return out(IType.num());
       },
       apply: args => {

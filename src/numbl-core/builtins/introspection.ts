@@ -217,21 +217,24 @@ export function registerIntrospectionFunctions(): void {
     })
   );
 
-  register(
+  // ── Type predicate factory ───────────────────────────────────────────
+  const typePred = (name: string, pred: (v: RuntimeValue) => boolean) =>
+    register(
+      name,
+      builtinSingle(args => {
+        if (args.length !== 1)
+          throw new RuntimeError(`${name} requires 1 argument`);
+        return RTV.logical(pred(args[0]));
+      })
+    );
+
+  typePred(
     "isscalar",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isscalar requires 1 argument");
-      const v = args[0];
-      if (
-        isRuntimeNumber(v) ||
-        isRuntimeLogical(v) ||
-        isRuntimeComplexNumber(v)
-      )
-        return RTV.logical(true);
-      if (isRuntimeTensor(v)) return RTV.logical(v.data.length === 1);
-      return RTV.logical(false);
-    })
+    v =>
+      isRuntimeNumber(v) ||
+      isRuntimeLogical(v) ||
+      isRuntimeComplexNumber(v) ||
+      (isRuntimeTensor(v) && v.data.length === 1)
   );
 
   /** Helper: get the effective 2D+ shape of a value */
@@ -244,138 +247,40 @@ export function registerIntrospectionFunctions(): void {
     return [1, 1];
   };
 
-  register(
-    "isvector",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isvector requires 1 argument");
-      const shape = getShape(args[0]);
-      // A vector has at most one dimension > 1
-      const dimsGt1 = shape.filter(d => d > 1).length;
-      return RTV.logical(dimsGt1 <= 1);
-    })
-  );
-
-  register(
-    "isrow",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isrow requires 1 argument");
-      const shape = getShape(args[0]);
-      // Row: exactly 2D with shape[0] === 1
-      return RTV.logical(shape.length === 2 && shape[0] === 1);
-    })
-  );
-
-  register(
-    "iscolumn",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("iscolumn requires 1 argument");
-      const shape = getShape(args[0]);
-      // Column: exactly 2D with shape[1] === 1
-      return RTV.logical(shape.length === 2 && shape[1] === 1);
-    })
-  );
-
-  register(
-    "ismatrix",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("ismatrix requires 1 argument");
-      const shape = getShape(args[0]);
-      // Matrix: ndims <= 2 (no dimension beyond 2nd)
-      return RTV.logical(shape.length <= 2);
-    })
-  );
-
-  register(
+  typePred("isvector", v => {
+    const shape = getShape(v);
+    return shape.filter(d => d > 1).length <= 1;
+  });
+  typePred("isrow", v => {
+    const shape = getShape(v);
+    return shape.length === 2 && shape[0] === 1;
+  });
+  typePred("iscolumn", v => {
+    const shape = getShape(v);
+    return shape.length === 2 && shape[1] === 1;
+  });
+  typePred("ismatrix", v => getShape(v).length <= 2);
+  typePred(
     "isfloat",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isfloat requires 1 argument");
-      const v = args[0];
-      // In numbl, numbers and tensors are always double (float)
-      return RTV.logical(
-        isRuntimeNumber(v) || isRuntimeTensor(v) || isRuntimeComplexNumber(v)
-      );
-    })
+    v => isRuntimeNumber(v) || isRuntimeTensor(v) || isRuntimeComplexNumber(v)
   );
-
-  register(
-    "isinteger",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isinteger requires 1 argument");
-      // numbl has no integer types (int8, uint16, etc.), everything is double
-      return RTV.logical(false);
-    })
-  );
-
-  register(
+  typePred("isinteger", () => false);
+  typePred(
     "isnumeric",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isnumeric requires 1 argument");
-      const v = args[0];
-      return RTV.logical(
-        isRuntimeNumber(v) ||
-          isRuntimeTensor(v) ||
-          isRuntimeComplexNumber(v) ||
-          (isRuntimeClassInstance(v) && v._builtinData !== undefined)
-      );
-    })
+    v =>
+      isRuntimeNumber(v) ||
+      isRuntimeTensor(v) ||
+      isRuntimeComplexNumber(v) ||
+      (isRuntimeClassInstance(v) && v._builtinData !== undefined)
   );
-
-  register(
+  typePred(
     "islogical",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("islogical requires 1 argument");
-      const v = args[0];
-      return RTV.logical(
-        isRuntimeLogical(v) || (isRuntimeTensor(v) && v._isLogical === true)
-      );
-    })
+    v => isRuntimeLogical(v) || (isRuntimeTensor(v) && v._isLogical === true)
   );
-
-  register(
-    "ischar",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("ischar requires 1 argument");
-      return RTV.logical(isRuntimeChar(args[0]));
-    })
-  );
-
-  register(
-    "isstring",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isstring requires 1 argument");
-      return RTV.logical(isRuntimeString(args[0]));
-    })
-  );
-
-  register(
-    "iscell",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("iscell requires 1 argument");
-      return RTV.logical(isRuntimeCell(args[0]));
-    })
-  );
-
-  register(
-    "isstruct",
-    builtinSingle(args => {
-      if (args.length !== 1)
-        throw new RuntimeError("isstruct requires 1 argument");
-      return RTV.logical(
-        isRuntimeStruct(args[0]) || isRuntimeStructArray(args[0])
-      );
-    })
-  );
+  typePred("ischar", v => isRuntimeChar(v));
+  typePred("isstring", v => isRuntimeString(v));
+  typePred("iscell", v => isRuntimeCell(v));
+  typePred("isstruct", v => isRuntimeStruct(v) || isRuntimeStructArray(v));
 
   register(
     "isequal",

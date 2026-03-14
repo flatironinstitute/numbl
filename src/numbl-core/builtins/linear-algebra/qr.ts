@@ -18,13 +18,12 @@ import {
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
-  matrix,
   out,
+  isMatrixLike,
   parseEconArg,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
-import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
 
@@ -79,26 +78,12 @@ export function registerQr(): void {
           argTypes.length > 2
         )
           return null;
-        const econ = parseEconArg(argTypes[1]);
-        if (econ === null) return null;
-
-        const A = argTypes[0];
-        const cpx = A.kind === "Tensor" && A.isComplex;
-        if (nargout === 1) {
-          if (isFullyUnknown(A)) return out(unknownMatrix());
-          if (isNum(A) === true) return out(matrix([1, 1]));
-          if (isTensor(A) !== true) return null;
-          return out(unknownMatrix(cpx || undefined));
-        }
-
-        if (isFullyUnknown(A)) return out(unknownMatrix(), unknownMatrix());
-        if (isNum(A) === true) return out(matrix([1, 1]), matrix([1, 1]));
-        if (isTensor(A) !== true) return null;
-
-        return out(
-          unknownMatrix(cpx || undefined),
-          unknownMatrix(cpx || undefined)
-        );
+        if (parseEconArg(argTypes[1]) === null) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
+        const cpx =
+          (argTypes[0].kind === "Tensor" && argTypes[0].isComplex) || undefined;
+        if (nargout === 1) return out(unknownMatrix(cpx));
+        return out(unknownMatrix(cpx), unknownMatrix(cpx));
       },
       apply: (args, nargout) => {
         if (args.length < 1)

@@ -19,8 +19,7 @@ import {
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, toF64, unknownMatrix } from "./check-helpers.js";
-import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
+import { out, toF64, unknownMatrix, isMatrixLike } from "./check-helpers.js";
 
 // ── LAPACK helpers ────────────────────────────────────────────────────────────
 
@@ -90,19 +89,8 @@ export function registerLinsolve(): void {
     {
       check: (argTypes, nargout) => {
         if (argTypes.length !== 2 || nargout !== 1) return null;
-
-        const A = argTypes[0];
-        const B = argTypes[1];
-
-        // Unknown inputs → unknown output shape
-        if (isFullyUnknown(A) || isFullyUnknown(B)) return out(unknownMatrix());
-
-        // Scalar A or B is coerced to 1×1 at runtime
-        if (isNum(A) === true || isNum(B) === true) return out(unknownMatrix());
-
-        // Must be 2-D tensors (real or complex)
-        if (isTensor(A) !== true || isTensor(B) !== true) return null;
-
+        if (!isMatrixLike(argTypes[0]) || !isMatrixLike(argTypes[1]))
+          return null;
         return out(unknownMatrix());
       },
 

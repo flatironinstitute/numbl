@@ -23,8 +23,13 @@ import {
 } from "../../runtime/types.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, toF64, unknownMatrix } from "./check-helpers.js";
-import { isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
+import {
+  out,
+  isMatrixLike,
+  isOptionalStringArg,
+  toF64,
+  unknownMatrix,
+} from "./check-helpers.js";
 
 // ── LAPACK helpers ───────────────────────────────────────────────────────────
 
@@ -171,42 +176,12 @@ export function registerQz(): void {
       check: (argTypes, nargout) => {
         if (nargout !== 4 && nargout !== 6) return null;
         if (argTypes.length < 2 || argTypes.length > 3) return null;
-
-        const A = argTypes[0];
-        const B = argTypes[1];
-
-        // Optional 3rd argument: 'real' or 'complex'
-        if (argTypes.length === 3) {
-          const mode = argTypes[2];
-          if (
-            !isFullyUnknown(mode) &&
-            mode.kind !== "String" &&
-            mode.kind !== "Char"
-          )
-            return null;
-        }
-
-        // Both A and B must be tensors or unknown
-        if (!isFullyUnknown(A) && isTensor(A) !== true) return null;
-        if (!isFullyUnknown(B) && isTensor(B) !== true) return null;
-
-        if (nargout === 4) {
-          return out(
-            unknownMatrix(true),
-            unknownMatrix(true),
-            unknownMatrix(true),
-            unknownMatrix(true)
-          );
-        }
-
-        return out(
-          unknownMatrix(true),
-          unknownMatrix(true),
-          unknownMatrix(true),
-          unknownMatrix(true),
-          unknownMatrix(true),
-          unknownMatrix(true)
-        );
+        if (!isOptionalStringArg(argTypes[2])) return null;
+        if (!isMatrixLike(argTypes[0]) || !isMatrixLike(argTypes[1]))
+          return null;
+        const c = unknownMatrix(true);
+        if (nargout === 4) return out(c, c, c, c);
+        return out(c, c, c, c, c, c);
       },
 
       apply: (args, nargout) => {

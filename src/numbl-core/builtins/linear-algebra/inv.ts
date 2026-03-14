@@ -13,13 +13,7 @@ import {
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, toF64, unknownMatrix } from "./check-helpers.js";
-import {
-  isNum,
-  isTensor,
-  isComplex,
-  isFullyUnknown,
-} from "../../lowering/itemTypes.js";
+import { out, toF64, unknownMatrix, isMatrixLike } from "./check-helpers.js";
 
 // ── Matrix inversion helpers ─────────────────────────────────────────────────
 
@@ -156,10 +150,8 @@ export function registerInv(): void {
       check: (argTypes, nargout) => {
         if (argTypes.length !== 1 || nargout !== 1) return null;
         const A = argTypes[0];
-        if (isFullyUnknown(A)) return out(unknownMatrix());
-        if (isComplex(A) === true || isNum(A) === true) return out(A);
-        if (isTensor(A) !== true) return null;
-        return out(A);
+        if (!isMatrixLike(A)) return null;
+        return out(A.kind === "Unknown" ? unknownMatrix() : A);
       },
       apply: args => {
         if (args.length < 1) throw new RuntimeError("inv requires 1 argument");

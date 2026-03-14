@@ -965,9 +965,14 @@ export function registerReductionFunctions(): void {
           if (scalar !== null) return scalar;
           if (isRuntimeTensor(v)) {
             if (v.data.length === 0) return RTV.logical(mode === "all");
-            if (v.shape[0] === 1)
+            const numNonSingleton = v.shape.filter(d => d > 1).length;
+            if (numNonSingleton <= 1) {
+              // Vector or scalar: full reduction → scalar
               return RTV.logical(scanLogical(v.data, v.imag, mode));
-            return logicalAlongDim(v, 1, mode);
+            }
+            // Multiple non-singleton dims: reduce along first non-singleton
+            const firstNonSingleton = v.shape.findIndex(d => d > 1);
+            return logicalAlongDim(v, firstNonSingleton + 1, mode);
           }
           throw new RuntimeError(
             `${name}: argument must be numeric or logical`

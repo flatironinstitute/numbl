@@ -20,18 +20,14 @@ import {
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
-  matrix,
+  isMatrixLike,
+  isOptionalStringArg,
   out,
   parseStringArgLower,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
-import {
-  IType,
-  isNum,
-  isTensor,
-  isFullyUnknown,
-} from "../../lowering/itemTypes.js";
+import { IType } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helpers ───────────────────────────────────────────────────────────
 
@@ -76,31 +72,9 @@ export function registerChol(): void {
       check: (argTypes, nargout) => {
         if (nargout < 1 || nargout > 2) return null;
         if (argTypes.length < 1 || argTypes.length > 2) return null;
-
-        const A = argTypes[0];
-
-        // Validate optional triangle arg
-        if (argTypes.length === 2) {
-          const tri = argTypes[1];
-          if (
-            !isFullyUnknown(tri) &&
-            tri.kind !== "String" &&
-            tri.kind !== "Char"
-          )
-            return null;
-        }
-
-        if (nargout === 1) {
-          if (isFullyUnknown(A)) return out(unknownMatrix());
-          if (isNum(A) === true) return out(matrix([1, 1]));
-          if (isTensor(A) !== true) return null;
-          return out(unknownMatrix());
-        }
-
-        // nargout === 2: [R, flag]
-        if (isFullyUnknown(A)) return out(unknownMatrix(), IType.num());
-        if (isNum(A) === true) return out(matrix([1, 1]), IType.num());
-        if (isTensor(A) !== true) return null;
+        if (!isOptionalStringArg(argTypes[1])) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
+        if (nargout === 1) return out(unknownMatrix());
         return out(unknownMatrix(), IType.num());
       },
 

@@ -316,9 +316,16 @@ function elemwiseCheckRealOutput(
   return { outputTypes: [{ kind: "Unknown" }] };
 }
 
+/**
+ * Create an element-wise builtin that applies fn to each element.
+ * Options:
+ *   nativeJs  — JS expression for scalar fast-path (e.g. "Math.floor")
+ *   isLogical — output is logical (used by real-only predicates)
+ *   complex   — also apply fn to real/imag parts independently (e.g. floor, ceil)
+ */
 function elemwise(
   fn: (x: number) => number,
-  o?: { nativeJs?: string; isLogical?: boolean }
+  o?: { nativeJs?: string; isLogical?: boolean; complex?: boolean }
 ): BuiltinFn {
   const ret: BuiltinFnBranch[] = [];
   const apply = (args: RuntimeValue[]) => {
@@ -332,10 +339,17 @@ function elemwise(
       const result = fn(v ? 1 : 0);
       return o?.isLogical ? RTV.logical(!!result) : RTV.num(result);
     }
+    if (o?.complex && isRuntimeComplexNumber(v))
+      return RTV.complex(fn(v.re), fn(v.im));
     if (isRuntimeTensor(v)) {
       const result = new FloatXArray(v.data.length);
       for (let i = 0; i < v.data.length; i++) result[i] = fn(v.data[i]);
-      const t = RTV.tensor(result, v.shape);
+      let imag: FloatXArrayType | undefined;
+      if (o?.complex && v.imag) {
+        imag = new FloatXArray(v.imag.length);
+        for (let i = 0; i < v.imag.length; i++) imag[i] = fn(v.imag[i]);
+      }
+      const t = RTV.tensor(result, v.shape, imag);
       if (o?.isLogical) t._isLogical = true;
       return t;
     }
@@ -354,51 +368,6 @@ function elemwise(
       // results must stay as RuntimeValue logicals so the codegen emits
       // $rt.not() instead of the `=== 0` fast path.
       nativeJsFn: o.isLogical ? undefined : o.nativeJs,
-    });
-  }
-  ret.push({
-    check: elemwiseCheck,
-    apply,
-  });
-  return ret;
-}
-
-/**
- * Like elemwise but also handles complex scalars and complex tensors
- * by applying fn independently to real and imaginary parts.
- */
-function elemwiseComplex(
-  fn: (x: number) => number,
-  o?: { nativeJs?: string }
-): BuiltinFn {
-  const ret: BuiltinFnBranch[] = [];
-  const apply = (args: RuntimeValue[]) => {
-    if (args.length !== 1) throw new RuntimeError(`Expected 1 argument`);
-    const v = args[0];
-    if (isRuntimeNumber(v)) return RTV.num(fn(v));
-    if (isRuntimeLogical(v)) return RTV.num(fn(v ? 1 : 0));
-    if (isRuntimeComplexNumber(v)) return RTV.complex(fn(v.re), fn(v.im));
-    if (isRuntimeTensor(v)) {
-      const result = new FloatXArray(v.data.length);
-      for (let i = 0; i < v.data.length; i++) result[i] = fn(v.data[i]);
-      let imag: FloatXArrayType | undefined;
-      if (v.imag) {
-        imag = new FloatXArray(v.imag.length);
-        for (let i = 0; i < v.imag.length; i++) imag[i] = fn(v.imag[i]);
-      }
-      return RTV.tensor(result, v.shape, imag);
-    }
-    throw new RuntimeError("Expected numeric argument");
-  };
-  if (o?.nativeJs) {
-    ret.push({
-      check: (argTypes: ItemType[]) => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "Number") return null;
-        return { outputTypes: [{ kind: "Number" }] };
-      },
-      apply,
-      nativeJsFn: o.nativeJs,
     });
   }
   ret.push({
@@ -754,8 +723,16 @@ export function registerMathFunctions(): void {
     ),
     1
   );
-  register("floor", elemwiseComplex(Math.floor, { nativeJs: "Math.floor" }), 1);
-  register("ceil", elemwiseComplex(Math.ceil, { nativeJs: "Math.ceil" }), 1);
+  register(
+    "floor",
+    elemwise(Math.floor, { nativeJs: "Math.floor", complex: true }),
+    1
+  );
+  register(
+    "ceil",
+    elemwise(Math.ceil, { nativeJs: "Math.ceil", complex: true }),
+    1
+  );
   // Rounds half away from zero (unlike JS Math.round which rounds half toward +inf)
   // Supports round(x) and round(x, n) where n is the number of decimal places
   register(

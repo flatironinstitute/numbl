@@ -20,13 +20,12 @@ import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
-  matrix,
+  isMatrixLike,
   out,
   parseEconArg,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
-import { isNum, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
 
@@ -86,25 +85,9 @@ export function registerSvd(): void {
           argTypes.length > 2
         )
           return null;
-        const econ = parseEconArg(argTypes[1]);
-        if (econ === null) return null;
-
-        const A = argTypes[0];
-        // Single output: return singular values as a column vector
-        if (nargout === 1) {
-          if (isFullyUnknown(A)) return out(unknownMatrix());
-          if (isNum(A) === true) return out(matrix([1, 1]));
-          if (isTensor(A) !== true) return null;
-          return out(unknownMatrix()); // column vector of singular values
-        }
-
-        // Three outputs: [U, S, V]
-        if (isFullyUnknown(A))
-          return out(unknownMatrix(), unknownMatrix(), unknownMatrix());
-        if (isNum(A) === true)
-          return out(matrix([1, 1]), matrix([1, 1]), matrix([1, 1]));
-        if (isTensor(A) !== true) return null;
-
+        if (parseEconArg(argTypes[1]) === null) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
+        if (nargout === 1) return out(unknownMatrix());
         return out(unknownMatrix(), unknownMatrix(), unknownMatrix());
       },
       apply: (args, nargout) => {

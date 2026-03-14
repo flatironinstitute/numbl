@@ -19,18 +19,14 @@ import {
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
-  matrix,
+  isMatrixLike,
+  isOptionalStringArg,
   out,
   parseStringArgLower,
   toF64,
   unknownMatrix,
 } from "./check-helpers.js";
-import {
-  type ItemType,
-  isNum,
-  isTensor,
-  isFullyUnknown,
-} from "../../lowering/itemTypes.js";
+import { type ItemType } from "../../lowering/itemTypes.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,29 +36,11 @@ import {
  *   'vector' / 'matrix'
  * Returns null if an argument is invalid.
  */
-function parseEigOptions(argTypes: ItemType[]): {
-  balance: boolean | "unknown";
-  outputForm: "vector" | "matrix" | "unknown";
-} | null {
-  let balance: boolean | "unknown" = true;
-  let outputForm: "vector" | "matrix" | "unknown" = "matrix";
-
+function parseEigOptions(argTypes: ItemType[]): boolean {
   for (let i = 1; i < argTypes.length; i++) {
-    const arg = argTypes[i];
-    if (isFullyUnknown(arg)) {
-      balance = "unknown";
-      outputForm = "unknown";
-      continue;
-    }
-    if (arg.kind === "String" || arg.kind === "Char") {
-      balance = "unknown";
-      outputForm = "unknown";
-      continue;
-    } else {
-      return null; // unexpected argument type
-    }
+    if (!isOptionalStringArg(argTypes[i])) return false;
   }
-  return { balance, outputForm };
+  return true;
 }
 
 function parseEigOptionsRuntime(args: RuntimeValue[]): {
@@ -131,58 +109,13 @@ export function registerEig(): void {
       check: (argTypes, nargout) => {
         if (nargout < 1 || nargout > 3) return null;
         if (argTypes.length < 1 || argTypes.length > 3) return null;
-
-        const opts = parseEigOptions(argTypes);
-        if (opts === null) return null;
-
-        const A = argTypes[0];
-
-        if (nargout === 1) {
-          // e = eig(A) — column vector of eigenvalues (possibly complex)
-          if (isFullyUnknown(A)) return out(unknownMatrix());
-          if (isNum(A) === true) return out(matrix([1, 1], true));
-          if (isTensor(A) !== true) return null;
-          return out(unknownMatrix(true));
-        }
-
-        if (nargout === 2) {
-          // [V,D] = eig(A) or [V,d] = eig(A,'vector')
-          if (isFullyUnknown(A)) return out(unknownMatrix(), unknownMatrix());
-          if (isNum(A) === true)
-            return out(matrix([1, 1], true), matrix([1, 1], true));
-          if (isTensor(A) !== true) return null;
-          if (opts.outputForm === "vector") {
-            return out(unknownMatrix(true), unknownMatrix(true));
-          }
-          return out(unknownMatrix(true), unknownMatrix(true));
-        }
-
-        if (nargout === 3) {
-          // [V,D,W] = eig(A)
-          if (isFullyUnknown(A))
-            return out(unknownMatrix(), unknownMatrix(), unknownMatrix());
-          if (isNum(A) === true)
-            return out(
-              matrix([1, 1], true),
-              matrix([1, 1], true),
-              matrix([1, 1], true)
-            );
-          if (isTensor(A) !== true) return null;
-          if (opts.outputForm === "vector") {
-            return out(
-              unknownMatrix(true),
-              unknownMatrix(true),
-              unknownMatrix(true)
-            );
-          }
-          return out(
-            unknownMatrix(true),
-            unknownMatrix(true),
-            unknownMatrix(true)
-          );
-        }
-
-        return null;
+        if (!parseEigOptions(argTypes)) return null;
+        if (!isMatrixLike(argTypes[0])) return null;
+        // Eigenvalues are generally complex
+        const c = unknownMatrix(true);
+        if (nargout === 1) return out(c);
+        if (nargout === 2) return out(c, c);
+        return out(c, c, c);
       },
 
       apply: (args, nargout) => {

@@ -521,7 +521,7 @@ export class Codegen {
     argTypes: ItemType[]
   ): string | null {
     // verify that none of the argTypes are unknown
-    if (argTypes.some(type => type && type.kind === "Unknown")) {
+    if (argTypes.some(type => type.kind === "Unknown")) {
       throw new Error(
         `Cannot generate specialized function for ${name}: unknown parameter types`
       );
