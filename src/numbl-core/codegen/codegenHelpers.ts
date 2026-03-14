@@ -77,6 +77,23 @@ export const JS_RESERVED = new Set([
   "JSON",
 ]);
 
+// ── Arg-type validation ─────────────────────────────────────────────────
+
+/**
+ * Throw if any element of `argTypes` is Unknown (or null/undefined).
+ * Consolidates the repeated guard that appeared in four codegen methods.
+ */
+export function assertNoUnknownArgTypes(
+  argTypes: ({ kind: string } | null | undefined)[],
+  label: string
+): void {
+  if (argTypes.some(t => !t || t.kind === "Unknown")) {
+    throw new Error(
+      `Cannot generate specialized function for ${label}: unknown parameter types`
+    );
+  }
+}
+
 // ── Expression analysis ─────────────────────────────────────────────────
 
 /**

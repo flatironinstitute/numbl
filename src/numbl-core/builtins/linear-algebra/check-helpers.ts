@@ -155,6 +155,80 @@ export function buildEigenvectorMatrix(
 }
 
 /**
+ * Build a tensor, attaching the imaginary part only when it contains non-zero values.
+ * Replaces the repeated `hasComplex ? RTV.tensor(re, shape, im) : RTV.tensor(re, shape)` pattern.
+ */
+export function maybeComplexTensor(
+  re: FloatXArrayType | Float64Array,
+  shape: number[],
+  im: FloatXArrayType | Float64Array | undefined
+): ReturnType<typeof RTV.tensor> {
+  const imag = im && im.some(v => v !== 0) ? new FloatXArray(im) : undefined;
+  return RTV.tensor(new FloatXArray(re), shape, imag);
+}
+
+/**
+ * Build a diagonal matrix from a vector of values (column-major).
+ * For square matrices pass just n; for rectangular pass [rows, cols].
+ * Optionally includes an imaginary diagonal.
+ */
+export function buildDiagMatrix(
+  realVals: Float64Array | FloatXArrayType,
+  imagVals: Float64Array | FloatXArrayType | undefined,
+  size: number | [number, number]
+): ReturnType<typeof RTV.tensor> {
+  const [rows, cols] = typeof size === "number" ? [size, size] : size;
+  const k = Math.min(rows, cols, realVals.length);
+  const dReal = new FloatXArray(rows * cols);
+  for (let i = 0; i < k; i++) dReal[colMajorIndex(i, i, rows)] = realVals[i];
+  if (imagVals && imagVals.some(v => v !== 0)) {
+    const dImag = new FloatXArray(rows * cols);
+    for (let i = 0; i < k; i++) dImag[colMajorIndex(i, i, rows)] = imagVals[i];
+    return RTV.tensor(dReal, [rows, cols], dImag);
+  }
+  return RTV.tensor(dReal, [rows, cols]);
+}
+
+/**
+ * In-place Gauss-Jordan elimination with partial pivoting on a column-major
+ * augmented matrix [A | B] of size `rows × totalCols`.
+ */
+export function gaussJordanEliminate(
+  aug: FloatXArrayType,
+  rows: number,
+  totalCols: number
+): void {
+  for (let col = 0; col < rows; col++) {
+    let maxVal = Math.abs(aug[col * rows + col]);
+    let maxRow = col;
+    for (let row = col + 1; row < rows; row++) {
+      const val = Math.abs(aug[col * rows + row]);
+      if (val > maxVal) {
+        maxVal = val;
+        maxRow = row;
+      }
+    }
+    if (maxRow !== col) {
+      for (let j = 0; j < totalCols; j++) {
+        const tmp = aug[j * rows + col];
+        aug[j * rows + col] = aug[j * rows + maxRow];
+        aug[j * rows + maxRow] = tmp;
+      }
+    }
+    const pivot = aug[col * rows + col];
+    if (Math.abs(pivot) < 1e-14) continue;
+    for (let j = 0; j < totalCols; j++) aug[j * rows + col] /= pivot;
+    for (let row = 0; row < rows; row++) {
+      if (row === col) continue;
+      const factor = aug[col * rows + row];
+      for (let j = 0; j < totalCols; j++) {
+        aug[j * rows + row] -= factor * aug[j * rows + col];
+      }
+    }
+  }
+}
+
+/**
  * Call a registered builtin from within another builtin's apply().
  * Convenience wrapper that includes the caller name in error messages.
  */

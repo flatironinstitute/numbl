@@ -14,6 +14,7 @@
 import { typeToString, type ItemType } from "../lowering/itemTypes.js";
 import { type LoweringContext } from "../lowering/loweringContext.js";
 import {
+  assertNoUnknownArgTypes,
   computeSpecKey,
   hashForJsId,
   JS_RESERVED,
@@ -458,12 +459,7 @@ export class Codegen {
   ): string | null {
     // Include the file name in the spec key and jsId so that local helper
     // functions with the same name in different workspace files don't collide.
-    // verify that none of the argTypes are unknown
-    if (argTypes.some(type => type.kind === "Unknown")) {
-      throw new Error(
-        `Cannot generate specialized function for ${name}: unknown parameter types`
-      );
-    }
+    assertNoUnknownArgTypes(argTypes, name);
     const filePrefix = this.loweringCtx.getRelativePath(
       this.loweringCtx.mainFileName
     );
@@ -524,12 +520,7 @@ export class Codegen {
     name: string,
     argTypes: ItemType[]
   ): string | null {
-    // verify that none of the argTypes are unknown
-    if (argTypes.some(type => type.kind === "Unknown")) {
-      throw new Error(
-        `Cannot generate specialized function for ${name}: unknown parameter types`
-      );
-    }
+    assertNoUnknownArgTypes(argTypes, name);
     return this.ensureExternalFunctionGenerated(name, argTypes, {
       specKeyPrefix: name,
       jsIdPrefix: "$fn_",
@@ -543,12 +534,7 @@ export class Codegen {
     name: string,
     argTypes: ItemType[]
   ): string | null {
-    // verify that none of the argTypes are unknown
-    if (argTypes.some(type => type.kind === "Unknown")) {
-      throw new Error(
-        `Cannot generate specialized function for ${name}: unknown parameter types`
-      );
-    }
+    assertNoUnknownArgTypes(argTypes, name);
     return this.ensureExternalFunctionGenerated(name, argTypes, {
       specKeyPrefix: `private:${name}`,
       jsIdPrefix: "$fn_priv_",
@@ -586,12 +572,7 @@ export class Codegen {
     className: string,
     argTypes: ItemType[]
   ): string | null {
-    // verify that none of the argTypes are unknown
-    if (argTypes.some(type => type && type.kind === "Unknown")) {
-      throw new Error(
-        `Cannot generate constructor for ${className}: unknown parameter types`
-      );
-    }
+    assertNoUnknownArgTypes(argTypes, className);
     const classInfo = this.loweringCtx.getClassInfo(className);
     if (!classInfo) return null;
 

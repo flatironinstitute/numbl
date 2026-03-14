@@ -18,6 +18,7 @@ import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
+  buildDiagMatrix,
   isMatrixLike,
   out,
   parseEconArg,
@@ -139,20 +140,11 @@ export function registerSvd(): void {
             [m, uCols],
             new FloatXArray(lapackResult.UIm!)
           );
-          let S;
-          if (econ) {
-            const S_data = new FloatXArray(k * k);
-            for (let i = 0; i < k; i++) {
-              S_data[colMajorIndex(i, i, k)] = lapackResult.S[i];
-            }
-            S = RTV.tensor(S_data, [k, k]);
-          } else {
-            const S_data = new FloatXArray(m * n);
-            for (let i = 0; i < k; i++) {
-              S_data[colMajorIndex(i, i, m)] = lapackResult.S[i];
-            }
-            S = RTV.tensor(S_data, [m, n]);
-          }
+          const S = buildDiagMatrix(
+            lapackResult.S,
+            undefined,
+            econ ? k : [m, n]
+          );
           const V = RTV.tensor(
             new FloatXArray(lapackResult.VRe!),
             [n, vCols],
@@ -172,22 +164,11 @@ export function registerSvd(): void {
           const uCols = econ ? k : m;
           const vCols = econ ? k : n;
           const U = RTV.tensor(new FloatXArray(lapackResult.U!), [m, uCols]);
-          let S;
-          if (econ) {
-            // Economy mode: S is k×k diagonal matrix
-            const S_data = new FloatXArray(k * k);
-            for (let i = 0; i < k; i++) {
-              S_data[colMajorIndex(i, i, k)] = lapackResult.S[i];
-            }
-            S = RTV.tensor(S_data, [k, k]);
-          } else {
-            // Full mode: S is m×n diagonal matrix
-            const S_data = new FloatXArray(m * n);
-            for (let i = 0; i < k; i++) {
-              S_data[colMajorIndex(i, i, m)] = lapackResult.S[i];
-            }
-            S = RTV.tensor(S_data, [m, n]);
-          }
+          const S = buildDiagMatrix(
+            lapackResult.S,
+            undefined,
+            econ ? k : [m, n]
+          );
           const V = RTV.tensor(new FloatXArray(lapackResult.V!), [n, vCols]);
           return [U, S, V];
         }

@@ -3,7 +3,6 @@
  */
 
 import {
-  colMajorIndex,
   RTV,
   RuntimeError,
   RuntimeValue,
@@ -19,9 +18,11 @@ import {
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
 import {
+  buildDiagMatrix,
   buildEigenvectorMatrix,
   isMatrixLike,
   isOptionalStringArg,
+  maybeComplexTensor,
   out,
   parseStringArgLower,
   toF64,
@@ -177,89 +178,26 @@ export function registerEig(): void {
 
           const { wRe, wIm, VLRe, VLIm, VRRe, VRIm } = result;
 
-          // Check if result is actually all-real
-          let hasComplex = false;
-          for (let i = 0; i < n; i++) {
-            if (Math.abs(wIm[i]) > 0) {
-              hasComplex = true;
-              break;
-            }
-          }
-
           if (nargout === 1) {
-            if (hasComplex) {
-              return RTV.tensor(
-                new FloatXArray(wRe),
-                [n, 1],
-                new FloatXArray(wIm)
-              );
-            }
-            return RTV.tensor(new FloatXArray(wRe), [n, 1]);
+            return maybeComplexTensor(wRe, [n, 1], wIm);
           }
 
-          // Build V (right eigenvectors)
-          let Vout;
-          if (computeVR && VRRe && VRIm) {
-            if (hasComplex) {
-              Vout = RTV.tensor(
-                new FloatXArray(VRRe),
-                [n, n],
-                new FloatXArray(VRIm)
-              );
-            } else {
-              Vout = RTV.tensor(new FloatXArray(VRRe), [n, n]);
-            }
-          } else {
-            Vout = RTV.tensor(new FloatXArray(n * n), [n, n]);
-          }
+          const Vout =
+            computeVR && VRRe && VRIm
+              ? maybeComplexTensor(VRRe, [n, n], VRIm)
+              : RTV.tensor(new FloatXArray(n * n), [n, n]);
 
-          // Build D
-          let Dout;
-          if (outputForm === "vector") {
-            if (hasComplex) {
-              Dout = RTV.tensor(
-                new FloatXArray(wRe),
-                [n, 1],
-                new FloatXArray(wIm)
-              );
-            } else {
-              Dout = RTV.tensor(new FloatXArray(wRe), [n, 1]);
-            }
-          } else {
-            const dReal = new FloatXArray(n * n);
-            for (let i = 0; i < n; i++) {
-              dReal[colMajorIndex(i, i, n)] = wRe[i];
-            }
-            if (hasComplex) {
-              const dImag = new FloatXArray(n * n);
-              for (let i = 0; i < n; i++) {
-                dImag[colMajorIndex(i, i, n)] = wIm[i];
-              }
-              Dout = RTV.tensor(dReal, [n, n], dImag);
-            } else {
-              Dout = RTV.tensor(dReal, [n, n]);
-            }
-          }
+          const Dout =
+            outputForm === "vector"
+              ? maybeComplexTensor(wRe, [n, 1], wIm)
+              : buildDiagMatrix(wRe, wIm, n);
 
-          if (nargout === 2) {
-            return [Vout, Dout];
-          }
+          if (nargout === 2) return [Vout, Dout];
 
-          // Build W (left eigenvectors)
-          let Wout;
-          if (computeVL && VLRe && VLIm) {
-            if (hasComplex) {
-              Wout = RTV.tensor(
-                new FloatXArray(VLRe),
-                [n, n],
-                new FloatXArray(VLIm)
-              );
-            } else {
-              Wout = RTV.tensor(new FloatXArray(VLRe), [n, n]);
-            }
-          } else {
-            Wout = RTV.tensor(new FloatXArray(n * n), [n, n]);
-          }
+          const Wout =
+            computeVL && VLRe && VLIm
+              ? maybeComplexTensor(VLRe, [n, n], VLIm)
+              : RTV.tensor(new FloatXArray(n * n), [n, n]);
 
           return [Vout, Dout, Wout];
         }
@@ -277,68 +215,32 @@ export function registerEig(): void {
         }
 
         const { wr, wi, VL, VR } = result;
-
-        // Check if any eigenvalues are complex
-        let hasComplex = false;
-        for (let i = 0; i < n; i++) {
-          if (Math.abs(wi[i]) > 0) {
-            hasComplex = true;
-            break;
-          }
-        }
+        const hasComplex = wi.some(v => v !== 0);
 
         // ── nargout === 1: return eigenvalue vector ──────────────────────
         if (nargout === 1) {
-          if (hasComplex) {
-            return RTV.tensor(new FloatXArray(wr), [n, 1], new FloatXArray(wi));
-          }
-          return RTV.tensor(new FloatXArray(wr), [n, 1]);
+          return maybeComplexTensor(wr, [n, 1], wi);
         }
 
         // ── Build eigenvector matrix V (right eigenvectors) ──────────────
-        let Vout;
-        if (computeVR && VR) {
-          Vout = buildEigenvectorMatrix(VR, wi, n, hasComplex);
-        } else {
-          Vout = RTV.tensor(new FloatXArray(n * n), [n, n]);
-        }
+        const Vout =
+          computeVR && VR
+            ? buildEigenvectorMatrix(VR, wi, n, hasComplex)
+            : RTV.tensor(new FloatXArray(n * n), [n, n]);
 
         // ── Build D (eigenvalue matrix or vector) ────────────────────────
-        let Dout;
-        if (outputForm === "vector") {
-          if (hasComplex) {
-            Dout = RTV.tensor(new FloatXArray(wr), [n, 1], new FloatXArray(wi));
-          } else {
-            Dout = RTV.tensor(new FloatXArray(wr), [n, 1]);
-          }
-        } else {
-          // Diagonal matrix
-          const dReal = new FloatXArray(n * n);
-          for (let i = 0; i < n; i++) {
-            dReal[colMajorIndex(i, i, n)] = wr[i];
-          }
-          if (hasComplex) {
-            const dImag = new FloatXArray(n * n);
-            for (let i = 0; i < n; i++) {
-              dImag[colMajorIndex(i, i, n)] = wi[i];
-            }
-            Dout = RTV.tensor(dReal, [n, n], dImag);
-          } else {
-            Dout = RTV.tensor(dReal, [n, n]);
-          }
-        }
+        const Dout =
+          outputForm === "vector"
+            ? maybeComplexTensor(wr, [n, 1], wi)
+            : buildDiagMatrix(wr, wi, n);
 
-        if (nargout === 2) {
-          return [Vout, Dout];
-        }
+        if (nargout === 2) return [Vout, Dout];
 
         // ── nargout === 3: also build W (left eigenvectors) ──────────────
-        let Wout;
-        if (computeVL && VL) {
-          Wout = buildEigenvectorMatrix(VL, wi, n, hasComplex);
-        } else {
-          Wout = RTV.tensor(new FloatXArray(n * n), [n, n]);
-        }
+        const Wout =
+          computeVL && VL
+            ? buildEigenvectorMatrix(VL, wi, n, hasComplex)
+            : RTV.tensor(new FloatXArray(n * n), [n, n]);
 
         return [Vout, Dout, Wout];
       },

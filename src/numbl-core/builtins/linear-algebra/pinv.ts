@@ -11,7 +11,7 @@ import {
 } from "../../runtime/types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { register, builtinSingle } from "../registry.js";
-import { toF64 } from "./check-helpers.js";
+import { gaussJordanEliminate, toF64 } from "./check-helpers.js";
 
 export function registerPinv(): void {
   register(
@@ -126,59 +126,19 @@ function pinvFallback(
       }
     }
 
-    // Solve (A'A) X = A' using Gauss-Jordan
+    // Solve (A'A) X = A' using Gauss-Jordan on augmented [A'A | A']
     const augmented = new FloatXArray(n * (n + m));
     for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        augmented[j * n + i] = ATA[j * n + i];
-      }
-      for (let j = 0; j < m; j++) {
-        augmented[(n + j) * n + i] = AT[j * n + i];
-      }
+      for (let j = 0; j < n; j++) augmented[j * n + i] = ATA[j * n + i];
+      for (let j = 0; j < m; j++) augmented[(n + j) * n + i] = AT[j * n + i];
     }
-
-    // Gauss-Jordan elimination
-    for (let col = 0; col < n; col++) {
-      // Partial pivoting
-      let maxVal = Math.abs(augmented[col * n + col]);
-      let maxRow = col;
-      for (let row = col + 1; row < n; row++) {
-        const val = Math.abs(augmented[col * n + row]);
-        if (val > maxVal) {
-          maxVal = val;
-          maxRow = row;
-        }
-      }
-      if (maxRow !== col) {
-        for (let j = 0; j < n + m; j++) {
-          const tmp = augmented[j * n + col];
-          augmented[j * n + col] = augmented[j * n + maxRow];
-          augmented[j * n + maxRow] = tmp;
-        }
-      }
-
-      const pivot = augmented[col * n + col];
-      if (Math.abs(pivot) < 1e-14) continue;
-
-      for (let j = 0; j < n + m; j++) {
-        augmented[j * n + col] /= pivot;
-      }
-
-      for (let row = 0; row < n; row++) {
-        if (row === col) continue;
-        const factor = augmented[col * n + row];
-        for (let j = 0; j < n + m; j++) {
-          augmented[j * n + row] -= factor * augmented[j * n + col];
-        }
-      }
-    }
+    gaussJordanEliminate(augmented, n, n + m);
 
     // Extract result (n x m)
     const result = new FloatXArray(n * m);
     for (let i = 0; i < n; i++) {
-      for (let j = 0; j < m; j++) {
+      for (let j = 0; j < m; j++)
         result[j * n + i] = augmented[(n + j) * n + i];
-      }
     }
     return RTV.tensor(result, [n, m]);
   } else {
@@ -195,55 +155,19 @@ function pinvFallback(
       }
     }
 
-    // Invert AA' using Gauss-Jordan
+    // Invert AA' using Gauss-Jordan on augmented [AA' | I]
     const augmented = new FloatXArray(m * 2 * m);
     for (let i = 0; i < m; i++) {
-      for (let j = 0; j < m; j++) {
-        augmented[j * m + i] = AAT[j * m + i];
-      }
+      for (let j = 0; j < m; j++) augmented[j * m + i] = AAT[j * m + i];
       augmented[(m + i) * m + i] = 1;
     }
-
-    for (let col = 0; col < m; col++) {
-      let maxVal = Math.abs(augmented[col * m + col]);
-      let maxRow = col;
-      for (let row = col + 1; row < m; row++) {
-        const val = Math.abs(augmented[col * m + row]);
-        if (val > maxVal) {
-          maxVal = val;
-          maxRow = row;
-        }
-      }
-      if (maxRow !== col) {
-        for (let j = 0; j < 2 * m; j++) {
-          const tmp = augmented[j * m + col];
-          augmented[j * m + col] = augmented[j * m + maxRow];
-          augmented[j * m + maxRow] = tmp;
-        }
-      }
-
-      const pivot = augmented[col * m + col];
-      if (Math.abs(pivot) < 1e-14) continue;
-
-      for (let j = 0; j < 2 * m; j++) {
-        augmented[j * m + col] /= pivot;
-      }
-
-      for (let row = 0; row < m; row++) {
-        if (row === col) continue;
-        const factor = augmented[col * m + row];
-        for (let j = 0; j < 2 * m; j++) {
-          augmented[j * m + row] -= factor * augmented[j * m + col];
-        }
-      }
-    }
+    gaussJordanEliminate(augmented, m, 2 * m);
 
     // Extract (AA')^-1 (m x m)
     const AATinv = new FloatXArray(m * m);
     for (let i = 0; i < m; i++) {
-      for (let j = 0; j < m; j++) {
+      for (let j = 0; j < m; j++)
         AATinv[j * m + i] = augmented[(m + j) * m + i];
-      }
     }
 
     // result = A' * (AA')^-1, which is n x m
@@ -251,10 +175,7 @@ function pinvFallback(
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < m; j++) {
         let sum = 0;
-        for (let k = 0; k < m; k++) {
-          // AT[i, k] * AATinv[k, j]
-          sum += AT[k * n + i] * AATinv[j * m + k];
-        }
+        for (let k = 0; k < m; k++) sum += AT[k * n + i] * AATinv[j * m + k];
         result[j * n + i] = sum;
       }
     }
