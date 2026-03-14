@@ -7,6 +7,14 @@ import { register, builtinSingle } from "./registry.js";
 import { IType } from "../lowering/itemTypes.js";
 import { RTV } from "../runtime/index.js";
 
+/** Register a group of names that all share the same dummy builtin. */
+function registerDummyGroup(
+  names: string[],
+  fn: ReturnType<typeof builtinSingle>
+): void {
+  for (const name of names) register(name, fn);
+}
+
 const dummyHandleFunctions = [
   "groot",
   "gcf",
@@ -18,16 +26,6 @@ const dummyHandleFunctions = [
   "axis",
   "odeset",
 ];
-
-function registerDummyHandleFunctions(): void {
-  const fn = builtinSingle(() => RTV.dummyHandle(), {
-    outputType: IType.DummyHandle,
-  });
-  for (const name of dummyHandleFunctions) {
-    register(name, fn);
-  }
-}
-
 const returnDummyStringFunctions = [
   "pwd",
   "datestr",
@@ -35,48 +33,9 @@ const returnDummyStringFunctions = [
   "lastwarn",
   "mfilename",
 ];
-
-function registerDummyStringFunctions(): void {
-  const fn = builtinSingle(() => RTV.string(""), {
-    outputType: IType.String,
-  });
-  for (const name of returnDummyStringFunctions) {
-    register(name, fn);
-  }
-}
-
 const returnEmptyArrayFunctions = ["who", "xlim", "ylim"];
-
-function registerDummyArrayFunctions(): void {
-  const fn = builtinSingle(() => RTV.tensor([], [0, 0]), {
-    outputType: IType.tensor(),
-  });
-  for (const name of returnEmptyArrayFunctions) {
-    register(name, fn);
-  }
-}
-
 const returnDummyBooleanFunctions = ["ispc", "ismac", "isunix"];
-
-function registerDummyBooleanFunctions(): void {
-  const fn = builtinSingle(() => RTV.logical(false), {
-    outputType: IType.Logical,
-  });
-  for (const name of returnDummyBooleanFunctions) {
-    register(name, fn);
-  }
-}
-
 const returnDummyCellArrayFunctions = ["listfonts"];
-
-function registerDummyCellArrayFunctions(): void {
-  const fn = builtinSingle(() => RTV.cell([], [0, 0]), {
-    outputType: IType.cell(IType.Unknown, "unknown"),
-  });
-  for (const name of returnDummyCellArrayFunctions) {
-    register(name, fn);
-  }
-}
 
 function registerPathFunctions(): void {
   // These are dummy registrations so the compiler generates proper call code.
@@ -154,11 +113,28 @@ export function getDummyBuiltinNames(): string[] {
 }
 
 export const registerDummyFunctions = () => {
-  registerDummyHandleFunctions();
-  registerDummyStringFunctions();
-  registerDummyArrayFunctions();
-  registerDummyBooleanFunctions();
-  registerDummyCellArrayFunctions();
+  registerDummyGroup(
+    dummyHandleFunctions,
+    builtinSingle(() => RTV.dummyHandle(), { outputType: IType.DummyHandle })
+  );
+  registerDummyGroup(
+    returnDummyStringFunctions,
+    builtinSingle(() => RTV.string(""), { outputType: IType.String })
+  );
+  registerDummyGroup(
+    returnEmptyArrayFunctions,
+    builtinSingle(() => RTV.tensor([], [0, 0]), { outputType: IType.tensor() })
+  );
+  registerDummyGroup(
+    returnDummyBooleanFunctions,
+    builtinSingle(() => RTV.logical(false), { outputType: IType.Logical })
+  );
+  registerDummyGroup(
+    returnDummyCellArrayFunctions,
+    builtinSingle(() => RTV.cell([], [0, 0]), {
+      outputType: IType.cell(IType.Unknown, "unknown"),
+    })
+  );
   registerHandleGetSet();
   registerPathFunctions();
   registerFileIOFunctions();

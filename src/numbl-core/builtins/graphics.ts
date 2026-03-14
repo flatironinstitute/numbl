@@ -8,178 +8,46 @@ import { isRuntimeNumber, FloatXArray } from "../runtime/types.js";
 import { IType } from "../lowering/itemTypes.js";
 
 export function registerGraphicsFunctions(): void {
-  // figure(handle) — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
+  // Placeholder registrations — real work is done via codegen / runtime special cases
+  const placeholderNames = [
     "figure",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // plot(x, y) — placeholder; real work is done as a special case in runtime
-  register(
     "plot",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // plot3(X, Y, Z) — placeholder; real work is done as a special case in runtime
-  register(
     "plot3",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // surf(X, Y, Z) — placeholder; real work is done as a special case in runtime
-  register(
     "surf",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // hold('on') / hold('off') — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
     "hold",
-    builtinSingle(() => RTV.num(0))
-  );
+    "grid",
+    "clf",
+    "close",
+    "title",
+    "xlabel",
+    "ylabel",
+    "shading",
+    "subplot",
+    "legend",
+    "sgtitle",
+    "zlabel",
+    "colorbar",
+    "colormap",
+    "axis",
+    "view",
+    "imagesc",
+    "contour",
+    "contourf",
+    "mesh",
+    "waterfall",
+    "scatter",
+    "drawnow",
+    "pause",
+  ];
+  const placeholder = builtinSingle(() => RTV.num(0));
+  for (const name of placeholderNames) {
+    register(name, placeholder);
+  }
 
   // ishold() — real work is done via $rt.ishold() in codegen
   register(
     "ishold",
     builtinSingle(() => RTV.logical(false), { outputType: IType.Logical })
-  );
-
-  // grid('on') / grid('off') — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "grid",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // clf — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "clf",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // close — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "close",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // title('text') — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "title",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // xlabel('text') — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "xlabel",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // ylabel('text') — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "ylabel",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // shading(type) — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "shading",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // subplot(rows, cols, index) — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "subplot",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // legend(labels...) — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "legend",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // sgtitle(text) — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "sgtitle",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // zlabel('text') — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "zlabel",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // colorbar — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "colorbar",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // colormap — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "colormap",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // axis — placeholder; real work is done via $rt.plot_instr in codegen
-  register(
-    "axis",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // view — placeholder; real work is done via $rt.view_call in codegen
-  register(
-    "view",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // imagesc — placeholder; real work is done as special case in runtime
-  register(
-    "imagesc",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // contour — placeholder; real work is done as special case in runtime
-  register(
-    "contour",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // contourf — placeholder; real work is done as special case in runtime
-  register(
-    "contourf",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // mesh — placeholder; real work is done as special case in runtime
-  register(
-    "mesh",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // waterfall — placeholder; real work is done as special case in runtime (renders as mesh)
-  register(
-    "waterfall",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // scatter — placeholder; real work is done as special case in runtime
-  register(
-    "scatter",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // drawnow
-  register(
-    "drawnow",
-    builtinSingle(() => RTV.num(0))
-  );
-
-  // pause(seconds)
-  register(
-    "pause",
-    builtinSingle(() => RTV.num(0))
   );
 
   // Colormap functions — return the colormap name as a char for use with colormap()
