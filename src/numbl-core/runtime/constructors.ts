@@ -192,11 +192,16 @@ export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
         // length: value.shape.reduce((a, b) => a * b, 1),
         length: "unknown", // do not include length or we get too many jits
       };
-    case "struct":
-      return {
-        kind: "Struct",
-        knownFields: Array.from(value.fields.keys()),
-      };
+    case "struct": {
+      const knownFields: Record<
+        string,
+        import("../lowering/itemTypes.js").ItemType
+      > = {};
+      for (const [k, v] of value.fields) {
+        knownFields[k] = getItemTypeFromRuntimeValue(v);
+      }
+      return { kind: "Struct", knownFields };
+    }
     case "function":
       return {
         kind: "Function",

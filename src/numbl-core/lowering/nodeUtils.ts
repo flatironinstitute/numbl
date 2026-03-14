@@ -238,9 +238,14 @@ function _computeItemType(
       return { kind: "Tensor" };
     case "End":
       return { kind: "Number" };
-    case "Member":
+    case "Member": {
+      const baseType = itemTypeForExprKind(kind.base.kind);
+      if (baseType.kind === "Struct" && kind.name in baseType.knownFields) {
+        return baseType.knownFields[kind.name];
+      }
+      return { kind: "Unknown" };
+    }
     case "MemberDynamic":
-      // TODO
       return { kind: "Unknown" };
     case "MethodCall":
       return kind.returnType;

@@ -27,6 +27,7 @@ import {
   RuntimeStruct,
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
+import { IType } from "../lowering/itemTypes.js";
 import {
   parseShapeArgs,
   coerceToTensor,
@@ -137,54 +138,57 @@ export function registerMiscFunctions(): void {
 
   register(
     "struct",
-    builtinSingle(args => {
-      if (args.length === 0) return RTV.struct(new Map());
-      if (args.length % 2 !== 0)
-        throw new RuntimeError("struct: requires field-value pairs");
-      // Check if any value is a cell array — if so, create a struct array
-      const fieldNames: string[] = [];
-      const fieldValues: RuntimeValue[] = [];
-      let hasCell = false;
-      let arrayLen = -1;
-      for (let i = 0; i < args.length; i += 2) {
-        const name = toString(args[i]);
-        const val = args[i + 1];
-        fieldNames.push(name);
-        fieldValues.push(val);
-        if (isRuntimeCell(val)) {
-          hasCell = true;
-          const len = val.data.length;
-          if (arrayLen === -1) arrayLen = len;
-          else if (len !== arrayLen)
-            throw new RuntimeError(
-              "struct: cell array values must have the same length"
-            );
-        }
-      }
-      if (!hasCell) {
-        const fields = new Map<string, RuntimeValue>();
-        for (let i = 0; i < fieldNames.length; i++) {
-          fields.set(fieldNames[i], fieldValues[i] as RuntimeValue);
-        }
-        return RTV.struct(fields);
-      }
-      // Create struct array: each element gets one value from each cell
-      const elements = [];
-      for (let k = 0; k < arrayLen; k++) {
-        const fields = new Map<string, RuntimeValue>();
-        for (let i = 0; i < fieldNames.length; i++) {
-          const val = fieldValues[i];
+    builtinSingle(
+      args => {
+        if (args.length === 0) return RTV.struct(new Map());
+        if (args.length % 2 !== 0)
+          throw new RuntimeError("struct: requires field-value pairs");
+        // Check if any value is a cell array — if so, create a struct array
+        const fieldNames: string[] = [];
+        const fieldValues: RuntimeValue[] = [];
+        let hasCell = false;
+        let arrayLen = -1;
+        for (let i = 0; i < args.length; i += 2) {
+          const name = toString(args[i]);
+          const val = args[i + 1];
+          fieldNames.push(name);
+          fieldValues.push(val);
           if (isRuntimeCell(val)) {
-            fields.set(fieldNames[i], val.data[k] as RuntimeValue);
-          } else {
-            // Non-cell values are shared across all elements
-            fields.set(fieldNames[i], val as RuntimeValue);
+            hasCell = true;
+            const len = val.data.length;
+            if (arrayLen === -1) arrayLen = len;
+            else if (len !== arrayLen)
+              throw new RuntimeError(
+                "struct: cell array values must have the same length"
+              );
           }
         }
-        elements.push(RTV.struct(fields));
-      }
-      return RTV.structArray(fieldNames, elements);
-    })
+        if (!hasCell) {
+          const fields = new Map<string, RuntimeValue>();
+          for (let i = 0; i < fieldNames.length; i++) {
+            fields.set(fieldNames[i], fieldValues[i] as RuntimeValue);
+          }
+          return RTV.struct(fields);
+        }
+        // Create struct array: each element gets one value from each cell
+        const elements = [];
+        for (let k = 0; k < arrayLen; k++) {
+          const fields = new Map<string, RuntimeValue>();
+          for (let i = 0; i < fieldNames.length; i++) {
+            const val = fieldValues[i];
+            if (isRuntimeCell(val)) {
+              fields.set(fieldNames[i], val.data[k] as RuntimeValue);
+            } else {
+              // Non-cell values are shared across all elements
+              fields.set(fieldNames[i], val as RuntimeValue);
+            }
+          }
+          elements.push(RTV.struct(fields));
+        }
+        return RTV.structArray(fieldNames, elements);
+      },
+      { outputType: IType.struct() }
+    )
   );
 
   const fieldnamesApply = builtinSingle(args => {

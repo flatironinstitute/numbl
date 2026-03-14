@@ -31,7 +31,7 @@ export function lowerLValue(ctx: LoweringContext, lv: AstLValue): IRLValue {
       if (lv.base.type === "Ident") {
         const vv =
           ctx.lookup(lv.base.name) ??
-          ctx.defineVariable(lv.base.name, IType.Unknown);
+          ctx.defineVariable(lv.base.name, undefined);
         const base: IRExpr = {
           kind: { type: "Var", variable: vv },
           span: lv.base.span,
@@ -43,7 +43,7 @@ export function lowerLValue(ctx: LoweringContext, lv: AstLValue): IRLValue {
         let root: AstExpr = lv.base;
         while (root.type === "Member") root = root.base;
         if (root.type === "Ident" && ctx.lookup(root.name) === null) {
-          ctx.defineVariable(root.name, IType.Unknown);
+          ctx.defineVariable(root.name, undefined);
         }
       }
       if (lv.base.type === "Index" || lv.base.type === "IndexCell") {

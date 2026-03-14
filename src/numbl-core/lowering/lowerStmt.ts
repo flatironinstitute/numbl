@@ -7,7 +7,11 @@
 import { type Stmt as AstStmt } from "../parser/index.js";
 import { SemanticError } from "../lowering/errors.js";
 import { type ItemType, IType } from "../lowering/itemTypes.js";
-import { type IRLValue, type IRStmt } from "../lowering/nodes.js";
+import {
+  type IRExprKind,
+  type IRLValue,
+  type IRStmt,
+} from "../lowering/nodes.js";
 import { itemTypeForExprKind } from "../lowering/nodeUtils.js";
 import { lowerArgumentsBlocks } from "../lowering/lowerArguments.js";
 import { type LoweringContext } from "./loweringContext.js";
@@ -120,6 +124,14 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
           suppressed: stmt.suppressed,
           span,
         };
+      }
+      // Member assignment (e.g. s.x = val, s.a.b = val): update the root
+      // variable's Struct type to include the assigned field and its type.
+      // For chained access like s.a.b = val, builds nested Struct types.
+      // Skip for ClassInstance — property assignments don't change the class type.
+      if (irLv.type === "Member") {
+        const fieldType = itemTypeForExprKind(value.kind);
+        updateStructTypeForMemberAssign(irLv, fieldType);
       }
       // Indexed assignment (e.g. X(i,j)=val, X{i}=val) can change the
       // runtime type of the base variable (e.g. scalar → tensor via
@@ -261,6 +273,41 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         `Unknown statement type: ${(stmt as AstStmt).type}`,
         span
       );
+  }
+}
+
+// ── Struct field type helpers ────────────────────────────────────────────
+
+/**
+ * Walk a Member lvalue chain to the root Var, building nested Struct types
+ * from inside out. For s.a.b = val with fieldType Number:
+ *   innermost: Struct<b: Number>
+ *   next:      Struct<a: Struct<b: Number>>
+ *   root var s gets unified with that.
+ */
+function updateStructTypeForMemberAssign(
+  lv: IRLValue & { type: "Member" },
+  fieldType: ItemType
+): void {
+  // Collect the chain of field names from outermost to innermost
+  const chain: string[] = [lv.name];
+  let cursor: IRExprKind = lv.base.kind;
+  while (cursor.type === "Member") {
+    chain.unshift(cursor.name);
+    cursor = cursor.base.kind;
+  }
+  if (cursor.type !== "Var") return;
+  const v = cursor.variable;
+  // Skip ClassInstance — property assignments don't change the class type
+  if (v.ty && v.ty.kind !== "Struct" && v.ty.kind !== "Unknown") return;
+
+  // Build nested Struct type from inside out
+  let ty: ItemType = IType.struct({ [chain[chain.length - 1]]: fieldType });
+  for (let i = chain.length - 2; i >= 0; i--) {
+    ty = IType.struct({ [chain[i]]: ty });
+  }
+  if (!v.ty || v.ty.kind === "Struct") {
+    v.ty = IType.unify(v.ty, ty);
   }
 }
 

@@ -19,7 +19,7 @@ export type ItemType =
       length: number | "unknown";
     }
   | { kind: "Function"; params: ItemType[]; returns: ItemType }
-  | { kind: "Struct"; knownFields: string[] }
+  | { kind: "Struct"; knownFields: Record<string, ItemType> }
   | { kind: "Void" }
   | { kind: "Unknown" }
   | { kind: "Union"; types: ItemType[] }
@@ -54,8 +54,11 @@ export function typeToString(ty: ItemType): string {
       return `Function<${ty.params.map(typeToString).join(", ")}, ${typeToString(
         ty.returns
       )}>`;
-    case "Struct":
-      return `Struct<${ty.knownFields ? ty.knownFields.join(", ") : "?"}>`;
+    case "Struct": {
+      const entries = Object.entries(ty.knownFields);
+      if (entries.length === 0) return "Struct<>";
+      return `Struct<${entries.map(([k, v]) => `${k}: ${typeToString(v)}`).join(", ")}>`;
+    }
     case "Void":
       return "Void";
     case "Unknown":
@@ -192,7 +195,7 @@ export const IType = {
     return { kind: "Function", params, returns };
   },
 
-  struct(fields: string[]): ItemType {
+  struct(fields: Record<string, ItemType> = {}): ItemType {
     return { kind: "Struct", knownFields: fields };
   },
 
@@ -275,11 +278,22 @@ export const IType = {
           break;
         }
         case "Struct": {
-          // TODO: check this carefully
           if (b.kind === "Struct") {
-            const knownFields = a.knownFields.filter(f =>
-              b.knownFields.includes(f)
-            );
+            // Union of all fields; unify types for fields present in both
+            const knownFields: Record<string, ItemType> = {};
+            for (const [k, v] of Object.entries(a.knownFields)) {
+              if (k in b.knownFields) {
+                knownFields[k] =
+                  IType.unify(v, b.knownFields[k]) ?? IType.Unknown;
+              } else {
+                knownFields[k] = v;
+              }
+            }
+            for (const [k, v] of Object.entries(b.knownFields)) {
+              if (!(k in a.knownFields)) {
+                knownFields[k] = v;
+              }
+            }
             return { kind: "Struct", knownFields };
           }
           break;

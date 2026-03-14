@@ -2,7 +2,7 @@
  * Return type inference utilities for function and method calls.
  */
 
-import { type ItemType } from "../lowering/itemTypes.js";
+import { type ItemType, IType } from "../lowering/itemTypes.js";
 import { type IRExpr } from "../lowering/nodes.js";
 import { itemTypeForExprKind } from "../lowering/nodeUtils.js";
 import { findBuiltinBranch } from "../builtins";
@@ -104,6 +104,26 @@ export function determineReturnType(
       ctx.getOrLowerFunctionSpecialized(name, argTypes) ??
       ctx.getOrLowerWorkspaceFunctionSpecialized(name, argTypes);
     return extractOutputTypes(specialized, nargout);
+  }
+
+  // struct('field', val, ...): extract field names and value types from args
+  if (candidate.type === "builtin" && name === "struct") {
+    if (args.length === 0) return IType.struct();
+    if (args.length % 2 === 0) {
+      const fields: Record<string, ItemType> = {};
+      let allCharKeys = true;
+      for (let i = 0; i < args.length; i += 2) {
+        const keyExpr = args[i].kind;
+        if (keyExpr.type !== "Char") {
+          allCharKeys = false;
+          break;
+        }
+        const fieldName = keyExpr.value.replace(/^'|'$/g, "");
+        fields[fieldName] = itemTypeForExprKind(args[i + 1].kind);
+      }
+      if (allCharKeys) return IType.struct(fields);
+    }
+    return IType.struct();
   }
 
   // Builtin: try to infer from arg types.
