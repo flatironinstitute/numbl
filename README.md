@@ -4,9 +4,13 @@ Numbl is an open-source numerical computing environment that aims to be compatib
 
 **Early stage project.** Numbl is under active development and new functionality is being added regularly.
 
-## Try it in the browser
+## Try it now
 
-You can try numbl directly in the browser at <https://numbl.org> — no installation required. All execution happens locally in your browser. Note that the browser version has limited functionality and is slower than the desktop/command-line version.
+[![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
+
+Click the terminal above to launch an interactive REPL in your browser — no installation required. All execution happens locally in your browser.
+
+The full browser IDE is available at <https://numbl.org>. Note that the browser version has limited functionality and is slower than the desktop/command-line version.
 
 ## Embedding in web pages
 
