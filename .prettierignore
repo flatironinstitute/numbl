@@ -7,3 +7,4 @@ coverage
 build
 .cache
 src/numbl-core/stdlib-bundle.ts
+README.md
