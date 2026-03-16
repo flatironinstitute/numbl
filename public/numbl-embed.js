@@ -36,6 +36,17 @@ class NumblEmbed extends HTMLElement {
       return;
     }
 
+    const defaultNumblUrl = "https://numbl.org";
+    const numblUrl = this.attributes["numbl-url"]?.value || defaultNumblUrl;
+    const cacheBust = `_cb=${Date.now()}`;
+    const mode = this.getAttribute("mode");
+
+    // REPL mode: no script needed, just load the REPL page
+    if (mode === "repl") {
+      this.iframe.src = `${numblUrl}/embed-repl?${cacheBust}`;
+      return;
+    }
+
     const encodePlain = text => {
       const text2 = text.replace(/&lt;/g, "<").replace(/&gt;/g, ">");
       return btoa(text2);
@@ -54,10 +65,6 @@ class NumblEmbed extends HTMLElement {
     } else {
       scriptBase64 = null;
     }
-
-    const defaultNumblUrl = "https://numbl.org";
-    const numblUrl = this.attributes["numbl-url"]?.value || defaultNumblUrl;
-    const cacheBust = `_cb=${Date.now()}`;
 
     if (scriptBase64) {
       this.iframe.src = `${numblUrl}/embed?script=${scriptBase64}&${cacheBust}`;

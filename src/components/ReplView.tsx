@@ -495,6 +495,12 @@ export function ReplView({
             height: "100%",
             padding: "8px",
           },
+          "& .xterm-viewport::-webkit-scrollbar": {
+            display: "none",
+          },
+          "& .xterm-viewport": {
+            scrollbarWidth: "none",
+          },
         }}
       />
     </Box>
