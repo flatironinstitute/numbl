@@ -1,5 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import Editor, { OnMount } from "@monaco-editor/react";
+import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
+import js from "react-syntax-highlighter/dist/esm/languages/hljs/javascript";
+import { githubGist } from "react-syntax-highlighter/dist/esm/styles/hljs";
+
+SyntaxHighlighter.registerLanguage("javascript", js);
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import CloudIcon from "@mui/icons-material/Cloud";
@@ -934,16 +939,15 @@ export function IDEWorkspace({
             </Box>
             <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
               {internalsSubTab === "js" && (
-                <Editor
-                  height="100%"
-                  language="javascript"
-                  value={generatedJS}
-                  options={{
-                    readOnly: true,
-                    minimap: { enabled: false },
-                    fontSize: 12,
-                  }}
-                />
+                <Box sx={{ height: "100%", overflow: "auto" }}>
+                  <SyntaxHighlighter
+                    language="javascript"
+                    style={githubGist}
+                    customStyle={{ margin: 0, fontSize: 12 }}
+                  >
+                    {generatedJS || ""}
+                  </SyntaxHighlighter>
+                </Box>
               )}
               {internalsSubTab === "ast" && (
                 <TreeViewer
@@ -1167,16 +1171,15 @@ export function IDEWorkspace({
                     </Box>
                   )}
                   {mobileOutputTab === 1 && (
-                    <Editor
-                      height="100%"
-                      language="javascript"
-                      value={generatedJS}
-                      options={{
-                        readOnly: true,
-                        minimap: { enabled: false },
-                        fontSize: 12,
-                      }}
-                    />
+                    <Box sx={{ height: "100%", overflow: "auto" }}>
+                      <SyntaxHighlighter
+                        language="javascript"
+                        style={githubGist}
+                        customStyle={{ margin: 0, fontSize: 12 }}
+                      >
+                        {generatedJS || ""}
+                      </SyntaxHighlighter>
+                    </Box>
                   )}
                   {mobileOutputTab === 2 && (
                     <TreeViewer

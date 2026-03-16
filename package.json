@@ -60,6 +60,7 @@
     "fflate": "^0.8.2",
     "node-addon-api": "^8.3.0",
     "pako": "^2.1.0",
+    "react-syntax-highlighter": "^16.1.1",
     "three": "^0.183.2"
   },
   "devDependencies": {
@@ -75,6 +76,7 @@
     "@types/pako": "^2.0.4",
     "@types/react": "^19.2.5",
     "@types/react-dom": "^19.2.3",
+    "@types/react-syntax-highlighter": "^15.5.13",
     "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.0.18",
