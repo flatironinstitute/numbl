@@ -12,7 +12,21 @@ You can try numbl directly in the browser at <https://numbl.org> — no installa
 
 Numbl scripts can be embedded in HTML and Markdown pages (including GitHub Pages). See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage info and a [live demo](https://magland.github.io/numbl-embed-example/example1).
 
+## Quick start (no installation)
+
+If you have Node.js installed, you can run numbl directly with `npx`:
+
+```bash
+npx numbl                      # interactive REPL
+npx numbl eval "disp(eye(3))"  # evaluate inline code
+npx numbl run script.m         # run a .m file
+```
+
+Note: without the native addon, linear algebra operations will be slower. For full performance, see [Installation](#installation) below.
+
 ## Installation
+
+For regular use, install globally:
 
 ```bash
 npm install -g numbl
