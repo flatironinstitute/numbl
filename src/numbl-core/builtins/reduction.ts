@@ -483,8 +483,8 @@ export function registerReductionFunctions(): void {
     // Scan positions in data/imag arrays for extreme value+index.
     // Returns { mRe, mIm, mIdx } where mIdx is 0-based position within indices.
     const minMaxScan = (
-      data: FloatXArray,
-      imag: FloatXArray | undefined,
+      data: ArrayLike<number>,
+      imag: ArrayLike<number> | undefined,
       indices: number[]
     ): { mRe: number; mIm: number; mIdx: number } => {
       let mRe = initial,
