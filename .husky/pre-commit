@@ -1,1 +1,5 @@
 npx lint-staged
+
+# Keep README CLI help section in sync with --help output
+npx tsx scripts/update-readme-usage.ts
+git diff --quiet README.md || git add README.md
