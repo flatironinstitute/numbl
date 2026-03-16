@@ -4,21 +4,17 @@ Numbl is an open-source numerical computing environment that aims to be compatib
 
 **Early stage project.** Numbl is under active development and new functionality is being added regularly.
 
-## Try it now
+## Try it in the browser
 
 [![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
 
-Click the terminal above to launch an interactive REPL in your browser — no installation required. All execution happens locally in your browser.
+Click the terminal above to launch an interactive REPL — no installation required. All execution happens locally in your browser. The full browser IDE with file management and plotting is available at <https://numbl.org>.
 
-The full browser IDE is available at <https://numbl.org>. Note that the browser version has limited functionality and is slower than the desktop/command-line version.
+Numbl scripts can also be embedded in HTML and Markdown pages (including GitHub Pages). See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage and a [live demo](https://magland.github.io/numbl-embed-example/example1).
 
-## Embedding in web pages
+## Command-line usage
 
-Numbl scripts can be embedded in HTML and Markdown pages (including GitHub Pages). See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage info and a [live demo](https://magland.github.io/numbl-embed-example/example1).
-
-## Quick start (no installation)
-
-If you have Node.js installed, you can run numbl directly with `npx`:
+For full performance, use the command-line version. If you have Node.js installed, you can run numbl directly with `npx` (no install needed):
 
 ```bash
 npx numbl                      # interactive REPL
@@ -26,11 +22,7 @@ npx numbl eval "disp(eye(3))"  # evaluate inline code
 npx numbl run script.m         # run a .m file
 ```
 
-Note: without the native addon, linear algebra operations will be slower. For full performance, see [Installation](#installation) below.
-
-## Installation
-
-For regular use, install globally:
+Or install globally for regular use:
 
 ```bash
 npm install -g numbl
