@@ -27,14 +27,39 @@ numbl build-addon
 
 ## Usage
 
-```bash
-numbl                          # interactive REPL
-numbl run script.m             # run a .m file
-numbl eval "disp(eye(3))"      # evaluate inline code
-numbl info                     # print info (JSON), including native addon status
-numbl list-builtins            # list available built-in functions
-numbl --help                   # show all commands and options
+<!-- BEGIN CLI HELP -->
 ```
+Usage: numbl <command> [options]
+
+Commands:
+  run <file.m>       Run a .m file
+  eval "<code>"      Evaluate inline code
+  run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
+  build-addon        Build native LAPACK addon
+  info               Print machine-readable info (JSON)
+  list-builtins      List available built-in functions
+  mip <subcommand>   Package manager (install, uninstall, list, avail, info)
+  (no command)       Start interactive REPL
+
+Options (for REPL):
+  --plot             Enable plot server
+  --plot-port <port> Set plot server port (implies --plot)
+
+Options (for run and eval):
+  --dump-js <file>   Write all generated JavaScript (main + JIT) to file
+  --dump-ast         Print AST as JSON
+  --verbose          Detailed logging to stderr
+  --stream           NDJSON output mode
+  --path <dir>       Add extra workspace directory
+  --plot             Enable plot server
+  --plot-port <port> Set plot server port (implies --plot)
+  --add-script-path  Add the script's directory to the workspace (run only)
+  --no-line-tracking  Omit $rt.$file/$rt.$line from generated JS
+
+Environment variables:
+  NUMBL_PATH         Extra workspace directories (separated by :)
+```
+<!-- END CLI HELP -->
 
 ## Upgrading
 
