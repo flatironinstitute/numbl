@@ -59,6 +59,41 @@ export function isColonIndex(v: RuntimeValue): boolean {
   return isRuntimeString(v) && v === "__COLON__";
 }
 
+/** Convert a RuntimeValue index to an array of 0-based numeric indices.
+ * Handles: colon (all), logical scalar, logical tensor, numeric tensor, numeric scalar.
+ * If `boundsLimit` > 0, throws on out-of-bounds; if 0, skips upper-bound check. */
+function resolveIndex(
+  idx: RuntimeValue,
+  dimSize: number,
+  boundsLimit: number = dimSize
+): number[] {
+  if (isColonIndex(idx)) {
+    return Array.from({ length: dimSize }, (_, i) => i);
+  }
+  if (isRuntimeLogical(idx)) {
+    return idx ? [0] : [];
+  }
+  if (isRuntimeTensor(idx)) {
+    if (idx._isLogical) {
+      const result: number[] = [];
+      for (let i = 0; i < idx.data.length; i++) {
+        if (idx.data[i] !== 0) result.push(i);
+      }
+      return result;
+    }
+    return Array.from(idx.data).map(v => {
+      const i = Math.round(v) - 1;
+      if (i < 0 || (boundsLimit > 0 && i >= boundsLimit))
+        throw new RuntimeError("Index exceeds array bounds");
+      return i;
+    });
+  }
+  const i = Math.round(toNumber(idx)) - 1;
+  if (i < 0 || (boundsLimit > 0 && i >= boundsLimit))
+    throw new RuntimeError("Index exceeds array bounds");
+  return [i];
+}
+
 // ── Indexing ─────────────────────────────────────────────────────────────
 
 /** Index into a value: v(i1, i2, ...) */
@@ -318,39 +353,8 @@ export function indexIntoRTValue(
       }
 
       // General case: row and col can each be scalar or tensor index
-      const rowIdxArr: number[] = isRuntimeLogical(indices[0])
-        ? indices[0]
-          ? [0]
-          : []
-        : isRuntimeTensor(indices[0])
-          ? indices[0]._isLogical
-            ? Array.from(indices[0].data).reduce<number[]>((acc, v, i) => {
-                if (v !== 0) acc.push(i);
-                return acc;
-              }, [])
-            : Array.from(indices[0].data).map(v => Math.round(v) - 1)
-          : [Math.round(toNumber(indices[0])) - 1];
-      const colIdxArr: number[] = isRuntimeLogical(indices[1])
-        ? indices[1]
-          ? [0]
-          : []
-        : isRuntimeTensor(indices[1])
-          ? indices[1]._isLogical
-            ? Array.from(indices[1].data).reduce<number[]>((acc, v, i) => {
-                if (v !== 0) acc.push(i);
-                return acc;
-              }, [])
-            : Array.from(indices[1].data).map(v => Math.round(v) - 1)
-          : [Math.round(toNumber(indices[1])) - 1];
-
-      for (const r of rowIdxArr) {
-        if (r < 0 || r >= rows)
-          throw new RuntimeError("Index exceeds array bounds");
-      }
-      for (const c of colIdxArr) {
-        if (c < 0 || c >= cols)
-          throw new RuntimeError("Index exceeds array bounds");
-      }
+      const rowIdxArr = resolveIndex(indices[0], rows);
+      const colIdxArr = resolveIndex(indices[1], cols);
 
       const numR = rowIdxArr.length;
       const numC = colIdxArr.length;
@@ -384,34 +388,9 @@ export function indexIntoRTValue(
     } else if (indices.length >= 3) {
       // General N-dimensional indexing
       const shape = base.shape;
-      // Resolve each index to an array of 0-based indices
       const dimIndices: number[][] = indices.map((idx, dim) => {
         const dimSize = dim < shape.length ? shape[dim] : 1;
-        if (isColonIndex(idx)) {
-          return Array.from({ length: dimSize }, (_, i) => i);
-        }
-        if (isRuntimeLogical(idx)) {
-          return idx ? [0] : [];
-        }
-        if (isRuntimeTensor(idx)) {
-          if (idx._isLogical) {
-            const result: number[] = [];
-            for (let i = 0; i < idx.data.length; i++) {
-              if (idx.data[i] !== 0) result.push(i);
-            }
-            return result;
-          }
-          return Array.from(idx.data).map(v => {
-            const i = Math.round(v) - 1;
-            if (i < 0 || i >= dimSize)
-              throw new RuntimeError("Index exceeds array bounds");
-            return i;
-          });
-        }
-        const i = Math.round(toNumber(idx)) - 1;
-        if (i < 0 || i >= dimSize)
-          throw new RuntimeError("Index exceeds array bounds");
-        return [i];
+        return resolveIndex(idx, dimSize);
       });
 
       // Check if result is scalar
@@ -1255,55 +1234,9 @@ export function storeIntoRTValueIndex(
         const rowIdx = indices[0];
         const colIdx = indices[1];
 
-        // Get row and column index arrays
-        let rowIndices: number[];
-        let colIndices: number[];
-
-        if (rowIsColon) {
-          rowIndices = Array.from({ length: rows }, (_, i) => i);
-        } else if (rowIsTensor && isRuntimeTensor(rowIdx)) {
-          if (rowIdx._isLogical) {
-            rowIndices = [];
-            for (let i = 0; i < rowIdx.data.length; i++) {
-              if (rowIdx.data[i] !== 0) rowIndices.push(i);
-            }
-          } else {
-            rowIndices = Array.from(rowIdx.data).map(
-              (v: number) => Math.round(v) - 1
-            );
-          }
-        } else if (isRuntimeLogical(rowIdx)) {
-          rowIndices = rowIdx ? [0] : [];
-        } else {
-          rowIndices = [Math.round(toNumber(rowIdx)) - 1];
-        }
-
-        if (colIsColon) {
-          colIndices = Array.from({ length: cols }, (_, i) => i);
-        } else if (colIsTensor && isRuntimeTensor(colIdx)) {
-          if (colIdx._isLogical) {
-            colIndices = [];
-            for (let i = 0; i < colIdx.data.length; i++) {
-              if (colIdx.data[i] !== 0) colIndices.push(i);
-            }
-          } else {
-            colIndices = Array.from(colIdx.data).map(
-              (v: number) => Math.round(v) - 1
-            );
-          }
-        } else if (isRuntimeLogical(colIdx)) {
-          colIndices = colIdx ? [0] : [];
-        } else {
-          colIndices = [Math.round(toNumber(colIdx)) - 1];
-        }
-
-        // Bounds checking — negative indices are always invalid
-        for (const r of rowIndices) {
-          if (r < 0) throw new RuntimeError("Index exceeds array bounds");
-        }
-        for (const c of colIndices) {
-          if (c < 0) throw new RuntimeError("Index exceeds array bounds");
-        }
+        // Resolve indices (boundsLimit=0: skip upper-bound check, tensor can auto-grow)
+        const rowIndices = resolveIndex(rowIdx, rows, 0);
+        const colIndices = resolveIndex(colIdx, cols, 0);
 
         // Auto-grow: if any index exceeds current dimensions, expand the
         // tensor with zero-fill (growing via indexed assignment)
@@ -1425,7 +1358,6 @@ export function storeIntoRTValueIndex(
         const dimSize = dim < shape.length ? shape[dim] : 1;
         if (isColonIndex(idx)) {
           if (dimSize === 0 && rhsShape) {
-            // Infer size from the corresponding RHS dimension
             const rDim =
               rhsDimCursor < rhsShape.length ? rhsShape[rhsDimCursor] : 1;
             rhsDimCursor++;
@@ -1434,27 +1366,8 @@ export function storeIntoRTValueIndex(
           rhsDimCursor++;
           return Array.from({ length: dimSize }, (_, i) => i);
         }
-        if (isRuntimeLogical(idx)) {
-          return idx ? [0] : [];
-        }
-        if (isRuntimeTensor(idx)) {
-          if (idx._isLogical) {
-            const result: number[] = [];
-            for (let i = 0; i < idx.data.length; i++) {
-              if (idx.data[i] !== 0) result.push(i);
-            }
-            return result;
-          }
-          // Don't bounds-check here; we'll grow below
-          return Array.from(idx.data).map(v => {
-            const i = Math.round(v) - 1;
-            if (i < 0) throw new RuntimeError("Index exceeds array bounds");
-            return i;
-          });
-        }
-        const i = Math.round(toNumber(idx)) - 1;
-        if (i < 0) throw new RuntimeError("Index exceeds array bounds");
-        return [i];
+        // boundsLimit=0: skip upper-bound check, tensor can auto-grow
+        return resolveIndex(idx, dimSize, 0);
       });
 
       // Determine required shape — grow base if any index exceeds current dims
