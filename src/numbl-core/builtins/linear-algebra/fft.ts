@@ -275,6 +275,79 @@ function applyFFTAlongDim(
   outShape[dim] = n;
   const totalOut = strideAboveOut * numAbove;
 
+  // ── Try native batch FFT via FFTW guru interface ──────────────────────
+  const bridge = getLapackBridge();
+  if (bridge?.fftAlongDim) {
+    // Ensure Float64Array for native call
+    const inRe64 =
+      inData instanceof Float64Array ? inData : new Float64Array(inData);
+    const inIm64: Float64Array | null = inImag
+      ? inImag instanceof Float64Array
+        ? inImag
+        : new Float64Array(inImag)
+      : null;
+
+    const result = bridge.fftAlongDim(inRe64, inIm64, shape, dim, n, inverse);
+
+    if (result) {
+      const outRe = result.re;
+      const outIm = result.im;
+
+      // For forward FFT of real input, enforce exact conjugate symmetry
+      // per fiber (FFTW is accurate but not bitwise exact)
+      if (!inverse && inputIsReal) {
+        for (let outer = 0; outer < numAbove; outer++) {
+          for (let inner = 0; inner < strideDim; inner++) {
+            const base = inner + outer * strideAboveOut;
+            // DC component: imag = 0
+            outIm[base] = 0;
+            // Nyquist for even n: imag = 0
+            if (n % 2 === 0) outIm[base + (n / 2) * strideDim] = 0;
+            // Conjugate pairs
+            for (let k = 1; k <= Math.floor((n - 1) / 2); k++) {
+              const j = n - k;
+              const idxK = base + k * strideDim;
+              const idxJ = base + j * strideDim;
+              const avgRe = (outRe[idxK] + outRe[idxJ]) / 2;
+              const avgIm = (outIm[idxK] - outIm[idxJ]) / 2;
+              outRe[idxK] = avgRe;
+              outRe[idxJ] = avgRe;
+              outIm[idxK] = avgIm;
+              outIm[idxJ] = -avgIm;
+            }
+          }
+        }
+      }
+
+      // Normalize for inverse FFT
+      if (inverse) {
+        const inv = 1 / n;
+        for (let i = 0; i < outRe.length; i++) {
+          outRe[i] *= inv;
+          outIm[i] *= inv;
+        }
+      }
+
+      // Check if output has any significant imaginary component
+      let anyImag = false;
+      for (let i = 0; i < outIm.length; i++) {
+        if (Math.abs(outIm[i]) > 1e-15) {
+          anyImag = true;
+          break;
+        }
+      }
+
+      return {
+        outData: new FloatXArray(outRe) as FloatXArrayType,
+        outImag: anyImag
+          ? (new FloatXArray(outIm) as FloatXArrayType)
+          : undefined,
+        outShape,
+      };
+    }
+  }
+
+  // ── Fallback: per-fiber JS FFT ───────────────────────────────────────────
   const outData = new FloatXArray(totalOut);
   const outImag = new FloatXArray(totalOut);
   let anyImag = false;
@@ -325,7 +398,6 @@ function applyFFTAlongDim(
       }
     }
   }
-
   return { outData, outImag: anyImag ? outImag : undefined, outShape };
 }
 

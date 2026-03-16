@@ -375,6 +375,27 @@ export interface LapackBridge {
     inverse: boolean
   ): { re: Float64Array; im: Float64Array };
 
+  /**
+   * Batch FFT along a single dimension of a column-major tensor via FFTW.
+   * Transforms ALL fibers in one FFTW call using the guru split interface.
+   * Does NOT normalize for inverse — caller handles 1/n scaling.
+   * @param re      Real part of input tensor (column-major flat array).
+   * @param im      Imaginary part, or null for real input.
+   * @param shape   Tensor dimensions as a JS array of numbers.
+   * @param dim     0-based dimension to transform along.
+   * @param n       FFT length (may differ from shape[dim] for pad/truncate).
+   * @param inverse true for inverse FFT, false for forward.
+   * @returns       { re, im } Float64Arrays for the output tensor.
+   */
+  fftAlongDim?(
+    re: Float64Array,
+    im: Float64Array | null,
+    shape: number[],
+    dim: number,
+    n: number,
+    inverse: boolean
+  ): { re: Float64Array; im: Float64Array };
+
   qzComplex?(
     dataARe: Float64Array,
     dataAIm: Float64Array,

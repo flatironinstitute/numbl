@@ -263,3 +263,4 @@ Napi::Value Qz(const Napi::CallbackInfo& info);
 Napi::Value QzComplex(const Napi::CallbackInfo& info);
 Napi::Value Fft1d(const Napi::CallbackInfo& info);
 Napi::Value Fft1dComplex(const Napi::CallbackInfo& info);
+Napi::Value FftAlongDim(const Napi::CallbackInfo& info);

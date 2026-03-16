@@ -62,6 +62,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, Fft1d));
   exports.Set(Napi::String::New(env, "fft1dComplex"),
               Napi::Function::New(env, Fft1dComplex));
+  exports.Set(Napi::String::New(env, "fftAlongDim"),
+              Napi::Function::New(env, FftAlongDim));
   return exports;
 }
 
