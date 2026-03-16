@@ -103,6 +103,7 @@ export interface ExecResult {
   variableValues: Record<string, RuntimeValue>;
   holdState: boolean;
   profileData?: ProfileData;
+  dispatchUnknownCounts?: Record<string, number>;
 }
 
 // ── Sentinel values ─────────────────────────────────────────────────────

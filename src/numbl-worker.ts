@@ -95,6 +95,7 @@ self.onmessage = (e: MessageEvent) => {
       outputCount: result.output.length,
       workspaceRep,
       plotInstructions: result.plotInstructions,
+      dispatchUnknownCounts: result.dispatchUnknownCounts,
     });
   } catch (error: unknown) {
     const diags = diagnoseErrors(error, code, activeFileName, wsFiles);

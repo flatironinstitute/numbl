@@ -185,6 +185,9 @@ export class Runtime {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private dispatchUnknownCache = new Map<string, (...args: any[]) => any>();
 
+  // Always-on counter: how many times dispatchUnknown was called per function name
+  public dispatchUnknownCounts = new Map<string, number>();
+
   // Profiling: stack-based self-time profiler for disjoint timings
   public profilingEnabled = false;
   private profileStack: { key: string; startTime: number }[] = [];
@@ -377,6 +380,14 @@ export class Runtime {
 
   public getJitCompileTimeMs(): number {
     return this.profileAccum.get("jit") ?? 0;
+  }
+
+  public getDispatchUnknownCounts(): Record<string, number> {
+    const result: Record<string, number> = {};
+    for (const [name, count] of this.dispatchUnknownCounts) {
+      result[name] = count;
+    }
+    return result;
   }
 
   private unwrapResult(
@@ -836,6 +847,10 @@ export class Runtime {
     args: unknown[],
     callSite: CallSite
   ): unknown {
+    this.dispatchUnknownCounts.set(
+      name,
+      (this.dispatchUnknownCounts.get(name) ?? 0) + 1
+    );
     // 1. Infer types from runtime values
     const argTypes: ItemType[] = args.map(a =>
       getItemTypeFromRuntimeValue(ensureRuntimeValue(a))

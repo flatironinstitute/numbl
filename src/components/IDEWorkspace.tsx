@@ -99,6 +99,10 @@ export function IDEWorkspace({
   headerContent,
 }: IDEWorkspaceProps) {
   const [output, setOutput] = useState("");
+  const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
+    string,
+    number
+  > | null>(null);
   const [generatedJS, setGeneratedJS] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [figures, figuresDispatch] = useReducer(
@@ -106,6 +110,9 @@ export function IDEWorkspace({
     initialFiguresState
   );
   const [outputTab, setOutputTab] = useState(0);
+  const [internalsSubTab, setInternalsSubTab] = useState<
+    "js" | "ast" | "dispatch"
+  >("js");
   const [allFilesRep, setAllFilesRep] = useState<
     { name: string; ast: unknown; irProgram: unknown }[]
   >([]);
@@ -265,6 +272,7 @@ export function IDEWorkspace({
         setGeneratedJS(msg.generatedJS || "");
         setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
         setFileSources(msg.workspaceRep?.fileSources ?? null);
+        setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
         setIsRunning(false);
         if (msg.plotInstructions?.length) {
           for (const instr of msg.plotInstructions) {
@@ -380,6 +388,7 @@ export function IDEWorkspace({
 
     setIsRunning(true);
     setOutput("");
+    setDispatchUnknownCounts(null);
     setAllFilesRep([]);
     setFileSources(null);
     figuresDispatch({ type: "clear" });
@@ -534,6 +543,7 @@ export function IDEWorkspace({
           setGeneratedJS(msg.generatedJS || "");
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
+          setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
           setIsRunning(false);
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
@@ -850,12 +860,11 @@ export function IDEWorkspace({
       >
         <Tab label="Output" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
         <Tab
-          label="JavaScript"
+          label="Packages"
           sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
         />
-        <Tab label="AST" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
         <Tab
-          label="Packages"
+          label="Internals"
           sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
         />
       </Tabs>
@@ -874,22 +883,102 @@ export function IDEWorkspace({
             </pre>
           </Box>
         )}
-        {outputTab === 1 && (
-          <Editor
-            height="100%"
-            language="javascript"
-            value={generatedJS}
-            options={{
-              readOnly: true,
-              minimap: { enabled: false },
-              fontSize: 12,
-            }}
-          />
-        )}
+        {outputTab === 1 && <MipPackageManager />}
         {outputTab === 2 && (
-          <TreeViewer data={astData} label="ast" fileSources={fileSources} />
+          <Box
+            sx={{ height: "100%", display: "flex", flexDirection: "column" }}
+          >
+            <Box sx={{ display: "flex", alignItems: "center", px: 1, py: 0.5 }}>
+              <ToggleButtonGroup
+                value={internalsSubTab}
+                exclusive
+                onChange={(_, v) => {
+                  if (v) setInternalsSubTab(v);
+                }}
+                size="small"
+              >
+                <ToggleButton
+                  value="js"
+                  sx={{
+                    py: 0,
+                    px: 1,
+                    fontSize: "0.75rem",
+                    textTransform: "none",
+                  }}
+                >
+                  JavaScript
+                </ToggleButton>
+                <ToggleButton
+                  value="ast"
+                  sx={{
+                    py: 0,
+                    px: 1,
+                    fontSize: "0.75rem",
+                    textTransform: "none",
+                  }}
+                >
+                  AST
+                </ToggleButton>
+                <ToggleButton
+                  value="dispatch"
+                  sx={{
+                    py: 0,
+                    px: 1,
+                    fontSize: "0.75rem",
+                    textTransform: "none",
+                  }}
+                >
+                  Dispatch
+                </ToggleButton>
+              </ToggleButtonGroup>
+            </Box>
+            <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
+              {internalsSubTab === "js" && (
+                <Editor
+                  height="100%"
+                  language="javascript"
+                  value={generatedJS}
+                  options={{
+                    readOnly: true,
+                    minimap: { enabled: false },
+                    fontSize: 12,
+                  }}
+                />
+              )}
+              {internalsSubTab === "ast" && (
+                <TreeViewer
+                  data={astData}
+                  label="ast"
+                  fileSources={fileSources}
+                />
+              )}
+              {internalsSubTab === "dispatch" && (
+                <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
+                  {dispatchUnknownCounts &&
+                  Object.keys(dispatchUnknownCounts).length > 0 ? (
+                    <pre
+                      style={{
+                        margin: 0,
+                        fontFamily: "monospace",
+                        fontSize: "13px",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {Object.entries(dispatchUnknownCounts)
+                        .sort(([, a], [, b]) => b - a)
+                        .map(([name, count]) => `${name}: ${count}`)
+                        .join("\n")}
+                    </pre>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      No dispatchUnknown calls
+                    </Typography>
+                  )}
+                </Box>
+              )}
+            </Box>
+          </Box>
         )}
-        {outputTab === 3 && <MipPackageManager />}
       </Box>
     </Box>
   );

@@ -108,6 +108,10 @@ export function executeCode(
       variableValues: rt.variableValues,
       holdState: rt.holdState,
     };
+    const duc = rt.getDispatchUnknownCounts();
+    if (Object.keys(duc).length > 0) {
+      result.dispatchUnknownCounts = duc;
+    }
     if (options.profile) {
       result.profileData = {
         codegenTimeMs,
