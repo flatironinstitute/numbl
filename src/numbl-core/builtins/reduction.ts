@@ -50,6 +50,56 @@ function squeezeTrailing(shape: number[]): void {
   }
 }
 
+/** Iterate over all 1-D fibers along `dim` (1-based).
+ * For each fiber, calls `callback(outIndex, srcIndices)` where
+ * `srcIndices` is an array of flat indices into the source data.
+ * Returns `{ resultShape, totalElems }` (resultShape is squeezed).
+ * Returns null if dim exceeds the tensor's rank. */
+function forEachSlice(
+  shape: number[],
+  dim: number,
+  callback: (outIdx: number, srcIndices: number[]) => void
+): { resultShape: number[]; totalElems: number } | null {
+  const dimIdx = dim - 1;
+  if (dimIdx >= shape.length) return null;
+
+  const reduceDimSize = shape[dimIdx];
+  const resultShape = [...shape];
+  resultShape[dimIdx] = 1;
+  const totalElems = resultShape.reduce((a, b) => a * b, 1);
+
+  const outSubs = new Array(shape.length).fill(0);
+  const srcIndices = new Array(reduceDimSize);
+  for (let i = 0; i < totalElems; i++) {
+    for (let k = 0; k < reduceDimSize; k++) {
+      const srcSubs = [...outSubs];
+      srcSubs[dimIdx] = k;
+      srcIndices[k] = sub2ind(shape, srcSubs);
+    }
+    callback(i, srcIndices);
+    nextSubscripts(outSubs, resultShape, dimIdx);
+  }
+
+  squeezeTrailing(resultShape);
+  return { resultShape, totalElems };
+}
+
+/** Return 1-based dim to reduce along (first non-singleton), or 0 for "reduce to scalar". */
+function firstReduceDim(shape: number[]): number {
+  const numNonSingleton = shape.filter(d => d > 1).length;
+  if (numNonSingleton <= 1) return 0;
+  return shape.findIndex(d => d > 1) + 1;
+}
+
+/** Return a deep copy of a tensor (data + shape + optional imag). */
+function copyTensor(v: RuntimeTensor): RuntimeValue {
+  return RTV.tensor(
+    new FloatXArray(v.data),
+    [...v.shape],
+    v.imag ? new FloatXArray(v.imag) : undefined
+  );
+}
+
 /** Scan tensor elements for logical reduction (any/all).
  * mode 'any': returns true if any element is nonzero.
  * mode 'all': returns true if all elements are nonzero (true for empty). */
@@ -72,31 +122,22 @@ function logicalAlongDim(
   dim: number,
   mode: "any" | "all"
 ): RuntimeValue {
-  const shape = v.shape;
-  const dimIdx = dim - 1;
-
-  if (dimIdx >= shape.length) {
+  const info = forEachSlice(v.shape, dim, () => {});
+  if (!info) {
+    // dim exceeds rank: element-wise cast to logical
     const result = new FloatXArray(v.data.length);
     for (let i = 0; i < v.data.length; i++)
       result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
-    const t = RTV.tensor(result, [...shape]);
+    const t = RTV.tensor(result, [...v.shape]);
     t._isLogical = true;
     return t;
   }
 
-  const reduceDimSize = shape[dimIdx];
-  const resultShape = [...shape];
-  resultShape[dimIdx] = 1;
-  const totalElems = resultShape.reduce((a, b) => a * b, 1);
-  const result = new FloatXArray(totalElems);
-
-  const outSubs = new Array(shape.length).fill(0);
-  for (let i = 0; i < totalElems; i++) {
+  const result = new FloatXArray(info.totalElems);
+  forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let val: boolean = mode === "all";
-    for (let k = 0; k < reduceDimSize; k++) {
-      const srcSubs = [...outSubs];
-      srcSubs[dimIdx] = k;
-      const srcIdx = sub2ind(shape, srcSubs);
+    for (let k = 0; k < srcIndices.length; k++) {
+      const srcIdx = srcIndices[k];
       const isNonZero =
         v.data[srcIdx] !== 0 || (v.imag !== undefined && v.imag[srcIdx] !== 0);
       if (mode === "any" && isNonZero) {
@@ -108,12 +149,10 @@ function logicalAlongDim(
         break;
       }
     }
-    result[i] = val ? 1 : 0;
-    nextSubscripts(outSubs, resultShape, dimIdx);
-  }
+    result[outIdx] = val ? 1 : 0;
+  });
 
-  squeezeTrailing(resultShape);
-  const t = RTV.tensor(result, resultShape);
+  const t = RTV.tensor(result, info.resultShape);
   t._isLogical = true;
   return t;
 }
@@ -136,52 +175,29 @@ function dimReduce(
   if (!isRuntimeTensor(v))
     throw new RuntimeError("dimReduce: argument must be a tensor");
 
-  const shape = v.shape;
-  const dimIdx = dim - 1; // Convert to 0-based
+  const info = forEachSlice(v.shape, dim, () => {});
+  if (!info) return copyTensor(v);
 
-  // If dim is beyond the tensor's dimensions, nothing to reduce — return copy
-  if (dimIdx >= shape.length) {
-    return RTV.tensor(
-      new FloatXArray(v.data),
-      [...shape],
-      v.imag ? new FloatXArray(v.imag) : undefined
-    );
-  }
+  const result = new FloatXArray(info.totalElems);
+  const resultImag = v.imag ? new FloatXArray(info.totalElems) : undefined;
 
-  const reduceDimSize = shape[dimIdx];
-
-  // Result shape: same as input but with reduced dimension set to 1
-  const resultShape = [...shape];
-  resultShape[dimIdx] = 1;
-  const totalElems = resultShape.reduce((a, b) => a * b, 1);
-  const result = new FloatXArray(totalElems);
-  const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
-
-  // For each output element, accumulate along the reduction dimension
-  const outSubs = new Array(shape.length).fill(0);
-  for (let i = 0; i < totalElems; i++) {
+  forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let acc = initialValue;
     let accIm = resultImag ? initialValue : 0;
-    for (let k = 0; k < reduceDimSize; k++) {
-      const srcSubs = [...outSubs];
-      srcSubs[dimIdx] = k;
-      const srcIdx = sub2ind(shape, srcSubs);
-      acc = reduceFn(acc, v.data[srcIdx]);
-      if (resultImag) accIm = reduceFn(accIm, v.imag![srcIdx]);
+    for (let k = 0; k < srcIndices.length; k++) {
+      acc = reduceFn(acc, v.data[srcIndices[k]]);
+      if (resultImag) accIm = reduceFn(accIm, v.imag![srcIndices[k]]);
     }
-    result[i] = finalizeFn ? finalizeFn(acc, reduceDimSize) : acc;
+    result[outIdx] = finalizeFn ? finalizeFn(acc, srcIndices.length) : acc;
     if (resultImag)
-      resultImag[i] = finalizeFn ? finalizeFn(accIm, reduceDimSize) : accIm;
+      resultImag[outIdx] = finalizeFn
+        ? finalizeFn(accIm, srcIndices.length)
+        : accIm;
+  });
 
-    nextSubscripts(outSubs, resultShape, dimIdx);
-  }
-
-  squeezeTrailing(resultShape);
-
-  // Drop imaginary part if all zeros
   const imOut =
     resultImag && resultImag.some(x => x !== 0) ? resultImag : undefined;
-  return RTV.tensor(result, resultShape, imOut);
+  return RTV.tensor(result, info.resultShape, imOut);
 }
 
 /**
@@ -189,71 +205,47 @@ function dimReduce(
  * because (a+bi)(c+di) = (ac-bd)+(ad+bc)i mixes both parts.
  */
 function complexProd(v: RuntimeTensor, dim?: number): RuntimeValue {
-  const shape = v.shape;
   const re = v.data;
   const im = v.imag!;
 
-  // Helper: multiply along a contiguous slice of the flat array
-  const mulSlice = (
-    start: number,
-    count: number
-  ): { re: number; im: number } => {
-    let accRe = re[start],
-      accIm = im[start];
-    for (let k = 1; k < count; k++) {
-      const idx = start + k;
-      const newRe = accRe * re[idx] - accIm * im[idx];
-      const newIm = accRe * im[idx] + accIm * re[idx];
-      accRe = newRe;
-      accIm = newIm;
-    }
-    return { re: accRe, im: accIm };
-  };
-
   if (dim !== undefined) {
-    // Reduce along specified dimension using sub2ind
-    const dimIdx = dim - 1;
-    if (dimIdx >= shape.length) {
-      return RTV.tensor(new FloatXArray(re), [...shape], new FloatXArray(im));
-    }
-    const reduceDimSize = shape[dimIdx];
-    const resultShape = [...shape];
-    resultShape[dimIdx] = 1;
-    const totalElems = resultShape.reduce((a, b) => a * b, 1);
-    const resultRe = new FloatXArray(totalElems);
-    const resultIm = new FloatXArray(totalElems);
-    const outSubs = new Array(shape.length).fill(0);
-    for (let i = 0; i < totalElems; i++) {
+    const info = forEachSlice(v.shape, dim, () => {});
+    if (!info) return copyTensor(v);
+
+    const resultRe = new FloatXArray(info.totalElems);
+    const resultIm = new FloatXArray(info.totalElems);
+    forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
       let accRe = 1,
         accIm = 0;
-      for (let k = 0; k < reduceDimSize; k++) {
-        const srcSubs = [...outSubs];
-        srcSubs[dimIdx] = k;
-        const srcIdx = sub2ind(shape, srcSubs);
-        const newRe = accRe * re[srcIdx] - accIm * im[srcIdx];
-        const newIm = accRe * im[srcIdx] + accIm * re[srcIdx];
+      for (let k = 0; k < srcIndices.length; k++) {
+        const idx = srcIndices[k];
+        const newRe = accRe * re[idx] - accIm * im[idx];
+        const newIm = accRe * im[idx] + accIm * re[idx];
         accRe = newRe;
         accIm = newIm;
       }
-      resultRe[i] = accRe;
-      resultIm[i] = accIm;
-      nextSubscripts(outSubs, resultShape, dimIdx);
-    }
-    squeezeTrailing(resultShape);
+      resultRe[outIdx] = accRe;
+      resultIm[outIdx] = accIm;
+    });
     const imOut = resultIm.some(x => x !== 0) ? resultIm : undefined;
-    return RTV.tensor(resultRe, resultShape, imOut);
+    return RTV.tensor(resultRe, info.resultShape, imOut);
   }
 
-  // No dim: reduce along first non-singleton dimension
-  const numNonSingleton = shape.filter(d => d > 1).length;
-  if (numNonSingleton <= 1) {
+  // No dim: reduce along first non-singleton dimension or to scalar
+  const d = firstReduceDim(v.shape);
+  if (d === 0) {
     // Vector or scalar: full linear product → scalar
-    const r = mulSlice(0, re.length);
-    return r.im !== 0 ? RTV.complex(r.re, r.im) : RTV.num(r.re);
+    let accRe = re[0],
+      accIm = im[0];
+    for (let k = 1; k < re.length; k++) {
+      const newRe = accRe * re[k] - accIm * im[k];
+      const newIm = accRe * im[k] + accIm * re[k];
+      accRe = newRe;
+      accIm = newIm;
+    }
+    return accIm !== 0 ? RTV.complex(accRe, accIm) : RTV.num(accRe);
   }
-  // Multiple non-singleton dims: reduce along first non-singleton dimension
-  const firstNonSingleton = shape.findIndex(d => d > 1);
-  return complexProd(v, firstNonSingleton + 1);
+  return complexProd(v, d);
 }
 
 // Type check for reductions that return Num without dim arg, Tensor with dim arg
@@ -346,16 +338,66 @@ function preserveTypeCheck(
 export function registerReductionFunctions(): void {
   /** Default dim for reductions: reduce along first non-singleton dimension.
    *  Vectors (at most one non-singleton dim) → scalar. Otherwise → dimReduce. */
-  const defaultDimOrScalar = (
+  /** Reduce a tensor along a dimension using a whole-slice function (for median, mode, etc.) */
+  const sliceDimReduce = (
     v: RuntimeTensor,
+    dim: number,
+    sliceFn: (slice: ArrayLike<number>) => number
+  ): RuntimeValue => {
+    const info = forEachSlice(v.shape, dim, () => {});
+    if (!info) return RTV.tensor(new FloatXArray(v.data), [...v.shape]);
+
+    const result = new FloatXArray(info.totalElems);
+    forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
+      const slice = new FloatXArray(srcIndices.length);
+      for (let k = 0; k < srcIndices.length; k++) {
+        slice[k] = v.data[srcIndices[k]];
+      }
+      result[outIdx] = sliceFn(slice);
+    });
+    return RTV.tensor(result, info.resultShape);
+  };
+
+  /** Unified factory for reductions (sum, mean, median, mode, etc.).
+   *  Handles arg parsing: scalar passthrough, 'all' flag, dim arg, default dim. */
+  type ReductionKernel = {
+    reduceAll: (v: RuntimeTensor) => RuntimeValue;
+    reduceDim: (v: RuntimeTensor, dim: number) => RuntimeValue;
+  };
+  const makeReduction = (
+    name: string,
+    kernel: ReductionKernel
+  ): {
+    check: typeof reductionCheck;
+    apply: (args: RuntimeValue[]) => RuntimeValue;
+  } => ({
+    check: reductionCheck,
+    apply: args => {
+      if (args.length < 1)
+        throw new RuntimeError(`${name} requires at least 1 argument`);
+      const v = args[0];
+      if (isRuntimeNumber(v)) return v;
+      if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+      if (isRuntimeTensor(v)) {
+        if (args.length >= 2) {
+          if (isRuntimeChar(args[1]) && toString(args[1]) === "all")
+            return kernel.reduceAll(v);
+          return kernel.reduceDim(v, Math.round(toNumber(args[1])));
+        }
+        const d = firstReduceDim(v.shape);
+        return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
+      }
+      throw new RuntimeError(`${name}: argument must be numeric`);
+    },
+  });
+
+  /** Create an accumulator-based reduction kernel (sum, mean, etc.) */
+  const accumKernel = (
     reduceFn: (acc: number, val: number) => number,
     initial: number,
     finalizeFn?: (acc: number, count: number) => number
-  ): RuntimeValue => {
-    const shape = v.shape;
-    const numNonSingleton = shape.filter(d => d > 1).length;
-    // Vector or scalar: full linear reduction → scalar result
-    if (numNonSingleton <= 1) {
+  ): ReductionKernel => ({
+    reduceAll: v => {
       let acc = initial;
       for (let i = 0; i < v.data.length; i++) acc = reduceFn(acc, v.data[i]);
       const re = finalizeFn ? finalizeFn(acc, v.data.length) : acc;
@@ -367,116 +409,26 @@ export function registerReductionFunctions(): void {
         if (im !== 0) return RTV.complex(re, im);
       }
       return RTV.num(re);
-    }
-    // Multiple non-singleton dims: reduce along first non-singleton dimension
-    const firstNonSingleton = shape.findIndex(d => d > 1);
-    return dimReduce(v, firstNonSingleton + 1, reduceFn, initial, finalizeFn);
-  };
-
-  /** Factory for accumulator-based reductions (sum, mean, etc.) */
-  const makeAccumReduction = (
-    name: string,
-    reduceFn: (acc: number, val: number) => number,
-    initial: number,
-    finalizeFn?: (acc: number, count: number) => number
-  ): {
-    check: typeof reductionCheck;
-    apply: (args: RuntimeValue[]) => RuntimeValue;
-  } => ({
-    check: reductionCheck,
-    apply: args => {
-      if (args.length < 1)
-        throw new RuntimeError(`${name} requires at least 1 argument`);
-      const v = args[0];
-      if (isRuntimeNumber(v)) return v;
-      if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
-      if (isRuntimeTensor(v)) {
-        if (args.length >= 2) {
-          if (isRuntimeChar(args[1]) && toString(args[1]) === "all") {
-            let acc = initial;
-            for (let i = 0; i < v.data.length; i++)
-              acc = reduceFn(acc, v.data[i]);
-            return RTV.num(finalizeFn ? finalizeFn(acc, v.data.length) : acc);
-          }
-          const dim = Math.round(toNumber(args[1]));
-          return dimReduce(v, dim, reduceFn, initial, finalizeFn);
-        }
-        return defaultDimOrScalar(v, reduceFn, initial, finalizeFn);
-      }
-      throw new RuntimeError(`${name}: argument must be numeric`);
     },
+    reduceDim: (v, dim) => dimReduce(v, dim, reduceFn, initial, finalizeFn),
   });
 
-  /** Reduce a tensor along a dimension using a whole-slice function (for median, mode, etc.) */
-  const sliceDimReduce = (
-    v: RuntimeTensor,
-    dim: number,
+  /** Create a slice-based reduction kernel (median, mode, etc.) */
+  const sliceKernel = (
     sliceFn: (slice: ArrayLike<number>) => number
-  ): RuntimeValue => {
-    const shape = v.shape;
-    const dimIdx = dim - 1;
-    if (dimIdx >= shape.length) {
-      return RTV.tensor(new FloatXArray(v.data), [...shape]);
-    }
-    const reduceDimSize = shape[dimIdx];
-    const resultShape = [...shape];
-    resultShape[dimIdx] = 1;
-    const totalElems = resultShape.reduce((a, b) => a * b, 1);
-    const result = new FloatXArray(totalElems);
-    const outSubs = new Array(shape.length).fill(0);
-    for (let i = 0; i < totalElems; i++) {
-      const slice = new FloatXArray(reduceDimSize);
-      for (let k = 0; k < reduceDimSize; k++) {
-        const srcSubs = [...outSubs];
-        srcSubs[dimIdx] = k;
-        slice[k] = v.data[sub2ind(shape, srcSubs)];
-      }
-      result[i] = sliceFn(slice);
-      nextSubscripts(outSubs, resultShape, dimIdx);
-    }
-    squeezeTrailing(resultShape);
-    return RTV.tensor(result, resultShape);
-  };
-
-  /** Factory for slice-based reductions (median, mode, etc.) */
-  const makeSliceReduction = (
-    name: string,
-    sliceFn: (slice: ArrayLike<number>) => number
-  ): {
-    check: typeof reductionCheck;
-    apply: (args: RuntimeValue[]) => RuntimeValue;
-  } => ({
-    check: reductionCheck,
-    apply: args => {
-      if (args.length < 1)
-        throw new RuntimeError(`${name} requires at least 1 argument`);
-      const v = args[0];
-      if (isRuntimeNumber(v)) return v;
-      if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
-      if (isRuntimeTensor(v)) {
-        if (args.length >= 2) {
-          if (isRuntimeChar(args[1]) && toString(args[1]) === "all") {
-            return RTV.num(sliceFn(v.data));
-          }
-          const dim = Math.round(toNumber(args[1]));
-          return sliceDimReduce(v, dim, sliceFn);
-        }
-        const shape = v.shape;
-        const numNonSingleton = shape.filter(d => d > 1).length;
-        // Vector or scalar: scalar result
-        if (numNonSingleton <= 1) {
-          return RTV.num(sliceFn(v.data));
-        }
-        // Multiple non-singleton dims: reduce along first non-singleton dimension
-        const firstNonSingleton = shape.findIndex(d => d > 1);
-        return sliceDimReduce(v, firstNonSingleton + 1, sliceFn);
-      }
-      throw new RuntimeError(`${name}: argument must be numeric`);
-    },
+  ): ReductionKernel => ({
+    reduceAll: v => RTV.num(sliceFn(v.data)),
+    reduceDim: (v, dim) => sliceDimReduce(v, dim, sliceFn),
   });
 
-  register("sum", [makeAccumReduction("sum", (acc, val) => acc + val, 0)]);
+  register("sum", [
+    makeReduction(
+      "sum",
+      accumKernel((acc, val) => acc + val, 0)
+    ),
+  ]);
 
+  const prodKernel = accumKernel((acc, val) => acc * val, 1);
   register("prod", [
     {
       check: reductionCheck,
@@ -494,15 +446,12 @@ export function registerReductionFunctions(): void {
             );
           }
           if (args.length >= 2) {
-            if (isRuntimeChar(args[1]) && toString(args[1]) === "all") {
-              let acc = 1;
-              for (let i = 0; i < v.data.length; i++) acc *= v.data[i];
-              return RTV.num(acc);
-            }
-            const dim = Math.round(toNumber(args[1]));
-            return dimReduce(v, dim, (acc, val) => acc * val, 1);
+            if (isRuntimeChar(args[1]) && toString(args[1]) === "all")
+              return prodKernel.reduceAll(v);
+            return prodKernel.reduceDim(v, Math.round(toNumber(args[1])));
           }
-          return defaultDimOrScalar(v, (acc, val) => acc * val, 1);
+          const d = firstReduceDim(v.shape);
+          return d === 0 ? prodKernel.reduceAll(v) : prodKernel.reduceDim(v, d);
         }
         throw new RuntimeError("prod: argument must be numeric");
       },
@@ -531,104 +480,93 @@ export function registerReductionFunctions(): void {
       return isBetter(Math.atan2(imA, reA), Math.atan2(imB, reB));
     };
 
-    if (args.length === 1) {
-      const v = args[0];
-      if (isRuntimeNumber(v)) {
-        if (nargout > 1) return [v, RTV.num(1)];
-        return v;
-      }
-      if (isRuntimeLogical(v)) {
-        if (nargout > 1) return [v, RTV.num(1)];
-        return v;
-      }
-      if (isRuntimeComplexNumber(v)) {
-        if (nargout > 1) return [v, RTV.num(1)];
-        return v;
-      }
-      if (isRuntimeTensor(v)) {
-        // Empty tensor: return empty array (Returns [] for max([]), min([]))
-        if (v.data.length === 0) {
-          const empty = RTV.tensor(new FloatXArray(0), [0, 0]);
-          if (nargout > 1) return [empty, empty];
-          return empty;
-        }
-        const shape = v.shape;
-        const numNonSingleton = shape.filter(d => d > 1).length;
-        if (v.imag) {
-          // Complex tensor: compare by real part, ties by imaginary part
-          const im = v.imag;
-          if (numNonSingleton <= 1) {
-            let mRe = initial,
-              mIm = 0,
-              mIdx = 0;
-            let foundNonNaN = false;
-            for (let i = 0; i < v.data.length; i++) {
-              if (v.data[i] !== v.data[i] || im[i] !== im[i]) continue; // skip NaN
-              if (!foundNonNaN || complexIsBetter(v.data[i], im[i], mRe, mIm)) {
-                mRe = v.data[i];
-                mIm = im[i];
-                mIdx = i;
-                foundNonNaN = true;
-              }
-            }
-            if (!foundNonNaN) {
-              mRe = NaN;
-              mIm = 0;
-            }
-            const result = mIm === 0 ? RTV.num(mRe) : RTV.complex(mRe, mIm);
-            if (nargout > 1) return [result, RTV.num(mIdx + 1)];
-            return result;
+    // Scan positions in data/imag arrays for extreme value+index.
+    // Returns { mRe, mIm, mIdx } where mIdx is 0-based position within indices.
+    const minMaxScan = (
+      data: FloatXArray,
+      imag: FloatXArray | undefined,
+      indices: number[]
+    ): { mRe: number; mIm: number; mIdx: number } => {
+      let mRe = initial,
+        mIm = 0,
+        mIdx = 0;
+      let foundNonNaN = false;
+      if (imag) {
+        for (let k = 0; k < indices.length; k++) {
+          const idx = indices[k];
+          if (data[idx] !== data[idx] || imag[idx] !== imag[idx]) continue;
+          if (!foundNonNaN || complexIsBetter(data[idx], imag[idx], mRe, mIm)) {
+            mRe = data[idx];
+            mIm = imag[idx];
+            mIdx = k;
+            foundNonNaN = true;
           }
-          // Multiple non-singleton dims: reduce along first non-singleton
-          const dim = shape.findIndex(d => d > 1) + 1;
-          return minMaxImpl(
-            name,
-            [v, RTV.num(0), RTV.num(dim)],
-            nargout,
-            initial,
-            isBetter,
-            twoArgFn
-          );
         }
-        // Real tensor (existing behavior)
-        if (numNonSingleton <= 1) {
-          let m = initial,
-            mIdx = 0;
-          let foundNonNaN = false;
-          for (let i = 0; i < v.data.length; i++) {
-            const val = v.data[i];
-            if (val !== val) continue; // skip NaN
-            if (!foundNonNaN || isBetter(val, m)) {
-              m = val;
-              mIdx = i;
-              foundNonNaN = true;
-            }
+      } else {
+        for (let k = 0; k < indices.length; k++) {
+          const val = data[indices[k]];
+          if (val !== val) continue;
+          if (!foundNonNaN || isBetter(val, mRe)) {
+            mRe = val;
+            mIdx = k;
+            foundNonNaN = true;
           }
-          if (!foundNonNaN) m = NaN;
-          if (nargout > 1)
-            return [
-              v._isLogical ? RTV.logical(m !== 0) : RTV.num(m),
-              RTV.num(mIdx + 1),
-            ];
-          return v._isLogical ? RTV.logical(m !== 0) : RTV.num(m);
         }
-        // Multiple non-singleton dims: reduce along first non-singleton dimension
-        const dim = shape.findIndex(d => d > 1) + 1; // 1-based
-        // Delegate to the 3-arg dim-reduction path
-        return minMaxImpl(
-          name,
-          [v, RTV.num(0), RTV.num(dim)],
-          nargout,
-          initial,
-          isBetter,
-          twoArgFn
+      }
+      if (!foundNonNaN) {
+        mRe = NaN;
+        mIm = 0;
+      }
+      return { mRe, mIm, mIdx };
+    };
+
+    // Reduce tensor along dim using minMaxScan + forEachSlice
+    const minMaxAlongDim = (
+      v: RuntimeTensor,
+      dim: number
+    ): RuntimeValue | RuntimeValue[] => {
+      const info = forEachSlice(v.shape, dim, () => {});
+      if (!info) return copyTensor(v);
+
+      if (v.imag) {
+        const resultRe = new FloatXArray(info.totalElems);
+        const resultIm = new FloatXArray(info.totalElems);
+        const idxArr =
+          nargout > 1 ? new FloatXArray(info.totalElems) : undefined;
+        forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
+          const { mRe, mIm, mIdx } = minMaxScan(v.data, v.imag, srcIndices);
+          resultRe[outIdx] = mRe;
+          resultIm[outIdx] = mIm;
+          if (idxArr) idxArr[outIdx] = mIdx + 1;
+        });
+        const hasImag = resultIm.some(x => x !== 0);
+        const out = RTV.tensor(
+          resultRe,
+          info.resultShape,
+          hasImag ? resultIm : undefined
         );
+        if (nargout > 1) return [out, RTV.tensor(idxArr!, info.resultShape)];
+        return out;
       }
-    }
-    if (args.length === 2) {
-      const a = args[0];
-      const b = args[1];
-      // Handle complex scalar inputs
+
+      const result = new FloatXArray(info.totalElems);
+      const idxArr = nargout > 1 ? new FloatXArray(info.totalElems) : undefined;
+      forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
+        const { mRe, mIdx } = minMaxScan(v.data, undefined, srcIndices);
+        result[outIdx] = mRe;
+        if (idxArr) idxArr[outIdx] = mIdx + 1;
+      });
+      const out = RTV.tensor(result, info.resultShape);
+      if (v._isLogical) out._isLogical = true;
+      if (nargout > 1) return [out, RTV.tensor(idxArr!, info.resultShape)];
+      return out;
+    };
+
+    // Element-wise min/max of two arguments with broadcasting
+    const minMaxElementwise = (
+      a: RuntimeValue,
+      b: RuntimeValue
+    ): RuntimeValue => {
       if (isRuntimeComplexNumber(a) || isRuntimeComplexNumber(b)) {
         const aRe = isRuntimeNumber(a)
           ? a
@@ -652,7 +590,6 @@ export function registerReductionFunctions(): void {
       if (aIsScalar && bIsScalar) {
         const aVal = toNumber(a),
           bVal = toNumber(b);
-        // NaN-aware — if one is NaN, return the other
         const r = isNaN(aVal)
           ? bVal
           : isNaN(bVal)
@@ -660,7 +597,6 @@ export function registerReductionFunctions(): void {
             : twoArgFn(aVal, bVal);
         return RTV.num(r);
       }
-      // Element-wise with broadcasting
       const aT: RuntimeTensor = aIsScalar
         ? (RTV.tensor(new FloatXArray([toNumber(a)]), [1, 1]) as RuntimeTensor)
         : (a as RuntimeTensor);
@@ -668,9 +604,8 @@ export function registerReductionFunctions(): void {
         ? (RTV.tensor(new FloatXArray([toNumber(b)]), [1, 1]) as RuntimeTensor)
         : (b as RuntimeTensor);
       const outShape = getBroadcastShape(aT.shape, bT.shape);
-      if (!outShape) {
+      if (!outShape)
         throw new RuntimeError(`${name}: non-singleton dimensions must match`);
-      }
       const result = new FloatXArray(outShape.reduce((acc, d) => acc * d, 1));
       broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
         const aVal = aT.data[aIdx],
@@ -682,11 +617,55 @@ export function registerReductionFunctions(): void {
             : twoArgFn(aVal, bVal);
       });
       return RTV.tensor(result, outShape);
+    };
+
+    // --- 1-arg: reduce to scalar or along default dim ---
+    if (args.length === 1) {
+      const v = args[0];
+      if (
+        isRuntimeNumber(v) ||
+        isRuntimeLogical(v) ||
+        isRuntimeComplexNumber(v)
+      ) {
+        if (nargout > 1) return [v, RTV.num(1)];
+        return v;
+      }
+      if (isRuntimeTensor(v)) {
+        if (v.data.length === 0) {
+          const empty = RTV.tensor(new FloatXArray(0), [0, 0]);
+          if (nargout > 1) return [empty, empty];
+          return empty;
+        }
+        const d = firstReduceDim(v.shape);
+        if (d === 0) {
+          // Vector: full scan
+          const allIdx = Array.from({ length: v.data.length }, (_, i) => i);
+          const { mRe, mIm, mIdx } = minMaxScan(v.data, v.imag, allIdx);
+          if (v.imag) {
+            const result = mIm === 0 ? RTV.num(mRe) : RTV.complex(mRe, mIm);
+            if (nargout > 1) return [result, RTV.num(mIdx + 1)];
+            return result;
+          }
+          if (nargout > 1)
+            return [
+              v._isLogical ? RTV.logical(mRe !== 0) : RTV.num(mRe),
+              RTV.num(mIdx + 1),
+            ];
+          return v._isLogical ? RTV.logical(mRe !== 0) : RTV.num(mRe);
+        }
+        return minMaxAlongDim(v, d);
+      }
     }
-    // max(A, [], dim) or max(A, [], 'all') — reduce along specified dimension
+
+    // --- 2-arg: element-wise ---
+    if (args.length === 2) {
+      return minMaxElementwise(args[0], args[1]);
+    }
+
+    // --- 3-arg: reduce along specified dim ---
     if (args.length === 3) {
       const v = args[0];
-      // Handle 'all' flag: reduce across all elements
+      // Handle 'all' flag
       if (
         (isRuntimeString(args[2]) || isRuntimeChar(args[2])) &&
         rstr(args[2]) === "all"
@@ -704,17 +683,16 @@ export function registerReductionFunctions(): void {
           twoArgFn
         );
       }
-      // Handle vector of dimensions: max(A, [], [d1, d2, ...])
+      // Handle vector of dimensions
       if (isRuntimeTensor(args[2])) {
         const dims = Array.from(args[2].data).map(d => Math.round(d));
-        // Sort descending so reducing higher dims first doesn't shift lower dim indices
         const sortedDims = [...dims].sort((a, b) => b - a);
         let result: RuntimeValue = v;
         for (const d of sortedDims) {
           const r = minMaxImpl(
             name,
             [result, RTV.num(0), RTV.num(d)],
-            1, // nargout=1 for intermediate reductions
+            1,
             initial,
             isBetter,
             twoArgFn
@@ -727,112 +705,7 @@ export function registerReductionFunctions(): void {
       if (isRuntimeNumber(v)) return v;
       if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
       if (isRuntimeTensor(v)) {
-        const shape = v.shape;
-        const dimIdx = dim - 1; // 0-based
-
-        // If dim is beyond tensor's dimensions, return a copy
-        if (dimIdx >= shape.length) {
-          return RTV.tensor(
-            new FloatXArray(v.data),
-            [...shape],
-            v.imag ? new FloatXArray(v.imag) : undefined
-          );
-        }
-
-        const reduceDimSize = shape[dimIdx];
-        const resultShape = [...shape];
-        resultShape[dimIdx] = 1;
-        const totalElems = resultShape.reduce((a, b) => a * b, 1);
-
-        if (v.imag) {
-          // Complex tensor: compare by real part, ties by imaginary part
-          const im = v.imag;
-          const resultRe = new FloatXArray(totalElems);
-          const resultIm = new FloatXArray(totalElems);
-          const indices = nargout > 1 ? new FloatXArray(totalElems) : undefined;
-
-          const outSubsC = new Array(shape.length).fill(0);
-          for (let i = 0; i < totalElems; i++) {
-            let mRe = initial,
-              mIm = 0,
-              mIdx = 0;
-            let foundNonNaN = false;
-            for (let k = 0; k < reduceDimSize; k++) {
-              const srcSubs = [...outSubsC];
-              srcSubs[dimIdx] = k;
-              const srcIdx = sub2ind(shape, srcSubs);
-              if (
-                v.data[srcIdx] !== v.data[srcIdx] ||
-                im[srcIdx] !== im[srcIdx]
-              )
-                continue; // skip NaN
-              if (
-                !foundNonNaN ||
-                complexIsBetter(v.data[srcIdx], im[srcIdx], mRe, mIm)
-              ) {
-                mRe = v.data[srcIdx];
-                mIm = im[srcIdx];
-                mIdx = k;
-                foundNonNaN = true;
-              }
-            }
-            if (!foundNonNaN) {
-              mRe = NaN;
-              mIm = 0;
-            }
-            resultRe[i] = mRe;
-            resultIm[i] = mIm;
-            if (indices) indices[i] = mIdx + 1;
-
-            nextSubscripts(outSubsC, resultShape, dimIdx);
-          }
-
-          squeezeTrailing(resultShape);
-
-          const hasImag = resultIm.some(x => x !== 0);
-          const outTensorC = RTV.tensor(
-            resultRe,
-            resultShape,
-            hasImag ? resultIm : undefined
-          );
-          if (nargout > 1)
-            return [outTensorC, RTV.tensor(indices!, resultShape)];
-          return outTensorC;
-        }
-
-        const result = new FloatXArray(totalElems);
-        const indices = nargout > 1 ? new FloatXArray(totalElems) : undefined;
-
-        const outSubs = new Array(shape.length).fill(0);
-        for (let i = 0; i < totalElems; i++) {
-          let m = initial,
-            mIdx = 0;
-          let foundNonNaN = false;
-          for (let k = 0; k < reduceDimSize; k++) {
-            const srcSubs = [...outSubs];
-            srcSubs[dimIdx] = k;
-            const srcIdx = sub2ind(shape, srcSubs);
-            const val = v.data[srcIdx];
-            if (val !== val) continue; // skip NaN
-            if (!foundNonNaN || isBetter(val, m)) {
-              m = val;
-              mIdx = k;
-              foundNonNaN = true;
-            }
-          }
-          if (!foundNonNaN) m = NaN;
-          result[i] = m;
-          if (indices) indices[i] = mIdx + 1;
-
-          nextSubscripts(outSubs, resultShape, dimIdx);
-        }
-
-        squeezeTrailing(resultShape);
-
-        const outTensor3 = RTV.tensor(result, resultShape);
-        if (v._isLogical) outTensor3._isLogical = true;
-        if (nargout > 1) return [outTensor3, RTV.tensor(indices!, resultShape)];
-        return outTensor3;
+        return minMaxAlongDim(v, dim);
       }
     }
     throw new RuntimeError(`${name}: invalid arguments`);
@@ -855,11 +728,13 @@ export function registerReductionFunctions(): void {
   ]);
 
   register("mean", [
-    makeAccumReduction(
+    makeReduction(
       "mean",
-      (acc, val) => acc + val,
-      0,
-      (sum, count) => sum / count
+      accumKernel(
+        (acc, val) => acc + val,
+        0,
+        (sum, count) => sum / count
+      )
     ),
   ]);
 
@@ -891,19 +766,12 @@ export function registerReductionFunctions(): void {
       const dimArg = args.length >= 3 ? Math.round(toNumber(args[2])) : 0;
       if (isRuntimeNumber(v)) return RTV.num(0);
       if (isRuntimeTensor(v)) {
-        const sliceFn = (slice: ArrayLike<number>) =>
-          transform(varianceOf(slice, w));
-        if (dimArg > 0) {
-          return sliceDimReduce(v, dimArg, sliceFn);
-        }
-        // Default: vector → scalar, matrix → reduce along first non-singleton dim
-        const shape = v.shape;
-        const numNonSingleton = shape.filter(d => d > 1).length;
-        if (numNonSingleton <= 1) {
-          return RTV.num(sliceFn(v.data));
-        }
-        const firstNonSingleton = shape.findIndex(d => d > 1);
-        return sliceDimReduce(v, firstNonSingleton + 1, sliceFn);
+        const kernel = sliceKernel((slice: ArrayLike<number>) =>
+          transform(varianceOf(slice, w))
+        );
+        if (dimArg > 0) return kernel.reduceDim(v, dimArg);
+        const d = firstReduceDim(v.shape);
+        return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
       }
       throw new RuntimeError(`${name}: argument must be numeric`);
     };
@@ -965,14 +833,11 @@ export function registerReductionFunctions(): void {
           if (scalar !== null) return scalar;
           if (isRuntimeTensor(v)) {
             if (v.data.length === 0) return RTV.logical(mode === "all");
-            const numNonSingleton = v.shape.filter(d => d > 1).length;
-            if (numNonSingleton <= 1) {
-              // Vector or scalar: full reduction → scalar
+            const d = firstReduceDim(v.shape);
+            if (d === 0) {
               return RTV.logical(scanLogical(v.data, v.imag, mode));
             }
-            // Multiple non-singleton dims: reduce along first non-singleton
-            const firstNonSingleton = v.shape.findIndex(d => d > 1);
-            return logicalAlongDim(v, firstNonSingleton + 1, mode);
+            return logicalAlongDim(v, d, mode);
           }
           throw new RuntimeError(
             `${name}: argument must be numeric or logical`
@@ -1947,7 +1812,7 @@ export function registerReductionFunctions(): void {
     return (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
   };
 
-  register("median", [makeSliceReduction("median", medianOf)]);
+  register("median", [makeReduction("median", sliceKernel(medianOf))]);
 
   /** Helper: find the mode (most frequent value; ties → smallest) */
   const modeOf = (arr: ArrayLike<number>): number => {
@@ -1966,7 +1831,7 @@ export function registerReductionFunctions(): void {
     return bestVal;
   };
 
-  register("mode", [makeSliceReduction("mode", modeOf)]);
+  register("mode", [makeReduction("mode", sliceKernel(modeOf))]);
 
   register(
     "nnz",
