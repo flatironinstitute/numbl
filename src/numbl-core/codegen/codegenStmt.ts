@@ -218,7 +218,16 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
       collectAssignedVarIds(stmt.body, whileAssigned);
       const preLoop = snapshotTypes(cg.typeEnv, whileAssigned);
 
+      // The while condition is re-evaluated every iteration, so variables
+      // assigned in the body may have changed type. Compile the condition
+      // with those variables set to Unknown so we get the safe codepath.
+      for (const vid of whileAssigned) {
+        cg.typeEnv.set({ id: vid }, IType.Unknown);
+      }
       const cond = genExpr(cg, stmt.cond);
+      // Restore pre-loop types for the body codegen
+      restoreTypes(cg.typeEnv, preLoop);
+
       cg.emit(`while ($rt.toBool(${cond})) {`);
       cg.pushIndent();
       genStmts(cg, stmt.body);
