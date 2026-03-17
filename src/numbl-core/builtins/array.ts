@@ -98,7 +98,7 @@ export function registerArrayFunctions(): void {
   register(
     "speye",
     builtinSingle(args => {
-      const dims = parseShapeArgs(args, "speye");
+      const dims = parseShapeArgs(args);
       const rows = dims[0];
       const cols = dims.length >= 2 ? dims[1] : rows;
       const k = Math.min(rows, cols);
