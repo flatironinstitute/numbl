@@ -493,7 +493,7 @@ function preCollectAssignedVarIds(
 }
 
 /** Save current types for a set of variable IDs. */
-function snapshotTypes(
+export function snapshotTypes(
   typeEnv: TypeEnv,
   varIds: Set<string>
 ): Map<string, ItemType | undefined> {
@@ -505,7 +505,7 @@ function snapshotTypes(
 }
 
 /** Restore types from a snapshot. */
-function restoreTypes(
+export function restoreTypes(
   typeEnv: TypeEnv,
   snap: Map<string, ItemType | undefined>
 ): void {
@@ -522,7 +522,7 @@ function restoreTypes(
  * If `includePreBranch` is true, the pre-branch type is also included
  * (for when not all paths assign, e.g. if without else).
  */
-function joinBranchTypes(
+export function joinBranchTypes(
   typeEnv: TypeEnv,
   varIds: Set<string>,
   preBranchTypes: Map<string, ItemType | undefined>,
@@ -547,7 +547,7 @@ function joinBranchTypes(
 
 // ── Loop assignedType fixpoint ───────────────────────────────────────────
 
-function itemTypesEqual(
+export function itemTypesEqual(
   a: ItemType | undefined,
   b: ItemType | undefined
 ): boolean {
