@@ -50,6 +50,7 @@ function toComplex(v: RuntimeValue): { re: number; im: number } {
   if (isRuntimeTensor(v) && v.data.length === 1) {
     return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
   }
+  if (isRuntimeSparseMatrix(v)) return toComplex(densify(v));
   throw new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`);
 }
 
@@ -58,7 +59,9 @@ function isComplexOrMixed(a: RuntimeValue, b: RuntimeValue): boolean {
     isRuntimeComplexNumber(a) ||
     isRuntimeComplexNumber(b) ||
     (isRuntimeTensor(a) && a.imag !== undefined) ||
-    (isRuntimeTensor(b) && b.imag !== undefined)
+    (isRuntimeTensor(b) && b.imag !== undefined) ||
+    (isRuntimeSparseMatrix(a) && a.pi !== undefined) ||
+    (isRuntimeSparseMatrix(b) && b.pi !== undefined)
   );
 }
 
@@ -95,6 +98,7 @@ function toComplexParts(v: RuntimeValue):
     const im = v.imag || new FloatXArray(v.data.length); // allocate zeros if needed
     return { scalar: false, re: v.data, im, shape: v.shape };
   }
+  if (isRuntimeSparseMatrix(v)) return toComplexParts(densify(v));
   throw new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`);
 }
 
@@ -360,6 +364,10 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   // Matrix right division: A / B = (B' \ A')' (uses mldivide)
   // When B is a matrix, always use matrix division (scalar A is promoted);
   // mLeftDiv will error on dimension mismatch, matching MATLAB behaviour.
+  if (isRuntimeSparseMatrix(b)) {
+    // Densify sparse b for matrix division
+    return mDiv(a, densify(b));
+  }
   if (isRuntimeTensor(b)) {
     const at = mConjugateTranspose(coerceToTensor(a, "mrdivide"));
     const bt = mConjugateTranspose(b);
@@ -385,6 +393,9 @@ export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Left division (mldivide): a \ b — for scalars b/a, for matrices solve a*x = b */
 export function mLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Densify sparse operands for linear solve
+  if (isRuntimeSparseMatrix(a)) return mLeftDiv(densify(a), b);
+  if (isRuntimeSparseMatrix(b)) return mLeftDiv(a, densify(b));
   // Scalar A: A \ B is element-wise B / A
   if (isRuntimeNumber(a) || isRuntimeLogical(a)) {
     return mElemDiv(b, a);
@@ -751,6 +762,10 @@ function asNumeric(
       return { scalar: true, value: v.data[0], isComplex: false };
     }
     return { scalar: false, tensor: v };
+  }
+  if (isRuntimeSparseMatrix(v)) {
+    // Densify sparse for generic numeric operations
+    return asNumeric(densify(v));
   }
   if (isRuntimeChar(v)) {
     // Char arithmetic: treat each character as its UTF-16 code point

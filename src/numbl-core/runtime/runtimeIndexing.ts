@@ -27,6 +27,7 @@ import {
   isRuntimeStructArray,
   isRuntimeComplexNumber,
   isRuntimeClassInstance,
+  isRuntimeSparseMatrix,
   FloatXArray,
 } from "../runtime/types.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
@@ -96,6 +97,10 @@ export function endResolver(
       return dim < mv.shape.length ? mv.shape[dim] : 1;
     }
     if (isRuntimeStructArray(mv)) return mv.elements.length;
+    if (isRuntimeSparseMatrix(mv)) {
+      if (numIndices === 1) return mv.m * mv.n;
+      return dim === 0 ? mv.m : dim === 1 ? mv.n : 1;
+    }
     return 1;
   };
 }
@@ -428,6 +433,12 @@ export function indexStore(
     }
     // No subsasgn or recursion guard active — just replace (fallback)
     return ensureRuntimeValue(rhs);
+  }
+  // Sparse matrix indexed assignment — delegate to storeIntoRTValueIndex
+  if (isRuntimeSparseMatrix(mv)) {
+    const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+    const rhsMv = ensureRuntimeValue(rhs);
+    return mIndexStore(mv, idxMvals, rhsMv);
   }
   // When the base is a scalar number and the RHS is a class instance or struct,
   // replace the variable entirely

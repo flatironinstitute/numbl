@@ -21,10 +21,61 @@ import {
   isRuntimeChar,
   isRuntimeTensor,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
 import { mTranspose, mConjugateTranspose } from "./arithmetic.js";
 import { coerceToTensor } from "./shape-utils.js";
+
+/** Flip a sparse matrix along dimIdx: 0=rows (flipud), 1=cols (fliplr). */
+function flipSparse(
+  v: import("../runtime/types.js").RuntimeSparseMatrix,
+  dimIdx: number
+): import("../runtime/types.js").RuntimeSparseMatrix {
+  const isComplex = v.pi !== undefined;
+  const nnz = v.jc[v.n];
+
+  if (dimIdx === 1) {
+    // fliplr: reverse column order
+    const ir = new Int32Array(nnz);
+    const pr = new Float64Array(nnz);
+    const pi = isComplex ? new Float64Array(nnz) : undefined;
+    const jc = new Int32Array(v.n + 1);
+    let dst = 0;
+    for (let c = 0; c < v.n; c++) {
+      const origCol = v.n - 1 - c;
+      jc[c] = dst;
+      for (let k = v.jc[origCol]; k < v.jc[origCol + 1]; k++) {
+        ir[dst] = v.ir[k];
+        pr[dst] = v.pr[k];
+        if (pi && v.pi) pi[dst] = v.pi[k];
+        dst++;
+      }
+    }
+    jc[v.n] = dst;
+    return RTV.sparseMatrix(v.m, v.n, ir, jc, pr, pi);
+  }
+  // flipud: reverse row indices within each column
+  const ir = new Int32Array(nnz);
+  const pr = new Float64Array(nnz);
+  const pi = isComplex ? new Float64Array(nnz) : undefined;
+  const jc = new Int32Array(v.n + 1);
+  let dst = 0;
+  for (let c = 0; c < v.n; c++) {
+    jc[c] = dst;
+    // Reverse entries within column to keep ir sorted after flipping
+    const start = v.jc[c];
+    const end = v.jc[c + 1];
+    for (let k = end - 1; k >= start; k--) {
+      ir[dst] = v.m - 1 - v.ir[k];
+      pr[dst] = v.pr[k];
+      if (pi && v.pi) pi[dst] = v.pi[k];
+      dst++;
+    }
+  }
+  jc[v.n] = dst;
+  return RTV.sparseMatrix(v.m, v.n, ir, jc, pr, pi);
+}
 
 /** Flip a tensor along a specific dimension (0-based dimIdx). N-D safe. */
 function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
@@ -62,6 +113,74 @@ export function registerArrayManipulationFunctions(): void {
       if (args.length < 2)
         throw new RuntimeError("reshape requires at least 2 arguments");
       const v = args[0];
+
+      // Sparse reshape: reinterpret CSC data with new shape
+      if (isRuntimeSparseMatrix(v)) {
+        const totalEl = v.m * v.n;
+        let rawDims: (number | null)[];
+        if (
+          args.length === 2 &&
+          isRuntimeTensor(args[1]) &&
+          args[1].data.length > 1
+        ) {
+          rawDims = Array.from(args[1].data).map(x => Math.round(x));
+        } else {
+          rawDims = args.slice(1).map(a => {
+            if (isRuntimeTensor(a) && a.data.length === 0) return null;
+            return Math.round(toNumber(a));
+          });
+        }
+        const autoCount = rawDims.filter(d => d === null).length;
+        if (autoCount > 1)
+          throw new RuntimeError("reshape: only one dimension size can be []");
+        let shape: number[];
+        if (autoCount === 1) {
+          const known = rawDims.filter(d => d !== null) as number[];
+          const knownProduct = known.reduce((a, b) => a * b, 1);
+          if (totalEl % knownProduct !== 0)
+            throw new RuntimeError(
+              "reshape: number of elements must not change"
+            );
+          shape = rawDims.map(d => (d === null ? totalEl / knownProduct : d));
+        } else {
+          shape = rawDims as number[];
+        }
+        if (shape.length !== 2)
+          throw new RuntimeError("reshape: sparse matrices must be 2-D");
+        const newM = shape[0];
+        const newN = shape[1];
+        if (newM * newN !== totalEl)
+          throw new RuntimeError("reshape: number of elements must not change");
+        // Remap CSC entries: old linear index = oldCol * oldM + oldRow → new (row, col)
+        const nnz = v.jc[v.n];
+        const triplets: { row: number; col: number; idx: number }[] = [];
+        for (let c = 0; c < v.n; c++) {
+          for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+            const lin = c * v.m + v.ir[k];
+            const newCol = Math.floor(lin / newM);
+            const newRow = lin % newM;
+            triplets.push({ row: newRow, col: newCol, idx: k });
+          }
+        }
+        triplets.sort((a, b) => a.col - b.col || a.row - b.row);
+        const ir = new Int32Array(nnz);
+        const pr = new Float64Array(nnz);
+        const pi = v.pi ? new Float64Array(nnz) : undefined;
+        const jc = new Int32Array(newN + 1);
+        let ti = 0;
+        for (let c = 0; c < newN; c++) {
+          jc[c] = ti;
+          while (ti < nnz && triplets[ti].col === c) {
+            ir[ti] = triplets[ti].row;
+            pr[ti] = v.pr[triplets[ti].idx];
+            if (pi && v.pi) pi[ti] = v.pi[triplets[ti].idx];
+            ti++;
+          }
+        }
+        jc[newN] = ti;
+        return RTV.sparseMatrix(newM, newN, ir, jc, pr, pi);
+      }
+
       if (
         !isRuntimeTensor(v) &&
         !isRuntimeNumber(v) &&
@@ -169,6 +288,117 @@ export function registerArrayManipulationFunctions(): void {
         imag[colMajorIndex(r, c, m)] = v.im;
         return RTV.tensor(data, [m, m], imag);
       }
+      // Sparse matrix: extract or create diagonal as sparse
+      if (isRuntimeSparseMatrix(v)) {
+        const m = v.m;
+        const n = v.n;
+        const isVec = m === 1 || n === 1;
+        if (isVec) {
+          // Sparse vector → sparse diagonal matrix
+          const vecLen = Math.max(m, n);
+          const sz = vecLen + absK;
+          const irArr: number[] = [];
+          const prArr: number[] = [];
+          const piArr: number[] = [];
+          const isComplex = v.pi !== undefined;
+          // Collect entries from sparse vector
+          for (let c = 0; c < v.n; c++) {
+            for (let kk = v.jc[c]; kk < v.jc[c + 1]; kk++) {
+              const vecIdx = m === 1 ? c : v.ir[kk]; // row or col vector
+              irArr.push(vecIdx + (k < 0 ? -k : 0));
+              prArr.push(v.pr[kk]);
+              if (isComplex) piArr.push(v.pi![kk]);
+            }
+          }
+          // Build CSC for diagonal matrix
+          // Map entries to (row, col) on the diagonal
+          const entries: {
+            row: number;
+            col: number;
+            re: number;
+            im: number;
+          }[] = [];
+          for (let i = 0; i < irArr.length; i++) {
+            const r = irArr[i];
+            if (k < 0) {
+              // row = vecIdx + absK, col = vecIdx
+              const vecIdx = r - absK;
+              entries.push({
+                row: r,
+                col: vecIdx,
+                re: prArr[i],
+                im: isComplex ? piArr[i] : 0,
+              });
+            } else {
+              entries.push({
+                row: r,
+                col: r + k,
+                re: prArr[i],
+                im: isComplex ? piArr[i] : 0,
+              });
+            }
+          }
+          entries.sort((a, b) => a.col - b.col || a.row - b.row);
+          const newIr = new Int32Array(entries.length);
+          const newPr = new Float64Array(entries.length);
+          const newPi = isComplex
+            ? new Float64Array(entries.length)
+            : undefined;
+          const jc = new Int32Array(sz + 1);
+          let ti = 0;
+          for (let c = 0; c < sz; c++) {
+            jc[c] = ti;
+            while (ti < entries.length && entries[ti].col === c) {
+              newIr[ti] = entries[ti].row;
+              newPr[ti] = entries[ti].re;
+              if (newPi) newPi[ti] = entries[ti].im;
+              ti++;
+            }
+          }
+          jc[sz] = ti;
+          return RTV.sparseMatrix(sz, sz, newIr, jc, newPr, newPi);
+        }
+        // Sparse matrix → extract k-th diagonal as sparse column vector
+        const iStart = Math.max(0, -k);
+        const jStart = Math.max(0, k);
+        const diagLen = Math.min(m - iStart, n - jStart);
+        if (diagLen <= 0) {
+          return RTV.sparseMatrix(
+            0,
+            1,
+            new Int32Array(0),
+            new Int32Array([0]),
+            new Float64Array(0)
+          );
+        }
+        const isComplex = v.pi !== undefined;
+        const dIr: number[] = [];
+        const dPr: number[] = [];
+        const dPi: number[] = [];
+        for (let j = 0; j < diagLen; j++) {
+          const row = iStart + j;
+          const col = jStart + j;
+          // Binary search in CSC column
+          for (let kk = v.jc[col]; kk < v.jc[col + 1]; kk++) {
+            if (v.ir[kk] === row) {
+              dIr.push(j);
+              dPr.push(v.pr[kk]);
+              if (isComplex) dPi.push(v.pi![kk]);
+              break;
+            }
+          }
+        }
+        const jcOut = new Int32Array([0, dIr.length]);
+        return RTV.sparseMatrix(
+          diagLen,
+          1,
+          new Int32Array(dIr),
+          jcOut,
+          new Float64Array(dPr),
+          isComplex ? new Float64Array(dPi) : undefined
+        );
+      }
+
       if (!isRuntimeTensor(v))
         throw new RuntimeError("diag: argument must be numeric");
       const [rows, cols] = tensorSize2D(v);
@@ -305,6 +535,7 @@ export function registerArrayManipulationFunctions(): void {
       if (isRuntimeNumber(v)) return v;
       if (isRuntimeChar(v))
         return { kind: "char", value: v.value.split("").reverse().join("") };
+      if (isRuntimeSparseMatrix(v)) return flipSparse(v, 1);
       if (!isRuntimeTensor(v))
         throw new RuntimeError("fliplr: argument must be numeric or char");
       return flipAlongDim(v, 1); // dim 2 (0-based index 1)
@@ -319,6 +550,7 @@ export function registerArrayManipulationFunctions(): void {
       const v = args[0];
       if (isRuntimeNumber(v)) return v;
       if (isRuntimeChar(v)) return v; // char is 1×N row vector, flipud is identity
+      if (isRuntimeSparseMatrix(v)) return flipSparse(v, 0);
       if (!isRuntimeTensor(v))
         throw new RuntimeError("flipud: argument must be numeric or char");
       return flipAlongDim(v, 0); // dim 1 (0-based index 0)

@@ -114,7 +114,15 @@ function toNumericArray(v: RuntimeValue, name: string): number[] {
   if (isRuntimeNumber(v)) return [v];
   if (isRuntimeLogical(v)) return [v ? 1 : 0];
   if (isRuntimeTensor(v)) return Array.from(v.data);
+  if (isRuntimeComplexNumber(v)) return [v.re];
   throw new RuntimeError(`${name}: arguments must be numeric`);
+}
+
+/** Extract imaginary parts from a RuntimeValue (undefined if all real). */
+function toImagArray(v: RuntimeValue): number[] | undefined {
+  if (isRuntimeComplexNumber(v)) return [v.im];
+  if (isRuntimeTensor(v) && v.imag) return Array.from(v.imag);
+  return undefined;
 }
 
 /** Build a sparse matrix from COO triplets (1-based i, j; summing duplicates). */
@@ -123,28 +131,38 @@ function buildSparseFromTriplets(
   jArr: number[],
   vArr: number[],
   m: number,
-  n: number
+  n: number,
+  vImag?: number[]
 ): import("../runtime/types.js").RuntimeSparseMatrix {
   const nnz = iArr.length;
+  const isComplex = vImag !== undefined;
   // Build (col0, row0, value) triplets with 0-based indices
-  const triplets: { col: number; row: number; val: number }[] = [];
+  const triplets: { col: number; row: number; re: number; im: number }[] = [];
   for (let k = 0; k < nnz; k++) {
-    triplets.push({ col: jArr[k] - 1, row: iArr[k] - 1, val: vArr[k] });
+    triplets.push({
+      col: jArr[k] - 1,
+      row: iArr[k] - 1,
+      re: vArr[k],
+      im: isComplex ? vImag[k] : 0,
+    });
   }
   // Sort by (col, row)
   triplets.sort((a, b) => a.col - b.col || a.row - b.row);
   // Merge duplicates by summing, tracking column for each merged entry
   const mergedIr: number[] = [];
   const mergedPr: number[] = [];
+  const mergedPi: number[] = [];
   const mergedCols: number[] = [];
   let prevCol = -1;
   let prevRow = -1;
   for (const t of triplets) {
     if (t.col === prevCol && t.row === prevRow) {
-      mergedPr[mergedPr.length - 1] += t.val;
+      mergedPr[mergedPr.length - 1] += t.re;
+      if (isComplex) mergedPi[mergedPi.length - 1] += t.im;
     } else {
       mergedIr.push(t.row);
-      mergedPr.push(t.val);
+      mergedPr.push(t.re);
+      if (isComplex) mergedPi.push(t.im);
       mergedCols.push(t.col);
       prevCol = t.col;
       prevRow = t.row;
@@ -163,7 +181,8 @@ function buildSparseFromTriplets(
     n,
     new Int32Array(mergedIr),
     jc,
-    new Float64Array(mergedPr)
+    new Float64Array(mergedPr),
+    isComplex ? new Float64Array(mergedPi) : undefined
   );
 }
 
@@ -538,12 +557,17 @@ export function registerIntrospectionFunctions(): void {
         const len = Math.max(iArr.length, jArr.length);
         // v can be scalar (broadcast) or array
         let vArr: number[];
+        let vImag: number[] | undefined;
         if (isRuntimeNumber(vArg)) {
           vArr = new Array(len).fill(vArg);
+        } else if (isRuntimeComplexNumber(vArg)) {
+          vArr = new Array(len).fill(vArg.re);
+          vImag = new Array(len).fill(vArg.im);
         } else if (isRuntimeLogical(vArg)) {
           vArr = new Array(len).fill(vArg ? 1 : 0);
         } else {
           vArr = toNumericArray(vArg, "sparse");
+          vImag = toImagArray(vArg);
         }
         if (iArr.length !== jArr.length || iArr.length !== vArr.length) {
           // Allow scalar i or j to broadcast
@@ -573,7 +597,7 @@ export function registerIntrospectionFunctions(): void {
           }
         }
         // nzmax (args[5]) is ignored — it's a pre-allocation hint
-        return buildSparseFromTriplets(iArr, jArr, vArr, m, n);
+        return buildSparseFromTriplets(iArr, jArr, vArr, m, n, vImag);
       }
       throw new RuntimeError("sparse: unsupported call signature");
     })

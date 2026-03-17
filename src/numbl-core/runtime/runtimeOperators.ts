@@ -44,6 +44,7 @@ import {
   isRuntimeTensor,
   isRuntimeCell,
   isRuntimeChar,
+  isRuntimeSparseMatrix,
   FloatXArray,
 } from "../runtime/types.js";
 import { asNumber } from "../executor/helpers.js";
@@ -52,6 +53,7 @@ import {
   linsolveLapack,
   linsolveComplexLapack,
 } from "../../numbl-core/builtins/linear-algebra/linsolve.js";
+import { sparseToDense as sparseToDenseFn } from "../../numbl-core/builtins/sparse-arithmetic.js";
 import {
   type DeferredRange,
   type DeferredHorzcat,
@@ -189,10 +191,12 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         result = mElemDiv(mb, ma);
         break;
       }
-      const tensorA = ma;
+      const tensorA = isRuntimeSparseMatrix(ma) ? sparseToDenseFn(ma) : ma;
       const tensorB = isRuntimeNumber(mb)
         ? RTV.tensor(new FloatXArray([mb]), [1, 1])
-        : mb;
+        : isRuntimeSparseMatrix(mb)
+          ? sparseToDenseFn(mb)
+          : mb;
       if (!isRuntimeTensor(tensorA) || !isRuntimeTensor(tensorB))
         throw new RuntimeError(
           "LeftDiv (\\): operands must be numeric matrices"

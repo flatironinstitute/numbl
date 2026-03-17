@@ -14,6 +14,8 @@ import {
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeString,
+  isRuntimeSparseMatrix,
+  type RuntimeSparseMatrix,
   kstr,
 } from "./types.js";
 import { RuntimeError } from "./error.js";
@@ -59,6 +61,11 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
   if (values.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
   if (values.length === 1) return values[0];
 
+  // If any element is sparse, concatenate as sparse
+  if (values.some(v => isRuntimeSparseMatrix(v))) {
+    return sparseCatAlongDim(values, 1);
+  }
+
   // If any element is a char, concatenate as char array
   if (values.some(v => isRuntimeChar(v))) {
     let result = "";
@@ -96,12 +103,178 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
   if (values.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
   if (values.length === 1) return values[0];
 
+  // If any element is sparse, concatenate as sparse
+  if (values.some(v => isRuntimeSparseMatrix(v))) {
+    return sparseCatAlongDim(values, 0);
+  }
+
   // Cell concatenation: [cellA; cellB]
   if (values.some(v => isRuntimeCell(v))) {
     return cellCatAlongDim(values, 0);
   }
 
   return catAlongDim(values, 0); // dim 1 = 0-based index 0
+}
+
+/** Convert a value to a sparse matrix for concatenation */
+function toSparseForCat(v: RuntimeValue): RuntimeSparseMatrix {
+  if (isRuntimeSparseMatrix(v)) return v;
+  if (isRuntimeNumber(v)) {
+    if (v === 0)
+      return RTV.sparseMatrix(
+        1,
+        1,
+        new Int32Array(0),
+        new Int32Array([0, 0]),
+        new Float64Array(0)
+      );
+    return RTV.sparseMatrix(
+      1,
+      1,
+      new Int32Array([0]),
+      new Int32Array([0, 1]),
+      new Float64Array([v])
+    );
+  }
+  if (isRuntimeLogical(v)) {
+    const val = v ? 1 : 0;
+    if (val === 0)
+      return RTV.sparseMatrix(
+        1,
+        1,
+        new Int32Array(0),
+        new Int32Array([0, 0]),
+        new Float64Array(0)
+      );
+    return RTV.sparseMatrix(
+      1,
+      1,
+      new Int32Array([0]),
+      new Int32Array([0, 1]),
+      new Float64Array([val])
+    );
+  }
+  if (isRuntimeTensor(v)) {
+    // Dense tensor → sparse
+    const m = v.shape[0] ?? 1;
+    const n = v.shape.length >= 2 ? v.shape[1] : 1;
+    const isComplex = v.imag !== undefined;
+    const irArr: number[] = [];
+    const prArr: number[] = [];
+    const piArr: number[] = [];
+    const jc = new Int32Array(n + 1);
+    for (let c = 0; c < n; c++) {
+      jc[c] = irArr.length;
+      for (let r = 0; r < m; r++) {
+        const idx = c * m + r;
+        const re = v.data[idx];
+        const im = isComplex ? v.imag![idx] : 0;
+        if (re !== 0 || im !== 0) {
+          irArr.push(r);
+          prArr.push(re);
+          if (isComplex) piArr.push(im);
+        }
+      }
+    }
+    jc[n] = irArr.length;
+    return RTV.sparseMatrix(
+      m,
+      n,
+      new Int32Array(irArr),
+      jc,
+      new Float64Array(prArr),
+      isComplex ? new Float64Array(piArr) : undefined
+    );
+  }
+  throw new RuntimeError(`Cannot concatenate ${kstr(v)} into sparse matrix`);
+}
+
+/** Sparse concatenation along a 0-based dimension index (0=vertical, 1=horizontal) */
+function sparseCatAlongDim(
+  values: RuntimeValue[],
+  dimIdx: number
+): RuntimeValue {
+  // Convert all to sparse, filtering empty [0,0]
+  const parts = values.map(toSparseForCat).filter(s => s.m > 0 || s.n > 0);
+  if (parts.length === 0)
+    return RTV.sparseMatrix(
+      0,
+      0,
+      new Int32Array(0),
+      new Int32Array([0]),
+      new Float64Array(0)
+    );
+  if (parts.length === 1) return parts[0];
+
+  // Verify dimensions match on non-cat axis
+  if (dimIdx === 1) {
+    // Horizontal: all must have same number of rows
+    const m = parts[0].m;
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].m !== m && parts[i].m > 0)
+        throw new RuntimeError(
+          "Dimensions of arrays being concatenated are not consistent"
+        );
+    }
+    // Build result: total cols = sum of cols
+    const totalN = parts.reduce((s, p) => s + p.n, 0);
+    const isComplex = parts.some(p => p.pi !== undefined);
+    const totalNnz = parts.reduce((s, p) => s + p.jc[p.n], 0);
+    const ir = new Int32Array(totalNnz);
+    const pr = new Float64Array(totalNnz);
+    const pi = isComplex ? new Float64Array(totalNnz) : undefined;
+    const jc = new Int32Array(totalN + 1);
+    let nnzOff = 0;
+    let colOff = 0;
+    for (const p of parts) {
+      const pNnz = p.jc[p.n];
+      for (let k = 0; k < pNnz; k++) {
+        ir[nnzOff + k] = p.ir[k];
+        pr[nnzOff + k] = p.pr[k];
+        if (pi) pi[nnzOff + k] = p.pi ? p.pi[k] : 0;
+      }
+      for (let c = 0; c < p.n; c++) {
+        jc[colOff + c] = p.jc[c] + nnzOff;
+      }
+      nnzOff += pNnz;
+      colOff += p.n;
+    }
+    jc[totalN] = nnzOff;
+    return RTV.sparseMatrix(m, totalN, ir, jc, pr, pi);
+  } else {
+    // Vertical: all must have same number of columns
+    const n = parts[0].n;
+    for (let i = 1; i < parts.length; i++) {
+      if (parts[i].n !== n && parts[i].n > 0)
+        throw new RuntimeError(
+          "Dimensions of arrays being concatenated are not consistent"
+        );
+    }
+    const totalM = parts.reduce((s, p) => s + p.m, 0);
+    const isComplex = parts.some(p => p.pi !== undefined);
+    const totalNnz = parts.reduce((s, p) => s + p.jc[p.n], 0);
+    const ir = new Int32Array(totalNnz);
+    const pr = new Float64Array(totalNnz);
+    const pi = isComplex ? new Float64Array(totalNnz) : undefined;
+    const jc = new Int32Array(n + 1);
+    let nnzOff = 0;
+    // For each column, concatenate all parts' entries for that column
+    for (let c = 0; c < n; c++) {
+      jc[c] = nnzOff;
+      let rowOff = 0;
+      for (const p of parts) {
+        for (let k = p.jc[c]; k < p.jc[c + 1]; k++) {
+          ir[nnzOff] = p.ir[k] + rowOff;
+          pr[nnzOff] = p.pr[k];
+          if (pi) pi[nnzOff] = p.pi ? p.pi[k] : 0;
+          nnzOff++;
+        }
+        rowOff += p.m;
+      }
+    }
+    jc[n] = nnzOff;
+    return RTV.sparseMatrix(totalM, n, ir, jc, pr, pi);
+  }
 }
 
 /** N-D concatenation along a 0-based dimension index */

@@ -17,6 +17,7 @@ import {
   isRuntimeNumber,
   isRuntimeTensor,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
 } from "../runtime/types.js";
 import {
   register,
@@ -93,7 +94,28 @@ export function registerArrayFunctions(): void {
   };
 
   register("eye", [{ check: realArrayConstructorCheck, apply: eyeApply }]);
-  register("speye", [{ check: realArrayConstructorCheck, apply: eyeApply }]);
+
+  register(
+    "speye",
+    builtinSingle(args => {
+      const dims = parseShapeArgs(args, "speye");
+      const rows = dims[0];
+      const cols = dims.length >= 2 ? dims[1] : rows;
+      const k = Math.min(rows, cols);
+      const ir = new Int32Array(k);
+      const pr = new Float64Array(k);
+      const jc = new Int32Array(cols + 1);
+      for (let i = 0; i < k; i++) {
+        ir[i] = i;
+        pr[i] = 1;
+      }
+      // jc: one entry per column for first k columns, rest point to k
+      for (let c = 0; c <= cols; c++) {
+        jc[c] = Math.min(c, k);
+      }
+      return RTV.sparseMatrix(rows, cols, ir, jc, pr);
+    })
+  );
 
   register(
     "linspace",
@@ -246,6 +268,23 @@ export function registerArrayFunctions(): void {
             rows: v.shape[0] ?? 1,
             cols: v.shape.length >= 2 ? v.shape[1] : 1,
           };
+        if (isRuntimeSparseMatrix(v)) {
+          // Densify for extraction
+          const data = new FloatXArray(v.m * v.n);
+          const imag = v.pi ? new FloatXArray(v.m * v.n) : undefined;
+          for (let c = 0; c < v.n; c++) {
+            for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+              data[c * v.m + v.ir[k]] = v.pr[k];
+              if (imag && v.pi) imag[c * v.m + v.ir[k]] = v.pi[k];
+            }
+          }
+          return {
+            re: data,
+            im: imag as FloatXArrayType | undefined,
+            rows: v.m,
+            cols: v.n,
+          };
+        }
         throw new RuntimeError("spdiags: argument must be numeric");
       }
 
@@ -267,7 +306,7 @@ export function registerArrayFunctions(): void {
         }
       }
 
-      // --- S = spdiags(Bin, d, m, n) --- create matrix from diagonals
+      // --- S = spdiags(Bin, d, m, n) --- create sparse matrix from diagonals
       if (args.length === 4) {
         const {
           re: binRe,
@@ -278,11 +317,11 @@ export function registerArrayFunctions(): void {
         const diags = getDiags(args[1]);
         const m = Math.round(toNumber(args[2]));
         const n = Math.round(toNumber(args[3]));
-
-        const data = new FloatXArray(m * n);
         const isComplex = binIm !== undefined;
-        const idata = isComplex ? new FloatXArray(m * n) : undefined;
 
+        // Collect triplets (row, col, re, im) then build CSC
+        const triplets: { row: number; col: number; re: number; im: number }[] =
+          [];
         for (let k = 0; k < diags.length; k++) {
           const dk = diags[k];
           const iStart = Math.max(0, -dk);
@@ -290,18 +329,37 @@ export function registerArrayFunctions(): void {
           const diagLen = Math.min(m - iStart, n - jStart);
           if (diagLen <= 0) continue;
 
-          const col = Math.min(k, binCols - 1);
+          const bCol = Math.min(k, binCols - 1);
           for (let j = 0; j < diagLen; j++) {
             let br = elemRow(m, n, dk, diagLen, j);
-            if (binRows === 1) br = 0; // broadcast row vectors
-            const binIdx = br + col * binRows;
-            const idx = iStart + j + (jStart + j) * m;
-            data[idx] = binRe[binIdx];
-            if (idata && binIm) idata[idx] = binIm[binIdx];
+            if (binRows === 1) br = 0;
+            const binIdx = br + bCol * binRows;
+            const re = binRe[binIdx];
+            const im = isComplex && binIm ? binIm[binIdx] : 0;
+            if (re !== 0 || im !== 0) {
+              triplets.push({ row: iStart + j, col: jStart + j, re, im });
+            }
           }
         }
-
-        return RTV.tensor(data, [m, n], idata);
+        // Sort by (col, row) and build CSC
+        triplets.sort((a, b) => a.col - b.col || a.row - b.row);
+        const nnz = triplets.length;
+        const ir = new Int32Array(nnz);
+        const pr = new Float64Array(nnz);
+        const pi = isComplex ? new Float64Array(nnz) : undefined;
+        const jc = new Int32Array(n + 1);
+        let ti = 0;
+        for (let c = 0; c < n; c++) {
+          jc[c] = ti;
+          while (ti < nnz && triplets[ti].col === c) {
+            ir[ti] = triplets[ti].row;
+            pr[ti] = triplets[ti].re;
+            if (pi) pi[ti] = triplets[ti].im;
+            ti++;
+          }
+        }
+        jc[n] = ti;
+        return RTV.sparseMatrix(m, n, ir, jc, pr, pi);
       }
 
       // --- S = spdiags(Bin, d, A) --- replace diagonals in A
@@ -446,6 +504,33 @@ export function registerArrayFunctions(): void {
     const k = args.length === 2 ? Math.round(toNumber(args[1])) : 0;
     const v = args[0];
     if (isRuntimeNumber(v)) return keepFn(0, 0, k) ? v : RTV.num(0);
+    if (isRuntimeSparseMatrix(v)) {
+      // Sparse triu/tril: filter entries
+      const isComplex = v.pi !== undefined;
+      const irArr: number[] = [];
+      const prArr: number[] = [];
+      const piArr: number[] = [];
+      const jc = new Int32Array(v.n + 1);
+      for (let c = 0; c < v.n; c++) {
+        jc[c] = irArr.length;
+        for (let kk = v.jc[c]; kk < v.jc[c + 1]; kk++) {
+          if (keepFn(v.ir[kk], c, k)) {
+            irArr.push(v.ir[kk]);
+            prArr.push(v.pr[kk]);
+            if (isComplex) piArr.push(v.pi![kk]);
+          }
+        }
+      }
+      jc[v.n] = irArr.length;
+      return RTV.sparseMatrix(
+        v.m,
+        v.n,
+        new Int32Array(irArr),
+        jc,
+        new Float64Array(prArr),
+        isComplex ? new Float64Array(piArr) : undefined
+      );
+    }
     if (!isRuntimeTensor(v))
       throw new RuntimeError("triu/tril: argument must be a matrix");
     const nrows = v.shape[0] ?? 1;

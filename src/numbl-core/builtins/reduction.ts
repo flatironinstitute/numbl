@@ -86,6 +86,107 @@ function firstReduceDim(shape: number[]): number {
   return shape.findIndex(d => d > 1) + 1;
 }
 
+/** Sum a sparse matrix along dim 1 (columns) or dim 2 (rows).
+ *  Returns sparse for dim=1, dense tensor for dim=2. */
+function sparseSum(
+  v: import("../runtime/types.js").RuntimeSparseMatrix,
+  dim: number
+): RuntimeValue {
+  const isComplex = v.pi !== undefined;
+  if (dim === 1) {
+    // Sum along columns → 1 × n sparse row vector
+    const irArr: number[] = [];
+    const prArr: number[] = [];
+    const piArr: number[] = [];
+    const jc = new Int32Array(v.n + 1);
+    for (let c = 0; c < v.n; c++) {
+      jc[c] = irArr.length;
+      let sumRe = 0;
+      let sumIm = 0;
+      for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+        sumRe += v.pr[k];
+        if (isComplex) sumIm += v.pi![k];
+      }
+      if (sumRe !== 0 || sumIm !== 0) {
+        irArr.push(0);
+        prArr.push(sumRe);
+        if (isComplex) piArr.push(sumIm);
+      }
+    }
+    jc[v.n] = irArr.length;
+    return RTV.sparseMatrix(
+      1,
+      v.n,
+      new Int32Array(irArr),
+      jc,
+      new Float64Array(prArr),
+      isComplex ? new Float64Array(piArr) : undefined
+    );
+  }
+  // dim === 2: Sum along rows → m × 1 dense column
+  const result = new FloatXArray(v.m);
+  const resultIm = isComplex ? new FloatXArray(v.m) : undefined;
+  for (let c = 0; c < v.n; c++) {
+    for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+      result[v.ir[k]] += v.pr[k];
+      if (resultIm && v.pi) resultIm[v.ir[k]] += v.pi[k];
+    }
+  }
+  return RTV.tensor(result, [v.m, 1], resultIm);
+}
+
+/** any/all on sparse matrix along a dimension.
+ *  Returns sparse for dim=1, dense for dim=2. */
+function sparseAnyAll(
+  v: import("../runtime/types.js").RuntimeSparseMatrix,
+  dim: number,
+  mode: "any" | "all"
+): RuntimeValue {
+  if (dim === 1) {
+    // Along columns: for "any", column has nonzero iff nnz_col > 0
+    // For "all", column is all-nonzero iff nnz_col === m
+    const irArr: number[] = [];
+    const prArr: number[] = [];
+    const jc = new Int32Array(v.n + 1);
+    for (let c = 0; c < v.n; c++) {
+      jc[c] = irArr.length;
+      const nnzCol = v.jc[c + 1] - v.jc[c];
+      const val =
+        mode === "any" ? (nnzCol > 0 ? 1 : 0) : nnzCol === v.m ? 1 : 0;
+      if (val !== 0) {
+        irArr.push(0);
+        prArr.push(1);
+      }
+    }
+    jc[v.n] = irArr.length;
+    return RTV.sparseMatrix(
+      1,
+      v.n,
+      new Int32Array(irArr),
+      jc,
+      new Float64Array(prArr)
+    );
+  }
+  // dim === 2: Along rows
+  const hasNonzero = new Uint8Array(v.m);
+  let nnzPerRow: Int32Array | undefined;
+  if (mode === "all") nnzPerRow = new Int32Array(v.m);
+  for (let c = 0; c < v.n; c++) {
+    for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+      hasNonzero[v.ir[k]] = 1;
+      if (nnzPerRow) nnzPerRow[v.ir[k]]++;
+    }
+  }
+  const result = new FloatXArray(v.m);
+  for (let r = 0; r < v.m; r++) {
+    if (mode === "any") result[r] = hasNonzero[r] ? 1 : 0;
+    else result[r] = nnzPerRow![r] === v.n ? 1 : 0;
+  }
+  const t = RTV.tensor(result, [v.m, 1]) as RuntimeTensor;
+  t._isLogical = true;
+  return t;
+}
+
 /** Return a deep copy of a tensor (data + shape + optional imag). */
 function copyTensor(v: RuntimeTensor): RuntimeValue {
   return RTV.tensor(
@@ -417,10 +518,31 @@ export function registerReductionFunctions(): void {
   });
 
   register("sum", [
-    makeReduction(
-      "sum",
-      accumKernel((acc, val) => acc + val, 0)
-    ),
+    {
+      check: reductionCheck,
+      apply: args => {
+        if (args.length < 1)
+          throw new RuntimeError("sum requires at least 1 argument");
+        const v = args[0];
+        if (isRuntimeSparseMatrix(v)) {
+          const dim = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
+          return sparseSum(v, dim);
+        }
+        const kernel = accumKernel((acc, val) => acc + val, 0);
+        if (isRuntimeNumber(v)) return v;
+        if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+        if (isRuntimeTensor(v)) {
+          if (args.length >= 2) {
+            if (isRuntimeChar(args[1]) && toString(args[1]) === "all")
+              return kernel.reduceAll(v);
+            return kernel.reduceDim(v, Math.round(toNumber(args[1])));
+          }
+          const d = firstReduceDim(v.shape);
+          return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
+        }
+        throw new RuntimeError("sum: argument must be numeric");
+      },
+    },
   ]);
 
   const prodKernel = accumKernel((acc, val) => acc * val, 1);
@@ -867,6 +989,12 @@ export function registerReductionFunctions(): void {
           throw new RuntimeError(`${name} requires at least 1 argument`);
         const v = args[0];
 
+        // Sparse matrix handling
+        if (isRuntimeSparseMatrix(v)) {
+          const dim = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
+          return sparseAnyAll(v, dim, mode);
+        }
+
         if (args.length === 1) {
           const scalar = scalarLogical(v);
           if (scalar !== null) return scalar;
@@ -1013,6 +1141,9 @@ export function registerReductionFunctions(): void {
         let rows: number[] = [],
           cols: number[] = [],
           vals: number[] = [];
+        let imagVals: number[] = [];
+        let isSparseInput = false;
+        let sparseImag: Float64Array | undefined;
 
         let linIndices: number[] = [];
 
@@ -1044,6 +1175,20 @@ export function registerReductionFunctions(): void {
               linIndices.push(k + 1); // 1-based linear index
             }
           }
+        } else if (isRuntimeSparseMatrix(v)) {
+          isSparseInput = true;
+          sparseImag = v.pi;
+          // Iterate CSC structure in column-major order
+          for (let col = 0; col < v.n; col++) {
+            for (let k = v.jc[col]; k < v.jc[col + 1]; k++) {
+              const row = v.ir[k];
+              rows.push(row + 1); // 1-based
+              cols.push(col + 1); // 1-based
+              vals.push(v.pr[k]);
+              if (v.pi) imagVals.push(v.pi[k]);
+              linIndices.push(col * v.m + row + 1); // 1-based linear
+            }
+          }
         } else {
           throw new RuntimeError("find: argument must be numeric");
         }
@@ -1056,11 +1201,14 @@ export function registerReductionFunctions(): void {
             cols = cols.slice(start);
             vals = vals.slice(start);
             linIndices = linIndices.slice(start);
+            if (isSparseInput && sparseImag) imagVals = imagVals.slice(start);
           } else {
             rows = rows.slice(0, countLimit);
             cols = cols.slice(0, countLimit);
             vals = vals.slice(0, countLimit);
             linIndices = linIndices.slice(0, countLimit);
+            if (isSparseInput && sparseImag)
+              imagVals = imagVals.slice(0, countLimit);
           }
         }
 
@@ -1069,6 +1217,10 @@ export function registerReductionFunctions(): void {
           n === 0
             ? RTV.tensor(new FloatXArray(0), [0, 1])
             : RTV.tensor(new FloatXArray(arr), [n, 1]);
+        const makeComplexVec = (re: number[], im: number[]) =>
+          n === 0
+            ? RTV.tensor(new FloatXArray(0), [0, 1])
+            : RTV.tensor(new FloatXArray(re), [n, 1], new FloatXArray(im));
 
         if (nargout <= 1) {
           // If X is a row vector, find returns a row vector.
@@ -1084,6 +1236,10 @@ export function registerReductionFunctions(): void {
           return RTV.tensor(new FloatXArray(linIndices), [n, 1]);
         }
         if (nargout === 2) return [makeVec(rows), makeVec(cols)];
+        // For complex sparse, return complex value vector
+        if (isSparseInput && sparseImag) {
+          return [makeVec(rows), makeVec(cols), makeComplexVec(vals, imagVals)];
+        }
         return [makeVec(rows), makeVec(cols), makeVec(vals)];
       },
     },
@@ -1884,6 +2040,49 @@ export function registerReductionFunctions(): void {
         throw new RuntimeError("nnz: argument must be numeric");
       },
       { outputType: { kind: "Number" } }
+    )
+  );
+
+  register(
+    "nonzeros",
+    builtinSingle(
+      args => {
+        if (args.length !== 1)
+          throw new RuntimeError("nonzeros requires 1 argument");
+        const v = args[0];
+        if (isRuntimeSparseMatrix(v)) {
+          const nnz = v.jc[v.n];
+          if (nnz === 0) return RTV.tensor(new FloatXArray(0), [0, 1]);
+          // Values are stored in CSC column order
+          const pr = new FloatXArray(v.pr.subarray(0, nnz));
+          const pi = v.pi ? new FloatXArray(v.pi.subarray(0, nnz)) : undefined;
+          return RTV.tensor(pr, [nnz, 1], pi);
+        }
+        if (isRuntimeTensor(v)) {
+          const nzVals: number[] = [];
+          const nzImag: number[] = [];
+          for (let i = 0; i < v.data.length; i++) {
+            if (v.data[i] !== 0 || (v.imag && v.imag[i] !== 0)) {
+              nzVals.push(v.data[i]);
+              if (v.imag) nzImag.push(v.imag[i]);
+            }
+          }
+          const n = nzVals.length;
+          if (n === 0) return RTV.tensor(new FloatXArray(0), [0, 1]);
+          return RTV.tensor(
+            new FloatXArray(nzVals),
+            [n, 1],
+            v.imag ? new FloatXArray(nzImag) : undefined
+          );
+        }
+        if (isRuntimeNumber(v)) {
+          return v !== 0
+            ? RTV.tensor(new FloatXArray([v]), [1, 1])
+            : RTV.tensor(new FloatXArray(0), [0, 1]);
+        }
+        throw new RuntimeError("nonzeros: argument must be numeric");
+      },
+      { outputType: { kind: "Unknown" } }
     )
   );
 

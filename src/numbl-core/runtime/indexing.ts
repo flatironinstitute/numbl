@@ -6,6 +6,7 @@ import {
   type RuntimeValue,
   type RuntimeTensor,
   type RuntimeCell,
+  type RuntimeSparseMatrix,
   FloatXArray,
   isRuntimeTensor,
   isRuntimeLogical,
@@ -13,6 +14,7 @@ import {
   isRuntimeComplexNumber,
   isRuntimeString,
   isRuntimeCell,
+  isRuntimeSparseMatrix,
   kstr,
   isRuntimeStructArray,
   isRuntimeStruct,
@@ -91,6 +93,296 @@ function resolveIndex(
   if (i < 0 || (boundsLimit > 0 && i >= boundsLimit))
     throw new RuntimeError("Index exceeds array bounds");
   return [i];
+}
+
+// ── Sparse indexing helpers ──────────────────────────────────────────────
+
+/** Look up a single value in a sparse matrix by 0-based (row, col). */
+function sparseElementAt(
+  s: RuntimeSparseMatrix,
+  row: number,
+  col: number
+): { re: number; im: number } {
+  for (let k = s.jc[col]; k < s.jc[col + 1]; k++) {
+    if (s.ir[k] === row) {
+      return { re: s.pr[k], im: s.pi ? s.pi[k] : 0 };
+    }
+  }
+  return { re: 0, im: 0 };
+}
+
+/** Build a sparse matrix from selected rows and columns of another sparse matrix.
+ *  rowIdx and colIdx are 0-based. */
+function sparseSubmatrix(
+  s: RuntimeSparseMatrix,
+  rowIdx: number[],
+  colIdx: number[]
+): RuntimeSparseMatrix {
+  const nRows = rowIdx.length;
+  const nCols = colIdx.length;
+  // Build reverse lookup: original row → list of new row positions
+  // (handles duplicate row indices correctly)
+  const rowLookup = new Map<number, number[]>();
+  for (let i = 0; i < nRows; i++) {
+    const orig = rowIdx[i];
+    const list = rowLookup.get(orig);
+    if (list) list.push(i);
+    else rowLookup.set(orig, [i]);
+  }
+
+  const isComplex = s.pi !== undefined;
+
+  // Collect triplets
+  const irArr: number[] = [];
+  const prArr: number[] = [];
+  const piArr: number[] = [];
+  const jcNew = new Int32Array(nCols + 1);
+
+  for (let ci = 0; ci < nCols; ci++) {
+    const origCol = colIdx[ci];
+    jcNew[ci] = irArr.length;
+    // Collect entries in this column matching requested rows, in row order
+    const entries: { newRow: number; re: number; im: number }[] = [];
+    for (let k = s.jc[origCol]; k < s.jc[origCol + 1]; k++) {
+      const newRows = rowLookup.get(s.ir[k]);
+      if (newRows !== undefined) {
+        const re = s.pr[k];
+        const im = isComplex ? s.pi![k] : 0;
+        for (const newRow of newRows) {
+          entries.push({ newRow, re, im });
+        }
+      }
+    }
+    // Sort by new row index to maintain CSC invariant
+    entries.sort((a, b) => a.newRow - b.newRow);
+    for (const e of entries) {
+      irArr.push(e.newRow);
+      prArr.push(e.re);
+      if (isComplex) piArr.push(e.im);
+    }
+  }
+  jcNew[nCols] = irArr.length;
+
+  return RTV.sparseMatrix(
+    nRows,
+    nCols,
+    new Int32Array(irArr),
+    jcNew,
+    new Float64Array(prArr),
+    isComplex ? new Float64Array(piArr) : undefined
+  );
+}
+
+/** Assign into a sparse matrix: S(rows, cols) = rhs.
+ *  Supports scalar, vector, and submatrix assignment.
+ *  Returns a new sparse matrix (COW). */
+function storeIntoSparse(
+  base: RuntimeSparseMatrix,
+  indices: RuntimeValue[],
+  rhs: RuntimeValue
+): RuntimeSparseMatrix {
+  if (indices.length !== 2) {
+    throw new RuntimeError(
+      "Sparse matrix assignment requires 2 indices (row, col)"
+    );
+  }
+
+  const rowIdx = resolveIndex(indices[0], base.m);
+  const colIdx = resolveIndex(indices[1], base.n);
+
+  // Extract RHS values into a dense grid (rowIdx.length × colIdx.length, col-major)
+  const nR = rowIdx.length;
+  const nC = colIdx.length;
+  const rhsRe = new Float64Array(nR * nC);
+  const rhsIm = new Float64Array(nR * nC);
+  let rhsHasImag = false;
+
+  if (isRuntimeNumber(rhs)) {
+    rhsRe.fill(rhs);
+  } else if (isRuntimeLogical(rhs)) {
+    rhsRe.fill(rhs ? 1 : 0);
+  } else if (isRuntimeComplexNumber(rhs)) {
+    rhsRe.fill(rhs.re);
+    rhsIm.fill(rhs.im);
+    rhsHasImag = rhs.im !== 0;
+  } else if (isRuntimeTensor(rhs)) {
+    for (let i = 0; i < rhs.data.length; i++) rhsRe[i] = rhs.data[i];
+    if (rhs.imag) {
+      for (let i = 0; i < rhs.imag.length; i++) rhsIm[i] = rhs.imag[i];
+      rhsHasImag = true;
+    }
+  } else if (isRuntimeSparseMatrix(rhs)) {
+    // Scatter sparse RHS into dense grid
+    for (let c = 0; c < rhs.n; c++) {
+      for (let k = rhs.jc[c]; k < rhs.jc[c + 1]; k++) {
+        const idx = c * nR + rhs.ir[k];
+        rhsRe[idx] = rhs.pr[k];
+        if (rhs.pi) {
+          rhsIm[idx] = rhs.pi[k];
+          rhsHasImag = true;
+        }
+      }
+    }
+  } else {
+    throw new RuntimeError(
+      "Cannot assign non-numeric value into sparse matrix"
+    );
+  }
+
+  const isComplex = base.pi !== undefined || rhsHasImag;
+
+  // Strategy: convert base to a map, apply updates, rebuild CSC.
+  // For large matrices this could be optimized, but correctness first.
+  // Build a map: col -> sorted array of { row, re, im }
+  type Entry = { row: number; re: number; im: number };
+  const colEntries = new Map<number, Entry[]>();
+
+  // Load existing entries
+  for (let c = 0; c < base.n; c++) {
+    const entries: Entry[] = [];
+    for (let k = base.jc[c]; k < base.jc[c + 1]; k++) {
+      entries.push({
+        row: base.ir[k],
+        re: base.pr[k],
+        im: base.pi ? base.pi[k] : 0,
+      });
+    }
+    if (entries.length > 0) colEntries.set(c, entries);
+  }
+
+  // Apply updates
+  for (let ci = 0; ci < nC; ci++) {
+    const col = colIdx[ci];
+    let entries = colEntries.get(col);
+    if (!entries) {
+      entries = [];
+      colEntries.set(col, entries);
+    }
+    for (let ri = 0; ri < nR; ri++) {
+      const row = rowIdx[ri];
+      const re = rhsRe[ci * nR + ri];
+      const im = rhsIm[ci * nR + ri];
+      // Find existing entry
+      let found = false;
+      for (let e = 0; e < entries.length; e++) {
+        if (entries[e].row === row) {
+          if (re === 0 && im === 0) {
+            entries.splice(e, 1); // remove zero entry
+          } else {
+            entries[e].re = re;
+            entries[e].im = im;
+          }
+          found = true;
+          break;
+        }
+      }
+      if (!found && (re !== 0 || im !== 0)) {
+        entries.push({ row, re, im });
+      }
+    }
+    // Re-sort by row
+    entries.sort((a, b) => a.row - b.row);
+    if (entries.length === 0) colEntries.delete(col);
+  }
+
+  // Rebuild CSC arrays
+  const irArr: number[] = [];
+  const prArr: number[] = [];
+  const piArr: number[] = [];
+  const jc = new Int32Array(base.n + 1);
+
+  for (let c = 0; c < base.n; c++) {
+    jc[c] = irArr.length;
+    const entries = colEntries.get(c);
+    if (entries) {
+      for (const e of entries) {
+        irArr.push(e.row);
+        prArr.push(e.re);
+        if (isComplex) piArr.push(e.im);
+      }
+    }
+  }
+  jc[base.n] = irArr.length;
+
+  return RTV.sparseMatrix(
+    base.m,
+    base.n,
+    new Int32Array(irArr),
+    jc,
+    new Float64Array(prArr),
+    isComplex ? new Float64Array(piArr) : undefined
+  );
+}
+
+/** Index into a sparse matrix. Returns sparse results (matching MATLAB behavior). */
+function indexIntoSparse(
+  base: RuntimeSparseMatrix,
+  indices: RuntimeValue[]
+): RuntimeValue {
+  if (indices.length === 1) {
+    const idx = indices[0];
+
+    // S(:) → reshape to column vector (m*n × 1)
+    if (isColonIndex(idx)) {
+      const totalLen = base.m * base.n;
+      const irArr: number[] = [];
+      const prArr: number[] = [];
+      const piArr: number[] = [];
+      const isComplex = base.pi !== undefined;
+
+      // Iterate in column-major order, mapping (row,col) → linear index
+      for (let col = 0; col < base.n; col++) {
+        for (let k = base.jc[col]; k < base.jc[col + 1]; k++) {
+          const linIdx = col * base.m + base.ir[k];
+          irArr.push(linIdx);
+          prArr.push(base.pr[k]);
+          if (isComplex) piArr.push(base.pi![k]);
+        }
+      }
+
+      // Build single-column sparse: m*n × 1
+      const jcNew = new Int32Array([0, irArr.length]);
+      return RTV.sparseMatrix(
+        totalLen,
+        1,
+        new Int32Array(irArr),
+        jcNew,
+        new Float64Array(prArr),
+        isComplex ? new Float64Array(piArr) : undefined
+      );
+    }
+
+    // S(k) — linear indexing (single scalar)
+    if (isRuntimeNumber(idx)) {
+      const k = Math.round(idx) - 1;
+      if (k < 0 || k >= base.m * base.n)
+        throw new RuntimeError("Index exceeds array bounds");
+      const col = Math.floor(k / base.m);
+      const row = k % base.m;
+      const val = sparseElementAt(base, row, col);
+      // Return 1×1 sparse
+      const nnz = val.re !== 0 || val.im !== 0 ? 1 : 0;
+      const isComplex = base.pi !== undefined;
+      return RTV.sparseMatrix(
+        1,
+        1,
+        new Int32Array(nnz > 0 ? [0] : []),
+        new Int32Array([0, nnz]),
+        new Float64Array(nnz > 0 ? [val.re] : []),
+        isComplex ? new Float64Array(nnz > 0 ? [val.im] : []) : undefined
+      );
+    }
+  }
+
+  if (indices.length === 2) {
+    const rowIdx = resolveIndex(indices[0], base.m);
+    const colIdx = resolveIndex(indices[1], base.n);
+
+    // Always return sparse (matching MATLAB)
+    return sparseSubmatrix(base, rowIdx, colIdx);
+  }
+
+  throw new RuntimeError("Sparse matrix supports 1 or 2 index dimensions");
 }
 
 // ── Indexing ─────────────────────────────────────────────────────────────
@@ -716,6 +1008,10 @@ export function indexIntoRTValue(
     }
   }
 
+  if (isRuntimeSparseMatrix(base)) {
+    return indexIntoSparse(base, indices);
+  }
+
   if (isRuntimeStructArray(base)) {
     if (indices.length === 1) {
       const idx = indices[0];
@@ -758,6 +1054,10 @@ export function storeIntoRTValueIndex(
   indices: RuntimeValue[],
   rhs: RuntimeValue
 ): RuntimeValue {
+  if (isRuntimeSparseMatrix(base)) {
+    return storeIntoSparse(base, indices, rhs);
+  }
+
   if (isRuntimeTensor(base)) {
     // Element deletion: base(idx) = [] removes elements at idx
     if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 1) {
