@@ -6,6 +6,7 @@ import { BinaryOperation } from "../parser/index.js";
 import { getConstantType } from "../builtins";
 import { ItemType, isScalarType, isComplexType } from "./itemTypes.js";
 import { IRExpr, IRExprKind } from "./nodes.js";
+import type { TypeEnv } from "./typeEnv.js";
 
 // Re-export for consumers that import from nodeUtils
 export { isScalarType, isComplexType } from "./itemTypes.js";
@@ -63,25 +64,39 @@ export function walkExpr(expr: IRExpr, fn: (e: IRExpr) => void): void {
 
 // Cache for computed expression types. Keyed on the IRExprKind object identity.
 // Var and SuperConstructorCall are excluded because they depend on mutable
-// variable.ty which can change during lowering via type unification.
+// type state which can change during lowering via type unification.
 const _typeCache = new WeakMap<object, ItemType>();
 
-export const itemTypeForExprKind = (kind: IRExprKind): ItemType => {
-  // Var and SuperConstructorCall depend on mutable variable.ty — never cache.
-  if (kind.type === "Var") return kind.variable.ty || { kind: "Unknown" };
-  if (kind.type === "SuperConstructorCall")
-    return kind.objVar.ty || { kind: "Unknown" };
+export const itemTypeForExprKind = (
+  kind: IRExprKind,
+  typeEnv?: TypeEnv
+): ItemType => {
+  // Var and SuperConstructorCall depend on mutable type state — never cache.
+  if (kind.type === "Var") {
+    return typeEnv?.getOrUnknown(kind.variable.id) ?? { kind: "Unknown" };
+  }
+  if (kind.type === "SuperConstructorCall") {
+    return typeEnv?.getOrUnknown(kind.objVar.id) ?? { kind: "Unknown" };
+  }
 
-  const cached = _typeCache.get(kind);
-  if (cached) return cached;
+  // When no typeEnv is provided, non-Var expressions can be cached
+  // (their types are structurally determined). With typeEnv, nested Var
+  // lookups may vary so we skip the cache.
+  if (!typeEnv) {
+    const cached = _typeCache.get(kind);
+    if (cached) return cached;
+  }
 
-  const result = _computeItemType(kind);
-  _typeCache.set(kind, result);
+  const result = _computeItemType(kind, typeEnv);
+  if (!typeEnv) {
+    _typeCache.set(kind, result);
+  }
   return result;
 };
 
 function _computeItemType(
-  kind: Exclude<IRExprKind, { type: "Var" } | { type: "SuperConstructorCall" }>
+  kind: Exclude<IRExprKind, { type: "Var" } | { type: "SuperConstructorCall" }>,
+  typeEnv?: TypeEnv
 ): ItemType {
   switch (kind.type) {
     case "Number": {
@@ -94,7 +109,7 @@ function _computeItemType(
     case "Constant":
       return getConstantType(kind.name) ?? { kind: "Unknown" };
     case "Unary": {
-      const operandType = itemTypeForExprKind(kind.operand.kind);
+      const operandType = itemTypeForExprKind(kind.operand.kind, typeEnv);
       if (kind.op === "Not") {
         if (isScalarType(operandType)) return { kind: "Boolean" };
         if (operandType.kind === "Tensor") return operandType;
@@ -104,8 +119,8 @@ function _computeItemType(
       return operandType;
     }
     case "Binary": {
-      const leftType = itemTypeForExprKind(kind.left.kind);
-      const rightType = itemTypeForExprKind(kind.right.kind);
+      const leftType = itemTypeForExprKind(kind.left.kind, typeEnv);
+      const rightType = itemTypeForExprKind(kind.right.kind, typeEnv);
       // Comparison operators → Logical for scalars, Tensor for tensors
       if (
         kind.op === BinaryOperation.Equal ||
@@ -175,7 +190,7 @@ function _computeItemType(
       let hasClassOrUnknown = false;
       for (const row of kind.rows) {
         for (const elem of row) {
-          const elemType = itemTypeForExprKind(elem.kind);
+          const elemType = itemTypeForExprKind(elem.kind, typeEnv);
           if (
             elemType.kind === "ClassInstance" ||
             elemType.kind === "Unknown"
@@ -202,11 +217,11 @@ function _computeItemType(
       // TODO
       return { kind: "Cell", elementType: "unknown", length: "unknown" };
     case "Index": {
-      const baseType = itemTypeForExprKind(kind.base.kind);
+      const baseType = itemTypeForExprKind(kind.base.kind, typeEnv);
       if (baseType.kind === "Tensor" || baseType.kind === "Number") {
         // All scalar indices → element access, otherwise → Tensor slice
         const allScalar = kind.indices.every(idx => {
-          const t = itemTypeForExprKind(idx.kind);
+          const t = itemTypeForExprKind(idx.kind, typeEnv);
           return t.kind === "Number";
         });
         if (allScalar) {
@@ -227,7 +242,7 @@ function _computeItemType(
       return { kind: "Unknown" };
     }
     case "IndexCell": {
-      const cellType = itemTypeForExprKind(kind.base.kind);
+      const cellType = itemTypeForExprKind(kind.base.kind, typeEnv);
       if (cellType.kind === "Cell" && cellType.elementType !== "unknown") {
         return cellType.elementType;
       }
@@ -240,7 +255,7 @@ function _computeItemType(
     case "End":
       return { kind: "Number" };
     case "Member": {
-      const baseType = itemTypeForExprKind(kind.base.kind);
+      const baseType = itemTypeForExprKind(kind.base.kind, typeEnv);
       if (baseType.kind === "Struct" && kind.name in baseType.knownFields) {
         return baseType.knownFields[kind.name];
       }
@@ -255,9 +270,9 @@ function _computeItemType(
     }
     case "AnonFunc": {
       const paramTypes = kind.params.map(
-        p => p.ty ?? ({ kind: "Unknown" } as ItemType)
+        p => typeEnv?.get(p.id) ?? ({ kind: "Unknown" } as ItemType)
       );
-      const returnType = itemTypeForExprKind(kind.body.kind);
+      const returnType = itemTypeForExprKind(kind.body.kind, typeEnv);
       return { kind: "Function", params: paramTypes, returns: returnType };
     }
     case "FuncHandle":

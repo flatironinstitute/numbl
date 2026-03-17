@@ -199,7 +199,7 @@ function genMemberAssign(
 
   if (root.kind.type === "Var") {
     const rootRef = cg.varRef(root.kind.variable.id.id);
-    const rootType = itemTypeForExprKind(root.kind);
+    const rootType = itemTypeForExprKind(root.kind, cg.typeEnv);
 
     // Optimized path: pure member chain with known class type → subsasgn
     if (allMemberSteps(steps)) {
@@ -269,7 +269,7 @@ function genIndexAssign(
   if (lv.base.kind.type === "Var") {
     const base = cg.genExpr(lv.base);
     // Inside a class method, obj(k) = same-class-val bypasses subsasgn
-    const rootType = itemTypeForExprKind(lv.base.kind);
+    const rootType = itemTypeForExprKind(lv.base.kind, cg.typeEnv);
     const ownerClassName = cg.loweringCtx.ownerClassName;
     const skipSubsasgn =
       storeFn === "indexStore" &&

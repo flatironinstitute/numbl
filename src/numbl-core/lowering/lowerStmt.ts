@@ -49,11 +49,12 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       const value = lowerExpr(ctx, stmt.expr, 1);
       let variable = ctx.lookup(stmt.name);
       if (variable) {
-        variable.ty = IType.unify(variable.ty, itemTypeForExprKind(value.kind));
+        const rhsType = itemTypeForExprKind(value.kind, ctx.typeEnv);
+        ctx.typeEnv.unify(variable.id, rhsType);
       } else {
         variable = ctx.defineVariable(
           stmt.name,
-          itemTypeForExprKind(value.kind)
+          itemTypeForExprKind(value.kind, ctx.typeEnv)
         );
       }
       return {
@@ -67,7 +68,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
 
     case "MultiAssign": {
       const value = lowerExpr(ctx, stmt.expr, stmt.lvalues.length);
-      const valueItemType = itemTypeForExprKind(value.kind);
+      const valueItemType = itemTypeForExprKind(value.kind, ctx.typeEnv);
       let outputTypes = stmt.lvalues.map(
         () => ({ kind: "Unknown" }) as ItemType
       );
@@ -86,7 +87,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         if (lv.type === "Var") {
           const vv = ctx.lookup(lv.name);
           if (vv) {
-            vv.ty = IType.unify(vv.ty, outputTypes[i]);
+            ctx.typeEnv.unify(vv.id, outputTypes[i]);
             return { type: "Var" as const, variable: vv };
           } else {
             return {
@@ -113,10 +114,8 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
 
       // If target is a plain variable, update its type from RHS
       if (irLv.type === "Var") {
-        irLv.variable.ty = IType.unify(
-          irLv.variable.ty,
-          itemTypeForExprKind(value.kind)
-        );
+        const rhsType = itemTypeForExprKind(value.kind, ctx.typeEnv);
+        ctx.typeEnv.unify(irLv.variable.id, rhsType);
         return {
           type: "Assign",
           variable: irLv.variable,
@@ -130,8 +129,8 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       // For chained access like s.a.b = val, builds nested Struct types.
       // Skip for ClassInstance — property assignments don't change the class type.
       if (irLv.type === "Member") {
-        const fieldType = itemTypeForExprKind(value.kind);
-        updateStructTypeForMemberAssign(irLv, fieldType);
+        const fieldType = itemTypeForExprKind(value.kind, ctx.typeEnv);
+        updateStructTypeForMemberAssign(ctx, irLv, fieldType);
       }
       // Indexed assignment (e.g. X(i,j)=val, X{i}=val) can change the
       // runtime type of the base variable (e.g. scalar → tensor via
@@ -144,8 +143,9 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         irLv.base.kind.type === "Var"
       ) {
         const v = irLv.base.kind.variable;
-        if (v.ty && isScalarType(v.ty)) {
-          v.ty = IType.Unknown;
+        const vTy = ctx.typeEnv.get(v.id);
+        if (vTy && isScalarType(vTy)) {
+          ctx.typeEnv.set(v.id, IType.Unknown);
         }
       }
       return {
@@ -177,7 +177,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
 
     case "For": {
       const expr = lowerExpr(ctx, stmt.expr);
-      const exprItemType = itemTypeForExprKind(expr.kind);
+      const exprItemType = itemTypeForExprKind(expr.kind, ctx.typeEnv);
       let varType: ItemType = { kind: "Unknown" };
       if (expr.kind.type === "Range") {
         varType = IType.Num;
@@ -194,7 +194,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       }
       const vv =
         ctx.lookup(stmt.varName) ?? ctx.defineVariable(stmt.varName, undefined);
-      vv.ty = IType.unify(vv.ty, varType);
+      ctx.typeEnv.unify(vv.id, varType);
       preDefineBodyVars(ctx, stmt.body, new Set([stmt.varName]));
       const body = lowerStmts(ctx, stmt.body);
       return { type: "For", variable: vv, expr, body, span };
@@ -286,6 +286,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
  *   root var s gets unified with that.
  */
 function updateStructTypeForMemberAssign(
+  ctx: LoweringContext,
   lv: IRLValue & { type: "Member" },
   fieldType: ItemType
 ): void {
@@ -299,15 +300,16 @@ function updateStructTypeForMemberAssign(
   if (cursor.type !== "Var") return;
   const v = cursor.variable;
   // Skip ClassInstance — property assignments don't change the class type
-  if (v.ty && v.ty.kind !== "Struct" && v.ty.kind !== "Unknown") return;
+  const vTy = ctx.typeEnv.get(v.id);
+  if (vTy && vTy.kind !== "Struct" && vTy.kind !== "Unknown") return;
 
   // Build nested Struct type from inside out
   let ty: ItemType = IType.struct({ [chain[chain.length - 1]]: fieldType });
   for (let i = chain.length - 2; i >= 0; i--) {
     ty = IType.struct({ [chain[i]]: ty });
   }
-  if (!v.ty || v.ty.kind === "Struct") {
-    v.ty = IType.unify(v.ty, ty);
+  if (!vTy || vTy.kind === "Struct") {
+    ctx.typeEnv.unify(v.id, ty);
   }
 }
 
@@ -414,6 +416,12 @@ export function lowerFunction(
 
   // Lower the body
   funcStmt.body = lowerStmts(ctx, stmt.body);
+
+  // Snapshot output types for cross-context reads (e.g. returnTypeInference)
+  funcStmt.outputTypes = outputVars.map(
+    v => ctx.typeEnv.get(v.id) ?? IType.Unknown
+  );
+
   ctx.popScope();
 
   return funcStmt;

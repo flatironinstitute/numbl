@@ -206,6 +206,8 @@ export type IRStmt =
        *  class name so that the codegen can skip overloaded subsref for
        *  same-class paren indexing. */
       classContext?: string;
+      /** Snapshot of output variable types at end of lowering. */
+      outputTypes?: ItemType[];
       span: Span;
     }
   | {

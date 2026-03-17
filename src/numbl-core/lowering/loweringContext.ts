@@ -18,6 +18,7 @@ import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import { type ClassInfo, extractClassInfo } from "./classInfo.js";
 import { computeSpecKey } from "./specKey.js";
 import { lowerFunction } from "./lowerStmt.js";
+import { TypeEnv } from "./typeEnv.js";
 
 // Re-export ClassInfo for consumers
 export type { ClassInfo } from "./classInfo.js";
@@ -158,6 +159,9 @@ export class LoweringContext {
   // All variables created during lowering
   readonly allVariables: IRVariable[] = [];
 
+  // Type environment: maps VarId → ItemType (decoupled from IRVariable)
+  readonly typeEnv = new TypeEnv();
+
   // Local function ASTs (parsed but not yet lowered)
   private localFunctionASTs = new Map<string, Stmt & { type: "Function" }>();
 
@@ -274,7 +278,8 @@ export class LoweringContext {
     this.nextVarCounters[name]++;
     const id = new VarId(idStr);
     const isTopLevel = this.isTopLevel;
-    const newVar: IRVariable = { id, name, ty, isTopLevel };
+    const newVar: IRVariable = { id, name, isTopLevel };
+    this.typeEnv.set(id, ty);
     const current = this.scopes.length - 1;
     this.scopes[current].bindings.set(name, newVar);
     this.allVariables.push(newVar);
@@ -404,6 +409,7 @@ export class LoweringContext {
       hasVarargin: false,
       hasVarargout: false,
       argumentsBlocks: [],
+      outputTypes: [],
       span: ast.span,
     };
   }

@@ -198,7 +198,7 @@ function genUnary(
   kind: Extract<IRExprKind, { type: "Unary" }>
 ): string {
   const operand = genExpr(cg, kind.operand);
-  const operandType = itemTypeForExprKind(kind.operand.kind);
+  const operandType = itemTypeForExprKind(kind.operand.kind, cg.typeEnv);
   if (operandType.kind === "Number") {
     switch (kind.op) {
       case UnaryOperation.Plus:
@@ -241,8 +241,8 @@ function genBinary(
     return `$rt.lg($rt.toBool(${left}) ? true : $rt.toBool(${right}))`;
   }
 
-  const leftType = itemTypeForExprKind(kind.left.kind);
-  const rightType = itemTypeForExprKind(kind.right.kind);
+  const leftType = itemTypeForExprKind(kind.left.kind, cg.typeEnv);
+  const rightType = itemTypeForExprKind(kind.right.kind, cg.typeEnv);
 
   if (leftType.kind === "Number" && rightType.kind === "Number") {
     switch (kind.op) {
@@ -372,7 +372,7 @@ function genIndex(
   // When the base type is known at compile time, pass `true`.  Otherwise,
   // if we are inside a classdef context, pass the class name so the
   // runtime can check at execution time.
-  const baseType = itemTypeForExprKind(kind.base.kind);
+  const baseType = itemTypeForExprKind(kind.base.kind, cg.typeEnv);
   const ownerClassName = cg.loweringCtx.ownerClassName;
   const skipKnown =
     baseType.kind === "ClassInstance" && ownerClassName === baseType.className;
@@ -492,7 +492,7 @@ function genMember(
     current = current.kind.base;
   }
   // Check if root is a class instance with overloaded subsref
-  const rootType = itemTypeForExprKind(current.kind);
+  const rootType = itemTypeForExprKind(current.kind, cg.typeEnv);
   if (
     rootType.kind === "ClassInstance" &&
     hasClassMethod(cg, rootType.className, "subsref") &&
@@ -502,7 +502,7 @@ function genMember(
     return `$rt.subsrefCall(${rootCode}, ${JSON.stringify(chain)})`;
   }
   // Check if we can emit a direct field access (known stored property, no getter, no subsref)
-  const baseType = itemTypeForExprKind(kind.base.kind);
+  const baseType = itemTypeForExprKind(kind.base.kind, cg.typeEnv);
   if (baseType.kind === "ClassInstance") {
     const info = cg.loweringCtx.getClassInfo(baseType.className);
     if (
@@ -564,7 +564,7 @@ function genSuperConstructorCall(
     };
     const argTypes: ItemType[] = [
       selfType,
-      ...kind.args.map(a => itemTypeForExprKind(a.kind)),
+      ...kind.args.map(a => itemTypeForExprKind(a.kind, cg.typeEnv)),
     ];
     const jsId = cg.ensureClassMethodGenerated(
       kind.superClassName,
@@ -640,11 +640,14 @@ function genAnonFunc(
 // ── Unknown-type dispatch helpers ────────────────────────────────────────
 
 /** Compute arg types and check for unknowns. Returns argTypes for reuse by specialization. */
-function getArgTypesAndCheckUnknown(irArgs: IRExpr[]): {
+function getArgTypesAndCheckUnknown(
+  cg: Codegen,
+  irArgs: IRExpr[]
+): {
   argTypes: ItemType[];
   hasUnknown: boolean;
 } {
-  const argTypes = irArgs.map(a => itemTypeForExprKind(a.kind));
+  const argTypes = irArgs.map(a => itemTypeForExprKind(a.kind, cg.typeEnv));
   const hasUnknown = argTypes.some(t => !t || t.kind === "Unknown");
   return { argTypes, hasUnknown };
 }
@@ -713,7 +716,7 @@ function genFuncCall(
   if (kind.name === "__inferred_type_str") {
     if (kind.args.length !== 1)
       throw new Error("__inferred_type_str expects exactly one argument");
-    const argType = itemTypeForExprKind(kind.args[0].kind);
+    const argType = itemTypeForExprKind(kind.args[0].kind, cg.typeEnv);
     const typeStr = typeToString(argType);
     return `$rt.makeString('"${typeStr}"')`;
   }
@@ -795,7 +798,7 @@ function genFuncCall(
     // at compile time, use runtime dispatch based on the instance's actual class.
     if (kind.instanceBase) {
       const argTypes: ItemType[] = kind.args.map(a =>
-        itemTypeForExprKind(a.kind)
+        itemTypeForExprKind(a.kind, cg.typeEnv)
       );
       const jsId = cg.ensureClassMethodGenerated(
         kind.targetClassName,
@@ -812,7 +815,7 @@ function genFuncCall(
 
     // Direct class method call (ClassName.method or super.method)
     const argTypes: ItemType[] = kind.args.map(a =>
-      itemTypeForExprKind(a.kind)
+      itemTypeForExprKind(a.kind, cg.typeEnv)
     );
     const jsId = cg.ensureClassMethodGenerated(
       kind.targetClassName,
@@ -828,7 +831,7 @@ function genFuncCall(
   }
 
   // ── Unified resolution via resolveFunction ──────────────────────────
-  const { argTypes, hasUnknown } = getArgTypesAndCheckUnknown(kind.args);
+  const { argTypes, hasUnknown } = getArgTypesAndCheckUnknown(cg, kind.args);
   const callSite = getCallSite(cg);
   const target = resolveFunction(
     kind.name,
@@ -918,6 +921,7 @@ function genFuncCall(
         );
         if (!isJsUserFunc) {
           const nativeMath = tryNativeMathCodegen(
+            cg,
             kind.name,
             kind.nargout,
             kind.args,
@@ -978,7 +982,7 @@ function genClassInstantiation(
   // not @domain constructor). Defer to runtime dispatch which checks class
   // methods before constructors.
   if (kind.args.length > 0) {
-    const { hasUnknown } = getArgTypesAndCheckUnknown(kind.args);
+    const { hasUnknown } = getArgTypesAndCheckUnknown(cg, kind.args);
     if (hasUnknown) {
       // Still register the class so the runtime can construct it if needed
       cg.ensureClassRegistered(className);
@@ -1002,7 +1006,7 @@ function genClassInstantiation(
     const selfType: ItemType = { kind: "ClassInstance", className };
     const argTypes: ItemType[] = [
       selfType,
-      ...kind.args.map(a => itemTypeForExprKind(a.kind)),
+      ...kind.args.map(a => itemTypeForExprKind(a.kind, cg.typeEnv)),
     ];
     const jsId = cg.ensureClassMethodGenerated(
       className,
@@ -1050,6 +1054,7 @@ const NATIVE_MATH_2: Record<string, string> = {
 };
 
 function tryNativeMathCodegen(
+  cg: Codegen,
   name: string,
   nargout: number,
   irArgs: IRExpr[],
@@ -1059,15 +1064,15 @@ function tryNativeMathCodegen(
   if (nargout > 1) return null;
   if (
     jsArgs.length === 1 &&
-    itemTypeForExprKind(irArgs[0].kind).kind === "Number"
+    itemTypeForExprKind(irArgs[0].kind, cg.typeEnv).kind === "Number"
   ) {
     const fn = NATIVE_MATH_1[name];
     if (fn) return `${fn}(${jsArgs[0]})`;
   }
   if (
     jsArgs.length === 2 &&
-    itemTypeForExprKind(irArgs[0].kind).kind === "Number" &&
-    itemTypeForExprKind(irArgs[1].kind).kind === "Number"
+    itemTypeForExprKind(irArgs[0].kind, cg.typeEnv).kind === "Number" &&
+    itemTypeForExprKind(irArgs[1].kind, cg.typeEnv).kind === "Number"
   ) {
     const fn = NATIVE_MATH_2[name];
     if (fn) return `${fn}(${jsArgs[0]}, ${jsArgs[1]})`;

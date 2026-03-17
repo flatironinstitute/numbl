@@ -115,7 +115,9 @@ export function genFunctionDef(
       for (const id of localVarIds) {
         if (paramJsNames.has(cg.varRef(id))) continue;
         const v = varById.get(id);
-        cg.emit(`var ${cg.varRef(id)};${cg.typeComment(v?.ty)}`);
+        cg.emit(
+          `var ${cg.varRef(id)};${cg.typeComment(v ? cg.typeEnv.get(v.id) : undefined)}`
+        );
       }
       cg.emit(`var ${resultVarName};`);
 
@@ -266,11 +268,12 @@ export function genFunctionDef(
       const bodyLines = cg.popEmitCaptureLines();
 
       // ── Emit type signature comment ────────────────────────────
+      const getType = (v: IRVariable) => cg.typeEnv.get(v.id);
       const paramSig = stmt.params
-        .map(p => `${p.name}: ${p.ty ? typeToString(p.ty) : "?"}`)
+        .map(p => `${p.name}: ${getType(p) ? typeToString(getType(p)!) : "?"}`)
         .join(", ");
       const outSig = stmt.outputs
-        .map(o => `${o.name}: ${o.ty ? typeToString(o.ty) : "?"}`)
+        .map(o => `${o.name}: ${getType(o) ? typeToString(getType(o)!) : "?"}`)
         .join(", ");
       cg.emit(`/* [${outSig}] = ${stmt.originalName}(${paramSig}) */`);
 
