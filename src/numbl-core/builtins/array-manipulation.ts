@@ -201,11 +201,7 @@ export function registerArrayManipulationFunctions(): void {
         data[i] = v.data[colMajorIndex(r, c, rows)];
         if (imag) imag[i] = v.imag![colMajorIndex(r, c, rows)];
       }
-      return RTV.tensor(
-        data,
-        [diagLen > 0 ? diagLen : 0, diagLen > 0 ? 1 : 0],
-        imag
-      );
+      return RTV.tensor(data, [diagLen, 1], imag);
     })
   );
 
