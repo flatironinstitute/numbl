@@ -132,6 +132,9 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
           span,
         };
       }
+      // Capture type side effects for codegen replay
+      const typeUpdates: [string, ItemType][] = [];
+
       // Member assignment (e.g. s.x = val, s.a.b = val): update the root
       // variable's Struct type to include the assigned field and its type.
       // For chained access like s.a.b = val, builds nested Struct types.
@@ -139,6 +142,13 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       if (irLv.type === "Member") {
         const fieldType = itemTypeForExprKind(value.kind, ctx.typeEnv);
         updateStructTypeForMemberAssign(ctx, irLv, fieldType);
+        // Capture the root variable's post-unify type
+        let cursor: IRExprKind = irLv.base.kind;
+        while (cursor.type === "Member") cursor = cursor.base.kind;
+        if (cursor.type === "Var") {
+          const ty = ctx.typeEnv.get(cursor.variable.id);
+          if (ty) typeUpdates.push([cursor.variable.id.id, ty]);
+        }
       }
       // Indexed assignment (e.g. X(i,j)=val, X{i}=val) can change the
       // runtime type of the base variable (e.g. scalar → tensor via
@@ -154,12 +164,14 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         const vTy = ctx.typeEnv.get(v.id);
         if (vTy && isScalarType(vTy)) {
           ctx.typeEnv.set(v.id, IType.Unknown);
+          typeUpdates.push([v.id.id, IType.Unknown]);
         }
       }
       return {
         type: "AssignLValue",
         lvalue: irLv,
         expr: value,
+        typeUpdates: typeUpdates.length > 0 ? typeUpdates : undefined,
         suppressed: stmt.suppressed,
         span,
       };
@@ -215,6 +227,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         thenBody,
         elseifBlocks: elseifBlocks.map(b => ({ cond: b.cond, body: b.body })),
         elseBody,
+        postFlowTypes: capturePostFlowTypes(ctx.typeEnv, ifAssigned),
         span,
       };
     }
@@ -240,7 +253,13 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       );
       fixLoopAssignedTypes(body, ctx.typeEnv, whileAssigned, preLoopTypes);
 
-      return { type: "While", cond, body, span };
+      return {
+        type: "While",
+        cond,
+        body,
+        postFlowTypes: capturePostFlowTypes(ctx.typeEnv, whileAssigned),
+        span,
+      };
     }
 
     case "For": {
@@ -282,6 +301,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         expr,
         body,
         iterVarType: varType,
+        postFlowTypes: capturePostFlowTypes(ctx.typeEnv, forAssigned),
         span,
       };
     }
@@ -329,6 +349,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         expr: control,
         cases: cases.map(c => ({ value: c.value, body: c.body })),
         otherwise,
+        postFlowTypes: capturePostFlowTypes(ctx.typeEnv, switchAssigned),
         span,
       };
     }
@@ -361,7 +382,14 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         true
       );
 
-      return { type: "TryCatch", tryBody, catchVar, catchBody, span };
+      return {
+        type: "TryCatch",
+        tryBody,
+        catchVar,
+        catchBody,
+        postFlowTypes: capturePostFlowTypes(ctx.typeEnv, tcAssigned),
+        span,
+      };
     }
 
     case "Global": {
@@ -543,6 +571,21 @@ export function joinBranchTypes(
       typeEnv.set({ id }, joined);
     }
   }
+}
+
+/** Capture post-flow types for all assigned variables (stored on IR control flow nodes). */
+export function capturePostFlowTypes(
+  typeEnv: TypeEnv,
+  assigned: Set<string>
+): [string, ItemType][] | undefined {
+  const result: [string, ItemType][] = [];
+  for (const id of assigned) {
+    const ty = typeEnv.get({ id });
+    if (ty) {
+      result.push([id, ty]);
+    }
+  }
+  return result.length > 0 ? result : undefined;
 }
 
 // ── Loop assignedType fixpoint ───────────────────────────────────────────

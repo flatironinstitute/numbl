@@ -148,6 +148,8 @@ export type IRStmt =
       type: "AssignLValue";
       lvalue: IRLValue;
       expr: IRExpr;
+      /** Type side effects on base variables (struct unification, scalar→Unknown widening). */
+      typeUpdates?: [string, ItemType][];
       suppressed: boolean;
       span: Span;
     }
@@ -157,9 +159,18 @@ export type IRStmt =
       thenBody: IRStmt[];
       elseifBlocks: Array<{ cond: IRExpr; body: IRStmt[] }>;
       elseBody: IRStmt[] | null;
+      /** Post-join variable types computed during lowering. */
+      postFlowTypes?: [string, ItemType][];
       span: Span;
     }
-  | { type: "While"; cond: IRExpr; body: IRStmt[]; span: Span }
+  | {
+      type: "While";
+      cond: IRExpr;
+      body: IRStmt[];
+      /** Post-join variable types computed during lowering. */
+      postFlowTypes?: [string, ItemType][];
+      span: Span;
+    }
   | {
       type: "For";
       variable: IRVariable;
@@ -167,6 +178,8 @@ export type IRStmt =
       body: IRStmt[];
       /** Flow-dependent type of the iteration variable. */
       iterVarType?: ItemType;
+      /** Post-join variable types computed during lowering. */
+      postFlowTypes?: [string, ItemType][];
       span: Span;
     }
   | {
@@ -174,6 +187,8 @@ export type IRStmt =
       expr: IRExpr;
       cases: Array<{ value: IRExpr; body: IRStmt[] }>;
       otherwise: IRStmt[] | null;
+      /** Post-join variable types computed during lowering. */
+      postFlowTypes?: [string, ItemType][];
       span: Span;
     }
   | {
@@ -181,6 +196,8 @@ export type IRStmt =
       tryBody: IRStmt[];
       catchVar: IRVariable | null;
       catchBody: IRStmt[];
+      /** Post-join variable types computed during lowering. */
+      postFlowTypes?: [string, ItemType][];
       span: Span;
     }
   | {
