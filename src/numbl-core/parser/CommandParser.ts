@@ -10,81 +10,180 @@ import { ExpressionParser } from "./ExpressionParser.js";
 export class CommandParser extends ExpressionParser {
   // ── Command Form ─────────────────────────────────────────────────────
 
+  /**
+   * Detect whether the current position starts a command-form statement.
+   *
+   * Uses raw source scanning: an identifier followed by horizontal whitespace
+   * and then non-operator content is command form.  For known COMMAND_VERBS
+   * zero-arg invocations are also allowed when the verb's spec permits it.
+   */
   canStartCommandForm(): boolean {
     const current = this.tokens[this.pos];
-    if (!current) return false;
+    if (!current || current.token !== Token.Ident) return false;
 
-    const verb = current.lexeme;
-    const command = this.lookupCommand(verb);
+    const command = this.lookupCommand(current.lexeme);
     const zeroArgAllowed =
       command?.argKind.type === "Any" ||
       (command?.argKind.type === "Keyword" && command.argKind.optional);
 
-    let i = 1;
-    let sawArg = false;
+    // --- raw-source lookahead ---
+    let srcPos = current.end;
 
-    // Skip ellipsis (line continuation), but NOT newlines – newlines terminate commands
-    while (this.peekTokenAt(i) === Token.Ellipsis) {
-      i++;
-      // Skip the newline after ellipsis (it's a continuation)
-      if (this.peekTokenAt(i) === Token.Newline) i++;
-    }
-
-    // If the very next non-ellipsis token is a newline, there are no args on this line
-    if (this.peekTokenAt(i) === Token.Newline) {
-      if (!zeroArgAllowed) return false;
-      return true;
-    }
-
-    // At least one simple arg must follow
-    const argTokens = [
-      Token.Ident,
-      Token.Integer,
-      Token.Float,
-      Token.Char,
-      Token.Str,
-      Token.End,
-      Token.Global,
-      Token.Persistent,
-    ];
-    if (!argTokens.includes(this.peekTokenAt(i)!)) {
-      if (!zeroArgAllowed) return false;
-    } else {
-      sawArg = true;
-    }
-
-    // Consume all contiguous simple args (on the same line)
-    while (true) {
-      const tok = this.peekTokenAt(i);
-      if (argTokens.includes(tok!)) {
-        sawArg = true;
-        i++;
-      } else if (tok === Token.Ellipsis) {
-        i++;
-        // Skip the newline after ellipsis (it's a continuation)
-        if (this.peekTokenAt(i) === Token.Newline) i++;
-      } else {
-        // Newlines and everything else stop the lookahead
-        break;
-      }
-    }
-
-    if (!sawArg && !zeroArgAllowed) return false;
-
-    // If next token begins indexing/member, do not use command-form
-    const nextTok = this.peekTokenAt(i);
+    // Must have at least one horizontal whitespace char after the identifier
     if (
-      nextTok === Token.LParen ||
-      nextTok === Token.Dot ||
-      nextTok === Token.LBracket ||
-      nextTok === Token.LBrace ||
-      nextTok === Token.Transpose ||
-      nextTok === Token.Assign
+      srcPos >= this.input.length ||
+      (this.input[srcPos] !== " " && this.input[srcPos] !== "\t")
     ) {
       return false;
     }
 
-    return true;
+    // Skip horizontal whitespace
+    while (
+      srcPos < this.input.length &&
+      (this.input[srcPos] === " " || this.input[srcPos] === "\t")
+    ) {
+      srcPos++;
+    }
+
+    // End-of-statement / end-of-input → zero-arg case
+    if (srcPos >= this.input.length) return zeroArgAllowed;
+    const ch = this.input[srcPos];
+    if (ch === "\n" || ch === "\r" || ch === ";" || ch === "%") {
+      return zeroArgAllowed;
+    }
+
+    // Assignment → not command form  (but == is comparison, not assignment)
+    if (ch === "=" && this.input[srcPos + 1] !== "=") return false;
+
+    // Opening paren → function call syntax, not command form
+    if (ch === "(") return false;
+
+    // Check if first arg looks like a command argument vs an operator.
+    // Command args start with: letter, digit, quote, or special prefixes.
+    // Operators start with: +, *, /, \, ^, &, |, <, >, ~, ?, :, [, {
+    if (this.isCommandArgStart(srcPos)) {
+      return true;
+    }
+
+    // Not recognized as a command argument start → not command form
+    return false;
+  }
+
+  /**
+   * Parse command arguments from the raw source text.
+   *
+   * Each whitespace-delimited token becomes a Char (character vector) node,
+   * matching MATLAB's command-syntax semantics.  Single-quoted strings
+   * preserve interior spaces.
+   *
+   * Call this AFTER consuming the verb token with next().
+   */
+  parseCommandArgsGeneral(): Expr[] {
+    const args: Expr[] = [];
+
+    // Start scanning right after the verb token
+    const verbToken = this.tokens[this.pos - 1];
+    let scanPos = verbToken.end;
+
+    while (scanPos < this.input.length) {
+      const ch = this.input[scanPos];
+
+      // Skip horizontal whitespace
+      if (ch === " " || ch === "\t") {
+        scanPos++;
+        continue;
+      }
+
+      // Stop at end-of-statement markers
+      if (ch === "\n" || ch === "\r" || ch === ";" || ch === "%") break;
+
+      // Handle , as argument separator (skip it)
+      if (ch === ",") {
+        scanPos++;
+        continue;
+      }
+
+      // Handle line continuation (... in raw source)
+      if (
+        ch === "." &&
+        scanPos + 2 < this.input.length &&
+        this.input[scanPos + 1] === "." &&
+        this.input[scanPos + 2] === "."
+      ) {
+        scanPos += 3;
+        // Skip to next line
+        while (scanPos < this.input.length && this.input[scanPos] !== "\n") {
+          scanPos++;
+        }
+        if (scanPos < this.input.length) scanPos++; // skip the newline
+        continue;
+      }
+
+      // Parse one argument
+      const argStart = scanPos;
+
+      if (ch === "'") {
+        // Single-quoted string: scan to matching closing quote
+        // Handle '' as escaped quote inside
+        scanPos++; // skip opening quote
+        while (scanPos < this.input.length) {
+          if (this.input[scanPos] === "'") {
+            if (
+              scanPos + 1 < this.input.length &&
+              this.input[scanPos + 1] === "'"
+            ) {
+              scanPos += 2; // escaped quote ''
+            } else {
+              scanPos++; // closing quote
+              break;
+            }
+          } else {
+            scanPos++;
+          }
+        }
+        const text = this.input.substring(argStart, scanPos);
+        const span = this.spanFrom(argStart, scanPos);
+        args.push({ type: "Char", value: text, span });
+      } else {
+        // Unquoted argument: read non-whitespace until delimiter
+        while (scanPos < this.input.length) {
+          const c = this.input[scanPos];
+          if (
+            c === " " ||
+            c === "\t" ||
+            c === "\n" ||
+            c === "\r" ||
+            c === ";" ||
+            c === "%" ||
+            c === ","
+          ) {
+            break;
+          }
+          // Check for ... (line continuation)
+          if (
+            c === "." &&
+            scanPos + 2 < this.input.length &&
+            this.input[scanPos + 1] === "." &&
+            this.input[scanPos + 2] === "."
+          ) {
+            break;
+          }
+          scanPos++;
+        }
+        const text = this.input.substring(argStart, scanPos);
+        const span = this.spanFrom(argStart, scanPos);
+        args.push({ type: "Char", value: `'${text}'`, span });
+      }
+    }
+
+    // Advance token stream past all tokens consumed by raw scanning
+    while (this.pos < this.tokens.length) {
+      const tok = this.tokens[this.pos];
+      if (tok.position >= scanPos) break;
+      this.pos++;
+    }
+
+    return args;
   }
 
   parseCommandArgs(): Expr[] {
@@ -142,6 +241,37 @@ export class CommandParser extends ExpressionParser {
       }
     }
     return args;
+  }
+
+  /**
+   * Check whether the character at `pos` in `this.input` can start a
+   * command-syntax argument (as opposed to a binary operator).
+   */
+  private isCommandArgStart(pos: number): boolean {
+    const ch = this.input[pos];
+    if (!ch) return false;
+
+    // Letters, underscore, digits → always a command arg
+    if (/[A-Za-z_0-9]/.test(ch)) return true;
+
+    // Quoted strings
+    if (ch === "'" || ch === '"') return true;
+
+    const next = pos + 1 < this.input.length ? this.input[pos + 1] : "";
+
+    // Dash followed by letter/underscore → flag (e.g. -file)
+    if (ch === "-" && /[A-Za-z_]/.test(next)) return true;
+
+    // Dot followed by / or \ → relative path (e.g. ./ .\)
+    // Dot followed by . → parent dir or ellipsis (e.g. .. ...)
+    // Dot followed by letter → hidden file (e.g. .gitignore)
+    if (ch === "." && /[./\\A-Za-z_]/.test(next)) return true;
+
+    // Tilde followed by / or \ → home path (e.g. ~/path)
+    if (ch === "~" && (next === "/" || next === "\\")) return true;
+
+    // Everything else (operators: + * / \ ^ & | < > ~ ? : [ { etc.)
+    return false;
   }
 
   private lookupCommand(name: string): CommandVerb | undefined {

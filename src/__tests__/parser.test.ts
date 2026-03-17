@@ -1608,8 +1608,20 @@ describe("parseMFile - error paths", () => {
     expect(() => parseMFile("function foo(a, b\nend")).toThrow(/expected '\)'/);
   });
 
-  it("throws on adjacency ambiguity", () => {
-    expect(() => parseMFile("noncommand b(1)\n")).toThrow();
+  it("parses adjacency as general command syntax", () => {
+    const stmt = parseFirst("noncommand b(1)\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt") {
+      expect(stmt.expr.type).toBe("FuncCall");
+      if (stmt.expr.type === "FuncCall") {
+        expect(stmt.expr.name).toBe("noncommand");
+        expect(stmt.expr.args).toHaveLength(1);
+        expect(stmt.expr.args[0].type).toBe("Char");
+        if (stmt.expr.args[0].type === "Char") {
+          expect(stmt.expr.args[0].value).toBe("'b(1)'");
+        }
+      }
+    }
   });
 
   it("throws on missing ] in lvalue multi-assign output args", () => {
@@ -1667,6 +1679,158 @@ describe("parseMFile - command edge cases", () => {
   it("does not use command form when next is assignment", () => {
     const stmt = parseFirst("x = 5\n");
     expect(stmt.type).toBe("Assign");
+  });
+});
+
+// ── General command syntax ───────────────────────────────────────────
+
+describe("parseMFile - general command syntax", () => {
+  it("parses disp hello as command syntax with char vector", () => {
+    const stmt = parseFirst("disp hello\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt") {
+      expect(stmt.expr.type).toBe("FuncCall");
+      if (stmt.expr.type === "FuncCall") {
+        expect(stmt.expr.name).toBe("disp");
+        expect(stmt.expr.args).toHaveLength(1);
+        expect(stmt.expr.args[0].type).toBe("Char");
+        if (stmt.expr.args[0].type === "Char") {
+          expect(stmt.expr.args[0].value).toBe("'hello'");
+        }
+      }
+    }
+  });
+
+  it("parses compound args with dots (load durer.mat)", () => {
+    const stmt = parseFirst("load durer.mat\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("load");
+      expect(stmt.expr.args).toHaveLength(1);
+      if (stmt.expr.args[0].type === "Char") {
+        expect(stmt.expr.args[0].value).toBe("'durer.mat'");
+      }
+    }
+  });
+
+  it("parses path args (cd some/path)", () => {
+    const stmt = parseFirst("cd some/path\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("cd");
+      expect(stmt.expr.args).toHaveLength(1);
+      if (stmt.expr.args[0].type === "Char") {
+        expect(stmt.expr.args[0].value).toBe("'some/path'");
+      }
+    }
+  });
+
+  it("parses flag and multiple args (whos -file durer.mat X)", () => {
+    const stmt = parseFirst("whos -file durer.mat X\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("whos");
+      expect(stmt.expr.args).toHaveLength(3);
+      expect(stmt.expr.args[0].type).toBe("Char");
+      expect(stmt.expr.args[1].type).toBe("Char");
+      expect(stmt.expr.args[2].type).toBe("Char");
+      if (
+        stmt.expr.args[0].type === "Char" &&
+        stmt.expr.args[1].type === "Char" &&
+        stmt.expr.args[2].type === "Char"
+      ) {
+        expect(stmt.expr.args[0].value).toBe("'-file'");
+        expect(stmt.expr.args[1].value).toBe("'durer.mat'");
+        expect(stmt.expr.args[2].value).toBe("'X'");
+      }
+    }
+  });
+
+  it("parses quoted string with spaces", () => {
+    const stmt = parseFirst("disp 'hello world'\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("disp");
+      expect(stmt.expr.args).toHaveLength(1);
+      if (stmt.expr.args[0].type === "Char") {
+        expect(stmt.expr.args[0].value).toBe("'hello world'");
+      }
+    }
+  });
+
+  it("parses numeric arg as char vector", () => {
+    const stmt = parseFirst("isnumeric 500\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("isnumeric");
+      expect(stmt.expr.args).toHaveLength(1);
+      if (stmt.expr.args[0].type === "Char") {
+        expect(stmt.expr.args[0].value).toBe("'500'");
+      }
+    }
+  });
+
+  it("does not use command form for expressions with operators", () => {
+    const expr = parseExpr("a + b");
+    expect(expr.type).toBe("Binary");
+  });
+
+  it("does not use command form for logical operators", () => {
+    const expr = parseExpr("a && b");
+    expect(expr.type).toBe("Binary");
+  });
+
+  it("does not use command form for element-wise operators", () => {
+    const expr = parseExpr("a .* b");
+    expect(expr.type).toBe("Binary");
+  });
+
+  it("does not use command form when next is assignment", () => {
+    const stmt = parseFirst("x = 5\n");
+    expect(stmt.type).toBe("Assign");
+  });
+
+  it("does not use command form when next is LParen", () => {
+    const stmt = parseFirst("foo(1)\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt") {
+      expect(stmt.expr.type).toBe("FuncCall");
+      if (stmt.expr.type === "FuncCall") {
+        // Should be normal function call, not command syntax
+        expect(stmt.expr.args[0].type).toBe("Number");
+      }
+    }
+  });
+
+  it("preserves existing COMMAND_VERBS behavior", () => {
+    // hold on → String arg (keyword normalization)
+    const stmt = parseFirst("hold on\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.args[0].type).toBe("String");
+    }
+  });
+
+  it("preserves clear with Ident args", () => {
+    // clear x y z → Ident args (Any normalization)
+    const stmt = parseFirst("clear x y z\n");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.args[0].type).toBe("Ident");
+      expect(stmt.expr.args[1].type).toBe("Ident");
+      expect(stmt.expr.args[2].type).toBe("Ident");
+    }
+  });
+
+  it("handles semicolon termination", () => {
+    const stmt = parseFirst("disp hello;");
+    expect(stmt.type).toBe("ExprStmt");
+    if (stmt.type === "ExprStmt") {
+      expect(stmt.suppressed).toBe(true);
+      if (stmt.expr.type === "FuncCall") {
+        expect(stmt.expr.args).toHaveLength(1);
+      }
+    }
   });
 });
 

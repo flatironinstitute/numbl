@@ -139,13 +139,20 @@ export class StatementParser extends ClassParser {
           // Command-form at statement start
           if (this.canStartCommandForm()) {
             const nameToken = this.next()!;
-            let args = this.parseCommandArgs();
             const command = COMMAND_VERBS.find(
               cmd => cmd.name.toLowerCase() === nameToken.lexeme.toLowerCase()
             );
+
+            let args: Expr[];
             if (command) {
+              // Known command verb: token-based parsing + normalization
+              args = this.parseCommandArgs();
               args = this.normalizeCommandArgs(command, args);
+            } else {
+              // General command syntax: raw source → char vectors
+              args = this.parseCommandArgsGeneral();
             }
+
             const end = this.lastTokenEnd();
             const span = this.spanFrom(nameToken.position, end);
             return {
@@ -186,9 +193,22 @@ export class StatementParser extends ClassParser {
                   span,
                 };
               }
-              throw this.error(
-                "Unexpected adjacency: interpret as function call? Use parentheses (e.g., foo(b(1)))."
-              );
+              // General command syntax: treat as command form with raw args
+              const nameToken = this.next()!;
+              const args = this.parseCommandArgsGeneral();
+              const end = this.lastTokenEnd();
+              const span = this.spanFrom(nameToken.position, end);
+              return {
+                type: "ExprStmt",
+                expr: {
+                  type: "FuncCall",
+                  name: nameToken.lexeme,
+                  args,
+                  span,
+                },
+                suppressed: false,
+                span,
+              };
             }
             const expr = this.parseExpr();
             const span = expr.span;
