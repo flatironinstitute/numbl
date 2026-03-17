@@ -218,15 +218,10 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
       collectAssignedVarIds(stmt.body, whileAssigned);
       const preLoop = snapshotTypes(cg.typeEnv, whileAssigned);
 
-      // The while condition is re-evaluated every iteration, so variables
-      // assigned in the body may have changed type. Compile the condition
-      // with those variables set to Unknown so we get the safe codepath.
-      for (const vid of whileAssigned) {
-        cg.typeEnv.set({ id: vid }, IType.Unknown);
-      }
+      // Only widen variables whose body-assigned type differs from
+      // pre-loop type (lowering fixpoint ensures assignedType is accurate).
+      widenChangedLoopVars(cg, stmt.body, preLoop);
       const cond = genExpr(cg, stmt.cond);
-      // Restore pre-loop types for the body codegen
-      restoreTypes(cg.typeEnv, preLoop);
 
       cg.emit(`while ($rt.toBool(${cond})) {`);
       cg.pushIndent();
@@ -248,6 +243,10 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
         cg.typeEnv.set(stmt.variable.id, stmt.iterVarType);
       }
       const preLoop = snapshotTypes(cg.typeEnv, forAssigned);
+
+      // Only widen variables whose body-assigned type differs from
+      // pre-loop type (lowering fixpoint ensures assignedType is accurate).
+      widenChangedLoopVars(cg, stmt.body, preLoop);
 
       if (stmt.expr.kind.type === "Range") {
         genForRange(
@@ -499,5 +498,73 @@ function replayMemberTypeUpdate(
   }
   if (!vTy || vTy.kind === "Struct") {
     cg.typeEnv.unify(v.id, ty);
+  }
+}
+
+/**
+ * Collect the unified assigned types for each variable from the IR
+ * `assignedType` annotations in a statement list.  For each variable
+ * assigned anywhere in `stmts`, unifies all of its `assignedType` values
+ * into a single type.  This tells us what type each variable may take
+ * inside a loop body.
+ */
+function collectBodyAssignedTypes(
+  stmts: IRStmt[],
+  out: Map<string, ItemType>
+): void {
+  for (const s of stmts) {
+    if (s.type === "Assign" && s.assignedType) {
+      const id = s.variable.id.id;
+      const prev = out.get(id);
+      out.set(id, prev ? IType.unify(prev, s.assignedType) : s.assignedType);
+    }
+    if (s.type === "MultiAssign" && s.assignedTypes) {
+      for (let i = 0; i < s.lvalues.length; i++) {
+        const lv = s.lvalues[i];
+        const ty = s.assignedTypes[i];
+        if (lv?.type === "Var" && ty) {
+          const id = lv.variable.id.id;
+          const prev = out.get(id);
+          out.set(id, prev ? IType.unify(prev, ty) : ty);
+        }
+      }
+    }
+    // Recurse into control flow
+    if (s.type === "If") {
+      collectBodyAssignedTypes(s.thenBody, out);
+      for (const b of s.elseifBlocks) collectBodyAssignedTypes(b.body, out);
+      if (s.elseBody) collectBodyAssignedTypes(s.elseBody, out);
+    }
+    if (s.type === "While" || s.type === "For")
+      collectBodyAssignedTypes(s.body, out);
+    if (s.type === "Switch") {
+      for (const c of s.cases) collectBodyAssignedTypes(c.body, out);
+      if (s.otherwise) collectBodyAssignedTypes(s.otherwise, out);
+    }
+    if (s.type === "TryCatch") {
+      collectBodyAssignedTypes(s.tryBody, out);
+      collectBodyAssignedTypes(s.catchBody, out);
+    }
+  }
+}
+
+/**
+ * For each variable assigned in a loop body, check whether its body-assigned
+ * type differs from its pre-loop type.  Only widen those variables (to the
+ * unified type of pre-loop and body-assigned) — leave the rest at their
+ * pre-loop types.
+ */
+function widenChangedLoopVars(
+  cg: Codegen,
+  body: IRStmt[],
+  preLoop: Map<string, ItemType | undefined>
+): void {
+  const bodyTypes = new Map<string, ItemType>();
+  collectBodyAssignedTypes(body, bodyTypes);
+  for (const [id, bodyTy] of bodyTypes) {
+    const pre = preLoop.get(id);
+    if (pre && JSON.stringify(pre) !== JSON.stringify(bodyTy)) {
+      cg.typeEnv.set({ id }, IType.unify(pre, bodyTy));
+    }
   }
 }

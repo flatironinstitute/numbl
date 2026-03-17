@@ -338,6 +338,9 @@ for i = 1:2
         end
     end
 end
+% deep = deep + 1 stays Number since Number + Number = Number.
+% With precise loop type widening, only vars that actually change type
+% across iterations become Unknown.
 assert(strcmp(__inferred_type_str(deep), 'Number'));
 assert(deep == 4);
 

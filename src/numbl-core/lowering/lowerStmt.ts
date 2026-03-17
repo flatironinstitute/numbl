@@ -238,6 +238,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         [postBody],
         true
       );
+      fixLoopAssignedTypes(body, ctx.typeEnv, whileAssigned, preLoopTypes);
 
       return { type: "While", cond, body, span };
     }
@@ -273,6 +274,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       restoreTypes(ctx.typeEnv, preLoopTypes);
       // Loop may not execute, so include pre-loop types
       joinBranchTypes(ctx.typeEnv, forAssigned, preLoopTypes, [postBody], true);
+      fixLoopAssignedTypes(body, ctx.typeEnv, forAssigned, preLoopTypes);
 
       return {
         type: "For",
@@ -540,6 +542,167 @@ function joinBranchTypes(
     if (joined !== undefined) {
       typeEnv.set({ id }, joined);
     }
+  }
+}
+
+// ── Loop assignedType fixpoint ───────────────────────────────────────────
+
+function itemTypesEqual(
+  a: ItemType | undefined,
+  b: ItemType | undefined
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Re-walk an already-lowered IR body and recompute `assignedType` fields
+ * using `itemTypeForExprKind` with the current TypeEnv.  This is used after
+ * joining loop types so that `assignedType` annotations reflect
+ * cross-iteration type changes (the initial lowering pass only sees
+ * first-iteration types).
+ *
+ * Returns true if any assignedType was changed.
+ */
+function recomputeAssignedTypes(stmts: IRStmt[], typeEnv: TypeEnv): boolean {
+  let changed = false;
+  for (const s of stmts) {
+    if (s.type === "Assign") {
+      const ty = itemTypeForExprKind(s.expr.kind, typeEnv);
+      if (s.assignedType && !itemTypesEqual(s.assignedType, ty)) {
+        s.assignedType = ty;
+        changed = true;
+      }
+      typeEnv.set(s.variable.id, ty);
+    } else if (s.type === "MultiAssign") {
+      // For multi-assign, update typeEnv with stored types (function
+      // return types don't change with context)
+      if (s.assignedTypes) {
+        for (let i = 0; i < s.lvalues.length; i++) {
+          const lv = s.lvalues[i];
+          const ty = s.assignedTypes[i];
+          if (lv?.type === "Var" && ty) {
+            typeEnv.set(lv.variable.id, ty);
+          }
+        }
+      }
+    } else if (s.type === "If") {
+      const ifAssigned = new Set<string>();
+      collectAssignedVarIds([s], ifAssigned);
+      const pre = snapshotTypes(typeEnv, ifAssigned);
+
+      const branchTypes: Map<string, ItemType | undefined>[] = [];
+      restoreTypes(typeEnv, pre);
+      if (recomputeAssignedTypes(s.thenBody, typeEnv)) changed = true;
+      branchTypes.push(snapshotTypes(typeEnv, ifAssigned));
+      for (const b of s.elseifBlocks) {
+        restoreTypes(typeEnv, pre);
+        if (recomputeAssignedTypes(b.body, typeEnv)) changed = true;
+        branchTypes.push(snapshotTypes(typeEnv, ifAssigned));
+      }
+      if (s.elseBody) {
+        restoreTypes(typeEnv, pre);
+        if (recomputeAssignedTypes(s.elseBody, typeEnv)) changed = true;
+        branchTypes.push(snapshotTypes(typeEnv, ifAssigned));
+      }
+      restoreTypes(typeEnv, pre);
+      joinBranchTypes(typeEnv, ifAssigned, pre, branchTypes, !s.elseBody);
+    } else if (s.type === "While" || s.type === "For") {
+      const body = s.body;
+      const loopAssigned = new Set<string>();
+      collectAssignedVarIds(body, loopAssigned);
+      if (s.type === "For" && s.iterVarType) {
+        typeEnv.set(s.variable.id, s.iterVarType);
+      }
+      const pre = snapshotTypes(typeEnv, loopAssigned);
+      if (recomputeAssignedTypes(body, typeEnv)) changed = true;
+      const post = snapshotTypes(typeEnv, loopAssigned);
+      restoreTypes(typeEnv, pre);
+      joinBranchTypes(typeEnv, loopAssigned, pre, [post], true);
+      // Also apply fixpoint to the nested loop body so its assignedType
+      // annotations are correct with the joined outer context types.
+      fixLoopAssignedTypes(body, typeEnv, loopAssigned, pre);
+    } else if (s.type === "Switch") {
+      const swAssigned = new Set<string>();
+      collectAssignedVarIds([s], swAssigned);
+      const pre = snapshotTypes(typeEnv, swAssigned);
+      const branchTypes: Map<string, ItemType | undefined>[] = [];
+      for (const c of s.cases) {
+        restoreTypes(typeEnv, pre);
+        if (recomputeAssignedTypes(c.body, typeEnv)) changed = true;
+        branchTypes.push(snapshotTypes(typeEnv, swAssigned));
+      }
+      if (s.otherwise) {
+        restoreTypes(typeEnv, pre);
+        if (recomputeAssignedTypes(s.otherwise, typeEnv)) changed = true;
+        branchTypes.push(snapshotTypes(typeEnv, swAssigned));
+      }
+      restoreTypes(typeEnv, pre);
+      joinBranchTypes(typeEnv, swAssigned, pre, branchTypes, !s.otherwise);
+    } else if (s.type === "TryCatch") {
+      const tcAssigned = new Set<string>();
+      collectAssignedVarIds([s], tcAssigned);
+      const pre = snapshotTypes(typeEnv, tcAssigned);
+      const branchTypes: Map<string, ItemType | undefined>[] = [];
+      restoreTypes(typeEnv, pre);
+      if (recomputeAssignedTypes(s.tryBody, typeEnv)) changed = true;
+      branchTypes.push(snapshotTypes(typeEnv, tcAssigned));
+      restoreTypes(typeEnv, pre);
+      if (recomputeAssignedTypes(s.catchBody, typeEnv)) changed = true;
+      branchTypes.push(snapshotTypes(typeEnv, tcAssigned));
+      restoreTypes(typeEnv, pre);
+      joinBranchTypes(typeEnv, tcAssigned, pre, branchTypes, false);
+    }
+  }
+  return changed;
+}
+
+/**
+ * After lowering a loop body and joining types, check if any variable's
+ * joined type differs from its pre-loop type.  If so, re-walk the body
+ * with the joined types to update `assignedType` annotations so they
+ * reflect cross-iteration type changes.  Repeat until fixpoint (at most
+ * 2 iterations since Unknown is the lattice top).
+ */
+function fixLoopAssignedTypes(
+  body: IRStmt[],
+  typeEnv: TypeEnv,
+  assigned: Set<string>,
+  preLoopTypes: Map<string, ItemType | undefined>
+): void {
+  // Check if any variable's type changed after the join
+  let needsRecompute = false;
+  for (const id of assigned) {
+    const pre = preLoopTypes.get(id);
+    const cur = typeEnv.get({ id });
+    if (pre !== cur && !(pre && cur && itemTypesEqual(pre, cur))) {
+      needsRecompute = true;
+      break;
+    }
+  }
+  if (!needsRecompute) return;
+
+  // Re-walk with joined types, up to 2 iterations for fixpoint
+  for (let iter = 0; iter < 2; iter++) {
+    const before = snapshotTypes(typeEnv, assigned);
+    recomputeAssignedTypes(body, typeEnv);
+    const after = snapshotTypes(typeEnv, assigned);
+    // Restore to the joined types and re-join with the recomputed post-body
+    restoreTypes(typeEnv, before);
+    joinBranchTypes(typeEnv, assigned, before, [after], true);
+
+    // Check if types stabilized
+    let stable = true;
+    for (const id of assigned) {
+      const b = before.get(id);
+      const a = typeEnv.get({ id });
+      if (b !== a && !(b && a && itemTypesEqual(b, a))) {
+        stable = false;
+        break;
+      }
+    }
+    if (stable) break;
   }
 }
 
