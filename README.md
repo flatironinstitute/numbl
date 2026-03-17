@@ -4,6 +4,8 @@ Numbl is an open-source numerical computing environment that aims to be compatib
 
 **Early stage project.** Numbl is under active development and new functionality is being added regularly.
 
+[Intro presentation](https://magland.github.io/mip-numbl-presentation)
+
 ## Try it in the browser
 
 [![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
