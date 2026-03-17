@@ -236,7 +236,8 @@ export function generateMainScriptCode(
   const sortedVarIds = [...scriptVarIds].sort();
   for (const id of sortedVarIds) {
     const v = varById.get(id);
-    const tc = v?.ty ? ` /* ${typeToString(v.ty)} */` : "";
+    const vTy = v ? codegen.typeEnv.get(v.id) : undefined;
+    const tc = vTy ? ` /* ${typeToString(vTy)} */` : "";
     codegen.emit(`var ${codegen.varRef(id)};${tc}`);
   }
 

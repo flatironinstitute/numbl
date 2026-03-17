@@ -3,15 +3,11 @@
  */
 
 import { VarId } from "./varId.js";
-import { ItemType } from "./itemTypes.js";
 import type { IRProgram, IRStmt } from "./nodes.js";
 
 export interface IRVariable {
   id: VarId;
   name: string;
-  // undefined means it hasn't been assigned yet, whereas
-  // unknown means it has been assigned and is unknown
-  ty: ItemType | undefined;
   isTopLevel?: boolean;
 }
 

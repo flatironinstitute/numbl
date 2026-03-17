@@ -4,6 +4,7 @@
 
 import { type ItemType, IType } from "../lowering/itemTypes.js";
 import { type IRExpr } from "../lowering/nodes.js";
+import type { IRVariable } from "../lowering/loweringTypes.js";
 import { itemTypeForExprKind } from "../lowering/nodeUtils.js";
 import { findBuiltinBranch } from "../builtins";
 import type { FunctionCandidate } from "../lowering/lowerExpr.js";
@@ -31,12 +32,20 @@ function hasCSLArg(args: IRExpr[]): boolean {
  * Shared logic for both regular functions and class methods.
  */
 function extractOutputTypes(
-  specialized: { outputs: { ty?: ItemType }[]; hasVarargout: boolean } | null,
+  specialized: {
+    outputs: IRVariable[];
+    outputTypes?: ItemType[];
+    hasVarargout: boolean;
+  } | null,
   nargout: number
 ): ItemType {
   if (!specialized || specialized.outputs.length === 0) {
     return { kind: "Unknown" };
   }
+
+  const getOutputType = (i: number): ItemType | undefined =>
+    specialized.outputTypes?.[i];
+
   // When hasVarargout is true, the last output is `varargout` (a cell).
   // The caller receives varargout{1}, varargout{2}, etc. — not the cell
   // itself — so we can't trust the Cell type of varargout for those slots.
@@ -46,21 +55,19 @@ function extractOutputTypes(
 
   if (nargout <= 1) {
     if (0 >= varargoutStart) {
-      // The first output comes from varargout — type is unknown
       return { kind: "Unknown" };
     }
-    if (specialized.outputs[0].ty) {
-      return specialized.outputs[0].ty;
-    }
+    const ty = getOutputType(0);
+    if (ty) return ty;
     return { kind: "Unknown" };
   }
   if (nargout > 1 && specialized.outputs.length > 1) {
     const outputTypes = specialized.outputs
       .slice(0, nargout)
-      .map((o, i) =>
+      .map((_o, i) =>
         i >= varargoutStart
           ? ({ kind: "Unknown" } as ItemType)
-          : (o.ty ?? ({ kind: "Unknown" } as ItemType))
+          : (getOutputType(i) ?? ({ kind: "Unknown" } as ItemType))
       );
     if (specialized.hasVarargout) {
       while (outputTypes.length < nargout) {
@@ -72,9 +79,8 @@ function extractOutputTypes(
   if (0 >= varargoutStart) {
     return { kind: "Unknown" };
   }
-  if (specialized.outputs[0].ty) {
-    return specialized.outputs[0].ty;
-  }
+  const ty = getOutputType(0);
+  if (ty) return ty;
   return { kind: "Unknown" };
 }
 
@@ -99,7 +105,7 @@ export function determineReturnType(
   const candidate = candidates[0];
 
   if (candidate.type === "userFunction") {
-    const argTypes = args.map(a => itemTypeForExprKind(a.kind));
+    const argTypes = args.map(a => itemTypeForExprKind(a.kind, ctx.typeEnv));
     const specialized =
       ctx.getOrLowerFunctionSpecialized(name, argTypes) ??
       ctx.getOrLowerWorkspaceFunctionSpecialized(name, argTypes);
@@ -119,7 +125,7 @@ export function determineReturnType(
           break;
         }
         const fieldName = keyExpr.value.replace(/^'|'$/g, "");
-        fields[fieldName] = itemTypeForExprKind(args[i + 1].kind);
+        fields[fieldName] = itemTypeForExprKind(args[i + 1].kind, ctx.typeEnv);
       }
       if (allCharKeys) return IType.struct(fields);
     }
@@ -132,7 +138,7 @@ export function determineReturnType(
     (name === "arrayfun" || name === "cellfun")
   ) {
     if (args.length >= 2) {
-      const funcArgType = itemTypeForExprKind(args[0].kind);
+      const funcArgType = itemTypeForExprKind(args[0].kind, ctx.typeEnv);
       if (
         funcArgType.kind === "Function" &&
         funcArgType.returns.kind !== "Unknown"
@@ -171,7 +177,7 @@ export function determineReturnType(
   // Builtin: try to infer from arg types.
   // But if any arg is Unknown, the call may be dispatched to a class method
   // at runtime instead of the builtin, so we can't trust the builtin's type.
-  const argTypes = args.map(a => itemTypeForExprKind(a.kind));
+  const argTypes = args.map(a => itemTypeForExprKind(a.kind, ctx.typeEnv));
   if (argTypes.some(t => t.kind === "Unknown")) {
     return { kind: "Unknown" };
   }

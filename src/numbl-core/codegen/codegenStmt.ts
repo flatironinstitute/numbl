@@ -47,7 +47,7 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
     case "Assign": {
       const val = genExpr(cg, stmt.expr);
       const vr = cg.varRef(stmt.variable.id.id);
-      const valType = itemTypeForExprKind(stmt.expr.kind);
+      const valType = itemTypeForExprKind(stmt.expr.kind, cg.typeEnv);
       const tc = cg.typeComment(valType);
       if (valType.kind === "Number") {
         cg.emit(`${vr} = ${val};${tc}`);

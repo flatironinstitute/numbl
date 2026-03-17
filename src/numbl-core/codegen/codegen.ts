@@ -13,6 +13,7 @@
 
 import { typeToString, type ItemType } from "../lowering/itemTypes.js";
 import { type LoweringContext } from "../lowering/loweringContext.js";
+import { type TypeEnv } from "../lowering/typeEnv.js";
 import {
   assertNoUnknownArgTypes,
   computeSpecKey,
@@ -149,6 +150,11 @@ export class Codegen {
     public loweringCtx: LoweringContext,
     public fileSources: Map<string, string>
   ) {}
+
+  /** Current context's type environment. Follows context switches automatically. */
+  get typeEnv(): TypeEnv {
+    return this.loweringCtx.typeEnv;
+  }
 
   // ── Emit ──────────────────────────────────────────────────────────
 

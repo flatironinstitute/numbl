@@ -51,7 +51,9 @@ function resolveFuncCall(
   nargout: number,
   span: Span
 ): IRExpr | null {
-  const argTypes: ItemType[] = args.map(a => itemTypeForExprKind(a.kind));
+  const argTypes: ItemType[] = args.map(a =>
+    itemTypeForExprKind(a.kind, ctx.typeEnv)
+  );
   const callSite: CallSite = {
     file: ctx.mainFileName,
     className: ctx.ownerClassName ?? undefined,
@@ -356,7 +358,7 @@ function lowerExprInner(
             ) {
               const args = expr.args.map(a => lowerExpr(ctx, a));
               const argTypes: ItemType[] = args.map(a =>
-                itemTypeForExprKind(a.kind)
+                itemTypeForExprKind(a.kind, ctx.typeEnv)
               );
               const returnType = determineMethodReturnType(
                 ctx,
@@ -387,7 +389,7 @@ function lowerExprInner(
       const args = expr.args.map(a => lowerExpr(ctx, a));
 
       // If base type is ClassInstance and method is known, infer return type
-      const baseType = itemTypeForExprKind(base.kind);
+      const baseType = itemTypeForExprKind(base.kind, ctx.typeEnv);
       if (baseType.kind === "ClassInstance") {
         const classInfo = ctx.getClassInfo(baseType.className);
         // When a property and method share the same name, dot-syntax
@@ -414,7 +416,7 @@ function lowerExprInner(
         if (classInfo && classInfo.methodNames.has(expr.name)) {
           const methodArgTypes: ItemType[] = [
             baseType,
-            ...args.map(a => itemTypeForExprKind(a.kind)),
+            ...args.map(a => itemTypeForExprKind(a.kind, ctx.typeEnv)),
           ];
           const returnType = determineMethodReturnType(
             ctx,
@@ -444,7 +446,7 @@ function lowerExprInner(
           ctx.classHasStaticMethod(baseType.className, expr.name)
         ) {
           const argTypes: ItemType[] = args.map(a =>
-            itemTypeForExprKind(a.kind)
+            itemTypeForExprKind(a.kind, ctx.typeEnv)
           );
           const returnType = determineMethodReturnType(
             ctx,
