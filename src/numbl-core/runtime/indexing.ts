@@ -26,7 +26,6 @@ import {
   tensorSize2D,
   colMajorIndex,
   sub2ind,
-  ind2sub,
   shareRuntimeValue,
 } from "./utils.js";
 import { toNumber } from "./convert.js";
@@ -420,20 +419,36 @@ export function indexIntoRTValue(
       const resultData = new FloatXArray(totalElems);
       const resultImag = base.imag ? new FloatXArray(totalElems) : undefined;
 
-      // Iterate over all combinations using column-major order
-      const subs = new Array(dimIndices.length).fill(0);
+      // Precompute source strides (column-major)
+      const ndimIdx = dimIndices.length;
+      const srcStrides = new Array(ndimIdx);
+      srcStrides[0] = 1;
+      for (let d = 1; d < ndimIdx; d++)
+        srcStrides[d] =
+          srcStrides[d - 1] * (d - 1 < shape.length ? shape[d - 1] : 1);
+
+      // Precompute flat-index offsets per dimension: srcStrides[d] * dimIndices[d][k]
+      const dimOffsets: number[][] = dimIndices.map((indices, d) =>
+        indices.map(idx => idx * srcStrides[d])
+      );
+
+      const subs = new Array(ndimIdx).fill(0);
+      let srcLinear = 0;
+      for (let d = 0; d < ndimIdx; d++) srcLinear += dimOffsets[d][0];
       for (let i = 0; i < totalElems; i++) {
-        // Map result subscripts to source subscripts
-        const srcSubs = subs.map((s, dim) => dimIndices[dim][s]);
-        const srcLinear = sub2ind(shape, srcSubs);
         resultData[i] = base.data[srcLinear];
         if (resultImag && base.imag) {
           resultImag[i] = base.imag[srcLinear];
         }
-        // Increment subscripts in column-major order
-        for (let d = 0; d < subs.length; d++) {
+        // Increment subscripts in column-major order, updating srcLinear
+        for (let d = 0; d < ndimIdx; d++) {
+          const prev = subs[d];
           subs[d]++;
-          if (subs[d] < resultShape[d]) break;
+          if (subs[d] < dimIndices[d].length) {
+            srcLinear += dimOffsets[d][subs[d]] - dimOffsets[d][prev];
+            break;
+          }
+          srcLinear -= dimOffsets[d][prev] - dimOffsets[d][0];
           subs[d] = 0;
         }
       }
@@ -1386,16 +1401,29 @@ export function storeIntoRTValueIndex(
         const newTotal = requiredShape.reduce((a, b) => a * b, 1);
         const newData = new FloatXArray(newTotal);
         const newImag = base.imag ? new FloatXArray(newTotal) : undefined;
-        // Copy old data into new array
+        // Copy old data into new array using stride arithmetic
         if (base.data.length > 0) {
           const oldShape = [...shape];
           while (oldShape.length < requiredShape.length) oldShape.push(1);
           const oldTotal = base.data.length;
+          const ndimGrow = oldShape.length;
+          // Precompute destination strides mapped to old shape iteration
+          const newStrides = new Array(ndimGrow);
+          newStrides[0] = 1;
+          for (let d = 1; d < ndimGrow; d++)
+            newStrides[d] = newStrides[d - 1] * requiredShape[d - 1];
+          const growSubs = new Array(ndimGrow).fill(0);
+          let dstIdx = 0;
           for (let i = 0; i < oldTotal; i++) {
-            const subs = ind2sub(oldShape, i);
-            const dst = sub2ind(requiredShape, subs);
-            newData[dst] = base.data[i];
-            if (newImag && base.imag) newImag[dst] = base.imag[i];
+            newData[dstIdx] = base.data[i];
+            if (newImag && base.imag) newImag[dstIdx] = base.imag[i];
+            for (let d = 0; d < ndimGrow; d++) {
+              growSubs[d]++;
+              dstIdx += newStrides[d];
+              if (growSubs[d] < oldShape[d]) break;
+              dstIdx -= growSubs[d] * newStrides[d];
+              growSubs[d] = 0;
+            }
           }
         }
         // Squeeze trailing singleton dims beyond 2nd
@@ -1412,22 +1440,38 @@ export function storeIntoRTValueIndex(
       const resultShape = dimIndices.map(d => d.length);
       const totalElems = resultShape.reduce((a, b) => a * b, 1);
 
+      // Precompute destination strides and per-dimension offset tables
+      const ndimStore = dimIndices.length;
+      const dstStrides = new Array(ndimStore);
+      dstStrides[0] = 1;
+      for (let d = 1; d < ndimStore; d++)
+        dstStrides[d] =
+          dstStrides[d - 1] * (d - 1 < shape.length ? shape[d - 1] : 1);
+      const dimOffsetsStore: number[][] = dimIndices.map((indices, d) =>
+        indices.map(idx => idx * dstStrides[d])
+      );
+
       if (isRuntimeTensor(rhs)) {
         if (rhs.data.length !== totalElems) {
           throw new RuntimeError("Subscripted assignment dimension mismatch");
         }
         const hasRhsImag = rhs.imag !== undefined;
         if (hasRhsImag || base.imag) ensureImag(base);
-        // Iterate in column-major order
-        const subs = new Array(dimIndices.length).fill(0);
+        const subs = new Array(ndimStore).fill(0);
+        let dstLinear = 0;
+        for (let d = 0; d < ndimStore; d++) dstLinear += dimOffsetsStore[d][0];
         for (let i = 0; i < totalElems; i++) {
-          const srcSubs = subs.map((s, dim) => dimIndices[dim][s]);
-          const dstLinear = sub2ind(shape, srcSubs);
           base.data[dstLinear] = rhs.data[i];
           if (base.imag) base.imag[dstLinear] = hasRhsImag ? rhs.imag![i] : 0;
-          for (let d = 0; d < subs.length; d++) {
+          for (let d = 0; d < ndimStore; d++) {
+            const prev = subs[d];
             subs[d]++;
-            if (subs[d] < resultShape[d]) break;
+            if (subs[d] < dimIndices[d].length) {
+              dstLinear +=
+                dimOffsetsStore[d][subs[d]] - dimOffsetsStore[d][prev];
+              break;
+            }
+            dstLinear -= dimOffsetsStore[d][prev] - dimOffsetsStore[d][0];
             subs[d] = 0;
           }
         }
@@ -1437,15 +1481,20 @@ export function storeIntoRTValueIndex(
       // Scalar RHS: fill all target positions
       const { re: rhsReN, im: rhsImN } = toReIm(rhs);
       if (rhsImN !== 0 || base.imag) ensureImag(base);
-      const subs = new Array(dimIndices.length).fill(0);
+      const subs = new Array(ndimStore).fill(0);
+      let dstLinear = 0;
+      for (let d = 0; d < ndimStore; d++) dstLinear += dimOffsetsStore[d][0];
       for (let i = 0; i < totalElems; i++) {
-        const srcSubs = subs.map((s, dim) => dimIndices[dim][s]);
-        const dstLinear = sub2ind(shape, srcSubs);
         base.data[dstLinear] = rhsReN;
         if (base.imag) base.imag[dstLinear] = rhsImN;
-        for (let d = 0; d < subs.length; d++) {
+        for (let d = 0; d < ndimStore; d++) {
+          const prev = subs[d];
           subs[d]++;
-          if (subs[d] < resultShape[d]) break;
+          if (subs[d] < dimIndices[d].length) {
+            dstLinear += dimOffsetsStore[d][subs[d]] - dimOffsetsStore[d][prev];
+            break;
+          }
+          dstLinear -= dimOffsetsStore[d][prev] - dimOffsetsStore[d][0];
           subs[d] = 0;
         }
       }

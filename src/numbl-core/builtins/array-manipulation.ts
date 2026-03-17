@@ -9,8 +9,6 @@ import {
   tensorSize2D,
   colMajorIndex,
   numel,
-  sub2ind,
-  ind2sub,
   horzcat,
   vertcat,
 } from "../runtime/index.js";
@@ -35,13 +33,25 @@ function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
   const result = new FloatXArray(totalElems);
   const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
   const dimSize = dimIdx < shape.length ? shape[dimIdx] : 1;
-  for (let i = 0; i < totalElems; i++) {
-    const subs = ind2sub(shape, i);
-    subs[dimIdx] = dimSize - 1 - subs[dimIdx];
-    const srcIdx = sub2ind(shape, subs);
-    result[i] = v.data[srcIdx];
-    if (resultImag) resultImag[i] = v.imag![srcIdx];
+
+  // Stride-based reversal: blocks of size strideDim are swapped along dim.
+  let strideDim = 1;
+  for (let d = 0; d < dimIdx; d++) strideDim *= shape[d];
+  const slabSize = strideDim * dimSize;
+  const numOuter = totalElems / slabSize;
+
+  for (let outer = 0; outer < numOuter; outer++) {
+    const base = outer * slabSize;
+    for (let k = 0; k < dimSize; k++) {
+      const srcOff = base + k * strideDim;
+      const dstOff = base + (dimSize - 1 - k) * strideDim;
+      result.set(v.data.subarray(srcOff, srcOff + strideDim), dstOff);
+      if (resultImag) {
+        resultImag.set(v.imag!.subarray(srcOff, srcOff + strideDim), dstOff);
+      }
+    }
   }
+
   return RTV.tensor(result, [...shape], resultImag) as RuntimeTensor;
 }
 
@@ -244,33 +254,32 @@ export function registerArrayManipulationFunctions(): void {
       const totalElems = numel(resultShape);
       const result = new FloatXArray(totalElems);
       const resultImag = hasComplex ? new FloatXArray(totalElems) : undefined;
-      // Fill result by iterating over each element
+
+      // Stride-based slab copies (same approach as catAlongDim)
       const ndim = resultShape.length;
-      const subs = new Array(ndim).fill(0);
-      for (let i = 0; i < totalElems; i++) {
-        // Determine which source tensor this element comes from
-        const catIdx = subs[dimIdx];
-        let srcTensorIdx = 0;
-        let offset = 0;
-        while (srcTensorIdx < tensors.length) {
-          const sz = tensors[srcTensorIdx].shape[dimIdx];
-          if (catIdx < offset + sz) break;
-          offset += sz;
-          srcTensorIdx++;
-        }
-        const srcSubs = [...subs];
-        srcSubs[dimIdx] = catIdx - offset;
-        const srcLinear = sub2ind(tensors[srcTensorIdx].shape, srcSubs);
-        result[i] = tensors[srcTensorIdx].data[srcLinear];
-        if (resultImag) {
-          const srcImag = tensors[srcTensorIdx].imag;
-          resultImag[i] = srcImag ? srcImag[srcLinear] : 0;
-        }
-        // Increment subs in column-major order
-        for (let d = 0; d < ndim; d++) {
-          subs[d]++;
-          if (subs[d] < resultShape[d]) break;
-          subs[d] = 0;
+      let strideDim = 1;
+      for (let d = 0; d < dimIdx; d++) strideDim *= resultShape[d];
+      let numOuter = 1;
+      for (let d = dimIdx + 1; d < ndim; d++) numOuter *= resultShape[d];
+
+      for (let outer = 0; outer < numOuter; outer++) {
+        let dstOff = outer * strideDim * resultShape[dimIdx];
+        for (let t = 0; t < tensors.length; t++) {
+          const srcDimSize = tensors[t].shape[dimIdx];
+          const blockSize = strideDim * srcDimSize;
+          const srcOff = outer * blockSize;
+          for (let j = 0; j < blockSize; j++) {
+            result[dstOff + j] = tensors[t].data[srcOff + j];
+          }
+          if (resultImag) {
+            const srcImag = tensors[t].imag;
+            if (srcImag) {
+              for (let j = 0; j < blockSize; j++) {
+                resultImag[dstOff + j] = srcImag[srcOff + j];
+              }
+            }
+          }
+          dstOff += blockSize;
         }
       }
       return RTV.tensor(result, resultShape, resultImag);
@@ -381,17 +390,47 @@ export function registerArrayManipulationFunctions(): void {
       const padReps = [...reps];
       while (padReps.length < ndim) padReps.push(1);
       const resultShape = padSrc.map((s, i) => s * padReps[i]);
-      const totalElems = numel(resultShape);
-      const result = new FloatXArray(totalElems);
-      const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
-      for (let i = 0; i < totalElems; i++) {
-        const subs = ind2sub(resultShape, i);
-        const srcSubs = subs.map((s, d) => s % padSrc[d]);
-        const srcIdx = sub2ind(padSrc, srcSubs);
-        result[i] = v.data[srcIdx];
-        if (resultImag) resultImag[i] = v.imag![srcIdx];
+
+      // Tile dimension-by-dimension using block copies.
+      // Start with a copy of the source data, then for each dimension,
+      // replicate the current buffer along that dimension.
+      let curData: FloatXArrayType = new FloatXArray(v.data) as FloatXArrayType;
+      let curImag: FloatXArrayType | undefined = v.imag
+        ? (new FloatXArray(v.imag) as FloatXArrayType)
+        : undefined;
+      const curShape = [...padSrc];
+
+      for (let d = 0; d < ndim; d++) {
+        const r = padReps[d];
+        if (r === 1) continue;
+        const curTotal = curData.length;
+        const newTotal = curTotal * r;
+        const newData = new FloatXArray(newTotal);
+        const newImag = curImag ? new FloatXArray(newTotal) : undefined;
+
+        // blockSize = product of curShape[0..d] (the size of a slab up to and including dim d)
+        let blockSize = 1;
+        for (let i = 0; i <= d; i++) blockSize *= curShape[i];
+        const numBlocks = curTotal / blockSize;
+
+        // For each outer block, copy the block r times
+        for (let b = 0; b < numBlocks; b++) {
+          const srcOff = b * blockSize;
+          const dstBase = b * blockSize * r;
+          for (let rep = 0; rep < r; rep++) {
+            const dstOff = dstBase + rep * blockSize;
+            newData.set(curData.subarray(srcOff, srcOff + blockSize), dstOff);
+            if (newImag && curImag) {
+              newImag.set(curImag.subarray(srcOff, srcOff + blockSize), dstOff);
+            }
+          }
+        }
+        curData = newData;
+        curImag = newImag;
+        curShape[d] *= r;
       }
-      const out = RTV.tensor(result, resultShape, resultImag);
+
+      const out = RTV.tensor(curData, resultShape, curImag);
       if (v._isLogical) out._isLogical = true;
       return out;
     })
@@ -499,19 +538,42 @@ export function registerArrayManipulationFunctions(): void {
       const totalElems = v.data.length;
       const result = new FloatXArray(totalElems);
       const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
-      for (let i = 0; i < totalElems; i++) {
-        const subs = ind2sub(shape, i);
-        const srcSubs = [...subs];
-        for (let d = 0; d < shape.length; d++) {
-          const s = d < shifts.length ? shifts[d] : 0;
-          if (s !== 0) {
-            const dimSize = shape[d];
-            srcSubs[d] = (((subs[d] - s) % dimSize) + dimSize) % dimSize;
-          }
+
+      // Precompute strides and per-dimension lookup tables
+      const ndimCS = shape.length;
+      const strides = new Array(ndimCS);
+      strides[0] = 1;
+      for (let d = 1; d < ndimCS; d++)
+        strides[d] = strides[d - 1] * shape[d - 1];
+
+      // For each dimension, precompute shifted offset: strides[d] * ((k - shift + n) % n)
+      const dimLookup: number[][] = new Array(ndimCS);
+      for (let d = 0; d < ndimCS; d++) {
+        const n = shape[d];
+        const s = d < shifts.length ? ((-shifts[d] % n) + n) % n : 0;
+        const lookup = new Array(n);
+        for (let k = 0; k < n; k++) {
+          lookup[k] = ((k + s) % n) * strides[d];
         }
-        const srcIdx = sub2ind(shape, srcSubs);
+        dimLookup[d] = lookup;
+      }
+
+      const subs = new Array(ndimCS).fill(0);
+      let srcIdx = 0;
+      for (let d = 0; d < ndimCS; d++) srcIdx += dimLookup[d][0];
+      for (let i = 0; i < totalElems; i++) {
         result[i] = v.data[srcIdx];
         if (resultImag) resultImag[i] = v.imag![srcIdx];
+        for (let d = 0; d < ndimCS; d++) {
+          const prev = subs[d];
+          subs[d]++;
+          if (subs[d] < shape[d]) {
+            srcIdx += dimLookup[d][subs[d]] - dimLookup[d][prev];
+            break;
+          }
+          srcIdx -= dimLookup[d][prev] - dimLookup[d][0];
+          subs[d] = 0;
+        }
       }
       return RTV.tensor(result, [...v.shape], resultImag);
     })
@@ -651,13 +713,17 @@ export function registerArrayManipulationFunctions(): void {
       const shape = vecs.slice(0, n).map(v => v.length);
       const totalElems = shape.reduce((acc, s) => acc * s, 1);
 
-      // Build one output tensor per dimension; k-th output varies along dim k
+      // Build one output tensor per dimension; k-th output varies along dim k.
+      // For dim k: stride = product(shape[0..k-1]), period = stride * shape[k]
       const outputs = [];
       for (let k = 0; k < n; k++) {
         const data = new FloatXArray(totalElems);
-        for (let idx = 0; idx < totalElems; idx++) {
-          const subs = ind2sub(shape, idx);
-          data[idx] = vecs[k][subs[k]];
+        let stride = 1;
+        for (let d = 0; d < k; d++) stride *= shape[d];
+        const dimLen = shape[k];
+        const period = stride * dimLen;
+        for (let i = 0; i < totalElems; i++) {
+          data[i] = vecs[k][Math.floor((i % period) / stride)];
         }
         outputs.push(RTV.tensor(data, [...shape]));
       }
@@ -698,13 +764,16 @@ export function registerArrayManipulationFunctions(): void {
       const shape = reordered.slice(0, n).map(v => v.length);
       const totalElems = shape.reduce((acc, s) => acc * s, 1);
 
-      // Build outputs using ndgrid logic on reordered vecs
+      // Build outputs using stride-based ndgrid logic on reordered vecs
       const ndgridOuts = [];
       for (let k = 0; k < n; k++) {
         const data = new FloatXArray(totalElems);
+        let stride = 1;
+        for (let d = 0; d < k; d++) stride *= shape[d];
+        const dimLen = shape[k];
+        const period = stride * dimLen;
         for (let idx = 0; idx < totalElems; idx++) {
-          const subs = ind2sub(shape, idx);
-          data[idx] = reordered[k][subs[k]];
+          data[idx] = reordered[k][Math.floor((idx % period) / stride)];
         }
         ndgridOuts.push(RTV.tensor(data, [...shape]));
       }
@@ -745,17 +814,33 @@ export function registerArrayManipulationFunctions(): void {
       const totalElems = v.data.length;
       const result = new FloatXArray(totalElems);
       const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
+
+      // Precompute source strides for each dimension
+      const ndim = perm.length;
+      const srcStrides = new Array(padShape.length);
+      srcStrides[0] = 1;
+      for (let d = 1; d < padShape.length; d++)
+        srcStrides[d] = srcStrides[d - 1] * padShape[d - 1];
+
+      // For each destination dimension d, stepping by 1 in dst dim d
+      // moves by srcStrides[perm[d]] in the source
+      const mappedStrides = new Array(ndim);
+      for (let d = 0; d < ndim; d++) mappedStrides[d] = srcStrides[perm[d]];
+
+      // Iterate in column-major order over destination, tracking source index
+      const subs = new Array(ndim).fill(0);
+      let srcIdx = 0;
       for (let i = 0; i < totalElems; i++) {
-        // Get destination subscripts
-        const dstSubs = ind2sub(newShape, i);
-        // Map to source subscripts via inverse permutation
-        const srcSubs = new Array(padShape.length).fill(0);
-        for (let d = 0; d < perm.length; d++) {
-          srcSubs[perm[d]] = dstSubs[d];
-        }
-        const srcIdx = sub2ind(padShape, srcSubs);
         result[i] = v.data[srcIdx];
         if (resultImag) resultImag[i] = v.imag![srcIdx];
+        // Increment subscripts in column-major order
+        for (let d = 0; d < ndim; d++) {
+          subs[d]++;
+          srcIdx += mappedStrides[d];
+          if (subs[d] < newShape[d]) break;
+          srcIdx -= subs[d] * mappedStrides[d];
+          subs[d] = 0;
+        }
       }
       return RTV.tensor(result, newShape, resultImag);
     })
@@ -791,15 +876,28 @@ export function registerArrayManipulationFunctions(): void {
       const totalElems = v.data.length;
       const result = new FloatXArray(totalElems);
       const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
+
+      const ndim2 = invPerm.length;
+      const srcStrides2 = new Array(padShape.length);
+      srcStrides2[0] = 1;
+      for (let d = 1; d < padShape.length; d++)
+        srcStrides2[d] = srcStrides2[d - 1] * padShape[d - 1];
+      const mappedStrides2 = new Array(ndim2);
+      for (let d = 0; d < ndim2; d++)
+        mappedStrides2[d] = srcStrides2[invPerm[d]];
+
+      const subs2 = new Array(ndim2).fill(0);
+      let srcIdx2 = 0;
       for (let i = 0; i < totalElems; i++) {
-        const dstSubs = ind2sub(newShape, i);
-        const srcSubs = new Array(padShape.length).fill(0);
-        for (let d = 0; d < invPerm.length; d++) {
-          srcSubs[invPerm[d]] = dstSubs[d];
+        result[i] = v.data[srcIdx2];
+        if (resultImag) resultImag[i] = v.imag![srcIdx2];
+        for (let d = 0; d < ndim2; d++) {
+          subs2[d]++;
+          srcIdx2 += mappedStrides2[d];
+          if (subs2[d] < newShape[d]) break;
+          srcIdx2 -= subs2[d] * mappedStrides2[d];
+          subs2[d] = 0;
         }
-        const srcIdx = sub2ind(padShape, srcSubs);
-        result[i] = v.data[srcIdx];
-        if (resultImag) resultImag[i] = v.imag![srcIdx];
       }
       return RTV.tensor(result, newShape, resultImag);
     })

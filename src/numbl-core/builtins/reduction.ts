@@ -8,7 +8,6 @@ import {
   toNumber,
   toString,
   RuntimeError,
-  sub2ind,
   tensorSize2D,
 } from "../runtime/index.js";
 import { ItemType } from "../lowering/itemTypes.js";
@@ -26,22 +25,6 @@ import {
 } from "../runtime/types.js";
 import { getBroadcastShape, broadcastIterate } from "./arithmetic.js";
 import { rstr } from "../runtime/runtime.js";
-
-/** Advance subscripts in column-major order, optionally skipping a dimension.
- * Returns true if there are more elements to visit. */
-function nextSubscripts(
-  subs: number[],
-  shape: number[],
-  skipDim?: number
-): boolean {
-  for (let d = 0; d < subs.length; d++) {
-    if (skipDim !== undefined && d === skipDim) continue;
-    subs[d]++;
-    if (subs[d] < shape[d]) return true;
-    subs[d] = 0;
-  }
-  return false;
-}
 
 /** Squeeze trailing singleton dimensions, keeping at least 2. Mutates in place. */
 function squeezeTrailing(shape: number[]): void {
@@ -68,16 +51,27 @@ function forEachSlice(
   resultShape[dimIdx] = 1;
   const totalElems = resultShape.reduce((a, b) => a * b, 1);
 
-  const outSubs = new Array(shape.length).fill(0);
+  // Stride along the reduction dimension (column-major)
+  let strideDim = 1;
+  for (let d = 0; d < dimIdx; d++) strideDim *= shape[d];
+
+  // Number of fibers in the "inner" block (below dim)
+  const innerCount = strideDim; // = product(shape[0..dimIdx-1])
+  // Size of one full slab (inner * reduceDimSize)
+  const slabSize = strideDim * reduceDimSize;
+
   const srcIndices = new Array(reduceDimSize);
-  for (let i = 0; i < totalElems; i++) {
-    for (let k = 0; k < reduceDimSize; k++) {
-      const srcSubs = [...outSubs];
-      srcSubs[dimIdx] = k;
-      srcIndices[k] = sub2ind(shape, srcSubs);
+  let outIdx = 0;
+  for (let outer = 0; outer < totalElems; outer += innerCount) {
+    // outer-th slab base = (outer / innerCount) * slabSize
+    const slabBase = (outer / innerCount) * slabSize;
+    for (let inner = 0; inner < innerCount; inner++) {
+      const base = slabBase + inner;
+      for (let k = 0; k < reduceDimSize; k++) {
+        srcIndices[k] = base + k * strideDim;
+      }
+      callback(outIdx++, srcIndices);
     }
-    callback(i, srcIndices);
-    nextSubscripts(outSubs, resultShape, dimIdx);
   }
 
   squeezeTrailing(resultShape);
@@ -520,6 +514,46 @@ export function registerReductionFunctions(): void {
       return { mRe, mIm, mIdx };
     };
 
+    // Fast scan over a contiguous range [start, start+count) — avoids index array allocation.
+    const minMaxScanDirect = (
+      data: ArrayLike<number>,
+      imag: ArrayLike<number> | undefined,
+      start: number,
+      count: number
+    ): { mRe: number; mIm: number; mIdx: number } => {
+      let mRe = initial,
+        mIm = 0,
+        mIdx = 0;
+      let foundNonNaN = false;
+      if (imag) {
+        for (let k = 0; k < count; k++) {
+          const idx = start + k;
+          if (data[idx] !== data[idx] || imag[idx] !== imag[idx]) continue;
+          if (!foundNonNaN || complexIsBetter(data[idx], imag[idx], mRe, mIm)) {
+            mRe = data[idx];
+            mIm = imag[idx];
+            mIdx = k;
+            foundNonNaN = true;
+          }
+        }
+      } else {
+        for (let k = 0; k < count; k++) {
+          const val = data[start + k];
+          if (val !== val) continue;
+          if (!foundNonNaN || isBetter(val, mRe)) {
+            mRe = val;
+            mIdx = k;
+            foundNonNaN = true;
+          }
+        }
+      }
+      if (!foundNonNaN) {
+        mRe = NaN;
+        mIm = 0;
+      }
+      return { mRe, mIm, mIdx };
+    };
+
     // Reduce tensor along dim using minMaxScan + forEachSlice
     const minMaxAlongDim = (
       v: RuntimeTensor,
@@ -638,9 +672,13 @@ export function registerReductionFunctions(): void {
         }
         const d = firstReduceDim(v.shape);
         if (d === 0) {
-          // Vector: full scan
-          const allIdx = Array.from({ length: v.data.length }, (_, i) => i);
-          const { mRe, mIm, mIdx } = minMaxScan(v.data, v.imag, allIdx);
+          // Vector: full scan (direct, no index array needed)
+          const { mRe, mIm, mIdx } = minMaxScanDirect(
+            v.data,
+            v.imag,
+            0,
+            v.data.length
+          );
           if (v.imag) {
             const result = mIm === 0 ? RTV.num(mRe) : RTV.complex(mRe, mIm);
             if (nargout > 1) return [result, RTV.num(mIdx + 1)];
@@ -1162,36 +1200,34 @@ export function registerReductionFunctions(): void {
               }
             }
           } else {
-            // General case: iterate over fibers along dimIdx using sub2ind
-            const numFibers = re.length / dimSize;
-            const fiberShape = shape.filter((_, i) => i !== dimIdx);
-            const fiberSubs = new Array(fiberShape.length).fill(0);
-            for (let fiber = 0; fiber < numFibers; fiber++) {
-              const fullSubs = new Array(shape.length);
-              let fi = 0;
-              for (let d = 0; d < shape.length; d++) {
-                if (d === dimIdx) continue;
-                fullSubs[d] = fiberSubs[fi++];
+            // General case: iterate over fibers along dimIdx using stride arithmetic
+            let strideDim = 1;
+            for (let d = 0; d < dimIdx; d++) strideDim *= shape[d];
+            const slabSize = strideDim * dimSize;
+            let numOuter = 1;
+            for (let d = dimIdx + 1; d < shape.length; d++)
+              numOuter *= shape[d];
+
+            const fiberFlatIdx = new Array(dimSize);
+            for (let outer = 0; outer < numOuter; outer++) {
+              for (let inner = 0; inner < strideDim; inner++) {
+                const base = outer * slabSize + inner;
+                for (let k = 0; k < dimSize; k++) {
+                  fiberFlatIdx[k] = base + k * strideDim;
+                }
+                // Sort fiber positions by value
+                const order = Array.from({ length: dimSize }, (_, k) => k);
+                order.sort((a, b) =>
+                  cmpFlatIdx(fiberFlatIdx[a], fiberFlatIdx[b])
+                );
+                // Write sorted values to fiber positions
+                for (let r = 0; r < dimSize; r++) {
+                  resultRe[fiberFlatIdx[r]] = re[fiberFlatIdx[order[r]]];
+                  if (resultIm)
+                    resultIm[fiberFlatIdx[r]] = im![fiberFlatIdx[order[r]]];
+                  if (resultIdx) resultIdx[fiberFlatIdx[r]] = order[r] + 1;
+                }
               }
-              // Collect the flat indices for this fiber
-              const fiberFlatIdx = new Array(dimSize);
-              for (let k = 0; k < dimSize; k++) {
-                fullSubs[dimIdx] = k;
-                fiberFlatIdx[k] = sub2ind(shape, fullSubs);
-              }
-              // Sort fiber positions by value
-              const order = Array.from({ length: dimSize }, (_, k) => k);
-              order.sort((a, b) =>
-                cmpFlatIdx(fiberFlatIdx[a], fiberFlatIdx[b])
-              );
-              // Write sorted values to fiber positions
-              for (let r = 0; r < dimSize; r++) {
-                resultRe[fiberFlatIdx[r]] = re[fiberFlatIdx[order[r]]];
-                if (resultIm)
-                  resultIm[fiberFlatIdx[r]] = im![fiberFlatIdx[order[r]]];
-                if (resultIdx) resultIdx[fiberFlatIdx[r]] = order[r] + 1;
-              }
-              nextSubscripts(fiberSubs, fiberShape);
             }
           }
 
@@ -1615,56 +1651,50 @@ export function registerReductionFunctions(): void {
           }
         }
       } else {
-        // General case: accumulate along non-contiguous dimension using sub2ind
-        const numFibers = v.data.length / dimSize;
-        const fiberShape = shape.filter((_, i) => i !== dimIdx);
-        const fiberSubs = new Array(fiberShape.length).fill(0);
-        for (let fiber = 0; fiber < numFibers; fiber++) {
-          // Build full subscripts by inserting dimIdx back
-          const fullSubs = new Array(shape.length);
-          let fi = 0;
-          for (let d = 0; d < shape.length; d++) {
-            if (d === dimIdx) continue;
-            fullSubs[d] = fiberSubs[fi++];
-          }
+        // General case: accumulate along non-contiguous dimension using stride arithmetic
+        let strideDim = 1;
+        for (let d = 0; d < dimIdx; d++) strideDim *= shape[d];
+        const slabSize = strideDim * dimSize;
+        let numOuter = 1;
+        for (let d = dimIdx + 1; d < shape.length; d++) numOuter *= shape[d];
 
-          if (initial !== undefined) {
-            let acc = initial;
-            let accIm = 0;
-            for (let k = 0; k < dimSize; k++) {
-              fullSubs[dimIdx] = k;
-              const idx = sub2ind(shape, fullSubs);
-              [acc, accIm] = accumOne(
-                acc,
-                accIm,
-                v.data[idx],
-                v.imag ? v.imag[idx] : 0
-              );
-              result[idx] = acc;
-              if (resultImag) resultImag[idx] = accIm;
-            }
-          } else {
-            fullSubs[dimIdx] = 0;
-            const startIdx = sub2ind(shape, fullSubs);
-            result[startIdx] = v.data[startIdx];
-            if (resultImag) resultImag[startIdx] = v.imag![startIdx];
-            let acc = v.data[startIdx];
-            let accIm = hasImag ? v.imag![startIdx] : 0;
-            for (let k = 1; k < dimSize; k++) {
-              fullSubs[dimIdx] = k;
-              const idx = sub2ind(shape, fullSubs);
-              [acc, accIm] = accumOne(
-                acc,
-                accIm,
-                v.data[idx],
-                v.imag ? v.imag[idx] : 0
-              );
-              result[idx] = acc;
-              if (resultImag) resultImag[idx] = accIm;
+        for (let outer = 0; outer < numOuter; outer++) {
+          for (let inner = 0; inner < strideDim; inner++) {
+            const base = outer * slabSize + inner;
+
+            if (initial !== undefined) {
+              let acc = initial;
+              let accIm = 0;
+              for (let k = 0; k < dimSize; k++) {
+                const idx = base + k * strideDim;
+                [acc, accIm] = accumOne(
+                  acc,
+                  accIm,
+                  v.data[idx],
+                  v.imag ? v.imag[idx] : 0
+                );
+                result[idx] = acc;
+                if (resultImag) resultImag[idx] = accIm;
+              }
+            } else {
+              const startIdx = base;
+              result[startIdx] = v.data[startIdx];
+              if (resultImag) resultImag[startIdx] = v.imag![startIdx];
+              let acc = v.data[startIdx];
+              let accIm = hasImag ? v.imag![startIdx] : 0;
+              for (let k = 1; k < dimSize; k++) {
+                const idx = base + k * strideDim;
+                [acc, accIm] = accumOne(
+                  acc,
+                  accIm,
+                  v.data[idx],
+                  v.imag ? v.imag[idx] : 0
+                );
+                result[idx] = acc;
+                if (resultImag) resultImag[idx] = accIm;
+              }
             }
           }
-
-          nextSubscripts(fiberSubs, fiberShape);
         }
       }
 

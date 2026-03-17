@@ -34,7 +34,6 @@ import {
 import { isBuiltin, getBuiltinNargin } from "../builtins";
 import { COLON_SENTINEL } from "../executor/types.js";
 import { getBroadcastShape } from "../../numbl-core/builtins/arithmetic.js";
-import { sub2ind } from "../runtime/utils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
@@ -802,12 +801,23 @@ export function bsxfunImpl(
     b.shape.length >= ndim
       ? b.shape
       : [...b.shape, ...new Array(ndim - b.shape.length).fill(1)];
+
+  // Precompute strides — zero for broadcast (size-1) dimensions
+  const aStrides = new Array(ndim);
+  const bStrides = new Array(ndim);
+  let aStr = 1,
+    bStr = 1;
+  for (let d = 0; d < ndim; d++) {
+    aStrides[d] = aPadded[d] === 1 ? 0 : aStr;
+    bStrides[d] = bPadded[d] === 1 ? 0 : bStr;
+    aStr *= aPadded[d];
+    bStr *= bPadded[d];
+  }
+
   const subs = new Array(ndim).fill(0);
+  let aIdx = 0,
+    bIdx = 0;
   for (let i = 0; i < totalElems; i++) {
-    const aSubs = subs.map((s, d) => (aPadded[d] === 1 ? 0 : s));
-    const bSubs = subs.map((s, d) => (bPadded[d] === 1 ? 0 : s));
-    const aIdx = sub2ind(aPadded, aSubs);
-    const bIdx = sub2ind(bPadded, bSubs);
     let r;
     if (aIsReal && bIsReal) {
       r = callFn(a.data[aIdx], b.data[bIdx]);
@@ -835,7 +845,11 @@ export function bsxfunImpl(
     }
     for (let d = 0; d < ndim; d++) {
       subs[d]++;
+      aIdx += aStrides[d];
+      bIdx += bStrides[d];
       if (subs[d] < outShape[d]) break;
+      aIdx -= subs[d] * aStrides[d];
+      bIdx -= subs[d] * bStrides[d];
       subs[d] = 0;
     }
   }
