@@ -90,16 +90,17 @@ assert(strcmp(__inferred_type_str(s3b), 'Struct<known: Number>'));
 assert(strcmp(__inferred_type_str(s3b.known), 'Number'));
 
 % =====================================================================
-% Whole-struct reassignment: flow-insensitive analysis accumulates fields
+% Whole-struct reassignment: flow-dependent analysis resets fields
 % =====================================================================
 
-% Type inference is flow-insensitive: variable.ty describes the variable
-% across its entire lifetime, so reassignment unifies rather than replaces.
+% Type inference is flow-dependent: reassignment replaces the type at
+% this program point, so only fields added after the last reassignment
+% are tracked.
 s4 = struct();
 s4.x = 1;
 s4 = struct();
 s4.y = 2;
-% Both fields are tracked because the type covers the whole scope
-assert(strcmp(__inferred_type_str(s4), 'Struct<x: Number, y: Number>'));
+% Only y is tracked because the second struct() assignment resets the type
+assert(strcmp(__inferred_type_str(s4), 'Struct<y: Number>'));
 
 disp('SUCCESS')

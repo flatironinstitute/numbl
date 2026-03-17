@@ -130,6 +130,8 @@ export type IRStmt =
       type: "Assign";
       variable: IRVariable;
       expr: IRExpr;
+      /** Flow-dependent type: the inferred type of the RHS at this program point. */
+      assignedType?: ItemType;
       suppressed: boolean;
       span: Span;
     }
@@ -137,6 +139,8 @@ export type IRStmt =
       type: "MultiAssign";
       lvalues: (IRLValue | null)[];
       expr: IRExpr;
+      /** Flow-dependent types: inferred type per lvalue at this program point. */
+      assignedTypes?: (ItemType | null)[];
       suppressed: boolean;
       span: Span;
     }
@@ -161,6 +165,8 @@ export type IRStmt =
       variable: IRVariable;
       expr: IRExpr;
       body: IRStmt[];
+      /** Flow-dependent type of the iteration variable. */
+      iterVarType?: ItemType;
       span: Span;
     }
   | {

@@ -5,7 +5,16 @@
  * Each function takes the Codegen instance as the first parameter.
  */
 
-import { type IRStmt, itemTypeForExprKind } from "../lowering/index.js";
+import {
+  type IRExprKind,
+  type IRExpr,
+  type IRLValue,
+  type IRStmt,
+  itemTypeForExprKind,
+} from "../lowering/index.js";
+import { type ItemType, IType, isScalarType } from "../lowering/itemTypes.js";
+import { type TypeEnv } from "../lowering/typeEnv.js";
+import { collectAssignedVarIds } from "../lowering/lowerStmt.js";
 import type { Codegen } from "./codegen.js";
 import {
   genExpr,
@@ -47,12 +56,17 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
     case "Assign": {
       const val = genExpr(cg, stmt.expr);
       const vr = cg.varRef(stmt.variable.id.id);
-      const valType = itemTypeForExprKind(stmt.expr.kind, cg.typeEnv);
+      const valType =
+        stmt.assignedType ?? itemTypeForExprKind(stmt.expr.kind, cg.typeEnv);
       const tc = cg.typeComment(valType);
       if (valType.kind === "Number") {
         cg.emit(`${vr} = ${val};${tc}`);
       } else {
         cg.emit(`${vr} = $rt.share(${val});${tc}`);
+      }
+      // Update TypeEnv for subsequent statements reading this variable
+      if (stmt.assignedType) {
+        cg.typeEnv.set(stmt.variable.id, stmt.assignedType);
       }
       if (!stmt.suppressed) {
         const name = stmt.variable.name;
@@ -102,6 +116,16 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
         const rhsItem = `$rt.share(${tmp}[${i}])`;
         cg.genLValueAssign(lv, rhsItem);
       }
+      // Update TypeEnv for subsequent statements reading these variables
+      if (stmt.assignedTypes) {
+        for (let i = 0; i < stmt.lvalues.length; i++) {
+          const lv = stmt.lvalues[i];
+          const ty = stmt.assignedTypes[i];
+          if (lv?.type === "Var" && ty) {
+            cg.typeEnv.set(lv.variable.id, ty);
+          }
+        }
+      }
       if (!stmt.suppressed) {
         for (let i = 0; i < stmt.lvalues.length; i++) {
           const lv = stmt.lvalues[i];
@@ -119,46 +143,103 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
     case "AssignLValue": {
       const rhs = genExpr(cg, stmt.expr);
       cg.genLValueAssign(stmt.lvalue, rhs);
+      // Replay struct member type updates (mirrors updateStructTypeForMemberAssign)
+      if (stmt.lvalue.type === "Member") {
+        replayMemberTypeUpdate(cg, stmt.lvalue, stmt.expr);
+      }
+      // Replay indexed assignment scalar→Unknown widening
+      if (
+        (stmt.lvalue.type === "Index" || stmt.lvalue.type === "IndexCell") &&
+        stmt.lvalue.base.kind.type === "Var"
+      ) {
+        const v = stmt.lvalue.base.kind.variable;
+        const vTy = cg.typeEnv.get(v.id);
+        if (vTy && isScalarType(vTy)) {
+          cg.typeEnv.set(v.id, IType.Unknown);
+        }
+      }
       break;
     }
 
     case "If": {
+      // Collect assigned vars for type join
+      const ifAssigned = new Set<string>();
+      collectAssignedVarIds(stmt.thenBody, ifAssigned);
+      for (const block of stmt.elseifBlocks)
+        collectAssignedVarIds(block.body, ifAssigned);
+      if (stmt.elseBody) collectAssignedVarIds(stmt.elseBody, ifAssigned);
+
+      const preBranch = snapshotTypes(cg.typeEnv, ifAssigned);
+
       const cond = genExpr(cg, stmt.cond);
       cg.emit(`if ($rt.toBool(${cond})) {`);
       cg.pushIndent();
       genStmts(cg, stmt.thenBody);
       cg.popIndent();
+      const postThen = snapshotTypes(cg.typeEnv, ifAssigned);
+      restoreTypes(cg.typeEnv, preBranch);
 
+      const postElseifs: Map<string, ItemType | undefined>[] = [];
       for (const block of stmt.elseifBlocks) {
         const c = genExpr(cg, block.cond);
         cg.emit(`} else if ($rt.toBool(${c})) {`);
         cg.pushIndent();
         genStmts(cg, block.body);
         cg.popIndent();
+        postElseifs.push(snapshotTypes(cg.typeEnv, ifAssigned));
+        restoreTypes(cg.typeEnv, preBranch);
       }
 
+      let postElse: Map<string, ItemType | undefined> | null = null;
       if (stmt.elseBody) {
         cg.emit(`} else {`);
         cg.pushIndent();
         genStmts(cg, stmt.elseBody);
         cg.popIndent();
+        postElse = snapshotTypes(cg.typeEnv, ifAssigned);
+        restoreTypes(cg.typeEnv, preBranch);
       }
 
       cg.emit(`}`);
+      const allBranch = [postThen, ...postElseifs];
+      if (postElse) allBranch.push(postElse);
+      joinBranchTypes(
+        cg.typeEnv,
+        ifAssigned,
+        preBranch,
+        allBranch,
+        !stmt.elseBody
+      );
       break;
     }
 
     case "While": {
+      const whileAssigned = new Set<string>();
+      collectAssignedVarIds(stmt.body, whileAssigned);
+      const preLoop = snapshotTypes(cg.typeEnv, whileAssigned);
+
       const cond = genExpr(cg, stmt.cond);
       cg.emit(`while ($rt.toBool(${cond})) {`);
       cg.pushIndent();
       genStmts(cg, stmt.body);
       cg.popIndent();
       cg.emit(`}`);
+
+      const postBody = snapshotTypes(cg.typeEnv, whileAssigned);
+      restoreTypes(cg.typeEnv, preLoop);
+      joinBranchTypes(cg.typeEnv, whileAssigned, preLoop, [postBody], true);
       break;
     }
 
     case "For": {
+      const forAssigned = new Set<string>();
+      collectAssignedVarIds(stmt.body, forAssigned);
+      // Set iter variable type for codegen inside the loop body
+      if (stmt.iterVarType) {
+        cg.typeEnv.set(stmt.variable.id, stmt.iterVarType);
+      }
+      const preLoop = snapshotTypes(cg.typeEnv, forAssigned);
+
       if (stmt.expr.kind.type === "Range") {
         genForRange(
           cg,
@@ -182,14 +263,24 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
         cg.popIndent();
         cg.emit(`}`);
       }
+
+      const postBody = snapshotTypes(cg.typeEnv, forAssigned);
+      restoreTypes(cg.typeEnv, preLoop);
+      joinBranchTypes(cg.typeEnv, forAssigned, preLoop, [postBody], true);
       break;
     }
 
     case "Switch": {
+      const switchAssigned = new Set<string>();
+      for (const c of stmt.cases) collectAssignedVarIds(c.body, switchAssigned);
+      if (stmt.otherwise) collectAssignedVarIds(stmt.otherwise, switchAssigned);
+      const preBranch = snapshotTypes(cg.typeEnv, switchAssigned);
+
       const val = genExpr(cg, stmt.expr);
       const tmp = cg.freshTemp();
       cg.emit(`var ${tmp} = ${val};`);
       let first = true;
+      const postCases: Map<string, ItemType | undefined>[] = [];
       for (const c of stmt.cases) {
         const cv = genExpr(cg, c.value);
         const kw = first ? "if" : "} else if";
@@ -197,25 +288,47 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
         cg.pushIndent();
         genStmts(cg, c.body);
         cg.popIndent();
+        postCases.push(snapshotTypes(cg.typeEnv, switchAssigned));
+        restoreTypes(cg.typeEnv, preBranch);
         first = false;
       }
+      let postOtherwise: Map<string, ItemType | undefined> | null = null;
       if (stmt.otherwise) {
         cg.emit(first ? `{` : `} else {`);
         cg.pushIndent();
         genStmts(cg, stmt.otherwise);
         cg.popIndent();
+        postOtherwise = snapshotTypes(cg.typeEnv, switchAssigned);
+        restoreTypes(cg.typeEnv, preBranch);
       }
       if (!first || stmt.otherwise) {
         cg.emit(`}`);
       }
+      const allBranch = [...postCases];
+      if (postOtherwise) allBranch.push(postOtherwise);
+      joinBranchTypes(
+        cg.typeEnv,
+        switchAssigned,
+        preBranch,
+        allBranch,
+        !stmt.otherwise
+      );
       break;
     }
 
     case "TryCatch": {
+      const tcAssigned = new Set<string>();
+      collectAssignedVarIds(stmt.tryBody, tcAssigned);
+      collectAssignedVarIds(stmt.catchBody, tcAssigned);
+      const preBranch = snapshotTypes(cg.typeEnv, tcAssigned);
+
       cg.emit(`try {`);
       cg.pushIndent();
       genStmts(cg, stmt.tryBody);
       cg.popIndent();
+      const postTry = snapshotTypes(cg.typeEnv, tcAssigned);
+      restoreTypes(cg.typeEnv, preBranch);
+
       const catchParam = cg.freshTemp();
       cg.emit(`} catch (${catchParam}) {`);
       cg.pushIndent();
@@ -227,6 +340,15 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
       genStmts(cg, stmt.catchBody);
       cg.popIndent();
       cg.emit(`}`);
+      const postCatch = snapshotTypes(cg.typeEnv, tcAssigned);
+      restoreTypes(cg.typeEnv, preBranch);
+      joinBranchTypes(
+        cg.typeEnv,
+        tcAssigned,
+        preBranch,
+        [postTry, postCatch],
+        true
+      );
       break;
     }
 
@@ -291,5 +413,82 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
     case "Import":
       // Declarative; imports are collected by buildFunctionIndex()
       break;
+  }
+}
+
+// ── Flow-dependent type helpers ─────────────────────────────────────────
+
+/** Save current types for a set of variable IDs. */
+function snapshotTypes(
+  typeEnv: TypeEnv,
+  varIds: Set<string>
+): Map<string, ItemType | undefined> {
+  const snap = new Map<string, ItemType | undefined>();
+  for (const id of varIds) {
+    snap.set(id, typeEnv.get({ id }));
+  }
+  return snap;
+}
+
+/** Restore types from a snapshot. */
+function restoreTypes(
+  typeEnv: TypeEnv,
+  snap: Map<string, ItemType | undefined>
+): void {
+  for (const [id, ty] of snap) {
+    if (ty !== undefined) {
+      typeEnv.set({ id }, ty);
+    }
+  }
+}
+
+/** Join branch types: unify types across all branches at a merge point. */
+function joinBranchTypes(
+  typeEnv: TypeEnv,
+  varIds: Set<string>,
+  preBranchTypes: Map<string, ItemType | undefined>,
+  branchTypes: Map<string, ItemType | undefined>[],
+  includePreBranch: boolean
+): void {
+  for (const id of varIds) {
+    let joined: ItemType | undefined = includePreBranch
+      ? preBranchTypes.get(id)
+      : undefined;
+    for (const bt of branchTypes) {
+      const ty = bt.get(id);
+      if (ty !== undefined) {
+        joined = joined !== undefined ? IType.unify(joined, ty) : ty;
+      }
+    }
+    if (joined !== undefined) {
+      typeEnv.set({ id }, joined);
+    }
+  }
+}
+
+/** Replay struct member type update during codegen (mirrors updateStructTypeForMemberAssign in lowering). */
+function replayMemberTypeUpdate(
+  cg: Codegen,
+  lv: IRLValue & { type: "Member" },
+  rhsExpr: IRExpr
+): void {
+  const chain: string[] = [lv.name];
+  let cursor: IRExprKind = lv.base.kind;
+  while (cursor.type === "Member") {
+    chain.unshift(cursor.name);
+    cursor = cursor.base.kind;
+  }
+  if (cursor.type !== "Var") return;
+  const v = cursor.variable;
+  const vTy = cg.typeEnv.get(v.id);
+  if (vTy && vTy.kind !== "Struct" && vTy.kind !== "Unknown") return;
+
+  const fieldType = itemTypeForExprKind(rhsExpr.kind, cg.typeEnv);
+  let ty = IType.struct({ [chain[chain.length - 1]]: fieldType });
+  for (let i = chain.length - 2; i >= 0; i--) {
+    ty = IType.struct({ [chain[i]]: ty });
+  }
+  if (!vTy || vTy.kind === "Struct") {
+    cg.typeEnv.unify(v.id, ty);
   }
 }
