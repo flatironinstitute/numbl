@@ -11,7 +11,7 @@
   <!-- Title -->
   <text x="240" y="18" text-anchor="middle" fill="#999" font-family="monospace" font-size="12">numbl REPL</text>
   <!-- Welcome text -->
-  <text x="16" y="52" fill="#6a9fb5" font-family="monospace" font-size="13">Welcome to the REPL. Alt+Enter for new line, Enter to execute.</text>
+  <text x="16" y="52" fill="#6a9fb5" font-family="monospace" font-size="13">Alt+Enter for new line, Enter to execute.</text>
   <!-- Prompt with command -->
   <text x="16" y="76" fill="#6a9955" font-family="monospace" font-size="14">&gt;&gt;</text>
   <text x="44" y="76" fill="#d4d4d4" font-family="monospace" font-size="14">x = magic(3); disp(x)</text>

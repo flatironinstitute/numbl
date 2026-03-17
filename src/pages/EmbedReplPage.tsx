@@ -196,6 +196,7 @@ export function EmbedReplPage() {
           onClear={handleReplClear}
           isExecuting={isReplExecuting}
           onTerminalReady={handleTerminalReady}
+          title="numbl"
         />
       </Box>
 

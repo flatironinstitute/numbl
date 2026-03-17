@@ -48,6 +48,7 @@ interface ReplViewProps {
   onClear: () => void;
   isExecuting: boolean;
   onTerminalReady?: (methods: TerminalMethods) => void;
+  title?: string;
 }
 
 export function ReplView({
@@ -55,6 +56,7 @@ export function ReplView({
   onClear,
   isExecuting,
   onTerminalReady,
+  title,
 }: ReplViewProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -303,7 +305,7 @@ export function ReplView({
     setTimeout(() => {
       if (termRef.current === currentTerm) {
         currentTerm.writeln(
-          "\x1b[36mWelcome to the REPL. Alt+Enter for new line, Enter to execute.\x1b[0m"
+          "\x1b[36mAlt+Enter for new line, Enter to execute.\x1b[0m"
         );
         currentTerm.write("\r\n");
         resetInput();
@@ -427,8 +429,7 @@ export function ReplView({
         },
         clearTerminal: () => {
           if (termRef.current) {
-            termRef.current.clear();
-            termRef.current.write("\r\n");
+            termRef.current.write("\x1b[2J\x1b[H");
             historyRef.current.length = 0;
             saveHistory([]);
             resetInputFnRef.current();
@@ -473,7 +474,9 @@ export function ReplView({
           bgcolor: "background.paper",
         }}
       >
-        <span style={{ fontWeight: 500, fontSize: "14px" }}>REPL</span>
+        {title && (
+          <span style={{ fontWeight: 500, fontSize: "14px" }}>{title}</span>
+        )}
         <Button
           size="small"
           variant="outlined"
