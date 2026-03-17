@@ -19,6 +19,7 @@ import { lowerExpr } from "./lowerExpr.js";
 import { lowerLValue } from "./lowerLValue.js";
 import { preDefineBodyVars } from "./loweringHelpers.js";
 import { isScalarType } from "./itemTypes.js";
+import { type TypeEnv } from "./typeEnv.js";
 
 // ── Public API ──────────────────────────────────────────────────────────
 
@@ -48,19 +49,17 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
     case "Assign": {
       const value = lowerExpr(ctx, stmt.expr, 1);
       let variable = ctx.lookup(stmt.name);
+      const rhsType = itemTypeForExprKind(value.kind, ctx.typeEnv);
       if (variable) {
-        const rhsType = itemTypeForExprKind(value.kind, ctx.typeEnv);
-        ctx.typeEnv.unify(variable.id, rhsType);
+        ctx.typeEnv.set(variable.id, rhsType);
       } else {
-        variable = ctx.defineVariable(
-          stmt.name,
-          itemTypeForExprKind(value.kind, ctx.typeEnv)
-        );
+        variable = ctx.defineVariable(stmt.name, rhsType);
       }
       return {
         type: "Assign",
         variable,
         expr: value,
+        assignedType: rhsType,
         suppressed: stmt.suppressed,
         span,
       };
@@ -87,7 +86,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         if (lv.type === "Var") {
           const vv = ctx.lookup(lv.name);
           if (vv) {
-            ctx.typeEnv.unify(vv.id, outputTypes[i]);
+            ctx.typeEnv.set(vv.id, outputTypes[i]);
             return { type: "Var" as const, variable: vv };
           } else {
             return {
@@ -99,10 +98,18 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         return lowerLValue(ctx, lv);
       });
 
+      // Build assignedTypes: type per lvalue (null for ignored or non-Var)
+      const assignedTypes: (ItemType | null)[] = stmt.lvalues.map((lv, i) => {
+        if (lv.type === "Ignore") return null;
+        if (lv.type === "Var") return outputTypes[i];
+        return null;
+      });
+
       return {
         type: "MultiAssign",
         lvalues: irLvalues,
         expr: value,
+        assignedTypes,
         suppressed: stmt.suppressed,
         span,
       };
@@ -115,11 +122,12 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       // If target is a plain variable, update its type from RHS
       if (irLv.type === "Var") {
         const rhsType = itemTypeForExprKind(value.kind, ctx.typeEnv);
-        ctx.typeEnv.unify(irLv.variable.id, rhsType);
+        ctx.typeEnv.set(irLv.variable.id, rhsType);
         return {
           type: "Assign",
           variable: irLv.variable,
           expr: value,
+          assignedType: rhsType,
           suppressed: stmt.suppressed,
           span,
         };
@@ -159,19 +167,78 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
 
     case "If": {
       const cond = lowerExpr(ctx, stmt.cond);
+
+      // Collect variables assigned in any branch for type join
+      const ifAssigned = new Set<string>();
+      preCollectAssignedVarIds(ctx, stmt.thenBody, ifAssigned);
+      for (const b of stmt.elseifBlocks)
+        preCollectAssignedVarIds(ctx, b.body, ifAssigned);
+      if (stmt.elseBody)
+        preCollectAssignedVarIds(ctx, stmt.elseBody, ifAssigned);
+
+      // Save pre-branch types
+      const preBranchTypes = snapshotTypes(ctx.typeEnv, ifAssigned);
+
+      // Lower each branch, capturing post-branch types
       const thenBody = lowerStmts(ctx, stmt.thenBody);
-      const elseifBlocks = stmt.elseifBlocks.map(b => ({
-        cond: lowerExpr(ctx, b.cond),
-        body: lowerStmts(ctx, b.body),
-      }));
+      const postThen = snapshotTypes(ctx.typeEnv, ifAssigned);
+      restoreTypes(ctx.typeEnv, preBranchTypes);
+
+      const elseifBlocks = stmt.elseifBlocks.map(b => {
+        const result = {
+          cond: lowerExpr(ctx, b.cond),
+          body: lowerStmts(ctx, b.body),
+        };
+        const postElseif = snapshotTypes(ctx.typeEnv, ifAssigned);
+        restoreTypes(ctx.typeEnv, preBranchTypes);
+        return { ...result, postTypes: postElseif };
+      });
+
       const elseBody = stmt.elseBody ? lowerStmts(ctx, stmt.elseBody) : null;
-      return { type: "If", cond, thenBody, elseifBlocks, elseBody, span };
+      const postElse = elseBody ? snapshotTypes(ctx.typeEnv, ifAssigned) : null;
+      restoreTypes(ctx.typeEnv, preBranchTypes);
+
+      // Join: unify types across all branches (and pre-branch if no else)
+      const allBranchTypes = [postThen, ...elseifBlocks.map(b => b.postTypes)];
+      if (postElse) allBranchTypes.push(postElse);
+      joinBranchTypes(
+        ctx.typeEnv,
+        ifAssigned,
+        preBranchTypes,
+        allBranchTypes,
+        !elseBody
+      );
+
+      return {
+        type: "If",
+        cond,
+        thenBody,
+        elseifBlocks: elseifBlocks.map(b => ({ cond: b.cond, body: b.body })),
+        elseBody,
+        span,
+      };
     }
 
     case "While": {
       const cond = lowerExpr(ctx, stmt.cond);
       preDefineBodyVars(ctx, stmt.body, new Set());
+
+      const whileAssigned = new Set<string>();
+      preCollectAssignedVarIds(ctx, stmt.body, whileAssigned);
+      const preLoopTypes = snapshotTypes(ctx.typeEnv, whileAssigned);
+
       const body = lowerStmts(ctx, stmt.body);
+      const postBody = snapshotTypes(ctx.typeEnv, whileAssigned);
+      restoreTypes(ctx.typeEnv, preLoopTypes);
+      // Loop may not execute, so include pre-loop types
+      joinBranchTypes(
+        ctx.typeEnv,
+        whileAssigned,
+        preLoopTypes,
+        [postBody],
+        true
+      );
+
       return { type: "While", cond, body, span };
     }
 
@@ -194,29 +261,104 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
       }
       const vv =
         ctx.lookup(stmt.varName) ?? ctx.defineVariable(stmt.varName, undefined);
-      ctx.typeEnv.unify(vv.id, varType);
+      ctx.typeEnv.set(vv.id, varType);
       preDefineBodyVars(ctx, stmt.body, new Set([stmt.varName]));
+
+      const forAssigned = new Set<string>();
+      preCollectAssignedVarIds(ctx, stmt.body, forAssigned);
+      const preLoopTypes = snapshotTypes(ctx.typeEnv, forAssigned);
+
       const body = lowerStmts(ctx, stmt.body);
-      return { type: "For", variable: vv, expr, body, span };
+      const postBody = snapshotTypes(ctx.typeEnv, forAssigned);
+      restoreTypes(ctx.typeEnv, preLoopTypes);
+      // Loop may not execute, so include pre-loop types
+      joinBranchTypes(ctx.typeEnv, forAssigned, preLoopTypes, [postBody], true);
+
+      return {
+        type: "For",
+        variable: vv,
+        expr,
+        body,
+        iterVarType: varType,
+        span,
+      };
     }
 
     case "Switch": {
       const control = lowerExpr(ctx, stmt.expr);
-      const cases = stmt.cases.map(c => ({
-        value: lowerExpr(ctx, c.value),
-        body: lowerStmts(ctx, c.body),
-      }));
+
+      // Collect variables assigned in any case
+      const switchAssigned = new Set<string>();
+      for (const c of stmt.cases)
+        preCollectAssignedVarIds(ctx, c.body, switchAssigned);
+      if (stmt.otherwise)
+        preCollectAssignedVarIds(ctx, stmt.otherwise, switchAssigned);
+
+      const preBranchTypes = snapshotTypes(ctx.typeEnv, switchAssigned);
+
+      const cases = stmt.cases.map(c => {
+        const result = {
+          value: lowerExpr(ctx, c.value),
+          body: lowerStmts(ctx, c.body),
+        };
+        const postCase = snapshotTypes(ctx.typeEnv, switchAssigned);
+        restoreTypes(ctx.typeEnv, preBranchTypes);
+        return { ...result, postTypes: postCase };
+      });
+
       const otherwise = stmt.otherwise ? lowerStmts(ctx, stmt.otherwise) : null;
-      return { type: "Switch", expr: control, cases, otherwise, span };
+      const postOtherwise = otherwise
+        ? snapshotTypes(ctx.typeEnv, switchAssigned)
+        : null;
+      restoreTypes(ctx.typeEnv, preBranchTypes);
+
+      const allBranchTypes = cases.map(c => c.postTypes);
+      if (postOtherwise) allBranchTypes.push(postOtherwise);
+      joinBranchTypes(
+        ctx.typeEnv,
+        switchAssigned,
+        preBranchTypes,
+        allBranchTypes,
+        !otherwise
+      );
+
+      return {
+        type: "Switch",
+        expr: control,
+        cases: cases.map(c => ({ value: c.value, body: c.body })),
+        otherwise,
+        span,
+      };
     }
 
     case "TryCatch": {
+      const tcAssigned = new Set<string>();
+      preCollectAssignedVarIds(ctx, stmt.tryBody, tcAssigned);
+      preCollectAssignedVarIds(ctx, stmt.catchBody, tcAssigned);
+      const preBranchTypes = snapshotTypes(ctx.typeEnv, tcAssigned);
+
       const tryBody = lowerStmts(ctx, stmt.tryBody);
+      const postTry = snapshotTypes(ctx.typeEnv, tcAssigned);
+      restoreTypes(ctx.typeEnv, preBranchTypes);
+
       const catchVar = stmt.catchVar
         ? (ctx.lookup(stmt.catchVar) ??
           ctx.defineVariable(stmt.catchVar, IType.Unknown))
         : null;
       const catchBody = lowerStmts(ctx, stmt.catchBody);
+      const postCatch = snapshotTypes(ctx.typeEnv, tcAssigned);
+      restoreTypes(ctx.typeEnv, preBranchTypes);
+
+      // Both branches can execute (try may throw at any point),
+      // so include pre-branch types in the join.
+      joinBranchTypes(
+        ctx.typeEnv,
+        tcAssigned,
+        preBranchTypes,
+        [postTry, postCatch],
+        true
+      );
+
       return { type: "TryCatch", tryBody, catchVar, catchBody, span };
     }
 
@@ -273,6 +415,131 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         `Unknown statement type: ${(stmt as AstStmt).type}`,
         span
       );
+  }
+}
+
+// ── Flow-dependent type helpers ─────────────────────────────────────────
+
+/** Collect VarIds of all variables assigned in a list of IR statements (recursive into control flow). */
+export function collectAssignedVarIds(stmts: IRStmt[], out: Set<string>): void {
+  for (const s of stmts) {
+    if (s.type === "Assign") out.add(s.variable.id.id);
+    if (s.type === "MultiAssign") {
+      for (const lv of s.lvalues) {
+        if (lv?.type === "Var") out.add(lv.variable.id.id);
+      }
+    }
+    if (s.type === "If") {
+      collectAssignedVarIds(s.thenBody, out);
+      for (const b of s.elseifBlocks) collectAssignedVarIds(b.body, out);
+      if (s.elseBody) collectAssignedVarIds(s.elseBody, out);
+    }
+    if (s.type === "While" || s.type === "For")
+      collectAssignedVarIds(s.body, out);
+    if (s.type === "Switch") {
+      for (const c of s.cases) collectAssignedVarIds(c.body, out);
+      if (s.otherwise) collectAssignedVarIds(s.otherwise, out);
+    }
+    if (s.type === "TryCatch") {
+      collectAssignedVarIds(s.tryBody, out);
+      collectAssignedVarIds(s.catchBody, out);
+    }
+  }
+}
+
+/**
+ * Pre-collect variable names assigned in AST statements (before lowering).
+ * Uses LoweringContext.lookup to find VarIds for already-known variables.
+ * Newly defined variables won't be found yet, but those don't need
+ * snapshot/restore since their type starts as undefined.
+ */
+function preCollectAssignedVarIds(
+  ctx: LoweringContext,
+  stmts: AstStmt[],
+  out: Set<string>
+): void {
+  for (const s of stmts) {
+    if (s.type === "Assign") {
+      const v = ctx.lookup(s.name);
+      if (v) out.add(v.id.id);
+    }
+    if (s.type === "MultiAssign") {
+      for (const lv of s.lvalues) {
+        if (lv.type === "Var") {
+          const v = ctx.lookup(lv.name);
+          if (v) out.add(v.id.id);
+        }
+      }
+    }
+    if (s.type === "If") {
+      preCollectAssignedVarIds(ctx, s.thenBody, out);
+      for (const b of s.elseifBlocks)
+        preCollectAssignedVarIds(ctx, b.body, out);
+      if (s.elseBody) preCollectAssignedVarIds(ctx, s.elseBody, out);
+    }
+    if (s.type === "While" || s.type === "For")
+      preCollectAssignedVarIds(ctx, s.body, out);
+    if (s.type === "Switch") {
+      for (const c of s.cases) preCollectAssignedVarIds(ctx, c.body, out);
+      if (s.otherwise) preCollectAssignedVarIds(ctx, s.otherwise, out);
+    }
+    if (s.type === "TryCatch") {
+      preCollectAssignedVarIds(ctx, s.tryBody, out);
+      preCollectAssignedVarIds(ctx, s.catchBody, out);
+    }
+  }
+}
+
+/** Save current types for a set of variable IDs. */
+function snapshotTypes(
+  typeEnv: TypeEnv,
+  varIds: Set<string>
+): Map<string, ItemType | undefined> {
+  const snap = new Map<string, ItemType | undefined>();
+  for (const id of varIds) {
+    snap.set(id, typeEnv.get({ id }));
+  }
+  return snap;
+}
+
+/** Restore types from a snapshot. */
+function restoreTypes(
+  typeEnv: TypeEnv,
+  snap: Map<string, ItemType | undefined>
+): void {
+  for (const [id, ty] of snap) {
+    if (ty !== undefined) {
+      typeEnv.set({ id }, ty);
+    }
+  }
+}
+
+/**
+ * Join branch types at a control flow merge point.
+ * For each variable, unifies types from all branches.
+ * If `includePreBranch` is true, the pre-branch type is also included
+ * (for when not all paths assign, e.g. if without else).
+ */
+function joinBranchTypes(
+  typeEnv: TypeEnv,
+  varIds: Set<string>,
+  preBranchTypes: Map<string, ItemType | undefined>,
+  branchTypes: Map<string, ItemType | undefined>[],
+  includePreBranch: boolean
+): void {
+  for (const id of varIds) {
+    let joined: ItemType | undefined = includePreBranch
+      ? preBranchTypes.get(id)
+      : undefined;
+    for (const bt of branchTypes) {
+      const ty = bt.get(id);
+      if (ty !== undefined) {
+        joined = joined !== undefined ? IType.unify(joined, ty) : ty;
+      }
+    }
+    if (joined !== undefined) {
+      typeEnv.set({ id }, joined);
+    }
   }
 }
 
