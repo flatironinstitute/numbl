@@ -605,10 +605,32 @@ export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
 
 // ── Comparison operators ────────────────────────────────────────────────
 
+/** When one operand is a string and the other is a char, convert the char
+ *  to a string so the comparison becomes scalar string comparison (MATLAB
+ *  semantics). Returns null if neither operand is a string-char mix. */
+function asStringPair(
+  a: RuntimeValue,
+  b: RuntimeValue
+): [string, string] | null {
+  if (isRuntimeString(a) && isRuntimeString(b)) return [a, b];
+  if (isRuntimeString(a) && isRuntimeChar(b)) return [a, b.value];
+  if (isRuntimeChar(a) && isRuntimeString(b)) return [a.value, b];
+  return null;
+}
+
+function stringComparisonOp(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  op: (x: string, y: string) => boolean
+): RuntimeValue | null {
+  const pair = asStringPair(a, b);
+  if (pair === null) return null;
+  return RTV.logical(op(pair[0], pair[1]));
+}
+
 export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeString(a) && isRuntimeString(b)) {
-    return RTV.logical(a === b);
-  }
+  const sr = stringComparisonOp(a, b, (x, y) => x === y);
+  if (sr !== null) return sr;
   if (isComplexOrMixed(a, b)) {
     return complexComparisonOp(
       a,
@@ -620,9 +642,8 @@ export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 }
 
 export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  if (isRuntimeString(a) && isRuntimeString(b)) {
-    return RTV.logical(a !== b);
-  }
+  const sr = stringComparisonOp(a, b, (x, y) => x !== y);
+  if (sr !== null) return sr;
   if (isComplexOrMixed(a, b)) {
     return complexComparisonOp(
       a,
@@ -634,18 +655,26 @@ export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 }
 
 export function mLess(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  const sr = stringComparisonOp(a, b, (x, y) => x < y);
+  if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x < y);
 }
 
 export function mLessEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  const sr = stringComparisonOp(a, b, (x, y) => x <= y);
+  if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x <= y);
 }
 
 export function mGreater(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  const sr = stringComparisonOp(a, b, (x, y) => x > y);
+  if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x > y);
 }
 
 export function mGreaterEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  const sr = stringComparisonOp(a, b, (x, y) => x >= y);
+  if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x >= y);
 }
 
