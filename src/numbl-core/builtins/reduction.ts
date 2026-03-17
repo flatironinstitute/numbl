@@ -21,6 +21,7 @@ import {
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
+  isRuntimeSparseMatrix,
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { getBroadcastShape, broadcastIterate } from "./arithmetic.js";
@@ -1872,6 +1873,7 @@ export function registerReductionFunctions(): void {
         const v = args[0];
         if (isRuntimeNumber(v)) return RTV.num(v !== 0 ? 1 : 0);
         if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+        if (isRuntimeSparseMatrix(v)) return RTV.num(v.jc[v.n]);
         if (isRuntimeTensor(v)) {
           let count = 0;
           for (let i = 0; i < v.data.length; i++) {

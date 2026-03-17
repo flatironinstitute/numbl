@@ -25,7 +25,8 @@ export type ItemType =
   | { kind: "Union"; types: ItemType[] }
   | { kind: "MultipleOutputs"; outputTypes: ItemType[] } // for return types of functions that return multiple outputs
   | { kind: "ClassInstance"; className: string }
-  | { kind: "DummyHandle" };
+  | { kind: "DummyHandle" }
+  | { kind: "SparseMatrix"; isComplex?: boolean };
 
 export function typeToString(ty: ItemType): string {
   switch (ty.kind) {
@@ -71,6 +72,8 @@ export function typeToString(ty: ItemType): string {
       return "DummyHandle";
     case "MultipleOutputs":
       return `MultipleOutputs<${ty.outputTypes.map(typeToString).join(", ")}>`;
+    case "SparseMatrix":
+      return ty.isComplex ? "SparseMatrix<complex>" : "SparseMatrix";
     default:
       return "Unknown";
   }
@@ -165,6 +168,7 @@ export const IType = {
   Void: { kind: "Void" } as ItemType,
   Unknown: { kind: "Unknown" } as ItemType,
   DummyHandle: { kind: "DummyHandle" } as ItemType,
+  SparseMatrix: { kind: "SparseMatrix" } as ItemType,
 
   /** Create a Num type */
   num(): ItemType {
@@ -197,6 +201,10 @@ export const IType = {
 
   struct(fields: Record<string, ItemType> = {}): ItemType {
     return { kind: "Struct", knownFields: fields };
+  },
+
+  sparseMatrix(isComplex?: boolean): ItemType {
+    return { kind: "SparseMatrix", isComplex };
   },
 
   union(types: ItemType[]): ItemType {
@@ -235,6 +243,13 @@ export const IType = {
         case "Void":
         case "DummyHandle":
           return a;
+        case "SparseMatrix": {
+          if (b.kind === "SparseMatrix") {
+            const isComplex = a.isComplex || b.isComplex || undefined;
+            return { kind: "SparseMatrix", isComplex };
+          }
+          break;
+        }
         case "Tensor": {
           if (b.kind === "Tensor") {
             const isComplex = a.isComplex || b.isComplex || undefined;

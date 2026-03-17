@@ -17,6 +17,7 @@ import {
   isRuntimeComplexNumber,
   isRuntimeDummyHandle,
   isRuntimeStructArray,
+  isRuntimeSparseMatrix,
   RuntimeStruct,
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
@@ -108,6 +109,64 @@ function valuesEqual(a: RuntimeValue, b: RuntimeValue): boolean {
   return false;
 }
 
+/** Extract a numeric array from a RuntimeValue (for sparse triplet construction). */
+function toNumericArray(v: RuntimeValue, name: string): number[] {
+  if (isRuntimeNumber(v)) return [v];
+  if (isRuntimeLogical(v)) return [v ? 1 : 0];
+  if (isRuntimeTensor(v)) return Array.from(v.data);
+  throw new RuntimeError(`${name}: arguments must be numeric`);
+}
+
+/** Build a sparse matrix from COO triplets (1-based i, j; summing duplicates). */
+function buildSparseFromTriplets(
+  iArr: number[],
+  jArr: number[],
+  vArr: number[],
+  m: number,
+  n: number
+): import("../runtime/types.js").RuntimeSparseMatrix {
+  const nnz = iArr.length;
+  // Build (col0, row0, value) triplets with 0-based indices
+  const triplets: { col: number; row: number; val: number }[] = [];
+  for (let k = 0; k < nnz; k++) {
+    triplets.push({ col: jArr[k] - 1, row: iArr[k] - 1, val: vArr[k] });
+  }
+  // Sort by (col, row)
+  triplets.sort((a, b) => a.col - b.col || a.row - b.row);
+  // Merge duplicates by summing, tracking column for each merged entry
+  const mergedIr: number[] = [];
+  const mergedPr: number[] = [];
+  const mergedCols: number[] = [];
+  let prevCol = -1;
+  let prevRow = -1;
+  for (const t of triplets) {
+    if (t.col === prevCol && t.row === prevRow) {
+      mergedPr[mergedPr.length - 1] += t.val;
+    } else {
+      mergedIr.push(t.row);
+      mergedPr.push(t.val);
+      mergedCols.push(t.col);
+      prevCol = t.col;
+      prevRow = t.row;
+    }
+  }
+  // Build jc from column list
+  const jc = new Int32Array(n + 1);
+  let ci = 0;
+  for (let c = 0; c < n; c++) {
+    jc[c] = ci;
+    while (ci < mergedCols.length && mergedCols[ci] === c) ci++;
+  }
+  jc[n] = ci;
+  return RTV.sparseMatrix(
+    m,
+    n,
+    new Int32Array(mergedIr),
+    jc,
+    new Float64Array(mergedPr)
+  );
+}
+
 export function registerIntrospectionFunctions(): void {
   register(
     "size",
@@ -117,6 +176,7 @@ export function registerIntrospectionFunctions(): void {
       const v = args[0];
       let shape: number[];
       if (isRuntimeNumber(v) || isRuntimeLogical(v)) shape = [1, 1];
+      else if (isRuntimeSparseMatrix(v)) shape = [v.m, v.n];
       else if (isRuntimeTensor(v))
         shape = v.shape.length >= 2 ? v.shape : [1, ...v.shape];
       else if (isRuntimeCell(v)) shape = v.shape;
@@ -152,6 +212,7 @@ export function registerIntrospectionFunctions(): void {
           throw new RuntimeError("length requires 1 argument");
         const v = args[0];
         if (isRuntimeNumber(v) || isRuntimeLogical(v)) return RTV.num(1);
+        if (isRuntimeSparseMatrix(v)) return RTV.num(Math.max(v.m, v.n));
         if (isRuntimeTensor(v))
           return RTV.num(v.data.length === 0 ? 0 : Math.max(...v.shape));
         if (isRuntimeCell(v))
@@ -177,6 +238,7 @@ export function registerIntrospectionFunctions(): void {
           throw new RuntimeError("numel requires 1 argument");
         const v = args[0];
         if (isRuntimeNumber(v) || isRuntimeLogical(v)) return RTV.num(1);
+        if (isRuntimeSparseMatrix(v)) return RTV.num(v.m * v.n);
         if (isRuntimeTensor(v)) return RTV.num(v.data.length);
         if (isRuntimeCell(v)) return RTV.num(v.data.length);
         if (isRuntimeChar(v)) return RTV.num(v.value.length);
@@ -208,6 +270,7 @@ export function registerIntrospectionFunctions(): void {
       if (args.length !== 1)
         throw new RuntimeError("isempty requires 1 argument");
       const v = args[0];
+      if (isRuntimeSparseMatrix(v)) return RTV.logical(v.m === 0 || v.n === 0);
       if (isRuntimeTensor(v)) return RTV.logical(v.data.length === 0);
       if (isRuntimeCell(v)) return RTV.logical(v.data.length === 0);
       if (isRuntimeChar(v)) return RTV.logical(v.value.length === 0);
@@ -262,7 +325,11 @@ export function registerIntrospectionFunctions(): void {
   typePred("ismatrix", v => getShape(v).length <= 2);
   typePred(
     "isfloat",
-    v => isRuntimeNumber(v) || isRuntimeTensor(v) || isRuntimeComplexNumber(v)
+    v =>
+      isRuntimeNumber(v) ||
+      isRuntimeTensor(v) ||
+      isRuntimeComplexNumber(v) ||
+      isRuntimeSparseMatrix(v)
   );
   typePred("isinteger", () => false);
   typePred(
@@ -271,6 +338,7 @@ export function registerIntrospectionFunctions(): void {
       isRuntimeNumber(v) ||
       isRuntimeTensor(v) ||
       isRuntimeComplexNumber(v) ||
+      isRuntimeSparseMatrix(v) ||
       (isRuntimeClassInstance(v) && v._builtinData !== undefined)
   );
   typePred(
@@ -311,6 +379,7 @@ export function registerIntrospectionFunctions(): void {
       if (isRuntimeFunction(v)) return RTV.string("function_handle");
       if (isRuntimeClassInstance(v)) return RTV.string(v.className);
       if (isRuntimeComplexNumber(v)) return RTV.string("double");
+      if (isRuntimeSparseMatrix(v)) return RTV.string("double");
       if (isRuntimeDummyHandle(v)) return RTV.string("dummy_handle");
       if (isRuntimeStructArray(v)) return RTV.string("struct");
       return RTV.string("unknown");
@@ -326,36 +395,185 @@ export function registerIntrospectionFunctions(): void {
     })
   );
 
-  // Sparse matrices are not supported; issparse always returns false
   register(
     "issparse",
     builtinSingle(args => {
       if (args.length !== 1)
         throw new RuntimeError("issparse requires 1 argument");
-      return RTV.logical(false);
+      return RTV.logical(isRuntimeSparseMatrix(args[0]));
     })
   );
 
-  // Sparse matrices are not supported; full() is a passthrough
   register(
     "full",
     builtinSingle(args => {
       if (args.length !== 1) throw new RuntimeError("full requires 1 argument");
-      return args[0];
+      const v = args[0];
+      if (!isRuntimeSparseMatrix(v)) return v; // passthrough for non-sparse
+      const { m, n, ir, jc, pr, pi } = v;
+      const data = new FloatXArray(m * n);
+      const imag = pi ? new FloatXArray(m * n) : undefined;
+      for (let col = 0; col < n; col++) {
+        for (let k = jc[col]; k < jc[col + 1]; k++) {
+          data[col * m + ir[k]] = pr[k]; // column-major
+          if (imag && pi) imag[col * m + ir[k]] = pi[k];
+        }
+      }
+      return RTV.tensor(data, [m, n], imag);
     })
   );
 
-  // Sparse matrices are not supported; sparse() is a passthrough/zeros constructor.
-  // sparse(S)    → returns S unchanged (dense passthrough)
-  // sparse(m, n) → returns an m-by-n zero matrix
   register(
     "sparse",
     builtinSingle(args => {
-      if (args.length === 1) return args[0]; // passthrough
+      if (args.length === 1) {
+        const v = args[0];
+        if (isRuntimeSparseMatrix(v)) return v;
+        // dense to sparse: scan column-major for nonzeros
+        if (isRuntimeNumber(v)) {
+          if (v === 0)
+            return RTV.sparseMatrix(
+              1,
+              1,
+              new Int32Array(0),
+              new Int32Array(2),
+              new Float64Array(0)
+            );
+          return RTV.sparseMatrix(
+            1,
+            1,
+            new Int32Array([0]),
+            new Int32Array([0, 1]),
+            new Float64Array([v])
+          );
+        }
+        if (isRuntimeLogical(v)) {
+          const nv = v ? 1 : 0;
+          if (nv === 0)
+            return RTV.sparseMatrix(
+              1,
+              1,
+              new Int32Array(0),
+              new Int32Array(2),
+              new Float64Array(0)
+            );
+          return RTV.sparseMatrix(
+            1,
+            1,
+            new Int32Array([0]),
+            new Int32Array([0, 1]),
+            new Float64Array([nv])
+          );
+        }
+        if (isRuntimeComplexNumber(v)) {
+          if (v.re === 0 && v.im === 0)
+            return RTV.sparseMatrix(
+              1,
+              1,
+              new Int32Array(0),
+              new Int32Array(2),
+              new Float64Array(0)
+            );
+          return RTV.sparseMatrix(
+            1,
+            1,
+            new Int32Array([0]),
+            new Int32Array([0, 1]),
+            new Float64Array([v.re]),
+            v.im !== 0 ? new Float64Array([v.im]) : undefined
+          );
+        }
+        if (!isRuntimeTensor(v))
+          throw new RuntimeError("sparse: argument must be numeric");
+        const rows = v.shape[0] || 1;
+        const cols = v.shape.length >= 2 ? v.shape[1] : 1;
+        const hasImag = v.imag !== undefined;
+        const irList: number[] = [];
+        const prList: number[] = [];
+        const piList: number[] | undefined = hasImag ? [] : undefined;
+        const jcArr = new Int32Array(cols + 1);
+        for (let c = 0; c < cols; c++) {
+          jcArr[c] = irList.length;
+          for (let r = 0; r < rows; r++) {
+            const idx = c * rows + r;
+            const re = v.data[idx];
+            const im = hasImag ? v.imag![idx] : 0;
+            if (re !== 0 || im !== 0) {
+              irList.push(r);
+              prList.push(re);
+              if (piList) piList.push(im);
+            }
+          }
+        }
+        jcArr[cols] = irList.length;
+        return RTV.sparseMatrix(
+          rows,
+          cols,
+          new Int32Array(irList),
+          jcArr,
+          new Float64Array(prList),
+          piList ? new Float64Array(piList) : undefined
+        );
+      }
       if (args.length === 2) {
+        // sparse(m, n) — sparse zero matrix
         const m = Math.round(toNumber(args[0]));
         const n = Math.round(toNumber(args[1]));
-        return RTV.tensor(new FloatXArray(m * n), [m, n]);
+        return RTV.sparseMatrix(
+          m,
+          n,
+          new Int32Array(0),
+          new Int32Array(n + 1),
+          new Float64Array(0)
+        );
+      }
+      if (args.length >= 3) {
+        // sparse(i, j, v) or sparse(i, j, v, m, n) or sparse(i, j, v, m, n, nzmax)
+        const iArg = args[0];
+        const jArg = args[1];
+        const vArg = args[2];
+        // Extract index arrays (1-based)
+        const iArr = toNumericArray(iArg, "sparse");
+        const jArr = toNumericArray(jArg, "sparse");
+        const len = Math.max(iArr.length, jArr.length);
+        // v can be scalar (broadcast) or array
+        let vArr: number[];
+        if (isRuntimeNumber(vArg)) {
+          vArr = new Array(len).fill(vArg);
+        } else if (isRuntimeLogical(vArg)) {
+          vArr = new Array(len).fill(vArg ? 1 : 0);
+        } else {
+          vArr = toNumericArray(vArg, "sparse");
+        }
+        if (iArr.length !== jArr.length || iArr.length !== vArr.length) {
+          // Allow scalar i or j to broadcast
+          if (iArr.length === 1 && jArr.length === vArr.length) {
+            const iv = iArr[0];
+            iArr.length = 0;
+            for (let k = 0; k < vArr.length; k++) iArr.push(iv);
+          } else if (jArr.length === 1 && iArr.length === vArr.length) {
+            const jv = jArr[0];
+            jArr.length = 0;
+            for (let k = 0; k < vArr.length; k++) jArr.push(jv);
+          } else {
+            throw new RuntimeError("sparse: i, j, v must have the same length");
+          }
+        }
+        // Determine dimensions
+        let m: number, n: number;
+        if (args.length >= 5) {
+          m = Math.round(toNumber(args[3]));
+          n = Math.round(toNumber(args[4]));
+        } else {
+          m = 0;
+          n = 0;
+          for (let k = 0; k < iArr.length; k++) {
+            if (iArr[k] > m) m = iArr[k];
+            if (jArr[k] > n) n = jArr[k];
+          }
+        }
+        // nzmax (args[5]) is ignored — it's a pre-allocation hint
+        return buildSparseFromTriplets(iArr, jArr, vArr, m, n);
       }
       throw new RuntimeError("sparse: unsupported call signature");
     })

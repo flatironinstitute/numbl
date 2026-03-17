@@ -15,6 +15,7 @@ import {
   isRuntimeTensor,
   isRuntimeCell,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   kstr,
 } from "../runtime/types.js";
 import { RuntimeError } from "../runtime/error.js";
@@ -28,6 +29,17 @@ import {
 } from "./linear-algebra/linsolve.js";
 import { applyBuiltin as applyBuiltinFn } from "./linear-algebra/check-helpers.js";
 import { coerceToTensor } from "./shape-utils.js";
+import {
+  mAddSparse,
+  mSubSparse,
+  mMulSparse,
+  mElemMulSparse,
+  mElemDivSparse,
+  sparseNeg,
+  sparseTranspose,
+  sparseConjugateTranspose,
+  sparseToDense,
+} from "./sparse-arithmetic.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────
 
@@ -288,6 +300,8 @@ function complexBinaryOp(
 
 /** Add two RuntimeValues */
 export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mAddSparse(a, b);
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
       re: aRe + bRe,
@@ -299,6 +313,8 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Subtract two RuntimeValues */
 export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mSubSparse(a, b);
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
       re: aRe - bRe,
@@ -310,6 +326,8 @@ export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Multiply two RuntimeValues (matrix multiply for 2D tensors, scalar otherwise) */
 export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mMulSparse(a, b);
   // Matrix multiply if both are tensors
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
     return matMul(a, b);
@@ -326,6 +344,8 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise multiply */
 export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mElemMulSparse(a, b);
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
       re: aRe * bRe - aIm * bIm,
@@ -355,6 +375,8 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise divide */
 export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mElemDivSparse(a, b);
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, complexDivide);
   }
@@ -532,6 +554,7 @@ export function mElemPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Negation */
 export function mNeg(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(v)) return sparseNeg(v);
   if (isRuntimeComplexNumber(v)) return RTV.complex(-v.re, -v.im);
   if (isRuntimeTensor(v) && v.imag !== undefined) {
     const resultRe = new FloatXArray(v.data.length);
@@ -585,6 +608,7 @@ function transposeCore(v: RuntimeTensor, conjugate: boolean): RuntimeValue {
 
 /** Transpose (non-conjugate for complex scalars and tensors) */
 export function mTranspose(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(v)) return sparseTranspose(v);
   if (isRuntimeComplexNumber(v)) return v;
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
@@ -595,6 +619,7 @@ export function mTranspose(v: RuntimeValue): RuntimeValue {
 
 /** Conjugate transpose (Hermitian transpose) - transposes and conjugates */
 export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(v)) return sparseConjugateTranspose(v);
   if (isRuntimeComplexNumber(v)) return RTV.complex(v.re, -v.im);
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
@@ -628,7 +653,15 @@ function stringComparisonOp(
   return RTV.logical(op(pair[0], pair[1]));
 }
 
+/** Convert sparse to dense for fallback paths. */
+function densify(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(v)) return sparseToDense(v);
+  return v;
+}
+
 export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mEqual(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x === y);
   if (sr !== null) return sr;
   if (isComplexOrMixed(a, b)) {
@@ -642,6 +675,8 @@ export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 }
 
 export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mNotEqual(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x !== y);
   if (sr !== null) return sr;
   if (isComplexOrMixed(a, b)) {
@@ -655,24 +690,32 @@ export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 }
 
 export function mLess(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mLess(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x < y);
   if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x < y);
 }
 
 export function mLessEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mLessEqual(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x <= y);
   if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x <= y);
 }
 
 export function mGreater(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mGreater(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x > y);
   if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x > y);
 }
 
 export function mGreaterEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
+    return mGreaterEqual(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x >= y);
   if (sr !== null) return sr;
   return comparisonOp(a, b, (x, y) => x >= y);

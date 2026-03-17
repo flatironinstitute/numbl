@@ -21,7 +21,8 @@ export type RuntimeValue =
   | RuntimeClassInstance
   | RuntimeComplexNumber
   | RuntimeDummyHandle
-  | RuntimeStructArray;
+  | RuntimeStructArray
+  | RuntimeSparseMatrix;
 
 export type RuntimeNumber = number;
 export type RuntimeLogical = boolean;
@@ -80,6 +81,12 @@ export const isRuntimeStructArray = (
   typeof value === "object" &&
   value !== null &&
   (value as RuntimeStructArray).kind === "struct_array";
+export const isRuntimeSparseMatrix = (
+  value: RuntimeValue
+): value is RuntimeSparseMatrix =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as RuntimeSparseMatrix).kind === "sparse_matrix";
 
 export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeNumber(value)) return "number";
@@ -94,6 +101,7 @@ export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeComplexNumber(value)) return "complex number";
   if (isRuntimeDummyHandle(value)) return "dummy handle";
   if (isRuntimeStructArray(value)) return "struct array";
+  if (isRuntimeSparseMatrix(value)) return "sparse matrix";
   return "unknown";
 };
 
@@ -170,4 +178,16 @@ export type RuntimeStructArray = {
   kind: "struct_array";
   fieldNames: string[];
   elements: RuntimeStruct[];
+};
+
+/** Sparse matrix in CSC (Compressed Sparse Column) format, matching MATLAB's internal representation. */
+export type RuntimeSparseMatrix = {
+  kind: "sparse_matrix";
+  m: number; // number of rows
+  n: number; // number of columns
+  ir: Int32Array; // row indices for each nonzero (length = nnz)
+  jc: Int32Array; // column pointers (length = n + 1)
+  pr: Float64Array; // nonzero values (length = nnz)
+  pi?: Float64Array; // imaginary values (length = nnz), undefined means real
+  _rc: number; // reference count for copy-on-write
 };

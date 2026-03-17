@@ -11,6 +11,7 @@ export type {
   RuntimeComplexNumber,
   RuntimeDummyHandle,
   RuntimeStructArray,
+  RuntimeSparseMatrix,
 } from "./types.js";
 
 export {
@@ -26,6 +27,7 @@ export {
   isRuntimeComplexNumber,
   isRuntimeDummyHandle,
   isRuntimeStructArray,
+  isRuntimeSparseMatrix,
   kstr,
   USE_FLOAT32,
   FloatXArray,

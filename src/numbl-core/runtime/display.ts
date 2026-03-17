@@ -5,6 +5,7 @@
 import {
   type RuntimeCell,
   type RuntimeClassInstance,
+  type RuntimeSparseMatrix,
   type RuntimeStruct,
   type RuntimeTensor,
   type RuntimeValue,
@@ -56,6 +57,8 @@ export function displayValue(v: RuntimeValue): string {
       return "[dummy_handle]";
     case "struct_array":
       return formatStructArray(v);
+    case "sparse_matrix":
+      return formatSparseMatrix(v);
   }
 }
 
@@ -189,6 +192,27 @@ function formatStruct(s: RuntimeStruct): string {
   const lines: string[] = [];
   for (const [key, val] of s.fields) {
     lines.push(`    ${key}: ${displayValue(val)}`);
+  }
+  return lines.join("\n");
+}
+
+function formatSparseMatrix(v: RuntimeSparseMatrix): string {
+  const nnz = v.jc[v.n];
+  if (nnz === 0) {
+    return `   All zero sparse: ${v.m}x${v.n}`;
+  }
+  const lines: string[] = [];
+  for (let col = 0; col < v.n; col++) {
+    for (let k = v.jc[col]; k < v.jc[col + 1]; k++) {
+      const row = v.ir[k] + 1; // 1-based
+      const c = col + 1; // 1-based
+      const val = v.pi
+        ? formatComplex(v.pr[k], v.pi[k])
+        : formatNumber(v.pr[k]);
+      lines.push(
+        `   (${row},${c})${" ".repeat(Math.max(1, 10 - `(${row},${c})`.length))}${val}`
+      );
+    }
   }
   return lines.join("\n");
 }
