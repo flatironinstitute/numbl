@@ -13,8 +13,13 @@ import {
   itemTypeForExprKind,
 } from "../lowering/index.js";
 import { type ItemType, IType, isScalarType } from "../lowering/itemTypes.js";
-import { type TypeEnv } from "../lowering/typeEnv.js";
-import { collectAssignedVarIds } from "../lowering/lowerStmt.js";
+import {
+  collectAssignedVarIds,
+  snapshotTypes,
+  restoreTypes,
+  joinBranchTypes,
+  itemTypesEqual,
+} from "../lowering/lowerStmt.js";
 import type { Codegen } from "./codegen.js";
 import {
   genExpr,
@@ -425,54 +430,8 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
 }
 
 // ── Flow-dependent type helpers ─────────────────────────────────────────
-
-/** Save current types for a set of variable IDs. */
-function snapshotTypes(
-  typeEnv: TypeEnv,
-  varIds: Set<string>
-): Map<string, ItemType | undefined> {
-  const snap = new Map<string, ItemType | undefined>();
-  for (const id of varIds) {
-    snap.set(id, typeEnv.get({ id }));
-  }
-  return snap;
-}
-
-/** Restore types from a snapshot. */
-function restoreTypes(
-  typeEnv: TypeEnv,
-  snap: Map<string, ItemType | undefined>
-): void {
-  for (const [id, ty] of snap) {
-    if (ty !== undefined) {
-      typeEnv.set({ id }, ty);
-    }
-  }
-}
-
-/** Join branch types: unify types across all branches at a merge point. */
-function joinBranchTypes(
-  typeEnv: TypeEnv,
-  varIds: Set<string>,
-  preBranchTypes: Map<string, ItemType | undefined>,
-  branchTypes: Map<string, ItemType | undefined>[],
-  includePreBranch: boolean
-): void {
-  for (const id of varIds) {
-    let joined: ItemType | undefined = includePreBranch
-      ? preBranchTypes.get(id)
-      : undefined;
-    for (const bt of branchTypes) {
-      const ty = bt.get(id);
-      if (ty !== undefined) {
-        joined = joined !== undefined ? IType.unify(joined, ty) : ty;
-      }
-    }
-    if (joined !== undefined) {
-      typeEnv.set({ id }, joined);
-    }
-  }
-}
+// snapshotTypes, restoreTypes, joinBranchTypes, itemTypesEqual are
+// imported from ../lowering/lowerStmt.js (shared with lowering phase).
 
 /** Replay struct member type update during codegen (mirrors updateStructTypeForMemberAssign in lowering). */
 function replayMemberTypeUpdate(
@@ -514,9 +473,10 @@ function collectBodyAssignedTypes(
 ): void {
   for (const s of stmts) {
     if (s.type === "Assign" && s.assignedType) {
+      const at = s.assignedType;
       const id = s.variable.id.id;
       const prev = out.get(id);
-      out.set(id, prev ? IType.unify(prev, s.assignedType) : s.assignedType);
+      out.set(id, prev ? (IType.unify(prev, at) ?? at) : at);
     }
     if (s.type === "MultiAssign" && s.assignedTypes) {
       for (let i = 0; i < s.lvalues.length; i++) {
@@ -525,7 +485,7 @@ function collectBodyAssignedTypes(
         if (lv?.type === "Var" && ty) {
           const id = lv.variable.id.id;
           const prev = out.get(id);
-          out.set(id, prev ? IType.unify(prev, ty) : ty);
+          out.set(id, prev ? (IType.unify(prev, ty) ?? ty) : ty);
         }
       }
     }
@@ -563,7 +523,7 @@ function widenChangedLoopVars(
   collectBodyAssignedTypes(body, bodyTypes);
   for (const [id, bodyTy] of bodyTypes) {
     const pre = preLoop.get(id);
-    if (pre && JSON.stringify(pre) !== JSON.stringify(bodyTy)) {
+    if (pre && !itemTypesEqual(pre, bodyTy)) {
       cg.typeEnv.set({ id }, IType.unify(pre, bodyTy));
     }
   }
