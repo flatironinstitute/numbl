@@ -18,7 +18,7 @@ import {
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
-import { sub2ind, numel } from "./utils.js";
+import { numel } from "./utils.js";
 
 /** Create a range start:end or start:step:end */
 export function makeRangeTensor(
@@ -168,33 +168,34 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   const resultRe = new FloatXArray(totalElems);
   const resultIm = isComplex ? new FloatXArray(totalElems) : undefined;
 
-  // Fill result by iterating over each element
-  const subs = new Array(ndim).fill(0);
-  for (let i = 0; i < totalElems; i++) {
-    // Determine which source tensor this element comes from
-    const catIdx = subs[dimIdx];
-    let srcTensorIdx = 0;
-    let offset = 0;
-    while (srcTensorIdx < tensors.length) {
-      const sz = shapes[srcTensorIdx][dimIdx];
-      if (catIdx < offset + sz) break;
-      offset += sz;
-      srcTensorIdx++;
-    }
-    const srcSubs = [...subs];
-    srcSubs[dimIdx] = catIdx - offset;
-    const srcLinear = sub2ind(shapes[srcTensorIdx], srcSubs);
-    resultRe[i] = tensors[srcTensorIdx].data[srcLinear];
-    if (resultIm) {
-      const srcImag = tensors[srcTensorIdx].imag;
-      resultIm[i] = srcImag ? srcImag[srcLinear] : 0;
-    }
+  // Copy blocks using stride-based arithmetic (column-major layout).
+  // strideDim = product of dims below dimIdx (size of one contiguous "column" block)
+  let strideDim = 1;
+  for (let d = 0; d < dimIdx; d++) strideDim *= resultShape[d];
 
-    // Increment subs in column-major order
-    for (let d = 0; d < ndim; d++) {
-      subs[d]++;
-      if (subs[d] < resultShape[d]) break;
-      subs[d] = 0;
+  // numOuter = product of dims above dimIdx
+  let numOuter = 1;
+  for (let d = dimIdx + 1; d < ndim; d++) numOuter *= resultShape[d];
+
+  for (let outer = 0; outer < numOuter; outer++) {
+    let dstOff = outer * strideDim * resultShape[dimIdx];
+    for (let t = 0; t < tensors.length; t++) {
+      const srcDimSize = shapes[t][dimIdx];
+      const blockSize = strideDim * srcDimSize;
+      // Source offset for this outer slab in tensor t
+      const srcOff = outer * blockSize;
+      resultRe.set(
+        tensors[t].data.subarray(srcOff, srcOff + blockSize),
+        dstOff
+      );
+      if (resultIm) {
+        const srcImag = tensors[t].imag;
+        if (srcImag) {
+          resultIm.set(srcImag.subarray(srcOff, srcOff + blockSize), dstOff);
+        }
+        // else: already zero-initialized
+      }
+      dstOff += blockSize;
     }
   }
 
@@ -244,28 +245,22 @@ function cellCatAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeCell {
 
   const resultData: RuntimeValue[] = new Array(totalElems);
 
-  // Fill result by iterating over each element
-  const subs = new Array(ndim).fill(0);
-  for (let i = 0; i < totalElems; i++) {
-    const catIdx = subs[dimIdx];
-    let srcIdx = 0;
-    let offset = 0;
-    while (srcIdx < cells.length) {
-      const sz = shapes[srcIdx][dimIdx];
-      if (catIdx < offset + sz) break;
-      offset += sz;
-      srcIdx++;
-    }
-    const srcSubs = [...subs];
-    srcSubs[dimIdx] = catIdx - offset;
-    const srcLinear = sub2ind(shapes[srcIdx], srcSubs);
-    resultData[i] = cells[srcIdx].data[srcLinear];
+  // Stride-based slab copies for cell concatenation
+  let strideDim = 1;
+  for (let d = 0; d < dimIdx; d++) strideDim *= resultShape[d];
+  let numOuter = 1;
+  for (let d = dimIdx + 1; d < ndim; d++) numOuter *= resultShape[d];
 
-    // Increment subs in column-major order
-    for (let d = 0; d < ndim; d++) {
-      subs[d]++;
-      if (subs[d] < resultShape[d]) break;
-      subs[d] = 0;
+  for (let outer = 0; outer < numOuter; outer++) {
+    let dstOff = outer * strideDim * resultShape[dimIdx];
+    for (let c = 0; c < cells.length; c++) {
+      const srcDimSize = shapes[c][dimIdx];
+      const blockSize = strideDim * srcDimSize;
+      const srcOff = outer * blockSize;
+      for (let j = 0; j < blockSize; j++) {
+        resultData[dstOff + j] = cells[c].data[srcOff + j];
+      }
+      dstOff += blockSize;
     }
   }
 

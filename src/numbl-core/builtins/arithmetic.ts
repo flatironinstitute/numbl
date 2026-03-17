@@ -19,7 +19,7 @@ import {
 } from "../runtime/types.js";
 import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
-import { tensorSize2D, colMajorIndex, sub2ind } from "../runtime/utils.js";
+import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import {
@@ -774,14 +774,30 @@ export function broadcastIterate(
   const aPadded = padShape(aShape, ndim);
   const bPadded = padShape(bShape, ndim);
 
+  // Precompute strides — zero for broadcast (size-1) dimensions
+  const aStrides = new Array(ndim);
+  const bStrides = new Array(ndim);
+  let aStr = 1,
+    bStr = 1;
+  for (let d = 0; d < ndim; d++) {
+    aStrides[d] = aPadded[d] === 1 ? 0 : aStr;
+    bStrides[d] = bPadded[d] === 1 ? 0 : bStr;
+    aStr *= aPadded[d];
+    bStr *= bPadded[d];
+  }
+
   const subs = new Array(ndim).fill(0);
+  let aIdx = 0,
+    bIdx = 0;
   for (let i = 0; i < totalElems; i++) {
-    const aSubs = subs.map((s, d) => (aPadded[d] === 1 ? 0 : s));
-    const bSubs = subs.map((s, d) => (bPadded[d] === 1 ? 0 : s));
-    visit(sub2ind(aPadded, aSubs), sub2ind(bPadded, bSubs), i);
+    visit(aIdx, bIdx, i);
     for (let d = 0; d < ndim; d++) {
       subs[d]++;
+      aIdx += aStrides[d];
+      bIdx += bStrides[d];
       if (subs[d] < outShape[d]) break;
+      aIdx -= subs[d] * aStrides[d];
+      bIdx -= subs[d] * bStrides[d];
       subs[d] = 0;
     }
   }
