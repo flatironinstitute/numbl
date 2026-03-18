@@ -1972,8 +1972,8 @@ export function storeIntoRTValueIndex(
       return base;
     }
     if (indices.length === 2) {
-      const rows = base.shape[0];
-      const cols = base.shape.length >= 2 ? base.shape[1] : 1;
+      let rows = base.shape[0];
+      let cols = base.shape.length >= 2 ? base.shape[1] : 1;
 
       // Resolve row indices to 0-based array
       const rowIsColon = isColonIndex(indices[0]);
@@ -2019,6 +2019,27 @@ export function storeIntoRTValueIndex(
         colIndices = [Math.round(toNumber(indices[1])) - 1];
       }
 
+      // Auto-grow cell if any index exceeds current dimensions
+      const maxRow = Math.max(...rowIndices) + 1;
+      const maxCol = Math.max(...colIndices) + 1;
+      const newRows = Math.max(rows, maxRow);
+      const newCols = Math.max(cols, maxCol);
+      if (newRows > rows || newCols > cols) {
+        const emptyVal = () => RTV.tensor(new FloatXArray(0), [0, 0]);
+        const newData: RuntimeValue[] = new Array(newRows * newCols);
+        for (let k = 0; k < newData.length; k++) newData[k] = emptyVal();
+        // Copy old data (column-major layout)
+        for (let j = 0; j < cols; j++) {
+          for (let i = 0; i < rows; i++) {
+            newData[j * newRows + i] = base.data[j * rows + i];
+          }
+        }
+        base.data = newData;
+        base.shape = [newRows, newCols];
+        rows = newRows;
+        cols = newCols;
+      }
+
       const nSelectedRows = rowIndices.length;
       const nSelectedCols = colIndices.length;
       const totalSelected = nSelectedRows * nSelectedCols;
@@ -2040,9 +2061,6 @@ export function storeIntoRTValueIndex(
       } else {
         // Single value RHS: assign to single position
         const linearIdx = colIndices[0] * rows + rowIndices[0];
-        if (linearIdx < 0 || linearIdx >= base.data.length) {
-          throw new RuntimeError("Cell index exceeds bounds");
-        }
         base.data[linearIdx] = rhs;
       }
       return base;
