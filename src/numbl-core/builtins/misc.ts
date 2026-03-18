@@ -696,6 +696,49 @@ export function registerMiscFunctions(): void {
     })
   );
 
+  // clock: returns [year month day hour minute seconds] as a 1x6 row vector
+  register(
+    "clock",
+    builtinSingle(() => {
+      const now = new Date();
+      const data = new FloatXArray([
+        now.getFullYear(),
+        now.getMonth() + 1,
+        now.getDate(),
+        now.getHours(),
+        now.getMinutes(),
+        now.getSeconds() + now.getMilliseconds() / 1000,
+      ]);
+      return RTV.tensor(data, [1, 6]);
+    })
+  );
+
+  // etime: elapsed time between two clock vectors
+  register(
+    "etime",
+    builtinSingle(args => {
+      if (args.length < 2) throw new RuntimeError("etime requires 2 arguments");
+      const t1 = args[0];
+      const t0 = args[1];
+      if (!isRuntimeTensor(t1) || !isRuntimeTensor(t0))
+        throw new RuntimeError("etime: arguments must be clock vectors");
+      // Convert to Date objects for accurate difference
+      const toMs = (t: typeof t1) => {
+        const d = new Date(
+          t.data[0],
+          t.data[1] - 1,
+          t.data[2],
+          t.data[3],
+          t.data[4],
+          Math.floor(t.data[5]),
+          (t.data[5] % 1) * 1000
+        );
+        return d.getTime();
+      };
+      return RTV.num((toMs(t1) - toMs(t0)) / 1000);
+    })
+  );
+
   register(
     "assert",
     builtinSingle(args => {
