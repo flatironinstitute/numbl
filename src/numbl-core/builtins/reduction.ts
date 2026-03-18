@@ -25,6 +25,7 @@ import {
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { getBroadcastShape, broadcastIterate } from "./arithmetic.js";
+import { sparseToDense } from "./sparse-arithmetic.js";
 import { rstr } from "../runtime/runtime.js";
 
 /** Squeeze trailing singleton dimensions, keeping at least 2. Mutates in place. */
@@ -775,6 +776,9 @@ export function registerReductionFunctions(): void {
       });
       return RTV.tensor(result, outShape);
     };
+
+    // Densify sparse arguments
+    args = args.map(a => (isRuntimeSparseMatrix(a) ? sparseToDense(a) : a));
 
     // --- 1-arg: reduce to scalar or along default dim ---
     if (args.length === 1) {
