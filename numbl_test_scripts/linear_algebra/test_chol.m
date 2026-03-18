@@ -89,4 +89,61 @@ assert(abs(R12 - 2) < 1e-10, 'chol([4]) should be [2]');
 [R13, flag13] = chol(-eye(3));
 assert(flag13 == 1, 'flag should be 1 for negative definite matrix');
 
+% Test 16: [R, flag, P] = chol(S) — 3 outputs with sparse, permutation matrix
+S = sparse(A);
+[R14, flag14, P14] = chol(S);
+assert(flag14 == 0, 'flag should be 0 for positive definite sparse');
+assert(norm(R14' * R14 - P14' * A * P14) < 1e-10, 'R''*R should equal P''*A*P');
+
+% Test 17: [R, flag, p] = chol(S, 'vector') — permutation as vector
+[R15, flag15, p15] = chol(S, 'vector');
+assert(flag15 == 0, 'flag should be 0');
+Ap = full(S);
+assert(norm(R15' * R15 - Ap(p15, p15)) < 1e-10, 'R''*R should equal A(p,p)');
+
+% Test 18: [L, flag, P] = chol(S, 'lower') — 3 outputs with lower
+[L16, flag16, P16] = chol(S, 'lower');
+assert(flag16 == 0, 'flag should be 0');
+assert(norm(L16 * L16' - P16' * A * P16) < 1e-10, 'L*L'' should equal P''*A*P');
+
+% Test 19: [R, flag, p] = chol(S, 'lower', 'vector') — both options
+[L17, flag17, p17] = chol(S, 'lower', 'vector');
+assert(flag17 == 0, 'flag should be 0');
+assert(norm(L17 * L17' - Ap(p17, p17)) < 1e-10, 'L*L'' should equal A(p,p)');
+
+% Test 20: 3-output with larger sparse matrix
+E = [10 3 1 0; 3 10 2 1; 1 2 10 4; 0 1 4 10];
+SE = sparse(E);
+[R18, flag18, p18] = chol(SE, 'vector');
+assert(flag18 == 0, 'flag should be 0 for 4x4 sparse');
+assert(norm(R18' * R18 - E(p18, p18)) < 1e-10, 'R''*R should equal E(p,p) for 4x4');
+
+% Test 21: 3-output with non-positive-definite sparse matrix
+C2 = sparse([1 2; 2 1]);
+[R19, flag19, P19] = chol(C2);
+assert(flag19 > 0, 'flag should be > 0 for non-positive-definite sparse');
+
+% Test 22: 3-output with 'vector' and non-positive-definite sparse
+[R20, flag20, p20] = chol(C2, 'vector');
+assert(flag20 > 0, 'flag should be > 0 for non-positive-definite sparse');
+
+% Test 23: 3-output errors for dense matrices
+caught = false;
+try
+    [R21, flag21, P21] = chol(A);
+catch e
+    caught = true;
+end
+assert(caught, '3-output chol should error for dense matrix');
+
+% Test 24: chol with sparse input and 1 output
+S2 = sparse([4 2; 2 3]);
+R22 = chol(S2);
+assert(norm(R22' * R22 - [4 2; 2 3]) < 1e-10, 'chol(sparse) should work with 1 output');
+
+% Test 25: chol with sparse input and 2 outputs
+[R23, flag23] = chol(S2);
+assert(flag23 == 0, 'flag should be 0 for sparse positive definite');
+assert(norm(R23' * R23 - [4 2; 2 3]) < 1e-10, 'chol(sparse) should work with 2 outputs');
+
 fprintf('SUCCESS\n');
