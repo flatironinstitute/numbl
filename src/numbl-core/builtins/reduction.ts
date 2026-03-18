@@ -1176,7 +1176,7 @@ export function registerReductionFunctions(): void {
             }
           }
           if (v.imag) {
-            sparseImag = new FloatXArray(1); // trigger complex return path
+            sparseImag = new Float64Array(1); // trigger complex return path
           }
         } else if (isRuntimeSparseMatrix(v)) {
           sparseImag = v.pi;
