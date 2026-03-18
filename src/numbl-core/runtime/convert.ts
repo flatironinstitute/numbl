@@ -65,6 +65,11 @@ export function toBool(v: RuntimeValue): boolean {
       }
       return v.data.length > 0;
     }
+    case "sparse_matrix": {
+      // All m*n elements must be nonzero — true only when nnz == m*n
+      const nnz = v.jc[v.n];
+      return v.m * v.n > 0 && nnz === v.m * v.n;
+    }
     case "char":
       return v.value.length > 0;
     case "complex_number":
