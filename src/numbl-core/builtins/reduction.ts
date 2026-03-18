@@ -526,7 +526,14 @@ export function registerReductionFunctions(): void {
           throw new RuntimeError("sum requires at least 1 argument");
         const v = args[0];
         if (isRuntimeSparseMatrix(v)) {
-          const dim = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
+          const dim =
+            args.length >= 2
+              ? Math.round(toNumber(args[1]))
+              : v.m > 1
+                ? 1
+                : v.n > 1
+                  ? 2
+                  : 1;
           return sparseSum(v, dim);
         }
         const kernel = accumKernel((acc, val) => acc + val, 0);
