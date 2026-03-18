@@ -18,6 +18,7 @@ import type { Codegen } from "./codegen.js";
 import { exprContainsEndShallow } from "./codegenHelpers.js";
 
 import type { CallSite } from "../runtime/runtimeHelpers.js";
+import { getBuiltin } from "../builtins/registry.js";
 import { resolveFunction } from "../functionResolve.js";
 
 // ── Public entry ────────────────────────────────────────────────────────
@@ -735,6 +736,9 @@ function genFuncCall(
           return `(${cg.varRef(variable.id.id)} !== undefined ? 1 : 0)`;
         }
         return "0";
+      }
+      if (typeArg === "builtin") {
+        return getBuiltin(varName) ? "5" : "0";
       }
     }
   }
