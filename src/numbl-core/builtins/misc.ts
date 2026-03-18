@@ -696,6 +696,18 @@ export function registerMiscFunctions(): void {
     })
   );
 
+  // version: returns MATLAB version string (stub)
+  register(
+    "version",
+    builtinSingle(() => RTV.char("9.14.0"))
+  );
+
+  // computer: returns platform string (stub)
+  register(
+    "computer",
+    builtinSingle(() => RTV.char("GLNXA64"))
+  );
+
   // clock: returns [year month day hour minute seconds] as a 1x6 row vector
   register(
     "clock",
