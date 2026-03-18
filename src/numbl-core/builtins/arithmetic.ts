@@ -423,11 +423,13 @@ export function mLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const BRe = tensorB.data;
     const BIm = tensorB.imag ?? new FloatXArray(tensorB.data.length);
     const X = linsolveComplexLapack(ARe, AIm, mA, nA, BRe, BIm, nB);
-    return RTV.tensor(new FloatXArray(X.re), [nA, nB], new FloatXArray(X.im));
+    return unwrap1x1(
+      RTV.tensor(new FloatXArray(X.re), [nA, nB], new FloatXArray(X.im))
+    );
   }
   const X = linsolveLapack(tensorA.data, mA, nA, tensorB.data, nB);
   if (!X) throw new RuntimeError("mldivide (\\): LAPACK bridge unavailable");
-  return RTV.tensor(new FloatXArray(X), [nA, nB]);
+  return unwrap1x1(RTV.tensor(new FloatXArray(X), [nA, nB]));
 }
 
 /** Element-wise left division (ldivide): a .\ b = b ./ a */
@@ -1105,6 +1107,15 @@ function comparisonOp(
   );
 }
 
+/** Unwrap a 1×1 tensor to a plain scalar (number or complex). */
+function unwrap1x1(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeTensor(v) && v.data.length === 1) {
+    if (v.imag && v.imag[0] !== 0) return RTV.complex(v.data[0], v.imag[0]);
+    return RTV.num(v.data[0]);
+  }
+  return v;
+}
+
 function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
   const [aRows, aCols] = tensorSize2D(a);
   const [bRows, bCols] = tensorSize2D(b);
@@ -1131,7 +1142,7 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
     const f64B =
       b.data instanceof Float64Array ? b.data : new Float64Array(b.data);
     const raw = bridge.matmul!(f64A, aRows, aCols, f64B, bCols);
-    return RTV.tensor(new FloatXArray(raw), [aRows, bCols]);
+    return unwrap1x1(RTV.tensor(new FloatXArray(raw), [aRows, bCols]));
   }
 
   // Complex matrix multiplication
@@ -1163,9 +1174,7 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
 
   // Check if result is purely real
   const isPurelyReal = resultIm.every(x => x === 0);
-  return RTV.tensor(
-    resultRe,
-    [aRows, bCols],
-    isPurelyReal ? undefined : resultIm
+  return unwrap1x1(
+    RTV.tensor(resultRe, [aRows, bCols], isPurelyReal ? undefined : resultIm)
   );
 }
