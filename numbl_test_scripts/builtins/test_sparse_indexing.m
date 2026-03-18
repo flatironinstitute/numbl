@@ -6,17 +6,15 @@ S = sparse([1 2 3 1], [1 2 3 3], [10 20 30 5], 3, 4);
 
 %% Element access S(i,j) — nonzero element
 v = S(1,1);
-assert(full(v) == 10);
-assert(issparse(v));
+assert(v == 10);
 
 %% Element access S(i,j) — zero element
 v0 = S(1,2);
-assert(full(v0) == 0);
-assert(issparse(v0));
+assert(v0 == 0);
 
 %% Element access S(i,j) — another nonzero
 v2 = S(1,3);
-assert(full(v2) == 5);
+assert(v2 == 5);
 
 %% Column extraction S(:,j)
 col2 = S(:,2);
@@ -59,12 +57,11 @@ assert(isequal(full(sub2), [10 5 0; 0 30 0]));
 
 %% Linear indexing S(k) — single element
 v_lin = S(1);
-assert(full(v_lin) == 10);
-assert(issparse(v_lin));
+assert(v_lin == 10);
 
 %% Linear indexing — zero element
 v_lin0 = S(2);
-assert(full(v_lin0) == 0);
+assert(v_lin0 == 0);
 
 %% S(:) — reshape to column
 Scol = S(:);
@@ -113,25 +110,25 @@ assert(isempty(nz_empty));
 S3 = S;
 S3(1,2) = 99;
 assert(issparse(S3));
-assert(full(S3(1,2)) == 99);
+assert(S3(1,2) == 99);
 assert(nnz(S3) == 5);
 
 %% Index assignment — overwrite existing nonzero
 S4 = S;
 S4(1,1) = 77;
-assert(full(S4(1,1)) == 77);
+assert(S4(1,1) == 77);
 assert(nnz(S4) == 4);
 
 %% Index assignment — set nonzero to zero (removes entry)
 S5 = S;
 S5(1,1) = 0;
-assert(full(S5(1,1)) == 0);
+assert(S5(1,1) == 0);
 assert(nnz(S5) == 3);
 
-%% Complex sparse indexing
+%% Complex sparse indexing — scalar element access
 CS = sparse([1 2], [1 2], [1+2i 3+4i], 2, 2);
 cv = CS(1,1);
-assert(full(cv) == 1+2i);
+assert(cv == 1+2i);
 
 %% Complex sparse find
 [ci, cj, cv2] = find(CS);
@@ -146,5 +143,12 @@ assert(isequal(cnz, [1+2i; 3+4i]));
 %% size/numel on indexed sparse
 assert(isequal(size(S(:,2)), [3 1]));
 assert(isequal(size(S(1,:)), [1 4]));
+
+%% Assign sparse scalar element to dense array
+nztmp = zeros(1, 4);
+nztmp(1) = S(1,1);
+nztmp(2) = S(1,3);
+assert(nztmp(1) == 10);
+assert(nztmp(2) == 5);
 
 disp('SUCCESS')

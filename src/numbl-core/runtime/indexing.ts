@@ -395,7 +395,7 @@ function indexIntoSparse(
       );
     }
 
-    // S(k) — linear indexing (single scalar)
+    // S(k) — linear indexing (single scalar) → return plain double
     if (isRuntimeNumber(idx)) {
       const k = Math.round(idx) - 1;
       if (k < 0 || k >= base.m * base.n)
@@ -403,17 +403,10 @@ function indexIntoSparse(
       const col = Math.floor(k / base.m);
       const row = k % base.m;
       const val = sparseElementAt(base, row, col);
-      // Return 1×1 sparse
-      const nnz = val.re !== 0 || val.im !== 0 ? 1 : 0;
-      const isComplex = base.pi !== undefined;
-      return RTV.sparseMatrix(
-        1,
-        1,
-        new Int32Array(nnz > 0 ? [0] : []),
-        new Int32Array([0, nnz]),
-        new Float64Array(nnz > 0 ? [val.re] : []),
-        isComplex ? new Float64Array(nnz > 0 ? [val.im] : []) : undefined
-      );
+      if (base.pi !== undefined && val.im !== 0) {
+        return RTV.complex(val.re, val.im);
+      }
+      return val.re;
     }
 
     // S(vector) or S(logical_vector) — linear vector indexing
@@ -455,7 +448,15 @@ function indexIntoSparse(
     const rowIdx = resolveIndex(indices[0], base.m);
     const colIdx = resolveIndex(indices[1], base.n);
 
-    // Always return sparse (matching MATLAB)
+    // Scalar indices → return plain double (matching MATLAB)
+    if (rowIdx.length === 1 && colIdx.length === 1) {
+      const val = sparseElementAt(base, rowIdx[0], colIdx[0]);
+      if (base.pi !== undefined && val.im !== 0) {
+        return RTV.complex(val.re, val.im);
+      }
+      return val.re;
+    }
+
     return sparseSubmatrix(base, rowIdx, colIdx);
   }
 
