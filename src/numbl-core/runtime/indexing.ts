@@ -1142,7 +1142,7 @@ export function storeIntoRTValueIndex(
   }
 
   // Auto-convert sparse RHS to dense when assigning into a dense tensor
-  if (isRuntimeSparseMatrix(rhs) && !isRuntimeSparseMatrix(base)) {
+  if (isRuntimeSparseMatrix(rhs) && isRuntimeTensor(base)) {
     const S = rhs;
     const data = new FloatXArray(S.m * S.n);
     const imag = S.pi ? new FloatXArray(S.m * S.n) : undefined;
