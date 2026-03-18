@@ -1988,7 +1988,9 @@ export function storeIntoRTValueIndex(
           base.data.push(RTV.tensor(new FloatXArray(0), [0, 0]));
       }
       // Mutate in place (safe — rc is 1)
-      base.data[i] = rhs;
+      // Unwrap 1x1 cell RHS: c(i) = {val} stores val, not the cell
+      base.data[i] =
+        isRuntimeCell(rhs) && rhs.data.length === 1 ? rhs.data[0] : rhs;
       updateShapeAfterLinearAssign(oldLen);
       return base;
     }
