@@ -193,6 +193,18 @@ export class Runtime {
       ) => ((...args: any[]) => any) | null)
     | null = null;
 
+  // Callback for eval-with-local-variables. Set by executeCode to avoid circular imports.
+  public evalLocalCallback:
+    | ((
+        code: string,
+        initialVars: Record<string, RuntimeValue>,
+        onOutput: (text: string) => void
+      ) => {
+        returnValue: unknown;
+        variableValues: Record<string, RuntimeValue>;
+      })
+    | null = null;
+
   // Per-function JIT-compiled code for debugging: jsId → generated JS
   public jitFunctionCode = new Map<string, string>();
 
@@ -647,6 +659,44 @@ export class Runtime {
     if (!callerAccessors) return;
     const accessor = callerAccessors[name];
     if (accessor) accessor[1](value);
+  }
+
+  // ── eval with local variable access ─────────────────────────────────
+
+  public evalLocal(
+    code: unknown,
+    accessors: Record<string, [() => unknown, (v: unknown) => void]>
+  ): unknown {
+    const codeStr = _toString(ensureRuntimeValue(code));
+
+    // Read current values from accessors
+    const initialValues: Record<string, RuntimeValue> = {};
+    for (const [name, [getter]] of Object.entries(accessors)) {
+      const val = getter();
+      if (val !== undefined && val !== null) {
+        initialValues[name] = ensureRuntimeValue(val);
+      }
+    }
+
+    if (!this.evalLocalCallback) {
+      throw new RuntimeError(
+        "eval: internal error - no eval callback available"
+      );
+    }
+
+    const result = this.evalLocalCallback(codeStr, initialValues, text =>
+      this.output(text)
+    );
+
+    // Write back modified variables
+    for (const [name, value] of Object.entries(result.variableValues)) {
+      const accessor = accessors[name];
+      if (accessor) {
+        accessor[1](value);
+      }
+    }
+
+    return result.returnValue;
   }
 
   // ── Persistent variables ────────────────────────────────────────────

@@ -722,6 +722,23 @@ function genFuncCall(
     return `$rt.makeString('"${typeStr}"')`;
   }
   if (kind.name === "isa") return `$rt.isa(${args[0]}, ${args[1]})`;
+  // eval() intrinsic: when inside a function with eval, pass local variable accessors
+  if (
+    kind.name === "eval" &&
+    kind.args.length === 1 &&
+    cg.evalVarAccessorStack.length > 0
+  ) {
+    const varMap = cg.evalVarAccessorStack[cg.evalVarAccessorStack.length - 1];
+    if (varMap.size > 0) {
+      const entries = [...varMap.entries()]
+        .map(
+          ([name, jsRef]) =>
+            `${JSON.stringify(name)}: [() => ${jsRef}, ($v) => { ${jsRef} = $v; }]`
+        )
+        .join(", ");
+      return `$rt.evalLocal(${args[0]}, {${entries}})`;
+    }
+  }
   if (kind.name === "exist" && kind.args.length === 2) {
     const arg0 = kind.args[0].kind;
     const arg1 = kind.args[1].kind;

@@ -239,6 +239,25 @@ export function genFunctionDef(
         }
       }
 
+      // Check if this function body contains any eval() calls
+      const bodyCallNames = new Set<string>();
+      collectCallNames(stmt.body, bodyCallNames);
+      const hasEvalCall = bodyCallNames.has("eval");
+
+      if (hasEvalCall) {
+        const evalVarMap = new Map<string, string>();
+        const seenNames = new Set<string>();
+        for (const id of ownVarIds) {
+          if (globalVarIds.has(id)) continue;
+          const name = varNameFromId(id);
+          if (!seenNames.has(name)) {
+            seenNames.add(name);
+            evalVarMap.set(name, cg.varRef(id));
+          }
+        }
+        cg.evalVarAccessorStack.push(evalVarMap);
+      }
+
       // Determine which local variables need caller accessors
       const callerVarsNeeded = computeCallerVarsNeeded(
         cg,
@@ -261,6 +280,10 @@ export function genFunctionDef(
 
       // Generate body
       cg.genStmts(stmt.body);
+
+      if (hasEvalCall) {
+        cg.evalVarAccessorStack.pop();
+      }
 
       // Return capture
       const fnCtx =
