@@ -836,7 +836,15 @@ export function registerMiscFunctions(): void {
   // codegen know the functions exist.
   // Runtime-handled placeholders: these are intercepted by the runtime;
   // the registrations let codegen know they exist.
-  for (const name of ["feval", "arrayfun", "cellfun", "structfun", "bsxfun"]) {
+  for (const name of [
+    "feval",
+    "arrayfun",
+    "cellfun",
+    "structfun",
+    "bsxfun",
+    "assignin",
+    "evalin",
+  ]) {
     register(
       name,
       builtinSingle(() => {
