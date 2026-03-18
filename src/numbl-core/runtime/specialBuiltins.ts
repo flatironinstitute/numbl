@@ -255,6 +255,49 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return RTV.char(parts.join("/"));
   };
 
+  // ── Workspace builtins ───────────────────────────────────────────
+
+  rt.builtins["assignin"] = (_nargout: number, args: unknown[]) => {
+    if (args.length < 3)
+      throw new RuntimeError("assignin requires 3 arguments");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    const ws = toString(margs[0]);
+    if (ws !== "base" && ws !== "caller" && ws !== "workspace")
+      throw new RuntimeError(
+        "assignin: first argument must be 'base', 'caller', or 'workspace'"
+      );
+    const varName = toString(margs[1]);
+    if (ws === "caller") {
+      rt.setCallerVariable(varName, args[2]);
+    } else {
+      rt.setWorkspaceVariable(varName, args[2]);
+    }
+    return 0;
+  };
+
+  rt.builtins["evalin"] = (_nargout: number, args: unknown[]) => {
+    if (args.length < 2)
+      throw new RuntimeError("evalin requires at least 2 arguments");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    const ws = toString(margs[0]);
+    if (ws !== "base" && ws !== "caller" && ws !== "workspace")
+      throw new RuntimeError(
+        "evalin: first argument must be 'base', 'caller', or 'workspace'"
+      );
+    const varName = toString(margs[1]);
+    const val =
+      ws === "caller"
+        ? rt.getCallerVariable(varName)
+        : rt.getWorkspaceVariable(varName);
+    if (val === undefined) {
+      if (args.length >= 3) return args[2];
+      throw new RuntimeError(
+        `evalin: variable '${varName}' does not exist in ${ws}`
+      );
+    }
+    return val;
+  };
+
   // ── Plot builtins ────────────────────────────────────────────────
 
   rt.builtins["drawnow"] = () => {

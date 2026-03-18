@@ -5,8 +5,12 @@
  * Each function takes the Codegen instance as the first parameter.
  */
 
-import { type IRStmt, itemTypeForExprKind } from "../lowering/index.js";
-import { type ItemType } from "../lowering/itemTypes.js";
+import {
+  type IRExpr,
+  type IRStmt,
+  itemTypeForExprKind,
+} from "../lowering/index.js";
+import { type ItemType, IType } from "../lowering/itemTypes.js";
 import { snapshotTypes, restoreTypes } from "../lowering/lowerStmt.js";
 import type { Codegen } from "./codegen.js";
 import {
@@ -15,6 +19,141 @@ import {
   isOutputFunction,
   genForRange,
 } from "./codegenExpr.js";
+
+// ── Externally-settable type reset (mirrors lowerStmt logic) ────────────
+
+/**
+ * After codegen processes a statement containing function calls,
+ * reset types of externally-settable variables so subsequent codegen
+ * doesn't use stale type assumptions for native math inlining.
+ */
+function resetExternallySettableTypesForCodegen(
+  cg: Codegen,
+  irExpr: IRExpr
+): void {
+  const ctx = cg.loweringCtx;
+  if (
+    ctx.workspaceAccessedVarNames.size === 0 &&
+    ctx.callerAccessMap.size === 0
+  ) {
+    return;
+  }
+
+  if (ctx.workspaceAccessedVarNames.size > 0 && exprHasFuncCall(irExpr)) {
+    for (const name of ctx.workspaceAccessedVarNames) {
+      const v = ctx.lookup(name);
+      if (v) cg.typeEnv.set(v.id, IType.Unknown);
+    }
+  }
+
+  if (ctx.callerAccessMap.size > 0) {
+    const callNames = new Set<string>();
+    collectExprCallNames(irExpr, callNames);
+    for (const callName of callNames) {
+      const baseName = callName.includes(".")
+        ? callName.slice(callName.lastIndexOf(".") + 1)
+        : callName;
+      const vars = ctx.callerAccessMap.get(baseName);
+      if (vars) {
+        for (const varName of vars) {
+          const v = ctx.lookup(varName);
+          if (v) cg.typeEnv.set(v.id, IType.Unknown);
+        }
+      }
+    }
+  }
+}
+
+function exprHasFuncCall(expr: IRExpr): boolean {
+  const k = expr.kind;
+  switch (k.type) {
+    case "FuncCall":
+    case "MethodCall":
+    case "SuperConstructorCall":
+    case "ClassInstantiation":
+      return true;
+    case "Binary":
+      return exprHasFuncCall(k.left) || exprHasFuncCall(k.right);
+    case "Unary":
+      return exprHasFuncCall(k.operand);
+    case "Range":
+      return (
+        exprHasFuncCall(k.start) ||
+        (k.step !== null && exprHasFuncCall(k.step)) ||
+        exprHasFuncCall(k.end)
+      );
+    case "Index":
+    case "IndexCell":
+      return exprHasFuncCall(k.base) || k.indices.some(i => exprHasFuncCall(i));
+    case "Member":
+      return exprHasFuncCall(k.base);
+    case "MemberDynamic":
+      return exprHasFuncCall(k.base) || exprHasFuncCall(k.nameExpr);
+    case "AnonFunc":
+      return exprHasFuncCall(k.body);
+    case "Tensor":
+    case "Cell":
+      return k.rows.some(row => row.some(e => exprHasFuncCall(e)));
+    default:
+      return false;
+  }
+}
+
+function collectExprCallNames(expr: IRExpr, out: Set<string>): void {
+  const k = expr.kind;
+  switch (k.type) {
+    case "FuncCall":
+      out.add(k.name);
+      for (const a of k.args) collectExprCallNames(a, out);
+      if (k.instanceBase) collectExprCallNames(k.instanceBase, out);
+      break;
+    case "MethodCall":
+      out.add(k.name);
+      collectExprCallNames(k.base, out);
+      for (const a of k.args) collectExprCallNames(a, out);
+      break;
+    case "Binary":
+      collectExprCallNames(k.left, out);
+      collectExprCallNames(k.right, out);
+      break;
+    case "Unary":
+      collectExprCallNames(k.operand, out);
+      break;
+    case "Range":
+      collectExprCallNames(k.start, out);
+      if (k.step) collectExprCallNames(k.step, out);
+      collectExprCallNames(k.end, out);
+      break;
+    case "Index":
+    case "IndexCell":
+      collectExprCallNames(k.base, out);
+      for (const i of k.indices) collectExprCallNames(i, out);
+      break;
+    case "Member":
+      collectExprCallNames(k.base, out);
+      break;
+    case "MemberDynamic":
+      collectExprCallNames(k.base, out);
+      collectExprCallNames(k.nameExpr, out);
+      break;
+    case "SuperConstructorCall":
+      for (const a of k.args) collectExprCallNames(a, out);
+      break;
+    case "AnonFunc":
+      collectExprCallNames(k.body, out);
+      break;
+    case "Tensor":
+    case "Cell":
+      for (const row of k.rows)
+        for (const e of row) collectExprCallNames(e, out);
+      break;
+    case "ClassInstantiation":
+      for (const a of k.args) collectExprCallNames(a, out);
+      break;
+    default:
+      break;
+  }
+}
 
 // ── Public API ──────────────────────────────────────────────────────────
 
@@ -43,6 +182,7 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
       if (!stmt.suppressed && !isOutputFunction(stmt.expr)) {
         cg.emit(`$rt.displayResult($ret);`);
       }
+      resetExternallySettableTypesForCodegen(cg, stmt.expr);
       break;
     }
 
@@ -57,6 +197,8 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
       } else {
         cg.emit(`${vr} = $rt.share(${val});${tc}`);
       }
+      // Reset externally-settable types before updating the assigned var's type
+      resetExternallySettableTypesForCodegen(cg, stmt.expr);
       // Update TypeEnv for subsequent statements reading this variable
       if (stmt.assignedType) {
         cg.typeEnv.set(stmt.variable.id, stmt.assignedType);
@@ -109,6 +251,7 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
         const rhsItem = `$rt.share(${tmp}[${i}])`;
         cg.genLValueAssign(lv, rhsItem);
       }
+      resetExternallySettableTypesForCodegen(cg, stmt.expr);
       // Update TypeEnv for subsequent statements reading these variables
       if (stmt.assignedTypes) {
         for (let i = 0; i < stmt.lvalues.length; i++) {
@@ -136,6 +279,7 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
     case "AssignLValue": {
       const rhs = genExpr(cg, stmt.expr);
       cg.genLValueAssign(stmt.lvalue, rhs);
+      resetExternallySettableTypesForCodegen(cg, stmt.expr);
       // Apply type side effects computed during lowering
       applyTypeUpdates(cg, stmt.typeUpdates);
       break;

@@ -8,6 +8,7 @@ import { type Stmt as AstStmt } from "../parser/index.js";
 import { SemanticError } from "../lowering/errors.js";
 import { type ItemType, IType } from "../lowering/itemTypes.js";
 import {
+  type IRExpr,
   type IRExprKind,
   type IRLValue,
   type IRStmt,
@@ -20,6 +21,151 @@ import { lowerLValue } from "./lowerLValue.js";
 import { preDefineBodyVars } from "./loweringHelpers.js";
 import { isScalarType } from "./itemTypes.js";
 import { type TypeEnv } from "./typeEnv.js";
+
+// ── Externally-settable variable type resetting ─────────────────────────
+
+/**
+ * After lowering an expression that may contain function calls, reset the
+ * inferred types of variables that could be modified externally via
+ * assignin('workspace', ...) or assignin('caller', ...).
+ *
+ * - Workspace-settable variables: reset after ANY function call
+ * - Caller-settable variables: reset only after calls to specific functions
+ */
+function resetExternallySettableTypes(
+  ctx: LoweringContext,
+  irExpr: IRExpr
+): void {
+  if (
+    ctx.workspaceAccessedVarNames.size === 0 &&
+    ctx.callerAccessMap.size === 0
+  ) {
+    return;
+  }
+
+  const hasFuncCall =
+    ctx.workspaceAccessedVarNames.size > 0 && irExprContainsFuncCall(irExpr);
+
+  if (hasFuncCall) {
+    for (const name of ctx.workspaceAccessedVarNames) {
+      const v = ctx.lookup(name);
+      if (v) ctx.typeEnv.set(v.id, IType.Unknown);
+    }
+  }
+
+  if (ctx.callerAccessMap.size > 0) {
+    const callNames = new Set<string>();
+    collectIRFuncCallNames(irExpr, callNames);
+    for (const callName of callNames) {
+      const baseName = callName.includes(".")
+        ? callName.slice(callName.lastIndexOf(".") + 1)
+        : callName;
+      const vars = ctx.callerAccessMap.get(baseName);
+      if (vars) {
+        for (const varName of vars) {
+          const v = ctx.lookup(varName);
+          if (v) ctx.typeEnv.set(v.id, IType.Unknown);
+        }
+      }
+    }
+  }
+}
+
+function irExprContainsFuncCall(expr: IRExpr): boolean {
+  const k = expr.kind;
+  switch (k.type) {
+    case "FuncCall":
+    case "MethodCall":
+    case "SuperConstructorCall":
+    case "ClassInstantiation":
+      return true;
+    case "Binary":
+      return irExprContainsFuncCall(k.left) || irExprContainsFuncCall(k.right);
+    case "Unary":
+      return irExprContainsFuncCall(k.operand);
+    case "Range":
+      return (
+        irExprContainsFuncCall(k.start) ||
+        (k.step !== null && irExprContainsFuncCall(k.step)) ||
+        irExprContainsFuncCall(k.end)
+      );
+    case "Index":
+    case "IndexCell":
+      return (
+        irExprContainsFuncCall(k.base) ||
+        k.indices.some(i => irExprContainsFuncCall(i))
+      );
+    case "Member":
+      return irExprContainsFuncCall(k.base);
+    case "MemberDynamic":
+      return (
+        irExprContainsFuncCall(k.base) || irExprContainsFuncCall(k.nameExpr)
+      );
+    case "AnonFunc":
+      return irExprContainsFuncCall(k.body);
+    case "Tensor":
+    case "Cell":
+      return k.rows.some(row => row.some(e => irExprContainsFuncCall(e)));
+    default:
+      return false;
+  }
+}
+
+function collectIRFuncCallNames(expr: IRExpr, out: Set<string>): void {
+  const k = expr.kind;
+  switch (k.type) {
+    case "FuncCall":
+      out.add(k.name);
+      for (const a of k.args) collectIRFuncCallNames(a, out);
+      if (k.instanceBase) collectIRFuncCallNames(k.instanceBase, out);
+      break;
+    case "MethodCall":
+      out.add(k.name);
+      collectIRFuncCallNames(k.base, out);
+      for (const a of k.args) collectIRFuncCallNames(a, out);
+      break;
+    case "Binary":
+      collectIRFuncCallNames(k.left, out);
+      collectIRFuncCallNames(k.right, out);
+      break;
+    case "Unary":
+      collectIRFuncCallNames(k.operand, out);
+      break;
+    case "Range":
+      collectIRFuncCallNames(k.start, out);
+      if (k.step) collectIRFuncCallNames(k.step, out);
+      collectIRFuncCallNames(k.end, out);
+      break;
+    case "Index":
+    case "IndexCell":
+      collectIRFuncCallNames(k.base, out);
+      for (const i of k.indices) collectIRFuncCallNames(i, out);
+      break;
+    case "Member":
+      collectIRFuncCallNames(k.base, out);
+      break;
+    case "MemberDynamic":
+      collectIRFuncCallNames(k.base, out);
+      collectIRFuncCallNames(k.nameExpr, out);
+      break;
+    case "SuperConstructorCall":
+      for (const a of k.args) collectIRFuncCallNames(a, out);
+      break;
+    case "AnonFunc":
+      collectIRFuncCallNames(k.body, out);
+      break;
+    case "Tensor":
+    case "Cell":
+      for (const row of k.rows)
+        for (const e of row) collectIRFuncCallNames(e, out);
+      break;
+    case "ClassInstantiation":
+      for (const a of k.args) collectIRFuncCallNames(a, out);
+      break;
+    default:
+      break;
+  }
+}
 
 // ── Public API ──────────────────────────────────────────────────────────
 
@@ -38,9 +184,11 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
         ["clear", "clf"].includes(stmt.expr.name)
           ? { ...stmt.expr, args: [] }
           : stmt.expr;
+      const loweredExpr = lowerExpr(ctx, exprToLower, stmt.suppressed ? 0 : 1);
+      resetExternallySettableTypes(ctx, loweredExpr);
       return {
         type: "ExprStmt",
-        expr: lowerExpr(ctx, exprToLower, stmt.suppressed ? 0 : 1),
+        expr: loweredExpr,
         suppressed: stmt.suppressed,
         span,
       };
@@ -48,6 +196,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
 
     case "Assign": {
       const value = lowerExpr(ctx, stmt.expr, 1);
+      resetExternallySettableTypes(ctx, value);
       let variable = ctx.lookup(stmt.name);
       const rhsType = itemTypeForExprKind(value.kind, ctx.typeEnv);
       if (variable) {
@@ -67,6 +216,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
 
     case "MultiAssign": {
       const value = lowerExpr(ctx, stmt.expr, stmt.lvalues.length);
+      resetExternallySettableTypes(ctx, value);
       const valueItemType = itemTypeForExprKind(value.kind, ctx.typeEnv);
       let outputTypes = stmt.lvalues.map(
         () => ({ kind: "Unknown" }) as ItemType
@@ -118,6 +268,7 @@ export function lowerStmt(ctx: LoweringContext, stmt: AstStmt): IRStmt {
     case "AssignLValue": {
       const irLv = lowerLValue(ctx, stmt.lvalue);
       const value = lowerExpr(ctx, stmt.expr, 1);
+      resetExternallySettableTypes(ctx, value);
 
       // If target is a plain variable, update its type from RHS
       if (irLv.type === "Var") {

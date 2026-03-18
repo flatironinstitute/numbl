@@ -1,4 +1,9 @@
-import { AbstractSyntaxTree, parseMFile, type Stmt } from "../parser/index.js";
+import {
+  AbstractSyntaxTree,
+  parseMFile,
+  type Stmt,
+  type Expr,
+} from "../parser/index.js";
 import { SyntaxError } from "../parser/errors.js";
 import type { WorkspaceFile, NativeBridge } from "../workspace/index.js";
 import { offsetToLine } from "../runtime/index.js";
@@ -13,6 +18,7 @@ import { Codegen } from "./codegen.js";
 import { collectVarIds } from "../lowering/varIdCollect.js";
 import { typeToString } from "../lowering/itemTypes.js";
 import type { IRVariable } from "../lowering/loweringTypes.js";
+import type { IRStmt, IRExpr } from "../lowering/nodes.js";
 import {
   register,
   unregister,
@@ -176,6 +182,14 @@ export function generateMainScriptCode(
   const functionIndex = ctx.buildFunctionIndex(jsUserFuncNames);
   const _buildFunctionIndexMs = performance.now() - _t0;
 
+  // ── 2c. Scan ASTs for assignin/evalin usage (before lowering) ────────
+  // This must happen before lowering so the type inference can reset
+  // types of externally-settable variables after function calls.
+  const { workspaceNames: workspaceAccessedNames, callerAccessMap } =
+    collectAccessedNames(ast, ctx.fileASTCache);
+  ctx.workspaceAccessedVarNames = workspaceAccessedNames;
+  ctx.callerAccessMap = callerAccessMap;
+
   // ── 3. Lower main body ─────────────────────────────────────────────
   // isTopLevel tags variables so only script-scope vars are exported to the workspace
   ctx.isTopLevel = true;
@@ -241,6 +255,39 @@ export function generateMainScriptCode(
     codegen.emit(`var ${codegen.varRef(id)};${tc}`);
   }
 
+  // Register workspace accessors only for variables referenced by assignin/evalin
+  for (const id of sortedVarIds) {
+    const v = varById.get(id);
+    if (v && ctx.workspaceAccessedVarNames.has(v.name)) {
+      const jsRef = codegen.varRef(id);
+      codegen.emit(
+        `$rt.setWorkspaceAccessor(${JSON.stringify(v.name)}, () => ${jsRef}, ($v) => { ${jsRef} = $v; });`
+      );
+    }
+  }
+
+  // Push caller accessors for the main script so functions called from
+  // top level can use evalin/assignin('caller', ...) to access script vars
+  if (ctx.callerAccessMap.size > 0) {
+    const callerVars = computeMainScriptCallerVars(
+      ctx.callerAccessMap,
+      irBody,
+      sortedVarIds,
+      varById,
+      codegen
+    );
+    if (callerVars.length > 0) {
+      const entries = callerVars
+        .map(({ name, jsRef }) => {
+          return `${JSON.stringify(name)}: [() => ${jsRef}, ($v) => { ${jsRef} = $v; }]`;
+        })
+        .join(", ");
+      codegen.emit(`$rt.pushCallerAccessors({${entries}});`);
+    } else {
+      codegen.emit(`$rt.pushCallerAccessors(null);`);
+    }
+  }
+
   // Initialize variables from initialVariableValues
   for (const v of initialVarIRVars) {
     codegen.emit(
@@ -282,6 +329,11 @@ export function generateMainScriptCode(
     }
   }
 
+  // Pop caller accessors if we pushed them
+  if (ctx.callerAccessMap.size > 0) {
+    codegen.emit(`$rt.popCallerAccessors();`);
+  }
+
   // $ret holds the last expression statement's value (set by ExprStmt codegen)
   codegen.emit(`return $ret;`);
 
@@ -316,4 +368,338 @@ export function generateMainScriptCode(
       codegenMs: _codegenMs,
     },
   };
+}
+
+/**
+ * Determine which main-script variables need caller accessors.
+ * Walks the main script IR body for function call names, cross-references
+ * with callerAccessMap, and returns matching script-level variables.
+ */
+function computeMainScriptCallerVars(
+  callerAccessMap: Map<string, Set<string>>,
+  irBody: IRStmt[],
+  sortedVarIds: string[],
+  varById: Map<string, IRVariable>,
+  codegen: Codegen
+): Array<{ name: string; jsRef: string }> {
+  // Collect function call names from the main script IR body
+  const callNames = new Set<string>();
+  collectIRCallNames(irBody, callNames);
+
+  // Find which variable names are needed
+  const neededVarNames = new Set<string>();
+  for (const callName of callNames) {
+    const baseName = callName.includes(".")
+      ? callName.slice(callName.lastIndexOf(".") + 1)
+      : callName;
+    const vars = callerAccessMap.get(baseName);
+    if (vars) {
+      for (const v of vars) neededVarNames.add(v);
+    }
+  }
+
+  if (neededVarNames.size === 0) return [];
+
+  // Intersect with script-level variables
+  const result: Array<{ name: string; jsRef: string }> = [];
+  for (const id of sortedVarIds) {
+    const v = varById.get(id);
+    if (v && neededVarNames.has(v.name)) {
+      result.push({ name: v.name, jsRef: codegen.varRef(id) });
+    }
+  }
+  return result;
+}
+
+/** Recursively collect function call names from IR statements. */
+function collectIRCallNames(stmts: IRStmt[], out: Set<string>): void {
+  for (const s of stmts) {
+    if (s.type === "Function") continue;
+    collectIRCallNamesFromStmt(s, out);
+  }
+}
+
+function collectIRCallNamesFromStmt(stmt: IRStmt, out: Set<string>): void {
+  switch (stmt.type) {
+    case "ExprStmt":
+      collectIRCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "Assign":
+      collectIRCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "MultiAssign":
+      collectIRCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "AssignLValue":
+      collectIRCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "If":
+      collectIRCallNamesFromExpr(stmt.cond, out);
+      collectIRCallNames(stmt.thenBody, out);
+      for (const c of stmt.elseifBlocks) {
+        collectIRCallNamesFromExpr(c.cond, out);
+        collectIRCallNames(c.body, out);
+      }
+      if (stmt.elseBody) collectIRCallNames(stmt.elseBody, out);
+      break;
+    case "For":
+      collectIRCallNamesFromExpr(stmt.expr, out);
+      collectIRCallNames(stmt.body, out);
+      break;
+    case "While":
+      collectIRCallNamesFromExpr(stmt.cond, out);
+      collectIRCallNames(stmt.body, out);
+      break;
+    case "Switch":
+      collectIRCallNamesFromExpr(stmt.expr, out);
+      for (const c of stmt.cases) {
+        collectIRCallNamesFromExpr(c.value, out);
+        collectIRCallNames(c.body, out);
+      }
+      if (stmt.otherwise) collectIRCallNames(stmt.otherwise, out);
+      break;
+    case "TryCatch":
+      collectIRCallNames(stmt.tryBody, out);
+      collectIRCallNames(stmt.catchBody, out);
+      break;
+    default:
+      break;
+  }
+}
+
+function collectIRCallNamesFromExpr(expr: IRExpr, out: Set<string>): void {
+  const k = expr.kind;
+  switch (k.type) {
+    case "FuncCall":
+      out.add(k.name);
+      for (const a of k.args) collectIRCallNamesFromExpr(a, out);
+      if (k.instanceBase) collectIRCallNamesFromExpr(k.instanceBase, out);
+      break;
+    case "MethodCall":
+      out.add(k.name);
+      collectIRCallNamesFromExpr(k.base, out);
+      for (const a of k.args) collectIRCallNamesFromExpr(a, out);
+      break;
+    case "Binary":
+      collectIRCallNamesFromExpr(k.left, out);
+      collectIRCallNamesFromExpr(k.right, out);
+      break;
+    case "Unary":
+      collectIRCallNamesFromExpr(k.operand, out);
+      break;
+    case "Range":
+      collectIRCallNamesFromExpr(k.start, out);
+      if (k.step) collectIRCallNamesFromExpr(k.step, out);
+      collectIRCallNamesFromExpr(k.end, out);
+      break;
+    case "Index":
+    case "IndexCell":
+      collectIRCallNamesFromExpr(k.base, out);
+      for (const i of k.indices) collectIRCallNamesFromExpr(i, out);
+      break;
+    case "Member":
+      collectIRCallNamesFromExpr(k.base, out);
+      break;
+    case "MemberDynamic":
+      collectIRCallNamesFromExpr(k.base, out);
+      collectIRCallNamesFromExpr(k.nameExpr, out);
+      break;
+    case "SuperConstructorCall":
+      for (const a of k.args) collectIRCallNamesFromExpr(a, out);
+      break;
+    case "AnonFunc":
+      collectIRCallNamesFromExpr(k.body, out);
+      break;
+    case "Tensor":
+    case "Cell":
+      for (const row of k.rows)
+        for (const e of row) collectIRCallNamesFromExpr(e, out);
+      break;
+    case "ClassInstantiation":
+      for (const a of k.args) collectIRCallNamesFromExpr(a, out);
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Scan all ASTs for assignin/evalin calls, returning:
+ * - workspaceNames: variable names accessed with 'workspace' scope
+ * - callerAccessMap: function base name → set of variable names accessed with 'caller' scope
+ */
+function collectAccessedNames(
+  mainAst: AbstractSyntaxTree,
+  fileASTCache: FileASTCache
+): {
+  workspaceNames: Set<string>;
+  callerAccessMap: Map<string, Set<string>>;
+} {
+  const workspaceNames = new Set<string>();
+  // Maps function base name → set of var names it accesses via caller
+  const callerAccessMap = new Map<string, Set<string>>();
+
+  // Track the enclosing function name stack
+  const funcNameStack: string[] = [];
+
+  function getStringLiteralValue(expr: Expr): string | null {
+    if (expr.type === "Char" || expr.type === "String")
+      return expr.value.replace(/^['"]|['"]$/g, "");
+    return null;
+  }
+
+  function baseName(name: string): string {
+    const dot = name.lastIndexOf(".");
+    return dot >= 0 ? name.slice(dot + 1) : name;
+  }
+
+  function walkExpr(expr: Expr): void {
+    switch (expr.type) {
+      case "FuncCall":
+        if (
+          (expr.name === "assignin" || expr.name === "evalin") &&
+          expr.args.length >= 2
+        ) {
+          const scope = getStringLiteralValue(expr.args[0]);
+          const varName = getStringLiteralValue(expr.args[1]);
+          if (varName) {
+            if (scope === "workspace") {
+              workspaceNames.add(varName);
+            } else if (scope === "caller") {
+              const enclosingFunc =
+                funcNameStack.length > 0
+                  ? funcNameStack[funcNameStack.length - 1]
+                  : null;
+              if (enclosingFunc) {
+                let vars = callerAccessMap.get(enclosingFunc);
+                if (!vars) {
+                  vars = new Set();
+                  callerAccessMap.set(enclosingFunc, vars);
+                }
+                vars.add(varName);
+              }
+            }
+          }
+        }
+        for (const a of expr.args) walkExpr(a);
+        break;
+      case "Binary":
+        walkExpr(expr.left);
+        walkExpr(expr.right);
+        break;
+      case "Unary":
+        walkExpr(expr.operand);
+        break;
+      case "Range":
+        walkExpr(expr.start);
+        if (expr.step) walkExpr(expr.step);
+        walkExpr(expr.end);
+        break;
+      case "Index":
+      case "IndexCell":
+        walkExpr(expr.base);
+        for (const i of expr.indices) walkExpr(i);
+        break;
+      case "Member":
+        walkExpr(expr.base);
+        break;
+      case "MemberDynamic":
+        walkExpr(expr.base);
+        walkExpr(expr.nameExpr);
+        break;
+      case "MethodCall":
+        walkExpr(expr.base);
+        for (const a of expr.args) walkExpr(a);
+        break;
+      case "SuperMethodCall":
+        for (const a of expr.args) walkExpr(a);
+        break;
+      case "AnonFunc":
+        walkExpr(expr.body);
+        break;
+      case "Tensor":
+      case "Cell":
+        for (const row of expr.rows) for (const e of row) walkExpr(e);
+        break;
+      case "ClassInstantiation":
+        for (const a of expr.args) walkExpr(a);
+        break;
+      default:
+        break;
+    }
+  }
+
+  function walkStmt(stmt: Stmt): void {
+    switch (stmt.type) {
+      case "ExprStmt":
+        walkExpr(stmt.expr);
+        break;
+      case "Assign":
+        walkExpr(stmt.expr);
+        break;
+      case "MultiAssign":
+        walkExpr(stmt.expr);
+        break;
+      case "AssignLValue":
+        walkExpr(stmt.expr);
+        break;
+      case "If":
+        walkExpr(stmt.cond);
+        stmt.thenBody.forEach(walkStmt);
+        stmt.elseifBlocks.forEach(c => {
+          walkExpr(c.cond);
+          c.body.forEach(walkStmt);
+        });
+        stmt.elseBody?.forEach(walkStmt);
+        break;
+      case "For":
+        walkExpr(stmt.expr);
+        stmt.body.forEach(walkStmt);
+        break;
+      case "While":
+        walkExpr(stmt.cond);
+        stmt.body.forEach(walkStmt);
+        break;
+      case "Switch":
+        walkExpr(stmt.expr);
+        stmt.cases.forEach(c => {
+          walkExpr(c.value);
+          c.body.forEach(walkStmt);
+        });
+        stmt.otherwise?.forEach(walkStmt);
+        break;
+      case "TryCatch":
+        stmt.tryBody.forEach(walkStmt);
+        stmt.catchBody.forEach(walkStmt);
+        break;
+      case "Function":
+        funcNameStack.push(baseName(stmt.name));
+        stmt.body.forEach(walkStmt);
+        funcNameStack.pop();
+        break;
+      case "Return":
+      case "Break":
+      case "Continue":
+      case "Global":
+      case "Persistent":
+        break;
+      case "ClassDef":
+        for (const m of stmt.members) {
+          if (m.type === "Methods") m.body.forEach(walkStmt);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Walk the main AST
+  for (const stmt of mainAst.body) walkStmt(stmt);
+
+  // Walk all cached workspace file ASTs
+  for (const [, ast] of fileASTCache) {
+    for (const stmt of ast.body) walkStmt(stmt);
+  }
+
+  return { workspaceNames, callerAccessMap };
 }

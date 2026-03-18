@@ -175,6 +175,11 @@ function lowerExprInner(
       // Class / local / workspace / builtin function with no args?
       const resolved = resolveFuncCall(ctx, expr.name, [], nargout, span);
       if (resolved) return resolved;
+      // Variable may be defined externally via assignin
+      if (ctx.isExternallyDefinable(expr.name)) {
+        const variable = ctx.defineVariable(expr.name, IType.Unknown);
+        return { kind: { type: "Var", variable }, span };
+      }
       // Undefined
       return {
         kind: {

@@ -7,7 +7,7 @@
 
 import { typeToString } from "../lowering/itemTypes.js";
 import { IRVariable } from "../lowering/loweringTypes.js";
-import { IRStmt } from "../lowering/nodes.js";
+import { IRStmt, type IRExpr } from "../lowering/nodes.js";
 import type { Codegen } from "./codegen.js";
 import { collectVarIds } from "./codegenHelpers.js";
 
@@ -221,6 +221,22 @@ export function genFunctionDef(
         }
       }
 
+      // Determine which local variables need caller accessors
+      const callerVarsNeeded = computeCallerVarsNeeded(
+        cg,
+        stmt.body,
+        ownVarIds
+      );
+      if (callerVarsNeeded.length > 0) {
+        const entries = callerVarsNeeded
+          .map(({ name, jsRef }) => {
+            return `${JSON.stringify(name)}: [() => ${jsRef}, ($v) => { ${jsRef} = $v; }]`;
+          })
+          .join(", ");
+        cg.emit(`$rt.pushCallerAccessors({${entries}});`);
+      } else {
+        cg.emit(`$rt.pushCallerAccessors(null);`);
+      }
       cg.emit(`$rt.pushCallFrame(${JSON.stringify(stmt.originalName)});`);
       cg.emit(`try {`);
       cg.pushIndent();
@@ -251,6 +267,7 @@ export function genFunctionDef(
         }
       }
       cg.emit(`$rt.popCallFrame();`);
+      cg.emit(`$rt.popCallerAccessors();`);
       cg.popIndent();
       cg.emit(`}`);
 
@@ -349,5 +366,170 @@ export function emitReturnCapture(
     cg.emit(
       `${fnCtx.resultVarName} = $nargout <= 1 ? ${firstOut} : [${outs}];`
     );
+  }
+}
+
+/**
+ * Extract the MATLAB variable name from a VarId (format: "name_N").
+ */
+function varNameFromId(id: string): string {
+  const lastUnderscore = id.lastIndexOf("_");
+  return lastUnderscore > 0 ? id.substring(0, lastUnderscore) : id;
+}
+
+/**
+ * Determine which local variables need caller accessors.
+ *
+ * Walks the function's IR body to find all function call base names,
+ * cross-references with callerAccessMap, and returns the intersection
+ * with the function's own variables (params + locals).
+ */
+function computeCallerVarsNeeded(
+  cg: Codegen,
+  body: IRStmt[],
+  ownVarIds: Set<string>
+): Array<{ name: string; jsRef: string }> {
+  if (cg.loweringCtx.callerAccessMap.size === 0) return [];
+
+  // Collect all function call base names from the IR body
+  const callNames = new Set<string>();
+  collectCallNames(body, callNames);
+
+  // Find which variable names are needed
+  const neededVarNames = new Set<string>();
+  for (const callName of callNames) {
+    const baseName = callName.includes(".")
+      ? callName.slice(callName.lastIndexOf(".") + 1)
+      : callName;
+    const vars = cg.loweringCtx.callerAccessMap.get(baseName);
+    if (vars) {
+      for (const v of vars) neededVarNames.add(v);
+    }
+  }
+
+  if (neededVarNames.size === 0) return [];
+
+  // Intersect with this function's own variables (params + locals)
+  const result: Array<{ name: string; jsRef: string }> = [];
+  const seen = new Set<string>();
+  for (const id of ownVarIds) {
+    const name = varNameFromId(id);
+    if (neededVarNames.has(name) && !seen.has(name)) {
+      seen.add(name);
+      result.push({ name, jsRef: cg.varRef(id) });
+    }
+  }
+  return result;
+}
+
+/** Recursively collect function call names from IR statements. */
+function collectCallNames(stmts: IRStmt[], out: Set<string>): void {
+  for (const s of stmts) {
+    if (s.type === "Function") continue; // Don't recurse into nested functions
+    collectCallNamesFromStmt(s, out);
+  }
+}
+
+function collectCallNamesFromStmt(stmt: IRStmt, out: Set<string>): void {
+  switch (stmt.type) {
+    case "ExprStmt":
+      collectCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "Assign":
+      collectCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "MultiAssign":
+      collectCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "AssignLValue":
+      collectCallNamesFromExpr(stmt.expr, out);
+      break;
+    case "If":
+      collectCallNamesFromExpr(stmt.cond, out);
+      collectCallNames(stmt.thenBody, out);
+      for (const c of stmt.elseifBlocks) {
+        collectCallNamesFromExpr(c.cond, out);
+        collectCallNames(c.body, out);
+      }
+      if (stmt.elseBody) collectCallNames(stmt.elseBody, out);
+      break;
+    case "For":
+      collectCallNamesFromExpr(stmt.expr, out);
+      collectCallNames(stmt.body, out);
+      break;
+    case "While":
+      collectCallNamesFromExpr(stmt.cond, out);
+      collectCallNames(stmt.body, out);
+      break;
+    case "Switch":
+      collectCallNamesFromExpr(stmt.expr, out);
+      for (const c of stmt.cases) {
+        collectCallNamesFromExpr(c.value, out);
+        collectCallNames(c.body, out);
+      }
+      if (stmt.otherwise) collectCallNames(stmt.otherwise, out);
+      break;
+    case "TryCatch":
+      collectCallNames(stmt.tryBody, out);
+      collectCallNames(stmt.catchBody, out);
+      break;
+    default:
+      break;
+  }
+}
+
+function collectCallNamesFromExpr(expr: IRExpr, out: Set<string>): void {
+  const k = expr.kind;
+  switch (k.type) {
+    case "FuncCall":
+      out.add(k.name);
+      for (const a of k.args) collectCallNamesFromExpr(a, out);
+      if (k.instanceBase) collectCallNamesFromExpr(k.instanceBase, out);
+      break;
+    case "MethodCall":
+      out.add(k.name);
+      collectCallNamesFromExpr(k.base, out);
+      for (const a of k.args) collectCallNamesFromExpr(a, out);
+      break;
+    case "Binary":
+      collectCallNamesFromExpr(k.left, out);
+      collectCallNamesFromExpr(k.right, out);
+      break;
+    case "Unary":
+      collectCallNamesFromExpr(k.operand, out);
+      break;
+    case "Range":
+      collectCallNamesFromExpr(k.start, out);
+      if (k.step) collectCallNamesFromExpr(k.step, out);
+      collectCallNamesFromExpr(k.end, out);
+      break;
+    case "Index":
+    case "IndexCell":
+      collectCallNamesFromExpr(k.base, out);
+      for (const i of k.indices) collectCallNamesFromExpr(i, out);
+      break;
+    case "Member":
+      collectCallNamesFromExpr(k.base, out);
+      break;
+    case "MemberDynamic":
+      collectCallNamesFromExpr(k.base, out);
+      collectCallNamesFromExpr(k.nameExpr, out);
+      break;
+    case "SuperConstructorCall":
+      for (const a of k.args) collectCallNamesFromExpr(a, out);
+      break;
+    case "AnonFunc":
+      collectCallNamesFromExpr(k.body, out);
+      break;
+    case "Tensor":
+    case "Cell":
+      for (const row of k.rows)
+        for (const e of row) collectCallNamesFromExpr(e, out);
+      break;
+    case "ClassInstantiation":
+      for (const a of k.args) collectCallNamesFromExpr(a, out);
+      break;
+    default:
+      break;
   }
 }

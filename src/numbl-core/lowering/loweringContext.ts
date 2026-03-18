@@ -162,6 +162,23 @@ export class LoweringContext {
   // Type environment: maps VarId → ItemType (decoupled from IRVariable)
   readonly typeEnv = new TypeEnv();
 
+  // Variable names accessed via assignin/evalin('workspace', ...)
+  // Set before lowering from AST scan results.
+  public workspaceAccessedVarNames = new Set<string>();
+
+  // Function base name → set of var names accessed via assignin/evalin('caller', ...)
+  // Set before lowering from AST scan results.
+  public callerAccessMap = new Map<string, Set<string>>();
+
+  /** Check if a variable name could be defined externally via assignin. */
+  public isExternallyDefinable(name: string): boolean {
+    if (this.workspaceAccessedVarNames.has(name)) return true;
+    for (const vars of this.callerAccessMap.values()) {
+      if (vars.has(name)) return true;
+    }
+    return false;
+  }
+
   // Local function ASTs (parsed but not yet lowered)
   private localFunctionASTs = new Map<string, Stmt & { type: "Function" }>();
 

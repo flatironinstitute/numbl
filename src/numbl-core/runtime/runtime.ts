@@ -155,6 +155,21 @@ export class Runtime {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public classMethodCache = new Map<string, ((...args: any[]) => any) | null>();
 
+  // Workspace accessors: varName → { get, set } closures over script-level vars
+  // Registered by generated code so assignin/evalin can access workspace variables
+  public workspaceAccessors = new Map<
+    string,
+    { get: () => unknown; set: (v: unknown) => void }
+  >();
+
+  // Caller accessor stack for evalin/assignin('caller', ...)
+  // Each entry is either null (no accessors needed) or a record of var accessors.
+  // Pushed/popped by generated function code.
+  public callerAccessorStack: (Record<
+    string,
+    [() => unknown, (v: unknown) => void]
+  > | null)[] = [];
+
   // File I/O adapter (injected from host environment)
   public fileIO?: FileIOAdapter;
 
@@ -573,6 +588,65 @@ export class Runtime {
   public setVariableValue(name: string, value: RuntimeValue | undefined): void {
     if (value === undefined) return;
     this.variableValues[name] = ensureRuntimeValue(value);
+  }
+
+  // ── Workspace accessors (for assignin/evalin) ──────────────────────
+
+  public setWorkspaceAccessor(
+    name: string,
+    getter: () => unknown,
+    setter: (v: unknown) => void
+  ): void {
+    this.workspaceAccessors.set(name, { get: getter, set: setter });
+  }
+
+  public getWorkspaceVariable(name: string): unknown | undefined {
+    const accessor = this.workspaceAccessors.get(name);
+    if (accessor) return accessor.get();
+    return undefined;
+  }
+
+  public setWorkspaceVariable(name: string, value: unknown): void {
+    const accessor = this.workspaceAccessors.get(name);
+    if (accessor) {
+      accessor.set(value);
+    }
+  }
+
+  // ── Caller accessors (for assignin/evalin('caller', ...)) ──────────
+
+  public pushCallerAccessors(
+    accessors: Record<string, [() => unknown, (v: unknown) => void]> | null
+  ): void {
+    this.callerAccessorStack.push(accessors);
+  }
+
+  public popCallerAccessors(): void {
+    this.callerAccessorStack.pop();
+  }
+
+  public getCallerVariable(name: string): unknown | undefined {
+    // The top of the stack is the current function's caller accessors.
+    // We need the one below it — the caller's accessors (set by the caller's caller).
+    // Actually, the stack is: each function pushes its own accessors before calling children.
+    // When a child calls evalin('caller', 'x'), the top of the stack is the child's push (null or its own).
+    // The caller's accessors are at index length - 2.
+    if (this.callerAccessorStack.length < 2) return undefined;
+    const callerAccessors =
+      this.callerAccessorStack[this.callerAccessorStack.length - 2];
+    if (!callerAccessors) return undefined;
+    const accessor = callerAccessors[name];
+    if (!accessor) return undefined;
+    return accessor[0]();
+  }
+
+  public setCallerVariable(name: string, value: unknown): void {
+    if (this.callerAccessorStack.length < 2) return;
+    const callerAccessors =
+      this.callerAccessorStack[this.callerAccessorStack.length - 2];
+    if (!callerAccessors) return;
+    const accessor = callerAccessors[name];
+    if (accessor) accessor[1](value);
   }
 
   // ── Persistent variables ────────────────────────────────────────────
