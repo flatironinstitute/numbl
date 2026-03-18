@@ -24,6 +24,10 @@ export function genFunctionDef(
 ): void {
   const effectiveJsId = jsId ?? `$fn_${cg.sanitizeName(stmt.functionId)}`;
 
+  // Save and reset globalVarRefs so mappings from other functions don't leak.
+  const savedGlobalVarRefs = new Map(cg.globalVarRefs);
+  cg.globalVarRefs.clear();
+
   return cg.withCodegenContext(
     { currentFunctionJsId: effectiveJsId, nargoutOverride: null },
     () => {
@@ -34,6 +38,15 @@ export function genFunctionDef(
       for (const o of stmt.outputs) ownVarIds.add(o.id.id);
       collectVarIds(stmt.body, ownVarIds);
 
+      // Pre-scan for Global statements to identify var IDs that should not
+      // get local `var` declarations (they are accessed via $rt.$g).
+      const globalVarIds = new Set<string>();
+      for (const s of stmt.body) {
+        if (s.type === "Global") {
+          for (const v of s.vars) globalVarIds.add(v.variable.id.id);
+        }
+      }
+
       // Determine which vars belong to a parent scope (shared via closure)
       const parentShared =
         cg.sharedVarIdStack.length > 0
@@ -41,9 +54,14 @@ export function genFunctionDef(
           : null;
 
       const paramIdSet = new Set(stmt.params.map(p => p.id.id));
-      // Local vars = own vars − params − parent-shared
+      // Local vars = own vars − params − parent-shared − globals
       const localVarIds = [...ownVarIds]
-        .filter(id => !paramIdSet.has(id) && !parentShared?.has(id))
+        .filter(
+          id =>
+            !paramIdSet.has(id) &&
+            !parentShared?.has(id) &&
+            !globalVarIds.has(id)
+        )
         .sort();
 
       const resultVarName = cg.freshTemp("$ret");
@@ -307,6 +325,9 @@ export function genFunctionDef(
       cg.emit(`}`);
 
       cg.currentFunctionOutputs.pop();
+
+      // Restore globalVarRefs so sibling function compilations are clean.
+      cg.globalVarRefs = savedGlobalVarRefs;
     }
   );
 }
