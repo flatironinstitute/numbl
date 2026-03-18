@@ -45,6 +45,11 @@ function toReIm(v: RuntimeValue): { re: number; im: number } {
   if (isRuntimeTensor(v) && v.data.length === 1) {
     return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
   }
+  if (isRuntimeSparseMatrix(v) && v.m === 1 && v.n === 1) {
+    const re = v.pr.length > 0 ? v.pr[0] : 0;
+    const im = v.pi && v.pi.length > 0 ? v.pi[0] : 0;
+    return { re, im };
+  }
   throw new RuntimeError(`Cannot convert ${kstr(v)} to number for assignment`);
 }
 
