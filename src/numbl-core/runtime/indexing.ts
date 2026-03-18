@@ -372,6 +372,40 @@ function indexIntoSparse(
         isComplex ? new Float64Array(nnz > 0 ? [val.im] : []) : undefined
       );
     }
+
+    // S(vector) or S(logical_vector) — linear vector indexing
+    if (isRuntimeTensor(idx) || isRuntimeLogical(idx)) {
+      const totalLen = base.m * base.n;
+      const linIdx = resolveIndex(idx, totalLen);
+      const n = linIdx.length;
+      const isComplex = base.pi !== undefined;
+      const irArr: number[] = [];
+      const prArr: number[] = [];
+      const piArr: number[] = [];
+      const jcNew = new Int32Array(n + 1);
+      // Result is 1 × n sparse (row vector, one column per index)
+      for (let i = 0; i < n; i++) {
+        jcNew[i] = irArr.length;
+        const k = linIdx[i];
+        const col = Math.floor(k / base.m);
+        const row = k % base.m;
+        const val = sparseElementAt(base, row, col);
+        if (val.re !== 0 || val.im !== 0) {
+          irArr.push(0);
+          prArr.push(val.re);
+          if (isComplex) piArr.push(val.im);
+        }
+      }
+      jcNew[n] = irArr.length;
+      return RTV.sparseMatrix(
+        1,
+        n,
+        new Int32Array(irArr),
+        jcNew,
+        new Float64Array(prArr),
+        isComplex ? new Float64Array(piArr) : undefined
+      );
+    }
   }
 
   if (indices.length === 2) {

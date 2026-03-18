@@ -154,6 +154,24 @@ function toSparseForCat(v: RuntimeValue): RuntimeSparseMatrix {
       new Float64Array([val])
     );
   }
+  if (isRuntimeComplexNumber(v)) {
+    if (v.re === 0 && v.im === 0)
+      return RTV.sparseMatrix(
+        1,
+        1,
+        new Int32Array(0),
+        new Int32Array([0, 0]),
+        new Float64Array(0)
+      );
+    return RTV.sparseMatrix(
+      1,
+      1,
+      new Int32Array([0]),
+      new Int32Array([0, 1]),
+      new Float64Array([v.re]),
+      v.im !== 0 ? new Float64Array([v.im]) : undefined
+    );
+  }
   if (isRuntimeTensor(v)) {
     // Dense tensor → sparse
     const m = v.shape[0] ?? 1;

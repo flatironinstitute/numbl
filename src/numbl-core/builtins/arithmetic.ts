@@ -364,9 +364,8 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   // Matrix right division: A / B = (B' \ A')' (uses mldivide)
   // When B is a matrix, always use matrix division (scalar A is promoted);
   // mLeftDiv will error on dimension mismatch, matching MATLAB behaviour.
-  if (isRuntimeSparseMatrix(b)) {
-    // Densify sparse b for matrix division
-    return mDiv(a, densify(b));
+  if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b)) {
+    return mDiv(densify(a), densify(b));
   }
   if (isRuntimeTensor(b)) {
     const at = mConjugateTranspose(coerceToTensor(a, "mrdivide"));
