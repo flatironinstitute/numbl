@@ -16,10 +16,12 @@ import {
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
+  isRuntimeSparseMatrix,
   isRuntimeChar,
   isRuntimeString,
   FloatXArray,
 } from "../runtime/types.js";
+import { sparseToDense } from "../../numbl-core/builtins/sparse-arithmetic.js";
 import { END_SENTINEL } from "../executor/types.js";
 
 // ── Deferred Range ──────────────────────────────────────────────────────
@@ -86,7 +88,12 @@ export function switchValuesMatch(a: RuntimeValue, b: RuntimeValue): boolean {
 }
 
 export function isNumericKind(v: RuntimeValue): boolean {
-  return isRuntimeTensor(v) || isRuntimeNumber(v) || isRuntimeLogical(v);
+  return (
+    isRuntimeTensor(v) ||
+    isRuntimeNumber(v) ||
+    isRuntimeLogical(v) ||
+    isRuntimeSparseMatrix(v)
+  );
 }
 
 export function elementWiseLogicalOp(
@@ -94,6 +101,10 @@ export function elementWiseLogicalOp(
   b: RuntimeValue,
   op: (x: number, y: number) => number
 ): RuntimeValue {
+  if (isRuntimeSparseMatrix(a))
+    return elementWiseLogicalOp(sparseToDense(a), b, op);
+  if (isRuntimeSparseMatrix(b))
+    return elementWiseLogicalOp(a, sparseToDense(b), op);
   const aIsT = isRuntimeTensor(a);
   const bIsT = isRuntimeTensor(b);
   const aData = aIsT ? a.data : new FloatXArray([toNumber(a)]);

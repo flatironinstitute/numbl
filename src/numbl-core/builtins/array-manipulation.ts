@@ -26,6 +26,7 @@ import {
 import { register, builtinSingle } from "./registry.js";
 import { mTranspose, mConjugateTranspose } from "./arithmetic.js";
 import { coerceToTensor } from "./shape-utils.js";
+import { sparseToDense } from "./sparse-arithmetic.js";
 
 /** Flip a sparse matrix along dimIdx: 0=rows (flipud), 1=cols (fliplr). */
 function flipSparse(
@@ -562,7 +563,8 @@ export function registerArrayManipulationFunctions(): void {
     builtinSingle(args => {
       if (args.length < 2)
         throw new RuntimeError("repmat requires at least 2 arguments");
-      const v = args[0];
+      let v = args[0];
+      if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
       let reps: number[];
       if (args.length === 2) {
         const arg1 = args[1];

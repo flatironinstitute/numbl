@@ -777,46 +777,42 @@ export function registerMathFunctions(): void {
     }),
     1
   );
-  register(
-    "sign",
-    builtinSingle(args => {
-      if (args.length !== 1) throw new RuntimeError("sign requires 1 argument");
-      const v = args[0];
-      if (isRuntimeComplexNumber(v)) {
-        const mag = Math.sqrt(v.re * v.re + v.im * v.im);
-        if (mag === 0) return RTV.num(0);
-        return RTV.complex(v.re / mag, v.im / mag);
-      }
-      if (isRuntimeNumber(v)) return RTV.num(Math.sign(v));
-      if (isRuntimeLogical(v)) return RTV.num(Math.sign(v ? 1 : 0));
-      if (isRuntimeTensor(v)) {
-        if (v.imag) {
-          // Complex tensor: sign(z) = z / abs(z)
-          const resultRe = new FloatXArray(v.data.length);
-          const resultIm = new FloatXArray(v.data.length);
-          for (let i = 0; i < v.data.length; i++) {
-            const re = v.data[i];
-            const im = v.imag[i];
-            const mag = Math.sqrt(re * re + im * im);
-            if (mag === 0) {
-              resultRe[i] = 0;
-              resultIm[i] = 0;
-            } else {
-              resultRe[i] = re / mag;
-              resultIm[i] = im / mag;
-            }
+  const signApply = (args: RuntimeValue[]): RuntimeValue => {
+    if (args.length !== 1) throw new RuntimeError("sign requires 1 argument");
+    let v = args[0];
+    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    if (isRuntimeComplexNumber(v)) {
+      const mag = Math.sqrt(v.re * v.re + v.im * v.im);
+      if (mag === 0) return RTV.num(0);
+      return RTV.complex(v.re / mag, v.im / mag);
+    }
+    if (isRuntimeNumber(v)) return RTV.num(Math.sign(v));
+    if (isRuntimeLogical(v)) return RTV.num(Math.sign(v ? 1 : 0));
+    if (isRuntimeTensor(v)) {
+      if (v.imag) {
+        const resultRe = new FloatXArray(v.data.length);
+        const resultIm = new FloatXArray(v.data.length);
+        for (let i = 0; i < v.data.length; i++) {
+          const re = v.data[i];
+          const im = v.imag[i];
+          const mag = Math.sqrt(re * re + im * im);
+          if (mag === 0) {
+            resultRe[i] = 0;
+            resultIm[i] = 0;
+          } else {
+            resultRe[i] = re / mag;
+            resultIm[i] = im / mag;
           }
-          return RTV.tensor(resultRe, v.shape, resultIm);
         }
-        const result = new FloatXArray(v.data.length);
-        for (let i = 0; i < v.data.length; i++)
-          result[i] = Math.sign(v.data[i]);
-        return RTV.tensor(result, v.shape);
+        return RTV.tensor(resultRe, v.shape, resultIm);
       }
-      throw new RuntimeError("Expected numeric argument");
-    }),
-    1
-  );
+      const result = new FloatXArray(v.data.length);
+      for (let i = 0; i < v.data.length; i++) result[i] = Math.sign(v.data[i]);
+      return RTV.tensor(result, v.shape);
+    }
+    throw new RuntimeError("Expected numeric argument");
+  };
+  register("sign", builtinSingle(signApply), 1);
 
   register(
     "gamma",
@@ -1083,6 +1079,8 @@ export function registerMathFunctions(): void {
       const v = args[0];
       if (isRuntimeComplexNumber(v)) return RTV.logical(false);
       if (isRuntimeTensor(v) && v.imag !== undefined) return RTV.logical(false);
+      if (isRuntimeSparseMatrix(v) && v.pi !== undefined)
+        return RTV.logical(false);
       return RTV.logical(true);
     }),
     1
