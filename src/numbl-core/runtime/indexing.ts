@@ -173,6 +173,29 @@ function sparseSubmatrix(
   );
 }
 
+/** Extract RHS values as individual RuntimeValues for element-wise assignment. */
+function extractRhsValues(rhs: RuntimeValue, count: number): RuntimeValue[] {
+  if (
+    isRuntimeNumber(rhs) ||
+    isRuntimeLogical(rhs) ||
+    isRuntimeComplexNumber(rhs)
+  ) {
+    return new Array(count).fill(rhs);
+  }
+  if (isRuntimeTensor(rhs)) {
+    const result: RuntimeValue[] = [];
+    for (let i = 0; i < count; i++) {
+      if (rhs.imag) {
+        result.push(RTV.complex(rhs.data[i], rhs.imag[i]));
+      } else {
+        result.push(RTV.num(rhs.data[i]));
+      }
+    }
+    return result;
+  }
+  return new Array(count).fill(rhs);
+}
+
 /** Assign into a sparse matrix: S(rows, cols) = rhs.
  *  Supports scalar, vector, and submatrix assignment.
  *  Returns a new sparse matrix (COW). */
@@ -181,10 +204,30 @@ function storeIntoSparse(
   indices: RuntimeValue[],
   rhs: RuntimeValue
 ): RuntimeSparseMatrix {
+  if (indices.length === 1) {
+    // Linear indexing: convert to 2D (row, col) pairs
+    const totalLen = base.m * base.n;
+    const linIdx = resolveIndex(indices[0], totalLen);
+    // Convert each linear index to (row, col) and do element-wise assignment
+    const rowIdx = linIdx.map(k => k % base.m);
+    const colIdx = linIdx.map(k => Math.floor(k / base.m));
+    // For linear indexing, each element maps independently, so we need
+    // to assign one at a time to handle non-contiguous row/col pairs
+    let result = base;
+    const rhsVals = extractRhsValues(rhs, linIdx.length);
+    for (let i = 0; i < linIdx.length; i++) {
+      const r = rowIdx[i];
+      const c = colIdx[i];
+      result = storeIntoSparse(
+        result,
+        [RTV.num(r + 1), RTV.num(c + 1)],
+        rhsVals[i]
+      );
+    }
+    return result;
+  }
   if (indices.length !== 2) {
-    throw new RuntimeError(
-      "Sparse matrix assignment requires 2 indices (row, col)"
-    );
+    throw new RuntimeError("Sparse matrix assignment requires 1 or 2 indices");
   }
 
   const rowIdx = resolveIndex(indices[0], base.m);

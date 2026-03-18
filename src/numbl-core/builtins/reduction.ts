@@ -553,7 +553,11 @@ export function registerReductionFunctions(): void {
       apply: args => {
         if (args.length < 1)
           throw new RuntimeError("prod requires at least 1 argument");
-        const v = args[0];
+        let v = args[0];
+        if (isRuntimeSparseMatrix(v)) {
+          v = sparseToDense(v);
+          args = [v, ...args.slice(1)];
+        }
         if (isRuntimeNumber(v)) return v;
         if (isRuntimeTensor(v)) {
           // Complex prod needs special handling (can't reduce real/imag independently)
@@ -1734,7 +1738,8 @@ export function registerReductionFunctions(): void {
   ): RuntimeValue => {
     if (args.length < 1)
       throw new RuntimeError(`${name} requires at least 1 argument`);
-    const v = args[0];
+    let v = args[0];
+    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
     if (isRuntimeNumber(v)) return v;
     if (isRuntimeTensor(v)) {
       const shape = v.shape;
@@ -1915,6 +1920,8 @@ export function registerReductionFunctions(): void {
       apply: args => {
         if (args.length < 1)
           throw new RuntimeError("diff requires at least 1 argument");
+        if (isRuntimeSparseMatrix(args[0]))
+          args = [sparseToDense(args[0]), ...args.slice(1)];
         const n = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
         const dimArg =
           args.length >= 3 ? Math.round(toNumber(args[2])) : undefined;

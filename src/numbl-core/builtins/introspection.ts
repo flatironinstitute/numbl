@@ -21,6 +21,7 @@ import {
   RuntimeStruct,
 } from "../runtime/types.js";
 import { register, builtinSingle } from "./registry.js";
+import { sparseToDense } from "./sparse-arithmetic.js";
 
 /** Extract string content from either a RuntimeChar or RuntimeString. */
 function charOrStringValue(v: RuntimeValue): string {
@@ -55,6 +56,9 @@ function valuesEqual(a: RuntimeValue, b: RuntimeValue): boolean {
   ) {
     return charOrStringValue(a) === charOrStringValue(b);
   }
+  // Densify sparse for comparison
+  if (isRuntimeSparseMatrix(a)) return valuesEqual(sparseToDense(a), b);
+  if (isRuntimeSparseMatrix(b)) return valuesEqual(a, sparseToDense(b));
   // Numeric types (number, logical, tensor) are all comparable by value
   const aNum = isRuntimeNumber(a) || isRuntimeLogical(a) || isRuntimeTensor(a);
   const bNum = isRuntimeNumber(b) || isRuntimeLogical(b) || isRuntimeTensor(b);
