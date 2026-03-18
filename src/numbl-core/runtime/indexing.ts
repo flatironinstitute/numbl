@@ -1141,6 +1141,21 @@ export function storeIntoRTValueIndex(
     return storeIntoSparse(base, indices, rhs);
   }
 
+  // Auto-convert sparse RHS to dense when assigning into a dense tensor
+  if (isRuntimeSparseMatrix(rhs) && !isRuntimeSparseMatrix(base)) {
+    const S = rhs;
+    const data = new FloatXArray(S.m * S.n);
+    const imag = S.pi ? new FloatXArray(S.m * S.n) : undefined;
+    for (let col = 0; col < S.n; col++) {
+      for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
+        const idx = col * S.m + S.ir[k];
+        data[idx] = S.pr[k];
+        if (imag && S.pi) imag[idx] = S.pi[k];
+      }
+    }
+    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n], _rc: 1 };
+  }
+
   if (isRuntimeTensor(base)) {
     // Element deletion: base(idx) = [] removes elements at idx
     if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 1) {
