@@ -137,6 +137,10 @@ export class Codegen {
   /** Set of nested function names currently in scope (for direct call/handle resolution). */
   nestedFunctionNames = new Set<string>();
 
+  /** Stack of variable maps for eval() intrinsic generation (MATLAB name → JS ref).
+   *  Only pushed for functions whose body contains eval() calls. */
+  evalVarAccessorStack: Array<Map<string, string>> = [];
+
   /** When generating a class method, the method name (for per-file local function scoping). */
   currentMethodName: string | null = null;
 

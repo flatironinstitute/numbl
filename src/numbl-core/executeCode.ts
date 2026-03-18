@@ -94,6 +94,19 @@ export function executeCode(
   );
   jit.install();
 
+  // Wire up eval-with-local-vars callback
+  rt.evalLocalCallback = (code, initialVars, onOutput) => {
+    const evalResult = executeCode(code, {
+      onOutput,
+      displayResults: false,
+      initialVariableValues: initialVars,
+    });
+    return {
+      returnValue: evalResult.returnValue,
+      variableValues: evalResult.variableValues,
+    };
+  };
+
   try {
     const syncCode = `${jsCode}`;
     const fn = new Function("$rt", syncCode);
