@@ -690,8 +690,24 @@ export function registerMiscFunctions(): void {
 
   register(
     "warning",
-    builtinSingle(() => {
-      // Silently ignore warnings for now
+    builtinSingle(args => {
+      // warning('off'/'on', 'ID') → return struct with previous state
+      if (
+        args.length === 2 &&
+        isRuntimeChar(args[0]) &&
+        isRuntimeChar(args[1])
+      ) {
+        const state = toString(args[0]);
+        if (state === "on" || state === "off") {
+          return RTV.struct(
+            new Map<string, RuntimeValue>([
+              ["state", RTV.char("on")],
+              ["identifier", args[1]],
+            ])
+          );
+        }
+      }
+      // All other forms: silently ignore
       return RTV.num(0);
     })
   );
