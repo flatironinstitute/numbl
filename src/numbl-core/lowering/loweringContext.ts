@@ -19,6 +19,7 @@ import { type ClassInfo, extractClassInfo } from "./classInfo.js";
 import { computeSpecKey } from "./specKey.js";
 import { lowerFunction } from "./lowerStmt.js";
 import { TypeEnv } from "./typeEnv.js";
+import { type ExternalAccessDirectives } from "../externalAccessDirective.js";
 
 // Re-export ClassInfo for consumers
 export type { ClassInfo } from "./classInfo.js";
@@ -53,6 +54,8 @@ interface WorkspaceRegistry {
   searchPaths: string[];
   /** Absolute fileName → resolved function name (e.g. "pkg.func") */
   fileToFuncName: Map<string, string>;
+  /** Per-file external-access directives: fileName → ExternalAccessDirectives */
+  externalAccessByFile: Map<string, ExternalAccessDirectives>;
 }
 
 function createWorkspaceRegistry(): WorkspaceRegistry {
@@ -66,6 +69,7 @@ function createWorkspaceRegistry(): WorkspaceRegistry {
     fileASTCache: new Map(),
     searchPaths: [],
     fileToFuncName: new Map(),
+    externalAccessByFile: new Map(),
   };
 }
 
@@ -162,21 +166,14 @@ export class LoweringContext {
   // Type environment: maps VarId → ItemType (decoupled from IRVariable)
   readonly typeEnv = new TypeEnv();
 
-  // Variable names accessed via assignin/evalin('workspace', ...)
-  // Set before lowering from AST scan results.
-  public workspaceAccessedVarNames = new Set<string>();
-
-  // Function base name → set of var names accessed via assignin/evalin('caller', ...)
-  // Set before lowering from AST scan results.
-  public callerAccessMap = new Map<string, Set<string>>();
+  // Variable names declared via `% external-access:` directive in the current scope.
+  // For scripts: these get workspace + caller accessors.
+  // For functions: these get caller accessors.
+  public externalAccessVarNames = new Set<string>();
 
   /** Check if a variable name could be defined externally via assignin. */
   public isExternallyDefinable(name: string): boolean {
-    if (this.workspaceAccessedVarNames.has(name)) return true;
-    for (const vars of this.callerAccessMap.values()) {
-      if (vars.has(name)) return true;
-    }
-    return false;
+    return this.externalAccessVarNames.has(name);
   }
 
   // Local function ASTs (parsed but not yet lowered)
@@ -633,6 +630,14 @@ export class LoweringContext {
       }
     }
     ctx.registry = this.registry;
+    // Apply external-access directives for the primary function
+    const directives = this.registry.externalAccessByFile.get(entry.fileName);
+    if (directives) {
+      const funcVars = directives.functionScope.get(funcName);
+      const combined = new Set(directives.fileScope);
+      if (funcVars) for (const v of funcVars) combined.add(v);
+      ctx.externalAccessVarNames = combined;
+    }
     this.registry.fileContexts.set(cacheKey, ctx);
     return ctx;
   }
@@ -690,6 +695,15 @@ export class LoweringContext {
 
     // Share the workspace registry
     ctx.registry = this.registry;
+
+    // Apply external-access directives for the primary function
+    const directives = this.registry.externalAccessByFile.get(entry.fileName);
+    if (directives) {
+      const funcVars = directives.functionScope.get(funcName);
+      const combined = new Set(directives.fileScope);
+      if (funcVars) for (const v of funcVars) combined.add(v);
+      ctx.externalAccessVarNames = combined;
+    }
 
     this.registry.fileContexts.set(funcName, ctx);
     return ctx;

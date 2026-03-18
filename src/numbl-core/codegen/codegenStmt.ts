@@ -24,43 +24,19 @@ import {
 
 /**
  * After codegen processes a statement containing function calls,
- * reset types of externally-settable variables so subsequent codegen
- * doesn't use stale type assumptions for native math inlining.
+ * reset types of variables declared via `% external-access:` to Unknown
+ * so subsequent codegen doesn't use stale type assumptions.
  */
 function resetExternallySettableTypesForCodegen(
   cg: Codegen,
   irExpr: IRExpr
 ): void {
   const ctx = cg.loweringCtx;
-  if (
-    ctx.workspaceAccessedVarNames.size === 0 &&
-    ctx.callerAccessMap.size === 0
-  ) {
-    return;
-  }
-
-  if (ctx.workspaceAccessedVarNames.size > 0 && exprHasFuncCall(irExpr)) {
-    for (const name of ctx.workspaceAccessedVarNames) {
-      const v = ctx.lookup(name);
-      if (v) cg.typeEnv.set(v.id, IType.Unknown);
-    }
-  }
-
-  if (ctx.callerAccessMap.size > 0) {
-    const callNames = new Set<string>();
-    collectExprCallNames(irExpr, callNames);
-    for (const callName of callNames) {
-      const baseName = callName.includes(".")
-        ? callName.slice(callName.lastIndexOf(".") + 1)
-        : callName;
-      const vars = ctx.callerAccessMap.get(baseName);
-      if (vars) {
-        for (const varName of vars) {
-          const v = ctx.lookup(varName);
-          if (v) cg.typeEnv.set(v.id, IType.Unknown);
-        }
-      }
-    }
+  if (ctx.externalAccessVarNames.size === 0) return;
+  if (!exprHasFuncCall(irExpr)) return;
+  for (const name of ctx.externalAccessVarNames) {
+    const v = ctx.lookup(name);
+    if (v) cg.typeEnv.set(v.id, IType.Unknown);
   }
 }
 
@@ -96,62 +72,6 @@ function exprHasFuncCall(expr: IRExpr): boolean {
       return k.rows.some(row => row.some(e => exprHasFuncCall(e)));
     default:
       return false;
-  }
-}
-
-function collectExprCallNames(expr: IRExpr, out: Set<string>): void {
-  const k = expr.kind;
-  switch (k.type) {
-    case "FuncCall":
-      out.add(k.name);
-      for (const a of k.args) collectExprCallNames(a, out);
-      if (k.instanceBase) collectExprCallNames(k.instanceBase, out);
-      break;
-    case "MethodCall":
-      out.add(k.name);
-      collectExprCallNames(k.base, out);
-      for (const a of k.args) collectExprCallNames(a, out);
-      break;
-    case "Binary":
-      collectExprCallNames(k.left, out);
-      collectExprCallNames(k.right, out);
-      break;
-    case "Unary":
-      collectExprCallNames(k.operand, out);
-      break;
-    case "Range":
-      collectExprCallNames(k.start, out);
-      if (k.step) collectExprCallNames(k.step, out);
-      collectExprCallNames(k.end, out);
-      break;
-    case "Index":
-    case "IndexCell":
-      collectExprCallNames(k.base, out);
-      for (const i of k.indices) collectExprCallNames(i, out);
-      break;
-    case "Member":
-      collectExprCallNames(k.base, out);
-      break;
-    case "MemberDynamic":
-      collectExprCallNames(k.base, out);
-      collectExprCallNames(k.nameExpr, out);
-      break;
-    case "SuperConstructorCall":
-      for (const a of k.args) collectExprCallNames(a, out);
-      break;
-    case "AnonFunc":
-      collectExprCallNames(k.body, out);
-      break;
-    case "Tensor":
-    case "Cell":
-      for (const row of k.rows)
-        for (const e of row) collectExprCallNames(e, out);
-      break;
-    case "ClassInstantiation":
-      for (const a of k.args) collectExprCallNames(a, out);
-      break;
-    default:
-      break;
   }
 }
 

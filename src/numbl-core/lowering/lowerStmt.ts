@@ -26,48 +26,18 @@ import { type TypeEnv } from "./typeEnv.js";
 
 /**
  * After lowering an expression that may contain function calls, reset the
- * inferred types of variables that could be modified externally via
- * assignin('workspace', ...) or assignin('caller', ...).
- *
- * - Workspace-settable variables: reset after ANY function call
- * - Caller-settable variables: reset only after calls to specific functions
+ * inferred types of variables declared via `% external-access:` to Unknown.
+ * Any function call could potentially modify these variables externally.
  */
 function resetExternallySettableTypes(
   ctx: LoweringContext,
   irExpr: IRExpr
 ): void {
-  if (
-    ctx.workspaceAccessedVarNames.size === 0 &&
-    ctx.callerAccessMap.size === 0
-  ) {
-    return;
-  }
-
-  const hasFuncCall =
-    ctx.workspaceAccessedVarNames.size > 0 && irExprContainsFuncCall(irExpr);
-
-  if (hasFuncCall) {
-    for (const name of ctx.workspaceAccessedVarNames) {
-      const v = ctx.lookup(name);
-      if (v) ctx.typeEnv.set(v.id, IType.Unknown);
-    }
-  }
-
-  if (ctx.callerAccessMap.size > 0) {
-    const callNames = new Set<string>();
-    collectIRFuncCallNames(irExpr, callNames);
-    for (const callName of callNames) {
-      const baseName = callName.includes(".")
-        ? callName.slice(callName.lastIndexOf(".") + 1)
-        : callName;
-      const vars = ctx.callerAccessMap.get(baseName);
-      if (vars) {
-        for (const varName of vars) {
-          const v = ctx.lookup(varName);
-          if (v) ctx.typeEnv.set(v.id, IType.Unknown);
-        }
-      }
-    }
+  if (ctx.externalAccessVarNames.size === 0) return;
+  if (!irExprContainsFuncCall(irExpr)) return;
+  for (const name of ctx.externalAccessVarNames) {
+    const v = ctx.lookup(name);
+    if (v) ctx.typeEnv.set(v.id, IType.Unknown);
   }
 }
 
@@ -108,62 +78,6 @@ function irExprContainsFuncCall(expr: IRExpr): boolean {
       return k.rows.some(row => row.some(e => irExprContainsFuncCall(e)));
     default:
       return false;
-  }
-}
-
-function collectIRFuncCallNames(expr: IRExpr, out: Set<string>): void {
-  const k = expr.kind;
-  switch (k.type) {
-    case "FuncCall":
-      out.add(k.name);
-      for (const a of k.args) collectIRFuncCallNames(a, out);
-      if (k.instanceBase) collectIRFuncCallNames(k.instanceBase, out);
-      break;
-    case "MethodCall":
-      out.add(k.name);
-      collectIRFuncCallNames(k.base, out);
-      for (const a of k.args) collectIRFuncCallNames(a, out);
-      break;
-    case "Binary":
-      collectIRFuncCallNames(k.left, out);
-      collectIRFuncCallNames(k.right, out);
-      break;
-    case "Unary":
-      collectIRFuncCallNames(k.operand, out);
-      break;
-    case "Range":
-      collectIRFuncCallNames(k.start, out);
-      if (k.step) collectIRFuncCallNames(k.step, out);
-      collectIRFuncCallNames(k.end, out);
-      break;
-    case "Index":
-    case "IndexCell":
-      collectIRFuncCallNames(k.base, out);
-      for (const i of k.indices) collectIRFuncCallNames(i, out);
-      break;
-    case "Member":
-      collectIRFuncCallNames(k.base, out);
-      break;
-    case "MemberDynamic":
-      collectIRFuncCallNames(k.base, out);
-      collectIRFuncCallNames(k.nameExpr, out);
-      break;
-    case "SuperConstructorCall":
-      for (const a of k.args) collectIRFuncCallNames(a, out);
-      break;
-    case "AnonFunc":
-      collectIRFuncCallNames(k.body, out);
-      break;
-    case "Tensor":
-    case "Cell":
-      for (const row of k.rows)
-        for (const e of row) collectIRFuncCallNames(e, out);
-      break;
-    case "ClassInstantiation":
-      for (const a of k.args) collectIRFuncCallNames(a, out);
-      break;
-    default:
-      break;
   }
 }
 
@@ -947,6 +861,16 @@ export function lowerFunction(
   stmt: AstStmt & { type: "Function" },
   paramTypes?: ItemType[]
 ): IRStmt & { type: "Function" } {
+  // Save and set function-specific external-access vars from directives
+  const savedExternalAccessVarNames = ctx.externalAccessVarNames;
+  const directives = ctx.registry.externalAccessByFile.get(ctx.mainFileName);
+  if (directives) {
+    const funcVars = directives.functionScope.get(stmt.name);
+    ctx.externalAccessVarNames = funcVars ?? new Set();
+  } else {
+    ctx.externalAccessVarNames = new Set();
+  }
+
   // Determine if this is a true nested function (defined inside another
   // function body) vs a top-level subfunction. Nested functions share the
   // parent workspace via closure; subfunctions use isolated scope.
@@ -1038,6 +962,13 @@ export function lowerFunction(
     );
   }
 
+  // Pre-define external-access vars that aren't already in scope
+  for (const name of ctx.externalAccessVarNames) {
+    if (!ctx.lookup(name)) {
+      ctx.defineVariable(name, undefined);
+    }
+  }
+
   // Lower the body
   funcStmt.body = lowerStmts(ctx, stmt.body);
 
@@ -1047,6 +978,9 @@ export function lowerFunction(
   );
 
   ctx.popScope();
+
+  // Restore parent's external-access vars
+  ctx.externalAccessVarNames = savedExternalAccessVarNames;
 
   return funcStmt;
 }

@@ -240,9 +240,7 @@ export function genFunctionDef(
       }
 
       // Check if this function body contains any eval() calls
-      const bodyCallNames = new Set<string>();
-      collectCallNames(stmt.body, bodyCallNames);
-      const hasEvalCall = bodyCallNames.has("eval");
+      const hasEvalCall = bodyContainsEvalCall(stmt.body);
 
       if (hasEvalCall) {
         const evalVarMap = new Map<string, string>();
@@ -258,19 +256,36 @@ export function genFunctionDef(
         cg.evalVarAccessorStack.push(evalVarMap);
       }
 
-      // Determine which local variables need caller accessors
-      const callerVarsNeeded = computeCallerVarsNeeded(
+      // Register caller accessors for external-access vars declared in this function
+      const externalVars = getExternalAccessVarsForFunction(
         cg,
-        stmt.body,
-        ownVarIds
+        stmt.originalName
       );
-      if (callerVarsNeeded.length > 0) {
-        const entries = callerVarsNeeded
-          .map(({ name, jsRef }) => {
-            return `${JSON.stringify(name)}: [() => ${jsRef}, ($v) => { ${jsRef} = $v; }]`;
-          })
-          .join(", ");
-        cg.emit(`$rt.pushCallerAccessors({${entries}});`);
+      // Also pre-declare any external-access vars that aren't already in ownVarIds
+      for (const name of externalVars) {
+        const found = [...ownVarIds].some(id => varNameFromId(id) === name);
+        if (!found) {
+          // Define a new variable for this external-access name
+          const v = cg.loweringCtx.defineVariable(name, undefined);
+          ownVarIds.add(v.id.id);
+          // Also need to emit a var declaration for it
+          cg.emit(`var ${cg.varRef(v.id.id)};`);
+        }
+      }
+      if (externalVars.size > 0) {
+        const entries: string[] = [];
+        const seen = new Set<string>();
+        for (const id of ownVarIds) {
+          const name = varNameFromId(id);
+          if (externalVars.has(name) && !seen.has(name)) {
+            seen.add(name);
+            const jsRef = cg.varRef(id);
+            entries.push(
+              `${JSON.stringify(name)}: [() => ${jsRef}, ($v) => { ${jsRef} = $v; }]`
+            );
+          }
+        }
+        cg.emit(`$rt.pushCallerAccessors({${entries.join(", ")}});`);
       } else {
         cg.emit(`$rt.pushCallerAccessors(null);`);
       }
@@ -421,159 +436,107 @@ function varNameFromId(id: string): string {
   return lastUnderscore > 0 ? id.substring(0, lastUnderscore) : id;
 }
 
-/**
- * Determine which local variables need caller accessors.
- *
- * Walks the function's IR body to find all function call base names,
- * cross-references with callerAccessMap, and returns the intersection
- * with the function's own variables (params + locals).
- */
-function computeCallerVarsNeeded(
-  cg: Codegen,
-  body: IRStmt[],
-  ownVarIds: Set<string>
-): Array<{ name: string; jsRef: string }> {
-  if (cg.loweringCtx.callerAccessMap.size === 0) return [];
-
-  // Collect all function call base names from the IR body
-  const callNames = new Set<string>();
-  collectCallNames(body, callNames);
-
-  // Find which variable names are needed
-  const neededVarNames = new Set<string>();
-  for (const callName of callNames) {
-    const baseName = callName.includes(".")
-      ? callName.slice(callName.lastIndexOf(".") + 1)
-      : callName;
-    const vars = cg.loweringCtx.callerAccessMap.get(baseName);
-    if (vars) {
-      for (const v of vars) neededVarNames.add(v);
-    }
-  }
-
-  if (neededVarNames.size === 0) return [];
-
-  // Intersect with this function's own variables (params + locals)
-  const result: Array<{ name: string; jsRef: string }> = [];
-  const seen = new Set<string>();
-  for (const id of ownVarIds) {
-    const name = varNameFromId(id);
-    if (neededVarNames.has(name) && !seen.has(name)) {
-      seen.add(name);
-      result.push({ name, jsRef: cg.varRef(id) });
-    }
-  }
-  return result;
-}
-
-/** Recursively collect function call names from IR statements. */
-function collectCallNames(stmts: IRStmt[], out: Set<string>): void {
+/** Check if any IR statement in the body contains a FuncCall to "eval". */
+function bodyContainsEvalCall(stmts: IRStmt[]): boolean {
   for (const s of stmts) {
-    if (s.type === "Function") continue; // Don't recurse into nested functions
-    collectCallNamesFromStmt(s, out);
+    if (s.type === "Function") continue;
+    if (stmtContainsEvalCall(s)) return true;
   }
+  return false;
 }
 
-function collectCallNamesFromStmt(stmt: IRStmt, out: Set<string>): void {
+function stmtContainsEvalCall(stmt: IRStmt): boolean {
   switch (stmt.type) {
     case "ExprStmt":
-      collectCallNamesFromExpr(stmt.expr, out);
-      break;
     case "Assign":
-      collectCallNamesFromExpr(stmt.expr, out);
-      break;
     case "MultiAssign":
-      collectCallNamesFromExpr(stmt.expr, out);
-      break;
     case "AssignLValue":
-      collectCallNamesFromExpr(stmt.expr, out);
-      break;
+      return exprContainsEvalCall(stmt.expr);
     case "If":
-      collectCallNamesFromExpr(stmt.cond, out);
-      collectCallNames(stmt.thenBody, out);
-      for (const c of stmt.elseifBlocks) {
-        collectCallNamesFromExpr(c.cond, out);
-        collectCallNames(c.body, out);
-      }
-      if (stmt.elseBody) collectCallNames(stmt.elseBody, out);
-      break;
+      return (
+        exprContainsEvalCall(stmt.cond) ||
+        bodyContainsEvalCall(stmt.thenBody) ||
+        stmt.elseifBlocks.some(
+          c => exprContainsEvalCall(c.cond) || bodyContainsEvalCall(c.body)
+        ) ||
+        (stmt.elseBody !== null && bodyContainsEvalCall(stmt.elseBody))
+      );
     case "For":
-      collectCallNamesFromExpr(stmt.expr, out);
-      collectCallNames(stmt.body, out);
-      break;
+      return exprContainsEvalCall(stmt.expr) || bodyContainsEvalCall(stmt.body);
     case "While":
-      collectCallNamesFromExpr(stmt.cond, out);
-      collectCallNames(stmt.body, out);
-      break;
+      return exprContainsEvalCall(stmt.cond) || bodyContainsEvalCall(stmt.body);
     case "Switch":
-      collectCallNamesFromExpr(stmt.expr, out);
-      for (const c of stmt.cases) {
-        collectCallNamesFromExpr(c.value, out);
-        collectCallNames(c.body, out);
-      }
-      if (stmt.otherwise) collectCallNames(stmt.otherwise, out);
-      break;
+      return (
+        exprContainsEvalCall(stmt.expr) ||
+        stmt.cases.some(
+          c => exprContainsEvalCall(c.value) || bodyContainsEvalCall(c.body)
+        ) ||
+        (stmt.otherwise !== null && bodyContainsEvalCall(stmt.otherwise))
+      );
     case "TryCatch":
-      collectCallNames(stmt.tryBody, out);
-      collectCallNames(stmt.catchBody, out);
-      break;
+      return (
+        bodyContainsEvalCall(stmt.tryBody) ||
+        bodyContainsEvalCall(stmt.catchBody)
+      );
     default:
-      break;
+      return false;
   }
 }
 
-function collectCallNamesFromExpr(expr: IRExpr, out: Set<string>): void {
+function exprContainsEvalCall(expr: IRExpr): boolean {
   const k = expr.kind;
-  switch (k.type) {
-    case "FuncCall":
-      out.add(k.name);
-      for (const a of k.args) collectCallNamesFromExpr(a, out);
-      if (k.instanceBase) collectCallNamesFromExpr(k.instanceBase, out);
-      break;
-    case "MethodCall":
-      out.add(k.name);
-      collectCallNamesFromExpr(k.base, out);
-      for (const a of k.args) collectCallNamesFromExpr(a, out);
-      break;
-    case "Binary":
-      collectCallNamesFromExpr(k.left, out);
-      collectCallNamesFromExpr(k.right, out);
-      break;
-    case "Unary":
-      collectCallNamesFromExpr(k.operand, out);
-      break;
-    case "Range":
-      collectCallNamesFromExpr(k.start, out);
-      if (k.step) collectCallNamesFromExpr(k.step, out);
-      collectCallNamesFromExpr(k.end, out);
-      break;
-    case "Index":
-    case "IndexCell":
-      collectCallNamesFromExpr(k.base, out);
-      for (const i of k.indices) collectCallNamesFromExpr(i, out);
-      break;
-    case "Member":
-      collectCallNamesFromExpr(k.base, out);
-      break;
-    case "MemberDynamic":
-      collectCallNamesFromExpr(k.base, out);
-      collectCallNamesFromExpr(k.nameExpr, out);
-      break;
-    case "SuperConstructorCall":
-      for (const a of k.args) collectCallNamesFromExpr(a, out);
-      break;
-    case "AnonFunc":
-      collectCallNamesFromExpr(k.body, out);
-      break;
-    case "Tensor":
-    case "Cell":
-      for (const row of k.rows)
-        for (const e of row) collectCallNamesFromExpr(e, out);
-      break;
-    case "ClassInstantiation":
-      for (const a of k.args) collectCallNamesFromExpr(a, out);
-      break;
-    default:
-      break;
+  if (k.type === "FuncCall") {
+    if (k.name === "eval") return true;
+    return (
+      k.args.some(a => exprContainsEvalCall(a)) ||
+      (k.instanceBase !== undefined &&
+        k.instanceBase !== null &&
+        exprContainsEvalCall(k.instanceBase))
+    );
   }
+  if (k.type === "Binary")
+    return exprContainsEvalCall(k.left) || exprContainsEvalCall(k.right);
+  if (k.type === "Unary") return exprContainsEvalCall(k.operand);
+  if (k.type === "Range")
+    return (
+      exprContainsEvalCall(k.start) ||
+      (k.step !== null && exprContainsEvalCall(k.step)) ||
+      exprContainsEvalCall(k.end)
+    );
+  if (k.type === "Index" || k.type === "IndexCell")
+    return (
+      exprContainsEvalCall(k.base) ||
+      k.indices.some(i => exprContainsEvalCall(i))
+    );
+  if (k.type === "Member") return exprContainsEvalCall(k.base);
+  if (k.type === "MemberDynamic")
+    return exprContainsEvalCall(k.base) || exprContainsEvalCall(k.nameExpr);
+  if (k.type === "MethodCall")
+    return (
+      k.name === "eval" ||
+      exprContainsEvalCall(k.base) ||
+      k.args.some(a => exprContainsEvalCall(a))
+    );
+  if (k.type === "AnonFunc") return exprContainsEvalCall(k.body);
+  if (k.type === "Tensor" || k.type === "Cell")
+    return k.rows.some(row => row.some(e => exprContainsEvalCall(e)));
+  if (k.type === "ClassInstantiation")
+    return k.args.some(a => exprContainsEvalCall(a));
+  if (k.type === "SuperConstructorCall")
+    return k.args.some(a => exprContainsEvalCall(a));
+  return false;
+}
+
+/**
+ * Look up external-access variable names for a function from the
+ * per-file directives stored in the workspace registry.
+ */
+function getExternalAccessVarsForFunction(
+  cg: Codegen,
+  functionName: string
+): Set<string> {
+  const fileName = cg.loweringCtx.mainFileName;
+  const directives = cg.loweringCtx.registry.externalAccessByFile.get(fileName);
+  if (!directives) return new Set();
+  return directives.functionScope.get(functionName) ?? new Set();
 }

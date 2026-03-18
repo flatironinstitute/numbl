@@ -1,4 +1,7 @@
-% Test assignin and evalin with workspace
+% Test assignin and evalin with workspace and caller scopes
+% using % external-access directives
+
+% external-access: x w newvar newvar2 a
 
 x = 10;
 
@@ -40,7 +43,6 @@ assert(w == 888);
 % ── Type inference edge cases ──────────────────────────────────────────
 
 % Edge case 1: workspace variable type changes from scalar to vector
-% If type isn't reset, native math (x + 1) would assume scalar and fail
 x = 5;
 ws_set_x_vector();  % sets x to [2, 5] via assignin('workspace', ...)
 result = x + 1;
@@ -51,8 +53,7 @@ x = 10;
 ws_set_x_string();  % sets x to 'hello' via assignin('workspace', ...)
 assert(isequal(x, 'hello'));
 
-% Edge case 3: workspace evalin after type change — make sure we can read
-% the new type correctly
+% Edge case 3: workspace evalin after type change
 x = 42;
 ws_set_x_vector();  % sets x to [2, 5]
 val = test_evalin_read();  % reads x from workspace
@@ -88,7 +89,6 @@ end
 assert(x == 30);
 
 % Edge case 9: evalin('caller', ...) with default when variable exists
-% should return the actual value, not the default
 result5 = test_caller_default_exists();
 assert(result5 == 7);
 
@@ -99,17 +99,37 @@ assert(x == -1);
 ws_set_x_conditional(false);
 assert(x == -1);  % unchanged since condition was false
 
-% Edge case 11: variable created by assignin('caller') in a directly-called function
+% Edge case 11: variable created by assignin('caller') — using external-access
 caller_create_newvar();
 assert(newvar == 3);
 
-% Edge case 12: variable created by assignin('workspace') that didn't exist before
+% Edge case 12: variable created by assignin('workspace') — using external-access
 ws_create_newvar2();
 assert(newvar2 == 'created');
 
-% Edge case 13: new variable created by caller, then used in arithmetic
+% Edge case 13: new variable created by caller via external-access, then used
 result6 = test_caller_create_and_use();
 assert(result6 == 15);
+
+% ── Dynamic fallback tests ────────────────────────────────────────────
+% Variables NOT in % external-access go to the dynamic space,
+% only accessible through evalin, NOT as bare local variables.
+
+% Dynamic workspace: set via assignin, read via evalin
+dyn_ws_setter();
+assert(evalin('workspace', 'dyn_ws_var') == 42);
+
+% Dynamic caller: set via assignin in caller's dynamic space, read back via evalin
+result7 = test_dyn_caller();
+assert(result7 == 77);
+
+
+% Dynamic workspace with default for unset var
+assert(evalin('workspace', 'never_set_var', -1) == -1);
+
+% Multiple external-access directives in same function
+result8 = test_multi_directive();
+assert(result8 == 30);
 
 disp('SUCCESS');
 
@@ -132,6 +152,7 @@ function test_evalin_error()
 end
 
 function test_caller_outer(y)
+    % external-access: y
     caller_reader_y();
     assert(y == 100);
     caller_writer_y();
@@ -147,6 +168,7 @@ function caller_writer_y()
 end
 
 function result = test_caller_modify()
+    % external-access: z
     z = 0;
     caller_writer_z();
     result = z;
@@ -183,6 +205,7 @@ function ws_set_x_conditional(flag)
 end
 
 function result = test_caller_type_change()
+    % external-access: m
     m = 0;  % starts as scalar
     caller_set_m_matrix();  % changes to [2,4;6,8]
     result = m;  % must handle the new type
@@ -193,6 +216,7 @@ function caller_set_m_matrix()
 end
 
 function result = test_caller_struct_change()
+    % external-access: s
     s = 0;  % starts as scalar
     caller_set_s_struct();  % changes to struct
     result = s;
@@ -203,6 +227,7 @@ function caller_set_s_struct()
 end
 
 function result = test_caller_chain()
+    % external-access: v
     v = 0;
     caller_set_v_vector();  % sets v to [10, 20, 30]
     caller_read_v_check();  % reads v via evalin, asserts it's the vector
@@ -219,6 +244,7 @@ function caller_read_v_check()
 end
 
 function result = test_caller_default_exists()
+    % external-access: q
     q = 7;
     result = caller_read_q_with_default();
 end
@@ -236,10 +262,49 @@ function ws_create_newvar2()
 end
 
 function result = test_caller_create_and_use()
+    % external-access: p
     caller_create_p();
     result = p + 5;
 end
 
 function caller_create_p()
     assignin('caller', 'p', 10);
+end
+
+% ── Dynamic fallback helpers ──────────────────────────────────────────
+
+function dyn_ws_setter()
+    assignin('workspace', 'dyn_ws_var', 42);
+end
+
+function result = test_dyn_caller()
+    % NO external-access directive for dyn_var — uses dynamic space
+    % dyn_caller_setter sets dyn_var in THIS function's dynamic frame
+    % dyn_caller_reader reads dyn_var from its caller (THIS function's frame)
+    dyn_caller_setter();
+    result = dyn_caller_reader();
+end
+
+function dyn_caller_setter()
+    assignin('caller', 'dyn_var', 77);
+end
+
+function result = dyn_caller_reader()
+    result = evalin('caller', 'dyn_var', -1);
+end
+
+function result = test_multi_directive()
+    % external-access: ma
+    % external-access: mb
+    ma = 10;
+    mb = 20;
+    caller_sum_ma_mb();
+    result = ma + mb;
+end
+
+function caller_sum_ma_mb()
+    a = evalin('caller', 'ma');
+    b = evalin('caller', 'mb');
+    assignin('caller', 'ma', a + 5);
+    assignin('caller', 'mb', b - 5);
 end
