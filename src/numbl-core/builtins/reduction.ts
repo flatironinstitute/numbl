@@ -1142,7 +1142,6 @@ export function registerReductionFunctions(): void {
           cols: number[] = [],
           vals: number[] = [];
         let imagVals: number[] = [];
-        let isSparseInput = false;
         let sparseImag: Float64Array | undefined;
 
         let linIndices: number[] = [];
@@ -1172,11 +1171,14 @@ export function registerReductionFunctions(): void {
               rows.push((k % nrows) + 1); // 1-based row
               cols.push(Math.floor(k / nrows) + 1); // 1-based col (2D sense)
               vals.push(val);
+              if (v.imag) imagVals.push(v.imag[k]);
               linIndices.push(k + 1); // 1-based linear index
             }
           }
+          if (v.imag) {
+            sparseImag = new FloatXArray(1); // trigger complex return path
+          }
         } else if (isRuntimeSparseMatrix(v)) {
-          isSparseInput = true;
           sparseImag = v.pi;
           // Iterate CSC structure in column-major order
           for (let col = 0; col < v.n; col++) {
@@ -1201,14 +1203,13 @@ export function registerReductionFunctions(): void {
             cols = cols.slice(start);
             vals = vals.slice(start);
             linIndices = linIndices.slice(start);
-            if (isSparseInput && sparseImag) imagVals = imagVals.slice(start);
+            if (sparseImag) imagVals = imagVals.slice(start);
           } else {
             rows = rows.slice(0, countLimit);
             cols = cols.slice(0, countLimit);
             vals = vals.slice(0, countLimit);
             linIndices = linIndices.slice(0, countLimit);
-            if (isSparseInput && sparseImag)
-              imagVals = imagVals.slice(0, countLimit);
+            if (sparseImag) imagVals = imagVals.slice(0, countLimit);
           }
         }
 
@@ -1236,8 +1237,8 @@ export function registerReductionFunctions(): void {
           return RTV.tensor(new FloatXArray(linIndices), [n, 1]);
         }
         if (nargout === 2) return [makeVec(rows), makeVec(cols)];
-        // For complex sparse, return complex value vector
-        if (isSparseInput && sparseImag) {
+        // For complex input, return complex value vector
+        if (sparseImag) {
           return [makeVec(rows), makeVec(cols), makeComplexVec(vals, imagVals)];
         }
         return [makeVec(rows), makeVec(cols), makeVec(vals)];
