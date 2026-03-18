@@ -607,6 +607,43 @@ export function registerIntrospectionFunctions(): void {
     })
   );
 
+  // spconvert: convert triplet-format matrix to sparse
+  // spconvert(S) where S is n×3 [i j v] or n×4 [i j re im]
+  register(
+    "spconvert",
+    builtinSingle(args => {
+      if (args.length !== 1)
+        throw new RuntimeError("spconvert requires 1 argument");
+      const S = args[0];
+      if (!isRuntimeTensor(S))
+        throw new RuntimeError("spconvert: argument must be a matrix");
+      const nrows = S.shape[0];
+      const ncols = S.shape.length >= 2 ? S.shape[1] : 1;
+      if (ncols < 3)
+        throw new RuntimeError("spconvert: input must have at least 3 columns");
+
+      const iArr: number[] = [];
+      const jArr: number[] = [];
+      const vArr: number[] = [];
+      let m = 0;
+      let n = 0;
+
+      for (let k = 0; k < nrows; k++) {
+        const i = S.data[k]; // column-major: col 0
+        const j = S.data[k + nrows]; // col 1
+        const v = S.data[k + 2 * nrows]; // col 2
+        if (i > m) m = i;
+        if (j > n) n = j;
+        if (v !== 0) {
+          iArr.push(i);
+          jArr.push(j);
+          vArr.push(v);
+        }
+      }
+      return buildSparseFromTriplets(iArr, jArr, vArr, m, n);
+    })
+  );
+
   // This is a placeholder that will be specially handled by the executor
   register(
     "builtin",
