@@ -533,23 +533,41 @@ export function mAddSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) && isRuntimeSparseMatrix(b)) {
     return sparseAdd(a, b);
   }
-  // sparse + scalar
+  // sparse + scalar (real or complex)
   if (isRuntimeSparseMatrix(a)) {
-    const s = scalarVal(b);
-    if (!isNaN(s)) {
+    const cs = complexScalarVal(b);
+    if (cs) {
       const dense = sparseToDense(a);
       const data = new FloatXArray(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = dense.data[i] + s;
-      return RTV.tensor(data, dense.shape, dense.imag);
+      for (let i = 0; i < data.length; i++) data[i] = dense.data[i] + cs.re;
+      const imag =
+        cs.im !== 0 || dense.imag
+          ? (() => {
+              const r = new FloatXArray(data.length);
+              for (let i = 0; i < r.length; i++)
+                r[i] = (dense.imag ? dense.imag[i] : 0) + cs.im;
+              return r;
+            })()
+          : undefined;
+      return RTV.tensor(data, dense.shape, imag);
     }
   }
   if (isRuntimeSparseMatrix(b)) {
-    const s = scalarVal(a);
-    if (!isNaN(s)) {
+    const cs = complexScalarVal(a);
+    if (cs) {
       const dense = sparseToDense(b);
       const data = new FloatXArray(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = s + dense.data[i];
-      return RTV.tensor(data, dense.shape, dense.imag);
+      for (let i = 0; i < data.length; i++) data[i] = cs.re + dense.data[i];
+      const imag =
+        cs.im !== 0 || dense.imag
+          ? (() => {
+              const r = new FloatXArray(data.length);
+              for (let i = 0; i < r.length; i++)
+                r[i] = cs.im + (dense.imag ? dense.imag[i] : 0);
+              return r;
+            })()
+          : undefined;
+      return RTV.tensor(data, dense.shape, imag);
     }
   }
   // sparse + dense tensor → dense
@@ -575,27 +593,38 @@ export function mSubSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return sparseSub(a, b);
   }
   if (isRuntimeSparseMatrix(a)) {
-    const s = scalarVal(b);
-    if (!isNaN(s)) {
+    const cs = complexScalarVal(b);
+    if (cs) {
       const dense = sparseToDense(a);
       const data = new FloatXArray(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = dense.data[i] - s;
-      return RTV.tensor(data, dense.shape, dense.imag);
+      for (let i = 0; i < data.length; i++) data[i] = dense.data[i] - cs.re;
+      const imag =
+        cs.im !== 0 || dense.imag
+          ? (() => {
+              const r = new FloatXArray(data.length);
+              for (let i = 0; i < r.length; i++)
+                r[i] = (dense.imag ? dense.imag[i] : 0) - cs.im;
+              return r;
+            })()
+          : undefined;
+      return RTV.tensor(data, dense.shape, imag);
     }
   }
   if (isRuntimeSparseMatrix(b)) {
-    const s = scalarVal(a);
-    if (!isNaN(s)) {
+    const cs = complexScalarVal(a);
+    if (cs) {
       const dense = sparseToDense(b);
       const data = new FloatXArray(dense.data.length);
-      for (let i = 0; i < data.length; i++) data[i] = s - dense.data[i];
-      const imag = dense.imag
-        ? (() => {
-            const r = new FloatXArray(dense.imag.length);
-            for (let i = 0; i < r.length; i++) r[i] = -dense.imag[i];
-            return r;
-          })()
-        : undefined;
+      for (let i = 0; i < data.length; i++) data[i] = cs.re - dense.data[i];
+      const imag =
+        cs.im !== 0 || dense.imag
+          ? (() => {
+              const r = new FloatXArray(data.length);
+              for (let i = 0; i < r.length; i++)
+                r[i] = cs.im - (dense.imag ? dense.imag[i] : 0);
+              return r;
+            })()
+          : undefined;
       return RTV.tensor(data, dense.shape, imag);
     }
   }
@@ -749,15 +778,51 @@ export function mElemDivSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       return sparseScaleComplex(a, cs.re / denom, -cs.im / denom);
     }
   }
+  // scalar ./ sparse → densify sparse, broadcast scalar
+  if (isRuntimeSparseMatrix(b)) {
+    const cs = complexScalarVal(a);
+    if (cs) {
+      const bDense = sparseToDense(b);
+      const len = bDense.data.length;
+      const hasImag = cs.im !== 0 || bDense.imag !== undefined;
+      const data = new FloatXArray(len);
+      const imag = hasImag ? new FloatXArray(len) : undefined;
+      for (let i = 0; i < len; i++) {
+        const bRe = bDense.data[i];
+        const bIm = bDense.imag ? bDense.imag[i] : 0;
+        if (!hasImag) {
+          data[i] = cs.re / bRe;
+        } else {
+          const denom = bRe * bRe + bIm * bIm;
+          data[i] = (cs.re * bRe + cs.im * bIm) / denom;
+          if (imag) imag[i] = (cs.im * bRe - cs.re * bIm) / denom;
+        }
+      }
+      return RTV.tensor(data, bDense.shape, imag);
+    }
+  }
   // All other combinations → convert to dense, return dense
   const aDense = isRuntimeSparseMatrix(a) ? sparseToDense(a) : a;
   const bDense = isRuntimeSparseMatrix(b) ? sparseToDense(b) : b;
   if (!isRuntimeTensor(aDense) || !isRuntimeTensor(bDense))
     throw new RuntimeError("mElemDivSparse: unexpected operand types");
+  const hasImag = aDense.imag !== undefined || bDense.imag !== undefined;
   const data = new FloatXArray(aDense.data.length);
-  for (let i = 0; i < data.length; i++)
-    data[i] = aDense.data[i] / bDense.data[i];
-  return RTV.tensor(data, aDense.shape);
+  const imag = hasImag ? new FloatXArray(aDense.data.length) : undefined;
+  for (let i = 0; i < data.length; i++) {
+    const bRe = bDense.data[i];
+    const bIm = bDense.imag ? bDense.imag[i] : 0;
+    if (!hasImag) {
+      data[i] = aDense.data[i] / bRe;
+    } else {
+      const aRe = aDense.data[i];
+      const aIm = aDense.imag ? aDense.imag[i] : 0;
+      const denom = bRe * bRe + bIm * bIm;
+      data[i] = (aRe * bRe + aIm * bIm) / denom;
+      if (imag) imag[i] = (aIm * bRe - aRe * bIm) / denom;
+    }
+  }
+  return RTV.tensor(data, aDense.shape, imag);
 }
 
 /** Convert sparse to dense RuntimeTensor (exported for use in arithmetic dispatch). */
