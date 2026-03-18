@@ -19,8 +19,10 @@ import {
   isRuntimeComplexNumber,
   isRuntimeChar,
   isRuntimeClassInstance,
+  isRuntimeSparseMatrix,
   RuntimeTensor,
 } from "../runtime/types.js";
+import { sparseToDense } from "./sparse-arithmetic.js";
 import {
   lanczosGamma,
   besselj,
@@ -222,6 +224,7 @@ function complexElemwise(
       return RTV.num(result);
     }
     if (isRuntimeLogical(v)) return RTV.num(realFn(v ? 1 : 0));
+    if (isRuntimeSparseMatrix(v)) return realApply([sparseToDense(v)]);
     if (isRuntimeTensor(v)) {
       // Handle complex tensors
       if (v.imag !== undefined) {
@@ -341,6 +344,7 @@ function elemwise(
     }
     if (o?.complex && isRuntimeComplexNumber(v))
       return RTV.complex(fn(v.re), fn(v.im));
+    if (isRuntimeSparseMatrix(v)) return apply([sparseToDense(v)]);
     if (isRuntimeTensor(v)) {
       const result = new FloatXArray(v.data.length);
       for (let i = 0; i < v.data.length; i++) result[i] = fn(v.data[i]);
@@ -979,6 +983,10 @@ export function registerMathFunctions(): void {
       if (isRuntimeComplexNumber(v)) return RTV.num(v.re);
       if (isRuntimeNumber(v)) return v;
       if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+      if (isRuntimeSparseMatrix(v)) {
+        const d = sparseToDense(v);
+        return d.imag ? RTV.tensor(d.data, d.shape) : d;
+      }
       if (isRuntimeTensor(v)) {
         // Return real part of complex tensor, or tensor itself if already real
         if (v.imag === undefined) return v;
@@ -997,6 +1005,12 @@ export function registerMathFunctions(): void {
       if (isRuntimeComplexNumber(v)) return RTV.num(v.im);
       if (isRuntimeNumber(v)) return RTV.num(0);
       if (isRuntimeLogical(v)) return RTV.num(0);
+      if (isRuntimeSparseMatrix(v)) {
+        const d = sparseToDense(v);
+        return d.imag
+          ? RTV.tensor(d.imag, d.shape)
+          : RTV.tensor(new FloatXArray(v.m * v.n), [v.m, v.n]);
+      }
       if (isRuntimeTensor(v)) {
         // Return imaginary part of complex tensor, or zeros if real
         if (v.imag === undefined) {
@@ -1017,6 +1031,13 @@ export function registerMathFunctions(): void {
       if (isRuntimeComplexNumber(v))
         return v.im === 0 ? RTV.num(v.re) : RTV.complex(v.re, -v.im);
       if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
+      if (isRuntimeSparseMatrix(v)) {
+        const d = sparseToDense(v);
+        if (!d.imag) return d;
+        const conjImag = new FloatXArray(d.imag.length);
+        for (let i = 0; i < d.imag.length; i++) conjImag[i] = -d.imag[i];
+        return RTV.tensor(d.data, d.shape, conjImag);
+      }
       if (isRuntimeTensor(v)) {
         // Return conjugate of complex tensor, or tensor itself if real
         if (v.imag === undefined) return v;

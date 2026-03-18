@@ -92,10 +92,11 @@ export function not(v: unknown): RuntimeLogical | RuntimeTensor {
   const mv = ensureRuntimeValue(v);
   if (isRuntimeNumber(mv)) return RTV.logical(mv === 0);
   if (isRuntimeLogical(mv)) return RTV.logical(!mv);
+  if (isRuntimeSparseMatrix(mv)) return not(sparseToDenseFn(mv));
   if (isRuntimeTensor(mv)) {
     const result = new FloatXArray(mv.data.length);
     for (let i = 0; i < mv.data.length; i++)
-      result[i] = mv.data[i] === 0 ? 1 : 0;
+      result[i] = mv.data[i] === 0 && (!mv.imag || mv.imag[i] === 0) ? 1 : 0;
     const t = RTV.tensor(result, mv.shape);
     t._isLogical = true;
     return t;
