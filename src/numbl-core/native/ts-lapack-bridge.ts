@@ -11,8 +11,9 @@ import { dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
 import { dgetri } from "../../ts-lapack/src/SRC/dgetri.js";
 import { dgeev } from "../../ts-lapack/src/SRC/dgeev.js";
 import { dgesvd as _dgesvd } from "../../ts-lapack/src/SRC/dgesvd.js";
+import { dpotf2 } from "../../ts-lapack/src/SRC/dpotf2.js";
 import type { LapackBridge } from "./lapack-bridge.js";
-import { NOTRANS } from "../../ts-lapack/src/utils/constants.js";
+import { NOTRANS, UPPER, LOWER } from "../../ts-lapack/src/utils/constants.js";
 import { dorgqr_optimized } from "../../ts-lapack/src/SRC/dorgqr_optimized.js";
 import { dgeqrf_optimized } from "../../ts-lapack/src/SRC/dgeqrf_optimized.js";
 import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
@@ -906,6 +907,121 @@ function svd(
   return { U: u, S: s, V: v };
 }
 
+function chol(
+  data: Float64Array,
+  n: number,
+  upper: boolean
+): { R: Float64Array; info: number } {
+  const a = new Float64Array(data);
+  const info = dpotf2(upper ? UPPER : LOWER, n, a, 0, n);
+
+  // Zero the opposite triangle (matching native C++ addon behavior)
+  if (upper) {
+    for (let j = 0; j < n; j++)
+      for (let i = j + 1; i < n; i++) a[i + j * n] = 0;
+  } else {
+    for (let j = 0; j < n; j++) for (let i = 0; i < j; i++) a[i + j * n] = 0;
+  }
+
+  return { R: a, info };
+}
+
+function cholComplex(
+  dataRe: Float64Array,
+  dataIm: Float64Array,
+  n: number,
+  upper: boolean
+): { RRe: Float64Array; RIm: Float64Array; info: number } {
+  const re = new Float64Array(dataRe);
+  const im = new Float64Array(dataIm);
+  let info = 0;
+
+  if (upper) {
+    // A = R^H * R (upper triangular R)
+    for (let j = 0; j < n; j++) {
+      // s = Re(A(j,j)) - sum_{k=0}^{j-1} |R(k,j)|^2
+      let s = re[j + j * n];
+      for (let k = 0; k < j; k++) {
+        s -= re[k + j * n] * re[k + j * n] + im[k + j * n] * im[k + j * n];
+      }
+      if (s <= 0 || Number.isNaN(s)) {
+        info = j + 1;
+        break;
+      }
+      const rjj = Math.sqrt(s);
+      re[j + j * n] = rjj;
+      im[j + j * n] = 0;
+
+      // Compute R(j, i) for i = j+1..n-1
+      for (let i = j + 1; i < n; i++) {
+        let sumRe = re[j + i * n];
+        let sumIm = im[j + i * n];
+        for (let k = 0; k < j; k++) {
+          const rkjRe = re[k + j * n];
+          const rkjIm = im[k + j * n];
+          const rkiRe = re[k + i * n];
+          const rkiIm = im[k + i * n];
+          // conj(R(k,j)) * R(k,i)
+          sumRe -= rkjRe * rkiRe + rkjIm * rkiIm;
+          sumIm -= rkjRe * rkiIm - rkjIm * rkiRe;
+        }
+        re[j + i * n] = sumRe / rjj;
+        im[j + i * n] = sumIm / rjj;
+      }
+    }
+  } else {
+    // A = L * L^H (lower triangular L)
+    for (let j = 0; j < n; j++) {
+      // s = Re(A(j,j)) - sum_{k=0}^{j-1} |L(j,k)|^2
+      let s = re[j + j * n];
+      for (let k = 0; k < j; k++) {
+        s -= re[j + k * n] * re[j + k * n] + im[j + k * n] * im[j + k * n];
+      }
+      if (s <= 0 || Number.isNaN(s)) {
+        info = j + 1;
+        break;
+      }
+      const ljj = Math.sqrt(s);
+      re[j + j * n] = ljj;
+      im[j + j * n] = 0;
+
+      // Compute L(i, j) for i = j+1..n-1
+      for (let i = j + 1; i < n; i++) {
+        let sumRe = re[i + j * n];
+        let sumIm = im[i + j * n];
+        for (let k = 0; k < j; k++) {
+          const likRe = re[i + k * n];
+          const likIm = im[i + k * n];
+          const ljkRe = re[j + k * n];
+          const ljkIm = im[j + k * n];
+          // L(i,k) * conj(L(j,k))
+          sumRe -= likRe * ljkRe + likIm * ljkIm;
+          sumIm -= likIm * ljkRe - likRe * ljkIm;
+        }
+        re[i + j * n] = sumRe / ljj;
+        im[i + j * n] = sumIm / ljj;
+      }
+    }
+  }
+
+  // Zero the opposite triangle
+  if (upper) {
+    for (let j = 0; j < n; j++)
+      for (let i = j + 1; i < n; i++) {
+        re[i + j * n] = 0;
+        im[i + j * n] = 0;
+      }
+  } else {
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < j; i++) {
+        re[i + j * n] = 0;
+        im[i + j * n] = 0;
+      }
+  }
+
+  return { RRe: re, RIm: im, info };
+}
+
 const _bridge: LapackBridge = {
   inv,
   matmul,
@@ -915,6 +1031,8 @@ const _bridge: LapackBridge = {
   eig,
   lu,
   svd,
+  chol,
+  cholComplex,
 };
 
 export function getTsLapackBridge(): LapackBridge {

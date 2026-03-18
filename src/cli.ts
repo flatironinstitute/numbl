@@ -40,14 +40,16 @@ const addonPath = join(packageDir, "build", "Release", "lapack_addon.node");
 // ── Try to load the native LAPACK addon ──────────────────────────────────────
 
 let nativeAddonLoaded = false;
-try {
-  const req = createRequire(import.meta.url);
-  const addon = req(addonPath);
-  setLapackBridge(addon);
-  setLapackBridgeNew(addon);
-  nativeAddonLoaded = true;
-} catch {
-  // Native addon not available — JS fallbacks will be used
+if (!process.env.NUMBL_NO_NATIVE) {
+  try {
+    const req = createRequire(import.meta.url);
+    const addon = req(addonPath);
+    setLapackBridge(addon);
+    setLapackBridgeNew(addon);
+    nativeAddonLoaded = true;
+  } catch {
+    // Native addon not available — JS fallbacks will be used
+  }
 }
 
 // ── Try to load koffi for native FFI bridge ───────────────────────────────────
