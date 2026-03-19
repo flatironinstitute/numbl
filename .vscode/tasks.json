@@ -1,0 +1,12 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Sync graphics to numbl-vscode",
+      "type": "shell",
+      "command": "bash",
+      "args": ["numbl-vscode/devel/sync-graphics.sh"],
+      "problemMatcher": []
+    }
+  ]
+}
