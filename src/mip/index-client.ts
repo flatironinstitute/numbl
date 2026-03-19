@@ -3,6 +3,7 @@ import {
   PackageIndexEntry,
   MipArchitecture,
   MipBackend,
+  compareVersions,
 } from "./types.js";
 
 const DEFAULT_INDEX_URL = "https://mip-org.github.io/mip-core/index.json";
@@ -22,10 +23,14 @@ export function findPackageEntry(
   arch: MipArchitecture
 ): PackageIndexEntry | undefined {
   for (const candidate of ["numbl_" + arch, "numbl_wasm", "any"]) {
-    const entry = index.packages.find(
+    const matches = index.packages.filter(
       p => p.name === packageName && p.architecture === candidate
     );
-    if (entry) return entry;
+    if (matches.length > 0) {
+      return matches.reduce((best, cur) =>
+        compareVersions(cur.version, best.version) > 0 ? cur : best
+      );
+    }
   }
   return undefined;
 }

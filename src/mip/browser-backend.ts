@@ -6,7 +6,11 @@
 
 import { unzipSync } from "fflate";
 import { db, type MipPackageCache } from "../db/schema.js";
-import type { PackageIndex, PackageIndexEntry } from "./types.js";
+import {
+  compareVersions,
+  type PackageIndex,
+  type PackageIndexEntry,
+} from "./types.js";
 import { executeCode } from "../numbl-core/executeCode.js";
 import { toString, RTV } from "../numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
@@ -32,10 +36,14 @@ function findEntry(
 ): PackageIndexEntry | undefined {
   // In the browser, prefer wasm packages, then fall back to "any"
   for (const candidate of ["numbl_wasm", "any"]) {
-    const entry = index.packages.find(
+    const matches = index.packages.filter(
       p => p.name === packageName && p.architecture === candidate
     );
-    if (entry) return entry;
+    if (matches.length > 0) {
+      return matches.reduce((best, cur) =>
+        compareVersions(cur.version, best.version) > 0 ? cur : best
+      );
+    }
   }
   return undefined;
 }
