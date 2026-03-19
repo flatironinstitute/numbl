@@ -203,7 +203,7 @@ function complexElemwise(
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
   complexOutKind: "ComplexNumber" | "Number",
-  o?: { nativeJs: string }
+  o?: { nativeJs: string; realSafe?: boolean }
 ): BuiltinFn {
   const complexApply = (args: RuntimeValue[]) => {
     if (args.length !== 1) throw new RuntimeError(`Expected 1 argument`);
@@ -238,6 +238,14 @@ function complexElemwise(
         const isReal =
           complexOutKind === "Number" || resultIm.every(x => x === 0);
         return RTV.tensor(resultRe, v.shape, isReal ? undefined : resultIm);
+      }
+      // Fast path: real input always produces real output (sin, cos, exp, etc.)
+      if (o?.realSafe) {
+        const resultRe = new FloatXArray(v.data.length);
+        for (let i = 0; i < v.data.length; i++) {
+          resultRe[i] = realFn(v.data[i]);
+        }
+        return RTV.tensor(resultRe, v.shape);
       }
       // Real tensor — some elements may be out of domain (e.g., acos([0, 2]))
       const resultRe = new FloatXArray(v.data.length);
@@ -453,7 +461,7 @@ export function registerMathFunctions(): void {
         im: Math.cos(re) * Math.sinh(im),
       }),
       "ComplexNumber",
-      { nativeJs: "Math.sin" }
+      { nativeJs: "Math.sin", realSafe: true }
     ),
     1
   );
@@ -466,7 +474,7 @@ export function registerMathFunctions(): void {
         im: -Math.sin(re) * Math.sinh(im),
       }),
       "ComplexNumber",
-      { nativeJs: "Math.cos" }
+      { nativeJs: "Math.cos", realSafe: true }
     ),
     1
   );
@@ -479,7 +487,7 @@ export function registerMathFunctions(): void {
         return { re: Math.sin(2 * re) / denom, im: Math.sinh(2 * im) / denom };
       },
       "ComplexNumber",
-      { nativeJs: "Math.tan" }
+      { nativeJs: "Math.tan", realSafe: true }
     ),
     1
   );
@@ -535,7 +543,7 @@ export function registerMathFunctions(): void {
         im: Math.cosh(re) * Math.sin(im),
       }),
       "ComplexNumber",
-      { nativeJs: "Math.sinh" }
+      { nativeJs: "Math.sinh", realSafe: true }
     ),
     1
   );
@@ -548,7 +556,7 @@ export function registerMathFunctions(): void {
         im: Math.sinh(re) * Math.sin(im),
       }),
       "ComplexNumber",
-      { nativeJs: "Math.cosh" }
+      { nativeJs: "Math.cosh", realSafe: true }
     ),
     1
   );
@@ -564,7 +572,7 @@ export function registerMathFunctions(): void {
         };
       },
       "ComplexNumber",
-      { nativeJs: "Math.tanh" }
+      { nativeJs: "Math.tanh", realSafe: true }
     ),
     1
   );
@@ -619,7 +627,7 @@ export function registerMathFunctions(): void {
         im: Math.exp(re) * Math.sin(im),
       }),
       "ComplexNumber",
-      { nativeJs: "Math.exp" }
+      { nativeJs: "Math.exp", realSafe: true }
     ),
     1
   );
@@ -723,7 +731,7 @@ export function registerMathFunctions(): void {
       Math.abs,
       (re, im) => ({ re: Math.sqrt(re * re + im * im), im: 0 }),
       "Number",
-      { nativeJs: "Math.abs" }
+      { nativeJs: "Math.abs", realSafe: true }
     ),
     1
   );

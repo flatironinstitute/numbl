@@ -304,6 +304,30 @@ function complexBinaryOp(
 
 /** Add two RuntimeValues */
 export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Fast path: two real tensors with same shape
+  if (
+    typeof a === "object" &&
+    a !== null &&
+    (a as RuntimeTensor).kind === "tensor" &&
+    typeof b === "object" &&
+    b !== null &&
+    (b as RuntimeTensor).kind === "tensor"
+  ) {
+    const at = a as RuntimeTensor;
+    const bt = b as RuntimeTensor;
+    if (
+      !at.imag &&
+      !bt.imag &&
+      at.data.length === bt.data.length &&
+      at.shape.length === bt.shape.length &&
+      at.shape.every((d, i) => d === bt.shape[i])
+    ) {
+      const result = new FloatXArray(at.data.length);
+      for (let i = 0; i < result.length; i++)
+        result[i] = at.data[i] + bt.data[i];
+      return RTV.tensor(result, at.shape);
+    }
+  }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mAddSparse(a, b);
   if (isComplexOrMixed(a, b)) {
@@ -348,6 +372,30 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise multiply */
 export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Fast path: two real tensors with same shape
+  if (
+    typeof a === "object" &&
+    a !== null &&
+    (a as RuntimeTensor).kind === "tensor" &&
+    typeof b === "object" &&
+    b !== null &&
+    (b as RuntimeTensor).kind === "tensor"
+  ) {
+    const at = a as RuntimeTensor;
+    const bt = b as RuntimeTensor;
+    if (
+      !at.imag &&
+      !bt.imag &&
+      at.data.length === bt.data.length &&
+      at.shape.length === bt.shape.length &&
+      at.shape.every((d, i) => d === bt.shape[i])
+    ) {
+      const result = new FloatXArray(at.data.length);
+      for (let i = 0; i < result.length; i++)
+        result[i] = at.data[i] * bt.data[i];
+      return RTV.tensor(result, at.shape);
+    }
+  }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemMulSparse(a, b);
   if (isComplexOrMixed(a, b)) {
@@ -510,6 +558,33 @@ export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise power */
 export function mElemPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Fast path: real tensor .^ scalar integer
+  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
+    const exp = b as number;
+    if (exp === 2) {
+      const result = new FloatXArray(a.data.length);
+      for (let i = 0; i < result.length; i++) result[i] = a.data[i] * a.data[i];
+      return RTV.tensor(result, a.shape);
+    }
+    if (Number.isInteger(exp) || exp >= 0) {
+      // No negative bases with fractional exponent concern if exp is integer or base could be negative
+      let hasNeg = false;
+      if (!Number.isInteger(exp)) {
+        for (let i = 0; i < a.data.length; i++) {
+          if (a.data[i] < 0) {
+            hasNeg = true;
+            break;
+          }
+        }
+      }
+      if (!hasNeg) {
+        const result = new FloatXArray(a.data.length);
+        for (let i = 0; i < result.length; i++)
+          result[i] = Math.pow(a.data[i], exp);
+        return RTV.tensor(result, a.shape);
+      }
+    }
+  }
   const complexPow = (aRe: number, aIm: number, bRe: number, bIm: number) => {
     // z^w = exp(w * ln(z)), using polar form: ln(z) = ln|z| + i*arg(z)
     const r = Math.sqrt(aRe * aRe + aIm * aIm);
@@ -566,17 +641,23 @@ export function mElemPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Negation */
 export function mNeg(v: RuntimeValue): RuntimeValue {
+  // Fast path: real tensor
+  if (isRuntimeTensor(v)) {
+    if (v.imag !== undefined) {
+      const resultRe = new FloatXArray(v.data.length);
+      const resultIm = new FloatXArray(v.imag.length);
+      for (let i = 0; i < v.data.length; i++) {
+        resultRe[i] = -v.data[i];
+        resultIm[i] = -v.imag[i];
+      }
+      return RTV.tensor(resultRe, v.shape, resultIm);
+    }
+    const resultRe = new FloatXArray(v.data.length);
+    for (let i = 0; i < v.data.length; i++) resultRe[i] = -v.data[i];
+    return RTV.tensor(resultRe, v.shape);
+  }
   if (isRuntimeSparseMatrix(v)) return sparseNeg(v);
   if (isRuntimeComplexNumber(v)) return RTV.complex(-v.re, -v.im);
-  if (isRuntimeTensor(v) && v.imag !== undefined) {
-    const resultRe = new FloatXArray(v.data.length);
-    const resultIm = new FloatXArray(v.imag.length);
-    for (let i = 0; i < v.data.length; i++) {
-      resultRe[i] = -v.data[i];
-      resultIm[i] = -v.imag[i];
-    }
-    return RTV.tensor(resultRe, v.shape, resultIm);
-  }
   return unaryOp(v, x => -x);
 }
 
@@ -966,6 +1047,51 @@ function binaryOp(
   b: RuntimeValue,
   op: (x: number, y: number) => number
 ): RuntimeValue {
+  // Fast path: real tensor op real tensor (most common in vectorized code)
+  if (isRuntimeTensor(a) && a.data.length > 1) {
+    if (isRuntimeTensor(b) && b.data.length > 1) {
+      // tensor op tensor — same shape fast path
+      if (
+        a.data.length === b.data.length &&
+        a.shape.length === b.shape.length &&
+        a.shape.every((d, i) => d === b.shape[i])
+      ) {
+        const result = new FloatXArray(a.data.length);
+        for (let i = 0; i < result.length; i++) {
+          result[i] = op(a.data[i], b.data[i]);
+        }
+        return RTV.tensor(result, a.shape);
+      }
+      // Try broadcasting
+      const broadcastShape = getBroadcastShape(a.shape, b.shape);
+      if (broadcastShape !== null) {
+        return broadcastBinary(a, b, broadcastShape, op);
+      }
+      throw new RuntimeError(
+        `Matrix dimensions must agree: [${a.shape.join(",")}] vs [${b.shape.join(",")}]`
+      );
+    }
+    if (isRuntimeNumber(b)) {
+      // tensor op scalar
+      const result = new FloatXArray(a.data.length);
+      const sv = b as number;
+      for (let i = 0; i < result.length; i++) {
+        result[i] = op(a.data[i], sv);
+      }
+      return RTV.tensor(result, a.shape);
+    }
+  }
+  if (isRuntimeTensor(b) && b.data.length > 1 && isRuntimeNumber(a)) {
+    // scalar op tensor
+    const result = new FloatXArray(b.data.length);
+    const sv = a as number;
+    for (let i = 0; i < result.length; i++) {
+      result[i] = op(sv, b.data[i]);
+    }
+    return RTV.tensor(result, b.shape);
+  }
+
+  // General path via asNumeric
   const an = asNumeric(a);
   const bn = asNumeric(b);
 
@@ -1028,6 +1154,14 @@ function binaryOp(
 }
 
 function unaryOp(v: RuntimeValue, op: (x: number) => number): RuntimeValue {
+  // Fast path: real tensor
+  if (isRuntimeTensor(v) && v.data.length > 1) {
+    const result = new FloatXArray(v.data.length);
+    for (let i = 0; i < result.length; i++) {
+      result[i] = op(v.data[i]);
+    }
+    return RTV.tensor(result, v.shape);
+  }
   const n = asNumeric(v);
   if (n.scalar) {
     const val = n.isComplex ? n.re : n.value;

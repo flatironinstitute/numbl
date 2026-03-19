@@ -70,6 +70,14 @@ export function registerSortUnique(): void {
           }
           const dimIdx = dim - 1;
 
+          // Fast path: 1D/vector real, ascending, no index output
+          // Works when all elements are in a single fiber (vector along the sort dim)
+          if (!im && !descend && nargout <= 1 && re.length === shape[dimIdx]) {
+            const sorted = new FloatXArray(re);
+            sorted.sort();
+            return RTV.tensor(sorted, [...shape]);
+          }
+
           if (dimIdx >= shape.length) {
             const cp = RTV.tensor(
               new FloatXArray(re),
