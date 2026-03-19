@@ -121,6 +121,36 @@ function instantiateWasm(wasmData: Uint8Array): WebAssembly.Instance {
 }
 
 /**
+ * Resolve WASM and native bindings for a .js file based on its directives.
+ */
+function resolveBindings(
+  file: WorkspaceFile,
+  directives: JsDirectives,
+  getWasmInstance: (name: string) => WebAssembly.Instance | undefined,
+  nativeBridge?: NativeBridge
+): { wasmInstance: WebAssembly.Instance | undefined; nativeLib: unknown } {
+  const wasmInstance = directives.wasm
+    ? getWasmInstance(directives.wasm)
+    : undefined;
+
+  let nativeLib: unknown;
+  if (directives.native && nativeBridge) {
+    const libFile = nativeLibFilename(directives.native);
+    const dir = file.name.substring(0, file.name.lastIndexOf("/") + 1);
+    const libPath = dir + libFile;
+    try {
+      nativeLib = nativeBridge.load(libPath);
+    } catch {
+      // Native library not found or failed to load — leave undefined
+    }
+  }
+  return { wasmInstance, nativeLib };
+}
+
+/** Sentinel value indicating a library is currently being loaded. */
+const LOADING = Symbol("loading");
+
+/**
  * Load .js user function files and return them as a map of function name → BuiltinFn.
  *
  * A .js file can specify bindings via directives at the top of the file:
@@ -130,6 +160,10 @@ function instantiateWasm(wasmData: Uint8Array): WebAssembly.Instance {
  * The `wasm` and `native` parameters are passed to the .js function context.
  * They are `undefined` when the corresponding directive is absent or the binary
  * is not found.
+ *
+ * Files whose basename starts with `_` are library files. They must not call
+ * register() and instead export values via `return`. Other .js files can import
+ * them with `importJS("_name")`.
  */
 export function loadJsUserFunctions(
   jsFiles: WorkspaceFile[],
@@ -151,7 +185,80 @@ export function loadJsUserFunctions(
     return instance;
   }
 
+  // Separate library files (_-prefixed) from function files
+  const libraryFiles = new Map<string, WorkspaceFile>();
+  const functionFiles: WorkspaceFile[] = [];
   for (const file of jsFiles) {
+    const base = file.name.split("/").pop()!;
+    if (base.startsWith("_")) {
+      const libName = base.replace(/\.js$/, "");
+      libraryFiles.set(libName, file);
+    } else {
+      functionFiles.push(file);
+    }
+  }
+
+  // Library cache: LOADING sentinel for circular detection, or cached exports
+  const libCache = new Map<string, typeof LOADING | unknown>();
+
+  function importJS(name: string): unknown {
+    const cached = libCache.get(name);
+    if (cached === LOADING) {
+      throw new RuntimeError(`Circular dependency detected: ${name}.js`);
+    }
+    if (libCache.has(name)) return cached;
+
+    const libFile = libraryFiles.get(name);
+    if (!libFile) {
+      throw new RuntimeError(
+        `importJS: library '${name}.js' not found in workspace`
+      );
+    }
+
+    libCache.set(name, LOADING);
+
+    const directives = parseDirectives(libFile.source);
+    const { wasmInstance, nativeLib } = resolveBindings(
+      libFile,
+      directives,
+      getWasmInstance,
+      nativeBridge
+    );
+
+    const dummyRegister = () => {
+      throw new RuntimeError(
+        `Library file '${name}.js' must not call register(). ` +
+          `Use return {...} to export values.`
+      );
+    };
+
+    const factory = new Function(
+      "RTV",
+      "RuntimeError",
+      "FloatXArray",
+      "IType",
+      "register",
+      "wasm",
+      "native",
+      "importJS",
+      libFile.source
+    );
+    const exports = factory(
+      RTV,
+      RuntimeError,
+      FloatXArray,
+      IType,
+      dummyRegister,
+      wasmInstance,
+      nativeLib,
+      importJS
+    );
+
+    libCache.set(name, exports);
+    return exports;
+  }
+
+  for (const file of functionFiles) {
     const funcName = funcNameFromFile(file.name);
     try {
       const branches: BuiltinFnBranch[] = [];
@@ -172,23 +279,12 @@ export function loadJsUserFunctions(
       // Parse directives from the top of the .js file
       const directives = parseDirectives(file.source);
 
-      // Resolve WASM: only if directive is present
-      const wasmInstance = directives.wasm
-        ? getWasmInstance(directives.wasm)
-        : undefined;
-
-      // Resolve native: only if directive is present and bridge is available
-      let nativeLib: unknown;
-      if (directives.native && nativeBridge) {
-        const libFile = nativeLibFilename(directives.native);
-        const dir = file.name.substring(0, file.name.lastIndexOf("/") + 1);
-        const libPath = dir + libFile;
-        try {
-          nativeLib = nativeBridge.load(libPath);
-        } catch {
-          // Native library not found or failed to load — leave undefined
-        }
-      }
+      const { wasmInstance, nativeLib } = resolveBindings(
+        file,
+        directives,
+        getWasmInstance,
+        nativeBridge
+      );
 
       const factory = new Function(
         "RTV",
@@ -198,6 +294,7 @@ export function loadJsUserFunctions(
         "register",
         "wasm",
         "native",
+        "importJS",
         file.source
       );
       factory(
@@ -207,7 +304,8 @@ export function loadJsUserFunctions(
         IType,
         registerFn,
         wasmInstance,
-        nativeLib
+        nativeLib,
+        importJS
       );
 
       if (branches.length === 0) {

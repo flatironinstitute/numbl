@@ -34,6 +34,113 @@ describe("jsUserFunctions", () => {
     expect(fns.has("double_it")).toBe(true);
   });
 
+  it("imports a library file via importJS", () => {
+    const jsFiles = [
+      {
+        name: "_helpers.js",
+        source: `return { add: function(a, b) { return a + b; } };`,
+      },
+      {
+        name: "usehelper.js",
+        source: `var H = importJS("_helpers");
+register({ apply: (args) => H.add(args[0], args[1]) });`,
+      },
+    ];
+    const fns = loadJsUserFunctions(jsFiles);
+    expect(fns.has("usehelper")).toBe(true);
+    expect(fns.has("_helpers")).toBe(false);
+    const branch = fns.get("usehelper")![0];
+    expect(branch.apply([3, 4], 1)).toBe(7);
+  });
+
+  it("caches library — executes once for multiple imports", () => {
+    const jsFiles = [
+      {
+        name: "_counter.js",
+        source: `var c = { n: 0 }; c.n++; return c;`,
+      },
+      {
+        name: "a.js",
+        source: `var C = importJS("_counter");
+register({ apply: () => C.n });`,
+      },
+      {
+        name: "b.js",
+        source: `var C = importJS("_counter");
+register({ apply: () => C.n });`,
+      },
+    ];
+    const fns = loadJsUserFunctions(jsFiles);
+    // Both should see the same cached object with n=1
+    expect(fns.get("a")![0].apply([], 1)).toBe(1);
+    expect(fns.get("b")![0].apply([], 1)).toBe(1);
+  });
+
+  it("throws on importJS for nonexistent library", () => {
+    const jsFiles = [
+      {
+        name: "bad.js",
+        source: `importJS("_nope"); register({ apply: () => 0 });`,
+      },
+    ];
+    expect(() => loadJsUserFunctions(jsFiles)).toThrow(/not found/);
+  });
+
+  it("throws on circular dependency", () => {
+    const jsFiles = [
+      {
+        name: "_a.js",
+        source: `var b = importJS("_b"); return { x: 1 };`,
+      },
+      {
+        name: "_b.js",
+        source: `var a = importJS("_a"); return { y: 2 };`,
+      },
+      {
+        name: "trigger.js",
+        source: `importJS("_a"); register({ apply: () => 0 });`,
+      },
+    ];
+    expect(() => loadJsUserFunctions(jsFiles)).toThrow(/Circular dependency/);
+  });
+
+  it("throws when library calls register()", () => {
+    const jsFiles = [
+      {
+        name: "_badlib.js",
+        source: `register({ apply: () => 0 }); return {};`,
+      },
+      {
+        name: "trigger.js",
+        source: `importJS("_badlib"); register({ apply: () => 0 });`,
+      },
+    ];
+    expect(() => loadJsUserFunctions(jsFiles)).toThrow(
+      /must not call register/
+    );
+  });
+
+  it("supports library importing another library", () => {
+    const jsFiles = [
+      {
+        name: "_base.js",
+        source: `return { mul: function(a, b) { return a * b; } };`,
+      },
+      {
+        name: "_derived.js",
+        source: `var B = importJS("_base");
+return { square: function(x) { return B.mul(x, x); } };`,
+      },
+      {
+        name: "usederived.js",
+        source: `var D = importJS("_derived");
+register({ apply: (args) => D.square(args[0]) });`,
+      },
+    ];
+    const fns = loadJsUserFunctions(jsFiles);
+    expect(fns.get("usederived")![0].apply([5], 1)).toBe(25);
+  });
+
   it("throws if no register() call", () => {
     const jsFiles = [
       {

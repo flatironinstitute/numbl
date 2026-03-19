@@ -106,10 +106,11 @@
     "vitest": "^4.0.18"
   },
   "lint-staged": {
-    "*.{js,jsx,ts,tsx}": [
+    "*.{ts,tsx}": [
       "prettier --write",
       "eslint"
     ],
+    "*.{js,jsx}": "prettier --write",
     "*.{json,css,md,yml}": "prettier --write"
   },
   "optionalDependencies": {
