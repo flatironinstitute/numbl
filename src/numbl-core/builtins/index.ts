@@ -28,7 +28,7 @@ import { registerPrngFunctions } from "./prng.js";
 import { registerArrayFunctions } from "./array.js";
 import { registerArrayManipulationFunctions } from "./array-manipulation.js";
 import { registerIntrospectionFunctions } from "./introspection.js";
-import { registerReductionFunctions } from "./reduction.js";
+import { registerReductionFunctions } from "./reduction/register-reduction-functions.js";
 import { registerStringFunctions } from "./string.js";
 import { registerLinearAlgebraFunctions } from "./linear-algebra/register-linear-algebra-functions.js";
 import { registerMiscFunctions } from "./misc.js";
