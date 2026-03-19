@@ -7,7 +7,8 @@
 
 import { typeToString } from "../lowering/itemTypes.js";
 import { IRVariable } from "../lowering/loweringTypes.js";
-import { IRStmt, type IRExpr } from "../lowering/nodes.js";
+import { IRStmt } from "../lowering/nodes.js";
+import { stmtsContainExpr } from "../lowering/nodeUtils.js";
 import type { Codegen } from "./codegen.js";
 import { collectVarIds } from "./codegenHelpers.js";
 
@@ -239,8 +240,12 @@ export function genFunctionDef(
         }
       }
 
-      // Check if this function body contains any eval() calls
-      const hasEvalCall = bodyContainsEvalCall(stmt.body);
+      // Check if this function body contains any eval() or who() calls
+      const isCallTo =
+        (name: string) => (e: { kind: { type: string; name?: string } }) =>
+          (e.kind.type === "FuncCall" || e.kind.type === "MethodCall") &&
+          e.kind.name === name;
+      const hasEvalCall = stmtsContainExpr(stmt.body, isCallTo("eval"));
 
       if (hasEvalCall) {
         const evalVarMap = new Map<string, string>();
@@ -254,6 +259,25 @@ export function genFunctionDef(
           }
         }
         cg.evalVarAccessorStack.push(evalVarMap);
+      }
+
+      const hasWhoCall = stmtsContainExpr(
+        stmt.body,
+        e => isCallTo("who")(e) || isCallTo("whos")(e)
+      );
+
+      if (hasWhoCall) {
+        const whoVarMap = new Map<string, string>();
+        const seenNames = new Set<string>();
+        for (const id of ownVarIds) {
+          if (globalVarIds.has(id)) continue;
+          const name = varNameFromId(id);
+          if (!seenNames.has(name)) {
+            seenNames.add(name);
+            whoVarMap.set(name, cg.varRef(id));
+          }
+        }
+        cg.whoVarGetterStack.push(whoVarMap);
       }
 
       // Register caller accessors for external-access vars declared in this function
@@ -298,6 +322,9 @@ export function genFunctionDef(
 
       if (hasEvalCall) {
         cg.evalVarAccessorStack.pop();
+      }
+      if (hasWhoCall) {
+        cg.whoVarGetterStack.pop();
       }
 
       // Return capture
@@ -431,100 +458,9 @@ export function emitReturnCapture(
 /**
  * Extract the MATLAB variable name from a VarId (format: "name_N").
  */
-function varNameFromId(id: string): string {
+export function varNameFromId(id: string): string {
   const lastUnderscore = id.lastIndexOf("_");
   return lastUnderscore > 0 ? id.substring(0, lastUnderscore) : id;
-}
-
-/** Check if any IR statement in the body contains a FuncCall to "eval". */
-function bodyContainsEvalCall(stmts: IRStmt[]): boolean {
-  for (const s of stmts) {
-    if (s.type === "Function") continue;
-    if (stmtContainsEvalCall(s)) return true;
-  }
-  return false;
-}
-
-function stmtContainsEvalCall(stmt: IRStmt): boolean {
-  switch (stmt.type) {
-    case "ExprStmt":
-    case "Assign":
-    case "MultiAssign":
-    case "AssignLValue":
-      return exprContainsEvalCall(stmt.expr);
-    case "If":
-      return (
-        exprContainsEvalCall(stmt.cond) ||
-        bodyContainsEvalCall(stmt.thenBody) ||
-        stmt.elseifBlocks.some(
-          c => exprContainsEvalCall(c.cond) || bodyContainsEvalCall(c.body)
-        ) ||
-        (stmt.elseBody !== null && bodyContainsEvalCall(stmt.elseBody))
-      );
-    case "For":
-      return exprContainsEvalCall(stmt.expr) || bodyContainsEvalCall(stmt.body);
-    case "While":
-      return exprContainsEvalCall(stmt.cond) || bodyContainsEvalCall(stmt.body);
-    case "Switch":
-      return (
-        exprContainsEvalCall(stmt.expr) ||
-        stmt.cases.some(
-          c => exprContainsEvalCall(c.value) || bodyContainsEvalCall(c.body)
-        ) ||
-        (stmt.otherwise !== null && bodyContainsEvalCall(stmt.otherwise))
-      );
-    case "TryCatch":
-      return (
-        bodyContainsEvalCall(stmt.tryBody) ||
-        bodyContainsEvalCall(stmt.catchBody)
-      );
-    default:
-      return false;
-  }
-}
-
-function exprContainsEvalCall(expr: IRExpr): boolean {
-  const k = expr.kind;
-  if (k.type === "FuncCall") {
-    if (k.name === "eval") return true;
-    return (
-      k.args.some(a => exprContainsEvalCall(a)) ||
-      (k.instanceBase !== undefined &&
-        k.instanceBase !== null &&
-        exprContainsEvalCall(k.instanceBase))
-    );
-  }
-  if (k.type === "Binary")
-    return exprContainsEvalCall(k.left) || exprContainsEvalCall(k.right);
-  if (k.type === "Unary") return exprContainsEvalCall(k.operand);
-  if (k.type === "Range")
-    return (
-      exprContainsEvalCall(k.start) ||
-      (k.step !== null && exprContainsEvalCall(k.step)) ||
-      exprContainsEvalCall(k.end)
-    );
-  if (k.type === "Index" || k.type === "IndexCell")
-    return (
-      exprContainsEvalCall(k.base) ||
-      k.indices.some(i => exprContainsEvalCall(i))
-    );
-  if (k.type === "Member") return exprContainsEvalCall(k.base);
-  if (k.type === "MemberDynamic")
-    return exprContainsEvalCall(k.base) || exprContainsEvalCall(k.nameExpr);
-  if (k.type === "MethodCall")
-    return (
-      k.name === "eval" ||
-      exprContainsEvalCall(k.base) ||
-      k.args.some(a => exprContainsEvalCall(a))
-    );
-  if (k.type === "AnonFunc") return exprContainsEvalCall(k.body);
-  if (k.type === "Tensor" || k.type === "Cell")
-    return k.rows.some(row => row.some(e => exprContainsEvalCall(e)));
-  if (k.type === "ClassInstantiation")
-    return k.args.some(a => exprContainsEvalCall(a));
-  if (k.type === "SuperConstructorCall")
-    return k.args.some(a => exprContainsEvalCall(a));
-  return false;
 }
 
 /**

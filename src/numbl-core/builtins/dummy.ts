@@ -33,7 +33,7 @@ const returnDummyStringFunctions = [
   "lastwarn",
   "mfilename",
 ];
-const returnEmptyArrayFunctions = ["who", "xlim", "ylim"];
+const returnEmptyArrayFunctions = ["xlim", "ylim"];
 const returnDummyBooleanFunctions = ["ispc", "ismac", "isunix"];
 const returnDummyCellArrayFunctions = ["listfonts"];
 
@@ -109,6 +109,8 @@ export function getDummyBuiltinNames(): string[] {
     ...fileIONumFunctions,
     ...fileIOStringFunctions,
     ...fileIOUnknownFunctions,
+    "who",
+    "whos",
   ];
 }
 
@@ -138,4 +140,18 @@ export const registerDummyFunctions = () => {
   registerHandleGetSet();
   registerPathFunctions();
   registerFileIOFunctions();
+  // who()/whos() are handled as compile-time intrinsics (codegenExpr) + runtime methods,
+  // but need builtin registrations so the compiler recognizes them as functions.
+  register(
+    "who",
+    builtinSingle(() => RTV.cell([], [0, 0]), {
+      outputType: IType.cell(IType.Char, "char"),
+    })
+  );
+  register(
+    "whos",
+    builtinSingle(() => RTV.struct(new Map()), {
+      outputType: IType.Unknown,
+    })
+  );
 };

@@ -11,6 +11,7 @@ import {
   itemTypeForExprKind,
 } from "../lowering/index.js";
 import { type ItemType, IType } from "../lowering/itemTypes.js";
+import { walkExpr } from "../lowering/nodeUtils.js";
 import { snapshotTypes, restoreTypes } from "../lowering/lowerStmt.js";
 import type { Codegen } from "./codegen.js";
 import {
@@ -33,45 +34,24 @@ function resetExternallySettableTypesForCodegen(
 ): void {
   const ctx = cg.loweringCtx;
   if (ctx.externalAccessVarNames.size === 0) return;
-  if (!exprHasFuncCall(irExpr)) return;
+  let hasFuncCall = false;
+  walkExpr(irExpr, e => {
+    if (!hasFuncCall) {
+      const t = e.kind.type;
+      if (
+        t === "FuncCall" ||
+        t === "MethodCall" ||
+        t === "SuperConstructorCall" ||
+        t === "ClassInstantiation"
+      ) {
+        hasFuncCall = true;
+      }
+    }
+  });
+  if (!hasFuncCall) return;
   for (const name of ctx.externalAccessVarNames) {
     const v = ctx.lookup(name);
     if (v) cg.typeEnv.set(v.id, IType.Unknown);
-  }
-}
-
-function exprHasFuncCall(expr: IRExpr): boolean {
-  const k = expr.kind;
-  switch (k.type) {
-    case "FuncCall":
-    case "MethodCall":
-    case "SuperConstructorCall":
-    case "ClassInstantiation":
-      return true;
-    case "Binary":
-      return exprHasFuncCall(k.left) || exprHasFuncCall(k.right);
-    case "Unary":
-      return exprHasFuncCall(k.operand);
-    case "Range":
-      return (
-        exprHasFuncCall(k.start) ||
-        (k.step !== null && exprHasFuncCall(k.step)) ||
-        exprHasFuncCall(k.end)
-      );
-    case "Index":
-    case "IndexCell":
-      return exprHasFuncCall(k.base) || k.indices.some(i => exprHasFuncCall(i));
-    case "Member":
-      return exprHasFuncCall(k.base);
-    case "MemberDynamic":
-      return exprHasFuncCall(k.base) || exprHasFuncCall(k.nameExpr);
-    case "AnonFunc":
-      return exprHasFuncCall(k.body);
-    case "Tensor":
-    case "Cell":
-      return k.rows.some(row => row.some(e => exprHasFuncCall(e)));
-    default:
-      return false;
   }
 }
 
@@ -97,6 +77,24 @@ export function genStmt(cg: Codegen, stmt: IRStmt): void {
 
   switch (stmt.type) {
     case "ExprStmt": {
+      // who()/whos() as expression statements (no assignment) should print, not return
+      if (
+        stmt.expr.kind.type === "FuncCall" &&
+        (stmt.expr.kind.name === "who" || stmt.expr.kind.name === "whos")
+      ) {
+        const fnName = stmt.expr.kind.name;
+        const whoVarMap =
+          cg.whoVarGetterStack.length > 0
+            ? cg.whoVarGetterStack[cg.whoVarGetterStack.length - 1]
+            : new Map<string, string>();
+        const entries = [...whoVarMap.entries()]
+          .map(([name, jsRef]) => `${JSON.stringify(name)}: () => ${jsRef}`)
+          .join(", ");
+        const whoArgs = stmt.expr.kind.args.map(a => genExpr(cg, a));
+        cg.emit(`$rt.${fnName}(0, {${entries}}, [${whoArgs.join(", ")}]);`);
+        resetExternallySettableTypesForCodegen(cg, stmt.expr);
+        break;
+      }
       const val = genExpr(cg, stmt.expr);
       cg.emit(`$ret = ${val};`);
       if (!stmt.suppressed && !isOutputFunction(stmt.expr)) {

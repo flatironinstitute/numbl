@@ -30,6 +30,9 @@ import {
   isRuntimeNumber,
   isRuntimeTensor,
   isRuntimeClassInstance,
+  isRuntimeCell,
+  isRuntimeLogical,
+  isRuntimeSparseMatrix,
   FloatXArray,
   RuntimeChar,
   RuntimeCell,
@@ -74,6 +77,7 @@ import {
   callBuiltin as _callBuiltin,
   callBuiltinSync as _callBuiltinSync,
   callClassMethod as _callClassMethod,
+  numblClass as _numblClass,
 } from "./runtimeDispatch.js";
 import {
   index as _index,
@@ -607,6 +611,238 @@ export class Runtime {
   public setVariableValue(name: string, value: RuntimeValue | undefined): void {
     if (value === undefined) return;
     this.variableValues[name] = ensureRuntimeValue(value);
+  }
+
+  // ── who() / whos() ─────────────────────────────────────────────────
+
+  /** Collect defined variable names from getters and apply argument filters. */
+  private filterVarNames(
+    getters: Record<string, () => unknown>,
+    args: unknown[]
+  ): { names: string[]; values: Map<string, unknown> } {
+    const values = new Map<string, unknown>();
+    for (const [name, getter] of Object.entries(getters)) {
+      const v = getter();
+      if (v !== undefined) values.set(name, v);
+    }
+    let names = [...values.keys()].sort();
+
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length > 0) {
+      const strArgs = margs.map(a => {
+        if (isRuntimeChar(a)) return a.value;
+        if (isRuntimeString(a)) return a;
+        if (typeof a === "string") return a;
+        return String(a);
+      });
+
+      if (strArgs[0] === "-regexp") {
+        const regexps = strArgs.slice(1).map(s => new RegExp(s));
+        names = names.filter(name => regexps.some(re => re.test(name)));
+      } else {
+        const patterns = strArgs.map(s => {
+          const escaped = s
+            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+            .replace(/\*/g, ".*")
+            .replace(/\?/g, ".");
+          return new RegExp(`^${escaped}$`);
+        });
+        names = names.filter(name => patterns.some(re => re.test(name)));
+      }
+    }
+    return { names, values };
+  }
+
+  /** Get shape of a runtime value as a number array. */
+  private static varShape(v: unknown): number[] {
+    const rv = ensureRuntimeValue(v);
+    if (isRuntimeNumber(rv) || isRuntimeLogical(rv)) return [1, 1];
+    if (isRuntimeTensor(rv))
+      return rv.shape.length >= 2 ? [...rv.shape] : [1, ...rv.shape];
+    if (isRuntimeSparseMatrix(rv)) return [rv.m, rv.n];
+    if (isRuntimeCell(rv)) return [...rv.shape];
+    if (isRuntimeChar(rv))
+      return (
+        rv.shape ?? (rv.value.length === 0 ? [0, 0] : [1, rv.value.length])
+      );
+    if (isRuntimeString(rv)) return [1, 1];
+    if (isRuntimeClassInstance(rv)) return [1, 1];
+    return [1, 1];
+  }
+
+  /** Estimate bytes for a runtime value. */
+  private static varBytes(v: unknown): number {
+    const rv = ensureRuntimeValue(v);
+    if (isRuntimeNumber(rv)) return 8;
+    if (isRuntimeLogical(rv)) return 1;
+    if (isRuntimeTensor(rv)) {
+      const n = rv.data.length;
+      return n * 8 + (rv.imag ? n * 8 : 0);
+    }
+    if (isRuntimeSparseMatrix(rv)) {
+      const nnz = rv.pr.length;
+      // ir (int32) + pr (float64) per nnz, jc (int32) per column+1, optional pi
+      return nnz * 4 + nnz * 8 + (rv.n + 1) * 4 + (rv.pi ? nnz * 8 : 0);
+    }
+    if (isRuntimeCell(rv)) return rv.data.length * 8;
+    if (isRuntimeChar(rv)) return rv.value.length * 2;
+    if (isRuntimeString(rv)) return rv.length * 2;
+    return 0;
+  }
+
+  /** Check if a runtime value is complex. */
+  private static varIsComplex(rv: RuntimeValue): boolean {
+    if (isRuntimeTensor(rv)) return !!rv.imag;
+    if (isRuntimeSparseMatrix(rv)) return !!rv.pi;
+    return (
+      typeof rv === "object" &&
+      rv !== null &&
+      "kind" in rv &&
+      rv.kind === "complex_number"
+    );
+  }
+
+  /** Check if a runtime value is sparse. */
+  private static varIsSparse(rv: RuntimeValue): boolean {
+    return isRuntimeSparseMatrix(rv);
+  }
+
+  public who(
+    nargout: number,
+    getters: Record<string, () => unknown>,
+    args: unknown[]
+  ): unknown {
+    const { names } = this.filterVarNames(getters, args);
+
+    if (nargout >= 1) {
+      return _makeCell(
+        names.map(n => RTV.char(n)),
+        [names.length, 1]
+      );
+    }
+    if (names.length > 0) {
+      this.output("Your variables are:\n\n");
+      for (const name of names) {
+        this.output(name + "  ");
+      }
+      this.output("\n\n");
+    }
+    return 0;
+  }
+
+  /** Build info record for a single variable. */
+  private static varInfo(
+    name: string,
+    v: unknown
+  ): {
+    name: string;
+    shape: number[];
+    bytes: number;
+    cls: string;
+    complex: boolean;
+    sparse: boolean;
+  } {
+    const rv = ensureRuntimeValue(v);
+    return {
+      name,
+      shape: Runtime.varShape(v),
+      bytes: Runtime.varBytes(v),
+      cls: _numblClass(rv),
+      complex: Runtime.varIsComplex(rv),
+      sparse: Runtime.varIsSparse(rv),
+    };
+  }
+
+  private static whosStruct(info: {
+    name: string;
+    shape: number[];
+    bytes: number;
+    cls: string;
+    complex: boolean;
+    sparse: boolean;
+  }): RuntimeStruct {
+    return RTV.struct(
+      new Map<string, RuntimeValue>([
+        ["name", RTV.char(info.name)],
+        [
+          "size",
+          RTV.tensor(new FloatXArray(info.shape), [1, info.shape.length]),
+        ],
+        ["bytes", RTV.num(info.bytes)],
+        ["class", RTV.char(info.cls)],
+        ["global", RTV.logical(false)],
+        ["sparse", RTV.logical(info.sparse)],
+        ["complex", RTV.logical(info.complex)],
+        [
+          "nesting",
+          RTV.struct(
+            new Map<string, RuntimeValue>([
+              ["function", RTV.char("")],
+              ["level", RTV.num(0)],
+            ])
+          ),
+        ],
+        ["persistent", RTV.logical(false)],
+      ])
+    );
+  }
+
+  public whos(
+    nargout: number,
+    getters: Record<string, () => unknown>,
+    args: unknown[]
+  ): unknown {
+    const { names, values } = this.filterVarNames(getters, args);
+    const infos = names.map(name => Runtime.varInfo(name, values.get(name)!));
+
+    if (nargout >= 1) {
+      if (infos.length === 0) {
+        return Runtime.whosStruct({
+          name: "",
+          shape: [0, 0],
+          bytes: 0,
+          cls: "",
+          complex: false,
+          sparse: false,
+        });
+      }
+      const structs = infos.map(info => Runtime.whosStruct(info));
+      if (structs.length === 1) return structs[0];
+      return RTV.structArray([...structs[0].fields.keys()], structs);
+    }
+
+    // Display mode
+    if (infos.length === 0) return 0;
+
+    const rows = infos.map(info => {
+      const attrs: string[] = [];
+      if (info.complex) attrs.push("complex");
+      if (info.sparse) attrs.push("sparse");
+      return {
+        ...info,
+        sizeStr: info.shape.join("x"),
+        attrsStr: attrs.join(", "),
+      };
+    });
+
+    const nameW = Math.max(4, ...rows.map(r => r.name.length));
+    const sizeW = Math.max(4, ...rows.map(r => r.sizeStr.length));
+    const bytesW = Math.max(5, ...rows.map(r => String(r.bytes).length));
+    const classW = Math.max(5, ...rows.map(r => r.cls.length));
+    const hasAttrs = rows.some(r => r.attrsStr.length > 0);
+    const attrsHeader = hasAttrs ? "  Attributes" : "";
+
+    this.output(
+      `  ${"Name".padEnd(nameW)}  ${"Size".padStart(sizeW)}  ${"Bytes".padStart(bytesW)}  ${"Class".padEnd(classW)}${attrsHeader}\n\n`
+    );
+    for (const r of rows) {
+      const attrsPart = hasAttrs ? `  ${r.attrsStr}` : "";
+      this.output(
+        `  ${r.name.padEnd(nameW)}  ${r.sizeStr.padStart(sizeW)}  ${String(r.bytes).padStart(bytesW)}  ${r.cls.padEnd(classW)}${attrsPart}\n`
+      );
+    }
+    this.output("\n");
+    return 0;
   }
 
   // ── Workspace accessors (for assignin/evalin) ──────────────────────
