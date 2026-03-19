@@ -115,6 +115,78 @@ export function index(
   nargout: number = 1,
   skipSubsref: boolean | string = false
 ): unknown {
+  // ── Fast path: tensor with scalar numeric indices ──
+  // Avoids resolveIndices, ensureRuntimeValue, mIndex dispatch, and all
+  // intermediate array allocations for the most common indexing pattern.
+  if (
+    typeof base === "object" &&
+    base !== null &&
+    (base as { kind?: string }).kind === "tensor"
+  ) {
+    const t = base as import("../runtime/types.js").RuntimeTensor;
+    const nIdx = indices.length;
+    if (nIdx === 1) {
+      // 1D: linear index
+      const idx = indices[0];
+      if (typeof idx === "number") {
+        const i = Math.round(idx) - 1;
+        if (i < 0 || i >= t.data.length)
+          throw new RuntimeError("Index exceeds array bounds");
+        if (t.imag !== undefined) {
+          const im = t.imag[i];
+          return im === 0 ? t.data[i] : RTV.complex(t.data[i], im);
+        }
+        return t.data[i];
+      }
+    } else if (nIdx === 2) {
+      // 2D: row, col
+      const ri = indices[0];
+      const ci = indices[1];
+      if (typeof ri === "number" && typeof ci === "number") {
+        const s = t.shape;
+        const rows = s.length === 0 ? 1 : s.length === 1 ? 1 : s[0];
+        const cols = s.length === 0 ? 1 : s.length === 1 ? s[0] : s[1];
+        const r = Math.round(ri) - 1;
+        const c = Math.round(ci) - 1;
+        if (r < 0 || r >= rows || c < 0 || c >= cols)
+          throw new RuntimeError("Index exceeds array bounds");
+        const lin = c * rows + r;
+        if (t.imag !== undefined) {
+          const im = t.imag[lin];
+          return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
+        }
+        return t.data[lin];
+      }
+    } else if (nIdx >= 3) {
+      // N-D: all indices must be scalar numbers
+      let allNumeric = true;
+      for (let k = 0; k < nIdx; k++) {
+        if (typeof indices[k] !== "number") {
+          allNumeric = false;
+          break;
+        }
+      }
+      if (allNumeric) {
+        const s = t.shape;
+        let lin = 0;
+        let stride = 1;
+        for (let k = 0; k < nIdx; k++) {
+          const dimSize = k < s.length ? s[k] : 1;
+          const sub = Math.round(indices[k] as number) - 1;
+          if (sub < 0 || sub >= dimSize)
+            throw new RuntimeError("Index exceeds array bounds");
+          lin += sub * stride;
+          stride *= dimSize;
+        }
+        if (t.imag !== undefined) {
+          const im = t.imag[lin];
+          return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
+        }
+        return t.data[lin];
+      }
+    }
+  }
+
   // Anonymous function call
   if (typeof base === "function") {
     return (base as (...args: unknown[]) => unknown)(...indices);
@@ -238,6 +310,21 @@ export function indexCell(
   base: unknown,
   indices: unknown[]
 ): unknown {
+  // ── Fast path: cell with single scalar numeric index ──
+  if (
+    indices.length === 1 &&
+    typeof indices[0] === "number" &&
+    typeof base === "object" &&
+    base !== null &&
+    (base as { kind?: string }).kind === "cell"
+  ) {
+    const cell = base as import("../runtime/types.js").RuntimeCell;
+    const i = Math.round(indices[0] as number) - 1;
+    if (i < 0 || i >= cell.data.length)
+      throw new RuntimeError("Cell index exceeds bounds");
+    return cell.data[i];
+  }
+
   const mv = ensureRuntimeValue(base);
 
   // Class instance brace indexing: dispatch to subsref with type '{}'
