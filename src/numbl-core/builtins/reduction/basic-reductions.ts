@@ -23,9 +23,13 @@ import {
   reductionCheck,
   makeReduction,
   accumKernel,
+  accumKernelOmitNaN,
   sliceKernel,
+  sliceKernelOmitNaN,
   sparseSum,
   complexProd,
+  parseNanFlag,
+  filterNaN,
 } from "./helpers.js";
 
 export function registerBasicReductions(): void {
@@ -34,9 +38,10 @@ export function registerBasicReductions(): void {
   register("sum", [
     {
       check: reductionCheck,
-      apply: args => {
-        if (args.length < 1)
+      apply: rawArgs => {
+        if (rawArgs.length < 1)
           throw new RuntimeError("sum requires at least 1 argument");
+        const { args, omitNaN } = parseNanFlag(rawArgs);
         const v = args[0];
         if (isRuntimeSparseMatrix(v)) {
           const dim =
@@ -49,7 +54,9 @@ export function registerBasicReductions(): void {
                   : 1;
           return sparseSum(v, dim);
         }
-        const kernel = accumKernel((acc, val) => acc + val, 0);
+        const kernel = omitNaN
+          ? accumKernelOmitNaN((acc, val) => acc + val, 0)
+          : accumKernel((acc, val) => acc + val, 0);
         if (isRuntimeNumber(v)) return v;
         if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
         if (isRuntimeTensor(v)) {
@@ -68,13 +75,14 @@ export function registerBasicReductions(): void {
 
   // ── prod ─────────────────────────────────────────────────────────────
 
-  const prodKernel = accumKernel((acc, val) => acc * val, 1);
   register("prod", [
     {
       check: reductionCheck,
-      apply: args => {
-        if (args.length < 1)
+      apply: rawArgs => {
+        if (rawArgs.length < 1)
           throw new RuntimeError("prod requires at least 1 argument");
+        const { args: parsedArgs, omitNaN } = parseNanFlag(rawArgs);
+        let args = parsedArgs;
         let v = args[0];
         if (isRuntimeSparseMatrix(v)) {
           v = sparseToDense(v);
@@ -88,13 +96,16 @@ export function registerBasicReductions(): void {
               args.length >= 2 ? Math.round(toNumber(args[1])) : undefined
             );
           }
+          const kernel = omitNaN
+            ? accumKernelOmitNaN((acc, val) => acc * val, 1)
+            : accumKernel((acc, val) => acc * val, 1);
           if (args.length >= 2) {
             if (isRuntimeChar(args[1]) && toString(args[1]) === "all")
-              return prodKernel.reduceAll(v);
-            return prodKernel.reduceDim(v, Math.round(toNumber(args[1])));
+              return kernel.reduceAll(v);
+            return kernel.reduceDim(v, Math.round(toNumber(args[1])));
           }
           const d = firstReduceDim(v.shape);
-          return d === 0 ? prodKernel.reduceAll(v) : prodKernel.reduceDim(v, d);
+          return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
         }
         throw new RuntimeError("prod: argument must be numeric");
       },
@@ -110,20 +121,32 @@ export function registerBasicReductions(): void {
         (acc, val) => acc + val,
         0,
         (sum, count) => sum / count
+      ),
+      accumKernelOmitNaN(
+        (acc, val) => acc + val,
+        0,
+        (sum, count) => (count === 0 ? NaN : sum / count)
       )
     ),
   ]);
 
   // ── std / var ────────────────────────────────────────────────────────
 
-  const varianceOf = (slice: ArrayLike<number>, w: number): number => {
-    const n = slice.length;
+  const varianceOf = (
+    slice: ArrayLike<number>,
+    w: number,
+    omitNaN: boolean
+  ): number => {
+    let data: ArrayLike<number> = slice;
+    if (omitNaN) data = filterNaN(slice);
+    const n = data.length;
+    if (n === 0) return NaN;
     if (n <= 1 && w === 0) return 0;
     let s = 0;
-    for (let i = 0; i < n; i++) s += slice[i];
+    for (let i = 0; i < n; i++) s += data[i];
     const m = s / n;
     let ss = 0;
-    for (let i = 0; i < n; i++) ss += (slice[i] - m) ** 2;
+    for (let i = 0; i < n; i++) ss += (data[i] - m) ** 2;
     const denom = w === 1 ? n : n - 1;
     return ss / denom;
   };
@@ -132,16 +155,17 @@ export function registerBasicReductions(): void {
     name: string,
     transform: (variance: number) => number
   ) => {
-    return (args: RuntimeValue[]): RuntimeValue => {
-      if (args.length < 1)
+    return (rawArgs: RuntimeValue[]): RuntimeValue => {
+      if (rawArgs.length < 1)
         throw new RuntimeError(`${name} requires at least 1 argument`);
+      const { args, omitNaN } = parseNanFlag(rawArgs);
       const v = args[0];
       const w = args.length >= 2 ? toNumber(args[1]) : 0;
       const dimArg = args.length >= 3 ? Math.round(toNumber(args[2])) : 0;
       if (isRuntimeNumber(v)) return RTV.num(0);
       if (isRuntimeTensor(v)) {
         const kernel = sliceKernel((slice: ArrayLike<number>) =>
-          transform(varianceOf(slice, w))
+          transform(varianceOf(slice, w, omitNaN))
         );
         if (dimArg > 0) return kernel.reduceDim(v, dimArg);
         const d = firstReduceDim(v.shape);
@@ -175,7 +199,13 @@ export function registerBasicReductions(): void {
     return (sorted[n / 2 - 1] + sorted[n / 2]) / 2;
   };
 
-  register("median", [makeReduction("median", sliceKernel(medianOf))]);
+  register("median", [
+    makeReduction(
+      "median",
+      sliceKernel(medianOf),
+      sliceKernelOmitNaN(medianOf)
+    ),
+  ]);
 
   // ── mode ─────────────────────────────────────────────────────────────
 
@@ -195,5 +225,7 @@ export function registerBasicReductions(): void {
     return bestVal;
   };
 
-  register("mode", [makeReduction("mode", sliceKernel(modeOf))]);
+  register("mode", [
+    makeReduction("mode", sliceKernel(modeOf), sliceKernelOmitNaN(modeOf)),
+  ]);
 }

@@ -132,6 +132,38 @@ export function dimReduce(
   return RTV.tensor(result, info.resultShape, imOut);
 }
 
+/** Like dimReduce but skips NaN values (for 'omitnan' flag). */
+export function dimReduceOmitNaN(
+  v: RuntimeValue,
+  dim: number,
+  reduceFn: (acc: number, val: number) => number,
+  initialValue: number,
+  finalizeFn?: (acc: number, count: number) => number
+): RuntimeValue {
+  if (!isRuntimeTensor(v))
+    throw new RuntimeError("dimReduceOmitNaN: argument must be a tensor");
+
+  const info = forEachSlice(v.shape, dim, () => {});
+  if (!info) return copyTensor(v);
+
+  const result = new FloatXArray(info.totalElems);
+
+  forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
+    let acc = initialValue;
+    let count = 0;
+    for (let k = 0; k < srcIndices.length; k++) {
+      const val = v.data[srcIndices[k]];
+      if (!isNaN(val)) {
+        acc = reduceFn(acc, val);
+        count++;
+      }
+    }
+    result[outIdx] = finalizeFn ? finalizeFn(acc, count) : acc;
+  });
+
+  return RTV.tensor(result, info.resultShape);
+}
+
 /** Reduce a tensor along a dimension using a whole-slice function (for median, mode, etc.) */
 export function sliceDimReduce(
   v: RuntimeTensor,
@@ -440,6 +472,34 @@ export function preserveTypeCheck(
   return null;
 }
 
+// ── NaN flag parsing ────────────────────────────────────────────────────
+
+/** Strip trailing 'omitnan'/'includenan' from args. Returns cleaned args and flag. */
+export function parseNanFlag(args: RuntimeValue[]): {
+  args: RuntimeValue[];
+  omitNaN: boolean;
+} {
+  if (args.length >= 2) {
+    const last = args[args.length - 1];
+    if (isRuntimeChar(last)) {
+      const s = toString(last).toLowerCase();
+      if (s === "omitnan") return { args: args.slice(0, -1), omitNaN: true };
+      if (s === "includenan")
+        return { args: args.slice(0, -1), omitNaN: false };
+    }
+  }
+  return { args, omitNaN: false };
+}
+
+/** Filter NaN values from a Float64Array, returning a new (possibly shorter) array. */
+export function filterNaN(arr: ArrayLike<number>): Float64Array {
+  const out: number[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    if (!isNaN(arr[i] as number)) out.push(arr[i] as number);
+  }
+  return new Float64Array(out);
+}
+
 // ── Reduction factories ────────────────────────────────────────────────
 
 export type ReductionKernel = {
@@ -448,30 +508,34 @@ export type ReductionKernel = {
 };
 
 /** Unified factory for reductions (sum, mean, median, mode, etc.).
- *  Handles arg parsing: scalar passthrough, 'all' flag, dim arg, default dim. */
+ *  Handles arg parsing: scalar passthrough, 'all' flag, dim arg, default dim.
+ *  Supports 'omitnan'/'includenan' nanflag as last string argument. */
 export function makeReduction(
   name: string,
-  kernel: ReductionKernel
+  kernel: ReductionKernel,
+  omitNaNKernel?: ReductionKernel
 ): {
   check: typeof reductionCheck;
   apply: (args: RuntimeValue[]) => RuntimeValue;
 } {
   return {
     check: reductionCheck,
-    apply: args => {
-      if (args.length < 1)
+    apply: rawArgs => {
+      if (rawArgs.length < 1)
         throw new RuntimeError(`${name} requires at least 1 argument`);
+      const { args, omitNaN } = parseNanFlag(rawArgs);
+      const k = omitNaN && omitNaNKernel ? omitNaNKernel : kernel;
       const v = args[0];
       if (isRuntimeNumber(v)) return v;
       if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
       if (isRuntimeTensor(v)) {
         if (args.length >= 2) {
           if (isRuntimeChar(args[1]) && toString(args[1]) === "all")
-            return kernel.reduceAll(v);
-          return kernel.reduceDim(v, Math.round(toNumber(args[1])));
+            return k.reduceAll(v);
+          return k.reduceDim(v, Math.round(toNumber(args[1])));
         }
         const d = firstReduceDim(v.shape);
-        return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
+        return d === 0 ? k.reduceAll(v) : k.reduceDim(v, d);
       }
       throw new RuntimeError(`${name}: argument must be numeric`);
     },
@@ -509,6 +573,53 @@ export function sliceKernel(
   return {
     reduceAll: v => RTV.num(sliceFn(v.data)),
     reduceDim: (v, dim) => sliceDimReduce(v, dim, sliceFn),
+  };
+}
+
+/** Create an accumulator kernel that skips NaN values. */
+export function accumKernelOmitNaN(
+  reduceFn: (acc: number, val: number) => number,
+  initial: number,
+  finalizeFn?: (acc: number, count: number) => number
+): ReductionKernel {
+  return {
+    reduceAll: v => {
+      let acc = initial;
+      let count = 0;
+      for (let i = 0; i < v.data.length; i++) {
+        if (!isNaN(v.data[i])) {
+          acc = reduceFn(acc, v.data[i]);
+          count++;
+        }
+      }
+      const re = finalizeFn ? finalizeFn(acc, count) : acc;
+      if (v.imag) {
+        let accIm = initial;
+        let countIm = 0;
+        for (let i = 0; i < v.imag.length; i++) {
+          if (!isNaN(v.imag[i])) {
+            accIm = reduceFn(accIm, v.imag[i]);
+            countIm++;
+          }
+        }
+        const im = finalizeFn ? finalizeFn(accIm, countIm) : accIm;
+        if (im !== 0) return RTV.complex(re, im);
+      }
+      return RTV.num(re);
+    },
+    reduceDim: (v, dim) =>
+      dimReduceOmitNaN(v, dim, reduceFn, initial, finalizeFn),
+  };
+}
+
+/** Create a slice kernel that filters NaN before applying the function. */
+export function sliceKernelOmitNaN(
+  sliceFn: (slice: ArrayLike<number>) => number
+): ReductionKernel {
+  const filteredFn = (slice: ArrayLike<number>) => sliceFn(filterNaN(slice));
+  return {
+    reduceAll: v => RTV.num(filteredFn(v.data)),
+    reduceDim: (v, dim) => sliceDimReduce(v, dim, filteredFn),
   };
 }
 
