@@ -739,6 +739,18 @@ function genFuncCall(
       return `$rt.evalLocal(${args[0]}, {${entries}})`;
     }
   }
+  // who()/whos() intrinsic: pass local variable getters so runtime can check which are defined
+  if (kind.name === "who" || kind.name === "whos") {
+    const varMap =
+      cg.whoVarGetterStack.length > 0
+        ? cg.whoVarGetterStack[cg.whoVarGetterStack.length - 1]
+        : new Map<string, string>();
+    const entries = [...varMap.entries()]
+      .map(([name, jsRef]) => `${JSON.stringify(name)}: () => ${jsRef}`)
+      .join(", ");
+    const nargout = cg.nargoutOverride ?? kind.nargout;
+    return `$rt.${kind.name}(${nargout}, {${entries}}, [${args.join(", ")}])`;
+  }
   if (kind.name === "exist" && kind.args.length === 2) {
     const arg0 = kind.args[0].kind;
     const arg1 = kind.args[1].kind;

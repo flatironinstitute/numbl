@@ -5,7 +5,7 @@
 import { BinaryOperation } from "../parser/index.js";
 import { getConstantType } from "../builtins";
 import { ItemType, isScalarType, isComplexType } from "./itemTypes.js";
-import { IRExpr, IRExprKind } from "./nodes.js";
+import { IRExpr, IRExprKind, IRStmt } from "./nodes.js";
 import type { TypeEnv } from "./typeEnv.js";
 
 // Re-export for consumers that import from nodeUtils
@@ -60,6 +60,78 @@ export function walkExpr(expr: IRExpr, fn: (e: IRExpr) => void): void {
       walkExpr(k.body, fn);
       break;
   }
+}
+
+/**
+ * Walk all expressions in a statement list (non-recursive into nested Functions),
+ * calling fn for each expression node.
+ */
+export function walkStmtExprs(stmts: IRStmt[], fn: (e: IRExpr) => void): void {
+  for (const s of stmts) {
+    if (s.type === "Function") continue;
+    walkStmtExprsOne(s, fn);
+  }
+}
+
+function walkStmtExprsOne(s: IRStmt, fn: (e: IRExpr) => void): void {
+  switch (s.type) {
+    case "ExprStmt":
+      walkExpr(s.expr, fn);
+      break;
+    case "Assign":
+      walkExpr(s.expr, fn);
+      break;
+    case "MultiAssign":
+      walkExpr(s.expr, fn);
+      break;
+    case "AssignLValue":
+      walkExpr(s.expr, fn);
+      break;
+    case "If":
+      walkExpr(s.cond, fn);
+      walkStmtExprs(s.thenBody, fn);
+      for (const b of s.elseifBlocks) {
+        walkExpr(b.cond, fn);
+        walkStmtExprs(b.body, fn);
+      }
+      if (s.elseBody) walkStmtExprs(s.elseBody, fn);
+      break;
+    case "While":
+      walkExpr(s.cond, fn);
+      walkStmtExprs(s.body, fn);
+      break;
+    case "For":
+      walkExpr(s.expr, fn);
+      walkStmtExprs(s.body, fn);
+      break;
+    case "Switch":
+      walkExpr(s.expr, fn);
+      for (const c of s.cases) {
+        walkExpr(c.value, fn);
+        walkStmtExprs(c.body, fn);
+      }
+      if (s.otherwise) walkStmtExprs(s.otherwise, fn);
+      break;
+    case "TryCatch":
+      walkStmtExprs(s.tryBody, fn);
+      walkStmtExprs(s.catchBody, fn);
+      break;
+  }
+}
+
+/**
+ * Check whether any expression in a statement list matches a predicate.
+ * Does not recurse into nested Function definitions.
+ */
+export function stmtsContainExpr(
+  stmts: IRStmt[],
+  pred: (e: IRExpr) => boolean
+): boolean {
+  let found = false;
+  walkStmtExprs(stmts, e => {
+    if (!found && pred(e)) found = true;
+  });
+  return found;
 }
 
 // Cache for computed expression types. Keyed on the IRExprKind object identity.

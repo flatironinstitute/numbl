@@ -22,6 +22,8 @@ import {
 import { loadJsUserFunctions } from "../jsUserFunctions.js";
 import { stdlibFiles, shimFiles } from "../stdlib-bundle.js";
 import { extractExternalAccessDirectives } from "../externalAccessDirective.js";
+import { varNameFromId } from "./codegenFunction.js";
+import { stmtsContainExpr } from "../lowering/nodeUtils.js";
 
 /** Virtual search path prefix for bundled shim files. */
 const SHIM_SEARCH_PATH = "__numbl_shims__";
@@ -300,8 +302,34 @@ export function generateMainScriptCode(
     );
   }
 
+  // Set up who()/whos() variable getter map for script level
+  const hasWhoCall = stmtsContainExpr(
+    irBody,
+    e =>
+      e.kind.type === "FuncCall" &&
+      (e.kind.name === "who" || e.kind.name === "whos")
+  );
+  if (hasWhoCall) {
+    const whoVarMap = new Map<string, string>();
+    const seenNames = new Set<string>();
+    for (const id of sortedVarIds) {
+      const v = varById.get(id);
+      if (!v) continue;
+      const name = varNameFromId(id);
+      if (!seenNames.has(name)) {
+        seenNames.add(name);
+        whoVarMap.set(name, codegen.varRef(id));
+      }
+    }
+    codegen.whoVarGetterStack.push(whoVarMap);
+  }
+
   // Generate main body statements
   codegen.genStmts(irBody);
+
+  if (hasWhoCall) {
+    codegen.whoVarGetterStack.pop();
+  }
 
   // Auto-invoke: if file has only function defs and no main body, call the first one
   if (autoInvokeFunction) {

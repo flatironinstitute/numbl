@@ -877,6 +877,8 @@ export function numblClass(v: RuntimeValue): string {
       return "function_handle";
     case "complex_number":
       return "double";
+    case "sparse_matrix":
+      return "double";
     case "class_instance":
       return v.className;
     default:

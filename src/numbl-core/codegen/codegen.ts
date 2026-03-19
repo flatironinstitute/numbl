@@ -141,6 +141,10 @@ export class Codegen {
    *  Only pushed for functions whose body contains eval() calls. */
   evalVarAccessorStack: Array<Map<string, string>> = [];
 
+  /** Stack of variable maps for who() intrinsic generation (MATLAB name → JS ref).
+   *  Only pushed for functions/scripts whose body contains who() calls. */
+  whoVarGetterStack: Array<Map<string, string>> = [];
+
   /** When generating a class method, the method name (for per-file local function scoping). */
   currentMethodName: string | null = null;
 
