@@ -2,7 +2,12 @@
  * det and trace builtin functions
  */
 
-import { RTV, RuntimeError, tensorSize2D } from "../../runtime/index.js";
+import {
+  RTV,
+  RuntimeError,
+  tensorSize2D,
+  toNumber,
+} from "../../runtime/index.js";
 import {
   FloatXArray,
   isRuntimeLogical,
@@ -198,66 +203,88 @@ export function registerDet(): void {
   register("cross", [
     {
       check: (argTypes, nargout) => {
-        if (argTypes.length !== 2 || nargout !== 1) return null;
+        if ((argTypes.length !== 2 && argTypes.length !== 3) || nargout !== 1)
+          return null;
         return { outputTypes: [IType.Unknown] };
       },
       apply: args => {
-        if (args.length !== 2)
-          throw new RuntimeError("cross requires 2 arguments");
+        if (args.length < 2 || args.length > 3)
+          throw new RuntimeError("cross requires 2 or 3 arguments");
         const a = args[0],
           b = args[1];
         if (!isRuntimeTensor(a) || !isRuntimeTensor(b))
-          throw new RuntimeError("cross: arguments must be vectors");
+          throw new RuntimeError("cross: arguments must be vectors or arrays");
 
-        const aRows = a.shape[0];
-        const aCols = a.shape.length >= 2 ? a.shape[1] : 1;
-        const bRows = b.shape[0];
-        const bCols = b.shape.length >= 2 ? b.shape[1] : 1;
+        const shape = a.shape;
+        // Validate shapes match
+        if (
+          shape.length !== b.shape.length ||
+          shape.some((s, i) => s !== b.shape[i])
+        )
+          throw new RuntimeError("cross: A and B must have the same size");
 
-        // Determine if inputs are column vectors (Nx1), row vectors (1xN), or matrices (3xM)
-        const isColVector = aRows === 3 && aCols === 1;
-        const isRowVector = aRows === 1 && aCols === 3;
-        const isMatrix = aRows === 3 && aCols > 1;
-
-        if (isColVector || isRowVector) {
-          // Vector case
-          if (a.data.length !== 3 || b.data.length !== 3)
-            throw new RuntimeError("cross: vectors must have 3 elements");
-          const ax = a.data[0],
-            ay = a.data[1],
-            az = a.data[2];
-          const bx = b.data[0],
-            by = b.data[1],
-            bz = b.data[2];
-          const result = new FloatXArray(3);
-          result[0] = ay * bz - az * by;
-          result[1] = az * bx - ax * bz;
-          result[2] = ax * by - ay * bx;
-          return RTV.tensor(result, isColVector ? [3, 1] : [1, 3]);
-        } else if (isMatrix) {
-          // Matrix case: column-wise cross products
-          if (bRows !== 3 || bCols !== aCols)
-            throw new RuntimeError("cross: matrix dimensions must agree");
-          const cols = aCols;
-          const result = new FloatXArray(3 * cols);
-          for (let c = 0; c < cols; c++) {
-            const off = c * 3; // column-major, 3 rows
-            const ax = a.data[off],
-              ay = a.data[off + 1],
-              az = a.data[off + 2];
-            const bx = b.data[off],
-              by = b.data[off + 1],
-              bz = b.data[off + 2];
-            result[off] = ay * bz - az * by;
-            result[off + 1] = az * bx - ax * bz;
-            result[off + 2] = ax * by - ay * bx;
-          }
-          return RTV.tensor(result, [3, cols]);
+        // Determine the dimension to operate along
+        let dim: number;
+        if (args.length === 3) {
+          dim = toNumber(args[2]);
+          if (!Number.isInteger(dim) || dim < 1)
+            throw new RuntimeError("cross: dim must be a positive integer");
         } else {
-          throw new RuntimeError(
-            "cross: inputs must be 3-element vectors or 3xN matrices"
-          );
+          // Find first dimension of size 3
+          dim = shape.indexOf(3) + 1; // 1-based
+          if (dim === 0)
+            throw new RuntimeError(
+              "cross: A and B must have at least one dimension of length 3"
+            );
         }
+
+        const dimIdx = dim - 1; // 0-based
+        if (dimIdx >= shape.length || shape[dimIdx] !== 3)
+          throw new RuntimeError(
+            `cross: size(A,${dim}) and size(B,${dim}) must be 3`
+          );
+
+        const totalLen = a.data.length;
+        const result = new FloatXArray(totalLen);
+
+        // Compute strides for column-major layout
+        // stride[d] = product of shape[0..d-1]
+        const strides = new Array(shape.length);
+        strides[0] = 1;
+        for (let d = 1; d < shape.length; d++)
+          strides[d] = strides[d - 1] * shape[d - 1];
+
+        const dimStride = strides[dimIdx];
+
+        // Iterate over all positions excluding the cross dimension.
+        // outerStride = stride of dimension dimIdx+1 (or totalLen if last dim)
+        const outerStride =
+          dimIdx + 1 < shape.length ? strides[dimIdx + 1] : totalLen;
+        const innerSize = dimStride; // elements before the cross dim
+        const numOuter = totalLen / outerStride; // number of outer blocks
+
+        // For each cross product, compute the base index (offset of element 0
+        // along the cross dimension). We iterate block-by-block.
+        for (let outer = 0; outer < numOuter; outer++) {
+          const blockBase = outer * outerStride;
+          for (let inner = 0; inner < innerSize; inner++) {
+            const base = blockBase + inner;
+            const i0 = base;
+            const i1 = base + dimStride;
+            const i2 = base + 2 * dimStride;
+            const ax = a.data[i0],
+              ay = a.data[i1],
+              az = a.data[i2];
+            const bx = b.data[i0],
+              by = b.data[i1],
+              bz = b.data[i2];
+            result[i0] = ay * bz - az * by;
+            result[i1] = az * bx - ax * bz;
+            result[i2] = ax * by - ay * bx;
+          }
+        }
+
+        return RTV.tensor(result, [...shape]);
       },
     },
   ]);
