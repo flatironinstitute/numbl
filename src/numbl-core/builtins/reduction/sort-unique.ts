@@ -99,13 +99,19 @@ export function registerSortUnique(): void {
           } else {
             cmpFlatIdx = descend
               ? (a, b) => {
-                  if (re[a] !== re[a]) return -1;
-                  if (re[b] !== re[b]) return 1;
+                  const aNaN = re[a] !== re[a];
+                  const bNaN = re[b] !== re[b];
+                  if (aNaN && bNaN) return 0;
+                  if (aNaN) return -1;
+                  if (bNaN) return 1;
                   return re[b] - re[a];
                 }
               : (a, b) => {
-                  if (re[a] !== re[a]) return 1;
-                  if (re[b] !== re[b]) return -1;
+                  const aNaN = re[a] !== re[a];
+                  const bNaN = re[b] !== re[b];
+                  if (aNaN && bNaN) return 0;
+                  if (aNaN) return 1;
+                  if (bNaN) return -1;
                   return re[a] - re[b];
                 };
           }
@@ -340,11 +346,25 @@ function uniqueByRows(
     for (let c = 0; c < cols; c++) parts.push(v.data[c * rows + r]);
     return parts.join(",");
   };
+  const rowHasNaN = (r: number): boolean => {
+    for (let c = 0; c < cols; c++) {
+      const val = v.data[c * rows + r];
+      if (val !== val) return true;
+    }
+    return false;
+  };
   const seen = new Map<string, number>();
   const uniqueRowOrder: number[] = [];
   const ic = new FloatXArray(rows);
 
   for (let r = 0; r < rows; r++) {
+    // Rows containing NaN are always unique (NaN !== NaN)
+    if (rowHasNaN(r)) {
+      const idx = uniqueRowOrder.length;
+      uniqueRowOrder.push(r);
+      ic[r] = idx + 1;
+      continue;
+    }
     const key = rowKey(r);
     if (seen.has(key)) {
       ic[r] = seen.get(key)! + 1;
@@ -403,6 +423,8 @@ function uniqueElements(
   stable: boolean
 ): RuntimeValue | RuntimeValue[] {
   const hasImag = !!v.imag;
+  const isNaNVal = (i: number): boolean =>
+    v.data[i] !== v.data[i] || (hasImag && v.imag![i] !== v.imag![i]);
   const valKey = (i: number): string =>
     hasImag ? `${v.data[i]},${v.imag![i]}` : `${v.data[i]}`;
   const seen = new Map<string, number>();
@@ -410,6 +432,13 @@ function uniqueElements(
   const icArr = new FloatXArray(v.data.length);
 
   for (let i = 0; i < v.data.length; i++) {
+    // NaN is never equal to itself — each NaN is always unique
+    if (isNaNVal(i)) {
+      const idx = uniqueOrder.length;
+      uniqueOrder.push(i);
+      icArr[i] = idx + 1;
+      continue;
+    }
     const key = valKey(i);
     if (seen.has(key)) {
       icArr[i] = seen.get(key)! + 1;
