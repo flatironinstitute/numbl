@@ -145,7 +145,7 @@ export const registerDummyFunctions = () => {
   register(
     "who",
     builtinSingle(() => RTV.cell([], [0, 0]), {
-      outputType: IType.cell(IType.Char, "char"),
+      outputType: IType.cell(IType.Char),
     })
   );
   register(
