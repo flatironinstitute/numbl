@@ -1,4 +1,4 @@
-import type { PlotTrace } from "../numbl-core/runtime/plotUtils.js";
+import type { PlotTrace } from "./types.js";
 
 export const TRACE_COLORS = [
   "#0072BD", // blue

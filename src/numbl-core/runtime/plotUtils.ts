@@ -16,91 +16,22 @@ import {
 } from "./types.js";
 import { toNumber, toString } from "./convert.js";
 
-// ── PlotTrace type ──────────────────────────────────────────────────────
+// Re-export trace types from the shared graphics types module.
+export type {
+  PlotTrace,
+  Plot3Trace,
+  SurfTrace,
+  ImagescTrace,
+  ContourTrace,
+} from "../../graphics/types.js";
 
-export interface PlotTrace {
-  x: number[];
-  y: number[];
-  lineStyle?: string;
-  marker?: string;
-  color?: [number, number, number];
-  lineWidth?: number;
-  markerSize?: number;
-  markerEdgeColor?: [number, number, number];
-  markerFaceColor?: [number, number, number];
-  markerIndices?: number[];
-}
-
-// ── Plot3Trace type ─────────────────────────────────────────────────────
-
-export interface Plot3Trace {
-  x: number[];
-  y: number[];
-  z: number[];
-  lineStyle?: string;
-  marker?: string;
-  color?: [number, number, number];
-  lineWidth?: number;
-  markerSize?: number;
-  markerEdgeColor?: [number, number, number];
-  markerFaceColor?: [number, number, number];
-  markerIndices?: number[];
-}
-
-// ── SurfTrace type ──────────────────────────────────────────────────────
-
-export interface SurfTrace {
-  /** X coordinates: flat array of length rows*cols (column-major) */
-  x: number[];
-  /** Y coordinates: flat array of length rows*cols (column-major) */
-  y: number[];
-  /** Z values: flat array of length rows*cols (column-major) */
-  z: number[];
-  /** Number of rows in the grid */
-  rows: number;
-  /** Number of columns in the grid */
-  cols: number;
-  /** Optional color data (same shape as Z) */
-  c?: number[];
-  edgeColor?: [number, number, number] | "none" | "flat" | "interp";
-  faceColor?:
-    | [number, number, number]
-    | "flat"
-    | "interp"
-    | "none"
-    | "texturemap";
-  faceAlpha?: number;
-}
-
-// ── ImagescTrace type ────────────────────────────────────────────────────
-
-export interface ImagescTrace {
-  /** X limits [xmin, xmax] */
-  x: [number, number];
-  /** Y limits [ymin, ymax] */
-  y: [number, number];
-  /** Z data: flat array (column-major), rows × cols */
-  z: number[];
-  rows: number;
-  cols: number;
-}
-
-// ── ContourTrace type ────────────────────────────────────────────────────
-
-export interface ContourTrace {
-  /** X coordinates: flat array (column-major) */
-  x: number[];
-  /** Y coordinates: flat array (column-major) */
-  y: number[];
-  /** Z values: flat array (column-major) */
-  z: number[];
-  rows: number;
-  cols: number;
-  /** Number of contour levels */
-  nLevels: number;
-  /** Whether this is a filled contour (contourf) */
-  filled: boolean;
-}
+import type {
+  PlotTrace,
+  Plot3Trace,
+  SurfTrace,
+  ImagescTrace,
+  ContourTrace,
+} from "../../graphics/types.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
 

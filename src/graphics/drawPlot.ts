@@ -1,8 +1,4 @@
-import type {
-  PlotTrace,
-  ImagescTrace,
-  ContourTrace,
-} from "../numbl-core/runtime/plotUtils.js";
+import type { PlotTrace, ImagescTrace, ContourTrace } from "./types.js";
 import {
   traceColor,
   getLineDash,

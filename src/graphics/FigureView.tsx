@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback } from "react";
-import type { PlotTrace } from "../numbl-core/runtime/plotUtils.js";
+import type { PlotTrace } from "./types.js";
 import type { AxesState, FigureState } from "./figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";

@@ -4,8 +4,8 @@ import type {
   SurfTrace,
   ImagescTrace,
   ContourTrace,
-} from "../numbl-core/runtime/plotUtils.js";
-import type { PlotInstruction } from "../numbl-core/executor/types.js";
+  PlotInstruction,
+} from "./types.js";
 
 export type AxesState = {
   holdOn: boolean;

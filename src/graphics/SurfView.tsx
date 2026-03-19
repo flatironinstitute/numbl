@@ -4,7 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
-import type { SurfTrace, Plot3Trace } from "../numbl-core/runtime/plotUtils.js";
+import type { SurfTrace, Plot3Trace } from "./types.js";
 import { colormapLookup } from "./surfColormap.js";
 
 // Color order for plot3 traces
