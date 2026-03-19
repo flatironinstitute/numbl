@@ -4,6 +4,7 @@ coverage
 /coverage-*/
 .nyc_output
 build
+numbl-vscode
 
 CLAUDE.*.md
 .claude/
