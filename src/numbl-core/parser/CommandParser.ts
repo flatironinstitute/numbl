@@ -4,7 +4,6 @@
 
 import { Token } from "../lexer/index.js";
 import { Expr } from "./types.js";
-import { COMMAND_VERBS, CommandVerb, extractKeyword } from "./commands.js";
 import { ExpressionParser } from "./ExpressionParser.js";
 
 export class CommandParser extends ExpressionParser {
@@ -14,17 +13,13 @@ export class CommandParser extends ExpressionParser {
    * Detect whether the current position starts a command-form statement.
    *
    * Uses raw source scanning: an identifier followed by horizontal whitespace
-   * and then non-operator content is command form.  For known COMMAND_VERBS
-   * zero-arg invocations are also allowed when the verb's spec permits it.
+   * and then non-operator content is command form.  Zero-arg invocations
+   * (e.g. `hold` alone) are handled by the expression parser + lowering
+   * which resolves bare identifiers to zero-arg function calls.
    */
   canStartCommandForm(): boolean {
     const current = this.tokens[this.pos];
     if (!current || current.token !== Token.Ident) return false;
-
-    const command = this.lookupCommand(current.lexeme);
-    const zeroArgAllowed =
-      command?.argKind.type === "Any" ||
-      (command?.argKind.type === "Keyword" && command.argKind.optional);
 
     // --- raw-source lookahead ---
     let srcPos = current.end;
@@ -45,11 +40,12 @@ export class CommandParser extends ExpressionParser {
       srcPos++;
     }
 
-    // End-of-statement / end-of-input → zero-arg case
-    if (srcPos >= this.input.length) return zeroArgAllowed;
+    // End-of-statement / end-of-input → not command form (zero-arg handled
+    // by expression parser resolving bare Ident to function call)
+    if (srcPos >= this.input.length) return false;
     const ch = this.input[srcPos];
     if (ch === "\n" || ch === "\r" || ch === ";" || ch === "%") {
-      return zeroArgAllowed;
+      return false;
     }
 
     // Assignment → not command form  (but == is comparison, not assignment)
@@ -186,63 +182,6 @@ export class CommandParser extends ExpressionParser {
     return args;
   }
 
-  parseCommandArgs(): Expr[] {
-    const args: Expr[] = [];
-    while (true) {
-      // Newlines terminate command arguments (like semicolons)
-      if (this.peekToken() === Token.Newline) break;
-      // Ellipsis is line continuation – skip it and the following newline
-      if (this.consume(Token.Ellipsis)) {
-        this.consume(Token.Newline);
-        continue;
-      }
-
-      const tok = this.peekToken();
-      if (tok === Token.Ident) {
-        const token = this.next()!;
-        const span = this.spanFrom(token.position, token.end);
-        args.push({ type: "Ident", name: token.lexeme, span });
-      } else if (tok === Token.End) {
-        const token = this.tokens[this.pos];
-        this.pos++;
-        const span = this.spanFrom(token.position, token.end);
-        args.push({ type: "Ident", name: "end", span });
-      } else if (tok === Token.Global || tok === Token.Persistent) {
-        const token = this.next()!;
-        const span = this.spanFrom(token.position, token.end);
-        args.push({ type: "Ident", name: token.lexeme, span });
-      } else if (tok === Token.Integer || tok === Token.Float) {
-        const token = this.next()!;
-        const span = this.spanFrom(token.position, token.end);
-        args.push({ type: "Number", value: token.lexeme, span });
-      } else if (tok === Token.Char) {
-        const token = this.next()!;
-        const span = this.spanFrom(token.position, token.end);
-        args.push({ type: "Char", value: token.lexeme, span });
-      } else if (tok === Token.Str) {
-        const token = this.next()!;
-        const span = this.spanFrom(token.position, token.end);
-        args.push({ type: "String", value: token.lexeme, span });
-      } else if (
-        tok === Token.Slash ||
-        tok === Token.Star ||
-        tok === Token.Backslash ||
-        tok === Token.Plus ||
-        tok === Token.Minus ||
-        tok === Token.LParen ||
-        tok === Token.Dot ||
-        tok === Token.LBracket ||
-        tok === Token.LBrace ||
-        tok === Token.Transpose
-      ) {
-        break;
-      } else {
-        break;
-      }
-    }
-    return args;
-  }
-
   /**
    * Check whether the character at `pos` in `this.input` can start a
    * command-syntax argument (as opposed to a binary operator).
@@ -272,57 +211,5 @@ export class CommandParser extends ExpressionParser {
 
     // Everything else (operators: + * / \ ^ & | < > ~ ? : [ { etc.)
     return false;
-  }
-
-  private lookupCommand(name: string): CommandVerb | undefined {
-    return COMMAND_VERBS.find(
-      cmd => cmd.name.toLowerCase() === name.toLowerCase()
-    );
-  }
-
-  normalizeCommandArgs(command: CommandVerb, args: Expr[]): Expr[] {
-    if (command.argKind.type === "Keyword") {
-      const { allowed, optional } = command.argKind;
-      if (args.length === 0) {
-        if (!optional) {
-          throw this.error(
-            `'${command.name}' command syntax requires an argument`
-          );
-        }
-        return args;
-      }
-      if (args.length > 1 && !command.argKind.multiKeyword) {
-        throw this.error(
-          `'${command.name}' command syntax accepts only one argument`
-        );
-      }
-      // Validate and normalize all keyword args
-      const keywords: string[] = [];
-      for (const arg of args) {
-        const keyword = extractKeyword(arg);
-        if (!keyword) {
-          throw this.error(
-            `'${command.name}' command syntax expects a keyword argument`
-          );
-        }
-        if (
-          allowed !== undefined &&
-          !allowed.some(a => a.toLowerCase() === keyword.toLowerCase())
-        ) {
-          throw this.error(
-            `'${command.name}' command syntax does not support '${keyword}'`
-          );
-        }
-        keywords.push(keyword);
-      }
-      if (keywords.length === 1) {
-        const span = args[0].span;
-        return [{ type: "String", value: `"${keywords[0]}"`, span }];
-      }
-      // Multiple keywords: join with space (e.g. "axis equal tight")
-      const span = args[0].span;
-      return [{ type: "String", value: `"${keywords.join(" ")}"`, span }];
-    }
-    return args;
   }
 }
