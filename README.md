@@ -53,6 +53,10 @@ Commands:
   mip <subcommand>   Package manager (install, uninstall, list, avail, info)
   (no command)       Start interactive REPL
 
+Global options:
+  --version, -V      Print version and exit
+  --help, -h         Print this help message
+
 Options (for REPL):
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
@@ -72,6 +76,10 @@ Environment variables:
   NUMBL_PATH         Extra workspace directories (separated by :)
 ```
 <!-- END CLI HELP -->
+
+## VS Code extension
+
+The [Numbl extension for VS Code](https://marketplace.visualstudio.com/items?itemName=jmagland.numbl) lets you run `.m` scripts directly in the editor with inline error diagnostics and a built-in figure viewer.
 
 ## Upgrading
 

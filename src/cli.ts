@@ -23,6 +23,7 @@ import { getAllBuiltinNames } from "./numbl-core/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
 import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
+import { NUMBL_VERSION } from "./numbl-core/version.js";
 import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 
@@ -261,6 +262,10 @@ Commands:
   list-builtins      List available built-in functions
   mip <subcommand>   Package manager (install, uninstall, list, avail, info)
   (no command)       Start interactive REPL
+
+Global options:
+  --version, -V      Print version and exit
+  --help, -h         Print this help message
 
 Options (for REPL):
   --plot             Enable plot server
@@ -750,6 +755,7 @@ async function cmdBuildAddon() {
 function cmdInfo() {
   process.stdout.write(
     JSON.stringify({
+      version: NUMBL_VERSION,
       nativeAddon: nativeAddonLoaded,
       nativeAddonPath: addonPath,
       packageDir,
@@ -960,6 +966,12 @@ function cmdShowProfile(args: string[]) {
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // --version / -V
+  if (args.includes("--version") || args.includes("-V")) {
+    console.log(NUMBL_VERSION);
+    process.exit(0);
+  }
 
   // --help / -h at any position
   if (args.includes("--help") || args.includes("-h")) {
