@@ -139,20 +139,7 @@ export class StatementParser extends ClassParser {
           // Command-form at statement start
           if (this.canStartCommandForm()) {
             const nameToken = this.next()!;
-            const command = COMMAND_VERBS.find(
-              cmd => cmd.name.toLowerCase() === nameToken.lexeme.toLowerCase()
-            );
-
-            let args: Expr[];
-            if (command) {
-              // Known command verb: token-based parsing + normalization
-              args = this.parseCommandArgs();
-              args = this.normalizeCommandArgs(command, args);
-            } else {
-              // General command syntax: raw source → char vectors
-              args = this.parseCommandArgsGeneral();
-            }
-
+            const args = this.parseCommandArgsGeneral();
             const end = this.lastTokenEnd();
             const span = this.spanFrom(nameToken.position, end);
             return {
@@ -162,7 +149,9 @@ export class StatementParser extends ClassParser {
               span,
             };
           } else {
-            // Ambiguous adjacency check
+            // Ambiguous adjacency: ident ident (paren/dot/bracket/brace/transpose)
+            // where raw source between tokens prevents canStartCommandForm
+            // (e.g. comment between them). Treat as general command syntax.
             if (
               this.peekTokenAt(1) === Token.Ident &&
               (this.peekTokenAt(2) === Token.LParen ||
@@ -171,29 +160,6 @@ export class StatementParser extends ClassParser {
                 this.peekTokenAt(2) === Token.LBrace ||
                 this.peekTokenAt(2) === Token.Transpose)
             ) {
-              // For known command verbs, parse as verb(expr)
-              // e.g., "colormap hsv(600)" → colormap(hsv(600))
-              const verbName = this.tokens[this.pos]?.lexeme;
-              const isCommandVerb = COMMAND_VERBS.some(
-                cmd => cmd.name.toLowerCase() === verbName?.toLowerCase()
-              );
-              if (isCommandVerb) {
-                const nameToken = this.next()!;
-                const arg = this.parseExpr();
-                const span = this.spanFrom(nameToken.position, arg.span.end);
-                return {
-                  type: "ExprStmt",
-                  expr: {
-                    type: "FuncCall",
-                    name: nameToken.lexeme,
-                    args: [arg],
-                    span,
-                  },
-                  suppressed: false,
-                  span,
-                };
-              }
-              // General command syntax: treat as command form with raw args
               const nameToken = this.next()!;
               const args = this.parseCommandArgsGeneral();
               const end = this.lastTokenEnd();
@@ -542,6 +508,3 @@ export class StatementParser extends ClassParser {
     throw this.error("invalid lvalue in multi-assign");
   }
 }
-
-// Import COMMAND_VERBS for inline usage
-import { COMMAND_VERBS } from "./commands.js";

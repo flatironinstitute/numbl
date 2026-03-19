@@ -1160,12 +1160,21 @@ describe("parseMFile - command form advanced", () => {
     }
   });
 
-  it("rejects keyword command with unsupported keyword", () => {
-    expect(() => parseMFile("hold badarg\n")).toThrow(/does not support/);
+  it("parses command with any keyword argument", () => {
+    const stmt = parseFirst("hold badarg\n");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("hold");
+      expect(stmt.expr.args).toHaveLength(1);
+      expect(stmt.expr.args[0].type).toBe("Char");
+    }
   });
 
-  it("rejects keyword command with multiple args", () => {
-    expect(() => parseMFile("hold on off\n")).toThrow(/only one argument/);
+  it("parses command with multiple args", () => {
+    const stmt = parseFirst("hold on off\n");
+    if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
+      expect(stmt.expr.name).toBe("hold");
+      expect(stmt.expr.args).toHaveLength(2);
+    }
   });
 
   it("parses colormap verb with expr argument", () => {
@@ -1651,7 +1660,7 @@ describe("parseMFile - command edge cases", () => {
   it("parses command with end as argument", () => {
     const stmt = parseFirst("clear end\n");
     if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
-      expect(stmt.expr.args[0].type).toBe("Ident");
+      expect(stmt.expr.args[0].type).toBe("Char");
     }
   });
 
@@ -1802,23 +1811,26 @@ describe("parseMFile - general command syntax", () => {
     }
   });
 
-  it("preserves existing COMMAND_VERBS behavior", () => {
-    // hold on → String arg (keyword normalization)
+  it("parses hold on as char arg", () => {
+    // hold on → Char arg (general command syntax)
     const stmt = parseFirst("hold on\n");
     expect(stmt.type).toBe("ExprStmt");
     if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
-      expect(stmt.expr.args[0].type).toBe("String");
+      expect(stmt.expr.args[0].type).toBe("Char");
+      if (stmt.expr.args[0].type === "Char") {
+        expect(stmt.expr.args[0].value).toBe("'on'");
+      }
     }
   });
 
-  it("preserves clear with Ident args", () => {
-    // clear x y z → Ident args (Any normalization)
+  it("parses clear with char args", () => {
+    // clear x y z → Char args (general command syntax)
     const stmt = parseFirst("clear x y z\n");
     expect(stmt.type).toBe("ExprStmt");
     if (stmt.type === "ExprStmt" && stmt.expr.type === "FuncCall") {
-      expect(stmt.expr.args[0].type).toBe("Ident");
-      expect(stmt.expr.args[1].type).toBe("Ident");
-      expect(stmt.expr.args[2].type).toBe("Ident");
+      expect(stmt.expr.args[0].type).toBe("Char");
+      expect(stmt.expr.args[1].type).toBe("Char");
+      expect(stmt.expr.args[2].type).toBe("Char");
     }
   });
 
