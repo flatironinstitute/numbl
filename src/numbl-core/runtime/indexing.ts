@@ -1072,6 +1072,16 @@ function storeIntoTensor(
 
   // Row/column deletion: base(idx,:) = [] or base(:,idx) = []
   if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 2) {
+    // If either index selects zero elements, it's a no-op, not a deletion
+    const nrows = base.shape[0] ?? 1;
+    const ncols = base.shape.length >= 2 ? base.shape[1] : 1;
+    const rowCount = isColonIndex(indices[0])
+      ? nrows
+      : resolveIndex(indices[0], nrows).length;
+    const colCount = isColonIndex(indices[1])
+      ? ncols
+      : resolveIndex(indices[1], ncols).length;
+    if (rowCount === 0 || colCount === 0) return base;
     return deleteTensorRowsOrCols(base, indices);
   }
 
