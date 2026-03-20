@@ -636,6 +636,35 @@ function indexIntoTensor2D(
   colIdx: RuntimeValue
 ): RuntimeValue {
   const [rows, cols] = tensorSize2D(base);
+
+  // Fast path: single-row extraction c(k,:) — avoids allocating a cols-length index array
+  if (isRuntimeNumber(rowIdx) && isColonIndex(colIdx)) {
+    const r = Math.round(rowIdx as number) - 1;
+    if (r < 0 || r >= rows)
+      throw new RuntimeError("Index exceeds array bounds");
+    const resultData = new FloatXArray(cols);
+    const resultImag = base.imag ? new FloatXArray(cols) : undefined;
+    for (let ci = 0; ci < cols; ci++) {
+      resultData[ci] = base.data[r + ci * rows];
+      if (resultImag && base.imag) resultImag[ci] = base.imag[r + ci * rows];
+    }
+    return RTV.tensor(resultData, [1, cols], resultImag);
+  }
+
+  // Fast path: single-column extraction c(:,k) — column is contiguous in col-major
+  if (isColonIndex(rowIdx) && isRuntimeNumber(colIdx)) {
+    const c = Math.round(colIdx as number) - 1;
+    if (c < 0 || c >= cols)
+      throw new RuntimeError("Index exceeds array bounds");
+    const offset = c * rows;
+    const resultData = new FloatXArray(rows);
+    for (let ri = 0; ri < rows; ri++) resultData[ri] = base.data[offset + ri];
+    const resultImag = base.imag ? new FloatXArray(rows) : undefined;
+    if (resultImag && base.imag)
+      for (let ri = 0; ri < rows; ri++) resultImag[ri] = base.imag[offset + ri];
+    return RTV.tensor(resultData, [rows, 1], resultImag);
+  }
+
   const rowIdxArr = resolveIndex(rowIdx, rows);
   const colIdxArr = resolveIndex(colIdx, cols);
 
