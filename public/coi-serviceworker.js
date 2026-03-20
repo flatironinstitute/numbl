@@ -7,7 +7,7 @@
  * Based on https://github.com/niccokunzmann/coi-serviceworker (MIT).
  */
 
-/* eslint-env serviceworker */
+/* global self, caches, fetch, Response, clients */
 
 if (typeof window === "undefined") {
   // --- Service Worker scope ---
