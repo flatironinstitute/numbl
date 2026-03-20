@@ -21,6 +21,7 @@ import { registerBlkdiag } from "./blkdiag.js";
 import { registerChol } from "./chol.js";
 import { registerPinv } from "./pinv.js";
 import { registerQz } from "./qz.js";
+import { registerVecnorm } from "./vecnorm.js";
 
 export function registerLinearAlgebraFunctions(): void {
   registerNorm();
@@ -42,4 +43,5 @@ export function registerLinearAlgebraFunctions(): void {
   registerChol();
   registerPinv();
   registerQz();
+  registerVecnorm();
 }
