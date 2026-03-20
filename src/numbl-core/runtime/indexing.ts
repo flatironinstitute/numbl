@@ -1686,7 +1686,8 @@ function storeIntoTensorND(
 function storeIntoCell(
   base: RuntimeCell,
   indices: RuntimeValue[],
-  rhs: RuntimeValue
+  rhs: RuntimeValue,
+  parenAssign = false
 ): RuntimeValue {
   // COW
   if (base._rc > 1) {
@@ -1704,10 +1705,16 @@ function storeIntoCell(
   };
 
   if (indices.length === 1) {
-    return storeIntoCell1D(base, indices[0], rhs, updateShapeAfterLinearAssign);
+    return storeIntoCell1D(
+      base,
+      indices[0],
+      rhs,
+      updateShapeAfterLinearAssign,
+      parenAssign
+    );
   }
   if (indices.length === 2) {
-    return storeIntoCell2D(base, indices, rhs);
+    return storeIntoCell2D(base, indices, rhs, parenAssign);
   }
 
   throw new RuntimeError(`Cannot index-assign into cell`);
@@ -1717,7 +1724,8 @@ function storeIntoCell1D(
   base: RuntimeCell,
   idx: RuntimeValue,
   rhs: RuntimeValue,
-  updateShape: (oldLen: number) => void
+  updateShape: (oldLen: number) => void,
+  parenAssign = false
 ): RuntimeValue {
   // Vector index
   if (isRuntimeTensor(idx)) {
@@ -1774,8 +1782,11 @@ function storeIntoCell1D(
     while (base.data.length <= i)
       base.data.push(RTV.tensor(new FloatXArray(0), [0, 0]));
   }
+  // Unwrap 1x1 cell RHS only for paren assignment: c(i) = {val} stores val
   base.data[i] =
-    isRuntimeCell(rhs) && rhs.data.length === 1 ? rhs.data[0] : rhs;
+    parenAssign && isRuntimeCell(rhs) && rhs.data.length === 1
+      ? rhs.data[0]
+      : rhs;
   updateShape(oldLen);
   return base;
 }
@@ -1783,7 +1794,8 @@ function storeIntoCell1D(
 function storeIntoCell2D(
   base: RuntimeCell,
   indices: RuntimeValue[],
-  rhs: RuntimeValue
+  rhs: RuntimeValue,
+  parenAssign = false
 ): RuntimeValue {
   let rows = base.shape[0];
   let cols = base.shape.length >= 2 ? base.shape[1] : 1;
@@ -1816,7 +1828,7 @@ function storeIntoCell2D(
   const nSelectedCols = colIndices.length;
   const totalSelected = nSelectedRows * nSelectedCols;
 
-  if (isRuntimeCell(rhs)) {
+  if (parenAssign && isRuntimeCell(rhs)) {
     if (rhs.data.length !== totalSelected && rhs.data.length !== 1) {
       throw new RuntimeError("Subscripted assignment dimension mismatch");
     }
@@ -1841,7 +1853,8 @@ function storeIntoCell2D(
 export function storeIntoRTValueIndex(
   base: RuntimeValue,
   indices: RuntimeValue[],
-  rhs: RuntimeValue
+  rhs: RuntimeValue,
+  parenAssign = false
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(base)) {
     return storeIntoSparse(base, indices, rhs);
@@ -1867,7 +1880,7 @@ export function storeIntoRTValueIndex(
   }
 
   if (isRuntimeCell(base)) {
-    return storeIntoCell(base, indices, rhs);
+    return storeIntoCell(base, indices, rhs, parenAssign);
   }
 
   throw new RuntimeError(`Cannot index-assign into ${kstr(base)}`);

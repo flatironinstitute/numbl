@@ -1844,6 +1844,28 @@ describe("parseMFile - general command syntax", () => {
       }
     }
   });
+
+  it("comma terminates command form (not an arg separator)", () => {
+    // "hold on, end" should be two statements: hold('on') and end
+    const ast = parseMFile("for i=1:3, hold on, end\n");
+    // Should parse without error; the for loop should contain hold('on')
+    expect(ast.body).toHaveLength(1);
+    expect(ast.body[0].type).toBe("For");
+  });
+
+  it("command form inside switch case with comma and end", () => {
+    const code = [
+      "switch x",
+      "  case 1",
+      "    for j=1:3, hold on, end",
+      "  case 2",
+      "    y = 1;",
+      "end",
+    ].join("\n");
+    const ast = parseMFile(code);
+    expect(ast.body).toHaveLength(1);
+    expect(ast.body[0].type).toBe("Switch");
+  });
 });
 
 // ── Two-pass function end detection ──────────────────────────────────

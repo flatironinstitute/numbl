@@ -90,14 +90,10 @@ export class CommandParser extends ExpressionParser {
         continue;
       }
 
-      // Stop at end-of-statement markers
-      if (ch === "\n" || ch === "\r" || ch === ";" || ch === "%") break;
-
-      // Handle , as argument separator (skip it)
-      if (ch === ",") {
-        scanPos++;
-        continue;
-      }
+      // Stop at end-of-statement markers (commas are statement separators
+      // in MATLAB, not command-argument separators)
+      if (ch === "\n" || ch === "\r" || ch === ";" || ch === "%" || ch === ",")
+        break;
 
       // Handle line continuation (... in raw source)
       if (

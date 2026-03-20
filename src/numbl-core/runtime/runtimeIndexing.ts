@@ -489,7 +489,7 @@ export function indexStore(
   if (isRuntimeCell(mv)) {
     const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
     const rhsMv = ensureRuntimeValue(rhs);
-    return mIndexStore(mv, idxMvals, rhsMv);
+    return mIndexStore(mv, idxMvals, rhsMv, true);
   }
   // Struct scalar indexed assignment
   if (isRuntimeStruct(mv)) {
