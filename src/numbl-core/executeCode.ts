@@ -22,6 +22,7 @@ import { getItemTypeFromRuntimeValue } from "./runtime/constructors.js";
 import { SemanticError } from "./lowering/errors.js";
 import { JitCompiler } from "./executor/jitCompiler.js";
 import { generateMainScriptCode } from "./codegen/generateMainScriptCode.js";
+import { interpretCode } from "./interpretCode.js";
 
 export { generateMainScriptCode as generateCode } from "./codegen/generateMainScriptCode.js";
 
@@ -33,6 +34,10 @@ export function executeCode(
   searchPaths?: string[],
   nativeBridge?: NativeBridge
 ): ExecResult {
+  if (options.interpret) {
+    return interpretCode(source, options, workspaceFiles, mainFileName);
+  }
+
   const initialVariableNames = options.initialVariableValues
     ? Object.keys(options.initialVariableValues)
     : undefined;

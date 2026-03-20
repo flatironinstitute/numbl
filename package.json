@@ -50,6 +50,7 @@
     "test:coverage": "vitest run --coverage",
     "test:coverage:all": "bash scripts/coverage-all.sh",
     "test:scripts": "bash numbl_test_scripts/run_all.sh",
+    "test:interpret": "tsx src/cli.ts run-tests --interpret",
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",

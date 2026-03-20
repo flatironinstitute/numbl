@@ -61,7 +61,8 @@ export async function runRepl(
   initialWorkspaceFiles: WorkspaceFile[],
   onDrawnow?: (instructions: PlotInstruction[]) => void,
   initialSearchPaths?: string[],
-  nativeBridge?: NativeBridge
+  nativeBridge?: NativeBridge,
+  interpret?: boolean
 ): Promise<void> {
   let variableValues: Record<string, RuntimeValue> = {};
   let holdState = false;
@@ -127,6 +128,7 @@ export async function runRepl(
             onDrawnow,
             initialVariableValues: variableValues,
             initialHoldState: holdState,
+            interpret,
           },
           workspaceFiles,
           "repl",
@@ -257,6 +259,7 @@ export async function runRepl(
           onDrawnow,
           initialVariableValues: variableValues,
           initialHoldState: holdState,
+          interpret,
         },
         workspaceFiles,
         "repl",

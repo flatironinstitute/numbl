@@ -40,6 +40,8 @@ export interface ExecOptions {
   customBuiltins?: Record<string, (nargout: number, args: any[]) => any>;
   /** Platform-specific file I/O adapter (e.g. Node.js fs). */
   fileIO?: FileIOAdapter;
+  /** Use the AST interpreter instead of codegen+eval. */
+  interpret?: boolean;
 }
 
 export interface BuiltinProfileEntry {

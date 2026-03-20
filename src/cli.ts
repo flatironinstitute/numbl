@@ -193,7 +193,7 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
-async function runTests(dir: string) {
+async function runTests(dir: string, interpret?: boolean) {
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
@@ -217,7 +217,7 @@ async function runTests(dir: string) {
     try {
       const result = executeCode(
         source,
-        { displayResults: true },
+        { displayResults: true, interpret },
         workspaceFiles,
         mainFileName,
         searchPaths,
@@ -313,6 +313,7 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   noLineTracking: boolean;
+  interpret: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -328,6 +329,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     noLineTracking: false,
+    interpret: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -401,6 +403,9 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--no-line-tracking":
         opts.noLineTracking = true;
+        break;
+      case "--interpret":
+        opts.interpret = true;
         break;
       default:
         if (args[i].startsWith("-")) {
@@ -596,6 +601,7 @@ async function executeWithOptions(
             onJitCompile,
             noLineTracking: opts.noLineTracking,
             fileIO,
+            interpret: opts.interpret,
           },
           workspaceFiles,
           mainFileName,
@@ -645,6 +651,7 @@ async function executeWithOptions(
           onJitCompile,
           noLineTracking: opts.noLineTracking,
           fileIO,
+          interpret: opts.interpret,
         },
         workspaceFiles,
         mainFileName,
@@ -677,6 +684,7 @@ async function executeWithOptions(
           onJitCompile,
           noLineTracking: opts.noLineTracking,
           fileIO,
+          interpret: opts.interpret,
         },
         workspaceFiles,
         mainFileName,
@@ -796,7 +804,13 @@ async function cmdRepl(args: string[]) {
     !opts.plot,
     replPlotOpts
   );
-  await runRepl(replFiles, replDrawnow, replSearchPaths, nativeBridge);
+  await runRepl(
+    replFiles,
+    replDrawnow,
+    replSearchPaths,
+    nativeBridge,
+    opts.interpret
+  );
 }
 
 // ── Plot handler ─────────────────────────────────────────────────────────────
@@ -1009,9 +1023,12 @@ async function main() {
       await cmdEval(rest);
       break;
     case "run-tests": {
+      const testOpts = parseOptions(rest);
       const dir =
-        rest.length > 0 ? rest[0] : join(packageDir, "numbl_test_scripts");
-      await runTests(dir);
+        testOpts.positional.length > 0
+          ? testOpts.positional[0]
+          : join(packageDir, "numbl_test_scripts");
+      await runTests(dir, testOpts.interpret);
       break;
     }
     case "build-addon":
