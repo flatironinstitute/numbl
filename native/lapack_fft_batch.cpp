@@ -17,7 +17,7 @@
  *   Does NOT normalize for inverse — caller handles 1/n scaling.
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 #include <fftw3.h>
 #include <cmath>
 

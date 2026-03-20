@@ -1059,9 +1059,6 @@ export class Runtime {
     }
     return _binop(op, a, b);
   }
-  public binopSync(op: string, a: unknown, b: unknown): unknown {
-    return _binop(op, a, b);
-  }
   public range(start: unknown, step: unknown, end: unknown): unknown {
     return _range(start, step, end);
   }

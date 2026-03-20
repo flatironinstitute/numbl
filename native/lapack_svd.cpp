@@ -13,7 +13,7 @@
  *     (k = min(m, n))
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 #include <string>
 
 // ── svd() ─────────────────────────────────────────────────────────────────────

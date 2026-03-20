@@ -10,7 +10,7 @@
  *       C is an m×n matrix returned in column-major order
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // ── matmul() ──────────────────────────────────────────────────────────────────
 

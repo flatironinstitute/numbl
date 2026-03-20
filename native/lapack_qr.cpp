@@ -13,7 +13,7 @@
  *     wantQ=false: skips Q generation.
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // ── qr() ─────────────────────────────────────────────────────────────────────
 

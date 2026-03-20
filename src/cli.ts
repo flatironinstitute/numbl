@@ -36,20 +36,33 @@ import { PlotInstruction } from "./numbl-core/executor/types.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageDir = join(__dirname, "..");
-const addonPath = join(packageDir, "build", "Release", "lapack_addon.node");
+const addonPath = join(packageDir, "build", "Release", "numbl_addon.node");
 
 // ── Try to load the native LAPACK addon ──────────────────────────────────────
+
+import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge.js";
 
 let nativeAddonLoaded = false;
 if (!process.env.NUMBL_NO_NATIVE) {
   try {
     const req = createRequire(import.meta.url);
     const addon = req(addonPath);
-    setLapackBridge(addon);
-    setLapackBridgeNew(addon);
-    nativeAddonLoaded = true;
+    const addonVer =
+      typeof addon.addonVersion === "function" ? addon.addonVersion() : 0;
+    if (addonVer !== NATIVE_ADDON_EXPECTED_VERSION) {
+      console.error(
+        `Warning: native addon version mismatch (got ${addonVer}, expected ${NATIVE_ADDON_EXPECTED_VERSION}). ` +
+          `Run "npx numbl build-addon" to rebuild. Using JS fallbacks.`
+      );
+    } else {
+      setLapackBridge(addon);
+      setLapackBridgeNew(addon);
+      nativeAddonLoaded = true;
+    }
   } catch {
-    // Native addon not available — JS fallbacks will be used
+    console.error(
+      `Warning: native addon not found. Run "npx numbl build-addon" to build it. Using JS fallbacks.`
+    );
   }
 }
 

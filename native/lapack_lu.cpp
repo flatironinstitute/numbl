@@ -12,7 +12,7 @@
  *     Returns the packed LU matrix and 1-based pivot indices.
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // ── lu() ─────────────────────────────────────────────────────────────────────
 
