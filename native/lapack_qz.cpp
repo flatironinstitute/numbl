@@ -9,7 +9,7 @@
  *   where Q and Z are unitary (orthogonal for real case).
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 Napi::Value Qz(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();

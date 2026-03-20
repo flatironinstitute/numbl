@@ -15,7 +15,16 @@
  *   if (bridge) { ... use bridge.inv(...) ... }
  */
 
+/**
+ * Expected native addon version. Bump this whenever the C++ addon API changes
+ * (must match ADDON_VERSION in numbl_addon.cpp).
+ */
+export const NATIVE_ADDON_EXPECTED_VERSION = 1;
+
 export interface LapackBridge {
+  /** Returns the native addon's version number. */
+  addonVersion?(): number;
+
   /**
    * Invert an n×n real matrix stored in column-major order (MATLAB/LAPACK convention).
    * @param data  Column-major Float64Array of length n*n (not modified).
@@ -421,6 +430,18 @@ export interface LapackBridge {
     WRe?: Float64Array;
     WIm?: Float64Array;
   };
+
+  /** Element-wise binary op on real Float64Arrays. op: 0=add, 1=sub, 2=mul, 3=div */
+  elemwise?(a: Float64Array, b: Float64Array, op: number): Float64Array;
+
+  /** Element-wise binary op on complex Float64Arrays. op: 0=add, 1=sub, 2=mul, 3=div */
+  elemwiseComplex?(
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    bRe: Float64Array,
+    bIm: Float64Array | null,
+    op: number
+  ): { re: Float64Array; im?: Float64Array };
 }
 
 let _bridge: LapackBridge | null = null;

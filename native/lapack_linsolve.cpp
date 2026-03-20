@@ -20,7 +20,7 @@
  *     Underdetermined (m < n): minimum-norm solution minimising ||X||₂.
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // ── linsolve() ────────────────────────────────────────────────────────────────
 

@@ -107,59 +107,72 @@ export function not(v: unknown): RuntimeLogical | RuntimeTensor {
 // ── Binary operators ────────────────────────────────────────────────────
 
 export function binop(op: string, a: unknown, b: unknown): unknown {
-  // Fast path: both numbers
-  const an = asNumber(a);
-  const bn = asNumber(b);
-  if (an !== null && bn !== null) {
+  // Fast path: both plain JS numbers (skip asNumber overhead)
+  if (typeof a === "number" && typeof b === "number") {
     switch (op) {
       case BinaryOperation.Add:
-        return an + bn;
+        return a + b;
       case BinaryOperation.Sub:
-        return an - bn;
+        return a - b;
       case BinaryOperation.Mul:
-        return an * bn;
+        return a * b;
       case BinaryOperation.Div:
-        return an / bn;
+        return a / b;
       case BinaryOperation.Pow: {
-        const r = Math.pow(an, bn);
-        if (isNaN(r) && !isNaN(an) && !isNaN(bn)) break; // fall to slow path for complex
+        const r = Math.pow(a, b);
+        if (isNaN(r) && !isNaN(a) && !isNaN(b)) break; // fall to slow path for complex
         return r;
       }
       case BinaryOperation.ElemMul:
-        return an * bn;
+        return a * b;
       case BinaryOperation.ElemDiv:
-        return an / bn;
+        return a / b;
       case BinaryOperation.ElemPow: {
-        const r = Math.pow(an, bn);
-        if (isNaN(r) && !isNaN(an) && !isNaN(bn)) break; // fall to slow path for complex
+        const r = Math.pow(a, b);
+        if (isNaN(r) && !isNaN(a) && !isNaN(b)) break; // fall to slow path for complex
         return r;
       }
       case BinaryOperation.LeftDiv:
-        return bn / an;
+        return b / a;
       case BinaryOperation.ElemLeftDiv:
-        return bn / an;
+        return b / a;
       case BinaryOperation.Equal:
-        return RTV.logical(an === bn);
+        return RTV.logical(a === b);
       case BinaryOperation.NotEqual:
-        return RTV.logical(an !== bn);
+        return RTV.logical(a !== b);
       case BinaryOperation.Less:
-        return RTV.logical(an < bn);
+        return RTV.logical(a < b);
       case BinaryOperation.LessEqual:
-        return RTV.logical(an <= bn);
+        return RTV.logical(a <= b);
       case BinaryOperation.Greater:
-        return RTV.logical(an > bn);
+        return RTV.logical(a > b);
       case BinaryOperation.GreaterEqual:
-        return RTV.logical(an >= bn);
+        return RTV.logical(a >= b);
       case BinaryOperation.BitAnd:
-        return RTV.logical(an !== 0 && bn !== 0);
+        return RTV.logical(a !== 0 && b !== 0);
       case BinaryOperation.BitOr:
-        return RTV.logical(an !== 0 || bn !== 0);
+        return RTV.logical(a !== 0 || b !== 0);
+    }
+  }
+
+  // Secondary fast path: booleans as numbers
+  if (typeof a !== "object" || typeof b !== "object") {
+    const an = asNumber(a);
+    const bn = asNumber(b);
+    if (an !== null && bn !== null) {
+      return binop(op, an, bn);
     }
   }
 
   // Slow path: RuntimeValue operations
-  const ma = ensureRuntimeValue(a);
-  const mb = ensureRuntimeValue(b);
+  const ma =
+    typeof a === "object" && a !== null && "kind" in a
+      ? (a as RuntimeValue)
+      : ensureRuntimeValue(a);
+  const mb =
+    typeof b === "object" && b !== null && "kind" in b
+      ? (b as RuntimeValue)
+      : ensureRuntimeValue(b);
 
   let result: RuntimeValue;
   switch (op) {

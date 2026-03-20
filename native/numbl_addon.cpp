@@ -1,5 +1,5 @@
 /**
- * Native Node.js addon exposing LAPACK/BLAS routines for efficient linear algebra.
+ * numbl native addon — LAPACK/BLAS, FFT, element-wise arithmetic, and more.
  *
  * Exported functions (see individual .cpp files for full documentation):
  *
@@ -19,11 +19,22 @@
  *   cholComplex(dataRe, dataIm, n, upper) — complex Cholesky     (lapack_chol.cpp)
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
+
+// ── Addon version ────────────────────────────────────────────────────────────
+// Bump this integer whenever the addon's API changes (new functions, signature
+// changes, etc.) so that the JS side can detect stale builds.
+static const int ADDON_VERSION = 1;
+
+static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
+  return Napi::Number::New(info.Env(), ADDON_VERSION);
+}
 
 // ── Module initialisation ─────────────────────────────────────────────────────
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  exports.Set(Napi::String::New(env, "addonVersion"),
+              Napi::Function::New(env, AddonVersion));
   exports.Set(Napi::String::New(env, "inv"),
               Napi::Function::New(env, Inv));
   exports.Set(Napi::String::New(env, "invComplex"),
@@ -64,7 +75,11 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, Fft1dComplex));
   exports.Set(Napi::String::New(env, "fftAlongDim"),
               Napi::Function::New(env, FftAlongDim));
+  exports.Set(Napi::String::New(env, "elemwise"),
+              Napi::Function::New(env, Elemwise));
+  exports.Set(Napi::String::New(env, "elemwiseComplex"),
+              Napi::Function::New(env, ElemwiseComplex));
   return exports;
 }
 
-NODE_API_MODULE(lapack_addon, Init)
+NODE_API_MODULE(numbl_addon, Init)

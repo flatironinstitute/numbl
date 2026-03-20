@@ -13,7 +13,7 @@
  *     Returns the triangular factor and info (0 = success, >0 = not pos def).
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // Zero out the opposite triangle of an n×n column-major matrix.
 template<typename T>

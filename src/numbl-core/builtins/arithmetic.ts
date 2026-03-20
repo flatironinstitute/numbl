@@ -23,6 +23,7 @@ import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
+import { getLapackBridge } from "../native/lapack-bridge.js";
 import {
   linsolveLapack,
   linsolveComplexLapack,
@@ -300,33 +301,140 @@ function complexBinaryOp(
   );
 }
 
+// ── Tensor element-wise fast path ────────────────────────────────────────
+
+/** Element-wise op codes matching native addon convention. */
+const ELEMWISE_ADD = 0;
+const ELEMWISE_SUB = 1;
+const ELEMWISE_MUL = 2;
+const ELEMWISE_DIV = 3;
+
+/**
+ * Check whether two RuntimeValues are same-shape tensors.
+ * Returns [tensorA, tensorB] on match, null otherwise.
+ */
+function matchSameShapeTensors(
+  a: RuntimeValue,
+  b: RuntimeValue
+): [RuntimeTensor, RuntimeTensor] | null {
+  if (
+    typeof a !== "object" ||
+    a === null ||
+    (a as RuntimeTensor).kind !== "tensor" ||
+    typeof b !== "object" ||
+    b === null ||
+    (b as RuntimeTensor).kind !== "tensor"
+  )
+    return null;
+  const at = a as RuntimeTensor;
+  const bt = b as RuntimeTensor;
+  if (
+    at.data.length !== bt.data.length ||
+    at.shape.length !== bt.shape.length ||
+    at.shape.some((d, i) => d !== bt.shape[i])
+  )
+    return null;
+  return [at, bt];
+}
+
+/**
+ * Try native element-wise op on two same-shape real tensors.
+ * Returns null if native addon is unavailable (caller should use inline JS loop).
+ */
+function tryNativeElemwiseReal(
+  at: RuntimeTensor,
+  bt: RuntimeTensor,
+  opCode: number
+): RuntimeValue | null {
+  const bridge = getLapackBridge();
+  if (!bridge?.elemwise) return null;
+  const result = bridge.elemwise(
+    at.data as Float64Array,
+    bt.data as Float64Array,
+    opCode
+  );
+  return RTV.tensorRaw(result, at.shape);
+}
+
+/**
+ * Element-wise op on two same-shape tensors where at least one is complex.
+ * Uses native addon when available, otherwise JS callback loop.
+ */
+function tensorElemwiseComplex(
+  at: RuntimeTensor,
+  bt: RuntimeTensor,
+  opCode: number,
+  jsOp: (
+    aRe: number,
+    aIm: number,
+    bRe: number,
+    bIm: number
+  ) => { re: number; im: number }
+): RuntimeValue {
+  const bridge = getLapackBridge();
+  if (bridge?.elemwiseComplex) {
+    const r = bridge.elemwiseComplex(
+      at.data as Float64Array,
+      (at.imag as Float64Array) ?? null,
+      bt.data as Float64Array,
+      (bt.imag as Float64Array) ?? null,
+      opCode
+    );
+    if (r.im) return RTV.tensor(r.re, at.shape, r.im);
+    return RTV.tensorRaw(r.re, at.shape);
+  }
+  const len = at.data.length;
+  const aIm = at.imag;
+  const bIm = bt.imag;
+  const resultRe = new FloatXArray(len);
+  const resultIm = new FloatXArray(len);
+  if (aIm && bIm) {
+    for (let i = 0; i < len; i++) {
+      const r = jsOp(at.data[i], aIm[i], bt.data[i], bIm[i]);
+      resultRe[i] = r.re;
+      resultIm[i] = r.im;
+    }
+  } else if (aIm) {
+    for (let i = 0; i < len; i++) {
+      const r = jsOp(at.data[i], aIm[i], bt.data[i], 0);
+      resultRe[i] = r.re;
+      resultIm[i] = r.im;
+    }
+  } else {
+    for (let i = 0; i < len; i++) {
+      const r = jsOp(at.data[i], 0, bt.data[i], bIm![i]);
+      resultRe[i] = r.re;
+      resultIm[i] = r.im;
+    }
+  }
+  const isReal = resultIm.every(x => x === 0);
+  return RTV.tensor(resultRe, at.shape, isReal ? undefined : resultIm);
+}
+
 // ── Arithmetic operators ────────────────────────────────────────────────
 
 /** Add two RuntimeValues */
 export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Fast path: two real tensors with same shape
-  if (
-    typeof a === "object" &&
-    a !== null &&
-    (a as RuntimeTensor).kind === "tensor" &&
-    typeof b === "object" &&
-    b !== null &&
-    (b as RuntimeTensor).kind === "tensor"
-  ) {
-    const at = a as RuntimeTensor;
-    const bt = b as RuntimeTensor;
-    if (
-      !at.imag &&
-      !bt.imag &&
-      at.data.length === bt.data.length &&
-      at.shape.length === bt.shape.length &&
-      at.shape.every((d, i) => d === bt.shape[i])
-    ) {
-      const result = new FloatXArray(at.data.length);
-      for (let i = 0; i < result.length; i++)
-        result[i] = at.data[i] + bt.data[i];
-      return RTV.tensor(result, at.shape);
+  const m = matchSameShapeTensors(a, b);
+  if (m) {
+    const [at, bt] = m;
+    if (!at.imag && !bt.imag) {
+      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_ADD);
+      if (nr) return nr;
+      const len = at.data.length;
+      const result = new FloatXArray(len);
+      for (let i = 0; i < len; i++) result[i] = at.data[i] + bt.data[i];
+      return RTV.tensorRaw(result, at.shape);
     }
+    return tensorElemwiseComplex(
+      at,
+      bt,
+      ELEMWISE_ADD,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe + bRe,
+        im: aIm + bIm,
+      })
+    );
   }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mAddSparse(a, b);
@@ -341,6 +449,27 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Subtract two RuntimeValues */
 export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  const m = matchSameShapeTensors(a, b);
+  if (m) {
+    const [at, bt] = m;
+    if (!at.imag && !bt.imag) {
+      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_SUB);
+      if (nr) return nr;
+      const len = at.data.length;
+      const result = new FloatXArray(len);
+      for (let i = 0; i < len; i++) result[i] = at.data[i] - bt.data[i];
+      return RTV.tensorRaw(result, at.shape);
+    }
+    return tensorElemwiseComplex(
+      at,
+      bt,
+      ELEMWISE_SUB,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe - bRe,
+        im: aIm - bIm,
+      })
+    );
+  }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mSubSparse(a, b);
   if (isComplexOrMixed(a, b)) {
@@ -372,29 +501,26 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise multiply */
 export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Fast path: two real tensors with same shape
-  if (
-    typeof a === "object" &&
-    a !== null &&
-    (a as RuntimeTensor).kind === "tensor" &&
-    typeof b === "object" &&
-    b !== null &&
-    (b as RuntimeTensor).kind === "tensor"
-  ) {
-    const at = a as RuntimeTensor;
-    const bt = b as RuntimeTensor;
-    if (
-      !at.imag &&
-      !bt.imag &&
-      at.data.length === bt.data.length &&
-      at.shape.length === bt.shape.length &&
-      at.shape.every((d, i) => d === bt.shape[i])
-    ) {
-      const result = new FloatXArray(at.data.length);
-      for (let i = 0; i < result.length; i++)
-        result[i] = at.data[i] * bt.data[i];
-      return RTV.tensor(result, at.shape);
+  const m = matchSameShapeTensors(a, b);
+  if (m) {
+    const [at, bt] = m;
+    if (!at.imag && !bt.imag) {
+      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_MUL);
+      if (nr) return nr;
+      const len = at.data.length;
+      const result = new FloatXArray(len);
+      for (let i = 0; i < len; i++) result[i] = at.data[i] * bt.data[i];
+      return RTV.tensorRaw(result, at.shape);
     }
+    return tensorElemwiseComplex(
+      at,
+      bt,
+      ELEMWISE_MUL,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe * bRe - aIm * bIm,
+        im: aRe * bIm + aIm * bRe,
+      })
+    );
   }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemMulSparse(a, b);
@@ -430,6 +556,19 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise divide */
 export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  const m = matchSameShapeTensors(a, b);
+  if (m) {
+    const [at, bt] = m;
+    if (!at.imag && !bt.imag) {
+      const nr = tryNativeElemwiseReal(at, bt, ELEMWISE_DIV);
+      if (nr) return nr;
+      const len = at.data.length;
+      const result = new FloatXArray(len);
+      for (let i = 0; i < len; i++) result[i] = at.data[i] / bt.data[i];
+      return RTV.tensorRaw(result, at.shape);
+    }
+    return tensorElemwiseComplex(at, bt, ELEMWISE_DIV, complexDivide);
+  }
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemDivSparse(a, b);
   if (isComplexOrMixed(a, b)) {
