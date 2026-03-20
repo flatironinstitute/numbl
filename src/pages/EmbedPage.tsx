@@ -41,22 +41,25 @@ disp('Hello from numbl!')
 disp(['Sum of squares: ', num2str(sum(y))])
 `;
 
-function getInitialScript(): string {
+function getQueryParams(): { script: string; interpret: boolean } {
   const params = new URLSearchParams(window.location.search);
+  const interpret =
+    params.get("interpret") === "true" || params.get("interpret") === "1";
   const scriptParam = params.get("script");
+  let script = DEFAULT_SCRIPT;
   if (scriptParam) {
     try {
-      return atob(scriptParam);
+      script = atob(scriptParam);
     } catch {
       console.error("Failed to decode script parameter");
-      return DEFAULT_SCRIPT;
     }
   }
-  return DEFAULT_SCRIPT;
+  return { script, interpret };
 }
 
 export function EmbedPage() {
-  const [code, setCode] = useState<string>(getInitialScript);
+  const { script: initialScript, interpret } = getQueryParams();
+  const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [outputTab, setOutputTab] = useState(0); // 0=Console, 1=Figure
@@ -174,12 +177,12 @@ export function EmbedPage() {
     workerRef.current.postMessage({
       type: "run",
       code: codeToRun,
-      options: { displayResults: true, maxIterations: 10000000 },
+      options: { displayResults: true, maxIterations: 10000000, interpret },
       workspaceFiles: mipWorkspaceFiles,
       mainFileName: "script.m",
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
     });
-  }, [code]);
+  }, [code, interpret]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

@@ -7,6 +7,7 @@
  *
  * Protocol:
  *   Main → Worker:  { type: "execute", code: string }
+ *   Main → Worker:  { type: "set_interpret", interpret: boolean }
  *   Main → Worker:  { type: "update_workspace", workspaceFiles: WorkspaceFile[] }
  *   Worker → Main:  { type: "output", text: string }
  *   Worker → Main:  { type: "drawnow", plotInstructions: object }
@@ -28,6 +29,7 @@ let variableValues: Record<string, RuntimeValue> = {};
 let holdState = false;
 let workspaceFiles: WorkspaceFile[] = [];
 let searchPaths: string[] | undefined;
+let interpretMode = false;
 
 // ── Snippet helpers ──────────────────────────────────────────────────────────
 
@@ -103,6 +105,11 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
+  if (type === "set_interpret") {
+    interpretMode = !!e.data.interpret;
+    return;
+  }
+
   if (type === "update_workspace") {
     workspaceFiles = e.data.workspaceFiles || [];
     if (e.data.searchPaths !== undefined) {
@@ -125,6 +132,7 @@ self.onmessage = (e: MessageEvent) => {
         },
         displayResults: true,
         maxIterations: 10000000,
+        interpret: interpretMode,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
       },

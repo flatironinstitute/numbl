@@ -23,7 +23,13 @@ interface TerminalMethods {
   clearTerminal: () => void;
 }
 
+function useInterpretParam(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  return params.get("interpret") === "true" || params.get("interpret") === "1";
+}
+
 export function EmbedReplPage() {
+  const interpret = useInterpretParam();
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -56,6 +62,11 @@ export function EmbedReplPage() {
       { type: "module" }
     );
     replWorkerRef.current = worker;
+
+    // Send interpret mode flag to worker
+    if (interpret) {
+      worker.postMessage({ type: "set_interpret", interpret: true });
+    }
 
     worker.onmessage = e => {
       const msg = e.data;
@@ -108,7 +119,7 @@ export function EmbedReplPage() {
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction]);
+  }, [handlePlotInstruction, interpret]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {

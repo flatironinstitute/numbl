@@ -103,6 +103,12 @@ export function IDEWorkspace({
   uploadFiles,
   headerContent,
 }: IDEWorkspaceProps) {
+  const interpret = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return (
+      params.get("interpret") === "true" || params.get("interpret") === "1"
+    );
+  }, []);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
@@ -308,6 +314,11 @@ export function IDEWorkspace({
     );
     replWorkerRef.current = worker;
 
+    // Send interpret mode flag to worker
+    if (interpret) {
+      worker.postMessage({ type: "set_interpret", interpret: true });
+    }
+
     if (files.length > 0) {
       worker.postMessage({
         type: "update_workspace",
@@ -503,7 +514,7 @@ export function IDEWorkspace({
       code: codeToRun,
       workspaceFiles: combinedWorkspaceFiles,
       mainFileName: activeFile.name,
-      options: { displayResults: true, maxIterations: 10000000 },
+      options: { displayResults: true, maxIterations: 10000000, interpret },
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
     });
   }, [
@@ -513,6 +524,7 @@ export function IDEWorkspace({
     useRemoteExecution,
     remoteServiceUrl,
     handlePlotInstruction,
+    interpret,
   ]);
 
   const stopExecution = useCallback(() => {

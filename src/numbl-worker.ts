@@ -63,6 +63,7 @@ self.onmessage = (e: MessageEvent) => {
         },
         displayResults: options?.displayResults ?? true,
         maxIterations: options?.maxIterations ?? 10000000,
+        interpret: options?.interpret ?? false,
         initialVariableValues: {
           init_var_1: RTV.num(12),
         },
