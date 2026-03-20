@@ -47,6 +47,11 @@ export const RTV = {
     return { kind: "tensor", data: d, imag: im, shape: s, _rc: 1 };
   },
 
+  /** Fast tensor constructor — data must be FloatXArray, shape already normalized (no trailing singletons). */
+  tensorRaw(data: FloatXArrayType, shape: number[]): RuntimeTensor {
+    return { kind: "tensor", data, imag: undefined, shape, _rc: 1 };
+  },
+
   /** Create a scalar tensor (1x1) */
   scalar(value: number): RuntimeNumber {
     return value;

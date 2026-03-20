@@ -11,7 +11,7 @@
  *     zgetrf + zgetri.  Throws if the matrix is singular.
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // ── inv() ─────────────────────────────────────────────────────────────────────
 

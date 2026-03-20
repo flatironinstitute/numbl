@@ -288,16 +288,6 @@ function genBinary(
     }
   }
 
-  // If both types are known and neither is a class instance, binop is sync
-  if (
-    leftType.kind !== "Unknown" &&
-    rightType.kind !== "Unknown" &&
-    leftType.kind !== "ClassInstance" &&
-    rightType.kind !== "ClassInstance"
-  ) {
-    return `$rt.binopSync(${JSON.stringify(kind.op)}, ${left}, ${right})`;
-  }
-
   return `$rt.binop(${JSON.stringify(kind.op)}, ${left}, ${right})`;
 }
 

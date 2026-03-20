@@ -1,9 +1,9 @@
 {
   "targets": [
     {
-      "target_name": "lapack_addon",
+      "target_name": "numbl_addon",
       "sources": [
-        "native/lapack_addon.cpp",
+        "native/numbl_addon.cpp",
         "native/lapack_inv.cpp",
         "native/lapack_qr.cpp",
         "native/lapack_lu.cpp",
@@ -14,7 +14,8 @@
         "native/lapack_chol.cpp",
         "native/lapack_qz.cpp",
         "native/lapack_fft.cpp",
-        "native/lapack_fft_batch.cpp"
+        "native/lapack_fft_batch.cpp",
+        "native/elemwise.cpp"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
@@ -29,7 +30,7 @@
         "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
         "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
       ],
-      "cflags_cc": [ "-std=c++17", "-O2" ]
+      "cflags_cc": [ "-std=c++17", "-O3", "-march=native" ]
     }
   ]
 }

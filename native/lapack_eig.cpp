@@ -12,7 +12,7 @@
  *   The ts-lapack bridge handles the nobalance case.
  */
 
-#include "lapack_common.h"
+#include "numbl_addon_common.h"
 
 // ── eig() ─────────────────────────────────────────────────────────────────────
 

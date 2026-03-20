@@ -1,6 +1,6 @@
 /**
  * Common includes, type definitions, LAPACK/BLAS declarations, and function
- * prototypes shared across the lapack_addon source files.
+ * prototypes shared across the numbl_addon source files.
  */
 
 #pragma once
@@ -264,3 +264,5 @@ Napi::Value QzComplex(const Napi::CallbackInfo& info);
 Napi::Value Fft1d(const Napi::CallbackInfo& info);
 Napi::Value Fft1dComplex(const Napi::CallbackInfo& info);
 Napi::Value FftAlongDim(const Napi::CallbackInfo& info);
+Napi::Value Elemwise(const Napi::CallbackInfo& info);
+Napi::Value ElemwiseComplex(const Napi::CallbackInfo& info);
