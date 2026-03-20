@@ -236,6 +236,22 @@ export function registerArrayManipulationFunctions(): void {
       if (n !== data.length) {
         throw new RuntimeError("reshape: number of elements must not change");
       }
+      if (isRuntimeTensor(v)) {
+        // Zero-copy reshape: share the underlying buffer via COW.
+        // Increment source _rc so indexed-assignment knows to copy before mutating.
+        v._rc++;
+        // Strip trailing singleton dimensions (matches RTV.tensor behavior)
+        const s = [...shape];
+        while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+        return {
+          kind: "tensor",
+          data,
+          imag,
+          shape: s,
+          _isLogical: v._isLogical,
+          _rc: v._rc,
+        } as RuntimeTensor;
+      }
       return RTV.tensor(
         new FloatXArray(data),
         shape,
