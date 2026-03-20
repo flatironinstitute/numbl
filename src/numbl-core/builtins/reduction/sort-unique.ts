@@ -349,11 +349,14 @@ function uniqueByRows(
   stable: boolean
 ): RuntimeValue | RuntimeValue[] {
   const [rows, cols] = tensorSize2D(v);
-  const rowKey = (r: number): string => {
-    const parts: number[] = [];
-    for (let c = 0; c < cols; c++) parts.push(v.data[c * rows + r]);
-    return parts.join(",");
-  };
+  const rowKey =
+    cols === 2
+      ? (r: number): string => v.data[r] + "," + v.data[rows + r]
+      : (r: number): string => {
+          let key = "" + v.data[r];
+          for (let c = 1; c < cols; c++) key += "," + v.data[c * rows + r];
+          return key;
+        };
   const rowHasNaN = (r: number): boolean => {
     for (let c = 0; c < cols; c++) {
       const val = v.data[c * rows + r];
@@ -411,12 +414,27 @@ function uniqueByRows(
     1,
   ]);
 
-  // Rebuild ic for sorted case
+  // Rebuild ic for sorted case: map old unsorted indices to new sorted indices
   if (!stable) {
-    const sortedKeyOrder = uniqueRowOrder.map(r => rowKey(r));
+    // Build a map from old-group-index → new-sorted-position
+    // Before sorting, each row was assigned an ic based on insertion order.
+    // After sorting, we need to remap those to sorted positions.
+    const sortedKeyToPos = new Map<string, number>();
+    for (let u = 0; u < nUnique; u++) {
+      sortedKeyToPos.set(rowKey(uniqueRowOrder[u]), u + 1);
+    }
     for (let r = 0; r < rows; r++) {
-      const key = rowKey(r);
-      ic[r] = sortedKeyOrder.indexOf(key) + 1;
+      if (rowHasNaN(r)) {
+        // NaN rows: find this specific row in uniqueRowOrder
+        for (let u = 0; u < nUnique; u++) {
+          if (uniqueRowOrder[u] === r) {
+            ic[r] = u + 1;
+            break;
+          }
+        }
+      } else {
+        ic[r] = sortedKeyToPos.get(rowKey(r))!;
+      }
     }
   }
 
