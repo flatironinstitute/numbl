@@ -33,7 +33,13 @@ import {
 } from "../runtime/types.js";
 import { isBuiltin, getBuiltinNargin } from "../builtins";
 import { COLON_SENTINEL } from "../executor/types.js";
-import { getBroadcastShape } from "../../numbl-core/builtins/arithmetic.js";
+import {
+  getBroadcastShape,
+  mAdd,
+  mSub,
+  mElemMul,
+  mElemDiv,
+} from "../../numbl-core/builtins/arithmetic.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
@@ -323,20 +329,6 @@ export function dispatch(
 
 /** Direct builtin call — skips local/workspace/registry lookup. */
 export function callBuiltin(
-  rt: Runtime,
-  name: string,
-  nargout: number,
-  args: unknown[]
-): unknown {
-  const plotResult = dispatchPlotCall(rt, name, args);
-  if (plotResult !== undefined) return plotResult;
-  const builtin = rt.builtins[name];
-  if (builtin) return builtin(nargout, args);
-  throw new RuntimeError(`'${name}' is not a builtin function`);
-}
-
-/** Synchronous builtin call — for builtins known to be sync at compile time. */
-export function callBuiltinSync(
   rt: Runtime,
   name: string,
   nargout: number,
@@ -752,6 +744,35 @@ export function structfunImpl(
   }
 }
 
+/** Map known operator names to their direct arithmetic implementations. */
+const bsxfunOpMap: Record<
+  string,
+  (a: RuntimeValue, b: RuntimeValue) => RuntimeValue
+> = {
+  plus: mAdd,
+  minus: mSub,
+  times: mElemMul,
+  rdivide: mElemDiv,
+};
+
+/**
+ * If fnArg is a known operator handle (@times, @plus, etc.), return the
+ * direct arithmetic function that already handles broadcasting natively.
+ */
+function resolveKnownBsxfunOp(
+  fnArg: unknown
+): ((a: RuntimeValue, b: RuntimeValue) => RuntimeValue) | undefined {
+  if (typeof fnArg === "function") {
+    // JS function — can't identify by name
+    return undefined;
+  }
+  const mv = ensureRuntimeValue(fnArg);
+  if (isRuntimeFunction(mv) && mv.impl === "builtin") {
+    return bsxfunOpMap[mv.name];
+  }
+  return undefined;
+}
+
 export function bsxfunImpl(
   rt: Runtime,
   _nargout: number,
@@ -773,6 +794,12 @@ export function bsxfunImpl(
         "bsxfun: first argument must be a function handle"
       );
     }
+  }
+
+  // Fast path: known operator handles bypass element-by-element dispatch
+  const knownOp = resolveKnownBsxfunOp(fnArg);
+  if (knownOp) {
+    return knownOp(ensureRuntimeValue(args[1]), ensureRuntimeValue(args[2]));
   }
 
   const rawA = ensureRuntimeValue(args[1]);
