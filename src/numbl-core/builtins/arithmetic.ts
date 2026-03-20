@@ -1418,9 +1418,37 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
     return unwrap1x1(RTV.tensor(new FloatXArray(raw), [aRows, bCols]));
   }
 
-  // Complex matrix multiplication
+  // Complex matrix multiplication — try native zgemm first
   const aIm = a.imag || new FloatXArray(a.data.length);
   const bIm = b.imag || new FloatXArray(b.data.length);
+
+  const bridge = getEffectiveBridge("matmul", "matmulComplex");
+  if (bridge.matmulComplex) {
+    const f64ARe =
+      a.data instanceof Float64Array ? a.data : new Float64Array(a.data);
+    const f64AIm = aIm instanceof Float64Array ? aIm : new Float64Array(aIm);
+    const f64BRe =
+      b.data instanceof Float64Array ? b.data : new Float64Array(b.data);
+    const f64BIm = bIm instanceof Float64Array ? bIm : new Float64Array(bIm);
+    const raw = bridge.matmulComplex(
+      f64ARe,
+      f64AIm,
+      aRows,
+      aCols,
+      f64BRe,
+      f64BIm,
+      bCols
+    );
+    return unwrap1x1(
+      RTV.tensor(
+        new FloatXArray(raw.re),
+        [aRows, bCols],
+        raw.im ? new FloatXArray(raw.im) : undefined
+      )
+    );
+  }
+
+  // Fallback: pure JavaScript complex matmul
   const resultRe = new FloatXArray(aRows * bCols);
   const resultIm = new FloatXArray(aRows * bCols);
 
@@ -1435,7 +1463,6 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
         const aI = aIm[aIdx];
         const bRe = b.data[bIdx];
         const bI = bIm[bIdx];
-        // (aRe + aI*i) * (bRe + bI*i) = (aRe*bRe - aI*bI) + (aRe*bI + aI*bRe)*i
         sumRe += aRe * bRe - aI * bI;
         sumIm += aRe * bI + aI * bRe;
       }
@@ -1445,7 +1472,6 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
     }
   }
 
-  // Check if result is purely real
   const isPurelyReal = resultIm.every(x => x === 0);
   return unwrap1x1(
     RTV.tensor(resultRe, [aRows, bCols], isPurelyReal ? undefined : resultIm)

@@ -20,6 +20,11 @@
  */
 
 #include "numbl_addon_common.h"
+#include <cstdlib>
+
+extern "C" {
+  void openblas_set_num_threads(int num_threads);
+}
 
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
@@ -33,6 +38,11 @@ static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
 // ── Module initialisation ─────────────────────────────────────────────────────
 
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
+  // Use single-threaded BLAS unless the user explicitly set the env var.
+  // Multi-threaded BLAS adds overhead for the many small matmuls in numbl.
+  if (!std::getenv("OPENBLAS_NUM_THREADS")) {
+    openblas_set_num_threads(1);
+  }
   exports.Set(Napi::String::New(env, "addonVersion"),
               Napi::Function::New(env, AddonVersion));
   exports.Set(Napi::String::New(env, "inv"),
@@ -53,6 +63,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, SvdComplex));
   exports.Set(Napi::String::New(env, "matmul"),
               Napi::Function::New(env, Matmul));
+  exports.Set(Napi::String::New(env, "matmulComplex"),
+              Napi::Function::New(env, MatmulComplex));
   exports.Set(Napi::String::New(env, "linsolve"),
               Napi::Function::New(env, Linsolve));
   exports.Set(Napi::String::New(env, "linsolveComplex"),

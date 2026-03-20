@@ -83,6 +83,13 @@ extern "C" {
               double* b, int* ldb,
               double* beta, double* c, int* ldc);
 
+  // Complex matrix-matrix multiplication: C = alpha * op(A) * op(B) + beta * C
+  void zgemm_(char* transa, char* transb,
+              int* m, int* n, int* k,
+              lapack_complex_double* alpha, lapack_complex_double* a, int* lda,
+              lapack_complex_double* b, int* ldb,
+              lapack_complex_double* beta, lapack_complex_double* c, int* ldc);
+
   // ── Linear solve (square) ─────────────────────────────────────────────────
   // LU factorisation + solve: A * X = B  (A is n×n, B is n×nrhs)
   // On exit A contains the LU factors; B contains X.
@@ -253,6 +260,7 @@ Napi::Value LuComplex(const Napi::CallbackInfo& info);
 Napi::Value Svd(const Napi::CallbackInfo& info);
 Napi::Value SvdComplex(const Napi::CallbackInfo& info);
 Napi::Value Matmul(const Napi::CallbackInfo& info);
+Napi::Value MatmulComplex(const Napi::CallbackInfo& info);
 Napi::Value Linsolve(const Napi::CallbackInfo& info);
 Napi::Value LinsolveComplex(const Napi::CallbackInfo& info);
 Napi::Value Eig(const Napi::CallbackInfo& info);

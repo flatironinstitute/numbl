@@ -155,6 +155,28 @@ export interface LapackBridge {
   ): Float64Array;
 
   /**
+   * Complex matrix-matrix multiplication using BLAS zgemm.
+   * Computes C = A * B in column-major order.
+   * @param ARe  Real parts of A, column-major Float64Array of length m*k.
+   * @param AIm  Imaginary parts of A, column-major Float64Array of length m*k.
+   * @param m    Number of rows in A and C.
+   * @param k    Number of columns in A and rows in B.
+   * @param BRe  Real parts of B, column-major Float64Array of length k*n.
+   * @param BIm  Imaginary parts of B, column-major Float64Array of length k*n.
+   * @param n    Number of columns in B and C.
+   * @returns    Object with {re, im?} — complex result as Float64Arrays.
+   */
+  matmulComplex?(
+    ARe: Float64Array,
+    AIm: Float64Array,
+    m: number,
+    k: number,
+    BRe: Float64Array,
+    BIm: Float64Array,
+    n: number
+  ): { re: Float64Array; im?: Float64Array };
+
+  /**
    * Solve a linear system A * X = B.
    * If A is square (m === n), uses LU factorization (dgesv / dgetrf+solve).
    * If A is non-square, uses QR / LQ factorization (dgels / dgeqrf+solve):

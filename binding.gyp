@@ -9,6 +9,7 @@
         "native/lapack_lu.cpp",
         "native/lapack_svd.cpp",
         "native/lapack_matmul.cpp",
+        "native/lapack_matmul_complex.cpp",
         "native/lapack_linsolve.cpp",
         "native/lapack_eig.cpp",
         "native/lapack_chol.cpp",
