@@ -381,16 +381,52 @@ export function registerMinMax(): void {
   register("min", [
     {
       check: minMaxCheck,
-      apply: (args, nargout) =>
-        minMaxImpl("min", args, nargout, Infinity, (a, b) => a < b, Math.min),
+      apply: (args, nargout) => {
+        // Fast path: min(a, b) where both are plain JS numbers
+        if (
+          args.length === 2 &&
+          typeof args[0] === "number" &&
+          typeof args[1] === "number"
+        ) {
+          const a = args[0] as number,
+            b = args[1] as number;
+          return a !== a ? b : b !== b ? a : Math.min(a, b);
+        }
+        return minMaxImpl(
+          "min",
+          args,
+          nargout,
+          Infinity,
+          (a, b) => a < b,
+          Math.min
+        );
+      },
     },
   ]);
 
   register("max", [
     {
       check: minMaxCheck,
-      apply: (args, nargout) =>
-        minMaxImpl("max", args, nargout, -Infinity, (a, b) => a > b, Math.max),
+      apply: (args, nargout) => {
+        // Fast path: max(a, b) where both are plain JS numbers
+        if (
+          args.length === 2 &&
+          typeof args[0] === "number" &&
+          typeof args[1] === "number"
+        ) {
+          const a = args[0] as number,
+            b = args[1] as number;
+          return a !== a ? b : b !== b ? a : Math.max(a, b);
+        }
+        return minMaxImpl(
+          "max",
+          args,
+          nargout,
+          -Infinity,
+          (a, b) => a > b,
+          Math.max
+        );
+      },
     },
   ]);
 }
