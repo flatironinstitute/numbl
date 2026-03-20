@@ -75,7 +75,6 @@ import {
   dispatch as _dispatch,
   methodDispatch as _methodDispatch,
   callBuiltin as _callBuiltin,
-  callBuiltinSync as _callBuiltinSync,
   callClassMethod as _callClassMethod,
   numblClass as _numblClass,
 } from "./runtimeDispatch.js";
@@ -1209,13 +1208,6 @@ export class Runtime {
   }
   public callBuiltin(name: string, nargout: number, args: unknown[]): unknown {
     return _callBuiltin(this, name, nargout, args);
-  }
-  public callBuiltinSync(
-    name: string,
-    nargout: number,
-    args: unknown[]
-  ): unknown {
-    return _callBuiltinSync(this, name, nargout, args);
   }
   public callClassMethod(
     className: string,

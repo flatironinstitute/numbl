@@ -157,7 +157,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     if (fn) {
       return fn(nargout, args.slice(1));
     }
-    return rt.callBuiltinSync(fnName, nargout, args.slice(1));
+    return rt.callBuiltin(fnName, nargout, args.slice(1));
   };
 
   // ── File I/O builtins ──────────────────────────────────────────────
