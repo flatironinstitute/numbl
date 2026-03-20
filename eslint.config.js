@@ -7,7 +7,14 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import eslintConfigPrettier from "eslint-config-prettier";
 
 export default defineConfig([
-  globalIgnores(["dist", "dist-cli", "dist-ssr", "coverage", "build"]),
+  globalIgnores([
+    "dist",
+    "dist-cli",
+    "dist-ssr",
+    "coverage",
+    "build",
+    "numbl_test_scripts",
+  ]),
   {
     files: ["**/*.{ts,tsx}"],
     extends: [
