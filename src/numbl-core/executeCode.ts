@@ -35,7 +35,13 @@ export function executeCode(
   nativeBridge?: NativeBridge
 ): ExecResult {
   if (options.interpret) {
-    return interpretCode(source, options, workspaceFiles, mainFileName);
+    return interpretCode(
+      source,
+      options,
+      workspaceFiles,
+      mainFileName,
+      searchPaths
+    );
   }
 
   const initialVariableNames = options.initialVariableValues
