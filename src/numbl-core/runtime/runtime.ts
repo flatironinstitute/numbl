@@ -248,15 +248,23 @@ export class Runtime {
 
   private initBuiltins(): void {
     for (const name of getAllBuiltinNames()) {
+      const builtin = getBuiltin(name)!;
+      const singleBranch = builtin.length === 1 ? builtin[0] : null;
       this.builtins[name] = (nargout: number, args: unknown[]) => {
-        const builtin = getBuiltin(name)!;
         const margs = args.map(a => ensureRuntimeValue(a));
-        const argItemTypes = margs.map(arg => getItemTypeFromRuntimeValue(arg));
-        let branch = builtin[0];
-        for (let i = 0; i < builtin.length; i++) {
-          if (builtin[i].check(argItemTypes, nargout)) {
-            branch = builtin[i];
-            break;
+        let branch: (typeof builtin)[0];
+        if (singleBranch) {
+          branch = singleBranch;
+        } else {
+          const argItemTypes = margs.map(arg =>
+            getItemTypeFromRuntimeValue(arg)
+          );
+          branch = builtin[0];
+          for (let i = 0; i < builtin.length; i++) {
+            if (builtin[i].check(argItemTypes, nargout)) {
+              branch = builtin[i];
+              break;
+            }
           }
         }
         if (this.profilingEnabled) {

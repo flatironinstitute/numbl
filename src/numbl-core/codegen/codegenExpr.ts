@@ -1062,8 +1062,6 @@ function genClassInstantiation(
 
 /** Builtins that map to a single-arg Math.* call when the argument is Num. */
 const NATIVE_MATH_1: Record<string, string> = {
-  // Note: sqrt, asin, acos, log are NOT here because they can produce
-  // complex results from real inputs (e.g., sqrt(-1) = 1i).
   abs: "Math.abs",
   floor: "Math.floor",
   ceil: "Math.ceil",
@@ -1076,6 +1074,21 @@ const NATIVE_MATH_1: Record<string, string> = {
   log2: "Math.log2",
   log10: "Math.log10",
   sign: "Math.sign",
+};
+
+/**
+ * Builtins that need a domain guard before using Math.*  because they can
+ * produce complex results from real inputs (e.g., sqrt(-1) = 1i).
+ * The guard is a JS expression template where `$x` is replaced with the arg.
+ * When the guard is true, Math.* is safe; otherwise fall back to runtime.
+ */
+const GUARDED_MATH_1: Record<string, { fn: string; guard: string }> = {
+  sqrt: { fn: "Math.sqrt", guard: "$x >= 0" },
+  log: { fn: "Math.log", guard: "$x > 0" },
+  asin: { fn: "Math.asin", guard: "$x >= -1 && $x <= 1" },
+  acos: { fn: "Math.acos", guard: "$x >= -1 && $x <= 1" },
+  acosh: { fn: "Math.acosh", guard: "$x >= 1" },
+  atanh: { fn: "Math.atanh", guard: "$x > -1 && $x < 1" },
 };
 
 /** Builtins that map to a two-arg Math.* call when both arguments are Num. */
@@ -1101,6 +1114,17 @@ function tryNativeMathCodegen(
   ) {
     const fn = NATIVE_MATH_1[name];
     if (fn) return `${fn}(${jsArgs[0]})`;
+
+    // Guarded native math: emit fast path with domain guard, fallback to runtime
+    const guarded = GUARDED_MATH_1[name];
+    if (guarded) {
+      const arg = jsArgs[0];
+      const tmp = cg.freshTemp("$gm");
+      cg.emit(`var ${tmp};`);
+      const guard = guarded.guard.replace(/\$x/g, tmp);
+      const fallback = `${cg.useBuiltin(name)}(1, [${tmp}])`;
+      return `(${tmp} = ${arg}, ${guard} ? ${guarded.fn}(${tmp}) : ${fallback})`;
+    }
   }
   if (
     jsArgs.length === 2 &&
