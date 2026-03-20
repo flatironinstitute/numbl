@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Pure-TypeScript LAPACK bridge — implements the LapackBridge interface using
  * the ts-lapack translations of LAPACK Fortran routines.

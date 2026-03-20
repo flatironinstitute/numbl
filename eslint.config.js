@@ -12,8 +12,10 @@ export default defineConfig([
     "dist-cli",
     "dist-ssr",
     "coverage",
+    "coverage-all",
     "build",
     "numbl_test_scripts",
+    "tmp",
   ]),
   {
     files: ["**/*.{ts,tsx}"],

@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 /**
  * Miscellaneous builtin functions (I/O, type conversion, cell/struct, error handling, timing, etc.)
  */
