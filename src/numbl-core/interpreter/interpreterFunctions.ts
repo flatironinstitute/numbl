@@ -553,6 +553,7 @@ export function callUserFunction(
   const savedCallerEnv = this.callerEnv;
   this.callerEnv = savedEnv;
   this.env = fnEnv;
+  this.rt.pushCallFrame(fn.name);
 
   try {
     this.execStmts(fn.body);
@@ -600,7 +601,11 @@ export function callUserFunction(
       return outputs[0];
     }
     return outputs;
+  } catch (e) {
+    this.rt.annotateError(e);
+    throw e;
   } finally {
+    this.rt.popCallFrame();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
   }
