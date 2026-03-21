@@ -415,11 +415,15 @@ export function evalExprNargout(
         }
       }
       const base = this.evalExpr(expr.base);
-      // For struct fields, try to get the field value for end-context resolution.
-      // Don't do this for class instances — getMember would call the method as a side effect.
+      // For struct/class fields, try to get the field value for end-context resolution.
+      // For class instances, read the field directly (not via getMember which could
+      // trigger subsref or call a no-arg method as a side effect).
       let fieldVal: unknown = undefined;
       const baseRv = ensureRuntimeValue(base);
-      if (!isRuntimeClassInstance(baseRv)) {
+      if (isRuntimeClassInstance(baseRv)) {
+        const fv = baseRv.fields.get(expr.name);
+        if (fv !== undefined) fieldVal = fv;
+      } else {
         try {
           fieldVal = this.rt.getMember(base, expr.name);
         } catch {
