@@ -21,6 +21,7 @@ import { RuntimeError } from "../runtime/error.js";
 import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { mPow } from "../builtins/arithmetic.js";
 import { getBuiltinNargin } from "../builtins/registry.js";
+import { buildLineTable, offsetToLineFast } from "../runtime/error.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
 import { numel } from "../runtime/utils.js";
 import {
@@ -46,6 +47,14 @@ import type { Interpreter } from "./interpreter.js";
 export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
   if (stmt.span) {
     this.rt.$file = stmt.span.file;
+    // Compute line number from character offset using cached line table
+    let table = this.lineTableCache.get(stmt.span.file);
+    if (!table) {
+      const src = this.fileSources.get(stmt.span.file) ?? "";
+      table = buildLineTable(src);
+      this.lineTableCache.set(stmt.span.file, table);
+    }
+    this.rt.$line = offsetToLineFast(table, stmt.span.start);
   }
 
   switch (stmt.type) {

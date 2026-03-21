@@ -122,6 +122,12 @@ export function interpretCode(
     options.initialVariableValues
   );
 
+  // Populate file→source map for line number computation in error messages
+  interpreter.fileSources.set(mainFileName, source);
+  for (const f of mWorkspaceFiles) {
+    interpreter.fileSources.set(f.name, f.source);
+  }
+
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
 

@@ -66,6 +66,12 @@ export class Interpreter {
   /** @internal */
   functionDefCache = new Map<string, FunctionDef>();
 
+  /** @internal Pre-built line break tables for offset→line lookup per file. */
+  lineTableCache = new Map<string, number[]>();
+
+  /** @internal file→source mapping for line number computation */
+  fileSources = new Map<string, string>();
+
   /** @internal Guard against infinite recursion in compileSpecialized */
   compileInProgress = new Set<string>();
 
