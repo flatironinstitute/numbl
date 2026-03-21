@@ -18,14 +18,9 @@ import {
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import {
-  binop,
-  uminus,
-  uplus,
-  ctranspose,
-} from "../runtime/runtimeOperators.js";
-import { horzcat, vertcat } from "../runtime/tensor-construction.js";
+import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { mPow } from "../builtins/arithmetic.js";
+import { getBuiltinNargin } from "../builtins/registry.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
 import { numel } from "../runtime/utils.js";
 import {
@@ -324,6 +319,14 @@ export function evalExprNargout(
         }
         if (isRuntimeChar(rv)) return rv.value.length;
         if (isRuntimeString(rv)) return (rv as string).length;
+        // Class instances: call overloaded end(obj, k, n) if available
+        if (isRuntimeClassInstance(rv)) {
+          return this.rt.dispatch("end", 1, [
+            rv,
+            ctx.dimIndex + 1,
+            ctx.numIndices,
+          ]);
+        }
       }
       return END_SENTINEL;
     }
@@ -559,14 +562,17 @@ export function evalUnary(
     case UnaryOperation.Plus:
       return uplus(operand);
     case UnaryOperation.Minus:
-      return uminus(operand);
+      return this.rt.uminus(operand);
     case UnaryOperation.Not: {
       if (typeof operand === "number") return RTV.logical(operand === 0);
       return this.rt.not(operand);
     }
     case UnaryOperation.Transpose:
+      // ' = conjugate transpose
+      return this.rt.ctranspose(operand);
     case UnaryOperation.NonConjugateTranspose:
-      return ctranspose(operand);
+      // .' = non-conjugate transpose
+      return this.rt.transpose(operand);
   }
 }
 
@@ -597,7 +603,16 @@ export function evalFuncCall(
       return this.rt.index(rv, args, nargout);
     }
     const args = this.evalIndicesWithEnd(varVal, expr.args);
-    return this.rt.index(varVal, args, nargout);
+    // Inside class methods, bypass overloaded subsref for same-class instances
+    let skipSubsref: boolean | string = false;
+    if (
+      this.currentClassName &&
+      isRuntimeClassInstance(rv) &&
+      rv.className === this.currentClassName
+    ) {
+      skipSubsref = true;
+    }
+    return this.rt.index(varVal, args, nargout, skipSubsref);
   }
   const args = this.evalArgs(expr.args);
   return this.callFunction(expr.name, args, nargout);
@@ -627,7 +642,14 @@ export function evalMember(
         if (
           this.functionIndex.classStaticMethods.get(prefix)?.has(methodName)
         ) {
-          return this.callFunction(methodName, [], nargout);
+          const target: ResolvedTarget = {
+            kind: "classMethod",
+            className: prefix,
+            methodName,
+            compileArgTypes: [],
+            stripInstance: false,
+          };
+          return this.interpretTarget(target, [], nargout);
         }
       }
     }
@@ -656,7 +678,18 @@ export function evalIndex(
 ): unknown {
   const base = this.evalExpr(expr.base);
   const indices = this.evalIndicesWithEnd(base, expr.indices);
-  return this.rt.index(base, indices);
+  // Inside class methods, bypass overloaded subsref for same-class instances
+  let skipSubsref: boolean | string = false;
+  if (this.currentClassName) {
+    const baseRv = ensureRuntimeValue(base);
+    if (
+      isRuntimeClassInstance(baseRv) &&
+      baseRv.className === this.currentClassName
+    ) {
+      skipSubsref = true;
+    }
+  }
+  return this.rt.index(base, indices, 1, skipSubsref);
 }
 
 export function evalIndexCell(
@@ -775,6 +808,9 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
     );
   };
   fn.jsFnExpectsNargout = true;
+  // Populate nargin for builtin handles (e.g. nargin(@sin) == 1)
+  const narg = getBuiltinNargin(name);
+  if (narg !== undefined) fn.nargin = narg;
   return fn;
 }
 
@@ -787,27 +823,27 @@ export function evalTensorLiteral(
   if (expr.rows.length === 0) {
     return RTV.tensor(new FloatXArray(0), [0, 0]);
   }
-  const rowValues: RuntimeValue[] = [];
+  const rowValues: unknown[] = [];
   for (const row of expr.rows) {
-    const vals: RuntimeValue[] = [];
+    const vals: unknown[] = [];
     for (const e of row) {
       const v = this.evalExpr(e);
       if (Array.isArray(v)) {
-        for (const elem of v) vals.push(ensureRuntimeValue(elem));
+        for (const elem of v) vals.push(elem);
       } else {
-        vals.push(ensureRuntimeValue(v));
+        vals.push(v);
       }
     }
     if (vals.length === 1) {
       rowValues.push(vals[0]);
     } else {
-      rowValues.push(horzcat(...vals) as RuntimeValue);
+      rowValues.push(this.rt.horzcat(vals));
     }
   }
   if (rowValues.length === 1) {
     return rowValues[0];
   }
-  return vertcat(...rowValues);
+  return this.rt.vertcat(rowValues);
 }
 
 export function evalCellLiteral(
@@ -860,11 +896,27 @@ export function assignLValue(
         lv.base.type === "Ident"
           ? (this.env.get(lv.base.name) ??
             RTV.tensor(new FloatXArray(0), [0, 0]))
-          : this.evalExpr(lv.base);
+          : this.evalLValueBase(
+              lv.base,
+              RTV.tensor(new FloatXArray(0), [0, 0])
+            );
       const indices = this.evalIndicesWithEnd(base, lv.indices);
-      const result = this.rt.indexStore(base, indices, value);
+      // Inside class methods, bypass overloaded subsasgn for same-class instances
+      let skipSubsasgn = false;
+      if (this.currentClassName) {
+        const baseRv = ensureRuntimeValue(base);
+        if (
+          isRuntimeClassInstance(baseRv) &&
+          baseRv.className === this.currentClassName
+        ) {
+          skipSubsasgn = true;
+        }
+      }
+      const result = this.rt.indexStore(base, indices, value, skipSubsasgn);
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, ensureRuntimeValue(result));
+      } else {
+        this.writeLValueBase(lv.base, ensureRuntimeValue(result));
       }
       break;
     }
@@ -873,11 +925,13 @@ export function assignLValue(
       const base =
         lv.base.type === "Ident"
           ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
-          : this.evalExpr(lv.base);
+          : this.evalLValueBase(lv.base, RTV.cell([], [0, 0]));
       const indices = this.evalIndicesWithEnd(base, lv.indices);
       const result = this.rt.indexCellStore(base, indices, value);
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, ensureRuntimeValue(result));
+      } else {
+        this.writeLValueBase(lv.base, ensureRuntimeValue(result));
       }
       break;
     }
@@ -916,7 +970,18 @@ export function writeLValueBase(
       RTV.tensor(new FloatXArray(0), [0, 0])
     );
     const indices = base.indices.map(idx => this.evalExpr(idx));
-    const result = this.rt.indexStore(baseVal, indices, value);
+    // Inside class methods, bypass overloaded subsasgn for same-class instances
+    let skipSubsasgn = false;
+    if (this.currentClassName) {
+      const bRv = ensureRuntimeValue(baseVal);
+      if (
+        isRuntimeClassInstance(bRv) &&
+        bRv.className === this.currentClassName
+      ) {
+        skipSubsasgn = true;
+      }
+    }
+    const result = this.rt.indexStore(baseVal, indices, value, skipSubsasgn);
     this.writeLValueBase(base.base, ensureRuntimeValue(result));
   } else if (base.type === "IndexCell") {
     const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
@@ -956,7 +1021,17 @@ export function evalLValueBase(
     const baseVal = this.evalLValueBase(base.base, RTV.struct({}));
     const indices = base.indices.map(idx => this.evalExpr(idx));
     try {
-      return this.rt.index(baseVal, indices);
+      let skipSubsref: boolean | string = false;
+      if (this.currentClassName) {
+        const bRv = ensureRuntimeValue(baseVal);
+        if (
+          isRuntimeClassInstance(bRv) &&
+          bRv.className === this.currentClassName
+        ) {
+          skipSubsref = true;
+        }
+      }
+      return this.rt.index(baseVal, indices, 1, skipSubsref);
     } catch {
       return defaultVal;
     }
