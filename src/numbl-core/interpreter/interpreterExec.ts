@@ -915,18 +915,22 @@ export function assignLValue(
       break;
 
     case "Index": {
+      // Use undefined for uninitialized Ident so indexStore can detect it
+      // (e.g. h(1) = classInstance when h is an uninitialized output var)
       const base =
         lv.base.type === "Ident"
-          ? (this.env.get(lv.base.name) ??
-            RTV.tensor(new FloatXArray(0), [0, 0]))
+          ? this.env.get(lv.base.name)
           : this.evalLValueBase(
               lv.base,
               RTV.tensor(new FloatXArray(0), [0, 0])
             );
-      const indices = this.evalIndicesWithEnd(base, lv.indices);
+      const indices = this.evalIndicesWithEnd(
+        base ?? RTV.tensor(new FloatXArray(0), [0, 0]),
+        lv.indices
+      );
       // Inside class methods, bypass overloaded subsasgn for same-class instances
       let skipSubsasgn = false;
-      if (this.currentClassName) {
+      if (this.currentClassName && base != null) {
         const baseRv = ensureRuntimeValue(base);
         if (
           isRuntimeClassInstance(baseRv) &&
@@ -960,9 +964,33 @@ export function assignLValue(
     }
 
     case "Member": {
-      const base = this.evalLValueBase(lv.base, RTV.struct({}));
-      const result = this.rt.setMemberReturn(base, lv.name, value);
-      this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+      // Walk up the Member chain to find the first non-Member node and collect names
+      const names: string[] = [lv.name];
+      let cursor: Expr = lv.base;
+      while (cursor.type === "Member") {
+        names.unshift(cursor.name);
+        cursor = cursor.base;
+      }
+      // cursor is now the root of the member chain (Ident, Index, etc.)
+      const rootBase =
+        cursor.type === "Ident"
+          ? (this.env.get(cursor.name) ?? RTV.struct({}))
+          : this.evalLValueBase(cursor, RTV.struct({}));
+      const rootRv = ensureRuntimeValue(rootBase);
+      if (isRuntimeClassInstance(rootRv)) {
+        // Use memberChainAssign which routes through subsasgn if needed
+        const result = this.rt.memberChainAssign(rootBase, names, value);
+        if (cursor.type === "Ident") {
+          this.env.set(cursor.name, ensureRuntimeValue(result));
+        } else {
+          this.writeLValueBase(cursor, ensureRuntimeValue(result));
+        }
+      } else {
+        // Non-class: use direct field set with store-back chain
+        const base = this.evalLValueBase(lv.base, RTV.struct({}));
+        const result = this.rt.setMemberReturn(base, lv.name, value);
+        this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+      }
       break;
     }
 
@@ -993,18 +1021,10 @@ export function writeLValueBase(
       RTV.tensor(new FloatXArray(0), [0, 0])
     );
     const indices = base.indices.map(idx => this.evalExpr(idx));
-    // Inside class methods, bypass overloaded subsasgn for same-class instances
-    let skipSubsasgn = false;
-    if (this.currentClassName) {
-      const bRv = ensureRuntimeValue(baseVal);
-      if (
-        isRuntimeClassInstance(bRv) &&
-        bRv.className === this.currentClassName
-      ) {
-        skipSubsasgn = true;
-      }
-    }
-    const result = this.rt.indexStore(baseVal, indices, value, skipSubsasgn);
+    // Use builtinIndexStore for compound assignment store-back —
+    // this bypasses subsasgn for class instances (the compound decomposition
+    // already handled the field set; the store-back should use builtin mechanics)
+    const result = this.rt.builtinIndexStore(baseVal, indices, value);
     this.writeLValueBase(base.base, ensureRuntimeValue(result));
   } else if (base.type === "IndexCell") {
     const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
