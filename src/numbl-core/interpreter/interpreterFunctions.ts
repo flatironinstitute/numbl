@@ -533,11 +533,8 @@ export function callUserFunction(
       .map(a => ensureRuntimeValue(a));
     fnEnv.set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
   }
-  fnEnv.set(
-    "$nargin",
-    (narginOverride ?? args.length) as unknown as RuntimeValue
-  );
-  fnEnv.set("$nargout", nargout as unknown as RuntimeValue);
+  fnEnv.set("$nargin", narginOverride ?? args.length);
+  fnEnv.set("$nargout", nargout);
 
   // Pre-register nested function definitions (hoisted, like MATLAB)
   for (const stmt of fn.body) {
@@ -638,8 +635,8 @@ export function callNestedFunction(
       .map(a => ensureRuntimeValue(a));
     fnEnv.setLocal("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
   }
-  fnEnv.setLocal("$nargin", args.length as unknown as RuntimeValue);
-  fnEnv.setLocal("$nargout", nargout as unknown as RuntimeValue);
+  fnEnv.setLocal("$nargin", args.length);
+  fnEnv.setLocal("$nargout", nargout);
 
   const savedEnv = this.env;
   this.env = fnEnv;
