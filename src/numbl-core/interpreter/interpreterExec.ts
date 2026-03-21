@@ -1,0 +1,963 @@
+/**
+ * Interpreter statement execution and expression evaluation methods.
+ * Augments the Interpreter class via prototype assignment.
+ */
+
+import type { Stmt, Expr, LValue } from "../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../parser/types.js";
+import type { RuntimeValue } from "../runtime/types.js";
+import {
+  isRuntimeTensor,
+  isRuntimeChar,
+  isRuntimeString,
+  isRuntimeCell,
+  isRuntimeClassInstance,
+  isRuntimeFunction,
+  FloatXArray,
+} from "../runtime/types.js";
+import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
+import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
+import { RuntimeError } from "../runtime/error.js";
+import {
+  binop,
+  uminus,
+  uplus,
+  ctranspose,
+} from "../runtime/runtimeOperators.js";
+import { horzcat, vertcat } from "../runtime/tensor-construction.js";
+import { mPow } from "../builtins/arithmetic.js";
+import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
+import { numel } from "../runtime/utils.js";
+import {
+  forIter,
+  switchMatch as runtimeSwitchMatch,
+  range as runtimeRange,
+} from "../runtime/runtimeOperators.js";
+import type { ResolvedTarget } from "../functionResolve.js";
+
+import {
+  BreakSignal,
+  ContinueSignal,
+  ReturnSignal,
+  Environment,
+  funcDefFromStmt,
+  type ControlSignal,
+} from "./types.js";
+
+import type { Interpreter } from "./interpreter.js";
+
+// ── Statement execution ──────────────────────────────────────────────────
+
+export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
+  if (stmt.span) {
+    this.rt.$file = stmt.span.file;
+  }
+
+  switch (stmt.type) {
+    case "ExprStmt": {
+      const val = this.evalExpr(stmt.expr);
+      const singleVal = Array.isArray(val) ? val[0] : val;
+      const rv = ensureRuntimeValue(singleVal);
+      this.ans = rv;
+      if (!stmt.suppressed && !this.isOutputExpr(stmt.expr)) {
+        this.rt.displayResult(rv);
+      }
+      return null;
+    }
+
+    case "Assign": {
+      const rawVal = this.evalExpr(stmt.expr);
+      const val = Array.isArray(rawVal) ? rawVal[0] : rawVal;
+      const rv = this.rt.share(val) as RuntimeValue;
+      this.env.set(stmt.name, rv);
+      this.ans = rv;
+      if (!stmt.suppressed) {
+        this.rt.displayAssign(stmt.name, rv);
+      }
+      return null;
+    }
+
+    case "MultiAssign": {
+      const nargout = stmt.lvalues.length;
+      const val = this.evalExprNargout(stmt.expr, nargout);
+      const values = Array.isArray(val) ? val : [val];
+      for (let i = 0; i < stmt.lvalues.length; i++) {
+        const lv = stmt.lvalues[i];
+        if (lv.type === "Ignore") continue;
+        const rv = this.rt.share(
+          i < values.length ? values[i] : undefined
+        ) as RuntimeValue;
+        this.assignLValue(lv, rv);
+      }
+      if (!stmt.suppressed && values.length > 0) {
+        const firstLv = stmt.lvalues[0];
+        if (firstLv.type === "Var") {
+          this.rt.displayAssign(firstLv.name, ensureRuntimeValue(values[0]));
+        }
+      }
+      return null;
+    }
+
+    case "AssignLValue": {
+      const val = this.evalExpr(stmt.expr);
+      const rv = this.rt.share(val) as RuntimeValue;
+      this.assignLValue(stmt.lvalue, rv);
+      if (!stmt.suppressed) {
+        if (stmt.lvalue.type === "Var") {
+          this.rt.displayAssign(stmt.lvalue.name, rv);
+        }
+      }
+      return null;
+    }
+
+    case "If": {
+      const cond = this.evalExpr(stmt.cond);
+      if (this.rt.toBool(cond)) {
+        return this.execStmts(stmt.thenBody);
+      }
+      for (const elseif of stmt.elseifBlocks) {
+        const elseifCond = this.evalExpr(elseif.cond);
+        if (this.rt.toBool(elseifCond)) {
+          return this.execStmts(elseif.body);
+        }
+      }
+      if (stmt.elseBody) {
+        return this.execStmts(stmt.elseBody);
+      }
+      return null;
+    }
+
+    case "While": {
+      while (true) {
+        const cond = this.evalExpr(stmt.cond);
+        if (!this.rt.toBool(cond)) break;
+        const signal = this.execStmts(stmt.body);
+        if (signal instanceof BreakSignal) break;
+        if (signal instanceof ContinueSignal) continue;
+        if (signal instanceof ReturnSignal) return signal;
+      }
+      return null;
+    }
+
+    case "For": {
+      const iterVal = this.evalExpr(stmt.expr);
+      const rv = ensureRuntimeValue(iterVal);
+      const iterItems = forIter(rv);
+      for (let _i = 0; _i < iterItems.length; _i++) {
+        this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
+        const signal = this.execStmts(stmt.body);
+        if (signal instanceof BreakSignal) break;
+        if (signal instanceof ContinueSignal) continue;
+        if (signal instanceof ReturnSignal) return signal;
+      }
+      return null;
+    }
+
+    case "Switch": {
+      const switchVal = this.evalExpr(stmt.expr);
+      let matched = false;
+      for (const c of stmt.cases) {
+        const caseVal = this.evalExpr(c.value);
+        if (this.switchMatch(switchVal, caseVal)) {
+          matched = true;
+          const signal = this.execStmts(c.body);
+          if (signal) return signal;
+          break;
+        }
+      }
+      if (!matched && stmt.otherwise) {
+        return this.execStmts(stmt.otherwise);
+      }
+      return null;
+    }
+
+    case "TryCatch": {
+      try {
+        const signal = this.execStmts(stmt.tryBody);
+        if (signal) return signal;
+      } catch (e) {
+        if (stmt.catchVar) {
+          this.env.set(stmt.catchVar, this.rt.wrapError(e));
+        }
+        const signal = this.execStmts(stmt.catchBody);
+        if (signal) return signal;
+      }
+      return null;
+    }
+
+    case "Function": {
+      this.env.nestedFunctions.set(stmt.name, {
+        fn: funcDefFromStmt(stmt),
+        env: this.env,
+      });
+      return null;
+    }
+
+    case "Return":
+      return new ReturnSignal([]);
+
+    case "Break":
+      return new BreakSignal();
+
+    case "Continue":
+      return new ContinueSignal();
+
+    case "Global": {
+      for (const name of stmt.names) {
+        this.env.globalNames.add(name);
+      }
+      return null;
+    }
+
+    case "Persistent": {
+      const funcId = this.env.persistentFuncId;
+      if (funcId) {
+        for (const name of stmt.names) {
+          this.env.persistentNames.add(name);
+          const val = this.rt.getPersistent(funcId, name);
+          this.env.setLocal(name, val);
+        }
+      }
+      return null;
+    }
+
+    case "ClassDef":
+      return null;
+
+    case "Import":
+      return null;
+  }
+}
+
+export function execStmts(
+  this: Interpreter,
+  stmts: Stmt[]
+): ControlSignal | null {
+  for (const stmt of stmts) {
+    const signal = this.execStmt(stmt);
+    if (signal) return signal;
+  }
+  return null;
+}
+
+// ── Expression evaluation ────────────────────────────────────────────────
+
+export function evalExpr(this: Interpreter, expr: Expr): unknown {
+  return this.evalExprNargout(expr, 1);
+}
+
+export function evalExprNargout(
+  this: Interpreter,
+  expr: Expr,
+  nargout: number
+): unknown {
+  switch (expr.type) {
+    case "Number":
+      return parseFloat(expr.value);
+
+    case "Char": {
+      let s = expr.value.slice(1, expr.value.length - 1);
+      s = s.replaceAll("''", "'");
+      return RTV.char(s);
+    }
+
+    case "String": {
+      let s = expr.value.slice(1, expr.value.length - 1);
+      s = s.replaceAll('""', '"');
+      return RTV.string(s);
+    }
+
+    case "Ident": {
+      const val = this.env.get(expr.name);
+      if (val !== undefined) return val;
+      try {
+        return this.rt.getConstant(expr.name);
+      } catch {
+        // Not a constant
+      }
+      return this.callFunction(expr.name, [], nargout);
+    }
+
+    case "ImagUnit":
+      return RTV.complex(0, 1);
+
+    case "EndKeyword": {
+      const ctx = this.endContextStack[this.endContextStack.length - 1];
+      if (ctx) {
+        const rv = ensureRuntimeValue(ctx.base);
+        if (isRuntimeTensor(rv)) {
+          if (ctx.numIndices === 1) return numel(rv.shape);
+          return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
+        }
+        if (isRuntimeCell(rv)) {
+          if (ctx.numIndices === 1) return numel(rv.shape);
+          return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
+        }
+        if (isRuntimeChar(rv)) return rv.value.length;
+        if (isRuntimeString(rv)) return (rv as string).length;
+      }
+      return END_SENTINEL;
+    }
+
+    case "Colon":
+      return COLON_SENTINEL;
+
+    case "Binary":
+      return this.evalBinary(expr);
+
+    case "Unary":
+      return this.evalUnary(expr);
+
+    case "Range":
+      return this.evalRange(expr);
+
+    case "FuncCall":
+      return this.evalFuncCall(expr, nargout);
+
+    case "Index":
+      return this.evalIndex(expr);
+
+    case "IndexCell":
+      return this.evalIndexCell(expr);
+
+    case "Member":
+      return this.evalMember(expr, nargout);
+
+    case "MemberDynamic": {
+      const base = this.evalExpr(expr.base);
+      const nameVal = this.evalExpr(expr.nameExpr);
+      const name =
+        typeof nameVal === "string"
+          ? nameVal
+          : isRuntimeChar(ensureRuntimeValue(nameVal))
+            ? (ensureRuntimeValue(nameVal) as { value: string }).value
+            : String(nameVal);
+      return this.rt.getMember(base, name);
+    }
+
+    case "MethodCall": {
+      const dottedBase = this.tryExtractDottedName(expr.base);
+      if (dottedBase && !this.env.has(dottedBase.split(".")[0])) {
+        const args = this.evalArgs(expr.args);
+        const qualifiedName = `${dottedBase}.${expr.name}`;
+        if (this.functionIndex.workspaceFunctions.has(qualifiedName)) {
+          return this.callFunction(qualifiedName, args, nargout);
+        }
+        if (this.functionIndex.workspaceClasses.has(qualifiedName)) {
+          return this.instantiateClass(qualifiedName, args, nargout);
+        }
+        if (
+          this.functionIndex.classStaticMethods.get(dottedBase)?.has(expr.name)
+        ) {
+          const target: ResolvedTarget = {
+            kind: "classMethod",
+            className: dottedBase,
+            methodName: expr.name,
+            compileArgTypes: args.map(a =>
+              getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
+            ),
+            stripInstance: false,
+          };
+          return this.interpretTarget(target, args, nargout);
+        }
+        if (this.functionIndex.workspaceClasses.has(dottedBase)) {
+          const target: ResolvedTarget = {
+            kind: "classMethod",
+            className: dottedBase,
+            methodName: expr.name,
+            compileArgTypes: args.map(a =>
+              getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
+            ),
+            stripInstance: false,
+          };
+          return this.interpretTarget(target, args, nargout);
+        }
+      }
+      const base = this.evalExpr(expr.base);
+      let fieldVal: unknown = undefined;
+      try {
+        fieldVal = this.rt.getMember(base, expr.name);
+      } catch {
+        // Not a struct field
+      }
+      const args =
+        fieldVal !== undefined
+          ? this.evalIndicesWithEnd(fieldVal, expr.args)
+          : this.evalArgs(expr.args);
+      return this.rt.methodDispatch(expr.name, nargout, [base, ...args]);
+    }
+
+    case "SuperMethodCall": {
+      const args = this.evalArgs(expr.args);
+      const objVal = this.env.get(expr.methodName);
+      if (objVal !== undefined) {
+        const superClassInfo = this.ctx.getClassInfo(expr.superClassName);
+        if (superClassInfo && superClassInfo.constructorName) {
+          const superResult = this.interpretConstructor(
+            superClassInfo,
+            [objVal, ...args],
+            1
+          );
+          return this.rt.callSuperConstructor(objVal, superResult);
+        }
+        const { propertyNames, propertyDefaults } = this.collectClassProperties(
+          superClassInfo ??
+            ({
+              propertyNames: [],
+              propertyDefaults: new Map(),
+              superClass: null,
+            } as never)
+        );
+        const defaults = new Map<string, RuntimeValue>();
+        for (const [propName, defaultExpr] of propertyDefaults) {
+          try {
+            defaults.set(
+              propName,
+              ensureRuntimeValue(this.evalExpr(defaultExpr))
+            );
+          } catch {
+            /* skip */
+          }
+        }
+        const superInstance = RTV.classInstance(
+          expr.superClassName,
+          propertyNames,
+          false,
+          defaults
+        );
+        return this.rt.callSuperConstructor(objVal, superInstance);
+      }
+      return this.rt.callClassMethod(
+        expr.superClassName,
+        expr.methodName,
+        nargout,
+        args
+      );
+    }
+
+    case "AnonFunc":
+      return this.evalAnonFunc(expr);
+
+    case "FuncHandle":
+      return this.makeFuncHandle(expr.name);
+
+    case "Tensor":
+      return this.evalTensorLiteral(expr);
+
+    case "Cell":
+      return this.evalCellLiteral(expr);
+
+    case "ClassInstantiation": {
+      const args = this.evalArgs(expr.args);
+      return this.instantiateClass(expr.className, args, nargout);
+    }
+
+    case "MetaClass":
+      throw new RuntimeError("Interpreter does not yet support meta.class");
+  }
+}
+
+export function evalArgs(this: Interpreter, argExprs: Expr[]): unknown[] {
+  const args: unknown[] = [];
+  for (const a of argExprs) {
+    const val = this.evalExpr(a);
+    if (Array.isArray(val)) {
+      for (const elem of val) {
+        args.push(elem);
+      }
+    } else {
+      args.push(val);
+    }
+  }
+  return args;
+}
+
+// ── Binary operators ─────────────────────────────────────────────────────
+
+export function evalBinary(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Binary" }>
+): unknown {
+  if (expr.op === BinaryOperation.AndAnd) {
+    const left = this.evalExpr(expr.left);
+    if (!this.rt.toBool(left)) return RTV.logical(false);
+    const right = this.evalExpr(expr.right);
+    return RTV.logical(this.rt.toBool(right));
+  }
+  if (expr.op === BinaryOperation.OrOr) {
+    const left = this.evalExpr(expr.left);
+    if (this.rt.toBool(left)) return RTV.logical(true);
+    const right = this.evalExpr(expr.right);
+    return RTV.logical(this.rt.toBool(right));
+  }
+
+  const left = this.evalExpr(expr.left);
+  const right = this.evalExpr(expr.right);
+
+  const lv = ensureRuntimeValue(left);
+  const rv = ensureRuntimeValue(right);
+  if (isRuntimeClassInstance(lv) || isRuntimeClassInstance(rv)) {
+    return this.rt.binop(expr.op, left, right);
+  }
+
+  if (
+    (expr.op === BinaryOperation.Pow || expr.op === BinaryOperation.ElemPow) &&
+    typeof left === "number" &&
+    typeof right === "number" &&
+    left < 0
+  ) {
+    const r = Math.pow(left, right);
+    if (!isNaN(r)) return r;
+    return mPow(ensureRuntimeValue(left), ensureRuntimeValue(right));
+  }
+
+  return binop(expr.op, left, right);
+}
+
+// ── Unary operators ──────────────────────────────────────────────────────
+
+export function evalUnary(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Unary" }>
+): unknown {
+  const operand = this.evalExpr(expr.operand);
+  switch (expr.op) {
+    case UnaryOperation.Plus:
+      return uplus(operand);
+    case UnaryOperation.Minus:
+      return uminus(operand);
+    case UnaryOperation.Not: {
+      if (typeof operand === "number") return RTV.logical(operand === 0);
+      return this.rt.not(operand);
+    }
+    case UnaryOperation.Transpose:
+    case UnaryOperation.NonConjugateTranspose:
+      return ctranspose(operand);
+  }
+}
+
+// ── Range ────────────────────────────────────────────────────────────────
+
+export function evalRange(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Range" }>
+): unknown {
+  const startVal = this.evalExpr(expr.start);
+  const endVal = this.evalExpr(expr.end);
+  const stepVal = expr.step ? this.evalExpr(expr.step) : 1;
+  return runtimeRange(startVal, stepVal, endVal);
+}
+
+// ── Function calls ───────────────────────────────────────────────────────
+
+export function evalFuncCall(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "FuncCall" }>,
+  nargout: number
+): unknown {
+  const varVal = this.env.get(expr.name);
+  if (varVal !== undefined) {
+    const rv = ensureRuntimeValue(varVal);
+    if (isRuntimeFunction(rv)) {
+      const args = this.evalArgs(expr.args);
+      return this.rt.index(rv, args, nargout);
+    }
+    const args = this.evalIndicesWithEnd(varVal, expr.args);
+    return this.rt.index(varVal, args, nargout);
+  }
+  const args = this.evalArgs(expr.args);
+  return this.callFunction(expr.name, args, nargout);
+}
+
+// ── Member access ────────────────────────────────────────────────────────
+
+export function evalMember(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Member" }>,
+  nargout: number
+): unknown {
+  const dottedName = this.tryExtractDottedName(expr);
+  if (dottedName) {
+    const rootName = dottedName.split(".")[0];
+    if (!this.env.has(rootName)) {
+      if (this.functionIndex.workspaceFunctions.has(dottedName)) {
+        return this.callFunction(dottedName, [], nargout);
+      }
+      if (this.functionIndex.workspaceClasses.has(dottedName)) {
+        return this.instantiateClass(dottedName, [], nargout);
+      }
+      const lastDot = dottedName.lastIndexOf(".");
+      if (lastDot > 0) {
+        const prefix = dottedName.slice(0, lastDot);
+        const methodName = dottedName.slice(lastDot + 1);
+        if (
+          this.functionIndex.classStaticMethods.get(prefix)?.has(methodName)
+        ) {
+          return this.callFunction(methodName, [], nargout);
+        }
+      }
+    }
+  }
+  const base = this.evalExpr(expr.base);
+  return this.rt.getMember(base, expr.name);
+}
+
+export function tryExtractDottedName(
+  this: Interpreter,
+  expr: Expr
+): string | null {
+  if (expr.type === "Ident") return expr.name;
+  if (expr.type === "Member") {
+    const baseChain = this.tryExtractDottedName(expr.base);
+    if (baseChain) return `${baseChain}.${expr.name}`;
+  }
+  return null;
+}
+
+// ── Indexing ─────────────────────────────────────────────────────────────
+
+export function evalIndex(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Index" }>
+): unknown {
+  const base = this.evalExpr(expr.base);
+  const indices = this.evalIndicesWithEnd(base, expr.indices);
+  return this.rt.index(base, indices);
+}
+
+export function evalIndexCell(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "IndexCell" }>
+): unknown {
+  const base = this.evalExpr(expr.base);
+  const indices = this.evalIndicesWithEnd(base, expr.indices);
+  return this.rt.indexCell(base, indices);
+}
+
+export function evalIndicesWithEnd(
+  this: Interpreter,
+  base: unknown,
+  indexExprs: Expr[]
+): unknown[] {
+  const numIndices = indexExprs.length;
+  return indexExprs.map((idx, dimIndex) => {
+    this.endContextStack.push({ base, dimIndex, numIndices });
+    try {
+      return this.evalExpr(idx);
+    } finally {
+      this.endContextStack.pop();
+    }
+  });
+}
+
+// ── Anonymous functions ──────────────────────────────────────────────────
+
+export function evalAnonFunc(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "AnonFunc" }>
+): RuntimeValue {
+  const capturedEnv = this.env.snapshot();
+  const capturedFile = this.currentFile;
+  const capturedClassName = this.currentClassName;
+  const capturedMethodName = this.currentMethodName;
+  const bodyExpr = expr.body;
+  const paramNames = expr.params;
+
+  const fn = RTV.func("anonymous", "user");
+  fn.jsFn = (nargoutArg: unknown, ...rest: unknown[]) => {
+    const fnEnv = new Environment(capturedEnv);
+    const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
+    for (let i = 0; i < paramNames.length; i++) {
+      if (i < actualArgs.length) {
+        fnEnv.set(paramNames[i], ensureRuntimeValue(actualArgs[i]));
+      }
+    }
+    const narg = typeof nargoutArg === "number" ? nargoutArg : 1;
+    const savedEnv = this.env;
+    this.env = fnEnv;
+    return this.withFileContext(
+      capturedFile,
+      capturedClassName,
+      capturedMethodName,
+      () => {
+        try {
+          return this.evalExprNargout(bodyExpr, narg);
+        } finally {
+          this.env = savedEnv;
+        }
+      }
+    );
+  };
+  fn.jsFnExpectsNargout = true;
+  fn.nargin = paramNames.length;
+  return fn;
+}
+
+// ── Function handles ─────────────────────────────────────────────────────
+
+export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
+  // Handle dotted names like @ClassName.method (static method handles)
+  const dotIdx = name.indexOf(".");
+  if (dotIdx > 0) {
+    const className = name.slice(0, dotIdx);
+    const methodName = name.slice(dotIdx + 1);
+    const fn = RTV.func(name, "builtin");
+    fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
+      const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
+      const narg = typeof nargout === "number" ? nargout : 1;
+      const target: ResolvedTarget = {
+        kind: "classMethod",
+        className,
+        methodName,
+        compileArgTypes: actualArgs.map(a =>
+          getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
+        ),
+        stripInstance: false,
+      };
+      return this.interpretTarget(target, actualArgs, narg);
+    };
+    fn.jsFnExpectsNargout = true;
+    return fn;
+  }
+
+  const capturedFile = this.currentFile;
+  const capturedClassName = this.currentClassName;
+  const capturedMethodName = this.currentMethodName;
+  const capturedEnv = this.env;
+
+  const fn = RTV.func(name, "builtin");
+  fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
+    const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
+    const narg = typeof nargout === "number" ? nargout : 1;
+    const nested = capturedEnv.getNestedFunction(name);
+    if (nested) {
+      return this.callNestedFunction(nested.fn, nested.env, actualArgs, narg);
+    }
+    return this.withFileContext(
+      capturedFile,
+      capturedClassName,
+      capturedMethodName,
+      () => this.callFunction(name, actualArgs, narg)
+    );
+  };
+  fn.jsFnExpectsNargout = true;
+  return fn;
+}
+
+// ── Tensor/Cell literal construction ─────────────────────────────────────
+
+export function evalTensorLiteral(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Tensor" }>
+): unknown {
+  if (expr.rows.length === 0) {
+    return RTV.tensor(new FloatXArray(0), [0, 0]);
+  }
+  const rowValues: RuntimeValue[] = [];
+  for (const row of expr.rows) {
+    const vals: RuntimeValue[] = [];
+    for (const e of row) {
+      const v = this.evalExpr(e);
+      if (Array.isArray(v)) {
+        for (const elem of v) vals.push(ensureRuntimeValue(elem));
+      } else {
+        vals.push(ensureRuntimeValue(v));
+      }
+    }
+    if (vals.length === 1) {
+      rowValues.push(vals[0]);
+    } else {
+      rowValues.push(horzcat(...vals) as RuntimeValue);
+    }
+  }
+  if (rowValues.length === 1) {
+    return rowValues[0];
+  }
+  return vertcat(...rowValues);
+}
+
+export function evalCellLiteral(
+  this: Interpreter,
+  expr: Extract<Expr, { type: "Cell" }>
+): unknown {
+  if (expr.rows.length === 0) {
+    return RTV.cell([], [0, 0]);
+  }
+  if (expr.rows.length === 1) {
+    const elements: RuntimeValue[] = [];
+    for (const e of expr.rows[0]) {
+      const v = this.evalExpr(e);
+      if (Array.isArray(v)) {
+        for (const elem of v) elements.push(ensureRuntimeValue(elem));
+      } else {
+        elements.push(ensureRuntimeValue(v));
+      }
+    }
+    return RTV.cell(elements, [1, elements.length]);
+  }
+  const numRows = expr.rows.length;
+  const numCols = expr.rows[0].length;
+  const elements: RuntimeValue[] = [];
+  for (let c = 0; c < numCols; c++) {
+    for (let r = 0; r < numRows; r++) {
+      elements.push(ensureRuntimeValue(this.evalExpr(expr.rows[r][c])));
+    }
+  }
+  return RTV.cell(elements, [numRows, numCols]);
+}
+
+// ── LValue assignment ────────────────────────────────────────────────────
+
+export function assignLValue(
+  this: Interpreter,
+  lv: LValue,
+  value: RuntimeValue
+): void {
+  switch (lv.type) {
+    case "Var":
+      this.env.set(lv.name, value);
+      break;
+
+    case "Ignore":
+      break;
+
+    case "Index": {
+      const base =
+        lv.base.type === "Ident"
+          ? (this.env.get(lv.base.name) ??
+            RTV.tensor(new FloatXArray(0), [0, 0]))
+          : this.evalExpr(lv.base);
+      const indices = this.evalIndicesWithEnd(base, lv.indices);
+      const result = this.rt.indexStore(base, indices, value);
+      if (lv.base.type === "Ident") {
+        this.env.set(lv.base.name, ensureRuntimeValue(result));
+      }
+      break;
+    }
+
+    case "IndexCell": {
+      const base =
+        lv.base.type === "Ident"
+          ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
+          : this.evalExpr(lv.base);
+      const indices = this.evalIndicesWithEnd(base, lv.indices);
+      const result = this.rt.indexCellStore(base, indices, value);
+      if (lv.base.type === "Ident") {
+        this.env.set(lv.base.name, ensureRuntimeValue(result));
+      }
+      break;
+    }
+
+    case "Member": {
+      const base = this.evalLValueBase(lv.base, RTV.struct({}));
+      const result = this.rt.setMemberReturn(base, lv.name, value);
+      this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+      break;
+    }
+
+    case "MemberDynamic": {
+      const base = this.evalLValueBase(lv.base, RTV.struct({}));
+      const nameVal = this.evalExpr(lv.nameExpr);
+      const result = this.rt.setMemberDynamicReturn(base, nameVal, value);
+      this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+      break;
+    }
+  }
+}
+
+export function writeLValueBase(
+  this: Interpreter,
+  base: Expr,
+  value: RuntimeValue
+): void {
+  if (base.type === "Ident") {
+    this.env.set(base.name, value);
+  } else if (base.type === "Member") {
+    const parentBase = this.evalLValueBase(base.base, RTV.struct({}));
+    const updatedParent = this.rt.setMemberReturn(parentBase, base.name, value);
+    this.writeLValueBase(base.base, ensureRuntimeValue(updatedParent));
+  } else if (base.type === "Index") {
+    const baseVal = this.evalLValueBase(
+      base.base,
+      RTV.tensor(new FloatXArray(0), [0, 0])
+    );
+    const indices = base.indices.map(idx => this.evalExpr(idx));
+    const result = this.rt.indexStore(baseVal, indices, value);
+    this.writeLValueBase(base.base, ensureRuntimeValue(result));
+  } else if (base.type === "IndexCell") {
+    const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
+    const indices = base.indices.map(idx => this.evalExpr(idx));
+    const result = this.rt.indexCellStore(baseVal, indices, value);
+    this.writeLValueBase(base.base, ensureRuntimeValue(result));
+  }
+}
+
+export function evalLValueBase(
+  this: Interpreter,
+  base: Expr,
+  defaultVal: RuntimeValue
+): unknown {
+  if (base.type === "Ident") {
+    return this.env.get(base.name) ?? defaultVal;
+  }
+  if (base.type === "Member") {
+    const parentBase = this.evalLValueBase(base.base, RTV.struct({}));
+    const parentRv = ensureRuntimeValue(parentBase);
+    try {
+      return this.rt.getMember(parentBase, base.name);
+    } catch {
+      const newStruct = RTV.struct({});
+      const updatedParent = this.rt.setMemberReturn(
+        parentRv,
+        base.name,
+        newStruct
+      );
+      if (base.base.type === "Ident") {
+        this.env.set(base.base.name, ensureRuntimeValue(updatedParent));
+      }
+      return newStruct;
+    }
+  }
+  if (base.type === "Index") {
+    const baseVal = this.evalLValueBase(base.base, RTV.struct({}));
+    const indices = base.indices.map(idx => this.evalExpr(idx));
+    try {
+      return this.rt.index(baseVal, indices);
+    } catch {
+      return defaultVal;
+    }
+  }
+  if (base.type === "IndexCell") {
+    const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
+    const indices = base.indices.map(idx => this.evalExpr(idx));
+    try {
+      return this.rt.indexCell(baseVal, indices);
+    } catch {
+      return defaultVal;
+    }
+  }
+  return this.evalExpr(base);
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────
+
+export function switchMatch(
+  this: Interpreter,
+  switchVal: unknown,
+  caseVal: unknown
+): boolean {
+  return runtimeSwitchMatch(switchVal, caseVal);
+}
+
+export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
+  if (expr.type !== "FuncCall") return false;
+  const outputFunctions = [
+    "disp",
+    "display",
+    "fprintf",
+    "warning",
+    "assert",
+    "tic",
+  ];
+  return outputFunctions.includes(expr.name);
+}
