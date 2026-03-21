@@ -51,6 +51,11 @@ export class Interpreter {
 
   /** @internal */ mainLocalFunctions = new Map<string, FunctionDef>();
 
+  /** @internal The main script (workspace) environment — for evalin/assignin('workspace', ...) */
+  workspaceEnv: Environment | undefined;
+  /** @internal The caller's environment — for evalin/assignin('caller', ...) */
+  callerEnv: Environment | undefined;
+
   /** @internal Stack of [base, dimIndex, numIndices] for resolving `end` keyword in indexing. */
   endContextStack: Array<{
     base: unknown;
@@ -160,6 +165,9 @@ export class Interpreter {
 
   /** Run a complete AST (main script). */
   run(ast: AbstractSyntaxTree): void {
+    // Remember the workspace (main script) environment
+    this.workspaceEnv = this.env;
+
     // First pass: collect local function definitions
     for (const stmt of ast.body) {
       if (stmt.type === "Function") {
@@ -294,7 +302,8 @@ export class Interpreter {
   ) => FunctionDef | null;
   declare findFunctionInClassFile: (
     className: string,
-    funcName: string
+    funcName: string,
+    methodScope?: string
   ) => FunctionDef | null;
   declare findMethodInClass: (
     classInfo: ClassInfo,

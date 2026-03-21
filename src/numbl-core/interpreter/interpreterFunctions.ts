@@ -44,11 +44,51 @@ export function callFunction(
     return this.evalInLocalScope(args[0]);
   }
   if (name === "evalin" && args.length >= 2) {
+    const scope = toString(ensureRuntimeValue(args[0]));
+    const targetEnv =
+      scope === "caller"
+        ? this.callerEnv
+        : scope === "workspace"
+          ? this.workspaceEnv
+          : undefined;
+    if (targetEnv) {
+      const code = toString(ensureRuntimeValue(args[1]));
+      // Simple variable name — just look it up
+      if (/^[a-zA-Z_]\w*$/.test(code)) {
+        const val = targetEnv.get(code);
+        if (val !== undefined) return val;
+        // If a default value was provided (3rd arg), return it
+        if (args.length >= 3) return ensureRuntimeValue(args[2]);
+        throw new RuntimeError(
+          `Variable '${code}' does not exist in ${scope} scope`
+        );
+      }
+      // Otherwise evaluate as code in target scope
+      const savedEnv = this.env;
+      this.env = targetEnv;
+      try {
+        return this.evalInLocalScope(args[1]);
+      } finally {
+        this.env = savedEnv;
+      }
+    }
     return this.evalInLocalScope(args[1]);
   }
   if (name === "assignin" && args.length >= 3) {
+    const scope = toString(ensureRuntimeValue(args[0]));
     const varName = toString(ensureRuntimeValue(args[1]));
-    this.env.set(varName, ensureRuntimeValue(args[2]));
+    const val = ensureRuntimeValue(args[2]);
+    const targetEnv =
+      scope === "caller"
+        ? this.callerEnv
+        : scope === "workspace"
+          ? this.workspaceEnv
+          : undefined;
+    if (targetEnv) {
+      targetEnv.set(varName, val);
+    } else {
+      this.env.set(varName, val);
+    }
     return undefined;
   }
   if (name === "feval" && args.length >= 1) {
@@ -208,13 +248,24 @@ export function interpretLocalFunction(
   }
 
   if (source.from === "classFile") {
-    const fn = this.findFunctionInClassFile(source.className, target.name);
+    const fn = this.findFunctionInClassFile(
+      source.className,
+      target.name,
+      source.methodScope
+    );
     if (!fn)
       throw new RuntimeError(
         `Local function '${target.name}' not found in class file '${source.className}'`
       );
+    // Use the external method file as context if methodScope points to one
+    const classInfo = this.ctx.getClassInfo(source.className);
+    const extFile = classInfo?.externalMethodFiles.get(
+      source.methodScope ?? ""
+    );
+    const fileCtx =
+      extFile?.fileName ?? this.getClassFileName(source.className);
     return this.withFileContext(
-      this.getClassFileName(source.className),
+      fileCtx,
       source.className,
       source.methodScope,
       () => this.callUserFunction(fn, args, nargout)
@@ -301,7 +352,6 @@ export function interpretClassMethod(
     return this.interpretConstructor(classInfo, args, nargout);
   }
 
-  const isStatic = classInfo.staticMethodNames.has(methodName);
   const methodFn = this.findMethodInClass(classInfo, methodName);
   if (!methodFn) {
     const extFn = this.findExternalMethod(classInfo, methodName);
@@ -322,7 +372,7 @@ export function interpretClassMethod(
   }
 
   const actualArgs =
-    target.stripInstance && !isStatic && args.length > 0 ? args.slice(1) : args;
+    target.stripInstance && args.length > 0 ? args.slice(1) : args;
 
   return this.withFileContext(
     classInfo.fileName,
@@ -485,6 +535,8 @@ export function callUserFunction(
   fnEnv.set("$nargout", nargout as unknown as RuntimeValue);
 
   const savedEnv = this.env;
+  const savedCallerEnv = this.callerEnv;
+  this.callerEnv = savedEnv;
   this.env = fnEnv;
 
   try {
@@ -535,6 +587,7 @@ export function callUserFunction(
     return outputs;
   } finally {
     this.env = savedEnv;
+    this.callerEnv = savedCallerEnv;
   }
 }
 
@@ -673,15 +726,31 @@ export function findFunctionInWorkspaceFile(
 export function findFunctionInClassFile(
   this: Interpreter,
   className: string,
-  funcName: string
+  funcName: string,
+  methodScope?: string
 ): FunctionDef | null {
-  const cacheKey = `cls:${className}:${funcName}`;
+  const cacheKey = `cls:${className}:${funcName}:${methodScope ?? ""}`;
   const cached = this.functionDefCache.get(cacheKey);
   if (cached) return cached;
 
   const classInfo = this.ctx.getClassInfo(className);
   if (!classInfo) return null;
 
+  // If methodScope is an external method, look ONLY in that file's subfunctions
+  if (methodScope && classInfo.externalMethodFiles.has(methodScope)) {
+    const mf = classInfo.externalMethodFiles.get(methodScope)!;
+    const methodAst = this.ctx.getCachedAST(mf.fileName);
+    for (const stmt of methodAst.body) {
+      if (stmt.type === "Function" && stmt.name === funcName) {
+        const fn = funcDefFromStmt(stmt);
+        this.functionDefCache.set(cacheKey, fn);
+        return fn;
+      }
+    }
+    // Fall through to main classdef file if not found in external method file
+  }
+
+  // Look in main classdef file's subfunctions
   const ast = this.ctx.getCachedAST(classInfo.fileName);
   for (const stmt of ast.body) {
     if (stmt.type === "Function" && stmt.name === funcName) {
@@ -691,18 +760,16 @@ export function findFunctionInClassFile(
     }
   }
 
-  for (const [, mf] of classInfo.externalMethodFiles) {
-    const methodAst = this.ctx.getCachedAST(mf.fileName);
-    for (const stmt of methodAst.body) {
-      if (stmt.type === "Function" && stmt.name === funcName) {
-        const fn: FunctionDef = {
-          name: stmt.name,
-          params: stmt.params,
-          outputs: stmt.outputs,
-          body: stmt.body,
-        };
-        this.functionDefCache.set(cacheKey, fn);
-        return fn;
+  // If no methodScope specified, also search all external method files
+  if (!methodScope) {
+    for (const [, mf] of classInfo.externalMethodFiles) {
+      const methodAst = this.ctx.getCachedAST(mf.fileName);
+      for (const stmt of methodAst.body) {
+        if (stmt.type === "Function" && stmt.name === funcName) {
+          const fn = funcDefFromStmt(stmt);
+          this.functionDefCache.set(cacheKey, fn);
+          return fn;
+        }
       }
     }
   }
