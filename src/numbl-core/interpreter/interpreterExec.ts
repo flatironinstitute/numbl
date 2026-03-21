@@ -21,6 +21,7 @@ import { RuntimeError } from "../runtime/error.js";
 import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { mPow } from "../builtins/arithmetic.js";
 import { getBuiltinNargin } from "../builtins/registry.js";
+import { getConstant } from "../builtins/constants.js";
 import { buildLineTable, offsetToLineFast } from "../runtime/error.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
 import { numel } from "../runtime/utils.js";
@@ -651,6 +652,11 @@ export function evalFuncCall(
     return this.rt.index(varVal, args, nargout, skipSubsref);
   }
   const args = this.evalArgs(expr.args);
+  // Constant called as zero-arg function? e.g. eps(), pi(), inf()
+  if (args.length === 0) {
+    const c = getConstant(expr.name);
+    if (c !== undefined) return c;
+  }
   return this.callFunction(expr.name, args, nargout);
 }
 
