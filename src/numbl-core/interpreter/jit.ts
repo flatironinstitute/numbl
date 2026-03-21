@@ -145,10 +145,6 @@ export function tryJitForLoop(
       compiled = new Function(...paramNames, jsBody) as LoopJitFn;
 
       stmt._jitLoopCache = { fn: compiled, source: fullSource, analysis };
-
-      if (interp.onJitCompile) {
-        interp.onJitCompile(`loop@${stmt.varName}`, fullSource);
-      }
     } catch {
       stmt._jitLoopCache = null;
       return JIT_SKIP;
@@ -187,6 +183,13 @@ export function tryJitForLoop(
 
   // Call compiled loop
   const result = compiled(...args);
+
+  // Report JIT compilation on first successful use
+  const cacheEntry = stmt._jitLoopCache!;
+  if (!cacheEntry.reported && interp.onJitCompile) {
+    cacheEntry.reported = true;
+    interp.onJitCompile(`loop@${stmt.varName}`, cacheEntry.source);
+  }
 
   if (result === null) {
     // Loop didn't execute (empty range) — don't touch any variables

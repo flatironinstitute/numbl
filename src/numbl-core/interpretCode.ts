@@ -129,7 +129,15 @@ export function interpretCode(
   }
 
   interpreter.optimization = options.optimization ?? 0;
-  interpreter.onJitCompile = options.onJitCompile;
+
+  // Collect JIT compilations for generatedJS output
+  const jitSections: string[] = [];
+  interpreter.onJitCompile = (description: string, jsCode: string) => {
+    jitSections.push(
+      `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${jsCode}`
+    );
+    options.onJitCompile?.(description, jsCode);
+  };
 
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
@@ -153,7 +161,10 @@ export function interpretCode(
 
     const result: ExecResult = {
       output: rt.outputLines,
-      generatedJS: "// interpreted mode — no JS generated",
+      generatedJS:
+        jitSections.length > 0
+          ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
+          : "// interpreted mode — no JS generated",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),

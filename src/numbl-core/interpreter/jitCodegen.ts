@@ -308,13 +308,14 @@ function emitBuiltinCall(name: string, args: Expr[]): string {
 export function generateScalarJS(fn: FunctionDef, nargout: number): string {
   let loopCounter = 0;
   const lines: string[] = [];
+  let indent = 1; // start at 1 — body is inside function wrapper
 
   // Declare local variables (not params — those come as function arguments)
   const declared = new Set<string>(fn.params);
   for (const out of fn.outputs) declared.add(out);
 
   function emit(line: string) {
-    lines.push(line);
+    lines.push("  ".repeat(indent) + line);
   }
 
   function emitStmt(s: Stmt) {
@@ -334,21 +335,29 @@ export function generateScalarJS(fn: FunctionDef, nargout: number): string {
         break;
       case "If": {
         emit(`if (${emitExpr(s.cond)} !== 0) {`);
+        indent++;
         for (const st of s.thenBody) emitStmt(st);
+        indent--;
         for (const eib of s.elseifBlocks) {
           emit(`} else if (${emitExpr(eib.cond)} !== 0) {`);
+          indent++;
           for (const st of eib.body) emitStmt(st);
+          indent--;
         }
         if (s.elseBody) {
           emit(`} else {`);
+          indent++;
           for (const st of s.elseBody) emitStmt(st);
+          indent--;
         }
         emit(`}`);
         break;
       }
       case "While":
         emit(`while (${emitExpr(s.cond)} !== 0) {`);
+        indent++;
         for (const st of s.body) emitStmt(st);
+        indent--;
         emit(`}`);
         break;
       case "For": {
@@ -359,18 +368,28 @@ export function generateScalarJS(fn: FunctionDef, nargout: number): string {
         const stVar = `$_st${id}`;
         const eVar = `$_e${id}`;
         emit(`{`);
+        indent++;
         emit(`const ${sVar} = ${emitExpr(range.start)};`);
         emit(`const ${stVar} = ${range.step ? emitExpr(range.step) : "1"};`);
         emit(`const ${eVar} = ${emitExpr(range.end)};`);
-        emit(
-          `if (${stVar} > 0) { for (let ${v} = ${sVar}; ${v} <= ${eVar}; ${v} += ${stVar}) {`
-        );
+        emit(`if (${stVar} > 0) {`);
+        indent++;
+        emit(`for (let ${v} = ${sVar}; ${v} <= ${eVar}; ${v} += ${stVar}) {`);
+        indent++;
         for (const st of s.body) emitStmt(st);
-        emit(
-          `} } else if (${stVar} < 0) { for (let ${v} = ${sVar}; ${v} >= ${eVar}; ${v} += ${stVar}) {`
-        );
+        indent--;
+        emit(`}`);
+        indent--;
+        emit(`} else if (${stVar} < 0) {`);
+        indent++;
+        emit(`for (let ${v} = ${sVar}; ${v} >= ${eVar}; ${v} += ${stVar}) {`);
+        indent++;
         for (const st of s.body) emitStmt(st);
-        emit(`} }`);
+        indent--;
+        emit(`}`);
+        indent--;
+        emit(`}`);
+        indent--;
         emit(`}`);
         break;
       }
@@ -538,12 +557,13 @@ export function generateLoopJS(
 ): string {
   let loopCounter = 0;
   const lines: string[] = [];
+  let indent = 1; // start at 1 — body is inside function wrapper
 
   const declared = new Set<string>(analysis.readVars);
   const readSet = new Set(analysis.readVars);
 
   function emit(line: string) {
-    lines.push(line);
+    lines.push("  ".repeat(indent) + line);
   }
 
   // Declare write-only vars (not params)
@@ -562,17 +582,27 @@ export function generateLoopJS(
   emit(`let $_ran = false;`);
 
   // Emit the outer for-loop using persistent loop variable
-  emit(`if ($_rst > 0) { for (let $_k = $_rs; $_k <= $_re; $_k += $_rst) {`);
+  emit(`if ($_rst > 0) {`);
+  indent++;
+  emit(`for (let $_k = $_rs; $_k <= $_re; $_k += $_rst) {`);
+  indent++;
   emit(`$_ran = true;`);
   emit(`${outerV} = $_k;`);
   for (const s of body) emitLoopStmt(s);
-  emit(
-    `} } else if ($_rst < 0) { for (let $_k = $_rs; $_k >= $_re; $_k += $_rst) {`
-  );
+  indent--;
+  emit(`}`);
+  indent--;
+  emit(`} else if ($_rst < 0) {`);
+  indent++;
+  emit(`for (let $_k = $_rs; $_k >= $_re; $_k += $_rst) {`);
+  indent++;
   emit(`$_ran = true;`);
   emit(`${outerV} = $_k;`);
   for (const s of body) emitLoopStmt(s);
-  emit(`} }`);
+  indent--;
+  emit(`}`);
+  indent--;
+  emit(`}`);
 
   // Return null if loop didn't execute, otherwise return all outputs
   emit(`if (!$_ran) return null;`);
@@ -599,21 +629,29 @@ export function generateLoopJS(
         break;
       case "If": {
         emit(`if (${emitExpr(s.cond)} !== 0) {`);
+        indent++;
         for (const st of s.thenBody) emitLoopStmt(st);
+        indent--;
         for (const eib of s.elseifBlocks) {
           emit(`} else if (${emitExpr(eib.cond)} !== 0) {`);
+          indent++;
           for (const st of eib.body) emitLoopStmt(st);
+          indent--;
         }
         if (s.elseBody) {
           emit(`} else {`);
+          indent++;
           for (const st of s.elseBody) emitLoopStmt(st);
+          indent--;
         }
         emit(`}`);
         break;
       }
       case "While":
         emit(`while (${emitExpr(s.cond)} !== 0) {`);
+        indent++;
         for (const st of s.body) emitLoopStmt(st);
+        indent--;
         emit(`}`);
         break;
       case "For": {
@@ -626,20 +664,34 @@ export function generateLoopJS(
         const eVar = `$_e${id}`;
         const kVar = `$_ki${id}`;
         emit(`{`);
+        indent++;
         emit(`const ${sVar} = ${emitExpr(range.start)};`);
         emit(`const ${stVar} = ${range.step ? emitExpr(range.step) : "1"};`);
         emit(`const ${eVar} = ${emitExpr(range.end)};`);
+        emit(`if (${stVar} > 0) {`);
+        indent++;
         emit(
-          `if (${stVar} > 0) { for (let ${kVar} = ${sVar}; ${kVar} <= ${eVar}; ${kVar} += ${stVar}) {`
+          `for (let ${kVar} = ${sVar}; ${kVar} <= ${eVar}; ${kVar} += ${stVar}) {`
         );
+        indent++;
         emit(`${v} = ${kVar};`);
         for (const st of s.body) emitLoopStmt(st);
+        indent--;
+        emit(`}`);
+        indent--;
+        emit(`} else if (${stVar} < 0) {`);
+        indent++;
         emit(
-          `} } else if (${stVar} < 0) { for (let ${kVar} = ${sVar}; ${kVar} >= ${eVar}; ${kVar} += ${stVar}) {`
+          `for (let ${kVar} = ${sVar}; ${kVar} >= ${eVar}; ${kVar} += ${stVar}) {`
         );
+        indent++;
         emit(`${v} = ${kVar};`);
         for (const st of s.body) emitLoopStmt(st);
-        emit(`} }`);
+        indent--;
+        emit(`}`);
+        indent--;
+        emit(`}`);
+        indent--;
         emit(`}`);
         break;
       }

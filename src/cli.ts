@@ -576,24 +576,27 @@ async function executeWithOptions(
 
   const fileIO = new NodeFileIOAdapter();
 
-  // Set up --dump-js: clear file, append JIT pieces during execution, then prepend main script.
+  // Set up --dump-js: for compiled mode, append JIT pieces during execution.
+  // For interpret mode, JIT code is collected in result.generatedJS instead.
   let onJitCompile: ((description: string, jsCode: string) => void) | undefined;
   if (opts.dumpJs) {
     // Clear any previous dump file
     writeFileSync(opts.dumpJs, "");
-    onJitCompile = (description: string, jsCode: string) => {
-      const header =
-        "\n// " +
-        "=".repeat(60) +
-        "\n" +
-        "// JIT: " +
-        description +
-        "\n" +
-        "// " +
-        "=".repeat(60) +
-        "\n\n";
-      appendFileSync(opts.dumpJs!, header + jsCode + "\n");
-    };
+    if (!opts.interpret) {
+      onJitCompile = (description: string, jsCode: string) => {
+        const header =
+          "\n// " +
+          "=".repeat(60) +
+          "\n" +
+          "// JIT: " +
+          description +
+          "\n" +
+          "// " +
+          "=".repeat(60) +
+          "\n\n";
+        appendFileSync(opts.dumpJs!, header + jsCode + "\n");
+      };
+    }
   }
 
   try {

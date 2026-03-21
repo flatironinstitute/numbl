@@ -167,6 +167,8 @@ export interface LoopJitCacheEntry {
   fn: (...args: number[]) => number[] | null;
   source: string;
   analysis: LoopAnalysis;
+  /** Set to true after onJitCompile has been fired for this entry. */
+  reported?: boolean;
 }
 
 export interface FunctionDef {
