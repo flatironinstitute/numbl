@@ -150,6 +150,25 @@ export interface JitCacheEntry {
   source: string;
 }
 
+/** Analysis result for loop-level JIT compilation. */
+export interface LoopAnalysis {
+  /** Variables read from outer scope (function params), sorted. */
+  readVars: string[];
+  /** Variables only written in body (declared as let), sorted. */
+  writeOnlyVars: string[];
+  /** All variables assigned in body (for writing back), sorted. */
+  allWriteVars: string[];
+  /** The loop variable name. */
+  loopVar: string;
+}
+
+/** Cached loop-level JIT compilation result. null = known non-compilable. */
+export interface LoopJitCacheEntry {
+  fn: (...args: number[]) => number[] | null;
+  source: string;
+  analysis: LoopAnalysis;
+}
+
 export interface FunctionDef {
   name: string;
   params: string[];

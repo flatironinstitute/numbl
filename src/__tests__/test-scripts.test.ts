@@ -99,6 +99,7 @@ const testFiles = findTestFiles(testDir);
 describe("integration test scripts", () => {
   for (const filepath of testFiles) {
     const rel = relative(resolve(thisDir, "../.."), filepath);
+    const isJit = rel.includes("/jit/");
 
     it(rel, () => {
       const source = readFileSync(filepath, "utf-8");
@@ -106,9 +107,21 @@ describe("integration test scripts", () => {
       const workspaceFiles = scanMFiles(scriptDir, filepath);
       const searchPaths = [scriptDir];
 
+      let jitFired = false;
       const result = executeCode(
         source,
-        { displayResults: true },
+        {
+          displayResults: true,
+          ...(isJit
+            ? {
+                interpret: true,
+                optimization: 1,
+                onJitCompile: () => {
+                  jitFired = true;
+                },
+              }
+            : {}),
+        },
         workspaceFiles,
         filepath,
         searchPaths
@@ -118,6 +131,10 @@ describe("integration test scripts", () => {
       const lines = outputText.split("\n").filter(l => l.length > 0);
       const lastLine = lines.length > 0 ? lines[lines.length - 1] : "";
       expect(lastLine).toBe("SUCCESS");
+
+      if (isJit) {
+        expect(jitFired).toBe(true);
+      }
     });
   }
 });

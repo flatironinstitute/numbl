@@ -44,6 +44,7 @@ import {
 } from "./types.js";
 
 import type { Interpreter } from "./interpreter.js";
+import { tryJitForLoop, JIT_SKIP } from "./jit.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -174,6 +175,12 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "For": {
+      // Try loop-level JIT for Range-based for loops
+      if (this.optimization >= 1 && stmt.expr.type === "Range") {
+        const jitResult = tryJitForLoop(this, stmt);
+        if (jitResult !== JIT_SKIP) return null;
+      }
+
       const iterVal = this.evalExpr(stmt.expr);
       const rv = ensureRuntimeValue(iterVal);
       const iterItems = forIter(rv);
