@@ -534,6 +534,7 @@ export function IDEWorkspace({
     remoteServiceUrl,
     handlePlotInstruction,
     interpret,
+    optimization,
   ]);
 
   const stopExecution = useCallback(() => {

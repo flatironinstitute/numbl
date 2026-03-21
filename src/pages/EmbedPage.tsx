@@ -192,7 +192,7 @@ export function EmbedPage() {
       mainFileName: "script.m",
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
     });
-  }, [code, interpret]);
+  }, [code, interpret, optimization]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

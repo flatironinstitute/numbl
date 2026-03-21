@@ -129,7 +129,7 @@ export function EmbedReplPage() {
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction, interpret]);
+  }, [handlePlotInstruction, interpret, optimization]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {

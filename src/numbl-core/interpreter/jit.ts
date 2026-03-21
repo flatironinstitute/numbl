@@ -64,7 +64,6 @@ export function tryJitCall(
     const paramNames = fn.params;
     const fullSource = `function ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
 
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
     const compiled = new Function(...paramNames, jsBody) as CompiledFn;
 
     const entry: JitCacheEntry = { fn: compiled, source: fullSource };
