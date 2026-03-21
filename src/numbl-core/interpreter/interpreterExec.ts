@@ -78,6 +78,35 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "MultiAssign": {
+      // Detect [c{idx}] = func() pattern for multi-output cell assign
+      if (stmt.lvalues.length === 1 && stmt.lvalues[0].type === "IndexCell") {
+        const lv = stmt.lvalues[0];
+        const cellBase =
+          lv.base.type === "Ident"
+            ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
+            : this.evalExpr(lv.base);
+        const indices = lv.indices.map(idx => this.evalExpr(idx));
+        // Determine nargout from index count
+        const idxVal = ensureRuntimeValue(indices[0]);
+        let expandedCount = 1;
+        if (isRuntimeTensor(idxVal)) {
+          expandedCount = idxVal.data.length;
+        } else if (typeof idxVal === "number") {
+          expandedCount = 1;
+        }
+        const val = this.evalExprNargout(stmt.expr, expandedCount);
+        const values = Array.isArray(val) ? val : [val];
+        const result = this.rt.multiOutputCellAssign(
+          cellBase,
+          indices[0],
+          values.map(v => ensureRuntimeValue(v))
+        );
+        if (lv.base.type === "Ident") {
+          this.env.set(lv.base.name, ensureRuntimeValue(result));
+        }
+        return null;
+      }
+
       const nargout = stmt.lvalues.length;
       const val = this.evalExprNargout(stmt.expr, nargout);
       const values = Array.isArray(val) ? val : [val];
@@ -374,11 +403,16 @@ export function evalExprNargout(
         }
       }
       const base = this.evalExpr(expr.base);
+      // For struct fields, try to get the field value for end-context resolution.
+      // Don't do this for class instances — getMember would call the method as a side effect.
       let fieldVal: unknown = undefined;
-      try {
-        fieldVal = this.rt.getMember(base, expr.name);
-      } catch {
-        // Not a struct field
+      const baseRv = ensureRuntimeValue(base);
+      if (!isRuntimeClassInstance(baseRv)) {
+        try {
+          fieldVal = this.rt.getMember(base, expr.name);
+        } catch {
+          // Not a struct field
+        }
       }
       const args =
         fieldVal !== undefined

@@ -271,7 +271,8 @@ export class Interpreter {
   declare callUserFunction: (
     fn: FunctionDef,
     args: unknown[],
-    nargout: number
+    nargout: number,
+    narginOverride?: number
   ) => unknown;
   declare callNestedFunction: (
     fn: FunctionDef,
