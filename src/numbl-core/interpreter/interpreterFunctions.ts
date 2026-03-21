@@ -96,9 +96,14 @@ export function callFunction(
     if (isRuntimeFunction(first)) {
       return this.rt.index(first, args.slice(1), nargout);
     }
-    const funcName = toString(first);
-    const funcArgs = args.slice(1);
-    return this.callFunction(funcName, funcArgs, nargout);
+    // Class instance: feval(obj, ...) dispatches to the class's feval method
+    if (isRuntimeClassInstance(first)) {
+      // Fall through to normal resolution which finds feval as a class method
+    } else {
+      const funcName = toString(first);
+      const funcArgs = args.slice(1);
+      return this.callFunction(funcName, funcArgs, nargout);
+    }
   }
   if (name === "exist" && args.length >= 2) {
     const nameArg = toString(ensureRuntimeValue(args[0]));
