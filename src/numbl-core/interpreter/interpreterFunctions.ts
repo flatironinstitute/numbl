@@ -417,11 +417,13 @@ export function interpretConstructor(
           ...funcDefFromStmt(methodStmt),
           params: [outputName, ...methodStmt.params],
         };
+        // nargin in constructor counts user args, not obj
+        const userArgCount = args.length - 1;
         return this.withFileContext(
           classInfo.fileName,
           classInfo.name,
           constructorName,
-          () => this.callUserFunction(fn, args, nargout)
+          () => this.callUserFunction(fn, args, nargout, userArgCount)
         );
       }
     }
@@ -434,12 +436,13 @@ export function interpretConstructor(
       ...extFn,
       params: [outputName, ...extFn.params],
     };
+    const userArgCount = args.length - 1;
     return this.withFileContext(
       classInfo.externalMethodFiles.get(constructorName)?.fileName ??
         classInfo.fileName,
       classInfo.name,
       constructorName,
-      () => this.callUserFunction(fn, args, nargout)
+      () => this.callUserFunction(fn, args, nargout, userArgCount)
     );
   }
 
@@ -452,7 +455,8 @@ export function callUserFunction(
   this: Interpreter,
   fn: FunctionDef,
   args: unknown[],
-  nargout: number
+  nargout: number,
+  narginOverride?: number
 ): unknown {
   const fnEnv = new Environment();
   fnEnv.rt = this.rt;
@@ -474,7 +478,10 @@ export function callUserFunction(
       .map(a => ensureRuntimeValue(a));
     fnEnv.set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
   }
-  fnEnv.set("$nargin", args.length as unknown as RuntimeValue);
+  fnEnv.set(
+    "$nargin",
+    (narginOverride ?? args.length) as unknown as RuntimeValue
+  );
   fnEnv.set("$nargout", nargout as unknown as RuntimeValue);
 
   const savedEnv = this.env;
