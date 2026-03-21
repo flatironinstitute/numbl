@@ -437,6 +437,29 @@ export function evalExprNargout(
           );
           return this.rt.callSuperConstructor(objVal, superResult);
         }
+        // Built-in super class (e.g. classdef Foo < double):
+        // pass the raw arg to callSuperConstructor which stores it as _builtinData
+        const builtinSuperNames = new Set([
+          "double",
+          "single",
+          "int8",
+          "int16",
+          "int32",
+          "int64",
+          "uint8",
+          "uint16",
+          "uint32",
+          "uint64",
+          "logical",
+          "char",
+        ]);
+        if (builtinSuperNames.has(expr.superClassName)) {
+          const data =
+            args.length > 0
+              ? ensureRuntimeValue(args[0])
+              : RTV.tensor(new FloatXArray(0), [0, 0]);
+          return this.rt.callSuperConstructor(objVal, data);
+        }
         const { propertyNames, propertyDefaults } = this.collectClassProperties(
           superClassInfo ??
             ({
