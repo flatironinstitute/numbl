@@ -539,6 +539,16 @@ export function callUserFunction(
   );
   fnEnv.set("$nargout", nargout as unknown as RuntimeValue);
 
+  // Pre-register nested function definitions (hoisted, like MATLAB)
+  for (const stmt of fn.body) {
+    if (stmt.type === "Function") {
+      fnEnv.nestedFunctions.set(stmt.name, {
+        fn: funcDefFromStmt(stmt),
+        env: fnEnv,
+      });
+    }
+  }
+
   const savedEnv = this.env;
   const savedCallerEnv = this.callerEnv;
   this.callerEnv = savedEnv;
