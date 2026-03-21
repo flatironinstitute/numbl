@@ -12,7 +12,6 @@
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
-import { RTV } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
 
@@ -64,9 +63,7 @@ self.onmessage = (e: MessageEvent) => {
         displayResults: options?.displayResults ?? true,
         maxIterations: options?.maxIterations ?? 10000000,
         interpret: options?.interpret ?? false,
-        initialVariableValues: {
-          init_var_1: RTV.num(12),
-        },
+        initialVariableValues: {},
       },
       wsFiles,
       activeFileName,

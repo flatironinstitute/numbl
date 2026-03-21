@@ -13,6 +13,8 @@ import {
   isRuntimeCell,
   isRuntimeClassInstance,
   isRuntimeFunction,
+  isRuntimeStructArray,
+  isRuntimeSparseMatrix,
   FloatXArray,
 } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
@@ -118,9 +120,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       for (let i = 0; i < stmt.lvalues.length; i++) {
         const lv = stmt.lvalues[i];
         if (lv.type === "Ignore") continue;
-        const rv = this.rt.share(
-          i < values.length ? values[i] : undefined
-        ) as RuntimeValue;
+        const rv = this.rt.share(i < values.length ? values[i] : undefined);
         this.assignLValue(lv, rv);
       }
       if (!stmt.suppressed && values.length > 0) {
@@ -337,6 +337,15 @@ export function evalExprNargout(
             ctx.numIndices,
           ]);
         }
+        if (isRuntimeStructArray(rv)) {
+          return rv.elements.length;
+        }
+        if (isRuntimeSparseMatrix(rv)) {
+          if (ctx.numIndices === 1) return rv.m * rv.n;
+          return ctx.dimIndex === 0 ? rv.m : ctx.dimIndex === 1 ? rv.n : 1;
+        }
+        // Scalars (number, boolean, complex) — default to 1
+        return 1;
       }
       return END_SENTINEL;
     }
