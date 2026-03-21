@@ -18,6 +18,7 @@ import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
+import { tryJitCall, JIT_SKIP } from "./jit.js";
 import { toNumber, toString } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
@@ -513,6 +514,12 @@ export function callUserFunction(
   nargout: number,
   narginOverride?: number
 ): unknown {
+  // Try JIT compilation for scalar-only functions
+  if (this.optimization >= 1 && narginOverride === undefined) {
+    const jitResult = tryJitCall(this, fn, args, nargout);
+    if (jitResult !== JIT_SKIP) return jitResult;
+  }
+
   const fnEnv = new Environment();
   fnEnv.rt = this.rt;
   fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
@@ -617,6 +624,12 @@ export function callNestedFunction(
   args: unknown[],
   nargout: number
 ): unknown {
+  // Try JIT compilation for scalar-only functions
+  if (this.optimization >= 1) {
+    const jitResult = tryJitCall(this, fn, args, nargout);
+    if (jitResult !== JIT_SKIP) return jitResult;
+  }
+
   const fnEnv = new Environment(parentEnv);
   fnEnv.isNested = true;
   fnEnv.rt = this.rt;

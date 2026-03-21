@@ -42,6 +42,8 @@ export interface ExecOptions {
   fileIO?: FileIOAdapter;
   /** Use the AST interpreter instead of codegen+eval. */
   interpret?: boolean;
+  /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
+  optimization?: number;
 }
 
 export interface BuiltinProfileEntry {

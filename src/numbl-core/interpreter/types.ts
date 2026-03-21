@@ -144,12 +144,20 @@ export class Environment {
 
 // ── Function definition storage ──────────────────────────────────────────
 
+/** Cached JIT compilation result for a specific nargout. */
+export interface JitCacheEntry {
+  fn: (...args: number[]) => number | number[];
+  source: string;
+}
+
 export interface FunctionDef {
   name: string;
   params: string[];
   outputs: string[];
   body: Stmt[];
   argumentsBlocks?: ArgumentsBlock[];
+  /** JIT cache keyed by signature (nargout + arg types). null = known non-compilable. */
+  _jitCache?: Map<string, JitCacheEntry | null>;
 }
 
 /** Create a FunctionDef from an AST Function statement. */

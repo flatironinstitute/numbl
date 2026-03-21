@@ -75,6 +75,12 @@ export class Interpreter {
   /** @internal Guard against infinite recursion in compileSpecialized */
   compileInProgress = new Set<string>();
 
+  /** Optimization level (0 = pure interpreter, >=1 = JIT scalar functions). */
+  optimization: number = 0;
+
+  /** Callback for JIT compilation logging. */
+  onJitCompile?: (description: string, jsCode: string) => void;
+
   constructor(
     rt: Runtime,
     ctx: LoweringContext,

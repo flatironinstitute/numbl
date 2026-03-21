@@ -294,6 +294,7 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
   --no-line-tracking  Omit $rt.$file/$rt.$line from generated JS
+  --opt <level>      Interpreter optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
   NUMBL_PATH         Extra workspace directories (separated by ${delimiter})`);
@@ -314,6 +315,7 @@ interface ParsedOptions {
   profileOutput: string | undefined;
   noLineTracking: boolean;
   interpret: boolean;
+  optimization: number;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -330,6 +332,7 @@ function parseOptions(args: string[]): ParsedOptions {
     profileOutput: undefined,
     noLineTracking: false,
     interpret: false,
+    optimization: 0,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -406,6 +409,18 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--interpret":
         opts.interpret = true;
+        break;
+      case "--opt":
+        i++;
+        if (i >= args.length) {
+          console.error("Error: --opt requires a level number");
+          process.exit(1);
+        }
+        opts.optimization = parseInt(args[i], 10);
+        if (isNaN(opts.optimization)) {
+          console.error("Error: --opt requires a valid number");
+          process.exit(1);
+        }
         break;
       default:
         if (args[i].startsWith("-")) {
@@ -602,6 +617,7 @@ async function executeWithOptions(
             noLineTracking: opts.noLineTracking,
             fileIO,
             interpret: opts.interpret,
+            optimization: opts.optimization,
           },
           workspaceFiles,
           mainFileName,
@@ -652,6 +668,7 @@ async function executeWithOptions(
           noLineTracking: opts.noLineTracking,
           fileIO,
           interpret: opts.interpret,
+          optimization: opts.optimization,
         },
         workspaceFiles,
         mainFileName,
@@ -685,6 +702,7 @@ async function executeWithOptions(
           noLineTracking: opts.noLineTracking,
           fileIO,
           interpret: opts.interpret,
+          optimization: opts.optimization,
         },
         workspaceFiles,
         mainFileName,
@@ -809,7 +827,8 @@ async function cmdRepl(args: string[]) {
     replDrawnow,
     replSearchPaths,
     nativeBridge,
-    opts.interpret
+    opts.interpret,
+    opts.optimization
   );
 }
 

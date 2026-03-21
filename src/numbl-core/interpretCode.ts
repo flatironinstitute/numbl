@@ -128,6 +128,9 @@ export function interpretCode(
     interpreter.fileSources.set(f.name, f.source);
   }
 
+  interpreter.optimization = options.optimization ?? 0;
+  interpreter.onJitCompile = options.onJitCompile;
+
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
 

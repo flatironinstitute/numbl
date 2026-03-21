@@ -41,10 +41,15 @@ disp('Hello from numbl!')
 disp(['Sum of squares: ', num2str(sum(y))])
 `;
 
-function getQueryParams(): { script: string; interpret: boolean } {
+function getQueryParams(): {
+  script: string;
+  interpret: boolean;
+  optimization: number;
+} {
   const params = new URLSearchParams(window.location.search);
   const interpret =
     params.get("interpret") === "true" || params.get("interpret") === "1";
+  const optimization = parseInt(params.get("opt") ?? "0", 10) || 0;
   const scriptParam = params.get("script");
   let script = DEFAULT_SCRIPT;
   if (scriptParam) {
@@ -54,11 +59,11 @@ function getQueryParams(): { script: string; interpret: boolean } {
       console.error("Failed to decode script parameter");
     }
   }
-  return { script, interpret };
+  return { script, interpret, optimization };
 }
 
 export function EmbedPage() {
-  const { script: initialScript, interpret } = getQueryParams();
+  const { script: initialScript, interpret, optimization } = getQueryParams();
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -177,7 +182,12 @@ export function EmbedPage() {
     workerRef.current.postMessage({
       type: "run",
       code: codeToRun,
-      options: { displayResults: true, maxIterations: 10000000, interpret },
+      options: {
+        displayResults: true,
+        maxIterations: 10000000,
+        interpret,
+        optimization,
+      },
       workspaceFiles: mipWorkspaceFiles,
       mainFileName: "script.m",
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,

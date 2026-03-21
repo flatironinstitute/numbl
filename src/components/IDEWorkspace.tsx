@@ -109,6 +109,10 @@ export function IDEWorkspace({
       params.get("interpret") === "true" || params.get("interpret") === "1"
     );
   }, []);
+  const optimization = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return parseInt(params.get("opt") ?? "0", 10) || 0;
+  }, []);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
@@ -514,7 +518,12 @@ export function IDEWorkspace({
       code: codeToRun,
       workspaceFiles: combinedWorkspaceFiles,
       mainFileName: activeFile.name,
-      options: { displayResults: true, maxIterations: 10000000, interpret },
+      options: {
+        displayResults: true,
+        maxIterations: 10000000,
+        interpret,
+        optimization,
+      },
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
     });
   }, [

@@ -30,6 +30,7 @@ let holdState = false;
 let workspaceFiles: WorkspaceFile[] = [];
 let searchPaths: string[] | undefined;
 let interpretMode = false;
+let optimizationLevel = 0;
 
 // ── Snippet helpers ──────────────────────────────────────────────────────────
 
@@ -107,6 +108,7 @@ self.onmessage = (e: MessageEvent) => {
 
   if (type === "set_interpret") {
     interpretMode = !!e.data.interpret;
+    optimizationLevel = e.data.optimization ?? optimizationLevel;
     return;
   }
 
@@ -133,6 +135,7 @@ self.onmessage = (e: MessageEvent) => {
         displayResults: true,
         maxIterations: 10000000,
         interpret: interpretMode,
+        optimization: optimizationLevel,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
       },

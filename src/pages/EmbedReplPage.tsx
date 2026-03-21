@@ -28,8 +28,14 @@ function useInterpretParam(): boolean {
   return params.get("interpret") === "true" || params.get("interpret") === "1";
 }
 
+function useOptimizationParam(): number {
+  const params = new URLSearchParams(window.location.search);
+  return parseInt(params.get("opt") ?? "0", 10) || 0;
+}
+
 export function EmbedReplPage() {
   const interpret = useInterpretParam();
+  const optimization = useOptimizationParam();
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -63,9 +69,13 @@ export function EmbedReplPage() {
     );
     replWorkerRef.current = worker;
 
-    // Send interpret mode flag to worker
-    if (interpret) {
-      worker.postMessage({ type: "set_interpret", interpret: true });
+    // Send interpret mode and optimization level to worker
+    if (interpret || optimization > 0) {
+      worker.postMessage({
+        type: "set_interpret",
+        interpret,
+        optimization,
+      });
     }
 
     worker.onmessage = e => {
