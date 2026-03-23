@@ -211,6 +211,22 @@ function emitStmt(
       // Early return uses the current output variable values
       lines.push(`${indent}return;`);
       break;
+
+    case "MultiAssign": {
+      const args = stmt.args.map(a => emitExpr(a, ht));
+      const nargout = stmt.names.length;
+      const tmp = `$ma${++_tmpCounter}`;
+      lines.push(
+        `${indent}const ${tmp} = $h.ibcall(${JSON.stringify(stmt.callName)}, ${nargout}, ${args.join(", ")});`
+      );
+      for (let i = 0; i < stmt.names.length; i++) {
+        const name = stmt.names[i];
+        if (name !== null) {
+          lines.push(`${indent}${mangle(name)} = ${tmp}[${i}];`);
+        }
+      }
+      break;
+    }
   }
 }
 
@@ -248,6 +264,9 @@ function emitExpr(expr: JitExpr, ht: boolean): string {
 
     case "UserCall":
       return emitUserCall(expr, ht);
+
+    case "Index":
+      return emitIndex(expr, ht);
   }
 }
 
@@ -424,6 +443,15 @@ function emitTensorLiteral(
     return `$h.mkTensorC([${reElems.join(", ")}], [${imElems.join(", ")}], [${nRows}, ${nCols}])`;
   }
   return `$h.mkTensor([${elems.join(", ")}], [${nRows}, ${nCols}])`;
+}
+
+function emitIndex(expr: JitExpr & { tag: "Index" }, ht: boolean): string {
+  const base = emitExpr(expr.base, ht);
+  const indices = expr.indices.map(i => emitExpr(i, ht));
+  if (indices.length === 1) return `$h.idx1(${base}, ${indices[0]})`;
+  if (indices.length === 2)
+    return `$h.idx2(${base}, ${indices[0]}, ${indices[1]})`;
+  return `$h.idxN(${base}, [${indices.join(", ")}])`;
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {

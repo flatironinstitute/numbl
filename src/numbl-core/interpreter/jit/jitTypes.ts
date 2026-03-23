@@ -136,6 +136,7 @@ export type JitExpr =
   | { tag: "StringLiteral"; value: string; isChar: boolean; jitType: JitType }
   | { tag: "Call"; name: string; args: JitExpr[]; jitType: JitType }
   | { tag: "UserCall"; jitName: string; args: JitExpr[]; jitType: JitType }
+  | { tag: "Index"; base: JitExpr; indices: JitExpr[]; jitType: JitType }
   | {
       tag: "TensorLiteral";
       rows: JitExpr[][];
@@ -165,7 +166,14 @@ export type JitStmt =
   | { tag: "Break" }
   | { tag: "Continue" }
   | { tag: "Return" }
-  | { tag: "ExprStmt"; expr: JitExpr };
+  | { tag: "ExprStmt"; expr: JitExpr }
+  | {
+      tag: "MultiAssign";
+      names: (string | null)[];
+      callName: string;
+      args: JitExpr[];
+      outputTypes: JitType[];
+    };
 
 // ── Scalar math builtins ────────────────────────────────────────────────
 

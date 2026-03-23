@@ -103,6 +103,10 @@ function binaryResultType(
       // tensor / tensor not supported (use ./ instead)
       if (isTensorType(left) && isTensorType(right)) return null;
       break;
+    case BinaryOperation.Pow:
+    case BinaryOperation.ElemPow:
+      // Scalar power only for now
+      break;
     default:
       return null;
   }
@@ -277,6 +281,8 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
       return [{ tag: "Continue" }];
     case "Return":
       return [{ tag: "Return" }];
+    case "MultiAssign":
+      return lowerMultiAssign(ctx, stmt);
     default:
       return null; // unsupported statement
   }
@@ -293,6 +299,59 @@ function lowerAssign(
   if (!ctx.params.has(stmt.name)) ctx.localVars.add(stmt.name);
 
   return [{ tag: "Assign", name: stmt.name, expr }];
+}
+
+function lowerMultiAssign(
+  ctx: LowerCtx,
+  stmt: Stmt & { type: "MultiAssign" }
+): JitStmt[] | null {
+  const nargout = stmt.lvalues.length;
+
+  // Only support simple variable lvalues and ~ (Ignore)
+  const names: (string | null)[] = [];
+  for (const lv of stmt.lvalues) {
+    if (lv.type === "Var") names.push(lv.name);
+    else if (lv.type === "Ignore") names.push(null);
+    else return null; // unsupported lvalue (index, member, etc.)
+  }
+
+  // RHS must be a FuncCall (either IBuiltin or user function)
+  const rhs = stmt.expr;
+  if (rhs.type !== "FuncCall") return null;
+
+  // Lower the arguments
+  const args = rhs.args.map(a => lowerExpr(ctx, a));
+  if (args.some(a => a === null)) return null;
+  const loweredArgs = args as JitExpr[];
+  const argJitTypes = loweredArgs.map(a => a.jitType);
+
+  // Try IBuiltin resolution with actual nargout
+  const ib = getIBuiltin(rhs.name);
+  if (!ib) return null; // user function multi-output not yet supported
+
+  const outputTypes = ib.typeRule(argJitTypes, nargout);
+  if (!outputTypes || outputTypes.length < nargout) return null;
+
+  // Update type environment for each output variable
+  for (let i = 0; i < names.length; i++) {
+    const name = names[i];
+    if (name !== null) {
+      ctx.env.set(name, outputTypes[i]);
+      if (!ctx.params.has(name)) ctx.localVars.add(name);
+    }
+  }
+
+  ctx._hasTensorOps = true;
+
+  return [
+    {
+      tag: "MultiAssign",
+      names,
+      callName: rhs.name,
+      args: loweredArgs,
+      outputTypes,
+    },
+  ];
 }
 
 function lowerExprStmt(
@@ -574,6 +633,15 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "FuncCall": {
+      // If the name is a known variable, treat as indexing (MATLAB ambiguity)
+      const varType = ctx.env.get(expr.name);
+      if (varType) {
+        return lowerIndexExpr(ctx, {
+          base: { tag: "Var", name: expr.name, jitType: varType },
+          indices: expr.args,
+        });
+      }
+
       // Try user function resolution (nested → local → workspace)
       const userResult = lowerUserFuncCall(ctx, expr);
       if (userResult) return userResult;
@@ -598,9 +666,57 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         jitType: { kind: "string", value: expr.value },
       };
 
+    case "Index": {
+      const base = lowerExpr(ctx, expr.base);
+      if (!base) return null;
+      return lowerIndexExpr(ctx, { base, indices: expr.indices });
+    }
+
     default:
       return null; // unsupported expression
   }
+}
+
+// ── Index expression lowering ───────────────────────────────────────────
+
+function lowerIndexExpr(
+  ctx: LowerCtx,
+  input: { base: JitExpr; indices: Expr[] }
+): JitExpr | null {
+  const { base } = input;
+  const indices: JitExpr[] = [];
+  for (const idx of input.indices) {
+    const lowered = lowerExpr(ctx, idx);
+    if (!lowered) return null;
+    // Only scalar numeric indices supported
+    if (lowered.jitType.kind !== "number" && lowered.jitType.kind !== "logical")
+      return null;
+    indices.push(lowered);
+  }
+  if (indices.length === 0) return null;
+
+  // Determine result type based on base type
+  let resultType: JitType;
+  switch (base.jitType.kind) {
+    case "realTensor":
+      resultType = { kind: "number" };
+      break;
+    case "complexTensor":
+      resultType = { kind: "complex" };
+      break;
+    case "number":
+    case "logical":
+      resultType = { kind: "number" };
+      break;
+    case "complex":
+      resultType = { kind: "complex" };
+      break;
+    default:
+      return null;
+  }
+
+  ctx._hasTensorOps = true;
+  return { tag: "Index", base, indices, jitType: resultType };
 }
 
 // ── User function call resolution ───────────────────────────────────────

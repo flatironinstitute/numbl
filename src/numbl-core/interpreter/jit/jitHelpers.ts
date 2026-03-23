@@ -204,6 +204,72 @@ function tensorNeg(a: RuntimeTensor): RuntimeTensor {
   return makeTensor(outR, outI, a.shape.slice());
 }
 
+// ── Tensor indexing ─────────────────────────────────────────────────────
+
+function idx1(base: unknown, i: number): unknown {
+  if (isTensor(base)) {
+    const idx = Math.round(i) - 1;
+    if (idx < 0 || idx >= base.data.length)
+      throw new Error("Index exceeds array bounds");
+    if (base.imag !== undefined) {
+      const imVal = base.imag[idx];
+      return imVal === 0 ? base.data[idx] : mkc(base.data[idx], imVal);
+    }
+    return base.data[idx];
+  }
+  // Scalar indexing: x(1) = x
+  if (typeof base === "number") {
+    if (Math.round(i) !== 1) throw new Error("Index exceeds array bounds");
+    return base;
+  }
+  if (isComplex(base)) {
+    if (Math.round(i) !== 1) throw new Error("Index exceeds array bounds");
+    return base;
+  }
+  throw new Error("JIT index: unsupported base type");
+}
+
+function idx2(base: unknown, ri: number, ci: number): unknown {
+  if (isTensor(base)) {
+    const s = base.shape;
+    const rows = s.length === 0 ? 1 : s.length === 1 ? 1 : s[0];
+    const cols = s.length === 0 ? 1 : s.length === 1 ? s[0] : s[1];
+    const r = Math.round(ri) - 1;
+    const c = Math.round(ci) - 1;
+    if (r < 0 || r >= rows || c < 0 || c >= cols)
+      throw new Error("Index exceeds array bounds");
+    const lin = c * rows + r;
+    if (base.imag !== undefined) {
+      const imVal = base.imag[lin];
+      return imVal === 0 ? base.data[lin] : mkc(base.data[lin], imVal);
+    }
+    return base.data[lin];
+  }
+  throw new Error("JIT index: unsupported base type for 2D indexing");
+}
+
+function idxN(base: unknown, indices: number[]): unknown {
+  if (isTensor(base)) {
+    const s = base.shape;
+    let lin = 0;
+    let stride = 1;
+    for (let k = 0; k < indices.length; k++) {
+      const dimSize = k < s.length ? s[k] : 1;
+      const sub = Math.round(indices[k]) - 1;
+      if (sub < 0 || sub >= dimSize)
+        throw new Error("Index exceeds array bounds");
+      lin += sub * stride;
+      stride *= dimSize;
+    }
+    if (base.imag !== undefined) {
+      const imVal = base.imag[lin];
+      return imVal === 0 ? base.data[lin] : mkc(base.data[lin], imVal);
+    }
+    return base.data[lin];
+  }
+  throw new Error("JIT index: unsupported base type for N-D indexing");
+}
+
 // ── Exported helpers object ─────────────────────────────────────────────
 
 export const jitHelpers = {
@@ -250,6 +316,11 @@ export const jitHelpers = {
     makeTensor(new FloatXArray(data), undefined, shape),
   mkTensorC: (reData: number[], imData: number[], shape: number[]) =>
     makeTensor(new FloatXArray(reData), new FloatXArray(imData), shape),
+
+  // Tensor indexing
+  idx1,
+  idx2,
+  idxN,
 
   // Scalar accessors (for complex tensor literal construction)
   re,

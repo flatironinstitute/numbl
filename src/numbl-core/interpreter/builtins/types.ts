@@ -58,6 +58,14 @@ export function buildIBuiltinHelpers(): Record<
     helpers[`ib_${name}`] = (...args: unknown[]) =>
       coerceBooleans(ib.apply(args as RuntimeValue[], 1));
   }
+  // Generic multi-output caller: ibcall(name, nargout, ...args)
+  helpers["ibcall"] = (name: unknown, nargout: unknown, ...args: unknown[]) => {
+    const ib = registry.get(name as string);
+    if (!ib) throw new Error(`JIT ibcall: unknown builtin ${name}`);
+    const result = ib.apply(args as RuntimeValue[], nargout as number);
+    if (Array.isArray(result)) return result.map(coerceBooleans);
+    return [coerceBooleans(result)];
+  };
   return helpers;
 }
 
