@@ -15,15 +15,15 @@ import type { JitType } from "../jit/jitTypes.js";
 
 // ── Type rule helpers ─────────────────────────────────────────────────
 
-/** Type rule for binary real functions that accept number or realTensor args. */
+/** Type rule for binary real functions that accept number/logical or realTensor args. */
 function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length !== 2) return null;
   const a = argTypes[0];
   const b = argTypes[1];
-  // Only accept number and realTensor
-  if (a.kind !== "number" && a.kind !== "realTensor") return null;
-  if (b.kind !== "number" && b.kind !== "realTensor") return null;
-  // If either is a tensor, result is tensor
+  if (a.kind !== "number" && a.kind !== "logical" && a.kind !== "realTensor")
+    return null;
+  if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "realTensor")
+    return null;
   if (a.kind === "realTensor" || b.kind === "realTensor")
     return [{ kind: "realTensor" }];
   return [{ kind: "number" }];
@@ -91,8 +91,10 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length === 2) {
     const a = argTypes[0];
     const b = argTypes[1];
-    if (a.kind !== "number" && a.kind !== "realTensor") return null;
-    if (b.kind !== "number" && b.kind !== "realTensor") return null;
+    if (a.kind !== "number" && a.kind !== "logical" && a.kind !== "realTensor")
+      return null;
+    if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "realTensor")
+      return null;
     if (a.kind === "realTensor" || b.kind === "realTensor")
       return [{ kind: "realTensor" }];
     return [
@@ -106,7 +108,8 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   }
   if (argTypes.length === 1) {
     const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "complex") return [a];
+    if (a.kind === "number" || a.kind === "logical" || a.kind === "complex")
+      return [a];
     if (a.kind === "realTensor") return [{ kind: "number" }];
     if (a.kind === "complexTensor") return [{ kind: "complex" }];
   }
@@ -115,7 +118,8 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
     const a = argTypes[0];
     if (a.kind === "realTensor") return [{ kind: "realTensor" }];
     if (a.kind === "complexTensor") return [{ kind: "complexTensor" }];
-    if (a.kind === "number") return [{ kind: "number" }];
+    if (a.kind === "number" || a.kind === "logical")
+      return [{ kind: "number" }];
   }
   return null;
 }

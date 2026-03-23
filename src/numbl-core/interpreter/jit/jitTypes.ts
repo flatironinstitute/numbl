@@ -8,6 +8,7 @@ import type { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 
 export type JitType =
   | { kind: "number"; nonneg?: boolean }
+  | { kind: "logical" }
   | { kind: "complex" }
   | { kind: "realTensor"; nonneg?: boolean }
   | { kind: "complexTensor" }
@@ -17,6 +18,8 @@ export function jitTypeKey(t: JitType): string {
   switch (t.kind) {
     case "number":
       return t.nonneg ? "number+" : "number";
+    case "logical":
+      return "logical";
     case "complex":
       return "complex";
     case "realTensor":
@@ -49,18 +52,32 @@ export function computeJitFnName(identity: string, funcName: string): string {
 
 /** Widen/unify two types at control-flow join points. */
 export function unifyJitTypes(a: JitType, b: JitType): JitType {
-  if (a.kind !== b.kind) return { kind: "unknown" };
-  if (a.kind === "number" && b.kind === "number") {
-    return { kind: "number", nonneg: a.nonneg && b.nonneg };
+  if (a.kind === b.kind) {
+    if (a.kind === "number" && b.kind === "number") {
+      return { kind: "number", nonneg: a.nonneg && b.nonneg };
+    }
+    if (a.kind === "realTensor" && b.kind === "realTensor") {
+      return { kind: "realTensor", nonneg: a.nonneg && b.nonneg };
+    }
+    return a; // same kind, no flags to merge
   }
-  if (a.kind === "realTensor" && b.kind === "realTensor") {
-    return { kind: "realTensor", nonneg: a.nonneg && b.nonneg };
+  // logical is a subtype of number
+  if (
+    (a.kind === "logical" && b.kind === "number") ||
+    (a.kind === "number" && b.kind === "logical")
+  ) {
+    return {
+      kind: "number",
+      nonneg:
+        (a as { nonneg?: boolean }).nonneg &&
+        (b as { nonneg?: boolean }).nonneg,
+    };
   }
-  return a; // same kind, no flags to merge
+  return { kind: "unknown" };
 }
 
 export function isScalarType(t: JitType): boolean {
-  return t.kind === "number" || t.kind === "complex";
+  return t.kind === "number" || t.kind === "logical" || t.kind === "complex";
 }
 
 export function isTensorType(t: JitType): boolean {
@@ -68,7 +85,7 @@ export function isTensorType(t: JitType): boolean {
 }
 
 export function isRealType(t: JitType): boolean {
-  return t.kind === "number" || t.kind === "realTensor";
+  return t.kind === "number" || t.kind === "logical" || t.kind === "realTensor";
 }
 
 // ── IR Nodes ────────────────────────────────────────────────────────────
