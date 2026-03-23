@@ -2,18 +2,14 @@
  * Unary math builtins: trig, hyperbolic, exp/log, rounding, abs, sqrt, sign.
  */
 
-import {
-  FloatXArray,
-  isRuntimeComplexNumber,
-  isRuntimeTensor,
-} from "../../runtime/types.js";
+import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
 import {
   registerIBuiltin,
-  mkc,
   makeTensor,
   unaryPreserveType,
   unaryAlwaysReal,
   applyUnaryElemwise,
+  applyUnaryElemwiseMaybeComplex,
   applyUnaryRealResult,
 } from "./types.js";
 
@@ -80,8 +76,19 @@ function cAcos(re: number, im: number): { re: number; im: number } {
   return { re: w5im, im: -w5re };
 }
 
-registerUnary("asin", Math.asin, cAsin);
-registerUnary("acos", Math.acos, cAcos);
+// asin/acos: use maybe-complex variant so out-of-domain real inputs (e.g. acos(2)) produce complex
+registerIBuiltin({
+  name: "asin",
+  typeRule: argTypes => unaryPreserveType(argTypes),
+  apply: args =>
+    applyUnaryElemwiseMaybeComplex(args[0], Math.asin, cAsin, "asin"),
+});
+registerIBuiltin({
+  name: "acos",
+  typeRule: argTypes => unaryPreserveType(argTypes),
+  apply: args =>
+    applyUnaryElemwiseMaybeComplex(args[0], Math.acos, cAcos, "acos"),
+});
 registerUnary("atan", Math.atan, (re, im) => {
   const w1re = 1 + im,
     w1im = -re;
@@ -150,10 +157,73 @@ function complexLog(re: number, im: number): { re: number; im: number } {
 
 registerUnary("log", Math.log, complexLog);
 
-registerUnary("log2", Math.log2, (re, im) => ({
+const complexLog2 = (re: number, im: number) => ({
   re: Math.log(Math.sqrt(re * re + im * im)) / Math.LN2,
   im: Math.atan2(im, re) / Math.LN2,
-}));
+});
+
+registerIBuiltin({
+  name: "log2",
+  typeRule: (argTypes, nargout) => {
+    if (argTypes.length !== 1) return null;
+    const a = argTypes[0];
+    if (nargout > 1) {
+      // [f, e] = log2(x) — frexp form, both outputs are real numbers
+      switch (a.kind) {
+        case "number":
+          return [{ kind: "number" }, { kind: "number" }];
+        case "realTensor":
+          return [{ kind: "realTensor" }, { kind: "realTensor" }];
+        default:
+          return null;
+      }
+    }
+    switch (a.kind) {
+      case "number":
+        return [{ kind: "number" }];
+      case "complex":
+        return [{ kind: "complex" }];
+      case "realTensor":
+        return [{ kind: "realTensor" }];
+      case "complexTensor":
+        return [{ kind: "complexTensor" }];
+      default:
+        return null;
+    }
+  },
+  apply: (args, nargout) => {
+    if (nargout > 1) {
+      // frexp: x = f * 2^e, 0.5 <= |f| < 1 (or f=0 if x=0)
+      function frexpScalar(x: number): { f: number; e: number } {
+        if (x === 0) return { f: 0, e: 0 };
+        if (!isFinite(x)) return { f: x, e: 0 };
+        const e = Math.floor(Math.log2(Math.abs(x))) + 1;
+        return { f: x / Math.pow(2, e), e };
+      }
+      const v = args[0];
+      if (typeof v === "number") {
+        const { f, e } = frexpScalar(v);
+        return [f, e];
+      }
+      if (isRuntimeTensor(v) && !v.imag) {
+        const n = v.data.length;
+        const fData = new FloatXArray(n);
+        const eData = new FloatXArray(n);
+        for (let i = 0; i < n; i++) {
+          const { f, e } = frexpScalar(v.data[i]);
+          fData[i] = f;
+          eData[i] = e;
+        }
+        return [
+          makeTensor(fData, undefined, v.shape.slice()),
+          makeTensor(eData, undefined, v.shape.slice()),
+        ];
+      }
+      throw new Error("log2: frexp form only supports real inputs");
+    }
+    return applyUnaryElemwise(args[0], Math.log2, complexLog2, "log2");
+  },
+});
 
 registerUnary("log10", Math.log10, (re, im) => ({
   re: Math.log(Math.sqrt(re * re + im * im)) / Math.LN10,
@@ -205,54 +275,13 @@ registerIBuiltin({
     }
   },
   apply: args => {
-    const v = args[0];
-
-    if (typeof v === "number") {
-      if (v >= 0) return Math.sqrt(v);
-      const r = complexSqrt(v, 0);
-      return mkc(r.re, r.im);
-    }
-
-    if (isRuntimeComplexNumber(v)) {
-      const r = complexSqrt(v.re, v.im);
-      return mkc(r.re, r.im);
-    }
-
-    if (isRuntimeTensor(v)) {
-      const n = v.data.length;
-      if (!v.imag) {
-        let hasNeg = false;
-        for (let i = 0; i < n; i++) {
-          if (v.data[i] < 0) {
-            hasNeg = true;
-            break;
-          }
-        }
-        if (!hasNeg) {
-          const out = new FloatXArray(n);
-          for (let i = 0; i < n; i++) out[i] = Math.sqrt(v.data[i]);
-          return makeTensor(out, undefined, v.shape.slice());
-        }
-        const outR = new FloatXArray(n);
-        const outI = new FloatXArray(n);
-        for (let i = 0; i < n; i++) {
-          const r = complexSqrt(v.data[i], 0);
-          outR[i] = r.re;
-          outI[i] = r.im;
-        }
-        return makeTensor(outR, outI, v.shape.slice());
-      }
-      const outR = new FloatXArray(n);
-      const outI = new FloatXArray(n);
-      for (let i = 0; i < n; i++) {
-        const r = complexSqrt(v.data[i], v.imag[i]);
-        outR[i] = r.re;
-        outI[i] = r.im;
-      }
-      return makeTensor(outR, outI, v.shape.slice());
-    }
-
-    throw new Error("sqrt: unsupported argument type");
+    // applyUnaryElemwiseMaybeComplex handles sparse densification automatically
+    return applyUnaryElemwiseMaybeComplex(
+      args[0],
+      x => (x >= 0 ? Math.sqrt(x) : NaN),
+      complexSqrt,
+      "sqrt"
+    );
   },
 });
 
@@ -297,5 +326,52 @@ function registerRounding(name: string, fn: (x: number) => number): void {
 
 registerRounding("floor", Math.floor);
 registerRounding("ceil", Math.ceil);
-registerRounding("round", Math.round);
 registerRounding("fix", Math.trunc);
+
+// MATLAB round: half away from zero (not JS half-toward-+inf)
+function matlabRound(x: number): number {
+  return Math.sign(x) * Math.round(Math.abs(x));
+}
+
+registerIBuiltin({
+  name: "round",
+  typeRule: argTypes => {
+    if (argTypes.length < 1 || argTypes.length > 2) return null;
+    const a = argTypes[0];
+    switch (a.kind) {
+      case "number":
+        return [{ kind: "number", nonneg: !!a.nonneg }];
+      case "complex":
+        return [{ kind: "complex" }];
+      case "realTensor":
+        return [{ kind: "realTensor", nonneg: !!a.nonneg }];
+      case "complexTensor":
+        return [{ kind: "complexTensor" }];
+      default:
+        return null;
+    }
+  },
+  apply: args => {
+    if (args.length === 1) {
+      return applyUnaryElemwise(
+        args[0],
+        matlabRound,
+        (re, im) => ({ re: matlabRound(re), im: matlabRound(im) }),
+        "round"
+      );
+    }
+    // Two-arg form: round(x, n) — round to n decimal places
+    const nArg = args[1];
+    const n = typeof nArg === "number" ? nArg : 0;
+    const scale = Math.pow(10, n);
+    function roundN(x: number): number {
+      return matlabRound(x * scale) / scale;
+    }
+    return applyUnaryElemwise(
+      args[0],
+      roundN,
+      (re, im) => ({ re: roundN(re), im: roundN(im) }),
+      "round"
+    );
+  },
+});
