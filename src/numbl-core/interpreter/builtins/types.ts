@@ -161,7 +161,7 @@ export function applyUnaryElemwiseMaybeComplex(
   name: string
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
-    return applyUnaryElemwiseMaybeComplex(v, realFn, complexFn, name);
+    throw new Error(`${name}: sparse matrices not yet supported`);
   if (typeof v === "number") {
     const r = realFn(v);
     if (!Number.isNaN(r)) return r;

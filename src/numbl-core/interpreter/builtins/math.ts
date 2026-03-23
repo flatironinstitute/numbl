@@ -155,7 +155,12 @@ function complexLog(re: number, im: number): { re: number; im: number } {
   return { re: Math.log(Math.sqrt(re * re + im * im)), im: Math.atan2(im, re) };
 }
 
-registerUnary("log", Math.log, complexLog);
+registerIBuiltin({
+  name: "log",
+  typeRule: argTypes => unaryPreserveType(argTypes),
+  apply: args =>
+    applyUnaryElemwiseMaybeComplex(args[0], Math.log, complexLog, "log"),
+});
 
 const complexLog2 = (re: number, im: number) => ({
   re: Math.log(Math.sqrt(re * re + im * im)) / Math.LN2,
@@ -221,14 +226,26 @@ registerIBuiltin({
       }
       throw new Error("log2: frexp form only supports real inputs");
     }
-    return applyUnaryElemwise(args[0], Math.log2, complexLog2, "log2");
+    return applyUnaryElemwiseMaybeComplex(
+      args[0],
+      Math.log2,
+      complexLog2,
+      "log2"
+    );
   },
 });
 
-registerUnary("log10", Math.log10, (re, im) => ({
+const complexLog10 = (re: number, im: number) => ({
   re: Math.log(Math.sqrt(re * re + im * im)) / Math.LN10,
   im: Math.atan2(im, re) / Math.LN10,
-}));
+});
+
+registerIBuiltin({
+  name: "log10",
+  typeRule: argTypes => unaryPreserveType(argTypes),
+  apply: args =>
+    applyUnaryElemwiseMaybeComplex(args[0], Math.log10, complexLog10, "log10"),
+});
 
 // ── Abs ─────────────────────────────────────────────────────────────────
 

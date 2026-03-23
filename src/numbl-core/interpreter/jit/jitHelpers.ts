@@ -238,7 +238,7 @@ export const jitHelpers = {
   tFloor: (a: RuntimeTensor) => tensorUnary(a, Math.floor),
   tCeil: (a: RuntimeTensor) => tensorUnary(a, Math.ceil),
   tRound: (a: RuntimeTensor) => tensorUnary(a, Math.round),
-  tFix: (a: RuntimeTensor) => tensorUnary(a, x => x | 0),
+  tFix: (a: RuntimeTensor) => tensorUnary(a, Math.trunc),
   tExp: (a: RuntimeTensor) => tensorUnary(a, Math.exp),
   tLog: (a: RuntimeTensor) => tensorUnary(a, Math.log),
   tLog2: (a: RuntimeTensor) => tensorUnary(a, Math.log2),
