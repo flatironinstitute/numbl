@@ -20,9 +20,9 @@ import {
   isTensorType,
   jitTypeKey,
   computeJitFnName,
-  SCALAR_MATH,
 } from "./jitTypes.js";
 import { generateJS } from "./jitCodegen.js";
+import { getIBuiltin } from "../builtins/index.js";
 
 // ── Type Environment ────────────────────────────────────────────────────
 
@@ -510,29 +510,12 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "FuncCall": {
-      // First try scalar math builtins
-      const entry = SCALAR_MATH[expr.name];
-      if (entry && expr.args.length === entry.arity) {
-        const args = expr.args.map(a => lowerExpr(ctx, a));
-        if (args.some(a => a === null)) return null;
-        const loweredArgs = args as JitExpr[];
+      // Try user function resolution (nested → local → workspace)
+      const userResult = lowerUserFuncCall(ctx, expr);
+      if (userResult) return userResult;
 
-        const resultType = entry.resultType(loweredArgs.map(a => a.jitType));
-        if (resultType && resultType.kind !== "unknown") {
-          if (loweredArgs.some(a => isTensorType(a.jitType)))
-            ctx._hasTensorOps = true;
-
-          return {
-            tag: "Call",
-            name: expr.name,
-            args: loweredArgs,
-            jitType: resultType,
-          };
-        }
-      }
-
-      // Try user function resolution
-      return lowerUserFuncCall(ctx, expr);
+      // Try IBuiltin resolution (same priority as builtins — last)
+      return lowerIBuiltinCall(ctx, expr);
     }
 
     default:
@@ -660,6 +643,34 @@ function resolveUserFunction(
 
   // Other target kinds (workspace, class, etc.) not supported yet
   return null;
+}
+
+// ── IBuiltin call resolution ────────────────────────────────────────────
+
+function lowerIBuiltinCall(
+  ctx: LowerCtx,
+  expr: Expr & { type: "FuncCall" }
+): JitExpr | null {
+  const ib = getIBuiltin(expr.name);
+  if (!ib) return null;
+
+  const args = expr.args.map(a => lowerExpr(ctx, a));
+  if (args.some(a => a === null)) return null;
+  const loweredArgs = args as JitExpr[];
+  const argJitTypes = loweredArgs.map(a => a.jitType);
+
+  const outputTypes = ib.typeRule(argJitTypes, 1);
+  if (!outputTypes || outputTypes.length === 0) return null;
+
+  // IBuiltin calls always go through $h helpers
+  ctx._hasTensorOps = true;
+
+  return {
+    tag: "Call",
+    name: expr.name,
+    args: loweredArgs,
+    jitType: outputTypes[0],
+  };
 }
 
 /** Get the return type of an already-generated function. */

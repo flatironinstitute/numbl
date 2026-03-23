@@ -377,79 +377,8 @@ function emitUserCall(
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
   const args = expr.args.map(a => emitExpr(a, ht));
-
-  // Check if any arg is a tensor -> use tensor helper
-  if (expr.args.some(a => isTensorType(a.jitType))) {
-    return emitTensorCall(expr.name, args);
-  }
-
-  // Scalar math
-  return emitScalarCall(expr.name, args);
-}
-
-function emitScalarCall(name: string, args: string[]): string {
-  switch (name) {
-    case "sin":
-      return `Math.sin(${args[0]})`;
-    case "cos":
-      return `Math.cos(${args[0]})`;
-    case "tan":
-      return `Math.tan(${args[0]})`;
-    case "asin":
-      return `Math.asin(${args[0]})`;
-    case "acos":
-      return `Math.acos(${args[0]})`;
-    case "atan":
-      return `Math.atan(${args[0]})`;
-    case "atan2":
-      return `Math.atan2(${args[0]}, ${args[1]})`;
-    case "sinh":
-      return `Math.sinh(${args[0]})`;
-    case "cosh":
-      return `Math.cosh(${args[0]})`;
-    case "tanh":
-      return `Math.tanh(${args[0]})`;
-    case "sqrt":
-      return `Math.sqrt(${args[0]})`;
-    case "abs":
-      return `Math.abs(${args[0]})`;
-    case "floor":
-      return `Math.floor(${args[0]})`;
-    case "ceil":
-      return `Math.ceil(${args[0]})`;
-    case "round":
-      return `Math.round(${args[0]})`;
-    case "fix":
-      return `(${args[0]} | 0)`;
-    case "exp":
-      return `Math.exp(${args[0]})`;
-    case "log":
-      return `Math.log(${args[0]})`;
-    case "log2":
-      return `Math.log2(${args[0]})`;
-    case "log10":
-      return `Math.log10(${args[0]})`;
-    case "sign":
-      return `Math.sign(${args[0]})`;
-    case "min":
-      return `Math.min(${args[0]}, ${args[1]})`;
-    case "max":
-      return `Math.max(${args[0]}, ${args[1]})`;
-    case "mod":
-      return `((${args[0]} % ${args[1]}) + ${args[1]}) % ${args[1]}`;
-    case "rem":
-      return `(${args[0]} % ${args[1]})`;
-    case "power":
-      return `Math.pow(${args[0]}, ${args[1]})`;
-    default:
-      return `${name}(${args.join(", ")})`; // fallback
-  }
-}
-
-function emitTensorCall(name: string, args: string[]): string {
-  // Map to helper names: tSin, tCos, etc.
-  const helperName = `t${name.charAt(0).toUpperCase()}${name.slice(1)}`;
-  return `$h.${helperName}(${args.join(", ")})`;
+  // All Call nodes are IBuiltins — route through $h.ib_<name>
+  return `$h.ib_${expr.name}(${args.join(", ")})`;
 }
 
 // ── Truthiness ──────────────────────────────────────────────────────────

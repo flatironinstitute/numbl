@@ -244,4 +244,9 @@ export const jitHelpers = {
   tLog2: (a: RuntimeTensor) => tensorUnary(a, Math.log2),
   tLog10: (a: RuntimeTensor) => tensorUnary(a, Math.log10),
   tSign: (a: RuntimeTensor) => tensorUnary(a, Math.sign),
-};
+
+  // IBuiltin apply functions (populated by buildJitHelpers)
+} as Record<string, unknown>;
+
+import { buildIBuiltinHelpers } from "../builtins/index.js";
+Object.assign(jitHelpers, buildIBuiltinHelpers());
