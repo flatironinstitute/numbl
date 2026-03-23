@@ -9,6 +9,7 @@ import "./arithmetic.js";
 import "./complex.js";
 import "./predicates.js";
 import "./utility.js";
+import "./introspection.js";
 
 export { getIBuiltin, buildIBuiltinHelpers } from "./types.js";
 export type { IBuiltin } from "./types.js";

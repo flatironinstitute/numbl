@@ -7,6 +7,8 @@ import {
   isRuntimeTensor,
   isRuntimeNumber,
   isRuntimeLogical,
+  isRuntimeChar,
+  isRuntimeString,
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { registerIBuiltin } from "./types.js";
@@ -53,7 +55,20 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
       b.data[0] === a.re &&
       (b.imag ? b.imag[0] === a.im : a.im === 0)
     );
+  // string/char comparison: extract text and compare
+  {
+    const aText = textValue(a);
+    const bText = textValue(b);
+    if (aText !== null && bText !== null) return aText === bText;
+  }
   return false;
+}
+
+/** Extract text from a RuntimeChar or RuntimeString, or null if neither. */
+function textValue(v: RuntimeValue): string | null {
+  if (isRuntimeChar(v)) return v.value;
+  if (isRuntimeString(v)) return v;
+  return null;
 }
 
 function tensorsEqual(a: RuntimeTensor, b: RuntimeTensor): boolean {

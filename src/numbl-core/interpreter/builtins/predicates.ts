@@ -22,7 +22,7 @@ function predicateType(argTypes: JitType[]): JitType[] | null {
       return [{ kind: "logical" }];
     case "realTensor":
     case "complexTensor":
-      return [{ kind: "realTensor", nonneg: true }];
+      return [{ kind: "realTensor", nonneg: true, isLogical: true }];
     default:
       return null;
   }

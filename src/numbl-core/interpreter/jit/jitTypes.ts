@@ -10,8 +10,10 @@ export type JitType =
   | { kind: "number"; nonneg?: boolean }
   | { kind: "logical" }
   | { kind: "complex" }
-  | { kind: "realTensor"; nonneg?: boolean }
+  | { kind: "realTensor"; nonneg?: boolean; isLogical?: boolean }
   | { kind: "complexTensor" }
+  | { kind: "string"; value?: string }
+  | { kind: "char"; value?: string }
   | { kind: "unknown" };
 
 export function jitTypeKey(t: JitType): string {
@@ -22,10 +24,17 @@ export function jitTypeKey(t: JitType): string {
       return "logical";
     case "complex":
       return "complex";
-    case "realTensor":
-      return t.nonneg ? "realTensor+" : "realTensor";
+    case "realTensor": {
+      let k = t.nonneg ? "realTensor+" : "realTensor";
+      if (t.isLogical) k += "L";
+      return k;
+    }
     case "complexTensor":
       return "complexTensor";
+    case "string":
+      return t.value != null ? `string:${t.value}` : "string";
+    case "char":
+      return t.value != null ? `char:${t.value}` : "char";
     case "unknown":
       return "unknown";
   }
@@ -57,7 +66,23 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
       return { kind: "number", nonneg: a.nonneg && b.nonneg };
     }
     if (a.kind === "realTensor" && b.kind === "realTensor") {
-      return { kind: "realTensor", nonneg: a.nonneg && b.nonneg };
+      return {
+        kind: "realTensor",
+        nonneg: a.nonneg && b.nonneg,
+        isLogical: a.isLogical && b.isLogical,
+      };
+    }
+    if (a.kind === "string" && b.kind === "string") {
+      return {
+        kind: "string",
+        value: a.value != null && a.value === b.value ? a.value : undefined,
+      };
+    }
+    if (a.kind === "char" && b.kind === "char") {
+      return {
+        kind: "char",
+        value: a.value != null && a.value === b.value ? a.value : undefined,
+      };
     }
     return a; // same kind, no flags to merge
   }
@@ -77,7 +102,13 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
 }
 
 export function isScalarType(t: JitType): boolean {
-  return t.kind === "number" || t.kind === "logical" || t.kind === "complex";
+  return (
+    t.kind === "number" ||
+    t.kind === "logical" ||
+    t.kind === "complex" ||
+    t.kind === "string" ||
+    t.kind === "char"
+  );
 }
 
 export function isTensorType(t: JitType): boolean {
@@ -102,6 +133,7 @@ export type JitExpr =
       jitType: JitType;
     }
   | { tag: "Unary"; op: UnaryOperation; operand: JitExpr; jitType: JitType }
+  | { tag: "StringLiteral"; value: string; isChar: boolean; jitType: JitType }
   | { tag: "Call"; name: string; args: JitExpr[]; jitType: JitType }
   | { tag: "UserCall"; jitName: string; args: JitExpr[]; jitType: JitType }
   | {

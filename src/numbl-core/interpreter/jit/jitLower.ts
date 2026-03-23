@@ -582,6 +582,22 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       return lowerIBuiltinCall(ctx, expr);
     }
 
+    case "Char":
+      return {
+        tag: "StringLiteral",
+        value: expr.value,
+        isChar: true,
+        jitType: { kind: "char", value: expr.value },
+      };
+
+    case "String":
+      return {
+        tag: "StringLiteral",
+        value: expr.value,
+        isChar: false,
+        jitType: { kind: "string", value: expr.value },
+      };
+
     default:
       return null; // unsupported expression
   }

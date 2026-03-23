@@ -243,6 +243,9 @@ function emitExpr(expr: JitExpr, ht: boolean): string {
     case "TensorLiteral":
       return emitTensorLiteral(expr, ht);
 
+    case "StringLiteral":
+      return JSON.stringify(expr.value);
+
     case "UserCall":
       return emitUserCall(expr, ht);
   }
@@ -438,6 +441,11 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
 // ── Truthiness ──────────────────────────────────────────────────────────
 
 function emitTruthiness(expr: JitExpr, ht: boolean): string {
+  const k = expr.jitType.kind;
+  // Strings are not valid in boolean context in MATLAB
+  if (k === "string" || k === "char") {
+    return `(${emitExpr(expr, ht)}) !== 0`;
+  }
   // For scalar types, just check !== 0
   if (isScalarType(expr.jitType)) {
     return `(${emitExpr(expr, ht)}) !== 0`;
