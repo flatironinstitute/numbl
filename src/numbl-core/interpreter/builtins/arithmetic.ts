@@ -10,12 +10,24 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { minMaxImpl } from "../../builtins/reduction/min-max.js";
-import {
-  registerIBuiltin,
-  binaryNumberOnly,
-  applyBinaryScalar,
-  makeTensor,
-} from "./types.js";
+import { registerIBuiltin, makeTensor } from "./types.js";
+import type { JitType } from "../jit/jitTypes.js";
+
+// ── Type rule helpers ─────────────────────────────────────────────────
+
+/** Type rule for binary real functions that accept number or realTensor args. */
+function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
+  if (argTypes.length !== 2) return null;
+  const a = argTypes[0];
+  const b = argTypes[1];
+  // Only accept number and realTensor
+  if (a.kind !== "number" && a.kind !== "realTensor") return null;
+  if (b.kind !== "number" && b.kind !== "realTensor") return null;
+  // If either is a tensor, result is tensor
+  if (a.kind === "realTensor" || b.kind === "realTensor")
+    return [{ kind: "realTensor" }];
+  return [{ kind: "number" }];
+}
 
 // ── Tensor-capable binary helper ─────────────────────────────────────────
 
@@ -68,33 +80,48 @@ function applyBinaryElemwise(
 
 registerIBuiltin({
   name: "atan2",
-  typeRule: argTypes => binaryNumberOnly(argTypes),
-  apply: args => applyBinaryScalar(args, Math.atan2, "atan2"),
+  typeRule: argTypes => binaryRealElemwise(argTypes),
+  apply: args => applyBinaryElemwise(args, Math.atan2, "atan2"),
 });
 
 // ── min ──────────────────────────────────────────────────────────────────
 
+function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
+  if (argTypes.length === 2) {
+    const a = argTypes[0];
+    const b = argTypes[1];
+    if (a.kind !== "number" && a.kind !== "realTensor") return null;
+    if (b.kind !== "number" && b.kind !== "realTensor") return null;
+    if (a.kind === "realTensor" || b.kind === "realTensor")
+      return [{ kind: "realTensor" }];
+    return [
+      {
+        kind: "number",
+        nonneg:
+          !!(a as { nonneg?: boolean }).nonneg &&
+          !!(b as { nonneg?: boolean }).nonneg,
+      },
+    ];
+  }
+  if (argTypes.length === 1) {
+    const a = argTypes[0];
+    if (a.kind === "number" || a.kind === "complex") return [a];
+    if (a.kind === "realTensor") return [{ kind: "number" }];
+    if (a.kind === "complexTensor") return [{ kind: "complex" }];
+  }
+  // 3-arg: min(X, [], dim) — second arg is always empty, third is dim
+  if (argTypes.length === 3) {
+    const a = argTypes[0];
+    if (a.kind === "realTensor") return [{ kind: "realTensor" }];
+    if (a.kind === "complexTensor") return [{ kind: "complexTensor" }];
+    if (a.kind === "number") return [{ kind: "number" }];
+  }
+  return null;
+}
+
 registerIBuiltin({
   name: "min",
-  typeRule: (argTypes, _nargout) => {
-    if (argTypes.length === 2) {
-      if (argTypes[0].kind !== "number" || argTypes[1].kind !== "number")
-        return null;
-      return [
-        {
-          kind: "number",
-          nonneg: !!argTypes[0].nonneg && !!argTypes[1].nonneg,
-        },
-      ];
-    }
-    if (argTypes.length === 1) {
-      const a = argTypes[0];
-      if (a.kind === "number" || a.kind === "complex") return [a];
-      if (a.kind === "realTensor") return [{ kind: "number" }];
-      if (a.kind === "complexTensor") return [{ kind: "complex" }];
-    }
-    return null;
-  },
+  typeRule: (argTypes, _nargout) => minMaxTypeRule(argTypes),
   apply: (args, nargout) =>
     minMaxImpl("min", args, nargout, Infinity, (a, b) => a < b, Math.min),
 });
@@ -103,25 +130,7 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "max",
-  typeRule: (argTypes, _nargout) => {
-    if (argTypes.length === 2) {
-      if (argTypes[0].kind !== "number" || argTypes[1].kind !== "number")
-        return null;
-      return [
-        {
-          kind: "number",
-          nonneg: !!argTypes[0].nonneg && !!argTypes[1].nonneg,
-        },
-      ];
-    }
-    if (argTypes.length === 1) {
-      const a = argTypes[0];
-      if (a.kind === "number" || a.kind === "complex") return [a];
-      if (a.kind === "realTensor") return [{ kind: "number" }];
-      if (a.kind === "complexTensor") return [{ kind: "complex" }];
-    }
-    return null;
-  },
+  typeRule: (argTypes, _nargout) => minMaxTypeRule(argTypes),
   apply: (args, nargout) =>
     minMaxImpl("max", args, nargout, -Infinity, (a, b) => a > b, Math.max),
 });
@@ -134,12 +143,7 @@ function modFn(a: number, b: number): number {
 
 registerIBuiltin({
   name: "mod",
-  typeRule: argTypes => {
-    if (argTypes.length !== 2) return null;
-    if (argTypes[0].kind !== "number" || argTypes[1].kind !== "number")
-      return null;
-    return [{ kind: "number", nonneg: !!argTypes[1].nonneg }];
-  },
+  typeRule: argTypes => binaryRealElemwise(argTypes),
   apply: args => applyBinaryElemwise(args, modFn, "mod"),
 });
 
@@ -147,7 +151,7 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "rem",
-  typeRule: argTypes => binaryNumberOnly(argTypes),
+  typeRule: argTypes => binaryRealElemwise(argTypes),
   apply: args => applyBinaryElemwise(args, (a, b) => a % b, "rem"),
 });
 
@@ -155,6 +159,6 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "power",
-  typeRule: argTypes => binaryNumberOnly(argTypes),
-  apply: args => applyBinaryScalar(args, Math.pow, "power"),
+  typeRule: argTypes => binaryRealElemwise(argTypes),
+  apply: args => applyBinaryElemwise(args, Math.pow, "power"),
 });

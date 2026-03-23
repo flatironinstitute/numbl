@@ -5,10 +5,8 @@
 import {
   FloatXArray,
   isRuntimeComplexNumber,
-  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import { sparseToDense } from "../../builtins/sparse-arithmetic.js";
 import {
   registerIBuiltin,
   mkc,
@@ -23,8 +21,7 @@ registerIBuiltin({
   name: "real",
   typeRule: argTypes => unaryAlwaysReal(argTypes),
   apply: args => {
-    let v = args[0];
-    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    const v = args[0];
     if (typeof v === "number") return v;
     if (isRuntimeComplexNumber(v)) return v.re;
     if (isRuntimeTensor(v)) {
@@ -42,8 +39,7 @@ registerIBuiltin({
   name: "imag",
   typeRule: argTypes => unaryAlwaysReal(argTypes),
   apply: args => {
-    let v = args[0];
-    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    const v = args[0];
     if (typeof v === "number") return 0;
     if (isRuntimeComplexNumber(v)) return v.im;
     if (isRuntimeTensor(v)) {
@@ -64,8 +60,7 @@ registerIBuiltin({
   name: "conj",
   typeRule: argTypes => unaryPreserveType(argTypes),
   apply: args => {
-    let v = args[0];
-    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    const v = args[0];
     if (typeof v === "number") return v;
     if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
     if (isRuntimeTensor(v)) {
@@ -87,8 +82,7 @@ registerIBuiltin({
   name: "angle",
   typeRule: argTypes => unaryAlwaysReal(argTypes),
   apply: args => {
-    let v = args[0];
-    if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
+    const v = args[0];
     if (typeof v === "number") return v >= 0 ? 0 : Math.PI;
     if (isRuntimeComplexNumber(v)) return Math.atan2(v.im, v.re);
     if (isRuntimeTensor(v)) {

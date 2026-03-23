@@ -24,6 +24,19 @@ import {
 import { generateJS } from "./jitCodegen.js";
 import { getIBuiltin } from "../builtins/index.js";
 
+// ── Known constants ─────────────────────────────────────────────────────
+
+const KNOWN_CONSTANTS: Record<string, number> = {
+  pi: Math.PI,
+  inf: Infinity,
+  Inf: Infinity,
+  nan: NaN,
+  NaN: NaN,
+  eps: 2.220446049250313e-16,
+  true: 1,
+  false: 0,
+};
+
 // ── Type Environment ────────────────────────────────────────────────────
 
 type TypeEnv = Map<string, JitType>;
@@ -471,6 +484,15 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       return { tag: "ImagLiteral", jitType: { kind: "complex" } };
 
     case "Ident": {
+      // Known numeric constants
+      const constVal = KNOWN_CONSTANTS[expr.name];
+      if (constVal !== undefined) {
+        return {
+          tag: "NumberLiteral",
+          value: constVal,
+          jitType: { kind: "number", nonneg: constVal >= 0 },
+        };
+      }
       const type = ctx.env.get(expr.name);
       if (!type) return null; // undefined variable
       return { tag: "Var", name: expr.name, jitType: type };
@@ -507,6 +529,39 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         ctx._hasTensorOps = true;
 
       return { tag: "Unary", op: expr.op, operand, jitType: resultType };
+    }
+
+    case "Tensor": {
+      const rows: JitExpr[][] = [];
+      let hasComplex = false;
+      for (const row of expr.rows) {
+        const loweredRow: JitExpr[] = [];
+        for (const elem of row) {
+          const lowered = lowerExpr(ctx, elem);
+          if (!lowered) return null;
+          // Only scalar elements supported in tensor literals
+          if (
+            lowered.jitType.kind !== "number" &&
+            lowered.jitType.kind !== "complex"
+          )
+            return null;
+          if (lowered.jitType.kind === "complex") hasComplex = true;
+          loweredRow.push(lowered);
+        }
+        rows.push(loweredRow);
+      }
+      const nRows = rows.length;
+      const nCols = rows[0]?.length ?? 0;
+      ctx._hasTensorOps = true;
+      return {
+        tag: "TensorLiteral",
+        rows,
+        nRows,
+        nCols,
+        jitType: hasComplex
+          ? { kind: "complexTensor" }
+          : { kind: "realTensor" },
+      };
     }
 
     case "FuncCall": {

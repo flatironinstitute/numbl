@@ -86,7 +86,14 @@ export type JitExpr =
     }
   | { tag: "Unary"; op: UnaryOperation; operand: JitExpr; jitType: JitType }
   | { tag: "Call"; name: string; args: JitExpr[]; jitType: JitType }
-  | { tag: "UserCall"; jitName: string; args: JitExpr[]; jitType: JitType };
+  | { tag: "UserCall"; jitName: string; args: JitExpr[]; jitType: JitType }
+  | {
+      tag: "TensorLiteral";
+      rows: JitExpr[][];
+      nRows: number;
+      nCols: number;
+      jitType: JitType;
+    };
 
 export type JitStmt =
   | { tag: "Assign"; name: string; expr: JitExpr }

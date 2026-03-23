@@ -229,6 +229,9 @@ function emitExpr(expr: JitExpr, ht: boolean): string {
     case "Call":
       return emitCall(expr, ht);
 
+    case "TensorLiteral":
+      return emitTensorLiteral(expr, ht);
+
     case "UserCall":
       return emitUserCall(expr, ht);
   }
@@ -373,6 +376,40 @@ function emitUserCall(
 ): string {
   const args = expr.args.map(a => emitExpr(a, ht));
   return `${expr.jitName}(${args.join(", ")})`;
+}
+
+function emitTensorLiteral(
+  expr: JitExpr & { tag: "TensorLiteral" },
+  ht: boolean
+): string {
+  const { rows, nRows, nCols } = expr;
+  // Column-major order: iterate columns first, then rows
+  const elems: string[] = [];
+  for (let c = 0; c < nCols; c++) {
+    for (let r = 0; r < nRows; r++) {
+      elems.push(emitExpr(rows[r][c], ht));
+    }
+  }
+  if (expr.jitType.kind === "complexTensor") {
+    // Extract real and imag parts
+    const reElems: string[] = [];
+    const imElems: string[] = [];
+    for (let c = 0; c < nCols; c++) {
+      for (let r = 0; r < nRows; r++) {
+        const e = rows[r][c];
+        if (e.jitType.kind === "complex") {
+          const s = emitExpr(e, ht);
+          reElems.push(`$h.re(${s})`);
+          imElems.push(`$h.im(${s})`);
+        } else {
+          reElems.push(emitExpr(e, ht));
+          imElems.push("0");
+        }
+      }
+    }
+    return `$h.mkTensorC([${reElems.join(", ")}], [${imElems.join(", ")}], [${nRows}, ${nCols}])`;
+  }
+  return `$h.mkTensor([${elems.join(", ")}], [${nRows}, ${nCols}])`;
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
