@@ -9,6 +9,7 @@ import {
   type JitType,
   type JitCacheEntry,
   computeJitCacheKey,
+  jitTypeKey,
 } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
@@ -30,7 +31,7 @@ function runtimeValueToJitType(value: unknown): JitType {
   if (
     typeof value === "object" &&
     value !== null &&
-    (value as { kind?: string }).kind === "complex"
+    (value as { kind?: string }).kind === "complex_number"
   ) {
     return { kind: "complex" };
   }
@@ -76,15 +77,15 @@ export function tryJitCall(
     return entry.fn(...args);
   }
 
-  // Attempt lowering
-  const lowered = lowerFunction(fn, argTypes, nargout);
+  // Attempt lowering (pass interpreter for user function resolution)
+  const lowered = lowerFunction(fn, argTypes, nargout, interp);
   if (!lowered) {
     fnWithCache._jitCache.set(cacheKey, null);
     return JIT_SKIP;
   }
 
-  // Generate JavaScript
-  const jsBody = generateJS(
+  // Generate JavaScript for the main function body
+  const mainBody = generateJS(
     lowered.body,
     fn.params,
     lowered.outputNames,
@@ -92,6 +93,14 @@ export function tryJitCall(
     lowered.localVars,
     lowered.hasTensorOps
   );
+
+  // Prepend generated helper function definitions (indented to match main body)
+  const parts: string[] = [];
+  for (const [, code] of lowered.generatedFns) {
+    parts.push(code.replace(/^/gm, "  "));
+  }
+  parts.push(mainBody);
+  const jsBody = parts.join("\n");
 
   // Create function
   let compiledFn: (...args: unknown[]) => unknown;
@@ -112,16 +121,24 @@ export function tryJitCall(
   }
 
   // Cache and log
-  const source = `function ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
+  const typeDesc = argTypes.map(jitTypeKey).join(", ");
+  const paramComments = fn.params
+    .map((p, i) => `${p}: ${jitTypeKey(argTypes[i])}`)
+    .join(", ");
+  const outputComments = lowered.outputNames
+    .map(
+      o =>
+        `${o}: ${lowered.outputType ? jitTypeKey(lowered.outputType) : "unknown"}`
+    )
+    .join(", ");
+  const fnComment = [
+    `// JIT: ${fn.name}(${paramComments}) -> (${outputComments})`,
+    `// from: ${interp.currentFile}`,
+  ].join("\n");
+  const source = `${fnComment}\nfunction ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
   fnWithCache._jitCache.set(cacheKey, { fn: compiledFn, source });
 
   // Fire logging callback
-  const typeDesc = argTypes
-    .map(t => {
-      if (t.kind === "number") return t.nonneg ? "number+" : "number";
-      return t.kind;
-    })
-    .join(", ");
   const description = `${fn.name}(${typeDesc}) -> nargout=${nargout}`;
   interp.onJitCompile?.(description, source);
 

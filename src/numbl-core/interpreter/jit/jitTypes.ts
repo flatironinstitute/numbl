@@ -35,6 +35,18 @@ export function computeJitCacheKey(
   return `${nargout}:${argTypes.map(jitTypeKey).join(":")}`;
 }
 
+/** Compute a unique JS function name for a JIT'd specialization. */
+export function computeJitFnName(identity: string, funcName: string): string {
+  // FNV-1a hash (same as lowering/specKey.ts hashForJsId)
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < identity.length; i++) {
+    hash ^= identity.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, "0");
+  return `$jit_${funcName}_${hex}`;
+}
+
 /** Widen/unify two types at control-flow join points. */
 export function unifyJitTypes(a: JitType, b: JitType): JitType {
   if (a.kind !== b.kind) return { kind: "unknown" };
@@ -63,6 +75,7 @@ export function isRealType(t: JitType): boolean {
 
 export type JitExpr =
   | { tag: "NumberLiteral"; value: number; jitType: JitType }
+  | { tag: "ImagLiteral"; jitType: JitType }
   | { tag: "Var"; name: string; jitType: JitType }
   | {
       tag: "Binary";
@@ -72,7 +85,8 @@ export type JitExpr =
       jitType: JitType;
     }
   | { tag: "Unary"; op: UnaryOperation; operand: JitExpr; jitType: JitType }
-  | { tag: "Call"; name: string; args: JitExpr[]; jitType: JitType };
+  | { tag: "Call"; name: string; args: JitExpr[]; jitType: JitType }
+  | { tag: "UserCall"; jitName: string; args: JitExpr[]; jitType: JitType };
 
 export type JitStmt =
   | { tag: "Assign"; name: string; expr: JitExpr }
@@ -135,8 +149,18 @@ export const SCALAR_MATH: Record<string, ScalarMathEntry> = {
   abs: { arity: 1, resultType: unaryNumberResult(() => true) },
   exp: { arity: 1, resultType: unaryNumberResult(() => true) },
 
-  // Preserves nonneg if input is nonneg
-  sqrt: { arity: 1, resultType: unaryNumberResult(nn => nn) },
+  // Requires nonneg input (negative → complex in MATLAB, can't JIT that)
+  sqrt: {
+    arity: 1,
+    resultType: argTypes => {
+      const a = argTypes[0];
+      if (a.kind === "number" && a.nonneg)
+        return { kind: "number", nonneg: true };
+      if (a.kind === "realTensor" && a.nonneg)
+        return { kind: "realTensor", nonneg: true };
+      return null; // can't JIT sqrt of possibly-negative values
+    },
+  },
   floor: { arity: 1, resultType: unaryNumberResult(nn => nn) },
   ceil: { arity: 1, resultType: unaryNumberResult(nn => nn) },
   round: { arity: 1, resultType: unaryNumberResult(nn => nn) },

@@ -2,18 +2,16 @@
 
 %!jit
 function y = cube(x)
-    y = x * x * x;
-end
-
-%!jit
-function y = sigmoid(x)
-    y = 1 / (1 + exp(-x));
+    y = x .* x .* x;
 end
 
 a = cube(2);
 assert(a == 8);
 
-b = sigmoid(0);
-assert(b == 1/2);
+b = cube(i);
+assert(b == -i);
+
+d = cube([i 2 3 4]);
+assert(all(d == [-i 8 27 64]));
 
 disp('SUCCESS');

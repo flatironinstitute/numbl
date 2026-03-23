@@ -8,6 +8,9 @@
 import type { Expr, Stmt } from "../../parser/types.js";
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { FunctionDef } from "../types.js";
+import type { Interpreter } from "../interpreter.js";
+import type { CallSite } from "../../runtime/runtimeHelpers.js";
+import { resolveFunction } from "../../functionResolve.js";
 import {
   type JitType,
   type JitExpr,
@@ -15,8 +18,11 @@ import {
   unifyJitTypes,
   isScalarType,
   isTensorType,
+  jitTypeKey,
+  computeJitFnName,
   SCALAR_MATH,
 } from "./jitTypes.js";
+import { generateJS } from "./jitCodegen.js";
 
 // ── Type Environment ────────────────────────────────────────────────────
 
@@ -71,73 +77,58 @@ function binaryResultType(
     return null;
   }
 
-  // Arithmetic
-  if (left.kind === "number" && right.kind === "number") {
-    return scalarArithResultType(op, left, right);
-  }
-
-  // Tensor + scalar or tensor + tensor (element-wise)
-  if (isTensorType(left) || isTensorType(right)) {
-    return tensorArithResultType(op, left, right);
-  }
-
-  return null;
-}
-
-function scalarArithResultType(
-  op: BinaryOperation,
-  left: JitType & { kind: "number" },
-  right: JitType & { kind: "number" }
-): JitType | null {
-  const bothNonneg = !!left.nonneg && !!right.nonneg;
+  // Only element-wise arithmetic ops
   switch (op) {
     case BinaryOperation.Add:
-      return { kind: "number", nonneg: bothNonneg };
     case BinaryOperation.Sub:
-      return { kind: "number" }; // subtraction can go negative
-    case BinaryOperation.Mul:
     case BinaryOperation.ElemMul:
-      return { kind: "number", nonneg: bothNonneg };
-    case BinaryOperation.Div:
     case BinaryOperation.ElemDiv:
-    case BinaryOperation.Pow:
-    case BinaryOperation.ElemPow:
-      return { kind: "number" };
+      break;
+    case BinaryOperation.Mul:
+      // Matrix multiply (both tensors) not supported
+      if (isTensorType(left) && isTensorType(right)) return null;
+      break;
+    case BinaryOperation.Div:
+      // tensor / tensor not supported (use ./ instead)
+      if (isTensorType(left) && isTensorType(right)) return null;
+      break;
     default:
       return null;
   }
-}
 
-function tensorArithResultType(
-  op: BinaryOperation,
-  left: JitType,
-  right: JitType
-): JitType | null {
-  // Matrix multiply: not supported
-  if (op === BinaryOperation.Mul) {
-    if (isTensorType(left) && isTensorType(right)) return null;
-    // scalar * tensor or tensor * scalar is OK (element-wise scale)
+  // Determine result type based on operand types
+  const anyComplex =
+    left.kind === "complex" ||
+    right.kind === "complex" ||
+    left.kind === "complexTensor" ||
+    right.kind === "complexTensor";
+  const anyTensor = isTensorType(left) || isTensorType(right);
+
+  if (anyTensor) {
+    return { kind: anyComplex ? "complexTensor" : "realTensor" };
   }
 
-  // Only element-wise ops on tensors
-  switch (op) {
-    case BinaryOperation.Add:
-    case BinaryOperation.Sub:
-    case BinaryOperation.Mul: // scalar * tensor case
-    case BinaryOperation.ElemMul:
-    case BinaryOperation.Div: // scalar / tensor or tensor / scalar
-    case BinaryOperation.ElemDiv:
-      break;
-    default:
-      return null; // Pow, LeftDiv, etc. not supported for tensors yet
+  if (anyComplex) {
+    return { kind: "complex" };
   }
 
-  // Determine if result is complex
-  if (left.kind === "complexTensor" || right.kind === "complexTensor")
-    return null; // complex tensor ops not supported yet
-  if (left.kind === "complex" || right.kind === "complex") return null;
+  // Both are numbers
+  if (left.kind === "number" && right.kind === "number") {
+    const bothNonneg = !!left.nonneg && !!right.nonneg;
+    switch (op) {
+      case BinaryOperation.Add:
+        return { kind: "number", nonneg: bothNonneg };
+      case BinaryOperation.Sub:
+        return { kind: "number" };
+      case BinaryOperation.Mul:
+      case BinaryOperation.ElemMul:
+        return { kind: "number", nonneg: bothNonneg };
+      default:
+        return { kind: "number" };
+    }
+  }
 
-  return { kind: "realTensor" };
+  return null;
 }
 
 function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
@@ -146,7 +137,9 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
       return operand;
     case UnaryOperation.Minus:
       if (operand.kind === "number") return { kind: "number" };
+      if (operand.kind === "complex") return { kind: "complex" };
       if (operand.kind === "realTensor") return { kind: "realTensor" };
+      if (operand.kind === "complexTensor") return { kind: "complexTensor" };
       return null;
     case UnaryOperation.Not:
       if (isScalarType(operand)) return { kind: "number", nonneg: true };
@@ -163,18 +156,24 @@ export interface LoweringResult {
   outputNames: string[];
   localVars: Set<string>;
   hasTensorOps: boolean;
+  /** Generated JS code for called user functions: jitName → code */
+  generatedFns: Map<string, string>;
+  /** Type of the first output variable after lowering */
+  outputType: JitType | null;
 }
 
 export function lowerFunction(
   fn: FunctionDef,
   argTypes: JitType[],
-  nargout: number
+  nargout: number,
+  interp?: Interpreter,
+  generatedFns?: Map<string, string>,
+  loweringInProgress?: Set<string>
 ): LoweringResult | null {
   if (argTypes.length !== fn.params.length) return null;
 
   const env: TypeEnv = new Map();
   const localVars = new Set<string>();
-  let hasTensorOps = false;
 
   // Initialize parameters
   for (let i = 0; i < fn.params.length; i++) {
@@ -190,13 +189,31 @@ export function lowerFunction(
     }
   }
 
-  const ctx: LowerCtx = { env, localVars, params: new Set(fn.params) };
+  const sharedGeneratedFns = generatedFns ?? new Map<string, string>();
+  const sharedInProgress = loweringInProgress ?? new Set<string>();
+
+  const ctx: LowerCtx = {
+    env,
+    localVars,
+    params: new Set(fn.params),
+    interp,
+    generatedFns: sharedGeneratedFns,
+    loweringInProgress: sharedInProgress,
+  };
   const body = lowerStmts(ctx, fn.body);
   if (!body) return null;
 
-  hasTensorOps = ctx._hasTensorOps ?? false;
+  const outputType =
+    outputNames.length > 0 ? (ctx.env.get(outputNames[0]) ?? null) : null;
 
-  return { body, outputNames, localVars: ctx.localVars, hasTensorOps };
+  return {
+    body,
+    outputNames,
+    localVars: ctx.localVars,
+    hasTensorOps: ctx._hasTensorOps ?? false,
+    generatedFns: sharedGeneratedFns,
+    outputType,
+  };
 }
 
 // ── Internal lowering context ───────────────────────────────────────────
@@ -206,6 +223,9 @@ interface LowerCtx {
   localVars: Set<string>;
   params: Set<string>;
   _hasTensorOps?: boolean;
+  interp?: Interpreter;
+  generatedFns: Map<string, string>;
+  loweringInProgress: Set<string>;
 }
 
 // ── Statement lowering ──────────────────────────────────────────────────
@@ -447,6 +467,9 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       };
     }
 
+    case "ImagUnit":
+      return { tag: "ImagLiteral", jitType: { kind: "complex" } };
+
     case "Ident": {
       const type = ctx.env.get(expr.name);
       if (!type) return null; // undefined variable
@@ -461,8 +484,13 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       const resultType = binaryResultType(expr.op, left.jitType, right.jitType);
       if (!resultType || resultType.kind === "unknown") return null;
 
-      // Track tensor ops
-      if (isTensorType(left.jitType) || isTensorType(right.jitType)) {
+      // Track ops that need $h helpers (tensor or complex)
+      if (
+        isTensorType(left.jitType) ||
+        isTensorType(right.jitType) ||
+        left.jitType.kind === "complex" ||
+        right.jitType.kind === "complex"
+      ) {
         ctx._hasTensorOps = true;
       }
 
@@ -475,36 +503,180 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       const resultType = unaryResultType(expr.op, operand.jitType);
       if (!resultType || resultType.kind === "unknown") return null;
 
-      if (isTensorType(operand.jitType)) ctx._hasTensorOps = true;
+      if (isTensorType(operand.jitType) || operand.jitType.kind === "complex")
+        ctx._hasTensorOps = true;
 
       return { tag: "Unary", op: expr.op, operand, jitType: resultType };
     }
 
     case "FuncCall": {
+      // First try scalar math builtins
       const entry = SCALAR_MATH[expr.name];
-      if (!entry) return null; // not a known math function
-      if (expr.args.length !== entry.arity) return null;
+      if (entry && expr.args.length === entry.arity) {
+        const args = expr.args.map(a => lowerExpr(ctx, a));
+        if (args.some(a => a === null)) return null;
+        const loweredArgs = args as JitExpr[];
 
-      const args = expr.args.map(a => lowerExpr(ctx, a));
-      if (args.some(a => a === null)) return null;
-      const loweredArgs = args as JitExpr[];
+        const resultType = entry.resultType(loweredArgs.map(a => a.jitType));
+        if (resultType && resultType.kind !== "unknown") {
+          if (loweredArgs.some(a => isTensorType(a.jitType)))
+            ctx._hasTensorOps = true;
 
-      const resultType = entry.resultType(loweredArgs.map(a => a.jitType));
-      if (!resultType || resultType.kind === "unknown") return null;
+          return {
+            tag: "Call",
+            name: expr.name,
+            args: loweredArgs,
+            jitType: resultType,
+          };
+        }
+      }
 
-      // Track tensor ops
-      if (loweredArgs.some(a => isTensorType(a.jitType)))
-        ctx._hasTensorOps = true;
-
-      return {
-        tag: "Call",
-        name: expr.name,
-        args: loweredArgs,
-        jitType: resultType,
-      };
+      // Try user function resolution
+      return lowerUserFuncCall(ctx, expr);
     }
 
     default:
       return null; // unsupported expression
   }
+}
+
+// ── User function call resolution ───────────────────────────────────────
+
+function lowerUserFuncCall(
+  ctx: LowerCtx,
+  expr: Expr & { type: "FuncCall" }
+): JitExpr | null {
+  const interp = ctx.interp;
+  if (!interp) return null;
+
+  // Lower arguments first to determine types
+  const args = expr.args.map(a => lowerExpr(ctx, a));
+  if (args.some(a => a === null)) return null;
+  const loweredArgs = args as JitExpr[];
+  const argJitTypes = loweredArgs.map(a => a.jitType);
+
+  // Resolve the function using the same mechanism as the interpreter
+  const calleeFn = resolveUserFunction(interp, expr.name);
+  if (!calleeFn) return null;
+
+  // Build identity string for unique naming
+  const calleeNargout = 1; // nested calls always expect 1 output
+  const typeKey = argJitTypes.map(jitTypeKey).join(":");
+  const identity = `${interp.currentFile}:${calleeFn.name}:${calleeNargout}:${typeKey}`;
+  const jitName = computeJitFnName(identity, calleeFn.name);
+
+  // Already generated? Reuse.
+  if (ctx.generatedFns.has(jitName)) {
+    // Need to determine return type - re-lower to get it (or cache it)
+    const returnType = getGeneratedFnReturnType(
+      calleeFn,
+      argJitTypes,
+      calleeNargout,
+      ctx
+    );
+    if (!returnType) return null;
+    return { tag: "UserCall", jitName, args: loweredArgs, jitType: returnType };
+  }
+
+  // Recursion guard
+  if (ctx.loweringInProgress.has(jitName)) return null;
+  ctx.loweringInProgress.add(jitName);
+
+  try {
+    // Recursively lower the callee
+    const calleeResult = lowerFunction(
+      calleeFn,
+      argJitTypes,
+      calleeNargout,
+      interp,
+      ctx.generatedFns,
+      ctx.loweringInProgress
+    );
+    if (!calleeResult) return null;
+
+    // Generate JS for the callee and wrap in a named function
+    const calleeJS = generateJS(
+      calleeResult.body,
+      calleeFn.params,
+      calleeResult.outputNames,
+      calleeNargout,
+      calleeResult.localVars,
+      calleeResult.hasTensorOps
+    );
+    const returnType = calleeResult.outputType ?? { kind: "number" as const };
+    const paramComments = calleeFn.params
+      .map((p, i) => `${p}: ${jitTypeKey(argJitTypes[i])}`)
+      .join(", ");
+    const outputComments = calleeResult.outputNames
+      .map(
+        o =>
+          `${o}: ${jitTypeKey(calleeResult.outputType ?? { kind: "number" })}`
+      )
+      .join(", ");
+    const comment = [
+      `// JIT: ${calleeFn.name}(${paramComments}) -> (${outputComments})`,
+      `// from: ${interp.currentFile}`,
+    ].join("\n");
+    const wrappedJS = `${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
+    ctx.generatedFns.set(jitName, wrappedJS);
+
+    // Propagate tensor ops flag
+    if (calleeResult.hasTensorOps) ctx._hasTensorOps = true;
+
+    return { tag: "UserCall", jitName, args: loweredArgs, jitType: returnType };
+  } finally {
+    ctx.loweringInProgress.delete(jitName);
+  }
+}
+
+/** Resolve a function name to a FunctionDef using the interpreter's resolution. */
+function resolveUserFunction(
+  interp: Interpreter,
+  name: string
+): FunctionDef | null {
+  // 1. Check nested functions (mirrors interpreter's callFunction priority)
+  const nested = interp.env.getNestedFunction(name);
+  if (nested) return nested.fn;
+
+  // 2. Check main local functions
+  const localFn = interp.mainLocalFunctions.get(name);
+  if (localFn) return localFn;
+
+  // 3. Resolve via function index (for workspace functions etc.)
+  const callSite: CallSite = {
+    file: interp.currentFile,
+    ...(interp.currentClassName ? { className: interp.currentClassName } : {}),
+    ...(interp.currentMethodName
+      ? { methodName: interp.currentMethodName }
+      : {}),
+  };
+  // Use empty argTypes for resolution - we just need the target identity
+  const target = resolveFunction(name, [], callSite, interp.functionIndex);
+  if (!target) return null;
+
+  if (target.kind === "localFunction" && target.source.from === "main") {
+    return interp.mainLocalFunctions.get(target.name) ?? null;
+  }
+
+  // Other target kinds (workspace, class, etc.) not supported yet
+  return null;
+}
+
+/** Get the return type of an already-generated function. */
+function getGeneratedFnReturnType(
+  fn: FunctionDef,
+  argTypes: JitType[],
+  nargout: number,
+  ctx: LowerCtx
+): JitType | null {
+  // Re-lower to determine the return type (this is cheap since the code is already generated)
+  const result = lowerFunction(
+    fn,
+    argTypes,
+    nargout,
+    ctx.interp,
+    ctx.generatedFns,
+    ctx.loweringInProgress
+  );
+  return result?.outputType ?? null;
 }

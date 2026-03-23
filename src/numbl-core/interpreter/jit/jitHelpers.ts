@@ -1,5 +1,5 @@
 /**
- * Runtime helpers for JIT-compiled tensor operations.
+ * Runtime helpers for JIT-compiled tensor and complex operations.
  * Passed as `$h` to generated functions.
  */
 
@@ -7,11 +7,10 @@ import {
   FloatXArray,
   type FloatXArrayType,
   type RuntimeTensor,
+  type RuntimeComplexNumber,
 } from "../../runtime/types.js";
 
-function makeTensor(data: FloatXArrayType, shape: number[]): RuntimeTensor {
-  return { kind: "tensor", data, shape, _rc: 1 };
-}
+// ── Type checks ─────────────────────────────────────────────────────────
 
 function isTensor(v: unknown): v is RuntimeTensor {
   return (
@@ -21,35 +20,167 @@ function isTensor(v: unknown): v is RuntimeTensor {
   );
 }
 
-// ── Element-wise binary operations ──────────────────────────────────────
-
-function tensorBinary(
-  a: unknown,
-  b: unknown,
-  op: (x: number, y: number) => number
-): RuntimeTensor {
-  if (isTensor(a) && isTensor(b)) {
-    const n = a.data.length;
-    const out = new FloatXArray(n);
-    for (let i = 0; i < n; i++) out[i] = op(a.data[i], b.data[i]);
-    return makeTensor(out, a.shape.slice());
-  }
-  if (isTensor(a) && typeof b === "number") {
-    const n = a.data.length;
-    const out = new FloatXArray(n);
-    for (let i = 0; i < n; i++) out[i] = op(a.data[i], b);
-    return makeTensor(out, a.shape.slice());
-  }
-  if (typeof a === "number" && isTensor(b)) {
-    const n = b.data.length;
-    const out = new FloatXArray(n);
-    for (let i = 0; i < n; i++) out[i] = op(a, b.data[i]);
-    return makeTensor(out, b.shape.slice());
-  }
-  throw new Error("JIT tensor binary: unexpected argument types");
+function isComplex(v: unknown): v is RuntimeComplexNumber {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    (v as RuntimeComplexNumber).kind === "complex_number"
+  );
 }
 
-// ── Element-wise unary math ─────────────────────────────────────────────
+function re(v: unknown): number {
+  if (typeof v === "number") return v;
+  return (v as RuntimeComplexNumber).re;
+}
+
+function im(v: unknown): number {
+  if (typeof v === "number") return 0;
+  return (v as RuntimeComplexNumber).im;
+}
+
+function mkc(r: number, i: number): number | RuntimeComplexNumber {
+  if (i === 0) return r;
+  return { kind: "complex_number", re: r, im: i };
+}
+
+// ── Tensor creation ─────────────────────────────────────────────────────
+
+function makeTensor(
+  data: FloatXArrayType,
+  imag: FloatXArrayType | undefined,
+  shape: number[]
+): RuntimeTensor {
+  const t: RuntimeTensor = { kind: "tensor", data, shape, _rc: 1 };
+  if (imag) t.imag = imag;
+  return t;
+}
+
+// ── Complex scalar operations ───────────────────────────────────────────
+
+function cAdd(a: unknown, b: unknown): number | RuntimeComplexNumber {
+  return mkc(re(a) + re(b), im(a) + im(b));
+}
+
+function cSub(a: unknown, b: unknown): number | RuntimeComplexNumber {
+  return mkc(re(a) - re(b), im(a) - im(b));
+}
+
+function cMul(a: unknown, b: unknown): number | RuntimeComplexNumber {
+  const ar = re(a),
+    ai = im(a),
+    br = re(b),
+    bi = im(b);
+  return mkc(ar * br - ai * bi, ar * bi + ai * br);
+}
+
+function cDiv(a: unknown, b: unknown): number | RuntimeComplexNumber {
+  const ar = re(a),
+    ai = im(a),
+    br = re(b),
+    bi = im(b);
+  const d = br * br + bi * bi;
+  return mkc((ar * br + ai * bi) / d, (ai * br - ar * bi) / d);
+}
+
+function cNeg(a: unknown): number | RuntimeComplexNumber {
+  return mkc(-re(a), -im(a));
+}
+
+// ── Element-wise tensor operations (real and complex) ───────────────────
+
+type ScalarVal = number | RuntimeComplexNumber;
+
+function tensorBinaryOp(
+  a: unknown,
+  b: unknown,
+  realOp: (x: number, y: number) => number,
+  complexOp: (a: ScalarVal, b: ScalarVal) => ScalarVal
+): RuntimeTensor | ScalarVal {
+  const aIsT = isTensor(a);
+  const bIsT = isTensor(b);
+
+  if (aIsT && bIsT) {
+    const at = a as RuntimeTensor;
+    const bt = b as RuntimeTensor;
+    const n = at.data.length;
+    const aHasImag = !!at.imag;
+    const bHasImag = !!bt.imag;
+
+    if (!aHasImag && !bHasImag) {
+      // Both real
+      const out = new FloatXArray(n);
+      for (let i = 0; i < n; i++) out[i] = realOp(at.data[i], bt.data[i]);
+      return makeTensor(out, undefined, at.shape.slice());
+    }
+    // At least one complex
+    const outR = new FloatXArray(n);
+    const outI = new FloatXArray(n);
+    for (let i = 0; i < n; i++) {
+      const av: ScalarVal = aHasImag
+        ? mkc(at.data[i], at.imag![i])
+        : at.data[i];
+      const bv: ScalarVal = bHasImag
+        ? mkc(bt.data[i], bt.imag![i])
+        : bt.data[i];
+      const r = complexOp(av, bv);
+      outR[i] = re(r);
+      outI[i] = im(r);
+    }
+    return makeTensor(outR, outI, at.shape.slice());
+  }
+
+  if (aIsT) {
+    const at = a as RuntimeTensor;
+    const n = at.data.length;
+    const aHasImag = !!at.imag;
+    const bIsC = isComplex(b);
+
+    if (!aHasImag && !bIsC) {
+      const bv = b as number;
+      const out = new FloatXArray(n);
+      for (let i = 0; i < n; i++) out[i] = realOp(at.data[i], bv);
+      return makeTensor(out, undefined, at.shape.slice());
+    }
+    const outR = new FloatXArray(n);
+    const outI = new FloatXArray(n);
+    for (let i = 0; i < n; i++) {
+      const av: ScalarVal = aHasImag
+        ? mkc(at.data[i], at.imag![i])
+        : at.data[i];
+      const r = complexOp(av, b as ScalarVal);
+      outR[i] = re(r);
+      outI[i] = im(r);
+    }
+    return makeTensor(outR, outI, at.shape.slice());
+  }
+
+  if (bIsT) {
+    const bt = b as RuntimeTensor;
+    const n = bt.data.length;
+    const bHasImag = !!bt.imag;
+    const aIsC = isComplex(a);
+
+    if (!bHasImag && !aIsC) {
+      const av = a as number;
+      const out = new FloatXArray(n);
+      for (let i = 0; i < n; i++) out[i] = realOp(av, bt.data[i]);
+      return makeTensor(out, undefined, bt.shape.slice());
+    }
+    const outR = new FloatXArray(n);
+    const outI = new FloatXArray(n);
+    for (let i = 0; i < n; i++) {
+      const bv: ScalarVal = bHasImag
+        ? mkc(bt.data[i], bt.imag![i])
+        : bt.data[i];
+      const r = complexOp(a as ScalarVal, bv);
+      outR[i] = re(r);
+      outI[i] = im(r);
+    }
+    return makeTensor(outR, outI, bt.shape.slice());
+  }
+
+  throw new Error("JIT tensor binary: unexpected argument types");
+}
 
 function tensorUnary(
   a: RuntimeTensor,
@@ -58,22 +189,41 @@ function tensorUnary(
   const n = a.data.length;
   const out = new FloatXArray(n);
   for (let i = 0; i < n; i++) out[i] = fn(a.data[i]);
-  return makeTensor(out, a.shape.slice());
+  return makeTensor(out, undefined, a.shape.slice());
+}
+
+function tensorNeg(a: RuntimeTensor): RuntimeTensor {
+  const n = a.data.length;
+  const outR = new FloatXArray(n);
+  for (let i = 0; i < n; i++) outR[i] = -a.data[i];
+  let outI: FloatXArrayType | undefined;
+  if (a.imag) {
+    outI = new FloatXArray(n);
+    for (let i = 0; i < n; i++) outI[i] = -a.imag[i];
+  }
+  return makeTensor(outR, outI, a.shape.slice());
 }
 
 // ── Exported helpers object ─────────────────────────────────────────────
 
 export const jitHelpers = {
-  // Binary ops
-  tAdd: (a: unknown, b: unknown) => tensorBinary(a, b, (x, y) => x + y),
-  tSub: (a: unknown, b: unknown) => tensorBinary(a, b, (x, y) => x - y),
-  tMul: (a: unknown, b: unknown) => tensorBinary(a, b, (x, y) => x * y),
-  tDiv: (a: unknown, b: unknown) => tensorBinary(a, b, (x, y) => x / y),
+  // Complex scalar ops
+  cAdd,
+  cSub,
+  cMul,
+  cDiv,
+  cNeg,
 
-  // Unary
-  tNeg: (a: RuntimeTensor) => tensorUnary(a, x => -x),
+  // Tensor binary ops (handles real + complex + mixed)
+  tAdd: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x + y, cAdd),
+  tSub: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x - y, cSub),
+  tMul: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x * y, cMul),
+  tDiv: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x / y, cDiv),
 
-  // Math
+  // Tensor unary
+  tNeg: tensorNeg,
+
+  // Tensor math (real only for now)
   tSin: (a: RuntimeTensor) => tensorUnary(a, Math.sin),
   tCos: (a: RuntimeTensor) => tensorUnary(a, Math.cos),
   tTan: (a: RuntimeTensor) => tensorUnary(a, Math.tan),

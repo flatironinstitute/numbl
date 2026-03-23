@@ -5,6 +5,7 @@
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import {
   type JitExpr,
+  type JitType,
   type JitStmt,
   isTensorType,
   isScalarType,
@@ -204,10 +205,17 @@ function emitStmt(
 
 // ── Expression emission ─────────────────────────────────────────────────
 
+function isComplexType(t: JitType): boolean {
+  return t.kind === "complex" || t.kind === "complexTensor";
+}
+
 function emitExpr(expr: JitExpr, ht: boolean): string {
   switch (expr.tag) {
     case "NumberLiteral":
       return String(expr.value);
+
+    case "ImagLiteral":
+      return `{kind:"complex_number",re:0,im:1}`;
 
     case "Var":
       return mangle(expr.name);
@@ -220,6 +228,9 @@ function emitExpr(expr: JitExpr, ht: boolean): string {
 
     case "Call":
       return emitCall(expr, ht);
+
+    case "UserCall":
+      return emitUserCall(expr, ht);
   }
 }
 
@@ -228,13 +239,20 @@ function emitBinary(expr: JitExpr & { tag: "Binary" }, ht: boolean): string {
   const right = emitExpr(expr.right, ht);
   const leftIsTensor = isTensorType(expr.left.jitType);
   const rightIsTensor = isTensorType(expr.right.jitType);
+  const anyComplex =
+    isComplexType(expr.left.jitType) || isComplexType(expr.right.jitType);
 
-  // Tensor operations use helpers
+  // Tensor operations use helpers (handles both real and complex tensors)
   if (leftIsTensor || rightIsTensor) {
     return emitTensorBinary(expr.op, left, right);
   }
 
-  // Scalar operations
+  // Complex scalar operations use helpers
+  if (anyComplex) {
+    return emitComplexBinary(expr.op, left, right);
+  }
+
+  // Real scalar operations
   switch (expr.op) {
     case BinaryOperation.Add:
       return `(${left} + ${right})`;
@@ -267,6 +285,27 @@ function emitBinary(expr: JitExpr & { tag: "Binary" }, ht: boolean): string {
       return `((${left}) !== 0 || (${right}) !== 0 ? 1 : 0)`;
     default:
       return `(${left} + ${right})`; // fallback
+  }
+}
+
+function emitComplexBinary(
+  op: BinaryOperation,
+  left: string,
+  right: string
+): string {
+  switch (op) {
+    case BinaryOperation.Add:
+      return `$h.cAdd(${left}, ${right})`;
+    case BinaryOperation.Sub:
+      return `$h.cSub(${left}, ${right})`;
+    case BinaryOperation.Mul:
+    case BinaryOperation.ElemMul:
+      return `$h.cMul(${left}, ${right})`;
+    case BinaryOperation.Div:
+    case BinaryOperation.ElemDiv:
+      return `$h.cDiv(${left}, ${right})`;
+    default:
+      return `$h.cAdd(${left}, ${right})`; // fallback
   }
 }
 
@@ -305,6 +344,17 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
     }
   }
 
+  if (isComplexType(expr.operand.jitType)) {
+    switch (expr.op) {
+      case UnaryOperation.Minus:
+        return `$h.cNeg(${operand})`;
+      case UnaryOperation.Plus:
+        return operand;
+      default:
+        return operand;
+    }
+  }
+
   switch (expr.op) {
     case UnaryOperation.Plus:
       return `(+${operand})`;
@@ -315,6 +365,14 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
     default:
       return operand;
   }
+}
+
+function emitUserCall(
+  expr: JitExpr & { tag: "UserCall" },
+  ht: boolean
+): string {
+  const args = expr.args.map(a => emitExpr(a, ht));
+  return `${expr.jitName}(${args.join(", ")})`;
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
