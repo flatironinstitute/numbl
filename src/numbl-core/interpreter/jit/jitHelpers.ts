@@ -245,6 +245,16 @@ export const jitHelpers = {
   tLog10: (a: RuntimeTensor) => tensorUnary(a, Math.log10),
   tSign: (a: RuntimeTensor) => tensorUnary(a, Math.sign),
 
+  // Tensor literal construction
+  mkTensor: (data: number[], shape: number[]) =>
+    makeTensor(new FloatXArray(data), undefined, shape),
+  mkTensorC: (reData: number[], imData: number[], shape: number[]) =>
+    makeTensor(new FloatXArray(reData), new FloatXArray(imData), shape),
+
+  // Scalar accessors (for complex tensor literal construction)
+  re,
+  im,
+
   // IBuiltin apply functions (populated by buildJitHelpers)
 } as Record<string, unknown>;
 

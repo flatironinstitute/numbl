@@ -8,6 +8,7 @@ import "./math.js";
 import "./arithmetic.js";
 import "./complex.js";
 import "./predicates.js";
+import "./utility.js";
 
 export { getIBuiltin, buildIBuiltinHelpers } from "./types.js";
 export type { IBuiltin } from "./types.js";

@@ -275,7 +275,6 @@ registerIBuiltin({
     }
   },
   apply: args => {
-    // applyUnaryElemwiseMaybeComplex handles sparse densification automatically
     return applyUnaryElemwiseMaybeComplex(
       args[0],
       x => (x >= 0 ? Math.sqrt(x) : NaN),

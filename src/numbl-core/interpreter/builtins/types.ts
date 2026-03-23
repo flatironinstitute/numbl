@@ -13,7 +13,6 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import { sparseToDense } from "../../builtins/sparse-arithmetic.js";
 import type { JitType } from "../jit/jitTypes.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
@@ -126,8 +125,6 @@ export function applyUnaryElemwise(
   complexFn: (re: number, im: number) => { re: number; im: number },
   name: string
 ): RuntimeValue {
-  if (isRuntimeSparseMatrix(v))
-    return applyUnaryElemwise(sparseToDense(v), realFn, complexFn, name);
   if (typeof v === "number") return realFn(v);
 
   if (isRuntimeComplexNumber(v)) {
@@ -164,12 +161,7 @@ export function applyUnaryElemwiseMaybeComplex(
   name: string
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
-    return applyUnaryElemwiseMaybeComplex(
-      sparseToDense(v),
-      realFn,
-      complexFn,
-      name
-    );
+    return applyUnaryElemwiseMaybeComplex(v, realFn, complexFn, name);
   if (typeof v === "number") {
     const r = realFn(v);
     if (!Number.isNaN(r)) return r;
@@ -222,8 +214,6 @@ export function applyUnaryRealResult(
   complexFn: (re: number, im: number) => number,
   name: string
 ): RuntimeValue {
-  if (isRuntimeSparseMatrix(v))
-    return applyUnaryRealResult(sparseToDense(v), realFn, complexFn, name);
   if (typeof v === "number") return realFn(v);
 
   if (isRuntimeComplexNumber(v)) {
