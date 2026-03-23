@@ -10,7 +10,7 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { minMaxImpl } from "../../builtins/reduction/min-max.js";
-import { registerIBuiltin, makeTensor } from "./types.js";
+import { registerIBuiltin, makeTensor, binaryMathJitEmit } from "./types.js";
 import type { JitType } from "../jit/jitTypes.js";
 
 // ── Type rule helpers ─────────────────────────────────────────────────
@@ -82,6 +82,7 @@ registerIBuiltin({
   name: "atan2",
   typeRule: argTypes => binaryRealElemwise(argTypes),
   apply: args => applyBinaryElemwise(args, Math.atan2, "atan2"),
+  jitEmit: binaryMathJitEmit("Math.atan2"),
 });
 
 // ── min ──────────────────────────────────────────────────────────────────
@@ -161,4 +162,5 @@ registerIBuiltin({
   name: "power",
   typeRule: argTypes => binaryRealElemwise(argTypes),
   apply: args => applyBinaryElemwise(args, Math.pow, "power"),
+  jitEmit: binaryMathJitEmit("Math.pow"),
 });

@@ -26,6 +26,8 @@ export interface IBuiltin {
     args: RuntimeValue[],
     nargout: number
   ) => RuntimeValue | RuntimeValue[];
+  /** Optional fast-path JS code emission for JIT. Return null to fall back to $h.ib_<name>. */
+  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null;
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -244,4 +246,40 @@ export function applyBinaryScalar(
     b = args[1];
   if (typeof a === "number" && typeof b === "number") return fn(a, b);
   throw new Error(`${name}: expected two scalar numbers`);
+}
+
+// ── JIT emit helpers ───────────────────────────────────────────────────
+
+/** Fast-path emitter for unary Math.* functions.
+ *  Emits Math.fn(x) for scalar numbers, $h.tHelper(x) for real tensors. */
+export function unaryMathJitEmit(
+  mathFn: string,
+  tensorHelper: string,
+  requireNonneg?: boolean
+): (argCode: string[], argTypes: JitType[]) => string | null {
+  return (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const a = argTypes[0];
+    if (a.kind === "number") {
+      if (requireNonneg && !a.nonneg) return null;
+      return `${mathFn}(${argCode[0]})`;
+    }
+    if (a.kind === "realTensor") {
+      if (requireNonneg && !a.nonneg) return null;
+      return `$h.${tensorHelper}(${argCode[0]})`;
+    }
+    return null;
+  };
+}
+
+/** Fast-path emitter for binary Math.* functions on two scalar numbers. */
+export function binaryMathJitEmit(
+  mathFn: string
+): (argCode: string[], argTypes: JitType[]) => string | null {
+  return (argCode, argTypes) => {
+    if (argTypes.length !== 2) return null;
+    if (argTypes[0].kind !== "number" || argTypes[1].kind !== "number")
+      return null;
+    return `${mathFn}(${argCode[0]}, ${argCode[1]})`;
+  };
 }

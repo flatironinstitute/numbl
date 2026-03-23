@@ -10,6 +10,7 @@ import {
   isTensorType,
   isScalarType,
 } from "./jitTypes.js";
+import { getIBuiltin } from "../builtins/types.js";
 
 // ── JS reserved words to mangle ─────────────────────────────────────────
 
@@ -88,6 +89,8 @@ function mangle(name: string): string {
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
+let _tmpCounter = 0;
+
 export function generateJS(
   body: JitStmt[],
   params: string[],
@@ -96,13 +99,14 @@ export function generateJS(
   localVars: Set<string>,
   hasTensorOps: boolean
 ): string {
+  _tmpCounter = 0;
   const lines: string[] = [];
   const indent = "  ";
 
   // Declare local variables (not params)
   const locals = [...localVars].filter(v => !params.includes(v));
   if (locals.length > 0) {
-    lines.push(`${indent}let ${locals.map(mangle).join(", ")};`);
+    lines.push(`${indent}var ${locals.map(mangle).join(", ")};`);
   }
 
   // Emit body
@@ -164,19 +168,26 @@ function emitStmt(
 
     case "For": {
       const v = mangle(stmt.varName);
+      const t = `$t${++_tmpCounter}`;
       const start = emitExpr(stmt.start, ht);
       const end = emitExpr(stmt.end, ht);
       const step = stmt.step ? emitExpr(stmt.step, ht) : "1";
-      // Handle both positive and negative steps
+      // Use a separate temp loop variable and assign the iterator inside
+      // the body. This is important for two reasons:
+      // 1. The iterator variable must retain the last value actually used
+      //    in the loop body (MATLAB semantics), not the incremented value
+      //    that failed the loop condition.
+      // 2. This pattern appears to be faster in V8 (reason unclear).
       if (stmt.step) {
         lines.push(
-          `${indent}for (${v} = ${start}; ${step} > 0 ? ${v} <= ${end} : ${v} >= ${end}; ${v} += ${step}) {`
+          `${indent}for (var ${t} = ${start}; ${step} > 0 ? ${t} <= ${end} : ${t} >= ${end}; ${t} += ${step}) {`
         );
       } else {
         lines.push(
-          `${indent}for (${v} = ${start}; ${v} <= ${end}; ${v} += 1) {`
+          `${indent}for (var ${t} = ${start}; ${t} <= ${end}; ${t} += 1) {`
         );
       }
+      lines.push(`${indent}  ${v} = ${t};`);
       emitStmts(lines, stmt.body, indent + "  ", ht);
       lines.push(`${indent}}`);
       break;
@@ -414,7 +425,13 @@ function emitTensorLiteral(
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
   const args = expr.args.map(a => emitExpr(a, ht));
-  // All Call nodes are IBuiltins — route through $h.ib_<name>
+  // Try fast-path emission if the IBuiltin provides one
+  const ib = getIBuiltin(expr.name);
+  if (ib?.jitEmit) {
+    const argTypes = expr.args.map(a => a.jitType);
+    const fast = ib.jitEmit(args, argTypes);
+    if (fast) return fast;
+  }
   return `$h.ib_${expr.name}(${args.join(", ")})`;
 }
 

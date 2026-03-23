@@ -11,38 +11,57 @@ import {
   applyUnaryElemwise,
   applyUnaryElemwiseMaybeComplex,
   applyUnaryRealResult,
+  unaryMathJitEmit,
 } from "./types.js";
+import type { JitType } from "../jit/jitTypes.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 
 function registerUnary(
   name: string,
   realFn: (x: number) => number,
-  complexFn: (re: number, im: number) => { re: number; im: number }
+  complexFn: (re: number, im: number) => { re: number; im: number },
+  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null
 ): void {
   registerIBuiltin({
     name,
     typeRule: argTypes => unaryPreserveType(argTypes),
     apply: args => applyUnaryElemwise(args[0], realFn, complexFn, name),
+    jitEmit,
   });
 }
 
 // ── Trig ────────────────────────────────────────────────────────────────
 
-registerUnary("sin", Math.sin, (re, im) => ({
-  re: Math.sin(re) * Math.cosh(im),
-  im: Math.cos(re) * Math.sinh(im),
-}));
+registerUnary(
+  "sin",
+  Math.sin,
+  (re, im) => ({
+    re: Math.sin(re) * Math.cosh(im),
+    im: Math.cos(re) * Math.sinh(im),
+  }),
+  unaryMathJitEmit("Math.sin", "tSin")
+);
 
-registerUnary("cos", Math.cos, (re, im) => ({
-  re: Math.cos(re) * Math.cosh(im),
-  im: -Math.sin(re) * Math.sinh(im),
-}));
+registerUnary(
+  "cos",
+  Math.cos,
+  (re, im) => ({
+    re: Math.cos(re) * Math.cosh(im),
+    im: -Math.sin(re) * Math.sinh(im),
+  }),
+  unaryMathJitEmit("Math.cos", "tCos")
+);
 
-registerUnary("tan", Math.tan, (re, im) => {
-  const denom = Math.cos(2 * re) + Math.cosh(2 * im);
-  return { re: Math.sin(2 * re) / denom, im: Math.sinh(2 * im) / denom };
-});
+registerUnary(
+  "tan",
+  Math.tan,
+  (re, im) => {
+    const denom = Math.cos(2 * re) + Math.cosh(2 * im);
+    return { re: Math.sin(2 * re) / denom, im: Math.sinh(2 * im) / denom };
+  },
+  unaryMathJitEmit("Math.tan", "tTan")
+);
 
 // Inverse trig (complex formulas from builtins/math.ts)
 
@@ -82,42 +101,64 @@ registerIBuiltin({
   typeRule: argTypes => unaryPreserveType(argTypes),
   apply: args =>
     applyUnaryElemwiseMaybeComplex(args[0], Math.asin, cAsin, "asin"),
+  jitEmit: unaryMathJitEmit("Math.asin", "tAsin"),
 });
 registerIBuiltin({
   name: "acos",
   typeRule: argTypes => unaryPreserveType(argTypes),
   apply: args =>
     applyUnaryElemwiseMaybeComplex(args[0], Math.acos, cAcos, "acos"),
+  jitEmit: unaryMathJitEmit("Math.acos", "tAcos"),
 });
-registerUnary("atan", Math.atan, (re, im) => {
-  const w1re = 1 + im,
-    w1im = -re;
-  const w2re = 1 - im,
-    w2im = re;
-  const denom = w2re * w2re + w2im * w2im;
-  const w3re = (w1re * w2re + w1im * w2im) / denom;
-  const w3im = (w1im * w2re - w1re * w2im) / denom;
-  const w4re = Math.log(Math.sqrt(w3re * w3re + w3im * w3im));
-  const w4im = Math.atan2(w3im, w3re);
-  return { re: -w4im / 2, im: w4re / 2 };
-});
+registerUnary(
+  "atan",
+  Math.atan,
+  (re, im) => {
+    const w1re = 1 + im,
+      w1im = -re;
+    const w2re = 1 - im,
+      w2im = re;
+    const denom = w2re * w2re + w2im * w2im;
+    const w3re = (w1re * w2re + w1im * w2im) / denom;
+    const w3im = (w1im * w2re - w1re * w2im) / denom;
+    const w4re = Math.log(Math.sqrt(w3re * w3re + w3im * w3im));
+    const w4im = Math.atan2(w3im, w3re);
+    return { re: -w4im / 2, im: w4re / 2 };
+  },
+  unaryMathJitEmit("Math.atan", "tAtan")
+);
 
 // ── Hyperbolic ──────────────────────────────────────────────────────────
 
-registerUnary("sinh", Math.sinh, (re, im) => ({
-  re: Math.sinh(re) * Math.cos(im),
-  im: Math.cosh(re) * Math.sin(im),
-}));
+registerUnary(
+  "sinh",
+  Math.sinh,
+  (re, im) => ({
+    re: Math.sinh(re) * Math.cos(im),
+    im: Math.cosh(re) * Math.sin(im),
+  }),
+  unaryMathJitEmit("Math.sinh", "tSinh")
+);
 
-registerUnary("cosh", Math.cosh, (re, im) => ({
-  re: Math.cosh(re) * Math.cos(im),
-  im: Math.sinh(re) * Math.sin(im),
-}));
+registerUnary(
+  "cosh",
+  Math.cosh,
+  (re, im) => ({
+    re: Math.cosh(re) * Math.cos(im),
+    im: Math.sinh(re) * Math.sin(im),
+  }),
+  unaryMathJitEmit("Math.cosh", "tCosh")
+);
 
-registerUnary("tanh", Math.tanh, (re, im) => {
-  const denom = Math.cosh(2 * re) + Math.cos(2 * im);
-  return { re: Math.sinh(2 * re) / denom, im: Math.sin(2 * im) / denom };
-});
+registerUnary(
+  "tanh",
+  Math.tanh,
+  (re, im) => {
+    const denom = Math.cosh(2 * re) + Math.cos(2 * im);
+    return { re: Math.sinh(2 * re) / denom, im: Math.sin(2 * im) / denom };
+  },
+  unaryMathJitEmit("Math.tanh", "tTanh")
+);
 
 // ── Exp / Log ───────────────────────────────────────────────────────────
 
@@ -149,6 +190,7 @@ registerIBuiltin({
       }),
       "exp"
     ),
+  jitEmit: unaryMathJitEmit("Math.exp", "tExp"),
 });
 
 function complexLog(re: number, im: number): { re: number; im: number } {
@@ -160,6 +202,7 @@ registerIBuiltin({
   typeRule: argTypes => unaryPreserveType(argTypes),
   apply: args =>
     applyUnaryElemwiseMaybeComplex(args[0], Math.log, complexLog, "log"),
+  jitEmit: unaryMathJitEmit("Math.log", "tLog", true),
 });
 
 const complexLog2 = (re: number, im: number) => ({
@@ -233,6 +276,7 @@ registerIBuiltin({
       "log2"
     );
   },
+  jitEmit: unaryMathJitEmit("Math.log2", "tLog2", true),
 });
 
 const complexLog10 = (re: number, im: number) => ({
@@ -245,6 +289,7 @@ registerIBuiltin({
   typeRule: argTypes => unaryPreserveType(argTypes),
   apply: args =>
     applyUnaryElemwiseMaybeComplex(args[0], Math.log10, complexLog10, "log10"),
+  jitEmit: unaryMathJitEmit("Math.log10", "tLog10", true),
 });
 
 // ── Abs ─────────────────────────────────────────────────────────────────
@@ -259,6 +304,7 @@ registerIBuiltin({
       (re, im) => Math.sqrt(re * re + im * im),
       "abs"
     ),
+  jitEmit: unaryMathJitEmit("Math.abs", "tAbs"),
 });
 
 // ── Sqrt ────────────────────────────────────────────────────────────────
@@ -299,19 +345,29 @@ registerIBuiltin({
       "sqrt"
     );
   },
+  jitEmit: unaryMathJitEmit("Math.sqrt", "tSqrt", true),
 });
 
 // ── Sign ────────────────────────────────────────────────────────────────
 
-registerUnary("sign", Math.sign, (re, im) => {
-  const mag = Math.sqrt(re * re + im * im);
-  if (mag === 0) return { re: 0, im: 0 };
-  return { re: re / mag, im: im / mag };
-});
+registerUnary(
+  "sign",
+  Math.sign,
+  (re, im) => {
+    const mag = Math.sqrt(re * re + im * im);
+    if (mag === 0) return { re: 0, im: 0 };
+    return { re: re / mag, im: im / mag };
+  },
+  unaryMathJitEmit("Math.sign", "tSign")
+);
 
 // ── Rounding ────────────────────────────────────────────────────────────
 
-function registerRounding(name: string, fn: (x: number) => number): void {
+function registerRounding(
+  name: string,
+  fn: (x: number) => number,
+  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null
+): void {
   registerIBuiltin({
     name,
     typeRule: argTypes => {
@@ -337,12 +393,13 @@ function registerRounding(name: string, fn: (x: number) => number): void {
         (re, im) => ({ re: fn(re), im: fn(im) }),
         name
       ),
+    jitEmit,
   });
 }
 
-registerRounding("floor", Math.floor);
-registerRounding("ceil", Math.ceil);
-registerRounding("fix", Math.trunc);
+registerRounding("floor", Math.floor, unaryMathJitEmit("Math.floor", "tFloor"));
+registerRounding("ceil", Math.ceil, unaryMathJitEmit("Math.ceil", "tCeil"));
+registerRounding("fix", Math.trunc, unaryMathJitEmit("Math.trunc", "tFix"));
 
 // MATLAB round: half away from zero (not JS half-toward-+inf)
 function matlabRound(x: number): number {
