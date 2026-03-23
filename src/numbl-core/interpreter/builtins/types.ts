@@ -99,9 +99,9 @@ export function unaryPreserveType(argTypes: JitType[]): JitType[] | null {
     case "complex":
       return [{ kind: "complex" }];
     case "realTensor":
-      return [{ kind: "realTensor" }];
+      return [{ kind: "realTensor", shape: a.shape }];
     case "complexTensor":
-      return [{ kind: "complexTensor" }];
+      return [{ kind: "complexTensor", shape: a.shape }];
     default:
       return null;
   }
@@ -118,9 +118,9 @@ export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
     case "complex":
       return [{ kind: "number", nonneg: true }];
     case "realTensor":
-      return [{ kind: "realTensor", nonneg: true }];
+      return [{ kind: "realTensor", shape: a.shape, nonneg: true }];
     case "complexTensor":
-      return [{ kind: "realTensor", nonneg: true }];
+      return [{ kind: "realTensor", shape: a.shape, nonneg: true }];
     default:
       return null;
   }

@@ -11,7 +11,7 @@ import {
 import type { RuntimeValue } from "../../runtime/types.js";
 import { minMaxImpl } from "../../builtins/reduction/min-max.js";
 import { registerIBuiltin, makeTensor, binaryMathJitEmit } from "./types.js";
-import type { JitType } from "../jit/jitTypes.js";
+import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
 
 // ── Type rule helpers ─────────────────────────────────────────────────
 
@@ -24,8 +24,13 @@ function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
     return null;
   if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "realTensor")
     return null;
-  if (a.kind === "realTensor" || b.kind === "realTensor")
-    return [{ kind: "realTensor" }];
+  if (a.kind === "realTensor" || b.kind === "realTensor") {
+    const shape =
+      a.kind === "realTensor"
+        ? a.shape
+        : (b as { kind: "realTensor"; shape: number[] }).shape;
+    return [{ kind: "realTensor", shape }];
+  }
   return [{ kind: "number" }];
 }
 
@@ -95,8 +100,13 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
       return null;
     if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "realTensor")
       return null;
-    if (a.kind === "realTensor" || b.kind === "realTensor")
-      return [{ kind: "realTensor" }];
+    if (a.kind === "realTensor" || b.kind === "realTensor") {
+      const shape =
+        a.kind === "realTensor"
+          ? a.shape
+          : (b as { kind: "realTensor"; shape: number[] }).shape;
+      return [{ kind: "realTensor", shape }];
+    }
     return [
       {
         kind: "number",
@@ -110,14 +120,24 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
     const a = argTypes[0];
     if (a.kind === "number" || a.kind === "logical" || a.kind === "complex")
       return [a];
-    if (a.kind === "realTensor") return [{ kind: "number" }];
-    if (a.kind === "complexTensor") return [{ kind: "complex" }];
+    if (a.kind === "realTensor") {
+      const result = shapeAfterReduction(a.shape);
+      if (result.scalar) return [{ kind: "number" }];
+      return [{ kind: "realTensor", shape: result.shape }];
+    }
+    if (a.kind === "complexTensor") {
+      const result = shapeAfterReduction(a.shape);
+      if (result.scalar) return [{ kind: "complex" }];
+      return [{ kind: "complexTensor", shape: result.shape }];
+    }
   }
   // 3-arg: min(X, [], dim) — second arg is always empty, third is dim
   if (argTypes.length === 3) {
     const a = argTypes[0];
-    if (a.kind === "realTensor") return [{ kind: "realTensor" }];
-    if (a.kind === "complexTensor") return [{ kind: "complexTensor" }];
+    if (a.kind === "realTensor")
+      return [{ kind: "realTensor", shape: a.shape }];
+    if (a.kind === "complexTensor")
+      return [{ kind: "complexTensor", shape: a.shape }];
     if (a.kind === "number" || a.kind === "logical")
       return [{ kind: "number" }];
   }
