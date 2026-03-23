@@ -138,8 +138,9 @@ export function tryJitCall(
   const source = `${fnComment}\nfunction ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
   fnWithCache._jitCache.set(cacheKey, { fn: compiledFn, source });
 
-  // Fire logging callback
-  const description = `${fn.name}(${typeDesc}) -> nargout=${nargout}`;
+  // Fire logging callback (include call-site line number)
+  const line = interp.rt.$line ?? 0;
+  const description = `${fn.name}@${line}(${typeDesc}) -> nargout=${nargout}`;
   interp.onJitCompile?.(description, source);
 
   // Execute

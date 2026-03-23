@@ -193,7 +193,8 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
-/** Parse %!jit annotations: each on the line above a for/function. */
+/** Parse %!jit annotations: each on the line above a function call site.
+ *  Returns patterns like "funcName@lineNumber" to match against JIT descriptions. */
 function parseJitAnnotations(source: string): string[] {
   const lines = source.split("\n");
   const patterns: string[] = [];
@@ -202,17 +203,11 @@ function parseJitAnnotations(source: string): string[] {
     for (let j = i + 1; j < lines.length; j++) {
       const trimmed = lines[j].trim();
       if (trimmed === "" || trimmed.startsWith("%")) continue;
-      const forMatch = trimmed.match(/^for\s+(\w+)/);
-      if (forMatch) {
-        patterns.push(`loop@${forMatch[1]}:${j + 1}`);
-        break;
-      }
-      const funcMatch =
-        trimmed.match(/^function\b[^=]*=\s*(\w+)/) ||
-        trimmed.match(/^function\s+(\w+)/);
-      if (funcMatch) {
-        patterns.push(funcMatch[1]);
-        break;
+      // Match function call: name(...) anywhere on the line
+      // Covers: a = foo(x), foo(x), [a,b] = foo(x)
+      const callMatch = trimmed.match(/\b(\w+)\s*\(/);
+      if (callMatch) {
+        patterns.push(`${callMatch[1]}@${j + 1}`); // 1-indexed line number
       }
       break;
     }
@@ -815,6 +810,11 @@ function finalizeDumpFile(
     "// " +
     "=".repeat(60) +
     "\n\n";
+  // For device files (/dev/stderr, /dev/stdout), just append — can't read back
+  if (dumpFile.startsWith("/dev/")) {
+    appendFileSync(dumpFile, header + jsCode + "\n");
+    return;
+  }
   // JIT pieces were appended during execution; prepend the main script
   let jitContent = "";
   try {
