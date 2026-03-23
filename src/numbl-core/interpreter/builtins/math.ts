@@ -173,9 +173,9 @@ registerIBuiltin({
       case "complex":
         return [{ kind: "complex" }];
       case "realTensor":
-        return [{ kind: "realTensor", nonneg: true }];
+        return [{ kind: "realTensor", shape: a.shape, nonneg: true }];
       case "complexTensor":
-        return [{ kind: "complexTensor" }];
+        return [{ kind: "complexTensor", shape: a.shape }];
       default:
         return null;
     }
@@ -221,7 +221,10 @@ registerIBuiltin({
         case "number":
           return [{ kind: "number" }, { kind: "number" }];
         case "realTensor":
-          return [{ kind: "realTensor" }, { kind: "realTensor" }];
+          return [
+            { kind: "realTensor", shape: a.shape },
+            { kind: "realTensor", shape: a.shape },
+          ];
         default:
           return null;
       }
@@ -232,9 +235,9 @@ registerIBuiltin({
       case "complex":
         return [{ kind: "complex" }];
       case "realTensor":
-        return [{ kind: "realTensor" }];
+        return [{ kind: "realTensor", shape: a.shape }];
       case "complexTensor":
-        return [{ kind: "complexTensor" }];
+        return [{ kind: "complexTensor", shape: a.shape }];
       default:
         return null;
     }
@@ -329,10 +332,11 @@ registerIBuiltin({
       case "complex":
         return [{ kind: "complex" }];
       case "realTensor":
-        if (a.nonneg) return [{ kind: "realTensor", nonneg: true }];
-        return [{ kind: "complexTensor" }];
+        if (a.nonneg)
+          return [{ kind: "realTensor", shape: a.shape, nonneg: true }];
+        return [{ kind: "complexTensor", shape: a.shape }];
       case "complexTensor":
-        return [{ kind: "complexTensor" }];
+        return [{ kind: "complexTensor", shape: a.shape }];
       default:
         return null;
     }
@@ -379,9 +383,9 @@ function registerRounding(
         case "complex":
           return [{ kind: "complex" }];
         case "realTensor":
-          return [{ kind: "realTensor", nonneg: !!a.nonneg }];
+          return [{ kind: "realTensor", shape: a.shape, nonneg: !!a.nonneg }];
         case "complexTensor":
-          return [{ kind: "complexTensor" }];
+          return [{ kind: "complexTensor", shape: a.shape }];
         default:
           return null;
       }
@@ -417,9 +421,9 @@ registerIBuiltin({
       case "complex":
         return [{ kind: "complex" }];
       case "realTensor":
-        return [{ kind: "realTensor", nonneg: !!a.nonneg }];
+        return [{ kind: "realTensor", shape: a.shape, nonneg: !!a.nonneg }];
       case "complexTensor":
-        return [{ kind: "complexTensor" }];
+        return [{ kind: "complexTensor", shape: a.shape }];
       default:
         return null;
     }

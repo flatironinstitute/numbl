@@ -369,7 +369,12 @@ registerIBuiltin({
   typeRule: (argTypes, _nargout) => {
     if (argTypes.length === 1) {
       if (argTypes[0].kind === "unknown") return null;
-      return [{ kind: "realTensor", nonneg: true }];
+      const a = argTypes[0];
+      const ndims =
+        a.kind === "realTensor" || a.kind === "complexTensor"
+          ? a.shape.length
+          : 2;
+      return [{ kind: "realTensor", shape: [1, ndims], nonneg: true }];
     }
     if (argTypes.length === 2) {
       if (argTypes[0].kind === "unknown") return null;

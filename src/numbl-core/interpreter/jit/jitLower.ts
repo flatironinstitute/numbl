@@ -126,7 +126,17 @@ function binaryResultType(
   const anyTensor = isTensorType(effLeft) || isTensorType(effRight);
 
   if (anyTensor) {
-    return { kind: anyComplex ? "complexTensor" : "realTensor" };
+    const leftShape = isTensorType(effLeft)
+      ? (effLeft as { shape: number[] }).shape
+      : undefined;
+    const rightShape = isTensorType(effRight)
+      ? (effRight as { shape: number[] }).shape
+      : undefined;
+    const shape = leftShape ?? rightShape ?? [-1, -1];
+    return {
+      kind: anyComplex ? "complexTensor" : "realTensor",
+      shape,
+    } as JitType;
   }
 
   if (anyComplex) {
@@ -160,8 +170,10 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
       if (operand.kind === "number") return { kind: "number" };
       if (operand.kind === "logical") return { kind: "number" };
       if (operand.kind === "complex") return { kind: "complex" };
-      if (operand.kind === "realTensor") return { kind: "realTensor" };
-      if (operand.kind === "complexTensor") return { kind: "complexTensor" };
+      if (operand.kind === "realTensor")
+        return { kind: "realTensor", shape: operand.shape };
+      if (operand.kind === "complexTensor")
+        return { kind: "complexTensor", shape: operand.shape };
       return null;
     case UnaryOperation.Not:
       if (isScalarType(operand)) return { kind: "logical" };
@@ -627,8 +639,8 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         nRows,
         nCols,
         jitType: hasComplex
-          ? { kind: "complexTensor" }
-          : { kind: "realTensor" },
+          ? { kind: "complexTensor", shape: [nRows, nCols] }
+          : { kind: "realTensor", shape: [nRows, nCols] },
       };
     }
 

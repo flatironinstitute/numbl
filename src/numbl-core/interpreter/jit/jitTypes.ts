@@ -10,8 +10,13 @@ export type JitType =
   | { kind: "number"; nonneg?: boolean }
   | { kind: "logical" }
   | { kind: "complex" }
-  | { kind: "realTensor"; nonneg?: boolean; isLogical?: boolean }
-  | { kind: "complexTensor" }
+  | {
+      kind: "realTensor";
+      shape: number[];
+      nonneg?: boolean;
+      isLogical?: boolean;
+    }
+  | { kind: "complexTensor"; shape: number[] }
   | { kind: "string"; value?: string }
   | { kind: "char"; value?: string }
   | { kind: "unknown" };
@@ -25,12 +30,16 @@ export function jitTypeKey(t: JitType): string {
     case "complex":
       return "complex";
     case "realTensor": {
-      let k = t.nonneg ? "realTensor+" : "realTensor";
+      const s = t.shape.map(d => (d === -1 ? "?" : d)).join("x");
+      let k = `realTensor[${s}]`;
+      if (t.nonneg) k += "+";
       if (t.isLogical) k += "L";
       return k;
     }
-    case "complexTensor":
-      return "complexTensor";
+    case "complexTensor": {
+      const s = t.shape.map(d => (d === -1 ? "?" : d)).join("x");
+      return `complexTensor[${s}]`;
+    }
     case "string":
       return t.value != null ? `string:${t.value}` : "string";
     case "char":
@@ -66,11 +75,31 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
       return { kind: "number", nonneg: a.nonneg && b.nonneg };
     }
     if (a.kind === "realTensor" && b.kind === "realTensor") {
+      const shapeA = a.shape,
+        shapeB = b.shape;
+      let shape: number[];
+      if (shapeA.length !== shapeB.length) {
+        shape = Array(Math.max(shapeA.length, shapeB.length)).fill(-1);
+      } else {
+        shape = shapeA.map((d, i) => (d === shapeB[i] ? d : -1));
+      }
       return {
         kind: "realTensor",
+        shape,
         nonneg: a.nonneg && b.nonneg,
         isLogical: a.isLogical && b.isLogical,
       };
+    }
+    if (a.kind === "complexTensor" && b.kind === "complexTensor") {
+      const shapeA = a.shape,
+        shapeB = b.shape;
+      let shape: number[];
+      if (shapeA.length !== shapeB.length) {
+        shape = Array(Math.max(shapeA.length, shapeB.length)).fill(-1);
+      } else {
+        shape = shapeA.map((d, i) => (d === shapeB[i] ? d : -1));
+      }
+      return { kind: "complexTensor", shape };
     }
     if (a.kind === "string" && b.kind === "string") {
       return {
@@ -117,6 +146,36 @@ export function isTensorType(t: JitType): boolean {
 
 export function isRealType(t: JitType): boolean {
   return t.kind === "number" || t.kind === "logical" || t.kind === "realTensor";
+}
+
+export function isVectorShape(shape: number[]): boolean {
+  if (shape.length === 1) return shape[0] !== -1;
+  if (shape.length === 2) {
+    return (
+      (shape[0] === 1 && shape[1] !== -1) || (shape[1] === 1 && shape[0] !== -1)
+    );
+  }
+  return false;
+}
+
+export function shapeAfterReduction(
+  shape: number[],
+  dim?: number
+): { scalar: true } | { scalar: false; shape: number[] } {
+  if (dim !== undefined) {
+    const result = [...shape];
+    result[dim - 1] = 1;
+    while (result.length > 2 && result[result.length - 1] === 1) result.pop();
+    if (result.every(d => d === 1)) return { scalar: true };
+    return { scalar: false, shape: result };
+  }
+  if (isVectorShape(shape)) return { scalar: true };
+  const firstNonSingleton = shape.findIndex(d => d !== 1);
+  if (firstNonSingleton === -1) return { scalar: true };
+  const result = [...shape];
+  result[firstNonSingleton] = 1;
+  while (result.length > 2 && result[result.length - 1] === 1) result.pop();
+  return { scalar: false, shape: result };
 }
 
 // ── IR Nodes ────────────────────────────────────────────────────────────

@@ -44,8 +44,9 @@ function runtimeValueToJitType(value: unknown): JitType {
     (value as { kind?: string }).kind === "tensor"
   ) {
     const t = value as RuntimeTensor;
-    if (t.imag) return { kind: "complexTensor" };
-    return { kind: "realTensor" };
+    const shape = t.shape.length >= 2 ? t.shape.slice() : [1, ...t.shape];
+    if (t.imag) return { kind: "complexTensor", shape };
+    return { kind: "realTensor", shape };
   }
   return { kind: "unknown" };
 }
