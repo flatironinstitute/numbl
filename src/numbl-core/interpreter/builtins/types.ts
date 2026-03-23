@@ -10,8 +10,10 @@ import type {
 import {
   FloatXArray,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
+import { sparseToDense } from "../../builtins/sparse-arithmetic.js";
 import type { JitType } from "../jit/jitTypes.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
@@ -20,8 +22,11 @@ export interface IBuiltin {
   name: string;
   /** Given input JIT types + nargout, return output JIT types or null if can't handle */
   typeRule: (argTypes: JitType[], nargout: number) => JitType[] | null;
-  /** Apply the function */
-  apply: (args: RuntimeValue[], nargout: number) => RuntimeValue;
+  /** Apply the function; may return multiple values as an array when nargout > 1 */
+  apply: (
+    args: RuntimeValue[],
+    nargout: number
+  ) => RuntimeValue | RuntimeValue[];
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -121,6 +126,8 @@ export function applyUnaryElemwise(
   complexFn: (re: number, im: number) => { re: number; im: number },
   name: string
 ): RuntimeValue {
+  if (isRuntimeSparseMatrix(v))
+    return applyUnaryElemwise(sparseToDense(v), realFn, complexFn, name);
   if (typeof v === "number") return realFn(v);
 
   if (isRuntimeComplexNumber(v)) {
@@ -148,6 +155,66 @@ export function applyUnaryElemwise(
   throw new Error(`${name}: unsupported argument type`);
 }
 
+/** Apply a unary element-wise function that may produce complex for out-of-domain real inputs.
+ * When realFn returns NaN, complexFn is used instead (e.g., acos(2), asin(2), log(-1)). */
+export function applyUnaryElemwiseMaybeComplex(
+  v: RuntimeValue,
+  realFn: (x: number) => number,
+  complexFn: (re: number, im: number) => { re: number; im: number },
+  name: string
+): RuntimeValue {
+  if (isRuntimeSparseMatrix(v))
+    return applyUnaryElemwiseMaybeComplex(
+      sparseToDense(v),
+      realFn,
+      complexFn,
+      name
+    );
+  if (typeof v === "number") {
+    const r = realFn(v);
+    if (!Number.isNaN(r)) return r;
+    const c = complexFn(v, 0);
+    return mkc(c.re, c.im);
+  }
+
+  if (isRuntimeComplexNumber(v)) {
+    const r = complexFn(v.re, v.im);
+    return mkc(r.re, r.im);
+  }
+
+  if (isRuntimeTensor(v)) {
+    const n = v.data.length;
+    if (!v.imag) {
+      const outR = new FloatXArray(n);
+      const outI = new FloatXArray(n);
+      let hasImag = false;
+      for (let i = 0; i < n; i++) {
+        const r = realFn(v.data[i]);
+        if (!Number.isNaN(r)) {
+          outR[i] = r;
+          outI[i] = 0;
+        } else {
+          const c = complexFn(v.data[i], 0);
+          outR[i] = c.re;
+          outI[i] = c.im;
+          if (c.im !== 0) hasImag = true;
+        }
+      }
+      return makeTensor(outR, hasImag ? outI : undefined, v.shape.slice());
+    }
+    const outR = new FloatXArray(n);
+    const outI = new FloatXArray(n);
+    for (let i = 0; i < n; i++) {
+      const r = complexFn(v.data[i], v.imag[i]);
+      outR[i] = r.re;
+      outI[i] = r.im;
+    }
+    return makeTensor(outR, outI, v.shape.slice());
+  }
+
+  throw new Error(`${name}: unsupported argument type`);
+}
+
 /** Apply a unary function that always returns real (e.g., abs) */
 export function applyUnaryRealResult(
   v: RuntimeValue,
@@ -155,6 +222,8 @@ export function applyUnaryRealResult(
   complexFn: (re: number, im: number) => number,
   name: string
 ): RuntimeValue {
+  if (isRuntimeSparseMatrix(v))
+    return applyUnaryRealResult(sparseToDense(v), realFn, complexFn, name);
   if (typeof v === "number") return realFn(v);
 
   if (isRuntimeComplexNumber(v)) {

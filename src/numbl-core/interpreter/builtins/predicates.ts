@@ -5,6 +5,7 @@
 import {
   FloatXArray,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import type { JitType } from "../jit/jitTypes.js";
@@ -26,6 +27,14 @@ function predicateType(argTypes: JitType[]): JitType[] | null {
   }
 }
 
+function makeBoolTensor(flags: boolean[], shape: number[]) {
+  const out = new FloatXArray(flags.length);
+  for (let i = 0; i < flags.length; i++) out[i] = flags[i] ? 1 : 0;
+  const t = makeTensor(out, undefined, shape);
+  t._isLogical = true;
+  return t;
+}
+
 // ── isnan ───────────────────────────────────────────────────────────────
 
 registerIBuiltin({
@@ -33,19 +42,19 @@ registerIBuiltin({
   typeRule: argTypes => predicateType(argTypes),
   apply: args => {
     const v = args[0];
-    if (typeof v === "number") return Number.isNaN(v) ? 1 : 0;
+    if (typeof v === "number") return Number.isNaN(v);
     if (isRuntimeComplexNumber(v))
-      return Number.isNaN(v.re) || Number.isNaN(v.im) ? 1 : 0;
+      return Number.isNaN(v.re) || Number.isNaN(v.im);
     if (isRuntimeTensor(v)) {
       const n = v.data.length;
-      const out = new FloatXArray(n);
+      const flags: boolean[] = new Array(n);
       if (!v.imag) {
-        for (let i = 0; i < n; i++) out[i] = Number.isNaN(v.data[i]) ? 1 : 0;
+        for (let i = 0; i < n; i++) flags[i] = Number.isNaN(v.data[i]);
       } else {
         for (let i = 0; i < n; i++)
-          out[i] = Number.isNaN(v.data[i]) || Number.isNaN(v.imag[i]) ? 1 : 0;
+          flags[i] = Number.isNaN(v.data[i]) || Number.isNaN(v.imag[i]);
       }
-      return makeTensor(out, undefined, v.shape.slice());
+      return makeBoolTensor(flags, v.shape.slice());
     }
     throw new Error("isnan: unsupported argument type");
   },
@@ -53,32 +62,27 @@ registerIBuiltin({
 
 // ── isinf ───────────────────────────────────────────────────────────────
 
+function isInfVal(x: number): boolean {
+  return !isFinite(x) && !Number.isNaN(x);
+}
+
 registerIBuiltin({
   name: "isinf",
   typeRule: argTypes => predicateType(argTypes),
   apply: args => {
     const v = args[0];
-    if (typeof v === "number") return !isFinite(v) && !Number.isNaN(v) ? 1 : 0;
-    if (isRuntimeComplexNumber(v))
-      return (!isFinite(v.re) && !Number.isNaN(v.re)) ||
-        (!isFinite(v.im) && !Number.isNaN(v.im))
-        ? 1
-        : 0;
+    if (typeof v === "number") return isInfVal(v);
+    if (isRuntimeComplexNumber(v)) return isInfVal(v.re) || isInfVal(v.im);
     if (isRuntimeTensor(v)) {
       const n = v.data.length;
-      const out = new FloatXArray(n);
+      const flags: boolean[] = new Array(n);
       if (!v.imag) {
-        for (let i = 0; i < n; i++)
-          out[i] = !isFinite(v.data[i]) && !Number.isNaN(v.data[i]) ? 1 : 0;
+        for (let i = 0; i < n; i++) flags[i] = isInfVal(v.data[i]);
       } else {
         for (let i = 0; i < n; i++)
-          out[i] =
-            (!isFinite(v.data[i]) && !Number.isNaN(v.data[i])) ||
-            (!isFinite(v.imag[i]) && !Number.isNaN(v.imag[i]))
-              ? 1
-              : 0;
+          flags[i] = isInfVal(v.data[i]) || isInfVal(v.imag[i]);
       }
-      return makeTensor(out, undefined, v.shape.slice());
+      return makeBoolTensor(flags, v.shape.slice());
     }
     throw new Error("isinf: unsupported argument type");
   },
@@ -91,19 +95,18 @@ registerIBuiltin({
   typeRule: argTypes => predicateType(argTypes),
   apply: args => {
     const v = args[0];
-    if (typeof v === "number") return isFinite(v) ? 1 : 0;
-    if (isRuntimeComplexNumber(v))
-      return isFinite(v.re) && isFinite(v.im) ? 1 : 0;
+    if (typeof v === "number") return isFinite(v);
+    if (isRuntimeComplexNumber(v)) return isFinite(v.re) && isFinite(v.im);
     if (isRuntimeTensor(v)) {
       const n = v.data.length;
-      const out = new FloatXArray(n);
+      const flags: boolean[] = new Array(n);
       if (!v.imag) {
-        for (let i = 0; i < n; i++) out[i] = isFinite(v.data[i]) ? 1 : 0;
+        for (let i = 0; i < n; i++) flags[i] = isFinite(v.data[i]);
       } else {
         for (let i = 0; i < n; i++)
-          out[i] = isFinite(v.data[i]) && isFinite(v.imag[i]) ? 1 : 0;
+          flags[i] = isFinite(v.data[i]) && isFinite(v.imag[i]);
       }
-      return makeTensor(out, undefined, v.shape.slice());
+      return makeBoolTensor(flags, v.shape.slice());
     }
     throw new Error("isfinite: unsupported argument type");
   },
@@ -115,15 +118,15 @@ registerIBuiltin({
   name: "isreal",
   typeRule: argTypes => {
     if (argTypes.length !== 1) return null;
-    // isreal always returns a scalar logical
     return [{ kind: "number", nonneg: true }];
   },
   apply: args => {
     const v = args[0];
-    if (typeof v === "number") return 1;
-    if (typeof v === "boolean") return 1;
-    if (isRuntimeComplexNumber(v)) return v.im === 0 ? 1 : 0;
-    if (isRuntimeTensor(v)) return !v.imag ? 1 : 0;
-    return 1; // strings, chars, etc. are real
+    if (typeof v === "number") return true;
+    if (typeof v === "boolean") return true;
+    if (isRuntimeComplexNumber(v)) return v.im === 0;
+    if (isRuntimeTensor(v)) return !v.imag;
+    if (isRuntimeSparseMatrix(v)) return !v.pi;
+    return true;
   },
 });

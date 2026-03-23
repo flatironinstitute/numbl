@@ -245,7 +245,7 @@ function minMaxElementwise(
 
 // ── Main min/max dispatch ──────────────────────────────────────────────
 
-function minMaxImpl(
+export function minMaxImpl(
   name: string,
   args: RuntimeValue[],
   nargout: number,
