@@ -68,7 +68,7 @@ function binaryResultType(
   left: JitType,
   right: JitType
 ): JitType | null {
-  // Comparisons always produce number(nonneg) for scalars
+  // Comparisons always produce logical for scalars
   if (
     op === BinaryOperation.Equal ||
     op === BinaryOperation.NotEqual ||
@@ -77,16 +77,14 @@ function binaryResultType(
     op === BinaryOperation.Greater ||
     op === BinaryOperation.GreaterEqual
   ) {
-    if (isScalarType(left) && isScalarType(right))
-      return { kind: "number", nonneg: true };
+    if (isScalarType(left) && isScalarType(right)) return { kind: "logical" };
     // Tensor comparison: not supported yet
     return null;
   }
 
-  // Logical: scalar only
+  // Logical operators: scalar only
   if (op === BinaryOperation.AndAnd || op === BinaryOperation.OrOr) {
-    if (isScalarType(left) && isScalarType(right))
-      return { kind: "number", nonneg: true };
+    if (isScalarType(left) && isScalarType(right)) return { kind: "logical" };
     return null;
   }
 
@@ -109,13 +107,19 @@ function binaryResultType(
       return null;
   }
 
+  // Coerce logical to number for arithmetic
+  const effLeft: JitType =
+    left.kind === "logical" ? { kind: "number", nonneg: true } : left;
+  const effRight: JitType =
+    right.kind === "logical" ? { kind: "number", nonneg: true } : right;
+
   // Determine result type based on operand types
   const anyComplex =
-    left.kind === "complex" ||
-    right.kind === "complex" ||
-    left.kind === "complexTensor" ||
-    right.kind === "complexTensor";
-  const anyTensor = isTensorType(left) || isTensorType(right);
+    effLeft.kind === "complex" ||
+    effRight.kind === "complex" ||
+    effLeft.kind === "complexTensor" ||
+    effRight.kind === "complexTensor";
+  const anyTensor = isTensorType(effLeft) || isTensorType(effRight);
 
   if (anyTensor) {
     return { kind: anyComplex ? "complexTensor" : "realTensor" };
@@ -125,9 +129,9 @@ function binaryResultType(
     return { kind: "complex" };
   }
 
-  // Both are numbers
-  if (left.kind === "number" && right.kind === "number") {
-    const bothNonneg = !!left.nonneg && !!right.nonneg;
+  // Both are numbers (or coerced from logical)
+  if (effLeft.kind === "number" && effRight.kind === "number") {
+    const bothNonneg = !!effLeft.nonneg && !!effRight.nonneg;
     switch (op) {
       case BinaryOperation.Add:
         return { kind: "number", nonneg: bothNonneg };
@@ -150,12 +154,13 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
       return operand;
     case UnaryOperation.Minus:
       if (operand.kind === "number") return { kind: "number" };
+      if (operand.kind === "logical") return { kind: "number" };
       if (operand.kind === "complex") return { kind: "complex" };
       if (operand.kind === "realTensor") return { kind: "realTensor" };
       if (operand.kind === "complexTensor") return { kind: "complexTensor" };
       return null;
     case UnaryOperation.Not:
-      if (isScalarType(operand)) return { kind: "number", nonneg: true };
+      if (isScalarType(operand)) return { kind: "logical" };
       return null;
     default:
       return null; // Transpose not supported
@@ -487,10 +492,13 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       // Known numeric constants
       const constVal = KNOWN_CONSTANTS[expr.name];
       if (constVal !== undefined) {
+        const isLogical = expr.name === "true" || expr.name === "false";
         return {
           tag: "NumberLiteral",
           value: constVal,
-          jitType: { kind: "number", nonneg: constVal >= 0 },
+          jitType: isLogical
+            ? { kind: "logical" }
+            : { kind: "number", nonneg: constVal >= 0 },
         };
       }
       const type = ctx.env.get(expr.name);
@@ -542,6 +550,7 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           // Only scalar elements supported in tensor literals
           if (
             lowered.jitType.kind !== "number" &&
+            lowered.jitType.kind !== "logical" &&
             lowered.jitType.kind !== "complex"
           )
             return null;

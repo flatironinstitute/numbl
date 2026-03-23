@@ -25,6 +25,9 @@ interface FunctionDefWithCache extends FunctionDef {
 // ── Type inference from runtime values ──────────────────────────────────
 
 function runtimeValueToJitType(value: unknown): JitType {
+  if (typeof value === "boolean") {
+    return { kind: "logical" };
+  }
   if (typeof value === "number") {
     return { kind: "number", nonneg: value >= 0 };
   }

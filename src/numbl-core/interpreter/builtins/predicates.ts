@@ -11,14 +11,15 @@ import {
 import type { JitType } from "../jit/jitTypes.js";
 import { registerIBuiltin, makeTensor } from "./types.js";
 
-/** Type rule for predicates: any numeric type → produces logical (number nonneg) */
+/** Type rule for predicates: any numeric type → produces logical */
 function predicateType(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length !== 1) return null;
   const a = argTypes[0];
   switch (a.kind) {
     case "number":
+    case "logical":
     case "complex":
-      return [{ kind: "number", nonneg: true }];
+      return [{ kind: "logical" }];
     case "realTensor":
     case "complexTensor":
       return [{ kind: "realTensor", nonneg: true }];
@@ -58,6 +59,12 @@ registerIBuiltin({
     }
     throw new Error("isnan: unsupported argument type");
   },
+  jitEmit: (args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "logical")
+      return `(Number.isNaN(${args[0]}) ? 1 : 0)`;
+    return null;
+  },
 });
 
 // ── isinf ───────────────────────────────────────────────────────────────
@@ -86,6 +93,12 @@ registerIBuiltin({
     }
     throw new Error("isinf: unsupported argument type");
   },
+  jitEmit: (args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "logical")
+      return `(Math.abs(${args[0]}) === Infinity ? 1 : 0)`;
+    return null;
+  },
 });
 
 // ── isfinite ────────────────────────────────────────────────────────────
@@ -110,6 +123,12 @@ registerIBuiltin({
     }
     throw new Error("isfinite: unsupported argument type");
   },
+  jitEmit: (args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "logical")
+      return `(isFinite(${args[0]}) ? 1 : 0)`;
+    return null;
+  },
 });
 
 // ── isreal ──────────────────────────────────────────────────────────────
@@ -118,7 +137,7 @@ registerIBuiltin({
   name: "isreal",
   typeRule: argTypes => {
     if (argTypes.length !== 1) return null;
-    return [{ kind: "number", nonneg: true }];
+    return [{ kind: "logical" }];
   },
   apply: args => {
     const v = args[0];
@@ -128,5 +147,11 @@ registerIBuiltin({
     if (isRuntimeTensor(v)) return !v.imag;
     if (isRuntimeSparseMatrix(v)) return !v.pi;
     return true;
+  },
+  jitEmit: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "logical") return "1";
+    if (k === "realTensor") return "1";
+    return null;
   },
 });

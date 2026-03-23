@@ -42,6 +42,12 @@ export function registerIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
 }
 
+/** Coerce JS booleans to 0/1 so JIT code never sees boolean values. */
+function coerceBooleans(v: unknown): unknown {
+  if (typeof v === "boolean") return v ? 1 : 0;
+  return v;
+}
+
 /** Build the ib_* entries for the jitHelpers object */
 export function buildIBuiltinHelpers(): Record<
   string,
@@ -50,7 +56,7 @@ export function buildIBuiltinHelpers(): Record<
   const helpers: Record<string, (...args: unknown[]) => unknown> = {};
   for (const [name, ib] of registry) {
     helpers[`ib_${name}`] = (...args: unknown[]) =>
-      ib.apply(args as RuntimeValue[], 1);
+      coerceBooleans(ib.apply(args as RuntimeValue[], 1));
   }
   return helpers;
 }
@@ -80,6 +86,7 @@ export function unaryPreserveType(argTypes: JitType[]): JitType[] | null {
   const a = argTypes[0];
   switch (a.kind) {
     case "number":
+    case "logical":
       return [{ kind: "number" }];
     case "complex":
       return [{ kind: "complex" }];
@@ -98,6 +105,7 @@ export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
   const a = argTypes[0];
   switch (a.kind) {
     case "number":
+    case "logical":
       return [{ kind: "number", nonneg: true }];
     case "complex":
       return [{ kind: "number", nonneg: true }];
@@ -113,7 +121,12 @@ export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
 /** Type rule requiring two scalar numbers */
 export function binaryNumberOnly(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length !== 2) return null;
-  if (argTypes[0].kind !== "number" || argTypes[1].kind !== "number")
+  const k0 = argTypes[0].kind,
+    k1 = argTypes[1].kind;
+  if (
+    (k0 !== "number" && k0 !== "logical") ||
+    (k1 !== "number" && k1 !== "logical")
+  )
     return null;
   return [{ kind: "number" }];
 }
@@ -260,8 +273,8 @@ export function unaryMathJitEmit(
   return (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const a = argTypes[0];
-    if (a.kind === "number") {
-      if (requireNonneg && !a.nonneg) return null;
+    if (a.kind === "number" || a.kind === "logical") {
+      if (requireNonneg && a.kind === "number" && !a.nonneg) return null;
       return `${mathFn}(${argCode[0]})`;
     }
     if (a.kind === "realTensor") {
@@ -278,7 +291,12 @@ export function binaryMathJitEmit(
 ): (argCode: string[], argTypes: JitType[]) => string | null {
   return (argCode, argTypes) => {
     if (argTypes.length !== 2) return null;
-    if (argTypes[0].kind !== "number" || argTypes[1].kind !== "number")
+    const k0 = argTypes[0].kind,
+      k1 = argTypes[1].kind;
+    if (
+      (k0 !== "number" && k0 !== "logical") ||
+      (k1 !== "number" && k1 !== "logical")
+    )
       return null;
     return `${mathFn}(${argCode[0]}, ${argCode[1]})`;
   };

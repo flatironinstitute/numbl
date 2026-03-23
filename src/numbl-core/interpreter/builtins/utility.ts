@@ -78,7 +78,7 @@ registerIBuiltin({
   name: "isequal",
   typeRule: argTypes => {
     if (argTypes.length < 2) return null;
-    return [{ kind: "number", nonneg: true }];
+    return [{ kind: "logical" }];
   },
   apply: args => {
     for (let i = 1; i < args.length; i++) {
