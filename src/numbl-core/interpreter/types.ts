@@ -144,41 +144,17 @@ export class Environment {
 
 // ── Function definition storage ──────────────────────────────────────────
 
-/** Cached JIT compilation result for a specific nargout. */
-export interface JitCacheEntry {
-  fn: (...args: number[]) => number | number[];
-  source: string;
-}
-
-/** Analysis result for loop-level JIT compilation. */
-export interface LoopAnalysis {
-  /** Variables read from outer scope (function params), sorted. */
-  readVars: string[];
-  /** Variables only written in body (declared as let), sorted. */
-  writeOnlyVars: string[];
-  /** All variables assigned in body (for writing back), sorted. */
-  allWriteVars: string[];
-  /** The loop variable name. */
-  loopVar: string;
-}
-
-/** Cached loop-level JIT compilation result. null = known non-compilable. */
-export interface LoopJitCacheEntry {
-  fn: (...args: number[]) => number[] | null;
-  source: string;
-  analysis: LoopAnalysis;
-  /** Set to true after onJitCompile has been fired for this entry. */
-  reported?: boolean;
-}
-
 export interface FunctionDef {
   name: string;
   params: string[];
   outputs: string[];
   body: Stmt[];
   argumentsBlocks?: ArgumentsBlock[];
-  /** JIT cache keyed by signature (nargout + arg types). null = known non-compilable. */
-  _jitCache?: Map<string, JitCacheEntry | null>;
+  /** JIT compilation cache: maps signature key -> compiled entry or null (failed). */
+  _jitCache?: Map<
+    string,
+    { fn: (...args: unknown[]) => unknown; source: string } | null
+  >;
 }
 
 /** Create a FunctionDef from an AST Function statement. */
