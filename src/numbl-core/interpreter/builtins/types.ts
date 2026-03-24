@@ -9,6 +9,7 @@ import type {
 } from "../../runtime/types.js";
 import {
   FloatXArray,
+  isRuntimeClassInstance,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeStruct,
@@ -83,6 +84,19 @@ export function inferJitType(value: unknown): JitType {
       fields[k] = inferJitType(v);
     }
     return { kind: "struct", fields };
+  }
+  if (isRuntimeClassInstance(value as RuntimeValue)) {
+    const ci = value as import("../../runtime/types.js").RuntimeClassInstance;
+    const fields: Record<string, JitType> = {};
+    for (const [k, v] of ci.fields) {
+      fields[k] = inferJitType(v);
+    }
+    return {
+      kind: "class_instance",
+      className: ci.className,
+      isHandleClass: ci.isHandleClass,
+      fields,
+    };
   }
   return { kind: "unknown" };
 }

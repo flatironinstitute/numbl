@@ -23,6 +23,12 @@ export type JitType =
   | { kind: "string"; value?: string }
   | { kind: "char"; value?: string }
   | { kind: "struct"; fields?: Record<string, JitType> }
+  | {
+      kind: "class_instance";
+      className: string;
+      isHandleClass?: boolean;
+      fields?: Record<string, JitType>;
+    }
   | { kind: "unknown" };
 
 // ── Sign helpers ─────────────────────────────────────────────────────────
@@ -98,6 +104,16 @@ export function jitTypeKey(t: JitType): string {
       const keys = Object.keys(t.fields).sort();
       const parts = keys.map(k => `${k}:${jitTypeKey(t.fields![k])}`);
       return `struct{${parts.join(",")}}`;
+    }
+    case "class_instance": {
+      let k = `class:${t.className}`;
+      if (t.isHandleClass) k += ":handle";
+      if (t.fields) {
+        const keys = Object.keys(t.fields).sort();
+        const parts = keys.map(f => `${f}:${jitTypeKey(t.fields![f])}`);
+        k += `{${parts.join(",")}}`;
+      }
+      return k;
     }
     case "unknown":
       return "unknown";
@@ -209,6 +225,32 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         }
       }
       return { kind: "struct", ...(hasFields ? { fields } : {}) };
+    }
+    if (a.kind === "class_instance" && b.kind === "class_instance") {
+      if (a.className !== b.className) return { kind: "unknown" };
+      const isHandleClass =
+        a.isHandleClass === b.isHandleClass ? a.isHandleClass : undefined;
+      if (!a.fields || !b.fields) {
+        return {
+          kind: "class_instance",
+          className: a.className,
+          ...(isHandleClass !== undefined ? { isHandleClass } : {}),
+        };
+      }
+      const fields: Record<string, JitType> = {};
+      let hasFields = false;
+      for (const key of Object.keys(a.fields)) {
+        if (key in b.fields) {
+          fields[key] = unifyJitTypes(a.fields[key], b.fields[key]);
+          hasFields = true;
+        }
+      }
+      return {
+        kind: "class_instance",
+        className: a.className,
+        ...(isHandleClass !== undefined ? { isHandleClass } : {}),
+        ...(hasFields ? { fields } : {}),
+      };
     }
     return a; // same kind, no flags to merge
   }

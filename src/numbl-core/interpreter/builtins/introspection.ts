@@ -545,6 +545,9 @@ registerIBuiltin({
       case "struct":
         outputTypes = [{ kind: "string", value: "struct" }];
         break;
+      case "class_instance":
+        outputTypes = [{ kind: "string", value: argTypes[0].className }];
+        break;
       case "unknown":
         return null;
       default:
@@ -589,6 +592,8 @@ registerIBuiltin({
         return '"char"';
       case "struct":
         return '"struct"';
+      case "class_instance":
+        return `"${(types[0] as Extract<JitType, { kind: "class_instance" }>).className}"`;
       default:
         return null;
     }
