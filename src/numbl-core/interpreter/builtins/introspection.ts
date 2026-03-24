@@ -143,7 +143,14 @@ registerIBuiltin({
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "1"
         : "0";
-    if (k === "number" || k === "complex" || k === "string" || k === "char")
+    if (
+      k === "number" ||
+      k === "complex" ||
+      k === "string" ||
+      k === "char" ||
+      k === "struct" ||
+      k === "class_instance"
+    )
       return "0";
     return null;
   },
