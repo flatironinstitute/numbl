@@ -11,6 +11,7 @@ import {
   FloatXArray,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
+  isRuntimeStruct,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { type JitType, signFromNumber, isNonneg } from "../jit/jitTypes.js";
@@ -74,6 +75,14 @@ export function inferJitType(value: unknown): JitType {
       shape,
       ...(t._isLogical ? { isLogical: true } : {}),
     };
+  }
+  if (isRuntimeStruct(value as RuntimeValue)) {
+    const s = value as import("../../runtime/types.js").RuntimeStruct;
+    const fields: Record<string, JitType> = {};
+    for (const [k, v] of s.fields) {
+      fields[k] = inferJitType(v);
+    }
+    return { kind: "struct", fields };
   }
   return { kind: "unknown" };
 }
