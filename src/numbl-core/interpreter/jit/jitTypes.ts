@@ -22,6 +22,7 @@ export type JitType =
     }
   | { kind: "string"; value?: string }
   | { kind: "char"; value?: string }
+  | { kind: "struct"; fields?: Record<string, JitType> }
   | { kind: "unknown" };
 
 // ── Sign helpers ─────────────────────────────────────────────────────────
@@ -92,6 +93,12 @@ export function jitTypeKey(t: JitType): string {
       return t.value != null ? `string:${t.value}` : "string";
     case "char":
       return t.value != null ? `char:${t.value}` : "char";
+    case "struct": {
+      if (!t.fields) return "struct";
+      const keys = Object.keys(t.fields).sort();
+      const parts = keys.map(k => `${k}:${jitTypeKey(t.fields![k])}`);
+      return `struct{${parts.join(",")}}`;
+    }
     case "unknown":
       return "unknown";
   }
@@ -189,6 +196,19 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
           ? { value: a.value }
           : {}),
       };
+    }
+    if (a.kind === "struct" && b.kind === "struct") {
+      if (!a.fields || !b.fields) return { kind: "struct" };
+      // Keep fields present in both, unify their types
+      const fields: Record<string, JitType> = {};
+      let hasFields = false;
+      for (const key of Object.keys(a.fields)) {
+        if (key in b.fields) {
+          fields[key] = unifyJitTypes(a.fields[key], b.fields[key]);
+          hasFields = true;
+        }
+      }
+      return { kind: "struct", ...(hasFields ? { fields } : {}) };
     }
     return a; // same kind, no flags to merge
   }

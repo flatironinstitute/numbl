@@ -75,7 +75,8 @@ registerIBuiltin({
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "0"
         : "1";
-    if (k === "boolean" || k === "string" || k === "char") return "0";
+    if (k === "boolean" || k === "string" || k === "char" || k === "struct")
+      return "0";
     return null;
   },
 });
@@ -104,7 +105,8 @@ registerIBuiltin({
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "0"
         : "1";
-    if (k === "boolean" || k === "string" || k === "char") return "0";
+    if (k === "boolean" || k === "string" || k === "char" || k === "struct")
+      return "0";
     return null;
   },
 });
@@ -201,7 +203,9 @@ registerIBuiltin({
     };
   },
   jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "0";
+    const k = types[0]?.kind;
+    if (k === "struct") return "1";
+    if (k !== "unknown") return "0";
     return null;
   },
 });
@@ -538,6 +542,9 @@ registerIBuiltin({
       case "char":
         outputTypes = [{ kind: "string", value: "char" }];
         break;
+      case "struct":
+        outputTypes = [{ kind: "string", value: "struct" }];
+        break;
       case "unknown":
         return null;
       default:
@@ -580,6 +587,8 @@ registerIBuiltin({
         return '"string"';
       case "char":
         return '"char"';
+      case "struct":
+        return '"struct"';
       default:
         return null;
     }
