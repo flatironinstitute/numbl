@@ -51,15 +51,22 @@ function getShape(v: RuntimeValue): number[] {
 
 registerIBuiltin({
   name: "isnumeric",
-  typeRule: anyToLogical,
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return true;
-    if (isRuntimeTensor(v) && !v._isLogical) return true;
-    if (isRuntimeComplexNumber(v)) return true;
-    if (isRuntimeSparseMatrix(v)) return true;
-    if (isRuntimeClassInstance(v) && v._builtinData !== undefined) return true;
-    return false;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return true;
+        if (isRuntimeTensor(v) && !v._isLogical) return true;
+        if (isRuntimeComplexNumber(v)) return true;
+        if (isRuntimeSparseMatrix(v)) return true;
+        if (isRuntimeClassInstance(v) && v._builtinData !== undefined)
+          return true;
+        return false;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -74,14 +81,20 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isfloat",
-  typeRule: anyToLogical,
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return true;
-    if (isRuntimeTensor(v) && !v._isLogical) return true;
-    if (isRuntimeComplexNumber(v)) return true;
-    if (isRuntimeSparseMatrix(v)) return true;
-    return false;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return true;
+        if (isRuntimeTensor(v) && !v._isLogical) return true;
+        if (isRuntimeComplexNumber(v)) return true;
+        if (isRuntimeSparseMatrix(v)) return true;
+        return false;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -96,19 +109,28 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isinteger",
-  typeRule: anyToLogical,
-  apply: () => false,
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return { outputTypes, apply: () => false };
+  },
   jitEmit: () => "0",
 });
 
 registerIBuiltin({
   name: "islogical",
-  typeRule: anyToLogical,
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "boolean") return true;
-    if (isRuntimeTensor(v) && v._isLogical === true) return true;
-    return false;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "boolean") return true;
+        if (isRuntimeTensor(v) && v._isLogical === true) return true;
+        return false;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -129,8 +151,11 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "ischar",
-  typeRule: anyToLogical,
-  apply: args => isRuntimeChar(args[0]),
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return { outputTypes, apply: args => isRuntimeChar(args[0]) };
+  },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "char") return "1";
@@ -141,8 +166,11 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isstring",
-  typeRule: anyToLogical,
-  apply: args => isRuntimeString(args[0]),
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return { outputTypes, apply: args => isRuntimeString(args[0]) };
+  },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "string") return "1";
@@ -153,8 +181,11 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "iscell",
-  typeRule: anyToLogical,
-  apply: args => isRuntimeCell(args[0]),
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return { outputTypes, apply: args => isRuntimeCell(args[0]) };
+  },
   jitEmit: (_args, types) => {
     if (types[0]?.kind !== "unknown") return "0";
     return null;
@@ -163,8 +194,14 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isstruct",
-  typeRule: anyToLogical,
-  apply: args => isRuntimeStruct(args[0]) || isRuntimeStructArray(args[0]),
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => isRuntimeStruct(args[0]) || isRuntimeStructArray(args[0]),
+    };
+  },
   jitEmit: (_args, types) => {
     if (types[0]?.kind !== "unknown") return "0";
     return null;
@@ -173,8 +210,11 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "issparse",
-  typeRule: anyToLogical,
-  apply: args => isRuntimeSparseMatrix(args[0]),
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return { outputTypes, apply: args => isRuntimeSparseMatrix(args[0]) };
+  },
   jitEmit: (_args, types) => {
     if (types[0]?.kind !== "unknown") return "0";
     return null;
@@ -185,13 +225,19 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isscalar",
-  typeRule: anyToLogical,
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return true;
-    if (isRuntimeComplexNumber(v)) return true;
-    if (isRuntimeTensor(v)) return v.data.length === 1;
-    return false;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number" || typeof v === "boolean") return true;
+        if (isRuntimeComplexNumber(v)) return true;
+        if (isRuntimeTensor(v)) return v.data.length === 1;
+        return false;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -203,18 +249,24 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isempty",
-  typeRule: anyToLogical,
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return false;
-    if (isRuntimeComplexNumber(v)) return false;
-    if (isRuntimeSparseMatrix(v)) return v.m === 0 || v.n === 0;
-    if (isRuntimeTensor(v)) return v.data.length === 0;
-    if (isRuntimeCell(v)) return v.data.length === 0;
-    if (isRuntimeChar(v)) return v.value.length === 0;
-    if (isRuntimeString(v)) return false;
-    if (isRuntimeStructArray(v)) return v.elements.length === 0;
-    return false;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number" || typeof v === "boolean") return false;
+        if (isRuntimeComplexNumber(v)) return false;
+        if (isRuntimeSparseMatrix(v)) return v.m === 0 || v.n === 0;
+        if (isRuntimeTensor(v)) return v.data.length === 0;
+        if (isRuntimeCell(v)) return v.data.length === 0;
+        if (isRuntimeChar(v)) return v.value.length === 0;
+        if (isRuntimeString(v)) return false;
+        if (isRuntimeStructArray(v)) return v.elements.length === 0;
+        return false;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -226,10 +278,16 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isvector",
-  typeRule: anyToLogical,
-  apply: args => {
-    const shape = getShape(args[0]);
-    return shape.filter(d => d > 1).length <= 1;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const shape = getShape(args[0]);
+        return shape.filter(d => d > 1).length <= 1;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -240,10 +298,16 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isrow",
-  typeRule: anyToLogical,
-  apply: args => {
-    const shape = getShape(args[0]);
-    return shape.length === 2 && shape[0] === 1;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const shape = getShape(args[0]);
+        return shape.length === 2 && shape[0] === 1;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -254,10 +318,16 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "iscolumn",
-  typeRule: anyToLogical,
-  apply: args => {
-    const shape = getShape(args[0]);
-    return shape.length === 2 && shape[1] === 1;
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const shape = getShape(args[0]);
+        return shape.length === 2 && shape[1] === 1;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -268,8 +338,14 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "ismatrix",
-  typeRule: anyToLogical,
-  apply: args => getShape(args[0]).length <= 2,
+  resolve: argTypes => {
+    const outputTypes = anyToLogical(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => getShape(args[0]).length <= 2,
+    };
+  },
   jitEmit: (_args, types) => {
     // JIT only handles ≤2D, so always true for known types
     if (types[0]?.kind !== "unknown") return "1";
@@ -281,22 +357,24 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "numel",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     if (argTypes[0].kind === "unknown") return null;
-    return [{ kind: "number", nonneg: true }];
-  },
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return 1;
-    if (isRuntimeComplexNumber(v)) return 1;
-    if (isRuntimeTensor(v)) return v.data.length;
-    if (isRuntimeSparseMatrix(v)) return v.m * v.n;
-    if (isRuntimeCell(v)) return v.data.length;
-    if (isRuntimeChar(v)) return v.value.length;
-    if (isRuntimeString(v)) return 1;
-    if (isRuntimeStructArray(v)) return v.elements.length;
-    return 1;
+    return {
+      outputTypes: [{ kind: "number", nonneg: true }],
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number" || typeof v === "boolean") return 1;
+        if (isRuntimeComplexNumber(v)) return 1;
+        if (isRuntimeTensor(v)) return v.data.length;
+        if (isRuntimeSparseMatrix(v)) return v.m * v.n;
+        if (isRuntimeCell(v)) return v.data.length;
+        if (isRuntimeChar(v)) return v.value.length;
+        if (isRuntimeString(v)) return 1;
+        if (isRuntimeStructArray(v)) return v.elements.length;
+        return 1;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -308,27 +386,30 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "length",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     if (argTypes[0].kind === "unknown") return null;
-    return [{ kind: "number", nonneg: true }];
-  },
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return 1;
-    if (isRuntimeComplexNumber(v)) return 1;
-    if (isRuntimeTensor(v))
-      return v.data.length === 0 ? 0 : Math.max(...v.shape);
-    if (isRuntimeSparseMatrix(v)) return Math.max(v.m, v.n);
-    if (isRuntimeCell(v)) return v.data.length === 0 ? 0 : Math.max(...v.shape);
-    if (isRuntimeChar(v)) {
-      const s =
-        v.shape ?? (v.value.length === 0 ? [0, 0] : [1, v.value.length]);
-      return s.length === 0 ? 0 : Math.max(...s);
-    }
-    if (isRuntimeString(v)) return 1;
-    if (isRuntimeStructArray(v)) return v.elements.length;
-    return 1;
+    return {
+      outputTypes: [{ kind: "number", nonneg: true }],
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number" || typeof v === "boolean") return 1;
+        if (isRuntimeComplexNumber(v)) return 1;
+        if (isRuntimeTensor(v))
+          return v.data.length === 0 ? 0 : Math.max(...v.shape);
+        if (isRuntimeSparseMatrix(v)) return Math.max(v.m, v.n);
+        if (isRuntimeCell(v))
+          return v.data.length === 0 ? 0 : Math.max(...v.shape);
+        if (isRuntimeChar(v)) {
+          const s =
+            v.shape ?? (v.value.length === 0 ? [0, 0] : [1, v.value.length]);
+          return s.length === 0 ? 0 : Math.max(...s);
+        }
+        if (isRuntimeString(v)) return 1;
+        if (isRuntimeStructArray(v)) return v.elements.length;
+        return 1;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -340,15 +421,17 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "ndims",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     if (argTypes[0].kind === "unknown") return null;
-    return [{ kind: "number", nonneg: true }];
-  },
-  apply: args => {
-    const v = args[0];
-    if (isRuntimeTensor(v)) return Math.max(2, v.shape.length);
-    return 2;
+    return {
+      outputTypes: [{ kind: "number", nonneg: true }],
+      apply: args => {
+        const v = args[0];
+        if (isRuntimeTensor(v)) return Math.max(2, v.shape.length);
+        return 2;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
@@ -366,7 +449,7 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "size",
-  typeRule: (argTypes, _nargout) => {
+  resolve: (argTypes, _nargout) => {
     if (argTypes.length === 1) {
       if (argTypes[0].kind === "unknown") return null;
       const a = argTypes[0];
@@ -374,35 +457,41 @@ registerIBuiltin({
         a.kind === "realTensor" || a.kind === "complexTensor"
           ? a.shape.length
           : 2;
-      return [{ kind: "realTensor", shape: [1, ndims], nonneg: true }];
+      return {
+        outputTypes: [{ kind: "realTensor", shape: [1, ndims], nonneg: true }],
+        apply: (args, nargout) => {
+          const v = args[0];
+          const shape = getShape(v);
+          if (nargout > 1) {
+            const result: RuntimeValue[] = [];
+            for (let i = 0; i < nargout; i++) {
+              result.push(i < shape.length ? shape[i] : 1);
+            }
+            return result;
+          }
+          return makeTensor(new FloatXArray(shape), undefined, [
+            1,
+            shape.length,
+          ]);
+        },
+      };
     }
     if (argTypes.length === 2) {
       if (argTypes[0].kind === "unknown") return null;
       const dimKind = argTypes[1].kind;
       if (dimKind !== "number" && dimKind !== "logical") return null;
-      return [{ kind: "number", nonneg: true }];
+      return {
+        outputTypes: [{ kind: "number", nonneg: true }],
+        apply: args => {
+          const v = args[0];
+          const shape = getShape(v);
+          const dim =
+            typeof args[1] === "number" ? Math.round(args[1]) : args[1] ? 1 : 0;
+          return dim > 0 && dim <= shape.length ? shape[dim - 1] : 1;
+        },
+      };
     }
     return null;
-  },
-  apply: (args, nargout) => {
-    const v = args[0];
-    const shape = getShape(v);
-
-    if (args.length === 2) {
-      const dim =
-        typeof args[1] === "number" ? Math.round(args[1]) : args[1] ? 1 : 0;
-      return dim > 0 && dim <= shape.length ? shape[dim - 1] : 1;
-    }
-
-    if (nargout > 1) {
-      const result: RuntimeValue[] = [];
-      for (let i = 0; i < nargout; i++) {
-        result.push(i < shape.length ? shape[i] : 1);
-      }
-      return result;
-    }
-
-    return makeTensor(new FloatXArray(shape), undefined, [1, shape.length]);
   },
   jitEmit: (args, types) => {
     if (args.length === 2) {
@@ -423,18 +512,21 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "class",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     const k = argTypes[0].kind;
+    let outputTypes: JitType[];
     switch (k) {
       case "number":
       case "complex":
       case "complexTensor":
-        return [{ kind: "string", value: "double" }];
+        outputTypes = [{ kind: "string", value: "double" }];
+        break;
       case "logical":
-        return [{ kind: "string", value: "logical" }];
+        outputTypes = [{ kind: "string", value: "logical" }];
+        break;
       case "realTensor":
-        return [
+        outputTypes = [
           {
             kind: "string",
             value: (argTypes[0] as { isLogical?: boolean }).isLogical
@@ -442,32 +534,38 @@ registerIBuiltin({
               : "double",
           },
         ];
+        break;
       case "string":
-        return [{ kind: "string", value: "string" }];
+        outputTypes = [{ kind: "string", value: "string" }];
+        break;
       case "char":
-        return [{ kind: "string", value: "char" }];
+        outputTypes = [{ kind: "string", value: "char" }];
+        break;
       case "unknown":
         return null;
       default:
         return null;
     }
-  },
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return "double";
-    if (typeof v === "boolean") return "logical";
-    if (isRuntimeString(v)) return "string";
-    if (isRuntimeChar(v)) return "char";
-    if (isRuntimeTensor(v)) return v._isLogical ? "logical" : "double";
-    if (isRuntimeCell(v)) return "cell";
-    if (isRuntimeStruct(v)) return "struct";
-    if (isRuntimeFunction(v)) return "function_handle";
-    if (isRuntimeClassInstance(v)) return v.className;
-    if (isRuntimeComplexNumber(v)) return "double";
-    if (isRuntimeSparseMatrix(v)) return "double";
-    if (isRuntimeDummyHandle(v)) return "dummy_handle";
-    if (isRuntimeStructArray(v)) return "struct";
-    return "unknown";
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return "double";
+        if (typeof v === "boolean") return "logical";
+        if (isRuntimeString(v)) return "string";
+        if (isRuntimeChar(v)) return "char";
+        if (isRuntimeTensor(v)) return v._isLogical ? "logical" : "double";
+        if (isRuntimeCell(v)) return "cell";
+        if (isRuntimeStruct(v)) return "struct";
+        if (isRuntimeFunction(v)) return "function_handle";
+        if (isRuntimeClassInstance(v)) return v.className;
+        if (isRuntimeComplexNumber(v)) return "double";
+        if (isRuntimeSparseMatrix(v)) return "double";
+        if (isRuntimeDummyHandle(v)) return "dummy_handle";
+        if (isRuntimeStructArray(v)) return "struct";
+        return "unknown";
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;

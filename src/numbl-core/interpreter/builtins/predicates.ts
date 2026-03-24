@@ -45,24 +45,30 @@ function makeBoolTensor(flags: boolean[], shape: number[]) {
 
 registerIBuiltin({
   name: "isnan",
-  typeRule: argTypes => predicateType(argTypes),
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return Number.isNaN(v);
-    if (isRuntimeComplexNumber(v))
-      return Number.isNaN(v.re) || Number.isNaN(v.im);
-    if (isRuntimeTensor(v)) {
-      const n = v.data.length;
-      const flags: boolean[] = new Array(n);
-      if (!v.imag) {
-        for (let i = 0; i < n; i++) flags[i] = Number.isNaN(v.data[i]);
-      } else {
-        for (let i = 0; i < n; i++)
-          flags[i] = Number.isNaN(v.data[i]) || Number.isNaN(v.imag[i]);
-      }
-      return makeBoolTensor(flags, v.shape.slice());
-    }
-    throw new Error("isnan: unsupported argument type");
+  resolve: argTypes => {
+    const outputTypes = predicateType(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return Number.isNaN(v);
+        if (isRuntimeComplexNumber(v))
+          return Number.isNaN(v.re) || Number.isNaN(v.im);
+        if (isRuntimeTensor(v)) {
+          const n = v.data.length;
+          const flags: boolean[] = new Array(n);
+          if (!v.imag) {
+            for (let i = 0; i < n; i++) flags[i] = Number.isNaN(v.data[i]);
+          } else {
+            for (let i = 0; i < n; i++)
+              flags[i] = Number.isNaN(v.data[i]) || Number.isNaN(v.imag[i]);
+          }
+          return makeBoolTensor(flags, v.shape.slice());
+        }
+        throw new Error("isnan: unsupported argument type");
+      },
+    };
   },
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
@@ -80,23 +86,29 @@ function isInfVal(x: number): boolean {
 
 registerIBuiltin({
   name: "isinf",
-  typeRule: argTypes => predicateType(argTypes),
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return isInfVal(v);
-    if (isRuntimeComplexNumber(v)) return isInfVal(v.re) || isInfVal(v.im);
-    if (isRuntimeTensor(v)) {
-      const n = v.data.length;
-      const flags: boolean[] = new Array(n);
-      if (!v.imag) {
-        for (let i = 0; i < n; i++) flags[i] = isInfVal(v.data[i]);
-      } else {
-        for (let i = 0; i < n; i++)
-          flags[i] = isInfVal(v.data[i]) || isInfVal(v.imag[i]);
-      }
-      return makeBoolTensor(flags, v.shape.slice());
-    }
-    throw new Error("isinf: unsupported argument type");
+  resolve: argTypes => {
+    const outputTypes = predicateType(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return isInfVal(v);
+        if (isRuntimeComplexNumber(v)) return isInfVal(v.re) || isInfVal(v.im);
+        if (isRuntimeTensor(v)) {
+          const n = v.data.length;
+          const flags: boolean[] = new Array(n);
+          if (!v.imag) {
+            for (let i = 0; i < n; i++) flags[i] = isInfVal(v.data[i]);
+          } else {
+            for (let i = 0; i < n; i++)
+              flags[i] = isInfVal(v.data[i]) || isInfVal(v.imag[i]);
+          }
+          return makeBoolTensor(flags, v.shape.slice());
+        }
+        throw new Error("isinf: unsupported argument type");
+      },
+    };
   },
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
@@ -110,23 +122,29 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isfinite",
-  typeRule: argTypes => predicateType(argTypes),
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return isFinite(v);
-    if (isRuntimeComplexNumber(v)) return isFinite(v.re) && isFinite(v.im);
-    if (isRuntimeTensor(v)) {
-      const n = v.data.length;
-      const flags: boolean[] = new Array(n);
-      if (!v.imag) {
-        for (let i = 0; i < n; i++) flags[i] = isFinite(v.data[i]);
-      } else {
-        for (let i = 0; i < n; i++)
-          flags[i] = isFinite(v.data[i]) && isFinite(v.imag[i]);
-      }
-      return makeBoolTensor(flags, v.shape.slice());
-    }
-    throw new Error("isfinite: unsupported argument type");
+  resolve: argTypes => {
+    const outputTypes = predicateType(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return isFinite(v);
+        if (isRuntimeComplexNumber(v)) return isFinite(v.re) && isFinite(v.im);
+        if (isRuntimeTensor(v)) {
+          const n = v.data.length;
+          const flags: boolean[] = new Array(n);
+          if (!v.imag) {
+            for (let i = 0; i < n; i++) flags[i] = isFinite(v.data[i]);
+          } else {
+            for (let i = 0; i < n; i++)
+              flags[i] = isFinite(v.data[i]) && isFinite(v.imag[i]);
+          }
+          return makeBoolTensor(flags, v.shape.slice());
+        }
+        throw new Error("isfinite: unsupported argument type");
+      },
+    };
   },
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
@@ -140,18 +158,20 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "isreal",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length !== 1) return null;
-    return [{ kind: "logical" }];
-  },
-  apply: args => {
-    const v = args[0];
-    if (typeof v === "number") return true;
-    if (typeof v === "boolean") return true;
-    if (isRuntimeComplexNumber(v)) return v.im === 0;
-    if (isRuntimeTensor(v)) return !v.imag;
-    if (isRuntimeSparseMatrix(v)) return !v.pi;
-    return true;
+    return {
+      outputTypes: [{ kind: "logical" }],
+      apply: args => {
+        const v = args[0];
+        if (typeof v === "number") return true;
+        if (typeof v === "boolean") return true;
+        if (isRuntimeComplexNumber(v)) return v.im === 0;
+        if (isRuntimeTensor(v)) return !v.imag;
+        if (isRuntimeSparseMatrix(v)) return !v.pi;
+        return true;
+      },
+    };
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
