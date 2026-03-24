@@ -233,7 +233,7 @@ function emitStmt(
 // ── Expression emission ─────────────────────────────────────────────────
 
 function isComplexType(t: JitType): boolean {
-  return t.kind === "complex" || t.kind === "complexTensor";
+  return t.kind === "complex" || (t.kind === "tensor" && t.isComplex === true);
 }
 
 function emitExpr(expr: JitExpr, ht: boolean): string {
@@ -423,7 +423,7 @@ function emitTensorLiteral(
       elems.push(emitExpr(rows[r][c], ht));
     }
   }
-  if (expr.jitType.kind === "complexTensor") {
+  if (expr.jitType.kind === "tensor" && expr.jitType.isComplex === true) {
     // Extract real and imag parts
     const reElems: string[] = [];
     const imElems: string[] = [];

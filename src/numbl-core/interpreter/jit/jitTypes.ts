@@ -6,39 +6,84 @@ import type { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 
 // ── JIT Type System ─────────────────────────────────────────────────────
 
+export type SignCategory = "positive" | "nonneg" | "nonpositive" | "negative";
+
 export type JitType =
-  | { kind: "number"; nonneg?: boolean }
+  | { kind: "number"; exact?: number; sign?: SignCategory }
   | { kind: "logical" }
-  | { kind: "complex" }
+  | { kind: "complex"; pureImaginary?: boolean }
   | {
-      kind: "realTensor";
-      shape: number[];
-      nonneg?: boolean;
+      kind: "tensor";
+      isComplex?: boolean;
+      shape?: number[];
+      ndim?: number;
       isLogical?: boolean;
+      nonneg?: boolean;
     }
-  | { kind: "complexTensor"; shape: number[] }
   | { kind: "string"; value?: string }
   | { kind: "char"; value?: string }
   | { kind: "unknown" };
 
+// ── Sign helpers ─────────────────────────────────────────────────────────
+
+export function signFromNumber(v: number): SignCategory | undefined {
+  if (v > 0) return "positive";
+  if (v === 0) return "nonneg";
+  if (v < 0) return "negative";
+  return undefined; // NaN
+}
+
+export function isNonneg(t: JitType): boolean {
+  if (t.kind === "number") return t.sign === "nonneg" || t.sign === "positive";
+  if (t.kind === "logical") return true;
+  if (t.kind === "tensor") return !!t.nonneg;
+  return false;
+}
+
+export function flipSign(s?: SignCategory): SignCategory | undefined {
+  if (s === "positive") return "negative";
+  if (s === "negative") return "positive";
+  if (s === "nonneg") return "nonpositive";
+  if (s === "nonpositive") return "nonneg";
+  return undefined;
+}
+
+export function unifySign(
+  a?: SignCategory,
+  b?: SignCategory
+): SignCategory | undefined {
+  if (a === b) return a;
+  if (!a || !b) return undefined;
+  const set = new Set([a, b]);
+  if (set.has("positive") && set.has("nonneg")) return "nonneg";
+  if (set.has("negative") && set.has("nonpositive")) return "nonpositive";
+  return undefined;
+}
+
 export function jitTypeKey(t: JitType): string {
   switch (t.kind) {
-    case "number":
-      return t.nonneg ? "number+" : "number";
+    case "number": {
+      let k = "number";
+      if (t.exact !== undefined) k += `=${t.exact}`;
+      if (t.sign) k += `:${t.sign}`;
+      return k;
+    }
     case "logical":
       return "logical";
     case "complex":
-      return "complex";
-    case "realTensor": {
-      const s = t.shape.map(d => (d === -1 ? "?" : d)).join("x");
-      let k = `realTensor[${s}]`;
+      return t.pureImaginary ? "complex:imag" : "complex";
+    case "tensor": {
+      const s = t.shape
+        ? t.shape.map(d => (d === -1 ? "?" : d)).join("x")
+        : t.ndim !== undefined
+          ? Array(t.ndim).fill("?").join("x")
+          : "?";
+      let k = `tensor[${s}]`;
+      if (t.isComplex === true) k += "C";
+      else if (t.isComplex === false) k += "R";
       if (t.nonneg) k += "+";
       if (t.isLogical) k += "L";
       return k;
-    }
-    case "complexTensor": {
-      const s = t.shape.map(d => (d === -1 ? "?" : d)).join("x");
-      return `complexTensor[${s}]`;
     }
     case "string":
       return t.value != null ? `string:${t.value}` : "string";
@@ -53,7 +98,7 @@ export function computeJitCacheKey(
   nargout: number,
   argTypes: JitType[]
 ): string {
-  return `${nargout}:${argTypes.map(jitTypeKey).join(":")}`;
+  return JSON.stringify({ nargout, argTypes });
 }
 
 /** Compute a unique JS function name for a JIT'd specialization. */
@@ -72,34 +117,55 @@ export function computeJitFnName(identity: string, funcName: string): string {
 export function unifyJitTypes(a: JitType, b: JitType): JitType {
   if (a.kind === b.kind) {
     if (a.kind === "number" && b.kind === "number") {
-      return { kind: "number", nonneg: a.nonneg && b.nonneg };
-    }
-    if (a.kind === "realTensor" && b.kind === "realTensor") {
-      const shapeA = a.shape,
-        shapeB = b.shape;
-      let shape: number[];
-      if (shapeA.length !== shapeB.length) {
-        shape = Array(Math.max(shapeA.length, shapeB.length)).fill(-1);
-      } else {
-        shape = shapeA.map((d, i) => (d === shapeB[i] ? d : -1));
-      }
+      const exact =
+        a.exact !== undefined && a.exact === b.exact ? a.exact : undefined;
+      const sign =
+        exact !== undefined ? signFromNumber(exact) : unifySign(a.sign, b.sign);
       return {
-        kind: "realTensor",
-        shape,
-        nonneg: a.nonneg && b.nonneg,
-        isLogical: a.isLogical && b.isLogical,
+        kind: "number",
+        ...(exact !== undefined ? { exact } : {}),
+        ...(sign ? { sign } : {}),
       };
     }
-    if (a.kind === "complexTensor" && b.kind === "complexTensor") {
-      const shapeA = a.shape,
-        shapeB = b.shape;
-      let shape: number[];
-      if (shapeA.length !== shapeB.length) {
-        shape = Array(Math.max(shapeA.length, shapeB.length)).fill(-1);
+    if (a.kind === "complex" && b.kind === "complex") {
+      return {
+        kind: "complex",
+        ...(a.pureImaginary && b.pureImaginary ? { pureImaginary: true } : {}),
+      };
+    }
+    if (a.kind === "tensor" && b.kind === "tensor") {
+      // Unify isComplex: same→keep, different→undefined
+      const isComplex = a.isComplex === b.isComplex ? a.isComplex : undefined;
+      // Unify shape
+      let shape: number[] | undefined;
+      let ndim: number | undefined;
+      if (a.shape && b.shape) {
+        if (a.shape.length !== b.shape.length) {
+          // Different ndim → drop shape, drop ndim
+          shape = undefined;
+          ndim = undefined;
+        } else {
+          shape = a.shape.map((d, i) => (d === b.shape![i] ? d : -1));
+          ndim = shape.length;
+        }
       } else {
-        shape = shapeA.map((d, i) => (d === shapeB[i] ? d : -1));
+        shape = undefined;
+        // Unify ndim from shape.length or ndim field
+        const aNdim = a.shape ? a.shape.length : a.ndim;
+        const bNdim = b.shape ? b.shape.length : b.ndim;
+        ndim = aNdim !== undefined && aNdim === bNdim ? aNdim : undefined;
       }
-      return { kind: "complexTensor", shape };
+      // nonneg only meaningful when definitely real
+      const nonneg = isComplex !== true && a.nonneg && b.nonneg;
+      const isLogical = a.isLogical && b.isLogical;
+      return {
+        kind: "tensor" as const,
+        ...(isComplex !== undefined ? { isComplex } : {}),
+        ...(shape ? { shape } : {}),
+        ...(ndim !== undefined && !shape ? { ndim } : {}),
+        ...(nonneg ? { nonneg: true } : {}),
+        ...(isLogical ? { isLogical: true } : {}),
+      };
     }
     if (a.kind === "string" && b.kind === "string") {
       return {
@@ -115,18 +181,6 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
     }
     return a; // same kind, no flags to merge
   }
-  // logical is a subtype of number
-  if (
-    (a.kind === "logical" && b.kind === "number") ||
-    (a.kind === "number" && b.kind === "logical")
-  ) {
-    return {
-      kind: "number",
-      nonneg:
-        (a as { nonneg?: boolean }).nonneg &&
-        (b as { nonneg?: boolean }).nonneg,
-    };
-  }
   return { kind: "unknown" };
 }
 
@@ -141,11 +195,19 @@ export function isScalarType(t: JitType): boolean {
 }
 
 export function isTensorType(t: JitType): boolean {
-  return t.kind === "realTensor" || t.kind === "complexTensor";
+  return t.kind === "tensor";
+}
+
+export function isComplexType(t: JitType): boolean {
+  return t.kind === "complex" || (t.kind === "tensor" && t.isComplex === true);
 }
 
 export function isRealType(t: JitType): boolean {
-  return t.kind === "number" || t.kind === "logical" || t.kind === "realTensor";
+  return (
+    t.kind === "number" ||
+    t.kind === "logical" ||
+    (t.kind === "tensor" && t.isComplex !== true)
+  );
 }
 
 export function isVectorShape(shape: number[]): boolean {

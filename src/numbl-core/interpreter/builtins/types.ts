@@ -13,7 +13,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import type { JitType } from "../jit/jitTypes.js";
+import { type JitType, signFromNumber, isNonneg } from "../jit/jitTypes.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 
@@ -49,7 +49,10 @@ export function registerIBuiltin(b: IBuiltin): void {
 
 export function inferJitType(value: unknown): JitType {
   if (typeof value === "boolean") return { kind: "logical" };
-  if (typeof value === "number") return { kind: "number", nonneg: value >= 0 };
+  if (typeof value === "number") {
+    const sign = signFromNumber(value);
+    return { kind: "number", exact: value, ...(sign ? { sign } : {}) };
+  }
   if (
     typeof value === "object" &&
     value !== null &&
@@ -64,8 +67,13 @@ export function inferJitType(value: unknown): JitType {
   ) {
     const t = value as RuntimeTensor;
     const shape = t.shape.length >= 2 ? t.shape.slice() : [1, ...t.shape];
-    if (t.imag) return { kind: "complexTensor", shape };
-    return { kind: "realTensor", shape };
+    if (t.imag) return { kind: "tensor", isComplex: true, shape };
+    return {
+      kind: "tensor",
+      isComplex: false,
+      shape,
+      ...(t._isLogical ? { isLogical: true } : {}),
+    };
   }
   return { kind: "unknown" };
 }
@@ -135,10 +143,15 @@ export function unaryPreserveType(argTypes: JitType[]): JitType[] | null {
       return [{ kind: "number" }];
     case "complex":
       return [{ kind: "complex" }];
-    case "realTensor":
-      return [{ kind: "realTensor", shape: a.shape }];
-    case "complexTensor":
-      return [{ kind: "complexTensor", shape: a.shape }];
+    case "tensor":
+      return [
+        {
+          kind: "tensor",
+          isComplex: a.isComplex,
+          shape: a.shape,
+          ndim: a.ndim,
+        },
+      ];
     default:
       return null;
   }
@@ -151,13 +164,19 @@ export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
   switch (a.kind) {
     case "number":
     case "logical":
-      return [{ kind: "number", nonneg: true }];
+      return [{ kind: "number", sign: "nonneg" }];
     case "complex":
-      return [{ kind: "number", nonneg: true }];
-    case "realTensor":
-      return [{ kind: "realTensor", shape: a.shape, nonneg: true }];
-    case "complexTensor":
-      return [{ kind: "realTensor", shape: a.shape, nonneg: true }];
+      return [{ kind: "number", sign: "nonneg" }];
+    case "tensor":
+      return [
+        {
+          kind: "tensor",
+          isComplex: false,
+          shape: a.shape,
+          ndim: a.ndim,
+          nonneg: true,
+        },
+      ];
     default:
       return null;
   }
@@ -387,11 +406,11 @@ export function unaryMathJitEmit(
     if (argTypes.length !== 1) return null;
     const a = argTypes[0];
     if (a.kind === "number" || a.kind === "logical") {
-      if (requireNonneg && a.kind === "number" && !a.nonneg) return null;
+      if (requireNonneg && !isNonneg(a)) return null;
       return `${mathFn}(${argCode[0]})`;
     }
-    if (a.kind === "realTensor") {
-      if (requireNonneg && !a.nonneg) return null;
+    if (a.kind === "tensor" && a.isComplex !== true) {
+      if (requireNonneg && !isNonneg(a)) return null;
       return `$h.${tensorHelper}(${argCode[0]})`;
     }
     return null;

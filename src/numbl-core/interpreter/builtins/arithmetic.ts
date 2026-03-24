@@ -16,25 +16,35 @@ import {
   makeTensor,
   binaryMathJitEmit,
 } from "./types.js";
-import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
+import {
+  type JitType,
+  shapeAfterReduction,
+  unifySign,
+} from "../jit/jitTypes.js";
 
 // ── Type rule helpers ─────────────────────────────────────────────────
 
-/** Type rule for binary real functions that accept number/logical or realTensor args. */
+/** Type rule for binary real functions that accept number/logical or real tensor args. */
 function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length !== 2) return null;
   const a = argTypes[0];
   const b = argTypes[1];
-  if (a.kind !== "number" && a.kind !== "logical" && a.kind !== "realTensor")
+  if (
+    a.kind !== "number" &&
+    a.kind !== "logical" &&
+    !(a.kind === "tensor" && a.isComplex !== true)
+  )
     return null;
-  if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "realTensor")
+  if (
+    b.kind !== "number" &&
+    b.kind !== "logical" &&
+    !(b.kind === "tensor" && b.isComplex !== true)
+  )
     return null;
-  if (a.kind === "realTensor" || b.kind === "realTensor") {
-    const shape =
-      a.kind === "realTensor"
-        ? a.shape
-        : (b as { kind: "realTensor"; shape: number[] }).shape;
-    return [{ kind: "realTensor", shape }];
+  if (a.kind === "tensor" || b.kind === "tensor") {
+    const t =
+      a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
+    return [{ kind: "tensor", isComplex: false, shape: t.shape, ndim: t.ndim }];
   }
   return [{ kind: "number" }];
 }
@@ -115,48 +125,68 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length === 2) {
     const a = argTypes[0];
     const b = argTypes[1];
-    if (a.kind !== "number" && a.kind !== "logical" && a.kind !== "realTensor")
+    if (a.kind !== "number" && a.kind !== "logical" && a.kind !== "tensor")
       return null;
-    if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "realTensor")
+    if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "tensor")
       return null;
-    if (a.kind === "realTensor" || b.kind === "realTensor") {
-      const shape =
-        a.kind === "realTensor"
-          ? a.shape
-          : (b as { kind: "realTensor"; shape: number[] }).shape;
-      return [{ kind: "realTensor", shape }];
+    if (a.kind === "tensor" || b.kind === "tensor") {
+      const t =
+        a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
+      return [
+        {
+          kind: "tensor",
+          isComplex: t.isComplex,
+          shape: t.shape,
+          ndim: t.ndim,
+        },
+      ];
     }
-    return [
-      {
-        kind: "number",
-        nonneg:
-          !!(a as { nonneg?: boolean }).nonneg &&
-          !!(b as { nonneg?: boolean }).nonneg,
-      },
-    ];
+    {
+      const aSign =
+        a.kind === "number"
+          ? a.sign
+          : a.kind === "logical"
+            ? ("nonneg" as const)
+            : undefined;
+      const bSign =
+        b.kind === "number"
+          ? b.sign
+          : b.kind === "logical"
+            ? ("nonneg" as const)
+            : undefined;
+      const sign = unifySign(aSign, bSign);
+      return [{ kind: "number", ...(sign ? { sign } : {}) }];
+    }
   }
   if (argTypes.length === 1) {
     const a = argTypes[0];
     if (a.kind === "number" || a.kind === "logical" || a.kind === "complex")
       return [a];
-    if (a.kind === "realTensor") {
+    if (a.kind === "tensor") {
+      if (!a.shape)
+        return [
+          a.isComplex === true ? { kind: "complex" } : { kind: "number" },
+        ];
       const result = shapeAfterReduction(a.shape);
-      if (result.scalar) return [{ kind: "number" }];
-      return [{ kind: "realTensor", shape: result.shape }];
-    }
-    if (a.kind === "complexTensor") {
-      const result = shapeAfterReduction(a.shape);
-      if (result.scalar) return [{ kind: "complex" }];
-      return [{ kind: "complexTensor", shape: result.shape }];
+      if (result.scalar)
+        return [
+          a.isComplex === true ? { kind: "complex" } : { kind: "number" },
+        ];
+      return [{ kind: "tensor", isComplex: a.isComplex, shape: result.shape }];
     }
   }
   // 3-arg: min(X, [], dim) — second arg is always empty, third is dim
   if (argTypes.length === 3) {
     const a = argTypes[0];
-    if (a.kind === "realTensor")
-      return [{ kind: "realTensor", shape: a.shape }];
-    if (a.kind === "complexTensor")
-      return [{ kind: "complexTensor", shape: a.shape }];
+    if (a.kind === "tensor")
+      return [
+        {
+          kind: "tensor",
+          isComplex: a.isComplex,
+          shape: a.shape,
+          ndim: a.ndim,
+        },
+      ];
     if (a.kind === "number" || a.kind === "logical")
       return [{ kind: "number" }];
   }

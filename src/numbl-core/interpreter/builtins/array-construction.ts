@@ -5,7 +5,7 @@
 import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { toNumber, numel } from "../../runtime/index.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType, SignCategory } from "../jit/jitTypes.js";
 import { registerIBuiltin, makeTensor } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -24,24 +24,43 @@ function parseShapeArgs(args: RuntimeValue[]): number[] {
 }
 
 /** Type rule for array constructors that take shape args and return a real tensor.
- *  Accepts: 0+ scalar number/logical args, or a single realTensor arg. */
+ *  Accepts: 0+ scalar number/logical args, or a single tensor arg. */
 function arrayConstructorTypeRule(
   argTypes: JitType[],
-  opts?: { nonneg?: boolean }
+  opts?: { scalarSign?: SignCategory; nonneg?: boolean }
 ): JitType[] | null {
   if (argTypes.length === 0) {
     // zeros() -> scalar 0
-    return [{ kind: "number", nonneg: opts?.nonneg }];
+    return [
+      {
+        kind: "number",
+        ...(opts?.scalarSign ? { sign: opts.scalarSign } : {}),
+      },
+    ];
   }
   if (argTypes.length === 1) {
     const a = argTypes[0];
     if (a.kind === "number" || a.kind === "logical") {
       // zeros(n) -> n×n matrix
-      return [{ kind: "realTensor", shape: [-1, -1], nonneg: opts?.nonneg }];
+      return [
+        {
+          kind: "tensor",
+          isComplex: false,
+          shape: [-1, -1],
+          ...(opts?.nonneg ? { nonneg: true } : {}),
+        },
+      ];
     }
-    if (a.kind === "realTensor") {
+    if (a.kind === "tensor") {
       // zeros([m, n]) -> m×n matrix (shape unknown at compile time)
-      return [{ kind: "realTensor", shape: [-1, -1], nonneg: opts?.nonneg }];
+      return [
+        {
+          kind: "tensor",
+          isComplex: false,
+          shape: [-1, -1],
+          ...(opts?.nonneg ? { nonneg: true } : {}),
+        },
+      ];
     }
     return null;
   }
@@ -50,7 +69,14 @@ function arrayConstructorTypeRule(
     if (a.kind !== "number" && a.kind !== "logical") return null;
   }
   const shape = new Array(argTypes.length).fill(-1);
-  return [{ kind: "realTensor", shape, nonneg: opts?.nonneg }];
+  return [
+    {
+      kind: "tensor",
+      isComplex: false,
+      shape,
+      ...(opts?.nonneg ? { nonneg: true } : {}),
+    },
+  ];
 }
 
 // ── zeros ────────────────────────────────────────────────────────────────
@@ -58,7 +84,10 @@ function arrayConstructorTypeRule(
 registerIBuiltin({
   name: "zeros",
   resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes, { nonneg: true });
+    const outputTypes = arrayConstructorTypeRule(argTypes, {
+      scalarSign: "nonneg",
+      nonneg: true,
+    });
     if (!outputTypes) return null;
     return {
       outputTypes,
@@ -78,7 +107,10 @@ registerIBuiltin({
 registerIBuiltin({
   name: "ones",
   resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes, { nonneg: true });
+    const outputTypes = arrayConstructorTypeRule(argTypes, {
+      scalarSign: "positive",
+      nonneg: true,
+    });
     if (!outputTypes) return null;
     return {
       outputTypes,
@@ -130,7 +162,10 @@ registerIBuiltin({
 registerIBuiltin({
   name: "eye",
   resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes, { nonneg: true });
+    const outputTypes = arrayConstructorTypeRule(argTypes, {
+      scalarSign: "nonneg",
+      nonneg: true,
+    });
     if (!outputTypes) return null;
     return {
       outputTypes,
@@ -174,7 +209,7 @@ registerIBuiltin({
     }
     // linspace always returns a 1×n row vector
     return {
-      outputTypes: [{ kind: "realTensor", shape: [1, -1] }],
+      outputTypes: [{ kind: "tensor", isComplex: false, shape: [1, -1] }],
       apply: args => {
         if (args.length < 2 || args.length > 3)
           throw new Error("linspace requires 2 or 3 arguments");
@@ -204,7 +239,7 @@ registerIBuiltin({
       if (a.kind !== "number" && a.kind !== "logical") return null;
     }
     return {
-      outputTypes: [{ kind: "realTensor", shape: [1, -1] }],
+      outputTypes: [{ kind: "tensor", isComplex: false, shape: [1, -1] }],
       apply: args => {
         if (args.length < 2 || args.length > 3)
           throw new Error("logspace requires 2 or 3 arguments");

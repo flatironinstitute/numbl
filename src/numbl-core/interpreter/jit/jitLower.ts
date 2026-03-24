@@ -15,11 +15,15 @@ import {
   type JitType,
   type JitExpr,
   type JitStmt,
+  type SignCategory,
   unifyJitTypes,
   isScalarType,
   isTensorType,
+  isComplexType,
   jitTypeKey,
   computeJitFnName,
+  signFromNumber,
+  flipSign,
 } from "./jitTypes.js";
 import { generateJS } from "./jitCodegen.js";
 import { getIBuiltin } from "../builtins/index.js";
@@ -59,6 +63,61 @@ function mergeEnvs(a: TypeEnv, b: TypeEnv): TypeEnv | null {
     }
   }
   return result;
+}
+
+// ── Sign algebra ────────────────────────────────────────────────────────
+
+function addSigns(a: SignCategory, b: SignCategory): SignCategory | undefined {
+  if (a === "positive" && b === "positive") return "positive";
+  if (a === "negative" && b === "negative") return "negative";
+  if (
+    (a === "nonneg" || a === "positive") &&
+    (b === "nonneg" || b === "positive")
+  )
+    return "nonneg";
+  if (
+    (a === "nonpositive" || a === "negative") &&
+    (b === "nonpositive" || b === "negative")
+  )
+    return "nonpositive";
+  return undefined;
+}
+
+function mulSigns(a: SignCategory, b: SignCategory): SignCategory | undefined {
+  // positive * positive -> positive, negative * negative -> positive
+  const aPos = a === "positive" || a === "nonneg";
+  const aNeg = a === "negative" || a === "nonpositive";
+  const bPos = b === "positive" || b === "nonneg";
+  const bNeg = b === "negative" || b === "nonpositive";
+  const aStrict = a === "positive" || a === "negative";
+  const bStrict = b === "positive" || b === "negative";
+
+  if ((aPos && bPos) || (aNeg && bNeg)) {
+    return aStrict && bStrict ? "positive" : "nonneg";
+  }
+  if ((aPos && bNeg) || (aNeg && bPos)) {
+    return aStrict && bStrict ? "negative" : "nonpositive";
+  }
+  return undefined;
+}
+
+function combineSigns(
+  a: SignCategory | undefined,
+  b: SignCategory | undefined,
+  op: BinaryOperation
+): SignCategory | undefined {
+  if (!a || !b) return undefined;
+  switch (op) {
+    case BinaryOperation.Add:
+      return addSigns(a, b);
+    case BinaryOperation.Sub:
+      return addSigns(a, flipSign(b)!);
+    case BinaryOperation.Mul:
+    case BinaryOperation.ElemMul:
+      return mulSigns(a, b);
+    default:
+      return undefined;
+  }
 }
 
 // ── Type propagation for binary operations ──────────────────────────────
@@ -113,30 +172,34 @@ function binaryResultType(
 
   // Coerce logical to number for arithmetic
   const effLeft: JitType =
-    left.kind === "logical" ? { kind: "number", nonneg: true } : left;
+    left.kind === "logical" ? { kind: "number", sign: "nonneg" } : left;
   const effRight: JitType =
-    right.kind === "logical" ? { kind: "number", nonneg: true } : right;
+    right.kind === "logical" ? { kind: "number", sign: "nonneg" } : right;
 
   // Determine result type based on operand types
-  const anyComplex =
-    effLeft.kind === "complex" ||
-    effRight.kind === "complex" ||
-    effLeft.kind === "complexTensor" ||
-    effRight.kind === "complexTensor";
+  const anyComplex = isComplexType(effLeft) || isComplexType(effRight);
   const anyTensor = isTensorType(effLeft) || isTensorType(effRight);
 
   if (anyTensor) {
-    const leftShape = isTensorType(effLeft)
-      ? (effLeft as { shape: number[] }).shape
+    const lt = isTensorType(effLeft)
+      ? (effLeft as Extract<JitType, { kind: "tensor" }>)
       : undefined;
-    const rightShape = isTensorType(effRight)
-      ? (effRight as { shape: number[] }).shape
+    const rt = isTensorType(effRight)
+      ? (effRight as Extract<JitType, { kind: "tensor" }>)
       : undefined;
-    const shape = leftShape ?? rightShape ?? [-1, -1];
+    const shape = lt?.shape ?? rt?.shape;
+    const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
+    const isComplex = anyComplex
+      ? true
+      : (lt?.isComplex === false || !lt) && (rt?.isComplex === false || !rt)
+        ? false
+        : undefined;
     return {
-      kind: anyComplex ? "complexTensor" : "realTensor",
-      shape,
-    } as JitType;
+      kind: "tensor",
+      ...(isComplex !== undefined ? { isComplex } : {}),
+      ...(shape ? { shape } : {}),
+      ...(ndim !== undefined ? { ndim } : {}),
+    };
   }
 
   if (anyComplex) {
@@ -145,18 +208,8 @@ function binaryResultType(
 
   // Both are numbers (or coerced from logical)
   if (effLeft.kind === "number" && effRight.kind === "number") {
-    const bothNonneg = !!effLeft.nonneg && !!effRight.nonneg;
-    switch (op) {
-      case BinaryOperation.Add:
-        return { kind: "number", nonneg: bothNonneg };
-      case BinaryOperation.Sub:
-        return { kind: "number" };
-      case BinaryOperation.Mul:
-      case BinaryOperation.ElemMul:
-        return { kind: "number", nonneg: bothNonneg };
-      default:
-        return { kind: "number" };
-    }
+    const sign = combineSigns(effLeft.sign, effRight.sign, op);
+    return { kind: "number", ...(sign ? { sign } : {}) };
   }
 
   return null;
@@ -167,13 +220,20 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
     case UnaryOperation.Plus:
       return operand;
     case UnaryOperation.Minus:
-      if (operand.kind === "number") return { kind: "number" };
-      if (operand.kind === "logical") return { kind: "number" };
+      if (operand.kind === "number") {
+        const sign = flipSign(operand.sign);
+        return { kind: "number", ...(sign ? { sign } : {}) };
+      }
+      if (operand.kind === "logical")
+        return { kind: "number", sign: "nonpositive" };
       if (operand.kind === "complex") return { kind: "complex" };
-      if (operand.kind === "realTensor")
-        return { kind: "realTensor", shape: operand.shape };
-      if (operand.kind === "complexTensor")
-        return { kind: "complexTensor", shape: operand.shape };
+      if (operand.kind === "tensor")
+        return {
+          kind: "tensor",
+          isComplex: operand.isComplex,
+          shape: operand.shape,
+          ndim: operand.ndim,
+        };
       return null;
     case UnaryOperation.Not:
       if (isScalarType(operand)) return { kind: "logical" };
@@ -218,7 +278,7 @@ export function lowerFunction(
   const outputNames = fn.outputs.slice(0, nargout || 1);
   for (const name of outputNames) {
     if (!env.has(name)) {
-      env.set(name, { kind: "number", nonneg: true }); // default 0
+      env.set(name, { kind: "number", exact: 0, sign: "nonneg" }); // default 0
       localVars.add(name);
     }
   }
@@ -457,12 +517,7 @@ function lowerFor(
   let needRepass = false;
   for (const [name, type] of merged) {
     const before = envBefore.get(name);
-    if (
-      before &&
-      (before.kind !== type.kind ||
-        (before as { nonneg?: boolean }).nonneg !==
-          (type as { nonneg?: boolean }).nonneg)
-    ) {
+    if (before && JSON.stringify(before) !== JSON.stringify(type)) {
       needRepass = true;
       break;
     }
@@ -514,12 +569,7 @@ function lowerWhile(
   let needRepass = false;
   for (const [name, type] of merged) {
     const before = envBefore.get(name);
-    if (
-      before &&
-      (before.kind !== type.kind ||
-        (before as { nonneg?: boolean }).nonneg !==
-          (type as { nonneg?: boolean }).nonneg)
-    ) {
+    if (before && JSON.stringify(before) !== JSON.stringify(type)) {
       needRepass = true;
       break;
     }
@@ -553,12 +603,19 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       return {
         tag: "NumberLiteral",
         value,
-        jitType: { kind: "number", nonneg: value >= 0 },
+        jitType: {
+          kind: "number",
+          exact: value,
+          ...(signFromNumber(value) ? { sign: signFromNumber(value) } : {}),
+        },
       };
     }
 
     case "ImagUnit":
-      return { tag: "ImagLiteral", jitType: { kind: "complex" } };
+      return {
+        tag: "ImagLiteral",
+        jitType: { kind: "complex", pureImaginary: true },
+      };
 
     case "Ident": {
       // Known numeric constants
@@ -570,7 +627,13 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           value: constVal,
           jitType: isLogical
             ? { kind: "logical" }
-            : { kind: "number", nonneg: constVal >= 0 },
+            : {
+                kind: "number",
+                exact: constVal,
+                ...(signFromNumber(constVal)
+                  ? { sign: signFromNumber(constVal) }
+                  : {}),
+              },
         };
       }
       const type = ctx.env.get(expr.name);
@@ -639,9 +702,11 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         rows,
         nRows,
         nCols,
-        jitType: hasComplex
-          ? { kind: "complexTensor", shape: [nRows, nCols] }
-          : { kind: "realTensor", shape: [nRows, nCols] },
+        jitType: {
+          kind: "tensor",
+          isComplex: hasComplex,
+          shape: [nRows, nCols],
+        },
       };
     }
 
@@ -711,11 +776,11 @@ function lowerIndexExpr(
   // Determine result type based on base type
   let resultType: JitType;
   switch (base.jitType.kind) {
-    case "realTensor":
-      resultType = { kind: "number" };
-      break;
-    case "complexTensor":
-      resultType = { kind: "complex" };
+    case "tensor":
+      resultType =
+        base.jitType.isComplex === true
+          ? { kind: "complex" }
+          : { kind: "number" };
       break;
     case "number":
     case "logical":

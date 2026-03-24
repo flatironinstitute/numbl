@@ -20,13 +20,16 @@ function predicateType(argTypes: JitType[]): JitType[] | null {
     case "logical":
     case "complex":
       return [{ kind: "logical" }];
-    case "realTensor":
+    case "tensor":
       return [
-        { kind: "realTensor", shape: a.shape, nonneg: true, isLogical: true },
-      ];
-    case "complexTensor":
-      return [
-        { kind: "realTensor", shape: a.shape, nonneg: true, isLogical: true },
+        {
+          kind: "tensor",
+          isComplex: false,
+          shape: a.shape,
+          ndim: a.ndim,
+          nonneg: true,
+          isLogical: true,
+        },
       ];
     default:
       return null;
@@ -176,7 +179,11 @@ registerIBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "logical") return "1";
-    if (k === "realTensor") return "1";
+    if (
+      k === "tensor" &&
+      (types[0] as Extract<JitType, { kind: "tensor" }>).isComplex === false
+    )
+      return "1";
     return null;
   },
 });

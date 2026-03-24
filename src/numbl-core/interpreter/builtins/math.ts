@@ -14,7 +14,7 @@ import {
   resolveUnaryRealResult,
   unaryMathJitEmit,
 } from "./types.js";
-import type { JitType } from "../jit/jitTypes.js";
+import { type JitType, isNonneg, type SignCategory } from "../jit/jitTypes.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 
@@ -176,16 +176,31 @@ registerIBuiltin({
     let outputTypes: JitType[] | null;
     switch (a.kind) {
       case "number":
-        outputTypes = [{ kind: "number", nonneg: true }];
+        outputTypes = [{ kind: "number", sign: "positive" }];
         break;
       case "complex":
         outputTypes = [{ kind: "complex" }];
         break;
-      case "realTensor":
-        outputTypes = [{ kind: "realTensor", shape: a.shape, nonneg: true }];
-        break;
-      case "complexTensor":
-        outputTypes = [{ kind: "complexTensor", shape: a.shape }];
+      case "tensor":
+        outputTypes =
+          a.isComplex === true
+            ? [
+                {
+                  kind: "tensor",
+                  isComplex: true,
+                  shape: a.shape,
+                  ndim: a.ndim,
+                },
+              ]
+            : [
+                {
+                  kind: "tensor",
+                  isComplex: false,
+                  shape: a.shape,
+                  ndim: a.ndim,
+                  nonneg: true,
+                },
+              ];
         break;
       default:
         return null;
@@ -239,10 +254,11 @@ registerIBuiltin({
         case "number":
           outputTypes = [{ kind: "number" }, { kind: "number" }];
           break;
-        case "realTensor":
+        case "tensor":
+          if (a.isComplex === true) return null;
           outputTypes = [
-            { kind: "realTensor", shape: a.shape },
-            { kind: "realTensor", shape: a.shape },
+            { kind: "tensor", isComplex: false, shape: a.shape, ndim: a.ndim },
+            { kind: "tensor", isComplex: false, shape: a.shape, ndim: a.ndim },
           ];
           break;
         default:
@@ -289,11 +305,15 @@ registerIBuiltin({
       case "complex":
         outputTypes = [{ kind: "complex" }];
         break;
-      case "realTensor":
-        outputTypes = [{ kind: "realTensor", shape: a.shape }];
-        break;
-      case "complexTensor":
-        outputTypes = [{ kind: "complexTensor", shape: a.shape }];
+      case "tensor":
+        outputTypes = [
+          {
+            kind: "tensor",
+            isComplex: a.isComplex,
+            shape: a.shape,
+            ndim: a.ndim,
+          },
+        ];
         break;
       default:
         return null;
@@ -353,19 +373,36 @@ registerIBuiltin({
     let outputTypes: JitType[];
     switch (a.kind) {
       case "number":
-        if (a.nonneg) outputTypes = [{ kind: "number", nonneg: true }];
-        else outputTypes = [{ kind: "complex" }];
+        if (isNonneg(a)) {
+          const outSign: SignCategory | undefined =
+            a.sign === "positive" ? "positive" : "nonneg";
+          outputTypes = [{ kind: "number", sign: outSign }];
+        } else {
+          outputTypes = [{ kind: "complex" }];
+        }
         break;
       case "complex":
         outputTypes = [{ kind: "complex" }];
         break;
-      case "realTensor":
-        if (a.nonneg)
-          outputTypes = [{ kind: "realTensor", shape: a.shape, nonneg: true }];
-        else outputTypes = [{ kind: "complexTensor", shape: a.shape }];
-        break;
-      case "complexTensor":
-        outputTypes = [{ kind: "complexTensor", shape: a.shape }];
+      case "tensor":
+        if (a.isComplex === true)
+          outputTypes = [
+            { kind: "tensor", isComplex: true, shape: a.shape, ndim: a.ndim },
+          ];
+        else if (a.nonneg)
+          outputTypes = [
+            {
+              kind: "tensor",
+              isComplex: false,
+              shape: a.shape,
+              ndim: a.ndim,
+              nonneg: true,
+            },
+          ];
+        else
+          outputTypes = [
+            { kind: "tensor", isComplex: true, shape: a.shape, ndim: a.ndim },
+          ];
         break;
       default:
         return null;
@@ -412,18 +449,23 @@ function registerRounding(
       let outputTypes: JitType[];
       switch (a.kind) {
         case "number":
-          outputTypes = [{ kind: "number", nonneg: !!a.nonneg }];
+          outputTypes = [
+            { kind: "number", ...(a.sign ? { sign: a.sign } : {}) },
+          ];
           break;
         case "complex":
           outputTypes = [{ kind: "complex" }];
           break;
-        case "realTensor":
+        case "tensor":
           outputTypes = [
-            { kind: "realTensor", shape: a.shape, nonneg: !!a.nonneg },
+            {
+              kind: "tensor",
+              isComplex: a.isComplex,
+              shape: a.shape,
+              ndim: a.ndim,
+              ...(a.nonneg ? { nonneg: true } : {}),
+            },
           ];
-          break;
-        case "complexTensor":
-          outputTypes = [{ kind: "complexTensor", shape: a.shape }];
           break;
         default:
           return null;
@@ -460,18 +502,21 @@ registerIBuiltin({
     let outputTypes: JitType[];
     switch (a.kind) {
       case "number":
-        outputTypes = [{ kind: "number", nonneg: !!a.nonneg }];
+        outputTypes = [{ kind: "number", ...(a.sign ? { sign: a.sign } : {}) }];
         break;
       case "complex":
         outputTypes = [{ kind: "complex" }];
         break;
-      case "realTensor":
+      case "tensor":
         outputTypes = [
-          { kind: "realTensor", shape: a.shape, nonneg: !!a.nonneg },
+          {
+            kind: "tensor",
+            isComplex: a.isComplex,
+            shape: a.shape,
+            ndim: a.ndim,
+            ...(a.nonneg ? { nonneg: true } : {}),
+          },
         ];
-        break;
-      case "complexTensor":
-        outputTypes = [{ kind: "complexTensor", shape: a.shape }];
         break;
       default:
         return null;

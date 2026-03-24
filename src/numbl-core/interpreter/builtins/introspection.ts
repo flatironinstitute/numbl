@@ -71,9 +71,10 @@ registerIBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "complex") return "1";
-    if (k === "realTensor")
-      return (types[0] as { isLogical?: boolean }).isLogical ? "0" : "1";
-    if (k === "complexTensor") return "1";
+    if (k === "tensor")
+      return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
+        ? "0"
+        : "1";
     if (k === "logical" || k === "string" || k === "char") return "0";
     return null;
   },
@@ -99,9 +100,10 @@ registerIBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "complex") return "1";
-    if (k === "realTensor")
-      return (types[0] as { isLogical?: boolean }).isLogical ? "0" : "1";
-    if (k === "complexTensor") return "1";
+    if (k === "tensor")
+      return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
+        ? "0"
+        : "1";
     if (k === "logical" || k === "string" || k === "char") return "0";
     return null;
   },
@@ -135,15 +137,11 @@ registerIBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "logical") return "1";
-    if (k === "realTensor")
-      return (types[0] as { isLogical?: boolean }).isLogical ? "1" : "0";
-    if (
-      k === "number" ||
-      k === "complex" ||
-      k === "complexTensor" ||
-      k === "string" ||
-      k === "char"
-    )
+    if (k === "tensor")
+      return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
+        ? "1"
+        : "0";
+    if (k === "number" || k === "complex" || k === "string" || k === "char")
       return "0";
     return null;
   },
@@ -361,7 +359,7 @@ registerIBuiltin({
     if (argTypes.length !== 1) return null;
     if (argTypes[0].kind === "unknown") return null;
     return {
-      outputTypes: [{ kind: "number", nonneg: true }],
+      outputTypes: [{ kind: "number", sign: "nonneg" }],
       apply: args => {
         const v = args[0];
         if (typeof v === "number" || typeof v === "boolean") return 1;
@@ -390,7 +388,7 @@ registerIBuiltin({
     if (argTypes.length !== 1) return null;
     if (argTypes[0].kind === "unknown") return null;
     return {
-      outputTypes: [{ kind: "number", nonneg: true }],
+      outputTypes: [{ kind: "number", sign: "nonneg" }],
       apply: args => {
         const v = args[0];
         if (typeof v === "number" || typeof v === "boolean") return 1;
@@ -425,7 +423,7 @@ registerIBuiltin({
     if (argTypes.length !== 1) return null;
     if (argTypes[0].kind === "unknown") return null;
     return {
-      outputTypes: [{ kind: "number", nonneg: true }],
+      outputTypes: [{ kind: "number", sign: "nonneg" }],
       apply: args => {
         const v = args[0];
         if (isRuntimeTensor(v)) return Math.max(2, v.shape.length);
@@ -453,12 +451,11 @@ registerIBuiltin({
     if (argTypes.length === 1) {
       if (argTypes[0].kind === "unknown") return null;
       const a = argTypes[0];
-      const ndims =
-        a.kind === "realTensor" || a.kind === "complexTensor"
-          ? a.shape.length
-          : 2;
+      const ndims = a.kind === "tensor" && a.shape ? a.shape.length : 2;
       return {
-        outputTypes: [{ kind: "realTensor", shape: [1, ndims], nonneg: true }],
+        outputTypes: [
+          { kind: "tensor", isComplex: false, shape: [1, ndims], nonneg: true },
+        ],
         apply: (args, nargout) => {
           const v = args[0];
           const shape = getShape(v);
@@ -481,7 +478,7 @@ registerIBuiltin({
       const dimKind = argTypes[1].kind;
       if (dimKind !== "number" && dimKind !== "logical") return null;
       return {
-        outputTypes: [{ kind: "number", nonneg: true }],
+        outputTypes: [{ kind: "number", sign: "nonneg" }],
         apply: args => {
           const v = args[0];
           const shape = getShape(v);
@@ -519,17 +516,17 @@ registerIBuiltin({
     switch (k) {
       case "number":
       case "complex":
-      case "complexTensor":
         outputTypes = [{ kind: "string", value: "double" }];
         break;
       case "logical":
         outputTypes = [{ kind: "string", value: "logical" }];
         break;
-      case "realTensor":
+      case "tensor":
         outputTypes = [
           {
             kind: "string",
-            value: (argTypes[0] as { isLogical?: boolean }).isLogical
+            value: (argTypes[0] as Extract<JitType, { kind: "tensor" }>)
+              .isLogical
               ? "logical"
               : "double",
           },
@@ -572,12 +569,11 @@ registerIBuiltin({
     switch (k) {
       case "number":
       case "complex":
-      case "complexTensor":
         return '"double"';
       case "logical":
         return '"logical"';
-      case "realTensor":
-        return (types[0] as { isLogical?: boolean }).isLogical
+      case "tensor":
+        return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
           ? '"logical"'
           : '"double"';
       case "string":
