@@ -176,6 +176,7 @@ registerIBuiltin({
     let outputTypes: JitType[] | null;
     switch (a.kind) {
       case "number":
+      case "boolean":
         outputTypes = [{ kind: "number", sign: "positive" }];
         break;
       case "complex":
@@ -252,6 +253,7 @@ registerIBuiltin({
       let outputTypes: JitType[];
       switch (a.kind) {
         case "number":
+        case "boolean":
           outputTypes = [{ kind: "number" }, { kind: "number" }];
           break;
         case "tensor":
@@ -300,6 +302,7 @@ registerIBuiltin({
     let outputTypes: JitType[];
     switch (a.kind) {
       case "number":
+      case "boolean":
         outputTypes = [{ kind: "number" }];
         break;
       case "complex":
@@ -372,6 +375,9 @@ registerIBuiltin({
     const a = argTypes[0];
     let outputTypes: JitType[];
     switch (a.kind) {
+      case "boolean":
+        outputTypes = [{ kind: "number", sign: "nonneg" }];
+        break;
       case "number":
         if (isNonneg(a)) {
           const outSign: SignCategory | undefined =
@@ -453,6 +459,9 @@ function registerRounding(
             { kind: "number", ...(a.sign ? { sign: a.sign } : {}) },
           ];
           break;
+        case "boolean":
+          outputTypes = [{ kind: "number", sign: "nonneg" }];
+          break;
         case "complex":
           outputTypes = [{ kind: "complex" }];
           break;
@@ -503,6 +512,9 @@ registerIBuiltin({
     switch (a.kind) {
       case "number":
         outputTypes = [{ kind: "number", ...(a.sign ? { sign: a.sign } : {}) }];
+        break;
+      case "boolean":
+        outputTypes = [{ kind: "number", sign: "nonneg" }];
         break;
       case "complex":
         outputTypes = [{ kind: "complex" }];

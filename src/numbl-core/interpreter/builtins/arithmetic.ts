@@ -32,13 +32,13 @@ function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
   if (
     a.kind !== "number" &&
     a.kind !== "boolean" &&
-    !(a.kind === "tensor" && a.isComplex !== true)
+    !(a.kind === "tensor" && a.isComplex === false)
   )
     return null;
   if (
     b.kind !== "number" &&
     b.kind !== "boolean" &&
-    !(b.kind === "tensor" && b.isComplex !== true)
+    !(b.kind === "tensor" && b.isComplex === false)
   )
     return null;
   if (a.kind === "tensor" || b.kind === "tensor") {
@@ -178,15 +178,32 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   // 3-arg: min(X, [], dim) — second arg is always empty, third is dim
   if (argTypes.length === 3) {
     const a = argTypes[0];
-    if (a.kind === "tensor")
+    if (a.kind === "tensor") {
+      // Try to compute reduced shape if dim is known
+      const dimType = argTypes[2];
+      const dim =
+        dimType.kind === "number" && dimType.exact !== undefined
+          ? dimType.exact
+          : undefined;
+      if (a.shape && dim !== undefined && dim >= 1 && dim <= a.shape.length) {
+        const result = shapeAfterReduction(a.shape, dim);
+        if (result.scalar)
+          return [
+            a.isComplex === true ? { kind: "complex" } : { kind: "number" },
+          ];
+        return [
+          { kind: "tensor", isComplex: a.isComplex, shape: result.shape },
+        ];
+      }
+      // Unknown dim or shape: return tensor with unknown shape
       return [
         {
           kind: "tensor",
           isComplex: a.isComplex,
-          shape: a.shape,
           ndim: a.ndim,
         },
       ];
+    }
     if (a.kind === "number" || a.kind === "boolean")
       return [{ kind: "number" }];
   }
