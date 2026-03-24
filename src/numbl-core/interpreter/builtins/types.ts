@@ -48,7 +48,7 @@ export function registerIBuiltin(b: IBuiltin): void {
 // ── Infer JitType from a runtime value ──────────────────────────────────
 
 export function inferJitType(value: unknown): JitType {
-  if (typeof value === "boolean") return { kind: "logical" };
+  if (typeof value === "boolean") return { kind: "boolean", value };
   if (typeof value === "number") {
     const sign = signFromNumber(value);
     return { kind: "number", exact: value, ...(sign ? { sign } : {}) };
@@ -139,7 +139,7 @@ export function unaryPreserveType(argTypes: JitType[]): JitType[] | null {
   const a = argTypes[0];
   switch (a.kind) {
     case "number":
-    case "logical":
+    case "boolean":
       return [{ kind: "number" }];
     case "complex":
       return [{ kind: "complex" }];
@@ -163,7 +163,7 @@ export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
   const a = argTypes[0];
   switch (a.kind) {
     case "number":
-    case "logical":
+    case "boolean":
       return [{ kind: "number", sign: "nonneg" }];
     case "complex":
       return [{ kind: "number", sign: "nonneg" }];
@@ -188,8 +188,8 @@ export function binaryNumberOnly(argTypes: JitType[]): JitType[] | null {
   const k0 = argTypes[0].kind,
     k1 = argTypes[1].kind;
   if (
-    (k0 !== "number" && k0 !== "logical") ||
-    (k1 !== "number" && k1 !== "logical")
+    (k0 !== "number" && k0 !== "boolean") ||
+    (k1 !== "number" && k1 !== "boolean")
   )
     return null;
   return [{ kind: "number" }];
@@ -405,7 +405,7 @@ export function unaryMathJitEmit(
   return (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "logical") {
+    if (a.kind === "number" || a.kind === "boolean") {
       if (requireNonneg && !isNonneg(a)) return null;
       return `${mathFn}(${argCode[0]})`;
     }
@@ -426,8 +426,8 @@ export function binaryMathJitEmit(
     const k0 = argTypes[0].kind,
       k1 = argTypes[1].kind;
     if (
-      (k0 !== "number" && k0 !== "logical") ||
-      (k1 !== "number" && k1 !== "logical")
+      (k0 !== "number" && k0 !== "boolean") ||
+      (k1 !== "number" && k1 !== "boolean")
     )
       return null;
     return `${mathFn}(${argCode[0]}, ${argCode[1]})`;

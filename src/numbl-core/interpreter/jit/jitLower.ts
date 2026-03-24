@@ -136,14 +136,14 @@ function binaryResultType(
     op === BinaryOperation.Greater ||
     op === BinaryOperation.GreaterEqual
   ) {
-    if (isScalarType(left) && isScalarType(right)) return { kind: "logical" };
+    if (isScalarType(left) && isScalarType(right)) return { kind: "boolean" };
     // Tensor comparison: not supported yet
     return null;
   }
 
   // Logical operators: scalar only
   if (op === BinaryOperation.AndAnd || op === BinaryOperation.OrOr) {
-    if (isScalarType(left) && isScalarType(right)) return { kind: "logical" };
+    if (isScalarType(left) && isScalarType(right)) return { kind: "boolean" };
     return null;
   }
 
@@ -172,9 +172,9 @@ function binaryResultType(
 
   // Coerce logical to number for arithmetic
   const effLeft: JitType =
-    left.kind === "logical" ? { kind: "number", sign: "nonneg" } : left;
+    left.kind === "boolean" ? { kind: "number", sign: "nonneg" } : left;
   const effRight: JitType =
-    right.kind === "logical" ? { kind: "number", sign: "nonneg" } : right;
+    right.kind === "boolean" ? { kind: "number", sign: "nonneg" } : right;
 
   // Determine result type based on operand types
   const anyComplex = isComplexType(effLeft) || isComplexType(effRight);
@@ -224,7 +224,7 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
         const sign = flipSign(operand.sign);
         return { kind: "number", ...(sign ? { sign } : {}) };
       }
-      if (operand.kind === "logical")
+      if (operand.kind === "boolean")
         return { kind: "number", sign: "nonpositive" };
       if (operand.kind === "complex") return { kind: "complex" };
       if (operand.kind === "tensor")
@@ -236,7 +236,7 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
         };
       return null;
     case UnaryOperation.Not:
-      if (isScalarType(operand)) return { kind: "logical" };
+      if (isScalarType(operand)) return { kind: "boolean" };
       return null;
     default:
       return null; // Transpose not supported
@@ -621,12 +621,12 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       // Known numeric constants
       const constVal = KNOWN_CONSTANTS[expr.name];
       if (constVal !== undefined) {
-        const isLogical = expr.name === "true" || expr.name === "false";
+        const isBool = expr.name === "true" || expr.name === "false";
         return {
           tag: "NumberLiteral",
           value: constVal,
-          jitType: isLogical
-            ? { kind: "logical" }
+          jitType: isBool
+            ? { kind: "boolean", value: expr.name === "true" }
             : {
                 kind: "number",
                 exact: constVal,
@@ -685,7 +685,7 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           // Only scalar elements supported in tensor literals
           if (
             lowered.jitType.kind !== "number" &&
-            lowered.jitType.kind !== "logical" &&
+            lowered.jitType.kind !== "boolean" &&
             lowered.jitType.kind !== "complex"
           )
             return null;
@@ -767,7 +767,7 @@ function lowerIndexExpr(
     const lowered = lowerExpr(ctx, idx);
     if (!lowered) return null;
     // Only scalar numeric indices supported
-    if (lowered.jitType.kind !== "number" && lowered.jitType.kind !== "logical")
+    if (lowered.jitType.kind !== "number" && lowered.jitType.kind !== "boolean")
       return null;
     indices.push(lowered);
   }
@@ -783,7 +783,7 @@ function lowerIndexExpr(
           : { kind: "number" };
       break;
     case "number":
-    case "logical":
+    case "boolean":
       resultType = { kind: "number" };
       break;
     case "complex":

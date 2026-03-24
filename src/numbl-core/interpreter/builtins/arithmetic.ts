@@ -31,13 +31,13 @@ function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
   const b = argTypes[1];
   if (
     a.kind !== "number" &&
-    a.kind !== "logical" &&
+    a.kind !== "boolean" &&
     !(a.kind === "tensor" && a.isComplex !== true)
   )
     return null;
   if (
     b.kind !== "number" &&
-    b.kind !== "logical" &&
+    b.kind !== "boolean" &&
     !(b.kind === "tensor" && b.isComplex !== true)
   )
     return null;
@@ -125,9 +125,9 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length === 2) {
     const a = argTypes[0];
     const b = argTypes[1];
-    if (a.kind !== "number" && a.kind !== "logical" && a.kind !== "tensor")
+    if (a.kind !== "number" && a.kind !== "boolean" && a.kind !== "tensor")
       return null;
-    if (b.kind !== "number" && b.kind !== "logical" && b.kind !== "tensor")
+    if (b.kind !== "number" && b.kind !== "boolean" && b.kind !== "tensor")
       return null;
     if (a.kind === "tensor" || b.kind === "tensor") {
       const t =
@@ -145,13 +145,13 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
       const aSign =
         a.kind === "number"
           ? a.sign
-          : a.kind === "logical"
+          : a.kind === "boolean"
             ? ("nonneg" as const)
             : undefined;
       const bSign =
         b.kind === "number"
           ? b.sign
-          : b.kind === "logical"
+          : b.kind === "boolean"
             ? ("nonneg" as const)
             : undefined;
       const sign = unifySign(aSign, bSign);
@@ -160,7 +160,7 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   }
   if (argTypes.length === 1) {
     const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "logical" || a.kind === "complex")
+    if (a.kind === "number" || a.kind === "boolean" || a.kind === "complex")
       return [a];
     if (a.kind === "tensor") {
       if (!a.shape)
@@ -187,7 +187,7 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
           ndim: a.ndim,
         },
       ];
-    if (a.kind === "number" || a.kind === "logical")
+    if (a.kind === "number" || a.kind === "boolean")
       return [{ kind: "number" }];
   }
   return null;

@@ -17,9 +17,9 @@ function predicateType(argTypes: JitType[]): JitType[] | null {
   const a = argTypes[0];
   switch (a.kind) {
     case "number":
-    case "logical":
+    case "boolean":
     case "complex":
-      return [{ kind: "logical" }];
+      return [{ kind: "boolean" }];
     case "tensor":
       return [
         {
@@ -75,7 +75,7 @@ registerIBuiltin({
   },
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical")
+    if (k === "number" || k === "boolean")
       return `(Number.isNaN(${args[0]}) ? 1 : 0)`;
     return null;
   },
@@ -115,7 +115,7 @@ registerIBuiltin({
   },
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical")
+    if (k === "number" || k === "boolean")
       return `(Math.abs(${args[0]}) === Infinity ? 1 : 0)`;
     return null;
   },
@@ -151,7 +151,7 @@ registerIBuiltin({
   },
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical")
+    if (k === "number" || k === "boolean")
       return `(isFinite(${args[0]}) ? 1 : 0)`;
     return null;
   },
@@ -164,7 +164,7 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     return {
-      outputTypes: [{ kind: "logical" }],
+      outputTypes: [{ kind: "boolean" }],
       apply: args => {
         const v = args[0];
         if (typeof v === "number") return true;
@@ -178,7 +178,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical") return "1";
+    if (k === "number" || k === "boolean") return "1";
     if (
       k === "tensor" &&
       (types[0] as Extract<JitType, { kind: "tensor" }>).isComplex === false

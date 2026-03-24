@@ -40,7 +40,7 @@ function arrayConstructorTypeRule(
   }
   if (argTypes.length === 1) {
     const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "logical") {
+    if (a.kind === "number" || a.kind === "boolean") {
       // zeros(n) -> n×n matrix
       return [
         {
@@ -66,7 +66,7 @@ function arrayConstructorTypeRule(
   }
   // Multiple args: all must be scalar numbers/logicals
   for (const a of argTypes) {
-    if (a.kind !== "number" && a.kind !== "logical") return null;
+    if (a.kind !== "number" && a.kind !== "boolean") return null;
   }
   const shape = new Array(argTypes.length).fill(-1);
   return [
@@ -205,7 +205,7 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length < 2 || argTypes.length > 3) return null;
     for (const a of argTypes) {
-      if (a.kind !== "number" && a.kind !== "logical") return null;
+      if (a.kind !== "number" && a.kind !== "boolean") return null;
     }
     // linspace always returns a 1×n row vector
     return {
@@ -236,7 +236,7 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length < 2 || argTypes.length > 3) return null;
     for (const a of argTypes) {
-      if (a.kind !== "number" && a.kind !== "logical") return null;
+      if (a.kind !== "number" && a.kind !== "boolean") return null;
     }
     return {
       outputTypes: [{ kind: "tensor", isComplex: false, shape: [1, -1] }],

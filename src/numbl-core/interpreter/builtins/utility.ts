@@ -94,7 +94,7 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length < 2) return null;
     return {
-      outputTypes: [{ kind: "logical" }],
+      outputTypes: [{ kind: "boolean" }],
       apply: args => {
         for (let i = 1; i < args.length; i++) {
           if (!valuesEqualSimple(args[0], args[i])) return false;

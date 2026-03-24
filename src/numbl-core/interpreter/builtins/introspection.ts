@@ -29,7 +29,7 @@ import { registerIBuiltin, makeTensor } from "./types.js";
 function anyToLogical(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length !== 1) return null;
   if (argTypes[0].kind === "unknown") return null;
-  return [{ kind: "logical" }];
+  return [{ kind: "boolean" }];
 }
 
 /** Get the effective 2D+ shape of a runtime value. */
@@ -75,7 +75,7 @@ registerIBuiltin({
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "0"
         : "1";
-    if (k === "logical" || k === "string" || k === "char") return "0";
+    if (k === "boolean" || k === "string" || k === "char") return "0";
     return null;
   },
 });
@@ -104,7 +104,7 @@ registerIBuiltin({
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "0"
         : "1";
-    if (k === "logical" || k === "string" || k === "char") return "0";
+    if (k === "boolean" || k === "string" || k === "char") return "0";
     return null;
   },
 });
@@ -136,7 +136,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "logical") return "1";
+    if (k === "boolean") return "1";
     if (k === "tensor")
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "1"
@@ -239,7 +239,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex") return "1";
     if (k === "string") return "1";
     return null; // tensors/char need runtime check
   },
@@ -268,7 +268,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex" || k === "string")
+    if (k === "number" || k === "boolean" || k === "complex" || k === "string")
       return "0";
     return null; // tensors/char need runtime check
   },
@@ -289,7 +289,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex") return "1";
     return null;
   },
 });
@@ -309,7 +309,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex") return "1";
     return null;
   },
 });
@@ -329,7 +329,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex") return "1";
     return null;
   },
 });
@@ -376,7 +376,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex" || k === "string")
+    if (k === "number" || k === "boolean" || k === "complex" || k === "string")
       return "1";
     return null;
   },
@@ -411,7 +411,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "logical" || k === "complex" || k === "string")
+    if (k === "number" || k === "boolean" || k === "complex" || k === "string")
       return "1";
     return null;
   },
@@ -435,7 +435,7 @@ registerIBuiltin({
     const k = types[0]?.kind;
     if (
       k === "number" ||
-      k === "logical" ||
+      k === "boolean" ||
       k === "complex" ||
       k === "string" ||
       k === "char"
@@ -476,7 +476,7 @@ registerIBuiltin({
     if (argTypes.length === 2) {
       if (argTypes[0].kind === "unknown") return null;
       const dimKind = argTypes[1].kind;
-      if (dimKind !== "number" && dimKind !== "logical") return null;
+      if (dimKind !== "number" && dimKind !== "boolean") return null;
       return {
         outputTypes: [{ kind: "number", sign: "nonneg" }],
         apply: args => {
@@ -495,7 +495,7 @@ registerIBuiltin({
       const k = types[0]?.kind;
       if (
         k === "number" ||
-        k === "logical" ||
+        k === "boolean" ||
         k === "complex" ||
         k === "string"
       )
@@ -518,7 +518,7 @@ registerIBuiltin({
       case "complex":
         outputTypes = [{ kind: "string", value: "double" }];
         break;
-      case "logical":
+      case "boolean":
         outputTypes = [{ kind: "string", value: "logical" }];
         break;
       case "tensor":
@@ -570,7 +570,7 @@ registerIBuiltin({
       case "number":
       case "complex":
         return '"double"';
-      case "logical":
+      case "boolean":
         return '"logical"';
       case "tensor":
         return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical

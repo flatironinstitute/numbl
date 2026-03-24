@@ -10,7 +10,7 @@ export type SignCategory = "positive" | "nonneg" | "nonpositive" | "negative";
 
 export type JitType =
   | { kind: "number"; exact?: number; sign?: SignCategory }
-  | { kind: "logical" }
+  | { kind: "boolean"; value?: boolean }
   | { kind: "complex"; pureImaginary?: boolean }
   | {
       kind: "tensor";
@@ -35,7 +35,7 @@ export function signFromNumber(v: number): SignCategory | undefined {
 
 export function isNonneg(t: JitType): boolean {
   if (t.kind === "number") return t.sign === "nonneg" || t.sign === "positive";
-  if (t.kind === "logical") return true;
+  if (t.kind === "boolean") return true;
   if (t.kind === "tensor") return !!t.nonneg;
   return false;
 }
@@ -68,8 +68,11 @@ export function jitTypeKey(t: JitType): string {
       if (t.sign) k += `:${t.sign}`;
       return k;
     }
-    case "logical":
-      return "logical";
+    case "boolean": {
+      let k = "boolean";
+      if (t.value !== undefined) k += `=${t.value}`;
+      return k;
+    }
     case "complex":
       return t.pureImaginary ? "complex:imag" : "complex";
     case "tensor": {
@@ -179,6 +182,14 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         value: a.value != null && a.value === b.value ? a.value : undefined,
       };
     }
+    if (a.kind === "boolean" && b.kind === "boolean") {
+      return {
+        kind: "boolean",
+        ...(a.value !== undefined && a.value === b.value
+          ? { value: a.value }
+          : {}),
+      };
+    }
     return a; // same kind, no flags to merge
   }
   return { kind: "unknown" };
@@ -187,7 +198,7 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
 export function isScalarType(t: JitType): boolean {
   return (
     t.kind === "number" ||
-    t.kind === "logical" ||
+    t.kind === "boolean" ||
     t.kind === "complex" ||
     t.kind === "string" ||
     t.kind === "char"
@@ -205,7 +216,7 @@ export function isComplexType(t: JitType): boolean {
 export function isRealType(t: JitType): boolean {
   return (
     t.kind === "number" ||
-    t.kind === "logical" ||
+    t.kind === "boolean" ||
     (t.kind === "tensor" && t.isComplex !== true)
   );
 }
