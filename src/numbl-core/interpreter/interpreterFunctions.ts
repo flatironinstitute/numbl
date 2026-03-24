@@ -19,7 +19,7 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { tryJitCall, JIT_SKIP } from "./jit/index.js";
-import { getIBuiltin } from "./builtins/index.js";
+import { getIBuiltin, inferJitType } from "./builtins/index.js";
 import { toNumber, toString } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
@@ -210,7 +210,9 @@ export function interpretTarget(
       const ib = getIBuiltin(target.name);
       if (ib) {
         const margs = args.map(a => ensureRuntimeValue(a));
-        return ib.apply(margs, nargout);
+        const argTypes = margs.map(inferJitType);
+        const resolution = ib.resolve(argTypes, nargout);
+        if (resolution) return resolution.apply(margs, nargout);
       }
       const builtin = this.rt.builtins[target.name];
       if (builtin) return builtin(nargout, args);

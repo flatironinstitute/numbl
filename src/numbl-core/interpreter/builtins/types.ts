@@ -17,15 +17,18 @@ import type { JitType } from "../jit/jitTypes.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 
-export interface IBuiltin {
-  name: string;
-  /** Given input JIT types + nargout, return output JIT types or null if can't handle */
-  typeRule: (argTypes: JitType[], nargout: number) => JitType[] | null;
-  /** Apply the function; may return multiple values as an array when nargout > 1 */
+export interface IBuiltinResolution {
+  outputTypes: JitType[];
   apply: (
     args: RuntimeValue[],
     nargout: number
   ) => RuntimeValue | RuntimeValue[];
+}
+
+export interface IBuiltin {
+  name: string;
+  /** Given input JIT types + nargout, return output types and a specialized apply, or null. */
+  resolve: (argTypes: JitType[], nargout: number) => IBuiltinResolution | null;
   /** Optional fast-path JS code emission for JIT. Return null to fall back to $h.ib_<name>. */
   jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null;
 }
@@ -42,6 +45,31 @@ export function registerIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
 }
 
+// ── Infer JitType from a runtime value ──────────────────────────────────
+
+export function inferJitType(value: unknown): JitType {
+  if (typeof value === "boolean") return { kind: "logical" };
+  if (typeof value === "number") return { kind: "number", nonneg: value >= 0 };
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "complex_number"
+  ) {
+    return { kind: "complex" };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "tensor"
+  ) {
+    const t = value as RuntimeTensor;
+    const shape = t.shape.length >= 2 ? t.shape.slice() : [1, ...t.shape];
+    if (t.imag) return { kind: "complexTensor", shape };
+    return { kind: "realTensor", shape };
+  }
+  return { kind: "unknown" };
+}
+
 /** Coerce JS booleans to 0/1 so JIT code never sees boolean values. */
 function coerceBooleans(v: unknown): unknown {
   if (typeof v === "boolean") return v ? 1 : 0;
@@ -55,14 +83,23 @@ export function buildIBuiltinHelpers(): Record<
 > {
   const helpers: Record<string, (...args: unknown[]) => unknown> = {};
   for (const [name, ib] of registry) {
-    helpers[`ib_${name}`] = (...args: unknown[]) =>
-      coerceBooleans(ib.apply(args as RuntimeValue[], 1));
+    helpers[`ib_${name}`] = (...args: unknown[]) => {
+      const rtArgs = args as RuntimeValue[];
+      const argTypes = rtArgs.map(inferJitType);
+      const res = ib.resolve(argTypes, 1);
+      if (!res) throw new Error(`JIT ib_${name}: resolve failed`);
+      return coerceBooleans(res.apply(rtArgs, 1));
+    };
   }
   // Generic multi-output caller: ibcall(name, nargout, ...args)
   helpers["ibcall"] = (name: unknown, nargout: unknown, ...args: unknown[]) => {
     const ib = registry.get(name as string);
     if (!ib) throw new Error(`JIT ibcall: unknown builtin ${name}`);
-    const result = ib.apply(args as RuntimeValue[], nargout as number);
+    const rtArgs = args as RuntimeValue[];
+    const argTypes = rtArgs.map(inferJitType);
+    const res = ib.resolve(argTypes, nargout as number);
+    if (!res) throw new Error(`JIT ibcall: resolve failed for ${name}`);
+    const result = res.apply(rtArgs, nargout as number);
     if (Array.isArray(result)) return result.map(coerceBooleans);
     return [coerceBooleans(result)];
   };
@@ -267,6 +304,74 @@ export function applyBinaryScalar(
     b = args[1];
   if (typeof a === "number" && typeof b === "number") return fn(a, b);
   throw new Error(`${name}: expected two scalar numbers`);
+}
+
+// ── Combined resolve helpers ────────────────────────────────────────────
+
+/** Resolve helper for unary element-wise functions with complex support. */
+export function resolveUnaryElemwise(
+  typeRule: (argTypes: JitType[]) => JitType[] | null,
+  realFn: (x: number) => number,
+  complexFn: (re: number, im: number) => { re: number; im: number },
+  name: string
+): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
+  return argTypes => {
+    const outputTypes = typeRule(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => applyUnaryElemwise(args[0], realFn, complexFn, name),
+    };
+  };
+}
+
+/** Resolve helper for unary element-wise functions that may produce complex. */
+export function resolveUnaryElemwiseMaybeComplex(
+  typeRule: (argTypes: JitType[]) => JitType[] | null,
+  realFn: (x: number) => number,
+  complexFn: (re: number, im: number) => { re: number; im: number },
+  name: string
+): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
+  return argTypes => {
+    const outputTypes = typeRule(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args =>
+        applyUnaryElemwiseMaybeComplex(args[0], realFn, complexFn, name),
+    };
+  };
+}
+
+/** Resolve helper for unary functions that always return real. */
+export function resolveUnaryRealResult(
+  realFn: (x: number) => number,
+  complexFn: (re: number, im: number) => number,
+  name: string
+): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
+  return argTypes => {
+    const outputTypes = unaryAlwaysReal(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => applyUnaryRealResult(args[0], realFn, complexFn, name),
+    };
+  };
+}
+
+/** Resolve helper for binary scalar-only functions. */
+export function resolveBinaryScalar(
+  fn: (a: number, b: number) => number,
+  name: string
+): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
+  return argTypes => {
+    const outputTypes = binaryNumberOnly(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => applyBinaryScalar(args, fn, name),
+    };
+  };
 }
 
 // ── JIT emit helpers ───────────────────────────────────────────────────

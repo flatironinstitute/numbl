@@ -2,7 +2,6 @@
  * JIT compilation entry point for interpreter function calls.
  */
 
-import type { RuntimeTensor } from "../../runtime/types.js";
 import type { Interpreter } from "../interpreter.js";
 import type { FunctionDef } from "../types.js";
 import {
@@ -14,41 +13,13 @@ import {
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
 import { jitHelpers } from "./jitHelpers.js";
+import { inferJitType } from "../builtins/types.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
 /** Augmented FunctionDef with JIT cache. */
 interface FunctionDefWithCache extends FunctionDef {
   _jitCache?: Map<string, JitCacheEntry | null>;
-}
-
-// ── Type inference from runtime values ──────────────────────────────────
-
-function runtimeValueToJitType(value: unknown): JitType {
-  if (typeof value === "boolean") {
-    return { kind: "logical" };
-  }
-  if (typeof value === "number") {
-    return { kind: "number", nonneg: value >= 0 };
-  }
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { kind?: string }).kind === "complex_number"
-  ) {
-    return { kind: "complex" };
-  }
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { kind?: string }).kind === "tensor"
-  ) {
-    const t = value as RuntimeTensor;
-    const shape = t.shape.length >= 2 ? t.shape.slice() : [1, ...t.shape];
-    if (t.imag) return { kind: "complexTensor", shape };
-    return { kind: "realTensor", shape };
-  }
-  return { kind: "unknown" };
 }
 
 // ── Main entry point ────────────────────────────────────────────────────
@@ -62,7 +33,7 @@ export function tryJitCall(
   // Determine argument types
   const argTypes: JitType[] = [];
   for (const arg of args) {
-    const t = runtimeValueToJitType(arg);
+    const t = inferJitType(arg);
     if (t.kind === "unknown") return JIT_SKIP;
     argTypes.push(t);
   }

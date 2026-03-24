@@ -10,6 +10,7 @@ import "./complex.js";
 import "./predicates.js";
 import "./utility.js";
 import "./introspection.js";
+import "./array-construction.js";
 
-export { getIBuiltin, buildIBuiltinHelpers } from "./types.js";
-export type { IBuiltin } from "./types.js";
+export { getIBuiltin, buildIBuiltinHelpers, inferJitType } from "./types.js";
+export type { IBuiltin, IBuiltinResolution } from "./types.js";

@@ -91,15 +91,17 @@ function tensorsEqual(a: RuntimeTensor, b: RuntimeTensor): boolean {
 
 registerIBuiltin({
   name: "isequal",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length < 2) return null;
-    return [{ kind: "logical" }];
-  },
-  apply: args => {
-    for (let i = 1; i < args.length; i++) {
-      if (!valuesEqualSimple(args[0], args[i])) return false;
-    }
-    return true;
+    return {
+      outputTypes: [{ kind: "logical" }],
+      apply: args => {
+        for (let i = 1; i < args.length; i++) {
+          if (!valuesEqualSimple(args[0], args[i])) return false;
+        }
+        return true;
+      },
+    };
   },
 });
 
@@ -107,28 +109,32 @@ registerIBuiltin({
 
 registerIBuiltin({
   name: "assert",
-  typeRule: argTypes => {
+  resolve: argTypes => {
     if (argTypes.length < 1 || argTypes.length > 2) return null;
-    return [{ kind: "number" }];
-  },
-  apply: args => {
-    const v = args[0];
-    let pass = false;
-    if (typeof v === "boolean") pass = v;
-    else if (typeof v === "number") pass = v !== 0;
-    else if (isRuntimeLogical(v)) pass = v;
-    else if (isRuntimeTensor(v)) {
-      pass = v.data.length > 0;
-      for (let i = 0; i < v.data.length; i++) {
-        if (v.data[i] === 0) {
-          pass = false;
-          break;
+    return {
+      outputTypes: [{ kind: "number" }],
+      apply: args => {
+        const v = args[0];
+        let pass = false;
+        if (typeof v === "boolean") pass = v;
+        else if (typeof v === "number") pass = v !== 0;
+        else if (isRuntimeLogical(v)) pass = v;
+        else if (isRuntimeTensor(v)) {
+          pass = v.data.length > 0;
+          for (let i = 0; i < v.data.length; i++) {
+            if (v.data[i] === 0) {
+              pass = false;
+              break;
+            }
+          }
         }
-      }
-    }
-    if (!pass) {
-      throw new Error(args.length > 1 ? String(args[1]) : "Assertion failed");
-    }
-    return 0;
+        if (!pass) {
+          throw new Error(
+            args.length > 1 ? String(args[1]) : "Assertion failed"
+          );
+        }
+        return 0;
+      },
+    };
   },
 });

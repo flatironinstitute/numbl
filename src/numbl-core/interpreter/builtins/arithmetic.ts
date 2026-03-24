@@ -10,7 +10,12 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { minMaxImpl } from "../../builtins/reduction/min-max.js";
-import { registerIBuiltin, makeTensor, binaryMathJitEmit } from "./types.js";
+import {
+  type IBuiltinResolution,
+  registerIBuiltin,
+  makeTensor,
+  binaryMathJitEmit,
+} from "./types.js";
 import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
 
 // ── Type rule helpers ─────────────────────────────────────────────────
@@ -81,12 +86,26 @@ function applyBinaryElemwise(
   throw new Error(`${name}: unsupported argument types`);
 }
 
+/** Resolve helper for binary real element-wise functions. */
+function resolveBinaryRealElemwise(
+  fn: (a: number, b: number) => number,
+  name: string
+): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
+  return argTypes => {
+    const outputTypes = binaryRealElemwise(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: args => applyBinaryElemwise(args, fn, name),
+    };
+  };
+}
+
 // ── atan2 ────────────────────────────────────────────────────────────────
 
 registerIBuiltin({
   name: "atan2",
-  typeRule: argTypes => binaryRealElemwise(argTypes),
-  apply: args => applyBinaryElemwise(args, Math.atan2, "atan2"),
+  resolve: resolveBinaryRealElemwise(Math.atan2, "atan2"),
   jitEmit: binaryMathJitEmit("Math.atan2"),
 });
 
@@ -146,18 +165,30 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
 
 registerIBuiltin({
   name: "min",
-  typeRule: (argTypes, _nargout) => minMaxTypeRule(argTypes),
-  apply: (args, nargout) =>
-    minMaxImpl("min", args, nargout, Infinity, (a, b) => a < b, Math.min),
+  resolve: (argTypes, _nargout) => {
+    const outputTypes = minMaxTypeRule(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: (args, nargout) =>
+        minMaxImpl("min", args, nargout, Infinity, (a, b) => a < b, Math.min),
+    };
+  },
 });
 
 // ── max ──────────────────────────────────────────────────────────────────
 
 registerIBuiltin({
   name: "max",
-  typeRule: (argTypes, _nargout) => minMaxTypeRule(argTypes),
-  apply: (args, nargout) =>
-    minMaxImpl("max", args, nargout, -Infinity, (a, b) => a > b, Math.max),
+  resolve: (argTypes, _nargout) => {
+    const outputTypes = minMaxTypeRule(argTypes);
+    if (!outputTypes) return null;
+    return {
+      outputTypes,
+      apply: (args, nargout) =>
+        minMaxImpl("max", args, nargout, -Infinity, (a, b) => a > b, Math.max),
+    };
+  },
 });
 
 // ── mod ──────────────────────────────────────────────────────────────────
@@ -168,23 +199,20 @@ function modFn(a: number, b: number): number {
 
 registerIBuiltin({
   name: "mod",
-  typeRule: argTypes => binaryRealElemwise(argTypes),
-  apply: args => applyBinaryElemwise(args, modFn, "mod"),
+  resolve: resolveBinaryRealElemwise(modFn, "mod"),
 });
 
 // ── rem ──────────────────────────────────────────────────────────────────
 
 registerIBuiltin({
   name: "rem",
-  typeRule: argTypes => binaryRealElemwise(argTypes),
-  apply: args => applyBinaryElemwise(args, (a, b) => a % b, "rem"),
+  resolve: resolveBinaryRealElemwise((a, b) => a % b, "rem"),
 });
 
 // ── power ────────────────────────────────────────────────────────────────
 
 registerIBuiltin({
   name: "power",
-  typeRule: argTypes => binaryRealElemwise(argTypes),
-  apply: args => applyBinaryElemwise(args, Math.pow, "power"),
+  resolve: resolveBinaryRealElemwise(Math.pow, "power"),
   jitEmit: binaryMathJitEmit("Math.pow"),
 });

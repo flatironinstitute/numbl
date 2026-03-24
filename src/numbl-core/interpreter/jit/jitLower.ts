@@ -341,8 +341,9 @@ function lowerMultiAssign(
   const ib = getIBuiltin(rhs.name);
   if (!ib) return null; // user function multi-output not yet supported
 
-  const outputTypes = ib.typeRule(argJitTypes, nargout);
-  if (!outputTypes || outputTypes.length < nargout) return null;
+  const resolution = ib.resolve(argJitTypes, nargout);
+  if (!resolution || resolution.outputTypes.length < nargout) return null;
+  const outputTypes = resolution.outputTypes;
 
   // Update type environment for each output variable
   for (let i = 0; i < names.length; i++) {
@@ -867,8 +868,9 @@ function lowerIBuiltinCall(
   const loweredArgs = args as JitExpr[];
   const argJitTypes = loweredArgs.map(a => a.jitType);
 
-  const outputTypes = ib.typeRule(argJitTypes, 1);
-  if (!outputTypes || outputTypes.length === 0) return null;
+  const resolution = ib.resolve(argJitTypes, 1);
+  if (!resolution || resolution.outputTypes.length === 0) return null;
+  const outputTypes = resolution.outputTypes;
 
   // IBuiltin calls always go through $h helpers
   ctx._hasTensorOps = true;
