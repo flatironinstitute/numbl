@@ -2,6 +2,29 @@
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the development guide.
 
+## Architecture: interpreter vs. codegen
+
+Numbl has two execution backends:
+
+1. **Codegen** (`executeCode` in `src/numbl-core/executeCode.ts`): Parse → Lower → Codegen (JS) → eval. The original pipeline. Lowers the MATLAB AST into an IR, generates JavaScript, and evaluates it.
+
+2. **Interpreter** (`interpretCode` in `src/numbl-core/interpretCode.ts`): Parse → AST-walk. Walks the AST directly using the `Interpreter` class (`src/numbl-core/interpreter/`). Reuses the `LoweringContext` for workspace/function resolution but dispatches to runtime values directly instead of generating code.
+
+**We are migrating to the interpreter as the primary backend.** The codegen path will eventually be removed. New builtins and features should target the interpreter path.
+
+### Interpreter builtins (IBuiltins)
+
+The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. These use the `IBuiltin` interface (`types.ts`) with:
+
+- **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
+- **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
+
+The JIT (`src/numbl-core/interpreter/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` for fast codegen.
+
+### Legacy builtins
+
+The codegen-path builtins live in `src/numbl-core/builtins/`. These use a different registration pattern (`register`, `builtinSingle`, `complexElemwise`, etc.) and are **not** used by the interpreter. Do not add new builtins here.
+
 ## Style
 
 - In general do not be too verbose in documentation and code comments.
@@ -48,12 +71,16 @@ Do **not** run `npm run format` manually. Prettier runs automatically via a pre-
 
 ## Adding builtins
 
-Builtins are registered in `src/numbl-core/builtins/`. Most math/special functions go in `math.ts` inside `registerMathFunctions()`. Key patterns:
+New builtins go in `src/numbl-core/interpreter/builtins/`. Each file registers IBuiltins via `registerIBuiltin()` from `types.ts`. Key patterns:
 
-- `register("name", builtinSingle((args, nargout) => { ... }))` for general functions
-- `complexElemwise(realFn, complexFn, outKind)` for element-wise math
-- `elemwise(fn)` for real-only element-wise math
-- `binaryScalar(fn)` for two-argument scalar functions
+- `resolveUnaryElemwise(typeRule, realFn, complexFn, name)` for unary element-wise math
+- `resolveUnaryRealResult(realFn, complexFn, name)` for unary functions that always return real (e.g., abs)
+- `resolveBinaryScalar(fn, name)` for two-argument scalar functions
+- Custom `resolve` for anything more complex (shape-dependent, multi-output, etc.)
+
+Type rules must handle all relevant JitType kinds (`number`, `boolean`, `complex`, `tensor`, `string`, `char`, `struct`, `class_instance`). Return `null` for unsupported types to fall back to the interpreter.
+
+Optional `jitEmit` provides fast-path JS code for scalar/real-tensor cases. Use helpers like `unaryMathJitEmit(mathFn, tensorHelper)` and `binaryMathJitEmit(mathFn)`.
 
 Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, `RTV.logical()`. Use `toNumber(arg)` to extract a scalar. Check types with `isRuntimeNumber()`, `isRuntimeTensor()`, `isRuntimeChar()`, etc.
 
