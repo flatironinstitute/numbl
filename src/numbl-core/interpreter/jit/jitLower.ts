@@ -440,8 +440,10 @@ function lowerExprStmt(
 function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   const cond = lowerExpr(ctx, stmt.cond);
   if (!cond) return null;
-  // Only scalar conditions supported — tensor truthiness requires checking all elements
+  // Only numeric scalar conditions supported
   if (!isScalarType(cond.jitType)) return null;
+  if (cond.jitType.kind === "string" || cond.jitType.kind === "char")
+    return null;
 
   const envBefore = cloneEnv(ctx.env);
 
@@ -562,6 +564,8 @@ function lowerWhile(
   const cond = lowerExpr(ctx, stmt.cond);
   if (!cond) return null;
   if (!isScalarType(cond.jitType)) return null;
+  if (cond.jitType.kind === "string" || cond.jitType.kind === "char")
+    return null;
 
   const body = lowerStmts(ctx, stmt.body);
   if (!body) return null;
