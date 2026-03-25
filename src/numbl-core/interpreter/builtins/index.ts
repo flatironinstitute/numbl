@@ -16,6 +16,10 @@ import "./strings.js";
 import "./set-operations.js";
 import "./linear-algebra.js";
 import "./fft.js";
+import "./array-manipulation.js";
+import "./array-extras.js";
+import "./validation.js";
+import "./numerical.js";
 
 export {
   getIBuiltin,

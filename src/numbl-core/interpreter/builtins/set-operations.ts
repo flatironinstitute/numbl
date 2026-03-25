@@ -14,7 +14,13 @@ import {
   isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
+import {
+  RTV,
+  toNumber,
+  toString,
+  RuntimeError,
+  tensorSize2D,
+} from "../../runtime/index.js";
 import { rstr } from "../../runtime/runtime.js";
 import type { JitType } from "../jit/jitTypes.js";
 import { defineBuiltin } from "./types.js";
@@ -515,4 +521,570 @@ function ismemberNumeric(
     return t;
   }
   throw new RuntimeError("ismember: first argument must be numeric");
+}
+
+// ── intersect ────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "intersect",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const a = toNumArray(args[0], "intersect");
+        const bSet = new Set(toNumArray(args[1], "intersect"));
+        const result = [...new Set(a.filter(x => bSet.has(x)))].sort((x, y) => {
+          if (x !== x) return 1;
+          if (y !== y) return -1;
+          return x - y;
+        });
+        return RTV.tensor(new FloatXArray(result), [1, result.length]);
+      },
+    },
+  ],
+});
+
+// ── union ────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "union",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const a = toNumArray(args[0], "union");
+        const b = toNumArray(args[1], "union");
+        const result = [...new Set([...a, ...b])].sort((x, y) => {
+          if (x !== x) return 1;
+          if (y !== y) return -1;
+          return x - y;
+        });
+        return RTV.tensor(new FloatXArray(result), [1, result.length]);
+      },
+    },
+  ],
+});
+
+// ── nnz ──────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "nnz",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        return [{ kind: "number" }];
+      },
+      apply: args => {
+        const v = args[0];
+        if (isRuntimeNumber(v)) return (v as number) !== 0 ? 1 : 0;
+        if (isRuntimeLogical(v)) return v ? 1 : 0;
+        if (isRuntimeSparseMatrix(v)) return v.jc[v.n];
+        if (isRuntimeTensor(v)) {
+          let count = 0;
+          for (let i = 0; i < v.data.length; i++) {
+            if (v.data[i] !== 0) count++;
+          }
+          return count;
+        }
+        throw new RuntimeError("nnz: argument must be numeric");
+      },
+    },
+  ],
+});
+
+// ── nonzeros ─────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "nonzeros",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const v = args[0];
+        if (isRuntimeSparseMatrix(v)) {
+          const nnz = v.jc[v.n];
+          if (nnz === 0) return RTV.tensor(new FloatXArray(0), [0, 1]);
+          const pr = new FloatXArray(v.pr.subarray(0, nnz));
+          const pi = v.pi ? new FloatXArray(v.pi.subarray(0, nnz)) : undefined;
+          return RTV.tensor(pr, [nnz, 1], pi);
+        }
+        if (isRuntimeTensor(v)) {
+          const nzVals: number[] = [];
+          const nzImag: number[] = [];
+          for (let i = 0; i < v.data.length; i++) {
+            if (v.data[i] !== 0 || (v.imag && v.imag[i] !== 0)) {
+              nzVals.push(v.data[i]);
+              if (v.imag) nzImag.push(v.imag[i]);
+            }
+          }
+          const n = nzVals.length;
+          if (n === 0) return RTV.tensor(new FloatXArray(0), [0, 1]);
+          return RTV.tensor(
+            new FloatXArray(nzVals),
+            [n, 1],
+            v.imag ? new FloatXArray(nzImag) : undefined
+          );
+        }
+        if (isRuntimeNumber(v)) {
+          return (v as number) !== 0
+            ? RTV.tensor(new FloatXArray([v as number]), [1, 1])
+            : RTV.tensor(new FloatXArray(0), [0, 1]);
+        }
+        throw new RuntimeError("nonzeros: argument must be numeric");
+      },
+    },
+  ],
+});
+
+// ── sortrows ─────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "sortrows",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length < 1 || argTypes.length > 2) return null;
+        const out: JitType = { kind: "unknown" };
+        return nargout > 1 ? [out, out] : [out];
+      },
+      apply: (args, nargout) => {
+        const A = args[0];
+        if (!isRuntimeTensor(A))
+          throw new RuntimeError("sortrows: input must be a matrix");
+
+        const m = A.shape[0];
+        const n = A.shape.length >= 2 ? A.shape[1] : 1;
+        const data = A.data;
+
+        let cols: number[] = [];
+        if (args.length >= 2) {
+          const colArg = args[1];
+          if (isRuntimeNumber(colArg)) {
+            cols = [Math.round(colArg as number)];
+          } else if (isRuntimeTensor(colArg)) {
+            for (let i = 0; i < colArg.data.length; i++)
+              cols.push(Math.round(colArg.data[i]));
+          } else {
+            throw new RuntimeError("sortrows: column argument must be numeric");
+          }
+        }
+        if (cols.length === 0) {
+          for (let j = 1; j <= n; j++) cols.push(j);
+        }
+
+        const rowIdx = Array.from({ length: m }, (_, i) => i);
+        rowIdx.sort((a, b) => {
+          for (const c of cols) {
+            const colIdx = Math.abs(c) - 1;
+            const desc = c < 0;
+            const va = data[a + colIdx * m];
+            const vb = data[b + colIdx * m];
+            if (va !== vb) {
+              const diff = va - vb;
+              return desc ? -diff : diff;
+            }
+          }
+          return 0;
+        });
+
+        const resultData = new FloatXArray(m * n);
+        for (let j = 0; j < n; j++) {
+          for (let i = 0; i < m; i++) {
+            resultData[i + j * m] = data[rowIdx[i] + j * m];
+          }
+        }
+        const result = RTV.tensor(resultData, [m, n]);
+
+        if (nargout > 1) {
+          const idxData = new FloatXArray(m);
+          for (let i = 0; i < m; i++) idxData[i] = rowIdx[i] + 1;
+          return [result, RTV.tensor(idxData, [m, 1])];
+        }
+        return result;
+      },
+    },
+  ],
+});
+
+// ── unique ───────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "unique",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length < 1) return null;
+        const out: JitType = { kind: "unknown" };
+        return Array(Math.max(nargout, 1)).fill(out);
+      },
+      apply: (args, nargout) => {
+        const v = args[0];
+
+        let byRows = false;
+        let stable = false;
+        for (let i = 1; i < args.length; i++) {
+          const a = args[i];
+          if (isRuntimeString(a) || isRuntimeChar(a)) {
+            const s = rstr(a).toLowerCase();
+            if (s === "rows") byRows = true;
+            else if (s === "stable") stable = true;
+            else if (s === "sorted") stable = false;
+          }
+        }
+
+        if (isRuntimeNumber(v)) {
+          if (nargout <= 1) return v;
+          if (nargout === 2) return [v, RTV.num(1)];
+          return [v, RTV.num(1), RTV.num(1)];
+        }
+        if (isRuntimeLogical(v)) {
+          const r = RTV.num(v ? 1 : 0);
+          if (nargout <= 1) return r;
+          if (nargout === 2) return [r, RTV.num(1)];
+          return [r, RTV.num(1), RTV.num(1)];
+        }
+
+        if (!isRuntimeTensor(v))
+          throw new RuntimeError("unique: argument must be numeric");
+
+        if (byRows) return uniqueByRows(v, nargout, stable);
+        return uniqueElements(v, nargout, stable);
+      },
+    },
+  ],
+});
+
+function uniqueByRows(
+  v: RuntimeTensor,
+  nargout: number,
+  stable: boolean
+): RuntimeValue | RuntimeValue[] {
+  const [rows, cols] = tensorSize2D(v);
+  const rowKey =
+    cols === 2
+      ? (r: number): string => v.data[r] + "," + v.data[rows + r]
+      : (r: number): string => {
+          let key = "" + v.data[r];
+          for (let c = 1; c < cols; c++) key += "," + v.data[c * rows + r];
+          return key;
+        };
+  const rowHasNaN = (r: number): boolean => {
+    for (let c = 0; c < cols; c++) {
+      if (v.data[c * rows + r] !== v.data[c * rows + r]) return true;
+    }
+    return false;
+  };
+  const seen = new Map<string, number>();
+  const uniqueRowOrder: number[] = [];
+  const ic = new FloatXArray(rows);
+
+  for (let r = 0; r < rows; r++) {
+    if (rowHasNaN(r)) {
+      const idx = uniqueRowOrder.length;
+      uniqueRowOrder.push(r);
+      ic[r] = idx + 1;
+      continue;
+    }
+    const key = rowKey(r);
+    if (seen.has(key)) {
+      ic[r] = seen.get(key)! + 1;
+    } else {
+      const idx = uniqueRowOrder.length;
+      seen.set(key, idx);
+      uniqueRowOrder.push(r);
+      ic[r] = idx + 1;
+    }
+  }
+
+  if (!stable) {
+    uniqueRowOrder.sort((a, b) => {
+      for (let c = 0; c < cols; c++) {
+        const va = v.data[c * rows + a];
+        const vb = v.data[c * rows + b];
+        if (va !== vb) return va - vb;
+      }
+      return 0;
+    });
+  }
+
+  const nUnique = uniqueRowOrder.length;
+  const resultData = new FloatXArray(nUnique * cols);
+  for (let c = 0; c < cols; c++) {
+    for (let u = 0; u < nUnique; u++) {
+      resultData[c * nUnique + u] = v.data[c * rows + uniqueRowOrder[u]];
+    }
+  }
+
+  const C = RTV.tensor(resultData, [nUnique, cols]);
+  if (nargout <= 1) return C;
+
+  const ia = RTV.tensor(new FloatXArray(uniqueRowOrder.map(r => r + 1)), [
+    nUnique,
+    1,
+  ]);
+
+  if (!stable) {
+    const sortedKeyToPos = new Map<string, number>();
+    for (let u = 0; u < nUnique; u++) {
+      sortedKeyToPos.set(rowKey(uniqueRowOrder[u]), u + 1);
+    }
+    for (let r = 0; r < rows; r++) {
+      if (rowHasNaN(r)) {
+        for (let u = 0; u < nUnique; u++) {
+          if (uniqueRowOrder[u] === r) {
+            ic[r] = u + 1;
+            break;
+          }
+        }
+      } else {
+        ic[r] = sortedKeyToPos.get(rowKey(r))!;
+      }
+    }
+  }
+
+  const icTensor = RTV.tensor(ic, [rows, 1]);
+  if (nargout === 2) return [C, ia];
+  return [C, ia, icTensor];
+}
+
+function uniqueElements(
+  v: RuntimeTensor,
+  nargout: number,
+  stable: boolean
+): RuntimeValue | RuntimeValue[] {
+  const hasImag = !!v.imag;
+  const isNaNVal = (i: number): boolean =>
+    v.data[i] !== v.data[i] || (hasImag && v.imag![i] !== v.imag![i]);
+  const valKey = (i: number): string =>
+    hasImag ? `${v.data[i]},${v.imag![i]}` : `${v.data[i]}`;
+  const seen = new Map<string, number>();
+  const uniqueOrder: number[] = [];
+  const icArr = new FloatXArray(v.data.length);
+
+  for (let i = 0; i < v.data.length; i++) {
+    if (isNaNVal(i)) {
+      const idx = uniqueOrder.length;
+      uniqueOrder.push(i);
+      icArr[i] = idx + 1;
+      continue;
+    }
+    const key = valKey(i);
+    if (seen.has(key)) {
+      icArr[i] = seen.get(key)! + 1;
+    } else {
+      const idx = uniqueOrder.length;
+      seen.set(key, idx);
+      uniqueOrder.push(i);
+      icArr[i] = idx + 1;
+    }
+  }
+
+  let uniqueRe = uniqueOrder.map(i => v.data[i]);
+  let uniqueIm = hasImag ? uniqueOrder.map(i => v.imag![i]) : null;
+  if (!stable) {
+    const indices = uniqueRe.map((_, i) => i);
+    indices.sort((a, b) => {
+      const ra = uniqueRe[a],
+        rb = uniqueRe[b];
+      if (ra !== ra) return 1;
+      if (rb !== rb) return -1;
+      if (ra !== rb) return ra - rb;
+      if (uniqueIm) {
+        const ia2 = uniqueIm[a],
+          ib = uniqueIm[b];
+        if (ia2 !== ib) return ia2 - ib;
+      }
+      return 0;
+    });
+    const reindex = new Array(uniqueRe.length);
+    indices.forEach((origIdx, newIdx) => {
+      reindex[origIdx] = newIdx;
+    });
+    for (let i = 0; i < icArr.length; i++) {
+      icArr[i] = reindex[icArr[i] - 1] + 1;
+    }
+    uniqueRe = indices.map(i => uniqueRe[i]);
+    if (uniqueIm) uniqueIm = indices.map(i => uniqueIm![i]);
+    const sortedOrder = indices.map(i => uniqueOrder[i]);
+    uniqueOrder.length = 0;
+    uniqueOrder.push(...sortedOrder);
+  }
+
+  const isRow = v.shape.length === 2 && v.shape[0] === 1;
+  const outShape: number[] = isRow
+    ? [1, uniqueRe.length]
+    : [uniqueRe.length, 1];
+  const C = RTV.tensor(
+    new FloatXArray(uniqueRe),
+    outShape,
+    uniqueIm ? new FloatXArray(uniqueIm) : undefined
+  );
+
+  if (nargout <= 1) return C;
+
+  const ia = RTV.tensor(new FloatXArray(uniqueOrder.map(i => i + 1)), [
+    uniqueRe.length,
+    1,
+  ]);
+  const icTensor = RTV.tensor(icArr, [v.data.length, 1]);
+  if (nargout === 2) return [C, ia];
+  return [C, ia, icTensor];
+}
+
+// ── uniquetol ────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "uniquetol",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length < 1) return null;
+        const out: JitType = { kind: "unknown" };
+        return Array(Math.max(nargout, 1)).fill(out);
+      },
+      apply: (args, nargout) => {
+        const v = args[0];
+        if (!isRuntimeTensor(v) && !isRuntimeNumber(v))
+          throw new RuntimeError("uniquetol: first argument must be numeric");
+
+        let tol = 1e-6;
+        let byRows = false;
+        let startIdx = 1;
+
+        if (
+          args.length >= 2 &&
+          (isRuntimeNumber(args[1]) ||
+            (isRuntimeTensor(args[1]) && args[1].data.length === 1))
+        ) {
+          tol = toNumber(args[1]);
+          startIdx = 2;
+        }
+
+        for (let i = startIdx; i < args.length; i += 2) {
+          const name = args[i];
+          if (
+            (isRuntimeString(name) || isRuntimeChar(name)) &&
+            rstr(name).toLowerCase() === "byrows"
+          ) {
+            byRows = i + 1 < args.length && toNumber(args[i + 1]) !== 0;
+          }
+        }
+
+        if (isRuntimeNumber(v)) {
+          if (nargout > 1) return [v, RTV.num(1), RTV.num(1)];
+          return v;
+        }
+
+        if (byRows) return uniquetolByRows(v, nargout, tol);
+        return uniquetolElements(v, nargout, tol);
+      },
+    },
+  ],
+});
+
+function uniquetolByRows(
+  v: RuntimeTensor,
+  nargout: number,
+  tol: number
+): RuntimeValue | RuntimeValue[] {
+  const [rows, cols] = tensorSize2D(v);
+  const data = v.data;
+  const uniqueRowIndices: number[] = [];
+  const ic = new FloatXArray(rows);
+
+  for (let r = 0; r < rows; r++) {
+    let matchIdx = -1;
+    for (let u = 0; u < uniqueRowIndices.length; u++) {
+      const ur = uniqueRowIndices[u];
+      let withinTol = true;
+      for (let c = 0; c < cols; c++) {
+        if (Math.abs(data[c * rows + r] - data[c * rows + ur]) > tol) {
+          withinTol = false;
+          break;
+        }
+      }
+      if (withinTol) {
+        matchIdx = u;
+        break;
+      }
+    }
+    if (matchIdx === -1) {
+      ic[r] = uniqueRowIndices.length + 1;
+      uniqueRowIndices.push(r);
+    } else {
+      ic[r] = matchIdx + 1;
+    }
+  }
+
+  const nUnique = uniqueRowIndices.length;
+  const resultData = new FloatXArray(nUnique * cols);
+  for (let c = 0; c < cols; c++) {
+    for (let u = 0; u < nUnique; u++) {
+      resultData[c * nUnique + u] = data[c * rows + uniqueRowIndices[u]];
+    }
+  }
+
+  const C = RTV.tensor(resultData, [nUnique, cols]);
+  if (nargout <= 1) return C;
+
+  const ia = RTV.tensor(new FloatXArray(uniqueRowIndices.map(r => r + 1)), [
+    nUnique,
+    1,
+  ]);
+  const icTensor = RTV.tensor(ic, [rows, 1]);
+  if (nargout === 2) return [C, ia];
+  return [C, ia, icTensor];
+}
+
+function uniquetolElements(
+  v: RuntimeTensor,
+  nargout: number,
+  tol: number
+): RuntimeValue | RuntimeValue[] {
+  const data = v.data;
+  const shape = v.shape;
+  const vals = Array.from(data);
+  const uniqueIndices: number[] = [];
+  const icArr = new FloatXArray(vals.length);
+
+  for (let i = 0; i < vals.length; i++) {
+    let matchIdx = -1;
+    for (let u = 0; u < uniqueIndices.length; u++) {
+      if (Math.abs(vals[i] - vals[uniqueIndices[u]]) <= tol) {
+        matchIdx = u;
+        break;
+      }
+    }
+    if (matchIdx === -1) {
+      icArr[i] = uniqueIndices.length + 1;
+      uniqueIndices.push(i);
+    } else {
+      icArr[i] = matchIdx + 1;
+    }
+  }
+
+  const nUnique = uniqueIndices.length;
+  const resultData = new FloatXArray(uniqueIndices.map(i => vals[i]));
+  const isRow = shape.length === 2 && shape[0] === 1;
+  const outShape: number[] = isRow ? [1, nUnique] : [nUnique, 1];
+  const C = RTV.tensor(resultData, outShape);
+
+  if (nargout <= 1) return C;
+  const ia = RTV.tensor(new FloatXArray(uniqueIndices.map(i => i + 1)), [
+    nUnique,
+    1,
+  ]);
+  const icTensor = RTV.tensor(icArr, [vals.length, 1]);
+  if (nargout === 2) return [C, ia];
+  return [C, ia, icTensor];
 }
