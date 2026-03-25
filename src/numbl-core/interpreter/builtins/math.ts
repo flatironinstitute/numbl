@@ -179,8 +179,8 @@ registerIBuiltin({
       case "boolean":
         outputTypes = [{ kind: "number", sign: "positive" }];
         break;
-      case "complex":
-        outputTypes = [{ kind: "complex" }];
+      case "complex_or_number":
+        outputTypes = [{ kind: "complex_or_number" }];
         break;
       case "tensor":
         outputTypes =
@@ -305,8 +305,8 @@ registerIBuiltin({
       case "boolean":
         outputTypes = [{ kind: "number" }];
         break;
-      case "complex":
-        outputTypes = [{ kind: "complex" }];
+      case "complex_or_number":
+        outputTypes = [{ kind: "complex_or_number" }];
         break;
       case "tensor":
         outputTypes = [
@@ -384,11 +384,11 @@ registerIBuiltin({
             a.sign === "positive" ? "positive" : "nonneg";
           outputTypes = [{ kind: "number", sign: outSign }];
         } else {
-          outputTypes = [{ kind: "complex" }];
+          outputTypes = [{ kind: "complex_or_number" }];
         }
         break;
-      case "complex":
-        outputTypes = [{ kind: "complex" }];
+      case "complex_or_number":
+        outputTypes = [{ kind: "complex_or_number" }];
         break;
       case "tensor":
         if (a.isComplex === true)
@@ -462,8 +462,8 @@ function registerRounding(
         case "boolean":
           outputTypes = [{ kind: "number", sign: "nonneg" }];
           break;
-        case "complex":
-          outputTypes = [{ kind: "complex" }];
+        case "complex_or_number":
+          outputTypes = [{ kind: "complex_or_number" }];
           break;
         case "tensor":
           outputTypes = [
@@ -516,8 +516,8 @@ registerIBuiltin({
       case "boolean":
         outputTypes = [{ kind: "number", sign: "nonneg" }];
         break;
-      case "complex":
-        outputTypes = [{ kind: "complex" }];
+      case "complex_or_number":
+        outputTypes = [{ kind: "complex_or_number" }];
         break;
       case "tensor":
         outputTypes = [

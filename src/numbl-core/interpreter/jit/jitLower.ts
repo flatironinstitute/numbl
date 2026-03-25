@@ -216,7 +216,7 @@ function binaryResultType(
   }
 
   if (anyComplex) {
-    return { kind: "complex" };
+    return { kind: "complex_or_number" };
   }
 
   // Both are numbers (or coerced from logical)
@@ -239,7 +239,8 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
       }
       if (operand.kind === "boolean")
         return { kind: "number", sign: "nonpositive" };
-      if (operand.kind === "complex") return { kind: "complex" };
+      if (operand.kind === "complex_or_number")
+        return { kind: "complex_or_number" };
       if (operand.kind === "tensor")
         return {
           kind: "tensor",
@@ -634,7 +635,7 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     case "ImagUnit":
       return {
         tag: "ImagLiteral",
-        jitType: { kind: "complex", pureImaginary: true },
+        jitType: { kind: "complex_or_number", pureImaginary: true },
       };
 
     case "Ident": {
@@ -673,8 +674,8 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       if (
         isTensorType(left.jitType) ||
         isTensorType(right.jitType) ||
-        left.jitType.kind === "complex" ||
-        right.jitType.kind === "complex"
+        left.jitType.kind === "complex_or_number" ||
+        right.jitType.kind === "complex_or_number"
       ) {
         ctx._hasTensorOps = true;
       }
@@ -688,7 +689,10 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       const resultType = unaryResultType(expr.op, operand.jitType);
       if (!resultType || resultType.kind === "unknown") return null;
 
-      if (isTensorType(operand.jitType) || operand.jitType.kind === "complex")
+      if (
+        isTensorType(operand.jitType) ||
+        operand.jitType.kind === "complex_or_number"
+      )
         ctx._hasTensorOps = true;
 
       return { tag: "Unary", op: expr.op, operand, jitType: resultType };
@@ -706,10 +710,10 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           if (
             lowered.jitType.kind !== "number" &&
             lowered.jitType.kind !== "boolean" &&
-            lowered.jitType.kind !== "complex"
+            lowered.jitType.kind !== "complex_or_number"
           )
             return null;
-          if (lowered.jitType.kind === "complex") hasComplex = true;
+          if (lowered.jitType.kind === "complex_or_number") hasComplex = true;
           loweredRow.push(lowered);
         }
         rows.push(loweredRow);
@@ -798,15 +802,15 @@ function lowerIndexExpr(
   switch (base.jitType.kind) {
     case "tensor":
       resultType = base.jitType.isComplex
-        ? { kind: "complex" }
+        ? { kind: "complex_or_number" }
         : { kind: "number" };
       break;
     case "number":
     case "boolean":
       resultType = { kind: "number" };
       break;
-    case "complex":
-      resultType = { kind: "complex" };
+    case "complex_or_number":
+      resultType = { kind: "complex_or_number" };
       break;
     default:
       return null;

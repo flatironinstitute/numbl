@@ -102,13 +102,13 @@ function reductionOutputType(
   opts?: { alwaysReal?: boolean; logicalOutput?: boolean }
 ): JitType[] | null {
   const isComplex =
-    inputType.kind === "complex" ||
+    inputType.kind === "complex_or_number" ||
     (inputType.kind === "tensor" && inputType.isComplex === true);
 
   const scalarOut = (): JitType => {
     if (opts?.logicalOutput) return { kind: "boolean" };
     if (opts?.alwaysReal || !isComplex) return { kind: "number" };
-    return { kind: "complex" };
+    return { kind: "complex_or_number" };
   };
 
   const tensorOut = (shape?: number[]): JitType => {
@@ -125,7 +125,7 @@ function reductionOutputType(
   if (
     inputType.kind === "number" ||
     inputType.kind === "boolean" ||
-    inputType.kind === "complex"
+    inputType.kind === "complex_or_number"
   ) {
     return [scalarOut()];
   }
@@ -528,7 +528,8 @@ function cumulativeOutputType(argTypes: JitType[]): JitType[] | null {
   const inputType = argTypes[0];
   if (inputType.kind === "number" || inputType.kind === "boolean")
     return [{ kind: "number" }];
-  if (inputType.kind === "complex") return [{ kind: "complex" }];
+  if (inputType.kind === "complex_or_number")
+    return [{ kind: "complex_or_number" }];
   if (inputType.kind === "tensor") {
     return [
       {

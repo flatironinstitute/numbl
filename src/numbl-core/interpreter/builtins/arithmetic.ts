@@ -127,12 +127,16 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
     const a = argTypes[0];
     const b = argTypes[1];
     const allowed = (k: string) =>
-      k === "number" || k === "boolean" || k === "tensor" || k === "complex";
+      k === "number" ||
+      k === "boolean" ||
+      k === "tensor" ||
+      k === "complex_or_number";
     if (!allowed(a.kind) || !allowed(b.kind)) return null;
     if (a.kind === "tensor" || b.kind === "tensor") {
       const t =
         a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
-      const otherIsComplex = a.kind === "complex" || b.kind === "complex";
+      const otherIsComplex =
+        a.kind === "complex_or_number" || b.kind === "complex_or_number";
       return [
         {
           kind: "tensor",
@@ -142,8 +146,8 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
         },
       ];
     }
-    if (a.kind === "complex" || b.kind === "complex") {
-      return [{ kind: "complex" }];
+    if (a.kind === "complex_or_number" || b.kind === "complex_or_number") {
+      return [{ kind: "complex_or_number" }];
     }
     {
       const aSign =
@@ -164,17 +168,25 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   }
   if (argTypes.length === 1) {
     const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "boolean" || a.kind === "complex")
+    if (
+      a.kind === "number" ||
+      a.kind === "boolean" ||
+      a.kind === "complex_or_number"
+    )
       return [a];
     if (a.kind === "tensor") {
       if (!a.shape)
         return [
-          a.isComplex === true ? { kind: "complex" } : { kind: "number" },
+          a.isComplex === true
+            ? { kind: "complex_or_number" }
+            : { kind: "number" },
         ];
       const result = shapeAfterReduction(a.shape);
       if (result.scalar)
         return [
-          a.isComplex === true ? { kind: "complex" } : { kind: "number" },
+          a.isComplex === true
+            ? { kind: "complex_or_number" }
+            : { kind: "number" },
         ];
       return [{ kind: "tensor", isComplex: a.isComplex, shape: result.shape }];
     }
@@ -193,7 +205,9 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
         const result = shapeAfterReduction(a.shape, dim);
         if (result.scalar)
           return [
-            a.isComplex === true ? { kind: "complex" } : { kind: "number" },
+            a.isComplex === true
+              ? { kind: "complex_or_number" }
+              : { kind: "number" },
           ];
         return [
           { kind: "tensor", isComplex: a.isComplex, shape: result.shape },

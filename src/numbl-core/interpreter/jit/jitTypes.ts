@@ -11,7 +11,7 @@ export type SignCategory = "positive" | "nonneg" | "nonpositive" | "negative";
 export type JitType =
   | { kind: "number"; exact?: number; sign?: SignCategory }
   | { kind: "boolean"; value?: boolean }
-  | { kind: "complex"; pureImaginary?: boolean }
+  | { kind: "complex_or_number"; pureImaginary?: boolean }
   | {
       kind: "tensor";
       isComplex: boolean;
@@ -80,8 +80,8 @@ export function jitTypeKey(t: JitType): string {
       if (t.value !== undefined) k += `=${t.value}`;
       return k;
     }
-    case "complex":
-      return t.pureImaginary ? "complex:imag" : "complex";
+    case "complex_or_number":
+      return t.pureImaginary ? "complex:imag" : "complex_or_number";
     case "tensor": {
       const s = t.shape
         ? t.shape.map(d => (d === -1 ? "?" : d)).join("x")
@@ -153,9 +153,9 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         ...(sign ? { sign } : {}),
       };
     }
-    if (a.kind === "complex" && b.kind === "complex") {
+    if (a.kind === "complex_or_number" && b.kind === "complex_or_number") {
       return {
-        kind: "complex",
+        kind: "complex_or_number",
         ...(a.pureImaginary && b.pureImaginary ? { pureImaginary: true } : {}),
       };
     }
@@ -254,6 +254,15 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
     }
     return a; // same kind, no flags to merge
   }
+  // Widen number/boolean → complex_or_number (every real is a valid complex)
+  if (
+    (a.kind === "complex_or_number" &&
+      (b.kind === "number" || b.kind === "boolean")) ||
+    ((a.kind === "number" || a.kind === "boolean") &&
+      b.kind === "complex_or_number")
+  ) {
+    return { kind: "complex_or_number" };
+  }
   return { kind: "unknown" };
 }
 
@@ -261,14 +270,18 @@ export function isScalarType(t: JitType): boolean {
   return (
     t.kind === "number" ||
     t.kind === "boolean" ||
-    t.kind === "complex" ||
+    t.kind === "complex_or_number" ||
     t.kind === "string" ||
     t.kind === "char"
   );
 }
 
 export function isNumericScalarType(t: JitType): boolean {
-  return t.kind === "number" || t.kind === "boolean" || t.kind === "complex";
+  return (
+    t.kind === "number" ||
+    t.kind === "boolean" ||
+    t.kind === "complex_or_number"
+  );
 }
 
 export function isTensorType(t: JitType): boolean {
@@ -276,7 +289,10 @@ export function isTensorType(t: JitType): boolean {
 }
 
 export function isComplexType(t: JitType): boolean {
-  return t.kind === "complex" || (t.kind === "tensor" && t.isComplex === true);
+  return (
+    t.kind === "complex_or_number" ||
+    (t.kind === "tensor" && t.isComplex === true)
+  );
 }
 
 /** Types that support arithmetic binary operations in the JIT. */
@@ -284,7 +300,7 @@ export function isArithmeticType(t: JitType): boolean {
   return (
     t.kind === "number" ||
     t.kind === "boolean" ||
-    t.kind === "complex" ||
+    t.kind === "complex_or_number" ||
     t.kind === "tensor"
   );
 }
