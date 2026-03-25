@@ -275,6 +275,16 @@ export function isComplexType(t: JitType): boolean {
   return t.kind === "complex" || (t.kind === "tensor" && t.isComplex === true);
 }
 
+/** Types that support arithmetic binary operations in the JIT. */
+export function isArithmeticType(t: JitType): boolean {
+  return (
+    t.kind === "number" ||
+    t.kind === "boolean" ||
+    t.kind === "complex" ||
+    t.kind === "tensor"
+  );
+}
+
 export function isRealType(t: JitType): boolean {
   return (
     t.kind === "number" ||

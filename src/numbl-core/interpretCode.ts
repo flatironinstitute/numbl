@@ -198,12 +198,18 @@ export function interpretCode(
 
     return result;
   } catch (e) {
+    // Attach collected JIT code to the error so callers (e.g. --dump-js) can inspect it
+    const generatedJS =
+      jitSections.length > 0
+        ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
+        : "// interpreted mode — no JS generated";
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {
         e.file = rt.$file;
         e.line = rt.$line;
       }
+      (e as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
       throw e;
     }
     const re = new RuntimeError(e instanceof Error ? e.message : String(e));
@@ -211,6 +217,7 @@ export function interpretCode(
       re.file = rt.$file;
       re.line = rt.$line;
     }
+    (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
     throw re;
   } finally {
     // Unregister .js user function IBuiltins to avoid polluting the global registry
