@@ -12,6 +12,7 @@ import "./utility.js";
 import "./introspection.js";
 import "./array-construction.js";
 import "./reductions.js";
+import "./strings.js";
 
 export { getIBuiltin, buildIBuiltinHelpers, inferJitType } from "./types.js";
 export type { IBuiltin, IBuiltinResolution } from "./types.js";
