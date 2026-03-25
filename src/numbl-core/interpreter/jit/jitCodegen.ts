@@ -96,8 +96,7 @@ export function generateJS(
   params: string[],
   outputs: string[],
   nargout: number,
-  localVars: Set<string>,
-  hasTensorOps: boolean
+  localVars: Set<string>
 ): string {
   _tmpCounter = 0;
 
@@ -119,7 +118,7 @@ export function generateJS(
   }
 
   // Emit body
-  emitStmts(lines, body, indent, hasTensorOps);
+  emitStmts(lines, body, indent);
 
   // Return
   lines.push(`${indent}return ${_returnExpr};`);
@@ -129,42 +128,32 @@ export function generateJS(
 
 // ── Statement emission ──────────────────────────────────────────────────
 
-function emitStmts(
-  lines: string[],
-  stmts: JitStmt[],
-  indent: string,
-  ht: boolean
-): void {
+function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
   for (const stmt of stmts) {
-    emitStmt(lines, stmt, indent, ht);
+    emitStmt(lines, stmt, indent);
   }
 }
 
-function emitStmt(
-  lines: string[],
-  stmt: JitStmt,
-  indent: string,
-  ht: boolean
-): void {
+function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign":
-      lines.push(`${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr, ht)};`);
+      lines.push(`${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr)};`);
       break;
 
     case "ExprStmt":
-      lines.push(`${indent}${emitExpr(stmt.expr, ht)};`);
+      lines.push(`${indent}${emitExpr(stmt.expr)};`);
       break;
 
     case "If": {
-      lines.push(`${indent}if (${emitTruthiness(stmt.cond, ht)}) {`);
-      emitStmts(lines, stmt.thenBody, indent + "  ", ht);
+      lines.push(`${indent}if (${emitTruthiness(stmt.cond)}) {`);
+      emitStmts(lines, stmt.thenBody, indent + "  ");
       for (const eib of stmt.elseifBlocks) {
-        lines.push(`${indent}} else if (${emitTruthiness(eib.cond, ht)}) {`);
-        emitStmts(lines, eib.body, indent + "  ", ht);
+        lines.push(`${indent}} else if (${emitTruthiness(eib.cond)}) {`);
+        emitStmts(lines, eib.body, indent + "  ");
       }
       if (stmt.elseBody) {
         lines.push(`${indent}} else {`);
-        emitStmts(lines, stmt.elseBody, indent + "  ", ht);
+        emitStmts(lines, stmt.elseBody, indent + "  ");
       }
       lines.push(`${indent}}`);
       break;
@@ -173,9 +162,9 @@ function emitStmt(
     case "For": {
       const v = mangle(stmt.varName);
       const t = `$t${++_tmpCounter}`;
-      const start = emitExpr(stmt.start, ht);
-      const end = emitExpr(stmt.end, ht);
-      const step = stmt.step ? emitExpr(stmt.step, ht) : "1";
+      const start = emitExpr(stmt.start);
+      const end = emitExpr(stmt.end);
+      const step = stmt.step ? emitExpr(stmt.step) : "1";
       // Use a separate temp loop variable and assign the iterator inside
       // the body. This is important for two reasons:
       // 1. The iterator variable must retain the last value actually used
@@ -192,14 +181,14 @@ function emitStmt(
         );
       }
       lines.push(`${indent}  ${v} = ${t};`);
-      emitStmts(lines, stmt.body, indent + "  ", ht);
+      emitStmts(lines, stmt.body, indent + "  ");
       lines.push(`${indent}}`);
       break;
     }
 
     case "While":
-      lines.push(`${indent}while (${emitTruthiness(stmt.cond, ht)}) {`);
-      emitStmts(lines, stmt.body, indent + "  ", ht);
+      lines.push(`${indent}while (${emitTruthiness(stmt.cond)}) {`);
+      emitStmts(lines, stmt.body, indent + "  ");
       lines.push(`${indent}}`);
       break;
 
@@ -217,7 +206,7 @@ function emitStmt(
       break;
 
     case "MultiAssign": {
-      const args = stmt.args.map(a => emitExpr(a, ht));
+      const args = stmt.args.map(a => emitExpr(a));
       const nargout = stmt.names.length;
       const tmp = `$ma${++_tmpCounter}`;
       lines.push(
@@ -243,7 +232,7 @@ function isComplexType(t: JitType): boolean {
   );
 }
 
-function emitExpr(expr: JitExpr, ht: boolean): string {
+function emitExpr(expr: JitExpr): string {
   switch (expr.tag) {
     case "NumberLiteral":
       return String(expr.value);
@@ -255,31 +244,31 @@ function emitExpr(expr: JitExpr, ht: boolean): string {
       return mangle(expr.name);
 
     case "Binary":
-      return emitBinary(expr, ht);
+      return emitBinary(expr);
 
     case "Unary":
-      return emitUnary(expr, ht);
+      return emitUnary(expr);
 
     case "Call":
-      return emitCall(expr, ht);
+      return emitCall(expr);
 
     case "TensorLiteral":
-      return emitTensorLiteral(expr, ht);
+      return emitTensorLiteral(expr);
 
     case "StringLiteral":
       return JSON.stringify(expr.value);
 
     case "UserCall":
-      return emitUserCall(expr, ht);
+      return emitUserCall(expr);
 
     case "Index":
-      return emitIndex(expr, ht);
+      return emitIndex(expr);
   }
 }
 
-function emitBinary(expr: JitExpr & { tag: "Binary" }, ht: boolean): string {
-  const left = emitExpr(expr.left, ht);
-  const right = emitExpr(expr.right, ht);
+function emitBinary(expr: JitExpr & { tag: "Binary" }): string {
+  const left = emitExpr(expr.left);
+  const right = emitExpr(expr.right);
   const leftIsTensor = isTensorType(expr.left.jitType);
   const rightIsTensor = isTensorType(expr.right.jitType);
   const anyComplex =
@@ -373,8 +362,8 @@ function emitTensorBinary(
   }
 }
 
-function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
-  const operand = emitExpr(expr.operand, ht);
+function emitUnary(expr: JitExpr & { tag: "Unary" }): string {
+  const operand = emitExpr(expr.operand);
 
   if (isTensorType(expr.operand.jitType)) {
     switch (expr.op) {
@@ -410,24 +399,18 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
   }
 }
 
-function emitUserCall(
-  expr: JitExpr & { tag: "UserCall" },
-  ht: boolean
-): string {
-  const args = expr.args.map(a => emitExpr(a, ht));
+function emitUserCall(expr: JitExpr & { tag: "UserCall" }): string {
+  const args = expr.args.map(a => emitExpr(a));
   return `${expr.jitName}(${args.join(", ")})`;
 }
 
-function emitTensorLiteral(
-  expr: JitExpr & { tag: "TensorLiteral" },
-  ht: boolean
-): string {
+function emitTensorLiteral(expr: JitExpr & { tag: "TensorLiteral" }): string {
   const { rows, nRows, nCols } = expr;
   // Column-major order: iterate columns first, then rows
   const elems: string[] = [];
   for (let c = 0; c < nCols; c++) {
     for (let r = 0; r < nRows; r++) {
-      elems.push(emitExpr(rows[r][c], ht));
+      elems.push(emitExpr(rows[r][c]));
     }
   }
   if (expr.jitType.kind === "tensor" && expr.jitType.isComplex === true) {
@@ -438,11 +421,11 @@ function emitTensorLiteral(
       for (let r = 0; r < nRows; r++) {
         const e = rows[r][c];
         if (e.jitType.kind === "complex_or_number") {
-          const s = emitExpr(e, ht);
+          const s = emitExpr(e);
           reElems.push(`$h.re(${s})`);
           imElems.push(`$h.im(${s})`);
         } else {
-          reElems.push(emitExpr(e, ht));
+          reElems.push(emitExpr(e));
           imElems.push("0");
         }
       }
@@ -452,17 +435,17 @@ function emitTensorLiteral(
   return `$h.mkTensor([${elems.join(", ")}], [${nRows}, ${nCols}])`;
 }
 
-function emitIndex(expr: JitExpr & { tag: "Index" }, ht: boolean): string {
-  const base = emitExpr(expr.base, ht);
-  const indices = expr.indices.map(i => emitExpr(i, ht));
+function emitIndex(expr: JitExpr & { tag: "Index" }): string {
+  const base = emitExpr(expr.base);
+  const indices = expr.indices.map(i => emitExpr(i));
   if (indices.length === 1) return `$h.idx1(${base}, ${indices[0]})`;
   if (indices.length === 2)
     return `$h.idx2(${base}, ${indices[0]}, ${indices[1]})`;
   return `$h.idxN(${base}, [${indices.join(", ")}])`;
 }
 
-function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
-  const args = expr.args.map(a => emitExpr(a, ht));
+function emitCall(expr: JitExpr & { tag: "Call" }): string {
+  const args = expr.args.map(a => emitExpr(a));
   // Try fast-path emission if the IBuiltin provides one
   const ib = getIBuiltin(expr.name);
   if (ib?.jitEmit) {
@@ -475,11 +458,11 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
 
 // ── Truthiness ──────────────────────────────────────────────────────────
 
-function emitTruthiness(expr: JitExpr, ht: boolean): string {
+function emitTruthiness(expr: JitExpr): string {
   // String/char conditions are rejected during lowering.
   // Complex values are objects, so !== 0 is always true — use $h.cTruthy.
   if (expr.jitType.kind === "complex_or_number") {
-    return `$h.cTruthy(${emitExpr(expr, ht)})`;
+    return `$h.cTruthy(${emitExpr(expr)})`;
   }
-  return `(${emitExpr(expr, ht)}) !== 0`;
+  return `(${emitExpr(expr)}) !== 0`;
 }

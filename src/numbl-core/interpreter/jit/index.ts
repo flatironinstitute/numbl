@@ -65,8 +65,7 @@ export function tryJitCall(
     fn.params,
     lowered.outputNames,
     nargout,
-    lowered.localVars,
-    lowered.hasTensorOps
+    lowered.localVars
   );
 
   // Prepend generated helper function definitions (indented to match main body)

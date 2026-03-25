@@ -149,8 +149,7 @@ function tryJitLoop(
     inputs,
     lowered.outputNames,
     outputs.length,
-    lowered.localVars,
-    lowered.hasTensorOps
+    lowered.localVars
   );
 
   // Prepend generated helper function definitions

@@ -883,8 +883,7 @@ function lowerUserFuncCall(
       calleeFn.params,
       calleeResult.outputNames,
       calleeNargout,
-      calleeResult.localVars,
-      calleeResult.hasTensorOps
+      calleeResult.localVars
     );
     const returnType = calleeResult.outputType ?? { kind: "number" as const };
     const paramComments = calleeFn.params
