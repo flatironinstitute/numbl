@@ -89,6 +89,18 @@ function cNeg(a: unknown): number | RuntimeComplexNumber {
   return mkc(-re(a), -im(a));
 }
 
+function cConj(a: unknown): number | RuntimeComplexNumber {
+  return mkc(re(a), -im(a));
+}
+
+function cAngle(a: unknown): number {
+  return Math.atan2(im(a), re(a));
+}
+
+function mod(a: number, b: number): number {
+  return ((a % b) + b) % b;
+}
+
 // ── Element-wise tensor operations (real and complex) ───────────────────
 
 type ScalarVal = number | RuntimeComplexNumber;
@@ -282,6 +294,11 @@ export const jitHelpers = {
   cMul,
   cDiv,
   cNeg,
+  cConj,
+  cAngle,
+
+  // Scalar math
+  mod,
 
   // Tensor binary ops (handles real + complex + mixed)
   tAdd: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x + y, cAdd),
@@ -325,7 +342,7 @@ export const jitHelpers = {
   idx2,
   idxN,
 
-  // Scalar accessors (for complex tensor literal construction)
+  // Scalar accessors
   re,
   im,
 

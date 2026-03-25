@@ -38,6 +38,13 @@ registerIBuiltin({
       },
     };
   },
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number" || k === "boolean") return `(+${argCode[0]})`;
+    if (k === "complex") return `$h.re(${argCode[0]})`;
+    return null;
+  },
 });
 
 // ── imag ────────────────────────────────────────────────────────────────
@@ -65,6 +72,13 @@ registerIBuiltin({
         throw new Error("imag: unsupported argument type");
       },
     };
+  },
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number" || k === "boolean") return "0";
+    if (k === "complex") return `$h.im(${argCode[0]})`;
+    return null;
   },
 });
 
@@ -94,6 +108,13 @@ registerIBuiltin({
         throw new Error("conj: unsupported argument type");
       },
     };
+  },
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number" || k === "boolean") return argCode[0];
+    if (k === "complex") return `$h.cConj(${argCode[0]})`;
+    return null;
   },
 });
 
@@ -125,5 +146,13 @@ registerIBuiltin({
         throw new Error("angle: unsupported argument type");
       },
     };
+  },
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number") return `(${argCode[0]} >= 0 ? 0 : Math.PI)`;
+    if (k === "boolean") return "0";
+    if (k === "complex") return `$h.cAngle(${argCode[0]})`;
+    return null;
   },
 });

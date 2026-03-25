@@ -248,6 +248,17 @@ function modFn(a: number, b: number): number {
 registerIBuiltin({
   name: "mod",
   resolve: resolveBinaryRealElemwise(modFn, "mod"),
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 2) return null;
+    const k0 = argTypes[0].kind,
+      k1 = argTypes[1].kind;
+    if (
+      (k0 !== "number" && k0 !== "boolean") ||
+      (k1 !== "number" && k1 !== "boolean")
+    )
+      return null;
+    return `$h.mod(${argCode[0]}, ${argCode[1]})`;
+  },
 });
 
 // ── rem ──────────────────────────────────────────────────────────────────
@@ -255,6 +266,17 @@ registerIBuiltin({
 registerIBuiltin({
   name: "rem",
   resolve: resolveBinaryRealElemwise((a, b) => a % b, "rem"),
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 2) return null;
+    const k0 = argTypes[0].kind,
+      k1 = argTypes[1].kind;
+    if (
+      (k0 !== "number" && k0 !== "boolean") ||
+      (k1 !== "number" && k1 !== "boolean")
+    )
+      return null;
+    return `(${argCode[0]} % ${argCode[1]})`;
+  },
 });
 
 // ── power ────────────────────────────────────────────────────────────────
