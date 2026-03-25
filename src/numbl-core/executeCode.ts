@@ -18,7 +18,11 @@ import {
   offsetToColumn,
 } from "../numbl-core/runtime/index.js";
 import { ensureRuntimeValue } from "./runtime/runtimeHelpers.js";
-import { getItemTypeFromRuntimeValue } from "./runtime/constructors.js";
+import {
+  registerIBuiltin,
+  unregisterIBuiltin,
+  inferJitType,
+} from "./interpreter/builtins/types.js";
 import { SemanticError } from "./lowering/errors.js";
 import { JitCompiler } from "./executor/jitCompiler.js";
 import { generateMainScriptCode } from "./codegen/generateMainScriptCode.js";
@@ -40,7 +44,8 @@ export function executeCode(
       options,
       workspaceFiles,
       mainFileName,
-      searchPaths
+      searchPaths,
+      nativeBridge
     );
   }
 
@@ -72,19 +77,17 @@ export function executeCode(
 
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Register .js user functions on the runtime (overrides same-named builtins)
-  for (const [name, branches] of jsUserFunctions) {
-    rt.builtins[name] = (nargout: number, args: unknown[]) => {
+  // Register .js user functions as IBuiltins (and on rt.builtins for codegen dispatch)
+  for (const ib of jsUserFunctions) {
+    registerIBuiltin(ib);
+    rt.builtins[ib.name] = (nargout: number, args: unknown[]) => {
       const margs = args.map(a => ensureRuntimeValue(a));
-      const argItemTypes = margs.map(arg => getItemTypeFromRuntimeValue(arg));
-      let branch = branches[0];
-      for (const b of branches) {
-        if (b.check(argItemTypes, nargout)) {
-          branch = b;
-          break;
-        }
-      }
-      return branch.apply(margs, nargout);
+      const argTypes = margs.map(inferJitType);
+      const resolution = ib.resolve(argTypes, nargout);
+      if (resolution) return resolution.apply(margs, nargout);
+      throw new RuntimeError(
+        `JS user function '${ib.name}' rejected arguments`
+      );
     };
   }
 
@@ -189,5 +192,10 @@ export function executeCode(
     (re as ErrorWithDebugInfo).generatedJS = jsCode;
     (re as ErrorWithDebugInfo).jitFunctionCode = rt.jitFunctionCode;
     throw re;
+  } finally {
+    // Unregister .js user function IBuiltins to avoid polluting the global registry
+    for (const ib of jsUserFunctions) {
+      unregisterIBuiltin(ib.name);
+    }
   }
 }

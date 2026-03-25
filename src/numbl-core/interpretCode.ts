@@ -14,6 +14,12 @@ import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { Runtime } from "./runtime/runtime.js";
 import { RTV } from "./runtime/constructors.js";
 import { RuntimeError } from "../numbl-core/runtime/index.js";
+import { loadJsUserFunctions } from "./jsUserFunctions.js";
+import {
+  registerIBuiltin,
+  unregisterIBuiltin,
+} from "./interpreter/builtins/types.js";
+import type { NativeBridge } from "./workspace/index.js";
 import { parseMFile, type Stmt } from "./parser/index.js";
 import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
@@ -28,7 +34,8 @@ export function interpretCode(
   options: ExecOptions = {},
   workspaceFiles?: WorkspaceFile[],
   mainFileName: string = "script.m",
-  searchPaths?: string[]
+  searchPaths?: string[],
+  nativeBridge?: NativeBridge
 ): ExecResult {
   // ── 1. Parse main file ──────────────────────────────────────────────
   const ast = parseMFile(source, mainFileName);
@@ -53,14 +60,27 @@ export function interpretCode(
 
   // Separate .m workspace files from .js/.wasm
   const mWorkspaceFiles: WorkspaceFile[] = [];
+  const jsWorkspaceFiles: WorkspaceFile[] = [];
+  const wasmWorkspaceFiles: WorkspaceFile[] = [];
   if (workspaceFiles) {
     for (const f of workspaceFiles) {
       if (f.name.endsWith(".m")) {
         mWorkspaceFiles.push(f);
+      } else if (f.name.endsWith(".js")) {
+        jsWorkspaceFiles.push(f);
+      } else if (f.name.endsWith(".wasm")) {
+        wasmWorkspaceFiles.push(f);
       }
-      // Skip .js and .wasm files for interpreter mode
     }
   }
+
+  // Load .js user functions
+  const jsUserFunctions = loadJsUserFunctions(
+    jsWorkspaceFiles,
+    wasmWorkspaceFiles,
+    nativeBridge
+  );
+  const jsUserFunctionNames = jsUserFunctions.map(ib => ib.name);
 
   // Add stdlib and shim files
   for (const f of stdlibFiles) {
@@ -103,10 +123,15 @@ export function interpretCode(
   }
 
   // Build function index (enables definitive resolution)
-  const functionIndex = ctx.buildFunctionIndex();
+  const functionIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
 
   // ── 3. Create runtime ──────────────────────────────────────────────
   const rt = new Runtime(options, options.initialVariableValues);
+
+  // Register .js user functions as IBuiltins
+  for (const ib of jsUserFunctions) {
+    registerIBuiltin(ib);
+  }
 
   // Apply custom builtins
   if (options.customBuiltins) {
@@ -187,5 +212,10 @@ export function interpretCode(
       re.line = rt.$line;
     }
     throw re;
+  } finally {
+    // Unregister .js user function IBuiltins to avoid polluting the global registry
+    for (const ib of jsUserFunctions) {
+      unregisterIBuiltin(ib.name);
+    }
   }
 }

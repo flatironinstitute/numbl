@@ -939,10 +939,7 @@ function genFuncCall(
 
       case "builtin": {
         // Skip native math inlining for JS user functions — they override the builtin.
-        const isJsUserFunc = cg.loweringCtx.functionIndex.jsUserFunctions.has(
-          kind.name
-        );
-        if (!isJsUserFunc) {
+        if (!cg.loweringCtx.functionIndex.jsUserFunctions.has(kind.name)) {
           const nativeMath = tryNativeMathCodegen(
             cg,
             kind.name,

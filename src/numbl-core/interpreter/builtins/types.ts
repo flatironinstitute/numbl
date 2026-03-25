@@ -47,6 +47,10 @@ export function registerIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
 }
 
+export function unregisterIBuiltin(name: string): void {
+  registry.delete(name);
+}
+
 // ── Infer JitType from a runtime value ──────────────────────────────────
 
 export function inferJitType(value: unknown): JitType {

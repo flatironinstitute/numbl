@@ -1,8 +1,10 @@
 register({
-  check: function (argTypes, nargout) {
-    return { outputTypes: [IType.num()] };
-  },
-  apply: function (args, nargout) {
-    return RTV.num(args[0] + args[1]);
+  resolve: function (argTypes, nargout) {
+    return {
+      outputTypes: [{ kind: "number" }],
+      apply: function (args) {
+        return args[0] + args[1];
+      },
+    };
   },
 });

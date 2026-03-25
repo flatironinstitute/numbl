@@ -1,17 +1,16 @@
 /**
  * Loader for .js user functions.
  *
- * Evaluates .js files that define branches via register({ check, apply }).
+ * Evaluates .js files that define IBuiltins via register({ resolve, jitEmit? }).
  * Supports optional WASM and native shared library bindings via directives:
  *   // wasm: <name>
  *   // native: <name>
  */
 
-import type { BuiltinFn, BuiltinFnBranch } from "./builtins/registry.js";
-import { type ItemType, IType } from "./lowering/itemTypes.js";
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
 import { RTV, RuntimeError } from "./runtime/index.js";
 import { FloatXArray } from "./runtime/types.js";
+import type { IBuiltin } from "./interpreter/builtins/types.js";
 
 /**
  * Derive a function name from a .js workspace file path.
@@ -21,12 +20,6 @@ function funcNameFromFile(fileName: string): string {
   const base = fileName.split("/").pop()!;
   return base.replace(/\.js$/, "");
 }
-
-const defaultCheck = (_argTypes: ItemType[], nargout: number) => ({
-  outputTypes: Array(Math.max(nargout, 1)).fill({
-    kind: "Unknown",
-  } as ItemType),
-});
 
 /**
  * Build a map of base name → Uint8Array from .wasm workspace files.
@@ -151,15 +144,14 @@ function resolveBindings(
 const LOADING = Symbol("loading");
 
 /**
- * Load .js user function files and return them as a map of function name → BuiltinFn.
+ * Load .js user function files and return them as IBuiltin objects.
+ *
+ * Each .js file calls register({ resolve, jitEmit? }) to define an IBuiltin.
+ * resolve(argTypes, nargout) returns { outputTypes, apply } or null.
  *
  * A .js file can specify bindings via directives at the top of the file:
  *   // wasm: <name>    — load a WASM module (looked up by name in wasmFiles)
  *   // native: <name>  — load a native shared library (resolved relative to .js file)
- *
- * The `wasm` and `native` parameters are passed to the .js function context.
- * They are `undefined` when the corresponding directive is absent or the binary
- * is not found.
  *
  * Files whose basename starts with `_` are library files. They must not call
  * register() and instead export values via `return`. Other .js files can import
@@ -169,8 +161,8 @@ export function loadJsUserFunctions(
   jsFiles: WorkspaceFile[],
   wasmFiles?: WorkspaceFile[],
   nativeBridge?: NativeBridge
-): Map<string, BuiltinFn> {
-  const result = new Map<string, BuiltinFn>();
+): IBuiltin[] {
+  const result: IBuiltin[] = [];
   const wasmMap = wasmFiles ? buildWasmMap(wasmFiles) : new Map();
   // Cache compiled WASM instances so multiple .js files can share one module
   const wasmInstanceCache = new Map<string, WebAssembly.Instance>();
@@ -236,7 +228,6 @@ export function loadJsUserFunctions(
       "RTV",
       "RuntimeError",
       "FloatXArray",
-      "IType",
       "register",
       "wasm",
       "native",
@@ -247,7 +238,6 @@ export function loadJsUserFunctions(
       RTV,
       RuntimeError,
       FloatXArray,
-      IType,
       dummyRegister,
       wasmInstance,
       nativeLib,
@@ -261,19 +251,25 @@ export function loadJsUserFunctions(
   for (const file of functionFiles) {
     const funcName = funcNameFromFile(file.name);
     try {
-      const branches: BuiltinFnBranch[] = [];
+      let builtin: IBuiltin | null = null;
 
-      const registerFn = (branch: {
-        check?: BuiltinFnBranch["check"];
-        apply: BuiltinFnBranch["apply"];
+      const registerFn = (spec: {
+        resolve: IBuiltin["resolve"];
+        jitEmit?: IBuiltin["jitEmit"];
       }) => {
-        if (typeof branch.apply !== "function") {
-          throw new Error("register(): branch must have an apply function");
+        if (typeof spec.resolve !== "function") {
+          throw new Error("register(): spec must have a resolve function");
         }
-        branches.push({
-          check: branch.check ?? defaultCheck,
-          apply: branch.apply,
-        });
+        if (builtin) {
+          throw new Error(
+            "register() called more than once — only one registration per .js file"
+          );
+        }
+        builtin = {
+          name: funcName,
+          resolve: spec.resolve as IBuiltin["resolve"],
+          jitEmit: spec.jitEmit as IBuiltin["jitEmit"],
+        };
       };
 
       // Parse directives from the top of the .js file
@@ -290,7 +286,6 @@ export function loadJsUserFunctions(
         "RTV",
         "RuntimeError",
         "FloatXArray",
-        "IType",
         "register",
         "wasm",
         "native",
@@ -301,20 +296,19 @@ export function loadJsUserFunctions(
         RTV,
         RuntimeError,
         FloatXArray,
-        IType,
         registerFn,
         wasmInstance,
         nativeLib,
         importJS
       );
 
-      if (branches.length === 0) {
+      if (!builtin) {
         throw new Error(
-          `JS user function '${funcName}' (${file.name}) must call register() at least once`
+          `JS user function '${funcName}' (${file.name}) must call register() once`
         );
       }
 
-      // Build binding status message (only if directives were present)
+      // Wrap resolve with binding status logging (only if directives were present)
       if (directives.native || directives.wasm) {
         const parts: string[] = [];
         if (directives.native) {
@@ -325,19 +319,25 @@ export function loadJsUserFunctions(
         }
         const statusMsg = `${funcName}: ${parts.join(", ")}`;
         let logged = false;
-        for (const branch of branches) {
-          const origApply = branch.apply;
-          branch.apply = (...applyArgs) => {
-            if (!logged) {
-              logged = true;
-              console.log(statusMsg);
-            }
-            return origApply(...applyArgs);
+        const origResolve = (builtin as IBuiltin).resolve;
+        (builtin as IBuiltin).resolve = (argTypes, nargout) => {
+          const resolution = origResolve(argTypes, nargout);
+          if (!resolution) return null;
+          const origApply = resolution.apply;
+          return {
+            outputTypes: resolution.outputTypes,
+            apply: (args, n) => {
+              if (!logged) {
+                logged = true;
+                console.log(statusMsg);
+              }
+              return origApply(args, n);
+            },
           };
-        }
+        };
       }
 
-      result.set(funcName, branches);
+      result.push(builtin);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(

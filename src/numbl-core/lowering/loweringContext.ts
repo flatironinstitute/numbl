@@ -984,14 +984,13 @@ export class LoweringContext {
     // 1. Builtins
     const builtins = new Set(getAllBuiltinNames());
 
-    // Separate JS user functions from builtins — they resolve at workspace priority
+    // JS user functions resolve at workspace priority (after .m, before builtins).
+    // Remove any shadowed builtins so the .js version takes precedence.
     const jsUserFunctions = new Set<string>();
     if (jsUserFunctionNames) {
       for (const name of jsUserFunctionNames) {
-        if (builtins.has(name)) {
-          builtins.delete(name);
-          jsUserFunctions.add(name);
-        }
+        builtins.delete(name);
+        jsUserFunctions.add(name);
       }
     }
 

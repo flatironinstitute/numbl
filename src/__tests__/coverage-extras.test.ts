@@ -1,9 +1,27 @@
 import { describe, it, expect } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
 import { loadJsUserFunctions } from "../numbl-core/jsUserFunctions.js";
+import type { RuntimeValue } from "../numbl-core/runtime/types.js";
 import { parseMFile } from "../numbl-core/parser/index.js";
 
 // ── jsUserFunctions ──────────────────────────────────────────────────
+
+/** Helper: resolve an IBuiltin and call its apply with given args. */
+function callIBuiltin(
+  ibs: ReturnType<typeof loadJsUserFunctions>,
+  name: string,
+  args: unknown[],
+  nargout = 1
+) {
+  const ib = ibs.find(b => b.name === name);
+  if (!ib) throw new Error(`IBuiltin '${name}' not found`);
+  const res = ib.resolve(
+    args.map(() => ({ kind: "number" as const })),
+    nargout
+  );
+  if (!res) throw new Error(`resolve returned null for '${name}'`);
+  return res.apply(args as RuntimeValue[], nargout);
+}
 
 describe("jsUserFunctions", () => {
   it("loads a simple JS user function", () => {
@@ -11,27 +29,16 @@ describe("jsUserFunctions", () => {
       {
         name: "myadd.js",
         source: `register({
-          apply: (args) => args[0] + args[1]
+          resolve: (argTypes, nargout) => ({
+            outputTypes: [{ kind: 'number' }],
+            apply: (args) => args[0] + args[1]
+          })
         });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles);
-    expect(fns.has("myadd")).toBe(true);
-    expect(fns.get("myadd")!.length).toBe(1);
-  });
-
-  it("loads a JS function with custom check", () => {
-    const jsFiles = [
-      {
-        name: "double_it.js",
-        source: `register({
-          check: (argTypes, nargout) => ({ outputTypes: [{ kind: 'Unknown' }] }),
-          apply: (args) => args[0] * 2
-        });`,
-      },
-    ];
-    const fns = loadJsUserFunctions(jsFiles);
-    expect(fns.has("double_it")).toBe(true);
+    expect(fns.find(b => b.name === "myadd")).toBeDefined();
+    expect(callIBuiltin(fns, "myadd", [3, 4])).toBe(7);
   });
 
   it("imports a library file via importJS", () => {
@@ -43,14 +50,13 @@ describe("jsUserFunctions", () => {
       {
         name: "usehelper.js",
         source: `var H = importJS("_helpers");
-register({ apply: (args) => H.add(args[0], args[1]) });`,
+register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) => H.add(args[0], args[1]) }) });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles);
-    expect(fns.has("usehelper")).toBe(true);
-    expect(fns.has("_helpers")).toBe(false);
-    const branch = fns.get("usehelper")![0];
-    expect(branch.apply([3, 4], 1)).toBe(7);
+    expect(fns.find(b => b.name === "usehelper")).toBeDefined();
+    expect(fns.find(b => b.name === "_helpers")).toBeUndefined();
+    expect(callIBuiltin(fns, "usehelper", [3, 4])).toBe(7);
   });
 
   it("caches library — executes once for multiple imports", () => {
@@ -62,25 +68,24 @@ register({ apply: (args) => H.add(args[0], args[1]) });`,
       {
         name: "a.js",
         source: `var C = importJS("_counter");
-register({ apply: () => C.n });`,
+register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n }) });`,
       },
       {
         name: "b.js",
         source: `var C = importJS("_counter");
-register({ apply: () => C.n });`,
+register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n }) });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles);
-    // Both should see the same cached object with n=1
-    expect(fns.get("a")![0].apply([], 1)).toBe(1);
-    expect(fns.get("b")![0].apply([], 1)).toBe(1);
+    expect(callIBuiltin(fns, "a", [])).toBe(1);
+    expect(callIBuiltin(fns, "b", [])).toBe(1);
   });
 
   it("throws on importJS for nonexistent library", () => {
     const jsFiles = [
       {
         name: "bad.js",
-        source: `importJS("_nope"); register({ apply: () => 0 });`,
+        source: `importJS("_nope"); register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
     expect(() => loadJsUserFunctions(jsFiles)).toThrow(/not found/);
@@ -98,7 +103,7 @@ register({ apply: () => C.n });`,
       },
       {
         name: "trigger.js",
-        source: `importJS("_a"); register({ apply: () => 0 });`,
+        source: `importJS("_a"); register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
     expect(() => loadJsUserFunctions(jsFiles)).toThrow(/Circular dependency/);
@@ -108,11 +113,11 @@ register({ apply: () => C.n });`,
     const jsFiles = [
       {
         name: "_badlib.js",
-        source: `register({ apply: () => 0 }); return {};`,
+        source: `register({ resolve: () => null }); return {};`,
       },
       {
         name: "trigger.js",
-        source: `importJS("_badlib"); register({ apply: () => 0 });`,
+        source: `importJS("_badlib"); register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
     expect(() => loadJsUserFunctions(jsFiles)).toThrow(
@@ -134,11 +139,11 @@ return { square: function(x) { return B.mul(x, x); } };`,
       {
         name: "usederived.js",
         source: `var D = importJS("_derived");
-register({ apply: (args) => D.square(args[0]) });`,
+register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) => D.square(args[0]) }) });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles);
-    expect(fns.get("usederived")![0].apply([5], 1)).toBe(25);
+    expect(callIBuiltin(fns, "usederived", [5])).toBe(25);
   });
 
   it("throws if no register() call", () => {
@@ -151,14 +156,14 @@ register({ apply: (args) => D.square(args[0]) });`,
     expect(() => loadJsUserFunctions(jsFiles)).toThrow(/must call register/);
   });
 
-  it("throws if apply is not a function", () => {
+  it("throws if resolve is not a function", () => {
     const jsFiles = [
       {
         name: "bad.js",
-        source: `register({ apply: 42 });`,
+        source: `register({ resolve: 42 });`,
       },
     ];
-    expect(() => loadJsUserFunctions(jsFiles)).toThrow(/apply function/);
+    expect(() => loadJsUserFunctions(jsFiles)).toThrow(/resolve function/);
   });
 
   it("throws on JS syntax errors", () => {
@@ -175,60 +180,54 @@ register({ apply: (args) => D.square(args[0]) });`,
     const jsFiles = [
       {
         name: "/some/path/myFunc.js",
-        source: `register({ apply: (args) => 0 });`,
+        source: `register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles);
-    expect(fns.has("myFunc")).toBe(true);
+    expect(fns.find(b => b.name === "myFunc")).toBeDefined();
   });
 
   it("does not provide wasm without directive (no fallback by name)", () => {
     const jsFiles = [
       {
         name: "myfunc.js",
-        source: `register({ apply: () => wasm });`,
+        source: `register({ resolve: () => ({ outputTypes: [], apply: () => wasm }) });`,
       },
     ];
-    // Even though there's a matching wasm file by name, wasm should be undefined
-    // without a directive
     const wasmFiles = [
       { name: "myfunc.wasm", source: "", data: new Uint8Array([]) },
     ];
     const fns = loadJsUserFunctions(jsFiles, wasmFiles);
-    const branch = fns.get("myfunc")![0];
-    expect(branch.apply([], 1)).toBeUndefined();
+    expect(callIBuiltin(fns, "myfunc", [])).toBeUndefined();
   });
 
   it("provides wasm when directive is present and wasm file exists", () => {
-    // Build a minimal valid wasm module (empty module: magic + version + no sections)
     const wasmBytes = new Uint8Array([
       0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
     ]);
     const jsFiles = [
       {
         name: "/path/to/myfunc.js",
-        source: `// wasm: mymod\nregister({ apply: () => (wasm !== undefined) });`,
+        source: `// wasm: mymod\nregister({ resolve: () => ({ outputTypes: [], apply: () => (wasm !== undefined) }) });`,
       },
     ];
     const wasmFiles = [
       { name: "/path/to/mymod.wasm", source: "", data: wasmBytes },
     ];
     const fns = loadJsUserFunctions(jsFiles, wasmFiles);
-    const branch = fns.get("myfunc")![0];
-    expect(branch.apply([], 1)).toBe(true);
+    expect(callIBuiltin(fns, "myfunc", [])).toBe(true);
   });
 
   it("passes native as undefined when no directive", () => {
     const jsFiles = [
       {
         name: "/path/to/myfunc.js",
-        source: `register({ apply: () => (typeof native === 'undefined') });`,
+        source: `register({ resolve: () => ({ outputTypes: [], apply: () => (typeof native === 'undefined') }) });`,
       },
     ];
     const mockBridge = { load: () => ({ fake: true }) };
     const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
-    const branch = fns.get("myfunc")![0];
-    expect(branch.apply([], 1)).toBe(true);
+    expect(callIBuiltin(fns, "myfunc", [])).toBe(true);
   });
 
   it("passes native library when directive and bridge are present", () => {
@@ -237,12 +236,11 @@ register({ apply: (args) => D.square(args[0]) });`,
     const jsFiles = [
       {
         name: "/path/to/myfunc.js",
-        source: `// native: mylib\nregister({ apply: () => native });`,
+        source: `// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => native }) });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
-    const branch = fns.get("myfunc")![0];
-    expect(branch.apply([], 1)).toBe(mockLib);
+    expect(callIBuiltin(fns, "myfunc", [])).toBe(mockLib);
   });
 
   it("leaves native undefined when bridge load fails", () => {
@@ -254,12 +252,11 @@ register({ apply: (args) => D.square(args[0]) });`,
     const jsFiles = [
       {
         name: "/path/to/myfunc.js",
-        source: `// native: mylib\nregister({ apply: () => (typeof native === 'undefined') });`,
+        source: `// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => (typeof native === 'undefined') }) });`,
       },
     ];
     const fns = loadJsUserFunctions(jsFiles, [], mockBridge);
-    const branch = fns.get("myfunc")![0];
-    expect(branch.apply([], 1)).toBe(true);
+    expect(callIBuiltin(fns, "myfunc", [])).toBe(true);
   });
 
   it("parses both wasm and native directives", () => {
@@ -271,15 +268,14 @@ register({ apply: (args) => D.square(args[0]) });`,
     const jsFiles = [
       {
         name: "/path/to/myfunc.js",
-        source: `// wasm: mymod\n// native: mylib\nregister({ apply: () => [wasm !== undefined, native !== undefined] });`,
+        source: `// wasm: mymod\n// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => [wasm !== undefined, native !== undefined] }) });`,
       },
     ];
     const wasmFiles = [
       { name: "/path/to/mymod.wasm", source: "", data: wasmBytes },
     ];
     const fns = loadJsUserFunctions(jsFiles, wasmFiles, mockBridge);
-    const branch = fns.get("myfunc")![0];
-    const result = branch.apply([], 1);
+    const result = callIBuiltin(fns, "myfunc", []);
     expect(result).toEqual([true, true]);
   });
 });

@@ -13,13 +13,8 @@ import { Codegen } from "./codegen.js";
 import { collectVarIds } from "../lowering/varIdCollect.js";
 import { typeToString } from "../lowering/itemTypes.js";
 import type { IRVariable } from "../lowering/loweringTypes.js";
-import {
-  register,
-  unregister,
-  getBuiltin,
-  type BuiltinFn,
-} from "../builtins/registry.js";
 import { loadJsUserFunctions } from "../jsUserFunctions.js";
+import type { IBuiltin } from "../interpreter/builtins/types.js";
 import { stdlibFiles, shimFiles } from "../stdlib-bundle.js";
 import { extractExternalAccessDirectives } from "../externalAccessDirective.js";
 import { varNameFromId } from "./codegenFunction.js";
@@ -52,7 +47,7 @@ export function generateMainScriptCode(
   ast: AbstractSyntaxTree;
   functionIndex: FunctionIndex;
   fileASTCache: FileASTCache;
-  jsUserFunctions: Map<string, BuiltinFn>;
+  jsUserFunctions: IBuiltin[];
   codegenBreakdown: CodegenBreakdown;
 } {
   // ── 1. Parse ────────────────────────────────────────────────────────
@@ -161,16 +156,7 @@ export function generateMainScriptCode(
   }
 
   // ── 2b. Build function index ───────────────────────────────────────
-  // Register .js user functions as builtins so they appear in the index
-  // and are available during lowering (for type inference via check()).
-  // They are unregistered at the end to avoid polluting the global singleton.
-  const jsUserFuncNames = [...jsUserFunctions.keys()];
-  const savedBuiltins = new Map<string, BuiltinFn>();
-  for (const name of jsUserFuncNames) {
-    const existing = getBuiltin(name);
-    if (existing) savedBuiltins.set(name, existing);
-    register(name, jsUserFunctions.get(name)!);
-  }
+  const jsUserFuncNames = jsUserFunctions.map(ib => ib.name);
   const _registrationMs = performance.now() - _t0;
 
   // Built after workspace/local function registration, before lowering so that
@@ -369,17 +355,6 @@ export function generateMainScriptCode(
   codegen.emit(`return $ret;`);
 
   const _codegenMs = performance.now() - _t0;
-
-  // Restore original builtins that were temporarily overwritten by .js user functions
-  // (the js user functions are registered on rt.builtins at runtime in executeCode)
-  for (const name of jsUserFuncNames) {
-    const original = savedBuiltins.get(name);
-    if (original) {
-      register(name, original);
-    } else {
-      unregister(name);
-    }
-  }
 
   return {
     jsCode: codegen.getCode(),
