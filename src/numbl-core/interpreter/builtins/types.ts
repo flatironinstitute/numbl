@@ -9,11 +9,13 @@ import type {
 } from "../../runtime/types.js";
 import {
   FloatXArray,
+  isRuntimeChar,
   isRuntimeClassInstance,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeStruct,
   isRuntimeTensor,
+  type RuntimeChar,
 } from "../../runtime/types.js";
 import { type JitType, signFromNumber, isNonneg } from "../jit/jitTypes.js";
 
@@ -58,6 +60,12 @@ export function inferJitType(value: unknown): JitType {
   if (typeof value === "number") {
     const sign = signFromNumber(value);
     return { kind: "number", exact: value, ...(sign ? { sign } : {}) };
+  }
+  if (typeof value === "string") {
+    return { kind: "string", value };
+  }
+  if (isRuntimeChar(value as RuntimeChar)) {
+    return { kind: "char", value: (value as RuntimeChar).value };
   }
   if (
     typeof value === "object" &&
