@@ -267,6 +267,10 @@ export function isScalarType(t: JitType): boolean {
   );
 }
 
+export function isNumericScalarType(t: JitType): boolean {
+  return t.kind === "number" || t.kind === "boolean" || t.kind === "complex";
+}
+
 export function isTensorType(t: JitType): boolean {
   return t.kind === "tensor";
 }

@@ -18,6 +18,7 @@ import {
   type SignCategory,
   unifyJitTypes,
   isScalarType,
+  isNumericScalarType,
   isTensorType,
   isComplexType,
   isArithmeticType,
@@ -248,7 +249,7 @@ function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
         };
       return null;
     case UnaryOperation.Not:
-      if (isScalarType(operand)) return { kind: "boolean" };
+      if (isNumericScalarType(operand)) return { kind: "boolean" };
       return null;
     default:
       return null; // Transpose not supported
@@ -515,11 +516,12 @@ function lowerFor(
   if (stmt.expr.type !== "Range") return null;
 
   const start = lowerExpr(ctx, stmt.expr.start);
-  if (!start || !isScalarType(start.jitType)) return null;
+  if (!start || !isNumericScalarType(start.jitType)) return null;
   const step = stmt.expr.step ? lowerExpr(ctx, stmt.expr.step) : null;
-  if (stmt.expr.step && (!step || !isScalarType(step!.jitType))) return null;
+  if (stmt.expr.step && (!step || !isNumericScalarType(step!.jitType)))
+    return null;
   const end = lowerExpr(ctx, stmt.expr.end);
-  if (!end || !isScalarType(end.jitType)) return null;
+  if (!end || !isNumericScalarType(end.jitType)) return null;
 
   // Loop variable is always number
   ctx.env.set(stmt.varName, { kind: "number" });
