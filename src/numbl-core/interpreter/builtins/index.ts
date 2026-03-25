@@ -13,6 +13,7 @@ import "./introspection.js";
 import "./array-construction.js";
 import "./reductions.js";
 import "./strings.js";
+import "./set-operations.js";
 import "./linear-algebra.js";
 import "./fft.js";
 

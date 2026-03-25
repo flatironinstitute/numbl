@@ -8,10 +8,20 @@ import {
   unaryElemwiseCases,
   unaryRealResultCases,
   applyUnaryElemwise,
+  applyBinaryScalar,
+  binaryNumberOnly,
   makeTensor,
   unaryMathJitEmit,
+  binaryMathJitEmit,
 } from "./types.js";
 import { type JitType, isNonneg, type SignCategory } from "../jit/jitTypes.js";
+import {
+  erfScalar,
+  erfcScalar,
+  erfinvScalar,
+  erfcinvScalar,
+  erfcxScalar,
+} from "../../builtins/erf.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 
@@ -467,3 +477,53 @@ defineBuiltin({
     ),
   ],
 });
+
+// ── Precision math: expm1, log1p ─────────────────────────────────────────
+
+registerUnary(
+  "expm1",
+  Math.expm1,
+  (re, im) => {
+    // expm1(z) = exp(z) - 1
+    const r = complexExp(re, im);
+    return { re: r.re - 1, im: r.im };
+  },
+  unaryMathJitEmit("Math.expm1", "tExpm1")
+);
+
+function complexLog1p(re: number, im: number): { re: number; im: number } {
+  // log1p(z) = log(1 + z)
+  return complexLog(1 + re, im);
+}
+
+defineBuiltin({
+  name: "log1p",
+  cases: unaryElemwiseCases(
+    { realFn: Math.log1p, complexFn: complexLog1p, maybeComplex: true },
+    "log1p"
+  ),
+  jitEmit: unaryMathJitEmit("Math.log1p", "tLog1p"),
+});
+
+// ── Hypot ────────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "hypot",
+  cases: [
+    {
+      match: argTypes => binaryNumberOnly(argTypes),
+      apply: args => applyBinaryScalar(args, Math.hypot, "hypot"),
+    },
+  ],
+  jitEmit: binaryMathJitEmit("Math.hypot"),
+});
+
+// ── Error functions ──────────────────────────────────────────────────────
+
+const noComplexFn = () => ({ re: NaN, im: NaN });
+
+registerUnary("erf", erfScalar, noComplexFn);
+registerUnary("erfc", erfcScalar, noComplexFn);
+registerUnary("erfinv", erfinvScalar, noComplexFn);
+registerUnary("erfcinv", erfcinvScalar, noComplexFn);
+registerUnary("erfcx", erfcxScalar, noComplexFn);

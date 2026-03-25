@@ -19,6 +19,7 @@ import {
   isRuntimeDummyHandle,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
+import { RTV, RuntimeError } from "../../runtime/index.js";
 import type { JitType } from "../jit/jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 
@@ -600,4 +601,101 @@ defineBuiltin({
         return null;
     }
   },
+});
+
+// ── fieldnames / fields ──────────────────────────────────────────────────
+
+function fieldnamesApply(args: RuntimeValue[]): RuntimeValue {
+  if (args.length !== 1)
+    throw new RuntimeError("fieldnames requires 1 argument");
+  const v = args[0];
+  if (isRuntimeStructArray(v)) {
+    const names = v.fieldNames;
+    return RTV.cell(
+      names.map(n => RTV.string(n)),
+      [names.length, 1]
+    );
+  }
+  if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v))
+    throw new RuntimeError("fieldnames: argument must be a struct");
+  const names = [...v.fields.keys()];
+  return RTV.cell(
+    names.map(n => RTV.string(n)),
+    [names.length, 1]
+  );
+}
+
+const fieldnamesCase: BuiltinCase = {
+  match: argTypes => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k !== "struct" && k !== "class_instance" && k !== "unknown")
+      return null;
+    return [{ kind: "unknown" }];
+  },
+  apply: args => fieldnamesApply(args),
+};
+
+defineBuiltin({ name: "fieldnames", cases: [fieldnamesCase] });
+defineBuiltin({ name: "fields", cases: [fieldnamesCase] });
+
+// ── fileparts ────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "fileparts",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length !== 1) return null;
+        const k = argTypes[0].kind;
+        if (k !== "string" && k !== "char" && k !== "unknown") return null;
+        const charType: JitType = { kind: "char" };
+        return Array(Math.max(nargout, 1)).fill(charType);
+      },
+      apply: (args, nargout) => {
+        if (args.length < 1)
+          throw new RuntimeError("fileparts requires 1 argument");
+        const v = args[0];
+        if (!isRuntimeString(v) && !isRuntimeChar(v))
+          throw new RuntimeError("fileparts: argument must be a string");
+        const p = isRuntimeString(v) ? v : v.value;
+        const lastSep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+        const dir = lastSep >= 0 ? p.slice(0, lastSep) : "";
+        const rest = lastSep >= 0 ? p.slice(lastSep + 1) : p;
+        const dotIdx = rest.lastIndexOf(".");
+        const name = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest;
+        const ext = dotIdx >= 0 ? rest.slice(dotIdx) : "";
+        if (nargout <= 1) return RTV.char(dir);
+        if (nargout === 2) return [RTV.char(dir), RTV.char(name)];
+        return [RTV.char(dir), RTV.char(name), RTV.char(ext)];
+      },
+    },
+  ],
+});
+
+// ── fullfile ─────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "fullfile",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 1) return null;
+        for (const t of argTypes) {
+          if (t.kind !== "string" && t.kind !== "char" && t.kind !== "unknown")
+            return null;
+        }
+        return [{ kind: "char" } as JitType];
+      },
+      apply: args => {
+        const parts: string[] = [];
+        for (const a of args) {
+          if (isRuntimeString(a)) parts.push(a);
+          else if (isRuntimeChar(a)) parts.push(a.value);
+          else throw new RuntimeError("fullfile: arguments must be strings");
+        }
+        return RTV.char(parts.join("/"));
+      },
+    },
+  ],
 });
