@@ -8,7 +8,6 @@ import {
   type JitType,
   type JitStmt,
   isTensorType,
-  isScalarType,
 } from "./jitTypes.js";
 import { getIBuiltin } from "../builtins/types.js";
 
@@ -474,15 +473,7 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
 // ── Truthiness ──────────────────────────────────────────────────────────
 
 function emitTruthiness(expr: JitExpr, ht: boolean): string {
-  const k = expr.jitType.kind;
-  // Strings are not valid in boolean context in MATLAB
-  if (k === "string" || k === "char") {
-    return `(${emitExpr(expr, ht)}) !== 0`;
-  }
-  // For scalar types, just check !== 0
-  if (isScalarType(expr.jitType)) {
-    return `(${emitExpr(expr, ht)}) !== 0`;
-  }
-  // For tensor, we'd need a helper - but conditions should be scalar
+  // String/char conditions are rejected during lowering.
+  // All remaining scalar types (number, boolean, complex) use !== 0.
   return `(${emitExpr(expr, ht)}) !== 0`;
 }
