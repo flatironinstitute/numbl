@@ -320,7 +320,7 @@ function emitBinary(expr: JitExpr & { tag: "Binary" }, ht: boolean): string {
     case BinaryOperation.OrOr:
       return `((${left}) !== 0 || (${right}) !== 0 ? 1 : 0)`;
     default:
-      return `(${left} + ${right})`; // fallback
+      throw new Error(`JIT codegen: unsupported scalar binary op ${expr.op}`);
   }
 }
 
@@ -341,7 +341,7 @@ function emitComplexBinary(
     case BinaryOperation.ElemDiv:
       return `$h.cDiv(${left}, ${right})`;
     default:
-      return `$h.cAdd(${left}, ${right})`; // fallback
+      throw new Error(`JIT codegen: unsupported complex binary op ${op}`);
   }
 }
 
@@ -362,7 +362,7 @@ function emitTensorBinary(
     case BinaryOperation.ElemDiv:
       return `$h.tDiv(${left}, ${right})`;
     default:
-      return `$h.tAdd(${left}, ${right})`; // fallback
+      throw new Error(`JIT codegen: unsupported tensor binary op ${op}`);
   }
 }
 
@@ -376,7 +376,7 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
       case UnaryOperation.Plus:
         return operand;
       default:
-        return operand;
+        throw new Error(`JIT codegen: unsupported tensor unary op ${expr.op}`);
     }
   }
 
@@ -387,7 +387,7 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
       case UnaryOperation.Plus:
         return operand;
       default:
-        return operand;
+        throw new Error(`JIT codegen: unsupported complex unary op ${expr.op}`);
     }
   }
 
@@ -399,7 +399,7 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ht: boolean): string {
     case UnaryOperation.Not:
       return `((${operand}) !== 0 ? 0 : 1)`;
     default:
-      return operand;
+      throw new Error(`JIT codegen: unsupported scalar unary op ${expr.op}`);
   }
 }
 

@@ -165,6 +165,7 @@ function binaryResultType(
     case BinaryOperation.Pow:
     case BinaryOperation.ElemPow:
       // Scalar power only for now
+      if (isTensorType(left) || isTensorType(right)) return null;
       break;
     default:
       return null;
@@ -439,6 +440,8 @@ function lowerExprStmt(
 function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   const cond = lowerExpr(ctx, stmt.cond);
   if (!cond) return null;
+  // Only scalar conditions supported — tensor truthiness requires checking all elements
+  if (!isScalarType(cond.jitType)) return null;
 
   const envBefore = cloneEnv(ctx.env);
 
@@ -454,6 +457,7 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
     ctx.env = cloneEnv(envBefore);
     const eibCond = lowerExpr(ctx, eib.cond);
     if (!eibCond) return null;
+    if (!isScalarType(eibCond.jitType)) return null;
     const eibBody = lowerStmts(ctx, eib.body);
     if (!eibBody) return null;
     elseifBlocks.push({ cond: eibCond, body: eibBody });
@@ -557,6 +561,7 @@ function lowerWhile(
 
   const cond = lowerExpr(ctx, stmt.cond);
   if (!cond) return null;
+  if (!isScalarType(cond.jitType)) return null;
 
   const body = lowerStmts(ctx, stmt.body);
   if (!body) return null;
@@ -777,10 +782,14 @@ function lowerIndexExpr(
   let resultType: JitType;
   switch (base.jitType.kind) {
     case "tensor":
-      resultType =
-        base.jitType.isComplex === true
-          ? { kind: "complex" }
-          : { kind: "number" };
+      if (base.jitType.isComplex === true) {
+        resultType = { kind: "complex" };
+      } else if (base.jitType.isComplex === false) {
+        resultType = { kind: "number" };
+      } else {
+        // Unknown complexity — bail out to interpreter
+        return null;
+      }
       break;
     case "number":
     case "boolean":
