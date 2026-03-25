@@ -14,7 +14,7 @@ export type JitType =
   | { kind: "complex"; pureImaginary?: boolean }
   | {
       kind: "tensor";
-      isComplex?: boolean;
+      isComplex: boolean;
       shape?: number[];
       ndim?: number;
       isLogical?: boolean;
@@ -160,8 +160,8 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
       };
     }
     if (a.kind === "tensor" && b.kind === "tensor") {
-      // Unify isComplex: same→keep, different→undefined
-      const isComplex = a.isComplex === b.isComplex ? a.isComplex : undefined;
+      // Unify isComplex: same→keep, different→widen to true
+      const isComplex = a.isComplex || b.isComplex;
       // Unify shape
       let shape: number[] | undefined;
       let ndim: number | undefined;
@@ -182,11 +182,11 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         ndim = aNdim !== undefined && aNdim === bNdim ? aNdim : undefined;
       }
       // nonneg only meaningful when definitely real
-      const nonneg = isComplex !== true && a.nonneg && b.nonneg;
+      const nonneg = !isComplex && a.nonneg && b.nonneg;
       const isLogical = a.isLogical && b.isLogical;
       return {
         kind: "tensor" as const,
-        ...(isComplex !== undefined ? { isComplex } : {}),
+        isComplex,
         ...(shape ? { shape } : {}),
         ...(ndim !== undefined && !shape ? { ndim } : {}),
         ...(nonneg ? { nonneg: true } : {}),
@@ -289,7 +289,7 @@ export function isRealType(t: JitType): boolean {
   return (
     t.kind === "number" ||
     t.kind === "boolean" ||
-    (t.kind === "tensor" && t.isComplex !== true)
+    (t.kind === "tensor" && !t.isComplex)
   );
 }
 

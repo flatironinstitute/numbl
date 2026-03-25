@@ -204,14 +204,11 @@ function binaryResultType(
       : undefined;
     const shape = lt?.shape ?? rt?.shape;
     const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
-    const isComplex = anyComplex
-      ? true
-      : (lt?.isComplex === false || !lt) && (rt?.isComplex === false || !rt)
-        ? false
-        : undefined;
+    const isComplex =
+      anyComplex || (lt?.isComplex ?? false) || (rt?.isComplex ?? false);
     return {
       kind: "tensor",
-      ...(isComplex !== undefined ? { isComplex } : {}),
+      isComplex,
       ...(shape ? { shape } : {}),
       ...(ndim !== undefined ? { ndim } : {}),
     };
@@ -798,14 +795,9 @@ function lowerIndexExpr(
   let resultType: JitType;
   switch (base.jitType.kind) {
     case "tensor":
-      if (base.jitType.isComplex === true) {
-        resultType = { kind: "complex" };
-      } else if (base.jitType.isComplex === false) {
-        resultType = { kind: "number" };
-      } else {
-        // Unknown complexity — bail out to interpreter
-        return null;
-      }
+      resultType = base.jitType.isComplex
+        ? { kind: "complex" }
+        : { kind: "number" };
       break;
     case "number":
     case "boolean":

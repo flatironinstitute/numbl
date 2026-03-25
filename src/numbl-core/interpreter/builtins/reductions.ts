@@ -116,7 +116,7 @@ function reductionOutputType(
       return { kind: "tensor", isComplex: false, isLogical: true, shape };
     return {
       kind: "tensor",
-      ...(isComplex !== undefined ? { isComplex } : {}),
+      isComplex,
       ...(shape ? { shape } : {}),
     };
   };
