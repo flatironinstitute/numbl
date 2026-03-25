@@ -460,6 +460,7 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   if (!isScalarType(cond.jitType)) return null;
   if (cond.jitType.kind === "string" || cond.jitType.kind === "char")
     return null;
+  if (cond.jitType.kind === "complex_or_number") ctx._hasTensorOps = true;
 
   const envBefore = cloneEnv(ctx.env);
 
@@ -478,6 +479,7 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
     if (!isScalarType(eibCond.jitType)) return null;
     if (eibCond.jitType.kind === "string" || eibCond.jitType.kind === "char")
       return null;
+    if (eibCond.jitType.kind === "complex_or_number") ctx._hasTensorOps = true;
     const eibBody = lowerStmts(ctx, eib.body);
     if (!eibBody) return null;
     elseifBlocks.push({ cond: eibCond, body: eibBody });
@@ -581,6 +583,7 @@ function lowerWhile(
   if (!isScalarType(cond.jitType)) return null;
   if (cond.jitType.kind === "string" || cond.jitType.kind === "char")
     return null;
+  if (cond.jitType.kind === "complex_or_number") ctx._hasTensorOps = true;
 
   const body = lowerStmts(ctx, stmt.body);
   if (!body) return null;

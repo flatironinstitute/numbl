@@ -285,9 +285,20 @@ function idxN(base: unknown, indices: number[]): unknown {
   throw new Error("JIT index: unsupported base type for N-D indexing");
 }
 
+// ── Complex truthiness ──────────────────────────────────────────────────
+
+function cTruthy(v: unknown): boolean {
+  if (typeof v === "number") return v !== 0;
+  const c = v as RuntimeComplexNumber;
+  return c.re !== 0 || c.im !== 0;
+}
+
 // ── Exported helpers object ─────────────────────────────────────────────
 
 export const jitHelpers = {
+  // Complex truthiness
+  cTruthy,
+
   // Complex scalar ops
   cAdd,
   cSub,
