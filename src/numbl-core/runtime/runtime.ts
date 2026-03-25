@@ -267,7 +267,7 @@ export class Runtime {
           }
         }
         if (this.profilingEnabled) {
-          this.profileEnter("builtin:" + name);
+          this.profileEnter("builtin:legacy:" + name);
           const result = branch.apply(margs, nargout);
           this.profileLeave();
           return this.unwrapResult(
@@ -387,18 +387,44 @@ export class Runtime {
 
   public getBuiltinProfile(): Record<
     string,
-    { totalTimeMs: number; callCount: number }
+    {
+      legacy: { totalTimeMs: number; callCount: number };
+      interp: { totalTimeMs: number; callCount: number };
+      jit: { totalTimeMs: number; callCount: number };
+    }
   > {
-    const result: Record<string, { totalTimeMs: number; callCount: number }> =
-      {};
+    const zero = () => ({ totalTimeMs: 0, callCount: 0 });
+    const result: Record<
+      string,
+      {
+        legacy: { totalTimeMs: number; callCount: number };
+        interp: { totalTimeMs: number; callCount: number };
+        jit: { totalTimeMs: number; callCount: number };
+      }
+    > = {};
     const prefix = "builtin:";
     for (const [key, time] of this.profileAccum) {
-      if (key.startsWith(prefix)) {
-        const name = key.slice(prefix.length);
-        const count = this.profileCounts.get(key) ?? 0;
-        if (count > 0) {
-          result[name] = { totalTimeMs: time, callCount: count };
-        }
+      if (!key.startsWith(prefix)) continue;
+      const rest = key.slice(prefix.length);
+      let source: "legacy" | "interp" | "jit";
+      let name: string;
+      if (rest.startsWith("legacy:")) {
+        source = "legacy";
+        name = rest.slice(7);
+      } else if (rest.startsWith("interp:")) {
+        source = "interp";
+        name = rest.slice(7);
+      } else if (rest.startsWith("jit:")) {
+        source = "jit";
+        name = rest.slice(4);
+      } else {
+        continue;
+      }
+      const count = this.profileCounts.get(key) ?? 0;
+      if (count > 0) {
+        if (!result[name])
+          result[name] = { legacy: zero(), interp: zero(), jit: zero() };
+        result[name][source] = { totalTimeMs: time, callCount: count };
       }
     }
     return result;

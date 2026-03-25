@@ -51,6 +51,15 @@ export interface BuiltinProfileEntry {
   callCount: number;
 }
 
+export interface BuiltinProfileBreakdown {
+  /** Calls from the legacy codegen runtime path. */
+  legacy: BuiltinProfileEntry;
+  /** Calls from the interpreter (IBuiltin.resolve → apply). */
+  interp: BuiltinProfileEntry;
+  /** Calls from JIT-compiled code (ib_* helpers). */
+  jit: BuiltinProfileEntry;
+}
+
 export interface ProfileData {
   codegenTimeMs: number;
   codegenBreakdown: {
@@ -64,7 +73,7 @@ export interface ProfileData {
   };
   executionTimeMs: number;
   jitCompileTimeMs: number;
-  builtins: Record<string, BuiltinProfileEntry>;
+  builtins: Record<string, BuiltinProfileBreakdown>;
   dispatches: Record<string, BuiltinProfileEntry>;
 }
 

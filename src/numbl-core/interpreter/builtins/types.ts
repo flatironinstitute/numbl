@@ -119,30 +119,51 @@ function coerceBooleans(v: unknown): unknown {
   return v;
 }
 
-/** Build the ib_* entries for the jitHelpers object */
+/** Build the ib_* entries for the jitHelpers object.
+ *  The returned object also has _profileEnter/_profileLeave hooks (no-ops by default)
+ *  that the runtime replaces when profiling is enabled. */
 export function buildIBuiltinHelpers(): Record<
   string,
-  (...args: unknown[]) => unknown
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  any
 > {
-  const helpers: Record<string, (...args: unknown[]) => unknown> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const helpers: Record<string, any> = {};
+  // Profiling hooks — no-ops by default, replaced by Runtime when profiling is enabled
+  helpers._profileEnter = Function.prototype;
+  helpers._profileLeave = Function.prototype;
   for (const [name, ib] of registry) {
     helpers[`ib_${name}`] = (...args: unknown[]) => {
+      helpers._profileEnter("builtin:jit:" + name);
       const rtArgs = args as RuntimeValue[];
       const argTypes = rtArgs.map(inferJitType);
       const res = ib.resolve(argTypes, 1);
-      if (!res) throw new Error(`JIT ib_${name}: resolve failed`);
-      return coerceBooleans(res.apply(rtArgs, 1));
+      if (!res) {
+        helpers._profileLeave();
+        throw new Error(`JIT ib_${name}: resolve failed`);
+      }
+      const result = coerceBooleans(res.apply(rtArgs, 1));
+      helpers._profileLeave();
+      return result;
     };
   }
   // Generic multi-output caller: ibcall(name, nargout, ...args)
   helpers["ibcall"] = (name: unknown, nargout: unknown, ...args: unknown[]) => {
+    helpers._profileEnter("builtin:jit:" + (name as string));
     const ib = registry.get(name as string);
-    if (!ib) throw new Error(`JIT ibcall: unknown builtin ${name}`);
+    if (!ib) {
+      helpers._profileLeave();
+      throw new Error(`JIT ibcall: unknown builtin ${name}`);
+    }
     const rtArgs = args as RuntimeValue[];
     const argTypes = rtArgs.map(inferJitType);
     const res = ib.resolve(argTypes, nargout as number);
-    if (!res) throw new Error(`JIT ibcall: resolve failed for ${name}`);
+    if (!res) {
+      helpers._profileLeave();
+      throw new Error(`JIT ibcall: resolve failed for ${name}`);
+    }
     const result = res.apply(rtArgs, nargout as number);
+    helpers._profileLeave();
     if (Array.isArray(result)) return result.map(coerceBooleans);
     return [coerceBooleans(result)];
   };

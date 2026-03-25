@@ -593,10 +593,17 @@ async function executeWithOptions(
     const builtins = Object.entries(pd.builtins)
       .map(([name, b]) => ({
         name,
-        totalTimeMs: b.totalTimeMs,
-        callCount: b.callCount,
+        legacy: b.legacy,
+        interp: b.interp,
+        jit: b.jit,
       }))
-      .sort((a, b) => b.totalTimeMs - a.totalTimeMs);
+      .sort((a, b) => {
+        const aTotal =
+          a.legacy.totalTimeMs + a.interp.totalTimeMs + a.jit.totalTimeMs;
+        const bTotal =
+          b.legacy.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
+        return bTotal - aTotal;
+      });
     const dispatches = Object.entries(pd.dispatches)
       .map(([name, b]) => ({
         name,
@@ -967,10 +974,18 @@ function cmdShowProfile(args: string[]) {
   // Compute disjoint breakdown of execution time
   const dispatches: { name: string; totalTimeMs: number; callCount: number }[] =
     data.dispatches ?? [];
-  const builtins: { name: string; totalTimeMs: number; callCount: number }[] =
-    data.builtins ?? [];
+  const builtins: {
+    name: string;
+    legacy: { totalTimeMs: number; callCount: number };
+    interp: { totalTimeMs: number; callCount: number };
+    jit: { totalTimeMs: number; callCount: number };
+  }[] = data.builtins ?? [];
   const sumDispatches = dispatches.reduce((s, d) => s + d.totalTimeMs, 0);
-  const sumBuiltins = builtins.reduce((s, b) => s + b.totalTimeMs, 0);
+  const sumBuiltins = builtins.reduce(
+    (s, b) =>
+      s + b.legacy.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs,
+    0
+  );
   const otherTime =
     data.executionTimeMs - jitTime - sumDispatches - sumBuiltins;
 
@@ -1048,22 +1063,25 @@ function cmdShowProfile(args: string[]) {
     const nameW = Math.max(20, ...builtins.map(b => b.name.length)) + 2;
     const header =
       "Builtin".padEnd(nameW) +
-      pad("Calls", 10) +
+      pad("Interp", 10) +
+      pad("Legacy", 10) +
+      pad("JIT", 10) +
       pad("Self (ms)", 13) +
-      pad("Avg (ms)", 11) +
       pad("% Exec", 9);
-    console.log("\nBuiltin functions:");
+    console.log("\nBuiltin functions (call counts by source):");
     console.log(header);
     console.log("─".repeat(header.length));
 
     for (const b of builtins) {
-      const avg = b.callCount > 0 ? b.totalTimeMs / b.callCount : 0;
-      const pct = (b.totalTimeMs / execTime) * 100;
+      const totalTime =
+        b.legacy.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
+      const pct = (totalTime / execTime) * 100;
       const line =
         b.name.padEnd(nameW) +
-        pad(String(b.callCount), 10) +
-        pad(fmt(b.totalTimeMs, 2), 13) +
-        pad(fmt(avg, 3), 11) +
+        pad(String(b.interp.callCount), 10) +
+        pad(String(b.legacy.callCount), 10) +
+        pad(String(b.jit.callCount), 10) +
+        pad(fmt(totalTime, 2), 13) +
         pad(fmt(pct, 1) + "%", 9);
       console.log(line);
     }

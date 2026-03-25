@@ -25,6 +25,7 @@ import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
+import { jitHelpers } from "./interpreter/jit/jitHelpers.js";
 
 /** Virtual search path prefix for bundled shim files. */
 const SHIM_SEARCH_PATH = "__numbl_shims__";
@@ -155,7 +156,7 @@ export function interpretCode(
 
   interpreter.optimization = options.optimization ?? 0;
 
-  // Collect JIT compilations for generatedJS output
+  // Collect JIT compilations for generatedJS output and profiling
   const jitSections: string[] = [];
   interpreter.onJitCompile = (description: string, jsCode: string) => {
     jitSections.push(
@@ -163,6 +164,14 @@ export function interpretCode(
     );
     options.onJitCompile?.(description, jsCode);
   };
+
+  // Wire up JIT builtin profiling hooks when profiling is enabled
+  if (options.profile) {
+    (jitHelpers as Record<string, unknown>)._profileEnter = (key: string) =>
+      rt.profileEnter(key);
+    (jitHelpers as Record<string, unknown>)._profileLeave = () =>
+      rt.profileLeave();
+  }
 
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
@@ -182,7 +191,9 @@ export function interpretCode(
 
   // ── 5. Run ─────────────────────────────────────────────────────────
   try {
+    const execStart = performance.now();
     interpreter.run(ast);
+    const executionTimeMs = performance.now() - execStart;
 
     const result: ExecResult = {
       output: rt.outputLines,
@@ -195,6 +206,25 @@ export function interpretCode(
       variableValues: interpreter.getVariableValues(),
       holdState: rt.holdState,
     };
+
+    if (options.profile) {
+      result.profileData = {
+        codegenTimeMs: 0,
+        codegenBreakdown: {
+          parseMainMs: 0,
+          parseWorkspaceMs: 0,
+          loadJsUserFunctionsMs: 0,
+          registrationMs: 0,
+          buildFunctionIndexMs: 0,
+          lowerMainMs: 0,
+          codegenMs: 0,
+        },
+        executionTimeMs,
+        jitCompileTimeMs: rt.getJitCompileTimeMs(),
+        builtins: rt.getBuiltinProfile(),
+        dispatches: rt.getDispatchProfile(),
+      };
+    }
 
     return result;
   } catch (e) {
@@ -220,6 +250,13 @@ export function interpretCode(
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
     throw re;
   } finally {
+    // Reset JIT profiling hooks to no-ops
+    if (options.profile) {
+      (jitHelpers as Record<string, unknown>)._profileEnter =
+        Function.prototype;
+      (jitHelpers as Record<string, unknown>)._profileLeave =
+        Function.prototype;
+    }
     // Unregister .js user function IBuiltins to avoid polluting the global registry
     for (const ib of jsUserFunctions) {
       unregisterIBuiltin(ib.name);
