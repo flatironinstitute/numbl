@@ -20,6 +20,7 @@ import {
 import { cmdMip } from "./cli-mip.js";
 import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
 import { getAllBuiltinNames } from "./numbl-core/builtins/index.js";
+import { getAllIBuiltinNames } from "./numbl-core/interpreter/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
 import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
 import {
@@ -881,8 +882,11 @@ function cmdInfo() {
   );
 }
 
-function cmdListBuiltins() {
-  const names = getAllBuiltinNames().sort();
+function cmdListBuiltins(args: string[]) {
+  const interpret = args.includes("--interpret");
+  const names = (
+    interpret ? getAllIBuiltinNames() : getAllBuiltinNames()
+  ).sort();
   for (const name of names) {
     console.log(name);
   }
@@ -1147,7 +1151,7 @@ async function main() {
       cmdInfo();
       break;
     case "list-builtins":
-      cmdListBuiltins();
+      cmdListBuiltins(rest);
       break;
     case "mip":
       await cmdMip(rest);

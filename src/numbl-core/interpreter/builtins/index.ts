@@ -17,5 +17,10 @@ import "./set-operations.js";
 import "./linear-algebra.js";
 import "./fft.js";
 
-export { getIBuiltin, buildIBuiltinHelpers, inferJitType } from "./types.js";
+export {
+  getIBuiltin,
+  getAllIBuiltinNames,
+  buildIBuiltinHelpers,
+  inferJitType,
+} from "./types.js";
 export type { IBuiltin, IBuiltinResolution } from "./types.js";

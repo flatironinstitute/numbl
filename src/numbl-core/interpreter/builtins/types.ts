@@ -53,6 +53,10 @@ export function unregisterIBuiltin(name: string): void {
   registry.delete(name);
 }
 
+export function getAllIBuiltinNames(): string[] {
+  return Array.from(registry.keys());
+}
+
 // ── Infer JitType from a runtime value ──────────────────────────────────
 
 export function inferJitType(value: unknown): JitType {
