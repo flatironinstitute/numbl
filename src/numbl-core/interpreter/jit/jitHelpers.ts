@@ -197,6 +197,38 @@ function tensorBinaryOp(
   throw new Error("JIT tensor binary: unexpected argument types");
 }
 
+function tensorCompareOp(
+  a: unknown,
+  b: unknown,
+  cmp: (x: number, y: number) => boolean
+): RuntimeTensor {
+  const aIsT = isTensor(a);
+  const bIsT = isTensor(b);
+
+  if (aIsT && bIsT) {
+    const at = a as RuntimeTensor;
+    const bt = b as RuntimeTensor;
+    const n = at.data.length;
+    const out = new FloatXArray(n);
+    for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bt.data[i]) ? 1 : 0;
+    return makeTensor(out, undefined, at.shape.slice());
+  }
+  if (aIsT) {
+    const at = a as RuntimeTensor;
+    const n = at.data.length;
+    const bv = b as number;
+    const out = new FloatXArray(n);
+    for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bv) ? 1 : 0;
+    return makeTensor(out, undefined, at.shape.slice());
+  }
+  const bt = b as RuntimeTensor;
+  const n = bt.data.length;
+  const av = a as number;
+  const out = new FloatXArray(n);
+  for (let i = 0; i < n; i++) out[i] = cmp(av, bt.data[i]) ? 1 : 0;
+  return makeTensor(out, undefined, bt.shape.slice());
+}
+
 function tensorUnary(
   a: RuntimeTensor,
   fn: (x: number) => number
@@ -316,6 +348,14 @@ export const jitHelpers = {
   tSub: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x - y, cSub),
   tMul: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x * y, cMul),
   tDiv: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x / y, cDiv),
+
+  // Tensor comparisons (real only, returns logical tensor)
+  tEq: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x === y),
+  tNeq: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x !== y),
+  tLt: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x < y),
+  tLe: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x <= y),
+  tGt: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x > y),
+  tGe: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x >= y),
 
   // Tensor unary
   tNeg: tensorNeg,

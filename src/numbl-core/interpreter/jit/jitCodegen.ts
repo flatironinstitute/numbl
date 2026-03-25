@@ -357,6 +357,18 @@ function emitTensorBinary(
     case BinaryOperation.Div:
     case BinaryOperation.ElemDiv:
       return `$h.tDiv(${left}, ${right})`;
+    case BinaryOperation.Equal:
+      return `$h.tEq(${left}, ${right})`;
+    case BinaryOperation.NotEqual:
+      return `$h.tNeq(${left}, ${right})`;
+    case BinaryOperation.Less:
+      return `$h.tLt(${left}, ${right})`;
+    case BinaryOperation.LessEqual:
+      return `$h.tLe(${left}, ${right})`;
+    case BinaryOperation.Greater:
+      return `$h.tGt(${left}, ${right})`;
+    case BinaryOperation.GreaterEqual:
+      return `$h.tGe(${left}, ${right})`;
     default:
       throw new Error(`JIT codegen: unsupported tensor binary op ${op}`);
   }
