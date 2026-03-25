@@ -44,6 +44,7 @@ import {
 } from "./types.js";
 
 import type { Interpreter } from "./interpreter.js";
+import { tryJitFor, tryJitWhile } from "./jit/jitLoop.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -162,6 +163,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "While": {
+      if (this.optimization >= 1 && tryJitWhile(this, stmt)) return null;
       while (true) {
         const cond = this.evalExpr(stmt.cond);
         if (!this.rt.toBool(cond)) break;
@@ -174,6 +176,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "For": {
+      if (this.optimization >= 1 && tryJitFor(this, stmt)) return null;
       const iterVal = this.evalExpr(stmt.expr);
       const rv = ensureRuntimeValue(iterVal);
       const iterItems = forIter(rv);
