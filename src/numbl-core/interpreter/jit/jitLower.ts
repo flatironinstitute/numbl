@@ -11,6 +11,7 @@ import type { FunctionDef } from "../types.js";
 import type { Interpreter } from "../interpreter.js";
 import type { CallSite } from "../../runtime/runtimeHelpers.js";
 import { resolveFunction } from "../../functionResolve.js";
+import type { ItemType } from "../../lowering/itemTypes.js";
 import {
   type JitType,
   type JitExpr,
@@ -801,9 +802,9 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         });
       }
 
-      // Try user function resolution (nested → local → workspace)
+      // Try user function resolution (nested → local → workspace → class method)
       const userResult = lowerUserFuncCall(ctx, expr);
-      if (userResult) return userResult;
+      if (userResult !== undefined) return userResult;
 
       // Try IBuiltin resolution (same priority as builtins — last)
       return lowerIBuiltinCall(ctx, expr);
@@ -882,12 +883,19 @@ function lowerIndexExpr(
 
 // ── User function call resolution ───────────────────────────────────────
 
+/**
+ * Try to resolve and compile a user function call.
+ * Returns:
+ *   JitExpr - successfully compiled
+ *   null    - function found but can't compile (bail out of containing function)
+ *   undefined - no user function found (fall through to builtins)
+ */
 function lowerUserFuncCall(
   ctx: LowerCtx,
   expr: Expr & { type: "FuncCall" }
-): JitExpr | null {
+): JitExpr | null | undefined {
   const interp = ctx.interp;
-  if (!interp) return null;
+  if (!interp) return undefined;
 
   // Lower arguments first to determine types
   const args = expr.args.map(a => lowerExpr(ctx, a));
@@ -896,8 +904,8 @@ function lowerUserFuncCall(
   const argJitTypes = loweredArgs.map(a => a.jitType);
 
   // Resolve the function using the same mechanism as the interpreter
-  const calleeFn = resolveUserFunction(interp, expr.name);
-  if (!calleeFn) return null;
+  const calleeFn = resolveUserFunction(interp, expr.name, argJitTypes);
+  if (!calleeFn) return undefined; // no user function found — fall through to builtins
 
   // Build identity string for unique naming
   const calleeNargout = 1; // nested calls always expect 1 output
@@ -981,10 +989,19 @@ function lowerUserFuncCall(
   }
 }
 
+/** Convert JitType to ItemType for function resolution (only ClassInstance matters). */
+function jitTypeToItemType(t: JitType): ItemType {
+  if (t.kind === "class_instance") {
+    return { kind: "ClassInstance", className: t.className };
+  }
+  return { kind: "Unknown" };
+}
+
 /** Resolve a function name to a FunctionDef using the interpreter's resolution. */
 function resolveUserFunction(
   interp: Interpreter,
-  name: string
+  name: string,
+  argJitTypes: JitType[]
 ): FunctionDef | null {
   // 1. Check nested functions (mirrors interpreter's callFunction priority)
   const nested = interp.env.getNestedFunction(name);
@@ -994,7 +1011,7 @@ function resolveUserFunction(
   const localFn = interp.mainLocalFunctions.get(name);
   if (localFn) return localFn;
 
-  // 3. Resolve via function index (for workspace functions etc.)
+  // 3. Resolve via function index (for workspace functions, class methods, etc.)
   const callSite: CallSite = {
     file: interp.currentFile,
     ...(interp.currentClassName ? { className: interp.currentClassName } : {}),
@@ -1002,15 +1019,40 @@ function resolveUserFunction(
       ? { methodName: interp.currentMethodName }
       : {}),
   };
-  // Use empty argTypes for resolution - we just need the target identity
-  const target = resolveFunction(name, [], callSite, interp.functionIndex);
+  const argItemTypes = argJitTypes.map(jitTypeToItemType);
+  const target = resolveFunction(
+    name,
+    argItemTypes,
+    callSite,
+    interp.functionIndex
+  );
   if (!target) return null;
 
   if (target.kind === "localFunction" && target.source.from === "main") {
     return interp.mainLocalFunctions.get(target.name) ?? null;
   }
 
-  // Other target kinds (workspace, class, etc.) not supported yet
+  if (target.kind === "classMethod") {
+    const definingClass = interp.ctx.findDefiningClass(
+      target.className,
+      target.methodName
+    );
+    const classInfo = interp.ctx.getClassInfo(definingClass);
+    if (!classInfo) return null;
+    return (
+      interp.findMethodInClass(classInfo, target.methodName) ??
+      interp.findExternalMethod(classInfo, target.methodName)
+    );
+  }
+
+  if (target.kind === "workspaceFunction") {
+    const dotIdx = target.name.lastIndexOf(".");
+    const primaryName =
+      dotIdx >= 0 ? target.name.slice(dotIdx + 1) : target.name;
+    return interp.findFunctionInWorkspaceFile(target.name, primaryName);
+  }
+
+  // Other target kinds (privateFunction, workspaceClassConstructor, etc.) not supported yet
   return null;
 }
 
@@ -1027,6 +1069,10 @@ function lowerIBuiltinCall(
   if (args.some(a => a === null)) return null;
   const loweredArgs = args as JitExpr[];
   const argJitTypes = loweredArgs.map(a => a.jitType);
+
+  // If any argument is unknown, bail — it could be a class instance at runtime,
+  // and class methods take priority over builtins in MATLAB.
+  if (argJitTypes.some(t => t.kind === "unknown")) return null;
 
   const resolution = ib.resolve(argJitTypes, 1);
   if (!resolution || resolution.outputTypes.length === 0) return null;
