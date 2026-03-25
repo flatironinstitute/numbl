@@ -18,7 +18,7 @@ function predicateType(argTypes: JitType[]): JitType[] | null {
   switch (a.kind) {
     case "number":
     case "boolean":
-    case "complex":
+    case "complex_or_number":
       return [{ kind: "boolean" }];
     case "tensor":
       return [

@@ -70,7 +70,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "complex") return "1";
+    if (k === "number" || k === "complex_or_number") return "1";
     if (k === "tensor")
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "0"
@@ -100,7 +100,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "complex") return "1";
+    if (k === "number" || k === "complex_or_number") return "1";
     if (k === "tensor")
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
         ? "0"
@@ -145,7 +145,7 @@ registerIBuiltin({
         : "0";
     if (
       k === "number" ||
-      k === "complex" ||
+      k === "complex_or_number" ||
       k === "string" ||
       k === "char" ||
       k === "struct" ||
@@ -250,7 +250,8 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex_or_number")
+      return "1";
     if (k === "string") return "1";
     return null; // tensors/char need runtime check
   },
@@ -279,7 +280,12 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex" || k === "string")
+    if (
+      k === "number" ||
+      k === "boolean" ||
+      k === "complex_or_number" ||
+      k === "string"
+    )
       return "0";
     return null; // tensors/char need runtime check
   },
@@ -300,7 +306,8 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex_or_number")
+      return "1";
     return null;
   },
 });
@@ -320,7 +327,8 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex_or_number")
+      return "1";
     return null;
   },
 });
@@ -340,7 +348,8 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex") return "1";
+    if (k === "number" || k === "boolean" || k === "complex_or_number")
+      return "1";
     return null;
   },
 });
@@ -387,7 +396,12 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex" || k === "string")
+    if (
+      k === "number" ||
+      k === "boolean" ||
+      k === "complex_or_number" ||
+      k === "string"
+    )
       return "1";
     return null;
   },
@@ -422,7 +436,12 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex" || k === "string")
+    if (
+      k === "number" ||
+      k === "boolean" ||
+      k === "complex_or_number" ||
+      k === "string"
+    )
       return "1";
     return null;
   },
@@ -447,7 +466,7 @@ registerIBuiltin({
     if (
       k === "number" ||
       k === "boolean" ||
-      k === "complex" ||
+      k === "complex_or_number" ||
       k === "string" ||
       k === "char"
     )
@@ -507,7 +526,7 @@ registerIBuiltin({
       if (
         k === "number" ||
         k === "boolean" ||
-        k === "complex" ||
+        k === "complex_or_number" ||
         k === "string"
       )
         return "1";
@@ -526,7 +545,7 @@ registerIBuiltin({
     let outputTypes: JitType[];
     switch (k) {
       case "number":
-      case "complex":
+      case "complex_or_number":
         outputTypes = [{ kind: "string", value: "double" }];
         break;
       case "boolean":
@@ -585,7 +604,7 @@ registerIBuiltin({
     const k = types[0]?.kind;
     switch (k) {
       case "number":
-      case "complex":
+      case "complex_or_number":
         return '"double"';
       case "boolean":
         return '"logical"';

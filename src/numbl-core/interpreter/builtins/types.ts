@@ -72,7 +72,7 @@ export function inferJitType(value: unknown): JitType {
     value !== null &&
     (value as { kind?: string }).kind === "complex_number"
   ) {
-    return { kind: "complex" };
+    return { kind: "complex_or_number" };
   }
   if (
     typeof value === "object" &&
@@ -179,8 +179,8 @@ export function unaryPreserveType(argTypes: JitType[]): JitType[] | null {
     case "number":
     case "boolean":
       return [{ kind: "number" }];
-    case "complex":
-      return [{ kind: "complex" }];
+    case "complex_or_number":
+      return [{ kind: "complex_or_number" }];
     case "tensor":
       return [
         {
@@ -203,7 +203,7 @@ export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
     case "number":
     case "boolean":
       return [{ kind: "number", sign: "nonneg" }];
-    case "complex":
+    case "complex_or_number":
       return [{ kind: "number", sign: "nonneg" }];
     case "tensor":
       return [
