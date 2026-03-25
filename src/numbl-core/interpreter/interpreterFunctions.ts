@@ -213,7 +213,15 @@ export function interpretTarget(
         const margs = args.map(a => ensureRuntimeValue(a));
         const argTypes = margs.map(inferJitType);
         const resolution = ib.resolve(argTypes, nargout);
-        if (resolution) return resolution.apply(margs, nargout);
+        if (resolution) {
+          if (this.rt.profilingEnabled) {
+            this.rt.profileEnter("builtin:interp:" + target.name);
+            const result = resolution.apply(margs, nargout);
+            this.rt.profileLeave();
+            return result;
+          }
+          return resolution.apply(margs, nargout);
+        }
       }
       const builtin = this.rt.builtins[target.name];
       if (builtin) return builtin(nargout, args);
