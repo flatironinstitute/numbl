@@ -16,6 +16,7 @@ import {
 } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
+import { shareRuntimeValue } from "../runtime/utils.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { tryJitCall, JIT_SKIP } from "./jit/index.js";
@@ -538,9 +539,17 @@ export function callUserFunction(
   const hasVarargin =
     fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
   const regularParams = hasVarargin ? fn.params.slice(0, -1) : fn.params;
+  // Build set of output names for COW sharing (value class semantics)
+  const outputSet = new Set(fn.outputs);
   for (let i = 0; i < regularParams.length; i++) {
     if (i < processedArgs.length) {
-      fnEnv.set(regularParams[i], ensureRuntimeValue(processedArgs[i]));
+      let val = ensureRuntimeValue(processedArgs[i]);
+      // When a parameter is also an output (e.g., function obj = method(obj)),
+      // share it for value-class COW safety, matching codegen behavior.
+      if (outputSet.has(regularParams[i])) {
+        val = shareRuntimeValue(val);
+      }
+      fnEnv.set(regularParams[i], val);
     }
   }
   if (hasVarargin) {
