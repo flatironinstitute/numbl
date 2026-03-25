@@ -227,6 +227,7 @@ export function applyUnaryElemwise(
   complexFn: (re: number, im: number) => { re: number; im: number },
   name: string
 ): RuntimeValue {
+  if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
   if (isRuntimeComplexNumber(v)) {
@@ -264,6 +265,7 @@ export function applyUnaryElemwiseMaybeComplex(
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
     throw new Error(`${name}: sparse matrices not yet supported`);
+  if (typeof v === "boolean") v = (v ? 1 : 0) as unknown as RuntimeValue;
   if (typeof v === "number") {
     const r = realFn(v);
     if (!Number.isNaN(r)) return r;
@@ -316,6 +318,7 @@ export function applyUnaryRealResult(
   complexFn: (re: number, im: number) => number,
   name: string
 ): RuntimeValue {
+  if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
   if (isRuntimeComplexNumber(v)) {
@@ -342,8 +345,8 @@ export function applyBinaryScalar(
   fn: (a: number, b: number) => number,
   name: string
 ): RuntimeValue {
-  const a = args[0],
-    b = args[1];
+  const a = typeof args[0] === "boolean" ? (args[0] ? 1 : 0) : args[0];
+  const b = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
   if (typeof a === "number" && typeof b === "number") return fn(a, b);
   throw new Error(`${name}: expected two scalar numbers`);
 }

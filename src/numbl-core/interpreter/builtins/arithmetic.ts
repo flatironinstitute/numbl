@@ -57,7 +57,8 @@ function applyBinaryElemwise(
   fn: (a: number, b: number) => number,
   name: string
 ): RuntimeValue {
-  const [a, b] = args;
+  const a = typeof args[0] === "boolean" ? (args[0] ? 1 : 0) : args[0];
+  const b = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
   if (typeof a === "number" && typeof b === "number") return fn(a, b);
 
   // scalar + tensor or tensor + scalar or tensor + tensor

@@ -26,6 +26,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return v ? 1 : 0;
         if (typeof v === "number") return v;
         if (isRuntimeComplexNumber(v)) return v.re;
         if (isRuntimeTensor(v)) {
@@ -50,6 +51,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return 0;
         if (typeof v === "number") return 0;
         if (isRuntimeComplexNumber(v)) return v.im;
         if (isRuntimeTensor(v)) {
@@ -77,6 +79,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return v ? 1 : 0;
         if (typeof v === "number") return v;
         if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
         if (isRuntimeTensor(v)) {
@@ -105,6 +108,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return 0;
         if (typeof v === "number") return v >= 0 ? 0 : Math.PI;
         if (isRuntimeComplexNumber(v)) return Math.atan2(v.im, v.re);
         if (isRuntimeTensor(v)) {

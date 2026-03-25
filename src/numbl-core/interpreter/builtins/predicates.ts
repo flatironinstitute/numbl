@@ -55,6 +55,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return false;
         if (typeof v === "number") return Number.isNaN(v);
         if (isRuntimeComplexNumber(v))
           return Number.isNaN(v.re) || Number.isNaN(v.im);
@@ -96,6 +97,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return false;
         if (typeof v === "number") return isInfVal(v);
         if (isRuntimeComplexNumber(v)) return isInfVal(v.re) || isInfVal(v.im);
         if (isRuntimeTensor(v)) {
@@ -132,6 +134,7 @@ registerIBuiltin({
       outputTypes,
       apply: args => {
         const v = args[0];
+        if (typeof v === "boolean") return true;
         if (typeof v === "number") return isFinite(v);
         if (isRuntimeComplexNumber(v)) return isFinite(v.re) && isFinite(v.im);
         if (isRuntimeTensor(v)) {

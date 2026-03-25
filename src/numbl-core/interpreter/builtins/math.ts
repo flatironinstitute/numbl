@@ -276,8 +276,8 @@ registerIBuiltin({
             return { f: x / Math.pow(2, e), e };
           }
           const v = args[0];
-          if (typeof v === "number") {
-            const { f, e } = frexpScalar(v);
+          if (typeof v === "boolean" || typeof v === "number") {
+            const { f, e } = frexpScalar(typeof v === "boolean" ? +v : v);
             return [f, e];
           }
           if (isRuntimeTensor(v) && !v.imag) {
