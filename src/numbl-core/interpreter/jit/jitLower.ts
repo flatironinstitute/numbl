@@ -20,6 +20,7 @@ import {
   isScalarType,
   isTensorType,
   isComplexType,
+  isArithmeticType,
   jitTypeKey,
   computeJitFnName,
   signFromNumber,
@@ -127,6 +128,9 @@ function binaryResultType(
   left: JitType,
   right: JitType
 ): JitType | null {
+  // Reject non-arithmetic types (class_instance, struct, string, char, etc.)
+  if (!isArithmeticType(left) || !isArithmeticType(right)) return null;
+
   // Comparisons always produce logical for scalars
   if (
     op === BinaryOperation.Equal ||

@@ -638,7 +638,7 @@ async function executeWithOptions(
   if (opts.dumpJs) {
     // Clear any previous dump file
     writeFileSync(opts.dumpJs, "");
-    if (!opts.interpret) {
+    {
       onJitCompile = (description: string, jsCode: string) => {
         const header =
           "\n// " +
