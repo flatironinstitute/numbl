@@ -90,6 +90,7 @@ function mangle(name: string): string {
 // ── Entry point ─────────────────────────────────────────────────────────
 
 let _tmpCounter = 0;
+let _returnExpr = "undefined";
 
 export function generateJS(
   body: JitStmt[],
@@ -100,6 +101,15 @@ export function generateJS(
   hasTensorOps: boolean
 ): string {
   _tmpCounter = 0;
+
+  // Compute the return expression for early returns and the final return
+  const effectiveOutputs = outputs.slice(0, nargout || 1);
+  if (effectiveOutputs.length <= 1) {
+    _returnExpr =
+      effectiveOutputs.length > 0 ? mangle(effectiveOutputs[0]) : "undefined";
+  } else {
+    _returnExpr = `[${effectiveOutputs.map(mangle).join(", ")}]`;
+  }
   const lines: string[] = [];
   const indent = "  ";
 
@@ -113,12 +123,7 @@ export function generateJS(
   emitStmts(lines, body, indent, hasTensorOps);
 
   // Return
-  const effectiveOutputs = outputs.slice(0, nargout || 1);
-  if (effectiveOutputs.length <= 1) {
-    lines.push(`${indent}return ${mangle(effectiveOutputs[0])};`);
-  } else {
-    lines.push(`${indent}return [${effectiveOutputs.map(mangle).join(", ")}];`);
-  }
+  lines.push(`${indent}return ${_returnExpr};`);
 
   return lines.join("\n");
 }
@@ -209,7 +214,7 @@ function emitStmt(
 
     case "Return":
       // Early return uses the current output variable values
-      lines.push(`${indent}return;`);
+      lines.push(`${indent}return ${_returnExpr};`);
       break;
 
     case "MultiAssign": {
