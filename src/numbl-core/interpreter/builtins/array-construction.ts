@@ -5,8 +5,8 @@
 import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { toNumber, numel } from "../../runtime/index.js";
-import type { JitType, SignCategory } from "../jit/jitTypes.js";
-import { registerIBuiltin, makeTensor } from "./types.js";
+import type { SignCategory } from "../jit/jitTypes.js";
+import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -23,193 +23,170 @@ function parseShapeArgs(args: RuntimeValue[]): number[] {
   return args.map(a => Math.max(0, Math.round(toNumber(a))));
 }
 
-/** Type rule for array constructors that take shape args and return a real tensor.
- *  Accepts: 0+ scalar number/logical args, or a single tensor arg. */
-function arrayConstructorTypeRule(
-  argTypes: JitType[],
+/** Build cases for array constructors that take shape args and return a real tensor. */
+function arrayConstructorCases(
+  fillFn: (shape: number[]) => RuntimeValue,
+  scalarValue: RuntimeValue,
   opts?: { scalarSign?: SignCategory; nonneg?: boolean }
-): JitType[] | null {
-  if (argTypes.length === 0) {
-    // zeros() -> scalar 0
-    return [
-      {
-        kind: "number",
-        ...(opts?.scalarSign ? { sign: opts.scalarSign } : {}),
-      },
-    ];
-  }
-  if (argTypes.length === 1) {
-    const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "boolean") {
-      // zeros(n) -> n×n matrix
-      return [
-        {
-          kind: "tensor",
-          isComplex: false,
-          shape: [-1, -1],
-          ...(opts?.nonneg ? { nonneg: true } : {}),
-        },
-      ];
-    }
-    if (a.kind === "tensor") {
-      // zeros([m, n]) -> m×n matrix (shape unknown at compile time)
-      return [
-        {
-          kind: "tensor",
-          isComplex: false,
-          shape: [-1, -1],
-          ...(opts?.nonneg ? { nonneg: true } : {}),
-        },
-      ];
-    }
-    return null;
-  }
-  // Multiple args: all must be scalar numbers/logicals
-  for (const a of argTypes) {
-    if (a.kind !== "number" && a.kind !== "boolean") return null;
-  }
-  const shape = new Array(argTypes.length).fill(-1);
+): BuiltinCase[] {
   return [
+    // No args: return scalar
     {
-      kind: "tensor",
-      isComplex: false,
-      shape,
-      ...(opts?.nonneg ? { nonneg: true } : {}),
+      match: argTypes => {
+        if (argTypes.length !== 0) return null;
+        return [
+          {
+            kind: "number" as const,
+            ...(opts?.scalarSign ? { sign: opts.scalarSign } : {}),
+          },
+        ];
+      },
+      apply: () => scalarValue,
+    },
+    // Single arg: number/boolean → n×n, tensor → shape from tensor
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        const a = argTypes[0];
+        if (a.kind === "number" || a.kind === "boolean" || a.kind === "tensor")
+          return [
+            {
+              kind: "tensor" as const,
+              isComplex: false,
+              shape: [-1, -1],
+              ...(opts?.nonneg ? { nonneg: true } : {}),
+            },
+          ];
+        return null;
+      },
+      apply: args => {
+        const shape = parseShapeArgs(args);
+        if (shape.length === 1) shape.push(shape[0]);
+        return fillFn(shape);
+      },
+    },
+    // Multiple scalar args
+    {
+      match: argTypes => {
+        if (argTypes.length <= 1) return null;
+        for (const a of argTypes) {
+          if (a.kind !== "number" && a.kind !== "boolean") return null;
+        }
+        return [
+          {
+            kind: "tensor" as const,
+            isComplex: false,
+            shape: new Array(argTypes.length).fill(-1),
+            ...(opts?.nonneg ? { nonneg: true } : {}),
+          },
+        ];
+      },
+      apply: args => {
+        const shape = parseShapeArgs(args);
+        return fillFn(shape);
+      },
     },
   ];
 }
 
 // ── zeros ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "zeros",
-  resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes, {
-      scalarSign: "nonneg",
-      nonneg: true,
-    });
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        if (args.length === 0) return 0;
-        const shape = parseShapeArgs(args);
-        if (shape.length === 1) shape.push(shape[0]);
-        const n = numel(shape);
-        return makeTensor(new FloatXArray(n), undefined, shape);
-      },
-    };
-  },
+  cases: arrayConstructorCases(
+    shape => makeTensor(new FloatXArray(numel(shape)), undefined, shape),
+    0,
+    { scalarSign: "nonneg", nonneg: true }
+  ),
 });
 
 // ── ones ─────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "ones",
-  resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes, {
-      scalarSign: "positive",
-      nonneg: true,
-    });
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        if (args.length === 0) return 1;
-        const shape = parseShapeArgs(args);
-        if (shape.length === 1) shape.push(shape[0]);
-        const n = numel(shape);
-        const data = new FloatXArray(n);
-        data.fill(1);
-        return makeTensor(data, undefined, shape);
-      },
-    };
-  },
+  cases: arrayConstructorCases(
+    shape => {
+      const data = new FloatXArray(numel(shape));
+      data.fill(1);
+      return makeTensor(data, undefined, shape);
+    },
+    1,
+    { scalarSign: "positive", nonneg: true }
+  ),
 });
 
 // ── nan / NaN ────────────────────────────────────────────────────────────
 
-function nanApply(args: RuntimeValue[]): RuntimeValue {
-  if (args.length === 0) return NaN;
-  const shape = parseShapeArgs(args);
-  if (shape.length === 1) shape.push(shape[0]);
-  const n = numel(shape);
-  const data = new FloatXArray(n);
+function nanFill(shape: number[]): RuntimeValue {
+  const data = new FloatXArray(numel(shape));
   data.fill(NaN);
   return makeTensor(data, undefined, shape);
 }
 
-registerIBuiltin({
+defineBuiltin({
   name: "nan",
-  resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes);
-    if (!outputTypes) return null;
-    return { outputTypes, apply: nanApply };
-  },
+  cases: arrayConstructorCases(nanFill, NaN),
 });
 
-registerIBuiltin({
+defineBuiltin({
   name: "NaN",
-  resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes);
-    if (!outputTypes) return null;
-    return { outputTypes, apply: nanApply };
-  },
+  cases: arrayConstructorCases(nanFill, NaN),
 });
 
 // ── eye ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "eye",
-  resolve: argTypes => {
-    const outputTypes = arrayConstructorTypeRule(argTypes, {
-      scalarSign: "nonneg",
-      nonneg: true,
-    });
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        let rows: number, cols: number;
-        if (args.length === 0) {
-          rows = 1;
-          cols = 1;
-        } else if (args.length === 1) {
-          const shape = parseShapeArgs(args);
-          if (shape.length >= 2) {
-            rows = shape[0];
-            cols = shape[1];
-          } else {
-            rows = shape[0];
-            cols = rows;
-          }
-        } else {
-          rows = Math.max(0, Math.round(toNumber(args[0])));
-          cols = Math.max(0, Math.round(toNumber(args[1])));
+  cases: arrayConstructorCases(
+    () => {
+      throw new Error("eye: unreachable — uses custom apply");
+    },
+    1,
+    { scalarSign: "nonneg", nonneg: true }
+  ).map((c, i) =>
+    i === 0
+      ? c
+      : {
+          ...c,
+          apply: (args: RuntimeValue[]) => {
+            let rows: number, cols: number;
+            if (args.length === 1) {
+              const shape = parseShapeArgs(args);
+              if (shape.length >= 2) {
+                rows = shape[0];
+                cols = shape[1];
+              } else {
+                rows = shape[0];
+                cols = rows;
+              }
+            } else {
+              rows = Math.max(0, Math.round(toNumber(args[0])));
+              cols = Math.max(0, Math.round(toNumber(args[1])));
+            }
+            const data = new FloatXArray(rows * cols);
+            const minDim = Math.min(rows, cols);
+            for (let i = 0; i < minDim; i++) {
+              data[i * rows + i] = 1;
+            }
+            return makeTensor(data, undefined, [rows, cols]);
+          },
         }
-        const data = new FloatXArray(rows * cols);
-        const minDim = Math.min(rows, cols);
-        for (let i = 0; i < minDim; i++) {
-          data[i * rows + i] = 1; // column-major: (i, i) = i * rows + i
-        }
-        return makeTensor(data, undefined, [rows, cols]);
-      },
-    };
-  },
+  ),
 });
 
 // ── linspace ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "linspace",
-  resolve: argTypes => {
-    if (argTypes.length < 2 || argTypes.length > 3) return null;
-    for (const a of argTypes) {
-      if (a.kind !== "number" && a.kind !== "boolean") return null;
-    }
-    // linspace always returns a 1×n row vector
-    return {
-      outputTypes: [{ kind: "tensor", isComplex: false, shape: [1, -1] }],
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2 || argTypes.length > 3) return null;
+        for (const a of argTypes) {
+          if (a.kind !== "number" && a.kind !== "boolean") return null;
+        }
+        return [{ kind: "tensor", isComplex: false, shape: [1, -1] }];
+      },
       apply: args => {
         if (args.length < 2 || args.length > 3)
           throw new Error("linspace requires 2 or 3 arguments");
@@ -225,21 +202,23 @@ registerIBuiltin({
         }
         return makeTensor(data, undefined, [1, n]);
       },
-    };
-  },
+    },
+  ],
 });
 
 // ── logspace ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "logspace",
-  resolve: argTypes => {
-    if (argTypes.length < 2 || argTypes.length > 3) return null;
-    for (const a of argTypes) {
-      if (a.kind !== "number" && a.kind !== "boolean") return null;
-    }
-    return {
-      outputTypes: [{ kind: "tensor", isComplex: false, shape: [1, -1] }],
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2 || argTypes.length > 3) return null;
+        for (const a of argTypes) {
+          if (a.kind !== "number" && a.kind !== "boolean") return null;
+        }
+        return [{ kind: "tensor", isComplex: false, shape: [1, -1] }];
+      },
       apply: args => {
         if (args.length < 2 || args.length > 3)
           throw new Error("logspace requires 2 or 3 arguments");
@@ -268,6 +247,6 @@ registerIBuiltin({
         }
         return makeTensor(data, undefined, [1, n]);
       },
-    };
-  },
+    },
+  ],
 });
