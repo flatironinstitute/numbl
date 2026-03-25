@@ -90,15 +90,18 @@ function mangle(name: string): string {
 
 let _tmpCounter = 0;
 let _returnExpr = "undefined";
+let _fileName: string | undefined;
 
 export function generateJS(
   body: JitStmt[],
   params: string[],
   outputs: string[],
   nargout: number,
-  localVars: Set<string>
+  localVars: Set<string>,
+  fileName?: string
 ): string {
   _tmpCounter = 0;
+  _fileName = fileName;
 
   // Compute the return expression for early returns and the final return
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -220,6 +223,13 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
       }
       break;
     }
+
+    case "SetLoc":
+      if (_fileName) {
+        lines.push(`${indent}$rt.$file = ${JSON.stringify(_fileName)};`);
+      }
+      lines.push(`${indent}$rt.$line = ${stmt.line};`);
+      break;
   }
 }
 
@@ -416,7 +426,7 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }): string {
 
 function emitUserCall(expr: JitExpr & { tag: "UserCall" }): string {
   const args = expr.args.map(a => emitExpr(a));
-  return `${expr.jitName}(${args.join(", ")})`;
+  return `$h.callUser($rt, ${JSON.stringify(expr.name)}, ${expr.jitName}, ${args.join(", ")})`;
 }
 
 function emitTensorLiteral(expr: JitExpr & { tag: "TensorLiteral" }): string {

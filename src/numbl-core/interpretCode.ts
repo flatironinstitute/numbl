@@ -239,6 +239,7 @@ export function interpretCode(
         e.file = rt.$file;
         e.line = rt.$line;
       }
+      if (!e.fileSources) e.fileSources = interpreter.fileSources;
       (e as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
       throw e;
     }
@@ -247,6 +248,7 @@ export function interpretCode(
       re.file = rt.$file;
       re.line = rt.$line;
     }
+    re.fileSources = interpreter.fileSources;
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
     throw re;
   } finally {

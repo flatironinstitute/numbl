@@ -359,7 +359,13 @@ export type JitExpr =
   | { tag: "Unary"; op: UnaryOperation; operand: JitExpr; jitType: JitType }
   | { tag: "StringLiteral"; value: string; isChar: boolean; jitType: JitType }
   | { tag: "Call"; name: string; args: JitExpr[]; jitType: JitType }
-  | { tag: "UserCall"; jitName: string; args: JitExpr[]; jitType: JitType }
+  | {
+      tag: "UserCall";
+      jitName: string;
+      name: string;
+      args: JitExpr[];
+      jitType: JitType;
+    }
   | { tag: "Index"; base: JitExpr; indices: JitExpr[]; jitType: JitType }
   | {
       tag: "TensorLiteral";
@@ -397,7 +403,8 @@ export type JitStmt =
       callName: string;
       args: JitExpr[];
       outputTypes: JitType[];
-    };
+    }
+  | { tag: "SetLoc"; line: number };
 
 // ── Scalar math builtins ────────────────────────────────────────────────
 

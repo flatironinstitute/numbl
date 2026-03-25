@@ -1,5 +1,5 @@
 /**
- * Utility builtins for JIT: isequal, assert, abs.
+ * Utility builtins for JIT: isequal, assert, error, abs.
  */
 
 import {
@@ -20,6 +20,8 @@ import type {
   RuntimeSparseMatrix,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
+import { RuntimeError } from "../../runtime/error.js";
+import { sprintfFormat } from "../../builtins/string.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 
@@ -173,6 +175,39 @@ defineBuiltin({
           throw new Error(msg);
         }
         return 0;
+      },
+    },
+  ],
+});
+
+// ── error ────────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "error",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length === 0) return null;
+        return [{ kind: "number" }]; // never actually returns
+      },
+      apply: args => {
+        const first = textValue(args[0]) ?? String(args[0]);
+        // error(id, fmt, ...) form: first arg contains ':' and there are more args
+        if (args.length >= 2 && first.includes(":")) {
+          const msg =
+            args.length === 2
+              ? (textValue(args[1]) ?? String(args[1]))
+              : sprintfFormat(
+                  textValue(args[1]) ?? String(args[1]),
+                  args.slice(2)
+                );
+          const err = new RuntimeError(msg);
+          err.identifier = first;
+          throw err;
+        }
+        const msg =
+          args.length === 1 ? first : sprintfFormat(first, args.slice(1));
+        throw new RuntimeError(msg);
       },
     },
   ],

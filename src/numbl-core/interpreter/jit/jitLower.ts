@@ -29,6 +29,7 @@ import {
 } from "./jitTypes.js";
 import { generateJS } from "./jitCodegen.js";
 import { getIBuiltin } from "../builtins/index.js";
+import { offsetToLineFast, buildLineTable } from "../../runtime/error.js";
 
 // ── Known constants ─────────────────────────────────────────────────────
 
@@ -320,6 +321,18 @@ export function lowerFunction(
   const sharedGeneratedFns = generatedFns ?? new Map<string, string>();
   const sharedInProgress = loweringInProgress ?? new Set<string>();
 
+  // Build line table for offset→line lookup from file sources
+  let lineTable: number[] | undefined;
+  if (interp && fn.body.length > 0 && fn.body[0].span) {
+    const file = fn.body[0].span.file;
+    lineTable = interp.lineTableCache.get(file);
+    if (!lineTable) {
+      const src = interp.fileSources.get(file) ?? "";
+      lineTable = buildLineTable(src);
+      interp.lineTableCache.set(file, lineTable);
+    }
+  }
+
   const ctx: LowerCtx = {
     env,
     localVars,
@@ -327,6 +340,7 @@ export function lowerFunction(
     interp,
     generatedFns: sharedGeneratedFns,
     loweringInProgress: sharedInProgress,
+    lineTable,
   };
   const body = lowerStmts(ctx, fn.body);
   if (!body) return null;
@@ -354,6 +368,8 @@ interface LowerCtx {
   interp?: Interpreter;
   generatedFns: Map<string, string>;
   loweringInProgress: Set<string>;
+  /** Pre-built line break table for offset→line lookup. */
+  lineTable?: number[];
 }
 
 // ── Statement lowering ──────────────────────────────────────────────────
@@ -369,29 +385,48 @@ function lowerStmts(ctx: LowerCtx, stmts: Stmt[]): JitStmt[] | null {
 }
 
 function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
+  // Emit SetLoc for line tracking if span info is available
+  const prefix: JitStmt[] = [];
+  if (ctx.lineTable && stmt.span) {
+    const line = offsetToLineFast(ctx.lineTable, stmt.span.start);
+    prefix.push({ tag: "SetLoc", line });
+  }
+
+  let result: JitStmt[] | null;
   switch (stmt.type) {
     case "Assign":
-      return lowerAssign(ctx, stmt);
+      result = lowerAssign(ctx, stmt);
+      break;
     case "ExprStmt":
       if (!stmt.suppressed) return null; // unsuppressed display not supported
-      return lowerExprStmt(ctx, stmt);
+      result = lowerExprStmt(ctx, stmt);
+      break;
     case "If":
-      return lowerIf(ctx, stmt);
+      result = lowerIf(ctx, stmt);
+      break;
     case "For":
-      return lowerFor(ctx, stmt);
+      result = lowerFor(ctx, stmt);
+      break;
     case "While":
-      return lowerWhile(ctx, stmt);
+      result = lowerWhile(ctx, stmt);
+      break;
     case "Break":
-      return [{ tag: "Break" }];
+      result = [{ tag: "Break" }];
+      break;
     case "Continue":
-      return [{ tag: "Continue" }];
+      result = [{ tag: "Continue" }];
+      break;
     case "Return":
-      return [{ tag: "Return" }];
+      result = [{ tag: "Return" }];
+      break;
     case "MultiAssign":
-      return lowerMultiAssign(ctx, stmt);
+      result = lowerMultiAssign(ctx, stmt);
+      break;
     default:
       return null; // unsupported statement
   }
+  if (!result) return null;
+  return [...prefix, ...result];
 }
 
 function lowerAssign(
@@ -774,13 +809,16 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       return lowerIBuiltinCall(ctx, expr);
     }
 
-    case "Char":
+    case "Char": {
+      // Strip enclosing quotes and unescape doubled single-quotes
+      const charVal = expr.value.slice(1, -1).replaceAll("''", "'");
       return {
         tag: "StringLiteral",
-        value: expr.value,
+        value: charVal,
         isChar: true,
-        jitType: { kind: "char", value: expr.value },
+        jitType: { kind: "char", value: charVal },
       };
+    }
 
     case "String":
       return {
@@ -877,7 +915,13 @@ function lowerUserFuncCall(
       ctx
     );
     if (!returnType) return null;
-    return { tag: "UserCall", jitName, args: loweredArgs, jitType: returnType };
+    return {
+      tag: "UserCall",
+      jitName,
+      name: calleeFn.name,
+      args: loweredArgs,
+      jitType: returnType,
+    };
   }
 
   // Recursion guard
@@ -902,7 +946,8 @@ function lowerUserFuncCall(
       calleeFn.params,
       calleeResult.outputNames,
       calleeNargout,
-      calleeResult.localVars
+      calleeResult.localVars,
+      interp.currentFile
     );
     const returnType = calleeResult.outputType ?? { kind: "number" as const };
     const paramComments = calleeFn.params
@@ -924,7 +969,13 @@ function lowerUserFuncCall(
     // Propagate tensor ops flag
     if (calleeResult.hasTensorOps) ctx._hasTensorOps = true;
 
-    return { tag: "UserCall", jitName, args: loweredArgs, jitType: returnType };
+    return {
+      tag: "UserCall",
+      jitName,
+      name: calleeFn.name,
+      args: loweredArgs,
+      jitType: returnType,
+    };
   } finally {
     ctx.loweringInProgress.delete(jitName);
   }

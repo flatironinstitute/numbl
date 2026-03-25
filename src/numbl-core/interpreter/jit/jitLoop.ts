@@ -144,12 +144,14 @@ function tryJitLoop(
   }
 
   // Generate JavaScript
+  const currentFile = interp.currentFile;
   const mainBody = generateJS(
     lowered.body,
     inputs,
     lowered.outputNames,
     outputs.length,
-    lowered.localVars
+    lowered.localVars,
+    currentFile
   );
 
   // Prepend generated helper function definitions
@@ -160,16 +162,13 @@ function tryJitLoop(
   parts.push(mainBody);
   const jsBody = parts.join("\n");
 
-  // Create compiled function
+  // Create compiled function — always pass $h and $rt for line tracking
   let compiledFn: (...args: unknown[]) => unknown;
+  const rt = interp.rt;
   try {
-    if (lowered.hasTensorOps) {
-      const factory = new Function("$h", ...inputs, jsBody);
-      compiledFn = (...callArgs: unknown[]) => factory(jitHelpers, ...callArgs);
-    } else {
-      const factory = new Function(...inputs, jsBody);
-      compiledFn = (...callArgs: unknown[]) => factory(...callArgs);
-    }
+    const factory = new Function("$h", "$rt", ...inputs, jsBody);
+    compiledFn = (...callArgs: unknown[]) =>
+      factory(jitHelpers, rt, ...callArgs);
   } catch {
     loopJitCache.set(cacheKey, null);
     return false;
@@ -198,12 +197,8 @@ function executeAndWriteBack(
   inputValues: unknown[],
   outputs: string[]
 ): boolean {
-  let result: unknown;
-  try {
-    result = compiledFn(...inputValues);
-  } catch {
-    return false; // runtime error — fall back to interpreter
-  }
+  // Let runtime errors propagate (don't silently fall back)
+  const result = compiledFn(...inputValues);
 
   // Write back output variables
   if (outputs.length === 1) {

@@ -404,6 +404,28 @@ export const jitHelpers = {
   re,
   im,
 
+  // User function call with call frame tracking
+  callUser: (
+    rt: {
+      pushCallFrame: (name: string) => void;
+      popCallFrame: () => void;
+      annotateError: (e: unknown) => void;
+    },
+    name: string,
+    fn: (...args: unknown[]) => unknown,
+    ...args: unknown[]
+  ) => {
+    rt.pushCallFrame(name);
+    try {
+      return fn(...args);
+    } catch (e) {
+      rt.annotateError(e);
+      throw e;
+    } finally {
+      rt.popCallFrame();
+    }
+  },
+
   // IBuiltin apply functions (populated by buildJitHelpers)
 } as Record<string, unknown>;
 

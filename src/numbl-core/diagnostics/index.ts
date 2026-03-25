@@ -97,13 +97,37 @@ export function diagnoseError(
         ? extractSnippetByLine(src, error.line, 2, error.column ?? undefined)
         : null;
     }
+    // Enrich call frames with source line text so downstream renderers
+    // (e.g. the IDE worker) don't need access to file sources.
+    // Each frame's callerSourceLine is the trimmed source at its own callerFile:callerLine.
+    const callStack = error.callStack;
+    if (callStack && callStack.length > 0) {
+      for (const frame of callStack) {
+        if (frame.callerFile && frame.callerLine > 0) {
+          const src = getSourceForFile(
+            frame.callerFile,
+            mainFileName,
+            mainSource,
+            wsFiles
+          );
+          if (src) {
+            const lines = src.split("\n");
+            if (frame.callerLine >= 1 && frame.callerLine <= lines.length) {
+              frame.callerSourceLine =
+                lines[frame.callerLine - 1].trim() || undefined;
+            }
+          }
+        }
+      }
+    }
+
     return {
       message: error.message,
       errorType: "runtime",
       file: error.file,
       line: error.line,
       snippet,
-      callStack: error.callStack,
+      callStack,
     };
   }
 
@@ -176,12 +200,18 @@ export function diagnoseError(
 }
 
 /** Format multiple DiagnosticInfo as a human-readable string for console output. */
-export function formatDiagnostics(infos: DiagnosticInfo[]): string {
-  return infos.map(formatDiagnostic).join("\n\n");
+export function formatDiagnostics(
+  infos: DiagnosticInfo[],
+  getSource?: (file: string) => string | null
+): string {
+  return infos.map(i => formatDiagnostic(i, getSource)).join("\n\n");
 }
 
 /** Format a DiagnosticInfo as a human-readable string for console output. */
-export function formatDiagnostic(info: DiagnosticInfo): string {
+export function formatDiagnostic(
+  info: DiagnosticInfo,
+  getSource?: (file: string) => string | null
+): string {
   const labels: Record<DiagnosticInfo["errorType"], string> = {
     syntax: "SyntaxError",
     semantic: "SemanticError",
@@ -210,27 +240,68 @@ export function formatDiagnostic(info: DiagnosticInfo): string {
     for (let i = N - 1; i >= 0; i--) {
       const name = stack[i].name;
       let loc: string;
+      let file: string | null = null;
+      let line = 0;
       if (i === N - 1) {
-        if (info.file && info.line !== null) {
-          loc = `${info.file}:${info.line}`;
-        } else if (info.line !== null) {
-          loc = `line ${info.line}`;
+        file = info.file;
+        line = info.line ?? 0;
+        if (file && line > 0) {
+          loc = `${file}:${line}`;
+        } else if (line > 0) {
+          loc = `line ${line}`;
         } else {
           loc = "unknown";
         }
       } else {
         const callerFrame = stack[i + 1];
-        if (callerFrame.callerFile && callerFrame.callerLine > 0) {
-          loc = `${callerFrame.callerFile}:${callerFrame.callerLine}`;
-        } else if (callerFrame.callerLine > 0) {
-          loc = `line ${callerFrame.callerLine}`;
+        file = callerFrame.callerFile;
+        line = callerFrame.callerLine;
+        if (file && line > 0) {
+          loc = `${file}:${line}`;
+        } else if (line > 0) {
+          loc = `line ${line}`;
         } else {
           loc = "unknown";
         }
       }
       result += `\n  at ${name} (${loc})`;
+      if (file && line > 0) {
+        let srcLine: string | null = null;
+        if (getSource) {
+          srcLine = getSourceLine(getSource, file, line);
+        } else if (i === N - 1) {
+          // Innermost frame uses error's file/line — not stored on any callerSourceLine,
+          // so we can't show it without getSource (snippet already covers this).
+        } else {
+          // Outer frame: file/line came from stack[i+1]'s caller info
+          srcLine = stack[i + 1].callerSourceLine ?? null;
+        }
+        if (srcLine) result += `\n        ${srcLine}`;
+      }
+    }
+    // Show the outermost caller location (where the first function was called from)
+    const outermost = stack[0];
+    if (outermost.callerFile && outermost.callerLine > 0) {
+      result += `\n  at ${outermost.callerFile}:${outermost.callerLine}`;
+      const srcLine = getSource
+        ? getSourceLine(getSource, outermost.callerFile, outermost.callerLine)
+        : (outermost.callerSourceLine ?? null);
+      if (srcLine) result += `\n        ${srcLine}`;
     }
   }
 
   return result;
+}
+
+/** Get a single trimmed source line by file and 1-based line number. */
+function getSourceLine(
+  getSource: (file: string) => string | null,
+  file: string,
+  line: number
+): string | null {
+  const src = getSource(file);
+  if (!src) return null;
+  const lines = src.split("\n");
+  if (line < 1 || line > lines.length) return null;
+  return lines[line - 1].trim() || null;
 }

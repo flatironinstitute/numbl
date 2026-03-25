@@ -49,7 +49,7 @@ export function tryJitCall(
   if (fnWithCache._jitCache.has(cacheKey)) {
     const entry = fnWithCache._jitCache.get(cacheKey)!;
     if (entry === null) return JIT_SKIP; // previously failed
-    return entry.fn(...args);
+    return runWithCallFrame(interp, fn.name, entry.fn, args);
   }
 
   // Attempt lowering (pass interpreter for user function resolution)
@@ -60,12 +60,14 @@ export function tryJitCall(
   }
 
   // Generate JavaScript for the main function body
+  const currentFile = interp.currentFile;
   const mainBody = generateJS(
     lowered.body,
     fn.params,
     lowered.outputNames,
     nargout,
-    lowered.localVars
+    lowered.localVars,
+    currentFile
   );
 
   // Prepend generated helper function definitions (indented to match main body)
@@ -76,19 +78,15 @@ export function tryJitCall(
   parts.push(mainBody);
   const jsBody = parts.join("\n");
 
-  // Create function
+  // Create function — always pass $h (helpers) and $rt (runtime) for line tracking
   let compiledFn: (...args: unknown[]) => unknown;
   const paramNames = fn.params.map(p => p);
+  const rt = interp.rt;
 
   try {
-    if (lowered.hasTensorOps) {
-      // Pass helpers as first parameter
-      const factory = new Function("$h", ...paramNames, jsBody);
-      compiledFn = (...callArgs: unknown[]) => factory(jitHelpers, ...callArgs);
-    } else {
-      const factory = new Function(...paramNames, jsBody);
-      compiledFn = (...callArgs: unknown[]) => factory(...callArgs);
-    }
+    const factory = new Function("$h", "$rt", ...paramNames, jsBody);
+    compiledFn = (...callArgs: unknown[]) =>
+      factory(jitHelpers, rt, ...callArgs);
   } catch {
     fnWithCache._jitCache.set(cacheKey, null);
     return JIT_SKIP;
@@ -117,12 +115,24 @@ export function tryJitCall(
   const description = `${fn.name}@${line}(${typeDesc}) -> nargout=${nargout}`;
   interp.onJitCompile?.(description, source);
 
-  // Execute
+  // Execute — let runtime errors propagate (don't silently fall back)
+  return runWithCallFrame(interp, fn.name, compiledFn, args);
+}
+
+/** Execute a JIT-compiled function with proper call frame tracking. */
+function runWithCallFrame(
+  interp: Interpreter,
+  name: string,
+  compiledFn: (...args: unknown[]) => unknown,
+  args: unknown[]
+): unknown {
+  interp.rt.pushCallFrame(name);
   try {
     return compiledFn(...args);
-  } catch {
-    // Runtime error in JIT'd code - remove from cache and fall back
-    fnWithCache._jitCache.set(cacheKey, null);
-    return JIT_SKIP;
+  } catch (e) {
+    interp.rt.annotateError(e);
+    throw e;
+  } finally {
+    interp.rt.popCallFrame();
   }
 }

@@ -12,6 +12,8 @@ export type CallFrame = {
   name: string;
   callerFile: string | null;
   callerLine: number;
+  /** Trimmed source text at callerLine (populated during error enrichment) */
+  callerSourceLine?: string;
 };
 
 export class RuntimeError extends Error {
@@ -31,6 +33,8 @@ export class RuntimeError extends Error {
   callStack: CallFrame[] | null;
   /** Error identifier (e.g. 'myid:myerr') */
   identifier: string;
+  /** File sources for resolving source lines in call stack display */
+  fileSources: Map<string, string> | null;
 
   constructor(message: string, span?: Span | null) {
     super(message);
@@ -42,6 +46,7 @@ export class RuntimeError extends Error {
     this.snippet = null;
     this.callStack = null;
     this.identifier = "";
+    this.fileSources = null;
   }
 
   /**
@@ -97,31 +102,61 @@ export class RuntimeError extends Error {
       for (let i = N - 1; i >= 0; i--) {
         const name = this.callStack[i].name;
         let loc: string;
+        let frameFile: string | null = null;
+        let frameLine = 0;
         if (i === N - 1) {
           // Innermost frame: use the error's own file/line
-          if (this.file && this.line !== null) {
-            loc = `${this.file}:${this.line}`;
-          } else if (this.line !== null) {
-            loc = `line ${this.line}`;
+          frameFile = this.file;
+          frameLine = this.line ?? 0;
+          if (frameFile && frameLine > 0) {
+            loc = `${frameFile}:${frameLine}`;
+          } else if (frameLine > 0) {
+            loc = `line ${frameLine}`;
           } else {
             loc = "unknown";
           }
         } else {
           // Outer frame: call site is recorded in the frame above it
           const callerFrame = this.callStack[i + 1];
-          if (callerFrame.callerFile && callerFrame.callerLine > 0) {
-            loc = `${callerFrame.callerFile}:${callerFrame.callerLine}`;
-          } else if (callerFrame.callerLine > 0) {
-            loc = `line ${callerFrame.callerLine}`;
+          frameFile = callerFrame.callerFile;
+          frameLine = callerFrame.callerLine;
+          if (frameFile && frameLine > 0) {
+            loc = `${frameFile}:${frameLine}`;
+          } else if (frameLine > 0) {
+            loc = `line ${frameLine}`;
           } else {
             loc = "unknown";
           }
         }
         result += `\n  at ${name} (${loc})`;
+        if (frameFile && frameLine > 0) {
+          const srcLine = this._getSourceLine(frameFile, frameLine);
+          if (srcLine) result += `\n        ${srcLine}`;
+        }
+      }
+      // Show the outermost caller location (where the first function was called from)
+      const outermost = this.callStack[0];
+      if (outermost.callerFile && outermost.callerLine > 0) {
+        result += `\n  at ${outermost.callerFile}:${outermost.callerLine}`;
+        const srcLine = this._getSourceLine(
+          outermost.callerFile,
+          outermost.callerLine
+        );
+        if (srcLine) result += `\n        ${srcLine}`;
       }
     }
 
     return result;
+  }
+
+  /** Look up a single trimmed source line from fileSources. */
+  private _getSourceLine(file: string, line: number): string | null {
+    if (!this.fileSources) return null;
+    const src = this.fileSources.get(file);
+    if (!src) return null;
+    const lines = src.split("\n");
+    if (line < 1 || line > lines.length) return null;
+    return lines[line - 1].trim() || null;
   }
 }
 

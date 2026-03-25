@@ -22,7 +22,11 @@ import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
 import { getAllBuiltinNames } from "./numbl-core/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
 import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
-import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
+import {
+  diagnoseErrors,
+  formatDiagnostics,
+  getSourceForFile,
+} from "./numbl-core/diagnostics";
 import { NUMBL_VERSION } from "./numbl-core/version.js";
 import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
@@ -295,9 +299,11 @@ async function runTests(
       }
     } catch (error) {
       const diags = diagnoseErrors(error, source, mainFileName, workspaceFiles);
+      const getSource = (file: string) =>
+        getSourceForFile(file, mainFileName, source, workspaceFiles);
       console.log(`FAIL  ${rel}`);
       console.log(
-        `      ${formatDiagnostics(diags).replace(/\n/g, "\n      ")}`
+        `      ${formatDiagnostics(diags, getSource).replace(/\n/g, "\n      ")}`
       );
       fail++;
       failedScripts.push(rel);
@@ -785,7 +791,9 @@ async function executeWithOptions(
     process.exit(0);
   } catch (error) {
     const diags = diagnoseErrors(error, code, mainFileName, workspaceFiles);
-    console.error(formatDiagnostics(diags));
+    const getSource = (file: string) =>
+      getSourceForFile(file, mainFileName, code, workspaceFiles);
+    console.error(formatDiagnostics(diags, getSource));
 
     // Still finalize the dump file on error so the user can inspect the generated JS
     if (opts.dumpJs) {
