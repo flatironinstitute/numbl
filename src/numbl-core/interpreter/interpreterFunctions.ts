@@ -115,7 +115,7 @@ export function callFunction(
       return this.env.has(nameArg) ? 1 : 0;
     }
     if (typeArg === "builtin") {
-      return this.rt.builtins[nameArg] ? 5 : 0;
+      return this.rt.builtins[nameArg] || getIBuiltin(nameArg) ? 5 : 0;
     }
   }
   if (name === "who" || name === "whos") {
