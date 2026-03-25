@@ -9,13 +9,43 @@ import {
   isRuntimeLogical,
   isRuntimeChar,
   isRuntimeString,
+  isRuntimeCell,
+  isRuntimeStruct,
+  isRuntimeSparseMatrix,
+  FloatXArray,
 } from "../../runtime/types.js";
-import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
+import type {
+  RuntimeValue,
+  RuntimeTensor,
+  RuntimeSparseMatrix,
+} from "../../runtime/types.js";
 import { registerIBuiltin } from "./types.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 
+function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
+  const data = new FloatXArray(S.m * S.n);
+  const imag = S.pi ? new FloatXArray(S.m * S.n) : undefined;
+  for (let col = 0; col < S.n; col++) {
+    for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
+      const idx = col * S.m + S.ir[k];
+      data[idx] = S.pr[k];
+      if (imag && S.pi) imag[idx] = S.pi[k];
+    }
+  }
+  return { kind: "tensor", data, imag, shape: [S.m, S.n], _rc: 1 };
+}
+
 function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
+  // string/char comparison: extract text and compare
+  {
+    const aText = textValue(a);
+    const bText = textValue(b);
+    if (aText !== null && bText !== null) return aText === bText;
+  }
+  // Densify sparse for comparison
+  if (isRuntimeSparseMatrix(a)) return valuesEqualSimple(sparseToDense(a), b);
+  if (isRuntimeSparseMatrix(b)) return valuesEqualSimple(a, sparseToDense(b));
   // number == number
   if (typeof a === "number" && typeof b === "number") return a === b;
   // logical coercion: logical true == 1, logical false == 0
@@ -55,11 +85,26 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
       b.data[0] === a.re &&
       (b.imag ? b.imag[0] === a.im : a.im === 0)
     );
-  // string/char comparison: extract text and compare
-  {
-    const aText = textValue(a);
-    const bText = textValue(b);
-    if (aText !== null && bText !== null) return aText === bText;
+  // cell == cell
+  if (isRuntimeCell(a) && isRuntimeCell(b)) {
+    if (a.shape.length !== b.shape.length) return false;
+    for (let i = 0; i < a.shape.length; i++) {
+      if (a.shape[i] !== b.shape[i]) return false;
+    }
+    if (a.data.length !== b.data.length) return false;
+    for (let i = 0; i < a.data.length; i++) {
+      if (!valuesEqualSimple(a.data[i], b.data[i])) return false;
+    }
+    return true;
+  }
+  // struct == struct
+  if (isRuntimeStruct(a) && isRuntimeStruct(b)) {
+    if (a.fields.size !== b.fields.size) return false;
+    for (const [key, val] of a.fields) {
+      if (!b.fields.has(key)) return false;
+      if (!valuesEqualSimple(val, b.fields.get(key)!)) return false;
+    }
+    return true;
   }
   return false;
 }
@@ -129,9 +174,11 @@ registerIBuiltin({
           }
         }
         if (!pass) {
-          throw new Error(
-            args.length > 1 ? String(args[1]) : "Assertion failed"
-          );
+          const msg =
+            args.length > 1
+              ? (textValue(args[1]) ?? String(args[1]))
+              : "Assertion failed";
+          throw new Error(msg);
         }
         return 0;
       },
