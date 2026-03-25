@@ -485,6 +485,9 @@ export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mMulSparse(a, b);
+  // Unwrap 1×1 tensors to scalars so scalar×tensor uses element-wise multiply
+  if (isRuntimeTensor(a) && a.data.length === 1) a = unwrap1x1(a);
+  if (isRuntimeTensor(b) && b.data.length === 1) b = unwrap1x1(b);
   // Matrix multiply if both are tensors
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
     return matMul(a, b);
