@@ -126,10 +126,9 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length === 2) {
     const a = argTypes[0];
     const b = argTypes[1];
-    if (a.kind !== "number" && a.kind !== "boolean" && a.kind !== "tensor")
-      return null;
-    if (b.kind !== "number" && b.kind !== "boolean" && b.kind !== "tensor")
-      return null;
+    const allowed = (k: string) =>
+      k === "number" || k === "boolean" || k === "tensor" || k === "complex";
+    if (!allowed(a.kind) || !allowed(b.kind)) return null;
     if (a.kind === "tensor" || b.kind === "tensor") {
       const t =
         a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
@@ -141,6 +140,9 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
           ndim: t.ndim,
         },
       ];
+    }
+    if (a.kind === "complex" || b.kind === "complex") {
+      return [{ kind: "complex" }];
     }
     {
       const aSign =
