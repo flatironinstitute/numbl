@@ -544,6 +544,9 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b)) {
     return mDiv(densify(a), densify(b));
   }
+  // Unwrap 1×1 tensors to scalars so scalar division path is used
+  if (isRuntimeTensor(a) && a.data.length === 1) a = unwrap1x1(a);
+  if (isRuntimeTensor(b) && b.data.length === 1) b = unwrap1x1(b);
   if (isRuntimeTensor(b)) {
     const at = mConjugateTranspose(coerceToTensor(a, "mrdivide"));
     const bt = mConjugateTranspose(b);
@@ -585,6 +588,9 @@ export function mLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   // Densify sparse operands for linear solve
   if (isRuntimeSparseMatrix(a)) return mLeftDiv(densify(a), b);
   if (isRuntimeSparseMatrix(b)) return mLeftDiv(a, densify(b));
+  // Unwrap 1×1 tensors to scalars so scalar division path is used
+  if (isRuntimeTensor(a) && a.data.length === 1) a = unwrap1x1(a);
+  if (isRuntimeTensor(b) && b.data.length === 1) b = unwrap1x1(b);
   // Scalar A: A \ B is element-wise B / A
   if (isRuntimeNumber(a) || isRuntimeLogical(a)) {
     return mElemDiv(b, a);
