@@ -1249,16 +1249,24 @@ function storeIntoTensor1D(
   // Colon: base(:) = rhs
   if (isColonIndex(idx)) {
     if (isRuntimeTensor(rhs)) {
-      if (rhs.data.length !== base.data.length) {
-        throw new RuntimeError("Subscripted assignment dimension mismatch");
+      if (rhs.data.length === 1) {
+        // 1×1 tensor acts as scalar — broadcast to all elements
+        rhs =
+          rhs.imag && rhs.imag[0] !== 0
+            ? RTV.complex(rhs.data[0], rhs.imag[0])
+            : RTV.num(rhs.data[0]);
+      } else {
+        if (rhs.data.length !== base.data.length) {
+          throw new RuntimeError("Subscripted assignment dimension mismatch");
+        }
+        base.data.set(rhs.data);
+        if (rhs.imag || base.imag) {
+          ensureImag(base);
+          if (rhs.imag) base.imag!.set(rhs.imag);
+          else base.imag!.fill(0);
+        }
+        return base;
       }
-      base.data.set(rhs.data);
-      if (rhs.imag || base.imag) {
-        ensureImag(base);
-        if (rhs.imag) base.imag!.set(rhs.imag);
-        else base.imag!.fill(0);
-      }
-      return base;
     }
     const { re, im } = toReIm(rhs);
     base.data.fill(re);
