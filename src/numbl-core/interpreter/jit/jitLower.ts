@@ -327,7 +327,6 @@ export function lowerFunction(
     interp,
     generatedFns: sharedGeneratedFns,
     loweringInProgress: sharedInProgress,
-    repassBudget: 20,
   };
   const body = lowerStmts(ctx, fn.body);
   if (!body) return null;
@@ -355,8 +354,6 @@ interface LowerCtx {
   interp?: Interpreter;
   generatedFns: Map<string, string>;
   loweringInProgress: Set<string>;
-  /** Remaining re-lower iterations allowed (shared across nested loops). */
-  repassBudget: number;
 }
 
 // ── Statement lowering ──────────────────────────────────────────────────
@@ -560,12 +557,13 @@ function lowerFor(
   let merged = mergeEnvs(envBefore, ctx.env);
   if (!merged) return null;
 
-  // Fixed-point iteration: re-lower until types stabilize
+  // Fixed-point iteration: re-lower until types stabilize (per-loop budget)
   let finalBody = body;
   let prevEnv = envBefore;
+  let repassBudget = 20;
   while (!envsEqual(merged, prevEnv)) {
-    if (ctx.repassBudget <= 0) return null;
-    ctx.repassBudget--;
+    if (repassBudget <= 0) return null;
+    repassBudget--;
     ctx.env = cloneEnv(merged);
     ctx.env.set(stmt.varName, { kind: "number" });
     const newBody = lowerStmts(ctx, stmt.body);
@@ -612,13 +610,14 @@ function lowerWhile(
   let merged = mergeEnvs(envBefore, ctx.env);
   if (!merged) return null;
 
-  // Fixed-point iteration: re-lower until types stabilize
+  // Fixed-point iteration: re-lower until types stabilize (per-loop budget)
   let finalCond = cond;
   let finalBody = body;
   let prevEnv = envBefore;
+  let repassBudget = 20;
   while (!envsEqual(merged, prevEnv)) {
-    if (ctx.repassBudget <= 0) return null;
-    ctx.repassBudget--;
+    if (repassBudget <= 0) return null;
+    repassBudget--;
     ctx.env = cloneEnv(merged);
     const newCond = lowerExpr(ctx, stmt.cond);
     if (!newCond) return null;
