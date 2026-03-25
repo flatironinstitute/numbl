@@ -256,7 +256,7 @@ function walkExpr(expr: Expr, referenced: Set<string>): void {
       walkExpr(expr.body, referenced);
       break;
 
-    case "End":
+    case "EndKeyword":
     case "Colon":
       break;
 
