@@ -50,7 +50,10 @@ function makeTensor(
   imag: FloatXArrayType | undefined,
   shape: number[]
 ): RuntimeTensor {
-  const t: RuntimeTensor = { kind: "tensor", data, shape, _rc: 1 };
+  // Strip trailing singleton dimensions (always keep minimum 2D)
+  const s = [...shape];
+  while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+  const t: RuntimeTensor = { kind: "tensor", data, shape: s, _rc: 1 };
   if (imag) t.imag = imag;
   return t;
 }
