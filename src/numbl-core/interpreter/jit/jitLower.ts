@@ -66,6 +66,16 @@ function mergeEnvs(a: TypeEnv, b: TypeEnv): TypeEnv | null {
   return result;
 }
 
+/** Check if two type environments are identical (by JSON comparison). */
+function envsEqual(a: TypeEnv, b: TypeEnv): boolean {
+  if (a.size !== b.size) return false;
+  for (const [name, type] of a) {
+    const other = b.get(name);
+    if (!other || JSON.stringify(type) !== JSON.stringify(other)) return false;
+  }
+  return true;
+}
+
 // ── Sign algebra ────────────────────────────────────────────────────────
 
 function addSigns(a: SignCategory, b: SignCategory): SignCategory | undefined {
@@ -298,6 +308,7 @@ export function lowerFunction(
     interp,
     generatedFns: sharedGeneratedFns,
     loweringInProgress: sharedInProgress,
+    repassBudget: 20,
   };
   const body = lowerStmts(ctx, fn.body);
   if (!body) return null;
@@ -325,6 +336,8 @@ interface LowerCtx {
   interp?: Interpreter;
   generatedFns: Map<string, string>;
   loweringInProgress: Set<string>;
+  /** Remaining re-lower iterations allowed (shared across nested loops). */
+  repassBudget: number;
 }
 
 // ── Statement lowering ──────────────────────────────────────────────────
@@ -522,32 +535,28 @@ function lowerFor(
   if (!body) return null;
 
   // Merge pre-loop and post-body envs (loop might not execute)
-  const merged = mergeEnvs(envBefore, ctx.env);
+  let merged = mergeEnvs(envBefore, ctx.env);
   if (!merged) return null;
 
-  // Check if types changed - if so, re-lower with merged types
-  let needRepass = false;
-  for (const [name, type] of merged) {
-    const before = envBefore.get(name);
-    if (before && JSON.stringify(before) !== JSON.stringify(type)) {
-      needRepass = true;
-      break;
-    }
-  }
-
+  // Fixed-point iteration: re-lower until types stabilize
   let finalBody = body;
-  if (needRepass) {
+  let prevEnv = envBefore;
+  while (!envsEqual(merged, prevEnv)) {
+    if (ctx.repassBudget <= 0) return null;
+    ctx.repassBudget--;
     ctx.env = cloneEnv(merged);
     ctx.env.set(stmt.varName, { kind: "number" });
-    finalBody = lowerStmts(ctx, stmt.body)!;
-    if (!finalBody) return null;
+    const newBody = lowerStmts(ctx, stmt.body);
+    if (!newBody) return null;
 
-    const merged2 = mergeEnvs(merged, ctx.env);
-    if (!merged2) return null;
-    ctx.env = merged2;
-  } else {
-    ctx.env = merged;
+    const newMerged = mergeEnvs(merged, ctx.env);
+    if (!newMerged) return null;
+    prevEnv = merged;
+    merged = newMerged;
+    finalBody = newBody;
   }
+
+  ctx.env = merged;
 
   return [
     {
@@ -577,34 +586,31 @@ function lowerWhile(
   if (!body) return null;
 
   // Merge pre-loop and post-body
-  const merged = mergeEnvs(envBefore, ctx.env);
+  let merged = mergeEnvs(envBefore, ctx.env);
   if (!merged) return null;
 
-  // Re-lower if types changed
-  let needRepass = false;
-  for (const [name, type] of merged) {
-    const before = envBefore.get(name);
-    if (before && JSON.stringify(before) !== JSON.stringify(type)) {
-      needRepass = true;
-      break;
-    }
-  }
-
+  // Fixed-point iteration: re-lower until types stabilize
   let finalCond = cond;
   let finalBody = body;
-  if (needRepass) {
+  let prevEnv = envBefore;
+  while (!envsEqual(merged, prevEnv)) {
+    if (ctx.repassBudget <= 0) return null;
+    ctx.repassBudget--;
     ctx.env = cloneEnv(merged);
-    finalCond = lowerExpr(ctx, stmt.cond)!;
-    if (!finalCond) return null;
-    finalBody = lowerStmts(ctx, stmt.body)!;
-    if (!finalBody) return null;
+    const newCond = lowerExpr(ctx, stmt.cond);
+    if (!newCond) return null;
+    const newBody = lowerStmts(ctx, stmt.body);
+    if (!newBody) return null;
 
-    const merged2 = mergeEnvs(merged, ctx.env);
-    if (!merged2) return null;
-    ctx.env = merged2;
-  } else {
-    ctx.env = merged;
+    const newMerged = mergeEnvs(merged, ctx.env);
+    if (!newMerged) return null;
+    prevEnv = merged;
+    merged = newMerged;
+    finalCond = newCond;
+    finalBody = newBody;
   }
+
+  ctx.env = merged;
 
   return [{ tag: "While", cond: finalCond, body: finalBody }];
 }
