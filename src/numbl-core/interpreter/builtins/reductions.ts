@@ -16,7 +16,7 @@ import {
 } from "../../runtime/types.js";
 import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
 import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
-import { registerIBuiltin } from "./types.js";
+import { defineBuiltin } from "./types.js";
 import {
   firstReduceDim,
   accumKernel,
@@ -196,39 +196,39 @@ function reductionApply(
 const sumKernel = accumKernel((acc, val) => acc + val, 0);
 const sumOmitNanKernel = accumKernelOmitNaN((acc, val) => acc + val, 0);
 
-registerIBuiltin({
+defineBuiltin({
   name: "sum",
-  resolve: argTypes => {
-    const parsed = parseStdReductionArgs(argTypes);
-    if (!parsed) return null;
-    const outputTypes = reductionOutputType(
-      parsed.inputType,
-      parsed.dimType,
-      parsed.allFlag
-    );
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => {
+        const parsed = parseStdReductionArgs(argTypes);
+        if (!parsed) return null;
+        return reductionOutputType(
+          parsed.inputType,
+          parsed.dimType,
+          parsed.allFlag
+        );
+      },
       apply: args => reductionApply("sum", args, sumKernel, sumOmitNanKernel),
-    };
-  },
+    },
+  ],
 });
 
 // ── prod ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "prod",
-  resolve: argTypes => {
-    const parsed = parseStdReductionArgs(argTypes);
-    if (!parsed) return null;
-    const outputTypes = reductionOutputType(
-      parsed.inputType,
-      parsed.dimType,
-      parsed.allFlag
-    );
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => {
+        const parsed = parseStdReductionArgs(argTypes);
+        if (!parsed) return null;
+        return reductionOutputType(
+          parsed.inputType,
+          parsed.dimType,
+          parsed.allFlag
+        );
+      },
       apply: (args): RuntimeValue => {
         const { args: parsedArgs, omitNaN } = parseNanFlag(args);
         const v = parsedArgs[0];
@@ -236,7 +236,6 @@ registerIBuiltin({
         if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
         if (isRuntimeComplexNumber(v)) return v;
         if (isRuntimeTensor(v)) {
-          // Complex tensors need cross-coupled multiply
           if (v.imag) {
             const dimArg =
               parsedArgs.length >= 2
@@ -260,8 +259,8 @@ registerIBuiltin({
         }
         throw new RuntimeError("prod: argument must be numeric");
       },
-    };
-  },
+    },
+  ],
 });
 
 // ── mean ───────────────────────────────────────────────────────────────
@@ -277,104 +276,93 @@ const meanOmitNanKernel = accumKernelOmitNaN(
   (sum, count) => (count === 0 ? NaN : sum / count)
 );
 
-registerIBuiltin({
+defineBuiltin({
   name: "mean",
-  resolve: argTypes => {
-    const parsed = parseStdReductionArgs(argTypes);
-    if (!parsed) return null;
-    const outputTypes = reductionOutputType(
-      parsed.inputType,
-      parsed.dimType,
-      parsed.allFlag
-    );
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => {
+        const parsed = parseStdReductionArgs(argTypes);
+        if (!parsed) return null;
+        return reductionOutputType(
+          parsed.inputType,
+          parsed.dimType,
+          parsed.allFlag
+        );
+      },
       apply: args =>
         reductionApply("mean", args, meanKernel, meanOmitNanKernel),
-    };
-  },
+    },
+  ],
 });
 
 // ── std / var ──────────────────────────────────────────────────────────
 
-function makeStdVarResolve(
-  name: string,
-  transform: (variance: number) => number
-) {
-  return (argTypes: JitType[]) => {
-    if (argTypes.length === 0) return null;
-    const inputType = argTypes[0];
-    if (inputType.kind === "unknown") return null;
+function stdVarMatch(argTypes: JitType[]): JitType[] | null {
+  if (argTypes.length === 0) return null;
+  const inputType = argTypes[0];
+  if (inputType.kind === "unknown") return null;
 
-    // Calling convention: f(A, [w=0], [dim], ['omitnan'])
-    // Strip trailing nanflag
-    let rest = argTypes.slice(1);
-    if (rest.length > 0) {
-      const last = rest[rest.length - 1];
-      if (last.kind === "char" || last.kind === "string") {
-        const v = last.value?.toLowerCase();
-        if (v === "omitnan" || v === "includenan") {
-          rest = rest.slice(0, -1);
-        } else if (v === undefined) {
-          return null;
-        }
+  let rest = argTypes.slice(1);
+  if (rest.length > 0) {
+    const last = rest[rest.length - 1];
+    if (last.kind === "char" || last.kind === "string") {
+      const v = last.value?.toLowerCase();
+      if (v === "omitnan" || v === "includenan") {
+        rest = rest.slice(0, -1);
+      } else if (v === undefined) {
+        return null;
       }
     }
-    // rest[0] = w (weight), rest[1] = dim
-    const dimType = rest.length >= 2 ? rest[1] : undefined;
+  }
+  const dimType = rest.length >= 2 ? rest[1] : undefined;
+  return reductionOutputType(inputType, dimType, false, { alwaysReal: true });
+}
 
-    // std/var always return real output
-    const outputTypes = reductionOutputType(inputType, dimType, false, {
-      alwaysReal: true,
-    });
-    if (!outputTypes) return null;
-
-    return {
-      outputTypes,
-      apply: (args: RuntimeValue[]): RuntimeValue => {
-        const { args: parsedArgs, omitNaN } = parseNanFlag(args);
-        const v = parsedArgs[0];
-        const w = parsedArgs.length >= 2 ? toNumber(parsedArgs[1]) : 0;
-        const dimArg =
-          parsedArgs.length >= 3 ? Math.round(toNumber(parsedArgs[2])) : 0;
-        if (isRuntimeNumber(v)) return 0;
-        if (isRuntimeComplexNumber(v)) return 0; // var/std of a single scalar = 0
-        if (isRuntimeTensor(v)) {
-          const varianceOf = (slice: ArrayLike<number>): number => {
-            let data: ArrayLike<number> = slice;
-            if (omitNaN) data = filterNaN(slice);
-            const n = data.length;
-            if (n === 0) return NaN;
-            if (n <= 1 && w === 0) return 0;
-            let s = 0;
-            for (let i = 0; i < n; i++) s += (data as number[])[i];
-            const m = s / n;
-            let ss = 0;
-            for (let i = 0; i < n; i++) ss += ((data as number[])[i] - m) ** 2;
-            return ss / (w === 1 ? n : n - 1);
-          };
-          const kernel = sliceKernel((s: ArrayLike<number>) =>
-            transform(varianceOf(s))
-          );
-          if (dimArg > 0) return kernel.reduceDim(v, dimArg);
-          const d = firstReduceDim(v.shape);
-          return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
-        }
-        throw new RuntimeError(`${name}: argument must be numeric`);
-      },
-    };
+function stdVarApply(
+  name: string,
+  transform: (variance: number) => number
+): (args: RuntimeValue[]) => RuntimeValue {
+  return (args): RuntimeValue => {
+    const { args: parsedArgs, omitNaN } = parseNanFlag(args);
+    const v = parsedArgs[0];
+    const w = parsedArgs.length >= 2 ? toNumber(parsedArgs[1]) : 0;
+    const dimArg =
+      parsedArgs.length >= 3 ? Math.round(toNumber(parsedArgs[2])) : 0;
+    if (isRuntimeNumber(v)) return 0;
+    if (isRuntimeComplexNumber(v)) return 0;
+    if (isRuntimeTensor(v)) {
+      const varianceOf = (slice: ArrayLike<number>): number => {
+        let data: ArrayLike<number> = slice;
+        if (omitNaN) data = filterNaN(slice);
+        const n = data.length;
+        if (n === 0) return NaN;
+        if (n <= 1 && w === 0) return 0;
+        let s = 0;
+        for (let i = 0; i < n; i++) s += (data as number[])[i];
+        const m = s / n;
+        let ss = 0;
+        for (let i = 0; i < n; i++) ss += ((data as number[])[i] - m) ** 2;
+        return ss / (w === 1 ? n : n - 1);
+      };
+      const kernel = sliceKernel((s: ArrayLike<number>) =>
+        transform(varianceOf(s))
+      );
+      if (dimArg > 0) return kernel.reduceDim(v, dimArg);
+      const d = firstReduceDim(v.shape);
+      return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
+    }
+    throw new RuntimeError(`${name}: argument must be numeric`);
   };
 }
 
-registerIBuiltin({
+defineBuiltin({
   name: "std",
-  resolve: makeStdVarResolve("std", v => Math.sqrt(v)),
+  cases: [{ match: stdVarMatch, apply: stdVarApply("std", v => Math.sqrt(v)) }],
 });
 
-registerIBuiltin({
+defineBuiltin({
   name: "var",
-  resolve: makeStdVarResolve("var", v => v),
+  cases: [{ match: stdVarMatch, apply: stdVarApply("var", v => v) }],
 });
 
 // ── median ─────────────────────────────────────────────────────────────
@@ -390,24 +378,24 @@ function medianOf(arr: ArrayLike<number>): number {
 const medianKernel = sliceKernel(medianOf);
 const medianOmitNanKernel = sliceKernelOmitNaN(medianOf);
 
-registerIBuiltin({
+defineBuiltin({
   name: "median",
-  resolve: argTypes => {
-    const parsed = parseStdReductionArgs(argTypes);
-    if (!parsed) return null;
-    const outputTypes = reductionOutputType(
-      parsed.inputType,
-      parsed.dimType,
-      parsed.allFlag,
-      { alwaysReal: true }
-    );
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => {
+        const parsed = parseStdReductionArgs(argTypes);
+        if (!parsed) return null;
+        return reductionOutputType(
+          parsed.inputType,
+          parsed.dimType,
+          parsed.allFlag,
+          { alwaysReal: true }
+        );
+      },
       apply: args =>
         reductionApply("median", args, medianKernel, medianOmitNanKernel),
-    };
-  },
+    },
+  ],
 });
 
 // ── mode ───────────────────────────────────────────────────────────────
@@ -431,93 +419,83 @@ function modeOf(arr: ArrayLike<number>): number {
 const modeKernel = sliceKernel(modeOf);
 const modeOmitNanKernel = sliceKernelOmitNaN(modeOf);
 
-registerIBuiltin({
+defineBuiltin({
   name: "mode",
-  resolve: argTypes => {
-    const parsed = parseStdReductionArgs(argTypes);
-    if (!parsed) return null;
-    const outputTypes = reductionOutputType(
-      parsed.inputType,
-      parsed.dimType,
-      parsed.allFlag,
-      { alwaysReal: true }
-    );
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => {
+        const parsed = parseStdReductionArgs(argTypes);
+        if (!parsed) return null;
+        return reductionOutputType(
+          parsed.inputType,
+          parsed.dimType,
+          parsed.allFlag,
+          { alwaysReal: true }
+        );
+      },
       apply: args =>
         reductionApply("mode", args, modeKernel, modeOmitNanKernel),
-    };
-  },
+    },
+  ],
 });
 
 // ── any / all ──────────────────────────────────────────────────────────
 
-function makeAnyAllResolve(name: string, mode: "any" | "all") {
-  return (argTypes: JitType[]) => {
-    const parsed = parseStdReductionArgs(argTypes);
-    if (!parsed) return null;
-    const outputTypes = reductionOutputType(
-      parsed.inputType,
-      parsed.dimType,
-      parsed.allFlag,
-      { logicalOutput: true }
-    );
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: (args: RuntimeValue[]): RuntimeValue => {
-        const v = args[0];
-        if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
-        if (isRuntimeLogical(v)) return RTV.logical(v);
-        if (isRuntimeComplexNumber(v))
-          return RTV.logical(v.re !== 0 || v.im !== 0);
-        if (isRuntimeTensor(v)) {
-          if (args.length === 1) {
-            if (v.data.length === 0) return RTV.logical(mode === "all");
-            const d = firstReduceDim(v.shape);
-            if (d === 0) return RTV.logical(scanLogical(v.data, v.imag, mode));
-            return logicalAlongDim(v, d, mode);
-          }
-          const arg2 = args[1];
-          // any/all(A, 'all')
-          if (
-            (isRuntimeString(arg2) || isRuntimeChar(arg2)) &&
-            rstr(arg2).toLowerCase() === "all"
-          ) {
-            if (v.data.length === 0) return RTV.logical(mode === "all");
-            return RTV.logical(scanLogical(v.data, v.imag, mode));
-          }
-          // any/all(A, dim)
-          if (isRuntimeNumber(arg2)) {
-            return logicalAlongDim(v, Math.round(arg2), mode);
-          }
-          // any/all(A, vecdim)
-          if (isRuntimeTensor(arg2)) {
-            const dims = Array.from(arg2.data).map(d => Math.round(d));
-            let result: RuntimeValue = v;
-            for (const dim of dims) {
-              if (isRuntimeTensor(result)) {
-                result = logicalAlongDim(result, dim, mode);
-              }
-            }
-            return result;
+function anyAllApply(name: string, mode: "any" | "all") {
+  return (args: RuntimeValue[]): RuntimeValue => {
+    const v = args[0];
+    if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
+    if (isRuntimeLogical(v)) return RTV.logical(v);
+    if (isRuntimeComplexNumber(v)) return RTV.logical(v.re !== 0 || v.im !== 0);
+    if (isRuntimeTensor(v)) {
+      if (args.length === 1) {
+        if (v.data.length === 0) return RTV.logical(mode === "all");
+        const d = firstReduceDim(v.shape);
+        if (d === 0) return RTV.logical(scanLogical(v.data, v.imag, mode));
+        return logicalAlongDim(v, d, mode);
+      }
+      const arg2 = args[1];
+      if (
+        (isRuntimeString(arg2) || isRuntimeChar(arg2)) &&
+        rstr(arg2).toLowerCase() === "all"
+      ) {
+        if (v.data.length === 0) return RTV.logical(mode === "all");
+        return RTV.logical(scanLogical(v.data, v.imag, mode));
+      }
+      if (isRuntimeNumber(arg2)) {
+        return logicalAlongDim(v, Math.round(arg2), mode);
+      }
+      if (isRuntimeTensor(arg2)) {
+        const dims = Array.from(arg2.data).map(d => Math.round(d));
+        let result: RuntimeValue = v;
+        for (const dim of dims) {
+          if (isRuntimeTensor(result)) {
+            result = logicalAlongDim(result, dim, mode);
           }
         }
-        throw new RuntimeError(`${name}: invalid arguments`);
-      },
-    };
+        return result;
+      }
+    }
+    throw new RuntimeError(`${name}: invalid arguments`);
   };
 }
 
-registerIBuiltin({
+function anyAllMatch(argTypes: JitType[]): JitType[] | null {
+  const parsed = parseStdReductionArgs(argTypes);
+  if (!parsed) return null;
+  return reductionOutputType(parsed.inputType, parsed.dimType, parsed.allFlag, {
+    logicalOutput: true,
+  });
+}
+
+defineBuiltin({
   name: "any",
-  resolve: makeAnyAllResolve("any", "any"),
+  cases: [{ match: anyAllMatch, apply: anyAllApply("any", "any") }],
 });
 
-registerIBuiltin({
+defineBuiltin({
   name: "all",
-  resolve: makeAnyAllResolve("all", "all"),
+  cases: [{ match: anyAllMatch, apply: anyAllApply("all", "all") }],
 });
 
 // ── Cumulative type rule ───────────────────────────────────────────────
@@ -545,27 +523,23 @@ function cumulativeOutputType(argTypes: JitType[]): JitType[] | null {
 
 // ── cumsum ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "cumsum",
-  resolve: argTypes => {
-    const outputTypes = cumulativeOutputType(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => cumulativeOutputType(argTypes),
       apply: args => cumOp("cumsum", args, (acc, val) => acc + val, 0),
-    };
-  },
+    },
+  ],
 });
 
 // ── cumprod ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "cumprod",
-  resolve: argTypes => {
-    const outputTypes = cumulativeOutputType(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => cumulativeOutputType(argTypes),
       apply: args =>
         cumOp(
           "cumprod",
@@ -574,36 +548,32 @@ registerIBuiltin({
           1,
           (aRe, aIm, bRe, bIm) => [aRe * bRe - aIm * bIm, aRe * bIm + aIm * bRe]
         ),
-    };
-  },
+    },
+  ],
 });
 
 // ── cummax ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "cummax",
-  resolve: argTypes => {
-    const outputTypes = cumulativeOutputType(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => cumulativeOutputType(argTypes),
       apply: args => cumOp("cummax", args, Math.max),
-    };
-  },
+    },
+  ],
 });
 
 // ── cummin ─────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "cummin",
-  resolve: argTypes => {
-    const outputTypes = cumulativeOutputType(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => cumulativeOutputType(argTypes),
       apply: args => cumOp("cummin", args, Math.min),
-    };
-  },
+    },
+  ],
 });
 
 // ── diff ───────────────────────────────────────────────────────────────
@@ -661,13 +631,11 @@ function diffOutputType(argTypes: JitType[]): JitType[] | null {
   ];
 }
 
-registerIBuiltin({
+defineBuiltin({
   name: "diff",
-  resolve: argTypes => {
-    const outputTypes = diffOutputType(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+  cases: [
+    {
+      match: argTypes => diffOutputType(argTypes),
       apply: (args): RuntimeValue => {
         if (args.length < 1)
           throw new RuntimeError("diff requires at least 1 argument");
@@ -680,8 +648,8 @@ registerIBuiltin({
         }
         return result;
       },
-    };
-  },
+    },
+  ],
 });
 
 // ── xor ────────────────────────────────────────────────────────────────
@@ -691,49 +659,57 @@ import {
   broadcastIterate,
 } from "../../builtins/arithmetic.js";
 
-registerIBuiltin({
+defineBuiltin({
   name: "xor",
-  resolve: argTypes => {
-    if (argTypes.length !== 2) return null;
-    const a = argTypes[0];
-    const b = argTypes[1];
-    // Accept numeric, boolean, or real tensor inputs
-    const aOk =
-      a.kind === "number" ||
-      a.kind === "boolean" ||
-      (a.kind === "tensor" && a.isComplex !== true);
-    const bOk =
-      b.kind === "number" ||
-      b.kind === "boolean" ||
-      (b.kind === "tensor" && b.isComplex !== true);
-    if (!aOk || !bOk) return null;
-
-    let outputType: JitType;
-    if (a.kind === "tensor" || b.kind === "tensor") {
-      const t =
-        a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
-      outputType = {
-        kind: "tensor",
-        isComplex: false,
-        isLogical: true,
-        shape: t.shape,
-      };
-    } else {
-      outputType = { kind: "boolean" };
-    }
-
-    return {
-      outputTypes: [outputType],
+  cases: [
+    // Two scalars
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0],
+          b = argTypes[1];
+        const aOk = a.kind === "number" || a.kind === "boolean";
+        const bOk = b.kind === "number" || b.kind === "boolean";
+        if (!aOk || !bOk) return null;
+        return [{ kind: "boolean" }];
+      },
       apply: (args): RuntimeValue => {
-        const a = args[0];
-        const b = args[1];
+        const aVal = isRuntimeLogical(args[0])
+          ? args[0]
+          : toNumber(args[0]) !== 0;
+        const bVal = isRuntimeLogical(args[1])
+          ? args[1]
+          : toNumber(args[1]) !== 0;
+        return RTV.logical(aVal !== bVal);
+      },
+    },
+    // At least one tensor
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0],
+          b = argTypes[1];
+        const aOk =
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          (a.kind === "tensor" && a.isComplex !== true);
+        const bOk =
+          b.kind === "number" ||
+          b.kind === "boolean" ||
+          (b.kind === "tensor" && b.isComplex !== true);
+        if (!aOk || !bOk) return null;
+        if (a.kind !== "tensor" && b.kind !== "tensor") return null;
+        const t =
+          a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
+        return [
+          { kind: "tensor", isComplex: false, isLogical: true, shape: t.shape },
+        ];
+      },
+      apply: (args): RuntimeValue => {
+        const a = args[0],
+          b = args[1];
         const aIsT = isRuntimeTensor(a);
         const bIsT = isRuntimeTensor(b);
-        if (!aIsT && !bIsT) {
-          const aVal = isRuntimeLogical(a) ? a : toNumber(a) !== 0;
-          const bVal = isRuntimeLogical(b) ? b : toNumber(b) !== 0;
-          return RTV.logical(aVal !== bVal);
-        }
         const aScalar = !aIsT ? (toNumber(a) !== 0 ? 1 : 0) : 0;
         const bScalar = !bIsT ? (toNumber(b) !== 0 ? 1 : 0) : 0;
         if (aIsT && bIsT) {
@@ -759,7 +735,6 @@ registerIBuiltin({
           result._isLogical = true;
           return result;
         }
-        // One tensor, one scalar
         const t = aIsT ? a : b;
         const s = aIsT ? bScalar : aScalar;
         if (!isRuntimeTensor(t))
@@ -773,6 +748,6 @@ registerIBuiltin({
         result._isLogical = true;
         return result;
       },
-    };
-  },
+    },
+  ],
 });

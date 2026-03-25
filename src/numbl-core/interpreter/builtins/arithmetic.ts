@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 /**
  * Binary scalar builtins: atan2, min, max, mod, rem, power.
  */
@@ -11,8 +10,8 @@ import {
 import type { RuntimeValue } from "../../runtime/types.js";
 import { minMaxImpl } from "../../builtins/reduction/min-max.js";
 import {
-  type IBuiltinResolution,
-  registerIBuiltin,
+  type BuiltinCase,
+  defineBuiltin,
   makeTensor,
   binaryMathJitEmit,
 } from "./types.js";
@@ -21,33 +20,6 @@ import {
   shapeAfterReduction,
   unifySign,
 } from "../jit/jitTypes.js";
-
-// ── Type rule helpers ─────────────────────────────────────────────────
-
-/** Type rule for binary real functions that accept number/logical or real tensor args. */
-function binaryRealElemwise(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length !== 2) return null;
-  const a = argTypes[0];
-  const b = argTypes[1];
-  if (
-    a.kind !== "number" &&
-    a.kind !== "boolean" &&
-    !(a.kind === "tensor" && a.isComplex === false)
-  )
-    return null;
-  if (
-    b.kind !== "number" &&
-    b.kind !== "boolean" &&
-    !(b.kind === "tensor" && b.isComplex === false)
-  )
-    return null;
-  if (a.kind === "tensor" || b.kind === "tensor") {
-    const t =
-      a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
-    return [{ kind: "tensor", isComplex: false, shape: t.shape, ndim: t.ndim }];
-  }
-  return [{ kind: "number" }];
-}
 
 // ── Tensor-capable binary helper ─────────────────────────────────────────
 
@@ -61,7 +33,6 @@ function applyBinaryElemwise(
   const b = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
   if (typeof a === "number" && typeof b === "number") return fn(a, b);
 
-  // scalar + tensor or tensor + scalar or tensor + tensor
   const aIsNum = typeof a === "number";
   const bIsNum = typeof b === "number";
   const aTensor = aIsNum ? null : (a as RuntimeTensor);
@@ -87,7 +58,6 @@ function applyBinaryElemwise(
     return makeTensor(out, undefined, aTensor.shape.slice());
   }
   if (aTensor && bTensor) {
-    // Same shape required (broadcasting not attempted here)
     const n = aTensor.data.length;
     if (n !== bTensor.data.length) throw new Error(`${name}: size mismatch`);
     const out = new FloatXArray(n);
@@ -97,112 +67,142 @@ function applyBinaryElemwise(
   throw new Error(`${name}: unsupported argument types`);
 }
 
-/** Resolve helper for binary real element-wise functions. */
-function resolveBinaryRealElemwise(
+// ── Binary real element-wise cases ──────────────────────────────────────
+
+/** Build cases for a binary real element-wise function. */
+function binaryRealElemwiseCases(
   fn: (a: number, b: number) => number,
   name: string
-): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
-  return argTypes => {
-    const outputTypes = binaryRealElemwise(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
+): BuiltinCase[] {
+  return [
+    // Two scalars (number/boolean)
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0],
+          b = argTypes[1];
+        if (
+          (a.kind !== "number" && a.kind !== "boolean") ||
+          (b.kind !== "number" && b.kind !== "boolean")
+        )
+          return null;
+        return [{ kind: "number" }];
+      },
       apply: args => applyBinaryElemwise(args, fn, name),
-    };
-  };
+    },
+    // At least one tensor (both must be real)
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0],
+          b = argTypes[1];
+        const aOk =
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          (a.kind === "tensor" && a.isComplex === false);
+        const bOk =
+          b.kind === "number" ||
+          b.kind === "boolean" ||
+          (b.kind === "tensor" && b.isComplex === false);
+        if (!aOk || !bOk) return null;
+        if (a.kind !== "tensor" && b.kind !== "tensor") return null;
+        const t =
+          a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
+        return [
+          { kind: "tensor", isComplex: false, shape: t.shape, ndim: t.ndim },
+        ];
+      },
+      apply: args => applyBinaryElemwise(args, fn, name),
+    },
+  ];
 }
 
 // ── atan2 ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "atan2",
-  resolve: resolveBinaryRealElemwise(Math.atan2, "atan2"),
+  cases: binaryRealElemwiseCases(Math.atan2, "atan2"),
   jitEmit: binaryMathJitEmit("Math.atan2"),
 });
 
-// ── min ──────────────────────────────────────────────────────────────────
+// ── min / max ───────────────────────────────────────────────────────────
 
-function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length === 2) {
-    const a = argTypes[0];
-    const b = argTypes[1];
-    const allowed = (k: string) =>
-      k === "number" ||
-      k === "boolean" ||
-      k === "tensor" ||
-      k === "complex_or_number";
-    if (!allowed(a.kind) || !allowed(b.kind)) return null;
-    if (a.kind === "tensor" || b.kind === "tensor") {
-      const t =
-        a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
-      const otherIsComplex =
-        a.kind === "complex_or_number" || b.kind === "complex_or_number";
-      return [
-        {
-          kind: "tensor",
-          isComplex: t.isComplex || otherIsComplex,
-          shape: t.shape,
-          ndim: t.ndim,
-        },
-      ];
-    }
-    if (a.kind === "complex_or_number" || b.kind === "complex_or_number") {
-      return [{ kind: "complex_or_number" }];
-    }
+function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
+  const initVal = mode === "min" ? Infinity : -Infinity;
+  const cmpFn =
+    mode === "min"
+      ? (a: number, b: number) => a < b
+      : (a: number, b: number) => a > b;
+  const mathFn = mode === "min" ? Math.min : Math.max;
+
+  return [
+    // 2-arg binary element-wise
     {
-      const aSign =
-        a.kind === "number"
-          ? a.sign
-          : a.kind === "boolean"
-            ? ("nonneg" as const)
-            : undefined;
-      const bSign =
-        b.kind === "number"
-          ? b.sign
-          : b.kind === "boolean"
-            ? ("nonneg" as const)
-            : undefined;
-      const sign = unifySign(aSign, bSign);
-      return [{ kind: "number", ...(sign ? { sign } : {}) }];
-    }
-  }
-  if (argTypes.length === 1) {
-    const a = argTypes[0];
-    if (
-      a.kind === "number" ||
-      a.kind === "boolean" ||
-      a.kind === "complex_or_number"
-    )
-      return [a];
-    if (a.kind === "tensor") {
-      if (!a.shape)
-        return [
-          a.isComplex === true
-            ? { kind: "complex_or_number" }
-            : { kind: "number" },
-        ];
-      const result = shapeAfterReduction(a.shape);
-      if (result.scalar)
-        return [
-          a.isComplex === true
-            ? { kind: "complex_or_number" }
-            : { kind: "number" },
-        ];
-      return [{ kind: "tensor", isComplex: a.isComplex, shape: result.shape }];
-    }
-  }
-  // 3-arg: min(X, [], dim) — second arg is always empty, third is dim
-  if (argTypes.length === 3) {
-    const a = argTypes[0];
-    if (a.kind === "tensor") {
-      // Try to compute reduced shape if dim is known
-      const dimType = argTypes[2];
-      const dim =
-        dimType.kind === "number" && dimType.exact !== undefined
-          ? dimType.exact
-          : undefined;
-      if (a.shape && dim !== undefined && dim >= 1 && dim <= a.shape.length) {
-        const result = shapeAfterReduction(a.shape, dim);
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0],
+          b = argTypes[1];
+        const allowed = (k: string) =>
+          k === "number" ||
+          k === "boolean" ||
+          k === "tensor" ||
+          k === "complex_or_number";
+        if (!allowed(a.kind) || !allowed(b.kind)) return null;
+        if (a.kind === "tensor" || b.kind === "tensor") {
+          const t =
+            a.kind === "tensor"
+              ? a
+              : (b as Extract<JitType, { kind: "tensor" }>);
+          const otherIsComplex =
+            a.kind === "complex_or_number" || b.kind === "complex_or_number";
+          return [
+            {
+              kind: "tensor",
+              isComplex: t.isComplex || otherIsComplex,
+              shape: t.shape,
+              ndim: t.ndim,
+            },
+          ];
+        }
+        if (a.kind === "complex_or_number" || b.kind === "complex_or_number")
+          return [{ kind: "complex_or_number" }];
+        const aSign =
+          a.kind === "number"
+            ? a.sign
+            : a.kind === "boolean"
+              ? ("nonneg" as const)
+              : undefined;
+        const bSign =
+          b.kind === "number"
+            ? b.sign
+            : b.kind === "boolean"
+              ? ("nonneg" as const)
+              : undefined;
+        const sign = unifySign(aSign, bSign);
+        return [{ kind: "number", ...(sign ? { sign } : {}) }];
+      },
+      apply: (args, nargout) =>
+        minMaxImpl(mode, args, nargout, initVal, cmpFn, mathFn),
+    },
+    // 1-arg reduction
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        const a = argTypes[0];
+        if (
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          a.kind === "complex_or_number"
+        )
+          return [a];
+        if (a.kind !== "tensor") return null;
+        if (!a.shape)
+          return [
+            a.isComplex === true
+              ? { kind: "complex_or_number" }
+              : { kind: "number" },
+          ];
+        const result = shapeAfterReduction(a.shape);
         if (result.scalar)
           return [
             a.isComplex === true
@@ -212,49 +212,52 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
         return [
           { kind: "tensor", isComplex: a.isComplex, shape: result.shape },
         ];
-      }
-      // Unknown dim or shape: return tensor with unknown shape
-      return [
-        {
-          kind: "tensor",
-          isComplex: a.isComplex,
-          ndim: a.ndim,
-        },
-      ];
-    }
-    if (a.kind === "number" || a.kind === "boolean")
-      return [{ kind: "number" }];
-  }
-  return null;
+      },
+      apply: (args, nargout) =>
+        minMaxImpl(mode, args, nargout, initVal, cmpFn, mathFn),
+    },
+    // 3-arg: min(X, [], dim)
+    {
+      match: argTypes => {
+        if (argTypes.length !== 3) return null;
+        const a = argTypes[0];
+        if (a.kind === "tensor") {
+          const dimType = argTypes[2];
+          const dim =
+            dimType.kind === "number" && dimType.exact !== undefined
+              ? dimType.exact
+              : undefined;
+          if (
+            a.shape &&
+            dim !== undefined &&
+            dim >= 1 &&
+            dim <= a.shape.length
+          ) {
+            const result = shapeAfterReduction(a.shape, dim);
+            if (result.scalar)
+              return [
+                a.isComplex === true
+                  ? { kind: "complex_or_number" }
+                  : { kind: "number" },
+              ];
+            return [
+              { kind: "tensor", isComplex: a.isComplex, shape: result.shape },
+            ];
+          }
+          return [{ kind: "tensor", isComplex: a.isComplex, ndim: a.ndim }];
+        }
+        if (a.kind === "number" || a.kind === "boolean")
+          return [{ kind: "number" }];
+        return null;
+      },
+      apply: (args, nargout) =>
+        minMaxImpl(mode, args, nargout, initVal, cmpFn, mathFn),
+    },
+  ];
 }
 
-registerIBuiltin({
-  name: "min",
-  resolve: (argTypes, _nargout) => {
-    const outputTypes = minMaxTypeRule(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: (args, nargout) =>
-        minMaxImpl("min", args, nargout, Infinity, (a, b) => a < b, Math.min),
-    };
-  },
-});
-
-// ── max ──────────────────────────────────────────────────────────────────
-
-registerIBuiltin({
-  name: "max",
-  resolve: (argTypes, _nargout) => {
-    const outputTypes = minMaxTypeRule(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: (args, nargout) =>
-        minMaxImpl("max", args, nargout, -Infinity, (a, b) => a > b, Math.max),
-    };
-  },
-});
+defineBuiltin({ name: "min", cases: minMaxCases("min") });
+defineBuiltin({ name: "max", cases: minMaxCases("max") });
 
 // ── mod ──────────────────────────────────────────────────────────────────
 
@@ -262,9 +265,9 @@ function modFn(a: number, b: number): number {
   return ((a % b) + b) % b;
 }
 
-registerIBuiltin({
+defineBuiltin({
   name: "mod",
-  resolve: resolveBinaryRealElemwise(modFn, "mod"),
+  cases: binaryRealElemwiseCases(modFn, "mod"),
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 2) return null;
     const k0 = argTypes[0].kind,
@@ -280,9 +283,9 @@ registerIBuiltin({
 
 // ── rem ──────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "rem",
-  resolve: resolveBinaryRealElemwise((a, b) => a % b, "rem"),
+  cases: binaryRealElemwiseCases((a, b) => a % b, "rem"),
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 2) return null;
     const k0 = argTypes[0].kind,
@@ -298,8 +301,8 @@ registerIBuiltin({
 
 // ── power ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "power",
-  resolve: resolveBinaryRealElemwise(Math.pow, "power"),
+  cases: binaryRealElemwiseCases(Math.pow, "power"),
   jitEmit: binaryMathJitEmit("Math.pow"),
 });

@@ -19,7 +19,7 @@ import type {
   RuntimeTensor,
   RuntimeSparseMatrix,
 } from "../../runtime/types.js";
-import { registerIBuiltin } from "./types.js";
+import { defineBuiltin } from "./types.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 
@@ -37,18 +37,14 @@ function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
 }
 
 function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
-  // string/char comparison: extract text and compare
   {
     const aText = textValue(a);
     const bText = textValue(b);
     if (aText !== null && bText !== null) return aText === bText;
   }
-  // Densify sparse for comparison
   if (isRuntimeSparseMatrix(a)) return valuesEqualSimple(sparseToDense(a), b);
   if (isRuntimeSparseMatrix(b)) return valuesEqualSimple(a, sparseToDense(b));
-  // number == number
   if (typeof a === "number" && typeof b === "number") return a === b;
-  // logical coercion: logical true == 1, logical false == 0
   if (
     (isRuntimeNumber(a) || isRuntimeLogical(a)) &&
     (isRuntimeNumber(b) || isRuntimeLogical(b))
@@ -57,22 +53,17 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     const bv = isRuntimeLogical(b) ? (b ? 1 : 0) : (b as number);
     return av === bv;
   }
-  // complex == complex
   if (isRuntimeComplexNumber(a) && isRuntimeComplexNumber(b))
     return a.re === b.re && a.im === b.im;
-  // complex == number
   if (isRuntimeComplexNumber(a) && typeof b === "number")
     return a.re === b && a.im === 0;
   if (typeof a === "number" && isRuntimeComplexNumber(b))
     return b.re === a && b.im === 0;
-  // tensor == tensor
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) return tensorsEqual(a, b);
-  // tensor == scalar (1x1 tensor vs number)
   if (isRuntimeTensor(a) && typeof b === "number")
     return a.data.length === 1 && !a.imag && a.data[0] === b;
   if (typeof a === "number" && isRuntimeTensor(b))
     return b.data.length === 1 && !b.imag && b.data[0] === a;
-  // tensor == complex scalar
   if (isRuntimeTensor(a) && isRuntimeComplexNumber(b))
     return (
       a.data.length === 1 &&
@@ -85,7 +76,6 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
       b.data[0] === a.re &&
       (b.imag ? b.imag[0] === a.im : a.im === 0)
     );
-  // cell == cell
   if (isRuntimeCell(a) && isRuntimeCell(b)) {
     if (a.shape.length !== b.shape.length) return false;
     for (let i = 0; i < a.shape.length; i++) {
@@ -97,7 +87,6 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     }
     return true;
   }
-  // struct == struct
   if (isRuntimeStruct(a) && isRuntimeStruct(b)) {
     if (a.fields.size !== b.fields.size) return false;
     for (const [key, val] of a.fields) {
@@ -109,7 +98,6 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
   return false;
 }
 
-/** Extract text from a RuntimeChar or RuntimeString, or null if neither. */
 function textValue(v: RuntimeValue): string | null {
   if (isRuntimeChar(v)) return v.value;
   if (isRuntimeString(v)) return v;
@@ -134,30 +122,34 @@ function tensorsEqual(a: RuntimeTensor, b: RuntimeTensor): boolean {
   return true;
 }
 
-registerIBuiltin({
+defineBuiltin({
   name: "isequal",
-  resolve: argTypes => {
-    if (argTypes.length < 2) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2) return null;
+        return [{ kind: "boolean" }];
+      },
       apply: args => {
         for (let i = 1; i < args.length; i++) {
           if (!valuesEqualSimple(args[0], args[i])) return false;
         }
         return true;
       },
-    };
-  },
+    },
+  ],
 });
 
 // ── assert ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "assert",
-  resolve: argTypes => {
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
-    return {
-      outputTypes: [{ kind: "number" }],
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 1 || argTypes.length > 2) return null;
+        return [{ kind: "number" }];
+      },
       apply: args => {
         const v = args[0];
         let pass = false;
@@ -182,6 +174,6 @@ registerIBuiltin({
         }
         return 0;
       },
-    };
-  },
+    },
+  ],
 });

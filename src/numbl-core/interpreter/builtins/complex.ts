@@ -8,36 +8,22 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import {
-  registerIBuiltin,
+  defineBuiltin,
+  unaryRealResultCases,
+  type BuiltinCase,
   mkc,
   makeTensor,
-  unaryAlwaysReal,
-  unaryPreserveType,
 } from "./types.js";
 
 // ── real ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "real",
-  resolve: argTypes => {
-    const outputTypes = unaryAlwaysReal(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "boolean") return v ? 1 : 0;
-        if (typeof v === "number") return v;
-        if (isRuntimeComplexNumber(v)) return v.re;
-        if (isRuntimeTensor(v)) {
-          const out = new FloatXArray(v.data.length);
-          out.set(v.data);
-          return makeTensor(out, undefined, v.shape.slice());
-        }
-        throw new Error("real: unsupported argument type");
-      },
-    };
-  },
+  cases: unaryRealResultCases(
+    x => x,
+    re => re,
+    "real"
+  ),
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const k = argTypes[0].kind;
@@ -49,30 +35,13 @@ registerIBuiltin({
 
 // ── imag ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "imag",
-  resolve: argTypes => {
-    const outputTypes = unaryAlwaysReal(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "boolean") return 0;
-        if (typeof v === "number") return 0;
-        if (isRuntimeComplexNumber(v)) return v.im;
-        if (isRuntimeTensor(v)) {
-          const n = v.data.length;
-          if (!v.imag)
-            return makeTensor(new FloatXArray(n), undefined, v.shape.slice());
-          const out = new FloatXArray(n);
-          out.set(v.imag);
-          return makeTensor(out, undefined, v.shape.slice());
-        }
-        throw new Error("imag: unsupported argument type");
-      },
-    };
-  },
+  cases: unaryRealResultCases(
+    () => 0,
+    (_re, im) => im,
+    "imag"
+  ),
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const k = argTypes[0].kind;
@@ -84,31 +53,66 @@ registerIBuiltin({
 
 // ── conj ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
-  name: "conj",
-  resolve: argTypes => {
-    const outputTypes = unaryPreserveType(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "boolean") return v ? 1 : 0;
-        if (typeof v === "number") return v;
-        if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
-        if (isRuntimeTensor(v)) {
-          const n = v.data.length;
-          const outR = new FloatXArray(n);
-          outR.set(v.data);
-          if (!v.imag) return makeTensor(outR, undefined, v.shape.slice());
-          const outI = new FloatXArray(n);
-          for (let i = 0; i < n; i++) outI[i] = -v.imag[i];
-          return makeTensor(outR, outI, v.shape.slice());
-        }
-        throw new Error("conj: unsupported argument type");
-      },
-    };
+const conjCases: BuiltinCase[] = [
+  {
+    match: argTypes => {
+      if (argTypes.length !== 1) return null;
+      const a = argTypes[0];
+      if (a.kind === "number" || a.kind === "boolean")
+        return [{ kind: "number" }];
+      return null;
+    },
+    apply: args => {
+      const v = args[0];
+      if (typeof v === "boolean") return v ? 1 : 0;
+      return v;
+    },
   },
+  {
+    match: argTypes => {
+      if (argTypes.length !== 1) return null;
+      if (argTypes[0].kind !== "complex_or_number") return null;
+      return [{ kind: "complex_or_number" }];
+    },
+    apply: args => {
+      const v = args[0];
+      if (typeof v === "number") return v;
+      if (isRuntimeComplexNumber(v)) return mkc(v.re, -v.im);
+      throw new Error("conj: unsupported argument type");
+    },
+  },
+  {
+    match: argTypes => {
+      if (argTypes.length !== 1) return null;
+      const a = argTypes[0];
+      if (a.kind !== "tensor") return null;
+      return [
+        {
+          kind: "tensor",
+          isComplex: a.isComplex,
+          shape: a.shape,
+          ndim: a.ndim,
+        },
+      ];
+    },
+    apply: args => {
+      const v = args[0];
+      if (!isRuntimeTensor(v))
+        throw new Error("conj: unsupported argument type");
+      const n = v.data.length;
+      const outR = new FloatXArray(n);
+      outR.set(v.data);
+      if (!v.imag) return makeTensor(outR, undefined, v.shape.slice());
+      const outI = new FloatXArray(n);
+      for (let i = 0; i < n; i++) outI[i] = -v.imag[i];
+      return makeTensor(outR, outI, v.shape.slice());
+    },
+  },
+];
+
+defineBuiltin({
+  name: "conj",
+  cases: conjCases,
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const k = argTypes[0].kind;
@@ -120,33 +124,13 @@ registerIBuiltin({
 
 // ── angle ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+defineBuiltin({
   name: "angle",
-  resolve: argTypes => {
-    const outputTypes = unaryAlwaysReal(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "boolean") return 0;
-        if (typeof v === "number") return v >= 0 ? 0 : Math.PI;
-        if (isRuntimeComplexNumber(v)) return Math.atan2(v.im, v.re);
-        if (isRuntimeTensor(v)) {
-          const n = v.data.length;
-          const out = new FloatXArray(n);
-          if (!v.imag) {
-            for (let i = 0; i < n; i++) out[i] = v.data[i] >= 0 ? 0 : Math.PI;
-          } else {
-            for (let i = 0; i < n; i++)
-              out[i] = Math.atan2(v.imag[i], v.data[i]);
-          }
-          return makeTensor(out, undefined, v.shape.slice());
-        }
-        throw new Error("angle: unsupported argument type");
-      },
-    };
-  },
+  cases: unaryRealResultCases(
+    x => (x >= 0 ? 0 : Math.PI),
+    (re, im) => Math.atan2(im, re),
+    "angle"
+  ),
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const k = argTypes[0].kind;
