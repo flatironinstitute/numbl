@@ -1051,7 +1051,7 @@ export function writeLValueBase(
       base.base,
       RTV.tensor(new FloatXArray(0), [0, 0])
     );
-    const indices = base.indices.map(idx => this.evalExpr(idx));
+    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     // Use builtinIndexStore for compound assignment store-back —
     // this bypasses subsasgn for class instances (the compound decomposition
     // already handled the field set; the store-back should use builtin mechanics)
@@ -1059,7 +1059,7 @@ export function writeLValueBase(
     this.writeLValueBase(base.base, ensureRuntimeValue(result));
   } else if (base.type === "IndexCell") {
     const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
-    const indices = base.indices.map(idx => this.evalExpr(idx));
+    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     const result = this.rt.indexCellStore(baseVal, indices, value);
     this.writeLValueBase(base.base, ensureRuntimeValue(result));
   }
@@ -1093,7 +1093,7 @@ export function evalLValueBase(
   }
   if (base.type === "Index") {
     const baseVal = this.evalLValueBase(base.base, RTV.struct({}));
-    const indices = base.indices.map(idx => this.evalExpr(idx));
+    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     try {
       let skipSubsref: boolean | string = false;
       if (this.currentClassName) {
@@ -1112,7 +1112,7 @@ export function evalLValueBase(
   }
   if (base.type === "IndexCell") {
     const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
-    const indices = base.indices.map(idx => this.evalExpr(idx));
+    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     try {
       return this.rt.indexCell(baseVal, indices);
     } catch {

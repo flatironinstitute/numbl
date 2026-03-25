@@ -464,6 +464,8 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
     const eibCond = lowerExpr(ctx, eib.cond);
     if (!eibCond) return null;
     if (!isScalarType(eibCond.jitType)) return null;
+    if (eibCond.jitType.kind === "string" || eibCond.jitType.kind === "char")
+      return null;
     const eibBody = lowerStmts(ctx, eib.body);
     if (!eibBody) return null;
     elseifBlocks.push({ cond: eibCond, body: eibBody });

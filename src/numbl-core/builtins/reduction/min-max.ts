@@ -195,6 +195,16 @@ function minMaxAlongDim(
 
 // ── Element-wise min/max of two arguments ──────────────────────────────
 
+function scalarToTensor(v: RuntimeValue): RuntimeTensor {
+  if (isRuntimeTensor(v)) return v;
+  if (isRuntimeComplexNumber(v)) {
+    const t = RTV.tensor(new FloatXArray([v.re]), [1, 1]) as RuntimeTensor;
+    t.imag = new FloatXArray([v.im]);
+    return t;
+  }
+  return RTV.tensor(new FloatXArray([toNumber(v)]), [1, 1]) as RuntimeTensor;
+}
+
 function minMaxElementwise(
   a: RuntimeValue,
   b: RuntimeValue,
@@ -207,40 +217,78 @@ function minMaxElementwise(
     imB: number
   ) => boolean
 ): RuntimeValue {
-  if (isRuntimeComplexNumber(a) || isRuntimeComplexNumber(b)) {
-    const aRe = isRuntimeNumber(a) ? a : isRuntimeComplexNumber(a) ? a.re : NaN;
+  const aIsScalar =
+    isRuntimeNumber(a) || isRuntimeLogical(a) || isRuntimeComplexNumber(a);
+  const bIsScalar =
+    isRuntimeNumber(b) || isRuntimeLogical(b) || isRuntimeComplexNumber(b);
+  const anyComplex =
+    isRuntimeComplexNumber(a) ||
+    isRuntimeComplexNumber(b) ||
+    (isRuntimeTensor(a) && a.imag != null) ||
+    (isRuntimeTensor(b) && b.imag != null);
+
+  // Both scalars, no complex
+  if (aIsScalar && bIsScalar && !anyComplex) {
+    const aVal = toNumber(a),
+      bVal = toNumber(b);
+    const r = isNaN(aVal) ? bVal : isNaN(bVal) ? aVal : twoArgFn(aVal, bVal);
+    return RTV.num(r);
+  }
+
+  // Both scalars, at least one complex
+  if (aIsScalar && bIsScalar) {
+    const aRe = isRuntimeComplexNumber(a) ? a.re : toNumber(a);
     const aIm = isRuntimeComplexNumber(a) ? a.im : 0;
-    const bRe = isRuntimeNumber(b) ? b : isRuntimeComplexNumber(b) ? b.re : NaN;
+    const bRe = isRuntimeComplexNumber(b) ? b.re : toNumber(b);
     const bIm = isRuntimeComplexNumber(b) ? b.im : 0;
     const pickA = complexIsBetter(aRe, aIm, bRe, bIm);
     const re = pickA ? aRe : bRe;
     const im = pickA ? aIm : bIm;
     return im === 0 ? RTV.num(re) : RTV.complex(re, im);
   }
-  const aIsScalar = isRuntimeNumber(a) || isRuntimeLogical(a);
-  const bIsScalar = isRuntimeNumber(b) || isRuntimeLogical(b);
-  if (aIsScalar && bIsScalar) {
-    const aVal = toNumber(a),
-      bVal = toNumber(b);
-    const r = isNaN(aVal) ? bVal : isNaN(bVal) ? aVal : twoArgFn(aVal, bVal);
-    return RTV.num(r);
-  }
-  const aT: RuntimeTensor = aIsScalar
-    ? (RTV.tensor(new FloatXArray([toNumber(a)]), [1, 1]) as RuntimeTensor)
-    : (a as RuntimeTensor);
-  const bT: RuntimeTensor = bIsScalar
-    ? (RTV.tensor(new FloatXArray([toNumber(b)]), [1, 1]) as RuntimeTensor)
-    : (b as RuntimeTensor);
+
+  // At least one tensor — promote scalars (including complex) to 1x1 tensors
+  const aT = scalarToTensor(a);
+  const bT = scalarToTensor(b);
   const outShape = getBroadcastShape(aT.shape, bT.shape);
   if (!outShape)
     throw new RuntimeError(`${name}: non-singleton dimensions must match`);
-  const result = new FloatXArray(outShape.reduce((acc, d) => acc * d, 1));
+  const n = outShape.reduce((acc, d) => acc * d, 1);
+  const result = new FloatXArray(n);
+
+  if (!anyComplex) {
+    // Real-only fast path
+    broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
+      const aVal = aT.data[aIdx],
+        bVal = bT.data[bIdx];
+      result[i] = isNaN(aVal)
+        ? bVal
+        : isNaN(bVal)
+          ? aVal
+          : twoArgFn(aVal, bVal);
+    });
+    return RTV.tensor(result, outShape);
+  }
+
+  // Complex element-wise path
+  const aIm = aT.imag;
+  const bIm = bT.imag;
+  const resultImag = new FloatXArray(n);
+  let hasImag = false;
   broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
-    const aVal = aT.data[aIdx],
-      bVal = bT.data[bIdx];
-    result[i] = isNaN(aVal) ? bVal : isNaN(bVal) ? aVal : twoArgFn(aVal, bVal);
+    const aRe = aT.data[aIdx],
+      aI = aIm ? aIm[aIdx] : 0;
+    const bRe = bT.data[bIdx],
+      bI = bIm ? bIm[bIdx] : 0;
+    const pickA = complexIsBetter(aRe, aI, bRe, bI);
+    result[i] = pickA ? aRe : bRe;
+    const im = pickA ? aI : bI;
+    resultImag[i] = im;
+    if (im !== 0) hasImag = true;
   });
-  return RTV.tensor(result, outShape);
+  const t = RTV.tensor(result, outShape) as RuntimeTensor;
+  if (hasImag) t.imag = resultImag;
+  return t;
 }
 
 // ── Main min/max dispatch ──────────────────────────────────────────────

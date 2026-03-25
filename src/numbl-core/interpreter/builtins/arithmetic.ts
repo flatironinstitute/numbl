@@ -132,10 +132,11 @@ function minMaxTypeRule(argTypes: JitType[]): JitType[] | null {
     if (a.kind === "tensor" || b.kind === "tensor") {
       const t =
         a.kind === "tensor" ? a : (b as Extract<JitType, { kind: "tensor" }>);
+      const otherIsComplex = a.kind === "complex" || b.kind === "complex";
       return [
         {
           kind: "tensor",
-          isComplex: t.isComplex,
+          isComplex: t.isComplex || otherIsComplex,
           shape: t.shape,
           ndim: t.ndim,
         },
