@@ -357,6 +357,9 @@ function emitTensorBinary(
     case BinaryOperation.Div:
     case BinaryOperation.ElemDiv:
       return `$h.tDiv(${left}, ${right})`;
+    case BinaryOperation.Pow:
+    case BinaryOperation.ElemPow:
+      return `$h.tPow(${left}, ${right})`;
     case BinaryOperation.Equal:
       return `$h.tEq(${left}, ${right})`;
     case BinaryOperation.NotEqual:

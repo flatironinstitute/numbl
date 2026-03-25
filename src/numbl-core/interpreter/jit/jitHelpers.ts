@@ -349,6 +349,13 @@ export const jitHelpers = {
   tMul: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x * y, cMul),
   tDiv: (a: unknown, b: unknown) => tensorBinaryOp(a, b, (x, y) => x / y, cDiv),
 
+  // Tensor power (element-wise)
+  tPow: (a: unknown, b: unknown) =>
+    tensorBinaryOp(a, b, Math.pow, () => {
+      // Complex power not supported in JIT — should not reach here
+      throw new Error("JIT tPow: complex power not supported");
+    }),
+
   // Tensor comparisons (real only, returns logical tensor)
   tEq: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x === y),
   tNeq: (a: unknown, b: unknown) => tensorCompareOp(a, b, (x, y) => x !== y),

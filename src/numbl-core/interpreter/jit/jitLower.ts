@@ -196,10 +196,11 @@ function binaryResultType(
       // tensor / tensor not supported (use ./ instead)
       if (isTensorType(left) && isTensorType(right)) return null;
       break;
-    case BinaryOperation.Pow:
     case BinaryOperation.ElemPow:
-      // Scalar power only for now
-      if (isTensorType(left) || isTensorType(right)) return null;
+      break;
+    case BinaryOperation.Pow:
+      // Matrix power (both tensors) not supported
+      if (isTensorType(left) && isTensorType(right)) return null;
       break;
     default:
       return null;
