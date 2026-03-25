@@ -23,7 +23,7 @@ import { preserveTypeCheck } from "./helpers.js";
 
 /** Generic cumulative operation along a specified or default dimension.
  *  Supports cumsum(A), cumsum(A, dim), etc. for arbitrary N-D arrays. */
-function cumOp(
+export function cumOp(
   name: string,
   args: RuntimeValue[],
   accumFn: (acc: number, val: number) => number,
@@ -145,7 +145,7 @@ function cumOp(
 
 // ── diff ───────────────────────────────────────────────────────────────
 
-function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
+export function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
   if (isRuntimeNumber(v)) {
     return RTV.tensor(new FloatXArray(0), [0, 0]);
   }
