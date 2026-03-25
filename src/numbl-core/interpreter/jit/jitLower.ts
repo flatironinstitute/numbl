@@ -152,7 +152,26 @@ function binaryResultType(
     op === BinaryOperation.GreaterEqual
   ) {
     if (isScalarType(left) && isScalarType(right)) return { kind: "boolean" };
-    // Tensor comparison: not supported yet
+    // Tensor comparison: real tensors only (MATLAB errors on complex comparisons)
+    const anyTensor = isTensorType(left) || isTensorType(right);
+    const anyComplex = isComplexType(left) || isComplexType(right);
+    if (anyTensor && !anyComplex) {
+      const lt = isTensorType(left)
+        ? (left as Extract<JitType, { kind: "tensor" }>)
+        : undefined;
+      const rt = isTensorType(right)
+        ? (right as Extract<JitType, { kind: "tensor" }>)
+        : undefined;
+      const shape = lt?.shape ?? rt?.shape;
+      const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
+      return {
+        kind: "tensor",
+        isComplex: false,
+        isLogical: true,
+        ...(shape ? { shape } : {}),
+        ...(ndim !== undefined ? { ndim } : {}),
+      };
+    }
     return null;
   }
 
