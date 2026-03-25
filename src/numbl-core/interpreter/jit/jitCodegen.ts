@@ -477,6 +477,9 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ht: boolean): string {
 
 function emitTruthiness(expr: JitExpr, ht: boolean): string {
   // String/char conditions are rejected during lowering.
-  // All remaining scalar types (number, boolean, complex) use !== 0.
+  // Complex values are objects, so !== 0 is always true — use $h.cTruthy.
+  if (expr.jitType.kind === "complex_or_number") {
+    return `$h.cTruthy(${emitExpr(expr, ht)})`;
+  }
   return `(${emitExpr(expr, ht)}) !== 0`;
 }
