@@ -16,7 +16,7 @@ import { RTV } from "./runtime/constructors.js";
 import { RuntimeError } from "../numbl-core/runtime/index.js";
 import { loadJsUserFunctions } from "./jsUserFunctions.js";
 import {
-  registerIBuiltin,
+  registerDynamicIBuiltin,
   unregisterIBuiltin,
 } from "./interpreter/builtins/types.js";
 import type { NativeBridge } from "./workspace/index.js";
@@ -131,7 +131,7 @@ export function interpretCode(
 
   // Register .js user functions as IBuiltins
   for (const ib of jsUserFunctions) {
-    registerIBuiltin(ib);
+    registerDynamicIBuiltin(ib);
   }
 
   // Apply custom builtins
