@@ -951,7 +951,7 @@ registerIBuiltin({
   resolve: (argTypes, nargout) => {
     if (
       nargout < 1 ||
-      nargout > 2 ||
+      nargout > 3 ||
       argTypes.length < 1 ||
       argTypes.length > 2
     )
@@ -961,6 +961,11 @@ registerIBuiltin({
     const t = tensorType(isComplex || undefined);
     if (nargout === 1)
       return { outputTypes: [t], apply: (args, n) => qrApply(args, n) };
+    if (nargout === 3)
+      return {
+        outputTypes: [t, t, t],
+        apply: (args, n) => qrApply(args, n),
+      };
     return { outputTypes: [t, t], apply: (args, n) => qrApply(args, n) };
   },
 });
@@ -976,6 +981,12 @@ function qrApply(
     const val = A;
     const s = val >= 0 ? 1 : -1;
     if (nargout === 1) return RTV.tensor(new FloatXArray([s * val]), [1, 1]);
+    if (nargout === 3)
+      return [
+        RTV.tensor(new FloatXArray([s]), [1, 1]),
+        RTV.tensor(new FloatXArray([s * val]), [1, 1]),
+        RTV.tensor(new FloatXArray([1]), [1, 1]),
+      ];
     return [
       RTV.tensor(new FloatXArray([s]), [1, 1]),
       RTV.tensor(new FloatXArray([s * val]), [1, 1]),
@@ -986,6 +997,11 @@ function qrApply(
   const econ = parseEconArgRuntime(args[1]);
   const [m, n] = tensorSize2D(A);
   const k = Math.min(m, n);
+
+  // 3-output: column-pivoted QR → [Q, R, E]
+  if (nargout === 3) {
+    return qrPivotApply(A, m, n, k, econ);
+  }
 
   if (A.imag) {
     const bridge = getEffectiveBridge("qr", "qrComplex");
@@ -1129,6 +1145,200 @@ function qrApply(
   return [
     RTV.tensor(Q_data, [m, m]),
     RTV.tensor(new FloatXArray(R_data.slice(0, m * n)), [m, n]),
+  ];
+}
+
+/** Convert 1-based permutation vector to permutation matrix or keep as vector. */
+function permResult(
+  jpvt: FloatXArrayType | Int32Array,
+  n: number,
+  econ: boolean
+): RuntimeValue {
+  const perm = new FloatXArray(n);
+  for (let i = 0; i < n; i++) perm[i] = jpvt[i];
+  if (econ) return RTV.tensor(perm, [1, n]);
+  // Non-economy: return n×n permutation matrix
+  const mat = new FloatXArray(n * n);
+  for (let j = 0; j < n; j++) mat[colMajorIndex(jpvt[j] - 1, j, n)] = 1;
+  return RTV.tensor(mat, [n, n]);
+}
+
+function qrPivotApply(
+  A: RuntimeTensor,
+  m: number,
+  n: number,
+  k: number,
+  econ: boolean
+): RuntimeValue[] {
+  if (A.imag) {
+    const bridge = getEffectiveBridge("qr", "qrPivotComplex");
+    if (!bridge?.qrPivotComplex)
+      throw new RuntimeError(
+        "qr: complex column-pivoted QR requires the native LAPACK addon"
+      );
+    const result = bridge.qrPivotComplex(
+      toF64(A.data),
+      toF64(A.imag),
+      m,
+      n,
+      econ
+    );
+    const rRows = econ ? k : m;
+    const qCols = econ ? k : m;
+    return [
+      RTV.tensor(
+        new FloatXArray(result.QRe),
+        [m, qCols],
+        new FloatXArray(result.QIm)
+      ),
+      RTV.tensor(
+        new FloatXArray(result.RRe),
+        [rRows, n],
+        new FloatXArray(result.RIm)
+      ),
+      permResult(result.jpvt, n, econ),
+    ];
+  }
+
+  const bridge = getEffectiveBridge("qr", "qrPivot");
+  if (bridge?.qrPivot) {
+    const result = bridge.qrPivot(toF64(A.data), m, n, econ);
+    if (result) {
+      const rRows = econ ? k : m;
+      const qCols = econ ? k : m;
+      return [
+        RTV.tensor(new FloatXArray(result.Q), [m, qCols]),
+        RTV.tensor(new FloatXArray(result.R), [rRows, n]),
+        permResult(result.jpvt, n, econ),
+      ];
+    }
+  }
+
+  // JS fallback: Householder QR with column pivoting
+  const R_data = new FloatXArray(A.data);
+  const perm = new Float64Array(n);
+  for (let i = 0; i < n; i++) perm[i] = i; // 0-based during computation
+
+  // Compute initial column norms
+  const colNorms = new Float64Array(n);
+  for (let j = 0; j < n; j++) {
+    let s = 0;
+    for (let i = 0; i < m; i++) {
+      const v = R_data[colMajorIndex(i, j, m)];
+      s += v * v;
+    }
+    colNorms[j] = s;
+  }
+
+  const vecs: FloatXArrayType[] = [];
+  const taus: number[] = [];
+
+  for (let j = 0; j < k; j++) {
+    // Find column with max remaining norm
+    let maxNorm = colNorms[j];
+    let maxCol = j;
+    for (let c = j + 1; c < n; c++) {
+      if (colNorms[c] > maxNorm) {
+        maxNorm = colNorms[c];
+        maxCol = c;
+      }
+    }
+    // Swap columns j and maxCol in R_data, perm, colNorms
+    if (maxCol !== j) {
+      for (let i = 0; i < m; i++) {
+        const ij = colMajorIndex(i, j, m);
+        const ic = colMajorIndex(i, maxCol, m);
+        const tmp = R_data[ij];
+        R_data[ij] = R_data[ic];
+        R_data[ic] = tmp;
+      }
+      const tmpP = perm[j];
+      perm[j] = perm[maxCol];
+      perm[maxCol] = tmpP;
+      const tmpN = colNorms[j];
+      colNorms[j] = colNorms[maxCol];
+      colNorms[maxCol] = tmpN;
+    }
+
+    // Householder reflector for column j
+    const len = m - j;
+    const x = new FloatXArray(len);
+    for (let i = 0; i < len; i++) x[i] = R_data[colMajorIndex(j + i, j, m)];
+    let normx = 0;
+    for (let i = 0; i < len; i++) normx += x[i] * x[i];
+    normx = Math.sqrt(normx);
+    if (normx === 0) {
+      vecs.push(new FloatXArray(len));
+      taus.push(0);
+      // Update remaining column norms
+      for (let c = j + 1; c < n; c++) {
+        const vj = R_data[colMajorIndex(j, c, m)];
+        colNorms[c] -= vj * vj;
+        if (colNorms[c] < 0) colNorms[c] = 0;
+      }
+      continue;
+    }
+    const sign = x[0] >= 0 ? 1 : -1;
+    const alpha = -sign * normx;
+    const v = new FloatXArray(len);
+    v[0] = x[0] - alpha;
+    for (let i = 1; i < len; i++) v[i] = x[i];
+    let vnorm = 0;
+    for (let i = 0; i < len; i++) vnorm += v[i] * v[i];
+    const tau = vnorm === 0 ? 0 : 2.0 / vnorm;
+    vecs.push(v);
+    taus.push(tau);
+    for (let c = j; c < n; c++) {
+      let dot = 0;
+      for (let i = 0; i < len; i++)
+        dot += v[i] * R_data[colMajorIndex(j + i, c, m)];
+      const scale = tau * dot;
+      for (let i = 0; i < len; i++)
+        R_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
+    }
+    // Update remaining column norms
+    for (let c = j + 1; c < n; c++) {
+      const vj = R_data[colMajorIndex(j, c, m)];
+      colNorms[c] -= vj * vj;
+      if (colNorms[c] < 0) colNorms[c] = 0;
+    }
+  }
+
+  // Build Q
+  const qCols = econ ? k : m;
+  const Q_data = new FloatXArray(m * qCols);
+  for (let i = 0; i < Math.min(m, qCols); i++)
+    Q_data[colMajorIndex(i, i, m)] = 1;
+  for (let j = k - 1; j >= 0; j--) {
+    const v = vecs[j],
+      tau = taus[j];
+    if (tau === 0) continue;
+    const len = m - j;
+    for (let c = j; c < qCols; c++) {
+      let dot = 0;
+      for (let i = 0; i < len; i++)
+        dot += v[i] * Q_data[colMajorIndex(j + i, c, m)];
+      const scale = tau * dot;
+      for (let i = 0; i < len; i++)
+        Q_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
+    }
+  }
+
+  // Build R
+  const rRows = econ ? k : m;
+  const R_out = new FloatXArray(rRows * n);
+  for (let r = 0; r < rRows; r++)
+    for (let c = r; c < n; c++)
+      R_out[colMajorIndex(r, c, rRows)] = R_data[colMajorIndex(r, c, m)];
+
+  // Convert perm to 1-based MATLAB convention
+  const permOut = new FloatXArray(n);
+  for (let i = 0; i < n; i++) permOut[i] = perm[i] + 1;
+
+  return [
+    RTV.tensor(Q_data, [m, qCols]),
+    RTV.tensor(R_out, [rRows, n]),
+    permResult(permOut, n, econ),
   ];
 }
 

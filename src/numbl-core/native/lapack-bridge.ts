@@ -68,6 +68,38 @@ export interface LapackBridge {
   ): { Q: Float64Array; R: Float64Array };
 
   /**
+   * Column-pivoted QR decomposition: A*P = Q*R via dgeqp3 + dorgqr.
+   * @param data   Column-major Float64Array of length m*n (not modified).
+   * @param m      Number of rows.
+   * @param n      Number of columns.
+   * @param econ   true → economy/thin QR; false → full QR.
+   * @returns      Object with Q, R, and jpvt (1-based permutation vector as Int32Array).
+   */
+  qrPivot?(
+    data: Float64Array,
+    m: number,
+    n: number,
+    econ: boolean
+  ): { Q: Float64Array; R: Float64Array; jpvt: Int32Array };
+
+  /**
+   * Column-pivoted QR decomposition of an m×n complex matrix: A*P = Q*R via zgeqp3 + zungqr.
+   */
+  qrPivotComplex?(
+    dataRe: Float64Array,
+    dataIm: Float64Array,
+    m: number,
+    n: number,
+    econ: boolean
+  ): {
+    QRe: Float64Array;
+    QIm: Float64Array;
+    RRe: Float64Array;
+    RIm: Float64Array;
+    jpvt: Int32Array;
+  };
+
+  /**
    * QR decomposition of an m×n complex matrix stored in column-major order.
    * Uses LAPACK zgeqrf (QR factorisation) + zungqr (generate Q).
    * @param dataRe  Real parts — column-major Float64Array of length m*n (not modified).

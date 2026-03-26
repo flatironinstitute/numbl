@@ -115,6 +115,218 @@ Napi::Value Qr(const Napi::CallbackInfo& info) {
   return result;
 }
 
+// ── qrPivot() ────────────────────────────────────────────────────────────────
+// Column-pivoted QR: A*P = Q*R via dgeqp3 + dorgqr.
+// Returns {Q, R, jpvt} where jpvt is a 1-based permutation vector.
+
+Napi::Value QrPivot(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 4
+      || !info[0].IsTypedArray()
+      || !info[1].IsNumber()
+      || !info[2].IsNumber()
+      || !info[3].IsBoolean()) {
+    Napi::TypeError::New(env,
+      "qrPivot: expected (Float64Array data, number m, number n, boolean econ)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto arr = info[0].As<Napi::TypedArray>();
+  if (arr.TypedArrayType() != napi_float64_array) {
+    Napi::TypeError::New(env, "qrPivot: data must be a Float64Array")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  int m    = info[1].As<Napi::Number>().Int32Value();
+  int n    = info[2].As<Napi::Number>().Int32Value();
+  bool econ = info[3].As<Napi::Boolean>().Value();
+
+  if (m <= 0 || n <= 0 || static_cast<int>(arr.ElementLength()) != m * n) {
+    Napi::RangeError::New(env, "qrPivot: data.length must equal m*n")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto float64arr = info[0].As<Napi::Float64Array>();
+  int k = m < n ? m : n;
+
+  // Copy input data
+  std::vector<double> a(m * n);
+  std::memcpy(a.data(), float64arr.Data(), m * n * sizeof(double));
+
+  // jpvt initialised to 0 → all columns are free
+  std::vector<int> jpvt(n, 0);
+  std::vector<double> tau(k);
+  int info_val = 0;
+
+  // Workspace query
+  int lwork = -1;
+  double work_query = 0.0;
+  dgeqp3_(&m, &n, a.data(), &m, jpvt.data(), tau.data(),
+           &work_query, &lwork, &info_val);
+  lwork = static_cast<int>(work_query);
+  if (lwork < 1) lwork = 3 * n + 1;
+
+  std::vector<double> work(lwork);
+  dgeqp3_(&m, &n, a.data(), &m, jpvt.data(), tau.data(),
+           work.data(), &lwork, &info_val);
+
+  if (!checkLapackInfo(env, info_val, "qrPivot", "dgeqp3"))
+    return env.Null();
+
+  // Extract R from the upper triangle
+  int r_rows = econ ? k : m;
+  std::vector<double> R(r_rows * n, 0.0);
+  for (int j = 0; j < n; j++) {
+    int ilim = j < k ? j : k - 1;
+    for (int i = 0; i <= ilim; i++) {
+      R[i + j * r_rows] = a[i + j * m];
+    }
+  }
+
+  // Generate Q via dorgqr
+  int q_cols = econ ? k : m;
+  std::vector<double> q_buf(m * q_cols, 0.0);
+  int cols_to_copy = n < q_cols ? n : q_cols;
+  for (int j = 0; j < cols_to_copy; j++) {
+    for (int i = 0; i < m; i++) {
+      q_buf[i + j * m] = a[i + j * m];
+    }
+  }
+
+  lwork = -1;
+  dorgqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
+          &work_query, &lwork, &info_val);
+  lwork = static_cast<int>(work_query);
+  if (lwork < 1) lwork = q_cols;
+
+  work.assign(lwork, 0.0);
+  dorgqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
+          work.data(), &lwork, &info_val);
+
+  if (!checkLapackInfo(env, info_val, "qrPivot", "dorgqr"))
+    return env.Null();
+
+  auto result = Napi::Object::New(env);
+  result.Set("Q", vecToF64(env, q_buf));
+  result.Set("R", vecToF64(env, R));
+  result.Set("jpvt", vecToI32(env, jpvt));
+  return result;
+}
+
+// ── qrPivotComplex() ─────────────────────────────────────────────────────────
+// Column-pivoted complex QR: A*P = Q*R via zgeqp3 + zungqr.
+
+Napi::Value QrPivotComplex(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 5
+      || !info[0].IsTypedArray()
+      || !info[1].IsTypedArray()
+      || !info[2].IsNumber()
+      || !info[3].IsNumber()
+      || !info[4].IsBoolean()) {
+    Napi::TypeError::New(env,
+      "qrPivotComplex: expected (Float64Array dataRe, Float64Array dataIm, "
+      "number m, number n, boolean econ)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto arrRe = info[0].As<Napi::TypedArray>();
+  auto arrIm = info[1].As<Napi::TypedArray>();
+  if (arrRe.TypedArrayType() != napi_float64_array ||
+      arrIm.TypedArrayType() != napi_float64_array) {
+    Napi::TypeError::New(env, "qrPivotComplex: dataRe and dataIm must be Float64Arrays")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  int m    = info[2].As<Napi::Number>().Int32Value();
+  int n    = info[3].As<Napi::Number>().Int32Value();
+  bool econ = info[4].As<Napi::Boolean>().Value();
+
+  if (m <= 0 || n <= 0 ||
+      static_cast<int>(arrRe.ElementLength()) != m * n ||
+      static_cast<int>(arrIm.ElementLength()) != m * n) {
+    Napi::RangeError::New(env,
+      "qrPivotComplex: dataRe.length and dataIm.length must equal m*n")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  int k = m < n ? m : n;
+
+  auto a = splitToInterleaved(
+      info[0].As<Napi::Float64Array>(),
+      info[1].As<Napi::Float64Array>(), m * n);
+
+  std::vector<int> jpvt(n, 0);
+  std::vector<lapack_complex_double> tau(k);
+  std::vector<double> rwork(2 * n);
+  int info_val = 0;
+
+  // Workspace query
+  int lwork = -1;
+  lapack_complex_double work_query;
+  zgeqp3_(&m, &n, a.data(), &m, jpvt.data(), tau.data(),
+           &work_query, &lwork, rwork.data(), &info_val);
+  lwork = static_cast<int>(work_query.real);
+  if (lwork < 1) lwork = n + 1;
+
+  std::vector<lapack_complex_double> work(lwork);
+  zgeqp3_(&m, &n, a.data(), &m, jpvt.data(), tau.data(),
+           work.data(), &lwork, rwork.data(), &info_val);
+
+  if (!checkLapackInfo(env, info_val, "qrPivotComplex", "zgeqp3"))
+    return env.Null();
+
+  // Extract R
+  int r_rows = econ ? k : m;
+  std::vector<double> R_re(r_rows * n, 0.0);
+  std::vector<double> R_im(r_rows * n, 0.0);
+  for (int j = 0; j < n; j++) {
+    int ilim = j < k ? j : k - 1;
+    for (int i = 0; i <= ilim; i++) {
+      R_re[i + j * r_rows] = a[i + j * m].real;
+      R_im[i + j * r_rows] = a[i + j * m].imag;
+    }
+  }
+
+  // Generate Q via zungqr
+  int q_cols = econ ? k : m;
+  std::vector<lapack_complex_double> q_buf(m * q_cols, {0.0, 0.0});
+  int cols_to_copy = n < q_cols ? n : q_cols;
+  for (int j = 0; j < cols_to_copy; j++) {
+    for (int i = 0; i < m; i++) {
+      q_buf[i + j * m] = a[i + j * m];
+    }
+  }
+
+  lwork = -1;
+  zungqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
+          &work_query, &lwork, &info_val);
+  lwork = static_cast<int>(work_query.real);
+  if (lwork < 1) lwork = q_cols;
+
+  work.assign(lwork, {0.0, 0.0});
+  zungqr_(&m, &q_cols, &k, q_buf.data(), &m, tau.data(),
+          work.data(), &lwork, &info_val);
+
+  if (!checkLapackInfo(env, info_val, "qrPivotComplex", "zungqr"))
+    return env.Null();
+
+  auto result = Napi::Object::New(env);
+  setSplitComplex(env, result, "QRe", "QIm", q_buf.data(), m * q_cols);
+  result.Set("RRe", vecToF64(env, R_re));
+  result.Set("RIm", vecToF64(env, R_im));
+  result.Set("jpvt", vecToI32(env, jpvt));
+  return result;
+}
+
 // ── qrComplex() ──────────────────────────────────────────────────────────────
 
 Napi::Value QrComplex(const Napi::CallbackInfo& info) {
