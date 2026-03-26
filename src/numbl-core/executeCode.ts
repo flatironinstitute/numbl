@@ -19,7 +19,7 @@ import {
 } from "../numbl-core/runtime/index.js";
 import { ensureRuntimeValue } from "./runtime/runtimeHelpers.js";
 import {
-  registerIBuiltin,
+  registerDynamicIBuiltin,
   unregisterIBuiltin,
   inferJitType,
 } from "./interpreter/builtins/types.js";
@@ -79,7 +79,7 @@ export function executeCode(
 
   // Register .js user functions as IBuiltins (and on rt.builtins for codegen dispatch)
   for (const ib of jsUserFunctions) {
-    registerIBuiltin(ib);
+    registerDynamicIBuiltin(ib);
     rt.builtins[ib.name] = (nargout: number, args: unknown[]) => {
       const margs = args.map(a => ensureRuntimeValue(a));
       const argTypes = margs.map(inferJitType);

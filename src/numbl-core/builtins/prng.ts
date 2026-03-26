@@ -29,6 +29,15 @@ import { parseShapeArgs } from "./shape-utils.js";
 let _rngState: Uint32Array | null = null; // null = use Math.random()
 let _rngSeed: number = 0; // track current seed for rng() output
 
+export function setRngShuffle(): void {
+  _rngState = null;
+  _rngSeed = 0;
+}
+
+export function setRngSeed(seed: number): void {
+  _rngSeed = seed;
+}
+
 function splitmix32(seed: number): () => number {
   let s = seed | 0;
   return () => {
@@ -40,7 +49,7 @@ function splitmix32(seed: number): () => number {
   };
 }
 
-function seedRng(seed: number): void {
+export function seedRng(seed: number): void {
   const sm = splitmix32(seed);
   _rngState = new Uint32Array([sm(), sm(), sm(), sm()]);
   // Ensure state is non-zero
@@ -72,12 +81,12 @@ function rotl(x: number, k: number): number {
 }
 
 /** Return a random float in [0, 1) using seeded or unseeded PRNG */
-function rngRandom(): number {
+export function rngRandom(): number {
   if (_rngState === null) return Math.random();
   return (xoshiro128ss() >>> 0) / 0x100000000;
 }
 
-function boxMullerRandom(): number {
+export function boxMullerRandom(): number {
   let u = 0,
     v = 0;
   while (u === 0) u = rngRandom();
@@ -86,7 +95,7 @@ function boxMullerRandom(): number {
 }
 
 /** Return the current RNG state as a struct {Type, Seed, State} */
-function getRngStateStruct(): RuntimeValue {
+export function getRngStateStruct(): RuntimeValue {
   const stateArray = _rngState
     ? RTV.tensor(new FloatXArray(Array.from(_rngState).map(v => v)), [4, 1])
     : RTV.tensor(new FloatXArray(0), [0, 1]);
@@ -98,7 +107,7 @@ function getRngStateStruct(): RuntimeValue {
 }
 
 /** Restore RNG state from a struct previously returned by rng() */
-function restoreRngState(s: {
+export function restoreRngState(s: {
   kind: "struct";
   fields: Map<string, RuntimeValue>;
 }): void {

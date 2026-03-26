@@ -20,6 +20,11 @@ import "./array-manipulation.js";
 import "./array-extras.js";
 import "./validation.js";
 import "./numerical.js";
+import "./type-constructors.js";
+import "./string-extras.js";
+import "./prng.js";
+import "./cell-struct.js";
+import "./time-system.js";
 
 export {
   getIBuiltin,
