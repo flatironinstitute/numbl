@@ -274,7 +274,7 @@ export class Runtime {
           }
         }
         if (this.profilingEnabled) {
-          this.profileEnter("builtin:legacy:" + name);
+          this.profileEnter("builtin:fallback:" + name);
           const result = branch.apply(margs, nargout);
           this.profileLeave();
           return this.unwrapResult(
@@ -395,7 +395,7 @@ export class Runtime {
   public getBuiltinProfile(): Record<
     string,
     {
-      legacy: { totalTimeMs: number; callCount: number };
+      fallback: { totalTimeMs: number; callCount: number };
       interp: { totalTimeMs: number; callCount: number };
       jit: { totalTimeMs: number; callCount: number };
     }
@@ -404,7 +404,7 @@ export class Runtime {
     const result: Record<
       string,
       {
-        legacy: { totalTimeMs: number; callCount: number };
+        fallback: { totalTimeMs: number; callCount: number };
         interp: { totalTimeMs: number; callCount: number };
         jit: { totalTimeMs: number; callCount: number };
       }
@@ -413,11 +413,11 @@ export class Runtime {
     for (const [key, time] of this.profileAccum) {
       if (!key.startsWith(prefix)) continue;
       const rest = key.slice(prefix.length);
-      let source: "legacy" | "interp" | "jit";
+      let source: "fallback" | "interp" | "jit";
       let name: string;
-      if (rest.startsWith("legacy:")) {
-        source = "legacy";
-        name = rest.slice(7);
+      if (rest.startsWith("fallback:")) {
+        source = "fallback";
+        name = rest.slice(9);
       } else if (rest.startsWith("interp:")) {
         source = "interp";
         name = rest.slice(7);
@@ -430,7 +430,7 @@ export class Runtime {
       const count = this.profileCounts.get(key) ?? 0;
       if (count > 0) {
         if (!result[name])
-          result[name] = { legacy: zero(), interp: zero(), jit: zero() };
+          result[name] = { fallback: zero(), interp: zero(), jit: zero() };
         result[name][source] = { totalTimeMs: time, callCount: count };
       }
     }

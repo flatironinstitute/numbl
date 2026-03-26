@@ -259,7 +259,6 @@ export async function runRepl(
           onDrawnow,
           initialVariableValues: variableValues,
           initialHoldState: holdState,
-          legacy,
           optimization,
         },
         workspaceFiles,

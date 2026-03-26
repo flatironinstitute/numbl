@@ -2,15 +2,9 @@
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the development guide.
 
-## Architecture: interpreter vs. codegen
+## Architecture
 
-Numbl has two execution backends:
-
-1. **Codegen** (`executeCode` in `src/numbl-core/executeCode.ts`): Parse → Lower → Codegen (JS) → eval. The original pipeline. Lowers the MATLAB AST into an IR, generates JavaScript, and evaluates it.
-
-2. **Interpreter** (`interpretCode` in `src/numbl-core/interpretCode.ts`): Parse → AST-walk. Walks the AST directly using the `Interpreter` class (`src/numbl-core/interpreter/`). Reuses the `LoweringContext` for workspace/function resolution but dispatches to runtime values directly instead of generating code.
-
-**The interpreter is the only backend.** New builtins and features go in `src/numbl-core/interpreter/builtins/`.
+The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/numbl-core/interpreter/`). The `LoweringContext` handles workspace/function resolution. New builtins and features go in `src/numbl-core/interpreter/builtins/`.
 
 ### Interpreter builtins (IBuiltins)
 
@@ -102,7 +96,7 @@ Options (for REPL):
 --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
---dump-js <file> Write all generated JavaScript (main + JIT) to file
+--dump-js <file> Write JIT-generated JavaScript to file
 --dump-ast Print AST as JSON
 --verbose Detailed logging to stderr
 --stream NDJSON output mode
@@ -110,7 +104,6 @@ Options (for run and eval):
 --plot Enable plot server
 --plot-port <port> Set plot server port (implies --plot)
 --add-script-path Add the script's directory to the workspace (run only)
---no-line-tracking Omit $rt.$file/$rt.$line from generated JS
 --opt <level> Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
