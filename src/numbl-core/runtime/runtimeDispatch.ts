@@ -36,7 +36,7 @@ import {
   getIBuiltin as _getIBuiltin,
   inferJitType as _inferJitType,
 } from "../interpreter/builtins/index.js";
-import { COLON_SENTINEL } from "../executor/types.js";
+import { COLON_SENTINEL } from "./sentinels.js";
 import {
   getBroadcastShape,
   mAdd,

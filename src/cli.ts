@@ -34,7 +34,7 @@ import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
-import { PlotInstruction } from "./numbl-core/executor/types.js";
+import type { PlotInstruction } from "./graphics/types.js";
 
 // ── Package directory & native addon paths ───────────────────────────────────
 
@@ -576,7 +576,7 @@ async function executeWithOptions(
 
   // Helper to write profile data after execution completes
   const writeProfileIfNeeded = (result: {
-    profileData?: import("./numbl-core/executor/types.js").ProfileData;
+    profileData?: import("./numbl-core/executeCode.js").ProfileData;
   }) => {
     if (!opts.profileOutput || !result.profileData) return;
     const pd = result.profileData;

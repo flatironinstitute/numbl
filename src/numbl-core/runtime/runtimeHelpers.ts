@@ -22,7 +22,7 @@ import {
   FloatXArray,
 } from "../runtime/types.js";
 import { sparseToDense } from "../../numbl-core/helpers/sparse-arithmetic.js";
-import { END_SENTINEL } from "../executor/types.js";
+import { END_SENTINEL } from "./sentinels.js";
 
 // ── Deferred Range ──────────────────────────────────────────────────────
 

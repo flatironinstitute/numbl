@@ -50,12 +50,9 @@ import { registerLinearAlgebraFunctions } from "../helpers/linear-algebra/regist
 registerMathFunctions();
 registerReductionFunctions();
 registerLinearAlgebraFunctions();
-import {
-  COLON_SENTINEL,
-  END_SENTINEL,
-  type PlotInstruction,
-  type ExecOptions,
-} from "../executor/types.js";
+import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
+import type { PlotInstruction } from "../../graphics/types.js";
+import type { ExecOptions } from "../executeCode.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
 import { ensureRuntimeValue, type CallSite } from "./runtimeHelpers.js";
 import {

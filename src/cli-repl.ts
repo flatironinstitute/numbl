@@ -5,7 +5,7 @@ import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
-import { PlotInstruction } from "./numbl-core/executor/types.js";
+import type { PlotInstruction } from "./graphics/types.js";
 import { executeCode } from "./numbl-core/executeCode.js";
 import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
 import { scanMFiles } from "./cli.js";

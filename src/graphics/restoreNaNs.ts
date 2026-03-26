@@ -1,4 +1,4 @@
-import type { PlotInstruction } from "../numbl-core/executor/types.js";
+import type { PlotInstruction } from "./types.js";
 
 /** Restore NaN/Infinity values that were converted to null by JSON serialization. */
 function restoreNullsToNaN(arr: number[]): void {
