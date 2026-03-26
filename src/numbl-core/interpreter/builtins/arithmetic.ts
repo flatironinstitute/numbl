@@ -6,8 +6,9 @@ import {
   FloatXArray,
   isRuntimeTensor,
   type RuntimeTensor,
+  type RuntimeValue,
 } from "../../runtime/types.js";
-import type { RuntimeValue } from "../../runtime/types.js";
+import { mElemPow } from "../../builtins/arithmetic.js";
 import { minMaxImpl } from "../../builtins/reduction/min-max.js";
 import {
   type BuiltinCase,
@@ -300,9 +301,48 @@ defineBuiltin({
 });
 
 // ── power ────────────────────────────────────────────────────────────────
+// power(a,b) is the functional form of a.^b and must produce complex
+// results for negative bases with fractional exponents, so delegate to
+// mElemPow which handles that correctly.
 
 defineBuiltin({
   name: "power",
-  cases: binaryRealElemwiseCases(Math.pow, "power"),
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0],
+          b = argTypes[1];
+        // Accept scalars and real tensors (mElemPow handles all combos)
+        const aOk =
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          (a.kind === "tensor" && a.isComplex === false);
+        const bOk =
+          b.kind === "number" ||
+          b.kind === "boolean" ||
+          (b.kind === "tensor" && b.isComplex === false);
+        if (!aOk || !bOk) return null;
+        // Output may be complex (negative base ^ fractional exp), so
+        // return a generic type; mElemPow decides at runtime.
+        if (a.kind === "tensor" || b.kind === "tensor") {
+          const t =
+            a.kind === "tensor"
+              ? a
+              : (b as Extract<JitType, { kind: "tensor" }>);
+          return [
+            {
+              kind: "tensor",
+              isComplex: undefined as unknown as boolean,
+              shape: t.shape,
+              ndim: t.ndim,
+            },
+          ];
+        }
+        return [{ kind: "number" }];
+      },
+      apply: args => mElemPow(args[0] as RuntimeValue, args[1] as RuntimeValue),
+    },
+  ],
   jitEmit: binaryMathJitEmit("Math.pow"),
 });
