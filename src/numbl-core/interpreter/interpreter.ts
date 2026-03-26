@@ -75,8 +75,14 @@ export class Interpreter {
   /** @internal Guard against infinite recursion in compileSpecialized */
   compileInProgress = new Set<string>();
 
+  /** @internal Per-instance cache for JIT-compiled loops (avoids cross-execution collisions). */
+  loopJitCache = new Map<
+    string,
+    { fn: (...args: unknown[]) => unknown; source: string } | null
+  >();
+
   /** Optimization level (0 = pure interpreter, >=1 = JIT scalar functions). */
-  optimization: number = 0;
+  optimization: number = 1;
 
   /** Callback for JIT compilation logging. */
   onJitCompile?: (description: string, jsCode: string) => void;

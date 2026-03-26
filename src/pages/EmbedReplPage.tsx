@@ -25,7 +25,7 @@ interface TerminalMethods {
 
 function useOptimizationParam(): number {
   const params = new URLSearchParams(window.location.search);
-  return parseInt(params.get("opt") ?? "0", 10) || 0;
+  return parseInt(params.get("opt") ?? "1", 10);
 }
 
 export function EmbedReplPage() {
@@ -64,12 +64,10 @@ export function EmbedReplPage() {
     replWorkerRef.current = worker;
 
     // Send optimization level to worker
-    if (optimization > 0) {
-      worker.postMessage({
-        type: "set_optimization",
-        optimization,
-      });
-    }
+    worker.postMessage({
+      type: "set_optimization",
+      optimization,
+    });
 
     worker.onmessage = e => {
       const msg = e.data;

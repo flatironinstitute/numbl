@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "=== Running tests (no optimization) ==="
-npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR"
+npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR" --opt 0
 
 echo "=== Running tests (--opt 1) ==="
 npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR" --opt 1

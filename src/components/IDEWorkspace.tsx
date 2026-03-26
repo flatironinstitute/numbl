@@ -105,7 +105,7 @@ export function IDEWorkspace({
 }: IDEWorkspaceProps) {
   const optimization = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
-    return parseInt(params.get("opt") ?? "0", 10) || 0;
+    return parseInt(params.get("opt") ?? "1", 10);
   }, []);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<

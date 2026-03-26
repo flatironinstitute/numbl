@@ -29,7 +29,7 @@ let variableValues: Record<string, RuntimeValue> = {};
 let holdState = false;
 let workspaceFiles: WorkspaceFile[] = [];
 let searchPaths: string[] | undefined;
-let optimizationLevel = 0;
+let optimizationLevel = 1;
 
 // ── Snippet helpers ──────────────────────────────────────────────────────────
 
