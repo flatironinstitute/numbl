@@ -10,15 +10,15 @@
  * supported; the native addon is preferred when available.
  */
 
-import { RTV, RuntimeError, tensorSize2D } from "../../runtime/index.js";
+import { RTV, RuntimeError, tensorSize2D } from "../runtime/index.js";
 import {
   FloatXArray,
   FloatXArrayType,
   isRuntimeNumber,
   isRuntimeTensor,
-} from "../../runtime/types.js";
-import { getEffectiveBridge } from "../../native/bridge-resolve.js";
-import { register } from "../registry.js";
+} from "../runtime/types.js";
+import { getEffectiveBridge } from "../native/bridge-resolve.js";
+import { register } from "./registry.js";
 import { out, toF64, unknownMatrix, isMatrixLike } from "./check-helpers.js";
 
 // ── LAPACK helpers ────────────────────────────────────────────────────────────

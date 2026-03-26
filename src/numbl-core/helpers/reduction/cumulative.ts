@@ -17,7 +17,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { sparseToDense } from "../sparse-arithmetic.js";
-import { preserveTypeCheck } from "./helpers.js";
+import { preserveTypeCheck } from "../reduction-helpers.js";
 
 // ── Generic cumulative operation ───────────────────────────────────────
 

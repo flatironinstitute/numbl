@@ -20,7 +20,7 @@ import {
   isRuntimeFunction,
   isRuntimeNumber,
 } from "../runtime/types.js";
-import { sprintfFormat } from "../../numbl-core/builtins/string.js";
+import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import {
   arrayfunImpl as _arrayfunImpl,

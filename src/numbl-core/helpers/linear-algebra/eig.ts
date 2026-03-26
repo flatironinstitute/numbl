@@ -27,7 +27,7 @@ import {
   parseStringArgLower,
   toF64,
   unknownMatrix,
-} from "./check-helpers.js";
+} from "../check-helpers.js";
 import { type ItemType } from "../../lowering/itemTypes.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────

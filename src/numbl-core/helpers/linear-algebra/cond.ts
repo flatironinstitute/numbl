@@ -23,7 +23,7 @@ import { register, builtinSingle } from "../registry.js";
 import {
   applyBuiltin as _applyBuiltin,
   parseStringArgLower,
-} from "./check-helpers.js";
+} from "../check-helpers.js";
 
 function applyBuiltin(
   name: string,

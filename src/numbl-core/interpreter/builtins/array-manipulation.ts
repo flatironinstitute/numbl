@@ -29,9 +29,9 @@ import {
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../jit/jitTypes.js";
-import { coerceToTensor } from "../../builtins/shape-utils.js";
-import { sparseToDense } from "../../builtins/sparse-arithmetic.js";
-import { mTranspose, mConjugateTranspose } from "../../builtins/arithmetic.js";
+import { coerceToTensor } from "../../helpers/shape-utils.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

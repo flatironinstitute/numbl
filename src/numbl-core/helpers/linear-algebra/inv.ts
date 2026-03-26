@@ -13,7 +13,7 @@ import {
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { register } from "../registry.js";
-import { out, toF64, unknownMatrix, isMatrixLike } from "./check-helpers.js";
+import { out, toF64, unknownMatrix, isMatrixLike } from "../check-helpers.js";
 
 // ── Matrix inversion helpers ─────────────────────────────────────────────────
 

@@ -11,7 +11,7 @@ import {
 } from "../../runtime/types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { register, builtinSingle } from "../registry.js";
-import { gaussJordanEliminate, toF64 } from "./check-helpers.js";
+import { gaussJordanEliminate, toF64 } from "../check-helpers.js";
 
 export function registerPinv(): void {
   register(

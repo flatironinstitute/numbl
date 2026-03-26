@@ -28,7 +28,7 @@ import {
   scanLogical,
   logicalAlongDim,
   sparseAnyAll,
-} from "./helpers.js";
+} from "../reduction-helpers.js";
 
 export function registerLogical(): void {
   /** Factory for any/all logical reductions. */

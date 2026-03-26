@@ -23,8 +23,8 @@ import {
   erfinvScalar,
   erfcinvScalar,
   erfcxScalar,
-} from "../../builtins/erf.js";
-import { lanczosGamma } from "../../builtins/bessel.js";
+} from "../../helpers/erf.js";
+import { lanczosGamma } from "../../helpers/bessel.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 

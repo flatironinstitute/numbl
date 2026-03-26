@@ -18,7 +18,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { register, builtinSingle } from "../registry.js";
-import { applyBuiltin as _applyBuiltin } from "./check-helpers.js";
+import { applyBuiltin as _applyBuiltin } from "../check-helpers.js";
 
 function applyBuiltin(
   name: string,

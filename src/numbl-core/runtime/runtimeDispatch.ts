@@ -31,7 +31,7 @@ import {
   FloatXArray,
   kstr,
 } from "../runtime/types.js";
-import { isBuiltin, getBuiltinNargin } from "../builtins";
+import { isBuiltin, getBuiltinNargin } from "../helpers/registry.js";
 import {
   getIBuiltin as _getIBuiltin,
   inferJitType as _inferJitType,
@@ -43,7 +43,7 @@ import {
   mSub,
   mElemMul,
   mElemDiv,
-} from "../../numbl-core/builtins/arithmetic.js";
+} from "../../numbl-core/helpers/arithmetic.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";

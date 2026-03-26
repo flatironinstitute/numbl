@@ -15,7 +15,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { register } from "../registry.js";
-import { out, toF64, isMatrixLike } from "./check-helpers.js";
+import { out, toF64, isMatrixLike } from "../check-helpers.js";
 import { IType } from "../../lowering/itemTypes.js";
 
 /**

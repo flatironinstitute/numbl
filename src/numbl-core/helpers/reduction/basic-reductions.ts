@@ -30,7 +30,7 @@ import {
   complexProd,
   parseNanFlag,
   filterNaN,
-} from "./helpers.js";
+} from "../reduction-helpers.js";
 
 export function registerBasicReductions(): void {
   // ── sum ──────────────────────────────────────────────────────────────

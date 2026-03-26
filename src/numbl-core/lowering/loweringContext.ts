@@ -7,7 +7,7 @@
 
 import { type AbstractSyntaxTree, type Stmt } from "../parser/index.js";
 import { BUILTIN_CONSTANTS } from "../lowering/constants.js";
-import { getAllBuiltinNames } from "../builtins";
+import { getAllBuiltinNames } from "../helpers/registry.js";
 import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
 import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";

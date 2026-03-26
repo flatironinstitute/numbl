@@ -12,17 +12,17 @@ import {
   isFullyUnknown,
   isString,
   isChar,
-} from "../../lowering/itemTypes.js";
+} from "../lowering/itemTypes.js";
 import {
   FloatXArray,
   type FloatXArrayType,
   isRuntimeChar,
   isRuntimeNumber,
   isRuntimeString,
-} from "../../runtime/types.js";
-import { colMajorIndex, RTV, RuntimeValue } from "../../runtime/index.js";
-import { RuntimeError } from "../../runtime/index.js";
-import { getBuiltin } from "../registry.js";
+} from "../runtime/types.js";
+import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
+import { RuntimeError } from "../runtime/index.js";
+import { getBuiltin } from "./registry.js";
 
 /**
  * Returns true when A is a plausible numeric/matrix input

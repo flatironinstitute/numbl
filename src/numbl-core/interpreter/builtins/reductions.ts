@@ -29,8 +29,8 @@ import {
   scanLogical,
   logicalAlongDim,
   type ReductionKernel,
-} from "../../builtins/reduction/helpers.js";
-import { cumOp, diffOnce } from "../../builtins/reduction/cumulative.js";
+} from "../../helpers/reduction-helpers.js";
+import { cumOp, diffOnce } from "../../helpers/reduction/cumulative.js";
 import { rstr } from "../../runtime/runtime.js";
 
 // ── Type rule helpers ──────────────────────────────────────────────────
@@ -655,7 +655,7 @@ defineBuiltin({
 import {
   getBroadcastShape,
   broadcastIterate,
-} from "../../builtins/arithmetic.js";
+} from "../../helpers/arithmetic.js";
 
 defineBuiltin({
   name: "xor",

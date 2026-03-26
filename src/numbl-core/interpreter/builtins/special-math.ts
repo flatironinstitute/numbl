@@ -24,7 +24,7 @@ import {
   bessely,
   besseli,
   besselk,
-} from "../../builtins/bessel.js";
+} from "../../helpers/bessel.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

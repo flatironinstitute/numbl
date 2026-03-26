@@ -28,7 +28,7 @@ import {
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../jit/jitTypes.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
-import { linsolveLapack } from "../../builtins/linear-algebra/linsolve.js";
+import { linsolveLapack } from "../../helpers/linsolve.js";
 
 function toFloatArray(v: RuntimeValue): FloatXArrayType {
   if (isRuntimeNumber(v)) return new FloatXArray([v as number]);

@@ -25,7 +25,7 @@ import {
   parseEconArgRuntime,
   toF64,
   unknownMatrix,
-} from "./check-helpers.js";
+} from "../check-helpers.js";
 
 // ── LAPACK helper ─────────────────────────────────────────────────────────────
 

@@ -24,11 +24,8 @@ import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
-import {
-  linsolveLapack,
-  linsolveComplexLapack,
-} from "./linear-algebra/linsolve.js";
-import { applyBuiltin as applyBuiltinFn } from "./linear-algebra/check-helpers.js";
+import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
+import { applyBuiltin as applyBuiltinFn } from "./check-helpers.js";
 import { coerceToTensor } from "./shape-utils.js";
 import {
   mAddSparse,

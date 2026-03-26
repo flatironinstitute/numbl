@@ -39,11 +39,9 @@ import {
 } from "../db/operations";
 import { validateProjectName } from "../utils/validation";
 import type { Project } from "../db/schema";
-import {
-  getAllBuiltinNames,
-  getAllConstantNames,
-} from "../numbl-core/builtins";
-import { getDummyBuiltinNames } from "../numbl-core/builtins/dummy";
+import { getAllBuiltinNames } from "../numbl-core/helpers/registry.js";
+import { getAllConstantNames } from "../numbl-core/helpers/constants.js";
+import { getDummyBuiltinNames } from "../numbl-core/helpers/dummy.js";
 
 interface ProjectWithMetadata extends Project {
   fileCount: number;

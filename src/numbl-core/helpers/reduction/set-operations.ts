@@ -22,7 +22,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { rstr } from "../../runtime/runtime.js";
-import { toNumArray } from "./helpers.js";
+import { toNumArray } from "../reduction-helpers.js";
 
 export function registerSetOperations(): void {
   // ── find ─────────────────────────────────────────────────────────────

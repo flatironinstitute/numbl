@@ -20,7 +20,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { rstr } from "../../runtime/runtime.js";
-import { preserveTypeCheck } from "./helpers.js";
+import { preserveTypeCheck } from "../reduction-helpers.js";
 
 export function registerSortUnique(): void {
   // ── sort ─────────────────────────────────────────────────────────────

@@ -79,7 +79,7 @@ export {
   mLessEqual,
   mGreater,
   mGreaterEqual,
-} from "../builtins/arithmetic.js";
+} from "../helpers/arithmetic.js";
 
 export {
   COLON_INDEX,

@@ -32,7 +32,7 @@ import {
   mGreater,
   mGreaterEqual,
   mNeg,
-} from "../../builtins/arithmetic.js";
+} from "../../helpers/arithmetic.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 

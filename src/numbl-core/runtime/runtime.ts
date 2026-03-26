@@ -41,7 +41,15 @@ import {
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { type ItemType } from "../lowering/itemTypes.js";
 import { BinaryOperation } from "../lowering/index.js";
-import { getBuiltin, getAllBuiltinNames, getConstant } from "../builtins";
+import { getBuiltin, getAllBuiltinNames } from "../helpers/registry.js";
+import { getConstant } from "../helpers/constants.js";
+// Register legacy builtins into the registry (fallback path for rt.builtins)
+import { registerMathFunctions } from "../helpers/math.js";
+import { registerReductionFunctions } from "../helpers/reduction/register-reduction-functions.js";
+import { registerLinearAlgebraFunctions } from "../helpers/linear-algebra/register-linear-algebra-functions.js";
+registerMathFunctions();
+registerReductionFunctions();
+registerLinearAlgebraFunctions();
 import {
   COLON_SENTINEL,
   END_SENTINEL,

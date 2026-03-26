@@ -38,7 +38,7 @@ export {
 export type { IBuiltin, IBuiltinResolution } from "./types.js";
 
 // Register IBuiltin + special builtin names so isBuiltin() recognizes them
-import { registerExtraBuiltinNames } from "../../builtins/registry.js";
+import { registerExtraBuiltinNames } from "../../helpers/registry.js";
 import { getAllIBuiltinNames as _getAllIBuiltinNames } from "./types.js";
 import { SPECIAL_BUILTIN_NAMES } from "../../runtime/specialBuiltins.js";
 registerExtraBuiltinNames(_getAllIBuiltinNames());

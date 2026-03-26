@@ -13,7 +13,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { register, builtinSingle } from "../registry.js";
-import { unknownMatrix } from "./check-helpers.js";
+import { unknownMatrix } from "../check-helpers.js";
 
 export function registerKron(): void {
   register(

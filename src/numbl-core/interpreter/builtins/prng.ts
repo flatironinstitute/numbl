@@ -21,7 +21,7 @@ import {
   setRngSeed,
   getRngStateStruct,
   restoreRngState,
-} from "../../builtins/prng.js";
+} from "../../helpers/prng.js";
 
 // ── Shape parsing (local, mirrors builtins/shape-utils.ts) ──────────────
 

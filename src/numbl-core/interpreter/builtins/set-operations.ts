@@ -24,7 +24,7 @@ import {
 import { rstr } from "../../runtime/runtime.js";
 import type { JitType } from "../jit/jitTypes.js";
 import { defineBuiltin } from "./types.js";
-import { toNumArray } from "../../builtins/reduction/helpers.js";
+import { toNumArray } from "../../helpers/reduction-helpers.js";
 
 // ── find ─────────────────────────────────────────────────────────────────
 

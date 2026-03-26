@@ -8,8 +8,8 @@ import {
   type RuntimeTensor,
   type RuntimeValue,
 } from "../../runtime/types.js";
-import { mElemPow } from "../../builtins/arithmetic.js";
-import { minMaxImpl } from "../../builtins/reduction/min-max.js";
+import { mElemPow } from "../../helpers/arithmetic.js";
+import { minMaxImpl } from "../../helpers/reduction/min-max.js";
 import {
   type BuiltinCase,
   defineBuiltin,

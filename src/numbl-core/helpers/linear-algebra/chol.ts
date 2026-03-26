@@ -31,7 +31,7 @@ import {
   parseStringArgLower,
   toF64,
   unknownMatrix,
-} from "./check-helpers.js";
+} from "../check-helpers.js";
 import { IType, isTensor, isFullyUnknown } from "../../lowering/itemTypes.js";
 import { sparseToDense } from "../sparse-arithmetic.js";
 

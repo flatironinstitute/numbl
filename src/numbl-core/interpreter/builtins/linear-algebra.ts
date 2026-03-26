@@ -41,9 +41,9 @@ import {
   buildEigenvectorMatrix,
   maybeComplexTensor,
   gaussJordanEliminate,
-} from "../../builtins/linear-algebra/check-helpers.js";
-import { forEachSlice, copyTensor } from "../../builtins/reduction/helpers.js";
-import { sparseToDense } from "../../builtins/sparse-arithmetic.js";
+} from "../../helpers/check-helpers.js";
+import { forEachSlice, copyTensor } from "../../helpers/reduction-helpers.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import {
   isRuntimeSparseMatrix,
   type FloatXArrayType,
@@ -51,7 +51,7 @@ import {
 import {
   linsolveLapack,
   linsolveComplexLapack,
-} from "../../builtins/linear-algebra/linsolve.js";
+} from "../../helpers/linsolve.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 

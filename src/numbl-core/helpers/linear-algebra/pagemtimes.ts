@@ -21,7 +21,7 @@ import {
 } from "../../runtime/types.js";
 import { rstr } from "../../runtime/runtime.js";
 import { register, builtinSingle } from "../registry.js";
-import { unknownMatrix } from "./check-helpers.js";
+import { unknownMatrix } from "../check-helpers.js";
 
 function matMulPage(
   aData: FloatXArrayType,

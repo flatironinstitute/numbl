@@ -52,8 +52,8 @@ import { END_SENTINEL } from "../executor/types.js";
 import {
   linsolveLapack,
   linsolveComplexLapack,
-} from "../../numbl-core/builtins/linear-algebra/linsolve.js";
-import { sparseToDense as sparseToDenseFn } from "../../numbl-core/builtins/sparse-arithmetic.js";
+} from "../../numbl-core/helpers/linsolve.js";
+import { sparseToDense as sparseToDenseFn } from "../../numbl-core/helpers/sparse-arithmetic.js";
 import {
   type DeferredRange,
   type DeferredHorzcat,

@@ -9,8 +9,8 @@ import {
   toNumber,
   toString,
   RuntimeError,
-} from "../../runtime/index.js";
-import { ItemType } from "../../lowering/itemTypes.js";
+} from "../runtime/index.js";
+import { ItemType } from "../lowering/itemTypes.js";
 import {
   FloatXArray,
   isRuntimeChar,
@@ -19,7 +19,7 @@ import {
   isRuntimeTensor,
   type RuntimeTensor,
   type RuntimeSparseMatrix,
-} from "../../runtime/types.js";
+} from "../runtime/types.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 

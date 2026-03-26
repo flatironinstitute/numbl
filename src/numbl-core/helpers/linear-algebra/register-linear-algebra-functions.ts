@@ -8,7 +8,7 @@ import { registerQr } from "./qr.js";
 import { registerInv } from "./inv.js";
 import { registerDet } from "./det.js";
 import { registerSvd } from "./svd.js";
-import { registerLinsolve } from "./linsolve.js";
+import { registerLinsolve } from "../linsolve.js";
 import { registerFft } from "./fft.js";
 import { registerKron } from "./kron.js";
 import { registerEig } from "./eig.js";

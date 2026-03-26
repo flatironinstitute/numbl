@@ -21,7 +21,7 @@ import type {
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import { RuntimeError } from "../../runtime/error.js";
-import { sprintfFormat } from "../../builtins/string.js";
+import { sprintfFormat } from "../../helpers/string.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 

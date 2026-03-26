@@ -28,7 +28,7 @@ import {
   firstReduceDim,
   copyTensor,
   minMaxCheck,
-} from "./helpers.js";
+} from "../reduction-helpers.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 

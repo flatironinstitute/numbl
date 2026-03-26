@@ -1,5 +1,6 @@
 import type * as monaco from "monaco-editor";
-import { getAllBuiltinNames, getAllConstantNames } from "./numbl-core/builtins";
+import { getAllBuiltinNames } from "./numbl-core/helpers/registry.js";
+import { getAllConstantNames } from "./numbl-core/helpers/constants.js";
 
 export const numblLanguageConfig: monaco.languages.LanguageConfiguration = {
   comments: {

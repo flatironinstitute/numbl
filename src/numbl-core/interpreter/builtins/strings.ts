@@ -24,7 +24,7 @@ import {
 } from "../../runtime/index.js";
 import type { JitType } from "../jit/jitTypes.js";
 import { registerIBuiltin } from "./types.js";
-import { sprintfFormat } from "../../builtins/string.js";
+import { sprintfFormat } from "../../helpers/string.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────
 

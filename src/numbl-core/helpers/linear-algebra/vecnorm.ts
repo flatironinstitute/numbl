@@ -11,7 +11,7 @@ import {
   type RuntimeTensor,
 } from "../../runtime/types.js";
 import { register, builtinSingle } from "../registry.js";
-import { forEachSlice, copyTensor } from "../reduction/helpers.js";
+import { forEachSlice, copyTensor } from "../reduction-helpers.js";
 
 function vecnormImpl(
   args: import("../../runtime/types.js").RuntimeValue[]
