@@ -122,7 +122,7 @@ const conjCases: BuiltinCase[] = [
     apply: args => {
       const v = args[0];
       if (isRuntimeSparseMatrix(v))
-        return conjCases[2].apply([sparseToDense(v)]);
+        return conjCases[2].apply([sparseToDense(v)], 1);
       throw new Error("conj: unsupported argument type");
     },
   },
