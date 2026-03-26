@@ -399,28 +399,77 @@ registerIBuiltin({
 
 // ── Text→boolean functions ────────────────────────────────────────────
 
+function isText(v: RuntimeValue): boolean {
+  return isRuntimeChar(v) || isRuntimeString(v);
+}
+
+/** Element-wise strcmp helper supporting cell arrays. */
+function strcmpApply(
+  args: RuntimeValue[],
+  cmp: (a: string, b: string) => boolean
+): RuntimeValue {
+  const a = args[0];
+  const b = args[1];
+  const aIsCell = isRuntimeCell(a);
+  const bIsCell = isRuntimeCell(b);
+
+  if (!aIsCell && !bIsCell) {
+    // Scalar comparison
+    if (!isText(a) || !isText(b)) return RTV.logical(false);
+    return RTV.logical(cmp(toString(a), toString(b)));
+  }
+
+  // At least one cell array — element-wise comparison
+  if (aIsCell && bIsCell) {
+    // Both cells — must be same size
+    const cellA = a as import("../../runtime/types.js").RuntimeCell;
+    const cellB = b as import("../../runtime/types.js").RuntimeCell;
+    const len = cellA.data.length;
+    const result = new FloatXArray(len);
+    for (let i = 0; i < len; i++) {
+      const ai = cellA.data[i];
+      const bi = cellB.data[i];
+      result[i] =
+        isText(ai) && isText(bi) && cmp(toString(ai), toString(bi)) ? 1 : 0;
+    }
+    return {
+      kind: "tensor",
+      data: result,
+      shape: cellA.shape.slice(),
+      _isLogical: true,
+      _rc: 1,
+    };
+  }
+
+  // One cell, one scalar
+  const cell = (
+    aIsCell ? a : b
+  ) as import("../../runtime/types.js").RuntimeCell;
+  const scalar = aIsCell ? b : a;
+  const len = cell.data.length;
+  const result = new FloatXArray(len);
+  for (let i = 0; i < len; i++) {
+    const elem = cell.data[i];
+    const [s1, s2] = aIsCell ? [elem, scalar] : [scalar, elem];
+    result[i] =
+      isText(s1) && isText(s2) && cmp(toString(s1), toString(s2)) ? 1 : 0;
+  }
+  return {
+    kind: "tensor",
+    data: result,
+    shape: cell.shape.slice(),
+    _isLogical: true,
+    _rc: 1,
+  };
+}
+
 registerIBuiltin({
   name: "strcmp",
   resolve: argTypes => {
     if (argTypes.length !== 2) return null;
-    // Fall back to legacy for cell arrays (unknown kind)
-    if (argTypes[0].kind === "unknown" || argTypes[1].kind === "unknown")
-      return null;
-    if (!isTextType(argTypes[0]) && !isTextType(argTypes[1])) return null;
     return {
       outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        // Delegate to legacy for cell arrays
-        if (isRuntimeCell(args[0]) || isRuntimeCell(args[1])) {
-          throw new RuntimeError("strcmp: IBuiltin cell fallback");
-        }
-        if (
-          !(isRuntimeChar(args[0]) || isRuntimeString(args[0])) ||
-          !(isRuntimeChar(args[1]) || isRuntimeString(args[1]))
-        )
-          return RTV.logical(false);
-        return RTV.logical(toString(args[0]) === toString(args[1]));
-      },
+      apply: args => strcmpApply(args, (a, b) => a === b),
     };
   },
 });
@@ -429,24 +478,10 @@ registerIBuiltin({
   name: "strcmpi",
   resolve: argTypes => {
     if (argTypes.length !== 2) return null;
-    if (argTypes[0].kind === "unknown" || argTypes[1].kind === "unknown")
-      return null;
-    if (!isTextType(argTypes[0]) && !isTextType(argTypes[1])) return null;
     return {
       outputTypes: [{ kind: "boolean" }],
-      apply: args => {
-        if (isRuntimeCell(args[0]) || isRuntimeCell(args[1])) {
-          throw new RuntimeError("strcmpi: IBuiltin cell fallback");
-        }
-        if (
-          !(isRuntimeChar(args[0]) || isRuntimeString(args[0])) ||
-          !(isRuntimeChar(args[1]) || isRuntimeString(args[1]))
-        )
-          return RTV.logical(false);
-        return RTV.logical(
-          toString(args[0]).toLowerCase() === toString(args[1]).toLowerCase()
-        );
-      },
+      apply: args =>
+        strcmpApply(args, (a, b) => a.toLowerCase() === b.toLowerCase()),
     };
   },
 });
@@ -455,10 +490,10 @@ registerIBuiltin({
   name: "strncmp",
   resolve: argTypes => {
     if (argTypes.length !== 3) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
     return {
       outputTypes: [{ kind: "boolean" }],
       apply: args => {
+        if (!isText(args[0]) || !isText(args[1])) return RTV.logical(false);
         const n = Math.round(toNumber(args[2]));
         const s1 = toString(args[0]);
         const s2 = toString(args[1]);
@@ -476,10 +511,10 @@ registerIBuiltin({
   name: "strncmpi",
   resolve: argTypes => {
     if (argTypes.length !== 3) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
     return {
       outputTypes: [{ kind: "boolean" }],
       apply: args => {
+        if (!isText(args[0]) || !isText(args[1])) return RTV.logical(false);
         const n = Math.round(toNumber(args[2]));
         const s1 = toString(args[0]).toLowerCase();
         const s2 = toString(args[1]).toLowerCase();

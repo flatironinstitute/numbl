@@ -11,6 +11,7 @@ import {
   isRuntimeTensor,
   isRuntimeChar,
   isRuntimeString,
+  type RuntimeChar,
   isRuntimeCell,
   isRuntimeStruct,
   isRuntimeStructArray,
@@ -32,7 +33,6 @@ function anyToLogicalCase(
   return {
     match: argTypes => {
       if (argTypes.length !== 1) return null;
-      if (argTypes[0].kind === "unknown") return null;
       return [{ kind: "boolean" }];
     },
     apply: applyFn,
@@ -315,7 +315,6 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind === "unknown") return null;
         return [{ kind: "number", sign: "nonneg" as const }];
       },
       apply: args => {
@@ -351,7 +350,6 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind === "unknown") return null;
         return [{ kind: "number", sign: "nonneg" as const }];
       },
       apply: args => {
@@ -393,7 +391,6 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind === "unknown") return null;
         return [{ kind: "number", sign: "nonneg" as const }];
       },
       apply: args => {
@@ -424,7 +421,6 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length !== 2) return null;
-        if (argTypes[0].kind === "unknown") return null;
         const dimKind = argTypes[1].kind;
         if (dimKind !== "number" && dimKind !== "boolean") return null;
         return [{ kind: "number", sign: "nonneg" as const }];
@@ -441,7 +437,6 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind === "unknown") return null;
         const a = argTypes[0];
         const ndims = a.kind === "tensor" && a.shape ? a.shape.length : 2;
         return [
@@ -484,119 +479,62 @@ defineBuiltin({
 
 // ── class() ──────────────────────────────────────────────────────────────
 
+/** Helper to create a RuntimeChar value. */
+function mkChar(value: string): RuntimeChar {
+  return { kind: "char", value };
+}
+
 defineBuiltin({
   name: "class",
   cases: [
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "complex_or_number")
-          return [{ kind: "string", value: "double" }];
-        return null;
-      },
-      apply: () => "double",
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "boolean") return null;
-        return [{ kind: "string", value: "logical" }];
-      },
-      apply: () => "logical",
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (a.kind !== "tensor") return null;
-        return [{ kind: "string", value: a.isLogical ? "logical" : "double" }];
+        return [{ kind: "char" }];
       },
       apply: args => {
         const v = args[0];
-        if (isRuntimeTensor(v)) return v._isLogical ? "logical" : "double";
-        throw new Error("class: unexpected tensor state");
-      },
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "string") return null;
-        return [{ kind: "string", value: "string" }];
-      },
-      apply: () => "string",
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "char") return null;
-        return [{ kind: "string", value: "char" }];
-      },
-      apply: () => "char",
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        if (argTypes[0].kind !== "struct") return null;
-        return [{ kind: "string", value: "struct" }];
-      },
-      apply: () => "struct",
-    },
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
-        if (a.kind !== "class_instance") return null;
-        return [{ kind: "string", value: a.className }];
-      },
-      apply: args => {
-        const v = args[0];
-        if (isRuntimeClassInstance(v)) return v.className;
-        throw new Error("class: unexpected class_instance state");
-      },
-    },
-    // Fallback for runtime types not representable in JitType (cell, function_handle, etc.)
-    {
-      match: argTypes => {
-        if (argTypes.length !== 1) return null;
-        // Accept unknown — fall through to runtime dispatch
-        return null;
-      },
-      apply: args => {
-        const v = args[0];
-        if (typeof v === "number") return "double";
-        if (typeof v === "boolean") return "logical";
-        if (isRuntimeComplexNumber(v)) return "double";
-        if (isRuntimeSparseMatrix(v)) return "double";
-        if (isRuntimeCell(v)) return "cell";
-        if (isRuntimeStruct(v)) return "struct";
-        if (isRuntimeFunction(v)) return "function_handle";
-        if (isRuntimeDummyHandle(v)) return "dummy_handle";
-        if (isRuntimeStructArray(v)) return "struct";
-        return "unknown";
+        if (typeof v === "number") return mkChar("double");
+        if (typeof v === "boolean") return mkChar("logical");
+        if (isRuntimeComplexNumber(v)) return mkChar("double");
+        if (isRuntimeTensor(v))
+          return mkChar(v._isLogical ? "logical" : "double");
+        if (isRuntimeSparseMatrix(v)) return mkChar("double");
+        if (isRuntimeString(v)) return mkChar("string");
+        if (isRuntimeChar(v)) return mkChar("char");
+        if (isRuntimeStruct(v) || isRuntimeStructArray(v))
+          return mkChar("struct");
+        if (isRuntimeCell(v)) return mkChar("cell");
+        if (isRuntimeClassInstance(v)) return mkChar(v.className);
+        if (isRuntimeFunction(v)) return mkChar("function_handle");
+        if (isRuntimeDummyHandle(v)) return mkChar("dummy_handle");
+        return mkChar("unknown");
       },
     },
   ],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
+    const wrap = (s: string) => `{kind:"char",value:"${s}"}`;
     switch (k) {
       case "number":
       case "complex_or_number":
-        return '"double"';
+        return wrap("double");
       case "boolean":
-        return '"logical"';
+        return wrap("logical");
       case "tensor":
         return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-          ? '"logical"'
-          : '"double"';
+          ? wrap("logical")
+          : wrap("double");
       case "string":
-        return '"string"';
+        return wrap("string");
       case "char":
-        return '"char"';
+        return wrap("char");
       case "struct":
-        return '"struct"';
+        return wrap("struct");
       case "class_instance":
-        return `"${(types[0] as Extract<JitType, { kind: "class_instance" }>).className}"`;
+        return wrap(
+          (types[0] as Extract<JitType, { kind: "class_instance" }>).className
+        );
       default:
         return null;
     }

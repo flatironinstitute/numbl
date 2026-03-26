@@ -46,8 +46,6 @@ function parseStdReductionArgs(argTypes: JitType[]): {
 } | null {
   if (argTypes.length === 0) return null;
   const inputType = argTypes[0];
-  if (inputType.kind === "unknown") return null;
-
   let rest = argTypes.slice(1);
 
   // Strip trailing char/string only if it's a known nanflag
@@ -300,8 +298,6 @@ defineBuiltin({
 function stdVarMatch(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length === 0) return null;
   const inputType = argTypes[0];
-  if (inputType.kind === "unknown") return null;
-
   let rest = argTypes.slice(1);
   if (rest.length > 0) {
     const last = rest[rest.length - 1];
