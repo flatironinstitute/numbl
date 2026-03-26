@@ -31,8 +31,6 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
-  /** Skip $rt.$file / $rt.$line tracking in generated code. */
-  noLineTracking?: boolean;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -50,8 +48,8 @@ export interface BuiltinProfileEntry {
 }
 
 export interface BuiltinProfileBreakdown {
-  /** Calls from the legacy codegen runtime path. */
-  legacy: BuiltinProfileEntry;
+  /** Calls from the registry fallback (rt.builtins). */
+  fallback: BuiltinProfileEntry;
   /** Calls from the interpreter (IBuiltin.resolve → apply). */
   interp: BuiltinProfileEntry;
   /** Calls from JIT-compiled code (ib_* helpers). */
@@ -59,16 +57,6 @@ export interface BuiltinProfileBreakdown {
 }
 
 export interface ProfileData {
-  codegenTimeMs: number;
-  codegenBreakdown: {
-    parseMainMs: number;
-    parseWorkspaceMs: number;
-    loadJsUserFunctionsMs: number;
-    registrationMs: number;
-    buildFunctionIndexMs: number;
-    lowerMainMs: number;
-    codegenMs: number;
-  };
   executionTimeMs: number;
   jitCompileTimeMs: number;
   builtins: Record<string, BuiltinProfileBreakdown>;

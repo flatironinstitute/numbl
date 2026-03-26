@@ -139,7 +139,7 @@ export function interpretCode(
     registerDynamicIBuiltin(ib);
   }
 
-  // Apply custom builtins (both to legacy rt.builtins and to customBuiltins
+  // Apply custom builtins (both to rt.builtins fallback and to customBuiltins
   // which take priority over IBuiltins in the interpreter)
   if (options.customBuiltins) {
     Object.assign(rt.builtins, options.customBuiltins);
@@ -216,16 +216,6 @@ export function interpretCode(
 
     if (options.profile) {
       result.profileData = {
-        codegenTimeMs: 0,
-        codegenBreakdown: {
-          parseMainMs: 0,
-          parseWorkspaceMs: 0,
-          loadJsUserFunctionsMs: 0,
-          registrationMs: 0,
-          buildFunctionIndexMs: 0,
-          lowerMainMs: 0,
-          codegenMs: 0,
-        },
         executionTimeMs,
         jitCompileTimeMs: rt.getJitCompileTimeMs(),
         builtins: rt.getBuiltinProfile(),

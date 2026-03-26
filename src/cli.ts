@@ -343,7 +343,7 @@ Options (for REPL):
   --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
-  --dump-js <file>   Write all generated JavaScript (main + JIT) to file
+  --dump-js <file>   Write JIT-generated JavaScript to file
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -351,7 +351,6 @@ Options (for run and eval):
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
-  --no-line-tracking  Omit $rt.$file/$rt.$line from generated JS
   --opt <level>      Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
@@ -371,7 +370,6 @@ interface ParsedOptions {
   extraPaths: string[];
   positional: string[];
   profileOutput: string | undefined;
-  noLineTracking: boolean;
   optimization: number;
 }
 
@@ -387,7 +385,6 @@ function parseOptions(args: string[]): ParsedOptions {
     extraPaths: [],
     positional: [],
     profileOutput: undefined,
-    noLineTracking: false,
     optimization: 0,
   };
 
@@ -459,9 +456,6 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.profileOutput = resolve(process.cwd(), args[i]);
-        break;
-      case "--no-line-tracking":
-        opts.noLineTracking = true;
         break;
       case "--opt":
         i++;
@@ -590,15 +584,15 @@ async function executeWithOptions(
     const builtins = Object.entries(pd.builtins)
       .map(([name, b]) => ({
         name,
-        legacy: b.legacy,
+        fallback: b.fallback,
         interp: b.interp,
         jit: b.jit,
       }))
       .sort((a, b) => {
         const aTotal =
-          a.legacy.totalTimeMs + a.interp.totalTimeMs + a.jit.totalTimeMs;
+          a.fallback.totalTimeMs + a.interp.totalTimeMs + a.jit.totalTimeMs;
         const bTotal =
-          b.legacy.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
+          b.fallback.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
         return bTotal - aTotal;
       });
     const dispatches = Object.entries(pd.dispatches)
@@ -610,8 +604,6 @@ async function executeWithOptions(
       .sort((a, b) => b.totalTimeMs - a.totalTimeMs);
     const profile = {
       totalTimeMs,
-      codegenTimeMs: pd.codegenTimeMs,
-      codegenBreakdown: pd.codegenBreakdown,
       executionTimeMs: pd.executionTimeMs,
       jitCompileTimeMs: pd.jitCompileTimeMs,
       builtins,
@@ -671,7 +663,7 @@ async function executeWithOptions(
               streamLine({ type: "drawnow", plotInstructions });
             },
             onJitCompile,
-            noLineTracking: opts.noLineTracking,
+
             fileIO,
 
             optimization: opts.optimization,
@@ -966,47 +958,20 @@ function cmdShowProfile(args: string[]) {
     data.dispatches ?? [];
   const builtins: {
     name: string;
-    legacy: { totalTimeMs: number; callCount: number };
+    fallback: { totalTimeMs: number; callCount: number };
     interp: { totalTimeMs: number; callCount: number };
     jit: { totalTimeMs: number; callCount: number };
   }[] = data.builtins ?? [];
   const sumDispatches = dispatches.reduce((s, d) => s + d.totalTimeMs, 0);
   const sumBuiltins = builtins.reduce(
     (s, b) =>
-      s + b.legacy.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs,
+      s + b.fallback.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs,
     0
   );
   const otherTime =
     data.executionTimeMs - jitTime - sumDispatches - sumBuiltins;
 
   console.log(`Total time:      ${fmt(data.totalTimeMs)} ms`);
-  console.log(`Codegen time:    ${fmt(data.codegenTimeMs)} ms`);
-  if (data.codegenBreakdown) {
-    const cb = data.codegenBreakdown;
-    const cgTime = data.codegenTimeMs || 1;
-    const cgPct = (v: number) => fmt((v / cgTime) * 100);
-    console.log(
-      `  Parse main:    ${fmt(cb.parseMainMs)} ms (${cgPct(cb.parseMainMs)}%)`
-    );
-    console.log(
-      `  Parse workspace: ${fmt(cb.parseWorkspaceMs)} ms (${cgPct(cb.parseWorkspaceMs)}%)`
-    );
-    console.log(
-      `  Load JS funcs: ${fmt(cb.loadJsUserFunctionsMs)} ms (${cgPct(cb.loadJsUserFunctionsMs)}%)`
-    );
-    console.log(
-      `  Registration:  ${fmt(cb.registrationMs)} ms (${cgPct(cb.registrationMs)}%)`
-    );
-    console.log(
-      `  Func index:    ${fmt(cb.buildFunctionIndexMs)} ms (${cgPct(cb.buildFunctionIndexMs)}%)`
-    );
-    console.log(
-      `  Lower main:    ${fmt(cb.lowerMainMs)} ms (${cgPct(cb.lowerMainMs)}%)`
-    );
-    console.log(
-      `  Codegen emit:  ${fmt(cb.codegenMs)} ms (${cgPct(cb.codegenMs)}%)`
-    );
-  }
   console.log(`Execution time:  ${fmt(data.executionTimeMs)} ms`);
   console.log(
     `  JIT compile:   ${fmt(jitTime)} ms (${fmt((jitTime / execTime) * 100)}%)`
@@ -1054,7 +1019,7 @@ function cmdShowProfile(args: string[]) {
     const header =
       "Builtin".padEnd(nameW) +
       pad("Interp", 10) +
-      pad("Legacy", 10) +
+      pad("Fallback", 10) +
       pad("JIT", 10) +
       pad("Self (ms)", 13) +
       pad("% Exec", 9);
@@ -1064,12 +1029,12 @@ function cmdShowProfile(args: string[]) {
 
     for (const b of builtins) {
       const totalTime =
-        b.legacy.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
+        b.fallback.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
       const pct = (totalTime / execTime) * 100;
       const line =
         b.name.padEnd(nameW) +
         pad(String(b.interp.callCount), 10) +
-        pad(String(b.legacy.callCount), 10) +
+        pad(String(b.fallback.callCount), 10) +
         pad(String(b.jit.callCount), 10) +
         pad(fmt(totalTime, 2), 13) +
         pad(fmt(pct, 1) + "%", 9);
