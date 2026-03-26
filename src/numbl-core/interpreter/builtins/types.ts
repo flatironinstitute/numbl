@@ -53,10 +53,21 @@ export function registerIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
 }
 
+/** Callback invoked when a dynamic IBuiltin is registered, so jitHelpers can be updated. */
+let _onDynamicRegister: ((b: IBuiltin) => void) | null = null;
+
+/** Set a callback for dynamic IBuiltin registration (called by jitHelpers setup). */
+export function setDynamicRegisterHook(
+  hook: ((b: IBuiltin) => void) | null
+): void {
+  _onDynamicRegister = hook;
+}
+
 /** Register a dynamic IBuiltin (e.g. .js user functions), replacing any
  *  existing entry with the same name without error. */
 export function registerDynamicIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
+  _onDynamicRegister?.(b);
 }
 
 export function unregisterIBuiltin(name: string): void {

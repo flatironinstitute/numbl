@@ -429,5 +429,30 @@ export const jitHelpers = {
   // IBuiltin apply functions (populated by buildJitHelpers)
 } as Record<string, unknown>;
 
-import { buildIBuiltinHelpers } from "../builtins/index.js";
+import {
+  buildIBuiltinHelpers,
+  setDynamicRegisterHook,
+} from "../builtins/index.js";
 Object.assign(jitHelpers, buildIBuiltinHelpers());
+
+// Hook: when a dynamic IBuiltin is registered, add its ib_* entry to jitHelpers
+import type { IBuiltin } from "../builtins/index.js";
+import { inferJitType as _ijt } from "../builtins/index.js";
+setDynamicRegisterHook((b: IBuiltin) => {
+  const h = jitHelpers as Record<string, unknown>;
+  h[`ib_${b.name}`] = (...args: unknown[]) => {
+    const pe = h._profileEnter as (...a: unknown[]) => void;
+    const pl = h._profileLeave as (...a: unknown[]) => void;
+    pe("builtin:jit:" + b.name);
+    const rtArgs = args as import("../../runtime/types.js").RuntimeValue[];
+    const argTypes = rtArgs.map(_ijt);
+    const res = b.resolve(argTypes, 1);
+    if (!res) {
+      pl();
+      throw new Error(`JIT ib_${b.name}: resolve failed`);
+    }
+    const result = res.apply(rtArgs, 1);
+    pl();
+    return typeof result === "boolean" ? (result ? 1 : 0) : result;
+  };
+});

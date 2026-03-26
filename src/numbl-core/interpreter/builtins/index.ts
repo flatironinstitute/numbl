@@ -34,6 +34,7 @@ export {
   getIBuiltinNargin,
   getAllIBuiltinNames,
   buildIBuiltinHelpers,
+  setDynamicRegisterHook,
   inferJitType,
 } from "./types.js";
 export type { IBuiltin, IBuiltinResolution } from "./types.js";
