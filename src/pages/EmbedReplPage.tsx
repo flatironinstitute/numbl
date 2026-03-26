@@ -13,7 +13,7 @@ import {
   figuresReducer,
   initialFiguresState,
 } from "../graphics/figuresReducer.js";
-import type { PlotInstruction } from "../numbl-core/executor/types.js";
+import type { PlotInstruction } from "../graphics/types.js";
 import { extractMipDirectives } from "../mip-directives-core";
 import { loadMipPackageBrowser } from "../mip/browser-backend";
 

@@ -23,7 +23,7 @@ import {
   createNumblTokensProvider,
 } from "../numblLanguage.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
-import type { PlotInstruction } from "../numbl-core/executor/types.js";
+import type { PlotInstruction } from "../graphics/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,

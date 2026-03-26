@@ -1,5 +1,5 @@
 import { useReducer, useEffect, useRef, useState, useCallback } from "react";
-import type { PlotInstruction } from "../numbl-core/executor/types.js";
+import type { PlotInstruction } from "../graphics/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
