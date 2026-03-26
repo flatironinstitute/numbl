@@ -119,7 +119,7 @@ The integration test suite lives in [`numbl_test_scripts/`](numbl_test_scripts/)
 Run all integration tests:
 
 ```bash
-npm run test:scripts
+npm run test:interpret
 ```
 
 Or run a single test directly from source:

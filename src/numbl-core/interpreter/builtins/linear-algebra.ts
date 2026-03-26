@@ -2222,7 +2222,9 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
       bIm = B.imag ? toF64(B.imag) : new Float64Array(nn);
     const bridge = getEffectiveBridge("qzComplex", "qzComplex");
     if (!bridge.qzComplex)
-      throw new RuntimeError("qz: complex LAPACK bridge not available");
+      throw new RuntimeError(
+        "qz: complex LAPACK bridge not available (requires native addon)"
+      );
     const result = bridge.qzComplex(aRe, aIm, bRe, bIm, n, computeEigvecs);
     if (!result) throw new RuntimeError("qz: complex QZ failed");
     const AAout = RTV.tensor(

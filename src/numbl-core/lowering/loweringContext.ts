@@ -14,6 +14,7 @@ import { type IRVariable } from "../lowering/loweringTypes.js";
 import { type IRStmt } from "../lowering/nodes.js";
 import { VarId } from "../lowering/varId.js";
 import { getAllBuiltinNames } from "../builtins";
+import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import { type ClassInfo, extractClassInfo } from "./classInfo.js";
 import { computeSpecKey } from "./specKey.js";
@@ -982,7 +983,10 @@ export class LoweringContext {
    */
   buildFunctionIndex(jsUserFunctionNames?: string[]): FunctionIndex {
     // 1. Builtins
-    const builtins = new Set(getAllBuiltinNames());
+    const builtins = new Set([
+      ...getAllBuiltinNames(),
+      ...getAllIBuiltinNames(),
+    ]);
 
     // JS user functions resolve at workspace priority (after .m, before builtins).
     // Remove any shadowed builtins so the .js version takes precedence.

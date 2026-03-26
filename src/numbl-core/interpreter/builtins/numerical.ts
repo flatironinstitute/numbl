@@ -27,7 +27,7 @@ import {
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../jit/jitTypes.js";
-import { getLapackBridge } from "../../native/lapack-bridge.js";
+import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { linsolveLapack } from "../../builtins/linear-algebra/linsolve.js";
 
 function toFloatArray(v: RuntimeValue): FloatXArrayType {
@@ -611,8 +611,8 @@ defineBuiltin({
         for (let i = 0; i < n - 1; i++) C[(i + 1) * n + i] = 1;
         for (let i = 0; i < n; i++) C[i] = -p[i + 1] / p[0];
 
-        const bridge = getLapackBridge();
-        if (bridge && bridge.eig) {
+        const bridge = getEffectiveBridge("roots", "eig");
+        if (bridge.eig) {
           const f64 = C instanceof Float64Array ? C : new Float64Array(C);
           const eigResult = bridge.eig(
             f64 as Float64Array,
@@ -719,8 +719,8 @@ defineBuiltin({
 
         if (m !== n) throw new RuntimeError("poly: matrix must be square");
 
-        const bridge = getLapackBridge();
-        if (bridge && bridge.eig) {
+        const bridge = getEffectiveBridge("poly", "eig");
+        if (bridge.eig) {
           const f64 =
             A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
           const eigResult = bridge.eig(

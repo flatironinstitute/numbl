@@ -212,3 +212,29 @@ defineBuiltin({
     },
   ],
 });
+
+// ── rethrow ─────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "rethrow",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        return [{ kind: "number" }]; // never returns
+      },
+      apply: args => {
+        const me = args[0];
+        if (isRuntimeStruct(me)) {
+          const msgVal = me.fields.get("message");
+          const idVal = me.fields.get("identifier");
+          const msg = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
+          const err = new RuntimeError(msg);
+          if (idVal) err.identifier = textValue(idVal) ?? "";
+          throw err;
+        }
+        throw new RuntimeError(String(me));
+      },
+    },
+  ],
+});

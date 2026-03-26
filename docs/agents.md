@@ -40,7 +40,7 @@ Run both test suites before considering work complete:
 
 ```bash
 npm test              # unit tests (Vitest)
-npm run test:scripts  # integration tests (.m scripts)
+npm run test:interpret  # integration tests (.m scripts)
 ```
 
 ### Increasing coverage
