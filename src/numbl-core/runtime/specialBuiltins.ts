@@ -1,8 +1,9 @@
 /**
  * Special builtin functions that require direct runtime access.
  *
- * These builtins are registered separately from the standard builtin registry
- * because they need access to the Runtime instance methods.
+ * These builtins are registered as IBuiltins (via registerDynamicIBuiltin)
+ * that close over the Runtime instance, unifying them with the standard
+ * IBuiltin dispatch path.
  */
 
 import {
@@ -31,8 +32,9 @@ import {
   subsasgnBuiltin as _subsasgnBuiltin,
 } from "./runtimeDispatch.js";
 import type { Runtime } from "./runtime.js";
+import { registerDynamicIBuiltin } from "../interpreter/builtins/types.js";
 
-/** Names of all special builtins (functions requiring runtime access). */
+/** Names of all special builtins (needed at lowering time before runtime exists). */
 export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "disp",
   "fprintf",
@@ -59,20 +61,35 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "pause",
 ];
 
+/** Helper: register a special builtin as an IBuiltin that accepts any args. */
+function registerSpecial(
+  name: string,
+  fn: (nargout: number, args: RuntimeValue[]) => unknown
+): void {
+  registerDynamicIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [{ kind: "unknown" as const }],
+      apply: (args: RuntimeValue[], nargout: number) =>
+        fn(nargout, args) as RuntimeValue | RuntimeValue[],
+    }),
+  });
+}
+
 /**
- * Register all special builtins on the provided runtime instance.
+ * Register all special builtins as IBuiltins closing over the runtime instance.
  */
 export function registerSpecialBuiltins(rt: Runtime): void {
-  rt.builtins["disp"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("disp", (_nargout, args) => {
     if (args.length >= 1) {
       const mv = ensureRuntimeValue(args[0]);
       if (isRuntimeTensor(mv) && mv.data.length === 0) return 0;
       rt.output(displayValue(mv) + "\n");
     }
     return 0;
-  };
+  });
 
-  rt.builtins["fprintf"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fprintf", (_nargout, args) => {
     let output = "";
     if (args.length >= 1) {
       const margs = args.map(a => ensureRuntimeValue(a));
@@ -119,21 +136,21 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       }
     }
     return output.length;
-  };
+  });
 
-  rt.builtins["arrayfun"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("arrayfun", (nargout, args) => {
     return _arrayfunImpl(rt, nargout, args);
-  };
+  });
 
-  rt.builtins["cellfun"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("cellfun", (nargout, args) => {
     return _cellfunImpl(rt, nargout, args);
-  };
+  });
 
-  rt.builtins["structfun"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("structfun", (nargout, args) => {
     return _structfunImpl(rt, nargout, args);
-  };
+  });
 
-  rt.builtins["feval"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("feval", (nargout, args) => {
     if (args.length < 1)
       throw new RuntimeError("feval requires at least 1 argument");
     const fn = ensureRuntimeValue(args[0]);
@@ -152,21 +169,21 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     throw new RuntimeError(
       "feval: first argument must be a function handle or name"
     );
-  };
+  });
 
-  rt.builtins["bsxfun"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("bsxfun", (nargout, args) => {
     return _bsxfunImpl(rt, nargout, args);
-  };
+  });
 
-  rt.builtins["subsref"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("subsref", (nargout, args) => {
     return _subsrefBuiltin(rt, nargout, args);
-  };
+  });
 
-  rt.builtins["subsasgn"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("subsasgn", (nargout, args) => {
     return _subsasgnBuiltin(rt, nargout, args);
-  };
+  });
 
-  rt.builtins["builtin"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("builtin", (nargout, args) => {
     if (args.length < 1)
       throw new RuntimeError("builtin requires at least 1 argument");
     const fnNameArg = ensureRuntimeValue(args[0]);
@@ -180,12 +197,8 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         "builtin: first argument must be a function name or handle"
       );
     }
-    const fn = rt.builtins[fnName];
-    if (fn) {
-      return fn(nargout, args.slice(1));
-    }
     return rt.callBuiltin(fnName, nargout, args.slice(1));
-  };
+  });
 
   // ── File I/O builtins ──────────────────────────────────────────────
 
@@ -195,7 +208,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return rt.fileIO;
   };
 
-  rt.builtins["fopen"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fopen", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1)
@@ -203,9 +216,9 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     const filename = toString(margs[0]);
     const permission = margs.length >= 2 ? toString(margs[1]) : "r";
     return RTV.num(io.fopen(filename, permission));
-  };
+  });
 
-  rt.builtins["fclose"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fclose", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("fclose requires 1 argument");
@@ -216,49 +229,49 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       throw new RuntimeError("fclose: invalid argument");
     }
     return RTV.num(io.fclose(toNumber(arg)));
-  };
+  });
 
-  rt.builtins["fgetl"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fgetl", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("fgetl requires 1 argument");
     const result = io.fgetl(toNumber(margs[0]));
     return typeof result === "number" ? RTV.num(result) : RTV.char(result);
-  };
+  });
 
-  rt.builtins["fgets"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fgets", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("fgets requires 1 argument");
     const result = io.fgets(toNumber(margs[0]));
     return typeof result === "number" ? RTV.num(result) : RTV.char(result);
-  };
+  });
 
-  rt.builtins["fileread"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fileread", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1)
       throw new RuntimeError("fileread requires 1 argument");
     return RTV.char(io.fileread(toString(margs[0])));
-  };
+  });
 
-  rt.builtins["feof"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("feof", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("feof requires 1 argument");
     return RTV.num(io.feof(toNumber(margs[0])));
-  };
+  });
 
-  rt.builtins["ferror"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("ferror", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("ferror requires 1 argument");
     return RTV.char(io.ferror(toNumber(margs[0])));
-  };
+  });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──
 
-  rt.builtins["fileparts"] = (nargout: number, args: unknown[]) => {
+  registerSpecial("fileparts", (nargout, args) => {
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1)
       throw new RuntimeError("fileparts requires 1 argument");
@@ -274,17 +287,17 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     if (nargout <= 1) return RTV.char(dir);
     if (nargout === 2) return [RTV.char(dir), RTV.char(name)];
     return [RTV.char(dir), RTV.char(name), RTV.char(ext)];
-  };
+  });
 
-  rt.builtins["fullfile"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("fullfile", (_nargout, args) => {
     const margs = args.map(a => ensureRuntimeValue(a));
     const parts = margs.map(a => toString(a));
     return RTV.char(parts.join("/"));
-  };
+  });
 
   // ── Workspace builtins ───────────────────────────────────────────
 
-  rt.builtins["assignin"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("assignin", (_nargout, args) => {
     if (args.length < 3)
       throw new RuntimeError("assignin requires 3 arguments");
     const margs = args.map(a => ensureRuntimeValue(a));
@@ -300,9 +313,9 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       rt.setWorkspaceVariable(varName, args[2]);
     }
     return 0;
-  };
+  });
 
-  rt.builtins["evalin"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("evalin", (_nargout, args) => {
     if (args.length < 2)
       throw new RuntimeError("evalin requires at least 2 arguments");
     const margs = args.map(a => ensureRuntimeValue(a));
@@ -323,17 +336,17 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       );
     }
     return val;
-  };
+  });
 
   // ── Plot builtins ────────────────────────────────────────────────
 
-  rt.builtins["drawnow"] = () => {
+  registerSpecial("drawnow", () => {
     rt.drawnow();
     return 0;
-  };
+  });
 
-  rt.builtins["pause"] = (_nargout: number, args: unknown[]) => {
+  registerSpecial("pause", (_nargout, args) => {
     rt.pause(args[0] ?? 0);
     return 0;
-  };
+  });
 }

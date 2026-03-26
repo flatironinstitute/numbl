@@ -489,6 +489,10 @@ function lowerMultiAssign(
   if (!resolution || resolution.outputTypes.length < nargout) return null;
   const outputTypes = resolution.outputTypes;
 
+  // If any output type is unknown, bail — the builtin likely depends on
+  // runtime state and must go through dispatch.
+  if (outputTypes.some(t => t.kind === "unknown")) return null;
+
   // Update type environment for each output variable
   for (let i = 0; i < names.length; i++) {
     const name = names[i];
@@ -1093,6 +1097,10 @@ function lowerIBuiltinCall(
   const resolution = ib.resolve(argJitTypes, 1);
   if (!resolution || resolution.outputTypes.length === 0) return null;
   const outputTypes = resolution.outputTypes;
+
+  // If the output type is unknown, bail — the builtin likely depends on
+  // runtime state (e.g. evalin, assignin) and must go through dispatch.
+  if (outputTypes[0].kind === "unknown") return null;
 
   // IBuiltin calls always go through $h helpers
   ctx._hasTensorOps = true;

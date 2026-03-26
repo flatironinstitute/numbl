@@ -318,6 +318,15 @@ export function dispatch(
     const builtin = rt.builtins[name];
     if (builtin) return builtin(nargout, args);
 
+    // 4. IBuiltin fallback (special builtins + standard IBuiltins)
+    const ib = _getIBuiltin(name);
+    if (ib) {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      const argTypes = margs.map(_inferJitType);
+      const resolution = ib.resolve(argTypes, nargout);
+      if (resolution) return resolution.apply(margs, nargout);
+    }
+
     if (targetClassName) {
       throw new RuntimeError(
         `No method '${name}' for class '${targetClassName}'`
@@ -465,6 +474,15 @@ export function methodDispatch(
     // Builtins
     const builtin = rt.builtins[name];
     if (builtin) return builtin(nargout, args);
+
+    // IBuiltin fallback
+    const ib = _getIBuiltin(name);
+    if (ib) {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      const argTypes = margs.map(_inferJitType);
+      const resolution = ib.resolve(argTypes, nargout);
+      if (resolution) return resolution.apply(margs, nargout);
+    }
 
     throw new RuntimeError(`No method '${name}' found`);
   } finally {
