@@ -109,16 +109,7 @@ export class ExpressionParser extends ParserBase {
         !this.tokensAdjacent(this.pos - 1, this.pos) &&
         this.tokensAdjacent(this.pos, this.pos + 1)
       ) {
-        const rhsIndex = this.pos + 1;
-        const rhsIsImagLiteral =
-          (this.tokens[rhsIndex]?.token === Token.Integer ||
-            this.tokens[rhsIndex]?.token === Token.Float) &&
-          this.tokens[rhsIndex + 1]?.token === Token.Ident &&
-          (this.tokens[rhsIndex + 1]?.lexeme.toLowerCase() === "i" ||
-            this.tokens[rhsIndex + 1]?.lexeme.toLowerCase() === "j") &&
-          this.tokensAdjacent(rhsIndex, rhsIndex + 1);
-
-        if (!rhsIsImagLiteral) break;
+        break;
       }
 
       let op: BinaryOperation | undefined;
