@@ -99,6 +99,7 @@ export function executeCode(
   // Apply custom builtins (overrides defaults for this execution only)
   if (options.customBuiltins) {
     Object.assign(rt.builtins, options.customBuiltins);
+    Object.assign(rt.customBuiltins, options.customBuiltins);
   }
 
   // Wire up JIT compilation callbacks so the runtime can compile functions on demand

@@ -139,9 +139,11 @@ export function interpretCode(
     registerDynamicIBuiltin(ib);
   }
 
-  // Apply custom builtins
+  // Apply custom builtins (both to legacy rt.builtins and to customBuiltins
+  // which take priority over IBuiltins in the interpreter)
   if (options.customBuiltins) {
     Object.assign(rt.builtins, options.customBuiltins);
+    Object.assign(rt.customBuiltins, options.customBuiltins);
   }
 
   // ── 4. Create interpreter and wire up runtime callbacks ────────────

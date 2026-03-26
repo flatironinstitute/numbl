@@ -189,6 +189,13 @@ export class Runtime {
     (nargout: number, args: unknown[]) => unknown
   > = {};
 
+  // Custom builtins (execution-specific overrides, e.g. mip load's addpath).
+  // These take priority over IBuiltins.
+  public customBuiltins: Record<
+    string,
+    (nargout: number, args: unknown[]) => unknown
+  > = {};
+
   // JIT compilation callback: compiles and evaluates a specialized function at
   // runtime. Set by executeCode() to close over the LoweringContext and Codegen.
   // The callback handles the full resolution chain (local → class method →
