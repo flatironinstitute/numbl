@@ -650,11 +650,9 @@ export function callNestedFunction(
   args: unknown[],
   nargout: number
 ): unknown {
-  // Try JIT compilation for eligible functions
-  if (this.optimization >= 1) {
-    const jitResult = tryJitCall(this, fn, args, nargout);
-    if (jitResult !== JIT_SKIP) return jitResult;
-  }
+  // Nested functions share the parent workspace by reference — JIT compiles
+  // functions as pure (parameter-only), so it cannot handle shared state.
+  // Always use the interpreter for nested calls.
 
   const fnEnv = new Environment(parentEnv);
   fnEnv.isNested = true;

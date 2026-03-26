@@ -341,6 +341,7 @@ export function lowerFunction(
     env,
     localVars,
     params: new Set(fn.params),
+    assignedVars: new Set(fn.params),
     interp,
     generatedFns: sharedGeneratedFns,
     loweringInProgress: sharedInProgress,
@@ -348,6 +349,13 @@ export function lowerFunction(
   };
   const body = lowerStmts(ctx, fn.body);
   if (!body) return null;
+
+  // Bail if any required output variable was never assigned in the body.
+  // The interpreter throws a RuntimeError for this case; the JIT would
+  // silently return undefined/0 without this check.
+  for (const name of outputNames) {
+    if (!ctx.params.has(name) && !ctx.assignedVars.has(name)) return null;
+  }
 
   const outputType =
     outputNames.length > 0 ? (ctx.env.get(outputNames[0]) ?? null) : null;
@@ -368,6 +376,8 @@ interface LowerCtx {
   env: TypeEnv;
   localVars: Set<string>;
   params: Set<string>;
+  /** Variables that are actually assigned in the function body. */
+  assignedVars: Set<string>;
   _hasTensorOps?: boolean;
   interp?: Interpreter;
   generatedFns: Map<string, string>;
@@ -441,6 +451,7 @@ function lowerAssign(
   if (!expr) return null;
 
   ctx.env.set(stmt.name, expr.jitType);
+  ctx.assignedVars.add(stmt.name);
   if (!ctx.params.has(stmt.name)) ctx.localVars.add(stmt.name);
 
   return [{ tag: "Assign", name: stmt.name, expr }];
@@ -483,6 +494,7 @@ function lowerMultiAssign(
     const name = names[i];
     if (name !== null) {
       ctx.env.set(name, outputTypes[i]);
+      ctx.assignedVars.add(name);
       if (!ctx.params.has(name)) ctx.localVars.add(name);
     }
   }
@@ -584,6 +596,7 @@ function lowerFor(
 
   // Loop variable is always number
   ctx.env.set(stmt.varName, { kind: "number" });
+  ctx.assignedVars.add(stmt.varName);
   if (!ctx.params.has(stmt.varName)) ctx.localVars.add(stmt.varName);
 
   const envBefore = cloneEnv(ctx.env);
