@@ -1,9 +1,9 @@
 /**
  * LAPACK bridge — a module-level singleton that holds a reference to the
- * native addon when running under Node.js.
+ * active acceleration bridge.
  *
- * In the browser the bridge is never set (stays null) and callers fall back
- * to pure-JavaScript implementations.
+ * In Node.js this is usually the native addon. In the browser it can also be a
+ * Wasm-backed bridge that implements a subset of the same interface.
  *
  * Usage (CLI startup):
  *   import { setLapackBridge } from './numbl-core/native/lapack-bridge.js';
@@ -22,6 +22,9 @@
 export const NATIVE_ADDON_EXPECTED_VERSION = 1;
 
 export interface LapackBridge {
+  /** Human-readable label for logging/debugging. */
+  bridgeName?: string;
+
   /** Returns the native addon's version number. */
   addonVersion?(): number;
 
@@ -500,7 +503,7 @@ export interface LapackBridge {
 
 let _bridge: LapackBridge | null = null;
 
-export function setLapackBridge(bridge: LapackBridge): void {
+export function setLapackBridge(bridge: LapackBridge | null): void {
   _bridge = bridge;
 }
 

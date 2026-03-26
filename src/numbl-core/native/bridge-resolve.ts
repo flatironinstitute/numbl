@@ -20,16 +20,16 @@ export function getEffectiveBridge(
   opName: string,
   method?: keyof LapackBridge
 ): LapackBridge {
-  const native = getLapackBridge();
+  const active = getLapackBridge();
   const bridge =
-    method && native
-      ? native[method]
-        ? native
+    method && active
+      ? active[method]
+        ? active
         : getTsLapackBridge()
-      : (native ?? getTsLapackBridge());
+      : (active ?? getTsLapackBridge());
   if (!_logged.has(opName)) {
     _logged.add(opName);
-    const name = native ? "native LAPACK addon" : "ts-lapack (TypeScript)";
+    const name = active?.bridgeName ?? (active ? "native LAPACK addon" : "ts-lapack (TypeScript)");
     console.log(`[${opName}] using bridge: ${name}`);
   }
   return bridge;

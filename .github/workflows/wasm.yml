@@ -29,8 +29,18 @@ jobs:
       - name: Bundle stdlib
         run: npm run bundle:stdlib
 
+      - name: Prepare browser Wasm sources
+        run: node scripts/prepare-browser-wasm-sources.mjs ducc0-fft blas-lapack flame-blas-lapack >> "$GITHUB_ENV"
+
+      - name: Build browser Wasm kernels
+        env:
+          NUMBL_BROWSER_WASM_JOBS: "2"
+        run: node scripts/build-browser-wasm.mjs ducc0-fft blas-lapack flame-blas-lapack
+
       - name: Build WASM modules (simple)
         run: npm run build:wasm
 
       - name: Run WASM tests
+        env:
+          NUMBL_TEST_EXPERIMENTAL_WASM: "1"
         run: npm run test

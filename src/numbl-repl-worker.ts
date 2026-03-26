@@ -22,6 +22,7 @@ import { offsetToColumn, RuntimeError } from "./numbl-core/runtime/index.js";
 import { SyntaxError } from "./numbl-core/parser/index.js";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
+import { ensureBrowserWasmBridgeConfigured } from "./numbl-core/native/browser-wasm-bridge.js";
 
 // ── Persistent state ─────────────────────────────────────────────────────────
 
@@ -95,7 +96,7 @@ function formatError(
 
 // ── Worker message handler ───────────────────────────────────────────────────
 
-self.onmessage = (e: MessageEvent) => {
+self.onmessage = async (e: MessageEvent) => {
   const { type, code } = e.data;
 
   if (type === "clear") {
@@ -121,6 +122,7 @@ self.onmessage = (e: MessageEvent) => {
   if (type !== "execute") return;
 
   try {
+    await ensureBrowserWasmBridgeConfigured();
     const result = executeCode(
       code,
       {

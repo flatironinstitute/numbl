@@ -22,9 +22,11 @@
 #include "numbl_addon_common.h"
 #include <cstdlib>
 
+#ifdef NUMBL_USE_OPENBLAS
 extern "C" {
   void openblas_set_num_threads(int num_threads);
 }
+#endif
 
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
@@ -40,9 +42,11 @@ static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   // Use single-threaded BLAS unless the user explicitly set the env var.
   // Multi-threaded BLAS adds overhead for the many small matmuls in numbl.
+#ifdef NUMBL_USE_OPENBLAS
   if (!std::getenv("OPENBLAS_NUM_THREADS")) {
     openblas_set_num_threads(1);
   }
+#endif
   exports.Set(Napi::String::New(env, "addonVersion"),
               Napi::Function::New(env, AddonVersion));
   exports.Set(Napi::String::New(env, "inv"),

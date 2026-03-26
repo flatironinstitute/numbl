@@ -14,6 +14,7 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
+import { ensureBrowserWasmBridgeConfigured } from "./numbl-core/native/browser-wasm-bridge.js";
 
 /** Post a structured error message back to the main thread. */
 function postError(
@@ -41,7 +42,7 @@ function postError(
 
 // ── Worker message handler ───────────────────────────────────────────────────
 
-self.onmessage = (e: MessageEvent) => {
+self.onmessage = async (e: MessageEvent) => {
   const { type, code, options, workspaceFiles, mainFileName, searchPaths } =
     e.data;
   if (type !== "run") return;
@@ -51,6 +52,7 @@ self.onmessage = (e: MessageEvent) => {
   let generatedJS: string | undefined;
 
   try {
+    await ensureBrowserWasmBridgeConfigured();
     const result = executeCode(
       code,
       {
