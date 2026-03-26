@@ -1,6 +1,6 @@
 import type { PlotTrace } from "./types.js";
 
-export const TRACE_COLORS = [
+const TRACE_COLORS = [
   "#0072BD", // blue
   "#D95319", // red-orange
   "#EDB120", // yellow
@@ -32,7 +32,7 @@ export function getLineDash(style: string | undefined): number[] {
   }
 }
 
-export function niceTickStep(range: number, maxTicks: number): number {
+function niceTickStep(range: number, maxTicks: number): number {
   const rough = range / maxTicks;
   const pow = Math.pow(10, Math.floor(Math.log10(rough)));
   const norm = rough / pow;

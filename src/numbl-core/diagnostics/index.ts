@@ -14,7 +14,7 @@ import { SemanticError } from "../lowering/errors.js";
 import type { WorkspaceFile } from "../workspace/index.js";
 import { CompilationErrors } from "./errors.js";
 
-export interface DiagnosticInfo {
+interface DiagnosticInfo {
   message: string;
   errorType: "syntax" | "semantic" | "runtime" | "unknown";
   file: string | null;
@@ -35,7 +35,7 @@ export function getSourceForFile(
 }
 
 /** Extract a code snippet (with context lines and pointer) around a 1-based line number. */
-export function extractSnippetByLine(
+function extractSnippetByLine(
   source: string,
   lineNumber: number,
   contextLines = 2,
@@ -81,7 +81,7 @@ export function diagnoseErrors(
 }
 
 /** Extract structured diagnostic info from a single error thrown during compilation/execution. */
-export function diagnoseError(
+function diagnoseError(
   error: unknown,
   mainSource: string,
   mainFileName: string,

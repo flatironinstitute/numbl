@@ -121,14 +121,6 @@ export function isChar(t: ItemType): boolean | undefined {
   return false;
 }
 
-/** True for scalar numeric types (Number, Boolean, ComplexNumber). */
-export const isScalarType = (t: ItemType): boolean =>
-  t.kind === "Number" || t.kind === "Boolean" || t.kind === "ComplexNumber";
-
-/** True for complex-valued types (ComplexNumber or complex Tensor). */
-export const isComplexType = (t: ItemType): boolean =>
-  t.kind === "ComplexNumber" || (t.kind === "Tensor" && !!t.isComplex);
-
 export const IType = {
   Num: { kind: "Number" } as ItemType,
   Complex: { kind: "ComplexNumber" } as ItemType,

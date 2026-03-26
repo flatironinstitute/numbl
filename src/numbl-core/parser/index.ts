@@ -27,7 +27,7 @@ export function parseMFile(
  *    before each top-level 'function' keyword and at EOF, then re-parse.
  *    Functions can omit 'end'.
  */
-export function parseWithOptions(
+function parseWithOptions(
   input: string,
   fileName: string = "script.m"
 ): AbstractSyntaxTree {
