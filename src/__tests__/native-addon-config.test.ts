@@ -45,6 +45,7 @@ describe("native addon config", () => {
       "-lopenblas",
       "-lfftw3",
     ]);
+    expect(config.linkerFlags).toEqual(["-Wl,-rpath,/opt/math/lib"]);
     expect(config.includeDirs).toEqual([
       "/opt/math/include",
       "/opt/fftw/include",
@@ -112,6 +113,10 @@ describe("native addon config", () => {
       "-L/opt/fftw/lib",
       "-lfftw3",
     ]);
+    expect(config.linkerFlags).toEqual([
+      "-Wl,-rpath,/opt/openblas/lib",
+      "-Wl,-rpath,/opt/fftw/lib",
+    ]);
     expect(config.includeDirs).toEqual([
       "/opt/openblas/include",
       "/opt/fftw/include",
@@ -162,6 +167,10 @@ describe("native addon config", () => {
       "-lblas",
       "-L/opt/fftw/lib",
       "-lfftw3",
+    ]);
+    expect(config.linkerFlags).toEqual([
+      "-Wl,-rpath,/opt/lapack/lib",
+      "-Wl,-rpath,/opt/fftw/lib",
     ]);
     expect(config.defines).toEqual([
       "NUMBL_USE_FFTW=1",
@@ -227,6 +236,11 @@ describe("native addon config", () => {
       "-lflame",
       "-L/opt/fftw/lib",
       "-lfftw3",
+    ]);
+    expect(config.linkerFlags).toEqual([
+      "-Wl,-rpath,/opt/blis/lib",
+      "-Wl,-rpath,/opt/flame/lib",
+      "-Wl,-rpath,/opt/fftw/lib",
     ]);
     expect(config.includeDirs).toEqual([
       "/opt/blis/include",
@@ -311,6 +325,7 @@ describe("native addon config", () => {
     });
 
     expect(config.libraries).toEqual(["-lopenblas"]);
+    expect(config.linkerFlags).toEqual([]);
     expect(config.resolvedCapabilities).toEqual({
       blas: true,
       lapack: true,
@@ -337,6 +352,10 @@ describe("native addon config", () => {
     });
 
     expect(config.includeDirs).toContain("/opt/ducc/src");
+    expect(config.linkerFlags).toEqual([
+      "-Wl,-rpath,/opt/flame/lib",
+      "-Wl,-rpath,/opt/blis/lib",
+    ]);
     expect(config.selectedProviders).toEqual({
       blas: "blis",
       lapack: "libflame",
@@ -586,5 +605,22 @@ describe("native addon install", () => {
     expect(log).toHaveBeenCalledWith(
       expect.stringContaining("Native provider summary:")
     );
+  });
+
+  it("honors explicit runtime library path overrides", () => {
+    const config = resolveNativeAddonConfig({
+      env: {
+        NUMBL_NATIVE_LIBS: "-L/opt/math/lib -lopenblas -lfftw3",
+        NUMBL_NATIVE_RPATH_DIRS: ["/opt/math/lib", "/opt/alt/lib"].join(
+          delimiter
+        ),
+      },
+      execFileSyncImpl: vi.fn(),
+    });
+
+    expect(config.linkerFlags).toEqual([
+      "-Wl,-rpath,/opt/math/lib",
+      "-Wl,-rpath,/opt/alt/lib",
+    ]);
   });
 });

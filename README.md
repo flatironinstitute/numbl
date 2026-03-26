@@ -65,6 +65,10 @@ with both browser linalg targets side-by-side: it prefers `blas-lapack` for
 `matmul`, `inv`, and square `linsolve`, and uses `flame-blas-lapack` for
 rectangular `linsolve` when available. See [browser-wasm.md](docs/browser-wasm.md).
 
+Successful builds replace the runtime manifest by default. Use `--merge` only
+when you intentionally want to keep existing manifest entries and add explicit
+targets on top.
+
 Experimental browser kernels can still be built explicitly, for example:
 
 ```bash
@@ -84,7 +88,9 @@ npm run bench:backends -- --quick --verify-only
 npm run bench:backends -- --backend wasm:blas-lapack,wasm:flame-blas-lapack --markdown bench/results/wasm-report.md
 ```
 
-For in-browser measurements, start the web app and open `/bench`.
+For in-browser measurements, start the web app and open `/bench`. The browser
+page runs the same quick scenarios as the CLI harness and validates outputs
+before timing.
 
 ## Native addon configuration
 

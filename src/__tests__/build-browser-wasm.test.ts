@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { mergeRuntimeManifestTargets } from "../../scripts/build-browser-wasm.mjs";
 
 describe("build-browser-wasm manifest handling", () => {
-  it("merges successful single-target builds into the existing runtime manifest", () => {
+  it("replaces the runtime manifest by default so optional targets do not stick", () => {
     const merged = mergeRuntimeManifestTargets(
       [
         {
@@ -22,26 +22,61 @@ describe("build-browser-wasm manifest handling", () => {
         {
           name: "flame-blas-lapack",
           status: "built",
-          wasmPath: "/wasm-kernels/flame-blas-lapack.wasm",
+          wasmPath: "wasm-kernels/flame-blas-lapack.wasm",
           exports: ["malloc", "free", "numbl_linsolve_f64"],
         },
-      ]
+      ],
+      false
+    );
+
+    expect(merged).toEqual([
+      {
+        name: "flame-blas-lapack",
+        wasmPath: "wasm-kernels/flame-blas-lapack.wasm",
+        exports: ["malloc", "free", "numbl_linsolve_f64"],
+      },
+    ]);
+  });
+
+  it("merges successful single-target builds only when explicitly requested", () => {
+    const merged = mergeRuntimeManifestTargets(
+      [
+        {
+          name: "ducc0-fft",
+          wasmPath: "wasm-kernels/ducc0-fft.wasm",
+          exports: ["malloc", "free", "numbl_fft1d_f64"],
+        },
+        {
+          name: "blas-lapack",
+          wasmPath: "wasm-kernels/blas-lapack.wasm",
+          exports: ["malloc", "free", "numbl_matmul_f64"],
+        },
+      ],
+      [
+        {
+          name: "flame-blas-lapack",
+          status: "built",
+          wasmPath: "wasm-kernels/flame-blas-lapack.wasm",
+          exports: ["malloc", "free", "numbl_linsolve_f64"],
+        },
+      ],
+      true
     );
 
     expect(merged).toEqual([
       {
         name: "blas-lapack",
-        wasmPath: "/wasm-kernels/blas-lapack.wasm",
+        wasmPath: "wasm-kernels/blas-lapack.wasm",
         exports: ["malloc", "free", "numbl_matmul_f64"],
       },
       {
         name: "ducc0-fft",
-        wasmPath: "/wasm-kernels/ducc0-fft.wasm",
+        wasmPath: "wasm-kernels/ducc0-fft.wasm",
         exports: ["malloc", "free", "numbl_fft1d_f64"],
       },
       {
         name: "flame-blas-lapack",
-        wasmPath: "/wasm-kernels/flame-blas-lapack.wasm",
+        wasmPath: "wasm-kernels/flame-blas-lapack.wasm",
         exports: ["malloc", "free", "numbl_linsolve_f64"],
       },
     ]);

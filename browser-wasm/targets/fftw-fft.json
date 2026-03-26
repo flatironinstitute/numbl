@@ -3,6 +3,9 @@
   "description": "Build a standalone browser Wasm module using the Emscripten FFTW port for a flat 1D complex FFT ABI.",
   "enabledByDefault": false,
   "buildScript": "browser-wasm/wrappers/fftw-fft/build-fftw-fft.sh",
+  "capabilities": {
+    "fft1dComplex": true
+  },
   "exports": [
     "malloc",
     "free",

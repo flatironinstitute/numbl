@@ -3,6 +3,10 @@
   "description": "Build a standalone browser Wasm module wrapping DUCC0 FFT kernels.",
   "sourceRootEnv": "NUMBL_DUCC0_FFT_SRC_ROOT",
   "buildScript": "browser-wasm/wrappers/ducc0-fft/build-ducc0-fft.sh",
+  "capabilities": {
+    "fft1dComplex": true,
+    "fftAlongDim": true
+  },
   "exports": [
     "malloc",
     "free",

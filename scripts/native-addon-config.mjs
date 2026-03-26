@@ -62,6 +62,15 @@ function splitPathEnv(value) {
     .filter(Boolean);
 }
 
+function libraryDirFromToken(token) {
+  const raw = String(token ?? "").trim();
+  if (!raw) return null;
+  if (raw.startsWith("-L") && raw.length > 2) {
+    return raw.slice(2);
+  }
+  return null;
+}
+
 function uniqueTokens(tokens) {
   const seen = new Set();
   const out = [];
@@ -219,6 +228,17 @@ function stringDefine(name, value) {
   return `${name}=\\\"${String(value)}\\\"`;
 }
 
+function runtimeLibraryFlags(libraries, extraDirs = []) {
+  if (process.platform === "win32") {
+    return [];
+  }
+  const dirs = uniqueTokens([
+    ...extraDirs,
+    ...libraries.map(libraryDirFromToken).filter(Boolean),
+  ]);
+  return dirs.map(dir => `-Wl,-rpath,${dir}`);
+}
+
 function pkgConfig(args, execFileSyncImpl = execFileSync) {
   try {
     return execFileSyncImpl("pkg-config", args, {
@@ -255,6 +275,7 @@ export function resolveNativeAddonConfig(options = {}) {
     env.NUMBL_NATIVE_DUCC0_INCLUDE_DIRS ?? ""
   );
   const manualCflags = splitShellWords(env.NUMBL_NATIVE_CFLAGS ?? "");
+  const manualRpathDirs = splitPathEnv(env.NUMBL_NATIVE_RPATH_DIRS ?? "");
   const explicitFftBackend = String(env.NUMBL_NATIVE_FFT_BACKEND ?? "")
     .trim()
     .toLowerCase();
@@ -326,6 +347,7 @@ export function resolveNativeAddonConfig(options = {}) {
     ...otherCFlags(detectedFft?.cflags ?? []),
     ...manualCflags,
   ]);
+  const linkerFlags = runtimeLibraryFlags(libraries, manualRpathDirs);
 
   const resolvedCaps = inferCapabilities(libraries);
   const selectedProviders = {
@@ -384,6 +406,7 @@ export function resolveNativeAddonConfig(options = {}) {
 
   return {
     libraries,
+    linkerFlags,
     includeDirs,
     cflagsCc,
     defines,
@@ -430,6 +453,9 @@ function main(argv) {
     case "include-dirs":
       printTokens(config.includeDirs);
       break;
+    case "linker-flags":
+      printTokens(config.linkerFlags);
+      break;
     case "cflags-cc":
       printTokens(config.cflagsCc);
       break;
@@ -441,7 +467,7 @@ function main(argv) {
       break;
     default:
       console.error(
-        `Unknown command: ${command}. Use one of: libraries, include-dirs, cflags-cc, defines, summary.`
+        `Unknown command: ${command}. Use one of: libraries, include-dirs, linker-flags, cflags-cc, defines, summary.`
       );
       process.exit(1);
   }

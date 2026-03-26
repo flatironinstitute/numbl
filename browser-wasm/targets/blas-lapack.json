@@ -4,6 +4,11 @@
   "enabledByDefault": false,
   "sourceRootEnv": "NUMBL_BLAS_LAPACK_SRC_ROOT",
   "buildScript": "browser-wasm/wrappers/openblas-linalg/build-openblas-linalg.sh",
+  "capabilities": {
+    "matmul": true,
+    "inv": true,
+    "linsolveSquare": true
+  },
   "exports": [
     "malloc",
     "free",

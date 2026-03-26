@@ -18,6 +18,7 @@ function usage() {
 Options:
   --list    List available browser Wasm targets
   --all     Attempt every configured target, even if its source tree is missing
+  --merge   Merge explicitly built targets into the existing runtime manifest
   --help    Show this help message
 `);
 }
@@ -33,7 +34,7 @@ function relFromRoot(path) {
 
 function toRuntimeWasmPath(path) {
   const relPath = relFromRoot(path).replaceAll("\\", "/");
-  return relPath.startsWith("public/") ? `/${relPath.slice("public/".length)}` : `/${relPath}`;
+  return relPath.startsWith("public/") ? relPath.slice("public/".length) : relPath;
 }
 
 function expandEnvString(value) {
@@ -256,6 +257,11 @@ function buildTarget(target, localSourceConfig) {
       wasmPath: toRuntimeWasmPath(outputPath),
       sourceRoot: sourceRoot ? relFromRoot(sourceRoot) : undefined,
       exports: Array.isArray(target.exports) ? target.exports : [],
+      enabledByDefault: target.enabledByDefault !== false,
+      capabilities:
+        target.capabilities && typeof target.capabilities === "object"
+          ? target.capabilities
+          : undefined,
     };
   }
 
@@ -325,12 +331,21 @@ function buildTarget(target, localSourceConfig) {
     wasmPath: toRuntimeWasmPath(outputPath),
     sourceRoot: sourceRoot ? relFromRoot(sourceRoot) : undefined,
     exports: exportsList,
+    enabledByDefault: target.enabledByDefault !== false,
+    capabilities:
+      target.capabilities && typeof target.capabilities === "object"
+        ? target.capabilities
+        : undefined,
   };
 }
 
-export function mergeRuntimeManifestTargets(existingTargets, entries) {
+export function mergeRuntimeManifestTargets(
+  existingTargets,
+  entries,
+  preserveExisting = false
+) {
   const merged = new Map(
-    (existingTargets ?? []).map(target => [target.name, target])
+    preserveExisting ? (existingTargets ?? []).map(target => [target.name, target]) : []
   );
   for (const entry of entries) {
     if (entry.status !== "built") continue;
@@ -338,16 +353,22 @@ export function mergeRuntimeManifestTargets(existingTargets, entries) {
       name: entry.name,
       wasmPath: entry.wasmPath,
       exports: entry.exports,
+      enabledByDefault: entry.enabledByDefault,
+      ...(entry.capabilities ? { capabilities: entry.capabilities } : {}),
       ...(entry.sourceRoot ? { sourceRoot: entry.sourceRoot } : {}),
     });
   }
   return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-function writeRuntimeManifest(entries, existingTargets = []) {
+function writeRuntimeManifest(entries, existingTargets = [], preserveExisting = false) {
   mkdirSync(defaultOutputDir, { recursive: true });
   const manifestPath = join(defaultOutputDir, "manifest.json");
-  const mergedTargets = mergeRuntimeManifestTargets(existingTargets, entries);
+  const mergedTargets = mergeRuntimeManifestTargets(
+    existingTargets,
+    entries,
+    preserveExisting
+  );
   writeFileSync(
     manifestPath,
     JSON.stringify(
@@ -393,6 +414,7 @@ export function main(argv = process.argv.slice(2)) {
 
   const requestedNames = args.filter(arg => !arg.startsWith("--"));
   const forceAll = args.includes("--all");
+  const preserveExisting = args.includes("--merge");
 
   let selectedTargets;
   if (requestedNames.length > 0) {
@@ -427,8 +449,12 @@ export function main(argv = process.argv.slice(2)) {
   let manifestPath = null;
   let manifestMessage = null;
 
-  if (failed.length === 0 && builtCount > 0) {
-    manifestPath = writeRuntimeManifest(results, existingManifest?.targets ?? []);
+  if (failed.length === 0) {
+    manifestPath = writeRuntimeManifest(
+      results,
+      existingManifest?.targets ?? [],
+      preserveExisting
+    );
     manifestMessage = `Wrote ${relFromRoot(manifestPath)}`;
   } else if (existingManifest) {
     manifestPath = existingManifest.path;

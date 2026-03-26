@@ -44,3 +44,34 @@ jobs:
         env:
           NUMBL_TEST_EXPERIMENTAL_WASM: "1"
         run: npm run test
+
+      - name: Run browser backend benchmarks
+        run: >
+          npm run bench:backends -- --quick
+          --backend ts,wasm:ducc0-fft,wasm:blas-lapack,wasm:flame-blas-lapack
+          --output bench/results/wasm.json
+          --markdown bench/results/wasm.md
+
+      - name: Check browser backend benchmarks
+        run: >
+          node scripts/check-backend-bench.mjs
+          --file bench/results/wasm.json
+          --require matmul-128:ts
+          --require matmul-128:wasm:blas-lapack
+          --require matmul-128:wasm:flame-blas-lapack
+          --require inv-64:ts
+          --require inv-64:wasm:blas-lapack
+          --require inv-64:wasm:flame-blas-lapack
+          --require linsolve-128:ts
+          --require linsolve-128:wasm:blas-lapack
+          --require linsolve-128:wasm:flame-blas-lapack
+          --require fft1d-4096:ts
+          --require fft1d-4096:wasm:ducc0-fft
+          --require fftAlongDim-1024x64-d0:ts
+          --require fftAlongDim-1024x64-d0:wasm:ducc0-fft
+          --min-samples matmul-128:wasm:blas-lapack:8
+          --min-samples inv-64:wasm:blas-lapack:8
+          --min-samples linsolve-128:wasm:blas-lapack:8
+          --min-speedup matmul-128:wasm:blas-lapack:1.02
+          --min-speedup inv-64:wasm:blas-lapack:1.02
+          --min-speedup linsolve-128:wasm:blas-lapack:1.02

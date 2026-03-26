@@ -30,7 +30,8 @@
         "<!@(node scripts/native-addon-config.mjs defines)"
       ],
       "libraries": [
-        "<!@(node scripts/native-addon-config.mjs libraries)"
+        "<!@(node scripts/native-addon-config.mjs libraries)",
+        "<!@(node scripts/native-addon-config.mjs linker-flags)"
       ],
       "cflags_cc": [
         "-std=c++17",

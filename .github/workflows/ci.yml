@@ -94,22 +94,28 @@ jobs:
             timed_benchmark: ""
           - variant: openblas-fftw
             native_deps: libopenblas-dev libfftw3-dev
-            install_skip_native: "1"
+            install_skip_native: ""
             native_deps_jobs: ""
             native_command: npm run build:addon
             timed_benchmark: "1"
+            verify_install_hook: "1"
+            benchmark_backends: "ts,native"
           - variant: blis-libflame-fftw
             native_deps: libblis-dev libflame-dev libfftw3-dev
             install_skip_native: "1"
             native_deps_jobs: ""
             native_command: npm run build:addon
             timed_benchmark: "1"
+            verify_install_hook: ""
+            benchmark_backends: "ts,native"
           - variant: local-fallback
             native_deps: ""
             install_skip_native: "1"
             native_deps_jobs: "2"
             native_command: npm run build:addon:deps
             timed_benchmark: "1"
+            verify_install_hook: ""
+            benchmark_backends: "ts,native"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -132,6 +138,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Verify npm install hook built the native addon
+        if: matrix.verify_install_hook == '1'
+        run: test -f build/Release/numbl_addon.node
+
       - name: Exercise native addon install/build behavior
         run: ${{ matrix.native_command }}
         env:
@@ -144,7 +154,25 @@ jobs:
 
       - name: Run quick backend benchmarks
         if: matrix.timed_benchmark == '1'
-        run: npm run bench:backends -- --quick --output bench/results/${{ matrix.variant }}.json --markdown bench/results/${{ matrix.variant }}.md
+        run: npm run bench:backends -- --quick --backend ${{ matrix.benchmark_backends }} --output bench/results/${{ matrix.variant }}.json --markdown bench/results/${{ matrix.variant }}.md
+
+      - name: Check timed benchmark results
+        if: matrix.timed_benchmark == '1'
+        run: >
+          node scripts/check-backend-bench.mjs
+          --file bench/results/${{ matrix.variant }}.json
+          --require matmul-128:ts
+          --require matmul-128:native
+          --require inv-64:ts
+          --require inv-64:native
+          --require linsolve-128:ts
+          --require linsolve-128:native
+          --min-samples matmul-128:native:8
+          --min-samples inv-64:native:8
+          --min-samples linsolve-128:native:8
+          --min-speedup matmul-128:native:1.05
+          --min-speedup inv-64:native:1.05
+          --min-speedup linsolve-128:native:1.05
 
       - name: Upload backend benchmark artifacts
         if: matrix.timed_benchmark == '1'

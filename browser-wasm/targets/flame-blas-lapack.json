@@ -4,6 +4,12 @@
   "enabledByDefault": false,
   "sourceRootEnv": "NUMBL_FLAME_BLAS_LAPACK_SRC_ROOT",
   "buildScript": "browser-wasm/wrappers/libflame-linalg/build-libflame-linalg.sh",
+  "capabilities": {
+    "matmul": true,
+    "inv": true,
+    "linsolveSquare": true,
+    "linsolveRectangular": true
+  },
   "exports": [
     "malloc",
     "free",

@@ -105,8 +105,13 @@ numerical behavior in FFT and LAPACK-style code.
 Built `.wasm` files are written into `public/wasm-kernels/` so the browser can
 fetch them as static assets. A generated `manifest.json` is written alongside
 them to give runtime code a single place to discover available kernels.
-Successful ad hoc builds are merged into the existing runtime manifest by
-target name, so building one extra backend does not silently drop the others.
+Successful builds replace the runtime manifest by default so optional kernels
+do not stick around accidentally across incremental builds. Use `--merge` only
+when you explicitly want to add targets on top of the existing manifest.
+
+```bash
+npm run build:browser-wasm -- --merge flame-blas-lapack
+```
 
 ## ABI contract
 
@@ -175,7 +180,10 @@ npm run bench:backends -- --quick
 npm run bench:backends -- --backend wasm:blas-lapack,wasm:flame-blas-lapack --markdown bench/results/wasm-report.md
 ```
 
-For actual browser timings, run the web app and open `/bench`.
+For actual browser timings, run the web app and open `/bench`. The browser
+page uses the same quick scenarios as the CLI harness, validates outputs
+before timing, and reports backend load failures instead of silently dropping
+them.
 
 ## Act
 

@@ -38,7 +38,9 @@ function createKernelExports(
     return ptr;
   };
 
-  const free = (_ptr: number) => {};
+  const free = (ptr: number) => {
+    void ptr;
+  };
 
   const baseExports: Record<string, unknown> = {
     memory,
@@ -188,10 +190,19 @@ describe("browser Wasm bridge", () => {
               {
                 name: "ducc0-fft",
                 wasmPath: "/wasm-kernels/ducc0-fft.wasm",
+                capabilities: {
+                  fft1dComplex: true,
+                  fftAlongDim: true,
+                },
               },
               {
                 name: "blas-lapack",
                 wasmPath: "/wasm-kernels/blas-lapack.wasm",
+                capabilities: {
+                  matmul: true,
+                  inv: true,
+                  linsolveSquare: true,
+                },
               },
             ],
           }),
@@ -286,14 +297,29 @@ describe("browser Wasm bridge", () => {
               {
                 name: "ducc0-fft",
                 wasmPath: "/wasm-kernels/ducc0-fft.wasm",
+                capabilities: {
+                  fft1dComplex: true,
+                  fftAlongDim: true,
+                },
               },
               {
                 name: "blas-lapack",
                 wasmPath: "/wasm-kernels/blas-lapack.wasm",
+                capabilities: {
+                  matmul: true,
+                  inv: true,
+                  linsolveSquare: true,
+                },
               },
               {
                 name: "flame-blas-lapack",
                 wasmPath: "/wasm-kernels/flame-blas-lapack.wasm",
+                capabilities: {
+                  matmul: true,
+                  inv: true,
+                  linsolveSquare: true,
+                  linsolveRectangular: true,
+                },
               },
             ],
           }),
@@ -349,6 +375,78 @@ describe("browser Wasm bridge", () => {
     );
     expect(Array.from(rectangularSolve)).toEqual([203]);
   });
+
+  it("keeps working kernels when one manifest target fails to instantiate", async () => {
+    vi.stubGlobal("location", { href: "https://example.test/base/app/" });
+
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.endsWith("/wasm-kernels/manifest.json")) {
+        return {
+          ok: true,
+          json: async () => ({
+            targets: [
+              {
+                name: "ducc0-fft",
+                wasmPath: "wasm-kernels/ducc0-fft.wasm",
+                capabilities: {
+                  fft1dComplex: true,
+                  fftAlongDim: true,
+                },
+              },
+              {
+                name: "blas-lapack",
+                wasmPath: "wasm-kernels/blas-lapack.wasm",
+                capabilities: {
+                  matmul: true,
+                  inv: true,
+                  linsolveSquare: true,
+                },
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        ok: true,
+        arrayBuffer: async () => new ArrayBuffer(8),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    vi.spyOn(WebAssembly, "instantiate")
+      .mockResolvedValueOnce(createInstantiateResult(createKernelExports("fft")))
+      .mockRejectedValueOnce(new Error("bad wasm"));
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const configured = await ensureBrowserWasmBridgeConfigured();
+    expect(configured).toBe(true);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("Browser Wasm kernel unavailable")
+    );
+
+    const bridge = getLapackBridge();
+    expect(bridge?.fft1dComplex).toBeTypeOf("function");
+    expect(bridge?.matmul).toBeTypeOf("function");
+
+    const fft = bridge!.fft1dComplex!(
+      new Float64Array([1, 2]),
+      new Float64Array([3, 4]),
+      2,
+      false
+    );
+    expect(Array.from(fft.re)).toEqual([2, 3]);
+
+    const matmul = bridge!.matmul!(
+      new Float64Array([2]),
+      1,
+      1,
+      new Float64Array([5]),
+      1
+    );
+    expect(Array.from(matmul)).toEqual([10]);
+  });
 });
 
 describe("browser Wasm target manifests", () => {
@@ -364,6 +462,7 @@ describe("browser Wasm target manifests", () => {
       sourceRootEnv: string;
       output: string;
       exports: string[];
+      capabilities?: Record<string, boolean>;
     };
     const flame = JSON.parse(
       readFileSync(
@@ -375,6 +474,7 @@ describe("browser Wasm target manifests", () => {
       sourceRootEnv: string;
       output: string;
       exports: string[];
+      capabilities?: Record<string, boolean>;
     };
     const blas = JSON.parse(
       readFileSync(
@@ -386,6 +486,7 @@ describe("browser Wasm target manifests", () => {
       sourceRootEnv: string;
       output: string;
       exports: string[];
+      capabilities?: Record<string, boolean>;
     };
 
     expect(ducc0.name).toBe("ducc0-fft");
@@ -394,6 +495,10 @@ describe("browser Wasm target manifests", () => {
     expect(ducc0.exports).toEqual(
       expect.arrayContaining(["malloc", "free", "numbl_fft1d_f64"])
     );
+    expect(ducc0.capabilities).toEqual({
+      fft1dComplex: true,
+      fftAlongDim: true,
+    });
 
     expect(flame.name).toBe("flame-blas-lapack");
     expect(flame.sourceRootEnv).toBe("NUMBL_FLAME_BLAS_LAPACK_SRC_ROOT");
@@ -401,6 +506,12 @@ describe("browser Wasm target manifests", () => {
     expect(flame.exports).toEqual(
       expect.arrayContaining(["malloc", "free", "numbl_inv_f64"])
     );
+    expect(flame.capabilities).toEqual({
+      matmul: true,
+      inv: true,
+      linsolveSquare: true,
+      linsolveRectangular: true,
+    });
 
     expect(blas.name).toBe("blas-lapack");
     expect(blas.sourceRootEnv).toBe("NUMBL_BLAS_LAPACK_SRC_ROOT");
@@ -408,5 +519,10 @@ describe("browser Wasm target manifests", () => {
     expect(blas.exports).toEqual(
       expect.arrayContaining(["malloc", "free", "numbl_inv_f64"])
     );
+    expect(blas.capabilities).toEqual({
+      matmul: true,
+      inv: true,
+      linsolveSquare: true,
+    });
   });
 });
