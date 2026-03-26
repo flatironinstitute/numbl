@@ -21,13 +21,6 @@ export interface RemoteExecutionResult {
   timedOut?: boolean;
 }
 
-export interface RemoteServiceConfig {
-  port: number;
-  maxConcurrentExecutions: number;
-  executionTimeoutMs: number;
-  maxMemoryMB: number;
-}
-
 export interface RemoteServiceHealth {
   status: string;
   activeExecutions: number;
@@ -90,32 +83,6 @@ export async function checkRemoteServiceHealth(
     return await response.json();
   } catch (error) {
     console.error("Failed to check remote service health:", error);
-    return null;
-  }
-}
-
-/**
- * Get the remote service configuration
- */
-export async function getRemoteServiceConfig(
-  serviceUrl?: string
-): Promise<RemoteServiceConfig | null> {
-  const url = serviceUrl || getRemoteServiceUrl();
-  try {
-    const response = await fetch(`${url}/config`, {
-      method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to get remote service config:", error);
     return null;
   }
 }
