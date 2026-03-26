@@ -31,6 +31,7 @@ import "./misc.js";
 
 export {
   getIBuiltin,
+  getIBuiltinNargin,
   getAllIBuiltinNames,
   buildIBuiltinHelpers,
   inferJitType,

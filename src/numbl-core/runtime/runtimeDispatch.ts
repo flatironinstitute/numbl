@@ -31,9 +31,10 @@ import {
   FloatXArray,
   kstr,
 } from "../runtime/types.js";
-import { isBuiltin, getBuiltinNargin } from "../helpers/registry.js";
+import { isBuiltin } from "../helpers/registry.js";
 import {
   getIBuiltin as _getIBuiltin,
+  getIBuiltinNargin,
   inferJitType as _inferJitType,
 } from "../interpreter/builtins/index.js";
 import { COLON_SENTINEL } from "./sentinels.js";
@@ -138,7 +139,7 @@ function coerceToTensor(
 
 export function getFuncHandle(name: string): RuntimeFunction {
   const handle = RTV.func(name, isBuiltin(name) ? "builtin" : "user");
-  const nargin = getBuiltinNargin(name);
+  const nargin = getIBuiltinNargin(name);
   if (nargin !== undefined) {
     handle.nargin = nargin;
   }

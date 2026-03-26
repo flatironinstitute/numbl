@@ -18,6 +18,7 @@ import {
   type RuntimeChar,
 } from "../../runtime/types.js";
 import { type JitType, signFromNumber, isNonneg } from "../jit/jitTypes.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 
@@ -66,6 +67,19 @@ export function getAllIBuiltinNames(): string[] {
   return Array.from(registry.keys());
 }
 
+/** Probe an IBuiltin to determine its nargin (number of input args).
+ *  Tries resolve with 1, 2, 3 number-type args to find the accepted count. */
+export function getIBuiltinNargin(name: string): number | undefined {
+  const ib = registry.get(name);
+  if (!ib) return undefined;
+  const num: JitType = { kind: "number" };
+  // Find the smallest arg count that resolves
+  for (let n = 1; n <= 10; n++) {
+    if (ib.resolve(Array(n).fill(num), 1)) return n;
+  }
+  return undefined;
+}
+
 // ── Infer JitType from a runtime value ──────────────────────────────────
 
 export function inferJitType(value: unknown): JitType {
@@ -109,6 +123,10 @@ export function inferJitType(value: unknown): JitType {
       fields[k] = inferJitType(v);
     }
     return { kind: "struct", fields };
+  }
+  if (isRuntimeSparseMatrix(value as RuntimeValue)) {
+    const sp = value as import("../../runtime/types.js").RuntimeSparseMatrix;
+    return { kind: "sparse_matrix", isComplex: !!sp.pi, m: sp.m, n: sp.n };
   }
   if (isRuntimeClassInstance(value as RuntimeValue)) {
     const ci = value as import("../../runtime/types.js").RuntimeClassInstance;
@@ -227,6 +245,8 @@ export function applyUnaryElemwise(
   complexFn: (re: number, im: number) => { re: number; im: number },
   name: string
 ): RuntimeValue {
+  if (isRuntimeSparseMatrix(v))
+    return applyUnaryElemwise(sparseToDense(v), realFn, complexFn, name);
   if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
@@ -264,7 +284,12 @@ function applyUnaryElemwiseMaybeComplex(
   name: string
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
-    throw new Error(`${name}: sparse matrices not yet supported`);
+    return applyUnaryElemwiseMaybeComplex(
+      sparseToDense(v),
+      realFn,
+      complexFn,
+      name
+    );
   if (typeof v === "boolean") v = (v ? 1 : 0) as unknown as RuntimeValue;
   if (typeof v === "number") {
     const r = realFn(v);
@@ -318,6 +343,8 @@ function applyUnaryRealResult(
   complexFn: (re: number, im: number) => number,
   name: string
 ): RuntimeValue {
+  if (isRuntimeSparseMatrix(v))
+    return applyUnaryRealResult(sparseToDense(v), realFn, complexFn, name);
   if (typeof v === "boolean") return realFn(v ? 1 : 0);
   if (typeof v === "number") return realFn(v);
 
@@ -530,6 +557,24 @@ export function unaryElemwiseCases(
     apply: applyFn,
   });
 
+  // sparse_matrix case — convert to dense tensor, result is dense tensor
+  cases.push({
+    match: argTypes => {
+      if (argTypes.length !== 1) return null;
+      if (argTypes[0].kind !== "sparse_matrix") return null;
+      const sp = argTypes[0];
+      const shape =
+        sp.m !== undefined && sp.n !== undefined ? [sp.m, sp.n] : undefined;
+      const out = tensorRule({
+        kind: "tensor",
+        isComplex: sp.isComplex,
+        shape,
+      } as TensorJitType);
+      return out ? [out] : null;
+    },
+    apply: applyFn,
+  });
+
   return cases;
 }
 
@@ -563,6 +608,25 @@ export function unaryRealResultCases(
             isComplex: false,
             shape: a.shape,
             ndim: a.ndim,
+            nonneg: true,
+          },
+        ];
+      },
+      apply: applyFn,
+    },
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        if (argTypes[0].kind !== "sparse_matrix") return null;
+        const sp = argTypes[0];
+        return [
+          {
+            kind: "tensor" as const,
+            isComplex: false,
+            shape:
+              sp.m !== undefined && sp.n !== undefined
+                ? [sp.m, sp.n]
+                : undefined,
             nonneg: true,
           },
         ];

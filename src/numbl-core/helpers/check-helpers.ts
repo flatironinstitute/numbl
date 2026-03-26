@@ -22,7 +22,7 @@ import {
 } from "../runtime/types.js";
 import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
 import { RuntimeError } from "../runtime/index.js";
-import { getBuiltin } from "./registry.js";
+import { getIBuiltin, inferJitType } from "../interpreter/builtins/types.js";
 
 /**
  * Returns true when A is a plausible numeric/matrix input
@@ -238,19 +238,13 @@ export function applyBuiltin(
   args: RuntimeValue[],
   nargout: number
 ): RuntimeValue {
-  const branches = getBuiltin(name);
-  if (!branches)
-    throw new RuntimeError(`${caller}: builtin '${name}' not found`);
-  for (const branch of branches) {
-    const result = branch.apply(args, nargout);
-    if (result !== undefined) {
-      if (result instanceof Promise)
-        throw new RuntimeError(
-          `${caller}: builtin '${name}' returned async result`
-        );
-      if (Array.isArray(result)) return result[0];
-      return result;
-    }
-  }
-  throw new RuntimeError(`${caller}: builtin '${name}' returned no result`);
+  const ib = getIBuiltin(name);
+  if (!ib) throw new RuntimeError(`${caller}: builtin '${name}' not found`);
+  const argTypes = args.map(inferJitType);
+  const resolution = ib.resolve(argTypes, nargout);
+  if (!resolution)
+    throw new RuntimeError(`${caller}: builtin '${name}' returned no result`);
+  const result = resolution.apply(args, nargout);
+  if (Array.isArray(result)) return result[0];
+  return result;
 }

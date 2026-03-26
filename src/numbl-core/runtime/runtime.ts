@@ -41,15 +41,7 @@ import {
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { type ItemType } from "../lowering/itemTypes.js";
 import { BinaryOperation } from "../lowering/index.js";
-import { getBuiltin, getAllBuiltinNames } from "../helpers/registry.js";
 import { getConstant } from "../helpers/constants.js";
-// Register legacy builtins into the registry (fallback path for rt.builtins)
-import { registerMathFunctions } from "../helpers/math.js";
-import { registerReductionFunctions } from "../helpers/reduction/register-reduction-functions.js";
-import { registerLinearAlgebraFunctions } from "../helpers/linear-algebra/register-linear-algebra-functions.js";
-registerMathFunctions();
-registerReductionFunctions();
-registerLinearAlgebraFunctions();
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import type { ExecOptions } from "../executeCode.js";
@@ -258,43 +250,6 @@ export class Runtime {
   // ── Builtin initialization ──────────────────────────────────────────
 
   private initBuiltins(): void {
-    for (const name of getAllBuiltinNames()) {
-      const builtin = getBuiltin(name)!;
-      const singleBranch = builtin.length === 1 ? builtin[0] : null;
-      this.builtins[name] = (nargout: number, args: unknown[]) => {
-        const margs = args.map(a => ensureRuntimeValue(a));
-        let branch: (typeof builtin)[0];
-        if (singleBranch) {
-          branch = singleBranch;
-        } else {
-          const argItemTypes = margs.map(arg =>
-            getItemTypeFromRuntimeValue(arg)
-          );
-          branch = builtin[0];
-          for (let i = 0; i < builtin.length; i++) {
-            if (builtin[i].check(argItemTypes, nargout)) {
-              branch = builtin[i];
-              break;
-            }
-          }
-        }
-        if (this.profilingEnabled) {
-          this.profileEnter("builtin:fallback:" + name);
-          const result = branch.apply(margs, nargout);
-          this.profileLeave();
-          return this.unwrapResult(
-            result as RuntimeValue | RuntimeValue[] | undefined
-          );
-        }
-        return this.unwrapResult(
-          branch.apply(margs, nargout) as
-            | RuntimeValue
-            | RuntimeValue[]
-            | undefined
-        );
-      };
-    }
-
     // Register special builtins
     registerSpecialBuiltins(this);
 

@@ -29,6 +29,7 @@ export type JitType =
       isHandleClass?: boolean;
       fields?: Record<string, JitType>;
     }
+  | { kind: "sparse_matrix"; isComplex: boolean; m?: number; n?: number }
   | { kind: "unknown" };
 
 // ── Sign helpers ─────────────────────────────────────────────────────────

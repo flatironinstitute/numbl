@@ -8,8 +8,6 @@ import {
   toNumber,
   RuntimeError,
 } from "../../runtime/index.js";
-import { ItemType } from "../../lowering/itemTypes.js";
-import { register } from "../registry.js";
 import {
   FloatXArray,
   isRuntimeNumber,
@@ -17,7 +15,6 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { sparseToDense } from "../sparse-arithmetic.js";
-import { preserveTypeCheck } from "../reduction-helpers.js";
 
 // ── Generic cumulative operation ───────────────────────────────────────
 
@@ -196,71 +193,4 @@ export function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
     return RTV.tensor(result, newShape, resultImag);
   }
   throw new RuntimeError("diff: argument must be numeric");
-}
-
-// ── Registration ───────────────────────────────────────────────────────
-
-export function registerCumulative(): void {
-  register("cumsum", [
-    {
-      check: preserveTypeCheck,
-      apply: args => cumOp("cumsum", args, (acc, val) => acc + val, 0),
-    },
-  ]);
-
-  register("cumprod", [
-    {
-      check: preserveTypeCheck,
-      apply: args =>
-        cumOp(
-          "cumprod",
-          args,
-          (acc, val) => acc * val,
-          1,
-          (aRe, aIm, bRe, bIm) => [aRe * bRe - aIm * bIm, aRe * bIm + aIm * bRe]
-        ),
-    },
-  ]);
-
-  register("cummax", [
-    {
-      check: preserveTypeCheck,
-      apply: args => cumOp("cummax", args, Math.max),
-    },
-  ]);
-
-  register("cummin", [
-    {
-      check: preserveTypeCheck,
-      apply: args => cumOp("cummin", args, Math.min),
-    },
-  ]);
-
-  register("diff", [
-    {
-      check: (_argTypes: ItemType[], nargout: number) => {
-        if (nargout !== 1) return null;
-        return {
-          outputTypes: [
-            { kind: "Tensor" as const, ndim: 2, shape: "unknown" as const },
-          ],
-        };
-      },
-      apply: args => {
-        if (args.length < 1)
-          throw new RuntimeError("diff requires at least 1 argument");
-        if (isRuntimeSparseMatrix(args[0]))
-          args = [sparseToDense(args[0]), ...args.slice(1)];
-        const n = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
-        const dimArg =
-          args.length >= 3 ? Math.round(toNumber(args[2])) : undefined;
-
-        let result = args[0];
-        for (let i = 0; i < n; i++) {
-          result = diffOnce(result, dimArg);
-        }
-        return result;
-      },
-    },
-  ]);
 }

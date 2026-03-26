@@ -147,6 +147,7 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
           k === "number" ||
           k === "boolean" ||
           k === "tensor" ||
+          k === "sparse_matrix" ||
           k === "complex_or_number";
         if (!allowed(a.kind) || !allowed(b.kind)) return null;
         if (a.kind === "tensor" || b.kind === "tensor") {
@@ -189,13 +190,18 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;
-        const a = argTypes[0];
+        let a = argTypes[0];
         if (
           a.kind === "number" ||
           a.kind === "boolean" ||
           a.kind === "complex_or_number"
         )
           return [a];
+        if (a.kind === "sparse_matrix") {
+          const shape =
+            a.m !== undefined && a.n !== undefined ? [a.m, a.n] : undefined;
+          a = { kind: "tensor", isComplex: a.isComplex, shape };
+        }
         if (a.kind !== "tensor") return null;
         if (!a.shape)
           return [
@@ -221,7 +227,12 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
     {
       match: argTypes => {
         if (argTypes.length !== 3) return null;
-        const a = argTypes[0];
+        let a = argTypes[0];
+        if (a.kind === "sparse_matrix") {
+          const shape =
+            a.m !== undefined && a.n !== undefined ? [a.m, a.n] : undefined;
+          a = { kind: "tensor", isComplex: a.isComplex, shape };
+        }
         if (a.kind === "tensor") {
           const dimType = argTypes[2];
           const dim =

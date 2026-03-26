@@ -10,16 +10,10 @@
  * supported; the native addon is preferred when available.
  */
 
-import { RTV, RuntimeError, tensorSize2D } from "../runtime/index.js";
-import {
-  FloatXArray,
-  FloatXArrayType,
-  isRuntimeNumber,
-  isRuntimeTensor,
-} from "../runtime/types.js";
+import { RuntimeError } from "../runtime/index.js";
+import { FloatXArrayType } from "../runtime/types.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
-import { register } from "./registry.js";
-import { out, toF64, unknownMatrix, isMatrixLike } from "./check-helpers.js";
+import { toF64 } from "./check-helpers.js";
 
 // ── LAPACK helpers ────────────────────────────────────────────────────────────
 
@@ -72,76 +66,3 @@ export function linsolveComplexLapack(
 }
 
 // ── Builtin registration ──────────────────────────────────────────────────────
-
-export function registerLinsolve(): void {
-  /**
-   * X = linsolve(A, B)
-   *
-   * A  — m×n real matrix
-   * B  — m×p real matrix (or m-vector when p = 1)
-   * X  — n×p solution matrix
-   *
-   * Square:        exact solution via LU
-   * Overdetermined: least-squares via QR
-   * Underdetermined: minimum-norm via LQ
-   */
-  register("linsolve", [
-    {
-      check: (argTypes, nargout) => {
-        if (argTypes.length !== 2 || nargout !== 1) return null;
-        if (!isMatrixLike(argTypes[0]) || !isMatrixLike(argTypes[1]))
-          return null;
-        return out(unknownMatrix());
-      },
-
-      apply: args => {
-        if (args.length < 2)
-          throw new RuntimeError("linsolve requires 2 arguments");
-
-        // Scalars are treated as 1×1 matrices so linsolve(a, b) works for
-        // scalar a/b and for row-vector A with scalar b (underdetermined case).
-        const rawA = args[0];
-        const rawB = args[1];
-
-        const A = isRuntimeNumber(rawA)
-          ? RTV.tensor(new FloatXArray([rawA]), [1, 1])
-          : rawA;
-        const B = isRuntimeNumber(rawB)
-          ? RTV.tensor(new FloatXArray([rawB]), [1, 1])
-          : rawB;
-
-        if (!isRuntimeTensor(A) || !isRuntimeTensor(B))
-          throw new RuntimeError(
-            "linsolve: arguments must be numeric matrices"
-          );
-
-        const [m, n] = tensorSize2D(A);
-        const [Bm, p] = tensorSize2D(B);
-
-        if (Bm !== m)
-          throw new RuntimeError(
-            "linsolve: A and B must have the same number of rows"
-          );
-
-        if (A.imag || B.imag) {
-          // Complex solve — native addon required
-          const ARe = A.data;
-          const AIm = A.imag ?? new FloatXArray(A.data.length);
-          const BRe = B.data;
-          const BIm = B.imag ?? new FloatXArray(B.data.length);
-          const X = linsolveComplexLapack(ARe, AIm, m, n, BRe, BIm, p);
-          return RTV.tensor(
-            new FloatXArray(X.re),
-            [n, p],
-            new FloatXArray(X.im)
-          );
-        }
-
-        const X = linsolveLapack(A.data, m, n, B.data, p);
-        if (!X) throw new RuntimeError("linsolve: LAPACK bridge unavailable");
-
-        return RTV.tensor(new FloatXArray(X), [n, p]);
-      },
-    },
-  ]);
-}

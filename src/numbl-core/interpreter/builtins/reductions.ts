@@ -11,11 +11,14 @@ import {
   isRuntimeComplexNumber,
   isRuntimeLogical,
   isRuntimeNumber,
+  isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
 import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import { sparseSum } from "../../helpers/reduction-helpers.js";
 import { defineBuiltin } from "./types.js";
 import {
   firstReduceDim,
@@ -129,6 +132,20 @@ function reductionOutputType(
     return [scalarOut()];
   }
 
+  if (inputType.kind === "sparse_matrix") {
+    // Treat sparse like a 2D tensor for reduction type rules
+    const shape =
+      inputType.m !== undefined && inputType.n !== undefined
+        ? [inputType.m, inputType.n]
+        : undefined;
+    return reductionOutputType(
+      { kind: "tensor", isComplex: inputType.isComplex, shape },
+      dimType,
+      allFlag,
+      opts
+    );
+  }
+
   if (inputType.kind !== "tensor") return null;
 
   // 'all' flag → always scalar
@@ -174,7 +191,11 @@ function reductionApply(
 ): RuntimeValue {
   const { args: parsedArgs, omitNaN } = parseNanFlag(args);
   const k = omitNaN && omitNanKernel ? omitNanKernel : kernel;
-  const v = parsedArgs[0];
+  let v = parsedArgs[0];
+  if (isRuntimeSparseMatrix(v)) {
+    parsedArgs[0] = sparseToDense(v);
+    v = parsedArgs[0];
+  }
   if (isRuntimeNumber(v)) return v;
   if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
   if (isRuntimeComplexNumber(v)) return v;
@@ -208,7 +229,22 @@ defineBuiltin({
           parsed.allFlag
         );
       },
-      apply: args => reductionApply("sum", args, sumKernel, sumOmitNanKernel),
+      apply: args => {
+        if (isRuntimeSparseMatrix(args[0])) {
+          const v =
+            args[0] as import("../../runtime/types.js").RuntimeSparseMatrix;
+          const dim =
+            args.length >= 2
+              ? Math.round(toNumber(args[1]))
+              : v.m > 1
+                ? 1
+                : v.n > 1
+                  ? 2
+                  : 1;
+          return sparseSum(v, dim);
+        }
+        return reductionApply("sum", args, sumKernel, sumOmitNanKernel);
+      },
     },
   ],
 });
@@ -230,6 +266,8 @@ defineBuiltin({
       },
       apply: (args): RuntimeValue => {
         const { args: parsedArgs, omitNaN } = parseNanFlag(args);
+        if (isRuntimeSparseMatrix(parsedArgs[0]))
+          parsedArgs[0] = sparseToDense(parsedArgs[0]);
         const v = parsedArgs[0];
         if (isRuntimeNumber(v)) return v;
         if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
@@ -441,6 +479,7 @@ defineBuiltin({
 
 function anyAllApply(name: string, mode: "any" | "all") {
   return (args: RuntimeValue[]): RuntimeValue => {
+    if (isRuntimeSparseMatrix(args[0])) args[0] = sparseToDense(args[0]);
     const v = args[0];
     if (isRuntimeNumber(v)) return RTV.logical(v !== 0);
     if (isRuntimeLogical(v)) return RTV.logical(v);
@@ -516,6 +555,13 @@ function cumulativeOutputType(argTypes: JitType[]): JitType[] | null {
       },
     ];
   }
+  if (inputType.kind === "sparse_matrix") {
+    const shape =
+      inputType.m !== undefined && inputType.n !== undefined
+        ? [inputType.m, inputType.n]
+        : undefined;
+    return [{ kind: "tensor", isComplex: inputType.isComplex, shape }];
+  }
   return null;
 }
 
@@ -526,7 +572,10 @@ defineBuiltin({
   cases: [
     {
       match: argTypes => cumulativeOutputType(argTypes),
-      apply: args => cumOp("cumsum", args, (acc, val) => acc + val, 0),
+      apply: args => {
+        if (isRuntimeSparseMatrix(args[0])) args[0] = sparseToDense(args[0]);
+        return cumOp("cumsum", args, (acc, val) => acc + val, 0);
+      },
     },
   ],
 });
@@ -538,14 +587,16 @@ defineBuiltin({
   cases: [
     {
       match: argTypes => cumulativeOutputType(argTypes),
-      apply: args =>
-        cumOp(
+      apply: args => {
+        if (isRuntimeSparseMatrix(args[0])) args[0] = sparseToDense(args[0]);
+        return cumOp(
           "cumprod",
           args,
           (acc, val) => acc * val,
           1,
           (aRe, aIm, bRe, bIm) => [aRe * bRe - aIm * bIm, aRe * bIm + aIm * bRe]
-        ),
+        );
+      },
     },
   ],
 });
@@ -584,6 +635,16 @@ function diffOutputType(argTypes: JitType[]): JitType[] | null {
   // diff of a scalar → empty [0, 0] tensor
   if (inputType.kind === "number" || inputType.kind === "boolean") {
     return [{ kind: "tensor", isComplex: false, shape: [0, 0] }];
+  }
+  if (inputType.kind === "sparse_matrix") {
+    const shape =
+      inputType.m !== undefined && inputType.n !== undefined
+        ? [inputType.m, inputType.n]
+        : undefined;
+    return diffOutputType([
+      { kind: "tensor", isComplex: inputType.isComplex, shape },
+      ...argTypes.slice(1),
+    ]);
   }
   if (inputType.kind !== "tensor") return null;
 
@@ -637,6 +698,7 @@ defineBuiltin({
       apply: (args): RuntimeValue => {
         if (args.length < 1)
           throw new RuntimeError("diff requires at least 1 argument");
+        if (isRuntimeSparseMatrix(args[0])) args[0] = sparseToDense(args[0]);
         const n = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
         const dimArg =
           args.length >= 3 ? Math.round(toNumber(args[2])) : undefined;

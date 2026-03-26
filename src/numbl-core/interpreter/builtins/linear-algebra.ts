@@ -61,7 +61,8 @@ function isNumericJitType(t: JitType): boolean {
     t.kind === "number" ||
     t.kind === "boolean" ||
     t.kind === "complex_or_number" ||
-    t.kind === "tensor"
+    t.kind === "tensor" ||
+    t.kind === "sparse_matrix"
   );
 }
 

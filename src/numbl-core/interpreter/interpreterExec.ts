@@ -22,7 +22,7 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { mPow } from "../helpers/arithmetic.js";
-import { getBuiltinNargin } from "../helpers/registry.js";
+import { getIBuiltinNargin } from "./builtins/types.js";
 import { getConstant } from "../helpers/constants.js";
 import { buildLineTable, offsetToLineFast } from "../runtime/error.js";
 import { COLON_SENTINEL, END_SENTINEL } from "../runtime/sentinels.js";
@@ -863,7 +863,7 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   };
   fn.jsFnExpectsNargout = true;
   // Populate nargin for builtin handles (e.g. nargin(@sin) == 1)
-  const narg = getBuiltinNargin(name);
+  const narg = getIBuiltinNargin(name);
   if (narg !== undefined) fn.nargin = narg;
   return fn;
 }

@@ -40,6 +40,7 @@ defineBuiltin({
           k !== "boolean" &&
           k !== "complex_or_number" &&
           k !== "tensor" &&
+          k !== "sparse_matrix" &&
           k !== "unknown"
         )
           return null;

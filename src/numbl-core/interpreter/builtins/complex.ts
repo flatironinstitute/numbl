@@ -5,8 +5,10 @@
 import {
   FloatXArray,
   isRuntimeComplexNumber,
+  isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import {
   defineBuiltin,
   unaryRealResultCases,
@@ -106,6 +108,22 @@ const conjCases: BuiltinCase[] = [
       const outI = new FloatXArray(n);
       for (let i = 0; i < n; i++) outI[i] = -v.imag[i];
       return makeTensor(outR, outI, v.shape.slice());
+    },
+  },
+  {
+    match: argTypes => {
+      if (argTypes.length !== 1) return null;
+      const a = argTypes[0];
+      if (a.kind !== "sparse_matrix") return null;
+      const shape =
+        a.m !== undefined && a.n !== undefined ? [a.m, a.n] : undefined;
+      return [{ kind: "tensor", isComplex: a.isComplex, shape }];
+    },
+    apply: args => {
+      const v = args[0];
+      if (isRuntimeSparseMatrix(v))
+        return conjCases[2].apply([sparseToDense(v)]);
+      throw new Error("conj: unsupported argument type");
     },
   },
 ];
