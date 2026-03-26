@@ -20,18 +20,24 @@
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
-        "<!@(pkg-config --cflags-only-I fftw3 2>/dev/null | sed 's/-I//g' || true)"
+        "<!@(node scripts/native-addon-config.mjs include-dirs)"
       ],
       "dependencies": [
         "<!(node -p \"require('node-addon-api').gyp\")"
       ],
-      "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
-      "libraries": [
-        "-lopenblas",
-        "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
-        "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
+      "defines": [
+        "NAPI_DISABLE_CPP_EXCEPTIONS",
+        "<!@(node scripts/native-addon-config.mjs defines)"
       ],
-      "cflags_cc": [ "-std=c++17", "-O3", "-march=native" ]
+      "libraries": [
+        "<!@(node scripts/native-addon-config.mjs libraries)",
+        "<!@(node scripts/native-addon-config.mjs linker-flags)"
+      ],
+      "cflags_cc": [
+        "-std=c++17",
+        "-O3",
+        "<!@(node scripts/native-addon-config.mjs cflags-cc)"
+      ]
     }
   ]
 }

@@ -23,6 +23,7 @@ dist
 dist-ssr
 dist-cli
 dist-plot-viewer
+bench/results
 server/dist
 *.local
 .env
@@ -33,6 +34,9 @@ numbl_test_scripts/**/*.wasm
 numbl_test_scripts/**/*.so
 numbl_test_scripts/**/*.dll
 numbl_test_scripts/**/*.dylib
+public/wasm-kernels/*.wasm
+public/wasm-kernels/manifest.json
+browser-wasm/local-sources.json
 
 # Editor directories and files
 .vscode/*

@@ -21,7 +21,6 @@ import { cmdMip } from "./cli-mip.js";
 import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
 import { getAllIBuiltinNames } from "./numbl-core/interpreter/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
-import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
 import {
   diagnoseErrors,
   formatDiagnostics,
@@ -61,7 +60,6 @@ if (!process.env.NUMBL_NO_NATIVE) {
       );
     } else {
       setLapackBridge(addon);
-      setLapackBridgeNew(addon);
       nativeAddonLoaded = true;
     }
   } catch {
@@ -328,7 +326,7 @@ Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon
+  build-addon        Build native addon [--with-deps]
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions
   mip <subcommand>   Package manager (install, uninstall, list, avail, info)
@@ -714,7 +712,6 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
-          noLineTracking: opts.noLineTracking,
           fileIO,
           optimization: opts.optimization,
         },
@@ -747,7 +744,6 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
-          noLineTracking: opts.noLineTracking,
           fileIO,
           optimization: opts.optimization,
         },
@@ -815,7 +811,7 @@ function finalizeDumpFile(
   writeFileSync(dumpFile, header + jsCode + "\n" + jitContent);
 }
 
-async function cmdBuildAddon() {
+async function cmdBuildAddon(args: string[]) {
   const bindingGyp = join(packageDir, "binding.gyp");
   if (!existsSync(bindingGyp)) {
     console.error(
@@ -823,23 +819,33 @@ async function cmdBuildAddon() {
     );
     process.exit(1);
   }
-  console.log("Building native LAPACK addon...");
+  const wantsDeps = args.includes("--with-deps");
+  console.log("Building native addon...");
   console.log("Package directory: " + packageDir);
-  console.log("Prerequisites: C++ compiler, libopenblas-dev (or equivalent)");
+  console.log(
+    wantsDeps
+      ? "Prerequisites: C++ compiler, git, make, and build tools for local BLIS/libFLAME/ducc0 fallback"
+      : "Prerequisites: C++ compiler plus compatible BLAS/LAPACK and FFT libraries"
+  );
   console.log("");
   try {
-    execSync("npx node-gyp rebuild", {
+    execSync(
+      `node scripts/install-native.mjs --force${wantsDeps ? " --with-deps" : ""}`,
+      {
       cwd: packageDir,
       stdio: "inherit",
-    });
+      }
+    );
     console.log("");
-    console.log("Native LAPACK addon built successfully.");
+    console.log("Native addon built successfully.");
     console.log("Restart numbl to use it.");
   } catch {
     console.error("");
-    console.error("Failed to build native LAPACK addon.");
+    console.error("Failed to build native addon.");
     console.error(
-      "Ensure you have a C++ compiler, libopenblas-dev, and libfftw3-dev installed."
+      wantsDeps
+        ? "Ensure the local BLIS/libFLAME/ducc0 fallback dependencies can be cloned and built on this machine."
+        : "Ensure you have a C++ compiler plus compatible BLAS/LAPACK and FFT libraries installed, or retry with `numbl build-addon --with-deps`."
     );
     process.exit(1);
   }
@@ -1088,7 +1094,7 @@ async function main() {
       break;
     }
     case "build-addon":
-      await cmdBuildAddon();
+      await cmdBuildAddon(rest);
       break;
     case "info":
       cmdInfo();

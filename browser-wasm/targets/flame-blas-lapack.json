@@ -1,0 +1,21 @@
+{
+  "name": "flame-blas-lapack",
+  "description": "Build a standalone browser Wasm module wrapping libFLAME BLAS/LAPACK kernels.",
+  "enabledByDefault": false,
+  "sourceRootEnv": "NUMBL_FLAME_BLAS_LAPACK_SRC_ROOT",
+  "buildScript": "browser-wasm/wrappers/libflame-linalg/build-libflame-linalg.sh",
+  "capabilities": {
+    "matmul": true,
+    "inv": true,
+    "linsolveSquare": true,
+    "linsolveRectangular": true
+  },
+  "exports": [
+    "malloc",
+    "free",
+    "numbl_matmul_f64",
+    "numbl_inv_f64",
+    "numbl_linsolve_f64"
+  ],
+  "output": "public/wasm-kernels/flame-blas-lapack.wasm"
+}
