@@ -2,7 +2,7 @@
  * Builtin function registry and type definitions
  */
 
-import { type ItemType, IType } from "../lowering/itemTypes.js";
+import { type ItemType } from "../lowering/itemTypes.js";
 import { RuntimeValue } from "../runtime/index.js";
 
 // ── Builtin registry ────────────────────────────────────────────────────
@@ -39,19 +39,6 @@ export const builtinSingle = (
     apply,
   },
 ];
-
-export function realArrayConstructorCheck(
-  argTypes: ItemType[],
-  nargout: number
-): { outputTypes: ItemType[] } | null {
-  if (nargout !== 1 && nargout !== 0) return null;
-  if (argTypes.length === 0) {
-    return { outputTypes: [IType.num()] };
-  }
-  return {
-    outputTypes: [IType.tensor()],
-  };
-}
 
 const builtins = new Map<string, BuiltinFn>();
 const builtinNarginMap = new Map<string, number>();

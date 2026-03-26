@@ -5,10 +5,6 @@ export const USE_FLOAT32 = useFloat32;
 export const FloatXArray = useFloat32 ? Float32Array : Float64Array;
 export type FloatXArrayType = Float32Array | Float64Array;
 
-// FOR NOW WE HARD-CODE DISABLE_WEBGPU - until we have a solid plan for this
-// export const DISABLE_WEBGPU = import.meta.env?.NUMBL_DISABLE_WEBGPU === "true" ? true : false;
-export const DISABLE_WEBGPU = true;
-
 export type RuntimeValue =
   | number
   | boolean

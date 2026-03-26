@@ -38,7 +38,7 @@ import { toNumber } from "./convert.js";
 export const COLON_INDEX: RuntimeValue = "__COLON__";
 
 /** Check if an index is a colon sentinel */
-export function isColonIndex(v: RuntimeValue): boolean {
+function isColonIndex(v: RuntimeValue): boolean {
   return isRuntimeString(v) && v === "__COLON__";
 }
 
