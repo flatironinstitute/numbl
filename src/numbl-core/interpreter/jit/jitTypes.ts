@@ -305,15 +305,7 @@ export function isArithmeticType(t: JitType): boolean {
   );
 }
 
-export function isRealType(t: JitType): boolean {
-  return (
-    t.kind === "number" ||
-    t.kind === "boolean" ||
-    (t.kind === "tensor" && !t.isComplex)
-  );
-}
-
-export function isVectorShape(shape: number[]): boolean {
+function isVectorShape(shape: number[]): boolean {
   if (shape.length === 1) return shape[0] !== -1;
   if (shape.length === 2) {
     return (
@@ -407,16 +399,6 @@ export type JitStmt =
   | { tag: "SetLoc"; line: number };
 
 // ── Scalar math builtins ────────────────────────────────────────────────
-
-export interface ScalarMathEntry {
-  arity: number;
-  /** Compute the result type given argument types */
-  resultType: (argTypes: JitType[]) => JitType | null;
-}
-
-/** @deprecated All scalar math is now handled by IBuiltins (see ibuiltins.ts). */
-/** @deprecated All scalar math is now handled by IBuiltins (see ibuiltins.ts). */
-export const SCALAR_MATH: Record<string, ScalarMathEntry> = {};
 
 // ── Cache entry type ────────────────────────────────────────────────────
 

@@ -24,7 +24,7 @@ import {
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
 /** Squeeze trailing singleton dimensions, keeping at least 2. Mutates in place. */
-export function squeezeTrailing(shape: number[]): void {
+function squeezeTrailing(shape: number[]): void {
   while (shape.length > 2 && shape[shape.length - 1] === 1) {
     shape.pop();
   }
@@ -97,7 +97,7 @@ export function copyTensor(v: RuntimeTensor): RuntimeValue {
  * @param initialValue Initial accumulator value
  * @param finalizeFn Optional function to transform final result (e.g., divide by count for mean)
  */
-export function dimReduce(
+function dimReduce(
   v: RuntimeValue,
   dim: number,
   reduceFn: (acc: number, val: number) => number,
@@ -133,7 +133,7 @@ export function dimReduce(
 }
 
 /** Like dimReduce but skips NaN values (for 'omitnan' flag). */
-export function dimReduceOmitNaN(
+function dimReduceOmitNaN(
   v: RuntimeValue,
   dim: number,
   reduceFn: (acc: number, val: number) => number,
@@ -165,7 +165,7 @@ export function dimReduceOmitNaN(
 }
 
 /** Reduce a tensor along a dimension using a whole-slice function (for median, mode, etc.) */
-export function sliceDimReduce(
+function sliceDimReduce(
   v: RuntimeTensor,
   dim: number,
   sliceFn: (slice: ArrayLike<number>) => number

@@ -86,8 +86,3 @@ export function register(name: string, fn: BuiltinFn, nargin?: number): void {
     builtinNarginMap.set(name, nargin);
   }
 }
-
-export function unregister(name: string): void {
-  builtins.delete(name);
-  builtinNarginMap.delete(name);
-}

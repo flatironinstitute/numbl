@@ -80,7 +80,7 @@ function complexScalarVal(v: RuntimeValue): { re: number; im: number } | null {
 
 // ── Sparse + Sparse ─────────────────────────────────────────────────────
 
-export function sparseAdd(
+function sparseAdd(
   a: RuntimeSparseMatrix,
   b: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
@@ -149,7 +149,7 @@ export function sparseAdd(
 
 // ── Sparse - Sparse ─────────────────────────────────────────────────────
 
-export function sparseSub(
+function sparseSub(
   a: RuntimeSparseMatrix,
   b: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
@@ -253,7 +253,7 @@ function sparseScaleComplex(
 
 // ── Sparse * real scalar ────────────────────────────────────────────────
 
-export function sparseScale(
+function sparseScale(
   S: RuntimeSparseMatrix,
   scalar: number
 ): RuntimeSparseMatrix {
@@ -359,7 +359,7 @@ export function sparseConjugateTranspose(
 
 // ── Sparse * Sparse (matrix multiply) ───────────────────────────────────
 
-export function sparseMatMul(
+function sparseMatMul(
   A: RuntimeSparseMatrix,
   B: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
@@ -428,7 +428,7 @@ export function sparseMatMul(
 
 // ── Element-wise multiply (Sparse .* Sparse) ───────────────────────────
 
-export function sparseElemMul(
+function sparseElemMul(
   a: RuntimeSparseMatrix,
   b: RuntimeSparseMatrix
 ): RuntimeSparseMatrix {
@@ -483,7 +483,7 @@ export function sparseElemMul(
 
 // ── Sparse .* Dense (result is sparse) ──────────────────────────────────
 
-export function sparseElemMulDense(
+function sparseElemMulDense(
   S: RuntimeSparseMatrix,
   D: RuntimeTensor
 ): RuntimeSparseMatrix {

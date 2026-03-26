@@ -1,56 +1,20 @@
 export type {
   RuntimeValue,
-  RuntimeNumber,
   RuntimeTensor,
   RuntimeString,
   RuntimeLogical,
   RuntimeCell,
   RuntimeStruct,
   RuntimeFunction,
-  RuntimeClassInstance,
-  RuntimeComplexNumber,
-  RuntimeDummyHandle,
-  RuntimeStructArray,
-  RuntimeSparseMatrix,
 } from "./types.js";
 
-export {
-  isRuntimeNumber,
-  isRuntimeLogical,
-  isRuntimeString,
-  isRuntimeChar,
-  isRuntimeTensor,
-  isRuntimeCell,
-  isRuntimeStruct,
-  isRuntimeFunction,
-  isRuntimeClassInstance,
-  isRuntimeComplexNumber,
-  isRuntimeDummyHandle,
-  isRuntimeStructArray,
-  isRuntimeSparseMatrix,
-  kstr,
-  USE_FLOAT32,
-  FloatXArray,
-} from "./types.js";
-
-export {
-  RuntimeError,
-  offsetToLine,
-  offsetToLineFast,
-  buildLineTable,
-  offsetToColumn,
-  extractSnippet,
-} from "./error.js";
+export { RuntimeError, offsetToLine, offsetToColumn } from "./error.js";
 export type { CallFrame } from "./error.js";
-
-export { runtimeError, formatError } from "./errorHelpers.js";
 
 export {
   tensorSize2D,
   numel,
   colMajorIndex,
-  ind2sub,
-  sub2ind,
   shareRuntimeValue,
 } from "./utils.js";
 
@@ -83,7 +47,6 @@ export {
 
 export {
   COLON_INDEX,
-  isColonIndex,
   indexIntoRTValue as mIndex,
   storeIntoRTValueIndex as mIndexStore,
 } from "./indexing.js";

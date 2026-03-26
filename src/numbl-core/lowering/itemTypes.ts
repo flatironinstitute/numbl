@@ -28,7 +28,7 @@ export type ItemType =
   | { kind: "DummyHandle" }
   | { kind: "SparseMatrix"; isComplex?: boolean };
 
-export function typeToString(ty: ItemType): string {
+function typeToString(ty: ItemType): string {
   switch (ty.kind) {
     case "Number":
       return "Number";
@@ -117,35 +117,6 @@ export function isString(t: ItemType): boolean | undefined {
 /** Returns true if the type is definitely Char, false if definitely not, undefined if unknown. */
 export function isChar(t: ItemType): boolean | undefined {
   if (t.kind === "Char") return true;
-  if (t.kind === "Unknown") return undefined;
-  return false;
-}
-
-/** Returns true if the type is definitely a Logical scalar, false if definitely not, undefined if unknown. */
-export function isLogicalScalar(t: ItemType): boolean | undefined {
-  if (t.kind === "Boolean") return true;
-  if (t.kind === "Unknown") return undefined;
-  return false;
-}
-
-/** Returns true if the type is definitely Void, false if definitely not, undefined if unknown. */
-export function isVoid(t: ItemType): boolean | undefined {
-  if (t.kind === "Void") return true;
-  if (t.kind === "Unknown") return undefined;
-  return false;
-}
-
-/** Returns true if the type is definitely a Cell, false if definitely not, undefined if unknown. */
-export function isCell(t: ItemType): boolean | undefined {
-  if (t.kind === "Cell") return true;
-  if (t.kind === "Unknown") return undefined;
-  return false;
-}
-
-/** Returns true if the type is a scalar numeric (Num, Complex, or Logical), false if not, undefined if unknown. */
-export function isScalarNumeric(t: ItemType): boolean | undefined {
-  if (t.kind === "Number" || t.kind === "ComplexNumber" || t.kind === "Boolean")
-    return true;
   if (t.kind === "Unknown") return undefined;
   return false;
 }

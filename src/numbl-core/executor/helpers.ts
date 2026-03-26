@@ -2,13 +2,12 @@
  * Helper functions for value conversion and wrapping.
  */
 
+import { RTV, RuntimeValue } from "../runtime/index.js";
 import {
-  RTV,
-  RuntimeValue,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
-} from "../runtime";
+} from "../runtime/types.js";
 
 /** Extract number from value if possible, for fast-path operations */
 export function asNumber(v: unknown): number | null {

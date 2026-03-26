@@ -205,55 +205,6 @@ export function makeTensor(
 
 // ── Type rule helpers ───────────────────────────────────────────────────
 
-/** Type rule for unary functions that preserve the type category */
-export function unaryPreserveType(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length !== 1) return null;
-  const a = argTypes[0];
-  switch (a.kind) {
-    case "number":
-    case "boolean":
-      return [{ kind: "number" }];
-    case "complex_or_number":
-      return [{ kind: "complex_or_number" }];
-    case "tensor":
-      return [
-        {
-          kind: "tensor",
-          isComplex: a.isComplex,
-          shape: a.shape,
-          ndim: a.ndim,
-        },
-      ];
-    default:
-      return null;
-  }
-}
-
-/** Type rule for unary functions that always return real (e.g., abs) */
-export function unaryAlwaysReal(argTypes: JitType[]): JitType[] | null {
-  if (argTypes.length !== 1) return null;
-  const a = argTypes[0];
-  switch (a.kind) {
-    case "number":
-    case "boolean":
-      return [{ kind: "number", sign: "nonneg" }];
-    case "complex_or_number":
-      return [{ kind: "number", sign: "nonneg" }];
-    case "tensor":
-      return [
-        {
-          kind: "tensor",
-          isComplex: false,
-          shape: a.shape,
-          ndim: a.ndim,
-          nonneg: true,
-        },
-      ];
-    default:
-      return null;
-  }
-}
-
 /** Type rule requiring two scalar numbers */
 export function binaryNumberOnly(argTypes: JitType[]): JitType[] | null {
   if (argTypes.length !== 2) return null;
@@ -306,7 +257,7 @@ export function applyUnaryElemwise(
 
 /** Apply a unary element-wise function that may produce complex for out-of-domain real inputs.
  * When realFn returns NaN, complexFn is used instead (e.g., acos(2), asin(2), log(-1)). */
-export function applyUnaryElemwiseMaybeComplex(
+function applyUnaryElemwiseMaybeComplex(
   v: RuntimeValue,
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
@@ -361,7 +312,7 @@ export function applyUnaryElemwiseMaybeComplex(
 }
 
 /** Apply a unary function that always returns real (e.g., abs) */
-export function applyUnaryRealResult(
+function applyUnaryRealResult(
   v: RuntimeValue,
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => number,
@@ -456,72 +407,6 @@ export function binaryElemwiseMatch(argTypes: JitType[]): JitType[] | null {
 
 // ── Combined resolve helpers ────────────────────────────────────────────
 
-/** Resolve helper for unary element-wise functions with complex support. */
-export function resolveUnaryElemwise(
-  typeRule: (argTypes: JitType[]) => JitType[] | null,
-  realFn: (x: number) => number,
-  complexFn: (re: number, im: number) => { re: number; im: number },
-  name: string
-): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
-  return argTypes => {
-    const outputTypes = typeRule(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => applyUnaryElemwise(args[0], realFn, complexFn, name),
-    };
-  };
-}
-
-/** Resolve helper for unary element-wise functions that may produce complex. */
-export function resolveUnaryElemwiseMaybeComplex(
-  typeRule: (argTypes: JitType[]) => JitType[] | null,
-  realFn: (x: number) => number,
-  complexFn: (re: number, im: number) => { re: number; im: number },
-  name: string
-): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
-  return argTypes => {
-    const outputTypes = typeRule(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args =>
-        applyUnaryElemwiseMaybeComplex(args[0], realFn, complexFn, name),
-    };
-  };
-}
-
-/** Resolve helper for unary functions that always return real. */
-export function resolveUnaryRealResult(
-  realFn: (x: number) => number,
-  complexFn: (re: number, im: number) => number,
-  name: string
-): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
-  return argTypes => {
-    const outputTypes = unaryAlwaysReal(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => applyUnaryRealResult(args[0], realFn, complexFn, name),
-    };
-  };
-}
-
-/** Resolve helper for binary scalar-only functions. */
-export function resolveBinaryScalar(
-  fn: (a: number, b: number) => number,
-  name: string
-): (argTypes: JitType[], nargout: number) => IBuiltinResolution | null {
-  return argTypes => {
-    const outputTypes = binaryNumberOnly(argTypes);
-    if (!outputTypes) return null;
-    return {
-      outputTypes,
-      apply: args => applyBinaryScalar(args, fn, name),
-    };
-  };
-}
-
 // ── Case-based builtin definition ────────────────────────────────────
 
 /** A single case in a builtin's dispatch table. Bundles type-level matching
@@ -562,7 +447,7 @@ type BooleanJitType = Extract<JitType, { kind: "boolean" }>;
 type ComplexJitType = Extract<JitType, { kind: "complex_or_number" }>;
 type TensorJitType = Extract<JitType, { kind: "tensor" }>;
 
-export interface UnaryElemwiseSpec {
+interface UnaryElemwiseSpec {
   numberType?: (a: NumberJitType) => JitType | null;
   booleanType?: (a: BooleanJitType) => JitType | null;
   complexType?: (a: ComplexJitType) => JitType | null;

@@ -45,11 +45,3 @@ export function coerceToTensor(v: RuntimeValue, name: string): RuntimeTensor {
     ) as RuntimeTensor;
   throw new RuntimeError(`${name}: argument must be numeric`);
 }
-
-/** Extract a numeric vector from a scalar or tensor. */
-export function toNumericVector(v: RuntimeValue, name: string): number[] {
-  if (isRuntimeNumber(v)) return [v as number];
-  if (isRuntimeLogical(v)) return [v ? 1 : 0];
-  if (isRuntimeTensor(v)) return Array.from(v.data);
-  throw new RuntimeError(`${name}: argument must be numeric`);
-}
