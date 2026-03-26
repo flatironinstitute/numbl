@@ -702,9 +702,9 @@ defineBuiltin({
         const n = args.length >= 2 ? Math.round(toNumber(args[1])) : 1;
         const dimArg =
           args.length >= 3 ? Math.round(toNumber(args[2])) : undefined;
-        let result = args[0];
+        let result = args[0] as RuntimeValue;
         for (let i = 0; i < n; i++) {
-          result = diffOnce(result, dimArg);
+          result = diffOnce(result, dimArg) as RuntimeValue;
         }
         return result;
       },

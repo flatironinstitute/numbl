@@ -428,24 +428,6 @@ export class Runtime {
     return result;
   }
 
-  private unwrapResult(
-    result: RuntimeValue | RuntimeValue[] | undefined
-  ): unknown {
-    if (result === undefined) return undefined;
-    if (Array.isArray(result)) {
-      return result.map(r => {
-        if (isRuntimeNumber(r)) return r;
-        if (isRuntimeTensor(r) && r.data.length === 1 && !r.imag)
-          return r.data[0];
-        return r;
-      });
-    }
-    if (isRuntimeNumber(result)) return result;
-    if (isRuntimeTensor(result) && result.data.length === 1 && !result.imag)
-      return result.data[0];
-    return result;
-  }
-
   // ── Output ──────────────────────────────────────────────────────────
 
   output(text: string): void {

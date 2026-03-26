@@ -116,6 +116,12 @@ export function jitTypeKey(t: JitType): string {
       }
       return k;
     }
+    case "sparse_matrix": {
+      let k = "sparse";
+      if (t.m !== undefined && t.n !== undefined) k += `[${t.m}x${t.n}]`;
+      if (t.isComplex) k += "C";
+      return k;
+    }
     case "unknown":
       return "unknown";
   }
