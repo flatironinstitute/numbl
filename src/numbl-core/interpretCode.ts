@@ -161,7 +161,7 @@ export function interpretCode(
     interpreter.fileSources.set(f.name, f.source);
   }
 
-  interpreter.optimization = options.optimization ?? 0;
+  interpreter.optimization = options.optimization ?? 1;
 
   // Collect JIT compilations for generatedJS output and profiling
   const jitSections: string[] = [];

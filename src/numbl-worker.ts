@@ -62,7 +62,7 @@ self.onmessage = (e: MessageEvent) => {
         },
         displayResults: options?.displayResults ?? true,
         maxIterations: options?.maxIterations ?? 10000000,
-        optimization: options?.optimization ?? 0,
+        optimization: options?.optimization ?? 1,
         initialVariableValues: {},
       },
       wsFiles,

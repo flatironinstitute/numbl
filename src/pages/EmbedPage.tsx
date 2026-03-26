@@ -46,7 +46,7 @@ function getQueryParams(): {
   optimization: number;
 } {
   const params = new URLSearchParams(window.location.search);
-  const optimization = parseInt(params.get("opt") ?? "0", 10) || 0;
+  const optimization = parseInt(params.get("opt") ?? "1", 10);
   const scriptParam = params.get("script");
   let script = DEFAULT_SCRIPT;
   if (scriptParam) {

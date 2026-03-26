@@ -11,7 +11,7 @@
 import type { Interpreter } from "../interpreter.js";
 import type { Stmt } from "../../parser/types.js";
 import type { FunctionDef } from "../types.js";
-import type { JitType, JitCacheEntry } from "./jitTypes.js";
+import type { JitType } from "./jitTypes.js";
 import { jitTypeKey } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
@@ -20,10 +20,6 @@ import { inferJitType } from "../builtins/types.js";
 import { analyzeForLoop, analyzeWhileLoop } from "./jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-
-// ── Loop JIT cache (keyed by cache string) ──────────────────────────────
-
-const loopJitCache = new Map<string, JitCacheEntry | null>();
 
 // ── Known constants that should not be treated as input variables ────────
 
@@ -112,8 +108,8 @@ function tryJitLoop(
   const cacheKey = `${loc}|${typeKey}`;
 
   // Check cache
-  if (loopJitCache.has(cacheKey)) {
-    const entry = loopJitCache.get(cacheKey)!;
+  if (interp.loopJitCache.has(cacheKey)) {
+    const entry = interp.loopJitCache.get(cacheKey)!;
     if (entry === null) return false; // previously failed
     // Log even on cache hit so the UI shows JIT info across re-runs
     interp.onJitCompile?.(
@@ -139,7 +135,7 @@ function tryJitLoop(
     interp
   );
   if (!lowered) {
-    loopJitCache.set(cacheKey, null);
+    interp.loopJitCache.set(cacheKey, null);
     return false;
   }
 
@@ -170,7 +166,7 @@ function tryJitLoop(
     compiledFn = (...callArgs: unknown[]) =>
       factory(jitHelpers, rt, ...callArgs);
   } catch {
-    loopJitCache.set(cacheKey, null);
+    interp.loopJitCache.set(cacheKey, null);
     return false;
   }
 
@@ -180,7 +176,7 @@ function tryJitLoop(
     .join(", ");
   const source = `// JIT loop (${kind}): (${paramComments})\nfunction $loop_${kind}(${inputs.join(", ")}) {\n${jsBody}\n}`;
 
-  loopJitCache.set(cacheKey, { fn: compiledFn, source });
+  interp.loopJitCache.set(cacheKey, { fn: compiledFn, source });
 
   // Fire logging callback
   const line = interp.rt.$line ?? 0;
