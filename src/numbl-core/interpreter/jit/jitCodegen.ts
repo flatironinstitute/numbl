@@ -176,7 +176,7 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
       // 2. This pattern appears to be faster in V8 (reason unclear).
       if (stmt.step) {
         lines.push(
-          `${indent}for (var ${t} = ${start}; ${step} > 0 ? ${t} <= ${end} : ${t} >= ${end}; ${t} += ${step}) {`
+          `${indent}for (var ${t} = ${start}; ${step} !== 0 && (${step} > 0 ? ${t} <= ${end} : ${t} >= ${end}); ${t} += ${step}) {`
         );
       } else {
         lines.push(

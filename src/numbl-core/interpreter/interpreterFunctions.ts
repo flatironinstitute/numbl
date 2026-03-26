@@ -691,6 +691,11 @@ export function callNestedFunction(
     const outputs: RuntimeValue[] = [];
     for (let i = 0; i < Math.min(regularOutputs.length, nargout); i++) {
       const val = this.env.get(regularOutputs[i]);
+      if (val === undefined && nargout >= i + 1) {
+        throw new RuntimeError(
+          `Output argument '${regularOutputs[i]}' (and maybe others) not assigned during call to '${fn.name}'`
+        );
+      }
       outputs.push(val ?? RTV.num(0));
     }
 
