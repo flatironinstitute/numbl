@@ -43,6 +43,9 @@ extern "C" {
   // Generate the m×n (or m×m) orthogonal matrix Q from dgeqrf reflectors
   void dorgqr_(int* m, int* n, int* k, double* a, int* lda, double* tau,
                double* work, int* lwork, int* info);
+  // Column-pivoted QR factorisation: A*P = Q*R
+  void dgeqp3_(int* m, int* n, double* a, int* lda, int* jpvt,
+               double* tau, double* work, int* lwork, int* info);
 
   // ── Complex QR factorisation ───────────────────────────────────────────────
   // Compute QR factorisation of a general complex m×n matrix: A = Q * R
@@ -53,6 +56,10 @@ extern "C" {
   void zungqr_(int* m, int* n, int* k, lapack_complex_double* a, int* lda,
                lapack_complex_double* tau,
                lapack_complex_double* work, int* lwork, int* info);
+  // Column-pivoted complex QR factorisation: A*P = Q*R
+  void zgeqp3_(int* m, int* n, lapack_complex_double* a, int* lda, int* jpvt,
+               lapack_complex_double* tau, lapack_complex_double* work,
+               int* lwork, double* rwork, int* info);
 
   // ── SVD ───────────────────────────────────────────────────────────────────
   // Compute SVD using divide-and-conquer: A = U * Sigma * V^T
@@ -254,6 +261,8 @@ inline bool checkLapackInfo(Napi::Env env, int info_val,
 Napi::Value Inv(const Napi::CallbackInfo& info);
 Napi::Value InvComplex(const Napi::CallbackInfo& info);
 Napi::Value Qr(const Napi::CallbackInfo& info);
+Napi::Value QrPivot(const Napi::CallbackInfo& info);
+Napi::Value QrPivotComplex(const Napi::CallbackInfo& info);
 Napi::Value QrComplex(const Napi::CallbackInfo& info);
 Napi::Value Lu(const Napi::CallbackInfo& info);
 Napi::Value LuComplex(const Napi::CallbackInfo& info);

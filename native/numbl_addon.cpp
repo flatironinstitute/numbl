@@ -51,6 +51,10 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, InvComplex));
   exports.Set(Napi::String::New(env, "qr"),
               Napi::Function::New(env, Qr));
+  exports.Set(Napi::String::New(env, "qrPivot"),
+              Napi::Function::New(env, QrPivot));
+  exports.Set(Napi::String::New(env, "qrPivotComplex"),
+              Napi::Function::New(env, QrPivotComplex));
   exports.Set(Napi::String::New(env, "qrComplex"),
               Napi::Function::New(env, QrComplex));
   exports.Set(Napi::String::New(env, "lu"),
