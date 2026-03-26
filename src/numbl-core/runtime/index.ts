@@ -43,12 +43,7 @@ export {
 } from "./error.js";
 export type { CallFrame } from "./error.js";
 
-export {
-  runtimeError,
-  errorFromExpr,
-  errorFromStmt,
-  formatError,
-} from "./errorHelpers.js";
+export { runtimeError, formatError } from "./errorHelpers.js";
 
 export {
   tensorSize2D,

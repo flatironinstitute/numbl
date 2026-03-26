@@ -1,26 +1,17 @@
 /**
- * On-demand lowering context.
+ * Lowering context — workspace/function resolution for the interpreter.
  *
- * Purpose-built for the execution pipeline. Manages variable scopes,
- * identifier resolution, and on-demand function lowering. Simpler than
- * LowerContextForFileObj (no workspace/cross-file context), but covers
- * the same core responsibilities for a single file.
+ * Manages workspace file registration, class extraction, function index
+ * building, and on-demand context creation for workspace/class files.
  */
 
 import { type AbstractSyntaxTree, type Stmt } from "../parser/index.js";
 import { BUILTIN_CONSTANTS } from "../lowering/constants.js";
-import { type ItemType } from "../lowering/itemTypes.js";
-import { type IRVariable } from "../lowering/loweringTypes.js";
-import { type IRStmt } from "../lowering/nodes.js";
-import { VarId } from "../lowering/varId.js";
 import { getAllBuiltinNames } from "../builtins";
 import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
 import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import { type ClassInfo, extractClassInfo } from "./classInfo.js";
-import { computeSpecKey } from "./specKey.js";
-import { lowerFunction } from "./lowerStmt.js";
-import { TypeEnv } from "./typeEnv.js";
 import { type ExternalAccessDirectives } from "../externalAccessDirective.js";
 
 // Re-export ClassInfo for consumers
@@ -144,30 +135,9 @@ export interface FunctionIndex {
   fileImports: Map<string, ImportEntry[]>;
 }
 
-// ── Scope ───────────────────────────────────────────────────────────────
-
-interface Scope {
-  parent: number | null;
-  bindings: Map<string, IRVariable>;
-}
-
 // ── Context ─────────────────────────────────────────────────────────────
 
 export class LoweringContext {
-  // Scope chain
-  public scopes: Scope[] = [
-    { parent: null, bindings: new Map<string, IRVariable>() },
-  ];
-
-  // Variable ID generation (unique across all functions in this file)
-  private nextVarCounters: Record<string, number> = {};
-
-  // All variables created during lowering
-  readonly allVariables: IRVariable[] = [];
-
-  // Type environment: maps VarId → ItemType (decoupled from IRVariable)
-  readonly typeEnv = new TypeEnv();
-
   // Variable names declared via `% external-access:` directive in the current scope.
   // For scripts: these get workspace + caller accessors.
   // For functions: these get caller accessors.
@@ -180,24 +150,6 @@ export class LoweringContext {
 
   // Local function ASTs (parsed but not yet lowered)
   private localFunctionASTs = new Map<string, Stmt & { type: "Function" }>();
-
-  // Lowered local functions (populated on demand)
-  private loweredFunctions = new Map<string, IRStmt & { type: "Function" }>();
-
-  // The function currently being lowered (for recursion detection)
-  private loweringInProgress = new Set<string>();
-
-  // Specialized lowered functions: specKey → lowered IR
-  private specializedFunctions = new Map<
-    string,
-    IRStmt & { type: "Function" }
-  >();
-
-  // Tracks which specializations are currently being lowered (for cycle detection)
-  private specializationInProgress = new Set<string>();
-
-  // Track whether we're at the top level (script scope)
-  isTopLevel = false;
 
   // ── Shared workspace/class registry ─────────────────────────────
   // Shared by reference between this context and all child contexts
@@ -257,63 +209,6 @@ export class LoweringContext {
     return this.registry.fileASTCache;
   }
 
-  /**
-   * Create a fresh context that shares only the workspace registry.
-   * Used for JIT compilation, which compiles workspace/class functions
-   * in other files — not the main script's local functions.
-   */
-  createJitContext(): LoweringContext {
-    const ctx = new LoweringContext("", "<jit>");
-    ctx.registry = this.registry;
-    return ctx;
-  }
-
-  // ── Scope management ──────────────────────────────────────────────
-
-  pushScope(): void {
-    const parent = this.scopes.length - 1;
-    this.scopes.push({ parent, bindings: new Map() });
-  }
-
-  /** Push a scope isolated from the current scope chain (for subfunctions). */
-  pushIsolatedScope(): void {
-    this.scopes.push({ parent: null, bindings: new Map() });
-  }
-
-  popScope(): void {
-    this.scopes.pop();
-  }
-
-  // ── Variable management ───────────────────────────────────────────
-
-  defineVariable(name: string, ty: ItemType | undefined): IRVariable {
-    if (!(name in this.nextVarCounters)) {
-      this.nextVarCounters[name] = 0;
-    }
-    const idStr = `${name}_${this.nextVarCounters[name]}`;
-    this.nextVarCounters[name]++;
-    const id = new VarId(idStr);
-    const isTopLevel = this.isTopLevel;
-    const newVar: IRVariable = { id, name, isTopLevel };
-    this.typeEnv.set(id, ty);
-    const current = this.scopes.length - 1;
-    this.scopes[current].bindings.set(name, newVar);
-    this.allVariables.push(newVar);
-    return newVar;
-  }
-
-  lookup(name: string): IRVariable | null {
-    let scopeIdx: number | null = this.scopes.length - 1;
-    while (scopeIdx !== null && scopeIdx >= 0) {
-      const vv = this.scopes[scopeIdx].bindings.get(name);
-      if (vv !== undefined) {
-        return vv;
-      }
-      scopeIdx = this.scopes[scopeIdx].parent;
-    }
-    return null;
-  }
-
   // ── Symbol resolution ─────────────────────────────────────────────
 
   isConstant(name: string): boolean {
@@ -331,113 +226,9 @@ export class LoweringContext {
     this.localFunctionASTs.set(stmt.name, stmt);
   }
 
-  /** Unregister a local function's AST and clear its cached specializations. */
+  /** Unregister a local function's AST. */
   unregisterLocalFunctionAST(name: string): void {
     this.localFunctionASTs.delete(name);
-    this.loweredFunctions.delete(name);
-    // Clear any specializations for this function (specKey is JSON with "name" field)
-    for (const key of this.specializedFunctions.keys()) {
-      const parsed = JSON.parse(key);
-      if (parsed.name === name) {
-        this.specializedFunctions.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Get a lowered function by name, lowering it on demand if needed.
-   * Returns null if the function is not a local function.
-   */
-  getOrLowerFunction(name: string): (IRStmt & { type: "Function" }) | null {
-    // Already lowered?
-    const existing = this.loweredFunctions.get(name);
-    if (existing) return existing;
-
-    // Not a local function?
-    const ast = this.localFunctionASTs.get(name);
-    if (!ast) return null;
-
-    // Currently being lowered? (recursive call) — return a stub
-    if (this.loweringInProgress.has(name)) {
-      return this.createFunctionStub(ast);
-    }
-
-    // Lower it
-    this.loweringInProgress.add(name);
-    const lowered = lowerFunction(this, ast);
-    this.loweringInProgress.delete(name);
-    this.loweredFunctions.set(name, lowered);
-    return lowered;
-  }
-
-  /**
-   * Get or lower a specialized version of a function.
-   * Returns null if the function is not a local function.
-   * For recursive calls detected via specializationInProgress, returns a stub.
-   */
-  getOrLowerFunctionSpecialized(
-    name: string,
-    argTypes: ItemType[]
-  ): (IRStmt & { type: "Function" }) | null {
-    const specKey = computeSpecKey(name, argTypes);
-
-    // Already specialized?
-    const existing = this.specializedFunctions.get(specKey);
-    if (existing) return existing;
-
-    // Not a local function?
-    const ast = this.localFunctionASTs.get(name);
-    if (!ast) return null;
-
-    // Currently being lowered? (recursive call) — return a stub
-    if (this.specializationInProgress.has(specKey)) {
-      return this.createFunctionStub(ast);
-    }
-
-    // Lower it with the specialized param types
-    this.specializationInProgress.add(specKey);
-    const lowered = lowerFunction(this, ast, argTypes);
-    this.specializationInProgress.delete(specKey);
-    this.specializedFunctions.set(specKey, lowered);
-    return lowered;
-  }
-
-  /** Get a pre-registered stub for a local function (for candidates). */
-  getLocalFunctionStub(name: string): (IRStmt & { type: "Function" }) | null {
-    const lowered = this.loweredFunctions.get(name);
-    if (lowered) return lowered;
-    const ast = this.localFunctionASTs.get(name);
-    if (!ast) return null;
-    return this.createFunctionStub(ast);
-  }
-
-  /** Create a minimal stub for a function (before it's fully lowered). */
-  private createFunctionStub(
-    ast: Stmt & { type: "Function" }
-  ): IRStmt & { type: "Function" } {
-    return {
-      type: "Function",
-      originalName: ast.name,
-      functionId: ast.functionId,
-      params: [],
-      outputs: [],
-      body: [],
-      hasVarargin: false,
-      hasVarargout: false,
-      argumentsBlocks: [],
-      outputTypes: [],
-      span: ast.span,
-    };
-  }
-
-  /** Get all lowered functions (for codegen). */
-  getLoweredFunctions(): Map<string, IRStmt & { type: "Function" }> {
-    return this.loweredFunctions;
-  }
-
-  /** Pre-register a lowered function (used when lowering function statements). */
-  registerLoweredFunction(stmt: IRStmt & { type: "Function" }): void {
-    this.loweredFunctions.set(stmt.originalName, stmt);
   }
 
   // ── Workspace function management ───────────────────────────────
@@ -644,15 +435,6 @@ export class LoweringContext {
     return ctx;
   }
 
-  getOrLowerPrivateFunctionSpecialized(
-    funcName: string,
-    argTypes: ItemType[]
-  ): (IRStmt & { type: "Function" }) | null {
-    const ctx = this.getOrCreatePrivateFileContext(funcName);
-    if (!ctx) return null;
-    return ctx.getOrLowerFunctionSpecialized(funcName, argTypes);
-  }
-
   /**
    * Look up a private function entry by effective directory and name.
    * Used by JIT to resolve private functions from a specific calling file.
@@ -709,29 +491,6 @@ export class LoweringContext {
 
     this.registry.fileContexts.set(funcName, ctx);
     return ctx;
-  }
-
-  /**
-   * Get or lower a specialized workspace function.
-   * The function name is the primary function of the workspace file (matches filename).
-   */
-  getOrLowerWorkspaceFunctionSpecialized(
-    funcName: string,
-    argTypes: ItemType[]
-  ): (IRStmt & { type: "Function" }) | null {
-    const ctx = this.getOrCreateWorkspaceFileContext(funcName);
-    if (!ctx) return null;
-
-    // The primary function name is the last segment (e.g., "pkg.func" → "func")
-    const dotIdx = funcName.lastIndexOf(".");
-    const primaryName = dotIdx >= 0 ? funcName.slice(dotIdx + 1) : funcName;
-
-    return ctx.getOrLowerFunctionSpecialized(primaryName, argTypes);
-  }
-
-  /** Get the workspace file context (for codegen to temporarily swap contexts). */
-  getWorkspaceFileContext(funcName: string): LoweringContext | null {
-    return this.registry.fileContexts.get(funcName) ?? null;
   }
 
   // ── Class management ────────────────────────────────────────────────
@@ -924,22 +683,6 @@ export class LoweringContext {
     ctx.ownerClassName = className;
     info.ctx = ctx;
     return ctx;
-  }
-
-  /**
-   * Get or lower a specialized class method.
-   */
-  getOrLowerClassMethodSpecialized(
-    className: string,
-    methodName: string,
-    argTypes: ItemType[]
-  ): (IRStmt & { type: "Function" }) | null {
-    const ctx = this.getOrCreateClassFileContext(className);
-    if (!ctx) return null;
-
-    return ctx.withMethodScope(methodName, () =>
-      ctx.getOrLowerFunctionSpecialized(methodName, argTypes)
-    );
   }
 
   /**

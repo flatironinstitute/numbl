@@ -4,7 +4,6 @@
 
 import { RuntimeError } from "./error.js";
 import type { Span } from "../parser/types.js";
-import type { IRExpr, IRStmt } from "../lowering/nodes.js";
 
 /**
  * Create a RuntimeError with optional span context.
@@ -14,20 +13,6 @@ export function runtimeError(
   span?: Span | null
 ): RuntimeError {
   return new RuntimeError(message, span ?? undefined);
-}
-
-/**
- * Create a RuntimeError from an IR expression (auto-extracts span).
- */
-export function errorFromExpr(message: string, expr: IRExpr): RuntimeError {
-  return new RuntimeError(message, expr.span ?? undefined);
-}
-
-/**
- * Create a RuntimeError from an IR statement (auto-extracts span).
- */
-export function errorFromStmt(message: string, stmt: IRStmt): RuntimeError {
-  return new RuntimeError(message, stmt.span ?? undefined);
 }
 
 /**
