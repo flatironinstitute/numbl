@@ -657,6 +657,7 @@ export function callNestedFunction(
   const fnEnv = new Environment(parentEnv);
   fnEnv.isNested = true;
   fnEnv.rt = this.rt;
+  fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
 
   const hasVarargin =
     fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
@@ -680,6 +681,15 @@ export function callNestedFunction(
 
   try {
     this.execStmts(fn.body);
+
+    if (fnEnv.persistentFuncId) {
+      for (const name of fnEnv.persistentNames) {
+        const val = fnEnv.get(name);
+        if (val !== undefined) {
+          this.rt.setPersistent(fnEnv.persistentFuncId, name, val);
+        }
+      }
+    }
 
     const hasVarargout =
       fn.outputs.length > 0 &&
