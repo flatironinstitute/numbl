@@ -43,12 +43,9 @@ disp(['Sum of squares: ', num2str(sum(y))])
 
 function getQueryParams(): {
   script: string;
-  legacy: boolean;
   optimization: number;
 } {
   const params = new URLSearchParams(window.location.search);
-  const legacy =
-    params.get("legacy") === "true" || params.get("legacy") === "1";
   const optimization = parseInt(params.get("opt") ?? "0", 10) || 0;
   const scriptParam = params.get("script");
   let script = DEFAULT_SCRIPT;
@@ -59,11 +56,11 @@ function getQueryParams(): {
       console.error("Failed to decode script parameter");
     }
   }
-  return { script, legacy, optimization };
+  return { script, optimization };
 }
 
 export function EmbedPage() {
-  const { script: initialScript, legacy, optimization } = getQueryParams();
+  const { script: initialScript, optimization } = getQueryParams();
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -185,14 +182,13 @@ export function EmbedPage() {
       options: {
         displayResults: true,
         maxIterations: 10000000,
-        legacy,
         optimization,
       },
       workspaceFiles: mipWorkspaceFiles,
       mainFileName: "script.m",
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
     });
-  }, [code, legacy, optimization]);
+  }, [code, optimization]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

@@ -7,7 +7,7 @@
  *
  * Protocol:
  *   Main → Worker:  { type: "execute", code: string }
- *   Main → Worker:  { type: "set_legacy", legacy: boolean }
+ *   Main → Worker:  { type: "set_optimization", optimization: number }
  *   Main → Worker:  { type: "update_workspace", workspaceFiles: WorkspaceFile[] }
  *   Worker → Main:  { type: "output", text: string }
  *   Worker → Main:  { type: "drawnow", plotInstructions: object }
@@ -29,7 +29,6 @@ let variableValues: Record<string, RuntimeValue> = {};
 let holdState = false;
 let workspaceFiles: WorkspaceFile[] = [];
 let searchPaths: string[] | undefined;
-let legacyMode = false;
 let optimizationLevel = 0;
 
 // ── Snippet helpers ──────────────────────────────────────────────────────────
@@ -106,8 +105,7 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
-  if (type === "set_legacy") {
-    legacyMode = !!e.data.legacy;
+  if (type === "set_optimization") {
     optimizationLevel = e.data.optimization ?? optimizationLevel;
     return;
   }
@@ -134,7 +132,6 @@ self.onmessage = (e: MessageEvent) => {
         },
         displayResults: true,
         maxIterations: 10000000,
-        legacy: legacyMode,
         optimization: optimizationLevel,
         initialVariableValues: variableValues,
         initialHoldState: holdState,

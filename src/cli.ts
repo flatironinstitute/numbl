@@ -19,7 +19,6 @@ import {
 } from "./cli-plot-server.js";
 import { cmdMip } from "./cli-mip.js";
 import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
-import { getAllBuiltinNames } from "./numbl-core/builtins/index.js";
 import { getAllIBuiltinNames } from "./numbl-core/interpreter/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
 import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
@@ -32,7 +31,8 @@ import { NUMBL_VERSION } from "./numbl-core/version.js";
 import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 
-import { executeCode, generateCode } from "./numbl-core/executeCode.js";
+import { executeCode } from "./numbl-core/executeCode.js";
+import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { PlotInstruction } from "./numbl-core/executor/types.js";
 
@@ -220,7 +220,7 @@ function parseJitAnnotations(source: string): string[] {
   return patterns;
 }
 
-async function runTests(dir: string, legacy?: boolean, optimization?: number) {
+async function runTests(dir: string, optimization?: number) {
   const absDir = resolve(process.cwd(), dir);
   let testFiles = findTestFiles(absDir);
 
@@ -256,7 +256,6 @@ async function runTests(dir: string, legacy?: boolean, optimization?: number) {
         source,
         {
           displayResults: true,
-          legacy,
           optimization: optimization ?? 0,
           onJitCompile: (description: string) => {
             jitDescriptions.push(description);
@@ -353,7 +352,6 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
   --no-line-tracking  Omit $rt.$file/$rt.$line from generated JS
-  --legacy           Use the legacy codegen backend instead of the interpreter
   --opt <level>      Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
@@ -374,7 +372,6 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   noLineTracking: boolean;
-  legacy: boolean;
   optimization: number;
 }
 
@@ -391,7 +388,6 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     noLineTracking: false,
-    legacy: false,
     optimization: 0,
   };
 
@@ -466,9 +462,6 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--no-line-tracking":
         opts.noLineTracking = true;
-        break;
-      case "--legacy":
-        opts.legacy = true;
         break;
       case "--opt":
         i++;
@@ -630,13 +623,7 @@ async function executeWithOptions(
 
   // If --dump-ast is used alone (without running), just dump and exit
   if (opts.dumpAst && !opts.dumpJs && !opts.stream && !opts.verbose) {
-    const { ast } = generateCode(
-      code,
-      mainFileName,
-      workspaceFiles,
-      undefined,
-      searchPaths
-    );
+    const ast = parseMFile(code, mainFileName);
     process.stdout.write(JSON.stringify(ast, null, 2) + "\n");
     process.exit(0);
   }
@@ -686,7 +673,7 @@ async function executeWithOptions(
             onJitCompile,
             noLineTracking: opts.noLineTracking,
             fileIO,
-            legacy: opts.legacy,
+
             optimization: opts.optimization,
           },
           workspaceFiles,
@@ -737,7 +724,6 @@ async function executeWithOptions(
           onJitCompile,
           noLineTracking: opts.noLineTracking,
           fileIO,
-          legacy: opts.legacy,
           optimization: opts.optimization,
         },
         workspaceFiles,
@@ -771,7 +757,6 @@ async function executeWithOptions(
           onJitCompile,
           noLineTracking: opts.noLineTracking,
           fileIO,
-          legacy: opts.legacy,
           optimization: opts.optimization,
         },
         workspaceFiles,
@@ -879,9 +864,8 @@ function cmdInfo() {
   );
 }
 
-function cmdListBuiltins(args: string[]) {
-  const legacy = args.includes("--legacy");
-  const names = (legacy ? getAllBuiltinNames() : getAllIBuiltinNames()).sort();
+function cmdListBuiltins() {
+  const names = getAllIBuiltinNames().sort();
   for (const name of names) {
     console.log(name);
   }
@@ -905,7 +889,6 @@ async function cmdRepl(args: string[]) {
     replDrawnow,
     replSearchPaths,
     nativeBridge,
-    opts.legacy,
     opts.optimization
   );
 }
@@ -1136,7 +1119,7 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.legacy, testOpts.optimization);
+      await runTests(dir, testOpts.optimization);
       break;
     }
     case "build-addon":
@@ -1146,7 +1129,7 @@ async function main() {
       cmdInfo();
       break;
     case "list-builtins":
-      cmdListBuiltins(rest);
+      cmdListBuiltins();
       break;
     case "mip":
       await cmdMip(rest);

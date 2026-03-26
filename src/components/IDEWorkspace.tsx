@@ -103,10 +103,6 @@ export function IDEWorkspace({
   uploadFiles,
   headerContent,
 }: IDEWorkspaceProps) {
-  const legacy = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return params.get("legacy") === "true" || params.get("legacy") === "1";
-  }, []);
   const optimization = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return parseInt(params.get("opt") ?? "0", 10) || 0;
@@ -316,11 +312,6 @@ export function IDEWorkspace({
     );
     replWorkerRef.current = worker;
 
-    // Send legacy mode flag to worker
-    if (legacy) {
-      worker.postMessage({ type: "set_legacy", legacy: true });
-    }
-
     if (files.length > 0) {
       worker.postMessage({
         type: "update_workspace",
@@ -519,7 +510,6 @@ export function IDEWorkspace({
       options: {
         displayResults: true,
         maxIterations: 10000000,
-        legacy,
         optimization,
       },
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
@@ -531,7 +521,6 @@ export function IDEWorkspace({
     useRemoteExecution,
     remoteServiceUrl,
     handlePlotInstruction,
-    legacy,
     optimization,
   ]);
 

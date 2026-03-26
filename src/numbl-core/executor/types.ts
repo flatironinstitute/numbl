@@ -40,8 +40,6 @@ export interface ExecOptions {
   customBuiltins?: Record<string, (nargout: number, args: any[]) => any>;
   /** Platform-specific file I/O adapter (e.g. Node.js fs). */
   fileIO?: FileIOAdapter;
-  /** Use the legacy codegen+eval backend instead of the interpreter. */
-  legacy?: boolean;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
   optimization?: number;
 }

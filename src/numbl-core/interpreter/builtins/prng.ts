@@ -1,6 +1,5 @@
 /**
  * PRNG builtins: rand, randn, randi, randperm, rng.
- * Shares global PRNG state with the legacy codegen path.
  */
 
 import {

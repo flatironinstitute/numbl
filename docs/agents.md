@@ -10,7 +10,7 @@ Numbl has two execution backends:
 
 2. **Interpreter** (`interpretCode` in `src/numbl-core/interpretCode.ts`): Parse → AST-walk. Walks the AST directly using the `Interpreter` class (`src/numbl-core/interpreter/`). Reuses the `LoweringContext` for workspace/function resolution but dispatches to runtime values directly instead of generating code.
 
-**The interpreter is the primary (default) backend.** The codegen path is legacy and will eventually be removed. New builtins and features should target the interpreter path. Use the `--legacy` CLI flag or `?legacy=true` query parameter to fall back to the codegen backend.
+**The interpreter is the only backend.** New builtins and features go in `src/numbl-core/interpreter/builtins/`.
 
 ### Interpreter builtins (IBuiltins)
 
@@ -20,10 +20,6 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
 The JIT (`src/numbl-core/interpreter/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` for fast codegen.
-
-### Legacy builtins
-
-The codegen-path builtins live in `src/numbl-core/builtins/`. These use a different registration pattern (`register`, `builtinSingle`, `complexElemwise`, etc.) and are **not** used by the interpreter. Do not add new builtins here.
 
 ## Style
 
@@ -115,7 +111,6 @@ Options (for run and eval):
 --plot-port <port> Set plot server port (implies --plot)
 --add-script-path Add the script's directory to the workspace (run only)
 --no-line-tracking Omit $rt.$file/$rt.$line from generated JS
---legacy Use the legacy codegen backend instead of the interpreter
 --opt <level> Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:

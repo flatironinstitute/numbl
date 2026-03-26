@@ -23,18 +23,12 @@ interface TerminalMethods {
   clearTerminal: () => void;
 }
 
-function useLegacyParam(): boolean {
-  const params = new URLSearchParams(window.location.search);
-  return params.get("legacy") === "true" || params.get("legacy") === "1";
-}
-
 function useOptimizationParam(): number {
   const params = new URLSearchParams(window.location.search);
   return parseInt(params.get("opt") ?? "0", 10) || 0;
 }
 
 export function EmbedReplPage() {
-  const legacy = useLegacyParam();
   const optimization = useOptimizationParam();
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
@@ -69,11 +63,10 @@ export function EmbedReplPage() {
     );
     replWorkerRef.current = worker;
 
-    // Send legacy mode and optimization level to worker
-    if (legacy || optimization > 0) {
+    // Send optimization level to worker
+    if (optimization > 0) {
       worker.postMessage({
-        type: "set_legacy",
-        legacy,
+        type: "set_optimization",
         optimization,
       });
     }
@@ -129,7 +122,7 @@ export function EmbedReplPage() {
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction, legacy, optimization]);
+  }, [handlePlotInstruction, optimization]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {
