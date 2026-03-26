@@ -3,18 +3,10 @@
  * reduction factories, sparse helpers, and logical/complex scan utilities.
  */
 
-import {
-  RuntimeValue,
-  RTV,
-  toNumber,
-  toString,
-  RuntimeError,
-} from "../runtime/index.js";
-import { ItemType } from "../lowering/itemTypes.js";
+import { RuntimeValue, RTV, toString, RuntimeError } from "../runtime/index.js";
 import {
   FloatXArray,
   isRuntimeChar,
-  isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeTensor,
   type RuntimeTensor,
@@ -392,85 +384,6 @@ export function sparseAnyAll(
 // ── Type check helpers ─────────────────────────────────────────────────
 
 /** Type check for reductions that return Num without dim arg, Tensor with dim arg. */
-export function reductionCheck(
-  argTypes: ItemType[],
-  nargout: number
-): { outputTypes: ItemType[] } | null {
-  if (nargout !== 1) return null;
-  const inputIsComplex =
-    argTypes.length >= 1 &&
-    argTypes[0].kind === "Tensor" &&
-    argTypes[0].isComplex;
-  if (argTypes.length >= 2) {
-    return {
-      outputTypes: [
-        {
-          kind: "Tensor",
-          isComplex: inputIsComplex || undefined,
-        },
-      ],
-    };
-  }
-  if (argTypes.length >= 1 && argTypes[0].kind === "Tensor") {
-    return { outputTypes: [{ kind: "Unknown" }] };
-  }
-  if (inputIsComplex) {
-    return { outputTypes: [{ kind: "ComplexNumber" }] };
-  }
-  return { outputTypes: [{ kind: "Number" }] };
-}
-
-/** Type check for min/max: nargout=1 → Num, nargout=2 → [Num, Num].
- *  With 3 args (e.g. max(A,[],dim)), output is Tensor. */
-export function minMaxCheck(
-  argTypes: ItemType[],
-  nargout: number
-): { outputTypes: ItemType[] } | null {
-  const inputIsComplex =
-    argTypes.length >= 1 &&
-    argTypes[0].kind === "Tensor" &&
-    argTypes[0].isComplex;
-  if (argTypes.length === 3) {
-    const t: ItemType = {
-      kind: "Tensor",
-      isComplex: inputIsComplex || undefined,
-    };
-    if (nargout === 1) return { outputTypes: [t] };
-    if (nargout === 2) return { outputTypes: [t, t] };
-    return null;
-  }
-  const inputIsTensor = argTypes.length >= 1 && argTypes[0].kind === "Tensor";
-  if (inputIsTensor) {
-    const u: ItemType = { kind: "Unknown" };
-    if (nargout === 1) return { outputTypes: [u] };
-    if (nargout === 2) return { outputTypes: [u, u] };
-    return null;
-  }
-  const scalarType: ItemType = inputIsComplex
-    ? { kind: "ComplexNumber" }
-    : { kind: "Number" };
-  if (nargout === 1) return { outputTypes: [scalarType] };
-  if (nargout === 2) return { outputTypes: [scalarType, { kind: "Number" }] };
-  return null;
-}
-
-/** Type check for functions that preserve the input type (sort, cumsum). */
-export function preserveTypeCheck(
-  argTypes: ItemType[],
-  nargout: number
-): { outputTypes: ItemType[] } | null {
-  if (argTypes.length < 1) return null;
-  const t = argTypes[0];
-  const outType =
-    t.kind === "Number"
-      ? { kind: "Number" as const }
-      : t.kind === "Tensor"
-        ? t
-        : { kind: "Unknown" as const };
-  if (nargout === 1) return { outputTypes: [outType] };
-  if (nargout === 2) return { outputTypes: [outType, outType] };
-  return null;
-}
 
 // ── NaN flag parsing ────────────────────────────────────────────────────
 
@@ -506,41 +419,6 @@ export type ReductionKernel = {
   reduceAll: (v: RuntimeTensor) => RuntimeValue;
   reduceDim: (v: RuntimeTensor, dim: number) => RuntimeValue;
 };
-
-/** Unified factory for reductions (sum, mean, median, mode, etc.).
- *  Handles arg parsing: scalar passthrough, 'all' flag, dim arg, default dim.
- *  Supports 'omitnan'/'includenan' nanflag as last string argument. */
-export function makeReduction(
-  name: string,
-  kernel: ReductionKernel,
-  omitNaNKernel?: ReductionKernel
-): {
-  check: typeof reductionCheck;
-  apply: (args: RuntimeValue[]) => RuntimeValue;
-} {
-  return {
-    check: reductionCheck,
-    apply: rawArgs => {
-      if (rawArgs.length < 1)
-        throw new RuntimeError(`${name} requires at least 1 argument`);
-      const { args, omitNaN } = parseNanFlag(rawArgs);
-      const k = omitNaN && omitNaNKernel ? omitNaNKernel : kernel;
-      const v = args[0];
-      if (isRuntimeNumber(v)) return v;
-      if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
-      if (isRuntimeTensor(v)) {
-        if (args.length >= 2) {
-          if (isRuntimeChar(args[1]) && toString(args[1]) === "all")
-            return k.reduceAll(v);
-          return k.reduceDim(v, Math.round(toNumber(args[1])));
-        }
-        const d = firstReduceDim(v.shape);
-        return d === 0 ? k.reduceAll(v) : k.reduceDim(v, d);
-      }
-      throw new RuntimeError(`${name}: argument must be numeric`);
-    },
-  };
-}
 
 /** Create an accumulator-based reduction kernel (sum, mean, etc.) */
 export function accumKernel(
