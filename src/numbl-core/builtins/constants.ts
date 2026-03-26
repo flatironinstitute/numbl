@@ -3,7 +3,6 @@
  */
 
 import { RuntimeValue, RTV } from "../runtime/index.js";
-import { ItemType } from "../lowering/itemTypes.js";
 
 const CONSTANTS: Record<string, number> = {
   pi: Math.PI,
@@ -22,13 +21,6 @@ export function getConstant(name: string): RuntimeValue | undefined {
   if (name === "i" || name === "j") {
     return RTV.complex(0, 1);
   }
-  return undefined;
-}
-
-export function getConstantType(name: string): ItemType | undefined {
-  if (name === "true" || name === "false") return { kind: "Boolean" };
-  if (name in CONSTANTS) return { kind: "Number" };
-  if (name === "i" || name === "j") return { kind: "ComplexNumber" };
   return undefined;
 }
 

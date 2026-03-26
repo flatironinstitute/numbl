@@ -4,12 +4,9 @@
  * This file exports all builtin function registration and utilities.
  */
 
-// Export registry types and functions
-export type { BuiltinFn, BuiltinFnBranch } from "./registry.js";
+// Export registry functions
 export {
-  builtinSingle,
   getBuiltin,
-  findBuiltinBranch,
   isBuiltin,
   getAllBuiltinNames,
   getBuiltinNargin,
@@ -17,17 +14,12 @@ export {
 } from "./registry.js";
 
 // Export constants
-export {
-  getConstant,
-  getConstantType,
-  getAllConstantNames,
-} from "./constants.js";
+export { getConstant, getAllConstantNames } from "./constants.js";
 
 export { getDummyBuiltinNames } from "./dummy.js";
 
-// Import registration functions still needed for legacy fallback.
-// These provide sparse-matrix support, assert, graphics stubs, and
-// other functionality not yet covered by interpreter IBuiltins.
+// Registration functions for builtins still served via rt.builtins fallback
+// (sparse-matrix support and other functions not yet covered by IBuiltins).
 import { registerMathFunctions } from "./math.js";
 import { registerReductionFunctions } from "./reduction/register-reduction-functions.js";
 import { registerLinearAlgebraFunctions } from "./linear-algebra/register-linear-algebra-functions.js";

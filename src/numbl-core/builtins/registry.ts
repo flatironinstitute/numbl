@@ -64,38 +64,6 @@ export function getBuiltinNargin(name: string): number | undefined {
   return builtinNarginMap.get(name);
 }
 
-export function findBuiltinBranch(
-  name: string,
-  argTypes: ItemType[],
-  nargout: number
-): {
-  builtin: BuiltinFn | undefined;
-  branch: BuiltinFnBranch | undefined;
-  branchIndex: number;
-} {
-  const builtin = getBuiltin(name);
-  if (!builtin)
-    return {
-      builtin: undefined,
-      branch: undefined,
-      branchIndex: -1,
-    };
-  let branchIndex = -1;
-  let branch: BuiltinFnBranch | undefined = undefined;
-  for (let i = 0; i < builtin.length; i++) {
-    if (builtin[i].check(argTypes, nargout)) {
-      branchIndex = i;
-      branch = builtin[i];
-      break;
-    }
-  }
-  return {
-    builtin,
-    branch,
-    branchIndex,
-  };
-}
-
 export function isBuiltin(name: string): boolean {
   return builtins.has(name) || _extraBuiltinNames.has(name);
 }
