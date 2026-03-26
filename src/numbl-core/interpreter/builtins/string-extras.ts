@@ -229,21 +229,20 @@ function walkExpr(e: Expr, found: Set<string>): void {
     case "Ident":
       found.add(e.name);
       break;
-    case "BinaryOp":
+    case "Binary":
       walkExpr(e.left, found);
       walkExpr(e.right, found);
       break;
-    case "UnaryOp":
+    case "Unary":
       walkExpr(e.operand, found);
       break;
-    case "Call":
-      if (e.callee.type === "Ident") found.add(e.callee.name);
-      else walkExpr(e.callee, found);
+    case "FuncCall":
+      found.add(e.name);
       for (const arg of e.args) walkExpr(arg, found);
       break;
     case "Index":
       walkExpr(e.base, found);
-      for (const arg of e.args) walkExpr(arg, found);
+      for (const idx of e.indices) walkExpr(idx, found);
       break;
     case "Member":
       walkExpr(e.base, found);
