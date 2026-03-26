@@ -48,6 +48,90 @@ function varargMatch(argTypes: JitType[]): JitType[] | null {
   return [{ kind: "unknown" }];
 }
 
+// ── eps ──────────────────────────────────────────────────────────────
+
+/** Compute eps(x): distance from abs(x) to the next larger double. */
+function epsOfScalar(x: number): number {
+  x = Math.abs(x);
+  if (!isFinite(x) || isNaN(x)) return NaN;
+  if (x === 0) return Number.MIN_VALUE; // smallest positive subnormal ≈ 5e-324
+  const buf = new Float64Array(1);
+  const view = new DataView(buf.buffer);
+  buf[0] = x;
+  const bits = view.getBigUint64(0, true);
+  view.setBigUint64(0, bits + 1n, true);
+  return buf[0] - x;
+}
+
+const DOUBLE_EPS = 2.220446049250313e-16; // 2^-52
+const SINGLE_EPS = 1.1920928955078125e-7; // 2^-23
+
+defineBuiltin({
+  name: "eps",
+  cases: [
+    // eps() — no args
+    {
+      match: argTypes => {
+        if (argTypes.length !== 0) return null;
+        return [{ kind: "number" }];
+      },
+      apply: () => DOUBLE_EPS,
+    },
+    // eps('double') or eps('single')
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        if (argTypes[0].kind !== "char" && argTypes[0].kind !== "string")
+          return null;
+        return [{ kind: "number" }];
+      },
+      apply: args => {
+        const v = args[0];
+        const s = isRuntimeChar(v)
+          ? v.value
+          : isRuntimeString(v)
+            ? (v as string)
+            : "";
+        if (s === "double") return DOUBLE_EPS;
+        if (s === "single") return SINGLE_EPS;
+        throw new RuntimeError(`eps: unknown data type '${s}'`);
+      },
+    },
+    // eps(x) — scalar number
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        const k = argTypes[0].kind;
+        if (k === "number" || k === "boolean") return [{ kind: "number" }];
+        return null;
+      },
+      apply: args => {
+        const v = args[0];
+        const x = typeof v === "boolean" ? (v ? 1 : 0) : (v as number);
+        return epsOfScalar(x);
+      },
+    },
+    // eps(x) — tensor
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        if (argTypes[0].kind !== "tensor") return null;
+        const a = argTypes[0];
+        return [{ kind: "tensor" as const, isComplex: false, shape: a.shape }];
+      },
+      apply: args => {
+        const v = args[0];
+        if (!isRuntimeTensor(v))
+          throw new RuntimeError("eps: expected numeric argument");
+        const n = v.data.length;
+        const out = new FloatXArray(n);
+        for (let i = 0; i < n; i++) out[i] = epsOfScalar(v.data[i]);
+        return RTV.tensor(out, v.shape.slice());
+      },
+    },
+  ],
+});
+
 // ── conv ─────────────────────────────────────────────────────────────
 
 defineBuiltin({

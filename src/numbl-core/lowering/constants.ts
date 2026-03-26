@@ -10,7 +10,6 @@ export const BUILTIN_CONSTANTS = new Set([
   "Inf",
   "nan",
   "NaN",
-  "eps",
   "realmax",
   "realmin",
   "intmax",

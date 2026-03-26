@@ -40,6 +40,19 @@ function isColumnVector(v: RuntimeValue): boolean {
   return false;
 }
 
+/** Compute eps(x): distance from abs(x) to the next larger double. */
+function epsOfScalar(x: number): number {
+  x = Math.abs(x);
+  if (!isFinite(x) || isNaN(x)) return NaN;
+  if (x === 0) return Number.MIN_VALUE;
+  const buf = new Float64Array(1);
+  const view = new DataView(buf.buffer);
+  buf[0] = x;
+  const bits = view.getBigUint64(0, true);
+  view.setBigUint64(0, bits + 1n, true);
+  return buf[0] - x;
+}
+
 export function registerNumericalFunctions(): void {
   // ── conv ──────────────────────────────────────────────────────────────
 
@@ -1072,6 +1085,37 @@ export function registerNumericalFunctions(): void {
       throw new RuntimeError("bitshift: arguments must be numeric");
     }),
     2
+  );
+
+  // ── eps ──────────────────────────────────────────────────────────────
+
+  register(
+    "eps",
+    builtinSingle(args => {
+      const DOUBLE_EPS = 2.220446049250313e-16;
+      const SINGLE_EPS = 1.1920928955078125e-7;
+      if (args.length === 0) return RTV.num(DOUBLE_EPS);
+      const v = args[0];
+      if (isRuntimeChar(v)) {
+        if (v.value === "double") return RTV.num(DOUBLE_EPS);
+        if (v.value === "single") return RTV.num(SINGLE_EPS);
+        throw new RuntimeError(`eps: unknown data type '${v.value}'`);
+      }
+      if (isRuntimeString(v)) {
+        if (v === "double") return RTV.num(DOUBLE_EPS);
+        if (v === "single") return RTV.num(SINGLE_EPS);
+        throw new RuntimeError(`eps: unknown data type '${v}'`);
+      }
+      if (isRuntimeNumber(v)) return RTV.num(epsOfScalar(v as number));
+      if (isRuntimeTensor(v)) {
+        const n = v.data.length;
+        const out = new FloatXArray(n);
+        for (let i = 0; i < n; i++) out[i] = epsOfScalar(v.data[i]);
+        return RTV.tensor(out, v.shape.slice());
+      }
+      throw new RuntimeError("eps: unsupported argument type");
+    }),
+    1
   );
 }
 
