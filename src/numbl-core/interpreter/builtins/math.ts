@@ -853,6 +853,32 @@ registerUnary(
 );
 
 registerUnary(
+  "gammaln",
+  (x: number) => {
+    if (x < 0) throw new Error("Input must be nonnegative.");
+    if (Number.isNaN(x)) return NaN;
+    if (x === 0 || x === Infinity) return Infinity;
+    // Lanczos approximation in log-space
+    const g = 7;
+    const coef = [
+      0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+      771.32342877765313, -176.61502916214059, 12.507343278686905,
+      -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7,
+    ];
+    const xx = x - 1;
+    let a = coef[0];
+    for (let i = 1; i < coef.length; i++) {
+      a += coef[i] / (xx + i);
+    }
+    const t = xx + g + 0.5;
+    return (
+      0.5 * Math.log(2 * Math.PI) + (xx + 0.5) * Math.log(t) - t + Math.log(a)
+    );
+  },
+  noComplexFn
+);
+
+registerUnary(
   "factorial",
   (n: number) => {
     if (n < 0 || !Number.isFinite(n)) return NaN;
