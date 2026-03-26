@@ -56,7 +56,7 @@ export function isDeferredHorzcat(v: unknown): v is DeferredHorzcat {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-export function isRuntimeValue(v: unknown): v is RuntimeValue {
+function isRuntimeValue(v: unknown): v is RuntimeValue {
   if (typeof v === "number") return true;
   if (typeof v === "boolean") return true;
   if (typeof v === "string") return true;

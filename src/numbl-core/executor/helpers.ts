@@ -2,7 +2,7 @@
  * Helper functions for value conversion and wrapping.
  */
 
-import { RTV, RuntimeValue } from "../runtime/index.js";
+import { type RuntimeValue } from "../runtime/index.js";
 import {
   isRuntimeNumber,
   isRuntimeLogical,
@@ -32,11 +32,4 @@ export function runtimeValueToNumberArray(v: RuntimeValue): number[] {
   }
   if (isRuntimeLogical(v)) return [v ? 1 : 0];
   return [0];
-}
-
-/** Wrap return value as RuntimeValue */
-export function wrapReturnValue(r: unknown): RuntimeValue {
-  if (typeof r === "number") return RTV.num(r);
-  if (r === undefined) return RTV.num(0);
-  return r as RuntimeValue;
 }

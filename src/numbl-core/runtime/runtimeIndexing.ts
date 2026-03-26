@@ -42,7 +42,7 @@ import type { Runtime } from "./runtime.js";
 /**
  * Resolve indices that may contain END or COLON sentinels, deferred ranges, or functions.
  */
-export function resolveIndices(
+function resolveIndices(
   indices: unknown[],
   resolveEndForDim: (dim: number) => number
 ): RuntimeValue[] {
@@ -82,7 +82,7 @@ export function resolveIndices(
 /**
  * Get an end resolver function for the given runtime value.
  */
-export function endResolver(
+function endResolver(
   mv: RuntimeValue,
   numIndices: number
 ): (dim: number) => number {

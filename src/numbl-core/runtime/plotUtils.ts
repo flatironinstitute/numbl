@@ -57,7 +57,7 @@ const COLOR_NAMES: Record<string, [number, number, number]> = {
   white: [1, 1, 1],
 };
 
-export function resolveColor(
+function resolveColor(
   v: RuntimeValue | string
 ): [number, number, number] | undefined {
   if (typeof v === "string") {
@@ -102,7 +102,7 @@ export interface ParsedLineSpec {
   marker?: string;
 }
 
-export function parseLineSpec(s: string): ParsedLineSpec | null {
+function parseLineSpec(s: string): ParsedLineSpec | null {
   const result: ParsedLineSpec = {};
   let pos = 0;
 

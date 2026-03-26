@@ -475,7 +475,7 @@ export function methodDispatch(
 // ── arrayfun / cellfun ──────────────────────────────────────────────────
 
 /** Shared implementation for arrayfun/cellfun — handles UniformOutput name-value pair */
-export function arrayfunCellfunImpl(
+function arrayfunCellfunImpl(
   rt: Runtime,
   name: string,
   nargout: number,
