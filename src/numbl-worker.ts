@@ -62,7 +62,7 @@ self.onmessage = (e: MessageEvent) => {
         },
         displayResults: options?.displayResults ?? true,
         maxIterations: options?.maxIterations ?? 10000000,
-        interpret: options?.interpret ?? false,
+        legacy: options?.legacy ?? false,
         optimization: options?.optimization ?? 0,
         initialVariableValues: {},
       },

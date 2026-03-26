@@ -71,7 +71,8 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
   --no-line-tracking  Omit $rt.$file/$rt.$line from generated JS
-  --opt <level>      Interpreter optimization level (0=none, 1=JIT scalar functions)
+  --legacy           Use the legacy codegen backend instead of the interpreter
+  --opt <level>      Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
   NUMBL_PATH         Extra workspace directories (separated by :)

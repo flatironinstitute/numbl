@@ -23,9 +23,9 @@ interface TerminalMethods {
   clearTerminal: () => void;
 }
 
-function useInterpretParam(): boolean {
+function useLegacyParam(): boolean {
   const params = new URLSearchParams(window.location.search);
-  return params.get("interpret") === "true" || params.get("interpret") === "1";
+  return params.get("legacy") === "true" || params.get("legacy") === "1";
 }
 
 function useOptimizationParam(): number {
@@ -34,7 +34,7 @@ function useOptimizationParam(): number {
 }
 
 export function EmbedReplPage() {
-  const interpret = useInterpretParam();
+  const legacy = useLegacyParam();
   const optimization = useOptimizationParam();
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
@@ -69,11 +69,11 @@ export function EmbedReplPage() {
     );
     replWorkerRef.current = worker;
 
-    // Send interpret mode and optimization level to worker
-    if (interpret || optimization > 0) {
+    // Send legacy mode and optimization level to worker
+    if (legacy || optimization > 0) {
       worker.postMessage({
-        type: "set_interpret",
-        interpret,
+        type: "set_legacy",
+        legacy,
         optimization,
       });
     }
@@ -129,7 +129,7 @@ export function EmbedReplPage() {
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction, interpret, optimization]);
+  }, [handlePlotInstruction, legacy, optimization]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {

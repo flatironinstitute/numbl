@@ -10,7 +10,7 @@ Numbl has two execution backends:
 
 2. **Interpreter** (`interpretCode` in `src/numbl-core/interpretCode.ts`): Parse → AST-walk. Walks the AST directly using the `Interpreter` class (`src/numbl-core/interpreter/`). Reuses the `LoweringContext` for workspace/function resolution but dispatches to runtime values directly instead of generating code.
 
-**We are migrating to the interpreter as the primary backend.** The codegen path will eventually be removed. New builtins and features should target the interpreter path.
+**The interpreter is the primary (default) backend.** The codegen path is legacy and will eventually be removed. New builtins and features should target the interpreter path. Use the `--legacy` CLI flag or `?legacy=true` query parameter to fall back to the codegen backend.
 
 ### Interpreter builtins (IBuiltins)
 
@@ -40,7 +40,7 @@ Run both test suites before considering work complete:
 
 ```bash
 npm test              # unit tests (Vitest)
-npm run test:interpret  # integration tests (.m scripts)
+npm run test:scripts    # integration tests (.m scripts)
 ```
 
 ### Increasing coverage
@@ -115,6 +115,8 @@ Options (for run and eval):
 --plot-port <port> Set plot server port (implies --plot)
 --add-script-path Add the script's directory to the workspace (run only)
 --no-line-tracking Omit $rt.$file/$rt.$line from generated JS
+--legacy Use the legacy codegen backend instead of the interpreter
+--opt <level> Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
 NUMBL_PATH Extra workspace directories (separated by :)

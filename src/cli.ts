@@ -220,11 +220,7 @@ function parseJitAnnotations(source: string): string[] {
   return patterns;
 }
 
-async function runTests(
-  dir: string,
-  interpret?: boolean,
-  optimization?: number
-) {
+async function runTests(dir: string, legacy?: boolean, optimization?: number) {
   const absDir = resolve(process.cwd(), dir);
   let testFiles = findTestFiles(absDir);
 
@@ -260,7 +256,7 @@ async function runTests(
         source,
         {
           displayResults: true,
-          interpret,
+          legacy,
           optimization: optimization ?? 0,
           onJitCompile: (description: string) => {
             jitDescriptions.push(description);
@@ -357,7 +353,8 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
   --no-line-tracking  Omit $rt.$file/$rt.$line from generated JS
-  --opt <level>      Interpreter optimization level (0=none, 1=JIT scalar functions)
+  --legacy           Use the legacy codegen backend instead of the interpreter
+  --opt <level>      Optimization level (0=none, 1=JIT scalar functions)
 
 Environment variables:
   NUMBL_PATH         Extra workspace directories (separated by ${delimiter})`);
@@ -377,7 +374,7 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   noLineTracking: boolean;
-  interpret: boolean;
+  legacy: boolean;
   optimization: number;
 }
 
@@ -394,7 +391,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     noLineTracking: false,
-    interpret: false,
+    legacy: false,
     optimization: 0,
   };
 
@@ -470,8 +467,8 @@ function parseOptions(args: string[]): ParsedOptions {
       case "--no-line-tracking":
         opts.noLineTracking = true;
         break;
-      case "--interpret":
-        opts.interpret = true;
+      case "--legacy":
+        opts.legacy = true;
         break;
       case "--opt":
         i++;
@@ -647,7 +644,7 @@ async function executeWithOptions(
   const fileIO = new NodeFileIOAdapter();
 
   // Set up --dump-js: for compiled mode, append JIT pieces during execution.
-  // For interpret mode, JIT code is collected in result.generatedJS instead.
+  // For interpreter mode, JIT code is collected in result.generatedJS instead.
   let onJitCompile: ((description: string, jsCode: string) => void) | undefined;
   if (opts.dumpJs) {
     // Clear any previous dump file
@@ -689,7 +686,7 @@ async function executeWithOptions(
             onJitCompile,
             noLineTracking: opts.noLineTracking,
             fileIO,
-            interpret: opts.interpret,
+            legacy: opts.legacy,
             optimization: opts.optimization,
           },
           workspaceFiles,
@@ -740,7 +737,7 @@ async function executeWithOptions(
           onJitCompile,
           noLineTracking: opts.noLineTracking,
           fileIO,
-          interpret: opts.interpret,
+          legacy: opts.legacy,
           optimization: opts.optimization,
         },
         workspaceFiles,
@@ -774,7 +771,7 @@ async function executeWithOptions(
           onJitCompile,
           noLineTracking: opts.noLineTracking,
           fileIO,
-          interpret: opts.interpret,
+          legacy: opts.legacy,
           optimization: opts.optimization,
         },
         workspaceFiles,
@@ -883,10 +880,8 @@ function cmdInfo() {
 }
 
 function cmdListBuiltins(args: string[]) {
-  const interpret = args.includes("--interpret");
-  const names = (
-    interpret ? getAllIBuiltinNames() : getAllBuiltinNames()
-  ).sort();
+  const legacy = args.includes("--legacy");
+  const names = (legacy ? getAllBuiltinNames() : getAllIBuiltinNames()).sort();
   for (const name of names) {
     console.log(name);
   }
@@ -910,7 +905,7 @@ async function cmdRepl(args: string[]) {
     replDrawnow,
     replSearchPaths,
     nativeBridge,
-    opts.interpret,
+    opts.legacy,
     opts.optimization
   );
 }
@@ -1141,7 +1136,7 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.interpret, testOpts.optimization);
+      await runTests(dir, testOpts.legacy, testOpts.optimization);
       break;
     }
     case "build-addon":

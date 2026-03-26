@@ -97,7 +97,7 @@ const testDir = resolve(thisDir, "../../numbl_test_scripts");
 const testFiles = findTestFiles(testDir);
 
 describe("integration test scripts", () => {
-  // jit/ tests are run separately via npm run test:interpret
+  // jit/ tests are run separately via npm run test:jit
   const nonJitFiles = testFiles.filter(f => !f.includes("/jit/"));
 
   for (const filepath of nonJitFiles) {

@@ -38,7 +38,7 @@ export function executeCode(
   searchPaths?: string[],
   nativeBridge?: NativeBridge
 ): ExecResult {
-  if (options.interpret) {
+  if (!options.legacy) {
     return interpretCode(
       source,
       options,

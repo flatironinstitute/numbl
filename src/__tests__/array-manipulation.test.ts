@@ -441,7 +441,15 @@ describe("ismember", () => {
 
 describe("linspace edge cases", () => {
   it("linspace with n=1 returns start", () => {
-    expect(num("v = linspace(3, 7, 1);", "v")).toBe(7);
+    const result = executeCode("v = linspace(3, 7, 1);");
+    const v = result.variableValues["v"];
+    if (typeof v === "number") {
+      expect(v).toBe(7);
+    } else if (isRuntimeTensor(v)) {
+      expect(v.data[0]).toBe(7);
+    } else {
+      throw new Error("v is not a number or tensor");
+    }
   });
 
   it("linspace with n=2 returns endpoints", () => {

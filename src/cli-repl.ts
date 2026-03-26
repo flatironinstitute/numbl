@@ -62,7 +62,7 @@ export async function runRepl(
   onDrawnow?: (instructions: PlotInstruction[]) => void,
   initialSearchPaths?: string[],
   nativeBridge?: NativeBridge,
-  interpret?: boolean,
+  legacy?: boolean,
   optimization?: number
 ): Promise<void> {
   let variableValues: Record<string, RuntimeValue> = {};
@@ -129,7 +129,7 @@ export async function runRepl(
             onDrawnow,
             initialVariableValues: variableValues,
             initialHoldState: holdState,
-            interpret,
+            legacy,
             optimization,
           },
           workspaceFiles,
@@ -261,8 +261,8 @@ export async function runRepl(
           onDrawnow,
           initialVariableValues: variableValues,
           initialHoldState: holdState,
-          interpret,
-          opt,
+          legacy,
+          optimization,
         },
         workspaceFiles,
         "repl",
