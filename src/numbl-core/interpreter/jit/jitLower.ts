@@ -238,6 +238,9 @@ function binaryResultType(
   }
 
   if (anyComplex) {
+    // Complex scalar power not yet supported in codegen
+    if (op === BinaryOperation.Pow || op === BinaryOperation.ElemPow)
+      return null;
     return { kind: "complex_or_number" };
   }
 
