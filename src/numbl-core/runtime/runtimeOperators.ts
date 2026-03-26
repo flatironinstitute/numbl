@@ -47,8 +47,19 @@ import {
   isRuntimeSparseMatrix,
   FloatXArray,
 } from "../runtime/types.js";
-import { asNumber } from "../executor/helpers.js";
-import { END_SENTINEL } from "../executor/types.js";
+import { END_SENTINEL } from "./sentinels.js";
+
+/** Extract number from value if possible, for fast-path operations */
+function asNumber(v: unknown): number | null {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (v && typeof v === "object" && "kind" in v) {
+    const mv = v as RuntimeValue;
+    if (isRuntimeNumber(mv)) return mv;
+    if (isRuntimeLogical(mv)) return mv ? 1 : 0;
+  }
+  return null;
+}
 import {
   linsolveLapack,
   linsolveComplexLapack,

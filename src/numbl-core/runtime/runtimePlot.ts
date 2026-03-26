@@ -3,8 +3,26 @@
  */
 
 import { type RuntimeValue, toNumber, toString } from "../runtime/index.js";
-import { runtimeValueToNumberArray } from "../executor/helpers.js";
-import type { PlotInstruction, ExecOptions } from "../executor/types.js";
+import type { PlotInstruction } from "../../graphics/types.js";
+import type { ExecOptions } from "../executeCode.js";
+import {
+  isRuntimeNumber,
+  isRuntimeLogical,
+  isRuntimeTensor,
+} from "../runtime/types.js";
+
+/** Convert RuntimeValue to number array for plotting */
+function runtimeValueToNumberArray(v: RuntimeValue): number[] {
+  if (isRuntimeNumber(v)) return [v];
+  if (isRuntimeTensor(v)) {
+    if (v.imag) {
+      throw new Error("Cannot convert complex tensor to number array");
+    }
+    return Array.from(v.data);
+  }
+  if (isRuntimeLogical(v)) return [v ? 1 : 0];
+  return [0];
+}
 import {
   parsePlotArgs,
   parsePlot3Args,

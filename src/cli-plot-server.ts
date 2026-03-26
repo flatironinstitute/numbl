@@ -3,7 +3,7 @@ import { exec } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { PlotInstruction } from "./numbl-core/executor/types.js";
+import type { PlotInstruction } from "./graphics/types.js";
 
 export interface PlotServer {
   /** Send a batch of plot instructions to all connected SSE clients */

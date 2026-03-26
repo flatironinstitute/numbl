@@ -25,7 +25,7 @@ import { mPow } from "../helpers/arithmetic.js";
 import { getBuiltinNargin } from "../helpers/registry.js";
 import { getConstant } from "../helpers/constants.js";
 import { buildLineTable, offsetToLineFast } from "../runtime/error.js";
-import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
+import { COLON_SENTINEL, END_SENTINEL } from "../runtime/sentinels.js";
 import { numel } from "../runtime/utils.js";
 import {
   forIter,

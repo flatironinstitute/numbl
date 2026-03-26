@@ -30,7 +30,7 @@ import {
   isRuntimeSparseMatrix,
   FloatXArray,
 } from "../runtime/types.js";
-import { COLON_SENTINEL, END_SENTINEL } from "../executor/types.js";
+import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import {
   isDeferredRange,
   isDeferredHorzcat,
