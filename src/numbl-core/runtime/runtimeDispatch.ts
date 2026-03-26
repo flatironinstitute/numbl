@@ -32,6 +32,10 @@ import {
   kstr,
 } from "../runtime/types.js";
 import { isBuiltin, getBuiltinNargin } from "../builtins";
+import {
+  getIBuiltin as _getIBuiltin,
+  inferJitType as _inferJitType,
+} from "../interpreter/builtins/index.js";
 import { COLON_SENTINEL } from "../executor/types.js";
 import {
   getBroadcastShape,
@@ -338,6 +342,14 @@ export function callBuiltin(
   if (plotResult !== undefined) return plotResult;
   const builtin = rt.builtins[name];
   if (builtin) return builtin(nargout, args);
+  // Try IBuiltin (interpreter builtins)
+  const ib = _getIBuiltin(name);
+  if (ib) {
+    const margs = args.map(a => ensureRuntimeValue(a));
+    const argTypes = margs.map(_inferJitType);
+    const resolution = ib.resolve(argTypes, nargout);
+    if (resolution) return resolution.apply(margs, nargout);
+  }
   throw new RuntimeError(`'${name}' is not a builtin function`);
 }
 

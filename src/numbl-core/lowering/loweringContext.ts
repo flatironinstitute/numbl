@@ -15,6 +15,7 @@ import { type IRStmt } from "../lowering/nodes.js";
 import { VarId } from "../lowering/varId.js";
 import { getAllBuiltinNames } from "../builtins";
 import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
+import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import { type ClassInfo, extractClassInfo } from "./classInfo.js";
 import { computeSpecKey } from "./specKey.js";
@@ -986,6 +987,7 @@ export class LoweringContext {
     const builtins = new Set([
       ...getAllBuiltinNames(),
       ...getAllIBuiltinNames(),
+      ...SPECIAL_BUILTIN_NAMES,
     ]);
 
     // JS user functions resolve at workspace priority (after .m, before builtins).

@@ -32,6 +32,33 @@ import {
 } from "./runtimeDispatch.js";
 import type { Runtime } from "./runtime.js";
 
+/** Names of all special builtins (functions requiring runtime access). */
+export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
+  "disp",
+  "fprintf",
+  "arrayfun",
+  "cellfun",
+  "structfun",
+  "feval",
+  "bsxfun",
+  "subsref",
+  "subsasgn",
+  "builtin",
+  "fopen",
+  "fclose",
+  "fgetl",
+  "fgets",
+  "fileread",
+  "feof",
+  "ferror",
+  "fileparts",
+  "fullfile",
+  "assignin",
+  "evalin",
+  "drawnow",
+  "pause",
+];
+
 /**
  * Register all special builtins on the provided runtime instance.
  */

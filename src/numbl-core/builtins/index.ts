@@ -13,6 +13,7 @@ export {
   isBuiltin,
   getAllBuiltinNames,
   getBuiltinNargin,
+  registerExtraBuiltinNames,
 } from "./registry.js";
 
 // Export constants
@@ -22,33 +23,21 @@ export {
   getAllConstantNames,
 } from "./constants.js";
 
-// Import all registration functions
+export { getDummyBuiltinNames } from "./dummy.js";
+
+// Import registration functions still needed for legacy fallback.
+// These provide sparse-matrix support, assert, graphics stubs, and
+// other functionality not yet covered by interpreter IBuiltins.
 import { registerMathFunctions } from "./math.js";
-import { registerPrngFunctions } from "./prng.js";
-import { registerArrayFunctions } from "./array.js";
-import { registerArrayManipulationFunctions } from "./array-manipulation.js";
-import { registerIntrospectionFunctions } from "./introspection.js";
 import { registerReductionFunctions } from "./reduction/register-reduction-functions.js";
-import { registerStringFunctions } from "./string.js";
 import { registerLinearAlgebraFunctions } from "./linear-algebra/register-linear-algebra-functions.js";
 import { registerMiscFunctions } from "./misc.js";
 import { registerGraphicsFunctions } from "./graphics.js";
-import { registerValidatorFunctions } from "./validators.js";
 import { registerDummyFunctions } from "./dummy.js";
-export { getDummyBuiltinNames } from "./dummy.js";
-import { registerNumericalFunctions } from "./numerical.js";
 
-// Register all builtins on module load
 registerMathFunctions();
-registerPrngFunctions();
-registerArrayFunctions();
-registerArrayManipulationFunctions();
-registerIntrospectionFunctions();
 registerReductionFunctions();
-registerStringFunctions();
 registerLinearAlgebraFunctions();
 registerMiscFunctions();
 registerGraphicsFunctions();
-registerValidatorFunctions();
 registerDummyFunctions();
-registerNumericalFunctions();
