@@ -400,6 +400,60 @@ export function applyBinaryScalar(
   throw new Error(`${name}: expected two scalar numbers`);
 }
 
+/** Apply a binary element-wise function supporting scalars, tensors, and broadcast. */
+export function applyBinaryElemwise(
+  args: RuntimeValue[],
+  fn: (a: number, b: number) => number,
+  name: string
+): RuntimeValue {
+  const a0 = typeof args[0] === "boolean" ? (args[0] ? 1 : 0) : args[0];
+  const a1 = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
+  const aIsNum = typeof a0 === "number";
+  const bIsNum = typeof a1 === "number";
+  const aIsTensor = isRuntimeTensor(a0);
+  const bIsTensor = isRuntimeTensor(a1);
+  if (aIsNum && bIsNum) return fn(a0 as number, a1 as number);
+  if (aIsTensor && bIsNum) {
+    const t = a0 as RuntimeTensor;
+    const s = a1 as number;
+    const out = new FloatXArray(t.data.length);
+    for (let i = 0; i < t.data.length; i++) out[i] = fn(t.data[i], s);
+    return makeTensor(out, undefined, t.shape);
+  }
+  if (aIsNum && bIsTensor) {
+    const s = a0 as number;
+    const t = a1 as RuntimeTensor;
+    const out = new FloatXArray(t.data.length);
+    for (let i = 0; i < t.data.length; i++) out[i] = fn(s, t.data[i]);
+    return makeTensor(out, undefined, t.shape);
+  }
+  if (aIsTensor && bIsTensor) {
+    const tA = a0 as RuntimeTensor;
+    const tB = a1 as RuntimeTensor;
+    if (tA.data.length !== tB.data.length) {
+      throw new Error(`${name}: array dimensions must agree`);
+    }
+    const out = new FloatXArray(tA.data.length);
+    for (let i = 0; i < tA.data.length; i++)
+      out[i] = fn(tA.data[i], tB.data[i]);
+    return makeTensor(out, undefined, tA.shape);
+  }
+  throw new Error(`${name}: unsupported argument types`);
+}
+
+/** Match a binary function accepting number/boolean/tensor args (no complex). */
+export function binaryElemwiseMatch(argTypes: JitType[]): JitType[] | null {
+  if (argTypes.length !== 2) return null;
+  const k0 = argTypes[0].kind,
+    k1 = argTypes[1].kind;
+  const ok = ["number", "boolean", "tensor"];
+  if (!ok.includes(k0) || !ok.includes(k1)) return null;
+  if (k0 === "tensor" || k1 === "tensor") {
+    return [{ kind: "tensor", isComplex: false }];
+  }
+  return [{ kind: "number" }];
+}
+
 // ── Combined resolve helpers ────────────────────────────────────────────
 
 /** Resolve helper for unary element-wise functions with complex support. */

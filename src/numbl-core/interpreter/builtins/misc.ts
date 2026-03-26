@@ -6,13 +6,33 @@ import {
   FloatXArray,
   isRuntimeCell,
   isRuntimeChar,
+  isRuntimeFunction,
   isRuntimeNumber,
   isRuntimeString,
+  isRuntimeTensor,
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeStruct } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
-import { registerIBuiltin } from "./types.js";
+import { registerIBuiltin, getIBuiltin } from "./types.js";
+import {
+  mAdd,
+  mSub,
+  mElemMul,
+  mElemDiv,
+  mMul,
+  mDiv,
+  mLeftDiv,
+  mPow,
+  mElemLeftDiv,
+  mEqual,
+  mNotEqual,
+  mLess,
+  mLessEqual,
+  mGreater,
+  mGreaterEqual,
+  mNeg,
+} from "../../builtins/arithmetic.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 
@@ -172,3 +192,271 @@ registerIBuiltin({
     },
   }),
 });
+
+// ── clear / clc / clf stubs ──────────────────────────────────────────────
+
+for (const name of ["clear", "clc", "clf"]) {
+  registerIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [],
+      apply: () => 0,
+    }),
+  });
+}
+
+// ── nargin ──────────────────────────────────────────────────────────────
+
+registerIBuiltin({
+  name: "nargin",
+  resolve: argTypes => {
+    if (argTypes.length > 1) return null;
+    return {
+      outputTypes: [{ kind: "number" }],
+      apply: args => {
+        if (args.length === 1 && isRuntimeFunction(args[0])) {
+          const handle = args[0];
+          if (handle.nargin !== undefined) return handle.nargin;
+          // Infer nargin for IBuiltins by probing resolve with 1..N unknown args
+          if (handle.impl === "builtin" && handle.name) {
+            const ib = getIBuiltin(handle.name);
+            if (ib) {
+              for (let n = 1; n <= 10; n++) {
+                const testArgs = Array.from({ length: n }, () => ({
+                  kind: "number" as const,
+                }));
+                if (ib.resolve(testArgs, 1)) return n;
+              }
+            }
+          }
+          return 0;
+        }
+        return 0;
+      },
+    };
+  },
+});
+
+// ── true/false constructors ─────────────────────────────────────────────
+
+function parseShapeArgs(args: RuntimeValue[]): number[] {
+  const dims: number[] = [];
+  for (const a of args) {
+    if (typeof a === "number") dims.push(Math.round(a));
+    else if (isRuntimeTensor(a)) {
+      for (let i = 0; i < a.data.length; i++) dims.push(Math.round(a.data[i]));
+    } else dims.push(Math.round(toNumber(a)));
+  }
+  return dims;
+}
+
+for (const [name, fillVal] of [
+  ["true", 1],
+  ["false", 0],
+] as const) {
+  registerIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => {
+        if (args.length === 0) return RTV.logical(fillVal === 1);
+        const shape = parseShapeArgs(args);
+        const rows = shape[0];
+        const cols = shape[1] ?? rows;
+        const t = RTV.tensor(
+          fillVal
+            ? new FloatXArray(rows * cols).fill(1)
+            : new FloatXArray(rows * cols),
+          [rows, cols]
+        );
+        t._isLogical = true;
+        return t;
+      },
+    }),
+  });
+}
+
+// ── Operator-name builtins ──────────────────────────────────────────────
+
+const opMap: [string, (a: RuntimeValue, b: RuntimeValue) => RuntimeValue][] = [
+  ["plus", mAdd],
+  ["minus", mSub],
+  ["times", mElemMul],
+  ["rdivide", mElemDiv],
+  ["mtimes", mMul],
+  ["mrdivide", mDiv],
+  ["mldivide", mLeftDiv],
+  ["mpower", mPow],
+  ["ldivide", mElemLeftDiv],
+  ["eq", mEqual],
+  ["ne", mNotEqual],
+  ["lt", mLess],
+  ["le", mLessEqual],
+  ["gt", mGreater],
+  ["ge", mGreaterEqual],
+];
+
+for (const [name, op] of opMap) {
+  registerIBuiltin({
+    name,
+    resolve: argTypes => {
+      if (argTypes.length !== 2) return null;
+      return {
+        outputTypes: [{ kind: "unknown" }],
+        apply: args => op(args[0], args[1]),
+      };
+    },
+  });
+}
+
+registerIBuiltin({
+  name: "uminus",
+  resolve: argTypes => {
+    if (argTypes.length !== 1) return null;
+    return {
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => mNeg(args[0]),
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "uplus",
+  resolve: argTypes => {
+    if (argTypes.length !== 1) return null;
+    return {
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => args[0],
+    };
+  },
+});
+
+// ── Dummy/placeholder builtins ──────────────────────────────────────────
+
+// Dummy handle functions — return a dummy handle struct
+for (const name of ["groot", "gcf", "gca", "shg", "newplot", "caxis"]) {
+  registerIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [{ kind: "unknown" }],
+      apply: () => RTV.dummyHandle(),
+    }),
+  });
+}
+
+// get(handle, propName) — return a dummy handle
+registerIBuiltin({
+  name: "get",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: () => RTV.dummyHandle(),
+  }),
+});
+
+// set(handle, ...) — void no-op
+registerIBuiltin({
+  name: "set",
+  resolve: () => ({
+    outputTypes: [],
+    apply: () => 0,
+  }),
+});
+
+// Graphics stubs that return nothing
+for (const name of [
+  "figure",
+  "hold",
+  "grid",
+  "close",
+  "title",
+  "xlabel",
+  "ylabel",
+  "shading",
+  "subplot",
+  "legend",
+  "sgtitle",
+  "zlabel",
+  "colorbar",
+  "addpath",
+  "dir",
+]) {
+  registerIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [],
+      apply: () => 0,
+    }),
+  });
+}
+
+// ishold — returns false
+registerIBuiltin({
+  name: "ishold",
+  resolve: () => ({
+    outputTypes: [{ kind: "boolean" }],
+    apply: () => RTV.logical(false),
+  }),
+});
+
+// pwd — return empty string
+registerIBuiltin({
+  name: "pwd",
+  resolve: () => ({
+    outputTypes: [{ kind: "char" }],
+    apply: () => RTV.char(""),
+  }),
+});
+
+// mfilename — return empty string
+registerIBuiltin({
+  name: "mfilename",
+  resolve: () => ({
+    outputTypes: [{ kind: "char" }],
+    apply: () => RTV.char(""),
+  }),
+});
+
+// xlim/ylim — return empty array
+for (const name of ["xlim", "ylim"]) {
+  registerIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [{ kind: "tensor", isComplex: false }],
+      apply: () => RTV.tensor(new FloatXArray(0), [0, 0]),
+    }),
+  });
+}
+
+// listfonts — return empty cell
+registerIBuiltin({
+  name: "listfonts",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: () => RTV.cell([], [0, 0]),
+  }),
+});
+
+// Colormap name functions — return the name as a char
+for (const cm of [
+  "parula",
+  "jet",
+  "hsv",
+  "hot",
+  "cool",
+  "spring",
+  "summer",
+  "autumn",
+  "winter",
+  "gray",
+  "bone",
+  "copper",
+  "pink",
+]) {
+  registerIBuiltin({
+    name: cm,
+    resolve: () => ({
+      outputTypes: [{ kind: "char" }],
+      apply: () => RTV.char(cm),
+    }),
+  });
+}

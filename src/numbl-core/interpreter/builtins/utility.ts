@@ -149,7 +149,7 @@ defineBuiltin({
   cases: [
     {
       match: argTypes => {
-        if (argTypes.length < 1 || argTypes.length > 2) return null;
+        if (argTypes.length < 1) return null;
         return [{ kind: "number" }];
       },
       apply: args => {

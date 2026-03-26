@@ -31,13 +31,6 @@ export { getDummyBuiltinNames } from "./dummy.js";
 import { registerMathFunctions } from "./math.js";
 import { registerReductionFunctions } from "./reduction/register-reduction-functions.js";
 import { registerLinearAlgebraFunctions } from "./linear-algebra/register-linear-algebra-functions.js";
-import { registerMiscFunctions } from "./misc.js";
-import { registerGraphicsFunctions } from "./graphics.js";
-import { registerDummyFunctions } from "./dummy.js";
-
 registerMathFunctions();
 registerReductionFunctions();
 registerLinearAlgebraFunctions();
-registerMiscFunctions();
-registerGraphicsFunctions();
-registerDummyFunctions();

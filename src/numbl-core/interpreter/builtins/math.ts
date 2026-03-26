@@ -9,7 +9,9 @@ import {
   unaryRealResultCases,
   applyUnaryElemwise,
   applyBinaryScalar,
+  applyBinaryElemwise,
   binaryNumberOnly,
+  binaryElemwiseMatch,
   makeTensor,
   unaryMathJitEmit,
   binaryMathJitEmit,
@@ -512,8 +514,8 @@ defineBuiltin({
   name: "hypot",
   cases: [
     {
-      match: argTypes => binaryNumberOnly(argTypes),
-      apply: args => applyBinaryScalar(args, Math.hypot, "hypot"),
+      match: argTypes => binaryElemwiseMatch(argTypes),
+      apply: args => applyBinaryElemwise(args, Math.hypot, "hypot"),
     },
   ],
   jitEmit: binaryMathJitEmit("Math.hypot"),
@@ -812,9 +814,9 @@ defineBuiltin({
   name: "nthroot",
   cases: [
     {
-      match: argTypes => binaryNumberOnly(argTypes),
+      match: argTypes => binaryElemwiseMatch(argTypes),
       apply: args =>
-        applyBinaryScalar(
+        applyBinaryElemwise(
           args,
           (x, n) => {
             let result: number;
@@ -896,9 +898,9 @@ defineBuiltin({
   name: "beta",
   cases: [
     {
-      match: argTypes => binaryNumberOnly(argTypes),
+      match: argTypes => binaryElemwiseMatch(argTypes),
       apply: args =>
-        applyBinaryScalar(
+        applyBinaryElemwise(
           args,
           (x, y) => {
             if (

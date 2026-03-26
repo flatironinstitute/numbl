@@ -18,7 +18,9 @@ import { loadJsUserFunctions } from "./jsUserFunctions.js";
 import {
   registerDynamicIBuiltin,
   unregisterIBuiltin,
+  getIBuiltin,
 } from "./interpreter/builtins/types.js";
+import type { IBuiltin } from "./interpreter/builtins/types.js";
 import type { NativeBridge } from "./workspace/index.js";
 import { parseMFile, type Stmt } from "./parser/index.js";
 import { SyntaxError } from "./parser/errors.js";
@@ -129,8 +131,11 @@ export function interpretCode(
   // ── 3. Create runtime ──────────────────────────────────────────────
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Register .js user functions as IBuiltins
+  // Register .js user functions as IBuiltins (save originals for cleanup)
+  const savedIBuiltins = new Map<string, IBuiltin>();
   for (const ib of jsUserFunctions) {
+    const orig = getIBuiltin(ib.name);
+    if (orig) savedIBuiltins.set(ib.name, orig);
     registerDynamicIBuiltin(ib);
   }
 
@@ -259,9 +264,14 @@ export function interpretCode(
       (jitHelpers as Record<string, unknown>)._profileLeave =
         Function.prototype;
     }
-    // Unregister .js user function IBuiltins to avoid polluting the global registry
+    // Restore or unregister .js user function IBuiltins
     for (const ib of jsUserFunctions) {
-      unregisterIBuiltin(ib.name);
+      const orig = savedIBuiltins.get(ib.name);
+      if (orig) {
+        registerDynamicIBuiltin(orig);
+      } else {
+        unregisterIBuiltin(ib.name);
+      }
     }
   }
 }

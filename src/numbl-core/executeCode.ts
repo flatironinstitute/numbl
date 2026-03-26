@@ -21,8 +21,10 @@ import { ensureRuntimeValue } from "./runtime/runtimeHelpers.js";
 import {
   registerDynamicIBuiltin,
   unregisterIBuiltin,
+  getIBuiltin,
   inferJitType,
 } from "./interpreter/builtins/types.js";
+import type { IBuiltin } from "./interpreter/builtins/types.js";
 import { SemanticError } from "./lowering/errors.js";
 import { JitCompiler } from "./executor/jitCompiler.js";
 import { generateMainScriptCode } from "./codegen/generateMainScriptCode.js";
@@ -77,8 +79,11 @@ export function executeCode(
 
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Register .js user functions as IBuiltins (and on rt.builtins for codegen dispatch)
+  // Register .js user functions as IBuiltins (save originals for cleanup)
+  const savedIBuiltins = new Map<string, IBuiltin>();
   for (const ib of jsUserFunctions) {
+    const orig = getIBuiltin(ib.name);
+    if (orig) savedIBuiltins.set(ib.name, orig);
     registerDynamicIBuiltin(ib);
     rt.builtins[ib.name] = (nargout: number, args: unknown[]) => {
       const margs = args.map(a => ensureRuntimeValue(a));
@@ -193,9 +198,14 @@ export function executeCode(
     (re as ErrorWithDebugInfo).jitFunctionCode = rt.jitFunctionCode;
     throw re;
   } finally {
-    // Unregister .js user function IBuiltins to avoid polluting the global registry
+    // Restore or unregister .js user function IBuiltins
     for (const ib of jsUserFunctions) {
-      unregisterIBuiltin(ib.name);
+      const orig = savedIBuiltins.get(ib.name);
+      if (orig) {
+        registerDynamicIBuiltin(orig);
+      } else {
+        unregisterIBuiltin(ib.name);
+      }
     }
   }
 }
