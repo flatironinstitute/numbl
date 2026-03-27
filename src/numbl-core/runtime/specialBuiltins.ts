@@ -999,7 +999,36 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       zipfilename = zipfilename + ".zip";
     }
 
-    const extracted = io.unzip(zipfilename, outputfolder);
+    // Support URL input: download to a temp file first
+    let tempFile: string | null = null;
+    if (
+      zipfilename.startsWith("http://") ||
+      zipfilename.startsWith("https://")
+    ) {
+      if (!io.websave)
+        throw new RuntimeError(
+          "unzip: URL download is not available in this environment"
+        );
+      // Create a temp file path in the output folder
+      if (io.mkdir) io.mkdir(outputfolder);
+      tempFile = outputfolder + "/.numbl_unzip_tmp_" + Date.now() + ".zip";
+      io.websave(zipfilename, tempFile);
+      zipfilename = tempFile;
+    }
+
+    let extracted: string[];
+    try {
+      extracted = io.unzip(zipfilename, outputfolder);
+    } finally {
+      // Clean up temp file
+      if (tempFile && io.deleteFile) {
+        try {
+          io.deleteFile(tempFile);
+        } catch {
+          // ignore cleanup errors
+        }
+      }
+    }
 
     if (nargout >= 1) {
       // Return cell array of extracted file names
