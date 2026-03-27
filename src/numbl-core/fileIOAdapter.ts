@@ -44,4 +44,10 @@ export interface FileIOAdapter {
 
   /** Create a directory (and parents). Returns true on success. Optional. */
   mkdir?(dirPath: string): boolean;
+
+  /** Download a URL to a file. Optional. */
+  websave?(url: string, filename: string): void;
+
+  /** Delete files matching a pattern (supports globs). Optional. */
+  deleteFile?(pattern: string): void;
 }

@@ -9,9 +9,13 @@ import {
   readSync,
   writeSync,
   readFileSync,
+  writeFileSync,
   statSync,
   mkdirSync,
+  unlinkSync,
+  readdirSync,
 } from "fs";
+import { execFileSync } from "child_process";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
@@ -177,6 +181,69 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  websave(url: string, filename: string): void {
+    const dest = expandTilde(filename);
+    // Use a child node process with fetch to perform a synchronous download
+    const script = `
+      fetch(${JSON.stringify(url)})
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+        .then(buf => require('fs').writeFileSync(${JSON.stringify(dest)}, Buffer.from(buf)))
+        .catch(e => { process.stderr.write(e.message + '\\n'); process.exit(1); });
+    `;
+    try {
+      execFileSync(process.execPath, ["-e", script], {
+        stdio: ["ignore", "ignore", "pipe"],
+        timeout: 30000,
+      });
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error && "stderr" in e
+          ? (e as { stderr: Buffer }).stderr.toString().trim()
+          : String(e);
+      throw new Error(`websave: failed to download ${url}: ${msg}`);
+    }
+  }
+
+  deleteFile(pattern: string): void {
+    const p = expandTilde(pattern);
+    // Check for glob wildcards
+    if (p.includes("*") || p.includes("?")) {
+      const lastSep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
+      const dir = lastSep >= 0 ? p.slice(0, lastSep) : ".";
+      const globPat = lastSep >= 0 ? p.slice(lastSep + 1) : p;
+      // Convert glob to regex: * -> .*, ? -> .
+      const re = new RegExp(
+        "^" +
+          globPat
+            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+            .replace(/\*/g, ".*")
+            .replace(/\?/g, ".") +
+          "$"
+      );
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return; // directory doesn't exist — nothing to delete
+      }
+      for (const entry of entries) {
+        if (re.test(entry)) {
+          try {
+            unlinkSync(join(dir, entry));
+          } catch {
+            // skip files that can't be deleted
+          }
+        }
+      }
+    } else {
+      try {
+        unlinkSync(p);
+      } catch {
+        // MATLAB silently warns on nonexistent files; we just ignore
+      }
     }
   }
 

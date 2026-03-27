@@ -64,6 +64,8 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "rmpath",
   "path",
   "mkdir",
+  "websave",
+  "delete",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -301,6 +303,47 @@ export function registerSpecialBuiltins(rt: Runtime): void {
           RTV.char(ok ? "" : `Cannot create directory '${dirPath}'`),
           RTV.char(""),
         ];
+  });
+
+  // ── websave ─────────────────────────────────────────────────────────
+
+  registerSpecial("websave", (_nargout, args) => {
+    const io = requireFileIO();
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 2)
+      throw new RuntimeError("websave requires at least 2 arguments");
+    if (!io.websave)
+      throw new RuntimeError("websave is not available in this environment");
+    const filename = toString(margs[0]);
+    let url = toString(margs[1]);
+    // Append query parameters (name-value pairs)
+    const queryParts: string[] = [];
+    for (let i = 2; i + 1 < margs.length; i += 2) {
+      const name = encodeURIComponent(toString(margs[i]));
+      const value = encodeURIComponent(toString(margs[i + 1]));
+      queryParts.push(`${name}=${value}`);
+    }
+    if (queryParts.length > 0) {
+      const sep = url.includes("?") ? "&" : "?";
+      url += sep + queryParts.join("&");
+    }
+    io.websave(url, filename);
+    return RTV.char(filename);
+  });
+
+  // ── delete (file deletion) ──────────────────────────────────────────
+
+  registerSpecial("delete", (_nargout, args) => {
+    const io = requireFileIO();
+    if (!io.deleteFile)
+      throw new RuntimeError("delete is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("delete requires at least 1 argument");
+    for (const arg of margs) {
+      io.deleteFile(toString(arg));
+    }
+    return 0;
   });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──
