@@ -715,7 +715,7 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
-          noLineTracking: opts.noLineTracking,
+
           fileIO,
           optimization: opts.optimization,
         },
@@ -748,7 +748,7 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
-          noLineTracking: opts.noLineTracking,
+
           fileIO,
           optimization: opts.optimization,
         },
