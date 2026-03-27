@@ -553,30 +553,46 @@ registerIBuiltin({
   },
 });
 
-registerIBuiltin({
-  name: "startsWith",
-  resolve: argTypes => {
-    if (argTypes.length < 2) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args =>
-        RTV.logical(toString(args[0]).startsWith(toString(args[1]))),
-    };
-  },
-});
+function resolveStartsEndsWith(
+  name: string,
+  testFn: (s: string, pat: string) => boolean
+) {
+  registerIBuiltin({
+    name,
+    resolve: argTypes => {
+      if (argTypes.length < 2) return null;
+      if (!isTextType(argTypes[0])) return null;
+      return {
+        outputTypes: [{ kind: "boolean" }],
+        apply: args => {
+          let ic = false;
+          for (let i = 2; i + 1 < args.length; i += 2) {
+            if (toString(args[i]).toLowerCase() === "ignorecase") {
+              ic = !!toNumber(args[i + 1]);
+            }
+          }
+          let s = toString(args[0]);
+          if (ic) s = s.toLowerCase();
+          const pat = args[1];
+          if (isRuntimeCell(pat)) {
+            for (let i = 0; i < pat.data.length; i++) {
+              let p = toString(pat.data[i]);
+              if (ic) p = p.toLowerCase();
+              if (testFn(s, p)) return RTV.logical(true);
+            }
+            return RTV.logical(false);
+          }
+          let p = toString(pat);
+          if (ic) p = p.toLowerCase();
+          return RTV.logical(testFn(s, p));
+        },
+      };
+    },
+  });
+}
 
-registerIBuiltin({
-  name: "endsWith",
-  resolve: argTypes => {
-    if (argTypes.length < 2) return null;
-    if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
-    return {
-      outputTypes: [{ kind: "boolean" }],
-      apply: args => RTV.logical(toString(args[0]).endsWith(toString(args[1]))),
-    };
-  },
-});
+resolveStartsEndsWith("startsWith", (s, p) => s.startsWith(p));
+resolveStartsEndsWith("endsWith", (s, p) => s.endsWith(p));
 
 // ── Text→number functions ─────────────────────────────────────────────
 
