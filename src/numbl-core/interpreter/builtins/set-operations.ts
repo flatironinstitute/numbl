@@ -2,7 +2,11 @@
  * Set and search builtins for the interpreter: find, sort, setdiff, ismember.
  */
 
-import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
+import type {
+  RuntimeValue,
+  RuntimeTensor,
+  RuntimeCell,
+} from "../../runtime/types.js";
 import {
   FloatXArray,
   isRuntimeCell,
@@ -193,6 +197,15 @@ defineBuiltin({
           };
           return nargout > 1 ? [out, idx] : [out];
         }
+        if (a.kind === "cell") {
+          const out: JitType = { kind: "cell", shape: a.shape };
+          const idx: JitType = {
+            kind: "tensor",
+            isComplex: false,
+            shape: a.shape,
+          };
+          return nargout > 1 ? [out, idx] : [out];
+        }
         return null;
       },
       apply: (args, nargout) => {
@@ -227,7 +240,10 @@ defineBuiltin({
         if (isRuntimeTensor(v)) {
           return sortTensor(v, dim, descend, nargout);
         }
-        throw new RuntimeError("sort: argument must be numeric");
+        if (isRuntimeCell(v)) {
+          return sortCell(v as RuntimeCell, descend, nargout);
+        }
+        throw new RuntimeError("sort: unsupported argument type");
       },
     },
   ],
@@ -347,6 +363,28 @@ function sortTensor(
   const imOut = resultIm && resultIm.some(x => x !== 0) ? resultIm : undefined;
   const sorted = RTV.tensor(resultRe, [...shape], imOut);
   if (nargout > 1) return [sorted, RTV.tensor(resultIdx!, [...shape])];
+  return sorted;
+}
+
+function sortCell(
+  v: RuntimeCell,
+  descend: boolean,
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const n = v.data.length;
+  const strs = v.data.map(e => toString(e as RuntimeValue));
+  const order = Array.from({ length: n }, (_, i) => i);
+  order.sort((a, b) => {
+    const cmp = strs[a] < strs[b] ? -1 : strs[a] > strs[b] ? 1 : 0;
+    return descend ? -cmp : cmp;
+  });
+  const sortedData = order.map(i => v.data[i]);
+  const sorted = RTV.cell(sortedData, [...v.shape]);
+  if (nargout > 1) {
+    const idxData = new FloatXArray(n);
+    for (let i = 0; i < n; i++) idxData[i] = order[i] + 1;
+    return [sorted, RTV.tensor(idxData, [...v.shape])];
+  }
   return sorted;
 }
 

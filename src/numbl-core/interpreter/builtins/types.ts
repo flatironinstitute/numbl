@@ -142,6 +142,14 @@ export function inferJitType(value: unknown): JitType {
   if (
     typeof value === "object" &&
     value !== null &&
+    (value as { kind?: string }).kind === "cell"
+  ) {
+    const c = value as import("../../runtime/types.js").RuntimeCell;
+    return { kind: "cell", shape: c.shape.slice() };
+  }
+  if (
+    typeof value === "object" &&
+    value !== null &&
     (value as { kind?: string }).kind === "dictionary"
   ) {
     return { kind: "dictionary" };

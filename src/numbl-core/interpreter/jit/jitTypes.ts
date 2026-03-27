@@ -30,6 +30,7 @@ export type JitType =
       fields?: Record<string, JitType>;
     }
   | { kind: "sparse_matrix"; isComplex: boolean; m?: number; n?: number }
+  | { kind: "cell"; shape?: number[] }
   | { kind: "dictionary" }
   | { kind: "unknown" };
 

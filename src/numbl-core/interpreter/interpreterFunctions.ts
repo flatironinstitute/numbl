@@ -114,6 +114,14 @@ export function interpretTarget(
       }
       const builtin = this.rt.builtins[target.name];
       if (builtin) return builtin(nargout, args);
+      if (ib) {
+        const typeNames = args.map(
+          a => inferJitType(ensureRuntimeValue(a)).kind
+        );
+        throw new RuntimeError(
+          `Builtin '${target.name}' does not support these argument types: (${typeNames.join(", ")})`
+        );
+      }
       throw new RuntimeError(`Unknown builtin: '${target.name}'`);
     }
     case "localFunction":
