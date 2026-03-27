@@ -63,6 +63,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "addpath",
   "rmpath",
   "path",
+  "mkdir",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -271,6 +272,35 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("ferror requires 1 argument");
     return RTV.char(io.ferror(toNumber(margs[0])));
+  });
+
+  registerSpecial("mkdir", (nargout, args) => {
+    const io = requireFileIO();
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("mkdir requires at least 1 argument");
+    if (!io.mkdir)
+      throw new RuntimeError("mkdir is not available in this environment");
+    let dirPath: string;
+    if (margs.length === 1) {
+      dirPath = toString(margs[0]);
+    } else {
+      // mkdir(parent, newDir) form
+      dirPath = toString(margs[0]) + "/" + toString(margs[1]);
+    }
+    const ok = io.mkdir(dirPath);
+    if (nargout === 0) {
+      if (!ok)
+        throw new RuntimeError(`mkdir: cannot create directory '${dirPath}'`);
+      return undefined;
+    }
+    return nargout <= 1
+      ? RTV.char(ok ? "true" : "false")
+      : [
+          RTV.char(ok ? "true" : "false"),
+          RTV.char(ok ? "" : `Cannot create directory '${dirPath}'`),
+          RTV.char(""),
+        ];
   });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──

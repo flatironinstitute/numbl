@@ -130,14 +130,31 @@ register("feval", (ctx, args, nargout) => {
 });
 
 register("exist", (ctx, args) => {
-  if (args.length < 2) return FALL_THROUGH;
+  if (args.length < 1) return FALL_THROUGH;
   const nameArg = toString(ensureRuntimeValue(args[0]));
-  const typeArg = toString(ensureRuntimeValue(args[1]));
+  const typeArg = args.length >= 2 ? toString(ensureRuntimeValue(args[1])) : "";
   if (typeArg === "var") {
     return ctx.env.has(nameArg) ? 1 : 0;
   }
   if (typeArg === "builtin") {
     return ctx.rt.builtins[nameArg] || getIBuiltin(nameArg) ? 5 : 0;
+  }
+  if (typeArg === "dir") {
+    const fio = ctx.rt.fileIO;
+    if (!fio?.existsPath) return FALL_THROUGH;
+    return fio.existsPath(nameArg) === "dir" ? 7 : 0;
+  }
+  if (typeArg === "file" || typeArg === "") {
+    const fio = ctx.rt.fileIO;
+    if (!fio?.existsPath) return FALL_THROUGH;
+    const result = fio.existsPath(nameArg);
+    if (typeArg === "file") return result === "file" ? 2 : 0;
+    // No type specified: check var, then file/dir
+    if (ctx.env.has(nameArg)) return 1;
+    if (result === "dir") return 7;
+    if (result === "file") return 2;
+    if (ctx.rt.builtins[nameArg] || getIBuiltin(nameArg)) return 5;
+    return 0;
   }
   return FALL_THROUGH;
 });

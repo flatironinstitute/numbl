@@ -3,7 +3,15 @@
  * Node.js implementation of FileIOAdapter using synchronous fs operations.
  */
 
-import { openSync, closeSync, readSync, writeSync, readFileSync } from "fs";
+import {
+  openSync,
+  closeSync,
+  readSync,
+  writeSync,
+  readFileSync,
+  statSync,
+  mkdirSync,
+} from "fs";
 import { homedir } from "os";
 import { join, resolve } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
@@ -152,6 +160,24 @@ export class NodeFileIOAdapter implements FileIOAdapter {
 
   resolvePath(dirPath: string) {
     return resolve(process.cwd(), expandTilde(dirPath));
+  }
+
+  existsPath(path: string): "file" | "dir" | null {
+    try {
+      const s = statSync(expandTilde(path));
+      return s.isDirectory() ? "dir" : "file";
+    } catch {
+      return null;
+    }
+  }
+
+  mkdir(dirPath: string): boolean {
+    try {
+      mkdirSync(expandTilde(dirPath), { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private getEntry(fid: number): OpenFile | undefined {

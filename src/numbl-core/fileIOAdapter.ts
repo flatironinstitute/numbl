@@ -38,4 +38,10 @@ export interface FileIOAdapter {
 
   /** Resolve a path to absolute. Optional. */
   resolvePath?(dirPath: string): string;
+
+  /** Check whether a path exists and whether it is a file or directory. Optional. */
+  existsPath?(path: string): "file" | "dir" | null;
+
+  /** Create a directory (and parents). Returns true on success. Optional. */
+  mkdir?(dirPath: string): boolean;
 }
