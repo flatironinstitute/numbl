@@ -98,6 +98,7 @@ function cAngle(a: unknown): number {
 }
 
 function mod(a: number, b: number): number {
+  if (b === 0) return a;
   return ((a % b) + b) % b;
 }
 
