@@ -384,7 +384,7 @@ export function interpretConstructor(
         const userArgCount = args.length - 1;
         return this.withFileContext(
           classInfo.fileName,
-          classInfo.name,
+          classInfo.qualifiedName,
           constructorName,
           () => this.callUserFunction(fn, args, nargout, userArgCount)
         );
@@ -403,7 +403,7 @@ export function interpretConstructor(
     return this.withFileContext(
       classInfo.externalMethodFiles.get(constructorName)?.fileName ??
         classInfo.fileName,
-      classInfo.name,
+      classInfo.qualifiedName,
       constructorName,
       () => this.callUserFunction(fn, args, nargout, userArgCount)
     );
