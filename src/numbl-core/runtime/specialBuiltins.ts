@@ -67,6 +67,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "websave",
   "delete",
   "rmdir",
+  "unzip",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -372,6 +373,52 @@ export function registerSpecialBuiltins(rt: Runtime): void {
           RTV.char(ok ? "" : `Cannot remove directory '${dirPath}'`),
           RTV.char(""),
         ];
+  });
+
+  // ── unzip (ZIP extraction) ──────────────────────────────────────────
+
+  registerSpecial("unzip", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.unzip)
+      throw new RuntimeError("unzip is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("unzip requires at least 1 argument");
+
+    // Parse name-value pairs (Password=...)
+    let zipfilename = toString(margs[0]);
+    let outputfolder = ".";
+    let nextArg = 1;
+
+    // Second positional arg is outputfolder (if not a name-value pair)
+    if (margs.length >= 2 && toString(margs[1]) !== "Password") {
+      outputfolder = toString(margs[1]);
+      nextArg = 2;
+    }
+
+    // Check for Password name-value pair (not supported, but give clear error)
+    for (let i = nextArg; i < margs.length; i += 2) {
+      const name = toString(margs[i]);
+      if (name === "Password") {
+        throw new RuntimeError(
+          "unzip: Password-protected ZIP files are not supported"
+        );
+      }
+    }
+
+    // If no extension, try appending .zip
+    if (!zipfilename.includes(".")) {
+      zipfilename = zipfilename + ".zip";
+    }
+
+    const extracted = io.unzip(zipfilename, outputfolder);
+
+    if (nargout >= 1) {
+      // Return cell array of extracted file names
+      const cellData: RuntimeValue[] = extracted.map(f => RTV.char(f));
+      return RTV.cell(cellData, [1, cellData.length]);
+    }
+    return 0;
   });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──

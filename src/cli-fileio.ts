@@ -9,6 +9,7 @@ import {
   readSync,
   writeSync,
   readFileSync,
+  writeFileSync,
   statSync,
   mkdirSync,
   unlinkSync,
@@ -16,9 +17,10 @@ import {
   rmSync,
   rmdirSync,
 } from "fs";
+import { inflateRawSync } from "zlib";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
-import { join, resolve } from "path";
+import { join, resolve, dirname } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli.js";
 
@@ -260,6 +262,85 @@ export class NodeFileIOAdapter implements FileIOAdapter {
         // MATLAB silently warns on nonexistent files; we just ignore
       }
     }
+  }
+
+  unzip(zipfilename: string, outputfolder: string): string[] {
+    const src = expandTilde(zipfilename);
+    const dest = resolve(expandTilde(outputfolder));
+    mkdirSync(dest, { recursive: true });
+
+    const buf = readFileSync(src);
+    // Find End of Central Directory record (signature 0x06054b50)
+    let eocdOffset = -1;
+    for (let i = buf.length - 22; i >= 0; i--) {
+      if (
+        buf[i] === 0x50 &&
+        buf[i + 1] === 0x4b &&
+        buf[i + 2] === 0x05 &&
+        buf[i + 3] === 0x06
+      ) {
+        eocdOffset = i;
+        break;
+      }
+    }
+    if (eocdOffset === -1) throw new Error("unzip: invalid ZIP file");
+
+    const cdOffset = buf.readUInt32LE(eocdOffset + 16);
+    const cdEntries = buf.readUInt16LE(eocdOffset + 10);
+    const extracted: string[] = [];
+    let pos = cdOffset;
+
+    for (let i = 0; i < cdEntries; i++) {
+      // Central directory file header signature 0x02014b50
+      if (buf.readUInt32LE(pos) !== 0x02014b50)
+        throw new Error("unzip: corrupt central directory");
+      const method = buf.readUInt16LE(pos + 10);
+      const nameLen = buf.readUInt16LE(pos + 28);
+      const extraLen = buf.readUInt16LE(pos + 30);
+      const commentLen = buf.readUInt16LE(pos + 32);
+      const localHeaderOffset = buf.readUInt32LE(pos + 42);
+      const entryName = buf.toString("utf-8", pos + 46, pos + 46 + nameLen);
+      pos += 46 + nameLen + extraLen + commentLen;
+
+      // Skip directories
+      if (entryName.endsWith("/")) {
+        mkdirSync(join(dest, entryName), { recursive: true });
+        continue;
+      }
+
+      // Read from local file header to get actual data
+      const localPos = localHeaderOffset;
+      if (buf.readUInt32LE(localPos) !== 0x04034b50)
+        throw new Error("unzip: corrupt local header");
+      const localNameLen = buf.readUInt16LE(localPos + 26);
+      const localExtraLen = buf.readUInt16LE(localPos + 28);
+      const compressedSize = buf.readUInt32LE(localPos + 18);
+      const dataStart = localPos + 30 + localNameLen + localExtraLen;
+      const compressedData = buf.subarray(
+        dataStart,
+        dataStart + compressedSize
+      );
+
+      let fileData: Buffer;
+      if (method === 0) {
+        // Stored (no compression)
+        fileData = Buffer.from(compressedData);
+      } else if (method === 8) {
+        // Deflate
+        fileData = inflateRawSync(compressedData);
+      } else {
+        throw new Error(
+          `unzip: unsupported compression method ${method} for ${entryName}`
+        );
+      }
+
+      const outPath = join(dest, entryName);
+      mkdirSync(dirname(outPath), { recursive: true });
+      writeFileSync(outPath, fileData);
+      extracted.push(outPath);
+    }
+
+    return extracted;
   }
 
   private getEntry(fid: number): OpenFile | undefined {

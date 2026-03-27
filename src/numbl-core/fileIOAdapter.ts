@@ -53,4 +53,7 @@ export interface FileIOAdapter {
 
   /** Remove a directory. If recursive is true, remove contents first. Returns true on success. Optional. */
   rmdir?(dirPath: string, recursive: boolean): boolean;
+
+  /** Extract a ZIP file to an output folder. Returns list of extracted file paths. Optional. */
+  unzip?(zipfilename: string, outputfolder: string): string[];
 }
