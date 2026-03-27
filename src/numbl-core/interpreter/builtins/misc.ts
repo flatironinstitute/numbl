@@ -407,14 +407,7 @@ registerIBuiltin({
   }),
 });
 
-// mfilename — return empty string
-registerIBuiltin({
-  name: "mfilename",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: () => RTV.char(""),
-  }),
-});
+// mfilename — handled as a special builtin (needs runtime access to current file)
 
 // xlim/ylim — return empty array
 for (const name of ["xlim", "ylim"]) {
