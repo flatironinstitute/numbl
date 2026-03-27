@@ -34,6 +34,7 @@ import {
 } from "./runtimeDispatch.js";
 import type { Runtime } from "./runtime.js";
 import { registerDynamicIBuiltin } from "../interpreter/builtins/types.js";
+import { convertJsonValue } from "../interpreter/builtins/misc.js";
 
 /** Names of all special builtins (needed at lowering time before runtime exists). */
 export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
@@ -71,6 +72,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "path",
   "mkdir",
   "websave",
+  "webread",
   "delete",
   "rmdir",
   "unzip",
@@ -884,6 +886,38 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
     io.websave(url, filename);
     return RTV.char(filename);
+  });
+
+  // ── webread ────────────────────────────────────────────────────────
+
+  registerSpecial("webread", (_nargout, args) => {
+    const io = requireFileIO();
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("webread requires at least 1 argument");
+    if (!io.webread)
+      throw new RuntimeError("webread is not available in this environment");
+    let url = toString(margs[0]);
+    // Append query parameters (name-value pairs)
+    const queryParts: string[] = [];
+    for (let i = 1; i + 1 < margs.length; i += 2) {
+      const name = encodeURIComponent(toString(margs[i]));
+      const value = encodeURIComponent(toString(margs[i + 1]));
+      queryParts.push(`${name}=${value}`);
+    }
+    if (queryParts.length > 0) {
+      const sep = url.includes("?") ? "&" : "?";
+      url += sep + queryParts.join("&");
+    }
+    const text = io.webread(url);
+    // Try to parse as JSON (MATLAB auto-decodes JSON responses)
+    try {
+      const parsed = JSON.parse(text);
+      return convertJsonValue(parsed);
+    } catch {
+      // Not JSON — return as char array
+      return RTV.char(text);
+    }
   });
 
   // ── delete (file deletion) ──────────────────────────────────────────

@@ -60,6 +60,9 @@ export interface FileIOAdapter {
   /** Download a URL to a file. Optional. */
   websave?(url: string, filename: string): void;
 
+  /** Fetch content from a URL and return as a string. Optional. */
+  webread?(url: string): string;
+
   /** Delete files matching a pattern (supports globs). Optional. */
   deleteFile?(pattern: string): void;
 

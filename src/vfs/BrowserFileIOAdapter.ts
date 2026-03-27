@@ -305,6 +305,17 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     this.vfs.writeFile(filename, data);
   }
 
+  webread(url: string): string {
+    // Use synchronous XHR (works in Web Workers)
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    xhr.send();
+    if (xhr.status < 200 || xhr.status >= 300) {
+      throw new Error(`webread: HTTP ${xhr.status} for ${url}`);
+    }
+    return xhr.responseText;
+  }
+
   unzip(zipfilename: string, outputfolder: string): string[] {
     const zipData = this.vfs.readFile(zipfilename);
     this.vfs.mkdir(outputfolder);

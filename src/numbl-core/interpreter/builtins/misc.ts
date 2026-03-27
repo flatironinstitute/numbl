@@ -636,7 +636,7 @@ function makeValidFieldName(name: string): string {
   return valid;
 }
 
-function convertJsonValue(val: unknown): RuntimeValue {
+export function convertJsonValue(val: unknown): RuntimeValue {
   if (val === null) return NaN;
   if (typeof val === "boolean") return val;
   if (typeof val === "number") return val;

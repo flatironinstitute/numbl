@@ -279,6 +279,30 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     }
   }
 
+  webread(url: string): string {
+    // Use a child node process with fetch to perform a synchronous download
+    const script = `
+      fetch(${JSON.stringify(url)})
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+        .then(t => process.stdout.write(t))
+        .catch(e => { process.stderr.write(e.message + '\\n'); process.exit(1); });
+    `;
+    try {
+      const result = execFileSync(process.execPath, ["-e", script], {
+        stdio: ["ignore", "pipe", "pipe"],
+        timeout: 30000,
+        maxBuffer: 50 * 1024 * 1024,
+      });
+      return result.toString();
+    } catch (e: unknown) {
+      const msg =
+        e instanceof Error && "stderr" in e
+          ? (e as { stderr: Buffer }).stderr.toString().trim()
+          : String(e);
+      throw new Error(`webread: failed to fetch ${url}: ${msg}`);
+    }
+  }
+
   rmdir(dirPath: string, recursive: boolean): boolean {
     try {
       const p = expandTilde(dirPath);
