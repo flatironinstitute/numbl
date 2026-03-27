@@ -362,8 +362,19 @@ function stdVarApply(
     const { args: parsedArgs, omitNaN } = parseNanFlag(args);
     const v = parsedArgs[0];
     const w = parsedArgs.length >= 2 ? toNumber(parsedArgs[1]) : 0;
-    const dimArg =
-      parsedArgs.length >= 3 ? Math.round(toNumber(parsedArgs[2])) : 0;
+    let dimArg = 0;
+    let allFlag = false;
+    if (parsedArgs.length >= 3) {
+      const d = parsedArgs[2];
+      if (
+        (isRuntimeChar(d) || isRuntimeString(d)) &&
+        toString(d).toLowerCase() === "all"
+      ) {
+        allFlag = true;
+      } else {
+        dimArg = Math.round(toNumber(d));
+      }
+    }
     if (isRuntimeNumber(v)) return 0;
     if (isRuntimeComplexNumber(v)) return 0;
     if (isRuntimeTensor(v)) {
@@ -383,6 +394,7 @@ function stdVarApply(
       const kernel = sliceKernel((s: ArrayLike<number>) =>
         transform(varianceOf(s))
       );
+      if (allFlag) return kernel.reduceAll(v);
       if (dimArg > 0) return kernel.reduceDim(v, dimArg);
       const d = firstReduceDim(v.shape);
       return d === 0 ? kernel.reduceAll(v) : kernel.reduceDim(v, d);
