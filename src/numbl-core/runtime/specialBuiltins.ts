@@ -119,21 +119,29 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         );
       }
     }
-    // warning(msg, ...) — display warning with optional sprintf formatting
-    const fmt = toString(margs[0]);
-    if (margs.length === 1) {
+    // Detect warning(msgID, msg, ...) form — msgID contains a ':'
+    let fmtIdx = 0;
+    if (
+      margs.length >= 2 &&
+      isRuntimeChar(margs[0]) &&
+      toString(margs[0]).includes(":")
+    ) {
+      fmtIdx = 1;
+    }
+    const fmt = toString(margs[fmtIdx]);
+    const fmtArgs: RuntimeValue[] = [];
+    for (let i = fmtIdx + 1; i < margs.length; i++) {
+      const a = margs[i];
+      if (isRuntimeTensor(a)) {
+        for (let j = 0; j < a.data.length; j++)
+          fmtArgs.push(RTV.num(a.data[j]));
+      } else {
+        fmtArgs.push(a);
+      }
+    }
+    if (fmtArgs.length === 0) {
       rt.output("Warning: " + fmt + "\n");
     } else {
-      const fmtArgs: RuntimeValue[] = [];
-      for (let i = 1; i < margs.length; i++) {
-        const a = margs[i];
-        if (isRuntimeTensor(a)) {
-          for (let j = 0; j < a.data.length; j++)
-            fmtArgs.push(RTV.num(a.data[j]));
-        } else {
-          fmtArgs.push(a);
-        }
-      }
       rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
     }
     return RTV.num(0);
