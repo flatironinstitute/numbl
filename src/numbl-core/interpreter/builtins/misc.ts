@@ -383,7 +383,6 @@ for (const name of [
   "zlabel",
   "colorbar",
   "addpath",
-  "dir",
 ]) {
   registerIBuiltin({
     name,

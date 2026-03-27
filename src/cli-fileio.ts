@@ -20,7 +20,7 @@ import {
 import { inflateRawSync } from "zlib";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
-import { join, resolve, dirname } from "path";
+import { join, resolve, dirname, basename } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli.js";
 
@@ -341,6 +341,253 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     }
 
     return extracted;
+  }
+
+  listDir(
+    dirPath: string
+  ): {
+    name: string;
+    folder: string;
+    bytes: number;
+    isdir: boolean;
+    mtimeMs: number;
+  }[] {
+    const p = expandTilde(dirPath);
+
+    // Check if path contains ** (recursive search)
+    if (p.includes("**")) {
+      return this.listDirRecursive(p);
+    }
+
+    // Check for glob wildcards in the filename part
+    if (p.includes("*") || p.includes("?")) {
+      return this.listDirGlob(p);
+    }
+
+    // Plain path — check if it's a directory or a file
+    try {
+      const s = statSync(p);
+      if (s.isDirectory()) {
+        // List contents of directory, including . and ..
+        const absDir = resolve(p);
+        const results: {
+          name: string;
+          folder: string;
+          bytes: number;
+          isdir: boolean;
+          mtimeMs: number;
+        }[] = [];
+        // Add . and ..
+        results.push({
+          name: ".",
+          folder: absDir,
+          bytes: 0,
+          isdir: true,
+          mtimeMs: s.mtimeMs,
+        });
+        try {
+          const parentStat = statSync(resolve(absDir, ".."));
+          results.push({
+            name: "..",
+            folder: absDir,
+            bytes: 0,
+            isdir: true,
+            mtimeMs: parentStat.mtimeMs,
+          });
+        } catch {
+          results.push({
+            name: "..",
+            folder: absDir,
+            bytes: 0,
+            isdir: true,
+            mtimeMs: 0,
+          });
+        }
+        const entries = readdirSync(absDir);
+        for (const entry of entries) {
+          try {
+            const es = statSync(join(absDir, entry));
+            results.push({
+              name: entry,
+              folder: absDir,
+              bytes: es.isDirectory() ? 0 : es.size,
+              isdir: es.isDirectory(),
+              mtimeMs: es.mtimeMs,
+            });
+          } catch {
+            // skip entries we can't stat
+          }
+        }
+        return results;
+      } else {
+        // Single file match
+        const absPath = resolve(p);
+        return [
+          {
+            name: basename(absPath),
+            folder: dirname(absPath),
+            bytes: s.size,
+            isdir: false,
+            mtimeMs: s.mtimeMs,
+          },
+        ];
+      }
+    } catch {
+      // Path doesn't exist — return empty
+      return [];
+    }
+  }
+
+  private listDirGlob(
+    pattern: string
+  ): {
+    name: string;
+    folder: string;
+    bytes: number;
+    isdir: boolean;
+    mtimeMs: number;
+  }[] {
+    const lastSep = Math.max(
+      pattern.lastIndexOf("/"),
+      pattern.lastIndexOf("\\")
+    );
+    const dir = lastSep >= 0 ? pattern.slice(0, lastSep) : ".";
+    const globPat = lastSep >= 0 ? pattern.slice(lastSep + 1) : pattern;
+    const re = new RegExp(
+      "^" +
+        globPat
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*/g, ".*")
+          .replace(/\?/g, ".") +
+        "$"
+    );
+    const absDir = resolve(dir);
+    const results: {
+      name: string;
+      folder: string;
+      bytes: number;
+      isdir: boolean;
+      mtimeMs: number;
+    }[] = [];
+    let entries: string[];
+    try {
+      entries = readdirSync(absDir);
+    } catch {
+      return [];
+    }
+    for (const entry of entries) {
+      if (re.test(entry)) {
+        try {
+          const es = statSync(join(absDir, entry));
+          results.push({
+            name: entry,
+            folder: absDir,
+            bytes: es.isDirectory() ? 0 : es.size,
+            isdir: es.isDirectory(),
+            mtimeMs: es.mtimeMs,
+          });
+        } catch {
+          // skip
+        }
+      }
+    }
+    return results;
+  }
+
+  private listDirRecursive(
+    pattern: string
+  ): {
+    name: string;
+    folder: string;
+    bytes: number;
+    isdir: boolean;
+    mtimeMs: number;
+  }[] {
+    // ** means recursive. Extract the base directory (everything before **)
+    const idx = pattern.indexOf("**");
+    let baseDir = pattern.slice(0, idx);
+    if (baseDir.endsWith("/") || baseDir.endsWith("\\")) {
+      baseDir = baseDir.slice(0, -1);
+    }
+    if (!baseDir) baseDir = ".";
+    const absBase = resolve(baseDir);
+
+    const results: {
+      name: string;
+      folder: string;
+      bytes: number;
+      isdir: boolean;
+      mtimeMs: number;
+    }[] = [];
+
+    const walkDir = (dir: string) => {
+      // Add . and .. for this directory
+      try {
+        const ds = statSync(dir);
+        results.push({
+          name: ".",
+          folder: dir,
+          bytes: 0,
+          isdir: true,
+          mtimeMs: ds.mtimeMs,
+        });
+      } catch {
+        results.push({
+          name: ".",
+          folder: dir,
+          bytes: 0,
+          isdir: true,
+          mtimeMs: 0,
+        });
+      }
+      try {
+        const ps = statSync(resolve(dir, ".."));
+        results.push({
+          name: "..",
+          folder: dir,
+          bytes: 0,
+          isdir: true,
+          mtimeMs: ps.mtimeMs,
+        });
+      } catch {
+        results.push({
+          name: "..",
+          folder: dir,
+          bytes: 0,
+          isdir: true,
+          mtimeMs: 0,
+        });
+      }
+
+      let entries: string[];
+      try {
+        entries = readdirSync(dir);
+      } catch {
+        return;
+      }
+      const subdirs: string[] = [];
+      for (const entry of entries) {
+        try {
+          const es = statSync(join(dir, entry));
+          results.push({
+            name: entry,
+            folder: dir,
+            bytes: es.isDirectory() ? 0 : es.size,
+            isdir: es.isDirectory(),
+            mtimeMs: es.mtimeMs,
+          });
+          if (es.isDirectory()) subdirs.push(entry);
+        } catch {
+          // skip
+        }
+      }
+      for (const sub of subdirs) {
+        walkDir(join(dir, sub));
+      }
+    };
+
+    walkDir(absBase);
+    return results;
   }
 
   private getEntry(fid: number): OpenFile | undefined {

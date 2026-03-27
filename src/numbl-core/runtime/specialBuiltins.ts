@@ -68,6 +68,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "delete",
   "rmdir",
   "unzip",
+  "dir",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -419,6 +420,75 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       return RTV.cell(cellData, [1, cellData.length]);
     }
     return 0;
+  });
+
+  // ── dir (directory listing) ──────────────────────────────────────────
+
+  registerSpecial("dir", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.listDir)
+      throw new RuntimeError("dir is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    const pattern = margs.length >= 1 ? toString(margs[0]) : ".";
+
+    const entries = io.listDir(pattern);
+
+    if (nargout === 0) {
+      // Display mode: print names separated by spaces
+      const names = entries.map(e => e.name);
+      if (names.length > 0) {
+        rt.output(names.join("  ") + "\n");
+      }
+      return undefined;
+    }
+
+    // Return struct array with fields: name, folder, date, bytes, isdir, datenum
+    const fieldNames = ["name", "folder", "date", "bytes", "isdir", "datenum"];
+    const elements = entries.map(e => {
+      const d = new Date(e.mtimeMs);
+      // Format date like MATLAB: dd-Mon-yyyy HH:MM:SS
+      const months = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ];
+      const dd = String(d.getDate()).padStart(2, "0");
+      const mon = months[d.getMonth()];
+      const yyyy = d.getFullYear();
+      const HH = String(d.getHours()).padStart(2, "0");
+      const MM = String(d.getMinutes()).padStart(2, "0");
+      const SS = String(d.getSeconds()).padStart(2, "0");
+      const dateStr = `${dd}-${mon}-${yyyy} ${HH}:${MM}:${SS}`;
+      // datenum: MATLAB serial date number (days since 0-Jan-0000)
+      // MATLAB epoch offset: 719529 days from 0-Jan-0000 to 1-Jan-1970
+      const datenum = 719529 + e.mtimeMs / 86400000;
+
+      return RTV.struct(
+        new Map<string, RuntimeValue>([
+          ["name", RTV.char(e.name)],
+          ["folder", RTV.char(e.folder)],
+          ["date", RTV.char(dateStr)],
+          ["bytes", RTV.num(e.bytes)],
+          ["isdir", RTV.logical(e.isdir)],
+          ["datenum", RTV.num(datenum)],
+        ])
+      );
+    });
+
+    if (elements.length === 0) {
+      // Return empty struct array
+      return RTV.structArray(fieldNames, []);
+    }
+    return RTV.structArray(fieldNames, elements);
   });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──
