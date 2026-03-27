@@ -69,6 +69,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "rmdir",
   "unzip",
   "dir",
+  "warning",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -97,6 +98,45 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       rt.output(displayValue(mv) + "\n");
     }
     return 0;
+  });
+
+  registerSpecial("warning", (_nargout, args) => {
+    if (args.length === 0) return RTV.num(0);
+    const margs = args.map(a => ensureRuntimeValue(a));
+    // warning('on'/'off', id) — state query/set form
+    if (
+      margs.length === 2 &&
+      isRuntimeChar(margs[0]) &&
+      isRuntimeChar(margs[1])
+    ) {
+      const state = toString(margs[0]);
+      if (state === "on" || state === "off") {
+        return RTV.struct(
+          new Map<string, RuntimeValue>([
+            ["state", RTV.char("on")],
+            ["identifier", margs[1]],
+          ])
+        );
+      }
+    }
+    // warning(msg, ...) — display warning with optional sprintf formatting
+    const fmt = toString(margs[0]);
+    if (margs.length === 1) {
+      rt.output("Warning: " + fmt + "\n");
+    } else {
+      const fmtArgs: RuntimeValue[] = [];
+      for (let i = 1; i < margs.length; i++) {
+        const a = margs[i];
+        if (isRuntimeTensor(a)) {
+          for (let j = 0; j < a.data.length; j++)
+            fmtArgs.push(RTV.num(a.data[j]));
+        } else {
+          fmtArgs.push(a);
+        }
+      }
+      rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
+    }
+    return RTV.num(0);
   });
 
   registerSpecial("fprintf", (_nargout, args) => {

@@ -100,35 +100,6 @@ defineBuiltin({
   ],
 });
 
-// ── warning ─────────────────────────────────────────────────────────────
-
-registerIBuiltin({
-  name: "warning",
-  resolve: () => {
-    return {
-      outputTypes: [{ kind: "unknown" }],
-      apply: args => {
-        if (
-          args.length === 2 &&
-          isRuntimeChar(args[0]) &&
-          isRuntimeChar(args[1])
-        ) {
-          const state = toString(args[0]);
-          if (state === "on" || state === "off") {
-            return RTV.struct(
-              new Map<string, RuntimeValue>([
-                ["state", RTV.char("on")],
-                ["identifier", args[1]],
-              ])
-            );
-          }
-        }
-        return RTV.num(0);
-      },
-    };
-  },
-});
-
 // ── version / computer ──────────────────────────────────────────────────
 
 defineBuiltin({
