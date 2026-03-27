@@ -147,6 +147,7 @@ defineBuiltin({
         const b = toFloatArray(args[1]);
         const m = a.length;
         const n = b.length;
+        const colVec = isColumnVector(args[0]);
 
         const fullLen = m + n - 1;
         const full = new FloatXArray(fullLen);
@@ -180,7 +181,10 @@ defineBuiltin({
           throw new RuntimeError(`conv: unknown shape '${shape}'`);
         }
 
-        return RTV.tensor(result, [1, result.length]);
+        const outShape: [number, number] = colVec
+          ? [result.length, 1]
+          : [1, result.length];
+        return RTV.tensor(result, outShape);
       },
     },
   ],
