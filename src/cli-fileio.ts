@@ -343,9 +343,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     return extracted;
   }
 
-  listDir(
-    dirPath: string
-  ): {
+  listDir(dirPath: string): {
     name: string;
     folder: string;
     bytes: number;
@@ -438,9 +436,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     }
   }
 
-  private listDirGlob(
-    pattern: string
-  ): {
+  private listDirGlob(pattern: string): {
     name: string;
     folder: string;
     bytes: number;
@@ -494,9 +490,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     return results;
   }
 
-  private listDirRecursive(
-    pattern: string
-  ): {
+  private listDirRecursive(pattern: string): {
     name: string;
     folder: string;
     bytes: number;
