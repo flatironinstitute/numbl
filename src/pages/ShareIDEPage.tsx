@@ -88,7 +88,7 @@ export function ShareIDEPage() {
 
       // Create all the shared files in the new project
       for (const file of files) {
-        await createFile(projectName, file.name, file.content);
+        await createFile(projectName, file.name, file.data);
       }
 
       setSaveDialogOpen(false);

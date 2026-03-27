@@ -12,7 +12,7 @@ export interface ProjectFile {
   id: string; // Primary key - UUID
   projectName: string; // Foreign key to Project.name (indexed)
   path: string; // File path like "src/utils/helper.m"
-  content: string; // File content
+  data: Uint8Array; // File content (binary). Text is decoded on demand.
   createdAt: number; // Timestamp
   updatedAt: number; // Timestamp
 }

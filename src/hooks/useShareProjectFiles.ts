@@ -7,10 +7,12 @@ import {
   shareDataToWorkspaceFiles,
 } from "../utils/shareUrl";
 
+const textEncoder = new TextEncoder();
+
 // Reuse the same reducer actions
 type FilesAction =
   | { type: "SET_FILES"; files: WorkspaceFile[] }
-  | { type: "UPDATE_CONTENT"; fileId: string; content: string }
+  | { type: "UPDATE_DATA"; fileId: string; data: Uint8Array }
   | { type: "ADD_FILE"; file: WorkspaceFile }
   | { type: "DELETE_FILE"; fileId: string }
   | { type: "RENAME_FILE"; fileId: string; newName: string }
@@ -24,9 +26,9 @@ function filesReducer(
   switch (action.type) {
     case "SET_FILES":
       return action.files;
-    case "UPDATE_CONTENT":
+    case "UPDATE_DATA":
       return state.map(f =>
-        f.id === action.fileId ? { ...f, content: action.content } : f
+        f.id === action.fileId ? { ...f, data: action.data } : f
       );
     case "ADD_FILE":
       return [...state, action.file];
@@ -129,7 +131,7 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
         const defaultFile: WorkspaceFile = {
           id: crypto.randomUUID(),
           name: "script.m",
-          content: "% Write your script here\n",
+          data: textEncoder.encode("% Write your script here\n"),
         };
         dispatch({ type: "SET_FILES", files: [defaultFile] });
         setActiveFileId(defaultFile.id);
@@ -139,7 +141,7 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
       const defaultFile: WorkspaceFile = {
         id: crypto.randomUUID(),
         name: "script.m",
-        content: "% Failed to load shared project\n",
+        data: textEncoder.encode("% Failed to load shared project\n"),
       };
       dispatch({ type: "SET_FILES", files: [defaultFile] });
       setActiveFileId(defaultFile.id);
@@ -177,10 +179,16 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
 
   const updateFileContent = useCallback(
     (content: string) => {
-      dispatch({ type: "UPDATE_CONTENT", fileId: activeFileId, content });
+      dispatch({
+        type: "UPDATE_DATA",
+        fileId: activeFileId,
+        data: textEncoder.encode(content),
+      });
     },
     [activeFileId]
   );
+
+  const emptyData = useMemo(() => new Uint8Array(0), []);
 
   const addFile = useCallback(
     async (folderPath?: string): Promise<string> => {
@@ -189,12 +197,12 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
       const id = crypto.randomUUID();
       dispatch({
         type: "ADD_FILE",
-        file: { id, name, content: "" },
+        file: { id, name, data: emptyData },
       });
       setActiveFileId(id);
       return id;
     },
-    [files]
+    [files, emptyData]
   );
 
   const addFolder = useCallback(
@@ -206,12 +214,12 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
       const id = crypto.randomUUID();
       dispatch({
         type: "ADD_FILE",
-        file: { id, name, content: "" },
+        file: { id, name, data: emptyData },
       });
       setActiveFileId(id);
       return fullPath;
     },
-    [files]
+    [files, emptyData]
   );
 
   const handleDeleteFile = useCallback(
@@ -322,9 +330,9 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
       for (const entry of duplicates) {
         const existing = existingByPath.get(entry.fullPath)!;
         dispatch({
-          type: "UPDATE_CONTENT",
+          type: "UPDATE_DATA",
           fileId: existing.id,
-          content: entry.content,
+          data: textEncoder.encode(entry.content),
         });
         if (!firstNewId) firstNewId = existing.id;
       }
@@ -332,7 +340,11 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
         const id = crypto.randomUUID();
         dispatch({
           type: "ADD_FILE",
-          file: { id, name: entry.fullPath, content: entry.content },
+          file: {
+            id,
+            name: entry.fullPath,
+            data: textEncoder.encode(entry.content),
+          },
         });
         if (!firstNewId) firstNewId = id;
       }
@@ -363,5 +375,8 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
     uploadFiles: handleUploadFiles,
     reload,
     urlSizeTooLarge,
+    mergeVfsChanges: useCallback(() => {
+      // No-op for share mode
+    }, []),
   };
 }

@@ -1,10 +1,12 @@
 import pako from "pako";
-import type { WorkspaceFile } from "../hooks/useProjectFiles";
+import { fileText, type WorkspaceFile } from "../hooks/useProjectFiles";
 
 export interface ShareData {
   files: { name: string; content: string }[];
   activeFileName: string | null;
 }
+
+const textEncoder = new TextEncoder();
 
 export function encodeShareData(
   files: WorkspaceFile[],
@@ -12,12 +14,12 @@ export function encodeShareData(
 ): string {
   const activeFile = files.find(f => f.id === activeFileId);
   const data: ShareData = {
-    files: files.map(f => ({ name: f.name, content: f.content })),
+    files: files.map(f => ({ name: f.name, content: fileText(f) })),
     activeFileName: activeFile?.name ?? null,
   };
 
   const json = JSON.stringify(data);
-  const compressed = pako.deflate(new TextEncoder().encode(json));
+  const compressed = pako.deflate(textEncoder.encode(json));
 
   // Base64url encoding (no padding, URL-safe)
   let base64 = btoa(String.fromCharCode(...compressed));
@@ -50,7 +52,7 @@ export function shareDataToWorkspaceFiles(data: ShareData): {
   const files: WorkspaceFile[] = data.files.map(f => ({
     id: crypto.randomUUID(),
     name: f.name,
-    content: f.content,
+    data: textEncoder.encode(f.content),
   }));
 
   let activeFileId = "";

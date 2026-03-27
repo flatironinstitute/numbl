@@ -14,6 +14,8 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
+import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
+import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 
 /** Post a structured error message back to the main thread. */
 function postError(
@@ -24,7 +26,8 @@ function postError(
   snippet: string | null,
   callStack: unknown,
   generatedJS: string | undefined,
-  workspaceRep?: unknown
+  workspaceRep?: unknown,
+  vfsChanges?: unknown
 ): void {
   self.postMessage({
     type: "error",
@@ -36,19 +39,38 @@ function postError(
     callStack,
     generatedJS,
     workspaceRep,
+    vfsChanges,
   });
 }
 
 // ── Worker message handler ───────────────────────────────────────────────────
 
 self.onmessage = (e: MessageEvent) => {
-  const { type, code, options, workspaceFiles, mainFileName, searchPaths } =
-    e.data;
+  const {
+    type,
+    code,
+    options,
+    workspaceFiles,
+    mainFileName,
+    searchPaths,
+    vfsFiles,
+  } = e.data;
   if (type !== "run") return;
 
   const wsFiles: WorkspaceFile[] = workspaceFiles;
   const activeFileName: string = mainFileName ?? "script.m";
   let generatedJS: string | undefined;
+
+  // Set up VFS if files were provided
+  let adapter: BrowserFileIOAdapter | undefined;
+  if (vfsFiles) {
+    const vfs = new VirtualFileSystem();
+    for (const f of vfsFiles as { path: string; content: Uint8Array }[]) {
+      vfs.writeFile(f.path, f.content);
+    }
+    vfs.clearChangeTracking();
+    adapter = new BrowserFileIOAdapter(vfs);
+  }
 
   try {
     const result = executeCode(
@@ -64,6 +86,7 @@ self.onmessage = (e: MessageEvent) => {
         maxIterations: options?.maxIterations ?? 10000000,
         optimization: options?.optimization ?? 1,
         initialVariableValues: {},
+        fileIO: adapter,
       },
       wsFiles,
       activeFileName,
@@ -87,6 +110,7 @@ self.onmessage = (e: MessageEvent) => {
       fileSources: new Map<string, string>([[activeFileName, code]]),
     };
 
+    const vfsChanges = adapter?.getChanges();
     self.postMessage({
       type: "done",
       generatedJS: result.generatedJS,
@@ -94,6 +118,7 @@ self.onmessage = (e: MessageEvent) => {
       workspaceRep,
       plotInstructions: result.plotInstructions,
       dispatchUnknownCounts: result.dispatchUnknownCounts,
+      vfsChanges,
     });
   } catch (error: unknown) {
     const diags = diagnoseErrors(error, code, activeFileName, wsFiles);
@@ -117,6 +142,7 @@ self.onmessage = (e: MessageEvent) => {
       }[],
       fileSources: new Map<string, string>([[activeFileName, code]]),
     };
+    const errVfsChanges = adapter?.getChanges();
     for (const diag of diags) {
       postError(
         diag.message,
@@ -126,7 +152,8 @@ self.onmessage = (e: MessageEvent) => {
         diag.snippet,
         diag.callStack,
         errGeneratedJS,
-        errWorkspaceRep
+        errWorkspaceRep,
+        errVfsChanges
       );
     }
   }

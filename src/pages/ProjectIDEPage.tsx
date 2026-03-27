@@ -39,6 +39,7 @@ export function ProjectIDEPage() {
     renameFolder,
     moveFile,
     uploadFiles,
+    mergeVfsChanges,
   } = useProjectFiles(projectName!);
 
   const handleShare = useCallback(() => {
@@ -144,6 +145,8 @@ export function ProjectIDEPage() {
       moveFile={moveFile}
       uploadFiles={uploadFiles}
       headerContent={headerContent}
+      projectName={projectName}
+      mergeVfsChanges={mergeVfsChanges}
     />
   );
 }

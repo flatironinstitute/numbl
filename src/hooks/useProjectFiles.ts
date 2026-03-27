@@ -1,27 +1,50 @@
 import { useState, useEffect, useCallback, useMemo, useReducer } from "react";
 import {
   getProjectFiles,
-  saveFile,
+  saveFileData,
   createFile,
   deleteFile,
   renameFile as renameFileInDb,
 } from "../db/operations";
 
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder("utf-8");
+
 export interface WorkspaceFile {
   id: string;
-  name: string; // path in the old system
-  content: string;
+  name: string;
+  data: Uint8Array; // All files stored as binary. Use textDecoder to get text.
+}
+
+/** Decode file data as UTF-8 text. */
+export function fileText(f: WorkspaceFile): string {
+  return textDecoder.decode(f.data);
+}
+
+/** Check if a file contains binary (non-text) data. */
+export function isBinaryFile(f: WorkspaceFile): boolean {
+  const data = f.data;
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === 0) return true;
+  }
+  return false;
 }
 
 // Actions for the files reducer
 type FilesAction =
   | { type: "SET_FILES"; files: WorkspaceFile[] }
-  | { type: "UPDATE_CONTENT"; fileId: string; content: string }
+  | { type: "UPDATE_DATA"; fileId: string; data: Uint8Array }
   | { type: "ADD_FILE"; file: WorkspaceFile }
   | { type: "DELETE_FILE"; fileId: string }
   | { type: "RENAME_FILE"; fileId: string; newName: string }
   | { type: "RENAME_FOLDER"; oldPath: string; newPath: string }
-  | { type: "MOVE_FILE"; fileId: string; newName: string };
+  | { type: "MOVE_FILE"; fileId: string; newName: string }
+  | {
+      type: "MERGE_VFS";
+      added: WorkspaceFile[];
+      modified: { path: string; data: Uint8Array }[];
+      deletedPaths: string[];
+    };
 
 // Reducer for managing files state
 function filesReducer(
@@ -32,9 +55,9 @@ function filesReducer(
     case "SET_FILES":
       return action.files;
 
-    case "UPDATE_CONTENT":
+    case "UPDATE_DATA":
       return state.map(f =>
-        f.id === action.fileId ? { ...f, content: action.content } : f
+        f.id === action.fileId ? { ...f, data: action.data } : f
       );
 
     case "ADD_FILE":
@@ -64,6 +87,24 @@ function filesReducer(
         f.id === action.fileId ? { ...f, name: action.newName } : f
       );
 
+    case "MERGE_VFS": {
+      let result = state;
+      if (action.modified.length > 0) {
+        result = result.map(f => {
+          const mod = action.modified.find(m => m.path === f.name);
+          return mod ? { ...f, data: mod.data } : f;
+        });
+      }
+      if (action.deletedPaths.length > 0) {
+        const deletedSet = new Set(action.deletedPaths);
+        result = result.filter(f => !deletedSet.has(f.name));
+      }
+      if (action.added.length > 0) {
+        result = [...result, ...action.added];
+      }
+      return result;
+    }
+
     default:
       return state;
   }
@@ -87,6 +128,11 @@ export interface UseProjectFilesResult {
     targetFolder?: string
   ) => Promise<void>;
   reload: () => Promise<void>;
+  mergeVfsChanges: (result: {
+    addedFiles: WorkspaceFile[];
+    modifiedFiles: { path: string; data: Uint8Array }[];
+    deletedPaths: string[];
+  }) => void;
 }
 
 // Debounce helper
@@ -180,11 +226,10 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
 
         if (cancelled) return;
 
-        // Convert ProjectFile[] to WorkspaceFile[]
         const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
           id: pf.id,
           name: pf.path,
-          content: pf.content,
+          data: pf.data,
         }));
 
         dispatch({ type: "SET_FILES", files: workspaceFiles });
@@ -225,7 +270,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
         id: pf.id,
         name: pf.path,
-        content: pf.content,
+        data: pf.data,
       }));
 
       dispatch({ type: "SET_FILES", files: workspaceFiles });
@@ -239,9 +284,9 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
   // Debounced save function
   const debouncedSave = useMemo(
     () =>
-      debounce(async (fileId: string, content: string) => {
+      debounce(async (fileId: string, data: Uint8Array) => {
         try {
-          await saveFile({ id: fileId, content });
+          await saveFileData(fileId, data);
         } catch (error) {
           console.error("Failed to save file:", error);
         }
@@ -251,12 +296,14 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
 
   const updateFileContent = useCallback(
     (content: string) => {
-      dispatch({ type: "UPDATE_CONTENT", fileId: activeFileId, content });
-      // Debounced save to IndexedDB
-      debouncedSave(activeFileId, content);
+      const data = textEncoder.encode(content);
+      dispatch({ type: "UPDATE_DATA", fileId: activeFileId, data });
+      debouncedSave(activeFileId, data);
     },
     [activeFileId, debouncedSave]
   );
+
+  const emptyData = useMemo(() => new Uint8Array(0), []);
 
   const addFile = useCallback(
     async (folderPath?: string): Promise<string> => {
@@ -264,10 +311,10 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       const name = folderPath ? `${folderPath}/${baseName}` : baseName;
 
       try {
-        const file = await createFile(projectName, name, "");
+        const file = await createFile(projectName, name, emptyData);
         dispatch({
           type: "ADD_FILE",
-          file: { id: file.id, name, content: "" },
+          file: { id: file.id, name, data: emptyData },
         });
         setActiveFileId(file.id);
         return file.id;
@@ -276,7 +323,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         return "";
       }
     },
-    [files, projectName, setActiveFileId]
+    [files, projectName, setActiveFileId, emptyData]
   );
 
   const addFolder = useCallback(
@@ -287,10 +334,10 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       const name = `${fullPath}/${fileName}`;
 
       try {
-        const file = await createFile(projectName, name, "");
+        const file = await createFile(projectName, name, emptyData);
         dispatch({
           type: "ADD_FILE",
-          file: { id: file.id, name, content: "" },
+          file: { id: file.id, name, data: emptyData },
         });
         setActiveFileId(file.id);
         return fullPath;
@@ -299,7 +346,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         return "";
       }
     },
-    [files, projectName, setActiveFileId]
+    [files, projectName, setActiveFileId, emptyData]
   );
 
   const handleDeleteFile = useCallback(
@@ -456,25 +503,23 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         // Overwrite existing files
         for (const entry of duplicates) {
           const existing = existingByPath.get(entry.fullPath)!;
-          await saveFile({ id: existing.id, content: entry.content });
+          const data = textEncoder.encode(entry.content);
+          await saveFileData(existing.id, data);
           dispatch({
-            type: "UPDATE_CONTENT",
+            type: "UPDATE_DATA",
             fileId: existing.id,
-            content: entry.content,
+            data,
           });
           if (!firstNewId) firstNewId = existing.id;
         }
 
         // Create new files
         for (const entry of newEntries) {
-          const file = await createFile(
-            projectName,
-            entry.fullPath,
-            entry.content
-          );
+          const data = textEncoder.encode(entry.content);
+          const file = await createFile(projectName, entry.fullPath, data);
           dispatch({
             type: "ADD_FILE",
-            file: { id: file.id, name: entry.fullPath, content: entry.content },
+            file: { id: file.id, name: entry.fullPath, data },
           });
           if (!firstNewId) firstNewId = file.id;
         }
@@ -504,5 +549,20 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     moveFile: handleMoveFile,
     uploadFiles: handleUploadFiles,
     reload,
+    mergeVfsChanges: useCallback(
+      (result: {
+        addedFiles: WorkspaceFile[];
+        modifiedFiles: { path: string; data: Uint8Array }[];
+        deletedPaths: string[];
+      }) => {
+        dispatch({
+          type: "MERGE_VFS",
+          added: result.addedFiles,
+          modified: result.modifiedFiles,
+          deletedPaths: result.deletedPaths,
+        });
+      },
+      []
+    ),
   };
 }

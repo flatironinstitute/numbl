@@ -1,5 +1,7 @@
 import { db, type Project, type ProjectFile } from "./schema";
 
+const textEncoder = new TextEncoder();
+
 const DEFAULT_CODE = `% Write your script here
 tic;
 a = 0;
@@ -31,7 +33,7 @@ export async function createProject(name: string): Promise<void> {
       id: crypto.randomUUID(),
       projectName: name,
       path: "script.m",
-      content: DEFAULT_CODE,
+      data: textEncoder.encode(DEFAULT_CODE),
       createdAt: now,
       updatedAt: now,
     });
@@ -99,11 +101,12 @@ export async function getFile(
   return await db.files.get(fileId);
 }
 
-export async function saveFile(
-  file: Partial<ProjectFile> & { id: string }
+export async function saveFileData(
+  fileId: string,
+  data: Uint8Array
 ): Promise<void> {
-  await db.files.update(file.id, {
-    ...file,
+  await db.files.update(fileId, {
+    data,
     updatedAt: Date.now(),
   });
 }
@@ -111,14 +114,14 @@ export async function saveFile(
 export async function createFile(
   projectName: string,
   path: string,
-  content: string = ""
+  data: Uint8Array = new Uint8Array(0)
 ): Promise<ProjectFile> {
   const now = Date.now();
   const file: ProjectFile = {
     id: crypto.randomUUID(),
     projectName,
     path,
-    content,
+    data,
     createdAt: now,
     updatedAt: now,
   };

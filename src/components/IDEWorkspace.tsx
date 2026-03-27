@@ -56,7 +56,11 @@ import { FigureView } from "../graphics/FigureView.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
 import { MipPackageManager } from "./MipPackageManager";
-import type { WorkspaceFile } from "../hooks/useProjectFiles";
+import {
+  fileText,
+  isBinaryFile,
+  type WorkspaceFile,
+} from "../hooks/useProjectFiles";
 import {
   isRemoteExecutionEnabled,
   setRemoteExecutionEnabled,
@@ -68,6 +72,8 @@ import {
 } from "../utils/remoteExecution";
 import { extractMipDirectives } from "../mip-directives-core";
 import { loadMipPackageBrowser } from "../mip/browser-backend";
+import { syncVfsChangesToProject } from "../vfs/syncVfsChanges";
+import type { VfsChanges } from "../vfs/VirtualFileSystem";
 
 export interface IDEWorkspaceProps {
   files: WorkspaceFile[];
@@ -86,6 +92,12 @@ export interface IDEWorkspaceProps {
     targetFolder?: string
   ) => Promise<void>;
   headerContent: ReactNode;
+  projectName?: string; // For VFS sync back to IndexedDB
+  mergeVfsChanges?: (result: {
+    addedFiles: WorkspaceFile[];
+    modifiedFiles: { path: string; data: Uint8Array }[];
+    deletedPaths: string[];
+  }) => void;
 }
 
 export function IDEWorkspace({
@@ -102,6 +114,8 @@ export function IDEWorkspace({
   moveFile,
   uploadFiles,
   headerContent,
+  projectName,
+  mergeVfsChanges,
 }: IDEWorkspaceProps) {
   const optimization = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -258,6 +272,31 @@ export function IDEWorkspace({
     figuresDispatch(instruction);
   }, []);
 
+  /** Convert workspace files to VFS format for the worker. */
+  const filesToVfs = useCallback(
+    (wsFiles: WorkspaceFile[]) =>
+      wsFiles.map(f => ({
+        path: f.name,
+        content: f.data,
+      })),
+    []
+  );
+
+  /** Handle VFS changes from worker execution. */
+  const handleVfsChanges = useCallback(
+    async (changes: VfsChanges | undefined) => {
+      if (!changes || !projectName) return;
+      const { created, modified, deleted } = changes;
+      if (created.length === 0 && modified.length === 0 && deleted.length === 0)
+        return;
+      const result = await syncVfsChangesToProject(projectName, changes);
+      if (result && mergeVfsChanges) {
+        mergeVfsChanges(result);
+      }
+    },
+    [projectName, mergeVfsChanges]
+  );
+
   // Initialize script worker
   useEffect(() => {
     scriptWorkerRef.current = new Worker(
@@ -288,6 +327,7 @@ export function IDEWorkspace({
             handlePlotInstruction(instr);
           }
         }
+        handleVfsChanges(msg.vfsChanges);
       } else if (msg.type === "error") {
         if (msg.generatedJS) {
           setGeneratedJS(msg.generatedJS);
@@ -296,13 +336,14 @@ export function IDEWorkspace({
         setFileSources(msg.workspaceRep?.fileSources ?? null);
         setIsRunning(false);
         setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
+        handleVfsChanges(msg.vfsChanges);
       }
     };
 
     return () => {
       scriptWorkerRef.current?.terminate();
     };
-  }, [handlePlotInstruction, extractAllFilesRep]);
+  }, [handlePlotInstruction, extractAllFilesRep, handleVfsChanges]);
 
   // Initialize REPL worker
   useEffect(() => {
@@ -315,7 +356,8 @@ export function IDEWorkspace({
     if (files.length > 0) {
       worker.postMessage({
         type: "update_workspace",
-        workspaceFiles: files.map(f => ({ name: f.name, source: f.content })),
+        workspaceFiles: files.map(f => ({ name: f.name, source: fileText(f) })),
+        vfsFiles: filesToVfs(files),
       });
     }
 
@@ -348,6 +390,7 @@ export function IDEWorkspace({
           } else if (msg.error && term?.writeOutput) {
             term.writeOutput(msg.error, true);
           }
+          handleVfsChanges(msg.vfsChanges);
           if (term?.writePrompt) {
             term.writePrompt();
           }
@@ -370,17 +413,18 @@ export function IDEWorkspace({
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [handlePlotInstruction, handleVfsChanges]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update workspace in REPL worker when files change
   useEffect(() => {
     if (replWorkerRef.current && files.length > 0) {
       replWorkerRef.current.postMessage({
         type: "update_workspace",
-        workspaceFiles: files.map(f => ({ name: f.name, source: f.content })),
+        workspaceFiles: files.map(f => ({ name: f.name, source: fileText(f) })),
+        vfsFiles: filesToVfs(files),
       });
     }
-  }, [files]);
+  }, [files, filesToVfs]);
 
   // Clear triggerRenameId after a short delay
   useEffect(() => {
@@ -404,15 +448,15 @@ export function IDEWorkspace({
 
     const workspaceFiles = files
       .filter(f => f.id !== activeFileId)
-      .map(f => ({ name: f.name, source: f.content }));
+      .map(f => ({ name: f.name, source: fileText(f) }));
 
     // Extract mip directives and load packages before execution
-    let codeToRun = activeFile.content;
+    let codeToRun = fileText(activeFile);
     const mipWorkspaceFiles: { name: string; source: string }[] = [];
     const mipSearchPaths: string[] = [];
     try {
       const { directives, cleanedSource } = extractMipDirectives(
-        activeFile.content,
+        fileText(activeFile),
         activeFile.name
       );
       if (directives.length > 0) {
@@ -513,6 +557,7 @@ export function IDEWorkspace({
         optimization,
       },
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
+      vfsFiles: filesToVfs(files),
     });
   }, [
     activeFile,
@@ -522,6 +567,7 @@ export function IDEWorkspace({
     remoteServiceUrl,
     handlePlotInstruction,
     optimization,
+    filesToVfs,
   ]);
 
   const stopExecution = useCallback(() => {
@@ -564,6 +610,7 @@ export function IDEWorkspace({
               handlePlotInstruction(instr);
             }
           }
+          handleVfsChanges(msg.vfsChanges);
         } else if (msg.type === "error") {
           if (msg.generatedJS) {
             setGeneratedJS(msg.generatedJS);
@@ -572,13 +619,14 @@ export function IDEWorkspace({
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setIsRunning(false);
           setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
+          handleVfsChanges(msg.vfsChanges);
         }
       };
 
       setIsRunning(false);
       setOutput(prev => prev + "\n--- Execution stopped ---\n");
     }
-  }, [handlePlotInstruction, extractAllFilesRep]);
+  }, [handlePlotInstruction, extractAllFilesRep, handleVfsChanges]);
 
   const handleExecutionModeChange = useCallback(
     (
@@ -655,7 +703,7 @@ export function IDEWorkspace({
           // Update worker with new workspace files including mip packages
           const userFiles = files.map(f => ({
             name: f.name,
-            source: f.content,
+            source: fileText(f),
           }));
           replWorkerRef.current?.postMessage({
             type: "update_workspace",
@@ -698,6 +746,8 @@ export function IDEWorkspace({
   }, []);
 
   const lastActiveFileId = useRef<string>("");
+  const activeFileIsBinary = activeFile ? isBinaryFile(activeFile) : false;
+
   useEffect(() => {
     if (!editorRef.current) return;
     if (!activeFile) return;
@@ -705,8 +755,9 @@ export function IDEWorkspace({
       return;
     }
     lastActiveFileId.current = activeFileId;
-    if (editorRef.current.value !== activeFile.content) {
-      editorRef.current.setValue(activeFile.content);
+    const text = isBinaryFile(activeFile) ? "" : fileText(activeFile);
+    if (editorRef.current.value !== text) {
+      editorRef.current.setValue(text);
     }
   }, [activeFileId, activeFile]);
 
@@ -836,21 +887,37 @@ export function IDEWorkspace({
             </Box>
 
             <Box sx={{ flexGrow: 1 }}>
-              <Editor
-                height="100%"
-                language={
-                  activeFile?.name.endsWith(".js") ? "javascript" : "numbl"
-                }
-                defaultValue={activeFile?.content || ""}
-                onChange={value => updateFileContent(value || "")}
-                onMount={handleEditorDidMount}
-                options={{
-                  minimap: { enabled: false },
-                  fontSize: 14,
-                  lineNumbers: "on",
-                  scrollBeyondLastLine: false,
-                }}
-              />
+              {activeFileIsBinary ? (
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: "100%",
+                    color: "text.secondary",
+                  }}
+                >
+                  <Typography variant="body2">
+                    Binary file ({activeFile?.data.length} bytes)
+                  </Typography>
+                </Box>
+              ) : (
+                <Editor
+                  height="100%"
+                  language={
+                    activeFile?.name.endsWith(".js") ? "javascript" : "numbl"
+                  }
+                  defaultValue={activeFile ? fileText(activeFile) : ""}
+                  onChange={value => updateFileContent(value || "")}
+                  onMount={handleEditorDidMount}
+                  options={{
+                    minimap: { enabled: false },
+                    fontSize: 14,
+                    lineNumbers: "on",
+                    scrollBeyondLastLine: false,
+                  }}
+                />
+              )}
             </Box>
           </Box>
         ) : (

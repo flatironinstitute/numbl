@@ -22,6 +22,8 @@ import { offsetToColumn, RuntimeError } from "./numbl-core/runtime/index.js";
 import { SyntaxError } from "./numbl-core/parser/index.js";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
+import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
+import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 
 // ── Persistent state ─────────────────────────────────────────────────────────
 
@@ -30,6 +32,7 @@ let holdState = false;
 let workspaceFiles: WorkspaceFile[] = [];
 let searchPaths: string[] | undefined;
 let optimizationLevel = 1;
+let vfs: VirtualFileSystem | null = null;
 
 // ── Snippet helpers ──────────────────────────────────────────────────────────
 
@@ -101,6 +104,7 @@ self.onmessage = (e: MessageEvent) => {
   if (type === "clear") {
     variableValues = {};
     holdState = false;
+    vfs = null;
     self.postMessage({ type: "cleared" });
     return;
   }
@@ -115,10 +119,27 @@ self.onmessage = (e: MessageEvent) => {
     if (e.data.searchPaths !== undefined) {
       searchPaths = e.data.searchPaths;
     }
+    // Update VFS with new workspace files
+    if (e.data.vfsFiles) {
+      vfs = new VirtualFileSystem();
+      for (const f of e.data.vfsFiles as {
+        path: string;
+        content: Uint8Array;
+      }[]) {
+        vfs.writeFile(f.path, f.content);
+      }
+      vfs.clearChangeTracking();
+    }
     return;
   }
 
   if (type !== "execute") return;
+
+  // Create adapter from persistent VFS (or a fresh one if no VFS yet)
+  if (!vfs) {
+    vfs = new VirtualFileSystem();
+  }
+  const adapter = new BrowserFileIOAdapter(vfs);
 
   try {
     const result = executeCode(
@@ -135,6 +156,7 @@ self.onmessage = (e: MessageEvent) => {
         optimization: optimizationLevel,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
+        fileIO: adapter,
       },
       workspaceFiles,
       "repl",
@@ -147,14 +169,17 @@ self.onmessage = (e: MessageEvent) => {
     variableValues = result.variableValues;
     holdState = result.holdState;
 
+    const vfsChanges = adapter.getChanges();
     self.postMessage({
       type: "result",
       success: true,
       output: result.output.join(""),
       plotInstructions: result.plotInstructions,
+      vfsChanges,
     });
   } catch (error: unknown) {
     // On error, variableValues remains unchanged - variables are preserved
+    const errVfsChanges = adapter.getChanges();
 
     // ── RuntimeError ─────────────────────────────────────────────────────────
     if (error instanceof RuntimeError) {
@@ -172,6 +197,7 @@ self.onmessage = (e: MessageEvent) => {
         type: "result",
         success: false,
         error: errorMsg,
+        vfsChanges: errVfsChanges,
       });
 
       // ── SyntaxError ──────────────────────────────────────────────────────────
@@ -191,6 +217,7 @@ self.onmessage = (e: MessageEvent) => {
         type: "result",
         success: false,
         error: errorMsg,
+        vfsChanges: errVfsChanges,
       });
 
       // ── SemanticError (with span) ─────────────────────────────────────────────
@@ -209,6 +236,7 @@ self.onmessage = (e: MessageEvent) => {
         type: "result",
         success: false,
         error: errorMsg,
+        vfsChanges: errVfsChanges,
       });
 
       // ── SemanticError (without span) ─────────────────────────────────────────
@@ -218,6 +246,7 @@ self.onmessage = (e: MessageEvent) => {
         type: "result",
         success: false,
         error: errorMsg,
+        vfsChanges: errVfsChanges,
       });
 
       // ── Unexpected errors ─────────────────────────────────────────────────────
@@ -227,6 +256,7 @@ self.onmessage = (e: MessageEvent) => {
         type: "result",
         success: false,
         error: errorMsg,
+        vfsChanges: errVfsChanges,
       });
     } else {
       const errorMsg = formatError(String(error), "unknown", null, null);
@@ -234,6 +264,7 @@ self.onmessage = (e: MessageEvent) => {
         type: "result",
         success: false,
         error: errorMsg,
+        vfsChanges: errVfsChanges,
       });
     }
   }

@@ -16,7 +16,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface WorkspaceFile {
   id: string;
   name: string; // may include '/' for folder paths, e.g. "src/utils/helper.m"
-  content: string;
+  data: Uint8Array;
 }
 
 interface TreeNode {
