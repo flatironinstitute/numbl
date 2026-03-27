@@ -136,8 +136,17 @@ registerIBuiltin({
         if (args.length >= 3) side = toString(args[2]).toLowerCase();
         if (s.length >= n)
           return isRuntimeChar(v) ? RTV.char(s) : RTV.string(s);
-        const padding = " ".repeat(n - s.length);
-        const result = side === "left" ? padding + s : s + padding;
+        const total = n - s.length;
+        let result: string;
+        if (side === "both") {
+          const left = Math.floor(total / 2);
+          const right = total - left;
+          result = " ".repeat(left) + s + " ".repeat(right);
+        } else if (side === "left") {
+          result = " ".repeat(total) + s;
+        } else {
+          result = s + " ".repeat(total);
+        }
         return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
       },
     };
@@ -807,6 +816,7 @@ function numStr(n: number): string {
   if (n === -Infinity) return "-Inf";
   if (isNaN(n)) return "NaN";
   if (n === 0) return "0";
+  if (Number.isInteger(n)) return String(n);
   const prec = 5;
   const exp = Math.floor(Math.log10(Math.abs(n)));
   let s: string;
@@ -819,7 +829,6 @@ function numStr(n: number): string {
     const expPart = expPart0.replace(/([eE][+-])(\d)$/, "$1" + "0$2");
     s = mantissa + expPart;
   } else {
-    if (Number.isInteger(n)) return String(n);
     s = n.toPrecision(prec);
     if (s.includes(".")) s = s.replace(/\.?0+$/, "");
   }
