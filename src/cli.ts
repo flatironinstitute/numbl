@@ -352,6 +352,7 @@ Options (for run and eval):
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
+  --no-mip           Skip mip directive processing
   --opt <level>      Optimization level (0=none, 1=JIT scalar functions; default: 1)
 
 Environment variables:
@@ -372,6 +373,7 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   optimization: number;
+  noMip: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -387,6 +389,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: 1,
+    noMip: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -458,6 +461,9 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.profileOutput = resolve(process.cwd(), args[i]);
         break;
+      case "--no-mip":
+        opts.noMip = true;
+        break;
       case "--opt":
         i++;
         if (i >= args.length) {
@@ -501,17 +507,23 @@ async function cmdRun(args: string[]) {
   const mainFileName = filepath;
 
   // Extract mip directives (before any parsing)
-  const { directives, cleanedSource: code } = extractMipDirectives(
-    rawCode,
-    filepath
-  );
-
-  // Process mip directives — collect additional search paths
+  let code: string;
   const mipPaths: string[] = [];
-  for (const d of directives) {
-    if (d.type === "load") {
-      for (const result of processMipLoad(d.packageName)) {
-        mipPaths.push(...result.paths);
+  if (opts.noMip) {
+    code = rawCode;
+  } else {
+    const { directives, cleanedSource } = extractMipDirectives(
+      rawCode,
+      filepath
+    );
+    code = cleanedSource;
+
+    // Process mip directives — collect additional search paths
+    for (const d of directives) {
+      if (d.type === "load") {
+        for (const result of processMipLoad(d.packageName)) {
+          mipPaths.push(...result.paths);
+        }
       }
     }
   }
