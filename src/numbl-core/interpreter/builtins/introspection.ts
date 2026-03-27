@@ -18,6 +18,7 @@ import {
   isRuntimeClassInstance,
   isRuntimeFunction,
   isRuntimeDummyHandle,
+  isRuntimeDictionary,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
@@ -505,6 +506,7 @@ defineBuiltin({
         if (isRuntimeStruct(v) || isRuntimeStructArray(v))
           return mkChar("struct");
         if (isRuntimeCell(v)) return mkChar("cell");
+        if (isRuntimeDictionary(v)) return mkChar("dictionary");
         if (isRuntimeClassInstance(v)) return mkChar(v.className);
         if (isRuntimeFunction(v)) return mkChar("function_handle");
         if (isRuntimeDummyHandle(v)) return mkChar("dummy_handle");

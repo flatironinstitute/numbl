@@ -28,8 +28,15 @@ import {
   isRuntimeComplexNumber,
   isRuntimeClassInstance,
   isRuntimeSparseMatrix,
+  isRuntimeDictionary,
   FloatXArray,
 } from "../runtime/types.js";
+import {
+  dictLookup,
+  dictInsert,
+  dictInsertSingle,
+  dictRemove,
+} from "../interpreter/builtins/dictionary.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import {
   isDeferredRange,
@@ -208,6 +215,15 @@ export function index(
       (typeof skipSubsref === "string" && mv.className === skipSubsref);
     return classInstanceParenIndex(rt, mv, base, indices, nargout, skip);
   }
+  // Dictionary paren indexing: d(key)
+  if (isRuntimeDictionary(mv)) {
+    if (indices.length !== 1)
+      throw new RuntimeError(
+        "Dictionary indexing requires exactly one key argument"
+      );
+    const key = ensureRuntimeValue(indices[0]);
+    return dictLookup(mv, key);
+  }
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
   return mIndex(mv, idxMvals);
 }
@@ -355,6 +371,23 @@ export function indexCell(
     throw new RuntimeError("Cell indexing on non-cell");
   }
 
+  // Dictionary curly-brace indexing: d{key} — unwrap cell contents
+  if (isRuntimeDictionary(mv)) {
+    if (mv.valueType && mv.valueType !== "cell")
+      throw new RuntimeError(
+        "Brace indexing on dictionary with non-cell values"
+      );
+    if (indices.length !== 1)
+      throw new RuntimeError(
+        "Dictionary brace indexing requires exactly one key argument"
+      );
+    const key = ensureRuntimeValue(indices[0]);
+    const val = dictLookup(mv, key);
+    // Unwrap cell
+    if (isRuntimeCell(val) && val.data.length === 1) return val.data[0];
+    return val;
+  }
+
   if (!isRuntimeCell(mv)) throw new RuntimeError("Cell indexing on non-cell");
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
   // CSL for 1D cell indexing
@@ -405,6 +438,20 @@ export function indexStore(
     base = RTV.tensor(new FloatXArray(0), [0, 0]);
   }
   let mv = ensureRuntimeValue(base);
+  // Dictionary paren-indexed assignment: d(key) = value or d(key) = [] for removal
+  if (isRuntimeDictionary(mv)) {
+    if (indices.length !== 1)
+      throw new RuntimeError(
+        "Dictionary assignment requires exactly one key argument"
+      );
+    const key = ensureRuntimeValue(indices[0]);
+    const rhsMv = ensureRuntimeValue(rhs);
+    // d(key) = [] means remove
+    if (isRuntimeTensor(rhsMv) && rhsMv.data.length === 0) {
+      return dictRemove(mv, key);
+    }
+    return dictInsert(mv, key, rhsMv);
+  }
   // Struct array element assignment
   if (
     indices.length === 1 &&
@@ -589,6 +636,18 @@ export function indexCellStore(
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);
+  // Dictionary curly-brace assignment: d{key} = value — wraps in cell
+  if (isRuntimeDictionary(mv)) {
+    if (indices.length !== 1)
+      throw new RuntimeError(
+        "Dictionary brace assignment requires exactly one key argument"
+      );
+    const key = ensureRuntimeValue(indices[0]);
+    const rhsMv = ensureRuntimeValue(rhs);
+    const cellVal = RTV.cell([rhsMv], [1, 1]);
+    // Use dictInsertSingle to avoid expandValues unwrapping the cell
+    return dictInsertSingle(mv, key, cellVal);
+  }
   if (!isRuntimeCell(mv)) mv = RTV.cell([], [0, 0]);
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
   const rhsMv = ensureRuntimeValue(rhs);

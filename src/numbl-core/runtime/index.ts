@@ -6,6 +6,7 @@ export type {
   RuntimeCell,
   RuntimeStruct,
   RuntimeFunction,
+  RuntimeDictionary,
 } from "./types.js";
 
 export { RuntimeError, offsetToLine, offsetToColumn } from "./error.js";

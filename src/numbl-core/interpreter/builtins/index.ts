@@ -28,6 +28,7 @@ import "./time-system.js";
 import "./sparse.js";
 import "./special-math.js";
 import "./misc.js";
+import "./dictionary.js";
 
 export {
   getIBuiltin,

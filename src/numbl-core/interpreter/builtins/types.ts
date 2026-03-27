@@ -139,6 +139,13 @@ export function inferJitType(value: unknown): JitType {
     const sp = value as import("../../runtime/types.js").RuntimeSparseMatrix;
     return { kind: "sparse_matrix", isComplex: !!sp.pi, m: sp.m, n: sp.n };
   }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "dictionary"
+  ) {
+    return { kind: "dictionary" };
+  }
   if (isRuntimeClassInstance(value as RuntimeValue)) {
     const ci = value as import("../../runtime/types.js").RuntimeClassInstance;
     const fields: Record<string, JitType> = {};

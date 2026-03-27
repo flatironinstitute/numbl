@@ -28,6 +28,7 @@ import {
   isRuntimeStructArray,
   isRuntimeComplexNumber,
   isRuntimeClassInstance,
+  isRuntimeDictionary,
   FloatXArray,
   kstr,
 } from "../runtime/types.js";
@@ -397,6 +398,10 @@ export function methodDispatch(
         firstRV = ensureRuntimeValue(first);
       } catch {
         // fall through
+      }
+      // Dictionary method dispatch: d.keys(), d.values(), d.numEntries(), etc.
+      if (firstRV && isRuntimeDictionary(firstRV)) {
+        return dispatch(rt, name, nargout, args);
       }
       if (firstRV && isRuntimeStruct(firstRV)) {
         const fieldVal = mGetField(firstRV, name);

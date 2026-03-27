@@ -5,6 +5,7 @@
 import {
   type RuntimeCell,
   type RuntimeClassInstance,
+  type RuntimeDictionary,
   type RuntimeSparseMatrix,
   type RuntimeStruct,
   type RuntimeTensor,
@@ -59,6 +60,8 @@ export function displayValue(v: RuntimeValue): string {
       return formatStructArray(v);
     case "sparse_matrix":
       return formatSparseMatrix(v);
+    case "dictionary":
+      return formatDictionary(v);
   }
 }
 
@@ -223,4 +226,38 @@ function formatClassInstance(v: RuntimeClassInstance): string {
     lines.push(`    ${key}: ${displayValue(val)}`);
   }
   return lines.join("\n");
+}
+
+function formatDictionary(d: RuntimeDictionary): string {
+  if (!d.keyType && !d.valueType && d.entries.size === 0) {
+    return "  dictionary with unset key and value types.";
+  }
+  const kt = d.keyType ?? "unset";
+  const vt = d.valueType ?? "unset";
+  const n = d.entries.size;
+  if (n === 0) {
+    return `  dictionary (${kt} \u27FC ${vt}) with no entries.`;
+  }
+  const header = `  dictionary (${kt} \u27FC ${vt}) with ${n} ${n === 1 ? "entry" : "entries"}:\n`;
+  const lines: string[] = [header];
+
+  // Format keys and values, compute alignment
+  const formatted: { keyStr: string; valStr: string }[] = [];
+  let maxKeyLen = 0;
+  for (const { key, value } of d.entries.values()) {
+    const keyStr = formatDictKey(key);
+    const valStr = displayValue(value);
+    formatted.push({ keyStr, valStr });
+    maxKeyLen = Math.max(maxKeyLen, keyStr.length);
+  }
+  for (const { keyStr, valStr } of formatted) {
+    lines.push(`    ${keyStr.padEnd(maxKeyLen)} \u27FC ${valStr}`);
+  }
+  return lines.join("\n");
+}
+
+function formatDictKey(v: RuntimeValue): string {
+  if (isRuntimeString(v)) return `"${v}"`;
+  if (isRuntimeChar(v)) return `'${v.value}'`;
+  return displayValue(v);
 }
