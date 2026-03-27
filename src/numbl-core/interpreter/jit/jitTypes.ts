@@ -30,6 +30,7 @@ export type JitType =
       fields?: Record<string, JitType>;
     }
   | { kind: "sparse_matrix"; isComplex: boolean; m?: number; n?: number }
+  | { kind: "dictionary" }
   | { kind: "unknown" };
 
 // ── Sign helpers ─────────────────────────────────────────────────────────
@@ -122,6 +123,8 @@ export function jitTypeKey(t: JitType): string {
       if (t.isComplex) k += "C";
       return k;
     }
+    case "dictionary":
+      return "dictionary";
     case "unknown":
       return "unknown";
   }
@@ -258,6 +261,9 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         ...(isHandleClass !== undefined ? { isHandleClass } : {}),
         ...(hasFields ? { fields } : {}),
       };
+    }
+    if (a.kind === "dictionary" && b.kind === "dictionary") {
+      return { kind: "dictionary" };
     }
     return a; // same kind, no flags to merge
   }

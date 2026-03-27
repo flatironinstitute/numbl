@@ -17,6 +17,7 @@ import {
   type RuntimeDummyHandle,
   type RuntimeStructArray,
   type RuntimeSparseMatrix,
+  type RuntimeDictionary,
   type RuntimeValue,
   type FloatXArrayType,
   FloatXArray,
@@ -176,6 +177,19 @@ export const RTV = {
   ): RuntimeSparseMatrix {
     return { kind: "sparse_matrix", m, n, ir, jc, pr, pi, _rc: 1 };
   },
+
+  dictionary(
+    entries?: Map<string, { key: RuntimeValue; value: RuntimeValue }>,
+    keyType?: string,
+    valueType?: string
+  ): RuntimeDictionary {
+    return {
+      kind: "dictionary",
+      entries: entries ?? new Map(),
+      keyType,
+      valueType,
+    };
+  },
 };
 
 export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
@@ -236,6 +250,8 @@ export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
       return { kind: "Unknown" };
     case "sparse_matrix":
       return { kind: "SparseMatrix", isComplex: value.pi !== undefined };
+    case "dictionary":
+      return { kind: "Dictionary" };
     default:
       return { kind: "Unknown" };
   }

@@ -62,6 +62,8 @@ export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
       const cb = b as typeof a;
       return a.re === cb.re && a.im === cb.im;
     }
+    case "dictionary":
+      return a === b;
     default:
       return false;
   }

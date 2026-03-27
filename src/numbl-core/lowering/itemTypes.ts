@@ -26,7 +26,8 @@ export type ItemType =
   | { kind: "MultipleOutputs"; outputTypes: ItemType[] } // for return types of functions that return multiple outputs
   | { kind: "ClassInstance"; className: string }
   | { kind: "DummyHandle" }
-  | { kind: "SparseMatrix"; isComplex?: boolean };
+  | { kind: "SparseMatrix"; isComplex?: boolean }
+  | { kind: "Dictionary" };
 
 function typeToString(ty: ItemType): string {
   switch (ty.kind) {
@@ -74,6 +75,8 @@ function typeToString(ty: ItemType): string {
       return `MultipleOutputs<${ty.outputTypes.map(typeToString).join(", ")}>`;
     case "SparseMatrix":
       return ty.isComplex ? "SparseMatrix<complex>" : "SparseMatrix";
+    case "Dictionary":
+      return "Dictionary";
     default:
       return "Unknown";
   }
@@ -132,6 +135,7 @@ export const IType = {
   Unknown: { kind: "Unknown" } as ItemType,
   DummyHandle: { kind: "DummyHandle" } as ItemType,
   SparseMatrix: { kind: "SparseMatrix" } as ItemType,
+  Dictionary: { kind: "Dictionary" } as ItemType,
 
   /** Create a Num type */
   num(): ItemType {
@@ -205,6 +209,7 @@ export const IType = {
         case "String":
         case "Void":
         case "DummyHandle":
+        case "Dictionary":
           return a;
         case "SparseMatrix": {
           if (b.kind === "SparseMatrix") {

@@ -18,7 +18,8 @@ export type RuntimeValue =
   | RuntimeComplexNumber
   | RuntimeDummyHandle
   | RuntimeStructArray
-  | RuntimeSparseMatrix;
+  | RuntimeSparseMatrix
+  | RuntimeDictionary;
 
 export type RuntimeNumber = number;
 export type RuntimeLogical = boolean;
@@ -83,6 +84,12 @@ export const isRuntimeSparseMatrix = (
   typeof value === "object" &&
   value !== null &&
   (value as RuntimeSparseMatrix).kind === "sparse_matrix";
+export const isRuntimeDictionary = (
+  value: RuntimeValue
+): value is RuntimeDictionary =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as RuntimeDictionary).kind === "dictionary";
 
 export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeNumber(value)) return "number";
@@ -98,6 +105,7 @@ export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeDummyHandle(value)) return "dummy handle";
   if (isRuntimeStructArray(value)) return "struct array";
   if (isRuntimeSparseMatrix(value)) return "sparse matrix";
+  if (isRuntimeDictionary(value)) return "dictionary";
   return "unknown";
 };
 
@@ -186,4 +194,13 @@ export type RuntimeSparseMatrix = {
   pr: Float64Array; // nonzero values (length = nnz)
   pi?: Float64Array; // imaginary values (length = nnz), undefined means real
   _rc: number; // reference count for copy-on-write
+};
+
+/** Dictionary mapping unique keys to values (MATLAB R2022b+). */
+export type RuntimeDictionary = {
+  kind: "dictionary";
+  /** Entries keyed by a hash string of the RuntimeValue key, preserving insertion order. */
+  entries: Map<string, { key: RuntimeValue; value: RuntimeValue }>;
+  keyType?: string; // e.g. "string", "double"; undefined = unconfigured
+  valueType?: string; // e.g. "double", "cell"; undefined = unconfigured
 };
