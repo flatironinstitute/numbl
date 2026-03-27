@@ -293,6 +293,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
   }
 
   websave(url: string, filename: string): void {
+    url = filterUrl(url);
     // Use synchronous XHR (works in Web Workers)
     const xhr = new XMLHttpRequest();
     xhr.open("GET", url, false);
@@ -306,6 +307,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
   }
 
   webread(url: string): string {
+    url = filterUrl(url);
     // Use synchronous XHR (works in Web Workers)
     const xhr = new XMLHttpRequest();
     xhr.open("GET", url, false);
@@ -317,6 +319,8 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
   }
 
   unzip(zipfilename: string, outputfolder: string): string[] {
+    zipfilename = filterUrl(zipfilename);
+
     const zipData = this.vfs.readFile(zipfilename);
     this.vfs.mkdir(outputfolder);
 
@@ -542,4 +546,17 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
 
 function syncInflateRaw(data: Uint8Array): Uint8Array {
   return inflateSync(data);
+}
+
+function filterUrl(url: string): string {
+  // If the url is of the form
+  // https://github.com/*/releases/download/*
+  // then we need to route through a CORS proxy since GitHub doesn't send CORS headers on release assets.
+  if (/^https:\/\/github\.com\/.+\/releases\/download\/.+/.test(url)) {
+    url = url.replace(
+      "https://github.com/",
+      "https://mip-cors-proxy.figurl.workers.dev/gh/"
+    );
+  }
+  return url;
 }
