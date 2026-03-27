@@ -50,4 +50,7 @@ export interface FileIOAdapter {
 
   /** Delete files matching a pattern (supports globs). Optional. */
   deleteFile?(pattern: string): void;
+
+  /** Remove a directory. If recursive is true, remove contents first. Returns true on success. Optional. */
+  rmdir?(dirPath: string, recursive: boolean): boolean;
 }

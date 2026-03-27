@@ -13,6 +13,8 @@ import {
   mkdirSync,
   unlinkSync,
   readdirSync,
+  rmSync,
+  rmdirSync,
 } from "fs";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
@@ -203,6 +205,20 @@ export class NodeFileIOAdapter implements FileIOAdapter {
           ? (e as { stderr: Buffer }).stderr.toString().trim()
           : String(e);
       throw new Error(`websave: failed to download ${url}: ${msg}`);
+    }
+  }
+
+  rmdir(dirPath: string, recursive: boolean): boolean {
+    try {
+      const p = expandTilde(dirPath);
+      if (recursive) {
+        rmSync(p, { recursive: true });
+      } else {
+        rmdirSync(p);
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 

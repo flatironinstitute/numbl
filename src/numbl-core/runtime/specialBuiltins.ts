@@ -66,6 +66,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "mkdir",
   "websave",
   "delete",
+  "rmdir",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -344,6 +345,33 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       io.deleteFile(toString(arg));
     }
     return 0;
+  });
+
+  // ── rmdir (directory removal) ────────────────────────────────────────
+
+  registerSpecial("rmdir", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.rmdir)
+      throw new RuntimeError("rmdir is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("rmdir requires at least 1 argument");
+    const dirPath = toString(margs[0]);
+    const recursive =
+      margs.length >= 2 && toString(margs[1]).toLowerCase() === "s";
+    const ok = io.rmdir(dirPath, recursive);
+    if (nargout === 0) {
+      if (!ok)
+        throw new RuntimeError(`rmdir: cannot remove directory '${dirPath}'`);
+      return undefined;
+    }
+    return nargout <= 1
+      ? RTV.num(ok ? 1 : 0)
+      : [
+          RTV.num(ok ? 1 : 0),
+          RTV.char(ok ? "" : `Cannot remove directory '${dirPath}'`),
+          RTV.char(""),
+        ];
   });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──
