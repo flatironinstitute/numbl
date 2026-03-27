@@ -384,7 +384,14 @@ defineBuiltin({
           return x.val - y.val;
         });
         const result = new FloatXArray(pairs.map(p => p.val));
-        const c = RTV.tensor(result, [1, result.length]);
+        const isCol =
+          isRuntimeTensor(args[0]) &&
+          args[0].shape[0] > 1 &&
+          (args[0].shape.length < 2 || args[0].shape[1] === 1);
+        const outShape: [number, number] = isCol
+          ? [result.length, 1]
+          : [1, result.length];
+        const c = RTV.tensor(result, outShape);
         if (nargout > 1) {
           const ia = new FloatXArray(pairs.map(p => p.idx));
           return [c, RTV.tensor(ia, [ia.length, 1])];
