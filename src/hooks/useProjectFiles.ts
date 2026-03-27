@@ -229,7 +229,8 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
           id: pf.id,
           name: pf.path,
-          data: pf.data,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          data: pf.data ?? textEncoder.encode((pf as any).content ?? ""),
         }));
 
         dispatch({ type: "SET_FILES", files: workspaceFiles });
@@ -270,7 +271,8 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
         id: pf.id,
         name: pf.path,
-        data: pf.data,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        data: pf.data ?? textEncoder.encode((pf as any).content ?? ""),
       }));
 
       dispatch({ type: "SET_FILES", files: workspaceFiles });
