@@ -139,23 +139,45 @@ defineBuiltin({
   ],
 });
 
-defineBuiltin({
+function getComputerStrings(): { str: string; arch: string } {
+  const platform = typeof process !== "undefined" ? process.platform : "linux";
+  const cpuArch = typeof process !== "undefined" ? process.arch : "x64";
+  if (platform === "win32") return { str: "PCWIN64", arch: "win64" };
+  if (platform === "darwin") {
+    if (cpuArch === "arm64") return { str: "MACA64", arch: "maca64" };
+    return { str: "MACI64", arch: "maci64" };
+  }
+  return { str: "GLNXA64", arch: "glnxa64" };
+}
+
+registerIBuiltin({
   name: "computer",
-  cases: [
-    {
-      match: argTypes => (argTypes.length === 0 ? [{ kind: "char" }] : null),
-      apply: () => RTV.char("GLNXA64"),
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: (args, nargout) => {
+      const info = getComputerStrings();
+      if (args.length >= 1 && isRuntimeChar(args[0])) {
+        const arg = toString(args[0]);
+        if (arg === "arch") return RTV.char(info.arch);
+        throw new RuntimeError(`computer: unknown argument '${arg}'`);
+      }
+      const maxsize = 2 ** 48 - 1;
+      const endian = RTV.char("L");
+      if (nargout <= 1) return RTV.char(info.str);
+      if (nargout === 2) return [RTV.char(info.str), RTV.num(maxsize)];
+      return [RTV.char(info.str), RTV.num(maxsize), endian];
     },
-  ],
+  }),
 });
 
 // ── Platform predicates ─────────────────────────────────────────────────
 
+const _platform = typeof process !== "undefined" ? process.platform : "linux";
 for (const [name, val] of [
-  ["ismac", false],
-  ["ispc", false],
-  ["isunix", true],
-] as const) {
+  ["ismac", _platform === "darwin"],
+  ["ispc", _platform === "win32"],
+  ["isunix", _platform !== "win32"],
+] as [string, boolean][]) {
   defineBuiltin({
     name,
     cases: [
