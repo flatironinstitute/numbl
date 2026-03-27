@@ -124,6 +124,10 @@ export function jitTypeKey(t: JitType): string {
       if (t.isComplex) k += "C";
       return k;
     }
+    case "cell": {
+      const s = t.shape ? t.shape.join("x") : "?";
+      return `cell[${s}]`;
+    }
     case "dictionary":
       return "dictionary";
     case "unknown":
