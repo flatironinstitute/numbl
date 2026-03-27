@@ -51,6 +51,7 @@
     "test:coverage:all": "bash scripts/coverage-all.sh",
     "test:scripts": "bash numbl_test_scripts/run_all.sh",
     "test:jit": "tsx src/cli.ts run-tests numbl_test_scripts/jit --opt 1",
+    "bench:linalg": "npx tsx src/bench/run-linalg-bench.ts",
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
@@ -62,7 +63,8 @@
     "node-addon-api": "^8.3.0",
     "pako": "^2.1.0",
     "react-syntax-highlighter": "^16.1.1",
-    "three": "^0.183.2"
+    "three": "^0.183.2",
+    "tinybench": "^6.0.0"
   },
   "devDependencies": {
     "@emotion/react": "^11.14.0",
