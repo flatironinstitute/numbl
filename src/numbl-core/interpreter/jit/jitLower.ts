@@ -841,13 +841,17 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       };
     }
 
-    case "String":
+    case "String": {
+      // Strip surrounding quotes and unescape doubled quotes (same as interpreter)
+      let strVal = expr.value.slice(1, expr.value.length - 1);
+      strVal = strVal.replaceAll('""', '"');
       return {
         tag: "StringLiteral",
-        value: expr.value,
+        value: strVal,
         isChar: false,
-        jitType: { kind: "string", value: expr.value },
+        jitType: { kind: "string", value: strVal },
       };
+    }
 
     case "Index": {
       const base = lowerExpr(ctx, expr.base);
