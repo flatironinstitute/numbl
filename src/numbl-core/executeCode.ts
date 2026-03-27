@@ -82,6 +82,10 @@ export interface ExecResult {
   holdState: boolean;
   profileData?: ProfileData;
   dispatchUnknownCounts?: Record<string, number>;
+  /** Updated search paths (set when addpath/rmpath was called). */
+  searchPaths?: string[];
+  /** Updated workspace files (set when addpath/rmpath was called). */
+  workspaceFiles?: WorkspaceFile[];
 }
 
 // ── Implementation ──────────────────────────────────────────────────────
@@ -142,15 +146,16 @@ export function executeCode(
   );
   const jsUserFunctionNames = jsUserFunctions.map(ib => ib.name);
 
-  // Add stdlib and shim files
+  // Add stdlib and shim files (track names for filtering in ExecResult)
+  const stdlibShimNames = new Set<string>();
   for (const f of stdlibFiles) {
     mWorkspaceFiles.push(f);
+    stdlibShimNames.add(f.name);
   }
   for (const f of shimFiles) {
-    mWorkspaceFiles.push({
-      name: `${SHIM_SEARCH_PATH}/${f.name}`,
-      source: f.source,
-    });
+    const shimName = `${SHIM_SEARCH_PATH}/${f.name}`;
+    mWorkspaceFiles.push({ name: shimName, source: f.source });
+    stdlibShimNames.add(shimName);
   }
   ctx.registry.searchPaths = [...(searchPaths ?? []), SHIM_SEARCH_PATH];
 
@@ -240,6 +245,92 @@ export function executeCode(
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
 
+  // Expose search paths reference on the runtime (for path() builtin)
+  rt.searchPaths = ctx.registry.searchPaths;
+
+  // Track whether paths were modified during execution
+  let pathsModified = false;
+
+  // Wire up addpath/rmpath callback
+  rt.onPathChange = (action, dir, position) => {
+    const fileIO = options.fileIO;
+    const absDir = fileIO?.resolvePath?.(dir) ?? dir;
+
+    if (action === "add") {
+      // Skip if already on the path
+      if (ctx.registry.searchPaths.includes(absDir)) return;
+
+      // Add to search paths (before the shim path for '-end')
+      if (position === "begin") {
+        ctx.registry.searchPaths.unshift(absDir);
+      } else {
+        const shimIdx = ctx.registry.searchPaths.indexOf(SHIM_SEARCH_PATH);
+        if (shimIdx >= 0) {
+          ctx.registry.searchPaths.splice(shimIdx, 0, absDir);
+        } else {
+          ctx.registry.searchPaths.push(absDir);
+        }
+      }
+
+      // Scan and parse new files
+      if (fileIO?.scanDirectory) {
+        const newFiles = fileIO.scanDirectory(absDir);
+        for (const f of newFiles) {
+          if (f.name.endsWith(".m") && !ctx.fileASTCache.has(f.name)) {
+            try {
+              ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
+            } catch (e) {
+              if (e instanceof SyntaxError && e.file === null) {
+                e.file = f.name;
+              }
+              throw e;
+            }
+            interpreter.fileSources.set(f.name, f.source);
+            mWorkspaceFiles.push(f);
+          }
+        }
+      }
+    } else {
+      // rmpath: remove from search paths
+      const idx = ctx.registry.searchPaths.indexOf(absDir);
+      if (idx >= 0) {
+        ctx.registry.searchPaths.splice(idx, 1);
+      }
+      // Remove files belonging to this path from AST cache and mWorkspaceFiles
+      const prefix = absDir.endsWith("/") ? absDir : absDir + "/";
+      for (let i = mWorkspaceFiles.length - 1; i >= 0; i--) {
+        if (mWorkspaceFiles[i].name.startsWith(prefix)) {
+          ctx.fileASTCache.delete(mWorkspaceFiles[i].name);
+          interpreter.fileSources.delete(mWorkspaceFiles[i].name);
+          mWorkspaceFiles.splice(i, 1);
+        }
+      }
+    }
+
+    // Clear workspace registrations and rebuild.
+    // Sort files by search path order so earlier paths win in first-wins registration.
+    const paths = ctx.registry.searchPaths;
+    mWorkspaceFiles.sort((a, b) => {
+      const ai = paths.findIndex(
+        p => a.name.startsWith(p.endsWith("/") ? p : p + "/") || a.name === p
+      );
+      const bi = paths.findIndex(
+        p => b.name.startsWith(p.endsWith("/") ? p : p + "/") || b.name === p
+      );
+      // Files not matching any search path (e.g. stdlib) go last
+      const aPri = ai >= 0 ? ai : paths.length;
+      const bPri = bi >= 0 ? bi : paths.length;
+      return aPri - bPri;
+    });
+
+    ctx.clearWorkspaceRegistrations();
+    ctx.registerWorkspaceFiles(mWorkspaceFiles);
+    const newIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
+    interpreter.functionIndex = newIndex;
+    interpreter.clearAllCaches();
+    pathsModified = true;
+  };
+
   // Wire up eval callback
   rt.evalLocalCallback = (code, initialVars, onOutput) => {
     const evalResult = executeCode(code, {
@@ -278,6 +369,16 @@ export function executeCode(
         builtins: rt.getBuiltinProfile(),
         dispatches: rt.getDispatchProfile(),
       };
+    }
+
+    // Propagate path changes so callers (e.g. REPL) can persist them
+    if (pathsModified) {
+      result.searchPaths = ctx.registry.searchPaths.filter(
+        p => p !== SHIM_SEARCH_PATH
+      );
+      result.workspaceFiles = mWorkspaceFiles.filter(
+        f => !stdlibShimNames.has(f.name)
+      );
     }
 
     return result;

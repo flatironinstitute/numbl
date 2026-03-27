@@ -30,4 +30,12 @@ export interface FileIOAdapter {
 
   /** Write a string to a file descriptor (used by fprintf). */
   fwrite(fid: number, text: string): void;
+
+  /** Scan a directory for workspace files (.m, .js, .wasm). Optional. */
+  scanDirectory?(
+    dirPath: string
+  ): import("../numbl-core/workspace/index.js").WorkspaceFile[];
+
+  /** Resolve a path to absolute. Optional. */
+  resolvePath?(dirPath: string): string;
 }

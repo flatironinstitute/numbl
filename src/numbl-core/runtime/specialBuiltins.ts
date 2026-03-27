@@ -59,6 +59,10 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "evalin",
   "drawnow",
   "pause",
+  "mfilename",
+  "addpath",
+  "rmpath",
+  "path",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -347,6 +351,111 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   registerSpecial("pause", (_nargout, args) => {
     rt.pause(args[0] ?? 0);
+    return 0;
+  });
+
+  // ── mfilename builtin ────────────────────────────────────────────
+
+  registerSpecial("mfilename", (_nargout, args) => {
+    const file = rt.$file ?? "";
+    if (args.length > 0) {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      const opt = toString(margs[0]);
+      if (opt === "fullpath") {
+        // Return full path without .m extension
+        return RTV.char(file.replace(/\.m$/, ""));
+      }
+    }
+    // Return just the base name without path or extension
+    const lastSep = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
+    const baseName = lastSep >= 0 ? file.slice(lastSep + 1) : file;
+    return RTV.char(baseName.replace(/\.m$/, ""));
+  });
+
+  // ── Path management builtins ──────────────────────────────────────
+
+  registerSpecial("addpath", (nargout, args) => {
+    if (!rt.onPathChange) {
+      throw new RuntimeError("addpath is not available in this environment");
+    }
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("addpath requires at least 1 argument");
+
+    // Detect '-end' or '-begin' flag as last argument
+    let position: "begin" | "end" = "begin";
+    const lastArg = margs[margs.length - 1];
+    if (isRuntimeChar(lastArg) || isRuntimeString(lastArg)) {
+      const flag = toString(lastArg);
+      if (flag === "-end") {
+        position = "end";
+        margs.pop();
+      } else if (flag === "-begin") {
+        margs.pop();
+      }
+    }
+
+    for (const arg of margs) {
+      const dirStr = toString(arg);
+      // MATLAB supports pathsep-separated dirs in a single string
+      const dirs = dirStr.split(";");
+      for (const d of dirs) {
+        const trimmed = d.trim();
+        if (trimmed) {
+          rt.onPathChange("add", trimmed, position);
+        }
+      }
+    }
+
+    if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+    return 0;
+  });
+
+  registerSpecial("rmpath", (nargout, args) => {
+    if (!rt.onPathChange) {
+      throw new RuntimeError("rmpath is not available in this environment");
+    }
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("rmpath requires at least 1 argument");
+
+    for (const arg of margs) {
+      const dirStr = toString(arg);
+      const dirs = dirStr.split(";");
+      for (const d of dirs) {
+        const trimmed = d.trim();
+        if (trimmed) {
+          rt.onPathChange("remove", trimmed, "begin");
+        }
+      }
+    }
+
+    if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+    return 0;
+  });
+
+  registerSpecial("path", (nargout, args) => {
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length === 0) {
+      // path() — return current path
+      return RTV.char(rt.searchPaths.join(";"));
+    }
+    // path(newpath) — set the entire path (not commonly used, but supported)
+    if (margs.length >= 1 && rt.onPathChange) {
+      // Remove all current paths then add the new ones
+      for (const sp of [...rt.searchPaths]) {
+        rt.onPathChange("remove", sp, "begin");
+      }
+      const newPath = toString(margs[0]);
+      const dirs = newPath.split(";");
+      for (const d of dirs) {
+        const trimmed = d.trim();
+        if (trimmed) {
+          rt.onPathChange("add", trimmed, "end");
+        }
+      }
+    }
+    if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
     return 0;
   });
 }

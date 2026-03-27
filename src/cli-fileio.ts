@@ -5,8 +5,9 @@
 
 import { openSync, closeSync, readSync, writeSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { join, resolve } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
+import { scanMFiles } from "./cli.js";
 
 function expandTilde(filepath: string): string {
   if (filepath.startsWith("~/")) {
@@ -143,6 +144,14 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       entry.lastError = e instanceof Error ? e.message : String(e);
       throw e;
     }
+  }
+
+  scanDirectory(dirPath: string) {
+    return scanMFiles(expandTilde(dirPath));
+  }
+
+  resolvePath(dirPath: string) {
+    return resolve(process.cwd(), expandTilde(dirPath));
   }
 
   private getEntry(fid: number): OpenFile | undefined {

@@ -107,6 +107,18 @@ export class Interpreter {
     }
   }
 
+  /** Clear all JIT and function resolution caches. Called after addpath/rmpath. */
+  clearAllCaches(): void {
+    for (const [, fd] of this.functionDefCache) {
+      fd._jitCache?.clear();
+    }
+    this.functionDefCache.clear();
+    this.loopJitCache.clear();
+    this.compileInProgress.clear();
+    this.ctx.registry.fileContexts.clear();
+    this.rt.classMethodCache.clear();
+  }
+
   /** Wire up runtime callbacks so dispatch() routes through the interpreter. */
   installRuntimeCallbacks(): void {
     this.rt.compileSpecialized = (

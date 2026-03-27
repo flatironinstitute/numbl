@@ -137,6 +137,12 @@ export async function runRepl(
         );
         variableValues = result.variableValues;
         holdState = result.holdState;
+        if (result.searchPaths) {
+          searchPaths.length = 0;
+          searchPaths.push(...result.searchPaths);
+          workspaceFiles.length = 0;
+          workspaceFiles.push(...(result.workspaceFiles ?? []));
+        }
         if (result.plotInstructions.length > 0 && onDrawnow) {
           onDrawnow(result.plotInstructions);
         }
@@ -268,6 +274,12 @@ export async function runRepl(
       );
       variableValues = result.variableValues;
       holdState = result.holdState;
+      if (result.searchPaths) {
+        searchPaths.length = 0;
+        searchPaths.push(...result.searchPaths);
+        workspaceFiles.length = 0;
+        workspaceFiles.push(...(result.workspaceFiles ?? []));
+      }
       if (result.plotInstructions.length > 0 && onDrawnow) {
         onDrawnow(result.plotInstructions);
       }

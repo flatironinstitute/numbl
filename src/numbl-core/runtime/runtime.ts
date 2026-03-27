@@ -155,6 +155,18 @@ export class Runtime {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public classMethodCache = new Map<string, ((...args: any[]) => any) | null>();
 
+  /** Callback for addpath/rmpath — mutates search paths and rebuilds function index. */
+  public onPathChange:
+    | ((
+        action: "add" | "remove",
+        dir: string,
+        position: "begin" | "end"
+      ) => void)
+    | null = null;
+
+  /** Reference to the active search paths (set by executeCode). */
+  public searchPaths: string[] = [];
+
   // Workspace accessors: varName → { get, set } closures over script-level vars
   // Registered by generated code so assignin/evalin can access workspace variables
   public workspaceAccessors = new Map<

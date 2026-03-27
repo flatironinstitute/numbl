@@ -260,6 +260,7 @@ async function runTests(dir: string, optimization?: number) {
           onJitCompile: (description: string) => {
             jitDescriptions.push(description);
           },
+          fileIO: new NodeFileIOAdapter(),
         },
         workspaceFiles,
         mainFileName,

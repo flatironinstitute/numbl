@@ -385,6 +385,18 @@ export class LoweringContext {
     return this.registry.filesByFuncName.has(name);
   }
 
+  /** Clear workspace-level registrations so they can be rebuilt after addpath/rmpath. */
+  clearWorkspaceRegistrations(): void {
+    this.registry.filesByFuncName.clear();
+    this.registry.classesByName.clear();
+    this.registry.privateFilesByDir.clear();
+    this.registry.fileContexts.clear();
+    this.registry.fileToFuncName.clear();
+    this.registry.externalAccessByFile.clear();
+    this.registry.functionIndex = null;
+    // Note: localClassesByName is NOT cleared (comes from main file, not workspace)
+  }
+
   // ── Private function management ──────────────────────────────────
 
   /**
