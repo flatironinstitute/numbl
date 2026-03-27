@@ -393,6 +393,15 @@ for (const name of [
   });
 }
 
+// pathdef — no-op, returns empty string
+registerIBuiltin({
+  name: "pathdef",
+  resolve: () => ({
+    outputTypes: [{ kind: "char" }],
+    apply: () => RTV.char(""),
+  }),
+});
+
 // ishold — returns false
 registerIBuiltin({
   name: "ishold",
