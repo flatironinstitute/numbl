@@ -145,14 +145,15 @@ defineBuiltin({
 defineBuiltin({
   name: "angle",
   cases: unaryRealResultCases(
-    x => (x >= 0 ? 0 : Math.PI),
+    x => (isNaN(x) ? NaN : x >= 0 ? 0 : Math.PI),
     (re, im) => Math.atan2(im, re),
     "angle"
   ),
   jitEmit: (argCode, argTypes) => {
     if (argTypes.length !== 1) return null;
     const k = argTypes[0].kind;
-    if (k === "number") return `(${argCode[0]} >= 0 ? 0 : Math.PI)`;
+    if (k === "number")
+      return `(Number.isNaN(${argCode[0]}) ? NaN : ${argCode[0]} >= 0 ? 0 : Math.PI)`;
     if (k === "boolean") return "0";
     if (k === "complex_or_number") return `$h.cAngle(${argCode[0]})`;
     return null;

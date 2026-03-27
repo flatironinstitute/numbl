@@ -156,12 +156,12 @@ defineBuiltin({
         const v = args[0];
         let pass = false;
         if (typeof v === "boolean") pass = v;
-        else if (typeof v === "number") pass = v !== 0;
+        else if (typeof v === "number") pass = v !== 0 && !isNaN(v);
         else if (isRuntimeLogical(v)) pass = v;
         else if (isRuntimeTensor(v)) {
           pass = v.data.length > 0;
           for (let i = 0; i < v.data.length; i++) {
-            if (v.data[i] === 0) {
+            if (v.data[i] === 0 || isNaN(v.data[i])) {
               pass = false;
               break;
             }
