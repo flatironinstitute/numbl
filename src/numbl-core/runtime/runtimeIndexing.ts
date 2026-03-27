@@ -33,7 +33,6 @@ import {
 } from "../runtime/types.js";
 import {
   dictLookup,
-  dictInsert,
   dictInsertSingle,
   dictRemove,
 } from "../interpreter/builtins/dictionary.js";
@@ -450,7 +449,7 @@ export function indexStore(
     if (isRuntimeTensor(rhsMv) && rhsMv.data.length === 0) {
       return dictRemove(mv, key);
     }
-    return dictInsert(mv, key, rhsMv);
+    return dictInsertSingle(mv, key, rhsMv);
   }
   // Struct array element assignment
   if (
