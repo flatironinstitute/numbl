@@ -776,6 +776,19 @@ defineBuiltin({
           return [r, RTV.num(1), RTV.num(1)];
         }
 
+        if (isRuntimeString(v) || isRuntimeChar(v)) {
+          return uniqueCharVector(v, nargout, stable);
+        }
+
+        if (
+          isRuntimeCell(v) &&
+          v.data.every(
+            (e: RuntimeValue) => isRuntimeString(e) || isRuntimeChar(e)
+          )
+        ) {
+          return uniqueCellOfStrings(v, nargout, stable);
+        }
+
         if (!isRuntimeTensor(v))
           throw new RuntimeError("unique: argument must be numeric");
 
@@ -785,6 +798,107 @@ defineBuiltin({
     },
   ],
 });
+
+function uniqueCharVector(
+  v: RuntimeValue,
+  nargout: number,
+  stable: boolean
+): RuntimeValue | RuntimeValue[] {
+  const s = toString(v);
+  const chars = [...s];
+  const seen = new Map<string, number>();
+  const order: number[] = [];
+  for (let i = 0; i < chars.length; i++) {
+    if (!seen.has(chars[i])) {
+      seen.set(chars[i], order.length);
+      order.push(i);
+    }
+  }
+  if (!stable) {
+    order.sort((a, b) => {
+      if (chars[a] < chars[b]) return -1;
+      if (chars[a] > chars[b]) return 1;
+      return 0;
+    });
+  }
+  const resultChars = order.map(i => chars[i]);
+  const result = RTV.char(resultChars.join(""));
+  if (nargout <= 1) return result;
+  const ia = RTV.tensor(new FloatXArray(order.map(i => i + 1)), [
+    1,
+    order.length,
+  ]);
+  if (nargout === 2) return [result, ia];
+  const icData = new FloatXArray(chars.length);
+  if (stable) {
+    for (let i = 0; i < chars.length; i++) {
+      icData[i] = seen.get(chars[i])! + 1;
+    }
+  } else {
+    const sortedMap = new Map<string, number>();
+    for (let u = 0; u < order.length; u++) {
+      sortedMap.set(chars[order[u]], u + 1);
+    }
+    for (let i = 0; i < chars.length; i++) {
+      icData[i] = sortedMap.get(chars[i])!;
+    }
+  }
+  return [result, ia, RTV.tensor(icData, [1, chars.length])];
+}
+
+function uniqueCellOfStrings(
+  v: { kind: "cell"; data: RuntimeValue[]; shape: number[]; _rc: number },
+  nargout: number,
+  stable: boolean
+): RuntimeValue | RuntimeValue[] {
+  const strs = v.data.map((e: RuntimeValue) => toString(e));
+  const seen = new Map<string, number>();
+  const order: number[] = [];
+  for (let i = 0; i < strs.length; i++) {
+    if (!seen.has(strs[i])) {
+      seen.set(strs[i], order.length);
+      order.push(i);
+    }
+  }
+  if (!stable) {
+    order.sort((a, b) => {
+      if (strs[a] < strs[b]) return -1;
+      if (strs[a] > strs[b]) return 1;
+      return 0;
+    });
+  }
+  const resultData = order.map(i => v.data[i]);
+  const isRow = v.shape[0] === 1;
+  const resultShape = isRow ? [1, order.length] : [order.length, 1];
+  const result: RuntimeValue = {
+    kind: "cell",
+    data: resultData,
+    shape: resultShape,
+    _rc: 1,
+  };
+  if (nargout <= 1) return result;
+  const ia = RTV.tensor(
+    new FloatXArray(order.map(i => i + 1)),
+    isRow ? [1, order.length] : [order.length, 1]
+  );
+  if (nargout === 2) return [result, ia];
+  const icData = new FloatXArray(strs.length);
+  if (stable) {
+    for (let i = 0; i < strs.length; i++) {
+      icData[i] = seen.get(strs[i])! + 1;
+    }
+  } else {
+    const sortedMap = new Map<string, number>();
+    for (let u = 0; u < order.length; u++) {
+      sortedMap.set(strs[order[u]], u + 1);
+    }
+    for (let i = 0; i < strs.length; i++) {
+      icData[i] = sortedMap.get(strs[i])!;
+    }
+  }
+  const icShape = isRow ? [1, strs.length] : [strs.length, 1];
+  return [result, ia, RTV.tensor(icData, icShape)];
+}
 
 function uniqueByRows(
   v: RuntimeTensor,
