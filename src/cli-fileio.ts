@@ -11,6 +11,7 @@ import {
   readFileSync,
   writeFileSync,
   statSync,
+  fstatSync,
   mkdirSync,
   unlinkSync,
   readdirSync,
@@ -37,6 +38,8 @@ interface OpenFile {
   lastError: string;
   buffer: string;
   eof: boolean;
+  /** Byte offset tracked for binary I/O (fread/fwrite/fseek/ftell). -1 means not tracking (text mode). */
+  pos: number;
 }
 
 function permissionToFlags(permission: string): string {
@@ -75,6 +78,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
         lastError: "",
         buffer: "",
         eof: false,
+        pos: 0,
       });
       return fid;
     } catch (e) {
@@ -159,6 +163,71 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       entry.lastError = e instanceof Error ? e.message : String(e);
       throw e;
     }
+  }
+
+  freadBytes(fid: number, count: number): Uint8Array {
+    const entry = this.getEntry(fid);
+    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
+    // Clear any text buffer (switching to binary mode)
+    if (entry.buffer.length > 0) {
+      entry.buffer = "";
+    }
+    const buf = Buffer.alloc(count);
+    try {
+      const bytesRead = readSync(entry.fd, buf, 0, count, entry.pos);
+      entry.pos += bytesRead;
+      if (bytesRead === 0) entry.eof = true;
+      else if (bytesRead < count) entry.eof = true;
+      entry.lastError = "";
+      return new Uint8Array(buf.buffer, buf.byteOffset, bytesRead);
+    } catch (e) {
+      entry.lastError = e instanceof Error ? e.message : String(e);
+      entry.eof = true;
+      return new Uint8Array(0);
+    }
+  }
+
+  fwriteBytes(fid: number, data: Uint8Array): number {
+    const entry = this.getEntry(fid);
+    if (!entry) throw new Error(`Invalid file identifier: ${fid}`);
+    try {
+      const written = writeSync(entry.fd, data, 0, data.length, entry.pos);
+      entry.pos += written;
+      entry.lastError = "";
+      return written;
+    } catch (e) {
+      entry.lastError = e instanceof Error ? e.message : String(e);
+      throw e;
+    }
+  }
+
+  fseek(fid: number, offset: number, origin: number): number {
+    const entry = this.getEntry(fid);
+    if (!entry) return -1;
+    entry.buffer = "";
+    entry.eof = false;
+    try {
+      if (origin === -1) {
+        // SEEK_SET (bof)
+        entry.pos = offset;
+      } else if (origin === 0) {
+        // SEEK_CUR (cof)
+        entry.pos += offset;
+      } else {
+        // SEEK_END (eof)
+        const size = fstatSync(entry.fd).size;
+        entry.pos = size + offset;
+      }
+      return 0;
+    } catch {
+      return -1;
+    }
+  }
+
+  ftell(fid: number): number {
+    const entry = this.getEntry(fid);
+    if (!entry) return -1;
+    return entry.pos;
   }
 
   scanDirectory(dirPath: string) {

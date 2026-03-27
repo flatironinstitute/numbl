@@ -850,6 +850,7 @@ export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeComplexNumber(v)) return v;
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
+  if (isRuntimeChar(v)) return v;
   if (!isRuntimeTensor(v))
     throw new RuntimeError("Cannot transpose non-numeric value");
   return transposeCore(v, false);
@@ -861,6 +862,7 @@ export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeComplexNumber(v)) return RTV.complex(v.re, -v.im);
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
+  if (isRuntimeChar(v)) return v;
   if (!isRuntimeTensor(v))
     throw new RuntimeError("Cannot transpose non-numeric value");
   return transposeCore(v, true);

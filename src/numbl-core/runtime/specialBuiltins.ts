@@ -20,6 +20,7 @@ import {
   isRuntimeString,
   isRuntimeFunction,
   isRuntimeNumber,
+  FloatXArray,
 } from "../runtime/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
@@ -53,6 +54,11 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "fileread",
   "feof",
   "ferror",
+  "fread",
+  "fwrite",
+  "frewind",
+  "fseek",
+  "ftell",
   "fileparts",
   "fullfile",
   "assignin",
@@ -325,6 +331,504 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1) throw new RuntimeError("ferror requires 1 argument");
     return RTV.char(io.ferror(toNumber(margs[0])));
+  });
+
+  // ── Binary fread / fwrite / frewind / fseek / ftell ──────────────
+
+  /** Parse a MATLAB precision string into source/output type info. */
+  function parsePrecision(prec: string): {
+    repeat: number;
+    sourceType: string;
+    outputType: string;
+    sourceBytes: number;
+  } {
+    let repeat = 0;
+    let rest = prec;
+    // Handle N*type form
+    const starIdx = rest.indexOf("*");
+    if (starIdx > 0 && /^\d+$/.test(rest.slice(0, starIdx))) {
+      repeat = parseInt(rest.slice(0, starIdx), 10);
+      rest = rest.slice(starIdx + 1);
+    } else if (starIdx === 0) {
+      // *type means source=>source
+      rest = rest.slice(1);
+      const info = precisionBytes(rest);
+      return {
+        repeat: 0,
+        sourceType: rest,
+        outputType: rest,
+        sourceBytes: info,
+      };
+    }
+    // Handle source=>output form
+    const arrowIdx = rest.indexOf("=>");
+    let sourceType: string;
+    let outputType: string;
+    if (arrowIdx !== -1) {
+      sourceType = rest.slice(0, arrowIdx);
+      outputType = rest.slice(arrowIdx + 2);
+    } else {
+      sourceType = rest;
+      outputType = "double";
+    }
+    return {
+      repeat,
+      sourceType,
+      outputType,
+      sourceBytes: precisionBytes(sourceType),
+    };
+  }
+
+  function precisionBytes(type: string): number {
+    switch (type) {
+      case "uint8":
+      case "int8":
+      case "uchar":
+      case "unsigned char":
+      case "schar":
+      case "signed char":
+      case "integer*1":
+      case "char":
+      case "char*1":
+        return 1;
+      case "uint16":
+      case "int16":
+      case "ushort":
+      case "short":
+      case "integer*2":
+        return 2;
+      case "uint32":
+      case "int32":
+      case "uint":
+      case "int":
+      case "ulong":
+      case "long":
+      case "single":
+      case "float":
+      case "float32":
+      case "real*4":
+      case "integer*4":
+        return 4;
+      case "uint64":
+      case "int64":
+      case "double":
+      case "float64":
+      case "real*8":
+      case "integer*8":
+        return 8;
+      default:
+        throw new RuntimeError(`fread: unsupported precision '${type}'`);
+    }
+  }
+
+  function readValue(
+    dv: DataView,
+    offset: number,
+    sourceType: string,
+    le: boolean
+  ): number {
+    switch (sourceType) {
+      case "uint8":
+      case "uchar":
+      case "unsigned char":
+      case "char":
+      case "char*1":
+        return dv.getUint8(offset);
+      case "int8":
+      case "schar":
+      case "signed char":
+      case "integer*1":
+        return dv.getInt8(offset);
+      case "uint16":
+      case "ushort":
+        return dv.getUint16(offset, le);
+      case "int16":
+      case "short":
+      case "integer*2":
+        return dv.getInt16(offset, le);
+      case "uint32":
+      case "uint":
+      case "ulong":
+        return dv.getUint32(offset, le);
+      case "int32":
+      case "int":
+      case "long":
+      case "integer*4":
+        return dv.getInt32(offset, le);
+      case "uint64":
+        return Number(dv.getBigUint64(offset, le));
+      case "int64":
+      case "integer*8":
+        return Number(dv.getBigInt64(offset, le));
+      case "single":
+      case "float":
+      case "float32":
+      case "real*4":
+        return dv.getFloat32(offset, le);
+      case "double":
+      case "float64":
+      case "real*8":
+        return dv.getFloat64(offset, le);
+      default:
+        throw new RuntimeError(
+          `fread: unsupported source type '${sourceType}'`
+        );
+    }
+  }
+
+  function writeValue(
+    dv: DataView,
+    offset: number,
+    value: number,
+    sourceType: string,
+    le: boolean
+  ): void {
+    switch (sourceType) {
+      case "uint8":
+      case "uchar":
+      case "unsigned char":
+      case "char":
+      case "char*1":
+        dv.setUint8(offset, value);
+        break;
+      case "int8":
+      case "schar":
+      case "signed char":
+      case "integer*1":
+        dv.setInt8(offset, value);
+        break;
+      case "uint16":
+      case "ushort":
+        dv.setUint16(offset, value, le);
+        break;
+      case "int16":
+      case "short":
+      case "integer*2":
+        dv.setInt16(offset, value, le);
+        break;
+      case "uint32":
+      case "uint":
+      case "ulong":
+        dv.setUint32(offset, value, le);
+        break;
+      case "int32":
+      case "int":
+      case "long":
+      case "integer*4":
+        dv.setInt32(offset, value, le);
+        break;
+      case "uint64":
+        dv.setBigUint64(offset, BigInt(Math.round(value)), le);
+        break;
+      case "int64":
+      case "integer*8":
+        dv.setBigInt64(offset, BigInt(Math.round(value)), le);
+        break;
+      case "single":
+      case "float":
+      case "float32":
+      case "real*4":
+        dv.setFloat32(offset, value, le);
+        break;
+      case "double":
+      case "float64":
+      case "real*8":
+        dv.setFloat64(offset, value, le);
+        break;
+      default:
+        throw new RuntimeError(`fwrite: unsupported precision '${sourceType}'`);
+    }
+  }
+
+  registerSpecial("fread", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.freadBytes)
+      throw new RuntimeError("fread is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("fread requires at least 1 argument");
+    const fid = toNumber(margs[0]);
+
+    // Parse arguments: fread(fid), fread(fid,sizeA), fread(fid,precision),
+    // fread(fid,sizeA,precision), fread(...,skip), fread(...,machinefmt)
+    let sizeA: number[] = [Infinity, 1]; // default: column vector, read all
+    let precision = "uint8=>double";
+    let skip = 0;
+    let machinefmt = "n";
+    let argIdx = 1;
+
+    if (argIdx < margs.length) {
+      const a = margs[argIdx];
+      // Could be sizeA (number/tensor) or precision (string/char)
+      if (isRuntimeChar(a) || isRuntimeString(a)) {
+        precision = toString(a);
+        argIdx++;
+      } else {
+        // It's sizeA
+        if (isRuntimeTensor(a)) {
+          sizeA = Array.from(a.data);
+          argIdx++;
+        } else if (isRuntimeNumber(a)) {
+          sizeA = [toNumber(a), 1];
+          argIdx++;
+        }
+        // Check for precision as next arg
+        if (argIdx < margs.length) {
+          const b = margs[argIdx];
+          if (isRuntimeChar(b) || isRuntimeString(b)) {
+            precision = toString(b);
+            argIdx++;
+          }
+        }
+      }
+    }
+    // Optional skip
+    if (argIdx < margs.length) {
+      const a = margs[argIdx];
+      if (isRuntimeNumber(a) || (isRuntimeTensor(a) && a.data.length === 1)) {
+        skip = toNumber(a);
+        argIdx++;
+      }
+    }
+    // Optional machinefmt
+    if (argIdx < margs.length) {
+      const a = margs[argIdx];
+      if (isRuntimeChar(a) || isRuntimeString(a)) {
+        machinefmt = toString(a);
+      }
+    }
+
+    const parsed = parsePrecision(precision);
+    const le =
+      machinefmt === "l" ||
+      machinefmt === "ieee-le" ||
+      machinefmt === "ieee-le.l64" ||
+      machinefmt === "a" ||
+      machinefmt === "n" ||
+      machinefmt === "native"; // assume native = little-endian
+
+    const bytesPerVal = parsed.sourceBytes;
+    const repeatCount = parsed.repeat || 0;
+
+    // Compute total elements to read
+    let totalElems: number;
+    const m = sizeA[0];
+    const n = sizeA.length > 1 ? sizeA[1] : 1;
+    if (m === Infinity && n === 1) {
+      totalElems = Infinity;
+    } else if (n === Infinity) {
+      totalElems = Infinity;
+    } else {
+      totalElems = m * n;
+    }
+
+    // Read data
+    const values: number[] = [];
+    let count = 0;
+
+    if (repeatCount > 0 && skip > 0) {
+      // N*type with skip: read N values, skip `skip` bytes, repeat
+      while (count < totalElems) {
+        const batch = Math.min(repeatCount, totalElems - count);
+        const bytes = io.freadBytes(fid, batch * bytesPerVal);
+        if (bytes.length === 0) break;
+        const dv = new DataView(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength
+        );
+        const elemsRead = Math.floor(bytes.length / bytesPerVal);
+        for (let i = 0; i < elemsRead; i++) {
+          values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
+          count++;
+        }
+        if (elemsRead < batch) break;
+        // Skip bytes
+        if (count < totalElems) {
+          io.freadBytes(fid, skip);
+        }
+      }
+    } else {
+      // Simple read: read all at once (or in chunks for Inf)
+      if (totalElems === Infinity) {
+        // Read in chunks until EOF
+        const chunkSize = 65536;
+        for (;;) {
+          const bytes = io.freadBytes(fid, chunkSize);
+          if (bytes.length === 0) break;
+          const dv = new DataView(
+            bytes.buffer,
+            bytes.byteOffset,
+            bytes.byteLength
+          );
+          const elemsRead = Math.floor(bytes.length / bytesPerVal);
+          for (let i = 0; i < elemsRead; i++) {
+            values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
+            count++;
+          }
+          if (bytes.length < chunkSize) break;
+        }
+      } else {
+        const totalBytes = totalElems * bytesPerVal;
+        const bytes = io.freadBytes(fid, totalBytes);
+        const dv = new DataView(
+          bytes.buffer,
+          bytes.byteOffset,
+          bytes.byteLength
+        );
+        const elemsRead = Math.floor(bytes.length / bytesPerVal);
+        for (let i = 0; i < elemsRead; i++) {
+          values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
+          count++;
+        }
+      }
+    }
+
+    // If output type is char, return a char array instead of numeric tensor
+    const isCharOutput =
+      parsed.outputType === "char" || parsed.outputType === "char*1";
+
+    // Shape the output
+    let result: RuntimeValue;
+    if (isCharOutput) {
+      const str = String.fromCharCode(...values);
+      result = RTV.char(str);
+    } else if (count === 0) {
+      result = RTV.tensor(new FloatXArray(0), [0, 0]);
+    } else if (count === 1 && m !== Infinity && n !== Infinity) {
+      result = RTV.tensor(new FloatXArray(values), [m, n]);
+    } else if (m === Infinity || (m !== Infinity && n === Infinity)) {
+      if (m === Infinity) {
+        result = RTV.tensor(new FloatXArray(values), [count, 1]);
+      } else {
+        const cols = Math.ceil(count / m);
+        while (values.length < m * cols) values.push(0);
+        result = RTV.tensor(new FloatXArray(values), [m, cols]);
+      }
+    } else {
+      while (values.length < m * n) values.push(0);
+      result = RTV.tensor(new FloatXArray(values.slice(0, m * n)), [m, n]);
+    }
+
+    if (nargout >= 2) {
+      return [result, RTV.num(count)];
+    }
+    return result;
+  });
+
+  registerSpecial("fwrite", (_nargout, args) => {
+    const io = requireFileIO();
+    if (!io.fwriteBytes)
+      throw new RuntimeError("fwrite is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 2)
+      throw new RuntimeError("fwrite requires at least 2 arguments");
+
+    const fid = toNumber(margs[0]);
+    const data = margs[1];
+    let precision = "uint8";
+    let skip = 0;
+    let machinefmt = "n";
+
+    if (margs.length >= 3) {
+      precision = toString(margs[2]);
+    }
+    if (margs.length >= 4) {
+      skip = toNumber(margs[3]);
+    }
+    if (margs.length >= 5) {
+      machinefmt = toString(margs[4]);
+    }
+
+    const parsed = parsePrecision(precision);
+    const le =
+      machinefmt === "l" ||
+      machinefmt === "ieee-le" ||
+      machinefmt === "ieee-le.l64" ||
+      machinefmt === "a" ||
+      machinefmt === "n" ||
+      machinefmt === "native";
+
+    // Extract values from the data argument
+    let values: number[];
+    if (isRuntimeTensor(data)) {
+      values = Array.from(data.data);
+    } else if (isRuntimeNumber(data)) {
+      values = [toNumber(data)];
+    } else if (isRuntimeChar(data) || isRuntimeString(data)) {
+      const str = toString(data);
+      values = [];
+      for (let i = 0; i < str.length; i++) values.push(str.charCodeAt(i));
+    } else {
+      throw new RuntimeError("fwrite: data must be numeric or char");
+    }
+
+    const bytesPerVal = parsed.sourceBytes;
+    if (skip === 0) {
+      const buf = new Uint8Array(values.length * bytesPerVal);
+      const dv = new DataView(buf.buffer);
+      for (let i = 0; i < values.length; i++) {
+        writeValue(dv, i * bytesPerVal, values[i], parsed.sourceType, le);
+      }
+      io.fwriteBytes(fid, buf);
+    } else {
+      // Write with skip bytes between values
+      const valBuf = new Uint8Array(bytesPerVal);
+      const skipBuf = new Uint8Array(skip);
+      const dv = new DataView(valBuf.buffer);
+      for (let i = 0; i < values.length; i++) {
+        writeValue(dv, 0, values[i], parsed.sourceType, le);
+        io.fwriteBytes(fid, valBuf);
+        if (i < values.length - 1) {
+          io.fwriteBytes(fid, skipBuf);
+        }
+      }
+    }
+    return RTV.num(values.length);
+  });
+
+  registerSpecial("frewind", (_nargout, args) => {
+    const io = requireFileIO();
+    if (!io.fseek)
+      throw new RuntimeError("frewind is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1) throw new RuntimeError("frewind requires 1 argument");
+    io.fseek(toNumber(margs[0]), 0, -1);
+    return RTV.num(0);
+  });
+
+  registerSpecial("fseek", (_nargout, args) => {
+    const io = requireFileIO();
+    if (!io.fseek)
+      throw new RuntimeError("fseek is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 2)
+      throw new RuntimeError("fseek requires at least 2 arguments");
+    const fid = toNumber(margs[0]);
+    const offset = toNumber(margs[1]);
+    let origin = -1; // default: bof
+    if (margs.length >= 3) {
+      const o = margs[2];
+      if (isRuntimeChar(o) || isRuntimeString(o)) {
+        const s = toString(o);
+        if (s === "bof") origin = -1;
+        else if (s === "cof") origin = 0;
+        else if (s === "eof") origin = 1;
+        else throw new RuntimeError(`fseek: invalid origin '${s}'`);
+      } else {
+        origin = toNumber(o);
+      }
+    }
+    return RTV.num(io.fseek(fid, offset, origin));
+  });
+
+  registerSpecial("ftell", (_nargout, args) => {
+    const io = requireFileIO();
+    if (!io.ftell)
+      throw new RuntimeError("ftell is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1) throw new RuntimeError("ftell requires 1 argument");
+    return RTV.num(io.ftell(toNumber(margs[0])));
   });
 
   registerSpecial("mkdir", (nargout, args) => {

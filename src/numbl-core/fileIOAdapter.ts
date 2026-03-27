@@ -31,6 +31,18 @@ export interface FileIOAdapter {
   /** Write a string to a file descriptor (used by fprintf). */
   fwrite(fid: number, text: string): void;
 
+  /** Read raw bytes from a file. Returns the bytes actually read (may be fewer than count at EOF). Optional. */
+  freadBytes?(fid: number, count: number): Uint8Array;
+
+  /** Write raw bytes to a file. Returns number of bytes written. Optional. */
+  fwriteBytes?(fid: number, data: Uint8Array): number;
+
+  /** Seek to a position in a file. origin: -1=bof, 0=cof, 1=eof. Returns 0 on success, -1 on error. Optional. */
+  fseek?(fid: number, offset: number, origin: number): number;
+
+  /** Return current file position. Optional. */
+  ftell?(fid: number): number;
+
   /** Scan a directory for workspace files (.m, .js, .wasm). Optional. */
   scanDirectory?(
     dirPath: string
