@@ -497,11 +497,7 @@ registerIBuiltin({
         const n = Math.round(toNumber(args[2]));
         const s1 = toString(args[0]);
         const s2 = toString(args[1]);
-        return RTV.logical(
-          s1.substring(0, n) === s2.substring(0, n) &&
-            s1.length >= n &&
-            s2.length >= n
-        );
+        return RTV.logical(s1.substring(0, n) === s2.substring(0, n));
       },
     };
   },
@@ -518,11 +514,7 @@ registerIBuiltin({
         const n = Math.round(toNumber(args[2]));
         const s1 = toString(args[0]).toLowerCase();
         const s2 = toString(args[1]).toLowerCase();
-        return RTV.logical(
-          s1.substring(0, n) === s2.substring(0, n) &&
-            s1.length >= n &&
-            s2.length >= n
-        );
+        return RTV.logical(s1.substring(0, n) === s2.substring(0, n));
       },
     };
   },
@@ -733,7 +725,13 @@ registerIBuiltin({
     return {
       outputTypes: [{ kind: "char" }],
       apply: args => {
-        const n = Math.round(toNumber(args[0]));
+        let n = Math.round(toNumber(args[0]));
+        if (n < 0) {
+          // Two's complement: find smallest byte-aligned width
+          let bits = 8;
+          while (bits <= 52 && -(1 << (bits - 1)) > n) bits += 8;
+          n = (1 << bits) + n;
+        }
         let hex = n.toString(16).toUpperCase();
         if (args.length === 2) {
           const minDigits = Math.round(toNumber(args[1]));
@@ -754,7 +752,12 @@ registerIBuiltin({
     return {
       outputTypes: [{ kind: "char" }],
       apply: args => {
-        const n = Math.round(toNumber(args[0]));
+        let n = Math.round(toNumber(args[0]));
+        if (n < 0) {
+          let bits = 8;
+          while (bits <= 52 && -(1 << (bits - 1)) > n) bits += 8;
+          n = (1 << bits) + n;
+        }
         let bin = n.toString(2);
         if (args.length === 2) {
           const minDigits = Math.round(toNumber(args[1]));

@@ -549,7 +549,14 @@ defineBuiltin({
           if (y !== y) return -1;
           return x - y;
         });
-        return RTV.tensor(new FloatXArray(result), [1, result.length]);
+        const isCol =
+          isRuntimeTensor(args[0]) &&
+          args[0].shape[0] > 1 &&
+          (args[0].shape.length < 2 || args[0].shape[1] === 1);
+        const outShape: [number, number] = isCol
+          ? [result.length, 1]
+          : [1, result.length];
+        return RTV.tensor(new FloatXArray(result), outShape);
       },
     },
   ],
@@ -573,7 +580,14 @@ defineBuiltin({
           if (y !== y) return -1;
           return x - y;
         });
-        return RTV.tensor(new FloatXArray(result), [1, result.length]);
+        const isCol =
+          isRuntimeTensor(args[0]) &&
+          args[0].shape[0] > 1 &&
+          (args[0].shape.length < 2 || args[0].shape[1] === 1);
+        const outShape: [number, number] = isCol
+          ? [result.length, 1]
+          : [1, result.length];
+        return RTV.tensor(new FloatXArray(result), outShape);
       },
     },
   ],
