@@ -206,6 +206,9 @@ defineBuiltin({
         const a = toFloatArray(args[1]);
         const nb = b.length;
         const na = a.length;
+        const colVec = isColumnVector(args[0]);
+        const mkShape = (n: number): [number, number] =>
+          colVec ? [n, 1] : [1, n];
 
         if (na === 0 || a[0] === 0)
           throw new RuntimeError(
@@ -214,10 +217,10 @@ defineBuiltin({
 
         const nq = nb - na + 1;
         if (nq <= 0) {
-          if (nargout <= 1) return RTV.tensor(new FloatXArray([0]), [1, 1]);
+          if (nargout <= 1) return RTV.tensor(new FloatXArray([0]), mkShape(1));
           return [
-            RTV.tensor(new FloatXArray([0]), [1, 1]),
-            RTV.tensor(new FloatXArray(b), [1, nb]),
+            RTV.tensor(new FloatXArray([0]), mkShape(1)),
+            RTV.tensor(new FloatXArray(b), mkShape(nb)),
           ];
         }
 
@@ -230,8 +233,8 @@ defineBuiltin({
           }
         }
 
-        if (nargout <= 1) return RTV.tensor(q, [1, nq]);
-        return [RTV.tensor(q, [1, nq]), RTV.tensor(r, [1, nb])];
+        if (nargout <= 1) return RTV.tensor(q, mkShape(nq));
+        return [RTV.tensor(q, mkShape(nq)), RTV.tensor(r, mkShape(nb))];
       },
     },
   ],
