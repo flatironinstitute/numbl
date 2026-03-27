@@ -224,10 +224,13 @@ export class Runtime {
     | ((
         code: string,
         initialVars: Record<string, RuntimeValue>,
-        onOutput: (text: string) => void
+        onOutput: (text: string) => void,
+        fileName?: string
       ) => {
         returnValue: unknown;
         variableValues: Record<string, RuntimeValue>;
+        searchPaths?: string[];
+        workspaceFiles?: import("../../numbl-core/workspace/index.js").WorkspaceFile[];
       })
     | null = null;
 

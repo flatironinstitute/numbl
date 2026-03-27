@@ -27,7 +27,7 @@ export interface InterpreterContext {
   setEnv: (env: Environment) => void;
   callerEnv: Environment | undefined;
   workspaceEnv: Environment | undefined;
-  evalInLocalScope: (codeArg: unknown) => unknown;
+  evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
 }
@@ -230,5 +230,56 @@ register("nargoutchk", (ctx, args) => {
   const hi = toNumber(ensureRuntimeValue(args[1]));
   if (n < lo) throw new RuntimeError("Not enough output arguments.");
   if (n > hi) throw new RuntimeError("Too many output arguments.");
+  return undefined;
+});
+
+register("run", (ctx, args) => {
+  if (args.length !== 1) return FALL_THROUGH;
+  const fio = ctx.rt.fileIO;
+  if (!fio)
+    throw new RuntimeError("File I/O is not available in this environment");
+  const scriptname = toString(ensureRuntimeValue(args[0]));
+
+  // Resolve the file path
+  let filePath = scriptname;
+  if (!filePath.endsWith(".m")) filePath += ".m";
+
+  // If the path contains a directory separator, use it directly;
+  // otherwise search the current directory (handled by fileread).
+  const lastSep = Math.max(
+    filePath.lastIndexOf("/"),
+    filePath.lastIndexOf("\\")
+  );
+  const scriptDir = lastSep >= 0 ? filePath.slice(0, lastSep) : null;
+
+  // cd to script directory, execute, cd back (per MATLAB behavior).
+  // If the script itself changes cwd, don't revert.
+  const oldCwd = process.cwd();
+  if (scriptDir) {
+    try {
+      process.chdir(scriptDir);
+    } catch {
+      throw new RuntimeError(`Cannot change directory to '${scriptDir}'`);
+    }
+  }
+  const cwdAfterCd = process.cwd();
+  const basename = lastSep >= 0 ? filePath.slice(lastSep + 1) : filePath;
+  // Resolve the absolute path so mfilename('fullpath') works in the run'd script.
+  const resolvedFile = fio.resolvePath
+    ? fio.resolvePath(basename)
+    : cwdAfterCd + "/" + basename;
+  try {
+    const code = fio.fileread(basename);
+    ctx.evalInLocalScope(code, resolvedFile);
+  } finally {
+    // Revert cwd only if the script didn't change it
+    if (process.cwd() === cwdAfterCd) {
+      try {
+        process.chdir(oldCwd);
+      } catch {
+        // ignore
+      }
+    }
+  }
   return undefined;
 });

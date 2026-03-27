@@ -336,15 +336,22 @@ export function executeCode(
   };
 
   // Wire up eval callback
-  rt.evalLocalCallback = (code, initialVars, onOutput) => {
-    const evalResult = executeCode(code, {
-      onOutput,
-      displayResults: false,
-      initialVariableValues: initialVars,
-    });
+  rt.evalLocalCallback = (code, initialVars, onOutput, fileName) => {
+    const evalResult = executeCode(
+      code,
+      {
+        onOutput,
+        displayResults: false,
+        initialVariableValues: initialVars,
+      },
+      undefined,
+      fileName
+    );
     return {
       returnValue: evalResult.returnValue,
       variableValues: evalResult.variableValues,
+      searchPaths: evalResult.searchPaths,
+      workspaceFiles: evalResult.workspaceFiles,
     };
   };
 

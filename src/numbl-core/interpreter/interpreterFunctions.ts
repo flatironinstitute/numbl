@@ -50,7 +50,8 @@ export function callFunction(
       },
       callerEnv: this.callerEnv,
       workspaceEnv: this.workspaceEnv,
-      evalInLocalScope: codeArg => this.evalInLocalScope(codeArg),
+      evalInLocalScope: (codeArg, fileName) =>
+        this.evalInLocalScope(codeArg, fileName),
       callFunction: (n, a, no) => this.callFunction(n, a, no),
       rt: this.rt,
     };
@@ -843,7 +844,11 @@ export function isHandleClass(
 
 // ── eval in local scope ──────────────────────────────────────────────────
 
-export function evalInLocalScope(this: Interpreter, codeArg: unknown): unknown {
+export function evalInLocalScope(
+  this: Interpreter,
+  codeArg: unknown,
+  fileName?: string
+): unknown {
   const code = toString(ensureRuntimeValue(codeArg));
   const initialVars: Record<string, RuntimeValue> = {};
   for (const name of this.env.localNames()) {
@@ -858,13 +863,26 @@ export function evalInLocalScope(this: Interpreter, codeArg: unknown): unknown {
 
   const cb = this.rt.evalLocalCallback;
   if (cb) {
-    const result = cb(code, initialVars, (text: string) => {
-      this.rt.output(text);
-    });
+    const result = cb(
+      code,
+      initialVars,
+      (text: string) => {
+        this.rt.output(text);
+      },
+      fileName
+    );
     if (result.variableValues) {
       for (const [name, val] of Object.entries(result.variableValues)) {
         if (name.startsWith("$")) continue;
         this.env.set(name, val);
+      }
+    }
+    // Propagate search path changes (e.g. addpath called inside eval/run)
+    if (result.searchPaths && this.rt.onPathChange) {
+      for (const p of result.searchPaths) {
+        if (!this.rt.searchPaths.includes(p)) {
+          this.rt.onPathChange("add", p, "end");
+        }
       }
     }
     return result.returnValue;
