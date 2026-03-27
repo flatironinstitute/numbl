@@ -274,6 +274,7 @@ defineBuiltin({ name: "max", cases: minMaxCases("max") });
 // ── mod ──────────────────────────────────────────────────────────────────
 
 function modFn(a: number, b: number): number {
+  if (b === 0) return a;
   return ((a % b) + b) % b;
 }
 
