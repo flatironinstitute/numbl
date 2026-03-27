@@ -6,12 +6,14 @@
 import {
   FloatXArray,
   isRuntimeChar,
+  isRuntimeDictionary,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { defineBuiltin, registerIBuiltin } from "./types.js";
+import { hashKey } from "./dictionary.js";
 
 // ── tic / toc ───────────────────────────────────────────────────────────
 
@@ -189,3 +191,85 @@ for (const [name, val] of [
     ],
   });
 }
+
+// ── getenv ──────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "getenv",
+  cases: [
+    // getenv() — return dictionary of all env vars
+    {
+      match: argTypes =>
+        argTypes.length === 0 ? [{ kind: "dictionary" }] : null,
+      apply: () => {
+        const entries = new Map<
+          string,
+          { key: RuntimeValue; value: RuntimeValue }
+        >();
+        for (const [k, v] of Object.entries(process.env)) {
+          if (v !== undefined) {
+            const key = RTV.string(k);
+            entries.set(hashKey(key), { key, value: RTV.string(v) });
+          }
+        }
+        return RTV.dictionary(entries, "string", "string");
+      },
+    },
+    // getenv(varname) — return char value (empty if not set)
+    {
+      match: argTypes =>
+        argTypes.length === 1 &&
+        (argTypes[0].kind === "char" || argTypes[0].kind === "string")
+          ? [{ kind: "char" }]
+          : null,
+      apply: args => RTV.char(process.env[toString(args[0])] ?? ""),
+    },
+  ],
+});
+
+// ── setenv ──────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "setenv",
+  cases: [
+    // setenv(varname, varvalue)
+    {
+      match: argTypes =>
+        argTypes.length === 2 &&
+        (argTypes[0].kind === "char" || argTypes[0].kind === "string") &&
+        (argTypes[1].kind === "char" || argTypes[1].kind === "string")
+          ? []
+          : null,
+      apply: args => {
+        process.env[toString(args[0])] = toString(args[1]);
+        return RTV.num(0);
+      },
+    },
+    // setenv(varname) — set to empty string
+    {
+      match: argTypes =>
+        argTypes.length === 1 &&
+        (argTypes[0].kind === "char" || argTypes[0].kind === "string")
+          ? []
+          : null,
+      apply: args => {
+        process.env[toString(args[0])] = "";
+        return RTV.num(0);
+      },
+    },
+    // setenv(d) — set all entries from dictionary
+    {
+      match: argTypes =>
+        argTypes.length === 1 && argTypes[0].kind === "dictionary" ? [] : null,
+      apply: args => {
+        const d = args[0];
+        if (!isRuntimeDictionary(d))
+          throw new RuntimeError("setenv: argument must be a dictionary");
+        for (const { key, value } of d.entries.values()) {
+          process.env[toString(key)] = toString(value);
+        }
+        return RTV.num(0);
+      },
+    },
+  ],
+});
