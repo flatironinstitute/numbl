@@ -402,13 +402,46 @@ registerIBuiltin({
   }),
 });
 
-// pwd — return empty string
+// pwd — return current working directory
 registerIBuiltin({
   name: "pwd",
   resolve: () => ({
     outputTypes: [{ kind: "char" }],
-    apply: () => RTV.char(""),
+    apply: () => RTV.char(process.cwd()),
   }),
+});
+
+// cd — change working directory
+registerIBuiltin({
+  name: "cd",
+  resolve: argTypes => {
+    if (argTypes.length === 0) {
+      // cd with no args returns current directory
+      return {
+        outputTypes: [{ kind: "char" }],
+        apply: () => RTV.char(process.cwd()),
+      };
+    }
+    if (
+      argTypes.length === 1 &&
+      (argTypes[0].kind === "char" || argTypes[0].kind === "string")
+    ) {
+      return {
+        outputTypes: [{ kind: "char" }],
+        apply: (args: RuntimeValue[]) => {
+          const oldDir = process.cwd();
+          const target = toString(args[0]);
+          try {
+            process.chdir(target);
+          } catch {
+            throw new RuntimeError(`Cannot change directory to '${target}'`);
+          }
+          return RTV.char(oldDir);
+        },
+      };
+    }
+    return null;
+  },
 });
 
 // tempdir — return system temporary directory
