@@ -5,15 +5,7 @@
 
 import type { Expr } from "../parser/types.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import {
-  isRuntimeNumber,
-  isRuntimeTensor,
-  isRuntimeChar,
-  isRuntimeString,
-  isRuntimeCell,
-  isRuntimeClassInstance,
-  isRuntimeFunction,
-} from "../runtime/types.js";
+import { isRuntimeCell } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { shareRuntimeValue } from "../runtime/utils.js";
@@ -21,9 +13,14 @@ import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { tryJitCall, JIT_SKIP } from "./jit/index.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
-import { toNumber, toString } from "../runtime/convert.js";
+import { toString } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
+import {
+  getInterpreterSpecialBuiltin,
+  FALL_THROUGH,
+  type InterpreterContext,
+} from "./interpreterSpecialBuiltins.js";
 
 import {
   ReturnSignal,
@@ -42,136 +39,23 @@ export function callFunction(
   args: unknown[],
   nargout: number
 ): unknown {
-  // 0. Intrinsics
-  if (name === "eval" && args.length === 1) {
-    return this.evalInLocalScope(args[0]);
-  }
-  if (name === "evalin" && args.length >= 2) {
-    const scope = toString(ensureRuntimeValue(args[0]));
-    const targetEnv =
-      scope === "caller"
-        ? this.callerEnv
-        : scope === "workspace"
-          ? this.workspaceEnv
-          : undefined;
-    if (targetEnv) {
-      const code = toString(ensureRuntimeValue(args[1]));
-      // Simple variable name — just look it up
-      if (/^[a-zA-Z_]\w*$/.test(code)) {
-        const val = targetEnv.get(code);
-        if (val !== undefined) return val;
-        // If a default value was provided (3rd arg), return it
-        if (args.length >= 3) return ensureRuntimeValue(args[2]);
-        throw new RuntimeError(
-          `Variable '${code}' does not exist in ${scope} scope`
-        );
-      }
-      // Otherwise evaluate as code in target scope
-      const savedEnv = this.env;
-      this.env = targetEnv;
-      try {
-        return this.evalInLocalScope(args[1]);
-      } finally {
-        this.env = savedEnv;
-      }
-    }
-    return this.evalInLocalScope(args[1]);
-  }
-  if (name === "assignin" && args.length >= 3) {
-    const scope = toString(ensureRuntimeValue(args[0]));
-    const varName = toString(ensureRuntimeValue(args[1]));
-    const val = ensureRuntimeValue(args[2]);
-    const targetEnv =
-      scope === "caller"
-        ? this.callerEnv
-        : scope === "workspace"
-          ? this.workspaceEnv
-          : undefined;
-    if (targetEnv) {
-      targetEnv.set(varName, val);
-    } else {
-      this.env.set(varName, val);
-    }
-    return undefined;
-  }
-  if (name === "feval" && args.length >= 1) {
-    const first = ensureRuntimeValue(args[0]);
-    if (isRuntimeFunction(first)) {
-      return this.rt.index(first, args.slice(1), nargout);
-    }
-    // Class instance: feval(obj, ...) dispatches to the class's feval method
-    if (isRuntimeClassInstance(first)) {
-      // Fall through to normal resolution which finds feval as a class method
-    } else {
-      const funcName = toString(first);
-      const funcArgs = args.slice(1);
-      return this.callFunction(funcName, funcArgs, nargout);
-    }
-  }
-  if (name === "exist" && args.length >= 2) {
-    const nameArg = toString(ensureRuntimeValue(args[0]));
-    const typeArg = toString(ensureRuntimeValue(args[1]));
-    if (typeArg === "var") {
-      return this.env.has(nameArg) ? 1 : 0;
-    }
-    if (typeArg === "builtin") {
-      return this.rt.builtins[nameArg] || getIBuiltin(nameArg) ? 5 : 0;
-    }
-  }
-  if (name === "who" || name === "whos") {
-    const getters: Record<string, () => unknown> = {};
-    for (const varName of this.env.localNames()) {
-      if (varName.startsWith("$")) continue;
-      const n = varName;
-      getters[n] = () => this.env.get(n);
-    }
-    if (name === "who") {
-      return this.rt.who(nargout, getters, args);
-    } else {
-      return this.rt.whos(nargout, getters, args);
-    }
-  }
-  if (name === "isa" && args.length === 2) {
-    return this.rt.isa(args[0], args[1]);
-  }
-  if (name === "__inferred_type_str" && args.length === 1) {
-    const rv = ensureRuntimeValue(args[0]);
-    if (isRuntimeNumber(rv)) return RTV.string("Number");
-    if (isRuntimeTensor(rv)) return RTV.string("Tensor");
-    if (isRuntimeCell(rv)) return RTV.string("Cell");
-    if (isRuntimeClassInstance(rv))
-      return RTV.string(`ClassInstance(${rv.className})`);
-    if (isRuntimeChar(rv)) return RTV.string("Char");
-    if (isRuntimeString(rv)) return RTV.string("String");
-    if (isRuntimeFunction(rv)) return RTV.string("Function");
-    if (typeof rv === "boolean") return RTV.string("Boolean");
-    return RTV.string("Unknown");
-  }
-  if (name === "nargin" && args.length === 0) {
-    const v = this.env.get("$nargin");
-    return v !== undefined ? v : 0;
-  }
-  if (name === "nargout" && args.length === 0) {
-    const v = this.env.get("$nargout");
-    return v !== undefined ? v : 0;
-  }
-  if (name === "narginchk" && args.length === 2) {
-    const narginVal = this.env.get("$nargin");
-    const n = typeof narginVal === "number" ? narginVal : 0;
-    const lo = toNumber(ensureRuntimeValue(args[0]));
-    const hi = toNumber(ensureRuntimeValue(args[1]));
-    if (n < lo) throw new RuntimeError("Not enough input arguments.");
-    if (n > hi) throw new RuntimeError("Too many input arguments.");
-    return undefined;
-  }
-  if (name === "nargoutchk" && args.length === 2) {
-    const nargoutVal = this.env.get("$nargout");
-    const n = typeof nargoutVal === "number" ? nargoutVal : 0;
-    const lo = toNumber(ensureRuntimeValue(args[0]));
-    const hi = toNumber(ensureRuntimeValue(args[1]));
-    if (n < lo) throw new RuntimeError("Not enough output arguments.");
-    if (n > hi) throw new RuntimeError("Too many output arguments.");
-    return undefined;
+  // 0. Interpreter special builtins (need interpreter context)
+  const specialHandler = getInterpreterSpecialBuiltin(name);
+  if (specialHandler) {
+    const ctx: InterpreterContext = {
+      env: this.env,
+      setEnv: e => {
+        this.env = e;
+        ctx.env = e;
+      },
+      callerEnv: this.callerEnv,
+      workspaceEnv: this.workspaceEnv,
+      evalInLocalScope: codeArg => this.evalInLocalScope(codeArg),
+      callFunction: (n, a, no) => this.callFunction(n, a, no),
+      rt: this.rt,
+    };
+    const result = specialHandler(ctx, args, nargout);
+    if (result !== FALL_THROUGH) return result;
   }
 
   // 1. Check nested functions (share parent scope)
