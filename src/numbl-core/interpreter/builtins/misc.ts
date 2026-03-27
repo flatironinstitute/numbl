@@ -1,5 +1,6 @@
 /**
- * Misc builtins: substruct, odeset, peaks, now, datestr, lastwarn, verLessThan.
+ * Misc builtins: substruct, odeset, peaks, now, datestr, lastwarn, verLessThan,
+ * setappdata, getappdata, rmappdata, isappdata.
  */
 
 import {
@@ -14,6 +15,7 @@ import {
 import type { RuntimeValue, RuntimeStruct } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
+import { toString } from "../../runtime/convert.js";
 import { registerIBuiltin, getIBuiltin } from "./types.js";
 import {
   mAdd,
@@ -453,3 +455,114 @@ for (const cm of [
     }),
   });
 }
+
+// ── setappdata / getappdata / rmappdata / isappdata ────────────────────
+
+// Persistent storage keyed by object handle (number).
+// Survives clear all because it's module-level state.
+const appdataStore = new Map<number, Map<string, RuntimeValue>>();
+
+/** Clear all appdata — called at the start of each executeCode to isolate runs. */
+export function resetAppdataStore(): void {
+  appdataStore.clear();
+}
+
+function getObjKey(obj: RuntimeValue): number {
+  if (typeof obj === "number") return obj;
+  if (typeof obj === "boolean") return obj ? 1 : 0;
+  throw new RuntimeError(
+    "setappdata/getappdata: object must be a numeric handle"
+  );
+}
+
+function ensureBucket(key: number): Map<string, RuntimeValue> {
+  let bucket = appdataStore.get(key);
+  if (!bucket) {
+    bucket = new Map();
+    appdataStore.set(key, bucket);
+  }
+  return bucket;
+}
+
+registerIBuiltin({
+  name: "setappdata",
+  resolve: argTypes => {
+    if (argTypes.length !== 3) return null;
+    return {
+      outputTypes: [],
+      apply: args => {
+        const key = getObjKey(args[0]);
+        const name = toString(args[1]);
+        const bucket = ensureBucket(key);
+        bucket.set(name, args[2]);
+        return [] as unknown as RuntimeValue;
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "getappdata",
+  resolve: argTypes => {
+    if (argTypes.length === 2) {
+      return {
+        outputTypes: [{ kind: "unknown" }],
+        apply: args => {
+          const key = getObjKey(args[0]);
+          const name = toString(args[1]);
+          const bucket = appdataStore.get(key);
+          if (!bucket || !bucket.has(name))
+            return RTV.tensor(new FloatXArray(0), [0, 0]);
+          return bucket.get(name)!;
+        },
+      };
+    }
+    if (argTypes.length === 1) {
+      return {
+        outputTypes: [{ kind: "struct" }],
+        apply: args => {
+          const key = getObjKey(args[0]);
+          const bucket = appdataStore.get(key);
+          if (!bucket || bucket.size === 0) return RTV.struct({});
+          const fields: Record<string, RuntimeValue> = {};
+          for (const [k, v] of bucket) fields[k] = v;
+          return RTV.struct(fields);
+        },
+      };
+    }
+    return null;
+  },
+});
+
+registerIBuiltin({
+  name: "rmappdata",
+  resolve: argTypes => {
+    if (argTypes.length !== 2) return null;
+    return {
+      outputTypes: [],
+      apply: args => {
+        const key = getObjKey(args[0]);
+        const name = toString(args[1]);
+        const bucket = appdataStore.get(key);
+        if (bucket) bucket.delete(name);
+        return [] as unknown as RuntimeValue;
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "isappdata",
+  resolve: argTypes => {
+    if (argTypes.length !== 2) return null;
+    return {
+      outputTypes: [{ kind: "boolean" }],
+      apply: args => {
+        const key = getObjKey(args[0]);
+        const name = toString(args[1]);
+        const bucket = appdataStore.get(key);
+        return !!(bucket && bucket.has(name));
+      },
+    };
+  },
+});

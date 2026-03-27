@@ -26,6 +26,7 @@ import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import { jitHelpers } from "./interpreter/jit/jitHelpers.js";
+import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -101,6 +102,9 @@ export function executeCode(
   searchPaths?: string[],
   nativeBridge?: NativeBridge
 ): ExecResult {
+  // Reset module-level mutable state so separate runs don't bleed
+  resetAppdataStore();
+
   // ── 1. Parse main file ──────────────────────────────────────────────
   const ast = parseMFile(source, mainFileName);
 

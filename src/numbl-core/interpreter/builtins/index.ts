@@ -38,6 +38,7 @@ export {
   inferJitType,
 } from "./types.js";
 export type { IBuiltin, IBuiltinResolution } from "./types.js";
+export { resetAppdataStore } from "./misc.js";
 
 // Register IBuiltin + special builtin names so isBuiltin() recognizes them
 import { registerExtraBuiltinNames } from "../../helpers/registry.js";
