@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import Editor, { OnMount } from "@monaco-editor/react";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import js from "react-syntax-highlighter/dist/esm/languages/hljs/javascript";
@@ -234,6 +235,8 @@ export function IDEWorkspace({
 
   // Script worker
   const scriptWorkerRef = useRef<Worker | null>(null);
+  const scriptInputSAB = useRef<SharedArrayBuffer>(createInputSAB());
+  const replInputSAB = useRef<SharedArrayBuffer>(createInputSAB());
   const remoteAbortRef = useRef<AbortController | null>(null);
   const editorRef = useRef<any>(null);
 
@@ -308,6 +311,11 @@ export function IDEWorkspace({
 
     scriptWorkerRef.current.onmessage = e => {
       const msg = e.data;
+      if (msg.type === "request-input") {
+        const response = prompt(msg.prompt ?? "") ?? "";
+        mainThreadRespond(scriptInputSAB.current, response);
+        return;
+      }
       if (msg.type === "output") {
         setOutput(prev => prev + msg.text);
       } else if (msg.type === "drawnow") {
@@ -353,6 +361,11 @@ export function IDEWorkspace({
     );
     replWorkerRef.current = worker;
 
+    worker.postMessage({
+      type: "set_input_sab",
+      inputSAB: replInputSAB.current,
+    });
+
     if (files.length > 0) {
       worker.postMessage({
         type: "update_workspace",
@@ -364,6 +377,12 @@ export function IDEWorkspace({
     worker.onmessage = e => {
       const msg = e.data;
       const term = replTerminalRef.current;
+
+      if (msg.type === "request-input") {
+        const response = prompt(msg.prompt ?? "") ?? "";
+        mainThreadRespond(replInputSAB.current, response);
+        return;
+      }
 
       switch (msg.type) {
         case "output":
@@ -558,6 +577,7 @@ export function IDEWorkspace({
       },
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
       vfsFiles: filesToVfs(files),
+      inputSAB: scriptInputSAB.current,
     });
   }, [
     activeFile,
@@ -591,6 +611,11 @@ export function IDEWorkspace({
 
       scriptWorkerRef.current.onmessage = e => {
         const msg = e.data;
+        if (msg.type === "request-input") {
+          const response = prompt(msg.prompt ?? "") ?? "";
+          mainThreadRespond(scriptInputSAB.current, response);
+          return;
+        }
         if (msg.type === "output") {
           setOutput(prev => prev + msg.text);
         } else if (msg.type === "drawnow") {

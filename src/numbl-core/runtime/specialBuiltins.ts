@@ -78,6 +78,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "unzip",
   "dir",
   "warning",
+  "input",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -1236,6 +1237,46 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
     if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
     return 0;
+  });
+
+  // ── input builtin ────────────────────────────────────────────────
+
+  registerSpecial("input", (_nargout, args) => {
+    const margs = args.map(a => ensureRuntimeValue(a));
+    const prompt = margs.length >= 1 ? toString(margs[0]) : "";
+    const isStringMode =
+      margs.length >= 2 &&
+      (isRuntimeChar(margs[1]) || isRuntimeString(margs[1])) &&
+      toString(margs[1]) === "s";
+
+    const line = rt.readInput(prompt);
+
+    if (isStringMode) {
+      return RTV.char(line);
+    }
+
+    // Numeric/expression mode: empty input returns []
+    if (line.trim() === "") {
+      return RTV.tensor(new Float64Array(0), [0, 0]);
+    }
+
+    // Evaluate the expression in the current workspace
+    if (!rt.evalLocalCallback) {
+      throw new RuntimeError(
+        "input: expression evaluation is not available in this environment"
+      );
+    }
+    // Gather current workspace variables for evaluation context
+    const vars: Record<string, RuntimeValue> = {};
+    for (const [name, acc] of rt.workspaceAccessors) {
+      const val = acc.get();
+      if (val !== undefined) vars[name] = ensureRuntimeValue(val);
+    }
+    for (const [name, val] of rt.dynamicWorkspaceVars) {
+      if (val !== undefined) vars[name] = ensureRuntimeValue(val);
+    }
+    const result = rt.evalLocalCallback(line, vars, text => rt.output(text));
+    return ensureRuntimeValue(result.returnValue);
   });
 
   registerSpecial("path", (nargout, args) => {

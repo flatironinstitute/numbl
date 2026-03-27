@@ -2,6 +2,7 @@
 
 import {
   readFileSync,
+  readSync,
   readdirSync,
   statSync,
   existsSync,
@@ -635,6 +636,22 @@ async function executeWithOptions(
 
   const fileIO = new NodeFileIOAdapter();
 
+  /** Synchronous line reader for input() builtin. */
+  const onInput = (prompt: string): string => {
+    process.stdout.write(prompt);
+    const buf = Buffer.alloc(1);
+    let line = "";
+    while (true) {
+      const bytesRead = readSync(0, buf, 0, 1, null);
+      if (bytesRead === 0) break; // EOF
+      const ch = buf.toString("utf8");
+      if (ch === "\n") break;
+      if (ch === "\r") continue;
+      line += ch;
+    }
+    return line;
+  };
+
   // Set up --dump-js: for compiled mode, append JIT pieces during execution.
   // For interpreter mode, JIT code is collected in result.generatedJS instead.
   let onJitCompile: ((description: string, jsCode: string) => void) | undefined;
@@ -678,6 +695,7 @@ async function executeWithOptions(
             onJitCompile,
 
             fileIO,
+            onInput,
 
             optimization: opts.optimization,
           },
@@ -729,6 +747,7 @@ async function executeWithOptions(
           onJitCompile,
 
           fileIO,
+          onInput,
           optimization: opts.optimization,
         },
         workspaceFiles,
@@ -762,6 +781,7 @@ async function executeWithOptions(
           onJitCompile,
 
           fileIO,
+          onInput,
           optimization: opts.optimization,
         },
         workspaceFiles,

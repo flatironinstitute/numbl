@@ -1,5 +1,5 @@
 import { createInterface } from "readline";
-import { readFileSync, writeFileSync, appendFileSync } from "fs";
+import { readFileSync, readSync, writeFileSync, appendFileSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
@@ -69,6 +69,21 @@ export async function runRepl(
   const workspaceFiles = [...initialWorkspaceFiles];
   const searchPaths = [...(initialSearchPaths ?? [])];
 
+  const onInput = (prompt: string): string => {
+    process.stdout.write(prompt);
+    const buf = Buffer.alloc(1);
+    let line = "";
+    while (true) {
+      const bytesRead = readSync(0, buf, 0, 1, null);
+      if (bytesRead === 0) break;
+      const ch = buf.toString("utf8");
+      if (ch === "\n") break;
+      if (ch === "\r") continue;
+      line += ch;
+    }
+    return line;
+  };
+
   /**
    * Process mip directives in the input. If directives are found, load packages
    * and add their files/paths to the persistent workspace. Returns the cleaned
@@ -126,6 +141,7 @@ export async function runRepl(
             displayResults: true,
             onOutput: (text: string) => process.stdout.write(text),
             onDrawnow,
+            onInput,
             initialVariableValues: variableValues,
             initialHoldState: holdState,
             optimization,
@@ -263,6 +279,7 @@ export async function runRepl(
           displayResults: true,
           onOutput: (text: string) => stdout.write(text),
           onDrawnow,
+          onInput,
           initialVariableValues: variableValues,
           initialHoldState: holdState,
           optimization,

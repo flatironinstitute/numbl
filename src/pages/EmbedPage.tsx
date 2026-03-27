@@ -1,3 +1,4 @@
+import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import Editor, { OnMount } from "@monaco-editor/react";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
@@ -66,6 +67,7 @@ export function EmbedPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [outputTab, setOutputTab] = useState(0); // 0=Console, 1=Figure
   const workerRef = useRef<Worker | null>(null);
+  const inputSAB = useRef<SharedArrayBuffer>(createInputSAB());
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
     initialFiguresState
@@ -99,6 +101,11 @@ export function EmbedPage() {
     (worker: Worker) => {
       worker.onmessage = e => {
         const msg = e.data;
+        if (msg.type === "request-input") {
+          const response = prompt(msg.prompt ?? "") ?? "";
+          mainThreadRespond(inputSAB.current, response);
+          return;
+        }
         if (msg.type === "output") {
           setOutput(prev => prev + msg.text);
         } else if (msg.type === "drawnow") {
@@ -187,6 +194,7 @@ export function EmbedPage() {
       workspaceFiles: mipWorkspaceFiles,
       mainFileName: "script.m",
       searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
+      inputSAB: inputSAB.current,
     });
   }, [code, optimization]);
 

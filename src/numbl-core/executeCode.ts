@@ -49,6 +49,8 @@ export interface ExecOptions {
   customBuiltins?: Record<string, (nargout: number, args: any[]) => any>;
   /** Platform-specific file I/O adapter (e.g. Node.js fs). */
   fileIO?: FileIOAdapter;
+  /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
+  onInput?: (prompt: string) => string;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
   optimization?: number;
 }
@@ -343,6 +345,8 @@ export function executeCode(
         onOutput,
         displayResults: false,
         initialVariableValues: initialVars,
+        fileIO: options.fileIO,
+        onInput: options.onInput,
       },
       undefined,
       fileName

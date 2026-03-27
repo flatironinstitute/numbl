@@ -16,6 +16,7 @@ import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
 import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
+import { workerOnInput } from "./syncInputChannel.js";
 
 /** Post a structured error message back to the main thread. */
 function postError(
@@ -54,6 +55,7 @@ self.onmessage = (e: MessageEvent) => {
     mainFileName,
     searchPaths,
     vfsFiles,
+    inputSAB,
   } = e.data;
   if (type !== "run") return;
 
@@ -87,6 +89,7 @@ self.onmessage = (e: MessageEvent) => {
         optimization: options?.optimization ?? 1,
         initialVariableValues: {},
         fileIO: adapter,
+        onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
       wsFiles,
       activeFileName,

@@ -16,6 +16,7 @@ import {
 import type { PlotInstruction } from "../graphics/types.js";
 import { extractMipDirectives } from "../mip-directives-core";
 import { loadMipPackageBrowser } from "../mip/browser-backend";
+import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 
 interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
@@ -39,6 +40,7 @@ export function EmbedReplPage() {
   const replWorkerRef = useRef<Worker | null>(null);
   const replMipFilesRef = useRef<{ name: string; source: string }[]>([]);
   const replMipSearchPathsRef = useRef<string[]>([]);
+  const inputSAB = useRef<SharedArrayBuffer>(createInputSAB());
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
     figuresDispatch(instruction);
@@ -63,6 +65,8 @@ export function EmbedReplPage() {
     );
     replWorkerRef.current = worker;
 
+    worker.postMessage({ type: "set_input_sab", inputSAB: inputSAB.current });
+
     // Send optimization level to worker
     worker.postMessage({
       type: "set_optimization",
@@ -72,6 +76,12 @@ export function EmbedReplPage() {
     worker.onmessage = e => {
       const msg = e.data;
       const term = replTerminalRef.current;
+
+      if (msg.type === "request-input") {
+        const response = prompt(msg.prompt ?? "") ?? "";
+        mainThreadRespond(inputSAB.current, response);
+        return;
+      }
 
       switch (msg.type) {
         case "output":

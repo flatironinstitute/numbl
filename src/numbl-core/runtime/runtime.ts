@@ -1526,6 +1526,13 @@ export class Runtime {
   public pause(seconds: unknown): void {
     return _pause(seconds);
   }
+
+  public readInput(prompt: string): string {
+    if (!this.options.onInput) {
+      throw new RuntimeError("input() is not available in this environment");
+    }
+    return this.options.onInput(prompt);
+  }
 }
 
 export const rstr = (s: RuntimeString | RuntimeChar): string => {
