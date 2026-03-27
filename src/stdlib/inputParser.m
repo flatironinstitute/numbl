@@ -20,7 +20,7 @@ classdef inputParser < handle
             if nargin < 3
                 validator = [];
             end
-            entry = struct('name', name, 'default', [], 'validator', {{}});
+            entry = struct('name', name, 'default', {[]}, 'validator', {{}});
             if ~isempty(validator)
                 entry.validator = validator;
             end
@@ -32,7 +32,7 @@ classdef inputParser < handle
             if nargin < 4
                 validator = [];
             end
-            entry = struct('name', name, 'default', default, 'validator', {{}});
+            entry = struct('name', name, 'default', {default}, 'validator', {{}});
             if ~isempty(validator)
                 entry.validator = validator;
             end
@@ -44,7 +44,7 @@ classdef inputParser < handle
             if nargin < 4
                 validator = [];
             end
-            entry = struct('name', name, 'default', default, 'validator', {{}});
+            entry = struct('name', name, 'default', {default}, 'validator', {{}});
             if ~isempty(validator)
                 entry.validator = validator;
             end
