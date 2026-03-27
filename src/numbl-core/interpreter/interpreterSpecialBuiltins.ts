@@ -159,6 +159,22 @@ register("exist", (ctx, args) => {
   return FALL_THROUGH;
 });
 
+register("isfolder", (ctx, args) => {
+  if (args.length < 1) return FALL_THROUGH;
+  const fio = ctx.rt.fileIO;
+  if (!fio?.existsPath) return FALL_THROUGH;
+  const name = toString(ensureRuntimeValue(args[0]));
+  return fio.existsPath(name) === "dir" ? 1 : 0;
+});
+
+register("isfile", (ctx, args) => {
+  if (args.length < 1) return FALL_THROUGH;
+  const fio = ctx.rt.fileIO;
+  if (!fio?.existsPath) return FALL_THROUGH;
+  const name = toString(ensureRuntimeValue(args[0]));
+  return fio.existsPath(name) === "file" ? 1 : 0;
+});
+
 register("who", (ctx, args, nargout) => {
   const getters: Record<string, () => unknown> = {};
   for (const varName of ctx.env.localNames()) {
