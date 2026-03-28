@@ -7,8 +7,6 @@ import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import type { PlotInstruction } from "./graphics/types.js";
 import { executeCode } from "./numbl-core/executeCode.js";
-import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
-import { scanMFiles } from "./cli.js";
 
 const HISTORY_FILE = join(homedir(), ".numbl_history");
 const HISTORY_MAX = 1000;
@@ -84,32 +82,6 @@ export async function runRepl(
     return line;
   };
 
-  /**
-   * Process mip directives in the input. If directives are found, load packages
-   * and add their files/paths to the persistent workspace. Returns the cleaned
-   * source (directives stripped), or null if only directives (no code to execute).
-   */
-  function handleMipDirectives(input: string): string | null {
-    const { directives, cleanedSource } = extractMipDirectives(input, "repl");
-    for (const d of directives) {
-      if (d.type === "load") {
-        console.log(`Loading mip package: ${d.packageName}...`);
-        const results = processMipLoad(d.packageName);
-        for (const result of results) {
-          for (const p of result.paths) {
-            searchPaths.push(p);
-            workspaceFiles.push(...scanMFiles(p));
-          }
-          console.log(
-            `  Loaded ${result.packageName} (${result.paths.length} path(s) added)`
-          );
-        }
-      }
-    }
-    const trimmedClean = cleanedSource.trim();
-    return trimmedClean.length > 0 ? trimmedClean : null;
-  }
-
   console.log(
     "numbl REPL — type 'exit' or press Ctrl+D to quit, Alt+Enter for new line"
   );
@@ -130,13 +102,8 @@ export async function runRepl(
         continue;
       }
       try {
-        const codeToRun = handleMipDirectives(trimmed);
-        if (codeToRun === null) {
-          rl.prompt();
-          continue;
-        }
         const result = executeCode(
-          codeToRun,
+          trimmed,
           {
             displayResults: true,
             onOutput: (text: string) => process.stdout.write(text),
@@ -266,15 +233,8 @@ export async function runRepl(
     busy = true;
     stdin.setRawMode(false); // normal mode so \n → \r\n in output
     try {
-      const codeToRun = handleMipDirectives(code);
-      if (codeToRun === null) {
-        stdin.setRawMode(true);
-        busy = false;
-        resetInput();
-        return;
-      }
       const result = executeCode(
-        codeToRun,
+        code,
         {
           displayResults: true,
           onOutput: (text: string) => stdout.write(text),

@@ -50,7 +50,6 @@ Commands:
   build-addon        Build native LAPACK addon
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions
-  mip <subcommand>   Package manager (install, uninstall, list, avail, info)
   (no command)       Start interactive REPL
 
 Global options:
@@ -70,7 +69,6 @@ Options (for run and eval):
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
-  --no-mip           Skip mip directive processing
   --opt <level>      Optimization level (0=none, 1=JIT scalar functions; default: 1)
 
 Environment variables:

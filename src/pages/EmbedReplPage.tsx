@@ -14,8 +14,6 @@ import {
   initialFiguresState,
 } from "../graphics/figuresReducer.js";
 import type { PlotInstruction } from "../graphics/types.js";
-import { extractMipDirectives } from "../mip-directives-core";
-import { loadMipPackageBrowser } from "../mip/browser-backend";
 import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 
 interface TerminalMethods {
@@ -38,8 +36,6 @@ export function EmbedReplPage() {
   );
   const replTerminalRef = useRef<TerminalMethods | null>(null);
   const replWorkerRef = useRef<Worker | null>(null);
-  const replMipFilesRef = useRef<{ name: string; source: string }[]>([]);
-  const replMipSearchPathsRef = useRef<string[]>([]);
   const inputSAB = useRef<SharedArrayBuffer>(createInputSAB());
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
@@ -137,57 +133,9 @@ export function EmbedReplPage() {
       if (isReplExecuting) return;
       setIsReplExecuting(true);
 
-      const term = replTerminalRef.current;
-
-      // Handle mip directives
-      let codeToRun = command;
-      try {
-        const { directives, cleanedSource } = extractMipDirectives(
-          command,
-          "repl"
-        );
-        if (directives.length > 0) {
-          codeToRun = cleanedSource;
-          for (const d of directives) {
-            if (d.type === "load") {
-              term?.writeOutput?.(
-                `Loading mip package: ${d.packageName}...\n`,
-                false
-              );
-              const result = await loadMipPackageBrowser(d.packageName, msg => {
-                term?.writeOutput?.(`  ${msg}\n`, false);
-              });
-              replMipFilesRef.current.push(...result.workspaceFiles);
-              replMipSearchPathsRef.current.push(...result.searchPaths);
-            }
-          }
-          // Update worker with mip packages
-          replWorkerRef.current?.postMessage({
-            type: "update_workspace",
-            workspaceFiles: replMipFilesRef.current,
-            searchPaths: replMipSearchPathsRef.current,
-          });
-        }
-      } catch (error) {
-        term?.writeOutput?.(
-          `MIP load error: ${error instanceof Error ? error.message : "Unknown error"}\n`,
-          true
-        );
-        term?.writePrompt?.();
-        setIsReplExecuting(false);
-        return;
-      }
-
-      // If only mip directives and no code, just show prompt
-      if (codeToRun.trim().length === 0) {
-        term?.writePrompt?.();
-        setIsReplExecuting(false);
-        return;
-      }
-
       replWorkerRef.current?.postMessage({
         type: "execute",
-        code: codeToRun,
+        code: command,
       });
     },
     [isReplExecuting]

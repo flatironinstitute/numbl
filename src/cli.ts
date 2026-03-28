@@ -18,8 +18,6 @@ import {
   type PlotServer,
   type PlotServerOptions,
 } from "./cli-plot-server.js";
-import { cmdMip } from "./cli-mip.js";
-import { extractMipDirectives, processMipLoad } from "./mip-directives.js";
 import { getAllIBuiltinNames } from "./numbl-core/interpreter/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
 import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
@@ -333,7 +331,6 @@ Commands:
   build-addon        Build native LAPACK addon
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions
-  mip <subcommand>   Package manager (install, uninstall, list, avail, info)
   (no command)       Start interactive REPL
 
 Global options:
@@ -353,7 +350,6 @@ Options (for run and eval):
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
   --add-script-path  Add the script's directory to the workspace (run only)
-  --no-mip           Skip mip directive processing
   --opt <level>      Optimization level (0=none, 1=JIT scalar functions; default: 1)
 
 Environment variables:
@@ -374,7 +370,6 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   optimization: number;
-  noMip: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -390,7 +385,6 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: 1,
-    noMip: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -462,9 +456,6 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.profileOutput = resolve(process.cwd(), args[i]);
         break;
-      case "--no-mip":
-        opts.noMip = true;
-        break;
       case "--opt":
         i++;
         if (i >= args.length) {
@@ -504,30 +495,8 @@ async function cmdRun(args: string[]) {
   }
 
   const filepath = resolve(process.cwd(), opts.positional[0]);
-  const rawCode = readFileSync(filepath, "utf-8");
+  const code = readFileSync(filepath, "utf-8");
   const mainFileName = filepath;
-
-  // Extract mip directives (before any parsing)
-  let code: string;
-  const mipPaths: string[] = [];
-  if (opts.noMip) {
-    code = rawCode;
-  } else {
-    const { directives, cleanedSource } = extractMipDirectives(
-      rawCode,
-      filepath
-    );
-    code = cleanedSource;
-
-    // Process mip directives — collect additional search paths
-    for (const d of directives) {
-      if (d.type === "load") {
-        for (const result of processMipLoad(d.packageName)) {
-          mipPaths.push(...result.paths);
-        }
-      }
-    }
-  }
 
   const searchPaths: string[] = [];
   let workspaceFiles: WorkspaceFile[] = [];
@@ -536,7 +505,7 @@ async function cmdRun(args: string[]) {
     searchPaths.push(scriptDir);
     workspaceFiles = scanMFiles(scriptDir, filepath);
   }
-  for (const p of [...opts.extraPaths, ...mipPaths]) {
+  for (const p of opts.extraPaths) {
     searchPaths.push(p);
     workspaceFiles.push(...scanMFiles(p));
   }
@@ -1128,9 +1097,6 @@ async function main() {
       break;
     case "list-builtins":
       cmdListBuiltins();
-      break;
-    case "mip":
-      await cmdMip(rest);
       break;
     case "show-profile":
       cmdShowProfile(rest);

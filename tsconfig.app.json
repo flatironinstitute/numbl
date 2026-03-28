@@ -29,10 +29,7 @@
     "src/cli.ts",
     "src/cli-fileio.ts",
     "src/cli-repl.ts",
-    "src/cli-mip.ts",
     "src/cli-plot-server.ts",
-    "src/mip-directives.ts",
-    "src/mip/node-backend.ts",
     "src/numbl-core/__tests__/native"
   ]
 }

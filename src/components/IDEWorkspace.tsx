@@ -6,6 +6,7 @@ import js from "react-syntax-highlighter/dist/esm/languages/hljs/javascript";
 import { githubGist } from "react-syntax-highlighter/dist/esm/styles/hljs";
 
 SyntaxHighlighter.registerLanguage("javascript", js);
+const _textEncoder = new TextEncoder();
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
 import CloudIcon from "@mui/icons-material/Cloud";
@@ -56,7 +57,6 @@ import { FileBrowser } from "./FileBrowser";
 import { FigureView } from "../graphics/FigureView.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
-import { MipPackageManager } from "./MipPackageManager";
 import {
   fileText,
   isBinaryFile,
@@ -71,10 +71,9 @@ import {
   checkRemoteServiceHealth,
   DEFAULT_REMOTE_SERVICE_URL,
 } from "../utils/remoteExecution";
-import { extractMipDirectives } from "../mip-directives-core";
-import { loadMipPackageBrowser } from "../mip/browser-backend";
 import { syncVfsChangesToProject } from "../vfs/syncVfsChanges";
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
+import { useHomeFiles } from "../hooks/useHomeFiles";
 
 export interface IDEWorkspaceProps {
   files: WorkspaceFile[];
@@ -118,6 +117,31 @@ export function IDEWorkspace({
   projectName,
   mergeVfsChanges,
 }: IDEWorkspaceProps) {
+  const {
+    homeFiles,
+    homeVfsFiles,
+    reloadHomeFiles,
+    updateHomeFileContent,
+    addHomeFile,
+    addHomeFolder,
+    deleteHomeFile,
+    deleteHomeFolder,
+    renameHomeFile,
+    renameHomeFolder,
+    moveHomeFile,
+  } = useHomeFiles();
+
+  const isHomePath = useCallback(
+    (name: string) => name === "~" || name.startsWith("~/"),
+    []
+  );
+  const isHomeFileId = useCallback(
+    (fileId: string) => homeFiles.some(f => f.id === fileId),
+    [homeFiles]
+  );
+
+  // Merged file list: project files + home files
+  const allFiles = useMemo(() => [...files, ...homeFiles], [files, homeFiles]);
   const optimization = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return parseInt(params.get("opt") ?? "1", 10);
@@ -178,8 +202,6 @@ export function IDEWorkspace({
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const replWorkerRef = useRef<Worker | null>(null);
   const replTerminalRef = useRef<any>(null);
-  const replMipFilesRef = useRef<{ name: string; source: string }[]>([]);
-  const replMipSearchPathsRef = useRef<string[]>([]);
 
   // Mobile layout
   const isMobile = useMediaQuery("(max-width:768px)");
@@ -249,8 +271,8 @@ export function IDEWorkspace({
   const [outputHeight, setOutputHeight] = useState(window.innerHeight / 2);
 
   const activeFile = useMemo(
-    () => files.find(f => f.id === activeFileId),
-    [files, activeFileId]
+    () => allFiles.find(f => f.id === activeFileId),
+    [allFiles, activeFileId]
   );
 
   const sortedFigureHandles = useMemo(() => {
@@ -275,14 +297,16 @@ export function IDEWorkspace({
     figuresDispatch(instruction);
   }, []);
 
-  /** Convert workspace files to VFS format for the worker. */
+  /** Convert workspace files to VFS format for the worker, including home files. */
   const filesToVfs = useCallback(
-    (wsFiles: WorkspaceFile[]) =>
-      wsFiles.map(f => ({
+    (wsFiles: WorkspaceFile[]) => [
+      ...wsFiles.map(f => ({
         path: f.name,
         content: f.data,
       })),
-    []
+      ...homeVfsFiles,
+    ],
+    [homeVfsFiles]
   );
 
   /** Handle VFS changes from worker execution. */
@@ -292,12 +316,18 @@ export function IDEWorkspace({
       const { created, modified, deleted } = changes;
       if (created.length === 0 && modified.length === 0 && deleted.length === 0)
         return;
-      const result = await syncVfsChangesToProject(projectName, changes);
-      if (result && mergeVfsChanges) {
-        mergeVfsChanges(result);
+      const { projectResult, homeResult } = await syncVfsChangesToProject(
+        projectName,
+        changes
+      );
+      if (projectResult && mergeVfsChanges) {
+        mergeVfsChanges(projectResult);
+      }
+      if (homeResult) {
+        reloadHomeFiles();
       }
     },
-    [projectName, mergeVfsChanges]
+    [projectName, mergeVfsChanges, reloadHomeFiles]
   );
 
   // Initialize script worker
@@ -366,10 +396,13 @@ export function IDEWorkspace({
       inputSAB: replInputSAB.current,
     });
 
-    if (files.length > 0) {
+    if (allFiles.length > 0) {
       worker.postMessage({
         type: "update_workspace",
-        workspaceFiles: files.map(f => ({ name: f.name, source: fileText(f) })),
+        workspaceFiles: allFiles.map(f => ({
+          name: f.name,
+          source: fileText(f),
+        })),
         vfsFiles: filesToVfs(files),
       });
     }
@@ -436,14 +469,17 @@ export function IDEWorkspace({
 
   // Update workspace in REPL worker when files change
   useEffect(() => {
-    if (replWorkerRef.current && files.length > 0) {
+    if (replWorkerRef.current && allFiles.length > 0) {
       replWorkerRef.current.postMessage({
         type: "update_workspace",
-        workspaceFiles: files.map(f => ({ name: f.name, source: fileText(f) })),
+        workspaceFiles: allFiles.map(f => ({
+          name: f.name,
+          source: fileText(f),
+        })),
         vfsFiles: filesToVfs(files),
       });
     }
-  }, [files, filesToVfs]);
+  }, [files, allFiles, filesToVfs]);
 
   // Clear triggerRenameId after a short delay
   useEffect(() => {
@@ -465,45 +501,13 @@ export function IDEWorkspace({
     setFileSources(null);
     figuresDispatch({ type: "clear" });
 
-    const workspaceFiles = files
+    const workspaceFiles = allFiles
       .filter(f => f.id !== activeFileId)
       .map(f => ({ name: f.name, source: fileText(f) }));
 
-    // Extract mip directives and load packages before execution
-    let codeToRun = fileText(activeFile);
-    const mipWorkspaceFiles: { name: string; source: string }[] = [];
-    const mipSearchPaths: string[] = [];
-    try {
-      const { directives, cleanedSource } = extractMipDirectives(
-        fileText(activeFile),
-        activeFile.name
-      );
-      if (directives.length > 0) {
-        codeToRun = cleanedSource;
-        for (const d of directives) {
-          if (d.type === "load") {
-            setOutput(
-              prev => prev + `Loading mip package: ${d.packageName}...\n`
-            );
-            const result = await loadMipPackageBrowser(d.packageName, msg => {
-              setOutput(prev => prev + `  ${msg}\n`);
-            });
-            mipWorkspaceFiles.push(...result.workspaceFiles);
-            mipSearchPaths.push(...result.searchPaths);
-          }
-        }
-      }
-    } catch (error) {
-      setOutput(
-        prev =>
-          prev +
-          `\nMIP load error: ${error instanceof Error ? error.message : "Unknown error"}\n`
-      );
-      setIsRunning(false);
-      return;
-    }
+    const codeToRun = fileText(activeFile);
 
-    const combinedWorkspaceFiles = [...workspaceFiles, ...mipWorkspaceFiles];
+    const combinedWorkspaceFiles = workspaceFiles;
 
     try {
       const ast = parseMFile(codeToRun);
@@ -575,7 +579,6 @@ export function IDEWorkspace({
         maxIterations: 10000000,
         optimization,
       },
-      searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
       vfsFiles: filesToVfs(files),
       inputSAB: scriptInputSAB.current,
     });
@@ -583,6 +586,7 @@ export function IDEWorkspace({
     activeFile,
     activeFileId,
     files,
+    allFiles,
     useRemoteExecution,
     remoteServiceUrl,
     handlePlotInstruction,
@@ -701,61 +705,9 @@ export function IDEWorkspace({
       if (isReplExecuting) return;
       setIsReplExecuting(true);
 
-      const term = replTerminalRef.current;
-
-      // Handle mip directives
-      let codeToRun = command;
-      try {
-        const { directives, cleanedSource } = extractMipDirectives(
-          command,
-          "repl"
-        );
-        if (directives.length > 0) {
-          codeToRun = cleanedSource;
-          for (const d of directives) {
-            if (d.type === "load") {
-              term?.writeOutput?.(
-                `Loading mip package: ${d.packageName}...\n`,
-                false
-              );
-              const result = await loadMipPackageBrowser(d.packageName, msg => {
-                term?.writeOutput?.(`  ${msg}\n`, false);
-              });
-              replMipFilesRef.current.push(...result.workspaceFiles);
-              replMipSearchPathsRef.current.push(...result.searchPaths);
-            }
-          }
-          // Update worker with new workspace files including mip packages
-          const userFiles = files.map(f => ({
-            name: f.name,
-            source: fileText(f),
-          }));
-          replWorkerRef.current?.postMessage({
-            type: "update_workspace",
-            workspaceFiles: [...userFiles, ...replMipFilesRef.current],
-            searchPaths: replMipSearchPathsRef.current,
-          });
-        }
-      } catch (error) {
-        term?.writeOutput?.(
-          `MIP load error: ${error instanceof Error ? error.message : "Unknown error"}\n`,
-          true
-        );
-        term?.writePrompt?.();
-        setIsReplExecuting(false);
-        return;
-      }
-
-      // If only mip directives and no code, just show prompt
-      if (codeToRun.trim().length === 0) {
-        term?.writePrompt?.();
-        setIsReplExecuting(false);
-        return;
-      }
-
       replWorkerRef.current?.postMessage({
         type: "execute",
-        code: codeToRun,
+        code: command,
       });
     },
     [isReplExecuting, files]
@@ -933,7 +885,16 @@ export function IDEWorkspace({
                     activeFile?.name.endsWith(".js") ? "javascript" : "numbl"
                   }
                   defaultValue={activeFile ? fileText(activeFile) : ""}
-                  onChange={value => updateFileContent(value || "")}
+                  onChange={value => {
+                    if (isHomeFileId(activeFileId)) {
+                      updateHomeFileContent(
+                        activeFileId,
+                        _textEncoder.encode(value || "")
+                      );
+                    } else {
+                      updateFileContent(value || "");
+                    }
+                  }}
                   onMount={handleEditorDidMount}
                   options={{
                     minimap: { enabled: false },
@@ -966,10 +927,6 @@ export function IDEWorkspace({
       >
         <Tab label="Output" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
         <Tab
-          label="Packages"
-          sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
-        />
-        <Tab
           label="Internals"
           sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
         />
@@ -989,8 +946,7 @@ export function IDEWorkspace({
             </pre>
           </Box>
         )}
-        {outputTab === 1 && <MipPackageManager />}
-        {outputTab === 2 && (
+        {outputTab === 1 && (
           <Box
             sx={{ height: "100%", display: "flex", flexDirection: "column" }}
           >
@@ -1119,27 +1075,55 @@ export function IDEWorkspace({
 
   const fileBrowserContent = (
     <FileBrowser
-      files={files}
+      files={allFiles}
       activeFileId={activeFileId}
       onSelectFile={id => {
         setActiveFileId(id);
         if (isMobile) setDrawerOpen(false);
       }}
       onAddFile={async folderPath => {
-        const id = await addFile(folderPath);
-        if (id) setTriggerRenameId(id);
+        if (folderPath && isHomePath(folderPath)) {
+          const id = await addHomeFile(folderPath);
+          if (id) setTriggerRenameId(id);
+        } else {
+          const id = await addFile(folderPath);
+          if (id) setTriggerRenameId(id);
+        }
       }}
       onAddFolder={async parentPath => {
-        const folderPath = await addFolder(parentPath);
-        if (folderPath) setTriggerRenameId(`folder:${folderPath}`);
+        if (parentPath && isHomePath(parentPath)) {
+          const folderPath = await addHomeFolder(parentPath);
+          if (folderPath) setTriggerRenameId(`folder:${folderPath}`);
+        } else {
+          const folderPath = await addFolder(parentPath);
+          if (folderPath) setTriggerRenameId(`folder:${folderPath}`);
+        }
       }}
-      onDeleteFile={deleteFile}
-      onDeleteFolder={deleteFolder}
-      onRenameFile={renameFile}
-      onRenameFolder={renameFolder}
-      onMoveFile={moveFile}
+      onDeleteFile={fileId =>
+        isHomeFileId(fileId) ? deleteHomeFile(fileId) : deleteFile(fileId)
+      }
+      onDeleteFolder={folderPath =>
+        isHomePath(folderPath)
+          ? deleteHomeFolder(folderPath)
+          : deleteFolder(folderPath)
+      }
+      onRenameFile={(fileId, newName) =>
+        isHomeFileId(fileId)
+          ? renameHomeFile(fileId, newName)
+          : renameFile(fileId, newName)
+      }
+      onRenameFolder={(oldPath, newName) =>
+        isHomePath(oldPath)
+          ? renameHomeFolder(oldPath, newName)
+          : renameFolder(oldPath, newName)
+      }
+      onMoveFile={(fileId, targetFolder) =>
+        isHomeFileId(fileId)
+          ? moveHomeFile(fileId, targetFolder)
+          : moveFile(fileId, targetFolder)
+      }
       onUploadFiles={uploadFiles}
-      fileCount={files.length}
+      fileCount={allFiles.length}
       triggerRenameId={triggerRenameId}
     />
   );
@@ -1245,16 +1229,6 @@ export function IDEWorkspace({
                       px: 1,
                     }}
                   />
-                  <Tab
-                    label="Packages"
-                    sx={{
-                      minHeight: 32,
-                      py: 0,
-                      fontSize: "0.75rem",
-                      minWidth: 0,
-                      px: 1,
-                    }}
-                  />
                 </Tabs>
                 <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
                   {mobileOutputTab === 0 && (
@@ -1327,7 +1301,6 @@ export function IDEWorkspace({
                       )}
                     </Box>
                   )}
-                  {mobileOutputTab === 4 && <MipPackageManager />}
                 </Box>
               </Box>
             </Splitter>
