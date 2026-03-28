@@ -17,18 +17,9 @@ export interface ProjectFile {
   updatedAt: number; // Timestamp
 }
 
-export interface MipPackageCache {
-  name: string; // Primary key - package name
-  version: string; // For cache invalidation against index
-  files: { path: string; source: string; data?: Uint8Array }[]; // Extracted files (.m, .js, .wasm)
-  loadPaths: string[]; // Resolved addpath paths from load_package.m
-  fetchedAt: number; // Timestamp
-}
-
 export class NumblDatabase extends Dexie {
   projects!: EntityTable<Project, "name">;
   files!: EntityTable<ProjectFile, "id">;
-  mipPackages!: EntityTable<MipPackageCache, "name">;
 
   constructor() {
     super("numbl-db");
@@ -41,7 +32,6 @@ export class NumblDatabase extends Dexie {
     this.version(2).stores({
       projects: "name, lastOpenedAt",
       files: "id, projectName, [projectName+path]",
-      mipPackages: "name",
     });
   }
 }

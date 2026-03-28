@@ -34,6 +34,12 @@ export class VirtualFileSystem {
 
   /** Normalize a path to absolute form. */
   normalizePath(p: string): string {
+    // Expand ~ to /home
+    if (p === "~") {
+      p = "/home";
+    } else if (p.startsWith("~/")) {
+      p = "/home/" + p.slice(2);
+    }
     // Make absolute
     if (!p.startsWith("/")) {
       p = this.cwd + "/" + p;

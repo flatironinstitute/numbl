@@ -36,7 +36,7 @@ A React + Vite browser-based IDE. Users can write and run `.m` scripts entirely 
 
 ### CLI (`src/cli.ts`)
 
-The `numbl` command-line tool. Supports running `.m` files, an interactive REPL, inline evaluation, a package manager (`mip`), and more. See `numbl --help` for all commands.
+The `numbl` command-line tool. Supports running `.m` files, an interactive REPL, inline evaluation, and more. See `numbl --help` for all commands.
 
 ### Execution Server (`server/`)
 

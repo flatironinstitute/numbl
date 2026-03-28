@@ -38,8 +38,6 @@ export default defineConfig({
         "src/components/**",
         "src/db/**",
         "src/hooks/**",
-        "src/mip/**",
-        "src/mip-directives*.ts",
       ],
     },
   },

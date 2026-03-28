@@ -45,7 +45,11 @@ export async function getProject(name: string): Promise<Project | undefined> {
 }
 
 export async function listProjects(): Promise<Project[]> {
-  return await db.projects.orderBy("lastOpenedAt").reverse().toArray();
+  const projects = await db.projects
+    .orderBy("lastOpenedAt")
+    .reverse()
+    .toArray();
+  return projects.filter(p => p.name !== "__home__");
 }
 
 export async function deleteProject(name: string): Promise<void> {
@@ -161,4 +165,28 @@ export async function getProjectLastModified(
     .toArray();
   if (files.length === 0) return 0;
   return Math.max(...files.map(f => f.updatedAt));
+}
+
+// Home directory operations (shared across all projects)
+
+const HOME_PROJECT_NAME = "__home__";
+
+export async function getHomeFiles(): Promise<ProjectFile[]> {
+  return await db.files
+    .where("projectName")
+    .equals(HOME_PROJECT_NAME)
+    .toArray();
+}
+
+export async function ensureHomeProject(): Promise<void> {
+  const existing = await db.projects.get(HOME_PROJECT_NAME);
+  if (!existing) {
+    const now = Date.now();
+    await db.projects.add({
+      name: HOME_PROJECT_NAME,
+      createdAt: now,
+      updatedAt: now,
+      lastOpenedAt: now,
+    });
+  }
 }

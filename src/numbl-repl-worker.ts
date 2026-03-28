@@ -168,7 +168,7 @@ self.onmessage = (e: MessageEvent) => {
       },
       workspaceFiles,
       "repl",
-      searchPaths
+      [...(searchPaths ?? []), "~/.mip/packages/mip-org/core/mip/mip"]
     );
 
     // Update persistent state with results from this execution

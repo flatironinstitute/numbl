@@ -93,8 +93,7 @@ export function interpretTarget(
   switch (target.kind) {
     case "builtin": {
       // Check customBuiltins first — these are execution-specific overrides
-      // (e.g. mip load's addpath/fileparts/fullfile/mfilename) that must
-      // take priority over IBuiltins.
+      // that take priority over IBuiltins.
       const customBuiltin = this.rt.customBuiltins[target.name];
       if (customBuiltin) return customBuiltin(nargout, args);
       // Then check IBuiltin (interpreter builtins with JIT-compatible type rules)

@@ -104,6 +104,7 @@ export function executeCode(
   searchPaths?: string[],
   nativeBridge?: NativeBridge
 ): ExecResult {
+  console.log("--- search paths", searchPaths);
   // Reset module-level mutable state so separate runs don't bleed
   resetAppdataStore();
 

@@ -198,7 +198,7 @@ export class Runtime {
     (nargout: number, args: unknown[]) => unknown
   > = {};
 
-  // Custom builtins (execution-specific overrides, e.g. mip load's addpath).
+  // Custom builtins (execution-specific overrides).
   // These take priority over IBuiltins.
   public customBuiltins: Record<
     string,

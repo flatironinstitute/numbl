@@ -30,8 +30,6 @@ import {
   figuresReducer,
   initialFiguresState,
 } from "../graphics/figuresReducer.js";
-import { extractMipDirectives } from "../mip-directives-core";
-import { loadMipPackageBrowser } from "../mip/browser-backend";
 
 const DEFAULT_SCRIPT = `% Welcome to numbl!
 % Try running some MATLAB code:
@@ -149,51 +147,16 @@ export function EmbedPage() {
     setOutput("");
     figuresDispatch({ type: "clear" });
 
-    // Extract mip directives and load packages before execution
-    let codeToRun = code;
-    const mipWorkspaceFiles: { name: string; source: string }[] = [];
-    const mipSearchPaths: string[] = [];
-    try {
-      const { directives, cleanedSource } = extractMipDirectives(
-        code,
-        "script.m"
-      );
-      if (directives.length > 0) {
-        codeToRun = cleanedSource;
-        for (const d of directives) {
-          if (d.type === "load") {
-            setOutput(
-              prev => prev + `Loading mip package: ${d.packageName}...\n`
-            );
-            const result = await loadMipPackageBrowser(d.packageName, msg => {
-              setOutput(prev => prev + `  ${msg}\n`);
-            });
-            mipWorkspaceFiles.push(...result.workspaceFiles);
-            mipSearchPaths.push(...result.searchPaths);
-          }
-        }
-      }
-    } catch (error) {
-      setOutput(
-        prev =>
-          prev +
-          `\nMIP load error: ${error instanceof Error ? error.message : "Unknown error"}\n`
-      );
-      setIsRunning(false);
-      return;
-    }
-
     workerRef.current.postMessage({
       type: "run",
-      code: codeToRun,
+      code,
       options: {
         displayResults: true,
         maxIterations: 10000000,
         optimization,
       },
-      workspaceFiles: mipWorkspaceFiles,
+      workspaceFiles: [],
       mainFileName: "script.m",
-      searchPaths: mipSearchPaths.length > 0 ? mipSearchPaths : undefined,
       inputSAB: inputSAB.current,
     });
   }, [code, optimization]);
