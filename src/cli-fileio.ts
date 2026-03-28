@@ -20,7 +20,7 @@ import {
 } from "fs";
 import { inflateRawSync } from "zlib";
 import { execFileSync } from "child_process";
-import { homedir } from "os";
+import { homedir, tmpdir } from "os";
 import { join, resolve, dirname, basename } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli.js";
@@ -254,6 +254,10 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     } catch {
       return false;
     }
+  }
+
+  tempdir(): string {
+    return tmpdir();
   }
 
   websave(url: string, filename: string): void {

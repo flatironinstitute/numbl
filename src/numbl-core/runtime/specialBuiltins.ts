@@ -93,6 +93,8 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "dir",
   "warning",
   "input",
+  "tempdir",
+  "tempname",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -1119,6 +1121,30 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       return RTV.structArray(fieldNames, []);
     }
     return RTV.structArray(fieldNames, elements);
+  });
+
+  // ── tempdir / tempname ─────────────────────────────────────────────
+
+  registerSpecial("tempdir", () => {
+    const io = requireFileIO();
+    if (!io.tempdir)
+      throw new RuntimeError("tempdir is not available in this environment");
+    return RTV.char(io.tempdir());
+  });
+
+  registerSpecial("tempname", (_nargout, args) => {
+    const io = requireFileIO();
+    const margs = args.map(a => ensureRuntimeValue(a));
+    let folder: string;
+    if (margs.length >= 1) {
+      folder = toString(margs[0]);
+    } else {
+      if (!io.tempdir)
+        throw new RuntimeError("tempname is not available in this environment");
+      folder = io.tempdir();
+    }
+    const name = "tp" + Math.random().toString(36).slice(2, 18);
+    return RTV.char(folder + "/" + name);
   });
 
   // ── Path utility builtins (pure string operations, no fs needed) ──

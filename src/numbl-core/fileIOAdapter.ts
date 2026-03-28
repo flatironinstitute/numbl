@@ -72,6 +72,9 @@ export interface FileIOAdapter {
   /** Extract a ZIP file to an output folder. Returns list of extracted file paths. Optional. */
   unzip?(zipfilename: string, outputfolder: string): string[];
 
+  /** Return the temporary directory path. Optional. */
+  tempdir?(): string;
+
   /** List directory entries. Returns array of {name, folder, bytes, isdir, mtimeMs}. Optional. */
   listDir?(dirPath: string): {
     name: string;

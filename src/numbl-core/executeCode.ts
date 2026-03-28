@@ -104,7 +104,6 @@ export function executeCode(
   searchPaths?: string[],
   nativeBridge?: NativeBridge
 ): ExecResult {
-  console.log("--- search paths", searchPaths);
   // Reset module-level mutable state so separate runs don't bleed
   resetAppdataStore();
 
@@ -166,16 +165,30 @@ export function executeCode(
   }
   ctx.registry.searchPaths = [...(searchPaths ?? []), SHIM_SEARCH_PATH];
 
-  // Pre-parse all .m workspace files into the shared AST cache
+  // Pre-parse all .m workspace files into the shared AST cache.
+  // Files that fail to parse are skipped with a warning instead of aborting.
   ctx.fileASTCache.set(mainFileName, ast);
+  const skippedFiles = new Set<string>();
   for (const f of mWorkspaceFiles) {
     try {
       ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
     } catch (e) {
-      if (e instanceof SyntaxError && e.file === null) {
-        e.file = f.name;
+      skippedFiles.add(f.name);
+      if (e instanceof SyntaxError) {
+        console.warn(
+          `Warning: skipping ${f.name} (syntax error at line ${e.line ?? "?"})`
+        );
+      } else {
+        console.warn(`Warning: skipping ${f.name} (parse error)`);
       }
-      throw e;
+    }
+  }
+  // Remove skipped files so they aren't registered in the workspace
+  if (skippedFiles.size > 0) {
+    for (let i = mWorkspaceFiles.length - 1; i >= 0; i--) {
+      if (skippedFiles.has(mWorkspaceFiles[i].name)) {
+        mWorkspaceFiles.splice(i, 1);
+      }
     }
   }
 

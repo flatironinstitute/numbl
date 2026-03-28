@@ -1,11 +1,7 @@
 /**
  * Misc builtins: substruct, odeset, peaks, now, datestr, lastwarn, verLessThan,
- * setappdata, getappdata, rmappdata, isappdata, tempdir, tempname.
+ * setappdata, getappdata, rmappdata, isappdata.
  */
-
-import os from "os";
-import path from "path";
-import crypto from "crypto";
 import {
   FloatXArray,
   isRuntimeCell,
@@ -451,28 +447,6 @@ registerIBuiltin({
     }
     return null;
   },
-});
-
-// tempdir — return system temporary directory
-registerIBuiltin({
-  name: "tempdir",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: () => RTV.char(os.tmpdir()),
-  }),
-});
-
-// tempname — unique temporary file path
-registerIBuiltin({
-  name: "tempname",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: args => {
-      const folder = args.length >= 1 ? toString(args[0]) : os.tmpdir();
-      const name = "tp" + crypto.randomBytes(8).toString("hex");
-      return RTV.char(path.join(folder, name));
-    },
-  }),
 });
 
 // mfilename — handled as a special builtin (needs runtime access to current file)
