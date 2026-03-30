@@ -713,7 +713,7 @@ export function IDEWorkspace({
         code: command,
       });
     },
-    [isReplExecuting, files]
+    [isReplExecuting]
   );
 
   const handleReplClear = useCallback(() => {
