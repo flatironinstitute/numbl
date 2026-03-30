@@ -179,6 +179,10 @@ self.onmessage = (e: MessageEvent) => {
     // and preserve the existing state
     variableValues = result.variableValues;
     holdState = result.holdState;
+    if (result.searchPaths) {
+      searchPaths = result.searchPaths;
+      workspaceFiles = result.workspaceFiles ?? [];
+    }
 
     const vfsChanges = adapter.getChanges();
     self.postMessage({
