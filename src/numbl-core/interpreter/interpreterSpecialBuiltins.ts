@@ -262,36 +262,36 @@ register("run", (ctx, args) => {
 
   // If the path contains a directory separator, use it directly;
   // otherwise search the current directory (handled by fileread).
+  // Resolve the absolute path *before* chdir so file reads work on both
+  // Node (where chdir affects fs) and browser (where VFS ignores virtual cwd).
+  const resolvedFile = fio.resolvePath ? fio.resolvePath(filePath) : filePath;
+
   const lastSep = Math.max(
-    filePath.lastIndexOf("/"),
-    filePath.lastIndexOf("\\")
+    resolvedFile.lastIndexOf("/"),
+    resolvedFile.lastIndexOf("\\")
   );
-  const scriptDir = lastSep >= 0 ? filePath.slice(0, lastSep) : null;
+  const scriptDir = lastSep >= 0 ? resolvedFile.slice(0, lastSep) : null;
 
   // cd to script directory, execute, cd back (per MATLAB behavior).
   // If the script itself changes cwd, don't revert.
-  const oldCwd = process.cwd();
-  if (scriptDir) {
+  const sys = ctx.rt.system;
+  const oldCwd = sys?.cwd() ?? "/";
+  if (scriptDir && sys) {
     try {
-      process.chdir(scriptDir);
+      sys.chdir(scriptDir);
     } catch {
       throw new RuntimeError(`Cannot change directory to '${scriptDir}'`);
     }
   }
-  const cwdAfterCd = process.cwd();
-  const basename = lastSep >= 0 ? filePath.slice(lastSep + 1) : filePath;
-  // Resolve the absolute path so mfilename('fullpath') works in the run'd script.
-  const resolvedFile = fio.resolvePath
-    ? fio.resolvePath(basename)
-    : cwdAfterCd + "/" + basename;
+  const cwdAfterCd = sys?.cwd() ?? "/";
   try {
-    const code = fio.fileread(basename);
+    const code = fio.fileread(resolvedFile);
     ctx.evalInLocalScope(code, resolvedFile);
   } finally {
     // Revert cwd only if the script didn't change it
-    if (process.cwd() === cwdAfterCd) {
+    if (sys && sys.cwd() === cwdAfterCd) {
       try {
-        process.chdir(oldCwd);
+        sys.chdir(oldCwd);
       } catch {
         // ignore
       }

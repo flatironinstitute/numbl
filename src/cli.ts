@@ -29,6 +29,7 @@ import {
 import { NUMBL_VERSION } from "./numbl-core/version.js";
 import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
+import { NodeSystemAdapter } from "./cli-system.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
@@ -260,6 +261,7 @@ async function runTests(dir: string, optimization?: number) {
             jitDescriptions.push(description);
           },
           fileIO: new NodeFileIOAdapter(),
+          system: new NodeSystemAdapter(),
         },
         workspaceFiles,
         mainFileName,
@@ -604,6 +606,7 @@ async function executeWithOptions(
   }
 
   const fileIO = new NodeFileIOAdapter();
+  const system = new NodeSystemAdapter();
 
   /** Synchronous line reader for input() builtin. */
   const onInput = (prompt: string): string => {
@@ -664,6 +667,7 @@ async function executeWithOptions(
             onJitCompile,
 
             fileIO,
+            system,
             onInput,
 
             optimization: opts.optimization,
@@ -716,6 +720,7 @@ async function executeWithOptions(
           onJitCompile,
 
           fileIO,
+          system,
           onInput,
           optimization: opts.optimization,
         },
@@ -750,6 +755,7 @@ async function executeWithOptions(
           onJitCompile,
 
           fileIO,
+          system,
           onInput,
           optimization: opts.optimization,
         },

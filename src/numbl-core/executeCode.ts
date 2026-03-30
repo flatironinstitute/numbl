@@ -8,6 +8,7 @@
 import type { RuntimeValue } from "./runtime/index.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import type { FileIOAdapter } from "./fileIOAdapter.js";
+import type { SystemAdapter } from "./systemAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { Runtime } from "./runtime/runtime.js";
 import { RTV } from "./runtime/constructors.js";
@@ -49,6 +50,8 @@ export interface ExecOptions {
   customBuiltins?: Record<string, (nargout: number, args: any[]) => any>;
   /** Platform-specific file I/O adapter (e.g. Node.js fs). */
   fileIO?: FileIOAdapter;
+  /** Platform-specific system adapter (env vars, cwd, platform info). */
+  system?: SystemAdapter;
   /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
   onInput?: (prompt: string) => string;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */

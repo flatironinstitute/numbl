@@ -20,6 +20,7 @@ import {
   isRuntimeString,
   isRuntimeFunction,
   isRuntimeNumber,
+  isRuntimeDictionary,
   FloatXArray,
 } from "../runtime/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
@@ -35,6 +36,7 @@ import {
 import type { Runtime } from "./runtime.js";
 import { registerDynamicIBuiltin } from "../interpreter/builtins/types.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
+import { hashKey } from "../interpreter/builtins/dictionary.js";
 
 /** Names of all special builtins (needed at lowering time before runtime exists). */
 export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
@@ -95,6 +97,10 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "input",
   "tempdir",
   "tempname",
+  "getenv",
+  "setenv",
+  "pwd",
+  "cd",
 ];
 
 /** Helper: register a special builtin as an IBuiltin that accepts any args. */
@@ -1371,5 +1377,73 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
     if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
     return 0;
+  });
+
+  // ── getenv ──────────────────────────────────────────────────────────────
+
+  registerSpecial("getenv", (_nargout, args) => {
+    const sys = rt.system;
+    if (args.length === 0) {
+      // getenv() — return dictionary of all env vars
+      const all = sys?.getAllEnv() ?? {};
+      const entries = new Map<
+        string,
+        { key: RuntimeValue; value: RuntimeValue }
+      >();
+      for (const [k, v] of Object.entries(all)) {
+        const key = RTV.string(k);
+        entries.set(hashKey(key), { key, value: RTV.string(v) });
+      }
+      return RTV.dictionary(entries, "string", "string");
+    }
+    // getenv(varname) — return char value (empty if not set)
+    return RTV.char(sys?.getEnv(toString(args[0])) ?? "");
+  });
+
+  // ── setenv ──────────────────────────────────────────────────────────────
+
+  registerSpecial("setenv", (_nargout, args) => {
+    const sys = rt.system;
+    if (args.length === 2) {
+      sys?.setEnv(toString(args[0]), toString(args[1]));
+      return 0;
+    }
+    if (args.length === 1) {
+      const d = args[0];
+      if (isRuntimeDictionary(d)) {
+        // setenv(d) — set all entries from dictionary
+        for (const { key, value } of d.entries.values()) {
+          sys?.setEnv(toString(key), toString(value));
+        }
+        return 0;
+      }
+      // setenv(varname) — set to empty string
+      sys?.setEnv(toString(d), "");
+      return 0;
+    }
+    throw new RuntimeError("setenv: invalid arguments");
+  });
+
+  // ── pwd ─────────────────────────────────────────────────────────────────
+
+  registerSpecial("pwd", () => {
+    return RTV.char(rt.system?.cwd() ?? "/");
+  });
+
+  // ── cd ──────────────────────────────────────────────────────────────────
+
+  registerSpecial("cd", (_nargout, args) => {
+    const sys = rt.system;
+    const curDir = sys?.cwd() ?? "/";
+    if (args.length === 0) return RTV.char(curDir);
+    const target = toString(args[0]);
+    if (sys) {
+      try {
+        sys.chdir(target);
+      } catch {
+        throw new RuntimeError(`Cannot change directory to '${target}'`);
+      }
+    }
+    return RTV.char(curDir);
   });
 }

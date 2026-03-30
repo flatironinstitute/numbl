@@ -24,6 +24,7 @@ import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
+import { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
 import { workerOnInput } from "./syncInputChannel.js";
 
 // ── Persistent state ─────────────────────────────────────────────────────────
@@ -35,6 +36,7 @@ let searchPaths: string[] | undefined;
 let optimizationLevel = 1;
 let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
+const systemAdapter = new BrowserSystemAdapter();
 
 // ── Snippet helpers ──────────────────────────────────────────────────────────
 
@@ -164,6 +166,7 @@ self.onmessage = (e: MessageEvent) => {
         initialVariableValues: variableValues,
         initialHoldState: holdState,
         fileIO: adapter,
+        system: systemAdapter,
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
       workspaceFiles,

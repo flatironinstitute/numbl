@@ -46,6 +46,7 @@ import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import type { ExecOptions } from "../executeCode.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
+import type { SystemAdapter } from "../systemAdapter.js";
 import { ensureRuntimeValue, type CallSite } from "./runtimeHelpers.js";
 import {
   uplus as _uplus,
@@ -192,6 +193,9 @@ export class Runtime {
   // File I/O adapter (injected from host environment)
   public fileIO?: FileIOAdapter;
 
+  // System adapter (injected from host environment)
+  public system?: SystemAdapter;
+
   // Builtin wrappers
   public builtins: Record<
     string,
@@ -256,6 +260,7 @@ export class Runtime {
   ) {
     this.profilingEnabled = !!options.profile;
     this.fileIO = options.fileIO;
+    this.system = options.system;
     if (options.initialHoldState) {
       this.holdState = options.initialHoldState;
     }

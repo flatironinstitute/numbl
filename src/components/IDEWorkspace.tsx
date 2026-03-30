@@ -74,6 +74,7 @@ import {
 import { syncVfsChangesToProject } from "../vfs/syncVfsChanges";
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
 import { useHomeFiles } from "../hooks/useHomeFiles";
+import { useMipCorePackage } from "../hooks/useMipCorePackage";
 
 export interface IDEWorkspaceProps {
   files: WorkspaceFile[];
@@ -130,6 +131,8 @@ export function IDEWorkspace({
     renameHomeFolder,
     moveHomeFile,
   } = useHomeFiles();
+
+  useMipCorePackage(reloadHomeFiles);
 
   const isHomePath = useCallback(
     (name: string) => name === "~" || name.startsWith("~/"),

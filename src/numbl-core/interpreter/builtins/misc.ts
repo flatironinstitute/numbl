@@ -407,47 +407,20 @@ registerIBuiltin({
   }),
 });
 
-// pwd — return current working directory
+// filesep — platform file separator
 registerIBuiltin({
-  name: "pwd",
-  resolve: () => ({
-    outputTypes: [{ kind: "char" }],
-    apply: () => RTV.char(process.cwd()),
-  }),
-});
-
-// cd — change working directory
-registerIBuiltin({
-  name: "cd",
+  name: "filesep",
   resolve: argTypes => {
-    if (argTypes.length === 0) {
-      // cd with no args returns current directory
-      return {
-        outputTypes: [{ kind: "char" }],
-        apply: () => RTV.char(process.cwd()),
-      };
-    }
-    if (
-      argTypes.length === 1 &&
-      (argTypes[0].kind === "char" || argTypes[0].kind === "string")
-    ) {
-      return {
-        outputTypes: [{ kind: "char" }],
-        apply: (args: RuntimeValue[]) => {
-          const oldDir = process.cwd();
-          const target = toString(args[0]);
-          try {
-            process.chdir(target);
-          } catch {
-            throw new RuntimeError(`Cannot change directory to '${target}'`);
-          }
-          return RTV.char(oldDir);
-        },
-      };
-    }
-    return null;
+    if (argTypes.length !== 0) return null;
+    return {
+      outputTypes: [{ kind: "char" }],
+      apply: () => RTV.char("/"),
+    };
   },
 });
+
+// pwd / cd — implemented as special builtins in specialBuiltins.ts
+// (they need the SystemAdapter from Runtime).
 
 // mfilename — handled as a special builtin (needs runtime access to current file)
 

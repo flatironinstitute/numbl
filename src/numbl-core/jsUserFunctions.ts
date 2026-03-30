@@ -71,7 +71,8 @@ function parseDirectives(source: string): JsDirectives {
  * E.g., "wadd" → "wadd.so" (Linux), "wadd.dll" (Windows), "wadd.dylib" (macOS)
  */
 function nativeLibFilename(baseName: string): string {
-  switch (process.platform) {
+  const platform = typeof process !== "undefined" ? process.platform : "linux";
+  switch (platform) {
     case "win32":
       return `${baseName}.dll`;
     case "darwin":

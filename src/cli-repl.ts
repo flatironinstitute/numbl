@@ -7,6 +7,7 @@ import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import type { PlotInstruction } from "./graphics/types.js";
 import { executeCode } from "./numbl-core/executeCode.js";
+import { NodeSystemAdapter } from "./cli-system.js";
 
 const HISTORY_FILE = join(homedir(), ".numbl_history");
 const HISTORY_MAX = 1000;
@@ -66,6 +67,7 @@ export async function runRepl(
   let holdState = false;
   const workspaceFiles = [...initialWorkspaceFiles];
   const searchPaths = [...(initialSearchPaths ?? [])];
+  const system = new NodeSystemAdapter();
 
   const onInput = (prompt: string): string => {
     process.stdout.write(prompt);
@@ -112,6 +114,7 @@ export async function runRepl(
             initialVariableValues: variableValues,
             initialHoldState: holdState,
             optimization,
+            system,
           },
           workspaceFiles,
           "repl",

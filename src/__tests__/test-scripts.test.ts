@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { executeCode } from "../numbl-core/executeCode.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/types.js";
 import { NodeFileIOAdapter } from "../cli-fileio.js";
+import { NodeSystemAdapter } from "../cli-system.js";
 
 // ── helpers (mirror cli.ts logic) ────────────────────────────────────
 
@@ -112,7 +113,11 @@ describe("integration test scripts", () => {
 
       const result = executeCode(
         source,
-        { displayResults: true, fileIO: new NodeFileIOAdapter() },
+        {
+          displayResults: true,
+          fileIO: new NodeFileIOAdapter(),
+          system: new NodeSystemAdapter(),
+        },
         workspaceFiles,
         filepath,
         searchPaths

@@ -16,6 +16,7 @@ import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
 import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
+import { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
 import { workerOnInput } from "./syncInputChannel.js";
 
 /** Post a structured error message back to the main thread. */
@@ -89,6 +90,7 @@ self.onmessage = (e: MessageEvent) => {
         optimization: options?.optimization ?? 1,
         initialVariableValues: {},
         fileIO: adapter,
+        system: new BrowserSystemAdapter(),
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
       wsFiles,
