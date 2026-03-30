@@ -85,6 +85,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "mfilename",
   "addpath",
   "rmpath",
+  "savepath",
   "path",
   "mkdir",
   "websave",
@@ -1311,6 +1312,11 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
 
     if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+    return 0;
+  });
+
+  registerSpecial("savepath", () => {
+    rt.output("Warning: savepath is a no-op in numbl\n");
     return 0;
   });
 
