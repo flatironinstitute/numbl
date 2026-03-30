@@ -260,8 +260,8 @@ export function IDEWorkspace({
 
   // Script worker
   const scriptWorkerRef = useRef<Worker | null>(null);
-  const scriptInputSAB = useRef<SharedArrayBuffer>(createInputSAB());
-  const replInputSAB = useRef<SharedArrayBuffer>(createInputSAB());
+  const scriptInputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
+  const replInputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
   const remoteAbortRef = useRef<AbortController | null>(null);
   const editorRef = useRef<any>(null);
 
@@ -346,7 +346,8 @@ export function IDEWorkspace({
       const msg = e.data;
       if (msg.type === "request-input") {
         const response = prompt(msg.prompt ?? "") ?? "";
-        mainThreadRespond(scriptInputSAB.current, response);
+        const sab = scriptInputSAB.current;
+        if (sab) mainThreadRespond(sab, response);
         return;
       }
       if (msg.type === "output") {
@@ -394,10 +395,12 @@ export function IDEWorkspace({
     );
     replWorkerRef.current = worker;
 
-    worker.postMessage({
-      type: "set_input_sab",
-      inputSAB: replInputSAB.current,
-    });
+    if (replInputSAB.current) {
+      worker.postMessage({
+        type: "set_input_sab",
+        inputSAB: replInputSAB.current,
+      });
+    }
 
     if (allFiles.length > 0) {
       worker.postMessage({
@@ -416,7 +419,8 @@ export function IDEWorkspace({
 
       if (msg.type === "request-input") {
         const response = prompt(msg.prompt ?? "") ?? "";
-        mainThreadRespond(replInputSAB.current, response);
+        const sab = replInputSAB.current;
+        if (sab) mainThreadRespond(sab, response);
         return;
       }
 
@@ -583,7 +587,7 @@ export function IDEWorkspace({
         optimization,
       },
       vfsFiles: filesToVfs(files),
-      inputSAB: scriptInputSAB.current,
+      inputSAB: scriptInputSAB.current ?? undefined,
     });
   }, [
     activeFile,
@@ -620,7 +624,8 @@ export function IDEWorkspace({
         const msg = e.data;
         if (msg.type === "request-input") {
           const response = prompt(msg.prompt ?? "") ?? "";
-          mainThreadRespond(scriptInputSAB.current, response);
+          const sab = scriptInputSAB.current;
+          if (sab) mainThreadRespond(sab, response);
           return;
         }
         if (msg.type === "output") {

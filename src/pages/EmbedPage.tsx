@@ -65,7 +65,7 @@ export function EmbedPage() {
   const [isRunning, setIsRunning] = useState(false);
   const [outputTab, setOutputTab] = useState(0); // 0=Console, 1=Figure
   const workerRef = useRef<Worker | null>(null);
-  const inputSAB = useRef<SharedArrayBuffer>(createInputSAB());
+  const inputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
     initialFiguresState
@@ -101,7 +101,8 @@ export function EmbedPage() {
         const msg = e.data;
         if (msg.type === "request-input") {
           const response = prompt(msg.prompt ?? "") ?? "";
-          mainThreadRespond(inputSAB.current, response);
+          const sab = inputSAB.current;
+          if (sab) mainThreadRespond(sab, response);
           return;
         }
         if (msg.type === "output") {
@@ -157,7 +158,7 @@ export function EmbedPage() {
       },
       workspaceFiles: [],
       mainFileName: "script.m",
-      inputSAB: inputSAB.current,
+      inputSAB: inputSAB.current ?? undefined,
     });
   }, [code, optimization]);
 

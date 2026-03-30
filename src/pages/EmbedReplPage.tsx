@@ -36,7 +36,7 @@ export function EmbedReplPage() {
   );
   const replTerminalRef = useRef<TerminalMethods | null>(null);
   const replWorkerRef = useRef<Worker | null>(null);
-  const inputSAB = useRef<SharedArrayBuffer>(createInputSAB());
+  const inputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
     figuresDispatch(instruction);
@@ -61,7 +61,9 @@ export function EmbedReplPage() {
     );
     replWorkerRef.current = worker;
 
-    worker.postMessage({ type: "set_input_sab", inputSAB: inputSAB.current });
+    if (inputSAB.current) {
+      worker.postMessage({ type: "set_input_sab", inputSAB: inputSAB.current });
+    }
 
     // Send optimization level to worker
     worker.postMessage({
@@ -75,7 +77,8 @@ export function EmbedReplPage() {
 
       if (msg.type === "request-input") {
         const response = prompt(msg.prompt ?? "") ?? "";
-        mainThreadRespond(inputSAB.current, response);
+        const sab = inputSAB.current;
+        if (sab) mainThreadRespond(sab, response);
         return;
       }
 

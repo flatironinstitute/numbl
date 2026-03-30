@@ -12,8 +12,9 @@
 
 const SAB_SIZE = 8 + 8192; // 8 bytes header + 8KB for response text
 
-/** Create a SharedArrayBuffer for the input channel. */
-export function createInputSAB(): SharedArrayBuffer {
+/** Create a SharedArrayBuffer for the input channel, or null if unavailable. */
+export function createInputSAB(): SharedArrayBuffer | null {
+  if (typeof SharedArrayBuffer === "undefined") return null;
   return new SharedArrayBuffer(SAB_SIZE);
 }
 
