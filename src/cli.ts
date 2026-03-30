@@ -8,8 +8,10 @@ import {
   existsSync,
   writeFileSync,
   appendFileSync,
+  mkdirSync,
 } from "fs";
 import { delimiter, dirname, join, relative, resolve } from "path";
+import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execSync } from "child_process";
@@ -36,6 +38,7 @@ import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import type { PlotInstruction } from "./graphics/types.js";
 import { scanMFiles } from "./cli-scan.js";
+import { unzipToFiles } from "./vfs/unzipToFiles.js";
 
 // ── Package directory & native addon paths ───────────────────────────────────
 
@@ -85,6 +88,41 @@ try {
 
 // scanMFiles is in cli-scan.ts (separate module to avoid circular deps with cli-fileio)
 export { scanMFiles } from "./cli-scan.js";
+
+// ── MIP core package auto-install ───────────────────────────────────────────
+
+const MHL_URL =
+  "https://github.com/mip-org/mip-core/releases/download/mip-main/mip-main-any.mhl";
+const mipCoreDir = join(
+  homedir(),
+  ".numbl",
+  "mip",
+  "packages",
+  "mip-org",
+  "core",
+  "mip"
+);
+const mipCoreSearchPath = join(mipCoreDir, "mip");
+
+async function ensureMipCorePackage(): Promise<void> {
+  if (existsSync(join(mipCoreSearchPath, "mip.m"))) return;
+  console.error("Installing mip core package...");
+  const resp = await fetch(MHL_URL);
+  if (!resp.ok) {
+    console.error(
+      `Warning: failed to download mip core package (HTTP ${resp.status})`
+    );
+    return;
+  }
+  const buf = new Uint8Array(await resp.arrayBuffer());
+  const files = unzipToFiles(buf);
+  for (const f of files) {
+    const dest = join(mipCoreDir, f.path);
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, f.content);
+  }
+  console.error("mip core package installed.");
+}
 
 // /** JSON replacer that serializes Maps and Sets as plain objects/arrays. */
 // function jsonReplacer(_key: string, value: unknown): unknown {
@@ -437,6 +475,8 @@ async function cmdRun(args: string[]) {
     process.exit(1);
   }
 
+  await ensureMipCorePackage();
+
   const filepath = resolve(process.cwd(), opts.positional[0]);
   const code = readFileSync(filepath, "utf-8");
   const mainFileName = filepath;
@@ -451,6 +491,10 @@ async function cmdRun(args: string[]) {
   for (const p of opts.extraPaths) {
     searchPaths.push(p);
     workspaceFiles.push(...scanMFiles(p));
+  }
+  if (existsSync(mipCoreSearchPath)) {
+    searchPaths.push(mipCoreSearchPath);
+    workspaceFiles.push(...scanMFiles(mipCoreSearchPath));
   }
 
   await executeWithOptions(
@@ -474,11 +518,17 @@ async function cmdEval(args: string[]) {
     process.exit(1);
   }
 
+  await ensureMipCorePackage();
+
   const searchPaths: string[] = [];
   const workspaceFiles: WorkspaceFile[] = [];
   for (const p of opts.extraPaths) {
     searchPaths.push(p);
     workspaceFiles.push(...scanMFiles(p));
+  }
+  if (existsSync(mipCoreSearchPath)) {
+    searchPaths.push(mipCoreSearchPath);
+    workspaceFiles.push(...scanMFiles(mipCoreSearchPath));
   }
 
   await executeWithOptions(
@@ -815,8 +865,14 @@ function cmdListBuiltins() {
 async function cmdRepl(args: string[]) {
   const opts = parseOptions(args);
 
+  await ensureMipCorePackage();
+
   const replSearchPaths = [...opts.extraPaths];
   const replFiles = opts.extraPaths.flatMap(d => scanMFiles(d));
+  if (existsSync(mipCoreSearchPath)) {
+    replSearchPaths.push(mipCoreSearchPath);
+    replFiles.push(...scanMFiles(mipCoreSearchPath));
+  }
   const replPlotOpts: PlotServerOptions | undefined =
     opts.plotPort !== undefined
       ? { port: opts.plotPort, host: "0.0.0.0" }
