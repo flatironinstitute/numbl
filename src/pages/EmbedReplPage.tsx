@@ -17,7 +17,6 @@ import type { PlotInstruction } from "../graphics/types.js";
 import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import { useHomeFiles } from "../hooks/useHomeFiles.js";
 import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
-import { fileText } from "../hooks/useProjectFiles.js";
 import { syncHomeVfsChanges } from "../vfs/syncVfsChanges.js";
 import type { VfsChanges } from "../vfs/VirtualFileSystem.js";
 
@@ -34,7 +33,8 @@ function useOptimizationParam(): number {
 
 export function EmbedReplPage() {
   const optimization = useOptimizationParam();
-  const { homeFiles, homeVfsFiles, reloadHomeFiles } = useHomeFiles();
+  const { homeFiles, reloadHomeFiles, getHomeVfsFiles, getHomeWorkspaceFiles } =
+    useHomeFiles();
   useMipCorePackage(reloadHomeFiles);
 
   const [isReplExecuting, setIsReplExecuting] = useState(false);
@@ -154,31 +154,37 @@ export function EmbedReplPage() {
     };
   }, [handlePlotInstruction, handleVfsChanges, optimization]);
 
-  // Update workspace in REPL worker when home files change
+  // Track that workspace needs updating when home files change
+  const workspaceStale = useRef(true);
   useEffect(() => {
-    if (replWorkerRef.current && homeFiles.length > 0) {
-      replWorkerRef.current.postMessage({
-        type: "update_workspace",
-        workspaceFiles: homeFiles.map(f => ({
-          name: f.name,
-          source: fileText(f),
-        })),
-        vfsFiles: homeVfsFiles,
-      });
-    }
-  }, [homeFiles, homeVfsFiles]);
+    workspaceStale.current = true;
+  }, [homeFiles]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {
       if (isReplExecuting) return;
       setIsReplExecuting(true);
 
+      // Send latest workspace files if stale
+      if (workspaceStale.current && replWorkerRef.current) {
+        const [wsFiles, vfsFiles] = await Promise.all([
+          getHomeWorkspaceFiles(),
+          getHomeVfsFiles(),
+        ]);
+        replWorkerRef.current.postMessage({
+          type: "update_workspace",
+          workspaceFiles: wsFiles,
+          vfsFiles,
+        });
+        workspaceStale.current = false;
+      }
+
       replWorkerRef.current?.postMessage({
         type: "execute",
         code: command,
       });
     },
-    [isReplExecuting]
+    [isReplExecuting, getHomeWorkspaceFiles, getHomeVfsFiles]
   );
 
   const handleReplClear = useCallback(() => {

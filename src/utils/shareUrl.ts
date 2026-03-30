@@ -10,11 +10,15 @@ const textEncoder = new TextEncoder();
 
 export function encodeShareData(
   files: WorkspaceFile[],
+  contentMap: Map<string, Uint8Array>,
   activeFileId: string
 ): string {
   const activeFile = files.find(f => f.id === activeFileId);
   const data: ShareData = {
-    files: files.map(f => ({ name: f.name, content: fileText(f) })),
+    files: files.map(f => ({
+      name: f.name,
+      content: fileText(contentMap.get(f.id) ?? new Uint8Array(0)),
+    })),
     activeFileName: activeFile?.name ?? null,
   };
 
@@ -45,15 +49,21 @@ export function decodeShareData(encoded: string): ShareData {
   return JSON.parse(json);
 }
 
-export function shareDataToWorkspaceFiles(data: ShareData): {
+export interface ShareFilesResult {
   files: WorkspaceFile[];
+  contentMap: Map<string, Uint8Array>;
   activeFileId: string;
-} {
-  const files: WorkspaceFile[] = data.files.map(f => ({
-    id: crypto.randomUUID(),
-    name: f.name,
-    data: textEncoder.encode(f.content),
-  }));
+}
+
+export function shareDataToWorkspaceFiles(data: ShareData): ShareFilesResult {
+  const files: WorkspaceFile[] = [];
+  const contentMap = new Map<string, Uint8Array>();
+
+  for (const f of data.files) {
+    const id = crypto.randomUUID();
+    files.push({ id, name: f.name });
+    contentMap.set(id, textEncoder.encode(f.content));
+  }
 
   let activeFileId = "";
   if (data.activeFileName) {
@@ -64,5 +74,5 @@ export function shareDataToWorkspaceFiles(data: ShareData): {
     activeFileId = files[0].id;
   }
 
-  return { files, activeFileId };
+  return { files, contentMap, activeFileId };
 }

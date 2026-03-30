@@ -65,57 +65,62 @@ async function syncChangesToDb(
   const modifiedFiles: { path: string; data: Uint8Array }[] = [];
   const deletedPaths: string[] = [];
 
-  await db.transaction("rw", db.files, db.projects, async () => {
-    for (const { path, content } of changes.created) {
-      const relPath = toRelativePath(path);
-      const now = Date.now();
-      const id = crypto.randomUUID();
-      await db.files.add({
-        id,
-        projectName,
-        path: relPath,
-        data: content,
-        createdAt: now,
-        updatedAt: now,
-      });
-      addedFiles.push({ id, name: relPath, data: content });
-    }
-
-    for (const { path, content } of changes.modified) {
-      const relPath = toRelativePath(path);
-      const existing = await db.files
-        .where("[projectName+path]")
-        .equals([projectName, relPath])
-        .first();
-      if (existing) {
-        await db.files.update(existing.id, {
-          data: content,
-          updatedAt: Date.now(),
+  await db.transaction(
+    "rw",
+    db.files,
+    db.fileContents,
+    db.projects,
+    async () => {
+      for (const { path, content } of changes.created) {
+        const relPath = toRelativePath(path);
+        const now = Date.now();
+        const id = crypto.randomUUID();
+        await db.files.add({
+          id,
+          projectName,
+          path: relPath,
+          createdAt: now,
+          updatedAt: now,
         });
-        modifiedFiles.push({ path: relPath, data: content });
+        await db.fileContents.add({ id, data: content });
+        addedFiles.push({ id, name: relPath });
+      }
+
+      for (const { path, content } of changes.modified) {
+        const relPath = toRelativePath(path);
+        const existing = await db.files
+          .where("[projectName+path]")
+          .equals([projectName, relPath])
+          .first();
+        if (existing) {
+          await db.fileContents.put({ id: existing.id, data: content });
+          await db.files.update(existing.id, { updatedAt: Date.now() });
+          modifiedFiles.push({ path: relPath, data: content });
+        }
+      }
+
+      for (const path of changes.deleted) {
+        const relPath = toRelativePath(path);
+        const existing = await db.files
+          .where("[projectName+path]")
+          .equals([projectName, relPath])
+          .first();
+        if (existing) {
+          await db.files.delete(existing.id);
+          await db.fileContents.delete(existing.id);
+          deletedPaths.push(relPath);
+        }
+      }
+
+      if (
+        addedFiles.length > 0 ||
+        modifiedFiles.length > 0 ||
+        deletedPaths.length > 0
+      ) {
+        await db.projects.update(projectName, { updatedAt: Date.now() });
       }
     }
-
-    for (const path of changes.deleted) {
-      const relPath = toRelativePath(path);
-      const existing = await db.files
-        .where("[projectName+path]")
-        .equals([projectName, relPath])
-        .first();
-      if (existing) {
-        await db.files.delete(existing.id);
-        deletedPaths.push(relPath);
-      }
-    }
-
-    if (
-      addedFiles.length > 0 ||
-      modifiedFiles.length > 0 ||
-      deletedPaths.length > 0
-    ) {
-      await db.projects.update(projectName, { updatedAt: Date.now() });
-    }
-  });
+  );
 
   if (
     addedFiles.length === 0 &&

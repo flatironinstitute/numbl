@@ -35,6 +35,7 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import type { PlotInstruction } from "./graphics/types.js";
+import { scanMFiles } from "./cli-scan.js";
 
 // ── Package directory & native addon paths ───────────────────────────────────
 
@@ -82,68 +83,8 @@ try {
   // koffi not installed — native shared library support disabled
 }
 
-/**
- * Recursively scan a directory for .m files.
- * File names are stored as absolute paths.
- */
-export function scanMFiles(
-  dirPath: string,
-  excludeFile?: string
-): WorkspaceFile[] {
-  const files: WorkspaceFile[] = [];
-
-  let entries: string[];
-  try {
-    entries = readdirSync(dirPath);
-  } catch {
-    // Can't read directory (e.g. permission denied) — skip it
-    return files;
-  }
-
-  for (const entry of entries) {
-    const fullPath = join(dirPath, entry);
-
-    if (excludeFile && fullPath === excludeFile) {
-      continue;
-    }
-
-    try {
-      const stat = statSync(fullPath);
-
-      if (stat.isDirectory()) {
-        if (
-          entry.startsWith("@") ||
-          entry.startsWith("+") ||
-          entry === "private"
-        ) {
-          files.push(...scanMFiles(fullPath, excludeFile));
-        }
-      } else if (
-        stat.isFile() &&
-        (entry.endsWith(".m") || entry.endsWith(".js"))
-      ) {
-        const source = readFileSync(fullPath, "utf-8");
-        files.push({
-          name: fullPath,
-          source,
-        });
-      } else if (stat.isFile() && entry.endsWith(".wasm")) {
-        const data = readFileSync(fullPath);
-        files.push({
-          name: fullPath,
-          source: "",
-          data: new Uint8Array(data),
-        });
-      }
-    } catch (err) {
-      console.warn(
-        `Warning: could not read ${fullPath}: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-  }
-
-  return files;
-}
+// scanMFiles is in cli-scan.ts (separate module to avoid circular deps with cli-fileio)
+export { scanMFiles } from "./cli-scan.js";
 
 // /** JSON replacer that serializes Maps and Sets as plain objects/arrays. */
 // function jsonReplacer(_key: string, value: unknown): unknown {

@@ -59,7 +59,7 @@ import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
 import {
   fileText,
-  isBinaryFile,
+  isBinaryData,
   type WorkspaceFile,
 } from "../hooks/useProjectFiles";
 import {
@@ -94,6 +94,12 @@ export interface IDEWorkspaceProps {
   ) => Promise<void>;
   headerContent: ReactNode;
   projectName?: string; // For VFS sync back to IndexedDB
+  /** Load content for a single project file (cached). */
+  loadFileContent: (fileId: string) => Promise<Uint8Array>;
+  /** Load all project file contents. */
+  loadAllContents: () => Promise<Map<string, Uint8Array>>;
+  /** Content cache ref for project files. */
+  contentCache: React.RefObject<Map<string, Uint8Array>>;
   mergeVfsChanges?: (result: {
     addedFiles: WorkspaceFile[];
     modifiedFiles: { path: string; data: Uint8Array }[];
@@ -116,11 +122,13 @@ export function IDEWorkspace({
   uploadFiles,
   headerContent,
   projectName,
+  loadFileContent,
+  loadAllContents,
+  contentCache,
   mergeVfsChanges,
 }: IDEWorkspaceProps) {
   const {
     homeFiles,
-    homeVfsFiles,
     reloadHomeFiles,
     updateHomeFileContent,
     addHomeFile,
@@ -130,6 +138,10 @@ export function IDEWorkspace({
     renameHomeFile,
     renameHomeFolder,
     moveHomeFile,
+    loadHomeFileContent,
+    getHomeVfsFiles,
+    getHomeWorkspaceFiles,
+    loadAllHomeContents,
   } = useHomeFiles();
 
   useMipCorePackage(reloadHomeFiles);
@@ -143,7 +155,7 @@ export function IDEWorkspace({
     [homeFiles]
   );
 
-  // Merged file list: project files + home files
+  // Merged file list: project files + home files (metadata only — no content blobs)
   const allFiles = useMemo(() => [...files, ...homeFiles], [files, homeFiles]);
   const optimization = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
@@ -300,16 +312,45 @@ export function IDEWorkspace({
     figuresDispatch(instruction);
   }, []);
 
-  /** Convert workspace files to VFS format for the worker, including home files. */
-  const filesToVfs = useCallback(
-    (wsFiles: WorkspaceFile[]) => [
-      ...wsFiles.map(f => ({
-        path: f.name,
-        content: f.data,
-      })),
-      ...homeVfsFiles,
-    ],
-    [homeVfsFiles]
+  /** Build VFS + workspace text files for sending to workers. Loads all content from DB. */
+  const buildWorkerFiles = useCallback(
+    async (wsFiles: WorkspaceFile[], excludeFileId?: string) => {
+      const [projectContents, homeVfs, homeWs] = await Promise.all([
+        loadAllContents(),
+        getHomeVfsFiles(),
+        getHomeWorkspaceFiles(),
+      ]);
+      const homeContents = await loadAllHomeContents();
+
+      const vfsFiles = [
+        ...wsFiles.map(f => ({
+          path: f.name,
+          content: projectContents.get(f.id) ?? new Uint8Array(0),
+        })),
+        ...homeVfs,
+      ];
+
+      const decoder = new TextDecoder("utf-8");
+      const workspaceFiles = [
+        ...wsFiles
+          .filter(f => !excludeFileId || f.id !== excludeFileId)
+          .map(f => ({
+            name: f.name,
+            source: decoder.decode(
+              projectContents.get(f.id) ?? new Uint8Array(0)
+            ),
+          })),
+        ...homeWs,
+      ];
+
+      return { vfsFiles, workspaceFiles, projectContents, homeContents };
+    },
+    [
+      loadAllContents,
+      getHomeVfsFiles,
+      getHomeWorkspaceFiles,
+      loadAllHomeContents,
+    ]
   );
 
   /** Handle VFS changes from worker execution. */
@@ -402,16 +443,8 @@ export function IDEWorkspace({
       });
     }
 
-    if (allFiles.length > 0) {
-      worker.postMessage({
-        type: "update_workspace",
-        workspaceFiles: allFiles.map(f => ({
-          name: f.name,
-          source: fileText(f),
-        })),
-        vfsFiles: filesToVfs(files),
-      });
-    }
+    // Don't send workspace files on init — content is loaded lazily
+    // and will be sent before the first REPL execute or script run.
 
     worker.onmessage = e => {
       const msg = e.data;
@@ -472,21 +505,13 @@ export function IDEWorkspace({
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction, handleVfsChanges]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [handlePlotInstruction, handleVfsChanges]);
 
-  // Update workspace in REPL worker when files change
+  // Track that REPL workspace needs updating when files change
+  const replWorkspaceStale = useRef(true);
   useEffect(() => {
-    if (replWorkerRef.current && allFiles.length > 0) {
-      replWorkerRef.current.postMessage({
-        type: "update_workspace",
-        workspaceFiles: allFiles.map(f => ({
-          name: f.name,
-          source: fileText(f),
-        })),
-        vfsFiles: filesToVfs(files),
-      });
-    }
-  }, [files, allFiles, filesToVfs]);
+    replWorkspaceStale.current = true;
+  }, [files, homeFiles]);
 
   // Clear triggerRenameId after a short delay
   useEffect(() => {
@@ -508,13 +533,15 @@ export function IDEWorkspace({
     setFileSources(null);
     figuresDispatch({ type: "clear" });
 
-    const workspaceFiles = allFiles
-      .filter(f => f.id !== activeFileId)
-      .map(f => ({ name: f.name, source: fileText(f) }));
+    // Load all file contents from DB
+    const { vfsFiles, workspaceFiles, projectContents } =
+      await buildWorkerFiles(files, activeFileId);
 
-    const codeToRun = fileText(activeFile);
-
-    const combinedWorkspaceFiles = workspaceFiles;
+    const activeData =
+      projectContents.get(activeFileId) ??
+      contentCache.current.get(activeFileId) ??
+      new Uint8Array(0);
+    const codeToRun = fileText(activeData);
 
     try {
       const ast = parseMFile(codeToRun);
@@ -527,8 +554,8 @@ export function IDEWorkspace({
       const abortController = new AbortController();
       remoteAbortRef.current = abortController;
       try {
-        const allFiles = [
-          ...combinedWorkspaceFiles.map(f => ({
+        const remoteFiles = [
+          ...workspaceFiles.map(f => ({
             name: f.name,
             content: f.source,
           })),
@@ -537,7 +564,7 @@ export function IDEWorkspace({
 
         const result = await executeRemoteStream(
           {
-            files: allFiles,
+            files: remoteFiles,
             mainScript: activeFile.name,
           },
           {
@@ -579,26 +606,26 @@ export function IDEWorkspace({
     scriptWorkerRef.current.postMessage({
       type: "run",
       code: codeToRun,
-      workspaceFiles: combinedWorkspaceFiles,
+      workspaceFiles,
       mainFileName: activeFile.name,
       options: {
         displayResults: true,
         maxIterations: 10000000,
         optimization,
       },
-      vfsFiles: filesToVfs(files),
+      vfsFiles,
       inputSAB: scriptInputSAB.current ?? undefined,
     });
   }, [
     activeFile,
     activeFileId,
     files,
-    allFiles,
     useRemoteExecution,
     remoteServiceUrl,
     handlePlotInstruction,
     optimization,
-    filesToVfs,
+    buildWorkerFiles,
+    contentCache,
   ]);
 
   const stopExecution = useCallback(() => {
@@ -713,12 +740,23 @@ export function IDEWorkspace({
       if (isReplExecuting) return;
       setIsReplExecuting(true);
 
+      // Send latest workspace files if stale
+      if (replWorkspaceStale.current && replWorkerRef.current) {
+        const { vfsFiles, workspaceFiles } = await buildWorkerFiles(files);
+        replWorkerRef.current.postMessage({
+          type: "update_workspace",
+          workspaceFiles,
+          vfsFiles,
+        });
+        replWorkspaceStale.current = false;
+      }
+
       replWorkerRef.current?.postMessage({
         type: "execute",
         code: command,
       });
     },
-    [isReplExecuting]
+    [isReplExecuting, files, buildWorkerFiles]
   );
 
   const handleReplClear = useCallback(() => {
@@ -731,7 +769,27 @@ export function IDEWorkspace({
   }, []);
 
   const lastActiveFileId = useRef<string>("");
-  const activeFileIsBinary = activeFile ? isBinaryFile(activeFile) : false;
+  const [activeFileData, setActiveFileData] = useState<Uint8Array | null>(null);
+  const activeFileIsBinary = activeFileData
+    ? isBinaryData(activeFileData)
+    : false;
+
+  // Load active file content from DB when file changes
+  useEffect(() => {
+    if (!activeFileId) {
+      setActiveFileData(null);
+      return;
+    }
+    let cancelled = false;
+    const isHome = homeFiles.some(f => f.id === activeFileId);
+    const loader = isHome ? loadHomeFileContent : loadFileContent;
+    loader(activeFileId).then(data => {
+      if (!cancelled) setActiveFileData(data);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFileId, homeFiles, loadHomeFileContent, loadFileContent]);
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -740,11 +798,12 @@ export function IDEWorkspace({
       return;
     }
     lastActiveFileId.current = activeFileId;
-    const text = isBinaryFile(activeFile) ? "" : fileText(activeFile);
+    if (!activeFileData) return;
+    const text = isBinaryData(activeFileData) ? "" : fileText(activeFileData);
     if (editorRef.current.value !== text) {
       editorRef.current.setValue(text);
     }
-  }, [activeFileId, activeFile]);
+  }, [activeFileId, activeFile, activeFileData]);
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -883,7 +942,7 @@ export function IDEWorkspace({
                   }}
                 >
                   <Typography variant="body2">
-                    Binary file ({activeFile?.data.length} bytes)
+                    Binary file ({activeFileData?.length ?? 0} bytes)
                   </Typography>
                 </Box>
               ) : (
@@ -892,13 +951,13 @@ export function IDEWorkspace({
                   language={
                     activeFile?.name.endsWith(".js") ? "javascript" : "numbl"
                   }
-                  defaultValue={activeFile ? fileText(activeFile) : ""}
+                  defaultValue={activeFileData ? fileText(activeFileData) : ""}
                   onChange={value => {
+                    const encoded = _textEncoder.encode(value || "");
+                    setActiveFileData(encoded);
+                    replWorkspaceStale.current = true;
                     if (isHomeFileId(activeFileId)) {
-                      updateHomeFileContent(
-                        activeFileId,
-                        _textEncoder.encode(value || "")
-                      );
+                      updateHomeFileContent(activeFileId, encoded);
                     } else {
                       updateFileContent(value || "");
                     }
@@ -1169,7 +1228,7 @@ export function IDEWorkspace({
             <Drawer
               open={drawerOpen}
               onClose={() => setDrawerOpen(false)}
-              PaperProps={{ sx: { width: 260 } }}
+              slotProps={{ paper: { sx: { width: 260 } } }}
             >
               {fileBrowserContent}
             </Drawer>

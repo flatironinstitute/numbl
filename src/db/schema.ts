@@ -12,14 +12,19 @@ export interface ProjectFile {
   id: string; // Primary key - UUID
   projectName: string; // Foreign key to Project.name (indexed)
   path: string; // File path like "src/utils/helper.m"
-  data: Uint8Array; // File content (binary). Text is decoded on demand.
   createdAt: number; // Timestamp
   updatedAt: number; // Timestamp
+}
+
+export interface FileContent {
+  id: string; // Same as ProjectFile.id
+  data: Uint8Array; // File content (binary)
 }
 
 export class NumblDatabase extends Dexie {
   projects!: EntityTable<Project, "name">;
   files!: EntityTable<ProjectFile, "id">;
+  fileContents!: EntityTable<FileContent, "id">;
 
   constructor() {
     super("numbl-db");
@@ -33,6 +38,34 @@ export class NumblDatabase extends Dexie {
       projects: "name, lastOpenedAt",
       files: "id, projectName, [projectName+path]",
     });
+
+    this.version(3)
+      .stores({
+        projects: "name, lastOpenedAt",
+        files: "id, projectName, [projectName+path]",
+        fileContents: "id",
+      })
+      .upgrade(async tx => {
+        // Migrate data from files table to fileContents table
+        const filesTable = tx.table("files");
+        const contentsTable = tx.table("fileContents");
+        const allFiles = await filesTable.toArray();
+        const contentRecords: FileContent[] = [];
+        for (const f of allFiles) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const data = (f as any).data;
+          if (data) {
+            contentRecords.push({ id: f.id, data });
+          }
+        }
+        if (contentRecords.length > 0) {
+          await contentsTable.bulkAdd(contentRecords);
+        }
+        // Remove data field from files records
+        await filesTable.toCollection().modify((f: Record<string, unknown>) => {
+          delete f.data;
+        });
+      });
   }
 }
 

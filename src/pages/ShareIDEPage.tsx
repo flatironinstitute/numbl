@@ -43,6 +43,9 @@ export function ShareIDEPage() {
     renameFolder,
     moveFile,
     uploadFiles,
+    loadFileContent,
+    loadAllContents,
+    contentCache,
     urlSizeTooLarge,
   } = useShareProjectFiles();
 
@@ -88,7 +91,8 @@ export function ShareIDEPage() {
 
       // Create all the shared files in the new project
       for (const file of files) {
-        await createFile(projectName, file.name, file.data);
+        const data = contentCache.current.get(file.id) ?? new Uint8Array(0);
+        await createFile(projectName, file.name, data);
       }
 
       setSaveDialogOpen(false);
@@ -99,7 +103,7 @@ export function ShareIDEPage() {
     } finally {
       setIsSaving(false);
     }
-  }, [projectName, files, navigate]);
+  }, [projectName, files, navigate, contentCache]);
 
   if (loading) {
     return (
@@ -175,6 +179,9 @@ export function ShareIDEPage() {
         moveFile={moveFile}
         uploadFiles={uploadFiles}
         headerContent={headerContent}
+        loadFileContent={loadFileContent}
+        loadAllContents={loadAllContents}
+        contentCache={contentCache}
       />
 
       <Dialog

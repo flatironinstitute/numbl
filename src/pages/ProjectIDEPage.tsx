@@ -39,12 +39,16 @@ export function ProjectIDEPage() {
     renameFolder,
     moveFile,
     uploadFiles,
+    loadFileContent,
+    loadAllContents,
+    contentCache,
     mergeVfsChanges,
   } = useProjectFiles(projectName!);
 
-  const handleShare = useCallback(() => {
+  const handleShare = useCallback(async () => {
     try {
-      const encoded = encodeShareData(files, activeFileId);
+      const allContents = await loadAllContents();
+      const encoded = encodeShareData(files, allContents, activeFileId);
       const url = `${window.location.origin}/share#${encoded}`;
       if (url.length > 64000) {
         alert(
@@ -60,7 +64,7 @@ export function ProjectIDEPage() {
       console.error("Failed to generate share URL:", e);
       alert("Failed to generate share URL.");
     }
-  }, [files, activeFileId]);
+  }, [files, activeFileId, loadAllContents]);
 
   if (projectLoading || filesLoading) {
     return (
@@ -146,6 +150,9 @@ export function ProjectIDEPage() {
       uploadFiles={uploadFiles}
       headerContent={headerContent}
       projectName={projectName}
+      loadFileContent={loadFileContent}
+      loadAllContents={loadAllContents}
+      contentCache={contentCache}
       mergeVfsChanges={mergeVfsChanges}
     />
   );

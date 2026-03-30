@@ -1,29 +1,37 @@
-import { useState, useEffect, useCallback, useMemo, useReducer } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  useReducer,
+  useRef,
+} from "react";
 import {
   getProjectFiles,
   saveFileData,
   createFile,
   deleteFile,
   renameFile as renameFileInDb,
+  getFileContent,
+  getAllFileContents,
 } from "../db/operations";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8");
 
+/** Metadata-only file reference (no content loaded). */
 export interface WorkspaceFile {
   id: string;
   name: string;
-  data: Uint8Array; // All files stored as binary. Use textDecoder to get text.
 }
 
 /** Decode file data as UTF-8 text. */
-export function fileText(f: WorkspaceFile): string {
-  return textDecoder.decode(f.data);
+export function fileText(data: Uint8Array): string {
+  return textDecoder.decode(data);
 }
 
-/** Check if a file contains binary (non-text) data. */
-export function isBinaryFile(f: WorkspaceFile): boolean {
-  const data = f.data;
+/** Check if data contains binary (non-text) content. */
+export function isBinaryData(data: Uint8Array): boolean {
   for (let i = 0; i < data.length; i++) {
     if (data[i] === 0) return true;
   }
@@ -33,7 +41,6 @@ export function isBinaryFile(f: WorkspaceFile): boolean {
 // Actions for the files reducer
 type FilesAction =
   | { type: "SET_FILES"; files: WorkspaceFile[] }
-  | { type: "UPDATE_DATA"; fileId: string; data: Uint8Array }
   | { type: "ADD_FILE"; file: WorkspaceFile }
   | { type: "DELETE_FILE"; fileId: string }
   | { type: "RENAME_FILE"; fileId: string; newName: string }
@@ -42,11 +49,10 @@ type FilesAction =
   | {
       type: "MERGE_VFS";
       added: WorkspaceFile[];
-      modified: { path: string; data: Uint8Array }[];
       deletedPaths: string[];
     };
 
-// Reducer for managing files state
+// Reducer for managing files state (metadata only)
 function filesReducer(
   state: WorkspaceFile[],
   action: FilesAction
@@ -54,11 +60,6 @@ function filesReducer(
   switch (action.type) {
     case "SET_FILES":
       return action.files;
-
-    case "UPDATE_DATA":
-      return state.map(f =>
-        f.id === action.fileId ? { ...f, data: action.data } : f
-      );
 
     case "ADD_FILE":
       return [...state, action.file];
@@ -89,12 +90,6 @@ function filesReducer(
 
     case "MERGE_VFS": {
       let result = state;
-      if (action.modified.length > 0) {
-        result = result.map(f => {
-          const mod = action.modified.find(m => m.path === f.name);
-          return mod ? { ...f, data: mod.data } : f;
-        });
-      }
       if (action.deletedPaths.length > 0) {
         const deletedSet = new Set(action.deletedPaths);
         result = result.filter(f => !deletedSet.has(f.name));
@@ -128,6 +123,12 @@ export interface UseProjectFilesResult {
     targetFolder?: string
   ) => Promise<void>;
   reload: () => Promise<void>;
+  /** Load content for a single file (cached). */
+  loadFileContent: (fileId: string) => Promise<Uint8Array>;
+  /** Load all file contents for this project. Returns map of id → data. */
+  loadAllContents: () => Promise<Map<string, Uint8Array>>;
+  /** Content cache — updated on edits and loads. */
+  contentCache: React.RefObject<Map<string, Uint8Array>>;
   mergeVfsChanges: (result: {
     addedFiles: WorkspaceFile[];
     modifiedFiles: { path: string; data: Uint8Array }[];
@@ -206,6 +207,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
   const [files, dispatch] = useReducer(filesReducer, []);
   const [activeFileId, setActiveFileIdRaw] = useState<string>("");
   const [loading, setLoading] = useState(true);
+  const contentCacheRef = useRef(new Map<string, Uint8Array>());
 
   const setActiveFileId = useCallback(
     (id: string) => {
@@ -215,7 +217,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     [projectName]
   );
 
-  // Load files from IndexedDB
+  // Load file metadata from IndexedDB (no content)
   useEffect(() => {
     let cancelled = false;
 
@@ -229,13 +231,10 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
           id: pf.id,
           name: pf.path,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          data: pf.data ?? textEncoder.encode((pf as any).content ?? ""),
         }));
 
         dispatch({ type: "SET_FILES", files: workspaceFiles });
 
-        // Restore previously active file, or fall back to the first file
         setActiveFileIdRaw(prevId => {
           if (!prevId && workspaceFiles.length > 0) {
             const storedId = getStoredActiveFileId(projectName);
@@ -260,9 +259,8 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     return () => {
       cancelled = true;
     };
-  }, [projectName]); // Only reload when project changes
+  }, [projectName]);
 
-  // Reload function for manual reloads
   const reload = useCallback(async () => {
     try {
       setLoading(true);
@@ -271,8 +269,6 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
         id: pf.id,
         name: pf.path,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        data: pf.data ?? textEncoder.encode((pf as any).content ?? ""),
       }));
 
       dispatch({ type: "SET_FILES", files: workspaceFiles });
@@ -281,6 +277,29 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     } finally {
       setLoading(false);
     }
+  }, [projectName]);
+
+  // Content loading
+  const loadFileContent = useCallback(
+    async (fileId: string): Promise<Uint8Array> => {
+      const cached = contentCacheRef.current.get(fileId);
+      if (cached !== undefined) return cached;
+      const data = await getFileContent(fileId);
+      contentCacheRef.current.set(fileId, data);
+      return data;
+    },
+    []
+  );
+
+  const loadAllContents = useCallback(async (): Promise<
+    Map<string, Uint8Array>
+  > => {
+    const map = await getAllFileContents(projectName);
+    // Update cache
+    for (const [id, data] of map) {
+      contentCacheRef.current.set(id, data);
+    }
+    return map;
   }, [projectName]);
 
   // Debounced save function
@@ -299,7 +318,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
   const updateFileContent = useCallback(
     (content: string) => {
       const data = textEncoder.encode(content);
-      dispatch({ type: "UPDATE_DATA", fileId: activeFileId, data });
+      contentCacheRef.current.set(activeFileId, data);
       debouncedSave(activeFileId, data);
     },
     [activeFileId, debouncedSave]
@@ -316,8 +335,9 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         const file = await createFile(projectName, name, emptyData);
         dispatch({
           type: "ADD_FILE",
-          file: { id: file.id, name, data: emptyData },
+          file: { id: file.id, name },
         });
+        contentCacheRef.current.set(file.id, emptyData);
         setActiveFileId(file.id);
         return file.id;
       } catch (error) {
@@ -339,8 +359,9 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         const file = await createFile(projectName, name, emptyData);
         dispatch({
           type: "ADD_FILE",
-          file: { id: file.id, name, data: emptyData },
+          file: { id: file.id, name },
         });
+        contentCacheRef.current.set(file.id, emptyData);
         setActiveFileId(file.id);
         return fullPath;
       } catch (error) {
@@ -360,6 +381,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
 
       try {
         await deleteFile(fileId);
+        contentCacheRef.current.delete(fileId);
         if (activeFileId === fileId) {
           const newFiles = files.filter(f => f.id !== fileId);
           if (newFiles.length > 0) setActiveFileId(newFiles[0].id);
@@ -384,6 +406,9 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
 
       try {
         await Promise.all(filesToDelete.map(f => deleteFile(f.id)));
+        for (const f of filesToDelete) {
+          contentCacheRef.current.delete(f.id);
+        }
         const newFiles = files.filter(
           f => !f.name.startsWith(folderPath + "/")
         );
@@ -482,7 +507,6 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
         fullPath: targetFolder ? `${targetFolder}/${e.path}` : e.path,
       }));
 
-      // Check for duplicates
       const existingByPath = new Map(files.map(f => [f.name, f]));
       const duplicates = toUpload.filter(e => existingByPath.has(e.fullPath));
       const newEntries = toUpload.filter(e => !existingByPath.has(e.fullPath));
@@ -502,27 +526,22 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       try {
         let firstNewId = "";
 
-        // Overwrite existing files
         for (const entry of duplicates) {
           const existing = existingByPath.get(entry.fullPath)!;
           const data = textEncoder.encode(entry.content);
           await saveFileData(existing.id, data);
-          dispatch({
-            type: "UPDATE_DATA",
-            fileId: existing.id,
-            data,
-          });
+          contentCacheRef.current.set(existing.id, data);
           if (!firstNewId) firstNewId = existing.id;
         }
 
-        // Create new files
         for (const entry of newEntries) {
           const data = textEncoder.encode(entry.content);
           const file = await createFile(projectName, entry.fullPath, data);
           dispatch({
             type: "ADD_FILE",
-            file: { id: file.id, name: entry.fullPath, data },
+            file: { id: file.id, name: entry.fullPath },
           });
+          contentCacheRef.current.set(file.id, data);
           if (!firstNewId) firstNewId = file.id;
         }
 
@@ -551,20 +570,31 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     moveFile: handleMoveFile,
     uploadFiles: handleUploadFiles,
     reload,
+    loadFileContent,
+    loadAllContents,
+    contentCache: contentCacheRef,
     mergeVfsChanges: useCallback(
       (result: {
         addedFiles: WorkspaceFile[];
         modifiedFiles: { path: string; data: Uint8Array }[];
         deletedPaths: string[];
       }) => {
+        // Update content cache for modified files
+        for (const mod of result.modifiedFiles) {
+          const file = files.find(f => f.name === mod.path);
+          if (file) {
+            contentCacheRef.current.set(file.id, mod.data);
+          }
+        }
+        // Cache content for added files — find data from addedFiles
+        // (addedFiles still carry data from syncVfsChanges)
         dispatch({
           type: "MERGE_VFS",
           added: result.addedFiles,
-          modified: result.modifiedFiles,
           deletedPaths: result.deletedPaths,
         });
       },
-      []
+      [files]
     ),
   };
 }

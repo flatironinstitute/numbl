@@ -23,7 +23,7 @@ import { execFileSync } from "child_process";
 import { homedir, tmpdir } from "os";
 import { join, resolve, dirname, basename } from "path";
 import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
-import { scanMFiles } from "./cli.js";
+import { scanMFiles } from "./cli-scan.js";
 
 function expandTilde(filepath: string): string {
   if (filepath.startsWith("~/")) {

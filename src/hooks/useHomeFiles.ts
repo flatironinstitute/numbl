@@ -1,6 +1,12 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { db } from "../db/schema";
-import { ensureHomeProject, getHomeFiles } from "../db/operations";
+import {
+  ensureHomeProject,
+  getHomeFiles,
+  getFileContent,
+  getHomeFileContents,
+  saveFileData,
+} from "../db/operations";
 import type { WorkspaceFile } from "./useProjectFiles";
 
 const HOME_PROJECT_NAME = "__home__";
@@ -8,6 +14,7 @@ const HOME_PREFIX = "~/";
 
 export function useHomeFiles() {
   const [homeFiles, setHomeFiles] = useState<WorkspaceFile[]>([]);
+  const contentCacheRef = useRef(new Map<string, Uint8Array>());
 
   const loadHomeFiles = useCallback(async () => {
     const files = await getHomeFiles();
@@ -15,7 +22,6 @@ export function useHomeFiles() {
       files.map(f => ({
         id: f.id,
         name: HOME_PREFIX + f.path,
-        data: f.data,
       }))
     );
   }, []);
@@ -26,12 +32,55 @@ export function useHomeFiles() {
     loadHomeFiles();
   }, [loadHomeFiles]);
 
+  const loadFileContent = useCallback(
+    async (fileId: string): Promise<Uint8Array> => {
+      const cached = contentCacheRef.current.get(fileId);
+      if (cached !== undefined) return cached;
+      const data = await getFileContent(fileId);
+      contentCacheRef.current.set(fileId, data);
+      return data;
+    },
+    []
+  );
+
+  /** Load all home file contents from DB. Used before code execution. */
+  const loadAllHomeContents = useCallback(async (): Promise<
+    Map<string, Uint8Array>
+  > => {
+    const map = await getHomeFileContents();
+    for (const [id, data] of map) {
+      contentCacheRef.current.set(id, data);
+    }
+    return map;
+  }, []);
+
+  /** Build VFS files for workers. Loads all content from DB. */
+  const getHomeVfsFiles = useCallback(async (): Promise<
+    { path: string; content: Uint8Array }[]
+  > => {
+    const contentsMap = await loadAllHomeContents();
+    return homeFiles.map(f => ({
+      path: "/home/" + f.name.slice(HOME_PREFIX.length),
+      content: contentsMap.get(f.id) ?? new Uint8Array(0),
+    }));
+  }, [homeFiles, loadAllHomeContents]);
+
+  /** Build workspace files (text) for workers. Loads all content from DB. */
+  const getHomeWorkspaceFiles = useCallback(async (): Promise<
+    { name: string; source: string }[]
+  > => {
+    const decoder = new TextDecoder("utf-8");
+    const contentsMap = await loadAllHomeContents();
+    return homeFiles.map(f => ({
+      name: f.name,
+      source: decoder.decode(contentsMap.get(f.id) ?? new Uint8Array(0)),
+    }));
+  }, [homeFiles, loadAllHomeContents]);
+
   const updateFileContent = useCallback(
     async (fileId: string, data: Uint8Array) => {
-      await db.files.update(fileId, { data, updatedAt: Date.now() });
-      setHomeFiles(prev =>
-        prev.map(f => (f.id === fileId ? { ...f, data } : f))
-      );
+      contentCacheRef.current.set(fileId, data);
+      await saveFileData(fileId, data);
     },
     []
   );
@@ -39,7 +88,6 @@ export function useHomeFiles() {
   const addFile = useCallback(
     async (folderPath?: string): Promise<string> => {
       await ensureHomeProject();
-      // Strip ~/ prefix if present
       const homeFolder = folderPath?.startsWith(HOME_PREFIX)
         ? folderPath.slice(HOME_PREFIX.length)
         : folderPath;
@@ -50,16 +98,19 @@ export function useHomeFiles() {
       const id = crypto.randomUUID();
       const data = new Uint8Array(0);
 
-      await db.files.add({
-        id,
-        projectName: HOME_PROJECT_NAME,
-        path: name,
-        data,
-        createdAt: now,
-        updatedAt: now,
+      await db.transaction("rw", db.files, db.fileContents, async () => {
+        await db.files.add({
+          id,
+          projectName: HOME_PROJECT_NAME,
+          path: name,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.fileContents.add({ id, data });
       });
 
-      setHomeFiles(prev => [...prev, { id, name: HOME_PREFIX + name, data }]);
+      contentCacheRef.current.set(id, data);
+      setHomeFiles(prev => [...prev, { id, name: HOME_PREFIX + name }]);
       return id;
     },
     [homeFiles]
@@ -80,33 +131,47 @@ export function useHomeFiles() {
       const id = crypto.randomUUID();
       const data = new Uint8Array(0);
 
-      await db.files.add({
-        id,
-        projectName: HOME_PROJECT_NAME,
-        path: name,
-        data,
-        createdAt: now,
-        updatedAt: now,
+      await db.transaction("rw", db.files, db.fileContents, async () => {
+        await db.files.add({
+          id,
+          projectName: HOME_PROJECT_NAME,
+          path: name,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.fileContents.add({ id, data });
       });
 
-      setHomeFiles(prev => [...prev, { id, name: HOME_PREFIX + name, data }]);
+      contentCacheRef.current.set(id, data);
+      setHomeFiles(prev => [...prev, { id, name: HOME_PREFIX + name }]);
       return HOME_PREFIX + fullPath;
     },
     [homeFiles]
   );
 
   const deleteFile = useCallback(async (fileId: string) => {
-    await db.files.delete(fileId);
+    await db.transaction("rw", db.files, db.fileContents, async () => {
+      await db.files.delete(fileId);
+      await db.fileContents.delete(fileId);
+    });
+    contentCacheRef.current.delete(fileId);
     setHomeFiles(prev => prev.filter(f => f.id !== fileId));
   }, []);
 
   const deleteFolder = useCallback(
     async (folderPath: string) => {
-      // folderPath includes ~/ prefix
       const filesToDelete = homeFiles.filter(f =>
         f.name.startsWith(folderPath + "/")
       );
-      await Promise.all(filesToDelete.map(f => db.files.delete(f.id)));
+      await db.transaction("rw", db.files, db.fileContents, async () => {
+        for (const f of filesToDelete) {
+          await db.files.delete(f.id);
+          await db.fileContents.delete(f.id);
+        }
+      });
+      for (const f of filesToDelete) {
+        contentCacheRef.current.delete(f.id);
+      }
       setHomeFiles(prev =>
         prev.filter(f => !f.name.startsWith(folderPath + "/"))
       );
@@ -115,7 +180,6 @@ export function useHomeFiles() {
   );
 
   const renameFile = useCallback(async (fileId: string, newName: string) => {
-    // newName includes ~/ prefix
     const homePath = newName.startsWith(HOME_PREFIX)
       ? newName.slice(HOME_PREFIX.length)
       : newName;
@@ -127,7 +191,6 @@ export function useHomeFiles() {
 
   const renameFolder = useCallback(
     async (oldPath: string, newName: string) => {
-      // oldPath includes ~/ prefix
       const parts = oldPath.split("/");
       parts[parts.length - 1] = newName;
       const newPath = parts.join("/");
@@ -178,19 +241,8 @@ export function useHomeFiles() {
     [homeFiles]
   );
 
-  /** VFS-format files for sending to workers (with /home/ prefix paths). */
-  const homeVfsFiles = useMemo(
-    () =>
-      homeFiles.map(f => ({
-        path: "/home/" + f.name.slice(HOME_PREFIX.length),
-        content: f.data,
-      })),
-    [homeFiles]
-  );
-
   return {
     homeFiles,
-    homeVfsFiles,
     reloadHomeFiles: loadHomeFiles,
     updateHomeFileContent: updateFileContent,
     addHomeFile: addFile,
@@ -200,6 +252,11 @@ export function useHomeFiles() {
     renameHomeFile: renameFile,
     renameHomeFolder: renameFolder,
     moveHomeFile: moveFile,
+    loadHomeFileContent: loadFileContent,
+    loadAllHomeContents,
+    getHomeVfsFiles,
+    getHomeWorkspaceFiles,
+    homeContentCache: contentCacheRef,
   };
 }
 

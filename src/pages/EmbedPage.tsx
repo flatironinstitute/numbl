@@ -26,7 +26,6 @@ import {
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { useHomeFiles } from "../hooks/useHomeFiles.js";
 import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
-import { fileText } from "../hooks/useProjectFiles.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
@@ -63,7 +62,8 @@ function getQueryParams(): {
 
 export function EmbedPage() {
   const { script: initialScript, optimization } = getQueryParams();
-  const { homeFiles, homeVfsFiles, reloadHomeFiles } = useHomeFiles();
+  const { reloadHomeFiles, getHomeVfsFiles, getHomeWorkspaceFiles } =
+    useHomeFiles();
   useMipCorePackage(reloadHomeFiles);
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
@@ -153,6 +153,11 @@ export function EmbedPage() {
     setOutput("");
     figuresDispatch({ type: "clear" });
 
+    const [wsFiles, vfsFiles] = await Promise.all([
+      getHomeWorkspaceFiles(),
+      getHomeVfsFiles(),
+    ]);
+
     workerRef.current.postMessage({
       type: "run",
       code,
@@ -161,15 +166,12 @@ export function EmbedPage() {
         maxIterations: 10000000,
         optimization,
       },
-      workspaceFiles: homeFiles.map(f => ({
-        name: f.name,
-        source: fileText(f),
-      })),
-      vfsFiles: homeVfsFiles,
+      workspaceFiles: wsFiles,
+      vfsFiles,
       mainFileName: "script.m",
       inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, optimization, homeFiles, homeVfsFiles]);
+  }, [code, optimization, getHomeWorkspaceFiles, getHomeVfsFiles]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

@@ -22,26 +22,44 @@ export function useMipCorePackage(onInstalled: () => void): void {
 
         await ensureHomeProject();
 
-        // Delete existing mip package files
-        const existing = await db.files
-          .where("projectName")
-          .equals(HOME_PROJECT_NAME)
-          .filter(f => f.path.startsWith(MIP_HOME_PREFIX))
-          .toArray();
-        await db.files.bulkDelete(existing.map(f => f.id));
-
-        // Write new files — strip /home/ prefix for IndexedDB storage
+        // Upsert mip files using deterministic IDs
         const now = Date.now();
-        await db.files.bulkAdd(
-          vfsFiles.map(f => ({
-            id: crypto.randomUUID(),
-            projectName: HOME_PROJECT_NAME,
-            path: f.path.replace(/^\/home\//, ""),
+        await db.transaction("rw", db.files, db.fileContents, async () => {
+          const metaRecords = vfsFiles.map(f => {
+            const path = f.path.replace(/^\/home\//, "");
+            return {
+              id: "mip:" + path,
+              projectName: HOME_PROJECT_NAME,
+              path,
+              createdAt: now,
+              updatedAt: now,
+            };
+          });
+          const contentRecords = vfsFiles.map(f => ({
+            id: "mip:" + f.path.replace(/^\/home\//, ""),
             data: f.content,
-            createdAt: now,
-            updatedAt: now,
-          }))
+          }));
+          await db.files.bulkPut(metaRecords);
+          await db.fileContents.bulkPut(contentRecords);
+        });
+
+        // Clean up stale mip files with old UUID keys
+        const existingKeys = await db.files
+          .where("[projectName+path]")
+          .between(
+            [HOME_PROJECT_NAME, MIP_HOME_PREFIX],
+            [HOME_PROJECT_NAME, MIP_HOME_PREFIX + "\uffff"]
+          )
+          .primaryKeys();
+        const staleKeys = existingKeys.filter(
+          k => typeof k === "string" && !k.startsWith("mip:")
         );
+        if (staleKeys.length > 0) {
+          await db.transaction("rw", db.files, db.fileContents, async () => {
+            await db.fileContents.bulkDelete(staleKeys);
+            await db.files.bulkDelete(staleKeys);
+          });
+        }
 
         if (!cancelled) {
           onInstalled();
