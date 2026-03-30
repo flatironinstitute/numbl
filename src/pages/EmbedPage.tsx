@@ -24,7 +24,9 @@ import {
   createNumblTokensProvider,
 } from "../numblLanguage.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
-import { useMipVfsFiles } from "../hooks/useMipVfsFiles.js";
+import { useHomeFiles } from "../hooks/useHomeFiles.js";
+import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
+import { fileText } from "../hooks/useProjectFiles.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
@@ -61,7 +63,8 @@ function getQueryParams(): {
 
 export function EmbedPage() {
   const { script: initialScript, optimization } = getQueryParams();
-  const mipFiles = useMipVfsFiles();
+  const { homeFiles, homeVfsFiles, reloadHomeFiles } = useHomeFiles();
+  useMipCorePackage(reloadHomeFiles);
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -158,12 +161,15 @@ export function EmbedPage() {
         maxIterations: 10000000,
         optimization,
       },
-      workspaceFiles: mipFiles.workspaceFiles,
-      vfsFiles: mipFiles.vfsFiles,
+      workspaceFiles: homeFiles.map(f => ({
+        name: f.name,
+        source: fileText(f),
+      })),
+      vfsFiles: homeVfsFiles,
       mainFileName: "script.m",
       inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, optimization, mipFiles]);
+  }, [code, optimization, homeFiles, homeVfsFiles]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

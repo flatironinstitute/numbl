@@ -15,7 +15,11 @@ import {
 } from "../graphics/figuresReducer.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
-import { useMipVfsFiles } from "../hooks/useMipVfsFiles.js";
+import { useHomeFiles } from "../hooks/useHomeFiles.js";
+import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
+import { fileText } from "../hooks/useProjectFiles.js";
+import { syncHomeVfsChanges } from "../vfs/syncVfsChanges.js";
+import type { VfsChanges } from "../vfs/VirtualFileSystem.js";
 
 interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
@@ -30,7 +34,9 @@ function useOptimizationParam(): number {
 
 export function EmbedReplPage() {
   const optimization = useOptimizationParam();
-  const mipFiles = useMipVfsFiles();
+  const { homeFiles, homeVfsFiles, reloadHomeFiles } = useHomeFiles();
+  useMipCorePackage(reloadHomeFiles);
+
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -55,6 +61,18 @@ export function EmbedReplPage() {
 
   const hasFigures = currentFig !== null;
 
+  /** Sync home VFS changes to IndexedDB, then reload home files. */
+  const handleVfsChanges = useCallback(
+    async (changes: VfsChanges | undefined) => {
+      if (!changes) return;
+      const changed = await syncHomeVfsChanges(changes);
+      if (changed) {
+        reloadHomeFiles();
+      }
+    },
+    [reloadHomeFiles]
+  );
+
   // Initialize REPL worker
   useEffect(() => {
     const worker = new Worker(
@@ -64,10 +82,12 @@ export function EmbedReplPage() {
     replWorkerRef.current = worker;
 
     if (inputSAB.current) {
-      worker.postMessage({ type: "set_input_sab", inputSAB: inputSAB.current });
+      worker.postMessage({
+        type: "set_input_sab",
+        inputSAB: inputSAB.current,
+      });
     }
 
-    // Send optimization level to worker
     worker.postMessage({
       type: "set_optimization",
       optimization,
@@ -109,6 +129,7 @@ export function EmbedReplPage() {
           } else if (msg.error && term?.writeOutput) {
             term.writeOutput(msg.error, true);
           }
+          handleVfsChanges(msg.vfsChanges);
           if (term?.writePrompt) {
             term.writePrompt();
           }
@@ -131,18 +152,21 @@ export function EmbedReplPage() {
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction, optimization]);
+  }, [handlePlotInstruction, handleVfsChanges, optimization]);
 
-  // Send mip files to worker when they become available
+  // Update workspace in REPL worker when home files change
   useEffect(() => {
-    if (mipFiles.vfsFiles.length > 0 && replWorkerRef.current) {
+    if (replWorkerRef.current && homeFiles.length > 0) {
       replWorkerRef.current.postMessage({
         type: "update_workspace",
-        workspaceFiles: mipFiles.workspaceFiles,
-        vfsFiles: mipFiles.vfsFiles,
+        workspaceFiles: homeFiles.map(f => ({
+          name: f.name,
+          source: fileText(f),
+        })),
+        vfsFiles: homeVfsFiles,
       });
     }
-  }, [mipFiles]);
+  }, [homeFiles, homeVfsFiles]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {

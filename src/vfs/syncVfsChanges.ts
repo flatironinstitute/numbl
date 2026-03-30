@@ -132,6 +132,30 @@ export interface VfsSyncAllResult {
   homeResult: VfsSyncResult | null;
 }
 
+/**
+ * Sync only the /home/ portion of VFS changes to the __home__ project in IndexedDB.
+ * Returns true if any home files were changed.
+ */
+export async function syncHomeVfsChanges(
+  changes: VfsChanges
+): Promise<boolean> {
+  const { homeChanges } = splitChanges(changes);
+  if (
+    homeChanges.created.length === 0 &&
+    homeChanges.modified.length === 0 &&
+    homeChanges.deleted.length === 0
+  ) {
+    return false;
+  }
+  await ensureHomeProject();
+  const result = await syncChangesToDb(
+    HOME_PROJECT_NAME,
+    homeChanges,
+    toHomePath
+  );
+  return result !== null;
+}
+
 export async function syncVfsChangesToProject(
   projectName: string,
   changes: VfsChanges
