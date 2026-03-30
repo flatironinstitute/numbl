@@ -61,7 +61,7 @@ function getQueryParams(): {
 
 export function EmbedPage() {
   const { script: initialScript, optimization } = getQueryParams();
-  const mipVfsFiles = useMipVfsFiles();
+  const mipFiles = useMipVfsFiles();
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -158,12 +158,12 @@ export function EmbedPage() {
         maxIterations: 10000000,
         optimization,
       },
-      workspaceFiles: [],
-      vfsFiles: mipVfsFiles,
+      workspaceFiles: mipFiles.workspaceFiles,
+      vfsFiles: mipFiles.vfsFiles,
       mainFileName: "script.m",
       inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, optimization, mipVfsFiles]);
+  }, [code, optimization, mipFiles]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

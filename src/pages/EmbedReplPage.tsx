@@ -30,7 +30,7 @@ function useOptimizationParam(): number {
 
 export function EmbedReplPage() {
   const optimization = useOptimizationParam();
-  const mipVfsFiles = useMipVfsFiles();
+  const mipFiles = useMipVfsFiles();
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -133,16 +133,16 @@ export function EmbedReplPage() {
     };
   }, [handlePlotInstruction, optimization]);
 
-  // Send mip VFS files to worker when they become available
+  // Send mip files to worker when they become available
   useEffect(() => {
-    if (mipVfsFiles.length > 0 && replWorkerRef.current) {
+    if (mipFiles.vfsFiles.length > 0 && replWorkerRef.current) {
       replWorkerRef.current.postMessage({
         type: "update_workspace",
-        workspaceFiles: [],
-        vfsFiles: mipVfsFiles,
+        workspaceFiles: mipFiles.workspaceFiles,
+        vfsFiles: mipFiles.vfsFiles,
       });
     }
-  }, [mipVfsFiles]);
+  }, [mipFiles]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {
