@@ -1,5 +1,12 @@
 import { createInterface } from "readline";
-import { readFileSync, readSync, writeFileSync, appendFileSync } from "fs";
+import {
+  openSync,
+  closeSync,
+  readFileSync,
+  readSync,
+  writeFileSync,
+  appendFileSync,
+} from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
@@ -73,17 +80,24 @@ export async function runRepl(
 
   const onInput = (prompt: string): string => {
     process.stdout.write(prompt);
-    const buf = Buffer.alloc(1);
-    let line = "";
-    while (true) {
-      const bytesRead = readSync(0, buf, 0, 1, null);
-      if (bytesRead === 0) break;
-      const ch = buf.toString("utf8");
-      if (ch === "\n") break;
-      if (ch === "\r") continue;
-      line += ch;
+    // Open /dev/tty for a fresh blocking fd — Node sets fd 0 to non-blocking
+    // mode internally, so readSync(0, ...) fails with EAGAIN in TTY mode.
+    const ttyFd = openSync("/dev/tty", "r");
+    try {
+      const buf = Buffer.alloc(1);
+      let line = "";
+      while (true) {
+        const bytesRead = readSync(ttyFd, buf, 0, 1, null);
+        if (bytesRead === 0) break;
+        const ch = buf.toString("utf8");
+        if (ch === "\n") break;
+        if (ch === "\r") continue;
+        line += ch;
+      }
+      return line;
+    } finally {
+      closeSync(ttyFd);
     }
-    return line;
   };
 
   console.log(
@@ -238,6 +252,7 @@ export async function runRepl(
 
     busy = true;
     stdin.setRawMode(false); // normal mode so \n → \r\n in output
+    stdin.pause(); // stop stream so readSync works for input()
     try {
       const result = executeCode(
         code,
@@ -272,6 +287,7 @@ export async function runRepl(
       const diags = diagnoseErrors(error, code, "repl", workspaceFiles);
       console.error(formatDiagnostics(diags));
     }
+    stdin.resume(); // resume stream for REPL input
     stdin.setRawMode(true); // back to raw mode
     busy = false;
     resetInput();
