@@ -398,6 +398,22 @@ registerIBuiltin({
   }),
 });
 
+// isnumbl — returns true (detect numbl runtime)
+registerIBuiltin({
+  name: "isnumbl",
+  resolve: argTypes => {
+    if (argTypes.length !== 0) return null;
+    return {
+      outputTypes: [{ kind: "boolean" }],
+      apply: () => true,
+    };
+  },
+  jitEmit: (_args, types) => {
+    if (types.length !== 0) return null;
+    return "1";
+  },
+});
+
 // ishold — returns false
 registerIBuiltin({
   name: "ishold",
