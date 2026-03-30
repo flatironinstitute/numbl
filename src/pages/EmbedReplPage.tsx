@@ -15,6 +15,7 @@ import {
 } from "../graphics/figuresReducer.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
+import { useMipVfsFiles } from "../hooks/useMipVfsFiles.js";
 
 interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
@@ -29,6 +30,7 @@ function useOptimizationParam(): number {
 
 export function EmbedReplPage() {
   const optimization = useOptimizationParam();
+  const mipVfsFiles = useMipVfsFiles();
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -130,6 +132,17 @@ export function EmbedReplPage() {
       worker.terminate();
     };
   }, [handlePlotInstruction, optimization]);
+
+  // Send mip VFS files to worker when they become available
+  useEffect(() => {
+    if (mipVfsFiles.length > 0 && replWorkerRef.current) {
+      replWorkerRef.current.postMessage({
+        type: "update_workspace",
+        workspaceFiles: [],
+        vfsFiles: mipVfsFiles,
+      });
+    }
+  }, [mipVfsFiles]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {

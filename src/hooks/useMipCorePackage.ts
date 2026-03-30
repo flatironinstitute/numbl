@@ -1,22 +1,10 @@
 import { useEffect } from "react";
 import { db } from "../db/schema.js";
 import { ensureHomeProject } from "../db/operations.js";
-import { unzipToFiles } from "../vfs/unzipToFiles.js";
+import { fetchMipCoreFiles } from "./fetchMipCoreFiles.js";
 
-const MHL_URL =
-  "https://github.com/mip-org/mip-core/releases/download/mip-main/mip-main-any.mhl";
 const MIP_HOME_PREFIX = ".mip/packages/mip-org/core/mip/";
 const HOME_PROJECT_NAME = "__home__";
-
-function proxiedUrl(url: string): string {
-  if (/^https:\/\/github\.com\/.+\/releases\/download\/.+/.test(url)) {
-    return url.replace(
-      "https://github.com/",
-      "https://mip-cors-proxy.figurl.workers.dev/gh/"
-    );
-  }
-  return url;
-}
 
 /**
  * On mount, fetches the mip core package, unzips it, and writes the files into
@@ -29,10 +17,7 @@ export function useMipCorePackage(onInstalled: () => void): void {
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch(proxiedUrl(MHL_URL));
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const buf = await resp.arrayBuffer();
-        const extracted = unzipToFiles(new Uint8Array(buf));
+        const vfsFiles = await fetchMipCoreFiles();
         if (cancelled) return;
 
         await ensureHomeProject();
@@ -45,13 +30,13 @@ export function useMipCorePackage(onInstalled: () => void): void {
           .toArray();
         await db.files.bulkDelete(existing.map(f => f.id));
 
-        // Write new files
+        // Write new files — strip /home/ prefix for IndexedDB storage
         const now = Date.now();
         await db.files.bulkAdd(
-          extracted.map(f => ({
+          vfsFiles.map(f => ({
             id: crypto.randomUUID(),
             projectName: HOME_PROJECT_NAME,
-            path: MIP_HOME_PREFIX + f.path,
+            path: f.path.replace(/^\/home\//, ""),
             data: f.content,
             createdAt: now,
             updatedAt: now,

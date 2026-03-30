@@ -24,6 +24,7 @@ import {
   createNumblTokensProvider,
 } from "../numblLanguage.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
+import { useMipVfsFiles } from "../hooks/useMipVfsFiles.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
@@ -60,6 +61,7 @@ function getQueryParams(): {
 
 export function EmbedPage() {
   const { script: initialScript, optimization } = getQueryParams();
+  const mipVfsFiles = useMipVfsFiles();
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
@@ -157,10 +159,11 @@ export function EmbedPage() {
         optimization,
       },
       workspaceFiles: [],
+      vfsFiles: mipVfsFiles,
       mainFileName: "script.m",
       inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, optimization]);
+  }, [code, optimization, mipVfsFiles]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {
