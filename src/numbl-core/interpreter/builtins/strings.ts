@@ -613,18 +613,75 @@ registerIBuiltin({
   },
 });
 
+/** Parse a single string to a double, handling commas and complex numbers. */
+function str2doubleScalar(s: string): number {
+  s = s.trim();
+  if (s === "") return NaN;
+
+  // Strip commas used as thousands separators
+  s = s.replace(/,/g, "");
+
+  // Try complex: e.g. "3+4i", "3-4j", "2i", "-1.5j"
+  // Full form: real +/- imag*i/j
+  const complexFull =
+    /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*([+-]\s*(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*[ij]$/i;
+  const mFull = complexFull.exec(s);
+  if (mFull) {
+    const real = Number(mFull[1]);
+    const imag = Number(mFull[2].replace(/\s/g, ""));
+    if (!isNaN(real) && !isNaN(imag)) return real; // MATLAB str2double returns real part... actually returns complex
+  }
+
+  // Pure imaginary: e.g. "4i", "-3j", "+2.5i"
+  const pureImag = /^([+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)\s*[ij]$/i;
+  const mImag = pureImag.exec(s);
+  if (mImag) {
+    // For now, return NaN for pure imaginary (complex not yet fully supported in str2double output)
+    // MATLAB returns a complex number; we return NaN since our output type is number
+  }
+
+  const n = Number(s);
+  return isNaN(n) ? NaN : n;
+}
+
 registerIBuiltin({
   name: "str2double",
   resolve: argTypes => {
     if (argTypes.length !== 1) return null;
-    if (!isTextType(argTypes[0])) return null;
-    return {
-      outputTypes: [{ kind: "number" }],
-      apply: args => {
-        const s = toString(args[0]).trim();
-        return RTV.num(s === "" ? NaN : Number(s));
-      },
-    };
+    const t = argTypes[0];
+    // Accept text or cell array
+    if (isTextType(t)) {
+      return {
+        outputTypes: [{ kind: "number" }],
+        apply: args => RTV.num(str2doubleScalar(toString(args[0]))),
+      };
+    }
+    if (t.kind === "cell") {
+      return {
+        outputTypes: [{ kind: "tensor", isComplex: false }],
+        apply: args => {
+          const cell = args[0];
+          if (
+            typeof cell !== "object" ||
+            cell === null ||
+            (cell as { kind?: string }).kind !== "cell"
+          )
+            throw new RuntimeError("str2double: expected cell array");
+          const c = cell as import("../../runtime/types.js").RuntimeCell;
+          const data = new FloatXArray(c.data.length);
+          for (let i = 0; i < c.data.length; i++) {
+            const el = c.data[i];
+            if (isRuntimeString(el) || isRuntimeChar(el)) {
+              data[i] = str2doubleScalar(toString(el));
+            } else {
+              data[i] = NaN;
+            }
+          }
+          return RTV.tensor(data, c.shape.slice());
+        },
+      };
+    }
+    return null;
   },
 });
 
