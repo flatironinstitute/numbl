@@ -374,6 +374,11 @@ export function ProjectListPage() {
         >
           {[
             {
+              label: "REPL",
+              icon: <TerminalIcon sx={{ fontSize: 14 }} />,
+              onClick: () => navigate("/embed-repl"),
+            },
+            {
               label: "Learn more",
               icon: <InfoOutlinedIcon sx={{ fontSize: 14 }} />,
               onClick: () => setAboutOpen(true),
