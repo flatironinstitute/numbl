@@ -298,6 +298,8 @@ export function executeCode(
       // Scan and parse new files
       if (fileIO?.scanDirectory) {
         const newFiles = fileIO.scanDirectory(absDir);
+        const newJsFiles: WorkspaceFile[] = [];
+        const newWasmFiles: WorkspaceFile[] = [];
         for (const f of newFiles) {
           if (f.name.endsWith(".m") && !ctx.fileASTCache.has(f.name)) {
             try {
@@ -310,6 +312,26 @@ export function executeCode(
             }
             interpreter.fileSources.set(f.name, f.source);
             mWorkspaceFiles.push(f);
+          } else if (f.name.endsWith(".js")) {
+            newJsFiles.push(f);
+          } else if (f.name.endsWith(".wasm")) {
+            newWasmFiles.push(f);
+          }
+        }
+        // Load any new .js/.wasm user functions
+        if (newJsFiles.length > 0) {
+          const newIBuiltins = loadJsUserFunctions(
+            newJsFiles,
+            newWasmFiles,
+            nativeBridge
+          );
+          for (const ib of newIBuiltins) {
+            const orig = getIBuiltin(ib.name);
+            if (orig) savedIBuiltins.set(ib.name, orig);
+            registerDynamicIBuiltin(ib);
+            if (!jsUserFunctionNames.includes(ib.name)) {
+              jsUserFunctionNames.push(ib.name);
+            }
           }
         }
       }
