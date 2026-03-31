@@ -200,10 +200,18 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
       ) {
         try {
           const content = this.vfs.readFile(filePath);
-          results.push({
-            name: relativePath,
-            source: TEXT_DECODER.decode(content),
-          });
+          if (relativePath.endsWith(".wasm")) {
+            results.push({
+              name: relativePath,
+              source: "",
+              data: new Uint8Array(content),
+            });
+          } else {
+            results.push({
+              name: relativePath,
+              source: TEXT_DECODER.decode(content),
+            });
+          }
         } catch {
           // skip unreadable files
         }
