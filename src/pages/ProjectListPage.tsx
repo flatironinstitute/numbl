@@ -39,9 +39,10 @@ import {
 } from "../db/operations";
 import { validateProjectName } from "../utils/validation";
 import type { Project } from "../db/schema";
-import { getAllBuiltinNames } from "../numbl-core/helpers/registry.js";
+import { getAllIBuiltinNames } from "../numbl-core/interpreter/builtins/index.js";
 import { getAllConstantNames } from "../numbl-core/helpers/constants.js";
 import { getDummyBuiltinNames } from "../numbl-core/helpers/dummy.js";
+import { SPECIAL_BUILTIN_NAMES } from "../numbl-core/runtime/specialBuiltinNames.js";
 
 interface ProjectWithMetadata extends Project {
   fileCount: number;
@@ -65,21 +66,6 @@ function formatDate(timestamp: number): string {
   return date.toLocaleDateString();
 }
 
-const SPECIAL_BUILTINS = [
-  "disp",
-  "fprintf",
-  "arrayfun",
-  "cellfun",
-  "structfun",
-  "feval",
-  "bsxfun",
-  "subsref",
-  "subsasgn",
-  "builtin",
-  "drawnow",
-  "pause",
-];
-
 const CAPABILITIES: { label: string; items: string[] }[] = [
   {
     label: "Language",
@@ -87,17 +73,19 @@ const CAPABILITIES: { label: string; items: string[] }[] = [
       "classes & inheritance",
       "abstract classes",
       "handle classes",
+      "enumerations",
       "namespaces & packages",
       "nested functions",
-      "anonymous functions",
-      "closures",
+      "anonymous functions & closures",
       "function handles",
-      "try / catch",
+      "global & persistent variables",
+      "try / catch / error / warning",
       "switch / case",
       "for / while loops",
       "varargin / varargout",
       "argument validation",
       "import statements",
+      "regular expressions",
     ],
   },
   {
@@ -108,8 +96,9 @@ const CAPABILITIES: { label: string; items: string[] }[] = [
       "logical arrays",
       "cell arrays",
       "structs & struct arrays",
-      "char arrays",
-      "strings",
+      "sparse matrices",
+      "dictionaries",
+      "char arrays & strings",
       "function handles",
     ],
   },
@@ -120,21 +109,53 @@ const CAPABILITIES: { label: string; items: string[] }[] = [
       "element-wise (.* ./ .^)",
       "comparison (== ~= < > <= >=)",
       "logical (&& || & | ~)",
+      "bitwise (bitand, bitor, bitxor, bitshift)",
       "transpose (' .')",
       "colon ranges (a:b, a:s:b)",
       "concatenation ([ ; ])",
     ],
   },
   {
-    label: "Other features",
+    label: "Numerics",
     items: [
-      "2-D plotting",
-      "linear algebra (SVD, QR, LU, Cholesky, eigenvalues)",
+      "linear algebra (SVD, QR, QZ, LU, Cholesky, eig)",
       "FFT / IFFT",
+      "interpolation (interp1)",
+      "polynomials (polyfit, polyval, roots, conv)",
+      "statistics (mean, std, var, cov, corrcoef)",
+      "set operations (union, intersect, setdiff, unique)",
+      "special functions (Bessel, Airy, erf, gamma, beta)",
+      "random number generation (rand, randn, randi, rng)",
+      "numerical integration (trapz, cumtrapz)",
+    ],
+  },
+  {
+    label: "Plotting",
+    items: [
+      "2-D (plot, scatter, imagesc)",
+      "3-D (plot3, surf, mesh, waterfall)",
+      "contour & contourf",
+      "colormaps, colorbar, legend, subplot",
+    ],
+  },
+  {
+    label: "I/O & system",
+    items: [
+      "file I/O (fopen, fread, fwrite, fileread)",
+      "JSON (jsondecode)",
+      "web (webread, websave)",
+      "path & directory operations",
+      "environment variables",
+      "sprintf / sscanf",
+    ],
+  },
+  {
+    label: "Engine",
+    items: [
+      "JIT compilation to JavaScript",
+      "type inference & specialization",
       "copy-on-write arrays",
       "column-major storage",
-      "type inference",
-      "compile to JavaScript",
     ],
   },
 ];
@@ -205,10 +226,10 @@ export function ProjectListPage() {
 
   const builtinNames = useMemo(() => {
     const dummyNames = new Set(getDummyBuiltinNames());
-    const registryNames = getAllBuiltinNames().filter(
+    const iBuiltinNames = getAllIBuiltinNames().filter(
       n => !dummyNames.has(n) && !n.startsWith("__")
     );
-    const allNames = new Set([...registryNames, ...SPECIAL_BUILTINS]);
+    const allNames = new Set([...iBuiltinNames, ...SPECIAL_BUILTIN_NAMES]);
     return Array.from(allNames).sort((a, b) =>
       a.toLowerCase().localeCompare(b.toLowerCase())
     );
