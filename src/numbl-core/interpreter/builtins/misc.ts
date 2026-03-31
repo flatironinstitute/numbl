@@ -378,7 +378,6 @@ for (const name of [
   "sgtitle",
   "zlabel",
   "colorbar",
-  "addpath",
 ]) {
   registerIBuiltin({
     name,
