@@ -310,6 +310,7 @@ export function ProjectListPage() {
         mx: "auto",
         px: 3,
         py: 5,
+        minHeight: "100vh",
       }}
     >
       {/* Hero */}
@@ -318,18 +319,24 @@ export function ProjectListPage() {
           variant="h3"
           component="h1"
           sx={{
-            fontWeight: 700,
-            letterSpacing: "-0.02em",
-            mb: 0.5,
-            background: "linear-gradient(135deg, #1976d2 0%, #9c27b0 100%)",
+            fontWeight: 800,
+            letterSpacing: "-0.03em",
+            mb: 0.75,
+            background:
+              "linear-gradient(135deg, #2563eb 0%, #7c3aed 50%, #db2777 100%)",
             backgroundClip: "text",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
+            fontSize: { xs: "2.5rem", sm: "3rem" },
           }}
         >
           numbl
         </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+        <Typography
+          variant="body1"
+          color="text.secondary"
+          sx={{ mb: 2.5, fontSize: "1.05rem", lineHeight: 1.5 }}
+        >
           A numerical computing environment for the browser and command line
         </Typography>
 
@@ -339,95 +346,97 @@ export function ProjectListPage() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: 2,
+            gap: 1,
             mb: 1,
             flexWrap: "wrap",
           }}
         >
-          <Box
-            onClick={() => setAboutOpen(true)}
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 0.5,
-              cursor: "pointer",
-              color: "text.secondary",
-              "&:hover": { color: "primary.main" },
-              transition: "color 0.15s",
-            }}
-          >
-            <InfoOutlinedIcon sx={{ fontSize: 14 }} />
-            <Typography variant="caption">Learn more</Typography>
-          </Box>
-          <Typography variant="caption" color="text.disabled">
-            |
-          </Typography>
-          <Box
-            component="a"
-            href="https://github.com/flatironinstitute/numbl"
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 0.5,
-              color: "text.secondary",
-              textDecoration: "none",
-              "&:hover": { color: "text.primary" },
-              transition: "color 0.15s",
-            }}
-          >
-            <GitHubIcon sx={{ fontSize: 14 }} />
-            <Typography variant="caption">GitHub</Typography>
-          </Box>
-          <Typography variant="caption" color="text.disabled">
-            |
-          </Typography>
-          <Box
-            component="a"
-            href="https://www.npmjs.com/package/numbl"
-            target="_blank"
-            rel="noopener noreferrer"
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 0.5,
-              color: "text.secondary",
-              textDecoration: "none",
-              "&:hover": { color: "text.primary" },
-              transition: "color 0.15s",
-            }}
-          >
-            <TerminalIcon sx={{ fontSize: 14 }} />
-            <Typography variant="caption">npm install -g numbl</Typography>
-          </Box>
-          <Typography variant="caption" color="text.disabled">
-            |
-          </Typography>
-          <Box
-            onClick={toggleBuiltins}
-            sx={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 0.5,
-              cursor: "pointer",
-              userSelect: "none",
-              color: "text.secondary",
-              "&:hover": { color: "text.primary" },
-              transition: "color 0.15s",
-            }}
-          >
-            <Typography variant="caption">
-              {builtinNames.length} built-in functions and more
-            </Typography>
-            <ExpandMoreIcon
+          {[
+            {
+              label: "Learn more",
+              icon: <InfoOutlinedIcon sx={{ fontSize: 14 }} />,
+              onClick: () => setAboutOpen(true),
+            },
+            {
+              label: "GitHub",
+              icon: <GitHubIcon sx={{ fontSize: 14 }} />,
+              href: "https://github.com/flatironinstitute/numbl",
+            },
+            {
+              label: "npm install -g numbl",
+              icon: <TerminalIcon sx={{ fontSize: 14 }} />,
+              href: "https://www.npmjs.com/package/numbl",
+              mono: true,
+            },
+          ].map((link, i) => (
+            <Box
+              key={i}
+              component={link.href ? "a" : "span"}
+              {...(link.href
+                ? {
+                    href: link.href,
+                    target: "_blank",
+                    rel: "noopener noreferrer",
+                  }
+                : { onClick: link.onClick })}
               sx={{
-                fontSize: 16,
-                transform: builtinsExpanded ? "rotate(180deg)" : "rotate(0deg)",
-                transition: "transform 0.2s",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 0.5,
+                cursor: "pointer",
+                color: "text.secondary",
+                textDecoration: "none",
+                px: 1.25,
+                py: 0.5,
+                borderRadius: 1,
+                border: "1px solid",
+                borderColor: "divider",
+                "&:hover": {
+                  color: "primary.main",
+                  borderColor: "primary.main",
+                  bgcolor: "action.hover",
+                },
+                transition: "all 0.15s",
               }}
-            />
-          </Box>
+            >
+              {link.icon}
+              <Typography
+                variant="caption"
+                sx={
+                  link.mono
+                    ? { fontFamily: "monospace", fontSize: "0.7rem" }
+                    : undefined
+                }
+              >
+                {link.label}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+        <Box
+          onClick={toggleBuiltins}
+          sx={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 0.5,
+            cursor: "pointer",
+            userSelect: "none",
+            color: "text.secondary",
+            "&:hover": { color: "text.primary" },
+            transition: "color 0.15s",
+            mt: 1,
+          }}
+        >
+          <Typography variant="caption">
+            {builtinNames.length} built-in functions and more
+          </Typography>
+          <ExpandMoreIcon
+            sx={{
+              fontSize: 16,
+              transform: builtinsExpanded ? "rotate(180deg)" : "rotate(0deg)",
+              transition: "transform 0.2s",
+            }}
+          />
         </Box>
         <Collapse in={builtinsExpanded}>
           <Box sx={{ mt: 2.5, textAlign: "left" }}>
@@ -467,7 +476,12 @@ export function ProjectListPage() {
           <Typography
             variant="subtitle2"
             color="text.secondary"
-            sx={{ textTransform: "uppercase", letterSpacing: "0.08em" }}
+            sx={{
+              textTransform: "uppercase",
+              letterSpacing: "0.1em",
+              fontSize: "0.7rem",
+              fontWeight: 600,
+            }}
           >
             Projects
           </Typography>
@@ -476,6 +490,13 @@ export function ProjectListPage() {
             size="small"
             startIcon={<AddIcon />}
             onClick={() => setCreateDialogOpen(true)}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              borderRadius: 1.5,
+              boxShadow: "none",
+              "&:hover": { boxShadow: "none" },
+            }}
           >
             New Project
           </Button>
@@ -489,26 +510,40 @@ export function ProjectListPage() {
           <Box
             sx={{
               textAlign: "center",
-              py: 6,
+              py: 7,
               px: 3,
-              border: "1px dashed",
+              border: "2px dashed",
               borderColor: "divider",
-              borderRadius: 2,
-              bgcolor: "action.hover",
+              borderRadius: 3,
+              bgcolor: "rgba(0,0,0,0.01)",
             }}
           >
-            <Typography variant="body1" sx={{ mb: 0.5 }}>
-              Get started
+            <Typography
+              variant="body1"
+              sx={{ mb: 0.5, fontWeight: 600, fontSize: "1.1rem" }}
+            >
+              No projects yet
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
-              Create a project to start writing and running code in your
-              browser.
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mb: 3, maxWidth: 360, mx: "auto" }}
+            >
+              Create a project to start writing and running MATLAB-compatible
+              code in your browser.
             </Typography>
             <Button
               variant="contained"
-              size="small"
               startIcon={<AddIcon />}
               onClick={() => setCreateDialogOpen(true)}
+              sx={{
+                textTransform: "none",
+                fontWeight: 600,
+                borderRadius: 1.5,
+                boxShadow: "none",
+                px: 3,
+                "&:hover": { boxShadow: "none" },
+              }}
             >
               Create your first project
             </Button>
@@ -518,15 +553,42 @@ export function ProjectListPage() {
             sx={{
               border: "1px solid",
               borderColor: "divider",
-              borderRadius: 1,
+              borderRadius: 2,
+              overflow: "hidden",
             }}
           >
             <Table size="small">
               <TableHead>
-                <TableRow>
-                  <TableCell>Name</TableCell>
-                  <TableCell align="right">Files</TableCell>
-                  <TableCell align="right">Modified</TableCell>
+                <TableRow sx={{ bgcolor: "action.hover" }}>
+                  <TableCell
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: "0.75rem",
+                      color: "text.secondary",
+                    }}
+                  >
+                    Name
+                  </TableCell>
+                  <TableCell
+                    align="right"
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: "0.75rem",
+                      color: "text.secondary",
+                    }}
+                  >
+                    Files
+                  </TableCell>
+                  <TableCell
+                    align="right"
+                    sx={{
+                      fontWeight: 600,
+                      fontSize: "0.75rem",
+                      color: "text.secondary",
+                    }}
+                  >
+                    Modified
+                  </TableCell>
                   <TableCell align="right" sx={{ width: 80 }} />
                 </TableRow>
               </TableHead>
@@ -535,12 +597,25 @@ export function ProjectListPage() {
                   <TableRow
                     key={project.name}
                     hover
-                    sx={{ cursor: "pointer" }}
+                    sx={{
+                      cursor: "pointer",
+                      "&:last-child td": { borderBottom: 0 },
+                    }}
                     onClick={() => navigate(`/project/${project.name}`)}
                   >
-                    <TableCell>{project.displayName || project.name}</TableCell>
-                    <TableCell align="right">{project.fileCount}</TableCell>
-                    <TableCell align="right">
+                    <TableCell sx={{ fontWeight: 500 }}>
+                      {project.displayName || project.name}
+                    </TableCell>
+                    <TableCell
+                      align="right"
+                      sx={{ color: "text.secondary", fontSize: "0.85rem" }}
+                    >
+                      {project.fileCount}
+                    </TableCell>
+                    <TableCell
+                      align="right"
+                      sx={{ color: "text.secondary", fontSize: "0.85rem" }}
+                    >
                       {formatDate(project.lastModified || project.updatedAt)}
                     </TableCell>
                     <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
@@ -548,6 +623,7 @@ export function ProjectListPage() {
                         <IconButton
                           size="small"
                           onClick={e => handleRenameClick(e, project)}
+                          sx={{ opacity: 0.5, "&:hover": { opacity: 1 } }}
                         >
                           <EditIcon fontSize="small" />
                         </IconButton>
@@ -556,7 +632,10 @@ export function ProjectListPage() {
                         <IconButton
                           size="small"
                           onClick={e => handleDeleteClick(e, project)}
-                          sx={{ color: "error.main" }}
+                          sx={{
+                            opacity: 0.5,
+                            "&:hover": { opacity: 1, color: "error.main" },
+                          }}
                         >
                           <DeleteIcon fontSize="small" />
                         </IconButton>

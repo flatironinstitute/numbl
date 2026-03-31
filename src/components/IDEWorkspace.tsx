@@ -844,10 +844,21 @@ export function IDEWorkspace({
       <Tabs
         value={editorTab}
         onChange={(_, newValue) => setEditorTab(newValue)}
-        sx={{ borderBottom: 1, borderColor: "divider", minHeight: 32 }}
+        sx={{
+          borderBottom: 1,
+          borderColor: "divider",
+          minHeight: 34,
+          "& .MuiTab-root": {
+            textTransform: "none",
+            fontWeight: 500,
+            fontSize: "0.8rem",
+            minHeight: 34,
+            py: 0,
+          },
+        }}
       >
-        <Tab label="Script" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
-        <Tab label="REPL" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
+        <Tab label="Script" />
+        <Tab label="REPL" />
       </Tabs>
 
       <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
@@ -861,22 +872,32 @@ export function IDEWorkspace({
           >
             <Box
               sx={{
-                px: 1,
+                px: 1.5,
                 py: 0.5,
                 borderBottom: 1,
                 borderColor: "divider",
                 display: "flex",
                 alignItems: "center",
                 gap: 1,
+                bgcolor: "background.default",
               }}
             >
               <Button
                 variant="contained"
-                color={isRunning ? "error" : "primary"}
+                color={isRunning ? "error" : "success"}
                 size="small"
                 startIcon={isRunning ? <StopIcon /> : <PlayArrowIcon />}
                 onClick={isRunning ? stopExecution : executeCode}
-                sx={{ py: 0.25, fontSize: "0.8rem" }}
+                sx={{
+                  py: 0.25,
+                  px: 2,
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  textTransform: "none",
+                  borderRadius: 1.5,
+                  boxShadow: "none",
+                  "&:hover": { boxShadow: "none" },
+                }}
               >
                 {isRunning ? "Stop" : "Run"}
               </Button>
@@ -995,27 +1016,46 @@ export function IDEWorkspace({
       <Tabs
         value={outputTab}
         onChange={(_, newValue) => setOutputTab(newValue)}
-        sx={{ borderBottom: 1, borderColor: "divider", minHeight: 32 }}
+        sx={{
+          borderBottom: 1,
+          borderColor: "divider",
+          minHeight: 34,
+          "& .MuiTab-root": {
+            textTransform: "none",
+            fontWeight: 500,
+            fontSize: "0.8rem",
+            minHeight: 34,
+            py: 0,
+          },
+        }}
       >
-        <Tab label="Output" sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }} />
-        <Tab
-          label="Internals"
-          sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
-        />
+        <Tab label="Output" />
+        <Tab label="Internals" />
       </Tabs>
       <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
         {outputTab === 0 && (
-          <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
-            <pre
-              style={{
-                margin: 0,
-                fontFamily: "monospace",
-                fontSize: "14px",
-                whiteSpace: "pre-wrap",
-              }}
-            >
-              {output}
-            </pre>
+          <Box sx={{ height: "100%", overflow: "auto", p: 1.5 }}>
+            {output ? (
+              <pre
+                style={{
+                  margin: 0,
+                  fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                  fontSize: "13px",
+                  lineHeight: 1.5,
+                  whiteSpace: "pre-wrap",
+                }}
+              >
+                {output}
+              </pre>
+            ) : (
+              <Typography
+                variant="body2"
+                color="text.disabled"
+                sx={{ fontStyle: "italic", mt: 2, textAlign: "center" }}
+              >
+                Run a script to see output here
+              </Typography>
+            )}
           </Box>
         )}
         {outputTab === 1 && (
@@ -1123,21 +1163,32 @@ export function IDEWorkspace({
         onChange={(_, newValue) => setFigureTab(newValue)}
         variant="scrollable"
         scrollButtons="auto"
-        sx={{ borderBottom: 1, borderColor: "divider", minHeight: 32 }}
+        sx={{
+          borderBottom: 1,
+          borderColor: "divider",
+          minHeight: 34,
+          "& .MuiTab-root": {
+            textTransform: "none",
+            fontWeight: 500,
+            fontSize: "0.8rem",
+            minHeight: 34,
+            py: 0,
+          },
+        }}
       >
         {sortedFigureHandles.map(h => (
-          <Tab
-            key={h}
-            label={`Figure ${h}`}
-            sx={{ minHeight: 32, py: 0, fontSize: "0.8rem" }}
-          />
+          <Tab key={h} label={`Figure ${h}`} />
         ))}
       </Tabs>
       <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
         {sortedFigureHandles.length > 0 ? (
           <FigureView figure={figures.figs[sortedFigureHandles[figureTab]]} />
         ) : (
-          <Typography variant="body2" color="text.secondary" sx={{ p: 1 }}>
+          <Typography
+            variant="body2"
+            color="text.disabled"
+            sx={{ p: 2, textAlign: "center", fontStyle: "italic" }}
+          >
             No figures
           </Typography>
         )}
@@ -1208,13 +1259,16 @@ export function IDEWorkspace({
           sx={{
             display: "flex",
             alignItems: "center",
-            px: 1,
+            px: 1.5,
             py: 0.5,
             borderBottom: 1,
             borderColor: "divider",
-            bgcolor: "background.paper",
-            minHeight: 36,
+            bgcolor: "#1e1e2e",
+            color: "#cdd6f4",
+            minHeight: 40,
             flexShrink: 0,
+            "& .MuiIconButton-root": { color: "#cdd6f4" },
+            "& .MuiTypography-root": { color: "#cdd6f4" },
           }}
         >
           {isMobile && (

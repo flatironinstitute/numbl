@@ -121,12 +121,12 @@ export function Splitter({
       <Box
         onMouseDown={handleMouseDown}
         sx={{
-          [isVertical ? "width" : "height"]: "4px",
-          [isVertical ? "minWidth" : "minHeight"]: "4px",
+          [isVertical ? "width" : "height"]: "3px",
+          [isVertical ? "minWidth" : "minHeight"]: "3px",
           cursor: isVertical ? "col-resize" : "row-resize",
-          bgcolor: "divider",
-          "&:hover": { bgcolor: "primary.main" },
-          transition: "background-color 0.2s",
+          bgcolor: "rgba(128,128,128,0.15)",
+          "&:hover": { bgcolor: "primary.main", opacity: 0.7 },
+          transition: "background-color 0.15s, opacity 0.15s",
           zIndex: 1,
         }}
       />
