@@ -110,8 +110,11 @@ defineBuiltin({
 });
 
 function getComputerStrings(): { str: string; arch: string } {
-  const platform = typeof process !== "undefined" ? process.platform : "linux";
-  const cpuArch = typeof process !== "undefined" ? process.arch : "x64";
+  if (typeof process === "undefined") {
+    return { str: "BROWSER", arch: "browser" };
+  }
+  const platform = process.platform;
+  const cpuArch = process.arch;
   if (platform === "win32") return { str: "PCWIN64", arch: "win64" };
   if (platform === "darwin") {
     if (cpuArch === "arm64") return { str: "MACA64", arch: "maca64" };
