@@ -52,6 +52,8 @@
     "test:scripts": "bash numbl_test_scripts/run_all.sh",
     "test:jit": "tsx src/cli.ts run-tests numbl_test_scripts/jit --opt 1",
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
+    "bench:alloc": "tsx bench/run-alloc-bench.ts",
+    "bench:alloc:quick": "tsx bench/run-alloc-bench.ts --quick",
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
     "prepublishOnly": "npm run build:cli && npm run build:plot-viewer",
