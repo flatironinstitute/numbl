@@ -812,7 +812,11 @@ export function IDEWorkspace({
 
   const handleEditorDidMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
-    lastActiveFileId.current = activeFileId;
+    // Only mark as synced if file data is already loaded; otherwise the sync
+    // effect will set the content once the async load completes.
+    if (activeFileData && activeFileDataIdRef.current === activeFileId) {
+      lastActiveFileId.current = activeFileId;
+    }
 
     monaco.languages.register({ id: "numbl" });
     monaco.languages.setLanguageConfiguration("numbl", numblLanguageConfig);
