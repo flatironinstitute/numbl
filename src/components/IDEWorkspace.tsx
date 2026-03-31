@@ -770,6 +770,7 @@ export function IDEWorkspace({
 
   const lastActiveFileId = useRef<string>("");
   const [activeFileData, setActiveFileData] = useState<Uint8Array | null>(null);
+  const activeFileDataIdRef = useRef<string>("");
   const activeFileIsBinary = activeFileData
     ? isBinaryData(activeFileData)
     : false;
@@ -778,13 +779,19 @@ export function IDEWorkspace({
   useEffect(() => {
     if (!activeFileId) {
       setActiveFileData(null);
+      activeFileDataIdRef.current = "";
       return;
     }
+    setActiveFileData(null);
+    activeFileDataIdRef.current = "";
     let cancelled = false;
     const isHome = homeFiles.some(f => f.id === activeFileId);
     const loader = isHome ? loadHomeFileContent : loadFileContent;
     loader(activeFileId).then(data => {
-      if (!cancelled) setActiveFileData(data);
+      if (!cancelled) {
+        activeFileDataIdRef.current = activeFileId;
+        setActiveFileData(data);
+      }
     });
     return () => {
       cancelled = true;
@@ -794,11 +801,9 @@ export function IDEWorkspace({
   useEffect(() => {
     if (!editorRef.current) return;
     if (!activeFile) return;
-    if (activeFileId === lastActiveFileId.current) {
-      return;
-    }
+    if (activeFileId === lastActiveFileId.current) return;
+    if (!activeFileData || activeFileDataIdRef.current !== activeFileId) return;
     lastActiveFileId.current = activeFileId;
-    if (!activeFileData) return;
     const text = isBinaryData(activeFileData) ? "" : fileText(activeFileData);
     if (editorRef.current.value !== text) {
       editorRef.current.setValue(text);
