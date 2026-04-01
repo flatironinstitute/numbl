@@ -123,6 +123,7 @@ import {
   swarmchart3Call as _swarmchart3Call,
   piechartCall as _piechartCall,
   donutchartCall as _donutchartCall,
+  heatmapCall as _heatmapCall,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -386,6 +387,9 @@ export class Runtime {
     };
     this.builtins["donutchart"] = (_nargout: number, args: unknown[]) => {
       this.donutchart_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["heatmap"] = (_nargout: number, args: unknown[]) => {
+      this.heatmap_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1672,6 +1676,10 @@ export class Runtime {
 
   public donutchart_call(args: RuntimeValue[]): void {
     _donutchartCall(this.plotInstructions, args);
+  }
+
+  public heatmap_call(args: RuntimeValue[]): void {
+    _heatmapCall(this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {

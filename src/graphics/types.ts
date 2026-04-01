@@ -182,6 +182,19 @@ export interface PieTrace {
   colors?: [number, number, number][];
 }
 
+// ── HeatmapTrace type ───────────────────────────────────────────────────
+
+export interface HeatmapTrace {
+  /** Cell values: flat array (column-major), rows × cols */
+  data: number[];
+  rows: number;
+  cols: number;
+  /** X-axis labels (one per column) */
+  xLabels?: string[];
+  /** Y-axis labels (one per row) */
+  yLabels?: string[];
+}
+
 // ── Plot Instructions ───────────────────────────────────────────────────
 
 export type PlotInstruction =
@@ -200,6 +213,7 @@ export type PlotInstruction =
   | { type: "area"; traces: PlotTrace[]; baseValue: number }
   | { type: "boxchart"; traces: BoxTrace[] }
   | { type: "piechart"; trace: PieTrace }
+  | { type: "heatmap"; trace: HeatmapTrace }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }

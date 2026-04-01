@@ -48,6 +48,7 @@ import {
   parseSwarmchartArgs,
   parseSwarmchart3Args,
   parsePiechartArgs,
+  parseHeatmapArgs,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -604,6 +605,14 @@ export function donutchartCall(
   if (trace.values.length > 0) {
     plotInstructions.push({ type: "piechart", trace });
   }
+}
+
+export function heatmapCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseHeatmapArgs(args);
+  plotInstructions.push({ type: "heatmap", trace });
 }
 
 export function legendCall(

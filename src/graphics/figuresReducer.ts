@@ -9,6 +9,7 @@ import type {
   ErrorBarTrace,
   BoxTrace,
   PieTrace,
+  HeatmapTrace,
   PlotInstruction,
 } from "./types.js";
 
@@ -26,6 +27,7 @@ export type AxesState = {
   errorBarTraces: ErrorBarTrace[];
   boxTraces: BoxTrace[];
   pieTrace?: PieTrace;
+  heatmapTrace?: HeatmapTrace;
   areaTraces: PlotTrace[];
   areaBaseValue: number;
   title?: string;
@@ -134,6 +136,7 @@ function addTraces(
       | "errorBarTraces"
       | "boxTraces"
       | "pieTrace"
+      | "heatmapTrace"
       | "areaTraces"
       | "areaBaseValue"
     >
@@ -160,6 +163,8 @@ function addTraces(
           update.errorBarTraces ?? (hold ? axes.errorBarTraces : []),
         boxTraces: update.boxTraces ?? (hold ? axes.boxTraces : []),
         pieTrace: update.pieTrace ?? (hold ? axes.pieTrace : undefined),
+        heatmapTrace:
+          update.heatmapTrace ?? (hold ? axes.heatmapTrace : undefined),
         areaTraces: update.areaTraces ?? (hold ? axes.areaTraces : []),
         areaBaseValue: update.areaBaseValue ?? axes.areaBaseValue,
         ...(update.imagescTrace !== undefined
@@ -285,6 +290,9 @@ export const figuresReducer = (
 
     case "piechart":
       return addTraces(state, { pieTrace: action.trace });
+
+    case "heatmap":
+      return addTraces(state, { heatmapTrace: action.trace });
 
     case "area": {
       const axes = getAxes(ensureFig(state));
