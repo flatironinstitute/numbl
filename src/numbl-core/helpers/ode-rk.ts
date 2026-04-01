@@ -135,8 +135,10 @@ export interface StepData {
   h: number;
   yOld: number[];
   yNew: number[];
-  /** Q = K^T P, dimensions neq x nInterp */
-  Q: number[][];
+  /** Q = K^T P, dimensions neq x nInterp (RK45, RK23) */
+  Q?: number[][];
+  /** F interpolation vectors, nPower x neq (DOP853) */
+  F?: number[][];
 }
 
 /**
@@ -163,6 +165,42 @@ export function denseOutputEval(
     }
     result[i] = yOld[i] + h * x * val;
   }
+  return result;
+}
+
+/**
+ * Evaluate dense output for a step at fractional position x in [0,1].
+ * Dispatches between Q-based (RK45/RK23) and F-based (DOP853) formats.
+ */
+export function evalStepAt(step: StepData, x: number): number[] {
+  if (step.Q) return denseOutputEval(step.yOld, step.Q, step.h, x);
+  if (step.F) return dop853DenseEval(step.yOld, step.F, x);
+  throw new Error("Step has no interpolation data");
+}
+
+/**
+ * DOP853 dense output evaluation.
+ * Matches scipy Dop853DenseOutput._call_impl:
+ *   Nested polynomial in x and (1-x) over F[0..nPower-1].
+ */
+function dop853DenseEval(yOld: number[], F: number[][], x: number): number[] {
+  const neq = yOld.length;
+  const nPower = F.length;
+  const result = new Array<number>(neq).fill(0);
+  const x1m = 1 - x;
+
+  // Evaluate reversed: F[nPower-1], F[nPower-2], ..., F[0]
+  // Even index (in reversed order) multiplies by x, odd by (1-x)
+  for (let i = 0; i < nPower; i++) {
+    const fi = F[nPower - 1 - i];
+    for (let j = 0; j < neq; j++) result[j] += fi[j];
+    if (i % 2 === 0) {
+      for (let j = 0; j < neq; j++) result[j] *= x;
+    } else {
+      for (let j = 0; j < neq; j++) result[j] *= x1m;
+    }
+  }
+  for (let j = 0; j < neq; j++) result[j] += yOld[j];
   return result;
 }
 
@@ -442,7 +480,7 @@ export function interpolateAtPoints(
 
     const x = Math.max(0, Math.min(1, (tReq - step.tOld) / step.h));
     tOut.push(tReq);
-    yOut.push(denseOutputEval(step.yOld, step.Q, step.h, x));
+    yOut.push(evalStepAt(step, x));
   }
 
   return { t: tOut, y: yOut };
@@ -542,17 +580,17 @@ function bisectEvent(
   step: StepData,
   events: (t: number, y: number[]) => [number[], boolean[], number[]]
 ): [number, number[]] {
-  const { tOld, h, yOld, Q } = step;
+  const { tOld, h } = step;
   let lo = 0; // fractional position in [0, 1]
   let hi = 1;
 
   for (let iter = 0; iter < 50; iter++) {
     const mid = (lo + hi) / 2;
-    const yMid = denseOutputEval(yOld, Q, h, mid);
+    const yMid = evalStepAt(step, mid);
     const tMid = tOld + mid * h;
     const [vals] = events(tMid, yMid);
 
-    const yLo = denseOutputEval(yOld, Q, h, lo);
+    const yLo = evalStepAt(step, lo);
     const vLo = events(tOld + lo * h, yLo)[0][eventIdx];
 
     if (vLo * vals[eventIdx] <= 0) {
@@ -565,5 +603,5 @@ function bisectEvent(
   }
 
   const xFinal = (lo + hi) / 2;
-  return [tOld + xFinal * h, denseOutputEval(yOld, Q, h, xFinal)];
+  return [tOld + xFinal * h, evalStepAt(step, xFinal)];
 }
