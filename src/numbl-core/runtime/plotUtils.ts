@@ -28,6 +28,7 @@ export type {
   Bar3Trace,
   ErrorBarTrace,
   BoxTrace,
+  PieTrace,
 } from "../../graphics/types.js";
 
 import type {
@@ -40,6 +41,7 @@ import type {
   Bar3Trace,
   ErrorBarTrace,
   BoxTrace,
+  PieTrace,
 } from "../../graphics/types.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
@@ -2074,4 +2076,63 @@ function tensorFromArray(arr: number[]): RuntimeValue {
     data: new FloatXArray(arr),
     shape: [1, arr.length],
   } as RuntimeTensor;
+}
+
+// ── piechart / donutchart argument parser ────────────────────────────────
+
+/**
+ * Parse piechart() / donutchart() arguments.
+ *
+ * Supported forms:
+ *   piechart(data)
+ *   piechart(data, names)
+ *
+ * @param innerRadius 0 for pie, >0 for donut
+ */
+export function parsePiechartArgs(
+  args: RuntimeValue[],
+  innerRadius: number
+): PieTrace {
+  if (args.length === 0)
+    throw new Error("piechart requires at least 1 argument");
+
+  let pos = 0;
+  const values = toNumberArray(args[pos++]).filter(v => isFinite(v) && v > 0);
+
+  let names: string[] | undefined;
+  if (pos < args.length && !isNumericArg(args[pos])) {
+    // Collect string names from a cell array or individual string args
+    if (isRuntimeTensor(args[pos]) || isRuntimeNumber(args[pos])) {
+      // Not names, skip
+    } else {
+      names = [];
+      // Could be a cell array of strings or individual string args
+      const nameArg = args[pos];
+      if (
+        nameArg &&
+        typeof nameArg === "object" &&
+        "kind" in nameArg &&
+        (nameArg as { kind: string }).kind === "cell"
+      ) {
+        // Cell array of strings
+        const cell = nameArg as { data: RuntimeValue[] };
+        for (const item of cell.data) {
+          names.push(getStringValue(item));
+        }
+      } else if (isStringArg(nameArg)) {
+        // Single string — try collecting multiple string args
+        names.push(getStringValue(nameArg));
+        pos++;
+        while (pos < args.length && isStringArg(args[pos])) {
+          names.push(getStringValue(args[pos]));
+          pos++;
+        }
+        // Already advanced pos, skip the increment below
+        return { values, names, innerRadius };
+      }
+      pos++;
+    }
+  }
+
+  return { values, names, innerRadius };
 }

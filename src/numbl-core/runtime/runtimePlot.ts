@@ -47,6 +47,7 @@ import {
   parseBoxchartArgs,
   parseSwarmchartArgs,
   parseSwarmchart3Args,
+  parsePiechartArgs,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -582,6 +583,26 @@ export function swarmchart3Call(
   const traces = parseSwarmchart3Args(args);
   if (traces.length > 0) {
     plotInstructions.push({ type: "plot3", traces });
+  }
+}
+
+export function piechartCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parsePiechartArgs(args, 0);
+  if (trace.values.length > 0) {
+    plotInstructions.push({ type: "piechart", trace });
+  }
+}
+
+export function donutchartCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parsePiechartArgs(args, 0.5);
+  if (trace.values.length > 0) {
+    plotInstructions.push({ type: "piechart", trace });
   }
 }
 
