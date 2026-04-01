@@ -223,14 +223,34 @@ export function drawPlot(
   const isTight = axisMode?.includes("tight") ?? false;
   const isEqual = axisMode?.includes("equal") ?? false;
 
+  const logX = axisScale === "semilogx" || axisScale === "loglog";
+  const logY = axisScale === "semilogy" || axisScale === "loglog";
+
+  // For log axes, clamp mins to positive values
+  if (logX && xMin <= 0) xMin = xMax > 0 ? xMax * 1e-6 : 1;
+  if (logY && yMin <= 0) yMin = yMax > 0 ? yMax * 1e-6 : 1;
+
   // Small margin around data (skip if tight)
   if (!isTight) {
-    const xPad = (xMax - xMin) * 0.05;
-    const yPad = (yMax - yMin) * 0.05;
-    xMin -= xPad;
-    xMax += xPad;
-    yMin -= yPad;
-    yMax += yPad;
+    if (logX) {
+      // Pad in log space
+      const logPad = (Math.log10(xMax) - Math.log10(xMin)) * 0.05;
+      xMin = Math.pow(10, Math.log10(xMin) - logPad);
+      xMax = Math.pow(10, Math.log10(xMax) + logPad);
+    } else {
+      const xPad = (xMax - xMin) * 0.05;
+      xMin -= xPad;
+      xMax += xPad;
+    }
+    if (logY) {
+      const logPad = (Math.log10(yMax) - Math.log10(yMin)) * 0.05;
+      yMin = Math.pow(10, Math.log10(yMin) - logPad);
+      yMax = Math.pow(10, Math.log10(yMax) + logPad);
+    } else {
+      const yPad = (yMax - yMin) * 0.05;
+      yMin -= yPad;
+      yMax += yPad;
+    }
   }
 
   // axis equal: ensure 1 data unit = same pixel length on both axes
@@ -270,9 +290,6 @@ export function drawPlot(
       }
     }
   }
-
-  const logX = axisScale === "semilogx" || axisScale === "loglog";
-  const logY = axisScale === "semilogy" || axisScale === "loglog";
 
   const toCanvasX = logX
     ? (v: number) => {
