@@ -59,7 +59,9 @@ export function drawPlot(
   axisScale?: "linear" | "semilogx" | "semilogy" | "loglog",
   barTraces?: BarTrace[],
   barhTraces?: BarTrace[],
-  errorBarTraces?: ErrorBarTrace[]
+  errorBarTraces?: ErrorBarTrace[],
+  areaTraces?: PlotTrace[],
+  areaBaseValue?: number
 ) {
   const ctx = canvas.getContext("2d");
   const hasContent =
@@ -68,7 +70,8 @@ export function drawPlot(
     (contourTraces && contourTraces.length > 0) ||
     (barTraces && barTraces.length > 0) ||
     (barhTraces && barhTraces.length > 0) ||
-    (errorBarTraces && errorBarTraces.length > 0);
+    (errorBarTraces && errorBarTraces.length > 0) ||
+    (areaTraces && areaTraces.length > 0);
   if (!ctx || !hasContent) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -202,6 +205,32 @@ export function drawPlot(
           const yhi = ey + et.yPos[i];
           if (ylo < yMin) yMin = ylo;
           if (yhi > yMax) yMax = yhi;
+        }
+      }
+    }
+  }
+
+  // Include area bounds (stacked: sum y values for upper bound)
+  if (areaTraces && areaTraces.length > 0) {
+    const base = areaBaseValue ?? 0;
+    if (base < yMin) yMin = base;
+    if (base > yMax) yMax = base;
+    // For stacked areas, the total height is the sum of all traces
+    const n = areaTraces[0].x.length;
+    for (let i = 0; i < n; i++) {
+      let cumY = base;
+      for (const t of areaTraces) {
+        if (i < t.x.length) {
+          const v = t.x[i];
+          if (isFinite(v)) {
+            if (v < xMin) xMin = v;
+            if (v > xMax) xMax = v;
+          }
+          cumY += t.y[i] - base;
+          if (isFinite(cumY)) {
+            if (cumY < yMin) yMin = cumY;
+            if (cumY > yMax) yMax = cumY;
+          }
         }
       }
     }
@@ -487,6 +516,67 @@ export function drawPlot(
           halfH * 2
         );
       }
+    }
+  }
+
+  // Area rendering (stacked filled areas)
+  if (areaTraces && areaTraces.length > 0) {
+    const base = areaBaseValue ?? 0;
+    const defaultColors: [number, number, number][] = [
+      [0.0, 0.447, 0.741],
+      [0.85, 0.325, 0.098],
+      [0.929, 0.694, 0.125],
+      [0.494, 0.184, 0.556],
+      [0.466, 0.674, 0.188],
+      [0.301, 0.745, 0.933],
+      [0.635, 0.078, 0.184],
+    ];
+    // Build cumulative stacks (bottom-up)
+    const n = areaTraces[0].x.length;
+    const bottoms: number[][] = [];
+    const tops: number[][] = [];
+    let prevTop = new Array(n).fill(base);
+    for (let ti = 0; ti < areaTraces.length; ti++) {
+      const t = areaTraces[ti];
+      bottoms.push([...prevTop]);
+      const top: number[] = [];
+      for (let i = 0; i < n; i++) {
+        top.push(prevTop[i] + (i < t.y.length ? t.y[i] - base : 0));
+      }
+      tops.push(top);
+      prevTop = top;
+    }
+    // Draw from last (top) to first (bottom) so earlier areas are on top visually
+    for (let ti = areaTraces.length - 1; ti >= 0; ti--) {
+      const t = areaTraces[ti];
+      const [r, g, b] = t.color ?? defaultColors[ti % defaultColors.length];
+      // Fill
+      ctx.fillStyle = `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},0.6)`;
+      ctx.beginPath();
+      // Top edge (left to right)
+      for (let i = 0; i < n; i++) {
+        const cx = toCanvasX(t.x[i]);
+        const cy = toCanvasY(tops[ti][i]);
+        if (i === 0) ctx.moveTo(cx, cy);
+        else ctx.lineTo(cx, cy);
+      }
+      // Bottom edge (right to left)
+      for (let i = n - 1; i >= 0; i--) {
+        ctx.lineTo(toCanvasX(t.x[i]), toCanvasY(bottoms[ti][i]));
+      }
+      ctx.closePath();
+      ctx.fill();
+      // Stroke top edge
+      ctx.strokeStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const cx = toCanvasX(t.x[i]);
+        const cy = toCanvasY(tops[ti][i]);
+        if (i === 0) ctx.moveTo(cx, cy);
+        else ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
     }
   }
 

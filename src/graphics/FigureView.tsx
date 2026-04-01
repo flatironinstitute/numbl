@@ -121,6 +121,8 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       barTraces={axes.barTraces}
       barhTraces={axes.barhTraces}
       errorBarTraces={axes.errorBarTraces}
+      areaTraces={axes.areaTraces}
+      areaBaseValue={axes.areaBaseValue}
     />
   );
 }
@@ -140,6 +142,8 @@ function PlotCanvas({
   barTraces,
   barhTraces,
   errorBarTraces,
+  areaTraces,
+  areaBaseValue,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -155,6 +159,8 @@ function PlotCanvas({
   barTraces?: AxesState["barTraces"];
   barhTraces?: AxesState["barhTraces"];
   errorBarTraces?: AxesState["errorBarTraces"];
+  areaTraces?: AxesState["areaTraces"];
+  areaBaseValue?: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -177,7 +183,9 @@ function PlotCanvas({
       axisScale,
       barTraces,
       barhTraces,
-      errorBarTraces
+      errorBarTraces,
+      areaTraces,
+      areaBaseValue
     );
   }, [
     traces,
@@ -194,6 +202,8 @@ function PlotCanvas({
     barTraces,
     barhTraces,
     errorBarTraces,
+    areaTraces,
+    areaBaseValue,
   ]);
 
   useEffect(() => {

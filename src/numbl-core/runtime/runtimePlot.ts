@@ -36,6 +36,7 @@ import {
   parseBar3Args,
   parseStairsArgs,
   parseErrorBarArgs,
+  parseAreaArgs,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -325,6 +326,16 @@ export function semilogyCall(
   const traces = parsePlotArgs(args);
   if (traces.length > 0) {
     plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+export function areaCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const { traces, baseValue } = parseAreaArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "area", traces, baseValue });
   }
 }
 
