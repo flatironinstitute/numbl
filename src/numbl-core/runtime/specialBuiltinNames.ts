@@ -57,6 +57,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "swarmchart3",
   "piechart",
   "donutchart",
+  "heatmap",
   "figure",
   "subplot",
   "title",

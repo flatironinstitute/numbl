@@ -126,6 +126,8 @@ function dispatchPlotCall(
       return rt.piechart_call(args.map(a => ensureRuntimeValue(a)));
     case "donutchart":
       return rt.donutchart_call(args.map(a => ensureRuntimeValue(a)));
+    case "heatmap":
+      return rt.heatmap_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

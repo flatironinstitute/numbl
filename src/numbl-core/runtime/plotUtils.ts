@@ -29,6 +29,7 @@ export type {
   ErrorBarTrace,
   BoxTrace,
   PieTrace,
+  HeatmapTrace,
 } from "../../graphics/types.js";
 
 import type {
@@ -42,6 +43,7 @@ import type {
   ErrorBarTrace,
   BoxTrace,
   PieTrace,
+  HeatmapTrace,
 } from "../../graphics/types.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
@@ -2135,4 +2137,52 @@ export function parsePiechartArgs(
   }
 
   return { values, names, innerRadius };
+}
+
+// ── heatmap argument parser ─────────────────────────────────────────────
+
+/**
+ * Parse heatmap() arguments.
+ *
+ * Supported forms:
+ *   heatmap(cdata)                — matrix of values
+ *   heatmap(xvalues, yvalues, cdata) — with axis labels
+ */
+export function parseHeatmapArgs(args: RuntimeValue[]): HeatmapTrace {
+  if (args.length === 0)
+    throw new Error("heatmap requires at least 1 argument");
+
+  let pos = 0;
+
+  // Count leading args to determine form
+  if (args.length >= 3 && !isNumericArg(args[0])) {
+    // Possibly heatmap(xvalues_strings, yvalues_strings, cdata) — skip for now
+  }
+
+  if (
+    args.length >= 3 &&
+    isNumericArg(args[0]) &&
+    isNumericArg(args[1]) &&
+    isNumericArg(args[2])
+  ) {
+    // heatmap(xvalues, yvalues, cdata)
+    const xArr = toNumberArray(args[pos++]);
+    const yArr = toNumberArray(args[pos++]);
+    const info = getMatrixInfo(args[pos++]);
+    return {
+      data: info.data,
+      rows: info.rows,
+      cols: info.cols,
+      xLabels: xArr.map(v => String(v)),
+      yLabels: yArr.map(v => String(v)),
+    };
+  }
+
+  // heatmap(cdata)
+  const info = getMatrixInfo(args[pos++]);
+  return {
+    data: info.data,
+    rows: info.rows,
+    cols: info.cols,
+  };
 }
