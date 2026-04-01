@@ -9,7 +9,11 @@ import {
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
+  isRuntimeFunction,
+  FloatXArray,
 } from "../runtime/types.js";
+import { RTV } from "../runtime/constructors.js";
+import type { Runtime } from "./runtime.js";
 
 /** Convert RuntimeValue to number array for plotting */
 function runtimeValueToNumberArray(v: RuntimeValue): number[] {
@@ -347,6 +351,171 @@ export function loglogCall(
   const traces = parsePlotArgs(args);
   if (traces.length > 0) {
     plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+/** Evaluate a function handle at a scalar value, returning a number. */
+function evalFnAtScalar(rt: Runtime, fn: RuntimeValue, x: number): number {
+  const result = rt.index(fn, [x], 1);
+  if (typeof result === "number") return result;
+  if (isRuntimeTensor(result as RuntimeValue)) {
+    return (result as { data: Float64Array }).data[0];
+  }
+  return toNumber(ensureRuntimeValue(result));
+}
+
+/** Check if a value is a function handle or string (for fplot). */
+function isFnArg(v: RuntimeValue): boolean {
+  return isRuntimeFunction(v);
+}
+
+/** Check if a value is a numeric 2-element vector (interval). */
+function is2ElementVector(v: RuntimeValue): boolean {
+  if (isRuntimeTensor(v) && v.data.length === 2 && !v.imag) return true;
+  return false;
+}
+
+/**
+ * fplot(f), fplot(f, xinterval), fplot(funx, funy),
+ * fplot(funx, funy, tinterval), fplot(..., LineSpec)
+ */
+export function fplotCall(
+  rt: Runtime,
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  if (args.length === 0) throw new Error("fplot requires at least 1 argument");
+
+  let pos = 0;
+  const fn1 = args[pos++];
+  if (!isFnArg(fn1))
+    throw new Error("fplot: first argument must be a function handle");
+
+  let fn2: RuntimeValue | undefined;
+  let interval: [number, number] = [-5, 5];
+  let restStart: number;
+
+  // Check if second arg is also a function handle (parametric mode)
+  if (pos < args.length && isFnArg(args[pos])) {
+    fn2 = args[pos++];
+    // Check for interval
+    if (pos < args.length && is2ElementVector(args[pos])) {
+      const iv = args[pos++];
+      const arr = runtimeValueToNumberArray(iv);
+      interval = [arr[0], arr[1]];
+    }
+    restStart = pos;
+  } else {
+    // Non-parametric: check for interval
+    if (pos < args.length && is2ElementVector(args[pos])) {
+      const iv = args[pos++];
+      const arr = runtimeValueToNumberArray(iv);
+      interval = [arr[0], arr[1]];
+    }
+    restStart = pos;
+  }
+
+  // Generate sample points
+  const nPoints = 200;
+  const t = new Float64Array(nPoints);
+  for (let i = 0; i < nPoints; i++) {
+    t[i] = interval[0] + ((interval[1] - interval[0]) * i) / (nPoints - 1);
+  }
+
+  // Evaluate function(s)
+  const xArr = new Float64Array(nPoints);
+  const yArr = new Float64Array(nPoints);
+
+  if (fn2) {
+    // Parametric: x = fn1(t), y = fn2(t)
+    for (let i = 0; i < nPoints; i++) {
+      xArr[i] = evalFnAtScalar(rt, fn1, t[i]);
+      yArr[i] = evalFnAtScalar(rt, fn2, t[i]);
+    }
+  } else {
+    // Non-parametric: x = t, y = fn1(t)
+    for (let i = 0; i < nPoints; i++) {
+      xArr[i] = t[i];
+      yArr[i] = evalFnAtScalar(rt, fn1, t[i]);
+    }
+  }
+
+  // Build synthetic args: X tensor, Y tensor, then any remaining LineSpec/Name-Value args
+  const xTensor = RTV.tensor(new FloatXArray(xArr), [1, nPoints]);
+  const yTensor = RTV.tensor(new FloatXArray(yArr), [1, nPoints]);
+  const synthArgs: RuntimeValue[] = [
+    xTensor,
+    yTensor,
+    ...args.slice(restStart),
+  ];
+
+  const traces = parsePlotArgs(synthArgs);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+/**
+ * fplot3(funx, funy, funz), fplot3(funx, funy, funz, tinterval),
+ * fplot3(..., LineSpec)
+ */
+export function fplot3Call(
+  rt: Runtime,
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  if (args.length < 3) throw new Error("fplot3 requires at least 3 arguments");
+
+  let pos = 0;
+  const funx = args[pos++];
+  const funy = args[pos++];
+  const funz = args[pos++];
+
+  if (!isFnArg(funx) || !isFnArg(funy) || !isFnArg(funz)) {
+    throw new Error("fplot3: first three arguments must be function handles");
+  }
+
+  let interval: [number, number] = [-5, 5];
+
+  if (pos < args.length && is2ElementVector(args[pos])) {
+    const iv = args[pos++];
+    const arr = runtimeValueToNumberArray(iv);
+    interval = [arr[0], arr[1]];
+  }
+  const restStart = pos;
+
+  // Generate sample points
+  const nPoints = 200;
+  const tArr = new Float64Array(nPoints);
+  for (let i = 0; i < nPoints; i++) {
+    tArr[i] = interval[0] + ((interval[1] - interval[0]) * i) / (nPoints - 1);
+  }
+
+  // Evaluate functions
+  const xArr = new Float64Array(nPoints);
+  const yArr = new Float64Array(nPoints);
+  const zArr = new Float64Array(nPoints);
+
+  for (let i = 0; i < nPoints; i++) {
+    xArr[i] = evalFnAtScalar(rt, funx, tArr[i]);
+    yArr[i] = evalFnAtScalar(rt, funy, tArr[i]);
+    zArr[i] = evalFnAtScalar(rt, funz, tArr[i]);
+  }
+
+  // Build synthetic args for plot3
+  const xTensor = RTV.tensor(new FloatXArray(xArr), [1, nPoints]);
+  const yTensor = RTV.tensor(new FloatXArray(yArr), [1, nPoints]);
+  const zTensor = RTV.tensor(new FloatXArray(zArr), [1, nPoints]);
+  const synthArgs: RuntimeValue[] = [
+    xTensor,
+    yTensor,
+    zTensor,
+    ...args.slice(restStart),
+  ];
+
+  const traces = parsePlot3Args(synthArgs);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot3", traces });
   }
 }
 

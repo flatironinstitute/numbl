@@ -113,6 +113,8 @@ import {
   semilogyCall as _semilogyCall,
   loglogCall as _loglogCall,
   areaCall as _areaCall,
+  fplotCall as _fplotCall,
+  fplot3Call as _fplot3Call,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -346,6 +348,12 @@ export class Runtime {
     };
     this.builtins["area"] = (_nargout: number, args: unknown[]) => {
       this.area_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["fplot"] = (_nargout: number, args: unknown[]) => {
+      this.fplot_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["fplot3"] = (_nargout: number, args: unknown[]) => {
+      this.fplot3_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1592,6 +1600,14 @@ export class Runtime {
 
   public area_call(args: RuntimeValue[]): void {
     _areaCall(this.plotInstructions, args);
+  }
+
+  public fplot_call(args: RuntimeValue[]): void {
+    _fplotCall(this, this.plotInstructions, args);
+  }
+
+  public fplot3_call(args: RuntimeValue[]): void {
+    _fplot3Call(this, this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {
