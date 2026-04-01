@@ -37,6 +37,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "contourf",
   "mesh",
   "waterfall",
+  "bar",
   "colormap",
   "view",
   "zlabel",

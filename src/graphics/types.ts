@@ -95,6 +95,19 @@ export interface ContourTrace {
   filled: boolean;
 }
 
+// ── BarTrace type ───────────────────────────────────────────────────────
+
+export interface BarTrace {
+  /** X positions for each bar */
+  x: number[];
+  /** Y values (bar heights) for each bar */
+  y: number[];
+  /** Relative bar width (0–1, default 0.8) */
+  width: number;
+  /** Bar color as RGB triple [0–1] */
+  color?: [number, number, number];
+}
+
 // ── Plot Instructions ───────────────────────────────────────────────────
 
 export type PlotInstruction =
@@ -105,6 +118,7 @@ export type PlotInstruction =
   | { type: "imagesc"; trace: ImagescTrace }
   | { type: "contour"; trace: ContourTrace }
   | { type: "mesh"; trace: SurfTrace }
+  | { type: "bar"; traces: BarTrace[] }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }

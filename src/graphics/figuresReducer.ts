@@ -4,6 +4,7 @@ import type {
   SurfTrace,
   ImagescTrace,
   ContourTrace,
+  BarTrace,
   PlotInstruction,
 } from "./types.js";
 
@@ -14,6 +15,7 @@ export type AxesState = {
   surfTraces: SurfTrace[];
   imagescTrace?: ImagescTrace;
   contourTraces: ContourTrace[];
+  barTraces: BarTrace[];
   title?: string;
   xlabel?: string;
   ylabel?: string;
@@ -50,6 +52,7 @@ const defaultAxes: AxesState = {
   plot3Traces: [],
   surfTraces: [],
   contourTraces: [],
+  barTraces: [],
 };
 
 function getAxes(fig: FigureState): AxesState {
@@ -99,7 +102,12 @@ function addTraces(
   update: Partial<
     Pick<
       AxesState,
-      "traces" | "plot3Traces" | "surfTraces" | "imagescTrace" | "contourTraces"
+      | "traces"
+      | "plot3Traces"
+      | "surfTraces"
+      | "imagescTrace"
+      | "contourTraces"
+      | "barTraces"
     >
   >
 ): FiguresState {
@@ -116,6 +124,7 @@ function addTraces(
         plot3Traces: update.plot3Traces ?? (hold ? axes.plot3Traces : []),
         surfTraces: update.surfTraces ?? (hold ? axes.surfTraces : []),
         contourTraces: update.contourTraces ?? (hold ? axes.contourTraces : []),
+        barTraces: update.barTraces ?? (hold ? axes.barTraces : []),
         ...(update.imagescTrace !== undefined
           ? { imagescTrace: update.imagescTrace }
           : {}),
@@ -180,6 +189,15 @@ export const figuresReducer = (
         surfTraces: axes.holdOn
           ? [...axes.surfTraces, action.trace]
           : [action.trace],
+      });
+    }
+
+    case "bar": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        barTraces: axes.holdOn
+          ? [...axes.barTraces, ...action.traces]
+          : [...action.traces],
       });
     }
 
