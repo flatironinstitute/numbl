@@ -12,7 +12,7 @@ import type { Interpreter } from "../interpreter.js";
 import type { Stmt } from "../../parser/types.js";
 import type { FunctionDef } from "../types.js";
 import type { JitType } from "./jitTypes.js";
-import { jitTypeKey } from "./jitTypes.js";
+import { jitTypeKey, unifyJitTypes } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
 import { jitHelpers } from "./jitHelpers.js";
@@ -98,10 +98,20 @@ function tryJitLoop(
   // Also include any input that is assigned (it's both input and output)
   const outputs = [...outputSet];
 
-  // Build cache key from AST location + input types
+  // Progressive type widening: unify with previously seen types to prevent
+  // unbounded specializations when called from an interpreted loop.
   const loc = stmt.span
     ? `${stmt.span.file}:${stmt.span.start}`
     : `loop:${kind}`;
+  const prevLoopTypes = interp.loopLastInputTypes.get(loc);
+  if (prevLoopTypes && prevLoopTypes.length === inputTypes.length) {
+    for (let i = 0; i < inputTypes.length; i++) {
+      inputTypes[i] = unifyJitTypes(inputTypes[i], prevLoopTypes[i]);
+    }
+  }
+  interp.loopLastInputTypes.set(loc, inputTypes.slice());
+
+  // Build cache key from AST location + input types
   const typeKey = inputs
     .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
     .join(",");
@@ -111,11 +121,6 @@ function tryJitLoop(
   if (interp.loopJitCache.has(cacheKey)) {
     const entry = interp.loopJitCache.get(cacheKey)!;
     if (entry === null) return false; // previously failed
-    // Log even on cache hit so the UI shows JIT info across re-runs
-    interp.onJitCompile?.(
-      `loop:${kind}@${interp.rt.$line ?? 0}(cached)`,
-      entry.source
-    );
     return executeAndWriteBack(interp, entry.fn, inputValues, outputs);
   }
 

@@ -81,6 +81,9 @@ export class Interpreter {
     { fn: (...args: unknown[]) => unknown; source: string } | null
   >();
 
+  /** @internal Progressive type widening for loop JIT: location -> last unified input types. */
+  loopLastInputTypes = new Map<string, import("./jit/jitTypes.js").JitType[]>();
+
   /** Optimization level (0 = pure interpreter, >=1 = JIT scalar functions). */
   optimization: number = 1;
 
@@ -111,9 +114,11 @@ export class Interpreter {
   clearAllCaches(): void {
     for (const [, fd] of this.functionDefCache) {
       fd._jitCache?.clear();
+      fd._lastJitArgTypes?.clear();
     }
     this.functionDefCache.clear();
     this.loopJitCache.clear();
+    this.loopLastInputTypes.clear();
     this.compileInProgress.clear();
     this.ctx.registry.fileContexts.clear();
     this.rt.classMethodCache.clear();

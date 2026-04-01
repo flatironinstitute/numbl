@@ -9,6 +9,7 @@ import {
   type JitCacheEntry,
   computeJitCacheKey,
   jitTypeKey,
+  unifyJitTypes,
 } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
@@ -20,6 +21,7 @@ export const JIT_SKIP = Symbol("JIT_SKIP");
 /** Augmented FunctionDef with JIT cache. */
 interface FunctionDefWithCache extends FunctionDef {
   _jitCache?: Map<string, JitCacheEntry | null>;
+  _lastJitArgTypes?: Map<number, JitType[]>;
 }
 
 // ── Main entry point ────────────────────────────────────────────────────
@@ -38,8 +40,21 @@ export function tryJitCall(
     argTypes.push(t);
   }
 
-  const cacheKey = computeJitCacheKey(nargout, argTypes);
+  // Progressive type widening: unify with previously seen types to prevent
+  // unbounded specializations when called from an interpreted loop.
   const fnWithCache = fn as FunctionDefWithCache;
+  if (!fnWithCache._lastJitArgTypes) {
+    fnWithCache._lastJitArgTypes = new Map();
+  }
+  const prevTypes = fnWithCache._lastJitArgTypes.get(nargout);
+  if (prevTypes && prevTypes.length === argTypes.length) {
+    for (let i = 0; i < argTypes.length; i++) {
+      argTypes[i] = unifyJitTypes(argTypes[i], prevTypes[i]);
+    }
+  }
+  fnWithCache._lastJitArgTypes.set(nargout, argTypes.slice());
+
+  const cacheKey = computeJitCacheKey(nargout, argTypes);
 
   // Check cache
   if (!fnWithCache._jitCache) {

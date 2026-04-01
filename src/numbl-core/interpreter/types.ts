@@ -5,6 +5,7 @@
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
+import type { JitType } from "./jit/jitTypes.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -155,6 +156,8 @@ export interface FunctionDef {
     string,
     { fn: (...args: unknown[]) => unknown; source: string } | null
   >;
+  /** Progressive type widening: last unified arg types, keyed by nargout. */
+  _lastJitArgTypes?: Map<number, JitType[]>;
 }
 
 /** Create a FunctionDef from an AST Function statement. */
