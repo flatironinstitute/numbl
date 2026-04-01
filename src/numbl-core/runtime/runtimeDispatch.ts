@@ -98,6 +98,10 @@ function dispatchPlotCall(
       return rt.stairs_call(args.map(a => ensureRuntimeValue(a)));
     case "errorbar":
       return rt.errorbar_call(args.map(a => ensureRuntimeValue(a)));
+    case "semilogx":
+      return rt.semilogx_call(args.map(a => ensureRuntimeValue(a)));
+    case "semilogy":
+      return rt.semilogy_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

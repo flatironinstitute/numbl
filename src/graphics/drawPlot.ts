@@ -14,6 +14,36 @@ import {
 import { drawMarkers } from "./plotMarkers.js";
 import { drawLegend } from "./plotLegend.js";
 
+/** Generate tick values at powers of 10 for log-scale axes. */
+function generateLogTicks(min: number, max: number): number[] {
+  const safeMin = Math.max(min, Number.MIN_VALUE);
+  const safeMax = Math.max(max, Number.MIN_VALUE);
+  const logMin = Math.floor(Math.log10(safeMin));
+  const logMax = Math.ceil(Math.log10(safeMax));
+  const ticks: number[] = [];
+  for (let p = logMin; p <= logMax; p++) {
+    const v = Math.pow(10, p);
+    if (v >= safeMin && v <= safeMax) ticks.push(v);
+  }
+  // If too few ticks, add intermediate values (2, 5) × 10^p
+  if (ticks.length < 3) {
+    for (let p = logMin; p <= logMax; p++) {
+      for (const m of [2, 5]) {
+        const v = m * Math.pow(10, p);
+        if (v >= safeMin && v <= safeMax && !ticks.includes(v)) ticks.push(v);
+      }
+    }
+    ticks.sort((a, b) => a - b);
+  }
+  return ticks;
+}
+
+/** Format a log-scale tick value (e.g., 10^3 → "1000", 10^-2 → "0.01"). */
+function formatLogTick(v: number): string {
+  if (v >= 1 && v < 1e6 && Number.isInteger(v)) return v.toString();
+  return v.toExponential(0);
+}
+
 export function drawPlot(
   canvas: HTMLCanvasElement,
   traces: PlotTrace[],
@@ -26,6 +56,7 @@ export function drawPlot(
   contourTraces?: ContourTrace[],
   colormap?: string,
   axisMode?: string,
+  axisScale?: "linear" | "semilogx" | "semilogy" | "loglog",
   barTraces?: BarTrace[],
   barhTraces?: BarTrace[],
   errorBarTraces?: ErrorBarTrace[]
@@ -240,26 +271,42 @@ export function drawPlot(
     }
   }
 
-  const toCanvasX = (v: number) =>
-    effMarginLeft + ((v - xMin) / (xMax - xMin)) * effPlotW;
-  const toCanvasY = (v: number) =>
-    effMarginTop + effPlotH - ((v - yMin) / (yMax - yMin)) * effPlotH;
+  const logX = axisScale === "semilogx" || axisScale === "loglog";
+  const logY = axisScale === "semilogy" || axisScale === "loglog";
+
+  const toCanvasX = logX
+    ? (v: number) => {
+        const logV = Math.log10(Math.max(v, Number.MIN_VALUE));
+        const logMin = Math.log10(Math.max(xMin, Number.MIN_VALUE));
+        const logMax = Math.log10(Math.max(xMax, Number.MIN_VALUE));
+        return effMarginLeft + ((logV - logMin) / (logMax - logMin)) * effPlotW;
+      }
+    : (v: number) => effMarginLeft + ((v - xMin) / (xMax - xMin)) * effPlotW;
+  const toCanvasY = logY
+    ? (v: number) => {
+        const logV = Math.log10(Math.max(v, Number.MIN_VALUE));
+        const logMin = Math.log10(Math.max(yMin, Number.MIN_VALUE));
+        const logMax = Math.log10(Math.max(yMax, Number.MIN_VALUE));
+        return (
+          effMarginTop +
+          effPlotH -
+          ((logV - logMin) / (logMax - logMin)) * effPlotH
+        );
+      }
+    : (v: number) =>
+        effMarginTop + effPlotH - ((v - yMin) / (yMax - yMin)) * effPlotH;
 
   // Grid (only when gridOn is true or undefined — default on for backward compat)
   if (gridOn !== false) {
     ctx.strokeStyle = "#ddd";
     ctx.lineWidth = 0.5;
 
-    const xTicksGrid = generateTicks(
-      xMin,
-      xMax,
-      Math.max(3, Math.floor(effPlotW / 80))
-    );
-    const yTicksGrid = generateTicks(
-      yMin,
-      yMax,
-      Math.max(3, Math.floor(effPlotH / 50))
-    );
+    const xTicksGrid = logX
+      ? generateLogTicks(xMin, xMax)
+      : generateTicks(xMin, xMax, Math.max(3, Math.floor(effPlotW / 80)));
+    const yTicksGrid = logY
+      ? generateLogTicks(yMin, yMax)
+      : generateTicks(yMin, yMax, Math.max(3, Math.floor(effPlotH / 50)));
 
     for (const tx of xTicksGrid) {
       const cx = toCanvasX(tx);
@@ -283,28 +330,32 @@ export function drawPlot(
   ctx.strokeRect(effMarginLeft, effMarginTop, effPlotW, effPlotH);
 
   // Tick labels
-  const xTicks = generateTicks(
-    xMin,
-    xMax,
-    Math.max(3, Math.floor(effPlotW / 80))
-  );
-  const yTicks = generateTicks(
-    yMin,
-    yMax,
-    Math.max(3, Math.floor(effPlotH / 50))
-  );
+  const xTicks = logX
+    ? generateLogTicks(xMin, xMax)
+    : generateTicks(xMin, xMax, Math.max(3, Math.floor(effPlotW / 80)));
+  const yTicks = logY
+    ? generateLogTicks(yMin, yMax)
+    : generateTicks(yMin, yMax, Math.max(3, Math.floor(effPlotH / 50)));
 
   ctx.fillStyle = "#333";
   ctx.font = "11px monospace";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   for (const tx of xTicks) {
-    ctx.fillText(formatTick(tx), toCanvasX(tx), effMarginTop + effPlotH + 5);
+    ctx.fillText(
+      logX ? formatLogTick(tx) : formatTick(tx),
+      toCanvasX(tx),
+      effMarginTop + effPlotH + 5
+    );
   }
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const ty of yTicks) {
-    ctx.fillText(formatTick(ty), effMarginLeft - 5, toCanvasY(ty));
+    ctx.fillText(
+      logY ? formatLogTick(ty) : formatTick(ty),
+      effMarginLeft - 5,
+      toCanvasY(ty)
+    );
   }
 
   // Labels

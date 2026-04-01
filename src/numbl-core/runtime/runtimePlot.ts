@@ -306,6 +306,28 @@ export function errorbarCall(
   }
 }
 
+export function semilogxCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  plotInstructions.push({ type: "set_axis_scale", value: "semilogx" });
+  const traces = parsePlotArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+export function semilogyCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  plotInstructions.push({ type: "set_axis_scale", value: "semilogy" });
+  const traces = parsePlotArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
+}
+
 export function legendCall(
   plotInstructions: PlotInstruction[],
   args: RuntimeValue[]

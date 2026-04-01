@@ -177,4 +177,8 @@ export type PlotInstruction =
   | { type: "set_colorbar"; value: string }
   | { type: "set_colormap"; name: string }
   | { type: "set_axis"; value: string }
+  | {
+      type: "set_axis_scale";
+      value: "linear" | "semilogx" | "semilogy" | "loglog";
+    }
   | { type: "set_view"; az: number; el: number };

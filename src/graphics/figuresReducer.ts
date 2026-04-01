@@ -33,6 +33,7 @@ export type AxesState = {
   colormap?: string;
   view?: { az: number; el: number };
   axisMode?: string;
+  axisScale?: "linear" | "semilogx" | "semilogy" | "loglog";
 };
 
 export type FigureState = {
@@ -308,6 +309,8 @@ export const figuresReducer = (
       return updateAxes(state, { view: { az: action.az, el: action.el } });
     case "set_axis":
       return updateAxes(state, { axisMode: action.value });
+    case "set_axis_scale":
+      return updateAxes(state, { axisScale: action.value });
 
     case "clf": {
       const fig = state.figs[state.currentHandle];

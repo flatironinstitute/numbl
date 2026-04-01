@@ -117,6 +117,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       contourTraces={axes.contourTraces}
       colormap={axes.colormap}
       axisMode={axes.axisMode}
+      axisScale={axes.axisScale}
       barTraces={axes.barTraces}
       barhTraces={axes.barhTraces}
       errorBarTraces={axes.errorBarTraces}
@@ -135,6 +136,7 @@ function PlotCanvas({
   contourTraces,
   colormap,
   axisMode,
+  axisScale,
   barTraces,
   barhTraces,
   errorBarTraces,
@@ -149,6 +151,7 @@ function PlotCanvas({
   contourTraces?: AxesState["contourTraces"];
   colormap?: string;
   axisMode?: string;
+  axisScale?: AxesState["axisScale"];
   barTraces?: AxesState["barTraces"];
   barhTraces?: AxesState["barhTraces"];
   errorBarTraces?: AxesState["errorBarTraces"];
@@ -171,6 +174,7 @@ function PlotCanvas({
       contourTraces,
       colormap,
       axisMode,
+      axisScale,
       barTraces,
       barhTraces,
       errorBarTraces
@@ -186,6 +190,7 @@ function PlotCanvas({
     contourTraces,
     colormap,
     axisMode,
+    axisScale,
     barTraces,
     barhTraces,
     errorBarTraces,
