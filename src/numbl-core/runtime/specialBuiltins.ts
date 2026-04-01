@@ -37,6 +37,10 @@ import type { Runtime } from "./runtime.js";
 import { registerDynamicIBuiltin } from "../interpreter/builtins/types.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
 import { hashKey } from "../interpreter/builtins/dictionary.js";
+import {
+  plotInstr as _plotInstr,
+  legendCall as _legendCall,
+} from "./runtimePlot.js";
 
 export { SPECIAL_BUILTIN_NAMES } from "./specialBuiltinNames.js";
 
@@ -1387,5 +1391,101 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       }
     }
     return RTV.char(curDir);
+  });
+
+  // ── Graphics builtins (override IBuiltin stubs in misc.ts) ───────────
+
+  registerSpecial("figure", (_nargout, args) => {
+    const handle = args.length > 0 ? args[0] : 1;
+    _plotInstr(rt.plotInstructions, { type: "set_figure_handle", handle });
+    return 0;
+  });
+
+  registerSpecial("subplot", (_nargout, args) => {
+    if (args.length >= 3) {
+      _plotInstr(rt.plotInstructions, {
+        type: "set_subplot",
+        rows: args[0],
+        cols: args[1],
+        index: args[2],
+      });
+    }
+    return 0;
+  });
+
+  registerSpecial("title", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, { type: "set_title", text: args[0] });
+    }
+    return 0;
+  });
+
+  registerSpecial("xlabel", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, { type: "set_xlabel", text: args[0] });
+    }
+    return 0;
+  });
+
+  registerSpecial("ylabel", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, { type: "set_ylabel", text: args[0] });
+    }
+    return 0;
+  });
+
+  registerSpecial("hold", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, { type: "set_hold", value: args[0] });
+    }
+    return 0;
+  });
+
+  registerSpecial("grid", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, { type: "set_grid", value: args[0] });
+    }
+    return 0;
+  });
+
+  registerSpecial("legend", (_nargout, args) => {
+    _legendCall(rt.plotInstructions, args);
+    return 0;
+  });
+
+  registerSpecial("close", (_nargout, args) => {
+    if (args.length > 0) {
+      const val = toString(args[0]);
+      if (val === "all") {
+        _plotInstr(rt.plotInstructions, { type: "close_all" });
+      } else {
+        _plotInstr(rt.plotInstructions, { type: "close" });
+      }
+    } else {
+      _plotInstr(rt.plotInstructions, { type: "close" });
+    }
+    return 0;
+  });
+
+  registerSpecial("sgtitle", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, { type: "set_sgtitle", text: args[0] });
+    }
+    return 0;
+  });
+
+  registerSpecial("shading", (_nargout, args) => {
+    if (args.length > 0) {
+      _plotInstr(rt.plotInstructions, {
+        type: "set_shading",
+        shading: args[0],
+      });
+    }
+    return 0;
+  });
+
+  registerSpecial("clf", () => {
+    _plotInstr(rt.plotInstructions, { type: "clf" });
+    return 0;
   });
 }

@@ -106,6 +106,10 @@ function dispatchPlotCall(
       return rt.loglog_call(args.map(a => ensureRuntimeValue(a)));
     case "area":
       return rt.area_call(args.map(a => ensureRuntimeValue(a)));
+    case "fplot":
+      return rt.fplot_call(args.map(a => ensureRuntimeValue(a)));
+    case "fplot3":
+      return rt.fplot3_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }
