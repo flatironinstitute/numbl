@@ -7,6 +7,7 @@ import type {
   BarTrace,
   Bar3Trace,
   ErrorBarTrace,
+  BoxTrace,
   PlotInstruction,
 } from "./types.js";
 
@@ -22,6 +23,7 @@ export type AxesState = {
   bar3Traces: Bar3Trace[];
   bar3hTraces: Bar3Trace[];
   errorBarTraces: ErrorBarTrace[];
+  boxTraces: BoxTrace[];
   areaTraces: PlotTrace[];
   areaBaseValue: number;
   title?: string;
@@ -66,6 +68,7 @@ const defaultAxes: AxesState = {
   bar3Traces: [],
   bar3hTraces: [],
   errorBarTraces: [],
+  boxTraces: [],
   areaTraces: [],
   areaBaseValue: 0,
 };
@@ -127,6 +130,7 @@ function addTraces(
       | "bar3Traces"
       | "bar3hTraces"
       | "errorBarTraces"
+      | "boxTraces"
       | "areaTraces"
       | "areaBaseValue"
     >
@@ -151,6 +155,7 @@ function addTraces(
         bar3hTraces: update.bar3hTraces ?? (hold ? axes.bar3hTraces : []),
         errorBarTraces:
           update.errorBarTraces ?? (hold ? axes.errorBarTraces : []),
+        boxTraces: update.boxTraces ?? (hold ? axes.boxTraces : []),
         areaTraces: update.areaTraces ?? (hold ? axes.areaTraces : []),
         areaBaseValue: update.areaBaseValue ?? axes.areaBaseValue,
         ...(update.imagescTrace !== undefined
@@ -261,6 +266,15 @@ export const figuresReducer = (
       return addTraces(state, {
         errorBarTraces: axes.holdOn
           ? [...axes.errorBarTraces, ...action.traces]
+          : [...action.traces],
+      });
+    }
+
+    case "boxchart": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        boxTraces: axes.holdOn
+          ? [...axes.boxTraces, ...action.traces]
           : [...action.traces],
       });
     }

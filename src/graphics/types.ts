@@ -146,6 +146,29 @@ export interface ErrorBarTrace {
   lineWidth?: number;
 }
 
+// ── BoxTrace type ───────────────────────────────────────────────────────
+
+export interface BoxTrace {
+  /** X position for this box */
+  x: number;
+  /** Median value */
+  median: number;
+  /** Lower quartile (Q1, 25th percentile) */
+  q1: number;
+  /** Upper quartile (Q3, 75th percentile) */
+  q3: number;
+  /** Lower whisker end (min non-outlier) */
+  whiskerLow: number;
+  /** Upper whisker end (max non-outlier) */
+  whiskerHigh: number;
+  /** Outlier values */
+  outliers: number[];
+  /** Relative box width */
+  width: number;
+  /** Box color as RGB triple [0–1] */
+  color?: [number, number, number];
+}
+
 // ── Plot Instructions ───────────────────────────────────────────────────
 
 export type PlotInstruction =
@@ -162,6 +185,7 @@ export type PlotInstruction =
   | { type: "bar3h"; trace: Bar3Trace }
   | { type: "errorbar"; traces: ErrorBarTrace[] }
   | { type: "area"; traces: PlotTrace[]; baseValue: number }
+  | { type: "boxchart"; traces: BoxTrace[] }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }
