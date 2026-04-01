@@ -74,13 +74,56 @@ registerIBuiltin({
   }),
 });
 
-// ── odeset (dummy) ───────────────────────────────────────────────────────
+// ── odeset ───────────────────────────────────────────────────────────────
 
 registerIBuiltin({
   name: "odeset",
   resolve: () => ({
+    outputTypes: [{ kind: "struct" }],
+    apply: args => {
+      const fields = new Map<string, RuntimeValue>();
+      if (args.length % 2 !== 0)
+        throw new RuntimeError("odeset: expected name-value pairs");
+      for (let i = 0; i < args.length; i += 2) {
+        const key = args[i];
+        if (!isRuntimeChar(key) && !isRuntimeString(key))
+          throw new RuntimeError("odeset: option name must be a string");
+        const name = isRuntimeChar(key) ? key.value : (key as string);
+        fields.set(name, args[i + 1]);
+      }
+      return RTV.struct(Object.fromEntries(fields));
+    },
+  }),
+});
+
+// ── odeget ───────────────────────────────────────────────────────────────
+
+registerIBuiltin({
+  name: "odeget",
+  resolve: () => ({
     outputTypes: [{ kind: "unknown" }],
-    apply: () => RTV.struct({}),
+    apply: args => {
+      if (args.length < 2)
+        throw new RuntimeError("odeget: requires 2 arguments (options, name)");
+      const opts = args[0];
+      const key = args[1];
+      if (!isRuntimeChar(key) && !isRuntimeString(key))
+        throw new RuntimeError("odeget: option name must be a string");
+      const name = isRuntimeChar(key) ? key.value : (key as string);
+      if (
+        opts &&
+        typeof opts === "object" &&
+        "kind" in opts &&
+        opts.kind === "struct"
+      ) {
+        const val = (
+          opts as { kind: "struct"; fields: Map<string, RuntimeValue> }
+        ).fields.get(name);
+        if (val !== undefined) return val;
+      }
+      // Return empty if not found (matches MATLAB)
+      return RTV.tensor(new FloatXArray(0), [0, 0]);
+    },
   }),
 });
 
