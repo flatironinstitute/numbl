@@ -1,5 +1,6 @@
-import { Box, Typography, LinearProgress, Button } from "@mui/material";
+import { Box, Typography, LinearProgress, Button, Link } from "@mui/material";
 import { useEffect, useRef, useState, useCallback } from "react";
+import pako from "pako";
 
 const DEFAULT_BENCHMARKS_URL =
   "https://magland.github.io/numbl-benchmarks/benchmarks";
@@ -20,6 +21,18 @@ function parseOutput(
     median: parseFloat(medianMatch[1]),
     times: timesMatch[1].split(",").map(s => parseFloat(s.trim())),
   };
+}
+
+function makeShareHash(name: string, code: string): string {
+  const data = {
+    files: [{ name: `${name}.m`, content: code }],
+    activeFileName: `${name}.m`,
+  };
+  const json = JSON.stringify(data);
+  const compressed = pako.deflate(new TextEncoder().encode(json));
+  let base64 = btoa(String.fromCharCode(...compressed));
+  base64 = base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return base64;
 }
 
 function getBenchmarksUrl(): string {
@@ -54,12 +67,12 @@ export function BenchmarkPage() {
   const [results, setResults] = useState<BenchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [runningAll, setRunningAll] = useState(false);
   const benchmarksRef = useRef<{ name: string; code: string }[]>([]);
-  const runningRef = useRef(false);
+  const cancelRef = useRef(false);
 
-  const allDone =
-    results.length > 0 &&
-    results.every(r => r.status === "done" || r.status === "error");
+  const anyRunning = results.some(r => r.status === "running");
+  const hasDone = results.some(r => r.status === "done");
 
   const handleCopyJson = useCallback(() => {
     const entries = results
@@ -86,7 +99,9 @@ export function BenchmarkPage() {
     return new Promise(resolve => {
       const bench = benchmarksRef.current[index];
       setResults(prev =>
-        prev.map((r, i) => (i === index ? { ...r, status: "running" } : r))
+        prev.map((r, i) =>
+          i === index ? { ...r, output: "", status: "running" } : r
+        )
       );
 
       const worker = new Worker(
@@ -133,12 +148,28 @@ export function BenchmarkPage() {
     });
   }, []);
 
+  const handleRunAll = useCallback(async () => {
+    cancelRef.current = false;
+    setRunningAll(true);
+    setResults(prev =>
+      prev.map(r => ({ ...r, output: "", status: "pending" }))
+    );
+    for (let i = 0; i < benchmarksRef.current.length; i++) {
+      if (cancelRef.current) break;
+      await runBenchmark(i);
+    }
+    setRunningAll(false);
+  }, [runBenchmark]);
+
+  const handleRunSingle = useCallback(
+    (index: number) => {
+      runBenchmark(index);
+    },
+    [runBenchmark]
+  );
+
   useEffect(() => {
-    if (runningRef.current) return;
-    runningRef.current = true;
-
     const baseUrl = getBenchmarksUrl();
-
     (async () => {
       try {
         const benchmarks = await fetchBenchmarks(baseUrl);
@@ -150,17 +181,13 @@ export function BenchmarkPage() {
             status: "pending",
           }))
         );
-        setLoading(false);
-
-        for (let i = 0; i < benchmarks.length; i++) {
-          await runBenchmark(i);
-        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
+      } finally {
         setLoading(false);
       }
     })();
-  }, [runBenchmark]);
+  }, []);
 
   return (
     <Box sx={{ maxWidth: 800, mx: "auto", p: 3 }}>
@@ -168,16 +195,21 @@ export function BenchmarkPage() {
         numbl browser benchmarks
       </Typography>
 
-      {allDone && (
+      <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
         <Button
-          variant="outlined"
+          variant="contained"
           size="small"
-          onClick={handleCopyJson}
-          sx={{ mb: 2 }}
+          onClick={handleRunAll}
+          disabled={loading || anyRunning}
         >
-          Copy results as JSON
+          Run All
         </Button>
-      )}
+        {hasDone && (
+          <Button variant="outlined" size="small" onClick={handleCopyJson}>
+            Copy results as JSON
+          </Button>
+        )}
+      </Box>
 
       {loading && <LinearProgress sx={{ mb: 2 }} />}
 
@@ -187,7 +219,7 @@ export function BenchmarkPage() {
         </Typography>
       )}
 
-      {results.map(r => (
+      {results.map((r, index) => (
         <Box
           key={r.name}
           sx={{
@@ -198,9 +230,43 @@ export function BenchmarkPage() {
             borderRadius: 1,
           }}
         >
-          <Typography variant="subtitle2">{r.name}</Typography>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <Typography variant="subtitle2">{r.name}</Typography>
+            <Box sx={{ display: "flex", gap: 0.5 }}>
+              <Link
+                href={`/share#${makeShareHash(r.name, benchmarksRef.current[index]?.code ?? "")}`}
+                target="_blank"
+                rel="noopener"
+                sx={{ fontSize: "0.8125rem", alignSelf: "center" }}
+              >
+                Open
+              </Link>
+              {r.status !== "running" && !runningAll && (
+                <Button
+                  size="small"
+                  onClick={() => handleRunSingle(index)}
+                  disabled={anyRunning}
+                >
+                  {r.status === "done" || r.status === "error"
+                    ? "Re-run"
+                    : "Run"}
+                </Button>
+              )}
+            </Box>
+          </Box>
           {r.status === "running" && <LinearProgress sx={{ my: 1 }} />}
-          {r.status === "pending" && (
+          {r.status === "pending" && !runningAll && (
+            <Typography variant="body2" color="text.secondary">
+              &mdash;
+            </Typography>
+          )}
+          {r.status === "pending" && runningAll && (
             <Typography variant="body2" color="text.secondary">
               Waiting...
             </Typography>
