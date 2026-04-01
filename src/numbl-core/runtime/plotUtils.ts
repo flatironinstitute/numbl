@@ -1467,3 +1467,42 @@ export function parseErrorBarArgs(args: RuntimeValue[]): ErrorBarTrace[] {
   if (marker) trace.marker = marker;
   return [trace];
 }
+
+/**
+ * Parse area() arguments.
+ *
+ * Supported forms:
+ *   area(Y)              — fill under Y with x = 1:length(Y)
+ *   area(X, Y)           — explicit X
+ *   area(..., basevalue)  — scalar baseline (default 0)
+ *   area(..., Name, Value)
+ *
+ * Returns { traces, baseValue }.
+ */
+export function parseAreaArgs(args: RuntimeValue[]): {
+  traces: PlotTrace[];
+  baseValue: number;
+} {
+  let baseValue = 0;
+
+  // Check if the last numeric arg is a scalar (basevalue)
+  // We need to peek: if last numeric arg is a scalar and there are ≥2 numeric args, it could be basevalue
+  const argsCopy = [...args];
+  const lastIdx = argsCopy.length - 1;
+  if (
+    lastIdx >= 1 &&
+    isNumericArg(argsCopy[lastIdx]) &&
+    isRuntimeNumber(argsCopy[lastIdx])
+  ) {
+    // If the previous arg is also numeric (vector/matrix), this scalar is basevalue
+    if (lastIdx >= 1 && isNumericArg(argsCopy[lastIdx - 1])) {
+      // Check it's truly a scalar, not a 1-element vector used as Y
+      baseValue = toNumber(argsCopy[lastIdx]);
+      argsCopy.pop();
+    }
+  }
+
+  // Now parse remaining args as plot-style (handles Y, X/Y, matrix columns, etc.)
+  const traces = parsePlotArgs(argsCopy);
+  return { traces, baseValue };
+}

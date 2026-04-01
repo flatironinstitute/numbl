@@ -104,6 +104,8 @@ function dispatchPlotCall(
       return rt.semilogy_call(args.map(a => ensureRuntimeValue(a)));
     case "loglog":
       return rt.loglog_call(args.map(a => ensureRuntimeValue(a)));
+    case "area":
+      return rt.area_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

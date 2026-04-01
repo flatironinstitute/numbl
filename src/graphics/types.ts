@@ -161,6 +161,7 @@ export type PlotInstruction =
   | { type: "bar3"; trace: Bar3Trace }
   | { type: "bar3h"; trace: Bar3Trace }
   | { type: "errorbar"; traces: ErrorBarTrace[] }
+  | { type: "area"; traces: PlotTrace[]; baseValue: number }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }

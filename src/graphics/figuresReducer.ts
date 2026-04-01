@@ -22,6 +22,8 @@ export type AxesState = {
   bar3Traces: Bar3Trace[];
   bar3hTraces: Bar3Trace[];
   errorBarTraces: ErrorBarTrace[];
+  areaTraces: PlotTrace[];
+  areaBaseValue: number;
   title?: string;
   xlabel?: string;
   ylabel?: string;
@@ -64,6 +66,8 @@ const defaultAxes: AxesState = {
   bar3Traces: [],
   bar3hTraces: [],
   errorBarTraces: [],
+  areaTraces: [],
+  areaBaseValue: 0,
 };
 
 function getAxes(fig: FigureState): AxesState {
@@ -123,6 +127,8 @@ function addTraces(
       | "bar3Traces"
       | "bar3hTraces"
       | "errorBarTraces"
+      | "areaTraces"
+      | "areaBaseValue"
     >
   >
 ): FiguresState {
@@ -145,6 +151,8 @@ function addTraces(
         bar3hTraces: update.bar3hTraces ?? (hold ? axes.bar3hTraces : []),
         errorBarTraces:
           update.errorBarTraces ?? (hold ? axes.errorBarTraces : []),
+        areaTraces: update.areaTraces ?? (hold ? axes.areaTraces : []),
+        areaBaseValue: update.areaBaseValue ?? axes.areaBaseValue,
         ...(update.imagescTrace !== undefined
           ? { imagescTrace: update.imagescTrace }
           : {}),
@@ -254,6 +262,16 @@ export const figuresReducer = (
         errorBarTraces: axes.holdOn
           ? [...axes.errorBarTraces, ...action.traces]
           : [...action.traces],
+      });
+    }
+
+    case "area": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        areaTraces: axes.holdOn
+          ? [...axes.areaTraces, ...action.traces]
+          : [...action.traces],
+        areaBaseValue: action.baseValue,
       });
     }
 
