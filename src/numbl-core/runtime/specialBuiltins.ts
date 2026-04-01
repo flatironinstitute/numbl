@@ -51,10 +51,9 @@ import {
   dormandPrince45,
   bogackiShampine23,
   interpolateAtPoints,
-  evalStepAt,
+  denseOutputEval,
   type StepData,
 } from "../helpers/ode-rk.js";
-import { solveDOP853 } from "../helpers/ode-dop853.js";
 
 /** Map sol structs to their dense output step data for deval. */
 const _solStepData = new WeakMap<object, StepData[]>();
@@ -1540,10 +1539,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return _ode45Impl(rt, nargout, args, bogackiShampine23);
   });
 
-  registerSpecial("dop853", (nargout, args) => {
-    return _dop853Impl(rt, nargout, args);
-  });
-
   registerSpecial("deval", (_nargout, args) => {
     return _devalImpl(args);
   });
@@ -1793,231 +1788,6 @@ function _ode45Impl(
   return [tTensor, yTensor, teTensor, yeTensor, ieTensor];
 }
 
-// ── dop853 implementation ─────────────────────────────────────────────
-
-function _dop853Impl(
-  rt: Runtime,
-  nargout: number,
-  args: RuntimeValue[]
-): RuntimeValue | RuntimeValue[] {
-  const solverName = "dop853";
-  if (args.length < 3)
-    throw new RuntimeError(
-      `${solverName}: requires at least 3 arguments (odefun, tspan, y0)`
-    );
-
-  // Parse odefun
-  const odefun = ensureRuntimeValue(args[0]);
-  if (!isRuntimeFunction(odefun))
-    throw new RuntimeError(
-      `${solverName}: first argument must be a function handle`
-    );
-
-  // Parse tspan
-  const tspanRaw = ensureRuntimeValue(args[1]);
-  let tspan: number[];
-  if (isRuntimeNumber(tspanRaw)) {
-    throw new RuntimeError(
-      `${solverName}: tspan must be a vector with at least 2 elements`
-    );
-  } else if (isRuntimeTensor(tspanRaw)) {
-    tspan = Array.from(tspanRaw.data);
-  } else {
-    throw new RuntimeError(`${solverName}: tspan must be a numeric vector`);
-  }
-  if (tspan.length < 2)
-    throw new RuntimeError(
-      `${solverName}: tspan must have at least 2 elements`
-    );
-
-  // Parse y0
-  const y0Raw = ensureRuntimeValue(args[2]);
-  let y0: number[];
-  if (isRuntimeNumber(y0Raw)) {
-    y0 = [y0Raw as number];
-  } else if (isRuntimeTensor(y0Raw)) {
-    y0 = Array.from(y0Raw.data);
-  } else {
-    throw new RuntimeError(`${solverName}: y0 must be a numeric vector`);
-  }
-  const neq = y0.length;
-
-  // Parse options
-  let relTol: number | undefined;
-  let absTol: number | undefined;
-  let maxStep: number | undefined;
-  let initialStep: number | undefined;
-  let eventsFn:
-    | ((t: number, y: number[]) => [number[], boolean[], number[]])
-    | undefined;
-
-  if (args.length >= 4) {
-    const optsRaw = ensureRuntimeValue(args[3]);
-    if (isRuntimeStruct(optsRaw)) {
-      const fields = optsRaw.fields;
-      const rtF = fields.get("RelTol");
-      if (rtF !== undefined) relTol = toNumber(rtF);
-      const atF = fields.get("AbsTol");
-      if (atF !== undefined) absTol = toNumber(atF);
-      const msF = fields.get("MaxStep");
-      if (msF !== undefined) maxStep = toNumber(msF);
-      const isF = fields.get("InitialStep");
-      if (isF !== undefined) initialStep = toNumber(isF);
-
-      const evF = fields.get("Events");
-      if (evF !== undefined) {
-        if (!isRuntimeFunction(evF))
-          throw new RuntimeError(
-            `${solverName}: Events option must be a function handle`
-          );
-        const evHandle = evF;
-        eventsFn = (
-          t: number,
-          y: number[]
-        ): [number[], boolean[], number[]] => {
-          const yTensor =
-            neq === 1
-              ? (y[0] as RuntimeValue)
-              : RTV.tensor(new FloatXArray(y), [neq, 1]);
-          const result = rt.index(evHandle, [t as RuntimeValue, yTensor], 3);
-          const resultArr = result as RuntimeValue[];
-          const extractArray = (v: RuntimeValue): number[] => {
-            if (isRuntimeNumber(v)) return [v as number];
-            if (isRuntimeTensor(v)) return Array.from(v.data);
-            return [toNumber(v)];
-          };
-          return [
-            extractArray(ensureRuntimeValue(resultArr[0])),
-            extractArray(ensureRuntimeValue(resultArr[1])).map(x => x !== 0),
-            extractArray(ensureRuntimeValue(resultArr[2])),
-          ];
-        };
-      }
-    }
-  }
-
-  // Build ODE function wrapper
-  const odeFn = (t: number, y: number[]): number[] => {
-    const yVal: RuntimeValue =
-      neq === 1
-        ? (y[0] as RuntimeValue)
-        : RTV.tensor(new FloatXArray(y), [neq, 1]);
-    const resultRaw = rt.index(odefun, [t as RuntimeValue, yVal], 1);
-    const result = ensureRuntimeValue(resultRaw as RuntimeValue);
-    if (isRuntimeNumber(result)) return [result as number];
-    if (isRuntimeTensor(result)) return Array.from(result.data);
-    throw new RuntimeError(
-      `${solverName}: odefun must return a numeric vector`
-    );
-  };
-
-  const span = Math.abs(tspan[tspan.length - 1] - tspan[0]);
-  const effectiveMaxStep = maxStep ?? 0.1 * span;
-
-  // Solve using DOP853
-  const odeResult = solveDOP853(odeFn, tspan, y0, {
-    relTol,
-    absTol,
-    maxStep: effectiveMaxStep,
-    initialStep,
-    events: eventsFn,
-  });
-
-  // Output formatting (same as _ode45Impl)
-  const useInterp = tspan.length > 2;
-  let tVals: number[];
-  let yVals: number[][];
-
-  if (useInterp) {
-    const interp = interpolateAtPoints(odeResult, tspan);
-    tVals = interp.t;
-    yVals = interp.y;
-  } else {
-    tVals = odeResult.t;
-    yVals = odeResult.y;
-  }
-
-  const nPoints = tVals.length;
-
-  if (nargout <= 1) {
-    const solSteps = odeResult.steps;
-    const nSolPts = solSteps.length + 1;
-    const xData = new FloatXArray(nSolPts);
-    xData[0] = solSteps.length > 0 ? solSteps[0].tOld : tspan[0];
-    for (let j = 0; j < solSteps.length; j++) {
-      xData[j + 1] = solSteps[j].tNew;
-    }
-    const yData = new FloatXArray(neq * nSolPts);
-    const y0sol = solSteps.length > 0 ? solSteps[0].yOld : y0;
-    for (let i = 0; i < neq; i++) yData[i] = y0sol[i];
-    for (let j = 0; j < solSteps.length; j++) {
-      for (let i = 0; i < neq; i++) {
-        yData[(j + 1) * neq + i] = solSteps[j].yNew[i];
-      }
-    }
-    const solFields: Record<string, RuntimeValue> = {
-      x: RTV.tensor(xData, [1, nSolPts]),
-      y: RTV.tensor(yData, [neq, nSolPts]),
-      solver: RTV.char(solverName),
-    };
-    if (odeResult.te.length > 0) {
-      solFields.xe = RTV.tensor(new FloatXArray(odeResult.te), [
-        1,
-        odeResult.te.length,
-      ]);
-      const yeData = new FloatXArray(neq * odeResult.ye.length);
-      for (let j = 0; j < odeResult.ye.length; j++) {
-        for (let i = 0; i < neq; i++) {
-          yeData[j * neq + i] = odeResult.ye[j][i];
-        }
-      }
-      solFields.ye = RTV.tensor(yeData, [neq, odeResult.ye.length]);
-      solFields.ie = RTV.tensor(new FloatXArray(odeResult.ie), [
-        odeResult.ie.length,
-        1,
-      ]);
-    }
-    const solStruct = RTV.struct(solFields);
-    _solStepData.set(solStruct, solSteps);
-    return solStruct;
-  }
-
-  const tData = new FloatXArray(nPoints);
-  const yData = new FloatXArray(nPoints * neq);
-  for (let j = 0; j < nPoints; j++) {
-    tData[j] = tVals[j];
-    for (let i = 0; i < neq; i++) {
-      yData[i * nPoints + j] = yVals[j][i];
-    }
-  }
-  const tTensor = RTV.tensor(tData, [nPoints, 1]);
-  const yTensor = RTV.tensor(yData, [nPoints, neq]);
-  if (nargout <= 2) return [tTensor, yTensor];
-
-  const nEvents = odeResult.te.length;
-  const teTensor =
-    nEvents > 0
-      ? RTV.tensor(new FloatXArray(odeResult.te), [nEvents, 1])
-      : RTV.tensor(new FloatXArray(0), [0, 1]);
-  let yeTensor: RuntimeValue;
-  if (nEvents > 0) {
-    const yeData2 = new FloatXArray(nEvents * neq);
-    for (let j = 0; j < nEvents; j++) {
-      for (let i = 0; i < neq; i++) {
-        yeData2[i * nEvents + j] = odeResult.ye[j][i];
-      }
-    }
-    yeTensor = RTV.tensor(yeData2, [nEvents, neq]);
-  } else {
-    yeTensor = RTV.tensor(new FloatXArray(0), [0, neq]);
-  }
-  const ieTensor =
-    nEvents > 0
-      ? RTV.tensor(new FloatXArray(odeResult.ie), [nEvents, 1])
-      : RTV.tensor(new FloatXArray(0), [0, 1]);
-  return [tTensor, yTensor, teTensor, yeTensor, ieTensor];
-}
-
 // ── deval implementation ──────────────────────────────────────────────
 
 function _devalImpl(args: RuntimeValue[]): RuntimeValue {
@@ -2073,7 +1843,7 @@ function _devalImpl(args: RuntimeValue[]): RuntimeValue {
       Math.abs(step.h) < 1e-300
         ? 0
         : Math.max(0, Math.min(1, (t - step.tOld) / step.h));
-    const yi = evalStepAt(step, x);
+    const yi = denseOutputEval(step.yOld, step.Q, step.h, x);
 
     // Column-major: y(i, p) at index p * neq + i
     for (let i = 0; i < neq; i++) {
