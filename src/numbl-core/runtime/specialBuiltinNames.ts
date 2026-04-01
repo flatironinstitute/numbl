@@ -1,5 +1,6 @@
 /** Names of all special builtins. Standalone module to avoid circular imports. */
 export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
+  "help",
   "disp",
   "fprintf",
   "arrayfun",

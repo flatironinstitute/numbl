@@ -30,8 +30,14 @@ export interface IBuiltinResolution {
   ) => RuntimeValue | RuntimeValue[];
 }
 
+export interface BuiltinHelp {
+  signatures: string[];
+  description: string;
+}
+
 export interface IBuiltin {
   name: string;
+  help?: BuiltinHelp;
   /** Given input JIT types + nargout, return output types and a specialized apply, or null. */
   resolve: (argTypes: JitType[], nargout: number) => IBuiltinResolution | null;
   /** Optional fast-path JS code emission for JIT. Return null to fall back to $h.ib_<name>. */
@@ -76,6 +82,16 @@ export function unregisterIBuiltin(name: string): void {
 
 export function getAllIBuiltinNames(): string[] {
   return Array.from(registry.keys());
+}
+
+const helpRegistry = new Map<string, BuiltinHelp>();
+
+export function getIBuiltinHelp(name: string): BuiltinHelp | undefined {
+  return registry.get(name)?.help ?? helpRegistry.get(name);
+}
+
+export function registerBuiltinHelp(name: string, help: BuiltinHelp): void {
+  helpRegistry.set(name, help);
 }
 
 /** Probe an IBuiltin to determine its nargin (number of input args).
@@ -477,11 +493,13 @@ export interface BuiltinCase {
 /** Register an IBuiltin from a list of cases. The first matching case wins. */
 export function defineBuiltin(opts: {
   name: string;
+  help?: BuiltinHelp;
   cases: BuiltinCase[];
   jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null;
 }): void {
   registerIBuiltin({
     name: opts.name,
+    help: opts.help,
     resolve: (argTypes, nargout) => {
       for (const c of opts.cases) {
         const outputTypes = c.match(argTypes, nargout);

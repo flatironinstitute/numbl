@@ -1141,6 +1141,7 @@ export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
     "warning",
     "assert",
     "tic",
+    "help",
   ];
   return outputFunctions.includes(expr.name);
 }
