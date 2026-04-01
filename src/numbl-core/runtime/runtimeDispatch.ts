@@ -110,6 +110,12 @@ function dispatchPlotCall(
       return rt.fplot_call(args.map(a => ensureRuntimeValue(a)));
     case "fplot3":
       return rt.fplot3_call(args.map(a => ensureRuntimeValue(a)));
+    case "scatter3":
+      return rt.scatter3_call(args.map(a => ensureRuntimeValue(a)));
+    case "histogram":
+      return rt.histogram_call(args.map(a => ensureRuntimeValue(a)));
+    case "histogram2":
+      return rt.histogram2_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

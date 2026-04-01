@@ -115,6 +115,9 @@ import {
   areaCall as _areaCall,
   fplotCall as _fplotCall,
   fplot3Call as _fplot3Call,
+  scatter3Call as _scatter3Call,
+  histogramCall as _histogramCall,
+  histogram2Call as _histogram2Call,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -354,6 +357,15 @@ export class Runtime {
     };
     this.builtins["fplot3"] = (_nargout: number, args: unknown[]) => {
       this.fplot3_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["scatter3"] = (_nargout: number, args: unknown[]) => {
+      this.scatter3_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["histogram"] = (_nargout: number, args: unknown[]) => {
+      this.histogram_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["histogram2"] = (_nargout: number, args: unknown[]) => {
+      this.histogram2_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1608,6 +1620,18 @@ export class Runtime {
 
   public fplot3_call(args: RuntimeValue[]): void {
     _fplot3Call(this, this.plotInstructions, args);
+  }
+
+  public scatter3_call(args: RuntimeValue[]): void {
+    _scatter3Call(this.plotInstructions, args);
+  }
+
+  public histogram_call(args: RuntimeValue[]): void {
+    _histogramCall(this.plotInstructions, args);
+  }
+
+  public histogram2_call(args: RuntimeValue[]): void {
+    _histogram2Call(this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {
