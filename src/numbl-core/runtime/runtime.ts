@@ -111,6 +111,7 @@ import {
   errorbarCall as _errorbarCall,
   semilogxCall as _semilogxCall,
   semilogyCall as _semilogyCall,
+  loglogCall as _loglogCall,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -338,6 +339,9 @@ export class Runtime {
     };
     this.builtins["semilogy"] = (_nargout: number, args: unknown[]) => {
       this.semilogy_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["loglog"] = (_nargout: number, args: unknown[]) => {
+      this.loglog_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1576,6 +1580,10 @@ export class Runtime {
 
   public semilogy_call(args: RuntimeValue[]): void {
     _semilogyCall(this.plotInstructions, args);
+  }
+
+  public loglog_call(args: RuntimeValue[]): void {
+    _loglogCall(this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {

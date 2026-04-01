@@ -45,6 +45,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "errorbar",
   "semilogx",
   "semilogy",
+  "loglog",
   "colormap",
   "view",
   "zlabel",

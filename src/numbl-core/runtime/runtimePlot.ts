@@ -328,6 +328,17 @@ export function semilogyCall(
   }
 }
 
+export function loglogCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  plotInstructions.push({ type: "set_axis_scale", value: "loglog" });
+  const traces = parsePlotArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
+}
+
 export function legendCall(
   plotInstructions: PlotInstruction[],
   args: RuntimeValue[]
