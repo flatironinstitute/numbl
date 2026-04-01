@@ -96,4 +96,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "setenv",
   "pwd",
   "cd",
+  "ode45",
+  "ode23",
+  "deval",
 ];
