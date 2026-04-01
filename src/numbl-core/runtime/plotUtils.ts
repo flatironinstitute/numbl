@@ -1438,7 +1438,10 @@ export function parseErrorBarArgs(args: RuntimeValue[]): ErrorBarTrace[] {
       const s = getStringValue(args[pos]);
       const spec = parseLineSpec(s);
       if (spec) {
-        if (spec.color) color = spec.color;
+        if (spec.color) {
+          const c = resolveColor(spec.color);
+          if (c) color = c;
+        }
         if (spec.lineStyle) lineStyle = spec.lineStyle;
         if (spec.marker) marker = spec.marker;
         pos++;
