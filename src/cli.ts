@@ -20,7 +20,10 @@ import {
   type PlotServer,
   type PlotServerOptions,
 } from "./cli-plot-server.js";
-import { getAllIBuiltinNames } from "./numbl-core/interpreter/builtins/index.js";
+import {
+  getAllIBuiltinNames,
+  getIBuiltinHelp,
+} from "./numbl-core/interpreter/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
 import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
 import {
@@ -311,7 +314,7 @@ Commands:
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
   build-addon        Build native LAPACK addon
   info               Print machine-readable info (JSON)
-  list-builtins      List available built-in functions
+  list-builtins      List available built-in functions (--no-help: only those without help text)
   (no command)       Start interactive REPL
 
 Global options:
@@ -855,9 +858,11 @@ function cmdInfo() {
   );
 }
 
-function cmdListBuiltins() {
+function cmdListBuiltins(flags: string[]) {
+  const noHelp = flags.includes("--no-help");
   const names = getAllIBuiltinNames().sort();
   for (const name of names) {
+    if (noHelp && getIBuiltinHelp(name)) continue;
     console.log(name);
   }
 }
@@ -1099,7 +1104,7 @@ async function main() {
       cmdInfo();
       break;
     case "list-builtins":
-      cmdListBuiltins();
+      cmdListBuiltins(rest);
       break;
     case "show-profile":
       cmdShowProfile(rest);

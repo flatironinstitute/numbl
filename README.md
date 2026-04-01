@@ -49,7 +49,7 @@ Commands:
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
   build-addon        Build native LAPACK addon
   info               Print machine-readable info (JSON)
-  list-builtins      List available built-in functions
+  list-builtins      List available built-in functions (--no-help: only those without help text)
   (no command)       Start interactive REPL
 
 Global options:

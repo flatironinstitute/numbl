@@ -29,16 +29,19 @@ import "./sparse.js";
 import "./special-math.js";
 import "./misc.js";
 import "./dictionary.js";
+import "./help-text.js";
 
 export {
   getIBuiltin,
+  getIBuiltinHelp,
   getIBuiltinNargin,
   getAllIBuiltinNames,
   buildIBuiltinHelpers,
   setDynamicRegisterHook,
+  registerBuiltinHelp,
   inferJitType,
 } from "./types.js";
-export type { IBuiltin, IBuiltinResolution } from "./types.js";
+export type { IBuiltin, IBuiltinResolution, BuiltinHelp } from "./types.js";
 export { resetAppdataStore, convertJsonValue } from "./misc.js";
 
 // Register IBuiltin + special builtin names so isBuiltin() recognizes them

@@ -15,6 +15,7 @@ import {
   makeTensor,
   unaryMathJitEmit,
   binaryMathJitEmit,
+  type BuiltinHelp,
 } from "./types.js";
 import { type JitType, isNonneg, type SignCategory } from "../jit/jitTypes.js";
 import {
@@ -32,10 +33,12 @@ function registerUnary(
   name: string,
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
-  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null
+  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null,
+  help?: BuiltinHelp
 ): void {
   defineBuiltin({
     name,
+    help,
     cases: unaryElemwiseCases({ realFn, complexFn }, name),
     jitEmit,
   });

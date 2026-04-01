@@ -34,7 +34,11 @@ import {
   subsasgnBuiltin as _subsasgnBuiltin,
 } from "./runtimeDispatch.js";
 import type { Runtime } from "./runtime.js";
-import { registerDynamicIBuiltin } from "../interpreter/builtins/types.js";
+import {
+  registerDynamicIBuiltin,
+  getIBuiltinHelp,
+} from "../interpreter/builtins/types.js";
+import { getAllBuiltinNames } from "../helpers/registry.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
 import { hashKey } from "../interpreter/builtins/dictionary.js";
 import {
@@ -63,6 +67,30 @@ function registerSpecial(
  * Register all special builtins as IBuiltins closing over the runtime instance.
  */
 export function registerSpecialBuiltins(rt: Runtime): void {
+  registerSpecial("help", (_nargout, args) => {
+    if (args.length === 0) {
+      const names = getAllBuiltinNames().sort();
+      rt.output("Available builtins:\n");
+      rt.output("  " + names.join(", ") + "\n");
+      rt.output("\nType 'help <name>' for help on a specific builtin.\n");
+      return 0;
+    }
+    const name = toString(args[0]);
+    const h = getIBuiltinHelp(name);
+    if (!h) {
+      const allNames = getAllBuiltinNames();
+      if (allNames.includes(name)) {
+        rt.output(`No help available for '${name}'.\n`);
+      } else {
+        rt.output(`Unknown function '${name}'.\n`);
+      }
+      return 0;
+    }
+    rt.output(`  ${h.signatures.join("\n  ")}\n\n`);
+    rt.output(`${h.description}\n`);
+    return 0;
+  });
+
   registerSpecial("disp", (_nargout, args) => {
     if (args.length >= 1) {
       const mv = ensureRuntimeValue(args[0]);
