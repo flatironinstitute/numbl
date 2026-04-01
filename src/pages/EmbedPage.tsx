@@ -34,7 +34,7 @@ import {
 } from "../graphics/figuresReducer.js";
 
 const DEFAULT_SCRIPT = `% Welcome to numbl!
-% Try running some MATLAB code:
+% Try running some code:
 
 x = 1:10;
 y = x.^2;
