@@ -118,6 +118,124 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Real Nth root of X, element-wise. Unlike X^(1/N), returns real results for odd N and negative X.",
   },
+  sind: {
+    signatures: ["Y = sind(X)"],
+    description: "Sine of argument in degrees, element-wise.",
+  },
+  cosd: {
+    signatures: ["Y = cosd(X)"],
+    description: "Cosine of argument in degrees, element-wise.",
+  },
+  tand: {
+    signatures: ["Y = tand(X)"],
+    description: "Tangent of argument in degrees, element-wise.",
+  },
+  asind: {
+    signatures: ["Y = asind(X)"],
+    description:
+      "Inverse sine in degrees, element-wise. Returns complex for |X| > 1.",
+  },
+  acosd: {
+    signatures: ["Y = acosd(X)"],
+    description:
+      "Inverse cosine in degrees, element-wise. Returns complex for |X| > 1.",
+  },
+  atand: {
+    signatures: ["Y = atand(X)"],
+    description: "Inverse tangent in degrees, element-wise.",
+  },
+  atan2d: {
+    signatures: ["T = atan2d(Y, X)"],
+    description: "Four-quadrant inverse tangent in degrees, element-wise.",
+  },
+  sec: {
+    signatures: ["Y = sec(X)"],
+    description: "Secant (1/cos), element-wise.",
+  },
+  csc: {
+    signatures: ["Y = csc(X)"],
+    description: "Cosecant (1/sin), element-wise.",
+  },
+  cot: {
+    signatures: ["Y = cot(X)"],
+    description: "Cotangent (1/tan), element-wise.",
+  },
+  secd: {
+    signatures: ["Y = secd(X)"],
+    description: "Secant of argument in degrees, element-wise.",
+  },
+  cscd: {
+    signatures: ["Y = cscd(X)"],
+    description: "Cosecant of argument in degrees, element-wise.",
+  },
+  cotd: {
+    signatures: ["Y = cotd(X)"],
+    description: "Cotangent of argument in degrees, element-wise.",
+  },
+  asec: {
+    signatures: ["Y = asec(X)"],
+    description: "Inverse secant in radians. Returns complex when needed.",
+  },
+  acsc: {
+    signatures: ["Y = acsc(X)"],
+    description: "Inverse cosecant in radians. Returns complex when needed.",
+  },
+  acot: {
+    signatures: ["Y = acot(X)"],
+    description: "Inverse cotangent in radians, element-wise.",
+  },
+  asecd: {
+    signatures: ["Y = asecd(X)"],
+    description: "Inverse secant in degrees. Returns complex when needed.",
+  },
+  acscd: {
+    signatures: ["Y = acscd(X)"],
+    description: "Inverse cosecant in degrees. Returns complex when needed.",
+  },
+  acotd: {
+    signatures: ["Y = acotd(X)"],
+    description: "Inverse cotangent in degrees, element-wise.",
+  },
+  acosh: {
+    signatures: ["Y = acosh(X)"],
+    description:
+      "Inverse hyperbolic cosine, element-wise. Returns complex for X < 1.",
+  },
+  asinh: {
+    signatures: ["Y = asinh(X)"],
+    description: "Inverse hyperbolic sine, element-wise.",
+  },
+  atanh: {
+    signatures: ["Y = atanh(X)"],
+    description:
+      "Inverse hyperbolic tangent, element-wise. Returns complex for |X| > 1.",
+  },
+  sech: {
+    signatures: ["Y = sech(X)"],
+    description: "Hyperbolic secant (1/cosh), element-wise.",
+  },
+  csch: {
+    signatures: ["Y = csch(X)"],
+    description: "Hyperbolic cosecant (1/sinh), element-wise.",
+  },
+  coth: {
+    signatures: ["Y = coth(X)"],
+    description: "Hyperbolic cotangent (1/tanh), element-wise.",
+  },
+  asech: {
+    signatures: ["Y = asech(X)"],
+    description:
+      "Inverse hyperbolic secant, element-wise. Returns complex when needed.",
+  },
+  acsch: {
+    signatures: ["Y = acsch(X)"],
+    description: "Inverse hyperbolic cosecant, element-wise.",
+  },
+  acoth: {
+    signatures: ["Y = acoth(X)"],
+    description:
+      "Inverse hyperbolic cotangent, element-wise. Returns complex for |X| < 1.",
+  },
 
   // ── Arithmetic ────────────────────────────────────────────────────────
   atan2: {
@@ -791,6 +909,137 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Convert to character array. Numeric input is interpreted as character codes.",
   },
+  bin2dec: {
+    signatures: ["D = bin2dec(S)"],
+    description: "Convert binary string to decimal number.",
+  },
+  dec2bin: {
+    signatures: ["S = dec2bin(D)", "S = dec2bin(D, N)"],
+    description:
+      "Convert decimal to binary string. N specifies minimum number of digits.",
+  },
+  dec2hex: {
+    signatures: ["S = dec2hex(D)", "S = dec2hex(D, N)"],
+    description:
+      "Convert decimal to hexadecimal string. N specifies minimum number of digits.",
+  },
+  hex2dec: {
+    signatures: ["D = hex2dec(S)"],
+    description: "Convert hexadecimal string to decimal number.",
+  },
+  int2str: {
+    signatures: ["S = int2str(X)"],
+    description:
+      "Convert integer to string. For matrices, formats rows with two-space column separation.",
+  },
+  mat2str: {
+    signatures: ["S = mat2str(X)", "S = mat2str(X, N)"],
+    description:
+      "Convert matrix to bracket notation string (e.g. '[1 2;3 4]'). N specifies precision.",
+  },
+  blanks: {
+    signatures: ["S = blanks(N)"],
+    description: "Create string of N space characters.",
+  },
+  deblank: {
+    signatures: ["S = deblank(S)"],
+    description: "Remove trailing whitespace from string.",
+  },
+  count: {
+    signatures: ["N = count(S, PAT)"],
+    description: "Count non-overlapping occurrences of pattern in string.",
+  },
+  endsWith: {
+    signatures: ["TF = endsWith(S, PAT)"],
+    description:
+      "True if string ends with pattern. PAT can be a cell array of patterns.",
+  },
+  startsWith: {
+    signatures: ["TF = startsWith(S, PAT)"],
+    description:
+      "True if string starts with pattern. PAT can be a cell array of patterns.",
+  },
+  erase: {
+    signatures: ["S2 = erase(S, PAT)"],
+    description: "Remove all occurrences of pattern from string.",
+  },
+  extractAfter: {
+    signatures: ["S2 = extractAfter(S, POS)", "S2 = extractAfter(S, PAT)"],
+    description:
+      "Extract substring after a numeric position or pattern occurrence.",
+  },
+  extractBefore: {
+    signatures: ["S2 = extractBefore(S, POS)", "S2 = extractBefore(S, PAT)"],
+    description:
+      "Extract substring before a numeric position or pattern occurrence.",
+  },
+  extractBetween: {
+    signatures: ["S2 = extractBetween(S, START, END)"],
+    description: "Extract substring between two positions or patterns.",
+  },
+  insertAfter: {
+    signatures: [
+      "S2 = insertAfter(S, POS, NEW)",
+      "S2 = insertAfter(S, PAT, NEW)",
+    ],
+    description: "Insert text after a position or pattern occurrence.",
+  },
+  insertBefore: {
+    signatures: [
+      "S2 = insertBefore(S, POS, NEW)",
+      "S2 = insertBefore(S, PAT, NEW)",
+    ],
+    description: "Insert text before a position or pattern occurrence.",
+  },
+  pad: {
+    signatures: ["S2 = pad(S, N)", "S2 = pad(S, N, SIDE)"],
+    description:
+      "Pad string with spaces to length N. SIDE: 'right' (default), 'left', or 'both'.",
+  },
+  reverse: {
+    signatures: ["S2 = reverse(S)"],
+    description: "Reverse character order in string.",
+  },
+  strncmp: {
+    signatures: ["TF = strncmp(S1, S2, N)"],
+    description: "Compare first N characters of two strings (case sensitive).",
+  },
+  strncmpi: {
+    signatures: ["TF = strncmpi(S1, S2, N)"],
+    description:
+      "Compare first N characters of two strings (case insensitive).",
+  },
+  strrep: {
+    signatures: ["S2 = strrep(S, OLD, NEW)"],
+    description: "Replace all occurrences of OLD with NEW in string.",
+  },
+  strtok: {
+    signatures: [
+      "TOK = strtok(S)",
+      "[TOK, REM] = strtok(S)",
+      "[TOK, REM] = strtok(S, DELIM)",
+    ],
+    description:
+      "Extract first token from string. Default delimiters are whitespace.",
+  },
+  strtrim: {
+    signatures: ["S2 = strtrim(S)"],
+    description: "Remove leading and trailing whitespace.",
+  },
+  sscanf: {
+    signatures: ["A = sscanf(S, FMT)", "[A, COUNT] = sscanf(S, FMT)"],
+    description:
+      "Read formatted data from string. Supports %d, %f, %x, %o, %c, %s specifiers.",
+  },
+  regexpi: {
+    signatures: [
+      "START = regexpi(S, PAT)",
+      "OUT = regexpi(S, PAT, 'match')",
+      "OUT = regexpi(S, PAT, 'tokens')",
+    ],
+    description:
+      "Case-insensitive regular expression matching. Same output options as regexp.",
+  },
 
   // ── Type constructors ─────────────────────────────────────────────────
   double: {
@@ -869,6 +1118,92 @@ const H: Record<string, BuiltinHelp> = {
   eps: {
     signatures: ["E = eps", "E = eps(X)"],
     description: "Floating-point relative accuracy. eps(X) gives spacing at X.",
+  },
+  erf: {
+    signatures: ["Y = erf(X)"],
+    description: "Error function, element-wise.",
+  },
+  erfc: {
+    signatures: ["Y = erfc(X)"],
+    description: "Complementary error function (1 - erf(X)), element-wise.",
+  },
+  erfinv: {
+    signatures: ["Y = erfinv(X)"],
+    description: "Inverse error function, element-wise.",
+  },
+  erfcinv: {
+    signatures: ["Y = erfcinv(X)"],
+    description: "Inverse complementary error function, element-wise.",
+  },
+  erfcx: {
+    signatures: ["Y = erfcx(X)"],
+    description:
+      "Scaled complementary error function: exp(X^2) * erfc(X), element-wise.",
+  },
+  gamma: {
+    signatures: ["Y = gamma(X)"],
+    description:
+      "Gamma function, element-wise. Returns NaN at non-positive integers.",
+  },
+  gammaln: {
+    signatures: ["Y = gammaln(X)"],
+    description: "Logarithm of gamma function, element-wise.",
+  },
+  beta: {
+    signatures: ["B = beta(X, Y)"],
+    description: "Beta function: gamma(X)*gamma(Y)/gamma(X+Y), element-wise.",
+  },
+  pow2: {
+    signatures: ["Y = pow2(X)"],
+    description: "Base-2 power: 2^X, element-wise.",
+  },
+  nextpow2: {
+    signatures: ["P = nextpow2(N)"],
+    description:
+      "Exponent of next higher power of 2. Returns 0 for non-positive input.",
+  },
+  besselj: {
+    signatures: ["Y = besselj(NU, Z)", "Y = besselj(NU, Z, SCALE)"],
+    description:
+      "Bessel function of the first kind. SCALE=1 applies exponential scaling.",
+  },
+  bessely: {
+    signatures: ["Y = bessely(NU, Z)", "Y = bessely(NU, Z, SCALE)"],
+    description:
+      "Bessel function of the second kind. SCALE=1 applies exponential scaling.",
+  },
+  besseli: {
+    signatures: ["Y = besseli(NU, Z)", "Y = besseli(NU, Z, SCALE)"],
+    description:
+      "Modified Bessel function of the first kind. SCALE=1 applies exponential scaling.",
+  },
+  besselk: {
+    signatures: ["Y = besselk(NU, Z)", "Y = besselk(NU, Z, SCALE)"],
+    description:
+      "Modified Bessel function of the second kind. SCALE=1 applies exponential scaling.",
+  },
+  airy: {
+    signatures: ["Y = airy(X)", "Y = airy(K, X)", "Y = airy(K, X, SCALE)"],
+    description:
+      "Airy functions. K selects the function: 0=Ai (default), 1=Ai', 2=Bi, 3=Bi'. SCALE=1 applies exponential scaling.",
+  },
+  ellipj: {
+    signatures: ["SN = ellipj(U, M)", "[SN, CN, DN] = ellipj(U, M)"],
+    description: "Jacobi elliptic functions.",
+  },
+  legendre: {
+    signatures: ["P = legendre(N, X)", "P = legendre(N, X, NORMALIZATION)"],
+    description:
+      "Associated Legendre functions of degree N. NORMALIZATION: 'unnorm' (default), 'sch', or 'norm'.",
+  },
+  deconv: {
+    signatures: ["[Q, R] = deconv(B, A)", "Q = deconv(B, A)"],
+    description:
+      "Polynomial deconvolution (division). Returns quotient and remainder.",
+  },
+  cumtrapz: {
+    signatures: ["Z = cumtrapz(Y)", "Z = cumtrapz(X, Y)"],
+    description: "Cumulative trapezoidal numerical integration.",
   },
 
   // ── FFT ───────────────────────────────────────────────────────────────
@@ -968,6 +1303,644 @@ const H: Record<string, BuiltinHelp> = {
       "A = accumarray(SUBS, VAL, SZ, FUN)",
     ],
     description: "Accumulate values into array using subscript indices.",
+  },
+
+  // ── Array extras ──────────────────────────────────────────────────────
+  blkdiag: {
+    signatures: ["Y = blkdiag(A, B, ...)"],
+    description: "Block diagonal matrix from input arguments.",
+  },
+  ipermute: {
+    signatures: ["B = ipermute(A, ORDER)"],
+    description: "Inverse permute dimensions of array.",
+  },
+  nonzeros: {
+    signatures: ["V = nonzeros(A)"],
+    description: "Column vector of nonzero elements.",
+  },
+  toeplitz: {
+    signatures: ["T = toeplitz(C)", "T = toeplitz(C, R)"],
+    description: "Toeplitz matrix. C is the first column, R is the first row.",
+  },
+  vecnorm: {
+    signatures: [
+      "N = vecnorm(A)",
+      "N = vecnorm(A, P)",
+      "N = vecnorm(A, P, DIM)",
+    ],
+    description: "Vector-wise norm. Default P=2 (Euclidean).",
+  },
+  pagemtimes: {
+    signatures: ["C = pagemtimes(X, Y)", "C = pagemtimes(X, TX, Y, TY)"],
+    description:
+      "Page-wise matrix multiplication. TX/TY are transpose options for each operand.",
+  },
+  pagetranspose: {
+    signatures: ["B = pagetranspose(X)"],
+    description: "Transpose each page (first two dimensions) of an N-D array.",
+  },
+  uniquetol: {
+    signatures: ["C = uniquetol(A)", "C = uniquetol(A, TOL)"],
+    description: "Unique values within tolerance.",
+  },
+  symvar: {
+    signatures: ["V = symvar(EXPR)", "V = symvar(EXPR, N)"],
+    description:
+      "Find symbolic variable names in expression string. N limits number of results.",
+  },
+
+  // ── Coordinate transforms ─────────────────────────────────────────────
+  cart2pol: {
+    signatures: ["[TH, R] = cart2pol(X, Y)", "[TH, R, Z] = cart2pol(X, Y, Z)"],
+    description: "Convert Cartesian to polar coordinates.",
+  },
+  pol2cart: {
+    signatures: ["[X, Y] = pol2cart(TH, R)", "[X, Y, Z] = pol2cart(TH, R, Z)"],
+    description: "Convert polar to Cartesian coordinates.",
+  },
+  cart2sph: {
+    signatures: ["[AZ, EL, R] = cart2sph(X, Y, Z)"],
+    description: "Convert Cartesian to spherical coordinates.",
+  },
+  sph2cart: {
+    signatures: ["[X, Y, Z] = sph2cart(AZ, EL, R)"],
+    description: "Convert spherical to Cartesian coordinates.",
+  },
+
+  // ── Cell/struct conversion ────────────────────────────────────────────
+  cell2mat: {
+    signatures: ["M = cell2mat(C)"],
+    description: "Convert cell array of matrices to a single matrix.",
+  },
+  mat2cell: {
+    signatures: [
+      "C = mat2cell(A, ROWDIST)",
+      "C = mat2cell(A, ROWDIST, COLDIST)",
+    ],
+    description:
+      "Partition matrix into cell array using row/column distributions.",
+  },
+  num2cell: {
+    signatures: ["C = num2cell(A)", "C = num2cell(A, DIM)"],
+    description:
+      "Convert array to cell array. With DIM, splits along that dimension.",
+  },
+  cell2struct: {
+    signatures: [
+      "S = cell2struct(C, FIELDS)",
+      "S = cell2struct(C, FIELDS, DIM)",
+    ],
+    description: "Convert cell array to struct using field names.",
+  },
+  struct2cell: {
+    signatures: ["C = struct2cell(S)"],
+    description: "Convert struct to cell array of field values.",
+  },
+  namedargs2cell: {
+    signatures: ["C = namedargs2cell(S)"],
+    description: "Convert struct to cell array of name-value pairs.",
+  },
+
+  // ── Sparse extras ─────────────────────────────────────────────────────
+  speye: {
+    signatures: ["S = speye(N)", "S = speye(M, N)"],
+    description: "Sparse identity matrix.",
+  },
+  spconvert: {
+    signatures: ["S = spconvert(T)"],
+    description: "Convert triplet matrix [I J V] to sparse matrix.",
+  },
+  spdiags: {
+    signatures: [
+      "B = spdiags(A)",
+      "B = spdiags(A, D)",
+      "S = spdiags(BIN, D, M, N)",
+      "S = spdiags(BIN, D, A)",
+    ],
+    description: "Extract or create sparse banded/diagonal matrices.",
+  },
+
+  // ── Linear algebra extras ─────────────────────────────────────────────
+  qz: {
+    signatures: [
+      "[AA, BB, Q, Z] = qz(A, B)",
+      "[AA, BB, Q, Z, V, W] = qz(A, B)",
+    ],
+    description:
+      "Generalized QZ (Schur) decomposition. With 6 outputs, also returns eigenvectors.",
+  },
+
+  // ── Operators ─────────────────────────────────────────────────────────
+  plus: {
+    signatures: ["C = plus(A, B)", "C = A + B"],
+    description: "Addition, element-wise with broadcasting.",
+  },
+  minus: {
+    signatures: ["C = minus(A, B)", "C = A - B"],
+    description: "Subtraction, element-wise with broadcasting.",
+  },
+  times: {
+    signatures: ["C = times(A, B)", "C = A .* B"],
+    description: "Element-wise multiplication with broadcasting.",
+  },
+  rdivide: {
+    signatures: ["C = rdivide(A, B)", "C = A ./ B"],
+    description: "Element-wise right division with broadcasting.",
+  },
+  ldivide: {
+    signatures: ["C = ldivide(A, B)", "C = A .\\ B"],
+    description: "Element-wise left division: equivalent to B ./ A.",
+  },
+  mtimes: {
+    signatures: ["C = mtimes(A, B)", "C = A * B"],
+    description: "Matrix multiplication.",
+  },
+  mrdivide: {
+    signatures: ["C = mrdivide(A, B)", "C = A / B"],
+    description: "Matrix right division: A * inv(B).",
+  },
+  mldivide: {
+    signatures: ["X = mldivide(A, B)", "X = A \\ B"],
+    description: "Matrix left division. Solves A*X = B.",
+  },
+  mpower: {
+    signatures: ["C = mpower(A, B)", "C = A ^ B"],
+    description: "Matrix power.",
+  },
+  uminus: {
+    signatures: ["B = uminus(A)", "B = -A"],
+    description: "Unary minus (negation).",
+  },
+  uplus: {
+    signatures: ["B = uplus(A)", "B = +A"],
+    description: "Unary plus (identity).",
+  },
+  eq: {
+    signatures: ["TF = eq(A, B)", "TF = A == B"],
+    description: "Equality comparison, element-wise.",
+  },
+  ne: {
+    signatures: ["TF = ne(A, B)", "TF = A ~= B"],
+    description: "Not-equal comparison, element-wise.",
+  },
+  lt: {
+    signatures: ["TF = lt(A, B)", "TF = A < B"],
+    description: "Less-than comparison, element-wise.",
+  },
+  le: {
+    signatures: ["TF = le(A, B)", "TF = A <= B"],
+    description: "Less-than-or-equal comparison, element-wise.",
+  },
+  gt: {
+    signatures: ["TF = gt(A, B)", "TF = A > B"],
+    description: "Greater-than comparison, element-wise.",
+  },
+  ge: {
+    signatures: ["TF = ge(A, B)", "TF = A >= B"],
+    description: "Greater-than-or-equal comparison, element-wise.",
+  },
+
+  // ── Constants/constructors ────────────────────────────────────────────
+  true: {
+    signatures: ["T = true", "T = true(N)", "T = true(M, N)"],
+    description: "Logical true value or logical array of all true.",
+  },
+  false: {
+    signatures: ["F = false", "F = false(N)", "F = false(M, N)"],
+    description: "Logical false value or logical array of all false.",
+  },
+  nan: {
+    signatures: ["X = nan", "X = nan(N)", "X = nan(M, N)"],
+    description: "Not-a-Number constant or NaN-filled array.",
+  },
+  NaN: {
+    signatures: ["X = NaN", "X = NaN(N)", "X = NaN(M, N)"],
+    description: "Not-a-Number constant or NaN-filled array.",
+  },
+
+  // ── Graphics ──────────────────────────────────────────────────────────
+  figure: {
+    signatures: ["figure", "figure(H)"],
+    description: "Create or set current figure.",
+  },
+  subplot: {
+    signatures: ["subplot(M, N, P)"],
+    description: "Create subplot in M-by-N grid at position P.",
+  },
+  title: {
+    signatures: ["title(TXT)"],
+    description: "Set title of current axes.",
+  },
+  xlabel: {
+    signatures: ["xlabel(TXT)"],
+    description: "Set x-axis label.",
+  },
+  ylabel: {
+    signatures: ["ylabel(TXT)"],
+    description: "Set y-axis label.",
+  },
+  zlabel: {
+    signatures: ["zlabel(TXT)"],
+    description: "Set z-axis label.",
+  },
+  hold: {
+    signatures: ["hold on", "hold off"],
+    description: "Control whether new plots replace or add to existing axes.",
+  },
+  grid: {
+    signatures: ["grid on", "grid off"],
+    description: "Toggle grid display on current axes.",
+  },
+  legend: {
+    signatures: ["legend(S1, S2, ...)"],
+    description: "Add legend to axes. Skips name-value option pairs.",
+  },
+  close: {
+    signatures: ["close", "close('all')"],
+    description: "Close current figure. Use 'all' to close all figures.",
+  },
+  clf: {
+    signatures: ["clf"],
+    description: "Clear current figure.",
+  },
+  sgtitle: {
+    signatures: ["sgtitle(TXT)"],
+    description: "Set super-title for subplot grid.",
+  },
+  shading: {
+    signatures: ["shading flat", "shading interp"],
+    description: "Set shading mode for surface/patch objects.",
+  },
+  colorbar: {
+    signatures: ["colorbar", "colorbar(MODE)"],
+    description: "Display colorbar on current axes.",
+  },
+  xlim: {
+    signatures: ["xlim(LIMITS)"],
+    description: "Set x-axis limits.",
+  },
+  ylim: {
+    signatures: ["ylim(LIMITS)"],
+    description: "Set y-axis limits.",
+  },
+  caxis: {
+    signatures: ["caxis(LIMITS)"],
+    description: "Set color axis limits. Returns dummy handle.",
+  },
+  ishold: {
+    signatures: ["TF = ishold"],
+    description: "True if hold is on for current axes.",
+  },
+  clear: {
+    signatures: ["clear"],
+    description: "Clear workspace variables (no-op in numbl).",
+  },
+  clc: {
+    signatures: ["clc"],
+    description: "Clear command window (no-op in numbl).",
+  },
+  gcf: {
+    signatures: ["H = gcf"],
+    description: "Get current figure handle.",
+  },
+  gca: {
+    signatures: ["H = gca"],
+    description: "Get current axes handle.",
+  },
+  groot: {
+    signatures: ["H = groot"],
+    description: "Graphics root object handle.",
+  },
+  shg: {
+    signatures: ["shg"],
+    description: "Show current figure.",
+  },
+  newplot: {
+    signatures: ["newplot"],
+    description: "Prepare axes for new plot.",
+  },
+  set: {
+    signatures: ["set(H, NAME, VALUE, ...)"],
+    description: "Set graphics object properties.",
+  },
+  get: {
+    signatures: ["V = get(H, NAME)"],
+    description: "Get graphics object properties.",
+  },
+  listfonts: {
+    signatures: ["F = listfonts"],
+    description: "List available fonts. Returns empty cell in numbl.",
+  },
+  setappdata: {
+    signatures: ["setappdata(H, NAME, VALUE)"],
+    description: "Store application data on graphics handle.",
+  },
+  getappdata: {
+    signatures: ["V = getappdata(H, NAME)", "S = getappdata(H)"],
+    description:
+      "Retrieve application data. With one arg, returns struct of all data.",
+  },
+  rmappdata: {
+    signatures: ["rmappdata(H, NAME)"],
+    description: "Remove application data from graphics handle.",
+  },
+  isappdata: {
+    signatures: ["TF = isappdata(H, NAME)"],
+    description: "True if application data exists on handle.",
+  },
+
+  // ── Dictionary ────────────────────────────────────────────────────────
+  dictionary: {
+    signatures: ["D = dictionary", "D = dictionary(KEYS, VALUES)"],
+    description: "Create a dictionary (key-value container).",
+  },
+  configureDictionary: {
+    signatures: ["D = configureDictionary(KEYTYPE, VALUETYPE)"],
+    description:
+      "Create a typed dictionary with specified key and value types.",
+  },
+  keys: {
+    signatures: ["K = keys(D)"],
+    description: "Return keys of dictionary.",
+  },
+  values: {
+    signatures: ["V = values(D)"],
+    description: "Return values of dictionary.",
+  },
+  numEntries: {
+    signatures: ["N = numEntries(D)"],
+    description: "Number of key-value pairs in dictionary.",
+  },
+  isConfigured: {
+    signatures: ["TF = isConfigured(D)"],
+    description: "True if dictionary has configured key/value types.",
+  },
+  isKey: {
+    signatures: ["TF = isKey(D, KEY)"],
+    description: "True if key exists in dictionary.",
+  },
+  entries: {
+    signatures: ["[K, V] = entries(D)"],
+    description: "Return keys and values of dictionary.",
+  },
+  types: {
+    signatures: ["T = types(D)"],
+    description: "Return key and value types of dictionary as cell array.",
+  },
+  lookup: {
+    signatures: ["V = lookup(D, KEY)"],
+    description: "Look up value by key in dictionary.",
+  },
+  insert: {
+    signatures: ["D2 = insert(D, KEYS, VALUES)"],
+    description: "Return new dictionary with specified key-value pairs added.",
+  },
+  remove: {
+    signatures: ["D2 = remove(D, KEY)"],
+    description: "Return new dictionary with specified key(s) removed.",
+  },
+
+  // ── Time & system ─────────────────────────────────────────────────────
+  clock: {
+    signatures: ["C = clock"],
+    description:
+      "Current date and time as [year, month, day, hour, minute, seconds].",
+  },
+  now: {
+    signatures: ["N = now"],
+    description: "Current date and time as serial date number.",
+  },
+  datestr: {
+    signatures: ["S = datestr(N)"],
+    description: "Convert serial date number to formatted date string.",
+  },
+  etime: {
+    signatures: ["E = etime(T1, T0)"],
+    description: "Elapsed time in seconds between two clock vectors.",
+  },
+  version: {
+    signatures: ["V = version"],
+    description: "Return version string.",
+  },
+  computer: {
+    signatures: [
+      "C = computer",
+      "[C, MAXSZ] = computer",
+      "[C, MAXSZ, ENDIAN] = computer",
+    ],
+    description:
+      "Computer type. Returns platform string, max array size, and endianness.",
+  },
+  ispc: {
+    signatures: ["TF = ispc"],
+    description: "True if running on Windows.",
+  },
+  ismac: {
+    signatures: ["TF = ismac"],
+    description: "True if running on macOS.",
+  },
+  isunix: {
+    signatures: ["TF = isunix"],
+    description: "True if running on Unix/Linux.",
+  },
+  isnumbl: {
+    signatures: ["TF = isnumbl"],
+    description: "True if running in the numbl interpreter.",
+  },
+  verLessThan: {
+    signatures: ["TF = verLessThan(TOOLBOX, VERSION)"],
+    description: "Always returns false in numbl.",
+  },
+  nargin: {
+    signatures: ["N = nargin", "N = nargin(FUN)"],
+    description: "Number of input arguments of current or specified function.",
+  },
+  lastwarn: {
+    signatures: ["S = lastwarn"],
+    description: "Last warning message. Returns empty string in numbl.",
+  },
+  rethrow: {
+    signatures: ["rethrow(ME)"],
+    description: "Re-throw error from MException struct.",
+  },
+  fileparts: {
+    signatures: [
+      "DIR = fileparts(PATH)",
+      "[DIR, NAME] = fileparts(PATH)",
+      "[DIR, NAME, EXT] = fileparts(PATH)",
+    ],
+    description: "Split file path into directory, name, and extension.",
+  },
+  fullfile: {
+    signatures: ["P = fullfile(PART1, PART2, ...)"],
+    description: "Build full file path from parts.",
+  },
+  filesep: {
+    signatures: ["S = filesep"],
+    description: "File separator character ('/').",
+  },
+  pathdef: {
+    signatures: ["P = pathdef"],
+    description: "Return default path. Returns empty string in numbl.",
+  },
+  func2str: {
+    signatures: ["S = func2str(FH)"],
+    description: "Convert function handle to string name.",
+  },
+  odeset: {
+    signatures: ["S = odeset(...)"],
+    description: "Create ODE options struct. Stub in numbl.",
+  },
+  peaks: {
+    signatures: ["Z = peaks", "Z = peaks(N)"],
+    description: "Sample data for demonstrating surface plots. Default N=49.",
+  },
+  jsondecode: {
+    signatures: ["V = jsondecode(S)"],
+    description:
+      "Decode JSON string. Objects become structs, arrays become tensors or cells.",
+  },
+
+  // ── Validation ────────────────────────────────────────────────────────
+  mustBeFinite: {
+    signatures: ["mustBeFinite(V)"],
+    description: "Error if any element is not finite.",
+  },
+  mustBeInRange: {
+    signatures: ["mustBeInRange(V, LOWER, UPPER)"],
+    description: "Error if any element is outside [LOWER, UPPER].",
+  },
+  mustBeInteger: {
+    signatures: ["mustBeInteger(V)"],
+    description: "Error if any element is not an integer value.",
+  },
+  mustBeMember: {
+    signatures: ["mustBeMember(V, SET)"],
+    description: "Error if any element is not found in SET.",
+  },
+  mustBeNonempty: {
+    signatures: ["mustBeNonempty(V)"],
+    description: "Error if value has no elements.",
+  },
+  mustBeNonnegative: {
+    signatures: ["mustBeNonnegative(V)"],
+    description: "Error if any element is negative.",
+  },
+  mustBeNonzero: {
+    signatures: ["mustBeNonzero(V)"],
+    description: "Error if any element is zero.",
+  },
+  mustBeNumeric: {
+    signatures: ["mustBeNumeric(V)"],
+    description: "Error if value is not numeric.",
+  },
+  mustBePositive: {
+    signatures: ["mustBePositive(V)"],
+    description: "Error if any element is not positive.",
+  },
+  mustBeScalarOrEmpty: {
+    signatures: ["mustBeScalarOrEmpty(V)"],
+    description: "Error if value is neither scalar nor empty.",
+  },
+  mustBeVector: {
+    signatures: ["mustBeVector(V)"],
+    description: "Error if value is not a vector.",
+  },
+
+  // ── Predicates extras ─────────────────────────────────────────────────
+  iscolumn: {
+    signatures: ["TF = iscolumn(A)"],
+    description: "True if A is a column vector.",
+  },
+  isrow: {
+    signatures: ["TF = isrow(A)"],
+    description: "True if A is a row vector.",
+  },
+  isfloat: {
+    signatures: ["TF = isfloat(A)"],
+    description: "True if A is a floating-point type.",
+  },
+  isinteger: {
+    signatures: ["TF = isinteger(A)"],
+    description: "Always returns false (numbl has no integer types).",
+  },
+  isfield: {
+    signatures: ["TF = isfield(S, FIELD)"],
+    description: "True if struct S has field named FIELD.",
+  },
+  rmfield: {
+    signatures: ["S2 = rmfield(S, FIELD)"],
+    description: "Remove field from struct.",
+  },
+  fields: {
+    signatures: ["F = fields(S)"],
+    description: "Alias for fieldnames. Returns cell array of field names.",
+  },
+  substruct: {
+    signatures: ["S = substruct(TYPE, SUBS, ...)"],
+    description:
+      "Create subscript structure for subsref/subsasgn. Types: '.', '()', '{}'.",
+  },
+
+  // ── Bit operations extras ─────────────────────────────────────────────
+  bitshift: {
+    signatures: ["C = bitshift(A, K)"],
+    description:
+      "Bitwise shift. Positive K shifts left, negative shifts right.",
+  },
+
+  // ── Colormaps ─────────────────────────────────────────────────────────
+  autumn: {
+    signatures: ["C = autumn"],
+    description: "Autumn colormap name.",
+  },
+  bone: {
+    signatures: ["C = bone"],
+    description: "Bone colormap name.",
+  },
+  cool: {
+    signatures: ["C = cool"],
+    description: "Cool colormap name.",
+  },
+  copper: {
+    signatures: ["C = copper"],
+    description: "Copper colormap name.",
+  },
+  gray: {
+    signatures: ["C = gray"],
+    description: "Gray colormap name.",
+  },
+  hot: {
+    signatures: ["C = hot"],
+    description: "Hot colormap name.",
+  },
+  hsv: {
+    signatures: ["C = hsv"],
+    description: "HSV colormap name.",
+  },
+  jet: {
+    signatures: ["C = jet"],
+    description: "Jet colormap name.",
+  },
+  parula: {
+    signatures: ["C = parula"],
+    description: "Parula colormap name.",
+  },
+  pink: {
+    signatures: ["C = pink"],
+    description: "Pink colormap name.",
+  },
+  spring: {
+    signatures: ["C = spring"],
+    description: "Spring colormap name.",
+  },
+  summer: {
+    signatures: ["C = summer"],
+    description: "Summer colormap name.",
+  },
+  winter: {
+    signatures: ["C = winter"],
+    description: "Winter colormap name.",
   },
 };
 
