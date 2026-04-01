@@ -32,6 +32,19 @@ export function encodeShareData(
   return base64;
 }
 
+/** Encode a single script into a share-page URL hash. */
+export function makeShareHash(name: string, code: string): string {
+  const data: ShareData = {
+    files: [{ name: `${name}.m`, content: code }],
+    activeFileName: `${name}.m`,
+  };
+  const json = JSON.stringify(data);
+  const compressed = pako.deflate(textEncoder.encode(json));
+  let base64 = btoa(String.fromCharCode(...compressed));
+  base64 = base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return base64;
+}
+
 export function decodeShareData(encoded: string): ShareData {
   // Base64url decoding
   let base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");

@@ -1,6 +1,6 @@
 import { Box, Typography, LinearProgress, Button, Link } from "@mui/material";
 import { useEffect, useRef, useState, useCallback } from "react";
-import pako from "pako";
+import { makeShareHash } from "../utils/shareUrl.js";
 
 const DEFAULT_BENCHMARKS_URL =
   "https://magland.github.io/numbl-benchmarks/benchmarks";
@@ -21,18 +21,6 @@ function parseOutput(
     median: parseFloat(medianMatch[1]),
     times: timesMatch[1].split(",").map(s => parseFloat(s.trim())),
   };
-}
-
-function makeShareHash(name: string, code: string): string {
-  const data = {
-    files: [{ name: `${name}.m`, content: code }],
-    activeFileName: `${name}.m`,
-  };
-  const json = JSON.stringify(data);
-  const compressed = pako.deflate(new TextEncoder().encode(json));
-  let base64 = btoa(String.fromCharCode(...compressed));
-  base64 = base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-  return base64;
 }
 
 function getBenchmarksUrl(): string {

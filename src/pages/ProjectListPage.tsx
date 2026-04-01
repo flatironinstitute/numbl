@@ -132,9 +132,11 @@ const CAPABILITIES: { label: string; items: string[] }[] = [
   {
     label: "Plotting",
     items: [
-      "2-D (plot, scatter, imagesc)",
+      "2-D (plot, scatter, imagesc, area, stairs)",
+      "bar charts (bar, barh, bar3, bar3h)",
       "3-D (plot3, surf, mesh, waterfall)",
       "contour & contourf",
+      "errorbar, semilogx, semilogy, loglog",
       "colormaps, colorbar, legend, subplot",
     ],
   },
@@ -377,6 +379,11 @@ export function ProjectListPage() {
               label: "REPL",
               icon: <TerminalIcon sx={{ fontSize: 14 }} />,
               onClick: () => navigate("/embed-repl"),
+            },
+            {
+              label: "Plot gallery",
+              icon: <InfoOutlinedIcon sx={{ fontSize: 14 }} />,
+              onClick: () => navigate("/gallery"),
             },
             {
               label: "Learn more",

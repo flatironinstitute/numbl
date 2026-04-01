@@ -5,6 +5,7 @@ import { ShareIDEPage } from "./pages/ShareIDEPage";
 import { EmbedPage } from "./pages/EmbedPage";
 import { EmbedReplPage } from "./pages/EmbedReplPage";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
+import { PlotGalleryPage } from "./pages/PlotGalleryPage";
 
 function App() {
   console.log("App initialized");
@@ -17,6 +18,7 @@ function App() {
         <Route path="/embed" element={<EmbedPage />} />
         <Route path="/embed-repl" element={<EmbedReplPage />} />
         <Route path="/benchmark" element={<BenchmarkPage />} />
+        <Route path="/gallery" element={<PlotGalleryPage />} />
       </Routes>
     </BrowserRouter>
   );
