@@ -1506,3 +1506,311 @@ export function parseAreaArgs(args: RuntimeValue[]): {
   const traces = parsePlotArgs(argsCopy);
   return { traces, baseValue };
 }
+
+// ── scatter3 argument parser ────────────────────────────────────────────
+
+/**
+ * Parse scatter3() arguments.
+ *
+ * Supported forms:
+ *   scatter3(X, Y, Z)
+ *   scatter3(X, Y, Z, S)
+ *   scatter3(X, Y, Z, S, C)
+ *   scatter3(..., 'filled')
+ *   scatter3(..., markertype)
+ */
+export function parseScatter3Args(args: RuntimeValue[]): Plot3Trace[] {
+  if (args.length < 3)
+    throw new Error("scatter3 requires at least 3 arguments");
+
+  const xData = toNumberArray(args[0]);
+  const yData = toNumberArray(args[1]);
+  const zData = toNumberArray(args[2]);
+
+  const trace: Plot3Trace = {
+    x: xData,
+    y: yData,
+    z: zData,
+    marker: "o",
+    lineStyle: "none",
+  };
+
+  let pos = 3;
+  let filled = false;
+
+  // Check for size argument (numeric, 4th positional arg)
+  if (pos < args.length && isNumericArg(args[pos])) {
+    const sz = args[pos];
+    if (isRuntimeNumber(sz)) {
+      trace.markerSize = Math.sqrt(sz as number) * 0.5;
+    } else if (isRuntimeTensor(sz)) {
+      const sArr = toNumberArray(sz);
+      if (sArr.length === 1 || new Set(sArr).size === 1) {
+        trace.markerSize = Math.sqrt(sArr[0]) * 0.5;
+      }
+    }
+    pos++;
+  }
+
+  // Check for color argument (5th positional: string color spec or RGB tensor)
+  if (pos < args.length && !isNameValueKey(args[pos])) {
+    if (isStringArg(args[pos])) {
+      const s = getStringValue(args[pos]);
+      if (s === "filled") {
+        filled = true;
+        pos++;
+      } else {
+        const c = resolveColor(s);
+        if (c) {
+          trace.color = c;
+          pos++;
+        } else {
+          const spec = parseLineSpec(s);
+          if (spec?.marker) {
+            trace.marker = spec.marker;
+            if (spec.color) trace.color = COLOR_SHORT[spec.color];
+            pos++;
+          }
+        }
+      }
+    } else if (isNumericArg(args[pos])) {
+      const c = resolveColor(args[pos]);
+      if (c) {
+        trace.color = c;
+        pos++;
+      }
+    }
+  }
+
+  // Check for 'filled' or marker string in remaining positional args
+  while (
+    pos < args.length &&
+    isStringArg(args[pos]) &&
+    !isNameValueKey(args[pos])
+  ) {
+    const s = getStringValue(args[pos]);
+    if (s === "filled") {
+      filled = true;
+      pos++;
+    } else {
+      const spec = parseLineSpec(s);
+      if (spec?.marker) {
+        trace.marker = spec.marker;
+        if (spec.color) trace.color = COLOR_SHORT[spec.color];
+        pos++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  if (filled) {
+    trace.markerFaceColor = trace.color || [0, 0, 1];
+  }
+
+  // Name-Value pairs
+  while (pos < args.length) {
+    const key = isNameValueKey(args[pos]);
+    if (!key) break;
+    pos++;
+    if (pos >= args.length) break;
+    const value = args[pos];
+    pos++;
+    applyPlot3NameValue([trace], key, value);
+  }
+
+  return [trace];
+}
+
+// ── histogram argument parser ───────────────────────────────────────────
+
+/**
+ * Parse histogram() arguments.
+ *
+ * Supported forms:
+ *   histogram(X)
+ *   histogram(X, nbins)
+ *   histogram(X, edges)
+ */
+export function parseHistogramArgs(args: RuntimeValue[]): BarTrace[] {
+  if (args.length === 0)
+    throw new Error("histogram requires at least 1 argument");
+
+  let pos = 0;
+  const xData = toNumberArray(args[pos++]);
+
+  // Filter out non-finite values
+  const data = xData.filter(v => isFinite(v));
+  if (data.length === 0) return [];
+
+  let edges: number[];
+
+  if (pos < args.length && isNumericArg(args[pos])) {
+    const arg = args[pos++];
+    if (isRuntimeNumber(arg)) {
+      // histogram(X, nbins)
+      const nbins = arg as number;
+      edges = computeUniformEdges(data, Math.max(1, Math.round(nbins)));
+    } else {
+      // histogram(X, edges)
+      edges = toNumberArray(arg);
+    }
+  } else {
+    // Auto bins using Sturges' rule
+    const nbins = Math.max(1, Math.ceil(Math.log2(data.length) + 1));
+    edges = computeUniformEdges(data, nbins);
+  }
+
+  // Compute bin counts
+  const nBins = edges.length - 1;
+  if (nBins <= 0) return [];
+  const counts = new Array(nBins).fill(0);
+  for (const v of data) {
+    // Find bin (last bin is right-inclusive)
+    let idx = -1;
+    for (let i = 0; i < nBins; i++) {
+      if (i < nBins - 1) {
+        if (v >= edges[i] && v < edges[i + 1]) {
+          idx = i;
+          break;
+        }
+      } else {
+        if (v >= edges[i] && v <= edges[i + 1]) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    if (idx >= 0) counts[idx]++;
+  }
+
+  // Build bar trace with bin centers
+  const xBins: number[] = [];
+  const yBins: number[] = [];
+  const width = edges[1] - edges[0];
+  for (let i = 0; i < nBins; i++) {
+    xBins.push((edges[i] + edges[i + 1]) / 2);
+    yBins.push(counts[i]);
+  }
+
+  return [{ x: xBins, y: yBins, width }];
+}
+
+function computeUniformEdges(data: number[], nbins: number): number[] {
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const step = range / nbins;
+  const edges: number[] = [];
+  for (let i = 0; i <= nbins; i++) {
+    edges.push(min + i * step);
+  }
+  return edges;
+}
+
+// ── histogram2 argument parser ──────────────────────────────────────────
+
+/**
+ * Parse histogram2() arguments.
+ *
+ * Supported forms:
+ *   histogram2(X, Y)
+ *   histogram2(X, Y, nbins)        — nbins is scalar or [nx, ny]
+ *   histogram2(X, Y, Xedges, Yedges)
+ */
+export function parseHistogram2Args(args: RuntimeValue[]): Bar3Trace {
+  if (args.length < 2)
+    throw new Error("histogram2 requires at least 2 arguments");
+
+  let pos = 0;
+  const xData = toNumberArray(args[pos++]).filter(v => isFinite(v));
+  const yData = toNumberArray(args[pos++]).filter(v => isFinite(v));
+  const n = Math.min(xData.length, yData.length);
+
+  if (n === 0) {
+    return { x: [], y: [], z: [], rows: 0, cols: 0, width: 0.8 };
+  }
+
+  let xEdges: number[];
+  let yEdges: number[];
+
+  if (pos < args.length && isNumericArg(args[pos])) {
+    const arg1 = args[pos++];
+    if (pos < args.length && isNumericArg(args[pos])) {
+      // histogram2(X, Y, Xedges, Yedges)
+      xEdges = toNumberArray(arg1);
+      yEdges = toNumberArray(args[pos++]);
+    } else if (isRuntimeNumber(arg1)) {
+      // histogram2(X, Y, nbins) — scalar
+      const nb = Math.max(1, Math.round(arg1 as number));
+      xEdges = computeUniformEdges(xData.slice(0, n), nb);
+      yEdges = computeUniformEdges(yData.slice(0, n), nb);
+    } else {
+      // histogram2(X, Y, [nx, ny])
+      const nbArr = toNumberArray(arg1);
+      const nx = Math.max(1, Math.round(nbArr[0]));
+      const ny = nbArr.length > 1 ? Math.max(1, Math.round(nbArr[1])) : nx;
+      xEdges = computeUniformEdges(xData.slice(0, n), nx);
+      yEdges = computeUniformEdges(yData.slice(0, n), ny);
+    }
+  } else {
+    // Auto bins
+    const nb = Math.max(1, Math.ceil(Math.sqrt(n)));
+    xEdges = computeUniformEdges(xData.slice(0, n), nb);
+    yEdges = computeUniformEdges(yData.slice(0, n), nb);
+  }
+
+  const nxBins = xEdges.length - 1;
+  const nyBins = yEdges.length - 1;
+  if (nxBins <= 0 || nyBins <= 0) {
+    return { x: [], y: [], z: [], rows: 0, cols: 0, width: 0.8 };
+  }
+
+  // Compute 2D bin counts
+  const counts = new Array(nxBins * nyBins).fill(0);
+  for (let k = 0; k < n; k++) {
+    const xi = findBin(xData[k], xEdges);
+    const yi = findBin(yData[k], yEdges);
+    if (xi >= 0 && yi >= 0) {
+      counts[xi * nyBins + yi]++; // column-major: col=xi, row=yi
+    }
+  }
+
+  // Build Bar3Trace — rows = nyBins, cols = nxBins
+  const xArr: number[] = [];
+  const yArr: number[] = [];
+  const zArr: number[] = [];
+  for (let j = 0; j < nxBins; j++) {
+    for (let i = 0; i < nyBins; i++) {
+      xArr.push((xEdges[j] + xEdges[j + 1]) / 2);
+      yArr.push((yEdges[i] + yEdges[i + 1]) / 2);
+      zArr.push(counts[j * nyBins + i]);
+    }
+  }
+
+  // Set width to the smaller bin spacing so bars don't overlap
+  const xBinWidth = xEdges[1] - xEdges[0];
+  const yBinWidth = yEdges[1] - yEdges[0];
+  const width = Math.min(xBinWidth, yBinWidth);
+
+  return {
+    x: xArr,
+    y: yArr,
+    z: zArr,
+    rows: nyBins,
+    cols: nxBins,
+    width,
+  };
+}
+
+function findBin(v: number, edges: number[]): number {
+  const nBins = edges.length - 1;
+  for (let i = 0; i < nBins; i++) {
+    if (i < nBins - 1) {
+      if (v >= edges[i] && v < edges[i + 1]) return i;
+    } else {
+      if (v >= edges[i] && v <= edges[i + 1]) return i;
+    }
+  }
+  return -1;
+}

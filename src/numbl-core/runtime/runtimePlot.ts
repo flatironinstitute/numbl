@@ -41,6 +41,9 @@ import {
   parseStairsArgs,
   parseErrorBarArgs,
   parseAreaArgs,
+  parseScatter3Args,
+  parseHistogramArgs,
+  parseHistogram2Args,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -516,6 +519,36 @@ export function fplot3Call(
   const traces = parsePlot3Args(synthArgs);
   if (traces.length > 0) {
     plotInstructions.push({ type: "plot3", traces });
+  }
+}
+
+export function scatter3Call(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseScatter3Args(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot3", traces });
+  }
+}
+
+export function histogramCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseHistogramArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "bar", traces });
+  }
+}
+
+export function histogram2Call(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseHistogram2Args(args);
+  if (trace.x.length > 0) {
+    plotInstructions.push({ type: "bar3", trace });
   }
 }
 

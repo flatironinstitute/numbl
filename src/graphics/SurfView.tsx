@@ -207,10 +207,25 @@ export function SurfView({
       zMax += 1;
     }
 
-    const rangeMax = Math.max(xMax - xMin, yMax - yMin, zMax - zMin);
+    const xRange = xMax - xMin || 1;
+    const yRange = yMax - yMin || 1;
+    const zRange2 = zMax - zMin || 1;
+    const rangeMax = Math.max(xRange, yRange, zRange2);
     const cxData = (xMin + xMax) / 2;
     const cyData = (yMin + yMax) / 2;
     const czData = (zMin + zMax) / 2;
+
+    // For bar3/bar3h: use per-axis scaling when z range dominates x/y range.
+    // This prevents bars from appearing as thin sticks in histogram2-style data.
+    const hasOnlyBars =
+      surfTraces.length === 0 &&
+      plot3Traces.length === 0 &&
+      (bar3Traces.length > 0 || bar3hTraces.length > 0);
+    const barRangeMax = hasOnlyBars ? Math.max(xRange, yRange) : rangeMax;
+    // normBar scales x/y to fill the view; normZ still uses rangeMax for z
+    const normBar = (v: number, center: number) => (v - center) / barRangeMax;
+    const normBarZ = (v: number, center: number) =>
+      (v - center) / (hasOnlyBars ? Math.max(barRangeMax, zRange2) : rangeMax);
 
     // Normalize a data point to [-0.5, 0.5] range
     const norm = (v: number, center: number) => (v - center) / rangeMax;
@@ -489,30 +504,30 @@ export function SurfView({
     // ── Render bar3 traces (vertical 3D bars) ────────────────────────────
     for (const trace of bar3Traces) {
       const halfW = (trace.width / 2) * 0.9; // slight shrink to show gaps
-      const zRange = zMax - zMin || 1;
+      const zRangeT = zMax - zMin || 1;
       for (let i = 0; i < trace.x.length; i++) {
         const bx = trace.x[i];
         const by = trace.y[i];
         const bz = trace.z[i];
         if (!isFinite(bz)) continue;
 
-        const barHeight = Math.abs(norm(bz, czData) - norm(0, czData));
-        const barCenter = (norm(bz, czData) + norm(0, czData)) / 2;
+        const barHeight = Math.abs(normBarZ(bz, czData) - normBarZ(0, czData));
+        const barCenter = (normBarZ(bz, czData) + normBarZ(0, czData)) / 2;
 
         const geo = new THREE.BoxGeometry(
-          (halfW * 2) / rangeMax,
+          (halfW * 2) / barRangeMax,
           barHeight,
-          (halfW * 2) / rangeMax
+          (halfW * 2) / barRangeMax
         );
 
-        const t = (bz - zMin) / zRange;
+        const t = (bz - zMin) / zRangeT;
         const [cr, cg, cb] = trace.color ?? colormapLookup(t);
         const mat = new THREE.MeshPhongMaterial({
           color: new THREE.Color(cr, cg, cb),
         });
         const mesh = new THREE.Mesh(geo, mat);
         // data X→three X, data Z→three Y, data Y→three Z
-        mesh.position.set(norm(bx, cxData), barCenter, norm(by, cyData));
+        mesh.position.set(normBar(bx, cxData), barCenter, normBar(by, cyData));
         scene.add(mesh);
 
         // Edge wireframe
@@ -531,7 +546,7 @@ export function SurfView({
     // ── Render bar3h traces (horizontal 3D bars) ───────────────────────
     for (const trace of bar3hTraces) {
       const halfW = (trace.width / 2) * 0.9;
-      const xRange = xMax - xMin || 1;
+      const xRangeH = xMax - xMin || 1;
       // bar3h: x=positions (category axis, mapped to z-axis in MATLAB),
       //        y=bar lengths (value axis, mapped to y/horizontal),
       //        z values are the bar lengths, x values are positions
@@ -542,22 +557,26 @@ export function SurfView({
         const len = trace.z[i]; // bar length along x-axis
         if (!isFinite(len)) continue;
 
-        const barLength = Math.abs(norm(len, cxData) - norm(0, cxData));
-        const barCenter = (norm(len, cxData) + norm(0, cxData)) / 2;
+        const barLength = Math.abs(normBar(len, cxData) - normBar(0, cxData));
+        const barCenter = (normBar(len, cxData) + normBar(0, cxData)) / 2;
 
         const geo = new THREE.BoxGeometry(
           barLength,
-          (halfW * 2) / rangeMax,
-          (halfW * 2) / rangeMax
+          (halfW * 2) / barRangeMax,
+          (halfW * 2) / barRangeMax
         );
 
-        const t = (len - xMin) / xRange;
+        const t = (len - xMin) / xRangeH;
         const [cr, cg, cb] = trace.color ?? colormapLookup(t);
         const mat = new THREE.MeshPhongMaterial({
           color: new THREE.Color(cr, cg, cb),
         });
         const mesh = new THREE.Mesh(geo, mat);
-        mesh.position.set(barCenter, norm(colIdx, czData), norm(pos, cyData));
+        mesh.position.set(
+          barCenter,
+          normBar(colIdx, czData),
+          normBar(pos, cyData)
+        );
         scene.add(mesh);
 
         const edges = new THREE.EdgesGeometry(geo);
