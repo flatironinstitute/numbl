@@ -13,6 +13,7 @@ import {
   isRuntimeLogical,
   isRuntimeString,
   isRuntimeChar,
+  FloatXArray,
 } from "./types.js";
 import { toNumber, toString } from "./convert.js";
 
@@ -26,6 +27,7 @@ export type {
   BarTrace,
   Bar3Trace,
   ErrorBarTrace,
+  BoxTrace,
 } from "../../graphics/types.js";
 
 import type {
@@ -37,6 +39,7 @@ import type {
   BarTrace,
   Bar3Trace,
   ErrorBarTrace,
+  BoxTrace,
 } from "../../graphics/types.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
@@ -1813,4 +1816,262 @@ function findBin(v: number, edges: number[]): number {
     }
   }
   return -1;
+}
+
+// ── boxchart argument parser ────────────────────────────────────────────
+
+/** Compute percentile using linear interpolation. */
+function percentile(sorted: number[], p: number): number {
+  if (sorted.length === 0) return NaN;
+  if (sorted.length === 1) return sorted[0];
+  const idx = (p / 100) * (sorted.length - 1);
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
+/** Compute box statistics for an array of values. */
+function computeBoxStats(
+  values: number[],
+  x: number,
+  width: number,
+  color?: [number, number, number]
+): BoxTrace | null {
+  const data = values.filter(v => isFinite(v));
+  if (data.length === 0) return null;
+  data.sort((a, b) => a - b);
+
+  const median = percentile(data, 50);
+  const q1 = percentile(data, 25);
+  const q3 = percentile(data, 75);
+  const iqr = q3 - q1;
+  const lowerFence = q1 - 1.5 * iqr;
+  const upperFence = q3 + 1.5 * iqr;
+
+  let whiskerLow = q1;
+  let whiskerHigh = q3;
+  const outliers: number[] = [];
+  for (const v of data) {
+    if (v < lowerFence || v > upperFence) {
+      outliers.push(v);
+    } else {
+      if (v < whiskerLow) whiskerLow = v;
+      if (v > whiskerHigh) whiskerHigh = v;
+    }
+  }
+
+  const trace: BoxTrace = {
+    x,
+    median,
+    q1,
+    q3,
+    whiskerLow,
+    whiskerHigh,
+    outliers,
+    width,
+  };
+  if (color) trace.color = color;
+  return trace;
+}
+
+/**
+ * Parse boxchart() arguments.
+ *
+ * Supported forms:
+ *   boxchart(ydata)           — one box per column of ydata
+ *   boxchart(xgroupdata, ydata) — group ydata by unique values in xgroupdata
+ */
+export function parseBoxchartArgs(args: RuntimeValue[]): BoxTrace[] {
+  if (args.length === 0)
+    throw new Error("boxchart requires at least 1 argument");
+
+  let pos = 0;
+  const first = args[pos++];
+
+  if (pos < args.length && isNumericArg(args[pos])) {
+    // boxchart(xgroupdata, ydata)
+    const xGroup = toNumberArray(first);
+    const yData = toNumberArray(args[pos++]);
+    const n = Math.min(xGroup.length, yData.length);
+
+    // Group y values by unique x values
+    const groups = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) {
+      const key = xGroup[i];
+      if (!isFinite(key)) continue;
+      let arr = groups.get(key);
+      if (!arr) {
+        arr = [];
+        groups.set(key, arr);
+      }
+      arr.push(yData[i]);
+    }
+
+    const traces: BoxTrace[] = [];
+    const sortedKeys = [...groups.keys()].sort((a, b) => a - b);
+    for (const key of sortedKeys) {
+      const t = computeBoxStats(groups.get(key)!, key, 0.5);
+      if (t) traces.push(t);
+    }
+    return traces;
+  }
+
+  // boxchart(ydata) — one box per column
+  if (
+    isRuntimeTensor(first) &&
+    first.shape.length >= 2 &&
+    first.shape[0] > 1 &&
+    first.shape[1] > 1
+  ) {
+    // Matrix: one box per column
+    const traces: BoxTrace[] = [];
+    for (let j = 0; j < first.shape[1]; j++) {
+      const col = tensorColumn(first, j);
+      const t = computeBoxStats(col, j + 1, 0.5);
+      if (t) traces.push(t);
+    }
+    return traces;
+  }
+
+  // Vector: single box at x=1
+  const data = toNumberArray(first);
+  const t = computeBoxStats(data, 1, 0.5);
+  return t ? [t] : [];
+}
+
+// ── swarmchart argument parser ──────────────────────────────────────────
+
+/**
+ * Apply jitter to points at each unique x position based on density of y values.
+ * Returns jittered x positions.
+ */
+function applySwarmJitter(
+  x: number[],
+  y: number[],
+  maxJitter: number
+): number[] {
+  const jittered = new Array(x.length);
+
+  // Group points by unique x value
+  const groups = new Map<number, number[]>();
+  for (let i = 0; i < x.length; i++) {
+    let arr = groups.get(x[i]);
+    if (!arr) {
+      arr = [];
+      groups.set(x[i], arr);
+    }
+    arr.push(i);
+  }
+
+  for (const [, indices] of groups) {
+    if (indices.length <= 1) {
+      for (const idx of indices) jittered[idx] = x[idx];
+      continue;
+    }
+
+    // Sort by y value within this group
+    const sorted = indices.slice().sort((a, b) => y[a] - y[b]);
+    const yVals = sorted.map(i => y[i]);
+    const yMin = yVals[0];
+    const yMax = yVals[yVals.length - 1];
+    const yRange = yMax - yMin || 1;
+
+    // Estimate density using a simple Gaussian KDE
+    const bandwidth = yRange / Math.max(3, Math.sqrt(sorted.length));
+    const densities = new Array(sorted.length);
+    for (let i = 0; i < sorted.length; i++) {
+      let d = 0;
+      for (let j = 0; j < sorted.length; j++) {
+        const u = (yVals[i] - yVals[j]) / bandwidth;
+        d += Math.exp(-0.5 * u * u);
+      }
+      densities[i] = d;
+    }
+    const maxDensity = Math.max(...densities);
+
+    // Assign jitter: alternate left/right at each y level
+    for (let i = 0; i < sorted.length; i++) {
+      const relDensity = maxDensity > 0 ? densities[i] / maxDensity : 0;
+      const jitterRange = maxJitter * relDensity;
+      // Place points in a beeswarm pattern
+      const rank = i;
+      const side = rank % 2 === 0 ? 1 : -1;
+      const offset =
+        (Math.ceil(rank / 2) / Math.max(1, sorted.length / 2)) * jitterRange;
+      jittered[sorted[i]] = x[sorted[i]] + side * offset;
+    }
+  }
+
+  return jittered;
+}
+
+/**
+ * Parse swarmchart() arguments.
+ *
+ * Supported forms:
+ *   swarmchart(x, y)
+ *   swarmchart(x, y, sz)
+ *   swarmchart(x, y, sz, c)
+ *   swarmchart(..., 'filled')
+ *   swarmchart(..., markertype)
+ */
+export function parseSwarmchartArgs(args: RuntimeValue[]): PlotTrace[] {
+  if (args.length < 2)
+    throw new Error("swarmchart requires at least 2 arguments");
+
+  const xData = toNumberArray(args[0]);
+  const yData = toNumberArray(args[1]);
+
+  // Apply jitter based on density
+  const jitteredX = applySwarmJitter(xData, yData, 0.3);
+
+  // Build synthetic scatter args with jittered x
+  const synthArgs: RuntimeValue[] = [
+    tensorFromArray(jitteredX),
+    args[1],
+    ...args.slice(2),
+  ];
+  return parseScatterArgs(synthArgs);
+}
+
+/**
+ * Parse swarmchart3() arguments.
+ *
+ * Supported forms:
+ *   swarmchart3(x, y, z)
+ *   swarmchart3(x, y, z, sz)
+ *   swarmchart3(x, y, z, sz, c)
+ *   swarmchart3(..., 'filled')
+ *   swarmchart3(..., markertype)
+ */
+export function parseSwarmchart3Args(args: RuntimeValue[]): Plot3Trace[] {
+  if (args.length < 3)
+    throw new Error("swarmchart3 requires at least 3 arguments");
+
+  const xData = toNumberArray(args[0]);
+  const yData = toNumberArray(args[1]);
+  const zData = toNumberArray(args[2]);
+
+  // Apply jitter in x based on z density at each (x,y) position
+  const jitteredX = applySwarmJitter(xData, zData, 0.3);
+  // Apply jitter in y based on z density at each (x,y) position
+  const jitteredY = applySwarmJitter(yData, zData, 0.3);
+
+  const synthArgs: RuntimeValue[] = [
+    tensorFromArray(jitteredX),
+    tensorFromArray(jitteredY),
+    args[2],
+    ...args.slice(3),
+  ];
+  return parseScatter3Args(synthArgs);
+}
+
+/** Create a runtime tensor from a plain number array (for synthetic args). */
+function tensorFromArray(arr: number[]): RuntimeValue {
+  return {
+    kind: "tensor",
+    data: new FloatXArray(arr),
+    shape: [1, arr.length],
+  } as RuntimeTensor;
 }

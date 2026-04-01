@@ -44,6 +44,9 @@ import {
   parseScatter3Args,
   parseHistogramArgs,
   parseHistogram2Args,
+  parseBoxchartArgs,
+  parseSwarmchartArgs,
+  parseSwarmchart3Args,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -549,6 +552,36 @@ export function histogram2Call(
   const trace = parseHistogram2Args(args);
   if (trace.x.length > 0) {
     plotInstructions.push({ type: "bar3", trace });
+  }
+}
+
+export function boxchartCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseBoxchartArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "boxchart", traces });
+  }
+}
+
+export function swarmchartCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseSwarmchartArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+export function swarmchart3Call(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseSwarmchart3Args(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot3", traces });
   }
 }
 

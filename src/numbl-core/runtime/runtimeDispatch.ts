@@ -116,6 +116,12 @@ function dispatchPlotCall(
       return rt.histogram_call(args.map(a => ensureRuntimeValue(a)));
     case "histogram2":
       return rt.histogram2_call(args.map(a => ensureRuntimeValue(a)));
+    case "boxchart":
+      return rt.boxchart_call(args.map(a => ensureRuntimeValue(a)));
+    case "swarmchart":
+      return rt.swarmchart_call(args.map(a => ensureRuntimeValue(a)));
+    case "swarmchart3":
+      return rt.swarmchart3_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

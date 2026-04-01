@@ -121,6 +121,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       barTraces={axes.barTraces}
       barhTraces={axes.barhTraces}
       errorBarTraces={axes.errorBarTraces}
+      boxTraces={axes.boxTraces}
       areaTraces={axes.areaTraces}
       areaBaseValue={axes.areaBaseValue}
     />
@@ -142,6 +143,7 @@ function PlotCanvas({
   barTraces,
   barhTraces,
   errorBarTraces,
+  boxTraces,
   areaTraces,
   areaBaseValue,
 }: {
@@ -159,6 +161,7 @@ function PlotCanvas({
   barTraces?: AxesState["barTraces"];
   barhTraces?: AxesState["barhTraces"];
   errorBarTraces?: AxesState["errorBarTraces"];
+  boxTraces?: AxesState["boxTraces"];
   areaTraces?: AxesState["areaTraces"];
   areaBaseValue?: number;
 }) {
@@ -184,6 +187,7 @@ function PlotCanvas({
       barTraces,
       barhTraces,
       errorBarTraces,
+      boxTraces,
       areaTraces,
       areaBaseValue
     );
@@ -202,6 +206,7 @@ function PlotCanvas({
     barTraces,
     barhTraces,
     errorBarTraces,
+    boxTraces,
     areaTraces,
     areaBaseValue,
   ]);

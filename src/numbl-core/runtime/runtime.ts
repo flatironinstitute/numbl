@@ -118,6 +118,9 @@ import {
   scatter3Call as _scatter3Call,
   histogramCall as _histogramCall,
   histogram2Call as _histogram2Call,
+  boxchartCall as _boxchartCall,
+  swarmchartCall as _swarmchartCall,
+  swarmchart3Call as _swarmchart3Call,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -366,6 +369,15 @@ export class Runtime {
     };
     this.builtins["histogram2"] = (_nargout: number, args: unknown[]) => {
       this.histogram2_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["boxchart"] = (_nargout: number, args: unknown[]) => {
+      this.boxchart_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["swarmchart"] = (_nargout: number, args: unknown[]) => {
+      this.swarmchart_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["swarmchart3"] = (_nargout: number, args: unknown[]) => {
+      this.swarmchart3_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1632,6 +1644,18 @@ export class Runtime {
 
   public histogram2_call(args: RuntimeValue[]): void {
     _histogram2Call(this.plotInstructions, args);
+  }
+
+  public boxchart_call(args: RuntimeValue[]): void {
+    _boxchartCall(this.plotInstructions, args);
+  }
+
+  public swarmchart_call(args: RuntimeValue[]): void {
+    _swarmchartCall(this.plotInstructions, args);
+  }
+
+  public swarmchart3_call(args: RuntimeValue[]): void {
+    _swarmchart3Call(this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {
