@@ -88,6 +88,16 @@ function dispatchPlotCall(
       return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
     case "bar":
       return rt.bar_call(args.map(a => ensureRuntimeValue(a)));
+    case "barh":
+      return rt.barh_call(args.map(a => ensureRuntimeValue(a)));
+    case "bar3":
+      return rt.bar3_call(args.map(a => ensureRuntimeValue(a)));
+    case "bar3h":
+      return rt.bar3h_call(args.map(a => ensureRuntimeValue(a)));
+    case "stairs":
+      return rt.stairs_call(args.map(a => ensureRuntimeValue(a)));
+    case "errorbar":
+      return rt.errorbar_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

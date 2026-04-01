@@ -3,6 +3,7 @@ import type {
   ImagescTrace,
   ContourTrace,
   BarTrace,
+  ErrorBarTrace,
 } from "./types.js";
 import {
   traceColor,
@@ -25,14 +26,18 @@ export function drawPlot(
   contourTraces?: ContourTrace[],
   colormap?: string,
   axisMode?: string,
-  barTraces?: BarTrace[]
+  barTraces?: BarTrace[],
+  barhTraces?: BarTrace[],
+  errorBarTraces?: ErrorBarTrace[]
 ) {
   const ctx = canvas.getContext("2d");
   const hasContent =
     traces.length > 0 ||
     imagescTrace !== undefined ||
     (contourTraces && contourTraces.length > 0) ||
-    (barTraces && barTraces.length > 0);
+    (barTraces && barTraces.length > 0) ||
+    (barhTraces && barhTraces.length > 0) ||
+    (errorBarTraces && errorBarTraces.length > 0);
   if (!ctx || !hasContent) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -124,6 +129,50 @@ export function drawPlot(
       // Bars extend to zero
       if (0 < yMin) yMin = 0;
       if (0 > yMax) yMax = 0;
+    }
+  }
+
+  // Include barh bounds (horizontal bars: x=positions on y-axis, y=bar lengths on x-axis)
+  if (barhTraces) {
+    for (const bt of barhTraces) {
+      const halfH = bt.width / 2;
+      for (let i = 0; i < bt.x.length; i++) {
+        const pos = bt.x[i]; // position on y-axis
+        if (isFinite(pos)) {
+          if (pos - halfH < yMin) yMin = pos - halfH;
+          if (pos + halfH > yMax) yMax = pos + halfH;
+        }
+        const len = bt.y[i]; // bar length on x-axis
+        if (isFinite(len)) {
+          if (len < xMin) xMin = len;
+          if (len > xMax) xMax = len;
+        }
+      }
+      // Horizontal bars extend to zero on the x-axis
+      if (0 < xMin) xMin = 0;
+      if (0 > xMax) xMax = 0;
+    }
+  }
+
+  // Include errorbar bounds
+  if (errorBarTraces) {
+    for (const et of errorBarTraces) {
+      for (let i = 0; i < et.x.length; i++) {
+        const ex = et.x[i];
+        const ey = et.y[i];
+        if (isFinite(ex)) {
+          const xl = et.xNeg ? ex - et.xNeg[i] : ex;
+          const xr = et.xPos ? ex + et.xPos[i] : ex;
+          if (xl < xMin) xMin = xl;
+          if (xr > xMax) xMax = xr;
+        }
+        if (isFinite(ey)) {
+          const ylo = ey - et.yNeg[i];
+          const yhi = ey + et.yPos[i];
+          if (ylo < yMin) yMin = ylo;
+          if (yhi > yMax) yMax = yhi;
+        }
+      }
     }
   }
 
@@ -333,6 +382,112 @@ export function drawPlot(
           halfW * 2,
           Math.abs(cy - y0)
         );
+      }
+    }
+  }
+
+  // Barh rendering (horizontal bars)
+  if (barhTraces) {
+    const defaultColors: [number, number, number][] = [
+      [0.0, 0.447, 0.741],
+      [0.85, 0.325, 0.098],
+      [0.929, 0.694, 0.125],
+      [0.494, 0.184, 0.556],
+      [0.466, 0.674, 0.188],
+    ];
+    for (let bi = 0; bi < barhTraces.length; bi++) {
+      const bt = barhTraces[bi];
+      const [r, g, b] = bt.color ?? defaultColors[bi % defaultColors.length];
+      ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+      ctx.strokeStyle = `rgb(${Math.round(r * 180)},${Math.round(g * 180)},${Math.round(b * 180)})`;
+      ctx.lineWidth = 1;
+      const x0 = toCanvasX(0);
+      for (let i = 0; i < bt.x.length; i++) {
+        const cy = toCanvasY(bt.x[i]); // position on y-axis
+        const cx = toCanvasX(bt.y[i]); // bar length on x-axis
+        const halfH = (toCanvasY(bt.x[i] - bt.width) - toCanvasY(bt.x[i])) / 2;
+        ctx.fillRect(
+          Math.min(x0, cx),
+          cy - halfH,
+          Math.abs(cx - x0),
+          halfH * 2
+        );
+        ctx.strokeRect(
+          Math.min(x0, cx),
+          cy - halfH,
+          Math.abs(cx - x0),
+          halfH * 2
+        );
+      }
+    }
+  }
+
+  // Errorbar rendering
+  if (errorBarTraces) {
+    for (let ei = 0; ei < errorBarTraces.length; ei++) {
+      const et = errorBarTraces[ei];
+      const colorStr = et.color
+        ? `rgb(${Math.round(et.color[0] * 255)},${Math.round(et.color[1] * 255)},${Math.round(et.color[2] * 255)})`
+        : traceColor({ x: [], y: [] }, ei);
+      ctx.strokeStyle = colorStr;
+      ctx.fillStyle = colorStr;
+      ctx.lineWidth = (et.lineWidth ?? 1) * dpr;
+      const capHalf = 3 * dpr;
+
+      // Draw the connecting line
+      ctx.beginPath();
+      for (let i = 0; i < et.x.length; i++) {
+        const cx = toCanvasX(et.x[i]);
+        const cy = toCanvasY(et.y[i]);
+        if (i === 0) ctx.moveTo(cx, cy);
+        else ctx.lineTo(cx, cy);
+      }
+      ctx.stroke();
+
+      // Draw error bars
+      for (let i = 0; i < et.x.length; i++) {
+        const cx = toCanvasX(et.x[i]);
+        const cy = toCanvasY(et.y[i]);
+
+        // Vertical error bars
+        const yLo = toCanvasY(et.y[i] - et.yNeg[i]);
+        const yHi = toCanvasY(et.y[i] + et.yPos[i]);
+        ctx.beginPath();
+        ctx.moveTo(cx, yLo);
+        ctx.lineTo(cx, yHi);
+        ctx.stroke();
+        // Caps
+        ctx.beginPath();
+        ctx.moveTo(cx - capHalf, yLo);
+        ctx.lineTo(cx + capHalf, yLo);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(cx - capHalf, yHi);
+        ctx.lineTo(cx + capHalf, yHi);
+        ctx.stroke();
+
+        // Horizontal error bars
+        if (et.xNeg && et.xPos) {
+          const xL = toCanvasX(et.x[i] - et.xNeg[i]);
+          const xR = toCanvasX(et.x[i] + et.xPos[i]);
+          ctx.beginPath();
+          ctx.moveTo(xL, cy);
+          ctx.lineTo(xR, cy);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(xL, cy - capHalf);
+          ctx.lineTo(xL, cy + capHalf);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(xR, cy - capHalf);
+          ctx.lineTo(xR, cy + capHalf);
+          ctx.stroke();
+        }
+
+        // Draw marker at data point
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2 * dpr, 0, 2 * Math.PI);
+        ctx.fill();
       }
     }
   }

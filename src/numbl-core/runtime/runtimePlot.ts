@@ -32,6 +32,10 @@ import {
   parseContourArgs,
   parseMeshArgs,
   parseBarArgs,
+  parseBarHArgs,
+  parseBar3Args,
+  parseStairsArgs,
+  parseErrorBarArgs,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -253,6 +257,52 @@ export function barCall(
   const traces = parseBarArgs(args);
   if (traces.length > 0) {
     plotInstructions.push({ type: "bar", traces });
+  }
+}
+
+export function barhCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseBarHArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "barh", traces });
+  }
+}
+
+export function bar3Call(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseBar3Args(args);
+  plotInstructions.push({ type: "bar3", trace });
+}
+
+export function bar3hCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseBar3Args(args);
+  plotInstructions.push({ type: "bar3h", trace });
+}
+
+export function stairsCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseStairsArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+export function errorbarCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseErrorBarArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "errorbar", traces });
   }
 }
 

@@ -104,6 +104,11 @@ import {
   contourCall as _contourCall,
   meshCall as _meshCall,
   barCall as _barCall,
+  barhCall as _barhCall,
+  bar3Call as _bar3Call,
+  bar3hCall as _bar3hCall,
+  stairsCall as _stairsCall,
+  errorbarCall as _errorbarCall,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -310,6 +315,21 @@ export class Runtime {
     };
     this.builtins["bar"] = (_nargout: number, args: unknown[]) => {
       this.bar_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["barh"] = (_nargout: number, args: unknown[]) => {
+      this.barh_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["bar3"] = (_nargout: number, args: unknown[]) => {
+      this.bar3_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["bar3h"] = (_nargout: number, args: unknown[]) => {
+      this.bar3h_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["stairs"] = (_nargout: number, args: unknown[]) => {
+      this.stairs_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["errorbar"] = (_nargout: number, args: unknown[]) => {
+      this.errorbar_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1520,6 +1540,26 @@ export class Runtime {
 
   public bar_call(args: RuntimeValue[]): void {
     _barCall(this.plotInstructions, args);
+  }
+
+  public barh_call(args: RuntimeValue[]): void {
+    _barhCall(this.plotInstructions, args);
+  }
+
+  public bar3_call(args: RuntimeValue[]): void {
+    _bar3Call(this.plotInstructions, args);
+  }
+
+  public bar3h_call(args: RuntimeValue[]): void {
+    _bar3hCall(this.plotInstructions, args);
+  }
+
+  public stairs_call(args: RuntimeValue[]): void {
+    _stairsCall(this.plotInstructions, args);
+  }
+
+  public errorbar_call(args: RuntimeValue[]): void {
+    _errorbarCall(this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {

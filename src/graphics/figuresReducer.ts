@@ -5,6 +5,8 @@ import type {
   ImagescTrace,
   ContourTrace,
   BarTrace,
+  Bar3Trace,
+  ErrorBarTrace,
   PlotInstruction,
 } from "./types.js";
 
@@ -16,6 +18,10 @@ export type AxesState = {
   imagescTrace?: ImagescTrace;
   contourTraces: ContourTrace[];
   barTraces: BarTrace[];
+  barhTraces: BarTrace[];
+  bar3Traces: Bar3Trace[];
+  bar3hTraces: Bar3Trace[];
+  errorBarTraces: ErrorBarTrace[];
   title?: string;
   xlabel?: string;
   ylabel?: string;
@@ -53,6 +59,10 @@ const defaultAxes: AxesState = {
   surfTraces: [],
   contourTraces: [],
   barTraces: [],
+  barhTraces: [],
+  bar3Traces: [],
+  bar3hTraces: [],
+  errorBarTraces: [],
 };
 
 function getAxes(fig: FigureState): AxesState {
@@ -108,6 +118,10 @@ function addTraces(
       | "imagescTrace"
       | "contourTraces"
       | "barTraces"
+      | "barhTraces"
+      | "bar3Traces"
+      | "bar3hTraces"
+      | "errorBarTraces"
     >
   >
 ): FiguresState {
@@ -125,6 +139,11 @@ function addTraces(
         surfTraces: update.surfTraces ?? (hold ? axes.surfTraces : []),
         contourTraces: update.contourTraces ?? (hold ? axes.contourTraces : []),
         barTraces: update.barTraces ?? (hold ? axes.barTraces : []),
+        barhTraces: update.barhTraces ?? (hold ? axes.barhTraces : []),
+        bar3Traces: update.bar3Traces ?? (hold ? axes.bar3Traces : []),
+        bar3hTraces: update.bar3hTraces ?? (hold ? axes.bar3hTraces : []),
+        errorBarTraces:
+          update.errorBarTraces ?? (hold ? axes.errorBarTraces : []),
         ...(update.imagescTrace !== undefined
           ? { imagescTrace: update.imagescTrace }
           : {}),
@@ -197,6 +216,42 @@ export const figuresReducer = (
       return addTraces(state, {
         barTraces: axes.holdOn
           ? [...axes.barTraces, ...action.traces]
+          : [...action.traces],
+      });
+    }
+
+    case "barh": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        barhTraces: axes.holdOn
+          ? [...axes.barhTraces, ...action.traces]
+          : [...action.traces],
+      });
+    }
+
+    case "bar3": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        bar3Traces: axes.holdOn
+          ? [...axes.bar3Traces, action.trace]
+          : [action.trace],
+      });
+    }
+
+    case "bar3h": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        bar3hTraces: axes.holdOn
+          ? [...axes.bar3hTraces, action.trace]
+          : [action.trace],
+      });
+    }
+
+    case "errorbar": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        errorBarTraces: axes.holdOn
+          ? [...axes.errorBarTraces, ...action.traces]
           : [...action.traces],
       });
     }

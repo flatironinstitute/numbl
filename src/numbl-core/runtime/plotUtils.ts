@@ -24,6 +24,8 @@ export type {
   ImagescTrace,
   ContourTrace,
   BarTrace,
+  Bar3Trace,
+  ErrorBarTrace,
 } from "../../graphics/types.js";
 
 import type {
@@ -33,6 +35,8 @@ import type {
   ImagescTrace,
   ContourTrace,
   BarTrace,
+  Bar3Trace,
+  ErrorBarTrace,
 } from "../../graphics/types.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
@@ -1218,5 +1222,245 @@ export function parseBarArgs(args: RuntimeValue[]): BarTrace[] {
 
   const trace: BarTrace = { x: xData, y: yData, width };
   if (color) trace.color = color;
+  return [trace];
+}
+
+/**
+ * Parse barh() arguments — same forms as bar() but rendered horizontally.
+ *
+ * Supported forms:
+ *   barh(Y)             — Y values (bar lengths) with positions = 1:length(Y)
+ *   barh(X, Y)          — explicit positions X, bar lengths Y
+ *   barh(..., width)    — relative bar thickness (scalar 0–1)
+ *   barh(..., color)    — single-char color spec
+ */
+export function parseBarHArgs(args: RuntimeValue[]): BarTrace[] {
+  return parseBarArgs(args);
+}
+
+/**
+ * Parse bar3() / bar3h() arguments.
+ *
+ * Supported forms:
+ *   bar3(Z)             — Z values with y = 1:m, x = 1:n
+ *   bar3(Y, Z)          — explicit Y positions
+ *   bar3(..., width)    — relative bar width (scalar 0–1)
+ *   bar3(..., color)    — single-char color spec
+ */
+export function parseBar3Args(args: RuntimeValue[]): Bar3Trace {
+  let pos = 0;
+  let yPositions: number[] | undefined;
+  let width = 0.8;
+  let color: [number, number, number] | undefined;
+
+  if (args.length === 0) throw new Error("bar3 requires at least 1 argument");
+
+  const first = args[pos++];
+
+  let zData: number[];
+  let rows: number;
+  let cols: number;
+
+  if (pos < args.length && isNumericArg(args[pos])) {
+    // bar3(Y, Z, ...)
+    yPositions = toNumberArray(first);
+    const second = args[pos++];
+    if (isRuntimeTensor(second)) {
+      const info = getMatrixInfo(second);
+      zData = Array.from(info.data);
+      rows = info.rows;
+      cols = info.cols;
+    } else {
+      zData = toNumberArray(second);
+      rows = zData.length;
+      cols = 1;
+    }
+  } else {
+    // bar3(Z)
+    if (isRuntimeTensor(first)) {
+      const info = getMatrixInfo(first);
+      zData = Array.from(info.data);
+      rows = info.rows;
+      cols = info.cols;
+    } else {
+      zData = toNumberArray(first);
+      rows = zData.length;
+      cols = 1;
+    }
+  }
+
+  // Check for optional width (scalar) or color (string)
+  while (pos < args.length) {
+    if (isNumericArg(args[pos])) {
+      const v = args[pos];
+      if (isRuntimeNumber(v)) {
+        width = v as number;
+        pos++;
+      } else {
+        break;
+      }
+    } else if (isStringArg(args[pos])) {
+      const s = getStringValue(args[pos]);
+      const c = resolveColor(s);
+      if (c) {
+        color = c;
+        pos++;
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  if (!yPositions) {
+    yPositions = oneBasedIndices(rows);
+  }
+
+  // Build x, y, z arrays for each bar (column-major → per-bar)
+  const xArr: number[] = [];
+  const yArr: number[] = [];
+  const zArr: number[] = [];
+  for (let j = 0; j < cols; j++) {
+    for (let i = 0; i < rows; i++) {
+      xArr.push(j + 1); // 1-based column index
+      yArr.push(yPositions[i]);
+      zArr.push(zData[j * rows + i]); // column-major
+    }
+  }
+
+  const trace: Bar3Trace = { x: xArr, y: yArr, z: zArr, rows, cols, width };
+  if (color) trace.color = color;
+  return trace;
+}
+
+/**
+ * Parse stairs() arguments — same forms as plot() but with staircase-transformed coordinates.
+ *
+ * Supported forms:
+ *   stairs(Y)
+ *   stairs(X, Y)
+ *   stairs(..., LineSpec)
+ *   stairs(..., Name, Value)
+ */
+export function parseStairsArgs(args: RuntimeValue[]): PlotTrace[] {
+  const traces = parsePlotArgs(args);
+  // Transform each trace's x/y into staircase coordinates
+  for (const t of traces) {
+    const n = t.x.length;
+    if (n < 2) continue;
+    const xb: number[] = [];
+    const yb: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      xb.push(t.x[i]);
+      yb.push(t.y[i]);
+      xb.push(t.x[i + 1]);
+      yb.push(t.y[i]);
+    }
+    xb.push(t.x[n - 1]);
+    yb.push(t.y[n - 1]);
+    t.x = xb;
+    t.y = yb;
+  }
+  return traces;
+}
+
+/**
+ * Parse errorbar() arguments.
+ *
+ * Supported forms:
+ *   errorbar(y, err)                    — symmetric vertical
+ *   errorbar(x, y, err)                 — symmetric vertical with explicit x
+ *   errorbar(x, y, neg, pos)            — asymmetric vertical
+ *   errorbar(x, y, yneg, ypos, xneg, xpos) — both axes
+ *   errorbar(..., LineSpec)
+ */
+export function parseErrorBarArgs(args: RuntimeValue[]): ErrorBarTrace[] {
+  if (args.length < 2)
+    throw new Error("errorbar requires at least 2 arguments");
+
+  let pos = 0;
+  let xData: number[] | undefined;
+  let yData: number[];
+  let yNeg: number[];
+  let yPos: number[];
+  let xNeg: number[] | undefined;
+  let xPos: number[] | undefined;
+  let color: [number, number, number] | undefined;
+  let lineStyle: string | undefined;
+  let marker: string | undefined;
+
+  // Count leading numeric args
+  let numericCount = 0;
+  for (let i = 0; i < args.length; i++) {
+    if (isNumericArg(args[i])) numericCount++;
+    else break;
+  }
+
+  if (numericCount === 2) {
+    // errorbar(y, err)
+    yData = toNumberArray(args[pos++]);
+    const err = toNumberArray(args[pos++]);
+    yNeg = err;
+    yPos = err;
+  } else if (numericCount === 3) {
+    // errorbar(x, y, err)
+    xData = toNumberArray(args[pos++]);
+    yData = toNumberArray(args[pos++]);
+    const err = toNumberArray(args[pos++]);
+    yNeg = err;
+    yPos = err;
+  } else if (numericCount === 4) {
+    // errorbar(x, y, neg, pos)
+    xData = toNumberArray(args[pos++]);
+    yData = toNumberArray(args[pos++]);
+    yNeg = toNumberArray(args[pos++]);
+    yPos = toNumberArray(args[pos++]);
+  } else if (numericCount >= 6) {
+    // errorbar(x, y, yneg, ypos, xneg, xpos)
+    xData = toNumberArray(args[pos++]);
+    yData = toNumberArray(args[pos++]);
+    yNeg = toNumberArray(args[pos++]);
+    yPos = toNumberArray(args[pos++]);
+    xNeg = toNumberArray(args[pos++]);
+    xPos = toNumberArray(args[pos++]);
+  } else {
+    throw new Error("errorbar: invalid number of numeric arguments");
+  }
+
+  if (!xData) {
+    xData = oneBasedIndices(yData.length);
+  }
+
+  // Check for optional LineSpec or color
+  while (pos < args.length) {
+    if (isStringArg(args[pos])) {
+      const s = getStringValue(args[pos]);
+      const spec = parseLineSpec(s);
+      if (spec) {
+        if (spec.color) color = spec.color;
+        if (spec.lineStyle) lineStyle = spec.lineStyle;
+        if (spec.marker) marker = spec.marker;
+        pos++;
+      } else {
+        const c = resolveColor(s);
+        if (c) {
+          color = c;
+          pos++;
+        } else {
+          break;
+        }
+      }
+    } else {
+      break;
+    }
+  }
+
+  const trace: ErrorBarTrace = { x: xData, y: yData, yNeg, yPos };
+  if (xNeg) trace.xNeg = xNeg;
+  if (xPos) trace.xPos = xPos;
+  if (color) trace.color = color;
+  if (lineStyle) trace.lineStyle = lineStyle;
+  if (marker) trace.marker = marker;
   return [trace];
 }

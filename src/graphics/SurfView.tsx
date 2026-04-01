@@ -4,7 +4,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
-import type { SurfTrace, Plot3Trace } from "./types.js";
+import type { SurfTrace, Plot3Trace, Bar3Trace } from "./types.js";
 import { colormapLookup } from "./surfColormap.js";
 
 // Color order for plot3 traces
@@ -21,12 +21,16 @@ const TRACE_COLORS = [
 interface SurfViewProps {
   surfTraces: SurfTrace[];
   plot3Traces?: Plot3Trace[];
+  bar3Traces?: Bar3Trace[];
+  bar3hTraces?: Bar3Trace[];
   shading?: "faceted" | "flat" | "interp";
 }
 
 export function SurfView({
   surfTraces,
   plot3Traces = [],
+  bar3Traces = [],
+  bar3hTraces = [],
   shading,
 }: SurfViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -120,7 +124,13 @@ export function SurfView({
       if ((obj as THREE.Mesh).geometry) (obj as THREE.Mesh).geometry.dispose();
     }
 
-    if (surfTraces.length === 0 && plot3Traces.length === 0) return;
+    if (
+      surfTraces.length === 0 &&
+      plot3Traces.length === 0 &&
+      bar3Traces.length === 0 &&
+      bar3hTraces.length === 0
+    )
+      return;
 
     // Compute global data ranges across both surf and plot3 traces
     let xMin = Infinity,
@@ -159,6 +169,21 @@ export function SurfView({
       updateRange(trace.x, xMinRef, xMaxRef);
       updateRange(trace.y, yMinRef, yMaxRef);
       updateRange(trace.z, zMinRef, zMaxRef);
+    }
+    for (const trace of bar3Traces) {
+      updateRange(trace.x, xMinRef, xMaxRef);
+      updateRange(trace.y, yMinRef, yMaxRef);
+      updateRange(trace.z, zMinRef, zMaxRef);
+      // Bars extend to zero on z-axis
+      if (0 < zMinRef.v) zMinRef.v = 0;
+    }
+    for (const trace of bar3hTraces) {
+      // bar3h: bars extend along x-axis, positions on y and z axes
+      updateRange(trace.y, yMinRef, yMaxRef);
+      updateRange(trace.z, zMinRef, zMaxRef);
+      updateRange(trace.x, xMinRef, xMaxRef);
+      // Bars extend to zero on x-axis
+      if (0 < xMinRef.v) xMinRef.v = 0;
     }
 
     xMin = xMinRef.v;
@@ -461,6 +486,92 @@ export function SurfView({
       }
     }
 
+    // ── Render bar3 traces (vertical 3D bars) ────────────────────────────
+    for (const trace of bar3Traces) {
+      const halfW = (trace.width / 2) * 0.9; // slight shrink to show gaps
+      const zRange = zMax - zMin || 1;
+      for (let i = 0; i < trace.x.length; i++) {
+        const bx = trace.x[i];
+        const by = trace.y[i];
+        const bz = trace.z[i];
+        if (!isFinite(bz)) continue;
+
+        const barHeight = Math.abs(norm(bz, czData) - norm(0, czData));
+        const barCenter = (norm(bz, czData) + norm(0, czData)) / 2;
+
+        const geo = new THREE.BoxGeometry(
+          (halfW * 2) / rangeMax,
+          barHeight,
+          (halfW * 2) / rangeMax
+        );
+
+        const t = (bz - zMin) / zRange;
+        const [cr, cg, cb] = trace.color ?? colormapLookup(t);
+        const mat = new THREE.MeshPhongMaterial({
+          color: new THREE.Color(cr, cg, cb),
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        // data X→three X, data Z→three Y, data Y→three Z
+        mesh.position.set(norm(bx, cxData), barCenter, norm(by, cyData));
+        scene.add(mesh);
+
+        // Edge wireframe
+        const edges = new THREE.EdgesGeometry(geo);
+        const lineMat = new THREE.LineBasicMaterial({
+          color: 0x000000,
+          opacity: 0.3,
+          transparent: true,
+        });
+        const wireframe = new THREE.LineSegments(edges, lineMat);
+        wireframe.position.copy(mesh.position);
+        scene.add(wireframe);
+      }
+    }
+
+    // ── Render bar3h traces (horizontal 3D bars) ───────────────────────
+    for (const trace of bar3hTraces) {
+      const halfW = (trace.width / 2) * 0.9;
+      const xRange = xMax - xMin || 1;
+      // bar3h: x=positions (category axis, mapped to z-axis in MATLAB),
+      //        y=bar lengths (value axis, mapped to y/horizontal),
+      //        z values are the bar lengths, x values are positions
+      // Reinterpret: y-positions on z-axis, x-values are bar lengths on x-axis
+      for (let i = 0; i < trace.x.length; i++) {
+        const pos = trace.y[i]; // position on y-axis
+        const colIdx = trace.x[i]; // position on x-axis (column)
+        const len = trace.z[i]; // bar length along x-axis
+        if (!isFinite(len)) continue;
+
+        const barLength = Math.abs(norm(len, cxData) - norm(0, cxData));
+        const barCenter = (norm(len, cxData) + norm(0, cxData)) / 2;
+
+        const geo = new THREE.BoxGeometry(
+          barLength,
+          (halfW * 2) / rangeMax,
+          (halfW * 2) / rangeMax
+        );
+
+        const t = (len - xMin) / xRange;
+        const [cr, cg, cb] = trace.color ?? colormapLookup(t);
+        const mat = new THREE.MeshPhongMaterial({
+          color: new THREE.Color(cr, cg, cb),
+        });
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.position.set(barCenter, norm(colIdx, czData), norm(pos, cyData));
+        scene.add(mesh);
+
+        const edges = new THREE.EdgesGeometry(geo);
+        const lineMat = new THREE.LineBasicMaterial({
+          color: 0x000000,
+          opacity: 0.3,
+          transparent: true,
+        });
+        const wireframe = new THREE.LineSegments(edges, lineMat);
+        wireframe.position.copy(mesh.position);
+        scene.add(wireframe);
+      }
+    }
+
     // Axis lines
     addAxisLines(
       scene,
@@ -475,7 +586,7 @@ export function SurfView({
       cyData,
       czData
     );
-  }, [surfTraces, plot3Traces, shading]);
+  }, [surfTraces, plot3Traces, bar3Traces, bar3hTraces, shading]);
 
   return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
 }

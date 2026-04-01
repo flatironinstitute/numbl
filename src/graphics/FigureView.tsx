@@ -89,13 +89,17 @@ export function FigureView({ figure }: FigureViewProps) {
 function SingleAxesView({ axes }: { axes: AxesState }) {
   const has3D =
     (axes.surfTraces && axes.surfTraces.length > 0) ||
-    (axes.plot3Traces && axes.plot3Traces.length > 0);
+    (axes.plot3Traces && axes.plot3Traces.length > 0) ||
+    (axes.bar3Traces && axes.bar3Traces.length > 0) ||
+    (axes.bar3hTraces && axes.bar3hTraces.length > 0);
 
   if (has3D) {
     return (
       <SurfView
         surfTraces={axes.surfTraces ?? []}
         plot3Traces={axes.plot3Traces ?? []}
+        bar3Traces={axes.bar3Traces ?? []}
+        bar3hTraces={axes.bar3hTraces ?? []}
         shading={axes.shading}
       />
     );
@@ -114,6 +118,8 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       colormap={axes.colormap}
       axisMode={axes.axisMode}
       barTraces={axes.barTraces}
+      barhTraces={axes.barhTraces}
+      errorBarTraces={axes.errorBarTraces}
     />
   );
 }
@@ -130,6 +136,8 @@ function PlotCanvas({
   colormap,
   axisMode,
   barTraces,
+  barhTraces,
+  errorBarTraces,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -142,6 +150,8 @@ function PlotCanvas({
   colormap?: string;
   axisMode?: string;
   barTraces?: AxesState["barTraces"];
+  barhTraces?: AxesState["barhTraces"];
+  errorBarTraces?: AxesState["errorBarTraces"];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -161,7 +171,9 @@ function PlotCanvas({
       contourTraces,
       colormap,
       axisMode,
-      barTraces
+      barTraces,
+      barhTraces,
+      errorBarTraces
     );
   }, [
     traces,
@@ -175,6 +187,8 @@ function PlotCanvas({
     colormap,
     axisMode,
     barTraces,
+    barhTraces,
+    errorBarTraces,
   ]);
 
   useEffect(() => {

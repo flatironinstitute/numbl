@@ -108,6 +108,44 @@ export interface BarTrace {
   color?: [number, number, number];
 }
 
+// ── Bar3Trace type ──────────────────────────────────────────────────────
+
+export interface Bar3Trace {
+  /** X positions for each bar (column index) */
+  x: number[];
+  /** Y positions for each bar (row index) */
+  y: number[];
+  /** Z values (bar heights) for each bar */
+  z: number[];
+  /** Number of rows in the grid */
+  rows: number;
+  /** Number of columns in the grid */
+  cols: number;
+  /** Relative bar width (0–1, default 0.8) */
+  width: number;
+  /** Bar color as RGB triple [0–1] */
+  color?: [number, number, number];
+}
+
+// ── ErrorBarTrace type ──────────────────────────────────────────────────
+
+export interface ErrorBarTrace {
+  x: number[];
+  y: number[];
+  /** Error below each data point */
+  yNeg: number[];
+  /** Error above each data point */
+  yPos: number[];
+  /** Error left of each data point (horizontal error bars) */
+  xNeg?: number[];
+  /** Error right of each data point (horizontal error bars) */
+  xPos?: number[];
+  color?: [number, number, number];
+  lineStyle?: string;
+  marker?: string;
+  lineWidth?: number;
+}
+
 // ── Plot Instructions ───────────────────────────────────────────────────
 
 export type PlotInstruction =
@@ -119,6 +157,10 @@ export type PlotInstruction =
   | { type: "contour"; trace: ContourTrace }
   | { type: "mesh"; trace: SurfTrace }
   | { type: "bar"; traces: BarTrace[] }
+  | { type: "barh"; traces: BarTrace[] }
+  | { type: "bar3"; trace: Bar3Trace }
+  | { type: "bar3h"; trace: Bar3Trace }
+  | { type: "errorbar"; traces: ErrorBarTrace[] }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }
