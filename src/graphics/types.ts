@@ -169,6 +169,19 @@ export interface BoxTrace {
   color?: [number, number, number];
 }
 
+// ── PieTrace type ───────────────────────────────────────────────────────
+
+export interface PieTrace {
+  /** Slice values (absolute, not percentages) */
+  values: number[];
+  /** Optional slice names */
+  names?: string[];
+  /** Inner radius as fraction of outer radius (0 = pie, >0 = donut) */
+  innerRadius: number;
+  /** Per-slice colors as RGB triples [0–1] */
+  colors?: [number, number, number][];
+}
+
 // ── Plot Instructions ───────────────────────────────────────────────────
 
 export type PlotInstruction =
@@ -186,6 +199,7 @@ export type PlotInstruction =
   | { type: "errorbar"; traces: ErrorBarTrace[] }
   | { type: "area"; traces: PlotTrace[]; baseValue: number }
   | { type: "boxchart"; traces: BoxTrace[] }
+  | { type: "piechart"; trace: PieTrace }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }

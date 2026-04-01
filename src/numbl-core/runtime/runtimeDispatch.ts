@@ -122,6 +122,10 @@ function dispatchPlotCall(
       return rt.swarmchart_call(args.map(a => ensureRuntimeValue(a)));
     case "swarmchart3":
       return rt.swarmchart3_call(args.map(a => ensureRuntimeValue(a)));
+    case "piechart":
+      return rt.piechart_call(args.map(a => ensureRuntimeValue(a)));
+    case "donutchart":
+      return rt.donutchart_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }
