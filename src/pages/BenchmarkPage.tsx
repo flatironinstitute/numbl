@@ -54,8 +54,8 @@ async function fetchBenchmarks(
   const names: string[] = await manifest.json();
   const benchmarks = await Promise.all(
     names.map(async name => {
-      const resp = await fetch(cacheBust(`${baseUrl}/${name}.m`));
-      if (!resp.ok) throw new Error(`Failed to fetch ${name}.m`);
+      const resp = await fetch(cacheBust(`${baseUrl}/bench_${name}.m`));
+      if (!resp.ok) throw new Error(`Failed to fetch bench_${name}.m`);
       const code = await resp.text();
       return { name, code };
     })
@@ -88,7 +88,14 @@ export function BenchmarkPage() {
         return { benchmark: r.name, env: "numbl-browser", result: parsed };
       });
     const json = JSON.stringify(
-      { timestamp: new Date().toISOString(), results: entries },
+      {
+        timestamp: new Date().toISOString(),
+        system: {
+          browser: navigator.userAgent,
+          platform: navigator.platform,
+        },
+        results: entries,
+      },
       null,
       2
     );
