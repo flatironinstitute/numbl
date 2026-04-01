@@ -1,4 +1,13 @@
-import { Box, Typography, CircularProgress, Link } from "@mui/material";
+import {
+  Box,
+  Typography,
+  CircularProgress,
+  Link,
+  Collapse,
+  IconButton,
+} from "@mui/material";
+import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
+import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import { makeShareHash } from "../utils/shareUrl.js";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { PlotInstruction } from "../graphics/types.js";
@@ -97,6 +106,8 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
   const currentFig =
     handles.length > 0 ? figures.figs[handles[handles.length - 1]] : null;
 
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <Box
       sx={{
@@ -129,7 +140,7 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
       <Box
         sx={{
           px: 1.5,
-          py: 1,
+          py: 0.5,
           bgcolor: "grey.50",
           borderTop: 1,
           borderColor: "divider",
@@ -141,15 +152,55 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
         <Typography variant="subtitle2" sx={{ fontFamily: "monospace" }}>
           {entry.name}
         </Typography>
-        <Link
-          href={`/share#${makeShareHash(entry.name, entry.code)}`}
-          target="_blank"
-          rel="noopener"
-          sx={{ fontSize: "0.8125rem" }}
+        <IconButton
+          size="small"
+          onClick={() => setExpanded(prev => !prev)}
+          sx={{ p: 0.25 }}
         >
-          Open
-        </Link>
+          {expanded ? (
+            <ExpandLessIcon fontSize="small" />
+          ) : (
+            <ExpandMoreIcon fontSize="small" />
+          )}
+        </IconButton>
       </Box>
+      <Collapse in={expanded}>
+        <Box
+          sx={{
+            px: 1.5,
+            py: 1,
+            bgcolor: "#1e1e1e",
+            fontFamily: "monospace",
+            fontSize: 12,
+            color: "#d4d4d4",
+            whiteSpace: "pre",
+            overflowX: "auto",
+            maxHeight: 200,
+            overflowY: "auto",
+            borderTop: 1,
+            borderColor: "divider",
+          }}
+        >
+          {entry.code}
+        </Box>
+        <Box
+          sx={{
+            px: 1.5,
+            py: 0.75,
+            bgcolor: "grey.50",
+            borderTop: 1,
+            borderColor: "divider",
+            textAlign: "right",
+          }}
+        >
+          <Link
+            href={`/share#${makeShareHash(entry.name, entry.code)}`}
+            sx={{ fontSize: "0.8125rem" }}
+          >
+            Open in editor
+          </Link>
+        </Box>
+      </Collapse>
     </Box>
   );
 }
