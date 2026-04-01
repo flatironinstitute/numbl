@@ -1,4 +1,9 @@
-import type { PlotTrace, ImagescTrace, ContourTrace } from "./types.js";
+import type {
+  PlotTrace,
+  ImagescTrace,
+  ContourTrace,
+  BarTrace,
+} from "./types.js";
 import {
   traceColor,
   getLineDash,
@@ -19,13 +24,15 @@ export function drawPlot(
   imagescTrace?: ImagescTrace,
   contourTraces?: ContourTrace[],
   colormap?: string,
-  axisMode?: string
+  axisMode?: string,
+  barTraces?: BarTrace[]
 ) {
   const ctx = canvas.getContext("2d");
   const hasContent =
     traces.length > 0 ||
     imagescTrace !== undefined ||
-    (contourTraces && contourTraces.length > 0);
+    (contourTraces && contourTraces.length > 0) ||
+    (barTraces && barTraces.length > 0);
   if (!ctx || !hasContent) return;
 
   const dpr = window.devicePixelRatio || 1;
@@ -95,6 +102,28 @@ export function drawPlot(
           if (v > yMax) yMax = v;
         }
       }
+    }
+  }
+
+  // Include bar bounds
+  if (barTraces) {
+    for (const bt of barTraces) {
+      const halfW = bt.width / 2;
+      for (let i = 0; i < bt.x.length; i++) {
+        const bx = bt.x[i];
+        if (isFinite(bx)) {
+          if (bx - halfW < xMin) xMin = bx - halfW;
+          if (bx + halfW > xMax) xMax = bx + halfW;
+        }
+        const by = bt.y[i];
+        if (isFinite(by)) {
+          if (by < yMin) yMin = by;
+          if (by > yMax) yMax = by;
+        }
+      }
+      // Bars extend to zero
+      if (0 < yMin) yMin = 0;
+      if (0 > yMax) yMax = 0;
     }
   }
 
@@ -269,6 +298,42 @@ export function drawPlot(
   if (contourTraces) {
     for (const ct of contourTraces) {
       drawContour(ctx, ct, toCanvasX, toCanvasY, colormap);
+    }
+  }
+
+  // Bar rendering
+  if (barTraces) {
+    const defaultColors: [number, number, number][] = [
+      [0.0, 0.447, 0.741],
+      [0.85, 0.325, 0.098],
+      [0.929, 0.694, 0.125],
+      [0.494, 0.184, 0.556],
+      [0.466, 0.674, 0.188],
+    ];
+    for (let bi = 0; bi < barTraces.length; bi++) {
+      const bt = barTraces[bi];
+      const [r, g, b] = bt.color ?? defaultColors[bi % defaultColors.length];
+      ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+      ctx.strokeStyle = `rgb(${Math.round(r * 180)},${Math.round(g * 180)},${Math.round(b * 180)})`;
+      ctx.lineWidth = 1;
+      const y0 = toCanvasY(0);
+      for (let i = 0; i < bt.x.length; i++) {
+        const cx = toCanvasX(bt.x[i]);
+        const cy = toCanvasY(bt.y[i]);
+        const halfW = (toCanvasX(bt.x[i] + bt.width) - toCanvasX(bt.x[i])) / 2;
+        ctx.fillRect(
+          cx - halfW,
+          Math.min(cy, y0),
+          halfW * 2,
+          Math.abs(cy - y0)
+        );
+        ctx.strokeRect(
+          cx - halfW,
+          Math.min(cy, y0),
+          halfW * 2,
+          Math.abs(cy - y0)
+        );
+      }
     }
   }
 

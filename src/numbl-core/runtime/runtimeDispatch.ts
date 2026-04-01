@@ -86,6 +86,8 @@ function dispatchPlotCall(
     case "mesh":
     case "waterfall":
       return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
+    case "bar":
+      return rt.bar_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }

@@ -31,6 +31,7 @@ import {
   parseImagescArgs,
   parseContourArgs,
   parseMeshArgs,
+  parseBarArgs,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -242,6 +243,16 @@ export function scatterCall(
   const traces = parseScatterArgs(args);
   if (traces.length > 0) {
     plotInstructions.push({ type: "plot", traces });
+  }
+}
+
+export function barCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const traces = parseBarArgs(args);
+  if (traces.length > 0) {
+    plotInstructions.push({ type: "bar", traces });
   }
 }
 

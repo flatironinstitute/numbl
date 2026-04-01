@@ -23,6 +23,7 @@ export type {
   SurfTrace,
   ImagescTrace,
   ContourTrace,
+  BarTrace,
 } from "../../graphics/types.js";
 
 import type {
@@ -31,6 +32,7 @@ import type {
   SurfTrace,
   ImagescTrace,
   ContourTrace,
+  BarTrace,
 } from "../../graphics/types.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
@@ -1152,4 +1154,69 @@ export function parseMeshArgs(args: RuntimeValue[]): SurfTrace {
   if (!trace.edgeColor) trace.edgeColor = "flat";
   if (!trace.faceColor) trace.faceColor = "none";
   return trace;
+}
+
+// ── Bar argument parser ─────────────────────────────────────────────────
+
+/**
+ * Parse bar() arguments.
+ *
+ * Supported forms:
+ *   bar(Y)             — Y values with x = 1:length(Y)
+ *   bar(X, Y)          — explicit X positions
+ *   bar(..., width)     — relative bar width (scalar 0–1)
+ *   bar(..., color)     — single-char color spec
+ */
+export function parseBarArgs(args: RuntimeValue[]): BarTrace[] {
+  let pos = 0;
+  let xData: number[] | undefined;
+  let yData: number[];
+  let width = 0.8;
+  let color: [number, number, number] | undefined;
+
+  if (args.length === 0) throw new Error("bar requires at least 1 argument");
+
+  // bar(Y) or bar(X, Y, ...)
+  const first = args[pos++];
+
+  if (pos < args.length && isNumericArg(args[pos])) {
+    // bar(X, Y, ...)
+    xData = toNumberArray(first);
+    yData = toNumberArray(args[pos++]);
+  } else {
+    // bar(Y) — could also be bar(Y, width) or bar(Y, color)
+    yData = toNumberArray(first);
+  }
+
+  // Check for optional width (scalar) or color (string)
+  while (pos < args.length) {
+    if (isNumericArg(args[pos])) {
+      const v = args[pos];
+      if (isRuntimeNumber(v)) {
+        width = v as number;
+        pos++;
+      } else {
+        break;
+      }
+    } else if (isStringArg(args[pos])) {
+      const s = getStringValue(args[pos]);
+      const c = resolveColor(s);
+      if (c) {
+        color = c;
+        pos++;
+      } else {
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  if (!xData) {
+    xData = oneBasedIndices(yData.length);
+  }
+
+  const trace: BarTrace = { x: xData, y: yData, width };
+  if (color) trace.color = color;
+  return [trace];
 }

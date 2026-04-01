@@ -113,6 +113,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       contourTraces={axes.contourTraces}
       colormap={axes.colormap}
       axisMode={axes.axisMode}
+      barTraces={axes.barTraces}
     />
   );
 }
@@ -128,6 +129,7 @@ function PlotCanvas({
   contourTraces,
   colormap,
   axisMode,
+  barTraces,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -139,6 +141,7 @@ function PlotCanvas({
   contourTraces?: AxesState["contourTraces"];
   colormap?: string;
   axisMode?: string;
+  barTraces?: AxesState["barTraces"];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -157,7 +160,8 @@ function PlotCanvas({
       imagescTrace,
       contourTraces,
       colormap,
-      axisMode
+      axisMode,
+      barTraces
     );
   }, [
     traces,
@@ -170,6 +174,7 @@ function PlotCanvas({
     contourTraces,
     colormap,
     axisMode,
+    barTraces,
   ]);
 
   useEffect(() => {

@@ -103,6 +103,7 @@ import {
   imagescCall as _imagescCall,
   contourCall as _contourCall,
   meshCall as _meshCall,
+  barCall as _barCall,
   viewCall as _viewCall,
   legendCall as _legendCall,
   drawnow as _drawnow,
@@ -306,6 +307,9 @@ export class Runtime {
     };
     this.builtins["waterfall"] = (_nargout: number, args: unknown[]) => {
       this.mesh_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["bar"] = (_nargout: number, args: unknown[]) => {
+      this.bar_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1512,6 +1516,10 @@ export class Runtime {
 
   public mesh_call(args: RuntimeValue[]): void {
     _meshCall(this.plotInstructions, args);
+  }
+
+  public bar_call(args: RuntimeValue[]): void {
+    _barCall(this.plotInstructions, args);
   }
 
   public view_call(args: RuntimeValue[]): void {
