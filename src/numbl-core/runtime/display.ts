@@ -104,6 +104,10 @@ function formatNumber(n: number): string {
   return s;
 }
 
+/** Max rows/cols to display before truncating with "..." */
+const MAX_DISPLAY_ROWS = 20;
+const MAX_DISPLAY_COLS = 20;
+
 function formatTensor(t: RuntimeTensor): string {
   if (t.data.length === 0) {
     return "[]";
@@ -157,26 +161,73 @@ function format2DSlice(
   cols: number,
   isComplex: boolean
 ): string {
-  const lines: string[] = [];
-  const formatted: string[][] = [];
-  const colWidths: number[] = new Array(cols).fill(0);
+  const truncateRows = rows > MAX_DISPLAY_ROWS;
+  const truncateCols = cols > MAX_DISPLAY_COLS;
 
-  for (let r = 0; r < rows; r++) {
+  // Which rows/cols to show
+  const showRows = truncateRows
+    ? [
+        ...Array(Math.ceil(MAX_DISPLAY_ROWS / 2)).keys(),
+        ...Array.from(
+          { length: Math.floor(MAX_DISPLAY_ROWS / 2) },
+          (_, i) => rows - Math.floor(MAX_DISPLAY_ROWS / 2) + i
+        ),
+      ]
+    : Array.from({ length: rows }, (_, i) => i);
+  const showCols = truncateCols
+    ? [
+        ...Array(Math.ceil(MAX_DISPLAY_COLS / 2)).keys(),
+        ...Array.from(
+          { length: Math.floor(MAX_DISPLAY_COLS / 2) },
+          (_, i) => cols - Math.floor(MAX_DISPLAY_COLS / 2) + i
+        ),
+      ]
+    : Array.from({ length: cols }, (_, i) => i);
+
+  const lines: string[] = [];
+
+  // Header for columns that are too wide
+  if (truncateRows || truncateCols) {
+    lines.push(`  Columns 1 through ${cols}`);
+    lines.push("");
+  }
+
+  const formatted: string[][] = [];
+  const colWidths: number[] = new Array(
+    showCols.length + (truncateCols ? 1 : 0)
+  ).fill(0);
+
+  for (const r of showRows) {
     const row: string[] = [];
-    for (let c = 0; c < cols; c++) {
+    let ci = 0;
+    for (const c of showCols) {
       const idx = colMajorIndex(r, c, rows);
       const s = isComplex
         ? formatComplex(data[idx], imag![idx])
         : formatNumber(data[idx]);
       row.push(s);
-      colWidths[c] = Math.max(colWidths[c], s.length);
+      colWidths[ci] = Math.max(colWidths[ci], s.length);
+      ci++;
+      // Insert ellipsis column between first and last halves
+      if (truncateCols && ci === Math.ceil(MAX_DISPLAY_COLS / 2)) {
+        row.push("...");
+        colWidths[ci] = Math.max(colWidths[ci], 3);
+        ci++;
+      }
     }
     formatted.push(row);
   }
 
-  for (let r = 0; r < rows; r++) {
-    const parts = formatted[r].map((s, c) => s.padStart(colWidths[c]));
+  let fi = 0;
+  for (let si = 0; si < showRows.length; si++) {
+    // Insert ellipsis row between first and last halves
+    if (truncateRows && si === Math.ceil(MAX_DISPLAY_ROWS / 2)) {
+      const ellipsisRow = colWidths.map(w => "...".padStart(w));
+      lines.push("   " + ellipsisRow.join("   "));
+    }
+    const parts = formatted[fi].map((s, c) => s.padStart(colWidths[c]));
     lines.push("   " + parts.join("   "));
+    fi++;
   }
 
   return lines.join("\n");
