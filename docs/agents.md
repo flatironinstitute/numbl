@@ -68,6 +68,8 @@ New builtins go in `src/numbl-core/interpreter/builtins/`. Each file registers I
 - `resolveBinaryScalar(fn, name)` for two-argument scalar functions
 - Custom `resolve` for anything more complex (shape-dependent, multi-output, etc.)
 
+New builtins should include inline `help` via the `help` field on `defineBuiltin`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
+
 Type rules must handle all relevant JitType kinds (`number`, `boolean`, `complex`, `tensor`, `string`, `char`, `struct`, `class_instance`). Return `null` for unsupported types to fall back to the interpreter.
 
 Optional `jitEmit` provides fast-path JS code for scalar/real-tensor cases. Use helpers like `unaryMathJitEmit(mathFn, tensorHelper)` and `binaryMathJitEmit(mathFn)`.
