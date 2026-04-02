@@ -282,5 +282,7 @@ Napi::Value Fft1d(const Napi::CallbackInfo& info);
 Napi::Value Fft1dComplex(const Napi::CallbackInfo& info);
 Napi::Value FftAlongDim(const Napi::CallbackInfo& info);
 Napi::Value Elemwise(const Napi::CallbackInfo& info);
+Napi::Value ElemwiseScalar(const Napi::CallbackInfo& info);
 Napi::Value ElemwiseComplex(const Napi::CallbackInfo& info);
 Napi::Value FillRandn(const Napi::CallbackInfo& info);
+Napi::Value UnaryElemwise(const Napi::CallbackInfo& info);

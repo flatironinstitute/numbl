@@ -93,10 +93,14 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, FftAlongDim));
   exports.Set(Napi::String::New(env, "elemwise"),
               Napi::Function::New(env, Elemwise));
+  exports.Set(Napi::String::New(env, "elemwiseScalar"),
+              Napi::Function::New(env, ElemwiseScalar));
   exports.Set(Napi::String::New(env, "elemwiseComplex"),
               Napi::Function::New(env, ElemwiseComplex));
   exports.Set(Napi::String::New(env, "fillRandn"),
               Napi::Function::New(env, FillRandn));
+  exports.Set(Napi::String::New(env, "unaryElemwise"),
+              Napi::Function::New(env, UnaryElemwise));
   return exports;
 }
 

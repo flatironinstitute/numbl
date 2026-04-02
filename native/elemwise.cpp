@@ -5,6 +5,11 @@
  *   elemwise(a: Float64Array, b: Float64Array, op: number): Float64Array
  *     op: 0=add, 1=sub, 2=mul, 3=div
  *
+ *   elemwiseScalar(scalar: number, arr: Float64Array, op: number, scalarOnLeft: boolean): Float64Array
+ *     op: 0=add, 1=sub, 2=mul, 3=div
+ *     scalarOnLeft=true:  result[i] = scalar op arr[i]
+ *     scalarOnLeft=false: result[i] = arr[i] op scalar
+ *
  * Complex:
  *   elemwiseComplex(aRe: Float64Array, aIm: Float64Array,
  *                   bRe: Float64Array, bIm: Float64Array,
@@ -164,5 +169,58 @@ Napi::Value ElemwiseComplex(const Napi::CallbackInfo& info) {
   if (!isReal) {
     result.Set("im", outIm);
   }
+  return result;
+}
+
+// ── elemwiseScalar() — scalar-tensor element-wise binary op ────────────────
+
+Napi::Value ElemwiseScalar(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 4
+      || !info[0].IsNumber()
+      || !info[1].IsTypedArray()
+      || !info[2].IsNumber()
+      || !info[3].IsBoolean()) {
+    Napi::TypeError::New(env,
+      "elemwiseScalar: expected (number scalar, Float64Array arr, number op, boolean scalarOnLeft)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  double scalar = info[0].As<Napi::Number>().DoubleValue();
+  auto arr = info[1].As<Napi::Float64Array>();
+  int op = info[2].As<Napi::Number>().Int32Value();
+  bool scalarOnLeft = info[3].As<Napi::Boolean>().Value();
+
+  size_t n = arr.ElementLength();
+  auto result = Napi::Float64Array::New(env, n);
+  const double* a = arr.Data();
+  double* out = result.Data();
+
+  if (scalarOnLeft) {
+    switch (op) {
+      case 0: for (size_t i = 0; i < n; i++) out[i] = scalar + a[i]; break;
+      case 1: for (size_t i = 0; i < n; i++) out[i] = scalar - a[i]; break;
+      case 2: for (size_t i = 0; i < n; i++) out[i] = scalar * a[i]; break;
+      case 3: for (size_t i = 0; i < n; i++) out[i] = scalar / a[i]; break;
+      default:
+        Napi::RangeError::New(env, "elemwiseScalar: op must be 0-3")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    }
+  } else {
+    switch (op) {
+      case 0: for (size_t i = 0; i < n; i++) out[i] = a[i] + scalar; break;
+      case 1: for (size_t i = 0; i < n; i++) out[i] = a[i] - scalar; break;
+      case 2: for (size_t i = 0; i < n; i++) out[i] = a[i] * scalar; break;
+      case 3: for (size_t i = 0; i < n; i++) out[i] = a[i] / scalar; break;
+      default:
+        Napi::RangeError::New(env, "elemwiseScalar: op must be 0-3")
+            .ThrowAsJavaScriptException();
+        return env.Null();
+    }
+  }
+
   return result;
 }
