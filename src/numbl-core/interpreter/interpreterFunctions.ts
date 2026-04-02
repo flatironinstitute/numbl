@@ -499,8 +499,16 @@ export function callUserFunction(
       fn.outputs[fn.outputs.length - 1] === "varargout";
     const regularOutputs = hasVarargout ? fn.outputs.slice(0, -1) : fn.outputs;
 
+    // When nargout==0 but the function defines outputs, still collect the
+    // first output so it can be used as `ans`.  The function body already
+    // saw $nargout==0, so guards like `if nargout > 0` behave correctly.
+    const collectCount =
+      nargout === 0 && regularOutputs.length > 0
+        ? 1
+        : Math.min(regularOutputs.length, nargout);
+
     const outputs: RuntimeValue[] = [];
-    for (let i = 0; i < Math.min(regularOutputs.length, nargout); i++) {
+    for (let i = 0; i < collectCount; i++) {
       const val = this.env.get(regularOutputs[i]);
       if (val === undefined && nargout >= i + 1) {
         throw new RuntimeError(
