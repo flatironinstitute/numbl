@@ -41,6 +41,7 @@ import {
 } from "../interpreter/builtins/types.js";
 import { getAllBuiltinNames } from "../helpers/registry.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
+import { getTicTime } from "../interpreter/builtins/time-system.js";
 import { hashKey } from "../interpreter/builtins/dictionary.js";
 import {
   plotInstr as _plotInstr,
@@ -110,6 +111,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       rt.output(displayValue(mv) + "\n");
     }
     return 0;
+  });
+
+  registerSpecial("toc", nargout => {
+    const elapsed = (performance.now() - getTicTime()) / 1000;
+    if (nargout === 0) {
+      rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
+    }
+    return RTV.num(elapsed);
   });
 
   registerSpecial("warning", (_nargout, args) => {

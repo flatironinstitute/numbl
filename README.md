@@ -8,9 +8,11 @@ Numbl is an open-source numerical computing environment that aims to be compatib
 
 ## Try it in the browser
 
+The full browser IDE with file management and plotting is at <https://numbl.org>. No installation required; all execution happens locally in your browser.
+
 [![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
 
-Click the terminal above to launch an interactive REPL — no installation required. All execution happens locally in your browser. The full browser IDE with file management and plotting is available at <https://numbl.org>.
+Or try the [embedded REPL](https://numbl.org/embed-repl) for a quick interactive session.
 
 Numbl scripts can also be embedded in HTML and Markdown pages (including GitHub Pages). See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage and a [live demo](https://magland.github.io/numbl-embed-example/example1).
 

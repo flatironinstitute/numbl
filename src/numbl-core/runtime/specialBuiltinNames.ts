@@ -99,4 +99,5 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "ode45",
   "ode23",
   "deval",
+  "toc",
 ];

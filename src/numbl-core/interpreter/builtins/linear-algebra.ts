@@ -94,7 +94,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length < 1 || argTypes.length > 2)
+        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
           return null;
         if (!isNumericJitType(argTypes[0])) return null;
         return [NUM];
@@ -229,7 +229,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length < 1 || argTypes.length > 3)
+        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 3)
           return null;
         if (!isNumericJitType(argTypes[0])) return null;
         const a = argTypes[0];
@@ -325,7 +325,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length !== 2) return null;
+        if (nargout > 1 || argTypes.length !== 2) return null;
         if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
           return null;
         const hasTensor = argTypes.some(t => t.kind === "tensor");
@@ -429,7 +429,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout !== 1) return null;
+        if (argTypes.length !== 1 || nargout > 1) return null;
         if (!isNumericJitType(argTypes[0])) return null;
         const hasComplex =
           argTypes[0].kind === "complex_or_number" ||
@@ -560,7 +560,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout !== 1) return null;
+        if (argTypes.length !== 1 || nargout > 1) return null;
         if (!isNumericJitType(argTypes[0])) return null;
         return [NUM];
       },
@@ -588,7 +588,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1) return null;
+        if (nargout > 1) return null;
         if (argTypes.length !== 2 && argTypes.length !== 3) return null;
         if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
           return null;
@@ -668,7 +668,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (argTypes.length !== 1 || nargout !== 1) return null;
+        if (argTypes.length !== 1 || nargout > 1) return null;
         if (!isNumericJitType(argTypes[0])) return null;
         const a = argTypes[0];
         if (a.kind === "number" || a.kind === "boolean") return [NUM];
@@ -796,7 +796,7 @@ registerIBuiltin({
   name: "svd",
   resolve: (argTypes, nargout) => {
     if (
-      nargout < 1 ||
+      nargout < 0 ||
       nargout > 3 ||
       argTypes.length < 1 ||
       argTypes.length > 2
@@ -804,7 +804,7 @@ registerIBuiltin({
       return null;
     if (!isNumericJitType(argTypes[0])) return null;
     const c = tensorType();
-    if (nargout === 1)
+    if (nargout <= 1)
       return { outputTypes: [c], apply: (args, n) => svdApply(args, n) };
     return { outputTypes: [c, c, c], apply: (args, n) => svdApply(args, n) };
   },
@@ -819,7 +819,7 @@ function svdApply(
   const A = args[0];
   if (isRuntimeNumber(A)) {
     const val = Math.abs(A);
-    if (nargout === 1) return RTV.tensor(new FloatXArray([val]), [1, 1]);
+    if (nargout <= 1) return RTV.tensor(new FloatXArray([val]), [1, 1]);
     return [
       RTV.tensor(new FloatXArray([A >= 0 ? 1 : -1]), [1, 1]),
       RTV.tensor(new FloatXArray([val]), [1, 1]),
@@ -846,7 +846,7 @@ function svdApply(
       nargout === 3
     );
     if (!result) throw new RuntimeError("svd: complex SVD failed");
-    if (nargout === 1) return RTV.tensor(new FloatXArray(result.S), [k, 1]);
+    if (nargout <= 1) return RTV.tensor(new FloatXArray(result.S), [k, 1]);
     const uCols = econ ? k : m;
     const vCols = econ ? k : n;
     return [
@@ -867,7 +867,7 @@ function svdApply(
   if (bridge?.svd) {
     const result = bridge.svd(toF64(A.data), m, n, econ, nargout === 3);
     if (result) {
-      if (nargout === 1) return RTV.tensor(new FloatXArray(result.S), [k, 1]);
+      if (nargout <= 1) return RTV.tensor(new FloatXArray(result.S), [k, 1]);
       const uCols = econ ? k : m;
       const vCols = econ ? k : n;
       return [
@@ -951,7 +951,7 @@ registerIBuiltin({
   name: "qr",
   resolve: (argTypes, nargout) => {
     if (
-      nargout < 1 ||
+      nargout < 0 ||
       nargout > 3 ||
       argTypes.length < 1 ||
       argTypes.length > 2
@@ -960,7 +960,7 @@ registerIBuiltin({
     if (!isNumericJitType(argTypes[0])) return null;
     const isComplex = argTypes[0].kind === "tensor" && argTypes[0].isComplex;
     const t = tensorType(isComplex || undefined);
-    if (nargout === 1)
+    if (nargout <= 1)
       return { outputTypes: [t], apply: (args, n) => qrApply(args, n) };
     if (nargout === 3)
       return {
@@ -981,7 +981,7 @@ function qrApply(
   if (isRuntimeNumber(A)) {
     const val = A;
     const s = val >= 0 ? 1 : -1;
-    if (nargout === 1) return RTV.tensor(new FloatXArray([s * val]), [1, 1]);
+    if (nargout <= 1) return RTV.tensor(new FloatXArray([s * val]), [1, 1]);
     if (nargout === 3)
       return [
         RTV.tensor(new FloatXArray([s]), [1, 1]),
@@ -1017,7 +1017,7 @@ function qrApply(
       nargout === 2
     );
     if (!result) throw new RuntimeError("qr: complex QR failed");
-    if (nargout === 1) {
+    if (nargout <= 1) {
       const rRows = econ ? k : m;
       return RTV.tensor(
         new FloatXArray(result.RRe),
@@ -1044,7 +1044,7 @@ function qrApply(
   if (bridge?.qr) {
     const result = bridge.qr(toF64(A.data), m, n, econ, nargout === 2);
     if (result) {
-      if (nargout === 1)
+      if (nargout <= 1)
         return RTV.tensor(new FloatXArray(result.R), [econ ? k : m, n]);
       const qCols = econ ? k : m;
       return [
@@ -1090,7 +1090,7 @@ function qrApply(
     }
   }
 
-  if (nargout === 1) {
+  if (nargout <= 1) {
     if (econ) {
       const R_econ = new FloatXArray(k * n);
       for (let r = 0; r < k; r++)
@@ -1348,11 +1348,11 @@ function qrPivotApply(
 registerIBuiltin({
   name: "lu",
   resolve: (argTypes, nargout) => {
-    if (nargout < 1 || nargout > 3) return null;
+    if (nargout < 0 || nargout > 3) return null;
     if (argTypes.length < 1 || argTypes.length > 2) return null;
     if (!isNumericJitType(argTypes[0])) return null;
     const t = tensorType();
-    if (nargout === 1)
+    if (nargout <= 1)
       return { outputTypes: [t], apply: (args, n) => luApply(args, n) };
     if (nargout === 2)
       return { outputTypes: [t, t], apply: (args, n) => luApply(args, n) };
@@ -1375,7 +1375,7 @@ function luApply(
     if (nargout <= 2) {
       const L = RTV.tensor(new FloatXArray([1]), [1, 1]);
       const U = RTV.tensor(new FloatXArray([val]), [1, 1]);
-      if (nargout === 1) return L;
+      if (nargout <= 1) return L;
       return [L, U];
     }
     const L = RTV.tensor(new FloatXArray([1]), [1, 1]);
@@ -1415,7 +1415,7 @@ function luApply(
       if (U_im && LU_im) U_im[i + j * k] = LU_im[i + j * m];
     }
   }
-  if (nargout === 1)
+  if (nargout <= 1)
     return RTV.tensor(
       new FloatXArray(LU_re),
       [m, n],
@@ -1498,7 +1498,7 @@ registerIBuiltin({
   name: "eig",
   resolve: (argTypes, nargout) => {
     if (
-      nargout < 1 ||
+      nargout < 0 ||
       nargout > 3 ||
       argTypes.length < 1 ||
       argTypes.length > 3
@@ -1506,7 +1506,7 @@ registerIBuiltin({
       return null;
     if (!isNumericJitType(argTypes[0])) return null;
     const c = tensorType(true);
-    if (nargout === 1)
+    if (nargout <= 1)
       return { outputTypes: [c], apply: (args, n) => eigApply(args, n) };
     if (nargout === 2)
       return { outputTypes: [c, c], apply: (args, n) => eigApply(args, n) };
@@ -1524,7 +1524,7 @@ function eigApply(
   const { balance, outputForm } = parseEigOptionsRuntime(args);
   if (isRuntimeNumber(A)) {
     const val = A;
-    if (nargout === 1) return RTV.num(val);
+    if (nargout <= 1) return RTV.num(val);
     const V = RTV.tensor(new FloatXArray([1]), [1, 1]);
     if (nargout === 2) {
       if (outputForm === "vector") return [V, RTV.num(val)];
@@ -1557,7 +1557,7 @@ function eigApply(
     );
     if (!result) throw new RuntimeError("eig: complex eig failed");
     const { wRe, wIm, VLRe, VLIm, VRRe, VRIm } = result;
-    if (nargout === 1) return maybeComplexTensor(wRe, [n, 1], wIm);
+    if (nargout <= 1) return maybeComplexTensor(wRe, [n, 1], wIm);
     const Vout =
       computeVR && VRRe && VRIm
         ? maybeComplexTensor(VRRe, [n, n], VRIm)
@@ -1579,7 +1579,7 @@ function eigApply(
   if (!result) throw new RuntimeError("eig: LAPACK eig failed");
   const { wr, wi, VL, VR } = result;
   const hasComplex = wi.some((v: number) => v !== 0);
-  if (nargout === 1) return maybeComplexTensor(wr, [n, 1], wi);
+  if (nargout <= 1) return maybeComplexTensor(wr, [n, 1], wi);
   const Vout =
     computeVR && VR
       ? buildEigenvectorMatrix(VR, wi, n, hasComplex)
@@ -1621,7 +1621,7 @@ registerIBuiltin({
   name: "chol",
   resolve: (argTypes, nargout) => {
     if (
-      nargout < 1 ||
+      nargout < 0 ||
       nargout > 3 ||
       argTypes.length < 1 ||
       argTypes.length > 3
@@ -1629,7 +1629,7 @@ registerIBuiltin({
       return null;
     if (!isNumericJitType(argTypes[0])) return null;
     const t = tensorType();
-    if (nargout === 1)
+    if (nargout <= 1)
       return { outputTypes: [t], apply: (args, n) => cholApply(args, n) };
     if (nargout === 2)
       return { outputTypes: [t, NUM], apply: (args, n) => cholApply(args, n) };
@@ -1807,7 +1807,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (argTypes.length !== 2 || nargout !== 1) return null;
+        if (argTypes.length !== 2 || nargout > 1) return null;
         if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
           return null;
         return [tensorType()];
@@ -1860,7 +1860,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length < 1 || argTypes.length > 2)
+        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
           return null;
         if (!isNumericJitType(argTypes[0])) return null;
         return [NUM];
@@ -1926,7 +1926,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length < 1 || argTypes.length > 2)
+        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
           return null;
         if (!isNumericJitType(argTypes[0])) return null;
         return [NUM];
@@ -1978,7 +1978,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length < 1 || argTypes.length > 2)
+        if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2)
           return null;
         if (!isNumericJitType(argTypes[0])) return null;
         const a = argTypes[0];
@@ -2088,7 +2088,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length !== 2) return null;
+        if (nargout > 1 || argTypes.length !== 2) return null;
         if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
           return null;
         return [tensorType()];
@@ -2133,7 +2133,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length === 0) return null;
+        if (nargout > 1 || argTypes.length === 0) return null;
         if (!argTypes.every(isNumericJitType)) return null;
         return [tensorType()];
       },
@@ -2182,7 +2182,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1) return null;
+        if (nargout > 1) return null;
         if (argTypes.length !== 2 && argTypes.length !== 4) return null;
         const xIdx = 0,
           yIdx = argTypes.length === 4 ? 2 : 1;
@@ -2353,7 +2353,7 @@ defineBuiltin({
   cases: [
     {
       match: (argTypes, nargout) => {
-        if (nargout !== 1 || argTypes.length !== 1) return null;
+        if (nargout > 1 || argTypes.length !== 1) return null;
         if (argTypes[0].kind !== "tensor") return null;
         return [tensorType(argTypes[0].isComplex)];
       },

@@ -63,7 +63,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
   switch (stmt.type) {
     case "ExprStmt": {
-      const val = this.evalExpr(stmt.expr);
+      const val = this.evalExprNargout(stmt.expr, 0);
       const singleVal = Array.isArray(val) ? val[0] : val;
       const rv = ensureRuntimeValue(singleVal);
       this.ans = rv;
@@ -1135,7 +1135,6 @@ export function switchMatch(
 }
 
 export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
-  if (expr.type !== "FuncCall") return false;
   const outputFunctions = [
     "disp",
     "display",
@@ -1143,7 +1142,10 @@ export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
     "warning",
     "assert",
     "tic",
+    "toc",
     "help",
   ];
-  return outputFunctions.includes(expr.name);
+  if (expr.type === "FuncCall") return outputFunctions.includes(expr.name);
+  if (expr.type === "Ident") return outputFunctions.includes(expr.name);
+  return false;
 }
