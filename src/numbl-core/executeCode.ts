@@ -118,10 +118,17 @@ export function executeCode(
   }
 
   // Separate local functions and class definitions from main body
+  const isRepl = mainFileName === "repl";
   const localFunctions: (Stmt & { type: "Function" })[] = [];
   const localClasses: (Stmt & { type: "ClassDef" })[] = [];
   for (const stmt of ast.body) {
     if (stmt.type === "Function") {
+      if (isRepl) {
+        throw new RuntimeError(
+          "Function definitions are not supported in the REPL. Save the function to a .m file instead.",
+          stmt.span
+        );
+      }
       localFunctions.push(stmt);
     } else if (stmt.type === "ClassDef") {
       localClasses.push(stmt);
