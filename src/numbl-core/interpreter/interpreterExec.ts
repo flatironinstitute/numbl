@@ -124,10 +124,12 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const rv = this.rt.share(i < values.length ? values[i] : undefined);
         this.assignLValue(lv, rv);
       }
-      if (!stmt.suppressed && values.length > 0) {
-        const firstLv = stmt.lvalues[0];
-        if (firstLv.type === "Var") {
-          this.rt.displayAssign(firstLv.name, ensureRuntimeValue(values[0]));
+      if (!stmt.suppressed) {
+        for (let i = 0; i < stmt.lvalues.length; i++) {
+          const lv = stmt.lvalues[i];
+          if (lv.type === "Var" && i < values.length) {
+            this.rt.displayAssign(lv.name, ensureRuntimeValue(values[i]));
+          }
         }
       }
       return null;
