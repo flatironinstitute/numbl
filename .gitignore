@@ -22,6 +22,7 @@ node_modules
 dist
 dist-ssr
 dist-cli
+dist-lib
 dist-plot-viewer
 server/dist
 *.local
