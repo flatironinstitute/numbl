@@ -10,6 +10,7 @@ export default defineConfig([
   globalIgnores([
     "dist",
     "dist-cli",
+    "dist-lib",
     "dist-ssr",
     "coverage",
     "coverage-all",
