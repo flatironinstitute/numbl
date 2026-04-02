@@ -95,6 +95,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, Elemwise));
   exports.Set(Napi::String::New(env, "elemwiseComplex"),
               Napi::Function::New(env, ElemwiseComplex));
+  exports.Set(Napi::String::New(env, "fillRandn"),
+              Napi::Function::New(env, FillRandn));
   return exports;
 }
 

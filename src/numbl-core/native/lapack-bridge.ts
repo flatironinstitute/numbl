@@ -485,6 +485,17 @@ export interface LapackBridge {
     WIm?: Float64Array;
   };
 
+  /**
+   * Bulk fill normal random values using Marsaglia polar + xoshiro128**.
+   * State is mutated in-place. Spare is passed in/out to preserve pair caching.
+   */
+  fillRandn?(
+    state: Uint32Array,
+    n: number,
+    spare: number,
+    hasSpare: boolean
+  ): { data: Float64Array; spare: number; hasSpare: boolean };
+
   /** Element-wise binary op on real Float64Arrays. op: 0=add, 1=sub, 2=mul, 3=div */
   elemwise?(a: Float64Array, b: Float64Array, op: number): Float64Array;
 

@@ -416,7 +416,7 @@ export function executeCode(
       generatedJS:
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
-          : "// interpreted mode — no JS generated",
+          : "// No JS generated",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -448,7 +448,7 @@ export function executeCode(
     const generatedJS =
       jitSections.length > 0
         ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
-        : "// interpreted mode — no JS generated";
+        : "// No JS generated";
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {

@@ -563,6 +563,19 @@ export function evalArgs(this: Interpreter, argExprs: Expr[]): unknown[] {
 
 // ── Binary operators ─────────────────────────────────────────────────────
 
+const binopProfileName: Record<string, string> = {
+  [BinaryOperation.Add]: "plus",
+  [BinaryOperation.Sub]: "minus",
+  [BinaryOperation.Mul]: "mtimes",
+  [BinaryOperation.ElemMul]: "times",
+  [BinaryOperation.Div]: "mrdivide",
+  [BinaryOperation.ElemDiv]: "rdivide",
+  [BinaryOperation.LeftDiv]: "mldivide",
+  [BinaryOperation.ElemLeftDiv]: "ldivide",
+  [BinaryOperation.Pow]: "mpower",
+  [BinaryOperation.ElemPow]: "power",
+};
+
 export function evalBinary(
   this: Interpreter,
   expr: Extract<Expr, { type: "Binary" }>
@@ -598,6 +611,18 @@ export function evalBinary(
     const r = Math.pow(left, right);
     if (!isNaN(r)) return r;
     return mPow(ensureRuntimeValue(left), ensureRuntimeValue(right));
+  }
+
+  // Profile non-scalar binary ops (tensor arithmetic)
+  if (
+    this.rt.profilingEnabled &&
+    (typeof left !== "number" || typeof right !== "number")
+  ) {
+    const opName = binopProfileName[expr.op] ?? expr.op;
+    this.rt.profileEnter("builtin:interp:" + opName);
+    const result = binop(expr.op, left, right);
+    this.rt.profileLeave();
+    return result;
   }
 
   return binop(expr.op, left, right);
