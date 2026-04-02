@@ -43,3 +43,9 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.changed == 'true'
+        run: gh release create "v${{ steps.version.outputs.local }}" --generate-notes --title "v${{ steps.version.outputs.local }}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
