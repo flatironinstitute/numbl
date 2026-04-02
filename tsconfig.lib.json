@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "dist-lib",
+    "outDir": "dist-lib",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM"],
+    "types": ["vite/client", "node"],
+    "erasableSyntaxOnly": false
+  },
+  "include": ["src/lib.ts", "src/numbl-core/**/*.ts", "src/graphics/types.ts"]
+}

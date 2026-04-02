@@ -1,6 +1,6 @@
 {
   "name": "numbl",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Run .m source files in the browser and on the command line by compiling to JavaScript",
   "license": "Apache-2.0",
   "type": "module",
@@ -18,10 +18,19 @@
   "engines": {
     "node": ">=18"
   },
+  "main": "dist-lib/lib.js",
+  "types": "dist-lib/lib.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-lib/lib.d.ts",
+      "import": "./dist-lib/lib.js"
+    }
+  },
   "bin": {
     "numbl": "dist-cli/cli.js"
   },
   "files": [
+    "dist-lib/",
     "dist-cli/",
     "dist-plot-viewer/",
     "native/",
@@ -33,6 +42,7 @@
     "build:plot-viewer": "vite build --config vite.plot-viewer.config.ts",
     "bundle:stdlib": "tsx scripts/bundle-stdlib.ts",
     "build:web": "npm run bundle:stdlib && tsc -b && vite build",
+    "build:lib": "npm run bundle:stdlib && esbuild src/lib.ts --bundle --platform=neutral --format=esm --outfile=dist-lib/lib.js --loader:.wasm=file && tsc -p tsconfig.lib.json",
     "build:cli": "npm run bundle:stdlib && esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist-cli/cli.js --packages=external --loader:.wasm=file",
     "build:server": "esbuild server/execution-service.ts --bundle --platform=node --format=esm --outfile=server/dist/execution-service.js --packages=external",
     "server:dev": "node --env-file=server/.env node_modules/.bin/tsx server/execution-service.ts",
@@ -54,7 +64,7 @@
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
-    "prepublishOnly": "npm run build:cli && npm run build:plot-viewer",
+    "prepublishOnly": "npm run build:lib && npm run build:cli && npm run build:plot-viewer",
     "prepare": "husky"
   },
   "dependencies": {
