@@ -496,8 +496,24 @@ export interface LapackBridge {
     hasSpare: boolean
   ): { data: Float64Array; spare: number; hasSpare: boolean };
 
+  /**
+   * Unary element-wise math on a real Float64Array.
+   * op: 0=exp, 1=log, 2=log2, 3=log10, 4=sqrt, 5=abs, 6=floor, 7=ceil,
+   *     8=round, 9=trunc, 10=sin, 11=cos, 12=tan, 13=asin, 14=acos, 15=atan,
+   *     16=sinh, 17=cosh, 18=tanh, 19=sign
+   */
+  unaryElemwise?(arr: Float64Array, op: number): Float64Array;
+
   /** Element-wise binary op on real Float64Arrays. op: 0=add, 1=sub, 2=mul, 3=div */
   elemwise?(a: Float64Array, b: Float64Array, op: number): Float64Array;
+
+  /** Scalar-tensor element-wise op. scalarOnLeft: true → scalar op arr[i], false → arr[i] op scalar */
+  elemwiseScalar?(
+    scalar: number,
+    arr: Float64Array,
+    op: number,
+    scalarOnLeft: boolean
+  ): Float64Array;
 
   /** Element-wise binary op on complex Float64Arrays. op: 0=add, 1=sub, 2=mul, 3=div */
   elemwiseComplex?(

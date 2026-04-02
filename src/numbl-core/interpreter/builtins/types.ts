@@ -17,6 +17,8 @@ import {
   isRuntimeTensor,
   type RuntimeChar,
 } from "../../runtime/types.js";
+import { getLapackBridge } from "../../native/lapack-bridge.js";
+import { RTV } from "../../runtime/constructors.js";
 import { type JitType, signFromNumber, isNonneg } from "../jit/jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
@@ -281,6 +283,30 @@ export function binaryNumberOnly(argTypes: JitType[]): JitType[] | null {
 // ── Apply helpers ───────────────────────────────────────────────────────
 
 /** Apply a unary element-wise function with complex support */
+/** Map Math.* functions to native unaryElemwise op codes. */
+const nativeUnaryOpCode = new Map<(x: number) => number, number>([
+  [Math.exp, 0],
+  [Math.log, 1],
+  [Math.log2, 2],
+  [Math.log10, 3],
+  [Math.sqrt, 4],
+  [Math.abs, 5],
+  [Math.floor, 6],
+  [Math.ceil, 7],
+  [Math.round, 8],
+  [Math.trunc, 9],
+  [Math.sin, 10],
+  [Math.cos, 11],
+  [Math.tan, 12],
+  [Math.asin, 13],
+  [Math.acos, 14],
+  [Math.atan, 15],
+  [Math.sinh, 16],
+  [Math.cosh, 17],
+  [Math.tanh, 18],
+  [Math.sign, 19],
+]);
+
 export function applyUnaryElemwise(
   v: RuntimeValue,
   realFn: (x: number) => number,
@@ -300,6 +326,15 @@ export function applyUnaryElemwise(
   if (isRuntimeTensor(v)) {
     const n = v.data.length;
     if (!v.imag) {
+      // Native fast path
+      const opCode = nativeUnaryOpCode.get(realFn);
+      if (opCode !== undefined) {
+        const bridge = getLapackBridge();
+        if (bridge?.unaryElemwise && v.data instanceof Float64Array) {
+          const result = bridge.unaryElemwise(v.data, opCode);
+          return RTV.tensorRaw(result, v.shape.slice());
+        }
+      }
       const out = new FloatXArray(n);
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
       return makeTensor(out, undefined, v.shape.slice());

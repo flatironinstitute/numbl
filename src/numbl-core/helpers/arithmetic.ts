@@ -354,6 +354,28 @@ function tryNativeElemwiseReal(
 }
 
 /**
+ * Try native scalar-tensor element-wise op.
+ * Returns null if native addon is unavailable.
+ */
+function tryNativeElemwiseScalar(
+  scalar: number,
+  tensor: RuntimeTensor,
+  opCode: number,
+  scalarOnLeft: boolean
+): RuntimeValue | null {
+  if (tensor.imag) return null;
+  const bridge = getLapackBridge();
+  if (!bridge?.elemwiseScalar) return null;
+  const result = bridge.elemwiseScalar(
+    scalar,
+    tensor.data as Float64Array,
+    opCode,
+    scalarOnLeft
+  );
+  return RTV.tensorRaw(result, tensor.shape);
+}
+
+/**
  * Element-wise op on two same-shape tensors where at least one is complex.
  * Uses native addon when available, otherwise JS callback loop.
  */
@@ -441,6 +463,14 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       im: aIm + bIm,
     }));
   }
+  // Scalar-tensor native fast path
+  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_ADD, true);
+    if (nr) return nr;
+  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_ADD, false);
+    if (nr) return nr;
+  }
   return binaryOp(a, b, (x, y) => x + y);
 }
 
@@ -475,6 +505,13 @@ export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       im: aIm - bIm,
     }));
   }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_SUB, true);
+    if (nr) return nr;
+  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_SUB, false);
+    if (nr) return nr;
+  }
   return binaryOp(a, b, (x, y) => x - y);
 }
 
@@ -495,6 +532,13 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       re: aRe * bRe - aIm * bIm,
       im: aRe * bIm + aIm * bRe,
     }));
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_MUL, true);
+    if (nr) return nr;
+  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_MUL, false);
+    if (nr) return nr;
   }
   return binaryOp(a, b, (x, y) => x * y);
 }
@@ -529,6 +573,13 @@ export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       re: aRe * bRe - aIm * bIm,
       im: aRe * bIm + aIm * bRe,
     }));
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_MUL, true);
+    if (nr) return nr;
+  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_MUL, false);
+    if (nr) return nr;
   }
   return binaryOp(a, b, (x, y) => x * y);
 }
@@ -576,6 +627,13 @@ export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return mElemDivSparse(a, b);
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, complexDivide);
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+    const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_DIV, true);
+    if (nr) return nr;
+  } else if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+    const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_DIV, false);
+    if (nr) return nr;
   }
   return binaryOp(a, b, (x, y) => x / y);
 }
