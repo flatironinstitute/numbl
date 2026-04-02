@@ -76,6 +76,19 @@ Environment variables:
 ```
 <!-- END CLI HELP -->
 
+## Library usage
+
+numbl can also be used as an npm library in Node.js or the browser:
+
+```js
+import { executeCode } from "numbl";
+
+const result = executeCode('disp(2 + 3)');
+console.log(result.output); // ["5\n"]
+```
+
+See [docs/library-usage.md](docs/library-usage.md) for the full API, and the example repos: [Node.js](https://github.com/magland/numbl-example-node), [browser](https://github.com/magland/numbl-example-browser).
+
 ## VS Code extension
 
 The [Numbl extension for VS Code](https://marketplace.visualstudio.com/items?itemName=jmagland.numbl) lets you run `.m` scripts directly in the editor with inline error diagnostics and a built-in figure viewer.
