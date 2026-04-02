@@ -41,6 +41,7 @@ interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
   writePrompt: () => void;
   clearTerminal: () => void;
+  fit: () => void;
 }
 
 interface ReplViewProps {
@@ -419,11 +420,13 @@ export function ReplView({
             } else {
               termRef.current.write(formattedText);
             }
+            termRef.current.scrollToBottom();
           }
         },
         writePrompt: () => {
           if (termRef.current) {
             termRef.current.write("\r\n");
+            termRef.current.scrollToBottom();
             resetInputFnRef.current();
           }
         },
@@ -434,6 +437,9 @@ export function ReplView({
             saveHistory([]);
             resetInputFnRef.current();
           }
+        },
+        fit: () => {
+          fitAddonRef.current?.fit();
         },
       };
 

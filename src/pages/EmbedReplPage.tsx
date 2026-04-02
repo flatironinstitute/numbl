@@ -24,6 +24,7 @@ interface TerminalMethods {
   writeOutput: (text: string, isError?: boolean) => void;
   writePrompt: () => void;
   clearTerminal: () => void;
+  fit: () => void;
 }
 
 function useOptimizationParam(): number {
@@ -195,6 +196,15 @@ export function EmbedReplPage() {
   const handleTerminalReady = useCallback((methods: TerminalMethods) => {
     replTerminalRef.current = methods;
   }, []);
+
+  // Re-fit terminal when figure area appears/disappears
+  useEffect(() => {
+    // Small delay to let the layout update before re-fitting
+    const timer = setTimeout(() => {
+      replTerminalRef.current?.fit();
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [hasFigures]);
 
   return (
     <Box
