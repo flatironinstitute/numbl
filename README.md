@@ -101,6 +101,10 @@ npm install -g numbl@latest
 
 Note: if you previously built the native addon, you'll need to run `numbl build-addon` again after upgrading.
 
+## MATLAB Compatibility
+
+See [docs/matlab-compatibility.md](docs/matlab-compatibility.md) for a detailed table of supported MATLAB features, including >400 builtin functions, plotting, data types, and language constructs.
+
 ## Authors
 
 Jeremy Magland and Dan Fortunato, Center for Computational Mathematics, Flatiron Institute.
