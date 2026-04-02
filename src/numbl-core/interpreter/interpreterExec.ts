@@ -67,6 +67,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       const singleVal = Array.isArray(val) ? val[0] : val;
       const rv = ensureRuntimeValue(singleVal);
       this.ans = rv;
+      this.env.set("ans", rv);
       if (!stmt.suppressed && !this.isOutputExpr(stmt.expr)) {
         this.rt.displayResult(rv);
       }

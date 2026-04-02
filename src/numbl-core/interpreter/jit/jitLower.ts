@@ -412,9 +412,9 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
       result = lowerAssign(ctx, stmt);
       break;
     case "ExprStmt":
-      if (!stmt.suppressed) return null; // unsuppressed display not supported
-      result = lowerExprStmt(ctx, stmt);
-      break;
+      // Bail out: ExprStmt must set `ans` in the environment, which the
+      // JIT codegen doesn't do.  Fall back to the interpreter.
+      return null;
     case "If":
       result = lowerIf(ctx, stmt);
       break;
@@ -514,15 +514,6 @@ function lowerMultiAssign(
       outputTypes,
     },
   ];
-}
-
-function lowerExprStmt(
-  ctx: LowerCtx,
-  stmt: Stmt & { type: "ExprStmt" }
-): JitStmt[] | null {
-  const expr = lowerExpr(ctx, stmt.expr);
-  if (!expr) return null;
-  return [{ tag: "ExprStmt", expr }];
 }
 
 function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
