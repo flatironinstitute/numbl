@@ -16,6 +16,10 @@ import { defineBuiltin, registerIBuiltin } from "./types.js";
 
 let ticTime = 0;
 
+export function getTicTime(): number {
+  return ticTime;
+}
+
 defineBuiltin({
   name: "tic",
   cases: [
@@ -29,15 +33,8 @@ defineBuiltin({
   ],
 });
 
-defineBuiltin({
-  name: "toc",
-  cases: [
-    {
-      match: argTypes => (argTypes.length === 0 ? [{ kind: "number" }] : null),
-      apply: () => RTV.num((performance.now() - ticTime) / 1000),
-    },
-  ],
-});
+// toc is registered as a special builtin in specialBuiltins.ts
+// because it needs rt.output access to print elapsed time.
 
 // ── clock ───────────────────────────────────────────────────────────────
 
