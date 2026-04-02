@@ -4,6 +4,7 @@
 
 import {
   FloatXArray,
+  type FloatXArrayType,
   isRuntimeString,
   isRuntimeChar,
   isRuntimeTensor,
@@ -16,6 +17,7 @@ import { defineBuiltin, registerIBuiltin } from "./types.js";
 import {
   rngRandom,
   boxMullerRandom,
+  fillRandn,
   seedRng,
   setRngShuffle,
   setRngSeed,
@@ -76,7 +78,11 @@ registerIBuiltin({
 
 // ── rand / randn ────────────────────────────────────────────────────────
 
-function registerRandBuiltin(name: string, gen: () => number): void {
+function registerRandBuiltin(
+  name: string,
+  gen: () => number,
+  bulkFill?: (data: FloatXArrayType) => void
+): void {
   defineBuiltin({
     name,
     cases: [
@@ -122,7 +128,11 @@ function registerRandBuiltin(name: string, gen: () => number): void {
           if (shape.length === 1) shape.push(shape[0]);
           const n = numel(shape);
           const data = new FloatXArray(n);
-          for (let i = 0; i < n; i++) data[i] = gen();
+          if (bulkFill) {
+            bulkFill(data);
+          } else {
+            for (let i = 0; i < n; i++) data[i] = gen();
+          }
           return RTV.tensor(data, shape);
         },
       },
@@ -131,7 +141,7 @@ function registerRandBuiltin(name: string, gen: () => number): void {
 }
 
 registerRandBuiltin("rand", rngRandom);
-registerRandBuiltin("randn", boxMullerRandom);
+registerRandBuiltin("randn", boxMullerRandom, fillRandn);
 
 // ── randi ───────────────────────────────────────────────────────────────
 
