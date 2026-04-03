@@ -1,4 +1,5 @@
 import { Box, Link, Typography } from "@mui/material";
+import { useNavigate } from "react-router-dom";
 import {
   useCallback,
   useEffect,
@@ -37,6 +38,7 @@ export function EmbedReplPage() {
   const { homeFiles, reloadHomeFiles, getHomeVfsFiles, getHomeWorkspaceFiles } =
     useHomeFiles();
   useMipCorePackage(reloadHomeFiles);
+  const navigate = useNavigate();
 
   const [isReplExecuting, setIsReplExecuting] = useState(false);
   const [figures, figuresDispatch] = useReducer(
@@ -163,6 +165,11 @@ export function EmbedReplPage() {
 
   const handleReplExecute = useCallback(
     async (command: string) => {
+      const trimmed = command.trim();
+      if (trimmed === "exit" || trimmed === "quit") {
+        navigate("/");
+        return;
+      }
       if (isReplExecuting) return;
       setIsReplExecuting(true);
 
@@ -185,7 +192,7 @@ export function EmbedReplPage() {
         code: command,
       });
     },
-    [isReplExecuting, getHomeWorkspaceFiles, getHomeVfsFiles]
+    [isReplExecuting, getHomeWorkspaceFiles, getHomeVfsFiles, navigate]
   );
 
   const handleReplClear = useCallback(() => {
