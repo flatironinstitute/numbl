@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   Box,
   Typography,
@@ -18,16 +18,13 @@ import {
   TableRow,
   IconButton,
   Tooltip,
-  Chip,
-  Collapse,
 } from "@mui/material";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
 import GitHubIcon from "@mui/icons-material/GitHub";
 import TerminalIcon from "@mui/icons-material/Terminal";
+import ImageIcon from "@mui/icons-material/Image";
 import { useNavigate } from "react-router-dom";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import {
@@ -38,9 +35,9 @@ import {
   getProjectLastModified,
 } from "../db/operations";
 import { validateProjectName } from "../utils/validation";
+import { makeShareHash } from "../utils/shareUrl.js";
 import type { Project } from "../db/schema";
 import { getAllIBuiltinNames } from "../numbl-core/interpreter/builtins/index.js";
-import { getAllConstantNames } from "../numbl-core/helpers/constants.js";
 import { getDummyBuiltinNames } from "../numbl-core/helpers/dummy.js";
 import { SPECIAL_BUILTIN_NAMES } from "../numbl-core/runtime/specialBuiltinNames.js";
 
@@ -66,152 +63,12 @@ function formatDate(timestamp: number): string {
   return date.toLocaleDateString();
 }
 
-const CAPABILITIES: { label: string; items: string[] }[] = [
-  {
-    label: "Language",
-    items: [
-      "classes & inheritance",
-      "abstract classes",
-      "handle classes",
-      "enumerations",
-      "namespaces & packages",
-      "nested functions",
-      "anonymous functions & closures",
-      "function handles",
-      "global & persistent variables",
-      "try / catch / error / warning",
-      "switch / case",
-      "for / while loops",
-      "varargin / varargout",
-      "argument validation",
-      "import statements",
-      "regular expressions",
-    ],
-  },
-  {
-    label: "Data types",
-    items: [
-      "N-D arrays",
-      "complex numbers",
-      "logical arrays",
-      "cell arrays",
-      "structs & struct arrays",
-      "sparse matrices",
-      "dictionaries",
-      "char arrays & strings",
-      "function handles",
-    ],
-  },
-  {
-    label: "Operators",
-    items: [
-      "matrix arithmetic (* / \\ ^)",
-      "element-wise (.* ./ .^)",
-      "comparison (== ~= < > <= >=)",
-      "logical (&& || & | ~)",
-      "bitwise (bitand, bitor, bitxor, bitshift)",
-      "transpose (' .')",
-      "colon ranges (a:b, a:s:b)",
-      "concatenation ([ ; ])",
-    ],
-  },
-  {
-    label: "Numerics",
-    items: [
-      "linear algebra (SVD, QR, QZ, LU, Cholesky, eig)",
-      "FFT / IFFT",
-      "interpolation (interp1)",
-      "polynomials (polyfit, polyval, roots, conv)",
-      "statistics (mean, std, var, cov, corrcoef)",
-      "set operations (union, intersect, setdiff, unique)",
-      "special functions (Bessel, Airy, erf, gamma, beta)",
-      "random number generation (rand, randn, randi, rng)",
-      "numerical integration (trapz, cumtrapz)",
-    ],
-  },
-  {
-    label: "Plotting",
-    items: [
-      "2-D (plot, scatter, imagesc, area, stairs)",
-      "bar charts (bar, barh, bar3, bar3h)",
-      "3-D (plot3, surf, mesh, waterfall)",
-      "contour & contourf",
-      "errorbar, semilogx, semilogy, loglog",
-      "colormaps, colorbar, legend, subplot",
-    ],
-  },
-  {
-    label: "I/O & system",
-    items: [
-      "file I/O (fopen, fread, fwrite, fileread)",
-      "JSON (jsondecode)",
-      "web (webread, websave)",
-      "path & directory operations",
-      "environment variables",
-      "sprintf / sscanf",
-    ],
-  },
-  {
-    label: "Engine",
-    items: [
-      "JIT compilation to JavaScript",
-      "type inference & specialization",
-      "copy-on-write arrays",
-      "column-major storage",
-    ],
-  },
-];
-
-function CapabilitySection({
-  label,
-  items,
-  mono,
-}: {
-  label: string;
-  items: string[];
-  mono?: boolean;
-}) {
-  return (
-    <Box sx={{ mb: 2 }}>
-      <Typography
-        variant="caption"
-        color="text.secondary"
-        sx={{
-          textTransform: "uppercase",
-          letterSpacing: "0.08em",
-          display: "block",
-          mb: 0.75,
-        }}
-      >
-        {label}
-      </Typography>
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 0.5,
-          justifyContent: "center",
-        }}
-      >
-        {items.map(item => (
-          <Chip
-            key={item}
-            label={item}
-            size="small"
-            variant="outlined"
-            sx={{
-              fontSize: "0.7rem",
-              height: 22,
-              borderColor: "divider",
-              color: "text.secondary",
-              ...(mono && { fontFamily: "monospace" }),
-            }}
-          />
-        ))}
-      </Box>
-    </Box>
-  );
-}
+const EXAMPLE_CODE = `x = linspace(0, 4*pi, 200);
+y = sin(x) .* exp(-x/10);
+fprintf('Peak value: %.4f\\n', max(y));
+plot(x, y, 'LineWidth', 2);
+title('Damped sine wave');
+xlabel('x'); ylabel('y');`;
 
 export function ProjectListPage() {
   const [projects, setProjects] = useState<ProjectWithMetadata[]>([]);
@@ -222,25 +79,15 @@ export function ProjectListPage() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [newName, setNewName] = useState("");
   const [renameError, setRenameError] = useState("");
-  const [builtinsExpanded, setBuiltinsExpanded] = useState(false);
-  const [aboutOpen, setAboutOpen] = useState(false);
   const navigate = useNavigate();
 
-  const builtinNames = useMemo(() => {
+  const builtinCount = useMemo(() => {
     const dummyNames = new Set(getDummyBuiltinNames());
     const iBuiltinNames = getAllIBuiltinNames().filter(
       n => !dummyNames.has(n) && !n.startsWith("__")
     );
     const allNames = new Set([...iBuiltinNames, ...SPECIAL_BUILTIN_NAMES]);
-    return Array.from(allNames).sort((a, b) =>
-      a.toLowerCase().localeCompare(b.toLowerCase())
-    );
-  }, []);
-
-  const constantNames = useMemo(() => {
-    return getAllConstantNames().sort((a, b) =>
-      a.toLowerCase().localeCompare(b.toLowerCase())
-    );
+    return allNames.size;
   }, []);
 
   useEffect(() => {
@@ -322,74 +169,110 @@ export function ProjectListPage() {
     }
   };
 
-  const toggleBuiltins = useCallback(() => {
-    setBuiltinsExpanded(prev => !prev);
-  }, []);
-
   return (
     <Box
       sx={{
-        maxWidth: 750,
+        maxWidth: 800,
         mx: "auto",
         px: 3,
-        py: 5,
+        py: { xs: 4, sm: 6 },
         minHeight: "100vh",
       }}
     >
       {/* Hero */}
-      <Box sx={{ mb: 5, textAlign: "center" }}>
+      <Box sx={{ mb: { xs: 5, sm: 7 }, textAlign: "center" }}>
         <Typography
-          variant="h3"
+          variant="h2"
           component="h1"
           sx={{
             fontWeight: 800,
             letterSpacing: "-0.03em",
-            mb: 0.75,
+            mb: 1.5,
             background:
               "linear-gradient(135deg, #2563eb 0%, #7c3aed 50%, #db2777 100%)",
             backgroundClip: "text",
             WebkitBackgroundClip: "text",
             WebkitTextFillColor: "transparent",
-            fontSize: { xs: "2.5rem", sm: "3rem" },
+            fontSize: { xs: "3rem", sm: "3.75rem" },
           }}
         >
           numbl
         </Typography>
         <Typography
-          variant="body1"
+          variant="h6"
+          component="p"
           color="text.secondary"
-          sx={{ mb: 2.5, fontSize: "1.05rem", lineHeight: 1.5 }}
+          sx={{
+            mb: 1,
+            fontSize: { xs: "1rem", sm: "1.15rem" },
+            lineHeight: 1.6,
+            fontWeight: 400,
+            maxWidth: 520,
+            mx: "auto",
+          }}
         >
-          A numerical computing environment for the browser and command line
+          A MATLAB-compatible numerical computing environment with{" "}
+          {builtinCount} built-in functions. Runs in your browser or on the
+          command line.
         </Typography>
 
-        {/* Links row */}
+        {/* Primary CTAs */}
         <Box
           sx={{
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            gap: 1,
-            mb: 1,
+            gap: 1.5,
+            mt: 3,
+            mb: 1.5,
+            flexWrap: "wrap",
+          }}
+        >
+          <Button
+            variant="contained"
+            startIcon={<TerminalIcon />}
+            onClick={() => navigate("/embed-repl")}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              borderRadius: 2,
+              px: 3,
+              py: 1,
+              fontSize: "0.95rem",
+              boxShadow: "none",
+              "&:hover": { boxShadow: "none" },
+            }}
+          >
+            Open REPL
+          </Button>
+          <Button
+            variant="outlined"
+            startIcon={<ImageIcon />}
+            onClick={() => navigate("/gallery")}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              borderRadius: 2,
+              px: 3,
+              py: 1,
+              fontSize: "0.95rem",
+            }}
+          >
+            Plot Gallery
+          </Button>
+        </Box>
+
+        {/* Secondary links */}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 2,
             flexWrap: "wrap",
           }}
         >
           {[
-            {
-              label: "REPL",
-              icon: <TerminalIcon sx={{ fontSize: 14 }} />,
-              onClick: () => navigate("/embed-repl"),
-            },
-            {
-              label: "Plot gallery",
-              icon: <InfoOutlinedIcon sx={{ fontSize: 14 }} />,
-              onClick: () => navigate("/gallery"),
-            },
-            {
-              label: "Learn more",
-              icon: <InfoOutlinedIcon sx={{ fontSize: 14 }} />,
-              onClick: () => setAboutOpen(true),
-            },
             {
               label: "GitHub",
               icon: <GitHubIcon sx={{ fontSize: 14 }} />,
@@ -404,32 +287,18 @@ export function ProjectListPage() {
           ].map((link, i) => (
             <Box
               key={i}
-              component={link.href ? "a" : "span"}
-              {...(link.href
-                ? {
-                    href: link.href,
-                    target: "_blank",
-                    rel: "noopener noreferrer",
-                  }
-                : { onClick: link.onClick })}
+              component="a"
+              href={link.href}
+              target="_blank"
+              rel="noopener noreferrer"
               sx={{
                 display: "inline-flex",
                 alignItems: "center",
                 gap: 0.5,
-                cursor: "pointer",
                 color: "text.secondary",
                 textDecoration: "none",
-                px: 1.25,
-                py: 0.5,
-                borderRadius: 1,
-                border: "1px solid",
-                borderColor: "divider",
-                "&:hover": {
-                  color: "primary.main",
-                  borderColor: "primary.main",
-                  bgcolor: "action.hover",
-                },
-                transition: "all 0.15s",
+                "&:hover": { color: "primary.main" },
+                transition: "color 0.15s",
               }}
             >
               {link.icon}
@@ -446,54 +315,124 @@ export function ProjectListPage() {
             </Box>
           ))}
         </Box>
-        <Box
-          onClick={toggleBuiltins}
+      </Box>
+
+      {/* Feature cards */}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: { xs: "1fr", sm: "1fr 1fr" },
+          gap: 2,
+          mb: { xs: 5, sm: 7 },
+        }}
+      >
+        {[
+          {
+            title: "Runs in your browser",
+            description:
+              "No server required. Full IDE, interactive REPL, and embeddable components for sharing code.",
+          },
+          {
+            title: "MATLAB-compatible",
+            description: `${builtinCount} built-in functions. Classes & inheritance, closures, namespaces, and more.`,
+          },
+          {
+            title: "Rich plotting",
+            description:
+              "2-D and 3-D plots, bar charts, contours, surface plots, colormaps, and subplots.",
+          },
+          {
+            title: "CLI with JIT compiler",
+            description:
+              "JIT compiles hot functions with type specialization. Optional native addon for LAPACK, FFTW, and C++.",
+          },
+        ].map(card => (
+          <Box
+            key={card.title}
+            sx={{
+              p: 2.5,
+              borderRadius: 2,
+              border: "1px solid",
+              borderColor: "divider",
+              bgcolor: "background.paper",
+            }}
+          >
+            <Typography
+              variant="subtitle2"
+              sx={{ fontWeight: 700, mb: 0.5, fontSize: "0.85rem" }}
+            >
+              {card.title}
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ lineHeight: 1.5 }}
+            >
+              {card.description}
+            </Typography>
+          </Box>
+        ))}
+        <Typography
+          variant="body2"
+          color="text.secondary"
           sx={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 0.5,
-            cursor: "pointer",
-            userSelect: "none",
-            color: "text.secondary",
-            "&:hover": { color: "text.primary" },
-            transition: "color 0.15s",
-            mt: 1,
+            gridColumn: "1 / -1",
+            textAlign: "center",
+            lineHeight: 1.6,
+            fontSize: "0.82rem",
+            fontStyle: "italic",
           }}
         >
-          <Typography variant="caption">
-            {builtinNames.length} built-in functions and more
-          </Typography>
-          <ExpandMoreIcon
-            sx={{
-              fontSize: 16,
-              transform: builtinsExpanded ? "rotate(180deg)" : "rotate(0deg)",
-              transition: "transform 0.2s",
-            }}
-          />
+          Browser mode is for development, sharing, teaching, and integrating
+          scientific computing with web applications. The CLI with native addon
+          is much faster. Both are currently slower than MATLAB but actively
+          improving.
+        </Typography>
+      </Box>
+
+      {/* Code example */}
+      <Box sx={{ mb: { xs: 5, sm: 7 }, position: "relative" }}>
+        <Box
+          component="pre"
+          sx={{
+            bgcolor: "#1e1e1e",
+            color: "#d4d4d4",
+            borderRadius: 2,
+            px: 3,
+            py: 2.5,
+            fontSize: "0.82rem",
+            lineHeight: 1.7,
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+            overflow: "auto",
+            border: "1px solid",
+            borderColor: "divider",
+            m: 0,
+          }}
+        >
+          {EXAMPLE_CODE}
         </Box>
-        <Collapse in={builtinsExpanded}>
-          <Box sx={{ mt: 2.5, textAlign: "left" }}>
-            <CapabilitySection
-              label={`Built-in functions (${builtinNames.length})`}
-              items={builtinNames}
-              mono
-            />
-            {constantNames.length > 0 && (
-              <CapabilitySection
-                label={`Constants (${constantNames.length})`}
-                items={constantNames}
-                mono
-              />
-            )}
-            {CAPABILITIES.map(category => (
-              <CapabilitySection
-                key={category.label}
-                label={category.label}
-                items={category.items}
-              />
-            ))}
-          </Box>
-        </Collapse>
+        <Button
+          size="small"
+          variant="contained"
+          onClick={() =>
+            navigate(`/share#${makeShareHash("example", EXAMPLE_CODE)}`)
+          }
+          sx={{
+            position: "absolute",
+            top: 10,
+            right: 10,
+            textTransform: "none",
+            fontSize: "0.8rem",
+            fontWeight: 600,
+            borderRadius: 1.5,
+            px: 2,
+            py: 0.5,
+            boxShadow: "none",
+            "&:hover": { boxShadow: "none" },
+          }}
+        >
+          Run
+        </Button>
       </Box>
 
       {/* Projects Section */}
@@ -506,18 +445,27 @@ export function ProjectListPage() {
             mb: 2,
           }}
         >
-          <Typography
-            variant="subtitle2"
-            color="text.secondary"
-            sx={{
-              textTransform: "uppercase",
-              letterSpacing: "0.1em",
-              fontSize: "0.7rem",
-              fontWeight: 600,
-            }}
-          >
-            Projects
-          </Typography>
+          <Box>
+            <Typography
+              variant="subtitle2"
+              color="text.secondary"
+              sx={{
+                textTransform: "uppercase",
+                letterSpacing: "0.1em",
+                fontSize: "0.7rem",
+                fontWeight: 600,
+              }}
+            >
+              Projects
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ fontSize: "0.65rem" }}
+            >
+              Stored locally in your browser
+            </Typography>
+          </Box>
           <Button
             variant="contained"
             size="small"
@@ -747,44 +695,6 @@ export function ProjectListPage() {
           <Button onClick={handleRenameConfirm} variant="contained">
             Rename
           </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* About Dialog */}
-      <Dialog
-        open={aboutOpen}
-        onClose={() => setAboutOpen(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>About numbl</DialogTitle>
-        <DialogContent>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            numbl is an open-source numerical computing environment that aims to
-            be compatible with Matlab.
-          </Typography>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            <strong>Browser</strong> — This web interface lets you create
-            projects, edit files, and run code entirely in your browser. No
-            server is involved; all execution happens locally. Browser execution
-            is convenient but has limited functionality and is slower than the
-            CLI.
-          </Typography>
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            <strong>Command line</strong> — For full performance and features,
-            <a
-              href="https://www.npmjs.com/package/numbl"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              install numbl as a CLI tool
-            </a>
-            . It supports running scripts, an interactive REPL, and optional
-            native LAPACK acceleration for linear algebra.
-          </Typography>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAboutOpen(false)}>Close</Button>
         </DialogActions>
       </Dialog>
     </Box>
