@@ -34,10 +34,8 @@ const re = new RegExp(
 );
 
 if (!re.test(readme)) {
-  console.error(
-    `ERROR: Could not find ${BEGIN} ... ${END} markers in README.md`
-  );
-  process.exit(1);
+  console.log("README.md does not contain CLI help markers — skipping.");
+  process.exit(0);
 }
 
 const updated = readme.replace(re, newBlock);
