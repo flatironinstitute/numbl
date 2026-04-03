@@ -6,6 +6,7 @@ import { EmbedPage } from "./pages/EmbedPage";
 import { EmbedReplPage } from "./pages/EmbedReplPage";
 import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { PlotGalleryPage } from "./pages/PlotGalleryPage";
+import { DocsPage } from "./pages/DocsPage";
 
 function App() {
   console.log("App initialized");
@@ -19,6 +20,8 @@ function App() {
         <Route path="/embed-repl" element={<EmbedReplPage />} />
         <Route path="/benchmark" element={<BenchmarkPage />} />
         <Route path="/gallery" element={<PlotGalleryPage />} />
+        <Route path="/docs" element={<DocsPage />} />
+        <Route path="/docs/:slug" element={<DocsPage />} />
       </Routes>
     </BrowserRouter>
   );

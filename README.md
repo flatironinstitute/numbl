@@ -1,24 +1,16 @@
 # Numbl
 
-Numbl is an open-source numerical computing environment that aims to be compatible with Matlab.
-
-**Early stage project.** Numbl is under active development and new functionality is being added regularly.
-
-[Intro presentation](https://magland.github.io/mip-numbl-presentation)
-
-## Try it in the browser
-
-The full browser IDE with file management and plotting is at <https://numbl.org>. No installation required; all execution happens locally in your browser.
+A MATLAB-compatible numerical computing environment with 400+ built-in functions. Runs in your browser or on the command line.
 
 [![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
 
-Or try the [embedded REPL](https://numbl.org/embed-repl) for a quick interactive session.
+**[Documentation](https://numbl.org/docs)** | **[Browser IDE](https://numbl.org)** | **[REPL](https://numbl.org/embed-repl)** | **[Plot Gallery](https://numbl.org/gallery)**
 
-Numbl scripts can also be embedded in HTML and Markdown pages (including GitHub Pages). See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage and a [live demo](https://magland.github.io/numbl-embed-example/example1).
+## Quick Start
 
-## Command-line usage
+Try it in the browser at [numbl.org](https://numbl.org) -- no installation required.
 
-For full performance, use the command-line version. If you have Node.js installed, you can run numbl directly with `npx` (no install needed):
+Or use the CLI:
 
 ```bash
 npx numbl                      # interactive REPL
@@ -26,86 +18,41 @@ npx numbl eval "disp(eye(3))"  # evaluate inline code
 npx numbl run script.m         # run a .m file
 ```
 
-Or install globally for regular use:
+Install globally for regular use:
 
 ```bash
 npm install -g numbl
 ```
 
-To enable fast linear algebra, build the native LAPACK addon:
+## Native Addon
+
+For faster linear algebra, FFT, and C++ operations, build the optional native addon:
 
 ```bash
 # Prerequisites: C++ compiler, libopenblas-dev, libfftw3-dev (or equivalents for your OS)
 numbl build-addon
 ```
 
-## Usage
+Rebuild after upgrading numbl (`npm install -g numbl@latest`).
 
-<!-- BEGIN CLI HELP -->
-```
-Usage: numbl <command> [options]
+## Documentation
 
-Commands:
-  run <file.m>       Run a .m file
-  eval "<code>"      Evaluate inline code
-  run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon
-  info               Print machine-readable info (JSON)
-  list-builtins      List available built-in functions (--no-help: only those without help text)
-  (no command)       Start interactive REPL
+Full documentation is available at **[numbl.org/docs](https://numbl.org/docs)**, covering:
 
-Global options:
-  --version, -V      Print version and exit
-  --help, -h         Print this help message
+- [Getting Started](https://numbl.org/docs/getting-started) -- installation, CLI options, native addon
+- [Language Features](https://numbl.org/docs/language) -- operators, data types, control flow, classes
+- [Built-in Functions](https://numbl.org/docs/builtins) -- 400+ functions by category
+- [Plotting](https://numbl.org/docs/plotting) -- 2-D/3-D plots, examples, CLI plot server
+- [Library Usage](https://numbl.org/docs/library) -- using numbl as an npm package
+- [Differences from MATLAB](https://numbl.org/docs/differences) -- behavioral differences and limitations
 
-Options (for REPL):
-  --plot             Enable plot server
-  --plot-port <port> Set plot server port (implies --plot)
+## VS Code Extension
 
-Options (for run and eval):
-  --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-ast         Print AST as JSON
-  --verbose          Detailed logging to stderr
-  --stream           NDJSON output mode
-  --path <dir>       Add extra workspace directory
-  --plot             Enable plot server
-  --plot-port <port> Set plot server port (implies --plot)
-  --add-script-path  Add the script's directory to the workspace (run only)
-  --opt <level>      Optimization level (0=none, 1=JIT scalar functions; default: 1)
+The [Numbl extension for VS Code](https://marketplace.visualstudio.com/items?itemName=jmagland.numbl) provides inline error diagnostics and a built-in figure viewer.
 
-Environment variables:
-  NUMBL_PATH         Extra workspace directories (separated by :)
-```
-<!-- END CLI HELP -->
+## Embedding
 
-## Library usage
-
-numbl can also be used as an npm library in Node.js or the browser:
-
-```js
-import { executeCode } from "numbl";
-
-const result = executeCode('disp(2 + 3)');
-console.log(result.output); // ["5\n"]
-```
-
-See [docs/library-usage.md](docs/library-usage.md) for the full API, and the example repos: [Node.js](https://github.com/magland/numbl-example-node), [browser](https://github.com/magland/numbl-example-browser).
-
-## VS Code extension
-
-The [Numbl extension for VS Code](https://marketplace.visualstudio.com/items?itemName=jmagland.numbl) lets you run `.m` scripts directly in the editor with inline error diagnostics and a built-in figure viewer.
-
-## Upgrading
-
-```bash
-npm install -g numbl@latest
-```
-
-Note: if you previously built the native addon, you'll need to run `numbl build-addon` again after upgrading.
-
-## MATLAB Compatibility
-
-See [docs/matlab-compatibility.md](docs/matlab-compatibility.md) for a detailed table of supported MATLAB features, including >400 builtin functions, plotting, data types, and language constructs.
+Numbl scripts can be embedded in HTML and Markdown pages. See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage and a [live demo](https://magland.github.io/numbl-embed-example/example1).
 
 ## Authors
 
@@ -113,8 +60,4 @@ Jeremy Magland and Dan Fortunato, Center for Computational Mathematics, Flatiron
 
 ## License
 
-Apache 2.0.
-
-## Acknowledgements
-
-See [acknowledgements.md](docs/acknowledgements.md).
+Apache 2.0

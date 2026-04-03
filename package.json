@@ -71,7 +71,9 @@
     "fflate": "^0.8.2",
     "node-addon-api": "^8.3.0",
     "pako": "^2.1.0",
+    "react-markdown": "^10.1.0",
     "react-syntax-highlighter": "^16.1.1",
+    "remark-gfm": "^4.0.1",
     "three": "^0.183.2"
   },
   "devDependencies": {

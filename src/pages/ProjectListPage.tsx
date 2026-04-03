@@ -25,6 +25,7 @@ import EditIcon from "@mui/icons-material/Edit";
 import GitHubIcon from "@mui/icons-material/GitHub";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import ImageIcon from "@mui/icons-material/Image";
+import MenuBookIcon from "@mui/icons-material/MenuBook";
 import { useNavigate } from "react-router-dom";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import {
@@ -247,6 +248,21 @@ export function ProjectListPage() {
           </Button>
           <Button
             variant="outlined"
+            startIcon={<MenuBookIcon />}
+            onClick={() => navigate("/docs")}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              borderRadius: 2,
+              px: 3,
+              py: 1,
+              fontSize: "0.95rem",
+            }}
+          >
+            Documentation
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<ImageIcon />}
             onClick={() => navigate("/gallery")}
             sx={{
@@ -289,8 +305,14 @@ export function ProjectListPage() {
               key={i}
               component="a"
               href={link.href}
-              target="_blank"
-              rel="noopener noreferrer"
+              {...("internal" in link && link.internal
+                ? {
+                    onClick: (e: React.MouseEvent) => {
+                      e.preventDefault();
+                      navigate(link.href);
+                    },
+                  }
+                : { target: "_blank", rel: "noopener noreferrer" })}
               sx={{
                 display: "inline-flex",
                 alignItems: "center",
