@@ -366,6 +366,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
         throw new Error("unzip: corrupt central directory");
       }
       const method = view.getUint16(pos + 10, true);
+      const cdCompressedSize = view.getUint32(pos + 20, true);
       const nameLen = view.getUint16(pos + 28, true);
       const extraLen = view.getUint16(pos + 30, true);
       const commentLen = view.getUint16(pos + 32, true);
@@ -386,7 +387,9 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
       }
       const localNameLen = view.getUint16(localPos + 26, true);
       const localExtraLen = view.getUint16(localPos + 28, true);
-      const compressedSize = view.getUint32(localPos + 18, true);
+      const localCompressedSize = view.getUint32(localPos + 18, true);
+      // Use central directory size when local header has 0 (data descriptor flag)
+      const compressedSize = localCompressedSize || cdCompressedSize;
       const dataStart = localPos + 30 + localNameLen + localExtraLen;
       const compressedData = zipData.subarray(
         dataStart,

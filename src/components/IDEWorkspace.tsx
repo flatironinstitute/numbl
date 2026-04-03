@@ -71,7 +71,10 @@ import {
   checkRemoteServiceHealth,
   DEFAULT_REMOTE_SERVICE_URL,
 } from "../utils/remoteExecution";
-import { syncVfsChangesToProject } from "../vfs/syncVfsChanges";
+import {
+  syncVfsChangesToProject,
+  syncHomeVfsChanges,
+} from "../vfs/syncVfsChanges";
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
 import { useHomeFiles } from "../hooks/useHomeFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
@@ -356,19 +359,27 @@ export function IDEWorkspace({
   /** Handle VFS changes from worker execution. */
   const handleVfsChanges = useCallback(
     async (changes: VfsChanges | undefined) => {
-      if (!changes || !projectName) return;
+      if (!changes) return;
       const { created, modified, deleted } = changes;
       if (created.length === 0 && modified.length === 0 && deleted.length === 0)
         return;
-      const { projectResult, homeResult } = await syncVfsChangesToProject(
-        projectName,
-        changes
-      );
-      if (projectResult && mergeVfsChanges) {
-        mergeVfsChanges(projectResult);
-      }
-      if (homeResult) {
-        reloadHomeFiles();
+      if (projectName) {
+        const { projectResult, homeResult } = await syncVfsChangesToProject(
+          projectName,
+          changes
+        );
+        if (projectResult && mergeVfsChanges) {
+          mergeVfsChanges(projectResult);
+        }
+        if (homeResult) {
+          reloadHomeFiles();
+        }
+      } else {
+        // No project (e.g. share route) — still sync home file changes
+        const synced = await syncHomeVfsChanges(changes);
+        if (synced) {
+          reloadHomeFiles();
+        }
       }
     },
     [projectName, mergeVfsChanges, reloadHomeFiles]
