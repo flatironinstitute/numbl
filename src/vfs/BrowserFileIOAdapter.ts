@@ -4,7 +4,7 @@
  */
 
 import { inflateSync } from "fflate";
-import type { FileIOAdapter } from "../numbl-core/fileIOAdapter.js";
+import type { FileIOAdapter, WebOptions } from "../numbl-core/fileIOAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { VirtualFileSystem, type VfsChanges } from "./VirtualFileSystem.js";
 
@@ -304,11 +304,21 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     return this.vfs.listDir(dirPath);
   }
 
-  websave(url: string, filename: string): void {
+  websave(url: string, filename: string, options?: WebOptions): void {
     url = filterUrl(url);
-    // Use synchronous XHR (works in Web Workers)
+    const method = options?.requestMethod?.toUpperCase() || "GET";
     const xhr = new XMLHttpRequest();
-    xhr.open("GET", url, false);
+    xhr.open(method, url, false);
+    if (options?.timeout) xhr.timeout = Math.round(options.timeout * 1000);
+    if (options?.username && options?.password) {
+      xhr.setRequestHeader(
+        "Authorization",
+        "Basic " + btoa(`${options.username}:${options.password}`)
+      );
+    }
+    if (options?.keyName && options?.keyValue) {
+      xhr.setRequestHeader(options.keyName, options.keyValue);
+    }
     xhr.responseType = "arraybuffer";
     xhr.send();
     if (xhr.status < 200 || xhr.status >= 300) {
@@ -318,11 +328,21 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     this.vfs.writeFile(filename, data);
   }
 
-  webread(url: string): string {
+  webread(url: string, options?: WebOptions): string {
     url = filterUrl(url);
-    // Use synchronous XHR (works in Web Workers)
+    const method = options?.requestMethod?.toUpperCase() || "GET";
     const xhr = new XMLHttpRequest();
-    xhr.open("GET", url, false);
+    xhr.open(method, url, false);
+    if (options?.timeout) xhr.timeout = Math.round(options.timeout * 1000);
+    if (options?.username && options?.password) {
+      xhr.setRequestHeader(
+        "Authorization",
+        "Basic " + btoa(`${options.username}:${options.password}`)
+      );
+    }
+    if (options?.keyName && options?.keyValue) {
+      xhr.setRequestHeader(options.keyName, options.keyValue);
+    }
     xhr.send();
     if (xhr.status < 200 || xhr.status >= 300) {
       throw new Error(`webread: HTTP ${xhr.status} for ${url}`);

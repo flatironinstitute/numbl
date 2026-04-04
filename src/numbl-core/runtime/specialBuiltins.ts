@@ -875,6 +875,47 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         ];
   });
 
+  // ── web options helper ──────────────────────────────────────────────
+
+  /** Extract WebOptions from a weboptions struct, or return undefined. */
+  function extractWebOptions(
+    arg: RuntimeValue
+  ): import("../fileIOAdapter.js").WebOptions | undefined {
+    if (!isRuntimeStruct(arg)) return undefined;
+    const s = arg as import("../runtime/types.js").RuntimeStruct;
+    // Detect weboptions struct by checking for the Timeout field
+    if (!s.fields.has("Timeout")) return undefined;
+    const opts: import("../fileIOAdapter.js").WebOptions = {};
+    const t = s.fields.get("Timeout");
+    if (t !== undefined) opts.timeout = toNumber(t);
+    const rm = s.fields.get("RequestMethod");
+    if (rm !== undefined) {
+      const v = toString(rm);
+      if (v !== "auto") opts.requestMethod = v;
+    }
+    const un = s.fields.get("Username");
+    if (un !== undefined) {
+      const v = toString(un);
+      if (v) opts.username = v;
+    }
+    const pw = s.fields.get("Password");
+    if (pw !== undefined) {
+      const v = toString(pw);
+      if (v) opts.password = v;
+    }
+    const kn = s.fields.get("KeyName");
+    if (kn !== undefined) {
+      const v = toString(kn);
+      if (v) opts.keyName = v;
+    }
+    const kv = s.fields.get("KeyValue");
+    if (kv !== undefined) {
+      const v = toString(kv);
+      if (v) opts.keyValue = v;
+    }
+    return opts;
+  }
+
   // ── websave ─────────────────────────────────────────────────────────
 
   registerSpecial("websave", (_nargout, args) => {
@@ -886,9 +927,16 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       throw new RuntimeError("websave is not available in this environment");
     const filename = toString(margs[0]);
     let url = toString(margs[1]);
+    // Check if last argument is a weboptions struct
+    let webOpts: import("../fileIOAdapter.js").WebOptions | undefined;
+    let queryEnd = margs.length;
+    if (margs.length > 2) {
+      webOpts = extractWebOptions(margs[margs.length - 1]);
+      if (webOpts) queryEnd = margs.length - 1;
+    }
     // Append query parameters (name-value pairs)
     const queryParts: string[] = [];
-    for (let i = 2; i + 1 < margs.length; i += 2) {
+    for (let i = 2; i + 1 < queryEnd; i += 2) {
       const name = encodeURIComponent(toString(margs[i]));
       const value = encodeURIComponent(toString(margs[i + 1]));
       queryParts.push(`${name}=${value}`);
@@ -897,7 +945,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       const sep = url.includes("?") ? "&" : "?";
       url += sep + queryParts.join("&");
     }
-    io.websave(url, filename);
+    io.websave(url, filename, webOpts);
     return RTV.char(filename);
   });
 
@@ -911,9 +959,16 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     if (!io.webread)
       throw new RuntimeError("webread is not available in this environment");
     let url = toString(margs[0]);
+    // Check if last argument is a weboptions struct
+    let webOpts: import("../fileIOAdapter.js").WebOptions | undefined;
+    let queryEnd = margs.length;
+    if (margs.length > 1) {
+      webOpts = extractWebOptions(margs[margs.length - 1]);
+      if (webOpts) queryEnd = margs.length - 1;
+    }
     // Append query parameters (name-value pairs)
     const queryParts: string[] = [];
-    for (let i = 1; i + 1 < margs.length; i += 2) {
+    for (let i = 1; i + 1 < queryEnd; i += 2) {
       const name = encodeURIComponent(toString(margs[i]));
       const value = encodeURIComponent(toString(margs[i + 1]));
       queryParts.push(`${name}=${value}`);
@@ -922,7 +977,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       const sep = url.includes("?") ? "&" : "?";
       url += sep + queryParts.join("&");
     }
-    const text = io.webread(url);
+    const text = io.webread(url, webOpts);
     // Try to parse as JSON (MATLAB auto-decodes JSON responses)
     try {
       const parsed = JSON.parse(text);

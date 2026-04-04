@@ -96,6 +96,49 @@ registerIBuiltin({
   }),
 });
 
+// ── weboptions ──────────────────────────────────────────────────────────
+
+const WEBOPTIONS_DEFAULTS: Record<string, RuntimeValue> = {
+  CharacterEncoding: RTV.char("auto"),
+  UserAgent: RTV.char("numbl"),
+  Timeout: 5,
+  Username: RTV.char(""),
+  Password: RTV.char(""),
+  KeyName: RTV.char(""),
+  KeyValue: RTV.char(""),
+  ContentType: RTV.char("auto"),
+  MediaType: RTV.char("auto"),
+  RequestMethod: RTV.char("auto"),
+  ArrayFormat: RTV.char("csv"),
+  CertificateFilename: RTV.char("default"),
+};
+
+registerIBuiltin({
+  name: "weboptions",
+  resolve: () => ({
+    outputTypes: [{ kind: "struct" }],
+    apply: args => {
+      const fields = new Map<string, RuntimeValue>();
+      // Start with defaults
+      for (const [k, v] of Object.entries(WEBOPTIONS_DEFAULTS)) {
+        fields.set(k, v);
+      }
+      if (args.length % 2 !== 0)
+        throw new RuntimeError("weboptions: expected name-value pairs");
+      for (let i = 0; i < args.length; i += 2) {
+        const key = args[i];
+        if (!isRuntimeChar(key) && !isRuntimeString(key))
+          throw new RuntimeError("weboptions: option name must be a string");
+        const name = isRuntimeChar(key) ? key.value : (key as string);
+        if (!(name in WEBOPTIONS_DEFAULTS))
+          throw new RuntimeError(`weboptions: unknown option '${name}'`);
+        fields.set(name, args[i + 1]);
+      }
+      return RTV.struct(Object.fromEntries(fields));
+    },
+  }),
+});
+
 // ── odeget ───────────────────────────────────────────────────────────────
 
 registerIBuiltin({

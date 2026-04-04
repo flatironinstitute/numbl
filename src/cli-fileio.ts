@@ -22,7 +22,7 @@ import { inflateRawSync } from "zlib";
 import { execFileSync } from "child_process";
 import { homedir, tmpdir } from "os";
 import { join, resolve, dirname, basename } from "path";
-import type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
+import type { FileIOAdapter, WebOptions } from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli-scan.js";
 
 function expandTilde(filepath: string): string {
@@ -62,6 +62,25 @@ function permissionToFlags(permission: string): string {
 }
 
 const READ_CHUNK_SIZE = 8192;
+
+/** Build fetch init options from WebOptions. */
+function buildFetchOptions(options?: WebOptions): Record<string, unknown> {
+  const init: Record<string, unknown> = {};
+  if (options?.requestMethod) {
+    init.method = options.requestMethod.toUpperCase();
+  }
+  const headers: Record<string, string> = {};
+  if (options?.username && options?.password) {
+    headers["Authorization"] =
+      "Basic " +
+      Buffer.from(`${options.username}:${options.password}`).toString("base64");
+  }
+  if (options?.keyName && options?.keyValue) {
+    headers[options.keyName] = options.keyValue;
+  }
+  if (Object.keys(headers).length > 0) init.headers = headers;
+  return init;
+}
 
 export class NodeFileIOAdapter implements FileIOAdapter {
   private nextFid = 3; // 0=stdin, 1=stdout, 2=stderr reserved
@@ -260,19 +279,25 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     return tmpdir();
   }
 
-  websave(url: string, filename: string): void {
+  websave(url: string, filename: string, options?: WebOptions): void {
     const dest = expandTilde(filename);
+    const timeoutMs = options?.timeout
+      ? Math.round(options.timeout * 1000)
+      : 30000;
     // Use a child node process with fetch to perform a synchronous download
+    const fetchOpts = buildFetchOptions(options);
     const script = `
-      fetch(${JSON.stringify(url)})
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), ${timeoutMs});
+      fetch(${JSON.stringify(url)}, { ...${JSON.stringify(fetchOpts)}, signal: ac.signal })
+        .then(r => { clearTimeout(t); if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
         .then(buf => require('fs').writeFileSync(${JSON.stringify(dest)}, Buffer.from(buf)))
         .catch(e => { process.stderr.write(e.message + '\\n'); process.exit(1); });
     `;
     try {
       execFileSync(process.execPath, ["-e", script], {
         stdio: ["ignore", "ignore", "pipe"],
-        timeout: 30000,
+        timeout: timeoutMs + 5000,
       });
     } catch (e: unknown) {
       const msg =
@@ -283,18 +308,24 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     }
   }
 
-  webread(url: string): string {
+  webread(url: string, options?: WebOptions): string {
+    const timeoutMs = options?.timeout
+      ? Math.round(options.timeout * 1000)
+      : 30000;
     // Use a child node process with fetch to perform a synchronous download
+    const fetchOpts = buildFetchOptions(options);
     const script = `
-      fetch(${JSON.stringify(url)})
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+      const ac = new AbortController();
+      const t = setTimeout(() => ac.abort(), ${timeoutMs});
+      fetch(${JSON.stringify(url)}, { ...${JSON.stringify(fetchOpts)}, signal: ac.signal })
+        .then(r => { clearTimeout(t); if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
         .then(t => process.stdout.write(t))
         .catch(e => { process.stderr.write(e.message + '\\n'); process.exit(1); });
     `;
     try {
       const result = execFileSync(process.execPath, ["-e", script], {
         stdio: ["ignore", "pipe", "pipe"],
-        timeout: 30000,
+        timeout: timeoutMs + 5000,
         maxBuffer: 50 * 1024 * 1024,
       });
       return result.toString();

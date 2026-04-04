@@ -6,6 +6,17 @@
  * from the CLI or other host environments via ExecOptions.fileIO.
  */
 
+/** Options extracted from a weboptions struct for websave/webread. */
+export interface WebOptions {
+  timeout?: number;
+  requestMethod?: string;
+  headerFields?: [string, string][];
+  username?: string;
+  password?: string;
+  keyName?: string;
+  keyValue?: string;
+}
+
 export interface FileIOAdapter {
   /** Open a file, returns an integer file identifier (fid). */
   fopen(filename: string, permission: string): number;
@@ -58,10 +69,10 @@ export interface FileIOAdapter {
   mkdir?(dirPath: string): boolean;
 
   /** Download a URL to a file. Optional. */
-  websave?(url: string, filename: string): void;
+  websave?(url: string, filename: string, options?: WebOptions): void;
 
   /** Fetch content from a URL and return as a string. Optional. */
-  webread?(url: string): string;
+  webread?(url: string, options?: WebOptions): string;
 
   /** Delete files matching a pattern (supports globs). Optional. */
   deleteFile?(pattern: string): void;
