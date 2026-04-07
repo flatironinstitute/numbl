@@ -3,7 +3,7 @@
  * Mirrors NodeFileIOAdapter patterns from cli-fileio.ts.
  */
 
-import { inflateSync } from "fflate";
+import { unzipSync } from "fflate";
 import type { FileIOAdapter, WebOptions } from "../numbl-core/fileIOAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { VirtualFileSystem, type VfsChanges } from "./VirtualFileSystem.js";
@@ -356,81 +356,15 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     const zipData = this.vfs.readFile(zipfilename);
     this.vfs.mkdir(outputfolder);
 
-    // Find End of Central Directory record (signature 0x06054b50)
-    let eocdOffset = -1;
-    for (let i = zipData.length - 22; i >= 0; i--) {
-      if (
-        zipData[i] === 0x50 &&
-        zipData[i + 1] === 0x4b &&
-        zipData[i + 2] === 0x05 &&
-        zipData[i + 3] === 0x06
-      ) {
-        eocdOffset = i;
-        break;
-      }
-    }
-    if (eocdOffset === -1) throw new Error("unzip: invalid ZIP file");
-
-    const view = new DataView(
-      zipData.buffer,
-      zipData.byteOffset,
-      zipData.byteLength
-    );
-    const cdOffset = view.getUint32(eocdOffset + 16, true);
-    const cdEntries = view.getUint16(eocdOffset + 10, true);
+    const files = unzipSync(zipData);
     const extracted: string[] = [];
-    let pos = cdOffset;
 
-    for (let i = 0; i < cdEntries; i++) {
-      if (view.getUint32(pos, true) !== 0x02014b50) {
-        throw new Error("unzip: corrupt central directory");
-      }
-      const method = view.getUint16(pos + 10, true);
-      const cdCompressedSize = view.getUint32(pos + 20, true);
-      const nameLen = view.getUint16(pos + 28, true);
-      const extraLen = view.getUint16(pos + 30, true);
-      const commentLen = view.getUint16(pos + 32, true);
-      const localHeaderOffset = view.getUint32(pos + 42, true);
-      const entryName = TEXT_DECODER.decode(
-        zipData.subarray(pos + 46, pos + 46 + nameLen)
-      );
-      pos += 46 + nameLen + extraLen + commentLen;
-
+    for (const [entryName, fileData] of Object.entries(files)) {
       if (entryName.endsWith("/")) {
         this.vfs.mkdir(outputfolder + "/" + entryName);
         continue;
       }
-
-      const localPos = localHeaderOffset;
-      if (view.getUint32(localPos, true) !== 0x04034b50) {
-        throw new Error("unzip: corrupt local header");
-      }
-      const localNameLen = view.getUint16(localPos + 26, true);
-      const localExtraLen = view.getUint16(localPos + 28, true);
-      const localCompressedSize = view.getUint32(localPos + 18, true);
-      // Use central directory size when local header has 0 (data descriptor flag)
-      const compressedSize = localCompressedSize || cdCompressedSize;
-      const dataStart = localPos + 30 + localNameLen + localExtraLen;
-      const compressedData = zipData.subarray(
-        dataStart,
-        dataStart + compressedSize
-      );
-
-      let fileData: Uint8Array;
-      if (method === 0) {
-        fileData = new Uint8Array(compressedData);
-      } else if (method === 8) {
-        // Deflate — use DecompressionStream if available, otherwise error
-        // In a synchronous context we need a sync inflate. Try fflate if bundled.
-        fileData = syncInflateRaw(compressedData);
-      } else {
-        throw new Error(
-          `unzip: unsupported compression method ${method} for ${entryName}`
-        );
-      }
-
       const outPath = outputfolder + "/" + entryName;
-      // Ensure parent dirs
       const lastSlash = outPath.lastIndexOf("/");
       if (lastSlash > 0) {
         this.vfs.mkdir(outPath.slice(0, lastSlash));
@@ -577,10 +511,6 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     walkDir(this.vfs.normalizePath(baseDir));
     return results;
   }
-}
-
-function syncInflateRaw(data: Uint8Array): Uint8Array {
-  return inflateSync(data);
 }
 
 function filterUrl(url: string): string {
