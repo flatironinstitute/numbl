@@ -266,6 +266,10 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     return this.vfs.rmdir(dirPath, recursive);
   }
 
+  movefile(source: string, destination: string): boolean {
+    return this.vfs.movefile(source, destination);
+  }
+
   listDir(dirPath: string): {
     name: string;
     folder: string;

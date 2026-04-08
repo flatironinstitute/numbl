@@ -86,6 +86,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "webread",
   "delete",
   "rmdir",
+  "movefile",
   "unzip",
   "dir",
   "warning",

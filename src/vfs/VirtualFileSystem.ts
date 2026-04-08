@@ -136,6 +136,66 @@ export class VirtualFileSystem {
     return true;
   }
 
+  /** Move/rename a file or directory tree. Returns true on success. */
+  movefile(source: string, destination: string): boolean {
+    const srcNorm = this.normalizePath(source);
+    const srcType = this.exists(srcNorm);
+    if (srcType === null) return false;
+
+    let dstNorm = this.normalizePath(destination);
+    const dstType = this.exists(dstNorm);
+
+    // If destination is an existing directory, append basename of source.
+    if (dstType === "dir") {
+      const lastSlash = srcNorm.lastIndexOf("/");
+      const baseName = lastSlash >= 0 ? srcNorm.slice(lastSlash + 1) : srcNorm;
+      dstNorm = (dstNorm === "/" ? "" : dstNorm) + "/" + baseName;
+    }
+
+    // If source is a directory, destination cannot be an existing file.
+    if (srcType === "dir" && this.exists(dstNorm) === "file") return false;
+
+    if (srcType === "file") {
+      const content = this.files.get(srcNorm)!.content;
+      // Delete destination file first if it exists (overwrite).
+      if (this.exists(dstNorm) === "file") this.deleteFile(dstNorm);
+      this.writeFile(dstNorm, content);
+      this.deleteFile(srcNorm);
+      return true;
+    }
+
+    // Directory move: re-key all files under srcNorm to dstNorm.
+    const srcPrefix = srcNorm + "/";
+    const filesToMove: { from: string; to: string; content: Uint8Array }[] = [];
+    for (const [path, file] of this.files) {
+      if (path === srcNorm || path.startsWith(srcPrefix)) {
+        const rest = path === srcNorm ? "" : path.slice(srcNorm.length);
+        filesToMove.push({
+          from: path,
+          to: dstNorm + rest,
+          content: file.content,
+        });
+      }
+    }
+    // Also move explicit empty directories.
+    const dirsToMove: { from: string; to: string }[] = [];
+    for (const dir of this.directories) {
+      if (dir === srcNorm || dir.startsWith(srcPrefix)) {
+        const rest = dir === srcNorm ? "" : dir.slice(srcNorm.length);
+        dirsToMove.push({ from: dir, to: dstNorm + rest });
+      }
+    }
+
+    for (const { from } of filesToMove) this.deleteFile(from);
+    for (const { from } of dirsToMove) this.directories.delete(from);
+
+    this.directories.add(dstNorm);
+    for (const { to } of dirsToMove) this.directories.add(to);
+    for (const { to, content } of filesToMove) this.writeFile(to, content);
+
+    return true;
+  }
+
   rmdir(dirPath: string, recursive: boolean): boolean {
     const norm = this.normalizePath(dirPath);
     if (recursive) {
