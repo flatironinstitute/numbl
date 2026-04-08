@@ -133,6 +133,24 @@ defineBuiltin({
   cases: arrayConstructorCases(nanFill, NaN),
 });
 
+// ── inf / Inf ────────────────────────────────────────────────────────────
+
+function infFill(shape: number[]): RuntimeValue {
+  const data = new FloatXArray(numel(shape));
+  data.fill(Infinity);
+  return makeTensor(data, undefined, shape);
+}
+
+defineBuiltin({
+  name: "inf",
+  cases: arrayConstructorCases(infFill, Infinity),
+});
+
+defineBuiltin({
+  name: "Inf",
+  cases: arrayConstructorCases(infFill, Infinity),
+});
+
 // ── eye ──────────────────────────────────────────────────────────────────
 
 defineBuiltin({
