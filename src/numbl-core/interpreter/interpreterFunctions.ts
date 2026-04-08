@@ -232,7 +232,23 @@ export function interpretWorkspaceFunction(
   const dotIdx = target.name.lastIndexOf(".");
   const primaryName = dotIdx >= 0 ? target.name.slice(dotIdx + 1) : target.name;
 
-  const fn = this.findFunctionInWorkspaceFile(target.name, primaryName);
+  let fn = this.findFunctionInWorkspaceFile(target.name, primaryName);
+  // MATLAB: if the declared function name doesn't match the file name, the
+  // file name still wins — the first top-level function in the file is what
+  // `<filename>(...)` calls.  Fall back to that here so mismatched-name
+  // function files don't get silently treated as scripts below.
+  if (!fn) {
+    const entry = this.ctx.registry.filesByFuncName.get(target.name);
+    if (entry) {
+      const ast = this.ctx.getCachedAST(entry.fileName);
+      for (const stmt of ast.body) {
+        if (stmt.type === "Function") {
+          fn = funcDefFromStmt(stmt);
+          break;
+        }
+      }
+    }
+  }
   if (!fn) {
     const entry = this.ctx.registry.filesByFuncName.get(target.name);
     if (entry) {
