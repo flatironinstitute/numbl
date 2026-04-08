@@ -28,6 +28,7 @@ import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import { jitHelpers } from "./interpreter/jit/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
+import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -274,6 +275,19 @@ export function executeCode(
   const functionIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
 
   // ── 3. Create runtime ──────────────────────────────────────────────
+  // Save the existing dynamic IBuiltin entries for SPECIAL_BUILTIN_NAMES
+  // before constructing the new Runtime. registerSpecialBuiltins (called
+  // from the Runtime constructor) replaces these global registry entries
+  // with closures that capture the new rt; if we don't restore them, a
+  // nested executeCode call leaves the parent runtime's special builtins
+  // (e.g. mfilename, disp, fprintf, ...) bound to the *nested* rt, so
+  // subsequent calls in the parent see stale rt.$file/output state.
+  const savedSpecialBuiltins = new Map<string, IBuiltin>();
+  for (const name of SPECIAL_BUILTIN_NAMES) {
+    const existing = getIBuiltin(name);
+    if (existing) savedSpecialBuiltins.set(name, existing);
+  }
+
   const rt = new Runtime(options, options.initialVariableValues);
 
   // Register .js user functions as IBuiltins (save originals for cleanup)
@@ -394,7 +408,12 @@ export function executeCode(
         }
       }
 
-      // Scan and parse new files
+      // Scan and parse new files. Match the startup behavior in this file:
+      // a single broken .m file in an addpath'd directory should not abort
+      // the addpath call — warn and skip it instead. (Without this, calling
+      // addpath('dir') from a script throws if any file in dir fails to
+      // parse, which breaks package load_package.m scripts that addpath a
+      // tree containing a few unparseable files.)
       if (fileIO?.scanDirectory) {
         const newFiles = fileIO.scanDirectory(absDir);
         const newJsFiles: WorkspaceFile[] = [];
@@ -404,10 +423,14 @@ export function executeCode(
             try {
               ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
             } catch (e) {
-              if (e instanceof SyntaxError && e.file === null) {
-                e.file = f.name;
+              if (e instanceof SyntaxError) {
+                console.warn(
+                  `Warning: skipping ${f.name} (syntax error at line ${e.line ?? "?"})`
+                );
+              } else {
+                console.warn(`Warning: skipping ${f.name} (parse error)`);
               }
-              throw e;
+              continue;
             }
             interpreter.fileSources.set(f.name, f.source);
             mWorkspaceFiles.push(f);
@@ -675,6 +698,13 @@ export function executeCode(
       } else {
         unregisterIBuiltin(ib.name);
       }
+    }
+    // Restore the parent runtime's special-builtin registrations. Our
+    // Runtime constructor replaced these with closures over our rt; the
+    // parent (or a still-running outer executeCode) needs its own closures
+    // back so its rt.$file/output streams are no longer aliased to ours.
+    for (const [, ib] of savedSpecialBuiltins) {
+      registerDynamicIBuiltin(ib);
     }
   }
 }
