@@ -15,17 +15,11 @@ end
 
 % Call with a semicolon: ans must not be overwritten.
 no_output_fn(5);
-saved = ans;
-assert(saved == 42, 'semicolon call should not overwrite ans');
-
-% Reset the sentinel (the assert above clobbered ans through ExprStmt
-% side-effects of the builtin).
-42;
+assert(ans == 42, 'semicolon call should not overwrite ans');
 
 % Call without a semicolon: ans must also not be overwritten.
 no_output_fn(5)
-saved = ans;
-assert(saved == 42, 'no-semicolon call should not overwrite ans');
+assert(ans == 42, 'no-semicolon call should not overwrite ans');
 
 % Assigning the result of a no-output function errors.
 err = '';
@@ -50,7 +44,6 @@ assert(strcmp(err, 'Too many output arguments.'), ...
 % feval of a no-output function works (nargout=0 at the call site).
 42;
 feval(@no_output_fn, 5);
-saved = ans;
-assert(saved == 42, 'feval should not overwrite ans either');
+assert(ans == 42, 'feval should not overwrite ans either');
 
 disp('SUCCESS');

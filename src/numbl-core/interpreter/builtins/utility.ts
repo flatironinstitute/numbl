@@ -150,7 +150,7 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length < 1) return null;
-        return [{ kind: "number" }];
+        return [];
       },
       apply: args => {
         const v = args[0];
@@ -174,7 +174,7 @@ defineBuiltin({
               : "Assertion failed";
           throw new Error(msg);
         }
-        return 0;
+        return undefined as unknown as RuntimeValue;
       },
     },
   ],
@@ -188,7 +188,7 @@ defineBuiltin({
     {
       match: argTypes => {
         if (argTypes.length === 0) return null;
-        return [{ kind: "number" }]; // never actually returns
+        return []; // throws; never returns
       },
       apply: args => {
         const first = textValue(args[0]) ?? String(args[0]);

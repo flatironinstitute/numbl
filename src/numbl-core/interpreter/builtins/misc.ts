@@ -287,7 +287,7 @@ for (const name of ["clear", "clc", "clf"]) {
     name,
     resolve: () => ({
       outputTypes: [],
-      apply: () => 0,
+      apply: () => undefined as unknown as RuntimeValue,
     }),
   });
 }
@@ -445,7 +445,7 @@ registerIBuiltin({
   name: "set",
   resolve: () => ({
     outputTypes: [],
-    apply: () => 0,
+    apply: () => undefined as unknown as RuntimeValue,
   }),
 });
 
@@ -469,7 +469,7 @@ for (const name of [
     name,
     resolve: () => ({
       outputTypes: [],
-      apply: () => 0,
+      apply: () => undefined as unknown as RuntimeValue,
     }),
   });
 }

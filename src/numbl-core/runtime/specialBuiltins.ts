@@ -76,41 +76,64 @@ function registerSpecial(
   });
 }
 
+/** Register a void special builtin — produces no outputs.  The call site
+ *  raises "Too many output arguments." when nargout > 0, and `ans` is not
+ *  set when called as a statement. */
+function registerSpecialVoid(
+  name: string,
+  fn: (args: RuntimeValue[]) => void
+): void {
+  registerDynamicIBuiltin({
+    name,
+    resolve: () => ({
+      outputTypes: [],
+      apply: (args: RuntimeValue[]) => {
+        fn(args);
+        return undefined as unknown as RuntimeValue;
+      },
+    }),
+  });
+}
+
 /**
  * Register all special builtins as IBuiltins closing over the runtime instance.
  */
 export function registerSpecialBuiltins(rt: Runtime): void {
-  registerSpecial("help", (_nargout, args) => {
+  registerSpecial("help", (nargout, args) => {
+    let text = "";
+    const emit = (s: string) => {
+      text += s;
+      if (nargout === 0) rt.output(s);
+    };
     if (args.length === 0) {
       const names = getAllBuiltinNames().sort();
-      rt.output("Available builtins:\n");
-      rt.output("  " + names.join(", ") + "\n");
-      rt.output("\nType 'help <name>' for help on a specific builtin.\n");
-      return 0;
-    }
-    const name = toString(args[0]);
-    const h = getIBuiltinHelp(name);
-    if (!h) {
-      const allNames = getAllBuiltinNames();
-      if (allNames.includes(name)) {
-        rt.output(`No help available for '${name}'.\n`);
+      emit("Available builtins:\n");
+      emit("  " + names.join(", ") + "\n");
+      emit("\nType 'help <name>' for help on a specific builtin.\n");
+    } else {
+      const name = toString(args[0]);
+      const h = getIBuiltinHelp(name);
+      if (!h) {
+        const allNames = getAllBuiltinNames();
+        if (allNames.includes(name)) {
+          emit(`No help available for '${name}'.\n`);
+        } else {
+          emit(`Unknown function '${name}'.\n`);
+        }
       } else {
-        rt.output(`Unknown function '${name}'.\n`);
+        emit(`  ${h.signatures.join("\n  ")}\n\n`);
+        emit(`${h.description}\n`);
       }
-      return 0;
     }
-    rt.output(`  ${h.signatures.join("\n  ")}\n\n`);
-    rt.output(`${h.description}\n`);
-    return 0;
+    return nargout >= 1 ? RTV.char(text) : undefined;
   });
 
-  registerSpecial("disp", (_nargout, args) => {
+  registerSpecialVoid("disp", args => {
     if (args.length >= 1) {
       const mv = ensureRuntimeValue(args[0]);
-      if (isRuntimeTensor(mv) && mv.data.length === 0) return 0;
+      if (isRuntimeTensor(mv) && mv.data.length === 0) return;
       rt.output(displayValue(mv) + "\n");
     }
-    return 0;
   });
 
   registerSpecial("toc", nargout => {
@@ -121,8 +144,8 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return RTV.num(elapsed);
   });
 
-  registerSpecial("warning", (_nargout, args) => {
-    if (args.length === 0) return RTV.num(0);
+  registerSpecial("warning", (nargout, args) => {
+    if (args.length === 0) return nargout >= 1 ? RTV.num(0) : undefined;
     const margs = args.map(a => ensureRuntimeValue(a));
     // warning('on'/'off', id) — state query/set form
     if (
@@ -132,6 +155,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     ) {
       const state = toString(margs[0]);
       if (state === "on" || state === "off") {
+        if (nargout === 0) return undefined;
         return RTV.struct(
           new Map<string, RuntimeValue>([
             ["state", RTV.char("on")],
@@ -165,10 +189,10 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     } else {
       rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
     }
-    return RTV.num(0);
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("fprintf", (_nargout, args) => {
+  registerSpecial("fprintf", (nargout, args) => {
     let output = "";
     if (args.length >= 1) {
       const margs = args.map(a => ensureRuntimeValue(a));
@@ -196,7 +220,9 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         rt.fileIO.fwrite(fid, output);
       }
     }
-    return output.length;
+    // MATLAB: called as a statement, fprintf does not set `ans`.  Only
+    // surface the byte count when the caller asks for it.
+    return nargout >= 1 ? output.length : undefined;
   });
 
   registerSpecial("arrayfun", (nargout, args) => {
@@ -972,7 +998,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   // ── delete (file deletion) ──────────────────────────────────────────
 
-  registerSpecial("delete", (_nargout, args) => {
+  registerSpecialVoid("delete", args => {
     const io = requireFileIO();
     if (!io.deleteFile)
       throw new RuntimeError("delete is not available in this environment");
@@ -982,7 +1008,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     for (const arg of margs) {
       io.deleteFile(toString(arg));
     }
-    return 0;
   });
 
   // ── rmdir (directory removal) ────────────────────────────────────────
@@ -1121,7 +1146,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       const cellData: RuntimeValue[] = extracted.map(f => RTV.char(f));
       return RTV.cell(cellData, [1, cellData.length]);
     }
-    return 0;
+    return undefined;
   });
 
   // ── dir (directory listing) ──────────────────────────────────────────
@@ -1245,7 +1270,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   // ── Workspace builtins ───────────────────────────────────────────
 
-  registerSpecial("assignin", (_nargout, args) => {
+  registerSpecialVoid("assignin", args => {
     if (args.length < 3)
       throw new RuntimeError("assignin requires 3 arguments");
     const margs = args.map(a => ensureRuntimeValue(a));
@@ -1260,7 +1285,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     } else {
       rt.setWorkspaceVariable(varName, args[2]);
     }
-    return 0;
   });
 
   registerSpecial("evalin", (_nargout, args) => {
@@ -1288,14 +1312,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   // ── Plot builtins ────────────────────────────────────────────────
 
-  registerSpecial("drawnow", () => {
+  registerSpecialVoid("drawnow", () => {
     rt.drawnow();
-    return 0;
   });
 
-  registerSpecial("pause", (_nargout, args) => {
+  registerSpecial("pause", (nargout, args) => {
     rt.pause(args[0] ?? 0);
-    return 0;
+    // MATLAB returns the current pause state when assigned.
+    return nargout >= 1 ? RTV.char("on") : undefined;
   });
 
   // ── mfilename builtin ────────────────────────────────────────────
@@ -1352,7 +1376,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
 
     if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
-    return 0;
+    return undefined;
   });
 
   registerSpecial("rmpath", (nargout, args) => {
@@ -1375,12 +1399,13 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
 
     if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
-    return 0;
+    return undefined;
   });
 
-  registerSpecial("savepath", () => {
+  registerSpecial("savepath", nargout => {
     rt.output("Warning: savepath is a no-op in numbl\n");
-    return 0;
+    // MATLAB returns 0 on success when an output is requested.
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
   // ── input builtin ────────────────────────────────────────────────
@@ -1471,11 +1496,11 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   // ── setenv ──────────────────────────────────────────────────────────────
 
-  registerSpecial("setenv", (_nargout, args) => {
+  registerSpecialVoid("setenv", args => {
     const sys = rt.system;
     if (args.length === 2) {
       sys?.setEnv(toString(args[0]), toString(args[1]));
-      return 0;
+      return;
     }
     if (args.length === 1) {
       const d = args[0];
@@ -1484,11 +1509,11 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         for (const { key, value } of d.entries.values()) {
           sys?.setEnv(toString(key), toString(value));
         }
-        return 0;
+        return;
       }
       // setenv(varname) — set to empty string
       sys?.setEnv(toString(d), "");
-      return 0;
+      return;
     }
     throw new RuntimeError("setenv: invalid arguments");
   });
@@ -1501,10 +1526,18 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   // ── cd ──────────────────────────────────────────────────────────────────
 
-  registerSpecial("cd", (_nargout, args) => {
+  registerSpecial("cd", (nargout, args) => {
     const sys = rt.system;
     const curDir = sys?.cwd() ?? "/";
-    if (args.length === 0) return RTV.char(curDir);
+    if (args.length === 0) {
+      // `cd` with no args: print current directory, return it only if
+      // assigned (matches MATLAB, which does not set `ans`).
+      if (nargout === 0) {
+        rt.output(curDir + "\n");
+        return undefined;
+      }
+      return RTV.char(curDir);
+    }
     const target = toString(args[0]);
     if (sys) {
       try {
@@ -1513,18 +1546,27 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         throw new RuntimeError(`Cannot change directory to '${target}'`);
       }
     }
-    return RTV.char(curDir);
+    // With a destination argument, MATLAB returns the previous directory
+    // only when an output is requested.
+    return nargout >= 1 ? RTV.char(curDir) : undefined;
   });
 
   // ── Graphics builtins (override IBuiltin stubs in misc.ts) ───────────
+  //
+  // In MATLAB most plotting functions have an *optional* output (a graphics
+  // handle) and do not set `ans` when called as statements.  The numbl
+  // stubs don't track real handles, so they hand back placeholder values
+  // only when an output is explicitly requested.
 
-  registerSpecial("figure", (_nargout, args) => {
+  registerSpecial("figure", (nargout, args) => {
     const handle = args.length > 0 ? args[0] : 1;
     _plotInstr(rt.plotInstructions, { type: "set_figure_handle", handle });
-    return 0;
+    return nargout >= 1
+      ? RTV.num(toNumber(ensureRuntimeValue(handle)))
+      : undefined;
   });
 
-  registerSpecial("subplot", (_nargout, args) => {
+  registerSpecial("subplot", (nargout, args) => {
     if (args.length >= 3) {
       _plotInstr(rt.plotInstructions, {
         type: "set_subplot",
@@ -1533,50 +1575,49 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         index: args[2],
       });
     }
-    return 0;
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("title", (_nargout, args) => {
+  registerSpecial("title", (nargout, args) => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_title", text: args[0] });
     }
-    return 0;
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("xlabel", (_nargout, args) => {
+  registerSpecial("xlabel", (nargout, args) => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_xlabel", text: args[0] });
     }
-    return 0;
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("ylabel", (_nargout, args) => {
+  registerSpecial("ylabel", (nargout, args) => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_ylabel", text: args[0] });
     }
-    return 0;
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("hold", (_nargout, args) => {
+  // `hold` and `grid` are truly void in MATLAB (they error on `r = hold`).
+  registerSpecialVoid("hold", args => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_hold", value: args[0] });
     }
-    return 0;
   });
 
-  registerSpecial("grid", (_nargout, args) => {
+  registerSpecialVoid("grid", args => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_grid", value: args[0] });
     }
-    return 0;
   });
 
-  registerSpecial("legend", (_nargout, args) => {
+  registerSpecial("legend", (nargout, args) => {
     _legendCall(rt.plotInstructions, args);
-    return 0;
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("close", (_nargout, args) => {
+  registerSpecial("close", (nargout, args) => {
     if (args.length > 0) {
       const val = toString(args[0]);
       if (val === "all") {
@@ -1587,29 +1628,29 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     } else {
       _plotInstr(rt.plotInstructions, { type: "close" });
     }
-    return 0;
+    return nargout >= 1 ? RTV.num(1) : undefined;
   });
 
-  registerSpecial("sgtitle", (_nargout, args) => {
+  registerSpecial("sgtitle", (nargout, args) => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_sgtitle", text: args[0] });
     }
-    return 0;
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
-  registerSpecial("shading", (_nargout, args) => {
+  // `shading` is truly void in MATLAB.
+  registerSpecialVoid("shading", args => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, {
         type: "set_shading",
         shading: args[0],
       });
     }
-    return 0;
   });
 
-  registerSpecial("clf", () => {
+  registerSpecial("clf", nargout => {
     _plotInstr(rt.plotInstructions, { type: "clf" });
-    return 0;
+    return nargout >= 1 ? RTV.num(1) : undefined;
   });
 
   // ── ODE solvers ─────────────────────────────────────────────────────
