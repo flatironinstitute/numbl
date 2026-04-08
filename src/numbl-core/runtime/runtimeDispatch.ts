@@ -473,6 +473,33 @@ export function methodDispatch(
           }
           return fieldVal;
         }
+        // Dependent property with a get.<name> accessor: call the getter
+        // to obtain the value, then index the result with any remaining
+        // args.  This makes `obj.depProp(i,j)` work, distinguishing it
+        // from a same-named method (which would take the extra args).
+        {
+          const accessorKey = `${firstRV.className}.get.${name}`;
+          if (!rt.activeAccessors.has(accessorKey)) {
+            const getter = rt.cachedResolveClassMethod(
+              firstRV.className,
+              `get.${name}`
+            );
+            if (getter) {
+              rt.activeAccessors.add(accessorKey);
+              let gotVal: unknown;
+              try {
+                gotVal = getter(1, first);
+              } finally {
+                rt.activeAccessors.delete(accessorKey);
+              }
+              const remaining = args.slice(1);
+              if (remaining.length > 0) {
+                return rt.index(gotVal, remaining, nargout);
+              }
+              return gotVal;
+            }
+          }
+        }
         // Try class method first (direct or JIT-compiled)
         try {
           return callClassMethod(rt, firstRV.className, name, nargout, args);

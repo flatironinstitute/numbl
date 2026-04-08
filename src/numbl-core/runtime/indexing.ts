@@ -593,6 +593,25 @@ function indexIntoTensor(
   if (indices.length === 1) {
     return indexIntoTensor1D(base, indices[0]);
   }
+  // MATLAB: when fewer indices are supplied than the tensor's rank, the
+  // last index linearizes all trailing dimensions (column-major).  E.g.
+  // A(i,j) on a [2 16 4] tensor behaves as if A were [2 64].
+  if (base.shape.length > indices.length) {
+    const collapsedShape: number[] = [];
+    for (let d = 0; d < indices.length - 1; d++) {
+      collapsedShape.push(base.shape[d]);
+    }
+    let tail = 1;
+    for (let d = indices.length - 1; d < base.shape.length; d++) {
+      tail *= base.shape[d];
+    }
+    collapsedShape.push(tail);
+    const view: RuntimeTensor = { ...base, shape: collapsedShape };
+    if (indices.length === 2) {
+      return indexIntoTensor2D(view, indices[0], indices[1]);
+    }
+    return indexIntoTensorND(view, indices);
+  }
   if (indices.length === 2) {
     return indexIntoTensor2D(base, indices[0], indices[1]);
   }

@@ -151,7 +151,16 @@ export function index(
       if (typeof ri === "number" && typeof ci === "number") {
         const s = t.shape;
         const rows = s.length === 0 ? 1 : s.length === 1 ? 1 : s[0];
-        const cols = s.length === 0 ? 1 : s.length === 1 ? s[0] : s[1];
+        // MATLAB: fewer indices than ndims — the last index linearizes
+        // all trailing dims.  For 2-arg indexing, "col" spans dims 2..end.
+        let cols: number;
+        if (s.length === 0) cols = 1;
+        else if (s.length === 1) cols = s[0];
+        else if (s.length === 2) cols = s[1];
+        else {
+          cols = 1;
+          for (let k = 1; k < s.length; k++) cols *= s[k];
+        }
         const r = Math.round(ri) - 1;
         const c = Math.round(ci) - 1;
         if (r < 0 || r >= rows || c < 0 || c >= cols)
