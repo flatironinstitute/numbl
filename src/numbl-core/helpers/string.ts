@@ -37,6 +37,35 @@ function numStr(n: number): string {
   return s;
 }
 
+/** Convert a scalar number to the string form MATLAB's num2str would
+ *  produce.  Unlike numStr (used for sprintf %g), integers always render
+ *  in fixed notation regardless of magnitude, so e.g. 1e15 becomes
+ *  "1000000000000000" rather than "1e+15".  This matches the formatting
+ *  MATLAB applies when concatenating a number to a string via `+`. */
+export function num2strScalar(n: number): string {
+  if (n === Infinity) return "Inf";
+  if (n === -Infinity) return "-Inf";
+  if (isNaN(n)) return "NaN";
+  if (n === 0) return "0";
+  if (Number.isInteger(n)) return String(n);
+  const prec = 5;
+  const exp = Math.floor(Math.log10(Math.abs(n)));
+  let s: string;
+  if (exp < -4 || exp >= prec) {
+    s = n.toExponential(prec - 1);
+    const ePos = s.indexOf("e");
+    let mantissa = s.slice(0, ePos);
+    const expPart0 = s.slice(ePos);
+    if (mantissa.includes(".")) mantissa = mantissa.replace(/\.?0+$/, "");
+    const expPart = expPart0.replace(/([eE][+-])(\d)$/, "$1" + "0$2");
+    s = mantissa + expPart;
+  } else {
+    s = n.toPrecision(prec);
+    if (s.includes(".")) s = s.replace(/\.?0+$/, "");
+  }
+  return s;
+}
+
 function applyWidth(spec: string, str: string): string {
   // Parse flags and width from format spec like "%04", "%-10", "%010"
   // Flags: '-', '+', '0', ' ', '#'. Then width digits follow.
