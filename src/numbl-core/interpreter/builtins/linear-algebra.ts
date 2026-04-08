@@ -2096,16 +2096,15 @@ defineBuiltin({
       apply: args => {
         if (args.length !== 2)
           throw new RuntimeError("kron requires 2 arguments");
-        const a = args[0],
-          b = args[1];
-        const A = isRuntimeNumber(a)
-          ? RTV.tensor(new FloatXArray([a]), [1, 1])
-          : a;
-        const B = isRuntimeNumber(b)
-          ? RTV.tensor(new FloatXArray([b]), [1, 1])
-          : b;
-        if (!isRuntimeTensor(A) || !isRuntimeTensor(B))
+        const coerce = (v: RuntimeValue): RuntimeTensor => {
+          if (isRuntimeNumber(v))
+            return RTV.tensor(new FloatXArray([v]), [1, 1]);
+          if (isRuntimeSparseMatrix(v)) return sparseToDense(v);
+          if (isRuntimeTensor(v)) return v;
           throw new RuntimeError("kron: arguments must be numeric");
+        };
+        const A = coerce(args[0]);
+        const B = coerce(args[1]);
         const [m, n] = tensorSize2D(A);
         const [p, q] = tensorSize2D(B);
         const rows = m * p,
