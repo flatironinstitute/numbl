@@ -459,6 +459,69 @@ defineBuiltin({
   ],
 });
 
+defineBuiltin({
+  name: "bitget",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        return [{ kind: "unknown" }];
+      },
+      // bitget(A, bit) returns bit number `bit` (1-based, 1 = LSB) of each
+      // element of A.  MATLAB supports vector `bit` with broadcasting; we
+      // match the scalar-or-same-shape rules used by the other bitwise ops.
+      apply: args =>
+        bitwiseOp(
+          args[0],
+          args[1],
+          (a, bit) => {
+            const b = Math.round(bit);
+            if (b < 1) return 0;
+            // Use BigInt for bit positions ≥ 32 to avoid JS integer overflow
+            if (b <= 31) return (a >>> (b - 1)) & 1;
+            const bi = BigInt(a);
+            return Number((bi >> BigInt(b - 1)) & 1n);
+          },
+          "bitget"
+        ),
+    },
+  ],
+});
+
+defineBuiltin({
+  name: "bitset",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2 || argTypes.length > 3) return null;
+        return [{ kind: "unknown" }];
+      },
+      // bitset(A, bit)     → set bit to 1
+      // bitset(A, bit, v)  → set bit to v (0 or 1)
+      apply: args => {
+        const v = args.length >= 3 ? Math.round(toNumber(args[2])) : 1;
+        return bitwiseOp(
+          args[0],
+          args[1],
+          (a, bit) => {
+            const b = Math.round(bit);
+            if (b < 1) return a;
+            if (b <= 31) {
+              const mask = 1 << (b - 1);
+              return v ? a | mask : a & ~mask;
+            }
+            const bi = BigInt(a);
+            const mask = 1n << BigInt(b - 1);
+            const out = v ? bi | mask : bi & ~mask;
+            return Number(out);
+          },
+          "bitset"
+        );
+      },
+    },
+  ],
+});
+
 // ── Coordinate transforms ────────────────────────────────────────────
 
 function coordTransform(
