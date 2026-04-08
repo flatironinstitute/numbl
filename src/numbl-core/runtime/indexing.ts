@@ -603,6 +603,26 @@ function indexIntoScalar(
       return RTV.tensor(out, [1, count]);
     }
   }
+  // Scalar indexed by a non-empty tensor of indices: every index must
+  // be 1 (since the scalar is a 1-element array), and the result
+  // replicates the scalar with the index's shape — MATLAB-style.
+  if (indices.length === 1 && isRuntimeTensor(indices[0])) {
+    const idx = indices[0];
+    for (let i = 0; i < idx.data.length; i++) {
+      const k = Math.round(idx.data[i]);
+      if (k !== 1) throw new RuntimeError("Index exceeds array bounds");
+    }
+    const n = idx.data.length;
+    const scalarRe = isRuntimeNumber(base) ? base : (base as { re: number }).re;
+    const data = new FloatXArray(n);
+    data.fill(scalarRe);
+    if (isRuntimeComplexNumber(base) && base.im !== 0) {
+      const im = new FloatXArray(n);
+      im.fill(base.im);
+      return RTV.tensor(data, [...idx.shape], im);
+    }
+    return RTV.tensor(data, [...idx.shape]);
+  }
   // Scalar indexing: only valid with (1) or (1,1) or (:)
   for (const idx of indices) {
     if (isColonIndex(idx)) continue;
