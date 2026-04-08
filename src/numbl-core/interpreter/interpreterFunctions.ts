@@ -429,6 +429,18 @@ export function callUserFunction(
   nargout: number,
   narginOverride?: number
 ): unknown {
+  // MATLAB: calling a function with more outputs than it declares is an
+  // error raised before the function body runs.  `varargout` functions can
+  // supply any number.
+  const hasVarargoutDecl =
+    fn.outputs.length > 0 && fn.outputs[fn.outputs.length - 1] === "varargout";
+  const declaredRegularOutputs = hasVarargoutDecl
+    ? fn.outputs.length - 1
+    : fn.outputs.length;
+  if (!hasVarargoutDecl && nargout > declaredRegularOutputs) {
+    throw new RuntimeError("Too many output arguments.");
+  }
+
   // Try JIT compilation for eligible functions
   if (this.optimization >= 1 && narginOverride === undefined) {
     const jitResult = tryJitCall(this, fn, args, nargout);
@@ -494,9 +506,7 @@ export function callUserFunction(
       }
     }
 
-    const hasVarargout =
-      fn.outputs.length > 0 &&
-      fn.outputs[fn.outputs.length - 1] === "varargout";
+    const hasVarargout = hasVarargoutDecl;
     const regularOutputs = hasVarargout ? fn.outputs.slice(0, -1) : fn.outputs;
 
     // When nargout==0 but the function defines outputs, still collect the

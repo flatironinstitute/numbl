@@ -65,6 +65,11 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "ExprStmt": {
       const val = this.evalExprNargout(stmt.expr, 0);
       const singleVal = Array.isArray(val) ? val[0] : val;
+      // Calls to functions with no outputs produce no value: do not set
+      // `ans` and do not display (matches MATLAB behavior).
+      if (singleVal === undefined) {
+        return null;
+      }
       const rv = ensureRuntimeValue(singleVal);
       this.ans = rv;
       this.env.set("ans", rv);
