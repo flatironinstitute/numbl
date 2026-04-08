@@ -17,6 +17,8 @@ import {
   readdirSync,
   rmSync,
   rmdirSync,
+  renameSync,
+  chmodSync,
 } from "fs";
 import { unzipSync } from "fflate";
 import { execFileSync } from "child_process";
@@ -30,6 +32,19 @@ function expandTilde(filepath: string): string {
     return join(homedir(), filepath.slice(2));
   }
   return filepath;
+}
+
+function copyDirRecursive(src: string, dst: string): void {
+  mkdirSync(dst, { recursive: true });
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, entry.name);
+    const d = join(dst, entry.name);
+    if (entry.isDirectory()) {
+      copyDirRecursive(s, d);
+    } else {
+      writeFileSync(d, readFileSync(s));
+    }
+  }
 }
 
 interface OpenFile {
@@ -347,6 +362,74 @@ export class NodeFileIOAdapter implements FileIOAdapter {
         rmdirSync(p);
       }
       return true;
+    } catch {
+      return false;
+    }
+  }
+
+  movefile(source: string, destination: string, force: boolean): boolean {
+    try {
+      const src = expandTilde(source);
+      const srcStat = statSync(src);
+
+      // Resolve destination: if it's an existing directory and source is a
+      // file (or source is a folder being moved into an existing folder),
+      // append the basename of source.
+      let dst = expandTilde(destination);
+      let dstType: "file" | "dir" | null = null;
+      try {
+        const s = statSync(dst);
+        dstType = s.isDirectory() ? "dir" : "file";
+      } catch {
+        dstType = null;
+      }
+      if (dstType === "dir") {
+        dst = join(dst, basename(src));
+        try {
+          dstType = statSync(dst).isDirectory() ? "dir" : "file";
+        } catch {
+          dstType = null;
+        }
+      }
+
+      // If destination exists and force is set, ensure it is writable.
+      if (dstType === "file" && force) {
+        try {
+          chmodSync(dst, 0o666);
+        } catch {
+          // ignore
+        }
+      }
+
+      // If source is a folder, destination must be a folder (per MATLAB).
+      if (srcStat.isDirectory() && dstType === "file") {
+        return false;
+      }
+
+      // Ensure parent directory exists.
+      const parent = dirname(dst);
+      if (parent && parent !== "." && parent !== "/") {
+        try {
+          mkdirSync(parent, { recursive: true });
+        } catch {
+          // ignore
+        }
+      }
+
+      try {
+        renameSync(src, dst);
+        return true;
+      } catch {
+        // Cross-device or other rename failure — fall back to copy+delete.
+        if (srcStat.isDirectory()) {
+          copyDirRecursive(src, dst);
+          rmSync(src, { recursive: true });
+        } else {
+          writeFileSync(dst, readFileSync(src));
+          unlinkSync(src);
+        }
+        return true;
+      }
     } catch {
       return false;
     }

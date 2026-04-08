@@ -80,6 +80,9 @@ export interface FileIOAdapter {
   /** Remove a directory. If recursive is true, remove contents first. Returns true on success. Optional. */
   rmdir?(dirPath: string, recursive: boolean): boolean;
 
+  /** Move or rename a file or folder. If force is true, overwrites read-only files. Returns true on success. Optional. */
+  movefile?(source: string, destination: string, force: boolean): boolean;
+
   /** Extract a ZIP file to an output folder. Returns list of extracted file paths. Optional. */
   unzip?(zipfilename: string, outputfolder: string): string[];
 

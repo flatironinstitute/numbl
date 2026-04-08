@@ -1012,6 +1012,43 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         ];
   });
 
+  // ── movefile (move/rename file or folder) ───────────────────────────
+
+  registerSpecial("movefile", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.movefile)
+      throw new RuntimeError("movefile is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("movefile requires at least 1 argument");
+    const source = toString(margs[0]);
+    // If only one argument, destination is the current folder.
+    const destination =
+      margs.length >= 2 ? toString(margs[1]) : (rt.system?.cwd() ?? ".");
+    let force = false;
+    // Third positional argument can be 'f' to force overwrite.
+    // The MoveLinkBehavior name=value form is not supported here.
+    if (margs.length >= 3) {
+      const third = toString(margs[2]);
+      if (third.toLowerCase() === "f") force = true;
+    }
+    const ok = io.movefile(source, destination, force);
+    if (nargout === 0) {
+      if (!ok)
+        throw new RuntimeError(
+          `movefile: cannot move '${source}' to '${destination}'`
+        );
+      return undefined;
+    }
+    return nargout <= 1
+      ? RTV.num(ok ? 1 : 0)
+      : [
+          RTV.num(ok ? 1 : 0),
+          RTV.char(ok ? "" : `Cannot move '${source}' to '${destination}'`),
+          RTV.char(""),
+        ];
+  });
+
   // ── unzip (ZIP extraction) ──────────────────────────────────────────
 
   registerSpecial("unzip", (nargout, args) => {
