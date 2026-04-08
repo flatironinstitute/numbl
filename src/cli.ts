@@ -333,7 +333,6 @@ Options (for run and eval):
   --path <dir>       Add extra workspace directory
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
-  --add-script-path  Add the script's directory to the workspace (run only)
   --opt <level>      Optimization level (0=none, 1=JIT scalar functions; default: 1)
 
 Environment variables:
@@ -349,7 +348,6 @@ interface ParsedOptions {
   stream: boolean;
   plot: boolean;
   plotPort: number | undefined;
-  addScriptPath: boolean;
   extraPaths: string[];
   positional: string[];
   profileOutput: string | undefined;
@@ -364,7 +362,6 @@ function parseOptions(args: string[]): ParsedOptions {
     stream: false,
     plot: false,
     plotPort: undefined,
-    addScriptPath: false,
     extraPaths: [],
     positional: [],
     profileOutput: undefined,
@@ -407,9 +404,6 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--plot":
         opts.plot = true;
-        break;
-      case "--add-script-path":
-        opts.addScriptPath = true;
         break;
       case "--plot-port":
         i++;
@@ -484,13 +478,13 @@ async function cmdRun(args: string[]) {
   const code = readFileSync(filepath, "utf-8");
   const mainFileName = filepath;
 
+  // Auto-cd into the script's directory before executing (matches MATLAB
+  // "F5 in editor" behavior). The script directory then becomes the
+  // first-priority implicit search path via the cwd-as-search-path feature.
+  process.chdir(dirname(filepath));
+
   const searchPaths: string[] = [];
-  let workspaceFiles: WorkspaceFile[] = [];
-  if (opts.addScriptPath) {
-    const scriptDir = dirname(filepath);
-    searchPaths.push(scriptDir);
-    workspaceFiles = scanMFiles(scriptDir, filepath);
-  }
+  const workspaceFiles: WorkspaceFile[] = [];
   for (const p of opts.extraPaths) {
     searchPaths.push(p);
     workspaceFiles.push(...scanMFiles(p));

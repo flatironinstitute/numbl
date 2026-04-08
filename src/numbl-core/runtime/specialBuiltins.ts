@@ -1545,6 +1545,11 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       } catch {
         throw new RuntimeError(`Cannot change directory to '${target}'`);
       }
+      // Trigger workspace rebuild for the new cwd (MATLAB semantics:
+      // current directory is the first-priority search path).
+      if (rt.onCwdChange) {
+        rt.onCwdChange(sys.cwd());
+      }
     }
     // With a destination argument, MATLAB returns the previous directory
     // only when an output is requested.

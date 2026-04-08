@@ -186,6 +186,9 @@ export class Runtime {
       ) => void)
     | null = null;
 
+  /** Callback invoked after cd() to update the implicit cwd search path. */
+  public onCwdChange: ((newCwd: string) => void) | null = null;
+
   /** Reference to the active search paths (set by executeCode). */
   public searchPaths: string[] = [];
 
