@@ -162,17 +162,41 @@ function assignSlice(
   curRows: number
 ): void {
   if (isRuntimeTensor(rhs)) {
+    const nR = rowIndices.length;
+    const nC = colIndices.length;
     const [rhsRows, rhsCols] = tensorSize2D(rhs);
-    if (rhsRows !== rowIndices.length || rhsCols !== colIndices.length) {
+    const shapeMatches = rhsRows === nR && rhsCols === nC;
+    // MATLAB: when the target slice is a vector (one side is 1), accept
+    // a matching-count RHS regardless of its row/column orientation.
+    // e.g. P(q, 1) = 1:nq  — nq × 1 slice, 1 × nq RHS.
+    // For 2-D slices the shape must match exactly.
+    const sliceIsVector = nR === 1 || nC === 1;
+    const rhsIsVector = rhsRows === 1 || rhsCols === 1;
+    const countMatches = rhs.data.length === nR * nC;
+    if (!shapeMatches && !(sliceIsVector && rhsIsVector && countMatches)) {
       throw new RuntimeError("Subscripted assignment dimension mismatch");
     }
     if (rhs.imag || base.imag) ensureImag(base);
-    for (let ri = 0; ri < rowIndices.length; ri++) {
-      for (let ci = 0; ci < colIndices.length; ci++) {
-        const dstLi = colMajorIndex(rowIndices[ri], colIndices[ci], curRows);
-        const srcLi = colMajorIndex(ri, ci, rhsRows);
-        base.data[dstLi] = rhs.data[srcLi];
-        if (base.imag) base.imag[dstLi] = rhs.imag ? rhs.imag[srcLi] : 0;
+    if (shapeMatches) {
+      for (let ri = 0; ri < nR; ri++) {
+        for (let ci = 0; ci < nC; ci++) {
+          const dstLi = colMajorIndex(rowIndices[ri], colIndices[ci], curRows);
+          const srcLi = colMajorIndex(ri, ci, rhsRows);
+          base.data[dstLi] = rhs.data[srcLi];
+          if (base.imag) base.imag[dstLi] = rhs.imag ? rhs.imag[srcLi] : 0;
+        }
+      }
+    } else {
+      // Linearized column-major walk of the slice, pulling from rhs.data
+      // in its natural storage order.
+      let k = 0;
+      for (let ci = 0; ci < nC; ci++) {
+        for (let ri = 0; ri < nR; ri++) {
+          const dstLi = colMajorIndex(rowIndices[ri], colIndices[ci], curRows);
+          base.data[dstLi] = rhs.data[k];
+          if (base.imag) base.imag[dstLi] = rhs.imag ? rhs.imag[k] : 0;
+          k++;
+        }
       }
     }
   } else {
