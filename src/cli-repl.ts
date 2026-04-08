@@ -73,6 +73,7 @@ export async function runRepl(
 ): Promise<void> {
   let variableValues: Record<string, RuntimeValue> = {};
   let holdState = false;
+  let implicitCwdPath: string | null | undefined;
   const workspaceFiles = [...initialWorkspaceFiles];
   const searchPaths = [...(initialSearchPaths ?? [])];
   const fileIO = new NodeFileIOAdapter();
@@ -132,6 +133,7 @@ export async function runRepl(
             optimization,
             fileIO,
             system,
+            implicitCwdPath,
           },
           workspaceFiles,
           "repl",
@@ -145,6 +147,9 @@ export async function runRepl(
           searchPaths.push(...result.searchPaths);
           workspaceFiles.length = 0;
           workspaceFiles.push(...(result.workspaceFiles ?? []));
+        }
+        if (result.implicitCwdPath !== undefined) {
+          implicitCwdPath = result.implicitCwdPath;
         }
         if (result.plotInstructions.length > 0 && onDrawnow) {
           onDrawnow(result.plotInstructions);
@@ -266,6 +271,7 @@ export async function runRepl(
           optimization,
           fileIO,
           system,
+          implicitCwdPath,
         },
         workspaceFiles,
         "repl",
@@ -279,6 +285,9 @@ export async function runRepl(
         searchPaths.push(...result.searchPaths);
         workspaceFiles.length = 0;
         workspaceFiles.push(...(result.workspaceFiles ?? []));
+      }
+      if (result.implicitCwdPath !== undefined) {
+        implicitCwdPath = result.implicitCwdPath;
       }
       if (result.plotInstructions.length > 0 && onDrawnow) {
         onDrawnow(result.plotInstructions);

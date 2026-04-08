@@ -33,6 +33,7 @@ let variableValues: Record<string, RuntimeValue> = {};
 let holdState = false;
 let workspaceFiles: WorkspaceFile[] = [];
 let searchPaths: string[] | undefined;
+let implicitCwdPath: string | null | undefined;
 let optimizationLevel = 1;
 let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
@@ -168,6 +169,7 @@ self.onmessage = (e: MessageEvent) => {
         fileIO: adapter,
         system: systemAdapter,
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+        implicitCwdPath,
       },
       workspaceFiles,
       "repl",
@@ -182,6 +184,9 @@ self.onmessage = (e: MessageEvent) => {
     if (result.searchPaths) {
       searchPaths = result.searchPaths;
       workspaceFiles = result.workspaceFiles ?? [];
+    }
+    if (result.implicitCwdPath !== undefined) {
+      implicitCwdPath = result.implicitCwdPath;
     }
 
     const vfsChanges = adapter.getChanges();

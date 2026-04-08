@@ -274,6 +274,9 @@ register("run", (ctx, args) => {
 
   // cd to script directory, execute, cd back (per MATLAB behavior).
   // If the script itself changes cwd, don't revert.
+  // Both legs of the chdir invoke onCwdChange so the script directory becomes
+  // the first-priority search path during execution and the original cwd is
+  // restored as the implicit search path after.
   const sys = ctx.rt.system;
   const oldCwd = sys?.cwd() ?? "/";
   if (scriptDir && sys) {
@@ -281,6 +284,9 @@ register("run", (ctx, args) => {
       sys.chdir(scriptDir);
     } catch {
       throw new RuntimeError(`Cannot change directory to '${scriptDir}'`);
+    }
+    if (ctx.rt.onCwdChange) {
+      ctx.rt.onCwdChange(sys.cwd());
     }
   }
   const cwdAfterCd = sys?.cwd() ?? "/";
@@ -294,6 +300,9 @@ register("run", (ctx, args) => {
         sys.chdir(oldCwd);
       } catch {
         // ignore
+      }
+      if (ctx.rt.onCwdChange) {
+        ctx.rt.onCwdChange(sys.cwd());
       }
     }
   }

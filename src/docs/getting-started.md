@@ -64,7 +64,6 @@ Options (for run and eval):
   --path <dir>       Add extra workspace directory
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
-  --add-script-path  Add the script's directory to the workspace
   --opt <level>      Optimization level (0=none, 1=JIT; default: 1)
 
 Environment variables:

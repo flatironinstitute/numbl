@@ -56,6 +56,13 @@ export interface ExecOptions {
   onInput?: (prompt: string) => string;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
   optimization?: number;
+  /**
+   * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
+   * - undefined → auto-detect from `system.cwd()` and scan its files.
+   * - a string → use this absolute path as the implicit cwd (REPL persistence).
+   * - null → opt out of the implicit-cwd behavior entirely.
+   */
+  implicitCwdPath?: string | null;
 }
 
 export interface BuiltinProfileEntry {
@@ -92,6 +99,8 @@ export interface ExecResult {
   searchPaths?: string[];
   /** Updated workspace files (set when addpath/rmpath was called). */
   workspaceFiles?: WorkspaceFile[];
+  /** Final implicit cwd path (for REPL persistence across commands). */
+  implicitCwdPath?: string | null;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────
@@ -154,6 +163,45 @@ export function executeCode(
     }
   }
 
+  // ── Implicit cwd as first-priority search path (MATLAB semantics) ──
+  // The implicit cwd scan only collects .m files. Loading arbitrary .js
+  // files from cwd would be too aggressive (e.g. eslint.config.js in a
+  // project root would be misinterpreted as a numbl user function); .js
+  // user functions remain explicit via `addpath`.
+  let implicitCwdPath: string | null = null;
+  if (
+    options.implicitCwdPath !== null &&
+    options.system &&
+    options.fileIO?.scanDirectory
+  ) {
+    try {
+      const cwd = options.implicitCwdPath ?? options.system.cwd();
+      const absCwd = options.fileIO.resolvePath?.(cwd) ?? cwd;
+      // Skip if this dir is already explicitly on the search path
+      const explicitPaths = searchPaths ?? [];
+      if (!explicitPaths.includes(absCwd)) {
+        implicitCwdPath = absCwd;
+        // Skip scan if we already received files from this dir via the
+        // workspaceFiles argument (REPL persistence path).
+        const prefix = absCwd.endsWith("/") ? absCwd : absCwd + "/";
+        const alreadyHave = mWorkspaceFiles.some(
+          f => f.name === absCwd || f.name.startsWith(prefix)
+        );
+        if (!alreadyHave) {
+          const cwdFiles = options.fileIO.scanDirectory(absCwd);
+          for (const f of cwdFiles) {
+            if (f.name.endsWith(".m")) {
+              mWorkspaceFiles.push(f);
+            }
+          }
+        }
+      }
+    } catch {
+      // cwd inaccessible or scan failed — silently disable implicit cwd
+      implicitCwdPath = null;
+    }
+  }
+
   // Load .js user functions
   const jsUserFunctions = loadJsUserFunctions(
     jsWorkspaceFiles,
@@ -174,6 +222,11 @@ export function executeCode(
     stdlibShimNames.add(shimName);
   }
   ctx.registry.searchPaths = [...(searchPaths ?? []), SHIM_SEARCH_PATH];
+
+  // Prepend implicit cwd at position 0 (highest priority).
+  if (implicitCwdPath !== null) {
+    ctx.registry.searchPaths.unshift(implicitCwdPath);
+  }
 
   // Pre-parse all .m workspace files into the shared AST cache.
   // Files that fail to parse are skipped with a warning instead of aborting.
@@ -281,6 +334,40 @@ export function executeCode(
   // Track whether paths were modified during execution
   let pathsModified = false;
 
+  // Shared rebuild logic used by both onPathChange and onCwdChange.
+  // Re-sorts mWorkspaceFiles by search path order, then re-registers
+  // and rebuilds the function index.
+  const rebuildWorkspace = () => {
+    const paths = ctx.registry.searchPaths;
+    // Compute file → priority by LONGEST matching prefix.
+    // (A simple findIndex would mis-classify a file in /a/b/c.m as
+    //  belonging to /a if /a is also on the path — when /a is the cwd
+    //  and /a/b is an explicit addpath, the file should belong to /a/b.)
+    const priorityOf = (name: string): number => {
+      let bestIdx = paths.length;
+      let bestLen = -1;
+      for (let i = 0; i < paths.length; i++) {
+        const p = paths[i];
+        const withSep = p.endsWith("/") ? p : p + "/";
+        if (name === p || name.startsWith(withSep)) {
+          if (p.length > bestLen) {
+            bestLen = p.length;
+            bestIdx = i;
+          }
+        }
+      }
+      return bestIdx;
+    };
+    mWorkspaceFiles.sort((a, b) => priorityOf(a.name) - priorityOf(b.name));
+
+    ctx.clearWorkspaceRegistrations();
+    ctx.registerWorkspaceFiles(mWorkspaceFiles);
+    const newIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
+    interpreter.functionIndex = newIndex;
+    interpreter.clearAllCaches();
+    pathsModified = true;
+  };
+
   // Wire up addpath/rmpath callback
   rt.onPathChange = (action, dir, position) => {
     const fileIO = options.fileIO;
@@ -290,9 +377,14 @@ export function executeCode(
       // Skip if already on the path
       if (ctx.registry.searchPaths.includes(absDir)) return;
 
-      // Add to search paths (before the shim path for '-end')
+      // Add to search paths (before the shim path for '-end').
+      // The implicit cwd entry, if present, must remain at position 0 — so
+      // a "begin" insertion goes to index 1 when cwd is currently first.
       if (position === "begin") {
-        ctx.registry.searchPaths.unshift(absDir);
+        const cwdIsFirst =
+          implicitCwdPath !== null &&
+          ctx.registry.searchPaths[0] === implicitCwdPath;
+        ctx.registry.searchPaths.splice(cwdIsFirst ? 1 : 0, 0, absDir);
       } else {
         const shimIdx = ctx.registry.searchPaths.indexOf(SHIM_SEARCH_PATH);
         if (shimIdx >= 0) {
@@ -359,32 +451,119 @@ export function executeCode(
       }
     }
 
-    // Clear workspace registrations and rebuild.
-    // Sort files by search path order so earlier paths win in first-wins registration.
-    const paths = ctx.registry.searchPaths;
-    mWorkspaceFiles.sort((a, b) => {
-      const ai = paths.findIndex(
-        p => a.name.startsWith(p.endsWith("/") ? p : p + "/") || a.name === p
-      );
-      const bi = paths.findIndex(
-        p => b.name.startsWith(p.endsWith("/") ? p : p + "/") || b.name === p
-      );
-      // Files not matching any search path (e.g. stdlib) go last
-      const aPri = ai >= 0 ? ai : paths.length;
-      const bPri = bi >= 0 ? bi : paths.length;
-      return aPri - bPri;
-    });
+    rebuildWorkspace();
+  };
 
-    ctx.clearWorkspaceRegistrations();
-    ctx.registerWorkspaceFiles(mWorkspaceFiles);
-    const newIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
-    interpreter.functionIndex = newIndex;
-    interpreter.clearAllCaches();
-    pathsModified = true;
+  // Wire up cd callback — updates the implicit cwd entry in searchPaths
+  // and rebuilds the workspace using the same pipeline as addpath/rmpath.
+  rt.onCwdChange = (newCwd: string) => {
+    const fileIO = options.fileIO;
+    const absNewCwd = fileIO?.resolvePath?.(newCwd) ?? newCwd;
+
+    // No-op if cwd is already the implicit path
+    if (implicitCwdPath === absNewCwd) return;
+
+    // Remove files from the OLD implicit cwd (if any). Only remove files
+    // whose CLOSEST search path is the old implicit cwd — files in
+    // addpath'd subdirectories of the old cwd belong to those subdirs and
+    // must survive (e.g. addpath('/a/b/lib') then cd('/a/b') then cd
+    // elsewhere should keep /a/b/lib/foo.m visible via the addpath entry).
+    if (implicitCwdPath !== null) {
+      const oldPrefix = implicitCwdPath.endsWith("/")
+        ? implicitCwdPath
+        : implicitCwdPath + "/";
+      // Collect all explicit search paths that are deeper than the old
+      // implicit cwd; a file under one of those paths "belongs" to it.
+      const deeperPaths = ctx.registry.searchPaths.filter(
+        p =>
+          p !== implicitCwdPath &&
+          p !== SHIM_SEARCH_PATH &&
+          (p === implicitCwdPath || p.startsWith(oldPrefix))
+      );
+      const fileBelongsToDeeperPath = (fname: string): boolean => {
+        for (const p of deeperPaths) {
+          const withSep = p.endsWith("/") ? p : p + "/";
+          if (fname === p || fname.startsWith(withSep)) return true;
+        }
+        return false;
+      };
+      for (let i = mWorkspaceFiles.length - 1; i >= 0; i--) {
+        const fname = mWorkspaceFiles[i].name;
+        if (
+          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
+          !fileBelongsToDeeperPath(fname)
+        ) {
+          ctx.fileASTCache.delete(fname);
+          interpreter.fileSources.delete(fname);
+          mWorkspaceFiles.splice(i, 1);
+        }
+      }
+      const oldIdx = ctx.registry.searchPaths.indexOf(implicitCwdPath);
+      if (oldIdx >= 0) ctx.registry.searchPaths.splice(oldIdx, 1);
+      implicitCwdPath = null;
+    }
+
+    // If new cwd is already an explicit search path, just rebuild — no
+    // need to add it again or scan its files.
+    if (ctx.registry.searchPaths.includes(absNewCwd)) {
+      rebuildWorkspace();
+      return;
+    }
+
+    // Insert new cwd at position 0 (highest priority)
+    ctx.registry.searchPaths.unshift(absNewCwd);
+    implicitCwdPath = absNewCwd;
+
+    // Scan and parse .m files in the new cwd. As with the initial setup,
+    // .js/.wasm files from the implicit cwd are NOT auto-loaded — that
+    // remains an explicit `addpath` opt-in to avoid misinterpreting random
+    // .js files (e.g. eslint configs) as numbl user functions.
+    if (fileIO?.scanDirectory) {
+      let newFiles: WorkspaceFile[] = [];
+      try {
+        newFiles = fileIO.scanDirectory(absNewCwd);
+      } catch {
+        // cwd inaccessible — leave the entry but skip scanning
+      }
+      for (const f of newFiles) {
+        if (f.name.endsWith(".m") && !ctx.fileASTCache.has(f.name)) {
+          try {
+            ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
+          } catch (e) {
+            // Warn-and-skip (matches startup behavior at the top of executeCode);
+            // a single broken .m file should not make `cd` unusable.
+            if (e instanceof SyntaxError) {
+              console.warn(
+                `Warning: skipping ${f.name} (syntax error at line ${e.line ?? "?"})`
+              );
+            } else {
+              console.warn(`Warning: skipping ${f.name} (parse error)`);
+            }
+            continue;
+          }
+          interpreter.fileSources.set(f.name, f.source);
+          mWorkspaceFiles.push(f);
+        }
+      }
+    }
+
+    rebuildWorkspace();
   };
 
   // Wire up eval callback
   rt.evalLocalCallback = (code, initialVars, onOutput, fileName) => {
+    // Propagate the parent's effective workspace state into the nested call
+    // so functions resolved via addpath remain visible inside eval()/run().
+    // Filter out the SHIM sentinel and the implicit cwd from searchPaths
+    // (the nested call will set up its own implicit cwd from `implicitCwdPath`),
+    // and filter out stdlib/shim files from workspaceFiles (the nested call
+    // re-adds them itself).
+    const nestedSearchPaths = ctx.registry.searchPaths.filter(
+      p => p !== SHIM_SEARCH_PATH && p !== implicitCwdPath
+    );
+    const nestedWorkspaceFiles = mWorkspaceFiles.filter(
+      f => !stdlibShimNames.has(f.name)
+    );
     const evalResult = executeCode(
       code,
       {
@@ -392,11 +571,21 @@ export function executeCode(
         displayResults: false,
         initialVariableValues: initialVars,
         fileIO: options.fileIO,
+        system: options.system,
         onInput: options.onInput,
+        implicitCwdPath,
       },
-      undefined,
-      fileName
+      nestedWorkspaceFiles,
+      fileName,
+      nestedSearchPaths,
+      nativeBridge
     );
+    // If the nested execution updated its implicit cwd (e.g. cd inside the
+    // evaluated code), reflect it in the parent so subsequent statements see
+    // the same effective search path.
+    if (evalResult.implicitCwdPath !== undefined) {
+      implicitCwdPath = evalResult.implicitCwdPath;
+    }
     return {
       returnValue: evalResult.returnValue,
       variableValues: evalResult.variableValues,
@@ -435,12 +624,15 @@ export function executeCode(
     // Propagate path changes so callers (e.g. REPL) can persist them
     if (pathsModified) {
       result.searchPaths = ctx.registry.searchPaths.filter(
-        p => p !== SHIM_SEARCH_PATH
+        p => p !== SHIM_SEARCH_PATH && p !== implicitCwdPath
       );
       result.workspaceFiles = mWorkspaceFiles.filter(
         f => !stdlibShimNames.has(f.name)
       );
     }
+    // Always propagate the implicit cwd so REPL callers can persist it
+    // across commands (cd inside one command should affect the next).
+    result.implicitCwdPath = implicitCwdPath;
 
     return result;
   } catch (e) {
