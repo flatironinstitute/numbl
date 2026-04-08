@@ -6,6 +6,7 @@ import {
   type RuntimeValue,
   type RuntimeTensor,
   type RuntimeCell,
+  type RuntimeStruct,
   FloatXArray,
   isRuntimeCell,
   isRuntimeTensor,
@@ -15,6 +16,8 @@ import {
   isRuntimeLogical,
   isRuntimeString,
   isRuntimeSparseMatrix,
+  isRuntimeStruct,
+  isRuntimeStructArray,
   type RuntimeSparseMatrix,
   kstr,
 } from "./types.js";
@@ -95,6 +98,11 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
     return cellCatAlongDim(values, 1);
   }
 
+  // Struct / struct-array concatenation: [sA, sB]
+  if (values.some(v => isRuntimeStruct(v) || isRuntimeStructArray(v))) {
+    return structCat(values);
+  }
+
   return catAlongDim(values, 1); // dim 2 = 0-based index 1
 }
 
@@ -113,7 +121,59 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
     return cellCatAlongDim(values, 0);
   }
 
+  // Struct / struct-array concatenation: [sA; sB]
+  if (values.some(v => isRuntimeStruct(v) || isRuntimeStructArray(v))) {
+    return structCat(values);
+  }
+
   return catAlongDim(values, 0); // dim 1 = 0-based index 0
+}
+
+/** Concatenate struct scalars and struct arrays into a flat struct array.
+ *  numbl's RuntimeStructArray doesn't carry a shape, so both horzcat and
+ *  vertcat produce a 1-D concatenated list.  All operands must have the
+ *  same set of field names. */
+function structCat(values: RuntimeValue[]): RuntimeValue {
+  const elements: RuntimeStruct[] = [];
+  let fieldNames: string[] | null = null;
+  for (const v of values) {
+    if (isRuntimeStruct(v)) {
+      const keys = Array.from(v.fields.keys());
+      if (fieldNames === null) fieldNames = keys;
+      else if (!arraysEqual(fieldNames, keys)) {
+        throw new RuntimeError(
+          "Cannot concatenate structs with different field names"
+        );
+      }
+      elements.push(v);
+    } else if (isRuntimeStructArray(v)) {
+      if (fieldNames === null) fieldNames = [...v.fieldNames];
+      else if (!arraysEqual(fieldNames, v.fieldNames)) {
+        throw new RuntimeError(
+          "Cannot concatenate struct arrays with different field names"
+        );
+      }
+      for (const e of v.elements) elements.push(e);
+    } else {
+      // Empty numeric [] is MATLAB's empty and is allowed in struct cats.
+      if (
+        isRuntimeTensor(v) &&
+        v.data.length === 0 &&
+        v.shape.every(d => d === 0)
+      ) {
+        continue;
+      }
+      throw new RuntimeError(`Cannot concatenate ${kstr(v)} into struct`);
+    }
+  }
+  if (fieldNames === null) fieldNames = [];
+  return RTV.structArray(fieldNames, elements);
+}
+
+function arraysEqual<T>(a: T[], b: T[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 /** Convert a value to a sparse matrix for concatenation */
