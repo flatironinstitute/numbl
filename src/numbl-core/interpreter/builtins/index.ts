@@ -8,6 +8,7 @@ import "./math.js";
 import "./arithmetic.js";
 import "./complex.js";
 import "./predicates.js";
+import "./logical.js";
 import "./utility.js";
 import "./introspection.js";
 import "./array-construction.js";
