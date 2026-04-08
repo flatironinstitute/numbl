@@ -78,6 +78,164 @@ defineBuiltin({
   ],
 });
 
+// ── Integer types ───────────────────────────────────────────────────────
+//
+// numbl represents all numeric data as double-precision floats, so the
+// int8/int16/...uint64 constructors don't really produce a distinct
+// runtime class — they round toward zero and saturate at the integer
+// range's limits, then return a double-backed tensor.  This matches
+// MATLAB's numeric behavior closely enough for code that uses the
+// `idivide(int64(a), int64(b))` idiom for integer division.
+
+interface IntRange {
+  name: string;
+  min: number;
+  max: number;
+}
+
+const INT_RANGES: IntRange[] = [
+  { name: "int8", min: -128, max: 127 },
+  { name: "int16", min: -32768, max: 32767 },
+  { name: "int32", min: -2147483648, max: 2147483647 },
+  // int64/uint64 can't represent their full native range as doubles;
+  // clamp at Number.MAX_SAFE_INTEGER to avoid silent precision loss.
+  {
+    name: "int64",
+    min: -Number.MAX_SAFE_INTEGER,
+    max: Number.MAX_SAFE_INTEGER,
+  },
+  { name: "uint8", min: 0, max: 255 },
+  { name: "uint16", min: 0, max: 65535 },
+  { name: "uint32", min: 0, max: 4294967295 },
+  { name: "uint64", min: 0, max: Number.MAX_SAFE_INTEGER },
+];
+
+function saturateRoundToward(x: number, min: number, max: number): number {
+  if (isNaN(x)) return 0;
+  // MATLAB int* conversion rounds to nearest, ties away from zero.
+  const r = x >= 0 ? Math.floor(x + 0.5) : -Math.floor(-x + 0.5);
+  if (r < min) return min;
+  if (r > max) return max;
+  return r;
+}
+
+for (const { name, min, max } of INT_RANGES) {
+  defineBuiltin({
+    name,
+    cases: [
+      {
+        match: argTypes => {
+          if (argTypes.length !== 1) return null;
+          const a = argTypes[0];
+          if (
+            a.kind === "number" ||
+            a.kind === "boolean" ||
+            a.kind === "char" ||
+            a.kind === "complex_or_number"
+          )
+            return [{ kind: "number" }];
+          if (a.kind === "tensor")
+            return [
+              {
+                kind: "tensor",
+                isComplex: false,
+                shape: a.shape,
+                ndim: a.ndim,
+              },
+            ];
+          return null;
+        },
+        apply: args => {
+          const v = args[0];
+          if (isRuntimeNumber(v))
+            return RTV.num(saturateRoundToward(v as number, min, max));
+          if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+          if (isRuntimeComplexNumber(v))
+            return RTV.num(saturateRoundToward(v.re, min, max));
+          if (isRuntimeChar(v)) {
+            if (v.value.length === 0)
+              return RTV.tensor(new FloatXArray(0), [0, 0]);
+            if (v.value.length === 1)
+              return RTV.num(
+                saturateRoundToward(v.value.charCodeAt(0), min, max)
+              );
+            const out = new FloatXArray(v.value.length);
+            for (let i = 0; i < v.value.length; i++) {
+              out[i] = saturateRoundToward(v.value.charCodeAt(i), min, max);
+            }
+            return RTV.row(Array.from(out));
+          }
+          if (isRuntimeTensor(v)) {
+            const data = new FloatXArray(v.data.length);
+            for (let i = 0; i < v.data.length; i++) {
+              data[i] = saturateRoundToward(v.data[i], min, max);
+            }
+            return RTV.tensor(data, [...v.shape]);
+          }
+          return RTV.num(saturateRoundToward(toNumber(v), min, max));
+        },
+      },
+    ],
+  });
+}
+
+// ── idivide ─────────────────────────────────────────────────────────────
+//
+// Integer division with fix-toward-zero rounding (MATLAB's default
+// 'fix' option).  Only the default rounding mode is supported; other
+// modes ('floor', 'ceil', 'round') fall back to 'fix' which matches
+// MATLAB when both inputs are integer types.
+
+defineBuiltin({
+  name: "idivide",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2 || argTypes.length > 3) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const divFix = (a: number, b: number): number => {
+          if (b === 0) {
+            // MATLAB returns 0 for integer divide-by-zero and warns.
+            return 0;
+          }
+          const q = a / b;
+          return q >= 0 ? Math.floor(q) : -Math.floor(-q);
+        };
+        const a = args[0];
+        const b = args[1];
+        if (isRuntimeNumber(a) && isRuntimeNumber(b)) {
+          return RTV.num(divFix(a as number, b as number));
+        }
+        if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
+          const bv = b as number;
+          const data = new FloatXArray(a.data.length);
+          for (let i = 0; i < a.data.length; i++)
+            data[i] = divFix(a.data[i], bv);
+          return RTV.tensor(data, [...a.shape]);
+        }
+        if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
+          const av = a as number;
+          const data = new FloatXArray(b.data.length);
+          for (let i = 0; i < b.data.length; i++)
+            data[i] = divFix(av, b.data[i]);
+          return RTV.tensor(data, [...b.shape]);
+        }
+        if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
+          if (a.data.length !== b.data.length)
+            throw new RuntimeError("idivide: arrays must be the same size");
+          const data = new FloatXArray(a.data.length);
+          for (let i = 0; i < a.data.length; i++)
+            data[i] = divFix(a.data[i], b.data[i]);
+          return RTV.tensor(data, [...a.shape]);
+        }
+        throw new RuntimeError("idivide: arguments must be numeric");
+      },
+    },
+  ],
+});
+
 // ── logical ─────────────────────────────────────────────────────────────
 
 defineBuiltin({
