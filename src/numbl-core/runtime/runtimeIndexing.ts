@@ -667,14 +667,21 @@ export function multiOutputCellAssign(
   if (!isRuntimeCell(mv)) mv = RTV.cell([], [0, 0]);
 
   // Get the linear indices as an array of numbers
-  const idxMv = ensureRuntimeValue(indices);
   let idxArray: number[];
-  if (isRuntimeTensor(idxMv)) {
-    idxArray = Array.from(idxMv.data);
-  } else if (isRuntimeNumber(idxMv)) {
-    idxArray = [idxMv];
+  if (indices === COLON_SENTINEL) {
+    // [c{:}] — all linear indices of the cell
+    const n = (mv as import("../runtime/types.js").RuntimeCell).data.length;
+    idxArray = [];
+    for (let i = 1; i <= n; i++) idxArray.push(i);
   } else {
-    idxArray = [1];
+    const idxMv = ensureRuntimeValue(indices);
+    if (isRuntimeTensor(idxMv)) {
+      idxArray = Array.from(idxMv.data);
+    } else if (isRuntimeNumber(idxMv)) {
+      idxArray = [idxMv];
+    } else {
+      idxArray = [1];
+    }
   }
 
   // Assign each result to the corresponding cell position

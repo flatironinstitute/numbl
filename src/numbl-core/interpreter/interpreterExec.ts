@@ -99,20 +99,27 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
           lv.base.type === "Ident"
             ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
             : this.evalExpr(lv.base);
-        const indices = lv.indices.map(idx => this.evalExpr(idx));
+        const indices = this.evalIndicesWithEnd(cellBase, lv.indices);
         // Determine nargout from index count
-        const idxVal = ensureRuntimeValue(indices[0]);
         let expandedCount = 1;
-        if (isRuntimeTensor(idxVal)) {
-          expandedCount = idxVal.data.length;
-        } else if (typeof idxVal === "number") {
-          expandedCount = 1;
+        const idx0 = indices[0];
+        if (idx0 === COLON_SENTINEL) {
+          // [c{:}] — expand to all elements of the cell base
+          const baseRv = ensureRuntimeValue(cellBase);
+          expandedCount = isRuntimeCell(baseRv) ? baseRv.data.length : 0;
+        } else {
+          const idxVal = ensureRuntimeValue(idx0);
+          if (isRuntimeTensor(idxVal)) {
+            expandedCount = idxVal.data.length;
+          } else if (typeof idxVal === "number") {
+            expandedCount = 1;
+          }
         }
         const val = this.evalExprNargout(stmt.expr, expandedCount);
         const values = Array.isArray(val) ? val : [val];
         const result = this.rt.multiOutputCellAssign(
           cellBase,
-          indices[0],
+          idx0,
           values.map(v => ensureRuntimeValue(v))
         );
         if (lv.base.type === "Ident") {
@@ -835,7 +842,16 @@ export function evalAnonFunc(
       capturedMethodName,
       () => {
         try {
-          return this.evalExprNargout(bodyExpr, narg);
+          const result = this.evalExprNargout(bodyExpr, narg);
+          // MATLAB: an anonymous function whose body is an expression (not
+          // a multi-output function call) only produces a single output.
+          // If more are requested, throw.  When the body is a call that
+          // actually returned multiple outputs, evalExprNargout returns an
+          // array of values, so we allow that.
+          if (narg > 1 && !(Array.isArray(result) && result.length >= narg)) {
+            throw new RuntimeError("Too many output arguments.");
+          }
+          return result;
         } finally {
           this.env = savedEnv;
         }
