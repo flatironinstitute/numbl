@@ -142,6 +142,7 @@ export function index(
           const im = t.imag[i];
           return im === 0 ? t.data[i] : RTV.complex(t.data[i], im);
         }
+        if (t._isLogical === true) return t.data[i] !== 0;
         return t.data[i];
       }
     } else if (nIdx === 2) {
@@ -170,6 +171,7 @@ export function index(
           const im = t.imag[lin];
           return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
         }
+        if (t._isLogical === true) return t.data[lin] !== 0;
         return t.data[lin];
       }
     } else if (nIdx >= 3) {

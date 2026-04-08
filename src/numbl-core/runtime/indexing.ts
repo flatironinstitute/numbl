@@ -73,6 +73,8 @@ function extractTensorElement(base: RuntimeTensor, i: number): RuntimeValue {
     const im = base.imag[i];
     return im === 0 ? RTV.num(base.data[i]) : RTV.complex(base.data[i], im);
   }
+  // Preserve logical class on scalar extraction.
+  if (base._isLogical === true) return base.data[i] !== 0;
   return RTV.num(base.data[i]);
 }
 
@@ -680,6 +682,12 @@ function indexIntoTensor2D(
 ): RuntimeValue {
   const [rows, cols] = tensorSize2D(base);
 
+  const baseLogical = base._isLogical === true;
+  const markLogical = (t: RuntimeValue): RuntimeValue => {
+    if (baseLogical && isRuntimeTensor(t)) t._isLogical = true;
+    return t;
+  };
+
   // Fast path: single-row extraction c(k,:) — avoids allocating a cols-length index array
   if (isRuntimeNumber(rowIdx) && isColonIndex(colIdx)) {
     const r = Math.round(rowIdx as number) - 1;
@@ -691,7 +699,7 @@ function indexIntoTensor2D(
       resultData[ci] = base.data[r + ci * rows];
       if (resultImag && base.imag) resultImag[ci] = base.imag[r + ci * rows];
     }
-    return RTV.tensor(resultData, [1, cols], resultImag);
+    return markLogical(RTV.tensor(resultData, [1, cols], resultImag));
   }
 
   // Fast path: single-column extraction c(:,k) — column is contiguous in col-major
@@ -705,7 +713,7 @@ function indexIntoTensor2D(
     const resultImag = base.imag ? new FloatXArray(rows) : undefined;
     if (resultImag && base.imag)
       for (let ri = 0; ri < rows; ri++) resultImag[ri] = base.imag[offset + ri];
-    return RTV.tensor(resultData, [rows, 1], resultImag);
+    return markLogical(RTV.tensor(resultData, [rows, 1], resultImag));
   }
 
   const rowIdxArr = resolveIndex(rowIdx, rows);
@@ -731,7 +739,7 @@ function indexIntoTensor2D(
       }
     }
   }
-  return RTV.tensor(resultData, [numR, numC], resultImag);
+  return markLogical(RTV.tensor(resultData, [numR, numC], resultImag));
 }
 
 function indexIntoTensorND(
@@ -790,7 +798,13 @@ function indexIntoTensorND(
     }
   }
 
-  return RTV.tensor(resultData, resultShape, resultImag);
+  const result = RTV.tensor(
+    resultData,
+    resultShape,
+    resultImag
+  ) as RuntimeTensor;
+  if (base._isLogical === true) result._isLogical = true;
+  return result;
 }
 
 function indexIntoCell(
@@ -1000,6 +1014,7 @@ function indexIntoTensorWithTensor(
   base: RuntimeTensor,
   idx: RuntimeTensor
 ): RuntimeValue {
+  const baseLogical = base._isLogical === true;
   if (idx._isLogical) {
     const selected: number[] = [];
     const selectedIm: number[] = [];
@@ -1013,6 +1028,7 @@ function indexIntoTensorWithTensor(
     if (selected.length === 1) {
       if (hasImag && selectedIm[0] !== 0)
         return RTV.complex(selected[0], selectedIm[0]);
+      if (baseLogical) return selected[0] !== 0;
       return RTV.num(selected[0]);
     }
     const imOut =
@@ -1023,7 +1039,13 @@ function indexIntoTensorWithTensor(
     const outShape: number[] = isRow
       ? [1, selected.length]
       : [selected.length, 1];
-    return RTV.tensor(new FloatXArray(selected), outShape, imOut);
+    const result = RTV.tensor(
+      new FloatXArray(selected),
+      outShape,
+      imOut
+    ) as RuntimeTensor;
+    if (baseLogical) result._isLogical = true;
+    return result;
   }
   // Numeric indexing
   const resultData: number[] = [];
@@ -1055,7 +1077,13 @@ function indexIntoTensorWithTensor(
     hasImag && imIndices.some(x => x !== 0)
       ? new FloatXArray(imIndices)
       : undefined;
-  return RTV.tensor(new FloatXArray(resultData), outShape, imOut);
+  const result = RTV.tensor(
+    new FloatXArray(resultData),
+    outShape,
+    imOut
+  ) as RuntimeTensor;
+  if (baseLogical) result._isLogical = true;
+  return result;
 }
 
 // ── Index read: main dispatcher ──────────────────────────────────────────
@@ -1487,11 +1515,28 @@ function storeIntoTensor2D(
 
   // Handle tensor indices (ranges): base(rowRange, colRange) = rhs
   if (rowIsTensor || colIsTensor) {
-    const rowIndices = resolveIndex(indices[0], rows, 0);
-    const colIndices = resolveIndex(indices[1], cols, 0);
+    // MATLAB grows-from-empty case: A(rowIdx, :) = rhs where A is empty.
+    // A colon on the "other" axis of an empty target adopts the rhs
+    // extent for that dimension instead of staying at 0.
+    const isEmpty = base.data.length === 0;
+    let effectiveCols = cols;
+    let effectiveRows = rows;
+    if (isEmpty && isRuntimeTensor(rhs)) {
+      const [rhsRowsG, rhsColsG] = tensorSize2D(rhs);
+      if (rowIsColon && !colIsColon) effectiveRows = rhsRowsG;
+      if (colIsColon && !rowIsColon) effectiveCols = rhsColsG;
+    }
+    const rowIndices = rowIsColon
+      ? Array.from({ length: effectiveRows }, (_, i) => i)
+      : resolveIndex(indices[0], rows, 0);
+    const colIndices = colIsColon
+      ? Array.from({ length: effectiveCols }, (_, i) => i)
+      : resolveIndex(indices[1], cols, 0);
 
-    const maxRow = rowIndices.length > 0 ? Math.max(...rowIndices) + 1 : rows;
-    const maxCol = colIndices.length > 0 ? Math.max(...colIndices) + 1 : cols;
+    const maxRow =
+      rowIndices.length > 0 ? Math.max(...rowIndices) + 1 : effectiveRows;
+    const maxCol =
+      colIndices.length > 0 ? Math.max(...colIndices) + 1 : effectiveCols;
     base = growTensor2D(base, maxRow, maxCol);
     const [curRows] = tensorSize2D(base);
 
