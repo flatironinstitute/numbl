@@ -103,13 +103,20 @@ export function interpretTarget(
         const argTypes = margs.map(inferJitType);
         const resolution = ib.resolve(argTypes, nargout);
         if (resolution) {
+          // MATLAB: a builtin declared with no outputs errors if the call
+          // site expects any.  Detect void builtins via `outputTypes: []`.
+          const isVoid = resolution.outputTypes.length === 0;
+          if (isVoid && nargout > 0) {
+            throw new RuntimeError("Too many output arguments.");
+          }
           if (this.rt.profilingEnabled) {
             this.rt.profileEnter("builtin:interp:" + target.name);
             const result = resolution.apply(margs, nargout);
             this.rt.profileLeave();
-            return result;
+            return isVoid ? undefined : result;
           }
-          return resolution.apply(margs, nargout);
+          const result = resolution.apply(margs, nargout);
+          return isVoid ? undefined : result;
         }
       }
       const builtin = this.rt.builtins[target.name];
