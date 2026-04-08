@@ -66,6 +66,7 @@ self.onmessage = (e: MessageEvent) => {
 
   // Set up VFS if files were provided
   let adapter: BrowserFileIOAdapter | undefined;
+  let systemAdapter: BrowserSystemAdapter;
   if (vfsFiles) {
     const vfs = new VirtualFileSystem();
     for (const f of vfsFiles as { path: string; content: Uint8Array }[]) {
@@ -73,6 +74,9 @@ self.onmessage = (e: MessageEvent) => {
     }
     vfs.clearChangeTracking();
     adapter = new BrowserFileIOAdapter(vfs);
+    systemAdapter = new BrowserSystemAdapter(vfs);
+  } else {
+    systemAdapter = new BrowserSystemAdapter();
   }
 
   try {
@@ -90,7 +94,7 @@ self.onmessage = (e: MessageEvent) => {
         optimization: options?.optimization ?? 1,
         initialVariableValues: {},
         fileIO: adapter,
-        system: new BrowserSystemAdapter(),
+        system: systemAdapter,
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
       wsFiles,

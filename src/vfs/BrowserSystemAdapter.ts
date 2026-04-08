@@ -1,12 +1,31 @@
 /**
  * Browser implementation of SystemAdapter using in-memory state.
+ *
+ * The current working directory is delegated to the VFS so that
+ * `cd` (system cwd) and relative-path resolution inside the VFS stay
+ * in sync. Without this, project files written at "folder1/foo.m"
+ * would land under VFS.cwd ("/project") while `cd folder1` would
+ * resolve against the system adapter's own root, producing "/folder1"
+ * — a directory that contains nothing.
  */
 
 import type { SystemAdapter } from "../numbl-core/systemAdapter.js";
+import type { VirtualFileSystem } from "./VirtualFileSystem.js";
 
 export class BrowserSystemAdapter implements SystemAdapter {
   private vars = new Map<string, string>();
-  private currentDir = "/";
+  private vfs: VirtualFileSystem | null = null;
+  // Used only when no VFS is attached (e.g. tests that don't need files).
+  private fallbackCwd = "/";
+
+  constructor(vfs?: VirtualFileSystem) {
+    if (vfs) this.vfs = vfs;
+  }
+
+  /** Attach (or replace) the VFS used as the cwd source of truth. */
+  setVfs(vfs: VirtualFileSystem): void {
+    this.vfs = vfs;
+  }
 
   getEnv(name: string): string | undefined {
     return this.vars.get(name);
@@ -25,15 +44,17 @@ export class BrowserSystemAdapter implements SystemAdapter {
   }
 
   cwd(): string {
-    return this.currentDir;
+    return this.vfs ? this.vfs.getCwd() : this.fallbackCwd;
   }
 
   chdir(dir: string): void {
-    // Simple path resolution for virtual cwd
-    if (dir.startsWith("/")) {
-      this.currentDir = dir;
+    if (this.vfs) {
+      this.vfs.setCwd(dir);
     } else {
-      this.currentDir = this.currentDir.replace(/\/$/, "") + "/" + dir;
+      // Fallback used only when no VFS is attached.
+      this.fallbackCwd = dir.startsWith("/")
+        ? dir
+        : this.fallbackCwd.replace(/\/$/, "") + "/" + dir;
     }
   }
 

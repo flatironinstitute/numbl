@@ -139,6 +139,7 @@ self.onmessage = (e: MessageEvent) => {
         vfs.writeFile(f.path, f.content);
       }
       vfs.clearChangeTracking();
+      systemAdapter.setVfs(vfs);
     }
     return;
   }
@@ -148,6 +149,7 @@ self.onmessage = (e: MessageEvent) => {
   // Create adapter from persistent VFS (or a fresh one if no VFS yet)
   if (!vfs) {
     vfs = new VirtualFileSystem();
+    systemAdapter.setVfs(vfs);
   }
   const adapter = new BrowserFileIOAdapter(vfs);
 

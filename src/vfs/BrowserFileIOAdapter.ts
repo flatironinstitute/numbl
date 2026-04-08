@@ -190,31 +190,48 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     const prefix = norm === "/" ? "/" : norm + "/";
     const results: WorkspaceFile[] = [];
 
+    // Mirrors cli-scan.ts: only top-level .m/.js/.wasm files, plus files
+    // inside @class/, +pkg/, and private/ subdirectories (recursively).
+    // Files are stored with their absolute VFS path in `name` so that
+    // search-path prefix matching in the lowering context works correctly.
     for (const filePath of this.vfs.allFiles()) {
       if (!filePath.startsWith(prefix)) continue;
       const relativePath = filePath.slice(prefix.length);
+      if (!relativePath) continue;
+
+      // Walk path segments. Allow any depth as long as every intermediate
+      // segment is a special directory (@…, +…, or "private").
+      const segments = relativePath.split("/");
+      const dirs = segments.slice(0, -1);
+      const allSpecial = dirs.every(
+        d => d.startsWith("@") || d.startsWith("+") || d === "private"
+      );
+      if (!allSpecial) continue;
+
       if (
-        relativePath.endsWith(".m") ||
-        relativePath.endsWith(".js") ||
-        relativePath.endsWith(".wasm")
+        !relativePath.endsWith(".m") &&
+        !relativePath.endsWith(".js") &&
+        !relativePath.endsWith(".wasm")
       ) {
-        try {
-          const content = this.vfs.readFile(filePath);
-          if (relativePath.endsWith(".wasm")) {
-            results.push({
-              name: relativePath,
-              source: "",
-              data: new Uint8Array(content),
-            });
-          } else {
-            results.push({
-              name: relativePath,
-              source: TEXT_DECODER.decode(content),
-            });
-          }
-        } catch {
-          // skip unreadable files
+        continue;
+      }
+
+      try {
+        const content = this.vfs.readFile(filePath);
+        if (relativePath.endsWith(".wasm")) {
+          results.push({
+            name: filePath,
+            source: "",
+            data: new Uint8Array(content),
+          });
+        } else {
+          results.push({
+            name: filePath,
+            source: TEXT_DECODER.decode(content),
+          });
         }
+      } catch {
+        // skip unreadable files
       }
     }
     return results;
