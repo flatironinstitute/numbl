@@ -89,12 +89,23 @@ export function sprintfFormat(fmt: string, args: RuntimeValue[]): string {
     while (i < fmt.length && !outOfArgs) {
       if (fmt[i] === "%" && i + 1 < fmt.length) {
         i++;
-        // Parse format specifier
+        // Parse format specifier. A '*' for width or precision consumes the
+        // next arg as an integer and substitutes its digits into the spec.
         let spec = "%";
         while (i < fmt.length && !"dfigeEsoxXuc%".includes(fmt[i])) {
-          spec += fmt[i];
-          i++;
+          if (fmt[i] === "*") {
+            if (argIdx >= flatArgs.length) {
+              outOfArgs = true;
+              break;
+            }
+            spec += String(Math.round(toNumber(flatArgs[argIdx++])));
+            i++;
+          } else {
+            spec += fmt[i];
+            i++;
+          }
         }
+        if (outOfArgs) break;
         if (i < fmt.length) {
           const ch = fmt[i];
           i++;
