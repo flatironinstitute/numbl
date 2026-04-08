@@ -54,6 +54,13 @@ export function callFunction(
         this.evalInLocalScope(codeArg, fileName),
       callFunction: (n, a, no) => this.callFunction(n, a, no),
       rt: this.rt,
+      lookupWorkspaceFile: n => {
+        const entry = this.ctx.registry.filesByFuncName.get(n);
+        if (entry) return entry.fileName;
+        const classInfo = this.ctx.getClassInfo(n);
+        if (classInfo) return classInfo.fileName;
+        return undefined;
+      },
     };
     const result = specialHandler(ctx, args, nargout);
     if (result !== FALL_THROUGH) return result;

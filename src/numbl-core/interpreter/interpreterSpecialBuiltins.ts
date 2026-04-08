@@ -30,6 +30,9 @@ export interface InterpreterContext {
   evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
+  /** Resolve a workspace function or class name to its source file path,
+   *  or undefined if no workspace file provides that name. */
+  lookupWorkspaceFile: (name: string) => string | undefined;
 }
 
 export const FALL_THROUGH: unique symbol = Symbol("FALL_THROUGH");
@@ -157,6 +160,27 @@ register("exist", (ctx, args) => {
     return 0;
   }
   return FALL_THROUGH;
+});
+
+register("which", (ctx, args) => {
+  if (args.length < 1) return FALL_THROUGH;
+  const nameArg = toString(ensureRuntimeValue(args[0]));
+
+  // Variable in current workspace — MATLAB returns the literal "variable".
+  if (ctx.env.has(nameArg)) return RTV.char("variable");
+
+  // Workspace function or class file — return the absolute file path.
+  const filePath = ctx.lookupWorkspaceFile(nameArg);
+  if (filePath) return RTV.char(filePath);
+
+  // Builtin — MATLAB returns "built-in (<path>)".  We don't track the
+  // source path for numbl builtins, so return just "built-in".
+  if (ctx.rt.builtins[nameArg] || getIBuiltin(nameArg)) {
+    return RTV.char("built-in");
+  }
+
+  // Not found — MATLAB returns '' (empty char array).
+  return RTV.char("");
 });
 
 register("isfolder", (ctx, args) => {
