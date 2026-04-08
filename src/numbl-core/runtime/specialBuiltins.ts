@@ -55,6 +55,7 @@ import {
   denseOutputEval,
   type StepData,
 } from "../helpers/ode-rk.js";
+import { quadgkAdaptive } from "../helpers/quadgk.js";
 
 /** Map sol structs to their dense output step data for deval. */
 const _solStepData = new WeakMap<object, StepData[]>();
@@ -260,6 +261,71 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   registerSpecial("bsxfun", (nargout, args) => {
     return _bsxfunImpl(rt, nargout, args);
+  });
+
+  registerSpecial("quadgk", (nargout, args) => {
+    if (args.length < 3)
+      throw new RuntimeError(
+        "quadgk: requires at least 3 arguments (fun, a, b)"
+      );
+    const fnArg = ensureRuntimeValue(args[0]);
+    if (!isRuntimeFunction(fnArg))
+      throw new RuntimeError("quadgk: first argument must be a function");
+    const a = toNumber(ensureRuntimeValue(args[1]));
+    const b = toNumber(ensureRuntimeValue(args[2]));
+
+    // Parse name-value option pairs.  Unknown names are ignored so that
+    // chunkie-style `quadgk(fun, a, b, quadgkparams{:})` spreads that may
+    // include options we don't yet support (Waypoints, etc.) don't error.
+    let relTol: number | undefined;
+    let absTol: number | undefined;
+    let maxIntervalCount: number | undefined;
+    for (let i = 3; i + 1 < args.length; i += 2) {
+      const keyRv = ensureRuntimeValue(args[i]);
+      const key = isRuntimeChar(keyRv)
+        ? keyRv.value
+        : isRuntimeString(keyRv)
+          ? (keyRv as string)
+          : "";
+      const lowerKey = key.toLowerCase();
+      const valRv = ensureRuntimeValue(args[i + 1]);
+      if (lowerKey === "reltol") relTol = toNumber(valRv);
+      else if (lowerKey === "abstol") absTol = toNumber(valRv);
+      else if (lowerKey === "maxintervalcount")
+        maxIntervalCount = toNumber(valRv);
+      // Waypoints and other options are silently ignored for now.
+    }
+
+    // Vectorized integrand: pass the 15 nodes as a 1x15 row vector and
+    // expect a 1x15 (or 15x1) numeric result.
+    const integrand = (pts: number[]): number[] => {
+      const vecData = new FloatXArray(pts);
+      const vec = RTV.tensor(vecData, [1, pts.length]);
+      const resultRaw = rt.index(fnArg, [vec], 1);
+      const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
+      if (isRuntimeNumber(rv)) {
+        // Scalar result: broadcast (rare — most integrands vectorize).
+        return new Array<number>(pts.length).fill(rv as number);
+      }
+      if (isRuntimeTensor(rv)) {
+        if (rv.data.length !== pts.length) {
+          throw new RuntimeError(
+            `quadgk: integrand returned ${rv.data.length} values for ${pts.length} nodes`
+          );
+        }
+        return Array.from(rv.data);
+      }
+      throw new RuntimeError("quadgk: integrand must return a numeric vector");
+    };
+
+    const result = quadgkAdaptive(integrand, a, b, {
+      relTol,
+      absTol,
+      maxIntervalCount,
+    });
+
+    if (nargout >= 2) return [result.value, result.errbnd];
+    return result.value;
   });
 
   registerSpecial("subsref", (nargout, args) => {
