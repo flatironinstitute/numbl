@@ -182,27 +182,9 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       }
 
       const fmt = toString(margs[fmtIdx]);
-      const scalarArgs: RuntimeValue[] = [];
-      for (let i = fmtIdx + 1; i < margs.length; i++) {
-        const a = margs[i];
-        if (isRuntimeTensor(a)) {
-          for (let j = 0; j < a.data.length; j++)
-            scalarArgs.push(RTV.num(a.data[j]));
-        } else {
-          scalarArgs.push(a);
-        }
-      }
-      const specCount = (fmt.match(/%[^%]/g) || []).length;
-      if (specCount === 0 || scalarArgs.length === 0) {
-        output = sprintfFormat(fmt, scalarArgs);
-      } else {
-        let idx = 0;
-        while (idx < scalarArgs.length) {
-          const batch = scalarArgs.slice(idx, idx + specCount);
-          output += sprintfFormat(fmt, batch);
-          idx += specCount;
-        }
-      }
+      // sprintfFormat handles tensor flattening and format cycling internally,
+      // so we can pass the remaining args through directly.
+      output = sprintfFormat(fmt, margs.slice(fmtIdx + 1));
 
       if (fid === 1 || fid === 2) {
         rt.output(output);

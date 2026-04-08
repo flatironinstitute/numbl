@@ -39,7 +39,22 @@ function preserveTextType(t: JitType): JitType | null {
   return null;
 }
 
-/** Resolve for a simple 1-arg text→text function that preserves char/string. */
+/** Apply a string function to a value, recursing into cells. */
+function applyTextFn(v: RuntimeValue, fn: (s: string) => string): RuntimeValue {
+  if (isRuntimeCell(v)) {
+    const out: RuntimeValue[] = new Array(v.data.length);
+    for (let i = 0; i < v.data.length; i++) {
+      out[i] = applyTextFn(v.data[i], fn);
+    }
+    return RTV.cell(out, [...v.shape]);
+  }
+  if (isRuntimeChar(v)) return RTV.char(fn(v.value));
+  if (isRuntimeString(v)) return RTV.string(fn(toString(v)));
+  return v;
+}
+
+/** Resolve for a simple 1-arg text→text function that preserves char/string,
+ *  and maps element-wise over cell arrays of text. */
 function textPreserveResolve(fn: (s: string) => string): (
   argTypes: JitType[],
   nargout: number
@@ -49,16 +64,18 @@ function textPreserveResolve(fn: (s: string) => string): (
 } | null {
   return argTypes => {
     if (argTypes.length !== 1) return null;
-    const out = preserveTextType(argTypes[0]);
+    const t = argTypes[0];
+    if (t.kind === "cell") {
+      return {
+        outputTypes: [{ kind: "cell" }],
+        apply: args => applyTextFn(args[0], fn),
+      };
+    }
+    const out = preserveTextType(t);
     if (!out) return null;
     return {
       outputTypes: [out],
-      apply: args => {
-        const v = args[0];
-        const s = toString(v);
-        const result = fn(s);
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
-      },
+      apply: args => applyTextFn(args[0], fn),
     };
   };
 }
