@@ -414,6 +414,10 @@ export function tokenizeDetailed(input: string): SpannedToken[] {
       if (numCfg.stripUnderscores) {
         lexeme = lexeme.replace(/_/g, "");
       }
+      // Normalize FORTRAN-style exponent markers (d/D → e) so parseFloat works
+      if (isFloat) {
+        lexeme = lexeme.replace(/[dD]/g, "e");
+      }
 
       const tok = isFloat
         ? Token[numCfg.floatToken as keyof typeof Token]

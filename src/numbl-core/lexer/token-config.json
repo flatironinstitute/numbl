@@ -102,7 +102,7 @@
     "stripUnderscores": true,
     "integerToken": "Integer",
     "floatToken": "Float",
-    "exponentChars": ["e", "E"],
+    "exponentChars": ["e", "E", "d", "D"],
     "decimalPoint": ".",
     "dotOperatorPrefixes": ["*", "/", "\\", "^"]
   },
