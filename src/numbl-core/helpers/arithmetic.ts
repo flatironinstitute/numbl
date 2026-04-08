@@ -27,6 +27,7 @@ import { getLapackBridge } from "../native/lapack-bridge.js";
 import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
 import { applyBuiltin as applyBuiltinFn } from "./check-helpers.js";
 import { coerceToTensor } from "./shape-utils.js";
+import { num2strScalar } from "./string.js";
 import {
   mAddSparse,
   mSubSparse,
@@ -432,8 +433,39 @@ function tensorElemwiseComplex(
 
 // ── Arithmetic operators ────────────────────────────────────────────────
 
+/** Format a RuntimeValue for string concatenation via `+`.
+ *  MATLAB converts numbers and logicals to their num2str form, and
+ *  strings/chars to their raw text.  Used only by mAdd when one operand
+ *  is a RuntimeString. */
+function coerceToConcatString(v: RuntimeValue): string | null {
+  if (isRuntimeString(v)) return v;
+  if (isRuntimeChar(v)) return v.value;
+  if (isRuntimeLogical(v)) return v ? "true" : "false";
+  if (isRuntimeNumber(v)) return num2strScalar(v);
+  // Scalar tensor (including logical-typed scalar tensors) — match
+  // MATLAB by formatting the single value.
+  if (isRuntimeTensor(v) && v.data.length === 1 && !v.imag) {
+    const x = v.data[0];
+    if (v._isLogical === true) return x ? "true" : "false";
+    return num2strScalar(x);
+  }
+  return null;
+}
+
 /** Add two RuntimeValues */
 export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // MATLAB string `+` is concatenation, not numeric addition.  When
+  // either operand is a string (and the other is convertible to text),
+  // return a concatenated string.
+  if (isRuntimeString(a) || isRuntimeString(b)) {
+    const aStr = coerceToConcatString(a);
+    const bStr = coerceToConcatString(b);
+    if (aStr !== null && bStr !== null) {
+      return RTV.string(aStr + bStr);
+    }
+    // Fall through to numeric path, which will raise a more descriptive
+    // error (e.g. when trying to add a tensor to a string).
+  }
   const m = matchSameShapeTensors(a, b);
   if (m) {
     const [at, bt] = m;
