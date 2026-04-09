@@ -1,6 +1,6 @@
 {
   "name": "numbl",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Run .m source files in the browser and on the command line by compiling to JavaScript",
   "license": "Apache-2.0",
   "type": "module",
