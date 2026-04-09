@@ -546,6 +546,192 @@ registerIBuiltin({
   },
 });
 
+// ── isstrprop ─────────────────────────────────────────────────────────
+
+const RE_ALPHA = /\p{L}/u;
+const RE_ALPHANUM = /[\p{L}\p{N}]/u;
+const RE_CNTRL = /\p{Cc}/u;
+const RE_GRAPHIC = /[\p{L}\p{N}\p{P}\p{S}\p{M}]/u;
+const RE_LOWER = /\p{Ll}/u;
+const RE_PUNCT = /\p{P}/u;
+const RE_UPPER = /\p{Lu}/u;
+const RE_WSPACE = /\s/u;
+
+/** Per-codepoint predicate for an isstrprop category, or null if unknown. */
+function isstrpropPredicate(
+  category: string
+): ((cp: number) => boolean) | null {
+  switch (category) {
+    case "alpha":
+      return cp => RE_ALPHA.test(String.fromCodePoint(cp));
+    case "alphanum":
+      return cp => RE_ALPHANUM.test(String.fromCodePoint(cp));
+    case "cntrl":
+      return cp => RE_CNTRL.test(String.fromCodePoint(cp));
+    case "digit":
+      return cp => cp >= 48 && cp <= 57;
+    case "graphic":
+      return cp => RE_GRAPHIC.test(String.fromCodePoint(cp));
+    case "lower":
+      return cp => RE_LOWER.test(String.fromCodePoint(cp));
+    case "print":
+      return cp => cp === 32 || RE_GRAPHIC.test(String.fromCodePoint(cp));
+    case "punct":
+      return cp => RE_PUNCT.test(String.fromCodePoint(cp));
+    case "wspace":
+      return cp => RE_WSPACE.test(String.fromCodePoint(cp));
+    case "upper":
+      return cp => RE_UPPER.test(String.fromCodePoint(cp));
+    case "xdigit":
+      return cp =>
+        (cp >= 48 && cp <= 57) ||
+        (cp >= 65 && cp <= 70) ||
+        (cp >= 97 && cp <= 102);
+    default:
+      return null;
+  }
+}
+
+/** Convert a string to per-character code points (handles surrogate pairs). */
+function stringCodePoints(s: string): number[] {
+  const out: number[] = [];
+  for (const ch of s) out.push(ch.codePointAt(0)!);
+  return out;
+}
+
+/** Build a logical tensor by applying a predicate to each code point of `s`. */
+function logicalRowFromString(
+  s: string,
+  pred: (cp: number) => boolean,
+  shape?: number[]
+): RuntimeValue {
+  const cps = stringCodePoints(s);
+  const data = new FloatXArray(cps.length);
+  for (let i = 0; i < cps.length; i++) data[i] = pred(cps[i]) ? 1 : 0;
+  return {
+    kind: "tensor",
+    data,
+    shape: shape ?? [1, cps.length],
+    _isLogical: true,
+    _rc: 1,
+  };
+}
+
+/** Build a logical tensor by applying a predicate to each element of a numeric tensor. */
+function logicalFromNumericTensor(
+  data: ArrayLike<number>,
+  shape: number[],
+  pred: (cp: number) => boolean
+): RuntimeValue {
+  const out = new FloatXArray(data.length);
+  for (let i = 0; i < data.length; i++) {
+    out[i] = pred(Math.round(data[i])) ? 1 : 0;
+  }
+  return {
+    kind: "tensor",
+    data: out,
+    shape: [...shape],
+    _isLogical: true,
+    _rc: 1,
+  };
+}
+
+function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
+  const v = args[0];
+  const category = toString(args[1]);
+  const pred = isstrpropPredicate(category);
+  if (!pred) {
+    throw new RuntimeError(`isstrprop: unknown category '${category}'`);
+  }
+
+  // Optional name-value pair: 'ForceCellOutput', tf
+  let forceCell = false;
+  if (args.length >= 3) {
+    const flagName = toString(args[2]).toLowerCase();
+    if (flagName !== "forcecelloutput") {
+      throw new RuntimeError(`isstrprop: unknown name '${toString(args[2])}'`);
+    }
+    if (args.length < 4) {
+      throw new RuntimeError("isstrprop: 'ForceCellOutput' requires a value");
+    }
+    forceCell = toNumber(args[3]) !== 0;
+  }
+
+  // Cell array of chars/strings → cell of logical row vectors
+  if (isRuntimeCell(v)) {
+    const out: RuntimeValue[] = new Array(v.data.length);
+    for (let i = 0; i < v.data.length; i++) {
+      const elem = v.data[i];
+      const s = isText(elem) ? toString(elem) : "";
+      out[i] = logicalRowFromString(s, pred);
+    }
+    return RTV.cell(out, [...v.shape]);
+  }
+
+  let result: RuntimeValue;
+  if (isRuntimeString(v)) {
+    result = logicalRowFromString(toString(v), pred);
+  } else if (isRuntimeChar(v)) {
+    const c = v as import("../../runtime/types.js").RuntimeChar;
+    result = logicalRowFromString(
+      c.value,
+      pred,
+      c.shape ? [...c.shape] : undefined
+    );
+  } else if (isRuntimeTensor(v)) {
+    result = logicalFromNumericTensor(v.data, v.shape, pred);
+  } else if (isRuntimeNumber(v) || isRuntimeLogical(v)) {
+    const cp = Math.round(toNumber(v));
+    const data = new FloatXArray(1);
+    data[0] = pred(cp) ? 1 : 0;
+    result = { kind: "tensor", data, shape: [1, 1], _isLogical: true, _rc: 1 };
+  } else {
+    throw new RuntimeError("isstrprop: unsupported input type");
+  }
+
+  if (forceCell) return RTV.cell([result], [1, 1]);
+  return result;
+}
+
+registerIBuiltin({
+  name: "isstrprop",
+  help: {
+    signatures: [
+      "TF = isstrprop(str, category)",
+      "TF = isstrprop(str, category, 'ForceCellOutput', tf)",
+    ],
+    description:
+      "Test which characters in str belong to a category (alpha, alphanum, cntrl, digit, graphic, lower, print, punct, upper, wspace, xdigit). Returns a logical array, or a cell of logical vectors when str is a cell array or ForceCellOutput is true. Numeric input is treated as Unicode code points.",
+  },
+  resolve: argTypes => {
+    if (argTypes.length < 2 || argTypes.length > 4) return null;
+    if (!isTextType(argTypes[1])) return null;
+    if (argTypes.length >= 3 && !isTextType(argTypes[2])) return null;
+    if (argTypes.length === 4) {
+      const k = argTypes[3].kind;
+      if (k !== "number" && k !== "boolean") return null;
+    }
+    const t0 = argTypes[0];
+    if (
+      t0.kind !== "char" &&
+      t0.kind !== "string" &&
+      t0.kind !== "number" &&
+      t0.kind !== "boolean" &&
+      t0.kind !== "tensor" &&
+      t0.kind !== "cell"
+    ) {
+      return null;
+    }
+    const isCell = t0.kind === "cell";
+    return {
+      outputTypes: isCell
+        ? [{ kind: "cell" }]
+        : [{ kind: "tensor", isComplex: false, isLogical: true }],
+      apply: args => isstrpropApply(args),
+    };
+  },
+});
+
 registerIBuiltin({
   name: "contains",
   resolve: argTypes => {
