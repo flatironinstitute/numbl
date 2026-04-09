@@ -3,12 +3,11 @@
  */
 
 import { db } from "../db/schema.js";
-import { ensureHomeProject } from "../db/operations.js";
+import { ensureSystemProject, SYSTEM_PROJECT_NAME } from "../db/operations.js";
 import type { VfsChanges } from "./VirtualFileSystem.js";
 import type { WorkspaceFile } from "../hooks/useProjectFiles.js";
 
-const HOME_PREFIX = "/home/";
-const HOME_PROJECT_NAME = "__home__";
+const SYSTEM_PREFIX = "/system/";
 
 /** Strip the /project/ prefix from VFS paths to get project-relative paths. */
 function toProjectPath(vfsPath: string): string {
@@ -17,37 +16,40 @@ function toProjectPath(vfsPath: string): string {
   return vfsPath;
 }
 
-/** Strip the /home/ prefix from VFS paths to get home-relative paths. */
-function toHomePath(vfsPath: string): string {
-  if (vfsPath.startsWith(HOME_PREFIX)) return vfsPath.slice(HOME_PREFIX.length);
+/** Strip the /system/ prefix from VFS paths to get system-relative paths. */
+function toSystemPath(vfsPath: string): string {
+  if (vfsPath.startsWith(SYSTEM_PREFIX))
+    return vfsPath.slice(SYSTEM_PREFIX.length);
   return vfsPath;
 }
 
-function isHomePath(vfsPath: string): boolean {
-  return vfsPath.startsWith(HOME_PREFIX) || vfsPath === "/home";
+function isSystemPath(vfsPath: string): boolean {
+  return vfsPath.startsWith(SYSTEM_PREFIX) || vfsPath === "/system";
 }
 
-/** Split VFS changes into project changes and home changes. */
+/** Split VFS changes into project changes and system changes. */
 function splitChanges(changes: VfsChanges): {
   projectChanges: VfsChanges;
-  homeChanges: VfsChanges;
+  systemChanges: VfsChanges;
 } {
   const projectChanges: VfsChanges = { created: [], modified: [], deleted: [] };
-  const homeChanges: VfsChanges = { created: [], modified: [], deleted: [] };
+  const systemChanges: VfsChanges = { created: [], modified: [], deleted: [] };
 
   for (const entry of changes.created) {
-    (isHomePath(entry.path) ? homeChanges : projectChanges).created.push(entry);
+    (isSystemPath(entry.path) ? systemChanges : projectChanges).created.push(
+      entry
+    );
   }
   for (const entry of changes.modified) {
-    (isHomePath(entry.path) ? homeChanges : projectChanges).modified.push(
+    (isSystemPath(entry.path) ? systemChanges : projectChanges).modified.push(
       entry
     );
   }
   for (const path of changes.deleted) {
-    (isHomePath(path) ? homeChanges : projectChanges).deleted.push(path);
+    (isSystemPath(path) ? systemChanges : projectChanges).deleted.push(path);
   }
 
-  return { projectChanges, homeChanges };
+  return { projectChanges, systemChanges };
 }
 
 export interface VfsSyncResult {
@@ -134,29 +136,29 @@ async function syncChangesToDb(
 
 export interface VfsSyncAllResult {
   projectResult: VfsSyncResult | null;
-  homeResult: VfsSyncResult | null;
+  systemResult: VfsSyncResult | null;
 }
 
 /**
- * Sync only the /home/ portion of VFS changes to the __home__ project in IndexedDB.
- * Returns true if any home files were changed.
+ * Sync only the /system/ portion of VFS changes to the __system__ project in IndexedDB.
+ * Returns true if any system files were changed.
  */
-export async function syncHomeVfsChanges(
+export async function syncSystemVfsChanges(
   changes: VfsChanges
 ): Promise<boolean> {
-  const { homeChanges } = splitChanges(changes);
+  const { systemChanges } = splitChanges(changes);
   if (
-    homeChanges.created.length === 0 &&
-    homeChanges.modified.length === 0 &&
-    homeChanges.deleted.length === 0
+    systemChanges.created.length === 0 &&
+    systemChanges.modified.length === 0 &&
+    systemChanges.deleted.length === 0
   ) {
     return false;
   }
-  await ensureHomeProject();
+  await ensureSystemProject();
   const result = await syncChangesToDb(
-    HOME_PROJECT_NAME,
-    homeChanges,
-    toHomePath
+    SYSTEM_PROJECT_NAME,
+    systemChanges,
+    toSystemPath
   );
   return result !== null;
 }
@@ -165,7 +167,7 @@ export async function syncVfsChangesToProject(
   projectName: string,
   changes: VfsChanges
 ): Promise<VfsSyncAllResult> {
-  const { projectChanges, homeChanges } = splitChanges(changes);
+  const { projectChanges, systemChanges } = splitChanges(changes);
 
   const projectResult = await syncChangesToDb(
     projectName,
@@ -173,19 +175,19 @@ export async function syncVfsChangesToProject(
     toProjectPath
   );
 
-  let homeResult: VfsSyncResult | null = null;
+  let systemResult: VfsSyncResult | null = null;
   if (
-    homeChanges.created.length > 0 ||
-    homeChanges.modified.length > 0 ||
-    homeChanges.deleted.length > 0
+    systemChanges.created.length > 0 ||
+    systemChanges.modified.length > 0 ||
+    systemChanges.deleted.length > 0
   ) {
-    await ensureHomeProject();
-    homeResult = await syncChangesToDb(
-      HOME_PROJECT_NAME,
-      homeChanges,
-      toHomePath
+    await ensureSystemProject();
+    systemResult = await syncChangesToDb(
+      SYSTEM_PROJECT_NAME,
+      systemChanges,
+      toSystemPath
     );
   }
 
-  return { projectResult, homeResult };
+  return { projectResult, systemResult };
 }

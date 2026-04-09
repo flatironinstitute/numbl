@@ -85,9 +85,14 @@ function buildTree(files: WorkspaceFile[]): TreeNode[] {
     }
   }
 
-  // Sort: folders first, then files, both alphabetically
+  // Sort: system folder first, then folders, then files, all alphabetically.
+  // The system folder is identified by its top-level path "system" — unique
+  // because top-level paths cannot collide.
   const sortNodes = (nodes: TreeNode[]) => {
     nodes.sort((a, b) => {
+      const aIsSystem = a.isFolder && a.path === "system";
+      const bIsSystem = b.isFolder && b.path === "system";
+      if (aIsSystem !== bIsSystem) return aIsSystem ? -1 : 1;
       if (a.isFolder !== b.isFolder) return a.isFolder ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
@@ -196,6 +201,9 @@ function TreeNodeItem({
   const isRenaming =
     renamingPath === (node.isFolder ? `folder:${node.path}` : node.path);
   const isDragOver = node.isFolder && dragOverFolder === node.path;
+  const isSystemFolder = node.isFolder && node.path === "system";
+  const folderIconColor = isSystemFolder ? "#4ec9b0" : "#dcb67a";
+  const folderTextColor = isSystemFolder ? "#4ec9b0" : "#cccccc";
   const indent = depth * 16;
 
   if (node.isFolder) {
@@ -227,9 +235,13 @@ function TreeNodeItem({
             />
           )}
           {isExpanded ? (
-            <FolderOpenIcon sx={{ fontSize: 16, color: "#dcb67a", mr: 0.75 }} />
+            <FolderOpenIcon
+              sx={{ fontSize: 16, color: folderIconColor, mr: 0.75 }}
+            />
           ) : (
-            <FolderIcon sx={{ fontSize: 16, color: "#dcb67a", mr: 0.75 }} />
+            <FolderIcon
+              sx={{ fontSize: 16, color: folderIconColor, mr: 0.75 }}
+            />
           )}
           {isRenaming ? (
             <Box sx={{ flex: 1 }}>
@@ -244,7 +256,7 @@ function TreeNodeItem({
               <Typography
                 sx={{
                   fontSize: "13px",
-                  color: "#cccccc",
+                  color: folderTextColor,
                   flex: 1,
                   whiteSpace: "nowrap",
                   overflow: "hidden",

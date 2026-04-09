@@ -73,10 +73,10 @@ import {
 } from "../utils/remoteExecution";
 import {
   syncVfsChangesToProject,
-  syncHomeVfsChanges,
+  syncSystemVfsChanges,
 } from "../vfs/syncVfsChanges";
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
-import { useHomeFiles } from "../hooks/useHomeFiles";
+import { useSystemFiles } from "../hooks/useSystemFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
 
 export interface IDEWorkspaceProps {
@@ -131,35 +131,38 @@ export function IDEWorkspace({
   mergeVfsChanges,
 }: IDEWorkspaceProps) {
   const {
-    homeFiles,
-    reloadHomeFiles,
-    updateHomeFileContent,
-    addHomeFile,
-    addHomeFolder,
-    deleteHomeFile,
-    deleteHomeFolder,
-    renameHomeFile,
-    renameHomeFolder,
-    moveHomeFile,
-    loadHomeFileContent,
-    getHomeVfsFiles,
-    getHomeWorkspaceFiles,
-    loadAllHomeContents,
-  } = useHomeFiles();
+    systemFiles,
+    reloadSystemFiles,
+    updateSystemFileContent,
+    addSystemFile,
+    addSystemFolder,
+    deleteSystemFile,
+    deleteSystemFolder,
+    renameSystemFile,
+    renameSystemFolder,
+    moveSystemFile,
+    loadSystemFileContent,
+    getSystemVfsFiles,
+    getSystemWorkspaceFiles,
+    loadAllSystemContents,
+  } = useSystemFiles();
 
-  useMipCorePackage(reloadHomeFiles);
+  useMipCorePackage(reloadSystemFiles);
 
-  const isHomePath = useCallback(
-    (name: string) => name === "~" || name.startsWith("~/"),
+  const isSystemPath = useCallback(
+    (name: string) => name === "system" || name.startsWith("system/"),
     []
   );
-  const isHomeFileId = useCallback(
-    (fileId: string) => homeFiles.some(f => f.id === fileId),
-    [homeFiles]
+  const isSystemFileId = useCallback(
+    (fileId: string) => systemFiles.some(f => f.id === fileId),
+    [systemFiles]
   );
 
-  // Merged file list: project files + home files (metadata only — no content blobs)
-  const allFiles = useMemo(() => [...files, ...homeFiles], [files, homeFiles]);
+  // Merged file list: project files + system files (metadata only — no content blobs)
+  const allFiles = useMemo(
+    () => [...files, ...systemFiles],
+    [files, systemFiles]
+  );
   const optimization = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     return parseInt(params.get("opt") ?? "1", 10);
@@ -318,19 +321,19 @@ export function IDEWorkspace({
   /** Build VFS + workspace text files for sending to workers. Loads all content from DB. */
   const buildWorkerFiles = useCallback(
     async (wsFiles: WorkspaceFile[], excludeFileId?: string) => {
-      const [projectContents, homeVfs, homeWs] = await Promise.all([
+      const [projectContents, systemVfs, systemWs] = await Promise.all([
         loadAllContents(),
-        getHomeVfsFiles(),
-        getHomeWorkspaceFiles(),
+        getSystemVfsFiles(),
+        getSystemWorkspaceFiles(),
       ]);
-      const homeContents = await loadAllHomeContents();
+      const systemContents = await loadAllSystemContents();
 
       const vfsFiles = [
         ...wsFiles.map(f => ({
           path: f.name,
           content: projectContents.get(f.id) ?? new Uint8Array(0),
         })),
-        ...homeVfs,
+        ...systemVfs,
       ];
 
       const decoder = new TextDecoder("utf-8");
@@ -343,16 +346,16 @@ export function IDEWorkspace({
               projectContents.get(f.id) ?? new Uint8Array(0)
             ),
           })),
-        ...homeWs,
+        ...systemWs,
       ];
 
-      return { vfsFiles, workspaceFiles, projectContents, homeContents };
+      return { vfsFiles, workspaceFiles, projectContents, systemContents };
     },
     [
       loadAllContents,
-      getHomeVfsFiles,
-      getHomeWorkspaceFiles,
-      loadAllHomeContents,
+      getSystemVfsFiles,
+      getSystemWorkspaceFiles,
+      loadAllSystemContents,
     ]
   );
 
@@ -364,25 +367,25 @@ export function IDEWorkspace({
       if (created.length === 0 && modified.length === 0 && deleted.length === 0)
         return;
       if (projectName) {
-        const { projectResult, homeResult } = await syncVfsChangesToProject(
+        const { projectResult, systemResult } = await syncVfsChangesToProject(
           projectName,
           changes
         );
         if (projectResult && mergeVfsChanges) {
           mergeVfsChanges(projectResult);
         }
-        if (homeResult) {
-          reloadHomeFiles();
+        if (systemResult) {
+          reloadSystemFiles();
         }
       } else {
-        // No project (e.g. share route) — still sync home file changes
-        const synced = await syncHomeVfsChanges(changes);
+        // No project (e.g. share route) — still sync system file changes
+        const synced = await syncSystemVfsChanges(changes);
         if (synced) {
-          reloadHomeFiles();
+          reloadSystemFiles();
         }
       }
     },
-    [projectName, mergeVfsChanges, reloadHomeFiles]
+    [projectName, mergeVfsChanges, reloadSystemFiles]
   );
 
   // Initialize script worker
@@ -522,7 +525,7 @@ export function IDEWorkspace({
   const replWorkspaceStale = useRef(true);
   useEffect(() => {
     replWorkspaceStale.current = true;
-  }, [files, homeFiles]);
+  }, [files, systemFiles]);
 
   // Clear triggerRenameId after a short delay
   useEffect(() => {
@@ -796,8 +799,8 @@ export function IDEWorkspace({
     setActiveFileData(null);
     activeFileDataIdRef.current = "";
     let cancelled = false;
-    const isHome = homeFiles.some(f => f.id === activeFileId);
-    const loader = isHome ? loadHomeFileContent : loadFileContent;
+    const isSystem = systemFiles.some(f => f.id === activeFileId);
+    const loader = isSystem ? loadSystemFileContent : loadFileContent;
     loader(activeFileId).then(data => {
       if (!cancelled) {
         activeFileDataIdRef.current = activeFileId;
@@ -807,7 +810,7 @@ export function IDEWorkspace({
     return () => {
       cancelled = true;
     };
-  }, [activeFileId, homeFiles, loadHomeFileContent, loadFileContent]);
+  }, [activeFileId, systemFiles, loadSystemFileContent, loadFileContent]);
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -997,8 +1000,8 @@ export function IDEWorkspace({
                     const encoded = _textEncoder.encode(value || "");
                     setActiveFileData(encoded);
                     replWorkspaceStale.current = true;
-                    if (isHomeFileId(activeFileId)) {
-                      updateHomeFileContent(activeFileId, encoded);
+                    if (isSystemFileId(activeFileId)) {
+                      updateSystemFileContent(activeFileId, encoded);
                     } else {
                       updateFileContent(value || "");
                     }
@@ -1220,8 +1223,8 @@ export function IDEWorkspace({
         if (isMobile) setDrawerOpen(false);
       }}
       onAddFile={async folderPath => {
-        if (folderPath && isHomePath(folderPath)) {
-          const id = await addHomeFile(folderPath);
+        if (folderPath && isSystemPath(folderPath)) {
+          const id = await addSystemFile(folderPath);
           if (id) setTriggerRenameId(id);
         } else {
           const id = await addFile(folderPath);
@@ -1229,8 +1232,8 @@ export function IDEWorkspace({
         }
       }}
       onAddFolder={async parentPath => {
-        if (parentPath && isHomePath(parentPath)) {
-          const folderPath = await addHomeFolder(parentPath);
+        if (parentPath && isSystemPath(parentPath)) {
+          const folderPath = await addSystemFolder(parentPath);
           if (folderPath) setTriggerRenameId(`folder:${folderPath}`);
         } else {
           const folderPath = await addFolder(parentPath);
@@ -1238,26 +1241,26 @@ export function IDEWorkspace({
         }
       }}
       onDeleteFile={fileId =>
-        isHomeFileId(fileId) ? deleteHomeFile(fileId) : deleteFile(fileId)
+        isSystemFileId(fileId) ? deleteSystemFile(fileId) : deleteFile(fileId)
       }
       onDeleteFolder={folderPath =>
-        isHomePath(folderPath)
-          ? deleteHomeFolder(folderPath)
+        isSystemPath(folderPath)
+          ? deleteSystemFolder(folderPath)
           : deleteFolder(folderPath)
       }
       onRenameFile={(fileId, newName) =>
-        isHomeFileId(fileId)
-          ? renameHomeFile(fileId, newName)
+        isSystemFileId(fileId)
+          ? renameSystemFile(fileId, newName)
           : renameFile(fileId, newName)
       }
       onRenameFolder={(oldPath, newName) =>
-        isHomePath(oldPath)
-          ? renameHomeFolder(oldPath, newName)
+        isSystemPath(oldPath)
+          ? renameSystemFolder(oldPath, newName)
           : renameFolder(oldPath, newName)
       }
       onMoveFile={(fileId, targetFolder) =>
-        isHomeFileId(fileId)
-          ? moveHomeFile(fileId, targetFolder)
+        isSystemFileId(fileId)
+          ? moveSystemFile(fileId, targetFolder)
           : moveFile(fileId, targetFolder)
       }
       onUploadFiles={uploadFiles}

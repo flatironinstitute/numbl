@@ -1,16 +1,15 @@
 import { useEffect } from "react";
 import { db } from "../db/schema.js";
-import { ensureHomeProject } from "../db/operations.js";
+import { ensureSystemProject, SYSTEM_PROJECT_NAME } from "../db/operations.js";
 import { fetchMipCoreFiles } from "./fetchMipCoreFiles.js";
 
-const MIP_HOME_PREFIX = ".mip/packages/mip-org/core/mip/";
-const HOME_PROJECT_NAME = "__home__";
+const MIP_SYSTEM_PREFIX = ".mip/packages/mip-org/core/mip/";
 
 /**
  * On mount, fetches the mip core package, unzips it, and writes the files into
- * IndexedDB under the __home__ project at .mip/packages/mip-org/core/mip/,
+ * IndexedDB under the __system__ project at .mip/packages/mip-org/core/mip/,
  * overwriting any previous contents. Calls onInstalled() when done so the
- * caller can reload home files.
+ * caller can reload system files.
  */
 export function useMipCorePackage(onInstalled: () => void): void {
   useEffect(() => {
@@ -20,23 +19,23 @@ export function useMipCorePackage(onInstalled: () => void): void {
         const vfsFiles = await fetchMipCoreFiles();
         if (cancelled) return;
 
-        await ensureHomeProject();
+        await ensureSystemProject();
 
         // Upsert mip files using deterministic IDs
         const now = Date.now();
         await db.transaction("rw", db.files, db.fileContents, async () => {
           const metaRecords = vfsFiles.map(f => {
-            const path = f.path.replace(/^\/home\//, "");
+            const path = f.path.replace(/^\/system\//, "");
             return {
               id: "mip:" + path,
-              projectName: HOME_PROJECT_NAME,
+              projectName: SYSTEM_PROJECT_NAME,
               path,
               createdAt: now,
               updatedAt: now,
             };
           });
           const contentRecords = vfsFiles.map(f => ({
-            id: "mip:" + f.path.replace(/^\/home\//, ""),
+            id: "mip:" + f.path.replace(/^\/system\//, ""),
             data: f.content,
           }));
           await db.files.bulkPut(metaRecords);
@@ -47,8 +46,8 @@ export function useMipCorePackage(onInstalled: () => void): void {
         const existingKeys = await db.files
           .where("[projectName+path]")
           .between(
-            [HOME_PROJECT_NAME, MIP_HOME_PREFIX],
-            [HOME_PROJECT_NAME, MIP_HOME_PREFIX + "\uffff"]
+            [SYSTEM_PROJECT_NAME, MIP_SYSTEM_PREFIX],
+            [SYSTEM_PROJECT_NAME, MIP_SYSTEM_PREFIX + "\uffff"]
           )
           .primaryKeys();
         const staleKeys = existingKeys.filter(

@@ -16,9 +16,9 @@ import {
 } from "../graphics/figuresReducer.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
-import { useHomeFiles } from "../hooks/useHomeFiles.js";
+import { useSystemFiles } from "../hooks/useSystemFiles.js";
 import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
-import { syncHomeVfsChanges } from "../vfs/syncVfsChanges.js";
+import { syncSystemVfsChanges } from "../vfs/syncVfsChanges.js";
 import type { VfsChanges } from "../vfs/VirtualFileSystem.js";
 
 interface TerminalMethods {
@@ -35,9 +35,13 @@ function useOptimizationParam(): number {
 
 export function EmbedReplPage() {
   const optimization = useOptimizationParam();
-  const { homeFiles, reloadHomeFiles, getHomeVfsFiles, getHomeWorkspaceFiles } =
-    useHomeFiles();
-  useMipCorePackage(reloadHomeFiles);
+  const {
+    systemFiles,
+    reloadSystemFiles,
+    getSystemVfsFiles,
+    getSystemWorkspaceFiles,
+  } = useSystemFiles();
+  useMipCorePackage(reloadSystemFiles);
   const navigate = useNavigate();
 
   const [isReplExecuting, setIsReplExecuting] = useState(false);
@@ -64,16 +68,16 @@ export function EmbedReplPage() {
 
   const hasFigures = currentFig !== null;
 
-  /** Sync home VFS changes to IndexedDB, then reload home files. */
+  /** Sync system VFS changes to IndexedDB, then reload system files. */
   const handleVfsChanges = useCallback(
     async (changes: VfsChanges | undefined) => {
       if (!changes) return;
-      const changed = await syncHomeVfsChanges(changes);
+      const changed = await syncSystemVfsChanges(changes);
       if (changed) {
-        reloadHomeFiles();
+        reloadSystemFiles();
       }
     },
-    [reloadHomeFiles]
+    [reloadSystemFiles]
   );
 
   // Initialize REPL worker
@@ -157,11 +161,11 @@ export function EmbedReplPage() {
     };
   }, [handlePlotInstruction, handleVfsChanges, optimization]);
 
-  // Track that workspace needs updating when home files change
+  // Track that workspace needs updating when system files change
   const workspaceStale = useRef(true);
   useEffect(() => {
     workspaceStale.current = true;
-  }, [homeFiles]);
+  }, [systemFiles]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {
@@ -176,8 +180,8 @@ export function EmbedReplPage() {
       // Send latest workspace files if stale
       if (workspaceStale.current && replWorkerRef.current) {
         const [wsFiles, vfsFiles] = await Promise.all([
-          getHomeWorkspaceFiles(),
-          getHomeVfsFiles(),
+          getSystemWorkspaceFiles(),
+          getSystemVfsFiles(),
         ]);
         replWorkerRef.current.postMessage({
           type: "update_workspace",
@@ -192,7 +196,7 @@ export function EmbedReplPage() {
         code: command,
       });
     },
-    [isReplExecuting, getHomeWorkspaceFiles, getHomeVfsFiles, navigate]
+    [isReplExecuting, getSystemWorkspaceFiles, getSystemVfsFiles, navigate]
   );
 
   const handleReplClear = useCallback(() => {
