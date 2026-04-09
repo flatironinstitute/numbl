@@ -11,6 +11,7 @@ import {
   isRuntimeString,
   isRuntimeCell,
   isRuntimeStruct,
+  isRuntimeStructArray,
   isRuntimeSparseMatrix,
   FloatXArray,
 } from "../../runtime/types.js";
@@ -22,6 +23,8 @@ import type {
 import { defineBuiltin } from "./types.js";
 import { RuntimeError } from "../../runtime/error.js";
 import { sprintfFormat } from "../../helpers/string.js";
+import { RTV } from "../../runtime/constructors.js";
+import { emptyStackField } from "../../runtime/runtime.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 
@@ -234,6 +237,153 @@ defineBuiltin({
           throw err;
         }
         throw new RuntimeError(String(me));
+      },
+    },
+  ],
+});
+
+// ── MException ──────────────────────────────────────────────────────────
+
+/** Build an MException-shaped struct. Field order matches MATLAB:
+ *  identifier, message, cause, stack. */
+function makeMException(identifier: string, message: string): RuntimeValue {
+  return RTV.struct(
+    new Map<string, RuntimeValue>([
+      ["identifier", RTV.char(identifier)],
+      ["message", RTV.char(message)],
+      ["cause", RTV.cell([], [0, 0])],
+      ["stack", emptyStackField()],
+    ])
+  );
+}
+
+defineBuiltin({
+  name: "MException",
+  help: {
+    signatures: [
+      "ME = MException(errID, msg)",
+      "ME = MException(errID, msg, A1, ..., An)",
+    ],
+    description:
+      "Construct an exception object with an error identifier and message. Extra arguments format the message with sprintf-style conversion specifiers. In numbl the result is a struct with fields identifier, message, cause, and stack.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2) return null;
+        const k0 = argTypes[0].kind;
+        const k1 = argTypes[1].kind;
+        if (k0 !== "string" && k0 !== "char") return null;
+        if (k1 !== "string" && k1 !== "char") return null;
+        return [{ kind: "struct", fields: {} }];
+      },
+      apply: args => {
+        const errID = textValue(args[0]) ?? String(args[0]);
+        const fmt = textValue(args[1]) ?? String(args[1]);
+        const msg = args.length === 2 ? fmt : sprintfFormat(fmt, args.slice(2));
+        return makeMException(errID, msg);
+      },
+    },
+  ],
+});
+
+// ── throw / throwAsCaller ────────────────────────────────────────────────
+
+function throwException(me: RuntimeValue): never {
+  if (isRuntimeStruct(me)) {
+    const msgVal = me.fields.get("message");
+    const idVal = me.fields.get("identifier");
+    const msg = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
+    const err = new RuntimeError(msg);
+    if (idVal) err.identifier = textValue(idVal) ?? "";
+    throw err;
+  }
+  throw new RuntimeError(String(me));
+}
+
+defineBuiltin({
+  name: "throw",
+  help: {
+    signatures: ["throw(ME)"],
+    description:
+      "Throw an exception. ME is an MException-shaped struct with identifier and message fields.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        return []; // never returns
+      },
+      apply: args => throwException(args[0]),
+    },
+  ],
+});
+
+defineBuiltin({
+  name: "throwAsCaller",
+  help: {
+    signatures: ["throwAsCaller(ME)"],
+    description:
+      "Throw an exception as if from the calling function. In numbl this is equivalent to throw(ME) — the throw site is not hidden from the stack.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        return []; // never returns
+      },
+      apply: args => throwException(args[0]),
+    },
+  ],
+});
+
+// ── getReport ────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "getReport",
+  help: {
+    signatures: ["S = getReport(ME)", "S = getReport(ME, TYPE)"],
+    description:
+      "Return a formatted error report for an MException-shaped struct as a char string. TYPE is 'basic' or 'extended' (default 'extended'). The 'extended' form appends stack frames if present.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 1 || argTypes.length > 4) return null;
+        return [{ kind: "char" }];
+      },
+      apply: args => {
+        const me = args[0];
+        if (!isRuntimeStruct(me)) {
+          return RTV.char(String(me));
+        }
+        const msgVal = me.fields.get("message");
+        const message = msgVal ? (textValue(msgVal) ?? String(msgVal)) : "";
+        let type = "extended";
+        if (args.length >= 2) {
+          const t = textValue(args[1]);
+          if (t === "basic" || t === "extended") type = t;
+        }
+        if (type === "basic") return RTV.char(message);
+        // Extended: append stack frames if present.
+        const stackVal = me.fields.get("stack");
+        const lines: string[] = [message];
+        const appendFrame = (frame: RuntimeValue) => {
+          if (!isRuntimeStruct(frame)) return;
+          const nameVal = frame.fields.get("name");
+          const lineVal = frame.fields.get("line");
+          const name = nameVal ? (textValue(nameVal) ?? "") : "";
+          const lineNum = typeof lineVal === "number" ? lineVal : 0;
+          if (name) lines.push(`Error in ${name} (line ${lineNum})`);
+        };
+        if (stackVal) {
+          if (isRuntimeStructArray(stackVal)) {
+            for (const el of stackVal.elements) appendFrame(el);
+          } else if (isRuntimeStruct(stackVal)) {
+            appendFrame(stackVal);
+          }
+        }
+        return RTV.char(lines.join("\n"));
       },
     },
   ],
