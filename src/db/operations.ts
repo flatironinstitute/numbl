@@ -55,7 +55,7 @@ export async function listProjects(): Promise<Project[]> {
     .orderBy("lastOpenedAt")
     .reverse()
     .toArray();
-  return projects.filter(p => p.name !== "__home__");
+  return projects.filter(p => p.name !== SYSTEM_PROJECT_NAME);
 }
 
 export async function deleteProject(name: string): Promise<void> {
@@ -207,27 +207,29 @@ export async function getProjectLastModified(
   return Math.max(...files.map(f => f.updatedAt));
 }
 
-// Home directory operations (shared across all projects)
+// System directory operations (shared across all projects)
 
-const HOME_PROJECT_NAME = "__home__";
+export const SYSTEM_PROJECT_NAME = "__system__";
 
-export async function getHomeFiles(): Promise<ProjectFile[]> {
+export async function getSystemFiles(): Promise<ProjectFile[]> {
   return await db.files
     .where("projectName")
-    .equals(HOME_PROJECT_NAME)
+    .equals(SYSTEM_PROJECT_NAME)
     .toArray();
 }
 
-export async function getHomeFileContents(): Promise<Map<string, Uint8Array>> {
-  return getAllFileContents(HOME_PROJECT_NAME);
+export async function getSystemFileContents(): Promise<
+  Map<string, Uint8Array>
+> {
+  return getAllFileContents(SYSTEM_PROJECT_NAME);
 }
 
-export async function ensureHomeProject(): Promise<void> {
-  const existing = await db.projects.get(HOME_PROJECT_NAME);
+export async function ensureSystemProject(): Promise<void> {
+  const existing = await db.projects.get(SYSTEM_PROJECT_NAME);
   if (!existing) {
     const now = Date.now();
     await db.projects.add({
-      name: HOME_PROJECT_NAME,
+      name: SYSTEM_PROJECT_NAME,
       createdAt: now,
       updatedAt: now,
       lastOpenedAt: now,

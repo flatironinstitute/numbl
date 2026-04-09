@@ -99,7 +99,7 @@ self.onmessage = (e: MessageEvent) => {
       },
       wsFiles,
       activeFileName,
-      [...(searchPaths ?? []), "~/.mip/packages/mip-org/core/mip/mip"]
+      [...(searchPaths ?? []), "/system/.mip/packages/mip-org/core/mip/mip"]
     );
 
     // Build a workspaceRep-like object for AST display

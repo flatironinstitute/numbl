@@ -66,6 +66,27 @@ export class NumblDatabase extends Dexie {
           delete f.data;
         });
       });
+
+    // v4: rename the shared __home__ project to __system__
+    this.version(4)
+      .stores({
+        projects: "name, lastOpenedAt",
+        files: "id, projectName, [projectName+path]",
+        fileContents: "id",
+      })
+      .upgrade(async tx => {
+        const projectsTable = tx.table("projects");
+        const filesTable = tx.table("files");
+        const oldProject = await projectsTable.get("__home__");
+        if (oldProject) {
+          await projectsTable.add({ ...oldProject, name: "__system__" });
+          await projectsTable.delete("__home__");
+        }
+        await filesTable
+          .where("projectName")
+          .equals("__home__")
+          .modify({ projectName: "__system__" });
+      });
   }
 }
 

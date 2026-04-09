@@ -34,12 +34,6 @@ export class VirtualFileSystem {
 
   /** Normalize a path to absolute form. */
   normalizePath(p: string): string {
-    // Expand ~ to /home
-    if (p === "~") {
-      p = "/home";
-    } else if (p.startsWith("~/")) {
-      p = "/home/" + p.slice(2);
-    }
     // Make absolute
     if (!p.startsWith("/")) {
       p = this.cwd + "/" + p;
@@ -83,9 +77,12 @@ export class VirtualFileSystem {
 
     // Track changes
     if (this.deletedFiles.has(norm)) {
-      // Was deleted earlier, now re-created
+      // Was deleted earlier in this session and is now being re-created.
+      // Since deletedFiles only ever contains originally-present paths
+      // (deleteFile removes session-created paths outright), this is a
+      // modification of an originally-present file, not a new creation.
       this.deletedFiles.delete(norm);
-      this.createdFiles.add(norm);
+      this.modifiedFiles.add(norm);
     } else if (!existed) {
       this.createdFiles.add(norm);
     } else if (!this.createdFiles.has(norm)) {

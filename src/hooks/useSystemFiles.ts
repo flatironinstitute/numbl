@@ -1,27 +1,27 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { db } from "../db/schema";
 import {
-  ensureHomeProject,
-  getHomeFiles,
+  ensureSystemProject,
+  getSystemFiles,
   getFileContent,
-  getHomeFileContents,
+  getSystemFileContents,
   saveFileData,
+  SYSTEM_PROJECT_NAME,
 } from "../db/operations";
 import type { WorkspaceFile } from "./useProjectFiles";
 
-const HOME_PROJECT_NAME = "__home__";
-const HOME_PREFIX = "~/";
+const SYSTEM_PREFIX = "system/";
 
-export function useHomeFiles() {
-  const [homeFiles, setHomeFiles] = useState<WorkspaceFile[]>([]);
+export function useSystemFiles() {
+  const [systemFiles, setSystemFiles] = useState<WorkspaceFile[]>([]);
   const contentCacheRef = useRef(new Map<string, Uint8Array>());
 
-  const loadHomeFiles = useCallback(async () => {
-    const files = await getHomeFiles();
-    setHomeFiles(
+  const loadSystemFiles = useCallback(async () => {
+    const files = await getSystemFiles();
+    setSystemFiles(
       files.map(f => ({
         id: f.id,
-        name: HOME_PREFIX + f.path,
+        name: SYSTEM_PREFIX + f.path,
       }))
     );
   }, []);
@@ -29,8 +29,8 @@ export function useHomeFiles() {
   useEffect(() => {
     // Initial async load from IndexedDB — setState is called after await, not synchronously
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadHomeFiles();
-  }, [loadHomeFiles]);
+    loadSystemFiles();
+  }, [loadSystemFiles]);
 
   const loadFileContent = useCallback(
     async (fileId: string): Promise<Uint8Array> => {
@@ -43,11 +43,11 @@ export function useHomeFiles() {
     []
   );
 
-  /** Load all home file contents from DB. Used before code execution. */
-  const loadAllHomeContents = useCallback(async (): Promise<
+  /** Load all system file contents from DB. Used before code execution. */
+  const loadAllSystemContents = useCallback(async (): Promise<
     Map<string, Uint8Array>
   > => {
-    const map = await getHomeFileContents();
+    const map = await getSystemFileContents();
     for (const [id, data] of map) {
       contentCacheRef.current.set(id, data);
     }
@@ -55,27 +55,27 @@ export function useHomeFiles() {
   }, []);
 
   /** Build VFS files for workers. Loads all content from DB. */
-  const getHomeVfsFiles = useCallback(async (): Promise<
+  const getSystemVfsFiles = useCallback(async (): Promise<
     { path: string; content: Uint8Array }[]
   > => {
-    const contentsMap = await loadAllHomeContents();
-    return homeFiles.map(f => ({
-      path: "/home/" + f.name.slice(HOME_PREFIX.length),
+    const contentsMap = await loadAllSystemContents();
+    return systemFiles.map(f => ({
+      path: "/system/" + f.name.slice(SYSTEM_PREFIX.length),
       content: contentsMap.get(f.id) ?? new Uint8Array(0),
     }));
-  }, [homeFiles, loadAllHomeContents]);
+  }, [systemFiles, loadAllSystemContents]);
 
   /** Build workspace files (text) for workers. Loads all content from DB. */
-  const getHomeWorkspaceFiles = useCallback(async (): Promise<
+  const getSystemWorkspaceFiles = useCallback(async (): Promise<
     { name: string; source: string }[]
   > => {
     const decoder = new TextDecoder("utf-8");
-    const contentsMap = await loadAllHomeContents();
-    return homeFiles.map(f => ({
+    const contentsMap = await loadAllSystemContents();
+    return systemFiles.map(f => ({
       name: f.name,
       source: decoder.decode(contentsMap.get(f.id) ?? new Uint8Array(0)),
     }));
-  }, [homeFiles, loadAllHomeContents]);
+  }, [systemFiles, loadAllSystemContents]);
 
   const updateFileContent = useCallback(
     async (fileId: string, data: Uint8Array) => {
@@ -87,13 +87,13 @@ export function useHomeFiles() {
 
   const addFile = useCallback(
     async (folderPath?: string): Promise<string> => {
-      await ensureHomeProject();
-      const homeFolder = folderPath?.startsWith(HOME_PREFIX)
-        ? folderPath.slice(HOME_PREFIX.length)
+      await ensureSystemProject();
+      const systemFolder = folderPath?.startsWith(SYSTEM_PREFIX)
+        ? folderPath.slice(SYSTEM_PREFIX.length)
         : folderPath;
 
-      const baseName = generateUniqueName(homeFiles, folderPath);
-      const name = homeFolder ? `${homeFolder}/${baseName}` : baseName;
+      const baseName = generateUniqueName(systemFiles, folderPath);
+      const name = systemFolder ? `${systemFolder}/${baseName}` : baseName;
       const now = Date.now();
       const id = crypto.randomUUID();
       const data = new Uint8Array(0);
@@ -101,7 +101,7 @@ export function useHomeFiles() {
       await db.transaction("rw", db.files, db.fileContents, async () => {
         await db.files.add({
           id,
-          projectName: HOME_PROJECT_NAME,
+          projectName: SYSTEM_PROJECT_NAME,
           path: name,
           createdAt: now,
           updatedAt: now,
@@ -110,22 +110,27 @@ export function useHomeFiles() {
       });
 
       contentCacheRef.current.set(id, data);
-      setHomeFiles(prev => [...prev, { id, name: HOME_PREFIX + name }]);
+      setSystemFiles(prev => [...prev, { id, name: SYSTEM_PREFIX + name }]);
       return id;
     },
-    [homeFiles]
+    [systemFiles]
   );
 
   const addFolder = useCallback(
     async (parentPath?: string): Promise<string> => {
-      await ensureHomeProject();
-      const homeParent = parentPath?.startsWith(HOME_PREFIX)
-        ? parentPath.slice(HOME_PREFIX.length)
+      await ensureSystemProject();
+      const systemParent = parentPath?.startsWith(SYSTEM_PREFIX)
+        ? parentPath.slice(SYSTEM_PREFIX.length)
         : parentPath;
 
-      const folderName = generateUniqueFolderName(homeFiles, parentPath);
-      const fullPath = homeParent ? `${homeParent}/${folderName}` : folderName;
-      const fileName = generateUniqueName(homeFiles, HOME_PREFIX + fullPath);
+      const folderName = generateUniqueFolderName(systemFiles, parentPath);
+      const fullPath = systemParent
+        ? `${systemParent}/${folderName}`
+        : folderName;
+      const fileName = generateUniqueName(
+        systemFiles,
+        SYSTEM_PREFIX + fullPath
+      );
       const name = `${fullPath}/${fileName}`;
       const now = Date.now();
       const id = crypto.randomUUID();
@@ -134,7 +139,7 @@ export function useHomeFiles() {
       await db.transaction("rw", db.files, db.fileContents, async () => {
         await db.files.add({
           id,
-          projectName: HOME_PROJECT_NAME,
+          projectName: SYSTEM_PROJECT_NAME,
           path: name,
           createdAt: now,
           updatedAt: now,
@@ -143,10 +148,10 @@ export function useHomeFiles() {
       });
 
       contentCacheRef.current.set(id, data);
-      setHomeFiles(prev => [...prev, { id, name: HOME_PREFIX + name }]);
-      return HOME_PREFIX + fullPath;
+      setSystemFiles(prev => [...prev, { id, name: SYSTEM_PREFIX + name }]);
+      return SYSTEM_PREFIX + fullPath;
     },
-    [homeFiles]
+    [systemFiles]
   );
 
   const deleteFile = useCallback(async (fileId: string) => {
@@ -155,12 +160,12 @@ export function useHomeFiles() {
       await db.fileContents.delete(fileId);
     });
     contentCacheRef.current.delete(fileId);
-    setHomeFiles(prev => prev.filter(f => f.id !== fileId));
+    setSystemFiles(prev => prev.filter(f => f.id !== fileId));
   }, []);
 
   const deleteFolder = useCallback(
     async (folderPath: string) => {
-      const filesToDelete = homeFiles.filter(f =>
+      const filesToDelete = systemFiles.filter(f =>
         f.name.startsWith(folderPath + "/")
       );
       await db.transaction("rw", db.files, db.fileContents, async () => {
@@ -172,19 +177,19 @@ export function useHomeFiles() {
       for (const f of filesToDelete) {
         contentCacheRef.current.delete(f.id);
       }
-      setHomeFiles(prev =>
+      setSystemFiles(prev =>
         prev.filter(f => !f.name.startsWith(folderPath + "/"))
       );
     },
-    [homeFiles]
+    [systemFiles]
   );
 
   const renameFile = useCallback(async (fileId: string, newName: string) => {
-    const homePath = newName.startsWith(HOME_PREFIX)
-      ? newName.slice(HOME_PREFIX.length)
+    const systemPath = newName.startsWith(SYSTEM_PREFIX)
+      ? newName.slice(SYSTEM_PREFIX.length)
       : newName;
-    await db.files.update(fileId, { path: homePath, updatedAt: Date.now() });
-    setHomeFiles(prev =>
+    await db.files.update(fileId, { path: systemPath, updatedAt: Date.now() });
+    setSystemFiles(prev =>
       prev.map(f => (f.id === fileId ? { ...f, name: newName } : f))
     );
   }, []);
@@ -195,22 +200,22 @@ export function useHomeFiles() {
       parts[parts.length - 1] = newName;
       const newPath = parts.join("/");
 
-      const filesToUpdate = homeFiles.filter(f =>
+      const filesToUpdate = systemFiles.filter(f =>
         f.name.startsWith(oldPath + "/")
       );
       await Promise.all(
         filesToUpdate.map(f => {
           const newFilePath = newPath + f.name.slice(oldPath.length);
-          const homePath = newFilePath.startsWith(HOME_PREFIX)
-            ? newFilePath.slice(HOME_PREFIX.length)
+          const systemPath = newFilePath.startsWith(SYSTEM_PREFIX)
+            ? newFilePath.slice(SYSTEM_PREFIX.length)
             : newFilePath;
           return db.files.update(f.id, {
-            path: homePath,
+            path: systemPath,
             updatedAt: Date.now(),
           });
         })
       );
-      setHomeFiles(prev =>
+      setSystemFiles(prev =>
         prev.map(f => {
           if (f.name.startsWith(oldPath + "/")) {
             return { ...f, name: newPath + f.name.slice(oldPath.length) };
@@ -219,44 +224,47 @@ export function useHomeFiles() {
         })
       );
     },
-    [homeFiles]
+    [systemFiles]
   );
 
   const moveFile = useCallback(
     async (fileId: string, targetFolder: string | null) => {
-      const file = homeFiles.find(f => f.id === fileId);
+      const file = systemFiles.find(f => f.id === fileId);
       if (!file) return;
       const parts = file.name.split("/");
       const baseName = parts[parts.length - 1];
       const newName = targetFolder ? `${targetFolder}/${baseName}` : baseName;
       if (newName === file.name) return;
-      const homePath = newName.startsWith(HOME_PREFIX)
-        ? newName.slice(HOME_PREFIX.length)
+      const systemPath = newName.startsWith(SYSTEM_PREFIX)
+        ? newName.slice(SYSTEM_PREFIX.length)
         : newName;
-      await db.files.update(fileId, { path: homePath, updatedAt: Date.now() });
-      setHomeFiles(prev =>
+      await db.files.update(fileId, {
+        path: systemPath,
+        updatedAt: Date.now(),
+      });
+      setSystemFiles(prev =>
         prev.map(f => (f.id === fileId ? { ...f, name: newName } : f))
       );
     },
-    [homeFiles]
+    [systemFiles]
   );
 
   return {
-    homeFiles,
-    reloadHomeFiles: loadHomeFiles,
-    updateHomeFileContent: updateFileContent,
-    addHomeFile: addFile,
-    addHomeFolder: addFolder,
-    deleteHomeFile: deleteFile,
-    deleteHomeFolder: deleteFolder,
-    renameHomeFile: renameFile,
-    renameHomeFolder: renameFolder,
-    moveHomeFile: moveFile,
-    loadHomeFileContent: loadFileContent,
-    loadAllHomeContents,
-    getHomeVfsFiles,
-    getHomeWorkspaceFiles,
-    homeContentCache: contentCacheRef,
+    systemFiles,
+    reloadSystemFiles: loadSystemFiles,
+    updateSystemFileContent: updateFileContent,
+    addSystemFile: addFile,
+    addSystemFolder: addFolder,
+    deleteSystemFile: deleteFile,
+    deleteSystemFolder: deleteFolder,
+    renameSystemFile: renameFile,
+    renameSystemFolder: renameFolder,
+    moveSystemFile: moveFile,
+    loadSystemFileContent: loadFileContent,
+    loadAllSystemContents,
+    getSystemVfsFiles,
+    getSystemWorkspaceFiles,
+    systemContentCache: contentCacheRef,
   };
 }
 
