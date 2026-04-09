@@ -1,13 +1,25 @@
 import { useEffect } from "react";
 import { db } from "../db/schema.js";
-import { ensureSystemProject, SYSTEM_PROJECT_NAME } from "../db/operations.js";
+import {
+  clearSystemFiles,
+  ensureSystemProject,
+  SYSTEM_PROJECT_NAME,
+} from "../db/operations.js";
 import { fetchMipCoreFiles } from "./fetchMipCoreFiles.js";
 
 const MIP_SYSTEM_PREFIX = ".mip/packages/mip-org/core/mip/";
 
+// Periodically wipe the system directory so that any stale or extra packages
+// installed via mip commands don't accumulate or leave the user in a broken
+// state. The mip core package is reinstalled immediately after.
+const SYSTEM_CLEAR_INTERVAL_MS = 10 * 60 * 1000;
+const SYSTEM_LAST_CLEARED_KEY = "numbl:systemLastCleared";
+
 /**
- * On mount, fetches the mip core package, unzips it, and writes the files into
- * IndexedDB under the __system__ project at .mip/packages/mip-org/core/mip/,
+ * On mount: if more than SYSTEM_CLEAR_INTERVAL_MS has elapsed since the last
+ * clear (tracked in localStorage), wipe every file under the __system__
+ * project. Then fetch the mip core package, unzip it, and write the files
+ * into IndexedDB under the __system__ project at .mip/packages/mip-org/core/mip/,
  * overwriting any previous contents. Calls onInstalled() when done so the
  * caller can reload system files.
  */
@@ -16,6 +28,20 @@ export function useMipCorePackage(onInstalled: () => void): void {
     let cancelled = false;
     (async () => {
       try {
+        // Periodic clear: must run before installing the mip package so that
+        // we always end the load with a fresh, minimal system directory.
+        const lastClearedStr = localStorage.getItem(SYSTEM_LAST_CLEARED_KEY);
+        const lastCleared = lastClearedStr ? parseInt(lastClearedStr, 10) : 0;
+        const nowMs = Date.now();
+        if (
+          !Number.isFinite(lastCleared) ||
+          nowMs - lastCleared > SYSTEM_CLEAR_INTERVAL_MS
+        ) {
+          await clearSystemFiles();
+          localStorage.setItem(SYSTEM_LAST_CLEARED_KEY, String(nowMs));
+        }
+        if (cancelled) return;
+
         const vfsFiles = await fetchMipCoreFiles();
         if (cancelled) return;
 
