@@ -236,3 +236,16 @@ export async function ensureSystemProject(): Promise<void> {
     });
   }
 }
+
+/** Delete every file (and its content) under the system project. */
+export async function clearSystemFiles(): Promise<void> {
+  await db.transaction("rw", db.files, db.fileContents, async () => {
+    const fileIds = await db.files
+      .where("projectName")
+      .equals(SYSTEM_PROJECT_NAME)
+      .primaryKeys();
+    if (fileIds.length === 0) return;
+    await db.fileContents.bulkDelete(fileIds);
+    await db.files.bulkDelete(fileIds);
+  });
+}
