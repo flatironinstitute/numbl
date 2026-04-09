@@ -13,11 +13,14 @@ import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { Runtime } from "./runtime/runtime.js";
 import { RTV } from "./runtime/constructors.js";
 import { RuntimeError } from "../numbl-core/runtime/index.js";
-import { loadJsUserFunctions } from "./jsUserFunctions.js";
 import {
-  registerDynamicIBuiltin,
-  unregisterIBuiltin,
+  loadJsUserFunctions,
+  isNumblJsFile,
+  type LoadedJsUserFunction,
+} from "./jsUserFunctions.js";
+import {
   getIBuiltin,
+  registerDynamicIBuiltin,
 } from "./interpreter/builtins/types.js";
 import type { IBuiltin } from "./interpreter/builtins/types.js";
 import type { NativeBridge } from "./workspace/index.js";
@@ -26,7 +29,10 @@ import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
-import { jitHelpers } from "./interpreter/jit/jitHelpers.js";
+import {
+  jitHelpers,
+  buildPerRuntimeJitHelpers,
+} from "./interpreter/jit/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 
@@ -148,7 +154,7 @@ export function executeCode(
   // ── 2. Set up LoweringContext for resolution ────────────────────────
   const ctx = new LoweringContext(source, mainFileName);
 
-  // Separate .m workspace files from .js/.wasm
+  // Separate .m workspace files from .numbl.js / .wasm
   const mWorkspaceFiles: WorkspaceFile[] = [];
   const jsWorkspaceFiles: WorkspaceFile[] = [];
   const wasmWorkspaceFiles: WorkspaceFile[] = [];
@@ -156,7 +162,7 @@ export function executeCode(
     for (const f of workspaceFiles) {
       if (f.name.endsWith(".m")) {
         mWorkspaceFiles.push(f);
-      } else if (f.name.endsWith(".js")) {
+      } else if (isNumblJsFile(f.name)) {
         jsWorkspaceFiles.push(f);
       } else if (f.name.endsWith(".wasm")) {
         wasmWorkspaceFiles.push(f);
@@ -165,10 +171,10 @@ export function executeCode(
   }
 
   // ── Implicit cwd as first-priority search path (MATLAB semantics) ──
-  // The implicit cwd scan only collects .m files. Loading arbitrary .js
-  // files from cwd would be too aggressive (e.g. eslint.config.js in a
-  // project root would be misinterpreted as a numbl user function); .js
-  // user functions remain explicit via `addpath`.
+  // Scans both .m and .numbl.js files from cwd. The .numbl.js extension is
+  // unambiguous (no plain .js file would ever be a numbl user function),
+  // so cwd auto-discovery is safe — eslint.config.js / vite.config.js / etc.
+  // are never picked up.
   let implicitCwdPath: string | null = null;
   if (
     options.implicitCwdPath !== null &&
@@ -193,6 +199,8 @@ export function executeCode(
           for (const f of cwdFiles) {
             if (f.name.endsWith(".m")) {
               mWorkspaceFiles.push(f);
+            } else if (isNumblJsFile(f.name)) {
+              jsWorkspaceFiles.push(f);
             }
           }
         }
@@ -203,13 +211,12 @@ export function executeCode(
     }
   }
 
-  // Load .js user functions
-  const jsUserFunctions = loadJsUserFunctions(
+  // Load .numbl.js user functions
+  const jsUserFunctions: LoadedJsUserFunction[] = loadJsUserFunctions(
     jsWorkspaceFiles,
     wasmWorkspaceFiles,
     nativeBridge
   );
-  const jsUserFunctionNames = jsUserFunctions.map(ib => ib.name);
 
   // Add stdlib and shim files (track names for filtering in ExecResult)
   const stdlibShimNames = new Set<string>();
@@ -271,8 +278,14 @@ export function executeCode(
     ctx.registerWorkspaceFiles(mWorkspaceFiles);
   }
 
+  // Register .numbl.js user functions on the per-context registry. They are
+  // resolved at workspace priority (after .m, before native builtins).
+  for (const entry of jsUserFunctions) {
+    ctx.registerJsUserFunction(entry.name, entry.fileName, entry.builtin);
+  }
+
   // Build function index (enables definitive resolution)
-  const functionIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
+  const functionIndex = ctx.buildFunctionIndex();
 
   // ── 3. Create runtime ──────────────────────────────────────────────
   // Save the existing dynamic IBuiltin entries for SPECIAL_BUILTIN_NAMES
@@ -290,13 +303,15 @@ export function executeCode(
 
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Register .js user functions as IBuiltins (save originals for cleanup)
-  const savedIBuiltins = new Map<string, IBuiltin>();
-  for (const ib of jsUserFunctions) {
-    const orig = getIBuiltin(ib.name);
-    if (orig) savedIBuiltins.set(ib.name, orig);
-    registerDynamicIBuiltin(ib);
+  // Build the per-runtime jitHelpers ($h) snapshot. This must happen AFTER
+  // Runtime construction so it captures the special-builtin closures bound
+  // to *this* rt, and AFTER js user functions are loaded so their ib_*
+  // entries are present.
+  const jsBuiltinMap = new Map<string, IBuiltin>();
+  for (const [n, e] of ctx.registry.jsUserFunctionsByName.entries()) {
+    jsBuiltinMap.set(n, e.builtin);
   }
+  rt.jitHelpers = buildPerRuntimeJitHelpers(jsBuiltinMap);
 
   // Apply custom builtins (both to rt.builtins fallback and to customBuiltins
   // which take priority over IBuiltins in the interpreter)
@@ -348,6 +363,20 @@ export function executeCode(
   // Track whether paths were modified during execution
   let pathsModified = false;
 
+  // All loaded .numbl.js user function records currently in scope. Mutated
+  // by addpath/rmpath/cd handlers below; sorted by search-path priority on
+  // rebuild so first-wins matches `mWorkspaceFiles` semantics.
+  const loadedJsUserFunctions: LoadedJsUserFunction[] = [...jsUserFunctions];
+
+  /** Rebuild rt.jitHelpers from the current jsUserFunctionsByName registry. */
+  const rebuildJitHelpers = () => {
+    const map = new Map<string, IBuiltin>();
+    for (const [n, e] of ctx.registry.jsUserFunctionsByName.entries()) {
+      map.set(n, e.builtin);
+    }
+    rt.jitHelpers = buildPerRuntimeJitHelpers(map);
+  };
+
   // Shared rebuild logic used by both onPathChange and onCwdChange.
   // Re-sorts mWorkspaceFiles by search path order, then re-registers
   // and rebuilds the function index.
@@ -373,12 +402,19 @@ export function executeCode(
       return bestIdx;
     };
     mWorkspaceFiles.sort((a, b) => priorityOf(a.name) - priorityOf(b.name));
+    loadedJsUserFunctions.sort(
+      (a, b) => priorityOf(a.fileName) - priorityOf(b.fileName)
+    );
 
     ctx.clearWorkspaceRegistrations();
     ctx.registerWorkspaceFiles(mWorkspaceFiles);
-    const newIndex = ctx.buildFunctionIndex(jsUserFunctionNames);
+    for (const entry of loadedJsUserFunctions) {
+      ctx.registerJsUserFunction(entry.name, entry.fileName, entry.builtin);
+    }
+    const newIndex = ctx.buildFunctionIndex();
     interpreter.functionIndex = newIndex;
     interpreter.clearAllCaches();
+    rebuildJitHelpers();
     pathsModified = true;
   };
 
@@ -434,25 +470,43 @@ export function executeCode(
             }
             interpreter.fileSources.set(f.name, f.source);
             mWorkspaceFiles.push(f);
-          } else if (f.name.endsWith(".js")) {
+          } else if (isNumblJsFile(f.name)) {
+            // Always include in newJsFiles so the loader runs again. The
+            // initial workspaceFiles may have provided this .numbl.js
+            // without proper wasm/native binary data (e.g. the IDE sends
+            // text-only file blobs); a fresh scanDirectory load typically
+            // provides those binaries, and we want the new IBuiltin to
+            // replace the old one.
             newJsFiles.push(f);
+            if (!jsWorkspaceFiles.some(e => e.name === f.name)) {
+              jsWorkspaceFiles.push(f);
+            }
           } else if (f.name.endsWith(".wasm")) {
             newWasmFiles.push(f);
+            if (!wasmWorkspaceFiles.some(e => e.name === f.name)) {
+              wasmWorkspaceFiles.push(f);
+            }
           }
         }
-        // Load any new .js/.wasm user functions
+        // Load any new .numbl.js user functions and append to the active
+        // list. Sorting by search-path priority happens in rebuildWorkspace.
         if (newJsFiles.length > 0) {
-          const newIBuiltins = loadJsUserFunctions(
+          const loaded = loadJsUserFunctions(
             newJsFiles,
             newWasmFiles,
             nativeBridge
           );
-          for (const ib of newIBuiltins) {
-            const orig = getIBuiltin(ib.name);
-            if (orig) savedIBuiltins.set(ib.name, orig);
-            registerDynamicIBuiltin(ib);
-            if (!jsUserFunctionNames.includes(ib.name)) {
-              jsUserFunctionNames.push(ib.name);
+          for (const entry of loaded) {
+            // Replace any prior load of this file path so the most recent
+            // (best-bound) version is what subsequent rebuildWorkspace
+            // calls register.
+            const existingIdx = loadedJsUserFunctions.findIndex(
+              e => e.fileName === entry.fileName
+            );
+            if (existingIdx >= 0) {
+              loadedJsUserFunctions[existingIdx] = entry;
+            } else {
+              loadedJsUserFunctions.push(entry);
             }
           }
         }
@@ -470,6 +524,22 @@ export function executeCode(
           ctx.fileASTCache.delete(mWorkspaceFiles[i].name);
           interpreter.fileSources.delete(mWorkspaceFiles[i].name);
           mWorkspaceFiles.splice(i, 1);
+        }
+      }
+      // Remove .numbl.js user functions and source files belonging to this path
+      for (let i = loadedJsUserFunctions.length - 1; i >= 0; i--) {
+        if (loadedJsUserFunctions[i].fileName.startsWith(prefix)) {
+          loadedJsUserFunctions.splice(i, 1);
+        }
+      }
+      for (let i = jsWorkspaceFiles.length - 1; i >= 0; i--) {
+        if (jsWorkspaceFiles[i].name.startsWith(prefix)) {
+          jsWorkspaceFiles.splice(i, 1);
+        }
+      }
+      for (let i = wasmWorkspaceFiles.length - 1; i >= 0; i--) {
+        if (wasmWorkspaceFiles[i].name.startsWith(prefix)) {
+          wasmWorkspaceFiles.splice(i, 1);
         }
       }
     }
@@ -521,6 +591,34 @@ export function executeCode(
           mWorkspaceFiles.splice(i, 1);
         }
       }
+      // Same logic for .numbl.js user functions in the old implicit cwd.
+      for (let i = loadedJsUserFunctions.length - 1; i >= 0; i--) {
+        const fname = loadedJsUserFunctions[i].fileName;
+        if (
+          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
+          !fileBelongsToDeeperPath(fname)
+        ) {
+          loadedJsUserFunctions.splice(i, 1);
+        }
+      }
+      for (let i = jsWorkspaceFiles.length - 1; i >= 0; i--) {
+        const fname = jsWorkspaceFiles[i].name;
+        if (
+          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
+          !fileBelongsToDeeperPath(fname)
+        ) {
+          jsWorkspaceFiles.splice(i, 1);
+        }
+      }
+      for (let i = wasmWorkspaceFiles.length - 1; i >= 0; i--) {
+        const fname = wasmWorkspaceFiles[i].name;
+        if (
+          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
+          !fileBelongsToDeeperPath(fname)
+        ) {
+          wasmWorkspaceFiles.splice(i, 1);
+        }
+      }
       const oldIdx = ctx.registry.searchPaths.indexOf(implicitCwdPath);
       if (oldIdx >= 0) ctx.registry.searchPaths.splice(oldIdx, 1);
       implicitCwdPath = null;
@@ -537,10 +635,7 @@ export function executeCode(
     ctx.registry.searchPaths.unshift(absNewCwd);
     implicitCwdPath = absNewCwd;
 
-    // Scan and parse .m files in the new cwd. As with the initial setup,
-    // .js/.wasm files from the implicit cwd are NOT auto-loaded — that
-    // remains an explicit `addpath` opt-in to avoid misinterpreting random
-    // .js files (e.g. eslint configs) as numbl user functions.
+    // Scan and parse .m and .numbl.js files in the new cwd.
     if (fileIO?.scanDirectory) {
       let newFiles: WorkspaceFile[] = [];
       try {
@@ -548,6 +643,8 @@ export function executeCode(
       } catch {
         // cwd inaccessible — leave the entry but skip scanning
       }
+      const newJsFiles: WorkspaceFile[] = [];
+      const newWasmFiles: WorkspaceFile[] = [];
       for (const f of newFiles) {
         if (f.name.endsWith(".m") && !ctx.fileASTCache.has(f.name)) {
           try {
@@ -566,6 +663,34 @@ export function executeCode(
           }
           interpreter.fileSources.set(f.name, f.source);
           mWorkspaceFiles.push(f);
+        } else if (isNumblJsFile(f.name)) {
+          // Always re-load on cwd change — see addpath handler comment.
+          newJsFiles.push(f);
+          if (!jsWorkspaceFiles.some(e => e.name === f.name)) {
+            jsWorkspaceFiles.push(f);
+          }
+        } else if (f.name.endsWith(".wasm")) {
+          newWasmFiles.push(f);
+          if (!wasmWorkspaceFiles.some(e => e.name === f.name)) {
+            wasmWorkspaceFiles.push(f);
+          }
+        }
+      }
+      if (newJsFiles.length > 0) {
+        const loaded = loadJsUserFunctions(
+          newJsFiles,
+          newWasmFiles,
+          nativeBridge
+        );
+        for (const entry of loaded) {
+          const existingIdx = loadedJsUserFunctions.findIndex(
+            e => e.fileName === entry.fileName
+          );
+          if (existingIdx >= 0) {
+            loadedJsUserFunctions[existingIdx] = entry;
+          } else {
+            loadedJsUserFunctions.push(entry);
+          }
         }
       }
     }
@@ -584,9 +709,11 @@ export function executeCode(
     const nestedSearchPaths = ctx.registry.searchPaths.filter(
       p => p !== SHIM_SEARCH_PATH && p !== implicitCwdPath
     );
-    const nestedWorkspaceFiles = mWorkspaceFiles.filter(
-      f => !stdlibShimNames.has(f.name)
-    );
+    const nestedWorkspaceFiles: WorkspaceFile[] = [
+      ...mWorkspaceFiles.filter(f => !stdlibShimNames.has(f.name)),
+      ...jsWorkspaceFiles,
+      ...wasmWorkspaceFiles,
+    ];
     const evalResult = executeCode(
       code,
       {
@@ -649,9 +776,11 @@ export function executeCode(
       result.searchPaths = ctx.registry.searchPaths.filter(
         p => p !== SHIM_SEARCH_PATH && p !== implicitCwdPath
       );
-      result.workspaceFiles = mWorkspaceFiles.filter(
-        f => !stdlibShimNames.has(f.name)
-      );
+      result.workspaceFiles = [
+        ...mWorkspaceFiles.filter(f => !stdlibShimNames.has(f.name)),
+        ...jsWorkspaceFiles,
+        ...wasmWorkspaceFiles,
+      ];
     }
     // Always propagate the implicit cwd so REPL callers can persist it
     // across commands (cd inside one command should affect the next).
@@ -689,15 +818,6 @@ export function executeCode(
         Function.prototype;
       (jitHelpers as Record<string, unknown>)._profileLeave =
         Function.prototype;
-    }
-    // Restore or unregister .js user function IBuiltins
-    for (const ib of jsUserFunctions) {
-      const orig = savedIBuiltins.get(ib.name);
-      if (orig) {
-        registerDynamicIBuiltin(orig);
-      } else {
-        unregisterIBuiltin(ib.name);
-      }
     }
     // Restore the parent runtime's special-builtin registrations. Our
     // Runtime constructor replaced these with closures over our rt; the

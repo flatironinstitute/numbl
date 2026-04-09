@@ -481,8 +481,10 @@ function lowerMultiAssign(
   const loweredArgs = args as JitExpr[];
   const argJitTypes = loweredArgs.map(a => a.jitType);
 
-  // Try IBuiltin resolution with actual nargout
-  const ib = getIBuiltin(rhs.name);
+  // Try IBuiltin resolution with actual nargout. Per-context JS user
+  // functions (.numbl.js) take priority over native builtins.
+  const jsEntry = ctx.interp?.ctx.registry.jsUserFunctionsByName.get(rhs.name);
+  const ib = jsEntry?.builtin ?? getIBuiltin(rhs.name);
   if (!ib) return null; // user function multi-output not yet supported
 
   const resolution = ib.resolve(argJitTypes, nargout);
@@ -1067,6 +1069,10 @@ function resolveUserFunction(
     return interp.findFunctionInWorkspaceFile(target.name, primaryName);
   }
 
+  // jsUserFunction targets are handled by lowerIBuiltinCall (they implement
+  // the IBuiltin interface), so this resolver returns null and the caller
+  // falls through to the IBuiltin path.
+
   // Other target kinds (privateFunction, workspaceClassConstructor, etc.) not supported yet
   return null;
 }
@@ -1077,7 +1083,10 @@ function lowerIBuiltinCall(
   ctx: LowerCtx,
   expr: Expr & { type: "FuncCall" }
 ): JitExpr | null {
-  const ib = getIBuiltin(expr.name);
+  // Per-context JS user functions (.numbl.js) take priority over native
+  // builtins so a .numbl.js file can shadow a builtin of the same name.
+  const jsEntry = ctx.interp?.ctx.registry.jsUserFunctionsByName.get(expr.name);
+  const ib = jsEntry?.builtin ?? getIBuiltin(expr.name);
   if (!ib) return null;
 
   const args = expr.args.map(a => lowerExpr(ctx, a));

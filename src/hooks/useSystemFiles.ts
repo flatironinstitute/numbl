@@ -72,16 +72,26 @@ export function useSystemFiles() {
    * `getRelativePath` in the lowering context can't strip the search-path
    * prefix and the mip files get treated as deeply-nested non-namespace
    * files and dropped.
+   *
+   * Only .m files are included. Binary blobs (.wasm) and .numbl.js mex-like
+   * files are NOT included here — they reach the worker via getSystemVfsFiles
+   * and are then discovered through scanDirectory when their package is
+   * addpath'd. Including binary files here would silently UTF-8-decode them
+   * to garbage, and including .numbl.js here would cause the loader to
+   * register them with wasm/native bindings unresolved (because the .wasm
+   * binary isn't accessible through the text-only workspaceFiles channel).
    */
   const getSystemWorkspaceFiles = useCallback(async (): Promise<
     { name: string; source: string }[]
   > => {
     const decoder = new TextDecoder("utf-8");
     const contentsMap = await loadAllSystemContents();
-    return systemFiles.map(f => ({
-      name: "/system/" + f.name.slice(SYSTEM_PREFIX.length),
-      source: decoder.decode(contentsMap.get(f.id) ?? new Uint8Array(0)),
-    }));
+    return systemFiles
+      .filter(f => f.name.endsWith(".m"))
+      .map(f => ({
+        name: "/system/" + f.name.slice(SYSTEM_PREFIX.length),
+        source: decoder.decode(contentsMap.get(f.id) ?? new Uint8Array(0)),
+      }));
   }, [systemFiles, loadAllSystemContents]);
 
   const updateFileContent = useCallback(

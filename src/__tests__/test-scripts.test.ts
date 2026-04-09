@@ -41,7 +41,7 @@ function scanMFiles(dirPath: string, excludeFile?: string): WorkspaceFile[] {
         }
       } else if (
         stat.isFile() &&
-        (entry.endsWith(".m") || entry.endsWith(".js"))
+        (entry.endsWith(".m") || entry.endsWith(".numbl.js"))
       ) {
         files.push({ name: fullPath, source: readFileSync(fullPath, "utf-8") });
       } else if (stat.isFile() && entry.endsWith(".wasm")) {

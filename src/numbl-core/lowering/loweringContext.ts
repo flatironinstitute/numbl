@@ -9,6 +9,7 @@ import { type AbstractSyntaxTree, type Stmt } from "../parser/index.js";
 import { BUILTIN_CONSTANTS } from "../lowering/constants.js";
 import { getAllBuiltinNames } from "../helpers/registry.js";
 import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
+import type { IBuiltin } from "../interpreter/builtins/index.js";
 import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import { type ClassInfo, extractClassInfo } from "./classInfo.js";
@@ -28,6 +29,8 @@ export type FileASTCache = Map<string, AbstractSyntaxTree>;
 interface WorkspaceRegistry {
   /** Raw workspace files: functionName → { fileName, source } */
   filesByFuncName: Map<string, { fileName: string; source: string }>;
+  /** JS user functions (.numbl.js): functionName → { fileName, builtin } */
+  jsUserFunctionsByName: Map<string, { fileName: string; builtin: IBuiltin }>;
   /** Per-workspace-file lowering contexts (created on demand) */
   fileContexts: Map<string, LoweringContext>;
   /** Workspace classes: qualifiedName → ClassInfo */
@@ -54,6 +57,7 @@ interface WorkspaceRegistry {
 function createWorkspaceRegistry(): WorkspaceRegistry {
   return {
     filesByFuncName: new Map(),
+    jsUserFunctionsByName: new Map(),
     fileContexts: new Map(),
     classesByName: new Map(),
     localClassesByName: new Map(),
@@ -388,6 +392,7 @@ export class LoweringContext {
   /** Clear workspace-level registrations so they can be rebuilt after addpath/rmpath. */
   clearWorkspaceRegistrations(): void {
     this.registry.filesByFuncName.clear();
+    this.registry.jsUserFunctionsByName.clear();
     this.registry.classesByName.clear();
     this.registry.privateFilesByDir.clear();
     this.registry.fileContexts.clear();
@@ -395,6 +400,19 @@ export class LoweringContext {
     this.registry.externalAccessByFile.clear();
     this.registry.functionIndex = null;
     // Note: localClassesByName is NOT cleared (comes from main file, not workspace)
+  }
+
+  /**
+   * Register a JS user function (.numbl.js) in the workspace registry.
+   * Uses first-wins semantics so search-path priority is honored.
+   */
+  registerJsUserFunction(
+    funcName: string,
+    fileName: string,
+    builtin: IBuiltin
+  ): void {
+    if (this.registry.jsUserFunctionsByName.has(funcName)) return;
+    this.registry.jsUserFunctionsByName.set(funcName, { fileName, builtin });
   }
 
   // ── Private function management ──────────────────────────────────
@@ -737,7 +755,7 @@ export class LoweringContext {
    * Should be called once after registerWorkspaceFiles() and registerLocalFunctionAST().
    * Parses all workspace files eagerly to discover subfunctions.
    */
-  buildFunctionIndex(jsUserFunctionNames?: string[]): FunctionIndex {
+  buildFunctionIndex(): FunctionIndex {
     // 1. Builtins
     const builtins = new Set([
       ...getAllBuiltinNames(),
@@ -745,15 +763,11 @@ export class LoweringContext {
       ...SPECIAL_BUILTIN_NAMES,
     ]);
 
-    // JS user functions resolve at workspace priority (after .m, before builtins).
-    // Remove any shadowed builtins so the .js version takes precedence.
-    const jsUserFunctions = new Set<string>();
-    if (jsUserFunctionNames) {
-      for (const name of jsUserFunctionNames) {
-        builtins.delete(name);
-        jsUserFunctions.add(name);
-      }
-    }
+    // JS user functions are stored on the per-context registry. They resolve
+    // at workspace priority (after .m, before builtins).
+    const jsUserFunctions = new Set<string>(
+      this.registry.jsUserFunctionsByName.keys()
+    );
 
     // 2. Main script local functions
     const mainLocalFunctions = new Set(this.localFunctionASTs.keys());

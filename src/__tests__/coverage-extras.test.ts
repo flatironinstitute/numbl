@@ -8,13 +8,14 @@ import { parseMFile } from "../numbl-core/parser/index.js";
 
 /** Helper: resolve an IBuiltin and call its apply with given args. */
 function callIBuiltin(
-  ibs: ReturnType<typeof loadJsUserFunctions>,
+  loaded: ReturnType<typeof loadJsUserFunctions>,
   name: string,
   args: unknown[],
   nargout = 1
 ) {
-  const ib = ibs.find(b => b.name === name);
-  if (!ib) throw new Error(`IBuiltin '${name}' not found`);
+  const entry = loaded.find(b => b.name === name);
+  if (!entry) throw new Error(`IBuiltin '${name}' not found`);
+  const ib = entry.builtin;
   const res = ib.resolve(
     args.map(() => ({ kind: "number" as const })),
     nargout
@@ -27,7 +28,7 @@ describe("jsUserFunctions", () => {
   it("loads a simple JS user function", () => {
     const jsFiles = [
       {
-        name: "myadd.js",
+        name: "myadd.numbl.js",
         source: `register({
           resolve: (argTypes, nargout) => ({
             outputTypes: [{ kind: 'number' }],
@@ -44,11 +45,11 @@ describe("jsUserFunctions", () => {
   it("imports a library file via importJS", () => {
     const jsFiles = [
       {
-        name: "_helpers.js",
+        name: "_helpers.numbl.js",
         source: `return { add: function(a, b) { return a + b; } };`,
       },
       {
-        name: "usehelper.js",
+        name: "usehelper.numbl.js",
         source: `var H = importJS("_helpers");
 register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) => H.add(args[0], args[1]) }) });`,
       },
@@ -62,16 +63,16 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("caches library — executes once for multiple imports", () => {
     const jsFiles = [
       {
-        name: "_counter.js",
+        name: "_counter.numbl.js",
         source: `var c = { n: 0 }; c.n++; return c;`,
       },
       {
-        name: "a.js",
+        name: "a.numbl.js",
         source: `var C = importJS("_counter");
 register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n }) });`,
       },
       {
-        name: "b.js",
+        name: "b.numbl.js",
         source: `var C = importJS("_counter");
 register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n }) });`,
       },
@@ -84,7 +85,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n
   it("throws on importJS for nonexistent library", () => {
     const jsFiles = [
       {
-        name: "bad.js",
+        name: "bad.numbl.js",
         source: `importJS("_nope"); register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
@@ -94,15 +95,15 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n
   it("throws on circular dependency", () => {
     const jsFiles = [
       {
-        name: "_a.js",
+        name: "_a.numbl.js",
         source: `var b = importJS("_b"); return { x: 1 };`,
       },
       {
-        name: "_b.js",
+        name: "_b.numbl.js",
         source: `var a = importJS("_a"); return { y: 2 };`,
       },
       {
-        name: "trigger.js",
+        name: "trigger.numbl.js",
         source: `importJS("_a"); register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
@@ -112,11 +113,11 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n
   it("throws when library calls register()", () => {
     const jsFiles = [
       {
-        name: "_badlib.js",
+        name: "_badlib.numbl.js",
         source: `register({ resolve: () => null }); return {};`,
       },
       {
-        name: "trigger.js",
+        name: "trigger.numbl.js",
         source: `importJS("_badlib"); register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
@@ -128,16 +129,16 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: () => C.n
   it("supports library importing another library", () => {
     const jsFiles = [
       {
-        name: "_base.js",
+        name: "_base.numbl.js",
         source: `return { mul: function(a, b) { return a * b; } };`,
       },
       {
-        name: "_derived.js",
+        name: "_derived.numbl.js",
         source: `var B = importJS("_base");
 return { square: function(x) { return B.mul(x, x); } };`,
       },
       {
-        name: "usederived.js",
+        name: "usederived.numbl.js",
         source: `var D = importJS("_derived");
 register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) => D.square(args[0]) }) });`,
       },
@@ -149,7 +150,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("throws if no register() call", () => {
     const jsFiles = [
       {
-        name: "empty.js",
+        name: "empty.numbl.js",
         source: `// no register call`,
       },
     ];
@@ -159,7 +160,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("throws if resolve is not a function", () => {
     const jsFiles = [
       {
-        name: "bad.js",
+        name: "bad.numbl.js",
         source: `register({ resolve: 42 });`,
       },
     ];
@@ -169,7 +170,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("throws on JS syntax errors", () => {
     const jsFiles = [
       {
-        name: "broken.js",
+        name: "broken.numbl.js",
         source: `register({{{`,
       },
     ];
@@ -179,7 +180,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("derives function name from path", () => {
     const jsFiles = [
       {
-        name: "/some/path/myFunc.js",
+        name: "/some/path/myFunc.numbl.js",
         source: `register({ resolve: () => ({ outputTypes: [], apply: () => 0 }) });`,
       },
     ];
@@ -190,7 +191,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("does not provide wasm without directive (no fallback by name)", () => {
     const jsFiles = [
       {
-        name: "myfunc.js",
+        name: "myfunc.numbl.js",
         source: `register({ resolve: () => ({ outputTypes: [], apply: () => wasm }) });`,
       },
     ];
@@ -207,7 +208,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     ]);
     const jsFiles = [
       {
-        name: "/path/to/myfunc.js",
+        name: "/path/to/myfunc.numbl.js",
         source: `// wasm: mymod\nregister({ resolve: () => ({ outputTypes: [], apply: () => (wasm !== undefined) }) });`,
       },
     ];
@@ -221,7 +222,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
   it("passes native as undefined when no directive", () => {
     const jsFiles = [
       {
-        name: "/path/to/myfunc.js",
+        name: "/path/to/myfunc.numbl.js",
         source: `register({ resolve: () => ({ outputTypes: [], apply: () => (typeof native === 'undefined') }) });`,
       },
     ];
@@ -235,7 +236,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const mockBridge = { load: () => mockLib };
     const jsFiles = [
       {
-        name: "/path/to/myfunc.js",
+        name: "/path/to/myfunc.numbl.js",
         source: `// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => native }) });`,
       },
     ];
@@ -251,7 +252,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     };
     const jsFiles = [
       {
-        name: "/path/to/myfunc.js",
+        name: "/path/to/myfunc.numbl.js",
         source: `// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => (typeof native === 'undefined') }) });`,
       },
     ];
@@ -267,7 +268,7 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
     const mockBridge = { load: () => mockLib };
     const jsFiles = [
       {
-        name: "/path/to/myfunc.js",
+        name: "/path/to/myfunc.numbl.js",
         source: `// wasm: mymod\n// native: mylib\nregister({ resolve: () => ({ outputTypes: [], apply: () => [wasm !== undefined, native !== undefined] }) });`,
       },
     ];

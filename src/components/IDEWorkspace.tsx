@@ -337,9 +337,15 @@ export function IDEWorkspace({
       ];
 
       const decoder = new TextDecoder("utf-8");
+      // Only .m files are sent as text workspace files. Binary blobs (.wasm)
+      // and .numbl.js mex-like files reach the worker via vfsFiles and are
+      // discovered through scanDirectory once their containing directory is
+      // on the search path. See useSystemFiles.getSystemWorkspaceFiles for
+      // the reasoning.
       const workspaceFiles = [
         ...wsFiles
           .filter(f => !excludeFileId || f.id !== excludeFileId)
+          .filter(f => f.name.endsWith(".m"))
           .map(f => ({
             name: f.name,
             source: decoder.decode(
