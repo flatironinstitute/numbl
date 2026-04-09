@@ -562,8 +562,9 @@ export class Runtime {
     if (e instanceof RuntimeError) {
       return RTV.struct(
         new Map<string, RuntimeValue>([
-          ["message", RTV.char(e.message)],
           ["identifier", RTV.char(e.identifier)],
+          ["message", RTV.char(e.message)],
+          ["cause", RTV.cell([], [0, 0])],
           ["stack", buildStackField(e)],
         ])
       );
@@ -571,16 +572,18 @@ export class Runtime {
     if (e instanceof Error) {
       return RTV.struct(
         new Map<string, RuntimeValue>([
-          ["message", RTV.char(e.message)],
           ["identifier", RTV.char("")],
+          ["message", RTV.char(e.message)],
+          ["cause", RTV.cell([], [0, 0])],
           ["stack", emptyStackField()],
         ])
       );
     }
     return RTV.struct(
       new Map<string, RuntimeValue>([
-        ["message", RTV.char(String(e))],
         ["identifier", RTV.char("")],
+        ["message", RTV.char(String(e))],
+        ["cause", RTV.cell([], [0, 0])],
         ["stack", emptyStackField()],
       ])
     );
