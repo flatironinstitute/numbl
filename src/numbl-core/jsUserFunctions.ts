@@ -1,10 +1,15 @@
 /**
- * Loader for .js user functions.
+ * Loader for .numbl.js user functions.
  *
- * Evaluates .js files that define IBuiltins via register({ resolve, jitEmit? }).
+ * Evaluates .numbl.js files that define IBuiltins via
+ *   register({ resolve, jitEmit? }).
  * Supports optional WASM and native shared library bindings via directives:
  *   // wasm: <name>
  *   // native: <name>
+ *
+ * The `.numbl.js` extension distinguishes numbl user functions from
+ * unrelated `.js` files (config files, source maps, etc.) so that they can
+ * be auto-discovered from the current working directory like `.m` files.
  */
 
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
@@ -12,13 +17,24 @@ import { RTV, RuntimeError } from "./runtime/index.js";
 import { FloatXArray } from "./runtime/types.js";
 import type { IBuiltin } from "./interpreter/builtins/types.js";
 
+/** A loaded JS user function ready for registration in the workspace. */
+export interface LoadedJsUserFunction {
+  name: string;
+  fileName: string;
+  builtin: IBuiltin;
+}
+
 /**
- * Derive a function name from a .js workspace file path.
- * E.g., "myadd.js" → "myadd", "/path/to/myadd.js" → "myadd"
+ * Derive a function name from a .numbl.js workspace file path.
+ * Library files (basename starts with `_`) strip only `.js`; function files
+ * strip the full `.numbl.js` suffix.
+ *   "myadd.numbl.js"            → "myadd"
+ *   "/path/to/myadd.numbl.js"   → "myadd"
+ *   "_helpers.numbl.js"         → "_helpers"
  */
 function funcNameFromFile(fileName: string): string {
   const base = fileName.split("/").pop()!;
-  return base.replace(/\.js$/, "");
+  return base.replace(/\.numbl\.js$/, "");
 }
 
 /**
@@ -64,6 +80,11 @@ function parseDirectives(source: string): JsDirectives {
     else if (key === "native") directives.native = value;
   }
   return directives;
+}
+
+/** Returns true if the file is a numbl JS user function file (`*.numbl.js`). */
+export function isNumblJsFile(fileName: string): boolean {
+  return fileName.endsWith(".numbl.js");
 }
 
 /**
@@ -145,25 +166,27 @@ function resolveBindings(
 const LOADING = Symbol("loading");
 
 /**
- * Load .js user function files and return them as IBuiltin objects.
+ * Load .numbl.js user function files and return them as LoadedJsUserFunction
+ * records. Each loaded record carries the function name, source file name,
+ * and the IBuiltin object built from the file's `register()` call.
  *
- * Each .js file calls register({ resolve, jitEmit? }) to define an IBuiltin.
- * resolve(argTypes, nargout) returns { outputTypes, apply } or null.
+ * Each .numbl.js file calls register({ resolve, jitEmit? }) to define an
+ * IBuiltin. resolve(argTypes, nargout) returns { outputTypes, apply } or null.
  *
- * A .js file can specify bindings via directives at the top of the file:
+ * A .numbl.js file can specify bindings via directives at the top of the file:
  *   // wasm: <name>    — load a WASM module (looked up by name in wasmFiles)
- *   // native: <name>  — load a native shared library (resolved relative to .js file)
+ *   // native: <name>  — load a native shared library (resolved relative to file)
  *
  * Files whose basename starts with `_` are library files. They must not call
- * register() and instead export values via `return`. Other .js files can import
- * them with `importJS("_name")`.
+ * register() and instead export values via `return`. Other .numbl.js files
+ * can import them with `importJS("_name")`.
  */
 export function loadJsUserFunctions(
   jsFiles: WorkspaceFile[],
   wasmFiles?: WorkspaceFile[],
   nativeBridge?: NativeBridge
-): IBuiltin[] {
-  const result: IBuiltin[] = [];
+): LoadedJsUserFunction[] {
+  const result: LoadedJsUserFunction[] = [];
   const wasmMap = wasmFiles ? buildWasmMap(wasmFiles) : new Map();
   // Cache compiled WASM instances so multiple .js files can share one module
   const wasmInstanceCache = new Map<string, WebAssembly.Instance>();
@@ -184,7 +207,7 @@ export function loadJsUserFunctions(
   for (const file of jsFiles) {
     const base = file.name.split("/").pop()!;
     if (base.startsWith("_")) {
-      const libName = base.replace(/\.js$/, "");
+      const libName = base.replace(/\.numbl\.js$/, "");
       libraryFiles.set(libName, file);
     } else {
       functionFiles.push(file);
@@ -197,14 +220,14 @@ export function loadJsUserFunctions(
   function importJS(name: string): unknown {
     const cached = libCache.get(name);
     if (cached === LOADING) {
-      throw new RuntimeError(`Circular dependency detected: ${name}.js`);
+      throw new RuntimeError(`Circular dependency detected: ${name}.numbl.js`);
     }
     if (libCache.has(name)) return cached;
 
     const libFile = libraryFiles.get(name);
     if (!libFile) {
       throw new RuntimeError(
-        `importJS: library '${name}.js' not found in workspace`
+        `importJS: library '${name}.numbl.js' not found in workspace`
       );
     }
 
@@ -220,7 +243,7 @@ export function loadJsUserFunctions(
 
     const dummyRegister = () => {
       throw new RuntimeError(
-        `Library file '${name}.js' must not call register(). ` +
+        `Library file '${name}.numbl.js' must not call register(). ` +
           `Use return {...} to export values.`
       );
     };
@@ -263,7 +286,7 @@ export function loadJsUserFunctions(
         }
         if (builtin) {
           throw new Error(
-            "register() called more than once — only one registration per .js file"
+            "register() called more than once — only one registration per .numbl.js file"
           );
         }
         builtin = {
@@ -338,7 +361,7 @@ export function loadJsUserFunctions(
         };
       }
 
-      result.push(builtin);
+      result.push({ name: funcName, fileName: file.name, builtin });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(

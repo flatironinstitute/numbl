@@ -59,6 +59,8 @@ export function callFunction(
         if (entry) return entry.fileName;
         const classInfo = this.ctx.getClassInfo(n);
         if (classInfo) return classInfo.fileName;
+        const jsEntry = this.ctx.registry.jsUserFunctionsByName.get(n);
+        if (jsEntry) return jsEntry.fileName;
         return undefined;
       },
     };
@@ -142,6 +144,8 @@ export function interpretTarget(
       return this.interpretLocalFunction(target, args, nargout);
     case "workspaceFunction":
       return this.interpretWorkspaceFunction(target, args, nargout);
+    case "jsUserFunction":
+      return this.interpretJsUserFunction(target, args, nargout);
     case "classMethod":
       return this.interpretClassMethod(target, args, nargout);
     case "workspaceClassConstructor":
@@ -149,6 +153,46 @@ export function interpretTarget(
     case "privateFunction":
       return this.interpretPrivateFunction(target, args, nargout);
   }
+}
+
+// ── JS user function interpretation ──────────────────────────────────────
+
+export function interpretJsUserFunction(
+  this: Interpreter,
+  target: Extract<ResolvedTarget, { kind: "jsUserFunction" }>,
+  args: unknown[],
+  nargout: number
+): unknown {
+  const entry = this.ctx.registry.jsUserFunctionsByName.get(target.name);
+  if (!entry) {
+    throw new RuntimeError(`JS user function '${target.name}' not found`);
+  }
+  const ib = entry.builtin;
+  const margs = args.map(a => ensureRuntimeValue(a));
+  const argTypes = margs.map(inferJitType);
+  const resolution = ib.resolve(argTypes, nargout);
+  if (!resolution) {
+    const typeNames = argTypes.map(t => t.kind);
+    throw new RuntimeError(
+      `JS user function '${target.name}' does not support these argument types: (${typeNames.join(", ")})`
+    );
+  }
+  // MATLAB: a function declared with no outputs errors if the call site
+  // expects any. Detect via `outputTypes: []`.
+  const isVoid = resolution.outputTypes.length === 0;
+  if (isVoid && nargout > 0) {
+    throw new RuntimeError("Too many output arguments.");
+  }
+  return this.withFileContext(entry.fileName, undefined, undefined, () => {
+    if (this.rt.profilingEnabled) {
+      this.rt.profileEnter("jsUserFunction:interp:" + target.name);
+      const result = resolution.apply(margs, nargout);
+      this.rt.profileLeave();
+      return isVoid ? undefined : result;
+    }
+    const result = resolution.apply(margs, nargout);
+    return isVoid ? undefined : result;
+  });
 }
 
 // ── Local function interpretation ────────────────────────────────────────

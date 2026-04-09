@@ -1,5 +1,5 @@
 /**
- * Shared utility for scanning directories for .m/.js/.wasm workspace files.
+ * Shared utility for scanning directories for .m/.numbl.js/.wasm workspace files.
  * Extracted from cli.ts to avoid circular imports (cli-fileio → cli → main()).
  */
 
@@ -41,7 +41,7 @@ export function scanMFiles(
         }
       } else if (
         stat.isFile() &&
-        (entry.endsWith(".m") || entry.endsWith(".js"))
+        (entry.endsWith(".m") || entry.endsWith(".numbl.js"))
       ) {
         const source = readFileSync(fullPath, "utf-8");
         files.push({

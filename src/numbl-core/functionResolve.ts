@@ -42,6 +42,11 @@ export type ResolvedTarget =
       argTypes: ItemType[];
     }
   | {
+      kind: "jsUserFunction";
+      name: string;
+      argTypes: ItemType[];
+    }
+  | {
       kind: "workspaceClassConstructor";
       className: string;
       argTypes: ItemType[];
@@ -346,9 +351,10 @@ export function resolveFunction(
     };
   }
 
-  // 4b. JS user function (same priority tier as workspace, but .m wins)
+  // 4b. JS user function (.numbl.js) — same priority tier as workspace,
+  // but .m wins because it's checked first.
   if (index.jsUserFunctions.has(name)) {
-    return { kind: "builtin", name };
+    return { kind: "jsUserFunction", name, argTypes };
   }
 
   // 5. Workspace class constructor

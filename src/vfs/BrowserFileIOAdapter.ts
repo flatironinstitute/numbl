@@ -190,8 +190,8 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     const prefix = norm === "/" ? "/" : norm + "/";
     const results: WorkspaceFile[] = [];
 
-    // Mirrors cli-scan.ts: only top-level .m/.js/.wasm files, plus files
-    // inside @class/, +pkg/, and private/ subdirectories (recursively).
+    // Mirrors cli-scan.ts: only top-level .m/.numbl.js/.wasm files, plus
+    // files inside @class/, +pkg/, and private/ subdirectories (recursively).
     // Files are stored with their absolute VFS path in `name` so that
     // search-path prefix matching in the lowering context works correctly.
     for (const filePath of this.vfs.allFiles()) {
@@ -210,7 +210,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
 
       if (
         !relativePath.endsWith(".m") &&
-        !relativePath.endsWith(".js") &&
+        !relativePath.endsWith(".numbl.js") &&
         !relativePath.endsWith(".wasm")
       ) {
         continue;

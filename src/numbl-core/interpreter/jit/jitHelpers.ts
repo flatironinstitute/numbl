@@ -457,3 +457,65 @@ setDynamicRegisterHook((b: IBuiltin) => {
     return typeof result === "boolean" ? (result ? 1 : 0) : result;
   };
 });
+
+/**
+ * Build a per-runtime jitHelpers map for an execution that has .numbl.js
+ * user functions. The result is a clone of the global jitHelpers extended
+ * with `ib_<name>` entries (single-output fast path) for each js user
+ * function and an overridden `ibcall` (multi-output) that consults the
+ * js user function map first before falling back to the global registry.
+ */
+export function buildPerRuntimeJitHelpers(
+  jsUserFunctions: ReadonlyMap<string, IBuiltin>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+): Record<string, any> {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const h: Record<string, any> = Object.assign({}, jitHelpers);
+
+  for (const [name, ib] of jsUserFunctions) {
+    h[`ib_${name}`] = (...args: unknown[]) => {
+      const pe = h._profileEnter as (...a: unknown[]) => void;
+      const pl = h._profileLeave as (...a: unknown[]) => void;
+      pe("jsUserFunction:jit:" + name);
+      const rtArgs = args as import("../../runtime/types.js").RuntimeValue[];
+      const argTypes = rtArgs.map(_ijt);
+      const res = ib.resolve(argTypes, 1);
+      if (!res) {
+        pl();
+        throw new Error(`JIT ib_${name}: resolve failed`);
+      }
+      const result = res.apply(rtArgs, 1);
+      pl();
+      return typeof result === "boolean" ? (result ? 1 : 0) : result;
+    };
+  }
+
+  // Override ibcall so multi-output calls find js user functions first.
+  const origIbcall = h.ibcall as (
+    name: unknown,
+    nargout: unknown,
+    ...args: unknown[]
+  ) => unknown;
+  h.ibcall = (name: unknown, nargout: unknown, ...args: unknown[]) => {
+    const ib = jsUserFunctions.get(name as string);
+    if (!ib) return origIbcall(name, nargout, ...args);
+    const pe = h._profileEnter as (...a: unknown[]) => void;
+    const pl = h._profileLeave as (...a: unknown[]) => void;
+    pe("jsUserFunction:jit:" + (name as string));
+    const rtArgs = args as import("../../runtime/types.js").RuntimeValue[];
+    const argTypes = rtArgs.map(_ijt);
+    const res = ib.resolve(argTypes, nargout as number);
+    if (!res) {
+      pl();
+      throw new Error(`JIT ibcall: resolve failed for ${name}`);
+    }
+    const result = res.apply(rtArgs, nargout as number);
+    pl();
+    if (Array.isArray(result)) {
+      return result.map(v => (typeof v === "boolean" ? (v ? 1 : 0) : v));
+    }
+    return [typeof result === "boolean" ? (result ? 1 : 0) : result];
+  };
+
+  return h;
+}

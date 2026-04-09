@@ -291,6 +291,11 @@ export class Interpreter {
     args: unknown[],
     nargout: number
   ) => unknown;
+  declare interpretJsUserFunction: (
+    target: Extract<ResolvedTarget, { kind: "jsUserFunction" }>,
+    args: unknown[],
+    nargout: number
+  ) => unknown;
   declare interpretClassMethod: (
     target: Extract<ResolvedTarget, { kind: "classMethod" }>,
     args: unknown[],

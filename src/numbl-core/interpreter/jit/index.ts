@@ -100,8 +100,8 @@ export function tryJitCall(
 
   try {
     const factory = new Function("$h", "$rt", ...paramNames, jsBody);
-    compiledFn = (...callArgs: unknown[]) =>
-      factory(jitHelpers, rt, ...callArgs);
+    const helpers = rt.jitHelpers ?? jitHelpers;
+    compiledFn = (...callArgs: unknown[]) => factory(helpers, rt, ...callArgs);
   } catch {
     fnWithCache._jitCache.set(cacheKey, null);
     return JIT_SKIP;

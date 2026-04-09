@@ -233,6 +233,12 @@ export class Runtime {
     (nargout: number, args: unknown[]) => unknown
   > = {};
 
+  // Per-runtime JIT helpers ($h) — populated by executeCode after the runtime
+  // is constructed. Cloned from the global jitHelpers and extended with
+  // ib_<name> entries for any .numbl.js user functions of this execution.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  public jitHelpers: Record<string, any> | null = null;
+
   // JIT compilation callback: compiles and evaluates a specialized function at
   // runtime. Set by executeCode() to close over the LoweringContext and Codegen.
   // The callback handles the full resolution chain (local → class method →
