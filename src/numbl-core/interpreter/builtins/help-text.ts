@@ -1182,6 +1182,15 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Modified Bessel function of the second kind. SCALE=1 applies exponential scaling.",
   },
+  besselh: {
+    signatures: [
+      "H = besselh(NU, Z)",
+      "H = besselh(NU, K, Z)",
+      "H = besselh(NU, K, Z, SCALE)",
+    ],
+    description:
+      "Hankel function (Bessel function of the third kind). K=1 (default) gives H^(1) = J + i*Y; K=2 gives H^(2) = J - i*Y. SCALE=1 multiplies by exp(-i*Z) for K=1 or exp(+i*Z) for K=2.",
+  },
   airy: {
     signatures: ["Y = airy(X)", "Y = airy(K, X)", "Y = airy(K, X, SCALE)"],
     description:

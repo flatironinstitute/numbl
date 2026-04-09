@@ -87,6 +87,109 @@ for (const [name, fn, scaleFn] of besselDefs) {
   });
 }
 
+// ── besselh: Hankel function (Bessel function of the third kind) ─────────
+
+function besselhScalar(
+  nu: number,
+  k: number,
+  z: number,
+  scale: boolean
+): { re: number; im: number } {
+  const J = besselj(nu, z);
+  const Y = bessely(nu, z);
+  let re = J;
+  let im = k === 1 ? Y : -Y;
+  if (scale) {
+    // K=1: multiply by e^(-iz) = cos(z) - i*sin(z)
+    // K=2: multiply by e^(+iz) = cos(z) + i*sin(z)
+    const c = Math.cos(z);
+    const s = Math.sin(z);
+    if (k === 1) {
+      const newRe = re * c + im * s;
+      const newIm = im * c - re * s;
+      re = newRe;
+      im = newIm;
+    } else {
+      const newRe = re * c - im * s;
+      const newIm = re * s + im * c;
+      re = newRe;
+      im = newIm;
+    }
+  }
+  return { re, im };
+}
+
+function binaryApplyComplex(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  fn: (x: number, y: number) => { re: number; im: number },
+  name: string
+): RuntimeValue {
+  const aIsT = isRuntimeTensor(a);
+  const bIsT = isRuntimeTensor(b);
+  const buildTensor = (
+    len: number,
+    shape: number[],
+    iter: (i: number) => { re: number; im: number }
+  ): RuntimeValue => {
+    const re = new FloatXArray(len);
+    const im = new FloatXArray(len);
+    let hasImag = false;
+    for (let i = 0; i < len; i++) {
+      const r = iter(i);
+      re[i] = r.re;
+      im[i] = r.im;
+      if (r.im !== 0) hasImag = true;
+    }
+    return RTV.tensor(re, shape, hasImag ? im : undefined);
+  };
+  if (aIsT && bIsT) {
+    if (a.data.length !== b.data.length)
+      throw new RuntimeError(`${name}: array dimensions must agree`);
+    return buildTensor(a.data.length, a.shape, i => fn(a.data[i], b.data[i]));
+  }
+  if (aIsT) {
+    const bv = toNumber(b);
+    return buildTensor(a.data.length, a.shape, i => fn(a.data[i], bv));
+  }
+  if (bIsT) {
+    const av = toNumber(a);
+    return buildTensor(b.data.length, b.shape, i => fn(av, b.data[i]));
+  }
+  const r = fn(toNumber(a), toNumber(b));
+  return r.im === 0 ? RTV.num(r.re) : RTV.complex(r.re, r.im);
+}
+
+registerIBuiltin({
+  name: "besselh",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: args => {
+      if (args.length < 2 || args.length > 4)
+        throw new RuntimeError("besselh requires 2 to 4 arguments");
+      const nuArg = args[0];
+      let k = 1;
+      let zArg: RuntimeValue;
+      let scale = false;
+      if (args.length === 2) {
+        zArg = args[1];
+      } else {
+        k = Math.round(toNumber(args[1]));
+        if (k !== 1 && k !== 2)
+          throw new RuntimeError("besselh: K must be 1 or 2");
+        zArg = args[2];
+        if (args.length === 4) scale = toNumber(args[3]) === 1;
+      }
+      return binaryApplyComplex(
+        nuArg,
+        zArg,
+        (nu, z) => besselhScalar(nu, k, z, scale),
+        "besselh"
+      );
+    },
+  }),
+});
+
 // ── Airy functions ───────────────────────────────────────────────────────
 
 const airyFns = [airyAi, airyAiPrime, airyBi, airyBiPrime];
