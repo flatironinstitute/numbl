@@ -1238,6 +1238,38 @@ const H: Record<string, BuiltinHelp> = {
     description: "True if all inputs are equal (NaN ~= NaN).",
   },
 
+  // ── Dynamic evaluation ────────────────────────────────────────────────
+  evalin: {
+    signatures: ["V = evalin(WS, EXPR)", "V = evalin(WS, EXPR, DEFAULT)"],
+    description:
+      "Evaluate EXPR in workspace WS ('caller' or 'base'/'workspace').\n\n" +
+      "numbl-specific note: variables read by evalin must be declared in the\n" +
+      "function that owns them with a `% external-access:` comment, e.g.\n" +
+      "    function out = f()\n" +
+      "        % external-access: x y\n" +
+      "        x = 1; y = 2;\n" +
+      "        ...\n" +
+      "    end\n" +
+      "Variables not listed in `% external-access` are stored in a separate\n" +
+      "dynamic map and are only reachable through evalin/assignin. The\n" +
+      "directive is a comment, so MATLAB ignores it.",
+  },
+  assignin: {
+    signatures: ["assignin(WS, NAME, VALUE)"],
+    description:
+      "Assign VALUE to variable NAME in workspace WS ('caller' or 'base'/'workspace').\n\n" +
+      "numbl-specific note: variables written by assignin must be declared in\n" +
+      "the function that owns them with a `% external-access:` comment, e.g.\n" +
+      "    function out = f()\n" +
+      "        % external-access: x y\n" +
+      "        x = 1; y = 2;\n" +
+      "        ...\n" +
+      "    end\n" +
+      "Variables not listed in `% external-access` are stored in a separate\n" +
+      "dynamic map and are only reachable through evalin/assignin. The\n" +
+      "directive is a comment, so MATLAB ignores it.",
+  },
+
   // ── Misc ──────────────────────────────────────────────────────────────
   disp: {
     signatures: ["disp(X)"],
