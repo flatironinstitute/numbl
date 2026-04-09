@@ -12,7 +12,17 @@ import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
+import bash from "react-syntax-highlighter/dist/esm/languages/hljs/bash";
+import javascript from "react-syntax-highlighter/dist/esm/languages/hljs/javascript";
+import { vs2015 } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { registerMatlabHighlighter } from "../utils/registerMatlabHighlighter";
 import { docs } from "../docs/index.js";
+
+registerMatlabHighlighter();
+SyntaxHighlighter.registerLanguage("bash", bash);
+SyntaxHighlighter.registerLanguage("javascript", javascript);
+SyntaxHighlighter.registerLanguage("js", javascript);
 
 const SIDEBAR_WIDTH = 220;
 
@@ -206,31 +216,13 @@ export function DocsPage() {
                 mb: 0.5,
               },
             },
-            "& code": {
+            "& :not(pre) > code": {
               fontFamily: 'Menlo, Monaco, "Courier New", monospace',
               fontSize: "0.84rem",
               bgcolor: "action.hover",
               px: 0.6,
               py: 0.2,
               borderRadius: 0.5,
-            },
-            "& pre": {
-              bgcolor: "#1e1e1e",
-              color: "#d4d4d4",
-              borderRadius: 2,
-              px: 2.5,
-              py: 2,
-              overflow: "auto",
-              mb: 2,
-              border: "1px solid",
-              borderColor: "divider",
-              "& code": {
-                bgcolor: "transparent",
-                px: 0,
-                py: 0,
-                fontSize: "0.82rem",
-                lineHeight: 1.6,
-              },
             },
             "& table": {
               width: "100%",
@@ -273,7 +265,47 @@ export function DocsPage() {
             },
           }}
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{activeDoc.content}</Markdown>
+          <Markdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              pre({ children }) {
+                const codeEl = children as
+                  | { props?: { className?: string; children?: unknown } }
+                  | undefined;
+                const className = codeEl?.props?.className || "";
+                const match = /language-(\w+)/.exec(className);
+                const lang = match?.[1] || "text";
+                const code = String(codeEl?.props?.children ?? "").replace(
+                  /\n$/,
+                  ""
+                );
+                return (
+                  <SyntaxHighlighter
+                    language={lang}
+                    style={vs2015}
+                    customStyle={{
+                      background: "#1e1e1e",
+                      borderRadius: 8,
+                      padding: "16px 20px",
+                      marginBottom: 16,
+                      border: "1px solid rgba(0,0,0,0.12)",
+                      fontSize: "0.82rem",
+                      lineHeight: 1.6,
+                    }}
+                    codeTagProps={{
+                      style: {
+                        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+                      },
+                    }}
+                  >
+                    {code}
+                  </SyntaxHighlighter>
+                );
+              },
+            }}
+          >
+            {activeDoc.content}
+          </Markdown>
         </Box>
 
         {/* Prev / Next navigation */}

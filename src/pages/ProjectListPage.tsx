@@ -19,6 +19,11 @@ import {
   IconButton,
   Tooltip,
 } from "@mui/material";
+import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vs2015 } from "react-syntax-highlighter/dist/esm/styles/hljs";
+import { registerMatlabHighlighter } from "../utils/registerMatlabHighlighter";
+
+registerMatlabHighlighter();
 import AddIcon from "@mui/icons-material/Add";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
@@ -439,26 +444,32 @@ export function ProjectListPage() {
       </Box>
 
       {/* Code example */}
-      <Box sx={{ mb: { xs: 5, sm: 7 }, position: "relative" }}>
-        <Box
-          component="pre"
-          sx={{
-            bgcolor: "#1e1e1e",
-            color: "#d4d4d4",
-            borderRadius: 2,
-            px: 3,
-            py: 2.5,
-            fontSize: "0.82rem",
-            lineHeight: 1.7,
-            fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-            overflow: "auto",
+      <Box
+        sx={{
+          mb: { xs: 5, sm: 7 },
+          position: "relative",
+          "& pre": {
+            m: 0,
+            borderRadius: "8px !important",
             border: "1px solid",
             borderColor: "divider",
-            m: 0,
-          }}
+            padding: "20px 24px !important",
+            fontSize: "0.82rem !important",
+            lineHeight: "1.7 !important",
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace !important',
+          },
+          "& code": {
+            fontFamily: 'Menlo, Monaco, "Courier New", monospace !important',
+          },
+        }}
+      >
+        <SyntaxHighlighter
+          language="matlab"
+          style={vs2015}
+          customStyle={{ background: "#1e1e1e" }}
         >
           {EXAMPLE_CODE}
-        </Box>
+        </SyntaxHighlighter>
         <Button
           size="small"
           variant="contained"
