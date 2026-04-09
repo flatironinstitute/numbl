@@ -26,6 +26,7 @@ import GitHubIcon from "@mui/icons-material/GitHub";
 import TerminalIcon from "@mui/icons-material/Terminal";
 import ImageIcon from "@mui/icons-material/Image";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
+import CodeIcon from "@mui/icons-material/Code";
 import { useNavigate } from "react-router-dom";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import {
@@ -34,6 +35,8 @@ import {
   renameProject,
   getProjectFileCount,
   getProjectLastModified,
+  getProject,
+  createProject,
 } from "../db/operations";
 import { validateProjectName } from "../utils/validation";
 import { makeShareHash } from "../utils/shareUrl.js";
@@ -114,6 +117,14 @@ export function ProjectListPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOpenUntitled = async () => {
+    const existing = await getProject("untitled");
+    if (!existing) {
+      await createProject("untitled");
+    }
+    navigate("/project/untitled");
   };
 
   const handleDeleteClick = (e: React.MouseEvent, project: Project) => {
@@ -248,6 +259,21 @@ export function ProjectListPage() {
           </Button>
           <Button
             variant="outlined"
+            startIcon={<CodeIcon />}
+            onClick={handleOpenUntitled}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              borderRadius: 2,
+              px: 3,
+              py: 1,
+              fontSize: "0.95rem",
+            }}
+          >
+            Open IDE
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<MenuBookIcon />}
             onClick={() => navigate("/docs")}
             sx={{
@@ -352,7 +378,7 @@ export function ProjectListPage() {
           {
             title: "Runs in your browser",
             description:
-              "No server required. Full IDE, interactive REPL, and embeddable components for sharing code.",
+              "No server required. IDE, interactive REPL, and embeddable components for sharing code.",
           },
           {
             title: "MATLAB-compatible",
