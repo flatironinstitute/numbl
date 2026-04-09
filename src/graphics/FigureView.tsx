@@ -1,8 +1,49 @@
-import { useRef, useEffect, useCallback } from "react";
+import { Component, useRef, useEffect, useCallback } from "react";
+import type { ErrorInfo, ReactNode } from "react";
 import type { PlotTrace } from "./types.js";
 import type { AxesState, FigureState } from "./figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
+
+class AxesErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("Axes render error:", error, info);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div
+          style={{
+            width: "100%",
+            height: "100%",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 8,
+            color: "#a00",
+            fontFamily: "sans-serif",
+            fontSize: 12,
+            textAlign: "center",
+            boxSizing: "border-box",
+          }}
+        >
+          Plot render error: {this.state.error.message}
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface FigureViewProps {
   figure: FigureState;
@@ -21,7 +62,11 @@ export function FigureView({ figure }: FigureViewProps) {
   if (!subplotGrid) {
     const ax = axes[axesIndices[0]];
     if (!ax) return null;
-    return <SingleAxesView axes={ax} />;
+    return (
+      <AxesErrorBoundary>
+        <SingleAxesView axes={ax} />
+      </AxesErrorBoundary>
+    );
   }
 
   // Subplot grid layout
@@ -77,7 +122,11 @@ export function FigureView({ figure }: FigureViewProps) {
                 overflow: "hidden",
               }}
             >
-              {ax ? <SingleAxesView axes={ax} /> : null}
+              {ax ? (
+                <AxesErrorBoundary>
+                  <SingleAxesView axes={ax} />
+                </AxesErrorBoundary>
+              ) : null}
             </div>
           );
         })}

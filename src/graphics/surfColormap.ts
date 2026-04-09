@@ -14,7 +14,9 @@ const COLORMAP: [number, number, number][] = [
 ];
 
 export function colormapLookup(t: number): [number, number, number] {
-  const clamped = Math.max(0, Math.min(1, t));
+  // Treat NaN/non-finite as 0 so we never index outside COLORMAP.
+  const safe = Number.isFinite(t) ? t : 0;
+  const clamped = Math.max(0, Math.min(1, safe));
   const idx = clamped * (COLORMAP.length - 1);
   const lo = Math.floor(idx);
   const hi = Math.min(lo + 1, COLORMAP.length - 1);
