@@ -7,6 +7,16 @@
  */
 
 import { dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
+import {
+  gmresCore,
+  gmresCoreComplex,
+  luSolveInPlace,
+  complexLuSolveInPlace,
+  type MatvecFn,
+  type PrecSolveFn,
+  type ComplexMatvecFn,
+  type ComplexPrecSolveFn,
+} from "../helpers/gmres.js";
 import { dgetri } from "../../ts-lapack/src/SRC/dgetri.js";
 import { dgeev } from "../../ts-lapack/src/SRC/dgeev.js";
 import { dgesvd as _dgesvd } from "../../ts-lapack/src/SRC/dgesvd.js";
@@ -1021,6 +1031,227 @@ function cholComplex(
   return { RRe: re, RIm: im, info };
 }
 
+function gmres(
+  A: Float64Array,
+  n: number,
+  b: Float64Array,
+  restart: number,
+  tol: number,
+  maxit: number,
+  M1: Float64Array | null,
+  M2: Float64Array | null,
+  x0: Float64Array | null
+): {
+  x: Float64Array;
+  flag: number;
+  relres: number;
+  iter: Int32Array;
+  resvec: Float64Array;
+} {
+  // Matvec callback: y = A*x (manual column-major loop)
+  const matvecFn: MatvecFn = (x: Float64Array): Float64Array => {
+    const y = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let s = 0;
+      for (let j = 0; j < n; j++) s += A[i + j * n] * x[j];
+      y[i] = s;
+    }
+    return y;
+  };
+
+  // Pre-factor preconditioners and create solve callback
+  let precSolveFn: PrecSolveFn | null = null;
+  if (M1 || M2) {
+    const m1lu = M1 ? new Float64Array(M1) : null;
+    const m1ipiv = M1 ? new Int32Array(n) : null;
+    if (m1lu && m1ipiv) {
+      const info = dgetrf(n, n, m1lu, n, m1ipiv);
+      if (info > 0) throw new Error("gmres: preconditioner M1 is singular");
+    }
+    const m2lu = M2 ? new Float64Array(M2) : null;
+    const m2ipiv = M2 ? new Int32Array(n) : null;
+    if (m2lu && m2ipiv) {
+      const info = dgetrf(n, n, m2lu, n, m2ipiv);
+      if (info > 0) throw new Error("gmres: preconditioner M2 is singular");
+    }
+    precSolveFn = (r: Float64Array): Float64Array => {
+      const z = new Float64Array(r);
+      if (m1lu && m1ipiv) luSolveInPlace(n, m1lu, m1ipiv, z);
+      if (m2lu && m2ipiv) luSolveInPlace(n, m2lu, m2ipiv, z);
+      return z;
+    };
+  }
+
+  const result = gmresCore(
+    matvecFn,
+    precSolveFn,
+    b,
+    n,
+    restart,
+    tol,
+    maxit,
+    x0
+  );
+  // Convert iter tuple to Int32Array for bridge interface compatibility
+  const iterArr = new Int32Array(2);
+  iterArr[0] = result.iter[0];
+  iterArr[1] = result.iter[1];
+  return {
+    x: result.x,
+    flag: result.flag,
+    relres: result.relres,
+    iter: iterArr,
+    resvec: result.resvec,
+  };
+}
+
+function gmresComplex(
+  ARe: Float64Array,
+  AIm: Float64Array,
+  n: number,
+  bRe: Float64Array,
+  bIm: Float64Array,
+  restart: number,
+  tol: number,
+  maxit: number,
+  M1Re: Float64Array | null,
+  M1Im: Float64Array | null,
+  M2Re: Float64Array | null,
+  M2Im: Float64Array | null,
+  x0Re: Float64Array | null,
+  x0Im: Float64Array | null
+): {
+  xRe: Float64Array;
+  xIm: Float64Array;
+  flag: number;
+  relres: number;
+  iter: Int32Array;
+  resvec: Float64Array;
+} {
+  // Complex matvec: y = A*x (manual column-major)
+  const matvecFn: ComplexMatvecFn = x => {
+    const yRe = new Float64Array(n);
+    const yIm = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      let sRe = 0,
+        sIm = 0;
+      for (let j = 0; j < n; j++) {
+        const aR = ARe[i + j * n],
+          aI = AIm[i + j * n];
+        sRe += aR * x.re[j] - aI * x.im[j];
+        sIm += aR * x.im[j] + aI * x.re[j];
+      }
+      yRe[i] = sRe;
+      yIm[i] = sIm;
+    }
+    return { re: yRe, im: yIm };
+  };
+
+  // Pre-factor preconditioners
+  let precSolveFn: ComplexPrecSolveFn | null = null;
+  if (M1Re || M2Re) {
+    const m1luRe = M1Re ? new Float64Array(M1Re) : null;
+    const m1luIm = M1Im ? new Float64Array(M1Im) : null;
+    const m1ipiv = M1Re ? new Int32Array(n) : null;
+    if (m1luRe && m1luIm && m1ipiv) {
+      // Complex LU via manual zgetrf equivalent: use the real dgetrf on
+      // interleaved-style manual factorization... actually we need complex LU.
+      // Use our own complexLuFactor.
+      complexLuFactor(n, m1luRe, m1luIm, m1ipiv);
+    }
+    const m2luRe = M2Re ? new Float64Array(M2Re) : null;
+    const m2luIm = M2Im ? new Float64Array(M2Im) : null;
+    const m2ipiv = M2Re ? new Int32Array(n) : null;
+    if (m2luRe && m2luIm && m2ipiv) {
+      complexLuFactor(n, m2luRe, m2luIm, m2ipiv);
+    }
+    precSolveFn = r => {
+      const zRe = new Float64Array(r.re);
+      const zIm = new Float64Array(r.im);
+      if (m1luRe && m1luIm && m1ipiv)
+        complexLuSolveInPlace(n, m1luRe, m1luIm, m1ipiv, zRe, zIm);
+      if (m2luRe && m2luIm && m2ipiv)
+        complexLuSolveInPlace(n, m2luRe, m2luIm, m2ipiv, zRe, zIm);
+      return { re: zRe, im: zIm };
+    };
+  }
+
+  const result = gmresCoreComplex(
+    matvecFn,
+    precSolveFn,
+    { re: bRe, im: bIm },
+    n,
+    restart,
+    tol,
+    maxit,
+    x0Re && x0Im ? { re: x0Re, im: x0Im } : null
+  );
+  const iterArr = new Int32Array(2);
+  iterArr[0] = result.iter[0];
+  iterArr[1] = result.iter[1];
+  return {
+    xRe: result.x.re,
+    xIm: result.x.im,
+    flag: result.flag,
+    relres: result.relres,
+    iter: iterArr,
+    resvec: result.resvec,
+  };
+}
+
+/** Manual complex LU factorization with partial pivoting (in-place). */
+function complexLuFactor(
+  n: number,
+  re: Float64Array,
+  im: Float64Array,
+  ipiv: Int32Array
+): void {
+  for (let k = 0; k < n; k++) {
+    // Find pivot
+    let maxVal = -1;
+    let maxIdx = k;
+    for (let i = k; i < n; i++) {
+      const v = Math.sqrt(
+        re[i + k * n] * re[i + k * n] + im[i + k * n] * im[i + k * n]
+      );
+      if (v > maxVal) {
+        maxVal = v;
+        maxIdx = i;
+      }
+    }
+    ipiv[k] = maxIdx + 1; // 1-based
+    if (maxIdx !== k) {
+      // Swap rows k and maxIdx
+      for (let j = 0; j < n; j++) {
+        let tmp = re[k + j * n];
+        re[k + j * n] = re[maxIdx + j * n];
+        re[maxIdx + j * n] = tmp;
+        tmp = im[k + j * n];
+        im[k + j * n] = im[maxIdx + j * n];
+        im[maxIdx + j * n] = tmp;
+      }
+    }
+    const dR = re[k + k * n],
+      dI = im[k + k * n];
+    const dAbs2 = dR * dR + dI * dI;
+    if (dAbs2 === 0) continue;
+    for (let i = k + 1; i < n; i++) {
+      // L(i,k) = A(i,k) / A(k,k)
+      const aR = re[i + k * n],
+        aI = im[i + k * n];
+      const lR = (aR * dR + aI * dI) / dAbs2;
+      const lI = (aI * dR - aR * dI) / dAbs2;
+      re[i + k * n] = lR;
+      im[i + k * n] = lI;
+      // A(i, k+1:n) -= L(i,k) * A(k, k+1:n)
+      for (let j = k + 1; j < n; j++) {
+        re[i + j * n] -= lR * re[k + j * n] - lI * im[k + j * n];
+        im[i + j * n] -= lR * im[k + j * n] + lI * re[k + j * n];
+      }
+    }
+  }
+}
+
 const _bridge: LapackBridge = {
   inv,
   matmul,
@@ -1032,6 +1263,8 @@ const _bridge: LapackBridge = {
   svd,
   chol,
   cholComplex,
+  gmres,
+  gmresComplex,
 };
 
 export function getTsLapackBridge(): LapackBridge {
