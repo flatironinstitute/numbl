@@ -56,11 +56,11 @@ export function callFunction(
       rt: this.rt,
       lookupWorkspaceFile: n => {
         const entry = this.ctx.registry.filesByFuncName.get(n);
-        if (entry) return entry.fileName;
+        if (entry) return { path: entry.fileName, kind: "function" };
         const classInfo = this.ctx.getClassInfo(n);
-        if (classInfo) return classInfo.fileName;
+        if (classInfo) return { path: classInfo.fileName, kind: "class" };
         const jsEntry = this.ctx.registry.jsUserFunctionsByName.get(n);
-        if (jsEntry) return jsEntry.fileName;
+        if (jsEntry) return { path: jsEntry.fileName, kind: "jsfunction" };
         return undefined;
       },
     };

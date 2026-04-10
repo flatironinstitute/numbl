@@ -73,6 +73,8 @@ function dispatchPlotCall(
       return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
     case "imagesc":
       return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
+    case "pcolor":
+      return rt.pcolor_call(args.map(a => ensureRuntimeValue(a)));
     case "contour":
       return rt.contour_call(
         args.map(a => ensureRuntimeValue(a)),

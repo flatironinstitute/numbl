@@ -23,6 +23,7 @@ export type {
   Plot3Trace,
   SurfTrace,
   ImagescTrace,
+  PcolorTrace,
   ContourTrace,
   BarTrace,
   Bar3Trace,
@@ -37,6 +38,7 @@ import type {
   Plot3Trace,
   SurfTrace,
   ImagescTrace,
+  PcolorTrace,
   ContourTrace,
   BarTrace,
   Bar3Trace,
@@ -808,6 +810,114 @@ function expandXY(
     }
   }
   return { x, y };
+}
+
+// ── Pcolor argument parser ──────────────────────────────────────────────
+
+const PCOLOR_NAME_VALUE_KEYS = new Set(["edgecolor", "facealpha"]);
+
+function isPcolorNameValueKey(v: RuntimeValue): string | null {
+  if (!isRuntimeString(v) && !isRuntimeChar(v)) return null;
+  const lower = isRuntimeString(v)
+    ? v.toLocaleLowerCase()
+    : v.value.toLowerCase();
+  if (PCOLOR_NAME_VALUE_KEYS.has(lower)) return lower;
+  return null;
+}
+
+function applyPcolorNameValue(
+  trace: PcolorTrace,
+  key: string,
+  value: RuntimeValue
+): void {
+  switch (key) {
+    case "edgecolor": {
+      const s = getStringValueIfString(value);
+      if (s !== undefined && s.toLowerCase() === "none") {
+        trace.edgeColor = "none";
+        break;
+      }
+      const c = resolveColor(value);
+      if (c) trace.edgeColor = c;
+      break;
+    }
+    case "facealpha": {
+      const n = typeof value === "number" ? value : toNumber(value);
+      trace.faceAlpha = n;
+      break;
+    }
+  }
+}
+
+/**
+ * Parse pcolor() arguments.
+ *
+ * Supported forms:
+ *   pcolor(C)         — C is m×n, X = 1:n, Y = 1:m
+ *   pcolor(X, Y, C)   — X, Y, C are m×n matrices (or X is 1×n / Y is m×1)
+ *   pcolor(..., Name, Value) — name-value pairs (EdgeColor, FaceAlpha)
+ */
+export function parsePcolorArgs(args: RuntimeValue[]): PcolorTrace {
+  let pos = 0;
+
+  let xData: number[];
+  let yData: number[];
+  let cData: number[];
+  let rows: number;
+  let cols: number;
+
+  // Count leading numeric args
+  let numericCount = 0;
+  for (let i = pos; i < args.length; i++) {
+    if (isNumericArg(args[i])) numericCount++;
+    else break;
+  }
+
+  if (numericCount === 1) {
+    // pcolor(C)
+    const c = args[pos++];
+    const info = getMatrixInfo(c);
+    rows = info.rows;
+    cols = info.cols;
+    cData = info.data;
+    const gen = generateMeshgrid(rows, cols);
+    xData = gen.x;
+    yData = gen.y;
+  } else if (numericCount >= 3) {
+    // pcolor(X, Y, C)
+    const x = args[pos++];
+    const y = args[pos++];
+    const c = args[pos++];
+    const cInfo = getMatrixInfo(c);
+    rows = cInfo.rows;
+    cols = cInfo.cols;
+    cData = cInfo.data;
+    const expanded = expandXY(x, y, rows, cols);
+    xData = expanded.x;
+    yData = expanded.y;
+  } else {
+    throw new Error("pcolor requires 1 or 3 numeric input arguments");
+  }
+
+  const trace: PcolorTrace = {
+    x: xData,
+    y: yData,
+    c: cData,
+    rows,
+    cols,
+  };
+
+  // Parse name-value pairs
+  while (pos < args.length) {
+    const key = isPcolorNameValueKey(args[pos]);
+    if (!key) break;
+    pos++;
+    if (pos >= args.length) break;
+    const value = args[pos++];
+    applyPcolorNameValue(trace, key, value);
+  }
+
+  return trace;
 }
 
 function applySurfNameValue(

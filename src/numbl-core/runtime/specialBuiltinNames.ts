@@ -34,6 +34,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "surf",
   "scatter",
   "imagesc",
+  "pcolor",
   "contour",
   "contourf",
   "mesh",

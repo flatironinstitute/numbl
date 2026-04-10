@@ -1724,6 +1724,60 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return nargout >= 1 ? RTV.num(1) : undefined;
   });
 
+  registerSpecial("colorbar", (nargout, args) => {
+    // Recognized location keywords (MATLAB).
+    const LOCATIONS = new Set([
+      "east",
+      "west",
+      "north",
+      "south",
+      "eastoutside",
+      "westoutside",
+      "northoutside",
+      "southoutside",
+    ]);
+    let value = "on";
+    let location: string | undefined;
+    // Walk positional string args. We accept 'off', a location keyword, or
+    // name-value pairs (which we skip silently).
+    let i = 0;
+    while (i < args.length) {
+      let s: string;
+      try {
+        s = toString(args[i]);
+      } catch {
+        break;
+      }
+      const lower = s.toLowerCase();
+      if (lower === "off") {
+        value = "off";
+        i++;
+        continue;
+      }
+      if (LOCATIONS.has(lower)) {
+        location = lower;
+        i++;
+        continue;
+      }
+      // Name-value pairs (Direction, Ticks, etc.) — accept and skip silently.
+      i += 2;
+    }
+    _plotInstr(rt.plotInstructions, {
+      type: "set_colorbar",
+      value,
+      location,
+    });
+    // MATLAB returns a ColorBar handle when an output is requested. We don't
+    // model real handle objects, so return a placeholder struct.
+    if (nargout >= 1) {
+      return RTV.struct({
+        Location: RTV.char(location ?? "eastoutside"),
+        Visible: RTV.char(value === "off" ? "off" : "on"),
+      });
+    }
+    return undefined;
+  });
+
   // ── ODE solvers ─────────────────────────────────────────────────────
 
   registerSpecial("ode45", (nargout, args) => {

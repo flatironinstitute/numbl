@@ -150,6 +150,9 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
         bar3Traces={axes.bar3Traces ?? []}
         bar3hTraces={axes.bar3hTraces ?? []}
         shading={axes.shading}
+        colorbar={axes.colorbar}
+        colorbarLocation={axes.colorbarLocation}
+        colormap={axes.colormap}
       />
     );
   }
@@ -163,6 +166,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       legend={axes.legend}
       gridOn={axes.gridOn}
       imagescTrace={axes.imagescTrace}
+      pcolorTraces={axes.pcolorTraces}
       contourTraces={axes.contourTraces}
       colormap={axes.colormap}
       axisMode={axes.axisMode}
@@ -175,6 +179,9 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       heatmapTrace={axes.heatmapTrace}
       areaTraces={axes.areaTraces}
       areaBaseValue={axes.areaBaseValue}
+      shading={axes.shading}
+      colorbar={axes.colorbar}
+      colorbarLocation={axes.colorbarLocation}
     />
   );
 }
@@ -187,6 +194,7 @@ function PlotCanvas({
   legend,
   gridOn,
   imagescTrace,
+  pcolorTraces,
   contourTraces,
   colormap,
   axisMode,
@@ -199,6 +207,9 @@ function PlotCanvas({
   heatmapTrace,
   areaTraces,
   areaBaseValue,
+  shading,
+  colorbar,
+  colorbarLocation,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -207,6 +218,7 @@ function PlotCanvas({
   legend?: string[];
   gridOn?: boolean;
   imagescTrace?: AxesState["imagescTrace"];
+  pcolorTraces?: AxesState["pcolorTraces"];
   contourTraces?: AxesState["contourTraces"];
   colormap?: string;
   axisMode?: string;
@@ -219,6 +231,9 @@ function PlotCanvas({
   heatmapTrace?: AxesState["heatmapTrace"];
   areaTraces?: AxesState["areaTraces"];
   areaBaseValue?: number;
+  shading?: AxesState["shading"];
+  colorbar?: boolean;
+  colorbarLocation?: string;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -246,7 +261,11 @@ function PlotCanvas({
       pieTrace,
       heatmapTrace,
       areaTraces,
-      areaBaseValue
+      areaBaseValue,
+      pcolorTraces,
+      shading,
+      colorbar,
+      colorbarLocation
     );
   }, [
     traces,
@@ -268,6 +287,10 @@ function PlotCanvas({
     heatmapTrace,
     areaTraces,
     areaBaseValue,
+    pcolorTraces,
+    shading,
+    colorbar,
+    colorbarLocation,
   ]);
 
   useEffect(() => {
