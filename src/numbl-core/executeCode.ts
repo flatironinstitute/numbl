@@ -86,11 +86,21 @@ export interface BuiltinProfileBreakdown {
   jit: BuiltinProfileEntry;
 }
 
+export interface HotLoopEntry {
+  file: string;
+  line: number;
+  kind: "for" | "while";
+  iterations: number;
+  callCount: number;
+  totalTimeMs: number;
+}
+
 export interface ProfileData {
   executionTimeMs: number;
   jitCompileTimeMs: number;
   builtins: Record<string, BuiltinProfileBreakdown>;
   dispatches: Record<string, BuiltinProfileEntry>;
+  hotLoops: HotLoopEntry[];
 }
 
 export interface ExecResult {
@@ -768,6 +778,7 @@ export function executeCode(
         jitCompileTimeMs: rt.getJitCompileTimeMs(),
         builtins: rt.getBuiltinProfile(),
         dispatches: rt.getDispatchProfile(),
+        hotLoops: [...rt.hotLoops.values()],
       };
     }
 
