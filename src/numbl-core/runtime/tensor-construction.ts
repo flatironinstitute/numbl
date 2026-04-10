@@ -382,8 +382,7 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
     throw new RuntimeError(`Cannot concatenate ${kstr(v)} into matrix`);
   });
 
-  // Filter out truly empty tensors
-  // Only filter [0,0] shaped tensors; keep shaped empties like zeros(30,0)
+  // Filter out [0,0] tensors (always safe to drop).
   tensors = tensors.filter(t => t.shape.some(d => d > 0));
   if (tensors.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
   if (tensors.length === 1) return tensors[0];
@@ -392,11 +391,31 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   const ndim = Math.max(2, ...tensors.map(t => t.shape.length));
 
   // Pad all shapes to ndim
-  const shapes = tensors.map(t => {
+  let shapes = tensors.map(t => {
     const s = [...t.shape];
     while (s.length < ndim) s.push(1);
     return s;
   });
+
+  // Find reference shape from first tensor with elements (non-zero-element).
+  // Drop zero-element tensors whose non-cat dimensions are incompatible with it.
+  // MATLAB allows e.g. horzcat(zeros(0,1), [1 2 3]) → [1 2 3].
+  const refIdx = tensors.findIndex(t => t.data.length > 0);
+  if (refIdx >= 0) {
+    const ref = shapes[refIdx];
+    const keep: boolean[] = tensors.map((t, i) => {
+      if (t.data.length > 0) return true;
+      for (let d = 0; d < ndim; d++) {
+        if (d === dimIdx) continue;
+        if (shapes[i][d] !== ref[d]) return false;
+      }
+      return true;
+    });
+    tensors = tensors.filter((_, i) => keep[i]);
+    shapes = shapes.filter((_, i) => keep[i]);
+    if (tensors.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+    if (tensors.length === 1) return tensors[0];
+  }
 
   // Verify all non-cat dimensions match
   const refShape = shapes[0];
