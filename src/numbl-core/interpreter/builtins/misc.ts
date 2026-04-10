@@ -431,12 +431,43 @@ for (const name of ["groot", "gcf", "gca", "shg", "newplot"]) {
   });
 }
 
-// get(handle, propName) — return a dummy handle
+// get(handle, propName) — return property value or dummy handle
 registerIBuiltin({
   name: "get",
   resolve: () => ({
     outputTypes: [{ kind: "unknown" }],
-    apply: () => RTV.dummyHandle(),
+    apply: (args: RuntimeValue[]) => {
+      // get(h, 'colormap') → return default 64×3 parula matrix
+      if (args.length >= 2) {
+        const prop = args[1];
+        const propStr = isRuntimeChar(prop)
+          ? prop.value
+          : isRuntimeString(prop)
+            ? prop
+            : "";
+        if (propStr.toLowerCase() === "colormap") {
+          const n = 64;
+          const data = new Float64Array(n * 3);
+          for (let i = 0; i < n; i++) {
+            const t = i / (n - 1);
+            // Simplified parula: dark blue → cyan → yellow
+            if (t < 0.5) {
+              const s = t * 2;
+              data[i] = 0.2 * (1 - s);
+              data[n + i] = 0.1 + 0.6 * s;
+              data[2 * n + i] = 0.9 - 0.3 * s;
+            } else {
+              const s = (t - 0.5) * 2;
+              data[i] = 0.2 + 0.8 * s;
+              data[n + i] = 0.7 + 0.3 * s;
+              data[2 * n + i] = 0.6 - 0.5 * s;
+            }
+          }
+          return RTV.tensor(data, [n, 3]);
+        }
+      }
+      return RTV.dummyHandle();
+    },
   }),
 });
 
