@@ -195,8 +195,9 @@ defineBuiltin({
       },
       apply: args => {
         const first = textValue(args[0]) ?? String(args[0]);
-        // error(id, fmt, ...) form: first arg contains ':' and there are more args
-        if (args.length >= 2 && first.includes(":")) {
+        // error(id, fmt, ...) form: first arg is a valid MATLAB error identifier
+        // Identifiers are component:mnemonic with only word chars and colons (e.g. 'MATLAB:badInput')
+        if (args.length >= 2 && /^[A-Za-z]\w*(:[A-Za-z]\w*)+$/.test(first)) {
           const msg =
             args.length === 2
               ? (textValue(args[1]) ?? String(args[1]))
