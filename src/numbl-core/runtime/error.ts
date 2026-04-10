@@ -79,6 +79,11 @@ export class RuntimeError extends Error {
    * Format error with location and snippet context.
    */
   toString(): string {
+    if (this.callStack != null && this.callStack.length > 0) {
+      return this._formatWithCallStack();
+    }
+
+    // No call stack — simple format
     let result = this.name;
 
     if (this.file && this.line !== null) {
@@ -96,57 +101,59 @@ export class RuntimeError extends Error {
       result += `\n${this.snippet}`;
     }
 
-    if (this.callStack != null && this.callStack.length > 0) {
-      result += `\nCall stack (most recent call first):`;
-      const N = this.callStack.length;
-      for (let i = N - 1; i >= 0; i--) {
-        const name = this.callStack[i].name;
-        let loc: string;
-        let frameFile: string | null = null;
-        let frameLine = 0;
-        if (i === N - 1) {
-          // Innermost frame: use the error's own file/line
-          frameFile = this.file;
-          frameLine = this.line ?? 0;
-          if (frameFile && frameLine > 0) {
-            loc = `${frameFile}:${frameLine}`;
-          } else if (frameLine > 0) {
-            loc = `line ${frameLine}`;
-          } else {
-            loc = "unknown";
-          }
-        } else {
-          // Outer frame: call site is recorded in the frame above it
-          const callerFrame = this.callStack[i + 1];
-          frameFile = callerFrame.callerFile;
-          frameLine = callerFrame.callerLine;
-          if (frameFile && frameLine > 0) {
-            loc = `${frameFile}:${frameLine}`;
-          } else if (frameLine > 0) {
-            loc = `line ${frameLine}`;
-          } else {
-            loc = "unknown";
-          }
-        }
-        result += `\n  at ${name} (${loc})`;
-        if (frameFile && frameLine > 0) {
-          const srcLine = this._getSourceLine(frameFile, frameLine);
-          if (srcLine) result += `\n        ${srcLine}`;
-        }
-      }
-      // Show the outermost caller location (where the first function was called from)
-      const outermost = this.callStack[0];
-      if (outermost.callerFile && outermost.callerLine > 0) {
-        result += `\n  at ${outermost.callerFile}:${outermost.callerLine}`;
-        const srcLine = this._getSourceLine(
-          outermost.callerFile,
-          outermost.callerLine
-        );
-        if (srcLine) result += `\n        ${srcLine}`;
+    return result;
+  }
+
+  /** Format error with MATLAB-style call stack. */
+  private _formatWithCallStack(): string {
+    const stack = this.callStack!;
+    const N = stack.length;
+    const parts: string[] = [];
+
+    // Innermost frame: where the error occurred
+    const innerName = stack[N - 1].name;
+    const innerFile = this.file;
+    const innerLine = this.line ?? 0;
+    if (innerFile && innerLine > 0) {
+      parts.push(`Error using ${innerName} (${innerFile}:${innerLine})`);
+    } else if (innerLine > 0) {
+      parts.push(`Error using ${innerName} (line ${innerLine})`);
+    } else {
+      parts.push(`Error using ${innerName}`);
+    }
+    parts.push(this.message);
+
+    // Outer frames: each function in the call chain
+    for (let i = N - 2; i >= 0; i--) {
+      const name = stack[i].name;
+      const callerFrame = stack[i + 1];
+      const file = callerFrame.callerFile;
+      const line = callerFrame.callerLine;
+      parts.push("");
+      if (file && line > 0) {
+        parts.push(`Error in ${name} (${file}:${line})`);
+        const srcLine = this._getSourceLine(file, line);
+        if (srcLine) parts.push(`    ${srcLine}`);
+      } else if (line > 0) {
+        parts.push(`Error in ${name} (line ${line})`);
+      } else {
+        parts.push(`Error in ${name}`);
       }
     }
 
-    return result;
+    // Outermost caller: the script/entry point
+    const outermost = stack[0];
+    if (outermost.callerFile && outermost.callerLine > 0) {
+      parts.push("");
+      parts.push(`Error in ${outermost.callerFile}:${outermost.callerLine}`);
+      const srcLine = this._getSourceLine(
+        outermost.callerFile,
+        outermost.callerLine
+      );
+      if (srcLine) parts.push(`    ${srcLine}`);
+    }
+
+    return parts.join("\n");
   }
 
   /** Look up a single trimmed source line from fileSources. */
