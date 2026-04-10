@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 1;
+export const NATIVE_ADDON_EXPECTED_VERSION = 2;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -514,6 +514,65 @@ export interface LapackBridge {
     op: number,
     scalarOnLeft: boolean
   ): Float64Array;
+
+  /**
+   * Restarted GMRES solver for A*x = b (real, dense matrices only).
+   * Uses BLAS dgemv for matvec and LAPACK dgetrf+dgetrs for preconditioner.
+   * @param A       Column-major Float64Array of length n*n (not modified).
+   * @param n       System dimension.
+   * @param b       Right-hand side Float64Array of length n.
+   * @param restart Inner iterations per restart cycle (use n for no restart).
+   * @param tol     Convergence tolerance on relative preconditioned residual.
+   * @param maxit   Maximum number of outer iterations.
+   * @param M1      Preconditioner factor 1 (n×n column-major), or null.
+   * @param M2      Preconditioner factor 2 (n×n column-major), or null.
+   * @param x0      Initial guess (length n), or null for zeros.
+   * @returns       Object with x, flag, relres, iter (Int32Array[2]), resvec.
+   */
+  gmres?(
+    A: Float64Array,
+    n: number,
+    b: Float64Array,
+    restart: number,
+    tol: number,
+    maxit: number,
+    M1: Float64Array | null,
+    M2: Float64Array | null,
+    x0: Float64Array | null
+  ): {
+    x: Float64Array;
+    flag: number;
+    relres: number;
+    iter: Int32Array;
+    resvec: Float64Array;
+  };
+
+  /**
+   * Complex restarted GMRES solver for A*x = b (split real/imag dense matrices).
+   */
+  gmresComplex?(
+    ARe: Float64Array,
+    AIm: Float64Array,
+    n: number,
+    bRe: Float64Array,
+    bIm: Float64Array,
+    restart: number,
+    tol: number,
+    maxit: number,
+    M1Re: Float64Array | null,
+    M1Im: Float64Array | null,
+    M2Re: Float64Array | null,
+    M2Im: Float64Array | null,
+    x0Re: Float64Array | null,
+    x0Im: Float64Array | null
+  ): {
+    xRe: Float64Array;
+    xIm: Float64Array;
+    flag: number;
+    relres: number;
+    iter: Int32Array;
+    resvec: Float64Array;
+  };
 
   /** Element-wise binary op on complex Float64Arrays. op: 0=add, 1=sub, 2=mul, 3=div */
   elemwiseComplex?(

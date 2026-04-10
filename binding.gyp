@@ -18,7 +18,8 @@
         "native/lapack_fft_batch.cpp",
         "native/elemwise.cpp",
         "native/randn.cpp",
-        "native/unary_elemwise.cpp"
+        "native/unary_elemwise.cpp",
+        "native/lapack_gmres.cpp"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",

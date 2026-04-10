@@ -146,6 +146,30 @@ extern "C" {
   // A = U^H * U (uplo='U') or A = L * L^H (uplo='L')
   void zpotrf_(char* uplo, int* n, lapack_complex_double* a, int* lda, int* info);
 
+  // ── Matrix-vector multiply (BLAS) ─────────────────────────────────────────
+  // y = alpha * op(A) * x + beta * y
+  void dgemv_(char* trans, int* m, int* n,
+              double* alpha, double* a, int* lda,
+              double* x, int* incx,
+              double* beta, double* y, int* incy);
+
+  // ── Triangular solve using LU factors (LAPACK) ──────────────────────────────
+  // Solve A * X = B using the LU factorization from dgetrf
+  void dgetrs_(char* trans, int* n, int* nrhs,
+               double* a, int* lda, int* ipiv,
+               double* b, int* ldb, int* info);
+
+  // Complex matrix-vector multiply: y = alpha * op(A) * x + beta * y
+  void zgemv_(char* trans, int* m, int* n,
+              lapack_complex_double* alpha, lapack_complex_double* a, int* lda,
+              lapack_complex_double* x, int* incx,
+              lapack_complex_double* beta, lapack_complex_double* y, int* incy);
+
+  // Complex triangular solve using LU factors from zgetrf
+  void zgetrs_(char* trans, int* n, int* nrhs,
+               lapack_complex_double* a, int* lda, int* ipiv,
+               lapack_complex_double* b, int* ldb, int* info);
+
   // ── QZ factorization (generalized Schur decomposition) ──────────────────────
   // Compute the generalized real Schur form of (A, B):
   //   A = VSL * S * VSR^T,  B = VSL * T * VSR^T
@@ -286,3 +310,5 @@ Napi::Value ElemwiseScalar(const Napi::CallbackInfo& info);
 Napi::Value ElemwiseComplex(const Napi::CallbackInfo& info);
 Napi::Value FillRandn(const Napi::CallbackInfo& info);
 Napi::Value UnaryElemwise(const Napi::CallbackInfo& info);
+Napi::Value Gmres(const Napi::CallbackInfo& info);
+Napi::Value GmresComplex(const Napi::CallbackInfo& info);
