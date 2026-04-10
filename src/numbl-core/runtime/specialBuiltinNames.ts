@@ -77,6 +77,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "zlabel",
   "colorbar",
   "axis",
+  "caxis",
   "mfilename",
   "addpath",
   "rmpath",

@@ -169,6 +169,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       pcolorTraces={axes.pcolorTraces}
       contourTraces={axes.contourTraces}
       colormap={axes.colormap}
+      colormapData={axes.colormapData}
       axisMode={axes.axisMode}
       axisScale={axes.axisScale}
       barTraces={axes.barTraces}
@@ -182,6 +183,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       shading={axes.shading}
       colorbar={axes.colorbar}
       colorbarLocation={axes.colorbarLocation}
+      caxis={axes.caxis}
     />
   );
 }
@@ -197,6 +199,7 @@ function PlotCanvas({
   pcolorTraces,
   contourTraces,
   colormap,
+  colormapData,
   axisMode,
   axisScale,
   barTraces,
@@ -210,6 +213,7 @@ function PlotCanvas({
   shading,
   colorbar,
   colorbarLocation,
+  caxis,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -221,6 +225,7 @@ function PlotCanvas({
   pcolorTraces?: AxesState["pcolorTraces"];
   contourTraces?: AxesState["contourTraces"];
   colormap?: string;
+  colormapData?: number[][];
   axisMode?: string;
   axisScale?: AxesState["axisScale"];
   barTraces?: AxesState["barTraces"];
@@ -234,6 +239,7 @@ function PlotCanvas({
   shading?: AxesState["shading"];
   colorbar?: boolean;
   colorbarLocation?: string;
+  caxis?: [number, number];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -265,7 +271,9 @@ function PlotCanvas({
       pcolorTraces,
       shading,
       colorbar,
-      colorbarLocation
+      colorbarLocation,
+      caxis,
+      colormapData
     );
   }, [
     traces,
@@ -277,6 +285,7 @@ function PlotCanvas({
     imagescTrace,
     contourTraces,
     colormap,
+    colormapData,
     axisMode,
     axisScale,
     barTraces,
@@ -291,6 +300,7 @@ function PlotCanvas({
     shading,
     colorbar,
     colorbarLocation,
+    caxis,
   ]);
 
   useEffect(() => {
