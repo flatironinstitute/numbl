@@ -8,6 +8,7 @@ import {
   type FloatXArrayType,
   type RuntimeTensor,
   type RuntimeComplexNumber,
+  type RuntimeFunction,
 } from "../../runtime/types.js";
 
 // ── Type checks ─────────────────────────────────────────────────────────
@@ -410,6 +411,9 @@ export const jitHelpers = {
     rt: {
       pushCallFrame: (name: string) => void;
       popCallFrame: () => void;
+      pushCleanupScope: () => void;
+      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
+      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
       annotateError: (e: unknown) => void;
     },
     name: string,
@@ -417,12 +421,21 @@ export const jitHelpers = {
     ...args: unknown[]
   ) => {
     rt.pushCallFrame(name);
+    rt.pushCleanupScope();
     try {
       return fn(...args);
     } catch (e) {
       rt.annotateError(e);
       throw e;
     } finally {
+      rt.popAndRunCleanups((cfn: RuntimeFunction) => {
+        if (cfn.jsFn) {
+          if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
+          else cfn.jsFn();
+        } else {
+          rt.dispatch(cfn.name, 0, []);
+        }
+      });
       rt.popCallFrame();
     }
   },

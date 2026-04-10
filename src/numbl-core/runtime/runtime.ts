@@ -146,6 +146,31 @@ export class Runtime {
   public $file: string | null = null;
   public $callStack: CallFrame[] = [];
 
+  // onCleanup scope stack: each function entry pushes an empty array;
+  // onCleanup() appends to the top; function exit pops and runs handlers LIFO.
+  public _cleanupScopes: RuntimeFunction[][] = [];
+
+  public pushCleanupScope(): void {
+    this._cleanupScopes.push([]);
+  }
+
+  public registerCleanup(fn: RuntimeFunction): void {
+    const top = this._cleanupScopes[this._cleanupScopes.length - 1];
+    if (top) top.push(fn);
+  }
+
+  public popAndRunCleanups(callFn: (fn: RuntimeFunction) => void): void {
+    const handlers = this._cleanupScopes.pop();
+    if (!handlers) return;
+    for (let i = handlers.length - 1; i >= 0; i--) {
+      try {
+        callFn(handlers[i]);
+      } catch {
+        // Cleanup errors are silently ignored (MATLAB behavior)
+      }
+    }
+  }
+
   // Sentinel values
   public COLON = COLON_SENTINEL;
   public END = END_SENTINEL;

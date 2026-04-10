@@ -567,6 +567,7 @@ export function callUserFunction(
   this.callerEnv = savedEnv;
   this.env = fnEnv;
   this.rt.pushCallFrame(fn.name);
+  this.rt.pushCleanupScope();
 
   try {
     this.execStmts(fn.body);
@@ -624,6 +625,14 @@ export function callUserFunction(
     this.rt.annotateError(e);
     throw e;
   } finally {
+    this.rt.popAndRunCleanups(fn => {
+      if (fn.jsFn) {
+        if (fn.jsFnExpectsNargout) fn.jsFn(0);
+        else fn.jsFn();
+      } else {
+        this.rt.dispatch(fn.name, 0, []);
+      }
+    });
     this.rt.popCallFrame();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
@@ -667,6 +676,7 @@ export function callNestedFunction(
 
   const savedEnv = this.env;
   this.env = fnEnv;
+  this.rt.pushCleanupScope();
 
   try {
     this.execStmts(fn.body);
@@ -715,6 +725,14 @@ export function callNestedFunction(
     }
     return outputs;
   } finally {
+    this.rt.popAndRunCleanups(fn => {
+      if (fn.jsFn) {
+        if (fn.jsFnExpectsNargout) fn.jsFn(0);
+        else fn.jsFn();
+      } else {
+        this.rt.dispatch(fn.name, 0, []);
+      }
+    });
     this.env = savedEnv;
   }
 }

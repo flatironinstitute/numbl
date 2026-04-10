@@ -105,4 +105,5 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "toc",
   "quadgk",
   "gmres",
+  "onCleanup",
 ];

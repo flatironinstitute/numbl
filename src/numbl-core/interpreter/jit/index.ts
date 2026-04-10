@@ -142,12 +142,21 @@ function runWithCallFrame(
   args: unknown[]
 ): unknown {
   interp.rt.pushCallFrame(name);
+  interp.rt.pushCleanupScope();
   try {
     return compiledFn(...args);
   } catch (e) {
     interp.rt.annotateError(e);
     throw e;
   } finally {
+    interp.rt.popAndRunCleanups(fn => {
+      if (fn.jsFn) {
+        if (fn.jsFnExpectsNargout) fn.jsFn(0);
+        else fn.jsFn();
+      } else {
+        interp.rt.dispatch(fn.name, 0, []);
+      }
+    });
     interp.rt.popCallFrame();
   }
 }

@@ -1813,6 +1813,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   registerSpecial("gmres", (nargout, args) => {
     return _gmresImpl(rt, nargout, args);
   });
+
+  // ── onCleanup ─────────────────────────────────────────────────────
+  registerSpecial("onCleanup", (_nargout, args) => {
+    if (args.length !== 1 || !isRuntimeFunction(args[0]))
+      throw new RuntimeError("onCleanup requires a function handle argument");
+    rt.registerCleanup(args[0]);
+    return RTV.classInstance("onCleanup", [], false);
+  });
 }
 
 // ── ode45 implementation ──────────────────────────────────────────────
