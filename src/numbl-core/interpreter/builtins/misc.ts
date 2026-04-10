@@ -421,7 +421,7 @@ registerIBuiltin({
 // ── Dummy/placeholder builtins ──────────────────────────────────────────
 
 // Dummy handle functions — return a dummy handle struct
-for (const name of ["groot", "gcf", "gca", "shg", "newplot", "caxis"]) {
+for (const name of ["groot", "gcf", "gca", "shg", "newplot"]) {
   registerIBuiltin({
     name,
     resolve: () => ({

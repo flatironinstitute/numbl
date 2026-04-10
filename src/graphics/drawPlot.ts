@@ -72,8 +72,11 @@ export function drawPlot(
   pcolorTraces?: PcolorTrace[],
   shading?: "faceted" | "flat" | "interp",
   colorbar?: boolean,
-  colorbarLocation?: string
+  colorbarLocation?: string,
+  caxis?: [number, number],
+  colormapData?: number[][]
 ) {
+  _activeColormapData = colormapData;
   const ctx = canvas.getContext("2d");
   const hasContent =
     traces.length > 0 ||
@@ -511,7 +514,7 @@ export function drawPlot(
   // Pcolor rendering
   if (pcolorTraces) {
     for (const pt of pcolorTraces) {
-      drawPcolor(ctx, pt, toCanvasX, toCanvasY, colormap, shading);
+      drawPcolor(ctx, pt, toCanvasX, toCanvasY, colormap, shading, caxis);
     }
   }
 
@@ -853,11 +856,8 @@ export function drawPlot(
 
   // Colorbar (drawn after clip is restored so it can sit outside the plot area)
   if (colorbar) {
-    const cbRange = computeColorbarRange(
-      pcolorTraces,
-      imagescTrace,
-      contourTraces
-    );
+    const cbRange =
+      caxis ?? computeColorbarRange(pcolorTraces, imagescTrace, contourTraces);
     if (cbRange) {
       drawColorbarAtLocation(
         ctx,
@@ -876,11 +876,31 @@ export function drawPlot(
 
 // ── Colormap helpers ────────────────────────────────────────────────────
 
+/** Module-scoped custom colormap data, set at the start of drawPlot. */
+let _activeColormapData: number[][] | undefined;
+
 function colormapLookup(t: number, name?: string): [number, number, number] {
   // t is 0..1
   const clamped = Math.max(0, Math.min(1, t));
+  if (_activeColormapData && _activeColormapData.length > 0) {
+    const data = _activeColormapData;
+    const n = data.length;
+    if (n === 1) return data[0] as [number, number, number];
+    const idx = clamped * (n - 1);
+    const lo = Math.floor(idx);
+    const hi = Math.min(lo + 1, n - 1);
+    const frac = idx - lo;
+    return [
+      data[lo][0] + frac * (data[hi][0] - data[lo][0]),
+      data[lo][1] + frac * (data[hi][1] - data[lo][1]),
+      data[lo][2] + frac * (data[hi][2] - data[lo][2]),
+    ];
+  }
   if (name === "jet") {
     return jetColormap(clamped);
+  }
+  if (name === "redblue") {
+    return redblueColormap(clamped);
   }
   // Default: parula-like (blue → yellow)
   return parulaColormap(clamped);
@@ -924,6 +944,16 @@ function jetColormap(t: number): [number, number, number] {
     Math.max(0, Math.min(1, g)),
     Math.max(0, Math.min(1, b)),
   ];
+}
+
+function redblueColormap(t: number): [number, number, number] {
+  // Blue (0) → White (0.5) → Red (1)
+  if (t < 0.5) {
+    const s = t * 2; // 0..1
+    return [s, s, 1];
+  }
+  const s = (t - 0.5) * 2; // 0..1
+  return [1, 1 - s, 1 - s];
 }
 
 // ── Imagesc rendering ────────────────────────────────────────────────────
@@ -1417,12 +1447,13 @@ function drawPcolor(
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
   colormap: string | undefined,
-  shading: "faceted" | "flat" | "interp" | undefined
+  shading: "faceted" | "flat" | "interp" | undefined,
+  caxis?: [number, number]
 ) {
   const mode = shading ?? "faceted";
   if (mode === "interp") {
     // TODO: implement bilinear interpolation across cell corners.
-    drawPcolorFlat(ctx, trace, toCanvasX, toCanvasY, colormap, false);
+    drawPcolorFlat(ctx, trace, toCanvasX, toCanvasY, colormap, false, caxis);
     return;
   }
   drawPcolorFlat(
@@ -1431,7 +1462,8 @@ function drawPcolor(
     toCanvasX,
     toCanvasY,
     colormap,
-    mode === "faceted"
+    mode === "faceted",
+    caxis
   );
 }
 
@@ -1441,18 +1473,24 @@ function drawPcolorFlat(
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
   colormap: string | undefined,
-  drawEdges: boolean
+  drawEdges: boolean,
+  caxis?: [number, number]
 ) {
   const { rows, cols, x, y, c } = trace;
   if (rows < 2 || cols < 2) return;
 
-  // Compute color range
-  let cMin = Infinity;
-  let cMax = -Infinity;
-  for (const v of c) {
-    if (isFinite(v)) {
-      if (v < cMin) cMin = v;
-      if (v > cMax) cMax = v;
+  // Compute color range (use caxis if provided)
+  let cMin: number, cMax: number;
+  if (caxis) {
+    [cMin, cMax] = caxis;
+  } else {
+    cMin = Infinity;
+    cMax = -Infinity;
+    for (const v of c) {
+      if (isFinite(v)) {
+        if (v < cMin) cMin = v;
+        if (v > cMax) cMax = v;
+      }
     }
   }
   if (!isFinite(cMin)) return;

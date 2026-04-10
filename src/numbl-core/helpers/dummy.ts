@@ -10,7 +10,6 @@ const dummyHandleFunctions = [
   "shg",
   "dir",
   "newplot",
-  "caxis",
   "axis",
   "odeset",
 ];

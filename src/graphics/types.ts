@@ -246,10 +246,11 @@ export type PlotInstruction =
   | { type: "set_sgtitle"; text: string }
   | { type: "set_grid"; value: boolean }
   | { type: "set_colorbar"; value: string; location?: string }
-  | { type: "set_colormap"; name: string }
+  | { type: "set_colormap"; name: string; data?: number[][] }
   | { type: "set_axis"; value: string }
   | {
       type: "set_axis_scale";
       value: "linear" | "semilogx" | "semilogy" | "loglog";
     }
-  | { type: "set_view"; az: number; el: number };
+  | { type: "set_view"; az: number; el: number }
+  | { type: "set_caxis"; limits: [number, number] };

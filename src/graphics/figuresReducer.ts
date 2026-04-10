@@ -42,9 +42,11 @@ export type AxesState = {
   colorbar?: boolean;
   colorbarLocation?: string;
   colormap?: string;
+  colormapData?: number[][];
   view?: { az: number; el: number };
   axisMode?: string;
   axisScale?: "linear" | "semilogx" | "semilogy" | "loglog";
+  caxis?: [number, number];
 };
 
 export type FigureState = {
@@ -369,13 +371,18 @@ export const figuresReducer = (
         colorbarLocation: action.location ?? "eastoutside",
       });
     case "set_colormap":
-      return updateAxes(state, { colormap: action.name });
+      return updateAxes(state, {
+        colormap: action.name,
+        colormapData: action.data,
+      });
     case "set_view":
       return updateAxes(state, { view: { az: action.az, el: action.el } });
     case "set_axis":
       return updateAxes(state, { axisMode: action.value });
     case "set_axis_scale":
       return updateAxes(state, { axisScale: action.value });
+    case "set_caxis":
+      return updateAxes(state, { caxis: action.limits });
 
     case "clf": {
       const fig = state.figs[state.currentHandle];

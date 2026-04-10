@@ -24,6 +24,16 @@ The JIT (`src/numbl-core/interpreter/jit/`) sits on top of the interpreter: it t
 
 - After creating a PR, switch back to `main`.
 
+## Building
+
+After changing any files under `src/graphics/`, rebuild the plot viewer:
+
+```bash
+npm run build:plot-viewer
+```
+
+The CLI `--plot` flag serves the pre-built bundle from `dist-plot-viewer/`. Unit tests do **not** exercise this bundle, so forgetting to rebuild means the browser will use stale rendering code.
+
 ## Testing
 
 Run both test suites before considering work complete:

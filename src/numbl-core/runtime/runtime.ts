@@ -335,6 +335,7 @@ export class Runtime {
     };
     this.builtins["pcolor"] = (_nargout: number, args: unknown[]) => {
       this.pcolor_call(args.map(a => ensureRuntimeValue(a)));
+      if (_nargout >= 1) return RTV.dummyHandle();
     };
     this.builtins["contour"] = (_nargout: number, args: unknown[]) => {
       this.contour_call(
@@ -420,8 +421,22 @@ export class Runtime {
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
         const rv = ensureRuntimeValue(args[0]);
-        const name = _toString(rv).replace(/^"|"$/g, "");
-        _plotInstr(this.plotInstructions, { type: "set_colormap", name });
+        if (isRuntimeTensor(rv) && rv.shape.length === 2 && rv.shape[1] === 3) {
+          // N×3 custom colormap matrix
+          const rows = rv.shape[0];
+          const data: number[][] = [];
+          for (let i = 0; i < rows; i++) {
+            data.push([rv.data[i], rv.data[rows + i], rv.data[2 * rows + i]]);
+          }
+          _plotInstr(this.plotInstructions, {
+            type: "set_colormap",
+            name: "__custom__",
+            data,
+          });
+        } else {
+          const name = _toString(rv).replace(/^"|"$/g, "");
+          _plotInstr(this.plotInstructions, { type: "set_colormap", name });
+        }
       }
     };
     this.builtins["view"] = (_nargout: number, args: unknown[]) => {
@@ -442,6 +457,17 @@ export class Runtime {
           ""
         );
         _plotInstr(this.plotInstructions, { type: "set_axis", value: val });
+      }
+    };
+    this.builtins["caxis"] = (_nargout: number, args: unknown[]) => {
+      if (args.length > 0) {
+        const rv = ensureRuntimeValue(args[0]);
+        if (isRuntimeTensor(rv) && rv.data.length >= 2) {
+          _plotInstr(this.plotInstructions, {
+            type: "set_caxis",
+            limits: [rv.data[0], rv.data[1]],
+          });
+        }
       }
     };
   }

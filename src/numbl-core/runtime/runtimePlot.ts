@@ -93,8 +93,9 @@ export function plotInstr(
     | { type: "set_grid"; value: unknown }
     | { type: "set_zlabel"; text: unknown }
     | { type: "set_colorbar"; value: unknown; location?: unknown }
-    | { type: "set_colormap"; name: unknown }
+    | { type: "set_colormap"; name: unknown; data?: number[][] }
     | { type: "set_axis"; value: unknown }
+    | { type: "set_caxis"; limits: [number, number] }
 ): void {
   switch (instr.type) {
     case "set_figure_handle":
@@ -169,16 +170,25 @@ export function plotInstr(
       plotInstructions.push(cbInstr);
       break;
     }
-    case "set_colormap":
-      plotInstructions.push({
+    case "set_colormap": {
+      const cmInstr: PlotInstruction & { type: "set_colormap" } = {
         type: "set_colormap",
         name: resolveStr(instr.name).replace(/^"|"$/g, ""),
-      });
+      };
+      if (instr.data) cmInstr.data = instr.data;
+      plotInstructions.push(cmInstr);
       break;
+    }
     case "set_axis":
       plotInstructions.push({
         type: "set_axis",
         value: resolveStr(instr.value).replace(/^"|"$/g, ""),
+      });
+      break;
+    case "set_caxis":
+      plotInstructions.push({
+        type: "set_caxis",
+        limits: instr.limits,
       });
       break;
   }
