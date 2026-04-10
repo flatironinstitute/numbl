@@ -212,6 +212,60 @@ export function formatDiagnostic(
   info: DiagnosticInfo,
   getSource?: (file: string) => string | null
 ): string {
+  // When there's a call stack, use MATLAB-style format
+  if (info.callStack != null && info.callStack.length > 0) {
+    const stack = info.callStack;
+    const N = stack.length;
+    const parts: string[] = [];
+
+    // Innermost frame: where the error occurred
+    const innerName = stack[N - 1].name;
+    const innerFile = info.file;
+    const innerLine = info.line ?? 0;
+    if (innerFile && innerLine > 0) {
+      parts.push(`Error using ${innerName} (${innerFile}:${innerLine})`);
+    } else if (innerLine > 0) {
+      parts.push(`Error using ${innerName} (line ${innerLine})`);
+    } else {
+      parts.push(`Error using ${innerName}`);
+    }
+    parts.push(info.message);
+
+    // Outer frames
+    for (let i = N - 2; i >= 0; i--) {
+      const name = stack[i].name;
+      const callerFrame = stack[i + 1];
+      const file = callerFrame.callerFile;
+      const line = callerFrame.callerLine;
+      parts.push("");
+      if (file && line > 0) {
+        parts.push(`Error in ${name} (${file}:${line})`);
+        const srcLine = getSource
+          ? getSourceLine(getSource, file, line)
+          : (callerFrame.callerSourceLine ?? null);
+        if (srcLine) parts.push(`    ${srcLine}`);
+      } else if (line > 0) {
+        parts.push(`Error in ${name} (line ${line})`);
+      } else {
+        parts.push(`Error in ${name}`);
+      }
+    }
+
+    // Outermost caller: the script/entry point
+    const outermost = stack[0];
+    if (outermost.callerFile && outermost.callerLine > 0) {
+      parts.push("");
+      parts.push(`Error in ${outermost.callerFile}:${outermost.callerLine}`);
+      const srcLine = getSource
+        ? getSourceLine(getSource, outermost.callerFile, outermost.callerLine)
+        : (outermost.callerSourceLine ?? null);
+      if (srcLine) parts.push(`    ${srcLine}`);
+    }
+
+    return parts.join("\n");
+  }
+
+  // No call stack — simple format
   const labels: Record<DiagnosticInfo["errorType"], string> = {
     syntax: "SyntaxError",
     semantic: "SemanticError",
@@ -231,63 +285,6 @@ export function formatDiagnostic(
 
   if (info.snippet) {
     result += `\n${info.snippet}`;
-  }
-
-  if (info.callStack != null && info.callStack.length > 0) {
-    result += `\nCall stack (most recent call first):`;
-    const stack = info.callStack;
-    const N = stack.length;
-    for (let i = N - 1; i >= 0; i--) {
-      const name = stack[i].name;
-      let loc: string;
-      let file: string | null = null;
-      let line = 0;
-      if (i === N - 1) {
-        file = info.file;
-        line = info.line ?? 0;
-        if (file && line > 0) {
-          loc = `${file}:${line}`;
-        } else if (line > 0) {
-          loc = `line ${line}`;
-        } else {
-          loc = "unknown";
-        }
-      } else {
-        const callerFrame = stack[i + 1];
-        file = callerFrame.callerFile;
-        line = callerFrame.callerLine;
-        if (file && line > 0) {
-          loc = `${file}:${line}`;
-        } else if (line > 0) {
-          loc = `line ${line}`;
-        } else {
-          loc = "unknown";
-        }
-      }
-      result += `\n  at ${name} (${loc})`;
-      if (file && line > 0) {
-        let srcLine: string | null = null;
-        if (getSource) {
-          srcLine = getSourceLine(getSource, file, line);
-        } else if (i === N - 1) {
-          // Innermost frame uses error's file/line — not stored on any callerSourceLine,
-          // so we can't show it without getSource (snippet already covers this).
-        } else {
-          // Outer frame: file/line came from stack[i+1]'s caller info
-          srcLine = stack[i + 1].callerSourceLine ?? null;
-        }
-        if (srcLine) result += `\n        ${srcLine}`;
-      }
-    }
-    // Show the outermost caller location (where the first function was called from)
-    const outermost = stack[0];
-    if (outermost.callerFile && outermost.callerLine > 0) {
-      result += `\n  at ${outermost.callerFile}:${outermost.callerLine}`;
-      const srcLine = getSource
-        ? getSourceLine(getSource, outermost.callerFile, outermost.callerLine)
-        : (outermost.callerSourceLine ?? null);
-      if (srcLine) result += `\n        ${srcLine}`;
-    }
   }
 
   return result;

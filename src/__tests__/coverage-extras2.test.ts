@@ -79,7 +79,7 @@ describe("RuntimeError", () => {
     expect(s).toContain("> 1 | x = 1;");
   });
 
-  it("toString with callStack", () => {
+  it("toString with callStack uses MATLAB-style format", () => {
     const err = new RuntimeError("bad");
     err.file = "main.m";
     err.line = 10;
@@ -88,9 +88,8 @@ describe("RuntimeError", () => {
       { name: "helper", callerFile: "main.m", callerLine: 5 },
     ];
     const s = err.toString();
-    expect(s).toContain("Call stack");
-    expect(s).toContain("helper");
-    expect(s).toContain("main");
+    expect(s).toContain("Error using helper");
+    expect(s).toContain("Error in main");
   });
 
   it("toString callStack with callerFile and callerLine", () => {
@@ -103,23 +102,17 @@ describe("RuntimeError", () => {
       { name: "inner", callerFile: "middle.m", callerLine: 20 },
     ];
     const s = err.toString();
-    expect(s).toContain("inner.m:3");
-    expect(s).toContain("middle.m:20");
-    expect(s).toContain("outer.m:10");
-  });
-
-  it("toString callStack with unknown locations", () => {
-    const err = new RuntimeError("bad");
-    err.callStack = [{ name: "fn", callerFile: null, callerLine: 0 }];
-    const s = err.toString();
-    expect(s).toContain("unknown");
+    expect(s).toContain("Error using inner (inner.m:3)");
+    expect(s).toContain("Error in middle (middle.m:20)");
+    expect(s).toContain("Error in outer (outer.m:10)");
   });
 
   it("toString callStack innermost without file/line", () => {
     const err = new RuntimeError("bad");
     err.callStack = [{ name: "fn", callerFile: null, callerLine: 0 }];
     const s = err.toString();
-    expect(s).toContain("at fn (unknown)");
+    expect(s).toContain("Error using fn");
+    expect(s).not.toContain("Error using fn (");
   });
 
   it("toString callStack innermost with line only", () => {
@@ -127,7 +120,7 @@ describe("RuntimeError", () => {
     err.line = 7;
     err.callStack = [{ name: "fn", callerFile: null, callerLine: 0 }];
     const s = err.toString();
-    expect(s).toContain("at fn (line 7)");
+    expect(s).toContain("Error using fn (line 7)");
   });
 
   it("toString callStack outer frame with callerLine only", () => {
@@ -139,7 +132,7 @@ describe("RuntimeError", () => {
       { name: "inner", callerFile: null, callerLine: 5 },
     ];
     const s = err.toString();
-    expect(s).toContain("line 5");
+    expect(s).toContain("Error in outer (line 5)");
   });
 });
 
