@@ -30,9 +30,13 @@ export interface InterpreterContext {
   evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
-  /** Resolve a workspace function or class name to its source file path,
-   *  or undefined if no workspace file provides that name. */
-  lookupWorkspaceFile: (name: string) => string | undefined;
+  /** Resolve a workspace function or class name to its source file,
+   *  or undefined if no workspace file provides that name.
+   *  `kind` distinguishes a regular .m function from a .numbl.js
+   *  user function (treated as a MEX-equivalent) or a class file. */
+  lookupWorkspaceFile: (
+    name: string
+  ) => { path: string; kind: "function" | "jsfunction" | "class" } | undefined;
 }
 
 export const FALL_THROUGH: unique symbol = Symbol("FALL_THROUGH");
@@ -136,28 +140,110 @@ register("exist", (ctx, args) => {
   if (args.length < 1) return FALL_THROUGH;
   const nameArg = toString(ensureRuntimeValue(args[0]));
   const typeArg = args.length >= 2 ? toString(ensureRuntimeValue(args[1])) : "";
+
+  const fio = ctx.rt.fileIO;
+  const isBuiltin = (): boolean =>
+    !!(ctx.rt.builtins[nameArg] || getIBuiltin(nameArg));
+
+  // Map a file path to a MATLAB type ID:
+  // .numbl.js → 3 (MEX), everything else → 2.
+  const fileTypeFromExt = (path: string): number =>
+    /\.numbl\.js$/i.test(path) ? 3 : 2;
+
+  // Whether `nameArg` already has a recognized MATLAB code-file extension.
+  const nameHasKnownExt = /\.(numbl\.js|m|mlx|mlapp)$/i.test(nameArg);
+
+  const isAbsolutePath = (p: string): boolean =>
+    p.startsWith("/") || p.startsWith("\\") || /^[a-zA-Z]:[/\\]/.test(p);
+  const joinPath = (dir: string, name: string): string => {
+    if (!dir) return name;
+    if (dir.endsWith("/") || dir.endsWith("\\")) return dir + name;
+    return dir + "/" + name;
+  };
+
+  // Walk the entire search path looking for `nameArg` as a file or folder.
+  // Per-directory precedence:
+  //   folder > .m / .mlx / .mlapp > .numbl.js (MEX) > literal name.
+  // Note: .m beats .numbl.js to mirror numbl's function-call resolution
+  // (`functionResolve.ts`), which intentionally diverges from MATLAB's
+  // MEX-wins precedence so that scripted code shadows the JS user function.
+  // Across directories the first hit wins.  An absolute or rooted path
+  // bypasses the search path and is checked directly.
+  const walkSearchPath = (acceptDir: boolean): number => {
+    if (!fio?.existsPath) return 0;
+    const dirs = isAbsolutePath(nameArg)
+      ? [""]
+      : ctx.rt.searchPaths.length > 0
+        ? ctx.rt.searchPaths
+        : [""];
+    for (const dir of dirs) {
+      // 1. Folder match
+      if (acceptDir) {
+        const t = fio.existsPath(joinPath(dir, nameArg));
+        if (t === "dir") return 7;
+      }
+      // 2. Registered code-file extensions (only if name has no known ext)
+      if (!nameHasKnownExt) {
+        for (const ext of [".m", ".mlx", ".mlapp"]) {
+          const t = fio.existsPath(joinPath(dir, nameArg + ext));
+          if (t === "file") {
+            // .m can be a class file — promote to 8 if so
+            const ws = ctx.lookupWorkspaceFile(nameArg);
+            return ws?.kind === "class" ? 8 : 2;
+          }
+        }
+        const numblJs = fio.existsPath(joinPath(dir, nameArg + ".numbl.js"));
+        if (numblJs === "file") return 3;
+      }
+      // 3. Literal name (with whatever extension was provided, or none)
+      const lit = fio.existsPath(joinPath(dir, nameArg));
+      if (lit === "file") return fileTypeFromExt(nameArg);
+    }
+    return 0;
+  };
+
+  // Workspace registry fallback: covers @-folder class definitions and any
+  // host environment that doesn't expose existsPath (e.g. browser VFS).
+  const workspaceTypeId = (): number => {
+    const ws = ctx.lookupWorkspaceFile(nameArg);
+    if (!ws) return 0;
+    switch (ws.kind) {
+      case "function":
+        return 2;
+      case "jsfunction":
+        return 3;
+      case "class":
+        return 8;
+    }
+  };
+
   if (typeArg === "var") {
     return ctx.env.has(nameArg) ? 1 : 0;
   }
   if (typeArg === "builtin") {
-    return ctx.rt.builtins[nameArg] || getIBuiltin(nameArg) ? 5 : 0;
+    return isBuiltin() ? 5 : 0;
+  }
+  if (typeArg === "class") {
+    const ws = ctx.lookupWorkspaceFile(nameArg);
+    return ws?.kind === "class" ? 8 : 0;
   }
   if (typeArg === "dir") {
-    const fio = ctx.rt.fileIO;
-    if (!fio?.existsPath) return FALL_THROUGH;
-    return fio.existsPath(nameArg) === "dir" ? 7 : 0;
+    return walkSearchPath(true) === 7 ? 7 : 0;
   }
-  if (typeArg === "file" || typeArg === "") {
-    const fio = ctx.rt.fileIO;
-    if (!fio?.existsPath) return FALL_THROUGH;
-    const result = fio.existsPath(nameArg);
-    if (typeArg === "file") return result === "file" ? 2 : 0;
-    // No type specified: check var, then file/dir
+  if (typeArg === "file") {
+    // 'file' searchType returns 2, 3, 4, 6, 7, 0 — folders are valid here.
+    const t = walkSearchPath(true);
+    if (t) return t;
+    return workspaceTypeId();
+  }
+  if (typeArg === "") {
+    // No type specified — full MATLAB precedence:
+    //   variable > built-in > folder > files (per-dir order, first hit wins)
     if (ctx.env.has(nameArg)) return 1;
-    if (result === "dir") return 7;
-    if (result === "file") return 2;
-    if (ctx.rt.builtins[nameArg] || getIBuiltin(nameArg)) return 5;
-    return 0;
+    if (isBuiltin()) return 5;
+    const t = walkSearchPath(true);
+    if (t) return t;
+    return workspaceTypeId();
   }
   return FALL_THROUGH;
 });
@@ -170,8 +256,8 @@ register("which", (ctx, args) => {
   if (ctx.env.has(nameArg)) return RTV.char("variable");
 
   // Workspace function or class file — return the absolute file path.
-  const filePath = ctx.lookupWorkspaceFile(nameArg);
-  if (filePath) return RTV.char(filePath);
+  const ws = ctx.lookupWorkspaceFile(nameArg);
+  if (ws) return RTV.char(ws.path);
 
   // Builtin — MATLAB returns "built-in (<path>)".  We don't track the
   // source path for numbl builtins, so return just "built-in".

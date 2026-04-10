@@ -1,6 +1,7 @@
 import type {
   PlotTrace,
   ImagescTrace,
+  PcolorTrace,
   ContourTrace,
   BarTrace,
   ErrorBarTrace,
@@ -67,12 +68,17 @@ export function drawPlot(
   pieTrace?: PieTrace,
   heatmapTrace?: HeatmapTrace,
   areaTraces?: PlotTrace[],
-  areaBaseValue?: number
+  areaBaseValue?: number,
+  pcolorTraces?: PcolorTrace[],
+  shading?: "faceted" | "flat" | "interp",
+  colorbar?: boolean,
+  colorbarLocation?: string
 ) {
   const ctx = canvas.getContext("2d");
   const hasContent =
     traces.length > 0 ||
     imagescTrace !== undefined ||
+    (pcolorTraces && pcolorTraces.length > 0) ||
     (contourTraces && contourTraces.length > 0) ||
     (barTraces && barTraces.length > 0) ||
     (barhTraces && barhTraces.length > 0) ||
@@ -114,6 +120,14 @@ export function drawPlot(
     bottom: xlabel ? 56 : 40,
     left: ylabel ? 76 : 60,
   };
+  // Reserve space for an outside colorbar.
+  const cbLoc = (colorbarLocation ?? "eastoutside").toLowerCase();
+  if (colorbar) {
+    if (cbLoc === "eastoutside") margin.right += 70;
+    else if (cbLoc === "westoutside") margin.left += 70;
+    else if (cbLoc === "northoutside") margin.top += 50;
+    else if (cbLoc === "southoutside") margin.bottom += 50;
+  }
   const plotW = cw - margin.left - margin.right;
   const plotH = ch - margin.top - margin.bottom;
 
@@ -145,6 +159,24 @@ export function drawPlot(
     if (imagescTrace.x[1] > xMax) xMax = imagescTrace.x[1];
     if (imagescTrace.y[0] < yMin) yMin = imagescTrace.y[0];
     if (imagescTrace.y[1] > yMax) yMax = imagescTrace.y[1];
+  }
+
+  // Include pcolor bounds
+  if (pcolorTraces) {
+    for (const pt of pcolorTraces) {
+      for (const v of pt.x) {
+        if (isFinite(v)) {
+          if (v < xMin) xMin = v;
+          if (v > xMax) xMax = v;
+        }
+      }
+      for (const v of pt.y) {
+        if (isFinite(v)) {
+          if (v < yMin) yMin = v;
+          if (v > yMax) yMax = v;
+        }
+      }
+    }
   }
 
   // Include contour bounds
@@ -474,6 +506,13 @@ export function drawPlot(
   // Imagesc rendering
   if (imagescTrace) {
     drawImagesc(ctx, imagescTrace, toCanvasX, toCanvasY, colormap);
+  }
+
+  // Pcolor rendering
+  if (pcolorTraces) {
+    for (const pt of pcolorTraces) {
+      drawPcolor(ctx, pt, toCanvasX, toCanvasY, colormap, shading);
+    }
   }
 
   // Contour rendering
@@ -810,6 +849,28 @@ export function drawPlot(
   // Legend
   if (legend && legend.length > 0) {
     drawLegend(ctx, traces, legend, effMarginLeft + effPlotW, effMarginTop);
+  }
+
+  // Colorbar (drawn after clip is restored so it can sit outside the plot area)
+  if (colorbar) {
+    const cbRange = computeColorbarRange(
+      pcolorTraces,
+      imagescTrace,
+      contourTraces
+    );
+    if (cbRange) {
+      drawColorbarAtLocation(
+        ctx,
+        cbLoc,
+        effMarginLeft,
+        effMarginTop,
+        effPlotW,
+        effPlotH,
+        cbRange[0],
+        cbRange[1],
+        colormap
+      );
+    }
   }
 }
 
@@ -1330,4 +1391,386 @@ function drawHeatmap(
 function formatCbVal(v: number): string {
   if (Number.isInteger(v)) return String(v);
   return v.toPrecision(3);
+}
+
+// ── Pcolor rendering ─────────────────────────────────────────────────────
+
+/**
+ * Draw a single pcolor trace. Each cell (i,j) for i in [0,rows-1) and
+ * j in [0,cols-1) is rendered as a quadrilateral with corners
+ *   (x[i,j],     y[i,j]),
+ *   (x[i,j+1],   y[i,j+1]),
+ *   (x[i+1,j+1], y[i+1,j+1]),
+ *   (x[i+1,j],   y[i+1,j]).
+ *
+ * MATLAB convention: the cell color comes from the (i,j) corner of C,
+ * so the last row and last column of C are not displayed.
+ *
+ * Shading dispatch:
+ *   - faceted (default): flat fill + edge stroke
+ *   - flat:              flat fill, no edge
+ *   - interp:            placeholder, currently calls flat (TODO)
+ */
+function drawPcolor(
+  ctx: CanvasRenderingContext2D,
+  trace: PcolorTrace,
+  toCanvasX: (v: number) => number,
+  toCanvasY: (v: number) => number,
+  colormap: string | undefined,
+  shading: "faceted" | "flat" | "interp" | undefined
+) {
+  const mode = shading ?? "faceted";
+  if (mode === "interp") {
+    // TODO: implement bilinear interpolation across cell corners.
+    drawPcolorFlat(ctx, trace, toCanvasX, toCanvasY, colormap, false);
+    return;
+  }
+  drawPcolorFlat(
+    ctx,
+    trace,
+    toCanvasX,
+    toCanvasY,
+    colormap,
+    mode === "faceted"
+  );
+}
+
+function drawPcolorFlat(
+  ctx: CanvasRenderingContext2D,
+  trace: PcolorTrace,
+  toCanvasX: (v: number) => number,
+  toCanvasY: (v: number) => number,
+  colormap: string | undefined,
+  drawEdges: boolean
+) {
+  const { rows, cols, x, y, c } = trace;
+  if (rows < 2 || cols < 2) return;
+
+  // Compute color range
+  let cMin = Infinity;
+  let cMax = -Infinity;
+  for (const v of c) {
+    if (isFinite(v)) {
+      if (v < cMin) cMin = v;
+      if (v > cMax) cMax = v;
+    }
+  }
+  if (!isFinite(cMin)) return;
+  const cRange = cMax - cMin || 1;
+
+  const alpha = trace.faceAlpha ?? 1;
+  ctx.save();
+  if (alpha < 1) ctx.globalAlpha = alpha;
+
+  // Each cell (i,j) for i in [0..rows-2], j in [0..cols-2]
+  for (let j = 0; j < cols - 1; j++) {
+    for (let i = 0; i < rows - 1; i++) {
+      const idx00 = j * rows + i;
+      const idx10 = j * rows + (i + 1);
+      const idx01 = (j + 1) * rows + i;
+      const idx11 = (j + 1) * rows + (i + 1);
+
+      const cv = c[idx00];
+      if (!isFinite(cv)) continue;
+
+      const t = (cv - cMin) / cRange;
+      const [r, g, b] = colormapLookup(t, colormap);
+      const fill = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+
+      const x0 = toCanvasX(x[idx00]);
+      const y0 = toCanvasY(y[idx00]);
+      const x1 = toCanvasX(x[idx10]);
+      const y1 = toCanvasY(y[idx10]);
+      const x2 = toCanvasX(x[idx11]);
+      const y2 = toCanvasY(y[idx11]);
+      const x3 = toCanvasX(x[idx01]);
+      const y3 = toCanvasY(y[idx01]);
+
+      ctx.beginPath();
+      ctx.moveTo(x0, y0);
+      ctx.lineTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x3, y3);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+
+      if (drawEdges && trace.edgeColor !== "none") {
+        if (Array.isArray(trace.edgeColor)) {
+          const [er, eg, eb] = trace.edgeColor;
+          ctx.strokeStyle = `rgb(${Math.round(er * 255)},${Math.round(eg * 255)},${Math.round(eb * 255)})`;
+        } else {
+          ctx.strokeStyle = "rgba(0,0,0,0.3)";
+        }
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    }
+  }
+
+  ctx.restore();
+}
+
+// ── Colorbar rendering ──────────────────────────────────────────────────
+
+/**
+ * Determine the data range for the colorbar by inspecting whichever
+ * color-mapped trace is present in the 2D pipeline.
+ */
+function computeColorbarRange(
+  pcolorTraces: PcolorTrace[] | undefined,
+  imagescTrace: ImagescTrace | undefined,
+  contourTraces: ContourTrace[] | undefined
+): [number, number] | null {
+  let dMin = Infinity;
+  let dMax = -Infinity;
+
+  const consume = (arr: number[] | Float64Array) => {
+    for (const v of arr) {
+      if (isFinite(v)) {
+        if (v < dMin) dMin = v;
+        if (v > dMax) dMax = v;
+      }
+    }
+  };
+
+  if (pcolorTraces) {
+    for (const pt of pcolorTraces) consume(pt.c);
+  }
+  if (imagescTrace) {
+    consume(imagescTrace.z);
+  }
+  if (contourTraces) {
+    for (const ct of contourTraces) consume(ct.z);
+  }
+
+  if (!isFinite(dMin) || !isFinite(dMax)) return null;
+  if (dMin === dMax) {
+    dMin -= 0.5;
+    dMax += 0.5;
+  }
+  return [dMin, dMax];
+}
+
+/**
+ * Draw a colorbar at one of the 8 MATLAB locations relative to the plot
+ * area at (plotL, plotT, plotW, plotH).
+ */
+function drawColorbarAtLocation(
+  ctx: CanvasRenderingContext2D,
+  location: string,
+  plotL: number,
+  plotT: number,
+  plotW: number,
+  plotH: number,
+  dMin: number,
+  dMax: number,
+  colormap: string | undefined
+) {
+  const barThickness = 16;
+  const inset = 8; // gap between plot edge and colorbar for inside variants
+  const gap = 10; // gap between plot edge and colorbar for outside variants
+
+  switch (location) {
+    case "eastoutside": {
+      const x = plotL + plotW + gap;
+      drawColorbarVertical(
+        ctx,
+        x,
+        plotT,
+        barThickness,
+        plotH,
+        dMin,
+        dMax,
+        colormap,
+        "right"
+      );
+      break;
+    }
+    case "westoutside": {
+      const x = plotL - gap - barThickness;
+      drawColorbarVertical(
+        ctx,
+        x,
+        plotT,
+        barThickness,
+        plotH,
+        dMin,
+        dMax,
+        colormap,
+        "left"
+      );
+      break;
+    }
+    case "northoutside": {
+      const y = plotT - gap - barThickness;
+      drawColorbarHorizontal(
+        ctx,
+        plotL,
+        y,
+        plotW,
+        barThickness,
+        dMin,
+        dMax,
+        colormap,
+        "top"
+      );
+      break;
+    }
+    case "southoutside": {
+      const y = plotT + plotH + gap;
+      drawColorbarHorizontal(
+        ctx,
+        plotL,
+        y,
+        plotW,
+        barThickness,
+        dMin,
+        dMax,
+        colormap,
+        "bottom"
+      );
+      break;
+    }
+    case "east": {
+      const x = plotL + plotW - inset - barThickness;
+      drawColorbarVertical(
+        ctx,
+        x,
+        plotT + inset,
+        barThickness,
+        plotH - 2 * inset,
+        dMin,
+        dMax,
+        colormap,
+        "left"
+      );
+      break;
+    }
+    case "west": {
+      const x = plotL + inset;
+      drawColorbarVertical(
+        ctx,
+        x,
+        plotT + inset,
+        barThickness,
+        plotH - 2 * inset,
+        dMin,
+        dMax,
+        colormap,
+        "right"
+      );
+      break;
+    }
+    case "north": {
+      const y = plotT + inset;
+      drawColorbarHorizontal(
+        ctx,
+        plotL + inset,
+        y,
+        plotW - 2 * inset,
+        barThickness,
+        dMin,
+        dMax,
+        colormap,
+        "bottom"
+      );
+      break;
+    }
+    case "south": {
+      const y = plotT + plotH - inset - barThickness;
+      drawColorbarHorizontal(
+        ctx,
+        plotL + inset,
+        y,
+        plotW - 2 * inset,
+        barThickness,
+        dMin,
+        dMax,
+        colormap,
+        "top"
+      );
+      break;
+    }
+  }
+}
+
+function drawColorbarVertical(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  dMin: number,
+  dMax: number,
+  colormap: string | undefined,
+  labelSide: "left" | "right"
+) {
+  const nSteps = Math.max(1, Math.round(h));
+  for (let s = 0; s < nSteps; s++) {
+    const t = 1 - s / nSteps; // top = max, bottom = min
+    const [r, g, b] = colormapLookup(t, colormap);
+    ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+    ctx.fillRect(x, y + (s / nSteps) * h, w, h / nSteps + 1);
+  }
+  ctx.strokeStyle = "#999";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+
+  // Labels
+  ctx.font = "10px sans-serif";
+  ctx.fillStyle = "#333";
+  if (labelSide === "right") {
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(formatCbVal(dMax), x + w + 4, y);
+    ctx.textBaseline = "bottom";
+    ctx.fillText(formatCbVal(dMin), x + w + 4, y + h);
+  } else {
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillText(formatCbVal(dMax), x - 4, y);
+    ctx.textBaseline = "bottom";
+    ctx.fillText(formatCbVal(dMin), x - 4, y + h);
+  }
+}
+
+function drawColorbarHorizontal(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  dMin: number,
+  dMax: number,
+  colormap: string | undefined,
+  labelSide: "top" | "bottom"
+) {
+  const nSteps = Math.max(1, Math.round(w));
+  for (let s = 0; s < nSteps; s++) {
+    const t = s / nSteps; // left = min, right = max
+    const [r, g, b] = colormapLookup(t, colormap);
+    ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+    ctx.fillRect(x + (s / nSteps) * w, y, w / nSteps + 1, h);
+  }
+  ctx.strokeStyle = "#999";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x, y, w, h);
+
+  // Labels
+  ctx.font = "10px sans-serif";
+  ctx.fillStyle = "#333";
+  if (labelSide === "bottom") {
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    ctx.fillText(formatCbVal(dMin), x, y + h + 4);
+    ctx.textAlign = "right";
+    ctx.fillText(formatCbVal(dMax), x + w, y + h + 4);
+  } else {
+    ctx.textBaseline = "bottom";
+    ctx.textAlign = "left";
+    ctx.fillText(formatCbVal(dMin), x, y - 4);
+    ctx.textAlign = "right";
+    ctx.fillText(formatCbVal(dMax), x + w, y - 4);
+  }
 }

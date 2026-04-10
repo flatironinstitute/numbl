@@ -78,6 +78,23 @@ export interface ImagescTrace {
   cols: number;
 }
 
+// ── PcolorTrace type ────────────────────────────────────────────────────
+
+export interface PcolorTrace {
+  /** X coordinates: flat array of length rows*cols (column-major) */
+  x: number[];
+  /** Y coordinates: flat array of length rows*cols (column-major) */
+  y: number[];
+  /** Color values: flat array of length rows*cols (column-major) */
+  c: number[];
+  /** Number of rows in the grid */
+  rows: number;
+  /** Number of columns in the grid */
+  cols: number;
+  edgeColor?: [number, number, number] | "none";
+  faceAlpha?: number;
+}
+
 // ── ContourTrace type ────────────────────────────────────────────────────
 
 export interface ContourTrace {
@@ -203,6 +220,7 @@ export type PlotInstruction =
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "surf"; trace: SurfTrace }
   | { type: "imagesc"; trace: ImagescTrace }
+  | { type: "pcolor"; trace: PcolorTrace }
   | { type: "contour"; trace: ContourTrace }
   | { type: "mesh"; trace: SurfTrace }
   | { type: "bar"; traces: BarTrace[] }
@@ -227,7 +245,7 @@ export type PlotInstruction =
   | { type: "set_legend"; labels: string[] }
   | { type: "set_sgtitle"; text: string }
   | { type: "set_grid"; value: boolean }
-  | { type: "set_colorbar"; value: string }
+  | { type: "set_colorbar"; value: string; location?: string }
   | { type: "set_colormap"; name: string }
   | { type: "set_axis"; value: string }
   | {

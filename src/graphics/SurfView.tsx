@@ -1,4 +1,4 @@
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, type CSSProperties } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
@@ -24,6 +24,9 @@ interface SurfViewProps {
   bar3Traces?: Bar3Trace[];
   bar3hTraces?: Bar3Trace[];
   shading?: "faceted" | "flat" | "interp";
+  colorbar?: boolean;
+  colorbarLocation?: string;
+  colormap?: string;
 }
 
 export function SurfView({
@@ -32,6 +35,9 @@ export function SurfView({
   bar3Traces = [],
   bar3hTraces = [],
   shading,
+  colorbar,
+  colorbarLocation,
+  colormap,
 }: SurfViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
@@ -607,7 +613,323 @@ export function SurfView({
     );
   }, [surfTraces, plot3Traces, bar3Traces, bar3hTraces, shading]);
 
-  return <div ref={containerRef} style={{ width: "100%", height: "100%" }} />;
+  // Compute color range for the colorbar from surf traces (uses C if present,
+  // otherwise Z). Falls back to bar3 z values when no surf traces are present.
+  let cbMin = Infinity;
+  let cbMax = -Infinity;
+  for (const t of surfTraces) {
+    const arr = t.c ?? t.z;
+    for (const v of arr) {
+      if (isFinite(v)) {
+        if (v < cbMin) cbMin = v;
+        if (v > cbMax) cbMax = v;
+      }
+    }
+  }
+  if (!isFinite(cbMin)) {
+    for (const t of bar3Traces) {
+      for (const v of t.z) {
+        if (isFinite(v)) {
+          if (v < cbMin) cbMin = v;
+          if (v > cbMax) cbMax = v;
+        }
+      }
+    }
+  }
+  const haveColorRange = isFinite(cbMin) && isFinite(cbMax);
+  if (cbMin === cbMax) {
+    cbMin -= 0.5;
+    cbMax += 0.5;
+  }
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <div ref={containerRef} style={{ position: "absolute", inset: 0 }} />
+      {colorbar && haveColorRange && (
+        <ColorbarOverlay
+          location={(colorbarLocation ?? "eastoutside").toLowerCase()}
+          dMin={cbMin}
+          dMax={cbMax}
+          colormap={colormap}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── Colorbar overlay (HTML, drawn on top of the Three.js canvas) ────────
+
+function ColorbarOverlay({
+  location,
+  dMin,
+  dMax,
+  colormap,
+}: {
+  location: string;
+  dMin: number;
+  dMax: number;
+  colormap?: string;
+}) {
+  // Build a CSS gradient from N samples of the colormap.
+  // (colormap name is currently unused — surfColormap.colormapLookup uses parula.)
+  void colormap;
+  const N = 32;
+  const stops: string[] = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / (N - 1);
+    const [r, g, b] = colormapLookup(t);
+    const rgb = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
+    stops.push(`${rgb} ${(t * 100).toFixed(2)}%`);
+  }
+  const horizontal =
+    location === "northoutside" ||
+    location === "southoutside" ||
+    location === "north" ||
+    location === "south";
+  // Vertical gradients go bottom→top so the max sits at the top.
+  const gradient = horizontal
+    ? `linear-gradient(to right, ${stops.join(",")})`
+    : `linear-gradient(to top, ${stops.join(",")})`;
+
+  const fmt = (v: number) =>
+    Number.isInteger(v) ? String(v) : v.toPrecision(3);
+
+  // Position styles per location
+  const barThickness = 16;
+  const containerStyle: CSSProperties = {
+    position: "absolute",
+    pointerEvents: "none",
+    fontFamily: "sans-serif",
+    fontSize: 10,
+    color: "#333",
+  };
+
+  const barStyle: CSSProperties = {
+    background: gradient,
+    border: "1px solid #999",
+    boxSizing: "border-box",
+  };
+
+  switch (location) {
+    case "eastoutside":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            top: 12,
+            bottom: 12,
+            right: 8,
+            width: 50,
+            display: "flex",
+            alignItems: "stretch",
+          }}
+        >
+          <div style={{ ...barStyle, width: barThickness, height: "100%" }} />
+          <div
+            style={{
+              marginLeft: 4,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>{fmt(dMax)}</span>
+            <span>{fmt(dMin)}</span>
+          </div>
+        </div>
+      );
+    case "westoutside":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            top: 12,
+            bottom: 12,
+            left: 8,
+            width: 50,
+            display: "flex",
+            alignItems: "stretch",
+            flexDirection: "row-reverse",
+          }}
+        >
+          <div style={{ ...barStyle, width: barThickness, height: "100%" }} />
+          <div
+            style={{
+              marginRight: 4,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+              textAlign: "right",
+            }}
+          >
+            <span>{fmt(dMax)}</span>
+            <span>{fmt(dMin)}</span>
+          </div>
+        </div>
+      );
+    case "northoutside":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            left: 12,
+            right: 12,
+            top: 8,
+            height: 32,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 2,
+            }}
+          >
+            <span>{fmt(dMin)}</span>
+            <span>{fmt(dMax)}</span>
+          </div>
+          <div style={{ ...barStyle, height: barThickness, width: "100%" }} />
+        </div>
+      );
+    case "southoutside":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            left: 12,
+            right: 12,
+            bottom: 8,
+            height: 32,
+            display: "flex",
+            flexDirection: "column-reverse",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: 2,
+            }}
+          >
+            <span>{fmt(dMin)}</span>
+            <span>{fmt(dMax)}</span>
+          </div>
+          <div style={{ ...barStyle, height: barThickness, width: "100%" }} />
+        </div>
+      );
+    case "east":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            top: 24,
+            bottom: 24,
+            right: 24,
+            width: 50,
+            display: "flex",
+            flexDirection: "row-reverse",
+            alignItems: "stretch",
+          }}
+        >
+          <div style={{ ...barStyle, width: barThickness, height: "100%" }} />
+          <div
+            style={{
+              marginRight: 4,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+              textAlign: "right",
+            }}
+          >
+            <span>{fmt(dMax)}</span>
+            <span>{fmt(dMin)}</span>
+          </div>
+        </div>
+      );
+    case "west":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            top: 24,
+            bottom: 24,
+            left: 24,
+            width: 50,
+            display: "flex",
+            alignItems: "stretch",
+          }}
+        >
+          <div style={{ ...barStyle, width: barThickness, height: "100%" }} />
+          <div
+            style={{
+              marginLeft: 4,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "space-between",
+            }}
+          >
+            <span>{fmt(dMax)}</span>
+            <span>{fmt(dMin)}</span>
+          </div>
+        </div>
+      );
+    case "north":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            left: 24,
+            right: 24,
+            top: 24,
+            height: 32,
+            display: "flex",
+            flexDirection: "column-reverse",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginTop: 2,
+            }}
+          >
+            <span>{fmt(dMin)}</span>
+            <span>{fmt(dMax)}</span>
+          </div>
+          <div style={{ ...barStyle, height: barThickness, width: "100%" }} />
+        </div>
+      );
+    case "south":
+      return (
+        <div
+          style={{
+            ...containerStyle,
+            left: 24,
+            right: 24,
+            bottom: 24,
+            height: 32,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              marginBottom: 2,
+            }}
+          >
+            <span>{fmt(dMin)}</span>
+            <span>{fmt(dMax)}</span>
+          </div>
+          <div style={{ ...barStyle, height: barThickness, width: "100%" }} />
+        </div>
+      );
+    default:
+      return null;
+  }
 }
 
 function addAxisLines(

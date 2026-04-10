@@ -3,6 +3,7 @@ import type {
   Plot3Trace,
   SurfTrace,
   ImagescTrace,
+  PcolorTrace,
   ContourTrace,
   BarTrace,
   Bar3Trace,
@@ -19,6 +20,7 @@ export type AxesState = {
   plot3Traces: Plot3Trace[];
   surfTraces: SurfTrace[];
   imagescTrace?: ImagescTrace;
+  pcolorTraces: PcolorTrace[];
   contourTraces: ContourTrace[];
   barTraces: BarTrace[];
   barhTraces: BarTrace[];
@@ -38,6 +40,7 @@ export type AxesState = {
   legend?: string[];
   gridOn?: boolean;
   colorbar?: boolean;
+  colorbarLocation?: string;
   colormap?: string;
   view?: { az: number; el: number };
   axisMode?: string;
@@ -66,6 +69,7 @@ const defaultAxes: AxesState = {
   traces: [],
   plot3Traces: [],
   surfTraces: [],
+  pcolorTraces: [],
   contourTraces: [],
   barTraces: [],
   barhTraces: [],
@@ -128,6 +132,7 @@ function addTraces(
       | "plot3Traces"
       | "surfTraces"
       | "imagescTrace"
+      | "pcolorTraces"
       | "contourTraces"
       | "barTraces"
       | "barhTraces"
@@ -154,6 +159,7 @@ function addTraces(
         traces: update.traces ?? (hold ? axes.traces : []),
         plot3Traces: update.plot3Traces ?? (hold ? axes.plot3Traces : []),
         surfTraces: update.surfTraces ?? (hold ? axes.surfTraces : []),
+        pcolorTraces: update.pcolorTraces ?? (hold ? axes.pcolorTraces : []),
         contourTraces: update.contourTraces ?? (hold ? axes.contourTraces : []),
         barTraces: update.barTraces ?? (hold ? axes.barTraces : []),
         barhTraces: update.barhTraces ?? (hold ? axes.barhTraces : []),
@@ -215,6 +221,15 @@ export const figuresReducer = (
 
     case "imagesc":
       return addTraces(state, { imagescTrace: action.trace });
+
+    case "pcolor": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        pcolorTraces: axes.holdOn
+          ? [...axes.pcolorTraces, action.trace]
+          : [action.trace],
+      });
+    }
 
     case "contour": {
       const axes = getAxes(ensureFig(state));
@@ -349,7 +364,10 @@ export const figuresReducer = (
     case "set_grid":
       return updateAxes(state, { gridOn: action.value });
     case "set_colorbar":
-      return updateAxes(state, { colorbar: action.value !== "off" });
+      return updateAxes(state, {
+        colorbar: action.value !== "off",
+        colorbarLocation: action.location ?? "eastoutside",
+      });
     case "set_colormap":
       return updateAxes(state, { colormap: action.name });
     case "set_view":

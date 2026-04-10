@@ -141,13 +141,14 @@ registerIBuiltin({
 });
 
 function getMexExt(): string {
-  if (typeof process === "undefined") return "";
-  const platform = process.platform;
-  const cpuArch = process.arch;
-  if (platform === "win32") return "mexw64";
-  if (platform === "darwin")
-    return cpuArch === "arm64" ? "mexmaca64" : "mexmaci64";
-  return "mexa64";
+  return "numbl.js";
+  // if (typeof process === "undefined") return "";
+  // const platform = process.platform;
+  // const cpuArch = process.arch;
+  // if (platform === "win32") return "mexw64";
+  // if (platform === "darwin")
+  //   return cpuArch === "arm64" ? "mexmaca64" : "mexmaci64";
+  // return "mexa64";
 }
 
 defineBuiltin({

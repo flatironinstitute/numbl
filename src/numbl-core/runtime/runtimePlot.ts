@@ -33,6 +33,7 @@ import {
   parseSurfArgs,
   parseScatterArgs,
   parseImagescArgs,
+  parsePcolorArgs,
   parseContourArgs,
   parseMeshArgs,
   parseBarArgs,
@@ -91,7 +92,7 @@ export function plotInstr(
     | { type: "set_sgtitle"; text: unknown }
     | { type: "set_grid"; value: unknown }
     | { type: "set_zlabel"; text: unknown }
-    | { type: "set_colorbar"; value: unknown }
+    | { type: "set_colorbar"; value: unknown; location?: unknown }
     | { type: "set_colormap"; name: unknown }
     | { type: "set_axis"; value: unknown }
 ): void {
@@ -153,12 +154,21 @@ export function plotInstr(
         value: resolveOnOff(instr.value),
       });
       break;
-    case "set_colorbar":
-      plotInstructions.push({
+    case "set_colorbar": {
+      const cbInstr: {
+        type: "set_colorbar";
+        value: string;
+        location?: string;
+      } = {
         type: "set_colorbar",
         value: resolveStr(instr.value),
-      });
+      };
+      if (instr.location !== undefined) {
+        cbInstr.location = resolveStr(instr.location);
+      }
+      plotInstructions.push(cbInstr);
       break;
+    }
     case "set_colormap":
       plotInstructions.push({
         type: "set_colormap",
@@ -234,6 +244,14 @@ export function imagescCall(
 ): void {
   const trace = parseImagescArgs(args);
   plotInstructions.push({ type: "imagesc", trace });
+}
+
+export function pcolorCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parsePcolorArgs(args);
+  plotInstructions.push({ type: "pcolor", trace });
 }
 
 export function contourCall(

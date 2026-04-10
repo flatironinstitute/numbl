@@ -101,6 +101,7 @@ import {
   surfCall as _surfCall,
   scatterCall as _scatterCall,
   imagescCall as _imagescCall,
+  pcolorCall as _pcolorCall,
   contourCall as _contourCall,
   meshCall as _meshCall,
   barCall as _barCall,
@@ -319,6 +320,9 @@ export class Runtime {
     this.builtins["imagesc"] = (_nargout: number, args: unknown[]) => {
       this.imagesc_call(args.map(a => ensureRuntimeValue(a)));
     };
+    this.builtins["pcolor"] = (_nargout: number, args: unknown[]) => {
+      this.pcolor_call(args.map(a => ensureRuntimeValue(a)));
+    };
     this.builtins["contour"] = (_nargout: number, args: unknown[]) => {
       this.contour_call(
         args.map(a => ensureRuntimeValue(a)),
@@ -417,11 +421,6 @@ export class Runtime {
           text: args[0],
         });
       }
-    };
-    this.builtins["colorbar"] = (_nargout: number, args: unknown[]) => {
-      const val =
-        args.length > 0 ? _toString(ensureRuntimeValue(args[0])) : "on";
-      _plotInstr(this.plotInstructions, { type: "set_colorbar", value: val });
     };
     this.builtins["axis"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1603,6 +1602,10 @@ export class Runtime {
 
   public imagesc_call(args: RuntimeValue[]): void {
     _imagescCall(this.plotInstructions, args);
+  }
+
+  public pcolor_call(args: RuntimeValue[]): void {
+    _pcolorCall(this.plotInstructions, args);
   }
 
   public contour_call(args: RuntimeValue[], filled: boolean): void {
