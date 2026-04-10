@@ -27,7 +27,7 @@ import {
 } from "../../runtime/index.js";
 import { rstr } from "../../runtime/runtime.js";
 import type { JitType } from "../jit/jitTypes.js";
-import { defineBuiltin } from "./types.js";
+import { defineBuiltin, type BuiltinCase } from "./types.js";
 import { toNumArray } from "../../helpers/reduction-helpers.js";
 
 // ── find ─────────────────────────────────────────────────────────────────
@@ -440,45 +440,45 @@ defineBuiltin({
   ],
 });
 
-// ── ismember ─────────────────────────────────────────────────────────────
+// ── ismember / ismembc ───────────────────────────────────────────────────
 
-defineBuiltin({
-  name: "ismember",
-  cases: [
-    {
-      match: (argTypes, nargout) => {
-        if (argTypes.length < 2) return null;
-        const out: JitType[] = [{ kind: "unknown" }];
-        if (nargout > 1) out.push({ kind: "unknown" });
-        return out;
-      },
-      apply: (args, nargout) => {
-        if (args.length < 2)
-          throw new RuntimeError("ismember requires 2 arguments");
-        const v = args[0];
-        const b = args[1];
-
-        const isStringLike = (x: RuntimeValue) =>
-          isRuntimeString(x) || isRuntimeChar(x);
-        const isCellOfStrings = (x: RuntimeValue) =>
-          isRuntimeCell(x) &&
-          x.data.every(
-            (e: RuntimeValue) => isRuntimeString(e) || isRuntimeChar(e)
-          );
-
-        if (
-          isStringLike(v) ||
-          isCellOfStrings(v) ||
-          isStringLike(b) ||
-          isCellOfStrings(b)
-        )
-          return ismemberStrings(v, b, nargout);
-
-        return ismemberNumeric(v, b, nargout);
-      },
+const ismemberCases: BuiltinCase[] = [
+  {
+    match: (argTypes, nargout) => {
+      if (argTypes.length < 2) return null;
+      const out: JitType[] = [{ kind: "unknown" }];
+      if (nargout > 1) out.push({ kind: "unknown" });
+      return out;
     },
-  ],
-});
+    apply: (args, nargout) => {
+      if (args.length < 2)
+        throw new RuntimeError("ismember requires 2 arguments");
+      const v = args[0];
+      const b = args[1];
+
+      const isStringLike = (x: RuntimeValue) =>
+        isRuntimeString(x) || isRuntimeChar(x);
+      const isCellOfStrings = (x: RuntimeValue) =>
+        isRuntimeCell(x) &&
+        x.data.every(
+          (e: RuntimeValue) => isRuntimeString(e) || isRuntimeChar(e)
+        );
+
+      if (
+        isStringLike(v) ||
+        isCellOfStrings(v) ||
+        isStringLike(b) ||
+        isCellOfStrings(b)
+      )
+        return ismemberStrings(v, b, nargout);
+
+      return ismemberNumeric(v, b, nargout);
+    },
+  },
+];
+
+defineBuiltin({ name: "ismember", cases: ismemberCases });
+defineBuiltin({ name: "ismembc", cases: ismemberCases });
 
 function ismemberStrings(
   v: RuntimeValue,
