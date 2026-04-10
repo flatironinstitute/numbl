@@ -462,20 +462,39 @@ export function indexStore(
     }
     return dictInsertSingle(mv, key, rhsMv);
   }
-  // Struct array element assignment
+  // Struct array element assignment (also handles scalar struct auto-growth)
   if (
     indices.length === 1 &&
-    (isRuntimeStructArray(mv) || (isRuntimeTensor(mv) && mv.data.length === 0))
+    (isRuntimeStructArray(mv) ||
+      isRuntimeStruct(mv) ||
+      (isRuntimeTensor(mv) && mv.data.length === 0))
   ) {
     const rhsMv = ensureRuntimeValue(rhs);
     if (isRuntimeStruct(rhsMv)) {
       const idxVal = ensureRuntimeValue(indices[0]);
       const k = Math.round(toNumber(idxVal)) - 1;
-      const existingElements = isRuntimeStructArray(mv) ? [...mv.elements] : [];
-      const existingFieldNames = isRuntimeStructArray(mv) ? mv.fieldNames : [];
+      const existingElements = isRuntimeStructArray(mv)
+        ? [...mv.elements]
+        : isRuntimeStruct(mv)
+          ? [mv]
+          : [];
+      const existingFieldNames = isRuntimeStructArray(mv)
+        ? mv.fieldNames
+        : isRuntimeStruct(mv)
+          ? [...mv.fields.keys()]
+          : [];
       const allFieldNames = [
         ...new Set([...existingFieldNames, ...[...rhsMv.fields.keys()]]),
       ];
+      // Ensure existing elements have all field names
+      for (let ei = 0; ei < existingElements.length; ei++) {
+        const el = existingElements[ei];
+        for (const f of allFieldNames) {
+          if (!el.fields.has(f)) {
+            el.fields.set(f, RTV.tensor(new FloatXArray(0), [0, 0]));
+          }
+        }
+      }
       while (existingElements.length <= k) {
         existingElements.push(
           RTV.struct(
