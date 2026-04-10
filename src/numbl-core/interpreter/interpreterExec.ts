@@ -179,19 +179,27 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "While": {
       if (this.optimization >= 1 && tryJitWhile(this, stmt)) return null;
+      const _whileStart = this.rt.profilingEnabled ? performance.now() : 0;
+      let _whileIters = 0;
       while (true) {
         const cond = this.evalExpr(stmt.cond);
         if (!this.rt.toBool(cond)) break;
+        _whileIters++;
         const signal = this.execStmts(stmt.body);
         if (signal instanceof BreakSignal) break;
         if (signal instanceof ContinueSignal) continue;
-        if (signal instanceof ReturnSignal) return signal;
+        if (signal instanceof ReturnSignal) {
+          recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
+          return signal;
+        }
       }
+      recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
       return null;
     }
 
     case "For": {
       if (this.optimization >= 1 && tryJitFor(this, stmt)) return null;
+      const _forStart = this.rt.profilingEnabled ? performance.now() : 0;
       const iterVal = this.evalExpr(stmt.expr);
       const rv = ensureRuntimeValue(iterVal);
       const iterItems = forIter(rv);
@@ -200,8 +208,12 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const signal = this.execStmts(stmt.body);
         if (signal instanceof BreakSignal) break;
         if (signal instanceof ContinueSignal) continue;
-        if (signal instanceof ReturnSignal) return signal;
+        if (signal instanceof ReturnSignal) {
+          recordHotLoop(this, stmt, "for", _i + 1, _forStart);
+          return signal;
+        }
       }
+      recordHotLoop(this, stmt, "for", iterItems.length, _forStart);
       return null;
     }
 
@@ -1195,4 +1207,38 @@ export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
   if (expr.type === "FuncCall") return outputFunctions.includes(expr.name);
   if (expr.type === "Ident") return outputFunctions.includes(expr.name);
   return false;
+}
+
+function recordHotLoop(
+  interp: Interpreter,
+  stmt: Stmt & { type: "For" | "While" },
+  kind: "for" | "while",
+  iterations: number,
+  startTime: number
+): void {
+  if (!interp.rt.profilingEnabled || iterations <= 1000 || !stmt.span) return;
+  const durationMs = performance.now() - startTime;
+  let table = interp.lineTableCache.get(stmt.span.file);
+  if (!table) {
+    const src = interp.fileSources.get(stmt.span.file) ?? "";
+    table = buildLineTable(src);
+    interp.lineTableCache.set(stmt.span.file, table);
+  }
+  const line = offsetToLineFast(table, stmt.span.start);
+  const key = `${stmt.span.file}:${line}`;
+  const prev = interp.rt.hotLoops.get(key);
+  if (prev) {
+    prev.callCount++;
+    prev.totalTimeMs += durationMs;
+    if (iterations > prev.iterations) prev.iterations = iterations;
+  } else {
+    interp.rt.hotLoops.set(key, {
+      file: stmt.span.file,
+      line,
+      kind,
+      iterations,
+      callCount: 1,
+      totalTimeMs: durationMs,
+    });
+  }
 }

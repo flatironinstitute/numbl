@@ -285,6 +285,19 @@ export class Runtime {
   private profileAccum = new Map<string, number>();
   private profileCounts = new Map<string, number>();
 
+  // Profiling: interpreted loops with >1000 iterations (keyed by "file:line")
+  public hotLoops = new Map<
+    string,
+    {
+      file: string;
+      line: number;
+      kind: "for" | "while";
+      iterations: number;
+      callCount: number;
+      totalTimeMs: number;
+    }
+  >();
+
   constructor(
     private options: ExecOptions,
     private initialVariableValues?: Record<string, RuntimeValue>

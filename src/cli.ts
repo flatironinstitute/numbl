@@ -581,6 +581,7 @@ async function executeWithOptions(
       jitCompileTimeMs: pd.jitCompileTimeMs,
       builtins,
       dispatches,
+      hotLoops: pd.hotLoops ?? [],
     };
     writeFileSync(opts.profileOutput, JSON.stringify(profile, null, 2) + "\n");
     console.error(`Profile written to ${opts.profileOutput}`);
@@ -1046,6 +1047,41 @@ function cmdShowProfile(args: string[]) {
     }
   } else {
     console.log("\nNo builtin functions were called.");
+  }
+
+  // Hot interpreted loops (>1000 iterations)
+  const hotLoops: {
+    file: string;
+    line: number;
+    kind: string;
+    iterations: number;
+    callCount: number;
+    totalTimeMs: number;
+  }[] = data.hotLoops ?? [];
+  if (hotLoops.length > 0) {
+    hotLoops.sort((a, b) => b.totalTimeMs - a.totalTimeMs);
+    const locW =
+      Math.max(20, ...hotLoops.map(l => `${l.file}:${l.line}`.length)) + 2;
+    const header =
+      "Location".padEnd(locW) +
+      pad("Kind", 8) +
+      pad("Calls", 8) +
+      pad("Max Iters", 12) +
+      pad("Total (ms)", 13);
+    console.log("\nInterpreted loops (>1000 iterations):");
+    console.log(header);
+    console.log("─".repeat(header.length));
+
+    for (const l of hotLoops) {
+      const loc = `${l.file}:${l.line}`;
+      const line =
+        loc.padEnd(locW) +
+        pad(l.kind, 8) +
+        pad(String(l.callCount ?? 1), 8) +
+        pad(String(l.iterations), 12) +
+        pad(fmt(l.totalTimeMs ?? 0, 2), 13);
+      console.log(line);
+    }
   }
 }
 
