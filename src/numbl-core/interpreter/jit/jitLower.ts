@@ -411,6 +411,9 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
     case "Assign":
       result = lowerAssign(ctx, stmt);
       break;
+    case "AssignLValue":
+      result = lowerAssignLValue(ctx, stmt);
+      break;
     case "ExprStmt":
       // Bail out: ExprStmt must set `ans` in the environment, which the
       // JIT codegen doesn't do.  Fall back to the interpreter.
@@ -455,6 +458,75 @@ function lowerAssign(
   if (!ctx.params.has(stmt.name)) ctx.localVars.add(stmt.name);
 
   return [{ tag: "Assign", name: stmt.name, expr }];
+}
+
+/**
+ * Lower `t(i) = v` (scalar indexed assignment on a tensor base).
+ *
+ * Currently supports the narrow case needed for the ptloop pattern:
+ *   - lvalue is `Index` with 1..3 **scalar** indices
+ *   - lvalue base is a plain `Ident` (no chained indexing or member access)
+ *   - base is a real tensor in the type env
+ *   - RHS is a scalar numeric expression (number/boolean)
+ *
+ * Anything else bails to `null`, falling the whole loop back to the
+ * interpreter. Notably: slice writes (`t(a:b) = src`) and complex tensors
+ * are not yet supported.
+ */
+function lowerAssignLValue(
+  ctx: LowerCtx,
+  stmt: Stmt & { type: "AssignLValue" }
+): JitStmt[] | null {
+  const lv = stmt.lvalue;
+
+  // Only `Index` lvalues — not `Member`, `IndexCell`, etc.
+  if (lv.type !== "Index") return null;
+
+  // Only plain Ident bases — no `a.b(i) = v` or `a(j)(i) = v`.
+  if (lv.base.type !== "Ident") return null;
+  const baseName = lv.base.name;
+
+  // Base must already exist in the type env as a real tensor.
+  const baseType = ctx.env.get(baseName);
+  if (!baseType || baseType.kind !== "tensor") return null;
+  if (baseType.isComplex === true) return null;
+
+  // 1..3 indices, all scalar numeric.
+  if (lv.indices.length < 1 || lv.indices.length > 3) return null;
+  const indices: JitExpr[] = [];
+  for (const idx of lv.indices) {
+    const lowered = lowerExpr(ctx, idx);
+    if (!lowered) return null;
+    if (lowered.jitType.kind !== "number" && lowered.jitType.kind !== "boolean")
+      return null;
+    indices.push(lowered);
+  }
+
+  // RHS must be a scalar real/bool. Complex scalars into a real tensor
+  // would upgrade the tensor to complex at runtime — too invasive for
+  // stage 4, bail.
+  const value = lowerExpr(ctx, stmt.expr);
+  if (!value) return null;
+  if (value.jitType.kind !== "number" && value.jitType.kind !== "boolean")
+    return null;
+
+  // The base var is both read and written. Mark it assigned so the JIT
+  // loop output-set filter keeps it live, and so the hoist logic knows
+  // it's a write-target (will go through `unshare` at loop entry).
+  ctx.assignedVars.add(baseName);
+  // Don't touch ctx.env for baseName — its tensor type is unchanged
+  // (same shape, still real — we're only updating one element).
+  ctx._hasTensorOps = true;
+
+  return [
+    {
+      tag: "AssignIndex",
+      baseName,
+      indices,
+      value,
+      baseType,
+    },
+  ];
 }
 
 function lowerMultiAssign(
