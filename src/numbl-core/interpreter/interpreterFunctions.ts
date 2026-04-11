@@ -54,6 +54,7 @@ export function callFunction(
         this.evalInLocalScope(codeArg, fileName),
       callFunction: (n, a, no) => this.callFunction(n, a, no),
       rt: this.rt,
+      optimization: this.optimization,
       lookupWorkspaceFile: n => {
         const entry = this.ctx.registry.filesByFuncName.get(n);
         if (entry) return { path: entry.fileName, kind: "function" };
