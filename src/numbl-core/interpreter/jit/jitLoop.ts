@@ -163,13 +163,16 @@ function tryJitLoop(
   parts.push(mainBody);
   const jsBody = parts.join("\n");
 
-  // Create compiled function — always pass $h and $rt for line tracking
+  // Create compiled function — always pass $h and $rt for line tracking.
+  // Prefer the per-runtime helpers (built once after all dynamic builtins
+  // are registered) so V8 sees a stable hidden class on $h and inlines
+  // the per-iter helper calls in hot loops.
   let compiledFn: (...args: unknown[]) => unknown;
   const rt = interp.rt;
   try {
     const factory = new Function("$h", "$rt", ...inputs, jsBody);
-    compiledFn = (...callArgs: unknown[]) =>
-      factory(jitHelpers, rt, ...callArgs);
+    const helpers = rt.jitHelpers ?? jitHelpers;
+    compiledFn = (...callArgs: unknown[]) => factory(helpers, rt, ...callArgs);
   } catch {
     interp.loopJitCache.set(cacheKey, null);
     return false;

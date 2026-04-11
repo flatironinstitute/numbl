@@ -530,20 +530,37 @@ setDynamicRegisterHook((b: IBuiltin) => {
 
 /**
  * Build a per-runtime jitHelpers map for an execution that has .numbl.js
- * user functions. The result is a clone of the global jitHelpers extended
- * with `ib_<name>` entries (single-output fast path) for each js user
- * function and an overridden `ibcall` (multi-output) that consults the
- * js user function map first before falling back to the global registry.
+ * user functions. The result is a snapshot of the global jitHelpers
+ * extended with `ib_<name>` entries (single-output fast path) for each js
+ * user function and an overridden `ibcall` (multi-output) that consults
+ * the js user function map first before falling back to the global registry.
+ *
+ * The result is built in a single object-literal expression (via spread)
+ * so V8 gives the new object a fresh, stable hidden class even when the
+ * source `jitHelpers` is in dictionary mode (which it is, because it gets
+ * mutated by the dynamic-builtin-register hook every time a Runtime is
+ * constructed). The codegen emits direct property accesses like
+ * `$h.idx2r(...)` from inside hot loops, and V8 can only inline through
+ * those accesses if `$h` has a stable shape — without this snapshot the
+ * scalar tensor loops were ~3.5× slower.
  */
 export function buildPerRuntimeJitHelpers(
   jsUserFunctions: ReadonlyMap<string, IBuiltin>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
 ): Record<string, any> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const h: Record<string, any> = Object.assign({}, jitHelpers);
+  // Forward-declare h so the per-user-function closures below can reference
+  // it; the closures only call into h at call time, by which point the
+  // single object-literal assignment to h has run. ESLint can't see that
+  // we're using a `let` purely for the temporal-dead-zone hoisting.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any, prefer-const
+  let h: Record<string, any>;
 
+  // Build user-fn ib_ entries into a fresh container; these get spread into
+  // h below in a single object-literal expression.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const userIbEntries: Record<string, any> = {};
   for (const [name, ib] of jsUserFunctions) {
-    h[`ib_${name}`] = (...args: unknown[]) => {
+    userIbEntries[`ib_${name}`] = (...args: unknown[]) => {
       const pe = h._profileEnter as (...a: unknown[]) => void;
       const pl = h._profileLeave as (...a: unknown[]) => void;
       pe("jsUserFunction:jit:" + name);
@@ -560,13 +577,19 @@ export function buildPerRuntimeJitHelpers(
     };
   }
 
-  // Override ibcall so multi-output calls find js user functions first.
-  const origIbcall = h.ibcall as (
+  // Build the multi-output `ibcall` override referencing the js-user-fn
+  // map. Done as a separate value so we can include it in the same
+  // object-literal expression that builds h.
+  const origIbcall = (jitHelpers as Record<string, unknown>).ibcall as (
     name: unknown,
     nargout: unknown,
     ...args: unknown[]
   ) => unknown;
-  h.ibcall = (name: unknown, nargout: unknown, ...args: unknown[]) => {
+  const userIbcall = (
+    name: unknown,
+    nargout: unknown,
+    ...args: unknown[]
+  ): unknown => {
     const ib = jsUserFunctions.get(name as string);
     if (!ib) return origIbcall(name, nargout, ...args);
     const pe = h._profileEnter as (...a: unknown[]) => void;
@@ -585,6 +608,15 @@ export function buildPerRuntimeJitHelpers(
       return result.map(v => (typeof v === "boolean" ? (v ? 1 : 0) : v));
     }
     return [typeof result === "boolean" ? (result ? 1 : 0) : result];
+  };
+
+  // Single object-literal assignment — fresh hidden class, all keys present
+  // up front. The `ibcall: userIbcall` field comes after the spread so it
+  // overrides the spread's value for that key without changing the shape.
+  h = {
+    ...(jitHelpers as Record<string, unknown>),
+    ...userIbEntries,
+    ibcall: userIbcall,
   };
 
   return h;
