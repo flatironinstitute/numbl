@@ -213,8 +213,40 @@ function complexBinaryOp(
     aIm: number,
     bRe: number,
     bIm: number
-  ) => { re: number; im: number }
+  ) => { re: number; im: number },
+  nativeOpCode?: number
 ): RuntimeValue {
+  // Fast path: complex scalar × tensor (or tensor × complex scalar).
+  // We detect the scalar side without going through toComplexParts, so we
+  // avoid the zero-im allocation for real tensors on the tensor side.
+  if (nativeOpCode !== undefined) {
+    const aScalarParts = scalarComplexParts(a);
+    const bScalarParts = scalarComplexParts(b);
+    if (aScalarParts && isRuntimeTensor(b) && b.data.length > 1) {
+      const nr = tryNativeComplexScalarTensor(
+        aScalarParts.re,
+        aScalarParts.im,
+        b.data as FloatXArrayType,
+        b.imag as FloatXArrayType | undefined,
+        b.shape,
+        nativeOpCode,
+        /*scalarOnLeft=*/ true
+      );
+      if (nr) return nr;
+    } else if (bScalarParts && isRuntimeTensor(a) && a.data.length > 1) {
+      const nr = tryNativeComplexScalarTensor(
+        bScalarParts.re,
+        bScalarParts.im,
+        a.data as FloatXArrayType,
+        a.imag as FloatXArrayType | undefined,
+        a.shape,
+        nativeOpCode,
+        /*scalarOnLeft=*/ false
+      );
+      if (nr) return nr;
+    }
+  }
+
   const ac = toComplexParts(a);
   const bc = toComplexParts(b);
 
@@ -377,6 +409,51 @@ function tryNativeElemwiseScalar(
 }
 
 /**
+ * Return complex scalar (re, im) parts if v is a scalar-like value, else null.
+ * Treats size-1 tensors as scalars.  Unlike toComplexParts, never allocates.
+ */
+function scalarComplexParts(
+  v: RuntimeValue
+): { re: number; im: number } | null {
+  if (isRuntimeNumber(v)) return { re: v as number, im: 0 };
+  if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
+  if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
+  if (isRuntimeTensor(v) && v.data.length === 1) {
+    return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
+  }
+  return null;
+}
+
+/**
+ * Try native complex-scalar * (real or complex) tensor element-wise op.
+ * Returns null if native addon is unavailable.  Caller handles JS fallback.
+ */
+function tryNativeComplexScalarTensor(
+  scalarRe: number,
+  scalarIm: number,
+  arrRe: FloatXArrayType,
+  arrIm: FloatXArrayType | undefined,
+  shape: number[],
+  opCode: number,
+  scalarOnLeft: boolean
+): RuntimeValue | null {
+  const bridge = getLapackBridge();
+  if (!bridge?.elemwiseComplexScalar) return null;
+  if (!(arrRe instanceof Float64Array)) return null;
+  if (arrIm && !(arrIm instanceof Float64Array)) return null;
+  const r = bridge.elemwiseComplexScalar(
+    scalarRe,
+    scalarIm,
+    arrRe as Float64Array,
+    (arrIm as Float64Array | undefined) ?? null,
+    opCode,
+    scalarOnLeft
+  );
+  if (r.im) return RTV.tensor(r.re, shape, r.im);
+  return RTV.tensorRaw(r.re, shape);
+}
+
+/**
  * Element-wise op on two same-shape tensors where at least one is complex.
  * Uses native addon when available, otherwise JS callback loop.
  */
@@ -490,10 +567,15 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mAddSparse(a, b);
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
-      re: aRe + bRe,
-      im: aIm + bIm,
-    }));
+    return complexBinaryOp(
+      a,
+      b,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe + bRe,
+        im: aIm + bIm,
+      }),
+      ELEMWISE_ADD
+    );
   }
   // Scalar-tensor native fast path
   if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
@@ -532,10 +614,15 @@ export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mSubSparse(a, b);
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
-      re: aRe - bRe,
-      im: aIm - bIm,
-    }));
+    return complexBinaryOp(
+      a,
+      b,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe - bRe,
+        im: aIm - bIm,
+      }),
+      ELEMWISE_SUB
+    );
   }
   if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
     const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_SUB, true);
@@ -560,10 +647,15 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   }
   // Complex scalar multiplication
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
-      re: aRe * bRe - aIm * bIm,
-      im: aRe * bIm + aIm * bRe,
-    }));
+    return complexBinaryOp(
+      a,
+      b,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe * bRe - aIm * bIm,
+        im: aRe * bIm + aIm * bRe,
+      }),
+      ELEMWISE_MUL
+    );
   }
   if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
     const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_MUL, true);
@@ -601,10 +693,15 @@ export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemMulSparse(a, b);
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, (aRe, aIm, bRe, bIm) => ({
-      re: aRe * bRe - aIm * bIm,
-      im: aRe * bIm + aIm * bRe,
-    }));
+    return complexBinaryOp(
+      a,
+      b,
+      (aRe, aIm, bRe, bIm) => ({
+        re: aRe * bRe - aIm * bIm,
+        im: aRe * bIm + aIm * bRe,
+      }),
+      ELEMWISE_MUL
+    );
   }
   if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
     const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_MUL, true);
@@ -635,7 +732,7 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   }
   // Scalar or element-wise division (b is not a tensor)
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, complexDivide);
+    return complexBinaryOp(a, b, complexDivide, ELEMWISE_DIV);
   }
   return binaryOp(a, b, (x, y) => x / y);
 }
@@ -658,7 +755,7 @@ export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b))
     return mElemDivSparse(a, b);
   if (isComplexOrMixed(a, b)) {
-    return complexBinaryOp(a, b, complexDivide);
+    return complexBinaryOp(a, b, complexDivide, ELEMWISE_DIV);
   }
   if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
     const nr = tryNativeElemwiseScalar(a as number, b, ELEMWISE_DIV, true);

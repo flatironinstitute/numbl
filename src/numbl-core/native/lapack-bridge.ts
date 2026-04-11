@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 2;
+export const NATIVE_ADDON_EXPECTED_VERSION = 3;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -581,6 +581,18 @@ export interface LapackBridge {
     bRe: Float64Array,
     bIm: Float64Array | null,
     op: number
+  ): { re: Float64Array; im?: Float64Array };
+
+  /** Complex-scalar * (real or complex) tensor element-wise op.
+   * op: 0=add, 1=sub, 2=mul, 3=div.
+   * Pass null for arrIm to treat the tensor as purely real. */
+  elemwiseComplexScalar?(
+    scalarRe: number,
+    scalarIm: number,
+    arrRe: Float64Array,
+    arrIm: Float64Array | null,
+    op: number,
+    scalarOnLeft: boolean
   ): { re: Float64Array; im?: Float64Array };
 }
 

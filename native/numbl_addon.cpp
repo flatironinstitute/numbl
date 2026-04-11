@@ -29,7 +29,7 @@ extern "C" {
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
 // changes, etc.) so that the JS side can detect stale builds.
-static const int ADDON_VERSION = 2;
+static const int ADDON_VERSION = 3;
 
 static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
   return Napi::Number::New(info.Env(), ADDON_VERSION);
@@ -97,6 +97,8 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, ElemwiseScalar));
   exports.Set(Napi::String::New(env, "elemwiseComplex"),
               Napi::Function::New(env, ElemwiseComplex));
+  exports.Set(Napi::String::New(env, "elemwiseComplexScalar"),
+              Napi::Function::New(env, ElemwiseComplexScalar));
   exports.Set(Napi::String::New(env, "fillRandn"),
               Napi::Function::New(env, FillRandn));
   exports.Set(Napi::String::New(env, "unaryElemwise"),

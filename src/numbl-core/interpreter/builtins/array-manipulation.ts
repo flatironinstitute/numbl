@@ -793,17 +793,65 @@ defineBuiltin({
           for (let i = 0; i <= d; i++) blockSize *= curShape[i];
           const numBlocks = curTotal / blockSize;
 
-          for (let b = 0; b < numBlocks; b++) {
-            const srcOff = b * blockSize;
-            const dstBase = b * blockSize * rep;
-            for (let r2 = 0; r2 < rep; r2++) {
-              const dstOff = dstBase + r2 * blockSize;
-              newData.set(curData.subarray(srcOff, srcOff + blockSize), dstOff);
+          if (blockSize === 1) {
+            // Each block is a single scalar: fill `rep` consecutive positions
+            // with the same value.  One TypedArray.fill() per source element,
+            // which is a tight C loop inside V8.
+            for (let b = 0; b < numBlocks; b++) {
+              const dstBase = b * rep;
+              newData.fill(curData[b], dstBase, dstBase + rep);
+              if (newImag && curImag) {
+                newImag.fill(curImag[b], dstBase, dstBase + rep);
+              }
+            }
+          } else {
+            // General case: copy the block once at the start of each tile,
+            // then use copyWithin() to double it in place — O(log rep)
+            // copyWithin calls per block instead of O(rep) .set() calls.
+            for (let b = 0; b < numBlocks; b++) {
+              const srcOff = b * blockSize;
+              const dstBase = b * blockSize * rep;
+              const totalToWrite = rep * blockSize;
+              newData.set(
+                curData.subarray(srcOff, srcOff + blockSize),
+                dstBase
+              );
               if (newImag && curImag) {
                 newImag.set(
                   curImag.subarray(srcOff, srcOff + blockSize),
-                  dstOff
+                  dstBase
                 );
+              }
+              let written = blockSize;
+              while (written * 2 <= totalToWrite) {
+                newData.copyWithin(
+                  dstBase + written,
+                  dstBase,
+                  dstBase + written
+                );
+                if (newImag) {
+                  newImag.copyWithin(
+                    dstBase + written,
+                    dstBase,
+                    dstBase + written
+                  );
+                }
+                written *= 2;
+              }
+              if (written < totalToWrite) {
+                const remaining = totalToWrite - written;
+                newData.copyWithin(
+                  dstBase + written,
+                  dstBase,
+                  dstBase + remaining
+                );
+                if (newImag) {
+                  newImag.copyWithin(
+                    dstBase + written,
+                    dstBase,
+                    dstBase + remaining
+                  );
+                }
               }
             }
           }

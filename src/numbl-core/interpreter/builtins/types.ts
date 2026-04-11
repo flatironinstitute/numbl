@@ -358,14 +358,16 @@ function applyUnaryElemwiseMaybeComplex(
   v: RuntimeValue,
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
-  name: string
+  name: string,
+  nativeOpCode?: number
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(v))
     return applyUnaryElemwiseMaybeComplex(
       sparseToDense(v),
       realFn,
       complexFn,
-      name
+      name,
+      nativeOpCode
     );
   if (typeof v === "boolean") v = (v ? 1 : 0) as unknown as RuntimeValue;
   if (typeof v === "number") {
@@ -383,6 +385,43 @@ function applyUnaryElemwiseMaybeComplex(
   if (isRuntimeTensor(v)) {
     const n = v.data.length;
     if (!v.imag) {
+      // Native fast path: if the underlying C math function (e.g. std::sqrt,
+      // std::log) already returns NaN on out-of-domain, let it compute the
+      // whole buffer, then scan for NaN.  In the overwhelmingly common case
+      // (all-in-domain input) we return the real-tensor result directly.
+      if (nativeOpCode !== undefined && v.data instanceof Float64Array) {
+        const bridge = getLapackBridge();
+        if (bridge?.unaryElemwise) {
+          const nativeOut = bridge.unaryElemwise(v.data, nativeOpCode);
+          let firstNaN = -1;
+          for (let i = 0; i < n; i++) {
+            if (Number.isNaN(nativeOut[i])) {
+              firstNaN = i;
+              break;
+            }
+          }
+          if (firstNaN === -1) {
+            return RTV.tensorRaw(nativeOut, v.shape.slice());
+          }
+          // Fall back: some entries were out of domain. Keep the native
+          // results for in-domain entries and patch NaN positions with the
+          // complex fallback.
+          const outR = new FloatXArray(n);
+          const outI = new FloatXArray(n);
+          let hasImag = false;
+          for (let i = 0; i < n; i++) {
+            if (!Number.isNaN(nativeOut[i])) {
+              outR[i] = nativeOut[i];
+            } else {
+              const c = complexFn(v.data[i], 0);
+              outR[i] = c.re;
+              outI[i] = c.im;
+              if (c.im !== 0) hasImag = true;
+            }
+          }
+          return makeTensor(outR, hasImag ? outI : undefined, v.shape.slice());
+        }
+      }
       const outR = new FloatXArray(n);
       const outI = new FloatXArray(n);
       let hasImag = false;
@@ -562,6 +601,10 @@ interface UnaryElemwiseSpec {
   complexFn: (re: number, im: number) => { re: number; im: number };
   /** Use applyUnaryElemwiseMaybeComplex instead of applyUnaryElemwise */
   maybeComplex?: boolean;
+  /** Opcode for the native unaryElemwise dispatch (see unary_elemwise.cpp).
+   * Used by the maybeComplex path so that e.g. sqrt/log can run in native C
+   * on the common all-in-domain case, then fall back for NaN entries only. */
+  nativeOpCode?: number;
 }
 
 /** Generate cases for a unary element-wise builtin. Each accepted kind gets
@@ -576,7 +619,8 @@ export function unaryElemwiseCases(
           args[0],
           spec.realFn,
           spec.complexFn,
-          name
+          name,
+          spec.nativeOpCode
         )
     : (args: RuntimeValue[]) =>
         applyUnaryElemwise(args[0], spec.realFn, spec.complexFn, name);

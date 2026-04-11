@@ -112,7 +112,12 @@ function cAcos(re: number, im: number): { re: number; im: number } {
 defineBuiltin({
   name: "asin",
   cases: unaryElemwiseCases(
-    { realFn: Math.asin, complexFn: cAsin, maybeComplex: true },
+    {
+      realFn: Math.asin,
+      complexFn: cAsin,
+      maybeComplex: true,
+      nativeOpCode: 13,
+    },
     "asin"
   ),
   jitEmit: unaryMathJitEmit("Math.asin", "tAsin"),
@@ -120,7 +125,12 @@ defineBuiltin({
 defineBuiltin({
   name: "acos",
   cases: unaryElemwiseCases(
-    { realFn: Math.acos, complexFn: cAcos, maybeComplex: true },
+    {
+      realFn: Math.acos,
+      complexFn: cAcos,
+      maybeComplex: true,
+      nativeOpCode: 14,
+    },
     "acos"
   ),
   jitEmit: unaryMathJitEmit("Math.acos", "tAcos"),
@@ -213,7 +223,12 @@ function complexLog(re: number, im: number): { re: number; im: number } {
 defineBuiltin({
   name: "log",
   cases: unaryElemwiseCases(
-    { realFn: Math.log, complexFn: complexLog, maybeComplex: true },
+    {
+      realFn: Math.log,
+      complexFn: complexLog,
+      maybeComplex: true,
+      nativeOpCode: 1,
+    },
     "log"
   ),
   jitEmit: unaryMathJitEmit("Math.log", "tLog", true),
@@ -273,7 +288,12 @@ defineBuiltin({
     },
     // Single-output log2 (standard element-wise)
     ...unaryElemwiseCases(
-      { realFn: Math.log2, complexFn: complexLog2, maybeComplex: true },
+      {
+        realFn: Math.log2,
+        complexFn: complexLog2,
+        maybeComplex: true,
+        nativeOpCode: 2,
+      },
       "log2"
     ),
   ],
@@ -288,7 +308,12 @@ const complexLog10 = (re: number, im: number) => ({
 defineBuiltin({
   name: "log10",
   cases: unaryElemwiseCases(
-    { realFn: Math.log10, complexFn: complexLog10, maybeComplex: true },
+    {
+      realFn: Math.log10,
+      complexFn: complexLog10,
+      maybeComplex: true,
+      nativeOpCode: 3,
+    },
     "log10"
   ),
   jitEmit: unaryMathJitEmit("Math.log10", "tLog10", true),
@@ -355,6 +380,7 @@ defineBuiltin({
       realFn: x => (x >= 0 ? Math.sqrt(x) : NaN),
       complexFn: complexSqrt,
       maybeComplex: true,
+      nativeOpCode: 4,
     },
     "sqrt"
   ),
