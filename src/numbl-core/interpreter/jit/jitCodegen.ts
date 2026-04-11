@@ -336,8 +336,10 @@ function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
           }
           visitExpr(s.dstStart);
           visitExpr(s.dstEnd);
-          visitExpr(s.srcStart);
-          visitExpr(s.srcEnd);
+          // stage 9: srcStart/srcEnd are null for whole-tensor RHS — the
+          // source's hoisted length alias is used instead at codegen time.
+          if (s.srcStart) visitExpr(s.srcStart);
+          if (s.srcEnd) visitExpr(s.srcEnd);
           break;
         }
         case "MultiAssign":
@@ -805,8 +807,11 @@ function emitAssignIndexRange(
   }
   const dstStart = emitExpr(stmt.dstStart);
   const dstEnd = emitExpr(stmt.dstEnd);
-  const srcStart = emitExpr(stmt.srcStart);
-  const srcEnd = emitExpr(stmt.srcEnd);
+  // stage 9: when srcStart/srcEnd are null, the source is used in its
+  // entirety — substitute `1` and the source's hoisted length alias. The
+  // same helper handles both forms since the check is length-based.
+  const srcStart = stmt.srcStart !== null ? emitExpr(stmt.srcStart) : "1";
+  const srcEnd = stmt.srcEnd !== null ? emitExpr(stmt.srcEnd) : srcAlias.len;
   return `$h.setRange1r_h(${dstAlias.data}, ${dstAlias.len}, ${dstStart}, ${dstEnd}, ${srcAlias.data}, ${srcAlias.len}, ${srcStart}, ${srcEnd})`;
 }
 

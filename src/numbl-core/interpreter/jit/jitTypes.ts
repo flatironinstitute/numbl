@@ -400,10 +400,15 @@ export type JitStmt =
     }
   | {
       /**
-       * Range-slice write of the form `dst(a:b) = src(c:d)`. Both `dst` and
-       * `src` must be real tensors, and the LHS must use exactly one
-       * (linear) range index. Used by the loop JIT for the chunkie
-       * grow-and-copy pattern.
+       * Range-slice write of the form `dst(a:b) = src(c:d)` or
+       * `dst(a:b) = src` (whole-tensor source). Both `dst` and `src` must
+       * be real tensors, and the LHS must use exactly one (linear) range
+       * index. Used by the loop JIT for the chunkie grow-and-copy pattern.
+       *
+       * When `srcStart` and `srcEnd` are both `null`, the source is used
+       * in its entirety — codegen substitutes `1` and `srcLen` (the
+       * source's hoisted length alias). This is stage 9's whole-tensor
+       * RHS form: `isp(1:nn) = itemp` where `itemp` is a plain Var.
        */
       tag: "AssignIndexRange";
       baseName: string;
@@ -412,8 +417,8 @@ export type JitStmt =
       dstEnd: JitExpr;
       srcBaseName: string;
       srcType: JitType;
-      srcStart: JitExpr;
-      srcEnd: JitExpr;
+      srcStart: JitExpr | null;
+      srcEnd: JitExpr | null;
     }
   | {
       tag: "If";

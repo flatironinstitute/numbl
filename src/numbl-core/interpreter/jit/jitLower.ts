@@ -764,19 +764,26 @@ function lowerAssignLValue(
 }
 
 /**
- * Lower `dst(a:b) = src(c:d)` (range-slice write between two real tensors).
+ * Lower `dst(a:b) = src(c:d)` or `dst(a:b) = src` (range-slice write
+ * between two real tensors).
  *
- * Currently supports the narrow chunkie grow-and-copy shape:
+ * Supports these chunkie grow-and-copy shapes:
  *   - LHS lvalue is `Index(Ident(dst), [Range(start, end)])` (1 linear index)
- *   - RHS expression is `Index(Ident(src), [Range(start, end)])` or
- *     `FuncCall(src, [Range(start, end)])` — both forms appear depending on
- *     parser disambiguation
+ *   - RHS expression is either
+ *       (a) `Index(Ident(src), [Range(start, end)])` / `FuncCall(src, [Range])`
+ *           — explicit source range (stage 6)
+ *       (b) `Ident(src)` — whole-tensor source; the runtime length check
+ *           compares dst range length against `src.data.length` (stage 9)
  *   - Both `dst` and `src` are real tensors in the type env
  *   - Range step must be `null` (default step of 1)
  *
+ * For the whole-tensor case, `srcStart`/`srcEnd` on the IR node are
+ * `null` — the codegen substitutes `1` and the source's hoisted length
+ * alias so the same helper (`setRange1r_h`) handles both shapes.
+ *
  * Anything else bails to `null`. Multi-dim slice writes (`dst(:, j) = ...`),
  * stepped ranges, scalar fills (`dst(a:b) = 0`), and complex tensors are
- * out of scope for stage 6.
+ * out of scope.
  */
 function tryLowerRangeAssign(
   ctx: LowerCtx,
@@ -788,11 +795,13 @@ function tryLowerRangeAssign(
   if (lhsRange.type !== "Range") return null;
   if (lhsRange.step !== null) return null;
 
-  // RHS must be a range slice of another real tensor. The parser may
-  // produce either Index or FuncCall depending on disambiguation, same
-  // as for slice reads (see tryLowerAsSliceBind).
+  // RHS can be:
+  //   - a range slice of another real tensor (stage 6), or
+  //   - a plain Ident referencing a whole real tensor (stage 9).
+  // The parser produces Index or FuncCall for the range form depending on
+  // disambiguation, same as for slice reads (see tryLowerAsSliceBind).
   let srcName: string;
-  let srcRange: Expr;
+  let srcRange: Expr | null;
   if (
     rhsExpr.type === "Index" &&
     rhsExpr.base.type === "Ident" &&
@@ -808,10 +817,20 @@ function tryLowerRangeAssign(
   ) {
     srcName = rhsExpr.name;
     srcRange = rhsExpr.args[0];
+  } else if (rhsExpr.type === "Ident") {
+    // Skip slice-alias names — they don't correspond to a real tensor
+    // at runtime.
+    if (ctx.sliceAliases.has(rhsExpr.name)) return null;
+    srcName = rhsExpr.name;
+    srcRange = null;
   } else {
     return null;
   }
-  if (srcRange.type !== "Range" || srcRange.step !== null) return null;
+  if (
+    srcRange !== null &&
+    (srcRange.type !== "Range" || srcRange.step !== null)
+  )
+    return null;
 
   const srcType = ctx.env.get(srcName);
   if (!srcType || srcType.kind !== "tensor" || srcType.isComplex === true)
@@ -826,14 +845,21 @@ function tryLowerRangeAssign(
   if (dstEnd.jitType.kind !== "number" && dstEnd.jitType.kind !== "boolean")
     return null;
 
-  const srcStart = lowerExpr(ctx, srcRange.start);
-  if (!srcStart) return null;
-  if (srcStart.jitType.kind !== "number" && srcStart.jitType.kind !== "boolean")
-    return null;
-  const srcEnd = lowerExpr(ctx, srcRange.end);
-  if (!srcEnd) return null;
-  if (srcEnd.jitType.kind !== "number" && srcEnd.jitType.kind !== "boolean")
-    return null;
+  let srcStart: JitExpr | null = null;
+  let srcEnd: JitExpr | null = null;
+  if (srcRange !== null) {
+    srcStart = lowerExpr(ctx, srcRange.start);
+    if (!srcStart) return null;
+    if (
+      srcStart.jitType.kind !== "number" &&
+      srcStart.jitType.kind !== "boolean"
+    )
+      return null;
+    srcEnd = lowerExpr(ctx, srcRange.end);
+    if (!srcEnd) return null;
+    if (srcEnd.jitType.kind !== "number" && srcEnd.jitType.kind !== "boolean")
+      return null;
+  }
 
   // The dst is both read (existing data preserved outside the range) and
   // written. Mark it assigned so the JIT loop output filter keeps it live
