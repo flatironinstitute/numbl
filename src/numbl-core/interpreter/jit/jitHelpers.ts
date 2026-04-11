@@ -476,6 +476,55 @@ function set3r_h(
   data[lin] = v;
 }
 
+// ── Range slice write helper ────────────────────────────────────────────
+//
+// Mirror of the scalar-write helpers for the linear range pattern
+//   dst(a:b) = src(c:d)
+// where both dst and src are real tensors and the indices are 1-based
+// MATLAB ranges. The two ranges must have the same length. Bounds checks
+// use the same `>>> 0` unsigned trick as the scalar helpers.
+//
+// Used by the loop JIT for the chunkie grow-and-copy pattern
+//   out_pt(1:nout_max) = tmp_pt(1:nout_max)
+// where the dst tensor was just freshly allocated by `zeros(...)` and
+// has been re-hoisted via the per-Assign refresh path.
+//
+// Implementation uses TypedArray.prototype.set with a subarray view of
+// the source. ECMAScript guarantees TypedArray#set on a TypedArray source
+// handles overlapping memory by cloning the source first, so this is
+// safe even when dst and src are the same buffer.
+
+function setRange1r_h(
+  dstData: FloatXArrayType,
+  dstLen: number,
+  dstStart: number,
+  dstEnd: number,
+  srcData: FloatXArrayType,
+  srcLen: number,
+  srcStart: number,
+  srcEnd: number
+): void {
+  const dStart = (dstStart - 1) | 0;
+  const dEnd = (dstEnd - 1) | 0;
+  const sStart = (srcStart - 1) | 0;
+  const sEnd = (srcEnd - 1) | 0;
+  const dN = dEnd - dStart + 1;
+  const sN = sEnd - sStart + 1;
+  if (dN !== sN) {
+    throw new Error(
+      "Unable to perform assignment because the indices on the left side are not compatible with the size of the right side."
+    );
+  }
+  if (dN <= 0) return;
+  // Bounds checks: start and end must be in-range. We check start with
+  // unsigned >= len which catches negative AND too-large in one branch.
+  if (dStart >>> 0 >= dstLen) bce();
+  if (dEnd >>> 0 >= dstLen) bce();
+  if (sStart >>> 0 >= srcLen) bce();
+  if (sEnd >>> 0 >= srcLen) bce();
+  dstData.set(srcData.subarray(sStart, sEnd + 1), dStart);
+}
+
 // ── Unshare (COW unsharing at loop entry) ───────────────────────────────
 //
 // Called once at the top of a JIT'd loop for each tensor parameter that's
@@ -607,6 +656,10 @@ export const jitHelpers = {
   set1r_h,
   set2r_h,
   set3r_h,
+
+  // Range-slice write helper (real tensors, hoisted bases for both dst
+  // and src). Used by the loop JIT for `dst(a:b) = src(c:d)`.
+  setRange1r_h,
 
   // Unshare a tensor for COW write. Returns `t` if _rc <= 1, else a fresh copy.
   unshare,

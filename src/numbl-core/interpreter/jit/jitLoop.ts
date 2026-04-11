@@ -182,8 +182,7 @@ function tryJitLoop(
     lowered.outputNames,
     outputs.length,
     lowered.localVars,
-    currentFile,
-    inputTypes
+    currentFile
   );
 
   // Prepend generated helper function definitions

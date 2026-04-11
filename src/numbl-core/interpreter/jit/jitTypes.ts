@@ -399,6 +399,23 @@ export type JitStmt =
       baseType: JitType;
     }
   | {
+      /**
+       * Range-slice write of the form `dst(a:b) = src(c:d)`. Both `dst` and
+       * `src` must be real tensors, and the LHS must use exactly one
+       * (linear) range index. Used by the loop JIT for the chunkie
+       * grow-and-copy pattern.
+       */
+      tag: "AssignIndexRange";
+      baseName: string;
+      baseType: JitType;
+      dstStart: JitExpr;
+      dstEnd: JitExpr;
+      srcBaseName: string;
+      srcType: JitType;
+      srcStart: JitExpr;
+      srcEnd: JitExpr;
+    }
+  | {
       tag: "If";
       cond: JitExpr;
       thenBody: JitStmt[];

@@ -703,6 +703,19 @@ function lowerAssignLValue(
   if (!baseType || baseType.kind !== "tensor") return null;
   if (baseType.isComplex === true) return null;
 
+  // Range-slice write `dst(a:b) = src(c:d)` is handled by a separate path
+  // that generates an `AssignIndexRange` IR node. The current narrow shape
+  // is exactly one linear range index — anything more general bails.
+  if (lv.indices.length === 1 && lv.indices[0].type === "Range") {
+    return tryLowerRangeAssign(
+      ctx,
+      baseName,
+      baseType,
+      lv.indices[0],
+      stmt.expr
+    );
+  }
+
   // 1..3 indices, all scalar numeric.
   if (lv.indices.length < 1 || lv.indices.length > 3) return null;
   const indices: JitExpr[] = [];
@@ -737,6 +750,103 @@ function lowerAssignLValue(
       indices,
       value,
       baseType,
+    },
+  ];
+}
+
+/**
+ * Lower `dst(a:b) = src(c:d)` (range-slice write between two real tensors).
+ *
+ * Currently supports the narrow chunkie grow-and-copy shape:
+ *   - LHS lvalue is `Index(Ident(dst), [Range(start, end)])` (1 linear index)
+ *   - RHS expression is `Index(Ident(src), [Range(start, end)])` or
+ *     `FuncCall(src, [Range(start, end)])` — both forms appear depending on
+ *     parser disambiguation
+ *   - Both `dst` and `src` are real tensors in the type env
+ *   - Range step must be `null` (default step of 1)
+ *
+ * Anything else bails to `null`. Multi-dim slice writes (`dst(:, j) = ...`),
+ * stepped ranges, scalar fills (`dst(a:b) = 0`), and complex tensors are
+ * out of scope for stage 6.
+ */
+function tryLowerRangeAssign(
+  ctx: LowerCtx,
+  baseName: string,
+  baseType: JitType,
+  lhsRange: Expr,
+  rhsExpr: Expr
+): JitStmt[] | null {
+  if (lhsRange.type !== "Range") return null;
+  if (lhsRange.step !== null) return null;
+
+  // RHS must be a range slice of another real tensor. The parser may
+  // produce either Index or FuncCall depending on disambiguation, same
+  // as for slice reads (see tryLowerAsSliceBind).
+  let srcName: string;
+  let srcRange: Expr;
+  if (
+    rhsExpr.type === "Index" &&
+    rhsExpr.base.type === "Ident" &&
+    rhsExpr.indices.length === 1 &&
+    rhsExpr.indices[0].type === "Range"
+  ) {
+    srcName = rhsExpr.base.name;
+    srcRange = rhsExpr.indices[0];
+  } else if (
+    rhsExpr.type === "FuncCall" &&
+    rhsExpr.args.length === 1 &&
+    rhsExpr.args[0].type === "Range"
+  ) {
+    srcName = rhsExpr.name;
+    srcRange = rhsExpr.args[0];
+  } else {
+    return null;
+  }
+  if (srcRange.type !== "Range" || srcRange.step !== null) return null;
+
+  const srcType = ctx.env.get(srcName);
+  if (!srcType || srcType.kind !== "tensor" || srcType.isComplex === true)
+    return null;
+
+  const dstStart = lowerExpr(ctx, lhsRange.start);
+  if (!dstStart) return null;
+  if (dstStart.jitType.kind !== "number" && dstStart.jitType.kind !== "boolean")
+    return null;
+  const dstEnd = lowerExpr(ctx, lhsRange.end);
+  if (!dstEnd) return null;
+  if (dstEnd.jitType.kind !== "number" && dstEnd.jitType.kind !== "boolean")
+    return null;
+
+  const srcStart = lowerExpr(ctx, srcRange.start);
+  if (!srcStart) return null;
+  if (srcStart.jitType.kind !== "number" && srcStart.jitType.kind !== "boolean")
+    return null;
+  const srcEnd = lowerExpr(ctx, srcRange.end);
+  if (!srcEnd) return null;
+  if (srcEnd.jitType.kind !== "number" && srcEnd.jitType.kind !== "boolean")
+    return null;
+
+  // The dst is both read (existing data preserved outside the range) and
+  // written. Mark it assigned so the JIT loop output filter keeps it live
+  // and the codegen hoist treats it as a write target (unshare-on-entry).
+  ctx.assignedVars.add(baseName);
+  // Plain reassignment of dst would invalidate any prior slice alias on
+  // it. A range write doesn't change the type — clear the alias defensively
+  // to mirror lowerAssign's behavior on this name.
+  ctx.sliceAliases.delete(baseName);
+  ctx._hasTensorOps = true;
+
+  return [
+    {
+      tag: "AssignIndexRange",
+      baseName,
+      baseType,
+      dstStart,
+      dstEnd,
+      srcBaseName: srcName,
+      srcType,
+      srcStart,
+      srcEnd,
     },
   ];
 }
@@ -1289,8 +1399,7 @@ function lowerUserFuncCall(
       calleeResult.outputNames,
       calleeNargout,
       calleeResult.localVars,
-      interp.currentFile,
-      argJitTypes
+      interp.currentFile
     );
     const returnType = calleeResult.outputType ?? { kind: "number" as const };
     const paramComments = calleeFn.params
