@@ -342,6 +342,7 @@ export function lowerFunction(
     localVars,
     params: new Set(fn.params),
     assignedVars: new Set(fn.params),
+    sliceAliases: new Map(),
     interp,
     generatedFns: sharedGeneratedFns,
     loweringInProgress: sharedInProgress,
@@ -372,12 +373,45 @@ export function lowerFunction(
 
 // ── Internal lowering context ───────────────────────────────────────────
 
+/**
+ * A "slice alias" records that a MATLAB local was bound to a colon-slice of
+ * a real tensor (e.g. `pt = pts(:, i)`). Rather than materializing the slice
+ * as a RuntimeTensor per iteration, we remember the base tensor and a
+ * per-dim "template" of indices — scalar expressions captured at bind time
+ * for the non-colon dims, and `"colon"` placeholders for the colon dims.
+ * Subsequent reads like `pt(k)` substitute `k` into the colon positions and
+ * emit a direct scalar read on the base tensor, which compiles cleanly
+ * through the existing hoisted `idx{1,2,3}r_h` fast path.
+ */
+interface SliceAlias {
+  baseName: string;
+  baseType: JitType;
+  /**
+   * One entry per index of the original bind expression, in source order.
+   * A `"colon"` slot expects to be filled by the read-site's colon indices.
+   * An `"expr"` slot carries a JitExpr that will be substituted as-is.
+   */
+  template: ({ kind: "colon" } | { kind: "expr"; expr: JitExpr })[];
+  /** Sizes of the slice's colon dimensions, in source order. */
+  sliceShape: number[];
+  /** Indices into `template` where colon slots live, in source order. */
+  colonPositions: number[];
+}
+
 interface LowerCtx {
   env: TypeEnv;
   localVars: Set<string>;
   params: Set<string>;
   /** Variables that are actually assigned in the function body. */
   assignedVars: Set<string>;
+  /**
+   * Map from a MATLAB local name to its slice alias, if any. A name is
+   * present here iff the most recent assignment to it was a whole-tensor
+   * colon slice. Reads of the name as a plain Ident bail; reads of
+   * `name(...)` substitute through the template and emit a direct scalar
+   * read of the base tensor. See `tryLowerAsSliceBind`.
+   */
+  sliceAliases: Map<string, SliceAlias>;
   _hasTensorOps?: boolean;
   interp?: Interpreter;
   generatedFns: Map<string, string>;
@@ -450,14 +484,192 @@ function lowerAssign(
   ctx: LowerCtx,
   stmt: Stmt & { type: "Assign" }
 ): JitStmt[] | null {
+  // If the RHS is a whole-tensor colon slice (`pts(:, i)`), register a
+  // slice alias instead of lowering the RHS directly. See `tryLowerAsSliceBind`.
+  const slice = tryLowerAsSliceBind(ctx, stmt.name, stmt.expr);
+  if (slice === "bail") return null;
+  if (slice !== null) return slice;
+
   const expr = lowerExpr(ctx, stmt.expr);
   if (!expr) return null;
+
+  // A plain reassignment invalidates any previous slice alias on this name.
+  ctx.sliceAliases.delete(stmt.name);
 
   ctx.env.set(stmt.name, expr.jitType);
   ctx.assignedVars.add(stmt.name);
   if (!ctx.params.has(stmt.name)) ctx.localVars.add(stmt.name);
 
   return [{ tag: "Assign", name: stmt.name, expr }];
+}
+
+/**
+ * Try to lower `name = base(...)` as a slice-alias bind instead of a real
+ * tensor read+allocation.
+ *
+ * Returns:
+ *   - `null` if the RHS isn't a colon slice of a real tensor (caller falls
+ *     through to normal Assign lowering).
+ *   - `"bail"` if the RHS IS a colon slice but it's shaped in a way we
+ *     can't safely alias (fall back to interpreter).
+ *   - A `JitStmt[]` if the slice-alias bind succeeded. The statements are
+ *     tmp-variable captures for any non-literal scalar indices in the bind
+ *     (so the read-site sees the bind-time value, matching MATLAB semantics).
+ */
+function tryLowerAsSliceBind(
+  ctx: LowerCtx,
+  name: string,
+  rhs: Expr
+): JitStmt[] | null | "bail" {
+  // The parser produces either `Index(Ident(base), indices)` or
+  // `FuncCall(baseName, args)` depending on disambiguation — both mean
+  // "index `base` with these args". We accept both forms and normalize.
+  let baseName: string;
+  let rawIndices: Expr[];
+  if (rhs.type === "Index" && rhs.base.type === "Ident") {
+    baseName = rhs.base.name;
+    rawIndices = rhs.indices;
+  } else if (rhs.type === "FuncCall") {
+    baseName = rhs.name;
+    rawIndices = rhs.args;
+  } else {
+    return null;
+  }
+
+  const baseType = ctx.env.get(baseName);
+  if (!baseType || baseType.kind !== "tensor") return null;
+
+  const hasColon = rawIndices.some(idx => idx.type === "Colon");
+  if (!hasColon) return null;
+
+  // From here on, any failure is a hard bail — the caller can't fall back
+  // to normal Index lowering because Colon isn't supported there.
+
+  // Real tensors only.
+  if (baseType.isComplex === true) return "bail";
+  // Fully-known shape required to infer the slice dimensions.
+  if (!baseType.shape || baseType.shape.some(d => d === -1)) return "bail";
+  // Range indices aren't supported yet (only bare `:`).
+  if (rawIndices.some(idx => idx.type === "Range")) return "bail";
+  // Require exact-arity multi-dim indexing.
+  if (rawIndices.length !== baseType.shape.length) return "bail";
+  // Can't rebind a param or an already-assigned local into a slice alias.
+  if (ctx.params.has(name)) return "bail";
+  if (ctx.assignedVars.has(name) && !ctx.sliceAliases.has(name)) return "bail";
+
+  const template: ({ kind: "colon" } | { kind: "expr"; expr: JitExpr })[] = [];
+  const sliceShape: number[] = [];
+  const colonPositions: number[] = [];
+  const stmts: JitStmt[] = [];
+
+  for (let d = 0; d < rawIndices.length; d++) {
+    const idx = rawIndices[d];
+    if (idx.type === "Colon") {
+      template.push({ kind: "colon" });
+      sliceShape.push(baseType.shape[d]);
+      colonPositions.push(d);
+    } else {
+      const lowered = lowerExpr(ctx, idx);
+      if (!lowered) return "bail";
+      if (
+        lowered.jitType.kind !== "number" &&
+        lowered.jitType.kind !== "boolean"
+      )
+        return "bail";
+      if (lowered.tag === "NumberLiteral") {
+        template.push({ kind: "expr", expr: lowered });
+      } else {
+        // Capture into a tmp local to freeze the bind-time value. This
+        // preserves MATLAB semantics when the source var is reassigned
+        // between the bind and a subsequent read.
+        const tmpName = `_slice_${name}_d${d}`;
+        stmts.push({ tag: "Assign", name: tmpName, expr: lowered });
+        ctx.env.set(tmpName, lowered.jitType);
+        if (!ctx.params.has(tmpName)) ctx.localVars.add(tmpName);
+        ctx.assignedVars.add(tmpName);
+        template.push({
+          kind: "expr",
+          expr: { tag: "Var", name: tmpName, jitType: lowered.jitType },
+        });
+      }
+    }
+  }
+
+  // Sanity: at least one colon (hasColon above should guarantee this).
+  if (colonPositions.length === 0) return "bail";
+
+  ctx.sliceAliases.set(name, {
+    baseName,
+    baseType,
+    template,
+    sliceShape,
+    colonPositions,
+  });
+  // Ensure plain Ident reads of `name` bail — they'd otherwise resolve to
+  // a stale env type (or succeed silently with the wrong value).
+  ctx.env.delete(name);
+  ctx._hasTensorOps = true;
+
+  return stmts;
+}
+
+/**
+ * Lower a read `alias(...)` where `alias` is a slice-aliased name. Supports
+ * two shapes:
+ *   - linear indexing with a single index into a 1-colon slice:
+ *     `pt(k)` where `pt = pts(:, i)` → `pts(k, i)`;
+ *   - multi-indexing matching the number of colons:
+ *     `pt(r, c)` where `pt = pts(:, :)` → `pts(r, c)`.
+ * Anything else (wrong arity, slice-of-slice, etc.) bails.
+ */
+function lowerSliceAliasRead(
+  ctx: LowerCtx,
+  alias: SliceAlias,
+  readIndices: Expr[]
+): JitExpr | null {
+  const ncolon = alias.colonPositions.length;
+
+  const lowered: JitExpr[] = [];
+  for (const idx of readIndices) {
+    const lo = lowerExpr(ctx, idx);
+    if (!lo) return null;
+    if (lo.jitType.kind !== "number" && lo.jitType.kind !== "boolean")
+      return null;
+    lowered.push(lo);
+  }
+
+  let readForColon: JitExpr[];
+  if (lowered.length === ncolon) {
+    readForColon = lowered;
+  } else if (lowered.length === 1 && ncolon === 1) {
+    readForColon = [lowered[0]];
+  } else {
+    return null;
+  }
+
+  const fullIndices: JitExpr[] = [];
+  let colonIdx = 0;
+  for (const slot of alias.template) {
+    if (slot.kind === "colon") {
+      fullIndices.push(readForColon[colonIdx++]);
+    } else {
+      fullIndices.push(slot.expr);
+    }
+  }
+
+  const baseExpr: JitExpr = {
+    tag: "Var",
+    name: alias.baseName,
+    jitType: alias.baseType,
+  };
+  const resultType: JitType = { kind: "number" };
+  ctx._hasTensorOps = true;
+  return {
+    tag: "Index",
+    base: baseExpr,
+    indices: fullIndices,
+    jitType: resultType,
+  };
 }
 
 /**
@@ -600,9 +812,14 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   if (cond.jitType.kind === "complex_or_number") ctx._hasTensorOps = true;
 
   const envBefore = cloneEnv(ctx.env);
+  // Slice aliases are lexically scoped to the block they're bound in; we
+  // snapshot here so aliases created inside a branch don't leak to the
+  // post-if code (where the binding may or may not have run).
+  const sliceAliasesBefore = new Map(ctx.sliceAliases);
 
   // Then branch
   ctx.env = cloneEnv(envBefore);
+  ctx.sliceAliases = new Map(sliceAliasesBefore);
   const thenBody = lowerStmts(ctx, stmt.thenBody);
   if (!thenBody) return null;
   let mergedEnv = cloneEnv(ctx.env);
@@ -611,6 +828,7 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   const elseifBlocks: { cond: JitExpr; body: JitStmt[] }[] = [];
   for (const eib of stmt.elseifBlocks) {
     ctx.env = cloneEnv(envBefore);
+    ctx.sliceAliases = new Map(sliceAliasesBefore);
     const eibCond = lowerExpr(ctx, eib.cond);
     if (!eibCond) return null;
     if (!isScalarType(eibCond.jitType)) return null;
@@ -630,6 +848,7 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   let elseBody: JitStmt[] | null = null;
   if (stmt.elseBody) {
     ctx.env = cloneEnv(envBefore);
+    ctx.sliceAliases = new Map(sliceAliasesBefore);
     elseBody = lowerStmts(ctx, stmt.elseBody);
     if (!elseBody) return null;
 
@@ -644,6 +863,8 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   }
 
   ctx.env = mergedEnv;
+  // Restore alias state — any aliases created inside a branch are gone.
+  ctx.sliceAliases = sliceAliasesBefore;
 
   return [{ tag: "If", cond, thenBody, elseifBlocks, elseBody }];
 }
@@ -669,8 +890,10 @@ function lowerFor(
   if (!ctx.params.has(stmt.varName)) ctx.localVars.add(stmt.varName);
 
   const envBefore = cloneEnv(ctx.env);
+  const sliceAliasesBefore = new Map(ctx.sliceAliases);
 
   // Lower body (first pass)
+  ctx.sliceAliases = new Map(sliceAliasesBefore);
   const body = lowerStmts(ctx, stmt.body);
   if (!body) return null;
 
@@ -687,6 +910,7 @@ function lowerFor(
     repassBudget--;
     ctx.env = cloneEnv(merged);
     ctx.env.set(stmt.varName, { kind: "number" });
+    ctx.sliceAliases = new Map(sliceAliasesBefore);
     const newBody = lowerStmts(ctx, stmt.body);
     if (!newBody) return null;
 
@@ -698,6 +922,8 @@ function lowerFor(
   }
 
   ctx.env = merged;
+  // Slice aliases created inside the body don't leak out of the loop.
+  ctx.sliceAliases = sliceAliasesBefore;
 
   return [
     {
@@ -716,6 +942,7 @@ function lowerWhile(
   stmt: Stmt & { type: "While" }
 ): JitStmt[] | null {
   const envBefore = cloneEnv(ctx.env);
+  const sliceAliasesBefore = new Map(ctx.sliceAliases);
 
   const cond = lowerExpr(ctx, stmt.cond);
   if (!cond) return null;
@@ -724,6 +951,7 @@ function lowerWhile(
     return null;
   if (cond.jitType.kind === "complex_or_number") ctx._hasTensorOps = true;
 
+  ctx.sliceAliases = new Map(sliceAliasesBefore);
   const body = lowerStmts(ctx, stmt.body);
   if (!body) return null;
 
@@ -740,6 +968,7 @@ function lowerWhile(
     if (repassBudget <= 0) return null;
     repassBudget--;
     ctx.env = cloneEnv(merged);
+    ctx.sliceAliases = new Map(sliceAliasesBefore);
     const newCond = lowerExpr(ctx, stmt.cond);
     if (!newCond) return null;
     const newBody = lowerStmts(ctx, stmt.body);
@@ -754,6 +983,7 @@ function lowerWhile(
   }
 
   ctx.env = merged;
+  ctx.sliceAliases = sliceAliasesBefore;
 
   return [{ tag: "While", cond: finalCond, body: finalBody }];
 }
@@ -782,6 +1012,11 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       };
 
     case "Ident": {
+      // Slice alias names can't be read as plain values (they don't
+      // correspond to a real tensor at runtime — only to a set of scalar
+      // locals and a substitution rule). Bail.
+      if (ctx.sliceAliases.has(expr.name)) return null;
+
       // Known numeric constants
       const constVal = KNOWN_CONSTANTS[expr.name];
       if (constVal !== undefined) {
@@ -887,6 +1122,11 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         });
       }
 
+      // Slice alias `pt(k)` — parsed as FuncCall because the parser
+      // doesn't know `pt` is a variable. Handle it like Index.
+      const alias = ctx.sliceAliases.get(expr.name);
+      if (alias) return lowerSliceAliasRead(ctx, alias, expr.args);
+
       // Try user function resolution (nested → local → workspace → class method)
       const userResult = lowerUserFuncCall(ctx, expr);
       if (userResult !== undefined) return userResult;
@@ -919,6 +1159,11 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "Index": {
+      // Slice alias intercept: `pt(k)` where `pt = pts(:, i)` → `pts(k, i)`.
+      if (expr.base.type === "Ident") {
+        const alias = ctx.sliceAliases.get(expr.base.name);
+        if (alias) return lowerSliceAliasRead(ctx, alias, expr.indices);
+      }
       const base = lowerExpr(ctx, expr.base);
       if (!base) return null;
       return lowerIndexExpr(ctx, { base, indices: expr.indices });
