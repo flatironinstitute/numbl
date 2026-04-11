@@ -462,7 +462,20 @@ function emitTensorLiteral(expr: JitExpr & { tag: "TensorLiteral" }): string {
 
 function emitIndex(expr: JitExpr & { tag: "Index" }): string {
   const base = emitExpr(expr.base);
+  const baseType = expr.base.jitType;
   const indices = expr.indices.map(i => emitExpr(i));
+
+  // Specialized fast path: real tensor with known type. The helpers skip
+  // isTensor / imag / Math.round and avoid the per-call array allocation
+  // that idxN otherwise needs.
+  if (baseType.kind === "tensor" && baseType.isComplex === false) {
+    if (indices.length === 1) return `$h.idx1r(${base}, ${indices[0]})`;
+    if (indices.length === 2)
+      return `$h.idx2r(${base}, ${indices[0]}, ${indices[1]})`;
+    if (indices.length === 3)
+      return `$h.idx3r(${base}, ${indices[0]}, ${indices[1]}, ${indices[2]})`;
+  }
+
   if (indices.length === 1) return `$h.idx1(${base}, ${indices[0]})`;
   if (indices.length === 2)
     return `$h.idx2(${base}, ${indices[0]}, ${indices[1]})`;

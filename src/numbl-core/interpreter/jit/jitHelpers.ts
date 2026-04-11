@@ -319,6 +319,57 @@ function idxN(base: unknown, indices: number[]): unknown {
   throw new Error("JIT index: unsupported base type for N-D indexing");
 }
 
+// ── Specialized real-tensor index helpers ───────────────────────────────
+//
+// These are emitted by the JIT codegen when the call site has statically
+// proven the base is a real-valued tensor (no imag part). They skip:
+//   * the isTensor runtime check
+//   * the imag !== undefined check
+//   * Math.round (callers in tight loops always pass integer indices)
+//   * the array allocation per call that idxN does
+//
+// V8 inlines these into the caller's hot loop, so each access compiles
+// down to a Float64Array load with one comparison for the bounds check.
+// Bounds check uses `>>> 0` so negative indices wrap to a huge unsigned
+// value which fails the `< length` test in one comparison.
+
+function bce(): never {
+  throw new Error("Index exceeds array bounds");
+}
+
+function idx1r(base: RuntimeTensor, i: number): number {
+  const idx = (i - 1) | 0;
+  if (idx >>> 0 >= base.data.length) bce();
+  return base.data[idx];
+}
+
+function idx2r(base: RuntimeTensor, ri: number, ci: number): number {
+  const s = base.shape;
+  const rows = s.length >= 2 ? s[0] : s.length === 1 ? 1 : 1;
+  const r = (ri - 1) | 0;
+  const c = (ci - 1) | 0;
+  const lin = c * rows + r;
+  if (lin >>> 0 >= base.data.length) bce();
+  return base.data[lin];
+}
+
+function idx3r(
+  base: RuntimeTensor,
+  i1: number,
+  i2: number,
+  i3: number
+): number {
+  const s = base.shape;
+  const d0 = s[0];
+  const d1 = s.length >= 2 ? s[1] : 1;
+  const k0 = (i1 - 1) | 0;
+  const k1 = (i2 - 1) | 0;
+  const k2 = (i3 - 1) | 0;
+  const lin = k2 * d0 * d1 + k1 * d0 + k0;
+  if (lin >>> 0 >= base.data.length) bce();
+  return base.data[lin];
+}
+
 // ── Complex truthiness ──────────────────────────────────────────────────
 
 function cTruthy(v: unknown): boolean {
@@ -397,10 +448,16 @@ export const jitHelpers = {
   mkTensorC: (reData: number[], imData: number[], shape: number[]) =>
     makeTensor(new FloatXArray(reData), new FloatXArray(imData), shape),
 
-  // Tensor indexing
+  // Tensor indexing (generic — handles any base type, real or complex)
   idx1,
   idx2,
   idxN,
+
+  // Specialized real-tensor index helpers (emitted when call site can
+  // prove the base is a real tensor — see emitIndex in jitCodegen.ts).
+  idx1r,
+  idx2r,
+  idx3r,
 
   // Scalar accessors
   re,
