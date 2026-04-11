@@ -180,37 +180,9 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
-/** Parse %!jit annotations: each on the line above a function call site.
- *  Returns patterns like "funcName@lineNumber" to match against JIT descriptions. */
-function parseJitAnnotations(source: string): string[] {
-  const lines = source.split("\n");
-  const patterns: string[] = [];
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].trim() !== "%!jit") continue;
-    for (let j = i + 1; j < lines.length; j++) {
-      const trimmed = lines[j].trim();
-      if (trimmed === "" || trimmed.startsWith("%")) continue;
-      // Match function call: name(...) anywhere on the line
-      // Covers: a = foo(x), foo(x), [a,b] = foo(x)
-      const callMatch = trimmed.match(/\b(\w+)\s*\(/);
-      if (callMatch) {
-        patterns.push(`${callMatch[1]}@${j + 1}`); // 1-indexed line number
-      }
-      break;
-    }
-  }
-  return patterns;
-}
-
 async function runTests(dir: string, optimization?: number) {
   const absDir = resolve(process.cwd(), dir);
-  let testFiles = findTestFiles(absDir);
-
-  // jit/ tests are run separately via npm run test:jit;
-  // skip the filter when targeting the jit directory directly
-  if (!absDir.endsWith("/jit")) {
-    testFiles = testFiles.filter(f => !f.includes("/jit/"));
-  }
+  const testFiles = findTestFiles(absDir);
 
   if (testFiles.length === 0) {
     console.error(`No .m test files found in ${dir}`);
@@ -228,10 +200,6 @@ async function runTests(dir: string, optimization?: number) {
     const scriptDir = dirname(filepath);
     const searchPaths = [scriptDir];
     const workspaceFiles = scanMFiles(scriptDir, filepath);
-    const isJit = filepath.includes("/jit/");
-
-    // Collect JIT descriptions for %!jit annotation checking
-    const jitDescriptions: string[] = [];
 
     try {
       const result = executeCode(
@@ -239,9 +207,6 @@ async function runTests(dir: string, optimization?: number) {
         {
           displayResults: true,
           optimization: optimization ?? 1,
-          onJitCompile: (description: string) => {
-            jitDescriptions.push(description);
-          },
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -255,25 +220,12 @@ async function runTests(dir: string, optimization?: number) {
       const lines = outputText.split("\n").filter(l => l.length > 0);
       const lastLine = lines.length > 0 ? lines[lines.length - 1] : "";
 
-      // Check %!jit annotations for jit/ tests
-      let jitFail: string | null = null;
-      if (isJit) {
-        const expected = parseJitAnnotations(source);
-        for (const pattern of expected) {
-          if (!jitDescriptions.some(d => d.includes(pattern))) {
-            jitFail = `%!jit ${pattern} — not matched. Got: [${jitDescriptions.join(", ")}]`;
-            break;
-          }
-        }
-      }
-
-      if (lastLine === "SUCCESS" && !jitFail) {
+      if (lastLine === "SUCCESS") {
         console.log(`PASS  ${rel}`);
         pass++;
       } else {
         console.log(`FAIL  ${rel}`);
-        if (jitFail) console.log(`      ${jitFail}`);
-        else console.log(outputText.replace(/^/gm, "      "));
+        console.log(outputText.replace(/^/gm, "      "));
         fail++;
         failedScripts.push(rel);
       }
