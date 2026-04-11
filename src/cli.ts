@@ -613,27 +613,14 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js: for compiled mode, append JIT pieces during execution.
-  // For interpreter mode, JIT code is collected in result.generatedJS instead.
-  let onJitCompile: ((description: string, jsCode: string) => void) | undefined;
+  // Set up --dump-js: JIT compilations are collected in result.generatedJS
+  // by executeCode and written by finalizeDumpFile at the end. Just clear
+  // any previous dump file here.
+  const onJitCompile:
+    | ((description: string, jsCode: string) => void)
+    | undefined = undefined;
   if (opts.dumpJs) {
-    // Clear any previous dump file
     writeFileSync(opts.dumpJs, "");
-    {
-      onJitCompile = (description: string, jsCode: string) => {
-        const header =
-          "\n// " +
-          "=".repeat(60) +
-          "\n" +
-          "// JIT: " +
-          description +
-          "\n" +
-          "// " +
-          "=".repeat(60) +
-          "\n\n";
-        appendFileSync(opts.dumpJs!, header + jsCode + "\n");
-      };
-    }
   }
 
   try {
@@ -797,19 +784,11 @@ function finalizeDumpFile(
     "// " +
     "=".repeat(60) +
     "\n\n";
-  // For device files (/dev/stderr, /dev/stdout), just append — can't read back
   if (dumpFile.startsWith("/dev/")) {
     appendFileSync(dumpFile, header + jsCode + "\n");
     return;
   }
-  // JIT pieces were appended during execution; prepend the main script
-  let jitContent = "";
-  try {
-    jitContent = readFileSync(dumpFile, "utf-8");
-  } catch {
-    // File may not exist yet if no JIT compilations happened
-  }
-  writeFileSync(dumpFile, header + jsCode + "\n" + jitContent);
+  writeFileSync(dumpFile, header + jsCode + "\n");
 }
 
 async function cmdBuildAddon() {
