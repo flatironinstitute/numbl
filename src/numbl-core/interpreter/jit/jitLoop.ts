@@ -17,7 +17,11 @@ import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
 import { jitHelpers } from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
-import { analyzeForLoop, analyzeWhileLoop } from "./jitLoopAnalysis.js";
+import {
+  analyzeForLoop,
+  analyzeWhileLoop,
+  collectReadsFromSiblings,
+} from "./jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 
@@ -93,10 +97,36 @@ function tryJitLoop(
     inputTypes.push(t);
   }
 
-  // Outputs: all assigned variables (deduplicated)
+  // Outputs: all assigned variables (deduplicated). We then filter this to
+  // only the variables the surrounding scope actually needs after the
+  // loop. Loop-internal temporaries that aren't read post-loop end up
+  // unwritten and the JIT'd function can keep them in registers — V8
+  // pessimizes register allocation if too many locals are live at the
+  // function exit.
   const outputSet = new Set(rawOutputs);
-  // Also include any input that is assigned (it's both input and output)
-  const outputs = [...outputSet];
+  let outputs = [...outputSet];
+
+  // Live-out filter: a variable should be written back if any of:
+  //   1. it's an input (was in the env before the loop), or
+  //   2. it's the loop's iteration variable (MATLAB exposes the final
+  //      value), or
+  //   3. it's read by a sibling stmt that runs after this loop in the
+  //      enclosing block.
+  // For (3) we walk just the sibling-tail provided by execStmts on the
+  // interpreter; cross-block flow is conservatively ignored (those vars
+  // get covered by the input check anyway, since they'd have to make it
+  // back into env via assignment somewhere upstream).
+  const inputSet = new Set(inputs);
+  const liveOut = new Set<string>(inputSet);
+  if (stmt.type === "For") liveOut.add(stmt.varName);
+  if (interp._postSiblings && interp._postSiblingsIdx > 0) {
+    collectReadsFromSiblings(
+      interp._postSiblings,
+      interp._postSiblingsIdx,
+      liveOut
+    );
+  }
+  outputs = outputs.filter(o => liveOut.has(o));
 
   // Progressive type widening: unify with previously seen types to prevent
   // unbounded specializations when called from an interpreted loop.
@@ -152,7 +182,8 @@ function tryJitLoop(
     lowered.outputNames,
     outputs.length,
     lowered.localVars,
-    currentFile
+    currentFile,
+    inputTypes
   );
 
   // Prepend generated helper function definitions

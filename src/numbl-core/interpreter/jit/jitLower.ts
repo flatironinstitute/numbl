@@ -972,7 +972,8 @@ function lowerUserFuncCall(
       calleeResult.outputNames,
       calleeNargout,
       calleeResult.localVars,
-      interp.currentFile
+      interp.currentFile,
+      argJitTypes
     );
     const returnType = calleeResult.outputType ?? { kind: "number" as const };
     const paramComments = calleeFn.params

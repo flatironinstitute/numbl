@@ -297,10 +297,19 @@ export function execStmts(
   this: Interpreter,
   stmts: Stmt[]
 ): ControlSignal | null {
-  for (const stmt of stmts) {
+  for (let i = 0; i < stmts.length; i++) {
+    const stmt = stmts[i];
+    // Stash sibling-tail info on the interpreter for the duration of the
+    // child execStmt call so that JIT loop analysis can see what's read
+    // after the loop. Used by tryJitFor / tryJitWhile to filter the loop's
+    // output set so that loop-internal temporaries don't escape.
+    this._postSiblings = stmts;
+    this._postSiblingsIdx = i + 1;
     const signal = this.execStmt(stmt);
     if (signal) return signal;
   }
+  this._postSiblings = null;
+  this._postSiblingsIdx = 0;
   return null;
 }
 

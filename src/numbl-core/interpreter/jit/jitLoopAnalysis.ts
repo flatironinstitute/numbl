@@ -42,6 +42,31 @@ export function analyzeForLoop(stmt: Stmt & { type: "For" }): LoopVarInfo {
   return { inputs, outputs, hasReturn };
 }
 
+/**
+ * Collect the names of all variables read in a sibling-tail starting at
+ * `startIdx` of the given stmt list. Used by the loop JIT to filter the
+ * loop's output set so that loop-internal temporaries don't get written
+ * back when no later code reads them.
+ */
+export function collectReadsFromSiblings(
+  stmts: Stmt[],
+  startIdx: number,
+  out: Set<string>
+): void {
+  // Walking via the existing `walkStmts` helper would also collect
+  // *assigned* names, which is what we want here too — anything read
+  // before being assigned in the tail is a true input, but anything
+  // assigned in the tail might be read later in the tail. The simplest
+  // safe approximation is to mark every name that appears textually as a
+  // read (i.e. mix `referenced` and the lvalue base). The walkers below
+  // already include this (Index/Member lvalue bases get added to both
+  // assigned and referenced).
+  const tailAssigned = new Set<string>();
+  for (let i = startIdx; i < stmts.length; i++) {
+    walkStmt(stmts[i], tailAssigned, out);
+  }
+}
+
 /** Analyze a while loop statement for JIT compilation. */
 export function analyzeWhileLoop(stmt: Stmt & { type: "While" }): LoopVarInfo {
   const assigned = new Set<string>();
