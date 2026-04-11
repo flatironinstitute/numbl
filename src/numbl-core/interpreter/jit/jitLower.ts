@@ -1288,6 +1288,59 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       const alias = ctx.sliceAliases.get(expr.name);
       if (alias) return lowerSliceAliasRead(ctx, alias, expr.args);
 
+      // Fold the function-call form `and(a, b)` / `or(a, b)` / `not(a)` to
+      // the operator form when both args are simple numeric scalars. This
+      // mirrors what `&&` / `||` / `~` already lower to (a JS Binary/Unary
+      // node), avoiding the per-iter `$h.ib_and(...)` helper hop. The fold
+      // is only safe for plain numeric/boolean operands — complex truthiness
+      // doesn't match JS truthiness, so for `complex_or_number` we fall
+      // through to the IBuiltin path. Variable shadowing is already handled
+      // above; we trust no JIT-able workspace function shadows these
+      // builtins.
+      if (
+        (expr.name === "and" || expr.name === "or") &&
+        expr.args.length === 2
+      ) {
+        const left = lowerExpr(ctx, expr.args[0]);
+        if (
+          left &&
+          (left.jitType.kind === "number" || left.jitType.kind === "boolean")
+        ) {
+          const right = lowerExpr(ctx, expr.args[1]);
+          if (
+            right &&
+            (right.jitType.kind === "number" ||
+              right.jitType.kind === "boolean")
+          ) {
+            return {
+              tag: "Binary",
+              op:
+                expr.name === "and"
+                  ? BinaryOperation.AndAnd
+                  : BinaryOperation.OrOr,
+              left,
+              right,
+              jitType: { kind: "boolean" },
+            };
+          }
+        }
+      }
+      if (expr.name === "not" && expr.args.length === 1) {
+        const operand = lowerExpr(ctx, expr.args[0]);
+        if (
+          operand &&
+          (operand.jitType.kind === "number" ||
+            operand.jitType.kind === "boolean")
+        ) {
+          return {
+            tag: "Unary",
+            op: UnaryOperation.Not,
+            operand,
+            jitType: { kind: "boolean" },
+          };
+        }
+      }
+
       // Try user function resolution (nested → local → workspace → class method)
       const userResult = lowerUserFuncCall(ctx, expr);
       if (userResult !== undefined) return userResult;
