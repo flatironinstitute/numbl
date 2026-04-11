@@ -425,6 +425,87 @@ function idx3r_h(
   return data[lin];
 }
 
+// ── Scalar-write helpers ────────────────────────────────────────────────
+//
+// Mirror the hoisted read helpers. Used by the loop JIT for `t(i) = v`
+// inside a hot loop, where the base tensor has already been unshared once
+// at the top of the loop function (see `unshare` below), so each write is
+// a direct Float64Array store with a single unsigned bounds check.
+
+function set1r_h(
+  data: FloatXArrayType,
+  len: number,
+  i: number,
+  v: number
+): void {
+  const idx = (i - 1) | 0;
+  if (idx >>> 0 >= len) bce();
+  data[idx] = v;
+}
+
+function set2r_h(
+  data: FloatXArrayType,
+  len: number,
+  rows: number,
+  ri: number,
+  ci: number,
+  v: number
+): void {
+  const r = (ri - 1) | 0;
+  const c = (ci - 1) | 0;
+  const lin = c * rows + r;
+  if (lin >>> 0 >= len) bce();
+  data[lin] = v;
+}
+
+function set3r_h(
+  data: FloatXArrayType,
+  len: number,
+  d0: number,
+  d1: number,
+  i1: number,
+  i2: number,
+  i3: number,
+  v: number
+): void {
+  const k0 = (i1 - 1) | 0;
+  const k1 = (i2 - 1) | 0;
+  const k2 = (i3 - 1) | 0;
+  const lin = k2 * d0 * d1 + k1 * d0 + k0;
+  if (lin >>> 0 >= len) bce();
+  data[lin] = v;
+}
+
+// ── Unshare (COW unsharing at loop entry) ───────────────────────────────
+//
+// Called once at the top of a JIT'd loop for each tensor parameter that's
+// written to inside the body. Returns the same tensor if `_rc <= 1`
+// (meaning no one else holds a reference, so in-place mutation is safe).
+// Otherwise decrements the old tensor's `_rc` and returns a fresh copy
+// with `_rc === 1`. The caller (JIT'd function) then reassigns the local
+// parameter to the returned tensor and hoists `.data` / `.length` / shape
+// dims from it — all subsequent writes go through the hoisted alias.
+//
+// This matches the `base._rc > 1` dance in `storeIntoTensor` in
+// runtime/indexing.ts but pulls it out of the inner loop.
+
+function unshare(t: unknown): RuntimeTensor {
+  const tt = t as RuntimeTensor;
+  if (tt._rc <= 1) return tt;
+  tt._rc--;
+  const newData = new FloatXArray(tt.data);
+  const newImag = tt.imag ? new FloatXArray(tt.imag) : undefined;
+  const copy: RuntimeTensor = {
+    kind: "tensor",
+    data: newData,
+    shape: tt.shape.slice(),
+    _rc: 1,
+  };
+  if (newImag) copy.imag = newImag;
+  if (tt._isLogical) copy._isLogical = tt._isLogical;
+  return copy;
+}
+
 // ── Complex truthiness ──────────────────────────────────────────────────
 
 function cTruthy(v: unknown): boolean {
@@ -520,6 +601,15 @@ export const jitHelpers = {
   idx1r_h,
   idx2r_h,
   idx3r_h,
+
+  // Scalar-write helpers (real tensors, hoisted base). Counterparts to
+  // idx{1,2,3}r_h used by the loop JIT for scalar indexed assignment.
+  set1r_h,
+  set2r_h,
+  set3r_h,
+
+  // Unshare a tensor for COW write. Returns `t` if _rc <= 1, else a fresh copy.
+  unshare,
 
   // Scalar accessors
   re,

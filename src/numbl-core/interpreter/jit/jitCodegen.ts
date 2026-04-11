@@ -93,17 +93,22 @@ let _returnExpr = "undefined";
 let _fileName: string | undefined;
 
 /**
- * Hoisted aliases for a tensor parameter that's read but not assigned in
- * the loop body. Each entry maps the original variable name to the local
- * JS identifiers for its `.data`, `.data.length`, `.shape[0]`, and
- * `.shape[1]` (the latter two are only emitted if needed by the
+ * Hoisted aliases for a tensor parameter that's read (and optionally
+ * written) in the loop body. Each entry maps the original variable name
+ * to the local JS identifiers for its `.data`, `.data.length`, `.shape[0]`,
+ * and `.shape[1]` (the latter two are only emitted if needed by the
  * dimensionality of the index ops in the body).
+ *
+ * If `isWriteTarget` is true the hoist was generated via a call to
+ * `$h.unshare(t)` at function entry, so the per-iter store goes through
+ * the hoisted `.data` alias safely (no risk of mutating shared state).
  */
 interface HoistedAlias {
   data: string;
   len: string;
   d0: string;
   d1: string;
+  isWriteTarget: boolean;
 }
 
 let _hoistedAliases: Map<string, HoistedAlias> = new Map();
@@ -137,50 +142,84 @@ export function generateJS(
     lines.push(`${indent}var ${locals.map(mangle).join(", ")};`);
   }
 
-  // Hoist loop-invariant tensor reads. A param qualifies if it's a real
-  // tensor and isn't reassigned by the loop body (i.e. not in `outputs`
-  // and not in `localVars` — localVars contains every name written by
-  // the body, so a param assigned inside the body shows up there too).
-  // Re-walk the body to figure out exactly which dim sizes the index ops
-  // actually need so we don't emit unused $foo_d1 vars.
+  // Hoist loop-invariant tensor reads (and, for write-target tensors,
+  // unshare once up front so the per-write body can store directly
+  // through the hoisted `.data` alias without a COW check per iter).
+  //
+  // A param qualifies for the *read-only* hoist path if it's a real tensor
+  // that the body never writes to (not in `outputs` or `localVars`).
+  //
+  // A param qualifies for the *write-target* hoist path if it's a real
+  // tensor that IS in `outputs` (i.e. the body contains an `AssignIndex`
+  // targeting it) but isn't a plain reassignment (plain reassignments show
+  // up in `localVars` because `lowerAssign` adds them). Write-targets
+  // reassign the local parameter to the result of `$h.unshare(param)`,
+  // which is a no-op fast return when `_rc <= 1`.
+  //
+  // We re-walk the body to figure out which dim sizes and index arities
+  // the body actually uses, so we don't emit unused aliases or unneeded
+  // unshare calls.
   const outputSet = new Set(outputs);
   const localSet = localVars;
   _hoistedAliases = new Map();
   if (paramTypes && paramTypes.length === params.length) {
     const usedDims = collectMaxIndexDimsByVar(body);
+    const writeTargets = collectAssignIndexBases(body);
     for (let i = 0; i < params.length; i++) {
       const name = params[i];
       const type = paramTypes[i];
-      if (
-        type.kind === "tensor" &&
-        type.isComplex === false &&
-        !outputSet.has(name) &&
-        !localSet.has(name)
-      ) {
-        const maxDim = usedDims.get(name) ?? 0;
-        if (maxDim === 0) continue; // never indexed in this loop body
-        const m = mangle(name);
-        const dataAlias = `$${m}_data`;
-        const lenAlias = `$${m}_len`;
-        const d0Alias = `$${m}_d0`;
-        const d1Alias = `$${m}_d1`;
-        const decls: string[] = [];
-        decls.push(`${dataAlias} = ${m}.data`);
-        decls.push(`${lenAlias} = ${dataAlias}.length`);
-        if (maxDim >= 2) {
-          decls.push(`${d0Alias} = ${m}.shape[0]`);
-        }
-        if (maxDim >= 3) {
-          decls.push(`${d1Alias} = ${m}.shape[1]`);
-        }
-        lines.push(`${indent}var ${decls.join(", ")};`);
-        _hoistedAliases.set(name, {
-          data: dataAlias,
-          len: lenAlias,
-          d0: d0Alias,
-          d1: d1Alias,
-        });
+      if (type.kind !== "tensor" || type.isComplex !== false) continue;
+
+      // Plain reassignment inside the body (e.g. `t = t + 1`) — don't
+      // hoist, the local would be stale after the first iteration.
+      if (localSet.has(name)) continue;
+
+      const isWriteTarget = writeTargets.has(name);
+      // Output set without a write-target marker means the name shows
+      // up in outputs because the analyzer flagged it, but the body
+      // doesn't actually have a scalar indexed assign on it. Don't
+      // hoist that — something unusual is going on.
+      if (outputSet.has(name) && !isWriteTarget) continue;
+
+      // For the read-only path, we need at least one Index read to
+      // justify the hoist. Write-targets always get hoisted (even if
+      // the only use is the write itself) so the store goes through
+      // the hoisted alias.
+      const maxRead = usedDims.get(name) ?? 0;
+      const maxWrite = writeTargets.get(name) ?? 0;
+      const maxDim = Math.max(maxRead, maxWrite);
+      if (maxDim === 0) continue;
+
+      const m = mangle(name);
+      const dataAlias = `$${m}_data`;
+      const lenAlias = `$${m}_len`;
+      const d0Alias = `$${m}_d0`;
+      const d1Alias = `$${m}_d1`;
+
+      if (isWriteTarget) {
+        // Unshare reassigns the param local to the un-COW'd tensor, so
+        // subsequent `.data` reads (and the writeback) see the fresh
+        // (or unchanged) copy we're safe to mutate.
+        lines.push(`${indent}${m} = $h.unshare(${m});`);
       }
+
+      const decls: string[] = [];
+      decls.push(`${dataAlias} = ${m}.data`);
+      decls.push(`${lenAlias} = ${dataAlias}.length`);
+      if (maxDim >= 2) {
+        decls.push(`${d0Alias} = ${m}.shape[0]`);
+      }
+      if (maxDim >= 3) {
+        decls.push(`${d1Alias} = ${m}.shape[1]`);
+      }
+      lines.push(`${indent}var ${decls.join(", ")};`);
+      _hoistedAliases.set(name, {
+        data: dataAlias,
+        len: lenAlias,
+        d0: d0Alias,
+        d1: d1Alias,
+        isWriteTarget,
+      });
     }
   }
 
@@ -236,6 +275,14 @@ function collectMaxIndexDimsByVar(body: JitStmt[]): Map<string, number> {
         case "ExprStmt":
           visit(s.expr);
           break;
+        case "AssignIndex":
+          // The base name doesn't contribute to the "max read dims"
+          // count directly (there's no Index expr around it), but its
+          // index expressions do need walking in case they themselves
+          // contain Index reads.
+          for (const idx of s.indices) visit(idx);
+          visit(s.value);
+          break;
         case "MultiAssign":
           for (const a of s.args) visit(a);
           break;
@@ -267,6 +314,40 @@ function collectMaxIndexDimsByVar(body: JitStmt[]): Map<string, number> {
   return out;
 }
 
+/**
+ * Walk the JitStmt body and collect, for each tensor variable that
+ * appears as the base of an `AssignIndex` statement, the max number of
+ * indices used. Returns a map baseName → maxDim. Used by `generateJS`
+ * to decide which params need the unshare-and-hoist write path.
+ */
+function collectAssignIndexBases(body: JitStmt[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const visit = (stmts: JitStmt[]): void => {
+    for (const s of stmts) {
+      switch (s.tag) {
+        case "AssignIndex": {
+          const cur = out.get(s.baseName) ?? 0;
+          if (s.indices.length > cur) out.set(s.baseName, s.indices.length);
+          break;
+        }
+        case "If":
+          visit(s.thenBody);
+          for (const eib of s.elseifBlocks) visit(eib.body);
+          if (s.elseBody) visit(s.elseBody);
+          break;
+        case "For":
+        case "While":
+          visit(s.body);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  visit(body);
+  return out;
+}
+
 // ── Statement emission ──────────────────────────────────────────────────
 
 function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
@@ -279,6 +360,10 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign":
       lines.push(`${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr)};`);
+      break;
+
+    case "AssignIndex":
+      lines.push(`${indent}${emitAssignIndex(stmt)};`);
       break;
 
     case "ExprStmt":
@@ -641,6 +726,31 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
   if (indices.length === 2)
     return `$h.idx2(${base}, ${indices[0]}, ${indices[1]})`;
   return `$h.idxN(${base}, [${indices.join(", ")}])`;
+}
+
+function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
+  const alias = _hoistedAliases.get(stmt.baseName);
+  const indices = stmt.indices.map(i => emitExpr(i));
+  const value = emitExpr(stmt.value);
+
+  // Write-target tensors are always hoisted at the top of the loop
+  // function (see generateJS). If there's no alias here something is
+  // wrong — lowering only emits AssignIndex for real-tensor write
+  // targets, which the hoist logic always picks up.
+  if (!alias) {
+    throw new Error(
+      `JIT codegen: AssignIndex on '${stmt.baseName}' without a hoisted alias`
+    );
+  }
+
+  if (indices.length === 1) {
+    return `$h.set1r_h(${alias.data}, ${alias.len}, ${indices[0]}, ${value})`;
+  }
+  if (indices.length === 2) {
+    return `$h.set2r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${indices[0]}, ${indices[1]}, ${value})`;
+  }
+  // 3D
+  return `$h.set3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${indices[0]}, ${indices[1]}, ${indices[2]}, ${value})`;
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }): string {

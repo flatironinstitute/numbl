@@ -388,6 +388,17 @@ export type JitExpr =
 export type JitStmt =
   | { tag: "Assign"; name: string; expr: JitExpr }
   | {
+      tag: "AssignIndex";
+      /** Name of the tensor variable being written to (must be an Ident-based lvalue). */
+      baseName: string;
+      /** Scalar index expressions (1..3). */
+      indices: JitExpr[];
+      /** RHS scalar value to store. */
+      value: JitExpr;
+      /** Type of the base tensor (for codegen to choose the right helper). */
+      baseType: JitType;
+    }
+  | {
       tag: "If";
       cond: JitExpr;
       thenBody: JitStmt[];
