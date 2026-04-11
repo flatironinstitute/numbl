@@ -154,8 +154,21 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
   });
 
-  registerSpecial("toc", nargout => {
-    const elapsed = (performance.now() - getTicTime()) / 1000;
+  registerSpecial("toc", (nargout, args) => {
+    // tic returns performance.now()/1000, so toc(h) is the elapsed time
+    // since that specific handle was captured. Without an argument, fall
+    // back to the most recent tic stored in the global ticTime.
+    let startSeconds: number;
+    if (args.length === 0) {
+      startSeconds = getTicTime() / 1000;
+    } else {
+      const h = ensureRuntimeValue(args[0]);
+      if (!isRuntimeNumber(h)) {
+        throw new RuntimeError("toc: argument must be a tic handle");
+      }
+      startSeconds = toNumber(h);
+    }
+    const elapsed = performance.now() / 1000 - startSeconds;
     if (nargout === 0) {
       rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
     }
