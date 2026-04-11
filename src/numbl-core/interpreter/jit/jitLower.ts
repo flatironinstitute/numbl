@@ -449,8 +449,17 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
       result = lowerAssignLValue(ctx, stmt);
       break;
     case "ExprStmt":
-      // Bail out: ExprStmt must set `ans` in the environment, which the
-      // JIT codegen doesn't do.  Fall back to the interpreter.
+      // Marker call `assert_jit_compiled()` is elided to nothing — its
+      // job is done by the fact that we successfully reached this point
+      // in the lowering. Anything else is a bail (an ExprStmt would set
+      // `ans` in the env, which the JIT codegen doesn't do).
+      if (
+        stmt.expr.type === "FuncCall" &&
+        stmt.expr.name === "assert_jit_compiled" &&
+        stmt.expr.args.length === 0
+      ) {
+        return prefix;
+      }
       return null;
     case "If":
       result = lowerIf(ctx, stmt);
@@ -1223,6 +1232,22 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "FuncCall": {
+      // Marker call `assert_jit_compiled()` in expression position is
+      // elided to a literal 1. The job of the marker is to fail when the
+      // surrounding loop body bails — reaching this point means lowering
+      // is succeeding, so just substitute a constant.
+      if (
+        expr.name === "assert_jit_compiled" &&
+        expr.args.length === 0 &&
+        !ctx.env.has(expr.name)
+      ) {
+        return {
+          tag: "NumberLiteral",
+          value: 1,
+          jitType: { kind: "number", exact: 1, sign: "positive" },
+        };
+      }
+
       // If the name is a known variable, treat as indexing (MATLAB ambiguity)
       const varType = ctx.env.get(expr.name);
       if (varType) {
