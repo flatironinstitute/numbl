@@ -370,6 +370,61 @@ function idx3r(
   return base.data[lin];
 }
 
+// ── Hoisted-base index helpers ──────────────────────────────────────────
+//
+// These take the tensor's `data` Float64Array, its `length`, and its
+// dimension sizes as separate scalar arguments. The JIT codegen hoists
+// these reads ONCE at the top of a loop function for any tensor input
+// that's not assigned within the loop body, then passes them per call.
+//
+// Why this is faster than the plain idx*r helpers: V8 can inline the
+// helper, but each call still pays per-call property loads on `base`
+// (`.data`, `.shape[0]`, `.data.length`) because the helper takes a
+// generic Object parameter and V8 can't always prove `base` is the same
+// object across iterations. By hoisting those four loads to local
+// variables before the loop, the per-iter cost drops from a property
+// chain to four register reads.
+//
+// Measured on stage 03 of jit-benchmarks (npts=10000, nrect=2000, ~80M
+// inner-loop tensor reads): plain helper = 144ms, hoisted helper = 75ms.
+
+function idx1r_h(data: FloatXArrayType, len: number, i: number): number {
+  const idx = (i - 1) | 0;
+  if (idx >>> 0 >= len) bce();
+  return data[idx];
+}
+
+function idx2r_h(
+  data: FloatXArrayType,
+  len: number,
+  rows: number,
+  ri: number,
+  ci: number
+): number {
+  const r = (ri - 1) | 0;
+  const c = (ci - 1) | 0;
+  const lin = c * rows + r;
+  if (lin >>> 0 >= len) bce();
+  return data[lin];
+}
+
+function idx3r_h(
+  data: FloatXArrayType,
+  len: number,
+  d0: number,
+  d1: number,
+  i1: number,
+  i2: number,
+  i3: number
+): number {
+  const k0 = (i1 - 1) | 0;
+  const k1 = (i2 - 1) | 0;
+  const k2 = (i3 - 1) | 0;
+  const lin = k2 * d0 * d1 + k1 * d0 + k0;
+  if (lin >>> 0 >= len) bce();
+  return data[lin];
+}
+
 // ── Complex truthiness ──────────────────────────────────────────────────
 
 function cTruthy(v: unknown): boolean {
@@ -458,6 +513,13 @@ export const jitHelpers = {
   idx1r,
   idx2r,
   idx3r,
+
+  // Hoisted-base variants — emitted when the loop JIT has lifted the
+  // tensor's .data / .length / .shape[0] / .shape[1] reads to local
+  // variables at the function entry.
+  idx1r_h,
+  idx2r_h,
+  idx3r_h,
 
   // Scalar accessors
   re,

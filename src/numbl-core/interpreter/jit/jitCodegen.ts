@@ -92,13 +92,30 @@ let _tmpCounter = 0;
 let _returnExpr = "undefined";
 let _fileName: string | undefined;
 
+/**
+ * Hoisted aliases for a tensor parameter that's read but not assigned in
+ * the loop body. Each entry maps the original variable name to the local
+ * JS identifiers for its `.data`, `.data.length`, `.shape[0]`, and
+ * `.shape[1]` (the latter two are only emitted if needed by the
+ * dimensionality of the index ops in the body).
+ */
+interface HoistedAlias {
+  data: string;
+  len: string;
+  d0: string;
+  d1: string;
+}
+
+let _hoistedAliases: Map<string, HoistedAlias> = new Map();
+
 export function generateJS(
   body: JitStmt[],
   params: string[],
   outputs: string[],
   nargout: number,
   localVars: Set<string>,
-  fileName?: string
+  fileName?: string,
+  paramTypes?: JitType[]
 ): string {
   _tmpCounter = 0;
   _fileName = fileName;
@@ -120,6 +137,53 @@ export function generateJS(
     lines.push(`${indent}var ${locals.map(mangle).join(", ")};`);
   }
 
+  // Hoist loop-invariant tensor reads. A param qualifies if it's a real
+  // tensor and isn't reassigned by the loop body (i.e. not in `outputs`
+  // and not in `localVars` — localVars contains every name written by
+  // the body, so a param assigned inside the body shows up there too).
+  // Re-walk the body to figure out exactly which dim sizes the index ops
+  // actually need so we don't emit unused $foo_d1 vars.
+  const outputSet = new Set(outputs);
+  const localSet = localVars;
+  _hoistedAliases = new Map();
+  if (paramTypes && paramTypes.length === params.length) {
+    const usedDims = collectMaxIndexDimsByVar(body);
+    for (let i = 0; i < params.length; i++) {
+      const name = params[i];
+      const type = paramTypes[i];
+      if (
+        type.kind === "tensor" &&
+        type.isComplex === false &&
+        !outputSet.has(name) &&
+        !localSet.has(name)
+      ) {
+        const maxDim = usedDims.get(name) ?? 0;
+        if (maxDim === 0) continue; // never indexed in this loop body
+        const m = mangle(name);
+        const dataAlias = `$${m}_data`;
+        const lenAlias = `$${m}_len`;
+        const d0Alias = `$${m}_d0`;
+        const d1Alias = `$${m}_d1`;
+        const decls: string[] = [];
+        decls.push(`${dataAlias} = ${m}.data`);
+        decls.push(`${lenAlias} = ${dataAlias}.length`);
+        if (maxDim >= 2) {
+          decls.push(`${d0Alias} = ${m}.shape[0]`);
+        }
+        if (maxDim >= 3) {
+          decls.push(`${d1Alias} = ${m}.shape[1]`);
+        }
+        lines.push(`${indent}var ${decls.join(", ")};`);
+        _hoistedAliases.set(name, {
+          data: dataAlias,
+          len: lenAlias,
+          d0: d0Alias,
+          d1: d1Alias,
+        });
+      }
+    }
+  }
+
   // Emit body
   emitStmts(lines, body, indent);
 
@@ -127,6 +191,80 @@ export function generateJS(
   lines.push(`${indent}return ${_returnExpr};`);
 
   return lines.join("\n");
+}
+
+/**
+ * Walk the JitStmt body and find, for each variable name used as the base
+ * of an Index expression, the maximum number of indices it's accessed
+ * with. Used by generateJS to decide how many shape dimensions to hoist
+ * for each tensor parameter.
+ */
+function collectMaxIndexDimsByVar(body: JitStmt[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const visit = (e: JitExpr): void => {
+    switch (e.tag) {
+      case "Index":
+        if (e.base.tag === "Var") {
+          const cur = out.get(e.base.name) ?? 0;
+          if (e.indices.length > cur) out.set(e.base.name, e.indices.length);
+        }
+        visit(e.base);
+        for (const idx of e.indices) visit(idx);
+        return;
+      case "Binary":
+        visit(e.left);
+        visit(e.right);
+        return;
+      case "Unary":
+        visit(e.operand);
+        return;
+      case "Call":
+      case "UserCall":
+        for (const a of e.args) visit(a);
+        return;
+      case "TensorLiteral":
+        for (const row of e.rows) for (const c of row) visit(c);
+        return;
+      default:
+        return;
+    }
+  };
+  const visitStmts = (stmts: JitStmt[]): void => {
+    for (const s of stmts) {
+      switch (s.tag) {
+        case "Assign":
+        case "ExprStmt":
+          visit(s.expr);
+          break;
+        case "MultiAssign":
+          for (const a of s.args) visit(a);
+          break;
+        case "If":
+          visit(s.cond);
+          visitStmts(s.thenBody);
+          for (const eib of s.elseifBlocks) {
+            visit(eib.cond);
+            visitStmts(eib.body);
+          }
+          if (s.elseBody) visitStmts(s.elseBody);
+          break;
+        case "For":
+          visit(s.start);
+          if (s.step) visit(s.step);
+          visit(s.end);
+          visitStmts(s.body);
+          break;
+        case "While":
+          visit(s.cond);
+          visitStmts(s.body);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  visitStmts(body);
+  return out;
 }
 
 // ── Statement emission ──────────────────────────────────────────────────
@@ -465,6 +603,29 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
   const baseType = expr.base.jitType;
   const indices = expr.indices.map(i => emitExpr(i));
 
+  // Hoisted-base fast path: the loop generator hoisted this base's data,
+  // length, and dim sizes to local aliases at function entry. This is the
+  // fastest path because the per-call helper takes only scalar args (no
+  // property loads on the tensor object).
+  if (
+    baseType.kind === "tensor" &&
+    baseType.isComplex === false &&
+    expr.base.tag === "Var"
+  ) {
+    const alias = _hoistedAliases.get(expr.base.name);
+    if (alias) {
+      if (indices.length === 1) {
+        return `$h.idx1r_h(${alias.data}, ${alias.len}, ${indices[0]})`;
+      }
+      if (indices.length === 2) {
+        return `$h.idx2r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${indices[0]}, ${indices[1]})`;
+      }
+      if (indices.length === 3) {
+        return `$h.idx3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${indices[0]}, ${indices[1]}, ${indices[2]})`;
+      }
+    }
+  }
+
   // Specialized fast path: real tensor with known type. The helpers skip
   // isTensor / imag / Math.round and avoid the per-call array allocation
   // that idxN otherwise needs.
@@ -494,13 +655,48 @@ function emitCall(expr: JitExpr & { tag: "Call" }): string {
   return `$h.ib_${expr.name}(${args.join(", ")})`;
 }
 
-// ── Truthiness ──────────────────────────────────────────────────────────
+// ── Truthiness / condition emission ──────────────────────────────────────
+//
+// emitTruthiness is called for the cond of `if` / `while` and the operands
+// of `&&` / `||`. The default value-form codegen for comparisons emits
+// `(a > b ? 1 : 0)` (so that "boolean" JIT values still print as 0/1
+// numbers in tensor contexts). Wrapping that in `!== 0` for every if/while
+// gives nested `((((a > b ? 1 : 0)) !== 0 && ...))` chains that obscure the
+// expression V8 needs to inline. We recurse here so that comparison /
+// logical sub-expressions emit directly as JS booleans inside conditions.
 
 function emitTruthiness(expr: JitExpr): string {
   // String/char conditions are rejected during lowering.
-  // Complex values are objects, so !== 0 is always true — use $h.cTruthy.
   if (expr.jitType.kind === "complex_or_number") {
     return `$h.cTruthy(${emitExpr(expr)})`;
   }
+
+  if (expr.tag === "Binary") {
+    switch (expr.op) {
+      case BinaryOperation.Equal:
+        return `(${emitExpr(expr.left)}) === (${emitExpr(expr.right)})`;
+      case BinaryOperation.NotEqual:
+        return `(${emitExpr(expr.left)}) !== (${emitExpr(expr.right)})`;
+      case BinaryOperation.Less:
+        return `(${emitExpr(expr.left)}) < (${emitExpr(expr.right)})`;
+      case BinaryOperation.LessEqual:
+        return `(${emitExpr(expr.left)}) <= (${emitExpr(expr.right)})`;
+      case BinaryOperation.Greater:
+        return `(${emitExpr(expr.left)}) > (${emitExpr(expr.right)})`;
+      case BinaryOperation.GreaterEqual:
+        return `(${emitExpr(expr.left)}) >= (${emitExpr(expr.right)})`;
+      case BinaryOperation.AndAnd:
+        return `(${emitTruthiness(expr.left)}) && (${emitTruthiness(expr.right)})`;
+      case BinaryOperation.OrOr:
+        return `(${emitTruthiness(expr.left)}) || (${emitTruthiness(expr.right)})`;
+      default:
+        break; // fall through to value-form
+    }
+  }
+
+  if (expr.tag === "Unary" && expr.op === UnaryOperation.Not) {
+    return `!(${emitTruthiness(expr.operand)})`;
+  }
+
   return `(${emitExpr(expr)}) !== 0`;
 }

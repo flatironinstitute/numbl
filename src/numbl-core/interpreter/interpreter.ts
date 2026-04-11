@@ -84,6 +84,11 @@ export class Interpreter {
   /** @internal Progressive type widening for loop JIT: location -> last unified input types. */
   loopLastInputTypes = new Map<string, import("./jit/jitTypes.js").JitType[]>();
 
+  /** @internal Sibling stmts of the currently-executing stmt (set by execStmts). */
+  _postSiblings: import("../parser/types.js").Stmt[] | null = null;
+  /** @internal Index in _postSiblings of the next stmt after the current one. */
+  _postSiblingsIdx: number = 0;
+
   /** Optimization level (0 = pure interpreter, >=1 = JIT scalar functions). */
   optimization: number = 1;
 
@@ -221,10 +226,15 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      for (const stmt of nonFuncStmts) {
-        const signal = this.execStmt(stmt);
+      for (let i = 0; i < nonFuncStmts.length; i++) {
+        // Set sibling-tail context so loop JIT can compute live-out vars.
+        this._postSiblings = nonFuncStmts;
+        this._postSiblingsIdx = i + 1;
+        const signal = this.execStmt(nonFuncStmts[i]);
         if (signal) break;
       }
+      this._postSiblings = null;
+      this._postSiblingsIdx = 0;
     }
   }
 
