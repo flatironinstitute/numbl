@@ -1222,6 +1222,43 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "Tensor": {
+      // Stage 11 vertical-concat-growth fast path: `[base; value]` where
+      // `base` is a real tensor (empty or column vector) and `value` is
+      // a numeric scalar. Mirrors the chunkie `it = [it; i]` grow-a-list
+      // pattern. Must run before the generic TensorLiteral path because
+      // the latter rejects any non-scalar row element.
+      if (
+        expr.rows.length === 2 &&
+        expr.rows[0].length === 1 &&
+        expr.rows[1].length === 1
+      ) {
+        const base = lowerExpr(ctx, expr.rows[0][0]);
+        if (
+          base &&
+          base.jitType.kind === "tensor" &&
+          base.jitType.isComplex === false
+        ) {
+          const value = lowerExpr(ctx, expr.rows[1][0]);
+          if (
+            value &&
+            (value.jitType.kind === "number" ||
+              value.jitType.kind === "boolean")
+          ) {
+            ctx._hasTensorOps = true;
+            return {
+              tag: "VConcatGrow",
+              base,
+              value,
+              jitType: {
+                kind: "tensor",
+                isComplex: false,
+                shape: [-1, 1],
+              },
+            };
+          }
+        }
+      }
+
       const rows: JitExpr[][] = [];
       let hasComplex = false;
       for (const row of expr.rows) {
