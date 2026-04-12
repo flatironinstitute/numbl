@@ -525,6 +525,42 @@ function setRange1r_h(
   dstData.set(srcData.subarray(sStart, sEnd + 1), dStart);
 }
 
+// ── Vertical concat growth (empty or column vector + scalar) ────────────
+//
+// Emitted by the loop JIT for the chunkie grow-a-list pattern
+//     it = []; ... it = [it; i]
+// where `it` is a real column-vector (or empty) tensor and `i` is a
+// numeric scalar. Allocates a fresh `(k+1, 1)` tensor and copies. The
+// per-iter allocation is unavoidable for MATLAB-ish growth semantics,
+// but V8's young-gen allocator is fast; the main cost saved vs. the
+// interpreter path is the per-op dispatch and unshare logic.
+//
+// Empty base is treated as matching any dimensions (MATLAB rule).
+// Scalar `(1,1)` base is promoted to `(2,1)`. Anything else is rejected.
+function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
+  const bt = base as RuntimeTensor;
+  const baseLen = bt.data.length;
+  if (baseLen === 0) {
+    const out = new FloatXArray(1);
+    out[0] = v;
+    return makeTensor(out, undefined, [1, 1]);
+  }
+  const s = bt.shape;
+  const isColOrScalar =
+    (s.length === 2 && s[1] === 1) ||
+    (s.length === 1 && s[0] >= 1) ||
+    (s.length === 2 && s[0] === 1 && s[1] === 1);
+  if (!isColOrScalar) {
+    throw new Error(
+      "Dimensions of arrays being concatenated are not consistent."
+    );
+  }
+  const out = new FloatXArray(baseLen + 1);
+  out.set(bt.data);
+  out[baseLen] = v;
+  return makeTensor(out, undefined, [baseLen + 1, 1]);
+}
+
 // ── Unshare (COW unsharing at loop entry) ───────────────────────────────
 //
 // Called once at the top of a JIT'd loop for each tensor parameter that's
@@ -660,6 +696,11 @@ export const jitHelpers = {
   // Range-slice write helper (real tensors, hoisted bases for both dst
   // and src). Used by the loop JIT for `dst(a:b) = src(c:d)`.
   setRange1r_h,
+
+  // Vertical concat growth: `[base; v]` where base is a real column
+  // vector (or empty) and v is a numeric scalar. Used by the loop JIT
+  // for the chunkie `it = [it; i]` grow-a-list pattern.
+  vconcatGrow1r,
 
   // Unshare a tensor for COW write. Returns `t` if _rc <= 1, else a fresh copy.
   unshare,

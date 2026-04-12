@@ -383,6 +383,19 @@ export type JitExpr =
       nRows: number;
       nCols: number;
       jitType: JitType;
+    }
+  | {
+      /**
+       * Vertical concat growth: `[base; value]` where `base` is a real
+       * column-vector (or empty) tensor and `value` is a numeric scalar.
+       * Lowered from the chunkie grow-a-list pattern `it = [it; i]`.
+       * Codegens to `$h.vconcatGrow1r(base, value)` which allocates a
+       * fresh `(k+1, 1)` tensor and copies.
+       */
+      tag: "VConcatGrow";
+      base: JitExpr;
+      value: JitExpr;
+      jitType: JitType;
     };
 
 export type JitStmt =

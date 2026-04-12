@@ -302,6 +302,10 @@ function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
       case "TensorLiteral":
         for (const row of e.rows) for (const c of row) visitExpr(c);
         return;
+      case "VConcatGrow":
+        visitExpr(e.base);
+        visitExpr(e.value);
+        return;
       default:
         return;
     }
@@ -522,6 +526,9 @@ function emitExpr(expr: JitExpr): string {
 
     case "TensorLiteral":
       return emitTensorLiteral(expr);
+
+    case "VConcatGrow":
+      return `$h.vconcatGrow1r(${emitExpr(expr.base)}, ${emitExpr(expr.value)})`;
 
     case "StringLiteral":
       return JSON.stringify(expr.value);
