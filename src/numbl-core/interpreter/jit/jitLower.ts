@@ -313,11 +313,18 @@ export function lowerFunction(
     env.set(fn.params[i], argTypes[i]);
   }
 
-  // Initialize output variables (default to number 0)
+  // Reserve output variables as locals without assigning a default type.
+  // An earlier incarnation seeded env[name] = number=0 so every output had
+  // *some* type at function exit, but that poisoned the loop-join merge
+  // whenever the body's first assignment produced a non-number type
+  // (e.g. `chld = T.nodes(i).chld` makes chld a tensor, which can't be
+  // unified with the default number=0 that was already in envBefore).
+  // Instead we rely on the "bail if output never assigned" check below
+  // to catch outputs that the body doesn't initialize — which is the
+  // correct failure mode, since reading an unassigned output is an error.
   const outputNames = fn.outputs.slice(0, nargout || 1);
   for (const name of outputNames) {
     if (!env.has(name)) {
-      env.set(name, { kind: "number", exact: 0, sign: "nonneg" }); // default 0
       localVars.add(name);
     }
   }
@@ -1421,6 +1428,59 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "Member": {
+      // Stage 13: chained struct array member read `T.nodes(i).leaf`.
+      // The parser produces this shape in read position as
+      //   Member(MethodCall(Ident(T), "nodes", [i]), "leaf")
+      // — the middle node is MethodCall, not Index, because the `.` +
+      // ident + `(` sequence is parsed as a method-call postfix.
+      if (
+        expr.base.type === "MethodCall" &&
+        expr.base.base.type === "Ident" &&
+        expr.base.args.length === 1
+      ) {
+        const structVarName = expr.base.base.name;
+        const structArrayFieldName = expr.base.name;
+        const leafFieldName = expr.name;
+        const structType = ctx.env.get(structVarName);
+        if (structType && structType.kind === "struct" && structType.fields) {
+          const arrayFieldType = structType.fields[structArrayFieldName];
+          if (
+            arrayFieldType &&
+            arrayFieldType.kind === "struct_array" &&
+            arrayFieldType.elemFields
+          ) {
+            const leafType = arrayFieldType.elemFields[leafFieldName];
+            // Accept scalar numeric fields (read to a scalar local or
+            // used inline) or real-tensor fields (assigned to a local
+            // which the existing hoist-refresh path picks up).
+            const leafOk =
+              leafType &&
+              (isNumericScalarType(leafType) ||
+                (leafType.kind === "tensor" && leafType.isComplex !== true));
+            if (leafOk) {
+              const idx = lowerExpr(ctx, expr.base.args[0]);
+              if (
+                idx &&
+                (idx.jitType.kind === "number" ||
+                  idx.jitType.kind === "boolean")
+              ) {
+                if (leafType.kind === "tensor") {
+                  ctx._hasTensorOps = true;
+                }
+                return {
+                  tag: "StructArrayMemberRead",
+                  structVarName,
+                  structArrayFieldName,
+                  indexExpr: idx,
+                  leafFieldName,
+                  jitType: leafType,
+                };
+              }
+            }
+          }
+        }
+      }
+
       // Stage 12: scalar struct field read `s.f` where `s` is an Ident
       // whose type in the env is a struct with a statically-known scalar
       // field. Lowered to a `MemberRead` IR node; codegen hoists each

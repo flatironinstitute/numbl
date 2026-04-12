@@ -14,12 +14,18 @@ import {
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeStruct,
+  isRuntimeStructArray,
   isRuntimeTensor,
   type RuntimeChar,
 } from "../../runtime/types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { RTV } from "../../runtime/constructors.js";
-import { type JitType, signFromNumber, isNonneg } from "../jit/jitTypes.js";
+import {
+  type JitType,
+  signFromNumber,
+  isNonneg,
+  unifyJitTypes,
+} from "../jit/jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
@@ -149,7 +155,20 @@ export function inferJitType(value: unknown): JitType {
     const s = value as import("../../runtime/types.js").RuntimeStruct;
     const fields: Record<string, JitType> = {};
     for (const [k, v] of s.fields) {
-      fields[k] = inferJitType(v);
+      // Nested struct_array fields (e.g. `T.nodes`) get a real
+      // `struct_array` JitType so the JIT loop lowering can chain
+      // through `T.nodes(i).leaf`. Top-level struct_array values stay
+      // as `unknown` below to preserve the existing dispatch behavior
+      // — the old inferJitType returned unknown for struct arrays
+      // and many builtin `match` functions only accept
+      // struct/class_instance/unknown.
+      if (isRuntimeStructArray(v)) {
+        fields[k] = inferStructArrayType(
+          v as import("../../runtime/types.js").RuntimeStructArray
+        );
+      } else {
+        fields[k] = inferJitType(v);
+      }
     }
     return { kind: "struct", fields };
   }
@@ -186,6 +205,43 @@ export function inferJitType(value: unknown): JitType {
     };
   }
   return { kind: "unknown" };
+}
+
+/**
+ * Infer a `struct_array` JitType from a runtime struct array. Walks
+ * every element, collects per-field JIT types, and unifies them across
+ * elements. Used exclusively from the `struct` branch of `inferJitType`
+ * — top-level struct array values still return `{kind: "unknown"}` to
+ * preserve compatibility with builtin dispatch functions that reject
+ * struct_array kinds.
+ */
+function inferStructArrayType(
+  sa: import("../../runtime/types.js").RuntimeStructArray
+): JitType {
+  if (sa.elements.length === 0) {
+    return { kind: "struct_array", length: 0 };
+  }
+  const elemFields: Record<string, JitType> = {};
+  const first = sa.elements[0];
+  for (const [k, v] of first.fields) {
+    elemFields[k] = inferJitType(v);
+  }
+  for (let i = 1; i < sa.elements.length; i++) {
+    const el = sa.elements[i];
+    for (const k of Object.keys(elemFields)) {
+      const v = el.fields.get(k);
+      if (v === undefined) {
+        delete elemFields[k];
+        continue;
+      }
+      elemFields[k] = unifyJitTypes(elemFields[k], inferJitType(v));
+    }
+  }
+  return {
+    kind: "struct_array",
+    elemFields,
+    length: sa.elements.length,
+  };
 }
 
 /** Coerce JS booleans to 0/1 so JIT code never sees boolean values. */

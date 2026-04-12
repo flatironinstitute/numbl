@@ -24,6 +24,17 @@ export type JitType =
   | { kind: "char"; value?: string }
   | { kind: "struct"; fields?: Record<string, JitType> }
   | {
+      /**
+       * A 1-D homogeneous array of structs (matlab struct array form
+       * `T.nodes(i)`). `elemFields` records the per-element field types
+       * unified across all elements. `length` is optional and carries
+       * the statically-known element count when available.
+       */
+      kind: "struct_array";
+      elemFields?: Record<string, JitType>;
+      length?: number;
+    }
+  | {
       kind: "class_instance";
       className: string;
       isHandleClass?: boolean;
@@ -107,6 +118,12 @@ export function jitTypeKey(t: JitType): string {
       const keys = Object.keys(t.fields).sort();
       const parts = keys.map(k => `${k}:${jitTypeKey(t.fields![k])}`);
       return `struct{${parts.join(",")}}`;
+    }
+    case "struct_array": {
+      if (!t.elemFields) return "struct_array";
+      const keys = Object.keys(t.elemFields).sort();
+      const parts = keys.map(k => `${k}:${jitTypeKey(t.elemFields![k])}`);
+      return `struct_array{${parts.join(",")}}`;
     }
     case "class_instance": {
       let k = `class:${t.className}`;
@@ -240,6 +257,24 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         }
       }
       return { kind: "struct", ...(hasFields ? { fields } : {}) };
+    }
+    if (a.kind === "struct_array" && b.kind === "struct_array") {
+      if (!a.elemFields || !b.elemFields) return { kind: "struct_array" };
+      const elemFields: Record<string, JitType> = {};
+      let hasFields = false;
+      for (const key of Object.keys(a.elemFields)) {
+        if (key in b.elemFields) {
+          elemFields[key] = unifyJitTypes(a.elemFields[key], b.elemFields[key]);
+          hasFields = true;
+        }
+      }
+      const length =
+        a.length !== undefined && a.length === b.length ? a.length : undefined;
+      return {
+        kind: "struct_array",
+        ...(hasFields ? { elemFields } : {}),
+        ...(length !== undefined ? { length } : {}),
+      };
     }
     if (a.kind === "class_instance" && b.kind === "class_instance") {
       if (a.className !== b.className) return { kind: "unknown" };
@@ -409,6 +444,32 @@ export type JitExpr =
       tag: "MemberRead";
       baseName: string;
       fieldName: string;
+      jitType: JitType;
+    }
+  | {
+      /**
+       * Chained struct array member read: `T.nodes(i).leaf` where
+       * `T.nodes` is a struct array whose elements all share a field
+       * `leaf`. Lowered from the parser shape
+       * `Member(MethodCall(Ident(T), "nodes", [i]), "leaf")`.
+       *
+       * Codegen hoists `var $T_nodes_elements = T.fields.get("nodes").elements`
+       * at function entry (one alias per unique (structVarName,
+       * structArrayFieldName) pair) and emits
+       * `$T_nodes_elements[Math.round(i) - 1].fields.get("leaf")` per use.
+       *
+       * `leafFieldJitType` records the result type: either a scalar
+       * numeric type (number/boolean/complex_or_number) or a real tensor.
+       * Tensor-valued leaves work because the existing per-Assign hoist
+       * refresh picks up the newly-read tensor when the result flows
+       * into `chld = T.nodes(i).chld` and the callers then use
+       * `chld(k)` through the hoisted alias path.
+       */
+      tag: "StructArrayMemberRead";
+      structVarName: string;
+      structArrayFieldName: string;
+      indexExpr: JitExpr;
+      leafFieldName: string;
       jitType: JitType;
     };
 
