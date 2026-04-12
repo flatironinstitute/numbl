@@ -1420,6 +1420,34 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       return lowerIndexExpr(ctx, { base, indices: expr.indices });
     }
 
+    case "Member": {
+      // Stage 12: scalar struct field read `s.f` where `s` is an Ident
+      // whose type in the env is a struct with a statically-known scalar
+      // field. Lowered to a `MemberRead` IR node; codegen hoists each
+      // unique `(baseName, fieldName)` pair as a local alias at function
+      // entry.
+      //
+      // The base is restricted to a plain Ident (no chained `a.b.c` yet)
+      // and the field type must be a scalar numeric type. Class instances
+      // aren't handled because field access may dispatch to a user-defined
+      // getter method.
+      if (expr.base.type !== "Ident") return null;
+      const baseName = expr.base.name;
+      const baseType = ctx.env.get(baseName);
+      if (!baseType) return null;
+      if (baseType.kind !== "struct") return null;
+      if (!baseType.fields) return null;
+      const fieldType = baseType.fields[expr.name];
+      if (!fieldType) return null;
+      if (!isNumericScalarType(fieldType)) return null;
+      return {
+        tag: "MemberRead",
+        baseName,
+        fieldName: expr.name,
+        jitType: fieldType,
+      };
+    }
+
     default:
       return null; // unsupported expression
   }

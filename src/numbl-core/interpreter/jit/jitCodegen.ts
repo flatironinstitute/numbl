@@ -121,6 +121,20 @@ interface HoistedAlias {
 
 let _hoistedAliases: Map<string, HoistedAlias> = new Map();
 
+/**
+ * Hoisted scalar struct-field aliases: `(baseName, fieldName)` → local JS
+ * identifier. At function entry we emit `var $<base>_<field> =
+ * <base>.fields.get("<field>")` for each pair, and on use MemberRead
+ * nodes emit the bare local identifier. Only scalar numeric fields are
+ * hoisted — stage 12 doesn't support tensor-typed fields or chained
+ * Member access (that's stage 13).
+ */
+let _hoistedStructFields: Map<string, string> = new Map();
+
+function structFieldKey(baseName: string, fieldName: string): string {
+  return `${baseName}.${fieldName}`;
+}
+
 export function generateJS(
   body: JitStmt[],
   params: string[],
@@ -169,6 +183,7 @@ export function generateJS(
   // the post-`zeros` reassignment refreshes `$out_pt_data`, and the
   // subsequent slice write goes through the new buffer.
   _hoistedAliases = new Map();
+  _hoistedStructFields = new Map();
   const usage = collectTensorUsage(body);
   const paramSet = new Set(params);
   // Stable name order for deterministic codegen output across runs.
@@ -223,6 +238,25 @@ export function generateJS(
       if (maxDim >= 3) decls.push(d1Alias);
       lines.push(`${indent}var ${decls.join(", ")};`);
     }
+  }
+
+  // Stage 12: hoist scalar struct-field reads. Walk the IR to find every
+  // `MemberRead` node, collect unique (baseName, fieldName) pairs, and
+  // emit a per-pair `var $<base>_<field> = <base>.fields.get("<field>")`
+  // at function entry. Later `emitExpr` case `MemberRead` substitutes
+  // the alias for each use. The struct bases must be loop-invariant
+  // (never reassigned inside the body); since the lowering only accepts
+  // Member reads when the env type is still a struct, any post-assign
+  // reads bail and we never hoist stale fields.
+  const structFieldReads = collectStructFieldReads(body);
+  const structFieldKeys = [...structFieldReads.keys()].sort();
+  for (const key of structFieldKeys) {
+    const { baseName, fieldName } = structFieldReads.get(key)!;
+    const aliasName = `$${mangle(baseName)}_${fieldName}`;
+    _hoistedStructFields.set(key, aliasName);
+    lines.push(
+      `${indent}var ${aliasName} = ${mangle(baseName)}.fields.get(${JSON.stringify(fieldName)});`
+    );
   }
 
   // Emit body
@@ -306,6 +340,11 @@ function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
         visitExpr(e.base);
         visitExpr(e.value);
         return;
+      case "MemberRead":
+        // No tensor-usage contribution; the struct base is not a tensor
+        // index target. The struct-field hoisting is collected by a
+        // separate walker (`collectStructFieldReads`).
+        return;
       default:
         return;
     }
@@ -346,6 +385,102 @@ function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
           if (s.srcEnd) visitExpr(s.srcEnd);
           break;
         }
+        case "MultiAssign":
+          for (const a of s.args) visitExpr(a);
+          break;
+        case "If":
+          visitExpr(s.cond);
+          visitStmts(s.thenBody);
+          for (const eib of s.elseifBlocks) {
+            visitExpr(eib.cond);
+            visitStmts(eib.body);
+          }
+          if (s.elseBody) visitStmts(s.elseBody);
+          break;
+        case "For":
+          visitExpr(s.start);
+          if (s.step) visitExpr(s.step);
+          visitExpr(s.end);
+          visitStmts(s.body);
+          break;
+        case "While":
+          visitExpr(s.cond);
+          visitStmts(s.body);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  visitStmts(body);
+  return out;
+}
+
+/**
+ * Walk the JIT IR collecting all unique `(baseName, fieldName)` pairs
+ * referenced by `MemberRead` nodes. The codegen hoists each pair as a
+ * local alias at function entry. Keys are `"<baseName>.<fieldName>"`;
+ * values carry the component parts so emission can use them directly.
+ */
+function collectStructFieldReads(
+  body: JitStmt[]
+): Map<string, { baseName: string; fieldName: string }> {
+  const out = new Map<string, { baseName: string; fieldName: string }>();
+
+  const visitExpr = (e: JitExpr): void => {
+    switch (e.tag) {
+      case "MemberRead": {
+        const key = structFieldKey(e.baseName, e.fieldName);
+        if (!out.has(key)) {
+          out.set(key, { baseName: e.baseName, fieldName: e.fieldName });
+        }
+        return;
+      }
+      case "Binary":
+        visitExpr(e.left);
+        visitExpr(e.right);
+        return;
+      case "Unary":
+        visitExpr(e.operand);
+        return;
+      case "Call":
+      case "UserCall":
+        for (const a of e.args) visitExpr(a);
+        return;
+      case "Index":
+        visitExpr(e.base);
+        for (const idx of e.indices) visitExpr(idx);
+        return;
+      case "TensorLiteral":
+        for (const row of e.rows) for (const c of row) visitExpr(c);
+        return;
+      case "VConcatGrow":
+        visitExpr(e.base);
+        visitExpr(e.value);
+        return;
+      default:
+        return;
+    }
+  };
+
+  const visitStmts = (stmts: JitStmt[]): void => {
+    for (const s of stmts) {
+      switch (s.tag) {
+        case "Assign":
+        case "ExprStmt":
+          visitExpr(s.expr);
+          break;
+        case "AssignIndex":
+          for (const idx of s.indices) visitExpr(idx);
+          visitExpr(s.value);
+          break;
+        case "AssignIndexRange":
+          visitExpr(s.dstStart);
+          visitExpr(s.dstEnd);
+          if (s.srcStart) visitExpr(s.srcStart);
+          if (s.srcEnd) visitExpr(s.srcEnd);
+          break;
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);
           break;
@@ -529,6 +664,17 @@ function emitExpr(expr: JitExpr): string {
 
     case "VConcatGrow":
       return `$h.vconcatGrow1r(${emitExpr(expr.base)}, ${emitExpr(expr.value)})`;
+
+    case "MemberRead": {
+      const key = structFieldKey(expr.baseName, expr.fieldName);
+      const alias = _hoistedStructFields.get(key);
+      if (alias) return alias;
+      // Fallback: the hoist pass should have registered every MemberRead
+      // (collectStructFieldReads walks the same IR). This branch only
+      // fires if a future code path synthesizes a MemberRead after the
+      // hoist walk completes — emit the Map lookup directly.
+      return `${mangle(expr.baseName)}.fields.get(${JSON.stringify(expr.fieldName)})`;
+    }
 
     case "StringLiteral":
       return JSON.stringify(expr.value);

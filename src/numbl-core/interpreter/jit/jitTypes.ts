@@ -396,6 +396,20 @@ export type JitExpr =
       base: JitExpr;
       value: JitExpr;
       jitType: JitType;
+    }
+  | {
+      /**
+       * Scalar read of a struct field: `s.f` where `s` has a struct type
+       * with a statically-known scalar field `f`. Lowered from `Member`
+       * exprs with an `Ident` base. The codegen hoists each unique
+       * `(baseName, fieldName)` pair to a local alias at function entry
+       * so per-iter reads are bare local loads (no `Map.get` per use).
+       * Mirrors the chunkie `opts.rho`, `chnkr.k`, `chnkr.nch` pattern.
+       */
+      tag: "MemberRead";
+      baseName: string;
+      fieldName: string;
+      jitType: JitType;
     };
 
 export type JitStmt =
