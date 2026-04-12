@@ -135,6 +135,24 @@ function structFieldKey(baseName: string, fieldName: string): string {
   return `${baseName}.${fieldName}`;
 }
 
+/**
+ * Hoisted struct-array element storage: `(structVarName,
+ * structArrayFieldName)` → local JS identifier bound to
+ * `<struct>.fields.get("<field>").elements` (the raw `RuntimeStruct[]`
+ * array). At function entry we emit one `var $<struct>_<field>_elements
+ * = ...` per unique pair, and on use `StructArrayMemberRead` nodes emit
+ * `$<...>_elements[Math.round(i) - 1].fields.get("<leaf>")`. See stage
+ * 13 lowering for the parser pattern this matches.
+ */
+let _hoistedStructArrayElements: Map<string, string> = new Map();
+
+function structArrayElementsKey(
+  structVarName: string,
+  structArrayFieldName: string
+): string {
+  return `${structVarName}.${structArrayFieldName}`;
+}
+
 export function generateJS(
   body: JitStmt[],
   params: string[],
@@ -184,6 +202,7 @@ export function generateJS(
   // subsequent slice write goes through the new buffer.
   _hoistedAliases = new Map();
   _hoistedStructFields = new Map();
+  _hoistedStructArrayElements = new Map();
   const usage = collectTensorUsage(body);
   const paramSet = new Set(params);
   // Stable name order for deterministic codegen output across runs.
@@ -256,6 +275,26 @@ export function generateJS(
     _hoistedStructFields.set(key, aliasName);
     lines.push(
       `${indent}var ${aliasName} = ${mangle(baseName)}.fields.get(${JSON.stringify(fieldName)});`
+    );
+  }
+
+  // Stage 13: hoist struct-array element storage. For every unique
+  // `(structVarName, structArrayFieldName)` pair found in a
+  // `StructArrayMemberRead`, emit
+  //   var $T_nodes_elements = T.fields.get("nodes").elements;
+  // at function entry. Per-use reads pull the RuntimeStruct at index
+  // `Math.round(i) - 1` and `.fields.get("leaf")` for the final field.
+  // Like stage 12, we assume the struct base is loop-invariant: any
+  // reassignment of `T` bails the whole lowering via the env type
+  // check in the Member case.
+  const structArrayReads = collectStructArrayElementReads(body);
+  const structArrayKeys = [...structArrayReads.keys()].sort();
+  for (const key of structArrayKeys) {
+    const { structVarName, structArrayFieldName } = structArrayReads.get(key)!;
+    const aliasName = `$${mangle(structVarName)}_${structArrayFieldName}_elements`;
+    _hoistedStructArrayElements.set(key, aliasName);
+    lines.push(
+      `${indent}var ${aliasName} = ${mangle(structVarName)}.fields.get(${JSON.stringify(structArrayFieldName)}).elements;`
     );
   }
 
@@ -344,6 +383,12 @@ function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
         // No tensor-usage contribution; the struct base is not a tensor
         // index target. The struct-field hoisting is collected by a
         // separate walker (`collectStructFieldReads`).
+        return;
+      case "StructArrayMemberRead":
+        // The struct base is not a tensor either. Recurse into the
+        // index expression so that any tensor Var used inside (e.g.
+        // `T.nodes(someTensor(k)).chld`) still gets its hoist.
+        visitExpr(e.indexExpr);
         return;
       default:
         return;
@@ -435,6 +480,116 @@ function collectStructFieldReads(
         if (!out.has(key)) {
           out.set(key, { baseName: e.baseName, fieldName: e.fieldName });
         }
+        return;
+      }
+      case "Binary":
+        visitExpr(e.left);
+        visitExpr(e.right);
+        return;
+      case "Unary":
+        visitExpr(e.operand);
+        return;
+      case "Call":
+      case "UserCall":
+        for (const a of e.args) visitExpr(a);
+        return;
+      case "Index":
+        visitExpr(e.base);
+        for (const idx of e.indices) visitExpr(idx);
+        return;
+      case "TensorLiteral":
+        for (const row of e.rows) for (const c of row) visitExpr(c);
+        return;
+      case "VConcatGrow":
+        visitExpr(e.base);
+        visitExpr(e.value);
+        return;
+      case "StructArrayMemberRead":
+        visitExpr(e.indexExpr);
+        return;
+      default:
+        return;
+    }
+  };
+
+  const visitStmts = (stmts: JitStmt[]): void => {
+    for (const s of stmts) {
+      switch (s.tag) {
+        case "Assign":
+        case "ExprStmt":
+          visitExpr(s.expr);
+          break;
+        case "AssignIndex":
+          for (const idx of s.indices) visitExpr(idx);
+          visitExpr(s.value);
+          break;
+        case "AssignIndexRange":
+          visitExpr(s.dstStart);
+          visitExpr(s.dstEnd);
+          if (s.srcStart) visitExpr(s.srcStart);
+          if (s.srcEnd) visitExpr(s.srcEnd);
+          break;
+        case "MultiAssign":
+          for (const a of s.args) visitExpr(a);
+          break;
+        case "If":
+          visitExpr(s.cond);
+          visitStmts(s.thenBody);
+          for (const eib of s.elseifBlocks) {
+            visitExpr(eib.cond);
+            visitStmts(eib.body);
+          }
+          if (s.elseBody) visitStmts(s.elseBody);
+          break;
+        case "For":
+          visitExpr(s.start);
+          if (s.step) visitExpr(s.step);
+          visitExpr(s.end);
+          visitStmts(s.body);
+          break;
+        case "While":
+          visitExpr(s.cond);
+          visitStmts(s.body);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+
+  visitStmts(body);
+  return out;
+}
+
+/**
+ * Walk the JIT IR collecting all unique `(structVarName,
+ * structArrayFieldName)` pairs referenced by `StructArrayMemberRead`
+ * nodes. The codegen hoists each pair as a local alias at function
+ * entry bound to the underlying `RuntimeStruct[]` element array. Keys
+ * are `"<structVarName>.<structArrayFieldName>"`.
+ */
+function collectStructArrayElementReads(
+  body: JitStmt[]
+): Map<string, { structVarName: string; structArrayFieldName: string }> {
+  const out = new Map<
+    string,
+    { structVarName: string; structArrayFieldName: string }
+  >();
+
+  const visitExpr = (e: JitExpr): void => {
+    switch (e.tag) {
+      case "StructArrayMemberRead": {
+        const key = structArrayElementsKey(
+          e.structVarName,
+          e.structArrayFieldName
+        );
+        if (!out.has(key)) {
+          out.set(key, {
+            structVarName: e.structVarName,
+            structArrayFieldName: e.structArrayFieldName,
+          });
+        }
+        visitExpr(e.indexExpr);
         return;
       }
       case "Binary":
@@ -674,6 +829,21 @@ function emitExpr(expr: JitExpr): string {
       // fires if a future code path synthesizes a MemberRead after the
       // hoist walk completes — emit the Map lookup directly.
       return `${mangle(expr.baseName)}.fields.get(${JSON.stringify(expr.fieldName)})`;
+    }
+
+    case "StructArrayMemberRead": {
+      const key = structArrayElementsKey(
+        expr.structVarName,
+        expr.structArrayFieldName
+      );
+      const elementsAlias =
+        _hoistedStructArrayElements.get(key) ??
+        `${mangle(expr.structVarName)}.fields.get(${JSON.stringify(expr.structArrayFieldName)}).elements`;
+      const idxCode = emitExpr(expr.indexExpr);
+      // Match MATLAB indexing semantics: Math.round then subtract 1
+      // for 0-based JS array access. Same rounding strategy used by
+      // the tensor index helpers.
+      return `${elementsAlias}[Math.round(${idxCode}) - 1].fields.get(${JSON.stringify(expr.leafFieldName)})`;
     }
 
     case "StringLiteral":

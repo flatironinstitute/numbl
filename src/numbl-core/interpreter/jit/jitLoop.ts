@@ -79,19 +79,41 @@ function tryJitLoop(
   kind: "for" | "while"
 ): boolean {
   // Filter inputs: only variables that exist in the current environment
-  // and are not known constants/builtins
+  // and are not known constants/builtins.
+  //
+  // We also promote any `rawOutputs` entry that exists in the outer env
+  // to an input. This preserves the pre-loop value of variables that the
+  // body *might* assign but doesn't always — most importantly, write-
+  // only locals (`clear_i_exists = false; for ... clear_i_exists = true;
+  // end`) whose only in-body use is an assignment. Without this,
+  // the synthetic JIT function can't see the pre-loop value and,
+  // when the range is empty, the unassigned local returns as undefined
+  // and clobbers the outer env. Promoting output-in-env names to inputs
+  // also unifies with the in-body assignment type at the loop join via
+  // the usual merge path.
+  const inputCandidates: string[] = [];
+  const seenCandidates = new Set<string>();
+  for (const name of rawInputs) {
+    if (seenCandidates.has(name)) continue;
+    seenCandidates.add(name);
+    inputCandidates.push(name);
+  }
+  for (const name of rawOutputs) {
+    if (seenCandidates.has(name)) continue;
+    seenCandidates.add(name);
+    inputCandidates.push(name);
+  }
+
   const inputs: string[] = [];
   const inputValues: unknown[] = [];
   const inputTypes: JitType[] = [];
 
-  for (const name of rawInputs) {
+  for (const name of inputCandidates) {
     if (KNOWN_CONSTANTS.has(name)) continue;
     const val = interp.env.get(name);
     if (val === undefined) continue; // not a variable in scope — likely a function name
     const t = inferJitType(val);
     if (t.kind === "unknown") return false;
-    // Deduplicate
-    if (inputs.includes(name)) continue;
     inputs.push(name);
     inputValues.push(val);
     inputTypes.push(t);

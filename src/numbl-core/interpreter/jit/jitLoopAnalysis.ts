@@ -276,6 +276,16 @@ function walkExpr(expr: Expr, referenced: Set<string>): void {
       walkExpr(expr.base, referenced);
       break;
 
+    case "MethodCall":
+      // Stage 13: `T.nodes(i)` parses as MethodCall. We need `T` to
+      // land in the referenced set so the loop JIT captures it as an
+      // input. The interpreter also evaluates the base for method
+      // dispatch, so this matches runtime semantics regardless of
+      // whether the JIT ultimately lowers the call.
+      walkExpr(expr.base, referenced);
+      for (const arg of expr.args) walkExpr(arg, referenced);
+      break;
+
     case "AnonFunc":
       // Walk the body expression — captures are references
       walkExpr(expr.body, referenced);
