@@ -234,7 +234,9 @@ function inferStructArrayType(
         delete elemFields[k];
         continue;
       }
-      elemFields[k] = unifyJitTypes(elemFields[k], inferJitType(v));
+      const before = elemFields[k];
+      const vType = inferJitType(v);
+      elemFields[k] = unifyStructArrayFieldTypes(before, vType);
     }
   }
   return {
@@ -242,6 +244,43 @@ function inferStructArrayType(
     elemFields,
     length: sa.elements.length,
   };
+}
+
+/**
+ * Unify two element types for a struct array field. Unlike generic
+ * `unifyJitTypes`, this widens mixed real-tensor / numeric-scalar
+ * combinations to `tensor[?x?]` instead of bailing to `unknown`.
+ *
+ * Rationale: chunkie (and many MATLAB libraries) store 1-element vector
+ * fields as bare numeric scalars (e.g. `T.nodes(i).xi = 87` when a leaf
+ * has a single point) while other elements hold genuine row-vector
+ * tensors. Treating the whole field as `unknown` bails the JIT on
+ * `T.nodes(i).xi` reads even though the pattern is semantically sound
+ * — a scalar is a 1x1 tensor in MATLAB. The JIT codegen for
+ * `StructArrayMemberRead` with a tensor leaf wraps the element read in
+ * `$h.asTensor(...)` so a runtime scalar is promoted to a 1x1 tensor
+ * before the tensor-read fast paths see it.
+ */
+function unifyStructArrayFieldTypes(a: JitType, b: JitType): JitType {
+  // Try the normal unification first — it handles same-kind merges
+  // correctly (number+number, tensor+tensor, etc.)
+  const normal = unifyJitTypes(a, b);
+  if (normal.kind !== "unknown") return normal;
+  // Normal unify returned unknown — this happens for mixed
+  // tensor-vs-scalar combinations. In MATLAB, a scalar is a 1x1
+  // tensor, so we widen to tensor[?x?] when one side is a real tensor
+  // and the other is a numeric scalar.
+  const isRealTensor = (t: JitType) =>
+    t.kind === "tensor" && t.isComplex !== true;
+  const isNumScalar = (t: JitType) =>
+    t.kind === "number" || t.kind === "boolean";
+  if (
+    (isRealTensor(a) && isNumScalar(b)) ||
+    (isNumScalar(a) && isRealTensor(b))
+  ) {
+    return { kind: "tensor", isComplex: false };
+  }
+  return normal;
 }
 
 /** Coerce JS booleans to 0/1 so JIT code never sees boolean values. */
