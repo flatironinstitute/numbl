@@ -538,6 +538,56 @@ function indexIntoSparse(
   }
 
   if (indices.length === 2) {
+    // Fast path: sp(:, col) — extract full column(s) directly from CSC
+    if (isColonIndex(indices[0])) {
+      const colIdx = resolveIndex(indices[1], base.n);
+      if (colIdx.length === 1) {
+        // Single column extraction — O(nnz_in_col) not O(m)
+        const col = colIdx[0];
+        const start = base.jc[col];
+        const end = base.jc[col + 1];
+        const nnz = end - start;
+        const ir = new Int32Array(nnz);
+        const pr = new Float64Array(nnz);
+        let pi: Float64Array | undefined;
+        for (let k = 0; k < nnz; k++) {
+          ir[k] = base.ir[start + k];
+          pr[k] = base.pr[start + k];
+        }
+        if (base.pi !== undefined) {
+          pi = new Float64Array(nnz);
+          for (let k = 0; k < nnz; k++) pi[k] = base.pi[start + k];
+        }
+        const jc = new Int32Array([0, nnz]);
+        return RTV.sparseMatrix(base.m, 1, ir, jc, pr, pi);
+      }
+      // Multi-column extraction with colon rows — avoid resolving colon
+      const nCols = colIdx.length;
+      const isComplex = base.pi !== undefined;
+      const irArr: number[] = [];
+      const prArr: number[] = [];
+      const piArr: number[] = [];
+      const jcNew = new Int32Array(nCols + 1);
+      for (let ci = 0; ci < nCols; ci++) {
+        jcNew[ci] = irArr.length;
+        const origCol = colIdx[ci];
+        for (let k = base.jc[origCol]; k < base.jc[origCol + 1]; k++) {
+          irArr.push(base.ir[k]);
+          prArr.push(base.pr[k]);
+          if (isComplex) piArr.push(base.pi![k]);
+        }
+      }
+      jcNew[nCols] = irArr.length;
+      return RTV.sparseMatrix(
+        base.m,
+        nCols,
+        new Int32Array(irArr),
+        jcNew,
+        new Float64Array(prArr),
+        isComplex ? new Float64Array(piArr) : undefined
+      );
+    }
+
     const rowIdx = resolveIndex(indices[0], base.m);
     const colIdx = resolveIndex(indices[1], base.n);
 
