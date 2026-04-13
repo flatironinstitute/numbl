@@ -17,6 +17,7 @@ export type RuntimeValue =
   | RuntimeClassInstance
   | RuntimeComplexNumber
   | RuntimeDummyHandle
+  | RuntimeGraphicsHandle
   | RuntimeStructArray
   | RuntimeSparseMatrix
   | RuntimeDictionary;
@@ -72,6 +73,12 @@ export const isRuntimeDummyHandle = (
   typeof value === "object" &&
   value !== null &&
   (value as RuntimeDummyHandle).kind === "dummy_handle";
+export const isRuntimeGraphicsHandle = (
+  value: RuntimeValue
+): value is RuntimeGraphicsHandle =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as RuntimeGraphicsHandle).kind === "graphics_handle";
 export const isRuntimeStructArray = (
   value: RuntimeValue
 ): value is RuntimeStructArray =>
@@ -103,6 +110,7 @@ export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeClassInstance(value)) return `instance of ${value.className}`;
   if (isRuntimeComplexNumber(value)) return "complex number";
   if (isRuntimeDummyHandle(value)) return "dummy handle";
+  if (isRuntimeGraphicsHandle(value)) return "graphics handle";
   if (isRuntimeStructArray(value)) return "struct array";
   if (isRuntimeSparseMatrix(value)) return "sparse matrix";
   if (isRuntimeDictionary(value)) return "dictionary";
@@ -175,6 +183,13 @@ export type RuntimeComplexNumber = {
 
 export type RuntimeDummyHandle = {
   kind: "dummy_handle";
+};
+
+/** Handle to a graphics object (e.g. surface returned by pcolor) with a mutable trace reference. */
+export type RuntimeGraphicsHandle = {
+  kind: "graphics_handle";
+  _trace: Record<string, unknown>;
+  _traceType: string;
 };
 
 /** A 1-D array of structs that all share the same field names. **/

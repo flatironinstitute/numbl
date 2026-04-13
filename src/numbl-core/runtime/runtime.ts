@@ -360,7 +360,16 @@ export class Runtime {
     };
     this.builtins["pcolor"] = (_nargout: number, args: unknown[]) => {
       this.pcolor_call(args.map(a => ensureRuntimeValue(a)));
-      if (_nargout >= 1) return RTV.dummyHandle();
+      if (_nargout >= 1) {
+        const last = this.plotInstructions[this.plotInstructions.length - 1];
+        if (last && last.type === "pcolor") {
+          return RTV.graphicsHandle(
+            last.trace as unknown as Record<string, unknown>,
+            "pcolor"
+          );
+        }
+        return RTV.dummyHandle();
+      }
     };
     this.builtins["contour"] = (_nargout: number, args: unknown[]) => {
       this.contour_call(

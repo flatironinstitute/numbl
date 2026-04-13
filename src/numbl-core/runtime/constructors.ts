@@ -15,6 +15,7 @@ import {
   type RuntimeClassInstance,
   type RuntimeComplexNumber,
   type RuntimeDummyHandle,
+  type RuntimeGraphicsHandle,
   type RuntimeStructArray,
   type RuntimeSparseMatrix,
   type RuntimeDictionary,
@@ -160,6 +161,13 @@ export const RTV = {
     return { kind: "dummy_handle" };
   },
 
+  graphicsHandle(
+    trace: Record<string, unknown>,
+    traceType: string
+  ): RuntimeGraphicsHandle {
+    return { kind: "graphics_handle", _trace: trace, _traceType: traceType };
+  },
+
   structArray(
     fieldNames: string[],
     elements: RuntimeStruct[]
@@ -245,6 +253,8 @@ export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
         className: value.className,
       };
     case "dummy_handle":
+      return { kind: "DummyHandle" };
+    case "graphics_handle":
       return { kind: "DummyHandle" };
     case "struct_array":
       return { kind: "Unknown" };

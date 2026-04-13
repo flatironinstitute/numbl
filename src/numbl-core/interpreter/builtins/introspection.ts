@@ -18,6 +18,7 @@ import {
   isRuntimeClassInstance,
   isRuntimeFunction,
   isRuntimeDummyHandle,
+  isRuntimeGraphicsHandle,
   isRuntimeDictionary,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
@@ -510,6 +511,8 @@ defineBuiltin({
         if (isRuntimeClassInstance(v)) return mkChar(v.className);
         if (isRuntimeFunction(v)) return mkChar("function_handle");
         if (isRuntimeDummyHandle(v)) return mkChar("dummy_handle");
+        if (isRuntimeGraphicsHandle(v))
+          return mkChar("matlab.graphics.primitive.Surface");
         return mkChar("unknown");
       },
     },

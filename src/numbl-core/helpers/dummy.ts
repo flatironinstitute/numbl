@@ -36,7 +36,6 @@ export function getDummyBuiltinNames(): string[] {
     ...returnDummyBooleanFunctions,
     ...returnDummyCellArrayFunctions,
     "get",
-    "set",
     "fileparts",
     "fullfile",
     "addpath",
