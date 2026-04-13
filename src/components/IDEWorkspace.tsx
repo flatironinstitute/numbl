@@ -221,7 +221,6 @@ export function IDEWorkspace({
   // REPL state
   const [editorTab, setEditorTab] = useState(0);
   const [isReplExecuting, setIsReplExecuting] = useState(false);
-  const replWorkerRef = useRef<Worker | null>(null);
   const replTerminalRef = useRef<any>(null);
 
   // Mobile layout
@@ -276,12 +275,19 @@ export function IDEWorkspace({
     };
   }, [useRemoteExecution, remoteServiceUrl]);
 
-  // Script worker
-  const scriptWorkerRef = useRef<Worker | null>(null);
-  const scriptInputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
-  const replInputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
+  // Unified worker (handles both script runs and REPL)
+  const workerRef = useRef<Worker | null>(null);
+  const workerInputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
+  const cancelSAB = useRef<SharedArrayBuffer | null>(
+    typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null
+  );
+  // Tracks which execution mode is active for routing streaming messages
+  const activeExecutionMode = useRef<"script" | "repl" | null>(null);
   const remoteAbortRef = useRef<AbortController | null>(null);
   const editorRef = useRef<any>(null);
+
+  // Persistent workspace toggle
+  const [persistWorkspace, setPersistWorkspace] = useState(false);
 
   // Panel sizing
   const initialSidebarWidth = window.innerWidth >= 1200 ? 260 : 200;
@@ -394,105 +400,74 @@ export function IDEWorkspace({
     [projectName, mergeVfsChanges, reloadSystemFiles]
   );
 
-  // Initialize script worker
-  useEffect(() => {
-    scriptWorkerRef.current = new Worker(
-      new URL("../numbl-worker.ts", import.meta.url),
-      {
-        type: "module",
-      }
-    );
+  // Set up the unified worker's onmessage handler
+  const setupWorkerHandler = useCallback(
+    (worker: Worker) => {
+      worker.onmessage = e => {
+        const msg = e.data;
 
-    scriptWorkerRef.current.onmessage = e => {
-      const msg = e.data;
-      if (msg.type === "request-input") {
-        const response = prompt(msg.prompt ?? "") ?? "";
-        const sab = scriptInputSAB.current;
-        if (sab) mainThreadRespond(sab, response);
-        return;
-      }
-      if (msg.type === "output") {
-        setOutput(prev => prev + msg.text);
-      } else if (msg.type === "drawnow") {
-        if (msg.plotInstructions?.length) {
-          for (const instr of msg.plotInstructions) {
-            handlePlotInstruction(instr);
-          }
+        // Input request — shared by both modes
+        if (msg.type === "request-input") {
+          const response = prompt(msg.prompt ?? "") ?? "";
+          const sab = workerInputSAB.current;
+          if (sab) mainThreadRespond(sab, response);
+          return;
         }
-      } else if (msg.type === "done") {
-        setGeneratedJS(msg.generatedJS || "");
-        setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
-        setFileSources(msg.workspaceRep?.fileSources ?? null);
-        setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
-        setIsRunning(false);
-        if (msg.plotInstructions?.length) {
-          for (const instr of msg.plotInstructions) {
-            handlePlotInstruction(instr);
+
+        // Streaming output — route based on active execution mode
+        if (msg.type === "output") {
+          if (activeExecutionMode.current === "repl") {
+            const term = replTerminalRef.current;
+            if (term?.writeOutput) term.writeOutput(msg.text, false);
+          } else {
+            setOutput(prev => prev + msg.text);
           }
+          return;
         }
-        handleVfsChanges(msg.vfsChanges);
-      } else if (msg.type === "error") {
-        if (msg.generatedJS) {
-          setGeneratedJS(msg.generatedJS);
-        }
-        setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
-        setFileSources(msg.workspaceRep?.fileSources ?? null);
-        setIsRunning(false);
-        setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
-        handleVfsChanges(msg.vfsChanges);
-      }
-    };
 
-    return () => {
-      scriptWorkerRef.current?.terminate();
-    };
-  }, [handlePlotInstruction, extractAllFilesRep, handleVfsChanges]);
-
-  // Initialize REPL worker
-  useEffect(() => {
-    const worker = new Worker(
-      new URL("../numbl-repl-worker.ts", import.meta.url),
-      { type: "module" }
-    );
-    replWorkerRef.current = worker;
-
-    if (replInputSAB.current) {
-      worker.postMessage({
-        type: "set_input_sab",
-        inputSAB: replInputSAB.current,
-      });
-    }
-
-    // Don't send workspace files on init — content is loaded lazily
-    // and will be sent before the first REPL execute or script run.
-
-    worker.onmessage = e => {
-      const msg = e.data;
-      const term = replTerminalRef.current;
-
-      if (msg.type === "request-input") {
-        const response = prompt(msg.prompt ?? "") ?? "";
-        const sab = replInputSAB.current;
-        if (sab) mainThreadRespond(sab, response);
-        return;
-      }
-
-      switch (msg.type) {
-        case "output":
-          if (term?.writeOutput) {
-            term.writeOutput(msg.text, false);
-          }
-          break;
-
-        case "drawnow":
+        if (msg.type === "drawnow") {
           if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions as PlotInstruction[]) {
+            for (const instr of msg.plotInstructions) {
               handlePlotInstruction(instr);
             }
           }
-          break;
+          return;
+        }
 
-        case "result":
+        // Script completion messages
+        if (msg.type === "done") {
+          activeExecutionMode.current = null;
+          setGeneratedJS(msg.generatedJS || "");
+          setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
+          setFileSources(msg.workspaceRep?.fileSources ?? null);
+          setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
+          setIsRunning(false);
+          if (msg.plotInstructions?.length) {
+            for (const instr of msg.plotInstructions) {
+              handlePlotInstruction(instr);
+            }
+          }
+          handleVfsChanges(msg.vfsChanges);
+          return;
+        }
+
+        if (msg.type === "error") {
+          activeExecutionMode.current = null;
+          if (msg.generatedJS) {
+            setGeneratedJS(msg.generatedJS);
+          }
+          setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
+          setFileSources(msg.workspaceRep?.fileSources ?? null);
+          setIsRunning(false);
+          setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
+          handleVfsChanges(msg.vfsChanges);
+          return;
+        }
+
+        // REPL completion messages
+        if (msg.type === "result") {
+          activeExecutionMode.current = null;
+          const term = replTerminalRef.current;
           if (msg.success) {
             if (msg.plotInstructions?.length) {
               for (const instr of msg.plotInstructions as PlotInstruction[]) {
@@ -507,30 +482,50 @@ export function IDEWorkspace({
             term.writePrompt();
           }
           setIsReplExecuting(false);
-          break;
+          return;
+        }
 
-        case "cleared":
-          break;
-      }
-    };
+        // "cleared" — no action needed
+      };
 
-    worker.onerror = (e: ErrorEvent) => {
-      const term = replTerminalRef.current;
-      if (term?.writeOutput) {
-        term.writeOutput(`Worker error: ${e.message}`, true);
-      }
-      setIsReplExecuting(false);
-    };
+      worker.onerror = (ev: ErrorEvent) => {
+        activeExecutionMode.current = null;
+        const term = replTerminalRef.current;
+        if (term?.writeOutput) {
+          term.writeOutput(`Worker error: ${ev.message}`, true);
+        }
+        setIsRunning(false);
+        setIsReplExecuting(false);
+      };
+    },
+    [handlePlotInstruction, extractAllFilesRep, handleVfsChanges]
+  );
+
+  // Initialize unified worker
+  useEffect(() => {
+    const worker = new Worker(new URL("../numbl-worker.ts", import.meta.url), {
+      type: "module",
+    });
+    workerRef.current = worker;
+
+    if (workerInputSAB.current) {
+      worker.postMessage({
+        type: "set_input_sab",
+        inputSAB: workerInputSAB.current,
+      });
+    }
+
+    setupWorkerHandler(worker);
 
     return () => {
       worker.terminate();
     };
-  }, [handlePlotInstruction, handleVfsChanges]);
+  }, [setupWorkerHandler]);
 
-  // Track that REPL workspace needs updating when files change
-  const replWorkspaceStale = useRef(true);
+  // Track that workspace needs updating when files change
+  const workspaceStale = useRef(true);
   useEffect(() => {
-    replWorkspaceStale.current = true;
+    workspaceStale.current = true;
   }, [files, systemFiles]);
 
   // Clear triggerRenameId after a short delay
@@ -621,9 +616,24 @@ export function IDEWorkspace({
       return;
     }
 
-    if (!scriptWorkerRef.current) return;
+    if (!workerRef.current) return;
 
-    scriptWorkerRef.current.postMessage({
+    // Send workspace update before run
+    workerRef.current.postMessage({
+      type: "update_workspace",
+      workspaceFiles,
+      vfsFiles,
+    });
+    workspaceStale.current = false;
+
+    // Reset cancel flag
+    if (cancelSAB.current) {
+      const flag = new Int32Array(cancelSAB.current);
+      Atomics.store(flag, 0, 0);
+    }
+
+    activeExecutionMode.current = "script";
+    workerRef.current.postMessage({
       type: "run",
       code: codeToRun,
       workspaceFiles,
@@ -634,7 +644,8 @@ export function IDEWorkspace({
         optimization,
       },
       vfsFiles,
-      inputSAB: scriptInputSAB.current ?? undefined,
+      persistent: persistWorkspace,
+      cancelSAB: cancelSAB.current ?? undefined,
     });
   }, [
     activeFile,
@@ -646,6 +657,7 @@ export function IDEWorkspace({
     optimization,
     buildWorkerFiles,
     contentCache,
+    persistWorkspace,
   ]);
 
   const stopExecution = useCallback(() => {
@@ -657,60 +669,42 @@ export function IDEWorkspace({
       return;
     }
 
-    if (scriptWorkerRef.current) {
-      scriptWorkerRef.current.terminate();
+    if (!workerRef.current) return;
 
-      scriptWorkerRef.current = new Worker(
+    if (persistWorkspace) {
+      // Persistent mode: cooperative cancellation (preserve worker state)
+      if (cancelSAB.current) {
+        const flag = new Int32Array(cancelSAB.current);
+        Atomics.store(flag, 0, 1);
+      }
+      // The worker will catch CancellationError and send "done"
+      // which will clear isRunning via the handler
+      setOutput(prev => prev + "\n--- Cancelling execution... ---\n");
+    } else {
+      // Non-persistent mode: terminate and recreate
+      workerRef.current.terminate();
+      activeExecutionMode.current = null;
+
+      const worker = new Worker(
         new URL("../numbl-worker.ts", import.meta.url),
-        {
-          type: "module",
-        }
+        { type: "module" }
       );
+      workerRef.current = worker;
 
-      scriptWorkerRef.current.onmessage = e => {
-        const msg = e.data;
-        if (msg.type === "request-input") {
-          const response = prompt(msg.prompt ?? "") ?? "";
-          const sab = scriptInputSAB.current;
-          if (sab) mainThreadRespond(sab, response);
-          return;
-        }
-        if (msg.type === "output") {
-          setOutput(prev => prev + msg.text);
-        } else if (msg.type === "drawnow") {
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions) {
-              handlePlotInstruction(instr);
-            }
-          }
-        } else if (msg.type === "done") {
-          setGeneratedJS(msg.generatedJS || "");
-          setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
-          setFileSources(msg.workspaceRep?.fileSources ?? null);
-          setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
-          setIsRunning(false);
-          if (msg.plotInstructions?.length) {
-            for (const instr of msg.plotInstructions) {
-              handlePlotInstruction(instr);
-            }
-          }
-          handleVfsChanges(msg.vfsChanges);
-        } else if (msg.type === "error") {
-          if (msg.generatedJS) {
-            setGeneratedJS(msg.generatedJS);
-          }
-          setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
-          setFileSources(msg.workspaceRep?.fileSources ?? null);
-          setIsRunning(false);
-          setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
-          handleVfsChanges(msg.vfsChanges);
-        }
-      };
+      if (workerInputSAB.current) {
+        worker.postMessage({
+          type: "set_input_sab",
+          inputSAB: workerInputSAB.current,
+        });
+      }
+
+      setupWorkerHandler(worker);
+      workspaceStale.current = true;
 
       setIsRunning(false);
       setOutput(prev => prev + "\n--- Execution stopped ---\n");
     }
-  }, [handlePlotInstruction, extractAllFilesRep, handleVfsChanges]);
+  }, [persistWorkspace, setupWorkerHandler]);
 
   const handleExecutionModeChange = useCallback(
     (
@@ -757,31 +751,39 @@ export function IDEWorkspace({
 
   const handleReplExecute = useCallback(
     async (command: string) => {
-      if (isReplExecuting) return;
+      if (isReplExecuting || isRunning) return;
       setIsReplExecuting(true);
 
       // Send latest workspace files if stale
-      if (replWorkspaceStale.current && replWorkerRef.current) {
+      if (workspaceStale.current && workerRef.current) {
         const { vfsFiles, workspaceFiles } = await buildWorkerFiles(files);
-        replWorkerRef.current.postMessage({
+        workerRef.current.postMessage({
           type: "update_workspace",
           workspaceFiles,
           vfsFiles,
         });
-        replWorkspaceStale.current = false;
+        workspaceStale.current = false;
       }
 
-      replWorkerRef.current?.postMessage({
+      // Reset cancel flag
+      if (cancelSAB.current) {
+        const flag = new Int32Array(cancelSAB.current);
+        Atomics.store(flag, 0, 0);
+      }
+
+      activeExecutionMode.current = "repl";
+      workerRef.current?.postMessage({
         type: "execute",
         code: command,
+        cancelSAB: cancelSAB.current ?? undefined,
       });
     },
-    [isReplExecuting, files, buildWorkerFiles]
+    [isReplExecuting, isRunning, files, buildWorkerFiles]
   );
 
   const handleReplClear = useCallback(() => {
     if (isReplExecuting) return;
-    replWorkerRef.current?.postMessage({ type: "clear" });
+    workerRef.current?.postMessage({ type: "clear" });
   }, [isReplExecuting]);
 
   const handleTerminalReady = useCallback((methods: any) => {
@@ -969,6 +971,33 @@ export function IDEWorkspace({
                   {remoteNativeAddon ? "native" : "no native"}
                 </Typography>
               )}
+              <Tooltip
+                title={
+                  persistWorkspace
+                    ? "Workspace persists across runs and REPL (click for fresh each run)"
+                    : "Fresh workspace each run (click to persist across runs and REPL)"
+                }
+              >
+                <Typography
+                  variant="caption"
+                  onClick={() => setPersistWorkspace(p => !p)}
+                  sx={{
+                    cursor: "pointer",
+                    fontSize: "0.7rem",
+                    px: 0.5,
+                    py: 0.1,
+                    borderRadius: 0.5,
+                    bgcolor: persistWorkspace
+                      ? "action.selected"
+                      : "transparent",
+                    opacity: persistWorkspace ? 1 : 0.5,
+                    "&:hover": { opacity: 1 },
+                    userSelect: "none",
+                  }}
+                >
+                  {persistWorkspace ? "persist" : "1x"}
+                </Typography>
+              </Tooltip>
               {activeFile && (
                 <Typography
                   variant="caption"
@@ -1005,7 +1034,7 @@ export function IDEWorkspace({
                   onChange={value => {
                     const encoded = _textEncoder.encode(value || "");
                     setActiveFileData(encoded);
-                    replWorkspaceStale.current = true;
+                    workspaceStale.current = true;
                     if (isSystemFileId(activeFileId)) {
                       updateSystemFileContent(activeFileId, encoded);
                     } else {

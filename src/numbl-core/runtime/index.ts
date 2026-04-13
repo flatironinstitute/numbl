@@ -9,7 +9,12 @@ export type {
   RuntimeDictionary,
 } from "./types.js";
 
-export { RuntimeError, offsetToLine, offsetToColumn } from "./error.js";
+export {
+  RuntimeError,
+  CancellationError,
+  offsetToLine,
+  offsetToColumn,
+} from "./error.js";
 export type { CallFrame } from "./error.js";
 
 export {

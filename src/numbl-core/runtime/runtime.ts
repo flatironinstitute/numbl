@@ -24,6 +24,7 @@ import {
   displayValue,
   shareRuntimeValue,
   RuntimeError,
+  CancellationError,
   type CallFrame,
 } from "../runtime/index.js";
 import {
@@ -143,6 +144,9 @@ export class Runtime {
   plotInstructions: PlotInstruction[] = [];
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
+
+  // Cooperative cancellation
+  private cancelFlag: Int32Array | null = null;
 
   // Line tracking
   public $line = 0;
@@ -336,7 +340,17 @@ export class Runtime {
     if (options.initialHoldState) {
       this.holdState = options.initialHoldState;
     }
+    if (options.cancelSAB) {
+      this.cancelFlag = new Int32Array(options.cancelSAB);
+    }
     this.initBuiltins();
+  }
+
+  /** Throw CancellationError if the cancel flag has been set. */
+  checkCancel(): void {
+    if (this.cancelFlag && Atomics.load(this.cancelFlag, 0) !== 0) {
+      throw new CancellationError();
+    }
   }
 
   // ── Builtin initialization ──────────────────────────────────────────

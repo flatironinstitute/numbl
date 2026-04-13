@@ -82,10 +82,9 @@ export function EmbedReplPage() {
 
   // Initialize REPL worker
   useEffect(() => {
-    const worker = new Worker(
-      new URL("../numbl-repl-worker.ts", import.meta.url),
-      { type: "module" }
-    );
+    const worker = new Worker(new URL("../numbl-worker.ts", import.meta.url), {
+      type: "module",
+    });
     replWorkerRef.current = worker;
 
     if (inputSAB.current) {

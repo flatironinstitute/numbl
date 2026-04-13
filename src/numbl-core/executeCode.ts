@@ -70,6 +70,8 @@ export interface ExecOptions {
    * - null → opt out of the implicit-cwd behavior entirely.
    */
   implicitCwdPath?: string | null;
+  /** SharedArrayBuffer for cooperative cancellation. Int32[0] != 0 means cancelled. */
+  cancelSAB?: SharedArrayBuffer;
 }
 
 export interface BuiltinProfileEntry {

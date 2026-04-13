@@ -182,6 +182,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       const _whileStart = this.rt.profilingEnabled ? performance.now() : 0;
       let _whileIters = 0;
       while (true) {
+        this.rt.checkCancel();
         const cond = this.evalExpr(stmt.cond);
         if (!this.rt.toBool(cond)) break;
         _whileIters++;
@@ -204,6 +205,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       const rv = ensureRuntimeValue(iterVal);
       const iterItems = forIter(rv);
       for (let _i = 0; _i < iterItems.length; _i++) {
+        this.rt.checkCancel();
         this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
         const signal = this.execStmts(stmt.body);
         if (signal instanceof BreakSignal) break;
