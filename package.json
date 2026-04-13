@@ -1,6 +1,6 @@
 {
   "name": "numbl",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Run .m source files in the browser and on the command line by compiling to JavaScript",
   "license": "Apache-2.0",
   "type": "module",
@@ -63,6 +63,7 @@
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
+    "bump": "tsx scripts/bump-version.ts",
     "prepublishOnly": "npm run build:lib && npm run build:cli && npm run build:plot-viewer",
     "prepare": "husky"
   },

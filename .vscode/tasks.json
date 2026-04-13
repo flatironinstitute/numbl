@@ -7,6 +7,13 @@
       "command": "bash",
       "args": ["numbl-vscode/devel/sync-graphics.sh"],
       "problemMatcher": []
+    },
+    {
+      "label": "Bump version (patch)",
+      "type": "shell",
+      "command": "npx",
+      "args": ["tsx", "scripts/bump-version.ts"],
+      "problemMatcher": []
     }
   ]
 }
