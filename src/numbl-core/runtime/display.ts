@@ -56,6 +56,8 @@ export function displayValue(v: RuntimeValue): string {
       return formatComplex(v.re, v.im);
     case "dummy_handle":
       return "[dummy_handle]";
+    case "graphics_handle":
+      return `[graphics_handle: ${v._traceType}]`;
     case "struct_array":
       return formatStructArray(v);
     case "sparse_matrix":

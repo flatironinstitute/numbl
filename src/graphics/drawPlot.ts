@@ -1542,6 +1542,11 @@ function drawPcolorFlat(
         }
         ctx.lineWidth = 0.5;
         ctx.stroke();
+      } else if (trace.edgeColor === "none") {
+        // Stroke with fill color to cover anti-aliasing seams between cells
+        ctx.strokeStyle = fill;
+        ctx.lineWidth = 1;
+        ctx.stroke();
       }
     }
   }
