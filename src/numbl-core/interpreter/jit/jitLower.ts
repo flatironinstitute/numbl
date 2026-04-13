@@ -3,6 +3,9 @@
  *
  * Returns null if any unsupported construct is encountered,
  * causing the entire function to fall back to interpretation.
+ *
+ * Type-level helpers (sign algebra, result types, env management) are
+ * in jitLowerTypes.ts. This file contains the core lowering logic.
  */
 
 import type { Expr, Stmt } from "../../parser/types.js";
@@ -16,271 +19,25 @@ import {
   type JitType,
   type JitExpr,
   type JitStmt,
-  type SignCategory,
-  unifyJitTypes,
   isScalarType,
   isNumericScalarType,
   isTensorType,
-  isComplexType,
-  isArithmeticType,
   jitTypeKey,
   computeJitFnName,
   signFromNumber,
-  flipSign,
 } from "./jitTypes.js";
+import {
+  KNOWN_CONSTANTS,
+  type TypeEnv,
+  cloneEnv,
+  mergeEnvs,
+  envsEqual,
+  binaryResultType,
+  unaryResultType,
+} from "./jitLowerTypes.js";
 import { generateJS } from "./jitCodegen.js";
 import { getIBuiltin } from "../builtins/index.js";
 import { offsetToLineFast, buildLineTable } from "../../runtime/error.js";
-
-// ── Known constants ─────────────────────────────────────────────────────
-
-const KNOWN_CONSTANTS: Record<string, number> = {
-  pi: Math.PI,
-  inf: Infinity,
-  Inf: Infinity,
-  nan: NaN,
-  NaN: NaN,
-  eps: 2.220446049250313e-16,
-  true: 1,
-  false: 0,
-};
-
-// ── Type Environment ────────────────────────────────────────────────────
-
-type TypeEnv = Map<string, JitType>;
-
-function cloneEnv(env: TypeEnv): TypeEnv {
-  return new Map(env);
-}
-
-/** Merge two type environments at a join point. Returns null if any type becomes unknown. */
-function mergeEnvs(a: TypeEnv, b: TypeEnv): TypeEnv | null {
-  const result = cloneEnv(a);
-  for (const [name, typeB] of b) {
-    const typeA = result.get(name);
-    if (typeA) {
-      const unified = unifyJitTypes(typeA, typeB);
-      if (unified.kind === "unknown") return null;
-      result.set(name, unified);
-    } else {
-      result.set(name, typeB);
-    }
-  }
-  return result;
-}
-
-/** Check if two type environments are identical (by JSON comparison). */
-function envsEqual(a: TypeEnv, b: TypeEnv): boolean {
-  if (a.size !== b.size) return false;
-  for (const [name, type] of a) {
-    const other = b.get(name);
-    if (!other || JSON.stringify(type) !== JSON.stringify(other)) return false;
-  }
-  return true;
-}
-
-// ── Sign algebra ────────────────────────────────────────────────────────
-
-function addSigns(a: SignCategory, b: SignCategory): SignCategory | undefined {
-  if (a === "positive" && b === "positive") return "positive";
-  if (a === "negative" && b === "negative") return "negative";
-  if (
-    (a === "nonneg" || a === "positive") &&
-    (b === "nonneg" || b === "positive")
-  )
-    return "nonneg";
-  if (
-    (a === "nonpositive" || a === "negative") &&
-    (b === "nonpositive" || b === "negative")
-  )
-    return "nonpositive";
-  return undefined;
-}
-
-function mulSigns(a: SignCategory, b: SignCategory): SignCategory | undefined {
-  // positive * positive -> positive, negative * negative -> positive
-  const aPos = a === "positive" || a === "nonneg";
-  const aNeg = a === "negative" || a === "nonpositive";
-  const bPos = b === "positive" || b === "nonneg";
-  const bNeg = b === "negative" || b === "nonpositive";
-  const aStrict = a === "positive" || a === "negative";
-  const bStrict = b === "positive" || b === "negative";
-
-  if ((aPos && bPos) || (aNeg && bNeg)) {
-    return aStrict && bStrict ? "positive" : "nonneg";
-  }
-  if ((aPos && bNeg) || (aNeg && bPos)) {
-    return aStrict && bStrict ? "negative" : "nonpositive";
-  }
-  return undefined;
-}
-
-function combineSigns(
-  a: SignCategory | undefined,
-  b: SignCategory | undefined,
-  op: BinaryOperation
-): SignCategory | undefined {
-  if (!a || !b) return undefined;
-  switch (op) {
-    case BinaryOperation.Add:
-      return addSigns(a, b);
-    case BinaryOperation.Sub:
-      return addSigns(a, flipSign(b)!);
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return mulSigns(a, b);
-    default:
-      return undefined;
-  }
-}
-
-// ── Type propagation for binary operations ──────────────────────────────
-
-function binaryResultType(
-  op: BinaryOperation,
-  left: JitType,
-  right: JitType
-): JitType | null {
-  // Reject non-arithmetic types (class_instance, struct, string, char, etc.)
-  if (!isArithmeticType(left) || !isArithmeticType(right)) return null;
-
-  // Comparisons always produce logical for scalars
-  if (
-    op === BinaryOperation.Equal ||
-    op === BinaryOperation.NotEqual ||
-    op === BinaryOperation.Less ||
-    op === BinaryOperation.LessEqual ||
-    op === BinaryOperation.Greater ||
-    op === BinaryOperation.GreaterEqual
-  ) {
-    if (isScalarType(left) && isScalarType(right)) return { kind: "boolean" };
-    // Tensor comparison: real tensors only (MATLAB errors on complex comparisons)
-    const anyTensor = isTensorType(left) || isTensorType(right);
-    const anyComplex = isComplexType(left) || isComplexType(right);
-    if (anyTensor && !anyComplex) {
-      const lt = isTensorType(left)
-        ? (left as Extract<JitType, { kind: "tensor" }>)
-        : undefined;
-      const rt = isTensorType(right)
-        ? (right as Extract<JitType, { kind: "tensor" }>)
-        : undefined;
-      const shape = lt?.shape ?? rt?.shape;
-      const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
-      return {
-        kind: "tensor",
-        isComplex: false,
-        isLogical: true,
-        ...(shape ? { shape } : {}),
-        ...(ndim !== undefined ? { ndim } : {}),
-      };
-    }
-    return null;
-  }
-
-  // Logical operators: scalar only
-  if (op === BinaryOperation.AndAnd || op === BinaryOperation.OrOr) {
-    if (isScalarType(left) && isScalarType(right)) return { kind: "boolean" };
-    return null;
-  }
-
-  // Only element-wise arithmetic ops
-  switch (op) {
-    case BinaryOperation.Add:
-    case BinaryOperation.Sub:
-    case BinaryOperation.ElemMul:
-    case BinaryOperation.ElemDiv:
-      break;
-    case BinaryOperation.Mul:
-      // Matrix multiply (both tensors) not supported
-      if (isTensorType(left) && isTensorType(right)) return null;
-      break;
-    case BinaryOperation.Div:
-      // tensor / tensor not supported (use ./ instead)
-      if (isTensorType(left) && isTensorType(right)) return null;
-      break;
-    case BinaryOperation.ElemPow:
-      break;
-    case BinaryOperation.Pow:
-      // Matrix power (both tensors) not supported
-      if (isTensorType(left) && isTensorType(right)) return null;
-      break;
-    default:
-      return null;
-  }
-
-  // Coerce logical to number for arithmetic
-  const effLeft: JitType =
-    left.kind === "boolean" ? { kind: "number", sign: "nonneg" } : left;
-  const effRight: JitType =
-    right.kind === "boolean" ? { kind: "number", sign: "nonneg" } : right;
-
-  // Determine result type based on operand types
-  const anyComplex = isComplexType(effLeft) || isComplexType(effRight);
-  const anyTensor = isTensorType(effLeft) || isTensorType(effRight);
-
-  if (anyTensor) {
-    const lt = isTensorType(effLeft)
-      ? (effLeft as Extract<JitType, { kind: "tensor" }>)
-      : undefined;
-    const rt = isTensorType(effRight)
-      ? (effRight as Extract<JitType, { kind: "tensor" }>)
-      : undefined;
-    const shape = lt?.shape ?? rt?.shape;
-    const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
-    const isComplex =
-      anyComplex || (lt?.isComplex ?? false) || (rt?.isComplex ?? false);
-    return {
-      kind: "tensor",
-      isComplex,
-      ...(shape ? { shape } : {}),
-      ...(ndim !== undefined ? { ndim } : {}),
-    };
-  }
-
-  if (anyComplex) {
-    // Complex scalar power not yet supported in codegen
-    if (op === BinaryOperation.Pow || op === BinaryOperation.ElemPow)
-      return null;
-    return { kind: "complex_or_number" };
-  }
-
-  // Both are numbers (or coerced from logical)
-  if (effLeft.kind === "number" && effRight.kind === "number") {
-    const sign = combineSigns(effLeft.sign, effRight.sign, op);
-    return { kind: "number", ...(sign ? { sign } : {}) };
-  }
-
-  return null;
-}
-
-function unaryResultType(op: UnaryOperation, operand: JitType): JitType | null {
-  switch (op) {
-    case UnaryOperation.Plus:
-      return operand;
-    case UnaryOperation.Minus:
-      if (operand.kind === "number") {
-        const sign = flipSign(operand.sign);
-        return { kind: "number", ...(sign ? { sign } : {}) };
-      }
-      if (operand.kind === "boolean")
-        return { kind: "number", sign: "nonpositive" };
-      if (operand.kind === "complex_or_number")
-        return { kind: "complex_or_number" };
-      if (operand.kind === "tensor")
-        return {
-          kind: "tensor",
-          isComplex: operand.isComplex,
-          shape: operand.shape,
-          ndim: operand.ndim,
-        };
-      return null;
-    case UnaryOperation.Not:
-      if (isNumericScalarType(operand)) return { kind: "boolean" };
-      return null;
-    default:
-      return null; // Transpose not supported
-  }
-}
 
 // ── Lowering entry point ────────────────────────────────────────────────
 
@@ -509,8 +266,14 @@ function lowerAssign(
   const expr = lowerExpr(ctx, stmt.expr);
   if (!expr) return null;
 
-  // A plain reassignment invalidates any previous slice alias on this name.
+  // A plain reassignment invalidates any previous slice alias on this name,
+  // AND any aliases that reference this name as their base tensor.
   ctx.sliceAliases.delete(stmt.name);
+  for (const [aliasName, alias] of ctx.sliceAliases) {
+    if (alias.baseName === stmt.name) {
+      ctx.sliceAliases.delete(aliasName);
+    }
+  }
 
   ctx.env.set(stmt.name, expr.jitType);
   ctx.assignedVars.add(stmt.name);
@@ -1072,13 +835,16 @@ function lowerFor(
   const end = lowerExpr(ctx, stmt.expr.end);
   if (!end || !isNumericScalarType(end.jitType)) return null;
 
-  // Loop variable is always number
+  // Save env BEFORE setting the loop variable so that in the zero-iteration
+  // case, the merge doesn't leak the loop variable's type into the post-loop
+  // env (MATLAB leaves the loop variable undefined after `for i = 1:0`).
+  const envBefore = cloneEnv(ctx.env);
+  const sliceAliasesBefore = new Map(ctx.sliceAliases);
+
+  // Loop variable is always number (inside the body)
   ctx.env.set(stmt.varName, { kind: "number" });
   ctx.assignedVars.add(stmt.varName);
   if (!ctx.params.has(stmt.varName)) ctx.localVars.add(stmt.varName);
-
-  const envBefore = cloneEnv(ctx.env);
-  const sliceAliasesBefore = new Map(ctx.sliceAliases);
 
   // Lower body (first pass)
   ctx.sliceAliases = new Map(sliceAliasesBefore);

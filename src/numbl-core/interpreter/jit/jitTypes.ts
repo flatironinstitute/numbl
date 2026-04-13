@@ -305,7 +305,30 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
     if (a.kind === "dictionary" && b.kind === "dictionary") {
       return { kind: "dictionary" };
     }
-    return a; // same kind, no flags to merge
+    if (a.kind === "cell" && b.kind === "cell") {
+      // Unify shapes: same→keep, different→drop
+      let shape: number[] | undefined;
+      if (a.shape && b.shape && a.shape.length === b.shape.length) {
+        shape = a.shape.map((d, i) => (d === b.shape![i] ? d : -1));
+      }
+      return { kind: "cell", ...(shape ? { shape } : {}) };
+    }
+    if (a.kind === "sparse_matrix" && b.kind === "sparse_matrix") {
+      return {
+        kind: "sparse_matrix",
+        isComplex: a.isComplex || b.isComplex,
+        ...(a.m !== undefined && a.m === b.m ? { m: a.m } : {}),
+        ...(a.n !== undefined && a.n === b.n ? { n: a.n } : {}),
+      };
+    }
+    return { kind: "unknown" }; // unrecognized same-kind pair → bail
+  }
+  // Widen number + boolean → number (MATLAB treats logical as numeric)
+  if (
+    (a.kind === "number" && b.kind === "boolean") ||
+    (a.kind === "boolean" && b.kind === "number")
+  ) {
+    return { kind: "number" };
   }
   // Widen number/boolean → complex_or_number (every real is a valid complex)
   if (
@@ -373,6 +396,12 @@ export function shapeAfterReduction(
   dim?: number
 ): { scalar: true } | { scalar: false; shape: number[] } {
   if (dim !== undefined) {
+    // Reduction along a dimension beyond ndims returns the shape unchanged
+    // (MATLAB: sum(A, dim) where dim > ndims(A) returns A)
+    if (dim > shape.length) {
+      if (shape.every(d => d === 1)) return { scalar: true };
+      return { scalar: false, shape: [...shape] };
+    }
     const result = [...shape];
     result[dim - 1] = 1;
     while (result.length > 2 && result[result.length - 1] === 1) result.pop();
