@@ -201,9 +201,13 @@ export function binaryResultType(
 
   // Coerce logical to number for arithmetic
   const effLeft: JitType =
-    left.kind === "boolean" ? { kind: "number", sign: "nonneg" } : left;
+    left.kind === "boolean"
+      ? { kind: "number", sign: "nonneg", isInteger: true }
+      : left;
   const effRight: JitType =
-    right.kind === "boolean" ? { kind: "number", sign: "nonneg" } : right;
+    right.kind === "boolean"
+      ? { kind: "number", sign: "nonneg", isInteger: true }
+      : right;
 
   const anyComplex = isComplexType(effLeft) || isComplexType(effRight);
   const anyTensor = isTensorType(effLeft) || isTensorType(effRight);
@@ -235,7 +239,19 @@ export function binaryResultType(
 
   if (effLeft.kind === "number" && effRight.kind === "number") {
     const sign = combineSigns(effLeft.sign, effRight.sign, op);
-    return { kind: "number", ...(sign ? { sign } : {}) };
+    // int ± int = int, int * int = int; division/power lose integer guarantee
+    const isInteger =
+      effLeft.isInteger &&
+      effRight.isInteger &&
+      (op === BinaryOperation.Add ||
+        op === BinaryOperation.Sub ||
+        op === BinaryOperation.Mul ||
+        op === BinaryOperation.ElemMul);
+    return {
+      kind: "number",
+      ...(sign ? { sign } : {}),
+      ...(isInteger ? { isInteger: true } : {}),
+    };
   }
 
   return null;
@@ -253,7 +269,11 @@ export function unaryResultType(
     case UnaryOperation.Minus:
       if (operand.kind === "number") {
         const sign = flipSign(operand.sign);
-        return { kind: "number", ...(sign ? { sign } : {}) };
+        return {
+          kind: "number",
+          ...(sign ? { sign } : {}),
+          ...(operand.isInteger ? { isInteger: true } : {}),
+        };
       }
       if (operand.kind === "boolean")
         return { kind: "number", sign: "nonpositive" };

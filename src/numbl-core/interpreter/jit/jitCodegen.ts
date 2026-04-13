@@ -10,6 +10,7 @@ import {
   type JitStmt,
   type JitType,
   isTensorType,
+  isKnownInteger,
 } from "./jitTypes.js";
 import { getIBuiltin } from "../builtins/types.js";
 import {
@@ -669,6 +670,14 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
   const baseType = expr.base.jitType;
   const indices = expr.indices.map(i => emitExpr(i));
 
+  // For specialized helpers that use |0 internally, pre-round indices that
+  // are not provably integer so that fractional values behave like
+  // Math.round (matching the interpreter and the generic idx helpers).
+  const ri = (i: number): string => {
+    if (isKnownInteger(expr.indices[i].jitType)) return indices[i];
+    return `Math.round(${indices[i]})`;
+  };
+
   // Hoisted-base fast path: the loop generator hoisted this base's data,
   // length, and dim sizes to local aliases at function entry. This is the
   // fastest path because the per-call helper takes only scalar args (no
@@ -681,13 +690,13 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
     const alias = _hoistedAliases.get(expr.base.name);
     if (alias) {
       if (indices.length === 1) {
-        return `$h.idx1r_h(${alias.data}, ${alias.len}, ${indices[0]})`;
+        return `$h.idx1r_h(${alias.data}, ${alias.len}, ${ri(0)})`;
       }
       if (indices.length === 2) {
-        return `$h.idx2r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${indices[0]}, ${indices[1]})`;
+        return `$h.idx2r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${ri(0)}, ${ri(1)})`;
       }
       if (indices.length === 3) {
-        return `$h.idx3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${indices[0]}, ${indices[1]}, ${indices[2]})`;
+        return `$h.idx3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${ri(0)}, ${ri(1)}, ${ri(2)})`;
       }
     }
   }
@@ -696,13 +705,13 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
   // isTensor / imag / Math.round and avoid the per-call array allocation
   // that idxN otherwise needs.
   if (baseType.kind === "tensor" && baseType.isComplex === false) {
-    if (indices.length === 1) return `$h.idx1r(${base}, ${indices[0]})`;
-    if (indices.length === 2)
-      return `$h.idx2r(${base}, ${indices[0]}, ${indices[1]})`;
+    if (indices.length === 1) return `$h.idx1r(${base}, ${ri(0)})`;
+    if (indices.length === 2) return `$h.idx2r(${base}, ${ri(0)}, ${ri(1)})`;
     if (indices.length === 3)
-      return `$h.idx3r(${base}, ${indices[0]}, ${indices[1]}, ${indices[2]})`;
+      return `$h.idx3r(${base}, ${ri(0)}, ${ri(1)}, ${ri(2)})`;
   }
 
+  // Generic helpers already use Math.round internally — no wrapping needed.
   if (indices.length === 1) return `$h.idx1(${base}, ${indices[0]})`;
   if (indices.length === 2)
     return `$h.idx2(${base}, ${indices[0]}, ${indices[1]})`;
@@ -751,13 +760,18 @@ function emitAssignIndexRange(
       `JIT codegen: AssignIndexRange src '${stmt.srcBaseName}' without a hoisted alias`
     );
   }
-  const dstStart = emitExpr(stmt.dstStart);
-  const dstEnd = emitExpr(stmt.dstEnd);
+  const emitRI = (e: JitExpr): string => {
+    const code = emitExpr(e);
+    if (isKnownInteger(e.jitType)) return code;
+    return `Math.round(${code})`;
+  };
+  const dstStart = emitRI(stmt.dstStart);
+  const dstEnd = emitRI(stmt.dstEnd);
   // stage 9: when srcStart/srcEnd are null, the source is used in its
   // entirety — substitute `1` and the source's hoisted length alias. The
   // same helper handles both forms since the check is length-based.
-  const srcStart = stmt.srcStart !== null ? emitExpr(stmt.srcStart) : "1";
-  const srcEnd = stmt.srcEnd !== null ? emitExpr(stmt.srcEnd) : srcAlias.len;
+  const srcStart = stmt.srcStart !== null ? emitRI(stmt.srcStart) : "1";
+  const srcEnd = stmt.srcEnd !== null ? emitRI(stmt.srcEnd) : srcAlias.len;
   return `$h.setRange1r_h(${dstAlias.data}, ${dstAlias.len}, ${dstStart}, ${dstEnd}, ${srcAlias.data}, ${srcAlias.len}, ${srcStart}, ${srcEnd})`;
 }
 
@@ -765,6 +779,11 @@ function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
   const alias = _hoistedAliases.get(stmt.baseName);
   const indices = stmt.indices.map(i => emitExpr(i));
   const value = emitExpr(stmt.value);
+
+  const ri = (i: number): string => {
+    if (isKnownInteger(stmt.indices[i].jitType)) return indices[i];
+    return `Math.round(${indices[i]})`;
+  };
 
   // Write-target tensors are always hoisted at the top of the loop
   // function (see generateJS). If there's no alias here something is
@@ -777,13 +796,13 @@ function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
   }
 
   if (indices.length === 1) {
-    return `$h.set1r_h(${alias.data}, ${alias.len}, ${indices[0]}, ${value})`;
+    return `$h.set1r_h(${alias.data}, ${alias.len}, ${ri(0)}, ${value})`;
   }
   if (indices.length === 2) {
-    return `$h.set2r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${indices[0]}, ${indices[1]}, ${value})`;
+    return `$h.set2r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${ri(0)}, ${ri(1)}, ${value})`;
   }
   // 3D
-  return `$h.set3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${indices[0]}, ${indices[1]}, ${indices[2]}, ${value})`;
+  return `$h.set3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${ri(0)}, ${ri(1)}, ${ri(2)}, ${value})`;
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }): string {

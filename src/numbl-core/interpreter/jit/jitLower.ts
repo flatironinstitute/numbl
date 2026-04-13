@@ -22,6 +22,7 @@ import {
   isScalarType,
   isNumericScalarType,
   isTensorType,
+  isKnownInteger,
   jitTypeKey,
   computeJitFnName,
   signFromNumber,
@@ -841,8 +842,13 @@ function lowerFor(
   const envBefore = cloneEnv(ctx.env);
   const sliceAliasesBefore = new Map(ctx.sliceAliases);
 
-  // Loop variable is always number (inside the body)
-  ctx.env.set(stmt.varName, { kind: "number" });
+  // Loop variable is number (integer when start and step are integer)
+  const loopVarIsInt =
+    isKnownInteger(start.jitType) && (!step || isKnownInteger(step.jitType));
+  ctx.env.set(stmt.varName, {
+    kind: "number",
+    ...(loopVarIsInt ? { isInteger: true } : {}),
+  });
   ctx.assignedVars.add(stmt.varName);
   if (!ctx.params.has(stmt.varName)) ctx.localVars.add(stmt.varName);
 
@@ -863,7 +869,10 @@ function lowerFor(
     if (repassBudget <= 0) return null;
     repassBudget--;
     ctx.env = cloneEnv(merged);
-    ctx.env.set(stmt.varName, { kind: "number" });
+    ctx.env.set(stmt.varName, {
+      kind: "number",
+      ...(loopVarIsInt ? { isInteger: true } : {}),
+    });
     ctx.sliceAliases = new Map(sliceAliasesBefore);
     const newBody = lowerStmts(ctx, stmt.body);
     if (!newBody) return null;
@@ -948,13 +957,15 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
   switch (expr.type) {
     case "Number": {
       const value = parseFloat(expr.value);
+      const sign = signFromNumber(value);
       return {
         tag: "NumberLiteral",
         value,
         jitType: {
           kind: "number",
           exact: value,
-          ...(signFromNumber(value) ? { sign: signFromNumber(value) } : {}),
+          ...(sign ? { sign } : {}),
+          ...(Number.isInteger(value) ? { isInteger: true } : {}),
         },
       };
     }
