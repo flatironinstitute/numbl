@@ -543,6 +543,23 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     // Fall through to numeric path, which will raise a more descriptive
     // error (e.g. when trying to add a tensor to a string).
   }
+  // Fast inline path: real tensor + number (bypasses bridge check + binaryOp closure)
+  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
+    const d = a.data,
+      sv = b as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = d[i] + sv;
+    return RTV.tensorRaw(result, a.shape);
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
+    const d = b.data,
+      sv = a as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = sv + d[i];
+    return RTV.tensorRaw(result, b.shape);
+  }
   const m = matchSameShapeTensors(a, b);
   if (m) {
     const [at, bt] = m;
@@ -590,6 +607,23 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Subtract two RuntimeValues */
 export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Fast inline path: real tensor - number or number - real tensor
+  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
+    const d = a.data,
+      sv = b as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = d[i] - sv;
+    return RTV.tensorRaw(result, a.shape);
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
+    const d = b.data,
+      sv = a as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = sv - d[i];
+    return RTV.tensorRaw(result, b.shape);
+  }
   const m = matchSameShapeTensors(a, b);
   if (m) {
     const [at, bt] = m;
@@ -669,6 +703,23 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise multiply */
 export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Fast inline path: real tensor .* number or number .* real tensor
+  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
+    const d = a.data,
+      sv = b as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = d[i] * sv;
+    return RTV.tensorRaw(result, a.shape);
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
+    const d = b.data,
+      sv = a as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = sv * d[i];
+    return RTV.tensorRaw(result, b.shape);
+  }
   const m = matchSameShapeTensors(a, b);
   if (m) {
     const [at, bt] = m;
@@ -739,6 +790,23 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise divide */
 export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // Fast inline path: real tensor ./ number or number ./ real tensor
+  if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
+    const d = a.data,
+      sv = b as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = d[i] / sv;
+    return RTV.tensorRaw(result, a.shape);
+  }
+  if (isRuntimeNumber(a) && isRuntimeTensor(b) && !b.imag) {
+    const d = b.data,
+      sv = a as number,
+      n = d.length;
+    const result = new FloatXArray(n);
+    for (let i = 0; i < n; i++) result[i] = sv / d[i];
+    return RTV.tensorRaw(result, b.shape);
+  }
   const m = matchSameShapeTensors(a, b);
   if (m) {
     const [at, bt] = m;

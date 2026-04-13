@@ -28,12 +28,32 @@ export class Environment {
   private vars = new Map<string, RuntimeValue>();
   /** When true, writes to variables found in parent go to the parent (nested function semantics). */
   isNested = false;
-  /** Nested function definitions registered during execution. */
-  nestedFunctions = new Map<string, { fn: FunctionDef; env: Environment }>();
-  /** Names declared as `global` in this scope — reads/writes go through rt.$g */
-  globalNames = new Set<string>();
-  /** Names declared as `persistent` in this scope */
-  persistentNames = new Set<string>();
+  /** Nested function definitions registered during execution. Lazy-initialized. */
+  private _nestedFunctions:
+    | Map<string, { fn: FunctionDef; env: Environment }>
+    | undefined;
+  get nestedFunctions(): Map<string, { fn: FunctionDef; env: Environment }> {
+    return (this._nestedFunctions ??= new Map());
+  }
+  set nestedFunctions(v: Map<string, { fn: FunctionDef; env: Environment }>) {
+    this._nestedFunctions = v;
+  }
+  /** Names declared as `global` in this scope — reads/writes go through rt.$g. Lazy-initialized. */
+  private _globalNames: Set<string> | undefined;
+  get globalNames(): Set<string> {
+    return (this._globalNames ??= new Set());
+  }
+  set globalNames(v: Set<string>) {
+    this._globalNames = v;
+  }
+  /** Names declared as `persistent` in this scope. Lazy-initialized. */
+  private _persistentNames: Set<string> | undefined;
+  get persistentNames(): Set<string> {
+    return (this._persistentNames ??= new Set());
+  }
+  set persistentNames(v: Set<string>) {
+    this._persistentNames = v;
+  }
   /** Function ID for persistent variable storage */
   persistentFuncId: string | undefined;
   /** Back-reference to the runtime (needed for global/persistent access) */
@@ -42,7 +62,11 @@ export class Environment {
   constructor(private parent?: Environment) {}
 
   get(name: string): RuntimeValue | undefined {
-    if (this.globalNames.has(name) && this.rt) {
+    if (
+      this._globalNames !== undefined &&
+      this._globalNames.has(name) &&
+      this.rt
+    ) {
       const v = this.rt.$g[name];
       return v === undefined ? undefined : v;
     }
@@ -51,7 +75,11 @@ export class Environment {
 
   /** Set variable — for nested scopes, writes to parent if variable exists there. */
   set(name: string, value: RuntimeValue): void {
-    if (this.globalNames.has(name) && this.rt) {
+    if (
+      this._globalNames !== undefined &&
+      this._globalNames.has(name) &&
+      this.rt
+    ) {
       this.rt.$g[name] = value;
       return;
     }
@@ -71,7 +99,11 @@ export class Environment {
   }
 
   has(name: string): boolean {
-    if (this.globalNames.has(name) && this.rt) {
+    if (
+      this._globalNames !== undefined &&
+      this._globalNames.has(name) &&
+      this.rt
+    ) {
       return name in this.rt.$g;
     }
     return this.vars.has(name) || (this.parent?.has(name) ?? false);
@@ -79,7 +111,8 @@ export class Environment {
 
   /** Check if this scope directly owns a variable (not parent). */
   hasLocal(name: string): boolean {
-    if (this.globalNames.has(name)) return true;
+    if (this._globalNames !== undefined && this._globalNames.has(name))
+      return true;
     return this.vars.has(name);
   }
 
@@ -94,7 +127,7 @@ export class Environment {
     name: string
   ): { fn: FunctionDef; env: Environment } | undefined {
     return (
-      this.nestedFunctions.get(name) ?? this.parent?.getNestedFunction(name)
+      this._nestedFunctions?.get(name) ?? this.parent?.getNestedFunction(name)
     );
   }
 

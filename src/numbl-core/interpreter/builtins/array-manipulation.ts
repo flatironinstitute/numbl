@@ -765,6 +765,14 @@ defineBuiltin({
         }
         if (!isRuntimeTensor(v))
           throw new RuntimeError("repmat: first argument must be numeric");
+        // Fast path: all reps are 1 → return copy without data duplication
+        if (reps.every(r => r === 1)) {
+          return RTV.tensor(
+            new FloatXArray(v.data),
+            v.shape,
+            v.imag ? new FloatXArray(v.imag) : undefined
+          );
+        }
         const srcShape = v.shape.length >= 2 ? v.shape : [1, v.shape[0] || 1];
         const ndim = Math.max(srcShape.length, reps.length);
         const padSrc = [...srcShape];
