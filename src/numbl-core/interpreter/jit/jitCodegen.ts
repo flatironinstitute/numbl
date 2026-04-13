@@ -91,6 +91,7 @@ function mangle(name: string): string {
 let _tmpCounter = 0;
 let _returnExpr = "undefined";
 let _fileName: string | undefined;
+let _fileEmitted = false;
 
 /**
  * Hoisted aliases for a tensor variable that's read (and optionally
@@ -163,6 +164,7 @@ export function generateJS(
 ): string {
   _tmpCounter = 0;
   _fileName = fileName;
+  _fileEmitted = false;
 
   // Compute the return expression for early returns and the final return
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -777,8 +779,9 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
     }
 
     case "SetLoc":
-      if (_fileName) {
+      if (_fileName && !_fileEmitted) {
         lines.push(`${indent}$rt.$file = ${JSON.stringify(_fileName)};`);
+        _fileEmitted = true;
       }
       lines.push(`${indent}$rt.$line = ${stmt.line};`);
       break;
