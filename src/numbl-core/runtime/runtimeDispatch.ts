@@ -28,6 +28,7 @@ import {
   isRuntimeStructArray,
   isRuntimeComplexNumber,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeDictionary,
   FloatXArray,
   kstr,
@@ -245,6 +246,9 @@ export function isa(
       case "class_instance":
         valueClass = mv.className;
         break;
+      case "class_instance_array":
+        valueClass = mv.className;
+        break;
       default:
         valueClass = "unknown";
         break;
@@ -259,7 +263,7 @@ export function isa(
   )
     return RTV.logical(true);
   // Walk the inheritance chain for class instances
-  if (isRuntimeClassInstance(mv)) {
+  if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv)) {
     let current: string | null = rt.getClassParentName(mv.className);
     while (current) {
       if (current === clsName) return RTV.logical(true);

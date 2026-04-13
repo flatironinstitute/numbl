@@ -64,6 +64,8 @@ export function displayValue(v: RuntimeValue): string {
       return formatSparseMatrix(v);
     case "dictionary":
       return formatDictionary(v);
+    case "class_instance_array":
+      return `  1x${v.elements.length} ${v.className} array`;
   }
 }
 

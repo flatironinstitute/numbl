@@ -252,6 +252,11 @@ export const getItemTypeFromRuntimeValue = (value: RuntimeValue): ItemType => {
         kind: "ClassInstance",
         className: value.className,
       };
+    case "class_instance_array":
+      return {
+        kind: "ClassInstance",
+        className: value.className,
+      };
     case "dummy_handle":
       return { kind: "DummyHandle" };
     case "graphics_handle":

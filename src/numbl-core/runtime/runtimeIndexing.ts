@@ -27,9 +27,11 @@ import {
   isRuntimeStructArray,
   isRuntimeComplexNumber,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
   FloatXArray,
+  type RuntimeClassInstanceArray,
 } from "../runtime/types.js";
 import {
   dictLookup,
@@ -103,6 +105,7 @@ function endResolver(
       return dim < mv.shape.length ? mv.shape[dim] : 1;
     }
     if (isRuntimeStructArray(mv)) return mv.elements.length;
+    if (isRuntimeClassInstanceArray(mv)) return mv.elements.length;
     if (isRuntimeSparseMatrix(mv)) {
       if (numIndices === 1) return mv.m * mv.n;
       return dim === 0 ? mv.m : dim === 1 ? mv.n : 1;
@@ -225,6 +228,10 @@ export function index(
       (typeof skipSubsref === "string" && mv.className === skipSubsref);
     return classInstanceParenIndex(rt, mv, base, indices, nargout, skip);
   }
+  // Class instance array indexing: arr(i)
+  if (isRuntimeClassInstanceArray(mv)) {
+    return classInstanceArrayParenIndex(mv, indices);
+  }
   // Dictionary paren indexing: d(key)
   if (isRuntimeDictionary(mv)) {
     if (indices.length !== 1)
@@ -286,6 +293,53 @@ function classInstanceParenIndex(
     if (valid) return base;
   }
   throw new RuntimeError(`Index exceeds class instance dimensions`);
+}
+
+/** Handle arr(k) on a class instance array — returns element(s). */
+function classInstanceArrayParenIndex(
+  mv: RuntimeClassInstanceArray,
+  indices: unknown[]
+): unknown {
+  if (indices.length !== 1) {
+    throw new RuntimeError(
+      "Class instance arrays only support single-subscript indexing"
+    );
+  }
+  const idx = indices[0];
+  if (idx === COLON_SENTINEL) {
+    // arr(:) returns the full array
+    return mv;
+  }
+  if (typeof idx === "number") {
+    const i = Math.round(idx) - 1;
+    if (i < 0 || i >= mv.elements.length)
+      throw new RuntimeError("Index exceeds array bounds");
+    return mv.elements[i];
+  }
+  const rv = ensureRuntimeValue(idx);
+  if (isRuntimeLogical(rv)) {
+    const i = rv ? 0 : -1;
+    if (i < 0 || i >= mv.elements.length)
+      throw new RuntimeError("Index exceeds array bounds");
+    return mv.elements[i];
+  }
+  if (isRuntimeTensor(rv)) {
+    // Tensor index — return an array of selected elements
+    const selected: import("../runtime/types.js").RuntimeClassInstance[] = [];
+    for (let k = 0; k < rv.data.length; k++) {
+      const i = Math.round(rv.data[k]) - 1;
+      if (i < 0 || i >= mv.elements.length)
+        throw new RuntimeError("Index exceeds array bounds");
+      selected.push(mv.elements[i]);
+    }
+    if (selected.length === 1) return selected[0];
+    return {
+      kind: "class_instance_array" as const,
+      className: mv.className,
+      elements: selected,
+    };
+  }
+  throw new RuntimeError("Invalid index type for class instance array");
 }
 
 /** Resolve raw index arguments for a class instance before passing to subsref.
