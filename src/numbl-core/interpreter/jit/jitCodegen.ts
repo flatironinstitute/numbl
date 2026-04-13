@@ -478,6 +478,9 @@ function emitExpr(expr: JitExpr): string {
     case "UserCall":
       return emitUserCall(expr);
 
+    case "FuncHandleCall":
+      return emitFuncHandleCall(expr);
+
     case "Index":
       return emitIndex(expr);
   }
@@ -634,6 +637,12 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }): string {
 function emitUserCall(expr: JitExpr & { tag: "UserCall" }): string {
   const args = expr.args.map(a => emitExpr(a));
   return `$h.callUser($rt, ${JSON.stringify(expr.name)}, ${expr.jitName}, ${args.join(", ")})`;
+}
+
+function emitFuncHandleCall(expr: JitExpr & { tag: "FuncHandleCall" }): string {
+  const args = expr.args.map(a => emitExpr(a));
+  const expectedType = JSON.stringify(expr.jitType.kind);
+  return `$h.callFuncHandle($rt, ${expr.name}, ${expectedType}, ${args.join(", ")})`;
 }
 
 function emitTensorLiteral(expr: JitExpr & { tag: "TensorLiteral" }): string {

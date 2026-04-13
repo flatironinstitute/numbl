@@ -15,7 +15,7 @@ import type { JitType } from "./jitTypes.js";
 import { jitTypeKey, unifyJitTypes } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
-import { jitHelpers } from "./jitHelpers.js";
+import { jitHelpers, JitFuncHandleBailError } from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
 import {
   analyzeForLoop,
@@ -173,7 +173,13 @@ function tryJitLoop(
   if (interp.loopJitCache.has(cacheKey)) {
     const entry = interp.loopJitCache.get(cacheKey)!;
     if (entry === null) return false; // previously failed
-    return executeAndWriteBack(interp, entry.fn, inputValues, outputs);
+    return executeAndWriteBack(
+      interp,
+      entry.fn,
+      inputValues,
+      outputs,
+      cacheKey
+    );
   }
 
   // Build a synthetic FunctionDef wrapping the loop statement
@@ -244,17 +250,35 @@ function tryJitLoop(
   interp.onJitCompile?.(description, source);
 
   // Execute
-  return executeAndWriteBack(interp, compiledFn, inputValues, outputs);
+  return executeAndWriteBack(
+    interp,
+    compiledFn,
+    inputValues,
+    outputs,
+    cacheKey
+  );
 }
 
 function executeAndWriteBack(
   interp: Interpreter,
   compiledFn: (...args: unknown[]) => unknown,
   inputValues: unknown[],
-  outputs: string[]
+  outputs: string[],
+  cacheKey?: string
 ): boolean {
-  // Let runtime errors propagate (don't silently fall back)
-  const result = compiledFn(...inputValues);
+  let result: unknown;
+  try {
+    result = compiledFn(...inputValues);
+  } catch (e) {
+    if (e instanceof JitFuncHandleBailError) {
+      // Function handle returned a different type than the JIT expected.
+      // Warn, invalidate the cache entry, and fall back to interpretation.
+      console.warn(`Warning: ${e.message}`);
+      if (cacheKey) interp.loopJitCache.set(cacheKey, null);
+      return false;
+    }
+    throw e; // Let other runtime errors propagate
+  }
 
   // Write back output variables
   if (outputs.length === 1) {

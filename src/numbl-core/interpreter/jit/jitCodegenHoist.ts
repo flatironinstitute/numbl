@@ -91,6 +91,7 @@ export function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
         return;
       case "Call":
       case "UserCall":
+      case "FuncHandleCall":
         for (const a of e.args) visitExpr(a);
         return;
       case "TensorLiteral":
@@ -205,6 +206,7 @@ export function collectStructFieldReads(
         return;
       case "Call":
       case "UserCall":
+      case "FuncHandleCall":
         for (const a of e.args) visitExpr(a);
         return;
       case "Index":
@@ -314,6 +316,7 @@ export function collectStructArrayElementReads(
         return;
       case "Call":
       case "UserCall":
+      case "FuncHandleCall":
         for (const a of e.args) visitExpr(a);
         return;
       case "Index":

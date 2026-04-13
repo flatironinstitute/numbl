@@ -204,6 +204,13 @@ export function inferJitType(value: unknown): JitType {
       fields,
     };
   }
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { kind?: string }).kind === "function"
+  ) {
+    return { kind: "function_handle" };
+  }
   return { kind: "unknown" };
 }
 

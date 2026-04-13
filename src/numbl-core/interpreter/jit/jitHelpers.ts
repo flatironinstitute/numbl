@@ -122,6 +122,45 @@ import {
   tensorUnary,
 } from "./jitHelpersTensor.js";
 
+// ── Function handle return type verification ─────────────────────────
+
+/**
+ * Thrown when a function handle called from JIT code returns a type
+ * different from what the JIT expected (determined by probing at compile
+ * time). The loop runner catches this and falls back to interpretation.
+ */
+export class JitFuncHandleBailError extends Error {
+  constructor(
+    public readonly fnName: string,
+    public readonly expectedType: string,
+    public readonly actualType: string
+  ) {
+    super(
+      `JIT bail: function handle '${fnName}' returned '${actualType}' ` +
+        `but JIT expected '${expectedType}'. Falling back to interpreter. ` +
+        `(This is unusual — function handles in JIT loops are expected to ` +
+        `return a consistent type.)`
+    );
+    this.name = "JitFuncHandleBailError";
+  }
+}
+
+/** Map a runtime value to its JIT type tag string for the bail check. */
+function typeTagOf(value: unknown): string {
+  if (typeof value === "number") return "number";
+  if (typeof value === "boolean") return "number"; // MATLAB treats logical as numeric
+  if (typeof value === "object" && value !== null) {
+    const kind = (value as { kind?: string }).kind;
+    if (kind === "tensor") return "tensor";
+    if (kind === "complex_number") return "complex_or_number";
+    if (kind === "struct") return "struct";
+    if (kind === "cell") return "cell";
+    if (kind === "char") return "char";
+  }
+  if (typeof value === "string") return "string";
+  return "unknown";
+}
+
 // ── Scalar helpers ─────────────────────────────────────────────────────
 
 function mod(a: number, b: number): number {
@@ -343,6 +382,67 @@ export const jitHelpers = {
       });
       rt.popCallFrame();
     }
+  },
+
+  // Indirect call through a function handle variable. Used by the JIT for
+  // loops that call anonymous functions or named function references, e.g.
+  // kern(srcinfo, targinfo) in chunkie's adapgausskerneval. The function
+  // handle is passed as a JIT input variable; this helper invokes its
+  // jsFn closure (or falls back to rt.dispatch for non-closure handles).
+  //
+  // `expectedType` is the type tag that the JIT lowering inferred at
+  // compile time (via probing). After every call, the result is checked
+  // against this tag. On mismatch a JitFuncHandleBailError is thrown,
+  // causing the loop runner to fall back to the interpreter.
+  //
+  // Fast path: for handles with jsFn, skip call frame push/pop. This
+  // matters in hot loops where per-call frame management dominates.
+  // The slow path (dispatch) still uses full call frame tracking.
+  callFuncHandle: (
+    rt: {
+      pushCallFrame: (name: string) => void;
+      popCallFrame: () => void;
+      pushCleanupScope: () => void;
+      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
+      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
+      annotateError: (e: unknown) => void;
+    },
+    fn: RuntimeFunction,
+    expectedType: string,
+    ...args: unknown[]
+  ) => {
+    let result: unknown;
+    // Fast path: direct jsFn call without frame overhead
+    if (fn.jsFn) {
+      if (fn.jsFnExpectsNargout) result = fn.jsFn(1, ...args);
+      else result = fn.jsFn(...args);
+    } else {
+      // Slow path: dispatch through runtime with full call frame tracking
+      rt.pushCallFrame(fn.name);
+      rt.pushCleanupScope();
+      try {
+        result = rt.dispatch(fn.name, 1, args);
+      } catch (e) {
+        rt.annotateError(e);
+        throw e;
+      } finally {
+        rt.popAndRunCleanups((cfn: RuntimeFunction) => {
+          if (cfn.jsFn) {
+            if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
+            else cfn.jsFn();
+          } else {
+            rt.dispatch(cfn.name, 0, []);
+          }
+        });
+        rt.popCallFrame();
+      }
+    }
+    // Verify the result type matches what the JIT expected
+    const actualType = typeTagOf(result);
+    if (actualType !== expectedType) {
+      throw new JitFuncHandleBailError(fn.name, expectedType, actualType);
+    }
+    return result;
   },
 } as Record<string, unknown>;
 

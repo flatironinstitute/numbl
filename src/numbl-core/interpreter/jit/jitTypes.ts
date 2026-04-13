@@ -43,6 +43,7 @@ export type JitType =
   | { kind: "sparse_matrix"; isComplex: boolean; m?: number; n?: number }
   | { kind: "cell"; shape?: number[] }
   | { kind: "dictionary" }
+  | { kind: "function_handle" }
   | { kind: "unknown" };
 
 // ── Sign helpers ─────────────────────────────────────────────────────────
@@ -136,6 +137,8 @@ export function jitTypeKey(t: JitType): string {
       }
       return k;
     }
+    case "function_handle":
+      return "function_handle";
     case "sparse_matrix": {
       let k = "sparse";
       if (t.m !== undefined && t.n !== undefined) k += `[${t.m}x${t.n}]`;
@@ -307,6 +310,9 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
     }
     if (a.kind === "dictionary" && b.kind === "dictionary") {
       return { kind: "dictionary" };
+    }
+    if (a.kind === "function_handle" && b.kind === "function_handle") {
+      return { kind: "function_handle" };
     }
     if (a.kind === "cell" && b.kind === "cell") {
       // Unify shapes: same→keep, different→drop
@@ -507,6 +513,20 @@ export type JitExpr =
       structArrayFieldName: string;
       indexExpr: JitExpr;
       leafFieldName: string;
+      jitType: JitType;
+    }
+  | {
+      /**
+       * Indirect call through a function handle variable: `f(a, b)` where
+       * `f` has JitType `function_handle`. The codegen emits
+       * `$h.callFuncHandle($rt, f, arg1, arg2, ...)` which invokes the
+       * handle via its `jsFn` closure (or falls back to `rt.dispatch`).
+       * The `returnType` is determined at lowering time by probing the
+       * function handle's runtime value.
+       */
+      tag: "FuncHandleCall";
+      name: string;
+      args: JitExpr[];
       jitType: JitType;
     };
 
