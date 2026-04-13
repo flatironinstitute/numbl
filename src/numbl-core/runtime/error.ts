@@ -16,6 +16,13 @@ export type CallFrame = {
   callerSourceLine?: string;
 };
 
+export class CancellationError extends Error {
+  constructor() {
+    super("Execution cancelled");
+    this.name = "CancellationError";
+  }
+}
+
 export class RuntimeError extends Error {
   /** Source span where the error occurred (carries file name + per-file offsets) */
   span: Span | null;

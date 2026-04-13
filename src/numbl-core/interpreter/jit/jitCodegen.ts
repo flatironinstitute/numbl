@@ -349,6 +349,7 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
           `${indent}for (var ${t} = ${start}; ${t} <= ${end}; ${t} += 1) {`
         );
       }
+      lines.push(`${indent}  $rt.checkCancel();`);
       lines.push(`${indent}  ${v} = ${t};`);
       emitStmts(lines, stmt.body, indent + "  ");
       lines.push(`${indent}}`);
@@ -357,6 +358,7 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
 
     case "While":
       lines.push(`${indent}while (${emitTruthiness(stmt.cond)}) {`);
+      lines.push(`${indent}  $rt.checkCancel();`);
       emitStmts(lines, stmt.body, indent + "  ");
       lines.push(`${indent}}`);
       break;

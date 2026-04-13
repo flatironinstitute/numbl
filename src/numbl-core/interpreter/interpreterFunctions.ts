@@ -39,6 +39,7 @@ export function callFunction(
   args: unknown[],
   nargout: number
 ): unknown {
+  this.rt.checkCancel();
   // 0. Interpreter special builtins (need interpreter context)
   const specialHandler = getInterpreterSpecialBuiltin(name);
   if (specialHandler) {
