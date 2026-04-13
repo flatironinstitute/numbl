@@ -461,6 +461,60 @@ function lowerSliceAliasRead(
 }
 
 /**
+ * Materialize a slice alias as a real tensor. Called when a slice-aliased
+ * name is used as a whole value (e.g. `rx .^ 2` where `rx = A(1,:)`).
+ * Only supports 2D base tensors with exactly one colon dimension.
+ */
+function materializeSliceAlias(
+  ctx: LowerCtx,
+  alias: SliceAlias
+): JitExpr | null {
+  const bt = alias.baseType;
+  if (bt.kind !== "tensor") return null;
+  if (!bt.shape || bt.shape.length !== 2) return null;
+  if (alias.colonPositions.length !== 1) return null;
+  if (alias.template.length !== 2) return null;
+
+  const colonPos = alias.colonPositions[0];
+  const fixedSlot = alias.template[colonPos === 0 ? 1 : 0];
+  if (fixedSlot.kind !== "expr") return null;
+
+  const sliceLen = alias.sliceShape[0];
+  if (sliceLen <= 0) return null;
+
+  // Emit: $h.__extractSlice2d(base, fixedIdx, colonPos, sliceLen)
+  ctx._hasTensorOps = true;
+  const baseVar: JitExpr = {
+    tag: "Var",
+    name: alias.baseName,
+    jitType: alias.baseType,
+  };
+  const shape =
+    colonPos === 0
+      ? [sliceLen, 1] // column slice → Mx1
+      : [1, sliceLen]; // row slice → 1xN
+  return {
+    tag: "Call",
+    name: "__extractSlice2d",
+    args: [
+      baseVar,
+      fixedSlot.expr,
+      {
+        tag: "NumberLiteral",
+        value: colonPos,
+        jitType: { kind: "number", exact: colonPos },
+      },
+      {
+        tag: "NumberLiteral",
+        value: sliceLen,
+        jitType: { kind: "number", exact: sliceLen },
+      },
+    ],
+    jitType: { kind: "tensor", isComplex: false, shape, ndim: 2 },
+  };
+}
+
+/**
  * Lower `t(i) = v` (scalar indexed assignment on a tensor base).
  *
  * Currently supports the narrow case needed for the ptloop pattern:
@@ -979,10 +1033,13 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       };
 
     case "Ident": {
-      // Slice alias names can't be read as plain values (they don't
-      // correspond to a real tensor at runtime — only to a set of scalar
-      // locals and a substitution rule). Bail.
-      if (ctx.sliceAliases.has(expr.name)) return null;
+      // When a slice alias is read as a whole value (not indexed), we
+      // materialize it into a real tensor via a helper call. This lets
+      // patterns like `rx = A(1,:); r2 = rx .^ 2;` work in the JIT.
+      if (ctx.sliceAliases.has(expr.name)) {
+        const alias = ctx.sliceAliases.get(expr.name)!;
+        return materializeSliceAlias(ctx, alias);
+      }
 
       // Known numeric constants
       const constVal = KNOWN_CONSTANTS[expr.name];
@@ -1013,6 +1070,38 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       const right = lowerExpr(ctx, expr.right);
       if (!right) return null;
       const resultType = binaryResultType(expr.op, left.jitType, right.jitType);
+
+      // Matrix multiply: tensor * tensor goes through the mtimes IBuiltin
+      // rather than the element-wise Binary path (which only handles scalar
+      // or broadcast element-wise ops).
+      if (
+        !resultType &&
+        expr.op === BinaryOperation.Mul &&
+        isTensorType(left.jitType) &&
+        isTensorType(right.jitType)
+      ) {
+        const lt = left.jitType as Extract<JitType, { kind: "tensor" }>;
+        const rt = right.jitType as Extract<JitType, { kind: "tensor" }>;
+        // Infer output shape from input shapes when known: (M×K) * (K×N) → (M×N)
+        const outShape =
+          lt.shape && rt.shape && lt.shape.length === 2 && rt.shape.length === 2
+            ? [lt.shape[0], rt.shape[1]]
+            : undefined;
+        const isComplex = (lt.isComplex || rt.isComplex) ?? false;
+        ctx._hasTensorOps = true;
+        return {
+          tag: "Call",
+          name: "__mtimes",
+          args: [left, right],
+          jitType: {
+            kind: "tensor",
+            isComplex,
+            ...(outShape ? { shape: outShape } : {}),
+            ndim: 2,
+          },
+        };
+      }
+
       if (!resultType || resultType.kind === "unknown") return null;
 
       // Track ops that need $h helpers (tensor or complex)
@@ -1259,6 +1348,59 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
             op: UnaryOperation.Not,
             operand,
             jitType: { kind: "boolean" },
+          };
+        }
+      }
+
+      // Fold `bsxfun(@op, a, b)` where @op is a known arithmetic operator
+      // into a direct call to the runtime's broadcasting-aware arithmetic
+      // helpers (mSub, mElemDiv, etc.). These handle shape broadcasting
+      // correctly, unlike the JIT's element-wise tSub/tDiv which require
+      // same-shape operands.
+      if (
+        expr.name === "bsxfun" &&
+        expr.args.length === 3 &&
+        expr.args[0].type === "FuncHandle"
+      ) {
+        const bsxfunHelperMap: Record<string, string> = {
+          minus: "__mSub",
+          plus: "__mAdd",
+          rdivide: "__mElemDiv",
+          // ldivide not yet supported
+          times: "__mElemMul",
+          power: "__mElemPow",
+        };
+        const helperName = bsxfunHelperMap[expr.args[0].name];
+        if (helperName) {
+          const left = lowerExpr(ctx, expr.args[1]);
+          if (!left) return null;
+          const right = lowerExpr(ctx, expr.args[2]);
+          if (!right) return null;
+          // Compute broadcast result type
+          const binOp =
+            expr.args[0].name === "minus"
+              ? BinaryOperation.Sub
+              : expr.args[0].name === "plus"
+                ? BinaryOperation.Add
+                : expr.args[0].name === "rdivide"
+                  ? BinaryOperation.ElemDiv
+                  : expr.args[0].name === "ldivide"
+                    ? BinaryOperation.ElemLeftDiv
+                    : expr.args[0].name === "times"
+                      ? BinaryOperation.ElemMul
+                      : BinaryOperation.ElemPow;
+          const resultType = binaryResultType(
+            binOp,
+            left.jitType,
+            right.jitType
+          );
+          if (!resultType || resultType.kind === "unknown") return null;
+          ctx._hasTensorOps = true;
+          return {
+            tag: "Call",
+            name: helperName,
+            args: [left, right],
+            jitType: resultType,
           };
         }
       }

@@ -17,6 +17,17 @@ import {
   type RuntimeFunction,
 } from "../../runtime/types.js";
 
+import {
+  mTranspose,
+  mConjugateTranspose,
+  mMul,
+  mAdd,
+  mSub,
+  mElemMul,
+  mElemDiv,
+  mElemPow,
+} from "../../helpers/arithmetic.js";
+
 // Re-export sub-modules for direct import where needed
 export {
   re,
@@ -203,6 +214,16 @@ export const jitHelpers = {
 
   // Tensor unary
   tNeg: tensorNeg,
+  tTranspose: mTranspose,
+  tCTranspose: mConjugateTranspose,
+  __mtimes: mMul,
+
+  // Broadcasting-aware arithmetic (used by bsxfun folding)
+  __mAdd: mAdd,
+  __mSub: mSub,
+  __mElemMul: mElemMul,
+  __mElemDiv: mElemDiv,
+  __mElemPow: mElemPow,
 
   // Tensor math (real only)
   tSin: (a: RuntimeTensor) => tensorUnary(a, Math.sin),
@@ -225,6 +246,31 @@ export const jitHelpers = {
   tLog2: (a: RuntimeTensor) => tensorUnary(a, Math.log2),
   tLog10: (a: RuntimeTensor) => tensorUnary(a, Math.log10),
   tSign: (a: RuntimeTensor) => tensorUnary(a, Math.sign),
+
+  // Extract a row or column slice from a 2D tensor as a real tensor.
+  // colonPos=0 → column slice (fix col, vary row): A(:, fixedIdx)
+  // colonPos=1 → row slice (fix row, vary col): A(fixedIdx, :)
+  __extractSlice2d: (
+    base: RuntimeTensor,
+    fixedIdx: number,
+    colonPos: number,
+    sliceLen: number
+  ): RuntimeTensor => {
+    const d = base.data;
+    const d0 = base.shape[0]; // number of rows (column-major stride)
+    const fi = Math.round(fixedIdx) - 1; // 0-based fixed index
+    const out = new FloatXArray(sliceLen);
+    if (colonPos === 0) {
+      // Column slice: A(:, fi) — contiguous in column-major
+      const offset = fi * d0;
+      for (let i = 0; i < sliceLen; i++) out[i] = d[offset + i];
+      return makeTensor(out, undefined, [sliceLen, 1]);
+    } else {
+      // Row slice: A(fi, :) — strided in column-major
+      for (let j = 0; j < sliceLen; j++) out[j] = d[j * d0 + fi];
+      return makeTensor(out, undefined, [1, sliceLen]);
+    }
+  },
 
   // Tensor literal construction
   mkTensor: (data: number[], shape: number[]) =>
