@@ -599,6 +599,27 @@ function cTruthy(v: unknown): boolean {
   return c.re !== 0 || c.im !== 0;
 }
 
+// ── Tensor coercion (scalar → 1x1 tensor) ───────────────────────────────
+//
+// Used by the StructArrayMemberRead codegen path when the leaf field
+// type was unified across mixed tensor-and-scalar element values: a
+// chunkie-style struct array where some elements hold a 1-element row
+// vector stored as a bare number (e.g. `T.nodes(i).xi = 87`) and others
+// hold genuine row-vector tensors. Wrapping the runtime field value in
+// `asTensor` ensures the JIT's tensor-read fast paths always see a real
+// RuntimeTensor, at the cost of one typeof check + an allocation per
+// scalar leaf.
+
+function asTensor(v: unknown): RuntimeTensor {
+  if (typeof v === "number") {
+    return makeTensor(new FloatXArray([v]), undefined, [1, 1]);
+  }
+  if (typeof v === "boolean") {
+    return makeTensor(new FloatXArray([v ? 1 : 0]), undefined, [1, 1]);
+  }
+  return v as RuntimeTensor;
+}
+
 // ── Exported helpers object ─────────────────────────────────────────────
 
 export const jitHelpers = {
@@ -704,6 +725,9 @@ export const jitHelpers = {
 
   // Unshare a tensor for COW write. Returns `t` if _rc <= 1, else a fresh copy.
   unshare,
+
+  // Scalar → 1x1 tensor coercion for mixed-type struct-array fields.
+  asTensor,
 
   // Scalar accessors
   re,

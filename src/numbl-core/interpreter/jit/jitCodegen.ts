@@ -843,7 +843,16 @@ function emitExpr(expr: JitExpr): string {
       // Match MATLAB indexing semantics: Math.round then subtract 1
       // for 0-based JS array access. Same rounding strategy used by
       // the tensor index helpers.
-      return `${elementsAlias}[Math.round(${idxCode}) - 1].fields.get(${JSON.stringify(expr.leafFieldName)})`;
+      const raw = `${elementsAlias}[Math.round(${idxCode}) - 1].fields.get(${JSON.stringify(expr.leafFieldName)})`;
+      // If the leaf type is a tensor, the field might hold a bare
+      // scalar number at runtime (a chunkie quirk — leaf nodes with a
+      // single point store `xi = 87` instead of a 1x1 tensor). Wrap
+      // in asTensor so downstream tensor-read helpers always see a
+      // real RuntimeTensor.
+      if (expr.jitType.kind === "tensor") {
+        return `$h.asTensor(${raw})`;
+      }
+      return raw;
     }
 
     case "StringLiteral":

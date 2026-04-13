@@ -563,8 +563,8 @@ function tryLowerAsSliceBind(
 
   // Real tensors only.
   if (baseType.isComplex === true) return "bail";
-  // Fully-known shape required to infer the slice dimensions.
-  if (!baseType.shape || baseType.shape.some(d => d === -1)) return "bail";
+  // Shape must exist so we can check ndim and colon-dim sizes.
+  if (!baseType.shape) return "bail";
   // Range indices aren't supported yet (only bare `:`).
   if (rawIndices.some(idx => idx.type === "Range")) return "bail";
   // Require exact-arity multi-dim indexing.
@@ -581,8 +581,14 @@ function tryLowerAsSliceBind(
   for (let d = 0; d < rawIndices.length; d++) {
     const idx = rawIndices[d];
     if (idx.type === "Colon") {
+      // The colon dimension's size must be statically known so the
+      // slice alias can substitute read-site indices correctly.
+      // Non-colon dimensions are scalar indices whose runtime value
+      // is captured at bind time, so they don't need a known size.
+      const dimSize = baseType.shape[d];
+      if (dimSize === -1 || dimSize === undefined) return "bail";
       template.push({ kind: "colon" });
-      sliceShape.push(baseType.shape[d]);
+      sliceShape.push(dimSize);
       colonPositions.push(d);
     } else {
       const lowered = lowerExpr(ctx, idx);
