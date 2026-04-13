@@ -30,6 +30,7 @@ import {
   isRuntimeNumber,
   isRuntimeTensor,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeCell,
   isRuntimeLogical,
   isRuntimeSparseMatrix,
@@ -37,6 +38,8 @@ import {
   RuntimeChar,
   RuntimeCell,
   type RuntimeComplexNumber,
+  type RuntimeClassInstance,
+  type RuntimeClassInstanceArray,
 } from "../runtime/types.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { type ItemType } from "../lowering/itemTypes.js";
@@ -1277,7 +1280,12 @@ export class Runtime {
       typeof e === "number" ? null : ensureRuntimeValue(e)
     );
     if (mvals.some(v => v && isRuntimeClassInstance(v))) {
-      return this.dispatch("horzcat", 1, flat);
+      // If the class overloads horzcat, dispatch to it
+      if (this._classHasMethod(mvals, "horzcat")) {
+        return this.dispatch("horzcat", 1, flat);
+      }
+      // Otherwise create a default object array
+      return defaultClassInstanceHorzcat(flat);
     }
     return opHorzcat(elems);
   }
@@ -1288,9 +1296,29 @@ export class Runtime {
       typeof r === "number" ? null : ensureRuntimeValue(r)
     );
     if (mvals.some(v => v && isRuntimeClassInstance(v))) {
-      return this.dispatch("vertcat", 1, rows);
+      // If the class overloads vertcat, dispatch to it
+      if (this._classHasMethod(mvals, "vertcat")) {
+        return this.dispatch("vertcat", 1, rows);
+      }
+      // Otherwise create a default object array
+      return defaultClassInstanceVertcat(rows);
     }
     return opVertcat(rows);
+  }
+  /** Check if any class instance in the values has a given method. */
+  private _classHasMethod(
+    mvals: (RuntimeValue | null)[],
+    methodName: string
+  ): boolean {
+    if (!this.resolveClassMethod) return false;
+    for (const v of mvals) {
+      if (v && isRuntimeClassInstance(v)) {
+        if (this.resolveClassMethod(v.className, methodName) !== null) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
   public switchMatch(control: unknown, caseVal: unknown): boolean {
     return _switchMatch(control, caseVal);
@@ -1876,4 +1904,50 @@ export function buildStackField(e: RuntimeError): RuntimeValue {
   }
 
   return RTV.structArray(fieldNames, elements);
+}
+
+// ── Default class instance array concatenation ─────────────────────────
+
+/** Collect class instances (and class instance arrays) into a flat list. */
+function collectClassInstances(items: unknown[]): RuntimeClassInstance[] {
+  const out: RuntimeClassInstance[] = [];
+  for (const item of items) {
+    const rv = ensureRuntimeValue(item);
+    if (isRuntimeClassInstance(rv)) {
+      out.push(rv);
+    } else if (isRuntimeClassInstanceArray(rv)) {
+      out.push(...rv.elements);
+    } else {
+      throw new RuntimeError(
+        `Cannot concatenate ${kstr(rv)} with class instances`
+      );
+    }
+  }
+  return out;
+}
+
+/** Default horzcat for class instances: creates a 1×N class instance array. */
+function defaultClassInstanceHorzcat(
+  items: unknown[]
+): RuntimeClassInstance | RuntimeClassInstanceArray {
+  const elements = collectClassInstances(items);
+  if (elements.length === 1) return elements[0];
+  return {
+    kind: "class_instance_array",
+    className: elements[0].className,
+    elements,
+  };
+}
+
+/** Default vertcat for class instances: creates an N×1 class instance array. */
+function defaultClassInstanceVertcat(
+  rows: unknown[]
+): RuntimeClassInstance | RuntimeClassInstanceArray {
+  const elements = collectClassInstances(rows);
+  if (elements.length === 1) return elements[0];
+  return {
+    kind: "class_instance_array",
+    className: elements[0].className,
+    elements,
+  };
 }

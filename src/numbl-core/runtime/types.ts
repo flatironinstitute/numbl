@@ -19,6 +19,7 @@ export type RuntimeValue =
   | RuntimeDummyHandle
   | RuntimeGraphicsHandle
   | RuntimeStructArray
+  | RuntimeClassInstanceArray
   | RuntimeSparseMatrix
   | RuntimeDictionary;
 
@@ -85,6 +86,12 @@ export const isRuntimeStructArray = (
   typeof value === "object" &&
   value !== null &&
   (value as RuntimeStructArray).kind === "struct_array";
+export const isRuntimeClassInstanceArray = (
+  value: RuntimeValue
+): value is RuntimeClassInstanceArray =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as RuntimeClassInstanceArray).kind === "class_instance_array";
 export const isRuntimeSparseMatrix = (
   value: RuntimeValue
 ): value is RuntimeSparseMatrix =>
@@ -108,6 +115,8 @@ export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeStruct(value)) return "struct";
   if (isRuntimeFunction(value)) return "function";
   if (isRuntimeClassInstance(value)) return `instance of ${value.className}`;
+  if (isRuntimeClassInstanceArray(value))
+    return `array of ${value.className} instances`;
   if (isRuntimeComplexNumber(value)) return "complex number";
   if (isRuntimeDummyHandle(value)) return "dummy handle";
   if (isRuntimeGraphicsHandle(value)) return "graphics handle";
@@ -173,6 +182,14 @@ export type RuntimeClassInstance = {
   /** For classes that inherit from built-in types (e.g. classdef Foo < double),
    *  stores the underlying built-in data. */
   _builtinData?: RuntimeValue;
+};
+
+/** A 1-D array of class instances that all share the same class.
+ *  Created by default horzcat/vertcat when the class doesn't overload them. */
+export type RuntimeClassInstanceArray = {
+  kind: "class_instance_array";
+  className: string;
+  elements: RuntimeClassInstance[];
 };
 
 export type RuntimeComplexNumber = {

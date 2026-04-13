@@ -20,6 +20,7 @@ import {
   isRuntimeDummyHandle,
   isRuntimeGraphicsHandle,
   isRuntimeDictionary,
+  isRuntimeClassInstanceArray,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
@@ -53,6 +54,7 @@ function getShape(v: RuntimeValue): number[] {
   if (isRuntimeSparseMatrix(v)) return [v.m, v.n];
   if (isRuntimeCell(v)) return v.shape;
   if (isRuntimeStructArray(v)) return [1, v.elements.length];
+  if (isRuntimeClassInstanceArray(v)) return [1, v.elements.length];
   return [1, 1];
 }
 
@@ -236,6 +238,7 @@ defineBuiltin({
       if (isRuntimeChar(v)) return v.value.length === 0;
       if (isRuntimeString(v)) return false;
       if (isRuntimeStructArray(v)) return v.elements.length === 0;
+      if (isRuntimeClassInstanceArray(v)) return v.elements.length === 0;
       return false;
     }),
   ],
@@ -329,6 +332,7 @@ defineBuiltin({
         if (isRuntimeChar(v)) return v.value.length;
         if (isRuntimeString(v)) return 1;
         if (isRuntimeStructArray(v)) return v.elements.length;
+        if (isRuntimeClassInstanceArray(v)) return v.elements.length;
         return 1;
       },
     },
@@ -370,6 +374,7 @@ defineBuiltin({
         }
         if (isRuntimeString(v)) return 1;
         if (isRuntimeStructArray(v)) return v.elements.length;
+        if (isRuntimeClassInstanceArray(v)) return v.elements.length;
         return 1;
       },
     },
@@ -509,6 +514,7 @@ defineBuiltin({
         if (isRuntimeCell(v)) return mkChar("cell");
         if (isRuntimeDictionary(v)) return mkChar("dictionary");
         if (isRuntimeClassInstance(v)) return mkChar(v.className);
+        if (isRuntimeClassInstanceArray(v)) return mkChar(v.className);
         if (isRuntimeFunction(v)) return mkChar("function_handle");
         if (isRuntimeDummyHandle(v)) return mkChar("dummy_handle");
         if (isRuntimeGraphicsHandle(v))
