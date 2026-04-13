@@ -1659,6 +1659,10 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   // stubs don't track real handles, so they hand back placeholder values
   // only when an output is explicitly requested.
 
+  registerSpecial("ishold", () => {
+    return rt.ishold();
+  });
+
   registerSpecial("figure", (nargout, args) => {
     const handle = args.length > 0 ? args[0] : 1;
     _plotInstr(rt.plotInstructions, { type: "set_figure_handle", handle });
@@ -1704,6 +1708,11 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   registerSpecialVoid("hold", args => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_hold", value: args[0] });
+      // Also update rt.holdState so ishold() returns the correct value.
+      const last = rt.plotInstructions[rt.plotInstructions.length - 1];
+      if (last && last.type === "set_hold") {
+        rt.holdState = last.value;
+      }
     }
   });
 

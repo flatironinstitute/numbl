@@ -131,6 +131,10 @@ function dispatchPlotCall(
       return rt.donutchart_call(args.map(a => ensureRuntimeValue(a)));
     case "heatmap":
       return rt.heatmap_call(args.map(a => ensureRuntimeValue(a)));
+    case "streamline":
+      return rt.streamline_call(args.map(a => ensureRuntimeValue(a)));
+    case "stream2":
+      return rt.stream2_call(args.map(a => ensureRuntimeValue(a)));
     default:
       return undefined;
   }
