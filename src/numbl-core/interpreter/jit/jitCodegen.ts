@@ -1,5 +1,7 @@
 /**
  * JIT IR -> JavaScript code generation.
+ *
+ * IR walkers for hoist-pass data collection are in jitCodegenHoist.ts.
  */
 
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
@@ -10,6 +12,14 @@ import {
   isTensorType,
 } from "./jitTypes.js";
 import { getIBuiltin } from "../builtins/types.js";
+import {
+  type HoistedAlias,
+  structFieldKey,
+  structArrayElementsKey,
+  collectTensorUsage,
+  collectStructFieldReads,
+  collectStructArrayElementReads,
+} from "./jitCodegenHoist.js";
 
 // ── JS reserved words to mangle ─────────────────────────────────────────
 
@@ -93,33 +103,6 @@ let _returnExpr = "undefined";
 let _fileName: string | undefined;
 let _fileEmitted = false;
 
-/**
- * Hoisted aliases for a tensor variable that's read (and optionally
- * written) in the loop body. Each entry maps the original variable name
- * to the local JS identifiers for its `.data`, `.data.length`, `.shape[0]`,
- * and `.shape[1]` (the latter two are only emitted if needed by the
- * dimensionality of the index ops in the body).
- *
- * If `isWriteTarget` is true the hoist sequence calls `$h.unshare(t)`
- * before reading `.data`, so the per-iter store goes through the hoisted
- * `.data` alias safely (no risk of mutating shared state).
- *
- * `maxDim` records the largest indexing arity used on this variable in
- * the body, which determines whether `.shape[0]` (≥ 2D) and `.shape[1]`
- * (3D) need to be hoisted. `isParam` distinguishes the entry-time
- * initialization (params start with a value) from locals which only get
- * their alias filled by the per-Assign refresh path.
- */
-interface HoistedAlias {
-  data: string;
-  len: string;
-  d0: string;
-  d1: string;
-  maxDim: number;
-  isWriteTarget: boolean;
-  isParam: boolean;
-}
-
 let _hoistedAliases: Map<string, HoistedAlias> = new Map();
 
 /**
@@ -132,10 +115,6 @@ let _hoistedAliases: Map<string, HoistedAlias> = new Map();
  */
 let _hoistedStructFields: Map<string, string> = new Map();
 
-function structFieldKey(baseName: string, fieldName: string): string {
-  return `${baseName}.${fieldName}`;
-}
-
 /**
  * Hoisted struct-array element storage: `(structVarName,
  * structArrayFieldName)` → local JS identifier bound to
@@ -146,13 +125,6 @@ function structFieldKey(baseName: string, fieldName: string): string {
  * 13 lowering for the parser pattern this matches.
  */
 let _hoistedStructArrayElements: Map<string, string> = new Map();
-
-function structArrayElementsKey(
-  structVarName: string,
-  structArrayFieldName: string
-): string {
-  return `${structVarName}.${structArrayFieldName}`;
-}
 
 export function generateJS(
   body: JitStmt[],
@@ -307,367 +279,6 @@ export function generateJS(
   lines.push(`${indent}return ${_returnExpr};`);
 
   return lines.join("\n");
-}
-
-/**
- * Per-variable indexing usage collected by walking the JIT IR. Used by
- * `generateJS` to decide which tensors to hoist and how many shape
- * dimensions each one needs.
- *
- * `isReal` is true only if every Var/AssignIndex/AssignIndexRange
- * occurrence of this name carries a real (non-complex) tensor type.
- * If any single use is complex, the whole name is excluded from
- * hoisting (the codegen falls back to the per-call generic helpers).
- */
-interface TensorUsage {
-  maxReadDim: number;
-  maxWriteDim: number;
-  isReal: boolean;
-}
-
-/**
- * Walk the JIT IR collecting, for every variable that appears as the base
- * of an `Index` read, an `AssignIndex` write, or an `AssignIndexRange`
- * write, the maximum indexing arity used and whether all uses are on a
- * real tensor. The hoist pass uses this to decide which names get a
- * hoisted alias and how many shape dims it needs.
- */
-function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
-  const out = new Map<string, TensorUsage>();
-  const bump = (
-    name: string,
-    isRead: boolean,
-    dim: number,
-    isReal: boolean
-  ): void => {
-    let u = out.get(name);
-    if (!u) {
-      u = { maxReadDim: 0, maxWriteDim: 0, isReal: true };
-      out.set(name, u);
-    }
-    if (!isReal) u.isReal = false;
-    if (isRead) {
-      if (dim > u.maxReadDim) u.maxReadDim = dim;
-    } else {
-      if (dim > u.maxWriteDim) u.maxWriteDim = dim;
-    }
-  };
-
-  const visitExpr = (e: JitExpr): void => {
-    switch (e.tag) {
-      case "Index":
-        if (e.base.tag === "Var" && e.base.jitType.kind === "tensor") {
-          const real = e.base.jitType.isComplex === false;
-          bump(e.base.name, true, e.indices.length, real);
-        }
-        visitExpr(e.base);
-        for (const idx of e.indices) visitExpr(idx);
-        return;
-      case "Binary":
-        visitExpr(e.left);
-        visitExpr(e.right);
-        return;
-      case "Unary":
-        visitExpr(e.operand);
-        return;
-      case "Call":
-      case "UserCall":
-        for (const a of e.args) visitExpr(a);
-        return;
-      case "TensorLiteral":
-        for (const row of e.rows) for (const c of row) visitExpr(c);
-        return;
-      case "VConcatGrow":
-        visitExpr(e.base);
-        visitExpr(e.value);
-        return;
-      case "MemberRead":
-        // No tensor-usage contribution; the struct base is not a tensor
-        // index target. The struct-field hoisting is collected by a
-        // separate walker (`collectStructFieldReads`).
-        return;
-      case "StructArrayMemberRead":
-        // The struct base is not a tensor either. Recurse into the
-        // index expression so that any tensor Var used inside (e.g.
-        // `T.nodes(someTensor(k)).chld`) still gets its hoist.
-        visitExpr(e.indexExpr);
-        return;
-      default:
-        return;
-    }
-  };
-
-  const visitStmts = (stmts: JitStmt[]): void => {
-    for (const s of stmts) {
-      switch (s.tag) {
-        case "Assign":
-        case "ExprStmt":
-          visitExpr(s.expr);
-          break;
-        case "AssignIndex": {
-          if (s.baseType.kind === "tensor") {
-            bump(
-              s.baseName,
-              false,
-              s.indices.length,
-              s.baseType.isComplex === false
-            );
-          }
-          for (const idx of s.indices) visitExpr(idx);
-          visitExpr(s.value);
-          break;
-        }
-        case "AssignIndexRange": {
-          if (s.baseType.kind === "tensor") {
-            bump(s.baseName, false, 1, s.baseType.isComplex === false);
-          }
-          if (s.srcType.kind === "tensor") {
-            bump(s.srcBaseName, true, 1, s.srcType.isComplex === false);
-          }
-          visitExpr(s.dstStart);
-          visitExpr(s.dstEnd);
-          // stage 9: srcStart/srcEnd are null for whole-tensor RHS — the
-          // source's hoisted length alias is used instead at codegen time.
-          if (s.srcStart) visitExpr(s.srcStart);
-          if (s.srcEnd) visitExpr(s.srcEnd);
-          break;
-        }
-        case "MultiAssign":
-          for (const a of s.args) visitExpr(a);
-          break;
-        case "If":
-          visitExpr(s.cond);
-          visitStmts(s.thenBody);
-          for (const eib of s.elseifBlocks) {
-            visitExpr(eib.cond);
-            visitStmts(eib.body);
-          }
-          if (s.elseBody) visitStmts(s.elseBody);
-          break;
-        case "For":
-          visitExpr(s.start);
-          if (s.step) visitExpr(s.step);
-          visitExpr(s.end);
-          visitStmts(s.body);
-          break;
-        case "While":
-          visitExpr(s.cond);
-          visitStmts(s.body);
-          break;
-        default:
-          break;
-      }
-    }
-  };
-
-  visitStmts(body);
-  return out;
-}
-
-/**
- * Walk the JIT IR collecting all unique `(baseName, fieldName)` pairs
- * referenced by `MemberRead` nodes. The codegen hoists each pair as a
- * local alias at function entry. Keys are `"<baseName>.<fieldName>"`;
- * values carry the component parts so emission can use them directly.
- */
-function collectStructFieldReads(
-  body: JitStmt[]
-): Map<string, { baseName: string; fieldName: string }> {
-  const out = new Map<string, { baseName: string; fieldName: string }>();
-
-  const visitExpr = (e: JitExpr): void => {
-    switch (e.tag) {
-      case "MemberRead": {
-        const key = structFieldKey(e.baseName, e.fieldName);
-        if (!out.has(key)) {
-          out.set(key, { baseName: e.baseName, fieldName: e.fieldName });
-        }
-        return;
-      }
-      case "Binary":
-        visitExpr(e.left);
-        visitExpr(e.right);
-        return;
-      case "Unary":
-        visitExpr(e.operand);
-        return;
-      case "Call":
-      case "UserCall":
-        for (const a of e.args) visitExpr(a);
-        return;
-      case "Index":
-        visitExpr(e.base);
-        for (const idx of e.indices) visitExpr(idx);
-        return;
-      case "TensorLiteral":
-        for (const row of e.rows) for (const c of row) visitExpr(c);
-        return;
-      case "VConcatGrow":
-        visitExpr(e.base);
-        visitExpr(e.value);
-        return;
-      case "StructArrayMemberRead":
-        visitExpr(e.indexExpr);
-        return;
-      default:
-        return;
-    }
-  };
-
-  const visitStmts = (stmts: JitStmt[]): void => {
-    for (const s of stmts) {
-      switch (s.tag) {
-        case "Assign":
-        case "ExprStmt":
-          visitExpr(s.expr);
-          break;
-        case "AssignIndex":
-          for (const idx of s.indices) visitExpr(idx);
-          visitExpr(s.value);
-          break;
-        case "AssignIndexRange":
-          visitExpr(s.dstStart);
-          visitExpr(s.dstEnd);
-          if (s.srcStart) visitExpr(s.srcStart);
-          if (s.srcEnd) visitExpr(s.srcEnd);
-          break;
-        case "MultiAssign":
-          for (const a of s.args) visitExpr(a);
-          break;
-        case "If":
-          visitExpr(s.cond);
-          visitStmts(s.thenBody);
-          for (const eib of s.elseifBlocks) {
-            visitExpr(eib.cond);
-            visitStmts(eib.body);
-          }
-          if (s.elseBody) visitStmts(s.elseBody);
-          break;
-        case "For":
-          visitExpr(s.start);
-          if (s.step) visitExpr(s.step);
-          visitExpr(s.end);
-          visitStmts(s.body);
-          break;
-        case "While":
-          visitExpr(s.cond);
-          visitStmts(s.body);
-          break;
-        default:
-          break;
-      }
-    }
-  };
-
-  visitStmts(body);
-  return out;
-}
-
-/**
- * Walk the JIT IR collecting all unique `(structVarName,
- * structArrayFieldName)` pairs referenced by `StructArrayMemberRead`
- * nodes. The codegen hoists each pair as a local alias at function
- * entry bound to the underlying `RuntimeStruct[]` element array. Keys
- * are `"<structVarName>.<structArrayFieldName>"`.
- */
-function collectStructArrayElementReads(
-  body: JitStmt[]
-): Map<string, { structVarName: string; structArrayFieldName: string }> {
-  const out = new Map<
-    string,
-    { structVarName: string; structArrayFieldName: string }
-  >();
-
-  const visitExpr = (e: JitExpr): void => {
-    switch (e.tag) {
-      case "StructArrayMemberRead": {
-        const key = structArrayElementsKey(
-          e.structVarName,
-          e.structArrayFieldName
-        );
-        if (!out.has(key)) {
-          out.set(key, {
-            structVarName: e.structVarName,
-            structArrayFieldName: e.structArrayFieldName,
-          });
-        }
-        visitExpr(e.indexExpr);
-        return;
-      }
-      case "Binary":
-        visitExpr(e.left);
-        visitExpr(e.right);
-        return;
-      case "Unary":
-        visitExpr(e.operand);
-        return;
-      case "Call":
-      case "UserCall":
-        for (const a of e.args) visitExpr(a);
-        return;
-      case "Index":
-        visitExpr(e.base);
-        for (const idx of e.indices) visitExpr(idx);
-        return;
-      case "TensorLiteral":
-        for (const row of e.rows) for (const c of row) visitExpr(c);
-        return;
-      case "VConcatGrow":
-        visitExpr(e.base);
-        visitExpr(e.value);
-        return;
-      default:
-        return;
-    }
-  };
-
-  const visitStmts = (stmts: JitStmt[]): void => {
-    for (const s of stmts) {
-      switch (s.tag) {
-        case "Assign":
-        case "ExprStmt":
-          visitExpr(s.expr);
-          break;
-        case "AssignIndex":
-          for (const idx of s.indices) visitExpr(idx);
-          visitExpr(s.value);
-          break;
-        case "AssignIndexRange":
-          visitExpr(s.dstStart);
-          visitExpr(s.dstEnd);
-          if (s.srcStart) visitExpr(s.srcStart);
-          if (s.srcEnd) visitExpr(s.srcEnd);
-          break;
-        case "MultiAssign":
-          for (const a of s.args) visitExpr(a);
-          break;
-        case "If":
-          visitExpr(s.cond);
-          visitStmts(s.thenBody);
-          for (const eib of s.elseifBlocks) {
-            visitExpr(eib.cond);
-            visitStmts(eib.body);
-          }
-          if (s.elseBody) visitStmts(s.elseBody);
-          break;
-        case "For":
-          visitExpr(s.start);
-          if (s.step) visitExpr(s.step);
-          visitExpr(s.end);
-          visitStmts(s.body);
-          break;
-        case "While":
-          visitExpr(s.cond);
-          visitStmts(s.body);
-          break;
-        default:
-          break;
-      }
-    }
-  };
-
-  visitStmts(body);
-  return out;
 }
 
 // ── Statement emission ──────────────────────────────────────────────────

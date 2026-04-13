@@ -209,6 +209,16 @@ function walkLValue(
     } else {
       walkExpr(base, referenced);
     }
+  } else if (lv.type === "MemberDynamic") {
+    // s.(fieldName) = v — base is both assigned and referenced, nameExpr is referenced
+    const base = lv.base as Expr;
+    if (base.type === "Ident") {
+      assigned.add(base.name);
+      referenced.add(base.name);
+    } else {
+      walkExpr(base, referenced);
+    }
+    walkExpr(lv.nameExpr as Expr, referenced);
   }
 }
 
@@ -274,6 +284,12 @@ function walkExpr(expr: Expr, referenced: Set<string>): void {
 
     case "Member":
       walkExpr(expr.base, referenced);
+      break;
+
+    case "MemberDynamic":
+      // s.(nameExpr) — walk both base and the dynamic name expression
+      walkExpr(expr.base, referenced);
+      walkExpr((expr as { nameExpr: Expr }).nameExpr, referenced);
       break;
 
     case "MethodCall":
