@@ -446,8 +446,26 @@ const ismemberCases: BuiltinCase[] = [
   {
     match: (argTypes, nargout) => {
       if (argTypes.length < 2) return null;
-      const out: JitType[] = [{ kind: "unknown" }];
-      if (nargout > 1) out.push({ kind: "unknown" });
+      const a = argTypes[0];
+      // For scalar input, result is a scalar logical
+      const isScalar =
+        a.kind === "number" ||
+        a.kind === "boolean" ||
+        a.kind === "complex_or_number";
+      const firstOut: JitType = isScalar
+        ? { kind: "boolean" }
+        : a.kind === "tensor"
+          ? {
+              kind: "tensor",
+              isComplex: false,
+              isLogical: true,
+              shape: a.shape,
+            }
+          : { kind: "unknown" };
+      const out: JitType[] = [firstOut];
+      if (nargout !== undefined && nargout > 1) {
+        out.push(isScalar ? { kind: "number" } : { kind: "unknown" });
+      }
       return out;
     },
     apply: (args, nargout) => {

@@ -188,37 +188,57 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
     },
     // 1-arg reduction
     {
-      match: argTypes => {
+      match: (argTypes, nargout) => {
         if (argTypes.length !== 1) return null;
         let a = argTypes[0];
+        let valueType: JitType;
         if (
           a.kind === "number" ||
           a.kind === "boolean" ||
           a.kind === "complex_or_number"
-        )
-          return [a];
-        if (a.kind === "sparse_matrix") {
-          const shape =
-            a.m !== undefined && a.n !== undefined ? [a.m, a.n] : undefined;
-          a = { kind: "tensor", isComplex: a.isComplex, shape };
+        ) {
+          valueType = a;
+        } else {
+          if (a.kind === "sparse_matrix") {
+            const shape =
+              a.m !== undefined && a.n !== undefined ? [a.m, a.n] : undefined;
+            a = { kind: "tensor", isComplex: a.isComplex, shape };
+          }
+          if (a.kind !== "tensor") return null;
+          if (!a.shape) {
+            valueType =
+              a.isComplex === true
+                ? { kind: "complex_or_number" }
+                : { kind: "number" };
+          } else {
+            const result = shapeAfterReduction(a.shape);
+            if (result.scalar) {
+              valueType =
+                a.isComplex === true
+                  ? { kind: "complex_or_number" }
+                  : { kind: "number" };
+            } else {
+              valueType = {
+                kind: "tensor",
+                isComplex: a.isComplex,
+                shape: result.shape,
+              };
+            }
+          }
         }
-        if (a.kind !== "tensor") return null;
-        if (!a.shape)
-          return [
-            a.isComplex === true
-              ? { kind: "complex_or_number" }
-              : { kind: "number" },
-          ];
-        const result = shapeAfterReduction(a.shape);
-        if (result.scalar)
-          return [
-            a.isComplex === true
-              ? { kind: "complex_or_number" }
-              : { kind: "number" },
-          ];
-        return [
-          { kind: "tensor", isComplex: a.isComplex, shape: result.shape },
-        ];
+        // nargout >= 2: return [value, index] where index matches value shape
+        if (nargout !== undefined && nargout >= 2) {
+          const idxType: JitType =
+            valueType.kind === "tensor"
+              ? {
+                  kind: "tensor",
+                  isComplex: false,
+                  shape: (valueType as { shape?: number[] }).shape,
+                }
+              : { kind: "number", sign: "positive" as const };
+          return [valueType, idxType];
+        }
+        return [valueType];
       },
       apply: (args, nargout) =>
         minMaxImpl(mode, args, nargout, initVal, cmpFn, mathFn),

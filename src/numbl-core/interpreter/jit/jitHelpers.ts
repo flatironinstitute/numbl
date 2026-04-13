@@ -729,6 +729,74 @@ export const jitHelpers = {
   // Scalar → 1x1 tensor coercion for mixed-type struct-array fields.
   asTensor,
 
+  // Tensor indexing with a tensor index: base(idxTensor) → tensor result.
+  // Used for patterns like sorted_arr(idcheck) where idcheck is a small vector.
+  __tensorIndex: (base: RuntimeTensor, idx: RuntimeTensor): RuntimeTensor => {
+    const n = idx.data.length;
+    const result = new FloatXArray(n);
+    const bd = base.data;
+    const bl = bd.length;
+    for (let i = 0; i < n; i++) {
+      const k = Math.round(idx.data[i] as number) - 1;
+      if (k < 0 || k >= bl) throw new Error("Index exceeds array bounds");
+      result[i] = bd[k];
+    }
+    return makeTensor(result, undefined, idx.shape);
+  },
+
+  // Cell array read: c{i} → element (1-based index)
+  __cellRead: (cell: unknown, idx: number): unknown => {
+    const c = cell as { kind: "cell"; data: unknown[]; shape: number[] };
+    const k = Math.round(idx) - 1;
+    if (k < 0 || k >= c.data.length)
+      throw new Error("Index exceeds cell bounds");
+    return c.data[k];
+  },
+
+  // Cell array write: c{i} = v (1-based index, mutates in place)
+  __cellWrite: (cell: unknown, idx: number, value: unknown): number => {
+    const c = cell as {
+      kind: "cell";
+      data: unknown[];
+      shape: number[];
+      _rc: number;
+    };
+    const k = Math.round(idx) - 1;
+    if (k < 0 || k >= c.data.length)
+      throw new Error("Index exceeds cell bounds");
+    c.data[k] = value;
+    return 0; // dummy return
+  },
+
+  // Horizontal concatenation: [a, b, ...] where elements may be tensors,
+  // scalars, or empty matrices. Used for the flagself pattern
+  // [c{idx}, scalar] → row vector growth.
+  __horzcat: (...args: unknown[]): unknown => {
+    // Collect all values as flat number arrays
+    const parts: number[] = [];
+    for (const a of args) {
+      if (typeof a === "number") {
+        parts.push(a);
+      } else if (typeof a === "boolean") {
+        parts.push(a ? 1 : 0);
+      } else if (
+        typeof a === "object" &&
+        a !== null &&
+        (a as { kind?: string }).kind === "tensor"
+      ) {
+        const t = a as RuntimeTensor;
+        if (t.data.length === 0) continue; // skip empty matrix
+        for (let i = 0; i < t.data.length; i++) parts.push(t.data[i] as number);
+      } else {
+        throw new Error("__horzcat: unsupported element type");
+      }
+    }
+    if (parts.length === 0) {
+      return makeTensor(new FloatXArray(0), undefined, [0, 0]);
+    }
+    return makeTensor(new FloatXArray(parts), undefined, [1, parts.length]);
+  },
+
   // Scalar accessors
   re,
   im,

@@ -713,7 +713,37 @@ function lowerAssignLValue(
 ): JitStmt[] | null {
   const lv = stmt.lvalue;
 
-  // Only `Index` lvalues — not `Member`, `IndexCell`, etc.
+  // Cell array write: c{i} = v
+  if (lv.type === "IndexCell") {
+    if (lv.base.type !== "Ident") return null;
+    const cellType = ctx.env.get(lv.base.name);
+    if (!cellType || cellType.kind !== "cell") return null;
+    if (lv.indices.length !== 1) return null;
+    const cellIdx = lowerExpr(ctx, lv.indices[0]);
+    if (!cellIdx) return null;
+    if (cellIdx.jitType.kind !== "number" && cellIdx.jitType.kind !== "boolean")
+      return null;
+    const rhs = lowerExpr(ctx, stmt.expr);
+    if (!rhs) return null;
+    ctx._hasTensorOps = true;
+    return [
+      {
+        tag: "ExprStmt",
+        expr: {
+          tag: "Call",
+          name: "__cellWrite",
+          args: [
+            { tag: "Var", name: lv.base.name, jitType: cellType },
+            cellIdx,
+            rhs,
+          ],
+          jitType: { kind: "number" }, // dummy — result is discarded
+        },
+      },
+    ];
+  }
+
+  // Only `Index` lvalues — not `Member`, etc.
   if (lv.type !== "Index") return null;
 
   // Only plain Ident bases — no `a.b(i) = v` or `a(j)(i) = v`.
@@ -1272,6 +1302,39 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         }
       }
 
+      // Horizontal concat fast path: [a, b] (single row with 2+ elements)
+      // where at least one element is a tensor/unknown (NOT string/char).
+      // Emits a runtime helper call. Handles the flagself pattern
+      // [c{idx}, scalar] → row vector growth.
+      if (expr.rows.length === 1 && expr.rows[0].length >= 2) {
+        const loweredElems = expr.rows[0].map(e => lowerExpr(ctx, e));
+        if (loweredElems.every(e => e !== null)) {
+          const elems = loweredElems as JitExpr[];
+          // Only match numeric-ish elements (number, boolean, tensor, unknown)
+          // — NOT strings or chars (those use char-concat semantics).
+          const isNumericIsh = (k: string) =>
+            k === "number" ||
+            k === "boolean" ||
+            k === "complex_or_number" ||
+            k === "tensor" ||
+            k === "unknown";
+          if (
+            elems.every(e => isNumericIsh(e.jitType.kind)) &&
+            elems.some(
+              e => e.jitType.kind === "tensor" || e.jitType.kind === "unknown"
+            )
+          ) {
+            ctx._hasTensorOps = true;
+            return {
+              tag: "Call",
+              name: "__horzcat",
+              args: elems,
+              jitType: { kind: "tensor", isComplex: false },
+            };
+          }
+        }
+      }
+
       const rows: JitExpr[][] = [];
       let hasComplex = false;
       for (const row of expr.rows) {
@@ -1433,6 +1496,34 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       return lowerIndexExpr(ctx, { base, indices: expr.indices });
     }
 
+    case "IndexCell": {
+      // Cell array scalar read: c{i}
+      if (expr.base.type !== "Ident") return null;
+      const cellType = ctx.env.get(expr.base.name);
+      if (!cellType || cellType.kind !== "cell") return null;
+      if (expr.indices.length !== 1) return null;
+      const cellIdx = lowerExpr(ctx, expr.indices[0]);
+      if (!cellIdx) return null;
+      if (
+        cellIdx.jitType.kind !== "number" &&
+        cellIdx.jitType.kind !== "boolean"
+      )
+        return null;
+      ctx._hasTensorOps = true;
+      // Result type is unknown — the cell element could be any type.
+      // Downstream operations that need a specific type (e.g. horzcat)
+      // handle this via runtime dispatch in the helper.
+      return {
+        tag: "Call",
+        name: "__cellRead",
+        args: [
+          { tag: "Var", name: expr.base.name, jitType: cellType },
+          cellIdx,
+        ],
+        jitType: { kind: "unknown" },
+      };
+    }
+
     case "Member": {
       // Stage 13: chained struct array member read `T.nodes(i).leaf`.
       // The parser produces this shape in read position as
@@ -1530,34 +1621,56 @@ function lowerIndexExpr(
   for (const idx of input.indices) {
     const lowered = lowerExpr(ctx, idx);
     if (!lowered) return null;
-    // Only scalar numeric indices supported
-    if (lowered.jitType.kind !== "number" && lowered.jitType.kind !== "boolean")
-      return null;
     indices.push(lowered);
   }
   if (indices.length === 0) return null;
 
-  // Determine result type based on base type
-  let resultType: JitType;
-  switch (base.jitType.kind) {
-    case "tensor":
-      resultType = base.jitType.isComplex
-        ? { kind: "complex_or_number" }
-        : { kind: "number" };
-      break;
-    case "number":
-    case "boolean":
-      resultType = { kind: "number" };
-      break;
-    case "complex_or_number":
-      resultType = { kind: "complex_or_number" };
-      break;
-    default:
-      return null;
+  // Check if all indices are scalar
+  const allScalar = indices.every(
+    i => i.jitType.kind === "number" || i.jitType.kind === "boolean"
+  );
+
+  if (allScalar) {
+    // Scalar indexing — result is a scalar
+    let resultType: JitType;
+    switch (base.jitType.kind) {
+      case "tensor":
+        resultType = base.jitType.isComplex
+          ? { kind: "complex_or_number" }
+          : { kind: "number" };
+        break;
+      case "number":
+      case "boolean":
+        resultType = { kind: "number" };
+        break;
+      case "complex_or_number":
+        resultType = { kind: "complex_or_number" };
+        break;
+      default:
+        return null;
+    }
+    ctx._hasTensorOps = true;
+    return { tag: "Index", base, indices, jitType: resultType };
   }
 
-  ctx._hasTensorOps = true;
-  return { tag: "Index", base, indices, jitType: resultType };
+  // Tensor indexing: base(tensorIdx) — single tensor index into a tensor base
+  // Result is a tensor of the same complexity as the base.
+  if (
+    indices.length === 1 &&
+    indices[0].jitType.kind === "tensor" &&
+    base.jitType.kind === "tensor"
+  ) {
+    const isComplex = base.jitType.isComplex === true;
+    ctx._hasTensorOps = true;
+    return {
+      tag: "Call",
+      name: "__tensorIndex",
+      args: [base, indices[0]],
+      jitType: { kind: "tensor", isComplex },
+    };
+  }
+
+  return null;
 }
 
 // ── User function call resolution ───────────────────────────────────────
@@ -1756,9 +1869,11 @@ function lowerIBuiltinCall(
   const loweredArgs = args as JitExpr[];
   const argJitTypes = loweredArgs.map(a => a.jitType);
 
-  // If any argument is unknown, bail — it could be a class instance at runtime,
-  // and class methods take priority over builtins in MATLAB.
-  if (argJitTypes.some(t => t.kind === "unknown")) return null;
+  // If any argument is unknown, it could be a class instance at runtime,
+  // and class methods take priority over builtins in MATLAB. Allow the
+  // call only if `resolve` succeeds with a non-unknown output type —
+  // this lets builtins like `ismember` work with cell-read results while
+  // still bailing for builtins that can't determine the output type.
 
   const resolution = ib.resolve(argJitTypes, 1);
   if (!resolution || resolution.outputTypes.length === 0) return null;

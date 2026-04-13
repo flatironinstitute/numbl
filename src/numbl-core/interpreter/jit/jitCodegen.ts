@@ -1177,6 +1177,10 @@ function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
 
 function emitCall(expr: JitExpr & { tag: "Call" }): string {
   const args = expr.args.map(a => emitExpr(a));
+  // Internal helper calls (prefixed with __) go directly to $h
+  if (expr.name.startsWith("__")) {
+    return `$h.${expr.name}(${args.join(", ")})`;
+  }
   // Try fast-path emission if the IBuiltin provides one
   const ib = getIBuiltin(expr.name);
   if (ib?.jitEmit) {
