@@ -9,7 +9,7 @@ import type { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 export type SignCategory = "positive" | "nonneg" | "nonpositive" | "negative";
 
 export type JitType =
-  | { kind: "number"; exact?: number; sign?: SignCategory }
+  | { kind: "number"; exact?: number; sign?: SignCategory; isInteger?: boolean }
   | { kind: "boolean"; value?: boolean }
   | { kind: "complex_or_number"; pureImaginary?: boolean }
   | {
@@ -87,6 +87,7 @@ export function jitTypeKey(t: JitType): string {
       let k = "number";
       if (t.exact !== undefined) k += `=${t.exact}`;
       if (t.sign) k += `:${t.sign}`;
+      if (t.isInteger) k += ":int";
       return k;
     }
     case "boolean": {
@@ -179,10 +180,12 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
         a.exact !== undefined && a.exact === b.exact ? a.exact : undefined;
       const sign =
         exact !== undefined ? signFromNumber(exact) : unifySign(a.sign, b.sign);
+      const isInteger = a.isInteger && b.isInteger;
       return {
         kind: "number",
         ...(exact !== undefined ? { exact } : {}),
         ...(sign ? { sign } : {}),
+        ...(isInteger ? { isInteger: true } : {}),
       };
     }
     if (a.kind === "complex_or_number" && b.kind === "complex_or_number") {
@@ -324,11 +327,11 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
     return { kind: "unknown" }; // unrecognized same-kind pair → bail
   }
   // Widen number + boolean → number (MATLAB treats logical as numeric)
-  if (
-    (a.kind === "number" && b.kind === "boolean") ||
-    (a.kind === "boolean" && b.kind === "number")
-  ) {
-    return { kind: "number" };
+  if (a.kind === "number" && b.kind === "boolean") {
+    return { kind: "number", ...(a.isInteger ? { isInteger: true } : {}) };
+  }
+  if (a.kind === "boolean" && b.kind === "number") {
+    return { kind: "number", ...(b.isInteger ? { isInteger: true } : {}) };
   }
   // Widen number/boolean → complex_or_number (every real is a valid complex)
   if (
@@ -369,6 +372,11 @@ export function isComplexType(t: JitType): boolean {
     t.kind === "complex_or_number" ||
     (t.kind === "tensor" && t.isComplex === true)
   );
+}
+
+/** True when the type guarantees an integer value at runtime (safe for |0). */
+export function isKnownInteger(t: JitType): boolean {
+  return t.kind === "boolean" || (t.kind === "number" && t.isInteger === true);
 }
 
 /** Types that support arithmetic binary operations in the JIT. */
