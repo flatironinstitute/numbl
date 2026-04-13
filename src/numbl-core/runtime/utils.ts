@@ -2,7 +2,6 @@
  * Tensor shape/indexing utilities and copy-on-write helpers.
  */
 
-import { RuntimeError } from "./error.js";
 import {
   type RuntimeValue,
   type RuntimeTensor,
@@ -15,7 +14,9 @@ import {
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
 
-/** Get 2D size (rows, cols) from shape, padding with 1s as needed */
+/** Get 2D size (rows, cols) from shape, padding with 1s as needed.
+ *  For N-D tensors (N>2), trailing dimensions are collapsed into cols,
+ *  matching MATLAB's behavior when fewer subscripts than dimensions. */
 export function tensorSize2D(t: RuntimeTensor): [number, number] {
   const s = t.shape;
   if (s.length === 0) return [1, 1];
@@ -23,9 +24,10 @@ export function tensorSize2D(t: RuntimeTensor): [number, number] {
   if (s.length === 2) {
     return [s[0], s[1]];
   }
-  throw new RuntimeError(
-    "Cannot get 2D size from tensor with more than 2 dimensions"
-  );
+  // N-D: collapse trailing dims into cols
+  let cols = 1;
+  for (let i = 1; i < s.length; i++) cols *= s[i];
+  return [s[0], cols];
 }
 
 /** Compute total number of elements from shape */
