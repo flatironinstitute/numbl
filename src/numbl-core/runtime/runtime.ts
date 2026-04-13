@@ -504,6 +504,7 @@ export class Runtime {
         }
       }
     };
+    this.builtins["clim"] = this.builtins["caxis"];
   }
 
   public profileEnter(key: string): void {
