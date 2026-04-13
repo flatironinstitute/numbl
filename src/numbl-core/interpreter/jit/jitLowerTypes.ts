@@ -219,7 +219,26 @@ export function binaryResultType(
     const rt = isTensorType(effRight)
       ? (effRight as Extract<JitType, { kind: "tensor" }>)
       : undefined;
-    const shape = lt?.shape ?? rt?.shape;
+    // Compute broadcast shape: element-wise max of dimensions, where
+    // 1 broadcasts to any size and -1 means unknown.
+    let shape: number[] | undefined;
+    if (lt?.shape && rt?.shape) {
+      const ls = lt.shape;
+      const rs = rt.shape;
+      const maxLen = Math.max(ls.length, rs.length);
+      shape = [];
+      for (let i = 0; i < maxLen; i++) {
+        const ld = i < ls.length ? ls[i] : 1;
+        const rd = i < rs.length ? rs[i] : 1;
+        if (ld === -1 || rd === -1) shape.push(-1);
+        else if (ld === 1) shape.push(rd);
+        else if (rd === 1) shape.push(ld);
+        else if (ld === rd) shape.push(ld);
+        else shape.push(-1); // mismatch → unknown
+      }
+    } else {
+      shape = lt?.shape ?? rt?.shape;
+    }
     const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
     const isComplex =
       anyComplex || (lt?.isComplex ?? false) || (rt?.isComplex ?? false);
@@ -290,7 +309,32 @@ export function unaryResultType(
     case UnaryOperation.Not:
       if (isNumericScalarType(operand)) return { kind: "boolean" };
       return null;
+    case UnaryOperation.Transpose:
+    case UnaryOperation.NonConjugateTranspose: {
+      // Scalars: transpose is identity
+      if (operand.kind === "number" || operand.kind === "boolean")
+        return operand;
+      if (operand.kind === "complex_or_number")
+        return op === UnaryOperation.Transpose
+          ? { kind: "complex_or_number" } // conjugate
+          : operand;
+      if (operand.kind === "tensor") {
+        // Swap shape dimensions [M,N] → [N,M]
+        const shape = operand.shape
+          ? operand.shape.length === 2
+            ? [operand.shape[1], operand.shape[0]]
+            : undefined
+          : undefined;
+        return {
+          kind: "tensor",
+          isComplex: operand.isComplex,
+          ...(shape ? { shape } : {}),
+          ndim: 2,
+        };
+      }
+      return null;
+    }
     default:
-      return null; // Transpose not supported
+      return null;
   }
 }

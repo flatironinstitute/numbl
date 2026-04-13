@@ -606,6 +606,10 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }): string {
         return `$h.tNeg(${operand})`;
       case UnaryOperation.Plus:
         return operand;
+      case UnaryOperation.Transpose:
+        return `$h.tCTranspose(${operand})`;
+      case UnaryOperation.NonConjugateTranspose:
+        return `$h.tTranspose(${operand})`;
       default:
         throw new Error(`JIT codegen: unsupported tensor unary op ${expr.op}`);
     }
@@ -629,6 +633,10 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }): string {
       return `(-${operand})`;
     case UnaryOperation.Not:
       return `((${operand}) !== 0 ? 0 : 1)`;
+    case UnaryOperation.Transpose:
+    case UnaryOperation.NonConjugateTranspose:
+      // Scalar transpose is identity
+      return operand;
     default:
       throw new Error(`JIT codegen: unsupported scalar unary op ${expr.op}`);
   }
