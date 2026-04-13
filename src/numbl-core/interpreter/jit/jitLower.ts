@@ -37,8 +37,10 @@ import {
   unaryResultType,
 } from "./jitLowerTypes.js";
 import { generateJS } from "./jitCodegen.js";
-import { getIBuiltin } from "../builtins/index.js";
+import { getIBuiltin, inferJitType } from "../builtins/index.js";
 import { offsetToLineFast, buildLineTable } from "../../runtime/error.js";
+import { isRuntimeFunction } from "../../runtime/types.js";
+import type { RuntimeValue } from "../../runtime/types.js";
 
 // ── Lowering entry point ────────────────────────────────────────────────
 
@@ -1164,8 +1166,38 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         };
       }
 
-      // If the name is a known variable, treat as indexing (MATLAB ambiguity)
+      // If the name is a function handle variable, emit an indirect call
+      // instead of treating it as indexing. This enables JIT compilation of
+      // loops that call function handles (e.g. kern(srcinfo, targinfo) in
+      // chunkie's adapgausskerneval).
       const varType = ctx.env.get(expr.name);
+      if (varType && varType.kind === "function_handle") {
+        const args = expr.args.map(a => lowerExpr(ctx, a));
+        if (args.some(a => a === null)) return null;
+        const loweredArgs = args as JitExpr[];
+
+        // Determine return type by probing the function handle at JIT
+        // compile time: call it once with the actual argument values and
+        // inspect the result type. If the probe can't determine a type,
+        // bail — we won't guess.
+        if (!ctx.interp) return null;
+        const returnType = probeFuncHandleReturnType(
+          ctx.interp,
+          expr.name,
+          loweredArgs
+        );
+        if (!returnType) return null;
+
+        ctx._hasTensorOps = true;
+        return {
+          tag: "FuncHandleCall",
+          name: expr.name,
+          args: loweredArgs,
+          jitType: returnType,
+        };
+      }
+
+      // If the name is a known variable, treat as indexing (MATLAB ambiguity)
       if (varType) {
         return lowerIndexExpr(ctx, {
           base: { tag: "Var", name: expr.name, jitType: varType },
@@ -1688,4 +1720,87 @@ function getGeneratedFnReturnType(
     ctx.loweringInProgress
   );
   return result?.outputType ?? null;
+}
+
+/**
+ * Probe a function handle's return type at JIT compile time.
+ *
+ * Calls the function handle once with representative argument values and
+ * inspects the result type via `inferJitType`. This is safe for pure
+ * numerical functions (the vast majority of function handles in numerical
+ * MATLAB code). At runtime, every call verifies the actual return type
+ * matches — a mismatch triggers a bail to the interpreter.
+ *
+ * If the probe fails for any reason, returns null and the caller bails
+ * (falls back to interpretation for the whole loop).
+ */
+function probeFuncHandleReturnType(
+  interp: Interpreter,
+  fnName: string,
+  loweredArgs: JitExpr[]
+): JitType | null {
+  try {
+    const fnVal = interp.env.get(fnName);
+    if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
+    const fn = fnVal as import("../../runtime/types.js").RuntimeFunction;
+
+    // Only probe function handles that have a direct JS closure — these
+    // are anonymous functions and named function references. Builtins
+    // that require full interpreter dispatch are too expensive to probe.
+    if (!fn.jsFn) return null;
+
+    // Collect argument values for the probe. For each lowered arg:
+    // - Var: use the actual value from the env, or synthesize a
+    //   representative value from its JIT type (handles loop variables
+    //   that don't exist in the env yet at JIT compile time)
+    // - NumberLiteral: use the literal value
+    // - Other: can't cheaply evaluate, bail
+    const argVals: unknown[] = [];
+    for (const arg of loweredArgs) {
+      if (arg.tag === "NumberLiteral") {
+        argVals.push(arg.value);
+      } else if (arg.tag === "Var") {
+        const val = interp.env.get(arg.name);
+        if (val !== undefined) {
+          argVals.push(val);
+        } else {
+          // Variable not in env (e.g. loop iterator before loop starts).
+          // Synthesize a representative value from its JIT type.
+          const rep = representativeValue(arg.jitType);
+          if (rep === undefined) return null;
+          argVals.push(rep);
+        }
+      } else {
+        return null;
+      }
+    }
+
+    // Call the function handle once to determine its return type
+    const result = fn.jsFnExpectsNargout
+      ? fn.jsFn(1, ...argVals)
+      : fn.jsFn(...argVals);
+    const resultType = inferJitType(result);
+    // Don't accept unknown — that would make downstream lowering bail anyway
+    if (resultType.kind === "unknown") return null;
+    return resultType;
+  } catch {
+    // Probe failed (function errored) — bail
+    return null;
+  }
+}
+
+/** Create a representative runtime value for a JIT type, for probing. */
+function representativeValue(t: JitType): unknown | undefined {
+  switch (t.kind) {
+    case "number":
+      return t.exact ?? 1;
+    case "boolean":
+      return true;
+    case "complex_or_number":
+      return 1;
+    default:
+      // For tensors, structs, etc. we can't cheaply synthesize a value
+      // that would be meaningful to an arbitrary function handle.
+      return undefined;
+  }
 }
