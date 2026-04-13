@@ -131,6 +131,8 @@ import {
   heatmapCall as _heatmapCall,
   viewCall as _viewCall,
   legendCall as _legendCall,
+  streamlineCall as _streamlineCall,
+  stream2Call as _stream2Call,
   drawnow as _drawnow,
   pause as _pause,
 } from "./runtimePlot.js";
@@ -468,6 +470,13 @@ export class Runtime {
     };
     this.builtins["heatmap"] = (_nargout: number, args: unknown[]) => {
       this.heatmap_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["streamline"] = (_nargout: number, args: unknown[]) => {
+      const h = this.streamline_call(args.map(a => ensureRuntimeValue(a)));
+      if (_nargout >= 1) return h;
+    };
+    this.builtins["stream2"] = (_nargout: number, args: unknown[]) => {
+      return this.stream2_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
       if (args.length > 0) {
@@ -1814,6 +1823,14 @@ export class Runtime {
 
   public heatmap_call(args: RuntimeValue[]): void {
     _heatmapCall(this.plotInstructions, args);
+  }
+
+  public streamline_call(args: RuntimeValue[]): RuntimeValue {
+    return _streamlineCall(this.plotInstructions, args);
+  }
+
+  public stream2_call(args: RuntimeValue[]): RuntimeValue {
+    return _stream2Call(args);
   }
 
   public view_call(args: RuntimeValue[]): void {
