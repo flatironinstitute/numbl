@@ -845,14 +845,24 @@ export function evalAnonFunc(
   const bodyExpr = expr.body;
   const paramNames = expr.params;
 
+  const hasVarargin =
+    paramNames.length > 0 && paramNames[paramNames.length - 1] === "varargin";
+  const regularParams = hasVarargin ? paramNames.slice(0, -1) : paramNames;
+
   const fn = RTV.func("anonymous", "user");
   fn.jsFn = (nargoutArg: unknown, ...rest: unknown[]) => {
     const fnEnv = new Environment(capturedEnv);
     const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
-    for (let i = 0; i < paramNames.length; i++) {
+    for (let i = 0; i < regularParams.length; i++) {
       if (i < actualArgs.length) {
-        fnEnv.set(paramNames[i], ensureRuntimeValue(actualArgs[i]));
+        fnEnv.set(regularParams[i], ensureRuntimeValue(actualArgs[i]));
       }
+    }
+    if (hasVarargin) {
+      const extraArgs = actualArgs
+        .slice(regularParams.length)
+        .map(a => ensureRuntimeValue(a));
+      fnEnv.set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
     }
     const narg = typeof nargoutArg === "number" ? nargoutArg : 1;
     const savedEnv = this.env;
