@@ -146,6 +146,46 @@ int numbl_complex_abs(size_t n,
                       const double* a_re, const double* a_im,
                       double* out);
 
+/* ── Comparisons (logical output stored as 0.0/1.0 in double buffer) ──── */
+
+typedef enum {
+  NUMBL_CMP_EQ = 0,  /* ==  */
+  NUMBL_CMP_NE = 1,  /* !=  */
+  NUMBL_CMP_LT = 2,  /* <   */
+  NUMBL_CMP_LE = 3,  /* <=  */
+  NUMBL_CMP_GT = 4,  /* >   */
+  NUMBL_CMP_GE = 5   /* >=  */
+} numbl_cmp_op_t;
+
+/**
+ * Real comparison: out[i] = (a[i] OP b[i]) ? 1.0 : 0.0.
+ * NaN in either operand yields 0 (except for !=, which yields 1).
+ */
+int numbl_real_comparison(int op, size_t n,
+                          const double* a, const double* b,
+                          double* out);
+
+/** Scalar-tensor variant. */
+int numbl_real_scalar_comparison(int op, size_t n,
+                                 double scalar, const double* arr,
+                                 int scalar_on_left, double* out);
+
+/**
+ * Complex comparison.  EQ / NE compare both parts; LT/LE/GT/GE compare
+ * only the real parts (MATLAB semantics).  a_im, b_im may be NULL.
+ */
+int numbl_complex_comparison(int op, size_t n,
+                             const double* a_re, const double* a_im,
+                             const double* b_re, const double* b_im,
+                             double* out);
+
+/** Complex-scalar / tensor comparison. */
+int numbl_complex_scalar_comparison(int op, size_t n,
+                                    double s_re, double s_im,
+                                    const double* arr_re,
+                                    const double* arr_im,
+                                    int scalar_on_left, double* out);
+
 /* ── Op-code dump (for drift detection) ───────────────────────────────── */
 
 /**

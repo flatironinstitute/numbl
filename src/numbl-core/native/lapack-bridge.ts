@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 5;
+export const NATIVE_ADDON_EXPECTED_VERSION = 6;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -664,6 +664,48 @@ export interface LapackBridge {
     n: number,
     aRe: Float64Array,
     aIm: Float64Array | null,
+    out: Float64Array
+  ): void;
+
+  /** Real comparison: out[i] = (a[i] OP b[i]) ? 1 : 0. */
+  tensorOpRealComparison?(
+    op: number,
+    n: number,
+    a: Float64Array,
+    b: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Real scalar-tensor comparison. */
+  tensorOpRealScalarComparison?(
+    op: number,
+    n: number,
+    scalar: number,
+    arr: Float64Array,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void;
+
+  /** Complex comparison. EQ/NE use both parts; LT/LE/GT/GE use real parts. */
+  tensorOpComplexComparison?(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    bRe: Float64Array,
+    bIm: Float64Array | null,
+    out: Float64Array
+  ): void;
+
+  /** Complex scalar-tensor comparison. */
+  tensorOpComplexScalarComparison?(
+    op: number,
+    n: number,
+    sRe: number,
+    sIm: number,
+    arrRe: Float64Array,
+    arrIm: Float64Array | null,
+    scalarOnLeft: boolean,
     out: Float64Array
   ): void;
 

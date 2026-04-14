@@ -166,6 +166,80 @@ Napi::Value TensorOpComplexAbs(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value TensorOpRealComparison(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 5) {
+    Napi::TypeError::New(env,
+      "tensorOpRealComparison(op, n, a, b, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  int rc = numbl_real_comparison(
+      op, n, AsF64(info[2]), AsF64(info[3]), AsF64Mut(info[4]));
+  ThrowOnError(env, rc, "tensorOpRealComparison");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpRealScalarComparison(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6) {
+    Napi::TypeError::New(env,
+      "tensorOpRealScalarComparison(op, n, scalar, arr, scalarOnLeft, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  double scalar = info[2].As<Napi::Number>().DoubleValue();
+  int scalar_on_left = info[4].As<Napi::Boolean>().Value() ? 1 : 0;
+  int rc = numbl_real_scalar_comparison(
+      op, n, scalar, AsF64(info[3]), scalar_on_left, AsF64Mut(info[5]));
+  ThrowOnError(env, rc, "tensorOpRealScalarComparison");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpComplexComparison(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 7) {
+    Napi::TypeError::New(env,
+      "tensorOpComplexComparison(op, n, aRe, aIm|null, bRe, bIm|null, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  int rc = numbl_complex_comparison(
+      op, n,
+      AsF64(info[2]), AsF64OrNull(info[3]),
+      AsF64(info[4]), AsF64OrNull(info[5]),
+      AsF64Mut(info[6]));
+  ThrowOnError(env, rc, "tensorOpComplexComparison");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpComplexScalarComparison(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 8) {
+    Napi::TypeError::New(env,
+      "tensorOpComplexScalarComparison(op, n, sRe, sIm, arrRe, arrIm|null, scalarOnLeft, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  double s_re = info[2].As<Napi::Number>().DoubleValue();
+  double s_im = info[3].As<Napi::Number>().DoubleValue();
+  int scalar_on_left = info[6].As<Napi::Boolean>().Value() ? 1 : 0;
+  int rc = numbl_complex_scalar_comparison(
+      op, n, s_re, s_im,
+      AsF64(info[4]), AsF64OrNull(info[5]),
+      scalar_on_left, AsF64Mut(info[7]));
+  ThrowOnError(env, rc, "tensorOpComplexScalarComparison");
+  return env.Undefined();
+}
+
 Napi::Value TensorOpDumpCodes(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   size_t need = numbl_dump_op_codes(nullptr, 0);

@@ -22,6 +22,12 @@ import {
   tsComplexUnaryElemwise,
   tsComplexAbs,
 } from "./complexUnaryElemwise.js";
+import {
+  tsRealComparison,
+  tsRealScalarComparison,
+  tsComplexComparison,
+  tsComplexScalarComparison,
+} from "./comparison.js";
 
 export const tensorOps = {
   realBinaryElemwise(
@@ -153,6 +159,97 @@ export const tensorOps = {
       bridge.tensorOpComplexAbs(n, aRe, aIm, out);
     } else {
       tsComplexAbs(n, aRe, aIm, out);
+    }
+  },
+
+  realComparison(
+    op: number,
+    n: number,
+    a: Float64Array,
+    b: Float64Array,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpRealComparison) {
+      bridge.tensorOpRealComparison(op, n, a, b, out);
+    } else {
+      tsRealComparison(op, n, a, b, out);
+    }
+  },
+
+  realScalarComparison(
+    op: number,
+    n: number,
+    scalar: number,
+    arr: Float64Array,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpRealScalarComparison) {
+      bridge.tensorOpRealScalarComparison(
+        op,
+        n,
+        scalar,
+        arr,
+        scalarOnLeft,
+        out
+      );
+    } else {
+      tsRealScalarComparison(op, n, scalar, arr, scalarOnLeft, out);
+    }
+  },
+
+  complexComparison(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    bRe: Float64Array,
+    bIm: Float64Array | null,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpComplexComparison) {
+      bridge.tensorOpComplexComparison(op, n, aRe, aIm, bRe, bIm, out);
+    } else {
+      tsComplexComparison(op, n, aRe, aIm, bRe, bIm, out);
+    }
+  },
+
+  complexScalarComparison(
+    op: number,
+    n: number,
+    sRe: number,
+    sIm: number,
+    arrRe: Float64Array,
+    arrIm: Float64Array | null,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpComplexScalarComparison) {
+      bridge.tensorOpComplexScalarComparison(
+        op,
+        n,
+        sRe,
+        sIm,
+        arrRe,
+        arrIm,
+        scalarOnLeft,
+        out
+      );
+    } else {
+      tsComplexScalarComparison(
+        op,
+        n,
+        sRe,
+        sIm,
+        arrRe,
+        arrIm,
+        scalarOnLeft,
+        out
+      );
     }
   },
 };

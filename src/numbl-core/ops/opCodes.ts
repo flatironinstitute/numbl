@@ -22,6 +22,16 @@ export const OpComplexBin = {
   DIV: 3,
 } as const;
 
+/** Comparison ops (logical output). */
+export const OpCmp = {
+  EQ: 0,
+  NE: 1,
+  LT: 2,
+  LE: 3,
+  GT: 4,
+  GE: 5,
+} as const;
+
 /** Unary element-wise ops (shared numbering for real + complex). */
 export const OpUnary = {
   EXP: 0,

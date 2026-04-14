@@ -6,4 +6,4 @@
  */
 
 export { tensorOps } from "./dispatch.js";
-export { OpRealBin, OpComplexBin, OpUnary } from "./opCodes.js";
+export { OpRealBin, OpComplexBin, OpUnary, OpCmp } from "./opCodes.js";
