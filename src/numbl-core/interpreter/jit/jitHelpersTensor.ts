@@ -396,6 +396,72 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
   return makeTensor(outR, outI, a.shape.slice());
 }
 
+// ── double() fast path ────────────────────────────────────────────────
+//
+// `double(x)` is an identity for non-logical numeric tensors and just
+// strips the _isLogical flag for logical ones. The interpreter builtin
+// allocates a fresh copy when the input is logical; when the tensor is
+// uniquely owned (rc==1, typically a JIT scratch) we can clear the flag
+// in place instead.
+
+export function tDouble(v: unknown): unknown {
+  if (typeof v === "number" || typeof v === "boolean") return +v;
+  if (
+    typeof v === "object" &&
+    v !== null &&
+    (v as RuntimeTensor).kind === "tensor"
+  ) {
+    const t = v as RuntimeTensor;
+    if (!t._isLogical) return t;
+    if (t._rc <= 1) {
+      t._isLogical = undefined;
+      return t;
+    }
+    // Shared: can't mutate; fall back to copying the data buffer.
+    const newData = uninitFloat64(t.data.length);
+    newData.set(t.data as Float64Array);
+    return {
+      kind: "tensor",
+      data: newData,
+      shape: t.shape.slice(),
+      _rc: 1,
+    } as RuntimeTensor;
+  }
+  return v;
+}
+
+// ── Flat-sum fast path (real vectors) ─────────────────────────────────
+//
+// `sum(t)` on a vector-shaped real tensor collapses to a scalar. The
+// interpreter builtin handles every case (nd arrays, 'all', 'omitnan',
+// dim arg, sparse) which is overkill for the hot-loop column-vector
+// case. Bail to the generic path for anything non-trivial.
+
+export function tSum(v: unknown): unknown {
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v ? 1 : 0;
+  if (
+    typeof v === "object" &&
+    v !== null &&
+    (v as RuntimeTensor).kind === "tensor"
+  ) {
+    const t = v as RuntimeTensor;
+    if (t.imag) return undefined; // complex → defer
+    const s = t.shape;
+    const isVector =
+      s.length === 1 ||
+      (s.length === 2 && (s[0] === 1 || s[1] === 1)) ||
+      s.length === 0;
+    if (!isVector) return undefined; // matrix → defer
+    const data = t.data;
+    const n = data.length;
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += data[i];
+    return sum;
+  }
+  return undefined;
+}
+
 // ── Vertical concat growth ─────────────────────────────────────────────
 
 export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
