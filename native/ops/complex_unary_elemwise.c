@@ -139,11 +139,13 @@ int numbl_complex_abs(size_t n,
                       double* out) {
   if (!a_re || !out) return NUMBL_ERR_NULL_PTR;
   if (a_im) {
+    #pragma omp simd
     for (size_t i = 0; i < n; i++) {
       /* hypot avoids overflow/underflow that (re*re + im*im) would miss. */
       out[i] = hypot(a_re[i], a_im[i]);
     }
   } else {
+    #pragma omp simd
     for (size_t i = 0; i < n; i++) out[i] = fabs(a_re[i]);
   }
   return NUMBL_OK;
