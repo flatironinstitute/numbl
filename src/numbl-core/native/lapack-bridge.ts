@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 6;
+export const NATIVE_ADDON_EXPECTED_VERSION = 7;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -707,6 +707,24 @@ export interface LapackBridge {
     arrIm: Float64Array | null,
     scalarOnLeft: boolean,
     out: Float64Array
+  ): void;
+
+  /** Flat real reduction (output is a 1-element Float64Array). */
+  tensorOpRealFlatReduce?(
+    op: number,
+    n: number,
+    a: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Flat complex reduction.  outIm may be null for ANY/ALL. */
+  tensorOpComplexFlatReduce?(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array | null
   ): void;
 
   /** Dump op-code enum values as a stable string (drift detection). */

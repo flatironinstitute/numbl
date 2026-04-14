@@ -240,6 +240,42 @@ Napi::Value TensorOpComplexScalarComparison(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value TensorOpRealFlatReduce(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4) {
+    Napi::TypeError::New(env,
+      "tensorOpRealFlatReduce(op, n, a, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  int rc = numbl_real_flat_reduce(op, n, AsF64(info[2]), AsF64Mut(info[3]));
+  ThrowOnError(env, rc, "tensorOpRealFlatReduce");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpComplexFlatReduce(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6) {
+    Napi::TypeError::New(env,
+      "tensorOpComplexFlatReduce(op, n, aRe, aIm|null, outRe, outIm|null)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  double* out_im = (info[5].IsNull() || info[5].IsUndefined())
+                       ? nullptr
+                       : AsF64Mut(info[5]);
+  int rc = numbl_complex_flat_reduce(
+      op, n,
+      AsF64(info[2]), AsF64OrNull(info[3]),
+      AsF64Mut(info[4]), out_im);
+  ThrowOnError(env, rc, "tensorOpComplexFlatReduce");
+  return env.Undefined();
+}
+
 Napi::Value TensorOpDumpCodes(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   size_t need = numbl_dump_op_codes(nullptr, 0);

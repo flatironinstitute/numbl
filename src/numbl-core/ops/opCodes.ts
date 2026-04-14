@@ -22,6 +22,17 @@ export const OpComplexBin = {
   DIV: 3,
 } as const;
 
+/** Flat reduction ops. */
+export const OpReduce = {
+  SUM: 0,
+  PROD: 1,
+  MAX: 2,
+  MIN: 3,
+  ANY: 4,
+  ALL: 5,
+  MEAN: 6,
+} as const;
+
 /** Comparison ops (logical output). */
 export const OpCmp = {
   EQ: 0,

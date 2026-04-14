@@ -47,6 +47,11 @@ size_t numbl_dump_op_codes(char* buf, size_t buf_size) {
                 "cmp:EQ=%d,NE=%d,LT=%d,LE=%d,GT=%d,GE=%d;",
                 NUMBL_CMP_EQ, NUMBL_CMP_NE, NUMBL_CMP_LT,
                 NUMBL_CMP_LE, NUMBL_CMP_GT, NUMBL_CMP_GE);
+  n += snprintf(tmp + n, sizeof(tmp) - n,
+                "reduce:SUM=%d,PROD=%d,MAX=%d,MIN=%d,ANY=%d,ALL=%d,MEAN=%d;",
+                NUMBL_REDUCE_SUM, NUMBL_REDUCE_PROD, NUMBL_REDUCE_MAX,
+                NUMBL_REDUCE_MIN, NUMBL_REDUCE_ANY, NUMBL_REDUCE_ALL,
+                NUMBL_REDUCE_MEAN);
   size_t need = (size_t)n;
   if (buf && buf_size > need) {
     memcpy(buf, tmp, need + 1);

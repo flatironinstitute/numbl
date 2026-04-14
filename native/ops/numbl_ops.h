@@ -186,6 +186,36 @@ int numbl_complex_scalar_comparison(int op, size_t n,
                                     const double* arr_im,
                                     int scalar_on_left, double* out);
 
+/* ── Flat reductions (reduce entire buffer to a single value) ─────────── */
+
+typedef enum {
+  NUMBL_REDUCE_SUM  = 0,
+  NUMBL_REDUCE_PROD = 1,
+  NUMBL_REDUCE_MAX  = 2,
+  NUMBL_REDUCE_MIN  = 3,
+  NUMBL_REDUCE_ANY  = 4,  /* result: 1 if any nonzero, else 0 */
+  NUMBL_REDUCE_ALL  = 5,  /* result: 1 if all nonzero, else 0 */
+  NUMBL_REDUCE_MEAN = 6
+} numbl_reduce_op_t;
+
+/**
+ * Flat real reduction: reduce a contiguous real buffer to a single value.
+ * For MAX/MIN on an empty buffer returns +Inf/-Inf.  MEAN on empty → NaN.
+ * NaN handling: NaN propagates for SUM/PROD/MAX/MIN/MEAN (omit-NaN variants
+ * could be added later as separate op codes).  ANY/ALL treat NaN as nonzero.
+ */
+int numbl_real_flat_reduce(int op, size_t n, const double* a, double* out);
+
+/**
+ * Flat complex reduction: SUM, PROD, ANY, ALL supported.  MAX/MIN/MEAN
+ * return NUMBL_ERR_BAD_OP (use real-only for those).  a_im may be NULL.
+ * For SUM/PROD, both out_re and out_im must be non-NULL.
+ * For ANY/ALL, out_re receives 0/1 and out_im is untouched (may be NULL).
+ */
+int numbl_complex_flat_reduce(int op, size_t n,
+                              const double* a_re, const double* a_im,
+                              double* out_re, double* out_im);
+
 /* ── Op-code dump (for drift detection) ───────────────────────────────── */
 
 /**

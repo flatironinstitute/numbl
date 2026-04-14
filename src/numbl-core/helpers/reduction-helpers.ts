@@ -12,6 +12,7 @@ import {
   type RuntimeTensor,
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
+import { tensorOps, OpReduce } from "../ops/index.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
@@ -235,6 +236,24 @@ export function scanLogical(
   imag: ArrayLike<number> | undefined,
   mode: "any" | "all"
 ): boolean {
+  // Fast path via tensor-ops layer when data is Float64Array.
+  if (data instanceof Float64Array && (!imag || imag instanceof Float64Array)) {
+    const op = mode === "any" ? OpReduce.ANY : OpReduce.ALL;
+    const out = new Float64Array(1);
+    if (imag) {
+      tensorOps.complexFlatReduce(
+        op,
+        data.length,
+        data,
+        imag as Float64Array,
+        out,
+        null
+      );
+    } else {
+      tensorOps.realFlatReduce(op, data.length, data, out);
+    }
+    return out[0] !== 0;
+  }
   const defaultResult = mode === "all";
   for (let i = 0; i < data.length; i++) {
     const isNonZero = data[i] !== 0 || (imag !== undefined && imag[i] !== 0);

@@ -15,6 +15,7 @@ import {
   OpComplexBin,
   OpUnary,
   OpCmp,
+  OpReduce,
 } from "../numbl-core/ops/opCodes.js";
 
 function loadAddon(): unknown | null {
@@ -34,7 +35,8 @@ function expectedDump(): string {
     `FLOOR=${OpUnary.FLOOR},CEIL=${OpUnary.CEIL},ROUND=${OpUnary.ROUND},TRUNC=${OpUnary.TRUNC},` +
     `SIN=${OpUnary.SIN},COS=${OpUnary.COS},TAN=${OpUnary.TAN},ASIN=${OpUnary.ASIN},ACOS=${OpUnary.ACOS},ATAN=${OpUnary.ATAN},` +
     `SINH=${OpUnary.SINH},COSH=${OpUnary.COSH},TANH=${OpUnary.TANH},SIGN=${OpUnary.SIGN};` +
-    `cmp:EQ=${OpCmp.EQ},NE=${OpCmp.NE},LT=${OpCmp.LT},LE=${OpCmp.LE},GT=${OpCmp.GT},GE=${OpCmp.GE};`
+    `cmp:EQ=${OpCmp.EQ},NE=${OpCmp.NE},LT=${OpCmp.LT},LE=${OpCmp.LE},GT=${OpCmp.GT},GE=${OpCmp.GE};` +
+    `reduce:SUM=${OpReduce.SUM},PROD=${OpReduce.PROD},MAX=${OpReduce.MAX},MIN=${OpReduce.MIN},ANY=${OpReduce.ANY},ALL=${OpReduce.ALL},MEAN=${OpReduce.MEAN};`
   );
 }
 
