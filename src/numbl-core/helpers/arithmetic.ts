@@ -23,7 +23,7 @@ import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
-import { getLapackBridge } from "../native/lapack-bridge.js";
+import { tensorOps } from "../ops/index.js";
 import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
 import { applyBuiltin as applyBuiltinFn } from "./check-helpers.js";
 import { coerceToTensor } from "./shape-utils.js";
@@ -368,27 +368,26 @@ function matchSameShapeTensors(
 }
 
 /**
- * Try native element-wise op on two same-shape real tensors.
- * Returns null if native addon is unavailable (caller should use inline JS loop).
+ * Element-wise op on two same-shape real tensors via the tensor-ops layer.
+ * Returns null only when the data isn't Float64Array (USE_FLOAT32 build);
+ * otherwise always succeeds (native if available, TS fallback otherwise).
  */
 function tryNativeElemwiseReal(
   at: RuntimeTensor,
   bt: RuntimeTensor,
   opCode: number
 ): RuntimeValue | null {
-  const bridge = getLapackBridge();
-  if (!bridge?.elemwise) return null;
-  const result = bridge.elemwise(
-    at.data as Float64Array,
-    bt.data as Float64Array,
-    opCode
-  );
-  return RTV.tensorRaw(result, at.shape);
+  if (!(at.data instanceof Float64Array) || !(bt.data instanceof Float64Array))
+    return null;
+  const n = at.data.length;
+  const out = new Float64Array(n);
+  tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
+  return RTV.tensorRaw(out, at.shape);
 }
 
 /**
- * Try native scalar-tensor element-wise op.
- * Returns null if native addon is unavailable.
+ * Scalar-tensor element-wise op via the tensor-ops layer.
+ * Returns null only when data isn't Float64Array; otherwise always succeeds.
  */
 function tryNativeElemwiseScalar(
   scalar: number,
@@ -397,15 +396,18 @@ function tryNativeElemwiseScalar(
   scalarOnLeft: boolean
 ): RuntimeValue | null {
   if (tensor.imag) return null;
-  const bridge = getLapackBridge();
-  if (!bridge?.elemwiseScalar) return null;
-  const result = bridge.elemwiseScalar(
-    scalar,
-    tensor.data as Float64Array,
+  if (!(tensor.data instanceof Float64Array)) return null;
+  const n = tensor.data.length;
+  const out = new Float64Array(n);
+  tensorOps.realScalarBinaryElemwise(
     opCode,
-    scalarOnLeft
+    n,
+    scalar,
+    tensor.data,
+    scalarOnLeft,
+    out
   );
-  return RTV.tensorRaw(result, tensor.shape);
+  return RTV.tensorRaw(out, tensor.shape);
 }
 
 /**
@@ -425,8 +427,8 @@ function scalarComplexParts(
 }
 
 /**
- * Try native complex-scalar * (real or complex) tensor element-wise op.
- * Returns null if native addon is unavailable.  Caller handles JS fallback.
+ * Complex-scalar * (real or complex) tensor element-wise op via the
+ * tensor-ops layer. Returns null only when the data isn't Float64Array.
  */
 function tryNativeComplexScalarTensor(
   scalarRe: number,
@@ -437,25 +439,37 @@ function tryNativeComplexScalarTensor(
   opCode: number,
   scalarOnLeft: boolean
 ): RuntimeValue | null {
-  const bridge = getLapackBridge();
-  if (!bridge?.elemwiseComplexScalar) return null;
   if (!(arrRe instanceof Float64Array)) return null;
   if (arrIm && !(arrIm instanceof Float64Array)) return null;
-  const r = bridge.elemwiseComplexScalar(
+  const n = arrRe.length;
+  const outRe = new Float64Array(n);
+  const outIm = new Float64Array(n);
+  tensorOps.complexScalarBinaryElemwise(
+    opCode,
+    n,
     scalarRe,
     scalarIm,
-    arrRe as Float64Array,
+    arrRe,
     (arrIm as Float64Array | undefined) ?? null,
-    opCode,
-    scalarOnLeft
+    scalarOnLeft,
+    outRe,
+    outIm
   );
-  if (r.im) return RTV.tensor(r.re, shape, r.im);
-  return RTV.tensorRaw(r.re, shape);
+  // Drop outIm if result is purely real (matches old bridge.elemwiseComplexScalar semantics).
+  let isReal = true;
+  for (let i = 0; i < n; i++) {
+    if (outIm[i] !== 0) {
+      isReal = false;
+      break;
+    }
+  }
+  return isReal ? RTV.tensorRaw(outRe, shape) : RTV.tensor(outRe, shape, outIm);
 }
 
 /**
  * Element-wise op on two same-shape tensors where at least one is complex.
- * Uses native addon when available, otherwise JS callback loop.
+ * Uses the tensor-ops layer (native if available, TS fallback otherwise) for
+ * Float64 data; falls back to the JS callback loop only for USE_FLOAT32 builds.
  */
 function tensorElemwiseComplex(
   at: RuntimeTensor,
@@ -468,17 +482,31 @@ function tensorElemwiseComplex(
     bIm: number
   ) => { re: number; im: number }
 ): RuntimeValue {
-  const bridge = getLapackBridge();
-  if (bridge?.elemwiseComplex) {
-    const r = bridge.elemwiseComplex(
-      at.data as Float64Array,
-      (at.imag as Float64Array) ?? null,
-      bt.data as Float64Array,
-      (bt.imag as Float64Array) ?? null,
-      opCode
+  if (at.data instanceof Float64Array && bt.data instanceof Float64Array) {
+    const n = at.data.length;
+    const outRe = new Float64Array(n);
+    const outIm = new Float64Array(n);
+    tensorOps.complexBinaryElemwise(
+      opCode,
+      n,
+      at.data,
+      (at.imag as Float64Array | undefined) ?? null,
+      bt.data,
+      (bt.imag as Float64Array | undefined) ?? null,
+      outRe,
+      outIm
     );
-    if (r.im) return RTV.tensor(r.re, at.shape, r.im);
-    return RTV.tensorRaw(r.re, at.shape);
+    // Drop outIm if result is purely real.
+    let isReal = true;
+    for (let i = 0; i < n; i++) {
+      if (outIm[i] !== 0) {
+        isReal = false;
+        break;
+      }
+    }
+    return isReal
+      ? RTV.tensorRaw(outRe, at.shape)
+      : RTV.tensor(outRe, at.shape, outIm);
   }
   const len = at.data.length;
   const aIm = at.imag;
