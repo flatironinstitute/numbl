@@ -253,6 +253,23 @@ defineBuiltin({
       },
     },
   ],
+  // JIT fast path: scalar is identity; real vector-shaped tensor collapses
+  // to a scalar via a straight-line loop in $h.tSum. Matrix/complex/dim-arg
+  // fall back to the generic ib_sum.
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const a = argTypes[0];
+    if (a.kind === "number" || a.kind === "boolean") return argCode[0];
+    if (a.kind === "tensor" && a.isComplex !== true) {
+      const shape = a.shape;
+      const isKnownVector =
+        shape !== undefined &&
+        (shape.length === 1 ||
+          (shape.length === 2 && (shape[0] === 1 || shape[1] === 1)));
+      if (isKnownVector) return `$h.tSum(${argCode[0]})`;
+    }
+    return null;
+  },
 });
 
 // ── prod ───────────────────────────────────────────────────────────────

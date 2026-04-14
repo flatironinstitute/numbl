@@ -70,6 +70,8 @@ export {
   unshare,
   shareTensor,
   asTensor,
+  tDouble,
+  tSum,
   tAdd,
   tSub,
   tMul,
@@ -121,6 +123,8 @@ import {
   unshare,
   shareTensor,
   asTensor,
+  tDouble,
+  tSum,
   tAdd,
   tSub,
   tMul,
@@ -254,6 +258,10 @@ export const jitHelpers = {
   // Var-to-var share: bumps _rc so the aliased tensor is no longer
   // eligible for in-place buffer reuse by later ops.
   shareTensor,
+
+  // Fast paths for common scalar-producing / identity builtins.
+  tDouble,
+  tSum,
 
   // Extract a row or column slice from a 2D tensor as a real tensor.
   // colonPos=0 → column slice (fix col, vary row): A(:, fixedIdx)
