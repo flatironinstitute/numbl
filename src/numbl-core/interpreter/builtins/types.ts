@@ -50,7 +50,11 @@ export interface IBuiltin {
   /** Given input JIT types + nargout, return output types and a specialized apply, or null. */
   resolve: (argTypes: JitType[], nargout: number) => IBuiltinResolution | null;
   /** Optional fast-path JS code emission for JIT. Return null to fall back to $h.ib_<name>. */
-  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null;
+  jitEmit?: (
+    argCode: string[],
+    argTypes: JitType[],
+    destName?: string
+  ) => string | null;
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -691,7 +695,11 @@ export function defineBuiltin(opts: {
   name: string;
   help?: BuiltinHelp;
   cases: BuiltinCase[];
-  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null;
+  jitEmit?: (
+    argCode: string[],
+    argTypes: JitType[],
+    destName?: string
+  ) => string | null;
 }): void {
   registerIBuiltin({
     name: opts.name,
@@ -945,13 +953,20 @@ export function predicateCases(
 // ── JIT emit helpers ───────────────────────────────────────────────────
 
 /** Fast-path emitter for unary Math.* functions.
- *  Emits Math.fn(x) for scalar numbers, $h.tHelper(x) for real tensors. */
+ *  Emits Math.fn(x) for scalar numbers, $h.tHelper(dest, x) for real tensors.
+ *  `dest` is the mangled LHS local when this call is the top-level RHS of
+ *  an Assign; tensor helpers reuse the dest buffer when it's rc==1 and
+ *  size-matching. */
 export function unaryMathJitEmit(
   mathFn: string,
   tensorHelper: string,
   requireNonneg?: boolean
-): (argCode: string[], argTypes: JitType[]) => string | null {
-  return (argCode, argTypes) => {
+): (
+  argCode: string[],
+  argTypes: JitType[],
+  destName?: string
+) => string | null {
+  return (argCode, argTypes, destName) => {
     if (argTypes.length !== 1) return null;
     const a = argTypes[0];
     if (a.kind === "number" || a.kind === "boolean") {
@@ -960,7 +975,8 @@ export function unaryMathJitEmit(
     }
     if (a.kind === "tensor" && a.isComplex !== true) {
       if (requireNonneg && !isNonneg(a)) return null;
-      return `$h.${tensorHelper}(${argCode[0]})`;
+      const dest = destName ?? "undefined";
+      return `$h.${tensorHelper}(${dest}, ${argCode[0]})`;
     }
     return null;
   };
