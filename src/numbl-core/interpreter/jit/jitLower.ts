@@ -563,6 +563,19 @@ function lowerAssignLValue(
     ];
   }
 
+  // Stage 22: Member lvalue `s.f = v` — scalar struct field assign.
+  // Three supported cases for the base:
+  //   (a) base is already a struct in env → mutate its fields map
+  //   (b) base is an empty tensor (from `s = []`) → promote to fresh
+  //       struct at runtime, update env type to struct
+  //   (c) base is not yet in the env (write-only local) → ditto (b):
+  //       compile as fresh-struct-init + field set, update env type
+  // All three emit the same IR shape; codegen branches on
+  // `needsPromote` to decide whether to emit the struct-init prefix.
+  if (lv.type === "Member") {
+    return tryLowerMemberAssign(ctx, lv, stmt.expr);
+  }
+
   // Only `Index` lvalues — not `Member`, etc.
   if (lv.type !== "Index") return null;
 
@@ -586,6 +599,30 @@ function lowerAssignLValue(
       lv.indices[0],
       stmt.expr
     );
+  }
+
+  // Stage 17: column slice write `dst(:, j) = src` where both are real
+  // tensors. LHS shape: [Colon, scalar_j], dst is a 2-D real tensor, RHS
+  // is a plain Ident referring to a real-tensor variable. Drives chunkie
+  // adapgausskerneval's `vals(:, jj+1) = v2` and chunkerinterior's
+  // `rss(:, jj) = rval(:, k)` after the latter's RHS binds to a tensor
+  // via the stage 5 slice alias.
+  if (
+    lv.indices.length === 2 &&
+    lv.indices[0].type === "Colon" &&
+    lv.indices[1].type !== "Colon" &&
+    lv.indices[1].type !== "Range"
+  ) {
+    const colResult = tryLowerColAssign(
+      ctx,
+      baseName,
+      baseType,
+      lv.indices[1],
+      stmt.expr
+    );
+    if (colResult) return colResult;
+    // Fall through — if the shape doesn't match the narrow col-write
+    // pattern we bail on the whole statement below.
   }
 
   // 1..3 indices, all scalar numeric.
@@ -745,6 +782,212 @@ function tryLowerRangeAssign(
       srcType,
       srcStart,
       srcEnd,
+    },
+  ];
+}
+
+/**
+ * Lower `dst(:, j) = src` where both are real tensors.
+ *
+ * Shape constraints:
+ *   - LHS is `Index(Ident(dst), [Colon, scalar_j])`
+ *   - `dst` is a real tensor with shape.length === 2 and shape[0] known
+ *     at compile time (so codegen can check RHS length statically at
+ *     lowering time; shape[0] is also available via the hoisted $dst_d0
+ *     alias at runtime)
+ *   - RHS is a plain `Ident` referring to a real tensor (sliced or
+ *     whole — we don't care as long as the linear element count
+ *     matches dst.shape[0] at runtime)
+ *
+ * Anything else returns null so the caller bails.
+ */
+function tryLowerColAssign(
+  ctx: LowerCtx,
+  baseName: string,
+  baseType: JitType,
+  colIdxExpr: Expr,
+  rhsExpr: Expr
+): JitStmt[] | null {
+  if (baseType.kind !== "tensor" || baseType.isComplex === true) return null;
+  if (!baseType.shape || baseType.shape.length !== 2) return null;
+
+  // RHS: plain Ident referring to a real-tensor variable in the env.
+  // Matches the chunkie `vals(:, jj+1) = v2;` shape. Slice-alias names
+  // don't correspond to a real tensor at runtime, so skip them.
+  if (rhsExpr.type !== "Ident") return null;
+  if (ctx.sliceAliases.has(rhsExpr.name)) return null;
+  const srcName = rhsExpr.name;
+  const srcType = ctx.env.get(srcName);
+  if (!srcType || srcType.kind !== "tensor" || srcType.isComplex === true)
+    return null;
+
+  const colIndex = lowerExpr(ctx, colIdxExpr);
+  if (!colIndex) return null;
+  if (colIndex.jitType.kind !== "number" && colIndex.jitType.kind !== "boolean")
+    return null;
+
+  // Mark dst as assigned (write-target → unshare-on-entry hoist); clear
+  // any prior slice alias defensively, matching the range-assign path.
+  ctx.assignedVars.add(baseName);
+  ctx.sliceAliases.delete(baseName);
+  ctx._hasTensorOps = true;
+
+  return [
+    {
+      tag: "AssignIndexCol",
+      baseName,
+      baseType,
+      colIndex,
+      srcBaseName: srcName,
+      srcType,
+    },
+  ];
+}
+
+/**
+ * Stage 21: lower `src(a:b)` on a real-tensor base into a
+ * `RangeSliceRead` IR node producing a fresh column-vector tensor.
+ *
+ * Accepts `Range` with no step (default step 1). `start` and `end`
+ * must lower to numeric/boolean scalar exprs. The result is a real
+ * tensor with shape `[?, 1]` — the exact length is runtime-dependent.
+ *
+ * Caller responsibility: match the parent expression shape
+ * `Index(Ident(src), [Range])` or `FuncCall(src, [Range])` before
+ * calling. Returns null if the source isn't a real tensor or the
+ * range isn't the expected shape.
+ */
+function tryLowerRangeSliceRead(
+  ctx: LowerCtx,
+  baseName: string,
+  rangeExpr: Expr
+): JitExpr | null {
+  if (rangeExpr.type !== "Range") return null;
+  if (rangeExpr.step !== null) return null;
+
+  const srcType = ctx.env.get(baseName);
+  if (!srcType || srcType.kind !== "tensor" || srcType.isComplex === true)
+    return null;
+  // Slice-alias names don't correspond to a real tensor at runtime.
+  if (ctx.sliceAliases.has(baseName)) return null;
+
+  const start = lowerExpr(ctx, rangeExpr.start);
+  if (!start) return null;
+  if (start.jitType.kind !== "number" && start.jitType.kind !== "boolean")
+    return null;
+
+  // `end` keyword inside the indexing context refers to the base's
+  // linear length. Codegen substitutes the hoisted `.data.length`
+  // alias. Any other expression lowers normally.
+  let end: JitExpr | null;
+  if (rangeExpr.end.type === "EndKeyword") {
+    end = null;
+  } else {
+    end = lowerExpr(ctx, rangeExpr.end);
+    if (!end) return null;
+    if (end.jitType.kind !== "number" && end.jitType.kind !== "boolean")
+      return null;
+  }
+
+  ctx._hasTensorOps = true;
+  return {
+    tag: "RangeSliceRead",
+    baseName,
+    start,
+    end,
+    jitType: { kind: "tensor", isComplex: false, shape: [-1, 1] },
+  };
+}
+
+/**
+ * Lower `s.f = v` (Member lvalue). Base must be a plain Ident. Three
+ * supported base-type cases:
+ *   (a) base is already a `struct` in env → mutate its fields map.
+ *   (b) base is a tensor with shape [0, 0] (the `s = []` idiom) →
+ *       promote to fresh struct at runtime, update env type to struct.
+ *   (c) base has no env type yet (write-only local) → same as (b).
+ *
+ * After lowering, env type for `baseName` is set to a struct that
+ * includes the new field (with `value.jitType`) so subsequent
+ * `s.f` reads (stage 12) can resolve it. Field type is re-unified if
+ * the field is re-assigned with a different type.
+ *
+ * RHS must lower to a numeric scalar or real tensor — class instances
+ * and cells are out of scope. The actual RHS type is stored in the
+ * struct's fields map for subsequent MemberRead lookups.
+ */
+function tryLowerMemberAssign(
+  ctx: LowerCtx,
+  lv: { type: "Member"; base: Expr; name: string },
+  rhsExpr: Expr
+): JitStmt[] | null {
+  if (lv.base.type !== "Ident") return null;
+  const baseName = lv.base.name;
+  const fieldName = lv.name;
+
+  // Reject class instances (their field dispatch may go through
+  // user-defined getters/setters that the simple fields-map write
+  // would bypass).
+  const currentType = ctx.env.get(baseName);
+  if (currentType && currentType.kind === "class_instance") return null;
+
+  // Determine whether we need to promote at runtime.
+  //   - struct → no promote, mutate fields map directly
+  //   - tensor[0x0] (real) → promote, `s = []; s.f = v` idiom
+  //   - undefined → promote, write-only local
+  //   - anything else → bail (complex tensors, unknown, cells, …)
+  let needsPromote: boolean;
+  if (currentType === undefined) {
+    needsPromote = true;
+  } else if (currentType.kind === "struct") {
+    needsPromote = false;
+  } else if (
+    currentType.kind === "tensor" &&
+    currentType.isComplex !== true &&
+    currentType.shape &&
+    currentType.shape.length === 2 &&
+    currentType.shape[0] === 0 &&
+    currentType.shape[1] === 0
+  ) {
+    needsPromote = true;
+  } else {
+    return null;
+  }
+
+  // Lower the RHS. Only accept numeric scalars and real tensors.
+  const value = lowerExpr(ctx, rhsExpr);
+  if (!value) return null;
+  const vk = value.jitType.kind;
+  if (
+    vk !== "number" &&
+    vk !== "boolean" &&
+    vk !== "tensor" &&
+    vk !== "complex_or_number"
+  )
+    return null;
+  if (vk === "tensor" && value.jitType.isComplex === true) return null;
+
+  // Update env: mark baseName as a struct whose fields include the
+  // new field. If the base is already a struct, extend (or overwrite)
+  // its fields map with the new field's type.
+  let newFields: Record<string, JitType>;
+  if (currentType && currentType.kind === "struct" && currentType.fields) {
+    newFields = { ...currentType.fields, [fieldName]: value.jitType };
+  } else {
+    newFields = { [fieldName]: value.jitType };
+  }
+  ctx.env.set(baseName, { kind: "struct", fields: newFields });
+  ctx.assignedVars.add(baseName);
+  // Clear any slice alias on this name (defensive — struct type supersedes).
+  ctx.sliceAliases.delete(baseName);
+
+  return [
+    {
+      tag: "AssignMember",
+      baseName,
+      fieldName,
+      value,
+      needsPromote,
     },
   ];
 }
@@ -1286,6 +1529,14 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         };
       }
 
+      // Stage 21: range slice read `src(a:b)` — parser may emit
+      // FuncCall when `src` is a variable. Match BEFORE lowerIndexExpr
+      // so the Range isn't rejected by the all-scalar check.
+      if (varType && expr.args.length === 1 && expr.args[0].type === "Range") {
+        const result = tryLowerRangeSliceRead(ctx, expr.name, expr.args[0]);
+        if (result) return result;
+      }
+
       // If the name is a known variable, treat as indexing (MATLAB ambiguity)
       if (varType) {
         return lowerIndexExpr(ctx, {
@@ -1441,6 +1692,22 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       if (expr.base.type === "Ident") {
         const alias = ctx.sliceAliases.get(expr.base.name);
         if (alias) return lowerSliceAliasRead(ctx, alias, expr.indices);
+      }
+      // Stage 21: range slice read `src(a:b)` on a real-tensor base
+      // returns a fresh column-vector tensor. Must match BEFORE
+      // `lowerExpr(expr.base)` so the Range expression isn't lowered
+      // as a standalone tensor.
+      if (
+        expr.base.type === "Ident" &&
+        expr.indices.length === 1 &&
+        expr.indices[0].type === "Range"
+      ) {
+        const result = tryLowerRangeSliceRead(
+          ctx,
+          expr.base.name,
+          expr.indices[0]
+        );
+        if (result) return result;
       }
       const base = lowerExpr(ctx, expr.base);
       if (!base) return null;

@@ -18,6 +18,8 @@ import {
   structFieldKey,
   structArrayElementsKey,
   collectTensorUsage,
+  collectStructMemberWrites,
+  collectPlainAssignTargets,
   collectStructFieldReads,
   collectStructArrayElementReads,
 } from "./jitCodegenHoist.js";
@@ -261,18 +263,43 @@ export function generateJS(
     }
   }
 
-  // Stage 12: hoist scalar struct-field reads. Walk the IR to find every
-  // `MemberRead` node, collect unique (baseName, fieldName) pairs, and
-  // emit a per-pair `var $<base>_<field> = <base>.fields.get("<field>")`
-  // at function entry. Later `emitExpr` case `MemberRead` substitutes
-  // the alias for each use. The struct bases must be loop-invariant
-  // (never reassigned inside the body); since the lowering only accepts
-  // Member reads when the env type is still a struct, any post-assign
-  // reads bail and we never hoist stale fields.
+  // Stage 22: for any struct param that is a target of an AssignMember
+  // inside the body, emit a one-time `$h.structUnshare_h(s)` clone at
+  // function entry. This preserves MATLAB value semantics when the
+  // caller passes a struct and the callee mutates a field — without
+  // the unshare, `s.fields.set(...)` inside a JIT'd function would
+  // leak the mutation back to the caller's binding.
+  //
+  // Locals (created inside the body via `s = []` + promote, or `s =
+  // struct()`) skip the unshare because they're already freshly
+  // allocated — no alias to clone away from.
+  const structMemberWrites = collectStructMemberWrites(body);
+  for (const name of [...structMemberWrites].sort()) {
+    if (!paramSet.has(name)) continue;
+    lines.push(
+      `${indent}${mangle(name)} = $h.structUnshare_h(${mangle(name)});`
+    );
+  }
+
+  // Stage 12: hoist scalar struct-field reads for PARAM bases that are
+  // NOT reassigned inside the body. Walk the IR to find every
+  // `MemberRead` node, collect unique `(baseName, fieldName)` pairs,
+  // and emit a per-pair
+  //   `var $<base>_<field> = <base>.fields.get("<field>")`
+  // at function entry IF `baseName` is a param AND isn't touched by a
+  // plain Assign or AssignMember inside the body. Otherwise (locals, or
+  // a param that's reassigned — e.g. `s = []; s.x = v;` reusing the
+  // same name as a struct param), fall through to the per-use
+  // `base.fields.get("field")` form in emitExpr so reads always see
+  // current state.
+  const plainAssignTargets = collectPlainAssignTargets(body);
   const structFieldReads = collectStructFieldReads(body);
   const structFieldKeys = [...structFieldReads.keys()].sort();
   for (const key of structFieldKeys) {
     const { baseName, fieldName } = structFieldReads.get(key)!;
+    if (!paramSet.has(baseName)) continue; // local — don't hoist
+    if (plainAssignTargets.has(baseName)) continue; // reassigned
+    if (structMemberWrites.has(baseName)) continue; // mutated
     const aliasName = `$${mangle(baseName)}_${fieldName}`;
     _hoistedStructFields.set(key, aliasName);
     lines.push(
@@ -356,6 +383,14 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
 
     case "AssignIndexRange":
       lines.push(`${indent}${emitAssignIndexRange(stmt)};`);
+      break;
+
+    case "AssignIndexCol":
+      lines.push(`${indent}${emitAssignIndexCol(stmt)};`);
+      break;
+
+    case "AssignMember":
+      emitAssignMember(lines, stmt, indent);
       break;
 
     case "ExprStmt":
@@ -490,6 +525,31 @@ function emitExpr(expr: JitExpr, destName?: string): string {
 
     case "VConcatGrow":
       return `$h.vconcatGrow1r(${emitExpr(expr.base)}, ${emitExpr(expr.value)})`;
+
+    case "RangeSliceRead": {
+      const alias = _hoistedAliases.get(expr.baseName);
+      if (!alias) {
+        throw new Error(
+          `JIT codegen: RangeSliceRead src '${expr.baseName}' without a hoisted alias`
+        );
+      }
+      const startCode = emitExpr(expr.start);
+      const start = isKnownInteger(expr.start.jitType)
+        ? startCode
+        : `Math.round(${startCode})`;
+      let end: string;
+      if (expr.end === null) {
+        // `src(a:end)` — the MATLAB `end` keyword. Use the hoisted
+        // base length alias (== data.length for 1-D linear indexing).
+        end = alias.len;
+      } else {
+        const endCode = emitExpr(expr.end);
+        end = isKnownInteger(expr.end.jitType)
+          ? endCode
+          : `Math.round(${endCode})`;
+      }
+      return `$h.subarrayCopy1r(${alias.data}, ${alias.len}, ${start}, ${end})`;
+    }
 
     case "MemberRead": {
       const key = structFieldKey(expr.baseName, expr.fieldName);
@@ -863,6 +923,48 @@ function emitAssignIndexRange(
   const srcStart = stmt.srcStart !== null ? emitRI(stmt.srcStart) : "1";
   const srcEnd = stmt.srcEnd !== null ? emitRI(stmt.srcEnd) : srcAlias.len;
   return `$h.setRange1r_h(${dstAlias.data}, ${dstAlias.len}, ${dstStart}, ${dstEnd}, ${srcAlias.data}, ${srcAlias.len}, ${srcStart}, ${srcEnd})`;
+}
+
+function emitAssignMember(
+  lines: string[],
+  stmt: JitStmt & { tag: "AssignMember" },
+  indent: string
+): void {
+  const base = mangle(stmt.baseName);
+  if (stmt.needsPromote) {
+    // `s = []; s.f = v` (or write-only local): initialize the runtime
+    // value as a fresh empty struct before writing the first field.
+    // Lowering only sets needsPromote=true on the FIRST Member assign
+    // for a given (baseName, segment), so subsequent field writes skip
+    // this and go straight to the fields-map mutate.
+    lines.push(`${indent}${base} = $h.structNew_h();`);
+  }
+  // Emit a direct `fields.set(...)` to avoid a helper-hop per assign.
+  // `structSetField_h` exists in the helpers for symmetry with the
+  // read path and for clients that want a function reference.
+  const value = emitExpr(stmt.value);
+  const fieldLit = JSON.stringify(stmt.fieldName);
+  lines.push(`${indent}${base}.fields.set(${fieldLit}, ${value});`);
+}
+
+function emitAssignIndexCol(stmt: JitStmt & { tag: "AssignIndexCol" }): string {
+  const dstAlias = _hoistedAliases.get(stmt.baseName);
+  const srcAlias = _hoistedAliases.get(stmt.srcBaseName);
+  if (!dstAlias) {
+    throw new Error(
+      `JIT codegen: AssignIndexCol dst '${stmt.baseName}' without a hoisted alias`
+    );
+  }
+  if (!srcAlias) {
+    throw new Error(
+      `JIT codegen: AssignIndexCol src '${stmt.srcBaseName}' without a hoisted alias`
+    );
+  }
+  const colCode = emitExpr(stmt.colIndex);
+  const col = isKnownInteger(stmt.colIndex.jitType)
+    ? colCode
+    : `Math.round(${colCode})`;
+  return `$h.setCol2r_h(${dstAlias.data}, ${dstAlias.d0}, ${dstAlias.len}, ${col}, ${srcAlias.data}, ${srcAlias.len})`;
 }
 
 function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
