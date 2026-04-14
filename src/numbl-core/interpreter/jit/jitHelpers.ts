@@ -548,6 +548,54 @@ export const jitHelpers = {
     }
     return result;
   },
+
+  // Stage 24: soft-bail user function call. Dispatches the named
+  // function through the interpreter's runtime. Used when the JIT
+  // couldn't lower the callee's body (tensor arithmetic, matrix
+  // multiply, etc.) but the enclosing loop is otherwise JIT-friendly.
+  // Mirrors callFuncHandle's slow path + return-type verification.
+  //
+  // The full call-frame + cleanup dance is deliberate: user functions
+  // can have cleanup handlers, throw errors, and maintain persistent
+  // state — all of which need frame tracking for correct semantics.
+  callUserFunc: (
+    rt: {
+      pushCallFrame: (name: string) => void;
+      popCallFrame: () => void;
+      pushCleanupScope: () => void;
+      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
+      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
+      annotateError: (e: unknown) => void;
+    },
+    name: string,
+    expectedType: string,
+    ...args: unknown[]
+  ) => {
+    let result: unknown;
+    rt.pushCallFrame(name);
+    rt.pushCleanupScope();
+    try {
+      result = rt.dispatch(name, 1, args);
+    } catch (e) {
+      rt.annotateError(e);
+      throw e;
+    } finally {
+      rt.popAndRunCleanups((cfn: RuntimeFunction) => {
+        if (cfn.jsFn) {
+          if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
+          else cfn.jsFn();
+        } else {
+          rt.dispatch(cfn.name, 0, []);
+        }
+      });
+      rt.popCallFrame();
+    }
+    const actualType = typeTagOf(result);
+    if (actualType !== expectedType) {
+      throw new JitFuncHandleBailError(name, expectedType, actualType);
+    }
+    return result;
+  },
 } as Record<string, unknown>;
 
 // ── IBuiltin integration ───────────────────────────────────────────────
