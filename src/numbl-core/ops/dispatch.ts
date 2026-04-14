@@ -38,6 +38,7 @@ export const tensorOps = {
     b: Float64Array,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpRealBinary) {
       bridge.tensorOpRealBinary(op, n, a, b, out);
@@ -54,6 +55,7 @@ export const tensorOps = {
     scalarOnLeft: boolean,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpRealScalarBinary) {
       bridge.tensorOpRealScalarBinary(op, n, scalar, arr, scalarOnLeft, out);
@@ -72,6 +74,7 @@ export const tensorOps = {
     outRe: Float64Array,
     outIm: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpComplexBinary) {
       bridge.tensorOpComplexBinary(op, n, aRe, aIm, bRe, bIm, outRe, outIm);
@@ -91,6 +94,7 @@ export const tensorOps = {
     outRe: Float64Array,
     outIm: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpComplexScalarBinary) {
       bridge.tensorOpComplexScalarBinary(
@@ -125,6 +129,7 @@ export const tensorOps = {
     a: Float64Array,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpRealUnary) {
       bridge.tensorOpRealUnary(op, n, a, out);
@@ -141,6 +146,7 @@ export const tensorOps = {
     outRe: Float64Array,
     outIm: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpComplexUnary) {
       bridge.tensorOpComplexUnary(op, n, aRe, aIm, outRe, outIm);
@@ -155,6 +161,7 @@ export const tensorOps = {
     aIm: Float64Array | null,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpComplexAbs) {
       bridge.tensorOpComplexAbs(n, aRe, aIm, out);
@@ -170,6 +177,7 @@ export const tensorOps = {
     b: Float64Array,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpRealComparison) {
       bridge.tensorOpRealComparison(op, n, a, b, out);
@@ -186,6 +194,7 @@ export const tensorOps = {
     scalarOnLeft: boolean,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpRealScalarComparison) {
       bridge.tensorOpRealScalarComparison(
@@ -210,6 +219,7 @@ export const tensorOps = {
     bIm: Float64Array | null,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpComplexComparison) {
       bridge.tensorOpComplexComparison(op, n, aRe, aIm, bRe, bIm, out);
@@ -228,6 +238,7 @@ export const tensorOps = {
     scalarOnLeft: boolean,
     out: Float64Array
   ): void {
+    if (n === 0) return;
     const bridge = getLapackBridge();
     if (bridge?.tensorOpComplexScalarComparison) {
       bridge.tensorOpComplexScalarComparison(
