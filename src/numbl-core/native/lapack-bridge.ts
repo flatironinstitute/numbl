@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 4;
+export const NATIVE_ADDON_EXPECTED_VERSION = 5;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -639,6 +639,32 @@ export interface LapackBridge {
     scalarOnLeft: boolean,
     outRe: Float64Array,
     outIm: Float64Array
+  ): void;
+
+  /** Real unary elemwise: out[i] = OP(a[i]). op codes per OpUnary. */
+  tensorOpRealUnary?(
+    op: number,
+    n: number,
+    a: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Complex unary elemwise (split storage). aIm may be null. ABS unsupported. */
+  tensorOpComplexUnary?(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  /** Complex absolute value (real-valued output). aIm may be null. */
+  tensorOpComplexAbs?(
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    out: Float64Array
   ): void;
 
   /** Dump op-code enum values as a stable string (drift detection). */

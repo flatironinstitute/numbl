@@ -29,13 +29,16 @@ extern "C" {
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
 // changes, etc.) so that the JS side can detect stale builds.
-static const int ADDON_VERSION = 4;
+static const int ADDON_VERSION = 5;
 
 // ── New tensor-ops layer (native/ops/) ───────────────────────────────────────
 Napi::Value TensorOpRealBinary(const Napi::CallbackInfo& info);
 Napi::Value TensorOpRealScalarBinary(const Napi::CallbackInfo& info);
 Napi::Value TensorOpComplexBinary(const Napi::CallbackInfo& info);
 Napi::Value TensorOpComplexScalarBinary(const Napi::CallbackInfo& info);
+Napi::Value TensorOpRealUnary(const Napi::CallbackInfo& info);
+Napi::Value TensorOpComplexUnary(const Napi::CallbackInfo& info);
+Napi::Value TensorOpComplexAbs(const Napi::CallbackInfo& info);
 Napi::Value TensorOpDumpCodes(const Napi::CallbackInfo& info);
 
 static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
@@ -124,6 +127,12 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, TensorOpComplexBinary));
   exports.Set(Napi::String::New(env, "tensorOpComplexScalarBinary"),
               Napi::Function::New(env, TensorOpComplexScalarBinary));
+  exports.Set(Napi::String::New(env, "tensorOpRealUnary"),
+              Napi::Function::New(env, TensorOpRealUnary));
+  exports.Set(Napi::String::New(env, "tensorOpComplexUnary"),
+              Napi::Function::New(env, TensorOpComplexUnary));
+  exports.Set(Napi::String::New(env, "tensorOpComplexAbs"),
+              Napi::Function::New(env, TensorOpComplexAbs));
   exports.Set(Napi::String::New(env, "tensorOpDumpCodes"),
               Napi::Function::New(env, TensorOpDumpCodes));
   return exports;

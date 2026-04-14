@@ -118,6 +118,54 @@ Napi::Value TensorOpComplexScalarBinary(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value TensorOpRealUnary(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4) {
+    Napi::TypeError::New(env,
+      "tensorOpRealUnary(op, n, a, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  int rc = numbl_real_unary_elemwise(op, n, AsF64(info[2]), AsF64Mut(info[3]));
+  ThrowOnError(env, rc, "tensorOpRealUnary");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpComplexUnary(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6) {
+    Napi::TypeError::New(env,
+      "tensorOpComplexUnary(op, n, aRe, aIm|null, outRe, outIm)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  size_t n = (size_t)info[1].As<Napi::Number>().Int64Value();
+  int rc = numbl_complex_unary_elemwise(
+      op, n,
+      AsF64(info[2]), AsF64OrNull(info[3]),
+      AsF64Mut(info[4]), AsF64Mut(info[5]));
+  ThrowOnError(env, rc, "tensorOpComplexUnary");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpComplexAbs(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 4) {
+    Napi::TypeError::New(env,
+      "tensorOpComplexAbs(n, aRe, aIm|null, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  size_t n = (size_t)info[0].As<Napi::Number>().Int64Value();
+  int rc = numbl_complex_abs(
+      n, AsF64(info[1]), AsF64OrNull(info[2]), AsF64Mut(info[3]));
+  ThrowOnError(env, rc, "tensorOpComplexAbs");
+  return env.Undefined();
+}
+
 Napi::Value TensorOpDumpCodes(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   size_t need = numbl_dump_op_codes(nullptr, 0);

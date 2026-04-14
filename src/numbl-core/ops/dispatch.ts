@@ -17,6 +17,11 @@ import {
   tsComplexBinaryElemwise,
   tsComplexScalarBinaryElemwise,
 } from "./complexBinaryElemwise.js";
+import { tsRealUnaryElemwise } from "./realUnaryElemwise.js";
+import {
+  tsComplexUnaryElemwise,
+  tsComplexAbs,
+} from "./complexUnaryElemwise.js";
 
 export const tensorOps = {
   realBinaryElemwise(
@@ -104,6 +109,50 @@ export const tensorOps = {
         outRe,
         outIm
       );
+    }
+  },
+
+  realUnaryElemwise(
+    op: number,
+    n: number,
+    a: Float64Array,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpRealUnary) {
+      bridge.tensorOpRealUnary(op, n, a, out);
+    } else {
+      tsRealUnaryElemwise(op, n, a, out);
+    }
+  },
+
+  complexUnaryElemwise(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpComplexUnary) {
+      bridge.tensorOpComplexUnary(op, n, aRe, aIm, outRe, outIm);
+    } else {
+      tsComplexUnaryElemwise(op, n, aRe, aIm, outRe, outIm);
+    }
+  },
+
+  complexAbs(
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpComplexAbs) {
+      bridge.tensorOpComplexAbs(n, aRe, aIm, out);
+    } else {
+      tsComplexAbs(n, aRe, aIm, out);
     }
   },
 };

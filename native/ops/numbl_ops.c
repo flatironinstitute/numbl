@@ -31,6 +31,18 @@ size_t numbl_dump_op_codes(char* buf, size_t buf_size) {
                 "complex_binary:ADD=%d,SUB=%d,MUL=%d,DIV=%d;",
                 NUMBL_COMPLEX_BIN_ADD, NUMBL_COMPLEX_BIN_SUB,
                 NUMBL_COMPLEX_BIN_MUL, NUMBL_COMPLEX_BIN_DIV);
+  n += snprintf(tmp + n, sizeof(tmp) - n,
+                "unary:EXP=%d,LOG=%d,LOG2=%d,LOG10=%d,SQRT=%d,ABS=%d,"
+                "FLOOR=%d,CEIL=%d,ROUND=%d,TRUNC=%d,"
+                "SIN=%d,COS=%d,TAN=%d,ASIN=%d,ACOS=%d,ATAN=%d,"
+                "SINH=%d,COSH=%d,TANH=%d,SIGN=%d;",
+                NUMBL_UNARY_EXP, NUMBL_UNARY_LOG, NUMBL_UNARY_LOG2,
+                NUMBL_UNARY_LOG10, NUMBL_UNARY_SQRT, NUMBL_UNARY_ABS,
+                NUMBL_UNARY_FLOOR, NUMBL_UNARY_CEIL, NUMBL_UNARY_ROUND,
+                NUMBL_UNARY_TRUNC, NUMBL_UNARY_SIN, NUMBL_UNARY_COS,
+                NUMBL_UNARY_TAN, NUMBL_UNARY_ASIN, NUMBL_UNARY_ACOS,
+                NUMBL_UNARY_ATAN, NUMBL_UNARY_SINH, NUMBL_UNARY_COSH,
+                NUMBL_UNARY_TANH, NUMBL_UNARY_SIGN);
   size_t need = (size_t)n;
   if (buf && buf_size > need) {
     memcpy(buf, tmp, need + 1);

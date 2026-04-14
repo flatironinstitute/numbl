@@ -10,7 +10,7 @@
 
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
-import { OpRealBin, OpComplexBin } from "../numbl-core/ops/opCodes.js";
+import { OpRealBin, OpComplexBin, OpUnary } from "../numbl-core/ops/opCodes.js";
 
 function loadAddon(): unknown | null {
   try {
@@ -24,7 +24,11 @@ function loadAddon(): unknown | null {
 function expectedDump(): string {
   return (
     `real_binary:ADD=${OpRealBin.ADD},SUB=${OpRealBin.SUB},MUL=${OpRealBin.MUL},DIV=${OpRealBin.DIV};` +
-    `complex_binary:ADD=${OpComplexBin.ADD},SUB=${OpComplexBin.SUB},MUL=${OpComplexBin.MUL},DIV=${OpComplexBin.DIV};`
+    `complex_binary:ADD=${OpComplexBin.ADD},SUB=${OpComplexBin.SUB},MUL=${OpComplexBin.MUL},DIV=${OpComplexBin.DIV};` +
+    `unary:EXP=${OpUnary.EXP},LOG=${OpUnary.LOG},LOG2=${OpUnary.LOG2},LOG10=${OpUnary.LOG10},SQRT=${OpUnary.SQRT},ABS=${OpUnary.ABS},` +
+    `FLOOR=${OpUnary.FLOOR},CEIL=${OpUnary.CEIL},ROUND=${OpUnary.ROUND},TRUNC=${OpUnary.TRUNC},` +
+    `SIN=${OpUnary.SIN},COS=${OpUnary.COS},TAN=${OpUnary.TAN},ASIN=${OpUnary.ASIN},ACOS=${OpUnary.ACOS},ATAN=${OpUnary.ATAN},` +
+    `SINH=${OpUnary.SINH},COSH=${OpUnary.COSH},TANH=${OpUnary.TANH},SIGN=${OpUnary.SIGN};`
   );
 }
 
