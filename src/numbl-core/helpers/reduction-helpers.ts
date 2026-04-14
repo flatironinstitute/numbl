@@ -439,14 +439,31 @@ export type ReductionKernel = {
   reduceDim: (v: RuntimeTensor, dim: number) => RuntimeValue;
 };
 
-/** Create an accumulator-based reduction kernel (sum, mean, etc.) */
+/** Create an accumulator-based reduction kernel (sum, mean, etc.).
+ *
+ * When `opCode` is provided (an OpReduce.* value whose semantics match
+ * `reduceFn`/`initial`), the reduceAll fast path routes Float64 real and
+ * complex tensors through tensorOps.realFlatReduce.  The closure path
+ * is still used as a fallback for non-Float64 data. */
 export function accumKernel(
   reduceFn: (acc: number, val: number) => number,
   initial: number,
-  finalizeFn?: (acc: number, count: number) => number
+  finalizeFn?: (acc: number, count: number) => number,
+  opCode?: number
 ): ReductionKernel {
   return {
     reduceAll: v => {
+      if (opCode !== undefined && v.data instanceof Float64Array) {
+        const out = new Float64Array(1);
+        tensorOps.realFlatReduce(opCode, v.data.length, v.data, out);
+        const re = finalizeFn ? finalizeFn(out[0], v.data.length) : out[0];
+        if (v.imag && v.imag instanceof Float64Array) {
+          tensorOps.realFlatReduce(opCode, v.imag.length, v.imag, out);
+          const im = finalizeFn ? finalizeFn(out[0], v.imag.length) : out[0];
+          if (im !== 0) return RTV.complex(re, im);
+        }
+        return RTV.num(re);
+      }
       let acc = initial;
       for (let i = 0; i < v.data.length; i++) acc = reduceFn(acc, v.data[i]);
       const re = finalizeFn ? finalizeFn(acc, v.data.length) : acc;

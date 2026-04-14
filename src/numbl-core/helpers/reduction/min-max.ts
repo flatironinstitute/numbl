@@ -27,6 +27,7 @@ import {
   firstReduceDim,
   copyTensor,
 } from "../reduction-helpers.js";
+import { tensorOps, OpReduce } from "../../ops/index.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 
@@ -334,7 +335,19 @@ export function minMaxImpl(
       }
       const d = firstReduceDim(v.shape);
       if (d === 0) {
-        // Vector: full scan (direct, no index array needed)
+        // Vector: full scan (direct, no index array needed).
+        // Fast path: single-output, real, Float64 → tensorOps.realFlatReduce.
+        if (
+          nargout <= 1 &&
+          !v.imag &&
+          v.data instanceof Float64Array &&
+          (name === "min" || name === "max")
+        ) {
+          const out = new Float64Array(1);
+          const op = name === "min" ? OpReduce.MIN : OpReduce.MAX;
+          tensorOps.realFlatReduce(op, v.data.length, v.data, out);
+          return v._isLogical ? RTV.logical(out[0] !== 0) : RTV.num(out[0]);
+        }
         const { mRe, mIm, mIdx } = minMaxScanDirect(
           v.data,
           v.imag,

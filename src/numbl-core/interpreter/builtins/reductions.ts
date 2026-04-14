@@ -34,6 +34,7 @@ import {
   type ReductionKernel,
 } from "../../helpers/reduction-helpers.js";
 import { cumOp, diffOnce } from "../../helpers/reduction/cumulative.js";
+import { OpReduce } from "../../ops/index.js";
 import { rstr } from "../../runtime/runtime.js";
 
 // ── Type rule helpers ──────────────────────────────────────────────────
@@ -213,7 +214,12 @@ function reductionApply(
 
 // ── sum ────────────────────────────────────────────────────────────────
 
-const sumKernel = accumKernel((acc, val) => acc + val, 0);
+const sumKernel = accumKernel(
+  (acc, val) => acc + val,
+  0,
+  undefined,
+  OpReduce.SUM
+);
 const sumOmitNanKernel = accumKernelOmitNaN((acc, val) => acc + val, 0);
 
 defineBuiltin({
@@ -282,7 +288,7 @@ defineBuiltin({
           }
           const kernel = omitNaN
             ? accumKernelOmitNaN((acc, val) => acc * val, 1)
-            : accumKernel((acc, val) => acc * val, 1);
+            : accumKernel((acc, val) => acc * val, 1, undefined, OpReduce.PROD);
           if (parsedArgs.length >= 2) {
             if (
               isRuntimeChar(parsedArgs[1]) &&
@@ -305,7 +311,8 @@ defineBuiltin({
 const meanKernel = accumKernel(
   (acc, val) => acc + val,
   0,
-  (sum, count) => sum / count
+  (sum, count) => sum / count,
+  OpReduce.SUM
 );
 const meanOmitNanKernel = accumKernelOmitNaN(
   (acc, val) => acc + val,

@@ -439,6 +439,20 @@ export function applyUnaryElemwise(
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
       return makeTensor(out, undefined, v.shape.slice());
     }
+    // Complex tensor path.
+    const opCode = nativeUnaryOpCode.get(realFn);
+    // tensorOps.complexUnaryElemwise supports all ops except ABS (op 5).
+    if (
+      opCode !== undefined &&
+      opCode !== 5 &&
+      v.data instanceof Float64Array &&
+      v.imag instanceof Float64Array
+    ) {
+      const outRe = new Float64Array(n);
+      const outIm = new Float64Array(n);
+      tensorOps.complexUnaryElemwise(opCode, n, v.data, v.imag, outRe, outIm);
+      return makeTensor(outRe, outIm, v.shape.slice());
+    }
     const outR = new FloatXArray(n);
     const outI = new FloatXArray(n);
     for (let i = 0; i < n; i++) {
@@ -564,6 +578,19 @@ function applyUnaryRealResult(
 
   if (isRuntimeTensor(v)) {
     const n = v.data.length;
+    // Fast path for abs (realFn = Math.abs) on Float64 data.
+    if (realFn === Math.abs && v.data instanceof Float64Array) {
+      if (!v.imag) {
+        const out = new Float64Array(n);
+        tensorOps.realUnaryElemwise(5, n, v.data, out); // OpUnary.ABS
+        return RTV.tensorRaw(out, v.shape.slice());
+      }
+      if (v.imag instanceof Float64Array) {
+        const out = new Float64Array(n);
+        tensorOps.complexAbs(n, v.data, v.imag, out);
+        return RTV.tensorRaw(out, v.shape.slice());
+      }
+    }
     const out = new FloatXArray(n);
     if (!v.imag) {
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
