@@ -6,7 +6,6 @@
 
 import type { RuntimeValue } from "../../runtime/types.js";
 import {
-  FloatXArray,
   isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeLogical,
@@ -19,6 +18,7 @@ import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
 import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { sparseSum } from "../../helpers/reduction-helpers.js";
+import { uninitFloatX } from "../../runtime/alloc.js";
 import { defineBuiltin } from "./types.js";
 import {
   firstReduceDim,
@@ -797,7 +797,7 @@ defineBuiltin({
             if (!outShape)
               throw new RuntimeError("xor: incompatible array sizes");
             const n = outShape.reduce((p, c) => p * c, 1);
-            const out = new FloatXArray(n);
+            const out = uninitFloatX(n);
             broadcastIterate(a.shape, b.shape, outShape, (ai, bi, oi) => {
               out[oi] = (a.data[ai] !== 0) !== (b.data[bi] !== 0) ? 1 : 0;
             });
@@ -806,7 +806,7 @@ defineBuiltin({
             return result;
           }
           const n = a.data.length;
-          const out = new FloatXArray(n);
+          const out = uninitFloatX(n);
           for (let i = 0; i < n; i++) {
             out[i] = (a.data[i] !== 0) !== (b.data[i] !== 0) ? 1 : 0;
           }
@@ -819,7 +819,7 @@ defineBuiltin({
         if (!isRuntimeTensor(t))
           throw new RuntimeError("xor: unexpected state");
         const n = t.data.length;
-        const out = new FloatXArray(n);
+        const out = uninitFloatX(n);
         for (let i = 0; i < n; i++) {
           out[i] = (t.data[i] !== 0) !== (s !== 0) ? 1 : 0;
         }

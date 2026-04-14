@@ -13,6 +13,7 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
+import { uninitFloatX } from "../runtime/alloc.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
@@ -103,8 +104,8 @@ function dimReduce(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return copyTensor(v);
 
-  const result = new FloatXArray(info.totalElems);
-  const resultImag = v.imag ? new FloatXArray(info.totalElems) : undefined;
+  const result = uninitFloatX(info.totalElems);
+  const resultImag = v.imag ? uninitFloatX(info.totalElems) : undefined;
 
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let acc = initialValue;
@@ -139,7 +140,7 @@ function dimReduceOmitNaN(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return copyTensor(v);
 
-  const result = new FloatXArray(info.totalElems);
+  const result = uninitFloatX(info.totalElems);
 
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let acc = initialValue;
@@ -166,9 +167,9 @@ function sliceDimReduce(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return RTV.tensor(new FloatXArray(v.data), [...v.shape]);
 
-  const result = new FloatXArray(info.totalElems);
+  const result = uninitFloatX(info.totalElems);
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
-    const slice = new FloatXArray(srcIndices.length);
+    const slice = uninitFloatX(srcIndices.length);
     for (let k = 0; k < srcIndices.length; k++) {
       slice[k] = v.data[srcIndices[k]];
     }
@@ -191,8 +192,8 @@ export function complexProd(v: RuntimeTensor, dim?: number): RuntimeValue {
     const info = forEachSlice(v.shape, dim, () => {});
     if (!info) return copyTensor(v);
 
-    const resultRe = new FloatXArray(info.totalElems);
-    const resultIm = new FloatXArray(info.totalElems);
+    const resultRe = uninitFloatX(info.totalElems);
+    const resultIm = uninitFloatX(info.totalElems);
     forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
       let accRe = 1,
         accIm = 0;
@@ -271,7 +272,7 @@ export function logicalAlongDim(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) {
     // dim exceeds rank: element-wise cast to logical
-    const result = new FloatXArray(v.data.length);
+    const result = uninitFloatX(v.data.length);
     for (let i = 0; i < v.data.length; i++)
       result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
     const t = RTV.tensor(result, [...v.shape]);
@@ -279,7 +280,7 @@ export function logicalAlongDim(
     return t;
   }
 
-  const result = new FloatXArray(info.totalElems);
+  const result = uninitFloatX(info.totalElems);
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let val: boolean = mode === "all";
     for (let k = 0; k < srcIndices.length; k++) {
@@ -390,7 +391,7 @@ export function sparseAnyAll(
       if (nnzPerRow) nnzPerRow[v.ir[k]]++;
     }
   }
-  const result = new FloatXArray(v.m);
+  const result = uninitFloatX(v.m);
   for (let r = 0; r < v.m; r++) {
     if (mode === "any") result[r] = hasNonzero[r] ? 1 : 0;
     else result[r] = nnzPerRow![r] === v.n ? 1 : 0;
