@@ -20,6 +20,7 @@ import {
 } from "../../runtime/types.js";
 import { tensorOps } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
+import { uninitFloat64, uninitFloatX } from "../../runtime/alloc.js";
 import {
   type JitType,
   signFromNumber,
@@ -431,11 +432,11 @@ export function applyUnaryElemwise(
       // Tensor-ops fast path (native if available, TS fallback otherwise).
       const opCode = nativeUnaryOpCode.get(realFn);
       if (opCode !== undefined && v.data instanceof Float64Array) {
-        const out = new Float64Array(n);
+        const out = uninitFloat64(n);
         tensorOps.realUnaryElemwise(opCode, n, v.data, out);
         return RTV.tensorRaw(out, v.shape.slice());
       }
-      const out = new FloatXArray(n);
+      const out = uninitFloatX(n);
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
       return makeTensor(out, undefined, v.shape.slice());
     }
@@ -448,13 +449,13 @@ export function applyUnaryElemwise(
       v.data instanceof Float64Array &&
       v.imag instanceof Float64Array
     ) {
-      const outRe = new Float64Array(n);
-      const outIm = new Float64Array(n);
+      const outRe = uninitFloat64(n);
+      const outIm = uninitFloat64(n);
       tensorOps.complexUnaryElemwise(opCode, n, v.data, v.imag, outRe, outIm);
       return makeTensor(outRe, outIm, v.shape.slice());
     }
-    const outR = new FloatXArray(n);
-    const outI = new FloatXArray(n);
+    const outR = uninitFloatX(n);
+    const outI = uninitFloatX(n);
     for (let i = 0; i < n; i++) {
       const r = complexFn(v.data[i], v.imag[i]);
       outR[i] = r.re;
@@ -502,7 +503,7 @@ function applyUnaryElemwiseMaybeComplex(
       // Tensor-ops fast path: compute the whole buffer via the ops layer,
       // then scan for NaN (indicates out-of-domain, patch with complex fallback).
       if (nativeOpCode !== undefined && v.data instanceof Float64Array) {
-        const nativeOut = new Float64Array(n);
+        const nativeOut = uninitFloat64(n);
         tensorOps.realUnaryElemwise(nativeOpCode, n, v.data, nativeOut);
         let firstNaN = -1;
         for (let i = 0; i < n; i++) {
@@ -515,8 +516,8 @@ function applyUnaryElemwiseMaybeComplex(
           return RTV.tensorRaw(nativeOut, v.shape.slice());
         }
         // Patch NaN positions with the complex fallback.
-        const outR = new FloatXArray(n);
-        const outI = new FloatXArray(n);
+        const outR = uninitFloatX(n);
+        const outI = new FloatXArray(n); // must zero-init: only NaN slots get im written
         let hasImag = false;
         for (let i = 0; i < n; i++) {
           if (!Number.isNaN(nativeOut[i])) {
@@ -530,8 +531,8 @@ function applyUnaryElemwiseMaybeComplex(
         }
         return makeTensor(outR, hasImag ? outI : undefined, v.shape.slice());
       }
-      const outR = new FloatXArray(n);
-      const outI = new FloatXArray(n);
+      const outR = uninitFloatX(n);
+      const outI = uninitFloatX(n);
       let hasImag = false;
       for (let i = 0; i < n; i++) {
         const r = realFn(v.data[i]);
@@ -547,8 +548,8 @@ function applyUnaryElemwiseMaybeComplex(
       }
       return makeTensor(outR, hasImag ? outI : undefined, v.shape.slice());
     }
-    const outR = new FloatXArray(n);
-    const outI = new FloatXArray(n);
+    const outR = uninitFloatX(n);
+    const outI = uninitFloatX(n);
     for (let i = 0; i < n; i++) {
       const r = complexFn(v.data[i], v.imag[i]);
       outR[i] = r.re;
@@ -581,17 +582,17 @@ function applyUnaryRealResult(
     // Fast path for abs (realFn = Math.abs) on Float64 data.
     if (realFn === Math.abs && v.data instanceof Float64Array) {
       if (!v.imag) {
-        const out = new Float64Array(n);
+        const out = uninitFloat64(n);
         tensorOps.realUnaryElemwise(5, n, v.data, out); // OpUnary.ABS
         return RTV.tensorRaw(out, v.shape.slice());
       }
       if (v.imag instanceof Float64Array) {
-        const out = new Float64Array(n);
+        const out = uninitFloat64(n);
         tensorOps.complexAbs(n, v.data, v.imag, out);
         return RTV.tensorRaw(out, v.shape.slice());
       }
     }
-    const out = new FloatXArray(n);
+    const out = uninitFloatX(n);
     if (!v.imag) {
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
     } else {
@@ -631,14 +632,14 @@ export function applyBinaryElemwise(
   if (aIsTensor && bIsNum) {
     const t = a0 as RuntimeTensor;
     const s = a1 as number;
-    const out = new FloatXArray(t.data.length);
+    const out = uninitFloatX(t.data.length);
     for (let i = 0; i < t.data.length; i++) out[i] = fn(t.data[i], s);
     return makeTensor(out, undefined, t.shape);
   }
   if (aIsNum && bIsTensor) {
     const s = a0 as number;
     const t = a1 as RuntimeTensor;
-    const out = new FloatXArray(t.data.length);
+    const out = uninitFloatX(t.data.length);
     for (let i = 0; i < t.data.length; i++) out[i] = fn(s, t.data[i]);
     return makeTensor(out, undefined, t.shape);
   }
@@ -648,7 +649,7 @@ export function applyBinaryElemwise(
     if (tA.data.length !== tB.data.length) {
       throw new Error(`${name}: array dimensions must agree`);
     }
-    const out = new FloatXArray(tA.data.length);
+    const out = uninitFloatX(tA.data.length);
     for (let i = 0; i < tA.data.length; i++)
       out[i] = fn(tA.data[i], tB.data[i]);
     return makeTensor(out, undefined, tA.shape);
@@ -926,7 +927,7 @@ export function predicateCases(
         if (!isRuntimeTensor(v))
           throw new Error(`${name}: unsupported argument type`);
         const n = v.data.length;
-        const out = new FloatXArray(n);
+        const out = uninitFloatX(n);
         if (!v.imag) {
           for (let i = 0; i < n; i++) out[i] = tensorTest(v.data[i]) ? 1 : 0;
         } else {

@@ -28,6 +28,7 @@ import {
   copyTensor,
 } from "../reduction-helpers.js";
 import { tensorOps, OpReduce } from "../../ops/index.js";
+import { uninitFloatX } from "../../runtime/alloc.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 
@@ -146,9 +147,9 @@ function minMaxAlongDim(
   if (!info) return copyTensor(v);
 
   if (v.imag) {
-    const resultRe = new FloatXArray(info.totalElems);
-    const resultIm = new FloatXArray(info.totalElems);
-    const idxArr = nargout > 1 ? new FloatXArray(info.totalElems) : undefined;
+    const resultRe = uninitFloatX(info.totalElems);
+    const resultIm = uninitFloatX(info.totalElems);
+    const idxArr = nargout > 1 ? uninitFloatX(info.totalElems) : undefined;
     forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
       const { mRe, mIm, mIdx } = minMaxScan(
         v.data,
@@ -172,8 +173,8 @@ function minMaxAlongDim(
     return out;
   }
 
-  const result = new FloatXArray(info.totalElems);
-  const idxArr = nargout > 1 ? new FloatXArray(info.totalElems) : undefined;
+  const result = uninitFloatX(info.totalElems);
+  const idxArr = nargout > 1 ? uninitFloatX(info.totalElems) : undefined;
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     const { mRe, mIdx } = minMaxScan(
       v.data,
@@ -253,7 +254,7 @@ function minMaxElementwise(
   if (!outShape)
     throw new RuntimeError(`${name}: non-singleton dimensions must match`);
   const n = outShape.reduce((acc, d) => acc * d, 1);
-  const result = new FloatXArray(n);
+  const result = uninitFloatX(n);
 
   if (!anyComplex) {
     // Real-only fast path
@@ -272,7 +273,7 @@ function minMaxElementwise(
   // Complex element-wise path
   const aIm = aT.imag;
   const bIm = bT.imag;
-  const resultImag = new FloatXArray(n);
+  const resultImag = uninitFloatX(n);
   let hasImag = false;
   broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
     const aRe = aT.data[aIdx],

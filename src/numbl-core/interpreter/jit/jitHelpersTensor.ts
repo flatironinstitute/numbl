@@ -10,6 +10,7 @@ import {
   type RuntimeTensor,
 } from "../../runtime/types.js";
 import type { RuntimeComplexNumber } from "../../runtime/types.js";
+import { uninitFloat64, uninitFloatX } from "../../runtime/alloc.js";
 import { re, im, mkc, cAdd, cSub, cMul, cDiv } from "./jitHelpersComplex.js";
 import { tensorOps, OpRealBin } from "../../ops/index.js";
 // Real/complex binary op codes are aligned (ADD=0, SUB=1, MUL=2, DIV=3) so
@@ -70,12 +71,12 @@ export function tensorBinaryOp(
     const bHasImag = !!bt.imag;
 
     if (!aHasImag && !bHasImag) {
-      const out = new FloatXArray(n);
+      const out = uninitFloatX(n);
       for (let i = 0; i < n; i++) out[i] = realOp(at.data[i], bt.data[i]);
       return makeTensor(out, undefined, at.shape.slice());
     }
-    const outR = new FloatXArray(n);
-    const outI = new FloatXArray(n);
+    const outR = uninitFloatX(n);
+    const outI = uninitFloatX(n);
     for (let i = 0; i < n; i++) {
       const av: ScalarVal = aHasImag
         ? mkc(at.data[i], at.imag![i])
@@ -98,12 +99,12 @@ export function tensorBinaryOp(
 
     if (!aHasImag && !bIsC) {
       const bv = b as number;
-      const out = new FloatXArray(n);
+      const out = uninitFloatX(n);
       for (let i = 0; i < n; i++) out[i] = realOp(at.data[i], bv);
       return makeTensor(out, undefined, at.shape.slice());
     }
-    const outR = new FloatXArray(n);
-    const outI = new FloatXArray(n);
+    const outR = uninitFloatX(n);
+    const outI = uninitFloatX(n);
     for (let i = 0; i < n; i++) {
       const av: ScalarVal = aHasImag
         ? mkc(at.data[i], at.imag![i])
@@ -123,12 +124,12 @@ export function tensorBinaryOp(
 
     if (!bHasImag && !aIsC) {
       const av = a as number;
-      const out = new FloatXArray(n);
+      const out = uninitFloatX(n);
       for (let i = 0; i < n; i++) out[i] = realOp(av, bt.data[i]);
       return makeTensor(out, undefined, bt.shape.slice());
     }
-    const outR = new FloatXArray(n);
-    const outI = new FloatXArray(n);
+    const outR = uninitFloatX(n);
+    const outI = uninitFloatX(n);
     for (let i = 0; i < n; i++) {
       const bv: ScalarVal = bHasImag
         ? mkc(bt.data[i], bt.imag![i])
@@ -159,7 +160,7 @@ export function tensorCompareOp(
     if (at.data.length !== bt.data.length)
       throw new Error("Matrix dimensions must agree.");
     const n = at.data.length;
-    const out = new FloatXArray(n);
+    const out = uninitFloatX(n);
     for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bt.data[i]) ? 1 : 0;
     return makeTensor(out, undefined, at.shape.slice());
   }
@@ -167,7 +168,7 @@ export function tensorCompareOp(
     const at = a as RuntimeTensor;
     const n = at.data.length;
     const bv = b as number;
-    const out = new FloatXArray(n);
+    const out = uninitFloatX(n);
     for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bv) ? 1 : 0;
     return makeTensor(out, undefined, at.shape.slice());
   }
@@ -179,7 +180,7 @@ export function tensorCompareOp(
   const bt = b as RuntimeTensor;
   const n = bt.data.length;
   const av = a as number;
-  const out = new FloatXArray(n);
+  const out = uninitFloatX(n);
   for (let i = 0; i < n; i++) out[i] = cmp(av, bt.data[i]) ? 1 : 0;
   return makeTensor(out, undefined, bt.shape.slice());
 }
@@ -217,23 +218,23 @@ export function tensorUnary(
   if (!a.imag && a.data instanceof Float64Array) {
     const opCode = UNARY_OP_CODE.get(fn);
     if (opCode !== undefined) {
-      const out = new Float64Array(n);
+      const out = uninitFloat64(n);
       tensorOps.realUnaryElemwise(opCode, n, a.data, out);
       return makeTensor(out, undefined, a.shape.slice());
     }
   }
-  const out = new FloatXArray(n);
+  const out = uninitFloatX(n);
   for (let i = 0; i < n; i++) out[i] = fn(a.data[i]);
   return makeTensor(out, undefined, a.shape.slice());
 }
 
 export function tensorNeg(a: RuntimeTensor): RuntimeTensor {
   const n = a.data.length;
-  const outR = new FloatXArray(n);
+  const outR = uninitFloatX(n);
   for (let i = 0; i < n; i++) outR[i] = -a.data[i];
   let outI: FloatXArrayType | undefined;
   if (a.imag) {
-    outI = new FloatXArray(n);
+    outI = uninitFloatX(n);
     for (let i = 0; i < n; i++) outI[i] = -a.imag[i];
   }
   return makeTensor(outR, outI, a.shape.slice());
@@ -259,7 +260,7 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
       "Dimensions of arrays being concatenated are not consistent."
     );
   }
-  const out = new FloatXArray(baseLen + 1);
+  const out = uninitFloatX(baseLen + 1);
   out.set(bt.data);
   out[baseLen] = v;
   return makeTensor(out, undefined, [baseLen + 1, 1]);
@@ -271,8 +272,13 @@ export function unshare(t: unknown): RuntimeTensor {
   const tt = t as RuntimeTensor;
   if (tt._rc <= 1) return tt;
   tt._rc--;
-  const newData = new FloatXArray(tt.data);
-  const newImag = tt.imag ? new FloatXArray(tt.imag) : undefined;
+  const newData = uninitFloatX(tt.data.length);
+  newData.set(tt.data);
+  let newImag: FloatXArrayType | undefined;
+  if (tt.imag) {
+    newImag = uninitFloatX(tt.imag.length);
+    newImag.set(tt.imag);
+  }
   const copy: RuntimeTensor = {
     kind: "tensor",
     data: newData,
@@ -342,12 +348,12 @@ function fastBinaryOp(
     ) {
       const n = at.data.length;
       if (!at.imag && !bt.imag) {
-        const out = new Float64Array(n);
+        const out = uninitFloat64(n);
         tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
         return makeTensor(out, undefined, at.shape.slice());
       }
-      const outRe = new Float64Array(n);
-      const outIm = new Float64Array(n);
+      const outRe = uninitFloat64(n);
+      const outIm = uninitFloat64(n);
       tensorOps.complexBinaryElemwise(
         opCode,
         n,
@@ -370,12 +376,12 @@ function fastBinaryOp(
     ) {
       const n = at.data.length;
       if (!at.imag) {
-        const out = new Float64Array(n);
+        const out = uninitFloat64(n);
         tensorOps.realScalarBinaryElemwise(opCode, n, b, at.data, false, out);
         return makeTensor(out, undefined, at.shape.slice());
       }
-      const outRe = new Float64Array(n);
-      const outIm = new Float64Array(n);
+      const outRe = uninitFloat64(n);
+      const outIm = uninitFloat64(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -399,12 +405,12 @@ function fastBinaryOp(
     ) {
       const n = bt.data.length;
       if (!bt.imag) {
-        const out = new Float64Array(n);
+        const out = uninitFloat64(n);
         tensorOps.realScalarBinaryElemwise(opCode, n, a, bt.data, true, out);
         return makeTensor(out, undefined, bt.shape.slice());
       }
-      const outRe = new Float64Array(n);
-      const outIm = new Float64Array(n);
+      const outRe = uninitFloat64(n);
+      const outIm = uninitFloat64(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -428,8 +434,8 @@ function fastBinaryOp(
       (!at.imag || at.imag instanceof Float64Array)
     ) {
       const n = at.data.length;
-      const outRe = new Float64Array(n);
-      const outIm = new Float64Array(n);
+      const outRe = uninitFloat64(n);
+      const outIm = uninitFloat64(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -452,8 +458,8 @@ function fastBinaryOp(
       (!bt.imag || bt.imag instanceof Float64Array)
     ) {
       const n = bt.data.length;
-      const outRe = new Float64Array(n);
-      const outIm = new Float64Array(n);
+      const outRe = uninitFloat64(n);
+      const outIm = uninitFloat64(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -501,7 +507,7 @@ function fastCompareOp(
       at.data.length === bt.data.length
     ) {
       const n = at.data.length;
-      const out = new Float64Array(n);
+      const out = uninitFloat64(n);
       tensorOps.realComparison(opCode, n, at.data, bt.data, out);
       const t = makeTensor(out, undefined, at.shape.slice());
       t._isLogical = true;
@@ -512,7 +518,7 @@ function fastCompareOp(
     const at = a as RuntimeTensor;
     if (at.data instanceof Float64Array) {
       const n = at.data.length;
-      const out = new Float64Array(n);
+      const out = uninitFloat64(n);
       tensorOps.realScalarComparison(opCode, n, b, at.data, false, out);
       const t = makeTensor(out, undefined, at.shape.slice());
       t._isLogical = true;
@@ -523,7 +529,7 @@ function fastCompareOp(
     const bt = b as RuntimeTensor;
     if (bt.data instanceof Float64Array) {
       const n = bt.data.length;
-      const out = new Float64Array(n);
+      const out = uninitFloat64(n);
       tensorOps.realScalarComparison(opCode, n, a, bt.data, true, out);
       const t = makeTensor(out, undefined, bt.shape.slice());
       t._isLogical = true;
