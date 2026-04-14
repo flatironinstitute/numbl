@@ -28,6 +28,7 @@ import {
   tsComplexComparison,
   tsComplexScalarComparison,
 } from "./comparison.js";
+import { tsRealFlatReduce, tsComplexFlatReduce } from "./reduce.js";
 
 export const tensorOps = {
   realBinaryElemwise(
@@ -250,6 +251,36 @@ export const tensorOps = {
         scalarOnLeft,
         out
       );
+    }
+  },
+
+  realFlatReduce(
+    op: number,
+    n: number,
+    a: Float64Array,
+    out: Float64Array
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpRealFlatReduce) {
+      bridge.tensorOpRealFlatReduce(op, n, a, out);
+    } else {
+      tsRealFlatReduce(op, n, a, out);
+    }
+  },
+
+  complexFlatReduce(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array | null
+  ): void {
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpComplexFlatReduce) {
+      bridge.tensorOpComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
+    } else {
+      tsComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
     }
   },
 };

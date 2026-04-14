@@ -26,6 +26,7 @@
         "native/ops/real_unary_elemwise.c",
         "native/ops/complex_unary_elemwise.c",
         "native/ops/comparison.c",
+        "native/ops/reduce.c",
         "native/ops_napi.cpp"
       ],
       "include_dirs": [
