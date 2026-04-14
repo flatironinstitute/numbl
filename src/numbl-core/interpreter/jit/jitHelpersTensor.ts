@@ -11,6 +11,7 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeComplexNumber } from "../../runtime/types.js";
 import { re, im, mkc, cAdd, cSub, cMul, cDiv } from "./jitHelpersComplex.js";
+import { tensorOps, OpRealBin } from "../../ops/index.js";
 
 // ── Type checks ────────────────────────────────────────────────────────
 
@@ -183,11 +184,42 @@ export function tensorCompareOp(
 
 // ── Element-wise tensor unary ──────────────────────────────────────────
 
+const UNARY_OP_CODE = new Map<(x: number) => number, number>([
+  [Math.exp, 0],
+  [Math.log, 1],
+  [Math.log2, 2],
+  [Math.log10, 3],
+  [Math.sqrt, 4],
+  [Math.abs, 5],
+  [Math.floor, 6],
+  [Math.ceil, 7],
+  [Math.round, 8],
+  [Math.trunc, 9],
+  [Math.sin, 10],
+  [Math.cos, 11],
+  [Math.tan, 12],
+  [Math.asin, 13],
+  [Math.acos, 14],
+  [Math.atan, 15],
+  [Math.sinh, 16],
+  [Math.cosh, 17],
+  [Math.tanh, 18],
+  [Math.sign, 19],
+]);
+
 export function tensorUnary(
   a: RuntimeTensor,
   fn: (x: number) => number
 ): RuntimeTensor {
   const n = a.data.length;
+  if (!a.imag && a.data instanceof Float64Array) {
+    const opCode = UNARY_OP_CODE.get(fn);
+    if (opCode !== undefined) {
+      const out = new Float64Array(n);
+      tensorOps.realUnaryElemwise(opCode, n, a.data, out);
+      return makeTensor(out, undefined, a.shape.slice());
+    }
+  }
   const out = new FloatXArray(n);
   for (let i = 0; i < n; i++) out[i] = fn(a.data[i]);
   return makeTensor(out, undefined, a.shape.slice());
@@ -263,29 +295,128 @@ export function asTensor(v: unknown): RuntimeTensor {
 }
 
 // ── Tensor binary op wrappers (re-exported via jitHelpers) ─────────────
+//
+// Fast path: real Float64 tensor-tensor or tensor-scalar → native tensorOps.
+// Fall back to the generic JS-closure path for complex / size mismatch.
+
+function fastBinaryOp(
+  a: unknown,
+  b: unknown,
+  opCode: number,
+  realOp: (x: number, y: number) => number,
+  complexOp: (a: ScalarVal, b: ScalarVal) => ScalarVal
+): RuntimeTensor | ScalarVal {
+  const aIsT = isTensor(a);
+  const bIsT = isTensor(b);
+
+  if (aIsT && bIsT) {
+    const at = a as RuntimeTensor;
+    const bt = b as RuntimeTensor;
+    if (
+      !at.imag &&
+      !bt.imag &&
+      at.data instanceof Float64Array &&
+      bt.data instanceof Float64Array &&
+      at.data.length === bt.data.length
+    ) {
+      const n = at.data.length;
+      const out = new Float64Array(n);
+      tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
+      return makeTensor(out, undefined, at.shape.slice());
+    }
+  }
+  if (aIsT && typeof b === "number") {
+    const at = a as RuntimeTensor;
+    if (!at.imag && at.data instanceof Float64Array) {
+      const n = at.data.length;
+      const out = new Float64Array(n);
+      tensorOps.realScalarBinaryElemwise(opCode, n, b, at.data, false, out);
+      return makeTensor(out, undefined, at.shape.slice());
+    }
+  }
+  if (bIsT && typeof a === "number") {
+    const bt = b as RuntimeTensor;
+    if (!bt.imag && bt.data instanceof Float64Array) {
+      const n = bt.data.length;
+      const out = new Float64Array(n);
+      tensorOps.realScalarBinaryElemwise(opCode, n, a, bt.data, true, out);
+      return makeTensor(out, undefined, bt.shape.slice());
+    }
+  }
+  return tensorBinaryOp(a, b, realOp, complexOp);
+}
 
 export const tAdd = (a: unknown, b: unknown) =>
-  tensorBinaryOp(a, b, (x, y) => x + y, cAdd);
+  fastBinaryOp(a, b, OpRealBin.ADD, (x, y) => x + y, cAdd);
 export const tSub = (a: unknown, b: unknown) =>
-  tensorBinaryOp(a, b, (x, y) => x - y, cSub);
+  fastBinaryOp(a, b, OpRealBin.SUB, (x, y) => x - y, cSub);
 export const tMul = (a: unknown, b: unknown) =>
-  tensorBinaryOp(a, b, (x, y) => x * y, cMul);
+  fastBinaryOp(a, b, OpRealBin.MUL, (x, y) => x * y, cMul);
 export const tDiv = (a: unknown, b: unknown) =>
-  tensorBinaryOp(a, b, (x, y) => x / y, cDiv);
+  fastBinaryOp(a, b, OpRealBin.DIV, (x, y) => x / y, cDiv);
 export const tPow = (a: unknown, b: unknown) =>
   tensorBinaryOp(a, b, Math.pow, () => {
     throw new Error("JIT tPow: complex power not supported");
   });
 
+function fastCompareOp(
+  a: unknown,
+  b: unknown,
+  opCode: number,
+  cmp: (x: number, y: number) => boolean
+): RuntimeTensor {
+  const aIsT = isTensor(a);
+  const bIsT = isTensor(b);
+  if (aIsT && bIsT) {
+    const at = a as RuntimeTensor;
+    const bt = b as RuntimeTensor;
+    if (
+      at.data instanceof Float64Array &&
+      bt.data instanceof Float64Array &&
+      at.data.length === bt.data.length
+    ) {
+      const n = at.data.length;
+      const out = new Float64Array(n);
+      tensorOps.realComparison(opCode, n, at.data, bt.data, out);
+      const t = makeTensor(out, undefined, at.shape.slice());
+      t._isLogical = true;
+      return t;
+    }
+  }
+  if (aIsT && typeof b === "number") {
+    const at = a as RuntimeTensor;
+    if (at.data instanceof Float64Array) {
+      const n = at.data.length;
+      const out = new Float64Array(n);
+      tensorOps.realScalarComparison(opCode, n, b, at.data, false, out);
+      const t = makeTensor(out, undefined, at.shape.slice());
+      t._isLogical = true;
+      return t;
+    }
+  }
+  if (bIsT && typeof a === "number") {
+    const bt = b as RuntimeTensor;
+    if (bt.data instanceof Float64Array) {
+      const n = bt.data.length;
+      const out = new Float64Array(n);
+      tensorOps.realScalarComparison(opCode, n, a, bt.data, true, out);
+      const t = makeTensor(out, undefined, bt.shape.slice());
+      t._isLogical = true;
+      return t;
+    }
+  }
+  return tensorCompareOp(a, b, cmp);
+}
+
 export const tEq = (a: unknown, b: unknown) =>
-  tensorCompareOp(a, b, (x, y) => x === y);
+  fastCompareOp(a, b, 0, (x, y) => x === y);
 export const tNeq = (a: unknown, b: unknown) =>
-  tensorCompareOp(a, b, (x, y) => x !== y);
+  fastCompareOp(a, b, 1, (x, y) => x !== y);
 export const tLt = (a: unknown, b: unknown) =>
-  tensorCompareOp(a, b, (x, y) => x < y);
+  fastCompareOp(a, b, 2, (x, y) => x < y);
 export const tLe = (a: unknown, b: unknown) =>
-  tensorCompareOp(a, b, (x, y) => x <= y);
+  fastCompareOp(a, b, 3, (x, y) => x <= y);
 export const tGt = (a: unknown, b: unknown) =>
-  tensorCompareOp(a, b, (x, y) => x > y);
+  fastCompareOp(a, b, 4, (x, y) => x > y);
 export const tGe = (a: unknown, b: unknown) =>
-  tensorCompareOp(a, b, (x, y) => x >= y);
+  fastCompareOp(a, b, 5, (x, y) => x >= y);
