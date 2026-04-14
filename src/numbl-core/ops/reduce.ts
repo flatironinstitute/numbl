@@ -25,29 +25,28 @@ export function tsRealFlatReduce(
       return;
     }
     case OpReduce.MAX: {
+      // MATLAB default: omitnan.  Result is NaN iff all values are NaN.
       let m = -Infinity;
+      let any = false;
       for (let i = 0; i < n; i++) {
         const v = a[i];
-        if (Number.isNaN(v)) {
-          m = v;
-          break;
-        }
+        if (Number.isNaN(v)) continue;
         if (v > m) m = v;
+        any = true;
       }
-      out[0] = m;
+      out[0] = any ? m : NaN;
       return;
     }
     case OpReduce.MIN: {
       let m = Infinity;
+      let any = false;
       for (let i = 0; i < n; i++) {
         const v = a[i];
-        if (Number.isNaN(v)) {
-          m = v;
-          break;
-        }
+        if (Number.isNaN(v)) continue;
         if (v < m) m = v;
+        any = true;
       }
-      out[0] = m;
+      out[0] = any ? m : NaN;
       return;
     }
     case OpReduce.ANY: {

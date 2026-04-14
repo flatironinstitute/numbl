@@ -12,6 +12,8 @@ import {
 import type { RuntimeComplexNumber } from "../../runtime/types.js";
 import { re, im, mkc, cAdd, cSub, cMul, cDiv } from "./jitHelpersComplex.js";
 import { tensorOps, OpRealBin } from "../../ops/index.js";
+// Real/complex binary op codes are aligned (ADD=0, SUB=1, MUL=2, DIV=3) so
+// the same OpRealBin value is passed to tensorOps.complexBinaryElemwise too.
 
 // ── Type checks ────────────────────────────────────────────────────────
 
@@ -299,6 +301,24 @@ export function asTensor(v: unknown): RuntimeTensor {
 // Fast path: real Float64 tensor-tensor or tensor-scalar → native tensorOps.
 // Fall back to the generic JS-closure path for complex / size mismatch.
 
+/** Finalize a split (outRe, outIm) result — drop outIm if purely real. */
+function finalizeSplit(
+  outRe: Float64Array,
+  outIm: Float64Array,
+  shape: number[]
+): RuntimeTensor {
+  let realOnly = true;
+  for (let i = 0; i < outIm.length; i++) {
+    if (outIm[i] !== 0) {
+      realOnly = false;
+      break;
+    }
+  }
+  return realOnly
+    ? makeTensor(outRe, undefined, shape)
+    : makeTensor(outRe, outIm, shape);
+}
+
 function fastBinaryOp(
   a: unknown,
   b: unknown,
@@ -309,38 +329,143 @@ function fastBinaryOp(
   const aIsT = isTensor(a);
   const bIsT = isTensor(b);
 
+  // ── tensor–tensor ─────────────────────────────────────────────────────
   if (aIsT && bIsT) {
     const at = a as RuntimeTensor;
     const bt = b as RuntimeTensor;
     if (
-      !at.imag &&
-      !bt.imag &&
       at.data instanceof Float64Array &&
       bt.data instanceof Float64Array &&
+      (!at.imag || at.imag instanceof Float64Array) &&
+      (!bt.imag || bt.imag instanceof Float64Array) &&
       at.data.length === bt.data.length
     ) {
       const n = at.data.length;
-      const out = new Float64Array(n);
-      tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
-      return makeTensor(out, undefined, at.shape.slice());
+      if (!at.imag && !bt.imag) {
+        const out = new Float64Array(n);
+        tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
+        return makeTensor(out, undefined, at.shape.slice());
+      }
+      const outRe = new Float64Array(n);
+      const outIm = new Float64Array(n);
+      tensorOps.complexBinaryElemwise(
+        opCode,
+        n,
+        at.data,
+        (at.imag as Float64Array | undefined) ?? null,
+        bt.data,
+        (bt.imag as Float64Array | undefined) ?? null,
+        outRe,
+        outIm
+      );
+      return finalizeSplit(outRe, outIm, at.shape.slice());
     }
   }
+  // ── tensor–scalar (right) ─────────────────────────────────────────────
   if (aIsT && typeof b === "number") {
     const at = a as RuntimeTensor;
-    if (!at.imag && at.data instanceof Float64Array) {
+    if (
+      at.data instanceof Float64Array &&
+      (!at.imag || at.imag instanceof Float64Array)
+    ) {
       const n = at.data.length;
-      const out = new Float64Array(n);
-      tensorOps.realScalarBinaryElemwise(opCode, n, b, at.data, false, out);
-      return makeTensor(out, undefined, at.shape.slice());
+      if (!at.imag) {
+        const out = new Float64Array(n);
+        tensorOps.realScalarBinaryElemwise(opCode, n, b, at.data, false, out);
+        return makeTensor(out, undefined, at.shape.slice());
+      }
+      const outRe = new Float64Array(n);
+      const outIm = new Float64Array(n);
+      tensorOps.complexScalarBinaryElemwise(
+        opCode,
+        n,
+        b,
+        0,
+        at.data,
+        at.imag as Float64Array,
+        false,
+        outRe,
+        outIm
+      );
+      return finalizeSplit(outRe, outIm, at.shape.slice());
     }
   }
+  // ── scalar–tensor (left) ──────────────────────────────────────────────
   if (bIsT && typeof a === "number") {
     const bt = b as RuntimeTensor;
-    if (!bt.imag && bt.data instanceof Float64Array) {
+    if (
+      bt.data instanceof Float64Array &&
+      (!bt.imag || bt.imag instanceof Float64Array)
+    ) {
       const n = bt.data.length;
-      const out = new Float64Array(n);
-      tensorOps.realScalarBinaryElemwise(opCode, n, a, bt.data, true, out);
-      return makeTensor(out, undefined, bt.shape.slice());
+      if (!bt.imag) {
+        const out = new Float64Array(n);
+        tensorOps.realScalarBinaryElemwise(opCode, n, a, bt.data, true, out);
+        return makeTensor(out, undefined, bt.shape.slice());
+      }
+      const outRe = new Float64Array(n);
+      const outIm = new Float64Array(n);
+      tensorOps.complexScalarBinaryElemwise(
+        opCode,
+        n,
+        a,
+        0,
+        bt.data,
+        bt.imag as Float64Array,
+        true,
+        outRe,
+        outIm
+      );
+      return finalizeSplit(outRe, outIm, bt.shape.slice());
+    }
+  }
+  // ── tensor–complex scalar variants ────────────────────────────────────
+  if (aIsT && isComplex(b)) {
+    const at = a as RuntimeTensor;
+    const bc = b as RuntimeComplexNumber;
+    if (
+      at.data instanceof Float64Array &&
+      (!at.imag || at.imag instanceof Float64Array)
+    ) {
+      const n = at.data.length;
+      const outRe = new Float64Array(n);
+      const outIm = new Float64Array(n);
+      tensorOps.complexScalarBinaryElemwise(
+        opCode,
+        n,
+        bc.re,
+        bc.im,
+        at.data,
+        (at.imag as Float64Array | undefined) ?? null,
+        false,
+        outRe,
+        outIm
+      );
+      return finalizeSplit(outRe, outIm, at.shape.slice());
+    }
+  }
+  if (bIsT && isComplex(a)) {
+    const bt = b as RuntimeTensor;
+    const ac = a as RuntimeComplexNumber;
+    if (
+      bt.data instanceof Float64Array &&
+      (!bt.imag || bt.imag instanceof Float64Array)
+    ) {
+      const n = bt.data.length;
+      const outRe = new Float64Array(n);
+      const outIm = new Float64Array(n);
+      tensorOps.complexScalarBinaryElemwise(
+        opCode,
+        n,
+        ac.re,
+        ac.im,
+        bt.data,
+        (bt.imag as Float64Array | undefined) ?? null,
+        true,
+        outRe,
+        outIm
+      );
+      return finalizeSplit(outRe, outIm, bt.shape.slice());
     }
   }
   return tensorBinaryOp(a, b, realOp, complexOp);

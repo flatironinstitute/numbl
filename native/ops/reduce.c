@@ -24,23 +24,28 @@ int numbl_real_flat_reduce(int op, size_t n, const double* a, double* out) {
       return NUMBL_OK;
     }
     case NUMBL_REDUCE_MAX: {
+      /* MATLAB default: omitnan.  If ALL values are NaN, result is NaN. */
       double m = -INFINITY;
+      int any = 0;
       for (size_t i = 0; i < n; i++) {
         double v = a[i];
-        if (isnan(v)) { m = v; break; }
+        if (isnan(v)) continue;
         if (v > m) m = v;
+        any = 1;
       }
-      *out = m;
+      *out = any ? m : (0.0 / 0.0);
       return NUMBL_OK;
     }
     case NUMBL_REDUCE_MIN: {
       double m = INFINITY;
+      int any = 0;
       for (size_t i = 0; i < n; i++) {
         double v = a[i];
-        if (isnan(v)) { m = v; break; }
+        if (isnan(v)) continue;
         if (v < m) m = v;
+        any = 1;
       }
-      *out = m;
+      *out = any ? m : (0.0 / 0.0);
       return NUMBL_OK;
     }
     case NUMBL_REDUCE_ANY: {
