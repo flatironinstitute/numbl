@@ -19,10 +19,15 @@
         "native/elemwise.cpp",
         "native/randn.cpp",
         "native/unary_elemwise.cpp",
-        "native/lapack_gmres.cpp"
+        "native/lapack_gmres.cpp",
+        "native/ops/numbl_ops.c",
+        "native/ops/real_binary_elemwise.c",
+        "native/ops/complex_binary_elemwise.c",
+        "native/ops_napi.cpp"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
+        "native/ops",
         "<!@(pkg-config --cflags-only-I fftw3 2>/dev/null | sed 's/-I//g' || true)"
       ],
       "dependencies": [

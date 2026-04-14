@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 3;
+export const NATIVE_ADDON_EXPECTED_VERSION = 4;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -594,6 +594,55 @@ export interface LapackBridge {
     op: number,
     scalarOnLeft: boolean
   ): { re: Float64Array; im?: Float64Array };
+
+  // ── New tensor-ops layer (caller-allocates output, no return value) ──────
+
+  /** Real binary elemwise: out[i] = a[i] OP b[i]. op codes per OpRealBin. */
+  tensorOpRealBinary?(
+    op: number,
+    n: number,
+    a: Float64Array,
+    b: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Real scalar-tensor binary elemwise. */
+  tensorOpRealScalarBinary?(
+    op: number,
+    n: number,
+    scalar: number,
+    arr: Float64Array,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void;
+
+  /** Complex binary elemwise (split storage). aIm/bIm may be null. */
+  tensorOpComplexBinary?(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    bRe: Float64Array,
+    bIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  /** Complex scalar-tensor binary elemwise. arrIm may be null. */
+  tensorOpComplexScalarBinary?(
+    op: number,
+    n: number,
+    sRe: number,
+    sIm: number,
+    arrRe: Float64Array,
+    arrIm: Float64Array | null,
+    scalarOnLeft: boolean,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  /** Dump op-code enum values as a stable string (drift detection). */
+  tensorOpDumpCodes?(): string;
 }
 
 let _bridge: LapackBridge | null = null;
