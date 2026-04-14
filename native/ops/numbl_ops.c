@@ -43,6 +43,10 @@ size_t numbl_dump_op_codes(char* buf, size_t buf_size) {
                 NUMBL_UNARY_TAN, NUMBL_UNARY_ASIN, NUMBL_UNARY_ACOS,
                 NUMBL_UNARY_ATAN, NUMBL_UNARY_SINH, NUMBL_UNARY_COSH,
                 NUMBL_UNARY_TANH, NUMBL_UNARY_SIGN);
+  n += snprintf(tmp + n, sizeof(tmp) - n,
+                "cmp:EQ=%d,NE=%d,LT=%d,LE=%d,GT=%d,GE=%d;",
+                NUMBL_CMP_EQ, NUMBL_CMP_NE, NUMBL_CMP_LT,
+                NUMBL_CMP_LE, NUMBL_CMP_GT, NUMBL_CMP_GE);
   size_t need = (size_t)n;
   if (buf && buf_size > need) {
     memcpy(buf, tmp, need + 1);

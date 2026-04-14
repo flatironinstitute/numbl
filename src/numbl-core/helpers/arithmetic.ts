@@ -23,7 +23,7 @@ import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
-import { tensorOps } from "../ops/index.js";
+import { tensorOps, OpCmp } from "../ops/index.js";
 import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
 import { applyBuiltin as applyBuiltinFn } from "./check-helpers.js";
 import { coerceToTensor } from "./shape-utils.js";
@@ -101,11 +101,14 @@ function toComplexParts(v: RuntimeValue):
   throw new RuntimeError(`Cannot use ${kstr(v)} in complex arithmetic`);
 }
 
-/** Complex comparison operation supporting scalars and tensors */
+/** Complex comparison operation supporting scalars and tensors.
+ *  opCode routes tensor paths through tensorOps; the closure is used for
+ *  scalar-scalar comparisons and the generic broadcasting fallback. */
 function complexComparisonOp(
   a: RuntimeValue,
   b: RuntimeValue,
-  op: (aRe: number, aIm: number, bRe: number, bIm: number) => boolean
+  op: (aRe: number, aIm: number, bRe: number, bIm: number) => boolean,
+  opCode: number
 ): RuntimeValue {
   const ac = toComplexParts(a);
   const bc = toComplexParts(b);
@@ -118,6 +121,25 @@ function complexComparisonOp(
   // scalar op tensor
   if (ac.scalar && !bc.scalar) {
     const len = bc.re.length;
+    if (
+      bc.re instanceof Float64Array &&
+      (!bc.im || bc.im instanceof Float64Array)
+    ) {
+      const result = new Float64Array(len);
+      tensorOps.complexScalarComparison(
+        opCode,
+        len,
+        ac.re,
+        ac.im,
+        bc.re,
+        bc.im as Float64Array | null,
+        true,
+        result
+      );
+      const t = RTV.tensor(result, bc.shape);
+      t._isLogical = true;
+      return t;
+    }
     const result = new FloatXArray(len);
     for (let i = 0; i < len; i++) {
       result[i] = op(ac.re, ac.im, bc.re[i], bc.im[i]) ? 1 : 0;
@@ -130,6 +152,25 @@ function complexComparisonOp(
   // tensor op scalar
   if (!ac.scalar && bc.scalar) {
     const len = ac.re.length;
+    if (
+      ac.re instanceof Float64Array &&
+      (!ac.im || ac.im instanceof Float64Array)
+    ) {
+      const result = new Float64Array(len);
+      tensorOps.complexScalarComparison(
+        opCode,
+        len,
+        bc.re,
+        bc.im,
+        ac.re,
+        ac.im as Float64Array | null,
+        false,
+        result
+      );
+      const t = RTV.tensor(result, ac.shape);
+      t._isLogical = true;
+      return t;
+    }
     const result = new FloatXArray(len);
     for (let i = 0; i < len; i++) {
       result[i] = op(ac.re[i], ac.im[i], bc.re, bc.im) ? 1 : 0;
@@ -160,6 +201,26 @@ function complexComparisonOp(
     at.shape.every((d, i) => d === bt.shape[i])
   ) {
     const len = at.re.length;
+    if (
+      at.re instanceof Float64Array &&
+      bt.re instanceof Float64Array &&
+      (!at.im || at.im instanceof Float64Array) &&
+      (!bt.im || bt.im instanceof Float64Array)
+    ) {
+      const result = new Float64Array(len);
+      tensorOps.complexComparison(
+        opCode,
+        len,
+        at.re,
+        at.im as Float64Array | null,
+        bt.re,
+        bt.im as Float64Array | null,
+        result
+      );
+      const t = RTV.tensor(result, at.shape);
+      t._isLogical = true;
+      return t;
+    }
     const result = new FloatXArray(len);
     for (let i = 0; i < len; i++) {
       result[i] = op(at.re[i], at.im[i], bt.re[i], bt.im[i]) ? 1 : 0;
@@ -1191,10 +1252,11 @@ export function mEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return complexComparisonOp(
       a,
       b,
-      (aRe, aIm, bRe, bIm) => aRe === bRe && aIm === bIm
+      (aRe, aIm, bRe, bIm) => aRe === bRe && aIm === bIm,
+      OpCmp.EQ
     );
   }
-  return comparisonOp(a, b, (x, y) => x === y);
+  return comparisonOp(a, b, (x, y) => x === y, OpCmp.EQ);
 }
 
 export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
@@ -1206,10 +1268,11 @@ export function mNotEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return complexComparisonOp(
       a,
       b,
-      (aRe, aIm, bRe, bIm) => aRe !== bRe || aIm !== bIm
+      (aRe, aIm, bRe, bIm) => aRe !== bRe || aIm !== bIm,
+      OpCmp.NE
     );
   }
-  return comparisonOp(a, b, (x, y) => x !== y);
+  return comparisonOp(a, b, (x, y) => x !== y, OpCmp.NE);
 }
 
 export function mLess(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
@@ -1217,7 +1280,7 @@ export function mLess(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return mLess(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x < y);
   if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x < y);
+  return comparisonOp(a, b, (x, y) => x < y, OpCmp.LT);
 }
 
 export function mLessEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
@@ -1225,7 +1288,7 @@ export function mLessEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return mLessEqual(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x <= y);
   if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x <= y);
+  return comparisonOp(a, b, (x, y) => x <= y, OpCmp.LE);
 }
 
 export function mGreater(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
@@ -1233,7 +1296,7 @@ export function mGreater(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return mGreater(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x > y);
   if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x > y);
+  return comparisonOp(a, b, (x, y) => x > y, OpCmp.GT);
 }
 
 export function mGreaterEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
@@ -1241,7 +1304,7 @@ export function mGreaterEqual(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return mGreaterEqual(densify(a), densify(b));
   const sr = stringComparisonOp(a, b, (x, y) => x >= y);
   if (sr !== null) return sr;
-  return comparisonOp(a, b, (x, y) => x >= y);
+  return comparisonOp(a, b, (x, y) => x >= y, OpCmp.GE);
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────
@@ -1607,7 +1670,8 @@ function unaryOp(v: RuntimeValue, op: (x: number) => number): RuntimeValue {
 function comparisonOp(
   a: RuntimeValue,
   b: RuntimeValue,
-  op: (x: number, y: number) => boolean
+  op: (x: number, y: number) => boolean,
+  opCode: number
 ): RuntimeValue {
   const an = asNumeric(a);
   const bn = asNumeric(b);
@@ -1618,11 +1682,26 @@ function comparisonOp(
     return RTV.logical(op(aVal, bVal));
   }
 
-  // For tensor comparisons, return a logical tensor (as num tensor with 0/1)
+  // For tensor comparisons, return a logical tensor (0/1 values in FloatXArray).
   if (an.scalar && !bn.scalar) {
-    const result = new FloatXArray(bn.tensor.data.length);
     const scalarVal = an.isComplex ? an.re : an.value;
-    for (let i = 0; i < result.length; i++) {
+    const len = bn.tensor.data.length;
+    if (bn.tensor.data instanceof Float64Array) {
+      const result = new Float64Array(len);
+      tensorOps.realScalarComparison(
+        opCode,
+        len,
+        scalarVal,
+        bn.tensor.data,
+        true,
+        result
+      );
+      const t = RTV.tensor(result, bn.tensor.shape);
+      t._isLogical = true;
+      return t;
+    }
+    const result = new FloatXArray(len);
+    for (let i = 0; i < len; i++) {
       result[i] = op(scalarVal, bn.tensor.data[i]) ? 1 : 0;
     }
     const t = RTV.tensor(result, bn.tensor.shape);
@@ -1631,9 +1710,24 @@ function comparisonOp(
   }
 
   if (!an.scalar && bn.scalar) {
-    const result = new FloatXArray(an.tensor.data.length);
     const scalarVal = bn.isComplex ? bn.re : bn.value;
-    for (let i = 0; i < result.length; i++) {
+    const len = an.tensor.data.length;
+    if (an.tensor.data instanceof Float64Array) {
+      const result = new Float64Array(len);
+      tensorOps.realScalarComparison(
+        opCode,
+        len,
+        scalarVal,
+        an.tensor.data,
+        false,
+        result
+      );
+      const t = RTV.tensor(result, an.tensor.shape);
+      t._isLogical = true;
+      return t;
+    }
+    const result = new FloatXArray(len);
+    for (let i = 0; i < len; i++) {
       result[i] = op(an.tensor.data[i], scalarVal) ? 1 : 0;
     }
     const t = RTV.tensor(result, an.tensor.shape);
@@ -1644,14 +1738,22 @@ function comparisonOp(
   const at = (an as { scalar: false; tensor: RuntimeTensor }).tensor;
   const bt = (bn as { scalar: false; tensor: RuntimeTensor }).tensor;
 
-  // Check if shapes are identical (fast path)
+  // Check if shapes are identical (fast path).
   if (
     at.data.length === bt.data.length &&
     at.shape.length === bt.shape.length &&
     at.shape.every((d, i) => d === bt.shape[i])
   ) {
-    const result = new FloatXArray(at.data.length);
-    for (let i = 0; i < result.length; i++) {
+    const len = at.data.length;
+    if (at.data instanceof Float64Array && bt.data instanceof Float64Array) {
+      const result = new Float64Array(len);
+      tensorOps.realComparison(opCode, len, at.data, bt.data, result);
+      const t = RTV.tensor(result, at.shape);
+      t._isLogical = true;
+      return t;
+    }
+    const result = new FloatXArray(len);
+    for (let i = 0; i < len; i++) {
       result[i] = op(at.data[i], bt.data[i]) ? 1 : 0;
     }
     const t = RTV.tensor(result, at.shape);
@@ -1659,13 +1761,13 @@ function comparisonOp(
     return t;
   }
 
-  // Try broadcasting
+  // Try broadcasting.
   const broadcastShape = getBroadcastShape(at.shape, bt.shape);
   if (broadcastShape !== null) {
     return broadcastComparison(at, bt, broadcastShape, op);
   }
 
-  // Incompatible shapes
+  // Incompatible shapes.
   throw new RuntimeError(
     `Matrix dimensions must agree for comparison: [${at.shape.join(",")}] vs [${bt.shape.join(",")}]`
   );

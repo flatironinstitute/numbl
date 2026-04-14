@@ -10,7 +10,12 @@
 
 import { describe, it, expect } from "vitest";
 import { createRequire } from "node:module";
-import { OpRealBin, OpComplexBin, OpUnary } from "../numbl-core/ops/opCodes.js";
+import {
+  OpRealBin,
+  OpComplexBin,
+  OpUnary,
+  OpCmp,
+} from "../numbl-core/ops/opCodes.js";
 
 function loadAddon(): unknown | null {
   try {
@@ -28,7 +33,8 @@ function expectedDump(): string {
     `unary:EXP=${OpUnary.EXP},LOG=${OpUnary.LOG},LOG2=${OpUnary.LOG2},LOG10=${OpUnary.LOG10},SQRT=${OpUnary.SQRT},ABS=${OpUnary.ABS},` +
     `FLOOR=${OpUnary.FLOOR},CEIL=${OpUnary.CEIL},ROUND=${OpUnary.ROUND},TRUNC=${OpUnary.TRUNC},` +
     `SIN=${OpUnary.SIN},COS=${OpUnary.COS},TAN=${OpUnary.TAN},ASIN=${OpUnary.ASIN},ACOS=${OpUnary.ACOS},ATAN=${OpUnary.ATAN},` +
-    `SINH=${OpUnary.SINH},COSH=${OpUnary.COSH},TANH=${OpUnary.TANH},SIGN=${OpUnary.SIGN};`
+    `SINH=${OpUnary.SINH},COSH=${OpUnary.COSH},TANH=${OpUnary.TANH},SIGN=${OpUnary.SIGN};` +
+    `cmp:EQ=${OpCmp.EQ},NE=${OpCmp.NE},LT=${OpCmp.LT},LE=${OpCmp.LE},GT=${OpCmp.GT},GE=${OpCmp.GE};`
   );
 }
 

@@ -29,7 +29,7 @@ extern "C" {
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
 // changes, etc.) so that the JS side can detect stale builds.
-static const int ADDON_VERSION = 5;
+static const int ADDON_VERSION = 6;
 
 // ── New tensor-ops layer (native/ops/) ───────────────────────────────────────
 Napi::Value TensorOpRealBinary(const Napi::CallbackInfo& info);
@@ -39,6 +39,10 @@ Napi::Value TensorOpComplexScalarBinary(const Napi::CallbackInfo& info);
 Napi::Value TensorOpRealUnary(const Napi::CallbackInfo& info);
 Napi::Value TensorOpComplexUnary(const Napi::CallbackInfo& info);
 Napi::Value TensorOpComplexAbs(const Napi::CallbackInfo& info);
+Napi::Value TensorOpRealComparison(const Napi::CallbackInfo& info);
+Napi::Value TensorOpRealScalarComparison(const Napi::CallbackInfo& info);
+Napi::Value TensorOpComplexComparison(const Napi::CallbackInfo& info);
+Napi::Value TensorOpComplexScalarComparison(const Napi::CallbackInfo& info);
 Napi::Value TensorOpDumpCodes(const Napi::CallbackInfo& info);
 
 static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
@@ -133,6 +137,14 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, TensorOpComplexUnary));
   exports.Set(Napi::String::New(env, "tensorOpComplexAbs"),
               Napi::Function::New(env, TensorOpComplexAbs));
+  exports.Set(Napi::String::New(env, "tensorOpRealComparison"),
+              Napi::Function::New(env, TensorOpRealComparison));
+  exports.Set(Napi::String::New(env, "tensorOpRealScalarComparison"),
+              Napi::Function::New(env, TensorOpRealScalarComparison));
+  exports.Set(Napi::String::New(env, "tensorOpComplexComparison"),
+              Napi::Function::New(env, TensorOpComplexComparison));
+  exports.Set(Napi::String::New(env, "tensorOpComplexScalarComparison"),
+              Napi::Function::New(env, TensorOpComplexScalarComparison));
   exports.Set(Napi::String::New(env, "tensorOpDumpCodes"),
               Napi::Function::New(env, TensorOpDumpCodes));
   return exports;
