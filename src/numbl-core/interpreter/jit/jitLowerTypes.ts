@@ -20,6 +20,7 @@ import {
   isTensorType,
   isComplexType,
   isArithmeticType,
+  isNonneg,
   flipSign,
 } from "./jitTypes.js";
 
@@ -242,11 +243,23 @@ export function binaryResultType(
     const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
     const isComplex =
       anyComplex || (lt?.isComplex ?? false) || (rt?.isComplex ?? false);
+    // Propagate nonneg through tensor add/mul when both operands are
+    // nonneg. Division isn't safe (0/0 = NaN, and negative-zero edge
+    // cases); subtraction isn't safe either. This lets `log(1 + u)` and
+    // `sqrt(u*v)` take the fast path when u,v are nonneg.
+    const nonneg =
+      !isComplex &&
+      (op === BinaryOperation.Add ||
+        op === BinaryOperation.Mul ||
+        op === BinaryOperation.ElemMul) &&
+      isNonneg(effLeft) &&
+      isNonneg(effRight);
     return {
       kind: "tensor",
       isComplex,
       ...(shape ? { shape } : {}),
       ...(ndim !== undefined ? { ndim } : {}),
+      ...(nonneg ? { nonneg: true } : {}),
     };
   }
 
