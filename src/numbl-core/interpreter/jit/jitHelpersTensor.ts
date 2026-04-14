@@ -328,20 +328,39 @@ const UNARY_OP_CODE = new Map<(x: number) => number, number>([
   [Math.sign, 19],
 ]);
 
+const OP_ABS = 5;
+
 export function tensorUnary(
   dest: unknown,
   a: RuntimeTensor,
   fn: (x: number) => number
 ): RuntimeTensor {
   const n = a.data.length;
-  if (!a.imag && a.data instanceof Float64Array) {
-    const opCode = UNARY_OP_CODE.get(fn);
-    if (opCode !== undefined) {
+  const opCode = UNARY_OP_CODE.get(fn);
+  if (opCode !== undefined && a.data instanceof Float64Array) {
+    // Real input → real output: existing fast path.
+    if (!a.imag) {
       const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
       tensorOps.realUnaryElemwise(opCode, n, a.data, out);
       return finalizeReal(out, a.shape.slice(), dest, false);
     }
+    // Complex input: abs → real output (complexAbs); otherwise complex
+    // output (complexUnaryElemwise). Both native where available.
+    if (a.imag instanceof Float64Array) {
+      if (opCode === OP_ABS) {
+        const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+        tensorOps.complexAbs(n, a.data, a.imag, out);
+        return finalizeReal(out, a.shape.slice(), dest, false);
+      }
+      const reuse = reuseComplexBuffers(dest, n);
+      const outRe = reuse ? reuse.outRe : uninitFloat64(n);
+      const outIm = reuse ? reuse.outIm : uninitFloat64(n);
+      tensorOps.complexUnaryElemwise(opCode, n, a.data, a.imag, outRe, outIm);
+      return finalizeSplitReused(outRe, outIm, a.shape.slice(), dest);
+    }
   }
+  // Slow fallback: scalar closure. Only reachable for non-op-coded `fn`s
+  // on real tensors (the old real-only slow path).
   const out = uninitFloatX(n);
   for (let i = 0; i < n; i++) out[i] = fn(a.data[i]);
   return makeTensor(out, undefined, a.shape.slice());
@@ -355,6 +374,17 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
     const aData = a.data;
     for (let i = 0; i < n; i++) outR[i] = -aData[i];
     return finalizeReal(outR, a.shape.slice(), dest, false);
+  }
+  // Complex negation: reuse split buffers when possible.
+  if (a.data instanceof Float64Array && a.imag instanceof Float64Array) {
+    const reuse = reuseComplexBuffers(dest, n);
+    const outR = reuse ? reuse.outRe : uninitFloat64(n);
+    const outI = reuse ? reuse.outIm : uninitFloat64(n);
+    const aData = a.data;
+    const aImag = a.imag;
+    for (let i = 0; i < n; i++) outR[i] = -aData[i];
+    for (let i = 0; i < n; i++) outI[i] = -aImag[i];
+    return finalizeSplitReused(outR, outI, a.shape.slice(), dest);
   }
   const outR = uninitFloatX(n);
   for (let i = 0; i < n; i++) outR[i] = -a.data[i];

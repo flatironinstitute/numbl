@@ -901,27 +901,20 @@ function emitCall(expr: JitExpr & { tag: "Call" }, destName?: string): string {
   if (expr.name.startsWith("__")) {
     return `$h.${expr.name}(${args.join(", ")})`;
   }
-  // Try fast-path emission if the IBuiltin provides one. destName (mangled
-  // LHS local) is passed so tensor-producing builtins can thread it into
-  // their output-buffer-reuse slot. For inner tensor-producing calls we
-  // allocate a scratch local and wrap the call so the scratch buffer is
-  // reused across loop iterations.
+  // Try fast-path emission if the IBuiltin provides one. `getDest` is
+  // invoked by jitEmit only when the fast path actually uses a dest slot
+  // — so rejected tensor paths (complex input, nonneg fail, etc.) don't
+  // burn a scratch. Top-level Assign passes the mangled LHS; inner calls
+  // allocate a scratch lazily.
   const ib = getIBuiltin(expr.name);
   if (ib?.jitEmit) {
     const argTypes = expr.args.map(a => a.jitType);
-    const isInnerTensor =
-      destName === undefined &&
-      expr.jitType.kind === "tensor" &&
-      expr.jitType.isComplex !== true;
-    let dest: string | undefined;
     let scratch: string | undefined;
-    if (destName !== undefined) {
-      dest = mangle(destName);
-    } else if (isInnerTensor) {
-      scratch = allocScratch();
-      dest = scratch;
-    }
-    const fast = ib.jitEmit(args, argTypes, dest);
+    const getDest =
+      destName !== undefined
+        ? () => mangle(destName)
+        : () => (scratch ??= allocScratch());
+    const fast = ib.jitEmit(args, argTypes, getDest);
     if (fast) return scratch ? `(${scratch} = ${fast})` : fast;
   }
   return `$h.ib_${expr.name}(${args.join(", ")})`;

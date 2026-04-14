@@ -53,7 +53,7 @@ export interface IBuiltin {
   jitEmit?: (
     argCode: string[],
     argTypes: JitType[],
-    destName?: string
+    getDest?: () => string
   ) => string | null;
 }
 
@@ -698,7 +698,7 @@ export function defineBuiltin(opts: {
   jitEmit?: (
     argCode: string[],
     argTypes: JitType[],
-    destName?: string
+    getDest?: () => string
   ) => string | null;
 }): void {
   registerIBuiltin({
@@ -953,10 +953,11 @@ export function predicateCases(
 // ── JIT emit helpers ───────────────────────────────────────────────────
 
 /** Fast-path emitter for unary Math.* functions.
- *  Emits Math.fn(x) for scalar numbers, $h.tHelper(dest, x) for real tensors.
- *  `dest` is the mangled LHS local when this call is the top-level RHS of
- *  an Assign; tensor helpers reuse the dest buffer when it's rc==1 and
- *  size-matching. */
+ *  Emits Math.fn(x) for scalar numbers, $h.tHelper(dest, x) for real
+ *  tensors. `getDest` is a lazy callback returning the dest local: either
+ *  a mangled LHS (top-level Assign) or a fresh scratch (inner tensor
+ *  sub-expression). It's only invoked when the tensor fast path is
+ *  actually taken, so scalar / rejected paths don't burn a scratch. */
 export function unaryMathJitEmit(
   mathFn: string,
   tensorHelper: string,
@@ -964,18 +965,21 @@ export function unaryMathJitEmit(
 ): (
   argCode: string[],
   argTypes: JitType[],
-  destName?: string
+  getDest?: () => string
 ) => string | null {
-  return (argCode, argTypes, destName) => {
+  return (argCode, argTypes, getDest) => {
     if (argTypes.length !== 1) return null;
     const a = argTypes[0];
     if (a.kind === "number" || a.kind === "boolean") {
       if (requireNonneg && !isNonneg(a)) return null;
       return `${mathFn}(${argCode[0]})`;
     }
-    if (a.kind === "tensor" && a.isComplex !== true) {
-      if (requireNonneg && !isNonneg(a)) return null;
-      const dest = destName ?? "undefined";
+    if (a.kind === "tensor") {
+      // For complex input the `requireNonneg` gate is irrelevant — the
+      // complex kernels return the principal-branch complex result, which
+      // is the correct MATLAB behavior for log(-1), sqrt(-1), etc.
+      if (requireNonneg && a.isComplex !== true && !isNonneg(a)) return null;
+      const dest = getDest?.() ?? "undefined";
       return `$h.${tensorHelper}(${dest}, ${argCode[0]})`;
     }
     return null;
