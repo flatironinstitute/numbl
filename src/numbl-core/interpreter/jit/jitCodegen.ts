@@ -104,6 +104,26 @@ let _returnExpr = "undefined";
 let _fileName: string | undefined;
 let _fileEmitted = false;
 
+/**
+ * Scratch locals for inner tensor-producing sub-expressions.
+ *
+ * Each tensor-producing sub-expression that doesn't have a LHS dest (i.e.
+ * isn't the top-level RHS of an Assign) is given a fresh scratch local at
+ * emit time. On first iteration the helper allocates a fresh tensor and
+ * the JS `$sN = $h.tXxx($sN, ...)` pattern stores it; on subsequent
+ * iterations the helper reuses the scratch's buffer.
+ *
+ * Scratches are declared `undefined` at function entry, so the first-iter
+ * reuse-check naturally fails and allocates. Each call site gets its own
+ * scratch so coexisting temps in the same expression tree don't collide
+ * (e.g. `(a+b) + (c+d)` uses two scratches).
+ *
+ * Only real-Float64 tensor sub-expressions are wrapped — complex paths
+ * would need a matching imag buffer to benefit, and the conservative
+ * reuse-check already falls back to allocation for size/type mismatches.
+ */
+let _scratchLocals: string[] = [];
+
 let _hoistedAliases: Map<string, HoistedAlias> = new Map();
 
 /**
@@ -127,6 +147,12 @@ let _hoistedStructFields: Map<string, string> = new Map();
  */
 let _hoistedStructArrayElements: Map<string, string> = new Map();
 
+function allocScratch(): string {
+  const name = `$s${_scratchLocals.length + 1}`;
+  _scratchLocals.push(name);
+  return name;
+}
+
 export function generateJS(
   body: JitStmt[],
   params: string[],
@@ -136,6 +162,7 @@ export function generateJS(
   fileName?: string
 ): string {
   _tmpCounter = 0;
+  _scratchLocals = [];
   _fileName = fileName;
   _fileEmitted = false;
 
@@ -273,8 +300,15 @@ export function generateJS(
     );
   }
 
-  // Emit body
-  emitStmts(lines, body, indent);
+  // Emit body into a separate buffer so we can prepend scratch-local
+  // declarations once allocScratch counts are known.
+  const bodyLines: string[] = [];
+  emitStmts(bodyLines, body, indent);
+
+  if (_scratchLocals.length > 0) {
+    lines.push(`${indent}var ${_scratchLocals.join(", ")};`);
+  }
+  lines.push(...bodyLines);
 
   // Return
   lines.push(`${indent}return ${_returnExpr};`);
@@ -590,33 +624,38 @@ function emitTensorBinary(
   right: string,
   destName?: string
 ): string {
-  const dest = destName !== undefined ? mangle(destName) : "undefined";
+  // Top-level assigns pass a LHS dest; inner sub-expressions get a fresh
+  // scratch local so the buffer can be reused across loop iterations.
+  const isInner = destName === undefined;
+  const dest = isInner ? allocScratch() : mangle(destName!);
+  const wrap = (call: string): string =>
+    isInner ? `(${dest} = ${call})` : call;
   switch (op) {
     case BinaryOperation.Add:
-      return `$h.tAdd(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tAdd(${dest}, ${left}, ${right})`);
     case BinaryOperation.Sub:
-      return `$h.tSub(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tSub(${dest}, ${left}, ${right})`);
     case BinaryOperation.Mul:
     case BinaryOperation.ElemMul:
-      return `$h.tMul(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tMul(${dest}, ${left}, ${right})`);
     case BinaryOperation.Div:
     case BinaryOperation.ElemDiv:
-      return `$h.tDiv(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tDiv(${dest}, ${left}, ${right})`);
     case BinaryOperation.Pow:
     case BinaryOperation.ElemPow:
-      return `$h.tPow(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tPow(${dest}, ${left}, ${right})`);
     case BinaryOperation.Equal:
-      return `$h.tEq(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tEq(${dest}, ${left}, ${right})`);
     case BinaryOperation.NotEqual:
-      return `$h.tNeq(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tNeq(${dest}, ${left}, ${right})`);
     case BinaryOperation.Less:
-      return `$h.tLt(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tLt(${dest}, ${left}, ${right})`);
     case BinaryOperation.LessEqual:
-      return `$h.tLe(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tLe(${dest}, ${left}, ${right})`);
     case BinaryOperation.Greater:
-      return `$h.tGt(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tGt(${dest}, ${left}, ${right})`);
     case BinaryOperation.GreaterEqual:
-      return `$h.tGe(${dest}, ${left}, ${right})`;
+      return wrap(`$h.tGe(${dest}, ${left}, ${right})`);
     default:
       throw new Error(`JIT codegen: unsupported tensor binary op ${op}`);
   }
@@ -629,10 +668,13 @@ function emitUnary(
   const operand = emitExpr(expr.operand);
 
   if (isTensorType(expr.operand.jitType)) {
-    const dest = destName !== undefined ? mangle(destName) : "undefined";
+    const isInner = destName === undefined;
+    const dest = isInner ? allocScratch() : mangle(destName!);
     switch (expr.op) {
-      case UnaryOperation.Minus:
-        return `$h.tNeg(${dest}, ${operand})`;
+      case UnaryOperation.Minus: {
+        const call = `$h.tNeg(${dest}, ${operand})`;
+        return isInner ? `(${dest} = ${call})` : call;
+      }
       case UnaryOperation.Plus:
         return operand;
       case UnaryOperation.Transpose:
@@ -861,13 +903,26 @@ function emitCall(expr: JitExpr & { tag: "Call" }, destName?: string): string {
   }
   // Try fast-path emission if the IBuiltin provides one. destName (mangled
   // LHS local) is passed so tensor-producing builtins can thread it into
-  // their output-buffer-reuse slot.
+  // their output-buffer-reuse slot. For inner tensor-producing calls we
+  // allocate a scratch local and wrap the call so the scratch buffer is
+  // reused across loop iterations.
   const ib = getIBuiltin(expr.name);
   if (ib?.jitEmit) {
     const argTypes = expr.args.map(a => a.jitType);
-    const dest = destName !== undefined ? mangle(destName) : undefined;
+    const isInnerTensor =
+      destName === undefined &&
+      expr.jitType.kind === "tensor" &&
+      expr.jitType.isComplex !== true;
+    let dest: string | undefined;
+    let scratch: string | undefined;
+    if (destName !== undefined) {
+      dest = mangle(destName);
+    } else if (isInnerTensor) {
+      scratch = allocScratch();
+      dest = scratch;
+    }
     const fast = ib.jitEmit(args, argTypes, dest);
-    if (fast) return fast;
+    if (fast) return scratch ? `(${scratch} = ${fast})` : fast;
   }
   return `$h.ib_${expr.name}(${args.join(", ")})`;
 }
