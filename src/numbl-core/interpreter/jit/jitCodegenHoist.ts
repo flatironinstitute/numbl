@@ -101,6 +101,11 @@ export function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
         visitExpr(e.base);
         visitExpr(e.value);
         return;
+      case "RangeSliceRead":
+        bump(e.baseName, true, 1, true);
+        visitExpr(e.start);
+        if (e.end) visitExpr(e.end);
+        return;
       case "MemberRead":
         return;
       case "StructArrayMemberRead":
@@ -144,6 +149,19 @@ export function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
           if (s.srcEnd) visitExpr(s.srcEnd);
           break;
         }
+        case "AssignIndexCol": {
+          // dst is written with 2-D arity so the hoist emits the $d0
+          // alias (rows). src is read as a whole tensor so we only need
+          // .data and .length (arity 1 is sufficient to get both).
+          if (s.baseType.kind === "tensor") {
+            bump(s.baseName, false, 2, s.baseType.isComplex === false);
+          }
+          if (s.srcType.kind === "tensor") {
+            bump(s.srcBaseName, true, 1, s.srcType.isComplex === false);
+          }
+          visitExpr(s.colIndex);
+          break;
+        }
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);
           break;
@@ -172,6 +190,74 @@ export function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
     }
   };
 
+  visitStmts(body);
+  return out;
+}
+
+/**
+ * Walk the JIT IR collecting every base name that is the target of an
+ * `AssignMember` stmt (stage 22 struct field write). Used by the
+ * codegen to emit a one-time `$h.structUnshare_h(s)` at function entry
+ * for any such name that is also a function parameter — this preserves
+ * MATLAB value semantics when structs are passed by value and the
+ * callee mutates a field.
+ */
+export function collectStructMemberWrites(body: JitStmt[]): Set<string> {
+  const out = new Set<string>();
+  const visitStmts = (stmts: JitStmt[]): void => {
+    for (const s of stmts) {
+      switch (s.tag) {
+        case "AssignMember":
+          out.add(s.baseName);
+          break;
+        case "If":
+          visitStmts(s.thenBody);
+          for (const eib of s.elseifBlocks) visitStmts(eib.body);
+          if (s.elseBody) visitStmts(s.elseBody);
+          break;
+        case "For":
+        case "While":
+          visitStmts(s.body);
+          break;
+        default:
+          break;
+      }
+    }
+  };
+  visitStmts(body);
+  return out;
+}
+
+/**
+ * Walk the JIT IR collecting every name that is the target of any
+ * plain `Assign` stmt. Used by the stage-12 struct-field-read hoist to
+ * decide whether a struct-typed param is safe to hoist: if the body
+ * ever reassigns the name (e.g. `s = [];` promoted to struct, or `s =
+ * struct()` inside the loop), the pre-loop hoisted field aliases would
+ * be stale and must be disabled.
+ */
+export function collectPlainAssignTargets(body: JitStmt[]): Set<string> {
+  const out = new Set<string>();
+  const visitStmts = (stmts: JitStmt[]): void => {
+    for (const s of stmts) {
+      switch (s.tag) {
+        case "Assign":
+          out.add(s.name);
+          break;
+        case "If":
+          visitStmts(s.thenBody);
+          for (const eib of s.elseifBlocks) visitStmts(eib.body);
+          if (s.elseBody) visitStmts(s.elseBody);
+          break;
+        case "For":
+        case "While":
+          visitStmts(s.body);
+          break;
+        default:
+          break;
+      }
+    }
+  };
   visitStmts(body);
   return out;
 }
@@ -220,6 +306,10 @@ export function collectStructFieldReads(
         visitExpr(e.base);
         visitExpr(e.value);
         return;
+      case "RangeSliceRead":
+        visitExpr(e.start);
+        if (e.end) visitExpr(e.end);
+        return;
       case "StructArrayMemberRead":
         visitExpr(e.indexExpr);
         return;
@@ -244,6 +334,12 @@ export function collectStructFieldReads(
           visitExpr(s.dstEnd);
           if (s.srcStart) visitExpr(s.srcStart);
           if (s.srcEnd) visitExpr(s.srcEnd);
+          break;
+        case "AssignIndexCol":
+          visitExpr(s.colIndex);
+          break;
+        case "AssignMember":
+          visitExpr(s.value);
           break;
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);
@@ -351,6 +447,12 @@ export function collectStructArrayElementReads(
           visitExpr(s.dstEnd);
           if (s.srcStart) visitExpr(s.srcStart);
           if (s.srcEnd) visitExpr(s.srcEnd);
+          break;
+        case "AssignIndexCol":
+          visitExpr(s.colIndex);
+          break;
+        case "AssignMember":
+          visitExpr(s.value);
           break;
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);

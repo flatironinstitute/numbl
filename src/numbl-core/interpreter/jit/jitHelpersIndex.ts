@@ -11,9 +11,11 @@
  */
 
 import {
+  FloatXArray,
   type FloatXArrayType,
   type RuntimeTensor,
 } from "../../runtime/types.js";
+import { makeTensor } from "./jitHelpersTensor.js";
 import { mkc } from "./jitHelpersComplex.js";
 
 function isComplex(
@@ -280,4 +282,57 @@ export function setRange1r_h(
   if (sStart >>> 0 >= srcLen) bce();
   if (sEnd >>> 0 >= srcLen) bce();
   dstData.set(srcData.subarray(sStart, sEnd + 1), dStart);
+}
+
+// ── Range slice read helper (stage 21) ─────────────────────────────────
+//
+// `src(a:b)` on a real tensor: return a fresh column-vector tensor of
+// length (b - a + 1) holding a copy of the requested slice. Allocation
+// per call is unavoidable without a range-alias extension to the
+// stage-5 slice-alias path; small slices are cheap in V8 young-gen.
+
+export function subarrayCopy1r(
+  srcData: FloatXArrayType,
+  srcLen: number,
+  start: number,
+  end: number
+): RuntimeTensor {
+  const s = (start - 1) | 0;
+  const e = (end - 1) | 0;
+  const n = e - s + 1;
+  if (n <= 0) {
+    return makeTensor(new FloatXArray(0), undefined, [0, 1]);
+  }
+  if (s >>> 0 >= srcLen) bce();
+  if (e >>> 0 >= srcLen) bce();
+  const out = new FloatXArray(n);
+  out.set(srcData.subarray(s, e + 1));
+  return makeTensor(out, undefined, [n, 1]);
+}
+
+// ── Column slice write helper ──────────────────────────────────────────
+//
+// dst(:, j) = src where dst is a real 2-D tensor with statically-known
+// row count `dstRows`, j is 1-based, and src is a real tensor with
+// exactly `dstRows` elements (column vector, row vector, or any shape
+// whose linear length matches — MATLAB's behavior for this shape).
+
+export function setCol2r_h(
+  dstData: FloatXArrayType,
+  dstRows: number,
+  dstLen: number,
+  col: number,
+  srcData: FloatXArrayType,
+  srcLen: number
+): void {
+  if (srcLen !== dstRows) {
+    throw new Error(
+      "Unable to perform assignment because the indices on the left side are not compatible with the size of the right side."
+    );
+  }
+  const j = (col - 1) | 0;
+  const dstCols = (dstLen / dstRows) | 0;
+  if (j >>> 0 >= dstCols) bce();
+  const off = j * dstRows;
+  dstData.set(srcData.subarray(0, dstRows), off);
 }

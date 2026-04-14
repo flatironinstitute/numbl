@@ -15,6 +15,8 @@ import {
   FloatXArray,
   type RuntimeTensor,
   type RuntimeFunction,
+  type RuntimeStruct,
+  type RuntimeValue,
 } from "../../runtime/types.js";
 
 import {
@@ -58,6 +60,8 @@ export {
   set2r_h,
   set3r_h,
   setRange1r_h,
+  setCol2r_h,
+  subarrayCopy1r,
 } from "./jitHelpersIndex.js";
 
 export {
@@ -114,6 +118,8 @@ import {
   set2r_h,
   set3r_h,
   setRange1r_h,
+  setCol2r_h,
+  subarrayCopy1r,
 } from "./jitHelpersIndex.js";
 
 import {
@@ -294,6 +300,36 @@ export const jitHelpers = {
   mkTensorC: (reData: number[], imData: number[], shape: number[]) =>
     makeTensor(new FloatXArray(reData), new FloatXArray(imData), shape),
 
+  // Struct construction + field write (stage 22)
+  //
+  // Used by AssignMember codegen to (re)initialize a variable as a
+  // fresh empty struct (for the MATLAB `s = []; s.f = v` idiom or a
+  // write-only local) and to set a field on an existing struct.
+  structNew_h: (): RuntimeStruct => ({
+    kind: "struct",
+    fields: new Map(),
+  }),
+  structSetField_h: (
+    s: RuntimeStruct,
+    field: string,
+    value: RuntimeValue
+  ): void => {
+    s.fields.set(field, value);
+  },
+  // Clone a struct's fields map so subsequent mutations don't leak
+  // back to the caller. Mirrors the interpreter's `setRTValueField`
+  // copy-on-write semantics for struct params. Called once at function
+  // entry for any struct param that is a target of AssignMember.
+  structUnshare_h: (s: unknown): unknown => {
+    if (s !== null && typeof s === "object") {
+      const rs = s as RuntimeStruct;
+      if (rs.kind === "struct") {
+        return { kind: "struct", fields: new Map(rs.fields) };
+      }
+    }
+    return s;
+  },
+
   // Tensor indexing (generic)
   idx1,
   idx2,
@@ -316,6 +352,12 @@ export const jitHelpers = {
 
   // Range-slice write helper
   setRange1r_h,
+
+  // Column slice write helper
+  setCol2r_h,
+
+  // Range-slice read helper (stage 21)
+  subarrayCopy1r,
 
   // Vertical concat growth
   vconcatGrow1r,

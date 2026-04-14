@@ -456,6 +456,26 @@ export type JitExpr =
     }
   | { tag: "Index"; base: JitExpr; indices: JitExpr[]; jitType: JitType }
   | {
+      /**
+       * Range slice read on a real tensor: `src(a:b)` producing a fresh
+       * column-vector tensor of length `b - a + 1`. Stage 21 — unblocks
+       * chunkie's chunk_nearparam Newton loop which splits a Legendre
+       * expansion vector via `r0 = all0(1:dim)`.
+       *
+       * Codegen emits `$h.subarrayCopy1r(srcData, srcLen, start, end)`
+       * using the hoisted data/length aliases. Per-iter allocation is
+       * unavoidable without a range-alias extension to stage 5; small
+       * slices are cheap in V8 young-gen.
+       */
+      tag: "RangeSliceRead";
+      baseName: string;
+      start: JitExpr;
+      /** `null` when the range endpoint is the `end` keyword — codegen
+       *  substitutes the hoisted `.data.length` alias. */
+      end: JitExpr | null;
+      jitType: JitType;
+    }
+  | {
       tag: "TensorLiteral";
       rows: JitExpr[][];
       nRows: number;
@@ -566,6 +586,42 @@ export type JitStmt =
       srcEnd: JitExpr | null;
     }
   | {
+      /**
+       * Multi-dim column slice write `dst(:, j) = src` where both `dst`
+       * and `src` are real tensors. LHS must be `Index(Ident(dst),
+       * [Colon, scalar_j])` with `dst` having statically 2-D shape.
+       * RHS must be a plain Ident referencing a real-tensor var whose
+       * total element count matches `dst.shape[0]` at runtime.
+       *
+       * Used by the loop JIT for chunkie's adapgausskerneval column
+       * stack write: `vals(:, jj+1) = v2`. Also covers
+       * chunkerinterior's `rss(:, jj) = rval(:, k)` after a slice
+       * alias binds the RHS.
+       */
+      tag: "AssignIndexCol";
+      baseName: string;
+      baseType: JitType;
+      colIndex: JitExpr;
+      srcBaseName: string;
+      srcType: JitType;
+    }
+  | {
+      /**
+       * Struct field assign lvalue `s.f = v`. When `needsPromote` is
+       * true, the base is (re)initialized as a fresh empty struct
+       * before the field is set — mirrors MATLAB's
+       * `s = []; s.f = v` idiom that promotes the empty matrix to a
+       * struct on first field write. `valueType` is the JIT type of
+       * `value` so stage 12 can hoist subsequent reads through a
+       * typed alias.
+       */
+      tag: "AssignMember";
+      baseName: string;
+      fieldName: string;
+      value: JitExpr;
+      needsPromote: boolean;
+    }
+  | {
       tag: "If";
       cond: JitExpr;
       thenBody: JitStmt[];
@@ -593,6 +649,8 @@ export type JitStmt =
       outputTypes: JitType[];
     }
   | { tag: "SetLoc"; line: number };
+
+// (Also defined in JitExpr below)
 
 // ── Scalar math builtins ────────────────────────────────────────────────
 
