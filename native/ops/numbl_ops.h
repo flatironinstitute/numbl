@@ -94,6 +94,58 @@ int numbl_complex_scalar_binary_elemwise(int op, size_t n,
                                          int scalar_on_left,
                                          double* out_re, double* out_im);
 
+/* ── Unary element-wise ops (real + complex) ──────────────────────────── */
+
+typedef enum {
+  NUMBL_UNARY_EXP   = 0,
+  NUMBL_UNARY_LOG   = 1,
+  NUMBL_UNARY_LOG2  = 2,
+  NUMBL_UNARY_LOG10 = 3,
+  NUMBL_UNARY_SQRT  = 4,
+  NUMBL_UNARY_ABS   = 5,
+  NUMBL_UNARY_FLOOR = 6,
+  NUMBL_UNARY_CEIL  = 7,
+  NUMBL_UNARY_ROUND = 8,
+  NUMBL_UNARY_TRUNC = 9,
+  NUMBL_UNARY_SIN   = 10,
+  NUMBL_UNARY_COS   = 11,
+  NUMBL_UNARY_TAN   = 12,
+  NUMBL_UNARY_ASIN  = 13,
+  NUMBL_UNARY_ACOS  = 14,
+  NUMBL_UNARY_ATAN  = 15,
+  NUMBL_UNARY_SINH  = 16,
+  NUMBL_UNARY_COSH  = 17,
+  NUMBL_UNARY_TANH  = 18,
+  NUMBL_UNARY_SIGN  = 19
+} numbl_unary_op_t;
+
+/**
+ * Real unary element-wise: out[i] = OP(a[i]).
+ * a, out must point to at least n doubles.
+ */
+int numbl_real_unary_elemwise(int op, size_t n,
+                              const double* a, double* out);
+
+/**
+ * Complex unary element-wise, split storage.
+ * a_im may be NULL → treat as zero.
+ * out_re and out_im are both required.
+ *
+ * ABS is unsupported here (output would be real-valued — use
+ * numbl_complex_abs for that).  Other ops are supported.
+ */
+int numbl_complex_unary_elemwise(int op, size_t n,
+                                 const double* a_re, const double* a_im,
+                                 double* out_re, double* out_im);
+
+/**
+ * Complex absolute value: out[i] = sqrt(re[i]^2 + im[i]^2).
+ * Output is real-valued.  a_im may be NULL.
+ */
+int numbl_complex_abs(size_t n,
+                      const double* a_re, const double* a_im,
+                      double* out);
+
 /* ── Op-code dump (for drift detection) ───────────────────────────────── */
 
 /**

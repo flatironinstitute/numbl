@@ -21,3 +21,27 @@ export const OpComplexBin = {
   MUL: 2,
   DIV: 3,
 } as const;
+
+/** Unary element-wise ops (shared numbering for real + complex). */
+export const OpUnary = {
+  EXP: 0,
+  LOG: 1,
+  LOG2: 2,
+  LOG10: 3,
+  SQRT: 4,
+  ABS: 5,
+  FLOOR: 6,
+  CEIL: 7,
+  ROUND: 8,
+  TRUNC: 9,
+  SIN: 10,
+  COS: 11,
+  TAN: 12,
+  ASIN: 13,
+  ACOS: 14,
+  ATAN: 15,
+  SINH: 16,
+  COSH: 17,
+  TANH: 18,
+  SIGN: 19,
+} as const;

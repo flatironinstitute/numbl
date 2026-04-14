@@ -18,7 +18,7 @@ import {
   isRuntimeTensor,
   type RuntimeChar,
 } from "../../runtime/types.js";
-import { getLapackBridge } from "../../native/lapack-bridge.js";
+import { tensorOps } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
 import {
   type JitType,
@@ -428,14 +428,12 @@ export function applyUnaryElemwise(
   if (isRuntimeTensor(v)) {
     const n = v.data.length;
     if (!v.imag) {
-      // Native fast path
+      // Tensor-ops fast path (native if available, TS fallback otherwise).
       const opCode = nativeUnaryOpCode.get(realFn);
-      if (opCode !== undefined) {
-        const bridge = getLapackBridge();
-        if (bridge?.unaryElemwise && v.data instanceof Float64Array) {
-          const result = bridge.unaryElemwise(v.data, opCode);
-          return RTV.tensorRaw(result, v.shape.slice());
-        }
+      if (opCode !== undefined && v.data instanceof Float64Array) {
+        const out = new Float64Array(n);
+        tensorOps.realUnaryElemwise(opCode, n, v.data, out);
+        return RTV.tensorRaw(out, v.shape.slice());
       }
       const out = new FloatXArray(n);
       for (let i = 0; i < n; i++) out[i] = realFn(v.data[i]);
@@ -487,42 +485,36 @@ function applyUnaryElemwiseMaybeComplex(
   if (isRuntimeTensor(v)) {
     const n = v.data.length;
     if (!v.imag) {
-      // Native fast path: if the underlying C math function (e.g. std::sqrt,
-      // std::log) already returns NaN on out-of-domain, let it compute the
-      // whole buffer, then scan for NaN.  In the overwhelmingly common case
-      // (all-in-domain input) we return the real-tensor result directly.
+      // Tensor-ops fast path: compute the whole buffer via the ops layer,
+      // then scan for NaN (indicates out-of-domain, patch with complex fallback).
       if (nativeOpCode !== undefined && v.data instanceof Float64Array) {
-        const bridge = getLapackBridge();
-        if (bridge?.unaryElemwise) {
-          const nativeOut = bridge.unaryElemwise(v.data, nativeOpCode);
-          let firstNaN = -1;
-          for (let i = 0; i < n; i++) {
-            if (Number.isNaN(nativeOut[i])) {
-              firstNaN = i;
-              break;
-            }
+        const nativeOut = new Float64Array(n);
+        tensorOps.realUnaryElemwise(nativeOpCode, n, v.data, nativeOut);
+        let firstNaN = -1;
+        for (let i = 0; i < n; i++) {
+          if (Number.isNaN(nativeOut[i])) {
+            firstNaN = i;
+            break;
           }
-          if (firstNaN === -1) {
-            return RTV.tensorRaw(nativeOut, v.shape.slice());
-          }
-          // Fall back: some entries were out of domain. Keep the native
-          // results for in-domain entries and patch NaN positions with the
-          // complex fallback.
-          const outR = new FloatXArray(n);
-          const outI = new FloatXArray(n);
-          let hasImag = false;
-          for (let i = 0; i < n; i++) {
-            if (!Number.isNaN(nativeOut[i])) {
-              outR[i] = nativeOut[i];
-            } else {
-              const c = complexFn(v.data[i], 0);
-              outR[i] = c.re;
-              outI[i] = c.im;
-              if (c.im !== 0) hasImag = true;
-            }
-          }
-          return makeTensor(outR, hasImag ? outI : undefined, v.shape.slice());
         }
+        if (firstNaN === -1) {
+          return RTV.tensorRaw(nativeOut, v.shape.slice());
+        }
+        // Patch NaN positions with the complex fallback.
+        const outR = new FloatXArray(n);
+        const outI = new FloatXArray(n);
+        let hasImag = false;
+        for (let i = 0; i < n; i++) {
+          if (!Number.isNaN(nativeOut[i])) {
+            outR[i] = nativeOut[i];
+          } else {
+            const c = complexFn(v.data[i], 0);
+            outR[i] = c.re;
+            outI[i] = c.im;
+            if (c.im !== 0) hasImag = true;
+          }
+        }
+        return makeTensor(outR, hasImag ? outI : undefined, v.shape.slice());
       }
       const outR = new FloatXArray(n);
       const outI = new FloatXArray(n);
