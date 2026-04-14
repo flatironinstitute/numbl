@@ -548,6 +548,28 @@ export type JitExpr =
       name: string;
       args: JitExpr[];
       jitType: JitType;
+    }
+  | {
+      /**
+       * User function call that bailed recursive lowering (stage 24 —
+       * soft-bail). Instead of bailing the containing loop, emit a
+       * runtime dispatch through the interpreter. Return type is
+       * determined at JIT compile time by probing (actually calling
+       * the function once with representative args). The helper
+       * `callUserFunc` verifies the actual return type on every call
+       * and throws `JitFuncHandleBailError` on mismatch so the loop
+       * runner can invalidate the cache entry and fall back to
+       * interpretation.
+       *
+       * Use case: `oneintp(...)` / `lege.exev(...)` in chunkie's adap
+       * inner loop — the callee body has tensor arithmetic the JIT
+       * can't inline, but the outer loop (scalar stack + col-slice
+       * writes + scalar compares) is a perfect JIT fit.
+       */
+      tag: "UserDispatchCall";
+      name: string;
+      args: JitExpr[];
+      jitType: JitType;
     };
 
 export type JitStmt =

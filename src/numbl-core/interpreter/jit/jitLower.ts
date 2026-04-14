@@ -1956,7 +1956,39 @@ function lowerUserFuncCall(
       ctx.generatedFns,
       ctx.loweringInProgress
     );
-    if (!calleeResult) return null;
+    if (!calleeResult) {
+      // Stage 24 soft-bail: the callee's body has constructs the JIT
+      // can't lower (tensor arithmetic, matrix multiply, bsxfun with a
+      // function-handle arg, etc.). Rather than bail the enclosing
+      // loop, probe the return type by actually invoking the function
+      // once with representative args, then emit a UserDispatchCall
+      // that goes through `rt.dispatch` at runtime. The outer loop
+      // still JITs — only the callee runs interpreted.
+      //
+      // Guard: skip the probe+dispatch path for callees whose bodies
+      // use caller-aware or frame-sensitive builtins (evalin,
+      // assignin, inputname, dbstack, nargin/nargout without arg,
+      // etc.). These resolve relative to the MATLAB call stack; a
+      // probe call at compile time runs with a different stack than
+      // the real runtime call, and going through $h.callUserFunc at
+      // runtime may not reproduce the semantics the user expects.
+      if (callerAwareBuiltinInBody(calleeFn.body)) {
+        return null;
+      }
+      const returnType = probeUserFuncReturnType(
+        interp,
+        calleeFn.name,
+        loweredArgs
+      );
+      if (!returnType) return null;
+      ctx._hasTensorOps = true;
+      return {
+        tag: "UserDispatchCall",
+        name: calleeFn.name,
+        args: loweredArgs,
+        jitType: returnType,
+      };
+    }
 
     // Generate JS for the callee and wrap in a named function
     const calleeJS = generateJS(
@@ -2194,6 +2226,154 @@ function probeFuncHandleReturnType(
     return resultType;
   } catch {
     // Probe failed (function errored) — bail
+    return null;
+  }
+}
+
+/**
+ * Stage 24 safety guard: returns true if the function body references
+ * any builtin that reads from or writes to the caller's workspace or
+ * the MATLAB call stack. Those builtins (evalin, assignin, inputname,
+ * dbstack, …) can't be probed safely at JIT compile time because the
+ * probe's call stack differs from the real runtime stack, and they
+ * may not survive a round-trip through `$h.callUserFunc` depending on
+ * how the runtime resolves the caller frame.
+ */
+const CALLER_AWARE_BUILTINS = new Set<string>([
+  "evalin",
+  "assignin",
+  "inputname",
+  "dbstack",
+  "dbstop",
+  "keyboard",
+  "input",
+]);
+
+function callerAwareBuiltinInBody(body: Stmt[]): boolean {
+  const visitExpr = (e: Expr): boolean => {
+    if (!e) return false;
+    if (e.type === "FuncCall" && CALLER_AWARE_BUILTINS.has(e.name)) return true;
+    switch (e.type) {
+      case "Binary":
+        return visitExpr(e.left) || visitExpr(e.right);
+      case "Unary":
+        return visitExpr(e.operand);
+      case "FuncCall":
+        return e.args.some(visitExpr);
+      case "Index":
+      case "IndexCell":
+        return visitExpr(e.base) || e.indices.some(visitExpr);
+      case "Member":
+        return visitExpr(e.base);
+      case "MethodCall":
+        return visitExpr(e.base) || e.args.some(visitExpr);
+      case "Range":
+        return (
+          visitExpr(e.start) ||
+          (e.step ? visitExpr(e.step) : false) ||
+          visitExpr(e.end)
+        );
+      case "Tensor":
+      case "Cell":
+        return e.rows.some(row => row.some(visitExpr));
+      case "AnonFunc":
+        return visitExpr(e.body);
+      default:
+        return false;
+    }
+  };
+  const visitStmts = (stmts: Stmt[]): boolean => {
+    for (const s of stmts) {
+      switch (s.type) {
+        case "Assign":
+        case "AssignLValue":
+        case "ExprStmt":
+        case "MultiAssign":
+          if (visitExpr(s.expr)) return true;
+          break;
+        case "If":
+          if (visitExpr(s.cond)) return true;
+          if (visitStmts(s.thenBody)) return true;
+          for (const eib of s.elseifBlocks) {
+            if (visitExpr(eib.cond)) return true;
+            if (visitStmts(eib.body)) return true;
+          }
+          if (s.elseBody && visitStmts(s.elseBody)) return true;
+          break;
+        case "For":
+          if (visitExpr(s.expr)) return true;
+          if (visitStmts(s.body)) return true;
+          break;
+        case "While":
+          if (visitExpr(s.cond)) return true;
+          if (visitStmts(s.body)) return true;
+          break;
+        case "TryCatch":
+          if (visitStmts(s.tryBody)) return true;
+          if (visitStmts(s.catchBody)) return true;
+          break;
+        case "Switch":
+          if (visitExpr(s.expr)) return true;
+          for (const c of s.cases) {
+            if (visitExpr(c.value)) return true;
+            if (visitStmts(c.body)) return true;
+          }
+          if (s.otherwise && visitStmts(s.otherwise)) return true;
+          break;
+        default:
+          break;
+      }
+    }
+    return false;
+  };
+  return visitStmts(body);
+}
+
+/**
+ * Stage 24: probe a user function's return type by invoking it once
+ * through `rt.dispatch` with representative argument values. Mirrors
+ * `probeFuncHandleReturnType` but for named user functions. Called
+ * when `lowerFunction` fails on the callee's body — we still want
+ * the outer loop to JIT via a UserDispatchCall.
+ *
+ * Args are mapped to runtime values:
+ *   - Var with a value in the current env: use that value.
+ *   - Var with no env value (e.g. loop iterator before loop starts):
+ *     synthesize a representative from its JIT type.
+ *   - NumberLiteral: use the literal value.
+ *   - Other exprs: bail — we can't cheaply evaluate.
+ *
+ * The probe call may have side effects (persistent-var init, etc.),
+ * so it's wrapped in try/catch; any failure bails the probe.
+ */
+function probeUserFuncReturnType(
+  interp: Interpreter,
+  fnName: string,
+  loweredArgs: JitExpr[]
+): JitType | null {
+  try {
+    const argVals: unknown[] = [];
+    for (const arg of loweredArgs) {
+      if (arg.tag === "NumberLiteral") {
+        argVals.push(arg.value);
+      } else if (arg.tag === "Var") {
+        const val = interp.env.get(arg.name);
+        if (val !== undefined) {
+          argVals.push(val);
+        } else {
+          const rep = representativeValue(arg.jitType);
+          if (rep === undefined) return null;
+          argVals.push(rep);
+        }
+      } else {
+        return null;
+      }
+    }
+    const result = interp.rt.dispatch(fnName, 1, argVals);
+    const resultType = inferJitType(result);
+    if (resultType.kind === "unknown") return null;
+    return resultType;
+  } catch {
     return null;
   }
 }
