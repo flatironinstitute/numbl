@@ -6,6 +6,26 @@
 #include "numbl_ops.h"
 
 #include <math.h>
+#include <stdint.h>
+#include <string.h>
+
+/* Bit-level NaN detection + constant. `-ffast-math` implies
+ * `-ffinite-math-only`, which makes gcc fold `isnan(x)` / `x != x` to
+ * `false` and collapse `0.0 / 0.0` to 0. Max/min need MATLAB-compatible
+ * NaN-omit semantics, so we inspect the IEEE 754 bit pattern directly
+ * and fabricate NaN by bit pattern too. */
+static inline int nb_isnan(double x) {
+  uint64_t bits;
+  memcpy(&bits, &x, sizeof(bits));
+  return (bits & 0x7FFFFFFFFFFFFFFFULL) > 0x7FF0000000000000ULL;
+}
+
+static inline double nb_nan(void) {
+  uint64_t bits = 0x7FF8000000000000ULL; /* quiet NaN */
+  double x;
+  memcpy(&x, &bits, sizeof(x));
+  return x;
+}
 
 int numbl_real_flat_reduce(int op, size_t n, const double* a, double* out) {
   if ((!a && n > 0) || !out) return NUMBL_ERR_NULL_PTR;
@@ -29,11 +49,11 @@ int numbl_real_flat_reduce(int op, size_t n, const double* a, double* out) {
       int any = 0;
       for (size_t i = 0; i < n; i++) {
         double v = a[i];
-        if (isnan(v)) continue;
+        if (nb_isnan(v)) continue;
         if (v > m) m = v;
         any = 1;
       }
-      *out = any ? m : (0.0 / 0.0);
+      *out = any ? m : nb_nan();
       return NUMBL_OK;
     }
     case NUMBL_REDUCE_MIN: {
@@ -41,17 +61,17 @@ int numbl_real_flat_reduce(int op, size_t n, const double* a, double* out) {
       int any = 0;
       for (size_t i = 0; i < n; i++) {
         double v = a[i];
-        if (isnan(v)) continue;
+        if (nb_isnan(v)) continue;
         if (v < m) m = v;
         any = 1;
       }
-      *out = any ? m : (0.0 / 0.0);
+      *out = any ? m : nb_nan();
       return NUMBL_OK;
     }
     case NUMBL_REDUCE_ANY: {
       double r = 0.0;
       for (size_t i = 0; i < n; i++) {
-        if (a[i] != 0.0 || isnan(a[i])) { r = 1.0; break; }
+        if (a[i] != 0.0 || nb_isnan(a[i])) { r = 1.0; break; }
       }
       *out = r;
       return NUMBL_OK;
@@ -65,7 +85,7 @@ int numbl_real_flat_reduce(int op, size_t n, const double* a, double* out) {
       return NUMBL_OK;
     }
     case NUMBL_REDUCE_MEAN: {
-      if (n == 0) { *out = 0.0 / 0.0; return NUMBL_OK; }
+      if (n == 0) { *out = nb_nan(); return NUMBL_OK; }
       double s = 0.0;
       for (size_t i = 0; i < n; i++) s += a[i];
       *out = s / (double)n;
@@ -114,7 +134,7 @@ int numbl_complex_flat_reduce(int op, size_t n,
       for (size_t i = 0; i < n; i++) {
         double ar = a_re[i];
         double ai = a_im ? a_im[i] : 0.0;
-        if (ar != 0.0 || ai != 0.0 || isnan(ar) || isnan(ai)) {
+        if (ar != 0.0 || ai != 0.0 || nb_isnan(ar) || nb_isnan(ai)) {
           r = 1.0;
           break;
         }

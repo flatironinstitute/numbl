@@ -45,9 +45,9 @@
         "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
         "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
       ],
-      "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fno-finite-math-only" ],
-      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fno-finite-math-only" ],
-      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fno-finite-math-only" ]
+      "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
+      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
+      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ]
     }
   ]
 }
