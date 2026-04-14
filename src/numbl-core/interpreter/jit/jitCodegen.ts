@@ -292,14 +292,29 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
 
 function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
-    case "Assign":
-      lines.push(`${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr)};`);
+    case "Assign": {
+      // Var-to-var tensor assign: bump _rc on the aliased tensor so later
+      // ops don't reuse its buffer in place (which would corrupt the other
+      // binding). Non-tensor RHS skips this.
+      if (stmt.expr.tag === "Var" && isTensorType(stmt.expr.jitType)) {
+        lines.push(
+          `${indent}${mangle(stmt.name)} = $h.shareTensor(${mangle(stmt.expr.name)});`
+        );
+      } else {
+        // Pass the LHS name as a dest hint so the top-level RHS op (tensor
+        // binary / unary / compare / builtin) can write into the previous
+        // value's buffer when uniquely owned.
+        lines.push(
+          `${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr, stmt.name)};`
+        );
+      }
       // If `name` is a hoisted tensor variable, refresh its hoisted aliases
       // (`.data`, `.length`, shape) so subsequent reads/writes see the new
       // value. Without this, `out_pt = zeros(N*2, 1)` followed by
       // `out_pt(i) = v` would write to the OLD hoisted buffer.
       emitHoistRefresh(lines, stmt.name, indent);
       break;
+    }
 
     case "AssignIndex":
       lines.push(`${indent}${emitAssignIndex(stmt)};`);
@@ -411,7 +426,12 @@ function isComplexType(t: JitType): boolean {
   );
 }
 
-function emitExpr(expr: JitExpr): string {
+// `destName` is non-undefined only when this expression is the top-level
+// RHS of a plain Assign. In that case the emitter may pass the mangled
+// dest local to tensor op helpers, which will reuse its `.data` buffer if
+// the previous value is a rc==1 Float64 tensor of matching length.
+// Sub-expressions get `undefined` — no reuse attempt for inner temps yet.
+function emitExpr(expr: JitExpr, destName?: string): string {
   switch (expr.tag) {
     case "NumberLiteral":
       return String(expr.value);
@@ -423,13 +443,13 @@ function emitExpr(expr: JitExpr): string {
       return mangle(expr.name);
 
     case "Binary":
-      return emitBinary(expr);
+      return emitBinary(expr, destName);
 
     case "Unary":
-      return emitUnary(expr);
+      return emitUnary(expr, destName);
 
     case "Call":
-      return emitCall(expr);
+      return emitCall(expr, destName);
 
     case "TensorLiteral":
       return emitTensorLiteral(expr);
@@ -486,7 +506,10 @@ function emitExpr(expr: JitExpr): string {
   }
 }
 
-function emitBinary(expr: JitExpr & { tag: "Binary" }): string {
+function emitBinary(
+  expr: JitExpr & { tag: "Binary" },
+  destName?: string
+): string {
   const left = emitExpr(expr.left);
   const right = emitExpr(expr.right);
   const leftIsTensor = isTensorType(expr.left.jitType);
@@ -496,7 +519,7 @@ function emitBinary(expr: JitExpr & { tag: "Binary" }): string {
 
   // Tensor operations use helpers (handles both real and complex tensors)
   if (leftIsTensor || rightIsTensor) {
-    return emitTensorBinary(expr.op, left, right);
+    return emitTensorBinary(expr.op, left, right, destName);
   }
 
   // Complex scalar operations use helpers
@@ -564,46 +587,52 @@ function emitComplexBinary(
 function emitTensorBinary(
   op: BinaryOperation,
   left: string,
-  right: string
+  right: string,
+  destName?: string
 ): string {
+  const dest = destName !== undefined ? mangle(destName) : "undefined";
   switch (op) {
     case BinaryOperation.Add:
-      return `$h.tAdd(${left}, ${right})`;
+      return `$h.tAdd(${dest}, ${left}, ${right})`;
     case BinaryOperation.Sub:
-      return `$h.tSub(${left}, ${right})`;
+      return `$h.tSub(${dest}, ${left}, ${right})`;
     case BinaryOperation.Mul:
     case BinaryOperation.ElemMul:
-      return `$h.tMul(${left}, ${right})`;
+      return `$h.tMul(${dest}, ${left}, ${right})`;
     case BinaryOperation.Div:
     case BinaryOperation.ElemDiv:
-      return `$h.tDiv(${left}, ${right})`;
+      return `$h.tDiv(${dest}, ${left}, ${right})`;
     case BinaryOperation.Pow:
     case BinaryOperation.ElemPow:
-      return `$h.tPow(${left}, ${right})`;
+      return `$h.tPow(${dest}, ${left}, ${right})`;
     case BinaryOperation.Equal:
-      return `$h.tEq(${left}, ${right})`;
+      return `$h.tEq(${dest}, ${left}, ${right})`;
     case BinaryOperation.NotEqual:
-      return `$h.tNeq(${left}, ${right})`;
+      return `$h.tNeq(${dest}, ${left}, ${right})`;
     case BinaryOperation.Less:
-      return `$h.tLt(${left}, ${right})`;
+      return `$h.tLt(${dest}, ${left}, ${right})`;
     case BinaryOperation.LessEqual:
-      return `$h.tLe(${left}, ${right})`;
+      return `$h.tLe(${dest}, ${left}, ${right})`;
     case BinaryOperation.Greater:
-      return `$h.tGt(${left}, ${right})`;
+      return `$h.tGt(${dest}, ${left}, ${right})`;
     case BinaryOperation.GreaterEqual:
-      return `$h.tGe(${left}, ${right})`;
+      return `$h.tGe(${dest}, ${left}, ${right})`;
     default:
       throw new Error(`JIT codegen: unsupported tensor binary op ${op}`);
   }
 }
 
-function emitUnary(expr: JitExpr & { tag: "Unary" }): string {
+function emitUnary(
+  expr: JitExpr & { tag: "Unary" },
+  destName?: string
+): string {
   const operand = emitExpr(expr.operand);
 
   if (isTensorType(expr.operand.jitType)) {
+    const dest = destName !== undefined ? mangle(destName) : "undefined";
     switch (expr.op) {
       case UnaryOperation.Minus:
-        return `$h.tNeg(${operand})`;
+        return `$h.tNeg(${dest}, ${operand})`;
       case UnaryOperation.Plus:
         return operand;
       case UnaryOperation.Transpose:
@@ -824,17 +853,20 @@ function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
   return `$h.set3r_h(${alias.data}, ${alias.len}, ${alias.d0}, ${alias.d1}, ${ri(0)}, ${ri(1)}, ${ri(2)}, ${value})`;
 }
 
-function emitCall(expr: JitExpr & { tag: "Call" }): string {
+function emitCall(expr: JitExpr & { tag: "Call" }, destName?: string): string {
   const args = expr.args.map(a => emitExpr(a));
   // Internal helper calls (prefixed with __) go directly to $h
   if (expr.name.startsWith("__")) {
     return `$h.${expr.name}(${args.join(", ")})`;
   }
-  // Try fast-path emission if the IBuiltin provides one
+  // Try fast-path emission if the IBuiltin provides one. destName (mangled
+  // LHS local) is passed so tensor-producing builtins can thread it into
+  // their output-buffer-reuse slot.
   const ib = getIBuiltin(expr.name);
   if (ib?.jitEmit) {
     const argTypes = expr.args.map(a => a.jitType);
-    const fast = ib.jitEmit(args, argTypes);
+    const dest = destName !== undefined ? mangle(destName) : undefined;
+    const fast = ib.jitEmit(args, argTypes, dest);
     if (fast) return fast;
   }
   return `$h.ib_${expr.name}(${args.join(", ")})`;

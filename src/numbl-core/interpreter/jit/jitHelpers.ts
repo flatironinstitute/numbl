@@ -68,6 +68,7 @@ export {
   tensorNeg,
   vconcatGrow1r,
   unshare,
+  shareTensor,
   asTensor,
   tAdd,
   tSub,
@@ -118,6 +119,7 @@ import {
   tensorNeg,
   vconcatGrow1r,
   unshare,
+  shareTensor,
   asTensor,
   tAdd,
   tSub,
@@ -225,27 +227,33 @@ export const jitHelpers = {
   __mElemDiv: mElemDiv,
   __mElemPow: mElemPow,
 
-  // Tensor math (real only)
-  tSin: (a: RuntimeTensor) => tensorUnary(a, Math.sin),
-  tCos: (a: RuntimeTensor) => tensorUnary(a, Math.cos),
-  tTan: (a: RuntimeTensor) => tensorUnary(a, Math.tan),
-  tAsin: (a: RuntimeTensor) => tensorUnary(a, Math.asin),
-  tAcos: (a: RuntimeTensor) => tensorUnary(a, Math.acos),
-  tAtan: (a: RuntimeTensor) => tensorUnary(a, Math.atan),
-  tSinh: (a: RuntimeTensor) => tensorUnary(a, Math.sinh),
-  tCosh: (a: RuntimeTensor) => tensorUnary(a, Math.cosh),
-  tTanh: (a: RuntimeTensor) => tensorUnary(a, Math.tanh),
-  tSqrt: (a: RuntimeTensor) => tensorUnary(a, Math.sqrt),
-  tAbs: (a: RuntimeTensor) => tensorUnary(a, Math.abs),
-  tFloor: (a: RuntimeTensor) => tensorUnary(a, Math.floor),
-  tCeil: (a: RuntimeTensor) => tensorUnary(a, Math.ceil),
-  tRound: (a: RuntimeTensor) => tensorUnary(a, Math.round),
-  tFix: (a: RuntimeTensor) => tensorUnary(a, Math.trunc),
-  tExp: (a: RuntimeTensor) => tensorUnary(a, Math.exp),
-  tLog: (a: RuntimeTensor) => tensorUnary(a, Math.log),
-  tLog2: (a: RuntimeTensor) => tensorUnary(a, Math.log2),
-  tLog10: (a: RuntimeTensor) => tensorUnary(a, Math.log10),
-  tSign: (a: RuntimeTensor) => tensorUnary(a, Math.sign),
+  // Tensor math (real only). `dest` is the previous value of the LHS
+  // variable (or undefined); when it's a rc==1 Float64 tensor of matching
+  // length, the op writes into its buffer in place.
+  tSin: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sin),
+  tCos: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.cos),
+  tTan: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.tan),
+  tAsin: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.asin),
+  tAcos: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.acos),
+  tAtan: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.atan),
+  tSinh: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sinh),
+  tCosh: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.cosh),
+  tTanh: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.tanh),
+  tSqrt: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sqrt),
+  tAbs: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.abs),
+  tFloor: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.floor),
+  tCeil: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.ceil),
+  tRound: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.round),
+  tFix: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.trunc),
+  tExp: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.exp),
+  tLog: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log),
+  tLog2: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log2),
+  tLog10: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log10),
+  tSign: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sign),
+
+  // Var-to-var share: bumps _rc so the aliased tensor is no longer
+  // eligible for in-place buffer reuse by later ops.
+  shareTensor,
 
   // Extract a row or column slice from a 2D tensor as a real tensor.
   // colonPos=0 → column slice (fix col, vary row): A(:, fixedIdx)
