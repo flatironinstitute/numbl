@@ -18,6 +18,21 @@ import {
 import { makeTensor } from "./jitHelpersTensor.js";
 import { mkc } from "./jitHelpersComplex.js";
 
+// ── Soft bail to interpreter ───────────────────────────────────────────
+//
+// Thrown by JIT helpers when the loop body hits a case the JIT can't
+// handle but the interpreter can — e.g. a column-slice write whose
+// column index would require growing the dst tensor (the hoisted aliases
+// become stale on growth, so we punt). The loop runner catches this and
+// silently re-runs the loop in the interpreter.
+
+export class JitBailToInterpreter extends Error {
+  constructor(public readonly reason: string) {
+    super(`JIT bail to interpreter: ${reason}`);
+    this.name = "JitBailToInterpreter";
+  }
+}
+
 function isComplex(
   v: unknown
 ): v is import("../../runtime/types.js").RuntimeComplexNumber {
@@ -331,8 +346,14 @@ export function setCol2r_h(
     );
   }
   const j = (col - 1) | 0;
+  if (j < 0) bce();
   const dstCols = (dstLen / dstRows) | 0;
-  if (j >>> 0 >= dstCols) bce();
+  // MATLAB auto-grows dst on `dst(:, j) = src` when j > current cols.
+  // The hoisted dstData/dstLen aliases become stale on growth, so bail
+  // to the interpreter which handles the growth correctly.
+  if (j >= dstCols) {
+    throw new JitBailToInterpreter("col-slice write requires dst growth");
+  }
   const off = j * dstRows;
   dstData.set(srcData.subarray(0, dstRows), off);
 }

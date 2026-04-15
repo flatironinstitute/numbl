@@ -8,6 +8,7 @@
 %   - column write with a non-trivial index expression
 %   - column write where src is a sliced alias of another tensor
 %   - error when RHS length doesn't match dst.rows
+%   - auto-growth when column index exceeds current dst.cols (MATLAB-compatible)
 
 % 1) Basic column write: dst(:, j) = src
 vals = zeros(2, 5);
@@ -59,17 +60,16 @@ catch
 end
 assert(ok, '4: expected size mismatch error');
 
-% 5) Column index out of bounds should throw
-oob_src = zeros(2, 1);
-oob_dst = zeros(2, 3);
-ok = false;
-try
-    for j = 1:1
-        oob_dst(:, 5) = oob_src;
-    end
-catch
-    ok = true;
+% 5) Column index past current dst.cols auto-grows the tensor (MATLAB
+%    semantics — there's no "out of bounds" on writes, only on reads).
+grow_src = ones(2, 1) * 7;
+grow_dst = zeros(2, 3);
+for j = 1:1
+    grow_dst(:, 5) = grow_src;
 end
-assert(ok, '5: expected out-of-bounds error');
+assert(size(grow_dst, 1) == 2 && size(grow_dst, 2) == 5, ...
+    '5: dst should have grown to 2x5');
+assert(grow_dst(1, 5) == 7 && grow_dst(2, 5) == 7, '5: col 5 mismatch');
+assert(grow_dst(1, 4) == 0 && grow_dst(2, 4) == 0, '5: col 4 should stay zero');
 
 disp('SUCCESS');
