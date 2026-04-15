@@ -15,7 +15,11 @@ import type { JitType } from "./jitTypes.js";
 import { jitTypeKey, unifyJitTypes } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
-import { jitHelpers, JitFuncHandleBailError } from "./jitHelpers.js";
+import {
+  jitHelpers,
+  JitFuncHandleBailError,
+  JitBailToInterpreter,
+} from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
 import {
   analyzeForLoop,
@@ -275,6 +279,12 @@ function executeAndWriteBack(
       // Warn, invalidate the cache entry, and fall back to interpretation.
       console.warn(`Warning: ${e.message}`);
       if (cacheKey) interp.loopJitCache.set(cacheKey, null);
+      return false;
+    }
+    if (e instanceof JitBailToInterpreter) {
+      // Helper hit a case the JIT can't handle (e.g. col-slice write that
+      // requires growing dst). Silently fall back to the interpreter,
+      // which re-runs the loop from the original env state.
       return false;
     }
     throw e; // Let other runtime errors propagate

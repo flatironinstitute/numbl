@@ -145,6 +145,8 @@ import {
   tensorUnary,
 } from "./jitHelpersTensor.js";
 
+export { JitBailToInterpreter } from "./jitHelpersIndex.js";
+
 // ── Function handle return type verification ─────────────────────────
 
 /**
