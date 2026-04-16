@@ -583,7 +583,7 @@ registerIBuiltin({
   },
   jitEmit: (_args, types) => {
     if (types.length !== 0) return null;
-    return "1";
+    return "true";
   },
 });
 
