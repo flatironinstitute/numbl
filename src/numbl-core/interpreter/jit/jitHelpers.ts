@@ -370,12 +370,31 @@ export const jitHelpers = {
   // Scalar → tensor coercion
   asTensor,
 
-  // Tensor indexing with a tensor index
+  // Tensor indexing with a tensor index.
+  // Supports both numeric (1-based) indices and logical masks (indexed
+  // element-by-element, returning values where mask != 0).
   __tensorIndex: (base: RuntimeTensor, idx: RuntimeTensor): RuntimeTensor => {
-    const n = idx.data.length;
-    const result = new FloatXArray(n);
     const bd = base.data;
     const bl = bd.length;
+    if (idx._isLogical) {
+      const n = idx.data.length;
+      const out: number[] = [];
+      for (let i = 0; i < n; i++) {
+        if (idx.data[i] !== 0) {
+          if (i >= bl) throw new Error("Index exceeds array bounds");
+          out.push(bd[i] as number);
+        }
+      }
+      // Preserve column orientation when base is a column vector; otherwise
+      // return a row (MATLAB convention for linear logical indexing).
+      const shape: [number, number] =
+        base.shape.length === 2 && base.shape[1] === 1 && base.shape[0] > 1
+          ? [out.length, 1]
+          : [1, out.length];
+      return makeTensor(new FloatXArray(out), undefined, shape);
+    }
+    const n = idx.data.length;
+    const result = new FloatXArray(n);
     for (let i = 0; i < n; i++) {
       const k = Math.round(idx.data[i] as number) - 1;
       if (k < 0 || k >= bl) throw new Error("Index exceeds array bounds");

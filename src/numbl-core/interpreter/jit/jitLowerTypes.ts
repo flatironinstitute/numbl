@@ -210,6 +210,14 @@ export function binaryResultType(
       ? { kind: "number", sign: "nonneg", isInteger: true }
       : right;
 
+  // Pow/ElemPow with a potentially negative base produces a complex result
+  // for fractional exponents. The JIT emits `Math.pow`, which returns NaN in
+  // that case. Bail out whenever the base's sign can't be proved nonneg so
+  // the interpreter handles it (which correctly returns complex).
+  if (op === BinaryOperation.Pow || op === BinaryOperation.ElemPow) {
+    if (!isComplexType(effLeft) && !isNonneg(effLeft)) return null;
+  }
+
   const anyComplex = isComplexType(effLeft) || isComplexType(effRight);
   const anyTensor = isTensorType(effLeft) || isTensorType(effRight);
 

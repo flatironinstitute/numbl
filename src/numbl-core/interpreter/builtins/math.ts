@@ -108,7 +108,10 @@ function cAcos(re: number, im: number): { re: number; im: number } {
   return { re: w5im, im: -w5re };
 }
 
-// asin/acos: use maybe-complex variant so out-of-domain real inputs produce complex
+// asin/acos: maybe-complex — out-of-domain real inputs (|x| > 1) produce
+// complex results. No jitEmit fast path because the JIT type system doesn't
+// track whether a value is within [-1, 1]; emitting `Math.asin` / `Math.acos`
+// directly would silently produce NaN where the interpreter produces complex.
 defineBuiltin({
   name: "asin",
   cases: unaryElemwiseCases(
@@ -120,7 +123,6 @@ defineBuiltin({
     },
     "asin"
   ),
-  jitEmit: unaryMathJitEmit("Math.asin", "tAsin"),
 });
 defineBuiltin({
   name: "acos",
@@ -133,7 +135,6 @@ defineBuiltin({
     },
     "acos"
   ),
-  jitEmit: unaryMathJitEmit("Math.acos", "tAcos"),
 });
 registerUnary(
   "atan",

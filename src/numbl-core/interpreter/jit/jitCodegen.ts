@@ -639,22 +639,30 @@ function emitBinary(
     case BinaryOperation.Pow:
     case BinaryOperation.ElemPow:
       return `Math.pow(${left}, ${right})`;
+    // Comparisons return a JS boolean so the value is a `logical` scalar.
+    // Coerce both operands with `+` for ==/~= so a boolean operand (JS
+    // `true`/`false`) matches a numeric literal — `false === 0` is false in
+    // strict equality but `+false === +0` is true. Ordered comparisons
+    // (<, <=, >, >=) already coerce via JS numeric semantics.
     case BinaryOperation.Equal:
-      return `((${left}) === (${right}) ? 1 : 0)`;
+      return `((+(${left})) === (+(${right})))`;
     case BinaryOperation.NotEqual:
-      return `((${left}) !== (${right}) ? 1 : 0)`;
+      return `((+(${left})) !== (+(${right})))`;
     case BinaryOperation.Less:
-      return `((${left}) < (${right}) ? 1 : 0)`;
+      return `((${left}) < (${right}))`;
     case BinaryOperation.LessEqual:
-      return `((${left}) <= (${right}) ? 1 : 0)`;
+      return `((${left}) <= (${right}))`;
     case BinaryOperation.Greater:
-      return `((${left}) > (${right}) ? 1 : 0)`;
+      return `((${left}) > (${right}))`;
     case BinaryOperation.GreaterEqual:
-      return `((${left}) >= (${right}) ? 1 : 0)`;
+      return `((${left}) >= (${right}))`;
+    // &&/|| coerce each side so a boolean operand compares as a number;
+    // the short-circuit semantics of JS `&&`/`||` preserve MATLAB's rule
+    // that the right operand is not evaluated when the left decides.
     case BinaryOperation.AndAnd:
-      return `((${left}) !== 0 && (${right}) !== 0 ? 1 : 0)`;
+      return `((+(${left})) !== 0 && (+(${right})) !== 0)`;
     case BinaryOperation.OrOr:
-      return `((${left}) !== 0 || (${right}) !== 0 ? 1 : 0)`;
+      return `((+(${left})) !== 0 || (+(${right})) !== 0)`;
     default:
       throw new Error(`JIT codegen: unsupported scalar binary op ${expr.op}`);
   }
@@ -766,7 +774,10 @@ function emitUnary(
     case UnaryOperation.Minus:
       return `(-${operand})`;
     case UnaryOperation.Not:
-      return `((${operand}) !== 0 ? 0 : 1)`;
+      // Coerce with `+` so a JS boolean operand is treated as 0/1 before
+      // the zero-check — `false !== 0` is true under strict equality, which
+      // would produce the wrong answer. Result is a JS boolean (logical).
+      return `((+(${operand})) === 0)`;
     case UnaryOperation.Transpose:
     case UnaryOperation.NonConjugateTranspose:
       // Scalar transpose is identity
