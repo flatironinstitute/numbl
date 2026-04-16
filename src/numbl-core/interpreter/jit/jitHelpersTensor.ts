@@ -280,15 +280,22 @@ export function tensorCompareOp(
     const n = at.data.length;
     const out = uninitFloatX(n);
     for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bt.data[i]) ? 1 : 0;
-    return makeTensor(out, undefined, at.shape.slice());
+    const r = makeTensor(out, undefined, at.shape.slice());
+    r._isLogical = true;
+    return r;
   }
+  // Coerce a scalar bool/number operand with `+` so `tensor === false` (used
+  // for ==/~=) doesn't trivially return all-zero/all-one due to JS strict
+  // equality treating booleans and numbers as different types.
   if (aIsT) {
     const at = a as RuntimeTensor;
     const n = at.data.length;
-    const bv = b as number;
+    const bv = +(b as number);
     const out = uninitFloatX(n);
     for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bv) ? 1 : 0;
-    return makeTensor(out, undefined, at.shape.slice());
+    const r = makeTensor(out, undefined, at.shape.slice());
+    r._isLogical = true;
+    return r;
   }
   if (!bIsT) {
     throw new Error(
@@ -297,10 +304,12 @@ export function tensorCompareOp(
   }
   const bt = b as RuntimeTensor;
   const n = bt.data.length;
-  const av = a as number;
+  const av = +(a as number);
   const out = uninitFloatX(n);
   for (let i = 0; i < n; i++) out[i] = cmp(av, bt.data[i]) ? 1 : 0;
-  return makeTensor(out, undefined, bt.shape.slice());
+  const r = makeTensor(out, undefined, bt.shape.slice());
+  r._isLogical = true;
+  return r;
 }
 
 // ── Element-wise tensor unary ──────────────────────────────────────────

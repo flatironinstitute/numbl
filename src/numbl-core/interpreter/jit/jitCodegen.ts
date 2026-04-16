@@ -1064,10 +1064,12 @@ function emitTruthiness(expr: JitExpr): string {
 
   if (expr.tag === "Binary") {
     switch (expr.op) {
+      // Coerce with `+` so a JS boolean operand compares correctly against a
+      // numeric literal (`false === 0` is false in strict equality).
       case BinaryOperation.Equal:
-        return `(${emitExpr(expr.left)}) === (${emitExpr(expr.right)})`;
+        return `(+(${emitExpr(expr.left)})) === (+(${emitExpr(expr.right)}))`;
       case BinaryOperation.NotEqual:
-        return `(${emitExpr(expr.left)}) !== (${emitExpr(expr.right)})`;
+        return `(+(${emitExpr(expr.left)})) !== (+(${emitExpr(expr.right)}))`;
       case BinaryOperation.Less:
         return `(${emitExpr(expr.left)}) < (${emitExpr(expr.right)})`;
       case BinaryOperation.LessEqual:
@@ -1089,5 +1091,7 @@ function emitTruthiness(expr: JitExpr): string {
     return `!(${emitTruthiness(expr.operand)})`;
   }
 
-  return `(${emitExpr(expr)}) !== 0`;
+  // Coerce with `+` so a JS boolean value is treated as 0/1 — `false !== 0`
+  // is true under strict equality, which would make `if (false)` truthy.
+  return `(+(${emitExpr(expr)})) !== 0`;
 }

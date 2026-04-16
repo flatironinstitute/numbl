@@ -75,6 +75,48 @@ assert(y == 0, 'false || false should be 0');
 y = do_or(true, false); y = do_or(true, false); y = do_or(true, false);
 assert(y == 1, 'true || false should be 1');
 
+% ── Bug 8: `if (x == 0)` with a logical operand (emitTruthiness) ───────
+y = do_if_eq_zero(false); y = do_if_eq_zero(false); y = do_if_eq_zero(false);
+assert(y == 1, 'if(false==0) should take the true branch');
+
+% ── Bug 9: bare `if (x)` with a logical operand (emitTruthiness default) ──
+y = do_if_bare(false); y = do_if_bare(false); y = do_if_bare(false);
+assert(y == 0, 'if(false) should take the false branch');
+
+y = do_if_bare(true); y = do_if_bare(true); y = do_if_bare(true);
+assert(y == 1, 'if(true) should take the true branch');
+
+% Same bug surfaces through `||` / `&&` operands in a condition
+y = do_if_or_zero(false); y = do_if_or_zero(false); y = do_if_or_zero(false);
+assert(y == 0, 'if(false || 0) should take the false branch');
+
+y = do_if_and_one(false); y = do_if_and_one(false); y = do_if_and_one(false);
+assert(y == 0, 'if(false && 1) should take the false branch');
+
+% Same bug in `while` condition with logical comparison
+y = do_while_eq_false(false); y = do_while_eq_false(false); y = do_while_eq_false(false);
+assert(y == 1, 'while(x==false) with x=false should run exactly once');
+
+% ── Bug 10: tensor == boolean_scalar / tensor ~= boolean_scalar ─────────
+r = do_tensor_eq_bool([1, 0, 1], false);
+r = do_tensor_eq_bool([1, 0, 1], false);
+r = do_tensor_eq_bool([1, 0, 1], false);
+assert(isequal(r, logical([0, 1, 0])), '[1,0,1] == false should be [0,1,0]');
+
+r = do_tensor_ne_bool([0, 1, 2], false);
+r = do_tensor_ne_bool([0, 1, 2], false);
+r = do_tensor_ne_bool([0, 1, 2], false);
+assert(isequal(r, logical([0, 1, 1])), '[0,1,2] ~= false should be [0,1,1]');
+
+% ── Bug 11: 2D logical indexing on a matrix should return a column ──────
+r = do_logical_index(magic(3) > 4);  % magic(3) = [8 1 6; 3 5 7; 4 9 2]
+% Actually easier: just pass both
+r = do_matrix_logical_index([1 2 3; 4 5 6; 7 8 9]);
+r = do_matrix_logical_index([1 2 3; 4 5 6; 7 8 9]);
+r = do_matrix_logical_index([1 2 3; 4 5 6; 7 8 9]);
+assert(isequal(size(r), [5, 1]), '2D logical indexing should produce a column');
+assert(isequal(r, [7; 5; 8; 6; 9]), '2D logical indexing values wrong');
+
 disp('SUCCESS')
 
 % ── Helpers (each wraps the op in its own function to trigger JIT specialization) ──
@@ -92,3 +134,31 @@ function r = do_ne_zero(x); r = x ~= 0; end
 function r = do_logical_index(v); m = v > 0; r = v(m); end
 function r = do_and(a, b); r = a && b; end
 function r = do_or(a, b); r = a || b; end
+
+function r = do_if_eq_zero(x)
+  if x == 0; r = 1; else; r = 0; end
+end
+function r = do_if_bare(x)
+  if x; r = 1; else; r = 0; end
+end
+function r = do_if_or_zero(x)
+  if x || 0; r = 1; else; r = 0; end
+end
+function r = do_if_and_one(x)
+  if x && 1; r = 1; else; r = 0; end
+end
+function n = do_while_eq_false(x)
+  n = 0;
+  while x == false
+    n = n + 1;
+    if n > 5; break; end
+    x = true;
+  end
+end
+
+function r = do_tensor_eq_bool(v, b); r = v == b; end
+function r = do_tensor_ne_bool(v, b); r = v ~= b; end
+function r = do_matrix_logical_index(M)
+  mask = M > 4;
+  r = M(mask);
+end
