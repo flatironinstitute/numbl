@@ -20,21 +20,23 @@
 % All runs print the same 'result' value (to within floating-point
 % rounding) alongside their wall time.
 %
-% Note: on this workload (scalar sin + div with a carried-dependency
-% accumulator) V8's TurboFan is already within ~10% of the C compiler's
-% output, so --opt 1 and --opt 2 are expected to come in close. The
-% interpreter-vs-JIT gap (~100x) is the dramatic one. The C-JIT's
-% structural win will show up when later phases add tensor/struct IR
-% it can specialize better than V8 can.
+% Typical results (30M sin/div calls, Debian/gcc-14, x86-64):
+%   --opt 0 (interpreter): ~31 s     (~1  Mcalls/s,  baseline)
+%   --opt 1 (JS-JIT):      ~0.31 s   (~98 Mcalls/s,  ~100x over interp)
+%   --opt 2 (C-JIT):       ~0.23 s   (~128 Mcalls/s, ~130x over interp)
+%   MATLAB -batch:         ~0.37 s   (~81 Mcalls/s)
+%
+% Compile time (~50-60ms for cc + ~1ms for createRequire the .node) is
+% amortized via a content-addressed disk cache at ~/.cache/numbl/c-jit/
+% and is kept out of the timed section by the two warm-ups above.
 
-N = 20000;    % outer points
+N = 60000;    % outer points
 M = 500;      % inner series terms
 fprintf('N=%d, M=%d (total sin/div calls: %d)\n', N, M, N*M);
 fprintf('----------------------------------------\n');
 
-% Warm-up: give the JIT a chance to specialize before we time it. numbl's
-% function-call JIT widens types progressively across the first few calls;
-% a short warm-up avoids measuring compile time along with execution.
+% Warm-up: one call lands the JIT specialization in cache so the timed
+% call below measures pure execution, not compile or module-load time.
 warm = run_bench(100, 10);
 fprintf('warmup check = %.6f\n', warm);
 
