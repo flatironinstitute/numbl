@@ -295,9 +295,11 @@ function unifyStructArrayFieldTypes(a: JitType, b: JitType): JitType {
   return normal;
 }
 
-/** Coerce JS booleans to 0/1 so JIT code never sees boolean values. */
+/** Pass-through — JS booleans are numbl's scalar `logical` representation
+ * and must flow through JIT code unchanged so `class(x)` reports `logical`.
+ * The JIT scalar codegen coerces booleans with `+` where it needs numeric
+ * behavior, so downstream arithmetic/comparison paths are not affected. */
 function coerceBooleans(v: unknown): unknown {
-  if (typeof v === "boolean") return v ? 1 : 0;
   return v;
 }
 

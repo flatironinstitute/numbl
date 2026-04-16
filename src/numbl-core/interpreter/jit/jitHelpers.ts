@@ -656,7 +656,10 @@ setDynamicRegisterHook((b: IBuiltin) => {
     }
     const result = res.apply(rtArgs, 1);
     pl();
-    return typeof result === "boolean" ? (result ? 1 : 0) : result;
+    // Preserve JS booleans as logicals — converting to 0/1 would strip the
+    // `class == "logical"` signal for builtins like `isnan`, `isempty`,
+    // `logical`, `any`, `all`, etc.
+    return result;
   };
 });
 
@@ -689,7 +692,7 @@ export function buildPerRuntimeJitHelpers(
       }
       const result = res.apply(rtArgs, 1);
       pl();
-      return typeof result === "boolean" ? (result ? 1 : 0) : result;
+      return result;
     };
   }
 
@@ -717,10 +720,8 @@ export function buildPerRuntimeJitHelpers(
     }
     const result = res.apply(rtArgs, nargout as number);
     pl();
-    if (Array.isArray(result)) {
-      return result.map(v => (typeof v === "boolean" ? (v ? 1 : 0) : v));
-    }
-    return [typeof result === "boolean" ? (result ? 1 : 0) : result];
+    if (Array.isArray(result)) return result;
+    return [result];
   };
 
   h = {

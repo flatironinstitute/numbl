@@ -23,8 +23,7 @@ defineBuiltin({
   ),
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean")
-      return `(Number.isNaN(${args[0]}) ? 1 : 0)`;
+    if (k === "number" || k === "boolean") return `Number.isNaN(${args[0]})`;
     return null;
   },
 });
@@ -47,7 +46,7 @@ defineBuiltin({
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean")
-      return `(Math.abs(${args[0]}) === Infinity ? 1 : 0)`;
+      return `(Math.abs(${args[0]}) === Infinity)`;
     return null;
   },
 });
@@ -65,8 +64,7 @@ defineBuiltin({
   ),
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean")
-      return `(isFinite(${args[0]}) ? 1 : 0)`;
+    if (k === "number" || k === "boolean") return `isFinite(${args[0]})`;
     return null;
   },
 });
@@ -96,12 +94,12 @@ defineBuiltin({
   ],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "boolean") return "1";
+    if (k === "number" || k === "boolean") return "true";
     if (
       k === "tensor" &&
       (types[0] as Extract<JitType, { kind: "tensor" }>).isComplex === false
     )
-      return "1";
+      return "true";
     return null;
   },
 });

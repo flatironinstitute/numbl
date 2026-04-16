@@ -76,13 +76,13 @@ defineBuiltin({
   ],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "complex_or_number") return "1";
+    if (k === "number" || k === "complex_or_number") return "true";
     if (k === "tensor")
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-        ? "0"
-        : "1";
+        ? "false"
+        : "true";
     if (k === "boolean" || k === "string" || k === "char" || k === "struct")
-      return "0";
+      return "false";
     return null;
   },
 });
@@ -101,13 +101,13 @@ defineBuiltin({
   ],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "number" || k === "complex_or_number") return "1";
+    if (k === "number" || k === "complex_or_number") return "true";
     if (k === "tensor")
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-        ? "0"
-        : "1";
+        ? "false"
+        : "true";
     if (k === "boolean" || k === "string" || k === "char" || k === "struct")
-      return "0";
+      return "false";
     return null;
   },
 });
@@ -115,7 +115,7 @@ defineBuiltin({
 defineBuiltin({
   name: "isinteger",
   cases: [anyToLogicalCase(() => false)],
-  jitEmit: () => "0",
+  jitEmit: () => "false",
 });
 
 defineBuiltin({
@@ -130,11 +130,11 @@ defineBuiltin({
   ],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "boolean") return "1";
+    if (k === "boolean") return "true";
     if (k === "tensor")
       return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-        ? "1"
-        : "0";
+        ? "true"
+        : "false";
     if (
       k === "number" ||
       k === "complex_or_number" ||
@@ -143,7 +143,7 @@ defineBuiltin({
       k === "struct" ||
       k === "class_instance"
     )
-      return "0";
+      return "false";
     return null;
   },
 });
@@ -153,8 +153,8 @@ defineBuiltin({
   cases: [anyToLogicalCase(args => isRuntimeChar(args[0]))],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "char") return "1";
-    if (k !== "unknown") return "0";
+    if (k === "char") return "true";
+    if (k !== "unknown") return "false";
     return null;
   },
 });
@@ -164,8 +164,8 @@ defineBuiltin({
   cases: [anyToLogicalCase(args => isRuntimeString(args[0]))],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "string") return "1";
-    if (k !== "unknown") return "0";
+    if (k === "string") return "true";
+    if (k !== "unknown") return "false";
     return null;
   },
 });
@@ -174,7 +174,7 @@ defineBuiltin({
   name: "iscell",
   cases: [anyToLogicalCase(args => isRuntimeCell(args[0]))],
   jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "0";
+    if (types[0]?.kind !== "unknown") return "false";
     return null;
   },
 });
@@ -188,8 +188,8 @@ defineBuiltin({
   ],
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
-    if (k === "struct") return "1";
-    if (k !== "unknown") return "0";
+    if (k === "struct") return "true";
+    if (k !== "unknown") return "false";
     return null;
   },
 });
@@ -198,7 +198,7 @@ defineBuiltin({
   name: "issparse",
   cases: [anyToLogicalCase(args => isRuntimeSparseMatrix(args[0]))],
   jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "0";
+    if (types[0]?.kind !== "unknown") return "false";
     return null;
   },
 });
@@ -219,8 +219,8 @@ defineBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "1";
-    if (k === "string") return "1";
+      return "true";
+    if (k === "string") return "true";
     return null;
   },
 });
@@ -250,7 +250,7 @@ defineBuiltin({
       k === "complex_or_number" ||
       k === "string"
     )
-      return "0";
+      return "false";
     return null;
   },
 });
@@ -266,7 +266,7 @@ defineBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "1";
+      return "true";
     return null;
   },
 });
@@ -282,7 +282,7 @@ defineBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "1";
+      return "true";
     return null;
   },
 });
@@ -298,7 +298,7 @@ defineBuiltin({
   jitEmit: (_args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "1";
+      return "true";
     return null;
   },
 });
@@ -307,7 +307,7 @@ defineBuiltin({
   name: "ismatrix",
   cases: [anyToLogicalCase(args => getShape(args[0]).length <= 2)],
   jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "1";
+    if (types[0]?.kind !== "unknown") return "true";
     return null;
   },
 });

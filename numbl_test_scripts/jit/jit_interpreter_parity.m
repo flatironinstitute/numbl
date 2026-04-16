@@ -148,6 +148,31 @@ r = do_grow_2d_assign(); r = do_grow_2d_assign(); r = do_grow_2d_assign();
 assert(isequal(size(r), [3, 4]), 'M(3,4)=7 on zeros(2,2) should grow to [3 4]');
 assert(r(3, 4) == 7, 'M(3,4)=7 should set that element');
 
+% ── Bug 15: boolean-returning builtins should preserve `logical` class ──
+y = do_logical(3.14); y = do_logical(3.14); y = do_logical(3.14);
+assert(islogical(y), 'logical(3.14) should be logical');
+
+y = do_isnan(NaN); y = do_isnan(NaN); y = do_isnan(NaN);
+assert(islogical(y), 'isnan(NaN) should be logical');
+
+y = do_isempty([]); y = do_isempty([]); y = do_isempty([]);
+assert(islogical(y), 'isempty([]) should be logical');
+
+y = do_isnumeric(5); y = do_isnumeric(5); y = do_isnumeric(5);
+assert(islogical(y), 'isnumeric(5) should be logical');
+
+y = do_isequal(1, 1); y = do_isequal(1, 1); y = do_isequal(1, 1);
+assert(islogical(y), 'isequal(1,1) should be logical');
+
+y = do_strcmp('a', 'a'); y = do_strcmp('a', 'a'); y = do_strcmp('a', 'a');
+assert(islogical(y), 'strcmp should be logical');
+
+y = do_all([1 1 1]); y = do_all([1 1 1]); y = do_all([1 1 1]);
+assert(islogical(y), 'all([1 1 1]) should be logical');
+
+y = do_any([0 1 0]); y = do_any([0 1 0]); y = do_any([0 1 0]);
+assert(islogical(y), 'any([0 1 0]) should be logical');
+
 disp('SUCCESS')
 
 % ── Helpers (each wraps the op in its own function to trigger JIT specialization) ──
@@ -209,3 +234,12 @@ function r = do_grow_2d_assign()
   M(3, 4) = 7;
   r = M;
 end
+
+function r = do_logical(x); r = logical(x); end
+function r = do_isnan(x); r = isnan(x); end
+function r = do_isempty(x); r = isempty(x); end
+function r = do_isnumeric(x); r = isnumeric(x); end
+function r = do_isequal(a, b); r = isequal(a, b); end
+function r = do_strcmp(a, b); r = strcmp(a, b); end
+function r = do_all(v); r = all(v); end
+function r = do_any(v); r = any(v); end
