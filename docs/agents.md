@@ -108,13 +108,22 @@ Options (for REPL):
 
 Options (for run and eval):
 --dump-js <file> Write JIT-generated JavaScript to file
+--dump-c <file> Write C-JIT-generated C source to file (requires --opt 2)
 --dump-ast Print AST as JSON
 --verbose Detailed logging to stderr
 --stream NDJSON output mode
 --path <dir> Add extra workspace directory
 --plot Enable plot server
 --plot-port <port> Set plot server port (implies --plot)
---opt <level> Optimization level (0=none, 1=JIT scalar functions; default: 1)
+--opt <level> Optimization level (default: 1)
+0 — interpreter (no JIT)
+1 — JS-JIT: type-specialize hot functions/loops to JS
+2 — C-JIT: emit C for feasible scalar functions, compile via cc,
+load as a .node module, fall back to JS-JIT on infeasible IR
+(requires a C compiler and Node API headers)
 
 Environment variables:
 NUMBL_PATH Extra workspace directories (separated by :)
+NUMBL_CC C compiler for --opt 2 (default: cc)
+NUMBL_CFLAGS Extra flags appended to the C-JIT compile command
+NUMBL_NO_NATIVE_CFLAGS Skip probed defaults like -march=native

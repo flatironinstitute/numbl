@@ -15,12 +15,24 @@ import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
 import { jitHelpers, JitBailToInterpreter } from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
+import { checkCFeasibility } from "./c/cFeasibility.js";
+import { generateC } from "./c/jitCodegenC.js";
+import { generateNapiShim } from "./c/cNapiShim.js";
+import { compileAndLoad } from "./c/cCompile.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
-/** Augmented FunctionDef with JIT cache. */
+/** C-JIT cache entry (parallel to JitCacheEntry but with a native-wrapped fn). */
+interface CJitCacheEntry {
+  fn: (...args: unknown[]) => unknown;
+  source: string;
+  cachedPath: string;
+}
+
+/** Augmented FunctionDef with JIT caches (JS and C specializations are parallel). */
 interface FunctionDefWithCache extends FunctionDef {
   _jitCache?: Map<string, JitCacheEntry | null>;
+  _cJitCache?: Map<string, CJitCacheEntry | null>;
   _lastJitArgTypes?: Map<number, JitType[]>;
 }
 
@@ -67,11 +79,46 @@ export function tryJitCall(
     return runWithCallFrame(interp, fn.name, entry.fn, args);
   }
 
+  // Fast path: previously-compiled C-JIT specialization.
+  if (interp.optimization >= 2) {
+    if (!fnWithCache._cJitCache) fnWithCache._cJitCache = new Map();
+    const cEntry = fnWithCache._cJitCache.get(cacheKey);
+    if (cEntry !== undefined && cEntry !== null) {
+      return runWithCallFrame(interp, fn.name, cEntry.fn, args);
+    }
+  }
+
   // Attempt lowering (pass interpreter for user function resolution)
   const lowered = lowerFunction(fn, argTypes, nargout, interp);
   if (!lowered) {
     fnWithCache._jitCache.set(cacheKey, null);
+    if (fnWithCache._cJitCache) fnWithCache._cJitCache.set(cacheKey, null);
     return JIT_SKIP;
+  }
+
+  // ── C-JIT path (--opt >= 2) ───────────────────────────────────────────
+  // Feasibility prepass: if the scalar-only whitelist covers this IR,
+  // emit C, compile, and cache. On any bail, fall through to the JS path
+  // below so the user gets JS-JIT behavior transparently.
+  if (interp.optimization >= 2) {
+    const cResult = tryBuildCJit(
+      interp,
+      fn,
+      lowered.body,
+      lowered.outputNames,
+      lowered.localVars,
+      lowered.outputType,
+      argTypes,
+      nargout,
+      cacheKey
+    );
+    if (cResult) {
+      // Also seed the JS cache with a reference to the C entry so the
+      // per-call fast path above returns the C fn for subsequent calls
+      // through this cacheKey without reaching into _cJitCache again.
+      return runWithCallFrame(interp, fn.name, cResult.fn, args);
+    }
+    // Fall through to JS-JIT path (cResult = null already recorded _cJitCache miss).
   }
 
   // Generate JavaScript for the main function body
@@ -169,4 +216,86 @@ function runWithCallFrame(
     });
     interp.rt.popCallFrame();
   }
+}
+
+/**
+ * Attempt to produce a C-JIT specialization for `fn` with the given
+ * lowered IR. Returns the cache entry on success or null on any bail
+ * (infeasible IR, compile failure, load failure).
+ *
+ * On success, writes the entry into `fn._cJitCache[cacheKey]`. On any
+ * failure, writes `null` into that slot so we don't retry each call.
+ */
+function tryBuildCJit(
+  interp: Interpreter,
+  fn: FunctionDef,
+  body: import("./jitTypes.js").JitStmt[],
+  outputNames: string[],
+  localVars: Set<string>,
+  outputType: JitType | null,
+  argTypes: JitType[],
+  nargout: number,
+  cacheKey: string
+): CJitCacheEntry | null {
+  const fnWithCache = fn as FunctionDefWithCache;
+  if (!fnWithCache._cJitCache) fnWithCache._cJitCache = new Map();
+
+  const feas = checkCFeasibility(body, argTypes, outputType, nargout);
+  if (!feas.ok) {
+    fnWithCache._cJitCache.set(cacheKey, null);
+    return null;
+  }
+
+  const gen = generateC(
+    body,
+    fn.params,
+    outputNames,
+    nargout,
+    localVars,
+    // Use a hash-ish name so the C entry point is stable across identical
+    // C sources but unique across specializations.
+    `${fn.name.replace(/[^A-Za-z0-9_]/g, "_")}_${cacheKey.length.toString(16)}`
+  );
+
+  const argKinds = argTypes.map(t =>
+    t.kind === "boolean" ? ("boolean" as const) : ("number" as const)
+  );
+  const returnKind: "boolean" | "number" =
+    outputType && outputType.kind === "boolean" ? "boolean" : "number";
+  const { shim, exportName } = generateNapiShim(
+    gen.cFnName,
+    argKinds,
+    returnKind
+  );
+
+  const log = interp.log;
+  const loaded = compileAndLoad(gen.cSource, shim, exportName, log);
+  if (!loaded) {
+    fnWithCache._cJitCache.set(cacheKey, null);
+    return null;
+  }
+
+  // Wrap the native function to match the (...callArgs) => unknown signature.
+  // The native fn accepts/returns `double` (or throws for non-number args
+  // via napi_get_value_double — which would only happen if callers violate
+  // the feasibility contract, e.g. by widening types mid-run).
+  const nativeFn = loaded.fn;
+  const compiledFn = (...callArgs: unknown[]): unknown => {
+    return nativeFn(...(callArgs as number[]));
+  };
+
+  const entry: CJitCacheEntry = {
+    fn: compiledFn,
+    source: gen.cSource + "\n\n" + shim,
+    cachedPath: loaded.cachedPath,
+  };
+  fnWithCache._cJitCache.set(cacheKey, entry);
+
+  // Fire the C-JIT-specific logging callback (for --dump-c).
+  const line = interp.rt.$line ?? 0;
+  const typeDesc = argTypes.map(jitTypeKey).join(", ");
+  const description = `${fn.name}@${line}(${typeDesc}) -> nargout=${nargout}`;
+  interp.onCJitCompile?.(description, entry.source);
+
+  return entry;
 }
