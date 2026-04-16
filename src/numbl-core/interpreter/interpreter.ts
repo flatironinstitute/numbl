@@ -81,6 +81,12 @@ export class Interpreter {
     { fn: (...args: unknown[]) => unknown; source: string } | null
   >();
 
+  /** @internal Per-instance cache for C-JIT-compiled loops (parallel to loopJitCache). */
+  loopCJitCache = new Map<
+    string,
+    { fn: (...args: unknown[]) => unknown } | null
+  >();
+
   /** @internal Progressive type widening for loop JIT: location -> last unified input types. */
   loopLastInputTypes = new Map<string, import("./jit/jitTypes.js").JitType[]>();
 
@@ -136,6 +142,7 @@ export class Interpreter {
     }
     this.functionDefCache.clear();
     this.loopJitCache.clear();
+    this.loopCJitCache.clear();
     this.loopLastInputTypes.clear();
     this.compileInProgress.clear();
     this.ctx.registry.fileContexts.clear();

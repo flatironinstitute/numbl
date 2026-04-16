@@ -313,17 +313,23 @@ function checkStmt(stmt: JitStmt): FeasibilityResult {
 
 /**
  * Check if the lowered function can be handled by the C-JIT.
- * `outputType` is the type of the first output (the return value).
+ *
+ * `outputTypes` holds the types of every output variable in order;
+ * `outputType` is kept for backwards-compatibility and equals
+ * `outputTypes[0]` when present.
+ *
+ * Multi-output mirrors the JS-JIT's `return [out0, out1, ...]` shape:
+ * the generated C builds a `napi_value` array of length `nargout`,
+ * each entry boxed according to its type (scalar doubles, booleans, or
+ * tensors).
  */
 export function checkCFeasibility(
   body: JitStmt[],
   argTypes: JitType[],
   outputType: JitType | null,
+  outputTypes: JitType[],
   nargout: number
 ): FeasibilityResult {
-  if (nargout > 1) {
-    return { ok: false, reason: "multi-output not supported in C-JIT" };
-  }
   for (const t of argTypes) {
     const r = checkValueType(t);
     if (!r.ok) return { ok: false, reason: `arg: ${r.reason}` };
@@ -331,6 +337,19 @@ export function checkCFeasibility(
   if (outputType) {
     const r = checkValueType(outputType);
     if (!r.ok) return { ok: false, reason: `return: ${r.reason}` };
+  }
+  for (let i = 0; i < outputTypes.length; i++) {
+    const r = checkValueType(outputTypes[i]);
+    if (!r.ok) return { ok: false, reason: `return[${i}]: ${r.reason}` };
+  }
+  // `nargout` > outputTypes.length means the caller asked for more
+  // outputs than the function produces; let the interpreter raise the
+  // usual MATLAB "too many output arguments" error.
+  if (nargout > outputTypes.length) {
+    return {
+      ok: false,
+      reason: `nargout ${nargout} exceeds available outputs (${outputTypes.length})`,
+    };
   }
   return checkStmts(body);
 }

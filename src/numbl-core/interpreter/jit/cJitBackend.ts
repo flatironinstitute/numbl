@@ -31,6 +31,7 @@ export interface CJitBackend {
     outputNames: string[],
     localVars: Set<string>,
     outputType: JitType | null,
+    outputTypes: JitType[],
     argTypes: JitType[],
     nargout: number
   ): ((...args: unknown[]) => unknown) | null;
