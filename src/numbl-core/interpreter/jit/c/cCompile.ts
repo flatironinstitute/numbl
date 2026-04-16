@@ -31,12 +31,16 @@ import {
 } from "fs";
 import { createHash } from "crypto";
 import { homedir, tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 import { NUMBL_VERSION } from "../../../version.js";
 
 export interface CompiledCFn {
-  fn: (...args: number[]) => number;
+  /** The exported wrapper function. Args/return are scalars (numbers/booleans)
+   *  for scalar-only C-JIT'd functions and JS objects (RuntimeTensor) for
+   *  tensor inputs/outputs — same as JS-JIT's per-helper wrappers. */
+  fn: (...args: unknown[]) => unknown;
   cachedPath: string;
 }
 
@@ -51,6 +55,13 @@ interface CEnv {
   /** All non-path compile flags that will be passed on every invocation
    *  (everything except the `-o <out>` and `<src>` positional args). */
   flags: string[];
+  /** Absolute path to `build/Release/numbl_ops.a` (linked into every
+   *  generated .node so the C codegen can call libnumbl_ops directly).
+   *  `--opt 2` requires this — `getCEnv` errors out if it's missing. */
+  opsLibPath: string;
+  /** Absolute path to `native/ops/` (the directory containing `numbl_ops.h`),
+   *  added as `-I` so `#include "numbl_ops.h"` resolves. */
+  opsHeaderDir: string;
 }
 
 let _envCache: CEnv | null | undefined;
@@ -97,6 +108,31 @@ function compilerAcceptsFlag(cc: string, flag: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Walk up from this module's location until we find a `package.json` whose
+ * `name` is `"numbl"`. The static-library `numbl_ops.a` lives under that
+ * repo's `build/Release/`, the header under `native/ops/`. Returns the
+ * repo root or undefined if not found (e.g., installed from npm).
+ */
+function discoverNumblRepoRoot(): string | undefined {
+  let cur = dirname(fileURLToPath(import.meta.url));
+  for (let i = 0; i < 12; i++) {
+    const pkg = join(cur, "package.json");
+    if (existsSync(pkg)) {
+      try {
+        const j = JSON.parse(readFileSync(pkg, "utf-8")) as { name?: string };
+        if (j.name === "numbl") return cur;
+      } catch {
+        /* malformed package.json — keep walking */
+      }
+    }
+    const parent = dirname(cur);
+    if (parent === cur) return undefined;
+    cur = parent;
+  }
+  return undefined;
 }
 
 function tryInstallHeaders(log?: (m: string) => void): string | undefined {
@@ -159,6 +195,34 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     return null;
   }
 
+  // Locate the prebuilt libnumbl_ops static archive. `--opt 2` always
+  // links against it (even scalar-only generated functions get the
+  // ops-helper boilerplate from cJitHelpers.ts emitted into them, and
+  // the boilerplate references libnumbl_ops symbols). If the .a is
+  // missing we throw a clear error so the user knows to run
+  // `npm run build:addon` rather than getting a confusing link error.
+  const repoRoot = discoverNumblRepoRoot();
+  if (!repoRoot) {
+    throw new Error(
+      "C-JIT (--opt 2): cannot locate numbl repo root from " +
+        fileURLToPath(import.meta.url) +
+        " (searched up 12 levels for a package.json with name='numbl')."
+    );
+  }
+  const opsLibPath = join(repoRoot, "build", "Release", "numbl_ops.a");
+  const opsHeaderDir = join(repoRoot, "native", "ops");
+  if (!existsSync(opsLibPath)) {
+    throw new Error(
+      `C-JIT (--opt 2): missing prebuilt libnumbl_ops static archive at\n  ${opsLibPath}\n` +
+        `Run \`npm run build:addon\` to build it (this also produces numbl_addon.node).`
+    );
+  }
+  if (!existsSync(join(opsHeaderDir, "numbl_ops.h"))) {
+    throw new Error(
+      `C-JIT (--opt 2): missing libnumbl_ops header at\n  ${join(opsHeaderDir, "numbl_ops.h")}`
+    );
+  }
+
   const flags: string[] = [
     "-O2",
     "-fPIC",
@@ -168,6 +232,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     "-Wno-unused-function",
     "-Wno-unused-variable",
     `-I${nodeHeadersDir}`,
+    `-I${opsHeaderDir}`,
   ];
   if (process.platform === "darwin") {
     flags.push("-undefined", "dynamic_lookup");
@@ -196,12 +261,22 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     for (const f of userFlags.split(/\s+/).filter(Boolean)) flags.push(f);
   }
 
-  _envCache = { cc, ccVersion, nodeHeadersDir, cacheDir, flags };
+  _envCache = {
+    cc,
+    ccVersion,
+    nodeHeadersDir,
+    cacheDir,
+    flags,
+    opsLibPath,
+    opsHeaderDir,
+  };
 
   // Print the compiler banner once per process so users of --opt 2 can
   // see exactly what flags their code is being built with. Goes to stderr
   // so it never contaminates stdout script output.
-  process.stderr.write(`C-JIT: ${cc} ${flags.join(" ")} -lm  (${ccVersion})\n`);
+  process.stderr.write(
+    `C-JIT: ${cc} ${flags.join(" ")} ${opsLibPath} -lm  (${ccVersion})\n`
+  );
 
   return _envCache;
 }
@@ -219,6 +294,15 @@ function computeSourceHash(cSource: string, shim: string, env: CEnv): string {
   h.update(process.platform);
   h.update(process.arch);
   h.update(NUMBL_VERSION);
+  // Mix the static archive's contents so a rebuild of libnumbl_ops.a
+  // forces a re-link of every cached .node module (otherwise a stale
+  // cached module could be wired to a previous version's symbols).
+  try {
+    h.update(readFileSync(env.opsLibPath));
+  } catch {
+    /* getCEnv already validated existence; if it disappears mid-process,
+       fail loud later in the link step. */
+  }
   return h.digest("hex");
 }
 
@@ -259,7 +343,7 @@ export function compileAndLoad(
       return null;
     }
     return {
-      fn: fn as (...args: number[]) => number,
+      fn: fn as (...args: unknown[]) => unknown,
       cachedPath,
     };
   } catch (e) {
@@ -296,7 +380,10 @@ function compileToCache(
     return false;
   }
 
-  const args = [...env.flags, "-o", outPath, srcPath, "-lm"];
+  // Place the static archive after the source so symbol resolution
+  // pulls in only the libnumbl_ops objects that the codegen-emitted
+  // helpers actually reference.
+  const args = [...env.flags, "-o", outPath, srcPath, env.opsLibPath, "-lm"];
 
   try {
     execFileSync(env.cc, args, {

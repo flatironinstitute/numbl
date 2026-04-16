@@ -48,6 +48,21 @@
       "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
       "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
       "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ]
+    },
+    {
+      "target_name": "numbl_ops",
+      "type": "static_library",
+      "sources": [
+        "native/ops/numbl_ops.c",
+        "native/ops/real_binary_elemwise.c",
+        "native/ops/complex_binary_elemwise.c",
+        "native/ops/real_unary_elemwise.c",
+        "native/ops/complex_unary_elemwise.c",
+        "native/ops/comparison.c",
+        "native/ops/reduce.c"
+      ],
+      "include_dirs": [ "native/ops" ],
+      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ]
     }
   ]
 }

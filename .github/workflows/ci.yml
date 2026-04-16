@@ -100,11 +100,20 @@ jobs:
           node-version: "20"
           cache: "npm"
 
+      - name: Install libopenblas and libfftw3
+        # Required by `npm run build:addon`, which builds both the LAPACK
+        # addon and the standalone libnumbl_ops.a that the C-JIT tensor
+        # path links against.
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libfftw3-dev
+
       - name: Install dependencies
         run: npm ci
 
       - name: Bundle stdlib
         run: npm run bundle:stdlib
+
+      - name: Build native addon (includes libnumbl_ops.a for C-JIT tensor ops)
+        run: npm run build:addon
 
       - name: Pre-install Node API headers
         run: npx node-gyp install --target=$(node -p "process.versions.node")

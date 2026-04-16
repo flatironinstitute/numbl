@@ -10,9 +10,11 @@
 import { registerCJitBackend } from "./cJitBackend.js";
 import { checkCFeasibility } from "./c/cFeasibility.js";
 import { generateC } from "./c/jitCodegenC.js";
-import { generateNapiShim } from "./c/cNapiShim.js";
+import { generateNapiShim, type ReturnCKind } from "./c/cNapiShim.js";
 import { compileAndLoad } from "./c/cCompile.js";
+import { C_JIT_BAIL_SENTINEL } from "./c/cJitHelpers.js";
 import { jitTypeKey } from "./jitTypes.js";
+import { JitBailToInterpreter } from "./jitHelpersIndex.js";
 
 registerCJitBackend({
   tryCompile(
@@ -40,18 +42,21 @@ registerCJitBackend({
       outputNames,
       nargout,
       localVars,
+      argTypes,
+      outputType,
       fn.name.replace(/[^A-Za-z0-9_]/g, "_")
     );
 
-    const argKinds = argTypes.map(t =>
-      t.kind === "boolean" ? ("boolean" as const) : ("number" as const)
-    );
-    const returnKind: "boolean" | "number" =
-      outputType && outputType.kind === "boolean" ? "boolean" : "number";
+    const returnKind: ReturnCKind = gen.returnIsTensor
+      ? "tensor"
+      : outputType && outputType.kind === "boolean"
+        ? "boolean"
+        : "number";
     const { shim, exportName } = generateNapiShim(
       gen.cFnName,
-      argKinds,
-      returnKind
+      gen.paramDescs,
+      returnKind,
+      gen.usesTensors
     );
 
     const loaded = compileAndLoad(gen.cSource, shim, exportName, interp.log);
@@ -64,7 +69,20 @@ registerCJitBackend({
     interp.onCJitCompile?.(description, gen.cSource + "\n\n" + shim);
 
     const nativeFn = loaded.fn;
-    return (...callArgs: unknown[]): unknown =>
-      nativeFn(...(callArgs as number[]));
+    return (...callArgs: unknown[]): unknown => {
+      try {
+        return nativeFn(...callArgs);
+      } catch (e) {
+        // The tensor helpers throw a JS error with the bail sentinel
+        // whenever they hit an unsupported input (complex, mismatched
+        // shape, matrix sum, ...). Convert to JitBailToInterpreter so
+        // the interpreter retries through the slow path, same as the
+        // JS-JIT's `return undefined` branches do.
+        if (e instanceof Error && e.message === C_JIT_BAIL_SENTINEL) {
+          throw new JitBailToInterpreter("C-JIT tensor helper bail");
+        }
+        throw e;
+      }
+    };
   },
 });
