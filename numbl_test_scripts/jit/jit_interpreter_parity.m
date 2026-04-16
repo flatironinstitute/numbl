@@ -117,6 +117,24 @@ r = do_matrix_logical_index([1 2 3; 4 5 6; 7 8 9]);
 assert(isequal(size(r), [5, 1]), '2D logical indexing should produce a column');
 assert(isequal(r, [7; 5; 8; 6; 9]), '2D logical indexing values wrong');
 
+% ── Bug 12: complex == complex should not crash the JIT ─────────────────
+y = do_complex_eq(1+2i, 1+2i); y = do_complex_eq(1+2i, 1+2i); y = do_complex_eq(1+2i, 1+2i);
+assert(y == 1, 'complex == complex (equal) should be 1');
+
+y = do_complex_eq(1+2i, 1+3i); y = do_complex_eq(1+2i, 1+3i); y = do_complex_eq(1+2i, 1+3i);
+assert(y == 0, 'complex == complex (unequal) should be 0');
+
+y = do_complex_ne(1+2i, 1+3i); y = do_complex_ne(1+2i, 1+3i); y = do_complex_ne(1+2i, 1+3i);
+assert(y == 1, 'complex ~= complex should be 1 when unequal');
+
+% ── Bug 13: complex < complex should not crash the JIT ──────────────────
+% (MATLAB compares real parts for ordered relations on complex values.)
+y = do_complex_lt(1+2i, 3+4i); y = do_complex_lt(1+2i, 3+4i); y = do_complex_lt(1+2i, 3+4i);
+assert(y == 1, 'complex < complex on real parts 1<3 should be 1');
+
+y = do_complex_gt(5+2i, 1+4i); y = do_complex_gt(5+2i, 1+4i); y = do_complex_gt(5+2i, 1+4i);
+assert(y == 1, 'complex > complex on real parts 5>1 should be 1');
+
 disp('SUCCESS')
 
 % ── Helpers (each wraps the op in its own function to trigger JIT specialization) ──
@@ -162,3 +180,8 @@ function r = do_matrix_logical_index(M)
   mask = M > 4;
   r = M(mask);
 end
+
+function r = do_complex_eq(a, b); r = a == b; end
+function r = do_complex_ne(a, b); r = a ~= b; end
+function r = do_complex_lt(a, b); r = a < b; end
+function r = do_complex_gt(a, b); r = a > b; end

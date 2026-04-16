@@ -149,6 +149,13 @@ export function binaryResultType(
     op === BinaryOperation.Greater ||
     op === BinaryOperation.GreaterEqual
   ) {
+    // Complex scalar comparisons don't have a codegen path; bail so the
+    // interpreter handles them (MATLAB compares real parts for </<=/>/>=
+    // and both parts for ==/~=).
+    if (isComplexType(left) || isComplexType(right)) {
+      const anyTensor = isTensorType(left) || isTensorType(right);
+      if (!anyTensor) return null;
+    }
     if (isScalarType(left) && isScalarType(right)) return { kind: "boolean" };
     const anyTensor = isTensorType(left) || isTensorType(right);
     const anyComplex = isComplexType(left) || isComplexType(right);
