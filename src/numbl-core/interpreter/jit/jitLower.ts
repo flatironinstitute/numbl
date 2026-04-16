@@ -53,6 +53,9 @@ export interface LoweringResult {
   generatedFns: Map<string, string>;
   /** Type of the first output variable after lowering */
   outputType: JitType | null;
+  /** Types of all output variables in outputNames order. Mirrors the
+   *  shape of JS-JIT's `return [out0, out1, ...]`. */
+  outputTypes: JitType[];
 }
 
 export function lowerFunction(
@@ -125,8 +128,10 @@ export function lowerFunction(
     if (!ctx.params.has(name) && !ctx.assignedVars.has(name)) return null;
   }
 
-  const outputType =
-    outputNames.length > 0 ? (ctx.env.get(outputNames[0]) ?? null) : null;
+  const outputTypes: JitType[] = outputNames.map(
+    n => ctx.env.get(n) ?? { kind: "unknown" as const }
+  );
+  const outputType = outputTypes.length > 0 ? outputTypes[0] : null;
 
   return {
     body,
@@ -135,6 +140,7 @@ export function lowerFunction(
     hasTensorOps: ctx._hasTensorOps ?? false,
     generatedFns: sharedGeneratedFns,
     outputType,
+    outputTypes,
   };
 }
 

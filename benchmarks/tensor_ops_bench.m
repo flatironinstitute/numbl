@@ -2,14 +2,13 @@ function tensor_ops_bench()
     % Tensor element-wise + reduction benchmark: numbl --opt 0/1/2 vs MATLAB
     % vs Octave. Companion to scalar_bench.m.
     %
-    % Each "kernel" function is small enough that the C-JIT can compile it
-    % into a single libnumbl_ops-backed function rather than per-statement
-    % JS-side helper calls — this is exactly the workload Phase 3 of
-    % the C-JIT was designed for.
+    % The five kernels are inlined into `run_all` (instead of being called
+    % as user functions) so numbl's outer-loop JIT has a pure tensor-op
+    % body to specialize — no UserCall boundary per iteration. Under
+    % --opt 1 the loops get JS-JIT'd; under --opt 2 they get C-JIT'd.
     %
-    % Written as a function file (not a script) because Octave 9 doesn't
-    % accept local functions at the end of a script file. MATLAB, Octave,
-    % and numbl all invoke the main function automatically.
+    % Warm-up is a low-iteration-count call to `run_all` that lands the
+    % loop specializations; the timed call reuses them.
     %
     % See benchmarks/tensor_ops_bench.md for full description + typical
     % results.
@@ -26,51 +25,13 @@ function tensor_ops_bench()
     x = sin(3.1 .* t) .* 0.9;
     y = cos(2.7 .* t + 0.4) .* 0.8;
 
-    % Warm-up: lands JIT specializations + C-JIT .node cache.
-    warm = kernel_binary(x, y);
-    warm = kernel_unary(x);
-    warm = kernel_compare(x, y);
-    warm = kernel_reduce(x);
-    warm = kernel_chain(x, y);
-    fprintf('warmup checks ok\n');
+    % Warm-up: run everything with a tiny trial count so the JIT has
+    % landed specializations before the timed call.
+    [~, ~, ~, ~, ~, ~, ~, ~, ~, ~] = run_all(x, y, 2);
 
-    % ── 1. Real binary element-wise (+, -, .*, ./, scalar mix) ─────────
-    tic;
-    for k = 1:trials
-        r = kernel_binary(x, y);
-    end
-    t1 = toc;
-
-    % ── 2. Real unary element-wise (exp, abs, sin, cos, tanh) ──────────
-    tic;
-    for k = 1:trials
-        u = kernel_unary(x);
-    end
-    t2 = toc;
-
-    % ── 3. Comparisons (>, <, ==) + reduction (sum) ────────────────────
-    tic;
-    cmp_acc = 0;
-    for k = 1:trials
-        cmp_acc = cmp_acc + kernel_compare(x, y);
-    end
-    t3 = toc;
-
-    % ── 4. Reductions (sum, mean, max, min) ────────────────────────────
-    tic;
-    red_acc = 0;
-    for k = 1:trials
-        red_acc = red_acc + kernel_reduce(x);
-    end
-    t4 = toc;
-
-    % ── 5. Chained pipeline (binary + unary + scalar mix + reduction) ──
-    tic;
-    chain_acc = 0;
-    for k = 1:trials
-        chain_acc = chain_acc + kernel_chain(x, y);
-    end
-    t5 = toc;
+    % Hot: real measurement.
+    [t1, t2, t3, t4, t5, r, u, cmp_acc, red_acc, chain_acc] = ...
+        run_all(x, y, trials);
 
     total = t1 + t2 + t3 + t4 + t5;
 
@@ -91,42 +52,64 @@ function tensor_ops_bench()
     disp('SUCCESS')
 end
 
-% ── Kernels ──────────────────────────────────────────────────────────────
-%
-% Each kernel is a single function so numbl's JIT can specialize it once
-% and the C-JIT (--opt 2) can compile it into a libnumbl_ops-backed
-% .node module. MATLAB and Octave just run them as plain element-wise
-% expressions.
+function [t1, t2, t3, t4, t5, r, u, cmp_acc, red_acc, chain_acc] = run_all(x, y, trials)
+    % All five kernels inlined. Each outer loop has no UserCall in its
+    % body, so the loop-JIT can specialize the full loop as a single
+    % unit under both --opt 1 and --opt 2.
 
-function r = kernel_binary(x, y)
-    r = x + y;
-    r = r - 0.5 .* x;
-    r = r .* y + 3.0;
-    r = r ./ (1 + abs(y));
-end
+    % Initialize outputs so the function is well-defined even if
+    % `trials == 0`. For the timed calls (trials >= 1) these are
+    % overwritten by the loop bodies on the first iteration.
+    r = x;
+    u = x;
 
-function u = kernel_unary(x)
-    u = exp(-x .* x);
-    u = u .* cos(5 .* x);
-    u = u + sin(x + 1) .* sin(x + 1);
-    u = abs(u);
-    u = tanh(u);
-end
+    % ── 1. Real binary element-wise (+, -, .*, ./, scalar mix) ─────────
+    tic;
+    for k = 1:trials
+        r = x + y;
+        r = r - 0.5 .* x;
+        r = r .* y + 3.0;
+        r = r ./ (1 + abs(y));
+    end
+    t1 = toc;
 
-function s = kernel_compare(x, y)
-    % Count how many positions satisfy (x > 0) AND (y < 0.5).
-    c1 = x > 0;
-    c2 = y < 0.5;
-    s = sum(c1 .* c2);
-end
+    % ── 2. Real unary element-wise (exp, abs, sin, cos, tanh) ──────────
+    tic;
+    for k = 1:trials
+        u = exp(-x .* x);
+        u = u .* cos(5 .* x);
+        u = u + sin(x + 1) .* sin(x + 1);
+        u = abs(u);
+        u = tanh(u);
+    end
+    t2 = toc;
 
-function s = kernel_reduce(x)
-    s = sum(x) + mean(x) + max(x) + min(x);
-end
+    % ── 3. Comparisons (>, <) + reduction (sum) ────────────────────────
+    tic;
+    cmp_acc = 0;
+    for k = 1:trials
+        c1 = x > 0;
+        c2 = y < 0.5;
+        cmp_acc = cmp_acc + sum(c1 .* c2);
+    end
+    t3 = toc;
 
-function s = kernel_chain(x, y)
-    r = x .* y + 0.5;
-    r = exp(-r .* r);
-    r = r .* x;
-    s = sum(r);
+    % ── 4. Reductions (sum, mean, max, min) ────────────────────────────
+    tic;
+    red_acc = 0;
+    for k = 1:trials
+        red_acc = red_acc + (sum(x) + mean(x) + max(x) + min(x));
+    end
+    t4 = toc;
+
+    % ── 5. Chained pipeline (binary + unary + scalar mix + reduction) ──
+    tic;
+    chain_acc = 0;
+    for k = 1:trials
+        r2 = x .* y + 0.5;
+        r2 = exp(-r2 .* r2);
+        r2 = r2 .* x;
+        chain_acc = chain_acc + sum(r2);
+    end
+    t5 = toc;
 end

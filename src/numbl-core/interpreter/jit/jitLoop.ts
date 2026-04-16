@@ -20,6 +20,7 @@ import {
   JitFuncHandleBailError,
   JitBailToInterpreter,
 } from "./jitHelpers.js";
+import { getCJitBackend } from "./cJitBackend.js";
 import { inferJitType } from "../builtins/types.js";
 import {
   analyzeForLoop,
@@ -116,8 +117,16 @@ function tryJitLoop(
     if (KNOWN_CONSTANTS.has(name)) continue;
     const val = interp.env.get(name);
     if (val === undefined) continue; // not a variable in scope — likely a function name
-    const t = inferJitType(val);
+    let t = inferJitType(val);
     if (t.kind === "unknown") return false;
+    // Strip exact literals from scalar params so the warmup key matches
+    // the hot key (mirrors the function-level JIT in index.ts).
+    if (t.kind === "number" && t.exact !== undefined) {
+      const pruned: JitType = { kind: "number" };
+      if (t.sign !== undefined) pruned.sign = t.sign;
+      if (t.isInteger) pruned.isInteger = true;
+      t = pruned;
+    }
     inputs.push(name);
     inputValues.push(val);
     inputTypes.push(t);
@@ -173,7 +182,7 @@ function tryJitLoop(
     .join(",");
   const cacheKey = `${loc}|${typeKey}`;
 
-  // Check cache
+  // Check JS-JIT cache
   if (interp.loopJitCache.has(cacheKey)) {
     const entry = interp.loopJitCache.get(cacheKey)!;
     if (entry === null) return false; // previously failed
@@ -184,6 +193,22 @@ function tryJitLoop(
       outputs,
       cacheKey
     );
+  }
+
+  // Fast path: previously-compiled C-JIT loop specialization.
+  if (interp.optimization >= 2 && interp.loopCJitCache.has(cacheKey)) {
+    const cEntry = interp.loopCJitCache.get(cacheKey);
+    if (cEntry) {
+      return executeAndWriteBack(
+        interp,
+        cEntry.fn,
+        inputValues,
+        outputs,
+        cacheKey
+      );
+    }
+    // cEntry === null means the C compile previously failed; fall through
+    // to the JS-JIT path below.
   }
 
   // Build a synthetic FunctionDef wrapping the loop statement
@@ -203,7 +228,38 @@ function tryJitLoop(
   );
   if (!lowered) {
     interp.loopJitCache.set(cacheKey, null);
+    interp.loopCJitCache.set(cacheKey, null);
     return false;
+  }
+
+  // ── C-JIT path (--opt >= 2) ─────────────────────────────────────────
+  // Mirror jit/index.ts: try the backend; on null, fall through to JS-JIT.
+  if (interp.optimization >= 2 && !interp.loopCJitCache.has(cacheKey)) {
+    const backend = getCJitBackend();
+    if (backend) {
+      const compiledCFn = backend.tryCompile(
+        interp,
+        syntheticFn,
+        lowered.body,
+        lowered.outputNames,
+        lowered.localVars,
+        lowered.outputType,
+        lowered.outputTypes,
+        inputTypes,
+        outputs.length
+      );
+      if (compiledCFn) {
+        interp.loopCJitCache.set(cacheKey, { fn: compiledCFn });
+        return executeAndWriteBack(
+          interp,
+          compiledCFn,
+          inputValues,
+          outputs,
+          cacheKey
+        );
+      }
+      interp.loopCJitCache.set(cacheKey, null);
+    }
   }
 
   // Generate JavaScript

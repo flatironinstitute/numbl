@@ -123,6 +123,7 @@ export function tryJitCall(
         lowered.outputNames,
         lowered.localVars,
         lowered.outputType,
+        lowered.outputTypes,
         argTypes,
         nargout
       );
