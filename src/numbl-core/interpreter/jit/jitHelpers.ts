@@ -385,12 +385,12 @@ export const jitHelpers = {
           out.push(bd[i] as number);
         }
       }
-      // Preserve column orientation when base is a column vector; otherwise
-      // return a row (MATLAB convention for linear logical indexing).
-      const shape: [number, number] =
-        base.shape.length === 2 && base.shape[1] === 1 && base.shape[0] > 1
-          ? [out.length, 1]
-          : [1, out.length];
+      // MATLAB convention: row vector bases stay rows, everything else
+      // (column vectors, matrices, higher-dim tensors) collapses to a column.
+      const isRowVector = base.shape.length === 2 && base.shape[0] === 1;
+      const shape: [number, number] = isRowVector
+        ? [1, out.length]
+        : [out.length, 1];
       return makeTensor(new FloatXArray(out), undefined, shape);
     }
     const n = idx.data.length;
