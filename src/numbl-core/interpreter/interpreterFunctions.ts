@@ -517,9 +517,22 @@ export function callUserFunction(
     throw new RuntimeError("Too many output arguments.");
   }
 
+  // Share each argument at the call boundary so mutations inside the
+  // function don't leak back into the caller's variable (MATLAB pass-by-
+  // value / copy-on-write). shareRuntimeValue is a no-op on primitives and
+  // bumps the refcount on tensors/cells/value-class instances, ensuring
+  // any in-place write inside the callee goes through the COW copy path.
+  // Without this, the caller's wrapper sees its refcount decrement on the
+  // first call's COW; the second call then finds rc==1 and mutates in place.
+  const sharedArgs = args.map(a =>
+    a !== undefined && a !== null && typeof a === "object"
+      ? shareRuntimeValue(a as RuntimeValue)
+      : a
+  );
+
   // Try JIT compilation for eligible functions
   if (this.optimization >= 1 && narginOverride === undefined) {
-    const jitResult = tryJitCall(this, fn, args, nargout);
+    const jitResult = tryJitCall(this, fn, sharedArgs, nargout);
     if (jitResult !== JIT_SKIP) return jitResult;
   }
 
@@ -527,22 +540,14 @@ export function callUserFunction(
   fnEnv.rt = this.rt;
   fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
 
-  const processedArgs = this.processArgumentsBlocks(fn, args);
+  const processedArgs = this.processArgumentsBlocks(fn, sharedArgs);
 
   const hasVarargin =
     fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
   const regularParams = hasVarargin ? fn.params.slice(0, -1) : fn.params;
-  // Build set of output names for COW sharing (value class semantics)
-  const outputSet = new Set(fn.outputs);
   for (let i = 0; i < regularParams.length; i++) {
     if (i < processedArgs.length) {
-      let val = ensureRuntimeValue(processedArgs[i]);
-      // When a parameter is also an output (e.g., function obj = method(obj)),
-      // share it for value-class COW safety, matching codegen behavior.
-      if (outputSet.has(regularParams[i])) {
-        val = shareRuntimeValue(val);
-      }
-      fnEnv.set(regularParams[i], val);
+      fnEnv.set(regularParams[i], ensureRuntimeValue(processedArgs[i]));
     }
   }
   if (hasVarargin) {

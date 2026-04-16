@@ -533,7 +533,9 @@ function lowerAssignLValue(
 ): JitStmt[] | null {
   const lv = stmt.lvalue;
 
-  // Cell array write: c{i} = v
+  // Cell array write: c{i} = v. Rebind `c` to the helper's return value so
+  // the COW-copied cell (when the wrapper is shared, e.g. passed in as a
+  // function arg) replaces the local; the caller's original cell stays put.
   if (lv.type === "IndexCell") {
     if (lv.base.type !== "Ident") return null;
     const cellType = ctx.env.get(lv.base.name);
@@ -546,9 +548,12 @@ function lowerAssignLValue(
     const rhs = lowerExpr(ctx, stmt.expr);
     if (!rhs) return null;
     ctx._hasTensorOps = true;
+    ctx.assignedVars.add(lv.base.name);
+    if (!ctx.params.has(lv.base.name)) ctx.localVars.add(lv.base.name);
     return [
       {
-        tag: "ExprStmt",
+        tag: "Assign",
+        name: lv.base.name,
         expr: {
           tag: "Call",
           name: "__cellWrite",
@@ -557,7 +562,7 @@ function lowerAssignLValue(
             cellIdx,
             rhs,
           ],
-          jitType: { kind: "number" }, // dummy — result is discarded
+          jitType: cellType,
         },
       },
     ];

@@ -412,8 +412,8 @@ export const jitHelpers = {
     return c.data[k];
   },
 
-  __cellWrite: (cell: unknown, idx: number, value: unknown): number => {
-    const c = cell as {
+  __cellWrite: (cell: unknown, idx: number, value: unknown): unknown => {
+    let c = cell as {
       kind: "cell";
       data: unknown[];
       shape: number[];
@@ -422,8 +422,20 @@ export const jitHelpers = {
     const k = Math.round(idx) - 1;
     if (k < 0 || k >= c.data.length)
       throw new Error("Index exceeds cell bounds");
+    // COW: if the cell wrapper is shared (rc > 1, typically because it was
+    // passed in as a function arg), copy before mutating so the caller's
+    // cell is unaffected.
+    if (c._rc > 1) {
+      c._rc--;
+      c = {
+        kind: "cell",
+        data: c.data.slice(),
+        shape: c.shape.slice(),
+        _rc: 1,
+      };
+    }
     c.data[k] = value;
-    return 0;
+    return c;
   },
 
   // Horizontal concatenation with row-count validation
