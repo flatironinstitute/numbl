@@ -48,6 +48,8 @@ interface CEnv {
   flags: string[];
   opsLibPath: string;
   opsHeaderDir: string;
+  /** Pre-computed hash of all env-level inputs (compiler, platform, libs, git HEAD). */
+  envHash: string;
 }
 
 let _envCache: CEnv | null | undefined;
@@ -167,6 +169,30 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     for (const f of userFlags.split(/\s+/).filter(Boolean)) flags.push(f);
   }
 
+  // Pre-compute the environment hash once — covers everything except
+  // the per-function C source, which is added in computeSourceHash().
+  const envH = createHash("sha256");
+  envH.update(ccVersion);
+  envH.update(process.version);
+  envH.update(process.platform);
+  envH.update(process.arch);
+  envH.update(NUMBL_VERSION);
+  try {
+    envH.update(
+      execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5_000,
+      })
+        .toString()
+        .trim()
+    );
+  } catch {
+    /* not in a git repo — skip */
+  }
+  envH.update(readFileSync(opsLibPath));
+  const envHash = envH.digest("hex");
+
   _envCache = {
     cc,
     ccVersion,
@@ -174,6 +200,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     flags,
     opsLibPath,
     opsHeaderDir,
+    envHash,
   };
 
   process.stderr.write(
@@ -188,17 +215,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
 function computeSourceHash(cSource: string, env: CEnv): string {
   const h = createHash("sha256");
   h.update(cSource);
-  h.update("\n---env---\n");
-  h.update(env.ccVersion);
-  h.update(process.version);
-  h.update(process.platform);
-  h.update(process.arch);
-  h.update(NUMBL_VERSION);
-  try {
-    h.update(readFileSync(env.opsLibPath));
-  } catch {
-    /* getCEnv already validated existence */
-  }
+  h.update(env.envHash);
   return h.digest("hex");
 }
 
