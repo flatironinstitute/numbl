@@ -36,6 +36,10 @@ import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
 
+// Side-effect import: installs the C-JIT backend (--opt 2). Must be Node-only
+// — this file imports child_process/fs/etc. that don't belong in the web build.
+import "./numbl-core/interpreter/jit/cJitInstall.js";
+
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
@@ -192,6 +196,9 @@ async function runTests(dir: string, optimization?: number) {
   let pass = 0;
   let fail = 0;
   const failedScripts: string[] = [];
+  const trackCJit = (optimization ?? 1) >= 2;
+  let scriptsWithCJit = 0;
+  let totalCJitCompilations = 0;
 
   for (const filepath of testFiles) {
     const rel = relative(process.cwd(), filepath);
@@ -201,12 +208,20 @@ async function runTests(dir: string, optimization?: number) {
     const searchPaths = [scriptDir];
     const workspaceFiles = scanMFiles(scriptDir, filepath);
 
+    let cJitCountThisScript = 0;
+    const onCJitCompile = trackCJit
+      ? () => {
+          cJitCountThisScript++;
+        }
+      : undefined;
+
     try {
       const result = executeCode(
         source,
         {
           displayResults: true,
           optimization: optimization ?? 1,
+          onCJitCompile,
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -220,11 +235,20 @@ async function runTests(dir: string, optimization?: number) {
       const lines = outputText.split("\n").filter(l => l.length > 0);
       const lastLine = lines.length > 0 ? lines[lines.length - 1] : "";
 
+      const cJitMark =
+        trackCJit && cJitCountThisScript > 0
+          ? ` [C-JIT x${cJitCountThisScript}]`
+          : "";
+
       if (lastLine === "SUCCESS") {
-        console.log(`PASS  ${rel}`);
+        console.log(`PASS  ${rel}${cJitMark}`);
         pass++;
+        if (cJitCountThisScript > 0) {
+          scriptsWithCJit++;
+          totalCJitCompilations += cJitCountThisScript;
+        }
       } else {
-        console.log(`FAIL  ${rel}`);
+        console.log(`FAIL  ${rel}${cJitMark}`);
         console.log(outputText.replace(/^/gm, "      "));
         fail++;
         failedScripts.push(rel);
@@ -244,6 +268,13 @@ async function runTests(dir: string, optimization?: number) {
 
   console.log("");
   console.log(`Results: ${pass} passed, ${fail} failed`);
+  if (trackCJit) {
+    const total = testFiles.length;
+    console.log(
+      `C-JIT: ${scriptsWithCJit} of ${total} scripts exercised C-JIT ` +
+        `(${totalCJitCompilations} total compilations)`
+    );
+  }
 
   if (fail > 0) {
     console.log("");
@@ -279,22 +310,34 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-c <file>    Write C-JIT-generated C source to file (requires --opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
   --path <dir>       Add extra workspace directory
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
-  --opt <level>      Optimization level (0=none, 1=JIT scalar functions; default: 1)
+  --opt <level>      Optimization level (default: 1)
+                       0 — interpreter (no JIT)
+                       1 — JS-JIT: type-specialize hot functions/loops to JS
+                       2 — C-JIT: emit C for feasible scalar functions, compile
+                           via cc, load as a .node module, fall back to JS-JIT
+                           on infeasible IR (requires a C compiler and Node API
+                           headers; prints its compile command once to stderr)
 
 Environment variables:
-  NUMBL_PATH         Extra workspace directories (separated by ${delimiter})`);
+  NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
+  NUMBL_CC                C compiler for --opt 2 (default: cc)
+  NUMBL_CFLAGS            Extra flags appended to the C-JIT compile command
+  NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
+                          reproducibility or debugging portability issues)`);
 }
 
 // ── Option parsing helpers ───────────────────────────────────────────────────
 
 interface ParsedOptions {
   dumpJs: string | undefined;
+  dumpC: string | undefined;
   dumpAst: boolean;
   verbose: boolean;
   stream: boolean;
@@ -309,6 +352,7 @@ interface ParsedOptions {
 function parseOptions(args: string[]): ParsedOptions {
   const opts: ParsedOptions = {
     dumpJs: undefined,
+    dumpC: undefined,
     dumpAst: false,
     verbose: false,
     stream: false,
@@ -344,6 +388,14 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.dumpJs = resolve(process.cwd(), args[i]);
+        break;
+      case "--dump-c":
+        i++;
+        if (i >= args.length) {
+          console.error("Error: --dump-c requires an output filename");
+          process.exit(1);
+        }
+        opts.dumpC = resolve(process.cwd(), args[i]);
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -565,14 +617,20 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js: JIT compilations are collected in result.generatedJS
-  // by executeCode and written by finalizeDumpFile at the end. Just clear
-  // any previous dump file here.
+  // Set up --dump-js / --dump-c: JIT compilations are collected in
+  // result.generatedJS / result.generatedC by executeCode and written by
+  // finalizeDumpFile at the end. Just clear any previous dump file here.
   const onJitCompile:
     | ((description: string, jsCode: string) => void)
     | undefined = undefined;
+  const onCJitCompile:
+    | ((description: string, cSource: string) => void)
+    | undefined = undefined;
   if (opts.dumpJs) {
     writeFileSync(opts.dumpJs, "");
+  }
+  if (opts.dumpC) {
+    writeFileSync(opts.dumpC, "");
   }
 
   try {
@@ -593,6 +651,7 @@ async function executeWithOptions(
               streamLine({ type: "drawnow", plotInstructions });
             },
             onJitCompile,
+            onCJitCompile,
 
             fileIO,
             system,
@@ -614,6 +673,9 @@ async function executeWithOptions(
         writeProfileIfNeeded(result);
         if (opts.dumpJs) {
           finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
+        }
+        if (opts.dumpC) {
+          finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
         }
         streamLine({ type: "done" });
       } catch (error) {
@@ -646,6 +708,7 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
+          onCJitCompile,
 
           fileIO,
           system,
@@ -660,6 +723,9 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
+      }
+      if (opts.dumpC) {
+        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     } else {
@@ -681,6 +747,7 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
+          onCJitCompile,
 
           fileIO,
           system,
@@ -696,6 +763,9 @@ async function executeWithOptions(
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
       }
+      if (opts.dumpC) {
+        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
+      }
       await flushAndWait(result.plotInstructions);
     }
 
@@ -706,13 +776,21 @@ async function executeWithOptions(
       getSourceForFile(file, mainFileName, code, workspaceFiles);
     console.error(formatDiagnostics(diags, getSource));
 
-    // Still finalize the dump file on error so the user can inspect the generated JS
+    // Still finalize the dump file on error so the user can inspect the generated JS / C
     if (opts.dumpJs) {
       const errWithInfo = error as Error & { generatedJS?: string };
       finalizeDumpFile(
         opts.dumpJs,
         mainFileName,
         errWithInfo.generatedJS ?? "// (main script JS not available)"
+      );
+    }
+    if (opts.dumpC) {
+      const errWithInfo = error as Error & { generatedC?: string };
+      finalizeDumpFile(
+        opts.dumpC,
+        mainFileName,
+        errWithInfo.generatedC ?? "/* (main script C not available) */"
       );
     }
 

@@ -15,12 +15,19 @@ import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
 import { jitHelpers, JitBailToInterpreter } from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
+import { getCJitBackend } from "./cJitBackend.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
-/** Augmented FunctionDef with JIT cache. */
+/** C-JIT cache entry (parallel to JitCacheEntry but with a native-wrapped fn). */
+interface CJitCacheEntry {
+  fn: (...args: unknown[]) => unknown;
+}
+
+/** Augmented FunctionDef with JIT caches (JS and C specializations are parallel). */
 interface FunctionDefWithCache extends FunctionDef {
   _jitCache?: Map<string, JitCacheEntry | null>;
+  _cJitCache?: Map<string, CJitCacheEntry | null>;
   _lastJitArgTypes?: Map<number, JitType[]>;
 }
 
@@ -32,12 +39,27 @@ export function tryJitCall(
   args: unknown[],
   nargout: number
 ): unknown | typeof JIT_SKIP {
-  // Determine argument types
+  // Determine argument types. For numeric scalar params, drop the
+  // literal `exact` field up front: it only survives unification when
+  // two consecutive calls pass the *same* literal, which almost never
+  // happens for user-function params (callers pass variables, not
+  // constants). Stripping means the first call's cache key already
+  // matches subsequent calls — one warmup suffices to land a reusable
+  // specialization. String/char `value`, boolean `value`, and `sign` /
+  // `isInteger` are preserved; they're useful for dispatch and widen
+  // naturally via the progressive unification below.
   const argTypes: JitType[] = [];
   for (const arg of args) {
     const t = inferJitType(arg);
     if (t.kind === "unknown") return JIT_SKIP;
-    argTypes.push(t);
+    if (t.kind === "number" && t.exact !== undefined) {
+      const pruned: JitType = { kind: "number" };
+      if (t.sign !== undefined) pruned.sign = t.sign;
+      if (t.isInteger) pruned.isInteger = true;
+      argTypes.push(pruned);
+    } else {
+      argTypes.push(t);
+    }
   }
 
   // Progressive type widening: unify with previously seen types to prevent
@@ -67,11 +89,50 @@ export function tryJitCall(
     return runWithCallFrame(interp, fn.name, entry.fn, args);
   }
 
+  // Fast path: previously-compiled C-JIT specialization.
+  if (interp.optimization >= 2) {
+    if (!fnWithCache._cJitCache) fnWithCache._cJitCache = new Map();
+    const cEntry = fnWithCache._cJitCache.get(cacheKey);
+    if (cEntry !== undefined && cEntry !== null) {
+      return runWithCallFrame(interp, fn.name, cEntry.fn, args);
+    }
+  }
+
   // Attempt lowering (pass interpreter for user function resolution)
   const lowered = lowerFunction(fn, argTypes, nargout, interp);
   if (!lowered) {
     fnWithCache._jitCache.set(cacheKey, null);
+    if (fnWithCache._cJitCache) fnWithCache._cJitCache.set(cacheKey, null);
     return JIT_SKIP;
+  }
+
+  // ── C-JIT path (--opt >= 2) ───────────────────────────────────────────
+  // Delegated to a pluggable backend registered at startup by the CLI
+  // entry point (src/numbl-core/interpreter/jit/cJitInstall.ts). The
+  // browser bundle never reaches the install module, so its Node-only
+  // transitive deps (child_process, fs, ...) stay out of the web build.
+  // On any bail the backend returns null and we fall through to JS-JIT.
+  if (interp.optimization >= 2) {
+    const backend = getCJitBackend();
+    if (backend) {
+      if (!fnWithCache._cJitCache) fnWithCache._cJitCache = new Map();
+      const compiledFn = backend.tryCompile(
+        interp,
+        fn,
+        lowered.body,
+        lowered.outputNames,
+        lowered.localVars,
+        lowered.outputType,
+        argTypes,
+        nargout
+      );
+      if (compiledFn) {
+        fnWithCache._cJitCache.set(cacheKey, { fn: compiledFn });
+        return runWithCallFrame(interp, fn.name, compiledFn, args);
+      }
+      fnWithCache._cJitCache.set(cacheKey, null);
+    }
+    // Fall through to JS-JIT path.
   }
 
   // Generate JavaScript for the main function body

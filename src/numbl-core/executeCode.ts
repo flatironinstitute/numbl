@@ -50,6 +50,8 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
+  /** Called each time the C-JIT compiles a function, with a description and the generated C. */
+  onCJitCompile?: (description: string, cSource: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -108,6 +110,7 @@ export interface ProfileData {
 export interface ExecResult {
   output: string[];
   generatedJS: string;
+  generatedC: string;
   plotInstructions: PlotInstruction[];
   returnValue: RuntimeValue;
   variableValues: Record<string, RuntimeValue>;
@@ -348,6 +351,7 @@ export function executeCode(
   }
 
   interpreter.optimization = options.optimization ?? 1;
+  interpreter.log = options.log;
 
   // Collect JIT compilations for generatedJS output and profiling
   const jitSections: string[] = [];
@@ -356,6 +360,15 @@ export function executeCode(
       `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${jsCode}`
     );
     options.onJitCompile?.(description, jsCode);
+  };
+
+  // Collect C-JIT compilations for generatedC output.
+  const cJitSections: string[] = [];
+  interpreter.onCJitCompile = (description: string, cSource: string) => {
+    cJitSections.push(
+      `/* ${"=".repeat(60)}\n * C-JIT: ${description}\n * ${"=".repeat(60)}\n */\n\n${cSource}`
+    );
+    options.onCJitCompile?.(description, cSource);
   };
 
   // Wire up JIT builtin profiling hooks when profiling is enabled
@@ -768,6 +781,10 @@ export function executeCode(
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
           : "// No JS generated",
+      generatedC:
+        cJitSections.length > 0
+          ? `/* C-JIT compiled sections */\n\n${cJitSections.join("\n\n")}`
+          : "/* No C generated */",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -806,6 +823,10 @@ export function executeCode(
       jitSections.length > 0
         ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
         : "// No JS generated";
+    const generatedC =
+      cJitSections.length > 0
+        ? `/* C-JIT compiled sections */\n\n${cJitSections.join("\n\n")}`
+        : "/* No C generated */";
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {
@@ -814,6 +835,7 @@ export function executeCode(
       }
       if (!e.fileSources) e.fileSources = interpreter.fileSources;
       (e as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
+      (e as RuntimeError & { generatedC?: string }).generatedC = generatedC;
       throw e;
     }
     const re = new RuntimeError(e instanceof Error ? e.message : String(e));
@@ -823,6 +845,7 @@ export function executeCode(
     }
     re.fileSources = interpreter.fileSources;
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
+    (re as RuntimeError & { generatedC?: string }).generatedC = generatedC;
     throw re;
   } finally {
     // Reset JIT profiling hooks to no-ops
