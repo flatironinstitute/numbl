@@ -150,6 +150,12 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
           k === "sparse_matrix" ||
           k === "complex_or_number";
         if (!allowed(a.kind) || !allowed(b.kind)) return null;
+        // Both-logical operand case: stay logical. MATLAB: class(min(true,
+        // false)) == 'logical'. Mixed logical+double still promotes.
+        const aIsLogical =
+          a.kind === "boolean" || (a.kind === "tensor" && a.isLogical === true);
+        const bIsLogical =
+          b.kind === "boolean" || (b.kind === "tensor" && b.isLogical === true);
         if (a.kind === "tensor" || b.kind === "tensor") {
           const t =
             a.kind === "tensor"
@@ -163,11 +169,13 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
               isComplex: t.isComplex || otherIsComplex,
               shape: t.shape,
               ndim: t.ndim,
+              ...(aIsLogical && bIsLogical ? { isLogical: true } : {}),
             },
           ];
         }
         if (a.kind === "complex_or_number" || b.kind === "complex_or_number")
           return [{ kind: "complex_or_number" }];
+        if (aIsLogical && bIsLogical) return [{ kind: "boolean" }];
         const aSign =
           a.kind === "number"
             ? a.sign
@@ -205,23 +213,30 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
             a = { kind: "tensor", isComplex: a.isComplex, shape };
           }
           if (a.kind !== "tensor") return null;
+          // Logical tensors reduce to a logical (scalar or smaller tensor).
+          const isLogicalIn = a.isLogical === true;
           if (!a.shape) {
             valueType =
               a.isComplex === true
                 ? { kind: "complex_or_number" }
-                : { kind: "number" };
+                : isLogicalIn
+                  ? { kind: "boolean" }
+                  : { kind: "number" };
           } else {
             const result = shapeAfterReduction(a.shape);
             if (result.scalar) {
               valueType =
                 a.isComplex === true
                   ? { kind: "complex_or_number" }
-                  : { kind: "number" };
+                  : isLogicalIn
+                    ? { kind: "boolean" }
+                    : { kind: "number" };
             } else {
               valueType = {
                 kind: "tensor",
                 isComplex: a.isComplex,
                 shape: result.shape,
+                ...(isLogicalIn ? { isLogical: true } : {}),
               };
             }
           }

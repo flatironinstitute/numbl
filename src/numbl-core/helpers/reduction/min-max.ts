@@ -226,13 +226,20 @@ function minMaxElementwise(
     isRuntimeComplexNumber(b) ||
     (isRuntimeTensor(a) && a.imag != null) ||
     (isRuntimeTensor(b) && b.imag != null);
+  // MATLAB: min/max on two logical operands stays logical; a mixed
+  // logical + double promotes to double.
+  const aIsLogical =
+    isRuntimeLogical(a) || (isRuntimeTensor(a) && a._isLogical === true);
+  const bIsLogical =
+    isRuntimeLogical(b) || (isRuntimeTensor(b) && b._isLogical === true);
+  const bothLogical = aIsLogical && bIsLogical;
 
   // Both scalars, no complex
   if (aIsScalar && bIsScalar && !anyComplex) {
     const aVal = toNumber(a),
       bVal = toNumber(b);
     const r = isNaN(aVal) ? bVal : isNaN(bVal) ? aVal : twoArgFn(aVal, bVal);
-    return RTV.num(r);
+    return bothLogical ? RTV.logical(r !== 0) : RTV.num(r);
   }
 
   // Both scalars, at least one complex
@@ -267,7 +274,9 @@ function minMaxElementwise(
           ? aVal
           : twoArgFn(aVal, bVal);
     });
-    return RTV.tensor(result, outShape);
+    const t = RTV.tensor(result, outShape);
+    if (bothLogical) t._isLogical = true;
+    return t;
   }
 
   // Complex element-wise path
