@@ -13,7 +13,7 @@ import {
 } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./jitCodegen.js";
-import { jitHelpers } from "./jitHelpers.js";
+import { jitHelpers, JitBailToInterpreter } from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
@@ -130,22 +130,32 @@ export function tryJitCall(
   const description = `${fn.name}@${line}(${typeDesc}) -> nargout=${nargout}`;
   interp.onJitCompile?.(description, source);
 
-  // Execute — let runtime errors propagate (don't silently fall back)
-  return runWithCallFrame(interp, fn.name, compiledFn, args);
+  // Execute — let most runtime errors propagate. JitBailToInterpreter is
+  // caught below as a signal to re-run via the interpreter.
+  const result = runWithCallFrame(interp, fn.name, compiledFn, args);
+  return result;
 }
 
-/** Execute a JIT-compiled function with proper call frame tracking. */
+/**
+ * Execute a JIT-compiled function with proper call frame tracking.
+ *
+ * If the JIT body throws `JitBailToInterpreter` (e.g. a scalar index write
+ * needs tensor growth, which the JIT's hoisted aliases can't represent),
+ * returns `JIT_SKIP` so the caller re-runs the function via the interpreter.
+ * Side effects accumulated before the bail may re-run.
+ */
 function runWithCallFrame(
   interp: Interpreter,
   name: string,
   compiledFn: (...args: unknown[]) => unknown,
   args: unknown[]
-): unknown {
+): unknown | typeof JIT_SKIP {
   interp.rt.pushCallFrame(name);
   interp.rt.pushCleanupScope();
   try {
     return compiledFn(...args);
   } catch (e) {
+    if (e instanceof JitBailToInterpreter) return JIT_SKIP;
     interp.rt.annotateError(e);
     throw e;
   } finally {

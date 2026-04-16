@@ -216,6 +216,12 @@ export function idx3r_h(
 
 // ── Hoisted-base write helpers ─────────────────────────────────────────
 
+// Out-of-bounds writes soft-bail: MATLAB grows the target tensor, but the
+// hoisted data/len aliases would become stale after growth. Signaling
+// JitBailToInterpreter lets the loop-JIT or function-JIT boundary fall
+// back to the interpreter, which handles growth correctly.
+const GROW_BAIL_MSG = "scalar index write requires tensor growth";
+
 export function set1r_h(
   data: FloatXArrayType,
   len: number,
@@ -223,7 +229,7 @@ export function set1r_h(
   v: number
 ): void {
   const idx = (i - 1) | 0;
-  if (idx >>> 0 >= len) bce();
+  if (idx >>> 0 >= len) throw new JitBailToInterpreter(GROW_BAIL_MSG);
   data[idx] = v;
 }
 
@@ -237,9 +243,10 @@ export function set2r_h(
 ): void {
   const r = (ri - 1) | 0;
   const c = (ci - 1) | 0;
-  if (r >>> 0 >= rows) bce();
   const cols = len / rows;
-  if (c >>> 0 >= cols) bce();
+  if (r >>> 0 >= rows || c >>> 0 >= cols) {
+    throw new JitBailToInterpreter(GROW_BAIL_MSG);
+  }
   const lin = c * rows + r;
   data[lin] = v;
 }
@@ -257,10 +264,10 @@ export function set3r_h(
   const k0 = (i1 - 1) | 0;
   const k1 = (i2 - 1) | 0;
   const k2 = (i3 - 1) | 0;
-  if (k0 >>> 0 >= d0) bce();
-  if (k1 >>> 0 >= d1) bce();
   const d2 = len / (d0 * d1);
-  if (k2 >>> 0 >= d2) bce();
+  if (k0 >>> 0 >= d0 || k1 >>> 0 >= d1 || k2 >>> 0 >= d2) {
+    throw new JitBailToInterpreter(GROW_BAIL_MSG);
+  }
   const lin = k2 * d0 * d1 + k1 * d0 + k0;
   data[lin] = v;
 }

@@ -135,6 +135,19 @@ assert(y == 1, 'complex < complex on real parts 1<3 should be 1');
 y = do_complex_gt(5+2i, 1+4i); y = do_complex_gt(5+2i, 1+4i); y = do_complex_gt(5+2i, 1+4i);
 assert(y == 1, 'complex > complex on real parts 5>1 should be 1');
 
+% ── Bug 14: scalar index assignment past end should grow (not crash) ────
+r = do_grow_scalar_assign(5); r = do_grow_scalar_assign(5); r = do_grow_scalar_assign(5);
+assert(isequal(r, [0, 0, 0, 0, 10]), 'v(5)=10 on zeros(1,3) should grow to [0 0 0 0 10]');
+
+r = do_grow_scalar_assign(8); r = do_grow_scalar_assign(8); r = do_grow_scalar_assign(8);
+assert(length(r) == 8, 'v(8)=10 on zeros(1,3) should grow to length 8');
+assert(r(8) == 10, 'v(8)=10 on zeros(1,3) should have r(8)=10');
+
+% 2D growth
+r = do_grow_2d_assign(); r = do_grow_2d_assign(); r = do_grow_2d_assign();
+assert(isequal(size(r), [3, 4]), 'M(3,4)=7 on zeros(2,2) should grow to [3 4]');
+assert(r(3, 4) == 7, 'M(3,4)=7 should set that element');
+
 disp('SUCCESS')
 
 % ── Helpers (each wraps the op in its own function to trigger JIT specialization) ──
@@ -185,3 +198,14 @@ function r = do_complex_eq(a, b); r = a == b; end
 function r = do_complex_ne(a, b); r = a ~= b; end
 function r = do_complex_lt(a, b); r = a < b; end
 function r = do_complex_gt(a, b); r = a > b; end
+
+function r = do_grow_scalar_assign(n)
+  v = zeros(1, 3);
+  v(n) = 10;
+  r = v;
+end
+function r = do_grow_2d_assign()
+  M = zeros(2, 2);
+  M(3, 4) = 7;
+  r = M;
+end
