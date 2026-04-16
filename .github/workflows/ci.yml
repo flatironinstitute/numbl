@@ -85,3 +85,34 @@ jobs:
 
       - name: Build native addon
         run: npm run build:addon
+
+  test-c-jit:
+    name: Test C-JIT (--opt 2)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle stdlib
+        run: npm run bundle:stdlib
+
+      - name: Pre-install Node API headers
+        run: npx node-gyp install --target=$(node -p "process.versions.node")
+
+      - name: Run integration tests under --opt 2
+        run: npm run test:scripts:c-jit
+
+      - name: Run C-JIT end-to-end unit tests
+        env:
+          NUMBL_CJIT_E2E: "1"
+        run: npx vitest run src/__tests__/c-jit-smoke.test.ts

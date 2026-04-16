@@ -89,11 +89,24 @@ export class Interpreter {
   /** @internal Index in _postSiblings of the next stmt after the current one. */
   _postSiblingsIdx: number = 0;
 
-  /** Optimization level (0 = pure interpreter, >=1 = JIT scalar functions). */
+  /**
+   * Optimization level:
+   *   0 — pure AST interpreter, no JIT.
+   *   1 — JS-JIT (default): type-specialize hot functions/loops to JS via `new Function()`.
+   *   2 — C-JIT: additionally emit C for feasible scalar specializations,
+   *       compile to a native `.node` module, and invoke via N-API.
+   *       Infeasible IR transparently falls back to the JS-JIT path.
+   */
   optimization: number = 1;
 
-  /** Callback for JIT compilation logging. */
+  /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
+
+  /** Callback for C-JIT compilation logging (--dump-c). */
+  onCJitCompile?: (description: string, cSource: string) => void;
+
+  /** Verbose log sink (plumbed from ExecOptions.log; used by C-JIT for diagnostics). */
+  log?: (message: string) => void;
 
   constructor(
     rt: Runtime,
