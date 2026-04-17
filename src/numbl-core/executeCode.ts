@@ -67,6 +67,8 @@ export interface ExecOptions {
   optimization?: number;
   /** Emit fused per-element loops in C-JIT (requires --opt 2). */
   fuse?: boolean;
+  /** Parallelize fused loops with OpenMP threads (--par flag). */
+  par?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -354,6 +356,7 @@ export function executeCode(
 
   interpreter.optimization = options.optimization ?? 1;
   interpreter.fuse = options.fuse ?? false;
+  interpreter.par = options.par ?? false;
   interpreter.log = options.log;
 
   // Collect JIT compilations for generatedJS output and profiling

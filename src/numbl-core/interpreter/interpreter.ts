@@ -108,6 +108,9 @@ export class Interpreter {
   /** Emit fused per-element loops in C-JIT (--fuse flag). */
   fuse: boolean = false;
 
+  /** Parallelize fused loops with OpenMP threads (--par flag). */
+  par: boolean = false;
+
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 

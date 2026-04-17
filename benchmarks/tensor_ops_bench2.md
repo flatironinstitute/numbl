@@ -22,7 +22,8 @@ trials each.
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench2.m --opt 0          # interpreter
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench2.m --opt 1          # JS-JIT
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench2.m --opt 2          # C-JIT (per-op)
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench2.m --opt 2 --fuse   # C-JIT (fused)
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench2.m --opt 2 --fuse        # C-JIT (fused)
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench2.m --opt 2 --fuse --par  # C-JIT (fused+parallel)
 matlab -batch "run('benchmarks/tensor_ops_bench2.m')"
 ```
 
@@ -37,14 +38,16 @@ All runs produce the same check values (to FP rounding).
 
 Median of 3 runs for all modes.
 
-| Mode                      |  Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
-| ------------------------- | -----: | -----: | -----: | ------: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)   | 15.3 s | 0.53 s | 2.10 s |  0.35 s |  0.58 s | 5.21 s | 6.29 s |
-| `--opt 1` (JS-JIT)        | 15.1 s | 0.37 s | 1.20 s |  0.27 s |  0.41 s | 5.84 s | 6.81 s |
-| `--opt 2` (C-JIT)         | 15.0 s | 0.30 s | 1.22 s |  0.24 s |  0.34 s | 5.91 s | 6.89 s |
-| `--opt 2 --fuse` (C-JIT)  |  1.6 s | 0.12 s | 0.56 s |  0.07 s |  0.37 s | 0.31 s | 0.13 s |
-| MATLAB R2025b `-batch`    |  4.3 s | 0.30 s | 2.21 s |  0.10 s |  0.29 s | 0.94 s | 0.39 s |
-| MATLAB R2025b (8 threads) |  2.5 s | 0.15 s | 1.07 s |  0.19 s |  0.27 s | 0.55 s | 0.27 s |
+| Mode                           |  Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
+| ------------------------------ | -----: | -----: | -----: | ------: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)        | 15.4 s | 0.57 s | 1.87 s |  0.35 s |  0.52 s | 5.64 s | 6.45 s |
+| `--opt 1` (JS-JIT)             | 13.3 s | 0.28 s | 1.05 s |  0.24 s |  0.37 s | 5.25 s | 6.08 s |
+| `--opt 2` (C-JIT)              | 12.2 s | 0.27 s | 1.33 s |  0.20 s |  0.29 s | 4.63 s | 5.48 s |
+| `--opt 2 --fuse` (C-JIT)       | 1.39 s | 0.10 s | 0.51 s |  0.07 s |  0.32 s | 0.27 s | 0.12 s |
+| `--opt 2 --fuse --par` (C-JIT) | 0.95 s | 0.07 s | 0.19 s |  0.08 s |  0.36 s | 0.14 s | 0.11 s |
+| MATLAB R2025b (1 thread)       | 6.28 s | 0.43 s | 3.27 s |  0.12 s |  0.46 s | 1.41 s | 0.58 s |
+| MATLAB R2025b `-batch`         | 3.95 s | 0.24 s | 2.04 s |  0.09 s |  0.27 s | 0.93 s | 0.39 s |
+| MATLAB R2025b (8 threads)      | 2.43 s | 0.12 s | 1.16 s |  0.11 s |  0.16 s | 0.61 s | 0.28 s |
 
 ### macOS (N=2 000 000, trials=50)
 
@@ -61,38 +64,6 @@ Median of 3 runs for all modes.
 | `--opt 2 --fuse` (C-JIT)   |     1.90 s |     0.20 s |     0.76 s | **0.02 s** |     0.19 s |     0.61 s |     0.14 s |
 | MATLAB R2026a (1 thread)   |     3.48 s |     0.31 s |     1.49 s |     0.06 s |     0.33 s |     0.91 s |     0.37 s |
 | MATLAB R2026a (16 threads) | **0.47 s** | **0.05 s** | **0.17 s** | **0.02 s** | **0.04 s** | **0.13 s** | **0.06 s** |
-
-Same pattern as the Linux run: fused C-JIT beats single-threaded MATLAB
-by ~1.8× on total, with the biggest wins on BinOps (0.61 s vs 0.91 s)
-and Clamp (0.14 s vs 0.37 s). Multi-threaded MATLAB pulls ahead ~4×
-overall by auto-parallelizing element-wise ops.
-
-## Reading the table
-
-- **`--opt 2 --fuse` is 2.6× faster than MATLAB overall.** The fused
-  codegen collapses each kernel into a single per-element `for` loop —
-  no intermediate buffers, one memory pass.
-- **Binary-builtin fusion is the biggest win** (0.31 s vs 5.91 s per-op,
-  19× speedup). Without fusion, `max(x,y)` / `atan2` / `hypot` each
-  allocate a tensor and iterate separately. Fused, they become one loop
-  with `fmax` / `atan2` / `hypot` calls per element.
-- **Clamp+distance** shows a similar effect (0.13 s vs 6.89 s). The
-  fused loop inlines `fmax(fmin(x[i], 0.5), -0.5)` and `hypot(...)` in
-  a single SIMD-vectorized pass.
-- **Single-expression Gaussian** (`exp(-x.*x)`) benefits from the new
-  single-assign fusion (0.12 s vs 0.30 s). Previously a single assign
-  couldn't form a fusible chain; now any assignment with 2+ tensor ops
-  qualifies.
-- **Inline reduction** (`sum(x.*y + 0.5)`) fuses the element-wise
-  expression into the reduction loop — no intermediate tensor at all
-  (0.07 s vs 0.24 s).
-- **Accumulate reduction** (`s += sum(exp(-x.*x))`) is roughly break-even
-  with per-op. The `exp()` inside the reduction loop can't be
-  SIMD-vectorized (no `#pragma omp simd` on reduction loops), so the
-  per-element overhead offsets the saved allocation.
-- **JS-JIT and per-op C-JIT are similar** on kernels 5–6 because two-arg
-  tensor builtins weren't in the C-JIT path until this change. Both now
-  emit per-element loops in the per-op path, but the real win is fusion.
 
 ## Generated C examples
 

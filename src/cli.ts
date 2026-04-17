@@ -336,7 +336,9 @@ Environment variables:
   NUMBL_CC                C compiler for --opt 2 (default: cc)
   NUMBL_CFLAGS            Extra flags appended to the C-JIT compile command
   NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
-                          reproducibility or debugging portability issues)`);
+                          reproducibility or debugging portability issues)
+  NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in
+                          (default: 100000)`);
 }
 
 // ── Option parsing helpers ───────────────────────────────────────────────────
@@ -354,6 +356,7 @@ interface ParsedOptions {
   profileOutput: string | undefined;
   optimization: number;
   fuse: boolean;
+  par: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -370,6 +373,7 @@ function parseOptions(args: string[]): ParsedOptions {
     profileOutput: undefined,
     optimization: 1,
     fuse: false,
+    par: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -460,6 +464,9 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--fuse":
         opts.fuse = true;
+        break;
+      case "--par":
+        opts.par = true;
         break;
       default:
         if (args[i].startsWith("-")) {
@@ -670,6 +677,7 @@ async function executeWithOptions(
 
             optimization: opts.optimization,
             fuse: opts.fuse,
+            par: opts.par,
           },
           workspaceFiles,
           mainFileName,
@@ -731,6 +739,7 @@ async function executeWithOptions(
           onInput,
           optimization: opts.optimization,
           fuse: opts.fuse,
+          par: opts.par,
         },
         workspaceFiles,
         mainFileName,
@@ -771,6 +780,7 @@ async function executeWithOptions(
           onInput,
           optimization: opts.optimization,
           fuse: opts.fuse,
+          par: opts.par,
         },
         workspaceFiles,
         mainFileName,

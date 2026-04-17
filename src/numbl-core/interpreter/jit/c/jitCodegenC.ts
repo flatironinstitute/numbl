@@ -172,6 +172,8 @@ interface EmitCtx {
   paramTensorNames: Set<string>;
   /** Set when tic or toc is used — triggers __tic_state parameter. */
   needsTicState: boolean;
+  /** Emit `#pragma omp parallel for` on fused non-reduction loops. */
+  openmp: boolean;
 }
 
 // ── Expression emission ───────────────────────────────────────────────
@@ -566,7 +568,8 @@ function emitStmts(
         ctx.tensorVars,
         ctx.paramTensorNames,
         ctx.outputTensorNames,
-        ctx.localTensorNames
+        ctx.localTensorNames,
+        ctx.openmp
       );
       for (const h of helpers) ctx.helpersNeeded.add(h);
       i += entry.chain.length;
@@ -909,7 +912,8 @@ export function generateC(
   _outputType: JitType | null,
   outputTypes: JitType[],
   fnName: string,
-  fuse?: boolean
+  fuse?: boolean,
+  openmp?: boolean
 ): GenerateCResult {
   if (params.length !== argTypes.length) {
     throw new Error("C-JIT codegen: params/argTypes length mismatch");
@@ -958,6 +962,7 @@ export function generateC(
     fuse: fuse ?? false,
     paramTensorNames,
     needsTicState: false,
+    openmp: openmp ?? false,
   };
 
   const indent = "  ";

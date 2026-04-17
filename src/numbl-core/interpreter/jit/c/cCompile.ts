@@ -53,6 +53,8 @@ interface CEnv {
   opsHeaderDir: string;
   /** Pre-computed hash of all env-level inputs (compiler, platform, libs, git HEAD). */
   envHash: string;
+  /** True when the compiler accepts `-fopenmp` (full thread-level parallelism). */
+  openmpAvailable: boolean;
 }
 
 let _envCache: CEnv | null | undefined;
@@ -161,6 +163,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
   }
 
   const skipNativeDefaults = !!process.env.NUMBL_NO_NATIVE_CFLAGS;
+  let openmpAvailable = false;
   if (!skipNativeDefaults) {
     for (const flag of [
       "-march=native",
@@ -170,6 +173,10 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     ]) {
       if (compilerAcceptsFlag(cc, flag)) flags.push(flag);
     }
+    // Probe -fopenmp but don't add to default flags — it's only used
+    // per compilation unit when --par is active. Adding it globally
+    // can change GCC codegen even for non-parallel code.
+    openmpAvailable = compilerAcceptsFlag(cc, "-fopenmp");
   }
 
   const userFlags = process.env.NUMBL_CFLAGS;
@@ -199,6 +206,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     /* not in a git repo — skip */
   }
   envH.update(readFileSync(opsLibPath));
+  envH.update(flags.join(" "));
   const envHash = envH.digest("hex");
 
   _envCache = {
@@ -209,6 +217,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     opsLibPath,
     opsHeaderDir,
     envHash,
+    openmpAvailable,
   };
 
   process.stderr.write(
@@ -224,6 +233,7 @@ function computeSourceHash(cSource: string, env: CEnv): string {
   const h = createHash("sha256");
   h.update(cSource);
   h.update(env.envHash);
+  h.update(env.flags.join(" "));
   return h.digest("hex");
 }
 
@@ -255,7 +265,8 @@ export function compileAndLoad(
   cSource: string,
   koffiSignature: string,
   _cFnName: string,
-  log?: (m: string) => void
+  log?: (m: string) => void,
+  extraFlags?: string[]
 ): CompiledCFn | null {
   const env = getCEnv(log);
   if (!env) return null;
@@ -266,11 +277,15 @@ export function compileAndLoad(
     return null;
   }
 
-  const hash = computeSourceHash(cSource, env);
-  const cachedPath = join(env.cacheDir, `${hash}.so`);
+  const effectiveEnv =
+    extraFlags && extraFlags.length > 0
+      ? { ...env, flags: [...env.flags, ...extraFlags] }
+      : env;
+  const hash = computeSourceHash(cSource, effectiveEnv);
+  const cachedPath = join(effectiveEnv.cacheDir, `${hash}.so`);
 
   if (!existsSync(cachedPath)) {
-    const built = compileToCache(cSource, cachedPath, env, log);
+    const built = compileToCache(cSource, cachedPath, effectiveEnv, log);
     if (!built) return null;
   }
 
@@ -362,4 +377,11 @@ export function cJitCacheSize(): number {
 
 export function readCachedBuild(cachedPath: string): Buffer {
   return readFileSync(cachedPath);
+}
+
+/** True when the C compiler supports `-fopenmp` (thread-level parallelism).
+ *  Triggers env discovery on first call so it can be used before compileAndLoad. */
+export function cJitOpenmpAvailable(log?: (m: string) => void): boolean {
+  const env = getCEnv(log);
+  return env?.openmpAvailable ?? false;
 }

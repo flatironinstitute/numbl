@@ -16,7 +16,7 @@
 import { registerCJitBackend } from "./cJitBackend.js";
 import { checkCFeasibility } from "./c/cFeasibility.js";
 import { generateC, type COutputDesc } from "./c/jitCodegenC.js";
-import { compileAndLoad } from "./c/cCompile.js";
+import { compileAndLoad, cJitOpenmpAvailable } from "./c/cCompile.js";
 import { jitTypeKey } from "./jitTypes.js";
 import { type RuntimeTensor } from "../../runtime/types.js";
 import { uninitFloat64 } from "../../runtime/alloc.js";
@@ -55,17 +55,20 @@ registerCJitBackend({
         outputType,
         outputTypes,
         fn.name.replace(/[^A-Za-z0-9_]/g, "_"),
-        interp.fuse
+        interp.fuse,
+        interp.par && cJitOpenmpAvailable()
       );
     } catch {
       return null;
     }
 
+    const useOmp = interp.par && cJitOpenmpAvailable();
     const loaded = compileAndLoad(
       gen.cSource,
       gen.koffiSignature,
       gen.cFnName,
-      interp.log
+      interp.log,
+      useOmp ? ["-fopenmp"] : undefined
     );
     if (!loaded) return null;
 

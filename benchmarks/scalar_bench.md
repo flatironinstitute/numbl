@@ -40,15 +40,18 @@ All runs produce the same `result = 2070.336478567545` (to FP rounding).
 - **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
 - **MATLAB:** R2025b Update 5 · **Octave:** 9.4.0
 
-Median of 3 runs per numbl mode; single run for MATLAB/Octave.
+Median of 3 runs for all modes.
 
 | Mode                      |  Wall time |       Throughput | Speedup vs `--opt 0` |
 | ------------------------- | ---------: | ---------------: | -------------------: |
-| `--opt 0` (interpreter)   |    34.32 s |    0.87 Mcalls/s |                   1× |
-| `--opt 1` (JS-JIT)        |     0.31 s |      97 Mcalls/s |                ~111× |
-| `--opt 2` (C-JIT)         | **0.23 s** | **129 Mcalls/s** |            **~149×** |
-| MATLAB R2025b `-batch`    |     0.30 s |      98 Mcalls/s |                ~114× |
-| MATLAB R2025b (8 threads) |     0.41 s |      73 Mcalls/s |                 ~84× |
+| `--opt 0` (interpreter)   |    30.71 s |    0.98 Mcalls/s |                   1× |
+| `--opt 1` (JS-JIT)        |     0.30 s |     101 Mcalls/s |                ~103× |
+| `--opt 2` (C-JIT)         | **0.22 s** | **135 Mcalls/s** |            **~139×** |
+| `--opt 2 --fuse` (C-JIT)  |     0.23 s |     133 Mcalls/s |                ~136× |
+| `--opt 2 --fuse --par`    |     0.22 s |     135 Mcalls/s |                ~139× |
+| MATLAB R2025b (1 thread)  |     0.30 s |     101 Mcalls/s |                ~103× |
+| MATLAB R2025b `-batch`    |     0.30 s |     100 Mcalls/s |                ~103× |
+| MATLAB R2025b (8 threads) |     0.30 s |     100 Mcalls/s |                ~102× |
 | Octave 9.4 `--eval`       |    65.03 s |    0.46 Mcalls/s |               ~0.53× |
 
 ### macOS (N=60 000, M=500, 30M sin+div)
@@ -64,18 +67,6 @@ Median of 3 runs per numbl mode; single run for MATLAB/Octave.
 | `--opt 1` (JS-JIT)      |     0.23 s |     131 Mcalls/s |                 ~78× |
 | `--opt 2` (C-JIT)       | **0.09 s** | **351 Mcalls/s** |            **~210×** |
 | MATLAB R2026a `-batch`  |     0.20 s |     148 Mcalls/s |                 ~88× |
-
-## Reading the table
-
-- **`--opt 2` (C-JIT) is ~33% faster than `--opt 1` (JS-JIT)** and
-  ~23% faster than MATLAB. The C compiler (`-O2 -march=native`) produces
-  tighter scalar code than V8's TurboFan for this carried-dependency
-  `sin` loop.
-- **V8's TurboFan is remarkably good** — `--opt 1` matches MATLAB's
-  performance on this benchmark. The larger structural win for the C-JIT
-  surfaces on tensor workloads (see [tensor_ops_bench.md](tensor_ops_bench.md)).
-- **Octave** is ~2× slower than numbl's _interpreter_. Octave's
-  experimental JIT is off by default in 9.x.
 
 ## Notes on timing methodology
 

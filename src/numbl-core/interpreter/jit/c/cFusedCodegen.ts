@@ -26,6 +26,62 @@ import {
   FUSIBLE_TENSOR_BINARY_OPS,
 } from "../fusionOps.js";
 
+/** Minimum element count before `#pragma omp parallel for` kicks in.
+ *  Below this, thread-spawn overhead dominates. */
+const OMP_PARALLEL_THRESHOLD =
+  parseInt(process.env.NUMBL_OMP_THRESHOLD || "", 10) || 100_000;
+
+/** Builtins that are expensive enough per element to justify thread-spawn overhead. */
+const HEAVY_OPS = new Set([
+  "sin",
+  "cos",
+  "tan",
+  "asin",
+  "acos",
+  "atan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "asinh",
+  "acosh",
+  "atanh",
+  "exp",
+  "expm1",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "pow",
+  "atan2",
+  "hypot",
+]);
+
+/** Count heavy (transcendental) ops in an expression tree. */
+function countHeavyOps(expr: JitExpr): number {
+  switch (expr.tag) {
+    case "NumberLiteral":
+    case "Var":
+      return 0;
+    case "Binary":
+      return (
+        (expr.op === BinaryOperation.Pow || expr.op === BinaryOperation.ElemPow
+          ? 1
+          : 0) +
+        countHeavyOps(expr.left) +
+        countHeavyOps(expr.right)
+      );
+    case "Unary":
+      return countHeavyOps(expr.operand);
+    case "Call":
+      return (
+        (HEAVY_OPS.has(expr.name) ? 1 : 0) +
+        expr.args.reduce((n, a) => n + countHeavyOps(a), 0)
+      );
+    default:
+      return 0;
+  }
+}
+
 const MANGLE_PREFIX = "v_";
 
 function mangle(name: string): string {
@@ -332,7 +388,8 @@ export function emitFusedChain(
   allTensorVars: ReadonlySet<string>,
   paramTensors: ReadonlySet<string>,
   outputTensorNames: ReadonlySet<string>,
-  localTensorNames: ReadonlySet<string>
+  localTensorNames: ReadonlySet<string>,
+  openmp?: boolean
 ): Set<string> {
   const helpersNeeded = new Set<string>();
 
@@ -392,8 +449,24 @@ export function emitFusedChain(
   const chainLocals = new Set<string>();
 
   // Open the fused loop.
+  // Conditions for parallel-for:
+  //  1. Writes to output/param tensors (not just local temporaries
+  //     consumed by subsequent per-op code — parallelizing those scatters
+  //     data across caches and hurts the sequential consumer).
+  //  2. Chain body has transcendental ops (sin, exp, etc.) so the
+  //     per-element compute justifies thread-spawn overhead.
+  const writesToOutput = [...writeBack].some(
+    d => outputTensorNames.has(d) || paramTensors.has(d)
+  );
+  const heavyOps = chain.assigns.reduce((n, a) => n + countHeavyOps(a.expr), 0);
   if (!chain.reduction) {
-    lines.push(`${indent}#pragma omp simd`);
+    if (openmp && writesToOutput && heavyOps > 0) {
+      lines.push(
+        `${indent}#pragma omp parallel for simd if(${lenVar} >= ${OMP_PARALLEL_THRESHOLD})`
+      );
+    } else {
+      lines.push(`${indent}#pragma omp simd`);
+    }
   }
   lines.push(`${indent}for (int64_t __i = 0; __i < ${lenVar}; __i++) {`);
   const inner = indent + "  ";

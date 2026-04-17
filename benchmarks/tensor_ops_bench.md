@@ -21,7 +21,8 @@ loop-JIT can specialize the full iteration as a single C function under
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 0          # interpreter
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 1          # JS-JIT
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2          # C-JIT (per-op)
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2 --fuse   # C-JIT (fused)
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2 --fuse        # C-JIT (fused)
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2 --fuse --par  # C-JIT (fused+parallel)
 matlab -batch "run('benchmarks/tensor_ops_bench.m')"
 (cd benchmarks && octave --no-gui --quiet --eval tensor_ops_bench)
 bash benchmarks/tensor_ops_bench_compare.sh                           # all of the above
@@ -38,17 +39,19 @@ All runs produce the same check values (to FP rounding).
 
 Median of 3 runs for all modes.
 
-| Mode                      |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
-| ------------------------- | -----: | -----: | -----: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)   | 5.29 s | 1.25 s | 2.42 s |  0.52 s | 0.27 s | 0.96 s |
-| `--opt 1` (JS-JIT)        | 3.27 s | 0.66 s | 1.36 s |  0.34 s | 0.30 s | 0.61 s |
-| `--opt 2` (C-JIT)         | 3.09 s | 0.66 s | 1.34 s |  0.30 s | 0.25 s | 0.55 s |
-| `--opt 2 --fuse` (C-JIT)  | 1.56 s | 0.10 s | 0.57 s |  0.28 s | 0.24 s | 0.38 s |
-| MATLAB R2025b `-batch`    | 2.86 s | 0.29 s | 1.82 s |  0.17 s | 0.18 s | 0.37 s |
-| MATLAB R2025b (8 threads) | 2.18 s | 0.40 s | 0.95 s |  0.16 s | 0.30 s | 0.35 s |
-| Octave 9.4 `--eval`       | 7.75 s | 0.98 s | 4.41 s |  0.75 s | 0.30 s | 1.40 s |
-| C baseline, per-op        | 2.63 s | 0.58 s | 1.22 s |  0.24 s | 0.11 s | 0.49 s |
-| C baseline, fused         | 1.03 s | 0.10 s | 0.68 s |  0.07 s | 0.04 s | 0.13 s |
+| Mode                           |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
+| ------------------------------ | -----: | -----: | -----: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)        | 5.50 s | 1.32 s | 2.38 s |  0.44 s | 0.28 s | 1.08 s |
+| `--opt 1` (JS-JIT)             | 3.23 s | 0.62 s | 1.37 s |  0.34 s | 0.30 s | 0.60 s |
+| `--opt 2` (C-JIT)              | 3.16 s | 0.66 s | 1.33 s |  0.36 s | 0.27 s | 0.54 s |
+| `--opt 2 --fuse` (C-JIT)       | 1.65 s | 0.08 s | 0.63 s |  0.27 s | 0.26 s | 0.40 s |
+| `--opt 2 --fuse --par` (C-JIT) | 1.44 s | 0.12 s | 0.29 s |  0.34 s | 0.29 s | 0.41 s |
+| MATLAB R2025b (1 thread)       | 4.95 s | 0.30 s | 3.42 s |  0.32 s | 0.21 s | 0.70 s |
+| MATLAB R2025b `-batch`         | 3.02 s | 0.24 s | 2.00 s |  0.20 s | 0.19 s | 0.39 s |
+| MATLAB R2025b (8 threads)      | 2.10 s | 0.24 s | 1.16 s |  0.13 s | 0.28 s | 0.29 s |
+| Octave 9.4 `--eval`            | 7.75 s | 0.98 s | 4.41 s |  0.75 s | 0.30 s | 1.40 s |
+| C baseline, per-op             | 2.63 s | 0.58 s | 1.22 s |  0.24 s | 0.11 s | 0.49 s |
+| C baseline, fused              | 1.03 s | 0.10 s | 0.68 s |  0.07 s | 0.04 s | 0.13 s |
 
 ### macOS (N=2 000 000, trials=50)
 
@@ -65,38 +68,6 @@ Median of 3 runs for all modes.
 | `--opt 2 --fuse` (C-JIT)   |     1.93 s |     0.03 s | 0.93 s |  0.11 s |     0.67 s |     0.20 s |
 | MATLAB R2026a (1 thread)   |     2.83 s |     0.20 s | 1.81 s |  0.12 s |     0.31 s |     0.40 s |
 | MATLAB R2026a (16 threads) | **0.46 s** | **0.05 s** | 0.22 s |  0.07 s | **0.05 s** | **0.07 s** |
-
-On a single thread the fused C-JIT is 1.5× faster than MATLAB. With 16 threads
-MATLAB auto-parallelizes the element-wise ops and wins wall time by ~4×.
-numbl's fused loops are per-core faster than MATLAB's (compare the
-`--opt 2 --fuse` row to MATLAB 1 thread); parallelizing them with
-`#pragma omp parallel for` would close the multi-threaded gap.
-
-## Reading the table
-
-- **`--opt 2 --fuse` is 1.8× faster than MATLAB overall** and 2× faster
-  than per-op C-JIT. The fused codegen collapses consecutive tensor
-  element-wise assigns into a single `for` loop with inline scalar
-  expressions per element — no libnumbl_ops calls, no intermediate
-  buffers, one memory pass. The compiler auto-vectorizes via
-  `#pragma omp simd` and `-fopenmp-simd -ffast-math`.
-- **Binary fusion matches the hand-written C baseline** (0.10 s vs
-  0.10 s). All four ops run in a single SIMD-vectorized loop with one
-  read of `x[i]`/`y[i]` and one write of `r[i]`.
-- **Unary fusion beats the C baseline** (0.57 s vs 0.68 s). The fused
-  loop keeps all transcendentals (`exp`, `cos`, `sin`, `tanh`) in
-  registers; the baseline was compiled separately and may not benefit
-  from the same cross-function inlining.
-- **MATLAB is faster on reductions and comparisons** (0.17 s vs 0.28 s).
-  The comparison kernel's `sum(c1 .* c2)` pattern is not yet fused into
-  the comparison chain — `c1` and `c2` are fused, but the subsequent
-  `sum(c1.*c2)` falls back to per-op. Fusing reduction of arbitrary
-  tensor expressions (not just the last chain variable) is future work.
-- **Per-op C-JIT (`--opt 2`) is ~5% faster than JS-JIT** on the same
-  per-statement architecture. The C-JIT eliminates per-statement JS
-  overhead; the main wins are on reductions and comparisons.
-- **Octave** is ~5× slower than numbl's fused C-JIT. Octave's
-  experimental JIT is off by default in 9.x.
 
 ## C-JIT architecture
 
