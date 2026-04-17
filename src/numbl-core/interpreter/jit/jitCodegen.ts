@@ -625,6 +625,13 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
       }
       lines.push(`${indent}$rt.$line = ${stmt.line};`);
       break;
+
+    case "AssertCJit":
+      // C-JIT was expected but we're running JS-JIT fallback → throw.
+      lines.push(
+        `${indent}throw new Error("%!numbl:assert_jit c: expected C-JIT compilation, but fell back to JS-JIT at --opt 2.");`
+      );
+      break;
   }
 }
 

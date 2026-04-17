@@ -167,9 +167,18 @@ export function tokenizeDetailed(input: string): SpannedToken[] {
     // ── Line comment ──
     const lineCfg = TOKEN_CONFIG.comments.lineComment;
     if (ch === lineCfg.start) {
-      // Skip to end of line
+      const start = pos;
       const eol = input.indexOf("\n", pos);
-      pos = eol >= 0 ? eol : input.length;
+      const end = eol >= 0 ? eol : input.length;
+      // Check for %!numbl: magic directive
+      const DIRECTIVE_PREFIX = "%!numbl:";
+      if (
+        input.slice(pos, pos + DIRECTIVE_PREFIX.length) === DIRECTIVE_PREFIX
+      ) {
+        const lexeme = input.slice(start, end).trimEnd();
+        out.push({ token: Token.Directive, lexeme, start, end });
+      }
+      pos = end;
       continue;
     }
 

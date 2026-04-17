@@ -101,6 +101,20 @@ export class StatementParser extends ClassParser {
       }
       case Token.Function:
         return this.parseFunction();
+      case Token.Directive: {
+        const token = this.next()!;
+        // lexeme is e.g. "%!numbl:assert_jit c"
+        const body = token.lexeme.slice("%!numbl:".length).trim();
+        const parts = body.split(/\s+/);
+        const directive = parts[0];
+        const args = parts.slice(1);
+        return {
+          type: "Directive",
+          directive,
+          args,
+          span: this.spanFrom(token.position, token.end),
+        };
+      }
       case Token.LBracket:
         // Multi-assign like [a,b] = f() or [X{N}, W{N}] = f()
         return this.tryParseMultiAssign();

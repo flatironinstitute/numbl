@@ -20,6 +20,10 @@ export function getTicTime(): number {
   return ticTime;
 }
 
+export function setTicTime(ms: number): void {
+  ticTime = ms;
+}
+
 defineBuiltin({
   name: "tic",
   cases: [
@@ -31,6 +35,10 @@ defineBuiltin({
       },
     },
   ],
+  jitEmit: (argCode, argTypes) => {
+    if (argTypes.length !== 0) return null;
+    return `$h.__tic()`;
+  },
 });
 
 // toc is registered as a special builtin in specialBuiltins.ts

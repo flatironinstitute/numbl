@@ -37,6 +37,9 @@ import { NUMBL_VERSION } from "../../../version.js";
 export interface CompiledCFn {
   fn: (...args: unknown[]) => unknown;
   cachedPath: string;
+  /** The loaded koffi library handle, for declaring additional exports. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  lib: any;
 }
 
 // ── Environment / tool discovery ───────────────────────────────────────
@@ -277,6 +280,7 @@ export function compileAndLoad(
     return {
       fn: fn as (...args: unknown[]) => unknown,
       cachedPath,
+      lib,
     };
   } catch (e) {
     log?.(`C-JIT: koffi load failed for ${cachedPath}: ${String(e)}`);

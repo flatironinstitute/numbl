@@ -170,6 +170,8 @@ interface EmitCtx {
   fuse: boolean;
   /** Tensor parameter names (for fusion analysis). */
   paramTensorNames: Set<string>;
+  /** Set when tic or toc is used — triggers __tic_state parameter. */
+  needsTicState: boolean;
 }
 
 // ── Expression emission ───────────────────────────────────────────────
@@ -472,6 +474,15 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     throw new Error(
       `C-JIT codegen: reduction of complex tensor expr outside statement context`
     );
+  }
+  // tic/toc: timer builtins using clock_gettime via __tic_state.
+  if (expr.name === "tic" && expr.args.length === 0) {
+    ctx.needsTicState = true;
+    return `__numbl_tic(__tic_state)`;
+  }
+  if (expr.name === "toc" && expr.args.length === 0) {
+    ctx.needsTicState = true;
+    return `__numbl_toc(__tic_state)`;
   }
   // Scalar math builtin.
   const cName = BUILTIN_TO_C[expr.name];
@@ -828,6 +839,10 @@ function emitStmt(
     case "SetLoc":
       return;
 
+    case "AssertCJit":
+      // C-JIT codegen reached → assertion satisfied, elide.
+      return;
+
     default:
       throw new Error(`C-JIT codegen: unsupported stmt ${stmt.tag}`);
   }
@@ -880,6 +895,8 @@ export interface GenerateCResult {
   usesTensors: boolean;
   /** koffi function signature string for declaring the C function. */
   koffiSignature: string;
+  /** True when tic/toc are used — the function has an extra `double*` param. */
+  needsTicState: boolean;
 }
 
 export function generateC(
@@ -940,6 +957,7 @@ export function generateC(
     localTensorNames,
     fuse: fuse ?? false,
     paramTensorNames,
+    needsTicState: false,
   };
 
   const indent = "  ";
@@ -1068,6 +1086,12 @@ export function generateC(
     }
   }
 
+  // Append __tic_state parameter when tic/toc are used.
+  if (ctx.needsTicState) {
+    sigParts.push(`double *__tic_state`);
+    koffiParts.push("double *");
+  }
+
   const paramList = sigParts.length > 0 ? sigParts.join(", ") : "void";
   const signature = `void ${cFnName}(${paramList})`;
   const koffiSignature = `void ${cFnName}(${koffiParts.join(", ")})`;
@@ -1084,13 +1108,36 @@ export function generateC(
 
   const parts: string[] = [];
   parts.push(`/* JIT C (koffi): ${fnName}(${params.join(", ")}) */`);
+  parts.push(`#include <math.h>`);
   if (usesTensors) {
-    parts.push(`#include <math.h>`);
     parts.push(`#include <stdint.h>`);
     parts.push(`#include <stdlib.h>`);
     parts.push(`#include "numbl_ops.h"`);
-  } else {
-    parts.push(`#include <math.h>`);
+  }
+  if (ctx.needsTicState) {
+    parts.push(`#include <time.h>`);
+    if (!usesTensors) parts.push(`#include <stdint.h>`);
+  }
+
+  // tic/toc helpers: clock_gettime-based timer + exported get_monotonic_time.
+  if (ctx.needsTicState) {
+    parts.push("");
+    parts.push(`static double __numbl_clock(void) {`);
+    parts.push(`  struct timespec ts;`);
+    parts.push(`  clock_gettime(CLOCK_MONOTONIC, &ts);`);
+    parts.push(`  return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;`);
+    parts.push(`}`);
+    parts.push(`static double __numbl_tic(double *state) {`);
+    parts.push(`  double t = __numbl_clock();`);
+    parts.push(`  *state = t;`);
+    parts.push(`  return t;`);
+    parts.push(`}`);
+    parts.push(`static double __numbl_toc(const double *state) {`);
+    parts.push(`  return __numbl_clock() - *state;`);
+    parts.push(`}`);
+    parts.push(`double get_monotonic_time(void) {`);
+    parts.push(`  return __numbl_clock();`);
+    parts.push(`}`);
   }
 
   // Reduction helper: always needed if tensors are involved.
@@ -1131,5 +1178,6 @@ export function generateC(
     outputDescs,
     usesTensors,
     koffiSignature,
+    needsTicState: ctx.needsTicState,
   };
 }

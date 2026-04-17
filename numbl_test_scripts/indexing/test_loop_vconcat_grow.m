@@ -13,14 +13,14 @@
 % emits `$h.vconcatGrow1r(base, value)` — a per-iter allocate-and-copy
 % helper that returns a fresh `(k+1, 1)` tensor.
 %
-% `assert_jit_compiled()` is placed inside each outer loop body to
+% ``%!numbl:assert_jit`` is placed inside each outer loop body to
 % assert the surrounding loop got JIT-compiled — if the marker call
 % survives to the interpreter (because lowering bailed), it throws.
 
 % 1) Basic growth: build a column vector 1..n via `[it; i]`.
 it = [];
 for i = 1:20
-    assert_jit_compiled();
+    %!numbl:assert_jit
     it = [it; i];
 end
 assert(length(it) == 20, '1: length after grow');
@@ -36,7 +36,7 @@ it2 = [];
 expected_count = 0;
 expected_sum = 0;
 for i = 1:50
-    assert_jit_compiled();
+    %!numbl:assert_jit
     if mod(i, 2) == 0
         it2 = [it2; i];
         expected_count = expected_count + 1;
@@ -56,7 +56,7 @@ assert(actual_sum == expected_sum, '2: even sum');
 totallen = 0;
 totalsum = 0;
 for i = 1:30
-    assert_jit_compiled();
+    %!numbl:assert_jit
     it3 = [];
     for j = 1:5
         if mod(i + j, 3) == 0
@@ -96,7 +96,7 @@ assert(totalsum == ref_totalsum, '3: totalsum mismatch');
 %    the tensor's final shape flows out of the JIT'd loop correctly.
 it4 = [];
 for i = 1:7
-    assert_jit_compiled();
+    %!numbl:assert_jit
     it4 = [it4; i * i];
 end
 assert(length(it4) == 7, '4: post-loop length');
@@ -107,7 +107,7 @@ assert(it4(7) == 49, '4: it4(7)');
 %    same outer iter — exercises the hoist refresh on both assigns.
 acc = 0;
 for i = 1:10
-    assert_jit_compiled();
+    %!numbl:assert_jit
     it5 = [];
     it5 = [it5; i];
     it5 = [it5; i * 2];

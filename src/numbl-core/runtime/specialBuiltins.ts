@@ -154,25 +154,40 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     }
   });
 
-  registerSpecial("toc", (nargout, args) => {
-    // tic returns performance.now()/1000, so toc(h) is the elapsed time
-    // since that specific handle was captured. Without an argument, fall
-    // back to the most recent tic stored in the global ticTime.
-    let startSeconds: number;
-    if (args.length === 0) {
-      startSeconds = getTicTime() / 1000;
-    } else {
-      const h = ensureRuntimeValue(args[0]);
-      if (!isRuntimeNumber(h)) {
-        throw new RuntimeError("toc: argument must be a tic handle");
-      }
-      startSeconds = toNumber(h);
-    }
-    const elapsed = performance.now() / 1000 - startSeconds;
-    if (nargout === 0) {
-      rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
-    }
-    return RTV.num(elapsed);
+  // toc: registered with proper output types so the JIT can lower it.
+  // Only the no-arg assigned form (t = toc) is JIT-able; bare `toc;`
+  // (nargout=0, prints elapsed) falls back to the interpreter.
+  registerDynamicIBuiltin({
+    name: "toc",
+    resolve: argTypes => {
+      // Only support 0-arg toc for JIT (no handle argument)
+      if (argTypes.length > 1) return null;
+      return {
+        outputTypes: [{ kind: "number" as const }],
+        apply: (args: RuntimeValue[], na: number) => {
+          let startSeconds: number;
+          if (args.length === 0) {
+            startSeconds = getTicTime() / 1000;
+          } else {
+            const h = ensureRuntimeValue(args[0]);
+            if (!isRuntimeNumber(h)) {
+              throw new RuntimeError("toc: argument must be a tic handle");
+            }
+            startSeconds = toNumber(h);
+          }
+          const elapsed = performance.now() / 1000 - startSeconds;
+          if (na === 0) {
+            rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
+          }
+          return RTV.num(elapsed);
+        },
+      };
+    },
+    jitEmit: (argCode, argTypes) => {
+      // Only 0-arg toc is JIT-able
+      if (argTypes.length !== 0) return null;
+      return `$h.__toc()`;
+    },
   });
 
   registerSpecial("warning", (nargout, args) => {

@@ -20,6 +20,7 @@ import {
 } from "../../runtime/types.js";
 
 import { uninitFloat64 } from "../../runtime/alloc.js";
+import { getTicTime, setTicTime } from "../builtins/time-system.js";
 
 import {
   mTranspose,
@@ -209,6 +210,16 @@ export const jitHelpers = {
   cNeg,
   cConj,
   cAngle,
+
+  // tic/toc: set/read the global tic timer from JIT'd code.
+  __tic: (): number => {
+    const t = performance.now();
+    setTicTime(t);
+    return t / 1000;
+  },
+  __toc: (): number => {
+    return performance.now() / 1000 - getTicTime() / 1000;
+  },
 
   // Scalar math
   mod,

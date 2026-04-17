@@ -80,6 +80,9 @@ export enum Token {
   Newline,
   Section,
   Error,
+
+  // Directives (magic comments like %!numbl:assert_jit)
+  Directive,
 }
 
 // ── Spanned token ───────────────────────────────────────────────────────

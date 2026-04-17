@@ -6,7 +6,7 @@
 % grow-and-copy line `isp(1:nn) = itemp` where `itemp` is a plain local
 % holding the old buffer reference.
 %
-% `assert_jit_compiled()` is placed inside each outer loop body to
+% ``%!numbl:assert_jit`` is placed inside each outer loop body to
 % assert the surrounding loop got JIT-compiled — if the marker call
 % survives to the interpreter (because lowering bailed), it throws.
 
@@ -17,7 +17,7 @@ for i = 1:20
 end
 dst = zeros(20, 1);
 for k = 1:1
-    assert_jit_compiled();
+    %!numbl:assert_jit
     dst(1:20) = src;
 end
 for i = 1:20
@@ -31,7 +31,7 @@ for i = 1:10
     b(i) = i * 7;
 end
 for k = 1:1
-    assert_jit_compiled();
+    %!numbl:assert_jit
     a(1:10) = b;
     a(5) = 999;
     a(10) = -1;
@@ -48,7 +48,7 @@ nout_max = 4;
 out_pt = zeros(nout_max, 1);
 nhit = 0;
 for i = 1:10
-    assert_jit_compiled();
+    %!numbl:assert_jit
     if nhit >= nout_max
         tmp_pt = out_pt;
         nout_max_new = nout_max * 2;
@@ -75,7 +75,7 @@ for i = 1:5
     q(i) = i + 100;
 end
 for k = 1:1
-    assert_jit_compiled();
+    %!numbl:assert_jit
     p(3:7) = q;
 end
 assert(p(1) == 0, '4: prefix untouched');
@@ -90,7 +90,7 @@ try
     r1 = zeros(10, 1);
     r2 = zeros(7, 1);
     for k = 1:1
-        assert_jit_compiled();
+        %!numbl:assert_jit
         r1(1:10) = r2;
     end
 catch

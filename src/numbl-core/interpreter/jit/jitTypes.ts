@@ -670,7 +670,12 @@ export type JitStmt =
       args: JitExpr[];
       outputTypes: JitType[];
     }
-  | { tag: "SetLoc"; line: number };
+  | { tag: "SetLoc"; line: number }
+  | {
+      /** C-JIT assertion: if this JitStmt survives to JS codegen at --opt 2,
+       *  emit a runtime throw. The C-JIT codegen elides it. */
+      tag: "AssertCJit";
+    };
 
 // (Also defined in JitExpr below)
 

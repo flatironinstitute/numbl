@@ -42,13 +42,14 @@ All runs produce the same `result = 2070.336478567545` (to FP rounding).
 
 Median of 3 runs per numbl mode; single run for MATLAB/Octave.
 
-| Mode                    |  Wall time |       Throughput | Speedup vs `--opt 0` |
-| ----------------------- | ---------: | ---------------: | -------------------: |
-| `--opt 0` (interpreter) |    34.32 s |    0.87 Mcalls/s |                   1× |
-| `--opt 1` (JS-JIT)      |     0.31 s |      97 Mcalls/s |                ~111× |
-| `--opt 2` (C-JIT)       | **0.23 s** | **129 Mcalls/s** |            **~149×** |
-| MATLAB R2025b `-batch`  |     0.30 s |      98 Mcalls/s |                ~114× |
-| Octave 9.4 `--eval`     |    65.03 s |    0.46 Mcalls/s |               ~0.53× |
+| Mode                      |  Wall time |       Throughput | Speedup vs `--opt 0` |
+| ------------------------- | ---------: | ---------------: | -------------------: |
+| `--opt 0` (interpreter)   |    34.32 s |    0.87 Mcalls/s |                   1× |
+| `--opt 1` (JS-JIT)        |     0.31 s |      97 Mcalls/s |                ~111× |
+| `--opt 2` (C-JIT)         | **0.23 s** | **129 Mcalls/s** |            **~149×** |
+| MATLAB R2025b `-batch`    |     0.30 s |      98 Mcalls/s |                ~114× |
+| MATLAB R2025b (8 threads) |     0.41 s |      73 Mcalls/s |                 ~84× |
+| Octave 9.4 `--eval`       |    65.03 s |    0.46 Mcalls/s |               ~0.53× |
 
 ### macOS (N=60 000, M=500, 30M sin+div)
 

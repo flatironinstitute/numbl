@@ -37,13 +37,14 @@ All runs produce the same check values (to FP rounding).
 
 Median of 3 runs for all modes.
 
-| Mode                     |  Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
-| ------------------------ | -----: | -----: | -----: | ------: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)  | 15.3 s | 0.53 s | 2.10 s |  0.35 s |  0.58 s | 5.21 s | 6.29 s |
-| `--opt 1` (JS-JIT)       | 15.1 s | 0.37 s | 1.20 s |  0.27 s |  0.41 s | 5.84 s | 6.81 s |
-| `--opt 2` (C-JIT)        | 15.0 s | 0.30 s | 1.22 s |  0.24 s |  0.34 s | 5.91 s | 6.89 s |
-| `--opt 2 --fuse` (C-JIT) |  1.6 s | 0.12 s | 0.56 s |  0.07 s |  0.37 s | 0.31 s | 0.13 s |
-| MATLAB R2025b `-batch`   |  4.3 s | 0.30 s | 2.21 s |  0.10 s |  0.29 s | 0.94 s | 0.39 s |
+| Mode                      |  Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
+| ------------------------- | -----: | -----: | -----: | ------: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)   | 15.3 s | 0.53 s | 2.10 s |  0.35 s |  0.58 s | 5.21 s | 6.29 s |
+| `--opt 1` (JS-JIT)        | 15.1 s | 0.37 s | 1.20 s |  0.27 s |  0.41 s | 5.84 s | 6.81 s |
+| `--opt 2` (C-JIT)         | 15.0 s | 0.30 s | 1.22 s |  0.24 s |  0.34 s | 5.91 s | 6.89 s |
+| `--opt 2 --fuse` (C-JIT)  |  1.6 s | 0.12 s | 0.56 s |  0.07 s |  0.37 s | 0.31 s | 0.13 s |
+| MATLAB R2025b `-batch`    |  4.3 s | 0.30 s | 2.21 s |  0.10 s |  0.29 s | 0.94 s | 0.39 s |
+| MATLAB R2025b (8 threads) |  2.5 s | 0.15 s | 1.07 s |  0.19 s |  0.27 s | 0.55 s | 0.27 s |
 
 ### macOS (N=2 000 000, trials=50)
 

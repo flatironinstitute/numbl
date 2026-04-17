@@ -222,16 +222,20 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
       result = lowerAssignLValue(ctx, stmt);
       break;
     case "ExprStmt":
-      // Marker call `assert_jit_compiled()` is elided to nothing — its
-      // job is done by the fact that we successfully reached this point
-      // in the lowering. Anything else is a bail (an ExprStmt would set
-      // `ans` in the env, which the JIT codegen doesn't do).
+      // Most ExprStmts set `ans` in the env, which the JIT codegen
+      // doesn't do — bail. Exception: `tic;` (no args, no assignment)
+      // is a side-effect-only call that we can JIT.
       if (
         stmt.expr.type === "FuncCall" &&
-        stmt.expr.name === "assert_jit_compiled" &&
-        stmt.expr.args.length === 0
+        stmt.expr.name === "tic" &&
+        stmt.expr.args.length === 0 &&
+        !ctx.env.has("tic")
       ) {
-        return prefix;
+        const lowered = lowerIBuiltinCall(ctx, stmt.expr);
+        if (lowered) {
+          result = [...prefix, { tag: "ExprStmt", expr: lowered }];
+          return result;
+        }
       }
       return null;
     case "If":
@@ -255,6 +259,20 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
     case "MultiAssign":
       result = lowerMultiAssign(ctx, stmt);
       break;
+    case "Directive":
+      if (stmt.directive === "assert_jit") {
+        const wantC = stmt.args.includes("c");
+        // Bare assert_jit: JS-JIT lowering succeeded → elide.
+        // assert_jit c at --opt 1: degrade to JS-JIT check → elide.
+        // assert_jit c at --opt 2: emit AssertCJit so JS codegen can
+        // throw if C-JIT bails back to JS.
+        if (wantC && ctx.interp && ctx.interp.optimization >= 2) {
+          return [...prefix, { tag: "AssertCJit" }];
+        }
+        return prefix;
+      }
+      // Unknown directives: silently elide in JIT.
+      return prefix;
     default:
       return null; // unsupported statement
   }
@@ -1493,22 +1511,6 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "FuncCall": {
-      // Marker call `assert_jit_compiled()` in expression position is
-      // elided to a literal 1. The job of the marker is to fail when the
-      // surrounding loop body bails — reaching this point means lowering
-      // is succeeding, so just substitute a constant.
-      if (
-        expr.name === "assert_jit_compiled" &&
-        expr.args.length === 0 &&
-        !ctx.env.has(expr.name)
-      ) {
-        return {
-          tag: "NumberLiteral",
-          value: 1,
-          jitType: { kind: "number", exact: 1, sign: "positive" },
-        };
-      }
-
       // If the name is a function handle variable, emit an indirect call
       // instead of treating it as indexing. This enables JIT compilation of
       // loops that call function handles (e.g. kern(srcinfo, targinfo) in

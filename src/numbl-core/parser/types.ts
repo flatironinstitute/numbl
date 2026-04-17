@@ -227,6 +227,13 @@ export type Stmt =
       superClass: string | null;
       members: ClassMember[];
       span: Span;
+    }
+  | {
+      /** Magic comment directive, e.g. `%!numbl:assert_jit` or `%!numbl:assert_jit c`. */
+      type: "Directive";
+      directive: string;
+      args: string[];
+      span: Span;
     };
 
 // ── AST Root ─────────────────────────────────────────────────────────────

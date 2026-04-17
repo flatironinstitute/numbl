@@ -292,6 +292,22 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "Import":
       return null;
+
+    case "Directive": {
+      if (stmt.directive === "assert_jit") {
+        const wantC = stmt.args.includes("c");
+        // At --opt 0, all assert_jit directives are no-ops.
+        if (this.optimization === 0) return null;
+        // If the directive survived to the interpreter, the loop wasn't JIT'd.
+        // At --opt >= 1 this is always an error (for both bare and "c" forms —
+        // the "c" variant at --opt 1 degrades to requiring JS-JIT).
+        throw new RuntimeError(
+          `%!numbl:assert_jit${wantC ? " c" : ""}: expected the surrounding loop or function body to be JIT-compiled, but it was interpreted. Run with --opt 0 to silence.`
+        );
+      }
+      // Unknown directives are silently ignored.
+      return null;
+    }
   }
 }
 

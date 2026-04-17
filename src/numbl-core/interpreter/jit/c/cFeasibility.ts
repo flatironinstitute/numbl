@@ -271,6 +271,14 @@ function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
     }
     return checkExpr(a);
   }
+  // tic/toc: scalar timer builtins, no args.
+  if (
+    (expr.name === "tic" || expr.name === "toc") &&
+    expr.args.length === 0 &&
+    expr.jitType.kind === "number"
+  ) {
+    return { ok: true };
+  }
   return { ok: false, reason: `non-C-mappable builtin: ${expr.name}` };
 }
 

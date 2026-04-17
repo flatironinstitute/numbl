@@ -68,32 +68,6 @@ export function getInterpreterSpecialBuiltin(
 
 // ── Handlers ─────────────────────────────────────────────────────────────
 
-/**
- * `assert_jit_compiled()` — runtime marker that asserts the surrounding
- * for/while loop body or function body got JIT-compiled.
- *
- * The numbl JIT lowering elides this call when the surrounding loop body
- * lowers successfully (see jitLower.ts case "ExprStmt" / "FuncCall"). If
- * the call survives to the interpreter, it means JIT lowering bailed —
- * we throw to flag the regression.
- *
- * If `optimization === 0` (JIT explicitly disabled via `--opt 0`), the
- * call is silently a no-op so the same script can run with JIT off
- * without raising. The MATLAB shim in jit-benchmarks/stages also no-ops
- * so the script runs in MATLAB unchanged.
- *
- * Takes priority over any `assert_jit_compiled.m` user file via the
- * special-builtin path in callFunction.
- */
-register("assert_jit_compiled", (ctx, args, nargout) => {
-  if (args.length !== 0) return FALL_THROUGH;
-  if (nargout > 0) return FALL_THROUGH;
-  if (ctx.optimization === 0) return undefined;
-  throw new RuntimeError(
-    "assert_jit_compiled: expected the surrounding loop or function body to be JIT-compiled, but the call survived to the interpreter (lowering bailed). Run with --opt 0 to silence."
-  );
-});
-
 register("eval", (ctx, args) => {
   if (args.length !== 1) return FALL_THROUGH;
   return ctx.evalInLocalScope(args[0]);

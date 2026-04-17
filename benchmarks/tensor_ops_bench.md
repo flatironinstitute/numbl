@@ -38,16 +38,17 @@ All runs produce the same check values (to FP rounding).
 
 Median of 3 runs for all modes.
 
-| Mode                     |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
-| ------------------------ | -----: | -----: | -----: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)  | 5.29 s | 1.25 s | 2.42 s |  0.52 s | 0.27 s | 0.96 s |
-| `--opt 1` (JS-JIT)       | 3.27 s | 0.66 s | 1.36 s |  0.34 s | 0.30 s | 0.61 s |
-| `--opt 2` (C-JIT)        | 3.09 s | 0.66 s | 1.34 s |  0.30 s | 0.25 s | 0.55 s |
-| `--opt 2 --fuse` (C-JIT) | 1.56 s | 0.10 s | 0.57 s |  0.28 s | 0.24 s | 0.38 s |
-| MATLAB R2025b `-batch`   | 2.86 s | 0.29 s | 1.82 s |  0.17 s | 0.18 s | 0.37 s |
-| Octave 9.4 `--eval`      | 7.75 s | 0.98 s | 4.41 s |  0.75 s | 0.30 s | 1.40 s |
-| C baseline, per-op       | 2.63 s | 0.58 s | 1.22 s |  0.24 s | 0.11 s | 0.49 s |
-| C baseline, fused        | 1.03 s | 0.10 s | 0.68 s |  0.07 s | 0.04 s | 0.13 s |
+| Mode                      |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
+| ------------------------- | -----: | -----: | -----: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)   | 5.29 s | 1.25 s | 2.42 s |  0.52 s | 0.27 s | 0.96 s |
+| `--opt 1` (JS-JIT)        | 3.27 s | 0.66 s | 1.36 s |  0.34 s | 0.30 s | 0.61 s |
+| `--opt 2` (C-JIT)         | 3.09 s | 0.66 s | 1.34 s |  0.30 s | 0.25 s | 0.55 s |
+| `--opt 2 --fuse` (C-JIT)  | 1.56 s | 0.10 s | 0.57 s |  0.28 s | 0.24 s | 0.38 s |
+| MATLAB R2025b `-batch`    | 2.86 s | 0.29 s | 1.82 s |  0.17 s | 0.18 s | 0.37 s |
+| MATLAB R2025b (8 threads) | 2.18 s | 0.40 s | 0.95 s |  0.16 s | 0.30 s | 0.35 s |
+| Octave 9.4 `--eval`       | 7.75 s | 0.98 s | 4.41 s |  0.75 s | 0.30 s | 1.40 s |
+| C baseline, per-op        | 2.63 s | 0.58 s | 1.22 s |  0.24 s | 0.11 s | 0.49 s |
+| C baseline, fused         | 1.03 s | 0.10 s | 0.68 s |  0.07 s | 0.04 s | 0.13 s |
 
 ### macOS (N=2 000 000, trials=50)
 

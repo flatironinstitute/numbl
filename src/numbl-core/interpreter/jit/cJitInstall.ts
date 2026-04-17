@@ -20,6 +20,7 @@ import { compileAndLoad } from "./c/cCompile.js";
 import { jitTypeKey } from "./jitTypes.js";
 import { type RuntimeTensor } from "../../runtime/types.js";
 import { uninitFloat64 } from "../../runtime/alloc.js";
+import { getTicTime, setTicTime } from "../builtins/time-system.js";
 
 registerCJitBackend({
   tryCompile(
@@ -79,6 +80,17 @@ registerCJitBackend({
     const outputDescs = gen.outputDescs;
     const isMultiOutput = outputDescs.length > 1;
 
+    // tic/toc support: declare get_monotonic_time, allocate shared buffer.
+    let getMonotonicTime: (() => number) | undefined;
+    let ticStateBuf: Float64Array | undefined;
+    if (gen.needsTicState) {
+      const lib = loaded.lib;
+      getMonotonicTime = lib.func(
+        "double get_monotonic_time(void)"
+      ) as () => number;
+      ticStateBuf = new Float64Array(1);
+    }
+
     return (...callArgs: unknown[]): unknown => {
       // Build the koffi call arguments: extract data/len from tensors,
       // pass scalars directly, append output buffers/out-pointers.
@@ -136,8 +148,23 @@ registerCJitBackend({
         }
       }
 
+      // tic/toc: convert JS ticTime to C clock domain before the call.
+      let ticJsNow = 0;
+      let ticCNow = 0;
+      if (ticStateBuf && getMonotonicTime) {
+        ticCNow = getMonotonicTime();
+        ticJsNow = performance.now() / 1000;
+        ticStateBuf[0] = getTicTime() / 1000 - ticJsNow + ticCNow;
+        koffiArgs.push(ticStateBuf);
+      }
+
       // Call the C function.
       nativeFn(...koffiArgs);
+
+      // tic/toc: convert C clock domain back to JS ticTime.
+      if (ticStateBuf) {
+        setTicTime((ticStateBuf[0] + ticJsNow - ticCNow) * 1000);
+      }
 
       // Extract results.
       if (isMultiOutput) {
