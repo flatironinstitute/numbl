@@ -18,6 +18,8 @@
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import { C_TENSOR_REDUCTION_OPS, C_TENSOR_UNARY_OPS } from "./cFeasibility.js";
+import { findFusibleChains } from "./cFusion.js";
+import { emitFusedChain } from "./cFusedCodegen.js";
 
 const MANGLE_PREFIX = "v_";
 
@@ -160,6 +162,10 @@ interface EmitCtx {
   /** When set, expression emission can prepend statements (e.g. for
    *  reductions of complex tensor expressions that need scratch buffers). */
   pendingStmts?: { lines: string[]; indent: string };
+  /** Emit fused per-element loops for tensor chains (--fuse). */
+  fuse: boolean;
+  /** Tensor parameter names (for fusion analysis). */
+  paramTensorNames: Set<string>;
 }
 
 // ── Expression emission ───────────────────────────────────────────────
@@ -516,7 +522,44 @@ function emitStmts(
   indent: string,
   ctx: EmitCtx
 ): void {
-  for (const s of stmts) emitStmt(lines, s, indent, ctx);
+  if (!ctx.fuse) {
+    for (const s of stmts) emitStmt(lines, s, indent, ctx);
+    return;
+  }
+
+  // Fusion enabled: find fusible chains, emit them as fused loops,
+  // emit everything else via the per-op path.
+  const chains = findFusibleChains(stmts, ctx.paramTensorNames, ctx.tensorVars);
+
+  // Build a set of statement indices covered by chains.
+  const coveredByChain = new Map<
+    number,
+    { chain: ReturnType<typeof findFusibleChains>[0] }
+  >();
+  for (const chain of chains) {
+    coveredByChain.set(chain.startIdx, { chain });
+  }
+
+  let i = 0;
+  while (i < stmts.length) {
+    const entry = coveredByChain.get(i);
+    if (entry) {
+      const helpers = emitFusedChain(
+        lines,
+        indent,
+        entry.chain,
+        ctx.tensorVars,
+        ctx.paramTensorNames,
+        ctx.outputTensorNames,
+        ctx.localTensorNames
+      );
+      for (const h of helpers) ctx.helpersNeeded.add(h);
+      i += entry.chain.length;
+    } else {
+      emitStmt(lines, stmts[i], indent, ctx);
+      i++;
+    }
+  }
 }
 
 /** For local tensor dests (not output, not param), ensure the buffer
@@ -783,7 +826,8 @@ export function generateC(
   argTypes: JitType[],
   _outputType: JitType | null,
   outputTypes: JitType[],
-  fnName: string
+  fnName: string,
+  fuse?: boolean
 ): GenerateCResult {
   if (params.length !== argTypes.length) {
     throw new Error("C-JIT codegen: params/argTypes length mismatch");
@@ -829,6 +873,8 @@ export function generateC(
     usedScratch: new Set(),
     freeStmts: [],
     localTensorNames,
+    fuse: fuse ?? false,
+    paramTensorNames,
   };
 
   const indent = "  ";

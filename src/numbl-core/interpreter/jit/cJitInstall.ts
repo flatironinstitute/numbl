@@ -53,7 +53,8 @@ registerCJitBackend({
         argTypes,
         outputType,
         outputTypes,
-        fn.name.replace(/[^A-Za-z0-9_]/g, "_")
+        fn.name.replace(/[^A-Za-z0-9_]/g, "_"),
+        interp.fuse
       );
     } catch {
       return null;
