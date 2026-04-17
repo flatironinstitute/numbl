@@ -21,7 +21,10 @@
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
-import { FUSIBLE_TENSOR_UNARY_OPS } from "../fusionOps.js";
+import {
+  FUSIBLE_TENSOR_UNARY_OPS,
+  FUSIBLE_TENSOR_BINARY_OPS,
+} from "../fusionOps.js";
 
 const MANGLE_PREFIX = "v_";
 
@@ -85,6 +88,8 @@ const BUILTIN_TO_C: Record<string, string> = {
   pow: "pow",
   mod: "__numbl_mod",
   sign: "__numbl_sign",
+  max: "fmax",
+  min: "fmin",
 };
 
 // ── Expression emission (per-element scalar form) ────────────────────
@@ -222,10 +227,11 @@ function emitCallScalar(
   allTensorVars: ReadonlySet<string>,
   helpersNeeded: Set<string>
 ): string {
-  // Tensor unary call → becomes scalar math call on the per-element value
+  // Tensor unary/binary call → becomes scalar math call on per-element values
   if (
     (expr.jitType.kind === "tensor" &&
-      FUSIBLE_TENSOR_UNARY_OPS.has(expr.name)) ||
+      (FUSIBLE_TENSOR_UNARY_OPS.has(expr.name) ||
+        FUSIBLE_TENSOR_BINARY_OPS.has(expr.name))) ||
     expr.name in BUILTIN_TO_C
   ) {
     const cName = BUILTIN_TO_C[expr.name];

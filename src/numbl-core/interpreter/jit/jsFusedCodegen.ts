@@ -17,7 +17,10 @@
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr } from "./jitTypes.js";
 import type { FusibleChain } from "./fusion.js";
-import { FUSIBLE_TENSOR_UNARY_OPS } from "./fusionOps.js";
+import {
+  FUSIBLE_TENSOR_UNARY_OPS,
+  FUSIBLE_TENSOR_BINARY_OPS,
+} from "./fusionOps.js";
 
 // ── JS math builtin mapping ──────────────────────────────────────────
 
@@ -50,6 +53,8 @@ const BUILTIN_TO_JS: Record<string, string> = {
   pow: "Math.pow",
   expm1: "Math.expm1",
   log1p: "Math.log1p",
+  max: "Math.max",
+  min: "Math.min",
 };
 
 /** Scalar local name for a chain-produced tensor intermediate. */
@@ -174,7 +179,8 @@ function emitCallScalar(
 ): string {
   if (
     (expr.jitType.kind === "tensor" &&
-      FUSIBLE_TENSOR_UNARY_OPS.has(expr.name)) ||
+      (FUSIBLE_TENSOR_UNARY_OPS.has(expr.name) ||
+        FUSIBLE_TENSOR_BINARY_OPS.has(expr.name))) ||
     expr.name in BUILTIN_TO_JS
   ) {
     const jsName = BUILTIN_TO_JS[expr.name];

@@ -17,7 +17,11 @@
 
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
-import { C_TENSOR_REDUCTION_OPS, C_TENSOR_UNARY_OPS } from "./cFeasibility.js";
+import {
+  C_TENSOR_BINARY_BUILTINS,
+  C_TENSOR_REDUCTION_OPS,
+  C_TENSOR_UNARY_OPS,
+} from "./cFeasibility.js";
 import { findFusibleChains } from "../fusion.js";
 import { emitFusedChain } from "./cFusedCodegen.js";
 
@@ -643,6 +647,67 @@ function emitTensorAssign(
     lines.push(
       `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${dLen}, ${arg.data}, ${dData});`
     );
+    return;
+  }
+
+  // Two-arg tensor binary builtin (max, min, atan2, hypot, mod, rem):
+  // emit a per-element loop calling the C math function.
+  if (
+    expr.tag === "Call" &&
+    isTensorExpr(expr) &&
+    C_TENSOR_BINARY_BUILTINS.has(expr.name) &&
+    expr.args.length === 2
+  ) {
+    const BINARY_BUILTIN_TO_C: Record<string, string> = {
+      max: "fmax",
+      min: "fmin",
+      atan2: "atan2",
+      hypot: "hypot",
+      mod: "__numbl_mod",
+      rem: "fmod",
+    };
+    const cFn = BINARY_BUILTIN_TO_C[expr.name];
+    if (!cFn) {
+      throw new Error(`C-JIT codegen: unmapped binary builtin: ${expr.name}`);
+    }
+    if (expr.name === "mod") ctx.helpersNeeded.add("mod");
+
+    const left = expr.args[0];
+    const right = expr.args[1];
+    const leftIsTensor = left.jitType.kind === "tensor";
+    const rightIsTensor = right.jitType.kind === "tensor";
+
+    if (leftIsTensor && rightIsTensor) {
+      const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
+      const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
+      if (needsAlloc)
+        emitEnsureLocalBuf(lines, indent, destName, lArg.len, ctx);
+      else lines.push(`${indent}${dLen} = ${lArg.len};`);
+      lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+      lines.push(
+        `${indent}  ${dData}[__i] = ${cFn}(${lArg.data}[__i], ${rArg.data}[__i]);`
+      );
+    } else if (leftIsTensor) {
+      const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
+      const rScalar = emitExpr(right, ctx);
+      if (needsAlloc)
+        emitEnsureLocalBuf(lines, indent, destName, lArg.len, ctx);
+      else lines.push(`${indent}${dLen} = ${lArg.len};`);
+      lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+      lines.push(
+        `${indent}  ${dData}[__i] = ${cFn}(${lArg.data}[__i], ${rScalar});`
+      );
+    } else {
+      const lScalar = emitExpr(left, ctx);
+      const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
+      if (needsAlloc)
+        emitEnsureLocalBuf(lines, indent, destName, rArg.len, ctx);
+      else lines.push(`${indent}${dLen} = ${rArg.len};`);
+      lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+      lines.push(
+        `${indent}  ${dData}[__i] = ${cFn}(${lScalar}, ${rArg.data}[__i]);`
+      );
+    }
     return;
   }
 

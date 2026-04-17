@@ -81,6 +81,19 @@ export const C_TENSOR_UNARY_OPS: Record<string, number> = {
 };
 
 /**
+ * Two-argument element-wise tensor builtins that the C-JIT can handle.
+ * These map to <math.h> functions in both per-op and fused paths.
+ */
+export const C_TENSOR_BINARY_BUILTINS = new Set<string>([
+  "max",
+  "min",
+  "atan2",
+  "hypot",
+  "mod",
+  "rem",
+]);
+
+/**
  * MATLAB reduction builtin → libnumbl_ops `numbl_reduce_op_t` code.
  * Mirrors what JS-JIT's tSum / tMax / tMin / tMean / tProd / tAny / tAll
  * helpers route to.
@@ -225,6 +238,21 @@ function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
       return { ok: false, reason: `${expr.name}: expected 1 tensor arg` };
     }
     return checkExpr(expr.args[0]);
+  }
+  // Tensor binary builtin (max, min, atan2, hypot, mod, rem):
+  // result is tensor, two args (tensor/scalar).
+  if (
+    expr.jitType.kind === "tensor" &&
+    C_TENSOR_BINARY_BUILTINS.has(expr.name)
+  ) {
+    if (expr.args.length !== 2) {
+      return { ok: false, reason: `${expr.name}: expected 2 args` };
+    }
+    for (const a of expr.args) {
+      const r = checkExpr(a);
+      if (!r.ok) return r;
+    }
+    return { ok: true };
   }
   // Reduction (tensor → scalar): name in mapping, single tensor arg.
   if (expr.jitType.kind !== "tensor" && expr.name in C_TENSOR_REDUCTION_OPS) {

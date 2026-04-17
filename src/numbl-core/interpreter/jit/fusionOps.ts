@@ -40,6 +40,20 @@ export const FUSIBLE_TENSOR_UNARY_OPS_JS: ReadonlySet<string> = new Set([
   "sign",
 ]);
 
+/**
+ * Two-argument tensor element-wise builtins fusible into per-element loops.
+ * These are parsed as Call nodes (not Binary nodes) and need separate
+ * recognition in isPureElementwise / emitScalarExpr.
+ */
+export const FUSIBLE_TENSOR_BINARY_OPS: ReadonlySet<string> = new Set([
+  "max",
+  "min",
+  "mod",
+  "rem",
+  "atan2",
+  "hypot",
+]);
+
 /** Tensor reduction builtins absorbable as trailing reductions. */
 export const FUSIBLE_TENSOR_REDUCTION_OPS: ReadonlySet<string> = new Set([
   "sum",
