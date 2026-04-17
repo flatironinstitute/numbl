@@ -12,6 +12,8 @@ export interface RemoteExecutionFile {
 export interface RemoteExecutionRequest {
   files: RemoteExecutionFile[];
   mainScript: string;
+  optimization?: number;
+  fuse?: boolean;
 }
 
 export interface RemoteExecutionResult {
@@ -19,6 +21,8 @@ export interface RemoteExecutionResult {
   output?: string;
   error?: string;
   timedOut?: boolean;
+  generatedJS?: string;
+  generatedC?: string;
 }
 
 export interface RemoteServiceHealth {
@@ -31,7 +35,7 @@ export interface RemoteServiceHealth {
 /**
  * Get the remote service URL from localStorage or default
  */
-export const DEFAULT_REMOTE_SERVICE_URL = "https://numbl.neurosift.app";
+export const DEFAULT_REMOTE_SERVICE_URL = "http://localhost:3001";
 
 export function getRemoteServiceUrl(): string {
   return (
@@ -65,15 +69,18 @@ export function setRemoteExecutionEnabled(enabled: boolean): void {
  * Check if the remote service is available
  */
 export async function checkRemoteServiceHealth(
-  serviceUrl?: string
+  serviceUrl?: string,
+  passkey?: string
 ): Promise<RemoteServiceHealth | null> {
   const url = serviceUrl || getRemoteServiceUrl();
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (passkey) headers["Authorization"] = `Bearer ${passkey}`;
     const response = await fetch(`${url}/health`, {
       method: "GET",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
     });
 
     if (!response.ok) {
@@ -97,15 +104,18 @@ export async function executeRemoteStream(
     onDrawnow: (plotInstructions: PlotInstruction[]) => void;
   },
   serviceUrl?: string,
-  abortSignal?: AbortSignal
+  abortSignal?: AbortSignal,
+  passkey?: string
 ): Promise<RemoteExecutionResult> {
   const url = serviceUrl || getRemoteServiceUrl();
   try {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (passkey) headers["Authorization"] = `Bearer ${passkey}`;
     const response = await fetch(`${url}/execute`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify(request),
       signal: abortSignal,
     });
@@ -149,6 +159,12 @@ export async function executeRemoteStream(
             callbacks.onOutput(msg.text);
           } else if (msg.type === "drawnow") {
             callbacks.onDrawnow(msg.plotInstructions);
+          } else if (msg.type === "done") {
+            result = {
+              ...result,
+              generatedJS: msg.generatedJS,
+              generatedC: msg.generatedC,
+            };
           } else if (msg.type === "error") {
             result = {
               success: false,

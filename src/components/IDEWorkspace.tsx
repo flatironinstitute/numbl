@@ -3,33 +3,33 @@ import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import Editor, { OnMount } from "@monaco-editor/react";
 import { Light as SyntaxHighlighter } from "react-syntax-highlighter";
 import js from "react-syntax-highlighter/dist/esm/languages/hljs/javascript";
+import c from "react-syntax-highlighter/dist/esm/languages/hljs/c";
 import { githubGist } from "react-syntax-highlighter/dist/esm/styles/hljs";
 
 SyntaxHighlighter.registerLanguage("javascript", js);
+SyntaxHighlighter.registerLanguage("c", c);
 const _textEncoder = new TextEncoder();
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import StopIcon from "@mui/icons-material/Stop";
-import CloudIcon from "@mui/icons-material/Cloud";
 import ComputerIcon from "@mui/icons-material/Computer";
 import DnsIcon from "@mui/icons-material/Dns";
 import MenuIcon from "@mui/icons-material/Menu";
 import {
   Box,
   Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Drawer,
   Tab,
   Tabs,
+  TextField,
   Typography,
   IconButton,
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  CircularProgress,
   useMediaQuery,
 } from "@mui/material";
 import {
@@ -63,13 +63,10 @@ import {
   type WorkspaceFile,
 } from "../hooks/useProjectFiles";
 import {
-  isRemoteExecutionEnabled,
-  setRemoteExecutionEnabled,
   executeRemoteStream,
   getRemoteServiceUrl,
   setRemoteServiceUrl as saveRemoteServiceUrl,
   checkRemoteServiceHealth,
-  DEFAULT_REMOTE_SERVICE_URL,
 } from "../utils/remoteExecution";
 import {
   syncVfsChangesToProject,
@@ -163,16 +160,15 @@ export function IDEWorkspace({
     () => [...files, ...systemFiles],
     [files, systemFiles]
   );
-  const optimization = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    return parseInt(params.get("opt") ?? "1", 10);
-  }, []);
+  const [optimization, setOptimization] = useState(1);
+  const [fuse, setFuse] = useState(false);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
     number
   > | null>(null);
   const [generatedJS, setGeneratedJS] = useState("");
+  const [generatedC, setGeneratedC] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -180,7 +176,7 @@ export function IDEWorkspace({
   );
   const [outputTab, setOutputTab] = useState(0);
   const [internalsSubTab, setInternalsSubTab] = useState<
-    "js" | "ast" | "dispatch"
+    "js" | "c" | "ast" | "dispatch"
   >("js");
   const [allFilesRep, setAllFilesRep] = useState<
     { name: string; ast: unknown; irProgram: unknown }[]
@@ -229,51 +225,60 @@ export function IDEWorkspace({
   const [mobileOutputTab, setMobileOutputTab] = useState(0);
 
   // Remote execution state
-  const [useRemoteExecution, setUseRemoteExecution] = useState(
-    isRemoteExecutionEnabled()
-  );
+  const [useRemoteExecution, setUseRemoteExecution] = useState(false);
   const [remoteServiceUrl, setRemoteServiceUrl] = useState(
     getRemoteServiceUrl()
   );
-  const [remoteSettingsOpen, setRemoteSettingsOpen] = useState(false);
-  const [remoteUrlDraft, setRemoteUrlDraft] = useState(getRemoteServiceUrl());
-  const [updateSecret, setUpdateSecret] = useState(
-    () => localStorage.getItem("numbl_update_secret") || ""
+  const [localServerSettingsOpen, setLocalServerSettingsOpen] = useState(false);
+  const [localServerUrlDraft, setLocalServerUrlDraft] = useState(
+    getRemoteServiceUrl()
   );
-  const [rebuildOutput, setRebuildOutput] = useState("");
-  const [isRebuilding, setIsRebuilding] = useState(false);
+  const generatePasskey = useCallback(() => {
+    const key = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    sessionStorage.setItem("numbl_passkey", key);
+    return key;
+  }, []);
+  const [passkey, setPasskey] = useState(() => {
+    const stored = sessionStorage.getItem("numbl_passkey");
+    if (stored) return stored;
+    return generatePasskey();
+  });
+  // Keep a ref so network calls always use the latest passkey
+  const passkeyRef = useRef(passkey);
+  passkeyRef.current = passkey;
 
-  const executionMode: "browser" | "localhost" | "cloud" = useMemo(() => {
-    if (!useRemoteExecution) return "browser";
-    try {
-      const url = new URL(remoteServiceUrl);
-      if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
-        return "localhost";
-      }
-    } catch {
-      // invalid URL
-    }
-    return "cloud";
-  }, [useRemoteExecution, remoteServiceUrl]);
+  const executionMode: "browser" | "localhost" = useRemoteExecution
+    ? "localhost"
+    : "browser";
 
   const [remoteNativeAddon, setRemoteNativeAddon] = useState<boolean | null>(
     null
   );
+  const [remoteServerStatus, setRemoteServerStatus] = useState<
+    "unknown" | "connected" | "disconnected"
+  >("unknown");
   useEffect(() => {
     if (!useRemoteExecution) {
       setRemoteNativeAddon(null);
+      setRemoteServerStatus("unknown");
       return;
     }
     let cancelled = false;
-    checkRemoteServiceHealth(remoteServiceUrl).then(health => {
-      if (!cancelled && health) {
-        setRemoteNativeAddon(health.nativeAddon === true);
+    checkRemoteServiceHealth(remoteServiceUrl, passkeyRef.current).then(
+      health => {
+        if (cancelled) return;
+        if (health) {
+          setRemoteNativeAddon(health.nativeAddon === true);
+          setRemoteServerStatus("connected");
+        } else {
+          setRemoteServerStatus("disconnected");
+        }
       }
-    });
+    );
     return () => {
       cancelled = true;
     };
-  }, [useRemoteExecution, remoteServiceUrl]);
+  }, [useRemoteExecution, remoteServiceUrl, passkey]);
 
   // Unified worker (handles both script runs and REPL)
   const workerRef = useRef<Worker | null>(null);
@@ -288,6 +293,19 @@ export function IDEWorkspace({
 
   // Persistent workspace toggle
   const [persistWorkspace, setPersistWorkspace] = useState(false);
+
+  // Sync optimization level to worker when toggled
+  useEffect(() => {
+    workerRef.current?.postMessage({
+      type: "set_optimization",
+      optimization,
+    });
+  }, [optimization]);
+
+  // Sync fuse flag to worker when toggled
+  useEffect(() => {
+    workerRef.current?.postMessage({ type: "set_fuse", fuse });
+  }, [fuse]);
 
   // Panel sizing
   const initialSidebarWidth = window.innerWidth >= 1200 ? 260 : 200;
@@ -438,6 +456,7 @@ export function IDEWorkspace({
         if (msg.type === "done") {
           activeExecutionMode.current = null;
           setGeneratedJS(msg.generatedJS || "");
+          setGeneratedC(msg.generatedC || "");
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
@@ -569,18 +588,32 @@ export function IDEWorkspace({
       const abortController = new AbortController();
       remoteAbortRef.current = abortController;
       try {
-        const remoteFiles = [
-          ...workspaceFiles.map(f => ({
-            name: f.name,
-            content: f.source,
-          })),
-          { name: activeFile.name, content: codeToRun },
-        ];
+        // Send all project files (excluding system/ directory) to the server
+        const decoder = new TextDecoder("utf-8");
+        const remoteFiles: { name: string; content: string }[] = [];
+        for (const f of files) {
+          if (f.name === "system" || f.name.startsWith("system/")) continue;
+          const data =
+            projectContents.get(f.id) ??
+            contentCache.current.get(f.id) ??
+            new Uint8Array(0);
+          if (isBinaryData(data)) continue;
+          remoteFiles.push({ name: f.name, content: decoder.decode(data) });
+        }
+        // Ensure the active file is included with the latest content
+        if (!remoteFiles.some(f => f.name === activeFile.name)) {
+          remoteFiles.push({ name: activeFile.name, content: codeToRun });
+        } else {
+          const idx = remoteFiles.findIndex(f => f.name === activeFile.name);
+          remoteFiles[idx] = { name: activeFile.name, content: codeToRun };
+        }
 
         const result = await executeRemoteStream(
           {
             files: remoteFiles,
             mainScript: activeFile.name,
+            optimization,
+            fuse,
           },
           {
             onOutput: (text: string) => {
@@ -593,8 +626,12 @@ export function IDEWorkspace({
             },
           },
           remoteServiceUrl,
-          abortController.signal
+          abortController.signal,
+          passkeyRef.current
         );
+
+        setGeneratedJS(result.generatedJS || "");
+        setGeneratedC(result.generatedC || "");
 
         if (!result.success) {
           setOutput(
@@ -642,6 +679,7 @@ export function IDEWorkspace({
         displayResults: true,
         maxIterations: 10000000,
         optimization,
+        fuse,
       },
       vfsFiles,
       persistent: persistWorkspace,
@@ -655,6 +693,7 @@ export function IDEWorkspace({
     remoteServiceUrl,
     handlePlotInstruction,
     optimization,
+    fuse,
     buildWorkerFiles,
     contentCache,
     persistWorkspace,
@@ -706,48 +745,25 @@ export function IDEWorkspace({
     }
   }, [persistWorkspace, setupWorkerHandler]);
 
+  const handleLocalServerSettingsSave = useCallback(() => {
+    setRemoteServiceUrl(localServerUrlDraft);
+    saveRemoteServiceUrl(localServerUrlDraft);
+    setLocalServerSettingsOpen(false);
+  }, [localServerUrlDraft]);
+
   const handleExecutionModeChange = useCallback(
-    (
-      _: React.MouseEvent<HTMLElement>,
-      newMode: "browser" | "remote" | null
-    ) => {
+    (_: React.MouseEvent<HTMLElement>, newMode: "browser" | "local" | null) => {
       if (newMode !== null) {
-        const isRemote = newMode === "remote";
-        setUseRemoteExecution(isRemote);
-        setRemoteExecutionEnabled(isRemote);
+        const isLocal = newMode === "local";
+        setUseRemoteExecution(isLocal);
+        // C-JIT is only available on the local server
+        if (!isLocal) {
+          setOptimization(o => (o > 1 ? 1 : o));
+        }
       }
     },
     []
   );
-
-  const handleRemoteSettingsSave = useCallback(() => {
-    setRemoteServiceUrl(remoteUrlDraft);
-    saveRemoteServiceUrl(remoteUrlDraft);
-    setRemoteSettingsOpen(false);
-  }, [remoteUrlDraft]);
-
-  const triggerRebuild = useCallback(async () => {
-    setIsRebuilding(true);
-    setRebuildOutput("Running update...\n");
-    try {
-      const response = await fetch(`${remoteServiceUrl}/update`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${updateSecret}` },
-      });
-      const data = await response.json();
-      if (data.success) {
-        setRebuildOutput(data.output || "Done.");
-      } else {
-        setRebuildOutput(`Error: ${data.error}`);
-      }
-    } catch (e) {
-      setRebuildOutput(
-        `Connection failed: ${e instanceof Error ? e.message : String(e)}`
-      );
-    } finally {
-      setIsRebuilding(false);
-    }
-  }, [remoteServiceUrl, updateSecret]);
 
   const handleReplExecute = useCallback(
     async (command: string) => {
@@ -868,7 +884,7 @@ export function IDEWorkspace({
   const editor = (
     <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
       <Tabs
-        value={editorTab}
+        value={useRemoteExecution ? 0 : editorTab}
         onChange={(_, newValue) => setEditorTab(newValue)}
         sx={{
           borderBottom: 1,
@@ -884,11 +900,11 @@ export function IDEWorkspace({
         }}
       >
         <Tab label="Script" />
-        <Tab label="REPL" />
+        {!useRemoteExecution && <Tab label="REPL" />}
       </Tabs>
 
       <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
-        {editorTab === 0 ? (
+        {editorTab === 0 || useRemoteExecution ? (
           <Box
             sx={{
               height: "100%",
@@ -929,80 +945,156 @@ export function IDEWorkspace({
               </Button>
               <Tooltip
                 title={
-                  (executionMode === "browser"
+                  executionMode === "browser"
                     ? "Executing in browser"
-                    : executionMode === "localhost"
-                      ? "Executing on localhost"
-                      : "Executing on remote cloud") +
-                  (remoteNativeAddon === true
-                    ? " (native)"
-                    : remoteNativeAddon === false
-                      ? " (no native addon)"
-                      : "")
+                    : "Executing on local server" +
+                      (remoteServerStatus === "disconnected"
+                        ? " (not connected)"
+                        : "") +
+                      (remoteNativeAddon === true
+                        ? " (native)"
+                        : remoteNativeAddon === false
+                          ? " (no native addon)"
+                          : "")
                 }
               >
                 <IconButton
                   size="small"
                   onClick={() => {
-                    setRemoteUrlDraft(remoteServiceUrl);
-                    setRebuildOutput("");
-                    setRemoteSettingsOpen(true);
+                    setLocalServerUrlDraft(remoteServiceUrl);
+                    setLocalServerSettingsOpen(true);
                   }}
                   sx={{ opacity: 0.5, "&:hover": { opacity: 1 } }}
                 >
                   {executionMode === "browser" ? (
                     <ComputerIcon sx={{ fontSize: "0.9rem" }} />
-                  ) : executionMode === "localhost" ? (
-                    <DnsIcon sx={{ fontSize: "0.9rem" }} />
                   ) : (
-                    <CloudIcon sx={{ fontSize: "0.9rem" }} />
+                    <DnsIcon
+                      sx={{
+                        fontSize: "0.9rem",
+                        color: "error.main",
+                      }}
+                    />
                   )}
                 </IconButton>
               </Tooltip>
-              {remoteNativeAddon !== null && (
+              {executionMode === "localhost" && (
                 <Typography
                   variant="caption"
                   sx={{
                     fontSize: "0.65rem",
                     opacity: 0.5,
-                    color: remoteNativeAddon ? "success.main" : "text.disabled",
+                    color: "error.main",
                   }}
                 >
-                  {remoteNativeAddon ? "native" : "no native"}
+                  {remoteServerStatus === "disconnected"
+                    ? "no server"
+                    : remoteNativeAddon
+                      ? "native"
+                      : remoteNativeAddon === false
+                        ? "no native"
+                        : "local"}
                 </Typography>
+              )}
+              {!useRemoteExecution && (
+                <Tooltip
+                  title={
+                    persistWorkspace
+                      ? "Workspace persists across runs and REPL (click for fresh each run)"
+                      : "Fresh workspace each run (click to persist across runs and REPL)"
+                  }
+                >
+                  <Typography
+                    variant="caption"
+                    onClick={() => setPersistWorkspace(p => !p)}
+                    sx={{
+                      cursor: "pointer",
+                      fontSize: "0.7rem",
+                      px: 0.5,
+                      py: 0.1,
+                      borderRadius: 0.5,
+                      bgcolor: persistWorkspace
+                        ? "action.selected"
+                        : "transparent",
+                      opacity: persistWorkspace ? 1 : 0.5,
+                      "&:hover": { opacity: 1 },
+                      userSelect: "none",
+                    }}
+                  >
+                    {persistWorkspace ? "persist" : "1x"}
+                  </Typography>
+                </Tooltip>
               )}
               <Tooltip
                 title={
-                  persistWorkspace
-                    ? "Workspace persists across runs and REPL (click for fresh each run)"
-                    : "Fresh workspace each run (click to persist across runs and REPL)"
+                  optimization === 0
+                    ? "Interpreter only (click for JS-JIT)"
+                    : optimization === 1
+                      ? useRemoteExecution
+                        ? "JS-JIT (click for C-JIT)"
+                        : "JS-JIT (click to disable)"
+                      : "C-JIT (click to disable)"
                 }
               >
                 <Typography
                   variant="caption"
-                  onClick={() => setPersistWorkspace(p => !p)}
+                  onClick={() =>
+                    setOptimization(o => {
+                      if (o === 0) return 1;
+                      if (o === 1 && useRemoteExecution) return 2;
+                      return 0;
+                    })
+                  }
                   sx={{
                     cursor: "pointer",
                     fontSize: "0.7rem",
                     px: 0.5,
                     py: 0.1,
                     borderRadius: 0.5,
-                    bgcolor: persistWorkspace
-                      ? "action.selected"
-                      : "transparent",
-                    opacity: persistWorkspace ? 1 : 0.5,
+                    bgcolor:
+                      optimization >= 1 ? "action.selected" : "transparent",
+                    opacity: optimization >= 1 ? 1 : 0.5,
                     "&:hover": { opacity: 1 },
                     userSelect: "none",
                   }}
                 >
-                  {persistWorkspace ? "persist" : "1x"}
+                  {optimization === 0
+                    ? "no jit"
+                    : optimization === 1
+                      ? "jit"
+                      : "jit-c"}
+                </Typography>
+              </Tooltip>
+              <Tooltip
+                title={
+                  fuse
+                    ? "Tensor fusion enabled (click to disable)"
+                    : "Tensor fusion disabled (click to enable)"
+                }
+              >
+                <Typography
+                  variant="caption"
+                  onClick={() => setFuse(f => !f)}
+                  sx={{
+                    cursor: "pointer",
+                    fontSize: "0.7rem",
+                    px: 0.5,
+                    py: 0.1,
+                    borderRadius: 0.5,
+                    bgcolor: fuse ? "action.selected" : "transparent",
+                    opacity: fuse ? 1 : 0.5,
+                    "&:hover": { opacity: 1 },
+                    userSelect: "none",
+                  }}
+                >
+                  {fuse ? "fuse" : "no fuse"}
                 </Typography>
               </Tooltip>
               {activeFile && (
                 <Typography
                   variant="caption"
                   color="text.secondary"
-                  sx={{ fontFamily: "monospace" }}
+                  sx={{ fontFamily: "monospace", fontWeight: "bold" }}
                 >
                   {activeFile.name}
                 </Typography>
@@ -1135,6 +1227,19 @@ export function IDEWorkspace({
                 >
                   JavaScript
                 </ToggleButton>
+                {generatedC && (
+                  <ToggleButton
+                    value="c"
+                    sx={{
+                      py: 0,
+                      px: 1,
+                      fontSize: "0.75rem",
+                      textTransform: "none",
+                    }}
+                  >
+                    C
+                  </ToggleButton>
+                )}
                 <ToggleButton
                   value="ast"
                   sx={{
@@ -1168,6 +1273,17 @@ export function IDEWorkspace({
                     customStyle={{ margin: 0, fontSize: 12 }}
                   >
                     {generatedJS || ""}
+                  </SyntaxHighlighter>
+                </Box>
+              )}
+              {internalsSubTab === "c" && (
+                <Box sx={{ height: "100%", overflow: "auto" }}>
+                  <SyntaxHighlighter
+                    language="c"
+                    style={githubGist}
+                    customStyle={{ margin: 0, fontSize: 12 }}
+                  >
+                    {generatedC || ""}
                   </SyntaxHighlighter>
                 </Box>
               )}
@@ -1514,8 +1630,8 @@ export function IDEWorkspace({
       </Box>
 
       <Dialog
-        open={remoteSettingsOpen}
-        onClose={() => setRemoteSettingsOpen(false)}
+        open={localServerSettingsOpen}
+        onClose={() => setLocalServerSettingsOpen(false)}
         maxWidth="sm"
         fullWidth
       >
@@ -1530,7 +1646,7 @@ export function IDEWorkspace({
           }}
         >
           <ToggleButtonGroup
-            value={useRemoteExecution ? "remote" : "browser"}
+            value={useRemoteExecution ? "local" : "browser"}
             exclusive
             onChange={handleExecutionModeChange}
             size="small"
@@ -1539,92 +1655,117 @@ export function IDEWorkspace({
               <ComputerIcon sx={{ fontSize: "1rem", mr: 0.5 }} />
               In browser
             </ToggleButton>
-            <ToggleButton value="remote" sx={{ px: 2 }}>
-              <CloudIcon sx={{ fontSize: "1rem", mr: 0.5 }} />
-              Remote
+            <ToggleButton value="local" sx={{ px: 2 }}>
+              <DnsIcon sx={{ fontSize: "1rem", mr: 0.5 }} />
+              Local server
             </ToggleButton>
           </ToggleButtonGroup>
-          {useRemoteExecution && (
-            <>
-              <TextField
-                label="Service URL"
-                value={remoteUrlDraft}
-                onChange={e => setRemoteUrlDraft(e.target.value)}
-                size="small"
-                fullWidth
-                slotProps={{
-                  input: {
-                    style: { fontFamily: "monospace", fontSize: "0.85rem" },
-                  },
-                }}
-                helperText={
-                  <span>
-                    <span
-                      style={{ cursor: "pointer", textDecoration: "underline" }}
-                      onClick={() =>
-                        setRemoteUrlDraft(DEFAULT_REMOTE_SERVICE_URL)
-                      }
-                    >
-                      {DEFAULT_REMOTE_SERVICE_URL}
-                    </span>
-                    {" · "}
-                    <span
-                      style={{ cursor: "pointer", textDecoration: "underline" }}
-                      onClick={() => setRemoteUrlDraft("http://localhost:3001")}
-                    >
-                      http://localhost:3001
-                    </span>
-                  </span>
-                }
-              />
-              <TextField
-                label="Update secret"
-                value={updateSecret}
-                onChange={e => {
-                  setUpdateSecret(e.target.value);
-                  localStorage.setItem("numbl_update_secret", e.target.value);
-                }}
-                size="small"
-                fullWidth
-                type="password"
-                helperText="Required to trigger remote rebuild (NUMBL_UPDATE_SECRET on server)"
-              />
-              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                <Button
-                  variant="outlined"
-                  size="small"
-                  onClick={triggerRebuild}
-                  disabled={isRebuilding || !updateSecret}
-                >
-                  {isRebuilding ? "Rebuilding..." : "Trigger rebuild"}
-                </Button>
-                {isRebuilding && <CircularProgress size={16} />}
-              </Box>
-              {rebuildOutput && (
-                <Box
-                  component="pre"
-                  sx={{
-                    background: "#1e1e1e",
-                    color: "#ccc",
-                    p: 1,
-                    borderRadius: 1,
-                    fontSize: "0.75rem",
-                    maxHeight: 200,
-                    overflow: "auto",
-                    whiteSpace: "pre-wrap",
-                    wordBreak: "break-all",
-                    m: 0,
-                  }}
-                >
-                  {rebuildOutput}
-                </Box>
-              )}
-            </>
-          )}
+          <TextField
+            label="Server URL"
+            value={localServerUrlDraft}
+            onChange={e => setLocalServerUrlDraft(e.target.value)}
+            size="small"
+            fullWidth
+            disabled={!useRemoteExecution}
+            slotProps={{
+              input: {
+                style: { fontFamily: "monospace", fontSize: "0.85rem" },
+              },
+            }}
+            helperText="Default: http://localhost:3001"
+          />
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Typography
+              variant="body2"
+              color={
+                !useRemoteExecution
+                  ? "text.disabled"
+                  : remoteServerStatus === "connected"
+                    ? "success.main"
+                    : remoteServerStatus === "disconnected"
+                      ? "warning.main"
+                      : "text.secondary"
+              }
+            >
+              {!useRemoteExecution
+                ? "Server status: n/a"
+                : remoteServerStatus === "connected"
+                  ? "Connected" +
+                    (remoteNativeAddon === true
+                      ? " (native addon available)"
+                      : remoteNativeAddon === false
+                        ? " (no native addon)"
+                        : "")
+                  : remoteServerStatus === "disconnected"
+                    ? "Not connected"
+                    : "Checking..."}
+            </Typography>
+            <Button
+              size="small"
+              disabled={!useRemoteExecution}
+              onClick={() => {
+                setRemoteServerStatus("unknown");
+                checkRemoteServiceHealth(
+                  localServerUrlDraft,
+                  passkeyRef.current
+                ).then(health => {
+                  if (health) {
+                    setRemoteNativeAddon(health.nativeAddon === true);
+                    setRemoteServerStatus("connected");
+                  } else {
+                    setRemoteServerStatus("disconnected");
+                  }
+                });
+              }}
+              sx={{ minWidth: 0, textTransform: "none" }}
+            >
+              Check
+            </Button>
+          </Box>
+          <Box
+            sx={{
+              opacity: useRemoteExecution ? 1 : 0.4,
+            }}
+          >
+            <Typography variant="body2" color="text.secondary" gutterBottom>
+              Start a local server in a terminal:
+            </Typography>
+            <Box
+              component="pre"
+              sx={{
+                bgcolor: "#1e1e1e",
+                color: "#ccc",
+                p: 1.5,
+                borderRadius: 1,
+                fontSize: "0.8rem",
+                m: 0,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {`# If installed globally:\nnpx numbl serve --passkey ${passkey}\n\n# Or from the repo (dev mode):\nnpx tsx src/cli.ts serve --passkey ${passkey}`}
+            </Box>
+            <Typography
+              variant="caption"
+              color="text.disabled"
+              onClick={() => {
+                setPasskey(generatePasskey());
+                setRemoteServerStatus("disconnected");
+              }}
+              sx={{
+                cursor: "pointer",
+                mt: 0.5,
+                "&:hover": { color: "text.secondary" },
+              }}
+            >
+              regenerate passkey
+            </Typography>
+          </Box>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setRemoteSettingsOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleRemoteSettingsSave}>
+          <Button onClick={() => setLocalServerSettingsOpen(false)}>
+            Cancel
+          </Button>
+          <Button variant="contained" onClick={handleLocalServerSettingsSave}>
             Save
           </Button>
         </DialogActions>

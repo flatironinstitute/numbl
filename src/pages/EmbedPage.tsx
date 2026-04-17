@@ -42,26 +42,21 @@ disp('Hello from numbl!')
 disp(['Sum of squares: ', num2str(sum(y))])
 `;
 
-function getQueryParams(): {
-  script: string;
-  optimization: number;
-} {
+function getQueryScript(): string {
   const params = new URLSearchParams(window.location.search);
-  const optimization = parseInt(params.get("opt") ?? "1", 10);
   const scriptParam = params.get("script");
-  let script = DEFAULT_SCRIPT;
   if (scriptParam) {
     try {
-      script = atob(scriptParam);
+      return atob(scriptParam);
     } catch {
       console.error("Failed to decode script parameter");
     }
   }
-  return { script, optimization };
+  return DEFAULT_SCRIPT;
 }
 
 export function EmbedPage() {
-  const { script: initialScript, optimization } = getQueryParams();
+  const initialScript = getQueryScript();
   const { reloadSystemFiles, getSystemVfsFiles, getSystemWorkspaceFiles } =
     useSystemFiles();
   useMipCorePackage(reloadSystemFiles);
@@ -164,14 +159,14 @@ export function EmbedPage() {
       options: {
         displayResults: true,
         maxIterations: 10000000,
-        optimization,
+        optimization: 1,
       },
       workspaceFiles: wsFiles,
       vfsFiles,
       mainFileName: "script.m",
       inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, optimization, getSystemWorkspaceFiles, getSystemVfsFiles]);
+  }, [code, getSystemWorkspaceFiles, getSystemVfsFiles]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {

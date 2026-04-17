@@ -9,6 +9,7 @@
  *   Main -> Worker:  { type: "run", code, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
  *   Main -> Worker:  { type: "execute", code, cancelSAB? }
  *   Main -> Worker:  { type: "set_optimization", optimization }
+ *   Main -> Worker:  { type: "set_fuse", fuse }
  *   Main -> Worker:  { type: "update_workspace", workspaceFiles, vfsFiles, searchPaths? }
  *   Main -> Worker:  { type: "set_input_sab", inputSAB }
  *   Main -> Worker:  { type: "clear" }
@@ -46,6 +47,7 @@ let persistentWorkspaceFiles: WorkspaceFile[] = [];
 let persistentSearchPaths: string[] | undefined;
 let implicitCwdPath: string | null | undefined;
 let optimizationLevel = 1;
+let fuseEnabled = false;
 let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();
@@ -155,6 +157,11 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
+  if (type === "set_fuse") {
+    fuseEnabled = e.data.fuse ?? fuseEnabled;
+    return;
+  }
+
   if (type === "update_workspace") {
     persistentWorkspaceFiles = e.data.workspaceFiles || [];
     if (e.data.searchPaths !== undefined) {
@@ -258,6 +265,7 @@ self.onmessage = (e: MessageEvent) => {
           displayResults: options?.displayResults ?? true,
           maxIterations: options?.maxIterations ?? 10000000,
           optimization: options?.optimization ?? optimizationLevel,
+          fuse: options?.fuse ?? fuseEnabled,
           initialVariableValues: useVariableValues,
           initialHoldState: useHoldState,
           fileIO: adapter,
@@ -307,6 +315,7 @@ self.onmessage = (e: MessageEvent) => {
       self.postMessage({
         type: "done",
         generatedJS: result.generatedJS,
+        generatedC: result.generatedC,
         outputCount: result.output.length,
         workspaceRep,
         plotInstructions: result.plotInstructions,
@@ -390,6 +399,7 @@ self.onmessage = (e: MessageEvent) => {
         displayResults: true,
         maxIterations: 10000000,
         optimization: optimizationLevel,
+        fuse: fuseEnabled,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
         fileIO: adapter,
