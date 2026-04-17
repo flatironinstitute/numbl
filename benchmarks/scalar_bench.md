@@ -68,6 +68,12 @@ Median of 3 runs for all modes.
 | `--opt 2` (C-JIT)       | **0.09 s** | **351 Mcalls/s** |            **~210×** |
 | MATLAB R2026a `-batch`  |     0.20 s |     148 Mcalls/s |                 ~88× |
 
+`--fuse` and `--par` don't apply here: the inner loop is a serial
+carried-dependency accumulator (`acc += sin(x·k)/k²`), so there's
+nothing to fuse and nothing to parallelize. Running with `--fuse --par`
+(under `NUMBL_CC=gcc-15`) measures 0.09 s / 327 Mcalls/s — effectively
+the same as plain `--opt 2`.
+
 ## Notes on timing methodology
 
 - **Warm-up.** A `run_bench(100, 10)` call before `tic` lands the JIT

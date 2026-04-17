@@ -60,14 +60,23 @@ Median of 3 runs for all modes.
 - **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
 - **MATLAB:** R2026a (26.1.0)
 
-| Mode                       |      Total |     Binary |  Unary | Cmp+Red |     Reduce |      Chain |
-| -------------------------- | ---------: | ---------: | -----: | ------: | ---------: | ---------: |
-| `--opt 0` (interpreter)    |     3.58 s |     0.48 s | 1.55 s |  0.46 s |     0.67 s |     0.42 s |
-| `--opt 1` (JS-JIT)         |     2.87 s |     0.15 s | 1.23 s |  0.44 s |     0.67 s |     0.38 s |
-| `--opt 2` (C-JIT)          |     2.80 s |     0.16 s | 1.20 s |  0.43 s |     0.68 s |     0.34 s |
-| `--opt 2 --fuse` (C-JIT)   |     1.93 s |     0.03 s | 0.93 s |  0.11 s |     0.67 s |     0.20 s |
-| MATLAB R2026a (1 thread)   |     2.83 s |     0.20 s | 1.81 s |  0.12 s |     0.31 s |     0.40 s |
-| MATLAB R2026a (16 threads) | **0.46 s** | **0.05 s** | 0.22 s |  0.07 s | **0.05 s** | **0.07 s** |
+| Mode                            |      Total |     Binary |      Unary | Cmp+Red |     Reduce |      Chain |
+| ------------------------------- | ---------: | ---------: | ---------: | ------: | ---------: | ---------: |
+| `--opt 0` (interpreter)         |     3.58 s |     0.48 s |     1.55 s |  0.46 s |     0.67 s |     0.42 s |
+| `--opt 1` (JS-JIT)              |     2.87 s |     0.15 s |     1.23 s |  0.44 s |     0.67 s |     0.38 s |
+| `--opt 2` (C-JIT)               |     2.80 s |     0.16 s |     1.20 s |  0.43 s |     0.68 s |     0.34 s |
+| `--opt 2 --fuse` (C-JIT)        |     1.93 s |     0.03 s |     0.93 s |  0.11 s |     0.67 s |     0.20 s |
+| `--opt 2 --fuse --par` (gcc-15) |     1.11 s |     0.04 s | **0.11 s** |  0.10 s |     0.65 s |     0.21 s |
+| MATLAB R2026a (1 thread)        |     2.83 s |     0.20 s |     1.81 s |  0.12 s |     0.31 s |     0.40 s |
+| MATLAB R2026a (16 threads)      | **0.46 s** | **0.05 s** |     0.22 s |  0.07 s | **0.05 s** | **0.07 s** |
+
+Adding `--par` (with `NUMBL_CC=gcc-15`, since Apple clang doesn't
+ship with OpenMP thread support) auto-parallelizes fused loops via
+`#pragma omp parallel for` — Unary drops 8× (0.93 → 0.11 s) and total
+wall time drops 1.7×. MATLAB 16-thread still wins overall (0.46 vs
+1.11 s) because this benchmark's `Reductions` kernel calls per-statement
+`sum`/`mean`/`max`/`min`, none of which are fused or parallelized in
+numbl yet — that single kernel accounts for 0.65 s of the remaining gap.
 
 ## C-JIT architecture
 

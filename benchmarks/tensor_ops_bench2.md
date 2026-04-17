@@ -56,14 +56,31 @@ Median of 3 runs for all modes.
 - **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
 - **MATLAB:** R2026a (26.1.0)
 
-| Mode                       |      Total |      Gauss |     Nested |    Inl.red |    Acc.red |     BinOps |      Clamp |
-| -------------------------- | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: |
-| `--opt 0` (interpreter)    |     8.01 s |     0.34 s |     1.37 s |     0.14 s |     0.35 s |     2.70 s |     3.12 s |
-| `--opt 1` (JS-JIT)         |     7.36 s |     0.26 s |     0.92 s |     0.09 s |     0.32 s |     2.66 s |     3.12 s |
-| `--opt 2` (C-JIT)          |     7.37 s |     0.23 s |     0.93 s |     0.09 s |     0.28 s |     2.67 s |     3.18 s |
-| `--opt 2 --fuse` (C-JIT)   |     1.90 s |     0.20 s |     0.76 s | **0.02 s** |     0.19 s |     0.61 s |     0.14 s |
-| MATLAB R2026a (1 thread)   |     3.48 s |     0.31 s |     1.49 s |     0.06 s |     0.33 s |     0.91 s |     0.37 s |
-| MATLAB R2026a (16 threads) | **0.47 s** | **0.05 s** | **0.17 s** | **0.02 s** | **0.04 s** | **0.13 s** | **0.06 s** |
+| Mode                            |      Total |      Gauss |     Nested |    Inl.red |    Acc.red |     BinOps |      Clamp |
+| ------------------------------- | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: |
+| `--opt 0` (interpreter)         |     8.01 s |     0.34 s |     1.37 s |     0.14 s |     0.35 s |     2.70 s |     3.12 s |
+| `--opt 1` (JS-JIT)              |     7.36 s |     0.26 s |     0.92 s |     0.09 s |     0.32 s |     2.66 s |     3.12 s |
+| `--opt 2` (C-JIT)               |     7.37 s |     0.23 s |     0.93 s |     0.09 s |     0.28 s |     2.67 s |     3.18 s |
+| `--opt 2 --fuse` (C-JIT)        |     1.90 s |     0.20 s |     0.76 s |     0.02 s |     0.19 s |     0.61 s |     0.14 s |
+| `--opt 2 --fuse --par` (gcc-15) | **0.41 s** | **0.03 s** | **0.09 s** | **0.00 s** |     0.20 s | **0.07 s** | **0.02 s** |
+| MATLAB R2026a (1 thread)        |     3.48 s |     0.31 s |     1.49 s |     0.06 s |     0.33 s |     0.91 s |     0.37 s |
+| MATLAB R2026a (16 threads)      |     0.47 s |     0.05 s |     0.17 s |     0.02 s | **0.04 s** |     0.13 s |     0.06 s |
+
+With `--par` enabled (via `NUMBL_CC=gcc-15` — Apple clang doesn't ship
+with OpenMP thread support), fused loops auto-parallelize across
+cores. **Total wall time beats MATLAB 16-thread (0.41 s vs 0.47 s)**
+and wins every kernel except Acc.red (where the serial reduction loop
+can't be parallelized with the current `#pragma omp simd` strategy).
+
+> **Caveat — Inl.red is a LICM artifact, not a real speedup.** Kernel 3
+> is `ir_acc = sum(x.*y + 0.5)` assigned fresh every trial iteration,
+> so the whole trials-loop body is loop-invariant. gcc-15 at
+> `-O2 -ffast-math` hoists it and runs the kernel once instead of 50
+> times, collapsing to ~0 ms. Apple clang doesn't hoist as aggressively
+> (~0.02 s), and MATLAB doesn't either. The closely-related kernel 4
+> (`ir_acc = ir_acc + sum(...)`) has a real carried dependency and is
+> not affected. A proper fix would be to make each trial depend on
+> `k` (e.g. `sum(x.*y + k*0.001)`) so LICM can't fire.
 
 ## Generated C examples
 
