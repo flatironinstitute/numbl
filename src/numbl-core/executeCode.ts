@@ -65,6 +65,8 @@ export interface ExecOptions {
   onInput?: (prompt: string) => string;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
   optimization?: number;
+  /** Emit fused per-element loops in C-JIT (requires --opt 2). */
+  fuse?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -351,6 +353,7 @@ export function executeCode(
   }
 
   interpreter.optimization = options.optimization ?? 1;
+  interpreter.fuse = options.fuse ?? false;
   interpreter.log = options.log;
 
   // Collect JIT compilations for generatedJS output and profiling

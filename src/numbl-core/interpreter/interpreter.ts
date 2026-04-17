@@ -105,6 +105,9 @@ export class Interpreter {
    */
   optimization: number = 1;
 
+  /** Emit fused per-element loops in C-JIT (--fuse flag). */
+  fuse: boolean = false;
+
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 
