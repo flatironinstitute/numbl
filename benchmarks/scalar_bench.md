@@ -50,15 +50,19 @@ Median of 3 runs per numbl mode; single run for MATLAB/Octave.
 | MATLAB R2025b `-batch`  |     0.30 s |      98 Mcalls/s |                ~114× |
 | Octave 9.4 `--eval`     |    65.03 s |    0.46 Mcalls/s |               ~0.53× |
 
-### macOS — TBD
+### macOS (N=60 000, M=500, 30M sin+div)
 
-| Mode                    | Wall time | Throughput | Speedup vs `--opt 0` |
-| ----------------------- | --------: | ---------: | -------------------: |
-| `--opt 0` (interpreter) |           |            |                      |
-| `--opt 1` (JS-JIT)      |           |            |                      |
-| `--opt 2` (C-JIT)       |           |            |                      |
-| MATLAB `-batch`         |           |            |                      |
-| Octave `--eval`         |           |            |                      |
+- **CPU:** Apple M4 Max
+- **OS:** macOS 15.7.3 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
+- **MATLAB:** R2026a (26.1.0) — single-threaded (`maxNumCompThreads(1)`; multi-threaded identical for this scalar loop)
+
+| Mode                    |  Wall time |       Throughput | Speedup vs `--opt 0` |
+| ----------------------- | ---------: | ---------------: | -------------------: |
+| `--opt 0` (interpreter) |    17.83 s |    1.68 Mcalls/s |                   1× |
+| `--opt 1` (JS-JIT)      |     0.23 s |     131 Mcalls/s |                 ~78× |
+| `--opt 2` (C-JIT)       | **0.09 s** | **351 Mcalls/s** |            **~210×** |
+| MATLAB R2026a `-batch`  |     0.20 s |     148 Mcalls/s |                 ~88× |
 
 ## Reading the table
 

@@ -45,6 +45,27 @@ Median of 3 runs for all modes.
 | `--opt 2 --fuse` (C-JIT) |  1.6 s | 0.12 s | 0.56 s |  0.07 s |  0.37 s | 0.31 s | 0.13 s |
 | MATLAB R2025b `-batch`   |  4.3 s | 0.30 s | 2.21 s |  0.10 s |  0.29 s | 0.94 s | 0.39 s |
 
+### macOS (N=2 000 000, trials=50)
+
+- **CPU:** Apple M4 Max (16 threads)
+- **OS:** macOS 15.7.3 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
+- **MATLAB:** R2026a (26.1.0)
+
+| Mode                       |      Total |      Gauss |     Nested |    Inl.red |    Acc.red |     BinOps |      Clamp |
+| -------------------------- | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: |
+| `--opt 0` (interpreter)    |     8.01 s |     0.34 s |     1.37 s |     0.14 s |     0.35 s |     2.70 s |     3.12 s |
+| `--opt 1` (JS-JIT)         |     7.36 s |     0.26 s |     0.92 s |     0.09 s |     0.32 s |     2.66 s |     3.12 s |
+| `--opt 2` (C-JIT)          |     7.37 s |     0.23 s |     0.93 s |     0.09 s |     0.28 s |     2.67 s |     3.18 s |
+| `--opt 2 --fuse` (C-JIT)   |     1.90 s |     0.20 s |     0.76 s | **0.02 s** |     0.19 s |     0.61 s |     0.14 s |
+| MATLAB R2026a (1 thread)   |     3.48 s |     0.31 s |     1.49 s |     0.06 s |     0.33 s |     0.91 s |     0.37 s |
+| MATLAB R2026a (16 threads) | **0.47 s** | **0.05 s** | **0.17 s** | **0.02 s** | **0.04 s** | **0.13 s** | **0.06 s** |
+
+Same pattern as the Linux run: fused C-JIT beats single-threaded MATLAB
+by ~1.8× on total, with the biggest wins on BinOps (0.61 s vs 0.91 s)
+and Clamp (0.14 s vs 0.37 s). Multi-threaded MATLAB pulls ahead ~4×
+overall by auto-parallelizing element-wise ops.
+
 ## Reading the table
 
 - **`--opt 2 --fuse` is 2.6× faster than MATLAB overall.** The fused
