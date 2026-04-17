@@ -324,6 +324,7 @@ Options (for run and eval):
                            via cc, load as a .node module, fall back to JS-JIT
                            on infeasible IR (requires a C compiler and Node API
                            headers; prints its compile command once to stderr)
+  --fuse             Emit fused per-element loops in C-JIT (requires --opt 2)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
@@ -347,6 +348,7 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   optimization: number;
+  fuse: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -362,6 +364,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: 1,
+    fuse: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -449,6 +452,9 @@ function parseOptions(args: string[]): ParsedOptions {
           console.error("Error: --opt requires a valid number");
           process.exit(1);
         }
+        break;
+      case "--fuse":
+        opts.fuse = true;
         break;
       default:
         if (args[i].startsWith("-")) {
@@ -658,6 +664,7 @@ async function executeWithOptions(
             onInput,
 
             optimization: opts.optimization,
+            fuse: opts.fuse,
           },
           workspaceFiles,
           mainFileName,
@@ -714,6 +721,7 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
+          fuse: opts.fuse,
         },
         workspaceFiles,
         mainFileName,
@@ -753,6 +761,7 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
+          fuse: opts.fuse,
         },
         workspaceFiles,
         mainFileName,

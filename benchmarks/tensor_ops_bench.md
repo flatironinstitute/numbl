@@ -18,12 +18,13 @@ loop-JIT can specialize the full iteration as a single C function under
 ## How to run
 
 ```bash
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 0   # interpreter
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 1   # JS-JIT
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2   # C-JIT
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 0          # interpreter
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 1          # JS-JIT
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2          # C-JIT (per-op)
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2 --fuse   # C-JIT (fused)
 matlab -batch "run('benchmarks/tensor_ops_bench.m')"
 (cd benchmarks && octave --no-gui --quiet --eval tensor_ops_bench)
-bash benchmarks/tensor_ops_bench_compare.sh                    # all of the above
+bash benchmarks/tensor_ops_bench_compare.sh                           # all of the above
 ```
 
 All runs produce the same check values (to FP rounding).
@@ -35,52 +36,59 @@ All runs produce the same check values (to FP rounding).
 - **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
 - **MATLAB:** R2025b Update 5 · **Octave:** 9.4.0
 
-Median of 3 runs per numbl mode; single run for MATLAB/Octave.
+Median of 3 runs for all modes.
 
-| Mode                    |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
-| ----------------------- | -----: | -----: | -----: | ------: | -----: | -----: |
-| `--opt 0` (interpreter) | 6.10 s | 1.10 s | 2.99 s |  0.54 s | 0.33 s | 1.13 s |
-| `--opt 1` (JS-JIT)      | 3.49 s | 0.71 s | 1.48 s |  0.36 s | 0.32 s | 0.63 s |
-| `--opt 2` (C-JIT)       | 3.35 s | 0.72 s | 1.46 s |  0.32 s | 0.27 s | 0.60 s |
-| MATLAB R2025b `-batch`  | 3.19 s | 0.28 s | 2.10 s |  0.20 s | 0.20 s | 0.42 s |
-| Octave 9.4 `--eval`     | 8.77 s | 1.03 s | 4.87 s |  0.88 s | 0.37 s | 1.62 s |
-| C baseline, per-op      | 2.63 s | 0.58 s | 1.22 s |  0.24 s | 0.11 s | 0.49 s |
-| C baseline, fused       | 1.03 s | 0.10 s | 0.68 s |  0.07 s | 0.04 s | 0.13 s |
+| Mode                     |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
+| ------------------------ | -----: | -----: | -----: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)  | 5.29 s | 1.25 s | 2.42 s |  0.52 s | 0.27 s | 0.96 s |
+| `--opt 1` (JS-JIT)       | 3.27 s | 0.66 s | 1.36 s |  0.34 s | 0.30 s | 0.61 s |
+| `--opt 2` (C-JIT)        | 3.09 s | 0.66 s | 1.34 s |  0.30 s | 0.25 s | 0.55 s |
+| `--opt 2 --fuse` (C-JIT) | 1.56 s | 0.10 s | 0.57 s |  0.28 s | 0.24 s | 0.38 s |
+| MATLAB R2025b `-batch`   | 2.86 s | 0.29 s | 1.82 s |  0.17 s | 0.18 s | 0.37 s |
+| Octave 9.4 `--eval`      | 7.75 s | 0.98 s | 4.41 s |  0.75 s | 0.30 s | 1.40 s |
+| C baseline, per-op       | 2.63 s | 0.58 s | 1.22 s |  0.24 s | 0.11 s | 0.49 s |
+| C baseline, fused        | 1.03 s | 0.10 s | 0.68 s |  0.07 s | 0.04 s | 0.13 s |
 
 ### macOS — TBD
 
-| Mode                    | Total | Binary | Unary | Cmp+Red | Reduce | Chain |
-| ----------------------- | ----: | -----: | ----: | ------: | -----: | ----: |
-| `--opt 0` (interpreter) |       |        |       |         |        |       |
-| `--opt 1` (JS-JIT)      |       |        |       |         |        |       |
-| `--opt 2` (C-JIT)       |       |        |       |         |        |       |
-| MATLAB `-batch`         |       |        |       |         |        |       |
-| Octave `--eval`         |       |        |       |         |        |       |
+| Mode                     | Total | Binary | Unary | Cmp+Red | Reduce | Chain |
+| ------------------------ | ----: | -----: | ----: | ------: | -----: | ----: |
+| `--opt 0` (interpreter)  |       |        |       |         |        |       |
+| `--opt 1` (JS-JIT)       |       |        |       |         |        |       |
+| `--opt 2` (C-JIT)        |       |        |       |         |        |       |
+| `--opt 2 --fuse` (C-JIT) |       |        |       |         |        |       |
+| MATLAB `-batch`          |       |        |       |         |        |       |
+| Octave `--eval`          |       |        |       |         |        |       |
 
 ## Reading the table
 
-- **`--opt 2` (C-JIT) is ~4% faster overall than `--opt 1` (JS-JIT).**
-  The C-JIT compiles each loop body to a single `.so` loaded via koffi,
-  with direct `numbl_real_*` calls and lazy-allocated scratch buffers
-  reused across iterations. The main wins are on reductions (−16%) and
-  comparisons (−11%), where eliminating per-statement JS overhead matters
-  most.
-- **MATLAB is ~5% faster overall** than `--opt 2`, but slower on unary
-  ops (2.10 s vs 1.46 s). MATLAB's binary dispatch and BLAS-backed
-  element-wise ops are highly optimized; numbl's `libnumbl_ops` kernels
-  are competitive on transcendentals (exp/sin/cos/tanh).
-- **The C baselines bracket future optimization headroom.** `per-op`
-  (2.63 s) is the ceiling for the current per-statement architecture —
-  any mode that calls libnumbl_ops per op can approach but not beat it.
-  `fused` (1.03 s) is the ceiling if the C-JIT ever emits fused per-
-  element loops instead of chained libnumbl_ops calls.
-- **Octave** is ~2.5× slower than numbl's C-JIT. Octave's experimental
-  JIT is off by default in 9.x.
-- **No exit hangs.** The koffi-based `.so` loading has no Node module
-  registration or libuv teardown hooks, eliminating the process-exit
-  hangs that affected the previous N-API `.node` approach.
+- **`--opt 2 --fuse` is 1.8× faster than MATLAB overall** and 2× faster
+  than per-op C-JIT. The fused codegen collapses consecutive tensor
+  element-wise assigns into a single `for` loop with inline scalar
+  expressions per element — no libnumbl_ops calls, no intermediate
+  buffers, one memory pass. The compiler auto-vectorizes via
+  `#pragma omp simd` and `-fopenmp-simd -ffast-math`.
+- **Binary fusion matches the hand-written C baseline** (0.10 s vs
+  0.10 s). All four ops run in a single SIMD-vectorized loop with one
+  read of `x[i]`/`y[i]` and one write of `r[i]`.
+- **Unary fusion beats the C baseline** (0.57 s vs 0.68 s). The fused
+  loop keeps all transcendentals (`exp`, `cos`, `sin`, `tanh`) in
+  registers; the baseline was compiled separately and may not benefit
+  from the same cross-function inlining.
+- **MATLAB is faster on reductions and comparisons** (0.17 s vs 0.28 s).
+  The comparison kernel's `sum(c1 .* c2)` pattern is not yet fused into
+  the comparison chain — `c1` and `c2` are fused, but the subsequent
+  `sum(c1.*c2)` falls back to per-op. Fusing reduction of arbitrary
+  tensor expressions (not just the last chain variable) is future work.
+- **Per-op C-JIT (`--opt 2`) is ~5% faster than JS-JIT** on the same
+  per-statement architecture. The C-JIT eliminates per-statement JS
+  overhead; the main wins are on reductions and comparisons.
+- **Octave** is ~5× slower than numbl's fused C-JIT. Octave's
+  experimental JIT is off by default in 9.x.
 
-## C-JIT architecture (koffi)
+## C-JIT architecture
+
+### Per-op mode (`--opt 2`)
 
 The C-JIT emits pure C functions with raw `double*` / `int64_t`
 parameters — no N-API, no `napi_value`, no `napi_env`. Each compiled
@@ -90,29 +98,49 @@ loop body is a self-contained `.so` loaded via [koffi](https://koffi.dev)
 Generated C for the binary kernel (simplified):
 
 ```c
-void jit__loop_for(
-    double v_trials,
-    const double *v_x_data, int64_t v_x_len,
-    const double *v_y_data, int64_t v_y_len,
-    const double *v_r_data_in, int64_t v_r_len_in,
-    double *v_k_out,
-    double *v_r_buf, int64_t *v_r_out_len)
-{
-  double *v_r_data = v_r_buf;
-  int64_t v_r_len = v_r_len_in;
-  double *__s1_data = NULL; /* scratch, lazily allocated */
-  ...
-  for (double __t1 = 1.0; __t1 <= v_trials; __t1 += 1.0) {
-    v_r_len = v_x_len;
-    numbl_real_binary_elemwise(NUMBL_REAL_BIN_ADD, v_r_len, v_x_data, v_y_data, v_r_data);
-    if (!__s1_data) __s1_data = malloc(v_r_len * sizeof(double));
-    numbl_real_scalar_binary_elemwise(NUMBL_REAL_BIN_MUL, v_r_len, 0.5, v_x_data, 1, __s1_data);
-    numbl_real_binary_elemwise(NUMBL_REAL_BIN_SUB, v_r_len, v_r_data, __s1_data, v_r_data);
+for (double __t1 = 1.0; __t1 <= v_trials; __t1 += 1.0) {
+    numbl_real_binary_elemwise(ADD, v_x_len, v_x_data, v_y_data, v_r_data);
+    if (!__s1_data) __s1_data = malloc(v_x_len * sizeof(double));
+    numbl_real_scalar_binary_elemwise(MUL, v_x_len, 0.5, v_x_data, 1, __s1_data);
+    numbl_real_binary_elemwise(SUB, v_x_len, v_r_data, __s1_data, v_r_data);
     ...
-  }
-  *v_k_out = v_k;
-  *v_r_out_len = v_r_len;
-  free(__s1_data); ...
+}
+```
+
+### Fused mode (`--opt 2 --fuse`)
+
+The fusion pass (`cFusion.ts`) scans the loop body for runs of
+consecutive tensor element-wise assigns and collapses them into a single
+per-element `for` loop (`cFusedCodegen.ts`). Trailing reductions
+(`acc += sum(r)`) are absorbed as inline accumulators.
+
+Generated C for the binary kernel:
+
+```c
+for (double __t1 = 1.0; __t1 <= v_trials; __t1 += 1.0) {
+    #pragma omp simd
+    for (int64_t __i = 0; __i < v_x_len; __i++) {
+      double __f_r = (v_x_data[__i] + v_y_data[__i]);
+      __f_r = (__f_r - (0.5 * v_x_data[__i]));
+      __f_r = ((__f_r * v_y_data[__i]) + 3.0);
+      __f_r = (__f_r / (1.0 + fabs(v_y_data[__i])));
+      v_r_data[__i] = __f_r;
+    }
+}
+```
+
+Generated C for the chain kernel (with fused reduction):
+
+```c
+for (double __t1 = 1.0; __t1 <= v_trials; __t1 += 1.0) {
+    double __f_reduce_acc = 0.0;
+    for (int64_t __i = 0; __i < v_x_len; __i++) {
+      double __f_r2 = ((v_x_data[__i] * v_y_data[__i]) + 0.5);
+      __f_r2 = exp((-__f_r2 * __f_r2));
+      __f_r2 = (__f_r2 * v_x_data[__i]);
+      __f_reduce_acc += __f_r2;
+    }
+    v_chain_acc += __f_reduce_acc;
 }
 ```
 
@@ -123,5 +151,8 @@ void jit__loop_for(
   to complex, libnumbl_ops returns NaN. Same behavior as JS-JIT.
 - **Complex tensors** are not in the C-JIT path yet. Real-only.
 - **Compiled `.so` cache** lives at `~/.cache/numbl/c-jit/<sha>.so`,
-  keyed by source + compiler/platform/numbl versions + `libnumbl_ops.a`
-  contents.
+  keyed by source + compiler/platform/numbl versions + git HEAD +
+  `libnumbl_ops.a` contents.
+- **`-ffast-math`** is enabled for the C-JIT compile. This allows SIMD
+  vectorization of transcendentals but changes FP rounding — check
+  values may differ slightly between modes.

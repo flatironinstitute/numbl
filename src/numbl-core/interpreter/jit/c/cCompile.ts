@@ -159,7 +159,12 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
 
   const skipNativeDefaults = !!process.env.NUMBL_NO_NATIVE_CFLAGS;
   if (!skipNativeDefaults) {
-    for (const flag of ["-march=native"]) {
+    for (const flag of [
+      "-march=native",
+      "-fopenmp-simd",
+      "-fno-math-errno",
+      "-ffast-math",
+    ]) {
       if (compilerAcceptsFlag(cc, flag)) flags.push(flag);
     }
   }
