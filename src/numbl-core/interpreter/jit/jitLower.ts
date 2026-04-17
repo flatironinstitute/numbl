@@ -224,17 +224,23 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
     case "ExprStmt":
       // Most ExprStmts set `ans` in the env, which the JIT codegen
       // doesn't do — bail. Exception: `tic;` (no args, no assignment)
-      // is a side-effect-only call that we can JIT.
-      if (
-        stmt.expr.type === "FuncCall" &&
-        stmt.expr.name === "tic" &&
-        stmt.expr.args.length === 0 &&
-        !ctx.env.has("tic")
-      ) {
-        const lowered = lowerIBuiltinCall(ctx, stmt.expr);
-        if (lowered) {
-          result = [...prefix, { tag: "ExprStmt", expr: lowered }];
-          return result;
+      // is a side-effect-only call that we can JIT. `tic;` parses as
+      // either a bare Ident or a zero-arg FuncCall depending on source;
+      // accept both.
+      {
+        const e = stmt.expr;
+        const isTicIdent = e.type === "Ident" && e.name === "tic";
+        const isTicCall =
+          e.type === "FuncCall" && e.name === "tic" && e.args.length === 0;
+        if ((isTicIdent || isTicCall) && !ctx.env.has("tic")) {
+          const call: Expr & { type: "FuncCall" } = isTicCall
+            ? (e as Expr & { type: "FuncCall" })
+            : { type: "FuncCall", name: "tic", args: [], span: e.span };
+          const lowered = lowerIBuiltinCall(ctx, call);
+          if (lowered) {
+            result = [...prefix, { tag: "ExprStmt", expr: lowered }];
+            return result;
+          }
         }
       }
       return null;
@@ -1332,8 +1338,23 @@ function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         };
       }
       const type = ctx.env.get(expr.name);
-      if (!type) return null; // undefined variable
-      return { tag: "Var", name: expr.name, jitType: type };
+      if (type) return { tag: "Var", name: expr.name, jitType: type };
+      // Not a variable — try resolving as a zero-arg builtin call.
+      // MATLAB lets bare identifiers like `toc` parse as Ident but
+      // execute as zero-arg calls; synthesize the equivalent FuncCall
+      // and route through lowerIBuiltinCall so things like `t = toc`
+      // can JIT. Skip frame-sensitive builtins (nargin/nargout/etc.)
+      // whose IBuiltin apply doesn't see the active call frame —
+      // the interpreter handles these via special env lookups that
+      // the JIT doesn't yet model.
+      if (FRAME_SENSITIVE_NO_ARG_BUILTINS.has(expr.name)) return null;
+      const zeroArgCall: Expr & { type: "FuncCall" } = {
+        type: "FuncCall",
+        name: expr.name,
+        args: [],
+        span: expr.span,
+      };
+      return lowerIBuiltinCall(ctx, zeroArgCall);
     }
 
     case "Binary": {
@@ -2262,6 +2283,15 @@ const CALLER_AWARE_BUILTINS = new Set<string>([
   "keyboard",
   "input",
 ]);
+
+/**
+ * Zero-arg builtins whose correct evaluation depends on the interpreter's
+ * call frame (e.g. reading $nargin/$nargout from the enclosing function's
+ * env). Their IBuiltin `resolve`/`apply` don't see that frame and return
+ * a wrong value, so bail out rather than routing a bare-Ident reference
+ * through lowerIBuiltinCall.
+ */
+const FRAME_SENSITIVE_NO_ARG_BUILTINS = new Set<string>(["nargin", "nargout"]);
 
 function callerAwareBuiltinInBody(body: Stmt[]): boolean {
   const visitExpr = (e: Expr): boolean => {
