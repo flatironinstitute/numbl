@@ -1,5 +1,5 @@
 /**
- * Fusion analysis for the C-JIT codegen.
+ * Fusion analysis for JIT backends (shared by JS-JIT and C-JIT).
  *
  * Scans a statement list for runs of tensor element-wise assigns that
  * can be collapsed into a single per-element `for` loop. Each such run
@@ -21,11 +21,14 @@
  * materialising the intermediate buffer.
  */
 
-import type { JitExpr, JitStmt } from "../jitTypes.js";
-import { BinaryOperation } from "../../../parser/types.js";
-import { C_TENSOR_UNARY_OPS, C_TENSOR_REDUCTION_OPS } from "./cFeasibility.js";
+import type { JitExpr, JitStmt } from "./jitTypes.js";
+import { BinaryOperation } from "../../parser/types.js";
+import {
+  FUSIBLE_TENSOR_UNARY_OPS,
+  FUSIBLE_TENSOR_REDUCTION_OPS,
+} from "./fusionOps.js";
 
-// ── Public types ──────────────────────────────────────────���──────────
+// ── Public types ─────────────────────────────────────────────────────
 
 /** One tensor assign inside a fusible chain. */
 export interface FusedAssign {
@@ -75,7 +78,8 @@ export interface FusibleChain {
 function isPureElementwise(
   expr: JitExpr,
   paramTensors: ReadonlySet<string>,
-  knownTensors: ReadonlySet<string>
+  knownTensors: ReadonlySet<string>,
+  allowedUnaryOps: ReadonlySet<string>
 ): boolean {
   switch (expr.tag) {
     case "NumberLiteral":
@@ -89,28 +93,41 @@ function isPureElementwise(
       return true;
 
     case "Binary": {
-      // All binary ops that feasibility already accepted are fine for
-      // fusion as long as both children are pure.
       return (
-        isPureElementwise(expr.left, paramTensors, knownTensors) &&
-        isPureElementwise(expr.right, paramTensors, knownTensors)
+        isPureElementwise(
+          expr.left,
+          paramTensors,
+          knownTensors,
+          allowedUnaryOps
+        ) &&
+        isPureElementwise(
+          expr.right,
+          paramTensors,
+          knownTensors,
+          allowedUnaryOps
+        )
       );
     }
 
     case "Unary":
-      return isPureElementwise(expr.operand, paramTensors, knownTensors);
+      return isPureElementwise(
+        expr.operand,
+        paramTensors,
+        knownTensors,
+        allowedUnaryOps
+      );
 
     case "Call": {
       // Tensor unary calls (exp, sin, etc.)
-      if (expr.jitType.kind === "tensor" && expr.name in C_TENSOR_UNARY_OPS) {
+      if (expr.jitType.kind === "tensor" && allowedUnaryOps.has(expr.name)) {
         return expr.args.every(a =>
-          isPureElementwise(a, paramTensors, knownTensors)
+          isPureElementwise(a, paramTensors, knownTensors, allowedUnaryOps)
         );
       }
       // Scalar math calls (sin of a scalar, etc.)
       if (expr.jitType.kind !== "tensor") {
         return expr.args.every(a =>
-          isPureElementwise(a, paramTensors, knownTensors)
+          isPureElementwise(a, paramTensors, knownTensors, allowedUnaryOps)
         );
       }
       return false;
@@ -139,7 +156,7 @@ function tryMatchReduction(
   // Pattern 1: acc = reduce(tensor)
   if (
     expr.tag === "Call" &&
-    expr.name in C_TENSOR_REDUCTION_OPS &&
+    FUSIBLE_TENSOR_REDUCTION_OPS.has(expr.name) &&
     expr.args.length === 1 &&
     expr.args[0].tag === "Var" &&
     expr.args[0].name === lastChainDest
@@ -159,7 +176,7 @@ function tryMatchReduction(
       expr.left.tag === "Var" &&
       expr.left.name === stmt.name &&
       expr.right.tag === "Call" &&
-      expr.right.name in C_TENSOR_REDUCTION_OPS &&
+      FUSIBLE_TENSOR_REDUCTION_OPS.has(expr.right.name) &&
       expr.right.args.length === 1 &&
       expr.right.args[0].tag === "Var" &&
       expr.right.args[0].name === lastChainDest
@@ -177,7 +194,7 @@ function tryMatchReduction(
       expr.right.tag === "Var" &&
       expr.right.name === stmt.name &&
       expr.left.tag === "Call" &&
-      expr.left.name in C_TENSOR_REDUCTION_OPS &&
+      FUSIBLE_TENSOR_REDUCTION_OPS.has(expr.left.name) &&
       expr.left.args.length === 1 &&
       expr.left.args[0].tag === "Var" &&
       expr.left.args[0].name === lastChainDest
@@ -202,11 +219,16 @@ function tryMatchReduction(
  * will be read via `data[i]` in the fused loop).
  * `allTensorVars` is the full set of tensor-typed variables (params +
  * locals + outputs).
+ * `allowedUnaryOps` optionally restricts which tensor unary Call names
+ * are fusible. Defaults to `FUSIBLE_TENSOR_UNARY_OPS` (full set).
+ * The JS backend passes a restricted set that excludes transcendentals
+ * (V8 can't vectorize them, so fusing them is slower than per-op calls).
  */
 export function findFusibleChains(
   stmts: JitStmt[],
   paramTensors: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
+  allTensorVars: ReadonlySet<string>,
+  allowedUnaryOps: ReadonlySet<string> = FUSIBLE_TENSOR_UNARY_OPS
 ): FusibleChain[] {
   const chains: FusibleChain[] = [];
   let i = 0;
@@ -227,7 +249,8 @@ export function findFusibleChains(
       if (s.tag !== "Assign") break;
       if (!allTensorVars.has(s.name)) break;
       if (s.expr.jitType.kind !== "tensor") break;
-      if (!isPureElementwise(s.expr, paramTensors, produced)) break;
+      if (!isPureElementwise(s.expr, paramTensors, produced, allowedUnaryOps))
+        break;
 
       chainAssigns.push({ destName: s.name, expr: s.expr });
       produced.add(s.name);

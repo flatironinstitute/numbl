@@ -324,7 +324,7 @@ Options (for run and eval):
                            via cc, load as a .node module, fall back to JS-JIT
                            on infeasible IR (requires a C compiler and Node API
                            headers; prints its compile command once to stderr)
-  --fuse             Emit fused per-element loops in C-JIT (requires --opt 2)
+  --fuse             Emit fused per-element loops (JS-JIT and C-JIT)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})

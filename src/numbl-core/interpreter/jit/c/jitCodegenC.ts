@@ -18,7 +18,7 @@
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import { C_TENSOR_REDUCTION_OPS, C_TENSOR_UNARY_OPS } from "./cFeasibility.js";
-import { findFusibleChains } from "./cFusion.js";
+import { findFusibleChains } from "../fusion.js";
 import { emitFusedChain } from "./cFusedCodegen.js";
 
 const MANGLE_PREFIX = "v_";

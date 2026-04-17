@@ -19,6 +19,8 @@ import {
   type RuntimeValue,
 } from "../../runtime/types.js";
 
+import { uninitFloat64 } from "../../runtime/alloc.js";
+
 import {
   mTranspose,
   mConjugateTranspose,
@@ -210,6 +212,11 @@ export const jitHelpers = {
 
   // Scalar math
   mod,
+
+  // Fused-loop helpers (raw Float64Array allocation + wrapping)
+  uninit: uninitFloat64,
+  wrapF64: (data: Float64Array, shape: number[]) =>
+    makeTensor(data, undefined, shape.slice()),
 
   // Tensor binary ops
   tAdd,

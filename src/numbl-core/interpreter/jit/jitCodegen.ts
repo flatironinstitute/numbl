@@ -13,6 +13,9 @@ import {
   isKnownInteger,
 } from "./jitTypes.js";
 import { getIBuiltin } from "../builtins/types.js";
+import { findFusibleChains } from "./fusion.js";
+import { FUSIBLE_TENSOR_UNARY_OPS_JS } from "./fusionOps.js";
+import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
   type HoistedAlias,
   structFieldKey,
@@ -23,6 +26,64 @@ import {
   collectStructFieldReads,
   collectStructArrayElementReads,
 } from "./jitCodegenHoist.js";
+
+// ── Fusion: collect all real-tensor variable names from IR ──────────────
+
+function collectAllTensorVars(
+  stmts: JitStmt[],
+  paramSet: ReadonlySet<string>,
+  allTensors: Set<string>,
+  paramTensors: Set<string>
+): void {
+  for (const s of stmts) {
+    if (s.tag === "Assign") {
+      if (
+        s.expr.jitType.kind === "tensor" &&
+        s.expr.jitType.isComplex !== true
+      ) {
+        allTensors.add(s.name);
+        if (paramSet.has(s.name)) paramTensors.add(s.name);
+      }
+      collectTensorVarsFromExpr(s.expr, paramSet, allTensors, paramTensors);
+    } else if (s.tag === "If") {
+      collectAllTensorVars(s.thenBody, paramSet, allTensors, paramTensors);
+      for (const eib of s.elseifBlocks)
+        collectAllTensorVars(eib.body, paramSet, allTensors, paramTensors);
+      if (s.elseBody)
+        collectAllTensorVars(s.elseBody, paramSet, allTensors, paramTensors);
+    } else if (s.tag === "For") {
+      collectAllTensorVars(s.body, paramSet, allTensors, paramTensors);
+    } else if (s.tag === "While") {
+      collectAllTensorVars(s.body, paramSet, allTensors, paramTensors);
+    }
+  }
+}
+
+function collectTensorVarsFromExpr(
+  expr: JitExpr,
+  paramSet: ReadonlySet<string>,
+  allTensors: Set<string>,
+  paramTensors: Set<string>
+): void {
+  if (
+    expr.tag === "Var" &&
+    expr.jitType.kind === "tensor" &&
+    expr.jitType.isComplex !== true
+  ) {
+    allTensors.add(expr.name);
+    if (paramSet.has(expr.name)) paramTensors.add(expr.name);
+    return;
+  }
+  if (expr.tag === "Binary") {
+    collectTensorVarsFromExpr(expr.left, paramSet, allTensors, paramTensors);
+    collectTensorVarsFromExpr(expr.right, paramSet, allTensors, paramTensors);
+  } else if (expr.tag === "Unary") {
+    collectTensorVarsFromExpr(expr.operand, paramSet, allTensors, paramTensors);
+  } else if (expr.tag === "Call") {
+    for (const a of expr.args)
+      collectTensorVarsFromExpr(a, paramSet, allTensors, paramTensors);
+  }
+}
 
 // ── JS reserved words to mangle ─────────────────────────────────────────
 
@@ -149,6 +210,13 @@ let _hoistedStructFields: Map<string, string> = new Map();
  */
 let _hoistedStructArrayElements: Map<string, string> = new Map();
 
+// ── Fusion state (--fuse flag) ──────────────────────────────────────────
+let _fuse = false;
+let _fusionParamTensors: ReadonlySet<string> = new Set();
+let _fusionAllTensorVars: ReadonlySet<string> = new Set();
+let _fusionOutputTensors: ReadonlySet<string> = new Set();
+let _fusionLocalTensors: ReadonlySet<string> = new Set();
+
 function allocScratch(): string {
   const name = `$s${_scratchLocals.length + 1}`;
   _scratchLocals.push(name);
@@ -161,12 +229,14 @@ export function generateJS(
   outputs: string[],
   nargout: number,
   localVars: Set<string>,
-  fileName?: string
+  fileName?: string,
+  fuse?: boolean
 ): string {
   _tmpCounter = 0;
   _scratchLocals = [];
   _fileName = fileName;
   _fileEmitted = false;
+  _fuse = fuse ?? false;
 
   // Compute the return expression for early returns and the final return
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -327,6 +397,38 @@ export function generateJS(
     );
   }
 
+  // Compute fusion tensor sets if --fuse is enabled.
+  if (_fuse) {
+    const paramTensors = new Set<string>();
+    const allTensors = new Set<string>();
+    // Tensors from hoist analysis (indexed params/locals).
+    for (const [name, u] of usage) {
+      if (!u.isReal) continue;
+      allTensors.add(name);
+      if (paramSet.has(name)) paramTensors.add(name);
+    }
+    // Walk the IR to find all real-tensor-typed variable references
+    // (params and locals that appear in Assign LHS/RHS, Call args, etc.).
+    // collectTensorUsage only covers indexed vars; fusion needs all of them.
+    collectAllTensorVars(body, paramSet, allTensors, paramTensors);
+    const effectiveOutputSet = new Set(effectiveOutputs);
+    _fusionParamTensors = paramTensors;
+    _fusionAllTensorVars = allTensors;
+    _fusionOutputTensors = new Set(
+      [...allTensors].filter(v => effectiveOutputSet.has(v))
+    );
+    _fusionLocalTensors = new Set(
+      [...allTensors].filter(
+        v => !paramTensors.has(v) && !effectiveOutputSet.has(v)
+      )
+    );
+  } else {
+    _fusionParamTensors = new Set();
+    _fusionAllTensorVars = new Set();
+    _fusionOutputTensors = new Set();
+    _fusionLocalTensors = new Set();
+  }
+
   // Emit body into a separate buffer so we can prepend scratch-local
   // declarations once allocScratch counts are known.
   const bodyLines: string[] = [];
@@ -346,8 +448,48 @@ export function generateJS(
 // ── Statement emission ──────────────────────────────────────────────────
 
 function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
-  for (const stmt of stmts) {
-    emitStmt(lines, stmt, indent);
+  if (!_fuse) {
+    for (const stmt of stmts) emitStmt(lines, stmt, indent);
+    return;
+  }
+
+  // Fusion enabled: find fusible chains, emit them as fused loops,
+  // emit non-fused statements via the per-op path.
+  const chains = findFusibleChains(
+    stmts,
+    _fusionParamTensors,
+    _fusionAllTensorVars,
+    FUSIBLE_TENSOR_UNARY_OPS_JS
+  );
+
+  const coveredByChain = new Map<number, (typeof chains)[0]>();
+  for (const chain of chains) {
+    coveredByChain.set(chain.startIdx, chain);
+  }
+
+  let i = 0;
+  while (i < stmts.length) {
+    const chain = coveredByChain.get(i);
+    if (chain) {
+      emitJsFusedChain(
+        lines,
+        indent,
+        chain,
+        _fusionAllTensorVars,
+        _fusionParamTensors,
+        _fusionOutputTensors,
+        _fusionLocalTensors,
+        mangle
+      );
+      // Refresh hoisted aliases for any dest that has one.
+      for (const assign of chain.assigns) {
+        emitHoistRefresh(lines, assign.destName, indent);
+      }
+      i += chain.length;
+    } else {
+      emitStmt(lines, stmts[i], indent);
+      i++;
+    }
   }
 }
 

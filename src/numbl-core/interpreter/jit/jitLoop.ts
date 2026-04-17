@@ -270,7 +270,8 @@ function tryJitLoop(
     lowered.outputNames,
     outputs.length,
     lowered.localVars,
-    currentFile
+    currentFile,
+    interp.fuse
   );
 
   // Prepend generated helper function definitions

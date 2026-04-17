@@ -144,7 +144,8 @@ export function tryJitCall(
     lowered.outputNames,
     nargout,
     lowered.localVars,
-    currentFile
+    currentFile,
+    interp.fuse
   );
 
   // Prepend generated helper function definitions (indented to match main body)

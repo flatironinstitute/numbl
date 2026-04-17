@@ -1,7 +1,7 @@
 /**
  * Fused per-element loop emission for the C-JIT.
  *
- * Given a FusibleChain (from cFusion.ts), emits a single
+ * Given a FusibleChain (from fusion.ts), emits a single
  *   `for (int64_t __i = 0; __i < N; __i++) { ... }`
  * loop that evaluates all the chain's tensor assigns as inline scalar
  * expressions per element — no libnumbl_ops calls, no intermediate
@@ -20,8 +20,8 @@
 
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr } from "../jitTypes.js";
-import type { FusibleChain } from "./cFusion.js";
-import { C_TENSOR_UNARY_OPS } from "./cFeasibility.js";
+import type { FusibleChain } from "../fusion.js";
+import { FUSIBLE_TENSOR_UNARY_OPS } from "../fusionOps.js";
 
 const MANGLE_PREFIX = "v_";
 
@@ -224,7 +224,8 @@ function emitCallScalar(
 ): string {
   // Tensor unary call → becomes scalar math call on the per-element value
   if (
-    (expr.jitType.kind === "tensor" && expr.name in C_TENSOR_UNARY_OPS) ||
+    (expr.jitType.kind === "tensor" &&
+      FUSIBLE_TENSOR_UNARY_OPS.has(expr.name)) ||
     expr.name in BUILTIN_TO_C
   ) {
     const cName = BUILTIN_TO_C[expr.name];
