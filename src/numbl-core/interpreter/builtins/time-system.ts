@@ -35,7 +35,7 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (argCode, argTypes) => {
+  jitEmit: (_argCode, argTypes) => {
     if (argTypes.length !== 0) return null;
     return `$h.__tic()`;
   },

@@ -344,6 +344,11 @@ function checkStmt(stmt: JitStmt): FeasibilityResult {
     case "AssignMember":
     case "MultiAssign":
       return { ok: false, reason: `unsupported stmt: ${stmt.tag}` };
+    default:
+      return {
+        ok: false,
+        reason: `unknown stmt: ${(stmt as { tag: string }).tag}`,
+      };
   }
 }
 
