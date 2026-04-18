@@ -39,7 +39,6 @@ registerCJitBackend({
       body,
       fn.params,
       argTypes,
-      outputNames,
       outputType,
       outputTypes,
       nargout

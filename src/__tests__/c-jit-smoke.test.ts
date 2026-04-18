@@ -47,7 +47,6 @@ describe("C-JIT: feasibility prepass", () => {
       body,
       ["a", "b"],
       [numberT, numberT],
-      ["out"],
       numberT,
       [numberT],
       1
@@ -62,30 +61,14 @@ describe("C-JIT: feasibility prepass", () => {
       shape: [100, 1],
     };
     const numberT: JitType = { kind: "number" };
-    const r = checkCFeasibility(
-      [],
-      ["x"],
-      [tensorT],
-      ["out"],
-      numberT,
-      [numberT],
-      1
-    );
+    const r = checkCFeasibility([], ["x"], [tensorT], numberT, [numberT], 1);
     expect(r.ok).toBe(true);
   });
 
   it("rejects complex tensor args", () => {
     const tensorT: JitType = { kind: "tensor", isComplex: true };
     const numberT: JitType = { kind: "number" };
-    const r = checkCFeasibility(
-      [],
-      ["x"],
-      [tensorT],
-      ["out"],
-      numberT,
-      [numberT],
-      1
-    );
+    const r = checkCFeasibility([], ["x"], [tensorT], numberT, [numberT], 1);
     expect(r.ok).toBe(false);
   });
 
@@ -95,7 +78,6 @@ describe("C-JIT: feasibility prepass", () => {
       [],
       ["x"],
       [numberT],
-      ["o1", "o2"],
       numberT,
       [numberT, numberT],
       2
@@ -298,7 +280,6 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
       body,
       ["x", "y"],
       [tensor1dT, tensor1dT],
-      ["r"],
       tensor1dT,
       [tensor1dT],
       1
@@ -323,7 +304,6 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
       body,
       ["x"],
       [tensor1dT],
-      ["r"],
       tensor1dT,
       [tensor1dT],
       1
@@ -349,7 +329,6 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
       body,
       ["x"],
       [tensor1dT],
-      ["s"],
       numberT,
       [numberT],
       1
@@ -374,7 +353,6 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
       body,
       ["x"],
       [tensor1dT],
-      ["r"],
       tensor1dT,
       [tensor1dT],
       1

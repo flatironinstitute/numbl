@@ -29,11 +29,13 @@ export type FeasibilityResult =
 interface Ctx {
   /** Updated from `SetLoc` markers during statement traversal. */
   line: number;
-  /** Tensor names that are both input params AND outputs — the
-   *  `function x = foo(x, ...)` pattern. Only these are safe AssignIndex
-   *  targets today: the JS wrapper seeds the output buffer with a copy
-   *  of the caller's data so writes don't scribble on caller memory. */
-  paramOutputTensors: Set<string>;
+  /** Every tensor-typed input param. AssignIndex is allowed on any of
+   *  these: param-outputs land on the seeded output buffer; pure-input
+   *  params land on a C-side unshare buffer (malloc'd in the prelude,
+   *  memcpy'd from the caller's data). Tensor locals and names aliased
+   *  to a param via `y = x` still defer — supporting those requires
+   *  flow analysis the emitter doesn't do yet. */
+  tensorParams: Set<string>;
 }
 
 function fail(ctx: Ctx, reason: string): FeasibilityResult {
@@ -390,10 +392,10 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       if (!isScalarKind(stmt.value.jitType.kind)) {
         return fail(ctx, "AssignIndex value must be scalar");
       }
-      if (!ctx.paramOutputTensors.has(stmt.baseName)) {
+      if (!ctx.tensorParams.has(stmt.baseName)) {
         return fail(
           ctx,
-          `AssignIndex base '${stmt.baseName}' must be both param and output`
+          `AssignIndex base '${stmt.baseName}' must be a tensor param`
         );
       }
       const vr = checkExpr(stmt.value, ctx);
@@ -428,7 +430,6 @@ export function checkCFeasibility(
   body: JitStmt[],
   paramNames: string[],
   argTypes: JitType[],
-  outputNames: string[],
   outputType: JitType | null,
   outputTypes: JitType[],
   nargout: number
@@ -454,17 +455,14 @@ export function checkCFeasibility(
       reason: `nargout ${nargout} exceeds available outputs (${outputTypes.length})`,
     };
   }
-  // Tensor names that are simultaneously input params AND outputs. The
-  // JS wrapper seeds these output buffers with a copy of the caller's
-  // data, so writes via AssignIndex land on a buffer independent of the
-  // caller's tensor — safe MATLAB call-by-value + local-mutation.
-  const outputNameSet = new Set(outputNames);
-  const paramOutputTensors = new Set<string>();
+  // All tensor params. AssignIndex targets must be one of these — param-
+  // outputs are safe because the JS wrapper seeds the output buffer
+  // from the caller's data, and pure-input tensor params are made safe
+  // by the emitter's unshare-at-entry copy (see jitCodegenC.ts).
+  const tensorParams = new Set<string>();
   for (let i = 0; i < paramNames.length; i++) {
-    if (argTypes[i].kind === "tensor" && outputNameSet.has(paramNames[i])) {
-      paramOutputTensors.add(paramNames[i]);
-    }
+    if (argTypes[i].kind === "tensor") tensorParams.add(paramNames[i]);
   }
-  const ctx: Ctx = { line: 0, paramOutputTensors };
+  const ctx: Ctx = { line: 0, tensorParams };
   return checkStmts(body, ctx);
 }

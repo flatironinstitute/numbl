@@ -635,8 +635,22 @@ function emitTensorAssign(
   const needsAlloc = ctx.localTensorNames.has(destName);
 
   if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
-    lines.push(`${indent}${dData} = ${tensorData(expr.name)};`);
-    lines.push(`${indent}${dLen} = ${tensorLen(expr.name)};`);
+    const srcData = tensorData(expr.name);
+    const srcLen = tensorLen(expr.name);
+    if (ctx.outputTensorNames.has(destName)) {
+      // Output tensor: the preallocated _buf must hold the result data
+      // when the C function returns. Pointer-swap would leave the buf
+      // untouched, so memcpy the source contents into it instead.
+      // (Skip the copy when src and dest already share the buffer, e.g.
+      // a param-output reassigned to itself.)
+      lines.push(`${indent}${dLen} = ${srcLen};`);
+      lines.push(
+        `${indent}if (${dData} != ${srcData}) memcpy(${dData}, ${srcData}, (size_t)${dLen} * sizeof(double));`
+      );
+    } else {
+      lines.push(`${indent}${dData} = ${srcData};`);
+      lines.push(`${indent}${dLen} = ${srcLen};`);
+    }
     return;
   }
 
@@ -925,6 +939,31 @@ function findTensorLocals(body: JitStmt[], out: Set<string>): void {
   body.forEach(visitStmt);
 }
 
+/** Collect the names of tensor variables that appear as AssignIndex bases. */
+function findAssignIndexTargets(body: JitStmt[], out: Set<string>): void {
+  const visitStmt = (s: JitStmt): void => {
+    switch (s.tag) {
+      case "AssignIndex":
+        out.add(s.baseName);
+        break;
+      case "If":
+        s.thenBody.forEach(visitStmt);
+        s.elseifBlocks.forEach(eb => eb.body.forEach(visitStmt));
+        if (s.elseBody) s.elseBody.forEach(visitStmt);
+        break;
+      case "For":
+        s.body.forEach(visitStmt);
+        break;
+      case "While":
+        s.body.forEach(visitStmt);
+        break;
+      default:
+        break;
+    }
+  };
+  body.forEach(visitStmt);
+}
+
 export interface CParamDesc {
   name: string;
   kind: "scalar" | "tensor";
@@ -1000,6 +1039,20 @@ export function generateC(
     )
   );
 
+  // Tensor params that receive an AssignIndex write but aren't also a named
+  // output. MATLAB call-by-value requires the write to land on a buffer
+  // independent of the caller's data; we emit an unshare-at-entry malloc +
+  // memcpy for these in the prelude and a matching free in the epilogue.
+  // (Param-outputs already get a seeded output buffer from the JS wrapper.)
+  const assignIndexTargets = new Set<string>();
+  findAssignIndexTargets(body, assignIndexTargets);
+  const unshareTensorParams = new Set<string>();
+  for (const name of assignIndexTargets) {
+    if (paramTensorNames.has(name) && !outputTensorNames.has(name)) {
+      unshareTensorParams.add(name);
+    }
+  }
+
   const ctx: EmitCtx = {
     tensorVars,
     outputTensorNames,
@@ -1054,6 +1107,13 @@ export function generateC(
     );
   }
 
+  // Free unshare buffers for pure-input tensor params that were written.
+  for (const p of unshareTensorParams) {
+    epilogueLines.push(
+      `${indent}if (${tensorData(p)}) free(${tensorData(p)});`
+    );
+  }
+
   // Build the prelude.
   // Tensor params that are also outputs need a writable local that
   // shadows the const input. The signature uses `_in` suffix for the
@@ -1077,6 +1137,20 @@ export function generateC(
   for (const p of paramOutputTensors) {
     preludeLines.push(`${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`);
     preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
+  }
+
+  // Unshare-at-entry: pure-input tensor params that are written via
+  // AssignIndex get a malloc'd copy of the caller's data. The local
+  // v_<p>_data points at the copy; writes never touch v_<p>_data_in.
+  // The buffer is freed in the epilogue.
+  for (const p of unshareTensorParams) {
+    preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
+    preludeLines.push(
+      `${indent}double *${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
+    );
+    preludeLines.push(
+      `${indent}memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
+    );
   }
 
   for (const local of allLocals) {
@@ -1118,7 +1192,8 @@ export function generateC(
   for (let i = 0; i < params.length; i++) {
     const p = params[i];
     if (argTypes[i].kind === "tensor") {
-      const suffix = paramOutputTensors.has(p) ? "_in" : "";
+      const suffix =
+        paramOutputTensors.has(p) || unshareTensorParams.has(p) ? "_in" : "";
       sigParts.push(`const double *${tensorData(p)}${suffix}`);
       sigParts.push(`int64_t ${tensorLen(p)}${suffix}`);
       koffiParts.push("double *");
@@ -1181,6 +1256,7 @@ export function generateC(
   parts.push(`#endif`);
   if (usesTensors) {
     parts.push(`#include <stdlib.h>`);
+    parts.push(`#include <string.h>`);
     parts.push(`#include "numbl_ops.h"`);
   }
 
