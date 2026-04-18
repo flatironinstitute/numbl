@@ -13,6 +13,7 @@
  *   - Wrapping results back into RuntimeTensor objects
  */
 
+import { createRequire } from "module";
 import { registerCJitBackend } from "./cJitBackend.js";
 import { checkCFeasibility } from "./cFeasibility.js";
 import { generateC, type COutputDesc } from "./jitCodegenC.js";
@@ -25,6 +26,17 @@ import {
   setTicTime,
 } from "../../interpreter/builtins/time-system.js";
 import { JitBailToInterpreter } from "../js/jitHelpers.js";
+
+// koffi is loaded lazily by cCompile.ts. We need direct access for
+// decode() / free() of the dynamic-output C pointers. Mirrors the
+// lazy require pattern from cCompile.ts to keep the web bundle clean.
+let _koffi: typeof import("koffi") | null | undefined;
+function getKoffi(): typeof import("koffi") {
+  if (_koffi) return _koffi;
+  const req = createRequire(import.meta.url);
+  _koffi = req("koffi") as typeof import("koffi");
+  return _koffi;
+}
 
 registerCJitBackend({
   tryCompile(
@@ -167,8 +179,16 @@ registerCJitBackend({
       // Prepare output buffers.
       const outputBufs: Array<{
         desc: COutputDesc;
-        buf: Float64Array;
+        buf?: Float64Array;
         lenBuf?: Float64Array;
+        /** Dynamic-output: single-element array slot the C function
+         *  fills via `*out = malloc(...)`. We decode the pointer post-
+         *  call, copy its contents into a fresh Float64Array, and free
+         *  the C allocation. */
+        dynPtrSlot?: (unknown | null)[];
+        dynLenSlot?: bigint[];
+        dynD0Slot?: bigint[];
+        dynD1Slot?: bigint[];
         /** When the output shares its name with a tensor param, this is
          *  the param's shape — used when wrapping the result so the output
          *  keeps the caller's tensor shape rather than whatever "first
@@ -178,6 +198,28 @@ registerCJitBackend({
 
       for (const od of outputDescs) {
         if (od.kind === "tensor") {
+          if (od.dynamic) {
+            // Dynamic-output ABI: pass a 4-slot set of out-params. The
+            // JS wrapper decodes the pointer after the call, copies the
+            // data into a fresh Float64Array, and frees the C pointer.
+            const dynPtrSlot: (unknown | null)[] = [null];
+            const dynLenSlot: bigint[] = [0n];
+            const dynD0Slot: bigint[] = [0n];
+            const dynD1Slot: bigint[] = [0n];
+            koffiArgs.push(dynPtrSlot);
+            koffiArgs.push(dynLenSlot);
+            koffiArgs.push(dynD0Slot);
+            koffiArgs.push(dynD1Slot);
+            outputBufs.push({
+              desc: od,
+              dynPtrSlot,
+              dynLenSlot,
+              dynD0Slot,
+              dynD1Slot,
+            });
+            continue;
+          }
+          // Fixed output: the JS wrapper preallocates the buffer.
           // If the output name matches a tensor param, MATLAB's `function
           // x = foo(x, ...)` call-by-value + local-mutation semantics
           // apply: the callee starts with a copy of caller's x and may
@@ -267,21 +309,56 @@ registerCJitBackend({
             ? firstTensorShape.slice()
             : [1, firstTensorLen];
 
+      // Build a RuntimeTensor from a dynamic-output slot set: copy the
+      // C-owned pointer contents into a fresh JS Float64Array, then free
+      // the C pointer. This runs exactly once per call-per-output so the
+      // extra memcpy is negligible next to the JIT / koffi overhead.
+      const readDynamicTensor = (
+        ob: (typeof outputBufs)[number]
+      ): RuntimeTensor => {
+        const ptr = ob.dynPtrSlot![0];
+        const d0 = Number(ob.dynD0Slot![0]);
+        const d1 = Number(ob.dynD1Slot![0]);
+        const len = Number(ob.dynLenSlot![0]);
+        if (!ptr || len <= 0) {
+          return {
+            kind: "tensor",
+            data: new Float64Array(0),
+            shape: [d0, d1],
+            _rc: 1,
+          };
+        }
+        const koffi = getKoffi();
+        const src = koffi.decode(ptr, "double", len) as Float64Array;
+        const data = new Float64Array(src);
+        koffi.free(ptr);
+        return {
+          kind: "tensor",
+          data,
+          shape: [d0, d1],
+          _rc: 1,
+        };
+      };
+
       if (isMultiOutput) {
         const results: unknown[] = [];
         for (const ob of outputBufs) {
           if (ob.desc.kind === "tensor") {
-            const tensor: RuntimeTensor = {
-              kind: "tensor",
-              data: ob.buf,
-              shape: tensorShapeFor(ob),
-              _rc: 1,
-            };
-            results.push(tensor);
+            if (ob.desc.dynamic) {
+              results.push(readDynamicTensor(ob));
+            } else {
+              const tensor: RuntimeTensor = {
+                kind: "tensor",
+                data: ob.buf!,
+                shape: tensorShapeFor(ob),
+                _rc: 1,
+              };
+              results.push(tensor);
+            }
           } else if (ob.desc.kind === "boolean") {
-            results.push(ob.buf[0] !== 0);
+            results.push(ob.buf![0] !== 0);
           } else {
-            results.push(ob.buf[0]);
+            results.push(ob.buf![0]);
           }
         }
         return results;
@@ -291,18 +368,19 @@ registerCJitBackend({
       const ob = outputBufs[0];
       if (!ob) return 0; // no-output function
       if (ob.desc.kind === "tensor") {
+        if (ob.desc.dynamic) return readDynamicTensor(ob);
         const tensor: RuntimeTensor = {
           kind: "tensor",
-          data: ob.buf,
+          data: ob.buf!,
           shape: tensorShapeFor(ob),
           _rc: 1,
         };
         return tensor;
       }
       if (ob.desc.kind === "boolean") {
-        return ob.buf[0] !== 0;
+        return ob.buf![0] !== 0;
       }
-      return ob.buf[0];
+      return ob.buf![0];
     };
 
     return { ok: true, fn: compiledFn };

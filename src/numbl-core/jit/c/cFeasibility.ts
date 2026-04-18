@@ -37,6 +37,13 @@ interface Ctx {
    *  to a param via `y = x` still defer — supporting those requires
    *  flow analysis the emitter doesn't do yet. */
   tensorParams: Set<string>;
+  /** Tensor-typed names whose data/len plumbing is reachable in the
+   *  emitter — union of `tensorParams`, tensor locals, and tensor
+   *  outputs. Used for read-side checks (Index base / RangeSliceRead
+   *  base / AssignIndexRange src / AssignIndexCol src). Writes still
+   *  require `tensorParams` OR a locally-allocated tensor (covered by
+   *  the dynamic-output path in the emitter). */
+  tensorVars: Set<string>;
 }
 
 function fail(ctx: Ctx, reason: string): FeasibilityResult {
@@ -146,13 +153,13 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
       ) {
         return fail(ctx, "Index read base must be a real tensor");
       }
-      // Multi-index reads require the base's shape dims in the ABI —
-      // only tensor params have that plumbing. Tensor locals don't
-      // carry shape into the emitted function.
-      if (n >= 2 && !ctx.tensorParams.has(expr.base.name)) {
+      // Multi-index reads require the base's shape dims — tensor
+      // params and dynamic tensor locals both carry `_d0`/`_d1`. The
+      // tensorVars check covers both.
+      if (n >= 2 && !ctx.tensorVars.has(expr.base.name)) {
         return fail(
           ctx,
-          `multi-index Index read base '${expr.base.name}' must be a tensor param`
+          `multi-index Index read base '${expr.base.name}' must be a tensor var`
         );
       }
       for (const idx of expr.indices) {
@@ -226,12 +233,13 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
 
     case "RangeSliceRead": {
       // `src(a:b)` producing a fresh column-vector tensor. Requires the
-      // src to have data/len plumbed — tensor params qualify (locals
-      // would too in principle, but deferring until a test needs it).
-      if (!ctx.tensorParams.has(expr.baseName)) {
+      // src to have data/len plumbed — tensor params qualify directly,
+      // and tensor locals/outputs plumb through the same `v_<n>_data` /
+      // `_len` locals.
+      if (!ctx.tensorVars.has(expr.baseName)) {
         return fail(
           ctx,
-          `RangeSliceRead base '${expr.baseName}' must be a tensor param`
+          `RangeSliceRead base '${expr.baseName}' must be a tensor var`
         );
       }
       const sr = checkExpr(expr.start, ctx);
@@ -243,11 +251,52 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
       return { ok: true };
     }
 
+    case "TensorLiteral": {
+      // Real-tensor literal: `[1 2 3]`, `[a b; c d]`, `[]`. Empty matrix
+      // (nRows == 0 && nCols == 0) is allowed — emits NULL / len 0.
+      // Non-empty cells must all be scalar-typed.
+      if (expr.jitType.kind !== "tensor" || expr.jitType.isComplex !== false) {
+        return fail(ctx, "TensorLiteral must be a real tensor");
+      }
+      if (expr.nRows === 0 && expr.nCols === 0) return { ok: true };
+      for (let r = 0; r < expr.nRows; r++) {
+        for (let c = 0; c < expr.nCols; c++) {
+          const cell = expr.rows[r][c];
+          if (!isScalarKind(cell.jitType.kind)) {
+            return fail(ctx, "TensorLiteral cell must be scalar");
+          }
+          const cr = checkExpr(cell, ctx);
+          if (!cr.ok) return cr;
+        }
+      }
+      return { ok: true };
+    }
+
+    case "VConcatGrow": {
+      // `[base; value]` grow-by-one: base is a real column-vector (or
+      // empty) tensor Var, value is a scalar. Codegen supports any
+      // tensor Var as base (common case: self-grow, `it = [it; i]`).
+      if (expr.jitType.kind !== "tensor" || expr.jitType.isComplex !== false) {
+        return fail(ctx, "VConcatGrow must be a real tensor");
+      }
+      if (expr.base.tag !== "Var") {
+        return fail(ctx, "VConcatGrow base must be a Var");
+      }
+      if (
+        expr.base.jitType.kind !== "tensor" ||
+        expr.base.jitType.isComplex !== false
+      ) {
+        return fail(ctx, "VConcatGrow base must be a real tensor");
+      }
+      if (!isScalarKind(expr.value.jitType.kind)) {
+        return fail(ctx, "VConcatGrow value must be scalar");
+      }
+      return checkExpr(expr.value, ctx);
+    }
+
     // Everything else is out of scope — bail to JS-JIT.
     case "ImagLiteral":
     case "StringLiteral":
-    case "TensorLiteral":
-    case "VConcatGrow":
     case "MemberRead":
     case "StructArrayMemberRead":
     case "UserCall":
@@ -318,6 +367,37 @@ function checkCall(
     (expr.name === "tic" || expr.name === "toc") &&
     expr.args.length === 0 &&
     expr.jitType.kind === "number"
+  ) {
+    return { ok: true };
+  }
+  // zeros / ones: fresh-tensor builtin (1 or 2 numeric args). Feasible
+  // only at the statement level where a malloc can be emitted; the
+  // codegen handles both tensor locals and dynamic tensor outputs.
+  // Refuse 3D+ and tensor-valued shape args — no test needs those today.
+  if (
+    (expr.name === "zeros" || expr.name === "ones") &&
+    expr.jitType.kind === "tensor" &&
+    (expr.args.length === 1 || expr.args.length === 2)
+  ) {
+    for (const a of expr.args) {
+      if (!isScalarKind(a.jitType.kind)) {
+        return fail(ctx, `${expr.name}: shape args must be scalar`);
+      }
+      const r = checkExpr(a, ctx);
+      if (!r.ok) return r;
+    }
+    return { ok: true };
+  }
+  // length / isempty on a tensor Var: fast scalar-result accessors
+  // that only need the tensor's `_len` (and optionally `_d0`/`_d1`)
+  // locals. Keep the arg-Var restriction — anything more general would
+  // need a scratch evaluation that these cheap accessors don't want.
+  if (
+    (expr.name === "length" || expr.name === "isempty") &&
+    expr.args.length === 1 &&
+    expr.args[0].tag === "Var" &&
+    expr.args[0].jitType.kind === "tensor" &&
+    expr.args[0].jitType.isComplex === false
   ) {
     return { ok: true };
   }
@@ -401,10 +481,14 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       if (!isScalarKind(stmt.value.jitType.kind)) {
         return fail(ctx, "AssignIndex value must be scalar");
       }
-      if (!ctx.tensorParams.has(stmt.baseName)) {
+      // Writes land on (a) a tensor param (unshare-at-entry for pure
+      // inputs, seeded output for param-outputs), or (b) a local /
+      // dynamic-output tensor whose buffer the emitter has already
+      // malloc'd. Either way the backing data is writable.
+      if (!ctx.tensorVars.has(stmt.baseName)) {
         return fail(
           ctx,
-          `AssignIndex base '${stmt.baseName}' must be a tensor param`
+          `AssignIndex base '${stmt.baseName}' must be a tensor var`
         );
       }
       const vr = checkExpr(stmt.value, ctx);
@@ -433,16 +517,16 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       if (stmt.srcType.kind !== "tensor" || stmt.srcType.isComplex !== false) {
         return fail(ctx, "AssignIndexRange src must be a real tensor");
       }
-      if (!ctx.tensorParams.has(stmt.baseName)) {
+      if (!ctx.tensorVars.has(stmt.baseName)) {
         return fail(
           ctx,
-          `AssignIndexRange base '${stmt.baseName}' must be a tensor param`
+          `AssignIndexRange base '${stmt.baseName}' must be a tensor var`
         );
       }
-      if (!ctx.tensorParams.has(stmt.srcBaseName)) {
+      if (!ctx.tensorVars.has(stmt.srcBaseName)) {
         return fail(
           ctx,
-          `AssignIndexRange src '${stmt.srcBaseName}' must be a tensor param`
+          `AssignIndexRange src '${stmt.srcBaseName}' must be a tensor var`
         );
       }
       const ds = checkExpr(stmt.dstStart, ctx);
@@ -472,16 +556,16 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       if (stmt.srcType.kind !== "tensor" || stmt.srcType.isComplex !== false) {
         return fail(ctx, "AssignIndexCol src must be a real tensor");
       }
-      if (!ctx.tensorParams.has(stmt.baseName)) {
+      if (!ctx.tensorVars.has(stmt.baseName)) {
         return fail(
           ctx,
-          `AssignIndexCol base '${stmt.baseName}' must be a tensor param`
+          `AssignIndexCol base '${stmt.baseName}' must be a tensor var`
         );
       }
-      if (!ctx.tensorParams.has(stmt.srcBaseName)) {
+      if (!ctx.tensorVars.has(stmt.srcBaseName)) {
         return fail(
           ctx,
-          `AssignIndexCol src '${stmt.srcBaseName}' must be a tensor param`
+          `AssignIndexCol src '${stmt.srcBaseName}' must be a tensor var`
         );
       }
       return checkExpr(stmt.colIndex, ctx);
@@ -545,6 +629,35 @@ export function checkCFeasibility(
   for (let i = 0; i < paramNames.length; i++) {
     if (argTypes[i].kind === "tensor") tensorParams.add(paramNames[i]);
   }
-  const ctx: Ctx = { line: 0, tensorParams };
+  // Tensor-typed names reachable in the emitter: params + any local
+  // that receives at least one tensor-valued Assign RHS. Used for
+  // read-side feasibility (src of AssignIndexRange / AssignIndexCol /
+  // RangeSliceRead / multi-index Index). Writes still go through the
+  // stricter `tensorParams` check.
+  const tensorVars = new Set<string>(tensorParams);
+  collectTensorLocals(body, tensorVars);
+  const ctx: Ctx = { line: 0, tensorParams, tensorVars };
   return checkStmts(body, ctx);
+}
+
+function collectTensorLocals(body: JitStmt[], out: Set<string>): void {
+  const visit = (s: JitStmt): void => {
+    switch (s.tag) {
+      case "Assign":
+        if (s.expr.jitType.kind === "tensor") out.add(s.name);
+        break;
+      case "If":
+        s.thenBody.forEach(visit);
+        s.elseifBlocks.forEach(eb => eb.body.forEach(visit));
+        if (s.elseBody) s.elseBody.forEach(visit);
+        break;
+      case "For":
+      case "While":
+        s.body.forEach(visit);
+        break;
+      default:
+        break;
+    }
+  };
+  body.forEach(visit);
 }

@@ -164,11 +164,15 @@ export function tensorLen(name: string): string {
   return `${mangle(name)}_len`;
 }
 
-/** Row count (shape[0]) for a 2D/3D-indexed tensor param. */
+/** Row count (shape[0]) for a 2D/3D-indexed tensor param. Also reused
+ *  as the mutable row-count local for fresh-alloc tensors (TensorLiteral/
+ *  zeros/ones/VConcatGrow targets). */
 export function tensorD0(name: string): string {
   return `${mangle(name)}_d0`;
 }
-/** Column count (shape[1]) for a 3D-indexed tensor param. */
+/** Column count. For 3D tensor params this is shape[1]; for fresh-alloc
+ *  tensors it's shape[1] (i.e., the column count of a matrix or 1 for
+ *  a column vector). */
 export function tensorD1(name: string): string {
   return `${mangle(name)}_d1`;
 }
@@ -209,6 +213,20 @@ interface EmitCtx {
    *  receive a `_d0` ABI param; arity == 3 also gets `_d1`. Tensor locals
    *  and vars that aren't indexed are omitted. */
   tensorMaxDim: Map<string, number>;
+  /** Tensor names that get a fresh-tensor RHS assignment (TensorLiteral /
+   *  zeros / ones / VConcatGrow). These have `v_<n>_d0` / `v_<n>_d1`
+   *  tracked as mutable C locals so the emitter can both set the shape
+   *  on each fresh-alloc and read it downstream (e.g., in `length(v)`
+   *  or the output ABI). Shape-only: buffer ownership is still tracked
+   *  via `localTensorNames` / `outputTensorNames` / `dynamicOutputs`. */
+  freshAllocTensors: Set<string>;
+  /** Tensor outputs that use the new dynamic-output ABI: the JS wrapper
+   *  passes a `double **` slot that the C function fills via
+   *  `*out = v_<n>_data`, transferring ownership of a C-malloc'd buffer
+   *  to the caller. Each such output also receives `_d0_out` / `_d1_out`
+   *  int64_t slots to report the runtime shape. Subset of
+   *  `outputTensorNames`. */
+  dynamicOutputs: Set<string>;
 }
 
 // ── Expression emission ───────────────────────────────────────────────
@@ -595,6 +613,31 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     ctx.needsTicState = true;
     return `numbl_toc(__tic_state)`;
   }
+  // length / isempty on a tensor Var. The common case is a 1-D vector
+  // where `length == data.length` and `isempty == (length == 0)`; for
+  // multi-D tensors the JIT's type system currently lowers through
+  // `$h.ib_length` / `$h.ib_isempty`, so this fast path only fires
+  // for vectors via the tensor Var shape plumbing. Keep it simple: use
+  // `_len` for length, and emit the == 0 compare for isempty.
+  if (
+    (expr.name === "length" || expr.name === "isempty") &&
+    expr.args.length === 1 &&
+    expr.args[0].tag === "Var" &&
+    ctx.tensorVars.has((expr.args[0] as JitExpr & { tag: "Var" }).name)
+  ) {
+    const name = (expr.args[0] as JitExpr & { tag: "Var" }).name;
+    const lenCode = tensorLen(name);
+    if (expr.name === "length") {
+      if (ctx.freshAllocTensors.has(name)) {
+        // Dynamic tensors carry d0/d1 locals; use max(d0, d1) so
+        // length on a matrix reports the larger dim (MATLAB convention).
+        return `((double)((${tensorD0(name)} > ${tensorD1(name)}) ? ${tensorD0(name)} : ${tensorD1(name)}))`;
+      }
+      return `((double)${lenCode})`;
+    }
+    // isempty
+    return `((double)(${lenCode} == 0))`;
+  }
   // Scalar math builtin — query the builtin's own C emission hook.
   const ib = getIBuiltin(expr.name);
   if (ib?.jitEmitC) {
@@ -688,6 +731,155 @@ function emitEnsureLocalBuf(
   );
 }
 
+/** Emit a fresh-alloc pattern: free old buffer, malloc new, fill with
+ *  the cells of a TensorLiteral. `destName` identifies the tracked
+ *  `v_<dest>_data / _len / _d0 / _d1` locals. */
+function emitTensorLiteralAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  expr: JitExpr & { tag: "TensorLiteral" },
+  ctx: EmitCtx
+): void {
+  const dData = tensorData(destName);
+  const dLen = tensorLen(destName);
+  const dD0 = tensorD0(destName);
+  const dD1 = tensorD1(destName);
+  const nRows = expr.nRows;
+  const nCols = expr.nCols;
+  if (nRows === 0 || nCols === 0) {
+    lines.push(`${indent}if (${dData}) free(${dData});`);
+    lines.push(`${indent}${dData} = NULL;`);
+    lines.push(`${indent}${dLen} = 0;`);
+    lines.push(`${indent}${dD0} = 0;`);
+    lines.push(`${indent}${dD1} = 0;`);
+    return;
+  }
+  const nLen = nRows * nCols;
+  lines.push(`${indent}{`);
+  const inner = indent + "  ";
+  // Evaluate all cells into a scratch C array first. Use the nearest
+  // enclosing statement context so nested fresh-alloc sub-exprs can
+  // emit their own preliminaries.
+  lines.push(
+    `${inner}double *__tl = (double *)malloc(${nLen} * sizeof(double));`
+  );
+  // Column-major fill: iterate columns, then rows.
+  for (let c = 0; c < nCols; c++) {
+    for (let r = 0; r < nRows; r++) {
+      const cell = expr.rows[r][c];
+      const cellCode = emitExpr(cell, ctx);
+      lines.push(`${inner}__tl[${c * nRows + r}] = ${cellCode};`);
+    }
+  }
+  lines.push(`${inner}if (${dData}) free(${dData});`);
+  lines.push(`${inner}${dData} = __tl;`);
+  lines.push(`${inner}${dLen} = ${nLen};`);
+  lines.push(`${inner}${dD0} = ${nRows};`);
+  lines.push(`${inner}${dD1} = ${nCols};`);
+  lines.push(`${indent}}`);
+}
+
+/** Emit zeros(n) / zeros(n, m) / ones(...) into the tracked locals.
+ *  1-arg produces an NxN matrix (MATLAB semantics). 2-arg is NxM. */
+function emitZerosOnesAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  expr: JitExpr & { tag: "Call" },
+  ctx: EmitCtx
+): void {
+  const dData = tensorData(destName);
+  const dLen = tensorLen(destName);
+  const dD0 = tensorD0(destName);
+  const dD1 = tensorD1(destName);
+  const fill = expr.name === "ones" ? "1.0" : "0.0";
+  // Round shape args like MATLAB (any fractional is rounded to nearest).
+  const roundArg = (a: JitExpr): string => {
+    let s = emitExpr(a, ctx);
+    if (!isKnownInteger(a.jitType)) s = `(int64_t)round(${s})`;
+    else s = `(int64_t)(${s})`;
+    return s;
+  };
+  const arg0 = roundArg(expr.args[0]);
+  const arg1 = expr.args.length === 2 ? roundArg(expr.args[1]) : arg0;
+  lines.push(`${indent}{`);
+  const inner = indent + "  ";
+  lines.push(`${inner}int64_t __zr = ${arg0};`);
+  lines.push(`${inner}int64_t __zc = ${arg1};`);
+  lines.push(`${inner}if (__zr < 0) __zr = 0;`);
+  lines.push(`${inner}if (__zc < 0) __zc = 0;`);
+  lines.push(`${inner}int64_t __zn = __zr * __zc;`);
+  lines.push(`${inner}double *__zb = NULL;`);
+  lines.push(`${inner}if (__zn > 0) {`);
+  if (expr.name === "zeros") {
+    lines.push(
+      `${inner}  __zb = (double *)calloc((size_t)__zn, sizeof(double));`
+    );
+  } else {
+    lines.push(
+      `${inner}  __zb = (double *)malloc((size_t)__zn * sizeof(double));`
+    );
+    lines.push(
+      `${inner}  for (int64_t __i = 0; __i < __zn; __i++) __zb[__i] = ${fill};`
+    );
+  }
+  lines.push(`${inner}}`);
+  lines.push(`${inner}if (${dData}) free(${dData});`);
+  lines.push(`${inner}${dData} = __zb;`);
+  lines.push(`${inner}${dLen} = __zn;`);
+  lines.push(`${inner}${dD0} = __zr;`);
+  lines.push(`${inner}${dD1} = __zc;`);
+  lines.push(`${indent}}`);
+}
+
+/** Emit VConcatGrow `dest = [base; value]`. Allocates a `(old_len + 1, 1)`
+ *  buffer, copies base's contents, appends value, and transfers into the
+ *  tracked locals. Handles the self-grow case (base == dest): the memcpy
+ *  completes before the old buffer is freed. */
+function emitVConcatGrowAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  expr: JitExpr & { tag: "VConcatGrow" },
+  ctx: EmitCtx
+): void {
+  if (expr.base.tag !== "Var") {
+    throw new Error("C-JIT codegen: VConcatGrow base must be a Var");
+  }
+  const baseName = expr.base.name;
+  if (!ctx.tensorVars.has(baseName)) {
+    throw new Error(
+      `C-JIT codegen: VConcatGrow base '${baseName}' is not a tensor var`
+    );
+  }
+  const bData = tensorData(baseName);
+  const bLen = tensorLen(baseName);
+  const dData = tensorData(destName);
+  const dLen = tensorLen(destName);
+  const dD0 = tensorD0(destName);
+  const dD1 = tensorD1(destName);
+  const valueCode = emitExpr(expr.value, ctx);
+  lines.push(`${indent}{`);
+  const inner = indent + "  ";
+  lines.push(`${inner}int64_t __vo = ${bLen};`);
+  lines.push(`${inner}int64_t __vn = __vo + 1;`);
+  lines.push(
+    `${inner}double *__vb = (double *)malloc((size_t)__vn * sizeof(double));`
+  );
+  lines.push(
+    `${inner}if (__vo > 0) memcpy(__vb, ${bData}, (size_t)__vo * sizeof(double));`
+  );
+  lines.push(`${inner}__vb[__vo] = ${valueCode};`);
+  // Free old dest buffer AFTER memcpy (handles self-grow where base == dest).
+  lines.push(`${inner}if (${dData}) free(${dData});`);
+  lines.push(`${inner}${dData} = __vb;`);
+  lines.push(`${inner}${dLen} = __vn;`);
+  lines.push(`${inner}${dD0} = __vn;`);
+  lines.push(`${inner}${dD1} = 1;`);
+  lines.push(`${indent}}`);
+}
+
 /** Emit a tensor-result Assign: handles Binary, Unary, Call on tensors. */
 function emitTensorAssign(
   lines: string[],
@@ -699,6 +891,25 @@ function emitTensorAssign(
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   const needsAlloc = ctx.localTensorNames.has(destName);
+
+  if (expr.tag === "TensorLiteral") {
+    emitTensorLiteralAssign(lines, indent, destName, expr, ctx);
+    return;
+  }
+
+  if (expr.tag === "VConcatGrow") {
+    emitVConcatGrowAssign(lines, indent, destName, expr, ctx);
+    return;
+  }
+
+  if (
+    expr.tag === "Call" &&
+    (expr.name === "zeros" || expr.name === "ones") &&
+    isTensorExpr(expr)
+  ) {
+    emitZerosOnesAssign(lines, indent, destName, expr, ctx);
+    return;
+  }
 
   if (expr.tag === "RangeSliceRead") {
     // `r = src(a:b)` into a tensor var. Two cases:
@@ -728,10 +939,47 @@ function emitTensorAssign(
   }
 
   if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
-    const srcData = tensorData(expr.name);
-    const srcLen = tensorLen(expr.name);
-    if (ctx.outputTensorNames.has(destName)) {
-      // Output tensor: the preallocated _buf must hold the result data
+    const srcName = expr.name;
+    const srcData = tensorData(srcName);
+    const srcLen = tensorLen(srcName);
+    const destIsDynamic = ctx.freshAllocTensors.has(destName);
+    const destIsFixedOutput =
+      ctx.outputTensorNames.has(destName) && !ctx.dynamicOutputs.has(destName);
+    if (destIsDynamic) {
+      // Deep-copy: the source's buffer may be freed later in the body
+      // (e.g. the test_loop_slice_write `tmp_pt = out_pt; out_pt =
+      // zeros(...)` pattern). A pointer alias would read freed memory.
+      // Free the old dest buffer, malloc a fresh one, copy, update
+      // shape locals. Guarded by a self-alias check since `x = x` is
+      // a no-op.
+      const dD0 = tensorD0(destName);
+      const dD1 = tensorD1(destName);
+      const srcD0Expr = ctx.freshAllocTensors.has(srcName)
+        ? tensorD0(srcName)
+        : (ctx.tensorMaxDim.get(srcName) ?? 0) >= 2
+          ? tensorD0(srcName)
+          : srcLen;
+      const srcD1Expr = ctx.freshAllocTensors.has(srcName)
+        ? tensorD1(srcName)
+        : (ctx.tensorMaxDim.get(srcName) ?? 0) >= 3
+          ? tensorD1(srcName)
+          : "1";
+      lines.push(`${indent}if (${dData} != ${srcData}) {`);
+      lines.push(`${indent}  if (${dData}) free(${dData});`);
+      lines.push(`${indent}  ${dLen} = ${srcLen};`);
+      lines.push(
+        `${indent}  ${dData} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+      );
+      lines.push(
+        `${indent}  if (${dLen} > 0) memcpy(${dData}, ${srcData}, (size_t)${dLen} * sizeof(double));`
+      );
+      lines.push(`${indent}}`);
+      lines.push(`${indent}${dD0} = ${srcD0Expr};`);
+      lines.push(`${indent}${dD1} = ${srcD1Expr};`);
+      return;
+    }
+    if (destIsFixedOutput) {
+      // Fixed output: the preallocated _buf must hold the result data
       // when the C function returns. Pointer-swap would leave the buf
       // untouched, so memcpy the source contents into it instead.
       // (Skip the copy when src and dest already share the buffer, e.g.
@@ -1117,6 +1365,95 @@ function findTensorLocals(body: JitStmt[], out: Set<string>): void {
   body.forEach(visitStmt);
 }
 
+/** Is `expr` a fresh-tensor-producing RHS? TensorLiteral, VConcatGrow,
+ *  or a call to `zeros` / `ones`. Each of these allocates a brand-new
+ *  buffer; when the Assign dest is a tensor output, that output must
+ *  use the dynamic-output ABI (double **out) rather than the legacy
+ *  pre-allocated-buffer ABI. */
+function isFreshTensorRhs(expr: JitExpr): boolean {
+  if (expr.tag === "TensorLiteral") return true;
+  if (expr.tag === "VConcatGrow") return true;
+  if (expr.tag === "Call" && (expr.name === "zeros" || expr.name === "ones")) {
+    return expr.jitType.kind === "tensor";
+  }
+  return false;
+}
+
+/** Walk body to collect tensor names that, directly or transitively,
+ *  hold a freshly-allocated (C-owned) buffer whose size is not tied to
+ *  any input tensor. Seeded with names receiving a direct fresh-tensor
+ *  RHS (TensorLiteral / VConcatGrow / zeros / ones); propagates through
+ *  Var-alias assigns since `dst = src` makes `dst` share `src`'s buffer.
+ *  These names need `_d0` / `_d1` tracked as C locals so the shape can
+ *  change mid-function, and — for tensor outputs — the dynamic-output
+ *  ABI (the JS wrapper's first-tensor-input-sized preallocated buffer
+ *  can't fit them). */
+function findFreshTensorAssignNames(body: JitStmt[], out: Set<string>): void {
+  const visitStmt = (s: JitStmt): void => {
+    switch (s.tag) {
+      case "Assign":
+        if (s.expr.jitType.kind === "tensor" && isFreshTensorRhs(s.expr)) {
+          out.add(s.name);
+        }
+        break;
+      case "If":
+        s.thenBody.forEach(visitStmt);
+        s.elseifBlocks.forEach(eb => eb.body.forEach(visitStmt));
+        if (s.elseBody) s.elseBody.forEach(visitStmt);
+        break;
+      case "For":
+        s.body.forEach(visitStmt);
+        break;
+      case "While":
+        s.body.forEach(visitStmt);
+        break;
+      default:
+        break;
+    }
+  };
+  body.forEach(visitStmt);
+
+  // Propagate through Var-alias: `dst = src` aliases src's buffer into
+  // dst, so dst is dynamic iff src is. RangeSliceRead also produces a
+  // fresh allocation whose size is derived from runtime endpoints —
+  // its destination joins the dynamic set too. Run to fixed point so
+  // chains like `a = zeros(n); b = a; c = b` all propagate.
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const propagate = (s: JitStmt): void => {
+      switch (s.tag) {
+        case "Assign":
+          if (s.expr.jitType.kind === "tensor" && !out.has(s.name)) {
+            const e = s.expr;
+            if (e.tag === "Var" && out.has(e.name)) {
+              out.add(s.name);
+              changed = true;
+            } else if (e.tag === "RangeSliceRead") {
+              out.add(s.name);
+              changed = true;
+            }
+          }
+          break;
+        case "If":
+          s.thenBody.forEach(propagate);
+          s.elseifBlocks.forEach(eb => eb.body.forEach(propagate));
+          if (s.elseBody) s.elseBody.forEach(propagate);
+          break;
+        case "For":
+          s.body.forEach(propagate);
+          break;
+        case "While":
+          s.body.forEach(propagate);
+          break;
+        default:
+          break;
+      }
+    };
+    body.forEach(propagate);
+  }
+}
+
 /** Collect tensor-param names that are written through AssignIndex /
  *  AssignIndexRange / AssignIndexCol. All three shape the same
  *  MATLAB-value-semantics problem: the write must not leak to the
@@ -1162,6 +1499,11 @@ export interface CParamDesc {
 export interface COutputDesc {
   name: string;
   kind: "scalar" | "boolean" | "tensor";
+  /** True for tensor outputs using the dynamic-output ABI: the C code
+   *  malloc's the buffer and transfers ownership via `double **` and
+   *  extra d0/d1 out-slots. The JS wrapper decodes the pointer, copies
+   *  into a fresh Float64Array, and frees the C allocation. */
+  dynamic?: boolean;
 }
 
 export interface GenerateCResult {
@@ -1216,6 +1558,9 @@ export function generateC(
           : "scalar",
   }));
 
+  // Note: `dynamic` on each tensor output desc is set below once the
+  // `dynamicOutputs` set is computed from the body walk.
+
   const outputTensorNames = new Set<string>(
     outputDescs.filter(od => od.kind === "tensor").map(od => od.name)
   );
@@ -1258,6 +1603,25 @@ export function generateC(
     }
   }
 
+  // Fresh-tensor assignments (TensorLiteral / zeros / ones / VConcatGrow).
+  // Every name hit here participates in shape-changing reassignment: emit
+  // `v_<n>_d0` / `v_<n>_d1` as mutable locals initialized from whatever
+  // path seeded the buffer, and update them on each fresh-alloc site.
+  const freshAllocTensors = new Set<string>();
+  findFreshTensorAssignNames(body, freshAllocTensors);
+
+  // Tensor outputs that need the dynamic-output ABI. Any tensor output
+  // whose value can be reassigned to a fresh-allocated buffer (directly
+  // via TensorLiteral/zeros/ones/VConcatGrow) can't fit the "JS preallocates
+  // a fixed buf" contract — the C code allocates the buffer itself.
+  const dynamicOutputs = new Set<string>();
+  for (const name of outputTensorNames) {
+    if (freshAllocTensors.has(name)) dynamicOutputs.add(name);
+  }
+  for (const od of outputDescs) {
+    if (od.kind === "tensor" && dynamicOutputs.has(od.name)) od.dynamic = true;
+  }
+
   const ctx: EmitCtx = {
     tensorVars,
     outputTensorNames,
@@ -1272,25 +1636,86 @@ export function generateC(
     needsErrorFlag: false,
     openmp: openmp ?? false,
     tensorMaxDim,
+    freshAllocTensors,
+    dynamicOutputs,
   };
 
   const indent = "  ";
   const bodyLines: string[] = [];
+
+  // Tensor params that are also outputs. MATLAB's `function x = foo(x, ...)`
+  // call-by-value + local-mutation semantics: the callee starts with a
+  // copy of the caller's x. For fixed outputs the JS wrapper already
+  // passes a seeded buffer as `_buf`; for dynamic outputs the C code
+  // unshare-copies the caller's data itself (the seeded buffer travels
+  // through `_buf` as const input, not as output).
+  const paramOutputTensors = new Set<string>();
+  for (let i = 0; i < params.length; i++) {
+    if (
+      argTypes[i].kind === "tensor" &&
+      outputDescs.some(od => od.name === params[i] && od.kind === "tensor")
+    ) {
+      paramOutputTensors.add(params[i]);
+    }
+  }
+
+  // Tensor params reassigned via a fresh-alloc RHS (not as a param-output)
+  // need their own writable local too — treat them as unshared-at-entry
+  // so that first read before reassignment sees the caller's data but
+  // the free-on-reassign path stays correct.
+  for (const p of paramTensorNames) {
+    if (
+      freshAllocTensors.has(p) &&
+      !outputTensorNames.has(p) &&
+      !unshareTensorParams.has(p)
+    ) {
+      unshareTensorParams.add(p);
+    }
+  }
+
   emitStmts(bodyLines, body, indent, ctx);
+
+  // Names for which we emit `_d0` / `_d1` mutable locals: anything that
+  // either receives a fresh-alloc (shape reassignment) or is referenced
+  // as a tensor with multi-index arity. For non-dynamic tensors the _d0/
+  // _d1 locals are initialized from the ABI `_in` params (existing
+  // behavior). For fresh-alloc tensors they start from the same source
+  // but get overwritten on each TensorLiteral / zeros / ones / VConcatGrow.
+  const needsShapeLocals = (name: string): boolean => {
+    if (freshAllocTensors.has(name)) return true;
+    const d = tensorMaxDim.get(name) ?? 0;
+    return d >= 2;
+  };
 
   // Build the epilogue: write outputs to out-pointers, free scratch buffers.
   const epilogueLines: string[] = [];
   for (const od of outputDescs) {
     if (od.kind === "tensor") {
-      // Tensor output: copy result data into pre-allocated output buffer.
-      // The JS side allocated the output buffer based on the first tensor
-      // input's length. The C function must have written into the dest.
-      // NOTE: the dest buffer IS the output buffer (passed by the JS wrapper),
-      // so no copy is needed — the data is already there. But we need to
-      // report the actual length via the out-pointer.
-      epilogueLines.push(
-        `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
-      );
+      if (dynamicOutputs.has(od.name)) {
+        // Dynamic output: transfer ownership of the C-malloc'd buffer
+        // to the caller (`*_buf_out`) and report the runtime shape.
+        // The JS wrapper reads data/d0/d1 and frees the pointer after
+        // copying into a JS-owned Float64Array.
+        epilogueLines.push(
+          `${indent}*${mangle(od.name)}_buf_out = ${tensorData(od.name)};`
+        );
+        epilogueLines.push(
+          `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
+        );
+        epilogueLines.push(
+          `${indent}*${mangle(od.name)}_d0_out = ${tensorD0(od.name)};`
+        );
+        epilogueLines.push(
+          `${indent}*${mangle(od.name)}_d1_out = ${tensorD1(od.name)};`
+        );
+      } else {
+        // Fixed output: data already lives in the pre-allocated _buf; just
+        // report the runtime length. (No memcpy: data and _buf share the
+        // same pointer in the fixed path.)
+        epilogueLines.push(
+          `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
+        );
+      }
     } else {
       // Scalar output: write to out-pointer.
       epilogueLines.push(
@@ -1306,83 +1731,137 @@ export function generateC(
     );
   }
 
-  // Free local tensor buffers.
+  // Free local tensor buffers (C-owned). Dynamic outputs have already
+  // transferred ownership above, so exclude them.
   for (const name of ctx.localTensorNames) {
+    if (dynamicOutputs.has(name)) continue;
     epilogueLines.push(
       `${indent}if (${tensorData(name)}) free(${tensorData(name)});`
     );
   }
 
   // Free unshare buffers for pure-input tensor params that were written.
+  // If the unshared param is also a dynamic output, ownership was already
+  // transferred — skip the free here to avoid a double free.
   for (const p of unshareTensorParams) {
+    if (dynamicOutputs.has(p)) continue;
     epilogueLines.push(
       `${indent}if (${tensorData(p)}) free(${tensorData(p)});`
     );
-  }
-
-  // Build the prelude.
-  // Tensor params that are also outputs need a writable local that
-  // shadows the const input. The signature uses `_in` suffix for the
-  // input; the prelude declares the normal data/len locals pointing at
-  // the output buffer.
-  const paramOutputTensors = new Set<string>();
-  for (let i = 0; i < params.length; i++) {
-    if (
-      argTypes[i].kind === "tensor" &&
-      outputDescs.some(od => od.name === params[i] && od.kind === "tensor")
-    ) {
-      paramOutputTensors.add(params[i]);
-    }
   }
 
   const paramSet = new Set(params);
   const allLocals = [...localVars].filter(v => !paramSet.has(v)).sort();
   const preludeLines: string[] = [];
 
+  // Emit `v_<p>_d0` / `v_<p>_d1` seeding for a tensor param. Uses the
+  // `_in` suffix when the param signature is shadowed (param-output /
+  // unshared) and the bare name otherwise.
+  const emitParamShapeLocals = (p: string, useInSuffix: boolean): void => {
+    const suf = useInSuffix ? "_in" : "";
+    const d = tensorMaxDim.get(p) ?? 0;
+    if (needsShapeLocals(p)) {
+      // Track mutable d0/d1 locals. Seed from the ABI where available;
+      // for 1-D-only tensor params we default to (len, 1) so first reads
+      // on the "row vector default" shape work for fresh-alloc that
+      // later overwrites.
+      if (d >= 2) {
+        preludeLines.push(
+          `${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}${suf};`
+        );
+      } else {
+        preludeLines.push(
+          `${indent}int64_t ${tensorD0(p)} = ${tensorLen(p)}${suf};`
+        );
+      }
+      if (d >= 3) {
+        preludeLines.push(
+          `${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}${suf};`
+        );
+      } else {
+        preludeLines.push(`${indent}int64_t ${tensorD1(p)} = 1;`);
+      }
+    } else {
+      if (d >= 2) {
+        preludeLines.push(
+          `${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}${suf};`
+        );
+      }
+      if (d >= 3) {
+        preludeLines.push(
+          `${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}${suf};`
+        );
+      }
+    }
+  };
+
   // Shadow tensor input-output params with writable locals. The shape
   // dims (`_d0`, `_d1`) are also shadowed so multi-index writes on a
   // param-output use the same local names the body expects.
   for (const p of paramOutputTensors) {
-    preludeLines.push(`${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`);
-    preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
-    const d = tensorMaxDim.get(p) ?? 0;
-    if (d >= 2) {
-      preludeLines.push(`${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}_in;`);
-    }
-    if (d >= 3) {
-      preludeLines.push(`${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}_in;`);
+    if (dynamicOutputs.has(p)) {
+      // Dynamic param-output: the seeded buffer is passed as const input
+      // via `_in`; we unshare-copy it into a C-owned buffer so
+      // reassignment / free-on-realloc is safe, and the epilogue
+      // transfers the final pointer back.
+      preludeLines.push(
+        `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
+      );
+      emitParamShapeLocals(p, /*useInSuffix*/ true);
+      preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
+      preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
+      preludeLines.push(
+        `${indent}  ${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
+      );
+      preludeLines.push(
+        `${indent}  memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
+      );
+      preludeLines.push(`${indent}}`);
+    } else {
+      // Fixed param-output: data points at the seeded _buf (no copy needed).
+      preludeLines.push(
+        `${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`
+      );
+      preludeLines.push(
+        `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
+      );
+      emitParamShapeLocals(p, /*useInSuffix*/ true);
     }
   }
 
-  // Unshare-at-entry: pure-input tensor params that are written via
-  // AssignIndex get a malloc'd copy of the caller's data. The local
-  // v_<p>_data points at the copy; writes never touch v_<p>_data_in.
-  // The buffer is freed in the epilogue.
+  // Unshare-at-entry: pure-input tensor params that are written (either
+  // via AssignIndex family or reassigned via a fresh-alloc RHS) get a
+  // malloc'd copy of the caller's data. The buffer is freed in the
+  // epilogue unless it was also transferred as a dynamic output.
   for (const p of unshareTensorParams) {
+    if (paramOutputTensors.has(p)) continue; // already shadowed above
     preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
-    const d = tensorMaxDim.get(p) ?? 0;
-    if (d >= 2) {
-      preludeLines.push(`${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}_in;`);
-    }
-    if (d >= 3) {
-      preludeLines.push(`${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}_in;`);
-    }
+    emitParamShapeLocals(p, /*useInSuffix*/ true);
+    preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
+    preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
     preludeLines.push(
-      `${indent}double *${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
+      `${indent}  ${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
     );
     preludeLines.push(
-      `${indent}memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
+      `${indent}  memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
     );
+    preludeLines.push(`${indent}}`);
   }
+
+  // Read-only tensor params (no writes, no fresh-alloc, not an output):
+  // the function-signature params `v_<p>_d0` / `v_<p>_d1` are already in
+  // scope, so no prelude shape-local redeclaration is needed. `needsShapeLocals`
+  // is true only for names that also need writable tracking, and those
+  // are handled by the param-output / unshare branches above.
 
   for (const local of allLocals) {
     if (tensorVars.has(local)) {
-      // Tensor locals: data pointer + length. For output tensors, the data
-      // pointer starts as the pre-allocated output buffer (passed as param).
-      const isOutput = outputDescs.some(
-        od => od.name === local && od.kind === "tensor"
-      );
-      if (isOutput) {
+      // Tensor locals: data pointer + length. For fixed output tensors,
+      // the data pointer starts as the pre-allocated output buffer (passed
+      // as param). Dynamic outputs and pure locals start as NULL — the
+      // C code allocates on first fresh-assign.
+      const isOutput = outputTensorNames.has(local);
+      if (isOutput && !dynamicOutputs.has(local)) {
         preludeLines.push(
           `${indent}double *${tensorData(local)} = ${mangle(local)}_buf;`
         );
@@ -1390,6 +1869,10 @@ export function generateC(
         preludeLines.push(`${indent}double *${tensorData(local)} = NULL;`);
       }
       preludeLines.push(`${indent}int64_t ${tensorLen(local)} = 0;`);
+      if (needsShapeLocals(local)) {
+        preludeLines.push(`${indent}int64_t ${tensorD0(local)} = 0;`);
+        preludeLines.push(`${indent}int64_t ${tensorD1(local)} = 0;`);
+      }
     } else {
       preludeLines.push(`${indent}double ${mangle(local)} = 0.0;`);
     }
@@ -1405,7 +1888,11 @@ export function generateC(
   // out-pointers. Parameters:
   //   - scalar params: double v_name
   //   - tensor params: const double *v_name_data, int64_t v_name_len
-  //   - tensor output buffers: double *v_name_buf, int64_t *v_name_out_len
+  //   - fixed tensor output: double *v_name_buf, int64_t *v_name_out_len
+  //   - dynamic tensor output: double **v_name_buf_out,
+  //                            int64_t *v_name_out_len,
+  //                            int64_t *v_name_d0_out,
+  //                            int64_t *v_name_d1_out
   //   - scalar output out-pointers: double *v_name_out
   const cFnName = `jit_${fnName}`;
   const sigParts: string[] = [];
@@ -1437,10 +1924,24 @@ export function generateC(
 
   for (const od of outputDescs) {
     if (od.kind === "tensor") {
-      sigParts.push(`double *${mangle(od.name)}_buf`);
-      sigParts.push(`int64_t *${mangle(od.name)}_out_len`);
-      koffiParts.push("double *");
-      koffiParts.push("int64_t *");
+      if (dynamicOutputs.has(od.name)) {
+        // Dynamic output: C allocates the buffer, transfers ownership
+        // via `*_buf_out`. The JS wrapper decodes the pointer + d0/d1,
+        // copies data into a fresh Float64Array, then frees the C ptr.
+        sigParts.push(`double **${mangle(od.name)}_buf_out`);
+        sigParts.push(`int64_t *${mangle(od.name)}_out_len`);
+        sigParts.push(`int64_t *${mangle(od.name)}_d0_out`);
+        sigParts.push(`int64_t *${mangle(od.name)}_d1_out`);
+        koffiParts.push("_Out_ double **");
+        koffiParts.push("_Out_ int64_t *");
+        koffiParts.push("_Out_ int64_t *");
+        koffiParts.push("_Out_ int64_t *");
+      } else {
+        sigParts.push(`double *${mangle(od.name)}_buf`);
+        sigParts.push(`int64_t *${mangle(od.name)}_out_len`);
+        koffiParts.push("double *");
+        koffiParts.push("int64_t *");
+      }
     } else {
       sigParts.push(`double *${mangle(od.name)}_out`);
       koffiParts.push("double *");
