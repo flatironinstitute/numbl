@@ -193,7 +193,9 @@ function typeTagOf(value: unknown): string {
 
 function mod(a: number, b: number): number {
   if (b === 0) return a;
-  return ((a % b) + b) % b;
+  let r = a % b;
+  if (r !== 0 && r < 0 !== b < 0) r += b;
+  return r;
 }
 
 // ── Assembled helpers object ───────────────────────────────────────────
