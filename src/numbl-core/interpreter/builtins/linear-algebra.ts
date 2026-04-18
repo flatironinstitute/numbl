@@ -120,6 +120,34 @@ function normApply(args: RuntimeValue[]): RuntimeValue {
   return normImplTensor(v, args);
 }
 
+// LAPACK dlassq-style Euclidean norm: finite for any inputs in double range.
+function scaledEuclid(magnitudes: ArrayLike<number>, count: number): number {
+  let scale = 0;
+  let ssq = 1;
+  for (let i = 0; i < count; i++) {
+    const ax = Math.abs(magnitudes[i]);
+    if (ax === 0) continue;
+    if (!isFinite(ax)) return isNaN(ax) ? NaN : Infinity;
+    if (scale < ax) {
+      const r = scale / ax;
+      ssq = 1 + ssq * r * r;
+      scale = ax;
+    } else {
+      const r = ax / scale;
+      ssq += r * r;
+    }
+  }
+  return scale === 0 ? 0 : scale * Math.sqrt(ssq);
+}
+
+function elemMag(
+  re: ArrayLike<number>,
+  im: ArrayLike<number> | undefined,
+  i: number
+): number {
+  return im ? Math.hypot(re[i], im[i]) : Math.abs(re[i]);
+}
+
 function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
   const shape = v.shape;
   const rows = shape[0] || 1;
@@ -161,6 +189,12 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
       }
       return RTV.num(m);
     }
+    if (vp === 2) {
+      const mags = new Float64Array(v.data.length);
+      for (let i = 0; i < v.data.length; i++)
+        mags[i] = elemMag(v.data, imag, i);
+      return RTV.num(scaledEuclid(mags, mags.length));
+    }
     let s = 0;
     for (let i = 0; i < v.data.length; i++) {
       const a = imag ? Math.hypot(v.data[i], imag[i]) : Math.abs(v.data[i]);
@@ -171,13 +205,9 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
 
   // Matrix norms
   if (p === "fro" || (typeof p === "number" && isNaN(p))) {
-    let s = 0;
-    for (let i = 0; i < v.data.length; i++) {
-      const re = v.data[i];
-      const im = imag ? imag[i] : 0;
-      s += re * re + im * im;
-    }
-    return RTV.num(Math.sqrt(s));
+    const mags = new Float64Array(v.data.length);
+    for (let i = 0; i < v.data.length; i++) mags[i] = elemMag(v.data, imag, i);
+    return RTV.num(scaledEuclid(mags, mags.length));
   }
   if (p === 1) {
     let maxColSum = 0;
@@ -303,6 +333,30 @@ function vecnormAlongDim(
         if (a < m) m = a;
       }
       result[outIdx] = m;
+    } else if (p === 2) {
+      let scale = 0;
+      let ssq = 1;
+      for (let k = 0; k < srcIndices.length; k++) {
+        const idx = srcIndices[k];
+        const ax = imag
+          ? Math.hypot(v.data[idx], imag[idx])
+          : Math.abs(v.data[idx]);
+        if (ax === 0) continue;
+        if (!isFinite(ax)) {
+          scale = isNaN(ax) ? NaN : Infinity;
+          ssq = 1;
+          break;
+        }
+        if (scale < ax) {
+          const r = scale / ax;
+          ssq = 1 + ssq * r * r;
+          scale = ax;
+        } else {
+          const r = ax / scale;
+          ssq += r * r;
+        }
+      }
+      result[outIdx] = scale === 0 ? 0 : scale * Math.sqrt(ssq);
     } else {
       let s = 0;
       for (let k = 0; k < srcIndices.length; k++) {

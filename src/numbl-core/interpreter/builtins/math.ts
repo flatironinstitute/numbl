@@ -78,34 +78,43 @@ registerUnary(
 
 // Inverse trig (complex formulas from builtins/math.ts)
 
+// Kahan's formulation of complex asin/acos via A, B, and 2x/(a1+a2) to
+// avoid overflow in re^2 / im^2 and cancellation in a1-a2.  Preserves
+// MATLAB's branch-cut convention for real x with |x|>1 and y==0.
+function cAsinAcosCore(
+  re: number,
+  im: number
+): { beta: number; alpha: number; signY: number } {
+  const a1 = Math.hypot(re + 1, im);
+  const a2 = Math.hypot(re - 1, im);
+  const sum = a1 + a2;
+  // β = (a1 - a2)/2 rewritten as 2*re/(a1+a2) to avoid cancellation.
+  const betaRaw = sum === 0 ? 0 : (2 * re) / sum;
+  const beta = betaRaw > 1 ? 1 : betaRaw < -1 ? -1 : betaRaw;
+  const alpha = sum / 2;
+  // MATLAB convention: for y == 0 and |re| > 1 the branch sign is -sign(re).
+  let signY: number;
+  if (im > 0) signY = 1;
+  else if (im < 0) signY = -1;
+  else signY = re > 1 ? -1 : 1;
+  return { beta, alpha, signY };
+}
+
+function acoshSafe(alpha: number): number {
+  if (alpha <= 1) return 0;
+  // For alpha large enough that alpha*alpha overflows, use log(2*alpha).
+  if (alpha > 1e150) return Math.LN2 + Math.log(alpha);
+  return Math.acosh(alpha);
+}
+
 function cAsin(re: number, im: number): { re: number; im: number } {
-  const w1re = -im,
-    w1im = re;
-  const w2re = 1 - re * re + im * im,
-    w2im = -2 * re * im;
-  const w2r = Math.sqrt(w2re * w2re + w2im * w2im);
-  const w3re = Math.sqrt((w2r + w2re) / 2);
-  const w3im =
-    w2im >= 0 ? Math.sqrt((w2r - w2re) / 2) : -Math.sqrt((w2r - w2re) / 2);
-  const w4re = w1re + w3re,
-    w4im = w1im + w3im;
-  const w5re = Math.log(Math.sqrt(w4re * w4re + w4im * w4im));
-  const w5im = Math.atan2(w4im, w4re);
-  return { re: w5im, im: -w5re };
+  const { beta, alpha, signY } = cAsinAcosCore(re, im);
+  return { re: Math.asin(beta), im: signY * acoshSafe(alpha) };
 }
 
 function cAcos(re: number, im: number): { re: number; im: number } {
-  const w2re = 1 - re * re + im * im,
-    w2im = -2 * re * im;
-  const w2r = Math.sqrt(w2re * w2re + w2im * w2im);
-  const w3re = Math.sqrt((w2r + w2re) / 2);
-  const w3im =
-    w2im >= 0 ? Math.sqrt((w2r - w2re) / 2) : -Math.sqrt((w2r - w2re) / 2);
-  const w4re = re - w3im,
-    w4im = im + w3re;
-  const w5re = Math.log(Math.sqrt(w4re * w4re + w4im * w4im));
-  const w5im = Math.atan2(w4im, w4re);
-  return { re: w5im, im: -w5re };
+  const { beta, alpha, signY } = cAsinAcosCore(re, im);
+  return { re: Math.acos(beta), im: -signY * acoshSafe(alpha) };
 }
 
 // asin/acos: maybe-complex — out-of-domain real inputs (|x| > 1) produce
@@ -568,8 +577,16 @@ registerUnary("erfcx", erfcxScalar, noComplexFn);
 // ── Complex helpers for inverse hyperbolic / reciprocal ──────────────
 
 function cRecip(re: number, im: number): { re: number; im: number } {
-  const d = re * re + im * im;
-  return { re: re / d, im: -im / d };
+  // Smith's algorithm avoids spurious over/underflow in re*re + im*im.
+  if (re === 0 && im === 0) return { re: 1 / 0, im: -1 / 0 };
+  if (Math.abs(re) >= Math.abs(im)) {
+    const r = im / re;
+    const d = re + im * r;
+    return { re: 1 / d, im: -r / d };
+  }
+  const r = re / im;
+  const d = im + re * r;
+  return { re: r / d, im: -1 / d };
 }
 
 function composeRecip(
