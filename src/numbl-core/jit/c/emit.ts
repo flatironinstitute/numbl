@@ -26,6 +26,7 @@ import {
   emitScalarTruthiness,
 } from "../scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
+import type { TensorMeta } from "./classify.js";
 import {
   C_SCALAR_TARGET,
   TENSOR_BIN_OP,
@@ -49,6 +50,30 @@ import {
   tensorMaxDim,
   type EmitCtx,
 } from "./codegenCtx.js";
+
+/** Resolve a tensor name's meta or throw — the tensor-creation emit
+ *  helpers below depend on the name being classified (with
+ *  `hasFreshAlloc`) for the d0/d1 locals they write to actually exist
+ *  at runtime. Failing loudly here beats emitting C that references
+ *  undeclared identifiers. */
+function requireFreshAllocMeta(
+  ctx: EmitCtx,
+  destName: string,
+  site: string
+): TensorMeta {
+  const m = ctx.cls.meta.get(destName);
+  if (!m) {
+    throw new Error(
+      `C-JIT codegen: ${site}: dest '${destName}' has no TensorMeta (not classified as a tensor)`
+    );
+  }
+  if (!m.hasFreshAlloc) {
+    throw new Error(
+      `C-JIT codegen: ${site}: dest '${destName}' is not hasFreshAlloc — shape locals (_d0/_d1) wouldn't exist`
+    );
+  }
+  return m;
+}
 
 // ── Expression emission ───────────────────────────────────────────────
 
@@ -514,14 +539,22 @@ function emitEnsureLocalBuf(
 }
 
 /** Emit a fresh-alloc pattern: free old buffer, malloc new, fill with
- *  the cells of a TensorLiteral. */
+ *  the cells of a TensorLiteral. The caller MUST pass the classified
+ *  `TensorMeta` for `destName` (a `hasFreshAlloc=true` meta) so the
+ *  `_d0` / `_d1` locals we write to are guaranteed to exist. */
 function emitTensorLiteralAssign(
   lines: string[],
   indent: string,
   destName: string,
+  destMeta: TensorMeta,
   expr: JitExpr & { tag: "TensorLiteral" },
   ctx: EmitCtx
 ): void {
+  if (!destMeta.hasFreshAlloc) {
+    throw new Error(
+      `C-JIT codegen: emitTensorLiteralAssign('${destName}'): destMeta.hasFreshAlloc must be true`
+    );
+  }
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   const dD0 = tensorD0(destName);
@@ -557,14 +590,21 @@ function emitTensorLiteralAssign(
   lines.push(`${indent}}`);
 }
 
-/** Emit zeros(n) / zeros(n, m) / ones(...) into the tracked locals. */
+/** Emit zeros(n) / zeros(n, m) / ones(...) into the tracked locals.
+ *  Caller must pass a `hasFreshAlloc=true` TensorMeta for `destName`. */
 function emitZerosOnesAssign(
   lines: string[],
   indent: string,
   destName: string,
+  destMeta: TensorMeta,
   expr: JitExpr & { tag: "Call" },
   ctx: EmitCtx
 ): void {
+  if (!destMeta.hasFreshAlloc) {
+    throw new Error(
+      `C-JIT codegen: emitZerosOnesAssign('${destName}'): destMeta.hasFreshAlloc must be true`
+    );
+  }
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   const dD0 = tensorD0(destName);
@@ -609,14 +649,21 @@ function emitZerosOnesAssign(
 }
 
 /** Emit VConcatGrow `dest = [base; value]`. Handles the self-grow case
- *  (base == dest): memcpy completes before the old buffer is freed. */
+ *  (base == dest): memcpy completes before the old buffer is freed.
+ *  Caller must pass a `hasFreshAlloc=true` TensorMeta for `destName`. */
 function emitVConcatGrowAssign(
   lines: string[],
   indent: string,
   destName: string,
+  destMeta: TensorMeta,
   expr: JitExpr & { tag: "VConcatGrow" },
   ctx: EmitCtx
 ): void {
+  if (!destMeta.hasFreshAlloc) {
+    throw new Error(
+      `C-JIT codegen: emitVConcatGrowAssign('${destName}'): destMeta.hasFreshAlloc must be true`
+    );
+  }
   if (expr.base.tag !== "Var") {
     throw new Error("C-JIT codegen: VConcatGrow base must be a Var");
   }
@@ -665,12 +712,14 @@ function emitTensorAssign(
   const needsAlloc = isLocalTensor(ctx, destName);
 
   if (expr.tag === "TensorLiteral") {
-    emitTensorLiteralAssign(lines, indent, destName, expr, ctx);
+    const destMeta = requireFreshAllocMeta(ctx, destName, "TensorLiteral");
+    emitTensorLiteralAssign(lines, indent, destName, destMeta, expr, ctx);
     return;
   }
 
   if (expr.tag === "VConcatGrow") {
-    emitVConcatGrowAssign(lines, indent, destName, expr, ctx);
+    const destMeta = requireFreshAllocMeta(ctx, destName, "VConcatGrow");
+    emitVConcatGrowAssign(lines, indent, destName, destMeta, expr, ctx);
     return;
   }
 
@@ -679,7 +728,8 @@ function emitTensorAssign(
     (expr.name === "zeros" || expr.name === "ones") &&
     isTensorExpr(expr)
   ) {
-    emitZerosOnesAssign(lines, indent, destName, expr, ctx);
+    const destMeta = requireFreshAllocMeta(ctx, destName, expr.name);
+    emitZerosOnesAssign(lines, indent, destName, destMeta, expr, ctx);
     return;
   }
 
