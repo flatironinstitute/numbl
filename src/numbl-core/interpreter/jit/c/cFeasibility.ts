@@ -20,6 +20,7 @@
 
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
+import { getIBuiltin } from "../../builtins/types.js";
 
 export type FeasibilityResult =
   | { ok: true }
@@ -41,39 +42,6 @@ interface Ctx {
 function fail(ctx: Ctx, reason: string): FeasibilityResult {
   return { ok: false, reason, line: ctx.line || undefined };
 }
-
-/**
- * Scalar math builtins that map 1:1 to `<math.h>` functions in the C emitter.
- *
- * **Deliberately excluded** (domain-restricted in MATLAB, where out-of-domain
- * inputs promote to complex rather than returning NaN):
- *   asin, acos, sqrt, log, log2, log10, acosh, atanh, log1p
- * The JS-JIT gates these with `requireNonneg`; we don't track the same
- * type refinement at feasibility time, so the conservative choice is to
- * bail for all call sites, letting JS-JIT handle them.
- */
-export const C_SCALAR_MATH_BUILTINS = new Set<string>([
-  "sin",
-  "cos",
-  "tan",
-  "atan",
-  "sinh",
-  "cosh",
-  "tanh",
-  "asinh",
-  "exp",
-  "abs",
-  "floor",
-  "ceil",
-  "fix",
-  "round",
-  "sign",
-  "atan2",
-  "hypot",
-  "mod",
-  "rem",
-  "expm1",
-]);
 
 /**
  * MATLAB unary builtin → libnumbl_ops `numbl_unary_op_t` code, restricted
@@ -260,13 +228,23 @@ function checkCall(
   expr: JitExpr & { tag: "Call" },
   ctx: Ctx
 ): FeasibilityResult {
-  // Scalar math builtin (Phase 1 path) — must produce a scalar result.
-  if (expr.jitType.kind !== "tensor" && C_SCALAR_MATH_BUILTINS.has(expr.name)) {
-    for (const a of expr.args) {
-      const r = checkExpr(a, ctx);
-      if (!r.ok) return r;
+  // Scalar math builtin — accept any builtin that provides a C
+  // scalar-emission hook and returns a non-null emission for the
+  // arg types at hand. Dummy argCode is passed since jitEmitC should
+  // only inspect argTypes to decide feasibility.
+  if (expr.jitType.kind !== "tensor") {
+    const ib = getIBuiltin(expr.name);
+    if (ib?.jitEmitC) {
+      const argTypes = expr.args.map(a => a.jitType);
+      const dummyArgs = expr.args.map(() => "_");
+      if (ib.jitEmitC(dummyArgs, argTypes) !== null) {
+        for (const a of expr.args) {
+          const r = checkExpr(a, ctx);
+          if (!r.ok) return r;
+        }
+        return { ok: true };
+      }
     }
-    return { ok: true };
   }
   // Tensor unary builtin: result is tensor, single tensor arg, name in
   // the libnumbl_ops mapping.

@@ -14,13 +14,16 @@
  * inside the same loop.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
+import { BinaryOperation } from "../../parser/types.js";
 import type { JitExpr } from "./jitTypes.js";
 import type { FusibleChain } from "./fusion.js";
+import type { ScalarOpTarget } from "./scalarEmit.js";
 import {
-  FUSIBLE_TENSOR_UNARY_OPS,
-  FUSIBLE_TENSOR_BINARY_OPS,
-} from "./fusionOps.js";
+  type FusedTarget,
+  emitFusedScalarExpr,
+  fusedLocal,
+  findTensorParamInChain,
+} from "./fusedScalarEmit.js";
 
 // ── JS math builtin mapping ──────────────────────────────────────────
 
@@ -57,157 +60,62 @@ const BUILTIN_TO_JS: Record<string, string> = {
   min: "Math.min",
 };
 
-/** Scalar local name for a chain-produced tensor intermediate. */
-function fusedLocal(name: string): string {
-  return `__f_${name}`;
-}
-
 /** Data alias for a tensor variable inside the fused block. */
 function dataAlias(name: string, mangle: (n: string) => string): string {
   return `__${mangle(name)}_data`;
 }
 
-// ── Expression emission (per-element scalar form) ────────────────────
+// ── Per-element op target (numeric form) ─────────────────────────────
+//
+// Fused bodies write results into a Float64Array. Comparisons and
+// logicals must emit a numeric 0/1 (not a JS boolean) so the V8
+// JIT keeps the loop body in a double-typed shape.
 
-function emitScalarExpr(
-  expr: JitExpr,
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  mangle: (n: string) => string
-): string {
-  switch (expr.tag) {
-    case "NumberLiteral":
-      return String(expr.value);
+const JS_FUSED_OP_TARGET: ScalarOpTarget = {
+  binAdd: (l, r) => `(${l} + ${r})`,
+  binSub: (l, r) => `(${l} - ${r})`,
+  binMul: (l, r) => `(${l} * ${r})`,
+  binDiv: (l, r) => `(${l} / ${r})`,
+  binPow: (l, r) => `Math.pow(${l}, ${r})`,
+  binEq: (l, r) => `((${l}) === (${r}) ? 1 : 0)`,
+  binNe: (l, r) => `((${l}) !== (${r}) ? 1 : 0)`,
+  binLt: (l, r) => `((${l}) < (${r}) ? 1 : 0)`,
+  binLe: (l, r) => `((${l}) <= (${r}) ? 1 : 0)`,
+  binGt: (l, r) => `((${l}) > (${r}) ? 1 : 0)`,
+  binGe: (l, r) => `((${l}) >= (${r}) ? 1 : 0)`,
+  binAnd: (l, r) => `(((${l}) !== 0) && ((${r}) !== 0) ? 1 : 0)`,
+  binOr: (l, r) => `(((${l}) !== 0) || ((${r}) !== 0) ? 1 : 0)`,
+  unaryPlus: o => `(+${o})`,
+  unaryMinus: o => `(-${o})`,
+  unaryNot: o => `((${o}) === 0 ? 1 : 0)`,
+  // Truthiness hooks unused in fused context — provide safe fallbacks.
+  toTruthy: v => `((${v}) !== 0)`,
+  condEq: (l, r) => `(${l}) === (${r})`,
+  condNe: (l, r) => `(${l}) !== (${r})`,
+  condLt: (l, r) => `(${l}) < (${r})`,
+  condLe: (l, r) => `(${l}) <= (${r})`,
+  condGt: (l, r) => `(${l}) > (${r})`,
+  condGe: (l, r) => `(${l}) >= (${r})`,
+  condNot: t => `!(${t})`,
+  condAnd: (l, r) => `(${l}) && (${r})`,
+  condOr: (l, r) => `(${l}) || (${r})`,
+};
 
-    case "Var": {
-      if (expr.jitType.kind === "tensor" || allTensorVars.has(expr.name)) {
-        if (chainLocals.has(expr.name)) return fusedLocal(expr.name);
-        return `${dataAlias(expr.name, mangle)}[__i]`;
+/** Build the JS fused target bound to a specific mangle function. */
+function makeJsFusedTarget(mangle: (n: string) => string): FusedTarget {
+  return {
+    formatNumber: v => String(v),
+    mangle,
+    tensorElemRead: name => `${dataAlias(name, mangle)}[__i]`,
+    emitBuiltinCall: (name, args) => {
+      if (name in BUILTIN_TO_JS) {
+        return `${BUILTIN_TO_JS[name]}(${args.join(", ")})`;
       }
-      return mangle(expr.name);
-    }
-
-    case "Binary":
-      return emitBinaryScalar(expr, chainLocals, allTensorVars, mangle);
-
-    case "Unary":
-      return emitUnaryScalar(expr, chainLocals, allTensorVars, mangle);
-
-    case "Call":
-      return emitCallScalar(expr, chainLocals, allTensorVars, mangle);
-
-    default:
-      throw new Error(
-        `jsFusedCodegen: unsupported expr in fused chain: ${expr.tag}`
-      );
-  }
-}
-
-function emitBinaryScalar(
-  expr: JitExpr & { tag: "Binary" },
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  mangle: (n: string) => string
-): string {
-  const l = emitScalarExpr(expr.left, chainLocals, allTensorVars, mangle);
-  const r = emitScalarExpr(expr.right, chainLocals, allTensorVars, mangle);
-
-  switch (expr.op) {
-    case BinaryOperation.Add:
-      return `(${l} + ${r})`;
-    case BinaryOperation.Sub:
-      return `(${l} - ${r})`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `(${l} * ${r})`;
-    case BinaryOperation.Div:
-    case BinaryOperation.ElemDiv:
-      return `(${l} / ${r})`;
-    case BinaryOperation.Pow:
-    case BinaryOperation.ElemPow:
-      return `Math.pow(${l}, ${r})`;
-    case BinaryOperation.Equal:
-      return `((${l}) === (${r}) ? 1 : 0)`;
-    case BinaryOperation.NotEqual:
-      return `((${l}) !== (${r}) ? 1 : 0)`;
-    case BinaryOperation.Less:
-      return `((${l}) < (${r}) ? 1 : 0)`;
-    case BinaryOperation.LessEqual:
-      return `((${l}) <= (${r}) ? 1 : 0)`;
-    case BinaryOperation.Greater:
-      return `((${l}) > (${r}) ? 1 : 0)`;
-    case BinaryOperation.GreaterEqual:
-      return `((${l}) >= (${r}) ? 1 : 0)`;
-    case BinaryOperation.AndAnd:
-      return `(((${l}) !== 0) && ((${r}) !== 0) ? 1 : 0)`;
-    case BinaryOperation.OrOr:
-      return `(((${l}) !== 0) || ((${r}) !== 0) ? 1 : 0)`;
-    default:
-      throw new Error(`jsFusedCodegen: unsupported binary op ${expr.op}`);
-  }
-}
-
-function emitUnaryScalar(
-  expr: JitExpr & { tag: "Unary" },
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  mangle: (n: string) => string
-): string {
-  const operand = emitScalarExpr(
-    expr.operand,
-    chainLocals,
-    allTensorVars,
-    mangle
-  );
-  switch (expr.op) {
-    case UnaryOperation.Plus:
-      return `(+${operand})`;
-    case UnaryOperation.Minus:
-      return `(-${operand})`;
-    case UnaryOperation.Not:
-      return `((${operand}) === 0 ? 1 : 0)`;
-    default:
-      throw new Error(`jsFusedCodegen: unsupported unary op ${expr.op}`);
-  }
-}
-
-function emitCallScalar(
-  expr: JitExpr & { tag: "Call" },
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  mangle: (n: string) => string
-): string {
-  if (
-    (expr.jitType.kind === "tensor" &&
-      (FUSIBLE_TENSOR_UNARY_OPS.has(expr.name) ||
-        FUSIBLE_TENSOR_BINARY_OPS.has(expr.name))) ||
-    expr.name in BUILTIN_TO_JS
-  ) {
-    const jsName = BUILTIN_TO_JS[expr.name];
-    if (!jsName) {
-      throw new Error(`jsFusedCodegen: unmapped builtin ${expr.name}`);
-    }
-    const args = expr.args.map(a =>
-      emitScalarExpr(a, chainLocals, allTensorVars, mangle)
-    );
-    return `${jsName}(${args.join(", ")})`;
-  }
-  // mod and rem are special — not in Math.*
-  if (expr.name === "mod") {
-    const args = expr.args.map(a =>
-      emitScalarExpr(a, chainLocals, allTensorVars, mangle)
-    );
-    return `$h.mod(${args.join(", ")})`;
-  }
-  if (expr.name === "rem") {
-    const args = expr.args.map(a =>
-      emitScalarExpr(a, chainLocals, allTensorVars, mangle)
-    );
-    return `((${args[0]}) % (${args[1]}))`;
-  }
-  throw new Error(
-    `jsFusedCodegen: unsupported call in fused chain: ${expr.name}`
-  );
+      if (name === "mod") return `$h.mod(${args.join(", ")})`;
+      if (name === "rem") return `((${args[0]}) % (${args[1]}))`;
+      return null;
+    },
+  };
 }
 
 // ── Reduction helpers ────────────────────────────────────────────────
@@ -273,49 +181,6 @@ function accumulateOp(op: BinaryOperation, dest: string, val: string): string {
 // ── Public API ────────────────────────────────────────────────────────
 
 /**
- * Find the first tensor param name referenced in the chain's expressions.
- * Used to determine the loop length and shape for output wrapping.
- */
-function findRefParam(
-  chain: FusibleChain,
-  paramTensors: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string | null {
-  for (const a of chain.assigns) {
-    const found = findTensorParamInExpr(a.expr, paramTensors, allTensorVars);
-    if (found) return found;
-  }
-  return null;
-}
-
-function findTensorParamInExpr(
-  expr: JitExpr,
-  paramTensors: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string | null {
-  if (expr.tag === "Var" && allTensorVars.has(expr.name)) {
-    if (paramTensors.has(expr.name)) return expr.name;
-    return null;
-  }
-  if (expr.tag === "Binary") {
-    return (
-      findTensorParamInExpr(expr.left, paramTensors, allTensorVars) ??
-      findTensorParamInExpr(expr.right, paramTensors, allTensorVars)
-    );
-  }
-  if (expr.tag === "Unary") {
-    return findTensorParamInExpr(expr.operand, paramTensors, allTensorVars);
-  }
-  if (expr.tag === "Call") {
-    for (const a of expr.args) {
-      const f = findTensorParamInExpr(a, paramTensors, allTensorVars);
-      if (f) return f;
-    }
-  }
-  return null;
-}
-
-/**
  * Collect all distinct tensor names referenced in the chain's expression
  * trees (params and chain-produced locals). We need data aliases for all
  * non-chain-produced tensors (i.e. params / pre-existing vars).
@@ -373,10 +238,13 @@ export function emitJsFusedChain(
   mangle: (n: string) => string
 ): void {
   // Find a reference param for length and shape.
-  const refParam = findRefParam(chain, paramTensors, allTensorVars);
+  const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
   if (!refParam) return; // shouldn't happen — bail silently
 
   const refMangled = mangle(refParam);
+
+  // Build the fused target bound to this backend's mangle.
+  const fusedTarget = makeJsFusedTarget(mangle);
 
   // Determine write-back dests (same logic as C codegen).
   const lastDest = chain.assigns[chain.assigns.length - 1].destName;
@@ -437,7 +305,13 @@ export function emitJsFusedChain(
   lines.push(`${inner}for (let __i = 0; __i < __len; __i++) {`);
 
   for (const assign of chain.assigns) {
-    const rhs = emitScalarExpr(assign.expr, chainLocals, allTensorVars, mangle);
+    const rhs = emitFusedScalarExpr(
+      assign.expr,
+      chainLocals,
+      allTensorVars,
+      JS_FUSED_OP_TARGET,
+      fusedTarget
+    );
 
     if (!chainLocals.has(assign.destName)) {
       lines.push(`${loopInner}let ${fusedLocal(assign.destName)} = ${rhs};`);

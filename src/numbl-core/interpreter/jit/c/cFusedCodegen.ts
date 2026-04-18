@@ -18,13 +18,23 @@
  * reduction.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
-import type { JitExpr } from "../jitTypes.js";
+import { BinaryOperation } from "../../../parser/types.js";
+import type { JitExpr, JitType } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import {
-  FUSIBLE_TENSOR_UNARY_OPS,
-  FUSIBLE_TENSOR_BINARY_OPS,
-} from "../fusionOps.js";
+  type FusedTarget,
+  emitFusedScalarExpr,
+  fusedLocal,
+  findTensorParamInChain,
+} from "../fusedScalarEmit.js";
+import {
+  C_SCALAR_TARGET,
+  formatNumberLiteral,
+  mangle,
+  tensorData,
+  tensorLen,
+} from "./jitCodegenC.js";
+import { getIBuiltin } from "../../builtins/types.js";
 
 /** Minimum element count before `#pragma omp parallel for` kicks in.
  *  Below this, thread-spawn overhead dominates. */
@@ -82,205 +92,29 @@ function countHeavyOps(expr: JitExpr): number {
   }
 }
 
-const MANGLE_PREFIX = "v_";
+// ── Fused target (per-element leaves) ────────────────────────────────
+//
+// The op switches (binary/unary) reuse C_SCALAR_TARGET — C's value
+// form is already numeric (booleans are `(double)` casts), so the
+// same target works in both value and per-element contexts.
+//
+// Function-call leaves consult each builtin's own `jitEmitC` so the
+// C function-name mapping lives with the builtin, not in a central
+// table here. Fused context is per-element, so argTypes are
+// fabricated as scalar numbers — all fusible ops (per fusionOps.ts)
+// are element-wise, and none carry a `requireNonneg` guard.
 
-function mangle(name: string): string {
-  return `${MANGLE_PREFIX}${name}`;
-}
-
-function tensorData(name: string): string {
-  return `${mangle(name)}_data`;
-}
-
-function tensorLen(name: string): string {
-  return `${mangle(name)}_len`;
-}
-
-/** Format a number literal for C source. */
-function fmtNum(v: number): string {
-  if (!Number.isFinite(v)) {
-    if (Number.isNaN(v)) return "(0.0/0.0)";
-    return v > 0 ? "(1.0/0.0)" : "(-1.0/0.0)";
-  }
-  if (Number.isInteger(v)) return `${v}.0`;
-  return `${v}`;
-}
-
-/** Scalar C name for a chain-produced tensor intermediate. */
-function fusedLocal(name: string): string {
-  return `__f_${name}`;
-}
-
-// ── Scalar math builtins (mirrors jitCodegenC.ts) ────────────────────
-
-const BUILTIN_TO_C: Record<string, string> = {
-  sin: "sin",
-  cos: "cos",
-  tan: "tan",
-  asin: "asin",
-  acos: "acos",
-  atan: "atan",
-  sinh: "sinh",
-  cosh: "cosh",
-  tanh: "tanh",
-  asinh: "asinh",
-  acosh: "acosh",
-  atanh: "atanh",
-  exp: "exp",
-  log: "log",
-  log2: "log2",
-  log10: "log10",
-  sqrt: "sqrt",
-  abs: "fabs",
-  floor: "floor",
-  ceil: "ceil",
-  fix: "trunc",
-  round: "round",
-  atan2: "atan2",
-  hypot: "hypot",
-  rem: "fmod",
-  expm1: "expm1",
-  log1p: "log1p",
-  pow: "pow",
-  mod: "numbl_mod",
-  sign: "numbl_sign",
-  max: "fmax",
-  min: "fmin",
+const C_FUSED_TARGET: FusedTarget = {
+  formatNumber: formatNumberLiteral,
+  mangle,
+  tensorElemRead: name => `${tensorData(name)}[__i]`,
+  emitBuiltinCall: (name, args) => {
+    const ib = getIBuiltin(name);
+    if (!ib?.jitEmitC) return null;
+    const argTypes: JitType[] = args.map(() => ({ kind: "number" }));
+    return ib.jitEmitC(args, argTypes);
+  },
 };
-
-// ── Expression emission (per-element scalar form) ────────────────────
-
-/**
- * Emit a JitExpr as a C scalar expression for element `__i`.
- *
- * `chainLocals` is the set of tensor variable names that have already
- * been assigned within the current fused chain — these are read via
- * the scalar local `__f_name` rather than `v_name_data[__i]`.
- *
- * `allTensorVars` is the full set of tensor-typed variables so we can
- * distinguish tensor reads from scalar reads.
- */
-function emitScalarExpr(
-  expr: JitExpr,
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string {
-  switch (expr.tag) {
-    case "NumberLiteral":
-      return fmtNum(expr.value);
-
-    case "Var": {
-      if (expr.jitType.kind === "tensor" || allTensorVars.has(expr.name)) {
-        // Chain-produced intermediate → scalar local
-        if (chainLocals.has(expr.name)) return fusedLocal(expr.name);
-        // Input param / pre-existing tensor → array read
-        return `${tensorData(expr.name)}[__i]`;
-      }
-      return mangle(expr.name);
-    }
-
-    case "Binary":
-      return emitBinaryScalar(expr, chainLocals, allTensorVars);
-
-    case "Unary":
-      return emitUnaryScalar(expr, chainLocals, allTensorVars);
-
-    case "Call":
-      return emitCallScalar(expr, chainLocals, allTensorVars);
-
-    default:
-      throw new Error(
-        `cFusedCodegen: unsupported expr in fused chain: ${expr.tag}`
-      );
-  }
-}
-
-function emitBinaryScalar(
-  expr: JitExpr & { tag: "Binary" },
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string {
-  const l = emitScalarExpr(expr.left, chainLocals, allTensorVars);
-  const r = emitScalarExpr(expr.right, chainLocals, allTensorVars);
-
-  switch (expr.op) {
-    case BinaryOperation.Add:
-      return `(${l} + ${r})`;
-    case BinaryOperation.Sub:
-      return `(${l} - ${r})`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `(${l} * ${r})`;
-    case BinaryOperation.Div:
-    case BinaryOperation.ElemDiv:
-      return `(${l} / ${r})`;
-    case BinaryOperation.Pow:
-    case BinaryOperation.ElemPow:
-      return `pow(${l}, ${r})`;
-    case BinaryOperation.Equal:
-      return `((double)((${l}) == (${r})))`;
-    case BinaryOperation.NotEqual:
-      return `((double)((${l}) != (${r})))`;
-    case BinaryOperation.Less:
-      return `((double)((${l}) < (${r})))`;
-    case BinaryOperation.LessEqual:
-      return `((double)((${l}) <= (${r})))`;
-    case BinaryOperation.Greater:
-      return `((double)((${l}) > (${r})))`;
-    case BinaryOperation.GreaterEqual:
-      return `((double)((${l}) >= (${r})))`;
-    case BinaryOperation.AndAnd:
-      return `((double)(((${l}) != 0.0) && ((${r}) != 0.0)))`;
-    case BinaryOperation.OrOr:
-      return `((double)(((${l}) != 0.0) || ((${r}) != 0.0)))`;
-    default:
-      throw new Error(`cFusedCodegen: unsupported binary op ${expr.op}`);
-  }
-}
-
-function emitUnaryScalar(
-  expr: JitExpr & { tag: "Unary" },
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string {
-  const operand = emitScalarExpr(expr.operand, chainLocals, allTensorVars);
-  switch (expr.op) {
-    case UnaryOperation.Plus:
-      return `(+${operand})`;
-    case UnaryOperation.Minus:
-      return `(-${operand})`;
-    case UnaryOperation.Not:
-      return `((double)((${operand}) == 0.0))`;
-    default:
-      throw new Error(`cFusedCodegen: unsupported unary op ${expr.op}`);
-  }
-}
-
-function emitCallScalar(
-  expr: JitExpr & { tag: "Call" },
-  chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string {
-  // Tensor unary/binary call → becomes scalar math call on per-element values
-  if (
-    (expr.jitType.kind === "tensor" &&
-      (FUSIBLE_TENSOR_UNARY_OPS.has(expr.name) ||
-        FUSIBLE_TENSOR_BINARY_OPS.has(expr.name))) ||
-    expr.name in BUILTIN_TO_C
-  ) {
-    const cName = BUILTIN_TO_C[expr.name];
-    if (!cName) {
-      throw new Error(`cFusedCodegen: unmapped builtin ${expr.name}`);
-    }
-    const args = expr.args.map(a =>
-      emitScalarExpr(a, chainLocals, allTensorVars)
-    );
-    return `${cName}(${args.join(", ")})`;
-  }
-  throw new Error(
-    `cFusedCodegen: unsupported call in fused chain: ${expr.name}`
-  );
-}
 
 // ── Reduction init / combine helpers ─────────────────────────────────
 
@@ -368,32 +202,23 @@ export function emitFusedChain(
   openmp?: boolean
 ): void {
   // Determine the length variable — use the first tensor param referenced.
-  const lenVar = findLenVar(chain, paramTensors, allTensorVars);
+  const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
+  const lenVar = refParam
+    ? tensorLen(refParam)
+    : tensorLen(chain.assigns[0].destName);
 
   // Determine which dest names need a write-back to their buffer.
-  // A dest needs write-back if:
-  //   1. It's an output or param-output tensor, OR
-  //   2. It's read after the chain (we conservatively always write back
-  //      unless the reduction fully consumes it)
-  // For simplicity: write back all distinct dest names EXCEPT one that
-  // is consumed solely by the trailing reduction.
   const lastDest = chain.assigns[chain.assigns.length - 1].destName;
   const reductionConsumes =
     chain.reduction && chain.reduction.tensorName === lastDest;
 
-  // Collect distinct dest names that appear in the chain.
   const destNames = new Set<string>();
   for (const a of chain.assigns) destNames.add(a.destName);
 
-  // Determine which dests need write-back.
   const writeBack = new Set<string>();
   for (const d of destNames) {
     if (reductionConsumes && d === lastDest) {
-      // Check if this dest is ALSO an output — if so, still write back.
-      if (outputTensorNames.has(d)) {
-        writeBack.add(d);
-      }
-      // Otherwise skip — the reduction consumes it.
+      if (outputTensorNames.has(d)) writeBack.add(d);
     } else {
       writeBack.add(d);
     }
@@ -446,7 +271,13 @@ export function emitFusedChain(
   const inner = indent + "  ";
 
   for (const assign of chain.assigns) {
-    const rhs = emitScalarExpr(assign.expr, chainLocals, allTensorVars);
+    const rhs = emitFusedScalarExpr(
+      assign.expr,
+      chainLocals,
+      allTensorVars,
+      C_SCALAR_TARGET,
+      C_FUSED_TARGET
+    );
 
     // First assignment to this dest in the loop → declare the scalar local.
     // Subsequent assignments → just reassign.
@@ -493,50 +324,4 @@ export function emitFusedChain(
       lines.push(`${indent}${acc} = ${reduceAccLocal};`);
     }
   }
-}
-
-/**
- * Find a tensor length C expression to use as the loop bound.
- * Walks the first chain assign's expression tree to find a tensor param
- * reference, then returns its `_len` variable.
- */
-function findLenVar(
-  chain: FusibleChain,
-  paramTensors: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string {
-  // Try to find a param tensor reference in the chain's expressions.
-  for (const a of chain.assigns) {
-    const found = findTensorParamInExpr(a.expr, paramTensors, allTensorVars);
-    if (found) return tensorLen(found);
-  }
-  // Fallback: use the first dest's length (it must be set from somewhere).
-  return tensorLen(chain.assigns[0].destName);
-}
-
-function findTensorParamInExpr(
-  expr: JitExpr,
-  paramTensors: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>
-): string | null {
-  if (expr.tag === "Var" && allTensorVars.has(expr.name)) {
-    if (paramTensors.has(expr.name)) return expr.name;
-    return null; // chain-produced, doesn't have a _len
-  }
-  if (expr.tag === "Binary") {
-    return (
-      findTensorParamInExpr(expr.left, paramTensors, allTensorVars) ??
-      findTensorParamInExpr(expr.right, paramTensors, allTensorVars)
-    );
-  }
-  if (expr.tag === "Unary") {
-    return findTensorParamInExpr(expr.operand, paramTensors, allTensorVars);
-  }
-  if (expr.tag === "Call") {
-    for (const a of expr.args) {
-      const f = findTensorParamInExpr(a, paramTensors, allTensorVars);
-      if (f) return f;
-    }
-  }
-  return null;
 }

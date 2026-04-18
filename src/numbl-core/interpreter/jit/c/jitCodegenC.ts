@@ -29,6 +29,13 @@ import {
 } from "./cFeasibility.js";
 import { findFusibleChains } from "../fusion.js";
 import { emitFusedChain } from "./cFusedCodegen.js";
+import {
+  type ScalarOpTarget,
+  emitScalarBinaryOp,
+  emitScalarUnaryOp,
+  emitScalarTruthiness,
+} from "../scalarEmit.js";
+import { getIBuiltin } from "../../builtins/types.js";
 
 const MANGLE_PREFIX = "v_";
 
@@ -47,41 +54,44 @@ const MANGLE_PREFIX = "v_";
  */
 const NUMBL_JIT_RT_REQUIRED_VERSION = 2;
 
-function mangle(name: string): string {
+export function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
 }
 
-const BUILTIN_TO_C: Record<string, string> = {
-  sin: "sin",
-  cos: "cos",
-  tan: "tan",
-  asin: "asin",
-  acos: "acos",
-  atan: "atan",
-  sinh: "sinh",
-  cosh: "cosh",
-  tanh: "tanh",
-  asinh: "asinh",
-  acosh: "acosh",
-  atanh: "atanh",
-  exp: "exp",
-  log: "log",
-  log2: "log2",
-  log10: "log10",
-  sqrt: "sqrt",
-  abs: "fabs",
-  floor: "floor",
-  ceil: "ceil",
-  fix: "trunc",
-  round: "round",
-  atan2: "atan2",
-  hypot: "hypot",
-  rem: "fmod",
-  expm1: "expm1",
-  log1p: "log1p",
-  pow: "pow",
-  mod: "numbl_mod",
-  sign: "numbl_sign",
+// ── Scalar op target (value form + truthiness form) ─────────────────────
+//
+// C coerces numeric results of comparisons/logicals to `double` so the
+// JIT type system can continue treating them as numbers. In condition
+// context (if/while/&&/||), the cast is dropped because C's control
+// flow already accepts scalar numeric tests.
+
+export const C_SCALAR_TARGET: ScalarOpTarget = {
+  binAdd: (l, r) => `(${l} + ${r})`,
+  binSub: (l, r) => `(${l} - ${r})`,
+  binMul: (l, r) => `(${l} * ${r})`,
+  binDiv: (l, r) => `(${l} / ${r})`,
+  binPow: (l, r) => `pow(${l}, ${r})`,
+  binEq: (l, r) => `(((double)((${l}) == (${r}))))`,
+  binNe: (l, r) => `(((double)((${l}) != (${r}))))`,
+  binLt: (l, r) => `(((double)((${l}) < (${r}))))`,
+  binLe: (l, r) => `(((double)((${l}) <= (${r}))))`,
+  binGt: (l, r) => `(((double)((${l}) > (${r}))))`,
+  binGe: (l, r) => `(((double)((${l}) >= (${r}))))`,
+  binAnd: (l, r) => `((double)(((${l}) != 0.0) && ((${r}) != 0.0)))`,
+  binOr: (l, r) => `((double)(((${l}) != 0.0) || ((${r}) != 0.0)))`,
+  unaryPlus: o => `(+${o})`,
+  unaryMinus: o => `(-${o})`,
+  unaryNot: o => `((double)((${o}) == 0.0))`,
+  toTruthy: v => `((${v}) != 0.0)`,
+  condEq: (l, r) => `((${l}) == (${r}))`,
+  condNe: (l, r) => `((${l}) != (${r}))`,
+  condLt: (l, r) => `((${l}) < (${r}))`,
+  condLe: (l, r) => `((${l}) <= (${r}))`,
+  condGt: (l, r) => `((${l}) > (${r}))`,
+  condGe: (l, r) => `((${l}) >= (${r}))`,
+  condNot: t => `(!(${t}))`,
+  condAnd: (l, r) => `((${l}) && (${r}))`,
+  condOr: (l, r) => `((${l}) || (${r}))`,
 };
 
 // Binary op → libnumbl_ops opcode enum name.
@@ -133,7 +143,7 @@ const TENSOR_REDUCE_OP: Record<string, string> = {
   mean: "NUMBL_REDUCE_MEAN",
 };
 
-function formatNumberLiteral(v: number): string {
+export function formatNumberLiteral(v: number): string {
   if (!Number.isFinite(v)) {
     if (Number.isNaN(v)) return "(0.0/0.0)";
     return v > 0 ? "(1.0/0.0)" : "(-1.0/0.0)";
@@ -144,10 +154,10 @@ function formatNumberLiteral(v: number): string {
 
 // ── Tensor data/len accessors ─────────────────────────────────────────
 
-function tensorData(name: string): string {
+export function tensorData(name: string): string {
   return `${mangle(name)}_data`;
 }
-function tensorLen(name: string): string {
+export function tensorLen(name: string): string {
   return `${mangle(name)}_len`;
 }
 
@@ -416,39 +426,7 @@ function emitBinary(expr: JitExpr & { tag: "Binary" }, ctx: EmitCtx): string {
 
   const l = emitExpr(expr.left, ctx);
   const r = emitExpr(expr.right, ctx);
-  switch (expr.op) {
-    case BinaryOperation.Add:
-      return `(${l} + ${r})`;
-    case BinaryOperation.Sub:
-      return `(${l} - ${r})`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `(${l} * ${r})`;
-    case BinaryOperation.Div:
-    case BinaryOperation.ElemDiv:
-      return `(${l} / ${r})`;
-    case BinaryOperation.Pow:
-    case BinaryOperation.ElemPow:
-      return `pow(${l}, ${r})`;
-    case BinaryOperation.Equal:
-      return `(((double)((${l}) == (${r}))))`;
-    case BinaryOperation.NotEqual:
-      return `(((double)((${l}) != (${r}))))`;
-    case BinaryOperation.Less:
-      return `(((double)((${l}) < (${r}))))`;
-    case BinaryOperation.LessEqual:
-      return `(((double)((${l}) <= (${r}))))`;
-    case BinaryOperation.Greater:
-      return `(((double)((${l}) > (${r}))))`;
-    case BinaryOperation.GreaterEqual:
-      return `(((double)((${l}) >= (${r}))))`;
-    case BinaryOperation.AndAnd:
-      return `((double)(((${l}) != 0.0) && ((${r}) != 0.0)))`;
-    case BinaryOperation.OrOr:
-      return `((double)(((${l}) != 0.0) || ((${r}) != 0.0)))`;
-    default:
-      throw new Error(`C-JIT codegen: unsupported binary op ${expr.op}`);
-  }
+  return emitScalarBinaryOp(expr.op, l, r, C_SCALAR_TARGET);
 }
 
 function emitUnary(expr: JitExpr & { tag: "Unary" }, ctx: EmitCtx): string {
@@ -459,16 +437,7 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ctx: EmitCtx): string {
   }
 
   const operand = emitExpr(expr.operand, ctx);
-  switch (expr.op) {
-    case UnaryOperation.Plus:
-      return `(+${operand})`;
-    case UnaryOperation.Minus:
-      return `(-${operand})`;
-    case UnaryOperation.Not:
-      return `((double)((${operand}) == 0.0))`;
-    default:
-      throw new Error(`C-JIT codegen: unsupported unary op ${expr.op}`);
-  }
+  return emitScalarUnaryOp(expr.op, operand, C_SCALAR_TARGET);
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
@@ -514,46 +483,31 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     ctx.needsTicState = true;
     return `numbl_toc(__tic_state)`;
   }
-  // Scalar math builtin.
-  const cName = BUILTIN_TO_C[expr.name];
-  if (!cName) {
-    throw new Error(`C-JIT codegen: unmapped builtin ${expr.name}`);
+  // Scalar math builtin — query the builtin's own C emission hook.
+  const ib = getIBuiltin(expr.name);
+  if (ib?.jitEmitC) {
+    const args = expr.args.map(a => emitExpr(a, ctx));
+    const argTypes = expr.args.map(a => a.jitType);
+    const fast = ib.jitEmitC(args, argTypes);
+    if (fast) return fast;
   }
-  const args = expr.args.map(a => emitExpr(a, ctx));
-  return `${cName}(${args.join(", ")})`;
+  throw new Error(`C-JIT codegen: unmapped builtin ${expr.name}`);
 }
 
 function emitTruthiness(expr: JitExpr, ctx: EmitCtx): string {
-  if (expr.tag === "Binary" && !isTensorExpr(expr)) {
-    switch (expr.op) {
-      case BinaryOperation.Equal:
-        return `((${emitExpr(expr.left, ctx)}) == (${emitExpr(expr.right, ctx)}))`;
-      case BinaryOperation.NotEqual:
-        return `((${emitExpr(expr.left, ctx)}) != (${emitExpr(expr.right, ctx)}))`;
-      case BinaryOperation.Less:
-        return `((${emitExpr(expr.left, ctx)}) < (${emitExpr(expr.right, ctx)}))`;
-      case BinaryOperation.LessEqual:
-        return `((${emitExpr(expr.left, ctx)}) <= (${emitExpr(expr.right, ctx)}))`;
-      case BinaryOperation.Greater:
-        return `((${emitExpr(expr.left, ctx)}) > (${emitExpr(expr.right, ctx)}))`;
-      case BinaryOperation.GreaterEqual:
-        return `((${emitExpr(expr.left, ctx)}) >= (${emitExpr(expr.right, ctx)}))`;
-      case BinaryOperation.AndAnd:
-        return `((${emitTruthiness(expr.left, ctx)}) && (${emitTruthiness(expr.right, ctx)}))`;
-      case BinaryOperation.OrOr:
-        return `((${emitTruthiness(expr.left, ctx)}) || (${emitTruthiness(expr.right, ctx)}))`;
-      default:
-        break;
-    }
-  }
+  // Tensor-valued Binary/Unary in condition context: skip the shared
+  // walker's comparison/logical switches (they would emit a garbage
+  // pointer compare) and route to value-form so emitExpr raises the
+  // "must be emitted via statement context" error.
   if (
-    expr.tag === "Unary" &&
-    expr.op === UnaryOperation.Not &&
-    !isTensorExpr(expr.operand)
+    (expr.tag === "Binary" && isTensorExpr(expr)) ||
+    (expr.tag === "Unary" &&
+      expr.op === UnaryOperation.Not &&
+      isTensorExpr(expr.operand))
   ) {
-    return `(!(${emitTruthiness(expr.operand, ctx)}))`;
+    return `((${emitExpr(expr, ctx)}) != 0.0)`;
   }
-  return `((${emitExpr(expr, ctx)}) != 0.0)`;
+  return emitScalarTruthiness(expr, e => emitExpr(e, ctx), C_SCALAR_TARGET);
 }
 
 // ── Statement emission ────────────────────────────────────────────────

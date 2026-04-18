@@ -14,7 +14,9 @@ import {
   binaryElemwiseMatch,
   makeTensor,
   unaryMathJitEmit,
+  unaryMathJitEmitC,
   binaryMathJitEmit,
+  binaryMathJitEmitC,
   type BuiltinHelp,
 } from "./types.js";
 import { type JitType, isNonneg, type SignCategory } from "../jit/jitTypes.js";
@@ -34,13 +36,15 @@ function registerUnary(
   realFn: (x: number) => number,
   complexFn: (re: number, im: number) => { re: number; im: number },
   jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null,
-  help?: BuiltinHelp
+  help?: BuiltinHelp,
+  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null
 ): void {
   defineBuiltin({
     name,
     help,
     cases: unaryElemwiseCases({ realFn, complexFn }, name),
     jitEmit,
+    jitEmitC,
   });
 }
 
@@ -53,7 +57,9 @@ registerUnary(
     re: Math.sin(re) * Math.cosh(im),
     im: Math.cos(re) * Math.sinh(im),
   }),
-  unaryMathJitEmit("Math.sin", "tSin")
+  unaryMathJitEmit("Math.sin", "tSin"),
+  undefined,
+  unaryMathJitEmitC("sin")
 );
 
 registerUnary(
@@ -63,7 +69,9 @@ registerUnary(
     re: Math.cos(re) * Math.cosh(im),
     im: -Math.sin(re) * Math.sinh(im),
   }),
-  unaryMathJitEmit("Math.cos", "tCos")
+  unaryMathJitEmit("Math.cos", "tCos"),
+  undefined,
+  unaryMathJitEmitC("cos")
 );
 
 registerUnary(
@@ -73,7 +81,9 @@ registerUnary(
     const denom = Math.cos(2 * re) + Math.cosh(2 * im);
     return { re: Math.sin(2 * re) / denom, im: Math.sinh(2 * im) / denom };
   },
-  unaryMathJitEmit("Math.tan", "tTan")
+  unaryMathJitEmit("Math.tan", "tTan"),
+  undefined,
+  unaryMathJitEmitC("tan")
 );
 
 // Inverse trig (complex formulas from builtins/math.ts)
@@ -160,7 +170,9 @@ registerUnary(
     const w4im = Math.atan2(w3im, w3re);
     return { re: -w4im / 2, im: w4re / 2 };
   },
-  unaryMathJitEmit("Math.atan", "tAtan")
+  unaryMathJitEmit("Math.atan", "tAtan"),
+  undefined,
+  unaryMathJitEmitC("atan")
 );
 
 // ── Hyperbolic ──────────────────────────────────────────────────────────
@@ -172,7 +184,9 @@ registerUnary(
     re: Math.sinh(re) * Math.cos(im),
     im: Math.cosh(re) * Math.sin(im),
   }),
-  unaryMathJitEmit("Math.sinh", "tSinh")
+  unaryMathJitEmit("Math.sinh", "tSinh"),
+  undefined,
+  unaryMathJitEmitC("sinh")
 );
 
 registerUnary(
@@ -182,7 +196,9 @@ registerUnary(
     re: Math.cosh(re) * Math.cos(im),
     im: Math.sinh(re) * Math.sin(im),
   }),
-  unaryMathJitEmit("Math.cosh", "tCosh")
+  unaryMathJitEmit("Math.cosh", "tCosh"),
+  undefined,
+  unaryMathJitEmitC("cosh")
 );
 
 registerUnary(
@@ -192,7 +208,9 @@ registerUnary(
     const denom = Math.cosh(2 * re) + Math.cos(2 * im);
     return { re: Math.sinh(2 * re) / denom, im: Math.sin(2 * im) / denom };
   },
-  unaryMathJitEmit("Math.tanh", "tTanh")
+  unaryMathJitEmit("Math.tanh", "tTanh"),
+  undefined,
+  unaryMathJitEmitC("tanh")
 );
 
 // ── Exp / Log ───────────────────────────────────────────────────────────
@@ -221,6 +239,7 @@ defineBuiltin({
     "exp"
   ),
   jitEmit: unaryMathJitEmit("Math.exp", "tExp"),
+  jitEmitC: unaryMathJitEmitC("exp"),
 });
 
 function complexLog(re: number, im: number): { re: number; im: number } {
@@ -242,6 +261,7 @@ defineBuiltin({
     "log"
   ),
   jitEmit: unaryMathJitEmit("Math.log", "tLog", true),
+  jitEmitC: unaryMathJitEmitC("log", true),
 });
 
 const complexLog2 = (re: number, im: number) => ({
@@ -308,6 +328,7 @@ defineBuiltin({
     ),
   ],
   jitEmit: unaryMathJitEmit("Math.log2", "tLog2", true),
+  jitEmitC: unaryMathJitEmitC("log2", true),
 });
 
 const complexLog10 = (re: number, im: number) => ({
@@ -327,6 +348,7 @@ defineBuiltin({
     "log10"
   ),
   jitEmit: unaryMathJitEmit("Math.log10", "tLog10", true),
+  jitEmitC: unaryMathJitEmitC("log10", true),
 });
 
 // ── Abs ─────────────────────────────────────────────────────────────────
@@ -335,6 +357,7 @@ defineBuiltin({
   name: "abs",
   cases: unaryRealResultCases(Math.abs, Math.hypot, "abs"),
   jitEmit: unaryMathJitEmit("Math.abs", "tAbs"),
+  jitEmitC: unaryMathJitEmitC("fabs"),
 });
 
 // ── Sqrt ────────────────────────────────────────────────────────────────
@@ -398,6 +421,7 @@ defineBuiltin({
     "sqrt"
   ),
   jitEmit: unaryMathJitEmit("Math.sqrt", "tSqrt", true),
+  jitEmitC: unaryMathJitEmitC("sqrt", true),
 });
 
 // ── Sign ────────────────────────────────────────────────────────────────
@@ -411,7 +435,9 @@ registerUnary(
     if (mag === 0) return { re: 0, im: 0 };
     return { re: re / mag, im: im / mag };
   },
-  unaryMathJitEmit("Math.sign", "tSign")
+  unaryMathJitEmit("Math.sign", "tSign"),
+  undefined,
+  unaryMathJitEmitC("numbl_sign")
 );
 
 // ── Rounding ────────────────────────────────────────────────────────────
@@ -419,7 +445,8 @@ registerUnary(
 function registerRounding(
   name: string,
   fn: (x: number) => number,
-  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null
+  jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null,
+  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null
 ): void {
   defineBuiltin({
     name,
@@ -443,12 +470,28 @@ function registerRounding(
       name
     ),
     jitEmit,
+    jitEmitC,
   });
 }
 
-registerRounding("floor", Math.floor, unaryMathJitEmit("Math.floor", "tFloor"));
-registerRounding("ceil", Math.ceil, unaryMathJitEmit("Math.ceil", "tCeil"));
-registerRounding("fix", Math.trunc, unaryMathJitEmit("Math.trunc", "tFix"));
+registerRounding(
+  "floor",
+  Math.floor,
+  unaryMathJitEmit("Math.floor", "tFloor"),
+  unaryMathJitEmitC("floor")
+);
+registerRounding(
+  "ceil",
+  Math.ceil,
+  unaryMathJitEmit("Math.ceil", "tCeil"),
+  unaryMathJitEmitC("ceil")
+);
+registerRounding(
+  "fix",
+  Math.trunc,
+  unaryMathJitEmit("Math.trunc", "tFix"),
+  unaryMathJitEmitC("trunc")
+);
 
 // MATLAB round: half away from zero (not JS half-toward-+inf)
 function matlabRound(x: number): number {
@@ -522,6 +565,8 @@ defineBuiltin({
       "round"
     ),
   ],
+  // C round(x) is half-away-from-zero per C99 — matches MATLAB.
+  jitEmitC: unaryMathJitEmitC("round"),
 });
 
 // ── Precision math: expm1, log1p ─────────────────────────────────────────
@@ -534,7 +579,9 @@ registerUnary(
     const r = complexExp(re, im);
     return { re: r.re - 1, im: r.im };
   },
-  unaryMathJitEmit("Math.expm1", "tExpm1")
+  unaryMathJitEmit("Math.expm1", "tExpm1"),
+  undefined,
+  unaryMathJitEmitC("expm1")
 );
 
 function complexLog1p(re: number, im: number): { re: number; im: number } {
@@ -549,6 +596,7 @@ defineBuiltin({
     "log1p"
   ),
   jitEmit: unaryMathJitEmit("Math.log1p", "tLog1p"),
+  jitEmitC: unaryMathJitEmitC("log1p"),
 });
 
 // ── Hypot ────────────────────────────────────────────────────────────────
@@ -562,6 +610,7 @@ defineBuiltin({
     },
   ],
   jitEmit: binaryMathJitEmit("Math.hypot"),
+  jitEmitC: binaryMathJitEmitC("hypot"),
 });
 
 // ── Error functions ──────────────────────────────────────────────────────
@@ -792,6 +841,9 @@ defineBuiltin({
     { realFn: Math.asinh, complexFn: cAsinh, maybeComplex: true },
     "asinh"
   ),
+  // asinh has no real-domain restriction, so C can emit it unguarded.
+  // (JS-JIT doesn't provide a scalar fast-path — it falls back to $h.ib_asinh.)
+  jitEmitC: unaryMathJitEmitC("asinh"),
 });
 defineBuiltin({
   name: "acosh",

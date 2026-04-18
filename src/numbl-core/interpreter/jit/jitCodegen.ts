@@ -17,6 +17,12 @@ import { findFusibleChains } from "./fusion.js";
 import { FUSIBLE_TENSOR_UNARY_OPS_JS } from "./fusionOps.js";
 import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
+  type ScalarOpTarget,
+  emitScalarBinaryOp,
+  emitScalarUnaryOp,
+  emitScalarTruthiness,
+} from "./scalarEmit.js";
+import {
   type HoistedAlias,
   structFieldKey,
   structArrayElementsKey,
@@ -159,6 +165,41 @@ function mangle(name: string): string {
   if (JS_RESERVED.has(name)) return `_m$${name}`;
   return name;
 }
+
+// ── Scalar op target (value form + truthiness form) ─────────────────────
+//
+// JS uses `+` to coerce booleans to 0/1 before equality/zero-checks —
+// `false === 0` is false under strict equality, but `+false === +0`
+// is true, and `(+false) !== 0` correctly treats `false` as falsy.
+
+const JS_SCALAR_TARGET: ScalarOpTarget = {
+  binAdd: (l, r) => `(${l} + ${r})`,
+  binSub: (l, r) => `(${l} - ${r})`,
+  binMul: (l, r) => `(${l} * ${r})`,
+  binDiv: (l, r) => `(${l} / ${r})`,
+  binPow: (l, r) => `Math.pow(${l}, ${r})`,
+  binEq: (l, r) => `((+(${l})) === (+(${r})))`,
+  binNe: (l, r) => `((+(${l})) !== (+(${r})))`,
+  binLt: (l, r) => `((${l}) < (${r}))`,
+  binLe: (l, r) => `((${l}) <= (${r}))`,
+  binGt: (l, r) => `((${l}) > (${r}))`,
+  binGe: (l, r) => `((${l}) >= (${r}))`,
+  binAnd: (l, r) => `((+(${l})) !== 0 && (+(${r})) !== 0)`,
+  binOr: (l, r) => `((+(${l})) !== 0 || (+(${r})) !== 0)`,
+  unaryPlus: o => `(+${o})`,
+  unaryMinus: o => `(-${o})`,
+  unaryNot: o => `((+(${o})) === 0)`,
+  toTruthy: v => `(+(${v})) !== 0`,
+  condEq: (l, r) => `(+(${l})) === (+(${r}))`,
+  condNe: (l, r) => `(+(${l})) !== (+(${r}))`,
+  condLt: (l, r) => `(${l}) < (${r})`,
+  condLe: (l, r) => `(${l}) <= (${r})`,
+  condGt: (l, r) => `(${l}) > (${r})`,
+  condGe: (l, r) => `(${l}) >= (${r})`,
+  condNot: t => `!(${t})`,
+  condAnd: (l, r) => `(${l}) && (${r})`,
+  condOr: (l, r) => `(${l}) || (${r})`,
+};
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
@@ -773,48 +814,8 @@ function emitBinary(
     return emitComplexBinary(expr.op, left, right);
   }
 
-  // Real scalar operations
-  switch (expr.op) {
-    case BinaryOperation.Add:
-      return `(${left} + ${right})`;
-    case BinaryOperation.Sub:
-      return `(${left} - ${right})`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `(${left} * ${right})`;
-    case BinaryOperation.Div:
-    case BinaryOperation.ElemDiv:
-      return `(${left} / ${right})`;
-    case BinaryOperation.Pow:
-    case BinaryOperation.ElemPow:
-      return `Math.pow(${left}, ${right})`;
-    // Comparisons return a JS boolean so the value is a `logical` scalar.
-    // Coerce both operands with `+` for ==/~= so a boolean operand (JS
-    // `true`/`false`) matches a numeric literal — `false === 0` is false in
-    // strict equality but `+false === +0` is true. Ordered comparisons
-    // (<, <=, >, >=) already coerce via JS numeric semantics.
-    case BinaryOperation.Equal:
-      return `((+(${left})) === (+(${right})))`;
-    case BinaryOperation.NotEqual:
-      return `((+(${left})) !== (+(${right})))`;
-    case BinaryOperation.Less:
-      return `((${left}) < (${right}))`;
-    case BinaryOperation.LessEqual:
-      return `((${left}) <= (${right}))`;
-    case BinaryOperation.Greater:
-      return `((${left}) > (${right}))`;
-    case BinaryOperation.GreaterEqual:
-      return `((${left}) >= (${right}))`;
-    // &&/|| coerce each side so a boolean operand compares as a number;
-    // the short-circuit semantics of JS `&&`/`||` preserve MATLAB's rule
-    // that the right operand is not evaluated when the left decides.
-    case BinaryOperation.AndAnd:
-      return `((+(${left})) !== 0 && (+(${right})) !== 0)`;
-    case BinaryOperation.OrOr:
-      return `((+(${left})) !== 0 || (+(${right})) !== 0)`;
-    default:
-      throw new Error(`JIT codegen: unsupported scalar binary op ${expr.op}`);
-  }
+  // Real scalar operations — delegate to the shared target.
+  return emitScalarBinaryOp(expr.op, left, right, JS_SCALAR_TARGET);
 }
 
 function emitComplexBinary(
@@ -917,23 +918,7 @@ function emitUnary(
     }
   }
 
-  switch (expr.op) {
-    case UnaryOperation.Plus:
-      return `(+${operand})`;
-    case UnaryOperation.Minus:
-      return `(-${operand})`;
-    case UnaryOperation.Not:
-      // Coerce with `+` so a JS boolean operand is treated as 0/1 before
-      // the zero-check — `false !== 0` is true under strict equality, which
-      // would produce the wrong answer. Result is a JS boolean (logical).
-      return `((+(${operand})) === 0)`;
-    case UnaryOperation.Transpose:
-    case UnaryOperation.NonConjugateTranspose:
-      // Scalar transpose is identity
-      return operand;
-    default:
-      throw new Error(`JIT codegen: unsupported scalar unary op ${expr.op}`);
-  }
+  return emitScalarUnaryOp(expr.op, operand, JS_SCALAR_TARGET);
 }
 
 function emitUserCall(expr: JitExpr & { tag: "UserCall" }): string {
@@ -1210,37 +1195,5 @@ function emitTruthiness(expr: JitExpr): string {
   if (expr.jitType.kind === "complex_or_number") {
     return `$h.cTruthy(${emitExpr(expr)})`;
   }
-
-  if (expr.tag === "Binary") {
-    switch (expr.op) {
-      // Coerce with `+` so a JS boolean operand compares correctly against a
-      // numeric literal (`false === 0` is false in strict equality).
-      case BinaryOperation.Equal:
-        return `(+(${emitExpr(expr.left)})) === (+(${emitExpr(expr.right)}))`;
-      case BinaryOperation.NotEqual:
-        return `(+(${emitExpr(expr.left)})) !== (+(${emitExpr(expr.right)}))`;
-      case BinaryOperation.Less:
-        return `(${emitExpr(expr.left)}) < (${emitExpr(expr.right)})`;
-      case BinaryOperation.LessEqual:
-        return `(${emitExpr(expr.left)}) <= (${emitExpr(expr.right)})`;
-      case BinaryOperation.Greater:
-        return `(${emitExpr(expr.left)}) > (${emitExpr(expr.right)})`;
-      case BinaryOperation.GreaterEqual:
-        return `(${emitExpr(expr.left)}) >= (${emitExpr(expr.right)})`;
-      case BinaryOperation.AndAnd:
-        return `(${emitTruthiness(expr.left)}) && (${emitTruthiness(expr.right)})`;
-      case BinaryOperation.OrOr:
-        return `(${emitTruthiness(expr.left)}) || (${emitTruthiness(expr.right)})`;
-      default:
-        break; // fall through to value-form
-    }
-  }
-
-  if (expr.tag === "Unary" && expr.op === UnaryOperation.Not) {
-    return `!(${emitTruthiness(expr.operand)})`;
-  }
-
-  // Coerce with `+` so a JS boolean value is treated as 0/1 — `false !== 0`
-  // is true under strict equality, which would make `if (false)` truthy.
-  return `(+(${emitExpr(expr)})) !== 0`;
+  return emitScalarTruthiness(expr, e => emitExpr(e), JS_SCALAR_TARGET);
 }

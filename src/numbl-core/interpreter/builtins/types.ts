@@ -55,6 +55,14 @@ export interface IBuiltin {
     argTypes: JitType[],
     getDest?: () => string
   ) => string | null;
+  /**
+   * Optional fast-path C code emission for the C-JIT. Return null if the
+   * builtin can't be emitted as a C expression for the given arg types
+   * — the C-JIT will bail to JS-JIT for this call site. Covers the
+   * scalar-argument case only (tensor-argument emission is handled by
+   * separate tensor-op dispatch in jitCodegenC.ts / cFusedCodegen.ts).
+   */
+  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -702,6 +710,7 @@ export function defineBuiltin(opts: {
     argTypes: JitType[],
     getDest?: () => string
   ) => string | null;
+  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
 }): void {
   registerIBuiltin({
     name: opts.name,
@@ -714,6 +723,7 @@ export function defineBuiltin(opts: {
       return null;
     },
     jitEmit: opts.jitEmit,
+    jitEmitC: opts.jitEmitC,
   });
 }
 
@@ -1002,5 +1012,40 @@ export function binaryMathJitEmit(
     )
       return null;
     return `${mathFn}(${argCode[0]}, ${argCode[1]})`;
+  };
+}
+
+/** Fast-path C emitter for unary math functions on a scalar.
+ *  Emits `cFn(x)` for scalar number/boolean; returns null otherwise
+ *  (tensor emission is handled separately by jitCodegenC's tensor paths).
+ *  If `requireNonneg` is set, rejects values whose sign isn't known
+ *  to be nonneg — matches the JS guard for domain-restricted functions. */
+export function unaryMathJitEmitC(
+  cFn: string,
+  requireNonneg?: boolean
+): (argCode: string[], argTypes: JitType[]) => string | null {
+  return (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const a = argTypes[0];
+    if (a.kind !== "number" && a.kind !== "boolean") return null;
+    if (requireNonneg && !isNonneg(a)) return null;
+    return `${cFn}(${argCode[0]})`;
+  };
+}
+
+/** Fast-path C emitter for binary math functions on two scalar numbers. */
+export function binaryMathJitEmitC(
+  cFn: string
+): (argCode: string[], argTypes: JitType[]) => string | null {
+  return (argCode, argTypes) => {
+    if (argTypes.length !== 2) return null;
+    const k0 = argTypes[0].kind,
+      k1 = argTypes[1].kind;
+    if (
+      (k0 !== "number" && k0 !== "boolean") ||
+      (k1 !== "number" && k1 !== "boolean")
+    )
+      return null;
+    return `${cFn}(${argCode[0]}, ${argCode[1]})`;
   };
 }

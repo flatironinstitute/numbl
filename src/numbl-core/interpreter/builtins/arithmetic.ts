@@ -15,6 +15,7 @@ import {
   defineBuiltin,
   makeTensor,
   binaryMathJitEmit,
+  binaryMathJitEmitC,
 } from "./types.js";
 import {
   type JitType,
@@ -124,6 +125,7 @@ defineBuiltin({
   name: "atan2",
   cases: binaryRealElemwiseCases(Math.atan2, "atan2"),
   jitEmit: binaryMathJitEmit("Math.atan2"),
+  jitEmitC: binaryMathJitEmitC("atan2"),
 });
 
 // ── min / max ───────────────────────────────────────────────────────────
@@ -303,8 +305,19 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
   ];
 }
 
-defineBuiltin({ name: "min", cases: minMaxCases("min") });
-defineBuiltin({ name: "max", cases: minMaxCases("max") });
+// Only the 2-arg scalar form routes through jitEmitC. Reductions and
+// tensor-binary forms are handled by dedicated tensor-op dispatch in
+// jitCodegenC.ts / cFusedCodegen.ts, which skip ib.jitEmitC.
+defineBuiltin({
+  name: "min",
+  cases: minMaxCases("min"),
+  jitEmitC: binaryMathJitEmitC("fmin"),
+});
+defineBuiltin({
+  name: "max",
+  cases: minMaxCases("max"),
+  jitEmitC: binaryMathJitEmitC("fmax"),
+});
 
 // ── mod ──────────────────────────────────────────────────────────────────
 
@@ -329,6 +342,9 @@ defineBuiltin({
       return null;
     return `$h.mod(${argCode[0]}, ${argCode[1]})`;
   },
+  // numbl_mod lives in jit_runtime.a; matches JS's $h.mod semantics
+  // (MATLAB-style floored modulo).
+  jitEmitC: binaryMathJitEmitC("numbl_mod"),
 });
 
 // ── rem ──────────────────────────────────────────────────────────────────
@@ -347,6 +363,8 @@ defineBuiltin({
       return null;
     return `(${argCode[0]} % ${argCode[1]})`;
   },
+  // C fmod matches JS's `%` truncated-toward-zero semantics for doubles.
+  jitEmitC: binaryMathJitEmitC("fmod"),
 });
 
 // ── power ────────────────────────────────────────────────────────────────
@@ -394,4 +412,5 @@ defineBuiltin({
     },
   ],
   jitEmit: binaryMathJitEmit("Math.pow"),
+  jitEmitC: binaryMathJitEmitC("pow"),
 });
