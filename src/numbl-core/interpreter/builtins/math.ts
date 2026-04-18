@@ -337,7 +337,8 @@ function complexSqrt(re: number, im: number): { re: number; im: number } {
     if (re >= 0) return { re: Math.sqrt(re), im: 0 };
     return { re: 0, im: Math.sqrt(-re) };
   }
-  const mag = Math.sqrt(re * re + im * im);
+  // hypot keeps |z| finite when re*re or im*im would overflow.
+  const mag = Math.hypot(re, im);
   if (mag === 0) return { re: 0, im: 0 };
   const r = Math.sqrt(mag);
   const angle = Math.atan2(im, re) / 2;
@@ -396,7 +397,8 @@ registerUnary(
   "sign",
   Math.sign,
   (re, im) => {
-    const mag = Math.sqrt(re * re + im * im);
+    // Use hypot so magnitude stays finite when re*re or im*im overflow.
+    const mag = Math.hypot(re, im);
     if (mag === 0) return { re: 0, im: 0 };
     return { re: re / mag, im: im / mag };
   },

@@ -682,9 +682,17 @@ defineBuiltin({
         const A = args[0];
         if (isRuntimeComplexNumber(A)) {
           const { re, im } = A;
-          const magSq = re * re + im * im;
-          if (magSq === 0) throw new RuntimeError("inv: argument is singular");
-          return RTV.complex(re / magSq, -im / magSq);
+          if (re === 0 && im === 0)
+            throw new RuntimeError("inv: argument is singular");
+          // Smith's algorithm for 1/(re + im*i) to avoid spurious over/underflow.
+          if (Math.abs(re) >= Math.abs(im)) {
+            const r = im / re;
+            const d = re + im * r;
+            return RTV.complex(1 / d, -r / d);
+          }
+          const r = re / im;
+          const d = im + re * r;
+          return RTV.complex(r / d, -1 / d);
         }
         if (isRuntimeNumber(A)) {
           if (A === 0) throw new RuntimeError("inv: argument is singular");

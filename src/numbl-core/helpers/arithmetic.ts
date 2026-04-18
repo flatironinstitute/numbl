@@ -254,17 +254,19 @@ function complexDivide(
   bRe: number,
   bIm: number
 ): { re: number; im: number } {
-  const denom = bRe * bRe + bIm * bIm;
-  if (denom === 0) {
-    if (aRe === 0 && aIm === 0) {
-      return { re: NaN, im: 0 };
-    }
+  // Smith's algorithm: avoids spurious overflow/underflow in bRe*bRe + bIm*bIm.
+  if (bRe === 0 && bIm === 0) {
+    if (aRe === 0 && aIm === 0) return { re: NaN, im: 0 };
     return { re: signedInf(aRe), im: signedInf(aIm) };
   }
-  return {
-    re: (aRe * bRe + aIm * bIm) / denom,
-    im: (aIm * bRe - aRe * bIm) / denom,
-  };
+  if (Math.abs(bRe) >= Math.abs(bIm)) {
+    const r = bIm / bRe;
+    const d = bRe + bIm * r;
+    return { re: (aRe + aIm * r) / d, im: (aIm - aRe * r) / d };
+  }
+  const r = bRe / bIm;
+  const d = bIm + bRe * r;
+  return { re: (aRe * r + aIm) / d, im: (aIm * r - aRe) / d };
 }
 
 function complexBinaryOp(
