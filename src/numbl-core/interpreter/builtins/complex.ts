@@ -15,6 +15,8 @@ import {
   type BuiltinCase,
   mkc,
   makeTensor,
+  scalarConstantJitEmitC,
+  scalarIdentityJitEmitC,
 } from "./types.js";
 
 // ── real ────────────────────────────────────────────────────────────────
@@ -33,12 +35,7 @@ defineBuiltin({
     if (k === "complex_or_number") return `$h.re(${argCode[0]})`;
     return null;
   },
-  jitEmitC: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number" || k === "boolean") return `(${argCode[0]})`;
-    return null;
-  },
+  jitEmitC: scalarIdentityJitEmitC(),
 });
 
 // ── imag ────────────────────────────────────────────────────────────────
@@ -57,12 +54,7 @@ defineBuiltin({
     if (k === "complex_or_number") return `$h.im(${argCode[0]})`;
     return null;
   },
-  jitEmitC: (_argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number" || k === "boolean") return "0.0";
-    return null;
-  },
+  jitEmitC: scalarConstantJitEmitC({ number: "0.0", boolean: "0.0" }),
 });
 
 // ── conj ────────────────────────────────────────────────────────────────
@@ -150,12 +142,7 @@ defineBuiltin({
     if (k === "complex_or_number") return `$h.cConj(${argCode[0]})`;
     return null;
   },
-  jitEmitC: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number" || k === "boolean") return `(${argCode[0]})`;
-    return null;
-  },
+  jitEmitC: scalarIdentityJitEmitC(),
 });
 
 // ── angle ───────────────────────────────────────────────────────────────

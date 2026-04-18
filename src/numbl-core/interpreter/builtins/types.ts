@@ -1049,3 +1049,60 @@ export function binaryMathJitEmitC(
     return `${cFn}(${argCode[0]}, ${argCode[1]})`;
   };
 }
+
+/**
+ * Fast-path C emitter for 1-arg scalar builtins that collapse to a
+ * compile-time constant given the arg's kind. Common for shape/type
+ * predicates where the answer is fully determined by the type
+ * (e.g. `isnumeric(number) -> 1.0`, `isscalar(number) -> 1.0`,
+ *       `ndims(number) -> 2.0`, `numel(number) -> 1.0`).
+ *
+ * `valueByKind` maps each supported JitType kind to its C constant.
+ * Arg kinds not in the map return null, which bails the C-JIT to
+ * JS-JIT for that call site. All values must be valid C double
+ * literals (`"1.0"`, `"0.0"`, `"2.0"`, ...).
+ */
+export function scalarConstantJitEmitC(
+  valueByKind: Partial<Record<JitType["kind"], string>>
+): (argCode: string[], argTypes: JitType[]) => string | null {
+  return (_argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0]?.kind;
+    if (k === undefined) return null;
+    return valueByKind[k] ?? null;
+  };
+}
+
+/**
+ * Fast-path C emitter for 1-arg scalar predicates backed by a C99
+ * function whose return value is int (e.g. `isnan`, `isinf`,
+ * `isfinite`). The int is cast to double for the C-JIT's uniform
+ * boolean-as-double representation. Returns null for non-scalar args.
+ */
+export function unaryPredicateJitEmitC(
+  cFn: string
+): (argCode: string[], argTypes: JitType[]) => string | null {
+  return (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0]?.kind;
+    if (k !== "number" && k !== "boolean") return null;
+    return `((double)${cFn}(${argCode[0]}))`;
+  };
+}
+
+/**
+ * Fast-path C emitter for 1-arg scalar builtins that are the identity
+ * on real scalars (e.g. `double(x)`, `real(x)`, `conj(x)`). Returns
+ * `(x)` for `number`/`boolean`, null otherwise.
+ */
+export function scalarIdentityJitEmitC(): (
+  argCode: string[],
+  argTypes: JitType[]
+) => string | null {
+  return (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0]?.kind;
+    if (k !== "number" && k !== "boolean") return null;
+    return `(${argCode[0]})`;
+  };
+}

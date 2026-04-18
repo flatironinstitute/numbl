@@ -21,7 +21,12 @@ import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jit/jitTypes.js";
-import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
+import {
+  defineBuiltin,
+  registerIBuiltin,
+  makeTensor,
+  scalarIdentityJitEmitC,
+} from "./types.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 
@@ -91,12 +96,7 @@ defineBuiltin({
   // Scalar: booleans are already doubles in the C-JIT representation,
   // so this is the identity. Tensor cases stay out of scope (the C-JIT
   // has no in-place logical-strip equivalent of $h.tDouble).
-  jitEmitC: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "boolean") return `(${argCode[0]})`;
-    return null;
-  },
+  jitEmitC: scalarIdentityJitEmitC(),
 });
 
 // ── Integer types ───────────────────────────────────────────────────────
