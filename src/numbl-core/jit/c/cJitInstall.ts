@@ -238,11 +238,19 @@ registerCJitBackend({
       // Error-flag conventions written by the jit_runtime helpers:
       //   1.0 — OOB read → hard bounds error (matches JS-JIT's idx1r_h)
       //   2.0 — OOB write → soft-bail: interpreter re-runs with proper
-      //         tensor-growth semantics (matches JS-JIT's set1r_h)
+      //         tensor-growth semantics (matches JS-JIT's set1r_h /
+      //         setCol2r_h's col-past-end branch)
+      //   3.0 — length mismatch on range / column slice write (matches
+      //         JS-JIT's setRange1r_h / setCol2r_h Error message)
       if (errorFlagBuf && errorFlagBuf[0] !== 0) {
         if (errorFlagBuf[0] === 2) {
           throw new JitBailToInterpreter(
             "scalar index write requires tensor growth"
+          );
+        }
+        if (errorFlagBuf[0] === 3) {
+          throw new Error(
+            "Unable to perform assignment because the indices on the left side are not compatible with the size of the right side."
           );
         }
         throw new Error("Index exceeds array bounds");

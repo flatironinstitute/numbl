@@ -53,8 +53,9 @@ const MANGLE_PREFIX = "v_";
  *   1 — initial: idx1r, mod, sign, reduce_flat, tic/toc/monotonic_time.
  *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
  *   3 — idx2r / idx3r / set2r_h / set3r_h (multi-index Index read/write).
+ *   4 — setRange1r_h / setCol2r_h / copyRange1r (range/col slice r/w).
  */
-const NUMBL_JIT_RT_REQUIRED_VERSION = 3;
+const NUMBL_JIT_RT_REQUIRED_VERSION = 4;
 
 export function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
@@ -254,6 +255,22 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
     case "Index":
       return emitIndex(expr, ctx);
 
+    case "RangeSliceRead": {
+      // Result is a fresh tensor — must be emitted in statement context.
+      if (!ctx.pendingStmts) {
+        throw new Error(
+          `C-JIT codegen: RangeSliceRead outside statement context`
+        );
+      }
+      const result = emitRangeSliceReadToStmts(
+        ctx.pendingStmts.lines,
+        ctx.pendingStmts.indent,
+        expr,
+        ctx
+      );
+      return result.data;
+    }
+
     default:
       throw new Error(`C-JIT codegen: unsupported expr ${expr.tag}`);
   }
@@ -369,6 +386,11 @@ function emitTensorExprToStmts(
   if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
     return { data: tensorData(expr.name), len: tensorLen(expr.name) };
   }
+
+  if (expr.tag === "RangeSliceRead") {
+    return emitRangeSliceReadToStmts(lines, indent, expr, ctx);
+  }
+
   // Need a scratch buffer for the result.
   const sIdx = allocScratch(ctx);
   const sData = scratchData(sIdx);
@@ -421,6 +443,69 @@ function emitTensorExprToStmts(
   throw new Error(
     `C-JIT codegen: cannot emit tensor expr ${expr.tag} to scratch`
   );
+}
+
+/** Emit `dstData = src(a:b) copy` pattern into caller-provided dst data /
+ *  len vars. Frees any existing buffer in dstData, malloc's the exact
+ *  range size, and calls numbl_copyRange1r. Used by both the direct
+ *  Assign path (local tensor buffer) and the scratch-buffer path. */
+function emitRangeSliceReadToBuf(
+  lines: string[],
+  indent: string,
+  expr: JitExpr & { tag: "RangeSliceRead" },
+  ctx: EmitCtx,
+  destData: string,
+  destLen: string
+): void {
+  if (!ctx.tensorVars.has(expr.baseName)) {
+    throw new Error(
+      `C-JIT codegen: RangeSliceRead base '${expr.baseName}' is not a tensor var`
+    );
+  }
+  ctx.needsErrorFlag = true;
+  const srcData = tensorData(expr.baseName);
+  const srcLen = tensorLen(expr.baseName);
+
+  let startCode = emitExpr(expr.start, ctx);
+  if (!isKnownInteger(expr.start.jitType)) startCode = `round(${startCode})`;
+
+  let endCode: string;
+  if (expr.end === null) {
+    endCode = `(double)${srcLen}`;
+  } else {
+    endCode = emitExpr(expr.end, ctx);
+    if (!isKnownInteger(expr.end.jitType)) endCode = `round(${endCode})`;
+  }
+
+  lines.push(`${indent}{`);
+  lines.push(`${indent}  double __rs = ${startCode};`);
+  lines.push(`${indent}  double __re = ${endCode};`);
+  lines.push(`${indent}  int64_t __rn = (int64_t)(__re - __rs + 1.0);`);
+  lines.push(`${indent}  if (__rn < 0) __rn = 0;`);
+  lines.push(`${indent}  if (${destData}) free(${destData});`);
+  lines.push(
+    `${indent}  ${destData} = (__rn > 0) ? (double *)malloc((size_t)__rn * sizeof(double)) : NULL;`
+  );
+  lines.push(`${indent}  ${destLen} = __rn;`);
+  lines.push(
+    `${indent}  numbl_copyRange1r(${srcData}, (size_t)${srcLen}, __rs, __re, ${destData}, __err_flag);`
+  );
+  lines.push(`${indent}}`);
+}
+
+/** Emit a `src(a:b)` RangeSliceRead into a fresh scratch buffer,
+ *  returning the {data, len} pair for the result. */
+function emitRangeSliceReadToStmts(
+  lines: string[],
+  indent: string,
+  expr: JitExpr & { tag: "RangeSliceRead" },
+  ctx: EmitCtx
+): { data: string; len: string } {
+  const sIdx = allocScratch(ctx);
+  const sData = scratchData(sIdx);
+  const sLen = scratchLen(sIdx);
+  emitRangeSliceReadToBuf(lines, indent, expr, ctx, sData, sLen);
+  return { data: sData, len: sLen };
 }
 
 /** Find a tensor-length expression from a tensor expr tree (for pre-allocating
@@ -614,6 +699,33 @@ function emitTensorAssign(
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   const needsAlloc = ctx.localTensorNames.has(destName);
+
+  if (expr.tag === "RangeSliceRead") {
+    // `r = src(a:b)` into a tensor var. Two cases:
+    //  - Local tensor: the local owns its buffer. free-then-malloc
+    //    the exact range length, numbl_copyRange1r fills in-place.
+    //  - Output tensor: v_<name>_data IS the preallocated JS output
+    //    buffer (sized from firstTensorLen in the JS wrapper). Emit
+    //    into a scratch first, then memcpy into the output buffer.
+    //    The output buffer is large enough whenever the slice length
+    //    doesn't exceed the first tensor input's length, which is the
+    //    JS-JIT subarrayCopy1r contract by construction.
+    if (ctx.localTensorNames.has(destName)) {
+      emitRangeSliceReadToBuf(lines, indent, expr, ctx, dData, dLen);
+      return;
+    }
+    if (ctx.outputTensorNames.has(destName)) {
+      const scratch = emitRangeSliceReadToStmts(lines, indent, expr, ctx);
+      lines.push(`${indent}${dLen} = ${scratch.len};`);
+      lines.push(
+        `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
+      );
+      return;
+    }
+    throw new Error(
+      `C-JIT codegen: RangeSliceRead assign to tensor param '${destName}' unsupported`
+    );
+  }
 
   if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
     const srcData = tensorData(expr.name);
@@ -844,6 +956,75 @@ function emitStmt(
       return;
     }
 
+    case "AssignIndexRange": {
+      // `dst(dStart:dEnd) = src(sStart:sEnd)` or `dst(dStart:dEnd) = src`
+      // (whole-tensor RHS form — srcStart/srcEnd are both null; we
+      // substitute `1` and srcLen, matching the JS-JIT's codegen).
+      // Feasibility already required both base and src to be tensor
+      // params, so the data/len ABI is guaranteed. Emit numbl_setRange1r_h
+      // with __err_flag — OOB (1.0) and length-mismatch (3.0) are both
+      // reported back through the shared flag and translated in the JS
+      // wrapper.
+      if (!ctx.tensorVars.has(stmt.baseName)) {
+        throw new Error(
+          `C-JIT codegen: AssignIndexRange base '${stmt.baseName}' is not a tensor var`
+        );
+      }
+      if (!ctx.tensorVars.has(stmt.srcBaseName)) {
+        throw new Error(
+          `C-JIT codegen: AssignIndexRange src '${stmt.srcBaseName}' is not a tensor var`
+        );
+      }
+      ctx.needsErrorFlag = true;
+      const dData = tensorData(stmt.baseName);
+      const dLen = tensorLen(stmt.baseName);
+      const sData = tensorData(stmt.srcBaseName);
+      const sLen = tensorLen(stmt.srcBaseName);
+      const emitRI = (e: JitExpr): string => {
+        let code = emitExpr(e, ctx);
+        if (!isKnownInteger(e.jitType)) code = `round(${code})`;
+        return code;
+      };
+      const dStart = emitRI(stmt.dstStart);
+      const dEnd = emitRI(stmt.dstEnd);
+      const srcStart = stmt.srcStart !== null ? emitRI(stmt.srcStart) : `1.0`;
+      const srcEnd =
+        stmt.srcEnd !== null ? emitRI(stmt.srcEnd) : `(double)${sLen}`;
+      lines.push(
+        `${indent}numbl_setRange1r_h(${dData}, (size_t)${dLen}, ${dStart}, ${dEnd}, ${sData}, (size_t)${sLen}, ${srcStart}, ${srcEnd}, __err_flag);`
+      );
+      return;
+    }
+
+    case "AssignIndexCol": {
+      // `dst(:, j) = src` — dst must have arity 2 so tensorMaxDim
+      // guarantees the `_d0` (row count) ABI param is present. Size
+      // mismatch (srcLen != dstRows) reports err_flag 3.0; OOB col
+      // that would require dst growth reports 2.0 (soft-bail).
+      if (!ctx.tensorVars.has(stmt.baseName)) {
+        throw new Error(
+          `C-JIT codegen: AssignIndexCol base '${stmt.baseName}' is not a tensor var`
+        );
+      }
+      if (!ctx.tensorVars.has(stmt.srcBaseName)) {
+        throw new Error(
+          `C-JIT codegen: AssignIndexCol src '${stmt.srcBaseName}' is not a tensor var`
+        );
+      }
+      ctx.needsErrorFlag = true;
+      const dData = tensorData(stmt.baseName);
+      const dLen = tensorLen(stmt.baseName);
+      const dRows = tensorD0(stmt.baseName);
+      const sData = tensorData(stmt.srcBaseName);
+      const sLen = tensorLen(stmt.srcBaseName);
+      let colCode = emitExpr(stmt.colIndex, ctx);
+      if (!isKnownInteger(stmt.colIndex.jitType)) colCode = `round(${colCode})`;
+      lines.push(
+        `${indent}numbl_setCol2r_h(${dData}, (size_t)${dRows}, (size_t)${dLen}, ${colCode}, ${sData}, (size_t)${sLen}, __err_flag);`
+      );
+      return;
+    }
+
     case "If": {
       lines.push(`${indent}if (${emitTruthiness(stmt.cond, ctx)}) {`);
       emitStmts(lines, stmt.thenBody, indent + "  ", ctx);
@@ -936,11 +1117,17 @@ function findTensorLocals(body: JitStmt[], out: Set<string>): void {
   body.forEach(visitStmt);
 }
 
-/** Collect the names of tensor variables that appear as AssignIndex bases. */
+/** Collect tensor-param names that are written through AssignIndex /
+ *  AssignIndexRange / AssignIndexCol. All three shape the same
+ *  MATLAB-value-semantics problem: the write must not leak to the
+ *  caller's buffer, so pure-input tensor params need an unshare-at-
+ *  entry copy. */
 function findAssignIndexTargets(body: JitStmt[], out: Set<string>): void {
   const visitStmt = (s: JitStmt): void => {
     switch (s.tag) {
       case "AssignIndex":
+      case "AssignIndexRange":
+      case "AssignIndexCol":
         out.add(s.baseName);
         break;
       case "If":

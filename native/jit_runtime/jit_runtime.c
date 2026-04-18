@@ -6,6 +6,7 @@
 #include "numbl_ops.h"
 
 #include <math.h>
+#include <string.h>
 #include <time.h>
 
 int numbl_jit_rt_version(void) {
@@ -108,6 +109,81 @@ void numbl_set3r_h(double* data, size_t len, size_t d0, size_t d1,
     return;
   }
   data[(size_t)k2 * plane + (size_t)k1 * d0 + (size_t)k0] = v;
+}
+
+void numbl_setRange1r_h(double* dstData, size_t dstLen,
+                        double dstStart, double dstEnd,
+                        const double* srcData, size_t srcLen,
+                        double srcStart, double srcEnd,
+                        double* err_flag) {
+  int64_t dS = (int64_t)(dstStart - 1.0);
+  int64_t dE = (int64_t)(dstEnd - 1.0);
+  int64_t sS = (int64_t)(srcStart - 1.0);
+  int64_t sE = (int64_t)(srcEnd - 1.0);
+  int64_t dN = dE - dS + 1;
+  int64_t sN = sE - sS + 1;
+  if (dN != sN) {
+    /* 3.0 — length-mismatch error; JS wrapper translates to MATLAB's
+     * "Unable to perform assignment..." message. */
+    *err_flag = 3.0;
+    return;
+  }
+  if (dN <= 0) return;
+  if ((uint64_t)dS >= (uint64_t)dstLen ||
+      (uint64_t)dE >= (uint64_t)dstLen ||
+      (uint64_t)sS >= (uint64_t)srcLen ||
+      (uint64_t)sE >= (uint64_t)srcLen) {
+    *err_flag = 1.0;
+    return;
+  }
+  /* memmove handles overlap when src and dst alias. */
+  memmove(dstData + (size_t)dS, srcData + (size_t)sS,
+          (size_t)dN * sizeof(double));
+}
+
+void numbl_setCol2r_h(double* dstData, size_t dstRows, size_t dstLen,
+                      double col,
+                      const double* srcData, size_t srcLen,
+                      double* err_flag) {
+  if (srcLen != dstRows) {
+    *err_flag = 3.0;
+    return;
+  }
+  int64_t j = (int64_t)(col - 1.0);
+  if (j < 0) {
+    *err_flag = 1.0;
+    return;
+  }
+  if (dstRows == 0) {
+    /* Empty dst with a nonempty src: growth territory — soft-bail. */
+    *err_flag = 2.0;
+    return;
+  }
+  size_t dstCols = dstLen / dstRows;
+  if ((uint64_t)j >= (uint64_t)dstCols) {
+    /* Growth on write — the interpreter handles growing dst; JS-JIT
+     * mirrors this with JitBailToInterpreter. */
+    *err_flag = 2.0;
+    return;
+  }
+  memcpy(dstData + (size_t)j * dstRows, srcData,
+         dstRows * sizeof(double));
+}
+
+void numbl_copyRange1r(const double* srcData, size_t srcLen,
+                       double start, double end,
+                       double* dstData,
+                       double* err_flag) {
+  int64_t s = (int64_t)(start - 1.0);
+  int64_t e = (int64_t)(end - 1.0);
+  int64_t n = e - s + 1;
+  if (n <= 0) return;
+  if ((uint64_t)s >= (uint64_t)srcLen ||
+      (uint64_t)e >= (uint64_t)srcLen) {
+    *err_flag = 1.0;
+    return;
+  }
+  memcpy(dstData, srcData + (size_t)s, (size_t)n * sizeof(double));
 }
 
 double numbl_mod(double a, double b) {

@@ -224,12 +224,30 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
     case "Call":
       return checkCall(expr, ctx);
 
+    case "RangeSliceRead": {
+      // `src(a:b)` producing a fresh column-vector tensor. Requires the
+      // src to have data/len plumbed — tensor params qualify (locals
+      // would too in principle, but deferring until a test needs it).
+      if (!ctx.tensorParams.has(expr.baseName)) {
+        return fail(
+          ctx,
+          `RangeSliceRead base '${expr.baseName}' must be a tensor param`
+        );
+      }
+      const sr = checkExpr(expr.start, ctx);
+      if (!sr.ok) return sr;
+      if (expr.end) {
+        const er = checkExpr(expr.end, ctx);
+        if (!er.ok) return er;
+      }
+      return { ok: true };
+    }
+
     // Everything else is out of scope — bail to JS-JIT.
     case "ImagLiteral":
     case "StringLiteral":
     case "TensorLiteral":
     case "VConcatGrow":
-    case "RangeSliceRead":
     case "MemberRead":
     case "StructArrayMemberRead":
     case "UserCall":
@@ -398,9 +416,78 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       return { ok: true };
     }
 
-    // Out of scope: range/col writes, struct writes, multi-assign.
-    case "AssignIndexRange":
-    case "AssignIndexCol":
+    case "AssignIndexRange": {
+      // `dst(a:b) = src(c:d)` (or `dst(a:b) = src` — whole-tensor RHS,
+      // srcStart/srcEnd are both null). Both tensors must be real. Dst
+      // is written like AssignIndex so it must be a tensor param (for
+      // either the unshare-at-entry copy or the seeded output buffer).
+      // Src just needs data/len — also a tensor param for now, which
+      // keeps the rule symmetric and avoids having to track local
+      // tensor buffer state here.
+      if (
+        stmt.baseType.kind !== "tensor" ||
+        stmt.baseType.isComplex !== false
+      ) {
+        return fail(ctx, "AssignIndexRange base must be a real tensor");
+      }
+      if (stmt.srcType.kind !== "tensor" || stmt.srcType.isComplex !== false) {
+        return fail(ctx, "AssignIndexRange src must be a real tensor");
+      }
+      if (!ctx.tensorParams.has(stmt.baseName)) {
+        return fail(
+          ctx,
+          `AssignIndexRange base '${stmt.baseName}' must be a tensor param`
+        );
+      }
+      if (!ctx.tensorParams.has(stmt.srcBaseName)) {
+        return fail(
+          ctx,
+          `AssignIndexRange src '${stmt.srcBaseName}' must be a tensor param`
+        );
+      }
+      const ds = checkExpr(stmt.dstStart, ctx);
+      if (!ds.ok) return ds;
+      const de = checkExpr(stmt.dstEnd, ctx);
+      if (!de.ok) return de;
+      if (stmt.srcStart) {
+        const ss = checkExpr(stmt.srcStart, ctx);
+        if (!ss.ok) return ss;
+      }
+      if (stmt.srcEnd) {
+        const se = checkExpr(stmt.srcEnd, ctx);
+        if (!se.ok) return se;
+      }
+      return { ok: true };
+    }
+
+    case "AssignIndexCol": {
+      // `dst(:, j) = src` — dst must have 2-D shape plumbing (numbl_setCol2r_h
+      // needs dstRows), src needs data/len. Both tensor params for now.
+      if (
+        stmt.baseType.kind !== "tensor" ||
+        stmt.baseType.isComplex !== false
+      ) {
+        return fail(ctx, "AssignIndexCol base must be a real tensor");
+      }
+      if (stmt.srcType.kind !== "tensor" || stmt.srcType.isComplex !== false) {
+        return fail(ctx, "AssignIndexCol src must be a real tensor");
+      }
+      if (!ctx.tensorParams.has(stmt.baseName)) {
+        return fail(
+          ctx,
+          `AssignIndexCol base '${stmt.baseName}' must be a tensor param`
+        );
+      }
+      if (!ctx.tensorParams.has(stmt.srcBaseName)) {
+        return fail(
+          ctx,
+          `AssignIndexCol src '${stmt.srcBaseName}' must be a tensor param`
+        );
+      }
+      return checkExpr(stmt.colIndex, ctx);
+    }
+
+    // Out of scope: struct writes, multi-assign.
     case "AssignMember":
     case "MultiAssign":
       return fail(ctx, `unsupported stmt: ${stmt.tag}`);
