@@ -2,8 +2,8 @@
  * JIT IR → pure C code generation (koffi path).
  *
  * Orchestration only: this file wires the classify / ABI / emit pieces
- * together into a single `generateC(...)` call and assembles the final
- * C source (headers + signature + prelude + body + epilogue).
+ * together and assembles the final C source (headers + per-callee
+ * static functions + outer function).
  *
  *   classify.ts     — TensorMeta / analyzeTensorUsage, the single pass
  *                     feeding every downstream decision.
@@ -13,11 +13,15 @@
  *                     ctx.cls for every classification decision.
  *   codegenCtx.ts   — EmitCtx + shared name/opcode helpers.
  *
- * Keep this file small: if a new iteration wants to grow codegen, put
- * the new logic in the targeted child file (emit.ts for codegen, abi.ts
- * for a new slot kind, classify.ts for a new meta flag).
+ * UserCall support: when a feasible user-defined function is called
+ * from the outer body, its lowered IR is already in `generatedIRBodies`
+ * (populated by `lowerUserFuncCall` in jitLower.ts). We emit each
+ * reachable callee as a `static void jit_<jitName>(...)` in the same
+ * .c file, in post-order so callees are defined before callers. The
+ * shared `__err_flag` pointer flows from outer to every callee.
  */
-import { type JitStmt, type JitType } from "../jitTypes.js";
+import { type JitExpr, type JitStmt, type JitType } from "../jitTypes.js";
+import type { GeneratedFn } from "../jitLower.js";
 import { analyzeTensorUsage } from "./classify.js";
 import {
   NUMBL_JIT_RT_REQUIRED_VERSION,
@@ -75,6 +79,22 @@ export interface GenerateCResult {
   needsErrorFlag: boolean;
 }
 
+/** Per-function emission output. The outer function's result is returned
+ *  upstream (for koffi + JS wrapper use); callee results feed into the
+ *  assembled C source only. */
+interface EmitOneFnResult {
+  /** The full C function definition — signature + body. */
+  definition: string;
+  paramDescs: CParamDesc[];
+  outputDescs: COutputDesc[];
+  abiSlots: AbiSlot[];
+  usesTensors: boolean;
+  needsTicState: boolean;
+  needsErrorFlag: boolean;
+  koffiSignature: string;
+  cFnName: string;
+}
+
 export function generateC(
   body: JitStmt[],
   params: string[],
@@ -86,12 +106,226 @@ export function generateC(
   outputTypes: JitType[],
   fnName: string,
   fuse?: boolean,
-  openmp?: boolean
+  openmp?: boolean,
+  generatedIRBodies?: Map<string, GeneratedFn>
 ): GenerateCResult {
   if (params.length !== argTypes.length) {
     throw new Error("C-JIT codegen: params/argTypes length mismatch");
   }
 
+  // ── Collect reachable callees in post-order (deepest first) ────────
+  const reachable: string[] = [];
+  if (generatedIRBodies) {
+    collectReachableJitNames(body, generatedIRBodies, reachable, new Set());
+  }
+
+  // ── Emit each callee as a static function ──────────────────────────
+  const calleeDefs: string[] = [];
+  let anyCalleeUsesTensors = false;
+  for (const jitName of reachable) {
+    const callee = generatedIRBodies!.get(jitName);
+    if (!callee) {
+      throw new Error(
+        `C-JIT codegen: UserCall '${jitName}' missing IR body in generatedIRBodies`
+      );
+    }
+    const r = emitOneFunction(
+      callee.body,
+      callee.fn.params,
+      callee.outputNames,
+      callee.nargout,
+      callee.localVars,
+      callee.argTypes,
+      callee.outputTypes,
+      `jit_${jitName}`,
+      fuse,
+      openmp,
+      generatedIRBodies,
+      { isStatic: true, forceNeedsErrorFlag: true }
+    );
+    // The static callee must not need __tic_state; the outer's tic
+    // state is not plumbed through to callees (not worth the ABI
+    // widening for this first cut).
+    if (r.needsTicState) {
+      throw new Error(
+        `C-JIT codegen: UserCall callee '${jitName}' uses tic/toc (unsupported)`
+      );
+    }
+    calleeDefs.push(r.definition);
+    if (r.usesTensors) anyCalleeUsesTensors = true;
+  }
+
+  // ── Emit the outer function ────────────────────────────────────────
+  const outer = emitOneFunction(
+    body,
+    params,
+    outputs,
+    nargout,
+    localVars,
+    argTypes,
+    outputTypes,
+    `jit_${fnName}`,
+    fuse,
+    openmp,
+    generatedIRBodies,
+    { isStatic: false }
+  );
+
+  // ── Assemble the full C source ─────────────────────────────────────
+  const usesTensors = outer.usesTensors || anyCalleeUsesTensors;
+  const parts: string[] = [];
+  parts.push(`/* JIT C (koffi): ${fnName}(${params.join(", ")}) */`);
+  parts.push(`#include <math.h>`);
+  parts.push(`#include <stdint.h>`);
+  parts.push(`#include "jit_runtime.h"`);
+  // Catch a stale jit_runtime.a at compile time — users get a clear
+  // "rebuild the addon" message instead of a cryptic linker error.
+  parts.push(
+    `#if !defined(NUMBL_JIT_RT_VERSION) || NUMBL_JIT_RT_VERSION < ${NUMBL_JIT_RT_REQUIRED_VERSION}`
+  );
+  parts.push(
+    `#error "numbl_jit_runtime too old (need version >= ${NUMBL_JIT_RT_REQUIRED_VERSION}); run \`npm run build:addon\` to rebuild"`
+  );
+  parts.push(`#endif`);
+  if (usesTensors) {
+    parts.push(`#include <stdlib.h>`);
+    parts.push(`#include <string.h>`);
+    parts.push(`#include "numbl_ops.h"`);
+  }
+  parts.push("");
+
+  for (const def of calleeDefs) {
+    parts.push(def);
+    parts.push("");
+  }
+  parts.push(outer.definition);
+
+  return {
+    cSource: parts.join("\n"),
+    cFnName: outer.cFnName,
+    paramDescs: outer.paramDescs,
+    outputDescs: outer.outputDescs,
+    abiSlots: outer.abiSlots,
+    usesTensors,
+    koffiSignature: outer.koffiSignature,
+    needsTicState: outer.needsTicState,
+    needsErrorFlag: outer.needsErrorFlag,
+  };
+}
+
+/** Walk `body` and collect every UserCall's jitName in post-order
+ *  (callees before callers), deduping on revisit. The post-order makes
+ *  the final C source compile cleanly without forward declarations. */
+function collectReachableJitNames(
+  body: JitStmt[],
+  generatedIRBodies: Map<string, GeneratedFn>,
+  out: string[],
+  seen: Set<string>
+): void {
+  const visitExpr = (e: JitExpr): void => {
+    switch (e.tag) {
+      case "UserCall": {
+        for (const a of e.args) visitExpr(a);
+        if (!seen.has(e.jitName)) {
+          seen.add(e.jitName);
+          const callee = generatedIRBodies.get(e.jitName);
+          if (callee) {
+            collectReachableJitNames(callee.body, generatedIRBodies, out, seen);
+            out.push(e.jitName);
+          }
+        }
+        return;
+      }
+      case "Binary":
+        visitExpr(e.left);
+        visitExpr(e.right);
+        return;
+      case "Unary":
+        visitExpr(e.operand);
+        return;
+      case "Call":
+        for (const a of e.args) visitExpr(a);
+        return;
+      case "Index":
+        visitExpr(e.base);
+        for (const i of e.indices) visitExpr(i);
+        return;
+      case "RangeSliceRead":
+        visitExpr(e.start);
+        if (e.end) visitExpr(e.end);
+        return;
+      case "TensorLiteral":
+        for (const row of e.rows) for (const cell of row) visitExpr(cell);
+        return;
+      case "VConcatGrow":
+        visitExpr(e.base);
+        visitExpr(e.value);
+        return;
+      default:
+        return;
+    }
+  };
+  const visitStmt = (s: JitStmt): void => {
+    switch (s.tag) {
+      case "Assign":
+      case "ExprStmt":
+        visitExpr(s.expr);
+        return;
+      case "AssignIndex":
+        visitExpr(s.value);
+        for (const i of s.indices) visitExpr(i);
+        return;
+      case "AssignIndexRange":
+        visitExpr(s.dstStart);
+        visitExpr(s.dstEnd);
+        if (s.srcStart) visitExpr(s.srcStart);
+        if (s.srcEnd) visitExpr(s.srcEnd);
+        return;
+      case "AssignIndexCol":
+        visitExpr(s.colIndex);
+        return;
+      case "If":
+        visitExpr(s.cond);
+        s.thenBody.forEach(visitStmt);
+        s.elseifBlocks.forEach(eb => {
+          visitExpr(eb.cond);
+          eb.body.forEach(visitStmt);
+        });
+        if (s.elseBody) s.elseBody.forEach(visitStmt);
+        return;
+      case "For":
+        visitExpr(s.start);
+        visitExpr(s.end);
+        if (s.step) visitExpr(s.step);
+        s.body.forEach(visitStmt);
+        return;
+      case "While":
+        visitExpr(s.cond);
+        s.body.forEach(visitStmt);
+        return;
+      default:
+        return;
+    }
+  };
+  body.forEach(visitStmt);
+}
+
+/** Emit a single C function (outer or static callee). Returns the full
+ *  definition plus all metadata the caller might want. */
+function emitOneFunction(
+  body: JitStmt[],
+  params: string[],
+  outputs: string[],
+  nargout: number,
+  localVars: Set<string>,
+  argTypes: JitType[],
+  outputTypes: JitType[],
+  cFnName: string,
+  fuse: boolean | undefined,
+  openmp: boolean | undefined,
+  generatedIRBodies: Map<string, GeneratedFn> | undefined,
+  opts: { isStatic: boolean; forceNeedsErrorFlag?: boolean }
+): EmitOneFnResult {
   const effectiveOutputs = outputs.slice(0, nargout || 1);
   const effectiveOutputTypes = outputTypes.slice(0, effectiveOutputs.length);
 
@@ -103,7 +337,6 @@ export function generateC(
     effectiveOutputTypes
   );
 
-  // Derived views used in the prelude/epilogue below.
   const paramOutputTensors = new Set<string>();
   const unshareTensorParams = new Set<string>();
   for (const [name, m] of cls.meta) {
@@ -149,9 +382,12 @@ export function generateC(
 
   emitStmts(bodyLines, body, indent, ctx);
 
-  // Names for which we emit `_d0` / `_d1` mutable locals: anything that
-  // either receives a fresh-alloc (shape reassignment) or is referenced
-  // as a tensor with multi-index arity.
+  // Callees always take `__err_flag` so the outer can pass it through
+  // uniformly. Without this, a callee with no Index ops and no nested
+  // UserCalls would have a signature mismatch with the outer's call
+  // expression.
+  if (opts.forceNeedsErrorFlag) ctx.needsErrorFlag = true;
+
   const needsShapeLocals = (name: string): boolean => {
     const m = cls.meta.get(name);
     if (!m) return false;
@@ -164,10 +400,6 @@ export function generateC(
   for (const od of outputDescs) {
     if (od.kind === "tensor") {
       if (od.dynamic) {
-        // Dynamic output: transfer ownership of the C-malloc'd buffer
-        // to the caller and report the runtime shape. The JS wrapper
-        // reads data/d0/d1 and frees the pointer after copying into a
-        // JS-owned Float64Array.
         epilogueLines.push(
           `${indent}*${mangle(od.name)}_buf_out = ${tensorData(od.name)};`
         );
@@ -181,8 +413,6 @@ export function generateC(
           `${indent}*${mangle(od.name)}_d1_out = ${tensorD1(od.name)};`
         );
       } else {
-        // Fixed output: data already lives in the pre-allocated _buf; just
-        // report the runtime length.
         epilogueLines.push(
           `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
         );
@@ -219,9 +449,6 @@ export function generateC(
   const allLocals = [...localVars].filter(v => !paramSet.has(v)).sort();
   const preludeLines: string[] = [];
 
-  // Emit `v_<p>_d0` / `v_<p>_d1` seeding for a tensor param. Uses the
-  // `_in` suffix when the param signature is shadowed (param-output /
-  // unshared).
   const emitParamShapeLocals = (p: string, useInSuffix: boolean): void => {
     const suf = useInSuffix ? "_in" : "";
     const d = cls.meta.get(p)?.maxIndexDim ?? 0;
@@ -256,15 +483,12 @@ export function generateC(
     }
   };
 
-  // Shadow tensor input-output params with writable locals.
   for (const p of paramOutputTensors) {
     if (cls.meta.get(p)?.isDynamicOutput) {
-      // Dynamic param-output: unshare-copy `_in` into a C-owned buffer
-      // and transfer the final pointer back at epilogue.
       preludeLines.push(
         `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
       );
-      emitParamShapeLocals(p, /*useInSuffix*/ true);
+      emitParamShapeLocals(p, true);
       preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
       preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
       preludeLines.push(
@@ -275,22 +499,20 @@ export function generateC(
       );
       preludeLines.push(`${indent}}`);
     } else {
-      // Fixed param-output: data points at the seeded _buf (no copy needed).
       preludeLines.push(
         `${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`
       );
       preludeLines.push(
         `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
       );
-      emitParamShapeLocals(p, /*useInSuffix*/ true);
+      emitParamShapeLocals(p, true);
     }
   }
 
-  // Unshare-at-entry for pure-input tensor params that are written.
   for (const p of unshareTensorParams) {
-    if (paramOutputTensors.has(p)) continue; // already shadowed above
+    if (paramOutputTensors.has(p)) continue;
     preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
-    emitParamShapeLocals(p, /*useInSuffix*/ true);
+    emitParamShapeLocals(p, true);
     preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
     preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
     preludeLines.push(
@@ -301,10 +523,6 @@ export function generateC(
     );
     preludeLines.push(`${indent}}`);
   }
-
-  // Read-only tensor params use the signature's `v_<p>_d0` / `_d1`
-  // directly — no prelude shape-local redeclaration needed. Fresh-alloc
-  // and AssignIndex writes are handled by the two loops above.
 
   for (const local of allLocals) {
     if (cls.tensorVars.has(local)) {
@@ -333,7 +551,6 @@ export function generateC(
   }
 
   // ── Signature + ABI ─────────────────────────────────────────────────
-  const cFnName = `jit_${fnName}`;
   const abiSlots = buildAbiSlots(
     paramDescs,
     outputDescs,
@@ -349,51 +566,31 @@ export function generateC(
   );
   const koffiParts = abiSlots.map(s => s.koffiType);
   const paramList = sigParts.length > 0 ? sigParts.join(", ") : "void";
-  const signature = `void ${cFnName}(${paramList})`;
+  const prefix = opts.isStatic ? "static " : "";
+  const signature = `${prefix}void ${cFnName}(${paramList})`;
   const koffiSignature = `void ${cFnName}(${koffiParts.join(", ")})`;
 
-  // ── Assemble the full C source ──────────────────────────────────────
-  const usesTensors = cls.tensorVars.size > 0;
-  const parts: string[] = [];
-  parts.push(`/* JIT C (koffi): ${fnName}(${params.join(", ")}) */`);
-  parts.push(`#include <math.h>`);
-  // Always include jit_runtime — the emitter may call any of its helpers
-  // (mod, sign, reduce, tic/toc, idx1r) from a non-tensor scalar context.
-  parts.push(`#include <stdint.h>`);
-  parts.push(`#include "jit_runtime.h"`);
-  // Catch a stale jit_runtime.a at compile time — users get a clear
-  // "rebuild the addon" message instead of a cryptic linker error.
-  parts.push(
-    `#if !defined(NUMBL_JIT_RT_VERSION) || NUMBL_JIT_RT_VERSION < ${NUMBL_JIT_RT_REQUIRED_VERSION}`
-  );
-  parts.push(
-    `#error "numbl_jit_runtime too old (need version >= ${NUMBL_JIT_RT_REQUIRED_VERSION}); run \`npm run build:addon\` to rebuild"`
-  );
-  parts.push(`#endif`);
-  if (usesTensors) {
-    parts.push(`#include <stdlib.h>`);
-    parts.push(`#include <string.h>`);
-    parts.push(`#include "numbl_ops.h"`);
-  }
-
-  parts.push("");
-  parts.push(`${signature} {`);
-  parts.push(preludeLines.join("\n"));
-  parts.push(bodyLines.join("\n"));
+  const defParts: string[] = [];
+  defParts.push(`${signature} {`);
+  defParts.push(preludeLines.join("\n"));
+  defParts.push(bodyLines.join("\n"));
   if (epilogueLines.length > 0) {
-    parts.push(epilogueLines.join("\n"));
+    defParts.push(epilogueLines.join("\n"));
   }
-  parts.push(`}`);
+  defParts.push(`}`);
+
+  // Suppress silly warnings we'll want if anything gets added later.
+  void generatedIRBodies;
 
   return {
-    cSource: parts.join("\n"),
-    cFnName,
+    definition: defParts.join("\n"),
     paramDescs,
     outputDescs,
     abiSlots,
-    usesTensors,
-    koffiSignature,
+    usesTensors: cls.tensorVars.size > 0,
     needsTicState: ctx.needsTicState,
     needsErrorFlag: ctx.needsErrorFlag,
+    koffiSignature,
+    cFnName,
   };
 }

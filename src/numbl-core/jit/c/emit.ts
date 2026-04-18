@@ -121,9 +121,38 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
       return result.data;
     }
 
+    case "UserCall":
+      return emitUserCall(expr, ctx);
+
     default:
       throw new Error(`C-JIT codegen: unsupported expr ${expr.tag}`);
   }
+}
+
+/** Scalar-return UserCall. Arg types are already validated by feasibility
+ *  (scalars only); the callee is emitted as `static void jit_<jitName>(...)`
+ *  in the same .c file by `generateC`, with a trailing `__err_flag`
+ *  pointer. We stash the return value in a fresh local and return its
+ *  name as the expression text. Must be invoked from statement context
+ *  so the decl + call can be inserted before the surrounding expression. */
+function emitUserCall(
+  expr: JitExpr & { tag: "UserCall" },
+  ctx: EmitCtx
+): string {
+  if (!ctx.pendingStmts) {
+    throw new Error(`C-JIT codegen: UserCall outside statement context`);
+  }
+  const argCodes = expr.args.map(a => emitExpr(a, ctx));
+  const n = ++ctx.tmp.n;
+  const tmpVar = `__uc${n}_out`;
+  ctx.needsErrorFlag = true;
+  const indent = ctx.pendingStmts.indent;
+  ctx.pendingStmts.lines.push(`${indent}double ${tmpVar} = 0.0;`);
+  const callArgs = [...argCodes, `&${tmpVar}`, `__err_flag`];
+  ctx.pendingStmts.lines.push(
+    `${indent}jit_${expr.jitName}(${callArgs.join(", ")});`
+  );
+  return tmpVar;
 }
 
 function emitIndex(expr: JitExpr & { tag: "Index" }, ctx: EmitCtx): string {
@@ -976,12 +1005,17 @@ function emitStmt(
       const name = stmt.baseName;
       const data = tensorData(name);
       const len = tensorLen(name);
+      // Allow UserCall / RangeSliceRead in the index or value by letting
+      // them prepend helper statements (decl + call) before the
+      // numbl_set*r_h line.
+      ctx.pendingStmts = { lines, indent };
       const idxCodes = stmt.indices.map(idx => {
         let s = emitExpr(idx, ctx);
         if (!isKnownInteger(idx.jitType)) s = `round(${s})`;
         return s;
       });
       const v = emitExpr(stmt.value, ctx);
+      ctx.pendingStmts = undefined;
       if (n === 1) {
         lines.push(
           `${indent}numbl_set1r_h(${data}, (size_t)${len}, ${idxCodes[0]}, ${v}, __err_flag);`

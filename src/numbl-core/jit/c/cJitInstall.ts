@@ -146,7 +146,8 @@ registerCJitBackend({
         outputTypes,
         fn.name.replace(/[^A-Za-z0-9_]/g, "_"),
         interp.fuse,
-        interp.par && cJitOpenmpAvailable()
+        interp.par && cJitOpenmpAvailable(),
+        generatedIRBodies
       );
     } catch (e) {
       // Codegen throws indicate a construct the feasibility check let
