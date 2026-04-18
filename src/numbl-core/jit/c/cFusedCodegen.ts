@@ -35,6 +35,13 @@ import {
   tensorLen,
 } from "./jitCodegenC.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
+import {
+  C_REDUCTION_LITERALS,
+  accumulateOp,
+  determineWriteBack,
+  reductionCombine,
+  reductionInit,
+} from "../fusedChainHelpers.js";
 
 /** Minimum element count before `#pragma omp parallel for` kicks in.
  *  Below this, thread-spawn overhead dominates. */
@@ -116,66 +123,6 @@ const C_FUSED_TARGET: FusedTarget = {
   },
 };
 
-// ── Reduction init / combine helpers ─────────────────────────────────
-
-function reductionInit(reduceName: string): string {
-  switch (reduceName) {
-    case "sum":
-    case "mean":
-      return "0.0";
-    case "prod":
-      return "1.0";
-    case "max":
-      return "(-1.0/0.0)"; // -Inf
-    case "min":
-      return "(1.0/0.0)"; // +Inf
-    case "any":
-      return "0.0";
-    case "all":
-      return "1.0";
-    default:
-      throw new Error(`cFusedCodegen: unknown reduction ${reduceName}`);
-  }
-}
-
-function reductionCombine(
-  reduceName: string,
-  accVar: string,
-  valueExpr: string
-): string {
-  switch (reduceName) {
-    case "sum":
-    case "mean":
-      return `${accVar} += ${valueExpr};`;
-    case "prod":
-      return `${accVar} *= ${valueExpr};`;
-    case "max":
-      return `if (${valueExpr} > ${accVar}) ${accVar} = ${valueExpr};`;
-    case "min":
-      return `if (${valueExpr} < ${accVar}) ${accVar} = ${valueExpr};`;
-    case "any":
-      return `if (${valueExpr} != 0.0) ${accVar} = 1.0;`;
-    case "all":
-      return `if (${valueExpr} == 0.0) ${accVar} = 0.0;`;
-    default:
-      throw new Error(`cFusedCodegen: unknown reduction ${reduceName}`);
-  }
-}
-
-function accumulateOp(op: BinaryOperation, dest: string, val: string): string {
-  switch (op) {
-    case BinaryOperation.Add:
-      return `${dest} += ${val};`;
-    case BinaryOperation.Sub:
-      return `${dest} -= ${val};`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `${dest} *= ${val};`;
-    default:
-      return `${dest} = ${dest} + ${val};`; // fallback
-  }
-}
-
 // ── Public API ────────────────────────────────────────────────────────
 
 /**
@@ -207,22 +154,9 @@ export function emitFusedChain(
     ? tensorLen(refParam)
     : tensorLen(chain.assigns[0].destName);
 
-  // Determine which dest names need a write-back to their buffer.
-  const lastDest = chain.assigns[chain.assigns.length - 1].destName;
-  const reductionConsumes =
-    chain.reduction && chain.reduction.tensorName === lastDest;
-
-  const destNames = new Set<string>();
-  for (const a of chain.assigns) destNames.add(a.destName);
-
-  const writeBack = new Set<string>();
-  for (const d of destNames) {
-    if (reductionConsumes && d === lastDest) {
-      if (outputTensorNames.has(d)) writeBack.add(d);
-    } else {
-      writeBack.add(d);
-    }
-  }
+  // Determine which dest names need a write-back to their buffer
+  // (shared with JS codegen).
+  const { writeBack } = determineWriteBack(chain, outputTensorNames);
 
   // For dests that need write-back and are local tensors, ensure buffer
   // is allocated before the loop.
@@ -239,7 +173,7 @@ export function emitFusedChain(
   const reduceAccLocal = "__f_reduce_acc";
   if (chain.reduction) {
     lines.push(
-      `${indent}double ${reduceAccLocal} = ${reductionInit(chain.reduction.reduceName)};`
+      `${indent}double ${reduceAccLocal} = ${reductionInit(chain.reduction.reduceName, C_REDUCTION_LITERALS)};`
     );
   }
 
@@ -298,7 +232,7 @@ export function emitFusedChain(
   if (chain.reduction) {
     const valueExpr = fusedLocal(chain.reduction.tensorName);
     lines.push(
-      `${inner}${reductionCombine(chain.reduction.reduceName, reduceAccLocal, valueExpr)}`
+      `${inner}${reductionCombine(chain.reduction.reduceName, reduceAccLocal, valueExpr, C_REDUCTION_LITERALS)}`
     );
   }
 

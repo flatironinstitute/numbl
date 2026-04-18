@@ -14,7 +14,6 @@
  * inside the same loop.
  */
 
-import { BinaryOperation } from "../../parser/types.js";
 import type { JitExpr } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
@@ -24,6 +23,13 @@ import {
   fusedLocal,
   findTensorParamInChain,
 } from "../fusedScalarEmit.js";
+import {
+  JS_REDUCTION_LITERALS,
+  accumulateOp,
+  determineWriteBack,
+  reductionCombine,
+  reductionInit,
+} from "../fusedChainHelpers.js";
 
 // ── JS math builtin mapping ──────────────────────────────────────────
 
@@ -118,66 +124,6 @@ function makeJsFusedTarget(mangle: (n: string) => string): FusedTarget {
   };
 }
 
-// ── Reduction helpers ────────────────────────────────────────────────
-
-function reductionInit(reduceName: string): string {
-  switch (reduceName) {
-    case "sum":
-    case "mean":
-      return "0";
-    case "prod":
-      return "1";
-    case "max":
-      return "-Infinity";
-    case "min":
-      return "Infinity";
-    case "any":
-      return "0";
-    case "all":
-      return "1";
-    default:
-      throw new Error(`jsFusedCodegen: unknown reduction ${reduceName}`);
-  }
-}
-
-function reductionCombine(
-  reduceName: string,
-  accVar: string,
-  valueExpr: string
-): string {
-  switch (reduceName) {
-    case "sum":
-    case "mean":
-      return `${accVar} += ${valueExpr};`;
-    case "prod":
-      return `${accVar} *= ${valueExpr};`;
-    case "max":
-      return `if (${valueExpr} > ${accVar}) ${accVar} = ${valueExpr};`;
-    case "min":
-      return `if (${valueExpr} < ${accVar}) ${accVar} = ${valueExpr};`;
-    case "any":
-      return `if (${valueExpr} !== 0) ${accVar} = 1;`;
-    case "all":
-      return `if (${valueExpr} === 0) ${accVar} = 0;`;
-    default:
-      throw new Error(`jsFusedCodegen: unknown reduction ${reduceName}`);
-  }
-}
-
-function accumulateOp(op: BinaryOperation, dest: string, val: string): string {
-  switch (op) {
-    case BinaryOperation.Add:
-      return `${dest} += ${val};`;
-    case BinaryOperation.Sub:
-      return `${dest} -= ${val};`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `${dest} *= ${val};`;
-    default:
-      return `${dest} = ${dest} + ${val};`;
-  }
-}
-
 // ── Public API ────────────────────────────────────────────────────────
 
 /**
@@ -246,22 +192,8 @@ export function emitJsFusedChain(
   // Build the fused target bound to this backend's mangle.
   const fusedTarget = makeJsFusedTarget(mangle);
 
-  // Determine write-back dests (same logic as C codegen).
-  const lastDest = chain.assigns[chain.assigns.length - 1].destName;
-  const reductionConsumes =
-    chain.reduction && chain.reduction.tensorName === lastDest;
-
-  const destNames = new Set<string>();
-  for (const a of chain.assigns) destNames.add(a.destName);
-
-  const writeBack = new Set<string>();
-  for (const d of destNames) {
-    if (reductionConsumes && d === lastDest) {
-      if (outputTensorNames.has(d)) writeBack.add(d);
-    } else {
-      writeBack.add(d);
-    }
-  }
+  // Determine write-back dests (shared with C codegen).
+  const { writeBack } = determineWriteBack(chain, outputTensorNames);
 
   // Collect input tensor names (params/pre-existing vars read by the chain).
   const inputTensors = collectInputTensors(chain, allTensorVars);
@@ -294,7 +226,7 @@ export function emitJsFusedChain(
   const reduceAccLocal = "__f_reduce_acc";
   if (chain.reduction) {
     lines.push(
-      `${inner}let ${reduceAccLocal} = ${reductionInit(chain.reduction.reduceName)};`
+      `${inner}let ${reduceAccLocal} = ${reductionInit(chain.reduction.reduceName, JS_REDUCTION_LITERALS)};`
     );
   }
 
@@ -330,7 +262,7 @@ export function emitJsFusedChain(
   if (chain.reduction) {
     const valueExpr = fusedLocal(chain.reduction.tensorName);
     lines.push(
-      `${loopInner}${reductionCombine(chain.reduction.reduceName, reduceAccLocal, valueExpr)}`
+      `${loopInner}${reductionCombine(chain.reduction.reduceName, reduceAccLocal, valueExpr, JS_REDUCTION_LITERALS)}`
     );
   }
 
