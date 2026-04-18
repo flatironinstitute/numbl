@@ -488,7 +488,10 @@ defineBuiltin({
       apply: args => {
         if (args.length < 1)
           throw new RuntimeError("cat requires at least 1 argument");
-        const dim = Math.round(toNumber(args[0]));
+        const dimRaw = toNumber(args[0]);
+        if (!Number.isFinite(dimRaw) || !Number.isInteger(dimRaw) || dimRaw < 1)
+          throw new RuntimeError("cat: dimension must be a positive integer.");
+        const dim = dimRaw;
         const arrays = args.slice(1);
         if (dim === 1) return vertcat(...arrays);
         if (dim === 2) return horzcat(...arrays);

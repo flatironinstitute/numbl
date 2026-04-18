@@ -4,11 +4,19 @@
 
 import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import { toNumber, numel } from "../../runtime/index.js";
+import { toNumber, numel, RuntimeError } from "../../runtime/index.js";
 import type { SignCategory } from "../jit/jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+/** Validate one dimension value: MATLAB rejects NaN, Inf, and non-integer
+ *  sizes; negative integers are silently clamped to 0. */
+function validateDim(x: number): number {
+  if (!Number.isFinite(x) || !Number.isInteger(x))
+    throw new RuntimeError("Size inputs must be nonnegative integers.");
+  return Math.max(0, x);
+}
 
 /** Parse shape arguments: zeros(2,3) or zeros([2,3]) -> [2, 3].
  *  Negative dimensions are clamped to 0. */
@@ -16,11 +24,10 @@ function parseShapeArgs(args: RuntimeValue[]): number[] {
   if (args.length === 1 && isRuntimeTensor(args[0])) {
     const t = args[0];
     const shape: number[] = [];
-    for (let i = 0; i < t.data.length; i++)
-      shape.push(Math.max(0, Math.round(t.data[i])));
+    for (let i = 0; i < t.data.length; i++) shape.push(validateDim(t.data[i]));
     return shape;
   }
-  return args.map(a => Math.max(0, Math.round(toNumber(a))));
+  return args.map(a => validateDim(toNumber(a)));
 }
 
 /** Build cases for array constructors that take shape args and return a real tensor. */
@@ -178,8 +185,8 @@ defineBuiltin({
                 cols = rows;
               }
             } else {
-              rows = Math.max(0, Math.round(toNumber(args[0])));
-              cols = Math.max(0, Math.round(toNumber(args[1])));
+              rows = validateDim(toNumber(args[0]));
+              cols = validateDim(toNumber(args[1]));
             }
             const data = new FloatXArray(rows * cols);
             const minDim = Math.min(rows, cols);
@@ -215,8 +222,22 @@ defineBuiltin({
         if (n === 1)
           return makeTensor(new FloatXArray([end]), undefined, [1, 1]);
         const data = new FloatXArray(n);
-        for (let i = 0; i < n; i++) {
+        // MATLAB preserves both endpoints exactly (so NaN/Inf at one end
+        // don't contaminate the other).
+        data[0] = start;
+        data[n - 1] = end;
+        for (let i = 1; i < n - 1; i++) {
           data[i] = start + ((end - start) * i) / (n - 1);
+        }
+        // Opposite-sign infinite endpoints: MATLAB places 0 at the exact
+        // center for odd n.
+        if (
+          (n & 1) === 1 &&
+          !Number.isFinite(start) &&
+          !Number.isFinite(end) &&
+          Math.sign(start) !== Math.sign(end)
+        ) {
+          data[(n - 1) / 2] = 0;
         }
         return makeTensor(data, undefined, [1, n]);
       },
