@@ -15,7 +15,7 @@ three places:
 - Element-wise binary/unary ops lived in [native/elemwise.cpp](../native/elemwise.cpp)
   and [native/unary_elemwise.cpp](../native/unary_elemwise.cpp) with integer op-code
   `switch` dispatch — but their JS fallbacks were scattered across builtin
-  files (e.g. [src/numbl-core/interpreter/jit/jitHelpersTensor.ts](../src/numbl-core/interpreter/jit/jitHelpersTensor.ts))
+  files (e.g. [src/numbl-core/jit/js/jitHelpersTensor.ts](../src/numbl-core/jit/js/jitHelpersTensor.ts))
   with no shared interface.
 - LAPACK ops lived in `native/lapack_*.cpp` with one N-API export per
   function; their JS fallback was the separate
@@ -164,7 +164,7 @@ Three consumer paths now hit the tensor-ops layer:
 - `applyUnaryRealResult` — `abs` fast path via
   `realUnaryElemwise(ABS)` / `complexAbs`.
 
-**3. JIT helpers** ([src/numbl-core/interpreter/jit/jitHelpersTensor.ts](../src/numbl-core/interpreter/jit/jitHelpersTensor.ts)):
+**3. JIT helpers** ([src/numbl-core/jit/js/jitHelpersTensor.ts](../src/numbl-core/jit/js/jitHelpersTensor.ts)):
 
 - `tAdd`, `tSub`, `tMul`, `tDiv` (`fastBinaryOp`) — real AND complex
   tensor-tensor, tensor-scalar, and tensor-complex-scalar paths all

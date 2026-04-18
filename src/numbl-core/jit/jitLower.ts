@@ -8,13 +8,13 @@
  * in jitLowerTypes.ts. This file contains the core lowering logic.
  */
 
-import type { Expr, Stmt } from "../../parser/types.js";
-import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
-import type { FunctionDef } from "../types.js";
-import type { Interpreter } from "../interpreter.js";
-import type { CallSite } from "../../runtime/runtimeHelpers.js";
-import { resolveFunction } from "../../functionResolve.js";
-import type { ItemType } from "../../lowering/itemTypes.js";
+import type { Expr, Stmt } from "../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../parser/types.js";
+import type { FunctionDef } from "../interpreter/types.js";
+import type { Interpreter } from "../interpreter/interpreter.js";
+import type { CallSite } from "../runtime/runtimeHelpers.js";
+import { resolveFunction } from "../functionResolve.js";
+import type { ItemType } from "../lowering/itemTypes.js";
 import {
   type JitType,
   type JitExpr,
@@ -36,11 +36,11 @@ import {
   binaryResultType,
   unaryResultType,
 } from "./jitLowerTypes.js";
-import { generateJS } from "./jitCodegen.js";
-import { getIBuiltin, inferJitType } from "../builtins/index.js";
-import { offsetToLineFast, buildLineTable } from "../../runtime/error.js";
-import { isRuntimeFunction } from "../../runtime/types.js";
-import type { RuntimeValue } from "../../runtime/types.js";
+import { generateJS } from "./js/jitCodegen.js";
+import { getIBuiltin, inferJitType } from "../interpreter/builtins/index.js";
+import { offsetToLineFast, buildLineTable } from "../runtime/error.js";
+import { isRuntimeFunction } from "../runtime/types.js";
+import type { RuntimeValue } from "../runtime/types.js";
 
 // ── Lowering entry point ────────────────────────────────────────────────
 
@@ -2218,7 +2218,7 @@ function probeFuncHandleReturnType(
   try {
     const fnVal = interp.env.get(fnName);
     if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
-    const fn = fnVal as import("../../runtime/types.js").RuntimeFunction;
+    const fn = fnVal as import("../runtime/types.js").RuntimeFunction;
 
     // Only probe function handles that have a direct JS closure — these
     // are anonymous functions and named function references. Builtins

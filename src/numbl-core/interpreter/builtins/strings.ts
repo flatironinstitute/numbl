@@ -22,7 +22,7 @@ import {
   RuntimeError,
   displayValue,
 } from "../../runtime/index.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { sprintfFormat } from "../../helpers/string.js";
 

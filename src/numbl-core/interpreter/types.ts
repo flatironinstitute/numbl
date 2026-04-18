@@ -5,7 +5,7 @@
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import type { JitType } from "./jit/jitTypes.js";
+import type { JitType } from "../jit/jitTypes.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 

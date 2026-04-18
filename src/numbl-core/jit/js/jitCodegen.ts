@@ -11,17 +11,17 @@ import {
   type JitType,
   isTensorType,
   isKnownInteger,
-} from "./jitTypes.js";
-import { getIBuiltin } from "../builtins/types.js";
-import { findFusibleChains } from "./fusion.js";
-import { FUSIBLE_TENSOR_UNARY_OPS_JS } from "./fusionOps.js";
+} from "../jitTypes.js";
+import { getIBuiltin } from "../../interpreter/builtins/types.js";
+import { findFusibleChains } from "../fusion.js";
+import { FUSIBLE_TENSOR_UNARY_OPS_JS } from "../fusionOps.js";
 import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
   type ScalarOpTarget,
   emitScalarBinaryOp,
   emitScalarUnaryOp,
   emitScalarTruthiness,
-} from "./scalarEmit.js";
+} from "../scalarEmit.js";
 import {
   type HoistedAlias,
   structFieldKey,

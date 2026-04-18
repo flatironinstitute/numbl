@@ -18,7 +18,7 @@
  * reduction.
  */
 
-import { BinaryOperation } from "../../../parser/types.js";
+import { BinaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitType } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import {
@@ -34,7 +34,7 @@ import {
   tensorData,
   tensorLen,
 } from "./jitCodegenC.js";
-import { getIBuiltin } from "../../builtins/types.js";
+import { getIBuiltin } from "../../interpreter/builtins/types.js";
 
 /** Minimum element count before `#pragma omp parallel for` kicks in.
  *  Below this, thread-spawn overhead dominates. */

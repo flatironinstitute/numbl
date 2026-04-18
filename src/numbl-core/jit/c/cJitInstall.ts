@@ -14,14 +14,17 @@
  */
 
 import { registerCJitBackend } from "./cJitBackend.js";
-import { checkCFeasibility } from "./c/cFeasibility.js";
-import { generateC, type COutputDesc } from "./c/jitCodegenC.js";
-import { compileAndLoad, cJitOpenmpAvailable } from "./c/cCompile.js";
-import { jitTypeKey } from "./jitTypes.js";
+import { checkCFeasibility } from "./cFeasibility.js";
+import { generateC, type COutputDesc } from "./jitCodegenC.js";
+import { compileAndLoad, cJitOpenmpAvailable } from "./cCompile.js";
+import { jitTypeKey } from "../jitTypes.js";
 import { type RuntimeTensor } from "../../runtime/types.js";
 import { uninitFloat64 } from "../../runtime/alloc.js";
-import { getTicTime, setTicTime } from "../builtins/time-system.js";
-import { JitBailToInterpreter } from "./jitHelpers.js";
+import {
+  getTicTime,
+  setTicTime,
+} from "../../interpreter/builtins/time-system.js";
+import { JitBailToInterpreter } from "../js/jitHelpers.js";
 
 registerCJitBackend({
   tryCompile(

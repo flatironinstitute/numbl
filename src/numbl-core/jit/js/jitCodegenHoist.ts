@@ -6,7 +6,7 @@
  * element reads to the top of the generated function.
  */
 
-import type { JitExpr, JitStmt } from "./jitTypes.js";
+import type { JitExpr, JitStmt } from "../jitTypes.js";
 
 // ── Hoisted alias types ────────────────────────────────────────────────
 

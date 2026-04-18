@@ -2,8 +2,8 @@
  * JIT compilation entry point for interpreter function calls.
  */
 
-import type { Interpreter } from "../interpreter.js";
-import type { FunctionDef } from "../types.js";
+import type { Interpreter } from "../interpreter/interpreter.js";
+import type { FunctionDef } from "../interpreter/types.js";
 import {
   type JitType,
   type JitCacheEntry,
@@ -12,11 +12,14 @@ import {
   unifyJitTypes,
 } from "./jitTypes.js";
 import { lowerFunction } from "./jitLower.js";
-import { generateJS } from "./jitCodegen.js";
-import { jitHelpers, JitBailToInterpreter } from "./jitHelpers.js";
-import { inferJitType } from "../builtins/types.js";
-import { getCJitBackend } from "./cJitBackend.js";
-import { CJitParityError, formatCJitParityMessage } from "./cJitParityError.js";
+import { generateJS } from "./js/jitCodegen.js";
+import { jitHelpers, JitBailToInterpreter } from "./js/jitHelpers.js";
+import { inferJitType } from "../interpreter/builtins/types.js";
+import { getCJitBackend } from "./c/cJitBackend.js";
+import {
+  CJitParityError,
+  formatCJitParityMessage,
+} from "./c/cJitParityError.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
@@ -109,7 +112,7 @@ export function tryJitCall(
 
   // ── C-JIT path (--opt >= 2) ───────────────────────────────────────────
   // Delegated to a pluggable backend registered at startup by the CLI
-  // entry point (src/numbl-core/interpreter/jit/cJitInstall.ts). The
+  // entry point (src/numbl-core/jit/c/cJitInstall.ts). The
   // browser bundle never reaches the install module, so its Node-only
   // transitive deps (child_process, fs, ...) stay out of the web build.
   // On any bail we fall through to the JS-JIT path, unless

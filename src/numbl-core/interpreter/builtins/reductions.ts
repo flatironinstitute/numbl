@@ -15,7 +15,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
-import { type JitType, shapeAfterReduction } from "../jit/jitTypes.js";
+import { type JitType, shapeAfterReduction } from "../../jit/jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { sparseSum } from "../../helpers/reduction-helpers.js";
 import { uninitFloatX } from "../../runtime/alloc.js";

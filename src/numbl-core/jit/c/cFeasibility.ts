@@ -18,9 +18,9 @@
  *   stay out of scope for now.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
-import { getIBuiltin } from "../../builtins/types.js";
+import { getIBuiltin } from "../../interpreter/builtins/types.js";
 
 export type FeasibilityResult =
   | { ok: true }

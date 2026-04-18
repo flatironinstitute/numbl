@@ -24,7 +24,7 @@ import {
   colMajorIndex,
 } from "../../runtime/index.js";
 import { rstr } from "../../runtime/runtime.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import {
   defineBuiltin,
   registerIBuiltin,

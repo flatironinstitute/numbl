@@ -14,7 +14,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { defineBuiltin } from "./types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 

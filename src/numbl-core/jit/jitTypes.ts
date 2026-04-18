@@ -2,7 +2,7 @@
  * JIT type system and IR node definitions.
  */
 
-import type { BinaryOperation, UnaryOperation } from "../../parser/types.js";
+import type { BinaryOperation, UnaryOperation } from "../parser/types.js";
 
 // ── JIT Type System ─────────────────────────────────────────────────────
 

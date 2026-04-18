@@ -20,7 +20,7 @@ import {
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toBool, toString } from "../../runtime/convert.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
 
 // ── double ──────────────────────────────────────────────────────────────

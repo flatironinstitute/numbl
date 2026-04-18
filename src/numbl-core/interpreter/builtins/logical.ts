@@ -16,7 +16,7 @@ import { RTV } from "../../runtime/constructors.js";
 import { toBool } from "../../runtime/index.js";
 import { not as notOp } from "../../runtime/runtimeOperators.js";
 import { elementWiseLogicalOp } from "../../runtime/runtimeHelpers.js";
-import { type JitType } from "../jit/jitTypes.js";
+import { type JitType } from "../../jit/jitTypes.js";
 import { defineBuiltin, type BuiltinCase } from "./types.js";
 
 // ── Type-level matcher ──────────────────────────────────────────────────

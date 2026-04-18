@@ -32,7 +32,7 @@ import { homedir, tmpdir } from "os";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
-import { NUMBL_VERSION } from "../../../version.js";
+import { NUMBL_VERSION } from "../../version.js";
 
 export interface CompiledCFn {
   fn: (...args: unknown[]) => unknown;

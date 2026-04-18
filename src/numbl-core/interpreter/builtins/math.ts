@@ -19,7 +19,11 @@ import {
   binaryMathJitEmitC,
   type BuiltinHelp,
 } from "./types.js";
-import { type JitType, isNonneg, type SignCategory } from "../jit/jitTypes.js";
+import {
+  type JitType,
+  isNonneg,
+  type SignCategory,
+} from "../../jit/jitTypes.js";
 import {
   erfScalar,
   erfcScalar,

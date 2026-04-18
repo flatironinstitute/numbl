@@ -26,7 +26,7 @@ import {
   isRuntimeFunction,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { linsolveLapack } from "../../helpers/linsolve.js";
 

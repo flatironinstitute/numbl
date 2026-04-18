@@ -13,9 +13,9 @@
  * `tryJitCall` silently falls through to JS-JIT.
  */
 
-import type { Interpreter } from "../interpreter.js";
-import type { FunctionDef } from "../types.js";
-import type { JitStmt, JitType } from "./jitTypes.js";
+import type { Interpreter } from "../../interpreter/interpreter.js";
+import type { FunctionDef } from "../../interpreter/types.js";
+import type { JitStmt, JitType } from "../jitTypes.js";
 
 /**
  * Outcome of a C-JIT compile attempt.

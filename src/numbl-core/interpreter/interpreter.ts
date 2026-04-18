@@ -88,7 +88,10 @@ export class Interpreter {
   >();
 
   /** @internal Progressive type widening for loop JIT: location -> last unified input types. */
-  loopLastInputTypes = new Map<string, import("./jit/jitTypes.js").JitType[]>();
+  loopLastInputTypes = new Map<
+    string,
+    import("../jit/jitTypes.js").JitType[]
+  >();
 
   /** @internal Sibling stmts of the currently-executing stmt (set by execStmts). */
   _postSiblings: import("../parser/types.js").Stmt[] | null = null;

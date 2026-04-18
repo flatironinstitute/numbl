@@ -5,7 +5,7 @@
 import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { toNumber, numel, RuntimeError } from "../../runtime/index.js";
-import type { SignCategory } from "../jit/jitTypes.js";
+import type { SignCategory } from "../../jit/jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────

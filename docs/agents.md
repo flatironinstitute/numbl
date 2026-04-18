@@ -13,7 +13,7 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT (`src/numbl-core/interpreter/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` for fast codegen.
+The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/` and the C backend (`jitCodegenC`, `cFusedCodegen`, `cFeasibility`, `cJitBackend`, `cJitInstall`, `cCompile`) under `jit/c/`.
 
 ## Style
 

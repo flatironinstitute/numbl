@@ -24,7 +24,7 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────

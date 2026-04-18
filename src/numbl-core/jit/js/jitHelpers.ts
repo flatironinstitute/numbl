@@ -20,7 +20,10 @@ import {
 } from "../../runtime/types.js";
 
 import { uninitFloat64 } from "../../runtime/alloc.js";
-import { getTicTime, setTicTime } from "../builtins/time-system.js";
+import {
+  getTicTime,
+  setTicTime,
+} from "../../interpreter/builtins/time-system.js";
 
 import {
   mTranspose,
@@ -656,11 +659,11 @@ export const jitHelpers = {
 import {
   buildIBuiltinHelpers,
   setDynamicRegisterHook,
-} from "../builtins/index.js";
+} from "../../interpreter/builtins/index.js";
 Object.assign(jitHelpers, buildIBuiltinHelpers());
 
-import type { IBuiltin } from "../builtins/index.js";
-import { inferJitType as _ijt } from "../builtins/index.js";
+import type { IBuiltin } from "../../interpreter/builtins/index.js";
+import { inferJitType as _ijt } from "../../interpreter/builtins/index.js";
 setDynamicRegisterHook((b: IBuiltin) => {
   const h = jitHelpers as Record<string, unknown>;
   h[`ib_${b.name}`] = (...args: unknown[]) => {

@@ -11,7 +11,7 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { shareRuntimeValue } from "../runtime/utils.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { tryJitCall, JIT_SKIP } from "./jit/index.js";
+import { tryJitCall, JIT_SKIP } from "../jit/index.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
 import { toString } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";

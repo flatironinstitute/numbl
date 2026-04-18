@@ -21,7 +21,7 @@ import {
   type JitType,
   shapeAfterReduction,
   unifySign,
-} from "../jit/jitTypes.js";
+} from "../../jit/jitTypes.js";
 
 // ── Tensor-capable binary helper ─────────────────────────────────────────
 

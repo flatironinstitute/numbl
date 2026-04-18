@@ -26,7 +26,7 @@ import {
   signFromNumber,
   isNonneg,
   unifyJitTypes,
-} from "../jit/jitTypes.js";
+} from "../../jit/jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────

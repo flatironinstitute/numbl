@@ -3,7 +3,7 @@
 % The JS-JIT compiles `y = x(i)` via runtimeIndexing fast paths, but the
 % C-JIT feasibility checker bails with
 %   "Index reads not supported (defer to JS-JIT)"
-% in src/numbl-core/interpreter/jit/c/cFeasibility.ts.
+% in src/numbl-core/jit/c/cFeasibility.ts.
 %
 % Expected disp output (should match across all runs):
 %   numbl --opt 1 run <this>                         -> 30

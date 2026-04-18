@@ -7,7 +7,7 @@
  * - hasReturn: whether the loop body contains a return statement
  */
 
-import type { Stmt, Expr } from "../../parser/types.js";
+import type { Stmt, Expr } from "../parser/types.js";
 
 export interface LoopVarInfo {
   /** Variables referenced in the loop that must come from enclosing scope */

@@ -15,15 +15,15 @@
  */
 
 import { BinaryOperation } from "../../parser/types.js";
-import type { JitExpr } from "./jitTypes.js";
-import type { FusibleChain } from "./fusion.js";
-import type { ScalarOpTarget } from "./scalarEmit.js";
+import type { JitExpr } from "../jitTypes.js";
+import type { FusibleChain } from "../fusion.js";
+import type { ScalarOpTarget } from "../scalarEmit.js";
 import {
   type FusedTarget,
   emitFusedScalarExpr,
   fusedLocal,
   findTensorParamInChain,
-} from "./fusedScalarEmit.js";
+} from "../fusedScalarEmit.js";
 
 // ── JS math builtin mapping ──────────────────────────────────────────
 

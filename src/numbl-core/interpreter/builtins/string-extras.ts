@@ -8,7 +8,7 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { toNumber } from "../../runtime/convert.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { parseMFile, type Stmt, type Expr } from "../../parser/index.js";
 import { BUILTIN_CONSTANTS } from "../../lowering/constants.js";

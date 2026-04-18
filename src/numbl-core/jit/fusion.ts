@@ -22,7 +22,7 @@
  */
 
 import type { JitExpr, JitStmt } from "./jitTypes.js";
-import { BinaryOperation } from "../../parser/types.js";
+import { BinaryOperation } from "../parser/types.js";
 import {
   FUSIBLE_TENSOR_UNARY_OPS,
   FUSIBLE_TENSOR_BINARY_OPS,

@@ -15,7 +15,7 @@
  * Tensor outputs use pre-allocated `double*` buffers passed in.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import {
   isKnownInteger,
   type JitExpr,
@@ -35,7 +35,7 @@ import {
   emitScalarUnaryOp,
   emitScalarTruthiness,
 } from "../scalarEmit.js";
-import { getIBuiltin } from "../../builtins/types.js";
+import { getIBuiltin } from "../../interpreter/builtins/types.js";
 
 const MANGLE_PREFIX = "v_";
 

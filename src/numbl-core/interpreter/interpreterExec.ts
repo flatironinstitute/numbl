@@ -44,7 +44,7 @@ import {
 } from "./types.js";
 
 import type { Interpreter } from "./interpreter.js";
-import { tryJitFor, tryJitWhile } from "./jit/jitLoop.js";
+import { tryJitFor, tryJitWhile } from "../jit/jitLoop.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 

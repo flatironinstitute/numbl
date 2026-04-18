@@ -10,7 +10,7 @@
  * These have no dependency on LowerCtx or the lowering state.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../parser/types.js";
 import {
   type JitType,
   type SignCategory,

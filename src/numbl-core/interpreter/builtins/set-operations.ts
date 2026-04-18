@@ -26,7 +26,7 @@ import {
   tensorSize2D,
 } from "../../runtime/index.js";
 import { rstr } from "../../runtime/runtime.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 import { defineBuiltin, type BuiltinCase } from "./types.js";
 import { toNumArray } from "../../helpers/reduction-helpers.js";
 

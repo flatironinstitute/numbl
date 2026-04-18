@@ -15,7 +15,7 @@ import {
 } from "../../runtime/types.js";
 import { toNumber, RuntimeError } from "../../runtime/index.js";
 import { defineBuiltin } from "./types.js";
-import type { JitType } from "../jit/jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
 
 function isNumeric(v: RuntimeValue): boolean {
   return isRuntimeNumber(v) || isRuntimeTensor(v) || isRuntimeLogical(v);
