@@ -36,7 +36,7 @@ import {
   emitScalarTruthiness,
 } from "../scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
-import { collectTensorUsage } from "../js/jitCodegenHoist.js";
+import { analyzeTensorUsage, type ClassificationResult } from "./classify.js";
 
 const MANGLE_PREFIX = "v_";
 
@@ -180,9 +180,10 @@ export function tensorD1(name: string): string {
 // ── Per-function emit context ─────────────────────────────────────────
 
 interface EmitCtx {
-  tensorVars: Set<string>;
-  /** Tensor outputs whose buffers are pre-allocated by JS. */
-  outputTensorNames: Set<string>;
+  /** Shared classification table: every tensor-name decision reads from
+   *  here (kind, maxIndexDim, hasFreshAlloc, needsUnshare,
+   *  isDynamicOutput, ...). See `classify.ts`. */
+  cls: ClassificationResult;
   /** Counter for scratch buffer slots. Each tensor sub-expression that
    *  doesn't have a top-level dest gets a scratch double* + int64_t pair. */
   scratchCount: number;
@@ -190,17 +191,11 @@ interface EmitCtx {
   tmp: { n: number };
   /** Set of scratch indices that were actually used. */
   usedScratch: Set<number>;
-  /** Statements to add at function epilogue (free scratch buffers). */
-  freeStmts: string[];
-  /** Non-output tensor locals that need to be freed at epilogue. */
-  localTensorNames: Set<string>;
   /** When set, expression emission can prepend statements (e.g. for
    *  reductions of complex tensor expressions that need scratch buffers). */
   pendingStmts?: { lines: string[]; indent: string };
   /** Emit fused per-element loops for tensor chains (--fuse). */
   fuse: boolean;
-  /** Tensor parameter names (for fusion analysis). */
-  paramTensorNames: Set<string>;
   /** Set when tic or toc is used — triggers __tic_state parameter. */
   needsTicState: boolean;
   /** Set when any Index read is emitted — triggers __err_flag parameter
@@ -209,24 +204,31 @@ interface EmitCtx {
   needsErrorFlag: boolean;
   /** Emit `#pragma omp parallel for` on fused non-reduction loops. */
   openmp: boolean;
-  /** Per-tensor-var max indexing arity (1/2/3). Tensors with arity >= 2
-   *  receive a `_d0` ABI param; arity == 3 also gets `_d1`. Tensor locals
-   *  and vars that aren't indexed are omitted. */
-  tensorMaxDim: Map<string, number>;
-  /** Tensor names that get a fresh-tensor RHS assignment (TensorLiteral /
-   *  zeros / ones / VConcatGrow). These have `v_<n>_d0` / `v_<n>_d1`
-   *  tracked as mutable C locals so the emitter can both set the shape
-   *  on each fresh-alloc and read it downstream (e.g., in `length(v)`
-   *  or the output ABI). Shape-only: buffer ownership is still tracked
-   *  via `localTensorNames` / `outputTensorNames` / `dynamicOutputs`. */
-  freshAllocTensors: Set<string>;
-  /** Tensor outputs that use the new dynamic-output ABI: the JS wrapper
-   *  passes a `double **` slot that the C function fills via
-   *  `*out = v_<n>_data`, transferring ownership of a C-malloc'd buffer
-   *  to the caller. Each such output also receives `_d0_out` / `_d1_out`
-   *  int64_t slots to report the runtime shape. Subset of
-   *  `outputTensorNames`. */
-  dynamicOutputs: Set<string>;
+}
+
+// ── Classification-lookup shortcuts ───────────────────────────────────
+//
+// Keep the emit sites short: `isTensorVar(ctx, n)` reads better than
+// `ctx.cls.tensorVars.has(n)`, and it gives us one place to add an
+// assertion later if a caller queries an unknown name.
+
+function isTensorVar(ctx: EmitCtx, name: string): boolean {
+  return ctx.cls.tensorVars.has(name);
+}
+function hasFreshAlloc(ctx: EmitCtx, name: string): boolean {
+  return !!ctx.cls.meta.get(name)?.hasFreshAlloc;
+}
+function isDynamicOutput(ctx: EmitCtx, name: string): boolean {
+  return !!ctx.cls.meta.get(name)?.isDynamicOutput;
+}
+function isLocalTensor(ctx: EmitCtx, name: string): boolean {
+  return ctx.cls.localTensorNames.has(name);
+}
+function isOutputTensor(ctx: EmitCtx, name: string): boolean {
+  return ctx.cls.outputTensorNames.has(name);
+}
+function tensorMaxDim(ctx: EmitCtx, name: string): number {
+  return ctx.cls.meta.get(name)?.maxIndexDim ?? 0;
 }
 
 // ── Expression emission ───────────────────────────────────────────────
@@ -258,7 +260,7 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
       return formatNumberLiteral(expr.value);
 
     case "Var":
-      if (ctx.tensorVars.has(expr.name)) return tensorData(expr.name);
+      if (isTensorVar(ctx, expr.name)) return tensorData(expr.name);
       return mangle(expr.name);
 
     case "Binary":
@@ -295,7 +297,7 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
 }
 
 function emitIndex(expr: JitExpr & { tag: "Index" }, ctx: EmitCtx): string {
-  if (expr.base.tag !== "Var" || !ctx.tensorVars.has(expr.base.name)) {
+  if (expr.base.tag !== "Var" || !isTensorVar(ctx, expr.base.name)) {
     throw new Error("C-JIT codegen: Index base must be a tensor Var");
   }
   const n = expr.indices.length;
@@ -401,7 +403,7 @@ function emitTensorExprToStmts(
   expr: JitExpr,
   ctx: EmitCtx
 ): { data: string; len: string } {
-  if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
+  if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
     return { data: tensorData(expr.name), len: tensorLen(expr.name) };
   }
 
@@ -475,7 +477,7 @@ function emitRangeSliceReadToBuf(
   destData: string,
   destLen: string
 ): void {
-  if (!ctx.tensorVars.has(expr.baseName)) {
+  if (!isTensorVar(ctx, expr.baseName)) {
     throw new Error(
       `C-JIT codegen: RangeSliceRead base '${expr.baseName}' is not a tensor var`
     );
@@ -529,7 +531,7 @@ function emitRangeSliceReadToStmts(
 /** Find a tensor-length expression from a tensor expr tree (for pre-allocating
  *  scratch buffers). Returns a C expression for the length. */
 function findTensorLenExpr(expr: JitExpr, ctx: EmitCtx): string {
-  if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
+  if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
     return tensorLen(expr.name);
   }
   if (expr.tag === "Binary") {
@@ -586,7 +588,7 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
       );
     }
     const arg = expr.args[0];
-    if (arg.tag === "Var" && ctx.tensorVars.has(arg.name)) {
+    if (arg.tag === "Var" && isTensorVar(ctx, arg.name)) {
       return `numbl_reduce_flat(${opEnum}, ${tensorData(arg.name)}, ${tensorLen(arg.name)})`;
     }
     // Non-Var tensor arg: emit the tensor expression to a scratch,
@@ -623,12 +625,12 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     (expr.name === "length" || expr.name === "isempty") &&
     expr.args.length === 1 &&
     expr.args[0].tag === "Var" &&
-    ctx.tensorVars.has((expr.args[0] as JitExpr & { tag: "Var" }).name)
+    isTensorVar(ctx, (expr.args[0] as JitExpr & { tag: "Var" }).name)
   ) {
     const name = (expr.args[0] as JitExpr & { tag: "Var" }).name;
     const lenCode = tensorLen(name);
     if (expr.name === "length") {
-      if (ctx.freshAllocTensors.has(name)) {
+      if (hasFreshAlloc(ctx, name)) {
         // Dynamic tensors carry d0/d1 locals; use max(d0, d1) so
         // length on a matrix reports the larger dim (MATLAB convention).
         return `((double)((${tensorD0(name)} > ${tensorD1(name)}) ? ${tensorD0(name)} : ${tensorD1(name)}))`;
@@ -680,7 +682,11 @@ function emitStmts(
 
   // Fusion enabled: find fusible chains, emit them as fused loops,
   // emit everything else via the per-op path.
-  const chains = findFusibleChains(stmts, ctx.paramTensorNames, ctx.tensorVars);
+  const chains = findFusibleChains(
+    stmts,
+    ctx.cls.paramTensorNames,
+    ctx.cls.tensorVars
+  );
 
   // Build a set of statement indices covered by chains.
   const coveredByChain = new Map<
@@ -699,10 +705,10 @@ function emitStmts(
         lines,
         indent,
         entry.chain,
-        ctx.tensorVars,
-        ctx.paramTensorNames,
-        ctx.outputTensorNames,
-        ctx.localTensorNames,
+        ctx.cls.tensorVars,
+        ctx.cls.paramTensorNames,
+        ctx.cls.outputTensorNames,
+        ctx.cls.localTensorNames,
         ctx.openmp
       );
       i += entry.chain.length;
@@ -722,7 +728,7 @@ function emitEnsureLocalBuf(
   lenExpr: string,
   ctx: EmitCtx
 ): void {
-  if (!ctx.localTensorNames.has(destName)) return;
+  if (!isLocalTensor(ctx, destName)) return;
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   lines.push(`${indent}${dLen} = ${lenExpr};`);
@@ -848,7 +854,7 @@ function emitVConcatGrowAssign(
     throw new Error("C-JIT codegen: VConcatGrow base must be a Var");
   }
   const baseName = expr.base.name;
-  if (!ctx.tensorVars.has(baseName)) {
+  if (!isTensorVar(ctx, baseName)) {
     throw new Error(
       `C-JIT codegen: VConcatGrow base '${baseName}' is not a tensor var`
     );
@@ -890,7 +896,7 @@ function emitTensorAssign(
 ): void {
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
-  const needsAlloc = ctx.localTensorNames.has(destName);
+  const needsAlloc = isLocalTensor(ctx, destName);
 
   if (expr.tag === "TensorLiteral") {
     emitTensorLiteralAssign(lines, indent, destName, expr, ctx);
@@ -921,11 +927,11 @@ function emitTensorAssign(
     //    The output buffer is large enough whenever the slice length
     //    doesn't exceed the first tensor input's length, which is the
     //    JS-JIT subarrayCopy1r contract by construction.
-    if (ctx.localTensorNames.has(destName)) {
+    if (isLocalTensor(ctx, destName)) {
       emitRangeSliceReadToBuf(lines, indent, expr, ctx, dData, dLen);
       return;
     }
-    if (ctx.outputTensorNames.has(destName)) {
+    if (isOutputTensor(ctx, destName)) {
       const scratch = emitRangeSliceReadToStmts(lines, indent, expr, ctx);
       lines.push(`${indent}${dLen} = ${scratch.len};`);
       lines.push(
@@ -938,13 +944,13 @@ function emitTensorAssign(
     );
   }
 
-  if (expr.tag === "Var" && ctx.tensorVars.has(expr.name)) {
+  if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
     const srcName = expr.name;
     const srcData = tensorData(srcName);
     const srcLen = tensorLen(srcName);
-    const destIsDynamic = ctx.freshAllocTensors.has(destName);
+    const destIsDynamic = hasFreshAlloc(ctx, destName);
     const destIsFixedOutput =
-      ctx.outputTensorNames.has(destName) && !ctx.dynamicOutputs.has(destName);
+      isOutputTensor(ctx, destName) && !isDynamicOutput(ctx, destName);
     if (destIsDynamic) {
       // Deep-copy: the source's buffer may be freed later in the body
       // (e.g. the test_loop_slice_write `tmp_pt = out_pt; out_pt =
@@ -954,14 +960,14 @@ function emitTensorAssign(
       // a no-op.
       const dD0 = tensorD0(destName);
       const dD1 = tensorD1(destName);
-      const srcD0Expr = ctx.freshAllocTensors.has(srcName)
+      const srcD0Expr = hasFreshAlloc(ctx, srcName)
         ? tensorD0(srcName)
-        : (ctx.tensorMaxDim.get(srcName) ?? 0) >= 2
+        : tensorMaxDim(ctx, srcName) >= 2
           ? tensorD0(srcName)
           : srcLen;
-      const srcD1Expr = ctx.freshAllocTensors.has(srcName)
+      const srcD1Expr = hasFreshAlloc(ctx, srcName)
         ? tensorD1(srcName)
-        : (ctx.tensorMaxDim.get(srcName) ?? 0) >= 3
+        : tensorMaxDim(ctx, srcName) >= 3
           ? tensorD1(srcName)
           : "1";
       lines.push(`${indent}if (${dData} != ${srcData}) {`);
@@ -1133,10 +1139,7 @@ function emitStmt(
   switch (stmt.tag) {
     case "Assign": {
       // Tensor-result assign: needs statement-level emission.
-      if (
-        stmt.expr.jitType.kind === "tensor" &&
-        ctx.tensorVars.has(stmt.name)
-      ) {
+      if (stmt.expr.jitType.kind === "tensor" && isTensorVar(ctx, stmt.name)) {
         emitTensorAssign(lines, indent, stmt.name, stmt.expr, ctx);
         return;
       }
@@ -1173,7 +1176,7 @@ function emitStmt(
           `C-JIT codegen: AssignIndex arity ${n} unsupported (only 1D/2D/3D)`
         );
       }
-      if (!ctx.tensorVars.has(stmt.baseName)) {
+      if (!isTensorVar(ctx, stmt.baseName)) {
         throw new Error(
           `C-JIT codegen: AssignIndex base '${stmt.baseName}' is not a tensor var`
         );
@@ -1213,12 +1216,12 @@ function emitStmt(
       // with __err_flag — OOB (1.0) and length-mismatch (3.0) are both
       // reported back through the shared flag and translated in the JS
       // wrapper.
-      if (!ctx.tensorVars.has(stmt.baseName)) {
+      if (!isTensorVar(ctx, stmt.baseName)) {
         throw new Error(
           `C-JIT codegen: AssignIndexRange base '${stmt.baseName}' is not a tensor var`
         );
       }
-      if (!ctx.tensorVars.has(stmt.srcBaseName)) {
+      if (!isTensorVar(ctx, stmt.srcBaseName)) {
         throw new Error(
           `C-JIT codegen: AssignIndexRange src '${stmt.srcBaseName}' is not a tensor var`
         );
@@ -1249,12 +1252,12 @@ function emitStmt(
       // guarantees the `_d0` (row count) ABI param is present. Size
       // mismatch (srcLen != dstRows) reports err_flag 3.0; OOB col
       // that would require dst growth reports 2.0 (soft-bail).
-      if (!ctx.tensorVars.has(stmt.baseName)) {
+      if (!isTensorVar(ctx, stmt.baseName)) {
         throw new Error(
           `C-JIT codegen: AssignIndexCol base '${stmt.baseName}' is not a tensor var`
         );
       }
-      if (!ctx.tensorVars.has(stmt.srcBaseName)) {
+      if (!isTensorVar(ctx, stmt.srcBaseName)) {
         throw new Error(
           `C-JIT codegen: AssignIndexCol src '${stmt.srcBaseName}' is not a tensor var`
         );
@@ -1341,150 +1344,6 @@ function emitStmt(
 
 // ── Top-level ─────────────────────────────────────────────────────────
 
-function findTensorLocals(body: JitStmt[], out: Set<string>): void {
-  const visitStmt = (s: JitStmt): void => {
-    switch (s.tag) {
-      case "Assign":
-        if (s.expr.jitType.kind === "tensor") out.add(s.name);
-        break;
-      case "If":
-        s.thenBody.forEach(visitStmt);
-        s.elseifBlocks.forEach(eb => eb.body.forEach(visitStmt));
-        if (s.elseBody) s.elseBody.forEach(visitStmt);
-        break;
-      case "For":
-        s.body.forEach(visitStmt);
-        break;
-      case "While":
-        s.body.forEach(visitStmt);
-        break;
-      default:
-        break;
-    }
-  };
-  body.forEach(visitStmt);
-}
-
-/** Is `expr` a fresh-tensor-producing RHS? TensorLiteral, VConcatGrow,
- *  or a call to `zeros` / `ones`. Each of these allocates a brand-new
- *  buffer; when the Assign dest is a tensor output, that output must
- *  use the dynamic-output ABI (double **out) rather than the legacy
- *  pre-allocated-buffer ABI. */
-function isFreshTensorRhs(expr: JitExpr): boolean {
-  if (expr.tag === "TensorLiteral") return true;
-  if (expr.tag === "VConcatGrow") return true;
-  if (expr.tag === "Call" && (expr.name === "zeros" || expr.name === "ones")) {
-    return expr.jitType.kind === "tensor";
-  }
-  return false;
-}
-
-/** Walk body to collect tensor names that, directly or transitively,
- *  hold a freshly-allocated (C-owned) buffer whose size is not tied to
- *  any input tensor. Seeded with names receiving a direct fresh-tensor
- *  RHS (TensorLiteral / VConcatGrow / zeros / ones); propagates through
- *  Var-alias assigns since `dst = src` makes `dst` share `src`'s buffer.
- *  These names need `_d0` / `_d1` tracked as C locals so the shape can
- *  change mid-function, and — for tensor outputs — the dynamic-output
- *  ABI (the JS wrapper's first-tensor-input-sized preallocated buffer
- *  can't fit them). */
-function findFreshTensorAssignNames(body: JitStmt[], out: Set<string>): void {
-  const visitStmt = (s: JitStmt): void => {
-    switch (s.tag) {
-      case "Assign":
-        if (s.expr.jitType.kind === "tensor" && isFreshTensorRhs(s.expr)) {
-          out.add(s.name);
-        }
-        break;
-      case "If":
-        s.thenBody.forEach(visitStmt);
-        s.elseifBlocks.forEach(eb => eb.body.forEach(visitStmt));
-        if (s.elseBody) s.elseBody.forEach(visitStmt);
-        break;
-      case "For":
-        s.body.forEach(visitStmt);
-        break;
-      case "While":
-        s.body.forEach(visitStmt);
-        break;
-      default:
-        break;
-    }
-  };
-  body.forEach(visitStmt);
-
-  // Propagate through Var-alias: `dst = src` aliases src's buffer into
-  // dst, so dst is dynamic iff src is. RangeSliceRead also produces a
-  // fresh allocation whose size is derived from runtime endpoints —
-  // its destination joins the dynamic set too. Run to fixed point so
-  // chains like `a = zeros(n); b = a; c = b` all propagate.
-  let changed = true;
-  while (changed) {
-    changed = false;
-    const propagate = (s: JitStmt): void => {
-      switch (s.tag) {
-        case "Assign":
-          if (s.expr.jitType.kind === "tensor" && !out.has(s.name)) {
-            const e = s.expr;
-            if (e.tag === "Var" && out.has(e.name)) {
-              out.add(s.name);
-              changed = true;
-            } else if (e.tag === "RangeSliceRead") {
-              out.add(s.name);
-              changed = true;
-            }
-          }
-          break;
-        case "If":
-          s.thenBody.forEach(propagate);
-          s.elseifBlocks.forEach(eb => eb.body.forEach(propagate));
-          if (s.elseBody) s.elseBody.forEach(propagate);
-          break;
-        case "For":
-          s.body.forEach(propagate);
-          break;
-        case "While":
-          s.body.forEach(propagate);
-          break;
-        default:
-          break;
-      }
-    };
-    body.forEach(propagate);
-  }
-}
-
-/** Collect tensor-param names that are written through AssignIndex /
- *  AssignIndexRange / AssignIndexCol. All three shape the same
- *  MATLAB-value-semantics problem: the write must not leak to the
- *  caller's buffer, so pure-input tensor params need an unshare-at-
- *  entry copy. */
-function findAssignIndexTargets(body: JitStmt[], out: Set<string>): void {
-  const visitStmt = (s: JitStmt): void => {
-    switch (s.tag) {
-      case "AssignIndex":
-      case "AssignIndexRange":
-      case "AssignIndexCol":
-        out.add(s.baseName);
-        break;
-      case "If":
-        s.thenBody.forEach(visitStmt);
-        s.elseifBlocks.forEach(eb => eb.body.forEach(visitStmt));
-        if (s.elseBody) s.elseBody.forEach(visitStmt);
-        break;
-      case "For":
-        s.body.forEach(visitStmt);
-        break;
-      case "While":
-        s.body.forEach(visitStmt);
-        break;
-      default:
-        break;
-    }
-  };
-  body.forEach(visitStmt);
-}
-
 export interface CParamDesc {
   name: string;
   kind: "scalar" | "tensor";
@@ -1539,139 +1398,52 @@ export function generateC(
     throw new Error("C-JIT codegen: params/argTypes length mismatch");
   }
 
-  const tensorVars = new Set<string>();
-  for (let i = 0; i < params.length; i++) {
-    if (argTypes[i].kind === "tensor") tensorVars.add(params[i]);
-  }
-  findTensorLocals(body, tensorVars);
-
   const effectiveOutputs = outputs.slice(0, nargout || 1);
+  const effectiveOutputTypes = outputTypes.slice(0, effectiveOutputs.length);
 
-  // Classify outputs.
-  const outputDescs: COutputDesc[] = effectiveOutputs.map((name, i) => ({
-    name,
-    kind:
-      outputTypes[i]?.kind === "tensor"
-        ? "tensor"
-        : outputTypes[i]?.kind === "boolean"
-          ? "boolean"
-          : "scalar",
-  }));
-
-  // Note: `dynamic` on each tensor output desc is set below once the
-  // `dynamicOutputs` set is computed from the body walk.
-
-  const outputTensorNames = new Set<string>(
-    outputDescs.filter(od => od.kind === "tensor").map(od => od.name)
-  );
-  const paramTensorNames = new Set<string>(
-    params.filter((_, i) => argTypes[i].kind === "tensor")
-  );
-  const localTensorNames = new Set<string>(
-    [...tensorVars].filter(
-      v => !paramTensorNames.has(v) && !outputTensorNames.has(v)
-    )
+  const cls = analyzeTensorUsage(
+    body,
+    params,
+    argTypes,
+    effectiveOutputs,
+    effectiveOutputTypes
   );
 
-  // Tensor params that receive an AssignIndex write but aren't also a named
-  // output. MATLAB call-by-value requires the write to land on a buffer
-  // independent of the caller's data; we emit an unshare-at-entry malloc +
-  // memcpy for these in the prelude and a matching free in the epilogue.
-  // (Param-outputs already get a seeded output buffer from the JS wrapper.)
-  const assignIndexTargets = new Set<string>();
-  findAssignIndexTargets(body, assignIndexTargets);
+  // Build per-output descs. `dynamic` mirrors the classification's
+  // `isDynamicOutput` flag so the JS wrapper and the epilogue/signature
+  // builders agree on the ABI shape.
+  const outputDescs: COutputDesc[] = effectiveOutputs.map((name, i) => {
+    const t = effectiveOutputTypes[i]?.kind;
+    const kind: COutputDesc["kind"] =
+      t === "tensor" ? "tensor" : t === "boolean" ? "boolean" : "scalar";
+    const desc: COutputDesc = { name, kind };
+    if (kind === "tensor" && cls.meta.get(name)?.isDynamicOutput) {
+      desc.dynamic = true;
+    }
+    return desc;
+  });
+
+  // Derived views used in the prelude/epilogue below.
+  const paramOutputTensors = new Set<string>();
   const unshareTensorParams = new Set<string>();
-  for (const name of assignIndexTargets) {
-    if (paramTensorNames.has(name) && !outputTensorNames.has(name)) {
-      unshareTensorParams.add(name);
-    }
-  }
-
-  // Per-tensor max indexing arity (for multi-index Index / AssignIndex).
-  // Reuses the JS hoist analyzer: any tensor Var that appears as an
-  // Index base or an AssignIndex target contributes its `indices.length`
-  // to the max for that name. Tensors that only participate in whole-
-  // tensor ops (or don't appear at all) don't get an entry, and keep
-  // the old (data, len) ABI.
-  const tensorMaxDim = new Map<string, number>();
-  {
-    const usage = collectTensorUsage(body);
-    for (const [name, u] of usage) {
-      if (!u.isReal) continue;
-      const d = Math.max(u.maxReadDim, u.maxWriteDim);
-      if (d > 0) tensorMaxDim.set(name, d);
-    }
-  }
-
-  // Fresh-tensor assignments (TensorLiteral / zeros / ones / VConcatGrow).
-  // Every name hit here participates in shape-changing reassignment: emit
-  // `v_<n>_d0` / `v_<n>_d1` as mutable locals initialized from whatever
-  // path seeded the buffer, and update them on each fresh-alloc site.
-  const freshAllocTensors = new Set<string>();
-  findFreshTensorAssignNames(body, freshAllocTensors);
-
-  // Tensor outputs that need the dynamic-output ABI. Any tensor output
-  // whose value can be reassigned to a fresh-allocated buffer (directly
-  // via TensorLiteral/zeros/ones/VConcatGrow) can't fit the "JS preallocates
-  // a fixed buf" contract — the C code allocates the buffer itself.
-  const dynamicOutputs = new Set<string>();
-  for (const name of outputTensorNames) {
-    if (freshAllocTensors.has(name)) dynamicOutputs.add(name);
-  }
-  for (const od of outputDescs) {
-    if (od.kind === "tensor" && dynamicOutputs.has(od.name)) od.dynamic = true;
+  for (const [name, m] of cls.meta) {
+    if (m.kind === "paramOutput") paramOutputTensors.add(name);
+    if (m.needsUnshare) unshareTensorParams.add(name);
   }
 
   const ctx: EmitCtx = {
-    tensorVars,
-    outputTensorNames,
+    cls,
     scratchCount: 0,
     tmp: { n: 0 },
     usedScratch: new Set(),
-    freeStmts: [],
-    localTensorNames,
     fuse: fuse ?? false,
-    paramTensorNames,
     needsTicState: false,
     needsErrorFlag: false,
     openmp: openmp ?? false,
-    tensorMaxDim,
-    freshAllocTensors,
-    dynamicOutputs,
   };
 
   const indent = "  ";
   const bodyLines: string[] = [];
-
-  // Tensor params that are also outputs. MATLAB's `function x = foo(x, ...)`
-  // call-by-value + local-mutation semantics: the callee starts with a
-  // copy of the caller's x. For fixed outputs the JS wrapper already
-  // passes a seeded buffer as `_buf`; for dynamic outputs the C code
-  // unshare-copies the caller's data itself (the seeded buffer travels
-  // through `_buf` as const input, not as output).
-  const paramOutputTensors = new Set<string>();
-  for (let i = 0; i < params.length; i++) {
-    if (
-      argTypes[i].kind === "tensor" &&
-      outputDescs.some(od => od.name === params[i] && od.kind === "tensor")
-    ) {
-      paramOutputTensors.add(params[i]);
-    }
-  }
-
-  // Tensor params reassigned via a fresh-alloc RHS (not as a param-output)
-  // need their own writable local too — treat them as unshared-at-entry
-  // so that first read before reassignment sees the caller's data but
-  // the free-on-reassign path stays correct.
-  for (const p of paramTensorNames) {
-    if (
-      freshAllocTensors.has(p) &&
-      !outputTensorNames.has(p) &&
-      !unshareTensorParams.has(p)
-    ) {
-      unshareTensorParams.add(p);
-    }
-  }
 
   emitStmts(bodyLines, body, indent, ctx);
 
@@ -1682,16 +1454,17 @@ export function generateC(
   // behavior). For fresh-alloc tensors they start from the same source
   // but get overwritten on each TensorLiteral / zeros / ones / VConcatGrow.
   const needsShapeLocals = (name: string): boolean => {
-    if (freshAllocTensors.has(name)) return true;
-    const d = tensorMaxDim.get(name) ?? 0;
-    return d >= 2;
+    const m = cls.meta.get(name);
+    if (!m) return false;
+    if (m.hasFreshAlloc) return true;
+    return m.maxIndexDim >= 2;
   };
 
   // Build the epilogue: write outputs to out-pointers, free scratch buffers.
   const epilogueLines: string[] = [];
   for (const od of outputDescs) {
     if (od.kind === "tensor") {
-      if (dynamicOutputs.has(od.name)) {
+      if (od.dynamic) {
         // Dynamic output: transfer ownership of the C-malloc'd buffer
         // to the caller (`*_buf_out`) and report the runtime shape.
         // The JS wrapper reads data/d0/d1 and frees the pointer after
@@ -1733,8 +1506,8 @@ export function generateC(
 
   // Free local tensor buffers (C-owned). Dynamic outputs have already
   // transferred ownership above, so exclude them.
-  for (const name of ctx.localTensorNames) {
-    if (dynamicOutputs.has(name)) continue;
+  for (const name of cls.localTensorNames) {
+    if (cls.meta.get(name)?.isDynamicOutput) continue;
     epilogueLines.push(
       `${indent}if (${tensorData(name)}) free(${tensorData(name)});`
     );
@@ -1744,7 +1517,7 @@ export function generateC(
   // If the unshared param is also a dynamic output, ownership was already
   // transferred — skip the free here to avoid a double free.
   for (const p of unshareTensorParams) {
-    if (dynamicOutputs.has(p)) continue;
+    if (cls.meta.get(p)?.isDynamicOutput) continue;
     epilogueLines.push(
       `${indent}if (${tensorData(p)}) free(${tensorData(p)});`
     );
@@ -1759,7 +1532,7 @@ export function generateC(
   // unshared) and the bare name otherwise.
   const emitParamShapeLocals = (p: string, useInSuffix: boolean): void => {
     const suf = useInSuffix ? "_in" : "";
-    const d = tensorMaxDim.get(p) ?? 0;
+    const d = cls.meta.get(p)?.maxIndexDim ?? 0;
     if (needsShapeLocals(p)) {
       // Track mutable d0/d1 locals. Seed from the ABI where available;
       // for 1-D-only tensor params we default to (len, 1) so first reads
@@ -1799,7 +1572,7 @@ export function generateC(
   // dims (`_d0`, `_d1`) are also shadowed so multi-index writes on a
   // param-output use the same local names the body expects.
   for (const p of paramOutputTensors) {
-    if (dynamicOutputs.has(p)) {
+    if (cls.meta.get(p)?.isDynamicOutput) {
       // Dynamic param-output: the seeded buffer is passed as const input
       // via `_in`; we unshare-copy it into a C-owned buffer so
       // reassignment / free-on-realloc is safe, and the epilogue
@@ -1855,13 +1628,14 @@ export function generateC(
   // are handled by the param-output / unshare branches above.
 
   for (const local of allLocals) {
-    if (tensorVars.has(local)) {
+    if (cls.tensorVars.has(local)) {
       // Tensor locals: data pointer + length. For fixed output tensors,
       // the data pointer starts as the pre-allocated output buffer (passed
       // as param). Dynamic outputs and pure locals start as NULL — the
       // C code allocates on first fresh-assign.
-      const isOutput = outputTensorNames.has(local);
-      if (isOutput && !dynamicOutputs.has(local)) {
+      const localMeta = cls.meta.get(local);
+      const isOutput = cls.outputTensorNames.has(local);
+      if (isOutput && !localMeta?.isDynamicOutput) {
         preludeLines.push(
           `${indent}double *${tensorData(local)} = ${mangle(local)}_buf;`
         );
@@ -1907,7 +1681,7 @@ export function generateC(
       sigParts.push(`int64_t ${tensorLen(p)}${suffix}`);
       koffiParts.push("double *");
       koffiParts.push("int64_t");
-      const d = tensorMaxDim.get(p) ?? 0;
+      const d = cls.meta.get(p)?.maxIndexDim ?? 0;
       if (d >= 2) {
         sigParts.push(`int64_t ${tensorD0(p)}${suffix}`);
         koffiParts.push("int64_t");
@@ -1924,7 +1698,7 @@ export function generateC(
 
   for (const od of outputDescs) {
     if (od.kind === "tensor") {
-      if (dynamicOutputs.has(od.name)) {
+      if (od.dynamic) {
         // Dynamic output: C allocates the buffer, transfers ownership
         // via `*_buf_out`. The JS wrapper decodes the pointer + d0/d1,
         // copies data into a fresh Float64Array, then frees the C ptr.
@@ -1967,7 +1741,7 @@ export function generateC(
   const koffiSignature = `void ${cFnName}(${koffiParts.join(", ")})`;
 
   // Assemble the full C source.
-  const usesTensors = tensorVars.size > 0;
+  const usesTensors = cls.tensorVars.size > 0;
 
   const parts: string[] = [];
   parts.push(`/* JIT C (koffi): ${fnName}(${params.join(", ")}) */`);
@@ -2007,7 +1781,7 @@ export function generateC(
       kind: argTypes[i].kind === "tensor" ? "tensor" : "scalar",
     };
     if (desc.kind === "tensor") {
-      const d = tensorMaxDim.get(p) ?? 0;
+      const d = cls.meta.get(p)?.maxIndexDim ?? 0;
       if (d >= 2) desc.ndim = d;
     }
     return desc;
