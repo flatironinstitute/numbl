@@ -193,6 +193,11 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
       "-fopenmp-simd",
       "-fno-math-errno",
       "-ffast-math",
+      // -ffast-math implies -ffinite-math-only, which lets the compiler
+      // assume no NaN / Inf and constant-folds isnan/isinf/isfinite away.
+      // MATLAB semantics require these checks to work correctly, so
+      // re-enable them while keeping the rest of -ffast-math's speedups.
+      "-fno-finite-math-only",
     ]) {
       if (compilerAcceptsFlag(cc, flag)) flags.push(flag);
     }
