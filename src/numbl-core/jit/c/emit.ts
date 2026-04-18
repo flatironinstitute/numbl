@@ -129,12 +129,69 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
   }
 }
 
-/** Scalar-return UserCall. Arg types are already validated by feasibility
- *  (scalars only); the callee is emitted as `static void jit_<jitName>(...)`
- *  in the same .c file by `generateC`, with a trailing `__err_flag`
- *  pointer. We stash the return value in a fresh local and return its
- *  name as the expression text. Must be invoked from statement context
- *  so the decl + call can be inserted before the surrounding expression. */
+/** Emit the C expressions for one arg's ABI slots, consulting the
+ *  callee's paramDesc so the slot order matches the callee's signature.
+ *  Scalars contribute one slot; tensors contribute data + len + optional
+ *  d0 / d1. For the shape slots the caller falls back to
+ *  `(int64_t)tensorLen(arg)` / `1` when its own arg-var wasn't classified
+ *  with matching shape plumbing. */
+function emitUserCallArgSlots(
+  a: JitExpr,
+  paramDesc: { kind: "scalar" | "tensor"; slots: { kind: string }[] },
+  ctx: EmitCtx
+): string[] {
+  if (paramDesc.kind === "scalar") {
+    return [emitExpr(a, ctx)];
+  }
+  if (a.tag !== "Var") {
+    throw new Error(
+      `C-JIT codegen: UserCall tensor arg must be a Var (got ${a.tag})`
+    );
+  }
+  const argName = a.name;
+  if (!isTensorVar(ctx, argName)) {
+    throw new Error(
+      `C-JIT codegen: UserCall tensor arg '${argName}' is not a tensor var`
+    );
+  }
+  const hasShape =
+    hasFreshAlloc(ctx, argName) || tensorMaxDim(ctx, argName) >= 2;
+  const slotCodes: string[] = [];
+  for (const s of paramDesc.slots) {
+    switch (s.kind) {
+      case "tensorData":
+        slotCodes.push(tensorData(argName));
+        break;
+      case "tensorLen":
+        slotCodes.push(tensorLen(argName));
+        break;
+      case "tensorD0":
+        slotCodes.push(
+          hasShape ? tensorD0(argName) : `(int64_t)${tensorLen(argName)}`
+        );
+        break;
+      case "tensorD1":
+        slotCodes.push(hasShape ? tensorD1(argName) : "1");
+        break;
+      default:
+        throw new Error(
+          `C-JIT codegen: unexpected callee param slot kind '${s.kind}'`
+        );
+    }
+  }
+  return slotCodes;
+}
+
+/** Scalar-return UserCall. Tensor args are marshaled via the callee's
+ *  paramDescs (data + len + optional d0/d1 slots). The callee is emitted
+ *  as `static void jit_<jitName>(...)` in the same .c file by
+ *  `generateC`, with a trailing `__err_flag` pointer. We stash the
+ *  return value in a fresh local and return its name as the expression
+ *  text. Must be invoked from statement context so the decl + call can
+ *  be inserted before the surrounding expression.
+ *
+ *  Tensor-return UserCall is handled upstream by emitTensorAssign (only
+ *  allowed as an Assign RHS), not here. */
 function emitUserCall(
   expr: JitExpr & { tag: "UserCall" },
   ctx: EmitCtx
@@ -142,7 +199,31 @@ function emitUserCall(
   if (!ctx.pendingStmts) {
     throw new Error(`C-JIT codegen: UserCall outside statement context`);
   }
-  const argCodes = expr.args.map(a => emitExpr(a, ctx));
+  if (expr.jitType.kind === "tensor") {
+    throw new Error(
+      `C-JIT codegen: tensor-return UserCall '${expr.name}' must appear as the top RHS of an Assign`
+    );
+  }
+  const calleeAbi = ctx.calleeAbi?.get(expr.jitName);
+  if (!calleeAbi) {
+    throw new Error(
+      `C-JIT codegen: UserCall '${expr.name}' missing callee ABI for ${expr.jitName}`
+    );
+  }
+  if (calleeAbi.paramDescs.length !== expr.args.length) {
+    throw new Error(
+      `C-JIT codegen: UserCall '${expr.name}' arg count (${expr.args.length}) differs from callee paramDescs (${calleeAbi.paramDescs.length})`
+    );
+  }
+  const argCodes: string[] = [];
+  for (let i = 0; i < expr.args.length; i++) {
+    const slots = emitUserCallArgSlots(
+      expr.args[i],
+      calleeAbi.paramDescs[i],
+      ctx
+    );
+    argCodes.push(...slots);
+  }
   const n = ++ctx.tmp.n;
   const tmpVar = `__uc${n}_out`;
   ctx.needsErrorFlag = true;

@@ -42,6 +42,7 @@ import {
   type COutputDesc,
 } from "./abi.js";
 import { emitStmts } from "./emit.js";
+import type { CalleeAbi } from "./codegenCtx.js";
 
 export type { AbiSlot, AbiSlotKind } from "./abi.js";
 export type { CParamDesc, COutputDesc } from "./abi.js";
@@ -121,6 +122,7 @@ export function generateC(
 
   // ── Emit each callee as a static function ──────────────────────────
   const calleeDefs: string[] = [];
+  const calleeAbi = new Map<string, CalleeAbi>();
   let anyCalleeUsesTensors = false;
   for (const jitName of reachable) {
     const callee = generatedIRBodies!.get(jitName);
@@ -140,7 +142,8 @@ export function generateC(
       `jit_${jitName}`,
       fuse,
       openmp,
-      { isStatic: true, forceNeedsErrorFlag: true }
+      { isStatic: true, forceNeedsErrorFlag: true },
+      calleeAbi
     );
     // The static callee must not need __tic_state; the outer's tic
     // state is not plumbed through to callees (not worth the ABI
@@ -151,6 +154,10 @@ export function generateC(
       );
     }
     calleeDefs.push(r.definition);
+    calleeAbi.set(jitName, {
+      paramDescs: r.paramDescs,
+      outputDescs: r.outputDescs,
+    });
     if (r.usesTensors) anyCalleeUsesTensors = true;
   }
 
@@ -166,7 +173,8 @@ export function generateC(
     `jit_${fnName}`,
     fuse,
     openmp,
-    { isStatic: false }
+    { isStatic: false },
+    calleeAbi
   );
 
   // ── Assemble the full C source ─────────────────────────────────────
@@ -209,6 +217,109 @@ export function generateC(
     needsTicState: outer.needsTicState,
     needsErrorFlag: outer.needsErrorFlag,
   };
+}
+
+/** Walk `body` looking for UserCall sites; for each tensor Var arg,
+ *  bump the caller's classification `maxIndexDim` to at least the
+ *  callee's param `ndim`. Ensures the outer's ABI always carries
+ *  correct shape dims (d0/d1) when a downstream callee reads the
+ *  tensor as a matrix — even when the outer itself only passes the
+ *  tensor through. */
+function propagateUserCallShapeNeeds(
+  body: JitStmt[],
+  cls: ReturnType<typeof analyzeTensorUsage>,
+  calleeAbi: Map<string, CalleeAbi>
+): void {
+  const visitExpr = (e: JitExpr): void => {
+    if (e.tag === "UserCall") {
+      const abi = calleeAbi.get(e.jitName);
+      if (abi) {
+        for (let i = 0; i < e.args.length && i < abi.paramDescs.length; i++) {
+          const a = e.args[i];
+          const pd = abi.paramDescs[i];
+          if (a.tag !== "Var" || pd.kind !== "tensor") continue;
+          const need = pd.ndim ?? 0;
+          if (need <= 0) continue;
+          const m = cls.meta.get(a.name);
+          if (m && need > m.maxIndexDim) m.maxIndexDim = need;
+        }
+      }
+      for (const a of e.args) visitExpr(a);
+      return;
+    }
+    switch (e.tag) {
+      case "Binary":
+        visitExpr(e.left);
+        visitExpr(e.right);
+        return;
+      case "Unary":
+        visitExpr(e.operand);
+        return;
+      case "Call":
+        for (const a of e.args) visitExpr(a);
+        return;
+      case "Index":
+        visitExpr(e.base);
+        for (const i of e.indices) visitExpr(i);
+        return;
+      case "RangeSliceRead":
+        visitExpr(e.start);
+        if (e.end) visitExpr(e.end);
+        return;
+      case "TensorLiteral":
+        for (const row of e.rows) for (const cell of row) visitExpr(cell);
+        return;
+      case "VConcatGrow":
+        visitExpr(e.base);
+        visitExpr(e.value);
+        return;
+      default:
+        return;
+    }
+  };
+  const visitStmt = (s: JitStmt): void => {
+    switch (s.tag) {
+      case "Assign":
+      case "ExprStmt":
+        visitExpr(s.expr);
+        return;
+      case "AssignIndex":
+        visitExpr(s.value);
+        for (const i of s.indices) visitExpr(i);
+        return;
+      case "AssignIndexRange":
+        visitExpr(s.dstStart);
+        visitExpr(s.dstEnd);
+        if (s.srcStart) visitExpr(s.srcStart);
+        if (s.srcEnd) visitExpr(s.srcEnd);
+        return;
+      case "AssignIndexCol":
+        visitExpr(s.colIndex);
+        return;
+      case "If":
+        visitExpr(s.cond);
+        s.thenBody.forEach(visitStmt);
+        s.elseifBlocks.forEach(eb => {
+          visitExpr(eb.cond);
+          eb.body.forEach(visitStmt);
+        });
+        if (s.elseBody) s.elseBody.forEach(visitStmt);
+        return;
+      case "For":
+        visitExpr(s.start);
+        visitExpr(s.end);
+        if (s.step) visitExpr(s.step);
+        s.body.forEach(visitStmt);
+        return;
+      case "While":
+        visitExpr(s.cond);
+        s.body.forEach(visitStmt);
+        return;
+      default:
+        return;
+    }
+  };
+  body.forEach(visitStmt);
 }
 
 /** Walk `body` and collect every UserCall's jitName in post-order
@@ -321,7 +432,8 @@ function emitOneFunction(
   cFnName: string,
   fuse: boolean | undefined,
   openmp: boolean | undefined,
-  opts: { isStatic: boolean; forceNeedsErrorFlag?: boolean }
+  opts: { isStatic: boolean; forceNeedsErrorFlag?: boolean },
+  calleeAbi?: Map<string, CalleeAbi>
 ): EmitOneFnResult {
   const effectiveOutputs = outputs.slice(0, nargout || 1);
   const effectiveOutputTypes = outputTypes.slice(0, effectiveOutputs.length);
@@ -333,6 +445,19 @@ function emitOneFunction(
     effectiveOutputs,
     effectiveOutputTypes
   );
+
+  // Tensor args passed to a UserCall must reach the callee with the
+  // right shape plumbing. If the callee's param uses 2D/3D indexing
+  // (`ndim >= 2` on its paramDesc) but the caller's arg-var was
+  // classified with `maxIndexDim < 2`, the caller would have no
+  // `_d0`/`_d1` locals — and the fallback `len`/`1` would be wrong for
+  // a 2D tensor that the caller just passes through. Bump the caller's
+  // maxIndexDim to match the max demand across every UserCall site, so
+  // the outer's ABI carries the real shape dims and the marshaller
+  // fills them from the RuntimeTensor.
+  if (calleeAbi) {
+    propagateUserCallShapeNeeds(body, cls, calleeAbi);
+  }
 
   const paramOutputTensors = new Set<string>();
   const unshareTensorParams = new Set<string>();
@@ -372,6 +497,7 @@ function emitOneFunction(
     needsTicState: false,
     needsErrorFlag: false,
     openmp: openmp ?? false,
+    calleeAbi,
   };
 
   const indent = "  ";

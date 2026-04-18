@@ -10,6 +10,16 @@
 import { BinaryOperation } from "../../parser/types.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 import type { ClassificationResult } from "./classify.js";
+import type { CParamDesc, COutputDesc } from "./abi.js";
+
+/** Per-callee ABI info the outer emitter uses to marshal its call sites.
+ *  `emitUserCall` reads `paramDescs` to know what slots each param
+ *  contributes (data + len + optional d0/d1 for tensors) and
+ *  `outputDescs` to know whether the return uses the dynamic-output ABI. */
+export interface CalleeAbi {
+  paramDescs: CParamDesc[];
+  outputDescs: COutputDesc[];
+}
 
 const MANGLE_PREFIX = "v_";
 
@@ -182,6 +192,12 @@ export interface EmitCtx {
   needsErrorFlag: boolean;
   /** Emit `#pragma omp parallel for` on fused non-reduction loops. */
   openmp: boolean;
+  /** ABI of every reachable UserCall callee (keyed by `jitName`). Populated
+   *  by `generateC` as each callee is emitted, then handed to the outer
+   *  emitter so `emitUserCall` can walk the callee's paramDescs to marshal
+   *  tensor args (and decide scalar-vs-tensor return shape) at the call
+   *  site. Absent during tests that only emit a single function. */
+  calleeAbi?: Map<string, CalleeAbi>;
 }
 
 // ── Classification-lookup shortcuts ───────────────────────────────────
