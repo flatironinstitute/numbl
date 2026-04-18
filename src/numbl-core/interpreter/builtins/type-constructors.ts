@@ -193,10 +193,25 @@ for (const { name, min, max } of INT_RANGES) {
 
 // ── idivide ─────────────────────────────────────────────────────────────
 //
-// Integer division with fix-toward-zero rounding (MATLAB's default
-// 'fix' option).  Only the default rounding mode is supported; other
-// modes ('floor', 'ceil', 'round') fall back to 'fix' which matches
-// MATLAB when both inputs are integer types.
+// Integer division with a selectable rounding mode.  The optional third
+// argument is a string: 'fix' (default, truncate toward zero), 'floor'
+// (toward -Inf), 'ceil' (toward +Inf), or 'round' (to nearest, ties
+// away from zero).  MATLAB semantics: fix/floor/ceil/round act on the
+// true quotient before the result lands in an integer class.
+
+type IdivMode = "fix" | "floor" | "ceil" | "round";
+
+function idivideMode(args: RuntimeValue[]): IdivMode {
+  if (args.length < 3) return "fix";
+  const m = args[2];
+  if (!isRuntimeChar(m))
+    throw new RuntimeError("idivide: OPT argument must be a string");
+  const s = m.value;
+  if (s === "fix" || s === "floor" || s === "ceil" || s === "round") return s;
+  throw new RuntimeError(
+    "idivide: OPT must be 'fix', 'floor', 'ceil', or 'round'"
+  );
+}
 
 defineBuiltin({
   name: "idivide",
@@ -207,31 +222,45 @@ defineBuiltin({
         return [{ kind: "unknown" }];
       },
       apply: args => {
-        const divFix = (a: number, b: number): number => {
-          if (b === 0) {
-            // MATLAB returns 0 for integer divide-by-zero and warns.
-            return 0;
+        const mode = idivideMode(args);
+        const divFn = ((): ((a: number, b: number) => number) => {
+          switch (mode) {
+            case "fix":
+              return (a, b) => {
+                if (b === 0) return 0;
+                const q = a / b;
+                return q >= 0 ? Math.floor(q) : -Math.floor(-q);
+              };
+            case "floor":
+              return (a, b) => (b === 0 ? 0 : Math.floor(a / b));
+            case "ceil":
+              return (a, b) => (b === 0 ? 0 : Math.ceil(a / b));
+            case "round":
+              return (a, b) => {
+                if (b === 0) return 0;
+                // MATLAB round: ties away from zero.
+                const q = a / b;
+                return q >= 0 ? Math.floor(q + 0.5) : -Math.floor(-q + 0.5);
+              };
           }
-          const q = a / b;
-          return q >= 0 ? Math.floor(q) : -Math.floor(-q);
-        };
+        })();
         const a = args[0];
         const b = args[1];
         if (isRuntimeNumber(a) && isRuntimeNumber(b)) {
-          return RTV.num(divFix(a as number, b as number));
+          return RTV.num(divFn(a as number, b as number));
         }
         if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
           const bv = b as number;
           const data = new FloatXArray(a.data.length);
           for (let i = 0; i < a.data.length; i++)
-            data[i] = divFix(a.data[i], bv);
+            data[i] = divFn(a.data[i], bv);
           return RTV.tensor(data, [...a.shape]);
         }
         if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
           const av = a as number;
           const data = new FloatXArray(b.data.length);
           for (let i = 0; i < b.data.length; i++)
-            data[i] = divFix(av, b.data[i]);
+            data[i] = divFn(av, b.data[i]);
           return RTV.tensor(data, [...b.shape]);
         }
         if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
@@ -239,7 +268,7 @@ defineBuiltin({
             throw new RuntimeError("idivide: arrays must be the same size");
           const data = new FloatXArray(a.data.length);
           for (let i = 0; i < a.data.length; i++)
-            data[i] = divFix(a.data[i], b.data[i]);
+            data[i] = divFn(a.data[i], b.data[i]);
           return RTV.tensor(data, [...a.shape]);
         }
         throw new RuntimeError("idivide: arguments must be numeric");
