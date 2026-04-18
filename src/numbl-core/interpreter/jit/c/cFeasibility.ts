@@ -21,7 +21,19 @@
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 
-export type FeasibilityResult = { ok: true } | { ok: false; reason: string };
+export type FeasibilityResult =
+  | { ok: true }
+  | { ok: false; reason: string; line?: number };
+
+/** Mutable traversal state so failure reasons can carry the nearest line. */
+interface Ctx {
+  /** Updated from `SetLoc` markers during statement traversal. */
+  line: number;
+}
+
+function fail(ctx: Ctx, reason: string): FeasibilityResult {
+  return { ok: false, reason, line: ctx.line || undefined };
+}
 
 /**
  * Scalar math builtins that map 1:1 to `<math.h>` functions in the C emitter.
@@ -131,14 +143,14 @@ function checkValueType(t: JitType): FeasibilityResult {
   return { ok: false, reason: `unsupported type: ${t.kind}` };
 }
 
-function checkExpr(expr: JitExpr): FeasibilityResult {
+function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
   // Index reads still bail (Phase 2 scope intentionally excludes them).
   if (expr.tag === "Index") {
-    return { ok: false, reason: "Index reads not supported (defer to JS-JIT)" };
+    return fail(ctx, "Index reads not supported (defer to JS-JIT)");
   }
 
   const typeCheck = checkValueType(expr.jitType);
-  if (!typeCheck.ok) return typeCheck;
+  if (!typeCheck.ok) return fail(ctx, typeCheck.reason);
 
   switch (expr.tag) {
     case "NumberLiteral":
@@ -165,7 +177,7 @@ function checkExpr(expr: JitExpr): FeasibilityResult {
         case BinaryOperation.OrOr:
           break;
         default:
-          return { ok: false, reason: `unsupported binary op ${expr.op}` };
+          return fail(ctx, `unsupported binary op ${expr.op}`);
       }
       // Tensor-result Pow: JS-JIT routes through tensorBinaryOp slow path
       // (tPow), no fast helper. Keep parity by bailing.
@@ -176,14 +188,14 @@ function checkExpr(expr: JitExpr): FeasibilityResult {
           expr.op === BinaryOperation.AndAnd ||
           expr.op === BinaryOperation.OrOr)
       ) {
-        return {
-          ok: false,
-          reason: `tensor-result binary op ${expr.op} has no C-JIT fast path`,
-        };
+        return fail(
+          ctx,
+          `tensor-result binary op ${expr.op} has no C-JIT fast path`
+        );
       }
-      const l = checkExpr(expr.left);
+      const l = checkExpr(expr.left, ctx);
       if (!l.ok) return l;
-      const r = checkExpr(expr.right);
+      const r = checkExpr(expr.right, ctx);
       if (!r.ok) return r;
       return { ok: true };
     }
@@ -195,17 +207,17 @@ function checkExpr(expr: JitExpr): FeasibilityResult {
         case UnaryOperation.Not:
           break;
         default:
-          return { ok: false, reason: `unsupported unary op ${expr.op}` };
+          return fail(ctx, `unsupported unary op ${expr.op}`);
       }
       // Tensor-result Not is unsupported (no `tNot` helper in JS-JIT either).
       if (expr.jitType.kind === "tensor" && expr.op === UnaryOperation.Not) {
-        return { ok: false, reason: "tensor-result Not not supported" };
+        return fail(ctx, "tensor-result Not not supported");
       }
-      return checkExpr(expr.operand);
+      return checkExpr(expr.operand, ctx);
     }
 
     case "Call":
-      return checkCall(expr);
+      return checkCall(expr, ctx);
 
     // Everything else is out of scope — bail to JS-JIT.
     case "ImagLiteral":
@@ -218,15 +230,18 @@ function checkExpr(expr: JitExpr): FeasibilityResult {
     case "UserCall":
     case "FuncHandleCall":
     case "UserDispatchCall":
-      return { ok: false, reason: `unsupported expr: ${expr.tag}` };
+      return fail(ctx, `unsupported expr: ${expr.tag}`);
   }
 }
 
-function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
+function checkCall(
+  expr: JitExpr & { tag: "Call" },
+  ctx: Ctx
+): FeasibilityResult {
   // Scalar math builtin (Phase 1 path) — must produce a scalar result.
   if (expr.jitType.kind !== "tensor" && C_SCALAR_MATH_BUILTINS.has(expr.name)) {
     for (const a of expr.args) {
-      const r = checkExpr(a);
+      const r = checkExpr(a, ctx);
       if (!r.ok) return r;
     }
     return { ok: true };
@@ -235,9 +250,9 @@ function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
   // the libnumbl_ops mapping.
   if (expr.jitType.kind === "tensor" && expr.name in C_TENSOR_UNARY_OPS) {
     if (expr.args.length !== 1) {
-      return { ok: false, reason: `${expr.name}: expected 1 tensor arg` };
+      return fail(ctx, `${expr.name}: expected 1 tensor arg`);
     }
-    return checkExpr(expr.args[0]);
+    return checkExpr(expr.args[0], ctx);
   }
   // Tensor binary builtin (max, min, atan2, hypot, mod, rem):
   // result is tensor, two args (tensor/scalar).
@@ -246,10 +261,10 @@ function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
     C_TENSOR_BINARY_BUILTINS.has(expr.name)
   ) {
     if (expr.args.length !== 2) {
-      return { ok: false, reason: `${expr.name}: expected 2 args` };
+      return fail(ctx, `${expr.name}: expected 2 args`);
     }
     for (const a of expr.args) {
-      const r = checkExpr(a);
+      const r = checkExpr(a, ctx);
       if (!r.ok) return r;
     }
     return { ok: true };
@@ -257,19 +272,13 @@ function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
   // Reduction (tensor → scalar): name in mapping, single tensor arg.
   if (expr.jitType.kind !== "tensor" && expr.name in C_TENSOR_REDUCTION_OPS) {
     if (expr.args.length !== 1) {
-      return {
-        ok: false,
-        reason: `${expr.name}: only single-arg reduction supported`,
-      };
+      return fail(ctx, `${expr.name}: only single-arg reduction supported`);
     }
     const a = expr.args[0];
     if (a.jitType.kind !== "tensor") {
-      return {
-        ok: false,
-        reason: `${expr.name}: only tensor-arg reduction supported`,
-      };
+      return fail(ctx, `${expr.name}: only tensor-arg reduction supported`);
     }
-    return checkExpr(a);
+    return checkExpr(a, ctx);
   }
   // tic/toc: scalar timer builtins, no args.
   if (
@@ -279,62 +288,65 @@ function checkCall(expr: JitExpr & { tag: "Call" }): FeasibilityResult {
   ) {
     return { ok: true };
   }
-  return { ok: false, reason: `non-C-mappable builtin: ${expr.name}` };
+  return fail(ctx, `non-C-mappable builtin: ${expr.name}`);
 }
 
-function checkStmts(stmts: JitStmt[]): FeasibilityResult {
+function checkStmts(stmts: JitStmt[], ctx: Ctx): FeasibilityResult {
   for (const s of stmts) {
-    const r = checkStmt(s);
+    const r = checkStmt(s, ctx);
     if (!r.ok) return r;
   }
   return { ok: true };
 }
 
-function checkStmt(stmt: JitStmt): FeasibilityResult {
+function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
   switch (stmt.tag) {
     case "Assign":
-      return checkExpr(stmt.expr);
+      return checkExpr(stmt.expr, ctx);
 
     case "ExprStmt":
-      return checkExpr(stmt.expr);
+      return checkExpr(stmt.expr, ctx);
 
     case "If": {
-      const c = checkExpr(stmt.cond);
+      const c = checkExpr(stmt.cond, ctx);
       if (!c.ok) return c;
-      const t = checkStmts(stmt.thenBody);
+      const t = checkStmts(stmt.thenBody, ctx);
       if (!t.ok) return t;
       for (const eib of stmt.elseifBlocks) {
-        const ec = checkExpr(eib.cond);
+        const ec = checkExpr(eib.cond, ctx);
         if (!ec.ok) return ec;
-        const eb = checkStmts(eib.body);
+        const eb = checkStmts(eib.body, ctx);
         if (!eb.ok) return eb;
       }
-      if (stmt.elseBody) return checkStmts(stmt.elseBody);
+      if (stmt.elseBody) return checkStmts(stmt.elseBody, ctx);
       return { ok: true };
     }
 
     case "For": {
-      const s = checkExpr(stmt.start);
+      const s = checkExpr(stmt.start, ctx);
       if (!s.ok) return s;
-      const e = checkExpr(stmt.end);
+      const e = checkExpr(stmt.end, ctx);
       if (!e.ok) return e;
       if (stmt.step) {
-        const stepR = checkExpr(stmt.step);
+        const stepR = checkExpr(stmt.step, ctx);
         if (!stepR.ok) return stepR;
       }
-      return checkStmts(stmt.body);
+      return checkStmts(stmt.body, ctx);
     }
 
     case "While": {
-      const c = checkExpr(stmt.cond);
+      const c = checkExpr(stmt.cond, ctx);
       if (!c.ok) return c;
-      return checkStmts(stmt.body);
+      return checkStmts(stmt.body, ctx);
     }
 
     case "Break":
     case "Continue":
     case "Return":
+      return { ok: true };
+
     case "SetLoc":
+      ctx.line = stmt.line;
       return { ok: true };
 
     // Out of scope: tensor/struct writes, multi-assign, member writes.
@@ -343,12 +355,9 @@ function checkStmt(stmt: JitStmt): FeasibilityResult {
     case "AssignIndexCol":
     case "AssignMember":
     case "MultiAssign":
-      return { ok: false, reason: `unsupported stmt: ${stmt.tag}` };
+      return fail(ctx, `unsupported stmt: ${stmt.tag}`);
     default:
-      return {
-        ok: false,
-        reason: `unknown stmt: ${(stmt as { tag: string }).tag}`,
-      };
+      return fail(ctx, `unknown stmt: ${(stmt as { tag: string }).tag}`);
   }
 }
 
@@ -392,5 +401,6 @@ export function checkCFeasibility(
       reason: `nargout ${nargout} exceeds available outputs (${outputTypes.length})`,
     };
   }
-  return checkStmts(body);
+  const ctx: Ctx = { line: 0 };
+  return checkStmts(body, ctx);
 }

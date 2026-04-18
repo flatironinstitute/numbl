@@ -70,6 +70,12 @@ export interface ExecOptions {
   /** Parallelize fused loops with OpenMP threads (--par flag). */
   par?: boolean;
   /**
+   * Diagnostic mode (`--check-c-jit-parity`, only meaningful with `--opt 2`):
+   * throw on any C-JIT miss where JS-JIT would have compiled. Lets us
+   * enumerate parity gaps as hard errors rather than silent fallbacks.
+   */
+  checkCJitParity?: boolean;
+  /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
    * - a string → use this absolute path as the implicit cwd (REPL persistence).
@@ -357,6 +363,7 @@ export function executeCode(
   interpreter.optimization = options.optimization ?? 1;
   interpreter.fuse = options.fuse ?? false;
   interpreter.par = options.par ?? false;
+  interpreter.checkCJitParity = options.checkCJitParity ?? false;
   interpreter.log = options.log;
 
   // Collect JIT compilations for generatedJS output and profiling

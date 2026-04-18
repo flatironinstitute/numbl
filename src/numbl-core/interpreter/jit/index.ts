@@ -16,6 +16,7 @@ import { generateJS } from "./jitCodegen.js";
 import { jitHelpers, JitBailToInterpreter } from "./jitHelpers.js";
 import { inferJitType } from "../builtins/types.js";
 import { getCJitBackend } from "./cJitBackend.js";
+import { CJitParityError, formatCJitParityMessage } from "./cJitParityError.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
@@ -111,12 +112,18 @@ export function tryJitCall(
   // entry point (src/numbl-core/interpreter/jit/cJitInstall.ts). The
   // browser bundle never reaches the install module, so its Node-only
   // transitive deps (child_process, fs, ...) stay out of the web build.
-  // On any bail the backend returns null and we fall through to JS-JIT.
+  // On any bail we fall through to the JS-JIT path, unless
+  // `--check-c-jit-parity` is on (see below).
+  let cJitBail: {
+    kind: "infeasible" | "env";
+    reason: string;
+    line?: number;
+  } | null = null;
   if (interp.optimization >= 2) {
     const backend = getCJitBackend();
     if (backend) {
       if (!fnWithCache._cJitCache) fnWithCache._cJitCache = new Map();
-      const compiledFn = backend.tryCompile(
+      const res = backend.tryCompile(
         interp,
         fn,
         lowered.body,
@@ -127,11 +134,12 @@ export function tryJitCall(
         argTypes,
         nargout
       );
-      if (compiledFn) {
-        fnWithCache._cJitCache.set(cacheKey, { fn: compiledFn });
-        return runWithCallFrame(interp, fn.name, compiledFn, args);
+      if (res.ok) {
+        fnWithCache._cJitCache.set(cacheKey, { fn: res.fn });
+        return runWithCallFrame(interp, fn.name, res.fn, args);
       }
       fnWithCache._cJitCache.set(cacheKey, null);
+      cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
     }
     // Fall through to JS-JIT path.
   }
@@ -168,6 +176,26 @@ export function tryJitCall(
   } catch {
     fnWithCache._jitCache.set(cacheKey, null);
     return JIT_SKIP;
+  }
+
+  // ── Parity check (--check-c-jit-parity) ───────────────────────────────
+  // We reach here only if C-JIT was attempted and declined. JS-JIT just
+  // compiled successfully, so this is the parity gap the flag is meant to
+  // surface — throw instead of silently downgrading.
+  if (interp.checkCJitParity && cJitBail) {
+    throw new CJitParityError(
+      formatCJitParityMessage({
+        kind: cJitBail.kind,
+        reason: cJitBail.reason,
+        reasonLine: cJitBail.line,
+        siteLabel: `fn ${fn.name}`,
+        file: interp.currentFile,
+        callSiteLine: interp.rt.$line ?? 0,
+        argsDesc: argTypes.map(jitTypeKey).join(", "),
+      }),
+      cJitBail.reason,
+      cJitBail.kind
+    );
   }
 
   // Cache and log

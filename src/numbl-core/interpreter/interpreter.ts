@@ -111,6 +111,16 @@ export class Interpreter {
   /** Parallelize fused loops with OpenMP threads (--par flag). */
   par: boolean = false;
 
+  /**
+   * Diagnostic mode (`--check-c-jit-parity`, only meaningful with `--opt 2`).
+   * When set, any C-JIT miss where JS-JIT would have compiled throws a
+   * `CJitParityError` instead of silently falling back — surfacing parity
+   * gaps as a punch list of features to implement in the C-JIT. Env
+   * failures (missing `cc`, compile failure) also throw, since the user
+   * explicitly asked to audit C-JIT coverage.
+   */
+  checkCJitParity: boolean = false;
+
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 

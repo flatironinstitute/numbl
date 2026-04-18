@@ -41,7 +41,14 @@ registerCJitBackend({
       outputTypes,
       nargout
     );
-    if (!feas.ok) return null;
+    if (!feas.ok) {
+      return {
+        ok: false,
+        kind: "infeasible",
+        reason: feas.reason,
+        line: feas.line,
+      };
+    }
 
     let gen;
     try {
@@ -58,8 +65,12 @@ registerCJitBackend({
         interp.fuse,
         interp.par && cJitOpenmpAvailable()
       );
-    } catch {
-      return null;
+    } catch (e) {
+      // Codegen throws indicate a construct the feasibility check let
+      // through but the emitter can't handle — still an infeasible-IR
+      // parity gap, not an env error.
+      const msg = e instanceof Error ? e.message : String(e);
+      return { ok: false, kind: "infeasible", reason: `codegen: ${msg}` };
     }
 
     const useOmp = interp.par && cJitOpenmpAvailable();
@@ -70,7 +81,13 @@ registerCJitBackend({
       interp.log,
       useOmp ? ["-fopenmp"] : undefined
     );
-    if (!loaded) return null;
+    if (!loaded) {
+      return {
+        ok: false,
+        kind: "env",
+        reason: "C compile/load failed (see verbose log)",
+      };
+    }
 
     // Fire --dump-c callback.
     const line = interp.rt.$line ?? 0;
@@ -94,7 +111,7 @@ registerCJitBackend({
       ticStateBuf = new Float64Array(1);
     }
 
-    return (...callArgs: unknown[]): unknown => {
+    const compiledFn = (...callArgs: unknown[]): unknown => {
       // Build the koffi call arguments: extract data/len from tensors,
       // pass scalars directly, append output buffers/out-pointers.
       const koffiArgs: unknown[] = [];
@@ -213,5 +230,7 @@ registerCJitBackend({
       }
       return ob.buf[0];
     };
+
+    return { ok: true, fn: compiledFn };
   },
 });

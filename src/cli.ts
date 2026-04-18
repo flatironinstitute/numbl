@@ -184,7 +184,11 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
-async function runTests(dir: string, optimization?: number) {
+async function runTests(
+  dir: string,
+  optimization?: number,
+  checkCJitParity?: boolean
+) {
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
@@ -221,6 +225,7 @@ async function runTests(dir: string, optimization?: number) {
         {
           displayResults: true,
           optimization: optimization ?? 1,
+          checkCJitParity: checkCJitParity ?? false,
           onCJitCompile,
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
@@ -330,6 +335,9 @@ Options (for run and eval):
                            on infeasible IR (requires a C compiler and Node API
                            headers; prints its compile command once to stderr)
   --fuse             Emit fused per-element loops (JS-JIT and C-JIT)
+  --check-c-jit-parity
+                     Diagnostic (requires --opt 2): throw on any C-JIT miss
+                     where JS-JIT would have compiled, to enumerate parity gaps
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
@@ -357,6 +365,7 @@ interface ParsedOptions {
   optimization: number;
   fuse: boolean;
   par: boolean;
+  checkCJitParity: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -374,6 +383,7 @@ function parseOptions(args: string[]): ParsedOptions {
     optimization: 1,
     fuse: false,
     par: false,
+    checkCJitParity: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -468,6 +478,9 @@ function parseOptions(args: string[]): ParsedOptions {
       case "--par":
         opts.par = true;
         break;
+      case "--check-c-jit-parity":
+        opts.checkCJitParity = true;
+        break;
       default:
         if (args[i].startsWith("-")) {
           console.error(`Unknown option: ${args[i]}`);
@@ -475,6 +488,13 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.positional.push(args[i]);
     }
+  }
+
+  if (opts.checkCJitParity && opts.optimization < 2) {
+    console.error(
+      "Error: --check-c-jit-parity requires --opt 2 (the C-JIT path)"
+    );
+    process.exit(1);
   }
 
   return opts;
@@ -678,6 +698,7 @@ async function executeWithOptions(
             optimization: opts.optimization,
             fuse: opts.fuse,
             par: opts.par,
+            checkCJitParity: opts.checkCJitParity,
           },
           workspaceFiles,
           mainFileName,
@@ -740,6 +761,7 @@ async function executeWithOptions(
           optimization: opts.optimization,
           fuse: opts.fuse,
           par: opts.par,
+          checkCJitParity: opts.checkCJitParity,
         },
         workspaceFiles,
         mainFileName,
@@ -781,6 +803,7 @@ async function executeWithOptions(
           optimization: opts.optimization,
           fuse: opts.fuse,
           par: opts.par,
+          checkCJitParity: opts.checkCJitParity,
         },
         workspaceFiles,
         mainFileName,
@@ -1194,7 +1217,7 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.optimization);
+      await runTests(dir, testOpts.optimization, testOpts.checkCJitParity);
       break;
     }
     case "build-addon":

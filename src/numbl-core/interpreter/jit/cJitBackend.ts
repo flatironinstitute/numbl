@@ -17,12 +17,29 @@ import type { Interpreter } from "../interpreter.js";
 import type { FunctionDef } from "../types.js";
 import type { JitStmt, JitType } from "./jitTypes.js";
 
+/**
+ * Outcome of a C-JIT compile attempt.
+ *
+ * - `ok: true`: compilation succeeded; `fn` is callable.
+ * - `ok: false, kind: "infeasible"`: the lowered IR contains a construct
+ *   the C-JIT doesn't handle (JS-JIT probably would). Carries a `reason`
+ *   and optional `line` from the feasibility checker; `--check-c-jit-parity`
+ *   treats this as a hard error.
+ * - `ok: false, kind: "env"`: the environment couldn't support C-JIT
+ *   (no C compiler, compile/link failed, header missing, etc.). Also a
+ *   hard error under `--check-c-jit-parity` because the user explicitly
+ *   asked for C-JIT.
+ */
+export type CJitCompileResult =
+  | { ok: true; fn: (...args: unknown[]) => unknown }
+  | { ok: false; kind: "infeasible" | "env"; reason: string; line?: number };
+
 export interface CJitBackend {
   /**
    * Attempt to emit + compile + load a C specialization for the given
-   * lowered IR. Returns a callable wrapper on success, or null on any
-   * bail (infeasible IR, compile failure, Node API headers missing,
-   * etc.) — the caller falls back to JS-JIT in either case.
+   * lowered IR. Returns a structured result: callers distinguish
+   * `infeasible` (parity gap with JS-JIT) from `env` (missing compiler)
+   * when `--check-c-jit-parity` is on.
    */
   tryCompile(
     interp: Interpreter,
@@ -34,7 +51,7 @@ export interface CJitBackend {
     outputTypes: JitType[],
     argTypes: JitType[],
     nargout: number
-  ): ((...args: unknown[]) => unknown) | null;
+  ): CJitCompileResult;
 }
 
 let _backend: CJitBackend | null = null;

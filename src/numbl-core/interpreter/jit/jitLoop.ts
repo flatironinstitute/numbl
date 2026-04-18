@@ -21,6 +21,7 @@ import {
   JitBailToInterpreter,
 } from "./jitHelpers.js";
 import { getCJitBackend } from "./cJitBackend.js";
+import { CJitParityError, formatCJitParityMessage } from "./cJitParityError.js";
 import { inferJitType } from "../builtins/types.js";
 import {
   analyzeForLoop,
@@ -233,11 +234,17 @@ function tryJitLoop(
   }
 
   // ── C-JIT path (--opt >= 2) ─────────────────────────────────────────
-  // Mirror jit/index.ts: try the backend; on null, fall through to JS-JIT.
+  // Mirror jit/index.ts: try the backend; on bail, fall through to JS-JIT
+  // (or throw under --check-c-jit-parity).
+  let cJitBail: {
+    kind: "infeasible" | "env";
+    reason: string;
+    line?: number;
+  } | null = null;
   if (interp.optimization >= 2 && !interp.loopCJitCache.has(cacheKey)) {
     const backend = getCJitBackend();
     if (backend) {
-      const compiledCFn = backend.tryCompile(
+      const res = backend.tryCompile(
         interp,
         syntheticFn,
         lowered.body,
@@ -248,17 +255,18 @@ function tryJitLoop(
         inputTypes,
         outputs.length
       );
-      if (compiledCFn) {
-        interp.loopCJitCache.set(cacheKey, { fn: compiledCFn });
+      if (res.ok) {
+        interp.loopCJitCache.set(cacheKey, { fn: res.fn });
         return executeAndWriteBack(
           interp,
-          compiledCFn,
+          res.fn,
           inputValues,
           outputs,
           cacheKey
         );
       }
       interp.loopCJitCache.set(cacheKey, null);
+      cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
     }
   }
 
@@ -295,6 +303,28 @@ function tryJitLoop(
   } catch {
     interp.loopJitCache.set(cacheKey, null);
     return false;
+  }
+
+  // ── Parity check (--check-c-jit-parity) ───────────────────────────────
+  // JS-JIT just compiled, so if the C-JIT declined above it's a parity gap.
+  if (interp.checkCJitParity && cJitBail) {
+    const file = stmt.span?.file ?? interp.currentFile;
+    const callSiteLine = stmt.span?.start ?? interp.rt.$line ?? 0;
+    throw new CJitParityError(
+      formatCJitParityMessage({
+        kind: cJitBail.kind,
+        reason: cJitBail.reason,
+        reasonLine: cJitBail.line,
+        siteLabel: `${kind}-loop`,
+        file,
+        callSiteLine,
+        argsDesc: inputs
+          .map((n, i) => `${n}: ${jitTypeKey(inputTypes[i])}`)
+          .join(", "),
+      }),
+      cJitBail.reason,
+      cJitBail.kind
+    );
   }
 
   // Build source for logging
