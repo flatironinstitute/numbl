@@ -140,7 +140,6 @@ export function generateC(
       `jit_${jitName}`,
       fuse,
       openmp,
-      generatedIRBodies,
       { isStatic: true, forceNeedsErrorFlag: true }
     );
     // The static callee must not need __tic_state; the outer's tic
@@ -167,7 +166,6 @@ export function generateC(
     `jit_${fnName}`,
     fuse,
     openmp,
-    generatedIRBodies,
     { isStatic: false }
   );
 
@@ -323,7 +321,6 @@ function emitOneFunction(
   cFnName: string,
   fuse: boolean | undefined,
   openmp: boolean | undefined,
-  generatedIRBodies: Map<string, GeneratedFn> | undefined,
   opts: { isStatic: boolean; forceNeedsErrorFlag?: boolean }
 ): EmitOneFnResult {
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -578,9 +575,6 @@ function emitOneFunction(
     defParts.push(epilogueLines.join("\n"));
   }
   defParts.push(`}`);
-
-  // Suppress silly warnings we'll want if anything gets added later.
-  void generatedIRBodies;
 
   return {
     definition: defParts.join("\n"),
