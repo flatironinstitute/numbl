@@ -128,12 +128,14 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
       return { ok: true };
 
     case "Index": {
-      // Phase 1 of Index support: single-index (linear) reads into a
-      // real-tensor Var. Multi-index reads need shape plumbed through
-      // the C ABI; non-Var bases need scratch-buffer evaluation first.
-      // Both deferred.
-      if (expr.indices.length !== 1) {
-        return fail(ctx, "multi-index Index read not supported");
+      // 1-3 D scalar Index reads into a real-tensor Var. 1D goes through
+      // numbl_idx1r (len-only); 2D/3D go through numbl_idx2r / numbl_idx3r
+      // with shape dims (`_d0` for 2D, `_d0`/`_d1` for 3D) threaded in
+      // via the ABI. Non-Var bases would need scratch-buffer evaluation
+      // first — deferred. 4D+ has no helper.
+      const n = expr.indices.length;
+      if (n < 1 || n > 3) {
+        return fail(ctx, `Index arity ${n} unsupported (only 1D/2D/3D)`);
       }
       if (expr.base.tag !== "Var") {
         return fail(ctx, "Index read requires a Var base");
@@ -144,7 +146,20 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
       ) {
         return fail(ctx, "Index read base must be a real tensor");
       }
-      return checkExpr(expr.indices[0], ctx);
+      // Multi-index reads require the base's shape dims in the ABI —
+      // only tensor params have that plumbing. Tensor locals don't
+      // carry shape into the emitted function.
+      if (n >= 2 && !ctx.tensorParams.has(expr.base.name)) {
+        return fail(
+          ctx,
+          `multi-index Index read base '${expr.base.name}' must be a tensor param`
+        );
+      }
+      for (const idx of expr.indices) {
+        const r = checkExpr(idx, ctx);
+        if (!r.ok) return r;
+      }
+      return { ok: true };
     }
 
     case "Binary": {
@@ -350,16 +365,14 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       return { ok: true };
 
     case "AssignIndex": {
-      // Phase 1 of AssignIndex support: single-index (linear) writes on a
-      // real-tensor Var with a scalar RHS, where the target is both an
-      // input param AND an output (so the JS wrapper has seeded the
-      // output buffer with a copy of the caller's data). Other targets
-      // — pure input params, fresh locals, tensors aliased to an input
-      // via `y = x` — defer, because correct MATLAB call-by-value
-      // semantics on those would require unshare/copy machinery the
-      // C-JIT doesn't have yet.
-      if (stmt.indices.length !== 1) {
-        return fail(ctx, "multi-index AssignIndex not supported");
+      // 1-3 D scalar writes to a real-tensor param (so the caller's
+      // buffer is either the seeded output or a prelude unshare copy).
+      // Shape dims for 2D/3D are threaded through the ABI. Fresh tensor
+      // locals and `y = x` aliases still defer — those would need shape
+      // tracking on the callee side that the emitter doesn't do yet.
+      const n = stmt.indices.length;
+      if (n < 1 || n > 3) {
+        return fail(ctx, `AssignIndex arity ${n} unsupported (only 1D/2D/3D)`);
       }
       if (
         stmt.baseType.kind !== "tensor" ||
@@ -378,7 +391,11 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       }
       const vr = checkExpr(stmt.value, ctx);
       if (!vr.ok) return vr;
-      return checkExpr(stmt.indices[0], ctx);
+      for (const idx of stmt.indices) {
+        const r = checkExpr(idx, ctx);
+        if (!r.ok) return r;
+      }
+      return { ok: true };
     }
 
     // Out of scope: range/col writes, struct writes, multi-assign.

@@ -36,6 +36,80 @@ void numbl_set1r_h(double* data, size_t len, double i, double v,
   data[idx] = v;
 }
 
+double numbl_idx2r(const double* data, size_t len, size_t d0,
+                   double i, double j, double* err_flag) {
+  int64_t r = (int64_t)(i - 1.0);
+  int64_t c = (int64_t)(j - 1.0);
+  /* d0 == 0 would mean an empty tensor — any index is OOB. */
+  if (d0 == 0 || (uint64_t)r >= (uint64_t)d0) {
+    *err_flag = 1.0;
+    return 0.0;
+  }
+  size_t cols = len / d0;
+  if ((uint64_t)c >= (uint64_t)cols) {
+    *err_flag = 1.0;
+    return 0.0;
+  }
+  return data[(size_t)c * d0 + (size_t)r];
+}
+
+double numbl_idx3r(const double* data, size_t len, size_t d0, size_t d1,
+                   double i, double j, double k, double* err_flag) {
+  int64_t k0 = (int64_t)(i - 1.0);
+  int64_t k1 = (int64_t)(j - 1.0);
+  int64_t k2 = (int64_t)(k - 1.0);
+  if (d0 == 0 || d1 == 0 ||
+      (uint64_t)k0 >= (uint64_t)d0 ||
+      (uint64_t)k1 >= (uint64_t)d1) {
+    *err_flag = 1.0;
+    return 0.0;
+  }
+  size_t plane = d0 * d1;
+  size_t d2 = len / plane;
+  if ((uint64_t)k2 >= (uint64_t)d2) {
+    *err_flag = 1.0;
+    return 0.0;
+  }
+  return data[(size_t)k2 * plane + (size_t)k1 * d0 + (size_t)k0];
+}
+
+void numbl_set2r_h(double* data, size_t len, size_t d0,
+                   double i, double j, double v, double* err_flag) {
+  int64_t r = (int64_t)(i - 1.0);
+  int64_t c = (int64_t)(j - 1.0);
+  if (d0 == 0) {
+    *err_flag = 2.0;
+    return;
+  }
+  size_t cols = len / d0;
+  if ((uint64_t)r >= (uint64_t)d0 || (uint64_t)c >= (uint64_t)cols) {
+    *err_flag = 2.0;
+    return;
+  }
+  data[(size_t)c * d0 + (size_t)r] = v;
+}
+
+void numbl_set3r_h(double* data, size_t len, size_t d0, size_t d1,
+                   double i, double j, double k, double v,
+                   double* err_flag) {
+  int64_t k0 = (int64_t)(i - 1.0);
+  int64_t k1 = (int64_t)(j - 1.0);
+  int64_t k2 = (int64_t)(k - 1.0);
+  if (d0 == 0 || d1 == 0) {
+    *err_flag = 2.0;
+    return;
+  }
+  size_t plane = d0 * d1;
+  size_t d2 = len / plane;
+  if ((uint64_t)k0 >= (uint64_t)d0 ||
+      (uint64_t)k1 >= (uint64_t)d1 ||
+      (uint64_t)k2 >= (uint64_t)d2) {
+    *err_flag = 2.0;
+    return;
+  }
+  data[(size_t)k2 * plane + (size_t)k1 * d0 + (size_t)k0] = v;
+}
+
 double numbl_mod(double a, double b) {
   if (b == 0.0) return a;
   double r = fmod(a, b);

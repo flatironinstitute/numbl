@@ -30,8 +30,9 @@ extern "C" {
  * Version log:
  *   1 — initial: idx1r, mod, sign, reduce_flat, tic/toc/monotonic_time.
  *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
+ *   3 — idx2r / idx3r / set2r_h / set3r_h (multi-index Index read/write).
  */
-#define NUMBL_JIT_RT_VERSION 2
+#define NUMBL_JIT_RT_VERSION 3
 
 /** Returns NUMBL_JIT_RT_VERSION baked into the compiled archive. */
 int numbl_jit_rt_version(void);
@@ -61,6 +62,45 @@ double numbl_idx1r(const double* data, size_t len, double i, double* err_flag);
  * the read path, the caller must zero the flag before each call.
  */
 void numbl_set1r_h(double* data, size_t len, double i, double v, double* err_flag);
+
+/* ── Multi-index Index read (2D, 3D) ──────────────────────────────────── */
+
+/**
+ * 1-based MATLAB 2D Index read on a real-valued tensor buffer.
+ *
+ * Column-major: returns data[(j-1)*d0 + (i-1)]. `d0` is the row count.
+ * The derived column count is `len / d0`; both dimensions are bounds-
+ * checked independently. Emitter wraps non-integer indices with
+ * `round()` to match the JS-JIT's `Math.round`-then-truncate sequence.
+ * On OOB, sets *err_flag = 1.0 and returns 0.0 (hard bounds error).
+ */
+double numbl_idx2r(const double* data, size_t len, size_t d0,
+                   double i, double j, double* err_flag);
+
+/**
+ * 1-based MATLAB 3D Index read on a real-valued tensor buffer.
+ *
+ * Column-major: returns data[((k-1)*d1 + (j-1))*d0 + (i-1)]. `d0` is
+ * the row count, `d1` the column count. The derived page count is
+ * `len / (d0 * d1)`; each dimension is bounds-checked independently.
+ */
+double numbl_idx3r(const double* data, size_t len, size_t d0, size_t d1,
+                   double i, double j, double k, double* err_flag);
+
+/* ── Multi-index Index write (2D, 3D), soft-bail on OOB ───────────────── */
+
+/**
+ * 2D Index write. On OOB (along either dim) writes `2.0` to *err_flag
+ * (the "growth-needed" code the JS wrapper translates to a
+ * JitBailToInterpreter) and returns without writing.
+ */
+void numbl_set2r_h(double* data, size_t len, size_t d0,
+                   double i, double j, double v, double* err_flag);
+
+/** 3D Index write with the same soft-bail convention as set2r_h. */
+void numbl_set3r_h(double* data, size_t len, size_t d0, size_t d1,
+                   double i, double j, double k, double v,
+                   double* err_flag);
 
 /* ── Scalar math helpers with MATLAB semantics ────────────────────────── */
 

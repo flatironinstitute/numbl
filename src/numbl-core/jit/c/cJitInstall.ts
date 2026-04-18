@@ -140,6 +140,19 @@ registerCJitBackend({
           const data = t.data as Float64Array;
           koffiArgs.push(data);
           koffiArgs.push(data.length);
+          // Multi-index ABI: tensors indexed with arity >= 2 also
+          // receive their column-major shape dims (d0 = rows, d1 = cols
+          // for 3D) so the emitted C can compute 2D/3D offsets. Matches
+          // the JS-JIT hoist which exposes $<name>_d0 / $<name>_d1.
+          if (pd.ndim && pd.ndim >= 2) {
+            const s = t.shape;
+            const d0 = s.length >= 1 ? s[0] : 1;
+            koffiArgs.push(d0);
+            if (pd.ndim >= 3) {
+              const d1 = s.length >= 2 ? s[1] : 1;
+              koffiArgs.push(d1);
+            }
+          }
           if (!firstTensorShape) {
             firstTensorShape = t.shape;
             firstTensorLen = data.length;

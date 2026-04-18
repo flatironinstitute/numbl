@@ -36,6 +36,7 @@ import {
   emitScalarTruthiness,
 } from "../scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
+import { collectTensorUsage } from "../js/jitCodegenHoist.js";
 
 const MANGLE_PREFIX = "v_";
 
@@ -51,8 +52,9 @@ const MANGLE_PREFIX = "v_";
  * Version log:
  *   1 — initial: idx1r, mod, sign, reduce_flat, tic/toc/monotonic_time.
  *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
+ *   3 — idx2r / idx3r / set2r_h / set3r_h (multi-index Index read/write).
  */
-const NUMBL_JIT_RT_REQUIRED_VERSION = 2;
+const NUMBL_JIT_RT_REQUIRED_VERSION = 3;
 
 export function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
@@ -161,6 +163,15 @@ export function tensorLen(name: string): string {
   return `${mangle(name)}_len`;
 }
 
+/** Row count (shape[0]) for a 2D/3D-indexed tensor param. */
+export function tensorD0(name: string): string {
+  return `${mangle(name)}_d0`;
+}
+/** Column count (shape[1]) for a 3D-indexed tensor param. */
+export function tensorD1(name: string): string {
+  return `${mangle(name)}_d1`;
+}
+
 // ── Per-function emit context ─────────────────────────────────────────
 
 interface EmitCtx {
@@ -193,6 +204,10 @@ interface EmitCtx {
   needsErrorFlag: boolean;
   /** Emit `#pragma omp parallel for` on fused non-reduction loops. */
   openmp: boolean;
+  /** Per-tensor-var max indexing arity (1/2/3). Tensors with arity >= 2
+   *  receive a `_d0` ABI param; arity == 3 also gets `_d1`. Tensor locals
+   *  and vars that aren't indexed are omitted. */
+  tensorMaxDim: Map<string, number>;
 }
 
 // ── Expression emission ───────────────────────────────────────────────
@@ -245,19 +260,31 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
 }
 
 function emitIndex(expr: JitExpr & { tag: "Index" }, ctx: EmitCtx): string {
-  if (expr.indices.length !== 1) {
-    throw new Error("C-JIT codegen: multi-index Index read unsupported");
-  }
   if (expr.base.tag !== "Var" || !ctx.tensorVars.has(expr.base.name)) {
     throw new Error("C-JIT codegen: Index base must be a tensor Var");
   }
+  const n = expr.indices.length;
+  if (n < 1 || n > 3) {
+    throw new Error(
+      `C-JIT codegen: Index arity ${n} unsupported (only 1D/2D/3D)`
+    );
+  }
   ctx.needsErrorFlag = true;
-  const data = tensorData(expr.base.name);
-  const len = tensorLen(expr.base.name);
-  const idxExpr = expr.indices[0];
-  let i = emitExpr(idxExpr, ctx);
-  if (!isKnownInteger(idxExpr.jitType)) i = `round(${i})`;
-  return `numbl_idx1r(${data}, (size_t)${len}, ${i}, __err_flag)`;
+  const name = expr.base.name;
+  const data = tensorData(name);
+  const len = tensorLen(name);
+  const idxCodes = expr.indices.map(idx => {
+    let s = emitExpr(idx, ctx);
+    if (!isKnownInteger(idx.jitType)) s = `round(${s})`;
+    return s;
+  });
+  if (n === 1) {
+    return `numbl_idx1r(${data}, (size_t)${len}, ${idxCodes[0]}, __err_flag)`;
+  }
+  if (n === 2) {
+    return `numbl_idx2r(${data}, (size_t)${len}, (size_t)${tensorD0(name)}, ${idxCodes[0]}, ${idxCodes[1]}, __err_flag)`;
+  }
+  return `numbl_idx3r(${data}, (size_t)${len}, (size_t)${tensorD0(name)}, (size_t)${tensorD1(name)}, ${idxCodes[0]}, ${idxCodes[1]}, ${idxCodes[2]}, __err_flag)`;
 }
 
 /** For tensor binary/unary, we need multi-statement emission. This helper
@@ -777,11 +804,14 @@ function emitStmt(
       return;
 
     case "AssignIndex": {
-      // Phase 1: single-index scalar linear write to a real-tensor Var.
-      // Feasibility already rejected multi-index / non-real-tensor /
-      // non-scalar-value cases.
-      if (stmt.indices.length !== 1) {
-        throw new Error("C-JIT codegen: multi-index AssignIndex unsupported");
+      // Feasibility already rejected non-real-tensor / non-scalar-value
+      // cases and arity > 3. The emitter routes to numbl_set1r_h /
+      // numbl_set2r_h / numbl_set3r_h based on index count.
+      const n = stmt.indices.length;
+      if (n < 1 || n > 3) {
+        throw new Error(
+          `C-JIT codegen: AssignIndex arity ${n} unsupported (only 1D/2D/3D)`
+        );
       }
       if (!ctx.tensorVars.has(stmt.baseName)) {
         throw new Error(
@@ -789,15 +819,28 @@ function emitStmt(
         );
       }
       ctx.needsErrorFlag = true;
-      const data = tensorData(stmt.baseName);
-      const len = tensorLen(stmt.baseName);
-      const idxExpr = stmt.indices[0];
-      let i = emitExpr(idxExpr, ctx);
-      if (!isKnownInteger(idxExpr.jitType)) i = `round(${i})`;
+      const name = stmt.baseName;
+      const data = tensorData(name);
+      const len = tensorLen(name);
+      const idxCodes = stmt.indices.map(idx => {
+        let s = emitExpr(idx, ctx);
+        if (!isKnownInteger(idx.jitType)) s = `round(${s})`;
+        return s;
+      });
       const v = emitExpr(stmt.value, ctx);
-      lines.push(
-        `${indent}numbl_set1r_h(${data}, (size_t)${len}, ${i}, ${v}, __err_flag);`
-      );
+      if (n === 1) {
+        lines.push(
+          `${indent}numbl_set1r_h(${data}, (size_t)${len}, ${idxCodes[0]}, ${v}, __err_flag);`
+        );
+      } else if (n === 2) {
+        lines.push(
+          `${indent}numbl_set2r_h(${data}, (size_t)${len}, (size_t)${tensorD0(name)}, ${idxCodes[0]}, ${idxCodes[1]}, ${v}, __err_flag);`
+        );
+      } else {
+        lines.push(
+          `${indent}numbl_set3r_h(${data}, (size_t)${len}, (size_t)${tensorD0(name)}, (size_t)${tensorD1(name)}, ${idxCodes[0]}, ${idxCodes[1]}, ${idxCodes[2]}, ${v}, __err_flag);`
+        );
+      }
       return;
     }
 
@@ -921,6 +964,11 @@ function findAssignIndexTargets(body: JitStmt[], out: Set<string>): void {
 export interface CParamDesc {
   name: string;
   kind: "scalar" | "tensor";
+  /** For tensor params: max indexing arity the body uses (1, 2, or 3).
+   *  Drives the extra `_d0` / `_d1` shape args the JS wrapper must
+   *  marshal. `undefined` means the tensor is only used in whole-tensor
+   *  ops (legacy data/len ABI). */
+  ndim?: number;
 }
 
 /** Per-output descriptor. Tells the JS wrapper how to marshal outputs. */
@@ -1007,6 +1055,22 @@ export function generateC(
     }
   }
 
+  // Per-tensor max indexing arity (for multi-index Index / AssignIndex).
+  // Reuses the JS hoist analyzer: any tensor Var that appears as an
+  // Index base or an AssignIndex target contributes its `indices.length`
+  // to the max for that name. Tensors that only participate in whole-
+  // tensor ops (or don't appear at all) don't get an entry, and keep
+  // the old (data, len) ABI.
+  const tensorMaxDim = new Map<string, number>();
+  {
+    const usage = collectTensorUsage(body);
+    for (const [name, u] of usage) {
+      if (!u.isReal) continue;
+      const d = Math.max(u.maxReadDim, u.maxWriteDim);
+      if (d > 0) tensorMaxDim.set(name, d);
+    }
+  }
+
   const ctx: EmitCtx = {
     tensorVars,
     outputTensorNames,
@@ -1020,6 +1084,7 @@ export function generateC(
     needsTicState: false,
     needsErrorFlag: false,
     openmp: openmp ?? false,
+    tensorMaxDim,
   };
 
   const indent = "  ";
@@ -1087,10 +1152,19 @@ export function generateC(
   const allLocals = [...localVars].filter(v => !paramSet.has(v)).sort();
   const preludeLines: string[] = [];
 
-  // Shadow tensor input-output params with writable locals.
+  // Shadow tensor input-output params with writable locals. The shape
+  // dims (`_d0`, `_d1`) are also shadowed so multi-index writes on a
+  // param-output use the same local names the body expects.
   for (const p of paramOutputTensors) {
     preludeLines.push(`${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`);
     preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
+    const d = tensorMaxDim.get(p) ?? 0;
+    if (d >= 2) {
+      preludeLines.push(`${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}_in;`);
+    }
+    if (d >= 3) {
+      preludeLines.push(`${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}_in;`);
+    }
   }
 
   // Unshare-at-entry: pure-input tensor params that are written via
@@ -1099,6 +1173,13 @@ export function generateC(
   // The buffer is freed in the epilogue.
   for (const p of unshareTensorParams) {
     preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
+    const d = tensorMaxDim.get(p) ?? 0;
+    if (d >= 2) {
+      preludeLines.push(`${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}_in;`);
+    }
+    if (d >= 3) {
+      preludeLines.push(`${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}_in;`);
+    }
     preludeLines.push(
       `${indent}double *${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
     );
@@ -1152,6 +1233,15 @@ export function generateC(
       sigParts.push(`int64_t ${tensorLen(p)}${suffix}`);
       koffiParts.push("double *");
       koffiParts.push("int64_t");
+      const d = tensorMaxDim.get(p) ?? 0;
+      if (d >= 2) {
+        sigParts.push(`int64_t ${tensorD0(p)}${suffix}`);
+        koffiParts.push("int64_t");
+      }
+      if (d >= 3) {
+        sigParts.push(`int64_t ${tensorD1(p)}${suffix}`);
+        koffiParts.push("int64_t");
+      }
     } else {
       sigParts.push(`double ${mangle(p)}`);
       koffiParts.push("double");
@@ -1223,10 +1313,17 @@ export function generateC(
   }
   parts.push(`}`);
 
-  const paramDescs: CParamDesc[] = params.map((p, i) => ({
-    name: p,
-    kind: argTypes[i].kind === "tensor" ? "tensor" : "scalar",
-  }));
+  const paramDescs: CParamDesc[] = params.map((p, i) => {
+    const desc: CParamDesc = {
+      name: p,
+      kind: argTypes[i].kind === "tensor" ? "tensor" : "scalar",
+    };
+    if (desc.kind === "tensor") {
+      const d = tensorMaxDim.get(p) ?? 0;
+      if (d >= 2) desc.ndim = d;
+    }
+    return desc;
+  });
 
   return {
     cSource: parts.join("\n"),
