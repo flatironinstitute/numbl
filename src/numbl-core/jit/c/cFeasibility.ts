@@ -22,6 +22,7 @@ import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
 import type { GeneratedFn } from "../jitLower.js";
+import { analyzeTensorUsage, type ClassificationResult } from "./classify.js";
 
 export type FeasibilityResult =
   | { ok: true }
@@ -30,11 +31,16 @@ export type FeasibilityResult =
 /** Shared across the feasibility check and any recursive UserCall descents.
  *  Caches per-jitName results (ok + reason) so a callee reached from
  *  multiple sites is only analyzed once. `inProgress` blocks reentry for
- *  direct or mutual recursion — we bail on recursive UserCall for now. */
+ *  direct or mutual recursion — we bail on recursive UserCall for now.
+ *
+ *  `classifications` memoizes analyzeTensorUsage per jitName so the
+ *  tensor-return feasibility check doesn't reanalyze the callee body
+ *  every time it's called from a different site. */
 interface SharedFeasCtx {
   generatedIRBodies: Map<string, GeneratedFn>;
   results: Map<string, FeasibilityResult>;
   inProgress: Set<string>;
+  classifications: Map<string, ClassificationResult>;
 }
 
 /** Mutable traversal state so failure reasons can carry the nearest line. */
@@ -139,7 +145,11 @@ function checkValueType(t: JitType): FeasibilityResult {
   return { ok: false, reason: `unsupported type: ${t.kind}` };
 }
 
-function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
+function checkExpr(
+  expr: JitExpr,
+  ctx: Ctx,
+  allowTensorUserCall: boolean = false
+): FeasibilityResult {
   const typeCheck = checkValueType(expr.jitType);
   if (!typeCheck.ok) return fail(ctx, typeCheck.reason);
 
@@ -309,7 +319,7 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
     }
 
     case "UserCall":
-      return checkUserCall(expr, ctx);
+      return checkUserCall(expr, ctx, allowTensorUserCall);
 
     // Everything else is out of scope — bail to JS-JIT.
     case "ImagLiteral":
@@ -322,50 +332,82 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
   }
 }
 
-/** UserCall: the callee must itself be C-feasible. First cut supports
- *  scalar args + scalar return only. Args are checked in the caller's
- *  ctx; the callee body is checked in a fresh ctx built from the
- *  cached `GeneratedFn` meta. Results are memoized across the whole
- *  feasibility descent to avoid rechecking heavily-reused helpers. */
+/** UserCall: the callee must itself be C-feasible.
+ *  - Scalar args: always allowed.
+ *  - Tensor args: real (1-3D), must appear as a Var at the caller (so
+ *    the existing tensor locals plumb straight through to the callee's
+ *    signature). Inline tensor literals / expressions would need scratch
+ *    materialization — deferred.
+ *  - Scalar return: always allowed.
+ *  - Tensor return: accepted only when (a) the callee's output[0] is
+ *    classified `isDynamicOutput` (fresh-alloc + output kind — the
+ *    callee mallocs and transfers ownership via the `double **` ABI)
+ *    AND (b) the caller is in Assign-RHS position (`allowTensorUserCall`).
+ *    Aliased param-output tensor returns violate COW and are rejected.
+ *
+ *  Args are checked in the caller's ctx; the callee body is checked in
+ *  a fresh ctx built from the cached `GeneratedFn` meta. Results are
+ *  memoized across the whole feasibility descent. */
 function checkUserCall(
   expr: JitExpr & { tag: "UserCall" },
-  ctx: Ctx
+  ctx: Ctx,
+  allowTensorUserCall: boolean
 ): FeasibilityResult {
   if (!ctx.shared) {
     return fail(ctx, "UserCall: no generatedIRBodies in feasibility ctx");
   }
-  // Scalar args only for this first cut. Tensor args go through the
-  // dynamic-output ABI and are deferred (step 4 of the handoff plan).
-  for (const a of expr.args) {
-    if (!isScalarKind(a.jitType.kind)) {
+  for (let i = 0; i < expr.args.length; i++) {
+    const a = expr.args[i];
+    if (isScalarKind(a.jitType.kind)) {
+      const r = checkExpr(a, ctx);
+      if (!r.ok) return r;
+      continue;
+    }
+    if (isAcceptableTensor(a.jitType)) {
+      if (a.tag !== "Var") {
+        return fail(
+          ctx,
+          `UserCall '${expr.name}': tensor arg must be a Var (inline tensor expressions not yet supported)`
+        );
+      }
+      if (!ctx.tensorVars.has(a.name)) {
+        return fail(
+          ctx,
+          `UserCall '${expr.name}': tensor arg '${a.name}' is not a tensor var`
+        );
+      }
+      continue;
+    }
+    return fail(ctx, `UserCall '${expr.name}': unsupported arg type`);
+  }
+
+  if (!isScalarKind(expr.jitType.kind)) {
+    if (!isAcceptableTensor(expr.jitType)) {
+      return fail(ctx, `UserCall '${expr.name}': unsupported return type`);
+    }
+    if (!allowTensorUserCall) {
       return fail(
         ctx,
-        `UserCall '${expr.name}': tensor args not yet supported`
+        `UserCall '${expr.name}': tensor-return UserCall only allowed as Assign RHS`
       );
     }
-    const r = checkExpr(a, ctx);
-    if (!r.ok) return r;
-  }
-  // Scalar return only for this first cut.
-  if (!isScalarKind(expr.jitType.kind)) {
-    return fail(
-      ctx,
-      `UserCall '${expr.name}': tensor return not yet supported`
-    );
   }
 
   // Descend into the callee body. Memoize + guard against recursion.
   const { shared } = ctx;
   const cached = shared.results.get(expr.jitName);
   if (cached) {
-    if (cached.ok) return { ok: true };
-    // Re-wrap the cached failure with the caller's line so the parity
-    // reporter blames the call site, not the callee body.
-    return fail(ctx, `UserCall '${expr.name}': ${cached.reason}`);
-  }
-  if (shared.inProgress.has(expr.jitName)) {
+    if (!cached.ok) {
+      // Re-wrap the cached failure with the caller's line so the parity
+      // reporter blames the call site, not the callee body.
+      return fail(ctx, `UserCall '${expr.name}': ${cached.reason}`);
+    }
+    // Callee body is feasible — still need to verify the tensor-return
+    // invariant using the (cached) classification below.
+  } else if (shared.inProgress.has(expr.jitName)) {
     return fail(ctx, `UserCall '${expr.name}': recursion not supported`);
   }
+
   const callee = shared.generatedIRBodies.get(expr.jitName);
   if (!callee) {
     return fail(
@@ -374,24 +416,55 @@ function checkUserCall(
     );
   }
 
-  shared.inProgress.add(expr.jitName);
-  let calleeRes: FeasibilityResult;
-  try {
-    calleeRes = checkCFeasibilityInternal(
-      callee.body,
-      callee.fn.params,
-      callee.argTypes,
-      callee.outputTypes[0] ?? null,
-      callee.outputTypes,
-      callee.nargout,
-      shared
-    );
-  } finally {
-    shared.inProgress.delete(expr.jitName);
+  if (!cached) {
+    shared.inProgress.add(expr.jitName);
+    let calleeRes: FeasibilityResult;
+    try {
+      calleeRes = checkCFeasibilityInternal(
+        callee.body,
+        callee.fn.params,
+        callee.argTypes,
+        callee.outputTypes[0] ?? null,
+        callee.outputTypes,
+        callee.nargout,
+        shared
+      );
+    } finally {
+      shared.inProgress.delete(expr.jitName);
+    }
+    shared.results.set(expr.jitName, calleeRes);
+    if (!calleeRes.ok) {
+      return fail(ctx, `UserCall '${expr.name}': ${calleeRes.reason}`);
+    }
   }
-  shared.results.set(expr.jitName, calleeRes);
-  if (!calleeRes.ok) {
-    return fail(ctx, `UserCall '${expr.name}': ${calleeRes.reason}`);
+
+  // Tensor-return case: require the callee's output[0] to be a
+  // fresh-alloc dynamic output. Classification is memoized per jitName.
+  if (expr.jitType.kind === "tensor") {
+    let cls = shared.classifications.get(expr.jitName);
+    if (!cls) {
+      const effectiveOutputs = callee.outputNames.slice(0, callee.nargout || 1);
+      const effectiveOutputTypes = callee.outputTypes.slice(
+        0,
+        effectiveOutputs.length
+      );
+      cls = analyzeTensorUsage(
+        callee.body,
+        callee.fn.params,
+        callee.argTypes,
+        effectiveOutputs,
+        effectiveOutputTypes
+      );
+      shared.classifications.set(expr.jitName, cls);
+    }
+    const outName = callee.outputNames[0];
+    const outMeta = outName ? cls.meta.get(outName) : undefined;
+    if (!outMeta || !outMeta.isDynamicOutput) {
+      return fail(
+        ctx,
+        `UserCall '${expr.name}': tensor return requires fresh-alloc output (aliased param-output not supported)`
+      );
+    }
   }
   return { ok: true };
 }
@@ -505,7 +578,10 @@ function checkStmts(stmts: JitStmt[], ctx: Ctx): FeasibilityResult {
 function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
   switch (stmt.tag) {
     case "Assign":
-      return checkExpr(stmt.expr, ctx);
+      // Assign-RHS is the one position where a tensor-return UserCall
+      // is allowed — the existing local-tensor + epilogue-free()
+      // machinery hooks it automatically if the RHS is the top expr.
+      return checkExpr(stmt.expr, ctx, true);
 
     case "ExprStmt":
       return checkExpr(stmt.expr, ctx);
@@ -696,6 +772,7 @@ export function checkCFeasibility(
         generatedIRBodies,
         results: new Map(),
         inProgress: new Set(),
+        classifications: new Map(),
       }
     : null;
   return checkCFeasibilityInternal(
