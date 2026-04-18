@@ -51,6 +51,10 @@ interface CEnv {
   flags: string[];
   opsLibPath: string;
   opsHeaderDir: string;
+  /** Static archive holding C-JIT-only helpers (idx1r, mod, sign, tic/toc, …). */
+  jitRtLibPath: string;
+  /** Header dir for `#include "jit_runtime.h"`. */
+  jitRtHeaderDir: string;
   /** Pre-computed hash of all env-level inputs (compiler, platform, libs, git HEAD). */
   envHash: string;
   /** True when the compiler accepts `-fopenmp` (full thread-level parallelism). */
@@ -136,6 +140,13 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
   }
   const opsLibPath = join(repoRoot, "build", "Release", "numbl_ops.a");
   const opsHeaderDir = join(repoRoot, "native", "ops");
+  const jitRtLibPath = join(
+    repoRoot,
+    "build",
+    "Release",
+    "numbl_jit_runtime.a"
+  );
+  const jitRtHeaderDir = join(repoRoot, "native", "jit_runtime");
   if (!existsSync(opsLibPath)) {
     throw new Error(
       `C-JIT (--opt 2): missing prebuilt libnumbl_ops static archive at\n  ${opsLibPath}\n` +
@@ -145,6 +156,17 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
   if (!existsSync(join(opsHeaderDir, "numbl_ops.h"))) {
     throw new Error(
       `C-JIT (--opt 2): missing libnumbl_ops header at\n  ${join(opsHeaderDir, "numbl_ops.h")}`
+    );
+  }
+  if (!existsSync(jitRtLibPath)) {
+    throw new Error(
+      `C-JIT (--opt 2): missing numbl_jit_runtime static archive at\n  ${jitRtLibPath}\n` +
+        `Run \`npm run build:addon\` to build it.`
+    );
+  }
+  if (!existsSync(join(jitRtHeaderDir, "jit_runtime.h"))) {
+    throw new Error(
+      `C-JIT (--opt 2): missing jit_runtime header at\n  ${join(jitRtHeaderDir, "jit_runtime.h")}`
     );
   }
 
@@ -157,6 +179,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     "-Wno-unused-function",
     "-Wno-unused-variable",
     `-I${opsHeaderDir}`,
+    `-I${jitRtHeaderDir}`,
   ];
   if (process.platform === "darwin") {
     flags.push("-undefined", "dynamic_lookup");
@@ -206,6 +229,7 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     /* not in a git repo — skip */
   }
   envH.update(readFileSync(opsLibPath));
+  envH.update(readFileSync(jitRtLibPath));
   envH.update(flags.join(" "));
   const envHash = envH.digest("hex");
 
@@ -216,12 +240,14 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
     flags,
     opsLibPath,
     opsHeaderDir,
+    jitRtLibPath,
+    jitRtHeaderDir,
     envHash,
     openmpAvailable,
   };
 
   process.stderr.write(
-    `C-JIT: ${cc} ${flags.join(" ")} ${opsLibPath} -lm  (${ccVersion})\n`
+    `C-JIT: ${cc} ${flags.join(" ")} ${jitRtLibPath} ${opsLibPath} -lm  (${ccVersion})\n`
   );
 
   return _envCache;
@@ -327,7 +353,19 @@ function compileToCache(
     return false;
   }
 
-  const args = [...env.flags, "-o", outPath, srcPath, env.opsLibPath, "-lm"];
+  // Link order: src.o first (unresolved symbols), then jit_runtime.a
+  // (provides idx1r/mod/sign/tic/toc and drags in numbl_real_flat_reduce),
+  // then numbl_ops.a (provides anything jit_runtime or src still need),
+  // then -lm for the standard C math functions.
+  const args = [
+    ...env.flags,
+    "-o",
+    outPath,
+    srcPath,
+    env.jitRtLibPath,
+    env.opsLibPath,
+    "-lm",
+  ];
 
   try {
     execFileSync(env.cc, args, {

@@ -63,6 +63,15 @@
       ],
       "include_dirs": [ "native/ops" ],
       "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ]
+    },
+    {
+      "target_name": "numbl_jit_runtime",
+      "type": "static_library",
+      "sources": [
+        "native/jit_runtime/jit_runtime.c"
+      ],
+      "include_dirs": [ "native/jit_runtime", "native/ops" ],
+      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ]
     }
   ]
 }

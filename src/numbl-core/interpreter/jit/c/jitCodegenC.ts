@@ -16,7 +16,12 @@
  */
 
 import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
-import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
+import {
+  isKnownInteger,
+  type JitExpr,
+  type JitStmt,
+  type JitType,
+} from "../jitTypes.js";
 import {
   C_TENSOR_BINARY_BUILTINS,
   C_TENSOR_REDUCTION_OPS,
@@ -26,6 +31,20 @@ import { findFusibleChains } from "../fusion.js";
 import { emitFusedChain } from "./cFusedCodegen.js";
 
 const MANGLE_PREFIX = "v_";
+
+/**
+ * Minimum NUMBL_JIT_RT_VERSION the emitter needs at link time.
+ *
+ * Bump this in lockstep with NUMBL_JIT_RT_VERSION in
+ * native/jit_runtime/jit_runtime.h whenever we add a helper the emitter
+ * calls. The emitted C asserts `NUMBL_JIT_RT_VERSION >= N` so a stale
+ * archive fails the per-JIT compile step with a clear message instead
+ * of a cryptic linker "undefined reference" error.
+ *
+ * Version log:
+ *   1 — initial: idx1r, mod, sign, reduce_flat, tic/toc/monotonic_time.
+ */
+const NUMBL_JIT_RT_REQUIRED_VERSION = 1;
 
 function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
@@ -60,22 +79,8 @@ const BUILTIN_TO_C: Record<string, string> = {
   expm1: "expm1",
   log1p: "log1p",
   pow: "pow",
-  mod: "__numbl_mod",
-  sign: "__numbl_sign",
-};
-
-const BUILTINS_NEEDING_HELPERS: Record<string, string> = {
-  mod: `static double __numbl_mod(double a, double b) {
-  if (b == 0.0) return a;
-  double r = fmod(a, b);
-  if (r != 0.0 && ((r < 0.0) != (b < 0.0))) r += b;
-  return r;
-}`,
-  sign: `static double __numbl_sign(double x) {
-  if (x > 0.0) return 1.0;
-  if (x < 0.0) return -1.0;
-  return 0.0;
-}`,
+  mod: "numbl_mod",
+  sign: "numbl_sign",
 };
 
 // Binary op → libnumbl_ops opcode enum name.
@@ -148,7 +153,6 @@ function tensorLen(name: string): string {
 // ── Per-function emit context ─────────────────────────────────────────
 
 interface EmitCtx {
-  helpersNeeded: Set<string>;
   tensorVars: Set<string>;
   /** Tensor outputs whose buffers are pre-allocated by JS. */
   outputTensorNames: Set<string>;
@@ -172,6 +176,10 @@ interface EmitCtx {
   paramTensorNames: Set<string>;
   /** Set when tic or toc is used — triggers __tic_state parameter. */
   needsTicState: boolean;
+  /** Set when any Index read is emitted — triggers __err_flag parameter
+   *  and the __numbl_idx1r helper. JS wrapper checks the flag after the
+   *  call and throws "Index exceeds array bounds" if set. */
+  needsErrorFlag: boolean;
   /** Emit `#pragma omp parallel for` on fused non-reduction loops. */
   openmp: boolean;
 }
@@ -217,9 +225,28 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
     case "Call":
       return emitCall(expr, ctx);
 
+    case "Index":
+      return emitIndex(expr, ctx);
+
     default:
       throw new Error(`C-JIT codegen: unsupported expr ${expr.tag}`);
   }
+}
+
+function emitIndex(expr: JitExpr & { tag: "Index" }, ctx: EmitCtx): string {
+  if (expr.indices.length !== 1) {
+    throw new Error("C-JIT codegen: multi-index Index read unsupported");
+  }
+  if (expr.base.tag !== "Var" || !ctx.tensorVars.has(expr.base.name)) {
+    throw new Error("C-JIT codegen: Index base must be a tensor Var");
+  }
+  ctx.needsErrorFlag = true;
+  const data = tensorData(expr.base.name);
+  const len = tensorLen(expr.base.name);
+  const idxExpr = expr.indices[0];
+  let i = emitExpr(idxExpr, ctx);
+  if (!isKnownInteger(idxExpr.jitType)) i = `round(${i})`;
+  return `numbl_idx1r(${data}, (size_t)${len}, ${i}, __err_flag)`;
 }
 
 /** For tensor binary/unary, we need multi-statement emission. This helper
@@ -460,7 +487,7 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     }
     const arg = expr.args[0];
     if (arg.tag === "Var" && ctx.tensorVars.has(arg.name)) {
-      return `__numbl_reduce(${opEnum}, ${tensorData(arg.name)}, ${tensorLen(arg.name)})`;
+      return `numbl_reduce_flat(${opEnum}, ${tensorData(arg.name)}, ${tensorLen(arg.name)})`;
     }
     // Non-Var tensor arg: emit the tensor expression to a scratch,
     // then reduce. Requires statement-level context — use pendingStmts.
@@ -471,28 +498,25 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
         arg,
         ctx
       );
-      return `__numbl_reduce(${opEnum}, ${tensorResult.data}, ${tensorResult.len})`;
+      return `numbl_reduce_flat(${opEnum}, ${tensorResult.data}, ${tensorResult.len})`;
     }
     throw new Error(
       `C-JIT codegen: reduction of complex tensor expr outside statement context`
     );
   }
-  // tic/toc: timer builtins using clock_gettime via __tic_state.
+  // tic/toc: timer builtins via __tic_state (helpers live in jit_runtime.a).
   if (expr.name === "tic" && expr.args.length === 0) {
     ctx.needsTicState = true;
-    return `__numbl_tic(__tic_state)`;
+    return `numbl_tic(__tic_state)`;
   }
   if (expr.name === "toc" && expr.args.length === 0) {
     ctx.needsTicState = true;
-    return `__numbl_toc(__tic_state)`;
+    return `numbl_toc(__tic_state)`;
   }
   // Scalar math builtin.
   const cName = BUILTIN_TO_C[expr.name];
   if (!cName) {
     throw new Error(`C-JIT codegen: unmapped builtin ${expr.name}`);
-  }
-  if (expr.name in BUILTINS_NEEDING_HELPERS) {
-    ctx.helpersNeeded.add(expr.name);
   }
   const args = expr.args.map(a => emitExpr(a, ctx));
   return `${cName}(${args.join(", ")})`;
@@ -561,7 +585,7 @@ function emitStmts(
   while (i < stmts.length) {
     const entry = coveredByChain.get(i);
     if (entry) {
-      const helpers = emitFusedChain(
+      emitFusedChain(
         lines,
         indent,
         entry.chain,
@@ -571,7 +595,6 @@ function emitStmts(
         ctx.localTensorNames,
         ctx.openmp
       );
-      for (const h of helpers) ctx.helpersNeeded.add(h);
       i += entry.chain.length;
     } else {
       emitStmt(lines, stmts[i], indent, ctx);
@@ -677,14 +700,13 @@ function emitTensorAssign(
       min: "fmin",
       atan2: "atan2",
       hypot: "hypot",
-      mod: "__numbl_mod",
+      mod: "numbl_mod",
       rem: "fmod",
     };
     const cFn = BINARY_BUILTIN_TO_C[expr.name];
     if (!cFn) {
       throw new Error(`C-JIT codegen: unmapped binary builtin: ${expr.name}`);
     }
-    if (expr.name === "mod") ctx.helpersNeeded.add("mod");
 
     const left = expr.args[0];
     const right = expr.args[1];
@@ -742,7 +764,7 @@ function emitReductionOfTensorExpr(
   const arg = callExpr.args[0];
   const tensorResult = emitTensorExprToStmts(lines, indent, arg, ctx);
   lines.push(
-    `${indent}${mangle(destName)} = __numbl_reduce(${opEnum}, ${tensorResult.data}, ${tensorResult.len});`
+    `${indent}${mangle(destName)} = numbl_reduce_flat(${opEnum}, ${tensorResult.data}, ${tensorResult.len});`
   );
 }
 
@@ -891,7 +913,6 @@ export interface COutputDesc {
 export interface GenerateCResult {
   cSource: string;
   cFnName: string;
-  helpersUsed: string[];
   paramDescs: CParamDesc[];
   outputDescs: COutputDesc[];
   /** True when any tensor is involved (params, locals, or outputs). */
@@ -900,6 +921,9 @@ export interface GenerateCResult {
   koffiSignature: string;
   /** True when tic/toc are used — the function has an extra `double*` param. */
   needsTicState: boolean;
+  /** True when any Index read was emitted — the function has an extra
+   *  `double *__err_flag` trailing param. */
+  needsErrorFlag: boolean;
 }
 
 export function generateC(
@@ -951,7 +975,6 @@ export function generateC(
   );
 
   const ctx: EmitCtx = {
-    helpersNeeded: new Set(),
     tensorVars,
     outputTensorNames,
     scratchCount: 0,
@@ -962,6 +985,7 @@ export function generateC(
     fuse: fuse ?? false,
     paramTensorNames,
     needsTicState: false,
+    needsErrorFlag: false,
     openmp: openmp ?? false,
   };
 
@@ -1097,71 +1121,44 @@ export function generateC(
     koffiParts.push("double *");
   }
 
+  // Append __err_flag when any Index read is emitted. Bounds-violation
+  // sets *__err_flag = 1.0; the JS wrapper checks after the call and
+  // throws "Index exceeds array bounds" to match JS-JIT semantics.
+  if (ctx.needsErrorFlag) {
+    sigParts.push(`double *__err_flag`);
+    koffiParts.push("double *");
+  }
+
   const paramList = sigParts.length > 0 ? sigParts.join(", ") : "void";
   const signature = `void ${cFnName}(${paramList})`;
   const koffiSignature = `void ${cFnName}(${koffiParts.join(", ")})`;
 
   // Assemble the full C source.
-  const helpersUsed: string[] = [];
-  const helperBlocks: string[] = [];
-  for (const h of ctx.helpersNeeded) {
-    helperBlocks.push(BUILTINS_NEEDING_HELPERS[h]);
-    helpersUsed.push(h);
-  }
-
   const usesTensors = tensorVars.size > 0;
 
   const parts: string[] = [];
   parts.push(`/* JIT C (koffi): ${fnName}(${params.join(", ")}) */`);
   parts.push(`#include <math.h>`);
+  // Always include jit_runtime — the emitter may call any of its helpers
+  // (mod, sign, reduce, tic/toc, idx1r) from a non-tensor scalar context.
+  parts.push(`#include <stdint.h>`);
+  parts.push(`#include "jit_runtime.h"`);
+  // Catch a stale jit_runtime.a at compile time so users get a clear
+  // "rebuild the addon" message instead of a cryptic linker "undefined
+  // reference" error when the emitter starts calling newly-added helpers.
+  parts.push(
+    `#if !defined(NUMBL_JIT_RT_VERSION) || NUMBL_JIT_RT_VERSION < ${NUMBL_JIT_RT_REQUIRED_VERSION}`
+  );
+  parts.push(
+    `#error "numbl_jit_runtime too old (need version >= ${NUMBL_JIT_RT_REQUIRED_VERSION}); run \`npm run build:addon\` to rebuild"`
+  );
+  parts.push(`#endif`);
   if (usesTensors) {
-    parts.push(`#include <stdint.h>`);
     parts.push(`#include <stdlib.h>`);
     parts.push(`#include "numbl_ops.h"`);
   }
-  if (ctx.needsTicState) {
-    parts.push(`#include <time.h>`);
-    if (!usesTensors) parts.push(`#include <stdint.h>`);
-  }
-
-  // tic/toc helpers: clock_gettime-based timer + exported get_monotonic_time.
-  if (ctx.needsTicState) {
-    parts.push("");
-    parts.push(`static double __numbl_clock(void) {`);
-    parts.push(`  struct timespec ts;`);
-    parts.push(`  clock_gettime(CLOCK_MONOTONIC, &ts);`);
-    parts.push(`  return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;`);
-    parts.push(`}`);
-    parts.push(`static double __numbl_tic(double *state) {`);
-    parts.push(`  double t = __numbl_clock();`);
-    parts.push(`  *state = t;`);
-    parts.push(`  return t;`);
-    parts.push(`}`);
-    parts.push(`static double __numbl_toc(const double *state) {`);
-    parts.push(`  return __numbl_clock() - *state;`);
-    parts.push(`}`);
-    parts.push(`double get_monotonic_time(void) {`);
-    parts.push(`  return __numbl_clock();`);
-    parts.push(`}`);
-  }
-
-  // Reduction helper: always needed if tensors are involved.
-  if (usesTensors) {
-    parts.push("");
-    parts.push(
-      `static double __numbl_reduce(int op, const double *data, int64_t len) {`
-    );
-    parts.push(`  double out = 0.0;`);
-    parts.push(`  numbl_real_flat_reduce(op, (size_t)len, data, &out);`);
-    parts.push(`  return out;`);
-    parts.push(`}`);
-  }
 
   parts.push("");
-  if (helperBlocks.length > 0) {
-    parts.push(helperBlocks.join("\n\n"));
-    parts.push("");
-  }
   parts.push(`${signature} {`);
   parts.push(preludeLines.join("\n"));
   parts.push(bodyLines.join("\n"));
@@ -1178,11 +1175,11 @@ export function generateC(
   return {
     cSource: parts.join("\n"),
     cFnName,
-    helpersUsed,
     paramDescs,
     outputDescs,
     usesTensors,
     koffiSignature,
     needsTicState: ctx.needsTicState,
+    needsErrorFlag: ctx.needsErrorFlag,
   };
 }

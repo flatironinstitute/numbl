@@ -149,8 +149,7 @@ describe("C-JIT: code generation (koffi)", () => {
       [numberT],
       "mod_test"
     );
-    expect(gen.cSource).toContain("__numbl_mod");
-    expect(gen.helpersUsed).toContain("mod");
+    expect(gen.cSource).toContain("numbl_mod");
   });
 });
 
@@ -475,7 +474,7 @@ describe("C-JIT: tensor codegen (Phase 2, koffi)", () => {
       [numberT],
       "fn_sum"
     );
-    expect(gen.cSource).toContain("__numbl_reduce(NUMBL_REDUCE_SUM");
+    expect(gen.cSource).toContain("numbl_reduce_flat(NUMBL_REDUCE_SUM");
   });
 });
 

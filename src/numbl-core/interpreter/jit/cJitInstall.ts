@@ -106,10 +106,17 @@ registerCJitBackend({
     if (gen.needsTicState) {
       const lib = loaded.lib;
       getMonotonicTime = lib.func(
-        "double get_monotonic_time(void)"
+        "double numbl_monotonic_time(void)"
       ) as () => number;
       ticStateBuf = new Float64Array(1);
     }
+
+    // Bounds-error flag: shared single-slot buffer. The C helper writes
+    // 1.0 on out-of-bounds index reads; we reset before each call and
+    // check after.
+    const errorFlagBuf: Float64Array | undefined = gen.needsErrorFlag
+      ? new Float64Array(1)
+      : undefined;
 
     const compiledFn = (...callArgs: unknown[]): unknown => {
       // Build the koffi call arguments: extract data/len from tensors,
@@ -178,12 +185,23 @@ registerCJitBackend({
         koffiArgs.push(ticStateBuf);
       }
 
+      // Reset and append the bounds-error flag.
+      if (errorFlagBuf) {
+        errorFlagBuf[0] = 0;
+        koffiArgs.push(errorFlagBuf);
+      }
+
       // Call the C function.
       nativeFn(...koffiArgs);
 
       // tic/toc: convert C clock domain back to JS ticTime.
       if (ticStateBuf) {
         setTicTime((ticStateBuf[0] + ticJsNow - ticCNow) * 1000);
+      }
+
+      // Raise if a bounds violation was flagged inside the C call.
+      if (errorFlagBuf && errorFlagBuf[0] !== 0) {
+        throw new Error("Index exceeds array bounds");
       }
 
       // Extract results.

@@ -144,11 +144,6 @@ function checkValueType(t: JitType): FeasibilityResult {
 }
 
 function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
-  // Index reads still bail (Phase 2 scope intentionally excludes them).
-  if (expr.tag === "Index") {
-    return fail(ctx, "Index reads not supported (defer to JS-JIT)");
-  }
-
   const typeCheck = checkValueType(expr.jitType);
   if (!typeCheck.ok) return fail(ctx, typeCheck.reason);
 
@@ -156,6 +151,26 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
     case "NumberLiteral":
     case "Var":
       return { ok: true };
+
+    case "Index": {
+      // Phase 1 of Index support: single-index (linear) reads into a
+      // real-tensor Var. Multi-index reads need shape plumbed through
+      // the C ABI; non-Var bases need scratch-buffer evaluation first.
+      // Both deferred.
+      if (expr.indices.length !== 1) {
+        return fail(ctx, "multi-index Index read not supported");
+      }
+      if (expr.base.tag !== "Var") {
+        return fail(ctx, "Index read requires a Var base");
+      }
+      if (
+        expr.base.jitType.kind !== "tensor" ||
+        expr.base.jitType.isComplex !== false
+      ) {
+        return fail(ctx, "Index read base must be a real tensor");
+      }
+      return checkExpr(expr.indices[0], ctx);
+    }
 
     case "Binary": {
       switch (expr.op) {

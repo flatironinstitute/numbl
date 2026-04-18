@@ -142,8 +142,8 @@ const BUILTIN_TO_C: Record<string, string> = {
   expm1: "expm1",
   log1p: "log1p",
   pow: "pow",
-  mod: "__numbl_mod",
-  sign: "__numbl_sign",
+  mod: "numbl_mod",
+  sign: "numbl_sign",
   max: "fmax",
   min: "fmin",
 };
@@ -159,15 +159,11 @@ const BUILTIN_TO_C: Record<string, string> = {
  *
  * `allTensorVars` is the full set of tensor-typed variables so we can
  * distinguish tensor reads from scalar reads.
- *
- * `helpersNeeded` collects names of scalar helpers that need to be
- * emitted (e.g. __numbl_mod).
  */
 function emitScalarExpr(
   expr: JitExpr,
   chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  helpersNeeded: Set<string>
+  allTensorVars: ReadonlySet<string>
 ): string {
   switch (expr.tag) {
     case "NumberLiteral":
@@ -184,13 +180,13 @@ function emitScalarExpr(
     }
 
     case "Binary":
-      return emitBinaryScalar(expr, chainLocals, allTensorVars, helpersNeeded);
+      return emitBinaryScalar(expr, chainLocals, allTensorVars);
 
     case "Unary":
-      return emitUnaryScalar(expr, chainLocals, allTensorVars, helpersNeeded);
+      return emitUnaryScalar(expr, chainLocals, allTensorVars);
 
     case "Call":
-      return emitCallScalar(expr, chainLocals, allTensorVars, helpersNeeded);
+      return emitCallScalar(expr, chainLocals, allTensorVars);
 
     default:
       throw new Error(
@@ -202,21 +198,10 @@ function emitScalarExpr(
 function emitBinaryScalar(
   expr: JitExpr & { tag: "Binary" },
   chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  helpersNeeded: Set<string>
+  allTensorVars: ReadonlySet<string>
 ): string {
-  const l = emitScalarExpr(
-    expr.left,
-    chainLocals,
-    allTensorVars,
-    helpersNeeded
-  );
-  const r = emitScalarExpr(
-    expr.right,
-    chainLocals,
-    allTensorVars,
-    helpersNeeded
-  );
+  const l = emitScalarExpr(expr.left, chainLocals, allTensorVars);
+  const r = emitScalarExpr(expr.right, chainLocals, allTensorVars);
 
   switch (expr.op) {
     case BinaryOperation.Add:
@@ -256,15 +241,9 @@ function emitBinaryScalar(
 function emitUnaryScalar(
   expr: JitExpr & { tag: "Unary" },
   chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  helpersNeeded: Set<string>
+  allTensorVars: ReadonlySet<string>
 ): string {
-  const operand = emitScalarExpr(
-    expr.operand,
-    chainLocals,
-    allTensorVars,
-    helpersNeeded
-  );
+  const operand = emitScalarExpr(expr.operand, chainLocals, allTensorVars);
   switch (expr.op) {
     case UnaryOperation.Plus:
       return `(+${operand})`;
@@ -280,8 +259,7 @@ function emitUnaryScalar(
 function emitCallScalar(
   expr: JitExpr & { tag: "Call" },
   chainLocals: ReadonlySet<string>,
-  allTensorVars: ReadonlySet<string>,
-  helpersNeeded: Set<string>
+  allTensorVars: ReadonlySet<string>
 ): string {
   // Tensor unary/binary call → becomes scalar math call on per-element values
   if (
@@ -294,11 +272,8 @@ function emitCallScalar(
     if (!cName) {
       throw new Error(`cFusedCodegen: unmapped builtin ${expr.name}`);
     }
-    if (expr.name === "mod" || expr.name === "sign") {
-      helpersNeeded.add(expr.name);
-    }
     const args = expr.args.map(a =>
-      emitScalarExpr(a, chainLocals, allTensorVars, helpersNeeded)
+      emitScalarExpr(a, chainLocals, allTensorVars)
     );
     return `${cName}(${args.join(", ")})`;
   }
@@ -372,9 +347,10 @@ function accumulateOp(op: BinaryOperation, dest: string, val: string): string {
 /**
  * Emit a fused per-element loop for the given chain.
  *
- * Appends C source lines to `lines`. Returns the set of helper
- * function names needed (e.g. "__numbl_mod") so the caller can emit
- * their definitions.
+ * Appends C source lines to `lines`. All scalar math helpers the inner
+ * body may reference (mod, sign, ...) live in jit_runtime.a, so this
+ * function no longer reports back "helpers needed" — the emitter simply
+ * calls them as library symbols.
  *
  * `allTensorVars` is the full set of tensor-typed variable names.
  * `paramTensors` is the subset that are input parameters.
@@ -390,9 +366,7 @@ export function emitFusedChain(
   outputTensorNames: ReadonlySet<string>,
   localTensorNames: ReadonlySet<string>,
   openmp?: boolean
-): Set<string> {
-  const helpersNeeded = new Set<string>();
-
+): void {
   // Determine the length variable — use the first tensor param referenced.
   const lenVar = findLenVar(chain, paramTensors, allTensorVars);
 
@@ -472,12 +446,7 @@ export function emitFusedChain(
   const inner = indent + "  ";
 
   for (const assign of chain.assigns) {
-    const rhs = emitScalarExpr(
-      assign.expr,
-      chainLocals,
-      allTensorVars,
-      helpersNeeded
-    );
+    const rhs = emitScalarExpr(assign.expr, chainLocals, allTensorVars);
 
     // First assignment to this dest in the loop → declare the scalar local.
     // Subsequent assignments → just reassign.
@@ -524,8 +493,6 @@ export function emitFusedChain(
       lines.push(`${indent}${acc} = ${reduceAccLocal};`);
     }
   }
-
-  return helpersNeeded;
 }
 
 /**
