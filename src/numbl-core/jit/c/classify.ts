@@ -70,6 +70,11 @@ export function isFreshTensorRhs(expr: JitExpr): boolean {
   if (expr.tag === "Call" && (expr.name === "zeros" || expr.name === "ones")) {
     return expr.jitType.kind === "tensor";
   }
+  // Tensor-return UserCall transfers ownership via the dynamic-output
+  // ABI (C mallocs; caller frees). Feasibility already restricts this
+  // to callees whose output[0] is isDynamicOutput, so the LHS receives
+  // a freshly-allocated buffer.
+  if (expr.tag === "UserCall" && expr.jitType.kind === "tensor") return true;
   return false;
 }
 

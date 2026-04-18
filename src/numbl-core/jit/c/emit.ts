@@ -828,6 +828,82 @@ function emitVConcatGrowAssign(
   lines.push(`${indent}}`);
 }
 
+/** Emit `dest = foo(...)` where foo returns a tensor via the dynamic-
+ *  output ABI. Feasibility has already verified the callee's output[0]
+ *  is a fresh-alloc dynamic output, so the callee fills
+ *  `buf_out / out_len / d0_out / d1_out` and transfers ownership. The
+ *  caller frees the old dest buffer (if any), takes the new buffer, and
+ *  lets the epilogue free() it at end-of-scope alongside the other
+ *  local tensors. */
+function emitUserCallTensorAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  destMeta: TensorMeta,
+  expr: JitExpr & { tag: "UserCall" },
+  ctx: EmitCtx
+): void {
+  if (!destMeta.hasFreshAlloc) {
+    throw new Error(
+      `C-JIT codegen: emitUserCallTensorAssign('${destName}'): destMeta.hasFreshAlloc must be true`
+    );
+  }
+  const calleeAbi = ctx.calleeAbi?.get(expr.jitName);
+  if (!calleeAbi) {
+    throw new Error(
+      `C-JIT codegen: UserCall '${expr.name}' missing callee ABI for ${expr.jitName}`
+    );
+  }
+  if (calleeAbi.paramDescs.length !== expr.args.length) {
+    throw new Error(
+      `C-JIT codegen: UserCall '${expr.name}' arg count (${expr.args.length}) differs from callee paramDescs (${calleeAbi.paramDescs.length})`
+    );
+  }
+  const out0 = calleeAbi.outputDescs[0];
+  if (!out0 || out0.kind !== "tensor" || !out0.dynamic) {
+    throw new Error(
+      `C-JIT codegen: UserCall '${expr.name}' tensor-return requires dynamic tensor output[0]`
+    );
+  }
+  ctx.needsErrorFlag = true;
+  const argCodes: string[] = [];
+  for (let i = 0; i < expr.args.length; i++) {
+    const slots = emitUserCallArgSlots(
+      expr.args[i],
+      calleeAbi.paramDescs[i],
+      ctx
+    );
+    argCodes.push(...slots);
+  }
+  const dData = tensorData(destName);
+  const dLen = tensorLen(destName);
+  const dD0 = tensorD0(destName);
+  const dD1 = tensorD1(destName);
+  const n = ++ctx.tmp.n;
+  const prefix = `__uc${n}`;
+  const inner = indent + "  ";
+  lines.push(`${indent}{`);
+  lines.push(`${inner}double *${prefix}_buf = NULL;`);
+  lines.push(`${inner}int64_t ${prefix}_len = 0;`);
+  lines.push(`${inner}int64_t ${prefix}_d0 = 0;`);
+  lines.push(`${inner}int64_t ${prefix}_d1 = 0;`);
+  const callArgs = [
+    ...argCodes,
+    `&${prefix}_buf`,
+    `&${prefix}_len`,
+    `&${prefix}_d0`,
+    `&${prefix}_d1`,
+    `__err_flag`,
+  ];
+  lines.push(`${inner}jit_${expr.jitName}(${callArgs.join(", ")});`);
+  lines.push(`${inner}if (${dData}) free(${dData});`);
+  lines.push(`${inner}${dData} = ${prefix}_buf;`);
+  lines.push(`${inner}${dLen} = ${prefix}_len;`);
+  lines.push(`${inner}${dD0} = ${prefix}_d0;`);
+  lines.push(`${inner}${dD1} = ${prefix}_d1;`);
+  lines.push(`${indent}}`);
+}
+
 /** Emit a tensor-result Assign: handles Binary, Unary, Call on tensors. */
 function emitTensorAssign(
   lines: string[],
@@ -839,6 +915,12 @@ function emitTensorAssign(
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   const needsAlloc = isLocalTensor(ctx, destName);
+
+  if (expr.tag === "UserCall") {
+    const destMeta = requireFreshAllocMeta(ctx, destName, "UserCall");
+    emitUserCallTensorAssign(lines, indent, destName, destMeta, expr, ctx);
+    return;
+  }
 
   if (expr.tag === "TensorLiteral") {
     const destMeta = requireFreshAllocMeta(ctx, destName, "TensorLiteral");
