@@ -975,13 +975,46 @@ export function mElemLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   return mElemDiv(b, a);
 }
 
+/** cos(pi * x) with exact results at integer and half-integer x. */
+function cospi(x: number): number {
+  if (Number.isInteger(x)) return (x & 1) === 0 ? 1 : -1;
+  if (Number.isInteger(x * 2)) return 0;
+  return Math.cos(Math.PI * x);
+}
+
+/** sin(pi * x) with exact results at integer and half-integer x. */
+function sinpi(x: number): number {
+  if (Number.isInteger(x)) return 0;
+  const twice = x * 2;
+  if (Number.isInteger(twice)) {
+    // x = n + 0.5; sin(pi*(n+0.5)) = (-1)^n. twice-1 = 2n, so (twice-1)/2 = n.
+    return (((twice - 1) / 2) & 1) === 0 ? 1 : -1;
+  }
+  return Math.sin(Math.PI * x);
+}
+
+/** Principal-branch z^w for pure-real base z<0 and pure-real exponent w,
+ *  using cospi/sinpi so the phase is exact at integer/half-integer w
+ *  (MATLAB: real((-4)^0.5) == 0 exactly). */
+function negRealPow(
+  negBase: number,
+  exponent: number
+): { re: number; im: number } {
+  const mag = Math.pow(-negBase, exponent);
+  return { re: mag * cospi(exponent), im: mag * sinpi(exponent) };
+}
+
 /** Power */
 export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isComplexOrMixed(a, b)) {
     const ac = toComplex(a),
       bc = toComplex(b);
+    if (ac.im === 0 && bc.im === 0 && ac.re < 0) {
+      const r = negRealPow(ac.re, bc.re);
+      return complexResult(r.re, r.im);
+    }
     // z^w = exp(w * ln(z)), using polar form: ln(z) = ln|z| + i*arg(z)
-    const r = Math.sqrt(ac.re * ac.re + ac.im * ac.im);
+    const r = Math.hypot(ac.re, ac.im);
     if (r === 0) {
       // 0^w: result is 0 for positive real exponent, 1 for w=0
       if (bc.re === 0 && bc.im === 0) return complexResult(1, 0);
@@ -1034,14 +1067,8 @@ export function mPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     isRuntimeNumber(b) &&
     !Number.isInteger(b)
   ) {
-    const r = Math.abs(a);
-    const theta = Math.PI; // arg of negative real
-    const lnR = Math.log(r);
-    const bVal = b as number;
-    const newRe = bVal * lnR;
-    const newIm = bVal * theta;
-    const expR = Math.exp(newRe);
-    return complexResult(expR * Math.cos(newIm), expR * Math.sin(newIm));
+    const r = negRealPow(a as number, b as number);
+    return complexResult(r.re, r.im);
   }
   return binaryOp(a, b, (x, y) => Math.pow(x, y));
 }
@@ -1076,8 +1103,11 @@ export function mElemPow(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     }
   }
   const complexPow = (aRe: number, aIm: number, bRe: number, bIm: number) => {
+    if (aIm === 0 && bIm === 0 && aRe < 0) {
+      return negRealPow(aRe, bRe);
+    }
     // z^w = exp(w * ln(z)), using polar form: ln(z) = ln|z| + i*arg(z)
-    const r = Math.sqrt(aRe * aRe + aIm * aIm);
+    const r = Math.hypot(aRe, aIm);
     if (r === 0) {
       // 0^w: result is 0 for positive real exponent, 1 for w=0
       if (bRe === 0 && bIm === 0) return { re: 1, im: 0 };

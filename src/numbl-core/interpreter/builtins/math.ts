@@ -216,7 +216,7 @@ defineBuiltin({
 
 function complexLog(re: number, im: number): { re: number; im: number } {
   return {
-    re: Math.log(Math.sqrt(re * re + im * im)),
+    re: Math.log(Math.hypot(re, im)),
     im: Math.atan2(im, re),
   };
 }
@@ -236,7 +236,7 @@ defineBuiltin({
 });
 
 const complexLog2 = (re: number, im: number) => ({
-  re: Math.log(Math.sqrt(re * re + im * im)) / Math.LN2,
+  re: Math.log(Math.hypot(re, im)) / Math.LN2,
   im: Math.atan2(im, re) / Math.LN2,
 });
 
@@ -302,7 +302,7 @@ defineBuiltin({
 });
 
 const complexLog10 = (re: number, im: number) => ({
-  re: Math.log(Math.sqrt(re * re + im * im)) / Math.LN10,
+  re: Math.log(Math.hypot(re, im)) / Math.LN10,
   im: Math.atan2(im, re) / Math.LN10,
 });
 
@@ -324,11 +324,7 @@ defineBuiltin({
 
 defineBuiltin({
   name: "abs",
-  cases: unaryRealResultCases(
-    Math.abs,
-    (re, im) => Math.sqrt(re * re + im * im),
-    "abs"
-  ),
+  cases: unaryRealResultCases(Math.abs, Math.hypot, "abs"),
   jitEmit: unaryMathJitEmit("Math.abs", "tAbs"),
 });
 
