@@ -21,10 +21,21 @@
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
+import type { GeneratedFn } from "../jitLower.js";
 
 export type FeasibilityResult =
   | { ok: true }
   | { ok: false; reason: string; line?: number };
+
+/** Shared across the feasibility check and any recursive UserCall descents.
+ *  Caches per-jitName results (ok + reason) so a callee reached from
+ *  multiple sites is only analyzed once. `inProgress` blocks reentry for
+ *  direct or mutual recursion — we bail on recursive UserCall for now. */
+interface SharedFeasCtx {
+  generatedIRBodies: Map<string, GeneratedFn>;
+  results: Map<string, FeasibilityResult>;
+  inProgress: Set<string>;
+}
 
 /** Mutable traversal state so failure reasons can carry the nearest line. */
 interface Ctx {
@@ -44,6 +55,9 @@ interface Ctx {
    *  require `tensorParams` OR a locally-allocated tensor (covered by
    *  the dynamic-output path in the emitter). */
   tensorVars: Set<string>;
+  /** Shared across the whole descent (top-level + every recursive
+   *  UserCall). null at the top when no callee map is available (tests). */
+  shared: SharedFeasCtx | null;
 }
 
 function fail(ctx: Ctx, reason: string): FeasibilityResult {
@@ -294,16 +308,92 @@ function checkExpr(expr: JitExpr, ctx: Ctx): FeasibilityResult {
       return checkExpr(expr.value, ctx);
     }
 
+    case "UserCall":
+      return checkUserCall(expr, ctx);
+
     // Everything else is out of scope — bail to JS-JIT.
     case "ImagLiteral":
     case "StringLiteral":
     case "MemberRead":
     case "StructArrayMemberRead":
-    case "UserCall":
     case "FuncHandleCall":
     case "UserDispatchCall":
       return fail(ctx, `unsupported expr: ${expr.tag}`);
   }
+}
+
+/** UserCall: the callee must itself be C-feasible. First cut supports
+ *  scalar args + scalar return only. Args are checked in the caller's
+ *  ctx; the callee body is checked in a fresh ctx built from the
+ *  cached `GeneratedFn` meta. Results are memoized across the whole
+ *  feasibility descent to avoid rechecking heavily-reused helpers. */
+function checkUserCall(
+  expr: JitExpr & { tag: "UserCall" },
+  ctx: Ctx
+): FeasibilityResult {
+  if (!ctx.shared) {
+    return fail(ctx, "UserCall: no generatedIRBodies in feasibility ctx");
+  }
+  // Scalar args only for this first cut. Tensor args go through the
+  // dynamic-output ABI and are deferred (step 4 of the handoff plan).
+  for (const a of expr.args) {
+    if (!isScalarKind(a.jitType.kind)) {
+      return fail(
+        ctx,
+        `UserCall '${expr.name}': tensor args not yet supported`
+      );
+    }
+    const r = checkExpr(a, ctx);
+    if (!r.ok) return r;
+  }
+  // Scalar return only for this first cut.
+  if (!isScalarKind(expr.jitType.kind)) {
+    return fail(
+      ctx,
+      `UserCall '${expr.name}': tensor return not yet supported`
+    );
+  }
+
+  // Descend into the callee body. Memoize + guard against recursion.
+  const { shared } = ctx;
+  const cached = shared.results.get(expr.jitName);
+  if (cached) {
+    if (cached.ok) return { ok: true };
+    // Re-wrap the cached failure with the caller's line so the parity
+    // reporter blames the call site, not the callee body.
+    return fail(ctx, `UserCall '${expr.name}': ${cached.reason}`);
+  }
+  if (shared.inProgress.has(expr.jitName)) {
+    return fail(ctx, `UserCall '${expr.name}': recursion not supported`);
+  }
+  const callee = shared.generatedIRBodies.get(expr.jitName);
+  if (!callee) {
+    return fail(
+      ctx,
+      `UserCall '${expr.name}': missing IR body for ${expr.jitName}`
+    );
+  }
+
+  shared.inProgress.add(expr.jitName);
+  let calleeRes: FeasibilityResult;
+  try {
+    calleeRes = checkCFeasibilityInternal(
+      callee.body,
+      callee.fn.params,
+      callee.argTypes,
+      callee.outputTypes[0] ?? null,
+      callee.outputTypes,
+      callee.nargout,
+      shared
+    );
+  } finally {
+    shared.inProgress.delete(expr.jitName);
+  }
+  shared.results.set(expr.jitName, calleeRes);
+  if (!calleeRes.ok) {
+    return fail(ctx, `UserCall '${expr.name}': ${calleeRes.reason}`);
+  }
+  return { ok: true };
 }
 
 function checkCall(
@@ -598,7 +688,35 @@ export function checkCFeasibility(
   argTypes: JitType[],
   outputType: JitType | null,
   outputTypes: JitType[],
-  nargout: number
+  nargout: number,
+  generatedIRBodies?: Map<string, GeneratedFn>
+): FeasibilityResult {
+  const shared: SharedFeasCtx | null = generatedIRBodies
+    ? {
+        generatedIRBodies,
+        results: new Map(),
+        inProgress: new Set(),
+      }
+    : null;
+  return checkCFeasibilityInternal(
+    body,
+    paramNames,
+    argTypes,
+    outputType,
+    outputTypes,
+    nargout,
+    shared
+  );
+}
+
+function checkCFeasibilityInternal(
+  body: JitStmt[],
+  paramNames: string[],
+  argTypes: JitType[],
+  outputType: JitType | null,
+  outputTypes: JitType[],
+  nargout: number,
+  shared: SharedFeasCtx | null
 ): FeasibilityResult {
   for (const t of argTypes) {
     const r = checkValueType(t);
@@ -636,7 +754,7 @@ export function checkCFeasibility(
   // stricter `tensorParams` check.
   const tensorVars = new Set<string>(tensorParams);
   collectTensorLocals(body, tensorVars);
-  const ctx: Ctx = { line: 0, tensorParams, tensorVars };
+  const ctx: Ctx = { line: 0, tensorParams, tensorVars, shared };
   return checkStmts(body, ctx);
 }
 
