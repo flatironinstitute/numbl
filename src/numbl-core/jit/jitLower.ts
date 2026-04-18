@@ -44,6 +44,25 @@ import type { RuntimeValue } from "../runtime/types.js";
 
 // ── Lowering entry point ────────────────────────────────────────────────
 
+/**
+ * Lowered IR for a user function reached during a top-level lowering.
+ *
+ * JS-JIT caches the callee as generated JS source in `generatedFns` and
+ * is done. C-JIT needs to re-analyze the callee's IR (for recursive
+ * feasibility + emitting a static C function per callee), so we also
+ * cache the raw IR here. One entry per unique `jitName`; matches the
+ * JS-JIT specialization key.
+ */
+export interface GeneratedFn {
+  fn: FunctionDef;
+  argTypes: JitType[];
+  outputNames: string[];
+  outputTypes: JitType[];
+  body: JitStmt[];
+  localVars: Set<string>;
+  nargout: number;
+}
+
 export interface LoweringResult {
   body: JitStmt[];
   outputNames: string[];
@@ -51,6 +70,10 @@ export interface LoweringResult {
   hasTensorOps: boolean;
   /** Generated JS code for called user functions: jitName → code */
   generatedFns: Map<string, string>;
+  /** Lowered IR for called user functions: jitName → IR + metadata.
+   *  Populated alongside `generatedFns` by `lowerUserFuncCall`; the
+   *  C-JIT uses it for recursive feasibility and per-callee C emission. */
+  generatedIRBodies: Map<string, GeneratedFn>;
   /** Type of the first output variable after lowering */
   outputType: JitType | null;
   /** Types of all output variables in outputNames order. Mirrors the
@@ -64,7 +87,8 @@ export function lowerFunction(
   nargout: number,
   interp?: Interpreter,
   generatedFns?: Map<string, string>,
-  loweringInProgress?: Set<string>
+  loweringInProgress?: Set<string>,
+  generatedIRBodies?: Map<string, GeneratedFn>
 ): LoweringResult | null {
   if (argTypes.length !== fn.params.length) return null;
 
@@ -94,6 +118,8 @@ export function lowerFunction(
 
   const sharedGeneratedFns = generatedFns ?? new Map<string, string>();
   const sharedInProgress = loweringInProgress ?? new Set<string>();
+  const sharedGeneratedIRBodies =
+    generatedIRBodies ?? new Map<string, GeneratedFn>();
 
   // Build line table for offset→line lookup from file sources
   let lineTable: number[] | undefined;
@@ -115,6 +141,7 @@ export function lowerFunction(
     sliceAliases: new Map(),
     interp,
     generatedFns: sharedGeneratedFns,
+    generatedIRBodies: sharedGeneratedIRBodies,
     loweringInProgress: sharedInProgress,
     lineTable,
   };
@@ -139,6 +166,7 @@ export function lowerFunction(
     localVars: ctx.localVars,
     hasTensorOps: ctx._hasTensorOps ?? false,
     generatedFns: sharedGeneratedFns,
+    generatedIRBodies: sharedGeneratedIRBodies,
     outputType,
     outputTypes,
   };
@@ -188,6 +216,7 @@ interface LowerCtx {
   _hasTensorOps?: boolean;
   interp?: Interpreter;
   generatedFns: Map<string, string>;
+  generatedIRBodies: Map<string, GeneratedFn>;
   loweringInProgress: Set<string>;
   /** Pre-built line break table for offset→line lookup. */
   lineTable?: number[];
@@ -1988,7 +2017,8 @@ function lowerUserFuncCall(
       calleeNargout,
       interp,
       ctx.generatedFns,
-      ctx.loweringInProgress
+      ctx.loweringInProgress,
+      ctx.generatedIRBodies
     );
     if (!calleeResult) {
       // Stage 24 soft-bail: the callee's body has constructs the JIT
@@ -2050,6 +2080,17 @@ function lowerUserFuncCall(
     ].join("\n");
     const wrappedJS = `${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
     ctx.generatedFns.set(jitName, wrappedJS);
+    // Cache the lowered IR alongside the JS source. The C-JIT reads this
+    // in cFeasibility / generateC; JS-JIT ignores it.
+    ctx.generatedIRBodies.set(jitName, {
+      fn: calleeFn,
+      argTypes: argJitTypes,
+      outputNames: calleeResult.outputNames,
+      outputTypes: calleeResult.outputTypes,
+      body: calleeResult.body,
+      localVars: calleeResult.localVars,
+      nargout: calleeNargout,
+    });
 
     // Propagate tensor ops flag
     if (calleeResult.hasTensorOps) ctx._hasTensorOps = true;
@@ -2193,7 +2234,8 @@ function getGeneratedFnReturnType(
     nargout,
     ctx.interp,
     ctx.generatedFns,
-    ctx.loweringInProgress
+    ctx.loweringInProgress,
+    ctx.generatedIRBodies
   );
   return result?.outputType ?? null;
 }

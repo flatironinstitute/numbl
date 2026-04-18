@@ -256,7 +256,8 @@ function tryJitLoop(
         lowered.outputType,
         lowered.outputTypes,
         inputTypes,
-        outputs.length
+        outputs.length,
+        lowered.generatedIRBodies
       );
       if (res.ok) {
         interp.loopCJitCache.set(cacheKey, { fn: res.fn });

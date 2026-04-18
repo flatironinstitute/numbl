@@ -112,7 +112,9 @@ registerCJitBackend({
     outputType,
     outputTypes,
     argTypes,
-    nargout
+    nargout,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    generatedIRBodies
   ) {
     const feas = checkCFeasibility(
       body,

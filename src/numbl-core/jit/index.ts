@@ -135,7 +135,8 @@ export function tryJitCall(
         lowered.outputType,
         lowered.outputTypes,
         argTypes,
-        nargout
+        nargout,
+        lowered.generatedIRBodies
       );
       if (res.ok) {
         fnWithCache._cJitCache.set(cacheKey, { fn: res.fn });

@@ -16,6 +16,7 @@
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import type { JitStmt, JitType } from "../jitTypes.js";
+import type { GeneratedFn } from "../jitLower.js";
 
 /**
  * Outcome of a C-JIT compile attempt.
@@ -50,7 +51,8 @@ export interface CJitBackend {
     outputType: JitType | null,
     outputTypes: JitType[],
     argTypes: JitType[],
-    nargout: number
+    nargout: number,
+    generatedIRBodies: Map<string, GeneratedFn>
   ): CJitCompileResult;
 }
 
