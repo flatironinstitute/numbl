@@ -61,6 +61,12 @@ export function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
 }
 
+/** Join a C type and an identifier with a space unless the type already
+ *  ends in `*` (pointer types get no space between `*` and the name). */
+function spaceBeforeName(cType: string): string {
+  return cType.endsWith("*") ? "" : " ";
+}
+
 // ── Scalar op target (value form + truthiness form) ─────────────────────
 //
 // C coerces numeric results of comparisons/logicals to `double` so the
@@ -1344,6 +1350,55 @@ function emitStmt(
 
 // ── Top-level ─────────────────────────────────────────────────────────
 
+/**
+ * The native ABI as a flat list of slots — one schema, two readers.
+ *
+ * The C-signature builder walks this list to emit the signature and the
+ * koffi type string; the JS wrapper in cJitInstall.ts walks the same
+ * list to push the matching JS value into each koffi arg position. Slots
+ * tied to a param/output carry the index back into paramDescs / outputDescs
+ * so the JS wrapper can find the source value / output buffer without
+ * reconstructing the mapping itself.
+ *
+ * Adding a new ABI shape = add a slot kind here, emit a slot for it in
+ * `buildAbiSlots` (below), and handle the kind in the JS marshaller.
+ */
+export type AbiSlotKind =
+  // Param-sourced slots — value comes from callArgs[paramIdx].
+  | "scalar"
+  | "tensorData"
+  | "tensorLen"
+  | "tensorD0"
+  | "tensorD1"
+  // Output-allocated slots — value comes from outputBufs[outputIdx].
+  | "scalarOut"
+  | "fixedOutBuf"
+  | "fixedOutLen"
+  | "dynOutBuf"
+  | "dynOutLen"
+  | "dynOutD0"
+  | "dynOutD1"
+  // Trailer slots — value comes from per-call shared buffers.
+  | "ticState"
+  | "errFlag";
+
+export interface AbiSlot {
+  kind: AbiSlotKind;
+  /** C type string for the signature, e.g. "double", "const double *",
+   *  "double **". */
+  cType: string;
+  /** Identifier as it appears in the C signature. Empty for koffi-only
+   *  slots (never happens today, but kept explicit). */
+  cName: string;
+  /** koffi type string, with `_Out_` prefix where koffi must treat the
+   *  pointer as an out-param. */
+  koffiType: string;
+  /** Index into paramDescs, for "scalar" / "tensor*" kinds. */
+  paramIdx?: number;
+  /** Index into outputDescs, for output-allocated kinds. */
+  outputIdx?: number;
+}
+
 export interface CParamDesc {
   name: string;
   kind: "scalar" | "tensor";
@@ -1352,6 +1407,9 @@ export interface CParamDesc {
    *  marshal. `undefined` means the tensor is only used in whole-tensor
    *  ops (legacy data/len ABI). */
   ndim?: number;
+  /** Ordered slots this param contributes to the ABI. One slot for a
+   *  scalar; two or more (data + len + optional d0/d1) for a tensor. */
+  slots: AbiSlot[];
 }
 
 /** Per-output descriptor. Tells the JS wrapper how to marshal outputs. */
@@ -1363,6 +1421,10 @@ export interface COutputDesc {
    *  extra d0/d1 out-slots. The JS wrapper decodes the pointer, copies
    *  into a fresh Float64Array, and frees the C allocation. */
   dynamic?: boolean;
+  /** Ordered slots this output contributes to the ABI. One for scalars,
+   *  two for fixed tensor outputs (buf + lenOut), four for dynamic
+   *  tensor outputs (dynBuf + dynLen + dynD0 + dynD1). */
+  slots: AbiSlot[];
 }
 
 export interface GenerateCResult {
@@ -1370,6 +1432,11 @@ export interface GenerateCResult {
   cFnName: string;
   paramDescs: CParamDesc[];
   outputDescs: COutputDesc[];
+  /** The full ABI slot list in calling order:
+   *    paramDescs[0].slots ++ paramDescs[1].slots ++ ...
+   *    ++ outputDescs[0].slots ++ ... ++ trailer slots (ticState/errFlag).
+   *  The JS wrapper walks this list to marshal values. */
+  abiSlots: AbiSlot[];
   /** True when any tensor is involved (params, locals, or outputs). */
   usesTensors: boolean;
   /** koffi function signature string for declaring the C function. */
@@ -1416,7 +1483,7 @@ export function generateC(
     const t = effectiveOutputTypes[i]?.kind;
     const kind: COutputDesc["kind"] =
       t === "tensor" ? "tensor" : t === "boolean" ? "boolean" : "scalar";
-    const desc: COutputDesc = { name, kind };
+    const desc: COutputDesc = { name, kind, slots: [] };
     if (kind === "tensor" && cls.meta.get(name)?.isDynamicOutput) {
       desc.dynamic = true;
     }
@@ -1658,84 +1725,150 @@ export function generateC(
     preludeLines.push(`${indent}int64_t ${scratchLen(sIdx)} = 0;`);
   }
 
-  // Build signature. The C function is always void; outputs go through
-  // out-pointers. Parameters:
-  //   - scalar params: double v_name
-  //   - tensor params: const double *v_name_data, int64_t v_name_len
-  //   - fixed tensor output: double *v_name_buf, int64_t *v_name_out_len
-  //   - dynamic tensor output: double **v_name_buf_out,
-  //                            int64_t *v_name_out_len,
-  //                            int64_t *v_name_d0_out,
-  //                            int64_t *v_name_d1_out
-  //   - scalar output out-pointers: double *v_name_out
+  // Build the ABI schema. The C function is always void; outputs go
+  // through out-pointers. Each param/output contributes a sequence of
+  // slots (see AbiSlot above) which both the signature builder and the
+  // JS wrapper walk — keeps the two sides in lock-step.
   const cFnName = `jit_${fnName}`;
-  const sigParts: string[] = [];
-  const koffiParts: string[] = [];
 
-  for (let i = 0; i < params.length; i++) {
-    const p = params[i];
-    if (argTypes[i].kind === "tensor") {
+  const paramDescs: CParamDesc[] = params.map((p, i) => {
+    const kind: CParamDesc["kind"] =
+      argTypes[i].kind === "tensor" ? "tensor" : "scalar";
+    const desc: CParamDesc = { name: p, kind, slots: [] };
+    if (kind === "tensor") {
+      const d = cls.meta.get(p)?.maxIndexDim ?? 0;
+      if (d >= 2) desc.ndim = d;
+      // `_in` suffix when the param signature is shadowed by a writable
+      // local (param-output / unshared). The prelude handles the copy.
       const suffix =
         paramOutputTensors.has(p) || unshareTensorParams.has(p) ? "_in" : "";
-      sigParts.push(`const double *${tensorData(p)}${suffix}`);
-      sigParts.push(`int64_t ${tensorLen(p)}${suffix}`);
-      koffiParts.push("double *");
-      koffiParts.push("int64_t");
-      const d = cls.meta.get(p)?.maxIndexDim ?? 0;
+      desc.slots.push({
+        kind: "tensorData",
+        cType: "const double *",
+        cName: `${tensorData(p)}${suffix}`,
+        koffiType: "double *",
+        paramIdx: i,
+      });
+      desc.slots.push({
+        kind: "tensorLen",
+        cType: "int64_t",
+        cName: `${tensorLen(p)}${suffix}`,
+        koffiType: "int64_t",
+        paramIdx: i,
+      });
       if (d >= 2) {
-        sigParts.push(`int64_t ${tensorD0(p)}${suffix}`);
-        koffiParts.push("int64_t");
+        desc.slots.push({
+          kind: "tensorD0",
+          cType: "int64_t",
+          cName: `${tensorD0(p)}${suffix}`,
+          koffiType: "int64_t",
+          paramIdx: i,
+        });
       }
       if (d >= 3) {
-        sigParts.push(`int64_t ${tensorD1(p)}${suffix}`);
-        koffiParts.push("int64_t");
+        desc.slots.push({
+          kind: "tensorD1",
+          cType: "int64_t",
+          cName: `${tensorD1(p)}${suffix}`,
+          koffiType: "int64_t",
+          paramIdx: i,
+        });
       }
     } else {
-      sigParts.push(`double ${mangle(p)}`);
-      koffiParts.push("double");
+      desc.slots.push({
+        kind: "scalar",
+        cType: "double",
+        cName: mangle(p),
+        koffiType: "double",
+        paramIdx: i,
+      });
     }
-  }
+    return desc;
+  });
 
-  for (const od of outputDescs) {
+  outputDescs.forEach((od, oi) => {
     if (od.kind === "tensor") {
       if (od.dynamic) {
-        // Dynamic output: C allocates the buffer, transfers ownership
-        // via `*_buf_out`. The JS wrapper decodes the pointer + d0/d1,
-        // copies data into a fresh Float64Array, then frees the C ptr.
-        sigParts.push(`double **${mangle(od.name)}_buf_out`);
-        sigParts.push(`int64_t *${mangle(od.name)}_out_len`);
-        sigParts.push(`int64_t *${mangle(od.name)}_d0_out`);
-        sigParts.push(`int64_t *${mangle(od.name)}_d1_out`);
-        koffiParts.push("_Out_ double **");
-        koffiParts.push("_Out_ int64_t *");
-        koffiParts.push("_Out_ int64_t *");
-        koffiParts.push("_Out_ int64_t *");
+        // Dynamic output: C allocates, transfers ownership via `*_buf_out`.
+        od.slots.push({
+          kind: "dynOutBuf",
+          cType: "double **",
+          cName: `${mangle(od.name)}_buf_out`,
+          koffiType: "_Out_ double **",
+          outputIdx: oi,
+        });
+        od.slots.push({
+          kind: "dynOutLen",
+          cType: "int64_t *",
+          cName: `${mangle(od.name)}_out_len`,
+          koffiType: "_Out_ int64_t *",
+          outputIdx: oi,
+        });
+        od.slots.push({
+          kind: "dynOutD0",
+          cType: "int64_t *",
+          cName: `${mangle(od.name)}_d0_out`,
+          koffiType: "_Out_ int64_t *",
+          outputIdx: oi,
+        });
+        od.slots.push({
+          kind: "dynOutD1",
+          cType: "int64_t *",
+          cName: `${mangle(od.name)}_d1_out`,
+          koffiType: "_Out_ int64_t *",
+          outputIdx: oi,
+        });
       } else {
-        sigParts.push(`double *${mangle(od.name)}_buf`);
-        sigParts.push(`int64_t *${mangle(od.name)}_out_len`);
-        koffiParts.push("double *");
-        koffiParts.push("int64_t *");
+        od.slots.push({
+          kind: "fixedOutBuf",
+          cType: "double *",
+          cName: `${mangle(od.name)}_buf`,
+          koffiType: "double *",
+          outputIdx: oi,
+        });
+        od.slots.push({
+          kind: "fixedOutLen",
+          cType: "int64_t *",
+          cName: `${mangle(od.name)}_out_len`,
+          koffiType: "int64_t *",
+          outputIdx: oi,
+        });
       }
     } else {
-      sigParts.push(`double *${mangle(od.name)}_out`);
-      koffiParts.push("double *");
+      od.slots.push({
+        kind: "scalarOut",
+        cType: "double *",
+        cName: `${mangle(od.name)}_out`,
+        koffiType: "double *",
+        outputIdx: oi,
+      });
     }
-  }
+  });
 
-  // Append __tic_state parameter when tic/toc are used.
+  const abiSlots: AbiSlot[] = [];
+  for (const pd of paramDescs) abiSlots.push(...pd.slots);
+  for (const od of outputDescs) abiSlots.push(...od.slots);
   if (ctx.needsTicState) {
-    sigParts.push(`double *__tic_state`);
-    koffiParts.push("double *");
+    abiSlots.push({
+      kind: "ticState",
+      cType: "double *",
+      cName: "__tic_state",
+      koffiType: "double *",
+    });
   }
-
-  // Append __err_flag when any Index read is emitted. Bounds-violation
-  // sets *__err_flag = 1.0; the JS wrapper checks after the call and
-  // throws "Index exceeds array bounds" to match JS-JIT semantics.
   if (ctx.needsErrorFlag) {
-    sigParts.push(`double *__err_flag`);
-    koffiParts.push("double *");
+    abiSlots.push({
+      kind: "errFlag",
+      cType: "double *",
+      cName: "__err_flag",
+      koffiType: "double *",
+    });
   }
 
+  const sigParts = abiSlots.map(
+    s => `${s.cType}${spaceBeforeName(s.cType)}${s.cName}`
+  );
+  const koffiParts = abiSlots.map(s => s.koffiType);
   const paramList = sigParts.length > 0 ? sigParts.join(", ") : "void";
   const signature = `void ${cFnName}(${paramList})`;
   const koffiSignature = `void ${cFnName}(${koffiParts.join(", ")})`;
@@ -1775,23 +1908,12 @@ export function generateC(
   }
   parts.push(`}`);
 
-  const paramDescs: CParamDesc[] = params.map((p, i) => {
-    const desc: CParamDesc = {
-      name: p,
-      kind: argTypes[i].kind === "tensor" ? "tensor" : "scalar",
-    };
-    if (desc.kind === "tensor") {
-      const d = cls.meta.get(p)?.maxIndexDim ?? 0;
-      if (d >= 2) desc.ndim = d;
-    }
-    return desc;
-  });
-
   return {
     cSource: parts.join("\n"),
     cFnName,
     paramDescs,
     outputDescs,
+    abiSlots,
     usesTensors,
     koffiSignature,
     needsTicState: ctx.needsTicState,

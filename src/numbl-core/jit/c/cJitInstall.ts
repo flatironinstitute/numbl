@@ -16,7 +16,7 @@
 import { createRequire } from "module";
 import { registerCJitBackend } from "./cJitBackend.js";
 import { checkCFeasibility } from "./cFeasibility.js";
-import { generateC, type COutputDesc } from "./jitCodegenC.js";
+import { generateC, type AbiSlot, type COutputDesc } from "./jitCodegenC.js";
 import { compileAndLoad, cJitOpenmpAvailable } from "./cCompile.js";
 import { jitTypeKey } from "../jitTypes.js";
 import { type RuntimeTensor } from "../../runtime/types.js";
@@ -36,6 +36,70 @@ function getKoffi(): typeof import("koffi") {
   const req = createRequire(import.meta.url);
   _koffi = req("koffi") as typeof import("koffi");
   return _koffi;
+}
+
+/** Per-output buffer record passed between the JS wrapper's output-alloc
+ *  step and the slot-marshalling + result-extraction steps. Shared with
+ *  the closure-local `outputBufs` below. */
+type OutputBuf = {
+  desc: COutputDesc;
+  buf?: Float64Array;
+  lenBuf?: Float64Array;
+  dynPtrSlot?: (unknown | null)[];
+  dynLenSlot?: bigint[];
+  dynD0Slot?: bigint[];
+  dynD1Slot?: bigint[];
+  paramShape?: number[];
+};
+
+/** Given an ABI slot, return the JS value to push at the matching koffi
+ *  arg position. Dispatches on `slot.kind`; param-sourced slots read
+ *  from `callArgs[slot.paramIdx]`, output-sourced from
+ *  `outputBufs[slot.outputIdx]`, trailers from shared buffers. */
+function marshalSlot(
+  slot: AbiSlot,
+  callArgs: unknown[],
+  outputBufs: OutputBuf[],
+  ticStateBuf: Float64Array | undefined,
+  errorFlagBuf: Float64Array | undefined
+): unknown {
+  switch (slot.kind) {
+    case "scalar": {
+      const v = callArgs[slot.paramIdx!];
+      return typeof v === "boolean" ? (v ? 1 : 0) : (v as number);
+    }
+    case "tensorData":
+      return (callArgs[slot.paramIdx!] as RuntimeTensor).data as Float64Array;
+    case "tensorLen": {
+      const t = callArgs[slot.paramIdx!] as RuntimeTensor;
+      return (t.data as Float64Array).length;
+    }
+    case "tensorD0": {
+      const t = callArgs[slot.paramIdx!] as RuntimeTensor;
+      return t.shape.length >= 1 ? t.shape[0] : 1;
+    }
+    case "tensorD1": {
+      const t = callArgs[slot.paramIdx!] as RuntimeTensor;
+      return t.shape.length >= 2 ? t.shape[1] : 1;
+    }
+    case "scalarOut":
+    case "fixedOutBuf":
+      return outputBufs[slot.outputIdx!].buf!;
+    case "fixedOutLen":
+      return outputBufs[slot.outputIdx!].lenBuf!;
+    case "dynOutBuf":
+      return outputBufs[slot.outputIdx!].dynPtrSlot!;
+    case "dynOutLen":
+      return outputBufs[slot.outputIdx!].dynLenSlot!;
+    case "dynOutD0":
+      return outputBufs[slot.outputIdx!].dynD0Slot!;
+    case "dynOutD1":
+      return outputBufs[slot.outputIdx!].dynD1Slot!;
+    case "ticState":
+      return ticStateBuf!;
+    case "errFlag":
+      return errorFlagBuf!;
+  }
 }
 
 registerCJitBackend({
@@ -115,6 +179,7 @@ registerCJitBackend({
     const nativeFn = loaded.fn;
     const paramDescs = gen.paramDescs;
     const outputDescs = gen.outputDescs;
+    const abiSlots = gen.abiSlots;
     const isMultiOutput = outputDescs.length > 1;
 
     // tic/toc support: declare get_monotonic_time, allocate shared buffer.
@@ -136,122 +201,62 @@ registerCJitBackend({
       : undefined;
 
     const compiledFn = (...callArgs: unknown[]): unknown => {
-      // Build the koffi call arguments: extract data/len from tensors,
-      // pass scalars directly, append output buffers/out-pointers.
-      const koffiArgs: unknown[] = [];
-
-      // Track the first tensor input's shape for tensor outputs.
+      // Track the first tensor input's shape so scalar-shaped outputs
+      // can inherit it when no explicit output shape is known.
       let firstTensorShape: number[] | undefined;
       let firstTensorLen = 0;
-
       for (let i = 0; i < paramDescs.length; i++) {
-        const pd = paramDescs[i];
-        const arg = callArgs[i];
-        if (pd.kind === "tensor") {
-          const t = arg as RuntimeTensor;
-          const data = t.data as Float64Array;
-          koffiArgs.push(data);
-          koffiArgs.push(data.length);
-          // Multi-index ABI: tensors indexed with arity >= 2 also
-          // receive their column-major shape dims (d0 = rows, d1 = cols
-          // for 3D) so the emitted C can compute 2D/3D offsets. Matches
-          // the JS-JIT hoist which exposes $<name>_d0 / $<name>_d1.
-          if (pd.ndim && pd.ndim >= 2) {
-            const s = t.shape;
-            const d0 = s.length >= 1 ? s[0] : 1;
-            koffiArgs.push(d0);
-            if (pd.ndim >= 3) {
-              const d1 = s.length >= 2 ? s[1] : 1;
-              koffiArgs.push(d1);
-            }
-          }
-          if (!firstTensorShape) {
-            firstTensorShape = t.shape;
-            firstTensorLen = data.length;
-          }
-        } else {
-          koffiArgs.push(
-            typeof arg === "boolean" ? (arg ? 1 : 0) : (arg as number)
-          );
+        if (paramDescs[i].kind === "tensor") {
+          const t = callArgs[i] as RuntimeTensor;
+          firstTensorShape = t.shape;
+          firstTensorLen = (t.data as Float64Array).length;
+          break;
         }
       }
 
-      // Prepare output buffers.
+      // Prepare output buffers — one entry per output. Indexed by
+      // `outputIdx` stored on the output-sourced ABI slots.
       const outputBufs: Array<{
         desc: COutputDesc;
         buf?: Float64Array;
         lenBuf?: Float64Array;
-        /** Dynamic-output: single-element array slot the C function
-         *  fills via `*out = malloc(...)`. We decode the pointer post-
-         *  call, copy its contents into a fresh Float64Array, and free
-         *  the C allocation. */
         dynPtrSlot?: (unknown | null)[];
         dynLenSlot?: bigint[];
         dynD0Slot?: bigint[];
         dynD1Slot?: bigint[];
-        /** When the output shares its name with a tensor param, this is
-         *  the param's shape — used when wrapping the result so the output
-         *  keeps the caller's tensor shape rather than whatever "first
-         *  tensor input" it happened to see. */
         paramShape?: number[];
-      }> = [];
-
-      for (const od of outputDescs) {
+      }> = outputDescs.map(od => {
         if (od.kind === "tensor") {
           if (od.dynamic) {
-            // Dynamic-output ABI: pass a 4-slot set of out-params. The
-            // JS wrapper decodes the pointer after the call, copies the
-            // data into a fresh Float64Array, and frees the C pointer.
-            const dynPtrSlot: (unknown | null)[] = [null];
-            const dynLenSlot: bigint[] = [0n];
-            const dynD0Slot: bigint[] = [0n];
-            const dynD1Slot: bigint[] = [0n];
-            koffiArgs.push(dynPtrSlot);
-            koffiArgs.push(dynLenSlot);
-            koffiArgs.push(dynD0Slot);
-            koffiArgs.push(dynD1Slot);
-            outputBufs.push({
+            return {
               desc: od,
-              dynPtrSlot,
-              dynLenSlot,
-              dynD0Slot,
-              dynD1Slot,
-            });
-            continue;
+              dynPtrSlot: [null],
+              dynLenSlot: [0n],
+              dynD0Slot: [0n],
+              dynD1Slot: [0n],
+            };
           }
-          // Fixed output: the JS wrapper preallocates the buffer.
-          // If the output name matches a tensor param, MATLAB's `function
-          // x = foo(x, ...)` call-by-value + local-mutation semantics
-          // apply: the callee starts with a copy of caller's x and may
-          // mutate it locally. Seed the output buffer with the caller's
-          // data so AssignIndex writes against the expected starting
-          // state. Otherwise (fresh output) allocate uninitialized — the
-          // C function is expected to overwrite it via whole-tensor ops.
+          // Fixed output: seed from the matching tensor param when the
+          // output name is also a param (`function x = foo(x, ...)`
+          // MATLAB call-by-value + local-mutation pattern); otherwise
+          // allocate uninitialized and let the C code fill it via
+          // whole-tensor ops.
           const paramIdx = paramDescs.findIndex(
             p => p.kind === "tensor" && p.name === od.name
           );
           if (paramIdx >= 0) {
             const t = callArgs[paramIdx] as RuntimeTensor;
-            const srcData = t.data as Float64Array;
-            const buf = new Float64Array(srcData); // copy
+            const buf = new Float64Array(t.data as Float64Array); // copy
             const lenBuf = new Float64Array(1);
-            koffiArgs.push(buf);
-            koffiArgs.push(lenBuf);
-            outputBufs.push({ desc: od, buf, lenBuf, paramShape: t.shape });
-          } else {
-            const n = firstTensorLen;
-            const buf = uninitFloat64(n);
-            const lenBuf = new Float64Array(1);
-            koffiArgs.push(buf);
-            koffiArgs.push(lenBuf);
-            outputBufs.push({ desc: od, buf, lenBuf });
+            return { desc: od, buf, lenBuf, paramShape: t.shape };
           }
-        } else {
-          const buf = new Float64Array(1);
-          koffiArgs.push(buf);
-          outputBufs.push({ desc: od, buf });
+          const buf = uninitFloat64(firstTensorLen);
+          const lenBuf = new Float64Array(1);
+          return { desc: od, buf, lenBuf };
         }
-      }
+        // scalar / boolean outputs: single-slot double buffer.
+        return { desc: od, buf: new Float64Array(1) };
+      });
 
       // tic/toc: convert JS ticTime to C clock domain before the call.
       let ticJsNow = 0;
@@ -260,14 +265,16 @@ registerCJitBackend({
         ticCNow = getMonotonicTime();
         ticJsNow = performance.now() / 1000;
         ticStateBuf[0] = getTicTime() / 1000 - ticJsNow + ticCNow;
-        koffiArgs.push(ticStateBuf);
       }
+      if (errorFlagBuf) errorFlagBuf[0] = 0;
 
-      // Reset and append the bounds-error flag.
-      if (errorFlagBuf) {
-        errorFlagBuf[0] = 0;
-        koffiArgs.push(errorFlagBuf);
-      }
+      // Build the koffi arg list by walking the ABI slot schedule. The
+      // order of slots matches the C signature exactly; each slot's
+      // `kind` tells us which JS value to push, and the paramIdx /
+      // outputIdx backrefs name the source.
+      const koffiArgs: unknown[] = abiSlots.map(slot =>
+        marshalSlot(slot, callArgs, outputBufs, ticStateBuf, errorFlagBuf)
+      );
 
       // Call the C function.
       nativeFn(...koffiArgs);
