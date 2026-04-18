@@ -21,6 +21,7 @@ import { jitTypeKey } from "./jitTypes.js";
 import { type RuntimeTensor } from "../../runtime/types.js";
 import { uninitFloat64 } from "../../runtime/alloc.js";
 import { getTicTime, setTicTime } from "../builtins/time-system.js";
+import { JitBailToInterpreter } from "./jitHelpers.js";
 
 registerCJitBackend({
   tryCompile(
@@ -36,7 +37,9 @@ registerCJitBackend({
   ) {
     const feas = checkCFeasibility(
       body,
+      fn.params,
       argTypes,
+      outputNames,
       outputType,
       outputTypes,
       nargout
@@ -151,23 +154,41 @@ registerCJitBackend({
         desc: COutputDesc;
         buf: Float64Array;
         lenBuf?: Float64Array;
-        reusedTensor?: RuntimeTensor;
+        /** When the output shares its name with a tensor param, this is
+         *  the param's shape — used when wrapping the result so the output
+         *  keeps the caller's tensor shape rather than whatever "first
+         *  tensor input" it happened to see. */
+        paramShape?: number[];
       }> = [];
 
       for (const od of outputDescs) {
         if (od.kind === "tensor") {
-          // Try to reuse the dest tensor's buffer. The dest is whatever
-          // the variable currently holds in the caller's scope — which is
-          // the corresponding callArg if it's a tensor param with the same
-          // name, or undefined for a fresh local. For simplicity, we always
-          // allocate a fresh buffer here. The C function writes into it
-          // directly. We can optimize reuse later.
-          const n = firstTensorLen;
-          const buf = uninitFloat64(n);
-          const lenBuf = new Float64Array(1);
-          koffiArgs.push(buf);
-          koffiArgs.push(lenBuf);
-          outputBufs.push({ desc: od, buf, lenBuf });
+          // If the output name matches a tensor param, MATLAB's `function
+          // x = foo(x, ...)` call-by-value + local-mutation semantics
+          // apply: the callee starts with a copy of caller's x and may
+          // mutate it locally. Seed the output buffer with the caller's
+          // data so AssignIndex writes against the expected starting
+          // state. Otherwise (fresh output) allocate uninitialized — the
+          // C function is expected to overwrite it via whole-tensor ops.
+          const paramIdx = paramDescs.findIndex(
+            p => p.kind === "tensor" && p.name === od.name
+          );
+          if (paramIdx >= 0) {
+            const t = callArgs[paramIdx] as RuntimeTensor;
+            const srcData = t.data as Float64Array;
+            const buf = new Float64Array(srcData); // copy
+            const lenBuf = new Float64Array(1);
+            koffiArgs.push(buf);
+            koffiArgs.push(lenBuf);
+            outputBufs.push({ desc: od, buf, lenBuf, paramShape: t.shape });
+          } else {
+            const n = firstTensorLen;
+            const buf = uninitFloat64(n);
+            const lenBuf = new Float64Array(1);
+            koffiArgs.push(buf);
+            koffiArgs.push(lenBuf);
+            outputBufs.push({ desc: od, buf, lenBuf });
+          }
         } else {
           const buf = new Float64Array(1);
           koffiArgs.push(buf);
@@ -199,23 +220,38 @@ registerCJitBackend({
         setTicTime((ticStateBuf[0] + ticJsNow - ticCNow) * 1000);
       }
 
-      // Raise if a bounds violation was flagged inside the C call.
+      // Error-flag conventions written by the jit_runtime helpers:
+      //   1.0 — OOB read → hard bounds error (matches JS-JIT's idx1r_h)
+      //   2.0 — OOB write → soft-bail: interpreter re-runs with proper
+      //         tensor-growth semantics (matches JS-JIT's set1r_h)
       if (errorFlagBuf && errorFlagBuf[0] !== 0) {
+        if (errorFlagBuf[0] === 2) {
+          throw new JitBailToInterpreter(
+            "scalar index write requires tensor growth"
+          );
+        }
         throw new Error("Index exceeds array bounds");
       }
 
-      // Extract results.
+      // Extract results. Tensor outputs keep the shape of the matching
+      // input param when output-name == param-name (the `function x =
+      // foo(x, ...)` pattern); otherwise fall back to the first tensor
+      // input's shape.
+      const tensorShapeFor = (ob: (typeof outputBufs)[number]): number[] =>
+        ob.paramShape
+          ? ob.paramShape.slice()
+          : firstTensorShape
+            ? firstTensorShape.slice()
+            : [1, firstTensorLen];
+
       if (isMultiOutput) {
         const results: unknown[] = [];
         for (const ob of outputBufs) {
           if (ob.desc.kind === "tensor") {
-            const shape = firstTensorShape
-              ? firstTensorShape.slice()
-              : [1, firstTensorLen];
             const tensor: RuntimeTensor = {
               kind: "tensor",
               data: ob.buf,
-              shape,
+              shape: tensorShapeFor(ob),
               _rc: 1,
             };
             results.push(tensor);
@@ -232,13 +268,10 @@ registerCJitBackend({
       const ob = outputBufs[0];
       if (!ob) return 0; // no-output function
       if (ob.desc.kind === "tensor") {
-        const shape = firstTensorShape
-          ? firstTensorShape.slice()
-          : [1, firstTensorLen];
         const tensor: RuntimeTensor = {
           kind: "tensor",
           data: ob.buf,
-          shape,
+          shape: tensorShapeFor(ob),
           _rc: 1,
         };
         return tensor;

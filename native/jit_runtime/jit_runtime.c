@@ -24,6 +24,18 @@ double numbl_idx1r(const double* data, size_t len, double i, double* err_flag) {
   return data[idx];
 }
 
+void numbl_set1r_h(double* data, size_t len, double i, double v,
+                   double* err_flag) {
+  int64_t idx = (int64_t)(i - 1.0);
+  if ((uint64_t)idx >= (uint64_t)len) {
+    /* 2.0 = "growth needed → soft-bail to interpreter", distinct from
+     * 1.0 which the JS wrapper translates into a hard bounds error. */
+    *err_flag = 2.0;
+    return;
+  }
+  data[idx] = v;
+}
+
 double numbl_mod(double a, double b) {
   if (b == 0.0) return a;
   double r = fmod(a, b);

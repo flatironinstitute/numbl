@@ -29,8 +29,9 @@ extern "C" {
 /**
  * Version log:
  *   1 — initial: idx1r, mod, sign, reduce_flat, tic/toc/monotonic_time.
+ *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
  */
-#define NUMBL_JIT_RT_VERSION 1
+#define NUMBL_JIT_RT_VERSION 2
 
 /** Returns NUMBL_JIT_RT_VERSION baked into the compiled archive. */
 int numbl_jit_rt_version(void);
@@ -49,6 +50,17 @@ int numbl_jit_rt_version(void);
  *                it after and throws "Index exceeds array bounds".
  */
 double numbl_idx1r(const double* data, size_t len, double i, double* err_flag);
+
+/**
+ * 1-based MATLAB linear Index write on a real-valued tensor buffer.
+ *
+ * On OOB, writes `2.0` to *err_flag (the "growth-needed" code the JS
+ * wrapper translates to a JitBailToInterpreter) and returns without
+ * writing, mirroring the JS-JIT's `set1r_h` helper. The interpreter
+ * then re-runs the call with proper tensor-growth semantics. As with
+ * the read path, the caller must zero the flag before each call.
+ */
+void numbl_set1r_h(double* data, size_t len, double i, double v, double* err_flag);
 
 /* ── Scalar math helpers with MATLAB semantics ────────────────────────── */
 

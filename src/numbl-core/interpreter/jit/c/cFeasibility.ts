@@ -29,6 +29,11 @@ export type FeasibilityResult =
 interface Ctx {
   /** Updated from `SetLoc` markers during statement traversal. */
   line: number;
+  /** Tensor names that are both input params AND outputs — the
+   *  `function x = foo(x, ...)` pattern. Only these are safe AssignIndex
+   *  targets today: the JS wrapper seeds the output buffer with a copy
+   *  of the caller's data so writes don't scribble on caller memory. */
+  paramOutputTensors: Set<string>;
 }
 
 function fail(ctx: Ctx, reason: string): FeasibilityResult {
@@ -364,8 +369,39 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       ctx.line = stmt.line;
       return { ok: true };
 
-    // Out of scope: tensor/struct writes, multi-assign, member writes.
-    case "AssignIndex":
+    case "AssignIndex": {
+      // Phase 1 of AssignIndex support: single-index (linear) writes on a
+      // real-tensor Var with a scalar RHS, where the target is both an
+      // input param AND an output (so the JS wrapper has seeded the
+      // output buffer with a copy of the caller's data). Other targets
+      // — pure input params, fresh locals, tensors aliased to an input
+      // via `y = x` — defer, because correct MATLAB call-by-value
+      // semantics on those would require unshare/copy machinery the
+      // C-JIT doesn't have yet.
+      if (stmt.indices.length !== 1) {
+        return fail(ctx, "multi-index AssignIndex not supported");
+      }
+      if (
+        stmt.baseType.kind !== "tensor" ||
+        stmt.baseType.isComplex !== false
+      ) {
+        return fail(ctx, "AssignIndex base must be a real tensor");
+      }
+      if (!isScalarKind(stmt.value.jitType.kind)) {
+        return fail(ctx, "AssignIndex value must be scalar");
+      }
+      if (!ctx.paramOutputTensors.has(stmt.baseName)) {
+        return fail(
+          ctx,
+          `AssignIndex base '${stmt.baseName}' must be both param and output`
+        );
+      }
+      const vr = checkExpr(stmt.value, ctx);
+      if (!vr.ok) return vr;
+      return checkExpr(stmt.indices[0], ctx);
+    }
+
+    // Out of scope: range/col writes, struct writes, multi-assign.
     case "AssignIndexRange":
     case "AssignIndexCol":
     case "AssignMember":
@@ -390,7 +426,9 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
  */
 export function checkCFeasibility(
   body: JitStmt[],
+  paramNames: string[],
   argTypes: JitType[],
+  outputNames: string[],
   outputType: JitType | null,
   outputTypes: JitType[],
   nargout: number
@@ -416,6 +454,17 @@ export function checkCFeasibility(
       reason: `nargout ${nargout} exceeds available outputs (${outputTypes.length})`,
     };
   }
-  const ctx: Ctx = { line: 0 };
+  // Tensor names that are simultaneously input params AND outputs. The
+  // JS wrapper seeds these output buffers with a copy of the caller's
+  // data, so writes via AssignIndex land on a buffer independent of the
+  // caller's tensor — safe MATLAB call-by-value + local-mutation.
+  const outputNameSet = new Set(outputNames);
+  const paramOutputTensors = new Set<string>();
+  for (let i = 0; i < paramNames.length; i++) {
+    if (argTypes[i].kind === "tensor" && outputNameSet.has(paramNames[i])) {
+      paramOutputTensors.add(paramNames[i]);
+    }
+  }
+  const ctx: Ctx = { line: 0, paramOutputTensors };
   return checkStmts(body, ctx);
 }

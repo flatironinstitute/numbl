@@ -43,8 +43,9 @@ const MANGLE_PREFIX = "v_";
  *
  * Version log:
  *   1 — initial: idx1r, mod, sign, reduce_flat, tic/toc/monotonic_time.
+ *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
  */
-const NUMBL_JIT_RT_REQUIRED_VERSION = 1;
+const NUMBL_JIT_RT_REQUIRED_VERSION = 2;
 
 function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
@@ -806,6 +807,31 @@ function emitStmt(
       lines.push(`${indent}(void)(${emitExpr(stmt.expr, ctx)});`);
       ctx.pendingStmts = undefined;
       return;
+
+    case "AssignIndex": {
+      // Phase 1: single-index scalar linear write to a real-tensor Var.
+      // Feasibility already rejected multi-index / non-real-tensor /
+      // non-scalar-value cases.
+      if (stmt.indices.length !== 1) {
+        throw new Error("C-JIT codegen: multi-index AssignIndex unsupported");
+      }
+      if (!ctx.tensorVars.has(stmt.baseName)) {
+        throw new Error(
+          `C-JIT codegen: AssignIndex base '${stmt.baseName}' is not a tensor var`
+        );
+      }
+      ctx.needsErrorFlag = true;
+      const data = tensorData(stmt.baseName);
+      const len = tensorLen(stmt.baseName);
+      const idxExpr = stmt.indices[0];
+      let i = emitExpr(idxExpr, ctx);
+      if (!isKnownInteger(idxExpr.jitType)) i = `round(${i})`;
+      const v = emitExpr(stmt.value, ctx);
+      lines.push(
+        `${indent}numbl_set1r_h(${data}, (size_t)${len}, ${i}, ${v}, __err_flag);`
+      );
+      return;
+    }
 
     case "If": {
       lines.push(`${indent}if (${emitTruthiness(stmt.cond, ctx)}) {`);

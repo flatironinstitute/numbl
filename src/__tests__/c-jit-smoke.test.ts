@@ -45,7 +45,9 @@ describe("C-JIT: feasibility prepass", () => {
     ];
     const r = checkCFeasibility(
       body,
+      ["a", "b"],
       [numberT, numberT],
+      ["out"],
       numberT,
       [numberT],
       1
@@ -60,20 +62,44 @@ describe("C-JIT: feasibility prepass", () => {
       shape: [100, 1],
     };
     const numberT: JitType = { kind: "number" };
-    const r = checkCFeasibility([], [tensorT], numberT, [numberT], 1);
+    const r = checkCFeasibility(
+      [],
+      ["x"],
+      [tensorT],
+      ["out"],
+      numberT,
+      [numberT],
+      1
+    );
     expect(r.ok).toBe(true);
   });
 
   it("rejects complex tensor args", () => {
     const tensorT: JitType = { kind: "tensor", isComplex: true };
     const numberT: JitType = { kind: "number" };
-    const r = checkCFeasibility([], [tensorT], numberT, [numberT], 1);
+    const r = checkCFeasibility(
+      [],
+      ["x"],
+      [tensorT],
+      ["out"],
+      numberT,
+      [numberT],
+      1
+    );
     expect(r.ok).toBe(false);
   });
 
   it("accepts multi-output when all outputs are scalar/tensor", () => {
     const numberT: JitType = { kind: "number" };
-    const r = checkCFeasibility([], [numberT], numberT, [numberT, numberT], 2);
+    const r = checkCFeasibility(
+      [],
+      ["x"],
+      [numberT],
+      ["o1", "o2"],
+      numberT,
+      [numberT, numberT],
+      2
+    );
     expect(r.ok).toBe(true);
   });
 });
@@ -270,7 +296,9 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
     ];
     const r = checkCFeasibility(
       body,
+      ["x", "y"],
       [tensor1dT, tensor1dT],
+      ["r"],
       tensor1dT,
       [tensor1dT],
       1
@@ -291,7 +319,15 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
         },
       },
     ];
-    const r = checkCFeasibility(body, [tensor1dT], tensor1dT, [tensor1dT], 1);
+    const r = checkCFeasibility(
+      body,
+      ["x"],
+      [tensor1dT],
+      ["r"],
+      tensor1dT,
+      [tensor1dT],
+      1
+    );
     expect(r.ok).toBe(true);
   });
 
@@ -309,7 +345,15 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
         },
       },
     ];
-    const r = checkCFeasibility(body, [tensor1dT], numberT, [numberT], 1);
+    const r = checkCFeasibility(
+      body,
+      ["x"],
+      [tensor1dT],
+      ["s"],
+      numberT,
+      [numberT],
+      1
+    );
     expect(r.ok).toBe(true);
   });
 
@@ -326,7 +370,15 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
         },
       },
     ];
-    const r = checkCFeasibility(body, [tensor1dT], tensor1dT, [tensor1dT], 1);
+    const r = checkCFeasibility(
+      body,
+      ["x"],
+      [tensor1dT],
+      ["r"],
+      tensor1dT,
+      [tensor1dT],
+      1
+    );
     expect(r.ok).toBe(false);
   });
 });
