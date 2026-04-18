@@ -502,6 +502,25 @@ function emitTruthiness(expr: JitExpr, ctx: EmitCtx): string {
 
 // ── Statement emission ────────────────────────────────────────────────
 
+/** Evaluate `fn` with `ctx.pendingStmts` set to `{lines, indent}` so any
+ *  UserCall / RangeSliceRead nested inside can hoist its decl+call into
+ *  `lines` ahead of the calling statement. Restores the prior value on
+ *  exit (safe even if nested save/restore frames stack). */
+function withPendingStmts<T>(
+  ctx: EmitCtx,
+  lines: string[],
+  indent: string,
+  fn: () => T
+): T {
+  const prev = ctx.pendingStmts;
+  ctx.pendingStmts = { lines, indent };
+  try {
+    return fn();
+  } finally {
+    ctx.pendingStmts = prev;
+  }
+}
+
 export function emitStmts(
   lines: string[],
   stmts: JitStmt[],
@@ -976,18 +995,20 @@ function emitStmt(
         emitReductionOfTensorExpr(lines, indent, stmt.name, stmt.expr, ctx);
         return;
       }
-      ctx.pendingStmts = { lines, indent };
-      const rhs = emitExpr(stmt.expr, ctx);
-      ctx.pendingStmts = undefined;
+      const rhs = withPendingStmts(ctx, lines, indent, () =>
+        emitExpr(stmt.expr, ctx)
+      );
       lines.push(`${indent}${mangle(stmt.name)} = ${rhs};`);
       return;
     }
 
-    case "ExprStmt":
-      ctx.pendingStmts = { lines, indent };
-      lines.push(`${indent}(void)(${emitExpr(stmt.expr, ctx)});`);
-      ctx.pendingStmts = undefined;
+    case "ExprStmt": {
+      const code = withPendingStmts(ctx, lines, indent, () =>
+        emitExpr(stmt.expr, ctx)
+      );
+      lines.push(`${indent}(void)(${code});`);
       return;
+    }
 
     case "AssignIndex": {
       const n = stmt.indices.length;
@@ -1008,14 +1029,14 @@ function emitStmt(
       // Allow UserCall / RangeSliceRead in the index or value by letting
       // them prepend helper statements (decl + call) before the
       // numbl_set*r_h line.
-      ctx.pendingStmts = { lines, indent };
-      const idxCodes = stmt.indices.map(idx => {
-        let s = emitExpr(idx, ctx);
-        if (!isKnownInteger(idx.jitType)) s = `round(${s})`;
-        return s;
-      });
-      const v = emitExpr(stmt.value, ctx);
-      ctx.pendingStmts = undefined;
+      const { idxCodes, v } = withPendingStmts(ctx, lines, indent, () => ({
+        idxCodes: stmt.indices.map(idx => {
+          let s = emitExpr(idx, ctx);
+          if (!isKnownInteger(idx.jitType)) s = `round(${s})`;
+          return s;
+        }),
+        v: emitExpr(stmt.value, ctx),
+      }));
       if (n === 1) {
         lines.push(
           `${indent}numbl_set1r_h(${data}, (size_t)${len}, ${idxCodes[0]}, ${v}, __err_flag);`
@@ -1048,16 +1069,25 @@ function emitStmt(
       const dLen = tensorLen(stmt.baseName);
       const sData = tensorData(stmt.srcBaseName);
       const sLen = tensorLen(stmt.srcBaseName);
-      const emitRI = (e: JitExpr): string => {
-        let code = emitExpr(e, ctx);
-        if (!isKnownInteger(e.jitType)) code = `round(${code})`;
-        return code;
-      };
-      const dStart = emitRI(stmt.dstStart);
-      const dEnd = emitRI(stmt.dstEnd);
-      const srcStart = stmt.srcStart !== null ? emitRI(stmt.srcStart) : `1.0`;
-      const srcEnd =
-        stmt.srcEnd !== null ? emitRI(stmt.srcEnd) : `(double)${sLen}`;
+      const { dStart, dEnd, srcStart, srcEnd } = withPendingStmts(
+        ctx,
+        lines,
+        indent,
+        () => {
+          const emitRI = (e: JitExpr): string => {
+            let code = emitExpr(e, ctx);
+            if (!isKnownInteger(e.jitType)) code = `round(${code})`;
+            return code;
+          };
+          return {
+            dStart: emitRI(stmt.dstStart),
+            dEnd: emitRI(stmt.dstEnd),
+            srcStart: stmt.srcStart !== null ? emitRI(stmt.srcStart) : `1.0`,
+            srcEnd:
+              stmt.srcEnd !== null ? emitRI(stmt.srcEnd) : `(double)${sLen}`,
+          };
+        }
+      );
       lines.push(
         `${indent}numbl_setRange1r_h(${dData}, (size_t)${dLen}, ${dStart}, ${dEnd}, ${sData}, (size_t)${sLen}, ${srcStart}, ${srcEnd}, __err_flag);`
       );
@@ -1081,8 +1111,11 @@ function emitStmt(
       const dRows = tensorD0(stmt.baseName);
       const sData = tensorData(stmt.srcBaseName);
       const sLen = tensorLen(stmt.srcBaseName);
-      let colCode = emitExpr(stmt.colIndex, ctx);
-      if (!isKnownInteger(stmt.colIndex.jitType)) colCode = `round(${colCode})`;
+      const colCode = withPendingStmts(ctx, lines, indent, () => {
+        let code = emitExpr(stmt.colIndex, ctx);
+        if (!isKnownInteger(stmt.colIndex.jitType)) code = `round(${code})`;
+        return code;
+      });
       lines.push(
         `${indent}numbl_setCol2r_h(${dData}, (size_t)${dRows}, (size_t)${dLen}, ${colCode}, ${sData}, (size_t)${sLen}, __err_flag);`
       );
@@ -1090,10 +1123,16 @@ function emitStmt(
     }
 
     case "If": {
-      lines.push(`${indent}if (${emitTruthiness(stmt.cond, ctx)}) {`);
+      const condCode = withPendingStmts(ctx, lines, indent, () =>
+        emitTruthiness(stmt.cond, ctx)
+      );
+      lines.push(`${indent}if (${condCode}) {`);
       emitStmts(lines, stmt.thenBody, indent + "  ", ctx);
       for (const eib of stmt.elseifBlocks) {
-        lines.push(`${indent}} else if (${emitTruthiness(eib.cond, ctx)}) {`);
+        const eibCondCode = withPendingStmts(ctx, lines, indent, () =>
+          emitTruthiness(eib.cond, ctx)
+        );
+        lines.push(`${indent}} else if (${eibCondCode}) {`);
         emitStmts(lines, eib.body, indent + "  ", ctx);
       }
       if (stmt.elseBody) {
@@ -1107,9 +1146,14 @@ function emitStmt(
     case "For": {
       const v = mangle(stmt.varName);
       const t = `__t${++ctx.tmp.n}`;
-      const start = emitExpr(stmt.start, ctx);
-      const end = emitExpr(stmt.end, ctx);
-      const step = stmt.step ? emitExpr(stmt.step, ctx) : "1.0";
+      // MATLAB evaluates start / end / step once at loop entry. Hoisting
+      // once matches that; C's for header re-reads end/step each iter,
+      // which is semantically neutral against a local already assigned.
+      const { start, end, step } = withPendingStmts(ctx, lines, indent, () => ({
+        start: emitExpr(stmt.start, ctx),
+        end: emitExpr(stmt.end, ctx),
+        step: stmt.step ? emitExpr(stmt.step, ctx) : "1.0",
+      }));
       if (stmt.step) {
         lines.push(
           `${indent}for (double ${t} = ${start}; (${step}) != 0.0 && ((${step}) > 0.0 ? ${t} <= (${end}) : ${t} >= (${end})); ${t} += (${step})) {`
@@ -1126,6 +1170,9 @@ function emitStmt(
     }
 
     case "While":
+      // NO pendingStmts here: While's cond is re-evaluated every iter,
+      // so a UserCall / RangeSliceRead in it can't be hoisted once —
+      // those cases throw "outside statement context" and bail.
       lines.push(`${indent}while (${emitTruthiness(stmt.cond, ctx)}) {`);
       emitStmts(lines, stmt.body, indent + "  ", ctx);
       lines.push(`${indent}}`);
