@@ -335,6 +335,12 @@ defineBuiltin({
 // ── Sqrt ────────────────────────────────────────────────────────────────
 
 function complexSqrt(re: number, im: number): { re: number; im: number } {
+  // Pure-real input: compute directly to avoid polar-form roundoff
+  // (Math.sin(pi/2) isn't exactly 1, Math.cos(pi/2) isn't exactly 0).
+  if (im === 0) {
+    if (re >= 0) return { re: Math.sqrt(re), im: 0 };
+    return { re: 0, im: Math.sqrt(-re) };
+  }
   const mag = Math.sqrt(re * re + im * im);
   if (mag === 0) return { re: 0, im: 0 };
   const r = Math.sqrt(mag);

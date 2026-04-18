@@ -1324,6 +1324,15 @@ defineBuiltin({
           let idx = 0;
           for (let d = 0; d < subscriptArgs.length; d++) {
             const s = allSubs[d][i];
+            if (!Number.isFinite(s) || s < 1 || s !== Math.floor(s))
+              throw new RuntimeError("Out of range subscript.");
+            if (d < shape.length) {
+              if (s > shape[d])
+                throw new RuntimeError("Out of range subscript.");
+            } else {
+              // MATLAB treats trailing dims as size 1, so only s==1 is valid.
+              if (s !== 1) throw new RuntimeError("Out of range subscript.");
+            }
             const stride = d < strides.length ? strides[d] : 0;
             idx += (s - 1) * stride;
           }
