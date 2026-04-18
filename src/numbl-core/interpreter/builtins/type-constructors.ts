@@ -88,6 +88,15 @@ defineBuiltin({
     if (a.kind === "tensor") return `$h.tDouble(${argCode[0]})`;
     return null;
   },
+  // Scalar: booleans are already doubles in the C-JIT representation,
+  // so this is the identity. Tensor cases stay out of scope (the C-JIT
+  // has no in-place logical-strip equivalent of $h.tDouble).
+  jitEmitC: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const a = argTypes[0];
+    if (a.kind === "number" || a.kind === "boolean") return `(${argCode[0]})`;
+    return null;
+  },
 });
 
 // ── Integer types ───────────────────────────────────────────────────────

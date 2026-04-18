@@ -26,6 +26,11 @@ defineBuiltin({
     if (k === "number" || k === "boolean") return `Number.isNaN(${args[0]})`;
     return null;
   },
+  jitEmitC: (args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return `((double)isnan(${args[0]}))`;
+    return null;
+  },
 });
 
 // ── isinf ───────────────────────────────────────────────────────────────
@@ -49,6 +54,11 @@ defineBuiltin({
       return `(Math.abs(${args[0]}) === Infinity)`;
     return null;
   },
+  jitEmitC: (args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return `((double)isinf(${args[0]}))`;
+    return null;
+  },
 });
 
 // ── isfinite ────────────────────────────────────────────────────────────
@@ -65,6 +75,12 @@ defineBuiltin({
   jitEmit: (args, types) => {
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean") return `isFinite(${args[0]})`;
+    return null;
+  },
+  jitEmitC: (args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean")
+      return `((double)isfinite(${args[0]}))`;
     return null;
   },
 });
@@ -100,6 +116,13 @@ defineBuiltin({
       (types[0] as Extract<JitType, { kind: "tensor" }>).isComplex === false
     )
       return "true";
+    return null;
+  },
+  jitEmitC: (_args, types) => {
+    // Real scalars (and C-JIT tensors, which are always real) are always
+    // real. Complex never reaches C-JIT's scalar path.
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
     return null;
   },
 });

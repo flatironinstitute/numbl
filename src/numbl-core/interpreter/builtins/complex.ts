@@ -33,6 +33,12 @@ defineBuiltin({
     if (k === "complex_or_number") return `$h.re(${argCode[0]})`;
     return null;
   },
+  jitEmitC: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number" || k === "boolean") return `(${argCode[0]})`;
+    return null;
+  },
 });
 
 // ── imag ────────────────────────────────────────────────────────────────
@@ -49,6 +55,12 @@ defineBuiltin({
     const k = argTypes[0].kind;
     if (k === "number" || k === "boolean") return "0";
     if (k === "complex_or_number") return `$h.im(${argCode[0]})`;
+    return null;
+  },
+  jitEmitC: (_argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number" || k === "boolean") return "0.0";
     return null;
   },
 });
@@ -136,6 +148,12 @@ defineBuiltin({
     const k = argTypes[0].kind;
     if (k === "number" || k === "boolean") return argCode[0];
     if (k === "complex_or_number") return `$h.cConj(${argCode[0]})`;
+    return null;
+  },
+  jitEmitC: (argCode, argTypes) => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (k === "number" || k === "boolean") return `(${argCode[0]})`;
     return null;
   },
 });

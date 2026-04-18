@@ -85,6 +85,12 @@ defineBuiltin({
       return "false";
     return null;
   },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number") return "1.0";
+    if (k === "boolean") return "0.0";
+    return null;
+  },
 });
 
 defineBuiltin({
@@ -110,12 +116,21 @@ defineBuiltin({
       return "false";
     return null;
   },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number") return "1.0";
+    if (k === "boolean") return "0.0";
+    return null;
+  },
 });
 
 defineBuiltin({
   name: "isinteger",
   cases: [anyToLogicalCase(() => false)],
   jitEmit: () => "false",
+  // C-JIT scalars are doubles/booleans — neither is an integer class in
+  // MATLAB's sense, so the answer is always false.
+  jitEmitC: () => "0.0",
 });
 
 defineBuiltin({
@@ -144,6 +159,12 @@ defineBuiltin({
       k === "class_instance"
     )
       return "false";
+    return null;
+  },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "boolean") return "1.0";
+    if (k === "number") return "0.0";
     return null;
   },
 });
@@ -223,6 +244,11 @@ defineBuiltin({
     if (k === "string") return "true";
     return null;
   },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
+    return null;
+  },
 });
 
 defineBuiltin({
@@ -253,6 +279,14 @@ defineBuiltin({
       return "false";
     return null;
   },
+  // The tensor-Var case is handled directly in jitCodegenC (length/
+  // isempty read the tensor's `_len` local). This hook covers only the
+  // scalar case — any scalar is non-empty.
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "0.0";
+    return null;
+  },
 });
 
 defineBuiltin({
@@ -267,6 +301,11 @@ defineBuiltin({
     const k = types[0]?.kind;
     if (k === "number" || k === "boolean" || k === "complex_or_number")
       return "true";
+    return null;
+  },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
     return null;
   },
 });
@@ -285,6 +324,11 @@ defineBuiltin({
       return "true";
     return null;
   },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
+    return null;
+  },
 });
 
 defineBuiltin({
@@ -301,6 +345,11 @@ defineBuiltin({
       return "true";
     return null;
   },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
+    return null;
+  },
 });
 
 defineBuiltin({
@@ -308,6 +357,15 @@ defineBuiltin({
   cases: [anyToLogicalCase(args => getShape(args[0]).length <= 2)],
   jitEmit: (_args, types) => {
     if (types[0]?.kind !== "unknown") return "true";
+    return null;
+  },
+  jitEmitC: (_args, types) => {
+    // C-JIT only sees number/boolean scalars and real 1-3D tensors; of
+    // those, scalars and 1D/2D tensors are always matrices. 3D tensors
+    // aren't, so the shape-aware tensor check stays out of scope and
+    // returns null.
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
     return null;
   },
 });
@@ -346,6 +404,11 @@ defineBuiltin({
       k === "string"
     )
       return "1";
+    return null;
+  },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
     return null;
   },
 });
@@ -390,6 +453,13 @@ defineBuiltin({
       return "1";
     return null;
   },
+  // The tensor-Var case is handled directly in jitCodegenC (reads the
+  // tensor's `_len` / shape locals). This hook covers the scalar case.
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "1.0";
+    return null;
+  },
 });
 
 defineBuiltin({
@@ -417,6 +487,11 @@ defineBuiltin({
       k === "char"
     )
       return "2";
+    return null;
+  },
+  jitEmitC: (_args, types) => {
+    const k = types[0]?.kind;
+    if (k === "number" || k === "boolean") return "2.0";
     return null;
   },
 });
