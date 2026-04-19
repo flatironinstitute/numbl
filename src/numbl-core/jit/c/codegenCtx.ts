@@ -37,8 +37,10 @@ const MANGLE_PREFIX = "v_";
  *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
  *   3 — idx2r / idx3r / set2r_h / set3r_h (multi-index Index read/write).
  *   4 — setRange1r_h / setCol2r_h / copyRange1r (range/col slice r/w).
+ *   5 — is_nan / is_inf / is_finite (predicates that survive -ffast-math
+ *       by inspecting IEEE-754 bit patterns).
  */
-export const NUMBL_JIT_RT_REQUIRED_VERSION = 4;
+export const NUMBL_JIT_RT_REQUIRED_VERSION = 5;
 
 export function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;

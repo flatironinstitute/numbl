@@ -31,7 +31,7 @@ defineBuiltin({
     if (k === "number" || k === "boolean") return `Number.isNaN(${args[0]})`;
     return null;
   },
-  jitEmitC: unaryPredicateJitEmitC("isnan"),
+  jitEmitC: unaryPredicateJitEmitC("numbl_is_nan"),
 });
 
 // ── isinf ───────────────────────────────────────────────────────────────
@@ -55,7 +55,7 @@ defineBuiltin({
       return `(Math.abs(${args[0]}) === Infinity)`;
     return null;
   },
-  jitEmitC: unaryPredicateJitEmitC("isinf"),
+  jitEmitC: unaryPredicateJitEmitC("numbl_is_inf"),
 });
 
 // ── isfinite ────────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ defineBuiltin({
     if (k === "number" || k === "boolean") return `isFinite(${args[0]})`;
     return null;
   },
-  jitEmitC: unaryPredicateJitEmitC("isfinite"),
+  jitEmitC: unaryPredicateJitEmitC("numbl_is_finite"),
 });
 
 // ── isreal ──────────────────────────────────────────────────────────────

@@ -32,8 +32,10 @@ extern "C" {
  *   2 — set1r_h (scalar linear Index write with soft-bail on OOB).
  *   3 — idx2r / idx3r / set2r_h / set3r_h (multi-index Index read/write).
  *   4 — setRange1r_h / setCol2r_h / copyRange1r (range/col slice r/w).
+ *   5 — is_nan / is_inf / is_finite (predicates that survive -ffast-math
+ *       by inspecting IEEE-754 bit patterns, not FP ops).
  */
-#define NUMBL_JIT_RT_VERSION 4
+#define NUMBL_JIT_RT_VERSION 5
 
 /** Returns NUMBL_JIT_RT_VERSION baked into the compiled archive. */
 int numbl_jit_rt_version(void);
@@ -174,6 +176,26 @@ double numbl_tic(double* state);
 
 /** Elapsed seconds since *state. */
 double numbl_toc(const double* state);
+
+/* ── NaN / Inf / finite predicates ───────────────────────────────────── */
+
+/**
+ * Bit-pattern-based predicates that return 1 for true, 0 for false.
+ *
+ * The JIT emits calls to these instead of C99's `isnan` / `isinf` /
+ * `isfinite` because the generated C is compiled with `-ffast-math`,
+ * which implies `-ffinite-math-only` and constant-folds those macros
+ * away. These helpers inspect the IEEE-754 bit pattern via `memcpy`,
+ * so the optimizer can't prove they're always-false even if the
+ * caller's `-ffast-math` assumes operands are finite — the function
+ * call is opaque, and the bit operations have no FP semantics.
+ *
+ * Assumes IEEE-754 binary64 doubles (true on every platform numbl
+ * targets).
+ */
+int numbl_is_nan(double x);
+int numbl_is_inf(double x);
+int numbl_is_finite(double x);
 
 #ifdef __cplusplus
 }

@@ -193,14 +193,18 @@ function getCEnv(log?: (m: string) => void): CEnv | null {
       "-fopenmp-simd",
       "-fno-math-errno",
       "-ffast-math",
-      // -ffast-math implies -ffinite-math-only, which lets the compiler
-      // assume no NaN / Inf and constant-folds isnan/isinf/isfinite away.
-      // MATLAB semantics require these checks to work correctly, so
-      // re-enable them while keeping the rest of -ffast-math's speedups.
-      "-fno-finite-math-only",
     ]) {
       if (compilerAcceptsFlag(cc, flag)) flags.push(flag);
     }
+    // `-ffast-math` implies `-ffinite-math-only`, which lets the compiler
+    // assume no NaN/Inf operands — great for vectorizing sin/cos/exp but
+    // constant-folds isnan/isinf/isfinite to false/true. We DO need
+    // those predicates to work on actual NaN/Inf values; see
+    // `numbl_is_nan` / `numbl_is_inf` / `numbl_is_finite` in jit_runtime
+    // — bit-pattern-based helpers that the JIT emitter calls instead of
+    // the C99 macros. Those helpers live in a separately-compiled static
+    // archive, so the optimizer here can't peek inside and constant-fold
+    // based on `-ffinite-math-only`.
     // Probe -fopenmp but don't add to default flags — it's only used
     // per compilation unit when --par is active. Adding it globally
     // can change GCC codegen even for non-parallel code.

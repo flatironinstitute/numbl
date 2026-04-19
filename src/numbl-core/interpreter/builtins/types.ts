@@ -1074,10 +1074,18 @@ export function scalarConstantJitEmitC(
 }
 
 /**
- * Fast-path C emitter for 1-arg scalar predicates backed by a C99
- * function whose return value is int (e.g. `isnan`, `isinf`,
- * `isfinite`). The int is cast to double for the C-JIT's uniform
- * boolean-as-double representation. Returns null for non-scalar args.
+ * Fast-path C emitter for 1-arg scalar predicates backed by a runtime
+ * helper whose return value is int (e.g. `numbl_is_nan`,
+ * `numbl_is_inf`, `numbl_is_finite`). The int is cast to double for
+ * the C-JIT's uniform boolean-as-double representation. Returns null
+ * for non-scalar args.
+ *
+ * Note: `isnan` / `isinf` / `isfinite` from `<math.h>` can't be used
+ * directly because the JIT compiles with `-ffast-math`, which implies
+ * `-ffinite-math-only` and constant-folds those macros to false/true.
+ * The `numbl_is_nan` / `_is_inf` / `_is_finite` helpers in
+ * `jit_runtime` use bit-pattern inspection and live in a separately
+ * compiled archive, so the caller's `-ffast-math` can't defeat them.
  */
 export function unaryPredicateJitEmitC(
   cFn: string

@@ -220,3 +220,42 @@ double numbl_tic(double* state) {
 double numbl_toc(const double* state) {
   return numbl_monotonic_time() - *state;
 }
+
+/* ── NaN / Inf / finite predicates ─────────────────────────────────────
+ *
+ * Bit-pattern inspection so the answer doesn't depend on the caller's
+ * `-ffast-math` / `-ffinite-math-only` posture. IEEE-754 binary64
+ * double: sign bit (1) | exponent (11) | mantissa (52). NaN has
+ * exponent all-1s and non-zero mantissa; ±Inf has exponent all-1s and
+ * zero mantissa; finite values have exponent != all-1s.
+ *
+ * memcpy is the portable way to reinterpret the bit pattern (type-
+ * punning through a union is UB in strict C; the compiler may still
+ * generate a type-punning read from memcpy as a single mov on any
+ * real platform).
+ */
+
+static uint64_t bits_of(double x) {
+  uint64_t u;
+  memcpy(&u, &x, sizeof u);
+  return u;
+}
+
+#define NUMBL_DBL_EXP_MASK 0x7FF0000000000000ULL
+#define NUMBL_DBL_MANT_MASK 0x000FFFFFFFFFFFFFULL
+
+int numbl_is_nan(double x) {
+  uint64_t u = bits_of(x);
+  return (u & NUMBL_DBL_EXP_MASK) == NUMBL_DBL_EXP_MASK
+      && (u & NUMBL_DBL_MANT_MASK) != 0;
+}
+
+int numbl_is_inf(double x) {
+  uint64_t u = bits_of(x);
+  return (u & ~0x8000000000000000ULL) == NUMBL_DBL_EXP_MASK;
+}
+
+int numbl_is_finite(double x) {
+  uint64_t u = bits_of(x);
+  return (u & NUMBL_DBL_EXP_MASK) != NUMBL_DBL_EXP_MASK;
+}
