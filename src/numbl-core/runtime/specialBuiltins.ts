@@ -1307,8 +1307,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       const SS = String(d.getSeconds()).padStart(2, "0");
       const dateStr = `${dd}-${mon}-${yyyy} ${HH}:${MM}:${SS}`;
       // datenum: MATLAB serial date number (days since 0-Jan-0000)
-      // MATLAB epoch offset: 719529 days from 0-Jan-0000 to 1-Jan-1970
-      const datenum = 719529 + e.mtimeMs / 86400000;
+      // MATLAB epoch offset: 719529 days from 0-Jan-0000 to 1-Jan-1970.
+      // MATLAB's dir returns datenum as a *local-calendar* serial number
+      // (so converting it back via datetime(...,'ConvertFrom','datenum')
+      // yields the same clock time as the 'date' field). Shift the UTC
+      // epoch-ms by the local TZ offset so that interpreting the result
+      // as UTC calendar recovers the host's local calendar value.
+      const datenum =
+        719529 + (e.mtimeMs - d.getTimezoneOffset() * 60000) / 86400000;
 
       return RTV.struct(
         new Map<string, RuntimeValue>([

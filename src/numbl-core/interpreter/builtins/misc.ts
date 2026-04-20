@@ -17,6 +17,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
 import { toString } from "../../runtime/convert.js";
 import { registerIBuiltin, getIBuiltin } from "./types.js";
+import { tryDatetimeDurationBinop } from "./datetime.js";
 import {
   mAdd,
   mSub,
@@ -281,6 +282,20 @@ registerIBuiltin({
   }),
 });
 
+// ── usejava ──────────────────────────────────────────────────────────────
+
+registerIBuiltin({
+  name: "usejava",
+  resolve: argTypes => {
+    if (argTypes.length !== 1) return null;
+    return {
+      outputTypes: [{ kind: "boolean" }],
+      apply: () => false,
+    };
+  },
+  jitEmit: (_args, types) => (types.length === 1 ? "false" : null),
+});
+
 // ── clear / clc / clf stubs ──────────────────────────────────────────────
 
 for (const name of ["clear", "clc", "clf"]) {
@@ -391,7 +406,11 @@ for (const [name, op] of opMap) {
       if (argTypes.length !== 2) return null;
       return {
         outputTypes: [{ kind: "unknown" }],
-        apply: args => op(args[0], args[1]),
+        apply: args => {
+          const dt = tryDatetimeDurationBinop(name, args[0], args[1]);
+          if (dt !== undefined) return dt;
+          return op(args[0], args[1]);
+        },
       };
     },
   });

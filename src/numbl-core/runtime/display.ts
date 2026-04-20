@@ -276,11 +276,89 @@ function formatSparseMatrix(v: RuntimeSparseMatrix): string {
 }
 
 function formatClassInstance(v: RuntimeClassInstance): string {
+  if (v.className === "datetime" || v.className === "duration") {
+    const s = formatDatetimeOrDuration(v);
+    if (s !== null) return s;
+  }
   const lines: string[] = [`  ${v.className} with properties:\n`];
   for (const [key, val] of v.fields) {
     lines.push(`    ${key}: ${displayValue(val)}`);
   }
   return lines.join("\n");
+}
+
+const DATETIME_MONTH_ABBR = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+
+function numField(v: RuntimeClassInstance, name: string): number | null {
+  const fv = v.fields.get(name);
+  if (fv === undefined) return null;
+  if (typeof fv === "number") return fv;
+  if (typeof fv === "boolean") return fv ? 1 : 0;
+  return null;
+}
+
+function formatDatetimeOrDuration(v: RuntimeClassInstance): string | null {
+  if (v.className === "datetime") return formatDatetimeInstance(v);
+  if (v.className === "duration") return formatDurationInstance(v);
+  return null;
+}
+
+function formatDatetimeInstance(v: RuntimeClassInstance): string | null {
+  const year = numField(v, "Year");
+  const month = numField(v, "Month");
+  const day = numField(v, "Day");
+  const hour = numField(v, "Hour");
+  const minute = numField(v, "Minute");
+  const second = numField(v, "Second");
+  if (
+    year === null ||
+    month === null ||
+    day === null ||
+    hour === null ||
+    minute === null ||
+    second === null
+  )
+    return null;
+  const mIdx = Math.max(0, Math.min(11, Math.floor(month) - 1));
+  const mon = DATETIME_MONTH_ABBR[mIdx];
+  const dd = String(Math.floor(day)).padStart(2, "0");
+  const yyyy = String(Math.floor(year));
+  const hasTime = hour !== 0 || minute !== 0 || second !== 0;
+  if (!hasTime) return `${dd}-${mon}-${yyyy}`;
+  const hh = String(Math.floor(hour)).padStart(2, "0");
+  const mm = String(Math.floor(minute)).padStart(2, "0");
+  const ss = String(Math.floor(second)).padStart(2, "0");
+  return `${dd}-${mon}-${yyyy} ${hh}:${mm}:${ss}`;
+}
+
+function formatDurationInstance(v: RuntimeClassInstance): string | null {
+  const total = numField(v, "Seconds");
+  if (total === null) return null;
+  const neg = total < 0;
+  const abs = Math.abs(total);
+  const hh = Math.floor(abs / 3600);
+  const mm = Math.floor((abs % 3600) / 60);
+  const ss = abs - hh * 3600 - mm * 60;
+  const ssWhole = Math.floor(ss);
+  const ssStr =
+    ss === ssWhole
+      ? String(ssWhole).padStart(2, "0")
+      : ss.toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  const sign = neg ? "-" : "";
+  return `${sign}${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}:${ssStr}`;
 }
 
 function formatDictionary(d: RuntimeDictionary): string {

@@ -26,6 +26,7 @@ import "./string-extras.js";
 import "./prng.js";
 import "./cell-struct.js";
 import "./time-system.js";
+import "./datetime.js";
 import "./sparse.js";
 import "./special-math.js";
 import "./misc.js";

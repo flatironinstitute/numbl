@@ -1792,6 +1792,11 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["TF = verLessThan(TOOLBOX, VERSION)"],
     description: "Always returns false in numbl.",
   },
+  usejava: {
+    signatures: ["TF = usejava(FEATURE)"],
+    description:
+      "Test if Java feature is available. Always returns false in numbl.",
+  },
   nargin: {
     signatures: ["N = nargin", "N = nargin(FUN)"],
     description: "Number of input arguments of current or specified function.",
