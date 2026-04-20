@@ -473,6 +473,10 @@ export type JitExpr =
       /** `null` when the range endpoint is the `end` keyword — codegen
        *  substitutes the hoisted `.data.length` alias. */
       end: JitExpr | null;
+      /** True when the source is a statically-known row vector
+       *  (shape `[1, n]`); the slice then preserves row orientation.
+       *  Otherwise the slice is a column vector (MATLAB semantics). */
+      isRow: boolean;
       jitType: JitType;
     }
   | {

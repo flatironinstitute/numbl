@@ -332,6 +332,29 @@ export function subarrayCopy1r(
   return makeTensor(out, undefined, [n, 1]);
 }
 
+// Row-preserving variant: used when `src(a:b)` is applied to a row
+// vector. Matches MATLAB's orientation-preserving 1-D slicing and is
+// needed for downstream shape-sensitive ops like isequal.
+
+export function subarrayCopy1rRow(
+  srcData: FloatXArrayType,
+  srcLen: number,
+  start: number,
+  end: number
+): RuntimeTensor {
+  const s = (start - 1) | 0;
+  const e = (end - 1) | 0;
+  const n = e - s + 1;
+  if (n <= 0) {
+    return makeTensor(new FloatXArray(0), undefined, [1, 0]);
+  }
+  if (s >>> 0 >= srcLen) bce();
+  if (e >>> 0 >= srcLen) bce();
+  const out = new FloatXArray(n);
+  out.set(srcData.subarray(s, e + 1));
+  return makeTensor(out, undefined, [1, n]);
+}
+
 // ── Column slice write helper ──────────────────────────────────────────
 //
 // dst(:, j) = src where dst is a real 2-D tensor with statically-known

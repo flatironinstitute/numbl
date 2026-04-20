@@ -68,6 +68,7 @@ export {
   setRange1r_h,
   setCol2r_h,
   subarrayCopy1r,
+  subarrayCopy1rRow,
 } from "./jitHelpersIndex.js";
 
 export {
@@ -126,6 +127,7 @@ import {
   setRange1r_h,
   setCol2r_h,
   subarrayCopy1r,
+  subarrayCopy1rRow,
 } from "./jitHelpersIndex.js";
 
 import {
@@ -381,8 +383,11 @@ export const jitHelpers = {
   // Column slice write helper
   setCol2r_h,
 
-  // Range-slice read helper (stage 21)
+  // Range-slice read helpers (stage 21).
+  // Column variant (default for column vectors / matrices under linear
+  // indexing) and row variant (row-vector sources preserve orientation).
   subarrayCopy1r,
+  subarrayCopy1rRow,
 
   // Vertical concat growth
   vconcatGrow1r,

@@ -833,13 +833,26 @@ export function tryLowerRangeSliceRead(
       return null;
   }
 
+  // MATLAB 1-D indexing preserves row/column orientation of a vector.
+  // For a statically-known row vector (shape [1, n]) the slice is a row;
+  // everything else (column vector or matrix under linear indexing) is a
+  // column. We can only claim row-ness when we're sure the first dim is
+  // exactly 1 (not -1/unknown).
+  const isRow =
+    !!srcType.shape &&
+    srcType.shape.length === 2 &&
+    srcType.shape[0] === 1 &&
+    srcType.shape[1] !== 1;
+  const resultShape: [number, number] = isRow ? [1, -1] : [-1, 1];
+
   ctx._hasTensorOps = true;
   return {
     tag: "RangeSliceRead",
     baseName,
     start,
     end,
-    jitType: { kind: "tensor", isComplex: false, shape: [-1, 1] },
+    isRow,
+    jitType: { kind: "tensor", isComplex: false, shape: resultShape },
   };
 }
 

@@ -738,7 +738,8 @@ function emitExpr(expr: JitExpr, destName?: string): string {
           ? endCode
           : `Math.round(${endCode})`;
       }
-      return `$h.subarrayCopy1r(${alias.data}, ${alias.len}, ${start}, ${end})`;
+      const helper = expr.isRow ? "subarrayCopy1rRow" : "subarrayCopy1r";
+      return `$h.${helper}(${alias.data}, ${alias.len}, ${start}, ${end})`;
     }
 
     case "MemberRead": {
