@@ -468,10 +468,21 @@ defineBuiltin({
         return dim > 0 && dim <= shape.length ? shape[dim - 1] : 1;
       },
     },
-    // size(A)
+    // size(A) — single-output returns a 1×ndims tensor of sizes.
+    // [d1,d2,...] = size(A) — multi-output returns each dim as a scalar;
+    // the trailing dim aggregates sizes of any remaining dims (MATLAB rule),
+    // but for the type-level signature we just report one nonneg number per
+    // requested output. The apply path pads with 1s for excess outputs.
     {
-      match: argTypes => {
+      match: (argTypes, nargout) => {
         if (argTypes.length !== 1) return null;
+        if (nargout > 1) {
+          const out: JitType[] = [];
+          for (let i = 0; i < nargout; i++) {
+            out.push({ kind: "number", sign: "nonneg" });
+          }
+          return out;
+        }
         const a = argTypes[0];
         const ndims = a.kind === "tensor" && a.shape ? a.shape.length : 2;
         return [
