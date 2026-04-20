@@ -63,6 +63,42 @@ export interface IBuiltin {
    * separate tensor-op dispatch in jitCodegenC.ts / cFusedCodegen.ts).
    */
   jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
+  /**
+   * Optional C-JIT tensor-op dispatch metadata. When a field is present,
+   * both the C feasibility check and C codegen read it directly —
+   * adding a new tensor-unary / tensor-binary / tensor-reduction builtin
+   * is one edit here (plus the matching native-side enum or C function).
+   * Previously these were three parallel hardcoded tables (one in
+   * cFeasibility.ts, two in codegenCtx.ts) that could silently drift
+   * from the native-side opcode enums. Centralizing on the IBuiltin
+   * registration removes that drift risk.
+   */
+  jitCapabilities?: JitCapabilities;
+}
+
+/** Per-builtin C-JIT tensor-op dispatch metadata. See IBuiltin.jitCapabilities. */
+export interface JitCapabilities {
+  /**
+   * libnumbl_ops opcode enum name (e.g. "NUMBL_UNARY_EXP") for
+   * element-wise unary tensor builtins routed through
+   * `numbl_realUnaryElemwise`. Set this on element-wise unary functions
+   * that have a libnumbl_ops opcode and are safe to invoke on any real
+   * input (domain-restricted ones like log/sqrt stay excluded).
+   */
+  tensorUnaryOp?: string;
+  /**
+   * C function name (e.g. "fmax", "atan2", "numbl_mod") for 2-arg
+   * element-wise tensor builtins. The C-JIT emits an inline per-element
+   * loop calling this function; it must match the interpreter's
+   * scalar-apply semantics exactly.
+   */
+  tensorBinaryFn?: string;
+  /**
+   * libnumbl_ops opcode enum name (e.g. "NUMBL_REDUCE_SUM") for
+   * tensor→scalar reductions routed through `numbl_tensor_reduce_op`.
+   * Set on reduction builtins (sum / prod / max / min / any / all / mean).
+   */
+  tensorReductionOp?: string;
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -711,6 +747,7 @@ export function defineBuiltin(opts: {
     getDest?: () => string
   ) => string | null;
   jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
+  jitCapabilities?: JitCapabilities;
 }): void {
   registerIBuiltin({
     name: opts.name,
@@ -724,6 +761,7 @@ export function defineBuiltin(opts: {
     },
     jitEmit: opts.jitEmit,
     jitEmitC: opts.jitEmitC,
+    jitCapabilities: opts.jitCapabilities,
   });
 }
 

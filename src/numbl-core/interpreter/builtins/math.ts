@@ -18,6 +18,7 @@ import {
   binaryMathJitEmit,
   binaryMathJitEmitC,
   type BuiltinHelp,
+  type JitCapabilities,
 } from "./types.js";
 import {
   type JitType,
@@ -41,7 +42,8 @@ function registerUnary(
   complexFn: (re: number, im: number) => { re: number; im: number },
   jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null,
   help?: BuiltinHelp,
-  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null
+  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null,
+  jitCapabilities?: JitCapabilities
 ): void {
   defineBuiltin({
     name,
@@ -49,6 +51,7 @@ function registerUnary(
     cases: unaryElemwiseCases({ realFn, complexFn }, name),
     jitEmit,
     jitEmitC,
+    jitCapabilities,
   });
 }
 
@@ -63,7 +66,8 @@ registerUnary(
   }),
   unaryMathJitEmit("Math.sin", "tSin"),
   undefined,
-  unaryMathJitEmitC("sin")
+  unaryMathJitEmitC("sin"),
+  { tensorUnaryOp: "NUMBL_UNARY_SIN" }
 );
 
 registerUnary(
@@ -75,7 +79,8 @@ registerUnary(
   }),
   unaryMathJitEmit("Math.cos", "tCos"),
   undefined,
-  unaryMathJitEmitC("cos")
+  unaryMathJitEmitC("cos"),
+  { tensorUnaryOp: "NUMBL_UNARY_COS" }
 );
 
 registerUnary(
@@ -87,7 +92,8 @@ registerUnary(
   },
   unaryMathJitEmit("Math.tan", "tTan"),
   undefined,
-  unaryMathJitEmitC("tan")
+  unaryMathJitEmitC("tan"),
+  { tensorUnaryOp: "NUMBL_UNARY_TAN" }
 );
 
 // Inverse trig (complex formulas from builtins/math.ts)
@@ -176,7 +182,8 @@ registerUnary(
   },
   unaryMathJitEmit("Math.atan", "tAtan"),
   undefined,
-  unaryMathJitEmitC("atan")
+  unaryMathJitEmitC("atan"),
+  { tensorUnaryOp: "NUMBL_UNARY_ATAN" }
 );
 
 // ── Hyperbolic ──────────────────────────────────────────────────────────
@@ -190,7 +197,8 @@ registerUnary(
   }),
   unaryMathJitEmit("Math.sinh", "tSinh"),
   undefined,
-  unaryMathJitEmitC("sinh")
+  unaryMathJitEmitC("sinh"),
+  { tensorUnaryOp: "NUMBL_UNARY_SINH" }
 );
 
 registerUnary(
@@ -202,7 +210,8 @@ registerUnary(
   }),
   unaryMathJitEmit("Math.cosh", "tCosh"),
   undefined,
-  unaryMathJitEmitC("cosh")
+  unaryMathJitEmitC("cosh"),
+  { tensorUnaryOp: "NUMBL_UNARY_COSH" }
 );
 
 registerUnary(
@@ -214,7 +223,8 @@ registerUnary(
   },
   unaryMathJitEmit("Math.tanh", "tTanh"),
   undefined,
-  unaryMathJitEmitC("tanh")
+  unaryMathJitEmitC("tanh"),
+  { tensorUnaryOp: "NUMBL_UNARY_TANH" }
 );
 
 // ── Exp / Log ───────────────────────────────────────────────────────────
@@ -244,6 +254,7 @@ defineBuiltin({
   ),
   jitEmit: unaryMathJitEmit("Math.exp", "tExp"),
   jitEmitC: unaryMathJitEmitC("exp"),
+  jitCapabilities: { tensorUnaryOp: "NUMBL_UNARY_EXP" },
 });
 
 function complexLog(re: number, im: number): { re: number; im: number } {
@@ -362,6 +373,7 @@ defineBuiltin({
   cases: unaryRealResultCases(Math.abs, Math.hypot, "abs"),
   jitEmit: unaryMathJitEmit("Math.abs", "tAbs"),
   jitEmitC: unaryMathJitEmitC("fabs"),
+  jitCapabilities: { tensorUnaryOp: "NUMBL_UNARY_ABS" },
 });
 
 // ── Sqrt ────────────────────────────────────────────────────────────────
@@ -441,7 +453,8 @@ registerUnary(
   },
   unaryMathJitEmit("Math.sign", "tSign"),
   undefined,
-  unaryMathJitEmitC("numbl_sign")
+  unaryMathJitEmitC("numbl_sign"),
+  { tensorUnaryOp: "NUMBL_UNARY_SIGN" }
 );
 
 // ── Rounding ────────────────────────────────────────────────────────────
@@ -450,7 +463,8 @@ function registerRounding(
   name: string,
   fn: (x: number) => number,
   jitEmit?: (argCode: string[], argTypes: JitType[]) => string | null,
-  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null
+  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null,
+  jitCapabilities?: JitCapabilities
 ): void {
   defineBuiltin({
     name,
@@ -475,6 +489,7 @@ function registerRounding(
     ),
     jitEmit,
     jitEmitC,
+    jitCapabilities,
   });
 }
 
@@ -482,19 +497,22 @@ registerRounding(
   "floor",
   Math.floor,
   unaryMathJitEmit("Math.floor", "tFloor"),
-  unaryMathJitEmitC("floor")
+  unaryMathJitEmitC("floor"),
+  { tensorUnaryOp: "NUMBL_UNARY_FLOOR" }
 );
 registerRounding(
   "ceil",
   Math.ceil,
   unaryMathJitEmit("Math.ceil", "tCeil"),
-  unaryMathJitEmitC("ceil")
+  unaryMathJitEmitC("ceil"),
+  { tensorUnaryOp: "NUMBL_UNARY_CEIL" }
 );
 registerRounding(
   "fix",
   Math.trunc,
   unaryMathJitEmit("Math.trunc", "tFix"),
-  unaryMathJitEmitC("trunc")
+  unaryMathJitEmitC("trunc"),
+  { tensorUnaryOp: "NUMBL_UNARY_TRUNC" }
 );
 
 // MATLAB round: half away from zero (not JS half-toward-+inf)
@@ -571,6 +589,7 @@ defineBuiltin({
   ],
   // C round(x) is half-away-from-zero per C99 — matches MATLAB.
   jitEmitC: unaryMathJitEmitC("round"),
+  jitCapabilities: { tensorUnaryOp: "NUMBL_UNARY_ROUND" },
 });
 
 // ── Precision math: expm1, log1p ─────────────────────────────────────────
@@ -615,6 +634,7 @@ defineBuiltin({
   ],
   jitEmit: binaryMathJitEmit("Math.hypot"),
   jitEmitC: binaryMathJitEmitC("hypot"),
+  jitCapabilities: { tensorBinaryFn: "hypot" },
 });
 
 // ── Error functions ──────────────────────────────────────────────────────

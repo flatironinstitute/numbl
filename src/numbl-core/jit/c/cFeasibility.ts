@@ -23,6 +23,11 @@ import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
 import type { GeneratedFn } from "../jitLower.js";
 import { analyzeTensorUsage, type ClassificationResult } from "./classify.js";
+import {
+  getTensorUnaryOp,
+  getTensorBinaryFn,
+  getTensorReductionOp,
+} from "./codegenCtx.js";
 
 export type FeasibilityResult =
   | { ok: true }
@@ -70,57 +75,10 @@ function fail(ctx: Ctx, reason: string): FeasibilityResult {
   return { ok: false, reason, line: ctx.line || undefined };
 }
 
-/**
- * MATLAB unary builtin → libnumbl_ops `numbl_unary_op_t` code, restricted
- * to the ones we route to a tensor unary helper. Mirrors JS-side
- * UNARY_OP_CODE in jitHelpersTensor.ts (minus the domain-restricted ones).
- */
-export const C_TENSOR_UNARY_OPS: Record<string, number> = {
-  exp: 0,
-  // log/log2/log10/sqrt deliberately excluded (domain-restricted)
-  abs: 5,
-  floor: 6,
-  ceil: 7,
-  round: 8,
-  fix: 9, // libnumbl_ops calls this TRUNC
-  sin: 10,
-  cos: 11,
-  tan: 12,
-  // asin/acos deliberately excluded
-  atan: 15,
-  sinh: 16,
-  cosh: 17,
-  tanh: 18,
-  sign: 19,
-};
-
-/**
- * Two-argument element-wise tensor builtins that the C-JIT can handle.
- * These map to <math.h> functions in both per-op and fused paths.
- */
-export const C_TENSOR_BINARY_BUILTINS = new Set<string>([
-  "max",
-  "min",
-  "atan2",
-  "hypot",
-  "mod",
-  "rem",
-]);
-
-/**
- * MATLAB reduction builtin → libnumbl_ops `numbl_reduce_op_t` code.
- * Mirrors what JS-JIT's tSum / tMax / tMin / tMean / tProd / tAny / tAll
- * helpers route to.
- */
-export const C_TENSOR_REDUCTION_OPS: Record<string, number> = {
-  sum: 0,
-  prod: 1,
-  max: 2,
-  min: 3,
-  any: 4,
-  all: 5,
-  mean: 6,
-};
+// C-JIT tensor-op membership comes from `IBuiltin.jitCapabilities`; see
+// `getTensorUnaryOp` / `getTensorBinaryFn` / `getTensorReductionOp` in
+// codegenCtx.ts. Domain-restricted ops (log / sqrt / asin / acos) are
+// excluded by simply not setting `tensorUnaryOp` on their IBuiltin.
 
 function isScalarKind(k: JitType["kind"]): boolean {
   return k === "number" || k === "boolean";
@@ -491,9 +449,9 @@ function checkCall(
       }
     }
   }
-  // Tensor unary builtin: result is tensor, single tensor arg, name in
-  // the libnumbl_ops mapping.
-  if (expr.jitType.kind === "tensor" && expr.name in C_TENSOR_UNARY_OPS) {
+  // Tensor unary builtin: result is tensor, single tensor arg, name has
+  // a `tensorUnaryOp` capability on its IBuiltin.
+  if (expr.jitType.kind === "tensor" && getTensorUnaryOp(expr.name)) {
     if (expr.args.length !== 1) {
       return fail(ctx, `${expr.name}: expected 1 tensor arg`);
     }
@@ -501,10 +459,7 @@ function checkCall(
   }
   // Tensor binary builtin (max, min, atan2, hypot, mod, rem):
   // result is tensor, two args (tensor/scalar).
-  if (
-    expr.jitType.kind === "tensor" &&
-    C_TENSOR_BINARY_BUILTINS.has(expr.name)
-  ) {
+  if (expr.jitType.kind === "tensor" && getTensorBinaryFn(expr.name)) {
     if (expr.args.length !== 2) {
       return fail(ctx, `${expr.name}: expected 2 args`);
     }
@@ -514,8 +469,9 @@ function checkCall(
     }
     return { ok: true };
   }
-  // Reduction (tensor → scalar): name in mapping, single tensor arg.
-  if (expr.jitType.kind !== "tensor" && expr.name in C_TENSOR_REDUCTION_OPS) {
+  // Reduction (tensor → scalar): name has a `tensorReductionOp`
+  // capability, single tensor arg.
+  if (expr.jitType.kind !== "tensor" && getTensorReductionOp(expr.name)) {
     if (expr.args.length !== 1) {
       return fail(ctx, `${expr.name}: only single-arg reduction supported`);
     }

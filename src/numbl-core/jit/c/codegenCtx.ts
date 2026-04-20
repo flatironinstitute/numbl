@@ -11,6 +11,7 @@ import { BinaryOperation } from "../../parser/types.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 import type { ClassificationResult } from "./classify.js";
 import type { CParamDesc, COutputDesc } from "./abi.js";
+import { getIBuiltin } from "../../interpreter/builtins/types.js";
 
 /** Per-callee ABI info the outer emitter uses to marshal its call sites.
  *  `emitUserCall` reads `paramDescs` to know what slots each param
@@ -107,34 +108,30 @@ export const TENSOR_CMP_OP: Partial<Record<BinaryOperation, string>> = {
   [BinaryOperation.GreaterEqual]: "NUMBL_CMP_GE",
 };
 
-// Unary builtin name → libnumbl_ops unary opcode enum name.
-export const TENSOR_UNARY_OP: Record<string, string> = {
-  exp: "NUMBL_UNARY_EXP",
-  abs: "NUMBL_UNARY_ABS",
-  floor: "NUMBL_UNARY_FLOOR",
-  ceil: "NUMBL_UNARY_CEIL",
-  round: "NUMBL_UNARY_ROUND",
-  fix: "NUMBL_UNARY_TRUNC",
-  sin: "NUMBL_UNARY_SIN",
-  cos: "NUMBL_UNARY_COS",
-  tan: "NUMBL_UNARY_TAN",
-  atan: "NUMBL_UNARY_ATAN",
-  sinh: "NUMBL_UNARY_SINH",
-  cosh: "NUMBL_UNARY_COSH",
-  tanh: "NUMBL_UNARY_TANH",
-  sign: "NUMBL_UNARY_SIGN",
-};
+/**
+ * Tensor-op dispatch helpers. Each reads `IBuiltin.jitCapabilities` for
+ * the named builtin and returns the corresponding libnumbl_ops opcode
+ * enum name / C function name — or `undefined` when the builtin has no
+ * C-JIT tensor-op routing. These helpers are the single source of truth
+ * for both the C feasibility check (cFeasibility.ts) and the C emitter
+ * (emit.ts); registering a new tensor op is a single edit on the
+ * IBuiltin, not three parallel table updates.
+ */
 
-// Reduction builtin → libnumbl_ops reduce opcode enum name.
-export const TENSOR_REDUCE_OP: Record<string, string> = {
-  sum: "NUMBL_REDUCE_SUM",
-  prod: "NUMBL_REDUCE_PROD",
-  max: "NUMBL_REDUCE_MAX",
-  min: "NUMBL_REDUCE_MIN",
-  any: "NUMBL_REDUCE_ANY",
-  all: "NUMBL_REDUCE_ALL",
-  mean: "NUMBL_REDUCE_MEAN",
-};
+/** libnumbl_ops unary opcode enum name for a tensor-unary builtin. */
+export function getTensorUnaryOp(name: string): string | undefined {
+  return getIBuiltin(name)?.jitCapabilities?.tensorUnaryOp;
+}
+
+/** C function name for a 2-arg element-wise tensor binary builtin. */
+export function getTensorBinaryFn(name: string): string | undefined {
+  return getIBuiltin(name)?.jitCapabilities?.tensorBinaryFn;
+}
+
+/** libnumbl_ops reduce opcode enum name for a tensor-reduction builtin. */
+export function getTensorReductionOp(name: string): string | undefined {
+  return getIBuiltin(name)?.jitCapabilities?.tensorReductionOp;
+}
 
 export function formatNumberLiteral(v: number): string {
   if (!Number.isFinite(v)) {

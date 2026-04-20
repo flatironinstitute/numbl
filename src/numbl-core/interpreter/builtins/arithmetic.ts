@@ -126,6 +126,7 @@ defineBuiltin({
   cases: binaryRealElemwiseCases(Math.atan2, "atan2"),
   jitEmit: binaryMathJitEmit("Math.atan2"),
   jitEmitC: binaryMathJitEmitC("atan2"),
+  jitCapabilities: { tensorBinaryFn: "atan2" },
 });
 
 // ── min / max ───────────────────────────────────────────────────────────
@@ -312,11 +313,19 @@ defineBuiltin({
   name: "min",
   cases: minMaxCases("min"),
   jitEmitC: binaryMathJitEmitC("fmin"),
+  jitCapabilities: {
+    tensorBinaryFn: "fmin",
+    tensorReductionOp: "NUMBL_REDUCE_MIN",
+  },
 });
 defineBuiltin({
   name: "max",
   cases: minMaxCases("max"),
   jitEmitC: binaryMathJitEmitC("fmax"),
+  jitCapabilities: {
+    tensorBinaryFn: "fmax",
+    tensorReductionOp: "NUMBL_REDUCE_MAX",
+  },
 });
 
 // ── mod ──────────────────────────────────────────────────────────────────
@@ -345,6 +354,7 @@ defineBuiltin({
   // numbl_mod lives in jit_runtime.a; matches JS's $h.mod semantics
   // (MATLAB-style floored modulo).
   jitEmitC: binaryMathJitEmitC("numbl_mod"),
+  jitCapabilities: { tensorBinaryFn: "numbl_mod" },
 });
 
 // ── rem ──────────────────────────────────────────────────────────────────
@@ -365,6 +375,7 @@ defineBuiltin({
   },
   // C fmod matches JS's `%` truncated-toward-zero semantics for doubles.
   jitEmitC: binaryMathJitEmitC("fmod"),
+  jitCapabilities: { tensorBinaryFn: "fmod" },
 });
 
 // ── power ────────────────────────────────────────────────────────────────

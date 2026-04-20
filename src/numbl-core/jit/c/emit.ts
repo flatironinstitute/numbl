@@ -13,11 +13,6 @@
  */
 import { UnaryOperation } from "../../parser/types.js";
 import { isKnownInteger, type JitExpr, type JitStmt } from "../jitTypes.js";
-import {
-  C_TENSOR_BINARY_BUILTINS,
-  C_TENSOR_REDUCTION_OPS,
-  C_TENSOR_UNARY_OPS,
-} from "./cFeasibility.js";
 import { findFusibleChains } from "../fusion.js";
 import { emitFusedChain } from "./cFusedCodegen.js";
 import {
@@ -31,8 +26,9 @@ import {
   C_SCALAR_TARGET,
   TENSOR_BIN_OP,
   TENSOR_CMP_OP,
-  TENSOR_REDUCE_OP,
-  TENSOR_UNARY_OP,
+  getTensorUnaryOp,
+  getTensorBinaryFn,
+  getTensorReductionOp,
   allocScratch,
   formatNumberLiteral,
   hasFreshAlloc,
@@ -378,21 +374,19 @@ function emitTensorExprToStmts(
     }
   }
 
-  if (
-    expr.tag === "Call" &&
-    isTensorExpr(expr) &&
-    expr.name in C_TENSOR_UNARY_OPS
-  ) {
-    const opEnum = TENSOR_UNARY_OP[expr.name];
-    const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
-    lines.push(`${indent}${sLen} = ${arg.len};`);
-    lines.push(
-      `${indent}if (!${sData}) ${sData} = (double *)malloc((size_t)${sLen} * sizeof(double));`
-    );
-    lines.push(
-      `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${sLen}, ${arg.data}, ${sData});`
-    );
-    return { data: sData, len: sLen };
+  if (expr.tag === "Call" && isTensorExpr(expr)) {
+    const opEnum = getTensorUnaryOp(expr.name);
+    if (opEnum) {
+      const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
+      lines.push(`${indent}${sLen} = ${arg.len};`);
+      lines.push(
+        `${indent}if (!${sData}) ${sData} = (double *)malloc((size_t)${sLen} * sizeof(double));`
+      );
+      lines.push(
+        `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${sLen}, ${arg.data}, ${sData});`
+      );
+      return { data: sData, len: sLen };
+    }
   }
 
   throw new Error(
@@ -502,35 +496,32 @@ function emitUnary(expr: JitExpr & { tag: "Unary" }, ctx: EmitCtx): string {
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
-  if (isTensorExpr(expr) && expr.name in C_TENSOR_UNARY_OPS) {
+  if (isTensorExpr(expr) && getTensorUnaryOp(expr.name)) {
     throw new Error(
       "C-JIT codegen: tensor unary call must be emitted via statement context"
     );
   }
   // Tensor reduction: result is scalar. Emit reduction inline.
-  if (!isTensorExpr(expr) && expr.name in C_TENSOR_REDUCTION_OPS) {
-    const opEnum = TENSOR_REDUCE_OP[expr.name];
-    if (!opEnum) {
+  if (!isTensorExpr(expr)) {
+    const opEnum = getTensorReductionOp(expr.name);
+    if (opEnum) {
+      const arg = expr.args[0];
+      if (arg.tag === "Var" && isTensorVar(ctx, arg.name)) {
+        return `numbl_reduce_flat(${opEnum}, ${tensorData(arg.name)}, ${tensorLen(arg.name)})`;
+      }
+      if (ctx.pendingStmts) {
+        const tensorResult = emitTensorExprToStmts(
+          ctx.pendingStmts.lines,
+          ctx.pendingStmts.indent,
+          arg,
+          ctx
+        );
+        return `numbl_reduce_flat(${opEnum}, ${tensorResult.data}, ${tensorResult.len})`;
+      }
       throw new Error(
-        `C-JIT codegen: tensor reduction ${expr.name} has no opcode`
+        `C-JIT codegen: reduction of complex tensor expr outside statement context`
       );
     }
-    const arg = expr.args[0];
-    if (arg.tag === "Var" && isTensorVar(ctx, arg.name)) {
-      return `numbl_reduce_flat(${opEnum}, ${tensorData(arg.name)}, ${tensorLen(arg.name)})`;
-    }
-    if (ctx.pendingStmts) {
-      const tensorResult = emitTensorExprToStmts(
-        ctx.pendingStmts.lines,
-        ctx.pendingStmts.indent,
-        arg,
-        ctx
-      );
-      return `numbl_reduce_flat(${opEnum}, ${tensorResult.data}, ${tensorResult.len})`;
-    }
-    throw new Error(
-      `C-JIT codegen: reduction of complex tensor expr outside statement context`
-    );
   }
   if (expr.name === "tic" && expr.args.length === 0) {
     ctx.needsTicState = true;
@@ -1039,45 +1030,32 @@ function emitTensorAssign(
     }
   }
 
-  if (
-    expr.tag === "Call" &&
-    isTensorExpr(expr) &&
-    expr.name in C_TENSOR_UNARY_OPS
-  ) {
-    const opEnum = TENSOR_UNARY_OP[expr.name];
-    const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
-    if (needsAlloc) {
-      emitEnsureLocalBuf(lines, indent, destName, arg.len, ctx);
-    } else {
-      lines.push(`${indent}${dLen} = ${arg.len};`);
+  if (expr.tag === "Call" && isTensorExpr(expr)) {
+    const opEnum = getTensorUnaryOp(expr.name);
+    if (opEnum) {
+      const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
+      if (needsAlloc) {
+        emitEnsureLocalBuf(lines, indent, destName, arg.len, ctx);
+      } else {
+        lines.push(`${indent}${dLen} = ${arg.len};`);
+      }
+      lines.push(
+        `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${dLen}, ${arg.data}, ${dData});`
+      );
+      return;
     }
-    lines.push(
-      `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${dLen}, ${arg.data}, ${dData});`
-    );
-    return;
   }
 
   // Two-arg tensor binary builtin (max, min, atan2, hypot, mod, rem):
-  // emit a per-element loop calling the C math function.
+  // emit a per-element loop calling the C math function registered on
+  // the builtin's jitCapabilities.tensorBinaryFn.
   if (
     expr.tag === "Call" &&
     isTensorExpr(expr) &&
-    C_TENSOR_BINARY_BUILTINS.has(expr.name) &&
-    expr.args.length === 2
+    expr.args.length === 2 &&
+    getTensorBinaryFn(expr.name) !== undefined
   ) {
-    const BINARY_BUILTIN_TO_C: Record<string, string> = {
-      max: "fmax",
-      min: "fmin",
-      atan2: "atan2",
-      hypot: "hypot",
-      mod: "numbl_mod",
-      rem: "fmod",
-    };
-    const cFn = BINARY_BUILTIN_TO_C[expr.name];
-    if (!cFn) {
-      throw new Error(`C-JIT codegen: unmapped binary builtin: ${expr.name}`);
-    }
-
+    const cFn = getTensorBinaryFn(expr.name)!;
     const left = expr.args[0];
     const right = expr.args[1];
     const leftIsTensor = left.jitType.kind === "tensor";
@@ -1129,7 +1107,12 @@ function emitReductionOfTensorExpr(
   callExpr: JitExpr & { tag: "Call" },
   ctx: EmitCtx
 ): void {
-  const opEnum = TENSOR_REDUCE_OP[callExpr.name];
+  const opEnum = getTensorReductionOp(callExpr.name);
+  if (!opEnum) {
+    throw new Error(
+      `C-JIT codegen: tensor reduction ${callExpr.name} has no opcode`
+    );
+  }
   const arg = callExpr.args[0];
   const tensorResult = emitTensorExprToStmts(lines, indent, arg, ctx);
   lines.push(
@@ -1151,7 +1134,7 @@ function emitStmt(
       }
       if (
         stmt.expr.tag === "Call" &&
-        stmt.expr.name in C_TENSOR_REDUCTION_OPS &&
+        getTensorReductionOp(stmt.expr.name) !== undefined &&
         stmt.expr.args[0]?.jitType.kind === "tensor" &&
         stmt.expr.args[0].tag !== "Var"
       ) {
