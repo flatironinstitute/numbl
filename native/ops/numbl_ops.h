@@ -216,6 +216,34 @@ int numbl_complex_flat_reduce(int op, size_t n,
                               const double* a_re, const double* a_im,
                               double* out_re, double* out_im);
 
+/* ── Bessel functions (real input) ────────────────────────────────────── */
+
+typedef enum {
+  NUMBL_BESSEL_J  = 0,  /* first kind,                   real output */
+  NUMBL_BESSEL_Y  = 1,  /* second kind,                  real output */
+  NUMBL_BESSEL_I  = 2,  /* modified first kind,          real output */
+  NUMBL_BESSEL_K  = 3   /* modified second kind,         real output */
+} numbl_bessel_real_op_t;
+
+/**
+ * Real-valued Bessel: out[i] = bessel<OP>(nu, z[i]).
+ * nu is a fixed scalar order.  z, out must each point to at least n doubles.
+ * scale: 0 unscaled; 1 applies the scaled variant (J,Y,I: exp(-|z|); K: exp(z)).
+ */
+int numbl_bessel_real(int op, double nu, size_t n,
+                      const double* z, int scale, double* out);
+
+/**
+ * Hankel function H_nu^{(k)}(z) with real z.
+ * k_kind = 1 →  out[i] = J_nu(z[i]) + i * Y_nu(z[i])
+ * k_kind = 2 →  out[i] = J_nu(z[i]) - i * Y_nu(z[i])
+ * Split complex output: out_re and out_im must each point to at least n doubles.
+ * scale: 0 unscaled; 1 multiplies output by exp(-i*z) (k=1) or exp(+i*z) (k=2).
+ */
+int numbl_bessel_h(int k_kind, double nu, size_t n,
+                   const double* z, int scale,
+                   double* out_re, double* out_im);
+
 /* ── Op-code dump (for drift detection) ───────────────────────────────── */
 
 /**

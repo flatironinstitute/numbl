@@ -25,6 +25,7 @@ import {
   besseli,
   besselk,
 } from "../../helpers/bessel.js";
+import { tensorOps, OpBessel } from "../../ops/index.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -62,14 +63,15 @@ const besselDefs: [
   string,
   (nu: number, z: number) => number,
   (z: number) => number,
+  number /* OpBessel op code for the tensor fast path */,
 ][] = [
-  ["besselj", besselj, z => Math.exp(-Math.abs(z))],
-  ["bessely", bessely, z => Math.exp(-Math.abs(z))],
-  ["besseli", besseli, z => Math.exp(-Math.abs(z))],
-  ["besselk", besselk, z => Math.exp(z)],
+  ["besselj", besselj, z => Math.exp(-Math.abs(z)), OpBessel.J],
+  ["bessely", bessely, z => Math.exp(-Math.abs(z)), OpBessel.Y],
+  ["besseli", besseli, z => Math.exp(-Math.abs(z)), OpBessel.I],
+  ["besselk", besselk, z => Math.exp(z), OpBessel.K],
 ];
 
-for (const [name, fn, scaleFn] of besselDefs) {
+for (const [name, fn, scaleFn, opCode] of besselDefs) {
   registerIBuiltin({
     name,
     resolve: () => ({
@@ -78,7 +80,28 @@ for (const [name, fn, scaleFn] of besselDefs) {
         if (args.length < 2 || args.length > 3)
           throw new RuntimeError(`${name} requires 2 or 3 arguments`);
         const scale = args.length === 3 ? toNumber(args[2]) : 0;
-        return binaryApply(args[0], args[1], (nu, z) => {
+        const nuArg = args[0];
+        const zArg = args[1];
+        // Fast tensor path: scalar nu, real tensor z.
+        if (
+          !isRuntimeTensor(nuArg) &&
+          isRuntimeTensor(zArg) &&
+          !(zArg as RuntimeTensor).imagData
+        ) {
+          const nu = toNumber(nuArg);
+          const zT = zArg as RuntimeTensor;
+          const out = new FloatXArray(zT.data.length);
+          tensorOps.besselReal(
+            opCode,
+            nu,
+            zT.data.length,
+            zT.data as Float64Array,
+            scale === 1 ? 1 : 0,
+            out as Float64Array
+          );
+          return RTV.tensor(out, zT.shape);
+        }
+        return binaryApply(nuArg, zArg, (nu, z) => {
           const val = fn(nu, z);
           return scale === 1 ? val * scaleFn(z) : val;
         });
@@ -179,6 +202,28 @@ registerIBuiltin({
           throw new RuntimeError("besselh: K must be 1 or 2");
         zArg = args[2];
         if (args.length === 4) scale = toNumber(args[3]) === 1;
+      }
+      // Fast tensor path: scalar nu, real tensor z.
+      if (
+        !isRuntimeTensor(nuArg) &&
+        isRuntimeTensor(zArg) &&
+        !(zArg as RuntimeTensor).imagData
+      ) {
+        const nu = toNumber(nuArg);
+        const zT = zArg as RuntimeTensor;
+        const len = zT.data.length;
+        const outRe = new FloatXArray(len);
+        const outIm = new FloatXArray(len);
+        tensorOps.besselH(
+          k,
+          nu,
+          len,
+          zT.data as Float64Array,
+          scale ? 1 : 0,
+          outRe as Float64Array,
+          outIm as Float64Array
+        );
+        return RTV.tensor(outRe, zT.shape, outIm);
       }
       return binaryApplyComplex(
         nuArg,

@@ -276,6 +276,41 @@ Napi::Value TensorOpComplexFlatReduce(const Napi::CallbackInfo& info) {
   return env.Undefined();
 }
 
+Napi::Value TensorOpBesselReal(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 6) {
+    Napi::TypeError::New(env,
+      "tensorOpBesselReal(op, nu, n, z, scale, out)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int op = info[0].As<Napi::Number>().Int32Value();
+  double nu = info[1].As<Napi::Number>().DoubleValue();
+  size_t n = (size_t)info[2].As<Napi::Number>().Int64Value();
+  int scale = info[4].As<Napi::Number>().Int32Value();
+  int rc = numbl_bessel_real(op, nu, n, AsF64(info[3]), scale, AsF64Mut(info[5]));
+  ThrowOnError(env, rc, "tensorOpBesselReal");
+  return env.Undefined();
+}
+
+Napi::Value TensorOpBesselH(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+  if (info.Length() < 7) {
+    Napi::TypeError::New(env,
+      "tensorOpBesselH(kKind, nu, n, z, scale, outRe, outIm)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+  int k_kind = info[0].As<Napi::Number>().Int32Value();
+  double nu = info[1].As<Napi::Number>().DoubleValue();
+  size_t n = (size_t)info[2].As<Napi::Number>().Int64Value();
+  int scale = info[4].As<Napi::Number>().Int32Value();
+  int rc = numbl_bessel_h(k_kind, nu, n, AsF64(info[3]), scale,
+                          AsF64Mut(info[5]), AsF64Mut(info[6]));
+  ThrowOnError(env, rc, "tensorOpBesselH");
+  return env.Undefined();
+}
+
 Napi::Value TensorOpDumpCodes(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
   size_t need = numbl_dump_op_codes(nullptr, 0);

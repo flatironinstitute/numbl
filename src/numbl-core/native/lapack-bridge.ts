@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 7;
+export const NATIVE_ADDON_EXPECTED_VERSION = 8;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -725,6 +725,33 @@ export interface LapackBridge {
     aIm: Float64Array | null,
     outRe: Float64Array,
     outIm: Float64Array | null
+  ): void;
+
+  /**
+   * Real Bessel tensor op: out[i] = besselX(nu, z[i]).
+   * op codes per OpBessel. scale: 0 unscaled, 1 scaled.
+   */
+  tensorOpBesselReal?(
+    op: number,
+    nu: number,
+    n: number,
+    z: Float64Array,
+    scale: number,
+    out: Float64Array
+  ): void;
+
+  /**
+   * Hankel function tensor op (complex output, real input).
+   * kKind: 1 → J + i*Y; 2 → J - i*Y.
+   */
+  tensorOpBesselH?(
+    kKind: number,
+    nu: number,
+    n: number,
+    z: Float64Array,
+    scale: number,
+    outRe: Float64Array,
+    outIm: Float64Array
   ): void;
 
   /** Dump op-code enum values as a stable string (drift detection). */

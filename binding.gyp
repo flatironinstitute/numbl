@@ -27,6 +27,7 @@
         "native/ops/complex_unary_elemwise.c",
         "native/ops/comparison.c",
         "native/ops/reduce.c",
+        "native/ops/bessel.c",
         "native/ops_napi.cpp"
       ],
       "include_dirs": [
@@ -59,7 +60,8 @@
         "native/ops/real_unary_elemwise.c",
         "native/ops/complex_unary_elemwise.c",
         "native/ops/comparison.c",
-        "native/ops/reduce.c"
+        "native/ops/reduce.c",
+        "native/ops/bessel.c"
       ],
       "include_dirs": [ "native/ops" ],
       "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ]

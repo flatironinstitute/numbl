@@ -52,6 +52,10 @@ size_t numbl_dump_op_codes(char* buf, size_t buf_size) {
                 NUMBL_REDUCE_SUM, NUMBL_REDUCE_PROD, NUMBL_REDUCE_MAX,
                 NUMBL_REDUCE_MIN, NUMBL_REDUCE_ANY, NUMBL_REDUCE_ALL,
                 NUMBL_REDUCE_MEAN);
+  n += snprintf(tmp + n, sizeof(tmp) - n,
+                "bessel:J=%d,Y=%d,I=%d,K=%d;",
+                NUMBL_BESSEL_J, NUMBL_BESSEL_Y,
+                NUMBL_BESSEL_I, NUMBL_BESSEL_K);
   size_t need = (size_t)n;
   if (buf && buf_size > need) {
     memcpy(buf, tmp, need + 1);

@@ -12,4 +12,5 @@ export {
   OpUnary,
   OpCmp,
   OpReduce,
+  OpBessel,
 } from "./opCodes.js";

@@ -16,6 +16,7 @@ import {
   OpUnary,
   OpCmp,
   OpReduce,
+  OpBessel,
 } from "../numbl-core/ops/opCodes.js";
 
 function loadAddon(): unknown | null {
@@ -36,7 +37,8 @@ function expectedDump(): string {
     `SIN=${OpUnary.SIN},COS=${OpUnary.COS},TAN=${OpUnary.TAN},ASIN=${OpUnary.ASIN},ACOS=${OpUnary.ACOS},ATAN=${OpUnary.ATAN},` +
     `SINH=${OpUnary.SINH},COSH=${OpUnary.COSH},TANH=${OpUnary.TANH},SIGN=${OpUnary.SIGN};` +
     `cmp:EQ=${OpCmp.EQ},NE=${OpCmp.NE},LT=${OpCmp.LT},LE=${OpCmp.LE},GT=${OpCmp.GT},GE=${OpCmp.GE};` +
-    `reduce:SUM=${OpReduce.SUM},PROD=${OpReduce.PROD},MAX=${OpReduce.MAX},MIN=${OpReduce.MIN},ANY=${OpReduce.ANY},ALL=${OpReduce.ALL},MEAN=${OpReduce.MEAN};`
+    `reduce:SUM=${OpReduce.SUM},PROD=${OpReduce.PROD},MAX=${OpReduce.MAX},MIN=${OpReduce.MIN},ANY=${OpReduce.ANY},ALL=${OpReduce.ALL},MEAN=${OpReduce.MEAN};` +
+    `bessel:J=${OpBessel.J},Y=${OpBessel.Y},I=${OpBessel.I},K=${OpBessel.K};`
   );
 }
 

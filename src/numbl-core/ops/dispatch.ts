@@ -29,6 +29,7 @@ import {
   tsComplexScalarComparison,
 } from "./comparison.js";
 import { tsRealFlatReduce, tsComplexFlatReduce } from "./reduce.js";
+import { tsBesselReal, tsBesselH } from "./bessel.js";
 
 export const tensorOps = {
   realBinaryElemwise(
@@ -292,6 +293,41 @@ export const tensorOps = {
       bridge.tensorOpComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
     } else {
       tsComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
+    }
+  },
+
+  besselReal(
+    op: number,
+    nu: number,
+    n: number,
+    z: Float64Array,
+    scale: number,
+    out: Float64Array
+  ): void {
+    if (n === 0) return;
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpBesselReal) {
+      bridge.tensorOpBesselReal(op, nu, n, z, scale, out);
+    } else {
+      tsBesselReal(op, nu, n, z, scale, out);
+    }
+  },
+
+  besselH(
+    kKind: number,
+    nu: number,
+    n: number,
+    z: Float64Array,
+    scale: number,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void {
+    if (n === 0) return;
+    const bridge = getLapackBridge();
+    if (bridge?.tensorOpBesselH) {
+      bridge.tensorOpBesselH(kKind, nu, n, z, scale, outRe, outIm);
+    } else {
+      tsBesselH(kKind, nu, n, z, scale, outRe, outIm);
     }
   },
 };

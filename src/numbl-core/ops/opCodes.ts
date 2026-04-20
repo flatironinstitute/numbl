@@ -43,6 +43,14 @@ export const OpCmp = {
   GE: 5,
 } as const;
 
+/** Bessel function ops (real input). H-variants are in numbl_bessel_h (complex output). */
+export const OpBessel = {
+  J: 0,
+  Y: 1,
+  I: 2,
+  K: 3,
+} as const;
+
 /** Unary element-wise ops (shared numbering for real + complex). */
 export const OpUnary = {
   EXP: 0,
