@@ -123,7 +123,7 @@ for (const [name, fn, scaleFn, opCode] of besselDefs) {
         if (
           !isRuntimeTensor(nuArg) &&
           isRuntimeTensor(zArg) &&
-          !(zArg as RuntimeTensor).imagData
+          !(zArg as RuntimeTensor).imag
         ) {
           const nu = toNumber(nuArg);
           const zT = zArg as RuntimeTensor;
@@ -262,7 +262,7 @@ registerIBuiltin({
       if (
         !isRuntimeTensor(nuArg) &&
         isRuntimeTensor(zArg) &&
-        !(zArg as RuntimeTensor).imagData
+        !(zArg as RuntimeTensor).imag
       ) {
         const nu = toNumber(nuArg);
         const zT = zArg as RuntimeTensor;
