@@ -302,22 +302,23 @@ export const jitHelpers = {
   __extractSlice2d: (
     base: RuntimeTensor,
     fixedIdx: number,
-    colonPos: number,
-    sliceLen: number
+    colonPos: number
   ): RuntimeTensor => {
     const d = base.data;
     const d0 = base.shape[0]; // number of rows (column-major stride)
+    const d1 = base.shape[1]; // number of cols
     const fi = Math.round(fixedIdx) - 1; // 0-based fixed index
-    const out = new FloatXArray(sliceLen);
     if (colonPos === 0) {
-      // Column slice: A(:, fi) — contiguous in column-major
+      // Column slice: A(:, fi) — contiguous in column-major, length d0.
+      const out = new FloatXArray(d0);
       const offset = fi * d0;
-      for (let i = 0; i < sliceLen; i++) out[i] = d[offset + i];
-      return makeTensor(out, undefined, [sliceLen, 1]);
+      for (let i = 0; i < d0; i++) out[i] = d[offset + i];
+      return makeTensor(out, undefined, [d0, 1]);
     } else {
-      // Row slice: A(fi, :) — strided in column-major
-      for (let j = 0; j < sliceLen; j++) out[j] = d[j * d0 + fi];
-      return makeTensor(out, undefined, [1, sliceLen]);
+      // Row slice: A(fi, :) — strided in column-major, length d1.
+      const out = new FloatXArray(d1);
+      for (let j = 0; j < d1; j++) out[j] = d[j * d0 + fi];
+      return makeTensor(out, undefined, [1, d1]);
     }
   },
 

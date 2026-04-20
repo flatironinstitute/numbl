@@ -19,6 +19,20 @@ import { offsetToLineFast } from "../runtime/error.js";
 import type { LowerCtx } from "./jitLower.js";
 import { lowerExpr, lowerIBuiltinCall } from "./jitLowerExpr.js";
 
+/** Returns true/false when the expr is a known constant scalar, else null. */
+function constantBool(e: JitExpr): boolean | null {
+  if (e.tag === "NumberLiteral" && typeof e.value === "number") {
+    return e.value !== 0;
+  }
+  if (e.jitType.kind === "boolean" && e.jitType.value !== undefined) {
+    return e.jitType.value;
+  }
+  if (e.jitType.kind === "number" && e.jitType.exact !== undefined) {
+    return e.jitType.exact !== 0;
+  }
+  return null;
+}
+
 // ── Statement lowering ──────────────────────────────────────────────────
 
 export function lowerStmts(ctx: LowerCtx, stmts: Stmt[]): JitStmt[] | null {
@@ -760,6 +774,51 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
   if (cond.jitType.kind === "string" || cond.jitType.kind === "char")
     return null;
   if (cond.jitType.kind === "complex_or_number") ctx._hasTensorOps = true;
+
+  // Dead-branch elimination: if the cond folded to a constant (e.g.
+  // `nargout > 1` with nargout inlined to a literal), lower only the live
+  // branch so unreachable code can't bail.
+  const constBool = constantBool(cond);
+  if (constBool === true) {
+    const thenBody = lowerStmts(ctx, stmt.thenBody);
+    return thenBody ?? null;
+  }
+  if (constBool === false) {
+    for (const eib of stmt.elseifBlocks) {
+      const eibCond = lowerExpr(ctx, eib.cond);
+      if (!eibCond) return null;
+      const eibConst = constantBool(eibCond);
+      if (eibConst === true) {
+        return lowerStmts(ctx, eib.body) ?? null;
+      }
+      if (eibConst !== false) {
+        // Non-constant elseif with dead then → fall back to normal path
+        // rather than half-specializing.
+        break;
+      }
+    }
+    if (stmt.elseBody && constBool === false) {
+      // Check that all elseifs were also constant-false before taking the else.
+      const allElseifFalse = stmt.elseifBlocks.every(eib => {
+        const c = lowerExpr(ctx, eib.cond);
+        return c !== null && constantBool(c) === false;
+      });
+      if (allElseifFalse) {
+        return lowerStmts(ctx, stmt.elseBody) ?? null;
+      }
+    }
+    // No elseif matched and no else (or else not fully dead): emit nothing.
+    if (
+      !stmt.elseBody &&
+      stmt.elseifBlocks.every(eib => {
+        const c = lowerExpr(ctx, eib.cond);
+        return c !== null && constantBool(c) === false;
+      })
+    ) {
+      return [];
+    }
+    // Fall through to normal handling otherwise.
+  }
 
   const envBefore = cloneEnv(ctx.env);
   // Slice aliases are lexically scoped to the block they're bound in; we

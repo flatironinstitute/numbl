@@ -718,7 +718,22 @@ defineBuiltin({
   name: "repmat",
   cases: [
     {
-      match: varargMatch2,
+      // Result is a tensor of the same complexity as arg[0]. Shape depends
+      // on the reps args (runtime-only), so we leave `shape` undefined.
+      match: argTypes => {
+        if (argTypes.length < 2) return null;
+        const a = argTypes[0];
+        if (a.kind === "number" || a.kind === "boolean") {
+          return [{ kind: "tensor", isComplex: false }];
+        }
+        if (a.kind === "tensor") {
+          return [{ kind: "tensor", isComplex: a.isComplex === true }];
+        }
+        if (a.kind === "complex_or_number") {
+          return [{ kind: "tensor", isComplex: true }];
+        }
+        return [{ kind: "unknown" }];
+      },
       apply: args => {
         if (args.length < 2)
           throw new RuntimeError("repmat requires at least 2 arguments");

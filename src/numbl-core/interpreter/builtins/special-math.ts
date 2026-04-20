@@ -59,6 +59,37 @@ function binaryApply(
 
 // ── Bessel functions ─────────────────────────────────────────────────────
 
+/** Output type resolver for besselj/bessely/besseli/besselk.
+ *  Scalar args → scalar output; any tensor arg → tensor of matching
+ *  complexity. Unknown fall-through → unknown. */
+function besselRealResolveType(
+  argTypes: import("../../jit/jitTypes.js").JitType[]
+): import("../../jit/jitTypes.js").JitType {
+  if (argTypes.length < 2) return { kind: "unknown" };
+  const [nu, z] = argTypes;
+  const nuTensor = nu.kind === "tensor";
+  const zTensor = z.kind === "tensor";
+  const scalarKinds = new Set(["number", "boolean", "complex_or_number"]);
+  const nuScalar = scalarKinds.has(nu.kind);
+  const zScalar = scalarKinds.has(z.kind);
+  if (!nuTensor && !zTensor && nuScalar && zScalar) {
+    // All-scalar: J/Y/I/K on real args → real. If either arg may be complex,
+    // the result is complex-or-number.
+    const anyComplex =
+      nu.kind === "complex_or_number" || z.kind === "complex_or_number";
+    return anyComplex ? { kind: "complex_or_number" } : { kind: "number" };
+  }
+  if ((nuTensor || zTensor) && (nuScalar || nuTensor) && (zScalar || zTensor)) {
+    const anyComplex =
+      (nu.kind === "tensor" && nu.isComplex === true) ||
+      (z.kind === "tensor" && z.isComplex === true) ||
+      nu.kind === "complex_or_number" ||
+      z.kind === "complex_or_number";
+    return { kind: "tensor", isComplex: anyComplex };
+  }
+  return { kind: "unknown" };
+}
+
 const besselDefs: [
   string,
   (nu: number, z: number) => number,
@@ -74,8 +105,14 @@ const besselDefs: [
 for (const [name, fn, scaleFn, opCode] of besselDefs) {
   registerIBuiltin({
     name,
-    resolve: () => ({
-      outputTypes: [{ kind: "unknown" }],
+    resolve: argTypes => ({
+      // Output shape mirrors the "combined" shape of nu and z for scalar/tensor
+      // mixes. Real J/Y with negative real z is NaN (or may go complex for Y
+      // at non-integer orders), but for the common JIT cases (scalar nu, real
+      // tensor z with z >= 0) the result is a real tensor. Conservative:
+      // scalar×scalar → number; any tensor arg → tensor (complex if any input
+      // tensor is complex); anything else → unknown.
+      outputTypes: [besselRealResolveType(argTypes)],
       apply: args => {
         if (args.length < 2 || args.length > 3)
           throw new RuntimeError(`${name} requires 2 or 3 arguments`);
@@ -108,6 +145,22 @@ for (const [name, fn, scaleFn, opCode] of besselDefs) {
       },
     }),
   });
+}
+
+/** Output type resolver for besselh.  Result is always complex. */
+function besselhResolveType(
+  argTypes: import("../../jit/jitTypes.js").JitType[]
+): import("../../jit/jitTypes.js").JitType {
+  if (argTypes.length < 2 || argTypes.length > 4) return { kind: "unknown" };
+  const nu = argTypes[0];
+  // besselh(nu, z) or besselh(nu, K, z[, scale])
+  const z = argTypes.length === 2 ? argTypes[1] : argTypes[2];
+  const anyTensor = nu.kind === "tensor" || z.kind === "tensor";
+  if (anyTensor) {
+    return { kind: "tensor", isComplex: true };
+  }
+  // Scalar args → complex scalar.
+  return { kind: "complex_or_number" };
 }
 
 // ── besselh: Hankel function (Bessel function of the third kind) ─────────
@@ -185,8 +238,10 @@ function binaryApplyComplex(
 
 registerIBuiltin({
   name: "besselh",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
+  resolve: argTypes => ({
+    // besselh always returns complex (H = J ± i*Y). Scalar args → complex
+    // scalar; any tensor arg → complex tensor.
+    outputTypes: [besselhResolveType(argTypes)],
     apply: args => {
       if (args.length < 2 || args.length > 4)
         throw new RuntimeError("besselh requires 2 to 4 arguments");

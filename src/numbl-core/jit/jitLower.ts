@@ -109,6 +109,10 @@ export interface LowerCtx {
   sliceAliases: Map<string, SliceAlias>;
   _hasTensorOps?: boolean;
   interp?: Interpreter;
+  /** The nargout this specialization was requested with — inlined wherever
+   *  the body reads the `nargout` identifier, since the JIT specializes per
+   *  nargout already. */
+  nargout?: number;
   generatedFns: Map<string, string>;
   generatedIRBodies: Map<string, GeneratedFn>;
   loweringInProgress: Set<string>;
@@ -189,6 +193,7 @@ export function lowerFunction(
     assignedVars: new Set(fn.params),
     sliceAliases: new Map(),
     interp,
+    nargout,
     generatedFns: sharedGeneratedFns,
     generatedIRBodies: sharedGeneratedIRBodies,
     loweringInProgress: sharedInProgress,

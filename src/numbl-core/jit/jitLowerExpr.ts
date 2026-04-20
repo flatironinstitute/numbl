@@ -34,6 +34,60 @@ import { offsetToLineFast } from "../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
 
+/** Pull a literal number out of a JitExpr, if any. Covers NumberLiteral
+ *  directly and Var/etc. whose `exact` field was preserved during inference. */
+function literalNumber(e: JitExpr): number | null {
+  if (e.tag === "NumberLiteral")
+    return typeof e.value === "number" ? e.value : null;
+  if (e.jitType.kind === "number" && e.jitType.exact !== undefined) {
+    return e.jitType.exact;
+  }
+  if (e.jitType.kind === "boolean" && e.jitType.value !== undefined) {
+    return e.jitType.value ? 1 : 0;
+  }
+  return null;
+}
+
+/** Fold a Binary expression whose operands are both literal. Only covers
+ *  the ops we need for dead-branch elimination on `if nargout > K`. */
+function tryConstantFoldBinary(
+  op: BinaryOperation,
+  left: JitExpr,
+  right: JitExpr
+): JitExpr | null {
+  const a = literalNumber(left);
+  const b = literalNumber(right);
+  if (a === null || b === null) return null;
+  let v: number | null = null;
+  switch (op) {
+    case BinaryOperation.Equal:
+      v = a === b ? 1 : 0;
+      break;
+    case BinaryOperation.NotEqual:
+      v = a !== b ? 1 : 0;
+      break;
+    case BinaryOperation.Less:
+      v = a < b ? 1 : 0;
+      break;
+    case BinaryOperation.LessEqual:
+      v = a <= b ? 1 : 0;
+      break;
+    case BinaryOperation.Greater:
+      v = a > b ? 1 : 0;
+      break;
+    case BinaryOperation.GreaterEqual:
+      v = a >= b ? 1 : 0;
+      break;
+    default:
+      return null;
+  }
+  return {
+    tag: "NumberLiteral",
+    value: v,
+    jitType: { kind: "boolean", value: v === 1 },
+  };
+}
+
 function bailExpr(ctx: LowerCtx, expr: Expr, reason: string): null {
   const line = expr.span
     ? ctx.lineTable
@@ -112,6 +166,23 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       // whose IBuiltin apply doesn't see the active call frame —
       // the interpreter handles these via special env lookups that
       // the JIT doesn't yet model.
+      // Exception: `nargout` is a constant within a given JIT specialization
+      // (the JIT specializes per nargout). Inline it as a number literal.
+      // `nargin` isn't quite as simple — callers can omit trailing args so
+      // nargin != ctx.params.size — leave it to the bail path for now.
+      if (expr.name === "nargout" && ctx.nargout !== undefined) {
+        const v = ctx.nargout;
+        return {
+          tag: "NumberLiteral",
+          value: v,
+          jitType: {
+            kind: "number",
+            exact: v,
+            isInteger: true,
+            sign: "nonneg",
+          },
+        };
+      }
       if (FRAME_SENSITIVE_NO_ARG_BUILTINS.has(expr.name)) return null;
       const zeroArgCall: Expr & { type: "FuncCall" } = {
         type: "FuncCall",
@@ -127,6 +198,12 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       if (!left) return null;
       const right = lowerExpr(ctx, expr.right);
       if (!right) return null;
+      // Constant fold comparisons and a handful of arithmetic ops when both
+      // operands are literal-valued — mainly to make `if nargout > K` dead
+      // branches vanish before lowering tries (and fails) to lower their
+      // bodies. The result is a 0/1 NumberLiteral for comparisons.
+      const folded = tryConstantFoldBinary(expr.op, left, right);
+      if (folded) return folded;
       const resultType = binaryResultType(expr.op, left.jitType, right.jitType);
 
       // Matrix multiply: tensor * tensor goes through the mtimes IBuiltin
@@ -634,6 +711,49 @@ function lowerIndexExpr(
   input: { base: JitExpr; indices: Expr[] }
 ): JitExpr | null {
   const { base } = input;
+
+  // 2D colon-slice read: A(i, :) or A(:, j) on a real-tensor base produces
+  // a row/column vector. Catch this before the per-index lowering loop so
+  // the Colon indices don't fall through to lowerExpr's default bail.
+  if (
+    input.indices.length === 2 &&
+    base.jitType.kind === "tensor" &&
+    base.jitType.isComplex === false &&
+    base.jitType.shape &&
+    base.jitType.shape.length === 2
+  ) {
+    const colonLeft = input.indices[0].type === "Colon";
+    const colonRight = input.indices[1].type === "Colon";
+    if (colonLeft !== colonRight) {
+      const fixedExpr = colonLeft ? input.indices[1] : input.indices[0];
+      const fixedLowered = lowerExpr(ctx, fixedExpr);
+      if (
+        fixedLowered &&
+        (fixedLowered.jitType.kind === "number" ||
+          fixedLowered.jitType.kind === "boolean")
+      ) {
+        const colonPos = colonLeft ? 0 : 1;
+        const sliceLen = base.jitType.shape[colonPos];
+        const outShape = colonPos === 0 ? [sliceLen, 1] : [1, sliceLen];
+        ctx._hasTensorOps = true;
+        return {
+          tag: "Call",
+          name: "__extractSlice2d",
+          args: [
+            base,
+            fixedLowered,
+            {
+              tag: "NumberLiteral",
+              value: colonPos,
+              jitType: { kind: "number", exact: colonPos },
+            },
+          ],
+          jitType: { kind: "tensor", isComplex: false, shape: outShape },
+        };
+      }
+    }
+  }
+
   const indices: JitExpr[] = [];
   for (const idx of input.indices) {
     const lowered = lowerExpr(ctx, idx);
@@ -773,7 +893,7 @@ function materializeSliceAlias(
   const sliceLen = alias.sliceShape[0];
   if (sliceLen <= 0) return null;
 
-  // Emit: $h.__extractSlice2d(base, fixedIdx, colonPos, sliceLen)
+  // Emit: $h.__extractSlice2d(base, fixedIdx, colonPos)
   ctx._hasTensorOps = true;
   const baseVar: JitExpr = {
     tag: "Var",
@@ -794,11 +914,6 @@ function materializeSliceAlias(
         tag: "NumberLiteral",
         value: colonPos,
         jitType: { kind: "number", exact: colonPos },
-      },
-      {
-        tag: "NumberLiteral",
-        value: sliceLen,
-        jitType: { kind: "number", exact: sliceLen },
       },
     ],
     jitType: { kind: "tensor", isComplex: false, shape, ndim: 2 },
