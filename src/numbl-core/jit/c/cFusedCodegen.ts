@@ -146,6 +146,7 @@ export function emitFusedChain(
   paramTensors: ReadonlySet<string>,
   outputTensorNames: ReadonlySet<string>,
   localTensorNames: ReadonlySet<string>,
+  dynamicOutputNames: ReadonlySet<string>,
   openmp?: boolean
 ): void {
   // Determine the length variable — use the first tensor param referenced.
@@ -158,13 +159,17 @@ export function emitFusedChain(
   // (shared with JS codegen).
   const { writeBack } = determineWriteBack(chain, outputTensorNames);
 
-  // For dests that need write-back and are local tensors, ensure buffer
-  // is allocated before the loop.
+  // For each write-back dest, size its buffer to `lenVar` before the loop.
+  // Locals and dynamic outputs need free+malloc so a later chain firing
+  // (with different `lenVar`) doesn't overflow a stale buffer. Fixed-size
+  // outputs share the caller's buffer — we must not free it.
   for (const d of writeBack) {
-    if (localTensorNames.has(d)) {
-      lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
+    const needsRealloc = localTensorNames.has(d) || dynamicOutputNames.has(d);
+    lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
+    if (needsRealloc) {
+      lines.push(`${indent}if (${tensorData(d)}) free(${tensorData(d)});`);
       lines.push(
-        `${indent}if (!${tensorData(d)}) ${tensorData(d)} = (double *)malloc((size_t)${lenVar} * sizeof(double));`
+        `${indent}${tensorData(d)} = (${tensorLen(d)} > 0) ? (double *)malloc((size_t)${tensorLen(d)} * sizeof(double)) : NULL;`
       );
     }
   }

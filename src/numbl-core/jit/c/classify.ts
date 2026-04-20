@@ -174,9 +174,15 @@ export function analyzeTensorUsage(
     if (m && d > 0) m.maxIndexDim = d;
   }
 
-  // Fixed-point propagation of hasFreshAlloc through Var-alias
-  // (`dst = src` aliases src's buffer) and RangeSliceRead (`dst = src(a:b)`
-  // produces a fresh allocation).
+  // Fixed-point propagation of hasFreshAlloc:
+  //   - `dst = src` (Var alias): fresh iff src is fresh
+  //   - `dst = src(a:b)` (RangeSliceRead): always fresh
+  //   - Tensor-producing Unary/Binary/Call: always fresh — the codegen
+  //     must malloc a new buffer because the result length tracks the
+  //     operand length, which may vary across loop iterations. Marking
+  //     these as fresh forces isDynamicOutput, which gates the free+malloc
+  //     path in emit.ts; without it, a paramOutput with a caller-aliased
+  //     buffer would be overflowed by a larger-sized elemwise result.
   let changed = true;
   while (changed) {
     changed = false;
@@ -191,7 +197,12 @@ export function analyzeTensorUsage(
           dst.hasFreshAlloc = true;
           changed = true;
         }
-      } else if (e.tag === "RangeSliceRead") {
+      } else if (
+        e.tag === "RangeSliceRead" ||
+        e.tag === "Unary" ||
+        e.tag === "Binary" ||
+        e.tag === "Call"
+      ) {
         dst.hasFreshAlloc = true;
         changed = true;
       }

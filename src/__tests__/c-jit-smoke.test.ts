@@ -399,7 +399,9 @@ describe("C-JIT: tensor codegen (Phase 2, koffi)", () => {
     // Signature should use raw double* for tensors
     expect(gen.cSource).toContain("const double *v_x_data");
     expect(gen.cSource).toContain("int64_t v_x_len");
-    expect(gen.cSource).toContain("double *v_r_buf");
+    // Tensor-producing elemwise op → dynamic output (caller receives a
+    // malloc'd buffer), so the output is `double **v_r_buf_out`.
+    expect(gen.cSource).toContain("double **v_r_buf_out");
   });
 
   it("emits scalar_binary_elemwise for scalar-tensor ops", () => {
@@ -468,8 +470,10 @@ describe("C-JIT: tensor codegen (Phase 2, koffi)", () => {
     // Should have scratch buffer declarations
     expect(gen.cSource).toContain("double *__s1_data = NULL;");
     expect(gen.cSource).toContain("int64_t __s1_len = 0;");
-    // Should malloc the scratch and call the binary op
-    expect(gen.cSource).toContain("__s1_data = (double *)malloc(");
+    // Should malloc the scratch (guarded against zero-length) and call
+    // the binary op. The malloc is wrapped in a ternary so the buffer
+    // stays NULL when sLen == 0, avoiding an undefined-behaviour malloc(0).
+    expect(gen.cSource).toContain("(double *)malloc((size_t)__s1_len");
     expect(gen.cSource).toContain(
       "numbl_real_binary_elemwise(NUMBL_REAL_BIN_MUL"
     );

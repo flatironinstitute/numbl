@@ -328,6 +328,23 @@ function emitTensorBinaryStmts(
   }
 }
 
+/** Size a scratch tensor buffer to `lenExpr` doubles, freeing any stale
+ *  buffer from a prior loop iteration first. A plain `if (!sData) malloc`
+ *  would overflow the buffer if a later iteration demanded more bytes. */
+function emitScratchBufAlloc(
+  lines: string[],
+  indent: string,
+  sData: string,
+  sLen: string,
+  lenExpr: string
+): void {
+  lines.push(`${indent}${sLen} = ${lenExpr};`);
+  lines.push(`${indent}if (${sData}) free(${sData});`);
+  lines.push(
+    `${indent}${sData} = (${sLen} > 0) ? (double *)malloc((size_t)${sLen} * sizeof(double)) : NULL;`
+  );
+}
+
 /** Emit a tensor expression as statements, returning the data/len vars. */
 function emitTensorExprToStmts(
   lines: string[],
@@ -349,10 +366,7 @@ function emitTensorExprToStmts(
 
   if (expr.tag === "Binary" && isTensorExpr(expr)) {
     const tensorLen0 = findTensorLenExpr(expr, ctx);
-    lines.push(`${indent}${sLen} = ${tensorLen0};`);
-    lines.push(
-      `${indent}if (!${sData}) ${sData} = (double *)malloc((size_t)${sLen} * sizeof(double));`
-    );
+    emitScratchBufAlloc(lines, indent, sData, sLen, tensorLen0);
     emitTensorBinaryStmts(lines, indent, expr, ctx, sData, sLen);
     return { data: sData, len: sLen };
   }
@@ -363,10 +377,7 @@ function emitTensorExprToStmts(
     }
     if (expr.op === UnaryOperation.Minus) {
       const operand = emitTensorExprToStmts(lines, indent, expr.operand, ctx);
-      lines.push(`${indent}${sLen} = ${operand.len};`);
-      lines.push(
-        `${indent}if (!${sData}) ${sData} = (double *)malloc((size_t)${sLen} * sizeof(double));`
-      );
+      emitScratchBufAlloc(lines, indent, sData, sLen, operand.len);
       lines.push(
         `${indent}numbl_real_scalar_binary_elemwise(NUMBL_REAL_BIN_MUL, (size_t)${sLen}, -1.0, ${operand.data}, 1, ${sData});`
       );
@@ -378,10 +389,7 @@ function emitTensorExprToStmts(
     const opEnum = getTensorUnaryOp(expr.name);
     if (opEnum) {
       const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
-      lines.push(`${indent}${sLen} = ${arg.len};`);
-      lines.push(
-        `${indent}if (!${sData}) ${sData} = (double *)malloc((size_t)${sLen} * sizeof(double));`
-      );
+      emitScratchBufAlloc(lines, indent, sData, sLen, arg.len);
       lines.push(
         `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${sLen}, ${arg.data}, ${sData});`
       );
@@ -622,6 +630,10 @@ export function emitStmts(
   while (i < stmts.length) {
     const entry = coveredByChain.get(i);
     if (entry) {
+      const dynamicOutputNames = new Set<string>();
+      for (const n of ctx.cls.outputTensorNames) {
+        if (ctx.cls.meta.get(n)?.isDynamicOutput) dynamicOutputNames.add(n);
+      }
       emitFusedChain(
         lines,
         indent,
@@ -630,6 +642,7 @@ export function emitStmts(
         ctx.cls.paramTensorNames,
         ctx.cls.outputTensorNames,
         ctx.cls.localTensorNames,
+        dynamicOutputNames,
         ctx.openmp
       );
       i += entry.chain.length;
@@ -640,22 +653,58 @@ export function emitStmts(
   }
 }
 
-/** For local tensor dests (not output, not param), ensure the buffer
- *  is allocated before writing. Emits a realloc-like pattern. */
-function emitEnsureLocalBuf(
+/** Ensure `destName`'s buffer is sized to exactly `lenExpr` doubles
+ *  before an elemwise op writes into it. For locals and dynamic
+ *  outputs, always free+malloc — loop iterations can produce different
+ *  sizes, so a first-time-only malloc would overflow the buffer in
+ *  later iterations. For fixed-size outputs (caller-aliased buffer),
+ *  just records the length; freeing would corrupt the caller.
+ *
+ *  When the destination is a dynamic output, also writes its _d0/_d1
+ *  shape locals. Pass the tensor operand whose shape the result
+ *  inherits (elemwise preserves operand shape); we use its static
+ *  jitType.shape when available, else fall back to `[lenExpr, 1]`. */
+function emitEnsureTensorBuf(
   lines: string[],
   indent: string,
   destName: string,
   lenExpr: string,
-  ctx: EmitCtx
+  ctx: EmitCtx,
+  shapeSrc?: JitExpr
 ): void {
-  if (!isLocalTensor(ctx, destName)) return;
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
+  const isDyn = isDynamicOutput(ctx, destName);
+  if (isLocalTensor(ctx, destName) || isDyn) {
+    lines.push(`${indent}${dLen} = ${lenExpr};`);
+    lines.push(`${indent}if (${dData}) free(${dData});`);
+    lines.push(
+      `${indent}${dData} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+    );
+    if (isDyn) {
+      const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
+      lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+      lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
+    }
+    return;
+  }
   lines.push(`${indent}${dLen} = ${lenExpr};`);
-  lines.push(
-    `${indent}if (!${dData}) ${dData} = (double *)malloc((size_t)${dLen} * sizeof(double));`
-  );
+}
+
+/** Derive (d0, d1) C expressions for a dynamic tensor output whose
+ *  shape is inherited from an elemwise operand. Uses the operand's
+ *  static shape when known; else falls back to `[len, 1]` (1D column
+ *  convention). */
+function shapeExprsFor(
+  shapeSrc: JitExpr | undefined,
+  lenExpr: string
+): [string, string] {
+  const shape =
+    shapeSrc?.jitType.kind === "tensor" ? shapeSrc.jitType.shape : undefined;
+  if (shape && shape.length === 2) {
+    return [`${shape[0]}`, `${shape[1]}`];
+  }
+  return [lenExpr, "1"];
 }
 
 /** Emit a fresh-alloc pattern: free old buffer, malloc new, fill with
@@ -905,7 +954,6 @@ function emitTensorAssign(
 ): void {
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
-  const needsAlloc = isLocalTensor(ctx, destName);
 
   if (expr.tag === "UserCall") {
     const destMeta = requireFreshAllocMeta(ctx, destName, "UserCall");
@@ -936,20 +984,22 @@ function emitTensorAssign(
   }
 
   if (expr.tag === "RangeSliceRead") {
-    if (isLocalTensor(ctx, destName)) {
+    // RangeSliceRead always propagates hasFreshAlloc (classify.ts), so
+    // an output destination is always isDynamicOutput. Free+malloc so
+    // the slice size doesn't have to match the current buffer size.
+    if (isLocalTensor(ctx, destName) || isDynamicOutput(ctx, destName)) {
       emitRangeSliceReadToBuf(lines, indent, expr, ctx, dData, dLen);
-      return;
-    }
-    if (isOutputTensor(ctx, destName)) {
-      const scratch = emitRangeSliceReadToStmts(lines, indent, expr, ctx);
-      lines.push(`${indent}${dLen} = ${scratch.len};`);
-      lines.push(
-        `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
-      );
+      if (isDynamicOutput(ctx, destName)) {
+        // 1D slice — emit column-vector shape for the dynamic output.
+        // Row-vector sources lose orientation here; C-JIT doesn't yet
+        // track RangeSliceRead's isRow flag (the JS-JIT does).
+        lines.push(`${indent}${tensorD0(destName)} = ${dLen};`);
+        lines.push(`${indent}${tensorD1(destName)} = 1;`);
+      }
       return;
     }
     throw new Error(
-      `C-JIT codegen: RangeSliceRead assign to tensor param '${destName}' unsupported`
+      `C-JIT codegen: RangeSliceRead assign to '${destName}' unsupported`
     );
   }
 
@@ -1003,10 +1053,9 @@ function emitTensorAssign(
   }
 
   if (expr.tag === "Binary" && isTensorExpr(expr)) {
-    if (needsAlloc) {
-      const lenExpr = findTensorLenExpr(expr, ctx);
-      emitEnsureLocalBuf(lines, indent, destName, lenExpr, ctx);
-    }
+    const lenExpr = findTensorLenExpr(expr, ctx);
+    const tensorOperand = isTensorExpr(expr.left) ? expr.left : expr.right;
+    emitEnsureTensorBuf(lines, indent, destName, lenExpr, ctx, tensorOperand);
     emitTensorBinaryStmts(lines, indent, expr, ctx, dData, dLen);
     return;
   }
@@ -1018,11 +1067,14 @@ function emitTensorAssign(
     }
     if (expr.op === UnaryOperation.Minus) {
       const operand = emitTensorExprToStmts(lines, indent, expr.operand, ctx);
-      if (needsAlloc) {
-        emitEnsureLocalBuf(lines, indent, destName, operand.len, ctx);
-      } else {
-        lines.push(`${indent}${dLen} = ${operand.len};`);
-      }
+      emitEnsureTensorBuf(
+        lines,
+        indent,
+        destName,
+        operand.len,
+        ctx,
+        expr.operand
+      );
       lines.push(
         `${indent}numbl_real_scalar_binary_elemwise(NUMBL_REAL_BIN_MUL, (size_t)${dLen}, -1.0, ${operand.data}, 1, ${dData});`
       );
@@ -1034,11 +1086,7 @@ function emitTensorAssign(
     const opEnum = getTensorUnaryOp(expr.name);
     if (opEnum) {
       const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
-      if (needsAlloc) {
-        emitEnsureLocalBuf(lines, indent, destName, arg.len, ctx);
-      } else {
-        lines.push(`${indent}${dLen} = ${arg.len};`);
-      }
+      emitEnsureTensorBuf(lines, indent, destName, arg.len, ctx, expr.args[0]);
       lines.push(
         `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${dLen}, ${arg.data}, ${dData});`
       );
@@ -1060,13 +1108,19 @@ function emitTensorAssign(
     const right = expr.args[1];
     const leftIsTensor = left.jitType.kind === "tensor";
     const rightIsTensor = right.jitType.kind === "tensor";
+    const tensorOperand = leftIsTensor ? left : right;
 
     if (leftIsTensor && rightIsTensor) {
       const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
       const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
-      if (needsAlloc)
-        emitEnsureLocalBuf(lines, indent, destName, lArg.len, ctx);
-      else lines.push(`${indent}${dLen} = ${lArg.len};`);
+      emitEnsureTensorBuf(
+        lines,
+        indent,
+        destName,
+        lArg.len,
+        ctx,
+        tensorOperand
+      );
       lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
       lines.push(
         `${indent}  ${dData}[__i] = ${cFn}(${lArg.data}[__i], ${rArg.data}[__i]);`
@@ -1074,9 +1128,14 @@ function emitTensorAssign(
     } else if (leftIsTensor) {
       const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
       const rScalar = emitExpr(right, ctx);
-      if (needsAlloc)
-        emitEnsureLocalBuf(lines, indent, destName, lArg.len, ctx);
-      else lines.push(`${indent}${dLen} = ${lArg.len};`);
+      emitEnsureTensorBuf(
+        lines,
+        indent,
+        destName,
+        lArg.len,
+        ctx,
+        tensorOperand
+      );
       lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
       lines.push(
         `${indent}  ${dData}[__i] = ${cFn}(${lArg.data}[__i], ${rScalar});`
@@ -1084,9 +1143,14 @@ function emitTensorAssign(
     } else {
       const lScalar = emitExpr(left, ctx);
       const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
-      if (needsAlloc)
-        emitEnsureLocalBuf(lines, indent, destName, rArg.len, ctx);
-      else lines.push(`${indent}${dLen} = ${rArg.len};`);
+      emitEnsureTensorBuf(
+        lines,
+        indent,
+        destName,
+        rArg.len,
+        ctx,
+        tensorOperand
+      );
       lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
       lines.push(
         `${indent}  ${dData}[__i] = ${cFn}(${lScalar}, ${rArg.data}[__i]);`
