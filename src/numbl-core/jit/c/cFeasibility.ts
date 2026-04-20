@@ -693,9 +693,10 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       return checkExpr(stmt.colIndex, ctx);
     }
 
-    // Out of scope: struct writes, multi-assign.
+    // Out of scope: struct writes, multi-assign, 3-D page-slice writes.
     case "AssignMember":
     case "MultiAssign":
+    case "AssignIndexPage3d":
       return fail(ctx, `unsupported stmt: ${stmt.tag}`);
     default:
       return fail(ctx, `unknown stmt: ${(stmt as { tag: string }).tag}`);

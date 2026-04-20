@@ -633,6 +633,23 @@ export type JitStmt =
     }
   | {
       /**
+       * Page-slice write `dst(:, :, k) = rhs` where `dst` is a 3-D tensor
+       * and `rhs` is a 2-D tensor. Real-base + complex-rhs upgrades the
+       * base to complex in place.  Drives chunkie helm2d.green's
+       * `grad(:,:,k) = ...` / `hess(:,:,k) = ...` assignments.
+       */
+      tag: "AssignIndexPage3d";
+      baseName: string;
+      /** Base tensor type AFTER the write (may be complex even if the
+       *  initializer was real — the lowerer promotes in ctx.env). */
+      baseType: JitType;
+      /** Page index (1-based). */
+      pageIndex: JitExpr;
+      /** 2-D tensor RHS. */
+      value: JitExpr;
+    }
+  | {
+      /**
        * Struct field assign lvalue `s.f = v`. When `needsPromote` is
        * true, the base is (re)initialized as a fresh empty struct
        * before the field is set — mirrors MATLAB's

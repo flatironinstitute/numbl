@@ -296,6 +296,10 @@ function propagateUserCallShapeNeeds(
       case "AssignIndexCol":
         visitExpr(s.colIndex);
         return;
+      case "AssignIndexPage3d":
+        visitExpr(s.pageIndex);
+        visitExpr(s.value);
+        return;
       case "If":
         visitExpr(s.cond);
         s.thenBody.forEach(visitStmt);
@@ -392,6 +396,10 @@ function collectReachableJitNames(
         return;
       case "AssignIndexCol":
         visitExpr(s.colIndex);
+        return;
+      case "AssignIndexPage3d":
+        visitExpr(s.pageIndex);
+        visitExpr(s.value);
         return;
       case "If":
         visitExpr(s.cond);

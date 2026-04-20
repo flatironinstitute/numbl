@@ -156,7 +156,8 @@ export function analyzeTensorUsage(
       }
       case "AssignIndex":
       case "AssignIndexRange":
-      case "AssignIndexCol": {
+      case "AssignIndexCol":
+      case "AssignIndexPage3d": {
         const m = meta.get(s.baseName);
         if (m) m.isAssignIndexTarget = true;
         return;

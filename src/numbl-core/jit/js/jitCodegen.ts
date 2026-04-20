@@ -572,6 +572,10 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
       lines.push(`${indent}${emitAssignIndexCol(stmt)};`);
       break;
 
+    case "AssignIndexPage3d":
+      lines.push(`${indent}${emitAssignIndexPage3d(stmt)};`);
+      break;
+
     case "AssignMember":
       emitAssignMember(lines, stmt, indent);
       break;
@@ -1124,6 +1128,20 @@ function emitAssignIndexCol(stmt: JitStmt & { tag: "AssignIndexCol" }): string {
     ? colCode
     : `Math.round(${colCode})`;
   return `$h.setCol2r_h(${dstAlias.data}, ${dstAlias.d0}, ${dstAlias.len}, ${col}, ${srcAlias.data}, ${srcAlias.len})`;
+}
+
+function emitAssignIndexPage3d(
+  stmt: JitStmt & { tag: "AssignIndexPage3d" }
+): string {
+  const m = mangle(stmt.baseName);
+  const page = emitExpr(stmt.pageIndex);
+  const rhs = emitExpr(stmt.value);
+  // The helper handles real→complex promotion of the base in place and
+  // writes the rhs tensor into the page. It returns the (possibly promoted)
+  // base; we re-assign the local so downstream reads pick up the new imag
+  // storage if any. No hoisted alias is used here because the page-write
+  // may change `base.imag` from undefined to a Float64Array mid-function.
+  return `${m} = $h.__writePage3d(${m}, ${page}, ${rhs})`;
 }
 
 function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {

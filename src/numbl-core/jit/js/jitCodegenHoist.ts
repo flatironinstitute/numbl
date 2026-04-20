@@ -163,6 +163,18 @@ export function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
           visitExpr(s.colIndex);
           break;
         }
+        case "AssignIndexPage3d": {
+          // The helper reads base.data / base.imag / base.shape directly at
+          // runtime and may re-seat base.imag (real→complex promotion), so
+          // don't emit hoisted aliases — mark with isReal=false to skip
+          // hoisting for this name.
+          if (s.baseType.kind === "tensor") {
+            bump(s.baseName, false, 0, false);
+          }
+          visitExpr(s.pageIndex);
+          visitExpr(s.value);
+          break;
+        }
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);
           break;
@@ -340,6 +352,10 @@ export function collectStructFieldReads(
         case "AssignIndexCol":
           visitExpr(s.colIndex);
           break;
+        case "AssignIndexPage3d":
+          visitExpr(s.pageIndex);
+          visitExpr(s.value);
+          break;
         case "AssignMember":
           visitExpr(s.value);
           break;
@@ -453,6 +469,10 @@ export function collectStructArrayElementReads(
           break;
         case "AssignIndexCol":
           visitExpr(s.colIndex);
+          break;
+        case "AssignIndexPage3d":
+          visitExpr(s.pageIndex);
+          visitExpr(s.value);
           break;
         case "AssignMember":
           visitExpr(s.value);

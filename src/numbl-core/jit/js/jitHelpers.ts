@@ -322,6 +322,36 @@ export const jitHelpers = {
     }
   },
 
+  // Page-slice write into a 3D tensor: base(:, :, k) = rhs.
+  // Copies rhs.data (a 2D tensor) into base.data at page offset (k-1)*d0*d1.
+  // If rhs is complex but base is real, promotes base to complex in-place
+  // — the caller's env/type map must have been updated to match. If rhs is
+  // real but base is complex, clears the page's imag part to 0.
+  __writePage3d: (
+    base: RuntimeTensor,
+    k: number,
+    rhs: RuntimeTensor
+  ): RuntimeTensor => {
+    const d0 = base.shape[0];
+    const d1 = base.shape[1];
+    const pageSize = d0 * d1;
+    const pageOffset = (Math.round(k) - 1) * pageSize;
+    if (rhs.imag && !base.imag) {
+      base.imag = new FloatXArray(base.data.length);
+    }
+    const rdata = rhs.data;
+    for (let i = 0; i < pageSize; i++) base.data[pageOffset + i] = rdata[i];
+    if (base.imag) {
+      if (rhs.imag) {
+        const rimag = rhs.imag;
+        for (let i = 0; i < pageSize; i++) base.imag[pageOffset + i] = rimag[i];
+      } else {
+        for (let i = 0; i < pageSize; i++) base.imag[pageOffset + i] = 0;
+      }
+    }
+    return base;
+  },
+
   // Tensor literal construction
   mkTensor: (data: number[], shape: number[]) =>
     makeTensor(new FloatXArray(data), undefined, shape),

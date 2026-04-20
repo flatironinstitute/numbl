@@ -351,10 +351,34 @@ function lowerAssignLValue(
   if (lv.base.type !== "Ident") return null;
   const baseName = lv.base.name;
 
-  // Base must already exist in the type env as a real tensor.
-  const baseType = ctx.env.get(baseName);
-  if (!baseType || baseType.kind !== "tensor") return null;
-  if (baseType.isComplex === true) return null;
+  // Base must already exist in the type env as a tensor.
+  const baseTypeRaw = ctx.env.get(baseName);
+  if (!baseTypeRaw || baseTypeRaw.kind !== "tensor") return null;
+
+  // Page-slice write `dst(:, :, k) = rhs` on a 3-D tensor.  Drives
+  // chunkie helm2d.green's `grad(:,:,k) = ...` pattern.  Must run BEFORE
+  // the `isComplex === true` bail below so the second write
+  // (`grad(:,:,2) = ...`) still lowers after the first one promoted
+  // grad's env type to complex.
+  if (
+    lv.indices.length === 3 &&
+    lv.indices[0].type === "Colon" &&
+    lv.indices[1].type === "Colon" &&
+    lv.indices[2].type !== "Colon" &&
+    lv.indices[2].type !== "Range"
+  ) {
+    const pageResult = tryLowerPage3dAssign(
+      ctx,
+      baseName,
+      baseTypeRaw,
+      lv.indices[2],
+      stmt.expr
+    );
+    if (pageResult) return pageResult;
+  }
+
+  if (baseTypeRaw.isComplex === true) return null;
+  const baseType = baseTypeRaw;
 
   // Range-slice write `dst(a:b) = src(c:d)` is handled by a separate path
   // that generates an `AssignIndexRange` IR node. The current narrow shape
@@ -569,6 +593,67 @@ function tryLowerRangeAssign(
  *
  * Anything else returns null so the caller bails.
  */
+/** Lower `dst(:, :, k) = rhs` where `dst` is a 3-D tensor and `rhs` is a
+ *  2-D tensor expression. If `rhs` is complex but `dst` is real, promote
+ *  `dst`'s entry in ctx.env to complex; the runtime helper promotes the
+ *  actual storage on write. */
+function tryLowerPage3dAssign(
+  ctx: LowerCtx,
+  baseName: string,
+  baseType: JitType,
+  pageIdxExpr: Expr,
+  rhsExpr: Expr
+): JitStmt[] | null {
+  if (baseType.kind !== "tensor") return null;
+  // Require a known 3-D shape on the base so we know we're writing a page.
+  // If shape is undefined the initializer wasn't a zeros-like call with
+  // known dims; skip for now (conservative).
+  if (!baseType.shape || baseType.shape.length !== 3) return null;
+
+  const pageIndex = lowerExpr(ctx, pageIdxExpr);
+  if (!pageIndex) return null;
+  if (
+    pageIndex.jitType.kind !== "number" &&
+    pageIndex.jitType.kind !== "boolean"
+  ) {
+    return null;
+  }
+
+  const value = lowerExpr(ctx, rhsExpr);
+  if (!value) return null;
+  // RHS must be a tensor. Scalar RHS into a 3-D page would be a broadcast
+  // (not supported yet).
+  if (value.jitType.kind !== "tensor") return null;
+
+  const rhsComplex = value.jitType.isComplex === true;
+  const baseComplex = baseType.isComplex === true;
+
+  // If RHS is complex but base was real-typed, promote the var's env type
+  // to complex so downstream reads and the function's output type are right.
+  const newBaseType: JitType = {
+    kind: "tensor",
+    isComplex: baseComplex || rhsComplex,
+    shape: baseType.shape,
+  };
+  if (!baseComplex && rhsComplex) {
+    ctx.env.set(baseName, newBaseType);
+  }
+
+  ctx.assignedVars.add(baseName);
+  ctx.sliceAliases.delete(baseName);
+  ctx._hasTensorOps = true;
+
+  return [
+    {
+      tag: "AssignIndexPage3d",
+      baseName,
+      baseType: newBaseType,
+      pageIndex,
+      value,
+    },
+  ];
+}
+
 function tryLowerColAssign(
   ctx: LowerCtx,
   baseName: string,
