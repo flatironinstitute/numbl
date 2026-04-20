@@ -38,6 +38,12 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
     const line = offsetToLineFast(ctx.lineTable, stmt.span.start);
     prefix.push({ tag: "SetLoc", line });
   }
+  if (process.env.NUMBL_LOG_CJIT_MISSES) {
+    ctx.lastExprType = `stmt:${stmt.type}`;
+    if (stmt.span && ctx.lineTable) {
+      ctx.lastExprLine = offsetToLineFast(ctx.lineTable, stmt.span.start);
+    }
+  }
 
   let result: JitStmt[] | null;
   switch (stmt.type) {

@@ -30,12 +30,29 @@ import { generateJS } from "./js/jitCodegen.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/index.js";
 import { isRuntimeFunction } from "../runtime/types.js";
 import type { RuntimeValue } from "../runtime/types.js";
+import { offsetToLineFast } from "../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
-import { lowerFunction } from "./jitLower.js";
+import { lowerFunction, setBailReason } from "./jitLower.js";
+
+function bailExpr(ctx: LowerCtx, expr: Expr, reason: string): null {
+  const line = expr.span
+    ? ctx.lineTable
+      ? offsetToLineFast(ctx.lineTable, expr.span.start)
+      : undefined
+    : undefined;
+  setBailReason(ctx, `${expr.type}: ${reason}`, line);
+  return null;
+}
 
 // ── Expression lowering ─────────────────────────────────────────────────
 
 export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
+  if (process.env.NUMBL_LOG_CJIT_MISSES) {
+    ctx.lastExprType = expr.type;
+    if (expr.span && ctx.lineTable) {
+      ctx.lastExprLine = offsetToLineFast(ctx.lineTable, expr.span.start);
+    }
+  }
   switch (expr.type) {
     case "Number": {
       const value = parseFloat(expr.value);
@@ -606,7 +623,7 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     default:
-      return null; // unsupported expression
+      return bailExpr(ctx, expr, "unsupported expression");
   }
 }
 

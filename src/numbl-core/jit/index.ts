@@ -23,6 +23,34 @@ import {
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
+// Opt-in JIT activity tally (env: NUMBL_LOG_CJIT_MISSES=1). Categories:
+//   cjit-ok      — C-JIT specialization compiled successfully
+//   cjit-miss    — C-JIT bail (falls through to JS-JIT); carries reason
+//   jsjit-ok     — JS-JIT specialization compiled successfully
+//   jsjit-skip   — JS-JIT lowering failed (never reaches C-JIT either)
+// One unique (category, fn, key) triple → one row; counter = number of
+// distinct cache keys that hit that row during the run. Emitted at exit.
+const _jitTally = new Map<string, number>();
+let _jitTallyExitInstalled = false;
+
+function _ensureJitTallyExitHook(): void {
+  if (_jitTallyExitInstalled) return;
+  _jitTallyExitInstalled = true;
+  process.on("exit", () => {
+    const entries = Array.from(_jitTally.entries()).sort((a, b) => b[1] - a[1]);
+    process.stderr.write(`\n[NUMBL_LOG_CJIT_MISSES] ${entries.length} rows:\n`);
+    for (const [k, n] of entries) {
+      process.stderr.write(`  ${n.toString().padStart(6)}  ${k}\n`);
+    }
+  });
+}
+
+function logJitEvent(category: string, fnName: string, extra: string): void {
+  const key = `${category}\t${fnName}\t${extra}`;
+  _jitTally.set(key, (_jitTally.get(key) ?? 0) + 1);
+  _ensureJitTallyExitHook();
+}
+
 /** C-JIT cache entry (parallel to JitCacheEntry but with a native-wrapped fn). */
 interface CJitCacheEntry {
   fn: (...args: unknown[]) => unknown;
@@ -107,6 +135,12 @@ export function tryJitCall(
   if (!lowered) {
     fnWithCache._jitCache.set(cacheKey, null);
     if (fnWithCache._cJitCache) fnWithCache._cJitCache.set(cacheKey, null);
+    if (process.env.NUMBL_LOG_CJIT_MISSES) {
+      const reason =
+        (fn as { _lastLowerBailReason?: string })._lastLowerBailReason ??
+        "lowering returned null";
+      logJitEvent("jsjit-skip", fn.name, reason);
+    }
     return JIT_SKIP;
   }
 
@@ -140,10 +174,20 @@ export function tryJitCall(
       );
       if (res.ok) {
         fnWithCache._cJitCache.set(cacheKey, { fn: res.fn });
+        if (process.env.NUMBL_LOG_CJIT_MISSES) {
+          logJitEvent("cjit-ok", fn.name, "");
+        }
         return runWithCallFrame(interp, fn.name, res.fn, args);
       }
       fnWithCache._cJitCache.set(cacheKey, null);
       cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
+      if (process.env.NUMBL_LOG_CJIT_MISSES) {
+        logJitEvent(
+          "cjit-miss",
+          fn.name,
+          `${res.kind}: ${res.reason}${res.line ? ` @L${res.line}` : ""}`
+        );
+      }
     }
     // Fall through to JS-JIT path.
   }
@@ -219,6 +263,9 @@ export function tryJitCall(
   ].join("\n");
   const source = `${fnComment}\nfunction ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
   fnWithCache._jitCache.set(cacheKey, { fn: compiledFn, source });
+  if (process.env.NUMBL_LOG_CJIT_MISSES) {
+    logJitEvent("jsjit-ok", fn.name, "");
+  }
 
   // Fire logging callback (include call-site line number)
   const line = interp.rt.$line ?? 0;

@@ -87,6 +87,16 @@ export interface LowerCtx {
   env: TypeEnv;
   localVars: Set<string>;
   params: Set<string>;
+  /** First bail reason encountered during lowering; lets callers surface
+   *  a hint for why JS-JIT declined a function (purely diagnostic, only
+   *  consulted by the `NUMBL_LOG_CJIT_MISSES` tally). Writes should use
+   *  `setBailReason()` which is idempotent — only the first reason sticks. */
+  bailReason?: string;
+  bailLine?: number;
+  /** Type of the deepest expr whose lowering was attempted — used as a
+   *  last-resort bail reason hint when no more specific reason was set. */
+  lastExprType?: string;
+  lastExprLine?: number;
   /** Variables that are actually assigned in the function body. */
   assignedVars: Set<string>;
   /**
@@ -104,6 +114,18 @@ export interface LowerCtx {
   loweringInProgress: Set<string>;
   /** Pre-built line break table for offset→line lookup. */
   lineTable?: number[];
+}
+
+/** Idempotent bail-reason setter. Only the first reason per function sticks. */
+export function setBailReason(
+  ctx: LowerCtx,
+  reason: string,
+  line?: number
+): void {
+  if (!ctx.bailReason && process.env.NUMBL_LOG_CJIT_MISSES) {
+    ctx.bailReason = reason;
+    ctx.bailLine = line;
+  }
 }
 
 // ── Lowering entry point ────────────────────────────────────────────────
@@ -173,7 +195,20 @@ export function lowerFunction(
     lineTable,
   };
   const body = lowerStmts(ctx, fn.body);
-  if (!body) return null;
+  if (!body) {
+    if (process.env.NUMBL_LOG_CJIT_MISSES) {
+      const reason =
+        ctx.bailReason ??
+        (ctx.lastExprType
+          ? `fallthrough on ${ctx.lastExprType}`
+          : "lowering returned null");
+      const line = ctx.bailLine ?? ctx.lastExprLine;
+      (fn as { _lastLowerBailReason?: string })._lastLowerBailReason = line
+        ? `${reason} @L${line}`
+        : reason;
+    }
+    return null;
+  }
 
   // Bail if any required output variable was never assigned in the body.
   // The interpreter throws a RuntimeError for this case; the JIT would
