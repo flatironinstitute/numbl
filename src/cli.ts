@@ -9,6 +9,7 @@ import {
   writeFileSync,
   appendFileSync,
   mkdirSync,
+  rmSync,
 } from "fs";
 import { delimiter, dirname, join, relative, resolve } from "path";
 import { homedir } from "os";
@@ -99,7 +100,7 @@ export { scanMFiles } from "./cli-scan.js";
 // ── MIP core package auto-install ───────────────────────────────────────────
 
 const MHL_URL =
-  "https://github.com/mip-org/mip-core/releases/download/mip-main/mip-main-any.mhl";
+  "https://github.com/mip-org/mip-core/releases/download/mip-numbl/mip-numbl-any.mhl";
 const mipCoreDir = join(
   homedir(),
   ".numbl",
@@ -110,25 +111,41 @@ const mipCoreDir = join(
   "mip"
 );
 const mipCoreSearchPath = join(mipCoreDir, "mip");
+const mipCoreStampPath = join(homedir(), ".numbl", "mip", ".last-refreshed");
+const MIP_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+
+function readMipRefreshStamp(): number {
+  try {
+    const raw = readFileSync(mipCoreStampPath, "utf8");
+    const n = parseInt(raw, 10);
+    return Number.isFinite(n) ? n : 0;
+  } catch {
+    return 0;
+  }
+}
 
 async function ensureMipCorePackage(): Promise<void> {
-  if (existsSync(join(mipCoreSearchPath, "mip.m"))) return;
-  console.error("Installing mip core package...");
-  const resp = await fetch(MHL_URL);
-  if (!resp.ok) {
-    console.error(
-      `Warning: failed to download mip core package (HTTP ${resp.status})`
-    );
-    return;
+  const installed = existsSync(join(mipCoreSearchPath, "mip.m"));
+  const fresh = Date.now() - readMipRefreshStamp() < MIP_REFRESH_INTERVAL_MS;
+  if (installed && fresh) return;
+  try {
+    if (!installed) console.error("Installing mip core package...");
+    const resp = await fetch(MHL_URL);
+    if (!resp.ok) return;
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    const files = unzipToFiles(buf);
+    rmSync(mipCoreDir, { recursive: true, force: true });
+    for (const f of files) {
+      const dest = join(mipCoreDir, f.path);
+      mkdirSync(dirname(dest), { recursive: true });
+      writeFileSync(dest, f.content);
+    }
+    mkdirSync(dirname(mipCoreStampPath), { recursive: true });
+    writeFileSync(mipCoreStampPath, String(Date.now()));
+    if (!installed) console.error("mip core package installed.");
+  } catch {
+    // silently ignore download / install failures; previous cache (if any) stays intact
   }
-  const buf = new Uint8Array(await resp.arrayBuffer());
-  const files = unzipToFiles(buf);
-  for (const f of files) {
-    const dest = join(mipCoreDir, f.path);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, f.content);
-  }
-  console.error("mip core package installed.");
 }
 
 // /** JSON replacer that serializes Maps and Sets as plain objects/arrays. */

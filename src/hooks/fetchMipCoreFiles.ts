@@ -1,7 +1,7 @@
 import { unzipToFiles } from "../vfs/unzipToFiles.js";
 
 const MHL_URL =
-  "https://github.com/mip-org/mip-core/releases/download/mip-main/mip-main-any.mhl";
+  "https://github.com/mip-org/mip-core/releases/download/mip-numbl/mip-numbl-any.mhl";
 const MIP_SYSTEM_PREFIX = ".mip/packages/mip-org/core/mip/";
 
 function proxiedUrl(url: string): string {
