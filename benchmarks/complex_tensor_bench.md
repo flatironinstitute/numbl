@@ -1,94 +1,113 @@
-# complex_tensor_bench — numbl vs MATLAB on a complex-tensor hot loop
+# complex_tensor_bench — numbl vs MATLAB on complex-tensor element-wise ops
 
-Compute + memory bound benchmark for the C-JIT's paired-buffer complex
-tensor codegen (Phase 2 of full-complex support). Compares numbl's three
-optimization levels (`--opt 0/1/2`) against MATLAB.
+Six-kernel complex-tensor benchmark. Companion to `complex_scalar_bench`
+(which measures per-scalar complex arithmetic) and `tensor_ops_bench`
+(which measures real-tensor fusion). Kernels are chosen to exercise both
+the fused per-element path and the per-op libnumbl_ops kernels, so the
+total captures numbl's coverage of the full complex-tensor surface.
 
-## What the benchmark does
+## Kernels
 
-`run_bench(x, M)` iterates the map `z -> z.*z + c` on a length-N complex
-tensor for `M` steps (seed `z = x + 2i*x`, `c = 0.001 + 0.001i`), then
-reduces via `real(sum(z))`. Default sizes `N = 200 000`, `M = 500` →
-**100M** complex-element `z.*z + c` operations per run.
+| #   | Pattern                 | Fuses?   | What it exercises                                 |
+| --- | ----------------------- | -------- | ------------------------------------------------- |
+| 1   | `u1 = z .* z + c`       | ✅ fused | scalar broadcast complex mul + add                |
+| 2   | `u1 = z .* w + y`       | ✅ fused | two-tensor complex mul + real tensor add          |
+| 3   | `u1 = conj(z) .* z + y` | ✅ fused | `conj` in a chain (result's imag cancels)         |
+| 4   | `u1 = x + y * 1i`       | ✅ fused | real→complex widening via `ImagLiteral`           |
+| 5   | `u2 = z ./ w`           | per-op   | complex `./` (Smith's method branches break SIMD) |
+| 6   | `acc += sum(abs(z))`    | per-op   | `abs(complex)` is complex→real mid-chain          |
 
-Each inner step is one `.*` (tensor × tensor) plus one `+ c` (tensor +
-complex scalar) — both lowered via paired re/im buffer kernels in
-`numbl_ops`:
-
-```
-numbl_complex_binary_elemwise(MUL, len, z_re, z_im, z_re, z_im, s_re, s_im)
-numbl_complex_scalar_binary_elemwise(ADD, len, c_re, c_im, s_re, s_im, 0, dst_re, dst_im)
-```
+Kernels 1–4 collapse into a single `#pragma omp simd for` loop with the
+re/im arithmetic inlined in registers. Kernels 5–6 fall back to the
+libnumbl_ops kernel-call path (`numbl_complex_binary_elemwise`,
+`numbl_complex_abs`, `numbl_complex_flat_reduce`).
 
 ## How to run
 
 ```bash
-npx tsx src/cli.ts run benchmarks/complex_tensor_bench.m --opt 0   # interpreter
-npx tsx src/cli.ts run benchmarks/complex_tensor_bench.m --opt 1   # JS-JIT
-npx tsx src/cli.ts run benchmarks/complex_tensor_bench.m --opt 2   # C-JIT
+npx tsx src/cli.ts run benchmarks/complex_tensor_bench.m --opt 1           # JS-JIT
+npx tsx src/cli.ts run benchmarks/complex_tensor_bench.m --opt 2           # C-JIT, per-op
+npx tsx src/cli.ts run benchmarks/complex_tensor_bench.m --opt 2 --fuse    # C-JIT, fused
 matlab -batch "run('benchmarks/complex_tensor_bench.m')"
 ```
 
-All runs produce the same `result = 199.999195988823` (to FP rounding).
+All runs produce the same check values to FP rounding:
 
-## Results (Linux, N=200 000, M=500, 100M z.\*z+c ops)
+```
+real(sum(u1))  = 12500.025
+imag(sum(u1))  = 25000.05
+real(sum(u2))  = 473072.2695
+imag(sum(u2))  = 6857.423421
+abs_acc        = 2795090.562
+```
+
+## Results (Linux, N=500 000, trials=100)
 
 - **CPU:** 13th Gen Intel Core i7-1355U (12 threads)
 - **OS:** Debian 13 (trixie), kernel 6.12.74
 - **Toolchain:** Node v24.14.1, cc 14.2.0
 - **MATLAB:** R2025b Update 5
 
-Median of 5 runs. Variance between invocations is ±5 %.
+Median of 3 runs. Times in seconds.
 
-| Mode                     | Wall time |      Throughput | vs MATLAB |
-| ------------------------ | --------: | --------------: | --------: |
-| `--opt 0` (interpreter)  |     >60 s |         < 2 M/s |      skip |
-| `--opt 1` (JS-JIT)       |   0.176 s |      568 Mops/s |      1.4× |
-| `--opt 2` (C-JIT)        |   0.240 s |      416 Mops/s |      1.0× |
-| `--opt 2 --fuse` (C-JIT) |   0.041 s | **2430 Mops/s** |  **6.0×** |
-| MATLAB R2025b `-batch`   |   0.249 s |      402 Mops/s |      1.0× |
+| Kernel                    | `--opt 1` | `--opt 2` | `--opt 2 --fuse` | MATLAB |
+| ------------------------- | --------: | --------: | ---------------: | -----: |
+| 1. Mandelbrot z.\*z+c     |     0.112 |     0.177 |        **0.044** |  0.138 |
+| 2. Tensor chain z.\*w+y   |     0.147 |     0.217 |        **0.082** |  0.132 |
+| 3. Conj chain conj(z).\*z |     0.324 |     0.279 |        **0.063** |  0.190 |
+| 4. Widening x+y\*1i       |     0.103 |     0.159 |        **0.048** |  0.110 |
+| 5. Divide z./w            |     0.097 |     0.151 |            0.153 |  0.124 |
+| 6. abs + sum reduction    |     0.077 |     0.052 |            0.053 |  0.178 |
+| **Total**                 |     0.874 |     1.069 |        **0.449** |  0.884 |
 
-## Fused complex-tensor codegen (`--fuse`)
+Per-kernel notes:
 
-With `--fuse`, the C-JIT collapses `z = z .* z + c` into a single fused
-per-element loop instead of two back-to-back libnumbl_ops kernel calls.
-That's the 6× speedup vs both unfused C-JIT and MATLAB:
+- **Kernels 1–4 (fused):** the C-JIT runs 2–4× faster than MATLAB or
+  JS-JIT because the whole chain lowers to one AVX2-vectorizable loop
+  instead of two or three memory passes through libnumbl_ops kernels.
+  The conj chain (kernel 3) is the most striking — 3× MATLAB, 5× JS-JIT.
+- **Kernel 5 (divide):** all three modes land in roughly the same place
+  (≈ 0.1–0.15 s). The per-op C kernel uses Smith's method with a single
+  branch per element; branch prediction and the scalar loop itself
+  dominate over op dispatch.
+- **Kernel 6 (abs + sum):** the C-JIT and JS-JIT both use a streaming
+  `numbl_complex_abs` + `numbl_complex_flat_reduce` pipeline which MATLAB
+  beats on some runs and loses on others — near the noise floor.
+- **Total:** `--opt 2 --fuse` finishes in ~half MATLAB's time. Most of
+  the win comes from the fused kernels; the non-fused kernels are
+  already competitive per-op.
+
+## Fused complex-tensor codegen
+
+With `--fuse`, `z = z .* z + c` becomes a single SIMD loop like this:
 
 ```c
 #pragma omp simd
 for (int64_t __i = 0; __i < v_z_len; __i++) {
-  double __f_z_re = (v_z_data[__i] * v_z_data[__i]
-                     - __im_v_z_data[__i] * __im_v_z_data[__i]) + v_c;
-  double __f_z_im = (v_z_data[__i] * __im_v_z_data[__i]
-                     + __im_v_z_data[__i] * v_z_data[__i]) + __im_v_c;
-  v_z_data[__i] = __f_z_re;
-  __im_v_z_data[__i] = __f_z_im;
+  double __f_u1_re = (v_z_data[__i] * v_z_data[__i]
+                      - __im_v_z_data[__i] * __im_v_z_data[__i]) + v_c;
+  double __f_u1_im = (v_z_data[__i] * __im_v_z_data[__i]
+                      + __im_v_z_data[__i] * v_z_data[__i]) + __im_v_c;
+  v_u1_data[__i] = __f_u1_re;
+  __im_v_u1_data[__i] = __f_u1_im;
 }
 ```
 
-Per element the inner body does 6 real flops (one complex multiply +
-one complex add) against 4 memory ops (2 reads + 2 writes of re/im).
-`#pragma omp simd` vectorizes the straight-line body to AVX2 FMAs; the
-compiler CSE's the repeated `v_z_data[__i]` / `__im_v_z_data[__i]`
-loads into registers. The data still streams through memory on every
-iteration (3.2 MB hot set at N = 200 000), so peak throughput is
-roughly `mem_bandwidth / 3.2MB ≈ 2–3 Gops/s` — the fused emitter
-saturates that, where the per-op path spent half its bandwidth
-re-reading the scratch tensor between the two kernel calls.
+The re/im arithmetic stays in registers; the compiler CSEs the repeated
+`v_z_data[__i]` loads and vectorizes the straight-line body. Without
+`--fuse`, the same step emits two back-to-back libnumbl_ops kernel calls
+(`numbl_complex_binary_elemwise` for `z.*z`, then
+`numbl_complex_scalar_binary_elemwise` for `+c`) — half the memory
+bandwidth is spent re-reading the intermediate.
 
 ## Scratch-allocation fast-path (`--opt 2`, no fuse)
 
-Before landing the bench, the C-JIT was emitting an unconditional
-`free(); malloc();` pair for every scratch / destination tensor on
-every hot-loop iteration. At N = 200 000 that was ~12 MB of allocator
-churn per step, and the C-JIT ran at **185 Mops/s** — slower than
-JS-JIT and MATLAB.
-
-Fix (same commit as this benchmark): guard every scratch + destination
-alloc with a `__need != current_len` check. Hot-loop sizes are invariant
-across iterations, so the first call allocates and subsequent calls
-short-circuit. The fast-path brought per-op C-JIT to **416 Mops/s**
-(2.25× speedup, on par with MATLAB before `--fuse`).
+A prior change to the per-op path (same commit that landed the
+benchmark) guards every scratch / destination alloc with
+`__need != current_len`. Hot-loop sizes are invariant, so the first
+call allocates and subsequent calls short-circuit. Before that fix the
+per-op C-JIT ran at ≈ 185 Mops/s on the single-kernel `z.*z+c` bench;
+with the fix it's 416 Mops/s, matching MATLAB before `--fuse`.
 
 ## What fuses, what doesn't (complex chains)
 
@@ -115,3 +134,5 @@ is a single `double`; the reduction runs post-loop via the normal path.
   slices) still bails to JS-JIT.
 - `-ffast-math` is enabled for the C-JIT compile; reduction results
   may differ from `--opt 0/1` by a few ULP.
+- `--opt 0` (interpreter) is omitted because a single kernel at
+  N = 500 000 × 100 trials would take tens of minutes.
