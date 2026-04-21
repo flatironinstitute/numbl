@@ -697,6 +697,13 @@ function isComplexType(t: JitType): boolean {
 function emitExpr(expr: JitExpr, destName?: string): string {
   switch (expr.tag) {
     case "NumberLiteral":
+      // Folded comparisons (`3 > 2`) produce a NumberLiteral with
+      // `jitType.kind === "boolean"` and `value === 0|1`. Emit as a JS
+      // boolean so `env.set(name, true)` stores RuntimeLogical, matching
+      // the interpreter.
+      if (expr.jitType.kind === "boolean") {
+        return expr.value ? "true" : "false";
+      }
       return String(expr.value);
 
     case "ImagLiteral":
@@ -782,7 +789,14 @@ function emitExpr(expr: JitExpr, destName?: string): string {
     }
 
     case "StringLiteral":
-      return JSON.stringify(expr.value);
+      // A char literal (`'hello'`) must emit as a RuntimeChar so that
+      // builtin dispatch paths that branch on `isRuntimeChar(arg)`
+      // behave the same as the interpreter. String literals (`"hello"`)
+      // stay as raw JS strings — that matches RuntimeString (which *is*
+      // a raw JS string).
+      return expr.isChar
+        ? `{kind:"char",value:${JSON.stringify(expr.value)}}`
+        : JSON.stringify(expr.value);
 
     case "UserCall":
       return emitUserCall(expr);

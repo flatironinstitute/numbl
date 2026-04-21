@@ -762,6 +762,10 @@ export class Runtime {
 
   // ── Display ─────────────────────────────────────────────────────────
 
+  public get displayResults(): boolean {
+    return !!this.options.displayResults;
+  }
+
   public displayResult(v: unknown): void {
     if (!this.options.displayResults) return;
     if (v === undefined || v === null) return;

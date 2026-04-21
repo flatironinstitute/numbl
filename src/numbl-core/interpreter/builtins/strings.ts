@@ -1326,15 +1326,14 @@ registerIBuiltin({
     if (argTypes.length < 1) return null;
     if (!isTextType(argTypes[0])) return null;
     // Output type matches format arg type
-    const outType: JitType =
-      argTypes[0].kind === "char" ? { kind: "char" } : { kind: "string" };
+    const isChar = argTypes[0].kind === "char";
+    const outType: JitType = isChar ? { kind: "char" } : { kind: "string" };
     return {
       outputTypes: [outType],
       apply: args => {
-        const fmtArg = args[0];
-        const fmt = toString(fmtArg);
+        const fmt = toString(args[0]);
         const result = sprintfFormat(fmt, args.slice(1));
-        return isRuntimeChar(fmtArg) ? RTV.char(result) : RTV.string(result);
+        return isChar ? RTV.char(result) : RTV.string(result);
       },
     };
   },

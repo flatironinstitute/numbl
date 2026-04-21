@@ -34,6 +34,7 @@ import {
 } from "./types.js";
 import type { Stmt, Expr, LValue } from "../parser/types.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
+import { tryJitTopLevel } from "../jit/jitTopLevel.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -265,6 +266,9 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
+      if (this.optimization >= 1 && tryJitTopLevel(this, nonFuncStmts)) {
+        return;
+      }
       for (let i = 0; i < nonFuncStmts.length; i++) {
         // Set sibling-tail context so loop JIT can compute live-out vars.
         this._postSiblings = nonFuncStmts;

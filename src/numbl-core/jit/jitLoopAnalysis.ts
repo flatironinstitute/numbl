@@ -67,6 +67,21 @@ export function collectReadsFromSiblings(
   }
 }
 
+/**
+ * Analyze a top-level script body (list of statements) for JIT compilation.
+ * Used by `tryJitTopLevel` to wrap the whole main script as a synthetic fn.
+ */
+export function analyzeTopLevel(stmts: Stmt[]): LoopVarInfo {
+  const assigned = new Set<string>();
+  const referenced = new Set<string>();
+  const { hasReturn } = walkStmts(stmts, assigned, referenced);
+  return {
+    inputs: [...referenced],
+    outputs: [...assigned],
+    hasReturn,
+  };
+}
+
 /** Analyze a while loop statement for JIT compilation. */
 export function analyzeWhileLoop(stmt: Stmt & { type: "While" }): LoopVarInfo {
   const assigned = new Set<string>();
