@@ -48,11 +48,16 @@ function getKoffi(): typeof import("koffi") {
 type OutputBuf = {
   desc: COutputDesc;
   buf?: Float64Array;
-  /** Imaginary part for complex scalar outputs. Pairs with `buf` which
-   *  holds the real part. */
+  /** Imaginary companion for complex scalar and complex fixed-tensor
+   *  outputs. Pairs with `buf` which holds the real part. */
   imBuf?: Float64Array;
   lenBuf?: Float64Array;
   dynPtrSlot?: (unknown | null)[];
+  /** Imaginary companion pointer slot for complex dynamic tensor
+   *  outputs. The C callee mallocs both buffers and transfers
+   *  ownership via two `double **` out-params; the wrapper decodes +
+   *  frees both. */
+  dynPtrImSlot?: (unknown | null)[];
   dynLenSlot?: bigint[];
   dynD0Slot?: bigint[];
   dynD1Slot?: bigint[];
@@ -99,6 +104,12 @@ function marshalSlot(
     }
     case "tensorData":
       return (callArgs[slot.paramIdx!] as RuntimeTensor).data as Float64Array;
+    case "tensorDataIm": {
+      // NULL when imag is absent — numbl_ops complex kernels treat that
+      // as "all zero", avoiding a per-call zero malloc.
+      const t = callArgs[slot.paramIdx!] as RuntimeTensor;
+      return (t.imag as Float64Array | undefined) ?? null;
+    }
     case "tensorLen": {
       const t = callArgs[slot.paramIdx!] as RuntimeTensor;
       return (t.data as Float64Array).length;
@@ -114,6 +125,8 @@ function marshalSlot(
     case "scalarOut":
     case "fixedOutBuf":
       return outputBufs[slot.outputIdx!].buf!;
+    case "fixedOutBufIm":
+      return outputBufs[slot.outputIdx!].imBuf!;
     case "complexScalarReOut":
       return outputBufs[slot.outputIdx!].buf!;
     case "complexScalarImOut":
@@ -122,6 +135,8 @@ function marshalSlot(
       return outputBufs[slot.outputIdx!].lenBuf!;
     case "dynOutBuf":
       return outputBufs[slot.outputIdx!].dynPtrSlot!;
+    case "dynOutBufIm":
+      return outputBufs[slot.outputIdx!].dynPtrImSlot!;
     case "dynOutLen":
       return outputBufs[slot.outputIdx!].dynLenSlot!;
     case "dynOutD0":
@@ -252,17 +267,7 @@ registerCJitBackend({
 
       // Prepare output buffers — one entry per output. Indexed by
       // `outputIdx` stored on the output-sourced ABI slots.
-      const outputBufs: Array<{
-        desc: COutputDesc;
-        buf?: Float64Array;
-        imBuf?: Float64Array;
-        lenBuf?: Float64Array;
-        dynPtrSlot?: (unknown | null)[];
-        dynLenSlot?: bigint[];
-        dynD0Slot?: bigint[];
-        dynD1Slot?: bigint[];
-        paramShape?: number[];
-      }> = outputDescs.map(od => {
+      const outputBufs: OutputBuf[] = outputDescs.map(od => {
         if (od.kind === "complexScalar") {
           return {
             desc: od,
@@ -272,19 +277,23 @@ registerCJitBackend({
         }
         if (od.kind === "tensor") {
           if (od.dynamic) {
-            return {
+            const rec: OutputBuf = {
               desc: od,
               dynPtrSlot: [null],
               dynLenSlot: [0n],
               dynD0Slot: [0n],
               dynD1Slot: [0n],
             };
+            if (od.isComplex) rec.dynPtrImSlot = [null];
+            return rec;
           }
           // Fixed output: seed from the matching tensor param when the
           // output name is also a param (`function x = foo(x, ...)`
           // MATLAB call-by-value + local-mutation pattern); otherwise
           // allocate uninitialized and let the C code fill it via
-          // whole-tensor ops.
+          // whole-tensor ops. Complex outputs allocate a paired imag
+          // buffer (seeded from param's `.imag` when available, else
+          // zeroed).
           const paramIdx = paramDescs.findIndex(
             p => p.kind === "tensor" && p.name === od.name
           );
@@ -292,11 +301,24 @@ registerCJitBackend({
             const t = callArgs[paramIdx] as RuntimeTensor;
             const buf = new Float64Array(t.data as Float64Array); // copy
             const lenBuf = new Float64Array(1);
-            return { desc: od, buf, lenBuf, paramShape: t.shape };
+            const rec: OutputBuf = {
+              desc: od,
+              buf,
+              lenBuf,
+              paramShape: t.shape,
+            };
+            if (od.isComplex) {
+              rec.imBuf = t.imag
+                ? new Float64Array(t.imag as Float64Array)
+                : new Float64Array(buf.length);
+            }
+            return rec;
           }
           const buf = uninitFloat64(firstTensorLen);
           const lenBuf = new Float64Array(1);
-          return { desc: od, buf, lenBuf };
+          const rec: OutputBuf = { desc: od, buf, lenBuf };
+          if (od.isComplex) rec.imBuf = uninitFloat64(firstTensorLen);
+          return rec;
         }
         // scalar / boolean outputs: single-slot double buffer.
         return { desc: od, buf: new Float64Array(1) };
@@ -363,7 +385,8 @@ registerCJitBackend({
       // Build a RuntimeTensor from a dynamic-output slot set: copy the
       // C-owned pointer contents into a fresh JS Float64Array, then free
       // the C pointer. This runs exactly once per call-per-output so the
-      // extra memcpy is negligible next to the JIT / koffi overhead.
+      // extra memcpy is negligible next to the JIT / koffi overhead. For
+      // complex dynamic outputs also decodes + frees the imag buffer.
       const readDynamicTensor = (
         ob: (typeof outputBufs)[number]
       ): RuntimeTensor => {
@@ -383,12 +406,46 @@ registerCJitBackend({
         const src = koffi.decode(ptr, "double", len) as Float64Array;
         const data = new Float64Array(src);
         koffi.free(ptr);
-        return {
+        const t: RuntimeTensor = {
           kind: "tensor",
           data,
           shape: [d0, d1],
           _rc: 1,
         };
+        if (ob.desc.isComplex && ob.dynPtrImSlot) {
+          const ptrIm = ob.dynPtrImSlot[0];
+          if (ptrIm) {
+            const srcIm = koffi.decode(ptrIm, "double", len) as Float64Array;
+            t.imag = new Float64Array(srcIm);
+            koffi.free(ptrIm);
+          }
+        }
+        return t;
+      };
+
+      /** Finalize a fixed tensor output. For complex tensors, only
+       *  attach `.imag` if it's non-zero anywhere — matches runtime
+       *  convention where `imag === undefined` means "all zero". Saves
+       *  downstream consumers an imag-is-all-zero branch. */
+      const readFixedTensor = (ob: OutputBuf): RuntimeTensor => {
+        const t: RuntimeTensor = {
+          kind: "tensor",
+          data: ob.buf!,
+          shape: tensorShapeFor(ob),
+          _rc: 1,
+        };
+        if (ob.desc.isComplex && ob.imBuf) {
+          let anyNonZero = false;
+          const im = ob.imBuf;
+          for (let i = 0; i < im.length; i++) {
+            if (im[i] !== 0) {
+              anyNonZero = true;
+              break;
+            }
+          }
+          if (anyNonZero) t.imag = im;
+        }
+        return t;
       };
 
       /** Decode a complex scalar output as either a bare number (im=0)
@@ -409,17 +466,9 @@ registerCJitBackend({
         const results: unknown[] = [];
         for (const ob of outputBufs) {
           if (ob.desc.kind === "tensor") {
-            if (ob.desc.dynamic) {
-              results.push(readDynamicTensor(ob));
-            } else {
-              const tensor: RuntimeTensor = {
-                kind: "tensor",
-                data: ob.buf!,
-                shape: tensorShapeFor(ob),
-                _rc: 1,
-              };
-              results.push(tensor);
-            }
+            results.push(
+              ob.desc.dynamic ? readDynamicTensor(ob) : readFixedTensor(ob)
+            );
           } else if (ob.desc.kind === "boolean") {
             results.push(ob.buf![0] !== 0);
           } else if (ob.desc.kind === "complexScalar") {
@@ -435,14 +484,7 @@ registerCJitBackend({
       const ob = outputBufs[0];
       if (!ob) return 0; // no-output function
       if (ob.desc.kind === "tensor") {
-        if (ob.desc.dynamic) return readDynamicTensor(ob);
-        const tensor: RuntimeTensor = {
-          kind: "tensor",
-          data: ob.buf!,
-          shape: tensorShapeFor(ob),
-          _rc: 1,
-        };
-        return tensor;
+        return ob.desc.dynamic ? readDynamicTensor(ob) : readFixedTensor(ob);
       }
       if (ob.desc.kind === "boolean") {
         return ob.buf![0] !== 0;

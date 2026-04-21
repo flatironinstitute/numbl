@@ -31,6 +31,7 @@ import {
   tensorD0,
   tensorD1,
   tensorData,
+  tensorDataIm,
   tensorLen,
   scratchData,
   scratchLen,
@@ -511,8 +512,10 @@ function emitOneFunction(
           : "scalar";
     const desc: CParamDesc = { name: p, kind, slots: [] };
     if (kind === "tensor") {
-      const d = cls.meta.get(p)?.maxIndexDim ?? 0;
+      const m = cls.meta.get(p);
+      const d = m?.maxIndexDim ?? 0;
       if (d >= 2) desc.ndim = d;
+      if (m?.isComplex) desc.isComplex = true;
     }
     return desc;
   });
@@ -528,8 +531,10 @@ function emitOneFunction(
             ? "complexScalar"
             : "scalar";
     const desc: COutputDesc = { name, kind, slots: [] };
-    if (kind === "tensor" && cls.meta.get(name)?.isDynamicOutput) {
-      desc.dynamic = true;
+    if (kind === "tensor") {
+      const m = cls.meta.get(name);
+      if (m?.isDynamicOutput) desc.dynamic = true;
+      if (m?.isComplex) desc.isComplex = true;
     }
     return desc;
   });
@@ -589,6 +594,11 @@ function emitOneFunction(
         epilogueLines.push(
           `${indent}*${mangle(od.name)}_buf_out = ${tensorData(od.name)};`
         );
+        if (od.isComplex) {
+          epilogueLines.push(
+            `${indent}*${mangle(od.name)}_buf_im_out = ${tensorDataIm(od.name)};`
+          );
+        }
         epilogueLines.push(
           `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
         );
@@ -628,6 +638,11 @@ function emitOneFunction(
     epilogueLines.push(
       `${indent}if (${tensorData(name)}) free(${tensorData(name)});`
     );
+    if (cls.meta.get(name)?.isComplex) {
+      epilogueLines.push(
+        `${indent}if (${tensorDataIm(name)}) free(${tensorDataIm(name)});`
+      );
+    }
   }
 
   for (const p of unshareTensorParams) {
@@ -635,6 +650,11 @@ function emitOneFunction(
     epilogueLines.push(
       `${indent}if (${tensorData(p)}) free(${tensorData(p)});`
     );
+    if (cls.meta.get(p)?.isComplex) {
+      epilogueLines.push(
+        `${indent}if (${tensorDataIm(p)}) free(${tensorDataIm(p)});`
+      );
+    }
   }
 
   // ── Prelude ─────────────────────────────────────────────────────────
@@ -677,12 +697,16 @@ function emitOneFunction(
   };
 
   for (const p of paramOutputTensors) {
+    const isComplex = !!cls.meta.get(p)?.isComplex;
     if (cls.meta.get(p)?.isDynamicOutput) {
       preludeLines.push(
         `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
       );
       emitParamShapeLocals(p, true);
       preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
+      if (isComplex) {
+        preludeLines.push(`${indent}double *${tensorDataIm(p)} = NULL;`);
+      }
       preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
       preludeLines.push(
         `${indent}  ${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
@@ -690,11 +714,29 @@ function emitOneFunction(
       preludeLines.push(
         `${indent}  memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
       );
+      if (isComplex) {
+        // Imag input may be NULL (undefined `.imag`); seed a zero
+        // buffer so downstream kernels that require a non-NULL imag
+        // pointer on writeable tensors still work.
+        preludeLines.push(
+          `${indent}  ${tensorDataIm(p)} = (double *)calloc((size_t)${tensorLen(p)}, sizeof(double));`
+        );
+        preludeLines.push(`${indent}  if (${tensorDataIm(p)}_in) {`);
+        preludeLines.push(
+          `${indent}    memcpy(${tensorDataIm(p)}, ${tensorDataIm(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
+        );
+        preludeLines.push(`${indent}  }`);
+      }
       preludeLines.push(`${indent}}`);
     } else {
       preludeLines.push(
         `${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`
       );
+      if (isComplex) {
+        preludeLines.push(
+          `${indent}double *${tensorDataIm(p)} = ${mangle(p)}_buf_im;`
+        );
+      }
       preludeLines.push(
         `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
       );
@@ -704,9 +746,13 @@ function emitOneFunction(
 
   for (const p of unshareTensorParams) {
     if (paramOutputTensors.has(p)) continue;
+    const isComplex = !!cls.meta.get(p)?.isComplex;
     preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
     emitParamShapeLocals(p, true);
     preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
+    if (isComplex) {
+      preludeLines.push(`${indent}double *${tensorDataIm(p)} = NULL;`);
+    }
     preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
     preludeLines.push(
       `${indent}  ${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
@@ -714,6 +760,16 @@ function emitOneFunction(
     preludeLines.push(
       `${indent}  memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
     );
+    if (isComplex) {
+      preludeLines.push(
+        `${indent}  ${tensorDataIm(p)} = (double *)calloc((size_t)${tensorLen(p)}, sizeof(double));`
+      );
+      preludeLines.push(`${indent}  if (${tensorDataIm(p)}_in) {`);
+      preludeLines.push(
+        `${indent}    memcpy(${tensorDataIm(p)}, ${tensorDataIm(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
+      );
+      preludeLines.push(`${indent}  }`);
+    }
     preludeLines.push(`${indent}}`);
   }
 
@@ -734,12 +790,21 @@ function emitOneFunction(
     if (cls.tensorVars.has(local)) {
       const localMeta = cls.meta.get(local);
       const isOutput = cls.outputTensorNames.has(local);
+      const isComplex = !!localMeta?.isComplex;
       if (isOutput && !localMeta?.isDynamicOutput) {
         preludeLines.push(
           `${indent}double *${tensorData(local)} = ${mangle(local)}_buf;`
         );
+        if (isComplex) {
+          preludeLines.push(
+            `${indent}double *${tensorDataIm(local)} = ${mangle(local)}_buf_im;`
+          );
+        }
       } else {
         preludeLines.push(`${indent}double *${tensorData(local)} = NULL;`);
+        if (isComplex) {
+          preludeLines.push(`${indent}double *${tensorDataIm(local)} = NULL;`);
+        }
       }
       preludeLines.push(`${indent}int64_t ${tensorLen(local)} = 0;`);
       if (needsShapeLocals(local)) {

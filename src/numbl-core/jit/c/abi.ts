@@ -20,6 +20,7 @@ import {
   tensorD0,
   tensorD1,
   tensorData,
+  tensorDataIm,
   tensorLen,
 } from "./codegenCtx.js";
 
@@ -30,6 +31,11 @@ export type AbiSlotKind =
   | "complexScalarRe"
   | "complexScalarIm"
   | "tensorData"
+  /** Imaginary data pointer for a complex tensor param. Paired with
+   *  `tensorData`. Marshaller passes the RuntimeTensor's `.imag` (a
+   *  Float64Array) or NULL when `.imag === undefined`; the numbl_ops
+   *  complex kernels treat NULL imag as all-zero. */
+  | "tensorDataIm"
   | "tensorLen"
   | "tensorD0"
   | "tensorD1"
@@ -39,8 +45,14 @@ export type AbiSlotKind =
   | "complexScalarReOut"
   | "complexScalarImOut"
   | "fixedOutBuf"
+  /** Imaginary fixed-output buffer (complex tensor output, non-dynamic). */
+  | "fixedOutBufIm"
   | "fixedOutLen"
   | "dynOutBuf"
+  /** Imaginary buffer pointer for a dynamic complex tensor output. C
+   *  mallocs, transfers ownership via `double **`; wrapper decodes+copies
+   *  into a fresh Float64Array then frees. */
+  | "dynOutBufIm"
   | "dynOutLen"
   | "dynOutD0"
   | "dynOutD1"
@@ -72,9 +84,13 @@ export interface CParamDesc {
    *  marshal. `undefined` means the tensor is only used in whole-tensor
    *  ops (legacy data/len ABI). */
   ndim?: number;
+  /** True for complex tensor params. Adds an imag-data slot right after
+   *  the real-data slot; the marshaller supplies the tensor's `.imag`
+   *  Float64Array or NULL. Ignored for scalar kinds. */
+  isComplex?: boolean;
   /** Ordered slots this param contributes to the ABI. One slot for a
    *  scalar; two for a complex scalar (re + im); two or more
-   *  (data + len + optional d0/d1) for a tensor. */
+   *  (data + [imag for complex] + len + optional d0/d1) for a tensor. */
   slots: AbiSlot[];
 }
 
@@ -87,10 +103,15 @@ export interface COutputDesc {
    *  extra d0/d1 out-slots. The JS wrapper decodes the pointer, copies
    *  into a fresh Float64Array, and frees the C allocation. */
   dynamic?: boolean;
+  /** True for complex tensor outputs. Fixed outputs add a paired imag
+   *  Float64Array buffer; dynamic outputs add a paired imag `double **`
+   *  out-pointer the caller decodes + frees after the call. */
+  isComplex?: boolean;
   /** Ordered slots this output contributes to the ABI. One for scalars,
-   *  two for complex scalars (reOut + imOut), two for fixed tensor
-   *  outputs (buf + lenOut), four for dynamic tensor outputs
-   *  (dynBuf + dynLen + dynD0 + dynD1). */
+   *  two for complex scalars (reOut + imOut), two for fixed real tensor
+   *  outputs (buf + lenOut), three for fixed complex (buf + bufIm +
+   *  lenOut), four for dynamic real tensor outputs, five for dynamic
+   *  complex (dynBuf + dynBufIm + dynLen + dynD0 + dynD1). */
   slots: AbiSlot[];
 }
 
@@ -122,6 +143,15 @@ export function buildAbiSlots(
         koffiType: "double *",
         paramIdx: pi,
       });
+      if (pd.isComplex) {
+        pd.slots.push({
+          kind: "tensorDataIm",
+          cType: "const double *",
+          cName: `${tensorDataIm(pd.name)}${suffix}`,
+          koffiType: "double *",
+          paramIdx: pi,
+        });
+      }
       pd.slots.push({
         kind: "tensorLen",
         cType: "int64_t",
@@ -184,6 +214,15 @@ export function buildAbiSlots(
           koffiType: "_Out_ double **",
           outputIdx: oi,
         });
+        if (od.isComplex) {
+          od.slots.push({
+            kind: "dynOutBufIm",
+            cType: "double **",
+            cName: `${mangle(od.name)}_buf_im_out`,
+            koffiType: "_Out_ double **",
+            outputIdx: oi,
+          });
+        }
         od.slots.push({
           kind: "dynOutLen",
           cType: "int64_t *",
@@ -213,6 +252,15 @@ export function buildAbiSlots(
           koffiType: "double *",
           outputIdx: oi,
         });
+        if (od.isComplex) {
+          od.slots.push({
+            kind: "fixedOutBufIm",
+            cType: "double *",
+            cName: `${mangle(od.name)}_buf_im`,
+            koffiType: "double *",
+            outputIdx: oi,
+          });
+        }
         od.slots.push({
           kind: "fixedOutLen",
           cType: "int64_t *",

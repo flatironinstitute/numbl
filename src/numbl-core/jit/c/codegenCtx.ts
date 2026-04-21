@@ -154,6 +154,14 @@ export function formatNumberLiteral(v: number): string {
 export function tensorData(name: string): string {
   return `${mangle(name)}_data`;
 }
+/** Imaginary data pointer for a complex tensor. Pairs with
+ *  `tensorData(name)` — both locals carry the same length and shape
+ *  info. The kernels in numbl_ops accept NULL for the imag pointer as
+ *  "all zero", so a nominally-complex tensor whose `.imag` is undefined
+ *  can still be passed efficiently without allocating a zero buffer. */
+export function tensorDataIm(name: string): string {
+  return `${mangle(name)}_data_im`;
+}
 export function tensorLen(name: string): string {
   return `${mangle(name)}_len`;
 }
@@ -217,6 +225,9 @@ export interface EmitCtx {
 
 export function isTensorVar(ctx: EmitCtx, name: string): boolean {
   return ctx.cls.tensorVars.has(name);
+}
+export function isComplexTensorVar(ctx: EmitCtx, name: string): boolean {
+  return !!ctx.cls.meta.get(name)?.isComplex;
 }
 export function isComplexScalarVar(ctx: EmitCtx, name: string): boolean {
   return ctx.complexScalarVars.has(name);

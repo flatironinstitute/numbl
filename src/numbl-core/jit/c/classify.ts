@@ -42,6 +42,13 @@ export interface TensorMeta {
    *  `kind === "paramOutput"`). Triggers the `double **` dynamic-output
    *  ABI. */
   isDynamicOutput: boolean;
+  /** True when this tensor's `JitType.isComplex === true` — either at
+   *  the boundary (param / output type) or propagated from a complex
+   *  RHS for locals. Drives paired imag-buffer plumbing: every complex
+   *  tensor gets a `v_name_data_im` companion pointer, an extra ABI
+   *  slot for boundaries, and imag malloc / free / copy parallel to
+   *  the existing real path. */
+  isComplex: boolean;
 }
 
 export interface ClassificationResult {
@@ -118,6 +125,7 @@ export function analyzeTensorUsage(
         isAssignIndexTarget: false,
         needsUnshare: false,
         isDynamicOutput: false,
+        isComplex: false,
       };
       meta.set(name, m);
       tensorNames.push(name);
@@ -126,19 +134,24 @@ export function analyzeTensorUsage(
   };
 
   for (let i = 0; i < params.length; i++) {
-    if (argTypes[i].kind === "tensor") {
-      ensureMeta(params[i], "param");
+    const t = argTypes[i];
+    if (t.kind === "tensor") {
+      const m = ensureMeta(params[i], "param");
+      if (t.isComplex === true) m.isComplex = true;
     }
   }
 
   for (let i = 0; i < outputNames.length; i++) {
-    if (outputTypes[i]?.kind === "tensor") {
+    const t = outputTypes[i];
+    if (t?.kind === "tensor") {
       const existing = meta.get(outputNames[i]);
       if (existing) {
         // Promote a tensor param named in the output list to paramOutput.
         existing.kind = "paramOutput";
+        if (t.isComplex === true) existing.isComplex = true;
       } else {
-        ensureMeta(outputNames[i], "output");
+        const m = ensureMeta(outputNames[i], "output");
+        if (t.isComplex === true) m.isComplex = true;
       }
     }
   }
@@ -151,6 +164,7 @@ export function analyzeTensorUsage(
         if (s.expr.jitType.kind === "tensor") {
           const m = ensureMeta(s.name, "local");
           if (isFreshTensorRhs(s.expr)) m.hasFreshAlloc = true;
+          if (s.expr.jitType.isComplex === true) m.isComplex = true;
         }
         return;
       }
@@ -190,8 +204,28 @@ export function analyzeTensorUsage(
     forEachStmt(body, s => {
       if (s.tag !== "Assign" || s.expr.jitType.kind !== "tensor") return;
       const dst = meta.get(s.name);
-      if (!dst || dst.hasFreshAlloc) return;
+      if (!dst) return;
       const e = s.expr;
+      // Propagate complexness: a Var alias inherits from its source;
+      // any other tensor RHS with a statically-complex jitType makes
+      // the dst complex. This catches `z = conj(x)`, `z = x + 1i*y`,
+      // `z = x(:)` (if x was complex), etc.
+      if (!dst.isComplex) {
+        if (e.tag === "Var") {
+          const src = meta.get(e.name);
+          if (src?.isComplex) {
+            dst.isComplex = true;
+            changed = true;
+          }
+        } else if (
+          e.jitType.kind === "tensor" &&
+          e.jitType.isComplex === true
+        ) {
+          dst.isComplex = true;
+          changed = true;
+        }
+      }
+      if (dst.hasFreshAlloc) return;
       if (e.tag === "Var") {
         const src = meta.get(e.name);
         if (src?.hasFreshAlloc) {
