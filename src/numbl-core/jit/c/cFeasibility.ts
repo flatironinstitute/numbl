@@ -93,7 +93,7 @@ function isComplexScalarKind(k: JitType["kind"]): boolean {
 }
 
 /** Real tensor (1-3 D) the C-JIT codegen can handle as a value. */
-function isAcceptableTensor(t: JitType): boolean {
+function isAcceptableRealTensor(t: JitType): boolean {
   if (t.kind !== "tensor") return false;
   if (t.isComplex !== false) return false;
   if (!t.shape) return true; // shape unknown — runtime helpers will check
@@ -101,12 +101,27 @@ function isAcceptableTensor(t: JitType): boolean {
   return ndim >= 1 && ndim <= 3;
 }
 
+/** Complex tensor (1-3 D) accepted for the Phase 2 binary/unary/reduce
+ *  ops. Reads (Index / RangeSliceRead / AssignIndex / AssignIndexRange /
+ *  AssignIndexCol) stay real-only — those require per-site checks below. */
+function isAcceptableComplexTensor(t: JitType): boolean {
+  if (t.kind !== "tensor") return false;
+  if (t.isComplex !== true) return false;
+  if (!t.shape) return true;
+  const ndim = t.shape.length;
+  return ndim >= 1 && ndim <= 3;
+}
+
+function isAcceptableTensor(t: JitType): boolean {
+  return isAcceptableRealTensor(t) || isAcceptableComplexTensor(t);
+}
+
 /** Type allowed for a value (RHS expression, local, return). */
 function checkValueType(t: JitType): FeasibilityResult {
   if (isScalarKind(t.kind)) return { ok: true };
   if (isAcceptableTensor(t)) return { ok: true };
   if (t.kind === "tensor") {
-    return { ok: false, reason: "complex tensor / unsupported ndim" };
+    return { ok: false, reason: "unsupported tensor ndim" };
   }
   return { ok: false, reason: `unsupported type: ${t.kind}` };
 }
@@ -199,6 +214,27 @@ function checkExpr(
           `tensor-result binary op ${expr.op} has no C-JIT fast path`
         );
       }
+      // Complex tensor binary ops: only Add/Sub/Mul/ElemMul/Div/ElemDiv
+      // have numbl_complex_binary_elemwise opcodes. Comparisons on
+      // complex are defined by the kernels but not wired through the
+      // emitter yet (would need a real-output tensor target); logical
+      // ops (AndAnd/OrOr) on complex tensors aren't defined.
+      if (expr.jitType.kind === "tensor" && expr.jitType.isComplex === true) {
+        switch (expr.op) {
+          case BinaryOperation.Add:
+          case BinaryOperation.Sub:
+          case BinaryOperation.Mul:
+          case BinaryOperation.ElemMul:
+          case BinaryOperation.Div:
+          case BinaryOperation.ElemDiv:
+            break;
+          default:
+            return fail(
+              ctx,
+              `complex tensor binary op ${expr.op} not supported in C-JIT`
+            );
+        }
+      }
       // Complex scalar binary ops: only Add/Sub/Mul/ElemMul/Div/ElemDiv
       // are supported in Phase 1. Comparisons, logicals, and pow all bail.
       const anyComplex =
@@ -258,12 +294,16 @@ function checkExpr(
       // `src(a:b)` producing a fresh column-vector tensor. Requires the
       // src to have data/len plumbed — tensor params qualify directly,
       // and tensor locals/outputs plumb through the same `v_<n>_data` /
-      // `_len` locals.
+      // `_len` locals. Phase 2 keeps this real-only; complex range
+      // slices need paired-imag plumbing that's deferred to Phase 3.
       if (!ctx.tensorVars.has(expr.baseName)) {
         return fail(
           ctx,
           `RangeSliceRead base '${expr.baseName}' must be a tensor var`
         );
+      }
+      if (expr.jitType.kind === "tensor" && expr.jitType.isComplex === true) {
+        return fail(ctx, "RangeSliceRead on complex tensor not yet supported");
       }
       const sr = checkExpr(expr.start, ctx);
       if (!sr.ok) return sr;
@@ -504,27 +544,65 @@ function checkCall(
     }
   }
   // Tensor unary builtin: result is tensor, single tensor arg, name has
-  // a `tensorUnaryOp` capability on its IBuiltin.
-  if (expr.jitType.kind === "tensor" && getTensorUnaryOp(expr.name)) {
+  // a `tensorUnaryOp` capability on its IBuiltin. These kernels are
+  // real-only in libnumbl_ops; the complex variant requires separate
+  // dispatch (Phase 3+) or is not defined. Keep this path real-only.
+  if (
+    expr.jitType.kind === "tensor" &&
+    expr.jitType.isComplex === false &&
+    getTensorUnaryOp(expr.name)
+  ) {
     if (expr.args.length !== 1) {
       return fail(ctx, `${expr.name}: expected 1 tensor arg`);
     }
+    if (
+      expr.args[0].jitType.kind === "tensor" &&
+      expr.args[0].jitType.isComplex === true
+    ) {
+      return fail(
+        ctx,
+        `${expr.name}: complex tensor arg not supported by real unary kernel`
+      );
+    }
+    return checkExpr(expr.args[0], ctx);
+  }
+  // Complex-tensor special cases: conj / real / imag on a complex tensor
+  // arg. conj preserves shape+complexness; real/imag produce a real
+  // tensor of the same shape. Handled in the emitter directly since
+  // they don't match the tensorUnaryOp kernel dispatch.
+  if (
+    (expr.name === "conj" || expr.name === "real" || expr.name === "imag") &&
+    expr.args.length === 1 &&
+    expr.args[0].jitType.kind === "tensor" &&
+    expr.args[0].jitType.isComplex === true
+  ) {
     return checkExpr(expr.args[0], ctx);
   }
   // Tensor binary builtin (max, min, atan2, hypot, mod, rem):
-  // result is tensor, two args (tensor/scalar).
-  if (expr.jitType.kind === "tensor" && getTensorBinaryFn(expr.name)) {
+  // result is tensor, two args (tensor/scalar). Real-only kernels.
+  if (
+    expr.jitType.kind === "tensor" &&
+    expr.jitType.isComplex === false &&
+    getTensorBinaryFn(expr.name)
+  ) {
     if (expr.args.length !== 2) {
       return fail(ctx, `${expr.name}: expected 2 args`);
     }
     for (const a of expr.args) {
+      if (a.jitType.kind === "tensor" && a.jitType.isComplex === true) {
+        return fail(
+          ctx,
+          `${expr.name}: complex tensor arg not supported by real binary kernel`
+        );
+      }
       const r = checkExpr(a, ctx);
       if (!r.ok) return r;
     }
     return { ok: true };
   }
   // Reduction (tensor → scalar): name has a `tensorReductionOp`
-  // capability, single tensor arg.
+  // capability, single tensor arg. Phase 2 keeps reductions real-only;
+  // complex reductions land in Phase 3.
   if (expr.jitType.kind !== "tensor" && getTensorReductionOp(expr.name)) {
     if (expr.args.length !== 1) {
       return fail(ctx, `${expr.name}: only single-arg reduction supported`);
@@ -532,6 +610,12 @@ function checkCall(
     const a = expr.args[0];
     if (a.jitType.kind !== "tensor") {
       return fail(ctx, `${expr.name}: only tensor-arg reduction supported`);
+    }
+    if (a.jitType.isComplex === true) {
+      return fail(
+        ctx,
+        `${expr.name}: complex tensor reduction not yet supported`
+      );
     }
     return checkExpr(a, ctx);
   }
@@ -569,9 +653,10 @@ function checkCall(
     (expr.name === "length" || expr.name === "isempty") &&
     expr.args.length === 1 &&
     expr.args[0].tag === "Var" &&
-    expr.args[0].jitType.kind === "tensor" &&
-    expr.args[0].jitType.isComplex === false
+    expr.args[0].jitType.kind === "tensor"
   ) {
+    // length / isempty only need `_len` (and optionally `_d0`/`_d1`) —
+    // they don't care whether the tensor is real or complex.
     return { ok: true };
   }
   return fail(ctx, `non-C-mappable builtin: ${expr.name}`);

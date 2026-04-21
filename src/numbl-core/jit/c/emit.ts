@@ -29,10 +29,12 @@ import {
   getTensorUnaryOp,
   getTensorBinaryFn,
   getTensorReductionOp,
+  allocComplexScratch,
   allocScratch,
   formatNumberLiteral,
   hasFreshAlloc,
   isComplexScalarVar,
+  isComplexTensorVar,
   isDynamicOutput,
   isLocalTensor,
   isOutputTensor,
@@ -40,10 +42,12 @@ import {
   mangle,
   mangleIm,
   scratchData,
+  scratchDataIm,
   scratchLen,
   tensorD0,
   tensorD1,
   tensorData,
+  tensorDataIm,
   tensorLen,
   tensorMaxDim,
   type EmitCtx,
@@ -528,6 +532,233 @@ function emitScratchBufAlloc(
   );
 }
 
+/** Complex scratch alloc: re + im buffers, both sized to `lenExpr`. The
+ *  complex kernels in numbl_ops write both buffers unconditionally, so
+ *  both must be valid pointers (len > 0). */
+function emitScratchBufAllocComplex(
+  lines: string[],
+  indent: string,
+  sData: string,
+  sDataIm: string,
+  sLen: string,
+  lenExpr: string
+): void {
+  lines.push(`${indent}${sLen} = ${lenExpr};`);
+  lines.push(`${indent}if (${sData}) free(${sData});`);
+  lines.push(`${indent}if (${sDataIm}) free(${sDataIm});`);
+  lines.push(
+    `${indent}${sData} = (${sLen} > 0) ? (double *)malloc((size_t)${sLen} * sizeof(double)) : NULL;`
+  );
+  lines.push(
+    `${indent}${sDataIm} = (${sLen} > 0) ? (double *)malloc((size_t)${sLen} * sizeof(double)) : NULL;`
+  );
+}
+
+/** Complex tensor expression result: data + dataIm + len in C. For a
+ *  Var whose JitType is a real tensor, `dataIm` is the literal string
+ *  `"NULL"` — the numbl_ops complex kernels treat that as "all zero",
+ *  so a real tensor flowing into a complex op doesn't need a zero
+ *  buffer. */
+interface ComplexTensorResult {
+  data: string;
+  dataIm: string;
+  len: string;
+}
+
+/** Emit a tensor expression in complex (paired-buffer) form, producing
+ *  scratch locals for sub-expressions. Handles:
+ *   - Var on a complex tensor: returns the name's `_data`/`_data_im`/`_len`.
+ *   - Var on a real tensor: widens via `dataIm = NULL`.
+ *   - Binary on a complex-typed tensor expr (the result is complex).
+ *   - Unary Plus/Minus on a complex-typed tensor expr.
+ *   - conj / real / imag on a complex tensor — real/imag are actually
+ *     handled via the real tensor path (result is real), but conj stays
+ *     complex and is lowered here.
+ */
+function emitComplexTensorExprToStmts(
+  lines: string[],
+  indent: string,
+  expr: JitExpr,
+  ctx: EmitCtx
+): ComplexTensorResult {
+  if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
+    if (isComplexTensorVar(ctx, expr.name)) {
+      return {
+        data: tensorData(expr.name),
+        dataIm: tensorDataIm(expr.name),
+        len: tensorLen(expr.name),
+      };
+    }
+    // Real tensor widened to complex at the kernel boundary. NULL imag
+    // = treat as all-zero per numbl_complex_* kernel convention.
+    return {
+      data: tensorData(expr.name),
+      dataIm: "NULL",
+      len: tensorLen(expr.name),
+    };
+  }
+
+  const sIdx = allocComplexScratch(ctx);
+  const sData = scratchData(sIdx);
+  const sDataIm = scratchDataIm(sIdx);
+  const sLen = scratchLen(sIdx);
+
+  if (expr.tag === "Binary" && isTensorExpr(expr)) {
+    const tensorLen0 = findTensorLenExpr(expr, ctx);
+    emitScratchBufAllocComplex(lines, indent, sData, sDataIm, sLen, tensorLen0);
+    emitComplexTensorBinaryStmts(
+      lines,
+      indent,
+      expr,
+      ctx,
+      sData,
+      sDataIm,
+      sLen
+    );
+    return { data: sData, dataIm: sDataIm, len: sLen };
+  }
+
+  if (expr.tag === "Unary" && isTensorExpr(expr)) {
+    if (expr.op === UnaryOperation.Plus) {
+      return emitComplexTensorExprToStmts(lines, indent, expr.operand, ctx);
+    }
+    if (expr.op === UnaryOperation.Minus) {
+      const operand = emitComplexTensorExprToStmts(
+        lines,
+        indent,
+        expr.operand,
+        ctx
+      );
+      emitScratchBufAllocComplex(
+        lines,
+        indent,
+        sData,
+        sDataIm,
+        sLen,
+        operand.len
+      );
+      // -z element-wise: re=-re, im=-im. Use a scalar binary MUL by -1.
+      // numbl_complex_scalar_binary_elemwise accepts NULL imag on arr.
+      lines.push(
+        `${indent}numbl_complex_scalar_binary_elemwise(NUMBL_COMPLEX_BIN_MUL, (size_t)${sLen}, -1.0, 0.0, ${operand.data}, ${operand.dataIm}, 1, ${sData}, ${sDataIm});`
+      );
+      return { data: sData, dataIm: sDataIm, len: sLen };
+    }
+  }
+
+  if (expr.tag === "Call" && isTensorExpr(expr) && expr.name === "conj") {
+    const operand = emitComplexTensorExprToStmts(
+      lines,
+      indent,
+      expr.args[0],
+      ctx
+    );
+    emitScratchBufAllocComplex(
+      lines,
+      indent,
+      sData,
+      sDataIm,
+      sLen,
+      operand.len
+    );
+    // conj: copy re; negate im. If operand.dataIm is NULL (real operand
+    // widened), the output imag is all-zero, so just zero it.
+    lines.push(
+      `${indent}if (${sLen} > 0) memcpy(${sData}, ${operand.data}, (size_t)${sLen} * sizeof(double));`
+    );
+    lines.push(`${indent}if (${operand.dataIm}) {`);
+    lines.push(`${indent}  for (int64_t __i = 0; __i < ${sLen}; __i++)`);
+    lines.push(`${indent}    ${sDataIm}[__i] = -((${operand.dataIm})[__i]);`);
+    lines.push(`${indent}} else {`);
+    lines.push(
+      `${indent}  if (${sLen} > 0) memset(${sDataIm}, 0, (size_t)${sLen} * sizeof(double));`
+    );
+    lines.push(`${indent}}`);
+    return { data: sData, dataIm: sDataIm, len: sLen };
+  }
+
+  throw new Error(
+    `C-JIT codegen: cannot emit complex tensor expr ${expr.tag} to scratch`
+  );
+}
+
+/** Emit a complex tensor binary op into caller-provided dest buffers
+ *  (both re and im). Handles all combos of real-tensor/complex-tensor/
+ *  real-scalar/complex-scalar operands. Operand widening is kernel-side
+ *  (NULL imag pointer or imag=0.0). */
+function emitComplexTensorBinaryStmts(
+  lines: string[],
+  indent: string,
+  expr: JitExpr & { tag: "Binary" },
+  ctx: EmitCtx,
+  destDataVar: string,
+  destDataImVar: string,
+  destLenVar: string
+): void {
+  const opEnum = TENSOR_BIN_OP[expr.op];
+  if (!opEnum) {
+    throw new Error(
+      `C-JIT codegen: complex tensor binary op ${expr.op} has no opcode`
+    );
+  }
+  // TENSOR_BIN_OP enum values are numerically aligned with the
+  // NUMBL_COMPLEX_BIN_* enum (ADD=0, SUB=1, MUL=2, DIV=3), so the same
+  // string works at the C-side switch. Confirmed by numbl_ops.h.
+  const complexOpEnum = opEnum.replace("NUMBL_REAL_BIN_", "NUMBL_COMPLEX_BIN_");
+
+  const leftIsTensor = isTensorExpr(expr.left);
+  const rightIsTensor = isTensorExpr(expr.right);
+
+  const lenSrc = findTensorLenExpr(expr, ctx);
+  lines.push(`${indent}${destLenVar} = ${lenSrc};`);
+
+  if (leftIsTensor && rightIsTensor) {
+    const l = emitComplexTensorExprToStmts(lines, indent, expr.left, ctx);
+    const r = emitComplexTensorExprToStmts(lines, indent, expr.right, ctx);
+    lines.push(
+      `${indent}numbl_complex_binary_elemwise(${complexOpEnum}, (size_t)${destLenVar}, ${l.data}, ${l.dataIm}, ${r.data}, ${r.dataIm}, ${destDataVar}, ${destDataImVar});`
+    );
+    return;
+  }
+  if (leftIsTensor) {
+    const l = emitComplexTensorExprToStmts(lines, indent, expr.left, ctx);
+    const sPair = emitComplexScalarPair(expr.right, ctx);
+    // scalar on right: out = arr OP scalar
+    lines.push(
+      `${indent}numbl_complex_scalar_binary_elemwise(${complexOpEnum}, (size_t)${destLenVar}, ${sPair.re}, ${sPair.im}, ${l.data}, ${l.dataIm}, 0, ${destDataVar}, ${destDataImVar});`
+    );
+    return;
+  }
+  if (rightIsTensor) {
+    const r = emitComplexTensorExprToStmts(lines, indent, expr.right, ctx);
+    const sPair = emitComplexScalarPair(expr.left, ctx);
+    // scalar on left: out = scalar OP arr
+    lines.push(
+      `${indent}numbl_complex_scalar_binary_elemwise(${complexOpEnum}, (size_t)${destLenVar}, ${sPair.re}, ${sPair.im}, ${r.data}, ${r.dataIm}, 1, ${destDataVar}, ${destDataImVar});`
+    );
+    return;
+  }
+  throw new Error(
+    `C-JIT codegen: emitComplexTensorBinaryStmts called with no tensor operand`
+  );
+}
+
+/** Emit a scalar sub-expression at a complex tensor op boundary. Returns
+ *  a (re, im) pair of C expressions. Real scalars become (expr, "0.0");
+ *  complex scalars go through emitComplex for their pair form. */
+function emitComplexScalarPair(
+  expr: JitExpr,
+  ctx: EmitCtx
+): {
+  re: string;
+  im: string;
+} {
+  if (expr.jitType.kind === "complex_or_number") {
+    return emitComplex(expr, ctx);
+  }
+  return { re: emitExpr(expr, ctx), im: "0.0" };
+}
+
 /** Emit a tensor expression as statements, returning the data/len vars. */
 function emitTensorExprToStmts(
   lines: string[],
@@ -576,6 +807,42 @@ function emitTensorExprToStmts(
       lines.push(
         `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${sLen}, ${arg.data}, ${sData});`
       );
+      return { data: sData, len: sLen };
+    }
+    // real(complex_tensor) / imag(complex_tensor) → real tensor. The
+    // re or im buffer of the complex operand is simply memcpy'd into a
+    // fresh real scratch. If the operand's imag is NULL (real tensor
+    // widened), imag result is all zero.
+    if (
+      (expr.name === "real" || expr.name === "imag") &&
+      expr.args.length === 1 &&
+      expr.args[0].jitType.kind === "tensor" &&
+      expr.args[0].jitType.isComplex === true
+    ) {
+      const arg = emitComplexTensorExprToStmts(
+        lines,
+        indent,
+        expr.args[0],
+        ctx
+      );
+      emitScratchBufAlloc(lines, indent, sData, sLen, arg.len);
+      const src = expr.name === "real" ? arg.data : arg.dataIm;
+      if (expr.name === "real") {
+        lines.push(
+          `${indent}if (${sLen} > 0) memcpy(${sData}, ${src}, (size_t)${sLen} * sizeof(double));`
+        );
+      } else {
+        // imag: handle NULL source (real-widened) → zero output.
+        lines.push(`${indent}if (${src}) {`);
+        lines.push(
+          `${indent}  if (${sLen} > 0) memcpy(${sData}, ${src}, (size_t)${sLen} * sizeof(double));`
+        );
+        lines.push(`${indent}} else {`);
+        lines.push(
+          `${indent}  if (${sLen} > 0) memset(${sData}, 0, (size_t)${sLen} * sizeof(double));`
+        );
+        lines.push(`${indent}}`);
+      }
       return { data: sData, len: sLen };
     }
   }
@@ -885,6 +1152,43 @@ function emitEnsureTensorBuf(
   lines.push(`${indent}${dLen} = ${lenExpr};`);
 }
 
+/** Complex-tensor version of emitEnsureTensorBuf. Reallocates both re
+ *  and im buffers in lockstep, so kernel writes into the paired
+ *  destination don't mismatch in size. Fixed outputs keep their
+ *  caller-aliased re buffer and (for complex) the caller-aliased im
+ *  buffer — we only record the length. */
+function emitEnsureComplexTensorBuf(
+  lines: string[],
+  indent: string,
+  destName: string,
+  lenExpr: string,
+  ctx: EmitCtx,
+  shapeSrc?: JitExpr
+): void {
+  const dData = tensorData(destName);
+  const dDataIm = tensorDataIm(destName);
+  const dLen = tensorLen(destName);
+  const isDyn = isDynamicOutput(ctx, destName);
+  if (isLocalTensor(ctx, destName) || isDyn) {
+    lines.push(`${indent}${dLen} = ${lenExpr};`);
+    lines.push(`${indent}if (${dData}) free(${dData});`);
+    lines.push(`${indent}if (${dDataIm}) free(${dDataIm});`);
+    lines.push(
+      `${indent}${dData} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+    );
+    lines.push(
+      `${indent}${dDataIm} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+    );
+    if (isDyn) {
+      const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
+      lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+      lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
+    }
+    return;
+  }
+  lines.push(`${indent}${dLen} = ${lenExpr};`);
+}
+
 /** Derive (d0, d1) C expressions for a dynamic tensor output whose
  *  shape is inherited from an elemwise operand. Uses the operand's
  *  static shape when known; else falls back to `[len, 1]` (1D column
@@ -1139,6 +1443,141 @@ function emitUserCallTensorAssign(
 }
 
 /** Emit a tensor-result Assign: handles Binary, Unary, Call on tensors. */
+/** Complex-tensor Assign: parallels emitTensorAssign but writes paired
+ *  re+im buffers. RHS sub-exprs route through emitComplexTensorExprToStmts
+ *  / emitComplexTensorBinaryStmts. For a real RHS (e.g. a Var pointing
+ *  to a real tensor), imag is widened via NULL pointer or a zero buffer.
+ *
+ *  Runs inside a pendingStmts frame so nested complex scalar sub-expressions
+ *  (`1i`, `3+4i`, `re(z) + 1i*im(z)`, ...) can materialize their pair
+ *  locals into the same `lines` stream ahead of the kernel call. */
+function emitComplexTensorAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  expr: JitExpr,
+  ctx: EmitCtx
+): void {
+  withPendingStmts(ctx, lines, indent, () =>
+    emitComplexTensorAssignInner(lines, indent, destName, expr, ctx)
+  );
+}
+
+function emitComplexTensorAssignInner(
+  lines: string[],
+  indent: string,
+  destName: string,
+  expr: JitExpr,
+  ctx: EmitCtx
+): void {
+  const dData = tensorData(destName);
+  const dDataIm = tensorDataIm(destName);
+  const dLen = tensorLen(destName);
+
+  if (expr.tag === "Binary" && isTensorExpr(expr)) {
+    const lenExpr = findTensorLenExpr(expr, ctx);
+    const tensorOperand = isTensorExpr(expr.left) ? expr.left : expr.right;
+    emitEnsureComplexTensorBuf(
+      lines,
+      indent,
+      destName,
+      lenExpr,
+      ctx,
+      tensorOperand
+    );
+    emitComplexTensorBinaryStmts(
+      lines,
+      indent,
+      expr,
+      ctx,
+      dData,
+      dDataIm,
+      dLen
+    );
+    return;
+  }
+
+  if (expr.tag === "Unary" && isTensorExpr(expr)) {
+    if (expr.op === UnaryOperation.Plus) {
+      emitComplexTensorAssign(lines, indent, destName, expr.operand, ctx);
+      return;
+    }
+    if (expr.op === UnaryOperation.Minus) {
+      const operand = emitComplexTensorExprToStmts(
+        lines,
+        indent,
+        expr.operand,
+        ctx
+      );
+      emitEnsureComplexTensorBuf(
+        lines,
+        indent,
+        destName,
+        operand.len,
+        ctx,
+        expr.operand
+      );
+      lines.push(
+        `${indent}numbl_complex_scalar_binary_elemwise(NUMBL_COMPLEX_BIN_MUL, (size_t)${dLen}, -1.0, 0.0, ${operand.data}, ${operand.dataIm}, 1, ${dData}, ${dDataIm});`
+      );
+      return;
+    }
+  }
+
+  if (expr.tag === "Call" && isTensorExpr(expr) && expr.name === "conj") {
+    const operand = emitComplexTensorExprToStmts(
+      lines,
+      indent,
+      expr.args[0],
+      ctx
+    );
+    emitEnsureComplexTensorBuf(
+      lines,
+      indent,
+      destName,
+      operand.len,
+      ctx,
+      expr.args[0]
+    );
+    lines.push(
+      `${indent}if (${dLen} > 0) memcpy(${dData}, ${operand.data}, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}if (${operand.dataIm}) {`);
+    lines.push(`${indent}  for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+    lines.push(`${indent}    ${dDataIm}[__i] = -((${operand.dataIm})[__i]);`);
+    lines.push(`${indent}} else {`);
+    lines.push(
+      `${indent}  if (${dLen} > 0) memset(${dDataIm}, 0, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}}`);
+    return;
+  }
+
+  if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
+    // Complex-dest Var assign: deep-copy re, and either deep-copy im
+    // (source is complex) or zero im (source is real, widened).
+    const operand = emitComplexTensorExprToStmts(lines, indent, expr, ctx);
+    emitEnsureComplexTensorBuf(lines, indent, destName, operand.len, ctx, expr);
+    lines.push(
+      `${indent}if (${dLen} > 0) memcpy(${dData}, ${operand.data}, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}if (${operand.dataIm}) {`);
+    lines.push(
+      `${indent}  if (${dLen} > 0) memcpy(${dDataIm}, ${operand.dataIm}, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}} else {`);
+    lines.push(
+      `${indent}  if (${dLen} > 0) memset(${dDataIm}, 0, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}}`);
+    return;
+  }
+
+  throw new Error(
+    `C-JIT codegen: unhandled complex tensor assign RHS: ${expr.tag}`
+  );
+}
+
 function emitTensorAssign(
   lines: string[],
   indent: string,
@@ -1148,6 +1587,14 @@ function emitTensorAssign(
 ): void {
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
+
+  // Complex destination tensor: route through the paired-buffer
+  // emitter. Real RHS expressions are transparently widened via the
+  // complex tensor helpers (NULL imag pointer or 0.0 imag scalar).
+  if (isComplexTensorVar(ctx, destName)) {
+    emitComplexTensorAssign(lines, indent, destName, expr, ctx);
+    return;
+  }
 
   if (expr.tag === "UserCall") {
     const destMeta = requireFreshAllocMeta(ctx, destName, "UserCall");
@@ -1284,6 +1731,46 @@ function emitTensorAssign(
       lines.push(
         `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${dLen}, ${arg.data}, ${dData});`
       );
+      return;
+    }
+    // real(complex_tensor) / imag(complex_tensor): produce a real tensor
+    // by copying the matching buffer (or zeroing imag when source has
+    // NULL imag).
+    if (
+      (expr.name === "real" || expr.name === "imag") &&
+      expr.args.length === 1 &&
+      expr.args[0].jitType.kind === "tensor" &&
+      expr.args[0].jitType.isComplex === true
+    ) {
+      const operand = emitComplexTensorExprToStmts(
+        lines,
+        indent,
+        expr.args[0],
+        ctx
+      );
+      emitEnsureTensorBuf(
+        lines,
+        indent,
+        destName,
+        operand.len,
+        ctx,
+        expr.args[0]
+      );
+      if (expr.name === "real") {
+        lines.push(
+          `${indent}if (${dLen} > 0) memcpy(${dData}, ${operand.data}, (size_t)${dLen} * sizeof(double));`
+        );
+      } else {
+        lines.push(`${indent}if (${operand.dataIm}) {`);
+        lines.push(
+          `${indent}  if (${dLen} > 0) memcpy(${dData}, ${operand.dataIm}, (size_t)${dLen} * sizeof(double));`
+        );
+        lines.push(`${indent}} else {`);
+        lines.push(
+          `${indent}  if (${dLen} > 0) memset(${dData}, 0, (size_t)${dLen} * sizeof(double));`
+        );
+        lines.push(`${indent}}`);
+      }
       return;
     }
   }

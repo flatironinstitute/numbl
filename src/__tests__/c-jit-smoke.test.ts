@@ -62,11 +62,15 @@ describe("C-JIT: feasibility prepass", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("rejects complex tensor args", () => {
-    const tensorT: JitType = { kind: "tensor", isComplex: true };
+  it("accepts complex tensor args (Phase 2: elementwise binary + unary)", () => {
+    const tensorT: JitType = {
+      kind: "tensor",
+      isComplex: true,
+      shape: [100, 1],
+    };
     const numberT: JitType = { kind: "number" };
     const r = checkCFeasibility([], ["x"], [tensorT], numberT, [numberT], 1);
-    expect(r.ok).toBe(false);
+    expect(r.ok).toBe(true);
   });
 
   it("accepts multi-output when all outputs are scalar/tensor", () => {

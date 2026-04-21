@@ -34,6 +34,7 @@ import {
   tensorDataIm,
   tensorLen,
   scratchData,
+  scratchDataIm,
   scratchLen,
   type EmitCtx,
 } from "./codegenCtx.js";
@@ -560,6 +561,7 @@ function emitOneFunction(
     scratchCount: 0,
     tmp: { n: 0 },
     usedScratch: new Set(),
+    complexScratch: new Set(),
     fuse: fuse ?? false,
     needsTicState: false,
     needsErrorFlag: false,
@@ -631,6 +633,11 @@ function emitOneFunction(
     epilogueLines.push(
       `${indent}if (${scratchData(sIdx)}) free(${scratchData(sIdx)});`
     );
+    if (ctx.complexScratch.has(sIdx)) {
+      epilogueLines.push(
+        `${indent}if (${scratchDataIm(sIdx)}) free(${scratchDataIm(sIdx)});`
+      );
+    }
   }
 
   for (const name of cls.localTensorNames) {
@@ -821,6 +828,9 @@ function emitOneFunction(
 
   for (const sIdx of ctx.usedScratch) {
     preludeLines.push(`${indent}double *${scratchData(sIdx)} = NULL;`);
+    if (ctx.complexScratch.has(sIdx)) {
+      preludeLines.push(`${indent}double *${scratchDataIm(sIdx)} = NULL;`);
+    }
     preludeLines.push(`${indent}int64_t ${scratchLen(sIdx)} = 0;`);
   }
 

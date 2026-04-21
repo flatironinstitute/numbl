@@ -189,6 +189,10 @@ export interface EmitCtx {
   /** Counter for scratch buffer slots. Each tensor sub-expression that
    *  doesn't have a top-level dest gets a scratch double* + int64_t pair. */
   scratchCount: number;
+  /** Scratch indices whose tensor expression was complex — the prelude
+   *  declares a paired `__sN_data_im` for these, and epilogue frees both
+   *  buffers. Real scratches stay single-buffer. */
+  complexScratch: Set<number>;
   /** Counter for for-loop step temps. */
   tmp: { n: number };
   /** Set of scratch indices that were actually used. */
@@ -257,8 +261,22 @@ export function allocScratch(ctx: EmitCtx): number {
   return ctx.scratchCount;
 }
 
+/** Allocate a complex scratch triple (__s{n}_data, __s{n}_data_im,
+ *  __s{n}_len) — the emitter tags the index so the prelude declares
+ *  and the epilogue frees the imag companion. */
+export function allocComplexScratch(ctx: EmitCtx): number {
+  const n = allocScratch(ctx);
+  ctx.complexScratch.add(n);
+  return n;
+}
+
 export function scratchData(n: number): string {
   return `__s${n}_data`;
+}
+/** Imaginary companion for a complex scratch buffer. Only declared in
+ *  the prelude when the scratch index appears in ctx.complexScratch. */
+export function scratchDataIm(n: number): string {
+  return `__s${n}_data_im`;
 }
 export function scratchLen(n: number): string {
   return `__s${n}_len`;
