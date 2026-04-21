@@ -476,8 +476,13 @@ describe("C-JIT: tensor codegen (Phase 2, koffi)", () => {
     expect(gen.cSource).toContain("int64_t __s1_len = 0;");
     // Should malloc the scratch (guarded against zero-length) and call
     // the binary op. The malloc is wrapped in a ternary so the buffer
-    // stays NULL when sLen == 0, avoiding an undefined-behaviour malloc(0).
-    expect(gen.cSource).toContain("(double *)malloc((size_t)__s1_len");
+    // stays NULL when `__need == 0`, avoiding an undefined-behaviour
+    // malloc(0). The alloc is further gated on `__need != __s1_len` so
+    // hot-loop reuse doesn't thrash the allocator.
+    expect(gen.cSource).toContain(
+      "(double *)malloc((size_t)__need * sizeof(double))"
+    );
+    expect(gen.cSource).toContain("if (__need != __s1_len)");
     expect(gen.cSource).toContain(
       "numbl_real_binary_elemwise(NUMBL_REAL_BIN_MUL"
     );

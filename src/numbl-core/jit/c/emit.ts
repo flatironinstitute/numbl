@@ -515,35 +515,33 @@ function emitTensorBinaryStmts(
   const leftIsTensor = isTensorExpr(expr.left);
   const rightIsTensor = isTensorExpr(expr.right);
 
-  let leftData: string, leftLen: string;
-  let rightData: string, rightLen: string;
+  let leftData: string;
+  let rightData: string;
 
   if (leftIsTensor) {
     const lResult = emitTensorExprToStmts(lines, indent, expr.left, ctx);
     leftData = lResult.data;
-    leftLen = lResult.len;
   } else {
     leftData = emitExpr(expr.left, ctx);
-    leftLen = "";
   }
 
   if (rightIsTensor) {
     const rResult = emitTensorExprToStmts(lines, indent, expr.right, ctx);
     rightData = rResult.data;
-    rightLen = rResult.len;
   } else {
     rightData = emitExpr(expr.right, ctx);
-    rightLen = "";
   }
 
+  // destLenVar was already set by emitScratchBufAlloc (the only caller):
+  // the guard block either kept it matching __need, or updated it. No
+  // need to re-assign here.
+
   if (leftIsTensor && rightIsTensor) {
-    lines.push(`${indent}${destLenVar} = ${leftLen};`);
     const fn = isCmp ? "numbl_real_comparison" : "numbl_real_binary_elemwise";
     lines.push(
       `${indent}${fn}(${opEnum}, (size_t)${destLenVar}, ${leftData}, ${rightData}, ${destDataVar});`
     );
   } else if (leftIsTensor) {
-    lines.push(`${indent}${destLenVar} = ${leftLen};`);
     const fn = isCmp
       ? "numbl_real_scalar_comparison"
       : "numbl_real_scalar_binary_elemwise";
@@ -551,7 +549,6 @@ function emitTensorBinaryStmts(
       `${indent}${fn}(${opEnum}, (size_t)${destLenVar}, ${rightData}, ${leftData}, 0, ${destDataVar});`
     );
   } else if (rightIsTensor) {
-    lines.push(`${indent}${destLenVar} = ${rightLen};`);
     const fn = isCmp
       ? "numbl_real_scalar_comparison"
       : "numbl_real_scalar_binary_elemwise";
@@ -571,16 +568,25 @@ function emitScratchBufAlloc(
   sLen: string,
   lenExpr: string
 ): void {
-  lines.push(`${indent}${sLen} = ${lenExpr};`);
-  lines.push(`${indent}if (${sData}) free(${sData});`);
+  const inner = indent + "  ";
+  lines.push(`${indent}{`);
+  lines.push(`${inner}int64_t __need = ${lenExpr};`);
+  lines.push(`${inner}if (__need != ${sLen}) {`);
+  lines.push(`${inner}  if (${sData}) free(${sData});`);
   lines.push(
-    `${indent}${sData} = (${sLen} > 0) ? (double *)malloc((size_t)${sLen} * sizeof(double)) : NULL;`
+    `${inner}  ${sData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
   );
+  lines.push(`${inner}  ${sLen} = __need;`);
+  lines.push(`${inner}}`);
+  lines.push(`${indent}}`);
 }
 
 /** Complex scratch alloc: re + im buffers, both sized to `lenExpr`. The
  *  complex kernels in numbl_ops write both buffers unconditionally, so
- *  both must be valid pointers (len > 0). */
+ *  both must be valid pointers (len > 0).
+ *
+ *  Same length-match fast-path as emitScratchBufAlloc: both buffers are
+ *  kept in lockstep, so a single size check guards both. */
 function emitScratchBufAllocComplex(
   lines: string[],
   indent: string,
@@ -589,15 +595,21 @@ function emitScratchBufAllocComplex(
   sLen: string,
   lenExpr: string
 ): void {
-  lines.push(`${indent}${sLen} = ${lenExpr};`);
-  lines.push(`${indent}if (${sData}) free(${sData});`);
-  lines.push(`${indent}if (${sDataIm}) free(${sDataIm});`);
+  const inner = indent + "  ";
+  lines.push(`${indent}{`);
+  lines.push(`${inner}int64_t __need = ${lenExpr};`);
+  lines.push(`${inner}if (__need != ${sLen}) {`);
+  lines.push(`${inner}  if (${sData}) free(${sData});`);
+  lines.push(`${inner}  if (${sDataIm}) free(${sDataIm});`);
   lines.push(
-    `${indent}${sData} = (${sLen} > 0) ? (double *)malloc((size_t)${sLen} * sizeof(double)) : NULL;`
+    `${inner}  ${sData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
   );
   lines.push(
-    `${indent}${sDataIm} = (${sLen} > 0) ? (double *)malloc((size_t)${sLen} * sizeof(double)) : NULL;`
+    `${inner}  ${sDataIm} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
   );
+  lines.push(`${inner}  ${sLen} = __need;`);
+  lines.push(`${inner}}`);
+  lines.push(`${indent}}`);
 }
 
 /** Complex tensor expression result: data + dataIm + len in C. For a
@@ -755,8 +767,9 @@ function emitComplexTensorBinaryStmts(
   const leftIsTensor = isTensorExpr(expr.left);
   const rightIsTensor = isTensorExpr(expr.right);
 
-  const lenSrc = findTensorLenExpr(expr, ctx);
-  lines.push(`${indent}${destLenVar} = ${lenSrc};`);
+  // destLenVar was already set to lenSrc inside emitScratchBufAllocComplex's
+  // guarded alloc (or, for non-scratch dests, by the caller). No need to
+  // re-assign here.
 
   if (leftIsTensor && rightIsTensor) {
     const l = emitComplexTensorExprToStmts(lines, indent, expr.left, ctx);
@@ -1227,11 +1240,17 @@ function emitEnsureTensorBuf(
   const dLen = tensorLen(destName);
   const isDyn = isDynamicOutput(ctx, destName);
   if (isLocalTensor(ctx, destName) || isDyn) {
-    lines.push(`${indent}${dLen} = ${lenExpr};`);
-    lines.push(`${indent}if (${dData}) free(${dData});`);
+    const inner = indent + "  ";
+    lines.push(`${indent}{`);
+    lines.push(`${inner}int64_t __need = ${lenExpr};`);
+    lines.push(`${inner}if (__need != ${dLen}) {`);
+    lines.push(`${inner}  if (${dData}) free(${dData});`);
     lines.push(
-      `${indent}${dData} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+      `${inner}  ${dData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
     );
+    lines.push(`${inner}  ${dLen} = __need;`);
+    lines.push(`${inner}}`);
+    lines.push(`${indent}}`);
     if (isDyn) {
       const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
       lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
@@ -1260,15 +1279,21 @@ function emitEnsureComplexTensorBuf(
   const dLen = tensorLen(destName);
   const isDyn = isDynamicOutput(ctx, destName);
   if (isLocalTensor(ctx, destName) || isDyn) {
-    lines.push(`${indent}${dLen} = ${lenExpr};`);
-    lines.push(`${indent}if (${dData}) free(${dData});`);
-    lines.push(`${indent}if (${dDataIm}) free(${dDataIm});`);
+    const inner = indent + "  ";
+    lines.push(`${indent}{`);
+    lines.push(`${inner}int64_t __need = ${lenExpr};`);
+    lines.push(`${inner}if (__need != ${dLen}) {`);
+    lines.push(`${inner}  if (${dData}) free(${dData});`);
+    lines.push(`${inner}  if (${dDataIm}) free(${dDataIm});`);
     lines.push(
-      `${indent}${dData} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+      `${inner}  ${dData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
     );
     lines.push(
-      `${indent}${dDataIm} = (${dLen} > 0) ? (double *)malloc((size_t)${dLen} * sizeof(double)) : NULL;`
+      `${inner}  ${dDataIm} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
     );
+    lines.push(`${inner}  ${dLen} = __need;`);
+    lines.push(`${inner}}`);
+    lines.push(`${indent}}`);
     if (isDyn) {
       const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
       lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
