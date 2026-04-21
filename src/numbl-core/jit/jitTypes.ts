@@ -691,6 +691,26 @@ export type JitStmt =
       args: JitExpr[];
       outputTypes: JitType[];
     }
+  | {
+      /**
+       * Call a synthetic specialization (installed as a forwarder on $h)
+       * and write back multiple outputs into outer-scope vars. Only
+       * produced by the hybrid-loop pass in cJitHybrid.ts, which
+       * replaces a For/While JitStmt with this call form when the
+       * extracted loop specialization compiled to native C.
+       *
+       * Semantics (0 / 1 / N outputs):
+       *   nargout==0 → emit `$h.callUser(...)` as a stmt (no writeback)
+       *   nargout==1 → emit `out = $h.callUser(...)`
+       *   nargout>=2 → emit `var $r = $h.callUser(...); out0=$r[0]; ...`
+       */
+      tag: "UserCallWriteback";
+      outputs: string[];
+      jitName: string;
+      name: string;
+      args: JitExpr[];
+      outputTypes: JitType[];
+    }
   | { tag: "SetLoc"; line: number }
   | {
       /** C-JIT assertion: if this JitStmt survives to JS codegen at --opt 2,

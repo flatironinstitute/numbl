@@ -26,6 +26,7 @@ import {
   JitBailToInterpreter,
 } from "./js/jitHelpers.js";
 import { getCJitBackend } from "./c/cJitBackend.js";
+import { compileHybridCallees, compileHybridLoops } from "./c/cJitHybrid.js";
 import {
   CJitParityError,
   formatCJitParityMessage,
@@ -217,6 +218,20 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
       cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
     }
   }
+
+  // Hybrid: top-level body bailed from C-JIT but individual callees
+  // and top-level For/While loops may still be C-feasible. Swap those
+  // in before JS codegen so the JS-JIT'd top-level calls native code
+  // at the inner boundaries.
+  compileHybridCallees(interp, lowered.generatedIRBodies, lowered.generatedFns);
+  compileHybridLoops(
+    interp,
+    lowered.body,
+    lowered.endEnv,
+    lowered.outputNames,
+    lowered.generatedIRBodies,
+    lowered.generatedFns
+  );
 
   const currentFile = interp.currentFile;
   const mainBody = generateJS(

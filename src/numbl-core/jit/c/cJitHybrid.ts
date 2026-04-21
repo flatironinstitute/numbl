@@ -1,0 +1,414 @@
+/**
+ * Hybrid JS/C-JIT compilation: when the outer body falls back to JS-JIT,
+ * still try C-JIT at narrower scopes and splice the native handles in.
+ * Two shapes:
+ *
+ *   - `compileHybridCallees`: walks `generatedIRBodies` (one entry per
+ *     user-function specialization reached by the outer) and tries
+ *     C-JIT on each standalone. Successes get installed on
+ *     `rt.jitHelpers[$cjit_<jitName>]` and their cached JS source is
+ *     rewritten to `var <jitName> = $h.$cjit_<jitName>;` so the outer
+ *     JS transparently calls native code at the callee boundary.
+ *
+ *   - `compileHybridLoops`: walks the outer's top-level JitStmt body,
+ *     finds `For`/`While` stmts whose body is C-feasible, extracts each
+ *     as a synthetic specialization (live-in vars → params, live-out
+ *     vars → outputs), compiles it to native, and replaces the loop
+ *     stmt in the outer's IR with a `UserCallWriteback` that invokes
+ *     the handle and writes back outputs into the outer's locals.
+ *
+ * Preconditions at call time:
+ *   - `interp.optimization >= 2`
+ *   - `interp.rt.jitHelpers` is populated (i.e. past executeCode init)
+ *   - the shared `generatedFns` / `generatedIRBodies` maps come from the
+ *     outer specialization's `LoweringResult`
+ *
+ * Calling convention matches: `$h.callUser($rt, name, fn, ...args)`
+ * invokes `fn(...args)`, and the args are the JIT's emitted JS forms —
+ * raw JS numbers for scalars, RuntimeTensor for tensors, etc. — same
+ * shape the C-JIT wrapper expects since it was compiled with matching
+ * `argTypes`.
+ */
+
+import type { Interpreter } from "../../interpreter/interpreter.js";
+import type { FunctionDef } from "../../interpreter/types.js";
+import type { GeneratedFn } from "../jitLower.js";
+import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
+import type { TypeEnv } from "../jitLowerTypes.js";
+import { jitTypeKey } from "../jitTypes.js";
+import { getCJitBackend } from "./cJitBackend.js";
+
+/**
+ * True if the callee's body does enough work per call to amortize the
+ * JS→C N-API crossing cost (~hundreds of ns per call with buffer setup).
+ *
+ * Heuristic: the body (or any nested body) must contain at least one
+ * For or While loop. Tiny straight-line callees like `y = x*x` called
+ * inside a 10M-iteration outer loop lose catastrophically to FFI
+ * overhead; requiring a loop in the callee makes the native body do
+ * batch work per call.
+ */
+function bodyWorthCrossing(body: JitStmt[]): boolean {
+  for (const s of body) {
+    if (s.tag === "For" || s.tag === "While") return true;
+    if (s.tag === "If") {
+      if (bodyWorthCrossing(s.thenBody)) return true;
+      for (const eib of s.elseifBlocks) {
+        if (bodyWorthCrossing(eib.body)) return true;
+      }
+      if (s.elseBody && bodyWorthCrossing(s.elseBody)) return true;
+    }
+  }
+  return false;
+}
+
+export function compileHybridCallees(
+  interp: Interpreter,
+  generatedIRBodies: Map<string, GeneratedFn>,
+  generatedFns: Map<string, string>
+): void {
+  if (interp.optimization < 2) return;
+  const backend = getCJitBackend();
+  if (!backend) return;
+  const helpers = interp.rt.jitHelpers;
+  if (!helpers) return;
+
+  for (const [jitName, gf] of generatedIRBodies) {
+    const helperKey = `$cjit_${jitName}`;
+    if (helpers[helperKey]) {
+      generatedFns.set(jitName, `var ${jitName} = $h.${helperKey};`);
+      continue;
+    }
+    if (!bodyWorthCrossing(gf.body)) continue;
+
+    const res = backend.tryCompile(
+      interp,
+      gf.fn,
+      gf.body,
+      gf.outputNames,
+      gf.localVars,
+      gf.outputTypes[0] ?? null,
+      gf.outputTypes,
+      gf.argTypes,
+      gf.nargout,
+      generatedIRBodies
+    );
+    if (!res.ok) continue;
+    helpers[helperKey] = res.fn;
+    generatedFns.set(jitName, `var ${jitName} = $h.${helperKey};`);
+  }
+}
+
+// ── Hybrid-loop extraction ──────────────────────────────────────────────
+
+interface VarRefs {
+  reads: Set<string>;
+  writes: Set<string>;
+  /** Early-exit control flow: Return / Break / Continue in the body.
+   *  If true, the loop isn't safe to extract as its own function because
+   *  a Return would change semantics (outer fn exits, not the loop). */
+  hasControl: boolean;
+  /** Set to true on any JitStmt / JitExpr kind the walker doesn't handle.
+   *  When true, we conservatively skip the extraction to avoid missing a
+   *  read/write that would cause stale-var writebacks or type errors. */
+  hasUnknown: boolean;
+}
+
+function emptyRefs(): VarRefs {
+  return {
+    reads: new Set(),
+    writes: new Set(),
+    hasControl: false,
+    hasUnknown: false,
+  };
+}
+
+function walkExpr(e: JitExpr, out: VarRefs): void {
+  switch (e.tag) {
+    case "Var":
+      out.reads.add(e.name);
+      return;
+    case "NumberLiteral":
+    case "ImagLiteral":
+    case "StringLiteral":
+      return;
+    case "Binary":
+      walkExpr(e.left, out);
+      walkExpr(e.right, out);
+      return;
+    case "Unary":
+      walkExpr(e.operand, out);
+      return;
+    case "Call":
+    case "UserCall":
+    case "FuncHandleCall":
+    case "UserDispatchCall":
+      for (const a of e.args) walkExpr(a, out);
+      return;
+    case "Index":
+      walkExpr(e.base, out);
+      for (const i of e.indices) walkExpr(i, out);
+      return;
+    case "TensorLiteral":
+      for (const row of e.rows) for (const c of row) walkExpr(c, out);
+      return;
+    case "VConcatGrow":
+      walkExpr(e.base, out);
+      walkExpr(e.value, out);
+      return;
+    case "RangeSliceRead":
+      // baseName is read implicitly via the hoisted alias
+      out.reads.add(e.baseName);
+      walkExpr(e.start, out);
+      if (e.end) walkExpr(e.end, out);
+      return;
+    case "MemberRead":
+      out.reads.add(e.baseName);
+      return;
+    case "StructArrayMemberRead":
+      out.reads.add(e.structVarName);
+      walkExpr(e.indexExpr, out);
+      return;
+    default:
+      out.hasUnknown = true;
+      return;
+  }
+}
+
+function walkStmt(s: JitStmt, out: VarRefs): void {
+  switch (s.tag) {
+    case "Assign":
+      walkExpr(s.expr, out);
+      out.writes.add(s.name);
+      return;
+    case "AssignIndex":
+      out.writes.add(s.baseName);
+      out.reads.add(s.baseName);
+      for (const i of s.indices) walkExpr(i, out);
+      walkExpr(s.value, out);
+      return;
+    case "AssignIndexRange":
+      out.writes.add(s.baseName);
+      out.reads.add(s.baseName);
+      out.reads.add(s.srcBaseName);
+      walkExpr(s.dstStart, out);
+      walkExpr(s.dstEnd, out);
+      if (s.srcStart) walkExpr(s.srcStart, out);
+      if (s.srcEnd) walkExpr(s.srcEnd, out);
+      return;
+    case "AssignIndexCol":
+      out.writes.add(s.baseName);
+      out.reads.add(s.baseName);
+      out.reads.add(s.srcBaseName);
+      walkExpr(s.colIndex, out);
+      return;
+    case "AssignIndexPage3d":
+      out.writes.add(s.baseName);
+      out.reads.add(s.baseName);
+      walkExpr(s.pageIndex, out);
+      walkExpr(s.value, out);
+      return;
+    case "AssignMember":
+      out.writes.add(s.baseName);
+      out.reads.add(s.baseName);
+      walkExpr(s.value, out);
+      return;
+    case "ExprStmt":
+      walkExpr(s.expr, out);
+      return;
+    case "MultiAssign":
+      for (const n of s.names) if (n !== null) out.writes.add(n);
+      for (const a of s.args) walkExpr(a, out);
+      return;
+    case "If":
+      walkExpr(s.cond, out);
+      walkStmts(s.thenBody, out);
+      for (const eib of s.elseifBlocks) {
+        walkExpr(eib.cond, out);
+        walkStmts(eib.body, out);
+      }
+      if (s.elseBody) walkStmts(s.elseBody, out);
+      return;
+    case "For":
+      out.writes.add(s.varName);
+      walkExpr(s.start, out);
+      if (s.step) walkExpr(s.step, out);
+      walkExpr(s.end, out);
+      walkStmts(s.body, out);
+      return;
+    case "While":
+      walkExpr(s.cond, out);
+      walkStmts(s.body, out);
+      return;
+    case "Return":
+    case "Break":
+    case "Continue":
+      out.hasControl = true;
+      return;
+    case "SetLoc":
+    case "AssertCJit":
+      return;
+    case "UserCallWriteback":
+      // Shouldn't appear in unmodified IR — conservative: mark unknown.
+      for (const a of s.args) walkExpr(a, out);
+      for (const o of s.outputs) out.writes.add(o);
+      return;
+    default:
+      out.hasUnknown = true;
+      return;
+  }
+}
+
+function walkStmts(stmts: JitStmt[], out: VarRefs): void {
+  for (const s of stmts) walkStmt(s, out);
+}
+
+function hashStr(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).padStart(8, "0");
+}
+
+/**
+ * Extract top-level For/While loops from the outer's IR and try to
+ * compile each to native. On success the loop is replaced in-place by a
+ * `UserCallWriteback` stmt.
+ */
+export function compileHybridLoops(
+  interp: Interpreter,
+  outerBody: JitStmt[],
+  outerEndEnv: TypeEnv,
+  outerOutputNames: string[],
+  generatedIRBodies: Map<string, GeneratedFn>,
+  generatedFns: Map<string, string>
+): void {
+  if (interp.optimization < 2) return;
+  const backend = getCJitBackend();
+  if (!backend) return;
+  const helpers = interp.rt.jitHelpers;
+  if (!helpers) return;
+
+  // Precompute reads of every suffix of the outer body so we can check
+  // live-out in O(n) instead of O(n^2).
+  const suffixReads: Set<string>[] = new Array(outerBody.length + 1);
+  suffixReads[outerBody.length] = new Set(outerOutputNames);
+  for (let i = outerBody.length - 1; i >= 0; i--) {
+    const r = emptyRefs();
+    walkStmt(outerBody[i], r);
+    suffixReads[i] = new Set(suffixReads[i + 1]);
+    for (const n of r.reads) suffixReads[i].add(n);
+  }
+
+  for (let i = 0; i < outerBody.length; i++) {
+    const stmt = outerBody[i];
+    if (stmt.tag !== "For" && stmt.tag !== "While") continue;
+
+    const refs = emptyRefs();
+    walkStmt(stmt, refs);
+    if (refs.hasControl || refs.hasUnknown) continue;
+
+    // Live-in: any name read by the loop that has a type in the outer env.
+    // Exclude the loop var (it's an output, not an input).
+    const liveInNames: string[] = [];
+    const liveInTypes: JitType[] = [];
+    const addLiveIn = (name: string): void => {
+      if (stmt.tag === "For" && name === stmt.varName) return;
+      if (liveInNames.includes(name)) return;
+      const t = outerEndEnv.get(name);
+      if (!t) return;
+      liveInNames.push(name);
+      liveInTypes.push(t);
+    };
+    for (const n of refs.reads) addLiveIn(n);
+    // A var that's written in the loop and also pre-exists in outer scope
+    // must come in as an input so the initial value is preserved (e.g.
+    // `s = 0; for ... s = s + ...; end`).
+    for (const n of refs.writes) addLiveIn(n);
+
+    // Live-out: loop var + any write that's read after the loop (or is
+    // an outer fn output). Vars that are locally-scoped to the loop
+    // (not referenced anywhere after) stay inside the synthetic fn.
+    const later = suffixReads[i + 1];
+    const liveOutNames: string[] = [];
+    if (stmt.tag === "For") liveOutNames.push(stmt.varName);
+    for (const n of refs.writes) {
+      if (liveOutNames.includes(n)) continue;
+      if (stmt.tag === "For" && n === stmt.varName) continue;
+      if (later.has(n) || liveInNames.includes(n)) liveOutNames.push(n);
+    }
+    if (liveOutNames.length === 0) continue;
+
+    const liveOutTypes: JitType[] = liveOutNames.map(
+      n => outerEndEnv.get(n) ?? { kind: "unknown" as const }
+    );
+    if (liveOutTypes.some(t => t.kind === "unknown")) continue;
+
+    // Locals: any write that isn't a param. Outputs that are not also
+    // params still need a local declaration in the synthetic fn (the C
+    // codegen emits `double v_x = 0.0; ... *v_x_out = v_x;` — the local
+    // is the storage, the out-param is the writeback slot).
+    const localVars = new Set<string>();
+    for (const n of refs.writes) {
+      if (liveInNames.includes(n)) continue;
+      localVars.add(n);
+    }
+
+    const typeKey = liveInNames
+      .map((n, k) => `${n}:${jitTypeKey(liveInTypes[k])}`)
+      .join(",");
+    const outKey = liveOutNames
+      .map((n, k) => `${n}:${jitTypeKey(liveOutTypes[k])}`)
+      .join(",");
+    const identity = `${interp.currentFile}:hybrid_${stmt.tag}:${i}:${typeKey}->${outKey}`;
+    const jitName = `$jit_hybrid_${stmt.tag}_${i}_${hashStr(identity)}`;
+    const helperKey = `$cjit_${jitName}`;
+
+    if (helpers[helperKey]) {
+      installReplacement();
+      continue;
+    }
+
+    const syntheticFn: FunctionDef = {
+      name: `$hybrid_${stmt.tag}`,
+      params: liveInNames,
+      outputs: liveOutNames,
+      body: [],
+    };
+
+    const res = backend.tryCompile(
+      interp,
+      syntheticFn,
+      [stmt],
+      liveOutNames,
+      localVars,
+      liveOutTypes[0] ?? null,
+      liveOutTypes,
+      liveInTypes,
+      liveOutNames.length,
+      generatedIRBodies
+    );
+    if (!res.ok) continue;
+    helpers[helperKey] = res.fn;
+    installReplacement();
+
+    function installReplacement(): void {
+      generatedFns.set(jitName, `var ${jitName} = $h.${helperKey};`);
+      const args: JitExpr[] = liveInNames.map((n, k) => ({
+        tag: "Var",
+        name: n,
+        jitType: liveInTypes[k],
+      }));
+      outerBody[i] = {
+        tag: "UserCallWriteback",
+        outputs: liveOutNames,
+        jitName,
+        name: syntheticFn.name,
+        args,
+        outputTypes: liveOutTypes,
+      };
+    }
+  }
+}

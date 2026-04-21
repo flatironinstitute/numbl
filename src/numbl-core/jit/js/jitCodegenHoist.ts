@@ -178,6 +178,9 @@ export function collectTensorUsage(body: JitStmt[]): Map<string, TensorUsage> {
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);
           break;
+        case "UserCallWriteback":
+          for (const a of s.args) visitExpr(a);
+          break;
         case "If":
           visitExpr(s.cond);
           visitStmts(s.thenBody);
@@ -362,6 +365,9 @@ export function collectStructFieldReads(
         case "MultiAssign":
           for (const a of s.args) visitExpr(a);
           break;
+        case "UserCallWriteback":
+          for (const a of s.args) visitExpr(a);
+          break;
         case "If":
           visitExpr(s.cond);
           visitStmts(s.thenBody);
@@ -478,6 +484,9 @@ export function collectStructArrayElementReads(
           visitExpr(s.value);
           break;
         case "MultiAssign":
+          for (const a of s.args) visitExpr(a);
+          break;
+        case "UserCallWriteback":
           for (const a of s.args) visitExpr(a);
           break;
         case "If":

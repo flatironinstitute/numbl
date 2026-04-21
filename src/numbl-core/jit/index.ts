@@ -16,6 +16,7 @@ import { generateJS } from "./js/jitCodegen.js";
 import { jitHelpers, JitBailToInterpreter } from "./js/jitHelpers.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
 import { getCJitBackend } from "./c/cJitBackend.js";
+import { compileHybridCallees, compileHybridLoops } from "./c/cJitHybrid.js";
 import {
   CJitParityError,
   formatCJitParityMessage,
@@ -190,6 +191,25 @@ export function tryJitCall(
       }
     }
     // Fall through to JS-JIT path.
+
+    // Hybrid mode: even though the outer C-JIT declined, try C-JIT on
+    // (a) each lowered callee and (b) each top-level For/While loop in
+    // the outer body. Successes are swapped into the JS-JIT'd outer
+    // via forwarder stubs so the outer calls native code at the inner
+    // boundaries. See cJitHybrid.ts.
+    compileHybridCallees(
+      interp,
+      lowered.generatedIRBodies,
+      lowered.generatedFns
+    );
+    compileHybridLoops(
+      interp,
+      lowered.body,
+      lowered.endEnv,
+      lowered.outputNames,
+      lowered.generatedIRBodies,
+      lowered.generatedFns
+    );
   }
 
   // Generate JavaScript for the main function body

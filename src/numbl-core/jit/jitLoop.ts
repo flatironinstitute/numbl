@@ -21,6 +21,7 @@ import {
   JitBailToInterpreter,
 } from "./js/jitHelpers.js";
 import { getCJitBackend } from "./c/cJitBackend.js";
+import { compileHybridCallees, compileHybridLoops } from "./c/cJitHybrid.js";
 import {
   CJitParityError,
   formatCJitParityMessage,
@@ -273,6 +274,21 @@ function tryJitLoop(
       cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
     }
   }
+
+  // Hybrid: outer loop-body bailed from C-JIT but individual callees
+  // and nested loops may still be C-feasible. Swap those in as native
+  // forwarders before JS codegen so the JS-JIT'd loop calls native
+  // code per iteration. (The outer loop stmt itself is lowered.body[0]
+  // here — a degenerate case compileHybridLoops handles the same way.)
+  compileHybridCallees(interp, lowered.generatedIRBodies, lowered.generatedFns);
+  compileHybridLoops(
+    interp,
+    lowered.body,
+    lowered.endEnv,
+    lowered.outputNames,
+    lowered.generatedIRBodies,
+    lowered.generatedFns
+  );
 
   // Generate JavaScript
   const currentFile = interp.currentFile;

@@ -54,6 +54,10 @@ export interface LoweringResult {
   /** Types of all output variables in outputNames order. Mirrors the
    *  shape of JS-JIT's `return [out0, out1, ...]`. */
   outputTypes: JitType[];
+  /** Final typed environment after lowering the body. The hybrid
+   *  loop-extraction pass uses this to look up live-in/live-out var
+   *  types without re-running type inference. */
+  endEnv: TypeEnv;
 }
 
 // ── Internal lowering context (shared with stmt/expr sides) ─────────────
@@ -236,5 +240,6 @@ export function lowerFunction(
     generatedIRBodies: sharedGeneratedIRBodies,
     outputType,
     outputTypes,
+    endEnv: ctx.env,
   };
 }

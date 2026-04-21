@@ -671,6 +671,23 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
       lines.push(`${indent}$rt.$line = ${stmt.line};`);
       break;
 
+    case "UserCallWriteback": {
+      const args = stmt.args.map(a => emitExpr(a));
+      const call = `$h.callUser($rt, ${JSON.stringify(stmt.name)}, ${stmt.jitName}${args.length ? `, ${args.join(", ")}` : ""})`;
+      if (stmt.outputs.length === 0) {
+        lines.push(`${indent}${call};`);
+      } else if (stmt.outputs.length === 1) {
+        lines.push(`${indent}${mangle(stmt.outputs[0])} = ${call};`);
+      } else {
+        const tmp = `$r${++_tmpCounter}`;
+        lines.push(`${indent}const ${tmp} = ${call};`);
+        for (let i = 0; i < stmt.outputs.length; i++) {
+          lines.push(`${indent}${mangle(stmt.outputs[i])} = ${tmp}[${i}];`);
+        }
+      }
+      break;
+    }
+
     case "AssertCJit":
       // C-JIT was expected but we're running JS-JIT fallback → throw.
       lines.push(
