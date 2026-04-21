@@ -172,3 +172,42 @@ function findTensorParamInExpr(
   }
   return null;
 }
+
+/**
+ * Collect distinct tensor names referenced in the chain's expression
+ * trees that are NOT produced by the chain itself (i.e. read from
+ * outside: params or pre-existing locals). Both backends need this to
+ * pick a length-reference tensor when no formal param is in the chain.
+ */
+export function collectInputTensors(
+  chain: FusibleChain,
+  allTensorVars: ReadonlySet<string>
+): Set<string> {
+  const result = new Set<string>();
+  const chainDests = new Set(chain.assigns.map(a => a.destName));
+  for (const a of chain.assigns) {
+    walkForTensors(a.expr, allTensorVars, chainDests, result);
+  }
+  return result;
+}
+
+function walkForTensors(
+  expr: JitExpr,
+  allTensorVars: ReadonlySet<string>,
+  chainDests: ReadonlySet<string>,
+  out: Set<string>
+): void {
+  if (expr.tag === "Var" && allTensorVars.has(expr.name)) {
+    if (!chainDests.has(expr.name)) out.add(expr.name);
+    return;
+  }
+  if (expr.tag === "Binary") {
+    walkForTensors(expr.left, allTensorVars, chainDests, out);
+    walkForTensors(expr.right, allTensorVars, chainDests, out);
+  } else if (expr.tag === "Unary") {
+    walkForTensors(expr.operand, allTensorVars, chainDests, out);
+  } else if (expr.tag === "Call") {
+    for (const a of expr.args)
+      walkForTensors(a, allTensorVars, chainDests, out);
+  }
+}

@@ -26,6 +26,7 @@ import {
   emitFusedScalarExpr,
   fusedLocal,
   findTensorParamInChain,
+  collectInputTensors,
 } from "../fusedScalarEmit.js";
 import {
   C_SCALAR_TARGET,
@@ -218,11 +219,15 @@ function emitRealFusedChain(
   dynamicOutputNames: ReadonlySet<string>,
   openmp?: boolean
 ): void {
-  // Determine the length variable — use the first tensor param referenced.
-  const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
-  const lenVar = refParam
-    ? tensorLen(refParam)
-    : tensorLen(chain.assigns[0].destName);
+  // Determine the length variable — prefer a formal param tensor; if
+  // the chain reads no params (e.g. function bodies with only local
+  // tensors), fall back to any source tensor read by the chain. Using
+  // a destination's length would read 0 on first entry and produce an
+  // empty loop.
+  const refTensor =
+    findTensorParamInChain(chain, paramTensors, allTensorVars) ??
+    [...collectInputTensors(chain, allTensorVars)][0];
+  const lenVar = tensorLen(refTensor ?? chain.assigns[0].destName);
 
   // Determine which dest names need a write-back to their buffer
   // (shared with JS codegen).
@@ -370,10 +375,12 @@ function emitComplexFusedChain(
   complexTensorNames: ReadonlySet<string>,
   complexScalarVars: ReadonlySet<string>
 ): void {
-  const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
-  const lenVar = refParam
-    ? tensorLen(refParam)
-    : tensorLen(chain.assigns[0].destName);
+  // See emitRealFusedChain for rationale — prefer a formal param, then
+  // any source tensor; destination lengths start at 0.
+  const refTensor =
+    findTensorParamInChain(chain, paramTensors, allTensorVars) ??
+    [...collectInputTensors(chain, allTensorVars)][0];
+  const lenVar = tensorLen(refTensor ?? chain.assigns[0].destName);
 
   const { writeBack } = determineWriteBack(chain, outputTensorNames);
 

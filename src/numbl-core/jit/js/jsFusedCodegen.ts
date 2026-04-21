@@ -14,7 +14,6 @@
  * inside the same loop.
  */
 
-import type { JitExpr } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 import {
@@ -22,6 +21,7 @@ import {
   emitFusedScalarExpr,
   fusedLocal,
   findTensorParamInChain,
+  collectInputTensors,
 } from "../fusedScalarEmit.js";
 import {
   JS_REDUCTION_LITERALS,
@@ -125,44 +125,6 @@ function makeJsFusedTarget(mangle: (n: string) => string): FusedTarget {
 }
 
 // ── Public API ────────────────────────────────────────────────────────
-
-/**
- * Collect all distinct tensor names referenced in the chain's expression
- * trees (params and chain-produced locals). We need data aliases for all
- * non-chain-produced tensors (i.e. params / pre-existing vars).
- */
-function collectInputTensors(
-  chain: FusibleChain,
-  allTensorVars: ReadonlySet<string>
-): Set<string> {
-  const result = new Set<string>();
-  const chainDests = new Set(chain.assigns.map(a => a.destName));
-  for (const a of chain.assigns) {
-    walkForTensors(a.expr, allTensorVars, chainDests, result);
-  }
-  return result;
-}
-
-function walkForTensors(
-  expr: JitExpr,
-  allTensorVars: ReadonlySet<string>,
-  chainDests: ReadonlySet<string>,
-  out: Set<string>
-): void {
-  if (expr.tag === "Var" && allTensorVars.has(expr.name)) {
-    if (!chainDests.has(expr.name)) out.add(expr.name);
-    return;
-  }
-  if (expr.tag === "Binary") {
-    walkForTensors(expr.left, allTensorVars, chainDests, out);
-    walkForTensors(expr.right, allTensorVars, chainDests, out);
-  } else if (expr.tag === "Unary") {
-    walkForTensors(expr.operand, allTensorVars, chainDests, out);
-  } else if (expr.tag === "Call") {
-    for (const a of expr.args)
-      walkForTensors(a, allTensorVars, chainDests, out);
-  }
-}
 
 /**
  * Emit a fused per-element loop for the given chain (JS backend).
