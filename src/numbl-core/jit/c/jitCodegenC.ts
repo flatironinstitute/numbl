@@ -83,6 +83,11 @@ export interface GenerateCResult {
   /** True when any Index read was emitted — the function has an extra
    *  `double *__err_flag` trailing param. */
   needsErrorFlag: boolean;
+  /** True when a `disp(...)` call was emitted — the function has an
+   *  extra `void (*__disp_cb)(const char *, double, int)` trailing
+   *  param. The JS wrapper registers a callback that routes back to
+   *  `rt.output`. */
+  needsDispCb: boolean;
 }
 
 /** Per-function emission output. The outer function's result is returned
@@ -97,6 +102,7 @@ interface EmitOneFnResult {
   usesTensors: boolean;
   needsTicState: boolean;
   needsErrorFlag: boolean;
+  needsDispCb: boolean;
   koffiSignature: string;
   cFnName: string;
 }
@@ -203,6 +209,9 @@ export function generateC(
     parts.push(`#include <string.h>`);
     parts.push(`#include "numbl_ops.h"`);
   }
+  if (outer.needsDispCb) {
+    parts.push(`typedef void (*NumblDispCb)(const char *, double, int);`);
+  }
   parts.push("");
 
   for (const def of calleeDefs) {
@@ -221,6 +230,7 @@ export function generateC(
     koffiSignature: outer.koffiSignature,
     needsTicState: outer.needsTicState,
     needsErrorFlag: outer.needsErrorFlag,
+    needsDispCb: outer.needsDispCb,
   };
 }
 
@@ -567,6 +577,7 @@ function emitOneFunction(
     fuse: fuse ?? false,
     needsTicState: false,
     needsErrorFlag: false,
+    needsDispCb: false,
     openmp: openmp ?? false,
     calleeAbi,
     complexScalarVars,
@@ -844,7 +855,8 @@ function emitOneFunction(
     paramOutputTensors,
     unshareTensorParams,
     ctx.needsTicState,
-    ctx.needsErrorFlag
+    ctx.needsErrorFlag,
+    ctx.needsDispCb
   );
 
   const sigParts = abiSlots.map(
@@ -873,6 +885,7 @@ function emitOneFunction(
     usesTensors: cls.tensorVars.size > 0,
     needsTicState: ctx.needsTicState,
     needsErrorFlag: ctx.needsErrorFlag,
+    needsDispCb: ctx.needsDispCb,
     koffiSignature,
     cFnName,
   };

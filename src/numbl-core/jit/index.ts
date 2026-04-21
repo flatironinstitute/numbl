@@ -21,6 +21,7 @@ import {
   CJitParityError,
   formatCJitParityMessage,
 } from "./c/cJitParityError.js";
+import { irHasBailRisk, irHasIO } from "./jitBailSafety.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
@@ -145,6 +146,18 @@ export function tryJitCall(
     return JIT_SKIP;
   }
 
+  // Bail-safety gate: a function that emits I/O (disp/fprintf/…) must
+  // be bail-free, or a mid-execution bail would re-run the call under
+  // the interpreter and duplicate already-printed output.
+  if (
+    irHasIO(lowered.body, lowered.generatedIRBodies) &&
+    irHasBailRisk(lowered.body, lowered.generatedIRBodies)
+  ) {
+    fnWithCache._jitCache.set(cacheKey, null);
+    if (fnWithCache._cJitCache) fnWithCache._cJitCache.set(cacheKey, null);
+    return JIT_SKIP;
+  }
+
   // ── C-JIT path (--opt >= 2) ───────────────────────────────────────────
   // Delegated to a pluggable backend registered at startup by the CLI
   // entry point (src/numbl-core/jit/c/cJitInstall.ts). The
@@ -250,7 +263,11 @@ export function tryJitCall(
   // We reach here only if C-JIT was attempted and declined. JS-JIT just
   // compiled successfully, so this is the parity gap the flag is meant to
   // surface — throw instead of silently downgrading.
-  if (interp.checkCJitParity && cJitBail) {
+  if (
+    interp.checkCJitParity &&
+    cJitBail &&
+    !irHasIO(lowered.body, lowered.generatedIRBodies)
+  ) {
     throw new CJitParityError(
       formatCJitParityMessage({
         kind: cJitBail.kind,

@@ -263,6 +263,35 @@ function walkStmts(stmts: JitStmt[], out: VarRefs): void {
   for (const s of stmts) walkStmt(s, out);
 }
 
+/**
+ * Walk the body in source order and return the set of variable names
+ * that are read BEFORE being unconditionally written on that iteration
+ * — i.e. genuine loop-carried reads that require a live-in.
+ *
+ * Only a plain top-level `Assign` (no `.name` self-read) counts as an
+ * unconditional pre-write. Conditional branches, index writes, and
+ * nested loops are not pre-writes. This is a sound under-approximation:
+ * false-negative pre-writes mean a var is treated as live-in (extra
+ * arg but still correct); false-positive pre-writes would drop a real
+ * live-in and break semantics, so we're careful not to claim a write
+ * is unconditional unless we're sure.
+ */
+function genuineLoopReads(stmts: JitStmt[]): Set<string> {
+  const preWritten = new Set<string>();
+  const genuine = new Set<string>();
+  for (const s of stmts) {
+    const r = emptyRefs();
+    walkStmt(s, r);
+    for (const n of r.reads) {
+      if (!preWritten.has(n)) genuine.add(n);
+    }
+    if (s.tag === "Assign" && !r.reads.has(s.name)) {
+      preWritten.add(s.name);
+    }
+  }
+  return genuine;
+}
+
 function hashStr(s: string): string {
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
@@ -302,6 +331,38 @@ export function compileHybridLoops(
     for (const n of r.reads) suffixReads[i].add(n);
   }
 
+  // Precompute, for each outer stmt index, the set of variables that
+  // are definitely defined (have a real value) at that point. A var is
+  // defined if it's an outer param (no outer write ever touches it) or
+  // the previous outer stmt was a plain `Assign` that unconditionally
+  // wrote it. Conditional / control-flow writes don't count.
+  //
+  // The hybrid-loop extraction consults this: a variable can only be
+  // a live-in if it's defined at the extraction point — otherwise the
+  // call site would pass `undefined`.
+  const outerWrites = new Set<string>();
+  for (const s of outerBody) {
+    const r = emptyRefs();
+    walkStmt(s, r);
+    for (const n of r.writes) outerWrites.add(n);
+  }
+  const definedBefore: Set<string>[] = new Array(outerBody.length + 1);
+  const paramsDef = new Set<string>();
+  for (const n of outerEndEnv.keys()) {
+    if (!outerWrites.has(n)) paramsDef.add(n);
+  }
+  definedBefore[0] = paramsDef;
+  for (let i = 0; i < outerBody.length; i++) {
+    const s = outerBody[i];
+    const next = new Set(definedBefore[i]);
+    if (s.tag === "Assign") {
+      const r = emptyRefs();
+      walkExpr(s.expr, r);
+      if (!r.reads.has(s.name)) next.add(s.name);
+    }
+    definedBefore[i + 1] = next;
+  }
+
   for (let i = 0; i < outerBody.length; i++) {
     const stmt = outerBody[i];
     if (stmt.tag !== "For" && stmt.tag !== "While") continue;
@@ -309,24 +370,6 @@ export function compileHybridLoops(
     const refs = emptyRefs();
     walkStmt(stmt, refs);
     if (refs.hasControl || refs.hasUnknown) continue;
-
-    // Live-in: any name read by the loop that has a type in the outer env.
-    // Exclude the loop var (it's an output, not an input).
-    const liveInNames: string[] = [];
-    const liveInTypes: JitType[] = [];
-    const addLiveIn = (name: string): void => {
-      if (stmt.tag === "For" && name === stmt.varName) return;
-      if (liveInNames.includes(name)) return;
-      const t = outerEndEnv.get(name);
-      if (!t) return;
-      liveInNames.push(name);
-      liveInTypes.push(t);
-    };
-    for (const n of refs.reads) addLiveIn(n);
-    // A var that's written in the loop and also pre-exists in outer scope
-    // must come in as an input so the initial value is preserved (e.g.
-    // `s = 0; for ... s = s + ...; end`).
-    for (const n of refs.writes) addLiveIn(n);
 
     // Live-out: loop var + any write that's read after the loop (or is
     // an outer fn output). Vars that are locally-scoped to the loop
@@ -337,7 +380,7 @@ export function compileHybridLoops(
     for (const n of refs.writes) {
       if (liveOutNames.includes(n)) continue;
       if (stmt.tag === "For" && n === stmt.varName) continue;
-      if (later.has(n) || liveInNames.includes(n)) liveOutNames.push(n);
+      if (later.has(n)) liveOutNames.push(n);
     }
     if (liveOutNames.length === 0) continue;
 
@@ -345,6 +388,48 @@ export function compileHybridLoops(
       n => outerEndEnv.get(n) ?? { kind: "unknown" as const }
     );
     if (liveOutTypes.some(t => t.kind === "unknown")) continue;
+
+    // Live-in: vars genuinely read before any pre-write on this
+    // iteration, plus vars written by the loop that are ALSO liveOut
+    // (the loop may only conditionally write them, so the pre-loop
+    // value must flow through). Exclude the loop var. Write-only
+    // locals that aren't observed after the loop are NOT live-in —
+    // they're fresh per iteration.
+    const loopBody =
+      stmt.tag === "For" || stmt.tag === "While" ? stmt.body : [];
+    const genuineReads = genuineLoopReads(loopBody);
+    const defined = definedBefore[i];
+    const liveInNames: string[] = [];
+    const liveInTypes: JitType[] = [];
+    const addLiveIn = (name: string): void => {
+      if (stmt.tag === "For" && name === stmt.varName) return;
+      if (liveInNames.includes(name)) return;
+      // Must be defined at the extraction point — otherwise the call
+      // site would pass undefined.
+      if (!defined.has(name)) return;
+      const t = outerEndEnv.get(name);
+      if (!t) return;
+      liveInNames.push(name);
+      liveInTypes.push(t);
+    };
+    // Also include reads that come from the loop's own header (start /
+    // step / end / While cond) — these fire before the body, so any
+    // body-level pre-write doesn't apply.
+    if (stmt.tag === "For") {
+      const hdr = emptyRefs();
+      walkExpr(stmt.start, hdr);
+      if (stmt.step) walkExpr(stmt.step, hdr);
+      walkExpr(stmt.end, hdr);
+      for (const n of hdr.reads) addLiveIn(n);
+    } else {
+      const hdr = emptyRefs();
+      walkExpr(stmt.cond, hdr);
+      for (const n of hdr.reads) addLiveIn(n);
+    }
+    for (const n of genuineReads) addLiveIn(n);
+    for (const n of refs.writes) {
+      if (liveOutNames.includes(n)) addLiveIn(n);
+    }
 
     // Locals: any write that isn't a param. Outputs that are not also
     // params still need a local declaration in the synthetic fn (the C

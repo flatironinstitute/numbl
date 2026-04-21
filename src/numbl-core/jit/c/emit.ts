@@ -53,6 +53,26 @@ import {
   type EmitCtx,
 } from "./codegenCtx.js";
 
+/** Escape a JS string into a C string literal (double-quoted, with C
+ *  escapes for backslash, double-quote, and common control chars;
+ *  non-ASCII bytes encoded as `\xNN` octets of their UTF-8 encoding). */
+function cStringLiteral(s: string): string {
+  const bytes = Buffer.from(s, "utf-8");
+  let out = '"';
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    if (b === 0x5c /* \ */) out += "\\\\";
+    else if (b === 0x22 /* " */) out += '\\"';
+    else if (b === 0x0a) out += "\\n";
+    else if (b === 0x0d) out += "\\r";
+    else if (b === 0x09) out += "\\t";
+    else if (b >= 0x20 && b < 0x7f) out += String.fromCharCode(b);
+    else out += "\\x" + b.toString(16).padStart(2, "0");
+  }
+  out += '"';
+  return out;
+}
+
 /** Resolve a tensor name's meta or throw — the tensor-creation emit
  *  helpers below depend on the name being classified (with
  *  `hasFreshAlloc`) for the d0/d1 locals they write to actually exist
@@ -1091,6 +1111,22 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
   if (expr.name === "toc" && expr.args.length === 0) {
     ctx.needsTicState = true;
     return `numbl_toc(__tic_state)`;
+  }
+  // disp(str_literal | numeric_scalar) — route through the
+  // JS-registered NumblDispCb callback. The call is a void expression
+  // wrapped by ExprStmt's `(void)(...)`. Strings are passed via `s` with
+  // kind=0; numbers via `num` with kind=1. Cast result to `double` so
+  // the containing expression context (always ExprStmt today) still
+  // type-checks; the cast is a no-op at runtime.
+  if (expr.name === "disp" && expr.args.length === 1) {
+    const a = expr.args[0];
+    ctx.needsDispCb = true;
+    if (a.tag === "StringLiteral") {
+      const s = cStringLiteral(a.value);
+      return `(__disp_cb(${s}, 0.0, 0), 0.0)`;
+    }
+    const numCode = emitExpr(a, ctx);
+    return `(__disp_cb((const char *)0, (double)(${numCode}), 1), 0.0)`;
   }
   // real / imag / conj on a complex scalar arg. conj(z) is complex and
   // handled in emitComplex; here we handle the real-returning cases

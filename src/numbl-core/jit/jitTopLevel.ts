@@ -35,6 +35,7 @@ import { inferJitType } from "../interpreter/builtins/types.js";
 import { analyzeTopLevel } from "./jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../runtime/types.js";
+import { JIT_IO_BUILTINS, irHasBailRisk, irHasIO } from "./jitBailSafety.js";
 
 const KNOWN_CONSTANTS = new Set([
   "pi",
@@ -58,20 +59,26 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
   if (stmts.length === 0) return false;
 
   // MATLAB displays unsuppressed top-level statements. The JIT has no
-  // emit for display calls, so when display is on we bail if any stmt
-  // at the top level is unsuppressed (which is the set that would
-  // normally print). Loops/functions in the body are fine — their
-  // bodies' unsuppressed stmts don't print in MATLAB anyway.
+  // emit for auto-display, so when display is on we bail for any stmt
+  // that would normally print. Void-call ExprStmts (disp/fprintf/etc.)
+  // don't auto-display — MATLAB doesn't set `ans` for them — so an
+  // unsuppressed void call is fine to JIT.
   if (interp.rt.displayResults) {
     for (const s of stmts) {
       if (
         (s.type === "Assign" ||
           s.type === "AssignLValue" ||
-          s.type === "MultiAssign" ||
-          s.type === "ExprStmt") &&
+          s.type === "MultiAssign") &&
         !s.suppressed
       ) {
         return false;
+      }
+      if (s.type === "ExprStmt" && !s.suppressed) {
+        const e = s.expr;
+        const isVoidCall =
+          e.type === "FuncCall" &&
+          (JIT_IO_BUILTINS.has(e.name) || e.name === "tic");
+        if (!isVoidCall) return false;
       }
     }
   }
@@ -183,6 +190,19 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     return false;
   }
 
+  // Bail-safety gate: if the body contains I/O (disp/fprintf/…) and
+  // *any* mid-execution bail could fire, decline to JIT. Re-running
+  // via the interpreter after a bail would duplicate already-emitted
+  // output, which the user would see.
+  if (
+    irHasIO(lowered.body, lowered.generatedIRBodies) &&
+    irHasBailRisk(lowered.body, lowered.generatedIRBodies)
+  ) {
+    interp.loopJitCache.set(cacheKey, null);
+    interp.loopCJitCache.set(cacheKey, null);
+    return false;
+  }
+
   // ── C-JIT path (--opt >= 2) ─────────────────────────────────────────
   let cJitBail: {
     kind: "infeasible" | "env";
@@ -262,7 +282,11 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     return false;
   }
 
-  if (interp.checkCJitParity && cJitBail) {
+  if (
+    interp.checkCJitParity &&
+    cJitBail &&
+    !irHasIO(lowered.body, lowered.generatedIRBodies)
+  ) {
     throw new CJitParityError(
       formatCJitParityMessage({
         kind: cJitBail.kind,

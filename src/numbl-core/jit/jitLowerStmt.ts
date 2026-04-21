@@ -18,6 +18,7 @@ import { getIBuiltin } from "../interpreter/builtins/index.js";
 import { offsetToLineFast } from "../runtime/error.js";
 import type { LowerCtx } from "./jitLower.js";
 import { lowerExpr, lowerIBuiltinCall } from "./jitLowerExpr.js";
+import { JIT_IO_BUILTINS as JIT_VOID_IO_BUILTINS } from "./jitBailSafety.js";
 
 /** Returns true/false when the expr is a known constant scalar, else null. */
 function constantBool(e: JitExpr): boolean | null {
@@ -69,10 +70,15 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
       break;
     case "ExprStmt":
       // Most ExprStmts set `ans` in the env, which the JIT codegen
-      // doesn't do — bail. Exception: `tic;` (no args, no assignment)
-      // is a side-effect-only call that we can JIT. `tic;` parses as
-      // either a bare Ident or a zero-arg FuncCall depending on source;
-      // accept both.
+      // doesn't do — bail. Exceptions:
+      //   - `tic;` (no args, no assignment) is a side-effect-only call
+      //     that we can JIT. `tic;` parses as either a bare Ident or a
+      //     zero-arg FuncCall depending on source; accept both.
+      //   - `disp/fprintf/printf/warning(...)` are I/O void calls: emit
+      //     as a runtime-dispatched `Call` with an "unknown" jitType.
+      //     The bail-safety gate ensures we only keep these if no
+      //     mid-execution bail is possible (else the I/O could be
+      //     duplicated on interpreter re-run).
       {
         const e = stmt.expr;
         const isTicIdent = e.type === "Ident" && e.name === "tic";
@@ -87,6 +93,26 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
             result = [...prefix, { tag: "ExprStmt", expr: lowered }];
             return result;
           }
+        }
+        if (
+          e.type === "FuncCall" &&
+          JIT_VOID_IO_BUILTINS.has(e.name) &&
+          !ctx.env.has(e.name)
+        ) {
+          const loweredArgs: JitExpr[] = [];
+          for (const arg of e.args) {
+            const la = lowerExpr(ctx, arg);
+            if (!la) return null;
+            loweredArgs.push(la);
+          }
+          const call: JitExpr = {
+            tag: "Call",
+            name: e.name,
+            args: loweredArgs,
+            jitType: { kind: "unknown" },
+          };
+          result = [...prefix, { tag: "ExprStmt", expr: call }];
+          return result;
         }
       }
       return null;

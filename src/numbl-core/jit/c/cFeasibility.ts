@@ -131,8 +131,14 @@ function checkExpr(
   ctx: Ctx,
   allowTensorUserCall: boolean = false
 ): FeasibilityResult {
-  const typeCheck = checkValueType(expr.jitType);
-  if (!typeCheck.ok) return fail(ctx, typeCheck.reason);
+  // Void-returning I/O calls (disp) carry jitType:unknown by design —
+  // they only appear in ExprStmt position where the result is
+  // discarded. Skip the type check and let `checkCall` decide.
+  const isVoidIoCall = expr.tag === "Call" && expr.name === "disp";
+  if (!isVoidIoCall) {
+    const typeCheck = checkValueType(expr.jitType);
+    if (!typeCheck.ok) return fail(ctx, typeCheck.reason);
+  }
 
   switch (expr.tag) {
     case "NumberLiteral":
@@ -683,6 +689,18 @@ function checkCall(
     // length / isempty only need `_len` (and optionally `_d0`/`_d1`) —
     // they don't care whether the tensor is real or complex.
     return { ok: true };
+  }
+  // disp: supported for string/char literals and real numeric scalars.
+  // The emitter routes these through a JS-registered callback
+  // (NumblDispCb) that calls back into `rt.output`. Tensor / complex /
+  // char-var args are still out of scope — fall through to the generic
+  // "non-C-mappable" failure.
+  if (expr.name === "disp" && expr.args.length === 1) {
+    const a = expr.args[0];
+    if (a.tag === "StringLiteral") return { ok: true };
+    if (a.jitType.kind === "number" || a.jitType.kind === "boolean") {
+      return checkExpr(a, ctx);
+    }
   }
   return fail(ctx, `non-C-mappable builtin: ${expr.name}`);
 }

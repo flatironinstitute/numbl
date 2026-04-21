@@ -27,6 +27,7 @@ import {
   formatCJitParityMessage,
 } from "./c/cJitParityError.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
+import { irHasBailRisk, irHasIO } from "./jitBailSafety.js";
 import {
   analyzeForLoop,
   analyzeWhileLoop,
@@ -237,6 +238,18 @@ function tryJitLoop(
     return false;
   }
 
+  // Bail-safety gate: loops with I/O (e.g. progress prints) must not
+  // bail mid-execution, or the interpreter re-run would duplicate
+  // already-emitted output.
+  if (
+    irHasIO(lowered.body, lowered.generatedIRBodies) &&
+    irHasBailRisk(lowered.body, lowered.generatedIRBodies)
+  ) {
+    interp.loopJitCache.set(cacheKey, null);
+    interp.loopCJitCache.set(cacheKey, null);
+    return false;
+  }
+
   // ── C-JIT path (--opt >= 2) ─────────────────────────────────────────
   // Mirror jit/index.ts: try the backend; on bail, fall through to JS-JIT
   // (or throw under --check-c-jit-parity).
@@ -327,7 +340,11 @@ function tryJitLoop(
 
   // ── Parity check (--check-c-jit-parity) ───────────────────────────────
   // JS-JIT just compiled, so if the C-JIT declined above it's a parity gap.
-  if (interp.checkCJitParity && cJitBail) {
+  if (
+    interp.checkCJitParity &&
+    cJitBail &&
+    !irHasIO(lowered.body, lowered.generatedIRBodies)
+  ) {
     const file = stmt.span?.file ?? interp.currentFile;
     const callSiteLine = stmt.span?.start ?? interp.rt.$line ?? 0;
     throw new CJitParityError(

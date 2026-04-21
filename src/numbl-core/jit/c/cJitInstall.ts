@@ -42,6 +42,32 @@ function getKoffi(): typeof import("koffi") {
   return _koffi;
 }
 
+/** Register the `NumblDispCb` callback type with koffi exactly once.
+ *  The C-JIT emits `NumblDispCb *` in the function signature; koffi needs
+ *  the proto to be declared before any `lib.func()` that references it. */
+let _dispCbProtoRegistered = false;
+function ensureDispCbProto(): void {
+  if (_dispCbProtoRegistered) return;
+  _dispCbProtoRegistered = true;
+  const k = getKoffi() as unknown as {
+    proto: (sig: string) => unknown;
+  };
+  k.proto("void NumblDispCb(const char *, double, int)");
+}
+
+/** Match the JS-JIT's `formatNumber` (runtime/display.ts) so C-emitted
+ *  `disp(x)` produces byte-identical output to JS-emitted `disp(x)`. */
+function formatJitNumber(n: number): string {
+  if (Number.isInteger(n) && Math.abs(n) < 1e15) {
+    return n.toString();
+  }
+  const s = n.toPrecision(5);
+  if (s.includes(".")) {
+    return s.replace(/\.?0+$/, "") || "0";
+  }
+  return s;
+}
+
 /** Per-output buffer record passed between the JS wrapper's output-alloc
  *  step and the slot-marshalling + result-extraction steps. Shared with
  *  the closure-local `outputBufs` below. */
@@ -73,7 +99,8 @@ function marshalSlot(
   callArgs: unknown[],
   outputBufs: OutputBuf[],
   ticStateBuf: Float64Array | undefined,
-  errorFlagBuf: Float64Array | undefined
+  errorFlagBuf: Float64Array | undefined,
+  dispCb: unknown
 ): unknown {
   switch (slot.kind) {
     case "scalar": {
@@ -147,6 +174,8 @@ function marshalSlot(
       return ticStateBuf!;
     case "errFlag":
       return errorFlagBuf!;
+    case "dispCb":
+      return dispCb;
   }
 }
 
@@ -205,6 +234,10 @@ registerCJitBackend({
       return { ok: false, kind: "infeasible", reason: `codegen: ${msg}` };
     }
 
+    // If the generated signature references NumblDispCb, register the
+    // proto globally before compileAndLoad declares the koffi function.
+    if (gen.needsDispCb) ensureDispCbProto();
+
     const useOmp = interp.par && cJitOpenmpAvailable();
     const loaded = compileAndLoad(
       gen.cSource,
@@ -250,6 +283,26 @@ registerCJitBackend({
     const errorFlagBuf: Float64Array | undefined = gen.needsErrorFlag
       ? new Float64Array(1)
       : undefined;
+
+    // disp callback: route C-emitted disp calls back into `rt.output`.
+    // Registered once per compiled-fn, captures `interp` via closure so
+    // lazy-resolved `rt` picks up the current interp run. The callback
+    // ptr is passed to the native fn as a trailer arg on each call.
+    let dispCb: unknown = null;
+    if (gen.needsDispCb) {
+      const k = getKoffi() as unknown as {
+        pointer: (name: string) => unknown;
+        register: (fn: unknown, ptrType: unknown) => unknown;
+      };
+      const cb = (sPtr: string | null, num: number, kind: number): void => {
+        if (kind === 0) {
+          interp.rt.output((sPtr ?? "") + "\n");
+        } else {
+          interp.rt.output(formatJitNumber(num) + "\n");
+        }
+      };
+      dispCb = k.register(cb, k.pointer("NumblDispCb"));
+    }
 
     const compiledFn = (...callArgs: unknown[]): unknown => {
       // Track the first tensor input's shape so scalar-shaped outputs
@@ -339,7 +392,14 @@ registerCJitBackend({
       // `kind` tells us which JS value to push, and the paramIdx /
       // outputIdx backrefs name the source.
       const koffiArgs: unknown[] = abiSlots.map(slot =>
-        marshalSlot(slot, callArgs, outputBufs, ticStateBuf, errorFlagBuf)
+        marshalSlot(
+          slot,
+          callArgs,
+          outputBufs,
+          ticStateBuf,
+          errorFlagBuf,
+          dispCb
+        )
       );
 
       // Call the C function.

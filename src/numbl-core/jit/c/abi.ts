@@ -58,7 +58,13 @@ export type AbiSlotKind =
   | "dynOutD1"
   // Trailer slots — value comes from per-call shared buffers.
   | "ticState"
-  | "errFlag";
+  | "errFlag"
+  /** Callback for `disp(...)` — JS-registered function pointer. The C
+   *  body invokes it directly; the JS wrapper supplies a koffi-registered
+   *  pointer that routes into `rt.output`. Signature:
+   *    void __disp_cb(const char *s, double num, int kind)
+   *  kind=0 => use `s`, kind=1 => use `num`. */
+  | "dispCb";
 
 export interface AbiSlot {
   kind: AbiSlotKind;
@@ -125,7 +131,8 @@ export function buildAbiSlots(
   paramOutputTensors: Set<string>,
   unshareTensorParams: Set<string>,
   needsTicState: boolean,
-  needsErrorFlag: boolean
+  needsErrorFlag: boolean,
+  needsDispCb: boolean
 ): AbiSlot[] {
   paramDescs.forEach((pd, pi) => {
     if (pd.kind === "tensor") {
@@ -312,6 +319,14 @@ export function buildAbiSlots(
       cType: "double *",
       cName: "__err_flag",
       koffiType: "double *",
+    });
+  }
+  if (needsDispCb) {
+    abiSlots.push({
+      kind: "dispCb",
+      cType: "NumblDispCb",
+      cName: "__disp_cb",
+      koffiType: "NumblDispCb *",
     });
   }
   return abiSlots;

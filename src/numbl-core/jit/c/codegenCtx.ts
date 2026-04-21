@@ -218,6 +218,10 @@ export interface EmitCtx {
    *  and the __numbl_idx1r helper. JS wrapper checks the flag after the
    *  call and throws "Index exceeds array bounds" if set. */
   needsErrorFlag: boolean;
+  /** Set when a `disp(...)` call is emitted — triggers the __disp_cb
+   *  trailer parameter. The JS wrapper registers a koffi callback that
+   *  routes back into `rt.output` with MATLAB-style formatting. */
+  needsDispCb: boolean;
   /** Emit `#pragma omp parallel for` on fused non-reduction loops. */
   openmp: boolean;
   /** ABI of every reachable UserCall callee (keyed by `jitName`). Populated
