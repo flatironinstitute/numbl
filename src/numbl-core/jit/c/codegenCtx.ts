@@ -23,7 +23,14 @@ export interface CalleeAbi {
 }
 
 const MANGLE_PREFIX = "v_";
-const IM_SUFFIX = "_im";
+/** Prefix for the imag companion of a complex scalar / tensor name.
+ *  We use `__im_v_NAME` instead of `v_NAME_im` to avoid colliding with
+ *  user-defined names that happen to end in `_im` (e.g. user has both
+ *  `s` as a complex scalar and `s_im` as a separate real scalar — the
+ *  suffix form would map both to the same C identifier). The `__`
+ *  prefix matches the internal-temp namespace already used for scratch
+ *  locals / loop temps, which user code is unlikely to collide with. */
+const IM_PREFIX = "__im_";
 
 /**
  * Minimum NUMBL_JIT_RT_VERSION the emitter needs at link time.
@@ -51,7 +58,7 @@ export function mangle(name: string): string {
 /** Imaginary part of a complex scalar local / param. Paired with
  *  `mangle(name)` (the real part). */
 export function mangleIm(name: string): string {
-  return `${MANGLE_PREFIX}${name}${IM_SUFFIX}`;
+  return `${IM_PREFIX}${MANGLE_PREFIX}${name}`;
 }
 
 /** Join a C type and an identifier with a space unless the type already
@@ -158,9 +165,12 @@ export function tensorData(name: string): string {
  *  `tensorData(name)` — both locals carry the same length and shape
  *  info. The kernels in numbl_ops accept NULL for the imag pointer as
  *  "all zero", so a nominally-complex tensor whose `.imag` is undefined
- *  can still be passed efficiently without allocating a zero buffer. */
+ *  can still be passed efficiently without allocating a zero buffer.
+ *
+ *  Uses the `__im_` prefix so a user variable `x_data_im` can't collide
+ *  with the imag companion of `x`'s tensor data. */
 export function tensorDataIm(name: string): string {
-  return `${mangle(name)}_data_im`;
+  return `${IM_PREFIX}${tensorData(name)}`;
 }
 export function tensorLen(name: string): string {
   return `${mangle(name)}_len`;
@@ -276,7 +286,7 @@ export function scratchData(n: number): string {
 /** Imaginary companion for a complex scratch buffer. Only declared in
  *  the prelude when the scratch index appears in ctx.complexScratch. */
 export function scratchDataIm(n: number): string {
-  return `__s${n}_data_im`;
+  return `${IM_PREFIX}__s${n}_data`;
 }
 export function scratchLen(n: number): string {
   return `__s${n}_len`;

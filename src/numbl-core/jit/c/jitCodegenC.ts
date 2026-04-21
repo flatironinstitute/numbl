@@ -598,7 +598,7 @@ function emitOneFunction(
         );
         if (od.isComplex) {
           epilogueLines.push(
-            `${indent}*${mangle(od.name)}_buf_im_out = ${tensorDataIm(od.name)};`
+            `${indent}*__im_${mangle(od.name)}_buf_out = ${tensorDataIm(od.name)};`
           );
         }
         epilogueLines.push(
@@ -741,7 +741,7 @@ function emitOneFunction(
       );
       if (isComplex) {
         preludeLines.push(
-          `${indent}double *${tensorDataIm(p)} = ${mangle(p)}_buf_im;`
+          `${indent}double *${tensorDataIm(p)} = __im_${mangle(p)}_buf;`
         );
       }
       preludeLines.push(
@@ -804,7 +804,7 @@ function emitOneFunction(
         );
         if (isComplex) {
           preludeLines.push(
-            `${indent}double *${tensorDataIm(local)} = ${mangle(local)}_buf_im;`
+            `${indent}double *${tensorDataIm(local)} = __im_${mangle(local)}_buf;`
           );
         }
       } else {

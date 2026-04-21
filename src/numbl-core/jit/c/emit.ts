@@ -197,6 +197,38 @@ function emitComplex(expr: JitExpr, ctx: EmitCtx): ComplexPair {
         const o = emitComplex(expr.args[0], ctx);
         return { re: o.im, im: "0.0" };
       }
+      // Complex tensor reduction returning a complex scalar (sum / prod
+      // / any / all on a complex tensor). numbl_complex_flat_reduce
+      // writes into two scratch doubles; return those as the pair.
+      const opEnum = getTensorReductionOp(expr.name);
+      if (
+        opEnum &&
+        expr.args.length === 1 &&
+        expr.args[0].jitType.kind === "tensor" &&
+        expr.args[0].jitType.isComplex === true
+      ) {
+        if (!ctx.pendingStmts) {
+          throw new Error(
+            `C-JIT codegen: complex reduction '${expr.name}' outside statement context`
+          );
+        }
+        const { lines, indent } = ctx.pendingStmts;
+        const operand = emitComplexTensorExprToStmts(
+          lines,
+          indent,
+          expr.args[0],
+          ctx
+        );
+        const n = ++ctx.tmp.n;
+        const reVar = `__cr${n}_re`;
+        const imVar = `__cr${n}_im`;
+        lines.push(`${indent}double ${reVar} = 0.0;`);
+        lines.push(`${indent}double ${imVar} = 0.0;`);
+        lines.push(
+          `${indent}numbl_complex_flat_reduce(${opEnum}, (size_t)${operand.len}, ${operand.data}, ${operand.dataIm}, &${reVar}, &${imVar});`
+        );
+        return { re: reVar, im: imVar };
+      }
       throw new Error(`C-JIT codegen: unsupported complex Call '${expr.name}'`);
     }
 
@@ -449,7 +481,12 @@ function emitIndex(expr: JitExpr & { tag: "Index" }, ctx: EmitCtx): string {
 
 /** For tensor binary/unary, we need multi-statement emission. This helper
  *  emits the operation as statements into `lines` and returns the result
- *  data pointer variable name. */
+ *  data pointer variable name. Callers that route the result into a
+ *  named dst (vs. a scratch) must use the scratch-transfer pattern —
+ *  let this helper write the full expression into a fresh scratch via
+ *  `emitTensorExprToStmts`, then `emitEnsureTensorBuf` + memcpy into
+ *  the dst. That ordering avoids clobbering an operand that aliases
+ *  the dst (e.g. `r = r .* y + 3.0`). */
 function emitTensorBinaryStmts(
   lines: string[],
   indent: string,
@@ -800,6 +837,27 @@ function emitTensorExprToStmts(
   }
 
   if (expr.tag === "Call" && isTensorExpr(expr)) {
+    // abs(complex_tensor) as a scratch sub-expression → real scratch.
+    // Checked before the tensorUnaryOp path so real-abs doesn't grab
+    // a complex arg (the real kernel would silently look at re only).
+    if (
+      expr.name === "abs" &&
+      expr.args.length === 1 &&
+      expr.args[0].jitType.kind === "tensor" &&
+      expr.args[0].jitType.isComplex === true
+    ) {
+      const arg = emitComplexTensorExprToStmts(
+        lines,
+        indent,
+        expr.args[0],
+        ctx
+      );
+      emitScratchBufAlloc(lines, indent, sData, sLen, arg.len);
+      lines.push(
+        `${indent}numbl_complex_abs((size_t)${sLen}, ${arg.data}, ${arg.dataIm}, ${sData});`
+      );
+      return { data: sData, len: sLen };
+    }
     const opEnum = getTensorUnaryOp(expr.name);
     if (opEnum) {
       const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
@@ -964,6 +1022,29 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     const opEnum = getTensorReductionOp(expr.name);
     if (opEnum) {
       const arg = expr.args[0];
+      // Complex-tensor arg with a real scalar result (any/all). Feasibility
+      // already restricts to opcodes numbl_complex_flat_reduce accepts.
+      // sum/prod on complex go through emitComplex — only any/all arrive
+      // here with a real scalar return type.
+      if (
+        arg.jitType.kind === "tensor" &&
+        arg.jitType.isComplex === true &&
+        ctx.pendingStmts
+      ) {
+        const { lines, indent } = ctx.pendingStmts;
+        const operand = emitComplexTensorExprToStmts(lines, indent, arg, ctx);
+        const n = ++ctx.tmp.n;
+        const reVar = `__cr${n}_re`;
+        const imVar = `__cr${n}_im`;
+        lines.push(`${indent}double ${reVar} = 0.0;`);
+        lines.push(`${indent}double ${imVar} = 0.0;`);
+        lines.push(
+          `${indent}numbl_complex_flat_reduce(${opEnum}, (size_t)${operand.len}, ${operand.data}, ${operand.dataIm}, &${reVar}, &${imVar});`
+        );
+        // any/all write the flag into out_re; out_im is untouched (per
+        // numbl_ops.h). Return re as the scalar result.
+        return reVar;
+      }
       if (arg.tag === "Var" && isTensorVar(ctx, arg.name)) {
         return `numbl_reduce_flat(${opEnum}, ${tensorData(arg.name)}, ${tensorLen(arg.name)})`;
       }
@@ -977,7 +1058,7 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
         return `numbl_reduce_flat(${opEnum}, ${tensorResult.data}, ${tensorResult.len})`;
       }
       throw new Error(
-        `C-JIT codegen: reduction of complex tensor expr outside statement context`
+        `C-JIT codegen: reduction of tensor expr outside statement context`
       );
     }
   }
@@ -1474,26 +1555,50 @@ function emitComplexTensorAssignInner(
   const dDataIm = tensorDataIm(destName);
   const dLen = tensorLen(destName);
 
-  if (expr.tag === "Binary" && isTensorExpr(expr)) {
-    const lenExpr = findTensorLenExpr(expr, ctx);
-    const tensorOperand = isTensorExpr(expr.left) ? expr.left : expr.right;
+  // All compound RHS cases (Binary / Unary Minus / conj) go through
+  // the scratch-transfer pattern: eval the whole expression into a
+  // fresh complex scratch, then free+malloc dst and memcpy both
+  // buffers across. This defuses self-aliasing (`z = z .* conj(z)`,
+  // `z = -z`, etc.) — the scratch reads v_z_data before v_z_data is
+  // freed.
+  if (
+    (expr.tag === "Binary" && isTensorExpr(expr)) ||
+    (expr.tag === "Unary" &&
+      isTensorExpr(expr) &&
+      expr.op === UnaryOperation.Minus) ||
+    (expr.tag === "Call" && isTensorExpr(expr) && expr.name === "conj")
+  ) {
+    const scratch = emitComplexTensorExprToStmts(lines, indent, expr, ctx);
+    // Shape source: for Binary, the tensor-typed operand; for Unary
+    // and conj, the single operand.
+    const shapeSrc: JitExpr =
+      expr.tag === "Binary"
+        ? isTensorExpr(expr.left)
+          ? expr.left
+          : expr.right
+        : expr.tag === "Unary"
+          ? expr.operand
+          : expr.args[0];
     emitEnsureComplexTensorBuf(
       lines,
       indent,
       destName,
-      lenExpr,
+      scratch.len,
       ctx,
-      tensorOperand
+      shapeSrc
     );
-    emitComplexTensorBinaryStmts(
-      lines,
-      indent,
-      expr,
-      ctx,
-      dData,
-      dDataIm,
-      dLen
+    lines.push(
+      `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
     );
+    lines.push(`${indent}if (${scratch.dataIm}) {`);
+    lines.push(
+      `${indent}  if (${dLen} > 0) memcpy(${dDataIm}, ${scratch.dataIm}, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}} else {`);
+    lines.push(
+      `${indent}  if (${dLen} > 0) memset(${dDataIm}, 0, (size_t)${dLen} * sizeof(double));`
+    );
+    lines.push(`${indent}}`);
     return;
   }
 
@@ -1502,55 +1607,6 @@ function emitComplexTensorAssignInner(
       emitComplexTensorAssign(lines, indent, destName, expr.operand, ctx);
       return;
     }
-    if (expr.op === UnaryOperation.Minus) {
-      const operand = emitComplexTensorExprToStmts(
-        lines,
-        indent,
-        expr.operand,
-        ctx
-      );
-      emitEnsureComplexTensorBuf(
-        lines,
-        indent,
-        destName,
-        operand.len,
-        ctx,
-        expr.operand
-      );
-      lines.push(
-        `${indent}numbl_complex_scalar_binary_elemwise(NUMBL_COMPLEX_BIN_MUL, (size_t)${dLen}, -1.0, 0.0, ${operand.data}, ${operand.dataIm}, 1, ${dData}, ${dDataIm});`
-      );
-      return;
-    }
-  }
-
-  if (expr.tag === "Call" && isTensorExpr(expr) && expr.name === "conj") {
-    const operand = emitComplexTensorExprToStmts(
-      lines,
-      indent,
-      expr.args[0],
-      ctx
-    );
-    emitEnsureComplexTensorBuf(
-      lines,
-      indent,
-      destName,
-      operand.len,
-      ctx,
-      expr.args[0]
-    );
-    lines.push(
-      `${indent}if (${dLen} > 0) memcpy(${dData}, ${operand.data}, (size_t)${dLen} * sizeof(double));`
-    );
-    lines.push(`${indent}if (${operand.dataIm}) {`);
-    lines.push(`${indent}  for (int64_t __i = 0; __i < ${dLen}; __i++)`);
-    lines.push(`${indent}    ${dDataIm}[__i] = -((${operand.dataIm})[__i]);`);
-    lines.push(`${indent}} else {`);
-    lines.push(
-      `${indent}  if (${dLen} > 0) memset(${dDataIm}, 0, (size_t)${dLen} * sizeof(double));`
-    );
-    lines.push(`${indent}}`);
-    return;
   }
 
   if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
@@ -1694,10 +1750,26 @@ function emitTensorAssign(
   }
 
   if (expr.tag === "Binary" && isTensorExpr(expr)) {
-    const lenExpr = findTensorLenExpr(expr, ctx);
+    // Route the whole RHS through a scratch so that a self-aliasing
+    // sub-expression like `r = r .* y + 3.0` sees the OLD v_r_data
+    // while the kernel writes into a fresh scratch. Then transfer
+    // the scratch into dst (free+malloc for locals/dyn outputs, or
+    // memcpy for fixed outputs). Fixes the heap-overflow regression
+    // where emitEnsureTensorBuf clobbered an aliased operand before
+    // the kernel read it.
+    const scratch = emitTensorExprToStmts(lines, indent, expr, ctx);
     const tensorOperand = isTensorExpr(expr.left) ? expr.left : expr.right;
-    emitEnsureTensorBuf(lines, indent, destName, lenExpr, ctx, tensorOperand);
-    emitTensorBinaryStmts(lines, indent, expr, ctx, dData, dLen);
+    emitEnsureTensorBuf(
+      lines,
+      indent,
+      destName,
+      scratch.len,
+      ctx,
+      tensorOperand
+    );
+    lines.push(
+      `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
+    );
     return;
   }
 
@@ -1707,17 +1779,21 @@ function emitTensorAssign(
       return;
     }
     if (expr.op === UnaryOperation.Minus) {
-      const operand = emitTensorExprToStmts(lines, indent, expr.operand, ctx);
+      // scratch-transfer pattern — evaluate `-operand` into a scratch
+      // first, then free+malloc dst. Guards against `r = -r` aliasing,
+      // where operand.data would otherwise dangle through the dst
+      // free before the kernel reads it.
+      const scratch = emitTensorExprToStmts(lines, indent, expr, ctx);
       emitEnsureTensorBuf(
         lines,
         indent,
         destName,
-        operand.len,
+        scratch.len,
         ctx,
         expr.operand
       );
       lines.push(
-        `${indent}numbl_real_scalar_binary_elemwise(NUMBL_REAL_BIN_MUL, (size_t)${dLen}, -1.0, ${operand.data}, 1, ${dData});`
+        `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
       );
       return;
     }
@@ -1726,10 +1802,49 @@ function emitTensorAssign(
   if (expr.tag === "Call" && isTensorExpr(expr)) {
     const opEnum = getTensorUnaryOp(expr.name);
     if (opEnum) {
-      const arg = emitTensorExprToStmts(lines, indent, expr.args[0], ctx);
-      emitEnsureTensorBuf(lines, indent, destName, arg.len, ctx, expr.args[0]);
+      // Scratch-transfer to defuse self-aliasing (e.g. `r = exp(r)`).
+      const scratch = emitTensorExprToStmts(lines, indent, expr, ctx);
+      emitEnsureTensorBuf(
+        lines,
+        indent,
+        destName,
+        scratch.len,
+        ctx,
+        expr.args[0]
+      );
       lines.push(
-        `${indent}numbl_real_unary_elemwise(${opEnum}, (size_t)${dLen}, ${arg.data}, ${dData});`
+        `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
+      );
+      return;
+    }
+    // abs(complex_tensor) → real tensor, via numbl_complex_abs. Sits
+    // here rather than in the tensorUnaryOp path because the output
+    // type changes (complex operand → real result). Scratch-transfer
+    // pattern keeps this aliasing-safe even if the real-tensor dst
+    // somehow shared a name with the complex operand (shouldn't
+    // happen given the type flip, but cheap insurance).
+    if (
+      expr.name === "abs" &&
+      expr.args.length === 1 &&
+      expr.args[0].jitType.kind === "tensor" &&
+      expr.args[0].jitType.isComplex === true
+    ) {
+      const operand = emitComplexTensorExprToStmts(
+        lines,
+        indent,
+        expr.args[0],
+        ctx
+      );
+      const sIdx = allocScratch(ctx);
+      const sData = scratchData(sIdx);
+      const sLen = scratchLen(sIdx);
+      emitScratchBufAlloc(lines, indent, sData, sLen, operand.len);
+      lines.push(
+        `${indent}numbl_complex_abs((size_t)${sLen}, ${operand.data}, ${operand.dataIm}, ${sData});`
+      );
+      emitEnsureTensorBuf(lines, indent, destName, sLen, ctx, expr.args[0]);
+      lines.push(
+        `${indent}if (${dLen} > 0) memcpy(${dData}, ${sData}, (size_t)${dLen} * sizeof(double));`
       );
       return;
     }
@@ -1777,7 +1892,8 @@ function emitTensorAssign(
 
   // Two-arg tensor binary builtin (max, min, atan2, hypot, mod, rem):
   // emit a per-element loop calling the C math function registered on
-  // the builtin's jitCapabilities.tensorBinaryFn.
+  // the builtin's jitCapabilities.tensorBinaryFn. Scratch-transfer
+  // pattern avoids self-aliasing (e.g. `r = max(r, y)`).
   if (
     expr.tag === "Call" &&
     isTensorExpr(expr) &&
@@ -1791,52 +1907,39 @@ function emitTensorAssign(
     const rightIsTensor = right.jitType.kind === "tensor";
     const tensorOperand = leftIsTensor ? left : right;
 
+    const sIdx = allocScratch(ctx);
+    const sData = scratchData(sIdx);
+    const sLen = scratchLen(sIdx);
+
     if (leftIsTensor && rightIsTensor) {
       const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
       const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
-      emitEnsureTensorBuf(
-        lines,
-        indent,
-        destName,
-        lArg.len,
-        ctx,
-        tensorOperand
-      );
-      lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+      emitScratchBufAlloc(lines, indent, sData, sLen, lArg.len);
+      lines.push(`${indent}for (int64_t __i = 0; __i < ${sLen}; __i++)`);
       lines.push(
-        `${indent}  ${dData}[__i] = ${cFn}(${lArg.data}[__i], ${rArg.data}[__i]);`
+        `${indent}  ${sData}[__i] = ${cFn}(${lArg.data}[__i], ${rArg.data}[__i]);`
       );
     } else if (leftIsTensor) {
       const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
       const rScalar = emitExpr(right, ctx);
-      emitEnsureTensorBuf(
-        lines,
-        indent,
-        destName,
-        lArg.len,
-        ctx,
-        tensorOperand
-      );
-      lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+      emitScratchBufAlloc(lines, indent, sData, sLen, lArg.len);
+      lines.push(`${indent}for (int64_t __i = 0; __i < ${sLen}; __i++)`);
       lines.push(
-        `${indent}  ${dData}[__i] = ${cFn}(${lArg.data}[__i], ${rScalar});`
+        `${indent}  ${sData}[__i] = ${cFn}(${lArg.data}[__i], ${rScalar});`
       );
     } else {
       const lScalar = emitExpr(left, ctx);
       const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
-      emitEnsureTensorBuf(
-        lines,
-        indent,
-        destName,
-        rArg.len,
-        ctx,
-        tensorOperand
-      );
-      lines.push(`${indent}for (int64_t __i = 0; __i < ${dLen}; __i++)`);
+      emitScratchBufAlloc(lines, indent, sData, sLen, rArg.len);
+      lines.push(`${indent}for (int64_t __i = 0; __i < ${sLen}; __i++)`);
       lines.push(
-        `${indent}  ${dData}[__i] = ${cFn}(${lScalar}, ${rArg.data}[__i]);`
+        `${indent}  ${sData}[__i] = ${cFn}(${lScalar}, ${rArg.data}[__i]);`
       );
     }
+    emitEnsureTensorBuf(lines, indent, destName, sLen, ctx, tensorOperand);
+    lines.push(
+      `${indent}if (${dLen} > 0) memcpy(${dData}, ${sData}, (size_t)${dLen} * sizeof(double));`
+    );
     return;
   }
 

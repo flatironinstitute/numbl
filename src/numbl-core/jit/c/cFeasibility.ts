@@ -543,6 +543,21 @@ function checkCall(
       return checkExpr(expr.args[0], ctx);
     }
   }
+  // abs(complex_tensor): complex → real tensor via numbl_complex_abs.
+  // Checked BEFORE the generic tensor-unary kernel dispatch below so
+  // the real-kernel guard doesn't reject a complex arg whose result
+  // lives on the complex-abs path. Emit handles it at the real-tensor
+  // Assign site / scratch path.
+  if (
+    expr.name === "abs" &&
+    expr.args.length === 1 &&
+    expr.jitType.kind === "tensor" &&
+    expr.jitType.isComplex === false &&
+    expr.args[0].jitType.kind === "tensor" &&
+    expr.args[0].jitType.isComplex === true
+  ) {
+    return checkExpr(expr.args[0], ctx);
+  }
   // Tensor unary builtin: result is tensor, single tensor arg, name has
   // a `tensorUnaryOp` capability on its IBuiltin. These kernels are
   // real-only in libnumbl_ops; the complex variant requires separate
@@ -601,8 +616,10 @@ function checkCall(
     return { ok: true };
   }
   // Reduction (tensor → scalar): name has a `tensorReductionOp`
-  // capability, single tensor arg. Phase 2 keeps reductions real-only;
-  // complex reductions land in Phase 3.
+  // capability, single tensor arg. Real reductions always OK; complex
+  // reductions limited to SUM/PROD/ANY/ALL (the opcodes the
+  // `numbl_complex_flat_reduce` kernel supports — MAX/MIN/MEAN aren't
+  // defined for complex values).
   if (expr.jitType.kind !== "tensor" && getTensorReductionOp(expr.name)) {
     if (expr.args.length !== 1) {
       return fail(ctx, `${expr.name}: only single-arg reduction supported`);
@@ -612,10 +629,18 @@ function checkCall(
       return fail(ctx, `${expr.name}: only tensor-arg reduction supported`);
     }
     if (a.jitType.isComplex === true) {
-      return fail(
-        ctx,
-        `${expr.name}: complex tensor reduction not yet supported`
-      );
+      const opEnum = getTensorReductionOp(expr.name);
+      const allowed =
+        opEnum === "NUMBL_REDUCE_SUM" ||
+        opEnum === "NUMBL_REDUCE_PROD" ||
+        opEnum === "NUMBL_REDUCE_ANY" ||
+        opEnum === "NUMBL_REDUCE_ALL";
+      if (!allowed) {
+        return fail(
+          ctx,
+          `${expr.name}: complex reduction not defined (only sum/prod/any/all)`
+        );
+      }
     }
     return checkExpr(a, ctx);
   }

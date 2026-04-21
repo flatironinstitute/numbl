@@ -218,7 +218,7 @@ export function buildAbiSlots(
           od.slots.push({
             kind: "dynOutBufIm",
             cType: "double **",
-            cName: `${mangle(od.name)}_buf_im_out`,
+            cName: `__im_${mangle(od.name)}_buf_out`,
             koffiType: "_Out_ double **",
             outputIdx: oi,
           });
@@ -256,7 +256,7 @@ export function buildAbiSlots(
           od.slots.push({
             kind: "fixedOutBufIm",
             cType: "double *",
-            cName: `${mangle(od.name)}_buf_im`,
+            cName: `__im_${mangle(od.name)}_buf`,
             koffiType: "double *",
             outputIdx: oi,
           });
