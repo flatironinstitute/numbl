@@ -32,6 +32,8 @@ export const JIT_SKIP = Symbol("JIT_SKIP");
 //   jsjit-skip   — JS-JIT lowering failed (never reaches C-JIT either)
 // One unique (category, fn, key) triple → one row; counter = number of
 // distinct cache keys that hit that row during the run. Emitted at exit.
+const LOG_CJIT_MISSES =
+  typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
 const _jitTally = new Map<string, number>();
 let _jitTallyExitInstalled = false;
 
@@ -137,7 +139,7 @@ export function tryJitCall(
   if (!lowered) {
     fnWithCache._jitCache.set(cacheKey, null);
     if (fnWithCache._cJitCache) fnWithCache._cJitCache.set(cacheKey, null);
-    if (process.env.NUMBL_LOG_CJIT_MISSES) {
+    if (LOG_CJIT_MISSES) {
       const reason =
         (fn as { _lastLowerBailReason?: string })._lastLowerBailReason ??
         "lowering returned null";
@@ -188,14 +190,14 @@ export function tryJitCall(
       );
       if (res.ok) {
         fnWithCache._cJitCache.set(cacheKey, { fn: res.fn });
-        if (process.env.NUMBL_LOG_CJIT_MISSES) {
+        if (LOG_CJIT_MISSES) {
           logJitEvent("cjit-ok", fn.name, "");
         }
         return runWithCallFrame(interp, fn.name, res.fn, args);
       }
       fnWithCache._cJitCache.set(cacheKey, null);
       cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
-      if (process.env.NUMBL_LOG_CJIT_MISSES) {
+      if (LOG_CJIT_MISSES) {
         logJitEvent(
           "cjit-miss",
           fn.name,
@@ -300,7 +302,7 @@ export function tryJitCall(
   ].join("\n");
   const source = `${fnComment}\nfunction ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
   fnWithCache._jitCache.set(cacheKey, { fn: compiledFn, source });
-  if (process.env.NUMBL_LOG_CJIT_MISSES) {
+  if (LOG_CJIT_MISSES) {
     logJitEvent("jsjit-ok", fn.name, "");
   }
 

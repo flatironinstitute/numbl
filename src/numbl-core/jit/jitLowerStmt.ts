@@ -20,6 +20,9 @@ import type { LowerCtx } from "./jitLower.js";
 import { lowerExpr, lowerIBuiltinCall } from "./jitLowerExpr.js";
 import { JIT_IO_BUILTINS as JIT_VOID_IO_BUILTINS } from "./jitBailSafety.js";
 
+const LOG_CJIT_MISSES =
+  typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
+
 /** Returns true/false when the expr is a known constant scalar, else null. */
 function constantBool(e: JitExpr): boolean | null {
   if (e.tag === "NumberLiteral" && typeof e.value === "number") {
@@ -53,7 +56,7 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
     const line = offsetToLineFast(ctx.lineTable, stmt.span.start);
     prefix.push({ tag: "SetLoc", line });
   }
-  if (process.env.NUMBL_LOG_CJIT_MISSES) {
+  if (LOG_CJIT_MISSES) {
     ctx.lastExprType = `stmt:${stmt.type}`;
     if (stmt.span && ctx.lineTable) {
       ctx.lastExprLine = offsetToLineFast(ctx.lineTable, stmt.span.start);

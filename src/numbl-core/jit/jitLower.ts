@@ -17,6 +17,9 @@ import { type TypeEnv } from "./jitLowerTypes.js";
 import { buildLineTable } from "../runtime/error.js";
 import { lowerStmts } from "./jitLowerStmt.js";
 
+const LOG_CJIT_MISSES =
+  typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
+
 // ── Public result types ─────────────────────────────────────────────────
 
 /**
@@ -130,7 +133,7 @@ export function setBailReason(
   reason: string,
   line?: number
 ): void {
-  if (!ctx.bailReason && process.env.NUMBL_LOG_CJIT_MISSES) {
+  if (!ctx.bailReason && LOG_CJIT_MISSES) {
     ctx.bailReason = reason;
     ctx.bailLine = line;
   }
@@ -205,7 +208,7 @@ export function lowerFunction(
   };
   const body = lowerStmts(ctx, fn.body);
   if (!body) {
-    if (process.env.NUMBL_LOG_CJIT_MISSES) {
+    if (LOG_CJIT_MISSES) {
       const reason =
         ctx.bailReason ??
         (ctx.lastExprType

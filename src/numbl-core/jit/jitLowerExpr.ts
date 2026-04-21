@@ -34,6 +34,9 @@ import { offsetToLineFast } from "../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
 
+const LOG_CJIT_MISSES =
+  typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
+
 /** Pull a literal number out of a JitExpr, if any. Covers NumberLiteral
  *  directly and Var/etc. whose `exact` field was preserved during inference. */
 function literalNumber(e: JitExpr): number | null {
@@ -101,7 +104,7 @@ function bailExpr(ctx: LowerCtx, expr: Expr, reason: string): null {
 // ── Expression lowering ─────────────────────────────────────────────────
 
 export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
-  if (process.env.NUMBL_LOG_CJIT_MISSES) {
+  if (LOG_CJIT_MISSES) {
     ctx.lastExprType = expr.type;
     if (expr.span && ctx.lineTable) {
       ctx.lastExprLine = offsetToLineFast(ctx.lineTable, expr.span.start);
