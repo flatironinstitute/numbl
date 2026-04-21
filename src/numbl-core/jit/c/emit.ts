@@ -11,7 +11,7 @@
  * state (scratch counters, needsTicState/needsErrorFlag flags, etc.).
  * See `codegenCtx.ts` for the shared types.
  */
-import { UnaryOperation } from "../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import { isKnownInteger, type JitExpr, type JitStmt } from "../jitTypes.js";
 import { findFusibleChains } from "../fusion.js";
 import { emitFusedChain } from "./cFusedCodegen.js";
@@ -32,11 +32,13 @@ import {
   allocScratch,
   formatNumberLiteral,
   hasFreshAlloc,
+  isComplexScalarVar,
   isDynamicOutput,
   isLocalTensor,
   isOutputTensor,
   isTensorVar,
   mangle,
+  mangleIm,
   scratchData,
   scratchLen,
   tensorD0,
@@ -77,10 +79,181 @@ function isTensorExpr(expr: JitExpr): boolean {
   return expr.jitType.kind === "tensor";
 }
 
+function isComplexExpr(expr: JitExpr): boolean {
+  return expr.jitType.kind === "complex_or_number";
+}
+
+/** Pair of C expressions holding the real and imaginary parts of a
+ *  complex scalar value. Produced by `emitComplex`. */
+interface ComplexPair {
+  re: string;
+  im: string;
+}
+
+/** Materialize a ComplexPair into two fresh `__cN_re` / `__cN_im` locals
+ *  prepended to `ctx.pendingStmts.lines`. Used when the emitted formula
+ *  would otherwise evaluate either sub-expression more than once (e.g.
+ *  both Mul and Div reference each operand twice in the per-component
+ *  formula). Returns references to the new locals. */
+function materializeComplexPair(pair: ComplexPair, ctx: EmitCtx): ComplexPair {
+  if (!ctx.pendingStmts) {
+    throw new Error(
+      "C-JIT codegen: materializeComplexPair outside statement context"
+    );
+  }
+  const n = ++ctx.tmp.n;
+  const reVar = `__c${n}_re`;
+  const imVar = `__c${n}_im`;
+  const { lines, indent } = ctx.pendingStmts;
+  lines.push(`${indent}double ${reVar} = ${pair.re};`);
+  lines.push(`${indent}double ${imVar} = ${pair.im};`);
+  return { re: reVar, im: imVar };
+}
+
+/** Widen a real scalar C expression to a complex pair (im = 0). */
+function widenRealToComplex(realCode: string): ComplexPair {
+  return { re: realCode, im: "0.0" };
+}
+
+/** Emit a complex-valued scalar expression, returning (re, im) C
+ *  expression strings. Call sites that need a pair (complex RHS, complex
+ *  operand of a complex op, arg of real/imag/conj on complex) route
+ *  through here. Real sub-expressions widen implicitly (im = 0). */
+function emitComplex(expr: JitExpr, ctx: EmitCtx): ComplexPair {
+  // Real scalar value in a complex position: widen with im = 0.
+  if (!isComplexExpr(expr)) {
+    if (expr.jitType.kind !== "number" && expr.jitType.kind !== "boolean") {
+      throw new Error(
+        `C-JIT codegen: emitComplex on non-scalar expr ${expr.tag}:${expr.jitType.kind}`
+      );
+    }
+    return widenRealToComplex(emitExpr(expr, ctx));
+  }
+
+  switch (expr.tag) {
+    case "ImagLiteral":
+      return { re: "0.0", im: "1.0" };
+
+    case "Var": {
+      if (!isComplexScalarVar(ctx, expr.name)) {
+        throw new Error(
+          `C-JIT codegen: complex Var '${expr.name}' not in complexScalarVars`
+        );
+      }
+      return { re: mangle(expr.name), im: mangleIm(expr.name) };
+    }
+
+    case "Unary": {
+      if (expr.op === UnaryOperation.Plus) {
+        return emitComplex(expr.operand, ctx);
+      }
+      if (expr.op === UnaryOperation.Minus) {
+        const o = emitComplex(expr.operand, ctx);
+        return { re: `(-(${o.re}))`, im: `(-(${o.im}))` };
+      }
+      throw new Error(`C-JIT codegen: unsupported complex unary op ${expr.op}`);
+    }
+
+    case "Binary": {
+      // Both operands lowered to pairs + materialized so the per-
+      // component formulas below don't duplicate evaluation.
+      const l = materializeComplexPair(emitComplex(expr.left, ctx), ctx);
+      const r = materializeComplexPair(emitComplex(expr.right, ctx), ctx);
+      switch (expr.op) {
+        case BinaryOperation.Add:
+          return { re: `(${l.re} + ${r.re})`, im: `(${l.im} + ${r.im})` };
+        case BinaryOperation.Sub:
+          return { re: `(${l.re} - ${r.re})`, im: `(${l.im} - ${r.im})` };
+        case BinaryOperation.Mul:
+        case BinaryOperation.ElemMul:
+          return {
+            re: `(${l.re} * ${r.re} - ${l.im} * ${r.im})`,
+            im: `(${l.re} * ${r.im} + ${l.im} * ${r.re})`,
+          };
+        case BinaryOperation.Div:
+        case BinaryOperation.ElemDiv:
+          return emitComplexDiv(l, r, ctx);
+        default:
+          throw new Error(
+            `C-JIT codegen: unsupported complex binary op ${expr.op}`
+          );
+      }
+    }
+
+    case "Call": {
+      if (expr.name === "conj" && expr.args.length === 1) {
+        const o = emitComplex(expr.args[0], ctx);
+        return { re: o.re, im: `(-(${o.im}))` };
+      }
+      if (expr.name === "real" && expr.args.length === 1) {
+        const o = emitComplex(expr.args[0], ctx);
+        return { re: o.re, im: "0.0" };
+      }
+      if (expr.name === "imag" && expr.args.length === 1) {
+        const o = emitComplex(expr.args[0], ctx);
+        return { re: o.im, im: "0.0" };
+      }
+      throw new Error(`C-JIT codegen: unsupported complex Call '${expr.name}'`);
+    }
+
+    default:
+      throw new Error(`C-JIT codegen: unsupported complex expr ${expr.tag}`);
+  }
+}
+
+/** Complex division using Smith's method with MATLAB-compatible
+ *  division-by-zero semantics (produces signed Inf, not NaN, when the
+ *  denominator is exactly zero). Mirrors cDiv in jitHelpersComplex.ts
+ *  so C-JIT and JS-JIT agree bit-for-bit on divide-by-zero cases.
+ *
+ *  Emits scratch locals because the formulas branch on |br| vs |bi| and
+ *  reuse the operand components five or six times each. */
+function emitComplexDiv(
+  a: ComplexPair,
+  b: ComplexPair,
+  ctx: EmitCtx
+): ComplexPair {
+  if (!ctx.pendingStmts) {
+    throw new Error("C-JIT codegen: emitComplexDiv outside statement context");
+  }
+  const { lines, indent } = ctx.pendingStmts;
+  const n = ++ctx.tmp.n;
+  const reVar = `__cdiv${n}_re`;
+  const imVar = `__cdiv${n}_im`;
+  lines.push(`${indent}double ${reVar};`);
+  lines.push(`${indent}double ${imVar};`);
+  lines.push(`${indent}if (fabs(${b.re}) >= fabs(${b.im})) {`);
+  lines.push(`${indent}  if (${b.re} == 0.0 && ${b.im} == 0.0) {`);
+  lines.push(`${indent}    ${reVar} = ${a.re} / 0.0;`);
+  lines.push(`${indent}    ${imVar} = ${a.im} / 0.0;`);
+  lines.push(`${indent}  } else {`);
+  lines.push(`${indent}    double __r = ${b.im} / ${b.re};`);
+  lines.push(`${indent}    double __d = ${b.re} + ${b.im} * __r;`);
+  lines.push(`${indent}    ${reVar} = (${a.re} + ${a.im} * __r) / __d;`);
+  lines.push(`${indent}    ${imVar} = (${a.im} - ${a.re} * __r) / __d;`);
+  lines.push(`${indent}  }`);
+  lines.push(`${indent}} else {`);
+  lines.push(`${indent}  double __r = ${b.re} / ${b.im};`);
+  lines.push(`${indent}  double __d = ${b.im} + ${b.re} * __r;`);
+  lines.push(`${indent}  ${reVar} = (${a.re} * __r + ${a.im}) / __d;`);
+  lines.push(`${indent}  ${imVar} = (${a.im} * __r - ${a.re}) / __d;`);
+  lines.push(`${indent}}`);
+  return { re: reVar, im: imVar };
+}
+
 /** Emit a value-expression. For scalars, returns a C `double` expression.
  *  For tensors, returns the data-variable name (the caller knows to also
- *  access the corresponding _len variable). */
+ *  access the corresponding _len variable).
+ *
+ *  Complex-typed expressions are *not* valid here — they produce a pair
+ *  of doubles and must go through `emitComplex`. Reaching this function
+ *  with a complex expression indicates a missed routing at the caller. */
 function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
+  if (isComplexExpr(expr)) {
+    throw new Error(
+      `C-JIT codegen: emitExpr on complex expr ${expr.tag} — route through emitComplex`
+    );
+  }
   switch (expr.tag) {
     case "NumberLiteral":
       return formatNumberLiteral(expr.value);
@@ -133,11 +306,21 @@ function emitExpr(expr: JitExpr, ctx: EmitCtx): string {
  *  with matching shape plumbing. */
 function emitUserCallArgSlots(
   a: JitExpr,
-  paramDesc: { kind: "scalar" | "tensor"; slots: { kind: string }[] },
+  paramDesc: {
+    kind: "scalar" | "complexScalar" | "tensor";
+    slots: { kind: string }[];
+  },
   ctx: EmitCtx
 ): string[] {
   if (paramDesc.kind === "scalar") {
     return [emitExpr(a, ctx)];
+  }
+  if (paramDesc.kind === "complexScalar") {
+    // Callee expects (re, im). The caller's arg may be a bare real
+    // scalar (widened to im = 0) or a complex_or_number value —
+    // emitComplex handles both cases.
+    const pair = emitComplex(a, ctx);
+    return [pair.re, pair.im];
   }
   if (a.tag !== "Var") {
     throw new Error(
@@ -538,6 +721,17 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
   if (expr.name === "toc" && expr.args.length === 0) {
     ctx.needsTicState = true;
     return `numbl_toc(__tic_state)`;
+  }
+  // real / imag / conj on a complex scalar arg. conj(z) is complex and
+  // handled in emitComplex; here we handle the real-returning cases
+  // (real(z), imag(z)) where the result goes into a real scalar context.
+  if (
+    (expr.name === "real" || expr.name === "imag") &&
+    expr.args.length === 1 &&
+    isComplexExpr(expr.args[0])
+  ) {
+    const pair = emitComplex(expr.args[0], ctx);
+    return expr.name === "real" ? pair.re : pair.im;
   }
   // length / isempty on a tensor Var.
   if (
@@ -1203,6 +1397,16 @@ function emitStmt(
         stmt.expr.args[0].tag !== "Var"
       ) {
         emitReductionOfTensorExpr(lines, indent, stmt.name, stmt.expr, ctx);
+        return;
+      }
+      // Complex scalar assign: emit pair into pendingStmts then write to
+      // the two paired locals.
+      if (isComplexScalarVar(ctx, stmt.name)) {
+        const pair = withPendingStmts(ctx, lines, indent, () =>
+          emitComplex(stmt.expr, ctx)
+        );
+        lines.push(`${indent}${mangle(stmt.name)} = ${pair.re};`);
+        lines.push(`${indent}${mangleIm(stmt.name)} = ${pair.im};`);
         return;
       }
       const rhs = withPendingStmts(ctx, lines, indent, () =>

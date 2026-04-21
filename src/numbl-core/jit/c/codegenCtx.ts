@@ -23,6 +23,7 @@ export interface CalleeAbi {
 }
 
 const MANGLE_PREFIX = "v_";
+const IM_SUFFIX = "_im";
 
 /**
  * Minimum NUMBL_JIT_RT_VERSION the emitter needs at link time.
@@ -45,6 +46,12 @@ export const NUMBL_JIT_RT_REQUIRED_VERSION = 5;
 
 export function mangle(name: string): string {
   return `${MANGLE_PREFIX}${name}`;
+}
+
+/** Imaginary part of a complex scalar local / param. Paired with
+ *  `mangle(name)` (the real part). */
+export function mangleIm(name: string): string {
+  return `${MANGLE_PREFIX}${name}${IM_SUFFIX}`;
 }
 
 /** Join a C type and an identifier with a space unless the type already
@@ -197,6 +204,9 @@ export interface EmitCtx {
    *  tensor args (and decide scalar-vs-tensor return shape) at the call
    *  site. Absent during tests that only emit a single function. */
   calleeAbi?: Map<string, CalleeAbi>;
+  /** Names (params + locals + outputs) that hold `complex_or_number`
+   *  scalar values and thus have paired `v_name` / `v_name_im` locals. */
+  complexScalarVars: Set<string>;
 }
 
 // ── Classification-lookup shortcuts ───────────────────────────────────
@@ -207,6 +217,9 @@ export interface EmitCtx {
 
 export function isTensorVar(ctx: EmitCtx, name: string): boolean {
   return ctx.cls.tensorVars.has(name);
+}
+export function isComplexScalarVar(ctx: EmitCtx, name: string): boolean {
+  return ctx.complexScalarVars.has(name);
 }
 export function hasFreshAlloc(ctx: EmitCtx, name: string): boolean {
   return !!ctx.cls.meta.get(name)?.hasFreshAlloc;

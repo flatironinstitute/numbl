@@ -81,7 +81,15 @@ function fail(ctx: Ctx, reason: string): FeasibilityResult {
 // excluded by simply not setting `tensorUnaryOp` on their IBuiltin.
 
 function isScalarKind(k: JitType["kind"]): boolean {
+  return k === "number" || k === "boolean" || k === "complex_or_number";
+}
+
+function isRealScalarKind(k: JitType["kind"]): boolean {
   return k === "number" || k === "boolean";
+}
+
+function isComplexScalarKind(k: JitType["kind"]): boolean {
+  return k === "complex_or_number";
 }
 
 /** Real tensor (1-3 D) the C-JIT codegen can handle as a value. */
@@ -114,6 +122,7 @@ function checkExpr(
   switch (expr.tag) {
     case "NumberLiteral":
     case "Var":
+    case "ImagLiteral":
       return { ok: true };
 
     case "Index": {
@@ -145,6 +154,9 @@ function checkExpr(
         );
       }
       for (const idx of expr.indices) {
+        if (!isRealScalarKind(idx.jitType.kind)) {
+          return fail(ctx, "Index index must be a real scalar");
+        }
         const r = checkExpr(idx, ctx);
         if (!r.ok) return r;
       }
@@ -187,6 +199,28 @@ function checkExpr(
           `tensor-result binary op ${expr.op} has no C-JIT fast path`
         );
       }
+      // Complex scalar binary ops: only Add/Sub/Mul/ElemMul/Div/ElemDiv
+      // are supported in Phase 1. Comparisons, logicals, and pow all bail.
+      const anyComplex =
+        isComplexScalarKind(expr.left.jitType.kind) ||
+        isComplexScalarKind(expr.right.jitType.kind) ||
+        isComplexScalarKind(expr.jitType.kind);
+      if (anyComplex) {
+        switch (expr.op) {
+          case BinaryOperation.Add:
+          case BinaryOperation.Sub:
+          case BinaryOperation.Mul:
+          case BinaryOperation.ElemMul:
+          case BinaryOperation.Div:
+          case BinaryOperation.ElemDiv:
+            break;
+          default:
+            return fail(
+              ctx,
+              `complex scalar binary op ${expr.op} not supported in C-JIT`
+            );
+        }
+      }
       const l = checkExpr(expr.left, ctx);
       if (!l.ok) return l;
       const r = checkExpr(expr.right, ctx);
@@ -206,6 +240,13 @@ function checkExpr(
       // Tensor-result Not is unsupported (no `tNot` helper in JS-JIT either).
       if (expr.jitType.kind === "tensor" && expr.op === UnaryOperation.Not) {
         return fail(ctx, "tensor-result Not not supported");
+      }
+      // Complex scalar Not is not supported — requires cTruthy semantics.
+      if (
+        isComplexScalarKind(expr.operand.jitType.kind) &&
+        expr.op === UnaryOperation.Not
+      ) {
+        return fail(ctx, "complex scalar Not not supported in C-JIT");
       }
       return checkExpr(expr.operand, ctx);
     }
@@ -236,7 +277,9 @@ function checkExpr(
     case "TensorLiteral": {
       // Real-tensor literal: `[1 2 3]`, `[a b; c d]`, `[]`. Empty matrix
       // (nRows == 0 && nCols == 0) is allowed — emits NULL / len 0.
-      // Non-empty cells must all be scalar-typed.
+      // Non-empty cells must all be real scalar-typed (the dest is a
+      // real tensor — complex cells would imply a complex tensor,
+      // unsupported in Phase 1).
       if (expr.jitType.kind !== "tensor" || expr.jitType.isComplex !== false) {
         return fail(ctx, "TensorLiteral must be a real tensor");
       }
@@ -244,8 +287,8 @@ function checkExpr(
       for (let r = 0; r < expr.nRows; r++) {
         for (let c = 0; c < expr.nCols; c++) {
           const cell = expr.rows[r][c];
-          if (!isScalarKind(cell.jitType.kind)) {
-            return fail(ctx, "TensorLiteral cell must be scalar");
+          if (!isRealScalarKind(cell.jitType.kind)) {
+            return fail(ctx, "TensorLiteral cell must be a real scalar");
           }
           const cr = checkExpr(cell, ctx);
           if (!cr.ok) return cr;
@@ -280,7 +323,6 @@ function checkExpr(
       return checkUserCall(expr, ctx, allowTensorUserCall);
 
     // Everything else is out of scope — bail to JS-JIT.
-    case "ImagLiteral":
     case "StringLiteral":
     case "MemberRead":
     case "StructArrayMemberRead":
@@ -448,6 +490,18 @@ function checkCall(
         return { ok: true };
       }
     }
+    // Complex-scalar special cases: real / imag / conj on a
+    // complex_or_number arg. The emitter decomposes the arg via
+    // emitComplex() and returns the appropriate component — no jitEmitC
+    // hook is needed since jitEmitC returns a single string and we need
+    // different per-component handling.
+    if (
+      (expr.name === "real" || expr.name === "imag" || expr.name === "conj") &&
+      expr.args.length === 1 &&
+      isComplexScalarKind(expr.args[0].jitType.kind)
+    ) {
+      return checkExpr(expr.args[0], ctx);
+    }
   }
   // Tensor unary builtin: result is tensor, single tensor arg, name has
   // a `tensorUnaryOp` capability on its IBuiltin.
@@ -543,11 +597,17 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       return checkExpr(stmt.expr, ctx);
 
     case "If": {
+      if (isComplexScalarKind(stmt.cond.jitType.kind)) {
+        return fail(ctx, "If condition cannot be complex scalar");
+      }
       const c = checkExpr(stmt.cond, ctx);
       if (!c.ok) return c;
       const t = checkStmts(stmt.thenBody, ctx);
       if (!t.ok) return t;
       for (const eib of stmt.elseifBlocks) {
+        if (isComplexScalarKind(eib.cond.jitType.kind)) {
+          return fail(ctx, "If condition cannot be complex scalar");
+        }
         const ec = checkExpr(eib.cond, ctx);
         if (!ec.ok) return ec;
         const eb = checkStmts(eib.body, ctx);
@@ -558,6 +618,15 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
     }
 
     case "For": {
+      if (isComplexScalarKind(stmt.start.jitType.kind)) {
+        return fail(ctx, "For loop bound cannot be complex scalar");
+      }
+      if (isComplexScalarKind(stmt.end.jitType.kind)) {
+        return fail(ctx, "For loop bound cannot be complex scalar");
+      }
+      if (stmt.step && isComplexScalarKind(stmt.step.jitType.kind)) {
+        return fail(ctx, "For loop step cannot be complex scalar");
+      }
       const s = checkExpr(stmt.start, ctx);
       if (!s.ok) return s;
       const e = checkExpr(stmt.end, ctx);
@@ -570,6 +639,9 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
     }
 
     case "While": {
+      if (isComplexScalarKind(stmt.cond.jitType.kind)) {
+        return fail(ctx, "While condition cannot be complex scalar");
+      }
       const c = checkExpr(stmt.cond, ctx);
       if (!c.ok) return c;
       return checkStmts(stmt.body, ctx);
@@ -600,8 +672,8 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       ) {
         return fail(ctx, "AssignIndex base must be a real tensor");
       }
-      if (!isScalarKind(stmt.value.jitType.kind)) {
-        return fail(ctx, "AssignIndex value must be scalar");
+      if (!isRealScalarKind(stmt.value.jitType.kind)) {
+        return fail(ctx, "AssignIndex value must be a real scalar");
       }
       // Writes land on (a) a tensor param (unshare-at-entry for pure
       // inputs, seeded output for param-outputs), or (b) a local /
@@ -616,6 +688,9 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
       const vr = checkExpr(stmt.value, ctx);
       if (!vr.ok) return vr;
       for (const idx of stmt.indices) {
+        if (!isRealScalarKind(idx.jitType.kind)) {
+          return fail(ctx, "AssignIndex index must be a real scalar");
+        }
         const r = checkExpr(idx, ctx);
         if (!r.ok) return r;
       }

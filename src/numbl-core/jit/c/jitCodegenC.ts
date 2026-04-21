@@ -27,6 +27,7 @@ import {
   NUMBL_JIT_RT_REQUIRED_VERSION,
   spaceBeforeName,
   mangle,
+  mangleIm,
   tensorD0,
   tensorD1,
   tensorData,
@@ -427,6 +428,32 @@ function collectReachableJitNames(
   body.forEach(visitStmt);
 }
 
+/** Walk `body` and collect every name assigned a `complex_or_number`
+ *  value, including nested If/For/While branches. The JIT lowerer
+ *  unifies each name's type across branches, so the first complex
+ *  Assign is enough to mark the name as a complex scalar throughout. */
+function collectComplexScalarLocals(body: JitStmt[], out: Set<string>): void {
+  const visit = (s: JitStmt): void => {
+    switch (s.tag) {
+      case "Assign":
+        if (s.expr.jitType.kind === "complex_or_number") out.add(s.name);
+        break;
+      case "If":
+        s.thenBody.forEach(visit);
+        s.elseifBlocks.forEach(eb => eb.body.forEach(visit));
+        if (s.elseBody) s.elseBody.forEach(visit);
+        break;
+      case "For":
+      case "While":
+        s.body.forEach(visit);
+        break;
+      default:
+        break;
+    }
+  };
+  body.forEach(visit);
+}
+
 /** Emit a single C function (outer or static callee). Returns the full
  *  definition plus all metadata the caller might want. */
 function emitOneFunction(
@@ -475,8 +502,13 @@ function emitOneFunction(
   }
 
   const paramDescs: CParamDesc[] = params.map((p, i) => {
+    const k = argTypes[i].kind;
     const kind: CParamDesc["kind"] =
-      argTypes[i].kind === "tensor" ? "tensor" : "scalar";
+      k === "tensor"
+        ? "tensor"
+        : k === "complex_or_number"
+          ? "complexScalar"
+          : "scalar";
     const desc: CParamDesc = { name: p, kind, slots: [] };
     if (kind === "tensor") {
       const d = cls.meta.get(p)?.maxIndexDim ?? 0;
@@ -488,13 +520,35 @@ function emitOneFunction(
   const outputDescs: COutputDesc[] = effectiveOutputs.map((name, i) => {
     const t = effectiveOutputTypes[i]?.kind;
     const kind: COutputDesc["kind"] =
-      t === "tensor" ? "tensor" : t === "boolean" ? "boolean" : "scalar";
+      t === "tensor"
+        ? "tensor"
+        : t === "boolean"
+          ? "boolean"
+          : t === "complex_or_number"
+            ? "complexScalar"
+            : "scalar";
     const desc: COutputDesc = { name, kind, slots: [] };
     if (kind === "tensor" && cls.meta.get(name)?.isDynamicOutput) {
       desc.dynamic = true;
     }
     return desc;
   });
+
+  // Complex scalar names = complex params + complex outputs + any local
+  // whose Assign RHS has jitType.kind === "complex_or_number". The JIT
+  // lowerer unifies the local's type across all branches, so if any
+  // Assign carries a complex RHS the whole name is treated as complex.
+  const complexScalarVars = new Set<string>();
+  for (let i = 0; i < params.length; i++) {
+    if (argTypes[i].kind === "complex_or_number")
+      complexScalarVars.add(params[i]);
+  }
+  for (let i = 0; i < effectiveOutputs.length; i++) {
+    if (effectiveOutputTypes[i]?.kind === "complex_or_number") {
+      complexScalarVars.add(effectiveOutputs[i]);
+    }
+  }
+  collectComplexScalarLocals(body, complexScalarVars);
 
   const ctx: EmitCtx = {
     cls,
@@ -506,6 +560,7 @@ function emitOneFunction(
     needsErrorFlag: false,
     openmp: openmp ?? false,
     calleeAbi,
+    complexScalarVars,
   };
 
   const indent = "  ";
@@ -548,6 +603,13 @@ function emitOneFunction(
           `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
         );
       }
+    } else if (od.kind === "complexScalar") {
+      epilogueLines.push(
+        `${indent}*${mangle(od.name)}_out = ${mangle(od.name)};`
+      );
+      epilogueLines.push(
+        `${indent}*${mangleIm(od.name)}_out = ${mangleIm(od.name)};`
+      );
     } else {
       epilogueLines.push(
         `${indent}*${mangle(od.name)}_out = ${mangle(od.name)};`
@@ -655,6 +717,19 @@ function emitOneFunction(
     preludeLines.push(`${indent}}`);
   }
 
+  // A scalar param that the body later widens to complex (e.g. `acc = 0`
+  // then `acc = acc + 1i`) arrives via the real-scalar ABI (one `double`
+  // slot). `complexScalarVars` tracks the effective type — we need to
+  // initialize the imag companion to 0 so subsequent emitComplex reads
+  // on Var(param) pick up a valid im local. Same idea for complex-param
+  // cases, but those already get both slots from buildAbiSlots.
+  for (let i = 0; i < params.length; i++) {
+    const p = params[i];
+    if (complexScalarVars.has(p) && argTypes[i].kind !== "complex_or_number") {
+      preludeLines.push(`${indent}double ${mangleIm(p)} = 0.0;`);
+    }
+  }
+
   for (const local of allLocals) {
     if (cls.tensorVars.has(local)) {
       const localMeta = cls.meta.get(local);
@@ -671,6 +746,9 @@ function emitOneFunction(
         preludeLines.push(`${indent}int64_t ${tensorD0(local)} = 0;`);
         preludeLines.push(`${indent}int64_t ${tensorD1(local)} = 0;`);
       }
+    } else if (complexScalarVars.has(local)) {
+      preludeLines.push(`${indent}double ${mangle(local)} = 0.0;`);
+      preludeLines.push(`${indent}double ${mangleIm(local)} = 0.0;`);
     } else {
       preludeLines.push(`${indent}double ${mangle(local)} = 0.0;`);
     }

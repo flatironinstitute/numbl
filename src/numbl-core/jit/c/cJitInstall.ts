@@ -19,7 +19,11 @@ import { checkCFeasibility } from "./cFeasibility.js";
 import { generateC, type AbiSlot, type COutputDesc } from "./jitCodegenC.js";
 import { compileAndLoad, cJitOpenmpAvailable } from "./cCompile.js";
 import { jitTypeKey } from "../jitTypes.js";
-import { type RuntimeTensor } from "../../runtime/types.js";
+import {
+  type RuntimeTensor,
+  type RuntimeComplexNumber,
+  isRuntimeComplexNumber,
+} from "../../runtime/types.js";
 import { uninitFloat64 } from "../../runtime/alloc.js";
 import {
   getTicTime,
@@ -44,6 +48,9 @@ function getKoffi(): typeof import("koffi") {
 type OutputBuf = {
   desc: COutputDesc;
   buf?: Float64Array;
+  /** Imaginary part for complex scalar outputs. Pairs with `buf` which
+   *  holds the real part. */
+  imBuf?: Float64Array;
   lenBuf?: Float64Array;
   dynPtrSlot?: (unknown | null)[];
   dynLenSlot?: bigint[];
@@ -68,6 +75,28 @@ function marshalSlot(
       const v = callArgs[slot.paramIdx!];
       return typeof v === "boolean" ? (v ? 1 : 0) : (v as number);
     }
+    case "complexScalarRe": {
+      const v = callArgs[slot.paramIdx!];
+      if (
+        isRuntimeComplexNumber(
+          v as import("../../runtime/types.js").RuntimeValue
+        )
+      ) {
+        return (v as RuntimeComplexNumber).re;
+      }
+      return typeof v === "boolean" ? (v ? 1 : 0) : (v as number);
+    }
+    case "complexScalarIm": {
+      const v = callArgs[slot.paramIdx!];
+      if (
+        isRuntimeComplexNumber(
+          v as import("../../runtime/types.js").RuntimeValue
+        )
+      ) {
+        return (v as RuntimeComplexNumber).im;
+      }
+      return 0;
+    }
     case "tensorData":
       return (callArgs[slot.paramIdx!] as RuntimeTensor).data as Float64Array;
     case "tensorLen": {
@@ -85,6 +114,10 @@ function marshalSlot(
     case "scalarOut":
     case "fixedOutBuf":
       return outputBufs[slot.outputIdx!].buf!;
+    case "complexScalarReOut":
+      return outputBufs[slot.outputIdx!].buf!;
+    case "complexScalarImOut":
+      return outputBufs[slot.outputIdx!].imBuf!;
     case "fixedOutLen":
       return outputBufs[slot.outputIdx!].lenBuf!;
     case "dynOutBuf":
@@ -222,6 +255,7 @@ registerCJitBackend({
       const outputBufs: Array<{
         desc: COutputDesc;
         buf?: Float64Array;
+        imBuf?: Float64Array;
         lenBuf?: Float64Array;
         dynPtrSlot?: (unknown | null)[];
         dynLenSlot?: bigint[];
@@ -229,6 +263,13 @@ registerCJitBackend({
         dynD1Slot?: bigint[];
         paramShape?: number[];
       }> = outputDescs.map(od => {
+        if (od.kind === "complexScalar") {
+          return {
+            desc: od,
+            buf: new Float64Array(1),
+            imBuf: new Float64Array(1),
+          };
+        }
         if (od.kind === "tensor") {
           if (od.dynamic) {
             return {
@@ -350,6 +391,20 @@ registerCJitBackend({
         };
       };
 
+      /** Decode a complex scalar output as either a bare number (im=0)
+       *  or a RuntimeComplexNumber. Mirrors `mkc` from
+       *  interpreter/builtins/types.ts so the result's runtime shape
+       *  matches what the interpreter and JS-JIT paths produce. */
+
+      const readComplexScalar = (
+        ob: OutputBuf
+      ): number | RuntimeComplexNumber => {
+        const re = ob.buf![0];
+        const im = ob.imBuf![0];
+        if (im === 0) return re;
+        return { kind: "complex_number", re, im };
+      };
+
       if (isMultiOutput) {
         const results: unknown[] = [];
         for (const ob of outputBufs) {
@@ -367,6 +422,8 @@ registerCJitBackend({
             }
           } else if (ob.desc.kind === "boolean") {
             results.push(ob.buf![0] !== 0);
+          } else if (ob.desc.kind === "complexScalar") {
+            results.push(readComplexScalar(ob));
           } else {
             results.push(ob.buf![0]);
           }
@@ -389,6 +446,9 @@ registerCJitBackend({
       }
       if (ob.desc.kind === "boolean") {
         return ob.buf![0] !== 0;
+      }
+      if (ob.desc.kind === "complexScalar") {
+        return readComplexScalar(ob);
       }
       return ob.buf![0];
     };

@@ -16,6 +16,7 @@
 import type { ClassificationResult } from "./classify.js";
 import {
   mangle,
+  mangleIm,
   tensorD0,
   tensorD1,
   tensorData,
@@ -25,12 +26,18 @@ import {
 export type AbiSlotKind =
   // Param-sourced slots — value comes from callArgs[paramIdx].
   | "scalar"
+  // Complex-scalar param slots — two per param (re + im).
+  | "complexScalarRe"
+  | "complexScalarIm"
   | "tensorData"
   | "tensorLen"
   | "tensorD0"
   | "tensorD1"
   // Output-allocated slots — value comes from outputBufs[outputIdx].
   | "scalarOut"
+  // Complex-scalar output slots — two per output (re + im).
+  | "complexScalarReOut"
+  | "complexScalarImOut"
   | "fixedOutBuf"
   | "fixedOutLen"
   | "dynOutBuf"
@@ -59,29 +66,31 @@ export interface AbiSlot {
 
 export interface CParamDesc {
   name: string;
-  kind: "scalar" | "tensor";
+  kind: "scalar" | "complexScalar" | "tensor";
   /** For tensor params: max indexing arity the body uses (1, 2, or 3).
    *  Drives the extra `_d0` / `_d1` shape args the JS wrapper must
    *  marshal. `undefined` means the tensor is only used in whole-tensor
    *  ops (legacy data/len ABI). */
   ndim?: number;
   /** Ordered slots this param contributes to the ABI. One slot for a
-   *  scalar; two or more (data + len + optional d0/d1) for a tensor. */
+   *  scalar; two for a complex scalar (re + im); two or more
+   *  (data + len + optional d0/d1) for a tensor. */
   slots: AbiSlot[];
 }
 
 /** Per-output descriptor. Tells the JS wrapper how to marshal outputs. */
 export interface COutputDesc {
   name: string;
-  kind: "scalar" | "boolean" | "tensor";
+  kind: "scalar" | "boolean" | "complexScalar" | "tensor";
   /** True for tensor outputs using the dynamic-output ABI: the C code
    *  malloc's the buffer and transfers ownership via `double **` and
    *  extra d0/d1 out-slots. The JS wrapper decodes the pointer, copies
    *  into a fresh Float64Array, and frees the C allocation. */
   dynamic?: boolean;
   /** Ordered slots this output contributes to the ABI. One for scalars,
-   *  two for fixed tensor outputs (buf + lenOut), four for dynamic
-   *  tensor outputs (dynBuf + dynLen + dynD0 + dynD1). */
+   *  two for complex scalars (reOut + imOut), two for fixed tensor
+   *  outputs (buf + lenOut), four for dynamic tensor outputs
+   *  (dynBuf + dynLen + dynD0 + dynD1). */
   slots: AbiSlot[];
 }
 
@@ -138,6 +147,21 @@ export function buildAbiSlots(
           paramIdx: pi,
         });
       }
+    } else if (pd.kind === "complexScalar") {
+      pd.slots.push({
+        kind: "complexScalarRe",
+        cType: "double",
+        cName: mangle(pd.name),
+        koffiType: "double",
+        paramIdx: pi,
+      });
+      pd.slots.push({
+        kind: "complexScalarIm",
+        cType: "double",
+        cName: mangleIm(pd.name),
+        koffiType: "double",
+        paramIdx: pi,
+      });
     } else {
       pd.slots.push({
         kind: "scalar",
@@ -197,6 +221,21 @@ export function buildAbiSlots(
           outputIdx: oi,
         });
       }
+    } else if (od.kind === "complexScalar") {
+      od.slots.push({
+        kind: "complexScalarReOut",
+        cType: "double *",
+        cName: `${mangle(od.name)}_out`,
+        koffiType: "double *",
+        outputIdx: oi,
+      });
+      od.slots.push({
+        kind: "complexScalarImOut",
+        cType: "double *",
+        cName: `${mangleIm(od.name)}_out`,
+        koffiType: "double *",
+        outputIdx: oi,
+      });
     } else {
       od.slots.push({
         kind: "scalarOut",
