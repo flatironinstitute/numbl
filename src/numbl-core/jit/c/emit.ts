@@ -377,6 +377,15 @@ function emitUserCallArgSlots(
       case "tensorData":
         slotCodes.push(tensorData(argName));
         break;
+      case "tensorDataIm":
+        // Callee expects a complex-tensor imag slot. If the caller's arg
+        // is a complex tensor, pass its imag pointer; if the arg is real,
+        // widen by passing NULL — numbl_ops complex kernels treat NULL
+        // imag as all-zero.
+        slotCodes.push(
+          isComplexTensorVar(ctx, argName) ? tensorDataIm(argName) : "NULL"
+        );
+        break;
       case "tensorLen":
         slotCodes.push(tensorLen(argName));
         break;
@@ -1484,6 +1493,13 @@ function emitUserCallTensorAssign(
       `C-JIT codegen: UserCall '${expr.name}' tensor-return requires dynamic tensor output[0]`
     );
   }
+  const destIsComplex = isComplexTensorVar(ctx, destName);
+  const calleeIsComplex = out0.isComplex === true;
+  if (destIsComplex !== calleeIsComplex) {
+    throw new Error(
+      `C-JIT codegen: UserCall '${expr.name}' dest/callee complex mismatch (dest=${destIsComplex}, callee=${calleeIsComplex})`
+    );
+  }
   ctx.needsErrorFlag = true;
   const argCodes: string[] = [];
   for (let i = 0; i < expr.args.length; i++) {
@@ -1503,20 +1519,31 @@ function emitUserCallTensorAssign(
   const inner = indent + "  ";
   lines.push(`${indent}{`);
   lines.push(`${inner}double *${prefix}_buf = NULL;`);
+  if (calleeIsComplex) {
+    lines.push(`${inner}double *${prefix}_buf_im = NULL;`);
+  }
   lines.push(`${inner}int64_t ${prefix}_len = 0;`);
   lines.push(`${inner}int64_t ${prefix}_d0 = 0;`);
   lines.push(`${inner}int64_t ${prefix}_d1 = 0;`);
-  const callArgs = [
-    ...argCodes,
-    `&${prefix}_buf`,
+  const callArgs = [...argCodes, `&${prefix}_buf`];
+  if (calleeIsComplex) callArgs.push(`&${prefix}_buf_im`);
+  callArgs.push(
     `&${prefix}_len`,
     `&${prefix}_d0`,
     `&${prefix}_d1`,
-    `__err_flag`,
-  ];
+    `__err_flag`
+  );
   lines.push(`${inner}jit_${expr.jitName}(${callArgs.join(", ")});`);
   lines.push(`${inner}if (${dData}) free(${dData});`);
+  if (calleeIsComplex) {
+    const dDataIm = tensorDataIm(destName);
+    lines.push(`${inner}if (${dDataIm}) free(${dDataIm});`);
+  }
   lines.push(`${inner}${dData} = ${prefix}_buf;`);
+  if (calleeIsComplex) {
+    const dDataIm = tensorDataIm(destName);
+    lines.push(`${inner}${dDataIm} = ${prefix}_buf_im;`);
+  }
   lines.push(`${inner}${dLen} = ${prefix}_len;`);
   lines.push(`${inner}${dD0} = ${prefix}_d0;`);
   lines.push(`${inner}${dD1} = ${prefix}_d1;`);
@@ -1554,6 +1581,15 @@ function emitComplexTensorAssignInner(
   const dData = tensorData(destName);
   const dDataIm = tensorDataIm(destName);
   const dLen = tensorLen(destName);
+
+  // Tensor-return UserCall whose dest is complex: callee transfers
+  // ownership of both real + imag buffers via the paired dynOutBuf /
+  // dynOutBufIm slots. Reuse the unified real/complex assigner.
+  if (expr.tag === "UserCall") {
+    const destMeta = requireFreshAllocMeta(ctx, destName, "UserCall");
+    emitUserCallTensorAssign(lines, indent, destName, destMeta, expr, ctx);
+    return;
+  }
 
   // All compound RHS cases (Binary / Unary Minus / conj) go through
   // the scratch-transfer pattern: eval the whole expression into a
