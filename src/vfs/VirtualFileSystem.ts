@@ -195,6 +195,7 @@ export class VirtualFileSystem {
 
   rmdir(dirPath: string, recursive: boolean): boolean {
     const norm = this.normalizePath(dirPath);
+    if (this.exists(norm) !== "dir") return false;
     if (recursive) {
       const prefix = norm + "/";
       for (const key of [...this.files.keys()]) {

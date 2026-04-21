@@ -1,0 +1,16 @@
+# Tests that cannot run in the browser test-runner. Format:
+#   <path>[|<reason>]
+# Skipped tests are still compiled, fetched, and displayed — but the runner
+# marks them SKIP and they don't count toward fail in CI.
+
+# Platform string asserts GLNXA64 — specific to a real Node/Linux host.
+builtins/test_computer.m|asserts Node/Linux computer() string
+
+# Assertions probe the real process cwd (package.json, numbl_test_scripts, …).
+builtins/test_isfile.m|asserts against real Node cwd contents
+builtins/test_isfolder.m|asserts against real Node cwd contents
+
+# Synchronous XHR in a document context can't set timeout/responseType.
+# Would need an async HTTP path through the interpreter to run here.
+builtins/test_weboptions.m|synchronous XHR restrictions in browser main thread
+builtins/test_websave.m|synchronous XHR restrictions in browser main thread

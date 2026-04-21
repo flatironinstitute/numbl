@@ -32,6 +32,7 @@ import TerminalIcon from "@mui/icons-material/Terminal";
 import ImageIcon from "@mui/icons-material/Image";
 import MenuBookIcon from "@mui/icons-material/MenuBook";
 import CodeIcon from "@mui/icons-material/Code";
+import ScienceIcon from "@mui/icons-material/Science";
 import { useNavigate } from "react-router-dom";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import {
@@ -330,6 +331,11 @@ export function ProjectListPage() {
               icon: <TerminalIcon sx={{ fontSize: 14 }} />,
               href: "https://www.npmjs.com/package/numbl",
               mono: true,
+            },
+            {
+              label: "Browser test runner",
+              icon: <ScienceIcon sx={{ fontSize: 14 }} />,
+              href: "/test-runner/",
             },
           ].map((link, i) => (
             <Box

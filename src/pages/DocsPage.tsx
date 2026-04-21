@@ -9,6 +9,8 @@ import {
 } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import ScienceIcon from "@mui/icons-material/Science";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -123,6 +125,40 @@ export function DocsPage() {
               />
             </ListItemButton>
           ))}
+        </List>
+        <Typography
+          variant="caption"
+          sx={{
+            px: 2,
+            pt: 2,
+            pb: 1,
+            display: "block",
+            color: "text.secondary",
+            textTransform: "uppercase",
+            letterSpacing: "0.1em",
+            fontSize: "0.65rem",
+            fontWeight: 600,
+          }}
+        >
+          Tools
+        </Typography>
+        <List dense disablePadding>
+          <ListItemButton
+            component="a"
+            href="/test-runner/"
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ py: 0.5, px: 2, borderRadius: 0 }}
+          >
+            <ScienceIcon
+              sx={{ fontSize: 16, mr: 1, color: "text.secondary" }}
+            />
+            <ListItemText
+              primary="Browser test runner"
+              primaryTypographyProps={{ fontSize: "0.82rem" }}
+            />
+            <OpenInNewIcon sx={{ fontSize: 12, color: "text.secondary" }} />
+          </ListItemButton>
         </List>
       </Box>
 

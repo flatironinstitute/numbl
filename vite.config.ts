@@ -28,7 +28,8 @@ export default defineConfig({
     ),
   },
   test: {
-    exclude: ["**/node_modules/**", "**/dist/**"],
+    // tests-browser/ is driven by Playwright, not Vitest.
+    exclude: ["**/node_modules/**", "**/dist/**", "**/tests-browser/**"],
     coverage: {
       exclude: [
         "**/node_modules/**",

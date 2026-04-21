@@ -28,6 +28,10 @@ dist-plot-viewer
 server/dist
 *.local
 .env
+
+# Playwright
+playwright-report/
+test-results/
 server/.env
 
 # Build artifacts (wasm, native shared libraries)
