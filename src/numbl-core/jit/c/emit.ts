@@ -1314,16 +1314,21 @@ function emitEnsureComplexTensorBuf(
 
 /** Derive (d0, d1) C expressions for a dynamic tensor output whose
  *  shape is inherited from an elemwise operand. Uses the operand's
- *  static shape when known; else falls back to `[len, 1]` (1D column
- *  convention). */
-function shapeExprsFor(
+ *  static shape when known; else recovers the missing dim from lenExpr
+ *  and the other dim (e.g. row `[1, -1]` → `[1, len]`). Falls back to
+ *  `[len, 1]` (column convention) when both dims are unknown. */
+export function shapeExprsFor(
   shapeSrc: JitExpr | undefined,
   lenExpr: string
 ): [string, string] {
   const shape =
     shapeSrc?.jitType.kind === "tensor" ? shapeSrc.jitType.shape : undefined;
   if (shape && shape.length === 2) {
-    return [`${shape[0]}`, `${shape[1]}`];
+    const d0Known = shape[0] !== -1;
+    const d1Known = shape[1] !== -1;
+    if (d0Known && d1Known) return [`${shape[0]}`, `${shape[1]}`];
+    if (d0Known) return [`${shape[0]}`, `(${lenExpr} / ${shape[0]})`];
+    if (d1Known) return [`(${lenExpr} / ${shape[1]})`, `${shape[1]}`];
   }
   return [lenExpr, "1"];
 }
@@ -1408,13 +1413,25 @@ function emitZerosOnesAssign(
   };
   const arg0 = roundArg(expr.args[0]);
   const arg1 = expr.args.length === 2 ? roundArg(expr.args[1]) : arg0;
+  ctx.needsErrorFlag = true;
   lines.push(`${indent}{`);
   const inner = indent + "  ";
   lines.push(`${inner}int64_t __zr = ${arg0};`);
   lines.push(`${inner}int64_t __zc = ${arg1};`);
   lines.push(`${inner}if (__zr < 0) __zr = 0;`);
   lines.push(`${inner}if (__zc < 0) __zc = 0;`);
-  lines.push(`${inner}int64_t __zn = __zr * __zc;`);
+  // Overflow guard: int64 wrap would silently produce size=[big×big]
+  // with numel=0. Flag the error (JS wrapper throws) and size to zero
+  // so the rest of the function doesn't allocate a garbage buffer.
+  lines.push(`${inner}int64_t __zn;`);
+  lines.push(
+    `${inner}if (__zr > 0 && __zc > ((int64_t)9223372036854775807LL / 8) / __zr) {`
+  );
+  lines.push(`${inner}  *__err_flag = 1.0;`);
+  lines.push(`${inner}  __zr = 0; __zc = 0; __zn = 0;`);
+  lines.push(`${inner}} else {`);
+  lines.push(`${inner}  __zn = __zr * __zc;`);
+  lines.push(`${inner}}`);
   lines.push(`${inner}double *__zb = NULL;`);
   lines.push(`${inner}if (__zn > 0) {`);
   if (expr.name === "zeros") {
@@ -1756,11 +1773,14 @@ function emitTensorAssign(
     if (isLocalTensor(ctx, destName) || isDynamicOutput(ctx, destName)) {
       emitRangeSliceReadToBuf(lines, indent, expr, ctx, dData, dLen);
       if (isDynamicOutput(ctx, destName)) {
-        // 1D slice — emit column-vector shape for the dynamic output.
-        // Row-vector sources lose orientation here; C-JIT doesn't yet
-        // track RangeSliceRead's isRow flag (the JS-JIT does).
-        lines.push(`${indent}${tensorD0(destName)} = ${dLen};`);
-        lines.push(`${indent}${tensorD1(destName)} = 1;`);
+        // Preserve source orientation: row source → row slice, else column.
+        if (expr.isRow) {
+          lines.push(`${indent}${tensorD0(destName)} = 1;`);
+          lines.push(`${indent}${tensorD1(destName)} = ${dLen};`);
+        } else {
+          lines.push(`${indent}${tensorD0(destName)} = ${dLen};`);
+          lines.push(`${indent}${tensorD1(destName)} = 1;`);
+        }
       }
       return;
     }

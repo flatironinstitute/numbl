@@ -32,10 +32,13 @@ import {
   formatNumberLiteral,
   mangle,
   mangleIm,
+  tensorD0,
+  tensorD1,
   tensorData,
   tensorDataIm,
   tensorLen,
 } from "./jitCodegenC.js";
+import { shapeExprsFor } from "./emit.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
 import {
   C_REDUCTION_LITERALS,
@@ -315,6 +318,16 @@ function emitRealFusedChain(
     lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
   }
 
+  // Propagate dynamic-output shape so size(y) ≠ [0 0].
+  for (const d of writeBack) {
+    if (!dynamicOutputNames.has(d)) continue;
+    let shapeSrc: JitExpr | undefined;
+    for (const a of chain.assigns) if (a.destName === d) shapeSrc = a.expr;
+    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenVar);
+    lines.push(`${indent}${tensorD0(d)} = ${d0Expr};`);
+    lines.push(`${indent}${tensorD1(d)} = ${d1Expr};`);
+  }
+
   // Post-loop: apply mean division if needed, then store reduction result.
   if (chain.reduction) {
     if (chain.reduction.reduceName === "mean") {
@@ -426,8 +439,16 @@ function emitComplexFusedChain(
       );
       chainLocals.add(assign.destName);
     } else {
-      lines.push(`${inner}${fusedLocal(assign.destName)}_re = ${pair.re};`);
-      lines.push(`${inner}${fusedLocal(assign.destName)}_im = ${pair.im};`);
+      // Reassignment aliasing: pair.im may reference `_re` (the prior
+      // value); writing _re first would make pair.im read the new one.
+      // Stage through temporaries so both reads see the old pair.
+      tmpN.n++;
+      const tre = `__fr${tmpN.n}_re`;
+      const tim = `__fr${tmpN.n}_im`;
+      lines.push(`${inner}double ${tre} = ${pair.re};`);
+      lines.push(`${inner}double ${tim} = ${pair.im};`);
+      lines.push(`${inner}${fusedLocal(assign.destName)}_re = ${tre};`);
+      lines.push(`${inner}${fusedLocal(assign.destName)}_im = ${tim};`);
     }
   }
 
@@ -440,6 +461,16 @@ function emitComplexFusedChain(
 
   for (const d of writeBack) {
     lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
+  }
+
+  // Propagate dynamic-output shape so size(y) ≠ [0 0].
+  for (const d of writeBack) {
+    if (!dynamicOutputNames.has(d)) continue;
+    let shapeSrc: JitExpr | undefined;
+    for (const a of chain.assigns) if (a.destName === d) shapeSrc = a.expr;
+    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenVar);
+    lines.push(`${indent}${tensorD0(d)} = ${d0Expr};`);
+    lines.push(`${indent}${tensorD1(d)} = ${d1Expr};`);
   }
 }
 
