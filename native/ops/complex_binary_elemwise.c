@@ -47,20 +47,70 @@ int numbl_complex_binary_elemwise(int op, size_t n,
         out_im[i] = ar * bi + ai * br;
       }
       return NUMBL_OK;
-    case NUMBL_COMPLEX_BIN_DIV:
-      for (size_t i = 0; i < n; i++) {
-        double ar = a_re[i], ai = a_im ? a_im[i] : 0.0;
-        double br = b_re[i], bi = b_im ? b_im[i] : 0.0;
-        double denom = br * br + bi * bi;
-        if (denom == 0.0) {
-          out_re[i] = cdivz_re(ar, ai);
-          out_im[i] = cdivz_im(ar, ai);
-        } else {
-          out_re[i] = (ar * br + ai * bi) / denom;
-          out_im[i] = (ai * br - ar * bi) / denom;
+    case NUMBL_COMPLEX_BIN_DIV: {
+      /* Hoist the a_im / b_im presence tests out of the loop so the
+       * vectorizer sees a straight-line body. The main SIMD pass uses
+       * the naive formula (fast but wrong when br=bi=0, since 0/0
+       * produces NaN); a single sequential fix-up pass then restores
+       * the C99 "complex divide by zero" semantics on any positions
+       * where the denominator was zero. Fix-up is only entered when
+       * the main pass actually produced such a position.
+       */
+      size_t zero_count = 0;
+      if (a_im && b_im) {
+        #pragma omp simd reduction(+:zero_count)
+        for (size_t i = 0; i < n; i++) {
+          double ar = a_re[i], ai = a_im[i];
+          double br = b_re[i], bi = b_im[i];
+          double denom = br * br + bi * bi;
+          double inv = 1.0 / denom;
+          out_re[i] = (ar * br + ai * bi) * inv;
+          out_im[i] = (ai * br - ar * bi) * inv;
+          zero_count += (denom == 0.0);
+        }
+      } else if (a_im) {
+        #pragma omp simd reduction(+:zero_count)
+        for (size_t i = 0; i < n; i++) {
+          double ar = a_re[i], ai = a_im[i];
+          double br = b_re[i];
+          double inv = 1.0 / br;
+          out_re[i] = ar * inv;
+          out_im[i] = ai * inv;
+          zero_count += (br == 0.0);
+        }
+      } else if (b_im) {
+        #pragma omp simd reduction(+:zero_count)
+        for (size_t i = 0; i < n; i++) {
+          double ar = a_re[i];
+          double br = b_re[i], bi = b_im[i];
+          double denom = br * br + bi * bi;
+          double inv = 1.0 / denom;
+          out_re[i] = (ar * br) * inv;
+          out_im[i] = (-ar * bi) * inv;
+          zero_count += (denom == 0.0);
+        }
+      } else {
+        #pragma omp simd reduction(+:zero_count)
+        for (size_t i = 0; i < n; i++) {
+          double ar = a_re[i];
+          double br = b_re[i];
+          out_re[i] = ar / br;
+          out_im[i] = 0.0;
+          zero_count += (br == 0.0);
+        }
+      }
+      if (zero_count) {
+        for (size_t i = 0; i < n; i++) {
+          double br = b_re[i], bi = b_im ? b_im[i] : 0.0;
+          if (br == 0.0 && bi == 0.0) {
+            double ar = a_re[i], ai = a_im ? a_im[i] : 0.0;
+            out_re[i] = cdivz_re(ar, ai);
+            out_im[i] = cdivz_im(ar, ai);
+          }
         }
       }
       return NUMBL_OK;
+    }
     default:
       return NUMBL_ERR_BAD_OP;
   }
