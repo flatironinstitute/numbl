@@ -123,32 +123,68 @@ function isPureElementwise(
   expr: JitExpr,
   paramTensors: ReadonlySet<string>,
   knownTensors: ReadonlySet<string>,
-  allowedUnaryOps: ReadonlySet<string>
+  allowedUnaryOps: ReadonlySet<string>,
+  allTensorVars: ReadonlySet<string>
 ): boolean {
   switch (expr.tag) {
     case "NumberLiteral":
       return true;
 
+    case "ImagLiteral":
+      // Complex-tensor chains route through emitComplexFusedChain, which
+      // reads ImagLiteral as the (0.0, 1.0) per-element pair. For a real
+      // chain that references `1i`, the chain is rejected at the result-
+      // type level (destName goes complex) before we reach here.
+      return true;
+
     case "Var":
       if (expr.jitType.kind === "tensor") {
-        return paramTensors.has(expr.name) || knownTensors.has(expr.name);
+        // Any tensor Var in scope is acceptable: params carry the caller's
+        // buffer; outer locals already assigned before the chain start have
+        // a valid buffer too (classify.ts + the emit prelude guarantee
+        // every tensor local has a pointer by the time any read happens).
+        // Chain-produced intermediates are tracked in `knownTensors`. The
+        // tensor's shape / length feeds the loop via tensorLen(). We still
+        // intersect with allTensorVars as a safety net against misclassified
+        // non-tensor names reaching this branch.
+        return (
+          paramTensors.has(expr.name) ||
+          knownTensors.has(expr.name) ||
+          allTensorVars.has(expr.name)
+        );
       }
       // scalar var — ok
       return true;
 
     case "Binary": {
+      // Complex-result tensor Binary: only the ops emitComplexPerElem
+      // handles (Add/Sub/Mul/ElemMul). Div would need Smith's method with
+      // branches, which doesn't vectorize; comparisons / logicals don't
+      // apply to complex values. Reject so fusion falls back to per-op.
+      if (expr.jitType.kind === "tensor" && expr.jitType.isComplex === true) {
+        if (
+          expr.op !== BinaryOperation.Add &&
+          expr.op !== BinaryOperation.Sub &&
+          expr.op !== BinaryOperation.Mul &&
+          expr.op !== BinaryOperation.ElemMul
+        ) {
+          return false;
+        }
+      }
       return (
         isPureElementwise(
           expr.left,
           paramTensors,
           knownTensors,
-          allowedUnaryOps
+          allowedUnaryOps,
+          allTensorVars
         ) &&
         isPureElementwise(
           expr.right,
           paramTensors,
           knownTensors,
-          allowedUnaryOps
+          allowedUnaryOps,
+          allTensorVars
         )
       );
     }
@@ -158,14 +194,44 @@ function isPureElementwise(
         expr.operand,
         paramTensors,
         knownTensors,
-        allowedUnaryOps
+        allowedUnaryOps,
+        allTensorVars
       );
 
     case "Call": {
-      // Tensor unary calls (exp, sin, etc.)
+      // Complex-tensor calls fusible by emitComplexPerElem: conj/real/imag.
+      const COMPLEX_FUSED_UNARY = new Set(["conj", "real", "imag"]);
+      if (
+        expr.jitType.kind === "tensor" &&
+        expr.jitType.isComplex === true &&
+        COMPLEX_FUSED_UNARY.has(expr.name) &&
+        expr.args.length === 1
+      ) {
+        return isPureElementwise(
+          expr.args[0],
+          paramTensors,
+          knownTensors,
+          allowedUnaryOps,
+          allTensorVars
+        );
+      }
+      // Tensor unary calls (exp, sin, etc.) — the real per-element emitter
+      // only knows how to read `v_name_data[__i]`, so reject when any arg
+      // is a complex tensor (abs(z), sin(z), ...). Those fall back to per-
+      // op emission where the complex kernel in numbl_ops handles them.
       if (expr.jitType.kind === "tensor" && allowedUnaryOps.has(expr.name)) {
+        const anyComplexArg = expr.args.some(
+          a => a.jitType.kind === "tensor" && a.jitType.isComplex === true
+        );
+        if (anyComplexArg) return false;
         return expr.args.every(a =>
-          isPureElementwise(a, paramTensors, knownTensors, allowedUnaryOps)
+          isPureElementwise(
+            a,
+            paramTensors,
+            knownTensors,
+            allowedUnaryOps,
+            allTensorVars
+          )
         );
       }
       // Tensor binary calls (max, min, mod, rem, atan2, hypot)
@@ -174,14 +240,30 @@ function isPureElementwise(
         FUSIBLE_TENSOR_BINARY_OPS.has(expr.name) &&
         expr.args.length === 2
       ) {
+        const anyComplexArg = expr.args.some(
+          a => a.jitType.kind === "tensor" && a.jitType.isComplex === true
+        );
+        if (anyComplexArg) return false;
         return expr.args.every(a =>
-          isPureElementwise(a, paramTensors, knownTensors, allowedUnaryOps)
+          isPureElementwise(
+            a,
+            paramTensors,
+            knownTensors,
+            allowedUnaryOps,
+            allTensorVars
+          )
         );
       }
       // Scalar math calls (sin of a scalar, etc.)
       if (expr.jitType.kind !== "tensor") {
         return expr.args.every(a =>
-          isPureElementwise(a, paramTensors, knownTensors, allowedUnaryOps)
+          isPureElementwise(
+            a,
+            paramTensors,
+            knownTensors,
+            allowedUnaryOps,
+            allTensorVars
+          )
         );
       }
       return false;
@@ -282,7 +364,8 @@ const INLINE_RED_TMP = "__red_tmp";
 function tryMatchInlineReduction(
   stmt: JitStmt,
   paramTensors: ReadonlySet<string>,
-  allowedUnaryOps: ReadonlySet<string>
+  allowedUnaryOps: ReadonlySet<string>,
+  allTensorVars: ReadonlySet<string>
 ): FusibleChain | null {
   if (stmt.tag !== "Assign") return null;
   const expr = stmt.expr;
@@ -300,8 +383,19 @@ function tryMatchInlineReduction(
     // preceding chain).
     if (arg.tag === "Var") return null;
     if (arg.jitType.kind !== "tensor") return null;
+    // Complex reductions can't be absorbed (scalar accumulator is a double,
+    // not a ComplexPair). Reject early.
+    if (arg.jitType.isComplex === true) return null;
     const empty = new Set<string>();
-    if (!isPureElementwise(arg, paramTensors, empty, allowedUnaryOps))
+    if (
+      !isPureElementwise(
+        arg,
+        paramTensors,
+        empty,
+        allowedUnaryOps,
+        allTensorVars
+      )
+    )
       return null;
     return { reduceName: call.name, innerExpr: arg };
   };
@@ -399,7 +493,15 @@ export function findFusibleChains(
       if (s.tag !== "Assign") break;
       if (!allTensorVars.has(s.name)) break;
       if (s.expr.jitType.kind !== "tensor") break;
-      if (!isPureElementwise(s.expr, paramTensors, produced, allowedUnaryOps))
+      if (
+        !isPureElementwise(
+          s.expr,
+          paramTensors,
+          produced,
+          allowedUnaryOps,
+          allTensorVars
+        )
+      )
         break;
 
       chainAssigns.push({ destName: s.name, expr: s.expr });
@@ -417,11 +519,19 @@ export function findFusibleChains(
         countTensorOps(chainAssigns[0].expr, allowedUnaryOps) >= 2);
 
     if (worthFusing) {
-      // Check for trailing reduction (skip any SetLoc first).
+      // Check for trailing reduction (skip any SetLoc first). Skip reduction
+      // absorption when the chain's final dest is a complex tensor — the
+      // fused-loop accumulator is a scalar double, which can't hold a
+      // complex-scalar reduction like `sum(complex_tensor)`. Per-op code
+      // handles the reduction separately (still emits the fused chain body).
       while (i < stmts.length && stmts[i].tag === "SetLoc") i++;
       let reduction: FusedReduction | undefined;
-      const lastDest = chainAssigns[chainAssigns.length - 1].destName;
-      if (i < stmts.length) {
+      const lastAssign = chainAssigns[chainAssigns.length - 1];
+      const lastDest = lastAssign.destName;
+      const lastIsComplex =
+        lastAssign.expr.jitType.kind === "tensor" &&
+        lastAssign.expr.jitType.isComplex === true;
+      if (i < stmts.length && !lastIsComplex) {
         const r = tryMatchReduction(stmts[i], lastDest);
         if (r) {
           reduction = r;
@@ -444,7 +554,8 @@ export function findFusibleChains(
         const inlineChain = tryMatchInlineReduction(
           s,
           paramTensors,
-          allowedUnaryOps
+          allowedUnaryOps,
+          allTensorVars
         );
         if (inlineChain) {
           inlineChain.startIdx = i;

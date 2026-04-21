@@ -40,50 +40,72 @@ All runs produce the same `result = 199.999195988823` (to FP rounding).
 
 Median of 5 runs. Variance between invocations is ±5 %.
 
-| Mode                    | Wall time |     Throughput | Notes                       |
-| ----------------------- | --------: | -------------: | --------------------------- |
-| `--opt 0` (interpreter) |     >60 s |        < 2 M/s | omitted; too slow to finish |
-| `--opt 1` (JS-JIT)      |   0.176 s | **568 Mops/s** | fastest                     |
-| `--opt 2` (C-JIT)       |   0.240 s |     416 Mops/s | on par with MATLAB          |
-| MATLAB R2025b `-batch`  |   0.249 s |     402 Mops/s |                             |
+| Mode                     | Wall time |      Throughput | vs MATLAB |
+| ------------------------ | --------: | --------------: | --------: |
+| `--opt 0` (interpreter)  |     >60 s |         < 2 M/s |      skip |
+| `--opt 1` (JS-JIT)       |   0.176 s |      568 Mops/s |      1.4× |
+| `--opt 2` (C-JIT)        |   0.240 s |      416 Mops/s |      1.0× |
+| `--opt 2 --fuse` (C-JIT) |   0.041 s | **2430 Mops/s** |  **6.0×** |
+| MATLAB R2025b `-batch`   |   0.249 s |      402 Mops/s |      1.0× |
 
-## Why C-JIT doesn't dominate here
+## Fused complex-tensor codegen (`--fuse`)
 
-Unlike `complex_scalar_bench` where the hot loop keeps both components of
-`z` resident in registers (180× speedup over the interpreter), this
-benchmark is **memory bound**:
+With `--fuse`, the C-JIT collapses `z = z .* z + c` into a single fused
+per-element loop instead of two back-to-back libnumbl_ops kernel calls.
+That's the 6× speedup vs both unfused C-JIT and MATLAB:
 
-- Each inner step reads and writes `2 * N * 8 = 3.2 MB` of data (re + im
-  Float64 buffers). That's well past L1 / L2 and streams through memory
-  on every iteration.
-- Per element the kernel does ~6 flops (one complex multiply) + 2 flops
-  (scalar add) = 8 flops, against 12 memory ops. Flops-to-mem ratio ≈
-  0.66, so effective throughput is bounded by memory bandwidth, not
-  arithmetic.
+```c
+#pragma omp simd
+for (int64_t __i = 0; __i < v_z_len; __i++) {
+  double __f_z_re = (v_z_data[__i] * v_z_data[__i]
+                     - __im_v_z_data[__i] * __im_v_z_data[__i]) + v_c;
+  double __f_z_im = (v_z_data[__i] * __im_v_z_data[__i]
+                     + __im_v_z_data[__i] * v_z_data[__i]) + __im_v_c;
+  v_z_data[__i] = __f_z_re;
+  __im_v_z_data[__i] = __f_z_im;
+}
+```
 
-JS-JIT wins this particular workload because V8 inlines its Float64Array
-element-wise helpers and the whole `z.*z + c` chain becomes one tight
-loop that the CPU can execute at near-streaming bandwidth. The C-JIT
-currently emits **two separate kernel calls** per step (elemwise MUL
-then scalar ADD), each doing its own pass over memory — so it moves the
-data through cache twice where JS-JIT moves it once.
+Per element the inner body does 6 real flops (one complex multiply +
+one complex add) against 4 memory ops (2 reads + 2 writes of re/im).
+`#pragma omp simd` vectorizes the straight-line body to AVX2 FMAs; the
+compiler CSE's the repeated `v_z_data[__i]` / `__im_v_z_data[__i]`
+loads into registers. The data still streams through memory on every
+iteration (3.2 MB hot set at N = 200 000), so peak throughput is
+roughly `mem_bandwidth / 3.2MB ≈ 2–3 Gops/s` — the fused emitter
+saturates that, where the per-op path spent half its bandwidth
+re-reading the scratch tensor between the two kernel calls.
 
-Once `--fuse` grows complex-tensor support, the C-JIT can collapse the
-two kernels into a single fused loop and recover the JS-JIT's advantage.
+## Scratch-allocation fast-path (`--opt 2`, no fuse)
 
-## Scratch-allocation fast-path
+Before landing the bench, the C-JIT was emitting an unconditional
+`free(); malloc();` pair for every scratch / destination tensor on
+every hot-loop iteration. At N = 200 000 that was ~12 MB of allocator
+churn per step, and the C-JIT ran at **185 Mops/s** — slower than
+JS-JIT and MATLAB.
 
-Before this benchmark landed, the C-JIT was emitting an unconditional
-`free(); malloc();` pair for every scratch/destination tensor at every
-hot-loop iteration. At N = 200 000, that was ~12 MB of allocator churn
-per step and the C-JIT ran at **185 Mops/s** — slower than JS-JIT and
-MATLAB.
-
-The fix (same commit as this benchmark): guard every scratch + destination
+Fix (same commit as this benchmark): guard every scratch + destination
 alloc with a `__need != current_len` check. Hot-loop sizes are invariant
 across iterations, so the first call allocates and subsequent calls
-short-circuit. The fast-path brought C-JIT up to the **416 Mops/s**
-reported above (2.25× speedup, now on par with MATLAB).
+short-circuit. The fast-path brought per-op C-JIT to **416 Mops/s**
+(2.25× speedup, on par with MATLAB before `--fuse`).
+
+## What fuses, what doesn't (complex chains)
+
+The complex per-element emitter supports:
+
+- Binary: `+`, `-`, `*` / `.*`
+- Unary: `+`, `-`
+- Call: `conj`, `real`, `imag`
+- Operand widening: real tensor or real scalar in a complex chain is
+  read with im = 0 implicitly.
+
+Chains with `./` (complex divide — Smith's method branches break SIMD),
+`abs(complex)` (type transition: complex → real mid-chain), or
+transcendentals (`exp`, `sin`, ... on complex) fall back to per-op
+libnumbl_ops kernel calls. Trailing complex reductions (`sum(z)` →
+complex scalar) are also not absorbed, since the fused-loop accumulator
+is a single `double`; the reduction runs post-loop via the normal path.
 
 ## Caveats
 
@@ -91,7 +113,5 @@ reported above (2.25× speedup, now on par with MATLAB).
   `real`, `imag`, `abs`, and flat reductions (`sum`, `prod`, `any`,
   `all`). Anything more (transcendentals, index read/write, range
   slices) still bails to JS-JIT.
-- Fusion (`--fuse`) doesn't yet cover complex-tensor chains — that's
-  the next optimization knob for closing the gap with JS-JIT.
 - `-ffast-math` is enabled for the C-JIT compile; reduction results
   may differ from `--opt 0/1` by a few ULP.

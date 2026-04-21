@@ -18,7 +18,7 @@
  * reduction.
  */
 
-import { BinaryOperation } from "../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitType } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import {
@@ -31,7 +31,9 @@ import {
   C_SCALAR_TARGET,
   formatNumberLiteral,
   mangle,
+  mangleIm,
   tensorData,
+  tensorDataIm,
   tensorLen,
 } from "./jitCodegenC.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
@@ -133,12 +135,76 @@ const C_FUSED_TARGET: FusedTarget = {
  * function no longer reports back "helpers needed" — the emitter simply
  * calls them as library symbols.
  *
+ * Dispatches to the real or complex per-element emitter based on whether
+ * any assign in the chain produces a complex tensor. Both paths share
+ * the outer shell (lenVar, writeBack, parallel-for decision, loop open);
+ * only the buffer sizing, per-element emission, and write-back differ.
+ *
  * `allTensorVars` is the full set of tensor-typed variable names.
  * `paramTensors` is the subset that are input parameters.
  * `outputTensorNames` is the subset that are function outputs.
  * `localTensorNames` is the subset that are non-param, non-output locals.
+ * `complexTensorNames` is the subset whose tensor has a paired imag buffer.
+ * `complexScalarVars` is the set of scalar vars that hold complex values
+ * (pair-of-doubles `v_name` / `__im_v_name`).
  */
 export function emitFusedChain(
+  lines: string[],
+  indent: string,
+  chain: FusibleChain,
+  allTensorVars: ReadonlySet<string>,
+  paramTensors: ReadonlySet<string>,
+  outputTensorNames: ReadonlySet<string>,
+  localTensorNames: ReadonlySet<string>,
+  dynamicOutputNames: ReadonlySet<string>,
+  complexTensorNames: ReadonlySet<string>,
+  complexScalarVars: ReadonlySet<string>,
+  openmp?: boolean
+): void {
+  if (chainIsComplex(chain, complexTensorNames)) {
+    emitComplexFusedChain(
+      lines,
+      indent,
+      chain,
+      allTensorVars,
+      paramTensors,
+      outputTensorNames,
+      localTensorNames,
+      dynamicOutputNames,
+      complexTensorNames,
+      complexScalarVars
+    );
+    return;
+  }
+  emitRealFusedChain(
+    lines,
+    indent,
+    chain,
+    allTensorVars,
+    paramTensors,
+    outputTensorNames,
+    localTensorNames,
+    dynamicOutputNames,
+    openmp
+  );
+}
+
+/** True when any assign in the chain writes (or reads through Var) a
+ *  complex tensor. The chain was already detected as pure element-wise,
+ *  so we only need to check the destNames and Var references. */
+function chainIsComplex(
+  chain: FusibleChain,
+  complexTensorNames: ReadonlySet<string>
+): boolean {
+  for (const a of chain.assigns) {
+    if (complexTensorNames.has(a.destName)) return true;
+    if (a.expr.jitType.kind === "tensor" && a.expr.jitType.isComplex === true)
+      return true;
+  }
+  return false;
+}
+
+function emitRealFusedChain(
   lines: string[],
   indent: string,
   chain: FusibleChain,
@@ -263,4 +329,313 @@ export function emitFusedChain(
       lines.push(`${indent}${acc} = ${reduceAccLocal};`);
     }
   }
+}
+
+// ── Complex-tensor fused chain ───────────────────────────────────────
+//
+// Mirrors emitRealFusedChain but threads paired (re, im) buffers
+// through every step. Reductions are not absorbed — fusion.ts drops the
+// trailing reduction for complex chains because the scalar accumulator
+// in the fused-loop helpers can't hold a complex value. The caller
+// emits the reduction via per-op code after the fused loop runs.
+
+/** Per-element complex value: two C scalar expression strings. */
+interface ComplexPerElem {
+  re: string;
+  im: string;
+}
+
+function emitComplexFusedChain(
+  lines: string[],
+  indent: string,
+  chain: FusibleChain,
+  allTensorVars: ReadonlySet<string>,
+  paramTensors: ReadonlySet<string>,
+  outputTensorNames: ReadonlySet<string>,
+  localTensorNames: ReadonlySet<string>,
+  dynamicOutputNames: ReadonlySet<string>,
+  complexTensorNames: ReadonlySet<string>,
+  complexScalarVars: ReadonlySet<string>
+): void {
+  const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
+  const lenVar = refParam
+    ? tensorLen(refParam)
+    : tensorLen(chain.assigns[0].destName);
+
+  const { writeBack } = determineWriteBack(chain, outputTensorNames);
+
+  // Size paired re+im buffers for each write-back dest. Same size-match
+  // guard as emitEnsureComplexTensorBuf in emit.ts (skip free+malloc
+  // when length is unchanged across iterations — the common hot-loop case).
+  for (const d of writeBack) {
+    const needsRealloc = localTensorNames.has(d) || dynamicOutputNames.has(d);
+    if (needsRealloc) {
+      const inner2 = indent + "  ";
+      lines.push(`${indent}{`);
+      lines.push(`${inner2}int64_t __need = ${lenVar};`);
+      lines.push(`${inner2}if (__need != ${tensorLen(d)}) {`);
+      lines.push(`${inner2}  if (${tensorData(d)}) free(${tensorData(d)});`);
+      lines.push(
+        `${inner2}  if (${tensorDataIm(d)}) free(${tensorDataIm(d)});`
+      );
+      lines.push(
+        `${inner2}  ${tensorData(d)} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+      );
+      lines.push(
+        `${inner2}  ${tensorDataIm(d)} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+      );
+      lines.push(`${inner2}  ${tensorLen(d)} = __need;`);
+      lines.push(`${inner2}}`);
+      lines.push(`${indent}}`);
+    } else {
+      lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
+    }
+  }
+
+  // Open the loop. No parallel-for yet — the complex elemwise body is
+  // compute-thin (6 flops per element) and thread-spawn overhead would
+  // dominate. #pragma omp simd is enough for the compiler to vectorize.
+  lines.push(`${indent}#pragma omp simd`);
+  lines.push(`${indent}for (int64_t __i = 0; __i < ${lenVar}; __i++) {`);
+  const inner = indent + "  ";
+
+  // Chain-produced intermediates: tracked in a set so later reads emit
+  // `__f_NAME_re` / `__f_NAME_im` instead of a buffer read.
+  const chainLocals = new Set<string>();
+  const tmpN = { n: 0 };
+
+  for (const assign of chain.assigns) {
+    const materializations: string[] = [];
+    const pair = emitComplexPerElem(
+      assign.expr,
+      chainLocals,
+      allTensorVars,
+      complexTensorNames,
+      complexScalarVars,
+      materializations,
+      inner,
+      tmpN
+    );
+    for (const m of materializations) lines.push(m);
+    if (!chainLocals.has(assign.destName)) {
+      lines.push(
+        `${inner}double ${fusedLocal(assign.destName)}_re = ${pair.re};`
+      );
+      lines.push(
+        `${inner}double ${fusedLocal(assign.destName)}_im = ${pair.im};`
+      );
+      chainLocals.add(assign.destName);
+    } else {
+      lines.push(`${inner}${fusedLocal(assign.destName)}_re = ${pair.re};`);
+      lines.push(`${inner}${fusedLocal(assign.destName)}_im = ${pair.im};`);
+    }
+  }
+
+  for (const d of writeBack) {
+    lines.push(`${inner}${tensorData(d)}[__i] = ${fusedLocal(d)}_re;`);
+    lines.push(`${inner}${tensorDataIm(d)}[__i] = ${fusedLocal(d)}_im;`);
+  }
+
+  lines.push(`${indent}}`);
+
+  for (const d of writeBack) {
+    lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
+  }
+}
+
+/** Walk a complex element-wise expression tree into per-element re/im
+ *  C expression strings. Analogous to emitFusedScalarExpr but returns a
+ *  ComplexPerElem and pre-declares scratch `__fm{n}_{re,im}` locals when
+ *  operands would otherwise be re-evaluated (Binary Mul / Div / Sub with
+ *  reused sides). Pre-decls are appended to `materializations` in the
+ *  order they must appear before the main assignment. */
+function emitComplexPerElem(
+  expr: JitExpr,
+  chainLocals: ReadonlySet<string>,
+  allTensorVars: ReadonlySet<string>,
+  complexTensorNames: ReadonlySet<string>,
+  complexScalarVars: ReadonlySet<string>,
+  materializations: string[],
+  indent: string,
+  tmpN: { n: number }
+): ComplexPerElem {
+  switch (expr.tag) {
+    case "NumberLiteral":
+      return { re: formatNumberLiteral(expr.value), im: "0.0" };
+
+    case "ImagLiteral":
+      return { re: "0.0", im: "1.0" };
+
+    case "Var": {
+      const name = expr.name;
+      if (expr.jitType.kind === "tensor" || allTensorVars.has(name)) {
+        if (chainLocals.has(name)) {
+          return {
+            re: `${fusedLocal(name)}_re`,
+            im: `${fusedLocal(name)}_im`,
+          };
+        }
+        if (complexTensorNames.has(name)) {
+          return {
+            re: `${tensorData(name)}[__i]`,
+            im: `${tensorDataIm(name)}[__i]`,
+          };
+        }
+        // Real tensor in complex context: widen with im = 0.
+        return { re: `${tensorData(name)}[__i]`, im: "0.0" };
+      }
+      // Scalar var.
+      if (complexScalarVars.has(name)) {
+        return { re: mangle(name), im: mangleIm(name) };
+      }
+      return { re: mangle(name), im: "0.0" };
+    }
+
+    case "Unary": {
+      if (expr.op === UnaryOperation.Plus) {
+        return emitComplexPerElem(
+          expr.operand,
+          chainLocals,
+          allTensorVars,
+          complexTensorNames,
+          complexScalarVars,
+          materializations,
+          indent,
+          tmpN
+        );
+      }
+      if (expr.op === UnaryOperation.Minus) {
+        const o = emitComplexPerElem(
+          expr.operand,
+          chainLocals,
+          allTensorVars,
+          complexTensorNames,
+          complexScalarVars,
+          materializations,
+          indent,
+          tmpN
+        );
+        return { re: `(-(${o.re}))`, im: `(-(${o.im}))` };
+      }
+      throw new Error(
+        `complex fused: unsupported unary op ${expr.op} in fused chain`
+      );
+    }
+
+    case "Binary": {
+      const l = emitComplexPerElem(
+        expr.left,
+        chainLocals,
+        allTensorVars,
+        complexTensorNames,
+        complexScalarVars,
+        materializations,
+        indent,
+        tmpN
+      );
+      const r = emitComplexPerElem(
+        expr.right,
+        chainLocals,
+        allTensorVars,
+        complexTensorNames,
+        complexScalarVars,
+        materializations,
+        indent,
+        tmpN
+      );
+      switch (expr.op) {
+        case BinaryOperation.Add:
+          return { re: `(${l.re} + ${r.re})`, im: `(${l.im} + ${r.im})` };
+        case BinaryOperation.Sub:
+          return { re: `(${l.re} - ${r.re})`, im: `(${l.im} - ${r.im})` };
+        case BinaryOperation.Mul:
+        case BinaryOperation.ElemMul: {
+          // Both sides used twice in the per-component formula. Reuse of a
+          // leaf (Var, number) is free; reuse of a compound sub-expression
+          // would 4x-expand the source. Materialize eagerly — the C
+          // compiler's CSE cleans up the trivial cases.
+          const lm = materializePair(l, materializations, indent, tmpN);
+          const rm = materializePair(r, materializations, indent, tmpN);
+          return {
+            re: `(${lm.re} * ${rm.re} - ${lm.im} * ${rm.im})`,
+            im: `(${lm.re} * ${rm.im} + ${lm.im} * ${rm.re})`,
+          };
+        }
+        default:
+          throw new Error(
+            `complex fused: unsupported binary op ${expr.op} in fused chain`
+          );
+      }
+    }
+
+    case "Call": {
+      if (expr.name === "conj" && expr.args.length === 1) {
+        const o = emitComplexPerElem(
+          expr.args[0],
+          chainLocals,
+          allTensorVars,
+          complexTensorNames,
+          complexScalarVars,
+          materializations,
+          indent,
+          tmpN
+        );
+        return { re: o.re, im: `(-(${o.im}))` };
+      }
+      if (expr.name === "real" && expr.args.length === 1) {
+        const o = emitComplexPerElem(
+          expr.args[0],
+          chainLocals,
+          allTensorVars,
+          complexTensorNames,
+          complexScalarVars,
+          materializations,
+          indent,
+          tmpN
+        );
+        return { re: o.re, im: "0.0" };
+      }
+      if (expr.name === "imag" && expr.args.length === 1) {
+        const o = emitComplexPerElem(
+          expr.args[0],
+          chainLocals,
+          allTensorVars,
+          complexTensorNames,
+          complexScalarVars,
+          materializations,
+          indent,
+          tmpN
+        );
+        return { re: o.im, im: "0.0" };
+      }
+      throw new Error(
+        `complex fused: unsupported call '${expr.name}' in fused chain`
+      );
+    }
+
+    default:
+      throw new Error(
+        `complex fused: unsupported expr ${expr.tag} in fused chain`
+      );
+  }
+}
+
+/** Materialize a ComplexPerElem into `__fm{n}_re` / `__fm{n}_im` locals
+ *  declared just above the current per-element statement. Skips the
+ *  materialization when the operand is already a simple identifier or
+ *  `ident[__i]` array read — no reason to bounce those through a temp. */
+function materializePair(
+  pair: ComplexPerElem,
+  materializations: string[],
+  indent: string,
+  tmpN: { n: number }
+): ComplexPerElem {
+  const simple = /^(-?\d+(\.\d+)?|[A-Za-z_]\w*(\[__i\])?)$/;
+  if (simple.test(pair.re) && simple.test(pair.im)) return pair;
+  const n = ++tmpN.n;
+  const reVar = `__fm${n}_re`;
+  const imVar = `__fm${n}_im`;
+  materializations.push(`${indent}double ${reVar} = ${pair.re};`);
+  materializations.push(`${indent}double ${imVar} = ${pair.im};`);
+  return { re: reVar, im: imVar };
 }

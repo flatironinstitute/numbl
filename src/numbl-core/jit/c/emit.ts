@@ -1190,14 +1190,20 @@ export function emitStmts(
     coveredByChain.set(chain.startIdx, { chain });
   }
 
+  // Pre-compute complex tensor names and complex scalar vars. The fused
+  // emitter dispatches on these to pick the real or complex per-element
+  // path; the sets are loop-invariant over the chain iteration below.
+  const dynamicOutputNames = new Set<string>();
+  const complexTensorNames = new Set<string>();
+  for (const [name, m] of ctx.cls.meta) {
+    if (m.isDynamicOutput) dynamicOutputNames.add(name);
+    if (m.isComplex) complexTensorNames.add(name);
+  }
+
   let i = 0;
   while (i < stmts.length) {
     const entry = coveredByChain.get(i);
     if (entry) {
-      const dynamicOutputNames = new Set<string>();
-      for (const n of ctx.cls.outputTensorNames) {
-        if (ctx.cls.meta.get(n)?.isDynamicOutput) dynamicOutputNames.add(n);
-      }
       emitFusedChain(
         lines,
         indent,
@@ -1207,6 +1213,8 @@ export function emitStmts(
         ctx.cls.outputTensorNames,
         ctx.cls.localTensorNames,
         dynamicOutputNames,
+        complexTensorNames,
+        ctx.complexScalarVars,
         ctx.openmp
       );
       i += entry.chain.length;

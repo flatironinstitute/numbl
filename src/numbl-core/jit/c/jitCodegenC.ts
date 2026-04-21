@@ -54,7 +54,9 @@ export type { CParamDesc, COutputDesc } from "./abi.js";
 // cJitInstall.ts, tests).
 export {
   mangle,
+  mangleIm,
   tensorData,
+  tensorDataIm,
   tensorLen,
   tensorD0,
   tensorD1,
