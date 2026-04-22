@@ -35,19 +35,19 @@ All runs produce the same check values (to FP rounding).
 - **OS:** Debian 13 (trixie), kernel 6.12.74
 - **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
 - **MATLAB:** R2025b Update 5
+- **Measured:** 2026-04-22 18:28 UTC
 
-Median of 3 runs for all modes.
+Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 
-| Mode                           |  Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
-| ------------------------------ | -----: | -----: | -----: | ------: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)        | 15.4 s | 0.57 s | 1.87 s |  0.35 s |  0.52 s | 5.64 s | 6.45 s |
-| `--opt 1` (JS-JIT)             | 13.3 s | 0.28 s | 1.05 s |  0.24 s |  0.37 s | 5.25 s | 6.08 s |
-| `--opt 2` (C-JIT)              | 12.2 s | 0.27 s | 1.33 s |  0.20 s |  0.29 s | 4.63 s | 5.48 s |
-| `--opt 2 --fuse` (C-JIT)       | 1.39 s | 0.10 s | 0.51 s |  0.07 s |  0.32 s | 0.27 s | 0.12 s |
-| `--opt 2 --fuse --par` (C-JIT) | 0.95 s | 0.07 s | 0.19 s |  0.08 s |  0.36 s | 0.14 s | 0.11 s |
-| MATLAB R2025b (1 thread)       | 6.28 s | 0.43 s | 3.27 s |  0.12 s |  0.46 s | 1.41 s | 0.58 s |
-| MATLAB R2025b `-batch`         | 3.95 s | 0.24 s | 2.04 s |  0.09 s |  0.27 s | 0.93 s | 0.39 s |
-| MATLAB R2025b (8 threads)      | 2.43 s | 0.12 s | 1.16 s |  0.11 s |  0.16 s | 0.61 s | 0.28 s |
+| Mode                           |   Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
+| ------------------------------ | ------: | -----: | -----: | ------: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)        | 15.88 s | 0.48 s | 1.85 s |  0.40 s |  0.58 s | 5.79 s | 6.79 s |
+| `--opt 1` (JS-JIT)             | 14.03 s | 0.31 s | 1.12 s |  0.24 s |  0.37 s | 5.57 s | 6.41 s |
+| `--opt 2` (C-JIT)              | 13.64 s | 0.29 s | 1.11 s |  0.21 s |  0.31 s | 5.36 s | 5.97 s |
+| `--opt 2 --fuse` (C-JIT)       |  1.69 s | 0.12 s | 0.62 s |  0.00 s |  0.41 s | 0.32 s | 0.21 s |
+| `--opt 2 --fuse --par` (C-JIT) |  1.16 s | 0.09 s | 0.23 s |  0.00 s |  0.40 s | 0.18 s | 0.28 s |
+| MATLAB R2025b (1 thread)       |  7.39 s | 0.47 s | 3.77 s |  0.16 s |  0.59 s | 1.80 s | 0.68 s |
+| MATLAB R2025b (8 threads)      |  2.49 s | 0.12 s | 1.17 s |  0.18 s |  0.28 s | 0.60 s | 0.28 s |
 
 ### macOS (N=2 000 000, trials=50)
 

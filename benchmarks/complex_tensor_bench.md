@@ -37,20 +37,21 @@ abs_acc        = 2795090.562
 
 - **CPU:** 13th Gen Intel Core i7-1355U (12 threads)
 - **OS:** Debian 13 (trixie), kernel 6.12.74
-- **Toolchain:** Node v24.14.1, cc 14.2.0
+- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
 - **MATLAB:** R2025b Update 5
+- **Measured:** 2026-04-22 18:28 UTC
 
 Median of 3 runs. Times in seconds.
 
-| Kernel                    | `--opt 1` | `--opt 2` | `--opt 2 --fuse` | MATLAB |
-| ------------------------- | --------: | --------: | ---------------: | -----: |
-| 1. Mandelbrot z.\*z+c     |     0.112 |     0.177 |            0.044 |  0.138 |
-| 2. Tensor chain z.\*w+y   |     0.147 |     0.217 |            0.082 |  0.132 |
-| 3. Conj chain conj(z).\*z |     0.324 |     0.279 |            0.063 |  0.190 |
-| 4. Widening x+y\*1i       |     0.103 |     0.159 |            0.048 |  0.110 |
-| 5. Divide z./w            |     0.097 |     0.151 |            0.153 |  0.124 |
-| 6. abs + sum reduction    |     0.077 |     0.052 |            0.053 |  0.178 |
-| **Total**                 |     0.874 |     1.069 |            0.449 |  0.884 |
+| Kernel                    | `--opt 1` | `--opt 2` | `--opt 2 --fuse` | `--opt 2 --fuse --par` | MATLAB (1 thread) | MATLAB (8 threads) |
+| ------------------------- | --------: | --------: | ---------------: | ---------------------: | ----------------: | -----------------: |
+| 1. Mandelbrot z.\*z+c     |     0.130 |     0.163 |            0.056 |                  0.051 |             0.302 |              0.068 |
+| 2. Tensor chain z.\*w+y   |     0.178 |     0.181 |            0.100 |                  0.096 |             0.290 |              0.085 |
+| 3. Conj chain conj(z).\*z |     0.384 |     0.266 |            0.081 |                  0.083 |             0.377 |              0.153 |
+| 4. Widening x+y\*1i       |     0.125 |     0.128 |            0.056 |                  0.063 |             0.232 |              0.066 |
+| 5. Divide z./w            |     0.096 |     0.085 |            0.085 |                  0.080 |             0.246 |              0.093 |
+| 6. abs + sum reduction    |     0.082 |     0.060 |            0.055 |                  0.058 |             0.270 |              0.099 |
+| **Total**                 |     0.978 |     0.884 |            0.423 |                  0.457 |             1.730 |              0.558 |
 
 ## What fuses, what doesn't (complex chains)
 

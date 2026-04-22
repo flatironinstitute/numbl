@@ -38,21 +38,21 @@ All runs produce the same `result = 2070.336478567545` (to FP rounding).
 - **CPU:** 13th Gen Intel Core i7-1355U (12 threads)
 - **OS:** Debian 13 (trixie), kernel 6.12.74
 - **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
-- **MATLAB:** R2025b Update 5 · **Octave:** 9.4.0
+- **MATLAB:** R2025b Update 5
+- **Measured:** 2026-04-22 18:28 UTC
 
-Median of 3 runs for all modes.
+Median of 3 runs for all non-interpreter modes (`--opt 0` is a single
+run since it's slow enough to make repeats uninteresting).
 
 | Mode                      |  Wall time |       Throughput | Speedup vs `--opt 0` |
 | ------------------------- | ---------: | ---------------: | -------------------: |
-| `--opt 0` (interpreter)   |    30.71 s |    0.98 Mcalls/s |                   1× |
-| `--opt 1` (JS-JIT)        |     0.30 s |     101 Mcalls/s |                ~103× |
-| `--opt 2` (C-JIT)         | **0.22 s** | **135 Mcalls/s** |            **~139×** |
-| `--opt 2 --fuse` (C-JIT)  |     0.23 s |     133 Mcalls/s |                ~136× |
-| `--opt 2 --fuse --par`    |     0.22 s |     135 Mcalls/s |                ~139× |
-| MATLAB R2025b (1 thread)  |     0.30 s |     101 Mcalls/s |                ~103× |
-| MATLAB R2025b `-batch`    |     0.30 s |     100 Mcalls/s |                ~103× |
-| MATLAB R2025b (8 threads) |     0.30 s |     100 Mcalls/s |                ~102× |
-| Octave 9.4 `--eval`       |    65.03 s |    0.46 Mcalls/s |               ~0.53× |
+| `--opt 0` (interpreter)   |    30.47 s |    0.98 Mcalls/s |                   1× |
+| `--opt 1` (JS-JIT)        |     0.31 s |      97 Mcalls/s |                 ~99× |
+| `--opt 2` (C-JIT)         | **0.23 s** | **132 Mcalls/s** |            **~134×** |
+| `--opt 2 --fuse` (C-JIT)  |     0.23 s |     129 Mcalls/s |                ~131× |
+| `--opt 2 --fuse --par`    |     0.23 s |     132 Mcalls/s |                ~134× |
+| MATLAB R2025b (1 thread)  |     0.31 s |      96 Mcalls/s |                 ~97× |
+| MATLAB R2025b (8 threads) |     0.33 s |      91 Mcalls/s |                 ~92× |
 
 ### macOS (N=60 000, M=500, 30M sin+div)
 
