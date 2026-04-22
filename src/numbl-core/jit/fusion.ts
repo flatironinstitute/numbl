@@ -584,6 +584,8 @@ export function findFusibleChains(
       // This handles `s = sum(x .* y + 0.5)` and
       // `s = s + sum(exp(-x .* x))` patterns.
       if (chainAssigns.length === 0) {
+        // The SetLoc-skip above may have advanced `i` to stmts.length.
+        if (i >= stmts.length) break;
         const s = stmts[i];
         const inlineChain = tryMatchInlineReduction(
           s,
