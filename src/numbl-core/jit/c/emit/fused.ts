@@ -50,9 +50,14 @@ import {
 } from "../../fusedChainHelpers.js";
 
 /** Minimum element count before `#pragma omp parallel for` kicks in.
- *  Below this, thread-spawn overhead dominates. */
-const OMP_PARALLEL_THRESHOLD =
-  parseInt(process.env.NUMBL_OMP_THRESHOLD || "", 10) || 100_000;
+ *  Below this, thread-spawn overhead dominates.
+ *
+ *  Read at emit time (not module-load) so a test or program that changes
+ *  NUMBL_OMP_THRESHOLD across runs in the same Node process sees the
+ *  updated value. */
+function ompParallelThreshold(): number {
+  return parseInt(process.env.NUMBL_OMP_THRESHOLD || "", 10) || 100_000;
+}
 
 /** Builtins that are expensive enough per element to justify thread-spawn overhead. */
 const HEAVY_OPS = new Set([
@@ -289,7 +294,7 @@ function emitRealFusedChain(
   if (!chain.reduction) {
     if (openmp && writesToOutput && heavyOps > 0) {
       lines.push(
-        `${indent}#pragma omp parallel for simd if(${lenVar} >= ${OMP_PARALLEL_THRESHOLD})`
+        `${indent}#pragma omp parallel for simd if(${lenVar} >= ${ompParallelThreshold()})`
       );
     } else {
       lines.push(`${indent}#pragma omp simd`);
