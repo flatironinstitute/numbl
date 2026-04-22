@@ -238,13 +238,18 @@ registerCJitBackend({
     // proto globally before compileAndLoad declares the koffi function.
     if (gen.needsDispCb) ensureDispCbProto();
 
-    const useOmp = interp.par && cJitOpenmpAvailable();
+    // Link with -fopenmp unconditionally when the compiler supports it so
+    // that numbl_ops.a (which has `#pragma omp parallel for` in bessel.c)
+    // can be safely linked into any JIT module regardless of --par.
+    // --par still controls whether fused loops get parallel pragmas via
+    // the `interp.par && cJitOpenmpAvailable()` flag passed to generateC.
+    const ompLink = cJitOpenmpAvailable();
     const loaded = compileAndLoad(
       gen.cSource,
       gen.koffiSignature,
       gen.cFnName,
       interp.log,
-      useOmp ? ["-fopenmp"] : undefined
+      ompLink ? ["-fopenmp"] : undefined
     );
     if (!loaded) {
       return {

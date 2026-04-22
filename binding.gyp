@@ -48,7 +48,14 @@
       ],
       "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
       "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
-      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ]
+      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
+      "conditions": [
+        ['OS=="linux"', {
+          "cflags_c": [ "-fopenmp" ],
+          "cflags_cc": [ "-fopenmp" ],
+          "libraries": [ "-fopenmp" ]
+        }]
+      ]
     },
     {
       "target_name": "numbl_ops",
@@ -64,7 +71,12 @@
         "native/ops/bessel.c"
       ],
       "include_dirs": [ "native/ops" ],
-      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ]
+      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ],
+      "conditions": [
+        ['OS=="linux"', {
+          "cflags_c": [ "-fopenmp" ]
+        }]
+      ]
     },
     {
       "target_name": "numbl_jit_runtime",

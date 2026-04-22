@@ -467,50 +467,65 @@ static double scalar_besselk(double nu, double x) {
  * for real z is 1, but we preserve existing numerical behavior.)
  */
 
+/* Minimum n before bessel_real / bessel_h go multi-threaded. Below this,
+ * per-scalar work (~50-200 ns) × n can't amortize OpenMP fork/join
+ * (~10-30 us on modern x86). 4096 elems × ~100 ns each ≈ 400 us is a
+ * comfortable crossover.
+ */
+#define NUMBL_BESSEL_OMP_MIN 4096
+
 int numbl_bessel_real(int op, double nu, size_t n,
                       const double* z, int scale, double* out) {
   if (!z || !out) return NUMBL_ERR_NULL_PTR;
   switch (op) {
     case NUMBL_BESSEL_J: {
       if (scale) {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) {
           double zi = z[i];
           out[i] = scalar_besselj(nu, zi) * exp(-fabs(zi));
         }
       } else {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) out[i] = scalar_besselj(nu, z[i]);
       }
       return NUMBL_OK;
     }
     case NUMBL_BESSEL_Y: {
       if (scale) {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) {
           double zi = z[i];
           out[i] = scalar_bessely(nu, zi) * exp(-fabs(zi));
         }
       } else {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) out[i] = scalar_bessely(nu, z[i]);
       }
       return NUMBL_OK;
     }
     case NUMBL_BESSEL_I: {
       if (scale) {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) {
           double zi = z[i];
           out[i] = scalar_besseli(nu, zi) * exp(-fabs(zi));
         }
       } else {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) out[i] = scalar_besseli(nu, z[i]);
       }
       return NUMBL_OK;
     }
     case NUMBL_BESSEL_K: {
       if (scale) {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) {
           double zi = z[i];
           out[i] = scalar_besselk(nu, zi) * exp(zi);
         }
       } else {
+        #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
         for (size_t i = 0; i < n; i++) out[i] = scalar_besselk(nu, z[i]);
       }
       return NUMBL_OK;
@@ -530,6 +545,7 @@ int numbl_bessel_h(int k_kind, double nu, size_t n,
   if (k_kind != 1 && k_kind != 2) return NUMBL_ERR_BAD_OP;
   double ysign = k_kind == 1 ? 1.0 : -1.0;
   if (!scale) {
+    #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
     for (size_t i = 0; i < n; i++) {
       double zi = z[i];
       out_re[i] = scalar_besselj(nu, zi);
@@ -540,6 +556,7 @@ int numbl_bessel_h(int k_kind, double nu, size_t n,
      * K=2 scaled: multiply by exp(+i*z) = cos(z) + i*sin(z).
      */
     double ssign = k_kind == 1 ? -1.0 : 1.0;
+    #pragma omp parallel for schedule(static) if (n >= NUMBL_BESSEL_OMP_MIN)
     for (size_t i = 0; i < n; i++) {
       double zi = z[i];
       double J = scalar_besselj(nu, zi);
