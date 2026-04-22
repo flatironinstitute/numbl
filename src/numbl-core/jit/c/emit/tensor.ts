@@ -203,6 +203,97 @@ export function emitEnsureTensorBuf(
   lines.push(`${indent}${dLen} = ${lenExpr};`);
 }
 
+/** Emit an elemwise tensor-assign with aliasing safety and a
+ *  steady-state fast path.
+ *
+ *  Problem: the RHS of `dst = <elemwise-expr>` may read from `dst` itself
+ *  (e.g. `r = r .* y + 3.0`). If we resized the dst buffer first and
+ *  then the kernel read the old dst data, it would dangle. Pre-c54add0
+ *  the kernel wrote inline into dst, which was only safe when no resize
+ *  was needed — resizing freed the operand buffer before the kernel
+ *  read it. c54add0 defused this via an unconditional scratch-transfer
+ *  (eval into scratch, then free+malloc dst, then memcpy) but that
+ *  added a full-tensor memcpy to every elemwise assign in hot loops.
+ *
+ *  This helper splits at runtime: if dst is already the right size,
+ *  emit the kernel directly into dst (no memcpy, no scratch). Else
+ *  evaluate into a scratch, then realloc dst and memcpy. Both paths
+ *  are aliasing-safe: the fast path doesn't free dst at all; the slow
+ *  path reads operands before dst is freed.
+ *
+ *  Fixed-size outputs (caller-owned buffer) skip the guard — their
+ *  buffer is never freed, so the inline path is always safe.
+ *
+ *  `emitKernel` emits the tensor kernel writing `targetLen` doubles
+ *  into `targetData`. It is invoked exactly once; both paths share
+ *  a single emission. Sub-expressions may use scratch buffers freely. */
+export function emitElemwiseTensorAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  lenExpr: string,
+  shapeSrc: JitExpr | undefined,
+  ctx: EmitCtx,
+  emitKernel: (
+    lines: string[],
+    indent: string,
+    targetData: string,
+    targetLen: string
+  ) => void
+): void {
+  const dData = tensorData(destName);
+  const dLen = tensorLen(destName);
+  const isDyn = isDynamicOutput(ctx, destName);
+
+  if (!isLocalTensor(ctx, destName) && !isDyn) {
+    // Fixed-size output: caller buffer, never freed — inline always safe.
+    lines.push(`${indent}${dLen} = ${lenExpr};`);
+    emitKernel(lines, indent, dData, dLen);
+    return;
+  }
+
+  const sIdx = allocScratch(ctx);
+  const sData = scratchData(sIdx);
+  const sLen = scratchLen(sIdx);
+  const tag = `__tgt${sIdx}`;
+  const inlineFlag = `__inline${sIdx}`;
+  const inner = indent + "  ";
+
+  lines.push(`${indent}{`);
+  lines.push(`${inner}int64_t __need = ${lenExpr};`);
+  lines.push(`${inner}int ${inlineFlag} = (__need == ${dLen});`);
+  lines.push(`${inner}double *${tag};`);
+  lines.push(`${inner}if (${inlineFlag}) {`);
+  lines.push(`${inner}  ${tag} = ${dData};`);
+  lines.push(`${inner}} else {`);
+  lines.push(`${inner}  if (__need != ${sLen}) {`);
+  lines.push(`${inner}    if (${sData}) free(${sData});`);
+  lines.push(
+    `${inner}    ${sData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+  );
+  lines.push(`${inner}    ${sLen} = __need;`);
+  lines.push(`${inner}  }`);
+  lines.push(`${inner}  ${tag} = ${sData};`);
+  lines.push(`${inner}}`);
+  emitKernel(lines, inner, tag, "__need");
+  lines.push(`${inner}if (!${inlineFlag}) {`);
+  lines.push(`${inner}  if (${dData}) free(${dData});`);
+  lines.push(
+    `${inner}  ${dData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+  );
+  lines.push(`${inner}  ${dLen} = __need;`);
+  lines.push(
+    `${inner}  if (${dLen} > 0) memcpy(${dData}, ${tag}, (size_t)${dLen} * sizeof(double));`
+  );
+  lines.push(`${inner}}`);
+  lines.push(`${indent}}`);
+  if (isDyn) {
+    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
+    lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+    lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
+  }
+}
+
 /** Complex-tensor version of emitEnsureTensorBuf. Reallocates both re
  *  and im buffers in lockstep, so kernel writes into the paired
  *  destination don't mismatch in size. Fixed outputs keep their

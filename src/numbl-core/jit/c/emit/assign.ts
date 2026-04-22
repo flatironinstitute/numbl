@@ -23,7 +23,6 @@ import { UnaryOperation } from "../../../parser/types.js";
 import { type JitExpr, isKnownInteger } from "../../jitTypes.js";
 import type { TensorMeta } from "../classify.js";
 import {
-  allocScratch,
   getTensorBinaryFn,
   getTensorReductionOp,
   getTensorUnaryOp,
@@ -34,8 +33,6 @@ import {
   isOutputTensor,
   isTensorVar,
   mangle,
-  scratchData,
-  scratchLen,
   tensorD0,
   tensorD1,
   tensorData,
@@ -48,11 +45,12 @@ import { isTensorExpr, requireFreshAllocMeta } from "./helpers.js";
 import { emitExpr } from "./scalar.js";
 import {
   emitComplexTensorExprToStmts,
+  emitElemwiseTensorAssign,
   emitEnsureComplexTensorBuf,
-  emitEnsureTensorBuf,
   emitRangeSliceReadToBuf,
-  emitScratchBufAlloc,
+  emitTensorBinaryStmts,
   emitTensorExprToStmts,
+  findTensorLenExpr,
   shapeExprsFor,
 } from "./tensor.js";
 import { emitUserCallTensorAssign } from "./userCall.js";
@@ -482,25 +480,21 @@ export function emitTensorAssign(
   }
 
   if (expr.tag === "Binary" && isTensorExpr(expr)) {
-    // Route the whole RHS through a scratch so that a self-aliasing
-    // sub-expression like `r = r .* y + 3.0` sees the OLD v_r_data
-    // while the kernel writes into a fresh scratch. Then transfer
-    // the scratch into dst (free+malloc for locals/dyn outputs, or
-    // memcpy for fixed outputs). Fixes the heap-overflow regression
-    // where emitEnsureTensorBuf clobbered an aliased operand before
-    // the kernel read it.
-    const scratch = emitTensorExprToStmts(lines, indent, expr, ctx);
+    // Emit the binary kernel with aliasing safety + steady-state fast
+    // path: if dst's buffer is already the right size (no realloc
+    // needed), the kernel writes directly into dst; otherwise it
+    // writes into scratch first, then dst is realloc'd and the
+    // scratch copied over. Fast path avoids a full-tensor memcpy.
     const tensorOperand = isTensorExpr(expr.left) ? expr.left : expr.right;
-    emitEnsureTensorBuf(
+    const lenExpr = findTensorLenExpr(expr, ctx);
+    emitElemwiseTensorAssign(
       lines,
       indent,
       destName,
-      scratch.len,
+      lenExpr,
+      tensorOperand,
       ctx,
-      tensorOperand
-    );
-    lines.push(
-      `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
+      (l, ind, buf, len) => emitTensorBinaryStmts(l, ind, expr, ctx, buf, len)
     );
     return;
   }
@@ -511,21 +505,20 @@ export function emitTensorAssign(
       return;
     }
     if (expr.op === UnaryOperation.Minus) {
-      // scratch-transfer pattern — evaluate `-operand` into a scratch
-      // first, then free+malloc dst. Guards against `r = -r` aliasing,
-      // where operand.data would otherwise dangle through the dst
-      // free before the kernel reads it.
-      const scratch = emitTensorExprToStmts(lines, indent, expr, ctx);
-      emitEnsureTensorBuf(
+      const lenExpr = findTensorLenExpr(expr.operand, ctx);
+      emitElemwiseTensorAssign(
         lines,
         indent,
         destName,
-        scratch.len,
+        lenExpr,
+        expr.operand,
         ctx,
-        expr.operand
-      );
-      lines.push(
-        `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
+        (l, ind, buf, len) => {
+          const operand = emitTensorExprToStmts(l, ind, expr.operand, ctx);
+          l.push(
+            `${ind}numbl_real_scalar_binary_elemwise(NUMBL_REAL_BIN_MUL, (size_t)${len}, -1.0, ${operand.data}, 1, ${buf});`
+          );
+        }
       );
       return;
     }
@@ -534,27 +527,24 @@ export function emitTensorAssign(
   if (expr.tag === "Call" && isTensorExpr(expr)) {
     const opEnum = getTensorUnaryOp(expr.name);
     if (opEnum) {
-      // Scratch-transfer to defuse self-aliasing (e.g. `r = exp(r)`).
-      const scratch = emitTensorExprToStmts(lines, indent, expr, ctx);
-      emitEnsureTensorBuf(
+      const lenExpr = findTensorLenExpr(expr.args[0], ctx);
+      emitElemwiseTensorAssign(
         lines,
         indent,
         destName,
-        scratch.len,
+        lenExpr,
+        expr.args[0],
         ctx,
-        expr.args[0]
-      );
-      lines.push(
-        `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
+        (l, ind, buf, len) => {
+          const arg = emitTensorExprToStmts(l, ind, expr.args[0], ctx);
+          l.push(
+            `${ind}numbl_real_unary_elemwise(${opEnum}, (size_t)${len}, ${arg.data}, ${buf});`
+          );
+        }
       );
       return;
     }
-    // abs(complex_tensor) → real tensor, via numbl_complex_abs. Sits
-    // here rather than in the tensorUnaryOp path because the output
-    // type changes (complex operand → real result). Scratch-transfer
-    // pattern keeps this aliasing-safe even if the real-tensor dst
-    // somehow shared a name with the complex operand (shouldn't
-    // happen given the type flip, but cheap insurance).
+    // abs(complex_tensor) → real tensor via numbl_complex_abs.
     if (
       expr.name === "abs" &&
       expr.args.length === 1 &&
@@ -567,16 +557,18 @@ export function emitTensorAssign(
         expr.args[0],
         ctx
       );
-      const sIdx = allocScratch(ctx);
-      const sData = scratchData(sIdx);
-      const sLen = scratchLen(sIdx);
-      emitScratchBufAlloc(lines, indent, sData, sLen, operand.len);
-      lines.push(
-        `${indent}numbl_complex_abs((size_t)${sLen}, ${operand.data}, ${operand.dataIm}, ${sData});`
-      );
-      emitEnsureTensorBuf(lines, indent, destName, sLen, ctx, expr.args[0]);
-      lines.push(
-        `${indent}if (${dLen} > 0) memcpy(${dData}, ${sData}, (size_t)${dLen} * sizeof(double));`
+      emitElemwiseTensorAssign(
+        lines,
+        indent,
+        destName,
+        operand.len,
+        expr.args[0],
+        ctx,
+        (l, ind, buf, len) => {
+          l.push(
+            `${ind}numbl_complex_abs((size_t)${len}, ${operand.data}, ${operand.dataIm}, ${buf});`
+          );
+        }
       );
       return;
     }
@@ -595,37 +587,39 @@ export function emitTensorAssign(
         expr.args[0],
         ctx
       );
-      emitEnsureTensorBuf(
+      emitElemwiseTensorAssign(
         lines,
         indent,
         destName,
         operand.len,
+        expr.args[0],
         ctx,
-        expr.args[0]
+        (l, ind, buf, len) => {
+          if (expr.name === "real") {
+            l.push(
+              `${ind}if (${len} > 0) memcpy(${buf}, ${operand.data}, (size_t)${len} * sizeof(double));`
+            );
+          } else {
+            l.push(`${ind}if (${operand.dataIm}) {`);
+            l.push(
+              `${ind}  if (${len} > 0) memcpy(${buf}, ${operand.dataIm}, (size_t)${len} * sizeof(double));`
+            );
+            l.push(`${ind}} else {`);
+            l.push(
+              `${ind}  if (${len} > 0) memset(${buf}, 0, (size_t)${len} * sizeof(double));`
+            );
+            l.push(`${ind}}`);
+          }
+        }
       );
-      if (expr.name === "real") {
-        lines.push(
-          `${indent}if (${dLen} > 0) memcpy(${dData}, ${operand.data}, (size_t)${dLen} * sizeof(double));`
-        );
-      } else {
-        lines.push(`${indent}if (${operand.dataIm}) {`);
-        lines.push(
-          `${indent}  if (${dLen} > 0) memcpy(${dData}, ${operand.dataIm}, (size_t)${dLen} * sizeof(double));`
-        );
-        lines.push(`${indent}} else {`);
-        lines.push(
-          `${indent}  if (${dLen} > 0) memset(${dData}, 0, (size_t)${dLen} * sizeof(double));`
-        );
-        lines.push(`${indent}}`);
-      }
       return;
     }
   }
 
   // Two-arg tensor binary builtin (max, min, atan2, hypot, mod, rem):
   // emit a per-element loop calling the C math function registered on
-  // the builtin's jitCapabilities.tensorBinaryFn. Scratch-transfer
-  // pattern avoids self-aliasing (e.g. `r = max(r, y)`).
+  // the builtin's jitCapabilities.tensorBinaryFn. Same steady-state
+  // fast path + aliasing safety as the other elemwise assigns.
   if (
     expr.tag === "Call" &&
     isTensorExpr(expr) &&
@@ -638,39 +632,39 @@ export function emitTensorAssign(
     const leftIsTensor = left.jitType.kind === "tensor";
     const rightIsTensor = right.jitType.kind === "tensor";
     const tensorOperand = leftIsTensor ? left : right;
+    const lenExpr = findTensorLenExpr(tensorOperand, ctx);
 
-    const sIdx = allocScratch(ctx);
-    const sData = scratchData(sIdx);
-    const sLen = scratchLen(sIdx);
-
-    if (leftIsTensor && rightIsTensor) {
-      const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
-      const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
-      emitScratchBufAlloc(lines, indent, sData, sLen, lArg.len);
-      lines.push(`${indent}for (int64_t __i = 0; __i < ${sLen}; __i++)`);
-      lines.push(
-        `${indent}  ${sData}[__i] = ${cFn}(${lArg.data}[__i], ${rArg.data}[__i]);`
-      );
-    } else if (leftIsTensor) {
-      const lArg = emitTensorExprToStmts(lines, indent, left, ctx);
-      const rScalar = emitExpr(right, ctx);
-      emitScratchBufAlloc(lines, indent, sData, sLen, lArg.len);
-      lines.push(`${indent}for (int64_t __i = 0; __i < ${sLen}; __i++)`);
-      lines.push(
-        `${indent}  ${sData}[__i] = ${cFn}(${lArg.data}[__i], ${rScalar});`
-      );
-    } else {
-      const lScalar = emitExpr(left, ctx);
-      const rArg = emitTensorExprToStmts(lines, indent, right, ctx);
-      emitScratchBufAlloc(lines, indent, sData, sLen, rArg.len);
-      lines.push(`${indent}for (int64_t __i = 0; __i < ${sLen}; __i++)`);
-      lines.push(
-        `${indent}  ${sData}[__i] = ${cFn}(${lScalar}, ${rArg.data}[__i]);`
-      );
-    }
-    emitEnsureTensorBuf(lines, indent, destName, sLen, ctx, tensorOperand);
-    lines.push(
-      `${indent}if (${dLen} > 0) memcpy(${dData}, ${sData}, (size_t)${dLen} * sizeof(double));`
+    emitElemwiseTensorAssign(
+      lines,
+      indent,
+      destName,
+      lenExpr,
+      tensorOperand,
+      ctx,
+      (l, ind, buf, len) => {
+        if (leftIsTensor && rightIsTensor) {
+          const lArg = emitTensorExprToStmts(l, ind, left, ctx);
+          const rArg = emitTensorExprToStmts(l, ind, right, ctx);
+          l.push(`${ind}for (int64_t __i = 0; __i < ${len}; __i++)`);
+          l.push(
+            `${ind}  ${buf}[__i] = ${cFn}(${lArg.data}[__i], ${rArg.data}[__i]);`
+          );
+        } else if (leftIsTensor) {
+          const lArg = emitTensorExprToStmts(l, ind, left, ctx);
+          const rScalar = emitExpr(right, ctx);
+          l.push(`${ind}for (int64_t __i = 0; __i < ${len}; __i++)`);
+          l.push(
+            `${ind}  ${buf}[__i] = ${cFn}(${lArg.data}[__i], ${rScalar});`
+          );
+        } else {
+          const lScalar = emitExpr(left, ctx);
+          const rArg = emitTensorExprToStmts(l, ind, right, ctx);
+          l.push(`${ind}for (int64_t __i = 0; __i < ${len}; __i++)`);
+          l.push(
+            `${ind}  ${buf}[__i] = ${cFn}(${lScalar}, ${rArg.data}[__i]);`
+          );
+        }
+      }
     );
     return;
   }
