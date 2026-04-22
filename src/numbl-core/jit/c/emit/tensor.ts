@@ -118,8 +118,11 @@ export function shapeExprsFor(
   const shape =
     shapeSrc?.jitType.kind === "tensor" ? shapeSrc.jitType.shape : undefined;
   if (shape && shape.length === 2) {
-    const d0Known = shape[0] !== -1;
-    const d1Known = shape[1] !== -1;
+    // Treat 0 the same as unknown (-1): dividing lenExpr by 0 would be UB
+    // in the emitted C. Feasibility normally excludes zero-dim tensors;
+    // guard here defensively.
+    const d0Known = shape[0] !== -1 && shape[0] !== 0;
+    const d1Known = shape[1] !== -1 && shape[1] !== 0;
     if (d0Known && d1Known) return [`${shape[0]}`, `${shape[1]}`];
     if (d0Known) return [`${shape[0]}`, `(${lenExpr} / ${shape[0]})`];
     if (d1Known) return [`(${lenExpr} / ${shape[1]})`, `${shape[1]}`];
