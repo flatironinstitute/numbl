@@ -34,6 +34,7 @@ import {
 } from "../context.js";
 import { emitComplex } from "./complexScalar.js";
 import { emitExpr } from "./scalar.js";
+import { withPendingStmts } from "./stmt.js";
 
 /** Emit the C expressions for one arg's ABI slots, consulting the
  *  callee's paramDesc so the slot order matches the callee's signature.
@@ -206,15 +207,24 @@ export function emitUserCallTensorAssign(
     );
   }
   ctx.needsErrorFlag = true;
-  const argCodes: string[] = [];
-  for (let i = 0; i < expr.args.length; i++) {
-    const slots = emitUserCallArgSlots(
-      expr.args[i],
-      calleeAbi.paramDescs[i],
-      ctx
-    );
-    argCodes.push(...slots);
-  }
+  // Marshal args inside a pendingStmts frame so a complex scalar arg
+  // whose expression needs materialized pair locals (e.g. `(1+2i)*z`)
+  // can hoist its decls into `lines` ahead of the callee invocation.
+  // emitComplexTensorAssign wraps its caller path, but the real-tensor
+  // emitTensorAssign path into this function does not — wrapping here
+  // makes the function self-sufficient.
+  const argCodes: string[] = withPendingStmts(ctx, lines, indent, () => {
+    const codes: string[] = [];
+    for (let i = 0; i < expr.args.length; i++) {
+      const slots = emitUserCallArgSlots(
+        expr.args[i],
+        calleeAbi.paramDescs[i],
+        ctx
+      );
+      codes.push(...slots);
+    }
+    return codes;
+  });
   const dData = tensorData(destName);
   const dLen = tensorLen(destName);
   const dD0 = tensorD0(destName);
