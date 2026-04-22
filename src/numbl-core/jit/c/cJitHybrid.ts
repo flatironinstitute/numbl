@@ -37,6 +37,7 @@ import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import type { TypeEnv } from "../jitLowerTypes.js";
 import { jitTypeKey } from "../jitTypes.js";
 import { getCJitBackend } from "./cJitBackend.js";
+import { walkExprNodes, walkStmts, walkStmtExprs } from "./visit.js";
 
 /**
  * True if the callee's body does enough work per call to amortize the
@@ -123,144 +124,93 @@ function emptyRefs(): VarRefs {
   };
 }
 
+/** Walk an expression subtree and accumulate reads into `out`. Uses the
+ *  shared `walkExprNodes` for the recursion; the per-node callback
+ *  handles the read-adding logic for `Var`, `RangeSliceRead`,
+ *  `MemberRead`, and `StructArrayMemberRead` (which refer to vars via
+ *  non-expression fields that the generic walker can't see), and marks
+ *  `hasUnknown` on any tag the cJitHybrid pass doesn't recognize. */
 function walkExpr(e: JitExpr, out: VarRefs): void {
-  switch (e.tag) {
-    case "Var":
-      out.reads.add(e.name);
-      return;
-    case "NumberLiteral":
-    case "ImagLiteral":
-    case "StringLiteral":
-      return;
-    case "Binary":
-      walkExpr(e.left, out);
-      walkExpr(e.right, out);
-      return;
-    case "Unary":
-      walkExpr(e.operand, out);
-      return;
-    case "Call":
-    case "UserCall":
-    case "FuncHandleCall":
-    case "UserDispatchCall":
-      for (const a of e.args) walkExpr(a, out);
-      return;
-    case "Index":
-      walkExpr(e.base, out);
-      for (const i of e.indices) walkExpr(i, out);
-      return;
-    case "TensorLiteral":
-      for (const row of e.rows) for (const c of row) walkExpr(c, out);
-      return;
-    case "VConcatGrow":
-      walkExpr(e.base, out);
-      walkExpr(e.value, out);
-      return;
-    case "RangeSliceRead":
-      // baseName is read implicitly via the hoisted alias
-      out.reads.add(e.baseName);
-      walkExpr(e.start, out);
-      if (e.end) walkExpr(e.end, out);
-      return;
-    case "MemberRead":
-      out.reads.add(e.baseName);
-      return;
-    case "StructArrayMemberRead":
-      out.reads.add(e.structVarName);
-      walkExpr(e.indexExpr, out);
-      return;
-    default:
-      out.hasUnknown = true;
-      return;
-  }
+  walkExprNodes(e, node => {
+    switch (node.tag) {
+      case "Var":
+        out.reads.add(node.name);
+        return;
+      case "RangeSliceRead":
+      case "MemberRead":
+        out.reads.add(node.baseName);
+        return;
+      case "StructArrayMemberRead":
+        out.reads.add(node.structVarName);
+        return;
+      case "NumberLiteral":
+      case "ImagLiteral":
+      case "StringLiteral":
+      case "Binary":
+      case "Unary":
+      case "Call":
+      case "UserCall":
+      case "FuncHandleCall":
+      case "UserDispatchCall":
+      case "Index":
+      case "TensorLiteral":
+      case "VConcatGrow":
+        return;
+      default:
+        out.hasUnknown = true;
+        return;
+    }
+  });
 }
 
+/** Walk a statement subtree, accumulating reads/writes/control-flow
+ *  flags into `out`. Uses `walkStmts` for descent into nested bodies
+ *  and `walkStmtExprs` for each stmt's top-level expressions, then
+ *  `walkExpr` for the expression contents. */
 function walkStmt(s: JitStmt, out: VarRefs): void {
-  switch (s.tag) {
-    case "Assign":
-      walkExpr(s.expr, out);
-      out.writes.add(s.name);
-      return;
-    case "AssignIndex":
-      out.writes.add(s.baseName);
-      out.reads.add(s.baseName);
-      for (const i of s.indices) walkExpr(i, out);
-      walkExpr(s.value, out);
-      return;
-    case "AssignIndexRange":
-      out.writes.add(s.baseName);
-      out.reads.add(s.baseName);
-      out.reads.add(s.srcBaseName);
-      walkExpr(s.dstStart, out);
-      walkExpr(s.dstEnd, out);
-      if (s.srcStart) walkExpr(s.srcStart, out);
-      if (s.srcEnd) walkExpr(s.srcEnd, out);
-      return;
-    case "AssignIndexCol":
-      out.writes.add(s.baseName);
-      out.reads.add(s.baseName);
-      out.reads.add(s.srcBaseName);
-      walkExpr(s.colIndex, out);
-      return;
-    case "AssignIndexPage3d":
-      out.writes.add(s.baseName);
-      out.reads.add(s.baseName);
-      walkExpr(s.pageIndex, out);
-      walkExpr(s.value, out);
-      return;
-    case "AssignMember":
-      out.writes.add(s.baseName);
-      out.reads.add(s.baseName);
-      walkExpr(s.value, out);
-      return;
-    case "ExprStmt":
-      walkExpr(s.expr, out);
-      return;
-    case "MultiAssign":
-      for (const n of s.names) if (n !== null) out.writes.add(n);
-      for (const a of s.args) walkExpr(a, out);
-      return;
-    case "If":
-      walkExpr(s.cond, out);
-      walkStmts(s.thenBody, out);
-      for (const eib of s.elseifBlocks) {
-        walkExpr(eib.cond, out);
-        walkStmts(eib.body, out);
-      }
-      if (s.elseBody) walkStmts(s.elseBody, out);
-      return;
-    case "For":
-      out.writes.add(s.varName);
-      walkExpr(s.start, out);
-      if (s.step) walkExpr(s.step, out);
-      walkExpr(s.end, out);
-      walkStmts(s.body, out);
-      return;
-    case "While":
-      walkExpr(s.cond, out);
-      walkStmts(s.body, out);
-      return;
-    case "Return":
-    case "Break":
-    case "Continue":
-      out.hasControl = true;
-      return;
-    case "SetLoc":
-    case "AssertCJit":
-      return;
-    case "UserCallWriteback":
-      // Shouldn't appear in unmodified IR — conservative: mark unknown.
-      for (const a of s.args) walkExpr(a, out);
-      for (const o of s.outputs) out.writes.add(o);
-      return;
-    default:
-      out.hasUnknown = true;
-      return;
-  }
-}
-
-function walkStmts(stmts: JitStmt[], out: VarRefs): void {
-  for (const s of stmts) walkStmt(s, out);
+  walkStmts([s], st => {
+    switch (st.tag) {
+      case "Assign":
+        out.writes.add(st.name);
+        break;
+      case "AssignIndex":
+      case "AssignIndexPage3d":
+      case "AssignMember":
+        out.writes.add(st.baseName);
+        out.reads.add(st.baseName);
+        break;
+      case "AssignIndexRange":
+      case "AssignIndexCol":
+        out.writes.add(st.baseName);
+        out.reads.add(st.baseName);
+        out.reads.add(st.srcBaseName);
+        break;
+      case "For":
+        out.writes.add(st.varName);
+        break;
+      case "MultiAssign":
+        for (const n of st.names) if (n !== null) out.writes.add(n);
+        break;
+      case "UserCallWriteback":
+        for (const o of st.outputs) out.writes.add(o);
+        break;
+      case "Return":
+      case "Break":
+      case "Continue":
+        out.hasControl = true;
+        break;
+      case "ExprStmt":
+      case "If":
+      case "While":
+      case "SetLoc":
+      case "AssertCJit":
+        break;
+      default:
+        out.hasUnknown = true;
+        break;
+    }
+    walkStmtExprs(st, e => walkExpr(e, out));
+  });
 }
 
 /**

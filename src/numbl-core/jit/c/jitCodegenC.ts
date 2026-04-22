@@ -48,6 +48,7 @@ import {
 } from "./abi.js";
 import { emitStmts } from "./emit/index.js";
 import type { CalleeAbi } from "./codegenCtx.js";
+import { walkExprNodes, walkStmts, walkStmtExprs } from "./visit.js";
 
 export type { AbiSlot, AbiSlotKind } from "./abi.js";
 export type { CParamDesc, COutputDesc } from "./abi.js";
@@ -246,201 +247,47 @@ function propagateUserCallShapeNeeds(
   cls: ReturnType<typeof analyzeTensorUsage>,
   calleeAbi: Map<string, CalleeAbi>
 ): void {
-  const visitExpr = (e: JitExpr): void => {
-    if (e.tag === "UserCall") {
-      const abi = calleeAbi.get(e.jitName);
-      if (abi) {
-        for (let i = 0; i < e.args.length && i < abi.paramDescs.length; i++) {
-          const a = e.args[i];
-          const pd = abi.paramDescs[i];
-          if (a.tag !== "Var" || pd.kind !== "tensor") continue;
-          const need = pd.ndim ?? 0;
-          if (need <= 0) continue;
-          const m = cls.meta.get(a.name);
-          if (m && need > m.maxIndexDim) m.maxIndexDim = need;
-        }
-      }
-      for (const a of e.args) visitExpr(a);
-      return;
-    }
-    switch (e.tag) {
-      case "Binary":
-        visitExpr(e.left);
-        visitExpr(e.right);
-        return;
-      case "Unary":
-        visitExpr(e.operand);
-        return;
-      case "Call":
-        for (const a of e.args) visitExpr(a);
-        return;
-      case "Index":
-        visitExpr(e.base);
-        for (const i of e.indices) visitExpr(i);
-        return;
-      case "RangeSliceRead":
-        visitExpr(e.start);
-        if (e.end) visitExpr(e.end);
-        return;
-      case "TensorLiteral":
-        for (const row of e.rows) for (const cell of row) visitExpr(cell);
-        return;
-      case "VConcatGrow":
-        visitExpr(e.base);
-        visitExpr(e.value);
-        return;
-      default:
-        return;
+  const onExpr = (e: JitExpr): void => {
+    if (e.tag !== "UserCall") return;
+    const abi = calleeAbi.get(e.jitName);
+    if (!abi) return;
+    for (let i = 0; i < e.args.length && i < abi.paramDescs.length; i++) {
+      const a = e.args[i];
+      const pd = abi.paramDescs[i];
+      if (a.tag !== "Var" || pd.kind !== "tensor") continue;
+      const need = pd.ndim ?? 0;
+      if (need <= 0) continue;
+      const m = cls.meta.get(a.name);
+      if (m && need > m.maxIndexDim) m.maxIndexDim = need;
     }
   };
-  const visitStmt = (s: JitStmt): void => {
-    switch (s.tag) {
-      case "Assign":
-      case "ExprStmt":
-        visitExpr(s.expr);
-        return;
-      case "AssignIndex":
-        visitExpr(s.value);
-        for (const i of s.indices) visitExpr(i);
-        return;
-      case "AssignIndexRange":
-        visitExpr(s.dstStart);
-        visitExpr(s.dstEnd);
-        if (s.srcStart) visitExpr(s.srcStart);
-        if (s.srcEnd) visitExpr(s.srcEnd);
-        return;
-      case "AssignIndexCol":
-        visitExpr(s.colIndex);
-        return;
-      case "AssignIndexPage3d":
-        visitExpr(s.pageIndex);
-        visitExpr(s.value);
-        return;
-      case "If":
-        visitExpr(s.cond);
-        s.thenBody.forEach(visitStmt);
-        s.elseifBlocks.forEach(eb => {
-          visitExpr(eb.cond);
-          eb.body.forEach(visitStmt);
-        });
-        if (s.elseBody) s.elseBody.forEach(visitStmt);
-        return;
-      case "For":
-        visitExpr(s.start);
-        visitExpr(s.end);
-        if (s.step) visitExpr(s.step);
-        s.body.forEach(visitStmt);
-        return;
-      case "While":
-        visitExpr(s.cond);
-        s.body.forEach(visitStmt);
-        return;
-      default:
-        return;
-    }
-  };
-  body.forEach(visitStmt);
+  walkStmts(body, s => walkStmtExprs(s, e => walkExprNodes(e, onExpr)));
 }
 
 /** Walk `body` and collect every UserCall's jitName in post-order
  *  (callees before callers), deduping on revisit. The post-order makes
- *  the final C source compile cleanly without forward declarations. */
+ *  the final C source compile cleanly without forward declarations.
+ *
+ *  walkExprNodes is already post-order over expr sub-nodes; on the
+ *  self-visit of a UserCall, we mark it seen, recurse into the callee
+ *  body (which may itself push names onto `out`), then push this name.
+ *  That keeps any jitName the callee depends on ahead of this one. */
 function collectReachableJitNames(
   body: JitStmt[],
   generatedIRBodies: Map<string, GeneratedFn>,
   out: string[],
   seen: Set<string>
 ): void {
-  const visitExpr = (e: JitExpr): void => {
-    switch (e.tag) {
-      case "UserCall": {
-        for (const a of e.args) visitExpr(a);
-        if (!seen.has(e.jitName)) {
-          seen.add(e.jitName);
-          const callee = generatedIRBodies.get(e.jitName);
-          if (callee) {
-            collectReachableJitNames(callee.body, generatedIRBodies, out, seen);
-            out.push(e.jitName);
-          }
-        }
-        return;
-      }
-      case "Binary":
-        visitExpr(e.left);
-        visitExpr(e.right);
-        return;
-      case "Unary":
-        visitExpr(e.operand);
-        return;
-      case "Call":
-        for (const a of e.args) visitExpr(a);
-        return;
-      case "Index":
-        visitExpr(e.base);
-        for (const i of e.indices) visitExpr(i);
-        return;
-      case "RangeSliceRead":
-        visitExpr(e.start);
-        if (e.end) visitExpr(e.end);
-        return;
-      case "TensorLiteral":
-        for (const row of e.rows) for (const cell of row) visitExpr(cell);
-        return;
-      case "VConcatGrow":
-        visitExpr(e.base);
-        visitExpr(e.value);
-        return;
-      default:
-        return;
-    }
+  const onExpr = (e: JitExpr): void => {
+    if (e.tag !== "UserCall") return;
+    if (seen.has(e.jitName)) return;
+    seen.add(e.jitName);
+    const callee = generatedIRBodies.get(e.jitName);
+    if (!callee) return;
+    collectReachableJitNames(callee.body, generatedIRBodies, out, seen);
+    out.push(e.jitName);
   };
-  const visitStmt = (s: JitStmt): void => {
-    switch (s.tag) {
-      case "Assign":
-      case "ExprStmt":
-        visitExpr(s.expr);
-        return;
-      case "AssignIndex":
-        visitExpr(s.value);
-        for (const i of s.indices) visitExpr(i);
-        return;
-      case "AssignIndexRange":
-        visitExpr(s.dstStart);
-        visitExpr(s.dstEnd);
-        if (s.srcStart) visitExpr(s.srcStart);
-        if (s.srcEnd) visitExpr(s.srcEnd);
-        return;
-      case "AssignIndexCol":
-        visitExpr(s.colIndex);
-        return;
-      case "AssignIndexPage3d":
-        visitExpr(s.pageIndex);
-        visitExpr(s.value);
-        return;
-      case "If":
-        visitExpr(s.cond);
-        s.thenBody.forEach(visitStmt);
-        s.elseifBlocks.forEach(eb => {
-          visitExpr(eb.cond);
-          eb.body.forEach(visitStmt);
-        });
-        if (s.elseBody) s.elseBody.forEach(visitStmt);
-        return;
-      case "For":
-        visitExpr(s.start);
-        visitExpr(s.end);
-        if (s.step) visitExpr(s.step);
-        s.body.forEach(visitStmt);
-        return;
-      case "While":
-        visitExpr(s.cond);
-        s.body.forEach(visitStmt);
-        return;
-      default:
-        return;
-    }
-  };
-  body.forEach(visitStmt);
+  walkStmts(body, s => walkStmtExprs(s, e => walkExprNodes(e, onExpr)));
 }
 
 /** Walk `body` and collect every name assigned a `complex_or_number`
@@ -448,25 +295,11 @@ function collectReachableJitNames(
  *  unifies each name's type across branches, so the first complex
  *  Assign is enough to mark the name as a complex scalar throughout. */
 function collectComplexScalarLocals(body: JitStmt[], out: Set<string>): void {
-  const visit = (s: JitStmt): void => {
-    switch (s.tag) {
-      case "Assign":
-        if (s.expr.jitType.kind === "complex_or_number") out.add(s.name);
-        break;
-      case "If":
-        s.thenBody.forEach(visit);
-        s.elseifBlocks.forEach(eb => eb.body.forEach(visit));
-        if (s.elseBody) s.elseBody.forEach(visit);
-        break;
-      case "For":
-      case "While":
-        s.body.forEach(visit);
-        break;
-      default:
-        break;
+  walkStmts(body, s => {
+    if (s.tag === "Assign" && s.expr.jitType.kind === "complex_or_number") {
+      out.add(s.name);
     }
-  };
-  body.forEach(visit);
+  });
 }
 
 /** Emit a single C function (outer or static callee). Returns the full

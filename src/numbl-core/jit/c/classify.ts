@@ -11,6 +11,7 @@
  */
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import { collectTensorUsage } from "../js/jitCodegenHoist.js";
+import { walkStmts } from "./visit.js";
 
 export type TensorKind =
   /** Tensor param, never appears in the output list. */
@@ -85,26 +86,6 @@ export function isFreshTensorRhs(expr: JitExpr): boolean {
   return false;
 }
 
-function forEachStmt(body: JitStmt[], cb: (s: JitStmt) => void): void {
-  const visit = (s: JitStmt): void => {
-    cb(s);
-    switch (s.tag) {
-      case "If":
-        s.thenBody.forEach(visit);
-        s.elseifBlocks.forEach(eb => eb.body.forEach(visit));
-        if (s.elseBody) s.elseBody.forEach(visit);
-        break;
-      case "For":
-      case "While":
-        s.body.forEach(visit);
-        break;
-      default:
-        break;
-    }
-  };
-  body.forEach(visit);
-}
-
 export function analyzeTensorUsage(
   body: JitStmt[],
   params: string[],
@@ -158,7 +139,7 @@ export function analyzeTensorUsage(
 
   // Single pass: seed tensor locals, fresh-alloc seeds, and
   // AssignIndex target flags.
-  forEachStmt(body, s => {
+  walkStmts(body, s => {
     switch (s.tag) {
       case "Assign": {
         if (s.expr.jitType.kind === "tensor") {
@@ -201,7 +182,7 @@ export function analyzeTensorUsage(
   let changed = true;
   while (changed) {
     changed = false;
-    forEachStmt(body, s => {
+    walkStmts(body, s => {
       if (s.tag !== "Assign" || s.expr.jitType.kind !== "tensor") return;
       const dst = meta.get(s.name);
       if (!dst) return;
