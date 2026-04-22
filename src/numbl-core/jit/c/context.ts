@@ -112,6 +112,19 @@ export const TENSOR_BIN_OP: Partial<Record<BinaryOperation, string>> = {
   [BinaryOperation.ElemDiv]: "NUMBL_REAL_BIN_DIV",
 };
 
+// Binary op → libnumbl_ops complex opcode enum name. Kept as an explicit
+// map (rather than string-replacing "REAL" → "COMPLEX" on TENSOR_BIN_OP)
+// so divergence between the real and complex enums in numbl_ops.h would
+// surface as a missing entry here rather than silently emit a wrong symbol.
+export const TENSOR_COMPLEX_BIN_OP: Partial<Record<BinaryOperation, string>> = {
+  [BinaryOperation.Add]: "NUMBL_COMPLEX_BIN_ADD",
+  [BinaryOperation.Sub]: "NUMBL_COMPLEX_BIN_SUB",
+  [BinaryOperation.Mul]: "NUMBL_COMPLEX_BIN_MUL",
+  [BinaryOperation.ElemMul]: "NUMBL_COMPLEX_BIN_MUL",
+  [BinaryOperation.Div]: "NUMBL_COMPLEX_BIN_DIV",
+  [BinaryOperation.ElemDiv]: "NUMBL_COMPLEX_BIN_DIV",
+};
+
 // Binary comparison op → libnumbl_ops opcode enum name.
 export const TENSOR_CMP_OP: Partial<Record<BinaryOperation, string>> = {
   [BinaryOperation.Equal]: "NUMBL_CMP_EQ",

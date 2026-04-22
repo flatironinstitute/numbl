@@ -39,6 +39,7 @@ import {
   tensorDataIm,
   tensorLen,
   TENSOR_BIN_OP,
+  TENSOR_COMPLEX_BIN_OP,
   TENSOR_CMP_OP,
   getTensorUnaryOp,
   type EmitCtx,
@@ -552,16 +553,12 @@ export function emitComplexTensorBinaryStmts(
   destDataImVar: string,
   destLenVar: string
 ): void {
-  const opEnum = TENSOR_BIN_OP[expr.op];
-  if (!opEnum) {
+  const complexOpEnum = TENSOR_COMPLEX_BIN_OP[expr.op];
+  if (!complexOpEnum) {
     throw new Error(
       `C-JIT codegen: complex tensor binary op ${expr.op} has no opcode`
     );
   }
-  // TENSOR_BIN_OP enum values are numerically aligned with the
-  // NUMBL_COMPLEX_BIN_* enum (ADD=0, SUB=1, MUL=2, DIV=3), so the same
-  // string works at the C-side switch. Confirmed by numbl_ops.h.
-  const complexOpEnum = opEnum.replace("NUMBL_REAL_BIN_", "NUMBL_COMPLEX_BIN_");
 
   const leftIsTensor = isTensorExpr(expr.left);
   const rightIsTensor = isTensorExpr(expr.right);
