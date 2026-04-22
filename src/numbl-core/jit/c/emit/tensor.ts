@@ -636,16 +636,27 @@ export function emitRangeSliceReadToBuf(
   lines.push(`${indent}{`);
   lines.push(`${indent}  double __rs = ${startCode};`);
   lines.push(`${indent}  double __re = ${endCode};`);
-  lines.push(`${indent}  int64_t __rn = (int64_t)(__re - __rs + 1.0);`);
-  lines.push(`${indent}  if (__rn < 0) __rn = 0;`);
+  lines.push(`${indent}  double __rd = __re - __rs + 1.0;`);
+  // Guard the double→int64 cast: NaN / Inf / overflow all fail the
+  // strict 0 < __rd < INT64_MAX test (NaN compares false; Inf exceeds
+  // the bound), collapsing to an empty slice. Strict `<` avoids the
+  // (double)INT64_MAX == 2^63 rounding edge where the cast is UB.
+  lines.push(
+    `${indent}  int64_t __rn = (__rd > 0.0 && __rd < (double)INT64_MAX) ? (int64_t)__rd : 0;`
+  );
   lines.push(`${indent}  if (${destData}) free(${destData});`);
   lines.push(
     `${indent}  ${destData} = (__rn > 0) ? (double *)malloc((size_t)__rn * sizeof(double)) : NULL;`
   );
   lines.push(`${indent}  ${destLen} = __rn;`);
+  // Only invoke the runtime when we have a real positive length; this
+  // keeps NaN/Inf/out-of-range __rs/__re from reaching the runtime's
+  // own double→int64 casts.
+  lines.push(`${indent}  if (__rn > 0) {`);
   lines.push(
-    `${indent}  numbl_copyRange1r(${srcData}, (size_t)${srcLen}, __rs, __re, ${destData}, __err_flag);`
+    `${indent}    numbl_copyRange1r(${srcData}, (size_t)${srcLen}, __rs, __re, ${destData}, __err_flag);`
   );
+  lines.push(`${indent}  }`);
   lines.push(`${indent}}`);
 }
 
