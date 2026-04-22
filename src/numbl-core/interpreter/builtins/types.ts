@@ -60,7 +60,7 @@ export interface IBuiltin {
    * builtin can't be emitted as a C expression for the given arg types
    * — the C-JIT will bail to JS-JIT for this call site. Covers the
    * scalar-argument case only (tensor-argument emission is handled by
-   * separate tensor-op dispatch in jitCodegenC.ts / cFusedCodegen.ts).
+   * separate tensor-op dispatch in assemble.ts / emit/fused.ts).
    */
   jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
   /**
@@ -69,7 +69,7 @@ export interface IBuiltin {
    * adding a new tensor-unary / tensor-binary / tensor-reduction builtin
    * is one edit here (plus the matching native-side enum or C function).
    * Previously these were three parallel hardcoded tables (one in
-   * cFeasibility.ts, two in codegenCtx.ts) that could silently drift
+   * feasibility.ts, two in context.ts) that could silently drift
    * from the native-side opcode enums. Centralizing on the IBuiltin
    * registration removes that drift risk.
    */
@@ -1055,7 +1055,7 @@ export function binaryMathJitEmit(
 
 /** Fast-path C emitter for unary math functions on a scalar.
  *  Emits `cFn(x)` for scalar number/boolean; returns null otherwise
- *  (tensor emission is handled separately by jitCodegenC's tensor paths).
+ *  (tensor emission is handled separately by emit/tensor.ts).
  *  If `requireNonneg` is set, rejects values whose sign isn't known
  *  to be nonneg — matches the JS guard for domain-restricted functions. */
 export function unaryMathJitEmitC(

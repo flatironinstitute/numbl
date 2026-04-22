@@ -13,7 +13,7 @@
  *                     by concern (scalar, complexScalar, tensor, assign,
  *                     userCall, stmt, fused). Reads ctx.cls for every
  *                     classification decision.
- *   codegenCtx.ts   — EmitCtx + shared name/opcode helpers.
+ *   context.ts   — EmitCtx + shared name/opcode helpers.
  *
  * UserCall support: when a feasible user-defined function is called
  * from the outer body, its lowered IR is already in `generatedIRBodies`
@@ -29,7 +29,7 @@ import {
   NUMBL_JIT_RT_REQUIRED_VERSION,
   spaceBeforeName,
   type EmitCtx,
-} from "./codegenCtx.js";
+} from "./context.js";
 import {
   buildAbiSlots,
   type AbiSlot,
@@ -37,7 +37,7 @@ import {
   type COutputDesc,
 } from "./abi.js";
 import { emitStmts } from "./emit/index.js";
-import type { CalleeAbi } from "./codegenCtx.js";
+import type { CalleeAbi } from "./context.js";
 import { walkExprNodes, walkStmts, walkStmtExprs } from "./visit.js";
 import { buildPrelude } from "./prelude.js";
 import { buildEpilogue } from "./epilogue.js";
@@ -45,7 +45,7 @@ import { buildEpilogue } from "./epilogue.js";
 export type { AbiSlot, AbiSlotKind } from "./abi.js";
 export type { CParamDesc, COutputDesc } from "./abi.js";
 // Public helpers that older callers reach for — re-exported so the
-// split is invisible to non-internal consumers (cJitInstall.ts, tests).
+// split is invisible to non-internal consumers (install.ts, tests).
 export {
   mangle,
   mangleIm,
@@ -56,7 +56,7 @@ export {
   tensorD1,
   formatNumberLiteral,
   C_SCALAR_TARGET,
-} from "./codegenCtx.js";
+} from "./context.js";
 
 export interface GenerateCResult {
   cSource: string;

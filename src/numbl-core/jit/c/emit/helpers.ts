@@ -7,7 +7,7 @@
  */
 import type { JitExpr } from "../../jitTypes.js";
 import type { TensorMeta } from "../classify.js";
-import type { EmitCtx } from "../codegenCtx.js";
+import type { EmitCtx } from "../context.js";
 
 export function isTensorExpr(expr: JitExpr): boolean {
   return expr.jitType.kind === "tensor";

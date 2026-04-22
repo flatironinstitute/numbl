@@ -29,7 +29,7 @@ import {
   mangle,
   mangleIm,
   type EmitCtx,
-} from "../codegenCtx.js";
+} from "../context.js";
 import {
   isComplexExpr,
   widenRealToComplex,

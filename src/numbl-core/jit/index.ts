@@ -15,12 +15,9 @@ import { lowerFunction } from "./jitLower.js";
 import { generateJS } from "./js/jitCodegen.js";
 import { jitHelpers, JitBailToInterpreter } from "./js/jitHelpers.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
-import { getCJitBackend } from "./c/cJitBackend.js";
-import { compileHybridCallees, compileHybridLoops } from "./c/cJitHybrid.js";
-import {
-  CJitParityError,
-  formatCJitParityMessage,
-} from "./c/cJitParityError.js";
+import { getCJitBackend } from "./c/registry.js";
+import { compileHybridCallees, compileHybridLoops } from "./c/hybrid.js";
+import { CJitParityError, formatCJitParityMessage } from "./c/parityError.js";
 import { irHasBailRisk, irHasIO } from "./jitBailSafety.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
@@ -162,7 +159,7 @@ export function tryJitCall(
 
   // ── C-JIT path (--opt >= 2) ───────────────────────────────────────────
   // Delegated to a pluggable backend registered at startup by the CLI
-  // entry point (src/numbl-core/jit/c/cJitInstall.ts). The
+  // entry point (src/numbl-core/jit/c/install.ts). The
   // browser bundle never reaches the install module, so its Node-only
   // transitive deps (child_process, fs, ...) stay out of the web build.
   // On any bail we fall through to the JS-JIT path, unless
@@ -211,7 +208,7 @@ export function tryJitCall(
     // (a) each lowered callee and (b) each top-level For/While loop in
     // the outer body. Successes are swapped into the JS-JIT'd outer
     // via forwarder stubs so the outer calls native code at the inner
-    // boundaries. See cJitHybrid.ts.
+    // boundaries. See hybrid.ts.
     compileHybridCallees(
       interp,
       lowered.generatedIRBodies,

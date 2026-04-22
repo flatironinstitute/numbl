@@ -6,7 +6,7 @@
  * the whitelist, return `{ok: false, reason}` so the caller falls
  * through to the JS-JIT path.
  *
- * The whitelist intentionally mirrors what [jitCodegenC.ts](./jitCodegenC.ts)
+ * The whitelist intentionally mirrors what [assemble.ts](./assemble.ts)
  * can emit, which in turn mirrors what JS-JIT does. Widen all three
  * together.
  *
@@ -27,7 +27,7 @@ import {
   getTensorUnaryOp,
   getTensorBinaryFn,
   getTensorReductionOp,
-} from "./codegenCtx.js";
+} from "./context.js";
 
 export type FeasibilityResult =
   | { ok: true }
@@ -77,7 +77,7 @@ function fail(ctx: Ctx, reason: string): FeasibilityResult {
 
 // C-JIT tensor-op membership comes from `IBuiltin.jitCapabilities`; see
 // `getTensorUnaryOp` / `getTensorBinaryFn` / `getTensorReductionOp` in
-// codegenCtx.ts. Domain-restricted ops (log / sqrt / asin / acos) are
+// context.ts. Domain-restricted ops (log / sqrt / asin / acos) are
 // excluded by simply not setting `tensorUnaryOp` on their IBuiltin.
 
 function isScalarKind(k: JitType["kind"]): boolean {
@@ -979,7 +979,7 @@ function checkCFeasibilityInternal(
   // All tensor params. AssignIndex targets must be one of these — param-
   // outputs are safe because the JS wrapper seeds the output buffer
   // from the caller's data, and pure-input tensor params are made safe
-  // by the emitter's unshare-at-entry copy (see jitCodegenC.ts).
+  // by the emitter's unshare-at-entry copy (see assemble.ts).
   const tensorParams = new Set<string>();
   for (let i = 0; i < paramNames.length; i++) {
     if (argTypes[i].kind === "tensor") tensorParams.add(paramNames[i]);

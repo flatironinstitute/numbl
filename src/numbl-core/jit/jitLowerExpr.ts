@@ -1118,7 +1118,7 @@ function lowerUserFuncCall(
     const wrappedJS = `${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
     ctx.generatedFns.set(jitName, wrappedJS);
     // Cache the lowered IR alongside the JS source. The C-JIT reads this
-    // in cFeasibility / generateC; JS-JIT ignores it.
+    // in feasibility / generateC; JS-JIT ignores it.
     ctx.generatedIRBodies.set(jitName, {
       fn: calleeFn,
       argTypes: argJitTypes,

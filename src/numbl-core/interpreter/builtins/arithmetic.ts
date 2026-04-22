@@ -308,7 +308,7 @@ function minMaxCases(mode: "min" | "max"): BuiltinCase[] {
 
 // Only the 2-arg scalar form routes through jitEmitC. Reductions and
 // tensor-binary forms are handled by dedicated tensor-op dispatch in
-// jitCodegenC.ts / cFusedCodegen.ts, which skip ib.jitEmitC.
+// assemble.ts / emit/fused.ts, which skip ib.jitEmitC.
 defineBuiltin({
   name: "min",
   cases: minMaxCases("min"),

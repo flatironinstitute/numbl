@@ -3,7 +3,7 @@
  * returns from an Assign RHS.
  *
  * A UserCall lowers to a static C function (`jit_<jitName>`) generated
- * alongside the outer function by [../jitCodegenC.ts](../jitCodegenC.ts).
+ * alongside the outer function by [../assemble.ts](../assemble.ts).
  * This module marshals arg slots per the callee's ABI and emits the
  * call itself.
  *
@@ -31,7 +31,7 @@ import {
   tensorLen,
   tensorMaxDim,
   type EmitCtx,
-} from "../codegenCtx.js";
+} from "../context.js";
 import { emitComplex } from "./complexScalar.js";
 import { emitExpr } from "./scalar.js";
 

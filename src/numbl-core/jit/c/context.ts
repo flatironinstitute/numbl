@@ -1,10 +1,10 @@
 /**
  * Shared types, constants, and helpers used by both emit.ts (the per-
- * function emitter) and jitCodegenC.ts (the orchestration that builds
+ * function emitter) and assemble.ts (the orchestration that builds
  * the final signature / prelude / epilogue).
  *
  * Contains no emit logic itself — pulling this out of the main file
- * breaks the otherwise-circular dependency between jitCodegenC.ts and
+ * breaks the otherwise-circular dependency between assemble.ts and
  * the emit helpers.
  */
 import { BinaryOperation } from "../../parser/types.js";
@@ -127,7 +127,7 @@ export const TENSOR_CMP_OP: Partial<Record<BinaryOperation, string>> = {
  * the named builtin and returns the corresponding libnumbl_ops opcode
  * enum name / C function name — or `undefined` when the builtin has no
  * C-JIT tensor-op routing. These helpers are the single source of truth
- * for both the C feasibility check (cFeasibility.ts) and the C emitter
+ * for both the C feasibility check (feasibility.ts) and the C emitter
  * (emit.ts); registering a new tensor op is a single edit on the
  * IBuiltin, not three parallel table updates.
  */

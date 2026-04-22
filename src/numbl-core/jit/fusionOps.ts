@@ -4,7 +4,7 @@
  * Both the C-JIT and JS-JIT fusion paths use these to determine which
  * tensor Call nodes are fusible element-wise unary ops or absorbable
  * trailing reductions. The numeric op codes live in their respective
- * backend files (cFeasibility.ts for C, jitHelpersTensor.ts for JS).
+ * backend files (feasibility.ts for C, jitHelpersTensor.ts for JS).
  */
 
 /** Tensor unary builtins fusible into per-element loops. */

@@ -695,7 +695,7 @@ export type JitStmt =
       /**
        * Call a synthetic specialization (installed as a forwarder on $h)
        * and write back multiple outputs into outer-scope vars. Only
-       * produced by the hybrid-loop pass in cJitHybrid.ts, which
+       * produced by the hybrid-loop pass in hybrid.ts, which
        * replaces a For/While JitStmt with this call form when the
        * extracted loop specialization compiled to native C.
        *

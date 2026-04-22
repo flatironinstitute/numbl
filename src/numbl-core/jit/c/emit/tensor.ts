@@ -42,7 +42,7 @@ import {
   TENSOR_CMP_OP,
   getTensorUnaryOp,
   type EmitCtx,
-} from "../codegenCtx.js";
+} from "../context.js";
 import { isTensorExpr, type ComplexTensorResult } from "./helpers.js";
 import { emitExpr } from "./scalar.js";
 import { emitComplexScalarPair } from "./complexScalar.js";

@@ -5,7 +5,7 @@
  * (but not transforming) expressions and statements: the feasibility
  * fall-through paths, tensor-classification, hybrid-loop live-in/out
  * analysis, and the shape-propagation / callee-discovery / complex-
- * scalar scans in [jitCodegenC.ts](./jitCodegenC.ts). Each used to
+ * scalar scans in [assemble.ts](./assemble.ts). Each used to
  * reimplement the same switch-on-tag descent.
  *
  * This module centralizes the descent. Three primitives, composable:
@@ -26,7 +26,7 @@
  *     NOT recurse into nested expression sub-nodes (use `walkExprNodes`
  *     for that) and does NOT walk into nested stmt bodies.
  *
- * The dispatchers in `cFeasibility.ts`, `emit/stmt.ts`, and
+ * The dispatchers in `feasibility.ts`, `emit/stmt.ts`, and
  * `emit/fused.ts` keep their native switches — they produce structured
  * results (feasibility verdicts, emitted C lines), so a callback-based
  * observer doesn't fit their shape.

@@ -39,7 +39,7 @@ import { NodeSystemAdapter } from "./cli-system.js";
 
 // Side-effect import: installs the C-JIT backend (--opt 2). Must be Node-only
 // — this file imports child_process/fs/etc. that don't belong in the web build.
-import "./numbl-core/jit/c/cJitInstall.js";
+import "./numbl-core/jit/c/install.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";

@@ -38,7 +38,7 @@ import {
   tensorData,
   tensorLen,
   type EmitCtx,
-} from "../codegenCtx.js";
+} from "../context.js";
 import { cStringLiteral, isComplexExpr, isTensorExpr } from "./helpers.js";
 import { emitComplex } from "./complexScalar.js";
 import {

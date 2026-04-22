@@ -43,7 +43,7 @@ import {
   tensorLen,
   tensorMaxDim,
   type EmitCtx,
-} from "../codegenCtx.js";
+} from "../context.js";
 import { isTensorExpr, requireFreshAllocMeta } from "./helpers.js";
 import { emitExpr } from "./scalar.js";
 import {

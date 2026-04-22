@@ -5,7 +5,7 @@
  * generated function: output-slot writes (scalar out-pointers, tensor
  * dynamic-output transfers), scratch buffer frees, and local / unshared
  * tensor frees. Called once per function by `generateC` in
- * [jitCodegenC.ts](./jitCodegenC.ts).
+ * [assemble.ts](./assemble.ts).
  *
  * The prelude is in [prelude.ts](./prelude.ts); both read from the same
  * shared state (`ClassificationResult` + `EmitCtx`).
@@ -23,7 +23,7 @@ import {
   tensorDataIm,
   tensorLen,
   type EmitCtx,
-} from "./codegenCtx.js";
+} from "./context.js";
 
 export interface EpilogueInput {
   cls: ClassificationResult;

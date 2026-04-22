@@ -38,7 +38,7 @@ import {
   tensorData,
   tensorDataIm,
   tensorLen,
-} from "../codegenCtx.js";
+} from "../context.js";
 import { shapeExprsFor } from "./tensor.js";
 import { getIBuiltin } from "../../../interpreter/builtins/types.js";
 import {

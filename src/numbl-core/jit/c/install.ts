@@ -14,10 +14,10 @@
  */
 
 import { createRequire } from "module";
-import { registerCJitBackend } from "./cJitBackend.js";
-import { checkCFeasibility } from "./cFeasibility.js";
-import { generateC, type AbiSlot, type COutputDesc } from "./jitCodegenC.js";
-import { compileAndLoad, cJitOpenmpAvailable } from "./cCompile.js";
+import { registerCJitBackend } from "./registry.js";
+import { checkCFeasibility } from "./feasibility.js";
+import { generateC, type AbiSlot, type COutputDesc } from "./assemble.js";
+import { compileAndLoad, cJitOpenmpAvailable } from "./compile.js";
 import { jitTypeKey } from "../jitTypes.js";
 import {
   type RuntimeTensor,
@@ -31,9 +31,9 @@ import {
 } from "../../interpreter/builtins/time-system.js";
 import { JitBailToInterpreter } from "../js/jitHelpers.js";
 
-// koffi is loaded lazily by cCompile.ts. We need direct access for
+// koffi is loaded lazily by compile.ts. We need direct access for
 // decode() / free() of the dynamic-output C pointers. Mirrors the
-// lazy require pattern from cCompile.ts to keep the web bundle clean.
+// lazy require pattern from compile.ts to keep the web bundle clean.
 let _koffi: typeof import("koffi") | null | undefined;
 function getKoffi(): typeof import("koffi") {
   if (_koffi) return _koffi;

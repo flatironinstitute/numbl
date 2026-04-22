@@ -25,12 +25,9 @@ import {
   JitFuncHandleBailError,
   JitBailToInterpreter,
 } from "./js/jitHelpers.js";
-import { getCJitBackend } from "./c/cJitBackend.js";
-import { compileHybridCallees, compileHybridLoops } from "./c/cJitHybrid.js";
-import {
-  CJitParityError,
-  formatCJitParityMessage,
-} from "./c/cJitParityError.js";
+import { getCJitBackend } from "./c/registry.js";
+import { compileHybridCallees, compileHybridLoops } from "./c/hybrid.js";
+import { CJitParityError, formatCJitParityMessage } from "./c/parityError.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
 import { analyzeTopLevel } from "./jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";

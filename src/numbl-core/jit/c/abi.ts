@@ -1,7 +1,7 @@
 /**
  * The native ABI as an explicit slot schema — one source of truth shared
- * between the C-signature builder (jitCodegenC.ts) and the JS wrapper
- * marshaller (cJitInstall.ts).
+ * between the C-signature builder (assemble.ts) and the JS wrapper
+ * marshaller (install.ts).
  *
  * Each `AbiSlot` carries everything either side needs: the C type for
  * the signature, the koffi type string (with `_Out_` prefix for
@@ -22,7 +22,7 @@ import {
   tensorData,
   tensorDataIm,
   tensorLen,
-} from "./codegenCtx.js";
+} from "./context.js";
 
 export type AbiSlotKind =
   // Param-sourced slots — value comes from callArgs[paramIdx].

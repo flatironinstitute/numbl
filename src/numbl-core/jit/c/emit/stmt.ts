@@ -28,7 +28,7 @@ import {
   tensorData,
   tensorLen,
   type EmitCtx,
-} from "../codegenCtx.js";
+} from "../context.js";
 import { emitExpr, emitTruthiness } from "./scalar.js";
 import { emitComplex } from "./complexScalar.js";
 import { emitTensorAssign, emitReductionOfTensorExpr } from "./assign.js";

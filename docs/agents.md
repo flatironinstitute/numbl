@@ -19,7 +19,7 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS (or C at `--opt 2`), using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` / `IBuiltin.jitEmitC` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/` and the C backend (`jitCodegenC`, `cFusedCodegen`, `cFeasibility`, `cJitBackend`, `cJitInstall`, `cCompile`) under `jit/c/`.
+The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS (or C at `--opt 2`), using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` / `IBuiltin.jitEmitC` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/` and the C backend (`assemble`, `feasibility`, `classify`, `context`, `abi`, `prelude`, `epilogue`, `compile`, `install`, `registry`, `hybrid`, `parityError`, `visit`, and the `emit/` subpackage) under `jit/c/`. See [developer_reference/jit/c-jit.md](developer_reference/jit/c-jit.md) for the pipeline overview.
 
 ## Style
 

@@ -265,9 +265,9 @@ defineBuiltin({
       return "false";
     return null;
   },
-  // The tensor-Var case is handled directly in jitCodegenC (length /
-  // isempty read the tensor's `_len` local). This hook covers only the
-  // scalar case — any scalar is non-empty.
+  // The tensor-Var case is handled directly in jit/c/emit/scalar.ts
+  // (length / isempty read the tensor's `_len` local). This hook
+  // covers only the scalar case — any scalar is non-empty.
   jitEmitC: scalarConstantJitEmitC({ number: "0.0", boolean: "0.0" }),
 });
 
@@ -414,8 +414,9 @@ defineBuiltin({
       return "1";
     return null;
   },
-  // The tensor-Var case is handled directly in jitCodegenC (reads the
-  // tensor's `_len` / shape locals). This hook covers the scalar case.
+  // The tensor-Var case is handled directly in jit/c/emit/scalar.ts
+  // (reads the tensor's `_len` / shape locals). This hook covers the
+  // scalar case.
   jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 

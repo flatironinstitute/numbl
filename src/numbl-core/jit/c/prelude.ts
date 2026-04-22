@@ -8,7 +8,7 @@
  * slots.
  *
  * Exported as `buildPrelude` — called once per function by `generateC`
- * in [jitCodegenC.ts](./jitCodegenC.ts).
+ * in [assemble.ts](./assemble.ts).
  *
  * The epilogue (tensor frees, out-pointer writes) is in
  * [epilogue.ts](./epilogue.ts); both read from the same shared state
@@ -28,7 +28,7 @@ import {
   tensorDataIm,
   tensorLen,
   type EmitCtx,
-} from "./codegenCtx.js";
+} from "./context.js";
 
 export interface PreludeInput {
   cls: ClassificationResult;

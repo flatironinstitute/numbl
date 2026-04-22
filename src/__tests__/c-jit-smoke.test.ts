@@ -1,18 +1,18 @@
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "child_process";
 import { executeCode } from "../numbl-core/executeCode.js";
-import { generateC } from "../numbl-core/jit/c/jitCodegenC.js";
+import { generateC } from "../numbl-core/jit/c/assemble.js";
 import {
   compileAndLoad,
   cJitUnavailableReason,
   resetCEnvForTesting,
-} from "../numbl-core/jit/c/cCompile.js";
-import { checkCFeasibility } from "../numbl-core/jit/c/cFeasibility.js";
+} from "../numbl-core/jit/c/compile.js";
+import { checkCFeasibility } from "../numbl-core/jit/c/feasibility.js";
 import type { JitStmt, JitType } from "../numbl-core/jit/jitTypes.js";
 import { BinaryOperation } from "../numbl-core/parser/types.js";
 
 // Register the C-JIT backend so executeCode-based tests exercise it.
-import "../numbl-core/jit/c/cJitInstall.js";
+import "../numbl-core/jit/c/install.js";
 
 const E2E_ENABLED = process.env.NUMBL_CJIT_E2E === "1";
 function hasCc(): boolean {

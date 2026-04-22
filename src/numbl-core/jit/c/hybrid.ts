@@ -36,7 +36,7 @@ import type { GeneratedFn } from "../jitLower.js";
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
 import type { TypeEnv } from "../jitLowerTypes.js";
 import { jitTypeKey } from "../jitTypes.js";
-import { getCJitBackend } from "./cJitBackend.js";
+import { getCJitBackend } from "./registry.js";
 import { walkExprNodes, walkStmts, walkStmtExprs } from "./visit.js";
 
 /**
@@ -129,7 +129,7 @@ function emptyRefs(): VarRefs {
  *  handles the read-adding logic for `Var`, `RangeSliceRead`,
  *  `MemberRead`, and `StructArrayMemberRead` (which refer to vars via
  *  non-expression fields that the generic walker can't see), and marks
- *  `hasUnknown` on any tag the cJitHybrid pass doesn't recognize. */
+ *  `hasUnknown` on any tag the hybrid pass doesn't recognize. */
 function walkExpr(e: JitExpr, out: VarRefs): void {
   walkExprNodes(e, node => {
     switch (node.tag) {

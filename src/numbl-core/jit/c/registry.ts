@@ -5,7 +5,7 @@
  * `fs`, `path`, ...) that would pollute the browser bundle if imported
  * statically from [jit/index.ts](./index.ts). This module defines a
  * thin interface + a module-level slot; the real backend is installed
- * from the CLI entry point via [cJitInstall.ts](./cJitInstall.ts),
+ * from the CLI entry point via [install.ts](./install.ts),
  * which is only pulled into the Node-targeted build.
  *
  * When no backend is registered (e.g. browser, or someone running the
