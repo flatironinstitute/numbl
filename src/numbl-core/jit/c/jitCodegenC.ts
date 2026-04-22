@@ -9,8 +9,10 @@
  *                     feeding every downstream decision.
  *   abi.ts          — AbiSlot / CParamDesc / COutputDesc, buildAbiSlots.
  *                     The one schema walked by both signature and JS.
- *   emit.ts         — per-statement / per-expression C emission, reads
- *                     ctx.cls for every classification decision.
+ *   emit/           — per-statement / per-expression C emission, split
+ *                     by concern (scalar, complexScalar, tensor, assign,
+ *                     userCall, stmt, fused). Reads ctx.cls for every
+ *                     classification decision.
  *   codegenCtx.ts   — EmitCtx + shared name/opcode helpers.
  *
  * UserCall support: when a feasible user-defined function is called
@@ -44,14 +46,13 @@ import {
   type CParamDesc,
   type COutputDesc,
 } from "./abi.js";
-import { emitStmts } from "./emit.js";
+import { emitStmts } from "./emit/index.js";
 import type { CalleeAbi } from "./codegenCtx.js";
 
 export type { AbiSlot, AbiSlotKind } from "./abi.js";
 export type { CParamDesc, COutputDesc } from "./abi.js";
 // Public helpers that older callers reach for — re-exported so the
-// split is invisible to non-internal consumers (cFusedCodegen.ts,
-// cJitInstall.ts, tests).
+// split is invisible to non-internal consumers (cJitInstall.ts, tests).
 export {
   mangle,
   mangleIm,

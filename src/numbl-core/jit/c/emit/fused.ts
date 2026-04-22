@@ -18,16 +18,16 @@
  * reduction.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
-import type { JitExpr, JitType } from "../jitTypes.js";
-import type { FusibleChain } from "../fusion.js";
+import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
+import type { JitExpr, JitType } from "../../jitTypes.js";
+import type { FusibleChain } from "../../fusion.js";
 import {
   type FusedTarget,
   emitFusedScalarExpr,
   fusedLocal,
   findTensorParamInChain,
   collectInputTensors,
-} from "../fusedScalarEmit.js";
+} from "../../fusedScalarEmit.js";
 import {
   C_SCALAR_TARGET,
   formatNumberLiteral,
@@ -38,16 +38,16 @@ import {
   tensorData,
   tensorDataIm,
   tensorLen,
-} from "./jitCodegenC.js";
-import { shapeExprsFor } from "./emit.js";
-import { getIBuiltin } from "../../interpreter/builtins/types.js";
+} from "../codegenCtx.js";
+import { shapeExprsFor } from "./tensor.js";
+import { getIBuiltin } from "../../../interpreter/builtins/types.js";
 import {
   C_REDUCTION_LITERALS,
   accumulateOp,
   determineWriteBack,
   reductionCombine,
   reductionInit,
-} from "../fusedChainHelpers.js";
+} from "../../fusedChainHelpers.js";
 
 /** Minimum element count before `#pragma omp parallel for` kicks in.
  *  Below this, thread-spawn overhead dominates. */
