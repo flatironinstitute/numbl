@@ -326,8 +326,11 @@ export function emitTensorExprToStmts(
       emitScratchBufAlloc(lines, indent, sData, sLen, arg.len);
       const src = expr.name === "real" ? arg.data : arg.dataIm;
       if (expr.name === "real") {
+        // Guard on ${src} too: invariant is that a tensor's data pointer
+        // is non-NULL when its len > 0, but make the memcpy safe even if
+        // the invariant were ever broken (no UB from NULL src).
         lines.push(
-          `${indent}if (${sLen} > 0) memcpy(${sData}, ${src}, (size_t)${sLen} * sizeof(double));`
+          `${indent}if (${sLen} > 0 && ${src}) memcpy(${sData}, ${src}, (size_t)${sLen} * sizeof(double));`
         );
       } else {
         // imag: handle NULL source (real-widened) → zero output.
@@ -520,8 +523,10 @@ export function emitComplexTensorExprToStmts(
     );
     // conj: copy re; negate im. If operand.dataIm is NULL (real operand
     // widened), the output imag is all-zero, so just zero it.
+    // Guard on operand.data too: invariant is that a tensor's data is
+    // non-NULL when len > 0, but make the memcpy safe even if broken.
     lines.push(
-      `${indent}if (${sLen} > 0) memcpy(${sData}, ${operand.data}, (size_t)${sLen} * sizeof(double));`
+      `${indent}if (${sLen} > 0 && ${operand.data}) memcpy(${sData}, ${operand.data}, (size_t)${sLen} * sizeof(double));`
     );
     lines.push(`${indent}if (${operand.dataIm}) {`);
     lines.push(`${indent}  for (int64_t __i = 0; __i < ${sLen}; __i++)`);
