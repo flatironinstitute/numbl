@@ -28,16 +28,6 @@ import { analyzeTensorUsage } from "./classify.js";
 import {
   NUMBL_JIT_RT_REQUIRED_VERSION,
   spaceBeforeName,
-  mangle,
-  mangleIm,
-  tensorD0,
-  tensorD1,
-  tensorData,
-  tensorDataIm,
-  tensorLen,
-  scratchData,
-  scratchDataIm,
-  scratchLen,
   type EmitCtx,
 } from "./codegenCtx.js";
 import {
@@ -49,6 +39,8 @@ import {
 import { emitStmts } from "./emit/index.js";
 import type { CalleeAbi } from "./codegenCtx.js";
 import { walkExprNodes, walkStmts, walkStmtExprs } from "./visit.js";
+import { buildPrelude } from "./prelude.js";
+import { buildEpilogue } from "./epilogue.js";
 
 export type { AbiSlot, AbiSlotKind } from "./abi.js";
 export type { CParamDesc, COutputDesc } from "./abi.js";
@@ -428,258 +420,28 @@ function emitOneFunction(
   // expression.
   if (opts.forceNeedsErrorFlag) ctx.needsErrorFlag = true;
 
-  const needsShapeLocals = (name: string): boolean => {
-    const m = cls.meta.get(name);
-    if (!m) return false;
-    if (m.hasFreshAlloc) return true;
-    return m.maxIndexDim >= 2;
-  };
-
-  // ── Epilogue ────────────────────────────────────────────────────────
-  const epilogueLines: string[] = [];
-  for (const od of outputDescs) {
-    if (od.kind === "tensor") {
-      if (od.dynamic) {
-        epilogueLines.push(
-          `${indent}*${mangle(od.name)}_buf_out = ${tensorData(od.name)};`
-        );
-        if (od.isComplex) {
-          epilogueLines.push(
-            `${indent}*__im_${mangle(od.name)}_buf_out = ${tensorDataIm(od.name)};`
-          );
-        }
-        epilogueLines.push(
-          `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
-        );
-        epilogueLines.push(
-          `${indent}*${mangle(od.name)}_d0_out = ${tensorD0(od.name)};`
-        );
-        epilogueLines.push(
-          `${indent}*${mangle(od.name)}_d1_out = ${tensorD1(od.name)};`
-        );
-      } else {
-        epilogueLines.push(
-          `${indent}*${mangle(od.name)}_out_len = ${tensorLen(od.name)};`
-        );
-      }
-    } else if (od.kind === "complexScalar") {
-      epilogueLines.push(
-        `${indent}*${mangle(od.name)}_out = ${mangle(od.name)};`
-      );
-      epilogueLines.push(
-        `${indent}*${mangleIm(od.name)}_out = ${mangleIm(od.name)};`
-      );
-    } else {
-      epilogueLines.push(
-        `${indent}*${mangle(od.name)}_out = ${mangle(od.name)};`
-      );
-    }
-  }
-
-  for (const sIdx of ctx.usedScratch) {
-    epilogueLines.push(
-      `${indent}if (${scratchData(sIdx)}) free(${scratchData(sIdx)});`
-    );
-    if (ctx.complexScratch.has(sIdx)) {
-      epilogueLines.push(
-        `${indent}if (${scratchDataIm(sIdx)}) free(${scratchDataIm(sIdx)});`
-      );
-    }
-  }
-
-  for (const name of cls.localTensorNames) {
-    if (cls.meta.get(name)?.isDynamicOutput) continue;
-    epilogueLines.push(
-      `${indent}if (${tensorData(name)}) free(${tensorData(name)});`
-    );
-    if (cls.meta.get(name)?.isComplex) {
-      epilogueLines.push(
-        `${indent}if (${tensorDataIm(name)}) free(${tensorDataIm(name)});`
-      );
-    }
-  }
-
-  for (const p of unshareTensorParams) {
-    if (cls.meta.get(p)?.isDynamicOutput) continue;
-    epilogueLines.push(
-      `${indent}if (${tensorData(p)}) free(${tensorData(p)});`
-    );
-    if (cls.meta.get(p)?.isComplex) {
-      epilogueLines.push(
-        `${indent}if (${tensorDataIm(p)}) free(${tensorDataIm(p)});`
-      );
-    }
-  }
-
-  // ── Prelude ─────────────────────────────────────────────────────────
   const paramSet = new Set(params);
   const allLocals = [...localVars].filter(v => !paramSet.has(v)).sort();
-  const preludeLines: string[] = [];
 
-  const emitParamShapeLocals = (p: string, useInSuffix: boolean): void => {
-    const suf = useInSuffix ? "_in" : "";
-    const d = cls.meta.get(p)?.maxIndexDim ?? 0;
-    if (needsShapeLocals(p)) {
-      if (d >= 2) {
-        preludeLines.push(
-          `${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}${suf};`
-        );
-      } else {
-        preludeLines.push(
-          `${indent}int64_t ${tensorD0(p)} = ${tensorLen(p)}${suf};`
-        );
-      }
-      if (d >= 3) {
-        preludeLines.push(
-          `${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}${suf};`
-        );
-      } else {
-        preludeLines.push(`${indent}int64_t ${tensorD1(p)} = 1;`);
-      }
-    } else {
-      if (d >= 2) {
-        preludeLines.push(
-          `${indent}int64_t ${tensorD0(p)} = ${tensorD0(p)}${suf};`
-        );
-      }
-      if (d >= 3) {
-        preludeLines.push(
-          `${indent}int64_t ${tensorD1(p)} = ${tensorD1(p)}${suf};`
-        );
-      }
-    }
-  };
+  const preludeLines = buildPrelude({
+    cls,
+    ctx,
+    params,
+    argTypes,
+    paramOutputTensors,
+    unshareTensorParams,
+    allLocals,
+    complexScalarVars,
+    indent,
+  });
 
-  for (const p of paramOutputTensors) {
-    const isComplex = !!cls.meta.get(p)?.isComplex;
-    if (cls.meta.get(p)?.isDynamicOutput) {
-      preludeLines.push(
-        `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
-      );
-      emitParamShapeLocals(p, true);
-      preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
-      if (isComplex) {
-        preludeLines.push(`${indent}double *${tensorDataIm(p)} = NULL;`);
-      }
-      preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
-      preludeLines.push(
-        `${indent}  ${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
-      );
-      preludeLines.push(
-        `${indent}  memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
-      );
-      if (isComplex) {
-        // Imag input may be NULL (undefined `.imag`); seed a zero
-        // buffer so downstream kernels that require a non-NULL imag
-        // pointer on writeable tensors still work.
-        preludeLines.push(
-          `${indent}  ${tensorDataIm(p)} = (double *)calloc((size_t)${tensorLen(p)}, sizeof(double));`
-        );
-        preludeLines.push(`${indent}  if (${tensorDataIm(p)}_in) {`);
-        preludeLines.push(
-          `${indent}    memcpy(${tensorDataIm(p)}, ${tensorDataIm(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
-        );
-        preludeLines.push(`${indent}  }`);
-      }
-      preludeLines.push(`${indent}}`);
-    } else {
-      preludeLines.push(
-        `${indent}double *${tensorData(p)} = ${mangle(p)}_buf;`
-      );
-      if (isComplex) {
-        preludeLines.push(
-          `${indent}double *${tensorDataIm(p)} = __im_${mangle(p)}_buf;`
-        );
-      }
-      preludeLines.push(
-        `${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`
-      );
-      emitParamShapeLocals(p, true);
-    }
-  }
-
-  for (const p of unshareTensorParams) {
-    if (paramOutputTensors.has(p)) continue;
-    const isComplex = !!cls.meta.get(p)?.isComplex;
-    preludeLines.push(`${indent}int64_t ${tensorLen(p)} = ${tensorLen(p)}_in;`);
-    emitParamShapeLocals(p, true);
-    preludeLines.push(`${indent}double *${tensorData(p)} = NULL;`);
-    if (isComplex) {
-      preludeLines.push(`${indent}double *${tensorDataIm(p)} = NULL;`);
-    }
-    preludeLines.push(`${indent}if (${tensorLen(p)} > 0) {`);
-    preludeLines.push(
-      `${indent}  ${tensorData(p)} = (double *)malloc((size_t)${tensorLen(p)} * sizeof(double));`
-    );
-    preludeLines.push(
-      `${indent}  memcpy(${tensorData(p)}, ${tensorData(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
-    );
-    if (isComplex) {
-      preludeLines.push(
-        `${indent}  ${tensorDataIm(p)} = (double *)calloc((size_t)${tensorLen(p)}, sizeof(double));`
-      );
-      preludeLines.push(`${indent}  if (${tensorDataIm(p)}_in) {`);
-      preludeLines.push(
-        `${indent}    memcpy(${tensorDataIm(p)}, ${tensorDataIm(p)}_in, (size_t)${tensorLen(p)} * sizeof(double));`
-      );
-      preludeLines.push(`${indent}  }`);
-    }
-    preludeLines.push(`${indent}}`);
-  }
-
-  // A scalar param that the body later widens to complex (e.g. `acc = 0`
-  // then `acc = acc + 1i`) arrives via the real-scalar ABI (one `double`
-  // slot). `complexScalarVars` tracks the effective type — we need to
-  // initialize the imag companion to 0 so subsequent emitComplex reads
-  // on Var(param) pick up a valid im local. Same idea for complex-param
-  // cases, but those already get both slots from buildAbiSlots.
-  for (let i = 0; i < params.length; i++) {
-    const p = params[i];
-    if (complexScalarVars.has(p) && argTypes[i].kind !== "complex_or_number") {
-      preludeLines.push(`${indent}double ${mangleIm(p)} = 0.0;`);
-    }
-  }
-
-  for (const local of allLocals) {
-    if (cls.tensorVars.has(local)) {
-      const localMeta = cls.meta.get(local);
-      const isOutput = cls.outputTensorNames.has(local);
-      const isComplex = !!localMeta?.isComplex;
-      if (isOutput && !localMeta?.isDynamicOutput) {
-        preludeLines.push(
-          `${indent}double *${tensorData(local)} = ${mangle(local)}_buf;`
-        );
-        if (isComplex) {
-          preludeLines.push(
-            `${indent}double *${tensorDataIm(local)} = __im_${mangle(local)}_buf;`
-          );
-        }
-      } else {
-        preludeLines.push(`${indent}double *${tensorData(local)} = NULL;`);
-        if (isComplex) {
-          preludeLines.push(`${indent}double *${tensorDataIm(local)} = NULL;`);
-        }
-      }
-      preludeLines.push(`${indent}int64_t ${tensorLen(local)} = 0;`);
-      if (needsShapeLocals(local)) {
-        preludeLines.push(`${indent}int64_t ${tensorD0(local)} = 0;`);
-        preludeLines.push(`${indent}int64_t ${tensorD1(local)} = 0;`);
-      }
-    } else if (complexScalarVars.has(local)) {
-      preludeLines.push(`${indent}double ${mangle(local)} = 0.0;`);
-      preludeLines.push(`${indent}double ${mangleIm(local)} = 0.0;`);
-    } else {
-      preludeLines.push(`${indent}double ${mangle(local)} = 0.0;`);
-    }
-  }
-
-  for (const sIdx of ctx.usedScratch) {
-    preludeLines.push(`${indent}double *${scratchData(sIdx)} = NULL;`);
-    if (ctx.complexScratch.has(sIdx)) {
-      preludeLines.push(`${indent}double *${scratchDataIm(sIdx)} = NULL;`);
-    }
-    preludeLines.push(`${indent}int64_t ${scratchLen(sIdx)} = 0;`);
-  }
+  const epilogueLines = buildEpilogue({
+    cls,
+    ctx,
+    outputDescs,
+    unshareTensorParams,
+    indent,
+  });
 
   // ── Signature + ABI ─────────────────────────────────────────────────
   const abiSlots = buildAbiSlots(
