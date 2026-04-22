@@ -98,7 +98,15 @@ export function emitScratchBufAllocComplex(
   lines.push(
     `${inner}  ${sDataIm} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
   );
-  lines.push(`${inner}  ${sLen} = __need;`);
+  // If the second malloc failed (OOM), free the first so we don't leak,
+  // and zero sLen so downstream sees "no scratch" rather than a stale size.
+  lines.push(`${inner}  if (__need > 0 && ${sDataIm} == NULL && ${sData}) {`);
+  lines.push(`${inner}    free(${sData});`);
+  lines.push(`${inner}    ${sData} = NULL;`);
+  lines.push(`${inner}    ${sLen} = 0;`);
+  lines.push(`${inner}  } else {`);
+  lines.push(`${inner}    ${sLen} = __need;`);
+  lines.push(`${inner}  }`);
   lines.push(`${inner}}`);
   lines.push(`${indent}}`);
 }
