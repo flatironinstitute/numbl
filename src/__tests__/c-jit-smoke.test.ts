@@ -518,6 +518,88 @@ describe("C-JIT: tensor codegen (Phase 2, koffi)", () => {
   });
 });
 
+describe("C-JIT: NUMBL_OMP_THRESHOLD is read at emit time", () => {
+  const tensor1dT: JitType = {
+    kind: "tensor",
+    isComplex: false,
+    shape: [100, 1],
+  };
+
+  // r = exp(x) + sin(x)  — heavy ops, tensor output → parallel-for candidate.
+  const body: JitStmt[] = [
+    {
+      tag: "Assign",
+      name: "r",
+      expr: {
+        tag: "Binary",
+        op: BinaryOperation.Add,
+        left: {
+          tag: "Call",
+          name: "exp",
+          args: [{ tag: "Var", name: "x", jitType: tensor1dT }],
+          jitType: tensor1dT,
+        },
+        right: {
+          tag: "Call",
+          name: "sin",
+          args: [{ tag: "Var", name: "x", jitType: tensor1dT }],
+          jitType: tensor1dT,
+        },
+        jitType: tensor1dT,
+      },
+    },
+  ];
+
+  const emit = () =>
+    generateC(
+      body,
+      ["x"],
+      ["r"],
+      1,
+      new Set(["r"]),
+      [tensor1dT],
+      tensor1dT,
+      [tensor1dT],
+      "fn_omp",
+      true, // fuse
+      true // openmp
+    ).cSource;
+
+  it("reflects updated env var across two emits in the same process", () => {
+    const original = process.env.NUMBL_OMP_THRESHOLD;
+    try {
+      process.env.NUMBL_OMP_THRESHOLD = "1234";
+      const a = emit();
+      expect(a).toContain("if(v_x_len >= 1234)");
+
+      process.env.NUMBL_OMP_THRESHOLD = "5678";
+      const b = emit();
+      expect(b).toContain("if(v_x_len >= 5678)");
+      expect(b).not.toContain("if(v_x_len >= 1234)");
+    } finally {
+      if (original === undefined) delete process.env.NUMBL_OMP_THRESHOLD;
+      else process.env.NUMBL_OMP_THRESHOLD = original;
+    }
+  });
+
+  it("falls back to 100000 when env var is empty or non-numeric", () => {
+    const original = process.env.NUMBL_OMP_THRESHOLD;
+    try {
+      process.env.NUMBL_OMP_THRESHOLD = "";
+      expect(emit()).toContain("if(v_x_len >= 100000)");
+      process.env.NUMBL_OMP_THRESHOLD = "not-a-number";
+      expect(emit()).toContain("if(v_x_len >= 100000)");
+      // "0" is falsy after parseInt, so it falls back to the default.
+      // Preserved intentionally — matches pre-fix behaviour.
+      process.env.NUMBL_OMP_THRESHOLD = "0";
+      expect(emit()).toContain("if(v_x_len >= 100000)");
+    } finally {
+      if (original === undefined) delete process.env.NUMBL_OMP_THRESHOLD;
+      else process.env.NUMBL_OMP_THRESHOLD = original;
+    }
+  });
+});
+
 describe("C-JIT: tensor parity with JS-JIT (E2E)", () => {
   const available = E2E_ENABLED && hasCc();
   const itSkipWithoutCc = available ? it : it.skip;
