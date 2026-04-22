@@ -15,6 +15,7 @@
  */
 
 import type { FusibleChain } from "../fusion.js";
+import type { JitExpr } from "../jitTypes.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 import {
   type FusedTarget,
@@ -55,7 +56,10 @@ const BUILTIN_TO_JS: Record<string, string> = {
   floor: "Math.floor",
   ceil: "Math.ceil",
   fix: "Math.trunc",
-  round: "Math.round",
+  // round: MATLAB rounds half-away-from-zero; Math.round rounds half-
+  // toward-+Inf, so `round(-1.5)` disagrees (-2 vs -1). Route through
+  // `$h.round` which matches the interpreter and C-JIT paths.
+  round: "$h.round",
   sign: "Math.sign",
   atan2: "Math.atan2",
   hypot: "Math.hypot",
@@ -69,6 +73,60 @@ const BUILTIN_TO_JS: Record<string, string> = {
 /** Data alias for a tensor variable inside the fused block. */
 function dataAlias(name: string, mangle: (n: string) => string): string {
   return `__${mangle(name)}_data`;
+}
+
+/** Collect write-back dests that are also read in the chain BEFORE they
+ *  are first written. These need the existing tensor's values copied
+ *  into a freshly-allocated buffer so the per-element body can read
+ *  them; pure-output dests (written but never read in the chain) skip
+ *  the copy.
+ *
+ *  A dest `d` counts as self-read when any assign *at or before d's
+ *  first write* references `d` in its RHS. That covers both the direct
+ *  self-alias (`y = y .* x + 3`) and the cross-assign case
+ *  (`z = y + x; y = z + 1` — y's first write is the 2nd assign, but
+ *  the 1st assign's RHS reads y). */
+function collectSelfReadDests(chain: FusibleChain): Set<string> {
+  const out = new Set<string>();
+  const writtenSoFar = new Set<string>();
+  for (const a of chain.assigns) {
+    // First, for each name referenced in this assign's RHS, if that
+    // name is a future chain dest (i.e. not yet written), mark it as
+    // needing its input preserved.
+    const refs = new Set<string>();
+    collectExprVars(a.expr, refs);
+    for (const name of refs) {
+      if (!writtenSoFar.has(name) && isChainDest(chain, name)) {
+        out.add(name);
+      }
+    }
+    writtenSoFar.add(a.destName);
+  }
+  return out;
+}
+
+function isChainDest(chain: FusibleChain, name: string): boolean {
+  for (const a of chain.assigns) if (a.destName === name) return true;
+  return false;
+}
+
+function collectExprVars(expr: JitExpr, out: Set<string>): void {
+  if (expr.tag === "Var") {
+    out.add(expr.name);
+    return;
+  }
+  if (expr.tag === "Binary") {
+    collectExprVars(expr.left, out);
+    collectExprVars(expr.right, out);
+    return;
+  }
+  if (expr.tag === "Unary") {
+    collectExprVars(expr.operand, out);
+    return;
+  }
+  if (expr.tag === "Call") {
+    for (const a of expr.args) collectExprVars(a, out);
+  }
 }
 
 // ── Per-element op target (numeric form) ─────────────────────────────
@@ -176,12 +234,25 @@ export function emitJsFusedChain(
   }
 
   // Output buffer allocation with reuse check for write-back dests.
+  //
+  // When a dest is also read in the chain BEFORE it is first written
+  // (e.g. `y = y .* x + 3`), the fresh-alloc branch must copy the
+  // existing values in — otherwise the loop reads uninitialized memory.
+  // Detect this per-dest; non-self-read dests (pure outputs) skip the
+  // copy to avoid a wasted memcpy.
+  const selfReadDests = collectSelfReadDests(chain);
   for (const d of writeBack) {
     const m = mangle(d);
     const da = dataAlias(d, mangle);
-    lines.push(
-      `${inner}const ${da} = (${m} && ${m}._rc === 1 && ${m}.data instanceof Float64Array && ${m}.data.length === __len) ? ${m}.data : $h.uninit(__len);`
-    );
+    if (selfReadDests.has(d)) {
+      lines.push(
+        `${inner}const ${da} = (${m} && ${m}._rc === 1 && ${m}.data instanceof Float64Array && ${m}.data.length === __len) ? ${m}.data : $h.uninitCopy(${m}.data, __len);`
+      );
+    } else {
+      lines.push(
+        `${inner}const ${da} = (${m} && ${m}._rc === 1 && ${m}.data instanceof Float64Array && ${m}.data.length === __len) ? ${m}.data : $h.uninit(__len);`
+      );
+    }
   }
 
   // Reduction accumulator init.

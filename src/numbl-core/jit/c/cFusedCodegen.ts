@@ -237,14 +237,29 @@ function emitRealFusedChain(
   // Locals and dynamic outputs need free+malloc so a later chain firing
   // (with different `lenVar`) doesn't overflow a stale buffer. Fixed-size
   // outputs share the caller's buffer — we must not free it.
+  //
+  // IMPORTANT: guard the realloc on a size mismatch. A dynamic-output
+  // paramOutput (e.g. `function y = f(y, x); y = y .* x + 3; end`) arrives
+  // with the prelude's unshare copy already in `v_y_data`; freeing +
+  // re-mallocing here would drop the input values and leave the fused
+  // loop reading uninitialized memory. Same size-match pattern as
+  // emitEnsureTensorBuf in emit.ts and emitComplexFusedChain below.
   for (const d of writeBack) {
     const needsRealloc = localTensorNames.has(d) || dynamicOutputNames.has(d);
-    lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
     if (needsRealloc) {
-      lines.push(`${indent}if (${tensorData(d)}) free(${tensorData(d)});`);
+      const inner2 = indent + "  ";
+      lines.push(`${indent}{`);
+      lines.push(`${inner2}int64_t __need = ${lenVar};`);
+      lines.push(`${inner2}if (__need != ${tensorLen(d)}) {`);
+      lines.push(`${inner2}  if (${tensorData(d)}) free(${tensorData(d)});`);
       lines.push(
-        `${indent}${tensorData(d)} = (${tensorLen(d)} > 0) ? (double *)malloc((size_t)${tensorLen(d)} * sizeof(double)) : NULL;`
+        `${inner2}  ${tensorData(d)} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
       );
+      lines.push(`${inner2}  ${tensorLen(d)} = __need;`);
+      lines.push(`${inner2}}`);
+      lines.push(`${indent}}`);
+    } else {
+      lines.push(`${indent}${tensorLen(d)} = ${lenVar};`);
     }
   }
 

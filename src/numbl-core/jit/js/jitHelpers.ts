@@ -230,9 +230,24 @@ export const jitHelpers = {
 
   // Scalar math
   mod,
+  // MATLAB-semantics round (half-away-from-zero). Math.round rounds
+  // half toward +Inf, which disagrees on negative half-values
+  // (round(-1.5) is -2 in MATLAB, -1 in JS). Used by the fused JS
+  // codegen; the non-fused interpreter path already routes through the
+  // math.ts matlabRound helper.
+  round: (x: number) => Math.sign(x) * Math.round(Math.abs(x)),
 
   // Fused-loop helpers (raw Float64Array allocation + wrapping)
   uninit: uninitFloat64,
+  // Allocate a fresh Float64Array of length `n` and seed it from `src`
+  // (used when the fused loop both reads and writes the same dest name:
+  // the input data must survive the free+alloc path so per-element
+  // self-reads get the original values).
+  uninitCopy: (src: ArrayLike<number>, n: number) => {
+    const buf = uninitFloat64(n);
+    buf.set(src);
+    return buf;
+  },
   wrapF64: (data: Float64Array, shape: number[]) =>
     makeTensor(data, undefined, shape.slice()),
 
@@ -546,7 +561,16 @@ export const jitHelpers = {
   re,
   im,
 
-  // User function call with call frame tracking
+  // User function call with call frame tracking.
+  //
+  // Tensor args are bumped with shareTensor before the call. The caller
+  // still holds each tensor variable, and the callee's parameter is a
+  // second alias — unshare() inside the callee only copies on `_rc > 1`,
+  // so without the bump the callee's in-place writes would leak back to
+  // the caller's buffer (COW violation). The bump is intentionally not
+  // undone on return: if the callee called unshare, it already
+  // decremented _rc; if it didn't, leaving _rc over-counted just means a
+  // future mutation in the caller takes an extra copy — safe and rare.
   callUser: (
     rt: {
       pushCallFrame: (name: string) => void;
@@ -560,6 +584,7 @@ export const jitHelpers = {
     fn: (...args: unknown[]) => unknown,
     ...args: unknown[]
   ) => {
+    for (let i = 0; i < args.length; i++) shareTensor(args[i]);
     rt.pushCallFrame(name);
     rt.pushCleanupScope();
     try {

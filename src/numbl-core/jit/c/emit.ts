@@ -1149,8 +1149,11 @@ function emitCall(expr: JitExpr & { tag: "Call" }, ctx: EmitCtx): string {
     const name = (expr.args[0] as JitExpr & { tag: "Var" }).name;
     const lenCode = tensorLen(name);
     if (expr.name === "length") {
+      // MATLAB: length(A) is 0 if any dim is 0, else max(size(A)). The
+      // 2D max(d0, d1) form must guard on len==0 — a 0x5 / 5x0 / 0x1
+      // tensor has total length 0 but one non-zero dim.
       if (hasFreshAlloc(ctx, name)) {
-        return `((double)((${tensorD0(name)} > ${tensorD1(name)}) ? ${tensorD0(name)} : ${tensorD1(name)}))`;
+        return `((double)((${lenCode} == 0) ? 0 : ((${tensorD0(name)} > ${tensorD1(name)}) ? ${tensorD0(name)} : ${tensorD1(name)})))`;
       }
       return `((double)${lenCode})`;
     }
