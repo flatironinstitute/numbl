@@ -2,6 +2,12 @@
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the development guide.
 
+## Developer reference
+
+For a conceptual orientation to how the system fits together — the compiler pipeline, interpreter, JIT, runtime, builtins, platform surfaces — read [developer_reference/overview.md](developer_reference/overview.md). It is the fastest way to get the mental model needed to make non-trivial changes.
+
+**Keep the reference in sync with the code.** When a change restructures a subsystem, changes how components relate, renames or removes a core concept, or introduces a new subsystem, update the relevant file(s) under `developer_reference/` in the same change. Small technical fixes and narrow adjustments (bug fixes, localized refactors, new builtins that fit an existing pattern, test additions) do not need a reference update.
+
 ## Architecture
 
 The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/numbl-core/interpreter/`). The `LoweringContext` handles workspace/function resolution. New builtins and features go in `src/numbl-core/interpreter/builtins/`.
@@ -13,7 +19,7 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/` and the C backend (`jitCodegenC`, `cFusedCodegen`, `cFeasibility`, `cJitBackend`, `cJitInstall`, `cCompile`) under `jit/c/`.
+The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS (or C at `--opt 2`), using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` / `IBuiltin.jitEmitC` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/` and the C backend (`jitCodegenC`, `cFusedCodegen`, `cFeasibility`, `cJitBackend`, `cJitInstall`, `cCompile`) under `jit/c/`.
 
 ## Style
 
@@ -80,7 +86,7 @@ New builtins go in `src/numbl-core/interpreter/builtins/`. Each file registers I
 
 New builtins should include inline `help` via the `help` field on `defineBuiltin`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
 
-Type rules must handle all relevant JitType kinds (`number`, `boolean`, `complex`, `tensor`, `string`, `char`, `struct`, `class_instance`). Return `null` for unsupported types to fall back to the interpreter.
+Type rules must handle all relevant JitType kinds (`number`, `boolean`, `complex_or_number`, `tensor`, `string`, `char`, `struct`, `class_instance`, and others — see [developer_reference/compiler/type-system.md](developer_reference/compiler/type-system.md) for the full list). Return `null` for unsupported types to fall back to the interpreter.
 
 Optional `jitEmit` provides fast-path JS code for scalar/real-tensor cases. Use helpers like `unaryMathJitEmit(mathFn, tensorHelper)` and `binaryMathJitEmit(mathFn)`.
 
@@ -88,42 +94,65 @@ Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, 
 
 Tensors use column-major (Fortran) storage order — element `(i, j)` of an `[m, n]` matrix is at index `j * m + i`.
 
-## The cli usage for numbl:
+## CLI usage for numbl
 
+Keep this section in sync with `npx tsx src/cli.ts --help`. Whenever the CLI interface changes (new command, new/renamed flag, new environment variable, changed defaults), re-run `--help` and paste the updated output here in the same change.
+
+```
 $ npx tsx src/cli.ts --help
-Usage: npx tsx src/cli.ts <command> [options]
+Usage: numbl <command> [options]
 
 Commands:
-run <file.m> Run a .m file
-eval "<code>" Evaluate inline code
-run-tests [dir] Run .m test scripts (default: numbl_test_scripts/)
-build-addon Build native LAPACK addon
-info Print machine-readable info (JSON)
-list-builtins List available built-in functions
-(no command) Start interactive REPL
+  run <file.m>       Run a .m file
+  eval "<code>"      Evaluate inline code
+  run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
+  build-addon        Build native LAPACK addon
+  info               Print machine-readable info (JSON)
+  list-builtins      List available built-in functions (--no-help: only those without help text)
+  serve              Start local execution server for the browser IDE
+  (no command)       Start interactive REPL
+
+Global options:
+  --version, -V      Print version and exit
+  --help, -h         Print this help message
+
+Options (for serve):
+  --passkey <key>    Required passkey (generated by the browser IDE)
+  --port <port>      Set server port (default: 3001)
 
 Options (for REPL):
---plot Enable plot server
---plot-port <port> Set plot server port (implies --plot)
+  --plot             Enable plot server
+  --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
---dump-js <file> Write JIT-generated JavaScript to file
---dump-c <file> Write C-JIT-generated C source to file (requires --opt 2)
---dump-ast Print AST as JSON
---verbose Detailed logging to stderr
---stream NDJSON output mode
---path <dir> Add extra workspace directory
---plot Enable plot server
---plot-port <port> Set plot server port (implies --plot)
---opt <level> Optimization level (default: 1)
-0 — interpreter (no JIT)
-1 — JS-JIT: type-specialize hot functions/loops to JS
-2 — C-JIT: emit C for feasible scalar functions, compile via cc,
-load as a .node module, fall back to JS-JIT on infeasible IR
-(requires a C compiler and Node API headers)
+  --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-c <file>    Write C-JIT-generated C source to file (requires --opt 2)
+  --dump-ast         Print AST as JSON
+  --verbose          Detailed logging to stderr
+  --stream           NDJSON output mode
+  --path <dir>       Add extra workspace directory
+  --plot             Enable plot server
+  --plot-port <port> Set plot server port (implies --plot)
+  --opt <level>      Optimization level (default: 1)
+                       0 — interpreter (no JIT)
+                       1 — JS-JIT: type-specialize hot functions/loops to JS
+                       2 — C-JIT: emit C for feasible scalar functions, compile
+                           via cc, load as a .node module, fall back to JS-JIT
+                           on infeasible IR (requires a C compiler and Node API
+                           headers; prints its compile command once to stderr)
+  --fuse             Emit fused per-element loops (C-JIT only, requires --opt 2)
+  --par              Parallelize fused loops with OpenMP threads (C-JIT only,
+                     requires --opt 2 and --fuse)
+  --check-c-jit-parity
+                     Diagnostic (requires --opt 2): throw on any C-JIT miss
+                     where JS-JIT would have compiled, to enumerate parity gaps
 
 Environment variables:
-NUMBL_PATH Extra workspace directories (separated by :)
-NUMBL_CC C compiler for --opt 2 (default: cc)
-NUMBL_CFLAGS Extra flags appended to the C-JIT compile command
-NUMBL_NO_NATIVE_CFLAGS Skip probed defaults like -march=native
+  NUMBL_PATH              Extra workspace directories (separated by :)
+  NUMBL_CC                C compiler for --opt 2 (default: cc)
+  NUMBL_CFLAGS            Extra flags appended to the C-JIT compile command
+  NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
+                          reproducibility or debugging portability issues)
+  NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in
+                          (default: 100000)
+```

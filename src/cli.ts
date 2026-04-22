@@ -351,7 +351,9 @@ Options (for run and eval):
                            via cc, load as a .node module, fall back to JS-JIT
                            on infeasible IR (requires a C compiler and Node API
                            headers; prints its compile command once to stderr)
-  --fuse             Emit fused per-element loops (JS-JIT and C-JIT)
+  --fuse             Emit fused per-element loops (C-JIT only, requires --opt 2)
+  --par              Parallelize fused loops with OpenMP threads (C-JIT only,
+                     requires --opt 2 and --fuse)
   --check-c-jit-parity
                      Diagnostic (requires --opt 2): throw on any C-JIT miss
                      where JS-JIT would have compiled, to enumerate parity gaps
