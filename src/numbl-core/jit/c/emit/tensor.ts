@@ -294,6 +294,110 @@ export function emitElemwiseTensorAssign(
   }
 }
 
+/** Complex-tensor sibling of `emitElemwiseTensorAssign`. Same runtime
+ *  size-match scheme, but manages paired (re, im) buffers. The kernel
+ *  callback receives both `targetData` and `targetDataIm` so it can
+ *  write the paired output in one shot.
+ *
+ *  When the kernel's operand aliases the target (e.g. `z = -z`, `z =
+ *  conj(z)`), the callback MUST be element-wise safe — kernels like
+ *  `numbl_complex_scalar_binary_elemwise` already are, but a memcpy
+ *  from operand→target against a same-buffer alias is UB. Use an
+ *  element-wise loop there. */
+export function emitComplexElemwiseTensorAssign(
+  lines: string[],
+  indent: string,
+  destName: string,
+  lenExpr: string,
+  shapeSrc: JitExpr | undefined,
+  ctx: EmitCtx,
+  emitKernel: (
+    lines: string[],
+    indent: string,
+    targetData: string,
+    targetDataIm: string,
+    targetLen: string
+  ) => void
+): void {
+  const dData = tensorData(destName);
+  const dDataIm = tensorDataIm(destName);
+  const dLen = tensorLen(destName);
+  const isDyn = isDynamicOutput(ctx, destName);
+
+  if (!isLocalTensor(ctx, destName) && !isDyn) {
+    // Fixed-size output: caller buffers, never freed — inline safe.
+    lines.push(`${indent}${dLen} = ${lenExpr};`);
+    emitKernel(lines, indent, dData, dDataIm, dLen);
+    return;
+  }
+
+  const sIdx = allocComplexScratch(ctx);
+  const sData = scratchData(sIdx);
+  const sDataIm = scratchDataIm(sIdx);
+  const sLen = scratchLen(sIdx);
+  const tagRe = `__tgtR${sIdx}`;
+  const tagIm = `__tgtI${sIdx}`;
+  const inlineFlag = `__inline${sIdx}`;
+  const inner = indent + "  ";
+
+  lines.push(`${indent}{`);
+  lines.push(`${inner}int64_t __need = ${lenExpr};`);
+  lines.push(`${inner}int ${inlineFlag} = (__need == ${dLen});`);
+  lines.push(`${inner}double *${tagRe};`);
+  lines.push(`${inner}double *${tagIm};`);
+  lines.push(`${inner}if (${inlineFlag}) {`);
+  lines.push(`${inner}  ${tagRe} = ${dData};`);
+  lines.push(`${inner}  ${tagIm} = ${dDataIm};`);
+  lines.push(`${inner}} else {`);
+  lines.push(`${inner}  if (__need != ${sLen}) {`);
+  lines.push(`${inner}    if (${sData}) free(${sData});`);
+  lines.push(`${inner}    if (${sDataIm}) free(${sDataIm});`);
+  lines.push(
+    `${inner}    ${sData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+  );
+  lines.push(
+    `${inner}    ${sDataIm} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+  );
+  // OOM guard: if the second malloc fails, free the first so we don't
+  // leak, and zero sLen so downstream sees "no scratch" rather than a
+  // stale size.
+  lines.push(`${inner}    if (__need > 0 && ${sDataIm} == NULL && ${sData}) {`);
+  lines.push(`${inner}      free(${sData});`);
+  lines.push(`${inner}      ${sData} = NULL;`);
+  lines.push(`${inner}      ${sLen} = 0;`);
+  lines.push(`${inner}    } else {`);
+  lines.push(`${inner}      ${sLen} = __need;`);
+  lines.push(`${inner}    }`);
+  lines.push(`${inner}  }`);
+  lines.push(`${inner}  ${tagRe} = ${sData};`);
+  lines.push(`${inner}  ${tagIm} = ${sDataIm};`);
+  lines.push(`${inner}}`);
+  emitKernel(lines, inner, tagRe, tagIm, "__need");
+  lines.push(`${inner}if (!${inlineFlag}) {`);
+  lines.push(`${inner}  if (${dData}) free(${dData});`);
+  lines.push(`${inner}  if (${dDataIm}) free(${dDataIm});`);
+  lines.push(
+    `${inner}  ${dData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+  );
+  lines.push(
+    `${inner}  ${dDataIm} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
+  );
+  lines.push(`${inner}  ${dLen} = __need;`);
+  lines.push(
+    `${inner}  if (${dLen} > 0) memcpy(${dData}, ${tagRe}, (size_t)${dLen} * sizeof(double));`
+  );
+  lines.push(
+    `${inner}  if (${dLen} > 0) memcpy(${dDataIm}, ${tagIm}, (size_t)${dLen} * sizeof(double));`
+  );
+  lines.push(`${inner}}`);
+  lines.push(`${indent}}`);
+  if (isDyn) {
+    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
+    lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+    lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
+  }
+}
+
 /** Complex-tensor version of emitEnsureTensorBuf. Reallocates both re
  *  and im buffers in lockstep, so kernel writes into the paired
  *  destination don't mismatch in size. Fixed outputs keep their

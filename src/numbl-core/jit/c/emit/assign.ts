@@ -44,6 +44,8 @@ import {
 import { isTensorExpr, requireFreshAllocMeta } from "./helpers.js";
 import { emitExpr } from "./scalar.js";
 import {
+  emitComplexElemwiseTensorAssign,
+  emitComplexTensorBinaryStmts,
   emitComplexTensorExprToStmts,
   emitElemwiseTensorAssign,
   emitEnsureComplexTensorBuf,
@@ -273,50 +275,23 @@ function emitComplexTensorAssignInner(
     return;
   }
 
-  // All compound RHS cases (Binary / Unary Minus / conj) go through
-  // the scratch-transfer pattern: eval the whole expression into a
-  // fresh complex scratch, then free+malloc dst and memcpy both
-  // buffers across. This defuses self-aliasing (`z = z .* conj(z)`,
-  // `z = -z`, etc.) — the scratch reads v_z_data before v_z_data is
-  // freed.
-  if (
-    (expr.tag === "Binary" && isTensorExpr(expr)) ||
-    (expr.tag === "Unary" &&
-      isTensorExpr(expr) &&
-      expr.op === UnaryOperation.Minus) ||
-    (expr.tag === "Call" && isTensorExpr(expr) && expr.name === "conj")
-  ) {
-    const scratch = emitComplexTensorExprToStmts(lines, indent, expr, ctx);
-    // Shape source: for Binary, the tensor-typed operand; for Unary
-    // and conj, the single operand.
-    const shapeSrc: JitExpr =
-      expr.tag === "Binary"
-        ? isTensorExpr(expr.left)
-          ? expr.left
-          : expr.right
-        : expr.tag === "Unary"
-          ? expr.operand
-          : expr.args[0];
-    emitEnsureComplexTensorBuf(
+  // Binary / Unary Minus / conj: each routes through the complex
+  // alias-safe helper. Fast path writes the paired-buffer kernel
+  // directly into dst re+im; slow path (first iter or size change)
+  // evaluates into scratch, reallocs dst, and copies both buffers.
+  if (expr.tag === "Binary" && isTensorExpr(expr)) {
+    const tensorOperand = isTensorExpr(expr.left) ? expr.left : expr.right;
+    const lenExpr = findTensorLenExpr(expr, ctx);
+    emitComplexElemwiseTensorAssign(
       lines,
       indent,
       destName,
-      scratch.len,
+      lenExpr,
+      tensorOperand,
       ctx,
-      shapeSrc
+      (l, ind, tRe, tIm, len) =>
+        emitComplexTensorBinaryStmts(l, ind, expr, ctx, tRe, tIm, len)
     );
-    lines.push(
-      `${indent}if (${dLen} > 0) memcpy(${dData}, ${scratch.data}, (size_t)${dLen} * sizeof(double));`
-    );
-    lines.push(`${indent}if (${scratch.dataIm}) {`);
-    lines.push(
-      `${indent}  if (${dLen} > 0) memcpy(${dDataIm}, ${scratch.dataIm}, (size_t)${dLen} * sizeof(double));`
-    );
-    lines.push(`${indent}} else {`);
-    lines.push(
-      `${indent}  if (${dLen} > 0) memset(${dDataIm}, 0, (size_t)${dLen} * sizeof(double));`
-    );
-    lines.push(`${indent}}`);
     return;
   }
 
@@ -325,6 +300,62 @@ function emitComplexTensorAssignInner(
       emitComplexTensorAssign(lines, indent, destName, expr.operand, ctx);
       return;
     }
+    if (expr.op === UnaryOperation.Minus) {
+      const lenExpr = findTensorLenExpr(expr.operand, ctx);
+      emitComplexElemwiseTensorAssign(
+        lines,
+        indent,
+        destName,
+        lenExpr,
+        expr.operand,
+        ctx,
+        (l, ind, tRe, tIm, len) => {
+          const operand = emitComplexTensorExprToStmts(
+            l,
+            ind,
+            expr.operand,
+            ctx
+          );
+          l.push(
+            `${ind}numbl_complex_scalar_binary_elemwise(NUMBL_COMPLEX_BIN_MUL, (size_t)${len}, -1.0, 0.0, ${operand.data}, ${operand.dataIm}, 1, ${tRe}, ${tIm});`
+          );
+        }
+      );
+      return;
+    }
+  }
+
+  if (expr.tag === "Call" && isTensorExpr(expr) && expr.name === "conj") {
+    const lenExpr = findTensorLenExpr(expr.args[0], ctx);
+    emitComplexElemwiseTensorAssign(
+      lines,
+      indent,
+      destName,
+      lenExpr,
+      expr.args[0],
+      ctx,
+      (l, ind, tRe, tIm, len) => {
+        const operand = emitComplexTensorExprToStmts(l, ind, expr.args[0], ctx);
+        // re: copy operand.data → tRe. Skip when they alias (fast path
+        // writes into dst's own re buffer and operand is dst itself —
+        // buffers are identical, no copy needed). memcpy on overlapping
+        // regions is UB.
+        l.push(
+          `${ind}if (${operand.data} && ${tRe} != ${operand.data} && ${len} > 0) memcpy(${tRe}, ${operand.data}, (size_t)${len} * sizeof(double));`
+        );
+        // im: negate operand.dataIm into tIm (element-wise loop is
+        // aliasing-safe). If operand widened from real, zero tIm.
+        l.push(`${ind}if (${operand.dataIm}) {`);
+        l.push(`${ind}  for (int64_t __i = 0; __i < ${len}; __i++)`);
+        l.push(`${ind}    ${tIm}[__i] = -((${operand.dataIm})[__i]);`);
+        l.push(`${ind}} else {`);
+        l.push(
+          `${ind}  if (${len} > 0) memset(${tIm}, 0, (size_t)${len} * sizeof(double));`
+        );
+        l.push(`${ind}}`);
+      }
+    );
+    return;
   }
 
   if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) {
