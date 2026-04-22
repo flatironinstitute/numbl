@@ -68,6 +68,26 @@ export interface FusibleChain {
   reduction?: FusedReduction;
 }
 
+/**
+ * Return true when two tensor shapes are statically known to produce
+ * the same number of elements. Unknown dims (`-1`) are treated as
+ * incompatible — a fused chain with an unknown-length assign can't
+ * soundly share a single `lenVar` across every op. A missing shape
+ * (`undefined`) is also incompatible.
+ */
+function fusibleShapesCompatible(
+  a: number[] | undefined,
+  b: number[] | undefined
+): boolean {
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === -1 || b[i] === -1) return false;
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 // ── Analysis ─────────────────────────────────────────────────────────
 
 /**
@@ -482,6 +502,12 @@ export function findFusibleChains(
     const chainStart = i;
     // Tensor vars produced so far in this chain.
     const produced = new Set<string>();
+    // Static shape the chain's per-element loop iterates over. The fused
+    // emitters pick a single `lenVar` shared across every assign, so a
+    // chain like `a = x1; b = x2` with mismatched x1/x2 lengths would
+    // truncate the longer one. Track the first assign's jitType.shape
+    // and break before adding any assign whose shape disagrees.
+    let chainShape: number[] | undefined;
 
     while (i < stmts.length) {
       const s = stmts[i];
@@ -503,9 +529,17 @@ export function findFusibleChains(
         )
       )
         break;
+      const thisShape = s.expr.jitType.shape;
+      if (
+        chainAssigns.length > 0 &&
+        !fusibleShapesCompatible(chainShape, thisShape)
+      ) {
+        break;
+      }
 
       chainAssigns.push({ destName: s.name, expr: s.expr });
       produced.add(s.name);
+      if (chainAssigns.length === 1) chainShape = thisShape;
       i++;
     }
 

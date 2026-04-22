@@ -227,11 +227,13 @@ export function analyzeTensorUsage(
       }
       if (dst.hasFreshAlloc) return;
       if (e.tag === "Var") {
-        const src = meta.get(e.name);
-        if (src?.hasFreshAlloc) {
-          dst.hasFreshAlloc = true;
-          changed = true;
-        }
+        // `y = x` is a deep copy at MATLAB semantics. The dst's length
+        // tracks the src's, which isn't knowable at JS-wrapper alloc
+        // time if src is a param whose size differs from the first
+        // tensor param. Force the dynamic-output ABI so C mallocs to
+        // the right size instead of overflowing a pre-alloc'd buffer.
+        dst.hasFreshAlloc = true;
+        changed = true;
       } else if (
         e.tag === "RangeSliceRead" ||
         e.tag === "Unary" ||

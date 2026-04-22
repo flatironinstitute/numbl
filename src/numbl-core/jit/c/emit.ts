@@ -1841,16 +1841,22 @@ function emitTensorAssign(
       // update shape locals. Guarded by self-alias check.
       const dD0 = tensorD0(destName);
       const dD1 = tensorD1(destName);
+      // Shape propagation: prefer runtime locals (fresh-alloc / d-indexed
+      // params) when present; else read from the RHS's static jitType
+      // shape. Falling back to [len, 1] flipped a row `[1, n]` param to
+      // a column `[n, 1]` — the source's static shape gives the correct
+      // orientation.
+      const [d0FromShape, d1FromShape] = shapeExprsFor(expr, srcLen);
       const srcD0Expr = hasFreshAlloc(ctx, srcName)
         ? tensorD0(srcName)
         : tensorMaxDim(ctx, srcName) >= 2
           ? tensorD0(srcName)
-          : srcLen;
+          : d0FromShape;
       const srcD1Expr = hasFreshAlloc(ctx, srcName)
         ? tensorD1(srcName)
         : tensorMaxDim(ctx, srcName) >= 3
           ? tensorD1(srcName)
-          : "1";
+          : d1FromShape;
       lines.push(`${indent}if (${dData} != ${srcData}) {`);
       lines.push(`${indent}  if (${dData}) free(${dData});`);
       lines.push(`${indent}  ${dLen} = ${srcLen};`);
