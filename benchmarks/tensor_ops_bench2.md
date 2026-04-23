@@ -33,21 +33,28 @@ All runs produce the same check values (to FP rounding).
 
 - **CPU:** 13th Gen Intel Core i7-1355U (12 threads)
 - **OS:** Debian 13 (trixie), kernel 6.12.74
-- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
+- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.2.0
 - **MATLAB:** R2025b Update 5
-- **Measured:** 2026-04-22 18:28 UTC
+- **Measured:** 2026-04-23 16:10 UTC
 
 Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 
 | Mode                           |   Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
 | ------------------------------ | ------: | -----: | -----: | ------: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)        | 15.88 s | 0.48 s | 1.85 s |  0.40 s |  0.58 s | 5.79 s | 6.79 s |
-| `--opt 1` (JS-JIT)             | 14.03 s | 0.31 s | 1.12 s |  0.24 s |  0.37 s | 5.57 s | 6.41 s |
-| `--opt 2` (C-JIT)              | 13.64 s | 0.29 s | 1.11 s |  0.21 s |  0.31 s | 5.36 s | 5.97 s |
-| `--opt 2 --fuse` (C-JIT)       |  1.69 s | 0.12 s | 0.62 s |  0.00 s |  0.41 s | 0.32 s | 0.21 s |
-| `--opt 2 --fuse --par` (C-JIT) |  1.16 s | 0.09 s | 0.23 s |  0.00 s |  0.40 s | 0.18 s | 0.28 s |
-| MATLAB R2025b (1 thread)       |  7.39 s | 0.47 s | 3.77 s |  0.16 s |  0.59 s | 1.80 s | 0.68 s |
-| MATLAB R2025b (8 threads)      |  2.49 s | 0.12 s | 1.17 s |  0.18 s |  0.28 s | 0.60 s | 0.28 s |
+| `--opt 0` (interpreter)        | 14.58 s | 0.50 s | 2.00 s |  0.36 s |  0.53 s | 5.15 s | 6.05 s |
+| `--opt 1` (JS-JIT)             | 13.98 s | 0.31 s | 1.09 s |  0.24 s |  0.35 s | 5.51 s | 6.43 s |
+| `--opt e1` (experimental)      |  1.24 s | 0.10 s | 0.51 s |  0.06 s |  0.11 s | 0.29 s | 0.18 s |
+| `--opt 2 --fuse --par` (C-JIT) |  1.08 s | 0.08 s | 0.20 s |  0.00 s |  0.37 s | 0.18 s | 0.22 s |
+| MATLAB R2025b (1 thread)       |  6.72 s | 0.48 s | 3.43 s |  0.13 s |  0.50 s | 1.46 s | 0.72 s |
+| MATLAB R2025b (8 threads)      |  2.63 s | 0.12 s | 1.30 s |  0.13 s |  0.20 s | 0.62 s | 0.27 s |
+
+`--opt e1` is total-time close to `--opt 2 --fuse --par` (1.24 vs
+1.08) and beats it on Acc.red (`ir_acc += sum(exp(-x.*x))`) by ~3.5×
+for the same reason as `tensor_ops_bench`'s Chain kernel —
+aggressive `#pragma omp simd` on reduction chains that the existing
+C-JIT fused path omits. Under `-ffast-math` modern compilers
+vectorize `+=` reductions without an explicit `reduction(+:acc)`
+clause.
 
 ### macOS (N=2 000 000, trials=50)
 

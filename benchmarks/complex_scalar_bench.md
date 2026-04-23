@@ -39,19 +39,25 @@ All runs produce the same `result = 49.999798997206` (to FP rounding).
 
 - **CPU:** 13th Gen Intel Core i7-1355U (12 threads)
 - **OS:** Debian 13 (trixie), kernel 6.12.74
-- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
+- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.2.0
 - **MATLAB:** R2025b Update 5
-- **Measured:** 2026-04-22 18:28 UTC
+- **Measured:** 2026-04-23 16:10 UTC
 
 Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 
-| Mode                      |  Wall time |     Throughput | Speedup vs `--opt 0` |
-| ------------------------- | ---------: | -------------: | -------------------: |
-| `--opt 0` (interpreter)   |     7.49 s |    2.67 Mops/s |                   1× |
-| `--opt 1` (JS-JIT)        |     1.04 s |   19.22 Mops/s |                  ~7× |
-| `--opt 2` (C-JIT)         | **0.04 s** | **463 Mops/s** |            **~174×** |
-| MATLAB R2025b (1 thread)  |     0.12 s |     163 Mops/s |                 ~61× |
-| MATLAB R2025b (8 threads) |     0.13 s |     151 Mops/s |                 ~57× |
+| Mode                           |  Wall time |     Throughput | Speedup vs `--opt 0` |
+| ------------------------------ | ---------: | -------------: | -------------------: |
+| `--opt 0` (interpreter)        |     6.62 s |    3.02 Mops/s |                   1× |
+| `--opt 1` (JS-JIT)             |     1.01 s |   19.88 Mops/s |                  ~7× |
+| `--opt e1` (experimental)      |     0.04 s |     485 Mops/s |                ~161× |
+| `--opt 2 --fuse --par` (C-JIT) | **0.04 s** | **534 Mops/s** |            **~179×** |
+| MATLAB R2025b (1 thread)       |     0.11 s |     179 Mops/s |                 ~59× |
+| MATLAB R2025b (8 threads)      |     0.11 s |     177 Mops/s |                 ~59× |
+
+`--opt e1` matches `--opt 2 --fuse --par` here because `run_bench`
+has pure-scalar params and a scalar return, so e1's whole-function
+scalar kernel path fires — the complex scalar `z` lives inside the
+kernel and is lowered to a pair of doubles, same as `--opt 2`.
 
 The C-JIT wins by a wide margin here because the complex arithmetic
 lowers to straight-line `double` math that `-O2 -march=native -ffast-math`

@@ -34,21 +34,27 @@ All runs produce the same check values (to FP rounding).
 
 - **CPU:** 13th Gen Intel Core i7-1355U (12 threads)
 - **OS:** Debian 13 (trixie), kernel 6.12.74
-- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
+- **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.2.0
 - **MATLAB:** R2025b Update 5
-- **Measured:** 2026-04-22 18:28 UTC
+- **Measured:** 2026-04-23 16:10 UTC
 
 Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 
 | Mode                           |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
 | ------------------------------ | -----: | -----: | -----: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)        | 5.13 s | 1.15 s | 2.35 s |  0.47 s | 0.26 s | 0.90 s |
-| `--opt 1` (JS-JIT)             | 3.29 s | 0.67 s | 1.40 s |  0.32 s | 0.30 s | 0.60 s |
-| `--opt 2` (C-JIT)              | 3.18 s | 0.66 s | 1.39 s |  0.33 s | 0.26 s | 0.54 s |
-| `--opt 2 --fuse` (C-JIT)       | 1.59 s | 0.10 s | 0.64 s |  0.21 s | 0.25 s | 0.40 s |
-| `--opt 2 --fuse --par` (C-JIT) | 1.20 s | 0.09 s | 0.24 s |  0.22 s | 0.26 s | 0.39 s |
-| MATLAB R2025b (1 thread)       | 4.79 s | 0.33 s | 3.37 s |  0.30 s | 0.20 s | 0.59 s |
-| MATLAB R2025b (8 threads)      | 2.09 s | 0.28 s | 1.14 s |  0.13 s | 0.25 s | 0.27 s |
+| `--opt 0` (interpreter)        | 5.02 s | 1.11 s | 2.30 s |  0.41 s | 0.26 s | 0.94 s |
+| `--opt 1` (JS-JIT)             | 3.25 s | 0.66 s | 1.40 s |  0.32 s | 0.30 s | 0.58 s |
+| `--opt e1` (experimental)      | 1.30 s | 0.10 s | 0.64 s |  0.14 s | 0.29 s | 0.12 s |
+| `--opt 2 --fuse --par` (C-JIT) | 1.21 s | 0.09 s | 0.28 s |  0.21 s | 0.26 s | 0.40 s |
+| MATLAB R2025b (1 thread)       | 4.90 s | 0.32 s | 3.45 s |  0.32 s | 0.21 s | 0.60 s |
+| MATLAB R2025b (8 threads)      | 1.81 s | 0.26 s | 0.84 s |  0.13 s | 0.25 s | 0.33 s |
+
+`--opt e1` matches `--opt 2 --fuse --par` on total wall time and wins
+the Chain kernel by ~3× — that kernel has a trailing `sum` reduction
+which e1 SIMD-vectorizes (`#pragma omp simd`) where the existing C-JIT
+fused path conservatively skips the pragma on reduction chains.
+`--opt 2 --fuse --par` wins on Unary by running a multi-threaded fused
+loop across trials; e1's outer loop is in JS so threads don't apply.
 
 ### macOS (N=2 000 000, trials=50)
 
