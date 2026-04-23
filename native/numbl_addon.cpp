@@ -22,9 +22,11 @@
 #include "numbl_addon_common.h"
 #include <cstdlib>
 
+#ifndef __APPLE__
 extern "C" {
   void openblas_set_num_threads(int num_threads);
 }
+#endif
 
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
@@ -58,9 +60,16 @@ static Napi::Value AddonVersion(const Napi::CallbackInfo& info) {
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
   // Use single-threaded BLAS unless the user explicitly set the env var.
   // Multi-threaded BLAS adds overhead for the many small matmuls in numbl.
+#ifdef __APPLE__
+  // Accelerate reads VECLIB_MAXIMUM_THREADS from the environment on first use.
+  if (!std::getenv("VECLIB_MAXIMUM_THREADS")) {
+    setenv("VECLIB_MAXIMUM_THREADS", "1", 0);
+  }
+#else
   if (!std::getenv("OPENBLAS_NUM_THREADS")) {
     openblas_set_num_threads(1);
   }
+#endif
   exports.Set(Napi::String::New(env, "addonVersion"),
               Napi::Function::New(env, AddonVersion));
   exports.Set(Napi::String::New(env, "inv"),
