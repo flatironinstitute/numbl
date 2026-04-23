@@ -267,6 +267,10 @@ export const jitHelpers = {
   },
   wrapF64: (data: Float64Array, shape: number[]) =>
     makeTensor(data, undefined, shape.slice()),
+  // Paired-buffer wrap for complex tensors. Used by e1's complex fused
+  // kernel path when writing back a complex output.
+  wrapF64c: (reData: Float64Array, imData: Float64Array, shape: number[]) =>
+    makeTensor(reData, imData, shape.slice()),
 
   // Tensor binary ops
   tAdd,

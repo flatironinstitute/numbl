@@ -39,29 +39,31 @@ abs_acc        = 2795090.562
 - **OS:** Debian 13 (trixie), kernel 6.12.74
 - **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.2.0
 - **MATLAB:** R2025b Update 5
-- **Measured:** 2026-04-23 16:10 UTC
+- **Measured:** 2026-04-23 18:00 UTC
 
 Median of 3 runs. Times in seconds. `--opt 0` is omitted (a single
 kernel at N=500 000 × 100 trials takes tens of minutes).
 
 | Kernel                    | `--opt 1` | `--opt e1` | `--opt 2 --fuse --par` | MATLAB (1 thread) | MATLAB (8 threads) |
 | ------------------------- | --------: | ---------: | ---------------------: | ----------------: | -----------------: |
-| 1. Mandelbrot z.\*z+c     |     0.119 |      0.130 |                  0.047 |             0.272 |              0.056 |
-| 2. Tensor chain z.\*w+y   |     0.151 |      0.158 |                  0.088 |             0.278 |              0.076 |
-| 3. Conj chain conj(z).\*z |     0.340 |      0.361 |                  0.064 |             0.354 |              0.140 |
-| 4. Widening x+y\*1i       |     0.111 |      0.118 |                  0.055 |             0.225 |              0.060 |
-| 5. Divide z./w            |     0.079 |      0.084 |                  0.078 |             0.249 |              0.070 |
-| 6. abs + sum reduction    |     0.081 |      0.085 |                  0.053 |             0.266 |              0.071 |
-| **Total**                 |     0.913 |      0.947 |                  0.396 |             1.643 |              0.475 |
+| 1. Mandelbrot z.\*z+c     |     0.146 |      0.054 |                  0.053 |             0.276 |              0.061 |
+| 2. Tensor chain z.\*w+y   |     0.197 |      0.098 |                  0.093 |             0.278 |              0.071 |
+| 3. Conj chain conj(z).\*z |     0.468 |      0.060 |                  0.071 |             0.359 |              0.130 |
+| 4. Widening x+y\*1i       |     0.146 |      0.047 |                  0.055 |             0.249 |              0.059 |
+| 5. Divide z./w            |     0.117 |      0.081 |                  0.086 |             0.265 |              0.073 |
+| 6. abs + sum reduction    |     0.105 |      0.078 |                  0.061 |             0.267 |              0.075 |
+| **Total**                 |     1.228 |      0.420 |                  0.404 |             1.702 |              0.470 |
 
-On this benchmark `--opt e1` behaves like `--opt 1` — the per-chain
-C-kernel path in e1 currently handles real-tensor chains only, so
-the four fusion-eligible complex chains (kernels 1–4) fall through
-to the JS-JIT per-op complex path. `--opt 2 --fuse --par` uses its
-dedicated complex fused emitter (paired re/im buffers, 6-flop
-per-element inner body) and wins. Adding complex support to the e1
-chain kernel would close most of this gap; it's tracked in the e1
-follow-ups (see `src/numbl-core/jit/e1/`).
+`--opt e1` now emits a paired-buffer C kernel for complex chains
+(real/imag pointer pairs per tensor, `re`/`im` arg pairs per complex
+scalar) — see `src/numbl-core/jit/e1/complexKernelEmit.ts`. All four
+fusion-eligible kernels (1–4) match or beat `--opt 2 --fuse --par`.
+Kernel 3 (`conj(z).*z`) is a 5.5× win over `--opt 1` because the
+per-op complex path walks the chain three times through libnumbl_ops
+(one call per op); e1 collapses the three ops into a single 6-flop
+per-element body. Kernels 5–6 still run per-op since `./` (Smith's
+method branches break SIMD) and `abs(complex)` (complex→real type
+transition mid-chain) are outside the fused-emitter envelope.
 
 ## What fuses, what doesn't (complex chains)
 

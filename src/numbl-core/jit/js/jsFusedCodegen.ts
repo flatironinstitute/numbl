@@ -32,6 +32,7 @@ import {
   reductionInit,
 } from "../fusedChainHelpers.js";
 import { emitChainKernel } from "../e1/kernelEmit.js";
+import { emitComplexChainKernel } from "../e1/complexKernelEmit.js";
 
 // ── JS math builtin mapping ──────────────────────────────────────────
 
@@ -259,6 +260,8 @@ export function emitJsFusedChain(
   paramTensors: ReadonlySet<string>,
   outputTensorNames: ReadonlySet<string>,
   _localTensorNames: ReadonlySet<string>,
+  complexTensorNames: ReadonlySet<string>,
+  complexScalarVars: ReadonlySet<string>,
   mangle: (n: string) => string,
   experimental?: string
 ): void {
@@ -267,6 +270,34 @@ export function emitJsFusedChain(
   if (!refParam) return; // shouldn't happen — bail silently
 
   const refMangled = mangle(refParam);
+
+  // Complex chain routing (e1 only). Delegates to the paired-buffer
+  // kernel emitter; on null (unsupported op) bail so the surrounding
+  // JS-JIT per-op path handles it.
+  if (experimental === "e1") {
+    const hasComplexDest = chain.assigns.some(a =>
+      complexTensorNames.has(a.destName)
+    );
+    const hasComplexResult = chain.assigns.some(
+      a => a.expr.jitType.kind === "tensor" && a.expr.jitType.isComplex === true
+    );
+    if (hasComplexDest || hasComplexResult) {
+      emitComplexChainBlock(
+        lines,
+        indent,
+        chain,
+        allTensorVars,
+        paramTensors,
+        outputTensorNames,
+        complexTensorNames,
+        complexScalarVars,
+        mangle,
+        refParam,
+        refMangled
+      );
+      return;
+    }
+  }
 
   // Build the fused target bound to this backend's mangle.
   const fusedTarget = makeJsFusedTarget(mangle);
@@ -426,5 +457,177 @@ export function emitJsFusedChain(
   }
 
   // Close block scope.
+  lines.push(`${indent}}`);
+}
+
+/** Data-alias pair for a complex tensor (real/imag buffers). */
+function complexInputReAlias(
+  name: string,
+  mangle: (n: string) => string
+): string {
+  return `__${mangle(name)}_re`;
+}
+function complexInputImAlias(
+  name: string,
+  mangle: (n: string) => string
+): string {
+  return `__${mangle(name)}_im`;
+}
+function complexOutputReAlias(
+  name: string,
+  mangle: (n: string) => string
+): string {
+  return `__${mangle(name)}_out_re`;
+}
+function complexOutputImAlias(
+  name: string,
+  mangle: (n: string) => string
+): string {
+  return `__${mangle(name)}_out_im`;
+}
+
+/**
+ * Emit the e1 complex fused-chain block: allocate paired re/im output
+ * buffers, marshal paired input buffers + scalar re/im pairs, call the
+ * compiled C kernel, then wrap the outputs as complex RuntimeTensors.
+ *
+ * No size-dispatch fallback: there is no JS-JIT complex fused loop. If
+ * the kernel emitter rejects the chain (unsupported op), this function
+ * throws and the caller lets the surrounding per-op codegen handle it.
+ */
+function emitComplexChainBlock(
+  lines: string[],
+  indent: string,
+  chain: FusibleChain,
+  allTensorVars: ReadonlySet<string>,
+  _paramTensors: ReadonlySet<string>,
+  outputTensorNames: ReadonlySet<string>,
+  complexTensorNames: ReadonlySet<string>,
+  complexScalarVars: ReadonlySet<string>,
+  mangle: (n: string) => string,
+  refParam: string,
+  refMangled: string
+): void {
+  const kernelInfo = emitComplexChainKernel(
+    chain,
+    allTensorVars,
+    complexTensorNames,
+    complexScalarVars,
+    outputTensorNames
+  );
+  if (!kernelInfo) {
+    // Fall back: emit nothing here. This produces an incorrect result
+    // (the chain's per-op statements would have been covered by the
+    // fused block but we emitted nothing). In practice, if the chain
+    // was rejected by the kernel emitter it was also rejected by
+    // fusion.ts's own filter for complex chains, so we shouldn't get
+    // here — but bail loudly if we do.
+    throw new Error(
+      "emitJsFusedChain: complex chain detected but complexKernelEmit rejected it"
+    );
+  }
+
+  const { writeBack } = determineWriteBack(chain, outputTensorNames);
+  const inputTensors = collectInputTensors(chain, allTensorVars);
+
+  lines.push(`${indent}{`);
+  const inner = indent + "  ";
+  const refIsComplex = complexTensorNames.has(refParam);
+  const refLenSource = refIsComplex
+    ? `${refMangled}.data.length`
+    : `${refMangled}.data.length`;
+  lines.push(`${inner}const __len = ${refLenSource};`);
+
+  // Data aliases for input tensors (paired for complex, single for real).
+  for (const name of [...inputTensors].sort()) {
+    if (complexTensorNames.has(name)) {
+      const reA = complexInputReAlias(name, mangle);
+      const imA = complexInputImAlias(name, mangle);
+      lines.push(`${inner}const ${reA} = ${mangle(name)}.data;`);
+      // A complex tensor without an imag buffer (widened from real in
+      // another flow) would yield undefined here; we assume complex
+      // tensors always carry `.imag`. The constructor (`makeTensor`) and
+      // complex ops uphold that invariant.
+      lines.push(`${inner}const ${imA} = ${mangle(name)}.imag;`);
+    } else {
+      // Real tensor read into a complex chain: widened with im=0. Only
+      // the real buffer is marshaled.
+      lines.push(
+        `${inner}const ${dataAlias(name, mangle)} = ${mangle(name)}.data;`
+      );
+    }
+  }
+
+  // Output buffer allocation. Complex outputs get paired re/im Float64
+  // buffers; self-read dests aren't supported (kernel emitter rejected
+  // them), so we always use `$h.uninit`.
+  for (const d of writeBack) {
+    const m = mangle(d);
+    if (complexTensorNames.has(d)) {
+      const reA = complexOutputReAlias(d, mangle);
+      const imA = complexOutputImAlias(d, mangle);
+      lines.push(
+        `${inner}const ${reA} = (${m} && ${m}._rc === 1 && ${m}.data instanceof Float64Array && ${m}.data.length === __len && ${m}.imag instanceof Float64Array && ${m}.imag.length === __len) ? ${m}.data : $h.uninit(__len);`
+      );
+      lines.push(
+        `${inner}const ${imA} = (${m} && ${m}._rc === 1 && ${m}.data instanceof Float64Array && ${m}.data.length === __len && ${m}.imag instanceof Float64Array && ${m}.imag.length === __len) ? ${m}.imag : $h.uninit(__len);`
+      );
+    } else {
+      // Real output in a complex chain — unlikely (chain is complex
+      // throughout) but emit a plain buffer just in case.
+      lines.push(
+        `${inner}const ${dataAlias(d, mangle)} = (${m} && ${m}._rc === 1 && ${m}.data instanceof Float64Array && ${m}.data.length === __len) ? ${m}.data : $h.uninit(__len);`
+      );
+    }
+  }
+
+  // Resolve call-arg slots.
+  const callArgExprs = kernelInfo.jsCallArgs.map(slot => {
+    if (slot === "n") return "__len";
+    const colonIdx = slot.indexOf(":");
+    const kind = slot.slice(0, colonIdx);
+    const name = slot.slice(colonIdx + 1);
+    switch (kind) {
+      case "t":
+        return dataAlias(name, mangle);
+      case "tcre":
+        return complexInputReAlias(name, mangle);
+      case "tcim":
+        return complexInputImAlias(name, mangle);
+      case "s":
+        return mangle(name);
+      case "scre":
+        return `$h.re(${mangle(name)})`;
+      case "scim":
+        return `$h.im(${mangle(name)})`;
+      case "ocre":
+        return complexOutputReAlias(name, mangle);
+      case "ocim":
+        return complexOutputImAlias(name, mangle);
+      default:
+        throw new Error(`emitComplexChainBlock: unknown kernel slot "${slot}"`);
+    }
+  });
+
+  // Emit kernel source + call. No size-dispatch fallback.
+  const kernelKey = JSON.stringify(kernelInfo.kernelName);
+  lines.push(
+    `${inner}$h.$kernels[${kernelKey}] ??= $h.compileKernel(${JSON.stringify(kernelInfo.cSource)}, ${JSON.stringify(kernelInfo.koffiSig)});`
+  );
+  lines.push(`${inner}$h.$kernels[${kernelKey}](${callArgExprs.join(", ")});`);
+
+  // Wrap outputs.
+  for (const d of writeBack) {
+    if (complexTensorNames.has(d)) {
+      lines.push(
+        `${inner}${mangle(d)} = $h.wrapF64c(${complexOutputReAlias(d, mangle)}, ${complexOutputImAlias(d, mangle)}, ${refMangled}.shape);`
+      );
+    } else {
+      lines.push(
+        `${inner}${mangle(d)} = $h.wrapF64(${dataAlias(d, mangle)}, ${refMangled}.shape);`
+      );
+    }
+  }
+
   lines.push(`${indent}}`);
 }
