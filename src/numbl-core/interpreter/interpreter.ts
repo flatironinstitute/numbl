@@ -109,6 +109,13 @@ export class Interpreter {
    */
   optimization: number = 1;
 
+  /**
+   * Experimental opt variant selector — e.g. `"e1"` for the prototype
+   * that keeps JS-JIT as the outer and emits on-demand C kernels for
+   * fusible tensor chains. Undefined for the standard `--opt <n>` path.
+   */
+  experimental?: string;
+
   /** Emit fused per-element loops in C-JIT (--fuse flag). */
   fuse: boolean = false;
 

@@ -62,6 +62,13 @@ export interface ExecOptions {
   onInput?: (prompt: string) => string;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
   optimization?: number;
+  /**
+   * Experimental opt variant selector — e.g. `"e1"` for the prototype
+   * that keeps JS-JIT as the outer and emits on-demand C kernels for
+   * fusible tensor chains. Orthogonal to `optimization`; when set,
+   * `optimization` is still the base level (typically 1).
+   */
+  experimental?: string;
   /** Emit fused per-element loops in C-JIT (requires --opt 2). */
   fuse?: boolean;
   /** Parallelize fused loops with OpenMP threads (--par flag). */
@@ -358,8 +365,11 @@ export function executeCode(
   }
 
   interpreter.optimization = options.optimization ?? 1;
+  interpreter.experimental = options.experimental;
   interpreter.fuse = options.fuse ?? false;
   interpreter.par = options.par ?? false;
+  // --opt e1 implies fusion (the feature only makes sense with chains).
+  if (interpreter.experimental === "e1") interpreter.fuse = true;
   interpreter.checkCJitParity = options.checkCJitParity ?? false;
   interpreter.log = options.log;
 

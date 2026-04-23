@@ -14,7 +14,10 @@ import {
 } from "../jitTypes.js";
 import { getIBuiltin } from "../../interpreter/builtins/types.js";
 import { findFusibleChains } from "../fusion.js";
-import { FUSIBLE_TENSOR_UNARY_OPS_JS } from "../fusionOps.js";
+import {
+  FUSIBLE_TENSOR_UNARY_OPS,
+  FUSIBLE_TENSOR_UNARY_OPS_JS,
+} from "../fusionOps.js";
 import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
   type ScalarOpTarget,
@@ -253,6 +256,7 @@ let _hoistedStructArrayElements: Map<string, string> = new Map();
 
 // ── Fusion state (--fuse flag) ──────────────────────────────────────────
 let _fuse = false;
+let _experimental: string | undefined;
 let _fusionParamTensors: ReadonlySet<string> = new Set();
 let _fusionAllTensorVars: ReadonlySet<string> = new Set();
 let _fusionOutputTensors: ReadonlySet<string> = new Set();
@@ -271,13 +275,15 @@ export function generateJS(
   nargout: number,
   localVars: Set<string>,
   fileName?: string,
-  fuse?: boolean
+  fuse?: boolean,
+  experimental?: string
 ): string {
   _tmpCounter = 0;
   _scratchLocals = [];
   _fileName = fileName;
   _fileEmitted = false;
   _fuse = fuse ?? false;
+  _experimental = experimental;
 
   // Compute the return expression for early returns and the final return
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -496,11 +502,19 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
 
   // Fusion enabled: find fusible chains, emit them as fused loops,
   // emit non-fused statements via the per-op path.
+  //
+  // Under --opt e1 the fused body is compiled to C, so use the full
+  // unary-op set (exp/sin/cos/... become SIMD-vectorized inside the
+  // kernel). The plain JS-JIT path sticks to the conservative subset
+  // because V8 can't SIMD-vectorize transcendentals, and fusing them
+  // as scalar JS is slower than calling libnumbl_ops per-op.
+  const allowedUnaryOps =
+    _experimental === "e1" ? FUSIBLE_TENSOR_UNARY_OPS : FUSIBLE_TENSOR_UNARY_OPS_JS;
   const chains = findFusibleChains(
     stmts,
     _fusionParamTensors,
     _fusionAllTensorVars,
-    FUSIBLE_TENSOR_UNARY_OPS_JS
+    allowedUnaryOps
   );
 
   const coveredByChain = new Map<number, (typeof chains)[0]>();
@@ -520,7 +534,8 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
         _fusionParamTensors,
         _fusionOutputTensors,
         _fusionLocalTensors,
-        mangle
+        mangle,
+        _experimental
       );
       // Refresh hoisted aliases for any dest that has one.
       for (const assign of chain.assigns) {

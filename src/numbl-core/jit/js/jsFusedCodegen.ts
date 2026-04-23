@@ -31,6 +31,7 @@ import {
   reductionCombine,
   reductionInit,
 } from "../fusedChainHelpers.js";
+import { emitChainKernel } from "../e1/kernelEmit.js";
 
 // ── JS math builtin mapping ──────────────────────────────────────────
 
@@ -193,6 +194,63 @@ function makeJsFusedTarget(mangle: (n: string) => string): FusedTarget {
  * 3. A single `for` loop with inline scalar computation
  * 4. Result wrapping (`x = $h.wrapF64(__x_data, refParam.shape);`)
  */
+/** Emit the plain inline JS fused loop — one `for` over `__len`, with
+ *  per-element scalar expressions, write-backs, and optional trailing
+ *  reduction accumulate. Shared between the `--fuse`-only path and the
+ *  `else` branch of the e1 size dispatch. */
+function emitInlineLoop(
+  lines: string[],
+  inner: string,
+  loopInner: string,
+  chain: FusibleChain,
+  allTensorVars: ReadonlySet<string>,
+  writeBack: ReadonlySet<string>,
+  fusedTarget: FusedTarget,
+  mangle: (n: string) => string,
+  reduceAccLocal: string
+): void {
+  const chainLocals = new Set<string>();
+
+  lines.push(`${inner}for (let __i = 0; __i < __len; __i++) {`);
+
+  for (const assign of chain.assigns) {
+    const rhs = emitFusedScalarExpr(
+      assign.expr,
+      chainLocals,
+      allTensorVars,
+      JS_FUSED_OP_TARGET,
+      fusedTarget
+    );
+
+    if (!chainLocals.has(assign.destName)) {
+      lines.push(`${loopInner}let ${fusedLocal(assign.destName)} = ${rhs};`);
+      chainLocals.add(assign.destName);
+    } else {
+      lines.push(`${loopInner}${fusedLocal(assign.destName)} = ${rhs};`);
+    }
+  }
+
+  for (const d of writeBack) {
+    lines.push(`${loopInner}${dataAlias(d, mangle)}[__i] = ${fusedLocal(d)};`);
+  }
+
+  if (chain.reduction) {
+    const valueExpr = fusedLocal(chain.reduction.tensorName);
+    lines.push(
+      `${loopInner}${reductionCombine(chain.reduction.reduceName, reduceAccLocal, valueExpr, JS_REDUCTION_LITERALS)}`
+    );
+  }
+
+  lines.push(`${inner}}`);
+}
+
+/** Minimum `__len` at which the e1 kernel dispatch prefers the C path.
+ *  40 comes from benchmarks/koffi_overhead_bench.md — the break-even
+ *  for a single `exp(1+sqrt(x))` kernel. Longer chains can tolerate a
+ *  lower threshold since the fixed koffi cost amortizes across more
+ *  per-element work, but 40 is a safe universal default for v1. */
+const E1_SIZE_THRESHOLD = 40;
+
 export function emitJsFusedChain(
   lines: string[],
   indent: string,
@@ -201,7 +259,8 @@ export function emitJsFusedChain(
   paramTensors: ReadonlySet<string>,
   outputTensorNames: ReadonlySet<string>,
   _localTensorNames: ReadonlySet<string>,
-  mangle: (n: string) => string
+  mangle: (n: string) => string,
+  experimental?: string
 ): void {
   // Find a reference param for length and shape.
   const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
@@ -263,44 +322,69 @@ export function emitJsFusedChain(
     );
   }
 
-  // Track chain-produced locals.
-  const chainLocals = new Set<string>();
+  // e1 experimental: when active and the chain is kernelizable, emit a
+  // runtime size dispatch that calls the compiled C kernel at large N
+  // and falls back to the inline JS loop at small N. We only try the
+  // kernel path for non-reduction chains in v1 (emitChainKernel returns
+  // null for anything else, so the kernelInfo check below would short-
+  // circuit without the reduction guard — but writing the guard explicitly
+  // keeps the codegen intent clear).
+  const kernelInfo =
+    experimental === "e1" && !chain.reduction
+      ? emitChainKernel(chain, allTensorVars, outputTensorNames)
+      : null;
 
-  // Open the fused loop.
-  lines.push(`${inner}for (let __i = 0; __i < __len; __i++) {`);
+  if (kernelInfo) {
+    // Resolve each kernel call-arg slot to the JS expression that the
+    // surrounding fused block already has on hand (data aliases for
+    // tensors, mangled name for scalars).
+    const callArgExprs = kernelInfo.jsCallArgs.map(slot => {
+      if (slot === "n") return "__len";
+      const colonIdx = slot.indexOf(":");
+      const kind = slot.slice(0, colonIdx);
+      const name = slot.slice(colonIdx + 1);
+      if (kind === "t" || kind === "o") return dataAlias(name, mangle);
+      if (kind === "s") return mangle(name);
+      throw new Error(`emitJsFusedChain: unknown kernel slot "${slot}"`);
+    });
 
-  for (const assign of chain.assigns) {
-    const rhs = emitFusedScalarExpr(
-      assign.expr,
-      chainLocals,
-      allTensorVars,
-      JS_FUSED_OP_TARGET,
-      fusedTarget
-    );
-
-    if (!chainLocals.has(assign.destName)) {
-      lines.push(`${loopInner}let ${fusedLocal(assign.destName)} = ${rhs};`);
-      chainLocals.add(assign.destName);
-    } else {
-      lines.push(`${loopInner}${fusedLocal(assign.destName)} = ${rhs};`);
-    }
-  }
-
-  // Write-back to buffers.
-  for (const d of writeBack) {
-    lines.push(`${loopInner}${dataAlias(d, mangle)}[__i] = ${fusedLocal(d)};`);
-  }
-
-  // Inline reduction accumulate.
-  if (chain.reduction) {
-    const valueExpr = fusedLocal(chain.reduction.tensorName);
+    // Kernel source embedded inline so --dump-js shows everything.
+    // JSON.stringify handles the escaping of the C string.
+    const kernelKey = JSON.stringify(kernelInfo.kernelName);
     lines.push(
-      `${loopInner}${reductionCombine(chain.reduction.reduceName, reduceAccLocal, valueExpr, JS_REDUCTION_LITERALS)}`
+      `${inner}$h.$kernels[${kernelKey}] ??= $h.compileKernel(${JSON.stringify(kernelInfo.cSource)}, ${JSON.stringify(kernelInfo.koffiSig)});`
+    );
+    lines.push(`${inner}if (__len >= ${E1_SIZE_THRESHOLD}) {`);
+    lines.push(
+      `${loopInner}$h.$kernels[${kernelKey}](${callArgExprs.join(", ")});`
+    );
+    lines.push(`${inner}} else {`);
+    emitInlineLoop(
+      lines,
+      inner,
+      loopInner,
+      chain,
+      allTensorVars,
+      writeBack,
+      fusedTarget,
+      mangle,
+      reduceAccLocal
+    );
+    lines.push(`${inner}}`);
+  } else {
+    // Non-e1 or non-kernelizable: plain inline JS fused loop only.
+    emitInlineLoop(
+      lines,
+      inner,
+      loopInner,
+      chain,
+      allTensorVars,
+      writeBack,
+      fusedTarget,
+      mangle,
+      reduceAccLocal
     );
   }
-
-  // Close the loop.
-  lines.push(`${inner}}`);
 
   // Post-loop: mean division.
   if (chain.reduction && chain.reduction.reduceName === "mean") {

@@ -19,6 +19,7 @@ import { getCJitBackend } from "./c/registry.js";
 import { compileHybridCallees, compileHybridLoops } from "./c/hybrid.js";
 import { CJitParityError, formatCJitParityMessage } from "./c/parityError.js";
 import { irHasBailRisk, irHasIO } from "./jitBailSafety.js";
+import { tryEmitScalarFnKernel } from "./e1/scalarFnKernel.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 
@@ -224,6 +225,63 @@ export function tryJitCall(
     );
   }
 
+  // ── e1 scalar whole-function kernel path ─────────────────────────────
+  // Under --opt e1, if the entire function is pure-scalar, emit a JS
+  // wrapper that compiles the whole body to C on first call and
+  // dispatches through `$h.compileKernel`. This is the e1 counterpart
+  // to the --opt 2 whole-function C-JIT, but with the C source visible
+  // inline in --dump-js.
+  if (interp.experimental === "e1") {
+    const scalarKernel = tryEmitScalarFnKernel(
+      interp,
+      fn,
+      lowered.body,
+      lowered.outputNames,
+      lowered.localVars,
+      lowered.outputType,
+      lowered.outputTypes,
+      argTypes,
+      nargout,
+      lowered.generatedIRBodies
+    );
+    if (scalarKernel) {
+      const rt = interp.rt;
+      const helpers = rt.jitHelpers ?? jitHelpers;
+      try {
+        const factory = new Function(
+          "$h",
+          "$rt",
+          `${scalarKernel.jsSource}\nreturn ${fn.name};`
+        );
+        const wrapped = factory(helpers, rt) as (
+          ...a: unknown[]
+        ) => unknown;
+        const compiled = (...callArgs: unknown[]) => wrapped(...callArgs);
+        const typeDesc = argTypes.map(jitTypeKey).join(", ");
+        const paramComments = fn.params
+          .map((p, i) => `${p}: ${jitTypeKey(argTypes[i])}`)
+          .join(", ");
+        const outputComments = lowered.outputNames
+          .map(
+            o =>
+              `${o}: ${lowered.outputType ? jitTypeKey(lowered.outputType) : "unknown"}`
+          )
+          .join(", ");
+        const source =
+          `// JIT (e1 scalar kernel): ${fn.name}(${paramComments}) -> (${outputComments})\n` +
+          `// from: ${interp.currentFile}\n` +
+          scalarKernel.jsSource;
+        fnWithCache._jitCache.set(cacheKey, { fn: compiled, source });
+        const line = interp.rt.$line ?? 0;
+        const description = `${fn.name}@${line}(${typeDesc}) -> e1-scalar-kernel`;
+        interp.onJitCompile?.(description, source);
+        return runWithCallFrame(interp, fn.name, compiled, args);
+      } catch {
+        // Fall through to the regular JS-JIT path on any hiccup.
+      }
+    }
+  }
+
   // Generate JavaScript for the main function body
   const currentFile = interp.currentFile;
   const mainBody = generateJS(
@@ -233,7 +291,8 @@ export function tryJitCall(
     nargout,
     lowered.localVars,
     currentFile,
-    interp.fuse
+    interp.fuse,
+    interp.experimental
   );
 
   // Prepend generated helper function definitions (indented to match main body)

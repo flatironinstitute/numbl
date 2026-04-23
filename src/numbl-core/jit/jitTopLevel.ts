@@ -258,7 +258,8 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     outputs.length,
     lowered.localVars,
     currentFile,
-    interp.fuse
+    interp.fuse,
+    interp.experimental
   );
 
   const parts: string[] = [];

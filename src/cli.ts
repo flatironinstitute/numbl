@@ -40,6 +40,9 @@ import { NodeSystemAdapter } from "./cli-system.js";
 // Side-effect import: installs the C-JIT backend (--opt 2). Must be Node-only
 // — this file imports child_process/fs/etc. that don't belong in the web build.
 import "./numbl-core/jit/c/install.js";
+// Side-effect import: installs the e1 experimental kernel pipeline
+// (--opt e1). Also Node-only — shares compile.ts with C-JIT.
+import "./numbl-core/jit/e1/install.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
@@ -351,6 +354,13 @@ Options (for run and eval):
                            via cc, load as a .node module, fall back to JS-JIT
                            on infeasible IR (requires a C compiler and Node API
                            headers; prints its compile command once to stderr)
+                       e1 — experimental: JS-JIT outer with on-demand C
+                           kernels emitted for fusible tensor chains. The
+                           generated JS contains the C source inline and
+                           dispatches to the compiled kernel at runtime
+                           when N is large enough to amortise koffi
+                           overhead. Falls back to the plain JS fused
+                           loop at small N or if compilation fails.
   --fuse             Emit fused per-element loops (C-JIT only, requires --opt 2)
   --par              Parallelize fused loops with OpenMP threads (C-JIT only,
                      requires --opt 2 and --fuse)
@@ -382,6 +392,8 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   optimization: number;
+  /** Experimental variant selected via `--opt e1`, `--opt e2`, etc. */
+  experimental: string | undefined;
   fuse: boolean;
   par: boolean;
   checkCJitParity: boolean;
@@ -400,6 +412,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: 1,
+    experimental: undefined,
     fuse: false,
     par: false,
     checkCJitParity: false,
@@ -484,6 +497,14 @@ function parseOptions(args: string[]): ParsedOptions {
         if (i >= args.length) {
           console.error("Error: --opt requires a level number");
           process.exit(1);
+        }
+        // Experimental variants: "--opt e1", "--opt e2", ...
+        // Map to a base optimization level (JS-JIT = 1) plus an
+        // `experimental` tag that the JIT consults for variant behaviour.
+        if (/^e\d+$/.test(args[i])) {
+          opts.experimental = args[i];
+          opts.optimization = 1;
+          break;
         }
         opts.optimization = parseInt(args[i], 10);
         if (isNaN(opts.optimization)) {
@@ -715,6 +736,7 @@ async function executeWithOptions(
             onInput,
 
             optimization: opts.optimization,
+            experimental: opts.experimental,
             fuse: opts.fuse,
             par: opts.par,
             checkCJitParity: opts.checkCJitParity,
@@ -778,6 +800,7 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
+          experimental: opts.experimental,
           fuse: opts.fuse,
           par: opts.par,
           checkCJitParity: opts.checkCJitParity,
@@ -820,6 +843,7 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
+          experimental: opts.experimental,
           fuse: opts.fuse,
           par: opts.par,
           checkCJitParity: opts.checkCJitParity,
