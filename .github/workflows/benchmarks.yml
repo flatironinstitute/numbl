@@ -59,20 +59,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libfftw3-dev
 
-      - name: Install openblas + fftw + gcc (macOS)
+      # macOS uses the system Accelerate framework for BLAS/LAPACK, so only
+      # fftw (and gcc for the --par mode) needs to be installed from brew.
+      - name: Install fftw + gcc (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install openblas fftw gcc@14
-
-      # Homebrew's openblas is keg-only (not symlinked into /opt/homebrew/lib),
-      # so the linker can't find it with plain `-lopenblas`. Export
-      # LIBRARY_PATH / CPATH so clang picks up the brew prefix paths. fftw
-      # is NOT keg-only so it resolves via pkg-config the normal way.
-      - name: Configure macOS linker paths for openblas
-        if: matrix.os == 'macos-latest'
-        run: |
-          OPENBLAS_PREFIX=$(brew --prefix openblas)
-          echo "LIBRARY_PATH=${OPENBLAS_PREFIX}/lib:${LIBRARY_PATH}" >> "$GITHUB_ENV"
-          echo "CPATH=${OPENBLAS_PREFIX}/include:${CPATH}" >> "$GITHUB_ENV"
+        run: brew install fftw gcc@14
 
       - name: Install dependencies
         run: npm ci

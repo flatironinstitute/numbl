@@ -40,7 +40,6 @@
       ],
       "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
       "libraries": [
-        "-lopenblas",
         "-lm",
         "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
         "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
@@ -52,7 +51,14 @@
         ['OS=="linux"', {
           "cflags_c": [ "-fopenmp" ],
           "cflags_cc": [ "-fopenmp" ],
-          "libraries": [ "-lmvec", "-fopenmp" ]
+          "libraries": [ "-lopenblas", "-lmvec", "-fopenmp" ]
+        }],
+        ['OS=="mac"', {
+          # Use Apple's Accelerate framework for BLAS/LAPACK — ships with
+          # macOS, so no Homebrew openblas install or keg-only linker path
+          # wrangling. The classic Fortran ABI (dgetrf_, etc.) that the
+          # native sources declare is provided by Accelerate.
+          "libraries": [ "-framework Accelerate" ]
         }]
       ]
     },
