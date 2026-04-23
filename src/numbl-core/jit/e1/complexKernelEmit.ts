@@ -310,13 +310,16 @@ function materializePair(
  * walker doesn't support (abs, complex divide, transcendental on
  * complex, etc.) — the caller falls back to the JS-JIT per-op path.
  */
+// Note: no `par` parameter — complex chains deliberately ignore --par
+// (6-flop per-element bodies are too compute-thin to amortize thread
+// spawn overhead). The caller in jsFusedCodegen.ts knows not to pass
+// it.
 export function emitComplexChainKernel(
   chain: FusibleChain,
   allTensorVars: ReadonlySet<string>,
   complexTensorNames: ReadonlySet<string>,
   complexScalarVars: ReadonlySet<string>,
-  outputTensorNames: ReadonlySet<string>,
-  _par: boolean
+  outputTensorNames: ReadonlySet<string>
 ): KernelEmitResult | null {
   // Complex chains never carry a reduction (fusion.ts drops it).
   if (chain.reduction) return null;

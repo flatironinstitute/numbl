@@ -294,8 +294,7 @@ export function emitJsFusedChain(
         complexScalarVars,
         mangle,
         refParam,
-        refMangled,
-        par ?? false
+        refMangled
       );
       return;
     }
@@ -508,16 +507,14 @@ function emitComplexChainBlock(
   complexScalarVars: ReadonlySet<string>,
   mangle: (n: string) => string,
   refParam: string,
-  refMangled: string,
-  par: boolean
+  refMangled: string
 ): void {
   const kernelInfo = emitComplexChainKernel(
     chain,
     allTensorVars,
     complexTensorNames,
     complexScalarVars,
-    outputTensorNames,
-    par
+    outputTensorNames
   );
   if (!kernelInfo) {
     // Fall back: emit nothing here. This produces an incorrect result
