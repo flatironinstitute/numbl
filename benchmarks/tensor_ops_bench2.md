@@ -56,19 +56,28 @@ would exceed the memory-bandwidth-bound compute.
 ### macOS (N=2 000 000, trials=50)
 
 - **CPU:** Apple M4 Max (16 threads)
-- **OS:** macOS 15.7.3 (Darwin 24.6.0)
-- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
-- **MATLAB:** R2026a (26.1.0)
+- **OS:** macOS 15.7.5 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, gcc-15 15.2.0 (Homebrew), numbl 0.2.0
+- **MATLAB:** R2025b
+- **Measured:** 2026-04-23
 
-| Mode                       |  Total |  Gauss | Nested | Inl.red | Acc.red | BinOps |  Clamp |
-| -------------------------- | -----: | -----: | -----: | ------: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)    | 8.01 s | 0.34 s | 1.37 s |  0.14 s |  0.35 s | 2.70 s | 3.12 s |
-| `--opt 1` (JS-JIT)         | 7.36 s | 0.26 s | 0.92 s |  0.09 s |  0.32 s | 2.66 s | 3.12 s |
-| MATLAB R2026a (1 thread)   | 3.48 s | 0.31 s | 1.49 s |  0.06 s |  0.33 s | 0.91 s | 0.37 s |
-| MATLAB R2026a (16 threads) | 0.47 s | 0.05 s | 0.17 s |  0.02 s |  0.04 s | 0.13 s | 0.06 s |
+Single run per mode. `--opt e1 --par` compiled with `NUMBL_CC=gcc-15`.
 
-(macOS `--opt e1 --par` not yet re-collected post-cleanup; on Linux,
-e1 + par captures most of the win.)
+| Mode                     |      Total |      Gauss |     Nested |    Inl.red |    Acc.red |     BinOps |      Clamp |
+| ------------------------ | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: |
+| `--opt 1` (JS-JIT)       |     7.31 s |     0.25 s |     0.93 s |     0.10 s |     0.32 s |     2.63 s |     3.08 s |
+| `--opt e1`               |     1.90 s |     0.19 s |     0.76 s |     0.02 s |     0.19 s |     0.60 s |     0.14 s |
+| `--opt e1 --par`         | **0.47 s** | **0.03 s** | **0.10 s** |     0.04 s |     0.20 s | **0.08 s** | **0.03 s** |
+| MATLAB R2025b (1 thread) |     3.50 s |     0.31 s |     1.48 s |     0.06 s |     0.32 s |     0.94 s |     0.38 s |
+| MATLAB R2025b (multi)    |     0.51 s |     0.04 s |     0.17 s | **0.02 s** | **0.04 s** |     0.17 s |     0.06 s |
+
+On macOS `--opt e1 --par` edges MATLAB multi-thread on total (0.47 vs
+0.51 s) and wins the fusible per-element kernels (Gauss, Nested,
+BinOps, Clamp). MATLAB retains the reduction rows (Inl.red, Acc.red)
+because numbl's `--par` doesn't yet emit `reduction(...)` clauses.
+Clang's `--opt e1` Inl.red number (0.02 s) is the LICM artifact
+described in the caveat below — gcc-15 with `--par` breaks it enough
+to expose a real timing (0.04 s).
 
 > **Caveat — Inl.red is a LICM artifact, not a real speedup.** Kernel 3
 > is `ir_acc = sum(x.*y + 0.5)` assigned fresh every trial iteration,

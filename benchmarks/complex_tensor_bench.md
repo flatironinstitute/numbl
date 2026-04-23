@@ -67,6 +67,32 @@ are outside the fused-emitter envelope.
 per-element body is only ~6 flops split across paired re/im buffers, so
 thread-spawn overhead swamps the compute win even at N = 500k.
 
+### macOS (N=500 000, trials=100)
+
+- **CPU:** Apple M4 Max (16 threads)
+- **OS:** macOS 15.7.5 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, gcc-15 15.2.0 (Homebrew), numbl 0.2.0
+- **MATLAB:** R2025b
+- **Measured:** 2026-04-23
+
+Single run per mode. `--opt e1 --par` compiled with `NUMBL_CC=gcc-15`.
+
+| Kernel                    | `--opt 1` | `--opt e1` | `--opt e1 --par` | MATLAB 1-thread | MATLAB multi |
+| ------------------------- | --------: | ---------: | ---------------: | --------------: | -----------: |
+| 1. Mandelbrot z.\*z+c     |     0.049 |      0.022 |            0.019 |           0.192 |        0.040 |
+| 2. Tensor chain z.\*w+y   |     0.109 |      0.030 |            0.030 |           0.203 |        0.038 |
+| 3. Conj chain conj(z).\*z |     0.198 |      0.022 |            0.023 |           0.253 |        0.085 |
+| 4. Widening x+y\*1i       |     0.052 |      0.021 |            0.017 |           0.162 |        0.033 |
+| 5. Divide z./w            |     0.023 |      0.023 |            0.023 |           0.183 |        0.029 |
+| 6. abs + sum reduction    |     0.095 |      0.095 |            0.094 |           0.176 |        0.027 |
+| **Total**                 |     0.525 |      0.212 |        **0.206** |           1.169 |        0.251 |
+
+On M4 Max `--opt e1` already beats MATLAB multi-thread on total
+(0.212 vs 0.251 s), with `--par` offering only a marginal win on the
+fusible kernels (1–4). Kernels 5 and 6 stay flat across e1 / e1 --par
+as expected: they're per-op paths (complex `./`, `abs(complex)`), not
+fused chains.
+
 ## What fuses, what doesn't (complex chains)
 
 The complex per-element emitter supports:

@@ -66,3 +66,29 @@ kernel wins without paying whole-function compile cost. `--par` doesn't
 help: most of this workload's compute is inside `fmm2d` / LAPACK native
 bridges and GMRES dot products, not in the fusible chains that `--par`
 could thread.
+
+### macOS (hot run only)
+
+- **CPU:** Apple M4 Max (16 threads)
+- **OS:** macOS 15.7.5 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, gcc-15 15.2.0 (Homebrew), numbl 0.2.0
+- **MATLAB:** R2025b
+- **Measured:** 2026-04-23
+
+Single run per mode. `--opt e1 --par` compiled with `NUMBL_CC=gcc-15`.
+Times in seconds.
+
+| Mode                     |     Total | Discretize |     Build | Solve | Interior |  Eval |
+| ------------------------ | --------: | ---------: | --------: | ----: | -------: | ----: |
+| `--opt 1` (JS-JIT)       |     3.776 |      0.238 |     1.475 | 0.103 |    0.350 | 1.521 |
+| `--opt e1`               |     3.744 |      0.237 |     1.461 | 0.101 |    0.353 | 1.502 |
+| `--opt e1 --par`         |     3.811 |      0.242 |     1.487 | 0.100 |    0.361 | 1.529 |
+| MATLAB R2025b (1 thread) |     3.978 |      0.074 |     3.241 | 0.130 |    0.196 | 0.320 |
+| MATLAB R2025b (multi)    | **1.295** |      0.076 | **0.553** | 0.109 |    0.204 | 0.335 |
+
+MATLAB multi-thread wins by ~3× on total because its
+`build_matrix` phase parallelizes well (0.55 s vs numbl's 1.48 s),
+and its `eval` phase (FMM-dense hybrid) is 4–5× faster across both
+MATLAB modes. numbl's `--par` offers no benefit here: the heavy
+compute lives in native FMM / LAPACK bridges and GMRES dot
+products rather than fusible element-wise chains.

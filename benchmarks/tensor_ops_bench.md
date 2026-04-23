@@ -58,19 +58,26 @@ doesn't emit yet.
 ### macOS (N=2 000 000, trials=50)
 
 - **CPU:** Apple M4 Max (16 threads)
-- **OS:** macOS 15.7.3 (Darwin 24.6.0)
-- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
-- **MATLAB:** R2026a (26.1.0)
+- **OS:** macOS 15.7.5 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, gcc-15 15.2.0 (Homebrew), numbl 0.2.0
+- **MATLAB:** R2025b
+- **Measured:** 2026-04-23
 
-| Mode                       |      Total |     Binary |  Unary | Cmp+Red |     Reduce |      Chain |
-| -------------------------- | ---------: | ---------: | -----: | ------: | ---------: | ---------: |
-| `--opt 0` (interpreter)    |     3.58 s |     0.48 s | 1.55 s |  0.46 s |     0.67 s |     0.42 s |
-| `--opt 1` (JS-JIT)         |     2.87 s |     0.15 s | 1.23 s |  0.44 s |     0.67 s |     0.38 s |
-| MATLAB R2026a (1 thread)   |     2.83 s |     0.20 s | 1.81 s |  0.12 s |     0.31 s |     0.40 s |
-| MATLAB R2026a (16 threads) | **0.46 s** | **0.05 s** | 0.22 s |  0.07 s | **0.05 s** | **0.07 s** |
+Single run per mode. `--opt e1 --par` compiled with `NUMBL_CC=gcc-15`.
 
-(macOS `--opt e1` numbers not yet re-collected post-cleanup; see
-Linux table above for the e1 story.)
+| Mode                     |      Total |     Binary |      Unary |    Cmp+Red |     Reduce |      Chain |
+| ------------------------ | ---------: | ---------: | ---------: | ---------: | ---------: | ---------: |
+| `--opt 1` (JS-JIT)       |     3.01 s |     0.17 s |     1.26 s |     0.47 s |     0.73 s |     0.39 s |
+| `--opt e1`               |     1.94 s |     0.02 s |     0.94 s |     0.06 s |     0.73 s |     0.19 s |
+| `--opt e1 --par`         |     1.17 s |     0.04 s | **0.12 s** |     0.07 s |     0.73 s |     0.21 s |
+| MATLAB R2025b (1 thread) |     2.85 s |     0.20 s |     1.83 s |     0.10 s |     0.34 s |     0.38 s |
+| MATLAB R2025b (multi)    | **0.47 s** | **0.06 s** |     0.22 s | **0.07 s** | **0.06 s** | **0.07 s** |
+
+MATLAB's threaded reductions dominate on macOS because numbl's `--par`
+doesn't yet emit OpenMP `reduction(...)` clauses — the Reduce row stays
+at single-thread speed (0.73 s) under `--par`. numbl's `--par` still
+takes the Unary column (0.12 s vs MATLAB's 0.22 s) thanks to OMP
+threading across the transcendental-heavy body.
 
 ## Architecture notes
 

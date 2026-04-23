@@ -53,6 +53,28 @@ Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 | MATLAB R2025b (1 thread)  |     0.11 s |     179 Mops/s |                 ~59× |
 | MATLAB R2025b (8 threads) |     0.11 s |     177 Mops/s |                 ~59× |
 
+### macOS (N=50 000, M=400, 20M z^2+c ops)
+
+- **CPU:** Apple M4 Max
+- **OS:** macOS 15.7.5 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, gcc-15 15.2.0 (Homebrew), numbl 0.2.0
+- **MATLAB:** R2025b
+- **Measured:** 2026-04-23
+
+Single run per mode. `--opt e1 --par` compiled with `NUMBL_CC=gcc-15`.
+
+| Mode                     |   Wall time |     Throughput |
+| ------------------------ | ----------: | -------------: |
+| `--opt 1` (JS-JIT)       |     0.576 s |    34.7 Mops/s |
+| `--opt e1`               |     0.031 s |     637 Mops/s |
+| `--opt e1 --par`         | **0.030 s** | **670 Mops/s** |
+| MATLAB R2025b (1 thread) |     0.148 s |     135 Mops/s |
+| MATLAB R2025b (multi)    |     0.148 s |     135 Mops/s |
+
+Inner loop is a scalar carried dependency, so `--par` and MATLAB
+multi-thread give no gain — the win comes entirely from e1's
+pair-of-doubles scalar kernel over MATLAB's complex-scalar dispatch.
+
 `run_bench` has pure-scalar params and a scalar return, so e1's
 whole-function scalar kernel path fires — the complex scalar `z`
 lives inside the kernel and is lowered to a pair of doubles. The

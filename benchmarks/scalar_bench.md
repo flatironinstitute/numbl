@@ -54,22 +54,25 @@ run since it's slow enough to make repeats uninteresting).
 ### macOS (N=60 000, M=500, 30M sin+div)
 
 - **CPU:** Apple M4 Max
-- **OS:** macOS 15.7.3 (Darwin 24.6.0)
-- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
-- **MATLAB:** R2026a (26.1.0) — single-threaded (`maxNumCompThreads(1)`; multi-threaded identical for this scalar loop)
+- **OS:** macOS 15.7.5 (Darwin 24.6.0)
+- **Toolchain:** Node v25.9.0, Apple clang 17.0.0, gcc-15 15.2.0 (Homebrew), numbl 0.2.0
+- **MATLAB:** R2025b
+- **Measured:** 2026-04-23
 
-| Mode                    | Wall time |    Throughput | Speedup vs `--opt 0` |
-| ----------------------- | --------: | ------------: | -------------------: |
-| `--opt 0` (interpreter) |   17.83 s | 1.68 Mcalls/s |                   1× |
-| `--opt 1` (JS-JIT)      |    0.23 s |  131 Mcalls/s |                 ~78× |
-| MATLAB R2026a `-batch`  |    0.20 s |  148 Mcalls/s |                 ~88× |
+Single run per mode. `--opt e1 --par` compiled with `NUMBL_CC=gcc-15`
+(Apple clang ships without OpenMP threading).
 
-(macOS `--opt e1` not yet re-collected post-cleanup; Linux table
-captures the e1 story.)
+| Mode                     |   Wall time |       Throughput |
+| ------------------------ | ----------: | ---------------: |
+| `--opt 1` (JS-JIT)       |     0.232 s |     129 Mcalls/s |
+| `--opt e1`               | **0.086 s** | **349 Mcalls/s** |
+| `--opt e1 --par`         |     0.086 s |     348 Mcalls/s |
+| MATLAB R2025b (1 thread) |     0.208 s |     144 Mcalls/s |
+| MATLAB R2025b (multi)    |     0.208 s |     144 Mcalls/s |
 
-`--par` doesn't apply here: the inner loop is a serial carried-
-dependency accumulator (`acc += sin(x·k)/k²`), so there's nothing to
-parallelize.
+`--par` and MATLAB multi-thread are no-ops here: the inner loop is a
+serial carried-dependency accumulator (`acc += sin(x·k)/k²`) with no
+parallelism to exploit.
 
 ## Notes on timing methodology
 
