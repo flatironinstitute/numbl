@@ -113,10 +113,12 @@ jobs:
           name: benchmark-results-macos-latest
           path: results/macos
 
-      # github-action-benchmark handles sequential calls in a single job
-      # correctly: each invocation fetches the latest gh-pages state from
-      # the remote repo, appends its entry, and pushes. So the second
-      # call naturally rebases onto the first call's commit.
+      # Each github-action-benchmark call clones the data repo into
+      # ./benchmark-data-repository and does not clean it up, so the
+      # second call would fail with "destination path already exists".
+      # We remove it between calls; each invocation then fetches the
+      # latest gh-pages state fresh, appends its entry, and pushes — so
+      # the second call naturally rebases onto the first call's commit.
       - name: Publish Linux results
         if: steps.dl-linux.outcome == 'success'
         uses: benchmark-action/github-action-benchmark@v1
@@ -133,6 +135,10 @@ jobs:
           alert-threshold: "200%"
           comment-on-alert: false
           fail-on-alert: false
+
+      - name: Clean benchmark data clone between publishes
+        if: steps.dl-linux.outcome == 'success' && steps.dl-macos.outcome == 'success'
+        run: rm -rf ./benchmark-data-repository
 
       - name: Publish macOS results
         if: steps.dl-macos.outcome == 'success'
