@@ -41,7 +41,6 @@
       "defines": [ "NAPI_DISABLE_CPP_EXCEPTIONS" ],
       "libraries": [
         "-lopenblas",
-        "-lmvec",
         "-lm",
         "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
         "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
@@ -53,7 +52,7 @@
         ['OS=="linux"', {
           "cflags_c": [ "-fopenmp" ],
           "cflags_cc": [ "-fopenmp" ],
-          "libraries": [ "-fopenmp" ]
+          "libraries": [ "-lmvec", "-fopenmp" ]
         }]
       ]
     },

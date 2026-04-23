@@ -20,14 +20,62 @@
 
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
+import { arch, cpus, platform, release, totalmem } from "node:os";
 
 interface Metric {
   name: string;
   unit: string;
   value: number;
+  /** Stamped on every metric so chart tooltips show runner context
+   *  (CPU model, OS, compiler, etc.). Invaluable later when a runner-image
+   *  upgrade shifts the baseline — the diff point carries its own
+   *  environment fingerprint. */
+  extra?: string;
 }
 
 const N_RUNS = parseInt(process.env.N_RUNS ?? "", 10) || 3;
+
+// ── System info stamp (attached to every metric's `extra` field) ─────
+
+function collectSystemInfo(): string {
+  const lines: string[] = [];
+  lines.push(`OS: ${platform()} ${release()} (${arch()})`);
+  const cpuList = cpus();
+  if (cpuList.length > 0) {
+    lines.push(`CPU: ${cpuList[0].model.trim()} (${cpuList.length} cores)`);
+  }
+  lines.push(`RAM: ${Math.round(totalmem() / 1024 ** 3)} GB`);
+  lines.push(`Node: ${process.version}`);
+  try {
+    const ccVer = execFileSync("cc", ["--version"], {
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    })
+      .split("\n")[0]
+      .trim();
+    lines.push(`cc: ${ccVer}`);
+  } catch {
+    // cc not on PATH — fine, just skip
+  }
+  if (process.env.NUMBL_PAR_CC) {
+    lines.push(`--par cc: ${process.env.NUMBL_PAR_CC}`);
+  }
+  // GitHub Actions sets these on hosted runners; useful for distinguishing
+  // runner-image upgrades that shift baselines invisibly.
+  const runnerBits = [
+    process.env.RUNNER_OS,
+    process.env.ImageOS,
+    process.env.ImageVersion,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  if (runnerBits) lines.push(`Runner: ${runnerBits}`);
+  return lines.join("\n");
+}
+
+const SYSTEM_INFO = collectSystemInfo();
+process.stderr.write(`\n[run_benchmarks] system info:\n${SYSTEM_INFO}\n`);
 
 // ── Per-benchmark output parsers ──────────────────────────────────────
 
@@ -245,6 +293,7 @@ for (const bench of BENCHMARKS) {
         name: `${benchSlug} / ${key} / ${mode.slug}`,
         unit: "s",
         value: median(vals),
+        extra: `median of ${vals.length}/${N_RUNS} runs: [${vals.map(v => v.toFixed(4)).join(", ")}]\n${SYSTEM_INFO}`,
       });
     }
   }
