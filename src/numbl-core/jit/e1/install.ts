@@ -44,9 +44,7 @@ function install(): void {
       // when N >= threshold; a failure here means the JS fallback
       // path wouldn't have been taken, so surface the error loudly.
       return () => {
-        throw new Error(
-          `--opt e1: C kernel compile/load failed for ${fnName}`
-        );
+        throw new Error(`--opt e1: C kernel compile/load failed for ${fnName}`);
       };
     }
     return loaded.fn as (...args: unknown[]) => unknown;

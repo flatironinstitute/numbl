@@ -509,7 +509,9 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
   // because V8 can't SIMD-vectorize transcendentals, and fusing them
   // as scalar JS is slower than calling libnumbl_ops per-op.
   const allowedUnaryOps =
-    _experimental === "e1" ? FUSIBLE_TENSOR_UNARY_OPS : FUSIBLE_TENSOR_UNARY_OPS_JS;
+    _experimental === "e1"
+      ? FUSIBLE_TENSOR_UNARY_OPS
+      : FUSIBLE_TENSOR_UNARY_OPS_JS;
   const chains = findFusibleChains(
     stmts,
     _fusionParamTensors,

@@ -253,9 +253,7 @@ export function tryJitCall(
           "$rt",
           `${scalarKernel.jsSource}\nreturn ${fn.name};`
         );
-        const wrapped = factory(helpers, rt) as (
-          ...a: unknown[]
-        ) => unknown;
+        const wrapped = factory(helpers, rt) as (...a: unknown[]) => unknown;
         const compiled = (...callArgs: unknown[]) => wrapped(...callArgs);
         const typeDesc = argTypes.map(jitTypeKey).join(", ");
         const paramComments = fn.params

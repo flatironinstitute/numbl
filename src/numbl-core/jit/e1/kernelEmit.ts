@@ -227,9 +227,7 @@ export function emitChainKernel(
         fusedTarget
       );
       if (!chainLocals.has(a.destName)) {
-        bodyLines.push(
-          `        double ${fusedLocal(a.destName)} = ${rhs};`
-        );
+        bodyLines.push(`        double ${fusedLocal(a.destName)} = ${rhs};`);
         chainLocals.add(a.destName);
       } else {
         bodyLines.push(`        ${fusedLocal(a.destName)} = ${rhs};`);
@@ -265,7 +263,10 @@ export function emitChainKernel(
     `void __KERNEL_NAME__(${paramList.join(", ")})\n` + `{\n${bodyStr}\n}\n`;
   const cSourceTemplate = prologue + bodyTemplate;
 
-  const h = createHash("sha256").update(cSourceTemplate).digest("hex").slice(0, 16);
+  const h = createHash("sha256")
+    .update(cSourceTemplate)
+    .digest("hex")
+    .slice(0, 16);
   const kernelName = `nk_${h}`;
   const cSource = cSourceTemplate.replace("__KERNEL_NAME__", kernelName);
 
@@ -274,7 +275,8 @@ export function emitChainKernel(
   koffiParams.push("int64_t");
   for (let k = 0; k < inputTensors.length; k++) koffiParams.push("double *");
   for (let k = 0; k < inputScalars.length; k++) koffiParams.push("double");
-  for (let k = 0; k < writeBackOrdered.length; k++) koffiParams.push("double *");
+  for (let k = 0; k < writeBackOrdered.length; k++)
+    koffiParams.push("double *");
   const koffiSig = `void ${kernelName}(${koffiParams.join(", ")})`;
 
   return {
