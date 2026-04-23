@@ -31,6 +31,7 @@ import type { Interpreter } from "../../interpreter/interpreter.js";
 import { checkCFeasibility } from "../c/feasibility.js";
 import { generateC } from "../c/assemble.js";
 import { isOpenmpAvailable } from "./openmpFlag.js";
+import { fnv1a64Hex } from "./hash.js";
 
 export interface ScalarFnKernelResult {
   /** The inline-compileKernel JS source. The JIT caller splices this
@@ -158,9 +159,18 @@ export function tryEmitScalarFnKernel(
         ? toReturn(0)
         : `[${Array.from({ length: numOut }, (_, k) => toReturn(k)).join(", ")}]`;
 
-  // Emit the JS. The kernel is cached on `$h.$kernels[<name>]` so the
+  // Emit the JS. The kernel is cached on `$h.$kernels[<key>]` so the
   // same specialization used elsewhere dedupes to one `cc` invocation.
-  const kernelKey = JSON.stringify(gen.cFnName);
+  // The key includes a content hash of the C source so different
+  // specializations of the *same* user-function name — e.g. multiple
+  // nargout-specific bodies of `four_outputs`, or two class methods
+  // that each define a local helper called `localHelper` — don't
+  // collide on a shared bare-name key. Without this, the first-
+  // compiled kernel would be hit by later callers expecting a
+  // different ABI and segfault inside koffi.
+  const sourceHash8 = fnv1a64Hex(gen.cSource).slice(0, 8);
+  const cacheKeyName = `${gen.cFnName}_${sourceHash8}`;
+  const kernelKey = JSON.stringify(cacheKeyName);
   const cSrcJs = JSON.stringify(gen.cSource);
   const koffiSigJs = JSON.stringify(gen.koffiSignature);
 

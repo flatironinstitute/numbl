@@ -266,11 +266,26 @@ export function emitJsFusedChain(
   experimental?: string,
   par?: boolean
 ): void {
-  // Find a reference param for length and shape.
-  const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
-  if (!refParam) return; // shouldn't happen — bail silently
+  // Pick a tensor to use for length + shape. Prefer a formal param
+  // (stable binding, can't be reassigned inside the chain), but fall
+  // back to any input tensor read by the chain — same pattern as
+  // `emitRealFusedChain` in c/emit/fused.ts. Without this fallback,
+  // chains whose inputs are all locals (e.g. `z = a + a*1i;` where
+  // `a` is a local real tensor) silently bail and their assignments
+  // get dropped, since the enclosing loop still advances past them.
+  const refTensor =
+    findTensorParamInChain(chain, paramTensors, allTensorVars) ??
+    [...collectInputTensors(chain, allTensorVars)][0];
+  if (!refTensor) {
+    // Truly no input tensor — rare (e.g. a chain that only writes
+    // a dest from scalars/literals). Skip emission rather than
+    // silently dropping; the caller will still advance past the
+    // chain, but the non-fused per-op path can't produce this
+    // shape either, so there's nothing to do.
+    return;
+  }
 
-  const refMangled = mangle(refParam);
+  const refMangled = mangle(refTensor);
 
   // Complex chain routing (e1 only). Delegates to the paired-buffer
   // kernel emitter; on null (unsupported op) bail so the surrounding
@@ -293,7 +308,7 @@ export function emitJsFusedChain(
         complexTensorNames,
         complexScalarVars,
         mangle,
-        refParam,
+        refTensor,
         refMangled
       );
       return;
@@ -506,7 +521,7 @@ function emitComplexChainBlock(
   complexTensorNames: ReadonlySet<string>,
   complexScalarVars: ReadonlySet<string>,
   mangle: (n: string) => string,
-  refParam: string,
+  _refTensor: string,
   refMangled: string
 ): void {
   const kernelInfo = emitComplexChainKernel(
@@ -533,11 +548,9 @@ function emitComplexChainBlock(
 
   lines.push(`${indent}{`);
   const inner = indent + "  ";
-  const refIsComplex = complexTensorNames.has(refParam);
-  const refLenSource = refIsComplex
-    ? `${refMangled}.data.length`
-    : `${refMangled}.data.length`;
-  lines.push(`${inner}const __len = ${refLenSource};`);
+  // `.data.length` works for both real and complex tensors — the
+  // `.data` buffer is the real part either way.
+  lines.push(`${inner}const __len = ${refMangled}.data.length;`);
 
   // Data aliases for input tensors (paired for complex, single for real).
   for (const name of [...inputTensors].sort()) {

@@ -49,6 +49,7 @@ import {
 import type { FusedTarget } from "../fusedScalarEmit.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/index.js";
+import { fnv1a64Hex } from "./hash.js";
 
 /** Transcendentals and `pow` — expensive enough per element that
  *  thread-spawn overhead pays off at N >= 100k. Arithmetic-only
@@ -324,10 +325,7 @@ export function emitChainKernel(
   // add overhead that exceeds the memory-bandwidth-bound body's time.
   // Reduction chains also stick to `simd` since the serial scalar acc
   // can't be parallelized without a `reduction(...)` clause.
-  const heavyOps = chain.assigns.reduce(
-    (n, a) => n + countHeavyOps(a.expr),
-    0
-  );
+  const heavyOps = chain.assigns.reduce((n, a) => n + countHeavyOps(a.expr), 0);
   const useParallel =
     par && !chain.reduction && writeBack.size > 0 && heavyOps > 0;
   const pragma = useParallel
@@ -402,20 +400,4 @@ function buildCallArgSlotTags(
   for (const o of outputTensors) out.push(`o:${o}`);
   if (hasReduction) out.push("r");
   return out;
-}
-
-// 64-bit FNV-1a over the source's UTF-8 code units, returned as 16 hex
-// chars. Deterministic and fully self-contained — avoids pulling Node's
-// `crypto` module into the browser bundle (the e1 path is Node-only at
-// runtime, but this file is reachable from the JS-JIT module graph that
-// Vite bundles for the web REPL). Cryptographic strength isn't needed:
-// the hash is just a content-addressed kernel-name suffix.
-function fnv1a64Hex(s: string): string {
-  let h = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h ^ BigInt(s.charCodeAt(i))) * prime) & mask;
-  }
-  return h.toString(16).padStart(16, "0");
 }

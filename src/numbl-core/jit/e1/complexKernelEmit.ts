@@ -42,6 +42,7 @@ import { collectInputTensors } from "../fusedScalarEmit.js";
 import { formatNumberLiteral } from "../c/context.js";
 import { determineWriteBack } from "../fusedChainHelpers.js";
 import type { KernelEmitResult } from "./kernelEmit.js";
+import { fnv1a64Hex } from "./hash.js";
 
 // ── Kernel-local naming ─────────────────────────────────────────────────
 
@@ -507,14 +508,4 @@ function buildCallArgSlotTags(
     out.push(`ocim:${o}`);
   }
   return out;
-}
-
-function fnv1a64Hex(s: string): string {
-  let h = 0xcbf29ce484222325n;
-  const prime = 0x100000001b3n;
-  const mask = 0xffffffffffffffffn;
-  for (let i = 0; i < s.length; i++) {
-    h = ((h ^ BigInt(s.charCodeAt(i))) * prime) & mask;
-  }
-  return h.toString(16).padStart(16, "0");
 }
