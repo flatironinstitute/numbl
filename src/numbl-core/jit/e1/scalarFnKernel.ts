@@ -61,15 +61,11 @@ export function tryEmitScalarFnKernel(
 ): ScalarFnKernelResult | null {
   // Gate 1: all arg types are scalar-ish. Bail early if any tensor /
   // complex / struct / string shows up — generateC might still succeed,
-  // but the wrapper marshaling below assumes pure doubles.
+  // but the wrapper marshaling below assumes pure doubles. `complex_or_number`
+  // is rejected because we can't statically rule out a complex runtime
+  // value, and the scalar wrapper doesn't have a re/im marshalling path.
   for (const t of argTypes) {
-    if (
-      t.kind !== "number" &&
-      t.kind !== "boolean" &&
-      !(t.kind === "complex_or_number" && !t.isComplex)
-    ) {
-      return null;
-    }
+    if (t.kind !== "number" && t.kind !== "boolean") return null;
   }
   // Gate 2: the declared/inferred outputs are all scalar-ish. A tensor
   // output (e.g. `function y = f(x)` where y is a vector) needs the
@@ -77,7 +73,11 @@ export function tryEmitScalarFnKernel(
   for (const t of outputTypes) {
     if (t.kind !== "number" && t.kind !== "boolean") return null;
   }
-  if (outputType && outputType.kind !== "number" && outputType.kind !== "boolean") {
+  if (
+    outputType &&
+    outputType.kind !== "number" &&
+    outputType.kind !== "boolean"
+  ) {
     return null;
   }
 
@@ -139,7 +139,9 @@ export function tryEmitScalarFnKernel(
   for (let k = 0; k < numOut; k++) {
     outBufs.push(`const __o${k} = new Float64Array(1);`);
   }
-  const callArgs = [...fn.params, ...outBufs.map((_, k) => `__o${k}`)].join(", ");
+  const callArgs = [...fn.params, ...outBufs.map((_, k) => `__o${k}`)].join(
+    ", "
+  );
 
   // Coerce boolean / number return according to the declared output
   // kinds. A single output returns a plain value (boolean or number);
@@ -164,7 +166,9 @@ export function tryEmitScalarFnKernel(
 
   const lines: string[] = [];
   lines.push(`function ${fn.name}(${paramList}) {`);
-  lines.push(`  $h.$kernels[${kernelKey}] ??= $h.compileKernel(${cSrcJs}, ${koffiSigJs});`);
+  lines.push(
+    `  $h.$kernels[${kernelKey}] ??= $h.compileKernel(${cSrcJs}, ${koffiSigJs});`
+  );
   for (const d of outBufs) lines.push(`  ${d}`);
   lines.push(`  $h.$kernels[${kernelKey}](${callArgs});`);
   lines.push(`  return ${returnExpr};`);
