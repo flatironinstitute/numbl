@@ -244,16 +244,15 @@ export const jitHelpers = {
   /** Stub — replaced on Node by jit/e1/install.ts. Throws otherwise,
    *  so a stray e1-compiled helper running in the web bundle surfaces
    *  as a clear error rather than a silent fallback. */
-  compileKernel: ((_cSource: string, _koffiSig: string): (
-    ...args: unknown[]
-  ) => unknown => {
-    throw new Error(
-      "--opt e1: compileKernel unavailable (Node-only; stub present in bundle)"
-    );
-  }) as (
+  compileKernel: ((
     cSource: string,
     koffiSig: string
-  ) => (...args: unknown[]) => unknown,
+  ): ((...args: unknown[]) => unknown) => {
+    throw new Error(
+      "--opt e1: compileKernel unavailable (Node-only; stub present in bundle). " +
+        `kernel sig='${koffiSig}', source len=${cSource.length}`
+    );
+  }) as (cSource: string, koffiSig: string) => (...args: unknown[]) => unknown,
 
   // Fused-loop helpers (raw Float64Array allocation + wrapping)
   uninit: uninitFloat64,
