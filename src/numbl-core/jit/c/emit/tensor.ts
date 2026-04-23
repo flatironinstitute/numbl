@@ -114,14 +114,34 @@ export function emitScratchBufAllocComplex(
 
 // ── Shape inference ───────────────────────────────────────────────────
 
+/** Walk an elemwise expression tree for a tensor Var whose runtime
+ *  d0/d1 locals describe the output shape. Elemwise binary/unary ops
+ *  preserve operand shape (or broadcast), so any tensor Var reachable
+ *  by descending into Binary/Unary operands works as a shape source. */
+function findShapeVar(expr: JitExpr | undefined, ctx: EmitCtx): string | null {
+  if (!expr) return null;
+  if (expr.tag === "Var" && isTensorVar(ctx, expr.name)) return expr.name;
+  if (expr.tag === "Binary") {
+    return findShapeVar(expr.left, ctx) ?? findShapeVar(expr.right, ctx);
+  }
+  if (expr.tag === "Unary") {
+    return findShapeVar(expr.operand, ctx);
+  }
+  return null;
+}
+
 /** Derive (d0, d1) C expressions for a dynamic tensor output whose
  *  shape is inherited from an elemwise operand. Uses the operand's
- *  static shape when known; else recovers the missing dim from lenExpr
- *  and the other dim (e.g. row `[1, -1]` → `[1, len]`). Falls back to
- *  `[len, 1]` (column convention) when both dims are unknown. */
+ *  static shape when known; else — when `ctx` is provided — falls
+ *  back to the nearest tensor Var's runtime `_d0`/`_d1` locals
+ *  (accurate even for partial-shape specializations). Final fallback
+ *  recovers the missing dim from lenExpr and the other dim (e.g. row
+ *  `[1, -1]` → `[1, len]`), or `[len, 1]` (column convention) when
+ *  nothing is known. */
 export function shapeExprsFor(
   shapeSrc: JitExpr | undefined,
-  lenExpr: string
+  lenExpr: string,
+  ctx?: EmitCtx
 ): [string, string] {
   const shape =
     shapeSrc?.jitType.kind === "tensor" ? shapeSrc.jitType.shape : undefined;
@@ -132,8 +152,20 @@ export function shapeExprsFor(
     const d0Known = shape[0] !== -1 && shape[0] !== 0;
     const d1Known = shape[1] !== -1 && shape[1] !== 0;
     if (d0Known && d1Known) return [`${shape[0]}`, `${shape[1]}`];
+    // Prefer runtime Var shape locals over len-based recovery when
+    // possible — they stay accurate for partial-shape specializations.
+    if (ctx) {
+      const shapeVar = findShapeVar(shapeSrc, ctx);
+      if (shapeVar) return [tensorD0(shapeVar), tensorD1(shapeVar)];
+    }
     if (d0Known) return [`${shape[0]}`, `(${lenExpr} / ${shape[0]})`];
     if (d1Known) return [`(${lenExpr} / ${shape[1]})`, `${shape[1]}`];
+  }
+  // Fully unknown static shape: try runtime Var locals before the
+  // [len, 1] fallback.
+  if (ctx) {
+    const shapeVar = findShapeVar(shapeSrc, ctx);
+    if (shapeVar) return [tensorD0(shapeVar), tensorD1(shapeVar)];
   }
   return [lenExpr, "1"];
 }
@@ -193,11 +225,13 @@ export function emitEnsureTensorBuf(
     lines.push(`${inner}  ${dLen} = __need;`);
     lines.push(`${inner}}`);
     lines.push(`${indent}}`);
-    if (isDyn) {
-      const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
-      lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
-      lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
-    }
+    // Always update shape locals (both dyn outputs and locals) so
+    // downstream ops reading d0/d1 (multi-index, AssignIndexCol, etc.)
+    // see the right values, not leftover values from an earlier
+    // differently-shaped write.
+    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr, ctx);
+    lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+    lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
     return;
   }
   lines.push(`${indent}${dLen} = ${lenExpr};`);
@@ -276,22 +310,25 @@ export function emitElemwiseTensorAssign(
   lines.push(`${inner}  ${tag} = ${sData};`);
   lines.push(`${inner}}`);
   emitKernel(lines, inner, tag, "__need");
+  // Swap-move: after the kernel has written the scratch, take its
+  // buffer as the new dst (pointer move) and null out the scratch.
+  // Saves one malloc + one N-element memcpy per elemwise assign vs.
+  // the old free+malloc+memcpy pattern. Aliasing stays safe because
+  // the swap happens AFTER the kernel has already finished reading
+  // its operands. Next use of this scratch slot re-allocs at its
+  // next required size (the sLen=0 reset forces the size-change branch).
   lines.push(`${inner}if (!${inlineFlag}) {`);
   lines.push(`${inner}  if (${dData}) free(${dData});`);
-  lines.push(
-    `${inner}  ${dData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
-  );
+  lines.push(`${inner}  ${dData} = ${sData};`);
   lines.push(`${inner}  ${dLen} = __need;`);
-  lines.push(
-    `${inner}  if (${dLen} > 0) memcpy(${dData}, ${tag}, (size_t)${dLen} * sizeof(double));`
-  );
+  lines.push(`${inner}  ${sData} = NULL;`);
+  lines.push(`${inner}  ${sLen} = 0;`);
   lines.push(`${inner}}`);
   lines.push(`${indent}}`);
-  if (isDyn) {
-    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
-    lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
-    lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
-  }
+  // Always update dest shape locals — see note in emitEnsureTensorBuf.
+  const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr, ctx);
+  lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+  lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
 }
 
 /** Complex-tensor sibling of `emitElemwiseTensorAssign`. Same runtime
@@ -373,29 +410,23 @@ export function emitComplexElemwiseTensorAssign(
   lines.push(`${inner}  ${tagIm} = ${sDataIm};`);
   lines.push(`${inner}}`);
   emitKernel(lines, inner, tagRe, tagIm, "__need");
+  // Swap-move (re + im): see note in emitElemwiseTensorAssign. Saves
+  // two mallocs + two N-element memcpy's per complex elemwise assign.
   lines.push(`${inner}if (!${inlineFlag}) {`);
   lines.push(`${inner}  if (${dData}) free(${dData});`);
   lines.push(`${inner}  if (${dDataIm}) free(${dDataIm});`);
-  lines.push(
-    `${inner}  ${dData} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
-  );
-  lines.push(
-    `${inner}  ${dDataIm} = (__need > 0) ? (double *)malloc((size_t)__need * sizeof(double)) : NULL;`
-  );
+  lines.push(`${inner}  ${dData} = ${sData};`);
+  lines.push(`${inner}  ${dDataIm} = ${sDataIm};`);
   lines.push(`${inner}  ${dLen} = __need;`);
-  lines.push(
-    `${inner}  if (${dLen} > 0) memcpy(${dData}, ${tagRe}, (size_t)${dLen} * sizeof(double));`
-  );
-  lines.push(
-    `${inner}  if (${dLen} > 0) memcpy(${dDataIm}, ${tagIm}, (size_t)${dLen} * sizeof(double));`
-  );
+  lines.push(`${inner}  ${sData} = NULL;`);
+  lines.push(`${inner}  ${sDataIm} = NULL;`);
+  lines.push(`${inner}  ${sLen} = 0;`);
   lines.push(`${inner}}`);
   lines.push(`${indent}}`);
-  if (isDyn) {
-    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
-    lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
-    lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
-  }
+  // Always update dest shape locals — see note in emitEnsureTensorBuf.
+  const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr, ctx);
+  lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+  lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
 }
 
 /** Complex-tensor version of emitEnsureTensorBuf. Reallocates both re
@@ -431,11 +462,10 @@ export function emitEnsureComplexTensorBuf(
     lines.push(`${inner}  ${dLen} = __need;`);
     lines.push(`${inner}}`);
     lines.push(`${indent}}`);
-    if (isDyn) {
-      const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr);
-      lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
-      lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
-    }
+    // Always update shape locals — see note in emitEnsureTensorBuf.
+    const [d0Expr, d1Expr] = shapeExprsFor(shapeSrc, lenExpr, ctx);
+    lines.push(`${indent}${tensorD0(destName)} = ${d0Expr};`);
+    lines.push(`${indent}${tensorD1(destName)} = ${d1Expr};`);
     return;
   }
   lines.push(`${indent}${dLen} = ${lenExpr};`);

@@ -207,7 +207,13 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       // bodies. The result is a 0/1 NumberLiteral for comparisons.
       const folded = tryConstantFoldBinary(expr.op, left, right);
       if (folded) return folded;
-      const resultType = binaryResultType(expr.op, left.jitType, right.jitType);
+      const resultType = binaryResultType(
+        expr.op,
+        left.jitType,
+        right.jitType,
+        left,
+        right
+      );
 
       // Matrix multiply: tensor * tensor goes through the mtimes IBuiltin
       // rather than the element-wise Binary path (which only handles scalar
@@ -522,7 +528,9 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           const resultType = binaryResultType(
             binOp,
             left.jitType,
-            right.jitType
+            right.jitType,
+            left,
+            right
           );
           if (!resultType || resultType.kind === "unknown") return null;
           ctx._hasTensorOps = true;

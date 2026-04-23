@@ -12,6 +12,7 @@
 
 import { BinaryOperation, UnaryOperation } from "../parser/types.js";
 import {
+  type JitExpr,
   type JitType,
   type SignCategory,
   unifyJitTypes,
@@ -136,7 +137,12 @@ export function combineSigns(
 export function binaryResultType(
   op: BinaryOperation,
   left: JitType,
-  right: JitType
+  right: JitType,
+  /** Lowered operand exprs. Optional because tests / older callers pass
+   *  only types. When provided, enables structural nonneg detection for
+   *  patterns like `x .* x` that the type-only path can't see. */
+  leftExpr?: JitExpr,
+  rightExpr?: JitExpr
 ): JitType | null {
   if (!isArithmeticType(left) || !isArithmeticType(right)) return null;
 
@@ -246,7 +252,13 @@ export function binaryResultType(
       for (let i = 0; i < maxLen; i++) {
         const ld = i < ls.length ? ls[i] : 1;
         const rd = i < rs.length ? rs[i] : 1;
-        if (ld === -1 || rd === -1) shape.push(-1);
+        // If one side knows a dim and the other doesn't, the known dim
+        // wins (broadcast-compatible inputs must have matching non-1
+        // dims, so the known side determines the output). Only fall
+        // back to -1 when both sides are unknown.
+        if (ld === -1 && rd === -1) shape.push(-1);
+        else if (ld === -1) shape.push(rd);
+        else if (rd === -1) shape.push(ld);
         else if (ld === 1) shape.push(rd);
         else if (rd === 1) shape.push(ld);
         else if (ld === rd) shape.push(ld);
@@ -262,13 +274,26 @@ export function binaryResultType(
     // nonneg. Division isn't safe (0/0 = NaN, and negative-zero edge
     // cases); subtraction isn't safe either. This lets `log(1 + u)` and
     // `sqrt(u*v)` take the fast path when u,v are nonneg.
-    const nonneg =
+    let nonneg =
       !isComplex &&
       (op === BinaryOperation.Add ||
         op === BinaryOperation.Mul ||
         op === BinaryOperation.ElemMul) &&
       isNonneg(effLeft) &&
       isNonneg(effRight);
+    // Structural nonneg: `x .* x` (same real Var squared) is always
+    // nonneg elementwise, regardless of x's sign. The type-only path
+    // can't see this; we need the lowered operand identity.
+    if (
+      !nonneg &&
+      !isComplex &&
+      (op === BinaryOperation.Mul || op === BinaryOperation.ElemMul) &&
+      leftExpr?.tag === "Var" &&
+      rightExpr?.tag === "Var" &&
+      leftExpr.name === rightExpr.name
+    ) {
+      nonneg = true;
+    }
     return {
       kind: "tensor",
       isComplex,

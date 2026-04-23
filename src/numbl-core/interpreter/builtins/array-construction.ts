@@ -55,15 +55,23 @@ function arrayConstructorCases(
       match: argTypes => {
         if (argTypes.length !== 1) return null;
         const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean" || a.kind === "tensor")
+        if (
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          a.kind === "tensor"
+        ) {
+          // Propagate literal `exact` to the n×n static shape when known.
+          const n =
+            a.kind === "number" && typeof a.exact === "number" ? a.exact : -1;
           return [
             {
               kind: "tensor" as const,
               isComplex: false,
-              shape: [-1, -1],
+              shape: [n, n],
               ...(opts?.nonneg ? { nonneg: true } : {}),
             },
           ];
+        }
         return null;
       },
       apply: args => {
@@ -79,11 +87,16 @@ function arrayConstructorCases(
         for (const a of argTypes) {
           if (a.kind !== "number" && a.kind !== "boolean") return null;
         }
+        // Propagate literal `exact` per-dim so e.g. zeros(2, 3) gets
+        // [2, 3] instead of [-1, -1].
+        const shape = argTypes.map(a =>
+          a.kind === "number" && typeof a.exact === "number" ? a.exact : -1
+        );
         return [
           {
             kind: "tensor" as const,
             isComplex: false,
-            shape: new Array(argTypes.length).fill(-1),
+            shape,
             ...(opts?.nonneg ? { nonneg: true } : {}),
           },
         ];
