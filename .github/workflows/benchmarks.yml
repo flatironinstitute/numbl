@@ -1,0 +1,90 @@
+name: Benchmarks
+
+# Runs the full `benchmarks/*.m` suite under `--opt 1`, `--opt e1`, and
+# `--opt e1 --par` on Linux and macOS, takes the median of 3 runs per
+# (benchmark, mode) pair, and publishes the results to
+# `magland/numbl-benchmarks` via github-action-benchmark. Chart lives at
+# https://magland.github.io/numbl-benchmarks/dev/bench/.
+#
+# Intentionally independent from the main CI: failures here do not gate
+# merges. A push to main triggers one run; `workflow_dispatch` lets you
+# re-run on demand.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Only one benchmark run at a time across the whole repo — matrix jobs
+# within one run are also serialized via strategy.max-parallel below, so
+# we never have two pushes to numbl-benchmarks' gh-pages branch racing.
+concurrency:
+  group: benchmarks
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: Linux
+            par-cc: ""
+          - os: macos-latest
+            label: macOS
+            # Apple clang doesn't ship with OpenMP threading — use Homebrew
+            # gcc for the --par mode only. Installed below.
+            par-cc: gcc-14
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install openblas + fftw (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libfftw3-dev
+
+      - name: Install openblas + fftw + gcc (macOS)
+        if: matrix.os == 'macos-latest'
+        run: brew install openblas fftw gcc@14
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle stdlib
+        run: npm run bundle:stdlib
+
+      - name: Build native addon (includes libnumbl_ops.a)
+        run: npm run build:addon
+
+      - name: Run benchmarks (median of 3)
+        env:
+          NUMBL_PAR_CC: ${{ matrix.par-cc }}
+        run: npx tsx benchmarks/run_benchmarks.ts benchmarks-results.json
+
+      - name: Publish to numbl-benchmarks
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: numbl benchmarks (${{ matrix.label }})
+          tool: customSmallerIsBetter
+          output-file-path: benchmarks-results.json
+          gh-repository: github.com/magland/numbl-benchmarks
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          github-token: ${{ secrets.BENCHMARK_PAT }}
+          auto-push: true
+          # Alerts off per project policy — we're just tracking trends.
+          alert-threshold: "200%"
+          comment-on-alert: false
+          fail-on-alert: false
