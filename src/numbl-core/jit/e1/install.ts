@@ -12,13 +12,19 @@
  */
 
 import { jitHelpers } from "../js/jitHelpers.js";
-import { compileAndLoad } from "../c/compile.js";
+import { compileAndLoad, cJitOpenmpAvailable } from "../c/compile.js";
+import { setOpenmpAvailableGetter } from "./openmpFlag.js";
 
 let _installed = false;
 
 function install(): void {
   if (_installed) return;
   _installed = true;
+
+  // Swap the browser-safe OpenMP-flag stub for the real Node probe. The
+  // e1 codegen (scalarFnKernel.ts) reads this via `isOpenmpAvailable()`
+  // — see openmpFlag.ts for why the indirection exists.
+  setOpenmpAvailableGetter(() => cJitOpenmpAvailable());
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const h = jitHelpers as any;

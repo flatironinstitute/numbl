@@ -324,22 +324,30 @@ export function emitJsFusedChain(
 
   // e1 experimental: when active and the chain is kernelizable, emit a
   // runtime size dispatch that calls the compiled C kernel at large N
-  // and falls back to the inline JS loop at small N. We only try the
-  // kernel path for non-reduction chains in v1 (emitChainKernel returns
-  // null for anything else, so the kernelInfo check below would short-
-  // circuit without the reduction guard — but writing the guard explicitly
-  // keeps the codegen intent clear).
+  // and falls back to the inline JS loop at small N. emitChainKernel
+  // now supports trailing reductions, so we don't pre-gate on
+  // `!chain.reduction` — if the kernel emitter rejects (e.g. unsupported
+  // builtin in the chain), it returns null and we fall through.
   const kernelInfo =
-    experimental === "e1" && !chain.reduction
+    experimental === "e1"
       ? emitChainKernel(chain, allTensorVars, outputTensorNames)
       : null;
 
   if (kernelInfo) {
+    // Per-chain scratch for the reduction result, if any. The kernel
+    // writes its final accumulator value here and we copy it into the
+    // JS-side `reduceAccLocal` in place of the inline-loop accumulate.
+    const reduceScratch = "__f_reduce_buf";
+    if (chain.reduction) {
+      lines.push(`${inner}const ${reduceScratch} = new Float64Array(1);`);
+    }
+
     // Resolve each kernel call-arg slot to the JS expression that the
     // surrounding fused block already has on hand (data aliases for
-    // tensors, mangled name for scalars).
+    // tensors, mangled name for scalars, the reduction scratch buf).
     const callArgExprs = kernelInfo.jsCallArgs.map(slot => {
       if (slot === "n") return "__len";
+      if (slot === "r") return reduceScratch;
       const colonIdx = slot.indexOf(":");
       const kind = slot.slice(0, colonIdx);
       const name = slot.slice(colonIdx + 1);
@@ -358,6 +366,13 @@ export function emitJsFusedChain(
     lines.push(
       `${loopInner}$h.$kernels[${kernelKey}](${callArgExprs.join(", ")});`
     );
+    // Copy the kernel's reduction result into `reduceAccLocal` so the
+    // post-block mean division + final accumulator write path can stay
+    // branch-agnostic (same code for both C-kernel and JS-fallback
+    // branches once we're past this block).
+    if (chain.reduction) {
+      lines.push(`${loopInner}${reduceAccLocal} = ${reduceScratch}[0];`);
+    }
     lines.push(`${inner}} else {`);
     emitInlineLoop(
       lines,

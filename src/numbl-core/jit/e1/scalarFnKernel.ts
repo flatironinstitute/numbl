@@ -30,7 +30,7 @@ import type { GeneratedFn } from "../jitLower.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import { checkCFeasibility } from "../c/feasibility.js";
 import { generateC } from "../c/assemble.js";
-import { cJitOpenmpAvailable } from "../c/compile.js";
+import { isOpenmpAvailable } from "./openmpFlag.js";
 
 export interface ScalarFnKernelResult {
   /** The inline-compileKernel JS source. The JIT caller splices this
@@ -111,7 +111,7 @@ export function tryEmitScalarFnKernel(
       outputTypes,
       fn.name.replace(/[^A-Za-z0-9_]/g, "_"),
       false,
-      interp.par && cJitOpenmpAvailable(),
+      interp.par && isOpenmpAvailable(),
       generatedIRBodies
     );
   } catch {

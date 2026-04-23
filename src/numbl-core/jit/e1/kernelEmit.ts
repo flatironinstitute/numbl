@@ -31,8 +31,6 @@
  * inline JS fused loop.
  */
 
-import { createHash } from "crypto";
-
 import type { JitExpr } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import {
@@ -41,7 +39,12 @@ import {
   collectInputTensors,
 } from "../fusedScalarEmit.js";
 import { C_SCALAR_TARGET, formatNumberLiteral } from "../c/context.js";
-import { determineWriteBack } from "../fusedChainHelpers.js";
+import {
+  determineWriteBack,
+  reductionCombine,
+  reductionInit,
+  C_REDUCTION_LITERALS,
+} from "../fusedChainHelpers.js";
 import type { FusedTarget } from "../fusedScalarEmit.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 
@@ -190,11 +193,10 @@ export function emitChainKernel(
   allTensorVars: ReadonlySet<string>,
   outputTensorNames: ReadonlySet<string>
 ): KernelEmitResult | null {
-  // Prototype scope: no reductions.
-  if (chain.reduction) return null;
-
   const { writeBack } = determineWriteBack(chain, outputTensorNames);
-  if (writeBack.size === 0) return null; // nothing to write — skip
+  // A kernel must produce *something* — either tensor write-back or a
+  // reduction result. If both are empty, there's nothing to do.
+  if (writeBack.size === 0 && !chain.reduction) return null;
 
   const inputTensorsSet = collectInputTensors(chain, allTensorVars);
   const inputTensors = [...inputTensorsSet].sort();
@@ -240,6 +242,21 @@ export function emitChainKernel(
     bodyLines.push(`        ${cOutputPtr(d)}[i] = ${fusedLocal(d)};`);
   }
 
+  // Trailing reduction: accumulate `<reduceName>(<lastDest>)` into an
+  // internal scalar during the loop, then write it to an out-pointer
+  // after the loop. The JS side reads back from the buffer, applies
+  // any mean division, and handles the final `acc = reduceAccLocal`
+  // or `acc OP= reduceAccLocal` write. We deliberately do NOT do the
+  // mean division inside the kernel — JS already has a post-block
+  // divide for the fallback path, and duplicating it would be fragile.
+  const reduceAccC = "__f_reduce_acc";
+  if (chain.reduction) {
+    const valueExpr = fusedLocal(chain.reduction.tensorName);
+    bodyLines.push(
+      `        ${reductionCombine(chain.reduction.reduceName, reduceAccC, valueExpr, C_REDUCTION_LITERALS)}`
+    );
+  }
+
   // Build the C function signature. Preliminary name with a zero hash;
   // we compute the real hash over the final source (minus the name
   // itself, which gets substituted in afterwards).
@@ -248,12 +265,26 @@ export function emitChainKernel(
   for (const t of inputTensors) paramList.push(`const double *${cInputPtr(t)}`);
   for (const s of inputScalars) paramList.push(`double ${cScalarParam(s)}`);
   for (const d of writeBackOrdered) paramList.push(`double *${cOutputPtr(d)}`);
+  if (chain.reduction) paramList.push(`double *out_acc`);
+
+  const prologueLines: string[] = [];
+  if (chain.reduction) {
+    prologueLines.push(
+      `    double ${reduceAccC} = ${reductionInit(chain.reduction.reduceName, C_REDUCTION_LITERALS)};`
+    );
+  }
+  const postLines: string[] = [];
+  if (chain.reduction) {
+    postLines.push(`    *out_acc = ${reduceAccC};`);
+  }
 
   const bodyStr = [
+    ...prologueLines,
     "    #pragma omp simd",
     "    for (int64_t i = 0; i < n; i++) {",
     ...bodyLines,
     "    }",
+    ...postLines,
   ].join("\n");
 
   // Two-pass assembly: emit with "__KERNEL_NAME__" placeholder, hash
@@ -263,10 +294,7 @@ export function emitChainKernel(
     `void __KERNEL_NAME__(${paramList.join(", ")})\n` + `{\n${bodyStr}\n}\n`;
   const cSourceTemplate = prologue + bodyTemplate;
 
-  const h = createHash("sha256")
-    .update(cSourceTemplate)
-    .digest("hex")
-    .slice(0, 16);
+  const h = fnv1a64Hex(cSourceTemplate);
   const kernelName = `nk_${h}`;
   const cSource = cSourceTemplate.replace("__KERNEL_NAME__", kernelName);
 
@@ -277,6 +305,7 @@ export function emitChainKernel(
   for (let k = 0; k < inputScalars.length; k++) koffiParams.push("double");
   for (let k = 0; k < writeBackOrdered.length; k++)
     koffiParams.push("double *");
+  if (chain.reduction) koffiParams.push("double *");
   const koffiSig = `void ${kernelName}(${koffiParams.join(", ")})`;
 
   return {
@@ -292,25 +321,45 @@ export function emitChainKernel(
     jsCallArgs: buildCallArgSlotTags(
       inputTensors,
       inputScalars,
-      writeBackOrdered
+      writeBackOrdered,
+      chain.reduction !== undefined
     ),
   };
 }
 
 /**
  * Encode kernel call-arg slots as structured tags the JS codegen fills
- * in. Tags look like `n`, `t:<name>`, `s:<name>`, `o:<name>` — a thin
+ * in. Tags look like `n`, `t:<name>`, `s:<name>`, `o:<name>`, `r` — a thin
  * wire format that keeps the kernel emitter agnostic of which specific
- * JS expression names the caller uses.
+ * JS expression names the caller uses. The reduction slot carries no
+ * name since there's at most one per chain.
  */
 function buildCallArgSlotTags(
   inputTensors: string[],
   inputScalars: string[],
-  outputTensors: string[]
+  outputTensors: string[],
+  hasReduction: boolean
 ): string[] {
   const out: string[] = ["n"];
   for (const t of inputTensors) out.push(`t:${t}`);
   for (const s of inputScalars) out.push(`s:${s}`);
   for (const o of outputTensors) out.push(`o:${o}`);
+  if (hasReduction) out.push("r");
   return out;
+}
+
+// 64-bit FNV-1a over the source's UTF-8 code units, returned as 16 hex
+// chars. Deterministic and fully self-contained — avoids pulling Node's
+// `crypto` module into the browser bundle (the e1 path is Node-only at
+// runtime, but this file is reachable from the JS-JIT module graph that
+// Vite bundles for the web REPL). Cryptographic strength isn't needed:
+// the hash is just a content-addressed kernel-name suffix.
+function fnv1a64Hex(s: string): string {
+  let h = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (let i = 0; i < s.length; i++) {
+    h = ((h ^ BigInt(s.charCodeAt(i))) * prime) & mask;
+  }
+  return h.toString(16).padStart(16, "0");
 }
