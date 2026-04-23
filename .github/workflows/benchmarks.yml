@@ -1,10 +1,15 @@
 name: Benchmarks
 
 # Runs the full `benchmarks/*.m` suite under `--opt 1`, `--opt e1`, and
-# `--opt e1 --par` on Linux and macOS, takes the median of 3 runs per
-# (benchmark, mode) pair, and publishes the results to
-# `magland/numbl-benchmarks` via github-action-benchmark. Chart lives at
+# `--opt e1 --par` on Linux and macOS (in parallel), takes the median of
+# 3 runs per (benchmark, mode), and publishes to `magland/numbl-benchmarks`
+# via github-action-benchmark. Chart lives at
 # https://magland.github.io/numbl-benchmarks/dev/bench/.
+#
+# Architecture: matrix jobs run in parallel and upload their results as
+# artifacts. A final `publish` job downloads both artifacts and pushes
+# them to the data repo sequentially — avoids race conditions on the
+# gh-pages branch without serializing the expensive benchmark runs.
 #
 # Intentionally independent from the main CI: failures here do not gate
 # merges. A push to main triggers one run; `workflow_dispatch` lets you
@@ -15,9 +20,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# Only one benchmark run at a time across the whole repo — matrix jobs
-# within one run are also serialized via strategy.max-parallel below, so
-# we never have two pushes to numbl-benchmarks' gh-pages branch racing.
+# Only one benchmark workflow run at a time across the whole repo, so
+# two concurrent pushes don't race to update numbl-benchmarks' gh-pages
+# branch from different publish jobs.
 concurrency:
   group: benchmarks
   cancel-in-progress: false
@@ -29,7 +34,6 @@ jobs:
   benchmark:
     strategy:
       fail-fast: false
-      max-parallel: 1
       matrix:
         include:
           - os: ubuntu-latest
@@ -84,18 +88,73 @@ jobs:
           NUMBL_PAR_CC: ${{ matrix.par-cc }}
         run: npx tsx benchmarks/run_benchmarks.ts benchmarks-results.json
 
-      - name: Publish to numbl-benchmarks
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results-${{ matrix.os }}
+          path: benchmarks-results.json
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: benchmark
+    # Even if one OS errored, publish whatever the other produced. The
+    # download-artifact step guards against a fully-empty set.
+    if: always() && needs.benchmark.result != 'skipped' && needs.benchmark.result != 'cancelled'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux results
+        id: dl-linux
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: benchmark-results-ubuntu-latest
+          path: results/linux
+
+      - name: Download macOS results
+        id: dl-macos
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: benchmark-results-macos-latest
+          path: results/macos
+
+      # github-action-benchmark handles sequential calls in a single job
+      # correctly: each invocation fetches the latest gh-pages state from
+      # the remote repo, appends its entry, and pushes. So the second
+      # call naturally rebases onto the first call's commit.
+      - name: Publish Linux results
+        if: steps.dl-linux.outcome == 'success'
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: numbl benchmarks (${{ matrix.label }})
+          name: numbl benchmarks (Linux)
           tool: customSmallerIsBetter
-          output-file-path: benchmarks-results.json
+          output-file-path: results/linux/benchmarks-results.json
           gh-repository: github.com/magland/numbl-benchmarks
           gh-pages-branch: gh-pages
           benchmark-data-dir-path: dev/bench
           github-token: ${{ secrets.BENCHMARK_PAT }}
           auto-push: true
           # Alerts off per project policy — we're just tracking trends.
+          alert-threshold: "200%"
+          comment-on-alert: false
+          fail-on-alert: false
+
+      - name: Publish macOS results
+        if: steps.dl-macos.outcome == 'success'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: numbl benchmarks (macOS)
+          tool: customSmallerIsBetter
+          output-file-path: results/macos/benchmarks-results.json
+          gh-repository: github.com/magland/numbl-benchmarks
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench
+          github-token: ${{ secrets.BENCHMARK_PAT }}
+          auto-push: true
           alert-threshold: "200%"
           comment-on-alert: false
           fail-on-alert: false
