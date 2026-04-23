@@ -31,7 +31,7 @@
  * inline JS fused loop.
  */
 
-import type { JitExpr } from "../jitTypes.js";
+import type { JitExpr, JitType } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import {
   emitFusedScalarExpr,
@@ -47,6 +47,7 @@ import {
 } from "../fusedChainHelpers.js";
 import type { FusedTarget } from "../fusedScalarEmit.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
+import { getIBuiltin } from "../../interpreter/builtins/index.js";
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -88,7 +89,12 @@ function cScalarParam(name: string): string {
   return `s_${name}`;
 }
 
-/** Build the FusedTarget that emits C for the per-element body. */
+/** Build the FusedTarget that emits C for the per-element body.
+ *
+ *  Mirrors the C-JIT's `C_FUSED_TARGET` (see
+ *  `jit/c/emit/fused.ts`): each builtin's own `jitEmitC` owns the
+ *  C-name mapping, so e1 picks up `max`, `min`, `mod`, `rem`, `atan2`,
+ *  `hypot`, etc. automatically without a parallel whitelist. */
 function makeCFusedTarget(writeBack: ReadonlySet<string>): FusedTarget {
   return {
     formatNumber: formatNumberLiteral,
@@ -96,43 +102,13 @@ function makeCFusedTarget(writeBack: ReadonlySet<string>): FusedTarget {
     tensorElemRead: name =>
       (writeBack.has(name) ? cOutputPtr(name) : cInputPtr(name)) + "[i]",
     emitBuiltinCall: (name, args) => {
-      // Subset of libm scalar functions that match MATLAB semantics
-      // when called via -ffast-math. Keep in sync with the JS-fused
-      // builtin table in jsFusedCodegen.ts.
-      const LIBM = new Set([
-        "sin",
-        "cos",
-        "tan",
-        "asin",
-        "acos",
-        "atan",
-        "sinh",
-        "cosh",
-        "tanh",
-        "asinh",
-        "acosh",
-        "atanh",
-        "exp",
-        "log",
-        "log2",
-        "log10",
-        "sqrt",
-        "fabs",
-        "floor",
-        "ceil",
-        "trunc",
-        "atan2",
-        "hypot",
-        "pow",
-        "expm1",
-        "log1p",
-      ]);
-      if (LIBM.has(name)) return `${name}(${args.join(", ")})`;
-      // Numbl name → libm name.
-      if (name === "abs") return `fabs(${args.join(", ")})`;
-      if (name === "fix") return `trunc(${args.join(", ")})`;
-      // Unsupported: bail the whole kernel (caller falls back to JS).
-      return null;
+      const ib = getIBuiltin(name);
+      if (!ib?.jitEmitC) return null;
+      // Fused context is per-element, so argTypes are fabricated as
+      // scalar numbers — all fusible ops are element-wise and none
+      // carry a `requireNonneg` guard on scalar args.
+      const argTypes: JitType[] = args.map(() => ({ kind: "number" }));
+      return ib.jitEmitC(args, argTypes);
     },
   };
 }
