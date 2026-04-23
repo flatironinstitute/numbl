@@ -351,6 +351,7 @@ let _hoistedStructArrayElements: Map<string, string> = new Map();
 // ── Fusion state (--fuse flag) ──────────────────────────────────────────
 let _fuse = false;
 let _experimental: string | undefined;
+let _par = false;
 let _fusionParamTensors: ReadonlySet<string> = new Set();
 let _fusionAllTensorVars: ReadonlySet<string> = new Set();
 let _fusionOutputTensors: ReadonlySet<string> = new Set();
@@ -372,7 +373,8 @@ export function generateJS(
   localVars: Set<string>,
   fileName?: string,
   fuse?: boolean,
-  experimental?: string
+  experimental?: string,
+  par?: boolean
 ): string {
   _tmpCounter = 0;
   _scratchLocals = [];
@@ -380,6 +382,7 @@ export function generateJS(
   _fileEmitted = false;
   _fuse = fuse ?? false;
   _experimental = experimental;
+  _par = par ?? false;
 
   // Compute the return expression for early returns and the final return
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -660,7 +663,8 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
         _fusionComplexTensors,
         _fusionComplexScalars,
         mangle,
-        _experimental
+        _experimental,
+        _par
       );
       // Refresh hoisted aliases for any dest that has one.
       for (const assign of chain.assigns) {

@@ -315,7 +315,8 @@ export function emitComplexChainKernel(
   allTensorVars: ReadonlySet<string>,
   complexTensorNames: ReadonlySet<string>,
   complexScalarVars: ReadonlySet<string>,
-  outputTensorNames: ReadonlySet<string>
+  outputTensorNames: ReadonlySet<string>,
+  _par: boolean
 ): KernelEmitResult | null {
   // Complex chains never carry a reduction (fusion.ts drops it).
   if (chain.reduction) return null;
@@ -413,6 +414,11 @@ export function emitComplexChainKernel(
     paramList.push(`double *${cOutputIm(d)}`);
   }
 
+  // Complex chains deliberately stick to `#pragma omp simd` regardless
+  // of `--par`. The per-element body is ~6 flops, memory-bandwidth-
+  // bound across paired re/im buffers; thread-spawn overhead dominates
+  // the compute win at realistic N. Mirrors the C-JIT's complex
+  // emitter, which also opts out of threading.
   const bodyStr = [
     "    #pragma omp simd",
     "    for (int64_t i = 0; i < n; i++) {",

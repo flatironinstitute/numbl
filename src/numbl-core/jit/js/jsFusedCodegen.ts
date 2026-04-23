@@ -263,7 +263,8 @@ export function emitJsFusedChain(
   complexTensorNames: ReadonlySet<string>,
   complexScalarVars: ReadonlySet<string>,
   mangle: (n: string) => string,
-  experimental?: string
+  experimental?: string,
+  par?: boolean
 ): void {
   // Find a reference param for length and shape.
   const refParam = findTensorParamInChain(chain, paramTensors, allTensorVars);
@@ -293,7 +294,8 @@ export function emitJsFusedChain(
         complexScalarVars,
         mangle,
         refParam,
-        refMangled
+        refMangled,
+        par ?? false
       );
       return;
     }
@@ -361,7 +363,7 @@ export function emitJsFusedChain(
   // builtin in the chain), it returns null and we fall through.
   const kernelInfo =
     experimental === "e1"
-      ? emitChainKernel(chain, allTensorVars, outputTensorNames)
+      ? emitChainKernel(chain, allTensorVars, outputTensorNames, par ?? false)
       : null;
 
   if (kernelInfo) {
@@ -506,14 +508,16 @@ function emitComplexChainBlock(
   complexScalarVars: ReadonlySet<string>,
   mangle: (n: string) => string,
   refParam: string,
-  refMangled: string
+  refMangled: string,
+  par: boolean
 ): void {
   const kernelInfo = emitComplexChainKernel(
     chain,
     allTensorVars,
     complexTensorNames,
     complexScalarVars,
-    outputTensorNames
+    outputTensorNames,
+    par
   );
   if (!kernelInfo) {
     // Fall back: emit nothing here. This produces an incorrect result

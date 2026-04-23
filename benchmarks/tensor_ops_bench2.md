@@ -43,18 +43,21 @@ Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 | ------------------------------ | ------: | -----: | -----: | ------: | ------: | -----: | -----: |
 | `--opt 0` (interpreter)        | 14.58 s | 0.50 s | 2.00 s |  0.36 s |  0.53 s | 5.15 s | 6.05 s |
 | `--opt 1` (JS-JIT)             | 13.98 s | 0.31 s | 1.09 s |  0.24 s |  0.35 s | 5.51 s | 6.43 s |
-| `--opt e1` (experimental)      |  1.24 s | 0.10 s | 0.51 s |  0.06 s |  0.11 s | 0.29 s | 0.18 s |
+| `--opt e1` (experimental)      |  1.23 s | 0.10 s | 0.51 s |  0.05 s |  0.10 s | 0.29 s | 0.18 s |
+| `--opt e1 --par`               |  0.87 s | 0.09 s | 0.22 s |  0.06 s |  0.12 s | 0.18 s | 0.21 s |
 | `--opt 2 --fuse --par` (C-JIT) |  1.08 s | 0.08 s | 0.20 s |  0.00 s |  0.37 s | 0.18 s | 0.22 s |
 | MATLAB R2025b (1 thread)       |  6.72 s | 0.48 s | 3.43 s |  0.13 s |  0.50 s | 1.46 s | 0.72 s |
 | MATLAB R2025b (8 threads)      |  2.63 s | 0.12 s | 1.30 s |  0.13 s |  0.20 s | 0.62 s | 0.27 s |
 
-`--opt e1` is total-time close to `--opt 2 --fuse --par` (1.24 vs
-1.08) and beats it on Acc.red (`ir_acc += sum(exp(-x.*x))`) by ~3.5×
-for the same reason as `tensor_ops_bench`'s Chain kernel —
-aggressive `#pragma omp simd` on reduction chains that the existing
-C-JIT fused path omits. Under `-ffast-math` modern compilers
-vectorize `+=` reductions without an explicit `reduction(+:acc)`
-clause.
+`--opt e1 --par` auto-parallelizes chain kernels whose per-element
+body has transcendentals — Nested (2.3×: 0.51→0.22 s), BinOps (1.6×:
+0.29→0.18 s), and Gauss (1.1×). Kernels without heavy ops (Inl.red,
+Acc.red) skip the parallel-for pragma because thread-spawn overhead
+would exceed the memory-bandwidth-bound compute. e1 still beats
+`--opt 2 --fuse --par` on Acc.red (`ir_acc += sum(exp(-x.*x))`) by
+~3× because e1 keeps `#pragma omp simd` on reduction chains; under
+`-ffast-math` the compiler vectorizes the `+=` accumulator without
+needing an explicit `reduction(+:acc)` clause.
 
 ### macOS (N=2 000 000, trials=50)
 

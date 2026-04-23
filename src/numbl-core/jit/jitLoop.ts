@@ -310,7 +310,8 @@ function tryJitLoop(
     lowered.localVars,
     currentFile,
     interp.fuse,
-    interp.experimental
+    interp.experimental,
+    interp.par
   );
 
   // Prepend generated helper function definitions

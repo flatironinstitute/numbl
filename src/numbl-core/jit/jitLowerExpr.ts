@@ -1156,7 +1156,8 @@ function lowerUserFuncCall(
         calleeResult.localVars,
         interp.currentFile,
         interp.fuse,
-        interp.experimental
+        interp.experimental,
+        interp.par
       );
       const paramComments = calleeFn.params
         .map((p, i) => `${p}: ${jitTypeKey(argJitTypes[i])}`)

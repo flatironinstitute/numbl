@@ -31,6 +31,7 @@
  * inline JS fused loop.
  */
 
+import { BinaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitType } from "../jitTypes.js";
 import type { FusibleChain } from "../fusion.js";
 import {
@@ -48,6 +49,60 @@ import {
 import type { FusedTarget } from "../fusedScalarEmit.js";
 import type { ScalarOpTarget } from "../scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/index.js";
+
+/** Transcendentals and `pow` — expensive enough per element that
+ *  thread-spawn overhead pays off at N >= 100k. Arithmetic-only
+ *  chains stick to plain `simd` because threads slow them down.
+ *  Mirrors the HEAVY_OPS set in `c/emit/fused.ts`. */
+const HEAVY_OPS = new Set([
+  "sin",
+  "cos",
+  "tan",
+  "asin",
+  "acos",
+  "atan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "asinh",
+  "acosh",
+  "atanh",
+  "exp",
+  "expm1",
+  "log",
+  "log1p",
+  "log2",
+  "log10",
+  "pow",
+  "atan2",
+  "hypot",
+]);
+
+function countHeavyOps(expr: JitExpr): number {
+  switch (expr.tag) {
+    case "NumberLiteral":
+    case "Var":
+    case "ImagLiteral":
+      return 0;
+    case "Binary":
+      return (
+        (expr.op === BinaryOperation.Pow || expr.op === BinaryOperation.ElemPow
+          ? 1
+          : 0) +
+        countHeavyOps(expr.left) +
+        countHeavyOps(expr.right)
+      );
+    case "Unary":
+      return countHeavyOps(expr.operand);
+    case "Call":
+      return (
+        (HEAVY_OPS.has(expr.name) ? 1 : 0) +
+        expr.args.reduce((n, a) => n + countHeavyOps(a), 0)
+      );
+    default:
+      return 0;
+  }
+}
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -164,10 +219,18 @@ function walkForScalars(
 
 // ── Main entry point ──────────────────────────────────────────────────
 
+/** Minimum element count before `#pragma omp parallel for simd` kicks
+ *  in. Below this the thread-spawn cost dominates the work — same
+ *  threshold the C-JIT uses, overridable via `NUMBL_OMP_THRESHOLD`. */
+function ompParallelThreshold(): number {
+  return parseInt(process.env.NUMBL_OMP_THRESHOLD || "", 10) || 100_000;
+}
+
 export function emitChainKernel(
   chain: FusibleChain,
   allTensorVars: ReadonlySet<string>,
-  outputTensorNames: ReadonlySet<string>
+  outputTensorNames: ReadonlySet<string>,
+  par: boolean
 ): KernelEmitResult | null {
   const { writeBack } = determineWriteBack(chain, outputTensorNames);
   // A kernel must produce *something* — either tensor write-back or a
@@ -254,9 +317,26 @@ export function emitChainKernel(
     postLines.push(`    *out_acc = ${reduceAccC};`);
   }
 
+  // Choose the loop pragma. `--par` upgrades tensor-writeback loops to
+  // `parallel for simd` when the body has heavy transcendentals — the
+  // spawn overhead only pays off past ~100 cycles of per-element work.
+  // Arithmetic-only chains stick to plain `simd` because threads would
+  // add overhead that exceeds the memory-bandwidth-bound body's time.
+  // Reduction chains also stick to `simd` since the serial scalar acc
+  // can't be parallelized without a `reduction(...)` clause.
+  const heavyOps = chain.assigns.reduce(
+    (n, a) => n + countHeavyOps(a.expr),
+    0
+  );
+  const useParallel =
+    par && !chain.reduction && writeBack.size > 0 && heavyOps > 0;
+  const pragma = useParallel
+    ? `    #pragma omp parallel for simd if(n >= ${ompParallelThreshold()})`
+    : "    #pragma omp simd";
+
   const bodyStr = [
     ...prologueLines,
-    "    #pragma omp simd",
+    pragma,
     "    for (int64_t i = 0; i < n; i++) {",
     ...bodyLines,
     "    }",

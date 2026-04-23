@@ -41,8 +41,19 @@ function install(): void {
     const headerBeforeParen = koffiSig.slice(0, parenIdx).trim();
     const fnName = headerBeforeParen.split(/\s+/).pop() ?? "kernel";
 
-    const loaded = compileAndLoad(cSource, koffiSig, fnName, msg =>
-      process.stderr.write(`[e1] ${msg}\n`)
+    // Link with -fopenmp when the compiler supports it so `#pragma omp
+    // parallel for` actually spawns threads. Without this, the pragma is
+    // silently reduced to a serial loop. Mirrors the unconditional link
+    // in c/install.ts — cost is negligible for kernels that don't use
+    // the pragma (the runtime is only brought in if a parallel region
+    // runs).
+    const ompLink = cJitOpenmpAvailable();
+    const loaded = compileAndLoad(
+      cSource,
+      koffiSig,
+      fnName,
+      msg => process.stderr.write(`[e1] ${msg}\n`),
+      ompLink ? ["-fopenmp"] : undefined
     );
     if (!loaded) {
       // Fall back: the helper returns a function that throws at call

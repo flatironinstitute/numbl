@@ -65,6 +65,13 @@ per-element body. Kernels 5–6 still run per-op since `./` (Smith's
 method branches break SIMD) and `abs(complex)` (complex→real type
 transition mid-chain) are outside the fused-emitter envelope.
 
+`--opt e1 --par` deliberately does NOT thread complex chains (same
+policy as `--opt 2 --fuse --par`'s complex emitter): the per-element
+body is only ~6 flops split across paired re/im buffers, so thread-
+spawn overhead swamps the compute win even at N = 500k. Measured
+`--opt e1 --par` numbers on this benchmark match `--opt e1` within
+noise; they're omitted from the table to avoid clutter.
+
 ## What fuses, what doesn't (complex chains)
 
 The complex per-element emitter supports:

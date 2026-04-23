@@ -44,17 +44,23 @@ Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 | ------------------------------ | -----: | -----: | -----: | ------: | -----: | -----: |
 | `--opt 0` (interpreter)        | 5.02 s | 1.11 s | 2.30 s |  0.41 s | 0.26 s | 0.94 s |
 | `--opt 1` (JS-JIT)             | 3.25 s | 0.66 s | 1.40 s |  0.32 s | 0.30 s | 0.58 s |
-| `--opt e1` (experimental)      | 1.30 s | 0.10 s | 0.64 s |  0.14 s | 0.29 s | 0.12 s |
+| `--opt e1` (experimental)      | 1.26 s | 0.10 s | 0.61 s |  0.15 s | 0.29 s | 0.12 s |
+| `--opt e1 --par`               | 0.94 s | 0.10 s | 0.27 s |  0.15 s | 0.30 s | 0.13 s |
 | `--opt 2 --fuse --par` (C-JIT) | 1.21 s | 0.09 s | 0.28 s |  0.21 s | 0.26 s | 0.40 s |
 | MATLAB R2025b (1 thread)       | 4.90 s | 0.32 s | 3.45 s |  0.32 s | 0.21 s | 0.60 s |
 | MATLAB R2025b (8 threads)      | 1.81 s | 0.26 s | 0.84 s |  0.13 s | 0.25 s | 0.33 s |
 
-`--opt e1` matches `--opt 2 --fuse --par` on total wall time and wins
-the Chain kernel by ~3× — that kernel has a trailing `sum` reduction
-which e1 SIMD-vectorizes (`#pragma omp simd`) where the existing C-JIT
-fused path conservatively skips the pragma on reduction chains.
-`--opt 2 --fuse --par` wins on Unary by running a multi-threaded fused
-loop across trials; e1's outer loop is in JS so threads don't apply.
+`--opt e1 --par` auto-parallelizes chain kernels whose per-element
+body has transcendentals (`exp`, `sin`, ...), matching the C-JIT's
+heuristic: arithmetic-only bodies (Binary) stick to serial `#pragma
+omp simd` since thread-spawn overhead exceeds the memory-bandwidth-
+bound compute. Unary drops 2.3× with `--par` (0.61 → 0.27 s) and the
+overall total is now competitive with — and sometimes beats —
+`--opt 2 --fuse --par`. The Chain kernel still wins vs `--opt 2
+--fuse --par` by ~3× because e1 keeps SIMD on trailing-reduction
+chains that the existing C-JIT fused path conservatively skips.
+Reduction kernels (no tensor output) can't be parallelized without a
+`reduction(...)` clause, which e1 doesn't emit yet.
 
 ### macOS (N=2 000 000, trials=50)
 
