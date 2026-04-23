@@ -47,15 +47,32 @@ native `fmm2d` / LAPACK bridge loads don't pollute the measurement.
 - **OS:** Debian 13 (trixie), kernel 6.12.74
 - **Toolchain:** Node v24.14.1, cc 14.2.0, numbl 0.1.7
 - **MATLAB:** R2025b Update 5
-- **Measured:** 2026-04-22 19:42 UTC
+- **Measured (numbl):** 2026-04-23 11:11 UTC, post-revert of helm2d
+  kernel enablement phases 1-5 (see commit 74415ff)
+- **Measured (MATLAB):** 2026-04-22 19:42 UTC
 
 Times in seconds.
 
 | Mode                           | Total | Discretize | Build | Solve | Interior |  Eval |
 | ------------------------------ | ----: | ---------: | ----: | ----: | -------: | ----: |
-| `--opt 1` (JS-JIT)             | 7.91s |      0.37s | 3.75s | 0.42s |    0.64s | 2.46s |
-| `--opt 2` (C-JIT)              | 7.73s |      0.36s | 3.88s | 0.45s |    0.63s | 2.22s |
-| `--opt 2 --fuse` (C-JIT)       | 7.43s |      0.38s | 3.58s | 0.41s |    0.59s | 2.32s |
-| `--opt 2 --fuse --par` (C-JIT) | 8.37s |      0.37s | 4.00s | 0.40s |    0.81s | 2.38s |
+| `--opt 1` (JS-JIT)             | 6.72s |      0.35s | 2.93s | 0.41s |    0.59s | 2.14s |
+| `--opt 2` (C-JIT)              | 7.40s |      0.37s | 3.18s | 0.41s |    0.70s | 2.45s |
+| `--opt 2 --fuse` (C-JIT)       | 7.69s |      0.39s | 3.28s | 0.45s |    0.74s | 2.56s |
+| `--opt 2 --fuse --par` (C-JIT) | 7.98s |      0.40s | 3.55s | 0.47s |    0.79s | 2.45s |
 | MATLAB R2025b (1 thread)       | 6.06s |      0.03s | 4.89s | 0.29s |    0.14s | 0.74s |
 | MATLAB R2025b (8 threads)      | 3.12s |      0.03s | 1.77s | 0.54s |    0.15s | 0.65s |
+
+`--opt 1` is the fastest numbl mode on this workload. The C-JIT
+pathways (`--opt 2` and variants) all pay a net cost: chnkie's
+hot `helm2d/green` kernel is now outside the C-JIT whitelist (the
+phases 1-5 features — `besselh`, `__extractSlice2d`, `repmat`,
+3-arg `zeros`, `__extractPage3d`, `AssignIndexPage3d`, `sqrt` on
+real-nonneg — were removed), so it bails to JS-JIT while the outer
+glue still pays C-JIT compile cost. `--fuse` and `--par` can't help
+a kernel that isn't compiling.
+
+The phases-1-5 work had been added specifically to close this gap
+and at its peak narrowed `--opt 2 --fuse` to ~5% below `--opt 1`,
+but it never beat MATLAB's single-threaded run on this workload
+and it was still ~2.4× slower than MATLAB 8-thread. The code
+complexity wasn't worth that ratio.
