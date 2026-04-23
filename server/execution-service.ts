@@ -19,7 +19,6 @@ interface ExecutionRequest {
   files: ProjectFile[];
   mainScript: string;
   optimization?: number;
-  fuse?: boolean;
 }
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB
@@ -127,7 +126,7 @@ async function handleExecute(
     return;
   }
 
-  const { files, mainScript, optimization, fuse } = parsed;
+  const { files, mainScript, optimization } = parsed;
 
   if (!files || !Array.isArray(files) || files.length === 0) {
     sendJson(res, 400, {
@@ -194,9 +193,6 @@ async function handleExecute(
       const cliArgs = [numblCliPath, "run", "--stream"];
       if (optimization !== undefined) {
         cliArgs.push("--opt", String(optimization));
-      }
-      if (fuse) {
-        cliArgs.push("--fuse");
       }
       cliArgs.push(scriptPath);
       const child = spawn("node", cliArgs, {

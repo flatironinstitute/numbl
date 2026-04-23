@@ -120,8 +120,8 @@ jobs:
       - name: Build native addon
         run: npm run build:addon
 
-  test-c-jit:
-    name: Test C-JIT (--opt 2)
+  test-e1:
+    name: Test --opt e1 (JS-JIT + inline C kernels)
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -136,7 +136,7 @@ jobs:
 
       - name: Install libopenblas and libfftw3
         # Required by `npm run build:addon`, which builds both the LAPACK
-        # addon and the standalone libnumbl_ops.a that the C-JIT tensor
+        # addon and the standalone libnumbl_ops.a that the e1 kernel tensor
         # path links against.
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libfftw3-dev
 
@@ -146,16 +146,13 @@ jobs:
       - name: Bundle stdlib
         run: npm run bundle:stdlib
 
-      - name: Build native addon (includes libnumbl_ops.a for C-JIT tensor ops)
+      - name: Build native addon (includes libnumbl_ops.a for C kernel tensor ops)
         run: npm run build:addon
 
-      - name: Pre-install Node API headers
-        run: npx node-gyp install --target=$(node -p "process.versions.node")
+      - name: Run integration tests under --opt e1
+        run: npm run test:scripts:e1
 
-      - name: Run integration tests under --opt 2
-        run: npm run test:scripts:c-jit
-
-      - name: Run C-JIT end-to-end unit tests
+      - name: Run e1 kernel end-to-end unit tests
         env:
           NUMBL_CJIT_E2E: "1"
-        run: npx vitest run src/__tests__/c-jit-smoke.test.ts
+        run: npx vitest run src/__tests__/e1-kernel-smoke.test.ts

@@ -25,9 +25,6 @@ import {
   JitFuncHandleBailError,
   JitBailToInterpreter,
 } from "./js/jitHelpers.js";
-import { getCJitBackend } from "./c/registry.js";
-import { compileHybridCallees, compileHybridLoops } from "./c/hybrid.js";
-import { CJitParityError, formatCJitParityMessage } from "./c/parityError.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
 import { analyzeTopLevel } from "./jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
@@ -153,21 +150,6 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     );
   }
 
-  // C-JIT cache fast path
-  if (interp.optimization >= 2 && interp.loopCJitCache.has(cacheKey)) {
-    const cEntry = interp.loopCJitCache.get(cacheKey);
-    if (cEntry) {
-      return executeAndWriteBack(
-        interp,
-        cEntry.fn,
-        inputValues,
-        outputs,
-        cacheKey
-      );
-    }
-    // null means previous C-JIT compile failed; fall through to JS-JIT.
-  }
-
   const syntheticFn: FunctionDef = {
     name: `$top`,
     params: inputs,
@@ -183,7 +165,6 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
   );
   if (!lowered) {
     interp.loopJitCache.set(cacheKey, null);
-    interp.loopCJitCache.set(cacheKey, null);
     return false;
   }
 
@@ -196,59 +177,8 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     irHasBailRisk(lowered.body, lowered.generatedIRBodies)
   ) {
     interp.loopJitCache.set(cacheKey, null);
-    interp.loopCJitCache.set(cacheKey, null);
     return false;
   }
-
-  // ── C-JIT path (--opt >= 2) ─────────────────────────────────────────
-  let cJitBail: {
-    kind: "infeasible" | "env";
-    reason: string;
-    line?: number;
-  } | null = null;
-  if (interp.optimization >= 2 && !interp.loopCJitCache.has(cacheKey)) {
-    const backend = getCJitBackend();
-    if (backend) {
-      const res = backend.tryCompile(
-        interp,
-        syntheticFn,
-        lowered.body,
-        lowered.outputNames,
-        lowered.localVars,
-        lowered.outputType,
-        lowered.outputTypes,
-        inputTypes,
-        outputs.length,
-        lowered.generatedIRBodies
-      );
-      if (res.ok) {
-        interp.loopCJitCache.set(cacheKey, { fn: res.fn });
-        return executeAndWriteBack(
-          interp,
-          res.fn,
-          inputValues,
-          outputs,
-          cacheKey
-        );
-      }
-      interp.loopCJitCache.set(cacheKey, null);
-      cJitBail = { kind: res.kind, reason: res.reason, line: res.line };
-    }
-  }
-
-  // Hybrid: top-level body bailed from C-JIT but individual callees
-  // and top-level For/While loops may still be C-feasible. Swap those
-  // in before JS codegen so the JS-JIT'd top-level calls native code
-  // at the inner boundaries.
-  compileHybridCallees(interp, lowered.generatedIRBodies, lowered.generatedFns);
-  compileHybridLoops(
-    interp,
-    lowered.body,
-    lowered.endEnv,
-    lowered.outputNames,
-    lowered.generatedIRBodies,
-    lowered.generatedFns
-  );
 
   const currentFile = interp.currentFile;
   const mainBody = generateJS(
@@ -258,7 +188,6 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     outputs.length,
     lowered.localVars,
     currentFile,
-    interp.fuse,
     interp.experimental,
     interp.par
   );
@@ -279,28 +208,6 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
   } catch {
     interp.loopJitCache.set(cacheKey, null);
     return false;
-  }
-
-  if (
-    interp.checkCJitParity &&
-    cJitBail &&
-    !irHasIO(lowered.body, lowered.generatedIRBodies)
-  ) {
-    throw new CJitParityError(
-      formatCJitParityMessage({
-        kind: cJitBail.kind,
-        reason: cJitBail.reason,
-        reasonLine: cJitBail.line,
-        siteLabel: `top-level`,
-        file: currentFile,
-        callSiteLine: cJitBail.line ?? 0,
-        argsDesc: inputs
-          .map((n, i) => `${n}: ${jitTypeKey(inputTypes[i])}`)
-          .join(", "),
-      }),
-      cJitBail.reason,
-      cJitBail.kind
-    );
   }
 
   const paramComments = inputs

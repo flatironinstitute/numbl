@@ -1155,7 +1155,6 @@ function lowerUserFuncCall(
         calleeNargout,
         calleeResult.localVars,
         interp.currentFile,
-        interp.fuse,
         interp.experimental,
         interp.par
       );

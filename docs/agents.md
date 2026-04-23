@@ -19,7 +19,7 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS (or C at `--opt 2`), using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` / `IBuiltin.jitEmitC` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/` and the C backend (`assemble`, `feasibility`, `classify`, `context`, `abi`, `prelude`, `epilogue`, `compile`, `install`, `registry`, `hybrid`, `parityError`, `visit`, and the `emit/` subpackage) under `jit/c/`. See [developer_reference/jit/c-jit.md](developer_reference/jit/c-jit.md) for the pipeline overview.
+The JIT (`src/numbl-core/jit/`) sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` / `IBuiltin.jitEmitC` for fast codegen. Shared JIT infrastructure lives at `jit/` top level; JS backend (`jitCodegen`, `jitHelpers*`, `jsFusedCodegen`) lives under `jit/js/`. Under `--opt e1`, compiled C kernels for fusible tensor chains and pure-scalar user functions are spliced into the JS output — the kernel emitters live under `jit/e1/` and share the C emission infrastructure (`assemble`, `feasibility`, `classify`, `context`, `abi`, `prelude`, `epilogue`, `compile`, `visit`, `emit/`) under `jit/c/`. See [developer_reference/jit/e1-kernels.md](developer_reference/jit/e1-kernels.md) for the pipeline overview.
 
 ## Style
 
@@ -126,7 +126,6 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write C-JIT-generated C source to file (requires --opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -136,21 +135,20 @@ Options (for run and eval):
   --opt <level>      Optimization level (default: 1)
                        0 — interpreter (no JIT)
                        1 — JS-JIT: type-specialize hot functions/loops to JS
-                       2 — C-JIT: emit C for feasible scalar functions, compile
-                           via cc, load as a .node module, fall back to JS-JIT
-                           on infeasible IR (requires a C compiler and Node API
-                           headers; prints its compile command once to stderr)
-  --fuse             Emit fused per-element loops (C-JIT only, requires --opt 2)
-  --par              Parallelize fused loops with OpenMP threads (C-JIT only,
-                     requires --opt 2 and --fuse)
-  --check-c-jit-parity
-                     Diagnostic (requires --opt 2): throw on any C-JIT miss
-                     where JS-JIT would have compiled, to enumerate parity gaps
+                       e1 — experimental: JS-JIT outer with on-demand C
+                           kernels emitted for fusible tensor chains and
+                           pure-scalar user functions. The generated JS
+                           contains the C source inline and dispatches to
+                           the compiled kernel at runtime when N is large
+                           enough to amortise koffi overhead. Falls back
+                           to the plain JS fused loop at small N or if
+                           compilation fails.
+  --par              Parallelize fused loops with OpenMP threads (--opt e1)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)
-  NUMBL_CC                C compiler for --opt 2 (default: cc)
-  NUMBL_CFLAGS            Extra flags appended to the C-JIT compile command
+  NUMBL_CC                C compiler for --opt e1 kernels (default: cc)
+  NUMBL_CFLAGS            Extra flags appended to the C kernel compile command
   NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
                           reproducibility or debugging portability issues)
   NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in

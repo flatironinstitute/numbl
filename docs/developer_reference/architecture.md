@@ -14,7 +14,7 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 2. **Parse** — tokens to an AST.
 3. **Lower** — `LoweringContext` indexes workspace files and resolves function names, classes, and search paths. It caches parsed ASTs and stores per-file metadata (directives, external access).
 4. **Interpret** — the `Interpreter` walks the AST against a `Runtime` and an `Environment` stack. Control flow is signalled by typed exceptions (break, continue, return).
-5. **JIT (optional)** — hot user functions, hot loops, and feasible top-level scripts are specialized. The JIT lowers AST to a typed IR, then emits JS (`--opt 1` or `2`) and optionally C (`--opt 2`). Runtime type mismatches bail back to the interpreter.
+5. **JIT (optional)** — hot user functions, hot loops, and feasible top-level scripts are specialized. The JIT lowers AST to a typed IR, then emits JS (`--opt 1`); under `--opt e1` it additionally splices in compiled C kernels at fusion boundaries. Runtime type mismatches bail back to the interpreter.
 6. **Runtime values** — results are `RuntimeValue`s (numbers, tensors, strings, structs, cells, class instances, etc.). Output, plot instructions, and workspace changes flow back through callbacks on `ExecOptions`.
 
 ## Component map
@@ -26,7 +26,7 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 | LoweringContext  | Workspace/function/class resolution; AST cache; directive metadata.              |
 | Interpreter      | AST walker; drives builtin dispatch and JIT triggers.                            |
 | Runtime          | Value constructors, global/persistent stores, plot accumulator, output router.   |
-| JIT              | Type-specializes hot code to JS or C.                                            |
+| JIT              | Type-specializes hot code to JS; splices in compiled C kernels under `--opt e1`. |
 | Builtin registry | `IBuiltin` lookup by name; provides type resolution and JIT emission.            |
 | Ops layer        | Dispatches tensor kernels to the native addon or JS fallbacks.                   |
 | Stdlib bundle    | `.m` files loaded into every run's workspace.                                    |

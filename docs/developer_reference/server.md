@@ -14,7 +14,7 @@ It is not part of the library surface — it is a separate deployable.
 
 ## Why it exists
 
-The browser worker has no LAPACK/FFTW addon and no C-JIT. For workloads where that matters, the web IDE can optionally offload execution to a server that does have those things installed. The same `.m` files run in both places; the server is just a faster backend.
+The browser worker has no LAPACK/FFTW addon and no inline C kernels (`--opt e1`). For workloads where that matters, the web IDE can optionally offload execution to a server that does have those things installed. The same `.m` files run in both places; the server is just a faster backend.
 
 ## Deployment notes
 

@@ -1,11 +1,12 @@
 function tensor_ops_bench()
-    % Tensor element-wise + reduction benchmark: numbl --opt 0/1/2 vs MATLAB
+    % Tensor element-wise + reduction benchmark: numbl --opt 0/1/e1 vs MATLAB
     % vs Octave. Companion to scalar_bench.m.
     %
     % The five kernels are inlined into `run_all` (instead of being called
     % as user functions) so numbl's outer-loop JIT has a pure tensor-op
     % body to specialize — no UserCall boundary per iteration. Under
-    % --opt 1 the loops get JS-JIT'd; under --opt 2 they get C-JIT'd.
+    % --opt 1 the loops get JS-JIT'd; under --opt e1 fusible chains get
+    % compiled as inline C kernels.
     %
     % Warm-up is a low-iteration-count call to `run_all` that lands the
     % loop specializations; the timed call reuses them.
@@ -55,7 +56,7 @@ end
 function [t1, t2, t3, t4, t5, r, u, cmp_acc, red_acc, chain_acc] = run_all(x, y, trials)
     % All five kernels inlined. Each outer loop has no UserCall in its
     % body, so the loop-JIT can specialize the full loop as a single
-    % unit under both --opt 1 and --opt 2.
+    % unit under both --opt 1 and --opt e1.
 
     % Initialize outputs so the function is well-defined even if
     % `trials == 0`. For the timed calls (trials >= 1) these are

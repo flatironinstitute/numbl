@@ -37,11 +37,9 @@ import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
 
-// Side-effect import: installs the C-JIT backend (--opt 2). Must be Node-only
-// — this file imports child_process/fs/etc. that don't belong in the web build.
-import "./numbl-core/jit/c/install.js";
-// Side-effect import: installs the e1 experimental kernel pipeline
-// (--opt e1). Also Node-only — shares compile.ts with C-JIT.
+// Side-effect import: installs the e1 kernel pipeline (--opt e1). Must be
+// Node-only — this file imports child_process/fs/etc. that don't belong in
+// the web build.
 import "./numbl-core/jit/e1/install.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
@@ -207,7 +205,7 @@ function findTestFiles(dir: string): string[] {
 async function runTests(
   dir: string,
   optimization?: number,
-  checkCJitParity?: boolean
+  experimental?: string
 ) {
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
@@ -220,9 +218,6 @@ async function runTests(
   let pass = 0;
   let fail = 0;
   const failedScripts: string[] = [];
-  const trackCJit = (optimization ?? 1) >= 2;
-  let scriptsWithCJit = 0;
-  let totalCJitCompilations = 0;
 
   for (const filepath of testFiles) {
     const rel = relative(process.cwd(), filepath);
@@ -232,21 +227,13 @@ async function runTests(
     const searchPaths = [scriptDir];
     const workspaceFiles = scanMFiles(scriptDir, filepath);
 
-    let cJitCountThisScript = 0;
-    const onCJitCompile = trackCJit
-      ? () => {
-          cJitCountThisScript++;
-        }
-      : undefined;
-
     try {
       const result = executeCode(
         source,
         {
           displayResults: true,
           optimization: optimization ?? 1,
-          checkCJitParity: checkCJitParity ?? false,
-          onCJitCompile,
+          experimental,
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -260,20 +247,11 @@ async function runTests(
       const lines = outputText.split("\n").filter(l => l.length > 0);
       const lastLine = lines.length > 0 ? lines[lines.length - 1] : "";
 
-      const cJitMark =
-        trackCJit && cJitCountThisScript > 0
-          ? ` [C-JIT x${cJitCountThisScript}]`
-          : "";
-
       if (lastLine === "SUCCESS") {
-        console.log(`PASS  ${rel}${cJitMark}`);
+        console.log(`PASS  ${rel}`);
         pass++;
-        if (cJitCountThisScript > 0) {
-          scriptsWithCJit++;
-          totalCJitCompilations += cJitCountThisScript;
-        }
       } else {
-        console.log(`FAIL  ${rel}${cJitMark}`);
+        console.log(`FAIL  ${rel}`);
         console.log(outputText.replace(/^/gm, "      "));
         fail++;
         failedScripts.push(rel);
@@ -293,13 +271,6 @@ async function runTests(
 
   console.log("");
   console.log(`Results: ${pass} passed, ${fail} failed`);
-  if (trackCJit) {
-    const total = testFiles.length;
-    console.log(
-      `C-JIT: ${scriptsWithCJit} of ${total} scripts exercised C-JIT ` +
-        `(${totalCJitCompilations} total compilations)`
-    );
-  }
 
   if (fail > 0) {
     console.log("");
@@ -340,7 +311,6 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write C-JIT-generated C source to file (requires --opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -350,28 +320,20 @@ Options (for run and eval):
   --opt <level>      Optimization level (default: 1)
                        0 — interpreter (no JIT)
                        1 — JS-JIT: type-specialize hot functions/loops to JS
-                       2 — C-JIT: emit C for feasible scalar functions, compile
-                           via cc, load as a .node module, fall back to JS-JIT
-                           on infeasible IR (requires a C compiler and Node API
-                           headers; prints its compile command once to stderr)
                        e1 — experimental: JS-JIT outer with on-demand C
-                           kernels emitted for fusible tensor chains. The
-                           generated JS contains the C source inline and
-                           dispatches to the compiled kernel at runtime
-                           when N is large enough to amortise koffi
-                           overhead. Falls back to the plain JS fused
-                           loop at small N or if compilation fails.
-  --fuse             Emit fused per-element loops (C-JIT only, requires --opt 2)
-  --par              Parallelize fused loops with OpenMP threads (C-JIT only,
-                     requires --opt 2 and --fuse)
-  --check-c-jit-parity
-                     Diagnostic (requires --opt 2): throw on any C-JIT miss
-                     where JS-JIT would have compiled, to enumerate parity gaps
+                           kernels emitted for fusible tensor chains and
+                           pure-scalar user functions. The generated JS
+                           contains the C source inline and dispatches to
+                           the compiled kernel at runtime when N is large
+                           enough to amortise koffi overhead. Falls back
+                           to the plain JS fused loop at small N or if
+                           compilation fails.
+  --par              Parallelize fused loops with OpenMP threads (--opt e1)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
-  NUMBL_CC                C compiler for --opt 2 (default: cc)
-  NUMBL_CFLAGS            Extra flags appended to the C-JIT compile command
+  NUMBL_CC                C compiler for --opt e1 kernels (default: cc)
+  NUMBL_CFLAGS            Extra flags appended to the C kernel compile command
   NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
                           reproducibility or debugging portability issues)
   NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in
@@ -382,7 +344,6 @@ Environment variables:
 
 interface ParsedOptions {
   dumpJs: string | undefined;
-  dumpC: string | undefined;
   dumpAst: boolean;
   verbose: boolean;
   stream: boolean;
@@ -394,15 +355,12 @@ interface ParsedOptions {
   optimization: number;
   /** Experimental variant selected via `--opt e1`, `--opt e2`, etc. */
   experimental: string | undefined;
-  fuse: boolean;
   par: boolean;
-  checkCJitParity: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
   const opts: ParsedOptions = {
     dumpJs: undefined,
-    dumpC: undefined,
     dumpAst: false,
     verbose: false,
     stream: false,
@@ -413,9 +371,7 @@ function parseOptions(args: string[]): ParsedOptions {
     profileOutput: undefined,
     optimization: 1,
     experimental: undefined,
-    fuse: false,
     par: false,
-    checkCJitParity: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -442,14 +398,6 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.dumpJs = resolve(process.cwd(), args[i]);
-        break;
-      case "--dump-c":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --dump-c requires an output filename");
-          process.exit(1);
-        }
-        opts.dumpC = resolve(process.cwd(), args[i]);
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -511,15 +459,15 @@ function parseOptions(args: string[]): ParsedOptions {
           console.error("Error: --opt requires a valid number");
           process.exit(1);
         }
-        break;
-      case "--fuse":
-        opts.fuse = true;
+        if (opts.optimization === 2) {
+          console.error(
+            "Error: --opt 2 (C-JIT whole-function) has been removed. Use --opt e1 instead."
+          );
+          process.exit(1);
+        }
         break;
       case "--par":
         opts.par = true;
-        break;
-      case "--check-c-jit-parity":
-        opts.checkCJitParity = true;
         break;
       default:
         if (args[i].startsWith("-")) {
@@ -528,13 +476,6 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.positional.push(args[i]);
     }
-  }
-
-  if (opts.checkCJitParity && opts.optimization < 2) {
-    console.error(
-      "Error: --check-c-jit-parity requires --opt 2 (the C-JIT path)"
-    );
-    process.exit(1);
   }
 
   return opts;
@@ -695,20 +636,14 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js / --dump-c: JIT compilations are collected in
-  // result.generatedJS / result.generatedC by executeCode and written by
-  // finalizeDumpFile at the end. Just clear any previous dump file here.
+  // Set up --dump-js: JIT compilations are collected in result.generatedJS
+  // by executeCode and written by finalizeDumpFile at the end. Just clear
+  // any previous dump file here.
   const onJitCompile:
     | ((description: string, jsCode: string) => void)
     | undefined = undefined;
-  const onCJitCompile:
-    | ((description: string, cSource: string) => void)
-    | undefined = undefined;
   if (opts.dumpJs) {
     writeFileSync(opts.dumpJs, "");
-  }
-  if (opts.dumpC) {
-    writeFileSync(opts.dumpC, "");
   }
 
   try {
@@ -729,7 +664,6 @@ async function executeWithOptions(
               streamLine({ type: "drawnow", plotInstructions });
             },
             onJitCompile,
-            onCJitCompile,
 
             fileIO,
             system,
@@ -737,9 +671,7 @@ async function executeWithOptions(
 
             optimization: opts.optimization,
             experimental: opts.experimental,
-            fuse: opts.fuse,
             par: opts.par,
-            checkCJitParity: opts.checkCJitParity,
           },
           workspaceFiles,
           mainFileName,
@@ -756,13 +688,9 @@ async function executeWithOptions(
         if (opts.dumpJs) {
           finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
         }
-        if (opts.dumpC) {
-          finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
-        }
         streamLine({
           type: "done",
           generatedJS: result.generatedJS || undefined,
-          generatedC: result.generatedC || undefined,
         });
       } catch (error) {
         const diags = diagnoseErrors(error, code, mainFileName, workspaceFiles);
@@ -794,16 +722,13 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
-          onCJitCompile,
 
           fileIO,
           system,
           onInput,
           optimization: opts.optimization,
           experimental: opts.experimental,
-          fuse: opts.fuse,
           par: opts.par,
-          checkCJitParity: opts.checkCJitParity,
         },
         workspaceFiles,
         mainFileName,
@@ -813,9 +738,6 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     } else {
@@ -837,16 +759,13 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
-          onCJitCompile,
 
           fileIO,
           system,
           onInput,
           optimization: opts.optimization,
           experimental: opts.experimental,
-          fuse: opts.fuse,
           par: opts.par,
-          checkCJitParity: opts.checkCJitParity,
         },
         workspaceFiles,
         mainFileName,
@@ -856,9 +775,6 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     }
@@ -870,21 +786,13 @@ async function executeWithOptions(
       getSourceForFile(file, mainFileName, code, workspaceFiles);
     console.error(formatDiagnostics(diags, getSource));
 
-    // Still finalize the dump file on error so the user can inspect the generated JS / C
+    // Still finalize the dump file on error so the user can inspect the generated JS
     if (opts.dumpJs) {
       const errWithInfo = error as Error & { generatedJS?: string };
       finalizeDumpFile(
         opts.dumpJs,
         mainFileName,
         errWithInfo.generatedJS ?? "// (main script JS not available)"
-      );
-    }
-    if (opts.dumpC) {
-      const errWithInfo = error as Error & { generatedC?: string };
-      finalizeDumpFile(
-        opts.dumpC,
-        mainFileName,
-        errWithInfo.generatedC ?? "/* (main script C not available) */"
       );
     }
 
@@ -1260,7 +1168,7 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.optimization, testOpts.checkCJitParity);
+      await runTests(dir, testOpts.optimization, testOpts.experimental);
       break;
     }
     case "build-addon":

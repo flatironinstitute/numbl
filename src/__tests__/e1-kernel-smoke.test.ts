@@ -11,8 +11,9 @@ import { checkCFeasibility } from "../numbl-core/jit/c/feasibility.js";
 import type { JitStmt, JitType } from "../numbl-core/jit/jitTypes.js";
 import { BinaryOperation } from "../numbl-core/parser/types.js";
 
-// Register the C-JIT backend so executeCode-based tests exercise it.
-import "../numbl-core/jit/c/install.js";
+// Register the e1 kernel pipeline so executeCode-based tests can reach the
+// compiled kernel path.
+import "../numbl-core/jit/e1/install.js";
 
 const E2E_ENABLED = process.env.NUMBL_CJIT_E2E === "1";
 function hasCc(): boolean {
@@ -234,24 +235,9 @@ end
 result = x;
 `;
     const js = executeCode(script, { optimization: 1 });
-    const cj = executeCode(script, { optimization: 2 });
-    expect(cj.variableValues["result"]).toBe(js.variableValues["result"]);
+    const e1 = executeCode(script, { optimization: 1, experimental: "e1" });
+    expect(e1.variableValues["result"]).toBe(js.variableValues["result"]);
   });
-
-  itSkipWithoutCc(
-    "--dump-c path: generatedC is populated when C-JIT fires",
-    () => {
-      const script = `
-function y = square(x)
-  y = x*x;
-end
-result = square(7);
-`;
-      const res = executeCode(script, { optimization: 2 });
-      expect(typeof res.generatedC).toBe("string");
-      expect(res.variableValues["result"]).toBe(49);
-    }
-  );
 });
 
 // ── Tensor feasibility ───────────────────────────────────────────────────
@@ -600,21 +586,21 @@ describe("C-JIT: NUMBL_OMP_THRESHOLD is read at emit time", () => {
   });
 });
 
-describe("C-JIT: tensor parity with JS-JIT (E2E)", () => {
+describe("--opt e1: tensor parity with JS-JIT (E2E)", () => {
   const available = E2E_ENABLED && hasCc();
   const itSkipWithoutCc = available ? it : it.skip;
 
   const parity = (script: string, keys: string[], approx = false) => {
     const js = executeCode(script, { optimization: 1 });
-    const cj = executeCode(script, { optimization: 2 });
+    const e1 = executeCode(script, { optimization: 1, experimental: "e1" });
     for (const k of keys) {
-      if (approx && typeof cj.variableValues[k] === "number") {
-        expect(cj.variableValues[k], `${k} mismatch`).toBeCloseTo(
+      if (approx && typeof e1.variableValues[k] === "number") {
+        expect(e1.variableValues[k], `${k} mismatch`).toBeCloseTo(
           js.variableValues[k] as number,
           8
         );
       } else {
-        expect(cj.variableValues[k], `${k} mismatch`).toEqual(
+        expect(e1.variableValues[k], `${k} mismatch`).toEqual(
           js.variableValues[k]
         );
       }

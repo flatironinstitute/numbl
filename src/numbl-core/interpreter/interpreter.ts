@@ -82,12 +82,6 @@ export class Interpreter {
     { fn: (...args: unknown[]) => unknown; source: string } | null
   >();
 
-  /** @internal Per-instance cache for C-JIT-compiled loops (parallel to loopJitCache). */
-  loopCJitCache = new Map<
-    string,
-    { fn: (...args: unknown[]) => unknown } | null
-  >();
-
   /** @internal Progressive type widening for loop JIT: location -> last unified input types. */
   loopLastInputTypes = new Map<
     string,
@@ -103,42 +97,24 @@ export class Interpreter {
    * Optimization level:
    *   0 — pure AST interpreter, no JIT.
    *   1 — JS-JIT (default): type-specialize hot functions/loops to JS via `new Function()`.
-   *   2 — C-JIT: additionally emit C for feasible scalar specializations,
-   *       compile to a native `.node` module, and invoke via N-API.
-   *       Infeasible IR transparently falls back to the JS-JIT path.
    */
   optimization: number = 1;
 
   /**
-   * Experimental opt variant selector — e.g. `"e1"` for the prototype
-   * that keeps JS-JIT as the outer and emits on-demand C kernels for
-   * fusible tensor chains. Undefined for the standard `--opt <n>` path.
+   * Experimental opt variant selector — e.g. `"e1"` for the mode that
+   * keeps JS-JIT as the outer and emits on-demand C kernels for fusible
+   * tensor chains and pure-scalar user functions. Undefined for the
+   * standard `--opt <n>` path.
    */
   experimental?: string;
-
-  /** Emit fused per-element loops in C-JIT (--fuse flag). */
-  fuse: boolean = false;
 
   /** Parallelize fused loops with OpenMP threads (--par flag). */
   par: boolean = false;
 
-  /**
-   * Diagnostic mode (`--check-c-jit-parity`, only meaningful with `--opt 2`).
-   * When set, any C-JIT miss where JS-JIT would have compiled throws a
-   * `CJitParityError` instead of silently falling back — surfacing parity
-   * gaps as a punch list of features to implement in the C-JIT. Env
-   * failures (missing `cc`, compile failure) also throw, since the user
-   * explicitly asked to audit C-JIT coverage.
-   */
-  checkCJitParity: boolean = false;
-
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 
-  /** Callback for C-JIT compilation logging (--dump-c). */
-  onCJitCompile?: (description: string, cSource: string) => void;
-
-  /** Verbose log sink (plumbed from ExecOptions.log; used by C-JIT for diagnostics). */
+  /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
 
   constructor(
@@ -169,7 +145,6 @@ export class Interpreter {
     }
     this.functionDefCache.clear();
     this.loopJitCache.clear();
-    this.loopCJitCache.clear();
     this.loopLastInputTypes.clear();
     this.compileInProgress.clear();
     this.ctx.registry.fileContexts.clear();

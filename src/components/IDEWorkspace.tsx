@@ -161,14 +161,12 @@ export function IDEWorkspace({
     [files, systemFiles]
   );
   const [optimization, setOptimization] = useState(1);
-  const [fuse, setFuse] = useState(false);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
     number
   > | null>(null);
   const [generatedJS, setGeneratedJS] = useState("");
-  const [generatedC, setGeneratedC] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -176,7 +174,7 @@ export function IDEWorkspace({
   );
   const [outputTab, setOutputTab] = useState(0);
   const [internalsSubTab, setInternalsSubTab] = useState<
-    "js" | "c" | "ast" | "dispatch"
+    "js" | "ast" | "dispatch"
   >("js");
   const [allFilesRep, setAllFilesRep] = useState<
     { name: string; ast: unknown; irProgram: unknown }[]
@@ -301,11 +299,6 @@ export function IDEWorkspace({
       optimization,
     });
   }, [optimization]);
-
-  // Sync fuse flag to worker when toggled
-  useEffect(() => {
-    workerRef.current?.postMessage({ type: "set_fuse", fuse });
-  }, [fuse]);
 
   // Panel sizing
   const initialSidebarWidth = window.innerWidth >= 1200 ? 260 : 200;
@@ -456,7 +449,6 @@ export function IDEWorkspace({
         if (msg.type === "done") {
           activeExecutionMode.current = null;
           setGeneratedJS(msg.generatedJS || "");
-          setGeneratedC(msg.generatedC || "");
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
@@ -613,7 +605,6 @@ export function IDEWorkspace({
             files: remoteFiles,
             mainScript: activeFile.name,
             optimization,
-            fuse,
           },
           {
             onOutput: (text: string) => {
@@ -631,7 +622,6 @@ export function IDEWorkspace({
         );
 
         setGeneratedJS(result.generatedJS || "");
-        setGeneratedC(result.generatedC || "");
 
         if (!result.success) {
           setOutput(
@@ -679,7 +669,6 @@ export function IDEWorkspace({
         displayResults: true,
         maxIterations: 10000000,
         optimization,
-        fuse,
       },
       vfsFiles,
       persistent: persistWorkspace,
@@ -693,7 +682,6 @@ export function IDEWorkspace({
     remoteServiceUrl,
     handlePlotInstruction,
     optimization,
-    fuse,
     buildWorkerFiles,
     contentCache,
     persistWorkspace,
@@ -1029,22 +1017,12 @@ export function IDEWorkspace({
                 title={
                   optimization === 0
                     ? "Interpreter only (click for JS-JIT)"
-                    : optimization === 1
-                      ? useRemoteExecution
-                        ? "JS-JIT (click for C-JIT)"
-                        : "JS-JIT (click to disable)"
-                      : "C-JIT (click to disable)"
+                    : "JS-JIT (click to disable)"
                 }
               >
                 <Typography
                   variant="caption"
-                  onClick={() =>
-                    setOptimization(o => {
-                      if (o === 0) return 1;
-                      if (o === 1 && useRemoteExecution) return 2;
-                      return 0;
-                    })
-                  }
+                  onClick={() => setOptimization(o => (o === 0 ? 1 : 0))}
                   sx={{
                     cursor: "pointer",
                     fontSize: "0.7rem",
@@ -1058,36 +1036,7 @@ export function IDEWorkspace({
                     userSelect: "none",
                   }}
                 >
-                  {optimization === 0
-                    ? "no jit"
-                    : optimization === 1
-                      ? "jit"
-                      : "jit-c"}
-                </Typography>
-              </Tooltip>
-              <Tooltip
-                title={
-                  fuse
-                    ? "Tensor fusion enabled (click to disable)"
-                    : "Tensor fusion disabled (click to enable)"
-                }
-              >
-                <Typography
-                  variant="caption"
-                  onClick={() => setFuse(f => !f)}
-                  sx={{
-                    cursor: "pointer",
-                    fontSize: "0.7rem",
-                    px: 0.5,
-                    py: 0.1,
-                    borderRadius: 0.5,
-                    bgcolor: fuse ? "action.selected" : "transparent",
-                    opacity: fuse ? 1 : 0.5,
-                    "&:hover": { opacity: 1 },
-                    userSelect: "none",
-                  }}
-                >
-                  {fuse ? "fuse" : "no fuse"}
+                  {optimization === 0 ? "no jit" : "jit"}
                 </Typography>
               </Tooltip>
               {activeFile && (
@@ -1227,19 +1176,6 @@ export function IDEWorkspace({
                 >
                   JavaScript
                 </ToggleButton>
-                {generatedC && (
-                  <ToggleButton
-                    value="c"
-                    sx={{
-                      py: 0,
-                      px: 1,
-                      fontSize: "0.75rem",
-                      textTransform: "none",
-                    }}
-                  >
-                    C
-                  </ToggleButton>
-                )}
                 <ToggleButton
                   value="ast"
                   sx={{
@@ -1273,17 +1209,6 @@ export function IDEWorkspace({
                     customStyle={{ margin: 0, fontSize: 12 }}
                   >
                     {generatedJS || ""}
-                  </SyntaxHighlighter>
-                </Box>
-              )}
-              {internalsSubTab === "c" && (
-                <Box sx={{ height: "100%", overflow: "auto" }}>
-                  <SyntaxHighlighter
-                    language="c"
-                    style={githubGist}
-                    customStyle={{ margin: 0, fontSize: 12 }}
-                  >
-                    {generatedC || ""}
                   </SyntaxHighlighter>
                 </Box>
               )}

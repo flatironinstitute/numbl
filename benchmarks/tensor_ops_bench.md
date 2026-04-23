@@ -2,8 +2,8 @@
 
 Tensor element-wise + reduction benchmark. Five kernels on real Float64
 vectors (N=2M elements), 50 trials each. The loop body is inlined so the
-loop-JIT can specialize the full iteration as a single C function under
-`--opt 2`.
+loop-JIT can specialize the full iteration as a single unit under
+`--opt e1`.
 
 ## Kernels
 
@@ -20,12 +20,10 @@ loop-JIT can specialize the full iteration as a single C function under
 ```bash
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 0          # interpreter
 npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 1          # JS-JIT
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2          # C-JIT (per-op)
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2 --fuse        # C-JIT (fused)
-npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt 2 --fuse --par  # C-JIT (fused+parallel)
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt e1         # JS-JIT + inline C kernels
+npx tsx src/cli.ts run benchmarks/tensor_ops_bench.m --opt e1 --par   # + OpenMP
 matlab -batch "run('benchmarks/tensor_ops_bench.m')"
 (cd benchmarks && octave --no-gui --quiet --eval tensor_ops_bench)
-bash benchmarks/tensor_ops_bench_compare.sh                           # all of the above
 ```
 
 All runs produce the same check values (to FP rounding).
@@ -40,27 +38,22 @@ All runs produce the same check values (to FP rounding).
 
 Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 
-| Mode                           |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
-| ------------------------------ | -----: | -----: | -----: | ------: | -----: | -----: |
-| `--opt 0` (interpreter)        | 5.02 s | 1.11 s | 2.30 s |  0.41 s | 0.26 s | 0.94 s |
-| `--opt 1` (JS-JIT)             | 3.25 s | 0.66 s | 1.40 s |  0.32 s | 0.30 s | 0.58 s |
-| `--opt e1` (experimental)      | 1.32 s | 0.09 s | 0.62 s |  0.20 s | 0.29 s | 0.12 s |
-| `--opt e1 --par`               | 0.96 s | 0.09 s | 0.26 s |  0.20 s | 0.29 s | 0.12 s |
-| `--opt 2 --fuse --par` (C-JIT) | 1.21 s | 0.09 s | 0.28 s |  0.21 s | 0.26 s | 0.40 s |
-| MATLAB R2025b (1 thread)       | 4.90 s | 0.32 s | 3.45 s |  0.32 s | 0.21 s | 0.60 s |
-| MATLAB R2025b (8 threads)      | 1.81 s | 0.26 s | 0.84 s |  0.13 s | 0.25 s | 0.33 s |
+| Mode                      |  Total | Binary |  Unary | Cmp+Red | Reduce |  Chain |
+| ------------------------- | -----: | -----: | -----: | ------: | -----: | -----: |
+| `--opt 0` (interpreter)   | 5.02 s | 1.11 s | 2.30 s |  0.41 s | 0.26 s | 0.94 s |
+| `--opt 1` (JS-JIT)        | 3.25 s | 0.66 s | 1.40 s |  0.32 s | 0.30 s | 0.58 s |
+| `--opt e1`                | 1.32 s | 0.09 s | 0.62 s |  0.20 s | 0.29 s | 0.12 s |
+| `--opt e1 --par`          | 0.96 s | 0.09 s | 0.26 s |  0.20 s | 0.29 s | 0.12 s |
+| MATLAB R2025b (1 thread)  | 4.90 s | 0.32 s | 3.45 s |  0.32 s | 0.21 s | 0.60 s |
+| MATLAB R2025b (8 threads) | 1.81 s | 0.26 s | 0.84 s |  0.13 s | 0.25 s | 0.33 s |
 
 `--opt e1 --par` auto-parallelizes chain kernels whose per-element
-body has transcendentals (`exp`, `sin`, ...), matching the C-JIT's
-heuristic: arithmetic-only bodies (Binary) stick to serial `#pragma
-omp simd` since thread-spawn overhead exceeds the memory-bandwidth-
-bound compute. Unary drops 2.3× with `--par` (0.61 → 0.27 s) and the
-overall total is now competitive with — and sometimes beats —
-`--opt 2 --fuse --par`. The Chain kernel still wins vs `--opt 2
---fuse --par` by ~3× because e1 keeps SIMD on trailing-reduction
-chains that the existing C-JIT fused path conservatively skips.
-Reduction kernels (no tensor output) can't be parallelized without a
-`reduction(...)` clause, which e1 doesn't emit yet.
+body has transcendentals (`exp`, `sin`, ...); arithmetic-only bodies
+(Binary) stick to serial `#pragma omp simd` since thread-spawn
+overhead exceeds the memory-bandwidth-bound compute. Unary drops 2.3×
+with `--par` (0.61 → 0.27 s). Reduction kernels (no tensor output)
+can't be parallelized without a `reduction(...)` clause, which e1
+doesn't emit yet.
 
 ### macOS (N=2 000 000, trials=50)
 
@@ -69,51 +62,24 @@ Reduction kernels (no tensor output) can't be parallelized without a
 - **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
 - **MATLAB:** R2026a (26.1.0)
 
-| Mode                            |      Total |     Binary |      Unary | Cmp+Red |     Reduce |      Chain |
-| ------------------------------- | ---------: | ---------: | ---------: | ------: | ---------: | ---------: |
-| `--opt 0` (interpreter)         |     3.58 s |     0.48 s |     1.55 s |  0.46 s |     0.67 s |     0.42 s |
-| `--opt 1` (JS-JIT)              |     2.87 s |     0.15 s |     1.23 s |  0.44 s |     0.67 s |     0.38 s |
-| `--opt 2` (C-JIT)               |     2.80 s |     0.16 s |     1.20 s |  0.43 s |     0.68 s |     0.34 s |
-| `--opt 2 --fuse` (C-JIT)        |     1.93 s |     0.03 s |     0.93 s |  0.11 s |     0.67 s |     0.20 s |
-| `--opt 2 --fuse --par` (gcc-15) |     1.11 s |     0.04 s | **0.11 s** |  0.10 s |     0.65 s |     0.21 s |
-| MATLAB R2026a (1 thread)        |     2.83 s |     0.20 s |     1.81 s |  0.12 s |     0.31 s |     0.40 s |
-| MATLAB R2026a (16 threads)      | **0.46 s** | **0.05 s** |     0.22 s |  0.07 s | **0.05 s** | **0.07 s** |
+| Mode                       |      Total |     Binary |  Unary | Cmp+Red |     Reduce |      Chain |
+| -------------------------- | ---------: | ---------: | -----: | ------: | ---------: | ---------: |
+| `--opt 0` (interpreter)    |     3.58 s |     0.48 s | 1.55 s |  0.46 s |     0.67 s |     0.42 s |
+| `--opt 1` (JS-JIT)         |     2.87 s |     0.15 s | 1.23 s |  0.44 s |     0.67 s |     0.38 s |
+| MATLAB R2026a (1 thread)   |     2.83 s |     0.20 s | 1.81 s |  0.12 s |     0.31 s |     0.40 s |
+| MATLAB R2026a (16 threads) | **0.46 s** | **0.05 s** | 0.22 s |  0.07 s | **0.05 s** | **0.07 s** |
 
-Adding `--par` (with `NUMBL_CC=gcc-15`, since Apple clang doesn't
-ship with OpenMP thread support) auto-parallelizes fused loops via
-`#pragma omp parallel for` — Unary drops 8× (0.93 → 0.11 s) and total
-wall time drops 1.7×. MATLAB 16-thread still wins overall (0.46 vs
-1.11 s) because this benchmark's `Reductions` kernel calls per-statement
-`sum`/`mean`/`max`/`min`, none of which are fused or parallelized in
-numbl yet — that single kernel accounts for 0.65 s of the remaining gap.
+(macOS `--opt e1` numbers not yet re-collected post-cleanup; see
+Linux table above for the e1 story.)
 
-## C-JIT architecture
+## Architecture notes
 
-### Per-op mode (`--opt 2`)
-
-The C-JIT emits pure C functions with raw `double*` / `int64_t`
-parameters — no N-API, no `napi_value`, no `napi_env`. Each compiled
-loop body is a self-contained `.so` loaded via [koffi](https://koffi.dev)
-(`dlopen`/`dlsym`, no module registration).
-
-Generated C for the binary kernel (simplified):
-
-```c
-for (double __t1 = 1.0; __t1 <= v_trials; __t1 += 1.0) {
-    numbl_real_binary_elemwise(ADD, v_x_len, v_x_data, v_y_data, v_r_data);
-    if (!__s1_data) __s1_data = malloc(v_x_len * sizeof(double));
-    numbl_real_scalar_binary_elemwise(MUL, v_x_len, 0.5, v_x_data, 1, __s1_data);
-    numbl_real_binary_elemwise(SUB, v_x_len, v_r_data, __s1_data, v_r_data);
-    ...
-}
-```
-
-### Fused mode (`--opt 2 --fuse`)
-
-The fusion pass (`cFusion.ts`) scans the loop body for runs of
-consecutive tensor element-wise assigns and collapses them into a single
-per-element `for` loop (`cFusedCodegen.ts`). Trailing reductions
-(`acc += sum(r)`) are absorbed as inline accumulators.
+`--opt e1` detects fusible runs of consecutive tensor element-wise
+assigns and emits each as a single per-element C loop. Trailing
+reductions (`acc += sum(r)`) are absorbed as inline accumulators.
+The JS wrapper dispatches to the compiled kernel when `N` exceeds a
+threshold (default 100 000); below that, the plain inline JS fused
+loop runs instead. See [docs/developer_reference/jit/e1-kernels.md](../docs/developer_reference/jit/e1-kernels.md).
 
 Generated C for the binary kernel:
 
@@ -150,10 +116,9 @@ for (double __t1 = 1.0; __t1 <= v_trials; __t1 += 1.0) {
 - **Domain-restricted unaries** (`sqrt`, `log`, `log2`, `log10`, `asin`,
   `acos`) bail to the interpreter — MATLAB promotes out-of-domain inputs
   to complex, libnumbl_ops returns NaN. Same behavior as JS-JIT.
-- **Complex tensors** are not in the C-JIT path yet. Real-only.
 - **Compiled `.so` cache** lives at `~/.cache/numbl/c-jit/<sha>.so`,
   keyed by source + compiler/platform/numbl versions + git HEAD +
   `libnumbl_ops.a` contents.
-- **`-ffast-math`** is enabled for the C-JIT compile. This allows SIMD
+- **`-ffast-math`** is enabled for the C kernel compile. This allows SIMD
   vectorization of transcendentals but changes FP rounding — check
   values may differ slightly between modes.

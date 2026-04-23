@@ -1,8 +1,8 @@
 # complex_scalar_bench — numbl vs MATLAB on a complex-scalar hot loop
 
-Compute-bound benchmark for the C-JIT's pair-of-doubles complex scalar
-codegen (Phase 1 of full-complex support). Compares numbl's three
-optimization levels (`--opt 0/1/2`) against MATLAB.
+Compute-bound benchmark for numbl's pair-of-doubles complex scalar
+codegen. Compares numbl's optimization levels (`--opt 0/1/e1`) against
+MATLAB.
 
 ## What the benchmark does
 
@@ -29,7 +29,7 @@ in registers.
 ```bash
 npx tsx src/cli.ts run benchmarks/complex_scalar_bench.m --opt 0   # interpreter
 npx tsx src/cli.ts run benchmarks/complex_scalar_bench.m --opt 1   # JS-JIT
-npx tsx src/cli.ts run benchmarks/complex_scalar_bench.m --opt 2   # C-JIT
+npx tsx src/cli.ts run benchmarks/complex_scalar_bench.m --opt e1  # JS-JIT + inline C kernel
 matlab -batch "run('benchmarks/complex_scalar_bench.m')"
 ```
 
@@ -45,31 +45,28 @@ All runs produce the same `result = 49.999798997206` (to FP rounding).
 
 Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 
-| Mode                           |  Wall time |     Throughput | Speedup vs `--opt 0` |
-| ------------------------------ | ---------: | -------------: | -------------------: |
-| `--opt 0` (interpreter)        |     6.62 s |    3.02 Mops/s |                   1× |
-| `--opt 1` (JS-JIT)             |     1.01 s |   19.88 Mops/s |                  ~7× |
-| `--opt e1` (experimental)      |     0.04 s |     485 Mops/s |                ~161× |
-| `--opt 2 --fuse --par` (C-JIT) | **0.04 s** | **534 Mops/s** |            **~179×** |
-| MATLAB R2025b (1 thread)       |     0.11 s |     179 Mops/s |                 ~59× |
-| MATLAB R2025b (8 threads)      |     0.11 s |     177 Mops/s |                 ~59× |
+| Mode                      |  Wall time |     Throughput | Speedup vs `--opt 0` |
+| ------------------------- | ---------: | -------------: | -------------------: |
+| `--opt 0` (interpreter)   |     6.62 s |    3.02 Mops/s |                   1× |
+| `--opt 1` (JS-JIT)        |     1.01 s |   19.88 Mops/s |                  ~7× |
+| `--opt e1`                | **0.04 s** | **485 Mops/s** |            **~161×** |
+| MATLAB R2025b (1 thread)  |     0.11 s |     179 Mops/s |                 ~59× |
+| MATLAB R2025b (8 threads) |     0.11 s |     177 Mops/s |                 ~59× |
 
-`--opt e1` matches `--opt 2 --fuse --par` here because `run_bench`
-has pure-scalar params and a scalar return, so e1's whole-function
-scalar kernel path fires — the complex scalar `z` lives inside the
-kernel and is lowered to a pair of doubles, same as `--opt 2`.
-
-The C-JIT wins by a wide margin here because the complex arithmetic
-lowers to straight-line `double` math that `-O2 -march=native -ffast-math`
-can keep resident in registers through the entire inner loop. The
-JS-JIT pays boxing costs on every `cMul` / `cAdd` call, and MATLAB's
-complex scalars go through its heavier dispatch path.
+`run_bench` has pure-scalar params and a scalar return, so e1's
+whole-function scalar kernel path fires — the complex scalar `z`
+lives inside the kernel and is lowered to a pair of doubles. The
+complex arithmetic reduces to straight-line `double` math that
+`-O2 -march=native -ffast-math` can keep resident in registers
+through the entire inner loop. The JS-JIT pays boxing costs on
+every `cMul` / `cAdd` call, and MATLAB's complex scalars go through
+its heavier dispatch path.
 
 ## Caveats
 
-- Phase 1 only supports `+`, `-`, `*`, `/`, unary `-`, `ImagLiteral`,
-  `real`/`imag`/`conj`. Anything more (comparisons, `exp`, `log`, `sin`
-  on complex) still bails to JS-JIT.
+- The pair-of-doubles emitter supports `+`, `-`, `*`, `/`, unary `-`,
+  `ImagLiteral`, `real`/`imag`/`conj`. Anything more (comparisons,
+  `exp`, `log`, `sin` on complex) still bails to JS-JIT.
 - This benchmark exercises the best case (tight scalar loop, no
   transcendentals, no branching). Mixed workloads will show less
   dramatic speedups.

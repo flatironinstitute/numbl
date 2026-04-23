@@ -13,7 +13,6 @@ export interface RemoteExecutionRequest {
   files: RemoteExecutionFile[];
   mainScript: string;
   optimization?: number;
-  fuse?: boolean;
 }
 
 export interface RemoteExecutionResult {
@@ -22,7 +21,6 @@ export interface RemoteExecutionResult {
   error?: string;
   timedOut?: boolean;
   generatedJS?: string;
-  generatedC?: string;
 }
 
 export interface RemoteServiceHealth {
@@ -163,7 +161,6 @@ export async function executeRemoteStream(
             result = {
               ...result,
               generatedJS: msg.generatedJS,
-              generatedC: msg.generatedC,
             };
           } else if (msg.type === "error") {
             result = {

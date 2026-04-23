@@ -5,8 +5,8 @@ making a koffi call, vs. just running the loop in JS?**
 
 Kernel: `y = exp(1 + sqrt(x))` (fused into a single C loop). `x` and `y`
 are JS-owned `Float64Array`s passed as `double *` via koffi — the same
-zero-copy contract numbl's C-JIT uses for tensor params, so there is no
-input/output copy.
+zero-copy contract numbl's e1 kernel path uses for tensor params, so
+there is no input/output copy.
 
 This deliberately sidesteps the numbl pipeline. The JS reference is a
 plain `Float64Array` loop, which is what the JS-JIT lowers this kernel
@@ -92,7 +92,7 @@ break-even N (C-fused beats JS):  ~39
 
 - **`-ffast-math`** enables SIMD vectorization of `sqrt`/`exp`. Without
   it, the C per-element cost jumps roughly 5× (run with `--no-fast-math`
-  to see). numbl's C-JIT uses `-ffast-math`, so this matches production.
+  to see). numbl's e1 kernel compile uses `-ffast-math`, so this matches production.
 - **The noop-with-args overhead (~366 ns)** reflects koffi's cost to
   translate JS typed arrays into `double *` on every call. That cost is
   paid per call regardless of `N`, so it's the main driver of the
@@ -103,5 +103,5 @@ break-even N (C-fused beats JS):  ~39
   would shift the crossover down.
 - **Single kernel only.** A program that can fuse _multiple_ statements
   into one koffi call amortizes the 370 ns fixed cost across more work,
-  so numbl's fused C-JIT wins at smaller `N` than 40 for longer
+  so numbl's fused e1 kernels win at smaller `N` than 40 for longer
   pipelines.

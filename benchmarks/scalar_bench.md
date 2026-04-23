@@ -1,7 +1,7 @@
 # scalar_bench — numbl vs MATLAB on a scalar hot loop
 
 A small compute-bound benchmark that stresses the scalar fast-path in
-numbl's JIT. Compares numbl's three optimization levels (`--opt 0/1/2`)
+numbl's JIT. Compares numbl's optimization levels (`--opt 0/1/e1`)
 against MATLAB and GNU Octave on the same machine.
 
 ## What the benchmark does
@@ -16,19 +16,18 @@ with all arithmetic held in scalar registers (a carried-dependency
 accumulator plus one `sin` and one division per innermost iteration).
 Default sizes are `N = 60000`, `M = 500` → **30M** sin+div ops per run.
 
-The whole inner loop stays inside the C-JIT whitelist — no tensor ops,
-no complex, no struct — so every step runs on the scalar fast path when
-`--opt 2` is active.
+The whole inner loop stays inside the e1 scalar-kernel whitelist — no
+tensor ops, no complex, no struct — so `--opt e1` compiles the whole
+`run_bench` body to a single C kernel and calls it from JS via koffi.
 
 ## How to run
 
 ```bash
 npx tsx src/cli.ts run benchmarks/scalar_bench.m --opt 0   # interpreter
 npx tsx src/cli.ts run benchmarks/scalar_bench.m --opt 1   # JS-JIT
-npx tsx src/cli.ts run benchmarks/scalar_bench.m --opt 2   # C-JIT
+npx tsx src/cli.ts run benchmarks/scalar_bench.m --opt e1  # JS-JIT + whole-fn C kernel
 matlab -batch "run('benchmarks/scalar_bench.m')"
 (cd benchmarks && octave --no-gui --quiet --eval scalar_bench)
-bash benchmarks/scalar_bench_compare.sh                    # all of the above
 ```
 
 All runs produce the same `result = 2070.336478567545` (to FP rounding).
@@ -48,8 +47,7 @@ run since it's slow enough to make repeats uninteresting).
 | ------------------------- | ---------: | ---------------: | -------------------: |
 | `--opt 0` (interpreter)   |    31.36 s |    0.96 Mcalls/s |                   1× |
 | `--opt 1` (JS-JIT)        |     0.31 s |      98 Mcalls/s |                ~102× |
-| `--opt e1` (experimental) |     0.23 s |     132 Mcalls/s |                ~138× |
-| `--opt 2 --fuse --par`    | **0.22 s** | **137 Mcalls/s** |            **~143×** |
+| `--opt e1`                | **0.23 s** | **132 Mcalls/s** |            **~138×** |
 | MATLAB R2025b (1 thread)  |     0.32 s |      94 Mcalls/s |                 ~99× |
 | MATLAB R2025b (8 threads) |     0.32 s |      95 Mcalls/s |                 ~99× |
 
@@ -60,18 +58,18 @@ run since it's slow enough to make repeats uninteresting).
 - **Toolchain:** Node v25.9.0, Apple clang 17.0.0, numbl 0.1.7
 - **MATLAB:** R2026a (26.1.0) — single-threaded (`maxNumCompThreads(1)`; multi-threaded identical for this scalar loop)
 
-| Mode                    |  Wall time |       Throughput | Speedup vs `--opt 0` |
-| ----------------------- | ---------: | ---------------: | -------------------: |
-| `--opt 0` (interpreter) |    17.83 s |    1.68 Mcalls/s |                   1× |
-| `--opt 1` (JS-JIT)      |     0.23 s |     131 Mcalls/s |                 ~78× |
-| `--opt 2` (C-JIT)       | **0.09 s** | **351 Mcalls/s** |            **~210×** |
-| MATLAB R2026a `-batch`  |     0.20 s |     148 Mcalls/s |                 ~88× |
+| Mode                    | Wall time |    Throughput | Speedup vs `--opt 0` |
+| ----------------------- | --------: | ------------: | -------------------: |
+| `--opt 0` (interpreter) |   17.83 s | 1.68 Mcalls/s |                   1× |
+| `--opt 1` (JS-JIT)      |    0.23 s |  131 Mcalls/s |                 ~78× |
+| MATLAB R2026a `-batch`  |    0.20 s |  148 Mcalls/s |                 ~88× |
 
-`--fuse` and `--par` don't apply here: the inner loop is a serial
-carried-dependency accumulator (`acc += sin(x·k)/k²`), so there's
-nothing to fuse and nothing to parallelize. Running with `--fuse --par`
-(under `NUMBL_CC=gcc-15`) measures 0.09 s / 327 Mcalls/s — effectively
-the same as plain `--opt 2`.
+(macOS `--opt e1` not yet re-collected post-cleanup; Linux table
+captures the e1 story.)
+
+`--par` doesn't apply here: the inner loop is a serial carried-
+dependency accumulator (`acc += sin(x·k)/k²`), so there's nothing to
+parallelize.
 
 ## Notes on timing methodology
 
@@ -79,7 +77,7 @@ the same as plain `--opt 2`.
   specialization in cache. Compiled `.so` modules live in
   `~/.cache/numbl/c-jit/<sha>.so`, so second runs skip the `cc` cost.
 - **Compile flags.** `-O2 -fPIC -shared -std=c11 -march=native` (printed
-  on first `--opt 2` run as the `C-JIT:` banner).
+  on first `--opt e1` run as the `C-JIT:` banner).
 
 ## Caveats
 

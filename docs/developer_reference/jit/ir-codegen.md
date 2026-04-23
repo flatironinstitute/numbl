@@ -23,14 +23,19 @@ Emits an ES function as a string, then materializes it with `new Function(args, 
 - **Inline emission** via `IBuiltin.jitEmit` produces a literal expression string for fast scalar/real-tensor paths. When absent or unsuitable, codegen falls back to the `$h.ib_<name>` trampoline.
 - **Bail expressions** throw a typed bail object that the JIT caller unwinds.
 
-## C backend
+## C kernels under `--opt e1`
 
-Emits a single C translation unit containing one function per compiled IR function plus any required helpers. Feasibility is checked first: the C backend supports real scalars and a subset of real tensor ops, enough to cover most numerical inner loops. Non-feasible IR nodes are rejected and the compilation falls back to JS.
+Under `--opt e1`, the JS-JIT outer can splice in compiled C kernels at two
+boundaries: fusible tensor chains (inside a JS function body) and pure-scalar
+user functions (the whole body becomes a C kernel). Kernel source is generated
+by the e1 emitters and the shared `generateC` in `jit/c/assemble.ts`, then
+compiled via `cc` (configurable via `NUMBL_CC` / `NUMBL_CFLAGS`) and loaded
+through koffi. The JS wrapper dispatches calls inline. See
+[e1-kernels.md](e1-kernels.md).
 
-- `IBuiltin.jitEmitC` (when defined) emits the C expression for a builtin call.
-- For tensor ops with an `jitCapabilities` annotation, the C backend issues the corresponding op-code call into the native ops library — the same kernels used by the interpreter's ops layer.
-- The compile step shells out to a C compiler (configurable via `NUMBL_CC` and `NUMBL_CFLAGS`) and loads the resulting `.node` module through Node-API. A hybrid mode wraps native callees in a JS function when the outer IR is JS-only.
+- `IBuiltin.jitEmitC` (when defined) emits the C expression for a builtin call inside a kernel body.
+- For tensor ops with a `jitCapabilities` annotation, the kernel issues the corresponding op-code call into the native ops library — the same kernels used by the interpreter's ops layer.
 
 ## Fusion
 
-Element-wise assignment runs are detected and collapsed into a single per-element loop by a shared analysis. Both backends consume the same fusion plan and emit their own fused form. See [fusion.md](fusion.md).
+Element-wise assignment runs are detected and collapsed into a single per-element loop by a shared analysis. The JS-JIT and the e1 kernel emitters consume the same fusion plan and emit their own fused form. See [fusion.md](fusion.md).

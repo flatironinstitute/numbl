@@ -348,7 +348,10 @@ let _hoistedStructFields: Map<string, string> = new Map();
  */
 let _hoistedStructArrayElements: Map<string, string> = new Map();
 
-// ── Fusion state (--fuse flag) ──────────────────────────────────────────
+// ── Fusion state ───────────────────────────────────────────────────────
+// Fusion is always on under --opt e1 (where chains become compiled C
+// kernels) and off otherwise. `_fuse` is derived from `_experimental`
+// at the top of `generateJS`.
 let _fuse = false;
 let _experimental: string | undefined;
 let _par = false;
@@ -372,7 +375,6 @@ export function generateJS(
   nargout: number,
   localVars: Set<string>,
   fileName?: string,
-  fuse?: boolean,
   experimental?: string,
   par?: boolean
 ): string {
@@ -380,8 +382,8 @@ export function generateJS(
   _scratchLocals = [];
   _fileName = fileName;
   _fileEmitted = false;
-  _fuse = fuse ?? false;
   _experimental = experimental;
+  _fuse = experimental === "e1";
   _par = par ?? false;
 
   // Compute the return expression for early returns and the final return

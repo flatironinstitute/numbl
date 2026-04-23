@@ -1,6 +1,6 @@
 # Numbl Overview
 
-Numbl is a MATLAB-compatible numerical computing environment written in TypeScript. It runs in Node (CLI, REPL, execution server) and in the browser (web IDE, embeddable worker). A program is a set of `.m` files that are parsed, interpreted, and optionally JIT-specialized to JavaScript or C.
+Numbl is a MATLAB-compatible numerical computing environment written in TypeScript. It runs in Node (CLI, REPL, execution server) and in the browser (web IDE, embeddable worker). A program is a set of `.m` files that are parsed, interpreted, and optionally JIT-specialized to JavaScript (optionally with inline compiled C kernels).
 
 ## Execution pipeline
 
@@ -16,15 +16,16 @@ source .m ──► Lexer ──► Parser ──► AST
                       (AST walker + Runtime)
                                     │
                    hot path?        │
-              ┌─────────────────────┤
-              ▼                     ▼
-           JS-JIT               C-JIT
-        (opt 1 or 2)           (opt 2)
-              │                     │
-              └────► specialized JS / native ◄─
-                                    │
-                                    ▼
-                             RuntimeValue
+              ┌─────────────────────┘
+              ▼
+           JS-JIT
+        (opt 1 or e1)
+              │   (under opt e1: splice in compiled C
+              │    kernels for fusible chains and
+              │    pure-scalar user functions)
+              │
+              ▼
+           RuntimeValue
 ```
 
 A single entry point (the `executeCode` function) accepts source, options, and adapters (file I/O, system, output callbacks) and drives this pipeline. Every surface — CLI, web worker, execution server — goes through it.
@@ -35,10 +36,10 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [compiler/lexer-parser.md](compiler/lexer-parser.md) — tokenization and parsing.
 - [compiler/interpreter.md](compiler/interpreter.md) — the AST walker and workspace resolution.
 - [compiler/type-system.md](compiler/type-system.md) — `JitType`, unification, type refinement.
-- [jit/overview.md](jit/overview.md) — when the JIT runs, JS-JIT vs C-JIT, bailouts.
-- [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS and C backends.
+- [jit/overview.md](jit/overview.md) — when the JIT runs, opt levels, bailouts.
+- [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS backend / inline C kernels.
 - [jit/fusion.md](jit/fusion.md) — element-wise fusion.
-- [jit/c-jit.md](jit/c-jit.md) — C-JIT file-by-file map and pipeline.
+- [jit/e1-kernels.md](jit/e1-kernels.md) — e1 kernel pipeline (chain kernels + scalar-function kernels).
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
 - [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.
