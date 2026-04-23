@@ -56,20 +56,29 @@ Times in seconds.
 | Mode                           | Total | Discretize | Build | Solve | Interior |  Eval |
 | ------------------------------ | ----: | ---------: | ----: | ----: | -------: | ----: |
 | `--opt 1` (JS-JIT)             | 6.72s |      0.35s | 2.93s | 0.41s |    0.59s | 2.14s |
+| `--opt e1` (experimental)      | 6.53s |      0.35s | 2.99s | 0.39s |    0.59s | 2.22s |
+| `--opt e1 --par`               | 7.19s |      0.37s | 3.05s | 0.40s |    0.62s | 2.40s |
 | `--opt 2` (C-JIT)              | 7.40s |      0.37s | 3.18s | 0.41s |    0.70s | 2.45s |
 | `--opt 2 --fuse` (C-JIT)       | 7.69s |      0.39s | 3.28s | 0.45s |    0.74s | 2.56s |
 | `--opt 2 --fuse --par` (C-JIT) | 7.98s |      0.40s | 3.55s | 0.47s |    0.79s | 2.45s |
 | MATLAB R2025b (1 thread)       | 6.06s |      0.03s | 4.89s | 0.29s |    0.14s | 0.74s |
 | MATLAB R2025b (8 threads)      | 3.12s |      0.03s | 1.77s | 0.54s |    0.15s | 0.65s |
 
-`--opt 1` is the fastest numbl mode on this workload. The C-JIT
-pathways (`--opt 2` and variants) all pay a net cost: chnkie's
-hot `helm2d/green` kernel is now outside the C-JIT whitelist (the
-phases 1-5 features — `besselh`, `__extractSlice2d`, `repmat`,
-3-arg `zeros`, `__extractPage3d`, `AssignIndexPage3d`, `sqrt` on
+`--opt e1` is the fastest numbl mode on this workload, narrowly
+beating `--opt 1` and ~12% under `--opt 2`. The C-JIT pathways
+(`--opt 2` and variants) all pay a net cost: chnkie's hot
+`helm2d/green` kernel is outside the C-JIT whitelist (the phases
+1-5 features — `besselh`, `__extractSlice2d`, `repmat`, 3-arg
+`zeros`, `__extractPage3d`, `AssignIndexPage3d`, `sqrt` on
 real-nonneg — were removed), so it bails to JS-JIT while the outer
-glue still pays C-JIT compile cost. `--fuse` and `--par` can't help
-a kernel that isn't compiling.
+glue still pays C-JIT compile cost. `--opt e1` keeps the same
+JS-JIT outer but splices in compiled C kernels only where they
+help (fusible tensor chains), so it avoids the compile-whole-
+function cost that penalizes `--opt 2` here while still capturing
+the small inner-kernel wins. `--par` doesn't help: most of this
+workload's compute is inside `fmm2d` / LAPACK native bridges and
+GMRES dot products, not in the fusible chains that `--par` could
+thread.
 
 The phases-1-5 work had been added specifically to close this gap
 and at its peak narrowed `--opt 2 --fuse` to ~5% below `--opt 1`,
