@@ -20,6 +20,11 @@ import {
 } from "../fusionOps.js";
 import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
+  tryMatchMultiReduction,
+  emitMultiReductionBlock,
+  resetMultiReductionState,
+} from "./jsMultiReduction.js";
+import {
   type ScalarOpTarget,
   emitScalarBinaryOp,
   emitScalarUnaryOp,
@@ -362,6 +367,21 @@ let _fusionLocalTensors: ReadonlySet<string> = new Set();
 let _fusionComplexTensors: ReadonlySet<string> = new Set();
 let _fusionComplexScalars: ReadonlySet<string> = new Set();
 
+/**
+ * When a multi-reduction scalar assign is emitted as a single-pass
+ * prologue block, each reduction Call in the Assign's RHS is pre-
+ * computed and stashed in a JS local. Any subsequent `emitExpr` /
+ * `emitCall` walk of that RHS consults this map before the default
+ * `$h.tSum` / `$h.ib_*` dispatch, so the rewritten RHS reads from the
+ * pre-computed locals instead of re-scanning the vector.
+ *
+ * Scoped to a single statement: installed before emitting the RHS,
+ * cleared in a `finally` right after. A map (not WeakMap) keeps this
+ * compatible with AST nodes that aren't reachable beyond the emit —
+ * identity lookup by reference is what we need.
+ */
+let _multiReductionSubst: Map<JitExpr, string> | null = null;
+
 function allocScratch(): string {
   const name = `$s${_scratchLocals.length + 1}`;
   _scratchLocals.push(name);
@@ -385,6 +405,8 @@ export function generateJS(
   _experimental = experimental;
   _fuse = experimental === "e1";
   _par = par ?? false;
+  resetMultiReductionState();
+  _multiReductionSubst = null;
 
   // Compute the return expression for early returns and the final return
   const effectiveOutputs = outputs.slice(0, nargout || 1);
@@ -622,7 +644,35 @@ export function generateJS(
 
 function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
   if (!_fuse) {
-    for (const stmt of stmts) emitStmt(lines, stmt, indent);
+    // Fusion off (--opt 1): per-statement emit, but still recognise
+    // multi-reduction scalar assigns and collapse them into a single
+    // JS loop. The kernel-dispatch branch stays off since there's no
+    // C compile here.
+    for (const stmt of stmts) {
+      const mr = tryMatchMultiReduction(stmt);
+      if (mr) {
+        emitMultiReductionBlock(
+          lines,
+          indent,
+          mr,
+          mangle,
+          (expr, subst) => {
+            const prev = _multiReductionSubst;
+            _multiReductionSubst = subst;
+            try {
+              return emitExpr(expr);
+            } finally {
+              _multiReductionSubst = prev;
+            }
+          },
+          _experimental,
+          _par
+        );
+        emitHoistRefresh(lines, mr.stmt.name, indent);
+      } else {
+        emitStmt(lines, stmt, indent);
+      }
+    }
     return;
   }
 
@@ -674,8 +724,34 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
       }
       i += chain.length;
     } else {
-      emitStmt(lines, stmts[i], indent);
-      i++;
+      // Multi-reduction fusion: `acc = f(sum(x), mean(x), max(x), min(x))`
+      // collapses to a single-pass loop (inline JS, or C kernel under e1)
+      // with one accumulator per reduction, instead of N helper calls.
+      const mr = tryMatchMultiReduction(stmts[i]);
+      if (mr) {
+        emitMultiReductionBlock(
+          lines,
+          indent,
+          mr,
+          mangle,
+          (expr, subst) => {
+            const prev = _multiReductionSubst;
+            _multiReductionSubst = subst;
+            try {
+              return emitExpr(expr);
+            } finally {
+              _multiReductionSubst = prev;
+            }
+          },
+          _experimental,
+          _par
+        );
+        emitHoistRefresh(lines, mr.stmt.name, indent);
+        i++;
+      } else {
+        emitStmt(lines, stmts[i], indent);
+        i++;
+      }
     }
   }
 }
@@ -1352,6 +1428,13 @@ function emitAssignIndex(stmt: JitStmt & { tag: "AssignIndex" }): string {
 }
 
 function emitCall(expr: JitExpr & { tag: "Call" }, destName?: string): string {
+  // Multi-reduction fusion: when the enclosing scalar-assign emitter has
+  // already computed this reduction into a JS local, short-circuit to
+  // that local instead of walking into the default helper dispatch.
+  if (_multiReductionSubst !== null) {
+    const temp = _multiReductionSubst.get(expr);
+    if (temp !== undefined) return temp;
+  }
   const args = expr.args.map(a => emitExpr(a));
   // Internal helper calls (prefixed with __) go directly to $h
   if (expr.name.startsWith("__")) {
