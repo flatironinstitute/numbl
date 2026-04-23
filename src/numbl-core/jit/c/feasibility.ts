@@ -10,12 +10,15 @@
  * can emit, which in turn mirrors what JS-JIT does. Widen all three
  * together.
  *
- * Phase 1 (scalar-only): numbers/booleans, scalar math, control flow.
- * Phase 2 (tensor-real, mirrors JS-JIT): real (non-complex) tensor
- *   parameters / locals / sub-expressions, the same tensor binary +
- *   unary + comparison + call ops the JS-JIT helpers cover, and
- *   reductions to scalar. Tensor reads / writes (Index, AssignIndex)
- *   stay out of scope for now.
+ * Covered today: scalar arithmetic and control flow (numbers, booleans,
+ * complex-scalar pairs); real tensor params / locals / outputs with
+ * Index / AssignIndex (1-3D), RangeSliceRead, AssignIndexRange,
+ * AssignIndexCol, TensorLiteral, VConcatGrow, zeros/ones (1-2D); real
+ * tensor binary + unary + reductions via the jitCapabilities opcodes;
+ * complex tensor binary + unary (minus, conj, real, imag, abs) and
+ * flat reductions (sum, prod, any, all); UserCall (scalar args/return
+ * and real / complex tensor args/return when the callee passes its own
+ * feasibility check).
  */
 
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
@@ -101,9 +104,9 @@ function isAcceptableRealTensor(t: JitType): boolean {
   return ndim >= 1 && ndim <= 3;
 }
 
-/** Complex tensor (1-3 D) accepted for the Phase 2 binary/unary/reduce
- *  ops. Reads (Index / RangeSliceRead / AssignIndex / AssignIndexRange /
- *  AssignIndexCol) stay real-only — those require per-site checks below. */
+/** Complex tensor (1-3 D) accepted for the binary / unary / reduce
+ *  ops. Index reads and all AssignIndex* variants stay real-only —
+ *  those require per-site checks below. */
 function isAcceptableComplexTensor(t: JitType): boolean {
   if (t.kind !== "tensor") return false;
   if (t.isComplex !== true) return false;
@@ -242,7 +245,7 @@ function checkExpr(
         }
       }
       // Complex scalar binary ops: only Add/Sub/Mul/ElemMul/Div/ElemDiv
-      // are supported in Phase 1. Comparisons, logicals, and pow all bail.
+      // have pair-of-doubles codegen. Comparisons, logicals, and pow all bail.
       const anyComplex =
         isComplexScalarKind(expr.left.jitType.kind) ||
         isComplexScalarKind(expr.right.jitType.kind) ||
@@ -300,8 +303,8 @@ function checkExpr(
       // `src(a:b)` producing a fresh column-vector tensor. Requires the
       // src to have data/len plumbed — tensor params qualify directly,
       // and tensor locals/outputs plumb through the same `v_<n>_data` /
-      // `_len` locals. Phase 2 keeps this real-only; complex range
-      // slices need paired-imag plumbing that's deferred to Phase 3.
+      // `_len` locals. Real-only; a complex-source range slice would
+      // need paired-imag plumbing in the emitter that isn't there yet.
       if (!ctx.tensorVars.has(expr.baseName)) {
         return fail(
           ctx,
@@ -323,9 +326,8 @@ function checkExpr(
     case "TensorLiteral": {
       // Real-tensor literal: `[1 2 3]`, `[a b; c d]`, `[]`. Empty matrix
       // (nRows == 0 && nCols == 0) is allowed — emits NULL / len 0.
-      // Non-empty cells must all be real scalar-typed (the dest is a
-      // real tensor — complex cells would imply a complex tensor,
-      // unsupported in Phase 1).
+      // Non-empty cells must all be real scalar-typed; complex-cell
+      // literals need a paired-imag emission path that isn't wired.
       if (expr.jitType.kind !== "tensor" || expr.jitType.isComplex !== false) {
         return fail(ctx, "TensorLiteral must be a real tensor");
       }
@@ -566,8 +568,8 @@ function checkCall(
   }
   // Tensor unary builtin: result is tensor, single tensor arg, name has
   // a `tensorUnaryOp` capability on its IBuiltin. These kernels are
-  // real-only in libnumbl_ops; the complex variant requires separate
-  // dispatch (Phase 3+) or is not defined. Keep this path real-only.
+  // real-only in libnumbl_ops; complex-tensor transcendentals aren't
+  // defined. Keep this path real-only.
   if (
     expr.jitType.kind === "tensor" &&
     expr.jitType.isComplex === false &&
@@ -778,6 +780,7 @@ function checkStmt(stmt: JitStmt, ctx: Ctx): FeasibilityResult {
     case "Break":
     case "Continue":
     case "Return":
+    case "AssertCJit":
       return { ok: true };
 
     case "SetLoc":

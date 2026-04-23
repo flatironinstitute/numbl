@@ -51,7 +51,7 @@ describe("C-JIT: feasibility prepass", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("accepts real tensor args (Phase 2)", () => {
+  it("accepts real tensor args", () => {
     const tensorT: JitType = {
       kind: "tensor",
       isComplex: false,
@@ -62,7 +62,7 @@ describe("C-JIT: feasibility prepass", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("accepts complex tensor args (Phase 2: elementwise binary + unary)", () => {
+  it("accepts complex tensor args", () => {
     const tensorT: JitType = {
       kind: "tensor",
       isComplex: true,
@@ -254,9 +254,9 @@ result = square(7);
   );
 });
 
-// ── Phase 2: tensor-support parity with JS-JIT ───────────────────────────
+// ── Tensor feasibility ───────────────────────────────────────────────────
 
-describe("C-JIT: tensor feasibility (Phase 2)", () => {
+describe("C-JIT: tensor feasibility", () => {
   const tensor1dT: JitType = {
     kind: "tensor",
     isComplex: false,
@@ -362,7 +362,7 @@ describe("C-JIT: tensor feasibility (Phase 2)", () => {
   });
 });
 
-describe("C-JIT: tensor codegen (Phase 2, koffi)", () => {
+describe("C-JIT: tensor codegen (koffi)", () => {
   const numberT: JitType = { kind: "number" };
   const tensor1dT: JitType = {
     kind: "tensor",

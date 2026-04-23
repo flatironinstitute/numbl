@@ -151,8 +151,7 @@ export function analyzeTensorUsage(
       }
       case "AssignIndex":
       case "AssignIndexRange":
-      case "AssignIndexCol":
-      case "AssignIndexPage3d": {
+      case "AssignIndexCol": {
         const m = meta.get(s.baseName);
         if (m) m.isAssignIndexTarget = true;
         return;
@@ -187,24 +186,18 @@ export function analyzeTensorUsage(
       const dst = meta.get(s.name);
       if (!dst) return;
       const e = s.expr;
-      // Propagate complexness: a Var alias inherits from its source;
-      // any other tensor RHS with a statically-complex jitType makes
-      // the dst complex. This catches `z = conj(x)`, `z = x + 1i*y`,
-      // `z = x(:)` (if x was complex), etc.
-      if (!dst.isComplex) {
-        if (e.tag === "Var") {
-          const src = meta.get(e.name);
-          if (src?.isComplex) {
-            dst.isComplex = true;
-            changed = true;
-          }
-        } else if (
-          e.jitType.kind === "tensor" &&
-          e.jitType.isComplex === true
-        ) {
-          dst.isComplex = true;
-          changed = true;
-        }
+      // Propagate complexness from the RHS's (unified) jitType. The
+      // JIT lowerer unifies Var types across branches and loops, so
+      // `e.jitType.isComplex` is authoritative for Var aliases too.
+      // Catches `z = conj(x)`, `z = x + 1i*y`, `z = x(:)` (complex x),
+      // aliased `b = a` where `a` becomes complex in a later iter, etc.
+      if (
+        !dst.isComplex &&
+        e.jitType.kind === "tensor" &&
+        e.jitType.isComplex === true
+      ) {
+        dst.isComplex = true;
+        changed = true;
       }
       if (dst.hasFreshAlloc) return;
       if (e.tag === "Var") {
