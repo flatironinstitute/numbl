@@ -12,15 +12,28 @@
  */
 
 import type { Expr } from "../../parser/types.js";
-import { BinaryOperation } from "../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr, JitType } from "../jitTypes.js";
 import { E2_BUILTIN_WHITELIST } from "./classify.js";
 
 export class E2LowerError extends Error {}
 
+const COMPARISON_OPS: ReadonlySet<BinaryOperation> = new Set([
+  BinaryOperation.Equal,
+  BinaryOperation.NotEqual,
+  BinaryOperation.Less,
+  BinaryOperation.LessEqual,
+  BinaryOperation.Greater,
+  BinaryOperation.GreaterEqual,
+]);
+
 /** Pick the result type of a Binary op given operand types. Tensor wins
- *  over scalar; complex propagates. Booleans coerce to number. */
-function unifyBinaryType(l: JitType, r: JitType): JitType {
+ *  over scalar; complex propagates. Comparison ops produce logical
+ *  tensors (so that `_isLogical` rides through to the output
+ *  `RuntimeTensor` — without it, `pts(:, mask)` treats the result as
+ *  a double index and fails). Booleans coerce to number. */
+function unifyBinaryType(op: BinaryOperation, l: JitType, r: JitType): JitType {
+  const isComparison = COMPARISON_OPS.has(op);
   // Any tensor input yields a tensor output (elementwise). Complex
   // propagates from either side — a complex scalar on one side widens
   // the tensor result to complex (e.g. `y * 1i` where y is real).
@@ -32,7 +45,14 @@ function unifyBinaryType(l: JitType, r: JitType): JitType {
       !!rt?.isComplex ||
       l.kind === "complex_or_number" ||
       r.kind === "complex_or_number";
+    // Comparisons always produce a real logical tensor.
+    if (isComparison) {
+      return { kind: "tensor", isComplex: false, isLogical: true };
+    }
     return { kind: "tensor", isComplex };
+  }
+  if (isComparison) {
+    return { kind: "boolean" };
   }
   if (l.kind === "complex_or_number" || r.kind === "complex_or_number") {
     return { kind: "complex_or_number" };
@@ -113,7 +133,7 @@ export function lowerAstToJitExpr(
           `e2: matrix op ${expr.op} on two tensors is not elementwise`
         );
       }
-      const jitType = unifyBinaryType(left.jitType, right.jitType);
+      const jitType = unifyBinaryType(expr.op, left.jitType, right.jitType);
       const resultIsComplex =
         (jitType.kind === "tensor" && jitType.isComplex) ||
         jitType.kind === "complex_or_number";
@@ -132,11 +152,25 @@ export function lowerAstToJitExpr(
     }
     case "Unary": {
       const operand = lowerAstToJitExpr(expr.operand, envTypes);
+      // `!x` on a tensor produces a logical tensor; on a scalar, a
+      // boolean. Plus/Minus pass the operand type through.
+      let jitType = operand.jitType;
+      if (expr.op === UnaryOperation.Not) {
+        if (jitType.kind === "tensor") {
+          jitType = { kind: "tensor", isComplex: false, isLogical: true };
+        } else if (
+          jitType.kind === "number" ||
+          jitType.kind === "boolean" ||
+          jitType.kind === "complex_or_number"
+        ) {
+          jitType = { kind: "boolean" };
+        }
+      }
       return {
         tag: "Unary",
         op: expr.op,
         operand,
-        jitType: operand.jitType,
+        jitType,
       };
     }
     case "FuncCall": {

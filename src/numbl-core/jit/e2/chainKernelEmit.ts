@@ -45,6 +45,7 @@ import {
   uniqueLhsOrdered,
   type ChainAssignSpec,
   type KernelInputs,
+  E2_C_PROLOGUE,
 } from "./emitShared.js";
 
 export type { ChainAssignSpec } from "./emitShared.js";
@@ -109,7 +110,7 @@ export function emitE2ChainKernel(
   ];
 
   const paramList = buildParamList(inputs);
-  const prologue = "#include <math.h>\n#include <stdint.h>\n\n";
+  const prologue = E2_C_PROLOGUE;
   const bodyTemplate =
     `void __KERNEL_NAME__(${paramList.join(", ")})\n` +
     `{\n${loopLines.join("\n")}\n}\n`;

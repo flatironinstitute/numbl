@@ -8,7 +8,49 @@
 import type { JitExpr, JitType } from "../jitTypes.js";
 import { emitFusedScalarExpr, type FusedTarget } from "../fusedScalarEmit.js";
 import { C_SCALAR_TARGET, formatNumberLiteral } from "../c/context.js";
+import type { ScalarOpTarget } from "../scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/index.js";
+
+/**
+ * C helper included in every e2 kernel prologue.
+ *
+ * `-ffast-math` implies `-ffinite-math-only`, which lets the compiler
+ * assume no NaN/Inf values and constant-fold `x != x` to 0 and `x == x`
+ * to 1. The NaN-detection idiom `mask = x ~= x` would silently return all
+ * zeros. `numbl_is_nan_fp` inspects the IEEE-754 bit pattern directly —
+ * the optimizer cannot look through `memcpy` to apply finite-math
+ * assumptions, so this survives the flag.
+ */
+export const E2_C_PROLOGUE =
+  "#include <math.h>\n" +
+  "#include <stdint.h>\n" +
+  "#include <string.h>\n" +
+  "\n" +
+  "static inline int numbl_is_nan_fp(double x) {\n" +
+  "    uint64_t b; memcpy(&b, &x, sizeof(b));\n" +
+  "    return (b & 0x7FFFFFFFFFFFFFFFULL) > 0x7FF0000000000000ULL;\n" +
+  "}\n\n";
+
+/**
+ * e2-specific scalar op target.
+ *
+ * Identical to `C_SCALAR_TARGET` except `binEq` / `binNe`: when both
+ * operand strings are the same C expression (i.e. the source was `x == x`
+ * or `x ~= x`), the standard `==` / `!=` forms are constant-folded to
+ * 1 / 0 by `-ffinite-math-only`. Replace them with the bit-pattern NaN
+ * helper so the self-comparison gives the correct IEEE 754 result.
+ */
+export const E2_C_SCALAR_TARGET: ScalarOpTarget = {
+  ...C_SCALAR_TARGET,
+  binEq: (l, r) =>
+    l === r
+      ? `((double)(!numbl_is_nan_fp(${l})))`
+      : `(((double)((${l}) == (${r}))))`,
+  binNe: (l, r) =>
+    l === r
+      ? `((double)(numbl_is_nan_fp(${l})))`
+      : `(((double)((${l}) != (${r}))))`,
+};
 
 export interface ChainAssignSpec {
   lhsName: string;
@@ -96,7 +138,7 @@ export function emitChainAssignLines(
       a.rhs,
       new Set(),
       allTensorVars,
-      C_SCALAR_TARGET,
+      E2_C_SCALAR_TARGET,
       ft
     );
     out.push(`        ${a.lhsName} = ${rhsC};`);

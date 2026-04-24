@@ -368,13 +368,18 @@ function tryChain(
       specs.push({ lhsName: a.stmt.name, rhs });
       acceptedAssigns.push(a);
       // Merge: once complex, stays complex so subsequent reads widen
-      // correctly in the paired-buffer kernel.
+      // correctly in the paired-buffer kernel. `isLogical`, by
+      // contrast, reflects just the last write (`a = x > 0; a = a + 1`
+      // leaves `a` non-logical); the driver reads it off envTypes when
+      // materializing the output RuntimeTensor so logical-indexing
+      // callers see `class(mask) == "logical"`.
       const prior = envTypes.get(a.stmt.name);
       const priorComplex =
         prior && prior.kind === "tensor" ? prior.isComplex : false;
       const newLhsType: JitType = {
         kind: "tensor",
         isComplex: priorComplex || rhs.jitType.isComplex,
+        ...(rhs.jitType.isLogical ? { isLogical: true } : {}),
       };
       envTypes.set(a.stmt.name, newLhsType);
     }
@@ -997,7 +1002,14 @@ function tryChain(
   cacheEntry.fn(...callArgs);
 
   // Bind escape LHSs back to env. Use the reference tensor's shape so
-  // column/row orientation is preserved.
+  // column/row orientation is preserved. `_isLogical` is stamped when
+  // the chain's last write to that LHS produced a logical result —
+  // without it, downstream logical-indexing (`pts(:, mask)`) treats
+  // the Float64Array as a double index and fails.
+  const isLogicalFor = (name: string): boolean => {
+    const t = envTypes.get(name);
+    return !!(t && t.kind === "tensor" && t.isLogical);
+  };
   if (cacheEntry.complex) {
     const cx = cacheEntry.complex;
     for (let k = 0; k < cx.complexEscapeLhsNames.length; k++) {
@@ -1020,6 +1032,7 @@ function tryChain(
         data: realOutBufs[k],
         shape: refTensor.shape.slice(),
         _rc: 1,
+        ...(isLogicalFor(name) ? { _isLogical: true } : {}),
       };
       interp.env.set(name, newTensor);
       interp.ans = newTensor;
@@ -1032,6 +1045,7 @@ function tryChain(
         data: realOutBufs[k],
         shape: refTensor.shape.slice(),
         _rc: 1,
+        ...(isLogicalFor(name) ? { _isLogical: true } : {}),
       };
       interp.env.set(name, newTensor);
       interp.ans = newTensor;

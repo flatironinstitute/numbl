@@ -42,7 +42,6 @@
 
 import type { JitExpr } from "../jitTypes.js";
 import { emitFusedScalarExpr } from "../fusedScalarEmit.js";
-import { C_SCALAR_TARGET } from "../c/context.js";
 import {
   C_REDUCTION_LITERALS,
   reductionInit,
@@ -60,6 +59,8 @@ import {
   uniqueLhsOrdered,
   type ChainAssignSpec,
   type KernelInputs,
+  E2_C_PROLOGUE,
+  E2_C_SCALAR_TARGET,
 } from "./emitShared.js";
 
 export interface ReductionEmitSpec {
@@ -134,7 +135,7 @@ export function emitE2ReductionKernel(
     spec.reduceValueExpr,
     new Set(),
     allTensorVars,
-    C_SCALAR_TARGET,
+    E2_C_SCALAR_TARGET,
     ft
   );
   bodyLines.push(
@@ -169,7 +170,7 @@ export function emitE2ReductionKernel(
     `    *out_acc = acc;`,
   ];
 
-  const prologue = "#include <math.h>\n#include <stdint.h>\n\n";
+  const prologue = E2_C_PROLOGUE;
   const bodyTemplate =
     `void __KERNEL_NAME__(${paramList.join(", ")})\n` +
     `{\n${loopLines.join("\n")}\n}\n`;
