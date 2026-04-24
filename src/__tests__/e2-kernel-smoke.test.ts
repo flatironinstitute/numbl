@@ -18,6 +18,14 @@ import { resetCEnvForTesting } from "../numbl-core/jit/c/compile.js";
 // Ensure the e2 install hook is registered.
 import "../numbl-core/jit/e2/install.js";
 
+// The e2 path shells out to `cc` and links against the prebuilt
+// `libnumbl_ops.a` (see `npm run build:addon`). Gate on both the
+// compiler's presence AND the `NUMBL_CJIT_E2E=1` opt-in — matches
+// how `e1-kernel-smoke.test.ts` is gated so the main "Test" job
+// (which doesn't build the addon) skips them cleanly, while the
+// dedicated `--opt e1 / e2` CI job runs them end-to-end.
+const E2E_ENABLED = process.env.NUMBL_CJIT_E2E === "1";
+
 function hasCc(): boolean {
   try {
     execFileSync("cc", ["--version"], { stdio: "ignore" });
@@ -27,7 +35,7 @@ function hasCc(): boolean {
   }
 }
 
-const itSkipWithoutCc = hasCc() ? it : it.skip;
+const itSkipWithoutCc = E2E_ENABLED && hasCc() ? it : it.skip;
 
 function runE2(script: string) {
   resetCEnvForTesting();

@@ -121,7 +121,7 @@ jobs:
         run: npm run build:addon
 
   test-e1:
-    name: Test --opt e1 (JS-JIT + inline C kernels)
+    name: Test --opt e1 / e2 (inline C kernels)
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -156,3 +156,11 @@ jobs:
         env:
           NUMBL_CJIT_E2E: "1"
         run: npx vitest run src/__tests__/e1-kernel-smoke.test.ts
+
+      - name: Run integration tests under --opt e2
+        run: npx tsx src/cli.ts run-tests numbl_test_scripts --opt e2
+
+      - name: Run e2 kernel end-to-end unit tests
+        env:
+          NUMBL_CJIT_E2E: "1"
+        run: npx vitest run src/__tests__/e2-kernel-smoke.test.ts
