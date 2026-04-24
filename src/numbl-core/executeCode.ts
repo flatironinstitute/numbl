@@ -47,6 +47,8 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
+  /** Called each time an e2 C kernel is compiled, with a description and the generated C source. */
+  onCCompile?: (description: string, cCode: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -114,6 +116,8 @@ export interface ProfileData {
 export interface ExecResult {
   output: string[];
   generatedJS: string;
+  /** Concatenated C-kernel source for all e2 compilations during the run. */
+  generatedC: string;
   plotInstructions: PlotInstruction[];
   returnValue: RuntimeValue;
   variableValues: Record<string, RuntimeValue>;
@@ -365,6 +369,15 @@ export function executeCode(
       `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${jsCode}`
     );
     options.onJitCompile?.(description, jsCode);
+  };
+
+  // Collect e2 C-kernel compilations for generatedC output (--dump-c)
+  const cSections: string[] = [];
+  interpreter.onCCompile = (description: string, cCode: string) => {
+    cSections.push(
+      `/* ${"=".repeat(60)}\n * ${description}\n * ${"=".repeat(60)} */\n\n${cCode}`
+    );
+    options.onCCompile?.(description, cCode);
   };
 
   // Wire up JIT builtin profiling hooks when profiling is enabled
@@ -777,6 +790,10 @@ export function executeCode(
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
           : "// No JS generated",
+      generatedC:
+        cSections.length > 0
+          ? `/* e2 C kernels compiled during run */\n\n${cSections.join("\n\n")}`
+          : "/* No C generated */",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -815,6 +832,10 @@ export function executeCode(
       jitSections.length > 0
         ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
         : "// No JS generated";
+    const generatedC =
+      cSections.length > 0
+        ? `/* e2 C kernels compiled during run */\n\n${cSections.join("\n\n")}`
+        : "/* No C generated */";
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {
@@ -823,6 +844,7 @@ export function executeCode(
       }
       if (!e.fileSources) e.fileSources = interpreter.fileSources;
       (e as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
+      (e as RuntimeError & { generatedC?: string }).generatedC = generatedC;
       throw e;
     }
     const re = new RuntimeError(e instanceof Error ? e.message : String(e));
@@ -832,6 +854,7 @@ export function executeCode(
     }
     re.fileSources = interpreter.fileSources;
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
+    (re as RuntimeError & { generatedC?: string }).generatedC = generatedC;
     throw re;
   } finally {
     // Reset JIT profiling hooks to no-ops

@@ -1,10 +1,10 @@
 name: Benchmarks
 
-# Runs the full `benchmarks/*.m` suite under `--opt 1`, `--opt e1`, and
-# `--opt e1 --par` on Linux and macOS (in parallel), takes the median of
-# 3 runs per (benchmark, mode), and publishes to `magland/numbl-benchmarks`
-# via github-action-benchmark. Chart lives at
-# https://magland.github.io/numbl-benchmarks/dev/bench/.
+# Runs the full `benchmarks/*.m` suite under `--opt 1`, `--opt e1`,
+# `--opt e1 --par`, `--opt e2`, and `--opt e2 --par` on Linux and macOS
+# (in parallel), takes the median of 3 runs per (benchmark, mode), and
+# publishes to `magland/numbl-benchmarks` via github-action-benchmark.
+# Chart lives at https://magland.github.io/numbl-benchmarks/dev/bench/.
 #
 # Architecture: matrix jobs run in parallel and upload their results as
 # artifacts. A final `publish` job downloads both artifacts and pushes

@@ -48,6 +48,7 @@ run since it's slow enough to make repeats uninteresting).
 | `--opt 0` (interpreter)   |    31.36 s |    0.96 Mcalls/s |                   1× |
 | `--opt 1` (JS-JIT)        |     0.31 s |      98 Mcalls/s |                ~102× |
 | `--opt e1`                | **0.23 s** | **132 Mcalls/s** |            **~138×** |
+| `--opt e2`                |     0.25 s |     118 Mcalls/s |                ~123× |
 | MATLAB R2025b (1 thread)  |     0.32 s |      94 Mcalls/s |                 ~99× |
 | MATLAB R2025b (8 threads) |     0.32 s |      95 Mcalls/s |                 ~99× |
 

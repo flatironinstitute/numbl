@@ -207,6 +207,15 @@ const MODES: ModeSpec[] = [
       ? { NUMBL_CC: process.env.NUMBL_PAR_CC }
       : undefined,
   },
+  { label: "--opt e2", slug: "opt-e2", args: ["--opt", "e2"] },
+  {
+    label: "--opt e2 --par",
+    slug: "opt-e2-par",
+    args: ["--opt", "e2", "--par"],
+    env: process.env.NUMBL_PAR_CC
+      ? { NUMBL_CC: process.env.NUMBL_PAR_CC }
+      : undefined,
+  },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────

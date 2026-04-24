@@ -24,6 +24,7 @@
  */
 
 import { fnv1a64Hex } from "./hash.js";
+import { ompParallelThreshold } from "../heavyOps.js";
 
 /** Reductions we can fuse into one pass. `any` / `all` are excluded
  *  because their short-circuit `break` would prematurely stop the
@@ -50,15 +51,6 @@ export interface MultiReductionKernelInfo {
   /** True when the kernel emits an `any_non_nan` slot at index
    *  `slotNames.length - 1`. */
   hasAnyNonNan: boolean;
-}
-
-/** Minimum element count before `#pragma omp parallel for simd` kicks
- *  in. Below this, the `if(n >= T)` clause short-circuits to serial so
- *  thread-spawn overhead doesn't dominate small reductions. Overridable
- *  via `NUMBL_OMP_THRESHOLD` for benchmarks. Same default and env-var
- *  semantics as the chain kernel in [kernelEmit.ts](./kernelEmit.ts). */
-function ompParallelThreshold(): number {
-  return parseInt(process.env.NUMBL_OMP_THRESHOLD || "", 10) || 100_000;
 }
 
 /**

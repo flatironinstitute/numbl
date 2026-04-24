@@ -12,6 +12,7 @@ import { shareRuntimeValue } from "../runtime/utils.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { tryJitCall, JIT_SKIP } from "../jit/index.js";
+import { tryE2ScalarFn, E2_SKIP } from "../jit/e2/scalarFnDriver.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
 import { toString } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
@@ -536,6 +537,14 @@ export function callUserFunction(
     if (jitResult !== JIT_SKIP) return jitResult;
   }
 
+  // --opt e2: whole-function scalar C kernel. Fires for pure-scalar
+  // user functions (e.g. benchmarks/scalar_bench.m's `run_bench`) to
+  // match e1's performance without routing through the JS-JIT outer.
+  if (this.experimental === "e2" && narginOverride === undefined) {
+    const e2Result = tryE2ScalarFn(this, fn, sharedArgs, nargout);
+    if (e2Result !== E2_SKIP) return e2Result;
+  }
+
   const fnEnv = new Environment();
   fnEnv.rt = this.rt;
   fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
@@ -573,6 +582,14 @@ export function callUserFunction(
   const savedCallerEnv = this.callerEnv;
   this.callerEnv = savedEnv;
   this.env = fnEnv;
+  const savedScopeBody = this._currentScopeBody;
+  const savedScopeExports = this._currentScopeExports;
+  this._currentScopeBody = fn.body;
+  // Outputs (and `varargout` if declared) are the names that escape
+  // the function regardless of textual usage in the body — used by
+  // --opt e2 chain liveness to materialize chain LHSs even when they
+  // happen to be only "syntactically" referenced inside the chain.
+  this._currentScopeExports = new Set(fn.outputs);
   this.rt.pushCallFrame(fn.name);
   this.rt.pushCleanupScope();
 
@@ -643,6 +660,8 @@ export function callUserFunction(
     this.rt.popCallFrame();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
+    this._currentScopeBody = savedScopeBody;
+    this._currentScopeExports = savedScopeExports;
   }
 }
 
@@ -683,6 +702,10 @@ export function callNestedFunction(
 
   const savedEnv = this.env;
   this.env = fnEnv;
+  const savedScopeBody = this._currentScopeBody;
+  const savedScopeExports = this._currentScopeExports;
+  this._currentScopeBody = fn.body;
+  this._currentScopeExports = new Set(fn.outputs);
   this.rt.pushCleanupScope();
 
   try {
@@ -741,6 +764,8 @@ export function callNestedFunction(
       }
     });
     this.env = savedEnv;
+    this._currentScopeBody = savedScopeBody;
+    this._currentScopeExports = savedScopeExports;
   }
 }
 

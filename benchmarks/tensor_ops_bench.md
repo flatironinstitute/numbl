@@ -44,6 +44,8 @@ Median of 3 runs for non-interpreter modes; `--opt 0` is a single run.
 | `--opt 1` (JS-JIT)        | 3.25 s | 0.66 s | 1.40 s |  0.32 s | 0.30 s | 0.58 s |
 | `--opt e1`                | 1.32 s | 0.09 s | 0.62 s |  0.20 s | 0.29 s | 0.12 s |
 | `--opt e1 --par`          | 0.96 s | 0.09 s | 0.26 s |  0.20 s | 0.29 s | 0.12 s |
+| `--opt e2`                | 1.42 s | 0.10 s | 0.66 s |  0.29 s | 0.18 s | 0.18 s |
+| `--opt e2 --par`          | 0.97 s | 0.09 s | 0.30 s |  0.28 s | 0.14 s | 0.19 s |
 | MATLAB R2025b (1 thread)  | 4.90 s | 0.32 s | 3.45 s |  0.32 s | 0.21 s | 0.60 s |
 | MATLAB R2025b (8 threads) | 1.81 s | 0.26 s | 0.84 s |  0.13 s | 0.25 s | 0.33 s |
 

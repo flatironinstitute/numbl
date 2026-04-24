@@ -45,6 +45,7 @@ import {
 
 import type { Interpreter } from "./interpreter.js";
 import { tryJitFor, tryJitWhile } from "../jit/jitLoop.js";
+import { tryE2Assign } from "../jit/e2/assignKernel.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -80,6 +81,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "Assign": {
+      if (this.experimental === "e2" && tryE2Assign(this, stmt)) return null;
       const rawVal = this.evalExpr(stmt.expr);
       const val = Array.isArray(rawVal) ? rawVal[0] : rawVal;
       const rv = this.rt.share(val) as RuntimeValue;
@@ -323,7 +325,14 @@ export function execStmts(
     // output set so that loop-internal temporaries don't escape.
     this._postSiblings = stmts;
     this._postSiblingsIdx = i + 1;
+    this._e2ChainAdvance = 0;
     const signal = this.execStmt(stmt);
+    if (this._e2ChainAdvance > 0) {
+      // The just-executed stmt was the head of an e2 chain; skip past
+      // the additional siblings the kernel consumed.
+      i += this._e2ChainAdvance;
+      this._e2ChainAdvance = 0;
+    }
     if (signal) return signal;
   }
   this._postSiblings = null;

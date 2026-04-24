@@ -40,6 +40,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS backend / inline C kernels.
 - [jit/fusion.md](jit/fusion.md) — element-wise fusion.
 - [jit/e1-kernels.md](jit/e1-kernels.md) — e1 kernel pipeline (chain kernels + scalar-function kernels).
+- [jit/e2-kernels.md](jit/e2-kernels.md) — e2 per-assign C-kernel pipeline (interpreter outer, no JS-JIT).
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
 - [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.

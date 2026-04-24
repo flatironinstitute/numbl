@@ -126,6 +126,7 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-c <file>    Write e2 per-assign C kernels to file (only with --opt e2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -143,14 +144,25 @@ Options (for run and eval):
                            enough to amortise koffi overhead. Falls back
                            to the plain JS fused loop at small N or if
                            compilation fails.
-  --par              Parallelize fused loops with OpenMP threads (--opt e1)
+                       e2 — experimental: pure interpreter (no JS-JIT) +
+                           on-demand C kernels emitted per tensor-assign
+                           statement. Compiles a fresh C function for
+                           each fusible elemwise expression the
+                           interpreter encounters, then dispatches via
+                           koffi. Compile failures are hard errors;
+                           non-classifiable expressions fall through to
+                           the plain interpreter silently. Use --dump-c
+                           to inspect the generated kernels.
+  --par              Parallelize fused loops with OpenMP threads (--opt e1 / e2)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)
-  NUMBL_CC                C compiler for --opt e1 kernels (default: cc)
+  NUMBL_CC                C compiler for --opt e1 / e2 kernels (default: cc)
   NUMBL_CFLAGS            Extra flags appended to the C kernel compile command
   NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
                           reproducibility or debugging portability issues)
   NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in
                           (default: 100000)
+  NUMBL_E2_MIN_ELEMS      Minimum tensor element count before --opt e2
+                          will compile a per-assign kernel (default: 1000)
 ```

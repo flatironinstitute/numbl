@@ -93,6 +93,30 @@ export class Interpreter {
   /** @internal Index in _postSiblings of the next stmt after the current one. */
   _postSiblingsIdx: number = 0;
 
+  /** @internal Number of EXTRA sibling stmts that the current execStmt
+   *  consumed beyond the one passed in. The surrounding sibling loop
+   *  reads this after each execStmt and advances its index by this
+   *  many. Used by `--opt e2` chain fusion to atomically execute a run
+   *  of consecutive Assigns as one C kernel. The interpreter must
+   *  reset this to 0 before each execStmt call. */
+  _e2ChainAdvance: number = 0;
+
+  /** @internal The stmt list of the innermost enclosing function body
+   *  (or top-level script body). Used by `--opt e2` chain liveness
+   *  analysis to decide whether a chain LHS is actually referenced
+   *  outside the chain — if not, the LHS becomes a per-element stack-
+   *  local rather than a materialized output buffer. Pushed on call
+   *  frame entry, popped on exit. */
+  _currentScopeBody: import("../parser/types.js").Stmt[] | null = null;
+
+  /** @internal Names that "escape" the current scope regardless of
+   *  textual usage. For functions: the declared output names (plus
+   *  `varargout`). For top-level scripts: `null`, meaning every name
+   *  escapes (the surrounding caller can read all script-level vars
+   *  via `result.variableValues`). Pushed/popped alongside
+   *  `_currentScopeBody`. */
+  _currentScopeExports: Set<string> | null = null;
+
   /**
    * Optimization level:
    *   0 — pure AST interpreter, no JIT.
@@ -113,6 +137,9 @@ export class Interpreter {
 
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
+
+  /** Callback for C-kernel compilation logging (--opt e2 / --dump-c). */
+  onCCompile?: (description: string, cCode: string) => void;
 
   /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
@@ -251,12 +278,26 @@ export class Interpreter {
       if (this.optimization >= 1 && tryJitTopLevel(this, nonFuncStmts)) {
         return;
       }
-      for (let i = 0; i < nonFuncStmts.length; i++) {
-        // Set sibling-tail context so loop JIT can compute live-out vars.
-        this._postSiblings = nonFuncStmts;
-        this._postSiblingsIdx = i + 1;
-        const signal = this.execStmt(nonFuncStmts[i]);
-        if (signal) break;
+      const savedScope = this._currentScopeBody;
+      const savedExports = this._currentScopeExports;
+      this._currentScopeBody = nonFuncStmts;
+      this._currentScopeExports = null; // script: every name escapes
+      try {
+        for (let i = 0; i < nonFuncStmts.length; i++) {
+          // Set sibling-tail context so loop JIT can compute live-out vars.
+          this._postSiblings = nonFuncStmts;
+          this._postSiblingsIdx = i + 1;
+          this._e2ChainAdvance = 0;
+          const signal = this.execStmt(nonFuncStmts[i]);
+          if (this._e2ChainAdvance > 0) {
+            i += this._e2ChainAdvance;
+            this._e2ChainAdvance = 0;
+          }
+          if (signal) break;
+        }
+      } finally {
+        this._currentScopeBody = savedScope;
+        this._currentScopeExports = savedExports;
       }
       this._postSiblings = null;
       this._postSiblingsIdx = 0;
