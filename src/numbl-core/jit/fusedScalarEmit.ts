@@ -45,6 +45,14 @@ export interface FusedTarget {
    */
   tensorElemRead(name: string): string;
   /**
+   * Emit a read of tensor `name` at a runtime 1-based scalar index
+   * `idxC` — i.e. `data[(int64_t)idx - 1]`. Used by the e2 whole-loop
+   * kernel (scalar-context access; elemwise backends can leave this
+   * undefined, the emitter will throw on an Index node). Returns `null`
+   * to reject.
+   */
+  tensorScalarIndexRead?(name: string, idxC: string): string | null;
+  /**
    * Emit a call to a scalar math builtin. The backend decides which
    * builtins it supports and how they map to library functions (e.g.
    * JS `Math.sin` vs C `sin`). Return `null` to reject.
@@ -121,6 +129,37 @@ export function emitFusedScalarExpr(
         );
       }
       return result;
+    }
+
+    case "Index": {
+      // Scalar-context index read of a tensor (e.g. `x(i)` in a scalar
+      // loop). Only 1-index form is supported today; the base must be
+      // a tensor Var. Backend decides how to emit; it returns null to
+      // reject.
+      if (expr.base.tag !== "Var" || expr.base.jitType.kind !== "tensor") {
+        throw new Error(
+          `fused scalar emitter: Index requires a tensor Var base`
+        );
+      }
+      if (expr.indices.length !== 1) {
+        throw new Error(
+          `fused scalar emitter: multi-index tensor access not supported`
+        );
+      }
+      const idxC = emitFusedScalarExpr(
+        expr.indices[0],
+        chainLocals,
+        allTensorVars,
+        opTarget,
+        fusedTarget
+      );
+      const out = fusedTarget.tensorScalarIndexRead?.(expr.base.name, idxC);
+      if (!out) {
+        throw new Error(
+          `fused scalar emitter: backend doesn't support scalar tensor index`
+        );
+      }
+      return out;
     }
 
     default:

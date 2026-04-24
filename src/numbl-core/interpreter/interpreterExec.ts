@@ -46,6 +46,7 @@ import {
 import type { Interpreter } from "./interpreter.js";
 import { tryJitFor, tryJitWhile } from "../jit/jitLoop.js";
 import { tryE2Assign } from "../jit/e2/assignKernel.js";
+import { tryE2Loop } from "../jit/e2/loopKernel.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -201,6 +202,7 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "For": {
+      if (this.experimental === "e2" && tryE2Loop(this, stmt)) return null;
       if (this.optimization >= 1 && tryJitFor(this, stmt)) return null;
       const _forStart = this.rt.profilingEnabled ? performance.now() : 0;
       const iterVal = this.evalExpr(stmt.expr);

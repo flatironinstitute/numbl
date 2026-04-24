@@ -97,10 +97,46 @@ const REAL_OUTPUT_BUILTINS: ReadonlySet<string> = new Set(["real", "imag"]);
  *  emitter (flips the sign of im). */
 const COMPLEX_PASSTHROUGH_BUILTINS: ReadonlySet<string> = new Set(["conj"]);
 
+export interface LowerOptions {
+  /** When a `FuncCall{name, args}` has `name` in `envTypes` as a tensor,
+   *  treat it as tensor indexing and lower to an `Index` node instead
+   *  of looking up a builtin. Used by the e2 whole-loop kernel — the
+   *  chain emitters don't set this (their classifier has already
+   *  marked tensor-access FuncCalls as opaque). */
+  resolveFuncCallAsTensorIndex?: boolean;
+}
+
+/** Build an `Index` JitExpr for a 1-D scalar tensor read from a
+ *  validated tensor `base`. Both the `FuncCall`-as-index and `Index`
+ *  AST paths share this: they differ only in how they obtain `base`. */
+function buildScalarIndexRead(
+  base: JitExpr,
+  indexArgs: readonly Expr[],
+  lower: (e: Expr) => JitExpr
+): JitExpr {
+  if (indexArgs.length !== 1) {
+    throw new E2LowerError(`e2: multi-index tensor access not supported`);
+  }
+  const idx = lower(indexArgs[0]);
+  if (idx.jitType.kind !== "number" && idx.jitType.kind !== "boolean") {
+    throw new E2LowerError(`e2: tensor index must be a scalar number`);
+  }
+  return {
+    tag: "Index",
+    base,
+    indices: [idx],
+    jitType: { kind: "number" },
+  };
+}
+
 export function lowerAstToJitExpr(
   expr: Expr,
-  envTypes: ReadonlyMap<string, JitType>
+  envTypes: ReadonlyMap<string, JitType>,
+  options: LowerOptions = {}
 ): JitExpr {
+  function rec(e: Expr): JitExpr {
+    return lowerAstToJitExpr(e, envTypes, options);
+  }
   switch (expr.type) {
     case "Number": {
       const value = parseFloat(expr.value);
@@ -126,8 +162,8 @@ export function lowerAstToJitExpr(
       return { tag: "Var", name: expr.name, jitType: t };
     }
     case "Binary": {
-      const left = lowerAstToJitExpr(expr.left, envTypes);
-      const right = lowerAstToJitExpr(expr.right, envTypes);
+      const left = rec(expr.left);
+      const right = rec(expr.right);
       if (MATRIX_OPS.has(expr.op) && bothTensor(left.jitType, right.jitType)) {
         throw new E2LowerError(
           `e2: matrix op ${expr.op} on two tensors is not elementwise`
@@ -151,7 +187,7 @@ export function lowerAstToJitExpr(
       };
     }
     case "Unary": {
-      const operand = lowerAstToJitExpr(expr.operand, envTypes);
+      const operand = rec(expr.operand);
       // `!x` on a tensor produces a logical tensor; on a scalar, a
       // boolean. Plus/Minus pass the operand type through.
       let jitType = operand.jitType;
@@ -174,10 +210,24 @@ export function lowerAstToJitExpr(
       };
     }
     case "FuncCall": {
+      // If the caller opts in and `name` is a tensor in envTypes,
+      // `name(idx)` is tensor indexing (MATLAB syntax overload), not a
+      // builtin call. Rewrite to an Index node.
+      if (options.resolveFuncCallAsTensorIndex) {
+        const existingType = envTypes.get(expr.name);
+        if (existingType?.kind === "tensor" && !existingType.isComplex) {
+          const base: JitExpr = {
+            tag: "Var",
+            name: expr.name,
+            jitType: existingType,
+          };
+          return buildScalarIndexRead(base, expr.args, rec);
+        }
+      }
       if (!E2_BUILTIN_WHITELIST.has(expr.name)) {
         throw new E2LowerError(`e2: builtin '${expr.name}' not whitelisted`);
       }
-      const args = expr.args.map(a => lowerAstToJitExpr(a, envTypes));
+      const args = expr.args.map(a => rec(a));
       // Result is tensor if any arg is tensor; complex if any arg is
       // complex; otherwise scalar number.
       let isTensor = false;
@@ -209,6 +259,20 @@ export function lowerAstToJitExpr(
           ? { kind: "complex_or_number" }
           : { kind: "number" };
       return { tag: "Call", name: expr.name, args, jitType };
+    }
+    case "Index": {
+      // Only the simplest form: `x(<scalar_idx>)` where `x` has a known
+      // tensor type and the result is a scalar read. Used by the e2
+      // whole-loop kernel. Multi-index, range-index, and other forms
+      // fall through to the caller's bail path.
+      const base = rec(expr.base);
+      if (base.tag !== "Var") {
+        throw new E2LowerError(`e2: Index base must be an Ident`);
+      }
+      if (base.jitType.kind !== "tensor" || base.jitType.isComplex) {
+        throw new E2LowerError(`e2: Index requires a real tensor base`);
+      }
+      return buildScalarIndexRead(base, expr.indices, rec);
     }
     default:
       throw new E2LowerError(
