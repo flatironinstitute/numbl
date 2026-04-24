@@ -39,9 +39,28 @@ export interface E2ReductionInfo {
   accOp?: BinaryOperation;
 }
 
+/** Complex-path partitioning info. Present iff the kernel was compiled
+ *  via the paired-buffer complex emitter. The driver uses these lists
+ *  to marshal complex tensors (two pointers per tensor), complex
+ *  scalars (two doubles per scalar), and to allocate complex output
+ *  buffers (data + imag Float64Arrays). */
+export interface E2ComplexInfo {
+  complexTensorNames: string[];
+  realTensorNames: string[];
+  complexInputLhsNames: string[];
+  realInputLhsNames: string[];
+  complexScalarNames: string[];
+  realScalarNames: string[];
+  complexEscapeLhsNames: string[];
+  realEscapeLhsNames: string[];
+}
+
 export interface E2CacheEntry {
   fn: CompiledKernelFn;
-  /** Regular env tensor input names — order matches kernel signature. */
+  /** Env tensor input names (combined — for diagnostics). When
+   *  `complex` is defined, the complex marshaling code uses
+   *  `complex.complexTensorNames` and `complex.realTensorNames`
+   *  instead of this. */
   tensorNames: string[];
   /** Chain LHS names that need `in_<name>` (between tensors and scalars). */
   inputLhsNames: string[];
@@ -56,8 +75,12 @@ export interface E2CacheEntry {
   /** Set when the kernel produces a trailing scalar reduction output.
    *  The driver allocates a `Float64Array(1)` for `out_acc`, calls the
    *  kernel, then combines the result with `env[accName]` per the
-   *  `accOp` and `hasAccumulate` fields. */
+   *  `accOp` and `hasAccumulate` fields. Complex chains never set this
+   *  — the complex emitter rejects trailing reductions. */
   reduction?: E2ReductionInfo;
+  /** Paired-buffer complex path info. When set, the marshaling code
+   *  takes the complex branch. */
+  complex?: E2ComplexInfo;
 }
 
 // Chain cache: keyed on the FIRST AST Stmt of the chain. Different

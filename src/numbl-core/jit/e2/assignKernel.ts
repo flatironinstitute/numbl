@@ -48,10 +48,15 @@ import { lowerAstToJitExpr, E2LowerError } from "./astToJitExpr.js";
 import { emitE2ChainKernel, type ChainAssignSpec } from "./chainKernelEmit.js";
 import { emitE2ReductionKernel } from "./reductionKernelEmit.js";
 import {
+  emitE2ComplexChainKernel,
+  type ComplexChainAssignSpec,
+} from "./complexChainKernelEmit.js";
+import {
   chainCacheGet,
   chainCacheSet,
   E2_BAILED,
   type E2CacheEntry,
+  type E2ComplexInfo,
   type E2ReductionInfo,
 } from "./cache.js";
 import { getE2CompileFn, e2MinElems } from "./compileFn.js";
@@ -80,11 +85,16 @@ function resolveSupportedInput(
   if (value === undefined) return null;
   const jt = inferJitType(value);
   if (jt.kind === "tensor") {
-    if (jt.isComplex) return null;
     const t = value as RuntimeTensor;
-    if (t.imag) return null;
     if (!(t.data instanceof Float64Array)) return null;
-  } else if (jt.kind !== "number" && jt.kind !== "boolean") {
+    if (jt.isComplex) {
+      if (!t.imag || !(t.imag instanceof Float64Array)) return null;
+    }
+  } else if (
+    jt.kind !== "number" &&
+    jt.kind !== "boolean" &&
+    jt.kind !== "complex_or_number"
+  ) {
     return null;
   }
   return { name, jitType: jt, value };
@@ -143,6 +153,31 @@ function reuseOrAllocOutBuf(
     return prev.data;
   }
   return new FloatXArray(n) as Float64Array;
+}
+
+/** Complex-output variant: reuse the existing complex tensor's paired
+ *  data+imag buffers when the env value is a unique-reference complex
+ *  tensor of the right length. Avoids two fresh allocations per call
+ *  on the hot path (e.g. loop body writes `u1 = z.*z + c` 100 times). */
+function reuseOrAllocComplexOutBufs(
+  prev: RuntimeValue | undefined,
+  n: number
+): { data: Float64Array; imag: Float64Array } {
+  if (
+    prev !== undefined &&
+    isRuntimeTensor(prev) &&
+    prev._rc === 1 &&
+    prev.data instanceof Float64Array &&
+    prev.data.length === n &&
+    prev.imag instanceof Float64Array &&
+    prev.imag.length === n
+  ) {
+    return { data: prev.data, imag: prev.imag };
+  }
+  return {
+    data: new FloatXArray(n) as Float64Array,
+    imag: new FloatXArray(n) as Float64Array,
+  };
 }
 
 function buildSig(
@@ -283,13 +318,19 @@ function tryChain(
   // Phase 2: lower each candidate chain stmt incrementally. envTypes
   // is built up from env values + chain LHS registrations as we go.
   // We truncate at the first stmt that fails to lower or produces a
-  // non-tensor / complex / undefined-type result — that stmt and
-  // everything after it stay on the interpreter path. May still match
-  // a trailing reduction below.
+  // non-tensor / undefined-type result — that stmt and everything
+  // after it stay on the interpreter path. May still match a trailing
+  // reduction below.
+  //
+  // Chain LHS type is propagated from each assign's lowered RHS so
+  // later stmts see correct complex-ness when reading a prior LHS.
+  // If any stmt in the accepted prefix produces a complex result, the
+  // whole chain goes through the paired-buffer complex emitter.
   const envTypes = new Map<string, JitType>();
-  const chainLhsType: JitType = { kind: "tensor", isComplex: false };
+  const defaultLhsType: JitType = { kind: "tensor", isComplex: false };
   const specs: ChainAssignSpec[] = [];
   const acceptedAssigns: ChainAssignClassification[] = [];
+  let chainIsComplex = false;
 
   // Look up the type for a name before lowering a stmt that references
   // it. Returns false if the name is unbound or has an unsupported
@@ -313,7 +354,7 @@ function tryChain(
       }
       if (!ok) break;
       if (!envTypes.has(a.stmt.name)) {
-        envTypes.set(a.stmt.name, chainLhsType);
+        envTypes.set(a.stmt.name, defaultLhsType);
       }
       let rhs;
       try {
@@ -323,10 +364,19 @@ function tryChain(
         throw e;
       }
       if (rhs.jitType.kind !== "tensor") break;
-      if (rhs.jitType.isComplex) break;
+      if (rhs.jitType.isComplex) chainIsComplex = true;
       specs.push({ lhsName: a.stmt.name, rhs });
       acceptedAssigns.push(a);
-      envTypes.set(a.stmt.name, chainLhsType);
+      // Merge: once complex, stays complex so subsequent reads widen
+      // correctly in the paired-buffer kernel.
+      const prior = envTypes.get(a.stmt.name);
+      const priorComplex =
+        prior && prior.kind === "tensor" ? prior.isComplex : false;
+      const newLhsType: JitType = {
+        kind: "tensor",
+        isComplex: priorComplex || rhs.jitType.isComplex,
+      };
+      envTypes.set(a.stmt.name, newLhsType);
     }
   }
 
@@ -565,6 +615,85 @@ function tryChain(
     }
   }
 
+  // Decide complex vs real dispatch. Complex codegen is required
+  // whenever ANY input tensor/scalar is complex OR any RHS produces a
+  // complex value: reads of complex Vars use paired buffers and the
+  // real emitter doesn't know how. We extend chainIsComplex (set
+  // during lowering) with the input-driven signal.
+  let needComplex = chainIsComplex;
+  if (!needComplex) {
+    for (const inp of inputs) {
+      if (inp.jitType.kind === "tensor" && inp.jitType.isComplex) {
+        needComplex = true;
+        break;
+      }
+      if (inp.jitType.kind === "complex_or_number") {
+        needComplex = true;
+        break;
+      }
+    }
+  }
+
+  // Complex chains can't absorb trailing reductions: the accumulator
+  // is a single double, but `sum(complex_tensor)` produces a complex
+  // scalar. Drop the trailing match and let the reduction stmt run
+  // through the interpreter on its own.
+  if (needComplex && trailing) {
+    if (trailingIsStandalone) {
+      // No chain prefix was accepted — the whole thing falls through.
+      return false;
+    }
+    trailing = null;
+    trailingTargetRhs = null;
+    trailingTargetCls = null;
+  }
+
+  // Partition for the complex path: complex vs real within each bucket.
+  // Only populated when `needComplex`. Chain-LHS complex-ness comes from
+  // the envTypes map we built during lowering.
+  const complexTensorNames: string[] = [];
+  const realTensorNames: string[] = [];
+  const complexScalarNames: string[] = [];
+  const realScalarNames: string[] = [];
+  const complexInputLhsNames: string[] = [];
+  const realInputLhsNames: string[] = [];
+  const complexEscapeLhsNames: string[] = [];
+  const realEscapeLhsNames: string[] = [];
+  if (needComplex) {
+    for (const name of tensorNames) {
+      const inp = inputs.find(i => i.name === name)!;
+      if (inp.jitType.kind === "tensor" && inp.jitType.isComplex) {
+        complexTensorNames.push(name);
+      } else {
+        realTensorNames.push(name);
+      }
+    }
+    for (const name of scalarNames) {
+      const inp = inputs.find(i => i.name === name)!;
+      if (inp.jitType.kind === "complex_or_number") {
+        complexScalarNames.push(name);
+      } else {
+        realScalarNames.push(name);
+      }
+    }
+    for (const name of inputLhsOrdered) {
+      const t = envTypes.get(name);
+      if (t && t.kind === "tensor" && t.isComplex) {
+        complexInputLhsNames.push(name);
+      } else {
+        realInputLhsNames.push(name);
+      }
+    }
+    for (const name of escapeLhsNames) {
+      const t = envTypes.get(name);
+      if (t && t.kind === "tensor" && t.isComplex) {
+        complexEscapeLhsNames.push(name);
+      } else {
+        realEscapeLhsNames.push(name);
+      }
+    }
+  }
+
   // Cache key includes everything that distinguishes one specialization
   // from another: input types, partition lists, chain length, and any
   // trailing reduction info (op + accumulate variant).
@@ -578,21 +707,54 @@ function tryChain(
       }`
     : "";
   // `--par` produces a different C kernel (parallel for vs simd-only),
-  // so it has to participate in the cache key.
+  // so it has to participate in the cache key. Complex kernels ignore
+  // `--par` but we still include it to keep the sig format uniform.
   const par = interp.par && isOpenmpAvailable();
   const sig =
     buildSig(inputs, inputLhsOrdered, escapeLhsNames, acceptedAssigns.length) +
     "|" +
     reductionSigPart +
-    `|par=${par ? "1" : "0"}`;
+    `|par=${par ? "1" : "0"}` +
+    `|complex=${needComplex ? "1" : "0"}`;
 
   let entry = chainCacheGet(firstStmt, sig);
   if (entry === E2_BAILED) return false;
 
   if (!entry) {
     let emit;
+    let complexInfo: E2ComplexInfo | undefined;
     try {
-      if (trailing) {
+      if (needComplex) {
+        // Build per-stmt specs with `rhsIsComplex` so the emitter
+        // knows which assigns write a paired pair vs a single real.
+        const complexSpecs: ComplexChainAssignSpec[] = specs.map(s => ({
+          lhsName: s.lhsName,
+          rhs: s.rhs,
+          rhsIsComplex:
+            s.rhs.jitType.kind === "tensor" && s.rhs.jitType.isComplex,
+        }));
+        const complexEmit = emitE2ComplexChainKernel(complexSpecs, {
+          complexTensorNames,
+          realTensorNames,
+          complexScalarNames,
+          realScalarNames,
+          complexInputLhsNames,
+          realInputLhsNames,
+          complexEscapeLhsNames,
+          realEscapeLhsNames,
+        });
+        emit = complexEmit;
+        complexInfo = {
+          complexTensorNames: complexEmit.complexInputTensors,
+          realTensorNames: complexEmit.realInputTensors,
+          complexInputLhsNames: complexEmit.complexInputLhsNames,
+          realInputLhsNames: complexEmit.realInputLhsNames,
+          complexScalarNames: complexEmit.complexInputScalars,
+          realScalarNames: complexEmit.realInputScalars,
+          complexEscapeLhsNames: complexEmit.complexEscapeLhsNames,
+          realEscapeLhsNames: complexEmit.realEscapeLhsNames,
+        };
+      } else if (trailing) {
         // Build the per-element value expression for the reduction.
         // For (B) chain+trailing: it's Var(lastChainLhs) which the
         // emitter resolves to the stack-local. For (A) standalone:
@@ -627,6 +789,12 @@ function tryChain(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.startsWith("fused scalar emitter:")) {
+        chainCacheSet(firstStmt, sig, E2_BAILED);
+        return false;
+      }
+      // Complex emitter rejects unsupported ops by throwing Error with
+      // a prefix — bail silently (falls through to interpreter).
+      if (msg.startsWith("e2 complex kernel:")) {
         chainCacheSet(firstStmt, sig, E2_BAILED);
         return false;
       }
@@ -677,15 +845,48 @@ function tryChain(
         }
       : undefined;
 
-    entry = {
-      fn,
-      tensorNames: emit.inputTensors,
-      inputLhsNames: emit.inputLhsNames,
-      scalarNames: emit.inputScalars,
-      escapeLhsNames: emit.escapeLhsNames,
-      chainLength: emit.chainLength,
-      ...(reduction ? { reduction } : {}),
-    };
+    if (complexInfo) {
+      entry = {
+        fn,
+        // Combined lists for diagnostics; actual marshaling uses
+        // `complex.*` buckets below.
+        tensorNames: [
+          ...complexInfo.complexTensorNames,
+          ...complexInfo.realTensorNames,
+        ],
+        inputLhsNames: [
+          ...complexInfo.complexInputLhsNames,
+          ...complexInfo.realInputLhsNames,
+        ],
+        scalarNames: [
+          ...complexInfo.complexScalarNames,
+          ...complexInfo.realScalarNames,
+        ],
+        escapeLhsNames: [
+          ...complexInfo.complexEscapeLhsNames,
+          ...complexInfo.realEscapeLhsNames,
+        ],
+        chainLength: emit.chainLength,
+        complex: complexInfo,
+      };
+    } else {
+      const realEmit = emit as {
+        inputTensors: string[];
+        inputLhsNames: string[];
+        inputScalars: string[];
+        escapeLhsNames: string[];
+        chainLength: number;
+      };
+      entry = {
+        fn,
+        tensorNames: realEmit.inputTensors,
+        inputLhsNames: realEmit.inputLhsNames,
+        scalarNames: realEmit.inputScalars,
+        escapeLhsNames: realEmit.escapeLhsNames,
+        chainLength: realEmit.chainLength,
+        ...(reduction ? { reduction } : {}),
+      };
+    }
     chainCacheSet(firstStmt, sig, entry);
   }
 
@@ -694,29 +895,99 @@ function tryChain(
   const callArgs: unknown[] = [n];
   const byName = new Map<string, InputDescriptor>();
   for (const inp of inputs) byName.set(inp.name, inp);
-  for (const t of cacheEntry.tensorNames) {
-    const inp = byName.get(t)!;
-    callArgs.push((inp.value as RuntimeTensor).data);
-  }
-  for (const t of cacheEntry.inputLhsNames) {
-    const inp = byName.get(t)!;
-    callArgs.push((inp.value as RuntimeTensor).data);
-  }
-  for (const s of cacheEntry.scalarNames) {
-    const inp = byName.get(s)!;
-    if (typeof inp.value === "boolean") callArgs.push(inp.value ? 1 : 0);
-    else callArgs.push(inp.value as number);
-  }
-  // One output buffer per escape LHS. Reuse if the existing env value
-  // is a unique-ref Float64 tensor of matching length.
-  const outBufs: Float64Array[] = [];
-  for (const e of cacheEntry.escapeLhsNames) {
-    const buf = reuseOrAllocOutBuf(interp.env.get(e), n);
-    outBufs.push(buf);
-    callArgs.push(buf);
+
+  // Output buffers, either single Float64Array (real) or paired
+  // {data, imag} (complex). Filled for all escape LHSs (both buckets
+  // in the complex case); mapped back to env in the same order below.
+  const realOutBufs: Float64Array[] = [];
+  const complexOutBufs: { data: Float64Array; imag: Float64Array }[] = [];
+
+  if (cacheEntry.complex) {
+    const cx = cacheEntry.complex;
+    // Complex tensors: push (data, imag) pairs.
+    for (const t of cx.complexTensorNames) {
+      const inp = byName.get(t)!;
+      const rt = inp.value as RuntimeTensor;
+      callArgs.push(rt.data);
+      callArgs.push(rt.imag!);
+    }
+    // Real tensors: single pointer.
+    for (const t of cx.realTensorNames) {
+      const inp = byName.get(t)!;
+      callArgs.push((inp.value as RuntimeTensor).data);
+    }
+    // Complex input LHSs (read before written in chain).
+    for (const t of cx.complexInputLhsNames) {
+      const inp = byName.get(t)!;
+      const rt = inp.value as RuntimeTensor;
+      callArgs.push(rt.data);
+      callArgs.push(rt.imag!);
+    }
+    for (const t of cx.realInputLhsNames) {
+      const inp = byName.get(t)!;
+      callArgs.push((inp.value as RuntimeTensor).data);
+    }
+    // Complex scalars: (re, im) pair. Handles both `complex_number`
+    // runtime values and plain numbers (im = 0, for a name typed as
+    // `complex_or_number` but bound to a real scalar).
+    for (const s of cx.complexScalarNames) {
+      const inp = byName.get(s)!;
+      const v = inp.value as
+        | { kind: "complex_number"; re: number; im: number }
+        | number
+        | boolean;
+      if (typeof v === "number") {
+        callArgs.push(v);
+        callArgs.push(0);
+      } else if (typeof v === "boolean") {
+        callArgs.push(v ? 1 : 0);
+        callArgs.push(0);
+      } else {
+        callArgs.push(v.re);
+        callArgs.push(v.im);
+      }
+    }
+    for (const s of cx.realScalarNames) {
+      const inp = byName.get(s)!;
+      if (typeof inp.value === "boolean") callArgs.push(inp.value ? 1 : 0);
+      else callArgs.push(inp.value as number);
+    }
+    // Complex escape outputs: paired data/imag Float64Arrays.
+    for (const e of cx.complexEscapeLhsNames) {
+      const pair = reuseOrAllocComplexOutBufs(interp.env.get(e), n);
+      complexOutBufs.push(pair);
+      callArgs.push(pair.data);
+      callArgs.push(pair.imag);
+    }
+    for (const e of cx.realEscapeLhsNames) {
+      const buf = reuseOrAllocOutBuf(interp.env.get(e), n);
+      realOutBufs.push(buf);
+      callArgs.push(buf);
+    }
+  } else {
+    // Real path — legacy flat lists.
+    for (const t of cacheEntry.tensorNames) {
+      const inp = byName.get(t)!;
+      callArgs.push((inp.value as RuntimeTensor).data);
+    }
+    for (const t of cacheEntry.inputLhsNames) {
+      const inp = byName.get(t)!;
+      callArgs.push((inp.value as RuntimeTensor).data);
+    }
+    for (const s of cacheEntry.scalarNames) {
+      const inp = byName.get(s)!;
+      if (typeof inp.value === "boolean") callArgs.push(inp.value ? 1 : 0);
+      else callArgs.push(inp.value as number);
+    }
+    for (const e of cacheEntry.escapeLhsNames) {
+      const buf = reuseOrAllocOutBuf(interp.env.get(e), n);
+      realOutBufs.push(buf);
+      callArgs.push(buf);
+    }
   }
   // Reduction output: a 1-element Float64Array. The kernel writes
   // `*out_acc = acc;` into slot [0]; the JS side reads it after.
+  // Never present for complex kernels (driver rejects absorption).
   let accBuf: Float64Array | null = null;
   if (cacheEntry.reduction) {
     accBuf = new FloatXArray(1) as Float64Array;
@@ -727,16 +998,44 @@ function tryChain(
 
   // Bind escape LHSs back to env. Use the reference tensor's shape so
   // column/row orientation is preserved.
-  for (let k = 0; k < cacheEntry.escapeLhsNames.length; k++) {
-    const name = cacheEntry.escapeLhsNames[k];
-    const newTensor: RuntimeTensor = {
-      kind: "tensor",
-      data: outBufs[k],
-      shape: refTensor.shape.slice(),
-      _rc: 1,
-    };
-    interp.env.set(name, newTensor);
-    interp.ans = newTensor;
+  if (cacheEntry.complex) {
+    const cx = cacheEntry.complex;
+    for (let k = 0; k < cx.complexEscapeLhsNames.length; k++) {
+      const name = cx.complexEscapeLhsNames[k];
+      const pair = complexOutBufs[k];
+      const newTensor: RuntimeTensor = {
+        kind: "tensor",
+        data: pair.data,
+        imag: pair.imag,
+        shape: refTensor.shape.slice(),
+        _rc: 1,
+      };
+      interp.env.set(name, newTensor);
+      interp.ans = newTensor;
+    }
+    for (let k = 0; k < cx.realEscapeLhsNames.length; k++) {
+      const name = cx.realEscapeLhsNames[k];
+      const newTensor: RuntimeTensor = {
+        kind: "tensor",
+        data: realOutBufs[k],
+        shape: refTensor.shape.slice(),
+        _rc: 1,
+      };
+      interp.env.set(name, newTensor);
+      interp.ans = newTensor;
+    }
+  } else {
+    for (let k = 0; k < cacheEntry.escapeLhsNames.length; k++) {
+      const name = cacheEntry.escapeLhsNames[k];
+      const newTensor: RuntimeTensor = {
+        kind: "tensor",
+        data: realOutBufs[k],
+        shape: refTensor.shape.slice(),
+        _rc: 1,
+      };
+      interp.env.set(name, newTensor);
+      interp.ans = newTensor;
+    }
   }
 
   // Trailing reduction: combine kernel's scalar output with env value.

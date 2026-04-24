@@ -63,6 +63,12 @@ export const E2_BUILTIN_WHITELIST: ReadonlySet<string> = new Set([
   "atan2",
   "hypot",
   "pow",
+  // Complex-specific scalar ops. In a real-tensor chain these are no-ops
+  // (real → real passes through); the emitter handles them via the
+  // paired-buffer walker when the chain is complex.
+  "conj",
+  "real",
+  "imag",
 ]);
 
 /** Binary ops we'll let through without further checks. Matrix ops
@@ -132,6 +138,7 @@ function makeOpaque(ctx: Ctx, expr: Expr): Expr {
 function visit(expr: Expr, ctx: Ctx): Expr {
   switch (expr.type) {
     case "Number":
+    case "ImagUnit":
       return expr;
 
     case "Ident":
@@ -194,6 +201,7 @@ export function classifyExpr(expr: Expr): ClassifyResult {
 export function isWorthCompiling(emittableExpr: Expr): boolean {
   switch (emittableExpr.type) {
     case "Number":
+    case "ImagUnit":
     case "Ident":
       return false;
     default:
