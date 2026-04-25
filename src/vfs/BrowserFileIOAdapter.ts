@@ -253,6 +253,10 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     return "/tmp";
   }
 
+  userpath(): string {
+    return "/system";
+  }
+
   deleteFile(pattern: string): void {
     const norm = this.vfs.normalizePath(pattern);
     if (norm.includes("*") || norm.includes("?")) {

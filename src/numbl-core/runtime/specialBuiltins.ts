@@ -1344,6 +1344,13 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return RTV.char(io.tempdir());
   });
 
+  registerSpecial("userpath", () => {
+    const io = requireFileIO();
+    if (!io.userpath)
+      throw new RuntimeError("userpath is not available in this environment");
+    return RTV.char(io.userpath());
+  });
+
   registerSpecial("tempname", (_nargout, args) => {
     const io = requireFileIO();
     const margs = args.map(a => ensureRuntimeValue(a));

@@ -89,6 +89,9 @@ export interface FileIOAdapter {
   /** Return the temporary directory path. Optional. */
   tempdir?(): string;
 
+  /** Return the numbl user/config directory path. Optional. */
+  userpath?(): string;
+
   /** List directory entries. Returns array of {name, folder, bytes, isdir, mtimeMs}. Optional. */
   listDir?(dirPath: string): {
     name: string;

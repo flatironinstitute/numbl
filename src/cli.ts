@@ -109,6 +109,7 @@ const mipCoreDir = join(
   ".numbl",
   "mip",
   "packages",
+  "gh",
   "mip-org",
   "core",
   "mip"

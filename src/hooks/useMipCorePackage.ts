@@ -7,7 +7,7 @@ import {
 } from "../db/operations.js";
 import { fetchMipCoreFiles } from "./fetchMipCoreFiles.js";
 
-const MIP_SYSTEM_PREFIX = ".mip/packages/mip-org/core/mip/";
+const MIP_SYSTEM_PREFIX = "mip/packages/gh/mip-org/core/mip/";
 
 // Periodically wipe the system directory so that any stale or extra packages
 // installed via mip commands don't accumulate or leave the user in a broken
@@ -19,7 +19,7 @@ const SYSTEM_LAST_CLEARED_KEY = "numbl:systemLastCleared";
  * On mount: if more than SYSTEM_CLEAR_INTERVAL_MS has elapsed since the last
  * clear (tracked in localStorage), wipe every file under the __system__
  * project. Then fetch the mip core package, unzip it, and write the files
- * into IndexedDB under the __system__ project at .mip/packages/mip-org/core/mip/,
+ * into IndexedDB under the __system__ project at mip/packages/gh/mip-org/core/mip/,
  * overwriting any previous contents. Calls onInstalled() when done so the
  * caller can reload system files.
  */

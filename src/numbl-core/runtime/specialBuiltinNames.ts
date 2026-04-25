@@ -99,6 +99,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "input",
   "tempdir",
   "tempname",
+  "userpath",
   "getenv",
   "setenv",
   "pwd",

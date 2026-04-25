@@ -269,7 +269,7 @@ self.onmessage = (e: MessageEvent) => {
         activeFileName,
         [
           ...(useSearchPaths ?? []),
-          "/system/.mip/packages/mip-org/core/mip/mip",
+          "/system/mip/packages/gh/mip-org/core/mip/mip",
         ]
       );
 
@@ -402,7 +402,7 @@ self.onmessage = (e: MessageEvent) => {
       "repl",
       [
         ...(persistentSearchPaths ?? []),
-        "/system/.mip/packages/mip-org/core/mip/mip",
+        "/system/mip/packages/gh/mip-org/core/mip/mip",
       ]
     );
 

@@ -294,6 +294,10 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     return tmpdir();
   }
 
+  userpath(): string {
+    return join(homedir(), ".numbl");
+  }
+
   websave(url: string, filename: string, options?: WebOptions): void {
     const dest = expandTilde(filename);
     const timeoutMs = options?.timeout
