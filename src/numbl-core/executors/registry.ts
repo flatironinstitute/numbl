@@ -137,7 +137,9 @@ export class Registry {
     }
 
     if ("bail" in result) {
-      this.cache.markBailed(c.executor.name, stmt, key);
+      if (!result.transient) {
+        this.cache.markBailed(c.executor.name, stmt, key);
+      }
       return null;
     }
     return { consumed: result.consumed, signal: result.signal ?? null };

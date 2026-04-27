@@ -45,7 +45,6 @@ import {
 
 import type { Interpreter } from "./interpreter.js";
 import { tryJitFor, tryJitWhile } from "../jit/jitLoop.js";
-import { tryE2Assign } from "../jit/e2/assignKernel.js";
 import { tryE2Loop } from "../jit/e2/loopKernel.js";
 import { makeRootContext } from "../executors/registry.js";
 
@@ -83,7 +82,6 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "Assign": {
-      if (this.experimental === "e2" && tryE2Assign(this, stmt)) return null;
       const rawVal = this.evalExpr(stmt.expr);
       const val = Array.isArray(rawVal) ? rawVal[0] : rawVal;
       const rv = this.rt.share(val) as RuntimeValue;

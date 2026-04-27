@@ -33,6 +33,8 @@ interface StubExecutorOpts {
   cost: { compileMs: number; perCallNs: number; runNs: number };
   /** When set, run() returns this bail. */
   bail?: { message: string };
+  /** When true, bail is reported as transient (not cached). */
+  bailTransient?: boolean;
   /** Counter incremented every time run() is entered. */
   runCount?: { n: number };
   /** Counter incremented every time compile() is entered. */
@@ -62,7 +64,12 @@ function stubExecutor(opts: StubExecutorOpts): Executor<StubMatch, StubMatch> {
     },
     run(): RunResult {
       if (opts.runCount) opts.runCount.n++;
-      if (opts.bail) return { bail: { message: opts.bail.message } };
+      if (opts.bail) {
+        return {
+          bail: { message: opts.bail.message },
+          ...(opts.bailTransient ? { transient: true } : {}),
+        };
+      }
       return { consumed: 1 };
     },
   };
@@ -203,6 +210,36 @@ describe("Registry plumbing", () => {
     r.dispatch(stmts, 0, fakeCtx(r));
     expect(compiles.n).toBe(1);
     expect(runs.n).toBe(3);
+  });
+
+  it("transient bail does not poison the cache", () => {
+    const fastRuns = { n: 0 };
+    const slowRuns = { n: 0 };
+    const r = new Registry();
+    r.register(
+      stubExecutor({
+        name: "fast-bails-transient",
+        cost: { compileMs: 0, perCallNs: 1, runNs: 1 },
+        bail: { message: "wrapped layer rejected" },
+        bailTransient: true,
+        runCount: fastRuns,
+      })
+    );
+    r.register(
+      stubExecutor({
+        name: "slow-ok",
+        cost: { compileMs: 0, perCallNs: 100, runNs: 100 },
+        runCount: slowRuns,
+      })
+    );
+
+    const stmts = [fakeStmt()];
+    r.dispatch(stmts, 0, fakeCtx(r));
+    r.dispatch(stmts, 0, fakeCtx(r));
+    // Both dispatches should have re-entered the transient-bailing
+    // executor; the cache is not poisoned.
+    expect(fastRuns.n).toBe(2);
+    expect(slowRuns.n).toBe(2);
   });
 
   it("clearCache forces recompile on next dispatch", () => {

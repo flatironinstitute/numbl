@@ -26,4 +26,5 @@ export {
   isKnownInteger,
 } from "./typeInfo.js";
 export { interpreterExecutor } from "./interpreterExecutor.js";
-export { registerInterpreterPlugin } from "./plugins.js";
+export { chainCKernelExecutor } from "./chainCKernelExecutor.js";
+export { registerInterpreterPlugin, registerE2Plugin } from "./plugins.js";

@@ -35,7 +35,15 @@ export interface BailReason {
 
 export type RunResult =
   | { consumed: number; signal?: ControlSignal | null }
-  | { bail: BailReason };
+  | {
+      bail: BailReason;
+      /** When true, the bail is not cached: future dispatches re-enter
+       *  the executor as if cache had never been touched. Use for
+       *  shim/wrapper executors whose internal classify logic must
+       *  re-run on every call (e.g., because the wrapped layer caches
+       *  on its own keying scheme). Default false. */
+      transient?: boolean;
+    };
 
 export interface MatchResult<M> {
   /** Opaque per-executor data; passed to compile() and run(). */

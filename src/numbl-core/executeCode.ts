@@ -32,6 +32,7 @@ import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import { jitHelpers, buildPerRuntimeJitHelpers } from "./jit/js/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
+import { registerE2Plugin } from "./executors/plugins.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -361,6 +362,12 @@ export function executeCode(
   interpreter.experimental = options.experimental;
   interpreter.par = options.par ?? false;
   interpreter.log = options.log;
+
+  // Register mode-specific executor plugins. The interpreter plugin is
+  // already registered by the Interpreter constructor.
+  if (interpreter.experimental === "e2") {
+    registerE2Plugin(interpreter.registry);
+  }
 
   // Collect JIT compilations for generatedJS output and profiling
   const jitSections: string[] = [];
