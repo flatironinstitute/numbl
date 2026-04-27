@@ -93,14 +93,6 @@ export class Interpreter {
   /** @internal Index in _postSiblings of the next stmt after the current one. */
   _postSiblingsIdx: number = 0;
 
-  /** @internal Number of EXTRA sibling stmts that the current execStmt
-   *  consumed beyond the one passed in. The surrounding sibling loop
-   *  reads this after each execStmt and advances its index by this
-   *  many. Used by `--opt e2` chain fusion to atomically execute a run
-   *  of consecutive Assigns as one C kernel. The interpreter must
-   *  reset this to 0 before each execStmt call. */
-  _e2ChainAdvance: number = 0;
-
   /** @internal The stmt list of the innermost enclosing function body
    *  (or top-level script body). Used by `--opt e2` chain liveness
    *  analysis to decide whether a chain LHS is actually referenced

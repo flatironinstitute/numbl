@@ -11,9 +11,8 @@
  * caching the rejection.
  *
  * Future work: move classification into `match`, compile/cache the
- * kernel under the registry's cache, and drop the dependency on the
- * legacy `_e2ChainAdvance` interpreter field. That refactor lands in
- * its own commit; this port is a structural step.
+ * kernel under the registry's cache. That refactor lands in its own
+ * commit; this port is a structural step.
  */
 
 import type { Stmt } from "../../parser/types.js";
@@ -70,19 +69,13 @@ export const chainCKernelExecutor: Executor<ChainMatch, true> = {
     // re-set them defensively here in case the call path changes.
     interp._postSiblings = m.siblings as Stmt[];
     interp._postSiblingsIdx = m.i + 1;
-    interp._e2ChainAdvance = 0;
-    const ok = tryE2Assign(interp, m.headStmt);
-    if (!ok) {
-      // tryE2Assign already cleared its own state; ensure the legacy
-      // signal is zeroed for the surrounding dispatch loop.
-      interp._e2ChainAdvance = 0;
+    const consumed = tryE2Assign(interp, m.headStmt);
+    if (consumed === null) {
       return {
         bail: { message: "chain-c-kernel: not classifiable" },
         transient: true,
       };
     }
-    const consumed = 1 + interp._e2ChainAdvance;
-    interp._e2ChainAdvance = 0;
     return { consumed };
   },
 };

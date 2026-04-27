@@ -14,12 +14,12 @@
  * On success:
  *   - Single chain assign: handled like a one-stmt chain.
  *   - Multi-stmt chain: one C kernel runs all assigns, only escape
- *     LHSs materialize back to env. `interp._e2ChainAdvance` is set
- *     so the surrounding loop skips the consumed sibling stmts.
+ *     LHSs materialize back to env. The returned `consumed` count
+ *     tells the dispatcher how many sibling stmts to skip.
  *
  * Compilation failures are hard errors (RuntimeError). Classification
  * bails (non-classifiable RHS, mismatched lengths, etc.) silently fall
- * through to the regular interpreter path.
+ * through (return null) to the regular interpreter path.
  */
 
 import type { Stmt } from "../../parser/types.js";
@@ -249,34 +249,34 @@ function describeKernel(
 // ── Public entry point ─────────────────────────────────────────────────
 
 /**
- * Try to compile a chain (1+ stmts) starting at `stmt`. Returns true
- * on success — `interp._e2ChainAdvance` is set to the count of EXTRA
- * sibling stmts the kernel consumed (0 for a single-stmt chain).
- * Returns false to fall back to the regular interpreter path.
+ * Try to compile a chain (1+ stmts) starting at `stmt`. Returns the
+ * total number of consumed sibling stmts on success (>= 1), or `null`
+ * to signal fall-back to the regular interpreter path.
  */
 export function tryE2Assign(
   interp: Interpreter,
   stmt: Stmt & { type: "Assign" }
-): boolean {
+): number | null {
   const siblings = interp._postSiblings;
   const nextIdx = interp._postSiblingsIdx;
   if (!siblings || nextIdx <= 0 || siblings[nextIdx - 1] !== stmt) {
-    return false;
+    return null;
   }
   const startIdx = nextIdx - 1;
   // Try chain (with optional trailing reduction or standalone reduction).
-  if (tryChain(interp, siblings, startIdx)) return true;
+  const chained = tryChain(interp, siblings, startIdx);
+  if (chained !== null) return chained;
   // Then the multi-reduction path (single Assign with 2+ reductions
   // over the same tensor, e.g. `acc = sum(x) + max(x) + min(x)`).
-  if (tryE2MultiReduction(interp, stmt)) return true;
-  return false;
+  if (tryE2MultiReduction(interp, stmt)) return 1;
+  return null;
 }
 
 function tryChain(
   interp: Interpreter,
   siblings: Stmt[],
   startIdx: number
-): boolean {
+): number | null {
   // The head may be a standalone reduction `acc = [acc OP] reduce(<expr>)`
   // with a scalar (or unset) accumulator. Prefer that over the chain
   // path: chain treats `reduce(...)` as opaque, evaluates it eagerly
@@ -294,7 +294,7 @@ function tryChain(
   const cls: ChainClassification | null = reductionStandaloneCandidate
     ? null
     : classifyAssignChain(siblings, startIdx);
-  if (!cls && !reductionStandaloneCandidate) return false;
+  if (!cls && !reductionStandaloneCandidate) return null;
 
   // Phase 1: evaluate opaque subtrees per chain stmt. We evaluate
   // eagerly for the FULL candidate chain; if we later truncate, the
@@ -308,7 +308,7 @@ function tryChain(
           const raw = interp.evalExpr(root.expr);
           val = Array.isArray(raw) ? raw[0] : raw;
         } catch {
-          return false;
+          return null;
         }
         extraBindings.set(root.syntheticName, val);
       }
@@ -497,7 +497,7 @@ function tryChain(
     }
   }
 
-  if (acceptedAssigns.length === 0 && !trailing) return false;
+  if (acceptedAssigns.length === 0 && !trailing) return null;
 
   // Phase 3: liveness — each unique chain LHS escapes if either:
   //   (a) it's a "scope export" (function output, or `varargout`, or
@@ -534,7 +534,7 @@ function tryChain(
   // No observable output ⇒ nothing to materialize. With a trailing
   // reduction the accumulator IS the observable output, so we keep
   // going. Without one, fall through to the interpreter.
-  if (escapeLhsNames.length === 0 && !trailing) return false;
+  if (escapeLhsNames.length === 0 && !trailing) return null;
 
   // Phase 4: input-needs analysis. A chain LHS needs `in_<name>` iff
   // any chain stmt reads it BEFORE the LHS has been written in the
@@ -582,7 +582,7 @@ function tryChain(
   // never references it.
   if (trailing) allEnvIdents.delete(trailing.accName);
   const inputs = gatherInputs(interp, allEnvIdents, extraBindings);
-  if (!inputs) return false;
+  if (!inputs) return null;
 
   // Determine output element count from the largest tensor input.
   let n = 0;
@@ -596,12 +596,12 @@ function tryChain(
       }
     }
   }
-  if (n === 0 || !refTensor) return false;
-  if (n < e2MinElems()) return false;
+  if (n === 0 || !refTensor) return null;
+  if (n < e2MinElems()) return null;
   for (const inp of inputs) {
     if (inp.jitType.kind === "tensor") {
       const t = inp.value as RuntimeTensor;
-      if (t.data.length !== n) return false;
+      if (t.data.length !== n) return null;
     }
   }
 
@@ -611,7 +611,7 @@ function tryChain(
   const scalarNames: string[] = [];
   for (const inp of inputs) {
     if (inputLhsNames.has(inp.name)) {
-      if (inp.jitType.kind !== "tensor") return false;
+      if (inp.jitType.kind !== "tensor") return null;
       inputLhsOrdered.push(inp.name);
     } else if (inp.jitType.kind === "tensor") {
       tensorNames.push(inp.name);
@@ -646,7 +646,7 @@ function tryChain(
   if (needComplex && trailing) {
     if (trailingIsStandalone) {
       // No chain prefix was accepted — the whole thing falls through.
-      return false;
+      return null;
     }
     trailing = null;
     trailingTargetRhs = null;
@@ -723,7 +723,7 @@ function tryChain(
     `|complex=${needComplex ? "1" : "0"}`;
 
   let entry = chainCacheGet(firstStmt, sig);
-  if (entry === E2_BAILED) return false;
+  if (entry === E2_BAILED) return null;
 
   if (!entry) {
     let emit;
@@ -795,13 +795,13 @@ function tryChain(
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.startsWith("fused scalar emitter:")) {
         chainCacheSet(firstStmt, sig, E2_BAILED);
-        return false;
+        return null;
       }
       // Complex emitter rejects unsupported ops by throwing Error with
       // a prefix — bail silently (falls through to interpreter).
       if (msg.startsWith("e2 complex kernel:")) {
         chainCacheSet(firstStmt, sig, E2_BAILED);
-        return false;
+        return null;
       }
       throw e;
     }
@@ -1083,11 +1083,8 @@ function tryChain(
     interp.ans = finalVal;
   }
 
-  // Tell the surrounding loop how many extra siblings we consumed.
-  // Chain stmts: acceptedAssigns.length. Trailing reduction stmt: 1
-  // more if absorbed. Subtract 1 because the loop's own `i++` already
-  // advances one stmt.
+  // Total sibling stmts consumed: chain assigns + trailing reduction
+  // (if absorbed). Returned to the caller as the executor's `consumed`.
   const consumed = acceptedAssigns.length + (trailing ? 1 : 0);
-  interp._e2ChainAdvance = consumed - 1;
-  return true;
+  return consumed;
 }
