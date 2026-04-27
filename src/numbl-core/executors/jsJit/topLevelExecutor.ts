@@ -27,6 +27,12 @@ interface TopLevelMatch {
   readonly siblings: Stmt[];
 }
 
+// Whole-script compile is the heaviest match; once compiled it saves
+// the per-stmt dispatch overhead for the entire script. The numbers
+// are illustrative — what matters is winning vs the interpreter
+// executor's stub runNs.
+const TOP_LEVEL_COST = { compileMs: 100, perCallNs: 1000, runNs: 1000 };
+
 export const jsJitTopLevelExecutor: Executor<TopLevelMatch, true> = {
   name: "js-jit-top-level",
   // Wrapped layer absorbs JitBailToInterpreter and restores state on
@@ -38,14 +44,7 @@ export const jsJitTopLevelExecutor: Executor<TopLevelMatch, true> = {
   match(siblings, i, ctx: DispatchContext): MatchResult<TopLevelMatch> | null {
     if (ctx.scope !== "top-level") return null;
     if (i !== 0) return null;
-    return {
-      match: { siblings: siblings as Stmt[] },
-      // Whole-script compile is the heaviest match; once compiled it
-      // saves the per-stmt dispatch overhead for the entire script.
-      // The numbers are illustrative — what matters is winning vs the
-      // interpreter executor's stub runNs.
-      cost: { compileMs: 100, perCallNs: 1000, runNs: 1000 },
-    };
+    return { match: { siblings: siblings as Stmt[] }, cost: TOP_LEVEL_COST };
   },
 
   cacheKey(): string {

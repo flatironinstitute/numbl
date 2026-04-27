@@ -27,6 +27,12 @@ interface ChainMatch {
   readonly headStmt: Stmt & { type: "Assign" };
 }
 
+// Rough estimate: per-call dispatch is a few hundred ns (classify +
+// koffi marshaling); runNs is small relative to the interpreter's
+// ~1e9 stub. The interpreter loses for tensor work and wins (via this
+// executor's bail) for everything else.
+const CHAIN_COST = { compileMs: 50, perCallNs: 300, runNs: 100 };
+
 export const chainCKernelExecutor: Executor<ChainMatch, true> = {
   name: "chain-c-kernel",
   // The wrapped tryE2Assign produces a fully-typed C kernel; once it
@@ -42,11 +48,7 @@ export const chainCKernelExecutor: Executor<ChainMatch, true> = {
         i,
         headStmt: stmt as Stmt & { type: "Assign" },
       },
-      // Rough estimate: per-call dispatch is a few hundred ns
-      // (classify + koffi marshaling); runNs is small relative to the
-      // interpreter's ~1e9 stub. The interpreter loses for tensor work
-      // and wins (via this executor's bail) for everything else.
-      cost: { compileMs: 50, perCallNs: 300, runNs: 100 },
+      cost: CHAIN_COST,
     };
   },
 

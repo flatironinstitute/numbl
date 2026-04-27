@@ -35,7 +35,6 @@ import {
 import type { Stmt, Expr, LValue } from "../parser/types.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
 import { Registry, makeRootContext } from "../executors/registry.js";
-import { registerInterpreterPlugin } from "../executors/plugins.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -171,8 +170,11 @@ export class Interpreter {
         this.env.set(name, value);
       }
     }
+    // The AST interpreter is the dispatcher's hardcoded last-resort
+    // fallback (see Registry.dispatch); no plugin registration needed
+    // for it. Specialized plugins are registered by executeCode based
+    // on the optimization mode.
     this.registry = new Registry();
-    registerInterpreterPlugin(this.registry);
   }
 
   /** Clear all JIT and function resolution caches. Called after addpath/rmpath. */
@@ -292,11 +294,12 @@ export class Interpreter {
       this._currentScopeBody = nonFuncStmts;
       this._currentScopeExports = null; // script: every name escapes
       try {
+        const ctx = makeRootContext(this, this.registry, "top-level");
         for (let i = 0; i < nonFuncStmts.length; ) {
           // Set sibling-tail context so loop JIT can compute live-out vars.
           this._postSiblings = nonFuncStmts;
           this._postSiblingsIdx = i + 1;
-          const ctx = makeRootContext(this, this.registry, "top-level");
+          ctx.resetForNextDispatch();
           const result = this.registry.dispatch(nonFuncStmts, i, ctx);
           i += result.consumed;
           if (result.signal) break;

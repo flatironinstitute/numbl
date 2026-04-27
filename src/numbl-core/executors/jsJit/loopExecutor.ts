@@ -27,6 +27,11 @@ interface LoopMatch {
   readonly stmt: Stmt & { type: "For" | "While" };
 }
 
+// Per-call dispatch ~hundreds of ns once compiled. The interpreter's
+// stub runNs ensures we win for any matching loop whose type analysis
+// succeeds.
+const JS_JIT_LOOP_COST = { compileMs: 30, perCallNs: 200, runNs: 200 };
+
 export const jsJitLoopExecutor: Executor<LoopMatch, true> = {
   name: "js-jit-loop",
   bailRisk: true,
@@ -34,13 +39,7 @@ export const jsJitLoopExecutor: Executor<LoopMatch, true> = {
   match(siblings, i): MatchResult<LoopMatch> | null {
     const stmt = siblings[i];
     if (stmt.type !== "For" && stmt.type !== "While") return null;
-    return {
-      match: { stmt },
-      // Per-call dispatch ~hundreds of ns once compiled. The
-      // interpreter's stub runNs ensures we win for any matching loop
-      // whose type analysis succeeds.
-      cost: { compileMs: 30, perCallNs: 200, runNs: 200 },
-    };
+    return { match: { stmt }, cost: JS_JIT_LOOP_COST };
   },
 
   cacheKey(): string {

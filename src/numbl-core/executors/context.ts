@@ -72,6 +72,14 @@ export class DispatchContext {
     return this.interp.env.get(name);
   }
 
+  /** Reset per-dispatch state so this context can be reused for the
+   *  next stmt in a sibling loop. The reentrancy guard is expected to
+   *  already be empty (every pushActive is paired with a popActive in
+   *  Registry.runCandidate's finally). */
+  resetForNextDispatch(): void {
+    if (this.typeCache.size > 0) this.typeCache.clear();
+  }
+
   /** Construct a child context for sub-dispatch. `requireNoBail` is
    *  the OR of the parent flag and the parent executor's
    *  `requireNoBailInChildren` declaration. Scope always becomes
@@ -87,7 +95,16 @@ export class DispatchContext {
     );
   }
 
-  /** @internal Used by the registry's reentrancy guard. */
+  /** @internal Whether the reentrancy guard has any entries. The
+   *  registry uses this to skip the guard check on the hot path —
+   *  when nothing is active there's nothing to detect. */
+  get hasActive(): boolean {
+    return this.active.size > 0;
+  }
+
+  /** @internal Used by the registry's reentrancy guard. Pre-checked
+   *  with hasActive on the hot path, so the actual `has` only fires
+   *  during sub-dispatch. */
   isActive(executorName: string, stmt: Stmt): boolean {
     return this.active.has(reentrancyKey(executorName, stmt));
   }

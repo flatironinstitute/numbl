@@ -21,6 +21,10 @@ interface LoopMatch {
   readonly stmt: Stmt & { type: "For" };
 }
 
+// Same shape of estimate as the chain executor: low per-call so we
+// beat the AST interpreter's stub runNs whenever we apply.
+const LOOP_C_COST = { compileMs: 50, perCallNs: 300, runNs: 100 };
+
 export const loopCKernelExecutor: Executor<LoopMatch, true> = {
   name: "loop-c-kernel",
   bailRisk: false,
@@ -28,12 +32,7 @@ export const loopCKernelExecutor: Executor<LoopMatch, true> = {
   match(siblings, i): MatchResult<LoopMatch> | null {
     const stmt = siblings[i];
     if (stmt.type !== "For") return null;
-    return {
-      match: { stmt },
-      // Same shape of estimate as the chain executor: low per-call so
-      // we beat the AST interpreter's stub runNs whenever we apply.
-      cost: { compileMs: 50, perCallNs: 300, runNs: 100 },
-    };
+    return { match: { stmt }, cost: LOOP_C_COST };
   },
 
   cacheKey(): string {

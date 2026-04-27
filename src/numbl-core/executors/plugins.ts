@@ -19,8 +19,13 @@ import { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
 import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
 
-/** Always-on baseline. The interpreter executor is the last-resort
- *  fallback that every mode needs. */
+/** Register the AST interpreter as a regular executor.
+ *
+ *  Normally not needed: the dispatcher already calls
+ *  `interp.execStmt` as a hardcoded last-resort fallback, which is
+ *  faster than going through the executor protocol on the hot path.
+ *  This entry point exists for tests that want the interpreter
+ *  visible as a registered candidate, or for diagnostics. */
 export function registerInterpreterPlugin(registry: Registry): void {
   registry.register(interpreterExecutor);
 }

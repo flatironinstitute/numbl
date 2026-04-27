@@ -18,20 +18,19 @@ interface InterpMatch {
   readonly stmt: Stmt;
 }
 
+// High runNs so any specialized executor outranks us. Numbers are
+// illustrative — the AST walker is a few hundred ns per stmt for
+// trivial work, orders of magnitude more for tensor ops. Hoisted
+// to module scope to avoid per-dispatch literal allocation on the
+// hot path.
+const INTERP_COST = { compileMs: 0, perCallNs: 0, runNs: 1e9 };
+
 export const interpreterExecutor: Executor<InterpMatch, true> = {
   name: "interpreter",
   bailRisk: false,
 
   match(siblings, i): MatchResult<InterpMatch> {
-    return {
-      match: { stmt: siblings[i] },
-      // High runNs so any specialized executor outranks us. Numbers
-      // are illustrative — the AST walker is a few hundred ns per
-      // stmt for trivial work; orders of magnitude more for tensor
-      // ops. Picking a single number means we always lose to anyone
-      // who actually estimates their work.
-      cost: { compileMs: 0, perCallNs: 0, runNs: 1e9 },
-    };
+    return { match: { stmt: siblings[i] }, cost: INTERP_COST };
   },
 
   cacheKey(): string {

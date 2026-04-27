@@ -21,7 +21,7 @@ interface RegisteredExecutor {
 interface Candidate {
   readonly executor: Executor;
   readonly match: unknown;
-  readonly cost: { readonly perCallNs: number; readonly runNs: number };
+  readonly total: number;
   readonly requireNoBailInChildren: boolean;
 }
 
@@ -61,84 +61,122 @@ export class Registry {
    * Dispatch one statement (or run of statements) starting at
    * `siblings[i]`. Returns the number of stmts consumed and any
    * control signal raised by the underlying execution.
+   *
+   * Hot path. Two optimizations matter for the chunkie-helmholtz-
+   * scale workloads:
+   *
+   *   1. The AST interpreter is the always-applicable last-resort
+   *      fallback. It is *not* a registered executor — the dispatcher
+   *      hardcodes a direct call to `ctx.interp.execStmt(stmt)` when
+   *      no specialized executor matches or all of them bail. This
+   *      avoids per-dispatch match/Candidate/cache/result allocations
+   *      for the most common path (where only the interpreter would
+   *      fit anyway).
+   *
+   *   2. The reentrancy guard (`pushActive`/`popActive` /
+   *      `isActive`) is short-circuited when the active set is
+   *      empty — no sub-dispatch in flight means the bookkeeping is
+   *      pure overhead.
    */
   dispatch(
     siblings: readonly Stmt[],
     i: number,
     ctx: DispatchContext
   ): DispatchResult {
-    // Phase 1: collect candidates by asking each eligible executor
-    // for a match.
-    const candidates: Candidate[] = [];
-    for (const { executor } of this.executors) {
-      if (ctx.requireNoBail && executor.bailRisk) continue;
-      if (ctx.isActive(executor.name, siblings[i])) continue;
+    // Single linear pass: pick the lowest-cost match among
+    // *specialized* executors. Backup list (allocated lazily) holds
+    // the rest, used only if the best bails.
+    let bestExec: Executor | null = null;
+    let bestMatch: unknown = null;
+    let bestTotal = Infinity;
+    let backups: Candidate[] | null = null;
+    const stmt = siblings[i];
+    const requireNoBail = ctx.requireNoBail;
+    const checkActive = ctx.hasActive;
+    const executors = this.executors;
+    for (let k = 0; k < executors.length; k++) {
+      const executor = executors[k].executor;
+      if (requireNoBail && executor.bailRisk) continue;
+      if (checkActive && ctx.isActive(executor.name, stmt)) continue;
       const m = executor.match(siblings, i, ctx);
       if (!m) continue;
-      candidates.push({
-        executor,
-        match: m.match,
-        cost: m.cost,
-        requireNoBailInChildren: !!m.requireNoBailInChildren,
-      });
+      const total = m.cost.perCallNs + m.cost.runNs;
+      if (total < bestTotal) {
+        if (bestExec) {
+          (backups ??= []).push({
+            executor: bestExec,
+            match: bestMatch,
+            total: bestTotal,
+            requireNoBailInChildren: false,
+          });
+        }
+        bestExec = executor;
+        bestMatch = m.match;
+        bestTotal = total;
+      } else {
+        (backups ??= []).push({
+          executor,
+          match: m.match,
+          total,
+          requireNoBailInChildren: !!m.requireNoBailInChildren,
+        });
+      }
     }
 
-    // No candidate should ever be empty: the interpreter executor
-    // always matches and is never bail-risk.
-    if (candidates.length === 0) {
-      throw new Error(
-        "Executor registry: no candidate for stmt — is the interpreter " +
-          "executor registered?"
-      );
+    // Try best (if any), then backups in cost order. Each may bail.
+    if (bestExec) {
+      const r = this.runCandidate(siblings, i, ctx, bestExec, bestMatch);
+      if (r) return r;
+      if (backups) {
+        backups.sort((a, b) => a.total - b.total);
+        for (let k = 0; k < backups.length; k++) {
+          const c = backups[k];
+          const r2 = this.runCandidate(siblings, i, ctx, c.executor, c.match);
+          if (r2) return r2;
+        }
+      }
     }
 
-    // Phase 2: sort by per-call cost (compileMs not in the comparison
-    // for now — see the design doc).
-    candidates.sort(
-      (a, b) =>
-        a.cost.perCallNs + a.cost.runNs - (b.cost.perCallNs + b.cost.runNs)
-    );
-
-    // Phase 3: try candidates in order. On bail, invalidate and try
-    // the next one.
-    for (const c of candidates) {
-      const result = this.runCandidate(siblings, i, ctx, c);
-      if (result) return result;
-    }
-
-    throw new Error(
-      "Executor registry: every candidate bailed — interpreter executor " +
-        "should never bail."
-    );
+    // Fallback: AST interpreter, called directly. Bypasses the
+    // executor protocol because the interpreter has no compiled
+    // artifact, no cache benefit, and never bails — and this path
+    // runs on every "uninteresting" stmt.
+    const signal = ctx.interp.execStmt(stmt);
+    return { consumed: 1, signal };
   }
 
   private runCandidate(
     siblings: readonly Stmt[],
     i: number,
     ctx: DispatchContext,
-    c: Candidate
+    executor: Executor,
+    match: unknown
   ): DispatchResult | null {
     const stmt = siblings[i];
-    const key = c.executor.cacheKey(c.match);
+    const key = executor.cacheKey(match);
 
-    let compiled = this.cache.get(c.executor.name, stmt, key);
+    let compiled = this.cache.get(executor.name, stmt, key);
     if (this.cache.isBailed(compiled)) return null;
     if (compiled === undefined) {
-      compiled = c.executor.compile(c.match, ctx);
-      this.cache.set(c.executor.name, stmt, key, compiled);
+      compiled = executor.compile(match, ctx);
+      this.cache.set(executor.name, stmt, key, compiled);
     }
 
-    ctx.pushActive(c.executor.name, stmt);
     let result;
-    try {
-      result = c.executor.run(compiled, c.match, ctx);
-    } finally {
-      ctx.popActive(c.executor.name, stmt);
+    if (ctx.hasActive) {
+      ctx.pushActive(executor.name, stmt);
+      try {
+        result = executor.run(compiled, match, ctx);
+      } finally {
+        ctx.popActive(executor.name, stmt);
+      }
+    } else {
+      result = executor.run(compiled, match, ctx);
     }
 
     if ("bail" in result) {
       if (!result.transient) {
-        this.cache.markBailed(c.executor.name, stmt, key);
+        this.cache.markBailed(executor.name, stmt, key);
       }
       return null;
     }

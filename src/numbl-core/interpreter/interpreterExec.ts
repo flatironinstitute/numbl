@@ -313,6 +313,10 @@ export function execStmts(
   this: Interpreter,
   stmts: Stmt[]
 ): ControlSignal | null {
+  // Allocate one DispatchContext for the whole sibling loop; reset
+  // per-dispatch state between stmts. Hot-path code — a fresh ctx
+  // per stmt would allocate a Map + Set per dispatch.
+  const ctx = makeRootContext(this, this.registry);
   for (let i = 0; i < stmts.length; ) {
     // Stash sibling-tail info on the interpreter for the duration of the
     // child dispatch so that JIT loop analysis can see what's read
@@ -320,7 +324,7 @@ export function execStmts(
     // loop's output set so that loop-internal temporaries don't escape.
     this._postSiblings = stmts;
     this._postSiblingsIdx = i + 1;
-    const ctx = makeRootContext(this, this.registry);
+    ctx.resetForNextDispatch();
     const result = this.registry.dispatch(stmts, i, ctx);
     i += result.consumed;
     if (result.signal) return result.signal;
