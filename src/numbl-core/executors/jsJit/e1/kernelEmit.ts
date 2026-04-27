@@ -31,25 +31,28 @@
  * inline JS fused loop.
  */
 
-import type { JitExpr, JitType } from "../jitTypes.js";
-import type { FusibleChain } from "../fusion.js";
+import type { JitExpr, JitType } from "../../../jit/jitTypes.js";
+import type { FusibleChain } from "../../../jit/fusion.js";
 import {
   emitFusedScalarExpr,
   fusedLocal,
   collectInputTensors,
-} from "../fusedScalarEmit.js";
-import { C_SCALAR_TARGET, formatNumberLiteral } from "../c/context.js";
+} from "../../../jit/fusedScalarEmit.js";
+import {
+  C_SCALAR_TARGET,
+  formatNumberLiteral,
+} from "../../../jit/c/context.js";
 import {
   determineWriteBack,
   reductionCombine,
   reductionInit,
   C_REDUCTION_LITERALS,
-} from "../fusedChainHelpers.js";
-import type { FusedTarget } from "../fusedScalarEmit.js";
-import type { ScalarOpTarget } from "../scalarEmit.js";
-import { getIBuiltin } from "../../interpreter/builtins/index.js";
-import { fnv1a64Hex } from "./hash.js";
-import { countHeavyOps, ompParallelThreshold } from "../heavyOps.js";
+} from "../../../jit/fusedChainHelpers.js";
+import type { FusedTarget } from "../../../jit/fusedScalarEmit.js";
+import type { ScalarOpTarget } from "../../../jit/scalarEmit.js";
+import { getIBuiltin } from "../../../interpreter/builtins/index.js";
+import { fnv1a64Hex } from "../../../jit/hash.js";
+import { countHeavyOps, ompParallelThreshold } from "../../../jit/heavyOps.js";
 
 // ── Public types ──────────────────────────────────────────────────────
 

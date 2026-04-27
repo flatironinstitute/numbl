@@ -37,7 +37,7 @@
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
 import type { JitExpr } from "../../jit/jitTypes.js";
 import { formatNumberLiteral } from "../../jit/c/context.js";
-import { fnv1a64Hex } from "../../jit/e1/hash.js";
+import { fnv1a64Hex } from "../../jit/hash.js";
 import type { ChainAssignSpec } from "./emitShared.js";
 
 export interface E2ComplexKernelInputs {

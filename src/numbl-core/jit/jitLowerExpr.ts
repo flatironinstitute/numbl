@@ -26,8 +26,8 @@ import {
   binaryResultType,
   unaryResultType,
 } from "./jitLowerTypes.js";
-import { generateJS } from "./js/jitCodegen.js";
-import { tryEmitScalarFnKernel } from "./e1/scalarFnKernel.js";
+import { generateJS } from "../executors/jsJit/js/jitCodegen.js";
+import { tryEmitScalarFnKernel } from "../executors/jsJit/e1/scalarFnKernel.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/index.js";
 import { isRuntimeFunction } from "../runtime/types.js";
 import type { RuntimeValue } from "../runtime/types.js";

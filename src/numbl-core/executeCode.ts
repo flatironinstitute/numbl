@@ -29,7 +29,10 @@ import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
-import { jitHelpers, buildPerRuntimeJitHelpers } from "./jit/js/jitHelpers.js";
+import {
+  jitHelpers,
+  buildPerRuntimeJitHelpers,
+} from "./executors/jsJit/js/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerE2Plugin, registerJsJitPlugin } from "./executors/plugins.js";

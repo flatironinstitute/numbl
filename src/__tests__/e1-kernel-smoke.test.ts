@@ -13,7 +13,7 @@ import { BinaryOperation } from "../numbl-core/parser/types.js";
 
 // Register the e1 kernel pipeline so executeCode-based tests can reach the
 // compiled kernel path.
-import "../numbl-core/jit/e1/install.js";
+import "../numbl-core/executors/jsJit/e1/install.js";
 
 const E2E_ENABLED = process.env.NUMBL_CJIT_E2E === "1";
 function hasCc(): boolean {

@@ -35,14 +35,14 @@
  * reduction output.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
-import type { JitExpr } from "../jitTypes.js";
-import type { FusibleChain } from "../fusion.js";
-import { collectInputTensors } from "../fusedScalarEmit.js";
-import { formatNumberLiteral } from "../c/context.js";
-import { determineWriteBack } from "../fusedChainHelpers.js";
+import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
+import type { JitExpr } from "../../../jit/jitTypes.js";
+import type { FusibleChain } from "../../../jit/fusion.js";
+import { collectInputTensors } from "../../../jit/fusedScalarEmit.js";
+import { formatNumberLiteral } from "../../../jit/c/context.js";
+import { determineWriteBack } from "../../../jit/fusedChainHelpers.js";
 import type { KernelEmitResult } from "./kernelEmit.js";
-import { fnv1a64Hex } from "./hash.js";
+import { fnv1a64Hex } from "../../../jit/hash.js";
 
 // ── Kernel-local naming ─────────────────────────────────────────────────
 

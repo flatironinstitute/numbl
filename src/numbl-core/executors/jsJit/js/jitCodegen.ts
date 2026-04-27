@@ -4,20 +4,20 @@
  * IR walkers for hoist-pass data collection are in jitCodegenHoist.ts.
  */
 
-import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import {
   type JitExpr,
   type JitStmt,
   type JitType,
   isTensorType,
   isKnownInteger,
-} from "../jitTypes.js";
-import { getIBuiltin } from "../../interpreter/builtins/types.js";
-import { findFusibleChains } from "../fusion.js";
+} from "../../../jit/jitTypes.js";
+import { getIBuiltin } from "../../../interpreter/builtins/types.js";
+import { findFusibleChains } from "../../../jit/fusion.js";
 import {
   FUSIBLE_TENSOR_UNARY_OPS,
   FUSIBLE_TENSOR_UNARY_OPS_JS,
-} from "../fusionOps.js";
+} from "../../../jit/fusionOps.js";
 import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
   tryMatchMultiReduction,
@@ -29,7 +29,7 @@ import {
   emitScalarBinaryOp,
   emitScalarUnaryOp,
   emitScalarTruthiness,
-} from "../scalarEmit.js";
+} from "../../../jit/scalarEmit.js";
 import {
   type HoistedAlias,
   structFieldKey,

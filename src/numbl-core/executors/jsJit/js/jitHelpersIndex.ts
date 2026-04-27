@@ -14,7 +14,7 @@ import {
   FloatXArray,
   type FloatXArrayType,
   type RuntimeTensor,
-} from "../../runtime/types.js";
+} from "../../../runtime/types.js";
 import { makeTensor } from "./jitHelpersTensor.js";
 import { mkc } from "./jitHelpersComplex.js";
 
@@ -35,7 +35,7 @@ export class JitBailToInterpreter extends Error {
 
 function isComplex(
   v: unknown
-): v is import("../../runtime/types.js").RuntimeComplexNumber {
+): v is import("../../../runtime/types.js").RuntimeComplexNumber {
   return (
     typeof v === "object" &&
     v !== null &&

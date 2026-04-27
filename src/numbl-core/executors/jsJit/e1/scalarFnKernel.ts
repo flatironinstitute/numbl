@@ -24,14 +24,14 @@
  * per-chain tensor kernels.
  */
 
-import type { FunctionDef } from "../../interpreter/types.js";
-import type { JitStmt, JitType } from "../jitTypes.js";
-import type { GeneratedFn } from "../jitLower.js";
-import type { Interpreter } from "../../interpreter/interpreter.js";
-import { checkCFeasibility } from "../c/feasibility.js";
-import { generateC } from "../c/assemble.js";
-import { isOpenmpAvailable } from "./openmpFlag.js";
-import { fnv1a64Hex } from "./hash.js";
+import type { FunctionDef } from "../../../interpreter/types.js";
+import type { JitStmt, JitType } from "../../../jit/jitTypes.js";
+import type { GeneratedFn } from "../../../jit/jitLower.js";
+import type { Interpreter } from "../../../interpreter/interpreter.js";
+import { checkCFeasibility } from "../../../jit/c/feasibility.js";
+import { generateC } from "../../../jit/c/assemble.js";
+import { isOpenmpAvailable } from "../../../jit/openmpFlag.js";
+import { fnv1a64Hex } from "../../../jit/hash.js";
 
 export interface ScalarFnKernelResult {
   /** The inline-compileKernel JS source. The JIT caller splices this

@@ -24,7 +24,7 @@
  */
 
 import { fnv1a64Hex } from "./hash.js";
-import { ompParallelThreshold } from "../heavyOps.js";
+import { ompParallelThreshold } from "./heavyOps.js";
 
 /** Reductions we can fuse into one pass. `any` / `all` are excluded
  *  because their short-circuit `break` would prematurely stop the

@@ -33,7 +33,7 @@
  *     }
  */
 
-import { fnv1a64Hex } from "../../jit/e1/hash.js";
+import { fnv1a64Hex } from "../../jit/hash.js";
 import { countHeavyOps, ompParallelThreshold } from "../../jit/heavyOps.js";
 import {
   allTensorVarsFor,

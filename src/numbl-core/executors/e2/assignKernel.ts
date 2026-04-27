@@ -63,7 +63,7 @@ import { getE2CompileFn, e2MinElems } from "./compileFn.js";
 import { isNameReferencedOutsideStmts } from "./liveness.js";
 import { BinaryOperation } from "../../parser/types.js";
 import { tryE2MultiReduction } from "./multiReductionDriver.js";
-import { isOpenmpAvailable } from "../../jit/e1/openmpFlag.js";
+import { isOpenmpAvailable } from "../../jit/openmpFlag.js";
 
 interface InputDescriptor {
   name: string;

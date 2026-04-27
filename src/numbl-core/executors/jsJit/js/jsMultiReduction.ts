@@ -25,11 +25,11 @@
  * drives the all-NaN → NaN fallback.
  */
 
-import type { JitExpr, JitStmt } from "../jitTypes.js";
+import type { JitExpr, JitStmt } from "../../../jit/jitTypes.js";
 import {
   emitMultiReductionKernel,
   type MultiReduceOp,
-} from "../e1/multiReductionKernel.js";
+} from "../../../jit/multiReductionKernel.js";
 
 /** Fusable reduction names. `any` / `all` stay on the default path —
  *  their short-circuit `break` doesn't fit the multi-accumulator loop. */

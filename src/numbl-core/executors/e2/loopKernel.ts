@@ -44,7 +44,7 @@ import { lowerAstToJitExpr, E2LowerError } from "./astToJitExpr.js";
 import { getE2CompileFn } from "./compileFn.js";
 import { analyzeForLoop } from "../../jit/jitLoopAnalysis.js";
 import { isRuntimeTensor, type RuntimeTensor } from "../../runtime/types.js";
-import { unshare } from "../../jit/js/jitHelpersTensor.js";
+import { unshare } from "../jsJit/js/jitHelpersTensor.js";
 import {
   emitLoopKernel,
   LOOP_SCALAR_BUILTINS,

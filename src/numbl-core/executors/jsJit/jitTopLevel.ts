@@ -19,12 +19,12 @@ import type { FunctionDef } from "../../interpreter/types.js";
 import type { JitType } from "../../jit/jitTypes.js";
 import { jitTypeKey, unifyJitTypes } from "../../jit/jitTypes.js";
 import { lowerFunction } from "../../jit/jitLower.js";
-import { generateJS } from "../../jit/js/jitCodegen.js";
+import { generateJS } from "./js/jitCodegen.js";
 import {
   jitHelpers,
   JitFuncHandleBailError,
   JitBailToInterpreter,
-} from "../../jit/js/jitHelpers.js";
+} from "./js/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
 import { analyzeTopLevel } from "../../jit/jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";

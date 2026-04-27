@@ -14,23 +14,23 @@
  * inside the same loop.
  */
 
-import type { FusibleChain } from "../fusion.js";
-import type { JitExpr } from "../jitTypes.js";
-import type { ScalarOpTarget } from "../scalarEmit.js";
+import type { FusibleChain } from "../../../jit/fusion.js";
+import type { JitExpr } from "../../../jit/jitTypes.js";
+import type { ScalarOpTarget } from "../../../jit/scalarEmit.js";
 import {
   type FusedTarget,
   emitFusedScalarExpr,
   fusedLocal,
   findTensorParamInChain,
   collectInputTensors,
-} from "../fusedScalarEmit.js";
+} from "../../../jit/fusedScalarEmit.js";
 import {
   JS_REDUCTION_LITERALS,
   accumulateOp,
   determineWriteBack,
   reductionCombine,
   reductionInit,
-} from "../fusedChainHelpers.js";
+} from "../../../jit/fusedChainHelpers.js";
 import { emitChainKernel } from "../e1/kernelEmit.js";
 import { emitComplexChainKernel } from "../e1/complexKernelEmit.js";
 

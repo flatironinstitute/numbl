@@ -40,7 +40,7 @@ import { NodeSystemAdapter } from "./cli-system.js";
 // Side-effect import: installs the e1 kernel pipeline (--opt e1). Must be
 // Node-only — this file imports child_process/fs/etc. that don't belong in
 // the web build.
-import "./numbl-core/jit/e1/install.js";
+import "./numbl-core/executors/jsJit/e1/install.js";
 // Side-effect import: installs the e2 per-assign C-JIT path (--opt e2).
 import "./numbl-core/executors/e2/install.js";
 

@@ -27,9 +27,9 @@ import { type RuntimeTensor, isRuntimeTensor } from "../../runtime/types.js";
 import {
   emitMultiReductionKernel,
   type MultiReduceOp,
-} from "../../jit/e1/multiReductionKernel.js";
+} from "../../jit/multiReductionKernel.js";
 import { getE2CompileFn, e2MinElems } from "./compileFn.js";
-import { isOpenmpAvailable } from "../../jit/e1/openmpFlag.js";
+import { isOpenmpAvailable } from "../../jit/openmpFlag.js";
 
 /** Reductions handled by the multi-reduction kernel. `any` / `all` are
  *  excluded for the same reason e1's kernel excludes them: their

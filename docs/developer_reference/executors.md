@@ -187,7 +187,7 @@ The port runs in increments. Each step is shippable:
 
 ## Files
 
-Each plugin's full implementation (executor + the legacy "wrapped layer" code it shims) lives under `executors/<plugin>/`. The shared `jit/` module retains only cross-plugin infrastructure (codegen, lowering, type system, IR).
+Each plugin's full implementation (executor + the legacy "wrapped layer" code it shims, plus its codegen) lives under `executors/<plugin>/`. The shared `jit/` module retains only cross-plugin infrastructure: the IR + type system, lowering, fusion analysis, C codegen pipeline, and shared kernel utilities (used by both jsJit's e1 path and e2).
 
 ```
 executors/
@@ -209,6 +209,10 @@ executors/
     jitLoop.ts               tryJitFor / tryJitWhile implementation
     jitTopLevel.ts           tryJitTopLevel implementation
     jitCall.ts               tryJitCall + JIT_SKIP implementation
+    js/                      JS codegen (jitCodegen, jsFusedCodegen,
+                             jsMultiReduction, jitHelpers*, ...)
+    e1/                      e1 inline-C-kernel splice (kernelEmit,
+                             complexKernelEmit, scalarFnKernel, install)
   e2/
     chainCKernelExecutor.ts  tryE2Assign shim (stmt)
     loopCKernelExecutor.ts   tryE2Loop shim (stmt)

@@ -12,8 +12,8 @@
  */
 
 import { jitHelpers } from "../js/jitHelpers.js";
-import { compileAndLoad, cJitOpenmpAvailable } from "../c/compile.js";
-import { setOpenmpAvailableGetter } from "./openmpFlag.js";
+import { compileAndLoad, cJitOpenmpAvailable } from "../../../jit/c/compile.js";
+import { setOpenmpAvailableGetter } from "../../../jit/openmpFlag.js";
 
 let _installed = false;
 

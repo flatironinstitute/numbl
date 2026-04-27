@@ -10,7 +10,7 @@
  * `TensorMeta` table this pass produces.
  */
 import type { JitExpr, JitStmt, JitType } from "../jitTypes.js";
-import { collectTensorUsage } from "../js/jitCodegenHoist.js";
+import { collectTensorUsage } from "../../executors/jsJit/js/jitCodegenHoist.js";
 import { walkStmts } from "./visit.js";
 
 export type TensorKind =

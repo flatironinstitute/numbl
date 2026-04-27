@@ -3,7 +3,7 @@
  * These are pure functions used by the $h helpers object.
  */
 
-import type { RuntimeComplexNumber } from "../../runtime/types.js";
+import type { RuntimeComplexNumber } from "../../../runtime/types.js";
 
 export function re(v: unknown): number {
   if (typeof v === "number") return v;

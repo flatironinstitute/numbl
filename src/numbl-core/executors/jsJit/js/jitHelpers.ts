@@ -17,13 +17,13 @@ import {
   type RuntimeFunction,
   type RuntimeStruct,
   type RuntimeValue,
-} from "../../runtime/types.js";
+} from "../../../runtime/types.js";
 
-import { uninitFloat64 } from "../../runtime/alloc.js";
+import { uninitFloat64 } from "../../../runtime/alloc.js";
 import {
   getTicTime,
   setTicTime,
-} from "../../interpreter/builtins/time-system.js";
+} from "../../../interpreter/builtins/time-system.js";
 
 import {
   mTranspose,
@@ -34,7 +34,7 @@ import {
   mElemMul,
   mElemDiv,
   mElemPow,
-} from "../../helpers/arithmetic.js";
+} from "../../../helpers/arithmetic.js";
 
 // Re-export sub-modules for direct import where needed
 export {
@@ -741,18 +741,18 @@ export const jitHelpers = {
 import {
   buildIBuiltinHelpers,
   setDynamicRegisterHook,
-} from "../../interpreter/builtins/index.js";
+} from "../../../interpreter/builtins/index.js";
 Object.assign(jitHelpers, buildIBuiltinHelpers());
 
-import type { IBuiltin } from "../../interpreter/builtins/index.js";
-import { inferJitType as _ijt } from "../../interpreter/builtins/index.js";
+import type { IBuiltin } from "../../../interpreter/builtins/index.js";
+import { inferJitType as _ijt } from "../../../interpreter/builtins/index.js";
 setDynamicRegisterHook((b: IBuiltin) => {
   const h = jitHelpers as Record<string, unknown>;
   h[`ib_${b.name}`] = (...args: unknown[]) => {
     const pe = h._profileEnter as (...a: unknown[]) => void;
     const pl = h._profileLeave as (...a: unknown[]) => void;
     pe("builtin:jit:" + b.name);
-    const rtArgs = args as import("../../runtime/types.js").RuntimeValue[];
+    const rtArgs = args as import("../../../runtime/types.js").RuntimeValue[];
     const argTypes = rtArgs.map(_ijt);
     const res = b.resolve(argTypes, 1);
     if (!res) {
@@ -788,7 +788,7 @@ export function buildPerRuntimeJitHelpers(
       const pe = h._profileEnter as (...a: unknown[]) => void;
       const pl = h._profileLeave as (...a: unknown[]) => void;
       pe("jsUserFunction:jit:" + name);
-      const rtArgs = args as import("../../runtime/types.js").RuntimeValue[];
+      const rtArgs = args as import("../../../runtime/types.js").RuntimeValue[];
       const argTypes = rtArgs.map(_ijt);
       const res = ib.resolve(argTypes, 1);
       if (!res) {
@@ -816,7 +816,7 @@ export function buildPerRuntimeJitHelpers(
     const pe = h._profileEnter as (...a: unknown[]) => void;
     const pl = h._profileLeave as (...a: unknown[]) => void;
     pe("jsUserFunction:jit:" + (name as string));
-    const rtArgs = args as import("../../runtime/types.js").RuntimeValue[];
+    const rtArgs = args as import("../../../runtime/types.js").RuntimeValue[];
     const argTypes = rtArgs.map(_ijt);
     const res = ib.resolve(argTypes, nargout as number);
     if (!res) {

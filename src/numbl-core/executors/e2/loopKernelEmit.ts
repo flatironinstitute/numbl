@@ -28,7 +28,7 @@ import {
   type FusedTarget,
 } from "../../jit/fusedScalarEmit.js";
 import { C_SCALAR_TARGET, formatNumberLiteral } from "../../jit/c/context.js";
-import { fnv1a64Hex } from "../../jit/e1/hash.js";
+import { fnv1a64Hex } from "../../jit/hash.js";
 import { getIBuiltin } from "../../interpreter/builtins/index.js";
 
 /** Scalar math builtins we emit as direct C library calls. We bypass

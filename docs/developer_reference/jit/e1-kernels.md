@@ -9,29 +9,35 @@ the JIT splices compiled C kernels at two well-defined points:
    a size threshold (otherwise falls back to the plain JS fused loop).
 2. **Pure-scalar user functions** — the entire function body becomes a
    C kernel; the JS wrapper marshals scalar params in and reads scalar
-   outputs back out. See [scalarFnKernel.ts](../../../src/numbl-core/jit/e1/scalarFnKernel.ts).
+   outputs back out. See [scalarFnKernel.ts](../../../src/numbl-core/executors/jsJit/e1/scalarFnKernel.ts).
 
 The C backend infrastructure under [jit/c/](../../../src/numbl-core/jit/c/)
 supplies the shared emitter (`generateC` in `assemble.ts`), the feasibility
 gate (`feasibility.ts`), and the cc / koffi driver (`compile.ts`). The e1
 path gates its callers to the scalar-only envelope that infrastructure
 supports cleanly; chain kernels are emitted by e1's own walkers
-([kernelEmit.ts](../../../src/numbl-core/jit/e1/kernelEmit.ts) for real,
-[complexKernelEmit.ts](../../../src/numbl-core/jit/e1/complexKernelEmit.ts)
+([kernelEmit.ts](../../../src/numbl-core/executors/jsJit/e1/kernelEmit.ts) for real,
+[complexKernelEmit.ts](../../../src/numbl-core/executors/jsJit/e1/complexKernelEmit.ts)
 for complex).
 
 ## Files
 
-[jit/e1/](../../../src/numbl-core/jit/e1/):
+[executors/jsJit/e1/](../../../src/numbl-core/executors/jsJit/e1/) — JS-JIT-only e1 emitters:
 
-| File                                                                        | Role                                                                |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [kernelEmit.ts](../../../src/numbl-core/jit/e1/kernelEmit.ts)               | Real-tensor chain kernel emitter (per-element body → C `for` loop)  |
-| [complexKernelEmit.ts](../../../src/numbl-core/jit/e1/complexKernelEmit.ts) | Complex-tensor chain kernel emitter (paired re/im buffers)          |
-| [scalarFnKernel.ts](../../../src/numbl-core/jit/e1/scalarFnKernel.ts)       | Whole-function scalar kernel emitter — delegates to `c/assemble.ts` |
-| [install.ts](../../../src/numbl-core/jit/e1/install.ts)                     | Wires `$h.compileKernel` to `compileAndLoad` via koffi (Node-only)  |
-| [openmpFlag.ts](../../../src/numbl-core/jit/e1/openmpFlag.ts)               | Browser-safe getter for `isOpenmpAvailable()`                       |
-| [hash.ts](../../../src/numbl-core/jit/e1/hash.ts)                           | FNV-1a 64-bit string hash used for content-addressed kernel keys    |
+| File                                                                                    | Role                                                                |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [kernelEmit.ts](../../../src/numbl-core/executors/jsJit/e1/kernelEmit.ts)               | Real-tensor chain kernel emitter (per-element body → C `for` loop)  |
+| [complexKernelEmit.ts](../../../src/numbl-core/executors/jsJit/e1/complexKernelEmit.ts) | Complex-tensor chain kernel emitter (paired re/im buffers)          |
+| [scalarFnKernel.ts](../../../src/numbl-core/executors/jsJit/e1/scalarFnKernel.ts)       | Whole-function scalar kernel emitter — delegates to `c/assemble.ts` |
+| [install.ts](../../../src/numbl-core/executors/jsJit/e1/install.ts)                     | Wires `$h.compileKernel` to `compileAndLoad` via koffi (Node-only)  |
+
+Shared kernel utilities at [jit/](../../../src/numbl-core/jit/) top level — used by both jsJit's e1 path and e2:
+
+| File                                                                           | Role                                                                                               |
+| ------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| [openmpFlag.ts](../../../src/numbl-core/jit/openmpFlag.ts)                     | Browser-safe getter for `isOpenmpAvailable()`                                                      |
+| [hash.ts](../../../src/numbl-core/jit/hash.ts)                                 | FNV-1a 64-bit string hash used for content-addressed kernel keys                                   |
+| [multiReductionKernel.ts](../../../src/numbl-core/jit/multiReductionKernel.ts) | Multi-reduction emitter (used by jsJit's `jsMultiReduction.ts` and e2's `multiReductionDriver.ts`) |
 
 [jit/c/](../../../src/numbl-core/jit/c/) (shared C-emitter infrastructure
 used by e1's scalar-kernel path):
@@ -65,9 +71,9 @@ Per-statement / per-expression C emission lives in [jit/c/emit/](../../../src/nu
 ## External entry points
 
 The CLI installs the Node-only kernel compiler via side-effect import of
-[e1/install.ts](../../../src/numbl-core/jit/e1/install.ts). From there,
+[e1/install.ts](../../../src/numbl-core/executors/jsJit/e1/install.ts). From there,
 [executors/jsJit/jitCall.ts](../../../src/numbl-core/executors/jsJit/jitCall.ts) (scalar-fn path) and
-[jit/js/jsFusedCodegen.ts](../../../src/numbl-core/jit/js/jsFusedCodegen.ts)
+[executors/jsJit/js/jsFusedCodegen.ts](../../../src/numbl-core/executors/jsJit/js/jsFusedCodegen.ts)
 (chain path) do the splicing during JS codegen.
 
 ## Parallelism

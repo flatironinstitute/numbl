@@ -167,7 +167,7 @@ buffers.
 
 **Multi-reduction over same tensor** (`red_acc = red_acc + (sum(x) +
 mean(x) + max(x) + min(x))`): the driver invokes
-[e1/multiReductionKernel.ts](../../../src/numbl-core/jit/e1/multiReductionKernel.ts)
+[multiReductionKernel.ts](../../../src/numbl-core/jit/multiReductionKernel.ts)
 to emit one kernel that computes every reduction in a single pass,
 then substitutes the kernel's scalar outputs back into the residual
 expression and lets the interpreter evaluate the result.
