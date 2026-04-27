@@ -47,6 +47,7 @@ import type { Interpreter } from "./interpreter.js";
 import { tryJitFor, tryJitWhile } from "../jit/jitLoop.js";
 import { tryE2Assign } from "../jit/e2/assignKernel.js";
 import { tryE2Loop } from "../jit/e2/loopKernel.js";
+import { makeRootContext } from "../executors/registry.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -319,23 +320,24 @@ export function execStmts(
   this: Interpreter,
   stmts: Stmt[]
 ): ControlSignal | null {
-  for (let i = 0; i < stmts.length; i++) {
-    const stmt = stmts[i];
+  for (let i = 0; i < stmts.length; ) {
     // Stash sibling-tail info on the interpreter for the duration of the
-    // child execStmt call so that JIT loop analysis can see what's read
+    // child dispatch so that JIT loop analysis can see what's read
     // after the loop. Used by tryJitFor / tryJitWhile to filter the loop's
     // output set so that loop-internal temporaries don't escape.
     this._postSiblings = stmts;
     this._postSiblingsIdx = i + 1;
     this._e2ChainAdvance = 0;
-    const signal = this.execStmt(stmt);
-    if (this._e2ChainAdvance > 0) {
-      // The just-executed stmt was the head of an e2 chain; skip past
-      // the additional siblings the kernel consumed.
-      i += this._e2ChainAdvance;
-      this._e2ChainAdvance = 0;
-    }
-    if (signal) return signal;
+    const ctx = makeRootContext(this, this.registry);
+    const result = this.registry.dispatch(stmts, i, ctx);
+    // result.consumed comes from the chosen executor. Until tryE2Assign
+    // is ported into the registry, the inline e2 chain hook still sets
+    // _e2ChainAdvance from inside execStmt; honor it on top of the
+    // executor's own advance. Once ported, the chain executor will
+    // return the full consumed count and _e2ChainAdvance stays 0.
+    i += result.consumed + this._e2ChainAdvance;
+    this._e2ChainAdvance = 0;
+    if (result.signal) return result.signal;
   }
   this._postSiblings = null;
   this._postSiblingsIdx = 0;

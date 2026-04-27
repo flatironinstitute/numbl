@@ -35,7 +35,7 @@ import {
 import type { Stmt, Expr, LValue } from "../parser/types.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
 import { tryJitTopLevel } from "../jit/jitTopLevel.js";
-import { Registry } from "../executors/registry.js";
+import { Registry, makeRootContext } from "../executors/registry.js";
 import { registerInterpreterPlugin } from "../executors/plugins.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
@@ -296,17 +296,20 @@ export class Interpreter {
       this._currentScopeBody = nonFuncStmts;
       this._currentScopeExports = null; // script: every name escapes
       try {
-        for (let i = 0; i < nonFuncStmts.length; i++) {
+        for (let i = 0; i < nonFuncStmts.length; ) {
           // Set sibling-tail context so loop JIT can compute live-out vars.
           this._postSiblings = nonFuncStmts;
           this._postSiblingsIdx = i + 1;
           this._e2ChainAdvance = 0;
-          const signal = this.execStmt(nonFuncStmts[i]);
-          if (this._e2ChainAdvance > 0) {
-            i += this._e2ChainAdvance;
-            this._e2ChainAdvance = 0;
-          }
-          if (signal) break;
+          const ctx = makeRootContext(this, this.registry);
+          const result = this.registry.dispatch(nonFuncStmts, i, ctx);
+          // Until tryE2Assign is ported into the registry, honor the
+          // legacy _e2ChainAdvance signal alongside the executor's own
+          // consumed count. See execStmts in interpreterExec.ts for the
+          // matching comment.
+          i += result.consumed + this._e2ChainAdvance;
+          this._e2ChainAdvance = 0;
+          if (result.signal) break;
         }
       } finally {
         this._currentScopeBody = savedScope;
