@@ -66,7 +66,7 @@ Per-statement / per-expression C emission lives in [jit/c/emit/](../../../src/nu
 
 The CLI installs the Node-only kernel compiler via side-effect import of
 [e1/install.ts](../../../src/numbl-core/jit/e1/install.ts). From there,
-[jit/index.ts](../../../src/numbl-core/jit/index.ts) (scalar-fn path) and
+[executors/jsJit/jitCall.ts](../../../src/numbl-core/executors/jsJit/jitCall.ts) (scalar-fn path) and
 [jit/js/jsFusedCodegen.ts](../../../src/numbl-core/jit/js/jsFusedCodegen.ts)
 (chain path) do the splicing during JS codegen.
 

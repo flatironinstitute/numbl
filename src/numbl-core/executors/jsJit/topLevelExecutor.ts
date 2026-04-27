@@ -21,7 +21,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, MatchResult, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
-import { tryJitTopLevel } from "../../jit/jitTopLevel.js";
+import { tryJitTopLevel } from "./jitTopLevel.js";
 
 interface TopLevelMatch {
   readonly siblings: Stmt[];

@@ -42,7 +42,7 @@ import { NodeSystemAdapter } from "./cli-system.js";
 // the web build.
 import "./numbl-core/jit/e1/install.js";
 // Side-effect import: installs the e2 per-assign C-JIT path (--opt e2).
-import "./numbl-core/jit/e2/install.js";
+import "./numbl-core/executors/e2/install.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";

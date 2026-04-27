@@ -21,7 +21,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, MatchResult, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
-import { tryJitFor, tryJitWhile } from "../../jit/jitLoop.js";
+import { tryJitFor, tryJitWhile } from "./jitLoop.js";
 
 interface LoopMatch {
   readonly stmt: Stmt & { type: "For" | "While" };

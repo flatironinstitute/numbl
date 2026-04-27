@@ -39,12 +39,12 @@
  */
 import type { Expr, Stmt } from "../../parser/types.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
-import type { JitExpr, JitType } from "../jitTypes.js";
+import type { JitExpr, JitType } from "../../jit/jitTypes.js";
 import { lowerAstToJitExpr, E2LowerError } from "./astToJitExpr.js";
 import { getE2CompileFn } from "./compileFn.js";
-import { analyzeForLoop } from "../jitLoopAnalysis.js";
+import { analyzeForLoop } from "../../jit/jitLoopAnalysis.js";
 import { isRuntimeTensor, type RuntimeTensor } from "../../runtime/types.js";
-import { unshare } from "../js/jitHelpersTensor.js";
+import { unshare } from "../../jit/js/jitHelpersTensor.js";
 import {
   emitLoopKernel,
   LOOP_SCALAR_BUILTINS,

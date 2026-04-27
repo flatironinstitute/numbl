@@ -9,7 +9,7 @@
  * Idempotent: re-importing in tests doesn't re-install.
  */
 
-import { compileAndLoad, cJitOpenmpAvailable } from "../c/compile.js";
+import { compileAndLoad, cJitOpenmpAvailable } from "../../jit/c/compile.js";
 import { setE2CompileFn } from "./compileFn.js";
 
 let _installed = false;

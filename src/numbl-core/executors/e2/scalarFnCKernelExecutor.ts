@@ -19,7 +19,7 @@
 
 import type { CallExecutor, CallMatchResult, CallRunResult } from "../types.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
-import { tryE2ScalarFn, E2_SKIP } from "../../jit/e2/scalarFnDriver.js";
+import { tryE2ScalarFn, E2_SKIP } from "./scalarFnDriver.js";
 
 interface ScalarFnMatch {
   readonly _: 0;

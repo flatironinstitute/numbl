@@ -13,23 +13,27 @@
  *   - every assigned variable is live-out (the whole workspace is live)
  *   - cache key is per-Interpreter (a single script AST per interp run)
  */
-import type { Interpreter } from "../interpreter/interpreter.js";
-import type { Stmt } from "../parser/types.js";
-import type { FunctionDef } from "../interpreter/types.js";
-import type { JitType } from "./jitTypes.js";
-import { jitTypeKey, unifyJitTypes } from "./jitTypes.js";
-import { lowerFunction } from "./jitLower.js";
-import { generateJS } from "./js/jitCodegen.js";
+import type { Interpreter } from "../../interpreter/interpreter.js";
+import type { Stmt } from "../../parser/types.js";
+import type { FunctionDef } from "../../interpreter/types.js";
+import type { JitType } from "../../jit/jitTypes.js";
+import { jitTypeKey, unifyJitTypes } from "../../jit/jitTypes.js";
+import { lowerFunction } from "../../jit/jitLower.js";
+import { generateJS } from "../../jit/js/jitCodegen.js";
 import {
   jitHelpers,
   JitFuncHandleBailError,
   JitBailToInterpreter,
-} from "./js/jitHelpers.js";
-import { inferJitType } from "../interpreter/builtins/types.js";
-import { analyzeTopLevel } from "./jitLoopAnalysis.js";
-import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import type { RuntimeValue } from "../runtime/types.js";
-import { JIT_IO_BUILTINS, irHasBailRisk, irHasIO } from "./jitBailSafety.js";
+} from "../../jit/js/jitHelpers.js";
+import { inferJitType } from "../../interpreter/builtins/types.js";
+import { analyzeTopLevel } from "../../jit/jitLoopAnalysis.js";
+import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
+import type { RuntimeValue } from "../../runtime/types.js";
+import {
+  JIT_IO_BUILTINS,
+  irHasBailRisk,
+  irHasIO,
+} from "../../jit/jitBailSafety.js";
 
 const KNOWN_CONSTANTS = new Set([
   "pi",

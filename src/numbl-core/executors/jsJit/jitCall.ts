@@ -2,21 +2,21 @@
  * JIT compilation entry point for interpreter function calls.
  */
 
-import type { Interpreter } from "../interpreter/interpreter.js";
-import type { FunctionDef } from "../interpreter/types.js";
+import type { Interpreter } from "../../interpreter/interpreter.js";
+import type { FunctionDef } from "../../interpreter/types.js";
 import {
   type JitType,
   type JitCacheEntry,
   computeJitCacheKey,
   jitTypeKey,
   unifyJitTypes,
-} from "./jitTypes.js";
-import { lowerFunction } from "./jitLower.js";
-import { generateJS } from "./js/jitCodegen.js";
-import { jitHelpers, JitBailToInterpreter } from "./js/jitHelpers.js";
-import { inferJitType } from "../interpreter/builtins/types.js";
-import { irHasBailRisk, irHasIO } from "./jitBailSafety.js";
-import { tryEmitScalarFnKernel } from "./e1/scalarFnKernel.js";
+} from "../../jit/jitTypes.js";
+import { lowerFunction } from "../../jit/jitLower.js";
+import { generateJS } from "../../jit/js/jitCodegen.js";
+import { jitHelpers, JitBailToInterpreter } from "../../jit/js/jitHelpers.js";
+import { inferJitType } from "../../interpreter/builtins/types.js";
+import { irHasBailRisk, irHasIO } from "../../jit/jitBailSafety.js";
+import { tryEmitScalarFnKernel } from "../../jit/e1/scalarFnKernel.js";
 
 export const JIT_SKIP = Symbol("JIT_SKIP");
 

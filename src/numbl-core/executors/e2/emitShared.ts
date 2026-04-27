@@ -5,10 +5,13 @@
  * out_acc output), so everything that's identical lives here.
  */
 
-import type { JitExpr, JitType } from "../jitTypes.js";
-import { emitFusedScalarExpr, type FusedTarget } from "../fusedScalarEmit.js";
-import { C_SCALAR_TARGET, formatNumberLiteral } from "../c/context.js";
-import type { ScalarOpTarget } from "../scalarEmit.js";
+import type { JitExpr, JitType } from "../../jit/jitTypes.js";
+import {
+  emitFusedScalarExpr,
+  type FusedTarget,
+} from "../../jit/fusedScalarEmit.js";
+import { C_SCALAR_TARGET, formatNumberLiteral } from "../../jit/c/context.js";
+import type { ScalarOpTarget } from "../../jit/scalarEmit.js";
 import { getIBuiltin } from "../../interpreter/builtins/index.js";
 
 /**

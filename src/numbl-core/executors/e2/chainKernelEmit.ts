@@ -33,8 +33,8 @@
  *     }
  */
 
-import { fnv1a64Hex } from "../e1/hash.js";
-import { countHeavyOps, ompParallelThreshold } from "../heavyOps.js";
+import { fnv1a64Hex } from "../../jit/e1/hash.js";
+import { countHeavyOps, ompParallelThreshold } from "../../jit/heavyOps.js";
 import {
   allTensorVarsFor,
   buildKoffiParts,

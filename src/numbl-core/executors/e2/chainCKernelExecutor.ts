@@ -18,7 +18,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, MatchResult, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
-import { tryE2Assign } from "../../jit/e2/assignKernel.js";
+import { tryE2Assign } from "./assignKernel.js";
 
 interface ChainMatch {
   readonly siblings: readonly Stmt[];

@@ -23,7 +23,7 @@
 
 import type { CallExecutor, CallMatchResult, CallRunResult } from "../types.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
-import { tryJitCall, JIT_SKIP } from "../../jit/index.js";
+import { tryJitCall, JIT_SKIP } from "./jitCall.js";
 
 interface JsJitCallMatch {
   /** No per-call data needed; the wrapped layer reads everything from

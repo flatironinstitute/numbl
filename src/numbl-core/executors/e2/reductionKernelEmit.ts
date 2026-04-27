@@ -40,15 +40,15 @@
  * `-ffast-math` + `#pragma omp simd`).
  */
 
-import type { JitExpr } from "../jitTypes.js";
-import { emitFusedScalarExpr } from "../fusedScalarEmit.js";
+import type { JitExpr } from "../../jit/jitTypes.js";
+import { emitFusedScalarExpr } from "../../jit/fusedScalarEmit.js";
 import {
   C_REDUCTION_LITERALS,
   reductionInit,
   reductionCombine,
-} from "../fusedChainHelpers.js";
-import { fnv1a64Hex } from "../e1/hash.js";
-import { countHeavyOps, ompParallelThreshold } from "../heavyOps.js";
+} from "../../jit/fusedChainHelpers.js";
+import { fnv1a64Hex } from "../../jit/e1/hash.js";
+import { countHeavyOps, ompParallelThreshold } from "../../jit/heavyOps.js";
 import {
   allTensorVarsFor,
   buildKoffiParts,

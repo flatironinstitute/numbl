@@ -25,8 +25,8 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import { RuntimeError } from "../../runtime/error.js";
-import type { JitType } from "../jitTypes.js";
-import { jitTypeKey } from "../jitTypes.js";
+import type { JitType } from "../../jit/jitTypes.js";
+import { jitTypeKey } from "../../jit/jitTypes.js";
 import {
   type RuntimeTensor,
   type RuntimeValue,
@@ -63,7 +63,7 @@ import { getE2CompileFn, e2MinElems } from "./compileFn.js";
 import { isNameReferencedOutsideStmts } from "./liveness.js";
 import { BinaryOperation } from "../../parser/types.js";
 import { tryE2MultiReduction } from "./multiReductionDriver.js";
-import { isOpenmpAvailable } from "../e1/openmpFlag.js";
+import { isOpenmpAvailable } from "../../jit/e1/openmpFlag.js";
 
 interface InputDescriptor {
   name: string;
@@ -120,7 +120,9 @@ function gatherInputs(
  *  per-element reduction loop has anything to reduce over). Used by
  *  the standalone-reduction detector to filter out e.g.
  *  `acc = sum(2.0)` which would loop over a constant. */
-function hasAnyTensorRef(expr: import("../jitTypes.js").JitExpr): boolean {
+function hasAnyTensorRef(
+  expr: import("../../jit/jitTypes.js").JitExpr
+): boolean {
   switch (expr.tag) {
     case "Var":
       return expr.jitType.kind === "tensor";
@@ -403,7 +405,7 @@ function tryChain(
   const trailingIdx = startIdx + acceptedAssigns.length;
   let trailing: TrailingReductionMatch | null = null;
   let trailingTargetCls: ClassifyResult | null = null;
-  let trailingTargetRhs: import("../jitTypes.js").JitExpr | null = null;
+  let trailingTargetRhs: import("../../jit/jitTypes.js").JitExpr | null = null;
   let trailingIsStandalone = false;
 
   if (acceptedAssigns.length > 0 && trailingIdx < siblings.length) {

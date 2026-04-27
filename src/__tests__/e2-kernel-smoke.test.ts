@@ -16,7 +16,7 @@ import { executeCode } from "../numbl-core/executeCode.js";
 import { resetCEnvForTesting } from "../numbl-core/jit/c/compile.js";
 
 // Ensure the e2 install hook is registered.
-import "../numbl-core/jit/e2/install.js";
+import "../numbl-core/executors/e2/install.js";
 
 // The e2 path shells out to `cc` and links against the prebuilt
 // `libnumbl_ops.a` (see `npm run build:addon`). Gate on both the

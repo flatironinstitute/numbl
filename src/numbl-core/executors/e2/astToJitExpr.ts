@@ -13,7 +13,7 @@
 
 import type { Expr } from "../../parser/types.js";
 import { BinaryOperation, UnaryOperation } from "../../parser/types.js";
-import type { JitExpr, JitType } from "../jitTypes.js";
+import type { JitExpr, JitType } from "../../jit/jitTypes.js";
 import { E2_BUILTIN_WHITELIST } from "./classify.js";
 
 export class E2LowerError extends Error {}

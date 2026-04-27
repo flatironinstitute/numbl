@@ -88,22 +88,22 @@ multi-reduction detector, which has its own driver and cache.
 
 ## Files
 
-[jit/e2/](../../../src/numbl-core/jit/e2/):
+[executors/e2/](../../../src/numbl-core/executors/e2/):
 
-| File                                                                              | Role                                                                                               |
-| --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| [classify.ts](../../../src/numbl-core/jit/e2/classify.ts)                         | AST `Expr` walker; multi-LHS chain detection; trailing-reduction matcher                           |
-| [astToJitExpr.ts](../../../src/numbl-core/jit/e2/astToJitExpr.ts)                 | Whitelist-only AST → `JitExpr` lowerer with runtime types from env                                 |
-| [chainKernelEmit.ts](../../../src/numbl-core/jit/e2/chainKernelEmit.ts)           | Multi-LHS chain C kernel (escape outputs, chain-locals, optional `in_<lhs>` inputs)                |
-| [reductionKernelEmit.ts](../../../src/numbl-core/jit/e2/reductionKernelEmit.ts)   | Chain + trailing reduction (or standalone reduction) C kernel — extra `out_acc` slot               |
-| [emitShared.ts](../../../src/numbl-core/jit/e2/emitShared.ts)                     | Shared helpers used by both emitters (name mangling, param/koffi list builders, FusedTarget, etc.) |
-| [multiReductionDriver.ts](../../../src/numbl-core/jit/e2/multiReductionDriver.ts) | Detects N≥2 reductions over the same tensor; reuses e1's `multiReductionKernel`                    |
-| [scalarFnDriver.ts](../../../src/numbl-core/jit/e2/scalarFnDriver.ts)             | `tryE2ScalarFn` — whole-function scalar C kernel (hook in `callUserFunction`)                      |
-| [liveness.ts](../../../src/numbl-core/jit/e2/liveness.ts)                         | `isNameReferencedOutsideStmts` — recursive scope-body scan with stmt-identity exclusion            |
-| [assignKernel.ts](../../../src/numbl-core/jit/e2/assignKernel.ts)                 | `tryE2Assign` driver — dispatches between chain/reduction paths                                    |
-| [cache.ts](../../../src/numbl-core/jit/e2/cache.ts)                               | `WeakMap<Stmt, Map<sig, CompiledFn                                                                 | BAILED>>` — chain & reduction kernels share one cache |
-| [compileFn.ts](../../../src/numbl-core/jit/e2/compileFn.ts)                       | Browser-safe indirection for the compile driver                                                    |
-| [install.ts](../../../src/numbl-core/jit/e2/install.ts)                           | Node-only side-effect import wiring `compileAndLoad`                                               |
+| File                                                                                    | Role                                                                                               |
+| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| [classify.ts](../../../src/numbl-core/executors/e2/classify.ts)                         | AST `Expr` walker; multi-LHS chain detection; trailing-reduction matcher                           |
+| [astToJitExpr.ts](../../../src/numbl-core/executors/e2/astToJitExpr.ts)                 | Whitelist-only AST → `JitExpr` lowerer with runtime types from env                                 |
+| [chainKernelEmit.ts](../../../src/numbl-core/executors/e2/chainKernelEmit.ts)           | Multi-LHS chain C kernel (escape outputs, chain-locals, optional `in_<lhs>` inputs)                |
+| [reductionKernelEmit.ts](../../../src/numbl-core/executors/e2/reductionKernelEmit.ts)   | Chain + trailing reduction (or standalone reduction) C kernel — extra `out_acc` slot               |
+| [emitShared.ts](../../../src/numbl-core/executors/e2/emitShared.ts)                     | Shared helpers used by both emitters (name mangling, param/koffi list builders, FusedTarget, etc.) |
+| [multiReductionDriver.ts](../../../src/numbl-core/executors/e2/multiReductionDriver.ts) | Detects N≥2 reductions over the same tensor; reuses e1's `multiReductionKernel`                    |
+| [scalarFnDriver.ts](../../../src/numbl-core/executors/e2/scalarFnDriver.ts)             | `tryE2ScalarFn` — whole-function scalar C kernel (hook in `callUserFunction`)                      |
+| [liveness.ts](../../../src/numbl-core/executors/e2/liveness.ts)                         | `isNameReferencedOutsideStmts` — recursive scope-body scan with stmt-identity exclusion            |
+| [assignKernel.ts](../../../src/numbl-core/executors/e2/assignKernel.ts)                 | `tryE2Assign` driver — dispatches between chain/reduction paths                                    |
+| [cache.ts](../../../src/numbl-core/executors/e2/cache.ts)                               | `WeakMap<Stmt, Map<sig, CompiledFn                                                                 | BAILED>>` — chain & reduction kernels share one cache |
+| [compileFn.ts](../../../src/numbl-core/executors/e2/compileFn.ts)                       | Browser-safe indirection for the compile driver                                                    |
+| [install.ts](../../../src/numbl-core/executors/e2/install.ts)                           | Node-only side-effect import wiring `compileAndLoad`                                               |
 
 ## Kernel shapes
 
@@ -217,7 +217,7 @@ A chain LHS escapes if either:
 1. it's in `_currentScopeExports` (or that field is `null`), OR
 2. it's textually referenced in `_currentScopeBody` outside the chain
    stmts (and the trailing-reduction stmt, if any). The recursive
-   walker in [liveness.ts](../../../src/numbl-core/jit/e2/liveness.ts)
+   walker in [liveness.ts](../../../src/numbl-core/executors/e2/liveness.ts)
    excludes the chain stmts at every nesting level.
 
 If neither, the LHS is purely chain-local: kept as a per-element

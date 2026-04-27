@@ -8,27 +8,27 @@
  * values are written back to the interpreter environment.
  */
 
-import type { Interpreter } from "../interpreter/interpreter.js";
-import type { Stmt } from "../parser/types.js";
-import type { FunctionDef } from "../interpreter/types.js";
-import type { JitType } from "./jitTypes.js";
-import { jitTypeKey, unifyJitTypes } from "./jitTypes.js";
-import { lowerFunction } from "./jitLower.js";
-import { generateJS } from "./js/jitCodegen.js";
+import type { Interpreter } from "../../interpreter/interpreter.js";
+import type { Stmt } from "../../parser/types.js";
+import type { FunctionDef } from "../../interpreter/types.js";
+import type { JitType } from "../../jit/jitTypes.js";
+import { jitTypeKey, unifyJitTypes } from "../../jit/jitTypes.js";
+import { lowerFunction } from "../../jit/jitLower.js";
+import { generateJS } from "../../jit/js/jitCodegen.js";
 import {
   jitHelpers,
   JitFuncHandleBailError,
   JitBailToInterpreter,
-} from "./js/jitHelpers.js";
-import { inferJitType } from "../interpreter/builtins/types.js";
-import { irHasBailRisk, irHasIO } from "./jitBailSafety.js";
+} from "../../jit/js/jitHelpers.js";
+import { inferJitType } from "../../interpreter/builtins/types.js";
+import { irHasBailRisk, irHasIO } from "../../jit/jitBailSafety.js";
 import {
   analyzeForLoop,
   analyzeWhileLoop,
   collectReadsFromSiblings,
-} from "./jitLoopAnalysis.js";
-import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import type { RuntimeValue } from "../runtime/types.js";
+} from "../../jit/jitLoopAnalysis.js";
+import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
+import type { RuntimeValue } from "../../runtime/types.js";
 
 // ── Known constants that should not be treated as input variables ────────
 

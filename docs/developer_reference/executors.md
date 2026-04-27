@@ -148,7 +148,7 @@ A bail happens _during_ `run`, after the executor has already started producing 
 - An executor whose compiled artifact contains observable side effects must declare its match with `requireNoBailInChildren: true`. When the dispatcher recurses into its child stmts (sub-dispatch), it sets `requireNoBail = true` on the child Ctx — only no-bail executors (the interpreter and pure C-kernel paths) are eligible there.
 - `bailRisk` is also a property of an executor's emitted code at use time. JS-JIT executors that emit `disp` calls inside their compiled body are themselves `requireNoBailInChildren: true` for any nested compilation.
 
-This generalizes today's `irHasIO` + `irHasBailRisk` check ([jit/index.ts:97-103](../../src/numbl-core/jit/index.ts#L97-L103)) — a function with both is rejected for JIT — into a uniform mechanism.
+This generalizes today's `irHasIO` + `irHasBailRisk` check ([executors/jsJit/jitCall.ts:97-103](../../src/numbl-core/executors/jsJit/jitCall.ts#L97-L103)) — a function with both is rejected for JIT — into a uniform mechanism.
 
 ## Testing contract
 
@@ -187,6 +187,8 @@ The port runs in increments. Each step is shippable:
 
 ## Files
 
+Each plugin's full implementation (executor + the legacy "wrapped layer" code it shims) lives under `executors/<plugin>/`. The shared `jit/` module retains only cross-plugin infrastructure (codegen, lowering, type system, IR).
+
 ```
 executors/
   index.ts          public surface
@@ -204,10 +206,21 @@ executors/
     loopExecutor.ts          tryJitFor + tryJitWhile shim (stmt)
     topLevelExecutor.ts      tryJitTopLevel shim (stmt, scope==="top-level")
     callExecutor.ts          tryJitCall shim (call)
+    jitLoop.ts               tryJitFor / tryJitWhile implementation
+    jitTopLevel.ts           tryJitTopLevel implementation
+    jitCall.ts               tryJitCall + JIT_SKIP implementation
   e2/
     chainCKernelExecutor.ts  tryE2Assign shim (stmt)
     loopCKernelExecutor.ts   tryE2Loop shim (stmt)
     scalarFnCKernelExecutor.ts  tryE2ScalarFn shim (call)
+    assignKernel.ts          tryE2Assign implementation
+    loopKernel.ts            tryE2Loop implementation
+    scalarFnDriver.ts        tryE2ScalarFn implementation
+    classify.ts, astToJitExpr.ts, chainKernelEmit.ts,
+    complexChainKernelEmit.ts, reductionKernelEmit.ts,
+    multiReductionDriver.ts, loopKernelEmit.ts,
+    cache.ts, compileFn.ts, emitShared.ts, liveness.ts,
+    install.ts               (Node-only side-effect import)
 ```
 
 ## Function-call dispatch

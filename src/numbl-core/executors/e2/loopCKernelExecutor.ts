@@ -15,7 +15,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, MatchResult, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
-import { tryE2Loop } from "../../jit/e2/loopKernel.js";
+import { tryE2Loop } from "./loopKernel.js";
 
 interface LoopMatch {
   readonly stmt: Stmt & { type: "For" };

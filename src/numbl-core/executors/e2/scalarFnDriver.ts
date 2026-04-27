@@ -27,10 +27,10 @@ import type { FunctionDef } from "../../interpreter/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RuntimeError } from "../../runtime/error.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
-import { type JitType, jitTypeKey, unifyJitTypes } from "../jitTypes.js";
-import { lowerFunction } from "../jitLower.js";
-import { generateC } from "../c/assemble.js";
-import { checkCFeasibility } from "../c/feasibility.js";
+import { type JitType, jitTypeKey, unifyJitTypes } from "../../jit/jitTypes.js";
+import { lowerFunction } from "../../jit/jitLower.js";
+import { generateC } from "../../jit/c/assemble.js";
+import { checkCFeasibility } from "../../jit/c/feasibility.js";
 import { getE2CompileFn } from "./compileFn.js";
 
 export const E2_SKIP = Symbol("E2_SKIP");
