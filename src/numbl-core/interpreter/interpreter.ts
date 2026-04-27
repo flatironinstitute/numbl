@@ -34,7 +34,6 @@ import {
 } from "./types.js";
 import type { Stmt, Expr, LValue } from "../parser/types.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
-import { tryJitTopLevel } from "../jit/jitTopLevel.js";
 import { Registry, makeRootContext } from "../executors/registry.js";
 import { registerInterpreterPlugin } from "../executors/plugins.js";
 
@@ -288,9 +287,6 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      if (this.optimization >= 1 && tryJitTopLevel(this, nonFuncStmts)) {
-        return;
-      }
       const savedScope = this._currentScopeBody;
       const savedExports = this._currentScopeExports;
       this._currentScopeBody = nonFuncStmts;
@@ -300,15 +296,9 @@ export class Interpreter {
           // Set sibling-tail context so loop JIT can compute live-out vars.
           this._postSiblings = nonFuncStmts;
           this._postSiblingsIdx = i + 1;
-          this._e2ChainAdvance = 0;
-          const ctx = makeRootContext(this, this.registry);
+          const ctx = makeRootContext(this, this.registry, "top-level");
           const result = this.registry.dispatch(nonFuncStmts, i, ctx);
-          // Until tryE2Assign is ported into the registry, honor the
-          // legacy _e2ChainAdvance signal alongside the executor's own
-          // consumed count. See execStmts in interpreterExec.ts for the
-          // matching comment.
-          i += result.consumed + this._e2ChainAdvance;
-          this._e2ChainAdvance = 0;
+          i += result.consumed;
           if (result.signal) break;
         }
       } finally {

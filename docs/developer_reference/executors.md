@@ -175,13 +175,41 @@ The browser bundle never imports the C-kernel plugins; nothing else needs to kno
 
 The port runs in increments. Each step is shippable:
 
-1. Land the registry, the executor interface, the `TypeInfo` object, and the AST interpreter executor. No behavior change — existing try-hooks stay; the registry is wired but only the interpreter is registered.
-2. Port `tryE2Assign` (chain + reduction) into a registered executor.
-3. Port `tryE2Loop` (loop C kernel).
-4. Port the JS-JIT loop, function, and top-level executors.
-5. Port `tryE2ScalarFn` and the e1 paths.
-6. Remove the old try-hooks from `interpreterExec.ts`.
+1. ✅ Land the registry, the executor interface, the `TypeInfo` object, and the AST interpreter executor.
+2. ✅ Wire `registry.dispatch` into `execStmts` and `Interpreter.run()`'s top-level loop.
+3. ✅ Port `tryE2Assign` (chain + reduction) — `e2/chainCKernelExecutor.ts`.
+4. ✅ Port `tryE2Loop` (whole-loop C kernel) — `e2/loopCKernelExecutor.ts`.
+5. ✅ Port `tryJitFor` / `tryJitWhile` — `jsJit/loopExecutor.ts`.
+6. ✅ Port `tryJitTopLevel` (with a `scope` tag on `Ctx`) — `jsJit/topLevelExecutor.ts`.
+7. ⏳ Port `tryE2ScalarFn` / `tryJitCall` — these fire from `callUserFunction` (expression-time), not from a stmt. Needs a function-call dispatch path on the registry, not a stmt-level shim.
+8. ⏳ Port the e1 codegen paths — these live inside the JIT codegen as sub-expression-level emitters. Different abstraction layer than stmt executors; either generalize the registry or keep them as-is.
+9. ⏳ Move classification into `match()` for the existing shims so the registry's cache replaces each wrapped layer's per-stmt `WeakMap`.
 
 ## Files
 
-(populated as the implementation lands)
+```
+executors/
+  index.ts          public surface
+  types.ts          Executor / RunResult / MatchResult / CostEstimate / BailReason
+  typeInfo.ts       TypeInfo (alias for JitType for now)
+  registry.ts       Registry, dispatch, makeRootContext
+  context.ts        DispatchContext, DispatchScope
+  cache.ts          ExecutorCache (per-stmt WeakMap with BAILED sentinel)
+  plugins.ts        registerInterpreterPlugin / registerJsJitPlugin / registerE2Plugin
+  interpreter/
+    interpreterExecutor.ts   always-matching last-resort fallback
+  jsJit/
+    loopExecutor.ts          tryJitFor + tryJitWhile shim
+    topLevelExecutor.ts      tryJitTopLevel shim (matches when scope === "top-level")
+  e2/
+    chainCKernelExecutor.ts  tryE2Assign shim
+    loopCKernelExecutor.ts   tryE2Loop shim
+```
+
+## Open design questions
+
+The remaining ports need design decisions, not just shims:
+
+- **Function-call dispatch path.** `tryJitCall` and `tryE2ScalarFn` fire from `callUserFunction`, which runs during expression evaluation, not stmt dispatch. To bring them into the registry, the registry needs a second match shape: "match a function call with these args/types," distinct from "match a stmt window." The two paths could share the executor interface but need separate dispatch entry points.
+- **Sub-expression codegen plugins.** The e1 paths are not stmt-level — they live inside the JIT codegen, splicing C kernels into the JS output for fusible chains and pure-scalar functions. They're effectively codegen callbacks at sub-expression granularity. Either keep them as-is or generalize the registry to cover codegen-time dispatch.
+- **Classify-in-match.** Today's shims call the wrapped layer's classifier inside `run`. Moving classification into `match` would let the registry's cache (rather than the wrapped layer's `WeakMap`) own the bail memo. Cleaner, but requires meaningful refactor of each wrapped layer.

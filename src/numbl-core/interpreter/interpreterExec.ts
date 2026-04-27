@@ -316,20 +316,13 @@ export function execStmts(
   for (let i = 0; i < stmts.length; ) {
     // Stash sibling-tail info on the interpreter for the duration of the
     // child dispatch so that JIT loop analysis can see what's read
-    // after the loop. Used by tryJitFor / tryJitWhile to filter the loop's
-    // output set so that loop-internal temporaries don't escape.
+    // after the loop. Used by the JS-JIT loop executor to filter the
+    // loop's output set so that loop-internal temporaries don't escape.
     this._postSiblings = stmts;
     this._postSiblingsIdx = i + 1;
-    this._e2ChainAdvance = 0;
     const ctx = makeRootContext(this, this.registry);
     const result = this.registry.dispatch(stmts, i, ctx);
-    // result.consumed comes from the chosen executor. Until tryE2Assign
-    // is ported into the registry, the inline e2 chain hook still sets
-    // _e2ChainAdvance from inside execStmt; honor it on top of the
-    // executor's own advance. Once ported, the chain executor will
-    // return the full consumed count and _e2ChainAdvance stays 0.
-    i += result.consumed + this._e2ChainAdvance;
-    this._e2ChainAdvance = 0;
+    i += result.consumed;
     if (result.signal) return result.signal;
   }
   this._postSiblings = null;

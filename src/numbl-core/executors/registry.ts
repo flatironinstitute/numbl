@@ -146,10 +146,14 @@ export class Registry {
   }
 }
 
-/** Build a fresh dispatch context for top-level interpreter use. */
+/** Build a fresh dispatch context. `scope` defaults to `"nested"` —
+ *  pass `"top-level"` only from `Interpreter.run()`'s script-body
+ *  loop, where whole-script executors (e.g., JS-JIT top-level) are
+ *  eligible. */
 export function makeRootContext(
   interp: import("../interpreter/interpreter.js").Interpreter,
-  registry: Registry
+  registry: Registry,
+  scope: import("./context.js").DispatchScope = "nested"
 ): DispatchContext {
-  return new DispatchContext(interp, registry, false);
+  return new DispatchContext(interp, registry, false, undefined, scope);
 }

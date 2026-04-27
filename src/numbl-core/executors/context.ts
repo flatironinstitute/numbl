@@ -13,6 +13,19 @@ import type { ControlSignal } from "../interpreter/types.js";
 import type { Registry } from "./registry.js";
 import { type TypeInfo, inferTypeInfo } from "./typeInfo.js";
 
+/** Where the dispatcher is currently running.
+ *
+ *   - `top-level` — the script body's top-level stmt list. Only set by
+ *     `Interpreter.run()`. Whole-script executors (e.g. JS-JIT
+ *     top-level) match only when this is set and `i === 0`.
+ *   - `nested` — a function body, loop body, or any other block.
+ *     Default for everything other than the script's top-level loop.
+ *
+ *  Sub-dispatch within an executor's compiled artifact always sets
+ *  `nested` regardless of the parent — once you're inside a compiled
+ *  artifact, you're no longer at the script's top level. */
+export type DispatchScope = "top-level" | "nested";
+
 export class DispatchContext {
   readonly interp: Interpreter;
   readonly registry: Registry;
@@ -20,6 +33,7 @@ export class DispatchContext {
    *  caller's compiled artifact has emitted observable side effects
    *  that mustn't repeat. */
   readonly requireNoBail: boolean;
+  readonly scope: DispatchScope;
 
   /** Per-dispatch memoization of typeOf(name) lookups. */
   private readonly typeCache = new Map<string, TypeInfo>();
@@ -33,12 +47,14 @@ export class DispatchContext {
     interp: Interpreter,
     registry: Registry,
     requireNoBail: boolean,
-    active?: Set<string>
+    active?: Set<string>,
+    scope: DispatchScope = "nested"
   ) {
     this.interp = interp;
     this.registry = registry;
     this.requireNoBail = requireNoBail;
     this.active = active ?? new Set();
+    this.scope = scope;
   }
 
   /** Look up a name's TypeInfo from the interpreter env, memoized. */
@@ -58,13 +74,16 @@ export class DispatchContext {
 
   /** Construct a child context for sub-dispatch. `requireNoBail` is
    *  the OR of the parent flag and the parent executor's
-   *  `requireNoBailInChildren` declaration. */
+   *  `requireNoBailInChildren` declaration. Scope always becomes
+   *  `nested` — sub-dispatches happen inside an executor's artifact
+   *  and are never at script top level. */
   childContext(requireNoBail: boolean): DispatchContext {
     return new DispatchContext(
       this.interp,
       this.registry,
       this.requireNoBail || requireNoBail,
-      this.active
+      this.active,
+      "nested"
     );
   }
 
