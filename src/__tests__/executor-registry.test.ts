@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { Registry, makeRootContext } from "../numbl-core/executors/registry.js";
-import { interpreterExecutor } from "../numbl-core/executors/interpreterExecutor.js";
+import { interpreterExecutor } from "../numbl-core/executors/interpreter/interpreterExecutor.js";
 import { executeCode } from "../numbl-core/executeCode.js";
 import type {
   Executor,

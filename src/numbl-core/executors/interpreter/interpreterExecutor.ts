@@ -10,9 +10,9 @@
  * holds a sentinel.
  */
 
-import type { Stmt } from "../parser/types.js";
-import type { Executor, MatchResult, RunResult } from "./types.js";
-import type { DispatchContext } from "./context.js";
+import type { Stmt } from "../../parser/types.js";
+import type { Executor, MatchResult, RunResult } from "../types.js";
+import type { DispatchContext } from "../context.js";
 
 interface InterpMatch {
   readonly stmt: Stmt;

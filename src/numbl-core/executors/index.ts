@@ -25,6 +25,7 @@ export {
   isComplexType,
   isKnownInteger,
 } from "./typeInfo.js";
-export { interpreterExecutor } from "./interpreterExecutor.js";
-export { chainCKernelExecutor } from "./chainCKernelExecutor.js";
+export { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
+export { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
+export { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
 export { registerInterpreterPlugin, registerE2Plugin } from "./plugins.js";
