@@ -16,11 +16,20 @@ import type { Registry } from "./registry.js";
 import { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
 import { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
 import { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
+import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 
 /** Always-on baseline. The interpreter executor is the last-resort
  *  fallback that every mode needs. */
 export function registerInterpreterPlugin(registry: Registry): void {
   registry.register(interpreterExecutor);
+}
+
+/** `--opt 1` / `--opt e1` JS-JIT plugins. Registers the loop
+ *  executor (For + While); the function and top-level executors will
+ *  follow in subsequent commits. Currently shims around `tryJitFor` /
+ *  `tryJitWhile`. */
+export function registerJsJitPlugin(registry: Registry): void {
+  registry.register(jsJitLoopExecutor);
 }
 
 /** `--opt e2` plugins. Registers the per-assign / chain C-kernel

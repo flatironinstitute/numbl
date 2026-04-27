@@ -28,4 +28,9 @@ export {
 export { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
 export { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
 export { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
-export { registerInterpreterPlugin, registerE2Plugin } from "./plugins.js";
+export { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
+export {
+  registerInterpreterPlugin,
+  registerJsJitPlugin,
+  registerE2Plugin,
+} from "./plugins.js";

@@ -44,7 +44,6 @@ import {
 } from "./types.js";
 
 import type { Interpreter } from "./interpreter.js";
-import { tryJitFor, tryJitWhile } from "../jit/jitLoop.js";
 import { makeRootContext } from "../executors/registry.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
@@ -179,7 +178,6 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "While": {
-      if (this.optimization >= 1 && tryJitWhile(this, stmt)) return null;
       const _whileStart = this.rt.profilingEnabled ? performance.now() : 0;
       let _whileIters = 0;
       while (true) {
@@ -200,7 +198,6 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "For": {
-      if (this.optimization >= 1 && tryJitFor(this, stmt)) return null;
       const _forStart = this.rt.profilingEnabled ? performance.now() : 0;
       const iterVal = this.evalExpr(stmt.expr);
       const rv = ensureRuntimeValue(iterVal);
