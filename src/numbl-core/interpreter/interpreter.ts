@@ -35,6 +35,8 @@ import {
 import type { Stmt, Expr, LValue } from "../parser/types.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
 import { tryJitTopLevel } from "../jit/jitTopLevel.js";
+import { Registry } from "../executors/registry.js";
+import { registerInterpreterPlugin } from "../executors/plugins.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -144,6 +146,14 @@ export class Interpreter {
   /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
 
+  /** Executor registry. Holds the strategies (interpreter, JS-JIT,
+   *  C-kernel, ...) the dispatcher selects among at runtime. The
+   *  always-on interpreter executor is registered at construction;
+   *  mode-driven plugins (`--opt 1`/`e1`/`e2`) register additional
+   *  executors during `executeCode` setup. See
+   *  docs/developer_reference/executors.md. */
+  readonly registry: import("../executors/registry.js").Registry;
+
   constructor(
     rt: Runtime,
     ctx: LoweringContext,
@@ -162,6 +172,8 @@ export class Interpreter {
         this.env.set(name, value);
       }
     }
+    this.registry = new Registry();
+    registerInterpreterPlugin(this.registry);
   }
 
   /** Clear all JIT and function resolution caches. Called after addpath/rmpath. */
@@ -176,6 +188,7 @@ export class Interpreter {
     this.compileInProgress.clear();
     this.ctx.registry.fileContexts.clear();
     this.rt.classMethodCache.clear();
+    this.registry.clearCache();
   }
 
   /** Wire up runtime callbacks so dispatch() routes through the interpreter. */
