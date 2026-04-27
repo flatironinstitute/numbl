@@ -10,7 +10,7 @@
  */
 
 import type { Stmt } from "../parser/types.js";
-import type { ControlSignal } from "../interpreter/types.js";
+import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { DispatchContext } from "./context.js";
 
 /** Estimated cost of using this executor for the matched work. Numbers
@@ -88,4 +88,66 @@ export interface Executor<M = unknown, C = unknown> {
    *  or a Bail signalling the cache entry should be invalidated and
    *  the next-best candidate tried. */
   run(compiled: C, match: M, ctx: DispatchContext): RunResult;
+}
+
+// ── Function-call dispatch ──────────────────────────────────────────────
+//
+// Parallel to the stmt dispatch path. Function-call executors fire from
+// `callUserFunction` (during expression evaluation), not from the
+// interpreter's stmt loop. They handle JIT-compiled user-function calls
+// (`tryJitCall`, `tryE2ScalarFn`).
+//
+// Call executors take the Interpreter directly rather than a
+// DispatchContext. The ctx machinery (typeCache, reentrancy guard) is
+// stmt-dispatch-specific; call executors only need env access via
+// `interp`. Skipping ctx avoids a per-call Map+Set allocation, which
+// dominates on user-function-call-heavy workloads (chunkie helmholtz).
+
+export type CallRunResult =
+  | { result: unknown }
+  | {
+      bail: BailReason;
+      /** Same semantics as RunResult.transient. */
+      transient?: boolean;
+    };
+
+export interface CallMatchResult<M> {
+  /** Opaque per-executor data; passed to runCall(). */
+  match: M;
+  cost: CostEstimate;
+}
+
+// Forward declare the Interpreter type without creating a hard import
+// cycle (types.ts is imported widely).
+type Interpreter = import("../interpreter/interpreter.js").Interpreter;
+
+/** Call executors don't have the registry's compile/cache layer.
+ *  Function-call dispatch is per-call hot — a registry-level cache
+ *  would add WeakMap+Map lookups per call without benefit, since the
+ *  wrapped layers (`tryJitCall`, `tryE2ScalarFn`) already cache
+ *  internally per (FunctionDef, argType-signature). Call executors
+ *  match-and-run; any compile state is the executor's own
+ *  responsibility. */
+export interface CallExecutor<M = unknown> {
+  readonly name: string;
+  readonly bailRisk: boolean;
+
+  /** Runs on every user-function call — must be cheap. Returns null
+   *  to decline. */
+  matchCall(
+    fn: FunctionDef,
+    args: unknown[],
+    nargout: number,
+    interp: Interpreter
+  ): CallMatchResult<M> | null;
+
+  /** Run. Returns the function's result (may be a value or an array
+   *  of values for multi-output) on success, or a Bail. */
+  runCall(
+    match: M,
+    fn: FunctionDef,
+    args: unknown[],
+    nargout: number,
+    interp: Interpreter
+  ): CallRunResult;
 }

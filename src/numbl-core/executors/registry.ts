@@ -9,8 +9,8 @@
  */
 
 import type { Stmt } from "../parser/types.js";
-import type { ControlSignal } from "../interpreter/types.js";
-import type { Executor } from "./types.js";
+import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
+import type { CallExecutor, Executor } from "./types.js";
 import { DispatchContext } from "./context.js";
 import { ExecutorCache } from "./cache.js";
 
@@ -18,11 +18,21 @@ interface RegisteredExecutor {
   readonly executor: Executor;
 }
 
+interface RegisteredCallExecutor {
+  readonly executor: CallExecutor;
+}
+
 interface Candidate {
   readonly executor: Executor;
   readonly match: unknown;
   readonly total: number;
   readonly requireNoBailInChildren: boolean;
+}
+
+interface CallCandidate {
+  readonly executor: CallExecutor;
+  readonly match: unknown;
+  readonly total: number;
 }
 
 export interface DispatchResult {
@@ -33,8 +43,14 @@ export interface DispatchResult {
   signal: ControlSignal | null;
 }
 
+/** Result from `dispatchCall`. `null` means no executor handled the
+ *  call — the caller should fall through to its own
+ *  interpreter-execution path. */
+export type CallDispatchResult = { result: unknown } | null;
+
 export class Registry {
   private readonly executors: RegisteredExecutor[] = [];
+  private readonly callExecutors: RegisteredCallExecutor[] = [];
   private cache = new ExecutorCache();
 
   register(executor: Executor): void {
@@ -44,9 +60,26 @@ export class Registry {
     this.executors.push({ executor });
   }
 
-  /** Number of registered executors. Mainly for tests. */
+  /** Register a function-call executor. Function-call executors fire
+   *  from `Interpreter.callUserFunction`, parallel to stmt-level
+   *  executors. */
+  registerCall(executor: CallExecutor): void {
+    if (this.callExecutors.some(r => r.executor.name === executor.name)) {
+      throw new Error(
+        `Function-call executor already registered: ${executor.name}`
+      );
+    }
+    this.callExecutors.push({ executor });
+  }
+
+  /** Number of registered stmt executors. Mainly for tests. */
   get size(): number {
     return this.executors.length;
+  }
+
+  /** Number of registered function-call executors. */
+  get callSize(): number {
+    return this.callExecutors.length;
   }
 
   /** Drop all cached compiled artifacts. Called from
@@ -181,6 +214,70 @@ export class Registry {
       return null;
     }
     return { consumed: result.consumed, signal: result.signal ?? null };
+  }
+
+  /**
+   * Dispatch a user-function call. Parallel to `dispatch` but for the
+   * function-call entry point (`Interpreter.callUserFunction`). Returns
+   * `{ result }` if a function-call executor handled the call, or
+   * `null` to signal "no executor matched / all bailed; fall through
+   * to the interpreter's normal call path."
+   *
+   * Takes the Interpreter directly instead of a DispatchContext — call
+   * executors don't use the typeCache/active machinery, so skipping
+   * the per-call Map+Set allocation matters on call-heavy workloads.
+   *
+   * Unlike stmt dispatch, there is no hardcoded fallback here — the
+   * caller (callUserFunction) knows how to interpret-execute a
+   * function and will do so when this returns null.
+   */
+  dispatchCall(
+    fn: FunctionDef,
+    args: unknown[],
+    nargout: number,
+    interp: import("../interpreter/interpreter.js").Interpreter
+  ): CallDispatchResult {
+    if (this.callExecutors.length === 0) return null;
+
+    let bestExec: CallExecutor | null = null;
+    let bestMatch: unknown = null;
+    let bestTotal = Infinity;
+    let backups: CallCandidate[] | null = null;
+    const callExecs = this.callExecutors;
+    for (let k = 0; k < callExecs.length; k++) {
+      const executor = callExecs[k].executor;
+      const m = executor.matchCall(fn, args, nargout, interp);
+      if (!m) continue;
+      const total = m.cost.perCallNs + m.cost.runNs;
+      if (total < bestTotal) {
+        if (bestExec) {
+          (backups ??= []).push({
+            executor: bestExec,
+            match: bestMatch,
+            total: bestTotal,
+          });
+        }
+        bestExec = executor;
+        bestMatch = m.match;
+        bestTotal = total;
+      } else {
+        (backups ??= []).push({ executor, match: m.match, total });
+      }
+    }
+
+    if (!bestExec) return null;
+
+    const r = bestExec.runCall(bestMatch, fn, args, nargout, interp);
+    if (!("bail" in r)) return { result: r.result };
+    if (backups) {
+      backups.sort((a, b) => a.total - b.total);
+      for (let k = 0; k < backups.length; k++) {
+        const c = backups[k];
+        const r2 = c.executor.runCall(c.match, fn, args, nargout, interp);
+        if (!("bail" in r2)) return { result: r2.result };
+      }
+    }
+    return null;
   }
 }
 

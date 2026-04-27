@@ -1,17 +1,18 @@
 /**
  * Per-executor compilation cache.
  *
- * Keyed by (executor, headStmt, cacheKey). The headStmt is the AST
- * node identity at `siblings[i]` where the match started, so cache
- * entries are scoped to the specific source location and can be
- * collected when the AST is dropped (WeakMap).
+ * Keyed by (executor, owner, cacheKey). The `owner` is the object the
+ * cache entry's lifetime is tied to:
+ *   - For stmt dispatch: the head Stmt at `siblings[i]`.
+ *   - For function-call dispatch: the FunctionDef.
+ *
+ * WeakMap scoping ensures entries are reclaimed when the owner is
+ * garbage-collected (e.g., when an AST is dropped after addpath).
  *
  * Each registered executor gets its own slot in the cache; a single
- * Stmt can host entries from multiple executors with different
+ * owner can host entries from multiple executors with different
  * specializations.
  */
-
-import type { Stmt } from "../parser/types.js";
 
 const BAILED = Symbol("EXECUTOR_BAILED");
 type Bailed = typeof BAILED;
@@ -19,35 +20,40 @@ type Bailed = typeof BAILED;
 type ExecutorSlot = Map<string, unknown | Bailed>;
 
 export class ExecutorCache {
-  /** stmt → executorName → cacheKey → compiled artifact (or BAILED) */
-  private readonly slots = new WeakMap<Stmt, Map<string, ExecutorSlot>>();
+  /** owner → executorName → cacheKey → compiled artifact (or BAILED) */
+  private readonly slots = new WeakMap<object, Map<string, ExecutorSlot>>();
 
-  get(executorName: string, stmt: Stmt, key: string): unknown | undefined {
-    const perStmt = this.slots.get(stmt);
-    if (!perStmt) return undefined;
-    const perExec = perStmt.get(executorName);
+  get(executorName: string, owner: object, key: string): unknown | undefined {
+    const perOwner = this.slots.get(owner);
+    if (!perOwner) return undefined;
+    const perExec = perOwner.get(executorName);
     if (!perExec) return undefined;
     const v = perExec.get(key);
     if (v === BAILED) return BAILED;
     return v;
   }
 
-  set(executorName: string, stmt: Stmt, key: string, compiled: unknown): void {
-    let perStmt = this.slots.get(stmt);
-    if (!perStmt) {
-      perStmt = new Map();
-      this.slots.set(stmt, perStmt);
+  set(
+    executorName: string,
+    owner: object,
+    key: string,
+    compiled: unknown
+  ): void {
+    let perOwner = this.slots.get(owner);
+    if (!perOwner) {
+      perOwner = new Map();
+      this.slots.set(owner, perOwner);
     }
-    let perExec = perStmt.get(executorName);
+    let perExec = perOwner.get(executorName);
     if (!perExec) {
       perExec = new Map();
-      perStmt.set(executorName, perExec);
+      perOwner.set(executorName, perExec);
     }
     perExec.set(key, compiled);
   }
 
-  markBailed(executorName: string, stmt: Stmt, key: string): void {
-    this.set(executorName, stmt, key, BAILED);
+  markBailed(executorName: string, owner: object, key: string): void {
+    this.set(executorName, owner, key, BAILED);
   }
 
   isBailed(value: unknown): value is Bailed {

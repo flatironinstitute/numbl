@@ -164,12 +164,12 @@ The harness `executorEquivalence(executor, corpus)` runs each `(stmts, env)` cas
 
 Existing `--opt` flags become plugin-registration choices. The CLI parses `--opt` and calls the matching `register*Plugin(registry)` functions; from then on, dispatch is mode-agnostic.
 
-| `--opt` | Plugins registered                                                |
-| ------- | ----------------------------------------------------------------- |
-| 0       | interpreter                                                       |
-| 1       | interpreter, js-jit-fn, js-jit-loop, js-jit-toplevel              |
-| e1      | interpreter, js-jit-\* + c-kernel-chain-inner, c-kernel-scalar-fn |
-| e2      | interpreter, chain-c-kernel, loop-c-kernel, scalar-fn-c-kernel    |
+| `--opt` | Plugins registered                                                                       |
+| ------- | ---------------------------------------------------------------------------------------- |
+| 0       | (none — AST interpreter is the dispatcher's hardcoded fallback)                          |
+| 1       | js-jit-loop, js-jit-top-level, js-jit-call                                               |
+| e1      | js-jit-loop, js-jit-top-level, js-jit-call (+ inline e1 codegen paths inside the JS JIT) |
+| e2      | chain-c-kernel, loop-c-kernel, scalar-fn-c-kernel                                        |
 
 The browser bundle never imports the C-kernel plugins; nothing else needs to know. CLI behavior is unchanged.
 
@@ -181,7 +181,7 @@ The port runs in increments. Each step is shippable:
 4. ✅ Port `tryE2Loop` (whole-loop C kernel) — `e2/loopCKernelExecutor.ts`.
 5. ✅ Port `tryJitFor` / `tryJitWhile` — `jsJit/loopExecutor.ts`.
 6. ✅ Port `tryJitTopLevel` (with a `scope` tag on `Ctx`) — `jsJit/topLevelExecutor.ts`.
-7. ⏳ Port `tryE2ScalarFn` / `tryJitCall` — these fire from `callUserFunction` (expression-time), not from a stmt. Needs a function-call dispatch path on the registry, not a stmt-level shim.
+7. ✅ Port `tryJitCall` and `tryE2ScalarFn` — added a function-call dispatch path (`Registry.dispatchCall` / `CallExecutor`) parallel to the stmt path. Wraps live in `jsJit/callExecutor.ts` and `e2/scalarFnCKernelExecutor.ts`.
 8. ⏳ Port the e1 codegen paths — these live inside the JIT codegen as sub-expression-level emitters. Different abstraction layer than stmt executors; either generalize the registry or keep them as-is.
 9. ⏳ Move classification into `match()` for the existing shims so the registry's cache replaces each wrapped layer's per-stmt `WeakMap`.
 
@@ -190,26 +190,37 @@ The port runs in increments. Each step is shippable:
 ```
 executors/
   index.ts          public surface
-  types.ts          Executor / RunResult / MatchResult / CostEstimate / BailReason
+  types.ts          Executor / CallExecutor / RunResult / CallRunResult / ...
   typeInfo.ts       TypeInfo (alias for JitType for now)
-  registry.ts       Registry, dispatch, makeRootContext
+  registry.ts       Registry, dispatch, dispatchCall, makeRootContext
   context.ts        DispatchContext, DispatchScope
-  cache.ts          ExecutorCache (per-stmt WeakMap with BAILED sentinel)
+  cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
   plugins.ts        registerInterpreterPlugin / registerJsJitPlugin / registerE2Plugin
   interpreter/
-    interpreterExecutor.ts   always-matching last-resort fallback
+    interpreterExecutor.ts   always-matching last-resort (used in tests; the
+                             dispatcher hardcodes the AST interpreter as
+                             fallback for performance)
   jsJit/
-    loopExecutor.ts          tryJitFor + tryJitWhile shim
-    topLevelExecutor.ts      tryJitTopLevel shim (matches when scope === "top-level")
+    loopExecutor.ts          tryJitFor + tryJitWhile shim (stmt)
+    topLevelExecutor.ts      tryJitTopLevel shim (stmt, scope==="top-level")
+    callExecutor.ts          tryJitCall shim (call)
   e2/
-    chainCKernelExecutor.ts  tryE2Assign shim
-    loopCKernelExecutor.ts   tryE2Loop shim
+    chainCKernelExecutor.ts  tryE2Assign shim (stmt)
+    loopCKernelExecutor.ts   tryE2Loop shim (stmt)
+    scalarFnCKernelExecutor.ts  tryE2ScalarFn shim (call)
 ```
+
+## Function-call dispatch
+
+Parallel to stmt dispatch but shaped differently. Function calls fire from `Interpreter.callUserFunction` during expression evaluation, not from the stmt-dispatch loop. Their inputs are `(fn, args, nargout)` rather than `(siblings, i)`.
+
+Differences from stmt dispatch:
+
+- Call executors implement `CallExecutor` (no `compile`/`cacheKey`). The registry-level cache adds no value when the wrapped layers (`tryJitCall`, `tryE2ScalarFn`) already cache internally per `(FunctionDef, argType-signature)` — and the per-call lookup overhead measurably hurts call-heavy workloads.
+- `dispatchCall(fn, args, nargout, interp)` takes the Interpreter directly, not a `DispatchContext`. The ctx machinery (typeCache, reentrancy) is stmt-dispatch-specific; skipping it avoids a per-call Map+Set allocation.
+- No hardcoded fallback. When all call executors decline or bail, `dispatchCall` returns `null` and the caller (`callUserFunction`) proceeds with normal interpreter execution.
 
 ## Open design questions
 
-The remaining ports need design decisions, not just shims:
-
-- **Function-call dispatch path.** `tryJitCall` and `tryE2ScalarFn` fire from `callUserFunction`, which runs during expression evaluation, not stmt dispatch. To bring them into the registry, the registry needs a second match shape: "match a function call with these args/types," distinct from "match a stmt window." The two paths could share the executor interface but need separate dispatch entry points.
-- **Sub-expression codegen plugins.** The e1 paths are not stmt-level — they live inside the JIT codegen, splicing C kernels into the JS output for fusible chains and pure-scalar functions. They're effectively codegen callbacks at sub-expression granularity. Either keep them as-is or generalize the registry to cover codegen-time dispatch.
+- **Sub-expression codegen plugins.** The e1 paths live inside the JIT codegen as sub-expression-level emitters (splicing C kernels into JS for fusible chains and pure-scalar functions). They are not stmt-level dispatch — different abstraction layer than executors.
 - **Classify-in-match.** Today's shims call the wrapped layer's classifier inside `run`. Moving classification into `match` would let the registry's cache (rather than the wrapped layer's `WeakMap`) own the bail memo. Cleaner, but requires meaningful refactor of each wrapped layer.

@@ -16,8 +16,10 @@ import type { Registry } from "./registry.js";
 import { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
 import { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
 import { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
+import { scalarFnCKernelExecutor } from "./e2/scalarFnCKernelExecutor.js";
 import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
+import { jsJitCallExecutor } from "./jsJit/callExecutor.js";
 
 /** Register the AST interpreter as a regular executor.
  *
@@ -30,22 +32,24 @@ export function registerInterpreterPlugin(registry: Registry): void {
   registry.register(interpreterExecutor);
 }
 
-/** `--opt 1` / `--opt e1` JS-JIT plugins. Registers the loop executor
- *  (For + While) and the whole-script top-level executor. The
- *  user-function call path (`tryJitCall`) is still inline; it lives
- *  at expression-evaluation time rather than stmt-dispatch time and
- *  doesn't fit the registry interface as currently shaped. */
+/** `--opt 1` / `--opt e1` JS-JIT plugins. Registers:
+ *
+ *   - js-jit-loop  — wraps tryJitFor / tryJitWhile (stmt-level).
+ *   - js-jit-top-level — wraps tryJitTopLevel (stmt-level).
+ *   - js-jit-call  — wraps tryJitCall (function-call dispatch). */
 export function registerJsJitPlugin(registry: Registry): void {
   registry.register(jsJitLoopExecutor);
   registry.register(jsJitTopLevelExecutor);
+  registry.registerCall(jsJitCallExecutor);
 }
 
-/** `--opt e2` plugins. Registers the per-assign / chain C-kernel
- *  executor and the whole-loop C-kernel executor. Both are currently
- *  shims around the legacy `tryE2Assign` / `tryE2Loop`. The
- *  scalar-function kernel is still inline; it'll be ported in a
- *  subsequent commit. */
+/** `--opt e2` plugins. Registers:
+ *
+ *   - chain-c-kernel — wraps tryE2Assign (stmt-level).
+ *   - loop-c-kernel  — wraps tryE2Loop (stmt-level).
+ *   - scalar-fn-c-kernel — wraps tryE2ScalarFn (function-call). */
 export function registerE2Plugin(registry: Registry): void {
   registry.register(chainCKernelExecutor);
   registry.register(loopCKernelExecutor);
+  registry.registerCall(scalarFnCKernelExecutor);
 }

@@ -11,8 +11,6 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { shareRuntimeValue } from "../runtime/utils.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { tryJitCall, JIT_SKIP } from "../jit/index.js";
-import { tryE2ScalarFn, E2_SKIP } from "../jit/e2/scalarFnDriver.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
 import { toString } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
@@ -531,18 +529,13 @@ export function callUserFunction(
       : a
   );
 
-  // Try JIT compilation for eligible functions
-  if (this.optimization >= 1 && narginOverride === undefined) {
-    const jitResult = tryJitCall(this, fn, sharedArgs, nargout);
-    if (jitResult !== JIT_SKIP) return jitResult;
-  }
-
-  // --opt e2: whole-function scalar C kernel. Fires for pure-scalar
-  // user functions (e.g. benchmarks/scalar_bench.m's `run_bench`) to
-  // match e1's performance without routing through the JS-JIT outer.
-  if (this.experimental === "e2" && narginOverride === undefined) {
-    const e2Result = tryE2ScalarFn(this, fn, sharedArgs, nargout);
-    if (e2Result !== E2_SKIP) return e2Result;
+  // Try the function-call dispatch path. Registered call executors
+  // (js-jit-call under --opt 1/e1, scalar-fn-c-kernel under --opt e2)
+  // are tried in cost order; if all decline or bail, we fall through
+  // to the regular interpreter call path below.
+  if (narginOverride === undefined && this.registry.callSize > 0) {
+    const r = this.registry.dispatchCall(fn, sharedArgs, nargout, this);
+    if (r) return r.result;
   }
 
   const fnEnv = new Environment();

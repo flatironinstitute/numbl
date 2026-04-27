@@ -10,9 +10,12 @@ export type {
   BailReason,
   RunResult,
   MatchResult,
+  CallExecutor,
+  CallMatchResult,
+  CallRunResult,
 } from "./types.js";
 export { Registry, makeRootContext } from "./registry.js";
-export type { DispatchResult } from "./registry.js";
+export type { DispatchResult, CallDispatchResult } from "./registry.js";
 export { DispatchContext } from "./context.js";
 export type { DispatchScope } from "./context.js";
 export { ExecutorCache } from "./cache.js";
@@ -29,8 +32,10 @@ export {
 export { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
 export { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
 export { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
+export { scalarFnCKernelExecutor } from "./e2/scalarFnCKernelExecutor.js";
 export { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 export { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
+export { jsJitCallExecutor } from "./jsJit/callExecutor.js";
 export {
   registerInterpreterPlugin,
   registerJsJitPlugin,
