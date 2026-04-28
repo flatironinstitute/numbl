@@ -2,16 +2,17 @@
  * c-jit-loop — C codegen executor for scalar for/while loops.
  *
  *   - `propose()` filters on `lowered.kind === "loop"`, requires a
- *     wired `nativeBridge`, applies the C feasibility whitelist
- *     (scalar-only IR), and rejects loops containing IO + bail-risk.
+ *     wired `nativeBridge`, applies the C feasibility whitelist, and
+ *     rejects loops containing IO + bail-risk.
  *
  *   - `compile()` generates C source from the lowered IR, caches the
  *     compiled `.so` under `~/.cache/numbl/c-jit/<sha>.so`, and loads
  *     via koffi.
  *
- *   - `run()` reads loop inputs from the interpreter env, invokes the
- *     compiled C function with an output Float64Array, writes back
- *     the outputs.
+ *   - `run()` reads loop inputs from the interpreter env, marshals
+ *     complex values to (re, im) pairs, invokes the compiled C
+ *     function with an output Float64Array, and writes the outputs
+ *     back to env.
  */
 
 import type { Executor, Proposal, RunResult } from "../types.js";
@@ -22,21 +23,27 @@ import type { JitType } from "../../jitTypes.js";
 import { jitTypeKey } from "../../jitTypes.js";
 import { RTV } from "../../runtime/constructors.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import { isCJitFeasible } from "./whitelist.js";
-import { generateCSource } from "./codegen.js";
+import { isCJitFeasible, isCScalarType } from "./whitelist.js";
+import {
+  generateCSource,
+  inferVarEncodings,
+  totalSlotCount,
+  varSlotCount,
+  type VarEncoding,
+} from "./codegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
 
 interface CLoopCompiled {
   readonly compiled: CompiledC;
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
-  /** Source kept for diagnostics; helpful in --dump-c output. */
+  readonly inputEncodings: readonly VarEncoding[];
+  readonly outputEncodings: readonly VarEncoding[];
+  /** Total `double` slots in `out` — sum of per-output slot counts. */
+  readonly outputSlots: number;
   readonly source: string;
 }
 
-// Cost is set to win comfortably against the AST interpreter for a
-// hot loop. Once a real cost-model exists, this scales with iteration
-// count.
 const C_JIT_LOOP_COST = { compileMs: 200, perCallNs: 100, runNs: 100 };
 
 export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
@@ -52,14 +59,11 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
     const flags = lowered.flags;
     if (flags.hasReturn) return null;
     if (flags.hasIO && flags.hasBailRisk) return null;
-    if (flags.hasIO) return null; // C-JIT has no IO emit (no disp/fprintf yet).
+    if (flags.hasIO) return null;
 
-    // All inputs must be scalar reals (the only type the codegen
-    // handles today). Inputs/outputs are mapped 1:1 to f64 args / out
-    // slots in C.
     const cls = lowered.lowered.classification;
     for (const t of cls.inputTypes) {
-      if (!isScalarReal(t)) return null;
+      if (!isCScalarType(t)) return null;
     }
 
     if (!isCJitFeasible(lowered.lowered.result.body)) return null;
@@ -81,11 +85,17 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
 
     const cls = d.classification;
     const fnName = `c_jit_loop_${cls.kind}`;
+    const varTypes = inferVarEncodings(
+      cls.inputs,
+      cls.inputTypes,
+      d.result.body
+    );
     const source = generateCSource(
       fnName,
       cls.inputs,
       cls.outputs,
-      d.result.body
+      d.result.body,
+      varTypes
     );
 
     const paramComments = cls.inputs
@@ -97,16 +107,19 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
       source
     );
 
+    const inputEncodings = cls.inputs.map(n => varTypes.get(n) ?? "real");
+    const outputEncodings = cls.outputs.map(n => varTypes.get(n) ?? "real");
+    const nInputSlots = totalSlotCount(cls.inputs, varTypes);
+    const nOutputSlots = totalSlotCount(cls.outputs, varTypes);
+
     let compiled: CompiledC;
     try {
       compiled = compileAndLoad(
         source,
-        { fnName, nInputs: cls.inputs.length, nOutputs: cls.outputs.length },
+        { fnName, nInputs: nInputSlots, nOutputs: nOutputSlots },
         bridge
       );
     } catch (e) {
-      // Surface the failure once to the user, then disable this
-      // proposal via cache-bail.
       console.warn(
         `Warning: c-jit-loop compile failed; falling back to interpreter. ${
           e instanceof Error ? e.message : String(e)
@@ -119,6 +132,9 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
       compiled,
       inputs: cls.inputs,
       outputs: cls.outputs,
+      inputEncodings,
+      outputEncodings,
+      outputSlots: nOutputSlots,
       source,
     };
   },
@@ -130,26 +146,42 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
 
     const interp = ctx.interp;
     const inputs = compiled.inputs;
+    const inputEncodings = compiled.inputEncodings;
     const outputs = compiled.outputs;
+    const outputEncodings = compiled.outputEncodings;
 
-    // Gather input values — must all be plain JS numbers (whitelist
-    // guarantees scalar real types).
+    // Gather + marshal input values. Complex inputs contribute two
+    // f64 args (re, im).
     const args: number[] = [];
-    for (const name of inputs) {
-      const v = interp.env.get(name);
-      const n = toScalarNumber(v);
-      if (n === null) {
-        return {
-          bail: {
-            message: `c-jit-loop: input '${name}' is not a scalar number at run time`,
-          },
-          transient: true,
-        };
+    for (let i = 0; i < inputs.length; i++) {
+      const v = interp.env.get(inputs[i]);
+      const enc = inputEncodings[i];
+      if (enc === "complex") {
+        const c = toComplexPair(v);
+        if (c === null) {
+          return {
+            bail: {
+              message: `c-jit-loop: input '${inputs[i]}' is not a scalar number/complex at run time`,
+            },
+            transient: true,
+          };
+        }
+        args.push(c.re, c.im);
+      } else {
+        const n = toScalarNumber(v);
+        if (n === null) {
+          return {
+            bail: {
+              message: `c-jit-loop: input '${inputs[i]}' is not a scalar number at run time`,
+            },
+            transient: true,
+          };
+        }
+        args.push(n);
       }
-      args.push(n);
     }
 
-    const out = new Float64Array(outputs.length);
+    const out = new Float64Array(compiled.outputSlots);
     try {
       compiled.compiled.fn(out, ...args);
     } catch (e) {
@@ -162,31 +194,52 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
       };
     }
 
-    // Write back outputs.
+    // Write back outputs. Each complex output reads two consecutive slots.
+    let slot = 0;
     for (let i = 0; i < outputs.length; i++) {
-      interp.env.set(outputs[i], RTV.num(out[i]) as RuntimeValue);
+      const enc = outputEncodings[i];
+      if (enc === "complex") {
+        const re = out[slot];
+        const im = out[slot + 1];
+        // Decay to a real number when the imaginary part vanishes —
+        // this matches MATLAB's "purely real result is a real
+        // number" semantics for downstream type tests.
+        const value =
+          im === 0 ? RTV.num(re) : (RTV.complex(re, im) as RuntimeValue);
+        interp.env.set(outputs[i], value as RuntimeValue);
+        slot += 2;
+      } else {
+        interp.env.set(outputs[i], RTV.num(out[slot]) as RuntimeValue);
+        slot += 1;
+      }
     }
+    void varSlotCount;
     return { consumed: 1 };
   },
 };
 
-function isScalarReal(t: JitType): boolean {
-  if (t.kind === "number") return true;
-  if (t.kind === "boolean") return true;
-  return false;
-}
-
 function toScalarNumber(v: unknown): number | null {
   if (typeof v === "number") return v;
   if (typeof v === "boolean") return v ? 1 : 0;
+  return null;
+}
+
+function toComplexPair(v: unknown): { re: number; im: number } | null {
+  if (typeof v === "number") return { re: v, im: 0 };
+  if (typeof v === "boolean") return { re: v ? 1 : 0, im: 0 };
   if (
     v !== null &&
     typeof v === "object" &&
-    "type" in v &&
-    (v as { type?: string }).type === "number"
+    "kind" in v &&
+    (v as { kind?: string }).kind === "complex_number"
   ) {
-    const val = (v as { value?: unknown }).value;
-    if (typeof val === "number") return val;
+    const c = v as { re?: unknown; im?: unknown };
+    if (typeof c.re === "number" && typeof c.im === "number") {
+      return { re: c.re, im: c.im };
+    }
   }
   return null;
 }
+
+// Keep the JitType import alive for downstream readers.
+void (null as unknown as JitType);
