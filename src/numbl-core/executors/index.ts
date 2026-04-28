@@ -10,9 +10,6 @@ export type {
   BailReason,
   RunResult,
   Proposal,
-  CallExecutor,
-  CallProposal,
-  CallRunResult,
 } from "./types.js";
 export { Registry, makeRootContext } from "./registry.js";
 export type { DispatchResult, CallDispatchResult } from "./registry.js";

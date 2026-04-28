@@ -529,11 +529,12 @@ export function callUserFunction(
       : a
   );
 
-  // Try the function-call dispatch path. Registered call executors
-  // (js-jit-call under --opt 1/e1, scalar-fn-c-kernel under --opt e2)
-  // are tried in cost order; if all decline or bail, we fall through
-  // to the regular interpreter call path below.
-  if (narginOverride === undefined && this.registry.callSize > 0) {
+  // Try the function-call dispatch path. Registered executors
+  // filtering on lowered.kind === "call" (js-jit-call under
+  // --opt 1/e1, scalar-fn-c-kernel under --opt e2) compete in cost
+  // order; if all decline or bail, we fall through to the regular
+  // interpreter call path below.
+  if (narginOverride === undefined && this.registry.size > 0) {
     const r = this.registry.dispatchCall(fn, sharedArgs, nargout, this);
     if (r) return r.result;
   }

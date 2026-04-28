@@ -34,22 +34,22 @@ export function registerInterpreterPlugin(registry: Registry): void {
 
 /** `--opt 1` / `--opt e1` JS-JIT plugins. Registers:
  *
- *   - js-jit-loop  — wraps tryJitFor / tryJitWhile (stmt-level).
- *   - js-jit-top-level — wraps tryJitTopLevel (stmt-level).
- *   - js-jit-call  — wraps tryJitCall (function-call dispatch). */
+ *   - js-jit-loop  — JS codegen for the loop shape (stmt-level).
+ *   - js-jit-top-level — JS codegen for the top-level shape (stmt-level).
+ *   - js-jit-call  — JS codegen for the call shape (call-level). */
 export function registerJsJitPlugin(registry: Registry): void {
   registry.register(jsJitLoopExecutor);
   registry.register(jsJitTopLevelExecutor);
-  registry.registerCall(jsJitCallExecutor);
+  registry.register(jsJitCallExecutor);
 }
 
 /** `--opt e2` plugins. Registers:
  *
  *   - chain-c-kernel — wraps tryE2Assign (stmt-level).
  *   - loop-c-kernel  — wraps tryE2Loop (stmt-level).
- *   - scalar-fn-c-kernel — wraps tryE2ScalarFn (function-call). */
+ *   - scalar-fn-c-kernel — C codegen for the call shape (call-level). */
 export function registerE2Plugin(registry: Registry): void {
   registry.register(chainCKernelExecutor);
   registry.register(loopCKernelExecutor);
-  registry.registerCall(scalarFnCKernelExecutor);
+  registry.register(scalarFnCKernelExecutor);
 }

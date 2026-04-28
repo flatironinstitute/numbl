@@ -2,25 +2,28 @@
  * Executor registry and dispatch.
  *
  * The dispatcher is the single place that decides which executor
- * handles each statement (or run of statements). Plugins register
- * executors at startup; the dispatcher selects among them at runtime
- * based on cost estimates, with the AST interpreter as the always-
- * matching last-resort fallback.
+ * handles each statement (or run of statements) — and each user-
+ * function call. Plugins register executors at startup; the dispatcher
+ * selects among them at runtime based on cost estimates, with the AST
+ * interpreter as the always-matching last-resort fallback for stmts.
+ *
+ * Stmt-shape and call-shape work share the same Executor interface:
+ * the dispatcher's lowering pass produces a discriminated `LoweredStmt`
+ * (kind: "top-level" / "loop" / "call" / "stmt"), and each executor's
+ * `propose()` filters on that kind. There are two entry points
+ * (`dispatch` for stmts, `dispatchCall` for calls) because the inputs
+ * and outputs differ, but both iterate the same `executors` array.
  */
 
 import type { Stmt } from "../parser/types.js";
 import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
-import type { CallExecutor, Executor } from "./types.js";
+import type { Executor } from "./types.js";
 import { DispatchContext } from "./context.js";
 import { ExecutorCache } from "./cache.js";
-import { LoweringCache, tryLower } from "./lowering.js";
+import { LoweringCache, tryLower, tryLowerCall } from "./lowering.js";
 
 interface RegisteredExecutor {
   readonly executor: Executor;
-}
-
-interface RegisteredCallExecutor {
-  readonly executor: CallExecutor;
 }
 
 interface Candidate {
@@ -28,12 +31,6 @@ interface Candidate {
   readonly data: unknown;
   readonly total: number;
   readonly requireNoBailInChildren: boolean;
-}
-
-interface CallCandidate {
-  readonly executor: CallExecutor;
-  readonly data: unknown;
-  readonly total: number;
 }
 
 export interface DispatchResult {
@@ -51,9 +48,16 @@ export type CallDispatchResult = { result: unknown } | null;
 
 export class Registry {
   private readonly executors: RegisteredExecutor[] = [];
-  private readonly callExecutors: RegisteredCallExecutor[] = [];
   private cache = new ExecutorCache();
   private loweringCache = new LoweringCache();
+  /** Pre-allocated context reused for `dispatchCall`. Avoids the
+   *  per-call Map+Set allocation cost that previously motivated
+   *  bypassing ctx entirely on call-heavy workloads. Safe to reuse
+   *  because dispatchCall isn't reentrant within itself: each call's
+   *  propose/compile/run touches the context synchronously, and any
+   *  nested call dispatch goes through `Interpreter.callUserFunction`
+   *  which re-enters dispatchCall and re-resets the context. */
+  private callCtx: DispatchContext | null = null;
 
   register(executor: Executor): void {
     if (this.executors.some(r => r.executor.name === executor.name)) {
@@ -62,26 +66,9 @@ export class Registry {
     this.executors.push({ executor });
   }
 
-  /** Register a function-call executor. Function-call executors fire
-   *  from `Interpreter.callUserFunction`, parallel to stmt-level
-   *  executors. */
-  registerCall(executor: CallExecutor): void {
-    if (this.callExecutors.some(r => r.executor.name === executor.name)) {
-      throw new Error(
-        `Function-call executor already registered: ${executor.name}`
-      );
-    }
-    this.callExecutors.push({ executor });
-  }
-
-  /** Number of registered stmt executors. Mainly for tests. */
+  /** Number of registered executors. Mainly for tests. */
   get size(): number {
     return this.executors.length;
-  }
-
-  /** Number of registered function-call executors. */
-  get callSize(): number {
-    return this.callExecutors.length;
   }
 
   /** Drop all cached compiled artifacts. Called from
@@ -126,9 +113,9 @@ export class Registry {
 
     // Pre-propose lowering pass. Runs the cheap classification and
     // (on cache miss) the IR-lowering pass for any specialized shape
-    // (top-level, etc.); for stmts with no specialized shape returns
-    // `{ kind: "stmt", stmt }`. Always non-null. Passed as the first
-    // argument to every executor's propose().
+    // (top-level, loop, ...); for stmts with no specialized shape
+    // returns `{ kind: "stmt", stmt }`. Always non-null. Passed as
+    // the first argument to every executor's propose().
     const lowered = tryLower(siblings, i, ctx, this.loweringCache);
 
     // Single linear pass: collect proposals, keep the lowest-cost one
@@ -175,13 +162,13 @@ export class Registry {
 
     // Try best (if any), then backups in cost order. Each may bail.
     if (bestExec) {
-      const r = this.runCandidate(siblings, i, ctx, bestExec, bestData);
+      const r = this.runStmtCandidate(stmt, ctx, bestExec, bestData);
       if (r) return r;
       if (backups) {
         backups.sort((a, b) => a.total - b.total);
         for (let k = 0; k < backups.length; k++) {
           const c = backups[k];
-          const r2 = this.runCandidate(siblings, i, ctx, c.executor, c.data);
+          const r2 = this.runStmtCandidate(stmt, ctx, c.executor, c.data);
           if (r2) return r2;
         }
       }
@@ -195,14 +182,12 @@ export class Registry {
     return { consumed: 1, signal };
   }
 
-  private runCandidate(
-    siblings: readonly Stmt[],
-    i: number,
+  private runStmtCandidate(
+    stmt: Stmt,
     ctx: DispatchContext,
     executor: Executor,
     data: unknown
   ): DispatchResult | null {
-    const stmt = siblings[i];
     const key = executor.cacheKey(data);
 
     let compiled = this.cache.get(executor.name, stmt, key);
@@ -230,23 +215,24 @@ export class Registry {
       }
       return null;
     }
-    return { consumed: result.consumed, signal: result.signal ?? null };
+    if ("consumed" in result) {
+      return { consumed: result.consumed, signal: result.signal ?? null };
+    }
+    // Stmt-shape executors should never return { result }; if one
+    // does, treat it as a non-result signal-less consume of 1.
+    return { consumed: 1, signal: null };
   }
 
   /**
-   * Dispatch a user-function call. Parallel to `dispatch` but for the
-   * function-call entry point (`Interpreter.callUserFunction`). Returns
-   * `{ result }` if a function-call executor handled the call, or
-   * `null` to signal "no executor matched / all bailed; fall through
-   * to the interpreter's normal call path."
+   * Dispatch a user-function call. Iterates the same `executors`
+   * array as stmt dispatch — call-shape executors filter on
+   * `lowered.kind === "call"`. Returns `{ result }` when one of them
+   * handles the call, or `null` so the caller (callUserFunction)
+   * falls through to the AST interpreter.
    *
-   * Takes the Interpreter directly instead of a DispatchContext — call
-   * executors don't use the typeCache/active machinery, so skipping
-   * the per-call Map+Set allocation matters on call-heavy workloads.
-   *
-   * Unlike stmt dispatch, there is no hardcoded fallback here — the
-   * caller (callUserFunction) knows how to interpret-execute a
-   * function and will do so when this returns null.
+   * Reuses a pre-allocated DispatchContext (`callCtx`) to avoid the
+   * per-call Map+Set allocation that previously motivated bypassing
+   * ctx for call dispatch entirely.
    */
   dispatchCall(
     fn: FunctionDef,
@@ -254,16 +240,19 @@ export class Registry {
     nargout: number,
     interp: import("../interpreter/interpreter.js").Interpreter
   ): CallDispatchResult {
-    if (this.callExecutors.length === 0) return null;
+    const lowered = tryLowerCall(fn, args, nargout, interp, this.loweringCache);
+    if (!lowered) return null;
 
-    let bestExec: CallExecutor | null = null;
+    const ctx = this.getCallCtx(interp);
+
+    let bestExec: Executor | null = null;
     let bestData: unknown = null;
     let bestTotal = Infinity;
-    let backups: CallCandidate[] | null = null;
-    const callExecs = this.callExecutors;
-    for (let k = 0; k < callExecs.length; k++) {
-      const executor = callExecs[k].executor;
-      const p = executor.proposeCall(fn, args, nargout, interp);
+    let backups: Candidate[] | null = null;
+    const executors = this.executors;
+    for (let k = 0; k < executors.length; k++) {
+      const executor = executors[k].executor;
+      const p = executor.propose(lowered, ctx);
       if (!p) continue;
       const total = p.cost.perCallNs + p.cost.runNs;
       if (total < bestTotal) {
@@ -272,29 +261,79 @@ export class Registry {
             executor: bestExec,
             data: bestData,
             total: bestTotal,
+            requireNoBailInChildren: false,
           });
         }
         bestExec = executor;
         bestData = p.data;
         bestTotal = total;
       } else {
-        (backups ??= []).push({ executor, data: p.data, total });
+        (backups ??= []).push({
+          executor,
+          data: p.data,
+          total,
+          requireNoBailInChildren: false,
+        });
       }
     }
 
     if (!bestExec) return null;
 
-    const r = bestExec.runCall(bestData, fn, args, nargout, interp);
-    if (!("bail" in r)) return { result: r.result };
+    const r = this.runCallCandidate(fn, ctx, bestExec, bestData);
+    if (r) return r;
     if (backups) {
       backups.sort((a, b) => a.total - b.total);
       for (let k = 0; k < backups.length; k++) {
         const c = backups[k];
-        const r2 = c.executor.runCall(c.data, fn, args, nargout, interp);
-        if (!("bail" in r2)) return { result: r2.result };
+        const r2 = this.runCallCandidate(fn, ctx, c.executor, c.data);
+        if (r2) return r2;
       }
     }
     return null;
+  }
+
+  private runCallCandidate(
+    fn: FunctionDef,
+    ctx: DispatchContext,
+    executor: Executor,
+    data: unknown
+  ): CallDispatchResult {
+    const key = executor.cacheKey(data);
+
+    let compiled = this.cache.get(executor.name, fn, key);
+    if (this.cache.isBailed(compiled)) return null;
+    if (compiled === undefined) {
+      compiled = executor.compile(data, ctx);
+      this.cache.set(executor.name, fn, key, compiled);
+    }
+
+    const result = executor.run(compiled, data, ctx);
+
+    if ("bail" in result) {
+      if (!result.transient) {
+        this.cache.markBailed(executor.name, fn, key);
+      }
+      return null;
+    }
+    if ("result" in result) {
+      return { result: result.result };
+    }
+    // Call-shape executors should always return { result } on
+    // success; treat anything else as a no-result success.
+    return { result: undefined };
+  }
+
+  private getCallCtx(
+    interp: import("../interpreter/interpreter.js").Interpreter
+  ): DispatchContext {
+    let ctx = this.callCtx;
+    if (!ctx) {
+      ctx = new DispatchContext(interp, this, false, undefined, "nested");
+      this.callCtx = ctx;
+    } else {
+      ctx.resetForNextDispatch();
+    }
+    return ctx;
   }
 }
 

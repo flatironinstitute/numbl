@@ -133,14 +133,18 @@ export function tryEmitScalarFnKernel(
 
   // Build the JS wrapper. One `double *` out-pointer per output — the
   // JS side allocates a Float64Array(1) buffer per output, calls, then
-  // reads back. Scalar params pass through as-is.
+  // reads back. Boolean params coerce to 0/1 because koffi rejects
+  // raw boolean values in a `double` slot; numeric params pass through.
   const paramList = fn.params.join(", ");
   const numOut = gen.outputDescs.length;
   const outBufs: string[] = [];
   for (let k = 0; k < numOut; k++) {
     outBufs.push(`const __o${k} = new Float64Array(1);`);
   }
-  const callArgs = [...fn.params, ...outBufs.map((_, k) => `__o${k}`)].join(
+  const paramExprs = fn.params.map((p, i) =>
+    argTypes[i]?.kind === "boolean" ? `(${p} ? 1 : 0)` : p
+  );
+  const callArgs = [...paramExprs, ...outBufs.map((_, k) => `__o${k}`)].join(
     ", "
   );
 

@@ -23,6 +23,8 @@
  */
 
 import type { Stmt } from "../parser/types.js";
+import type { FunctionDef } from "../interpreter/types.js";
+import type { Interpreter } from "../interpreter/interpreter.js";
 import type { DispatchContext } from "./context.js";
 import {
   classifyTopLevel,
@@ -36,6 +38,12 @@ import {
   type LoopClassification,
   type LoopLowered,
 } from "./jsJit/jitLoop.js";
+import {
+  classifyCall,
+  lowerCall,
+  type CallClassification,
+  type CallLowered,
+} from "./jsJit/jitCall.js";
 import { analyzeTopLevel } from "../jit/jitLoopAnalysis.js";
 import {
   JIT_IO_BUILTINS,
@@ -46,7 +54,11 @@ import {
 /** What `propose()` receives. The dispatcher always produces some
  *  variant — there's no `null` LoweredStmt. Executors filter on
  *  `kind`. */
-export type LoweredStmt = TopLevelLoweredStmt | LoopLoweredStmt | RawStmt;
+export type LoweredStmt =
+  | TopLevelLoweredStmt
+  | LoopLoweredStmt
+  | CallLoweredStmt
+  | RawStmt;
 
 /** Top-level shape: the entire script body lowered to JS-JIT IR.
  *  Carries the lowered IR plus pre-computed feasibility flags so
@@ -93,6 +105,30 @@ export interface LoopFlags {
   readonly hasBailRisk: boolean;
 }
 
+/** Call shape: a user-function call lowered to JS-JIT IR. Produced
+ *  by `tryLowerCall`, not `tryLower` — function calls fire from
+ *  expression evaluation (callUserFunction → dispatchCall), not from
+ *  the stmt loop. */
+export interface CallLoweredStmt {
+  readonly kind: "call";
+  readonly classification: CallClassification;
+  readonly lowered: CallLowered;
+  readonly flags: CallFlags;
+  /** The actual runtime argument values. Carried alongside the
+   *  classification because the executor needs them at runCall
+   *  time; unlike stmt-shape executors, the call executor can't
+   *  re-fetch them from env. */
+  readonly args: readonly unknown[];
+}
+
+/** Pre-computed feasibility flags for call codegen executors. */
+export interface CallFlags {
+  /** Lowered body contains an I/O builtin. */
+  readonly hasIO: boolean;
+  /** Lowered body contains a possibly-bailing operation. */
+  readonly hasBailRisk: boolean;
+}
+
 /** Fallback wrapper for stmts that have no specialized lowering shape
  *  yet. AST-driven executors filter on this kind and inspect `stmt`
  *  directly. */
@@ -104,35 +140,37 @@ export interface RawStmt {
 const BAILED = Symbol("LOWERING_BAILED");
 type Bailed = typeof BAILED;
 
-/** Per-stmt lowering cache. Entries are scoped to the head stmt
- *  (WeakMap key) so they're reclaimed when the AST is dropped. The
- *  inner Map is keyed by the classification's cacheKey. */
+/** Per-owner lowering cache. Owner is either the head Stmt (for
+ *  stmt-shape lowerings) or the FunctionDef (for call-shape
+ *  lowerings) — both are AST objects whose lifetimes the cache
+ *  entries are tied to. WeakMap-scoped so entries are reclaimed when
+ *  the AST is dropped. */
 export class LoweringCache {
   private readonly slots = new WeakMap<
-    Stmt,
+    object,
     Map<string, LoweredStmt | Bailed>
   >();
 
-  get(stmt: Stmt, cacheKey: string): LoweredStmt | Bailed | undefined {
-    return this.slots.get(stmt)?.get(cacheKey);
+  get(owner: object, cacheKey: string): LoweredStmt | Bailed | undefined {
+    return this.slots.get(owner)?.get(cacheKey);
   }
 
-  set(stmt: Stmt, cacheKey: string, value: LoweredStmt): void {
-    let perStmt = this.slots.get(stmt);
-    if (!perStmt) {
-      perStmt = new Map();
-      this.slots.set(stmt, perStmt);
+  set(owner: object, cacheKey: string, value: LoweredStmt): void {
+    let perOwner = this.slots.get(owner);
+    if (!perOwner) {
+      perOwner = new Map();
+      this.slots.set(owner, perOwner);
     }
-    perStmt.set(cacheKey, value);
+    perOwner.set(cacheKey, value);
   }
 
-  markBailed(stmt: Stmt, cacheKey: string): void {
-    let perStmt = this.slots.get(stmt);
-    if (!perStmt) {
-      perStmt = new Map();
-      this.slots.set(stmt, perStmt);
+  markBailed(owner: object, cacheKey: string): void {
+    let perOwner = this.slots.get(owner);
+    if (!perOwner) {
+      perOwner = new Map();
+      this.slots.set(owner, perOwner);
     }
-    perStmt.set(cacheKey, BAILED);
+    perOwner.set(cacheKey, BAILED);
   }
 
   isBailed(value: unknown): value is Bailed {
@@ -267,4 +305,61 @@ function computeLoopFlags(
   const hasIO = irHasIO(result.body, result.generatedIRBodies);
   const hasBailRisk = irHasBailRisk(result.body, result.generatedIRBodies);
   return { hasReturn: classification.hasReturn, hasIO, hasBailRisk };
+}
+
+function computeCallFlags(lowered: CallLowered): CallFlags {
+  const result = lowered.result;
+  const hasIO = irHasIO(result.body, result.generatedIRBodies);
+  const hasBailRisk = irHasBailRisk(result.body, result.generatedIRBodies);
+  return { hasIO, hasBailRisk };
+}
+
+/**
+ * Try to lower a user-function call based on current arg values.
+ * Always returns a `CallLoweredStmt` when classification succeeds —
+ * executors filter on flags / classification.argTypes.
+ *
+ * Returns null only when the cheap classify pass declines (`~`
+ * params, type-unknown args). In that case `dispatchCall` returns
+ * null and the caller (callUserFunction) falls back to AST
+ * interpretation.
+ *
+ * Caches lowered IR by (FunctionDef, classification.cacheKey). The
+ * cheap classify runs every call; the expensive IR-lowering runs at
+ * most once per (FunctionDef, type signature).
+ */
+export function tryLowerCall(
+  fn: FunctionDef,
+  args: unknown[],
+  nargout: number,
+  interp: Interpreter,
+  cache: LoweringCache
+): CallLoweredStmt | null {
+  const classification = classifyCall(fn, args, nargout);
+  if (!classification) return null;
+
+  const hit = cache.get(fn, classification.cacheKey);
+  if (hit !== undefined) {
+    if (cache.isBailed(hit)) return null;
+    // The cached entry's `args` is from a prior call; re-bind to the
+    // current call's args (values may differ; types are unified via
+    // classification's cacheKey).
+    return { ...(hit as CallLoweredStmt), args };
+  }
+
+  const lowered = lowerCall(interp, classification);
+  if (!lowered) {
+    cache.markBailed(fn, classification.cacheKey);
+    return null;
+  }
+  const flags = computeCallFlags(lowered);
+  const entry: CallLoweredStmt = {
+    kind: "call",
+    classification,
+    lowered,
+    flags,
+    args,
+  };
+  cache.set(fn, classification.cacheKey, entry);
+  return entry;
 }

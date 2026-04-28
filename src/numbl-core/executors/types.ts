@@ -3,14 +3,16 @@
  *
  * See docs/developer_reference/executors.md for the design overview.
  *
- * The interpreter delegates each statement (or run of statements) to a
- * registry of Executors. Each executor implements one strategy
- * (interpreter, JS-JIT, C-kernel, ...). On each dispatch, every
- * executor may submit a Proposal — a bid to handle the work along
- * with its cost. The dispatcher picks the lowest-cost proposal.
+ * The interpreter delegates each statement (or run of statements) — and
+ * each user-function call — to a registry of Executors. Each executor
+ * implements one strategy (interpreter, JS-JIT, C-kernel, ...). On each
+ * dispatch, every executor may submit a Proposal; the dispatcher picks
+ * the lowest-cost. Stmt-shape and call-shape work share the same
+ * Executor interface — they're discriminated via the lowered statement
+ * passed to propose().
  */
 
-import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
+import type { ControlSignal } from "../interpreter/types.js";
 import type { DispatchContext } from "./context.js";
 import type { LoweredStmt } from "./lowering.js";
 
@@ -36,6 +38,10 @@ export interface BailReason {
 
 export type RunResult =
   | { consumed: number; signal?: ControlSignal | null }
+  /** Call-shape success — used by executors that handle a
+   *  CallLoweredStmt. The dispatcher's call entry point
+   *  (`dispatchCall`) returns this `result` to the caller. */
+  | { result: unknown }
   | {
       bail: BailReason;
       /** When true, the bail is not cached: future dispatches re-enter
@@ -105,68 +111,10 @@ export interface Executor<D = unknown, C = unknown> {
   run(compiled: C, data: D, ctx: DispatchContext): RunResult;
 }
 
-// ── Function-call dispatch ──────────────────────────────────────────────
-//
-// Parallel to the stmt dispatch path. Function-call executors fire from
-// `callUserFunction` (during expression evaluation), not from the
-// interpreter's stmt loop. They handle JIT-compiled user-function calls
-// (`tryJitCall`, `tryE2ScalarFn`).
-//
-// Call executors take the Interpreter directly rather than a
-// DispatchContext. The ctx machinery (typeCache, reentrancy guard) is
-// stmt-dispatch-specific; call executors only need env access via
-// `interp`. Skipping ctx avoids a per-call Map+Set allocation, which
-// dominates on user-function-call-heavy workloads (chunkie helmholtz).
-
-export type CallRunResult =
-  | { result: unknown }
-  | {
-      bail: BailReason;
-      /** Same semantics as RunResult.transient. */
-      transient?: boolean;
-    };
-
-export interface CallProposal<D> {
-  /** Opaque per-executor data; passed to runCall(). */
-  data: D;
-  cost: CostEstimate;
-  /** Whether this proposal's runCall may fail mid-execution. The
-   *  dispatcher filters bail-risk proposals out of bail-sensitive
-   *  contexts. (Currently call dispatch has no `requireNoBail`
-   *  pathway — kept for symmetry with stmt-side Proposal.) */
-  bailRisk: boolean;
-}
-
-// Forward declare the Interpreter type without creating a hard import
-// cycle (types.ts is imported widely).
-type Interpreter = import("../interpreter/interpreter.js").Interpreter;
-
-/** Call executors don't have the registry's compile/cache layer.
- *  Function-call dispatch is per-call hot — a registry-level cache
- *  would add WeakMap+Map lookups per call without benefit, since the
- *  wrapped layers (`tryJitCall`, `tryE2ScalarFn`) already cache
- *  internally per (FunctionDef, argType-signature). Call executors
- *  propose-and-run; any compile state is the executor's own
- *  responsibility. */
-export interface CallExecutor<D = unknown> {
-  readonly name: string;
-
-  /** Submit a bid to handle this user-function call. Runs on every
-   *  call — must be cheap. Returns null to decline. */
-  proposeCall(
-    fn: FunctionDef,
-    args: unknown[],
-    nargout: number,
-    interp: Interpreter
-  ): CallProposal<D> | null;
-
-  /** Run. Returns the function's result (may be a value or an array
-   *  of values for multi-output) on success, or a Bail. */
-  runCall(
-    data: D,
-    fn: FunctionDef,
-    args: unknown[],
-    nargout: number,
-    interp: Interpreter
-  ): CallRunResult;
-}
+// Function-call dispatch is unified with stmt-level dispatch: a call
+// becomes a `CallLoweredStmt` (kind: "call") that the same Executor
+// interface consumes. The dispatcher exposes a separate entry point
+// (`Registry.dispatchCall`) for the (fn, args, nargout) input shape,
+// but it iterates the same `executors` array — a regular Executor
+// filters on `lowered.kind === "call"` and returns `{ result }` from
+// run() on success.

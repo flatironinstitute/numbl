@@ -1,52 +1,100 @@
 /**
- * JIT compilation entry point for interpreter function calls.
+ * User-function call — phased pipeline.
+ *
+ * Mirrors `jitTopLevel.ts` and `jitLoop.ts`: classify (cheap) → lower
+ * (IR) → generate-JS (per-executor codegen) → run. The dispatcher's
+ * `tryLowerCall` runs the first two phases; the JS-JIT call executor
+ * consumes the lowered IR for the latter two.
+ *
+ *   1. `classifyCall`  — cheap classification + cacheKey synthesis.
+ *      Type-infer args (drop `exact` for numeric scalars), type
+ *      widening using fn._lastJitArgTypes, cacheKey from
+ *      (nargout, argType signature). Returns null on type-unknown
+ *      args or `~` placeholder params.
+ *
+ *   2. `lowerCall`     — IR lowering. Calls `lowerFunction`. Returns
+ *      null when lowerFunction declines.
+ *
+ *   3. `generateCallJS` — JS codegen + `new Function`. Tries the e1
+ *      scalar whole-fn kernel under `--opt e1` and falls back to the
+ *      regular JS body on any hiccup.
+ *
+ *   4. `runCallCompiled` — push call frame + cleanup scope, invoke
+ *      compiled fn, pop frame. Translates JitBailToInterpreter into
+ *      a transient bail.
  */
 
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import {
   type JitType,
-  type JitCacheEntry,
   computeJitCacheKey,
   jitTypeKey,
   unifyJitTypes,
 } from "../../jit/jitTypes.js";
-import { lowerFunction } from "../../jit/jitLower.js";
+import { lowerFunction, type LoweringResult } from "../../jit/jitLower.js";
 import { generateJS } from "./js/jitCodegen.js";
 import { jitHelpers, JitBailToInterpreter } from "./js/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
-import { irHasBailRisk, irHasIO } from "../../jit/jitBailSafety.js";
 import { tryEmitScalarFnKernel } from "./e1/scalarFnKernel.js";
 
-export const JIT_SKIP = Symbol("JIT_SKIP");
-
-/** Augmented FunctionDef with the per-specialization JIT cache. */
+/** Augmented FunctionDef carrying the per-FunctionDef type-widening
+ *  state. Ports the old `_lastJitArgTypes` field; the registry's
+ *  lowering cache subsumes the old `_jitCache`. */
 interface FunctionDefWithCache extends FunctionDef {
-  _jitCache?: Map<string, JitCacheEntry | null>;
   _lastJitArgTypes?: Map<number, JitType[]>;
 }
 
-// ── Main entry point ────────────────────────────────────────────────────
+/** Cheap pre-lowering data. Produced by `classifyCall`. */
+export interface CallClassification {
+  readonly fn: FunctionDef;
+  readonly nargout: number;
+  readonly argTypes: readonly JitType[];
+  /** Stable string key derived from (nargout, argType signature).
+   *  The dispatcher's lowering cache and the executor's compile
+   *  cache both key on this. */
+  readonly cacheKey: string;
+}
 
-export function tryJitCall(
-  interp: Interpreter,
+/** Lowered IR plus the classification it came from. */
+export interface CallLowered {
+  readonly classification: CallClassification;
+  readonly result: LoweringResult;
+}
+
+/** A compiled JS artifact ready to run. */
+export interface CallCompiled {
+  readonly fn: (...args: unknown[]) => unknown;
+  readonly source: string;
+}
+
+/**
+ * Phase 1 — cheap classification. Returns null when:
+ *   - The call has a `~` placeholder param (lowerFunction emits it
+ *     as `v_~`, not a valid JS identifier).
+ *   - Any arg has type-unknown.
+ *
+ * Mutates `fn._lastJitArgTypes` for progressive type widening.
+ */
+export function classifyCall(
   fn: FunctionDef,
   args: unknown[],
   nargout: number
-): unknown | typeof JIT_SKIP {
-  // Determine argument types. For numeric scalar params, drop the
-  // literal `exact` field up front: it only survives unification when
-  // two consecutive calls pass the *same* literal, which almost never
-  // happens for user-function params (callers pass variables, not
-  // constants). Stripping means the first call's cache key already
-  // matches subsequent calls — one warmup suffices to land a reusable
-  // specialization. String/char `value`, boolean `value`, and `sign` /
-  // `isInteger` are preserved; they're useful for dispatch and widen
-  // naturally via the progressive unification below.
+): CallClassification | null {
+  // Lower-level constraint: `~` params don't survive JS codegen.
+  for (const p of fn.params) {
+    if (p === "~") return null;
+  }
+
+  // Determine argument types. Drop `exact` for numeric scalars: it
+  // only survives unification when two consecutive calls pass the
+  // *same* literal (almost never, since callers usually pass
+  // variables). Stripping means the first call's cacheKey already
+  // matches subsequent calls — one warmup suffices.
   const argTypes: JitType[] = [];
   for (const arg of args) {
     const t = inferJitType(arg);
-    if (t.kind === "unknown") return JIT_SKIP;
+    if (t.kind === "unknown") return null;
     if (t.kind === "number" && t.exact !== undefined) {
       const pruned: JitType = { kind: "number" };
       if (t.sign !== undefined) pruned.sign = t.sign;
@@ -57,8 +105,9 @@ export function tryJitCall(
     }
   }
 
-  // Progressive type widening: unify with previously seen types to prevent
-  // unbounded specializations when called from an interpreted loop.
+  // Progressive type widening: unify with previously seen types so
+  // a function called from an interpreted loop with shifting types
+  // converges to a single specialization.
   const fnWithCache = fn as FunctionDefWithCache;
   if (!fnWithCache._lastJitArgTypes) {
     fnWithCache._lastJitArgTypes = new Map();
@@ -73,34 +122,34 @@ export function tryJitCall(
 
   const cacheKey = computeJitCacheKey(nargout, argTypes);
 
-  // Check cache
-  if (!fnWithCache._jitCache) {
-    fnWithCache._jitCache = new Map();
-  }
+  return { fn, nargout, argTypes, cacheKey };
+}
 
-  if (fnWithCache._jitCache.has(cacheKey)) {
-    const entry = fnWithCache._jitCache.get(cacheKey)!;
-    if (entry === null) return JIT_SKIP; // previously failed
-    return runWithCallFrame(interp, fn.name, entry.fn, args);
-  }
+/**
+ * Phase 2 — IR lowering. Returns null when `lowerFunction` declines
+ * (constructs the JS-JIT IR doesn't model).
+ */
+export function lowerCall(
+  interp: Interpreter,
+  classification: CallClassification
+): CallLowered | null {
+  const { fn, nargout, argTypes } = classification;
+  const result = lowerFunction(fn, [...argTypes], nargout, interp);
+  if (!result) return null;
+  return { classification, result };
+}
 
-  // Attempt lowering (pass interpreter for user function resolution)
-  const lowered = lowerFunction(fn, argTypes, nargout, interp);
-  if (!lowered) {
-    fnWithCache._jitCache.set(cacheKey, null);
-    return JIT_SKIP;
-  }
-
-  // Bail-safety gate: a function that emits I/O (disp/fprintf/…) must
-  // be bail-free, or a mid-execution bail would re-run the call under
-  // the interpreter and duplicate already-printed output.
-  if (
-    irHasIO(lowered.body, lowered.generatedIRBodies) &&
-    irHasBailRisk(lowered.body, lowered.generatedIRBodies)
-  ) {
-    fnWithCache._jitCache.set(cacheKey, null);
-    return JIT_SKIP;
-  }
+/**
+ * Phase 3 — JS codegen. Tries the e1 whole-fn scalar kernel first
+ * under `--opt e1`; falls back to the regular JS-JIT body. Returns
+ * null when both paths fail.
+ */
+export function generateCallJS(
+  interp: Interpreter,
+  lowered: CallLowered
+): CallCompiled | null {
+  const { classification, result } = lowered;
+  const { fn, nargout, argTypes } = classification;
 
   // ── e1 scalar whole-function kernel path ─────────────────────────────
   // Under --opt e1, if the entire function is pure-scalar, emit a JS
@@ -111,14 +160,14 @@ export function tryJitCall(
     const scalarKernel = tryEmitScalarFnKernel(
       interp,
       fn,
-      lowered.body,
-      lowered.outputNames,
-      lowered.localVars,
-      lowered.outputType,
-      lowered.outputTypes,
-      argTypes,
+      result.body,
+      result.outputNames,
+      result.localVars,
+      result.outputType,
+      result.outputTypes,
+      [...argTypes],
       nargout,
-      lowered.generatedIRBodies
+      result.generatedIRBodies
     );
     if (scalarKernel) {
       const rt = interp.rt;
@@ -135,35 +184,34 @@ export function tryJitCall(
         const paramComments = fn.params
           .map((p, i) => `${p}: ${jitTypeKey(argTypes[i])}`)
           .join(", ");
-        const outputComments = lowered.outputNames
+        const outputComments = result.outputNames
           .map(
             o =>
-              `${o}: ${lowered.outputType ? jitTypeKey(lowered.outputType) : "unknown"}`
+              `${o}: ${result.outputType ? jitTypeKey(result.outputType) : "unknown"}`
           )
           .join(", ");
         const source =
           `// JIT (e1 scalar kernel): ${fn.name}(${paramComments}) -> (${outputComments})\n` +
           `// from: ${interp.currentFile}\n` +
           scalarKernel.jsSource;
-        fnWithCache._jitCache.set(cacheKey, { fn: compiled, source });
         const line = interp.rt.$line ?? 0;
         const description = `${fn.name}@${line}(${typeDesc}) -> e1-scalar-kernel`;
         interp.onJitCompile?.(description, source);
-        return runWithCallFrame(interp, fn.name, compiled, args);
+        return { fn: compiled, source };
       } catch {
-        // Fall through to the regular JS-JIT path on any hiccup.
+        // Fall through to the regular JS-JIT path.
       }
     }
   }
 
-  // Generate JavaScript for the main function body
+  // Generate JavaScript for the main function body.
   const currentFile = interp.currentFile;
   const mainBody = generateJS(
-    lowered.body,
+    result.body,
     fn.params,
-    lowered.outputNames,
+    result.outputNames,
     nargout,
-    lowered.localVars,
+    result.localVars,
     currentFile,
     interp.experimental,
     interp.par
@@ -171,7 +219,7 @@ export function tryJitCall(
 
   // Prepend generated helper function definitions (indented to match main body)
   const parts: string[] = [];
-  for (const [, code] of lowered.generatedFns) {
+  for (const [, code] of result.generatedFns) {
     parts.push(code.replace(/^/gm, "  "));
   }
   parts.push(mainBody);
@@ -181,14 +229,12 @@ export function tryJitCall(
   let compiledFn: (...args: unknown[]) => unknown;
   const paramNames = fn.params.map(p => p);
   const rt = interp.rt;
-
   try {
     const factory = new Function("$h", "$rt", ...paramNames, jsBody);
     const helpers = rt.jitHelpers ?? jitHelpers;
     compiledFn = (...callArgs: unknown[]) => factory(helpers, rt, ...callArgs);
   } catch {
-    fnWithCache._jitCache.set(cacheKey, null);
-    return JIT_SKIP;
+    return null;
   }
 
   // Cache and log
@@ -196,10 +242,10 @@ export function tryJitCall(
   const paramComments = fn.params
     .map((p, i) => `${p}: ${jitTypeKey(argTypes[i])}`)
     .join(", ");
-  const outputComments = lowered.outputNames
+  const outputComments = result.outputNames
     .map(
       o =>
-        `${o}: ${lowered.outputType ? jitTypeKey(lowered.outputType) : "unknown"}`
+        `${o}: ${result.outputType ? jitTypeKey(result.outputType) : "unknown"}`
     )
     .join(", ");
   const fnComment = [
@@ -207,48 +253,51 @@ export function tryJitCall(
     `// from: ${interp.currentFile}`,
   ].join("\n");
   const source = `${fnComment}\nfunction ${fn.name}(${paramNames.join(", ")}) {\n${jsBody}\n}`;
-  fnWithCache._jitCache.set(cacheKey, { fn: compiledFn, source });
 
-  // Fire logging callback (include call-site line number)
   const line = interp.rt.$line ?? 0;
   const description = `${fn.name}@${line}(${typeDesc}) -> nargout=${nargout}`;
   interp.onJitCompile?.(description, source);
 
-  // Execute — let most runtime errors propagate. JitBailToInterpreter is
-  // caught below as a signal to re-run via the interpreter.
-  const result = runWithCallFrame(interp, fn.name, compiledFn, args);
-  return result;
+  return { fn: compiledFn, source };
 }
 
+/** Outcome of `runCallCompiled`. `transient` distinguishes the
+ *  recoverable JitBailToInterpreter case (cache preserved) from a
+ *  hard failure (cache invalidated). */
+export type CallRunOutcome =
+  | { ok: true; result: unknown }
+  | { ok: false; transient: boolean };
+
 /**
- * Execute a JIT-compiled function with proper call frame tracking.
- *
- * If the JIT body throws `JitBailToInterpreter` (e.g. a scalar index write
- * needs tensor growth, which the JIT's hoisted aliases can't represent),
- * returns `JIT_SKIP` so the caller re-runs the function via the interpreter.
- * Side effects accumulated before the bail may re-run.
+ * Phase 4 — execute the compiled fn with proper call frame tracking.
+ * If the JIT body throws JitBailToInterpreter (e.g. a scalar index
+ * write that needs tensor growth), returns transient bail so the
+ * caller falls back to the AST interpreter.
  */
-function runWithCallFrame(
+export function runCallCompiled(
   interp: Interpreter,
-  name: string,
-  compiledFn: (...args: unknown[]) => unknown,
+  fn: FunctionDef,
+  compiled: CallCompiled,
   args: unknown[]
-): unknown | typeof JIT_SKIP {
-  interp.rt.pushCallFrame(name);
+): CallRunOutcome {
+  interp.rt.pushCallFrame(fn.name);
   interp.rt.pushCleanupScope();
   try {
-    return compiledFn(...args);
+    const result = compiled.fn(...args);
+    return { ok: true, result };
   } catch (e) {
-    if (e instanceof JitBailToInterpreter) return JIT_SKIP;
+    if (e instanceof JitBailToInterpreter) {
+      return { ok: false, transient: true };
+    }
     interp.rt.annotateError(e);
     throw e;
   } finally {
-    interp.rt.popAndRunCleanups(fn => {
-      if (fn.jsFn) {
-        if (fn.jsFnExpectsNargout) fn.jsFn(0);
-        else fn.jsFn();
+    interp.rt.popAndRunCleanups(cf => {
+      if (cf.jsFn) {
+        if (cf.jsFnExpectsNargout) cf.jsFn(0);
+        else cf.jsFn();
       } else {
-        interp.rt.dispatch(fn.name, 0, []);
+        interp.rt.dispatch(cf.name, 0, []);
       }
     });
     interp.rt.popCallFrame();

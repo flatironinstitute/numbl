@@ -1,55 +1,90 @@
 /**
- * scalar-fn-c-kernel — port of the e2 whole-function scalar C JIT
- * (`tryE2ScalarFn`).
+ * scalar-fn-c-kernel — C codegen executor for the call shape.
  *
- * Wraps the existing per-FunctionDef pure-scalar C-kernel path: when
- * all args are scalar number/boolean and all outputs are scalar, the
- * function body compiles to a single C function via the same lowering
- * pipeline `--opt 2` and `--opt e1` use, and dispatches via koffi.
+ * Consumes the same lowered call IR the JS-JIT call executor sees;
+ * codegens to a C kernel via koffi when the args + outputs are all
+ * scalar (number/boolean).
  *
- * Same shim pattern as the other e2 executors: classification and
- * per-FunctionDef caching live in the wrapped layer; the shim
- * declares a transient bail so the registry cache stays out of the
- * way.
+ *   - `propose()` filters on `lowered.kind === "call"`, then applies
+ *     the e2-specific scalar-args gate (skips on tensors, structs,
+ *     cells, etc.). Output scalar-ness is verified during compile.
  *
- * `bailRisk: false` because the C kernel runs to completion or
- * doesn't run at all — there is no mid-execution bail mechanism for
- * this path.
+ *   - `compile()` calls `compileE2ScalarFn` against the lowered IR.
+ *     Runs `checkCFeasibility`, `generateC`, koffi compilation.
+ *     Cached by the registry. Returns null when the body isn't
+ *     pure-scalar — registry marks BAILED.
+ *
+ *   - `run()` calls `runE2ScalarFn`. The C kernel runs to completion
+ *     or raises — no mid-execution bail mechanism, so `bailRisk`
+ *     stays false.
  */
 
-import type { CallExecutor, CallProposal, CallRunResult } from "../types.js";
-import type { Interpreter } from "../../interpreter/interpreter.js";
-import { tryE2ScalarFn, E2_SKIP } from "./scalarFnDriver.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
+import type { DispatchContext } from "../context.js";
+import type { LoweredStmt } from "../lowering.js";
+import type { CallLowered } from "../jsJit/jitCall.js";
+import {
+  compileE2ScalarFn,
+  runE2ScalarFn,
+  type E2ScalarFnCompiled,
+} from "./scalarFnDriver.js";
 
 interface ScalarFnData {
-  readonly _: 0;
+  readonly lowered: CallLowered;
+  readonly args: readonly unknown[];
 }
 
-const SHARED_DATA: ScalarFnData = { _: 0 };
 const SCALAR_FN_C_COST = { compileMs: 80, perCallNs: 300, runNs: 100 };
-const SHARED_PROPOSAL: CallProposal<ScalarFnData> = {
-  data: SHARED_DATA,
-  cost: SCALAR_FN_C_COST,
-  // C kernel runs to completion or doesn't run at all — no mid-
-  // execution bail mechanism for this path.
-  bailRisk: false,
-};
 
-export const scalarFnCKernelExecutor: CallExecutor<ScalarFnData> = {
+export const scalarFnCKernelExecutor: Executor<
+  ScalarFnData,
+  E2ScalarFnCompiled | null
+> = {
   name: "scalar-fn-c-kernel",
 
-  proposeCall(): CallProposal<ScalarFnData> {
-    return SHARED_PROPOSAL;
+  propose(lowered: LoweredStmt): Proposal<ScalarFnData> | null {
+    if (lowered.kind !== "call") return null;
+
+    const { classification, args } = lowered;
+    const fn = classification.fn;
+
+    // Param count must match — generateC's ABI is positional /
+    // fixed-arity, no MATLAB-style nargin underflow.
+    if (args.length !== fn.params.length) return null;
+
+    // All args must be scalar number/boolean. Tensors, cells,
+    // structs, chars, etc. need the tensor-aware lowering path
+    // we don't have here.
+    for (const a of args) {
+      if (typeof a !== "number" && typeof a !== "boolean") return null;
+    }
+
+    return {
+      data: { lowered: lowered.lowered, args },
+      cost: SCALAR_FN_C_COST,
+      // C kernel runs to completion or doesn't run at all — no
+      // mid-execution bail mechanism.
+      bailRisk: false,
+    };
   },
 
-  runCall(_data, fn, args, nargout, interp: Interpreter): CallRunResult {
-    const r = tryE2ScalarFn(interp, fn, args, nargout);
-    if (r === E2_SKIP) {
-      return {
-        bail: { message: "scalar-fn-c-kernel: not eligible" },
-        transient: true,
-      };
+  cacheKey(d): string {
+    return d.lowered.classification.cacheKey;
+  },
+
+  compile(d, ctx: DispatchContext): E2ScalarFnCompiled | null {
+    return compileE2ScalarFn(ctx.interp, d.lowered);
+  },
+
+  run(compiled, d): RunResult {
+    if (compiled === null) {
+      return { bail: { message: "scalar-fn-c-kernel: not pure-scalar" } };
     }
-    return { result: r };
+    const result = runE2ScalarFn(
+      d.args,
+      compiled,
+      d.lowered.classification.nargout
+    );
+    return { result };
   },
 };

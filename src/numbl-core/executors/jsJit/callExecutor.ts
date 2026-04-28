@@ -1,69 +1,83 @@
 /**
- * js-jit-call — port of the JS-JIT user-function-call hook
- * (`tryJitCall`).
+ * js-jit-call — JS codegen executor for the call shape.
  *
- * Wraps the existing whole-function JS-JIT path: when a user function
- * is called with eligible arg types, the function body compiles to a
- * type-specialized JS function via `new Function()` and runs in
- * place of the AST interpreter walking the body.
+ * Lowering is the dispatcher's job. The call executor receives the
+ * lowered IR (with pre-computed feasibility flags) as the first arg
+ * to propose, decides whether to commit, and produces a compiled JS
+ * artifact on commit.
  *
- * Same shim pattern as the stmt-level executors: the wrapped layer
- * (`jit/index.ts`) maintains its own per-FunctionDef cache keyed by
- * argument-type signature, with progressive widening. The shim
- * declares a transient bail so the registry's outer cache stays out
- * of the way.
+ *   - `propose()` filters on `lowered.kind === "call"`, applies
+ *     IO+bail-risk feasibility check. Returns null to decline.
  *
- * `bailRisk: true` is conservative — `tryJitCall` may throw
- * `JitBailToInterpreter` mid-execution, but the wrapped layer's
- * `runWithCallFrame` already absorbs that into a JIT_SKIP return,
- * which the shim translates to a transient bail. The flag still
- * surfaces the fact that the artifact's correctness depends on type
- * assumptions, in case a future caller wants to filter on it.
+ *   - `compile()` calls `generateCallJS` against the lowered IR
+ *     (which internally tries the e1 scalar kernel under --opt e1
+ *     and falls back to the regular JS body). Cached by the
+ *     registry under the classification's cacheKey.
+ *
+ *   - `run()` calls `runCallCompiled`. JitBailToInterpreter →
+ *     transient bail.
  */
 
-import type { CallExecutor, CallProposal, CallRunResult } from "../types.js";
-import type { Interpreter } from "../../interpreter/interpreter.js";
-import { tryJitCall, JIT_SKIP } from "./jitCall.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
+import type { DispatchContext } from "../context.js";
+import type { LoweredStmt } from "../lowering.js";
+import {
+  generateCallJS,
+  runCallCompiled,
+  type CallLowered,
+  type CallCompiled,
+} from "./jitCall.js";
 
 interface JsJitCallData {
-  /** No per-call data needed; the wrapped layer reads everything from
-   *  fn / args / nargout passed through to runCall. */
-  readonly _: 0;
+  readonly lowered: CallLowered;
+  readonly args: readonly unknown[];
 }
 
-// Constant proposal and cost — both shared across all calls, avoiding
-// per-call object allocation. Possible because the shim always
-// proposes with the same shape; the wrapped layer (`tryJitCall`) does
-// the actual eligibility check.
-const SHARED_DATA: JsJitCallData = { _: 0 };
 const JS_JIT_CALL_COST = { compileMs: 50, perCallNs: 200, runNs: 200 };
-const SHARED_PROPOSAL: CallProposal<JsJitCallData> = {
-  data: SHARED_DATA,
-  cost: JS_JIT_CALL_COST,
-  // The artifact's correctness depends on type assumptions that can
-  // fail at runtime. (Currently call dispatch has no requireNoBail
-  // pathway, but kept for symmetry.)
-  bailRisk: true,
-};
 
-export const jsJitCallExecutor: CallExecutor<JsJitCallData> = {
+export const jsJitCallExecutor: Executor<JsJitCallData, CallCompiled | null> = {
   name: "js-jit-call",
 
-  proposeCall(): CallProposal<JsJitCallData> {
-    // Propose unconditionally — the wrapped layer does its own
-    // eligibility check and returns JIT_SKIP when types are
-    // unsuitable. We translate that to a transient bail.
-    return SHARED_PROPOSAL;
+  propose(lowered: LoweredStmt): Proposal<JsJitCallData> | null {
+    if (lowered.kind !== "call") return null;
+    const flags = lowered.flags;
+
+    // If the body emits I/O and any mid-execution bail could fire,
+    // decline — re-running via the interpreter after a partial run
+    // would duplicate already-emitted output.
+    if (flags.hasIO && flags.hasBailRisk) return null;
+
+    return {
+      data: { lowered: lowered.lowered, args: lowered.args },
+      cost: JS_JIT_CALL_COST,
+      // The artifact's correctness depends on type assumptions that
+      // can fail at runtime.
+      bailRisk: true,
+    };
   },
 
-  runCall(_data, fn, args, nargout, interp: Interpreter): CallRunResult {
-    const r = tryJitCall(interp, fn, args, nargout);
-    if (r === JIT_SKIP) {
-      return {
-        bail: { message: "js-jit-call: not jittable" },
-        transient: true,
-      };
+  cacheKey(d): string {
+    return d.lowered.classification.cacheKey;
+  },
+
+  compile(d, ctx: DispatchContext): CallCompiled | null {
+    return generateCallJS(ctx.interp, d.lowered);
+  },
+
+  run(compiled, d, ctx: DispatchContext): RunResult {
+    if (compiled === null) {
+      return { bail: { message: "js-jit-call: codegen rejected" } };
     }
-    return { result: r };
+    const r = runCallCompiled(
+      ctx.interp,
+      d.lowered.classification.fn,
+      compiled,
+      [...d.args]
+    );
+    if (r.ok) return { result: r.result };
+    return {
+      bail: { message: "js-jit-call: bailed at runtime" },
+      ...(r.transient ? { transient: true } : {}),
+    };
   },
 };
