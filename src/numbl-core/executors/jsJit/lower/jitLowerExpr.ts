@@ -5,13 +5,13 @@
  * the orchestrator that ties them together via LowerCtx + lowerFunction.
  */
 
-import type { Expr, Stmt } from "../parser/types.js";
-import { BinaryOperation, UnaryOperation } from "../parser/types.js";
-import type { FunctionDef } from "../interpreter/types.js";
-import type { Interpreter } from "../interpreter/interpreter.js";
-import type { CallSite } from "../runtime/runtimeHelpers.js";
-import { resolveFunction } from "../functionResolve.js";
-import type { ItemType } from "../lowering/itemTypes.js";
+import type { Expr, Stmt } from "../../../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
+import type { FunctionDef } from "../../../interpreter/types.js";
+import type { Interpreter } from "../../../interpreter/interpreter.js";
+import type { CallSite } from "../../../runtime/runtimeHelpers.js";
+import { resolveFunction } from "../../../functionResolve.js";
+import type { ItemType } from "../../../lowering/itemTypes.js";
 import {
   type JitType,
   type JitExpr,
@@ -20,17 +20,20 @@ import {
   jitTypeKey,
   computeJitFnName,
   signFromNumber,
-} from "./jitTypes.js";
+} from "../../../jitTypes.js";
 import {
   KNOWN_CONSTANTS,
   binaryResultType,
   unaryResultType,
 } from "./jitLowerTypes.js";
-import { generateJS } from "../executors/jsJit/js/jitCodegen.js";
-import { getIBuiltin, inferJitType } from "../interpreter/builtins/index.js";
-import { isRuntimeFunction } from "../runtime/types.js";
-import type { RuntimeValue } from "../runtime/types.js";
-import { offsetToLineFast } from "../runtime/error.js";
+import { generateJS } from "../codegen/jitCodegen.js";
+import {
+  getIBuiltin,
+  inferJitType,
+} from "../../../interpreter/builtins/index.js";
+import { isRuntimeFunction } from "../../../runtime/types.js";
+import type { RuntimeValue } from "../../../runtime/types.js";
+import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
 
@@ -1307,7 +1310,7 @@ function probeFuncHandleReturnType(
   try {
     const fnVal = interp.env.get(fnName);
     if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
-    const fn = fnVal as import("../runtime/types.js").RuntimeFunction;
+    const fn = fnVal as import("../../../runtime/types.js").RuntimeFunction;
 
     // Only probe function handles that have a direct JS closure — these
     // are anonymous functions and named function references. Builtins

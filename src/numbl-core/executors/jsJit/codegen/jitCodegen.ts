@@ -11,7 +11,7 @@ import {
   type JitType,
   isTensorType,
   isKnownInteger,
-} from "../../../jit/jitTypes.js";
+} from "../../../jitTypes.js";
 import { getIBuiltin } from "../../../interpreter/builtins/types.js";
 import {
   tryMatchMultiReduction,
@@ -23,7 +23,7 @@ import {
   emitScalarBinaryOp,
   emitScalarUnaryOp,
   emitScalarTruthiness,
-} from "../../../jit/scalarEmit.js";
+} from "../lower/scalarEmit.js";
 import {
   type HoistedAlias,
   structFieldKey,

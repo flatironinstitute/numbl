@@ -32,7 +32,7 @@ import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import {
   jitHelpers,
   buildPerRuntimeJitHelpers,
-} from "./executors/jsJit/js/jitHelpers.js";
+} from "./executors/jsJit/helpers/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerJsJitPlugin } from "./executors/plugins.js";

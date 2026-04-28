@@ -12,7 +12,6 @@
  * passed to propose().
  */
 
-import type { ControlSignal } from "../interpreter/types.js";
 import type { DispatchContext } from "./context.js";
 import type { LoweredStmt } from "./lowering.js";
 
@@ -37,7 +36,11 @@ export interface BailReason {
 }
 
 export type RunResult =
-  | { consumed: number; signal?: ControlSignal | null }
+  /** Stmt-shape success — claims `consumed` consecutive sibling stmts
+   *  starting at the current head. Registered executors don't produce
+   *  control signals (break/continue/return); only the hardcoded
+   *  interpreter fallback in `Registry.dispatch` does. */
+  | { consumed: number }
   /** Call-shape success — used by executors that handle a
    *  CallLoweredStmt. The dispatcher's call entry point
    *  (`dispatchCall`) returns this `result` to the caller. */
@@ -66,11 +69,6 @@ export interface Proposal<D> {
    *  produce both bail-risky and bail-safe proposals depending on the
    *  inputs it sees. */
   bailRisk: boolean;
-  /** When true, the compiled artifact emits observable side effects
-   *  (`disp`, `fprintf`, file writes, ...) that mustn't repeat. The
-   *  dispatcher sets `requireNoBail = true` on any sub-dispatch the
-   *  executor performs while running. */
-  requireNoBailInChildren?: boolean;
 }
 
 export interface Executor<D = unknown, C = unknown> {

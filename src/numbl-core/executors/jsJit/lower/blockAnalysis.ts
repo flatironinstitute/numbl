@@ -7,9 +7,9 @@
  * - hasReturn: whether the loop body contains a return statement
  */
 
-import type { Stmt, Expr } from "../parser/types.js";
+import type { Stmt, Expr } from "../../../parser/types.js";
 
-export interface LoopVarInfo {
+export interface BlockVarInfo {
   /** Variables referenced in the loop that must come from enclosing scope */
   inputs: string[];
   /** Variables assigned in the loop body (written back after JIT execution) */
@@ -19,7 +19,7 @@ export interface LoopVarInfo {
 }
 
 /** Analyze a for loop statement for JIT compilation. */
-export function analyzeForLoop(stmt: Stmt & { type: "For" }): LoopVarInfo {
+export function analyzeForLoop(stmt: Stmt & { type: "For" }): BlockVarInfo {
   const assigned = new Set<string>();
   const referenced = new Set<string>();
   let hasReturn = false;
@@ -71,7 +71,7 @@ export function collectReadsFromSiblings(
  * Analyze a top-level script body (list of statements) for JIT compilation.
  * Used by `tryJitTopLevel` to wrap the whole main script as a synthetic fn.
  */
-export function analyzeTopLevel(stmts: Stmt[]): LoopVarInfo {
+export function analyzeTopLevel(stmts: Stmt[]): BlockVarInfo {
   const assigned = new Set<string>();
   const referenced = new Set<string>();
   const { hasReturn } = walkStmts(stmts, assigned, referenced);
@@ -83,7 +83,7 @@ export function analyzeTopLevel(stmts: Stmt[]): LoopVarInfo {
 }
 
 /** Analyze a while loop statement for JIT compilation. */
-export function analyzeWhileLoop(stmt: Stmt & { type: "While" }): LoopVarInfo {
+export function analyzeWhileLoop(stmt: Stmt & { type: "While" }): BlockVarInfo {
   const assigned = new Set<string>();
   const referenced = new Set<string>();
 

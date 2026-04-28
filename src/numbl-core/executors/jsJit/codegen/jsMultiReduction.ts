@@ -24,7 +24,7 @@
  * drives the all-NaN → NaN fallback.
  */
 
-import type { JitExpr, JitStmt } from "../../../jit/jitTypes.js";
+import type { JitExpr, JitStmt } from "../../../jitTypes.js";
 
 type MultiReduceOp = "sum" | "prod" | "max" | "min" | "mean";
 

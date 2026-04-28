@@ -15,7 +15,7 @@
  * of `UserCall`-ed functions (via `generatedIRBodies`), since a bail
  * inside a callee still forces the caller to re-run.
  */
-import type { JitExpr, JitStmt } from "./jitTypes.js";
+import type { JitExpr, JitStmt } from "../../../jitTypes.js";
 import type { GeneratedFn } from "./jitLower.js";
 
 /**

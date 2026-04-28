@@ -11,7 +11,8 @@ import type { Interpreter } from "../interpreter/interpreter.js";
 import type { Stmt } from "../parser/types.js";
 import type { ControlSignal } from "../interpreter/types.js";
 import type { Registry } from "./registry.js";
-import { type TypeInfo, inferTypeInfo } from "./typeInfo.js";
+import { type JitType } from "../jitTypes.js";
+import { inferJitType } from "../interpreter/builtins/types.js";
 
 /** Where the dispatcher is currently running.
  *
@@ -37,7 +38,7 @@ export class DispatchContext {
   readonly scope: DispatchScope;
 
   /** Per-dispatch memoization of typeOf(name) lookups. */
-  private readonly typeCache = new Map<string, TypeInfo>();
+  private readonly typeCache = new Map<string, JitType>();
 
   /** Re-entrancy guard: which executors are currently running on
    *  which head stmts. Prevents an executor sub-dispatching back into
@@ -65,12 +66,12 @@ export class DispatchContext {
     this.scope = scope;
   }
 
-  /** Look up a name's TypeInfo from the interpreter env, memoized. */
-  typeOf(name: string): TypeInfo {
+  /** Look up a name's JitType from the interpreter env, memoized. */
+  typeOf(name: string): JitType {
     const cached = this.typeCache.get(name);
     if (cached) return cached;
     const v = this.interp.env.get(name);
-    const t = v === undefined ? { kind: "unknown" as const } : inferTypeInfo(v);
+    const t = v === undefined ? { kind: "unknown" as const } : inferJitType(v);
     this.typeCache.set(name, t);
     return t;
   }

@@ -63,8 +63,8 @@ function binaryApply(
  *  Scalar args → scalar output; any tensor arg → tensor of matching
  *  complexity. Unknown fall-through → unknown. */
 function besselRealResolveType(
-  argTypes: import("../../jit/jitTypes.js").JitType[]
-): import("../../jit/jitTypes.js").JitType {
+  argTypes: import("../../jitTypes.js").JitType[]
+): import("../../jitTypes.js").JitType {
   if (argTypes.length < 2) return { kind: "unknown" };
   const [nu, z] = argTypes;
   const nuTensor = nu.kind === "tensor";
@@ -149,8 +149,8 @@ for (const [name, fn, scaleFn, opCode] of besselDefs) {
 
 /** Output type resolver for besselh.  Result is always complex. */
 function besselhResolveType(
-  argTypes: import("../../jit/jitTypes.js").JitType[]
-): import("../../jit/jitTypes.js").JitType {
+  argTypes: import("../../jitTypes.js").JitType[]
+): import("../../jitTypes.js").JitType {
   if (argTypes.length < 2 || argTypes.length > 4) return { kind: "unknown" };
   const nu = argTypes[0];
   // besselh(nu, z) or besselh(nu, K, z[, scale])

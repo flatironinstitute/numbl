@@ -19,14 +19,14 @@
  */
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { Stmt } from "../../parser/types.js";
-import type { JitType } from "../../jit/jitTypes.js";
-import { jitTypeKey } from "../../jit/jitTypes.js";
-import type { LoweringResult } from "../../jit/jitLower.js";
+import type { JitType } from "../../jitTypes.js";
+import { jitTypeKey } from "../../jitTypes.js";
+import type { LoweringResult } from "./lower/jitLower.js";
 import {
   analyzeForLoop,
   analyzeWhileLoop,
   collectReadsFromSiblings,
-} from "../../jit/jitLoopAnalysis.js";
+} from "./lower/blockAnalysis.js";
 import {
   gatherTypedEnvInputs,
   generateSyntheticFnJS,

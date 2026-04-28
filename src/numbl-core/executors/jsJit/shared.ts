@@ -11,17 +11,17 @@
 
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { Runtime } from "../../runtime/runtime.js";
-import type { JitType } from "../../jit/jitTypes.js";
-import { unifyJitTypes } from "../../jit/jitTypes.js";
-import { lowerFunction, type LoweringResult } from "../../jit/jitLower.js";
+import type { JitType } from "../../jitTypes.js";
+import { unifyJitTypes } from "../../jitTypes.js";
+import { lowerFunction, type LoweringResult } from "./lower/jitLower.js";
 import type { Stmt } from "../../parser/types.js";
 import type { FunctionDef } from "../../interpreter/types.js";
-import { generateJS } from "./js/jitCodegen.js";
+import { generateJS } from "./codegen/jitCodegen.js";
 import {
   jitHelpers,
   JitFuncHandleBailError,
   JitBailToInterpreter,
-} from "./js/jitHelpers.js";
+} from "./helpers/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../../runtime/types.js";

@@ -30,7 +30,6 @@ interface Candidate {
   readonly executor: Executor;
   readonly data: unknown;
   readonly total: number;
-  readonly requireNoBailInChildren: boolean;
 }
 
 export interface DispatchResult {
@@ -111,12 +110,16 @@ export class Registry {
     // executors only see the single stmt and don't care.
     ctx._setPosition(siblings, i);
 
-    // Pre-propose lowering pass. Runs the cheap classification and
-    // (on cache miss) the IR-lowering pass for any specialized shape
-    // (top-level, loop, ...); for stmts with no specialized shape
-    // returns `{ kind: "stmt", stmt }`. Always non-null. Passed as
-    // the first argument to every executor's propose().
+    // Pre-propose lowering pass. Returns the lowered IR for stmts
+    // that match a specialized shape (top-level, loop, ...), or null
+    // for stmts with no shape — those skip the proposal loop entirely
+    // and go straight to the hardcoded interpreter fallback.
+    const stmt = siblings[i];
     const lowered = tryLower(siblings, i, ctx, this.loweringCache);
+    if (lowered === null) {
+      const signal = ctx.interp.execStmt(stmt);
+      return { consumed: 1, signal };
+    }
 
     // Single linear pass: collect proposals, keep the lowest-cost one
     // as best; the rest go in a lazily-allocated backup list (only
@@ -125,7 +128,6 @@ export class Registry {
     let bestData: unknown = null;
     let bestTotal = Infinity;
     let backups: Candidate[] | null = null;
-    const stmt = siblings[i];
     const requireNoBail = ctx.requireNoBail;
     const checkActive = ctx.hasActive;
     const executors = this.executors;
@@ -144,19 +146,13 @@ export class Registry {
             executor: bestExec,
             data: bestData,
             total: bestTotal,
-            requireNoBailInChildren: false,
           });
         }
         bestExec = executor;
         bestData = p.data;
         bestTotal = total;
       } else {
-        (backups ??= []).push({
-          executor,
-          data: p.data,
-          total,
-          requireNoBailInChildren: !!p.requireNoBailInChildren,
-        });
+        (backups ??= []).push({ executor, data: p.data, total });
       }
     }
 
@@ -174,10 +170,8 @@ export class Registry {
       }
     }
 
-    // Fallback: AST interpreter, called directly. Bypasses the
-    // executor protocol because the interpreter has no compiled
-    // artifact, no cache benefit, and never bails — and this path
-    // runs on every "uninteresting" stmt.
+    // Fallback: AST interpreter, called directly. Reached when every
+    // proposal bailed.
     const signal = ctx.interp.execStmt(stmt);
     return { consumed: 1, signal };
   }
@@ -216,11 +210,13 @@ export class Registry {
       return null;
     }
     if ("consumed" in result) {
-      return { consumed: result.consumed, signal: result.signal ?? null };
+      return { consumed: result.consumed, signal: null };
     }
-    // Stmt-shape executors should never return { result }; if one
-    // does, treat it as a non-result signal-less consume of 1.
-    return { consumed: 1, signal: null };
+    // Type system forbids reaching here (stmt-shape executors return
+    // either { consumed } or a bail). Defensive throw if we do.
+    throw new Error(
+      `Stmt-shape executor ${executor.name} returned an invalid RunResult`
+    );
   }
 
   /**
@@ -261,19 +257,13 @@ export class Registry {
             executor: bestExec,
             data: bestData,
             total: bestTotal,
-            requireNoBailInChildren: false,
           });
         }
         bestExec = executor;
         bestData = p.data;
         bestTotal = total;
       } else {
-        (backups ??= []).push({
-          executor,
-          data: p.data,
-          total,
-          requireNoBailInChildren: false,
-        });
+        (backups ??= []).push({ executor, data: p.data, total });
       }
     }
 
@@ -318,9 +308,11 @@ export class Registry {
     if ("result" in result) {
       return { result: result.result };
     }
-    // Call-shape executors should always return { result } on
-    // success; treat anything else as a no-result success.
-    return { result: undefined };
+    // Type system forbids reaching here (call-shape executors return
+    // either { result } or a bail). Defensive throw if we do.
+    throw new Error(
+      `Call-shape executor ${executor.name} returned an invalid RunResult`
+    );
   }
 
   private getCallCtx(

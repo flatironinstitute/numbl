@@ -10,11 +10,11 @@
  * entire function to fall back to interpretation.
  */
 
-import type { FunctionDef } from "../interpreter/types.js";
-import type { Interpreter } from "../interpreter/interpreter.js";
-import type { JitType, JitExpr, JitStmt } from "./jitTypes.js";
+import type { FunctionDef } from "../../../interpreter/types.js";
+import type { Interpreter } from "../../../interpreter/interpreter.js";
+import type { JitType, JitExpr, JitStmt } from "../../../jitTypes.js";
 import { type TypeEnv } from "./jitLowerTypes.js";
-import { buildLineTable } from "../runtime/error.js";
+import { buildLineTable } from "../../../runtime/error.js";
 import { lowerStmts } from "./jitLowerStmt.js";
 
 const LOG_CJIT_MISSES =

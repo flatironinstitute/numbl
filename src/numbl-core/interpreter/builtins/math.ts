@@ -20,11 +20,7 @@ import {
   type BuiltinHelp,
   type JitCapabilities,
 } from "./types.js";
-import {
-  type JitType,
-  isNonneg,
-  type SignCategory,
-} from "../../jit/jitTypes.js";
+import { type JitType, isNonneg, type SignCategory } from "../../jitTypes.js";
 import {
   erfScalar,
   erfcScalar,

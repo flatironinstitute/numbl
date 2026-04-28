@@ -4,7 +4,7 @@
  * them together via LowerCtx + lowerFunction.
  */
 
-import type { Expr, Stmt } from "../parser/types.js";
+import type { Expr, Stmt } from "../../../parser/types.js";
 import {
   type JitType,
   type JitExpr,
@@ -12,10 +12,10 @@ import {
   isScalarType,
   isNumericScalarType,
   isKnownInteger,
-} from "./jitTypes.js";
+} from "../../../jitTypes.js";
 import { cloneEnv, mergeEnvs, envsEqual } from "./jitLowerTypes.js";
-import { getIBuiltin } from "../interpreter/builtins/index.js";
-import { offsetToLineFast } from "../runtime/error.js";
+import { getIBuiltin } from "../../../interpreter/builtins/index.js";
+import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx } from "./jitLower.js";
 import { lowerExpr, lowerIBuiltinCall } from "./jitLowerExpr.js";
 import { JIT_IO_BUILTINS as JIT_VOID_IO_BUILTINS } from "./jitBailSafety.js";

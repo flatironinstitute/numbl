@@ -4,7 +4,10 @@
  * The dispatcher calls `tryLower` once per stmt-dispatch (and
  * `tryLowerCall` per function-call dispatch), before any executor is
  * asked to propose. The result — a `LoweredStmt` — is passed to every
- * executor's `propose()` as the first argument.
+ * executor's `propose()` as the first argument. `tryLower` returns
+ * `null` for stmts with no specialized lowering shape; the dispatcher
+ * falls through to its hardcoded `interp.execStmt` path in that case
+ * (no executor needs to filter on "raw stmt").
  *
  * Lowering produces an IR; it does NOT make codegen-feasibility
  * decisions. "Can this be JS-JIT'd?" lives in the JS-JIT executor's
@@ -18,8 +21,6 @@
  *     FunctionDef that wraps just that stmt.
  *   - `call`      — user-function call. Lowered via `tryLowerCall`
  *     from `dispatchCall`.
- *   - `stmt`      — fallback for stmts with no specialized shape.
- *     AST-driven executors filter on this kind.
  *
  * Top-level and loop share the same underlying mechanics
  * (`shared.ts`); they're modeled as separate kinds because they have
@@ -56,16 +57,16 @@ import {
   JIT_IO_BUILTINS,
   irHasBailRisk,
   irHasIO,
-} from "../jit/jitBailSafety.js";
+} from "./jsJit/lower/jitBailSafety.js";
 
-/** What `propose()` receives. The dispatcher always produces some
- *  variant — there's no `null` LoweredStmt. Executors filter on
- *  `kind`. */
+/** What `propose()` receives — a discriminated union of the
+ *  specialized shapes the dispatcher knows how to lower. Stmts with
+ *  no specialized shape don't reach `propose()` at all; the dispatcher
+ *  falls through to its hardcoded interpreter path. */
 export type LoweredStmt =
   | TopLevelLoweredStmt
   | LoopLoweredStmt
-  | CallLoweredStmt
-  | RawStmt;
+  | CallLoweredStmt;
 
 /** Top-level shape: script body lowered to JS-JIT IR. */
 export interface TopLevelLoweredStmt {
@@ -128,13 +129,6 @@ export interface CallFlags {
   readonly hasBailRisk: boolean;
 }
 
-/** Fallback wrapper for stmts that have no specialized lowering
- *  shape. AST-driven executors filter on this kind. */
-export interface RawStmt {
-  readonly kind: "stmt";
-  readonly stmt: Stmt;
-}
-
 const BAILED = Symbol("LOWERING_BAILED");
 type Bailed = typeof BAILED;
 
@@ -155,7 +149,7 @@ export class LoweringCache {
   >();
   private readonly widening = new WeakMap<
     object,
-    Map<string, import("../jit/jitTypes.js").JitType[]>
+    Map<string, import("../jitTypes.js").JitType[]>
   >();
 
   get(owner: object, cacheKey: string): LoweredStmt | Bailed | undefined {
@@ -189,7 +183,7 @@ export class LoweringCache {
   getLastInputTypes(
     owner: object,
     slot: string
-  ): import("../jit/jitTypes.js").JitType[] | undefined {
+  ): import("../jitTypes.js").JitType[] | undefined {
     return this.widening.get(owner)?.get(slot);
   }
 
@@ -197,7 +191,7 @@ export class LoweringCache {
   setLastInputTypes(
     owner: object,
     slot: string,
-    types: readonly import("../jit/jitTypes.js").JitType[]
+    types: readonly import("../jitTypes.js").JitType[]
   ): void {
     let perOwner = this.widening.get(owner);
     if (!perOwner) {
@@ -210,15 +204,16 @@ export class LoweringCache {
 
 /**
  * Try to lower the stmt at `siblings[i]` based on current runtime
- * info. Always returns a LoweredStmt — at minimum, the raw stmt
- * wrapped in `{ kind: "stmt", stmt }`.
+ * info. Returns a `LoweredStmt` for stmts that match a specialized
+ * shape, or `null` for stmts with no shape — the dispatcher falls
+ * through to its hardcoded interpreter path in that case.
  */
 export function tryLower(
   siblings: readonly Stmt[],
   i: number,
   ctx: DispatchContext,
   cache: LoweringCache
-): LoweredStmt {
+): LoweredStmt | null {
   const head = siblings[i];
 
   // Top-level shape: only at the script's root, on the first stmt.
@@ -229,11 +224,10 @@ export function tryLower(
 
   // Loop shape: For/While stmts.
   if (head.type === "For" || head.type === "While") {
-    const entry = tryBuildLoop(ctx.interp, head, siblings, i, cache);
-    if (entry) return entry;
+    return tryBuildLoop(ctx.interp, head, siblings, i, cache);
   }
 
-  return { kind: "stmt", stmt: head };
+  return null;
 }
 
 function tryBuildTopLevel(

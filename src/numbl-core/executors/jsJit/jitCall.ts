@@ -21,10 +21,10 @@ import {
   type JitType,
   computeJitCacheKey,
   jitTypeKey,
-} from "../../jit/jitTypes.js";
-import { lowerFunction, type LoweringResult } from "../../jit/jitLower.js";
-import { generateJS } from "./js/jitCodegen.js";
-import { JitBailToInterpreter } from "./js/jitHelpers.js";
+} from "../../jitTypes.js";
+import { lowerFunction, type LoweringResult } from "./lower/jitLower.js";
+import { generateJS } from "./codegen/jitCodegen.js";
+import { JitBailToInterpreter } from "./helpers/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
 import {
   assembleJsBody,

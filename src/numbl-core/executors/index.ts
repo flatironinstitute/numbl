@@ -16,18 +16,17 @@ export type { DispatchResult, CallDispatchResult } from "./registry.js";
 export { DispatchContext } from "./context.js";
 export type { DispatchScope } from "./context.js";
 export { ExecutorCache } from "./cache.js";
-export type { TypeInfo, SignCategory } from "./typeInfo.js";
+export type { JitType, SignCategory } from "../jitTypes.js";
 export {
-  typeInfoKey,
-  unifyTypeInfo,
-  inferTypeInfo,
+  jitTypeKey,
+  unifyJitTypes,
   isScalarType,
   isTensorType,
   isComplexType,
   isKnownInteger,
-} from "./typeInfo.js";
-export { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
+} from "../jitTypes.js";
+export { inferJitType } from "../interpreter/builtins/types.js";
 export { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
 export { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 export { jsJitCallExecutor } from "./jsJit/callExecutor.js";
-export { registerInterpreterPlugin, registerJsJitPlugin } from "./plugins.js";
+export { registerJsJitPlugin } from "./plugins.js";

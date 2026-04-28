@@ -7,7 +7,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import type { JitType } from "../../jit/jitTypes.js";
+import type { JitType } from "../../jitTypes.js";
 import {
   defineBuiltin,
   predicateCases,

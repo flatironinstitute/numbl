@@ -10,7 +10,7 @@
  * These have no dependency on LowerCtx or the lowering state.
  */
 
-import { BinaryOperation, UnaryOperation } from "../parser/types.js";
+import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
 import {
   type JitExpr,
   type JitType,
@@ -23,7 +23,7 @@ import {
   isArithmeticType,
   isNonneg,
   flipSign,
-} from "./jitTypes.js";
+} from "../../../jitTypes.js";
 
 // ── Known constants ────────────────────────────────────────────────────
 

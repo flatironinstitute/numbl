@@ -12,8 +12,8 @@
  * backend-specific (JS uses `$h.cAdd` etc.; C-JIT bails on complex).
  */
 
-import { BinaryOperation, UnaryOperation } from "../parser/types.js";
-import type { JitExpr } from "./jitTypes.js";
+import { BinaryOperation, UnaryOperation } from "../../../parser/types.js";
+import type { JitExpr } from "../../../jitTypes.js";
 
 export interface ScalarOpTarget {
   // Binary scalar ops — value form (result is a scalar expression).
