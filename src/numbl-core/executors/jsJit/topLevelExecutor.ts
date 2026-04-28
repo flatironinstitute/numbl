@@ -1,30 +1,36 @@
 /**
- * js-jit-top-level — port of the top-level script JIT
- * (`tryJitTopLevel`).
+ * js-jit-top-level — JS codegen executor for the top-level shape.
  *
- * Wraps the existing whole-script JS-JIT path: when the script's
- * top-level body is JIT-feasible, the entire body compiles to a
- * synthetic JS function and runs in one go. Outputs are written back
- * to the workspace env afterwards.
+ * Lowering is the dispatcher's job. This executor receives the
+ * lowered IR (with pre-computed feasibility flags) as the first arg
+ * to propose, decides whether to commit, and on commit produces a
+ * compiled JS artifact.
  *
- * Match conditions:
- *   - `ctx.scope === "top-level"` (only the script's root stmt list,
- *     not function bodies, loop bodies, or other blocks).
- *   - `i === 0` (matches once at the start of the script body).
+ *   - `propose()` filters on `lowered.kind === "top-level"`, then
+ *     applies JIT-feasibility checks against the flags and the
+ *     runtime display-mode setting. Returns null to decline.
  *
- * On match the executor consumes the entire sibling list. On bail,
- * the dispatcher falls through to the AST interpreter, which runs
- * stmts one at a time — and the per-stmt path picks up other
- * specialized executors (loop, chain, etc.) for stmts that match.
+ *   - `compile()` calls `generateTopLevelJS` against the lowered IR
+ *     to produce a JS function. Cached by the registry under the
+ *     classification's cacheKey.
+ *
+ *   - `run()` calls `runTopLevelCompiled`. JitBailToInterpreter →
+ *     transient bail (cache preserved). JitFuncHandleBailError →
+ *     permanent bail (cache invalidated).
  */
 
-import type { Stmt } from "../../parser/types.js";
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
-import { tryJitTopLevel } from "./jitTopLevel.js";
+import type { LoweredStmt } from "../lowering.js";
+import {
+  generateTopLevelJS,
+  runTopLevelCompiled,
+  type TopLevelLowered,
+  type TopLevelCompiled,
+} from "./jitTopLevel.js";
 
 interface TopLevelData {
-  readonly siblings: Stmt[];
+  readonly lowered: TopLevelLowered;
 }
 
 // Whole-script compile is the heaviest match; once compiled it saves
@@ -33,41 +39,65 @@ interface TopLevelData {
 // executor's stub runNs.
 const TOP_LEVEL_COST = { compileMs: 100, perCallNs: 1000, runNs: 1000 };
 
-export const jsJitTopLevelExecutor: Executor<TopLevelData, true> = {
+export const jsJitTopLevelExecutor: Executor<
+  TopLevelData,
+  TopLevelCompiled | null
+> = {
   name: "js-jit-top-level",
-  // Wrapped layer absorbs JitBailToInterpreter and restores state on
-  // failure; the surrounding compile-time IO+bail-risk gate ensures
-  // that side effects don't replay. Marked true to surface the
-  // assumption-based nature of the artifact through the interface.
-  bailRisk: true,
 
-  propose(_stmt, ctx: DispatchContext): Proposal<TopLevelData> | null {
-    if (ctx.scope !== "top-level") return null;
-    if (!ctx.isFirstInScope) return null;
-    // headIndex is 0 here (isFirstInScope), so ctx.siblings is the
-    // full scope list — exactly what tryJitTopLevel wants.
+  propose(
+    lowered: LoweredStmt,
+    ctx: DispatchContext
+  ): Proposal<TopLevelData> | null {
+    if (lowered.kind !== "top-level") return null;
+    const flags = lowered.flags;
+
+    // JIT can't model `return` from the synthetic top-level fn.
+    if (flags.hasReturn) return null;
+
+    // MATLAB displays unsuppressed top-level statements. The JIT has
+    // no emit for auto-display, so in display mode we bail when any
+    // source stmt would normally print.
+    if (ctx.interp.rt.displayResults && flags.hasUnsuppressedAssign) {
+      return null;
+    }
+
+    // If the body contains I/O (disp/fprintf/…) and any mid-execution
+    // bail could fire, decline — re-running via the interpreter after
+    // a partial run would duplicate already-emitted output.
+    if (flags.hasIO && flags.hasBailRisk) return null;
+
     return {
-      data: { siblings: ctx.siblings as Stmt[] },
+      data: { lowered: lowered.lowered },
       cost: TOP_LEVEL_COST,
+      // Wrapped layer absorbs JitBailToInterpreter and restores state
+      // on failure; bail-risky because the artifact's correctness
+      // relies on type assumptions that can fail at runtime.
+      bailRisk: true,
     };
   },
 
-  cacheKey(): string {
-    return "top-level";
+  cacheKey(d): string {
+    return d.lowered.classification.cacheKey;
   },
 
-  compile(): true {
-    return true;
+  compile(d, ctx: DispatchContext): TopLevelCompiled | null {
+    return generateTopLevelJS(ctx.interp, d.lowered);
   },
 
-  run(_compiled, d, ctx: DispatchContext): RunResult {
-    const ok = tryJitTopLevel(ctx.interp, d.siblings);
-    if (!ok) {
-      return {
-        bail: { message: "js-jit-top-level: not jittable" },
-        transient: true,
-      };
+  run(compiled, d, ctx: DispatchContext): RunResult {
+    if (compiled === null) {
+      return { bail: { message: "js-jit-top-level: codegen rejected" } };
     }
-    return { consumed: d.siblings.length };
+    const r = runTopLevelCompiled(
+      ctx.interp,
+      compiled,
+      d.lowered.classification
+    );
+    if (r.ok) return { consumed: d.lowered.classification.stmts.length };
+    return {
+      bail: { message: "js-jit-top-level: bailed at runtime" },
+      ...(r.transient ? { transient: true } : {}),
+    };
   },
 };

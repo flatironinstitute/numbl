@@ -13,6 +13,7 @@ import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { CallExecutor, Executor } from "./types.js";
 import { DispatchContext } from "./context.js";
 import { ExecutorCache } from "./cache.js";
+import { LoweringCache, tryLower } from "./lowering.js";
 
 interface RegisteredExecutor {
   readonly executor: Executor;
@@ -52,6 +53,7 @@ export class Registry {
   private readonly executors: RegisteredExecutor[] = [];
   private readonly callExecutors: RegisteredCallExecutor[] = [];
   private cache = new ExecutorCache();
+  private loweringCache = new LoweringCache();
 
   register(executor: Executor): void {
     if (this.executors.some(r => r.executor.name === executor.name)) {
@@ -85,9 +87,10 @@ export class Registry {
   /** Drop all cached compiled artifacts. Called from
    *  `Interpreter.clearAllCaches()` after addpath/rmpath etc. */
   clearCache(): void {
-    // ExecutorCache uses a WeakMap, so we just throw away the whole
-    // instance and start fresh.
+    // ExecutorCache and LoweringCache use WeakMaps, so we just throw
+    // away the whole instance and start fresh.
     this.cache = new ExecutorCache();
+    this.loweringCache = new LoweringCache();
   }
 
   /**
@@ -121,6 +124,13 @@ export class Registry {
     // executors only see the single stmt and don't care.
     ctx._setPosition(siblings, i);
 
+    // Pre-propose lowering pass. Runs the cheap classification and
+    // (on cache miss) the IR-lowering pass for any specialized shape
+    // (top-level, etc.); for stmts with no specialized shape returns
+    // `{ kind: "stmt", stmt }`. Always non-null. Passed as the first
+    // argument to every executor's propose().
+    const lowered = tryLower(siblings, i, ctx, this.loweringCache);
+
     // Single linear pass: collect proposals, keep the lowest-cost one
     // as best; the rest go in a lazily-allocated backup list (only
     // used if the best bails).
@@ -134,10 +144,12 @@ export class Registry {
     const executors = this.executors;
     for (let k = 0; k < executors.length; k++) {
       const executor = executors[k].executor;
-      if (requireNoBail && executor.bailRisk) continue;
       if (checkActive && ctx.isActive(executor.name, stmt)) continue;
-      const p = executor.propose(stmt, ctx);
+      const p = executor.propose(lowered, ctx);
       if (!p) continue;
+      // bailRisk is per-proposal: an executor can produce both
+      // bail-risky and bail-safe proposals depending on its input.
+      if (requireNoBail && p.bailRisk) continue;
       const total = p.cost.perCallNs + p.cost.runNs;
       if (total < bestTotal) {
         if (bestExec) {

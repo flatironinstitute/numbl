@@ -40,11 +40,14 @@ const JS_JIT_CALL_COST = { compileMs: 50, perCallNs: 200, runNs: 200 };
 const SHARED_PROPOSAL: CallProposal<JsJitCallData> = {
   data: SHARED_DATA,
   cost: JS_JIT_CALL_COST,
+  // The artifact's correctness depends on type assumptions that can
+  // fail at runtime. (Currently call dispatch has no requireNoBail
+  // pathway, but kept for symmetry.)
+  bailRisk: true,
 };
 
 export const jsJitCallExecutor: CallExecutor<JsJitCallData> = {
   name: "js-jit-call",
-  bailRisk: true,
 
   proposeCall(): CallProposal<JsJitCallData> {
     // Propose unconditionally — the wrapped layer does its own

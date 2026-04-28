@@ -13,6 +13,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
+import type { LoweredStmt } from "../lowering.js";
 
 interface InterpData {
   readonly stmt: Stmt;
@@ -27,10 +28,14 @@ const INTERP_COST = { compileMs: 0, perCallNs: 0, runNs: 1e9 };
 
 export const interpreterExecutor: Executor<InterpData, true> = {
   name: "interpreter",
-  bailRisk: false,
 
-  propose(stmt): Proposal<InterpData> {
-    return { data: { stmt }, cost: INTERP_COST };
+  propose(lowered: LoweredStmt): Proposal<InterpData> | null {
+    if (lowered.kind !== "stmt") return null;
+    return {
+      data: { stmt: lowered.stmt },
+      cost: INTERP_COST,
+      bailRisk: false,
+    };
   },
 
   cacheKey(): string {

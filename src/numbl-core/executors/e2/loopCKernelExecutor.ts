@@ -15,6 +15,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
+import type { LoweredStmt } from "../lowering.js";
 import { tryE2Loop } from "./loopKernel.js";
 
 interface LoopData {
@@ -27,11 +28,18 @@ const LOOP_C_COST = { compileMs: 50, perCallNs: 300, runNs: 100 };
 
 export const loopCKernelExecutor: Executor<LoopData, true> = {
   name: "loop-c-kernel",
-  bailRisk: false,
 
-  propose(stmt): Proposal<LoopData> | null {
+  propose(lowered: LoweredStmt): Proposal<LoopData> | null {
+    if (lowered.kind !== "stmt") return null;
+    const stmt = lowered.stmt;
     if (stmt.type !== "For") return null;
-    return { data: { stmt }, cost: LOOP_C_COST };
+    return {
+      data: { stmt },
+      cost: LOOP_C_COST,
+      // C kernel runs to completion or doesn't run at all — no mid-
+      // execution bail mechanism.
+      bailRisk: false,
+    };
   },
 
   cacheKey(): string {

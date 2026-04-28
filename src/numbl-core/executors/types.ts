@@ -10,9 +10,9 @@
  * with its cost. The dispatcher picks the lowest-cost proposal.
  */
 
-import type { Stmt } from "../parser/types.js";
 import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { DispatchContext } from "./context.js";
+import type { LoweredStmt } from "./lowering.js";
 
 /** Estimated cost of using this executor for the proposed work.
  *  Numbers can be very rough at first; the dispatcher's policy is
@@ -53,6 +53,13 @@ export interface Proposal<D> {
   /** Opaque per-executor data; passed to compile() and run(). */
   data: D;
   cost: CostEstimate;
+  /** Whether this specific proposal's compiled artifact may fail an
+   *  invariant mid-execution (and thus need re-running by a fallback).
+   *  The dispatcher filters bail-risk proposals out of contexts marked
+   *  `requireNoBail`. Per-proposal because a single executor may
+   *  produce both bail-risky and bail-safe proposals depending on the
+   *  inputs it sees. */
+  bailRisk: boolean;
   /** When true, the compiled artifact emits observable side effects
    *  (`disp`, `fprintf`, file writes, ...) that mustn't repeat. The
    *  dispatcher sets `requireNoBail = true` on any sub-dispatch the
@@ -64,18 +71,23 @@ export interface Executor<D = unknown, C = unknown> {
   /** Stable identifier for logging, cache keys, and test selection. */
   readonly name: string;
 
-  /** Whether this executor's compiled artifact can fail an invariant
-   *  mid-execution (and thus need to be re-run by a fallback). The
-   *  dispatcher filters bail-risk executors out of contexts marked
-   *  `requireNoBail`. */
-  readonly bailRisk: boolean;
-
   /** Submit a bid to handle this stmt. Runs on every dispatch — must
-   *  be cheap. Receives just the current stmt; for executors that
-   *  need to look across multiple stmts (chain fusion, whole-script
-   *  JIT), use `ctx.peekSibling(offset)` or `ctx.siblings`. Returns
-   *  null to decline. */
-  propose(stmt: Stmt, ctx: DispatchContext): Proposal<D> | null;
+   *  be cheap.
+   *
+   *  Receives the lowered statement produced by the dispatcher's
+   *  pre-propose lowering pass. The `kind` field discriminates: a
+   *  specialized shape (e.g. `"top-level"`) carries a lowered IR
+   *  plus pre-computed feasibility flags; the fallback `"stmt"` kind
+   *  carries the raw AST stmt for executors that classify from the
+   *  AST directly.
+   *
+   *  Codegen-feasibility decisions (display mode, IO+bail-risk, etc.)
+   *  belong here — the lowering pipeline produces an IR; the
+   *  executor decides whether to commit. For lookahead across
+   *  multiple stmts, use `ctx.peekSibling(offset)` or `ctx.siblings`.
+   *
+   *  Returns null to decline. */
+  propose(lowered: LoweredStmt, ctx: DispatchContext): Proposal<D> | null;
 
   /** Stable cache key projected from the proposal data. Drops
    *  volatile bits (e.g., exact scalar values; tensor shape if
@@ -118,6 +130,11 @@ export interface CallProposal<D> {
   /** Opaque per-executor data; passed to runCall(). */
   data: D;
   cost: CostEstimate;
+  /** Whether this proposal's runCall may fail mid-execution. The
+   *  dispatcher filters bail-risk proposals out of bail-sensitive
+   *  contexts. (Currently call dispatch has no `requireNoBail`
+   *  pathway — kept for symmetry with stmt-side Proposal.) */
+  bailRisk: boolean;
 }
 
 // Forward declare the Interpreter type without creating a hard import
@@ -133,7 +150,6 @@ type Interpreter = import("../interpreter/interpreter.js").Interpreter;
  *  responsibility. */
 export interface CallExecutor<D = unknown> {
   readonly name: string;
-  readonly bailRisk: boolean;
 
   /** Submit a bid to handle this user-function call. Runs on every
    *  call — must be cheap. Returns null to decline. */

@@ -30,11 +30,13 @@ const SCALAR_FN_C_COST = { compileMs: 80, perCallNs: 300, runNs: 100 };
 const SHARED_PROPOSAL: CallProposal<ScalarFnData> = {
   data: SHARED_DATA,
   cost: SCALAR_FN_C_COST,
+  // C kernel runs to completion or doesn't run at all — no mid-
+  // execution bail mechanism for this path.
+  bailRisk: false,
 };
 
 export const scalarFnCKernelExecutor: CallExecutor<ScalarFnData> = {
   name: "scalar-fn-c-kernel",
-  bailRisk: false,
 
   proposeCall(): CallProposal<ScalarFnData> {
     return SHARED_PROPOSAL;

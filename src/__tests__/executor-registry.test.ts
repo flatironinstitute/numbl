@@ -45,11 +45,12 @@ interface StubExecutorOpts {
 function stubExecutor(opts: StubExecutorOpts): Executor<StubData, StubData> {
   return {
     name: opts.name,
-    bailRisk: !!opts.bailRisk,
-    propose(): Proposal<StubData> {
+    propose(lowered): Proposal<StubData> | null {
+      if (lowered.kind !== "stmt") return null;
       return {
         data: { tag: opts.name },
         cost: opts.cost,
+        bailRisk: !!opts.bailRisk,
         ...(opts.requireNoBailInChildren
           ? { requireNoBailInChildren: true }
           : {}),

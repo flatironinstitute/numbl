@@ -1,30 +1,34 @@
 /**
- * js-jit-loop — port of the JS-JIT loop hooks (`tryJitFor` /
- * `tryJitWhile`).
+ * js-jit-loop — JS codegen executor for the loop shape.
  *
- * Matches `For` and `While` statements. The wrapped layer
- * (`jit/jitLoop.ts`) does its own type signature analysis, progressive
- * widening, compile-time IO+bail-risk gating, and writes back outputs
- * to the env. A `JitBailToInterpreter` thrown at runtime is absorbed
- * inside `executeAndWriteBack`, which restores the loop to its pre-
- * call state and returns false — so from the outside this executor
- * never observes a mid-execution bail.
+ * Lowering is the dispatcher's job. The loop executor receives the
+ * lowered IR (with pre-computed feasibility flags) as the first arg
+ * to propose, decides whether to commit, and produces a compiled JS
+ * artifact on commit.
  *
- * Because the wrapped layer's compile-time gate refuses bodies that
- * can both emit observable I/O and bail at runtime, the compiled
- * artifact is effectively bail-safe by construction. We still mark
- * `bailRisk: true` to be conservative: the artifact's correctness
- * relies on type assumptions that can fail, even if today's gating
- * catches the unsafe overlap.
+ *   - `propose()` filters on `lowered.kind === "loop"`, applies
+ *     JIT-feasibility checks against the flags. Returns null to
+ *     decline.
+ *
+ *   - `compile()` calls `generateLoopJS` against the lowered IR.
+ *     Cached by the registry under the classification's cacheKey.
+ *
+ *   - `run()` calls `runLoopCompiled`. JitBailToInterpreter →
+ *     transient bail; JitFuncHandleBailError → permanent bail.
  */
 
-import type { Stmt } from "../../parser/types.js";
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
-import { tryJitFor, tryJitWhile } from "./jitLoop.js";
+import type { LoweredStmt } from "../lowering.js";
+import {
+  generateLoopJS,
+  runLoopCompiled,
+  type LoopLowered,
+  type LoopCompiled,
+} from "./jitLoop.js";
 
 interface LoopData {
-  readonly stmt: Stmt & { type: "For" | "While" };
+  readonly lowered: LoopLowered;
 }
 
 // Per-call dispatch ~hundreds of ns once compiled. The interpreter's
@@ -32,34 +36,47 @@ interface LoopData {
 // succeeds.
 const JS_JIT_LOOP_COST = { compileMs: 30, perCallNs: 200, runNs: 200 };
 
-export const jsJitLoopExecutor: Executor<LoopData, true> = {
+export const jsJitLoopExecutor: Executor<LoopData, LoopCompiled | null> = {
   name: "js-jit-loop",
-  bailRisk: true,
 
-  propose(stmt): Proposal<LoopData> | null {
-    if (stmt.type !== "For" && stmt.type !== "While") return null;
-    return { data: { stmt }, cost: JS_JIT_LOOP_COST };
+  propose(lowered: LoweredStmt): Proposal<LoopData> | null {
+    if (lowered.kind !== "loop") return null;
+    const flags = lowered.flags;
+
+    // JIT can't model `return` from the synthetic loop fn.
+    if (flags.hasReturn) return null;
+
+    // If the body contains I/O and a mid-execution bail could fire,
+    // decline — re-running via the interpreter after a partial run
+    // would duplicate already-emitted output.
+    if (flags.hasIO && flags.hasBailRisk) return null;
+
+    return {
+      data: { lowered: lowered.lowered },
+      cost: JS_JIT_LOOP_COST,
+      // Compiled artifact's correctness relies on type assumptions
+      // that can fail at runtime.
+      bailRisk: true,
+    };
   },
 
-  cacheKey(): string {
-    return "loop";
+  cacheKey(d): string {
+    return d.lowered.classification.cacheKey;
   },
 
-  compile(): true {
-    return true;
+  compile(d, ctx: DispatchContext): LoopCompiled | null {
+    return generateLoopJS(ctx.interp, d.lowered);
   },
 
-  run(_compiled, d, ctx: DispatchContext): RunResult {
-    const ok =
-      d.stmt.type === "For"
-        ? tryJitFor(ctx.interp, d.stmt)
-        : tryJitWhile(ctx.interp, d.stmt);
-    if (!ok) {
-      return {
-        bail: { message: "js-jit-loop: not jittable" },
-        transient: true,
-      };
+  run(compiled, d, ctx: DispatchContext): RunResult {
+    if (compiled === null) {
+      return { bail: { message: "js-jit-loop: codegen rejected" } };
     }
-    return { consumed: 1 };
+    const r = runLoopCompiled(ctx.interp, compiled, d.lowered.classification);
+    if (r.ok) return { consumed: 1 };
+    return {
+      bail: { message: "js-jit-loop: bailed at runtime" },
+      ...(r.transient ? { transient: true } : {}),
+    };
   },
 };

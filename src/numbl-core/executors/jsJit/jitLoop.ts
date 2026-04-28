@@ -1,19 +1,33 @@
 /**
- * JIT compilation for inline for/while loops.
+ * For/while loop body — phased pipeline.
  *
- * When the interpreter encounters a for or while loop, these functions
- * attempt to JIT-compile the loop as a synthetic function: inputs are
- * variables from the enclosing scope, outputs are variables assigned
- * inside the loop body. On success the compiled code runs and output
- * values are written back to the interpreter environment.
+ * Mirrors `jitTopLevel.ts`'s structure: classify (cheap) → lower (IR)
+ * → generate-JS (per-executor codegen) → run. The dispatcher's
+ * `tryLower` runs the first two phases; the JS-JIT loop executor
+ * consumes the lowered IR for the latter two.
+ *
+ *   1. `classifyLoop`  — cheap classification + cacheKey synthesis.
+ *      Inputs analysis (rawInputs ∪ rawOutputs filtered against env),
+ *      output live-out filter against post-siblings, type widening
+ *      across runs, cacheKey from (loop location, type signature).
+ *
+ *   2. `lowerLoop`     — IR lowering. Wraps the loop stmt as a
+ *      synthetic `FunctionDef`, calls `lowerFunction`. Returns null
+ *      when lowerFunction itself declines.
+ *
+ *   3. `generateLoopJS` — JS codegen + `new Function`.
+ *
+ *   4. `runLoopCompiled` — gather inputs from env, invoke compiled
+ *      fn, write back outputs. Translates JitBailToInterpreter into
+ *      a transient bail (cache preserved) and JitFuncHandleBailError
+ *      into a permanent bail (cache invalidated).
  */
-
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { Stmt } from "../../parser/types.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import type { JitType } from "../../jit/jitTypes.js";
 import { jitTypeKey, unifyJitTypes } from "../../jit/jitTypes.js";
-import { lowerFunction } from "../../jit/jitLower.js";
+import { lowerFunction, type LoweringResult } from "../../jit/jitLower.js";
 import { generateJS } from "./js/jitCodegen.js";
 import {
   jitHelpers,
@@ -21,7 +35,6 @@ import {
   JitBailToInterpreter,
 } from "./js/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
-import { irHasBailRisk, irHasIO } from "../../jit/jitBailSafety.js";
 import {
   analyzeForLoop,
   analyzeWhileLoop,
@@ -29,8 +42,6 @@ import {
 } from "../../jit/jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-
-// ── Known constants that should not be treated as input variables ────────
 
 const KNOWN_CONSTANTS = new Set([
   "pi",
@@ -46,81 +57,87 @@ const KNOWN_CONSTANTS = new Set([
   "j",
 ]);
 
-// ── Public entry points ─────────────────────────────────────────────────
+export type LoopKind = "for" | "while";
 
-/**
- * Attempt to JIT-compile and execute a for-loop statement.
- * Returns true if JIT succeeded, false to fall back to interpretation.
- */
-export function tryJitFor(
-  interp: Interpreter,
-  stmt: Stmt & { type: "For" }
-): boolean {
-  const analysis = analyzeForLoop(stmt);
-  if (analysis.hasReturn) return false;
-  return tryJitLoop(interp, stmt, analysis.inputs, analysis.outputs, "for");
+/** Cheap pre-lowering data. Produced by `classifyLoop`. */
+export interface LoopClassification {
+  readonly stmt: Stmt & { type: "For" | "While" };
+  readonly kind: LoopKind;
+  readonly inputs: readonly string[];
+  readonly inputTypes: readonly JitType[];
+  readonly outputs: readonly string[];
+  /** True when the loop body contains a `return` — JIT can't model
+   *  early-return out of the synthetic loop fn, so the executor must
+   *  decline. */
+  readonly hasReturn: boolean;
+  /** Stable string key derived from (loop location, input-type
+   *  signature). Used by the dispatcher's lowering cache and by the
+   *  executor's compile cache. */
+  readonly cacheKey: string;
+}
+
+/** Lowered IR plus the classification it came from. */
+export interface LoopLowered {
+  readonly classification: LoopClassification;
+  readonly result: LoweringResult;
+}
+
+/** A compiled JS artifact ready to run. */
+export interface LoopCompiled {
+  readonly fn: (...args: unknown[]) => unknown;
+  readonly source: string;
 }
 
 /**
- * Attempt to JIT-compile and execute a while-loop statement.
- * Returns true if JIT succeeded, false to fall back to interpretation.
+ * Phase 1 — cheap classification. Returns null when the loop is
+ * unjittable on grounds we can decide without lowering (type-unknown
+ * inputs). Codegen-feasibility checks (hasReturn, IO+bail-risk) are
+ * exposed as flags / via the lowered IR for the executor's propose
+ * to act on.
+ *
+ * Mutates `interp.loopLastInputTypes` for progressive type widening.
+ *
+ * `postSiblings` / `postIdx` describe the stmt list this loop sits
+ * in (passed from the dispatcher's `ctx.siblings` / `ctx.headIndex`),
+ * used to compute the live-out filter on outputs.
  */
-export function tryJitWhile(
-  interp: Interpreter,
-  stmt: Stmt & { type: "While" }
-): boolean {
-  const analysis = analyzeWhileLoop(stmt);
-  if (analysis.hasReturn) return false;
-  return tryJitLoop(interp, stmt, analysis.inputs, analysis.outputs, "while");
-}
-
-// ── Core implementation ─────────────────────────────────────────────────
-
-function tryJitLoop(
+export function classifyLoop(
   interp: Interpreter,
   stmt: Stmt & { type: "For" | "While" },
-  rawInputs: string[],
-  rawOutputs: string[],
-  kind: "for" | "while"
-): boolean {
-  // Filter inputs: only variables that exist in the current environment
-  // and are not known constants/builtins.
-  //
-  // We also promote any `rawOutputs` entry that exists in the outer env
-  // to an input. This preserves the pre-loop value of variables that the
-  // body *might* assign but doesn't always — most importantly, write-
-  // only locals (`clear_i_exists = false; for ... clear_i_exists = true;
-  // end`) whose only in-body use is an assignment. Without this,
-  // the synthetic JIT function can't see the pre-loop value and,
-  // when the range is empty, the unassigned local returns as undefined
-  // and clobbers the outer env. Promoting output-in-env names to inputs
-  // also unifies with the in-body assignment type at the loop join via
-  // the usual merge path.
+  postSiblings: readonly Stmt[],
+  postIdx: number
+): LoopClassification | null {
+  const kind: LoopKind = stmt.type === "For" ? "for" : "while";
+  const analysis =
+    stmt.type === "For" ? analyzeForLoop(stmt) : analyzeWhileLoop(stmt);
+
+  // Filter inputs: only variables that exist in the current
+  // environment and are not known constants/builtins. Promote any
+  // rawOutputs entry that exists in env to an input as well —
+  // preserves pre-loop values of conditionally-assigned locals
+  // (write-only-in-body case).
   const inputCandidates: string[] = [];
   const seenCandidates = new Set<string>();
-  for (const name of rawInputs) {
+  for (const name of analysis.inputs) {
     if (seenCandidates.has(name)) continue;
     seenCandidates.add(name);
     inputCandidates.push(name);
   }
-  for (const name of rawOutputs) {
+  for (const name of analysis.outputs) {
     if (seenCandidates.has(name)) continue;
     seenCandidates.add(name);
     inputCandidates.push(name);
   }
 
   const inputs: string[] = [];
-  const inputValues: unknown[] = [];
   const inputTypes: JitType[] = [];
 
   for (const name of inputCandidates) {
     if (KNOWN_CONSTANTS.has(name)) continue;
     const val = interp.env.get(name);
-    if (val === undefined) continue; // not a variable in scope — likely a function name
+    if (val === undefined) continue; // not a variable in scope (likely a fn name)
     let t = inferJitType(val);
-    if (t.kind === "unknown") return false;
-    // Strip exact literals from scalar params so the warmup key matches
-    // the hot key (mirrors the function-level JIT in index.ts).
+    if (t.kind === "unknown") return null;
     if (t.kind === "number" && t.exact !== undefined) {
       const pruned: JitType = { kind: "number" };
       if (t.sign !== undefined) pruned.sign = t.sign;
@@ -128,43 +145,26 @@ function tryJitLoop(
       t = pruned;
     }
     inputs.push(name);
-    inputValues.push(val);
     inputTypes.push(t);
   }
 
-  // Outputs: all assigned variables (deduplicated). We then filter this to
-  // only the variables the surrounding scope actually needs after the
-  // loop. Loop-internal temporaries that aren't read post-loop end up
-  // unwritten and the JIT'd function can keep them in registers — V8
-  // pessimizes register allocation if too many locals are live at the
-  // function exit.
-  const outputSet = new Set(rawOutputs);
+  // Outputs: dedupe, then filter to live-out set. Loop-internal
+  // temporaries that aren't read post-loop end up unwritten so V8
+  // can keep them in registers.
+  const outputSet = new Set(analysis.outputs);
   let outputs = [...outputSet];
 
-  // Live-out filter: a variable should be written back if any of:
-  //   1. it's an input (was in the env before the loop), or
-  //   2. it's the loop's iteration variable (MATLAB exposes the final
-  //      value), or
-  //   3. it's read by a sibling stmt that runs after this loop in the
-  //      enclosing block.
-  // For (3) we walk just the sibling-tail provided by execStmts on the
-  // interpreter; cross-block flow is conservatively ignored (those vars
-  // get covered by the input check anyway, since they'd have to make it
-  // back into env via assignment somewhere upstream).
   const inputSet = new Set(inputs);
   const liveOut = new Set<string>(inputSet);
   if (stmt.type === "For") liveOut.add(stmt.varName);
-  if (interp._postSiblings && interp._postSiblingsIdx > 0) {
-    collectReadsFromSiblings(
-      interp._postSiblings,
-      interp._postSiblingsIdx,
-      liveOut
-    );
+  if (postSiblings.length > postIdx + 1) {
+    collectReadsFromSiblings(postSiblings as Stmt[], postIdx + 1, liveOut);
   }
   outputs = outputs.filter(o => liveOut.has(o));
 
-  // Progressive type widening: unify with previously seen types to prevent
-  // unbounded specializations when called from an interpreted loop.
+  // Progressive type widening: rare for inline loops but matters
+  // when called from an interpreted outer loop where input types
+  // can shift.
   const loc = stmt.span
     ? `${stmt.span.file}:${stmt.span.start}`
     : `loop:${kind}`;
@@ -176,81 +176,81 @@ function tryJitLoop(
   }
   interp.loopLastInputTypes.set(loc, inputTypes.slice());
 
-  // Build cache key from AST location + input types
   const typeKey = inputs
     .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
     .join(",");
   const cacheKey = `${loc}|${typeKey}`;
 
-  // Check JS-JIT cache
-  if (interp.loopJitCache.has(cacheKey)) {
-    const entry = interp.loopJitCache.get(cacheKey)!;
-    if (entry === null) return false; // previously failed
-    return executeAndWriteBack(
-      interp,
-      entry.fn,
-      inputValues,
-      outputs,
-      cacheKey
-    );
-  }
+  return {
+    stmt,
+    kind,
+    inputs,
+    inputTypes,
+    outputs,
+    hasReturn: analysis.hasReturn,
+    cacheKey,
+  };
+}
 
-  // Build a synthetic FunctionDef wrapping the loop statement
+/**
+ * Phase 2 — IR lowering. Wraps the loop as a synthetic FunctionDef
+ * and calls `lowerFunction`. Returns null when lowerFunction itself
+ * declines.
+ */
+export function lowerLoop(
+  interp: Interpreter,
+  classification: LoopClassification
+): LoopLowered | null {
+  const { stmt, kind, inputs, inputTypes, outputs } = classification;
+
   const syntheticFn: FunctionDef = {
     name: `$loop_${kind}`,
-    params: inputs,
-    outputs,
+    params: [...inputs],
+    outputs: [...outputs],
     body: [stmt],
   };
 
-  // Attempt lowering
-  const lowered = lowerFunction(
+  const result = lowerFunction(
     syntheticFn,
-    inputTypes,
+    [...inputTypes],
     outputs.length,
     interp
   );
-  if (!lowered) {
-    interp.loopJitCache.set(cacheKey, null);
-    return false;
-  }
+  if (!result) return null;
 
-  // Bail-safety gate: loops with I/O (e.g. progress prints) must not
-  // bail mid-execution, or the interpreter re-run would duplicate
-  // already-emitted output.
-  if (
-    irHasIO(lowered.body, lowered.generatedIRBodies) &&
-    irHasBailRisk(lowered.body, lowered.generatedIRBodies)
-  ) {
-    interp.loopJitCache.set(cacheKey, null);
-    return false;
-  }
+  return { classification, result };
+}
 
-  // Generate JavaScript
+/**
+ * Phase 3 — JS codegen. Returns null only if `new Function` itself
+ * throws (defensive — should not happen for IR that lowering accepted).
+ */
+export function generateLoopJS(
+  interp: Interpreter,
+  lowered: LoopLowered
+): LoopCompiled | null {
+  const { classification, result } = lowered;
+  const { kind, inputs, inputTypes, outputs } = classification;
+
   const currentFile = interp.currentFile;
   const mainBody = generateJS(
-    lowered.body,
-    inputs,
-    lowered.outputNames,
+    result.body,
+    [...inputs],
+    result.outputNames,
     outputs.length,
-    lowered.localVars,
+    result.localVars,
     currentFile,
     interp.experimental,
     interp.par
   );
 
-  // Prepend generated helper function definitions
   const parts: string[] = [];
-  for (const [, code] of lowered.generatedFns) {
+  for (const [, code] of result.generatedFns) {
     parts.push(code.replace(/^/gm, "  "));
   }
   parts.push(mainBody);
   const jsBody = parts.join("\n");
 
-  // Create compiled function — always pass $h and $rt for line tracking.
-  // Prefer the per-runtime helpers (built once after all dynamic builtins
-  // are registered) so V8 sees a stable hidden class on $h and inlines
-  // the per-iter helper calls in hot loops.
   let compiledFn: (...args: unknown[]) => unknown;
   const rt = interp.rt;
   try {
@@ -258,62 +258,58 @@ function tryJitLoop(
     const helpers = rt.jitHelpers ?? jitHelpers;
     compiledFn = (...callArgs: unknown[]) => factory(helpers, rt, ...callArgs);
   } catch {
-    interp.loopJitCache.set(cacheKey, null);
-    return false;
+    return null;
   }
 
-  // Build source for logging
   const paramComments = inputs
     .map((p, i) => `${p}: ${jitTypeKey(inputTypes[i])}`)
     .join(", ");
   const source = `// JIT loop (${kind}): (${paramComments})\nfunction $loop_${kind}(${inputs.join(", ")}) {\n${jsBody}\n}`;
 
-  interp.loopJitCache.set(cacheKey, { fn: compiledFn, source });
-
-  // Fire logging callback
   const line = interp.rt.$line ?? 0;
   const description = `loop:${kind}@${line}(${inputs.map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`).join(", ")})`;
   interp.onJitCompile?.(description, source);
 
-  // Execute
-  return executeAndWriteBack(
-    interp,
-    compiledFn,
-    inputValues,
-    outputs,
-    cacheKey
-  );
+  return { fn: compiledFn, source };
 }
 
-function executeAndWriteBack(
+/** Outcome of `runLoopCompiled`. `transient` distinguishes the
+ *  recoverable JitBailToInterpreter case from the hard
+ *  JitFuncHandleBailError case. */
+export type LoopRunResult = { ok: true } | { ok: false; transient: boolean };
+
+/**
+ * Phase 4 — execute. Re-fetches input values from env each call.
+ */
+export function runLoopCompiled(
   interp: Interpreter,
-  compiledFn: (...args: unknown[]) => unknown,
-  inputValues: unknown[],
-  outputs: string[],
-  cacheKey?: string
-): boolean {
-  let result: unknown;
-  try {
-    result = compiledFn(...inputValues);
-  } catch (e) {
-    if (e instanceof JitFuncHandleBailError) {
-      // Function handle returned a different type than the JIT expected.
-      // Warn, invalidate the cache entry, and fall back to interpretation.
-      console.warn(`Warning: ${e.message}`);
-      if (cacheKey) interp.loopJitCache.set(cacheKey, null);
-      return false;
-    }
-    if (e instanceof JitBailToInterpreter) {
-      // Helper hit a case the JIT can't handle (e.g. col-slice write that
-      // requires growing dst). Silently fall back to the interpreter,
-      // which re-runs the loop from the original env state.
-      return false;
-    }
-    throw e; // Let other runtime errors propagate
+  compiled: LoopCompiled,
+  classification: LoopClassification
+): LoopRunResult {
+  const { inputs, outputs } = classification;
+
+  const inputValues: unknown[] = [];
+  for (const name of inputs) {
+    inputValues.push(interp.env.get(name));
   }
 
-  // Write back output variables
-  if (outputs.length === 1) {
+  let result: unknown;
+  try {
+    result = compiled.fn(...inputValues);
+  } catch (e) {
+    if (e instanceof JitFuncHandleBailError) {
+      console.warn(`Warning: ${e.message}`);
+      return { ok: false, transient: false };
+    }
+    if (e instanceof JitBailToInterpreter) {
+      return { ok: false, transient: true };
+    }
+    throw e;
+  }
+
+  if (outputs.length === 0) {
+    // Nothing to write back.
+  } else if (outputs.length === 1) {
     interp.env.set(outputs[0], ensureRuntimeValue(result) as RuntimeValue);
   } else {
     const arr = result as unknown[];
@@ -322,5 +318,5 @@ function executeAndWriteBack(
     }
   }
 
-  return true;
+  return { ok: true };
 }

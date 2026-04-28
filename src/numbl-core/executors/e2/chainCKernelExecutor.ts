@@ -18,6 +18,7 @@
 import type { Stmt } from "../../parser/types.js";
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
+import type { LoweredStmt } from "../lowering.js";
 import { tryE2Assign } from "./assignKernel.js";
 
 interface ChainData {
@@ -32,15 +33,17 @@ const CHAIN_COST = { compileMs: 50, perCallNs: 300, runNs: 100 };
 
 export const chainCKernelExecutor: Executor<ChainData, true> = {
   name: "chain-c-kernel",
-  // The wrapped tryE2Assign produces a fully-typed C kernel; once it
-  // returns successfully it does not bail mid-execution.
-  bailRisk: false,
 
-  propose(stmt): Proposal<ChainData> | null {
+  propose(lowered: LoweredStmt): Proposal<ChainData> | null {
+    if (lowered.kind !== "stmt") return null;
+    const stmt = lowered.stmt;
     if (stmt.type !== "Assign") return null;
     return {
       data: { headStmt: stmt as Stmt & { type: "Assign" } },
       cost: CHAIN_COST,
+      // The wrapped tryE2Assign produces a fully-typed C kernel; once
+      // it returns successfully it does not bail mid-execution.
+      bailRisk: false,
     };
   },
 

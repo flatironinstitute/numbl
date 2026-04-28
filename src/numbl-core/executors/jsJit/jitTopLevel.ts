@@ -1,24 +1,38 @@
 /**
- * JIT compilation for the top-level script body (the main workspace).
+ * Top-level script body — phased pipeline.
  *
- * Wraps the list of non-function, non-classdef statements of a script as
- * a synthetic `FunctionDef` whose parameters are the live-in env vars
- * and whose outputs are every variable assigned in the script. On
- * success the compiled code runs once and all output values are written
- * back to the interpreter's workspace env.
+ * Splits the work into four phases that map onto the new architecture
+ * where the dispatcher does the lowering before any executor proposes:
  *
- * Mirrors `tryJitLoop` in jitLoop.ts — same lowering, same JS/C backend
- * pipeline, same progressive type widening. The differences:
- *   - the synthetic body is the list of stmts directly, not a single For/While
- *   - every assigned variable is live-out (the whole workspace is live)
- *   - cache key is per-Interpreter (a single script AST per interp run)
+ *   1. `classifyTopLevel`  — cheap classification + cacheKey
+ *      synthesis. Type-infers env inputs, gathers outputs, applies
+ *      progressive type widening, builds the cache key. Returns null
+ *      only on structural blockers (empty body, type-unknown inputs)
+ *      that prevent the lowering pipeline from running. Codegen-
+ *      feasibility checks (display mode, hasReturn, IO+bail-risk)
+ *      live in the executor's propose, not here.
+ *
+ *   2. `lowerTopLevel`     — IR lowering. Wraps stmts as a synthetic
+ *      `FunctionDef`, calls `lowerFunction`. Returns null when
+ *      lowering itself declines.
+ *
+ *   3. `generateTopLevelJS` — JS codegen + `new Function`. Per-
+ *      executor (the JS-JIT executor calls it; a hypothetical C
+ *      executor for whole-script would have its own pass against
+ *      the same IR).
+ *
+ *   4. `runTopLevelCompiled` — gather inputs from env, invoke
+ *      compiled fn, write back outputs. Translates
+ *      JitBailToInterpreter into a transient bail (cache preserved)
+ *      and JitFuncHandleBailError into a permanent bail (cache
+ *      invalidated).
  */
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { Stmt } from "../../parser/types.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import type { JitType } from "../../jit/jitTypes.js";
 import { jitTypeKey, unifyJitTypes } from "../../jit/jitTypes.js";
-import { lowerFunction } from "../../jit/jitLower.js";
+import { lowerFunction, type LoweringResult } from "../../jit/jitLower.js";
 import { generateJS } from "./js/jitCodegen.js";
 import {
   jitHelpers,
@@ -29,11 +43,6 @@ import { inferJitType } from "../../interpreter/builtins/types.js";
 import { analyzeTopLevel } from "../../jit/jitLoopAnalysis.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import {
-  JIT_IO_BUILTINS,
-  irHasBailRisk,
-  irHasIO,
-} from "../../jit/jitBailSafety.js";
 
 const KNOWN_CONSTANTS = new Set([
   "pi",
@@ -49,40 +58,58 @@ const KNOWN_CONSTANTS = new Set([
   "j",
 ]);
 
+/** Cheap pre-lowering data: the inputs/outputs/types that drive the
+ *  cacheKey, the head stmt for cache scoping, and the original stmt
+ *  list. Produced by `classifyTopLevel`. */
+export interface TopLevelClassification {
+  readonly stmts: readonly Stmt[];
+  readonly inputs: readonly string[];
+  readonly inputTypes: readonly JitType[];
+  readonly outputs: readonly string[];
+  readonly currentFile: string;
+  /** Stable string key derived from (currentFile, input-type signature).
+   *  The dispatcher's lowering cache and any per-executor compile cache
+   *  both key on this. */
+  readonly cacheKey: string;
+}
+
+/** The lowered IR plus the classification it came from. Produced by
+ *  `lowerTopLevel`; consumed by per-executor codegen passes
+ *  (`generateTopLevelJS` for JS, …). */
+export interface TopLevelLowered {
+  readonly classification: TopLevelClassification;
+  readonly result: LoweringResult;
+}
+
+/** A compiled JS artifact ready to run. Produced by
+ *  `generateTopLevelJS`; consumed by `runTopLevelCompiled`. */
+export interface TopLevelCompiled {
+  readonly fn: (...args: unknown[]) => unknown;
+  readonly source: string;
+}
+
 /**
- * Attempt to JIT-compile and execute the top-level script body.
- * Returns true if JIT succeeded, false to fall back to interpretation.
+ * Phase 1 — cheap classification. Returns null when the body is
+ * unjittable on grounds we can decide without lowering (display mode +
+ * unsuppressed assigns, hasReturn, unknown-typed inputs, empty body).
+ *
+ * Mutates `interp.loopLastInputTypes` for progressive type widening:
+ * subsequent calls unify against the most recent type signature so
+ * repeated runs of the same script with shifting types converge to a
+ * single specialization.
  */
-export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
-  if (stmts.length === 0) return false;
+export function classifyTopLevel(
+  interp: Interpreter,
+  stmts: readonly Stmt[]
+): TopLevelClassification | null {
+  if (stmts.length === 0) return null;
 
-  // MATLAB displays unsuppressed top-level statements. The JIT has no
-  // emit for auto-display, so when display is on we bail for any stmt
-  // that would normally print. Void-call ExprStmts (disp/fprintf/etc.)
-  // don't auto-display — MATLAB doesn't set `ans` for them — so an
-  // unsuppressed void call is fine to JIT.
-  if (interp.rt.displayResults) {
-    for (const s of stmts) {
-      if (
-        (s.type === "Assign" ||
-          s.type === "AssignLValue" ||
-          s.type === "MultiAssign") &&
-        !s.suppressed
-      ) {
-        return false;
-      }
-      if (s.type === "ExprStmt" && !s.suppressed) {
-        const e = s.expr;
-        const isVoidCall =
-          e.type === "FuncCall" &&
-          (JIT_IO_BUILTINS.has(e.name) || e.name === "tic");
-        if (!isVoidCall) return false;
-      }
-    }
-  }
+  // Codegen-feasibility checks (display mode + unsuppressed stmts,
+  // hasReturn, IO+bail-risk) live in the executor's propose. This
+  // pass only blocks on structural lowering pre-conditions: empty
+  // body, type-unknown inputs.
 
-  const analysis = analyzeTopLevel(stmts);
-  if (analysis.hasReturn) return false;
+  const analysis = analyzeTopLevel(stmts as Stmt[]);
 
   // Candidate input order: referenced names first, then assigned names
   // that also exist in env (pre-script values we must preserve).
@@ -100,7 +127,6 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
   }
 
   const inputs: string[] = [];
-  const inputValues: unknown[] = [];
   const inputTypes: JitType[] = [];
 
   for (const name of inputCandidates) {
@@ -108,7 +134,7 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     const val = interp.env.get(name);
     if (val === undefined) continue; // not a variable in scope (likely a fn name)
     let t = inferJitType(val);
-    if (t.kind === "unknown") return false;
+    if (t.kind === "unknown") return null;
     if (t.kind === "number" && t.exact !== undefined) {
       const pruned: JitType = { kind: "number" };
       if (t.sign !== undefined) pruned.sign = t.sign;
@@ -116,17 +142,15 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
       t = pruned;
     }
     inputs.push(name);
-    inputValues.push(val);
     inputTypes.push(t);
   }
 
   // Every assigned name is live-out — no liveness filter here.
   const outputs = [...new Set(analysis.outputs)];
 
-  // Cache key: fixed per-interp location + input-type signature. Progressive
-  // type widening matches the loop-JIT pattern (rarely matters in practice
-  // since the top-level body normally runs once, but keeps semantics
-  // consistent if the same interp ever re-runs the same script).
+  // Progressive type widening: rarely matters in practice (top-level
+  // body normally runs once) but keeps semantics consistent if the
+  // same interp ever re-runs the same script.
   const loc = `$top:${interp.currentFile}`;
   const prevTypes = interp.loopLastInputTypes.get(loc);
   if (prevTypes && prevTypes.length === inputTypes.length) {
@@ -141,63 +165,73 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     .join(",");
   const cacheKey = `${loc}|${typeKey}`;
 
-  // JS-JIT cache fast path
-  if (interp.loopJitCache.has(cacheKey)) {
-    const entry = interp.loopJitCache.get(cacheKey)!;
-    if (entry === null) return false;
-    return executeAndWriteBack(
-      interp,
-      entry.fn,
-      inputValues,
-      outputs,
-      cacheKey
-    );
-  }
+  return {
+    stmts,
+    inputs,
+    inputTypes,
+    outputs,
+    currentFile: interp.currentFile,
+    cacheKey,
+  };
+}
+
+/**
+ * Phase 2 — IR lowering. Produces the shared lowered IR consumed by
+ * all whole-script codegen passes. Returns null when `lowerFunction`
+ * itself declines (the body has constructs the JS-JIT IR doesn't
+ * model, e.g. unsupported control flow). Codegen-feasibility checks
+ * (IO+bail-risk, etc.) are the executor's responsibility.
+ */
+export function lowerTopLevel(
+  interp: Interpreter,
+  classification: TopLevelClassification
+): TopLevelLowered | null {
+  const { stmts, inputs, inputTypes, outputs } = classification;
 
   const syntheticFn: FunctionDef = {
     name: `$top`,
-    params: inputs,
-    outputs,
-    body: stmts,
+    params: [...inputs],
+    outputs: [...outputs],
+    body: [...stmts],
   };
 
-  const lowered = lowerFunction(
+  const result = lowerFunction(
     syntheticFn,
-    inputTypes,
+    [...inputTypes],
     outputs.length,
     interp
   );
-  if (!lowered) {
-    interp.loopJitCache.set(cacheKey, null);
-    return false;
-  }
+  if (!result) return null;
 
-  // Bail-safety gate: if the body contains I/O (disp/fprintf/…) and
-  // *any* mid-execution bail could fire, decline to JIT. Re-running
-  // via the interpreter after a bail would duplicate already-emitted
-  // output, which the user would see.
-  if (
-    irHasIO(lowered.body, lowered.generatedIRBodies) &&
-    irHasBailRisk(lowered.body, lowered.generatedIRBodies)
-  ) {
-    interp.loopJitCache.set(cacheKey, null);
-    return false;
-  }
+  return { classification, result };
+}
 
-  const currentFile = interp.currentFile;
+/**
+ * Phase 3 — JS codegen. Generates a JS function from the lowered IR
+ * and wires it through the runtime helpers. Returns null only if
+ * `new Function` itself throws (malformed JS — should never happen for
+ * IR that lowering accepted; defensive).
+ */
+export function generateTopLevelJS(
+  interp: Interpreter,
+  lowered: TopLevelLowered
+): TopLevelCompiled | null {
+  const { classification, result } = lowered;
+  const { inputs, inputTypes, outputs, currentFile } = classification;
+
   const mainBody = generateJS(
-    lowered.body,
-    inputs,
-    lowered.outputNames,
+    result.body,
+    [...inputs],
+    result.outputNames,
     outputs.length,
-    lowered.localVars,
+    result.localVars,
     currentFile,
     interp.experimental,
     interp.par
   );
 
   const parts: string[] = [];
-  for (const [, code] of lowered.generatedFns) {
+  for (const [, code] of result.generatedFns) {
     parts.push(code.replace(/^/gm, "  "));
   }
   parts.push(mainBody);
@@ -210,8 +244,7 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     const helpers = rt.jitHelpers ?? jitHelpers;
     compiledFn = (...callArgs: unknown[]) => factory(helpers, rt, ...callArgs);
   } catch {
-    interp.loopJitCache.set(cacheKey, null);
-    return false;
+    return null;
   }
 
   const paramComments = inputs
@@ -219,38 +252,46 @@ export function tryJitTopLevel(interp: Interpreter, stmts: Stmt[]): boolean {
     .join(", ");
   const source = `// JIT top-level: (${paramComments})\nfunction $top(${inputs.join(", ")}) {\n${jsBody}\n}`;
 
-  interp.loopJitCache.set(cacheKey, { fn: compiledFn, source });
-
   const description = `top-level@${currentFile}(${inputs.map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`).join(", ")})`;
   interp.onJitCompile?.(description, source);
 
-  return executeAndWriteBack(
-    interp,
-    compiledFn,
-    inputValues,
-    outputs,
-    cacheKey
-  );
+  return { fn: compiledFn, source };
 }
 
-function executeAndWriteBack(
+/** Outcome of `runTopLevelCompiled`. `transient` distinguishes the
+ *  recoverable JitBailToInterpreter case (cache preserved) from the
+ *  hard JitFuncHandleBailError case (cache invalidated). */
+export type TopLevelRunResult =
+  | { ok: true }
+  | { ok: false; transient: boolean };
+
+/**
+ * Phase 4 — execute the compiled fn against current env and write
+ * back outputs. Re-fetches input values from env each call (values
+ * may change between dispatches even when types don't).
+ */
+export function runTopLevelCompiled(
   interp: Interpreter,
-  compiledFn: (...args: unknown[]) => unknown,
-  inputValues: unknown[],
-  outputs: string[],
-  cacheKey?: string
-): boolean {
+  compiled: TopLevelCompiled,
+  classification: TopLevelClassification
+): TopLevelRunResult {
+  const { inputs, outputs } = classification;
+
+  const inputValues: unknown[] = [];
+  for (const name of inputs) {
+    inputValues.push(interp.env.get(name));
+  }
+
   let result: unknown;
   try {
-    result = compiledFn(...inputValues);
+    result = compiled.fn(...inputValues);
   } catch (e) {
     if (e instanceof JitFuncHandleBailError) {
       console.warn(`Warning: ${e.message}`);
-      if (cacheKey) interp.loopJitCache.set(cacheKey, null);
-      return false;
+      return { ok: false, transient: false };
     }
     if (e instanceof JitBailToInterpreter) {
-      return false;
+      return { ok: false, transient: true };
     }
     throw e;
   }
@@ -266,5 +307,5 @@ function executeAndWriteBack(
     }
   }
 
-  return true;
+  return { ok: true };
 }
