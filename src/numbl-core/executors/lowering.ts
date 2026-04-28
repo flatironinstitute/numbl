@@ -1,25 +1,33 @@
 /**
  * Shared lowering pipeline.
  *
- * The dispatcher calls `tryLower` once per stmt-dispatch, before any
- * executor is asked to propose. The result — a `LoweredStmt` — is
- * passed to every executor's `propose()` as the first argument.
+ * The dispatcher calls `tryLower` once per stmt-dispatch (and
+ * `tryLowerCall` per function-call dispatch), before any executor is
+ * asked to propose. The result — a `LoweredStmt` — is passed to every
+ * executor's `propose()` as the first argument.
  *
  * Lowering produces an IR; it does NOT make codegen-feasibility
  * decisions. "Can this be JS-JIT'd?" lives in the JS-JIT executor's
- * propose. "Can this be a C kernel?" lives in the C kernel executor's
  * propose. Lowering's only "no" is structural: type-unknown inputs,
- * lowerFunction declined, etc. — failures that prevent the lowering
- * pipeline from producing an IR at all.
+ * lowerFunction declined.
  *
- * For shapes that haven't been added yet, lowering returns the raw
- * stmt wrapped in `{ kind: "stmt", stmt }`. AST-driven executors
- * (e.g., the e2 family) filter on `kind === "stmt"` and continue to
- * inspect the AST as before.
+ * Shapes today:
+ *   - `top-level` — script body (top-level scope, first stmt). Whole
+ *     script lowered as a synthetic FunctionDef.
+ *   - `loop`      — for/while loop stmt. Loop lowered as a synthetic
+ *     FunctionDef that wraps just that stmt.
+ *   - `call`      — user-function call. Lowered via `tryLowerCall`
+ *     from `dispatchCall`.
+ *   - `stmt`      — fallback for stmts with no specialized shape.
+ *     AST-driven executors filter on this kind.
  *
- * Lowerings are cached by (head stmt, classification cacheKey). The
- * cheap classify pass runs every dispatch; the expensive IR-lowering
- * pass runs at most once per cacheKey.
+ * Top-level and loop share the same underlying mechanics
+ * (`shared.ts`); they're modeled as separate kinds because they have
+ * distinct trigger conditions (script-root vs. control-flow stmt) and
+ * runtime semantics (claim entire stmt list vs. consume one stmt).
+ *
+ * Lowerings are cached by (head Stmt or FunctionDef, classification
+ * cacheKey).
  */
 
 import type { Stmt } from "../parser/types.js";
@@ -44,7 +52,6 @@ import {
   type CallClassification,
   type CallLowered,
 } from "./jsJit/jitCall.js";
-import { analyzeTopLevel } from "../jit/jitLoopAnalysis.js";
 import {
   JIT_IO_BUILTINS,
   irHasBailRisk,
@@ -60,9 +67,7 @@ export type LoweredStmt =
   | CallLoweredStmt
   | RawStmt;
 
-/** Top-level shape: the entire script body lowered to JS-JIT IR.
- *  Carries the lowered IR plus pre-computed feasibility flags so
- *  propose() can do cheap inspection without re-walking the IR. */
+/** Top-level shape: script body lowered to JS-JIT IR. */
 export interface TopLevelLoweredStmt {
   readonly kind: "top-level";
   readonly classification: TopLevelClassification;
@@ -72,18 +77,18 @@ export interface TopLevelLoweredStmt {
 
 /** Pre-computed feasibility flags for top-level codegen executors. */
 export interface TopLevelFlags {
-  /** Source body contains a `return` statement. JIT cannot model
+  /** Body contains a `return` statement. JIT cannot model
    *  early-return from the synthetic top-level fn. */
   readonly hasReturn: boolean;
-  /** Source body contains an unsuppressed assign/multiassign. In
-   *  display-mode, the JIT has no emit for auto-display, so it must
-   *  bail when these are present. */
+  /** Source body contains an unsuppressed assign / multiassign /
+   *  non-void-call ExprStmt. In display-mode the JIT must bail —
+   *  it has no emit for auto-display. */
   readonly hasUnsuppressedAssign: boolean;
   /** Lowered IR contains an I/O builtin (disp, fprintf, ...). */
   readonly hasIO: boolean;
-  /** Lowered IR contains a possibly-bailing operation. Combined with
-   *  hasIO, signals a body that mustn't be retried after a partial
-   *  run (already-emitted output would duplicate). */
+  /** Lowered IR contains a possibly-bailing operation. Combined
+   *  with hasIO, signals a body that mustn't be retried after a
+   *  partial run (already-emitted output would duplicate). */
   readonly hasBailRisk: boolean;
 }
 
@@ -97,41 +102,34 @@ export interface LoopLoweredStmt {
 
 /** Pre-computed feasibility flags for loop codegen executors. */
 export interface LoopFlags {
-  /** Loop body contains `return` — JIT can't model early-return. */
   readonly hasReturn: boolean;
-  /** Lowered IR contains an I/O builtin. */
   readonly hasIO: boolean;
-  /** Lowered IR contains a possibly-bailing operation. */
   readonly hasBailRisk: boolean;
 }
 
 /** Call shape: a user-function call lowered to JS-JIT IR. Produced
  *  by `tryLowerCall`, not `tryLower` — function calls fire from
- *  expression evaluation (callUserFunction → dispatchCall), not from
- *  the stmt loop. */
+ *  expression evaluation, not from the stmt loop. */
 export interface CallLoweredStmt {
   readonly kind: "call";
   readonly classification: CallClassification;
   readonly lowered: CallLowered;
   readonly flags: CallFlags;
-  /** The actual runtime argument values. Carried alongside the
-   *  classification because the executor needs them at runCall
-   *  time; unlike stmt-shape executors, the call executor can't
-   *  re-fetch them from env. */
+  /** Runtime arg values. Carried alongside the classification
+   *  because the executor needs them at runCall time; unlike
+   *  stmt-shape executors, the call executor can't re-fetch them
+   *  from env. */
   readonly args: readonly unknown[];
 }
 
 /** Pre-computed feasibility flags for call codegen executors. */
 export interface CallFlags {
-  /** Lowered body contains an I/O builtin. */
   readonly hasIO: boolean;
-  /** Lowered body contains a possibly-bailing operation. */
   readonly hasBailRisk: boolean;
 }
 
-/** Fallback wrapper for stmts that have no specialized lowering shape
- *  yet. AST-driven executors filter on this kind and inspect `stmt`
- *  directly. */
+/** Fallback wrapper for stmts that have no specialized lowering
+ *  shape. AST-driven executors filter on this kind. */
 export interface RawStmt {
   readonly kind: "stmt";
   readonly stmt: Stmt;
@@ -140,11 +138,9 @@ export interface RawStmt {
 const BAILED = Symbol("LOWERING_BAILED");
 type Bailed = typeof BAILED;
 
-/** Per-owner lowering cache. Owner is either the head Stmt (for
- *  stmt-shape lowerings) or the FunctionDef (for call-shape
- *  lowerings) — both are AST objects whose lifetimes the cache
- *  entries are tied to. WeakMap-scoped so entries are reclaimed when
- *  the AST is dropped. */
+/** Per-owner lowering cache. Owner is either the head Stmt
+ *  (stmt-shape lowerings) or the FunctionDef (call-shape lowerings).
+ *  WeakMap-scoped so entries are reclaimed when the AST is dropped. */
 export class LoweringCache {
   private readonly slots = new WeakMap<
     object,
@@ -182,10 +178,6 @@ export class LoweringCache {
  * Try to lower the stmt at `siblings[i]` based on current runtime
  * info. Always returns a LoweredStmt — at minimum, the raw stmt
  * wrapped in `{ kind: "stmt", stmt }`.
- *
- * Uses `cache` to memoize specialized shapes by (head stmt,
- * classification cacheKey). The cheap classify runs every dispatch;
- * the expensive IR-lowering runs at most once per cacheKey.
  */
 export function tryLower(
   siblings: readonly Stmt[],
@@ -197,76 +189,84 @@ export function tryLower(
 
   // Top-level shape: only at the script's root, on the first stmt.
   if (ctx.scope === "top-level" && i === 0) {
-    const classification = classifyTopLevel(ctx.interp, siblings as Stmt[]);
-    if (classification) {
-      const hit = cache.get(head, classification.cacheKey);
-      if (hit !== undefined) {
-        if (cache.isBailed(hit)) {
-          // Lowering previously failed — fall through to raw stmt.
-          return { kind: "stmt", stmt: head };
-        }
-        return hit;
-      }
-      const lowered = lowerTopLevel(ctx.interp, classification);
-      if (!lowered) {
-        cache.markBailed(head, classification.cacheKey);
-        return { kind: "stmt", stmt: head };
-      }
-      const flags = computeTopLevelFlags(classification, lowered);
-      const entry: TopLevelLoweredStmt = {
-        kind: "top-level",
-        classification,
-        lowered,
-        flags,
-      };
-      cache.set(head, classification.cacheKey, entry);
-      return entry;
-    }
+    const entry = tryBuildTopLevel(ctx.interp, siblings, head, cache);
+    if (entry) return entry;
   }
 
   // Loop shape: For/While stmts.
   if (head.type === "For" || head.type === "While") {
-    const loopStmt = head as Stmt & { type: "For" | "While" };
-    const classification = classifyLoop(ctx.interp, loopStmt, siblings, i);
-    if (classification) {
-      const hit = cache.get(head, classification.cacheKey);
-      if (hit !== undefined) {
-        if (cache.isBailed(hit)) {
-          return { kind: "stmt", stmt: head };
-        }
-        return hit;
-      }
-      const lowered = lowerLoop(ctx.interp, classification);
-      if (!lowered) {
-        cache.markBailed(head, classification.cacheKey);
-        return { kind: "stmt", stmt: head };
-      }
-      const flags = computeLoopFlags(classification, lowered);
-      const entry: LoopLoweredStmt = {
-        kind: "loop",
-        classification,
-        lowered,
-        flags,
-      };
-      cache.set(head, classification.cacheKey, entry);
-      return entry;
-    }
+    const entry = tryBuildLoop(ctx.interp, head, siblings, i, cache);
+    if (entry) return entry;
   }
 
   return { kind: "stmt", stmt: head };
+}
+
+function tryBuildTopLevel(
+  interp: Interpreter,
+  siblings: readonly Stmt[],
+  head: Stmt,
+  cache: LoweringCache
+): TopLevelLoweredStmt | null {
+  const classification = classifyTopLevel(interp, siblings);
+  if (!classification) return null;
+
+  const hit = cache.get(head, classification.cacheKey);
+  if (hit !== undefined) {
+    return cache.isBailed(hit) ? null : (hit as TopLevelLoweredStmt);
+  }
+
+  const lowered = lowerTopLevel(interp, classification);
+  if (!lowered) {
+    cache.markBailed(head, classification.cacheKey);
+    return null;
+  }
+
+  const entry: TopLevelLoweredStmt = {
+    kind: "top-level",
+    classification,
+    lowered,
+    flags: computeTopLevelFlags(classification, lowered),
+  };
+  cache.set(head, classification.cacheKey, entry);
+  return entry;
+}
+
+function tryBuildLoop(
+  interp: Interpreter,
+  head: Stmt & { type: "For" | "While" },
+  siblings: readonly Stmt[],
+  i: number,
+  cache: LoweringCache
+): LoopLoweredStmt | null {
+  const classification = classifyLoop(interp, head, siblings, i);
+  if (!classification) return null;
+
+  const hit = cache.get(head, classification.cacheKey);
+  if (hit !== undefined) {
+    return cache.isBailed(hit) ? null : (hit as LoopLoweredStmt);
+  }
+
+  const lowered = lowerLoop(interp, classification);
+  if (!lowered) {
+    cache.markBailed(head, classification.cacheKey);
+    return null;
+  }
+
+  const entry: LoopLoweredStmt = {
+    kind: "loop",
+    classification,
+    lowered,
+    flags: computeLoopFlags(classification, lowered),
+  };
+  cache.set(head, classification.cacheKey, entry);
+  return entry;
 }
 
 function computeTopLevelFlags(
   classification: TopLevelClassification,
   lowered: TopLevelLowered
 ): TopLevelFlags {
-  // Re-run the AST analysis to get hasReturn (cheap; same walk
-  // analyzeTopLevel does for inputs/outputs). Done here rather than
-  // returning it from classifyTopLevel because feasibility flags are
-  // a lowering-output concern, not a classification-output concern.
-  const analysis = analyzeTopLevel(classification.stmts as Stmt[]);
-  const hasReturn = analysis.hasReturn;
-
   let hasUnsuppressedAssign = false;
   for (const s of classification.stmts) {
     if (
@@ -291,10 +291,12 @@ function computeTopLevelFlags(
   }
 
   const result = lowered.result;
-  const hasIO = irHasIO(result.body, result.generatedIRBodies);
-  const hasBailRisk = irHasBailRisk(result.body, result.generatedIRBodies);
-
-  return { hasReturn, hasUnsuppressedAssign, hasIO, hasBailRisk };
+  return {
+    hasReturn: classification.hasReturn,
+    hasUnsuppressedAssign,
+    hasIO: irHasIO(result.body, result.generatedIRBodies),
+    hasBailRisk: irHasBailRisk(result.body, result.generatedIRBodies),
+  };
 }
 
 function computeLoopFlags(
@@ -302,31 +304,25 @@ function computeLoopFlags(
   lowered: LoopLowered
 ): LoopFlags {
   const result = lowered.result;
-  const hasIO = irHasIO(result.body, result.generatedIRBodies);
-  const hasBailRisk = irHasBailRisk(result.body, result.generatedIRBodies);
-  return { hasReturn: classification.hasReturn, hasIO, hasBailRisk };
+  return {
+    hasReturn: classification.hasReturn,
+    hasIO: irHasIO(result.body, result.generatedIRBodies),
+    hasBailRisk: irHasBailRisk(result.body, result.generatedIRBodies),
+  };
 }
 
 function computeCallFlags(lowered: CallLowered): CallFlags {
   const result = lowered.result;
-  const hasIO = irHasIO(result.body, result.generatedIRBodies);
-  const hasBailRisk = irHasBailRisk(result.body, result.generatedIRBodies);
-  return { hasIO, hasBailRisk };
+  return {
+    hasIO: irHasIO(result.body, result.generatedIRBodies),
+    hasBailRisk: irHasBailRisk(result.body, result.generatedIRBodies),
+  };
 }
 
 /**
- * Try to lower a user-function call based on current arg values.
- * Always returns a `CallLoweredStmt` when classification succeeds —
- * executors filter on flags / classification.argTypes.
- *
- * Returns null only when the cheap classify pass declines (`~`
- * params, type-unknown args). In that case `dispatchCall` returns
- * null and the caller (callUserFunction) falls back to AST
- * interpretation.
- *
- * Caches lowered IR by (FunctionDef, classification.cacheKey). The
- * cheap classify runs every call; the expensive IR-lowering runs at
- * most once per (FunctionDef, type signature).
+ * Try to lower a user-function call. Always returns a
+ * `CallLoweredStmt` when classification succeeds; null when the
+ * cheap classify declines (`~` params, type-unknown args).
  */
 export function tryLowerCall(
   fn: FunctionDef,
@@ -341,9 +337,9 @@ export function tryLowerCall(
   const hit = cache.get(fn, classification.cacheKey);
   if (hit !== undefined) {
     if (cache.isBailed(hit)) return null;
-    // The cached entry's `args` is from a prior call; re-bind to the
-    // current call's args (values may differ; types are unified via
-    // classification's cacheKey).
+    // Cached entry's `args` is from a prior call; rebind to the
+    // current args (values may differ; types are unified via
+    // classification.cacheKey).
     return { ...(hit as CallLoweredStmt), args };
   }
 
@@ -352,12 +348,12 @@ export function tryLowerCall(
     cache.markBailed(fn, classification.cacheKey);
     return null;
   }
-  const flags = computeCallFlags(lowered);
+
   const entry: CallLoweredStmt = {
     kind: "call",
     classification,
     lowered,
-    flags,
+    flags: computeCallFlags(lowered),
     args,
   };
   cache.set(fn, classification.cacheKey, entry);

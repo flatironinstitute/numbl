@@ -1,22 +1,16 @@
 /**
  * js-jit-top-level — JS codegen executor for the top-level shape.
  *
- * Lowering is the dispatcher's job. This executor receives the
- * lowered IR (with pre-computed feasibility flags) as the first arg
- * to propose, decides whether to commit, and on commit produces a
- * compiled JS artifact.
+ *   - `propose()` filters on `lowered.kind === "top-level"`, applies
+ *     JIT-feasibility checks (hasReturn, display mode + unsuppressed
+ *     assigns, IO+bail-risk).
  *
- *   - `propose()` filters on `lowered.kind === "top-level"`, then
- *     applies JIT-feasibility checks against the flags and the
- *     runtime display-mode setting. Returns null to decline.
- *
- *   - `compile()` calls `generateTopLevelJS` against the lowered IR
- *     to produce a JS function. Cached by the registry under the
- *     classification's cacheKey.
+ *   - `compile()` calls `generateTopLevelJS`. Cached by the registry
+ *     under the classification's cacheKey.
  *
  *   - `run()` calls `runTopLevelCompiled`. JitBailToInterpreter →
- *     transient bail (cache preserved). JitFuncHandleBailError →
- *     permanent bail (cache invalidated).
+ *     transient bail; JitFuncHandleBailError → permanent bail.
+ *     `consumed` claims the entire script body.
  */
 
 import type { Executor, Proposal, RunResult } from "../types.js";
@@ -34,9 +28,7 @@ interface TopLevelData {
 }
 
 // Whole-script compile is the heaviest match; once compiled it saves
-// the per-stmt dispatch overhead for the entire script. The numbers
-// are illustrative — what matters is winning vs the interpreter
-// executor's stub runNs.
+// the per-stmt dispatch overhead for the entire script.
 const TOP_LEVEL_COST = { compileMs: 100, perCallNs: 1000, runNs: 1000 };
 
 export const jsJitTopLevelExecutor: Executor<
@@ -52,27 +44,15 @@ export const jsJitTopLevelExecutor: Executor<
     if (lowered.kind !== "top-level") return null;
     const flags = lowered.flags;
 
-    // JIT can't model `return` from the synthetic top-level fn.
     if (flags.hasReturn) return null;
-
-    // MATLAB displays unsuppressed top-level statements. The JIT has
-    // no emit for auto-display, so in display mode we bail when any
-    // source stmt would normally print.
     if (ctx.interp.rt.displayResults && flags.hasUnsuppressedAssign) {
       return null;
     }
-
-    // If the body contains I/O (disp/fprintf/…) and any mid-execution
-    // bail could fire, decline — re-running via the interpreter after
-    // a partial run would duplicate already-emitted output.
     if (flags.hasIO && flags.hasBailRisk) return null;
 
     return {
       data: { lowered: lowered.lowered },
       cost: TOP_LEVEL_COST,
-      // Wrapped layer absorbs JitBailToInterpreter and restores state
-      // on failure; bail-risky because the artifact's correctness
-      // relies on type assumptions that can fail at runtime.
       bailRisk: true,
     };
   },

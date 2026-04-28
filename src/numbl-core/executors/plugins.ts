@@ -17,8 +17,8 @@ import { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
 import { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
 import { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
 import { scalarFnCKernelExecutor } from "./e2/scalarFnCKernelExecutor.js";
-import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
+import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 import { jsJitCallExecutor } from "./jsJit/callExecutor.js";
 
 /** Register the AST interpreter as a regular executor.
@@ -34,12 +34,12 @@ export function registerInterpreterPlugin(registry: Registry): void {
 
 /** `--opt 1` / `--opt e1` JS-JIT plugins. Registers:
  *
- *   - js-jit-loop  — JS codegen for the loop shape (stmt-level).
- *   - js-jit-top-level — JS codegen for the top-level shape (stmt-level).
- *   - js-jit-call  — JS codegen for the call shape (call-level). */
+ *   - js-jit-top-level — JS codegen for the top-level shape.
+ *   - js-jit-loop      — JS codegen for the loop shape.
+ *   - js-jit-call      — JS codegen for the call shape. */
 export function registerJsJitPlugin(registry: Registry): void {
-  registry.register(jsJitLoopExecutor);
   registry.register(jsJitTopLevelExecutor);
+  registry.register(jsJitLoopExecutor);
   registry.register(jsJitCallExecutor);
 }
 

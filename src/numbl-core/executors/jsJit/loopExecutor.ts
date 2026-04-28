@@ -1,17 +1,11 @@
 /**
  * js-jit-loop — JS codegen executor for the loop shape.
  *
- * Lowering is the dispatcher's job. The loop executor receives the
- * lowered IR (with pre-computed feasibility flags) as the first arg
- * to propose, decides whether to commit, and produces a compiled JS
- * artifact on commit.
- *
  *   - `propose()` filters on `lowered.kind === "loop"`, applies
- *     JIT-feasibility checks against the flags. Returns null to
- *     decline.
+ *     JIT-feasibility checks (hasReturn, IO+bail-risk).
  *
- *   - `compile()` calls `generateLoopJS` against the lowered IR.
- *     Cached by the registry under the classification's cacheKey.
+ *   - `compile()` calls `generateLoopJS`. Cached by the registry
+ *     under the classification's cacheKey.
  *
  *   - `run()` calls `runLoopCompiled`. JitBailToInterpreter →
  *     transient bail; JitFuncHandleBailError → permanent bail.
@@ -43,19 +37,12 @@ export const jsJitLoopExecutor: Executor<LoopData, LoopCompiled | null> = {
     if (lowered.kind !== "loop") return null;
     const flags = lowered.flags;
 
-    // JIT can't model `return` from the synthetic loop fn.
     if (flags.hasReturn) return null;
-
-    // If the body contains I/O and a mid-execution bail could fire,
-    // decline — re-running via the interpreter after a partial run
-    // would duplicate already-emitted output.
     if (flags.hasIO && flags.hasBailRisk) return null;
 
     return {
       data: { lowered: lowered.lowered },
       cost: JS_JIT_LOOP_COST,
-      // Compiled artifact's correctness relies on type assumptions
-      // that can fail at runtime.
       bailRisk: true,
     };
   },
