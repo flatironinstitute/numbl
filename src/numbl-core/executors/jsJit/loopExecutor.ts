@@ -36,8 +36,7 @@ export const jsJitLoopExecutor: Executor<LoopMatch, true> = {
   name: "js-jit-loop",
   bailRisk: true,
 
-  match(siblings, i): MatchResult<LoopMatch> | null {
-    const stmt = siblings[i];
+  match(stmt): MatchResult<LoopMatch> | null {
     if (stmt.type !== "For" && stmt.type !== "While") return null;
     return { match: { stmt }, cost: JS_JIT_LOOP_COST };
   },

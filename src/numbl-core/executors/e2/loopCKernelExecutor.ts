@@ -29,8 +29,7 @@ export const loopCKernelExecutor: Executor<LoopMatch, true> = {
   name: "loop-c-kernel",
   bailRisk: false,
 
-  match(siblings, i): MatchResult<LoopMatch> | null {
-    const stmt = siblings[i];
+  match(stmt): MatchResult<LoopMatch> | null {
     if (stmt.type !== "For") return null;
     return { match: { stmt }, cost: LOOP_C_COST };
   },

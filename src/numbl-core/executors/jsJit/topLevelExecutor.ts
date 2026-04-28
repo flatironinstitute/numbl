@@ -41,10 +41,15 @@ export const jsJitTopLevelExecutor: Executor<TopLevelMatch, true> = {
   // assumption-based nature of the artifact through the interface.
   bailRisk: true,
 
-  match(siblings, i, ctx: DispatchContext): MatchResult<TopLevelMatch> | null {
+  match(_stmt, ctx: DispatchContext): MatchResult<TopLevelMatch> | null {
     if (ctx.scope !== "top-level") return null;
-    if (i !== 0) return null;
-    return { match: { siblings: siblings as Stmt[] }, cost: TOP_LEVEL_COST };
+    if (!ctx.isFirstInScope) return null;
+    // headIndex is 0 here (isFirstInScope), so ctx.siblings is the
+    // full scope list — exactly what tryJitTopLevel wants.
+    return {
+      match: { siblings: ctx.siblings as Stmt[] },
+      cost: TOP_LEVEL_COST,
+    };
   },
 
   cacheKey(): string {

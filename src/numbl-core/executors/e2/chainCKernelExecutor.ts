@@ -21,8 +21,6 @@ import type { DispatchContext } from "../context.js";
 import { tryE2Assign } from "./assignKernel.js";
 
 interface ChainMatch {
-  readonly siblings: readonly Stmt[];
-  readonly i: number;
   readonly headStmt: Stmt & { type: "Assign" };
 }
 
@@ -38,15 +36,10 @@ export const chainCKernelExecutor: Executor<ChainMatch, true> = {
   // returns successfully it does not bail mid-execution.
   bailRisk: false,
 
-  match(siblings, i): MatchResult<ChainMatch> | null {
-    const stmt = siblings[i];
+  match(stmt): MatchResult<ChainMatch> | null {
     if (stmt.type !== "Assign") return null;
     return {
-      match: {
-        siblings,
-        i,
-        headStmt: stmt as Stmt & { type: "Assign" },
-      },
+      match: { headStmt: stmt as Stmt & { type: "Assign" } },
       cost: CHAIN_COST,
     };
   },
@@ -63,13 +56,12 @@ export const chainCKernelExecutor: Executor<ChainMatch, true> = {
   },
 
   run(_compiled, m, ctx: DispatchContext): RunResult {
-    const interp = ctx.interp;
-    // tryE2Assign reads _postSiblings/_postSiblingsIdx from the
-    // interpreter. The dispatch loop sets these before calling us, but
-    // re-set them defensively here in case the call path changes.
-    interp._postSiblings = m.siblings as Stmt[];
-    interp._postSiblingsIdx = m.i + 1;
-    const consumed = tryE2Assign(interp, m.headStmt);
+    // tryE2Assign reads `interp._postSiblings` / `_postSiblingsIdx`
+    // for chain lookahead. The outer `execStmts` loop already sets
+    // those before each dispatch, so we don't need to re-set them
+    // here — they describe the same scope and head index that ctx
+    // exposes.
+    const consumed = tryE2Assign(ctx.interp, m.headStmt);
     if (consumed === null) {
       return {
         bail: { message: "chain-c-kernel: not classifiable" },

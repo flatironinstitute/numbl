@@ -17,7 +17,8 @@ import { type TypeInfo, inferTypeInfo } from "./typeInfo.js";
  *
  *   - `top-level` — the script body's top-level stmt list. Only set by
  *     `Interpreter.run()`. Whole-script executors (e.g. JS-JIT
- *     top-level) match only when this is set and `i === 0`.
+ *     top-level) match only when this is set and the dispatch is at
+ *     `isFirstInScope`.
  *   - `nested` — a function body, loop body, or any other block.
  *     Default for everything other than the script's top-level loop.
  *
@@ -42,6 +43,13 @@ export class DispatchContext {
    *  which head stmts. Prevents an executor sub-dispatching back into
    *  itself on the same stmt. */
   private readonly active: Set<string>;
+
+  /** Sibling list and head index for the current dispatch. Set by
+   *  Registry.dispatch before calling executors; read by peekSibling /
+   *  remainingSiblings / isFirstInScope. Most executors don't read
+   *  these directly. */
+  private _siblings: readonly Stmt[] = [];
+  private _i: number = 0;
 
   constructor(
     interp: Interpreter,
@@ -70,6 +78,43 @@ export class DispatchContext {
   /** Read a value from env (no inference). Returns undefined if unbound. */
   envValue(name: string): unknown {
     return this.interp.env.get(name);
+  }
+
+  /** True when the current dispatch is the first stmt in its scope —
+   *  used by whole-scope executors (e.g. JS-JIT top-level) that should
+   *  fire only once per scope, claiming the entire stmt list. */
+  get isFirstInScope(): boolean {
+    return this._i === 0;
+  }
+
+  /** Peek at a sibling stmt at `offset` from the current head.
+   *  offset=0 is the current stmt; positive values look ahead.
+   *  Returns null if the offset is past the end of the scope. Used by
+   *  chain-style executors that may consume multiple consecutive
+   *  stmts. */
+  peekSibling(offset: number): Stmt | null {
+    const k = this._i + offset;
+    if (k < 0 || k >= this._siblings.length) return null;
+    return this._siblings[k];
+  }
+
+  /** Sibling list of the current scope. The head stmt is at
+   *  `siblings[headIndex]`. Most executors don't need this directly —
+   *  use `peekSibling(offset)` for lookahead. The rare cases that
+   *  forward the raw list to a legacy adapter (the chain executor) or
+   *  claim the whole scope (the top-level executor) read these. */
+  get siblings(): readonly Stmt[] {
+    return this._siblings;
+  }
+  get headIndex(): number {
+    return this._i;
+  }
+
+  /** @internal Set the position state for an upcoming dispatch. Only
+   *  the registry calls this. */
+  _setPosition(siblings: readonly Stmt[], i: number): void {
+    this._siblings = siblings;
+    this._i = i;
   }
 
   /** Reset per-dispatch state so this context can be reused for the

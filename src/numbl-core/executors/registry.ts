@@ -116,6 +116,11 @@ export class Registry {
     i: number,
     ctx: DispatchContext
   ): DispatchResult {
+    // Set position info on ctx so peekSibling / remainingSiblings /
+    // isFirstInScope work for executors that consult them. Most
+    // executors only see the single stmt and don't care.
+    ctx._setPosition(siblings, i);
+
     // Single linear pass: pick the lowest-cost match among
     // *specialized* executors. Backup list (allocated lazily) holds
     // the rest, used only if the best bails.
@@ -131,7 +136,7 @@ export class Registry {
       const executor = executors[k].executor;
       if (requireNoBail && executor.bailRisk) continue;
       if (checkActive && ctx.isActive(executor.name, stmt)) continue;
-      const m = executor.match(siblings, i, ctx);
+      const m = executor.match(stmt, ctx);
       if (!m) continue;
       const total = m.cost.perCallNs + m.cost.runNs;
       if (total < bestTotal) {

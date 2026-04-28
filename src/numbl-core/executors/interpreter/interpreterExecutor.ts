@@ -29,8 +29,8 @@ export const interpreterExecutor: Executor<InterpMatch, true> = {
   name: "interpreter",
   bailRisk: false,
 
-  match(siblings, i): MatchResult<InterpMatch> {
-    return { match: { stmt: siblings[i] }, cost: INTERP_COST };
+  match(stmt): MatchResult<InterpMatch> {
+    return { match: { stmt }, cost: INTERP_COST };
   },
 
   cacheKey(): string {

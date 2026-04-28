@@ -66,13 +66,12 @@ export interface Executor<M = unknown, C = unknown> {
    *  `requireNoBail`. */
   readonly bailRisk: boolean;
 
-  /** Runs every dispatch — must be cheap. Returns null to decline.
-   *  On success, returns the match data plus a cost estimate. */
-  match(
-    siblings: readonly Stmt[],
-    i: number,
-    ctx: DispatchContext
-  ): MatchResult<M> | null;
+  /** Runs every dispatch — must be cheap. Receives just the current
+   *  stmt; for executors that need to look across multiple stmts
+   *  (chain fusion, whole-script JIT), use `ctx.peekSibling(offset)`
+   *  or `ctx.remainingSiblings()`. Returns null to decline; on
+   *  success, returns the match data plus a cost estimate. */
+  match(stmt: Stmt, ctx: DispatchContext): MatchResult<M> | null;
 
   /** Stable cache key projected from the match. Drops volatile bits
    *  (e.g., exact scalar values; tensor shape if codegen is shape-
