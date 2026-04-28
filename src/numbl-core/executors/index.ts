@@ -9,9 +9,9 @@ export type {
   CostEstimate,
   BailReason,
   RunResult,
-  MatchResult,
+  Proposal,
   CallExecutor,
-  CallMatchResult,
+  CallProposal,
   CallRunResult,
 } from "./types.js";
 export { Registry, makeRootContext } from "./registry.js";

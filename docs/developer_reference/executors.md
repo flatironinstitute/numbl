@@ -20,13 +20,13 @@ This subsystem replaces the scattered `tryE2Assign`, `tryJitFor`, `tryJitWhile`,
 - **Dispatch context** (`Ctx`) — passed to every executor call. Provides env access, the runtime, type-info queries, sub-dispatch into the registry, and runtime callbacks.
 - **TypeInfo** — unified rich type information about a value or expression. Successor to `JitType`. Includes scalar kind, complex/logical, exact value if known, tensor shape if known, etc. Each executor reads what it cares about.
 - **CacheKey** — per-executor projection of TypeInfo into a stable string. Drops volatile bits (e.g., exact scalar values; tensor shape if codegen is shape-agnostic) so unrelated runs of the same code reuse compiled artifacts.
-- **Cost estimate** — three numbers the executor returns from its match: estimated compile time (ms, paid once on cache miss), per-call overhead (ns, paid every dispatch — koffi marshaling, frame setup), and run time (ns, the actual work). Estimates can be very rough at first; the dispatcher's policy can be refined as we learn what's accurate.
+- **Cost estimate** — three numbers the executor returns with each proposal: estimated compile time (ms, paid once on cache miss), per-call overhead (ns, paid every dispatch — koffi marshaling, frame setup), and run time (ns, the actual work). Estimates can be very rough at first; the dispatcher's policy can be refined as we learn what's accurate.
 - **Bail-risk** — whether the executor's compiled artifact can fail an invariant mid-execution and need to be re-run by the interpreter. Executors that compile around runtime-type assumptions (JS-JIT) are bail-risk; the AST interpreter and pure C-kernel paths are not. The dispatcher refuses bail-risk executors when the surrounding context has observable side effects that mustn't repeat (see Bailouts).
 
 ## Executor interface
 
 ```ts
-interface Executor<M = unknown, C = unknown> {
+interface Executor<D = unknown, C = unknown> {
   name: string;
 
   // Whether this executor's compiled artifact can fail an invariant
@@ -34,34 +34,36 @@ interface Executor<M = unknown, C = unknown> {
   // the surrounding context has non-rerunnable side effects.
   bailRisk: boolean;
 
-  // Try to match starting at siblings[i]. Runs every dispatch — must
-  // be cheap. Returns null to decline. On match, returns a Match
-  // (capturing how many siblings to consume, the input TypeInfo
-  // snapshot, lowered IR / classification, anything compile() and
-  // run() need) and a CostEstimate.
-  match(
-    siblings: Stmt[],
-    i: number,
-    ctx: Ctx
-  ): { match: M; cost: CostEstimate } | null;
+  // Submit a bid to handle this stmt. Runs every dispatch — must be
+  // cheap. Receives just the current stmt; for cross-stmt views (chain
+  // fusion, whole-script JIT) use ctx.peekSibling / ctx.siblings.
+  // Returns null to decline; on success, returns a Proposal (the
+  // executor's own per-dispatch data plus a CostEstimate).
+  propose(stmt: Stmt, ctx: Ctx): Proposal<D> | null;
 
-  // Stable cache key projected from the match.
-  cacheKey(match: M): string;
+  // Stable cache key projected from the proposal data.
+  cacheKey(data: D): string;
 
   // Compile to a runnable artifact. Called only on cache miss. Cached
-  // under the matched stmt's identity + cacheKey.
-  compile(match: M, ctx: Ctx): C;
+  // under the head stmt's identity + cacheKey.
+  compile(data: D, ctx: Ctx): C;
 
   // Execute. Returns how many siblings were consumed, or a Bail
   // signalling that the cache entry should be invalidated and the
   // next executor (or the interpreter) tried.
-  run(compiled: C, match: M, ctx: Ctx): RunResult;
+  run(compiled: C, data: D, ctx: Ctx): RunResult;
+}
+
+interface Proposal<D> {
+  data: D; // opaque per-executor payload, flows through compile/run
+  cost: CostEstimate;
+  requireNoBailInChildren?: boolean;
 }
 
 interface CostEstimate {
   compileMs: number; // paid once per cache entry
   perCallNs: number; // dispatch overhead (marshaling, frame setup)
-  runNs: number; // estimated work for this match's input sizes
+  runNs: number; // estimated work for the proposed input sizes
 }
 
 type RunResult = { consumed: number } | { bail: BailReason };
@@ -69,7 +71,7 @@ type RunResult = { consumed: number } | { bail: BailReason };
 
 Cost numbers can be rough at first. The dispatcher's initial policy:
 
-- Among matching executors, pick the lowest `perCallNs + runNs` (per-call work).
+- Among proposing executors, pick the lowest `perCallNs + runNs` (per-call work).
 - Compile cost (`compileMs`) is amortized over the cache lifetime; on cache hit it doesn't matter, and on cache miss the policy treats it as paid up-front. We may add a "skip executors with high `compileMs` if this stmt is cold" heuristic later, but the first pass simply pays it.
 
 Refining the policy doesn't require executor changes — they keep returning the same three numbers.
@@ -77,44 +79,44 @@ Refining the policy doesn't require executor changes — they keep returning the
 ## Dispatch flow
 
 ```
-execStmt(siblings, i, ctx):
+dispatch(stmt, ctx):
   candidates = []
   for executor in registry:
     if ctx.requireNoBail and executor.bailRisk: continue
-    m = executor.match(siblings, i, ctx)
-    if m is null: continue
-    candidates.push({ executor, match: m.match, cost: m.cost })
+    p = executor.propose(stmt, ctx)
+    if p is null: continue
+    candidates.push({ executor, data: p.data, cost: p.cost })
 
-  // Pick by lowest per-call cost. The interpreter is always a
-  // candidate (it matches every stmt with consumed=1) — and is the
-  // last-resort because every other executor is faster on its
-  // declared domain or it wouldn't be registered.
+  // Pick by lowest per-call cost. The AST interpreter is the
+  // hardcoded fallback when no specialized executor proposes (or all
+  // bail) — it isn't a registered candidate on the hot path.
   candidates.sort by (cost.perCallNs + cost.runNs)
 
   for c in candidates:
-    key = c.executor.cacheKey(c.match)
-    compiled = cache.get(c.executor, siblings[i], key)
-              ?? cache.set(..., c.executor.compile(c.match, ctx))
-    result = c.executor.run(compiled, c.match, ctx)
+    key = c.executor.cacheKey(c.data)
+    compiled = cache.get(c.executor, stmt, key)
+              ?? cache.set(..., c.executor.compile(c.data, ctx))
+    result = c.executor.run(compiled, c.data, ctx)
     if result.bail:
       cache.invalidate(...)
       continue   // try next-best candidate (eventually the interpreter)
     advance i by result.consumed
     return
-```
 
-The AST interpreter executor always matches every statement, has `bailRisk: false`, and reports a high `runNs` — so it loses to specialized executors on their domain but always wins as a last resort. It cannot itself be filtered out by `requireNoBail`.
+  // Fallback: AST interpreter, called directly.
+  ctx.interp.execStmt(stmt)
+```
 
 ## Composition
 
 Two patterns, both first-class:
 
-1. **Window composition** — `match` consumes 1..N consecutive siblings. The chain-c-kernel executor reads ahead, classifies, and returns a Match capturing the run length. After `run` returns `{ consumed: 4 }`, the dispatcher advances four stmts.
+1. **Window composition** — an executor's `run()` may consume more than one stmt. The chain-c-kernel executor reads ahead via `ctx.peekSibling(offset)` (or hands `ctx.siblings` / `ctx.headIndex` to a legacy adapter) and reports `{ consumed: N }` to the dispatcher.
 2. **Sub-dispatch** — within `compile` or `run`, an executor calls `ctx.dispatch(subStmts)` to delegate sub-work to the registry. The JS-JIT loop executor uses this to handle stmts inside its loop body without re-implementing them. Sub-dispatch can recurse; the dispatcher guards against re-entering the same executor on the same stmt.
 
 ## TypeInfo
 
-Computed lazily. When an executor's `match` asks for `ctx.typeOf(name)`, the dispatcher does the env lookup and inference once and memoizes for the rest of that dispatch.
+Computed lazily. When an executor's `propose` asks for `ctx.typeOf(name)`, the dispatcher does the env lookup and inference once and memoizes for the rest of that dispatch.
 
 The shape (sketched — full definition lives in the implementation):
 
@@ -145,7 +147,7 @@ This generalizes today's `JitBailToInterpreter` (JS-JIT) and `E2_BAILED` sentine
 A bail happens _during_ `run`, after the executor has already started producing output. If that output included observable side effects (`disp`, `fprintf`, file writes, plot commands, …), re-running on the interpreter would emit them a second time. To prevent this, the dispatcher carries a `requireNoBail` flag in `Ctx`:
 
 - A top-level dispatch sets `requireNoBail = false`. Bail-risk executors are eligible.
-- An executor whose compiled artifact contains observable side effects must declare its match with `requireNoBailInChildren: true`. When the dispatcher recurses into its child stmts (sub-dispatch), it sets `requireNoBail = true` on the child Ctx — only no-bail executors (the interpreter and pure C-kernel paths) are eligible there.
+- An executor whose compiled artifact contains observable side effects must declare its proposal with `requireNoBailInChildren: true`. When the dispatcher recurses into its child stmts (sub-dispatch), it sets `requireNoBail = true` on the child Ctx — only no-bail executors (the interpreter and pure C-kernel paths) are eligible there.
 - `bailRisk` is also a property of an executor's emitted code at use time. JS-JIT executors that emit `disp` calls inside their compiled body are themselves `requireNoBailInChildren: true` for any nested compilation.
 
 This generalizes today's `irHasIO` + `irHasBailRisk` check ([executors/jsJit/jitCall.ts:97-103](../../src/numbl-core/executors/jsJit/jitCall.ts#L97-L103)) — a function with both is rejected for JIT — into a uniform mechanism.
@@ -158,7 +160,7 @@ The interpreter executor is the source of truth. Every other executor's correctn
 runWithRegistry(stmts, env, registry) ≡ runWithInterpreterOnly(stmts, env)
 ```
 
-The harness `executorEquivalence(executor, corpus)` runs each `(stmts, env)` case through registry-with-only-interpreter and again through registry-with-executor-included, and asserts env-after equivalence. New executors add tests by adding `(stmts, env)` cases that exercise their match conditions — no hand-rolled expected outputs. The interpreter answers the question.
+The harness `executorEquivalence(executor, corpus)` runs each `(stmts, env)` case through registry-with-only-interpreter and again through registry-with-executor-included, and asserts env-after equivalence. New executors add tests by adding `(stmts, env)` cases that exercise their proposal conditions — no hand-rolled expected outputs. The interpreter answers the question.
 
 ## Migration
 
@@ -183,7 +185,7 @@ The port runs in increments. Each step is shippable:
 6. ✅ Port `tryJitTopLevel` (with a `scope` tag on `Ctx`) — `jsJit/topLevelExecutor.ts`.
 7. ✅ Port `tryJitCall` and `tryE2ScalarFn` — added a function-call dispatch path (`Registry.dispatchCall` / `CallExecutor`) parallel to the stmt path. Wraps live in `jsJit/callExecutor.ts` and `e2/scalarFnCKernelExecutor.ts`.
 8. ⏳ Port the e1 codegen paths — these live inside the JIT codegen as sub-expression-level emitters. Different abstraction layer than stmt executors; either generalize the registry or keep them as-is.
-9. ⏳ Move classification into `match()` for the existing shims so the registry's cache replaces each wrapped layer's per-stmt `WeakMap`.
+9. ⏳ Move classification into `propose()` for the existing shims so the registry's cache replaces each wrapped layer's per-stmt `WeakMap`.
 
 ## Files
 
@@ -240,4 +242,4 @@ Differences from stmt dispatch:
 ## Open design questions
 
 - **Sub-expression codegen plugins.** The e1 paths live inside the JIT codegen as sub-expression-level emitters (splicing C kernels into JS for fusible chains and pure-scalar functions). They are not stmt-level dispatch — different abstraction layer than executors.
-- **Classify-in-match.** Today's shims call the wrapped layer's classifier inside `run`. Moving classification into `match` would let the registry's cache (rather than the wrapped layer's `WeakMap`) own the bail memo. Cleaner, but requires meaningful refactor of each wrapped layer.
+- **Classify-in-propose.** Today's shims call the wrapped layer's classifier inside `run`. Moving classification into `propose` would let the registry's cache (rather than the wrapped layer's `WeakMap`) own the bail memo. Cleaner, but requires meaningful refactor of each wrapped layer.

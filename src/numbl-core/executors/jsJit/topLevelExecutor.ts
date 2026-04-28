@@ -19,11 +19,11 @@
  */
 
 import type { Stmt } from "../../parser/types.js";
-import type { Executor, MatchResult, RunResult } from "../types.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import { tryJitTopLevel } from "./jitTopLevel.js";
 
-interface TopLevelMatch {
+interface TopLevelData {
   readonly siblings: Stmt[];
 }
 
@@ -33,7 +33,7 @@ interface TopLevelMatch {
 // executor's stub runNs.
 const TOP_LEVEL_COST = { compileMs: 100, perCallNs: 1000, runNs: 1000 };
 
-export const jsJitTopLevelExecutor: Executor<TopLevelMatch, true> = {
+export const jsJitTopLevelExecutor: Executor<TopLevelData, true> = {
   name: "js-jit-top-level",
   // Wrapped layer absorbs JitBailToInterpreter and restores state on
   // failure; the surrounding compile-time IO+bail-risk gate ensures
@@ -41,13 +41,13 @@ export const jsJitTopLevelExecutor: Executor<TopLevelMatch, true> = {
   // assumption-based nature of the artifact through the interface.
   bailRisk: true,
 
-  match(_stmt, ctx: DispatchContext): MatchResult<TopLevelMatch> | null {
+  propose(_stmt, ctx: DispatchContext): Proposal<TopLevelData> | null {
     if (ctx.scope !== "top-level") return null;
     if (!ctx.isFirstInScope) return null;
     // headIndex is 0 here (isFirstInScope), so ctx.siblings is the
     // full scope list — exactly what tryJitTopLevel wants.
     return {
-      match: { siblings: ctx.siblings as Stmt[] },
+      data: { siblings: ctx.siblings as Stmt[] },
       cost: TOP_LEVEL_COST,
     };
   },
@@ -60,14 +60,14 @@ export const jsJitTopLevelExecutor: Executor<TopLevelMatch, true> = {
     return true;
   },
 
-  run(_compiled, m, ctx: DispatchContext): RunResult {
-    const ok = tryJitTopLevel(ctx.interp, m.siblings);
+  run(_compiled, d, ctx: DispatchContext): RunResult {
+    const ok = tryJitTopLevel(ctx.interp, d.siblings);
     if (!ok) {
       return {
         bail: { message: "js-jit-top-level: not jittable" },
         transient: true,
       };
     }
-    return { consumed: m.siblings.length };
+    return { consumed: d.siblings.length };
   },
 };

@@ -11,10 +11,10 @@
  */
 
 import type { Stmt } from "../../parser/types.js";
-import type { Executor, MatchResult, RunResult } from "../types.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 
-interface InterpMatch {
+interface InterpData {
   readonly stmt: Stmt;
 }
 
@@ -25,12 +25,12 @@ interface InterpMatch {
 // hot path.
 const INTERP_COST = { compileMs: 0, perCallNs: 0, runNs: 1e9 };
 
-export const interpreterExecutor: Executor<InterpMatch, true> = {
+export const interpreterExecutor: Executor<InterpData, true> = {
   name: "interpreter",
   bailRisk: false,
 
-  match(stmt): MatchResult<InterpMatch> {
-    return { match: { stmt }, cost: INTERP_COST };
+  propose(stmt): Proposal<InterpData> {
+    return { data: { stmt }, cost: INTERP_COST };
   },
 
   cacheKey(): string {
@@ -41,8 +41,8 @@ export const interpreterExecutor: Executor<InterpMatch, true> = {
     return true;
   },
 
-  run(_compiled, m, ctx: DispatchContext): RunResult {
-    const signal = ctx.interp.execStmt(m.stmt);
+  run(_compiled, d, ctx: DispatchContext): RunResult {
+    const signal = ctx.interp.execStmt(d.stmt);
     return { consumed: 1, signal };
   },
 };

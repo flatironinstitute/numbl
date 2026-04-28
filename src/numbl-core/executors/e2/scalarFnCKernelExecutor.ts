@@ -17,30 +17,30 @@
  * this path.
  */
 
-import type { CallExecutor, CallMatchResult, CallRunResult } from "../types.js";
+import type { CallExecutor, CallProposal, CallRunResult } from "../types.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import { tryE2ScalarFn, E2_SKIP } from "./scalarFnDriver.js";
 
-interface ScalarFnMatch {
+interface ScalarFnData {
   readonly _: 0;
 }
 
-const SHARED_MATCH: ScalarFnMatch = { _: 0 };
+const SHARED_DATA: ScalarFnData = { _: 0 };
 const SCALAR_FN_C_COST = { compileMs: 80, perCallNs: 300, runNs: 100 };
-const SHARED_MATCH_RESULT: CallMatchResult<ScalarFnMatch> = {
-  match: SHARED_MATCH,
+const SHARED_PROPOSAL: CallProposal<ScalarFnData> = {
+  data: SHARED_DATA,
   cost: SCALAR_FN_C_COST,
 };
 
-export const scalarFnCKernelExecutor: CallExecutor<ScalarFnMatch> = {
+export const scalarFnCKernelExecutor: CallExecutor<ScalarFnData> = {
   name: "scalar-fn-c-kernel",
   bailRisk: false,
 
-  matchCall(): CallMatchResult<ScalarFnMatch> {
-    return SHARED_MATCH_RESULT;
+  proposeCall(): CallProposal<ScalarFnData> {
+    return SHARED_PROPOSAL;
   },
 
-  runCall(_match, fn, args, nargout, interp: Interpreter): CallRunResult {
+  runCall(_data, fn, args, nargout, interp: Interpreter): CallRunResult {
     const r = tryE2ScalarFn(interp, fn, args, nargout);
     if (r === E2_SKIP) {
       return {

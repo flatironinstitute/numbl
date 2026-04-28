@@ -5,23 +5,24 @@
  *
  * The interpreter delegates each statement (or run of statements) to a
  * registry of Executors. Each executor implements one strategy
- * (interpreter, JS-JIT, C-kernel, ...). Selection happens at runtime
- * based on cost estimates returned from `match`.
+ * (interpreter, JS-JIT, C-kernel, ...). On each dispatch, every
+ * executor may submit a Proposal — a bid to handle the work along
+ * with its cost. The dispatcher picks the lowest-cost proposal.
  */
 
 import type { Stmt } from "../parser/types.js";
 import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { DispatchContext } from "./context.js";
 
-/** Estimated cost of using this executor for the matched work. Numbers
- *  can be very rough at first; the dispatcher's policy is refined
- *  separately from executors. */
+/** Estimated cost of using this executor for the proposed work.
+ *  Numbers can be very rough at first; the dispatcher's policy is
+ *  refined separately from executors. */
 export interface CostEstimate {
   /** One-time compile cost on cache miss. */
   compileMs: number;
   /** Per-call dispatch overhead (marshaling, frame setup, ...). */
   perCallNs: number;
-  /** Estimated work done by the compiled artifact for this match's
+  /** Estimated work done by the compiled artifact for the proposed
    *  input sizes. */
   runNs: number;
 }
@@ -45,9 +46,12 @@ export type RunResult =
       transient?: boolean;
     };
 
-export interface MatchResult<M> {
+/** An executor's bid to handle the current dispatch. The dispatcher
+ *  picks the lowest-cost proposal; the executor's own `data` flows
+ *  through to compile() and run() unchanged. */
+export interface Proposal<D> {
   /** Opaque per-executor data; passed to compile() and run(). */
-  match: M;
+  data: D;
   cost: CostEstimate;
   /** When true, the compiled artifact emits observable side effects
    *  (`disp`, `fprintf`, file writes, ...) that mustn't repeat. The
@@ -56,7 +60,7 @@ export interface MatchResult<M> {
   requireNoBailInChildren?: boolean;
 }
 
-export interface Executor<M = unknown, C = unknown> {
+export interface Executor<D = unknown, C = unknown> {
   /** Stable identifier for logging, cache keys, and test selection. */
   readonly name: string;
 
@@ -66,27 +70,27 @@ export interface Executor<M = unknown, C = unknown> {
    *  `requireNoBail`. */
   readonly bailRisk: boolean;
 
-  /** Runs every dispatch — must be cheap. Receives just the current
-   *  stmt; for executors that need to look across multiple stmts
-   *  (chain fusion, whole-script JIT), use `ctx.peekSibling(offset)`
-   *  or `ctx.remainingSiblings()`. Returns null to decline; on
-   *  success, returns the match data plus a cost estimate. */
-  match(stmt: Stmt, ctx: DispatchContext): MatchResult<M> | null;
+  /** Submit a bid to handle this stmt. Runs on every dispatch — must
+   *  be cheap. Receives just the current stmt; for executors that
+   *  need to look across multiple stmts (chain fusion, whole-script
+   *  JIT), use `ctx.peekSibling(offset)` or `ctx.siblings`. Returns
+   *  null to decline. */
+  propose(stmt: Stmt, ctx: DispatchContext): Proposal<D> | null;
 
-  /** Stable cache key projected from the match. Drops volatile bits
-   *  (e.g., exact scalar values; tensor shape if codegen is shape-
-   *  agnostic) so unrelated runs of the same code reuse compiled
-   *  artifacts. */
-  cacheKey(match: M): string;
+  /** Stable cache key projected from the proposal data. Drops
+   *  volatile bits (e.g., exact scalar values; tensor shape if
+   *  codegen is shape-agnostic) so unrelated runs of the same code
+   *  reuse compiled artifacts. */
+  cacheKey(data: D): string;
 
   /** Compile to a runnable artifact. Called only on cache miss.
    *  Cached under (executor, headStmt, cacheKey). */
-  compile(match: M, ctx: DispatchContext): C;
+  compile(data: D, ctx: DispatchContext): C;
 
   /** Execute. Returns the number of consumed sibling stmts on success,
    *  or a Bail signalling the cache entry should be invalidated and
    *  the next-best candidate tried. */
-  run(compiled: C, match: M, ctx: DispatchContext): RunResult;
+  run(compiled: C, data: D, ctx: DispatchContext): RunResult;
 }
 
 // ── Function-call dispatch ──────────────────────────────────────────────
@@ -110,9 +114,9 @@ export type CallRunResult =
       transient?: boolean;
     };
 
-export interface CallMatchResult<M> {
+export interface CallProposal<D> {
   /** Opaque per-executor data; passed to runCall(). */
-  match: M;
+  data: D;
   cost: CostEstimate;
 }
 
@@ -125,25 +129,25 @@ type Interpreter = import("../interpreter/interpreter.js").Interpreter;
  *  would add WeakMap+Map lookups per call without benefit, since the
  *  wrapped layers (`tryJitCall`, `tryE2ScalarFn`) already cache
  *  internally per (FunctionDef, argType-signature). Call executors
- *  match-and-run; any compile state is the executor's own
+ *  propose-and-run; any compile state is the executor's own
  *  responsibility. */
-export interface CallExecutor<M = unknown> {
+export interface CallExecutor<D = unknown> {
   readonly name: string;
   readonly bailRisk: boolean;
 
-  /** Runs on every user-function call — must be cheap. Returns null
-   *  to decline. */
-  matchCall(
+  /** Submit a bid to handle this user-function call. Runs on every
+   *  call — must be cheap. Returns null to decline. */
+  proposeCall(
     fn: FunctionDef,
     args: unknown[],
     nargout: number,
     interp: Interpreter
-  ): CallMatchResult<M> | null;
+  ): CallProposal<D> | null;
 
   /** Run. Returns the function's result (may be a value or an array
    *  of values for multi-output) on success, or a Bail. */
   runCall(
-    match: M,
+    data: D,
     fn: FunctionDef,
     args: unknown[],
     nargout: number,

@@ -19,11 +19,11 @@
  */
 
 import type { Stmt } from "../../parser/types.js";
-import type { Executor, MatchResult, RunResult } from "../types.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import { tryJitFor, tryJitWhile } from "./jitLoop.js";
 
-interface LoopMatch {
+interface LoopData {
   readonly stmt: Stmt & { type: "For" | "While" };
 }
 
@@ -32,13 +32,13 @@ interface LoopMatch {
 // succeeds.
 const JS_JIT_LOOP_COST = { compileMs: 30, perCallNs: 200, runNs: 200 };
 
-export const jsJitLoopExecutor: Executor<LoopMatch, true> = {
+export const jsJitLoopExecutor: Executor<LoopData, true> = {
   name: "js-jit-loop",
   bailRisk: true,
 
-  match(stmt): MatchResult<LoopMatch> | null {
+  propose(stmt): Proposal<LoopData> | null {
     if (stmt.type !== "For" && stmt.type !== "While") return null;
-    return { match: { stmt }, cost: JS_JIT_LOOP_COST };
+    return { data: { stmt }, cost: JS_JIT_LOOP_COST };
   },
 
   cacheKey(): string {
@@ -49,11 +49,11 @@ export const jsJitLoopExecutor: Executor<LoopMatch, true> = {
     return true;
   },
 
-  run(_compiled, m, ctx: DispatchContext): RunResult {
+  run(_compiled, d, ctx: DispatchContext): RunResult {
     const ok =
-      m.stmt.type === "For"
-        ? tryJitFor(ctx.interp, m.stmt)
-        : tryJitWhile(ctx.interp, m.stmt);
+      d.stmt.type === "For"
+        ? tryJitFor(ctx.interp, d.stmt)
+        : tryJitWhile(ctx.interp, d.stmt);
     if (!ok) {
       return {
         bail: { message: "js-jit-loop: not jittable" },

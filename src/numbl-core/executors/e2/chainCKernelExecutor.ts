@@ -16,11 +16,11 @@
  */
 
 import type { Stmt } from "../../parser/types.js";
-import type { Executor, MatchResult, RunResult } from "../types.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import { tryE2Assign } from "./assignKernel.js";
 
-interface ChainMatch {
+interface ChainData {
   readonly headStmt: Stmt & { type: "Assign" };
 }
 
@@ -30,16 +30,16 @@ interface ChainMatch {
 // executor's bail) for everything else.
 const CHAIN_COST = { compileMs: 50, perCallNs: 300, runNs: 100 };
 
-export const chainCKernelExecutor: Executor<ChainMatch, true> = {
+export const chainCKernelExecutor: Executor<ChainData, true> = {
   name: "chain-c-kernel",
   // The wrapped tryE2Assign produces a fully-typed C kernel; once it
   // returns successfully it does not bail mid-execution.
   bailRisk: false,
 
-  match(stmt): MatchResult<ChainMatch> | null {
+  propose(stmt): Proposal<ChainData> | null {
     if (stmt.type !== "Assign") return null;
     return {
-      match: { headStmt: stmt as Stmt & { type: "Assign" } },
+      data: { headStmt: stmt as Stmt & { type: "Assign" } },
       cost: CHAIN_COST,
     };
   },
@@ -55,13 +55,13 @@ export const chainCKernelExecutor: Executor<ChainMatch, true> = {
     return true;
   },
 
-  run(_compiled, m, ctx: DispatchContext): RunResult {
+  run(_compiled, d, ctx: DispatchContext): RunResult {
     // tryE2Assign reads `interp._postSiblings` / `_postSiblingsIdx`
     // for chain lookahead. The outer `execStmts` loop already sets
     // those before each dispatch, so we don't need to re-set them
     // here — they describe the same scope and head index that ctx
     // exposes.
-    const consumed = tryE2Assign(ctx.interp, m.headStmt);
+    const consumed = tryE2Assign(ctx.interp, d.headStmt);
     if (consumed === null) {
       return {
         bail: { message: "chain-c-kernel: not classifiable" },

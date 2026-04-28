@@ -13,11 +13,11 @@
  */
 
 import type { Stmt } from "../../parser/types.js";
-import type { Executor, MatchResult, RunResult } from "../types.js";
+import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import { tryE2Loop } from "./loopKernel.js";
 
-interface LoopMatch {
+interface LoopData {
   readonly stmt: Stmt & { type: "For" };
 }
 
@@ -25,13 +25,13 @@ interface LoopMatch {
 // beat the AST interpreter's stub runNs whenever we apply.
 const LOOP_C_COST = { compileMs: 50, perCallNs: 300, runNs: 100 };
 
-export const loopCKernelExecutor: Executor<LoopMatch, true> = {
+export const loopCKernelExecutor: Executor<LoopData, true> = {
   name: "loop-c-kernel",
   bailRisk: false,
 
-  match(stmt): MatchResult<LoopMatch> | null {
+  propose(stmt): Proposal<LoopData> | null {
     if (stmt.type !== "For") return null;
-    return { match: { stmt }, cost: LOOP_C_COST };
+    return { data: { stmt }, cost: LOOP_C_COST };
   },
 
   cacheKey(): string {
@@ -42,8 +42,8 @@ export const loopCKernelExecutor: Executor<LoopMatch, true> = {
     return true;
   },
 
-  run(_compiled, m, ctx: DispatchContext): RunResult {
-    const ok = tryE2Loop(ctx.interp, m.stmt);
+  run(_compiled, d, ctx: DispatchContext): RunResult {
+    const ok = tryE2Loop(ctx.interp, d.stmt);
     if (!ok) {
       return {
         bail: { message: "loop-c-kernel: not classifiable" },

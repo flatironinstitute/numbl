@@ -24,14 +24,14 @@ interface RegisteredCallExecutor {
 
 interface Candidate {
   readonly executor: Executor;
-  readonly match: unknown;
+  readonly data: unknown;
   readonly total: number;
   readonly requireNoBailInChildren: boolean;
 }
 
 interface CallCandidate {
   readonly executor: CallExecutor;
-  readonly match: unknown;
+  readonly data: unknown;
   readonly total: number;
 }
 
@@ -121,11 +121,11 @@ export class Registry {
     // executors only see the single stmt and don't care.
     ctx._setPosition(siblings, i);
 
-    // Single linear pass: pick the lowest-cost match among
-    // *specialized* executors. Backup list (allocated lazily) holds
-    // the rest, used only if the best bails.
+    // Single linear pass: collect proposals, keep the lowest-cost one
+    // as best; the rest go in a lazily-allocated backup list (only
+    // used if the best bails).
     let bestExec: Executor | null = null;
-    let bestMatch: unknown = null;
+    let bestData: unknown = null;
     let bestTotal = Infinity;
     let backups: Candidate[] | null = null;
     const stmt = siblings[i];
@@ -136,40 +136,40 @@ export class Registry {
       const executor = executors[k].executor;
       if (requireNoBail && executor.bailRisk) continue;
       if (checkActive && ctx.isActive(executor.name, stmt)) continue;
-      const m = executor.match(stmt, ctx);
-      if (!m) continue;
-      const total = m.cost.perCallNs + m.cost.runNs;
+      const p = executor.propose(stmt, ctx);
+      if (!p) continue;
+      const total = p.cost.perCallNs + p.cost.runNs;
       if (total < bestTotal) {
         if (bestExec) {
           (backups ??= []).push({
             executor: bestExec,
-            match: bestMatch,
+            data: bestData,
             total: bestTotal,
             requireNoBailInChildren: false,
           });
         }
         bestExec = executor;
-        bestMatch = m.match;
+        bestData = p.data;
         bestTotal = total;
       } else {
         (backups ??= []).push({
           executor,
-          match: m.match,
+          data: p.data,
           total,
-          requireNoBailInChildren: !!m.requireNoBailInChildren,
+          requireNoBailInChildren: !!p.requireNoBailInChildren,
         });
       }
     }
 
     // Try best (if any), then backups in cost order. Each may bail.
     if (bestExec) {
-      const r = this.runCandidate(siblings, i, ctx, bestExec, bestMatch);
+      const r = this.runCandidate(siblings, i, ctx, bestExec, bestData);
       if (r) return r;
       if (backups) {
         backups.sort((a, b) => a.total - b.total);
         for (let k = 0; k < backups.length; k++) {
           const c = backups[k];
-          const r2 = this.runCandidate(siblings, i, ctx, c.executor, c.match);
+          const r2 = this.runCandidate(siblings, i, ctx, c.executor, c.data);
           if (r2) return r2;
         }
       }
@@ -188,15 +188,15 @@ export class Registry {
     i: number,
     ctx: DispatchContext,
     executor: Executor,
-    match: unknown
+    data: unknown
   ): DispatchResult | null {
     const stmt = siblings[i];
-    const key = executor.cacheKey(match);
+    const key = executor.cacheKey(data);
 
     let compiled = this.cache.get(executor.name, stmt, key);
     if (this.cache.isBailed(compiled)) return null;
     if (compiled === undefined) {
-      compiled = executor.compile(match, ctx);
+      compiled = executor.compile(data, ctx);
       this.cache.set(executor.name, stmt, key, compiled);
     }
 
@@ -204,12 +204,12 @@ export class Registry {
     if (ctx.hasActive) {
       ctx.pushActive(executor.name, stmt);
       try {
-        result = executor.run(compiled, match, ctx);
+        result = executor.run(compiled, data, ctx);
       } finally {
         ctx.popActive(executor.name, stmt);
       }
     } else {
-      result = executor.run(compiled, match, ctx);
+      result = executor.run(compiled, data, ctx);
     }
 
     if ("bail" in result) {
@@ -245,40 +245,40 @@ export class Registry {
     if (this.callExecutors.length === 0) return null;
 
     let bestExec: CallExecutor | null = null;
-    let bestMatch: unknown = null;
+    let bestData: unknown = null;
     let bestTotal = Infinity;
     let backups: CallCandidate[] | null = null;
     const callExecs = this.callExecutors;
     for (let k = 0; k < callExecs.length; k++) {
       const executor = callExecs[k].executor;
-      const m = executor.matchCall(fn, args, nargout, interp);
-      if (!m) continue;
-      const total = m.cost.perCallNs + m.cost.runNs;
+      const p = executor.proposeCall(fn, args, nargout, interp);
+      if (!p) continue;
+      const total = p.cost.perCallNs + p.cost.runNs;
       if (total < bestTotal) {
         if (bestExec) {
           (backups ??= []).push({
             executor: bestExec,
-            match: bestMatch,
+            data: bestData,
             total: bestTotal,
           });
         }
         bestExec = executor;
-        bestMatch = m.match;
+        bestData = p.data;
         bestTotal = total;
       } else {
-        (backups ??= []).push({ executor, match: m.match, total });
+        (backups ??= []).push({ executor, data: p.data, total });
       }
     }
 
     if (!bestExec) return null;
 
-    const r = bestExec.runCall(bestMatch, fn, args, nargout, interp);
+    const r = bestExec.runCall(bestData, fn, args, nargout, interp);
     if (!("bail" in r)) return { result: r.result };
     if (backups) {
       backups.sort((a, b) => a.total - b.total);
       for (let k = 0; k < backups.length; k++) {
         const c = backups[k];
-        const r2 = c.executor.runCall(c.match, fn, args, nargout, interp);
+        const r2 = c.executor.runCall(c.data, fn, args, nargout, interp);
         if (!("bail" in r2)) return { result: r2.result };
       }
     }

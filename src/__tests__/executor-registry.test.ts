@@ -4,7 +4,7 @@ import { interpreterExecutor } from "../numbl-core/executors/interpreter/interpr
 import { executeCode } from "../numbl-core/executeCode.js";
 import type {
   Executor,
-  MatchResult,
+  Proposal,
   RunResult,
 } from "../numbl-core/executors/types.js";
 import type { Stmt } from "../numbl-core/parser/types.js";
@@ -23,7 +23,7 @@ import type { Stmt } from "../numbl-core/parser/types.js";
  * specialized executors are ported.
  */
 
-interface StubMatch {
+interface StubData {
   tag: string;
 }
 
@@ -42,25 +42,25 @@ interface StubExecutorOpts {
   requireNoBailInChildren?: boolean;
 }
 
-function stubExecutor(opts: StubExecutorOpts): Executor<StubMatch, StubMatch> {
+function stubExecutor(opts: StubExecutorOpts): Executor<StubData, StubData> {
   return {
     name: opts.name,
     bailRisk: !!opts.bailRisk,
-    match(): MatchResult<StubMatch> {
+    propose(): Proposal<StubData> {
       return {
-        match: { tag: opts.name },
+        data: { tag: opts.name },
         cost: opts.cost,
         ...(opts.requireNoBailInChildren
           ? { requireNoBailInChildren: true }
           : {}),
       };
     },
-    cacheKey(m) {
-      return m.tag;
+    cacheKey(d) {
+      return d.tag;
     },
-    compile(m) {
+    compile(d) {
       if (opts.compileCount) opts.compileCount.n++;
-      return m;
+      return d;
     },
     run(): RunResult {
       if (opts.runCount) opts.runCount.n++;

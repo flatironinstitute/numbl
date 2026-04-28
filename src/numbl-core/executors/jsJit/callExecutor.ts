@@ -21,39 +21,39 @@
  * assumptions, in case a future caller wants to filter on it.
  */
 
-import type { CallExecutor, CallMatchResult, CallRunResult } from "../types.js";
+import type { CallExecutor, CallProposal, CallRunResult } from "../types.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import { tryJitCall, JIT_SKIP } from "./jitCall.js";
 
-interface JsJitCallMatch {
+interface JsJitCallData {
   /** No per-call data needed; the wrapped layer reads everything from
    *  fn / args / nargout passed through to runCall. */
   readonly _: 0;
 }
 
-// Constant match result and cost — both shared across all calls,
-// avoiding per-call object allocation. Possible because the shim
-// always matches with the same shape; the wrapped layer (`tryJitCall`)
-// does the actual eligibility check.
-const SHARED_MATCH: JsJitCallMatch = { _: 0 };
+// Constant proposal and cost — both shared across all calls, avoiding
+// per-call object allocation. Possible because the shim always
+// proposes with the same shape; the wrapped layer (`tryJitCall`) does
+// the actual eligibility check.
+const SHARED_DATA: JsJitCallData = { _: 0 };
 const JS_JIT_CALL_COST = { compileMs: 50, perCallNs: 200, runNs: 200 };
-const SHARED_MATCH_RESULT: CallMatchResult<JsJitCallMatch> = {
-  match: SHARED_MATCH,
+const SHARED_PROPOSAL: CallProposal<JsJitCallData> = {
+  data: SHARED_DATA,
   cost: JS_JIT_CALL_COST,
 };
 
-export const jsJitCallExecutor: CallExecutor<JsJitCallMatch> = {
+export const jsJitCallExecutor: CallExecutor<JsJitCallData> = {
   name: "js-jit-call",
   bailRisk: true,
 
-  matchCall(): CallMatchResult<JsJitCallMatch> {
-    // Match unconditionally — the wrapped layer does its own
+  proposeCall(): CallProposal<JsJitCallData> {
+    // Propose unconditionally — the wrapped layer does its own
     // eligibility check and returns JIT_SKIP when types are
     // unsuitable. We translate that to a transient bail.
-    return SHARED_MATCH_RESULT;
+    return SHARED_PROPOSAL;
   },
 
-  runCall(_match, fn, args, nargout, interp: Interpreter): CallRunResult {
+  runCall(_data, fn, args, nargout, interp: Interpreter): CallRunResult {
     const r = tryJitCall(interp, fn, args, nargout);
     if (r === JIT_SKIP) {
       return {
