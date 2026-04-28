@@ -142,14 +142,11 @@ function lowerStmt(ctx: LowerCtx, stmt: Stmt): JitStmt[] | null {
       break;
     case "Directive":
       if (stmt.directive === "assert_jit") {
-        const wantC = stmt.args.includes("c");
         // Bare assert_jit: JS-JIT lowering succeeded → elide.
-        // assert_jit c at --opt 1: degrade to JS-JIT check → elide.
-        // assert_jit c at --opt 2: emit AssertCJit so JS codegen can
-        // throw if C-JIT bails back to JS.
-        if (wantC && ctx.interp && ctx.interp.optimization >= 2) {
-          return [...prefix, { tag: "AssertCJit" }];
-        }
+        // assert_jit c: under JS-JIT (opt "1") this degrades to a
+        // JS-JIT check (since there is no C-JIT path inside JS-JIT
+        // bodies); the directive is dropped. Under "e3" the JS-JIT
+        // lowering is never reached.
         return prefix;
       }
       // Unknown directives: silently elide in JIT.

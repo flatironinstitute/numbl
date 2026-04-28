@@ -160,7 +160,8 @@ export function IDEWorkspace({
     () => [...files, ...systemFiles],
     [files, systemFiles]
   );
-  const [optimization, setOptimization] = useState(1);
+  const [optimization, setOptimization] =
+    useState<import("../numbl-core/executors/plugins.js").OptLevel>("1");
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
@@ -746,7 +747,7 @@ export function IDEWorkspace({
         setUseRemoteExecution(isLocal);
         // C-JIT is only available on the local server
         if (!isLocal) {
-          setOptimization(o => (o > 1 ? 1 : o));
+          setOptimization(o => (o === "e3" ? "1" : o));
         }
       }
     },
@@ -1015,14 +1016,14 @@ export function IDEWorkspace({
               )}
               <Tooltip
                 title={
-                  optimization === 0
+                  optimization === "0"
                     ? "Interpreter only (click for JS-JIT)"
                     : "JS-JIT (click to disable)"
                 }
               >
                 <Typography
                   variant="caption"
-                  onClick={() => setOptimization(o => (o === 0 ? 1 : 0))}
+                  onClick={() => setOptimization(o => (o === "0" ? "1" : "0"))}
                   sx={{
                     cursor: "pointer",
                     fontSize: "0.7rem",
@@ -1030,13 +1031,13 @@ export function IDEWorkspace({
                     py: 0.1,
                     borderRadius: 0.5,
                     bgcolor:
-                      optimization >= 1 ? "action.selected" : "transparent",
-                    opacity: optimization >= 1 ? 1 : 0.5,
+                      optimization !== "0" ? "action.selected" : "transparent",
+                    opacity: optimization !== "0" ? 1 : 0.5,
                     "&:hover": { opacity: 1 },
                     userSelect: "none",
                   }}
                 >
-                  {optimization === 0 ? "no jit" : "jit"}
+                  {optimization === "0" ? "no jit" : "jit"}
                 </Typography>
               </Tooltip>
               {activeFile && (

@@ -17,14 +17,10 @@
 
 import type { Stmt } from "../parser/types.js";
 import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
-import type { Executor } from "./types.js";
+import type { Executor, RunResult } from "./types.js";
 import { DispatchContext } from "./context.js";
 import { ExecutorCache } from "./cache.js";
 import { LoweringCache, tryLower, tryLowerCall } from "./lowering.js";
-
-interface RegisteredExecutor {
-  readonly executor: Executor;
-}
 
 interface Candidate {
   readonly executor: Executor;
@@ -46,7 +42,7 @@ export interface DispatchResult {
 export type CallDispatchResult = { result: unknown } | null;
 
 export class Registry {
-  private readonly executors: RegisteredExecutor[] = [];
+  private readonly executors: Executor[] = [];
   private cache = new ExecutorCache();
   private loweringCache = new LoweringCache();
   /** Pre-allocated context reused for `dispatchCall`. Avoids the
@@ -59,10 +55,10 @@ export class Registry {
   private callCtx: DispatchContext | null = null;
 
   register(executor: Executor): void {
-    if (this.executors.some(r => r.executor.name === executor.name)) {
+    if (this.executors.some(e => e.name === executor.name)) {
       throw new Error(`Executor already registered: ${executor.name}`);
     }
-    this.executors.push({ executor });
+    this.executors.push(executor);
   }
 
   /** Number of registered executors. Mainly for tests. */
@@ -132,7 +128,7 @@ export class Registry {
     const checkActive = ctx.hasActive;
     const executors = this.executors;
     for (let k = 0; k < executors.length; k++) {
-      const executor = executors[k].executor;
+      const executor = executors[k];
       if (checkActive && ctx.isActive(executor.name, stmt)) continue;
       const p = executor.propose(lowered, ctx);
       if (!p) continue;
@@ -189,22 +185,46 @@ export class Registry {
     data: unknown,
     lowered: import("./lowering.js").LoweredStmt
   ): DispatchResult | null {
+    const result = this.executeCandidate(ctx, executor, stmt, data, stmt);
+    if (!result) return null;
+    if ("consumed" in result) {
+      ctx.interp.onExecutorFired?.(executor.name, lowered.kind);
+      return { consumed: result.consumed, signal: null };
+    }
+    throw new Error(
+      `Stmt-shape executor ${executor.name} returned an invalid RunResult`
+    );
+  }
+
+  /** Cache lookup + compile-on-miss + run + bail handling. Returns
+   *  the executor's success RunResult, or null when the candidate
+   *  bailed (cache may have been marked BAILED). When `guardKey` is
+   *  non-null, the reentrancy guard pushes/pops around `run()` —
+   *  passed by the stmt path; the call path passes null because
+   *  `dispatchCall` isn't reentrant within itself. */
+  private executeCandidate(
+    ctx: DispatchContext,
+    executor: Executor,
+    owner: object,
+    data: unknown,
+    guardKey: Stmt | null
+  ): RunResult | null {
     const key = executor.cacheKey(data);
 
-    let compiled = this.cache.get(executor.name, stmt, key);
+    let compiled = this.cache.get(executor.name, owner, key);
     if (this.cache.isBailed(compiled)) return null;
     if (compiled === undefined) {
       compiled = executor.compile(data, ctx);
-      this.cache.set(executor.name, stmt, key, compiled);
+      this.cache.set(executor.name, owner, key, compiled);
     }
 
-    let result;
-    if (ctx.hasActive) {
-      ctx.pushActive(executor.name, stmt);
+    let result: RunResult;
+    if (guardKey !== null && ctx.hasActive) {
+      ctx.pushActive(executor.name, guardKey);
       try {
         result = executor.run(compiled, data, ctx);
       } finally {
-        ctx.popActive(executor.name, stmt);
+        ctx.popActive(executor.name, guardKey);
       }
     } else {
       result = executor.run(compiled, data, ctx);
@@ -212,19 +232,11 @@ export class Registry {
 
     if ("bail" in result) {
       if (!result.transient) {
-        this.cache.markBailed(executor.name, stmt, key);
+        this.cache.markBailed(executor.name, owner, key);
       }
       return null;
     }
-    if ("consumed" in result) {
-      ctx.interp.onExecutorFired?.(executor.name, lowered.kind);
-      return { consumed: result.consumed, signal: null };
-    }
-    // Type system forbids reaching here (stmt-shape executors return
-    // either { consumed } or a bail). Defensive throw if we do.
-    throw new Error(
-      `Stmt-shape executor ${executor.name} returned an invalid RunResult`
-    );
+    return result;
   }
 
   /**
@@ -255,7 +267,7 @@ export class Registry {
     let backups: Candidate[] | null = null;
     const executors = this.executors;
     for (let k = 0; k < executors.length; k++) {
-      const executor = executors[k].executor;
+      const executor = executors[k];
       const p = executor.propose(lowered, ctx);
       if (!p) continue;
       const total = p.cost.perCallNs + p.cost.runNs;
@@ -296,29 +308,12 @@ export class Registry {
     executor: Executor,
     data: unknown
   ): CallDispatchResult {
-    const key = executor.cacheKey(data);
-
-    let compiled = this.cache.get(executor.name, fn, key);
-    if (this.cache.isBailed(compiled)) return null;
-    if (compiled === undefined) {
-      compiled = executor.compile(data, ctx);
-      this.cache.set(executor.name, fn, key, compiled);
-    }
-
-    const result = executor.run(compiled, data, ctx);
-
-    if ("bail" in result) {
-      if (!result.transient) {
-        this.cache.markBailed(executor.name, fn, key);
-      }
-      return null;
-    }
+    const result = this.executeCandidate(ctx, executor, fn, data, null);
+    if (!result) return null;
     if ("result" in result) {
       ctx.interp.onExecutorFired?.(executor.name, "call");
       return { result: result.result };
     }
-    // Type system forbids reaching here (call-shape executors return
-    // either { result } or a bail). Defensive throw if we do.
     throw new Error(
       `Call-shape executor ${executor.name} returned an invalid RunResult`
     );

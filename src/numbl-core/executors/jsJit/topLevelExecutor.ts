@@ -23,16 +23,12 @@ import {
   type TopLevelCompiled,
 } from "./jitTopLevel.js";
 
-interface TopLevelData {
-  readonly lowered: TopLevelLowered;
-}
-
 // Whole-script compile is the heaviest match; once compiled it saves
 // the per-stmt dispatch overhead for the entire script.
 const TOP_LEVEL_COST = { compileMs: 100, perCallNs: 1000, runNs: 1000 };
 
 export const jsJitTopLevelExecutor: Executor<
-  TopLevelData,
+  TopLevelLowered,
   TopLevelCompiled | null
 > = {
   name: "js-jit-top-level",
@@ -40,7 +36,7 @@ export const jsJitTopLevelExecutor: Executor<
   propose(
     lowered: LoweredStmt,
     ctx: DispatchContext
-  ): Proposal<TopLevelData> | null {
+  ): Proposal<TopLevelLowered> | null {
     if (lowered.kind !== "top-level") return null;
     const flags = lowered.flags;
 
@@ -51,30 +47,26 @@ export const jsJitTopLevelExecutor: Executor<
     if (flags.hasIO && flags.hasBailRisk) return null;
 
     return {
-      data: { lowered: lowered.lowered },
+      data: lowered.lowered,
       cost: TOP_LEVEL_COST,
       bailRisk: true,
     };
   },
 
   cacheKey(d): string {
-    return d.lowered.classification.cacheKey;
+    return d.classification.cacheKey;
   },
 
   compile(d, ctx: DispatchContext): TopLevelCompiled | null {
-    return generateTopLevelJS(ctx.interp, d.lowered);
+    return generateTopLevelJS(ctx.interp, d);
   },
 
   run(compiled, d, ctx: DispatchContext): RunResult {
     if (compiled === null) {
       return { bail: { message: "js-jit-top-level: codegen rejected" } };
     }
-    const r = runTopLevelCompiled(
-      ctx.interp,
-      compiled,
-      d.lowered.classification
-    );
-    if (r.ok) return { consumed: d.lowered.classification.stmts.length };
+    const r = runTopLevelCompiled(ctx.interp, compiled, d.classification);
+    if (r.ok) return { consumed: d.classification.stmts.length };
     return {
       bail: { message: "js-jit-top-level: bailed at runtime" },
       ...(r.transient ? { transient: true } : {}),

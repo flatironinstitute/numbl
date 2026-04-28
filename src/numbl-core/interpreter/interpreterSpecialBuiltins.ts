@@ -30,8 +30,8 @@ export interface InterpreterContext {
   evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
-  /** Optimization level: 0 = no JIT, 1 = JS-JIT, 2 = JS-JIT + C-JIT. */
-  optimization: number;
+  /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "e3" = C-JIT scalar loops. */
+  optimization: import("../executors/plugins.js").OptLevel;
   /** Resolve a workspace function or class name to its source file,
    *  or undefined if no workspace file provides that name.
    *  `kind` distinguishes a regular .m function from a .numbl.js

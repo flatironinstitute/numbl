@@ -45,7 +45,8 @@ let holdState = false;
 let persistentWorkspaceFiles: WorkspaceFile[] = [];
 let persistentSearchPaths: string[] | undefined;
 let implicitCwdPath: string | null | undefined;
-let optimizationLevel = 1;
+let optimizationLevel: import("./numbl-core/executors/plugins.js").OptLevel =
+  "1";
 let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();

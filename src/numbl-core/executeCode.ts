@@ -51,6 +51,8 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
+  /** Called each time a C-JIT artifact is compiled, with a description and the generated C source. */
+  onCJitCompile?: (description: string, cCode: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -62,8 +64,9 @@ export interface ExecOptions {
   system?: SystemAdapter;
   /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
   onInput?: (prompt: string) => string;
-  /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
-  optimization?: number;
+  /** Optimization mode: `"0"` interpreter, `"1"` JS-JIT, `"e3"` C-JIT
+   *  scalar-loop only. */
+  optimization?: import("./executors/plugins.js").OptLevel;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -109,6 +112,9 @@ export interface ProfileData {
 export interface ExecResult {
   output: string[];
   generatedJS: string;
+  /** Collected C source from C-JIT compilations during this run, or
+   *  empty when no C-JIT artifact was produced. */
+  generatedC: string;
   plotInstructions: PlotInstruction[];
   returnValue: RuntimeValue;
   variableValues: Record<string, RuntimeValue>;
@@ -348,7 +354,8 @@ export function executeCode(
     interpreter.fileSources.set(f.name, f.source);
   }
 
-  interpreter.optimization = options.optimization ?? 1;
+  interpreter.optimization = options.optimization ?? "1";
+  interpreter.nativeBridge = nativeBridge;
   interpreter.log = options.log;
 
   // Register mode-specific executor plugins. The AST interpreter is
@@ -362,6 +369,15 @@ export function executeCode(
       `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${jsCode}`
     );
     options.onJitCompile?.(description, jsCode);
+  };
+
+  // Collect C-JIT compilations for generatedC output.
+  const cJitSections: string[] = [];
+  interpreter.onCJitCompile = (description: string, cCode: string) => {
+    cJitSections.push(
+      `/* ${"=".repeat(60)}\n * C-JIT: ${description}\n * ${"=".repeat(60)} */\n\n${cCode}`
+    );
+    options.onCJitCompile?.(description, cCode);
   };
 
   // Wire up JIT builtin profiling hooks when profiling is enabled
@@ -774,6 +790,10 @@ export function executeCode(
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
           : "// No JS generated",
+      generatedC:
+        cJitSections.length > 0
+          ? cJitSections.join("\n\n")
+          : "/* No C generated */",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),

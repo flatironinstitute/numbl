@@ -293,12 +293,12 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "Directive": {
       if (stmt.directive === "assert_jit") {
+        // Only enforce assert_jit at --opt 1 (JS-JIT). Other opt
+        // modes (e3 etc.) cover narrower shapes than JS-JIT, so a
+        // directive surviving to the interpreter is expected and
+        // doesn't represent a regression. At --opt 0 it's a no-op.
+        if (this.optimization !== "1") return null;
         const wantC = stmt.args.includes("c");
-        // At --opt 0, all assert_jit directives are no-ops.
-        if (this.optimization === 0) return null;
-        // If the directive survived to the interpreter, the loop wasn't JIT'd.
-        // At --opt >= 1 this is always an error (for both bare and "c" forms —
-        // the "c" variant at --opt 1 degrades to requiring JS-JIT).
         throw new RuntimeError(
           `%!numbl:assert_jit${wantC ? " c" : ""}: expected the surrounding loop or function body to be JIT-compiled, but it was interpreted. Run with --opt 0 to silence.`
         );

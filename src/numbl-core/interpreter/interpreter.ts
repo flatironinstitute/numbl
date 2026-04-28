@@ -77,16 +77,28 @@ export class Interpreter {
   compileInProgress = new Set<string>();
 
   /**
-   * Optimization level:
-   *   0 — pure AST interpreter, no JIT.
-   *   1 — JS-JIT (default): type-specialize hot functions/loops to JS
-   *       via `new Function()`.
-   *   2 — JS-JIT plus C-JIT optimizers (Node only).
+   * Optimization mode:
+   *   "0"  — pure AST interpreter, no JIT.
+   *   "1"  — JS-JIT (default): type-specialize hot functions/loops to JS
+   *          via `new Function()`.
+   *   "e3" — C-JIT scalar-loop only (Node only). No JS-JIT suite is
+   *          registered alongside; loops either match the C-JIT
+   *          executor or fall back to the AST interpreter.
    */
-  optimization: number = 1;
+  optimization: import("../executors/plugins.js").OptLevel = "1";
 
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
+
+  /** Callback for C-JIT compilation logging (C codegen). Invoked once
+   *  per cache miss, before the C source is compiled. */
+  onCJitCompile?: (description: string, cCode: string) => void;
+
+  /** Bridge for loading native shared libraries — used by the C-JIT
+   *  loop executor (`--opt e3`) to dlopen freshly-compiled `.so`
+   *  artifacts via koffi. Undefined in browser contexts; the executor
+   *  declines when undefined. */
+  nativeBridge?: import("../workspace/types.js").NativeBridge;
 
   /** Telemetry: invoked after a registered executor's `run()` succeeds.
    *  Used to track which optimizers fire in a session. The kind is the

@@ -12,7 +12,7 @@ export interface RemoteExecutionFile {
 export interface RemoteExecutionRequest {
   files: RemoteExecutionFile[];
   mainScript: string;
-  optimization?: number;
+  optimization?: import("../numbl-core/executors/plugins.js").OptLevel;
 }
 
 export interface RemoteExecutionResult {
