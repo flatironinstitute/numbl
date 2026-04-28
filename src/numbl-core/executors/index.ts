@@ -27,14 +27,7 @@ export {
   isKnownInteger,
 } from "./typeInfo.js";
 export { interpreterExecutor } from "./interpreter/interpreterExecutor.js";
-export { chainCKernelExecutor } from "./e2/chainCKernelExecutor.js";
-export { loopCKernelExecutor } from "./e2/loopCKernelExecutor.js";
-export { scalarFnCKernelExecutor } from "./e2/scalarFnCKernelExecutor.js";
 export { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
 export { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 export { jsJitCallExecutor } from "./jsJit/callExecutor.js";
-export {
-  registerInterpreterPlugin,
-  registerJsJitPlugin,
-  registerE2Plugin,
-} from "./plugins.js";
+export { registerInterpreterPlugin, registerJsJitPlugin } from "./plugins.js";

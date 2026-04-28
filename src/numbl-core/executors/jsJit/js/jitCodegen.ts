@@ -13,12 +13,6 @@ import {
   isKnownInteger,
 } from "../../../jit/jitTypes.js";
 import { getIBuiltin } from "../../../interpreter/builtins/types.js";
-import { findFusibleChains } from "../../../jit/fusion.js";
-import {
-  FUSIBLE_TENSOR_UNARY_OPS,
-  FUSIBLE_TENSOR_UNARY_OPS_JS,
-} from "../../../jit/fusionOps.js";
-import { emitJsFusedChain } from "./jsFusedCodegen.js";
 import {
   tryMatchMultiReduction,
   emitMultiReductionBlock,
@@ -40,158 +34,6 @@ import {
   collectStructFieldReads,
   collectStructArrayElementReads,
 } from "./jitCodegenHoist.js";
-
-// ── Fusion: collect all real-tensor variable names from IR ──────────────
-//
-// When `includeComplex` is true (e1 experimental path), complex tensors
-// are added to `allTensors` alongside reals, and `complexTensors` is
-// populated with the complex subset so the fused emitter can pick the
-// paired-buffer kernel. Complex scalar assignments contribute to
-// `complexScalars`. The default (JS-JIT) path keeps complex tensors out
-// of the fusion set — the JS fused codegen emits real Float64Array loops
-// and has no paired-buffer path.
-
-function collectAllTensorVars(
-  stmts: JitStmt[],
-  paramSet: ReadonlySet<string>,
-  allTensors: Set<string>,
-  paramTensors: Set<string>,
-  complexTensors: Set<string>,
-  complexScalars: Set<string>,
-  includeComplex: boolean
-): void {
-  for (const s of stmts) {
-    if (s.tag === "Assign") {
-      if (s.expr.jitType.kind === "tensor") {
-        const isCplx = s.expr.jitType.isComplex === true;
-        if (!isCplx || includeComplex) {
-          allTensors.add(s.name);
-          if (paramSet.has(s.name)) paramTensors.add(s.name);
-          if (isCplx) complexTensors.add(s.name);
-        }
-      } else if (
-        includeComplex &&
-        s.expr.jitType.kind === "complex_or_number"
-      ) {
-        complexScalars.add(s.name);
-      }
-      collectTensorVarsFromExpr(
-        s.expr,
-        paramSet,
-        allTensors,
-        paramTensors,
-        complexTensors,
-        includeComplex
-      );
-    } else if (s.tag === "If") {
-      collectAllTensorVars(
-        s.thenBody,
-        paramSet,
-        allTensors,
-        paramTensors,
-        complexTensors,
-        complexScalars,
-        includeComplex
-      );
-      for (const eib of s.elseifBlocks)
-        collectAllTensorVars(
-          eib.body,
-          paramSet,
-          allTensors,
-          paramTensors,
-          complexTensors,
-          complexScalars,
-          includeComplex
-        );
-      if (s.elseBody)
-        collectAllTensorVars(
-          s.elseBody,
-          paramSet,
-          allTensors,
-          paramTensors,
-          complexTensors,
-          complexScalars,
-          includeComplex
-        );
-    } else if (s.tag === "For") {
-      collectAllTensorVars(
-        s.body,
-        paramSet,
-        allTensors,
-        paramTensors,
-        complexTensors,
-        complexScalars,
-        includeComplex
-      );
-    } else if (s.tag === "While") {
-      collectAllTensorVars(
-        s.body,
-        paramSet,
-        allTensors,
-        paramTensors,
-        complexTensors,
-        complexScalars,
-        includeComplex
-      );
-    }
-  }
-}
-
-function collectTensorVarsFromExpr(
-  expr: JitExpr,
-  paramSet: ReadonlySet<string>,
-  allTensors: Set<string>,
-  paramTensors: Set<string>,
-  complexTensors: Set<string>,
-  includeComplex: boolean
-): void {
-  if (expr.tag === "Var" && expr.jitType.kind === "tensor") {
-    const isCplx = expr.jitType.isComplex === true;
-    if (!isCplx || includeComplex) {
-      allTensors.add(expr.name);
-      if (paramSet.has(expr.name)) paramTensors.add(expr.name);
-      if (isCplx) complexTensors.add(expr.name);
-    }
-    return;
-  }
-  if (expr.tag === "Binary") {
-    collectTensorVarsFromExpr(
-      expr.left,
-      paramSet,
-      allTensors,
-      paramTensors,
-      complexTensors,
-      includeComplex
-    );
-    collectTensorVarsFromExpr(
-      expr.right,
-      paramSet,
-      allTensors,
-      paramTensors,
-      complexTensors,
-      includeComplex
-    );
-  } else if (expr.tag === "Unary") {
-    collectTensorVarsFromExpr(
-      expr.operand,
-      paramSet,
-      allTensors,
-      paramTensors,
-      complexTensors,
-      includeComplex
-    );
-  } else if (expr.tag === "Call") {
-    for (const a of expr.args)
-      collectTensorVarsFromExpr(
-        a,
-        paramSet,
-        allTensors,
-        paramTensors,
-        complexTensors,
-        includeComplex
-      );
-  }
-}
 
 // ── JS reserved words to mangle ─────────────────────────────────────────
 
@@ -353,20 +195,6 @@ let _hoistedStructFields: Map<string, string> = new Map();
  */
 let _hoistedStructArrayElements: Map<string, string> = new Map();
 
-// ── Fusion state ───────────────────────────────────────────────────────
-// Fusion is always on under --opt e1 (where chains become compiled C
-// kernels) and off otherwise. `_fuse` is derived from `_experimental`
-// at the top of `generateJS`.
-let _fuse = false;
-let _experimental: string | undefined;
-let _par = false;
-let _fusionParamTensors: ReadonlySet<string> = new Set();
-let _fusionAllTensorVars: ReadonlySet<string> = new Set();
-let _fusionOutputTensors: ReadonlySet<string> = new Set();
-let _fusionLocalTensors: ReadonlySet<string> = new Set();
-let _fusionComplexTensors: ReadonlySet<string> = new Set();
-let _fusionComplexScalars: ReadonlySet<string> = new Set();
-
 /**
  * When a multi-reduction scalar assign is emitted as a single-pass
  * prologue block, each reduction Call in the Assign's RHS is pre-
@@ -394,17 +222,12 @@ export function generateJS(
   outputs: string[],
   nargout: number,
   localVars: Set<string>,
-  fileName?: string,
-  experimental?: string,
-  par?: boolean
+  fileName?: string
 ): string {
   _tmpCounter = 0;
   _scratchLocals = [];
   _fileName = fileName;
   _fileEmitted = false;
-  _experimental = experimental;
-  _fuse = experimental === "e1";
-  _par = par ?? false;
   resetMultiReductionState();
   _multiReductionSubst = null;
 
@@ -567,63 +390,6 @@ export function generateJS(
     );
   }
 
-  // Compute fusion tensor sets if --fuse is enabled.
-  if (_fuse) {
-    const paramTensors = new Set<string>();
-    const allTensors = new Set<string>();
-    const complexTensors = new Set<string>();
-    const complexScalars = new Set<string>();
-    const includeComplex = _experimental === "e1";
-    // Tensors from hoist analysis (indexed params/locals) — real only.
-    // Complex tensors aren't hoisted (the hoist pass only covers real
-    // Float64 buffers), so they only enter the fusion set via
-    // collectAllTensorVars below.
-    for (const [name, u] of usage) {
-      if (!u.isReal) continue;
-      allTensors.add(name);
-      if (paramSet.has(name)) paramTensors.add(name);
-    }
-    // Walk the IR to find all tensor-typed variable references
-    // (params and locals that appear in Assign LHS/RHS, Call args, etc.).
-    // collectTensorUsage only covers indexed vars; fusion needs all of them.
-    collectAllTensorVars(
-      body,
-      paramSet,
-      allTensors,
-      paramTensors,
-      complexTensors,
-      complexScalars,
-      includeComplex
-    );
-    // Include complex scalar params too (the walker only picks up
-    // scalars that are assigned inside the body).
-    if (includeComplex) {
-      // TODO: mark complex scalar params — currently the walker catches
-      // them from Var reads, which is sufficient for kernels that just
-      // *use* a complex scalar param without reassigning.
-    }
-    const effectiveOutputSet = new Set(effectiveOutputs);
-    _fusionParamTensors = paramTensors;
-    _fusionAllTensorVars = allTensors;
-    _fusionOutputTensors = new Set(
-      [...allTensors].filter(v => effectiveOutputSet.has(v))
-    );
-    _fusionLocalTensors = new Set(
-      [...allTensors].filter(
-        v => !paramTensors.has(v) && !effectiveOutputSet.has(v)
-      )
-    );
-    _fusionComplexTensors = complexTensors;
-    _fusionComplexScalars = complexScalars;
-  } else {
-    _fusionParamTensors = new Set();
-    _fusionAllTensorVars = new Set();
-    _fusionOutputTensors = new Set();
-    _fusionLocalTensors = new Set();
-    _fusionComplexTensors = new Set();
-    _fusionComplexScalars = new Set();
-  }
-
   // Emit body into a separate buffer so we can prepend scratch-local
   // declarations once allocScratch counts are known.
   const bodyLines: string[] = [];
@@ -643,115 +409,24 @@ export function generateJS(
 // ── Statement emission ──────────────────────────────────────────────────
 
 function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
-  if (!_fuse) {
-    // Fusion off (--opt 1): per-statement emit, but still recognise
-    // multi-reduction scalar assigns and collapse them into a single
-    // JS loop. The kernel-dispatch branch stays off since there's no
-    // C compile here.
-    for (const stmt of stmts) {
-      const mr = tryMatchMultiReduction(stmt);
-      if (mr) {
-        emitMultiReductionBlock(
-          lines,
-          indent,
-          mr,
-          mangle,
-          (expr, subst) => {
-            const prev = _multiReductionSubst;
-            _multiReductionSubst = subst;
-            try {
-              return emitExpr(expr);
-            } finally {
-              _multiReductionSubst = prev;
-            }
-          },
-          _experimental,
-          _par
-        );
-        emitHoistRefresh(lines, mr.stmt.name, indent);
-      } else {
-        emitStmt(lines, stmt, indent);
-      }
-    }
-    return;
-  }
-
-  // Fusion enabled: find fusible chains, emit them as fused loops,
-  // emit non-fused statements via the per-op path.
-  //
-  // Under --opt e1 the fused body is compiled to C, so use the full
-  // unary-op set (exp/sin/cos/... become SIMD-vectorized inside the
-  // kernel). The plain JS-JIT path sticks to the conservative subset
-  // because V8 can't SIMD-vectorize transcendentals, and fusing them
-  // as scalar JS is slower than calling libnumbl_ops per-op.
-  const allowedUnaryOps =
-    _experimental === "e1"
-      ? FUSIBLE_TENSOR_UNARY_OPS
-      : FUSIBLE_TENSOR_UNARY_OPS_JS;
-  const chains = findFusibleChains(
-    stmts,
-    _fusionParamTensors,
-    _fusionAllTensorVars,
-    allowedUnaryOps
-  );
-
-  const coveredByChain = new Map<number, (typeof chains)[0]>();
-  for (const chain of chains) {
-    coveredByChain.set(chain.startIdx, chain);
-  }
-
-  let i = 0;
-  while (i < stmts.length) {
-    const chain = coveredByChain.get(i);
-    if (chain) {
-      emitJsFusedChain(
-        lines,
-        indent,
-        chain,
-        _fusionAllTensorVars,
-        _fusionParamTensors,
-        _fusionOutputTensors,
-        _fusionLocalTensors,
-        _fusionComplexTensors,
-        _fusionComplexScalars,
-        mangle,
-        _experimental,
-        _par
-      );
-      // Refresh hoisted aliases for any dest that has one.
-      for (const assign of chain.assigns) {
-        emitHoistRefresh(lines, assign.destName, indent);
-      }
-      i += chain.length;
+  // Per-statement emit, with multi-reduction scalar assigns
+  // (`acc = f(sum(x), mean(x), max(x), ...)`) collapsed into a
+  // single-pass JS loop instead of N separate reduction helper calls.
+  for (const stmt of stmts) {
+    const mr = tryMatchMultiReduction(stmt);
+    if (mr) {
+      emitMultiReductionBlock(lines, indent, mr, mangle, (expr, subst) => {
+        const prev = _multiReductionSubst;
+        _multiReductionSubst = subst;
+        try {
+          return emitExpr(expr);
+        } finally {
+          _multiReductionSubst = prev;
+        }
+      });
+      emitHoistRefresh(lines, mr.stmt.name, indent);
     } else {
-      // Multi-reduction fusion: `acc = f(sum(x), mean(x), max(x), min(x))`
-      // collapses to a single-pass loop (inline JS, or C kernel under e1)
-      // with one accumulator per reduction, instead of N helper calls.
-      const mr = tryMatchMultiReduction(stmts[i]);
-      if (mr) {
-        emitMultiReductionBlock(
-          lines,
-          indent,
-          mr,
-          mangle,
-          (expr, subst) => {
-            const prev = _multiReductionSubst;
-            _multiReductionSubst = subst;
-            try {
-              return emitExpr(expr);
-            } finally {
-              _multiReductionSubst = prev;
-            }
-          },
-          _experimental,
-          _par
-        );
-        emitHoistRefresh(lines, mr.stmt.name, indent);
-        i++;
-      } else {
-        emitStmt(lines, stmts[i], indent);
-        i++;
-      }
+      emitStmt(lines, stmt, indent);
     }
   }
 }

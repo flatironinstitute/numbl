@@ -222,9 +222,7 @@ export function generateSyntheticFnJS(
     result.outputNames,
     outputCount,
     result.localVars,
-    interp.currentFile,
-    interp.experimental,
-    interp.par
+    interp.currentFile
   );
   const jsBody = assembleJsBody(result, mainBody);
   const fn = instantiateJsFn(interp.rt, inputs, jsBody);

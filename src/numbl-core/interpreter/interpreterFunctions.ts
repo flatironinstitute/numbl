@@ -576,14 +576,6 @@ export function callUserFunction(
   const savedCallerEnv = this.callerEnv;
   this.callerEnv = savedEnv;
   this.env = fnEnv;
-  const savedScopeBody = this._currentScopeBody;
-  const savedScopeExports = this._currentScopeExports;
-  this._currentScopeBody = fn.body;
-  // Outputs (and `varargout` if declared) are the names that escape
-  // the function regardless of textual usage in the body — used by
-  // --opt e2 chain liveness to materialize chain LHSs even when they
-  // happen to be only "syntactically" referenced inside the chain.
-  this._currentScopeExports = new Set(fn.outputs);
   this.rt.pushCallFrame(fn.name);
   this.rt.pushCleanupScope();
 
@@ -654,8 +646,6 @@ export function callUserFunction(
     this.rt.popCallFrame();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
-    this._currentScopeBody = savedScopeBody;
-    this._currentScopeExports = savedScopeExports;
   }
 }
 
@@ -696,10 +686,6 @@ export function callNestedFunction(
 
   const savedEnv = this.env;
   this.env = fnEnv;
-  const savedScopeBody = this._currentScopeBody;
-  const savedScopeExports = this._currentScopeExports;
-  this._currentScopeBody = fn.body;
-  this._currentScopeExports = new Set(fn.outputs);
   this.rt.pushCleanupScope();
 
   try {
@@ -758,8 +744,6 @@ export function callNestedFunction(
       }
     });
     this.env = savedEnv;
-    this._currentScopeBody = savedScopeBody;
-    this._currentScopeExports = savedScopeExports;
   }
 }
 

@@ -35,7 +35,7 @@ import {
 } from "./executors/jsJit/js/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
-import { registerE2Plugin, registerJsJitPlugin } from "./executors/plugins.js";
+import { registerJsJitPlugin } from "./executors/plugins.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -51,8 +51,6 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
-  /** Called each time an e2 C kernel is compiled, with a description and the generated C source. */
-  onCCompile?: (description: string, cCode: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -66,15 +64,6 @@ export interface ExecOptions {
   onInput?: (prompt: string) => string;
   /** Optimization level for interpreter (0 = none, >=1 = JIT scalar functions). */
   optimization?: number;
-  /**
-   * Experimental opt variant selector — e.g. `"e1"` for the prototype
-   * that keeps JS-JIT as the outer and emits on-demand C kernels for
-   * fusible tensor chains. Orthogonal to `optimization`; when set,
-   * `optimization` is still the base level (typically 1).
-   */
-  experimental?: string;
-  /** Parallelize fused loops with OpenMP threads (--par flag). */
-  par?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -362,17 +351,12 @@ export function executeCode(
   }
 
   interpreter.optimization = options.optimization ?? 1;
-  interpreter.experimental = options.experimental;
-  interpreter.par = options.par ?? false;
   interpreter.log = options.log;
 
   // Register mode-specific executor plugins. The interpreter plugin is
   // already registered by the Interpreter constructor.
   if (interpreter.optimization >= 1) {
     registerJsJitPlugin(interpreter.registry);
-  }
-  if (interpreter.experimental === "e2") {
-    registerE2Plugin(interpreter.registry);
   }
 
   // Collect JIT compilations for generatedJS output and profiling
@@ -382,15 +366,6 @@ export function executeCode(
       `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${jsCode}`
     );
     options.onJitCompile?.(description, jsCode);
-  };
-
-  // Collect e2 C-kernel compilations for generatedC output (--dump-c)
-  const cSections: string[] = [];
-  interpreter.onCCompile = (description: string, cCode: string) => {
-    cSections.push(
-      `/* ${"=".repeat(60)}\n * ${description}\n * ${"=".repeat(60)} */\n\n${cCode}`
-    );
-    options.onCCompile?.(description, cCode);
   };
 
   // Wire up JIT builtin profiling hooks when profiling is enabled
@@ -803,10 +778,7 @@ export function executeCode(
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
           : "// No JS generated",
-      generatedC:
-        cSections.length > 0
-          ? `/* e2 C kernels compiled during run */\n\n${cSections.join("\n\n")}`
-          : "/* No C generated */",
+      generatedC: "/* No C generated */",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -845,10 +817,7 @@ export function executeCode(
       jitSections.length > 0
         ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
         : "// No JS generated";
-    const generatedC =
-      cSections.length > 0
-        ? `/* e2 C kernels compiled during run */\n\n${cSections.join("\n\n")}`
-        : "/* No C generated */";
+    const generatedC = "/* No C generated */";
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {

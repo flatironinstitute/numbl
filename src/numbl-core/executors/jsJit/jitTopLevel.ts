@@ -56,7 +56,8 @@ export type TopLevelRunResult = SyntheticFnRunResult;
 
 export function classifyTopLevel(
   interp: Interpreter,
-  stmts: readonly Stmt[]
+  stmts: readonly Stmt[],
+  prevInputTypes: readonly JitType[] | undefined
 ): TopLevelClassification | null {
   if (stmts.length === 0) return null;
 
@@ -80,17 +81,15 @@ export function classifyTopLevel(
   // liveness analog, so no liveness filter here.
   const outputs = [...new Set(analysis.outputs)];
 
-  // Progressive type widening: rarely matters in practice (top-level
-  // body normally runs once) but keeps semantics consistent if the
-  // same interp ever re-runs the same script.
-  const loc = `$top:${interp.currentFile}`;
-  widenAgainst(inputTypes, interp.loopLastInputTypes.get(loc));
-  interp.loopLastInputTypes.set(loc, inputTypes.slice());
+  // Progressive type widening against the previously-recorded
+  // signature for this stmt position. The dispatcher records the
+  // result in the lowering cache after this returns.
+  widenAgainst(inputTypes, prevInputTypes);
 
   const typeKey = inputs
     .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
     .join(",");
-  const cacheKey = `${loc}|${typeKey}`;
+  const cacheKey = `$top:${interp.currentFile}|${typeKey}`;
 
   return {
     stmts,

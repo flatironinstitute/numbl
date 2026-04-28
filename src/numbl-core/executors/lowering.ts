@@ -140,11 +140,22 @@ type Bailed = typeof BAILED;
 
 /** Per-owner lowering cache. Owner is either the head Stmt
  *  (stmt-shape lowerings) or the FunctionDef (call-shape lowerings).
- *  WeakMap-scoped so entries are reclaimed when the AST is dropped. */
+ *  WeakMap-scoped so entries are reclaimed when the AST is dropped.
+ *
+ *  Also tracks per-owner type-widening state: the most recent input
+ *  type signature seen for a given (owner, slot). Classify phases
+ *  consult this so a callee invoked with shifting input types
+ *  converges to a single specialization rather than thrashing the
+ *  cache. The slot string lets one owner host multiple widening
+ *  trackers (e.g. one per nargout for call-shape). */
 export class LoweringCache {
   private readonly slots = new WeakMap<
     object,
     Map<string, LoweredStmt | Bailed>
+  >();
+  private readonly widening = new WeakMap<
+    object,
+    Map<string, import("../jit/jitTypes.js").JitType[]>
   >();
 
   get(owner: object, cacheKey: string): LoweredStmt | Bailed | undefined {
@@ -171,6 +182,29 @@ export class LoweringCache {
 
   isBailed(value: unknown): value is Bailed {
     return value === BAILED;
+  }
+
+  /** Most recent input-type signature recorded for (owner, slot), or
+   *  undefined when nothing has been recorded yet. */
+  getLastInputTypes(
+    owner: object,
+    slot: string
+  ): import("../jit/jitTypes.js").JitType[] | undefined {
+    return this.widening.get(owner)?.get(slot);
+  }
+
+  /** Record the latest unified input-type signature for (owner, slot). */
+  setLastInputTypes(
+    owner: object,
+    slot: string,
+    types: readonly import("../jit/jitTypes.js").JitType[]
+  ): void {
+    let perOwner = this.widening.get(owner);
+    if (!perOwner) {
+      perOwner = new Map();
+      this.widening.set(owner, perOwner);
+    }
+    perOwner.set(slot, [...types]);
   }
 }
 
@@ -208,8 +242,10 @@ function tryBuildTopLevel(
   head: Stmt,
   cache: LoweringCache
 ): TopLevelLoweredStmt | null {
-  const classification = classifyTopLevel(interp, siblings);
+  const prev = cache.getLastInputTypes(head, "");
+  const classification = classifyTopLevel(interp, siblings, prev);
   if (!classification) return null;
+  cache.setLastInputTypes(head, "", classification.inputTypes);
 
   const hit = cache.get(head, classification.cacheKey);
   if (hit !== undefined) {
@@ -239,8 +275,10 @@ function tryBuildLoop(
   i: number,
   cache: LoweringCache
 ): LoopLoweredStmt | null {
-  const classification = classifyLoop(interp, head, siblings, i);
+  const prev = cache.getLastInputTypes(head, "");
+  const classification = classifyLoop(interp, head, siblings, i, prev);
   if (!classification) return null;
+  cache.setLastInputTypes(head, "", classification.inputTypes);
 
   const hit = cache.get(head, classification.cacheKey);
   if (hit !== undefined) {
@@ -331,8 +369,11 @@ export function tryLowerCall(
   interp: Interpreter,
   cache: LoweringCache
 ): CallLoweredStmt | null {
-  const classification = classifyCall(fn, args, nargout);
+  const slot = String(nargout);
+  const prev = cache.getLastInputTypes(fn, slot);
+  const classification = classifyCall(fn, args, nargout, prev);
   if (!classification) return null;
+  cache.setLastInputTypes(fn, slot, classification.argTypes);
 
   const hit = cache.get(fn, classification.cacheKey);
   if (hit !== undefined) {

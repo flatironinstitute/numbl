@@ -318,19 +318,11 @@ export function execStmts(
   // per stmt would allocate a Map + Set per dispatch.
   const ctx = makeRootContext(this, this.registry);
   for (let i = 0; i < stmts.length; ) {
-    // Stash sibling-tail info on the interpreter for the duration of the
-    // child dispatch so that JIT loop analysis can see what's read
-    // after the loop. Used by the JS-JIT loop executor to filter the
-    // loop's output set so that loop-internal temporaries don't escape.
-    this._postSiblings = stmts;
-    this._postSiblingsIdx = i + 1;
     ctx.resetForNextDispatch();
     const result = this.registry.dispatch(stmts, i, ctx);
     i += result.consumed;
     if (result.signal) return result.signal;
   }
-  this._postSiblings = null;
-  this._postSiblingsIdx = 0;
   return null;
 }
 

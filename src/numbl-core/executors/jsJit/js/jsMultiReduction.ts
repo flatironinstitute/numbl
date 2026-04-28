@@ -6,12 +6,11 @@
  *   acc = <expr tree with >=2 reductions over a single tensor Var>
  *
  * On match, the JS codegen emits a block that runs a single-pass
- * reduction loop (either an inline JS loop, or a compiled C kernel
- * under --opt e1), stashes each reduction result in a local, and then
- * emits the Assign's RHS with each reduction Call substituted by the
- * local that holds its value. The RHS-substitution contract lives in
- * `jitCodegen._multiReductionSubst`, which this module installs and
- * clears around the `emitExpr` call the caller provides.
+ * inline JS reduction loop, stashes each reduction result in a local,
+ * and then emits the Assign's RHS with each reduction Call substituted
+ * by the local that holds its value. The RHS-substitution contract
+ * lives in `jitCodegen._multiReductionSubst`, which this module
+ * installs and clears around the `emitExpr` call the caller provides.
  *
  * Limited to:
  *   - sum / prod / max / min / mean (short-circuit any/all excluded)
@@ -26,10 +25,8 @@
  */
 
 import type { JitExpr, JitStmt } from "../../../jit/jitTypes.js";
-import {
-  emitMultiReductionKernel,
-  type MultiReduceOp,
-} from "../../../jit/multiReductionKernel.js";
+
+type MultiReduceOp = "sum" | "prod" | "max" | "min" | "mean";
 
 /** Fusable reduction names. `any` / `all` stay on the default path —
  *  their short-circuit `break` doesn't fit the multi-accumulator loop. */
@@ -161,9 +158,7 @@ export function emitMultiReductionBlock(
   indent: string,
   match: MultiReductionMatch,
   mangleName: (n: string) => string,
-  emitExprWithSubst: (expr: JitExpr, subst: Map<JitExpr, string>) => string,
-  experimental: string | undefined,
-  par: boolean
+  emitExprWithSubst: (expr: JitExpr, subst: Map<JitExpr, string>) => string
 ): void {
   const inner = indent + "  ";
   const tensorName = match.tensorName;
@@ -174,7 +169,6 @@ export function emitMultiReductionBlock(
   const id = ++_blockCounter;
   const dataAlias = `__mr${id}_data`;
   const lenAlias = `__mr${id}_n`;
-  const outBuf = `__mr${id}_out`;
   const anyFlag = `__mr${id}_any`;
 
   const hasSum = match.ops.includes("sum");
@@ -209,62 +203,14 @@ export function emitMultiReductionBlock(
   if (hasAnyNonNan) declared.push(`${anyFlag} = 0`);
   lines.push(`${inner}let ${declared.join(", ")};`);
 
-  const kernelInfo =
-    experimental === "e1" ? emitMultiReductionKernel(match.ops, par) : null;
-
-  if (kernelInfo) {
-    const kernelKey = JSON.stringify(kernelInfo.kernelName);
-    const slotIndex = (name: string) => {
-      const idx = kernelInfo.slotNames.indexOf(name);
-      if (idx < 0)
-        throw new Error(
-          `emitMultiReductionBlock: slot ${name} missing from kernel ${kernelInfo.kernelName}`
-        );
-      return idx;
-    };
-    lines.push(
-      `${inner}const ${outBuf} = new Float64Array(${kernelInfo.slotNames.length});`
-    );
-    lines.push(
-      `${inner}$h.$kernels[${kernelKey}] ??= $h.compileKernel(${JSON.stringify(kernelInfo.cSource)}, ${JSON.stringify(kernelInfo.koffiSig)});`
-    );
-    lines.push(`${inner}if (${lenAlias} >= ${E1_SIZE_THRESHOLD}) {`);
-    lines.push(
-      `${inner}  $h.$kernels[${kernelKey}](${lenAlias}, ${dataAlias}, ${outBuf});`
-    );
-    if (needSumAcc)
-      lines.push(`${inner}  ${locals.sum} = ${outBuf}[${slotIndex("sum")}];`);
-    if (hasProd)
-      lines.push(`${inner}  ${locals.prod} = ${outBuf}[${slotIndex("prod")}];`);
-    if (hasMax)
-      lines.push(`${inner}  ${locals.max} = ${outBuf}[${slotIndex("max")}];`);
-    if (hasMin)
-      lines.push(`${inner}  ${locals.min} = ${outBuf}[${slotIndex("min")}];`);
-    if (hasAnyNonNan)
-      lines.push(
-        `${inner}  ${anyFlag} = ${outBuf}[${slotIndex("any_non_nan")}];`
-      );
-    lines.push(`${inner}} else {`);
-    emitJsFallbackLoop(
-      lines,
-      `${inner}  `,
-      dataAlias,
-      lenAlias,
-      anyFlag,
-      locals,
-      { needSumAcc, hasProd, hasMax, hasMin, hasAnyNonNan }
-    );
-    lines.push(`${inner}}`);
-  } else {
-    // Non-e1: plain inline JS fused loop.
-    emitJsFallbackLoop(lines, inner, dataAlias, lenAlias, anyFlag, locals, {
-      needSumAcc,
-      hasProd,
-      hasMax,
-      hasMin,
-      hasAnyNonNan,
-    });
-  }
+  // Inline JS single-pass reduction loop.
+  emitJsFallbackLoop(lines, inner, dataAlias, lenAlias, anyFlag, locals, {
+    needSumAcc,
+    hasProd,
+    hasMax,
+    hasMin,
+    hasAnyNonNan,
+  });
 
   // Post-loop: NaN fixup for max/min when every element was NaN.
   if (hasMax) {
@@ -291,11 +237,6 @@ export function emitMultiReductionBlock(
   lines.push(`${inner}${lhs} = ${rhs};`);
   lines.push(`${indent}}`);
 }
-
-/** Minimum `n` at which we prefer the C kernel over the inline JS
- *  fallback. Same threshold the chain-kernel emitter uses — kept local
- *  to avoid cross-module coupling. */
-const E1_SIZE_THRESHOLD = 40;
 
 /** Monotonic counter so two multi-reduction blocks in the same JS
  *  output have distinct local-name prefixes. Reset between compiles

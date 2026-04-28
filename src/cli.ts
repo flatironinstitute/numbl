@@ -37,13 +37,6 @@ import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
 
-// Side-effect import: installs the e1 kernel pipeline (--opt e1). Must be
-// Node-only — this file imports child_process/fs/etc. that don't belong in
-// the web build.
-import "./numbl-core/executors/jsJit/e1/install.js";
-// Side-effect import: installs the e2 per-assign C-JIT path (--opt e2).
-import "./numbl-core/executors/e2/install.js";
-
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
@@ -205,11 +198,7 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
-async function runTests(
-  dir: string,
-  optimization?: number,
-  experimental?: string
-) {
+async function runTests(dir: string, optimization?: number) {
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
@@ -236,7 +225,6 @@ async function runTests(
         {
           displayResults: true,
           optimization: optimization ?? 1,
-          experimental,
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -314,7 +302,6 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write e2 per-assign C kernels to file (only with --opt e2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -324,42 +311,15 @@ Options (for run and eval):
   --opt <level>      Optimization level (default: 1)
                        0 — interpreter (no JIT)
                        1 — JS-JIT: type-specialize hot functions/loops to JS
-                       e1 — experimental: JS-JIT outer with on-demand C
-                           kernels emitted for fusible tensor chains and
-                           pure-scalar user functions. The generated JS
-                           contains the C source inline and dispatches to
-                           the compiled kernel at runtime when N is large
-                           enough to amortise koffi overhead. Falls back
-                           to the plain JS fused loop at small N or if
-                           compilation fails.
-                       e2 — experimental: pure interpreter (no JS-JIT) +
-                           on-demand C kernels emitted per tensor-assign
-                           statement. Compiles a fresh C function for
-                           each fusible elemwise expression the
-                           interpreter encounters, then dispatches via
-                           koffi. Compile failures are hard errors;
-                           non-classifiable expressions fall through to
-                           the plain interpreter silently. Use --dump-c
-                           to inspect the generated kernels.
-  --par              Parallelize fused loops with OpenMP threads (--opt e1 / e2)
 
 Environment variables:
-  NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
-  NUMBL_CC                C compiler for --opt e1 / e2 kernels (default: cc)
-  NUMBL_CFLAGS            Extra flags appended to the C kernel compile command
-  NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
-                          reproducibility or debugging portability issues)
-  NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in
-                          (default: 100000)
-  NUMBL_E2_MIN_ELEMS      Minimum tensor element count before --opt e2
-                          will compile a per-assign kernel (default: 1000)`);
+  NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
 }
 
 // ── Option parsing helpers ───────────────────────────────────────────────────
 
 interface ParsedOptions {
   dumpJs: string | undefined;
-  dumpC: string | undefined;
   dumpAst: boolean;
   verbose: boolean;
   stream: boolean;
@@ -369,15 +329,11 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   optimization: number;
-  /** Experimental variant selected via `--opt e1`, `--opt e2`, etc. */
-  experimental: string | undefined;
-  par: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
   const opts: ParsedOptions = {
     dumpJs: undefined,
-    dumpC: undefined,
     dumpAst: false,
     verbose: false,
     stream: false,
@@ -387,8 +343,6 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: 1,
-    experimental: undefined,
-    par: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -415,14 +369,6 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.dumpJs = resolve(process.cwd(), args[i]);
-        break;
-      case "--dump-c":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --dump-c requires an output filename");
-          process.exit(1);
-        }
-        opts.dumpC = resolve(process.cwd(), args[i]);
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -471,30 +417,17 @@ function parseOptions(args: string[]): ParsedOptions {
           console.error("Error: --opt requires a level number");
           process.exit(1);
         }
-        // Experimental variants: "--opt e1", "--opt e2", ...
-        // Map to a base optimization level (JS-JIT = 1) plus an
-        // `experimental` tag that the JIT consults for variant behaviour.
-        // e2 is a pure-interpreter outer (no JS-JIT) — set base level
-        // to 0 so tryJitFor/tryJitWhile/tryJitTopLevel never fire.
-        if (/^e\d+$/.test(args[i])) {
-          opts.experimental = args[i];
-          opts.optimization = args[i] === "e2" ? 0 : 1;
-          break;
-        }
         opts.optimization = parseInt(args[i], 10);
         if (isNaN(opts.optimization)) {
-          console.error("Error: --opt requires a valid number");
+          console.error("Error: --opt requires a valid number (0 or 1)");
           process.exit(1);
         }
-        if (opts.optimization === 2) {
+        if (opts.optimization !== 0 && opts.optimization !== 1) {
           console.error(
-            "Error: --opt 2 (C-JIT whole-function) has been removed. Use --opt e1 instead."
+            `Error: --opt level must be 0 or 1 (got ${opts.optimization}).`
           );
           process.exit(1);
         }
-        break;
-      case "--par":
-        opts.par = true;
         break;
       default:
         if (args[i].startsWith("-")) {
@@ -663,19 +596,14 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js / --dump-c: compilations are collected in
-  // result.generatedJS / result.generatedC by executeCode and written by
-  // finalizeDumpFile at the end. Just clear any previous dump file here.
+  // Set up --dump-js: compilations are collected in result.generatedJS
+  // by executeCode and written by finalizeDumpFile at the end. Just
+  // clear any previous dump file here.
   const onJitCompile:
     | ((description: string, jsCode: string) => void)
     | undefined = undefined;
-  const onCCompile: ((description: string, cCode: string) => void) | undefined =
-    undefined;
   if (opts.dumpJs) {
     writeFileSync(opts.dumpJs, "");
-  }
-  if (opts.dumpC) {
-    writeFileSync(opts.dumpC, "");
   }
 
   try {
@@ -696,15 +624,12 @@ async function executeWithOptions(
               streamLine({ type: "drawnow", plotInstructions });
             },
             onJitCompile,
-            onCCompile,
 
             fileIO,
             system,
             onInput,
 
             optimization: opts.optimization,
-            experimental: opts.experimental,
-            par: opts.par,
           },
           workspaceFiles,
           mainFileName,
@@ -720,9 +645,6 @@ async function executeWithOptions(
         writeProfileIfNeeded(result);
         if (opts.dumpJs) {
           finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-        }
-        if (opts.dumpC) {
-          finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
         }
         streamLine({
           type: "done",
@@ -758,14 +680,11 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
-          onCCompile,
 
           fileIO,
           system,
           onInput,
           optimization: opts.optimization,
-          experimental: opts.experimental,
-          par: opts.par,
         },
         workspaceFiles,
         mainFileName,
@@ -775,9 +694,6 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     } else {
@@ -799,14 +715,11 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
-          onCCompile,
 
           fileIO,
           system,
           onInput,
           optimization: opts.optimization,
-          experimental: opts.experimental,
-          par: opts.par,
         },
         workspaceFiles,
         mainFileName,
@@ -816,9 +729,6 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     }
@@ -837,14 +747,6 @@ async function executeWithOptions(
         opts.dumpJs,
         mainFileName,
         errWithInfo.generatedJS ?? "// (main script JS not available)"
-      );
-    }
-    if (opts.dumpC) {
-      const errWithInfo = error as Error & { generatedC?: string };
-      finalizeDumpFile(
-        opts.dumpC,
-        mainFileName,
-        errWithInfo.generatedC ?? "/* (main script C not available) */"
       );
     }
 
@@ -1220,7 +1122,7 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.optimization, testOpts.experimental);
+      await runTests(dir, testOpts.optimization);
       break;
     }
     case "build-addon":

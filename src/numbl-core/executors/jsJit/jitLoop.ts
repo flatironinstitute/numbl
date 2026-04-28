@@ -66,7 +66,8 @@ export function classifyLoop(
   interp: Interpreter,
   stmt: Stmt & { type: "For" | "While" },
   postSiblings: readonly Stmt[],
-  postIdx: number
+  postIdx: number,
+  prevInputTypes: readonly JitType[] | undefined
 ): LoopClassification | null {
   const kind: LoopKind = stmt.type === "For" ? "for" : "while";
   const analysis =
@@ -99,13 +100,13 @@ export function classifyLoop(
   outputs = outputs.filter(o => liveOut.has(o));
 
   // Progressive type widening: matters when called from an
-  // interpreted outer loop where input types can shift.
+  // interpreted outer loop where input types can shift. The
+  // dispatcher records the unified result in the lowering cache.
+  widenAgainst(inputTypes, prevInputTypes);
+
   const loc = stmt.span
     ? `${stmt.span.file}:${stmt.span.start}`
     : `loop:${kind}`;
-  widenAgainst(inputTypes, interp.loopLastInputTypes.get(loc));
-  interp.loopLastInputTypes.set(loc, inputTypes.slice());
-
   const typeKey = inputs
     .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
     .join(",");

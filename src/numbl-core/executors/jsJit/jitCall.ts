@@ -8,9 +8,7 @@
  *
  *   2. `lowerCall`     — IR lowering.
  *
- *   3. `generateCallJS` — JS codegen + `new Function`. Tries the e1
- *      whole-fn scalar kernel under `--opt e1` first, falls back to
- *      the regular JS body.
+ *   3. `generateCallJS` — JS codegen + `new Function`.
  *
  *   4. `runCallCompiled` — push call frame + cleanup scope, invoke
  *      compiled fn, pop frame. Translates JitBailToInterpreter into
@@ -26,22 +24,14 @@ import {
 } from "../../jit/jitTypes.js";
 import { lowerFunction, type LoweringResult } from "../../jit/jitLower.js";
 import { generateJS } from "./js/jitCodegen.js";
-import { jitHelpers, JitBailToInterpreter } from "./js/jitHelpers.js";
+import { JitBailToInterpreter } from "./js/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
-import { tryEmitScalarFnKernel } from "./e1/scalarFnKernel.js";
 import {
   assembleJsBody,
   instantiateJsFn,
   pruneArgType,
   widenAgainst,
 } from "./shared.js";
-
-/** Augmented FunctionDef carrying the per-FunctionDef type-widening
- *  state. The registry's lowering cache subsumes the old per-fn
- *  `_jitCache`. */
-interface FunctionDefWithCache extends FunctionDef {
-  _lastJitArgTypes?: Map<number, JitType[]>;
-}
 
 /** Cheap pre-lowering data. */
 export interface CallClassification {
@@ -66,7 +56,8 @@ export interface CallCompiled {
 export function classifyCall(
   fn: FunctionDef,
   args: unknown[],
-  nargout: number
+  nargout: number,
+  prevArgTypes: readonly JitType[] | undefined
 ): CallClassification | null {
   // `~` params don't survive JS codegen (lowerFunction emits them as
   // `v_~`, not a valid identifier).
@@ -81,15 +72,11 @@ export function classifyCall(
     argTypes.push(pruneArgType(t));
   }
 
-  // Progressive type widening: unify with previously seen types so a
-  // function called from an interpreted loop with shifting types
-  // converges to a single specialization.
-  const fnWithCache = fn as FunctionDefWithCache;
-  if (!fnWithCache._lastJitArgTypes) {
-    fnWithCache._lastJitArgTypes = new Map();
-  }
-  widenAgainst(argTypes, fnWithCache._lastJitArgTypes.get(nargout));
-  fnWithCache._lastJitArgTypes.set(nargout, argTypes.slice());
+  // Progressive type widening so a function called from an
+  // interpreted loop with shifting types converges to a single
+  // specialization. The dispatcher records the unified result in the
+  // lowering cache.
+  widenAgainst(argTypes, prevArgTypes);
 
   const cacheKey = computeJitCacheKey(nargout, argTypes);
 
@@ -113,7 +100,19 @@ export function generateCallJS(
   const { classification, result } = lowered;
   const { fn, nargout, argTypes } = classification;
 
-  // Description / source comments shared by both codegen paths.
+  const mainBody = generateJS(
+    result.body,
+    fn.params,
+    result.outputNames,
+    nargout,
+    result.localVars,
+    interp.currentFile
+  );
+  const jsBody = assembleJsBody(result, mainBody);
+
+  const compiledFn = instantiateJsFn(interp.rt, fn.params, jsBody);
+  if (!compiledFn) return null;
+
   const paramComments = fn.params
     .map((p, i) => `${p}: ${jitTypeKey(argTypes[i])}`)
     .join(", ");
@@ -123,74 +122,13 @@ export function generateCallJS(
         `${o}: ${result.outputType ? jitTypeKey(result.outputType) : "unknown"}`
     )
     .join(", ");
-  const typeDesc = argTypes.map(jitTypeKey).join(", ");
-  const line = interp.rt.$line ?? 0;
-
-  // ── e1 scalar whole-function kernel path ─────────────────────────────
-  // Under --opt e1, if the entire function is pure-scalar, emit a JS
-  // wrapper that compiles the body to C on first call and dispatches
-  // through `$h.compileKernel`.
-  if (interp.experimental === "e1") {
-    const scalarKernel = tryEmitScalarFnKernel(
-      interp,
-      fn,
-      result.body,
-      result.outputNames,
-      result.localVars,
-      result.outputType,
-      result.outputTypes,
-      [...argTypes],
-      nargout,
-      result.generatedIRBodies
-    );
-    if (scalarKernel) {
-      try {
-        const factory = new Function(
-          "$h",
-          "$rt",
-          `${scalarKernel.jsSource}\nreturn ${fn.name};`
-        );
-        const helpers = interp.rt.jitHelpers ?? jitHelpers;
-        const wrapped = factory(helpers, interp.rt) as (
-          ...a: unknown[]
-        ) => unknown;
-        const compiled = (...callArgs: unknown[]) => wrapped(...callArgs);
-        const source =
-          `// JIT (e1 scalar kernel): ${fn.name}(${paramComments}) -> (${outputComments})\n` +
-          `// from: ${interp.currentFile}\n` +
-          scalarKernel.jsSource;
-        interp.onJitCompile?.(
-          `${fn.name}@${line}(${typeDesc}) -> e1-scalar-kernel`,
-          source
-        );
-        return { fn: compiled, source };
-      } catch {
-        // Fall through to the regular JS-JIT path.
-      }
-    }
-  }
-
-  // Regular JS-JIT path.
-  const mainBody = generateJS(
-    result.body,
-    fn.params,
-    result.outputNames,
-    nargout,
-    result.localVars,
-    interp.currentFile,
-    interp.experimental,
-    interp.par
-  );
-  const jsBody = assembleJsBody(result, mainBody);
-
-  const compiledFn = instantiateJsFn(interp.rt, fn.params, jsBody);
-  if (!compiledFn) return null;
-
   const fnComment = [
     `// JIT: ${fn.name}(${paramComments}) -> (${outputComments})`,
     `// from: ${interp.currentFile}`,
   ].join("\n");
   const source = `${fnComment}\nfunction ${fn.name}(${fn.params.join(", ")}) {\n${jsBody}\n}`;
+  const typeDesc = argTypes.map(jitTypeKey).join(", ");
+  const line = interp.rt.$line ?? 0;
   interp.onJitCompile?.(
     `${fn.name}@${line}(${typeDesc}) -> nargout=${nargout}`,
     source

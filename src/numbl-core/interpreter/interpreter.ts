@@ -76,39 +76,6 @@ export class Interpreter {
   /** @internal Guard against infinite recursion in compileSpecialized */
   compileInProgress = new Set<string>();
 
-  /** @internal Per-instance cache for JIT-compiled loops (avoids cross-execution collisions). */
-  loopJitCache = new Map<
-    string,
-    { fn: (...args: unknown[]) => unknown; source: string } | null
-  >();
-
-  /** @internal Progressive type widening for loop JIT: location -> last unified input types. */
-  loopLastInputTypes = new Map<
-    string,
-    import("../jit/jitTypes.js").JitType[]
-  >();
-
-  /** @internal Sibling stmts of the currently-executing stmt (set by execStmts). */
-  _postSiblings: import("../parser/types.js").Stmt[] | null = null;
-  /** @internal Index in _postSiblings of the next stmt after the current one. */
-  _postSiblingsIdx: number = 0;
-
-  /** @internal The stmt list of the innermost enclosing function body
-   *  (or top-level script body). Used by `--opt e2` chain liveness
-   *  analysis to decide whether a chain LHS is actually referenced
-   *  outside the chain — if not, the LHS becomes a per-element stack-
-   *  local rather than a materialized output buffer. Pushed on call
-   *  frame entry, popped on exit. */
-  _currentScopeBody: import("../parser/types.js").Stmt[] | null = null;
-
-  /** @internal Names that "escape" the current scope regardless of
-   *  textual usage. For functions: the declared output names (plus
-   *  `varargout`). For top-level scripts: `null`, meaning every name
-   *  escapes (the surrounding caller can read all script-level vars
-   *  via `result.variableValues`). Pushed/popped alongside
-   *  `_currentScopeBody`. */
-  _currentScopeExports: Set<string> | null = null;
-
   /**
    * Optimization level:
    *   0 — pure AST interpreter, no JIT.
@@ -116,22 +83,8 @@ export class Interpreter {
    */
   optimization: number = 1;
 
-  /**
-   * Experimental opt variant selector — e.g. `"e1"` for the mode that
-   * keeps JS-JIT as the outer and emits on-demand C kernels for fusible
-   * tensor chains and pure-scalar user functions. Undefined for the
-   * standard `--opt <n>` path.
-   */
-  experimental?: string;
-
-  /** Parallelize fused loops with OpenMP threads (--par flag). */
-  par: boolean = false;
-
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
-
-  /** Callback for C-kernel compilation logging (--opt e2 / --dump-c). */
-  onCCompile?: (description: string, cCode: string) => void;
 
   /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
@@ -171,13 +124,7 @@ export class Interpreter {
 
   /** Clear all JIT and function resolution caches. Called after addpath/rmpath. */
   clearAllCaches(): void {
-    for (const [, fd] of this.functionDefCache) {
-      fd._jitCache?.clear();
-      fd._lastJitArgTypes?.clear();
-    }
     this.functionDefCache.clear();
-    this.loopJitCache.clear();
-    this.loopLastInputTypes.clear();
     this.compileInProgress.clear();
     this.ctx.registry.fileContexts.clear();
     this.rt.classMethodCache.clear();
@@ -281,27 +228,13 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      const savedScope = this._currentScopeBody;
-      const savedExports = this._currentScopeExports;
-      this._currentScopeBody = nonFuncStmts;
-      this._currentScopeExports = null; // script: every name escapes
-      try {
-        const ctx = makeRootContext(this, this.registry, "top-level");
-        for (let i = 0; i < nonFuncStmts.length; ) {
-          // Set sibling-tail context so loop JIT can compute live-out vars.
-          this._postSiblings = nonFuncStmts;
-          this._postSiblingsIdx = i + 1;
-          ctx.resetForNextDispatch();
-          const result = this.registry.dispatch(nonFuncStmts, i, ctx);
-          i += result.consumed;
-          if (result.signal) break;
-        }
-      } finally {
-        this._currentScopeBody = savedScope;
-        this._currentScopeExports = savedExports;
+      const ctx = makeRootContext(this, this.registry, "top-level");
+      for (let i = 0; i < nonFuncStmts.length; ) {
+        ctx.resetForNextDispatch();
+        const result = this.registry.dispatch(nonFuncStmts, i, ctx);
+        i += result.consumed;
+        if (result.signal) break;
       }
-      this._postSiblings = null;
-      this._postSiblingsIdx = 0;
     }
   }
 

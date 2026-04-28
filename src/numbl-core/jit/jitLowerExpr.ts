@@ -27,7 +27,6 @@ import {
   unaryResultType,
 } from "./jitLowerTypes.js";
 import { generateJS } from "../executors/jsJit/js/jitCodegen.js";
-import { tryEmitScalarFnKernel } from "../executors/jsJit/e1/scalarFnKernel.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/index.js";
 import { isRuntimeFunction } from "../runtime/types.js";
 import type { RuntimeValue } from "../runtime/types.js";
@@ -1102,77 +1101,29 @@ function lowerUserFuncCall(
 
     const returnType = calleeResult.outputType ?? { kind: "number" as const };
 
-    // Under --opt e1, try the whole-function scalar C kernel first.
-    // When the callee is pure-scalar, we emit a JS wrapper that shells
-    // out to `$h.compileKernel` with the C source inlined — visible in
-    // --dump-js and compiled on first call.
-    let wrappedJS: string | null = null;
-    if (interp.experimental === "e1") {
-      const scalarKernel = tryEmitScalarFnKernel(
-        interp,
-        calleeFn,
-        calleeResult.body,
-        calleeResult.outputNames,
-        calleeResult.localVars,
-        calleeResult.outputType,
-        calleeResult.outputTypes,
-        argJitTypes,
-        calleeNargout,
-        ctx.generatedIRBodies
-      );
-      if (scalarKernel) {
-        const paramComments = calleeFn.params
-          .map((p, i) => `${p}: ${jitTypeKey(argJitTypes[i])}`)
-          .join(", ");
-        const outputComments = calleeResult.outputNames
-          .map(
-            o =>
-              `${o}: ${jitTypeKey(calleeResult.outputType ?? { kind: "number" })}`
-          )
-          .join(", ");
-        const comment = [
-          `// JIT (e1 scalar kernel): ${calleeFn.name}(${paramComments}) -> (${outputComments})`,
-          `// from: ${interp.currentFile}`,
-        ].join("\n");
-        // scalarKernel.jsSource defines a function named after the
-        // user function; we need the JIT's internal `jitName`. Re-emit
-        // with the jitName by string-replacing the signature line.
-        const renamed = scalarKernel.jsSource.replace(
-          `function ${calleeFn.name}(`,
-          `function ${jitName}(`
-        );
-        wrappedJS = `${comment}\n${renamed}`;
-      }
-    }
-
-    // Generate JS for the callee and wrap in a named function (fallback
-    // path when the e1 scalar-kernel attempt didn't fire).
-    if (!wrappedJS) {
-      const calleeJS = generateJS(
-        calleeResult.body,
-        calleeFn.params,
-        calleeResult.outputNames,
-        calleeNargout,
-        calleeResult.localVars,
-        interp.currentFile,
-        interp.experimental,
-        interp.par
-      );
-      const paramComments = calleeFn.params
-        .map((p, i) => `${p}: ${jitTypeKey(argJitTypes[i])}`)
-        .join(", ");
-      const outputComments = calleeResult.outputNames
-        .map(
-          o =>
-            `${o}: ${jitTypeKey(calleeResult.outputType ?? { kind: "number" })}`
-        )
-        .join(", ");
-      const comment = [
-        `// JIT: ${calleeFn.name}(${paramComments}) -> (${outputComments})`,
-        `// from: ${interp.currentFile}`,
-      ].join("\n");
-      wrappedJS = `${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
-    }
+    // Generate JS for the callee and wrap in a named function.
+    const calleeJS = generateJS(
+      calleeResult.body,
+      calleeFn.params,
+      calleeResult.outputNames,
+      calleeNargout,
+      calleeResult.localVars,
+      interp.currentFile
+    );
+    const paramComments = calleeFn.params
+      .map((p, i) => `${p}: ${jitTypeKey(argJitTypes[i])}`)
+      .join(", ");
+    const outputComments = calleeResult.outputNames
+      .map(
+        o =>
+          `${o}: ${jitTypeKey(calleeResult.outputType ?? { kind: "number" })}`
+      )
+      .join(", ");
+    const comment = [
+      `// JIT: ${calleeFn.name}(${paramComments}) -> (${outputComments})`,
+      `// from: ${interp.currentFile}`,
+    ].join("\n");
+    const wrappedJS = `${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
     ctx.generatedFns.set(jitName, wrappedJS);
     // Cache the lowered IR alongside the JS source. The C-JIT reads this
     // in feasibility / generateC; JS-JIT ignores it.
