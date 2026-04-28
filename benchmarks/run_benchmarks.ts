@@ -11,11 +11,7 @@
  * Usage: tsx benchmarks/run_benchmarks.ts <output-json-path>
  *
  * Env:
- *   NUMBL_PAR_CC    — compiler for the `--opt e1 --par` mode (e.g.
- *                     `gcc-14` on macOS, since Apple clang ships without
- *                     OpenMP threading). If unset, `--par` uses whatever
- *                     `cc` resolves to.
- *   N_RUNS          — number of runs per (benchmark, mode) pair. Default 3.
+ *   N_RUNS — number of runs per (benchmark, mode) pair. Default 3.
  */
 
 import { execFileSync } from "node:child_process";
@@ -57,9 +53,6 @@ function collectSystemInfo(): string {
     lines.push(`cc: ${ccVer}`);
   } catch {
     // cc not on PATH — fine, just skip
-  }
-  if (process.env.NUMBL_PAR_CC) {
-    lines.push(`--par cc: ${process.env.NUMBL_PAR_CC}`);
   }
   // GitHub Actions sets these on hosted runners; useful for distinguishing
   // runner-image upgrades that shift baselines invisibly.
@@ -193,29 +186,10 @@ interface ModeSpec {
   label: string;
   slug: string; // file-safe label used in the metric name
   args: string[];
-  env?: NodeJS.ProcessEnv;
 }
 
 const MODES: ModeSpec[] = [
   { label: "--opt 1", slug: "opt-1", args: ["--opt", "1"] },
-  { label: "--opt e1", slug: "opt-e1", args: ["--opt", "e1"] },
-  {
-    label: "--opt e1 --par",
-    slug: "opt-e1-par",
-    args: ["--opt", "e1", "--par"],
-    env: process.env.NUMBL_PAR_CC
-      ? { NUMBL_CC: process.env.NUMBL_PAR_CC }
-      : undefined,
-  },
-  { label: "--opt e2", slug: "opt-e2", args: ["--opt", "e2"] },
-  {
-    label: "--opt e2 --par",
-    slug: "opt-e2-par",
-    args: ["--opt", "e2", "--par"],
-    env: process.env.NUMBL_PAR_CC
-      ? { NUMBL_CC: process.env.NUMBL_PAR_CC }
-      : undefined,
-  },
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────
@@ -225,11 +199,7 @@ function median(xs: number[]): number {
   return sorted[Math.floor(sorted.length / 2)];
 }
 
-function runNumbl(
-  benchFile: string,
-  args: string[],
-  env: NodeJS.ProcessEnv
-): string {
+function runNumbl(benchFile: string, args: string[]): string {
   try {
     return execFileSync(
       "npx",
@@ -237,7 +207,6 @@ function runNumbl(
       {
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "inherit"],
-        env: { ...process.env, ...env },
         maxBuffer: 64 * 1024 * 1024,
       }
     );
@@ -272,7 +241,7 @@ for (const bench of BENCHMARKS) {
 
     const runs: Record<string, number>[] = [];
     for (let i = 0; i < N_RUNS; i++) {
-      const out = runNumbl(bench.file, mode.args, mode.env ?? {});
+      const out = runNumbl(bench.file, mode.args);
       const parsed = bench.parse(out);
       process.stderr.write(
         `  run ${i + 1}: ${

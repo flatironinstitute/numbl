@@ -1,10 +1,10 @@
 name: Benchmarks
 
-# Runs the full `benchmarks/*.m` suite under `--opt 1`, `--opt e1`,
-# `--opt e1 --par`, `--opt e2`, and `--opt e2 --par` on Linux and macOS
-# (in parallel), takes the median of 3 runs per (benchmark, mode), and
-# publishes to `magland/numbl-benchmarks` via github-action-benchmark.
-# Chart lives at https://magland.github.io/numbl-benchmarks/dev/bench/.
+# Runs the full `benchmarks/*.m` suite under `--opt 1` on Linux and
+# macOS (in parallel), takes the median of 3 runs per (benchmark,
+# mode), and publishes to `magland/numbl-benchmarks` via
+# github-action-benchmark. Chart lives at
+# https://magland.github.io/numbl-benchmarks/dev/bench/.
 #
 # Architecture: matrix jobs run in parallel and upload their results as
 # artifacts. A final `publish` job downloads both artifacts and pushes
@@ -38,12 +38,8 @@ jobs:
         include:
           - os: ubuntu-latest
             label: Linux
-            par-cc: ""
           - os: macos-latest
             label: macOS
-            # Apple clang doesn't ship with OpenMP threading — use Homebrew
-            # gcc for the --par mode only. Installed below.
-            par-cc: gcc-14
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -59,11 +55,11 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libopenblas-dev libfftw3-dev
 
-      # macOS uses the system Accelerate framework for BLAS/LAPACK, so only
-      # fftw (and gcc for the --par mode) needs to be installed from brew.
-      - name: Install fftw + gcc (macOS)
+      # macOS uses the system Accelerate framework for BLAS/LAPACK, so
+      # only fftw needs to be installed from brew.
+      - name: Install fftw (macOS)
         if: matrix.os == 'macos-latest'
-        run: brew install fftw gcc@14
+        run: brew install fftw
 
       - name: Install dependencies
         run: npm ci
@@ -71,12 +67,10 @@ jobs:
       - name: Bundle stdlib
         run: npm run bundle:stdlib
 
-      - name: Build native addon (includes libnumbl_ops.a)
+      - name: Build native addon
         run: npm run build:addon
 
       - name: Run benchmarks (median of 3)
-        env:
-          NUMBL_PAR_CC: ${{ matrix.par-cc }}
         run: npx tsx benchmarks/run_benchmarks.ts benchmarks-results.json
 
       - name: Upload benchmark results
