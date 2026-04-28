@@ -19,7 +19,7 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT sits on top of the interpreter: it type-specializes hot functions by lowering AST → JIT IR → JS, using `IBuiltin.resolve` for type propagation and `IBuiltin.jitEmit` / `IBuiltin.jitEmitC` for fast codegen. Plugin-specific code lives under `executors/<plugin>/` (e.g. JS-JIT codegen and helpers under `executors/jsJit/js/`, e1 kernel emitters under `executors/jsJit/e1/`, e2 kernels under `executors/e2/`). Shared JIT infrastructure — the IR + type system, lowering, fusion analysis, the C codegen pipeline (`assemble`, `feasibility`, `classify`, `context`, `abi`, `prelude`, `epilogue`, `compile`, `visit`, `emit/`) under `c/`, and shared kernel utilities (`hash`, `openmpFlag`, `multiReductionKernel`) — lives at `src/numbl-core/jit/`. See [developer_reference/jit/e1-kernels.md](developer_reference/jit/e1-kernels.md) for the e1 pipeline overview and [developer_reference/executors.md](developer_reference/executors.md) for the executor registry.
+The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor implements one strategy (JS-JIT top-level / loop / call, eventually C-JIT optimizers). The dispatcher lowers each statement once via the shared lowering pipeline (`executors/lowering.ts`) and lets executors compete by cost estimate. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
 
 ## Style
 
@@ -126,7 +126,6 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write e2 per-assign C kernels to file (only with --opt e2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -136,33 +135,8 @@ Options (for run and eval):
   --opt <level>      Optimization level (default: 1)
                        0 — interpreter (no JIT)
                        1 — JS-JIT: type-specialize hot functions/loops to JS
-                       e1 — experimental: JS-JIT outer with on-demand C
-                           kernels emitted for fusible tensor chains and
-                           pure-scalar user functions. The generated JS
-                           contains the C source inline and dispatches to
-                           the compiled kernel at runtime when N is large
-                           enough to amortise koffi overhead. Falls back
-                           to the plain JS fused loop at small N or if
-                           compilation fails.
-                       e2 — experimental: pure interpreter (no JS-JIT) +
-                           on-demand C kernels emitted per tensor-assign
-                           statement. Compiles a fresh C function for
-                           each fusible elemwise expression the
-                           interpreter encounters, then dispatches via
-                           koffi. Compile failures are hard errors;
-                           non-classifiable expressions fall through to
-                           the plain interpreter silently. Use --dump-c
-                           to inspect the generated kernels.
-  --par              Parallelize fused loops with OpenMP threads (--opt e1 / e2)
+                       2 — JS-JIT plus C-JIT optimizers (Node only)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)
-  NUMBL_CC                C compiler for --opt e1 / e2 kernels (default: cc)
-  NUMBL_CFLAGS            Extra flags appended to the C kernel compile command
-  NUMBL_NO_NATIVE_CFLAGS  Skip probed defaults like -march=native (for
-                          reproducibility or debugging portability issues)
-  NUMBL_OMP_THRESHOLD     Minimum elements before parallel-for kicks in
-                          (default: 100000)
-  NUMBL_E2_MIN_ELEMS      Minimum tensor element count before --opt e2
-                          will compile a per-assign kernel (default: 1000)
 ```

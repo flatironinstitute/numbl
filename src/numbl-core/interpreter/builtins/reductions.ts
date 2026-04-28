@@ -270,7 +270,6 @@ defineBuiltin({
     }
     return null;
   },
-  jitCapabilities: { tensorReductionOp: "NUMBL_REDUCE_SUM" },
 });
 
 // ── prod ───────────────────────────────────────────────────────────────
@@ -322,7 +321,6 @@ defineBuiltin({
       },
     },
   ],
-  jitCapabilities: { tensorReductionOp: "NUMBL_REDUCE_PROD" },
 });
 
 // ── mean ───────────────────────────────────────────────────────────────
@@ -356,7 +354,6 @@ defineBuiltin({
         reductionApply("mean", args, meanKernel, meanOmitNanKernel),
     },
   ],
-  jitCapabilities: { tensorReductionOp: "NUMBL_REDUCE_MEAN" },
 });
 
 // ── std / var ──────────────────────────────────────────────────────────
@@ -567,13 +564,11 @@ function anyAllMatch(argTypes: JitType[]): JitType[] | null {
 defineBuiltin({
   name: "any",
   cases: [{ match: anyAllMatch, apply: anyAllApply("any", "any") }],
-  jitCapabilities: { tensorReductionOp: "NUMBL_REDUCE_ANY" },
 });
 
 defineBuiltin({
   name: "all",
   cases: [{ match: anyAllMatch, apply: anyAllApply("all", "all") }],
-  jitCapabilities: { tensorReductionOp: "NUMBL_REDUCE_ALL" },
 });
 
 // ── Cumulative type rule ───────────────────────────────────────────────

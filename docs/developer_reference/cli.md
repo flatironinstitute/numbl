@@ -22,15 +22,12 @@ The CLI provides:
 
 ## Options of note
 
-- `--opt <0|1|e1>` — interpreter / JS-JIT / JS-JIT with inline C kernels (see [jit/overview.md](jit/overview.md)).
-- `--par` — parallelize fused chain kernels with OpenMP under `--opt e1`.
-- `--dump-js` — write JIT-generated JavaScript to disk for inspection (under `--opt e1`, the inline C kernel source is embedded as JS string literals).
+- `--opt <0|1|2>` — interpreter / JS-JIT / JS-JIT + C-JIT optimizers (see [jit/overview.md](jit/overview.md)).
+- `--dump-js` — write JIT-generated JavaScript to disk for inspection.
 - `--dump-ast` — print the parsed AST as JSON.
 - `--stream` — NDJSON output, suitable for programmatic consumers.
 - `--path <dir>` and the `NUMBL_PATH` environment variable — add extra workspace directories to the search path.
 - `--plot` / `--plot-port` — enable the embedded plot server for figures.
-
-C kernel compilation is controlled by `NUMBL_CC`, `NUMBL_CFLAGS`, and `NUMBL_NO_NATIVE_CFLAGS`. `NUMBL_OMP_THRESHOLD` sets the minimum element count before `--par`'s parallel-for kicks in (default 100 000).
 
 ## REPL specifics
 

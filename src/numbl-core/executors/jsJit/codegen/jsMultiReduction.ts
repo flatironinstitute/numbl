@@ -143,10 +143,7 @@ export function tryMatchMultiReduction(
  *
  * The block:
  *   1. Aliases `<tensorName>.data` to a local and reads its length.
- *   2. Under e1, compiles/dispatches a single-pass C kernel that fills
- *      a Float64Array scratch with the accumulator values, with an
- *      inline JS fallback at small `n`. Under non-e1, emits just the
- *      JS loop.
+ *   2. Emits a single-pass JS loop that updates each accumulator.
  *   3. Post-loop: `mean = sum / n`, and a NaN fixup for max/min when
  *      every input element was NaN.
  *   4. Installs `_multiReductionSubst` pointing each reduction Call at

@@ -55,50 +55,6 @@ export interface IBuiltin {
     argTypes: JitType[],
     getDest?: () => string
   ) => string | null;
-  /**
-   * Optional fast-path C code emission for the C-JIT. Return null if the
-   * builtin can't be emitted as a C expression for the given arg types
-   * — the C-JIT will bail to JS-JIT for this call site. Covers the
-   * scalar-argument case only (tensor-argument emission is handled by
-   * separate tensor-op dispatch in assemble.ts / emit/fused.ts).
-   */
-  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
-  /**
-   * Optional C-JIT tensor-op dispatch metadata. When a field is present,
-   * both the C feasibility check and C codegen read it directly —
-   * adding a new tensor-unary / tensor-binary / tensor-reduction builtin
-   * is one edit here (plus the matching native-side enum or C function).
-   * Previously these were three parallel hardcoded tables (one in
-   * feasibility.ts, two in context.ts) that could silently drift
-   * from the native-side opcode enums. Centralizing on the IBuiltin
-   * registration removes that drift risk.
-   */
-  jitCapabilities?: JitCapabilities;
-}
-
-/** Per-builtin C-JIT tensor-op dispatch metadata. See IBuiltin.jitCapabilities. */
-export interface JitCapabilities {
-  /**
-   * libnumbl_ops opcode enum name (e.g. "NUMBL_UNARY_EXP") for
-   * element-wise unary tensor builtins routed through
-   * `numbl_realUnaryElemwise`. Set this on element-wise unary functions
-   * that have a libnumbl_ops opcode and are safe to invoke on any real
-   * input (domain-restricted ones like log/sqrt stay excluded).
-   */
-  tensorUnaryOp?: string;
-  /**
-   * C function name (e.g. "fmax", "atan2", "numbl_mod") for 2-arg
-   * element-wise tensor builtins. The C-JIT emits an inline per-element
-   * loop calling this function; it must match the interpreter's
-   * scalar-apply semantics exactly.
-   */
-  tensorBinaryFn?: string;
-  /**
-   * libnumbl_ops opcode enum name (e.g. "NUMBL_REDUCE_SUM") for
-   * tensor→scalar reductions routed through `numbl_tensor_reduce_op`.
-   * Set on reduction builtins (sum / prod / max / min / any / all / mean).
-   */
-  tensorReductionOp?: string;
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -746,8 +702,6 @@ export function defineBuiltin(opts: {
     argTypes: JitType[],
     getDest?: () => string
   ) => string | null;
-  jitEmitC?: (argCode: string[], argTypes: JitType[]) => string | null;
-  jitCapabilities?: JitCapabilities;
 }): void {
   registerIBuiltin({
     name: opts.name,
@@ -760,8 +714,6 @@ export function defineBuiltin(opts: {
       return null;
     },
     jitEmit: opts.jitEmit,
-    jitEmitC: opts.jitEmitC,
-    jitCapabilities: opts.jitCapabilities,
   });
 }
 
@@ -1050,105 +1002,5 @@ export function binaryMathJitEmit(
     )
       return null;
     return `${mathFn}(${argCode[0]}, ${argCode[1]})`;
-  };
-}
-
-/** Fast-path C emitter for unary math functions on a scalar.
- *  Emits `cFn(x)` for scalar number/boolean; returns null otherwise
- *  (tensor emission is handled separately by emit/tensor.ts).
- *  If `requireNonneg` is set, rejects values whose sign isn't known
- *  to be nonneg — matches the JS guard for domain-restricted functions. */
-export function unaryMathJitEmitC(
-  cFn: string,
-  requireNonneg?: boolean
-): (argCode: string[], argTypes: JitType[]) => string | null {
-  return (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (a.kind !== "number" && a.kind !== "boolean") return null;
-    if (requireNonneg && !isNonneg(a)) return null;
-    return `${cFn}(${argCode[0]})`;
-  };
-}
-
-/** Fast-path C emitter for binary math functions on two scalar numbers. */
-export function binaryMathJitEmitC(
-  cFn: string
-): (argCode: string[], argTypes: JitType[]) => string | null {
-  return (argCode, argTypes) => {
-    if (argTypes.length !== 2) return null;
-    const k0 = argTypes[0].kind,
-      k1 = argTypes[1].kind;
-    if (
-      (k0 !== "number" && k0 !== "boolean") ||
-      (k1 !== "number" && k1 !== "boolean")
-    )
-      return null;
-    return `${cFn}(${argCode[0]}, ${argCode[1]})`;
-  };
-}
-
-/**
- * Fast-path C emitter for 1-arg scalar builtins that collapse to a
- * compile-time constant given the arg's kind. Common for shape/type
- * predicates where the answer is fully determined by the type
- * (e.g. `isnumeric(number) -> 1.0`, `isscalar(number) -> 1.0`,
- *       `ndims(number) -> 2.0`, `numel(number) -> 1.0`).
- *
- * `valueByKind` maps each supported JitType kind to its C constant.
- * Arg kinds not in the map return null, which bails the C-JIT to
- * JS-JIT for that call site. All values must be valid C double
- * literals (`"1.0"`, `"0.0"`, `"2.0"`, ...).
- */
-export function scalarConstantJitEmitC(
-  valueByKind: Partial<Record<JitType["kind"], string>>
-): (argCode: string[], argTypes: JitType[]) => string | null {
-  return (_argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0]?.kind;
-    if (k === undefined) return null;
-    return valueByKind[k] ?? null;
-  };
-}
-
-/**
- * Fast-path C emitter for 1-arg scalar predicates backed by a runtime
- * helper whose return value is int (e.g. `numbl_is_nan`,
- * `numbl_is_inf`, `numbl_is_finite`). The int is cast to double for
- * the C-JIT's uniform boolean-as-double representation. Returns null
- * for non-scalar args.
- *
- * Note: `isnan` / `isinf` / `isfinite` from `<math.h>` can't be used
- * directly because the JIT compiles with `-ffast-math`, which implies
- * `-ffinite-math-only` and constant-folds those macros to false/true.
- * The `numbl_is_nan` / `_is_inf` / `_is_finite` helpers in
- * `jit_runtime` use bit-pattern inspection and live in a separately
- * compiled archive, so the caller's `-ffast-math` can't defeat them.
- */
-export function unaryPredicateJitEmitC(
-  cFn: string
-): (argCode: string[], argTypes: JitType[]) => string | null {
-  return (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0]?.kind;
-    if (k !== "number" && k !== "boolean") return null;
-    return `((double)${cFn}(${argCode[0]}))`;
-  };
-}
-
-/**
- * Fast-path C emitter for 1-arg scalar builtins that are the identity
- * on real scalars (e.g. `double(x)`, `real(x)`, `conj(x)`). Returns
- * `(x)` for `number`/`boolean`, null otherwise.
- */
-export function scalarIdentityJitEmitC(): (
-  argCode: string[],
-  argTypes: JitType[]
-) => string | null {
-  return (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0]?.kind;
-    if (k !== "number" && k !== "boolean") return null;
-    return `(${argCode[0]})`;
   };
 }

@@ -15,7 +15,7 @@ Every addon-backed operation has a pure-JS fallback. The fallbacks are correct b
 
 ## Op-code contract
 
-The element-wise kernels are dispatched by integer op code. The TypeScript side (used by the ops layer and the e1 kernel emitters) and the C side (in the addon's header) must agree on these values. A dedicated unit test loads the addon, asks it for its op-code table, and compares against the TypeScript enum — drift fails CI rather than silently producing wrong results.
+The element-wise kernels are dispatched by integer op code. The TypeScript side (used by the ops layer) and the C side (in the addon's header) must agree on these values. A dedicated unit test loads the addon, asks it for its op-code table, and compares against the TypeScript enum — drift fails CI rather than silently producing wrong results.
 
 ## Build and installation
 

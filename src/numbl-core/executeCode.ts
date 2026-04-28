@@ -35,7 +35,7 @@ import {
 } from "./executors/jsJit/helpers/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
-import { registerJsJitPlugin } from "./executors/plugins.js";
+import { registerExecutorsForOpt } from "./executors/plugins.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -109,8 +109,6 @@ export interface ProfileData {
 export interface ExecResult {
   output: string[];
   generatedJS: string;
-  /** Concatenated C-kernel source for all e2 compilations during the run. */
-  generatedC: string;
   plotInstructions: PlotInstruction[];
   returnValue: RuntimeValue;
   variableValues: Record<string, RuntimeValue>;
@@ -353,11 +351,9 @@ export function executeCode(
   interpreter.optimization = options.optimization ?? 1;
   interpreter.log = options.log;
 
-  // Register mode-specific executor plugins. The interpreter plugin is
-  // already registered by the Interpreter constructor.
-  if (interpreter.optimization >= 1) {
-    registerJsJitPlugin(interpreter.registry);
-  }
+  // Register mode-specific executor plugins. The AST interpreter is
+  // the dispatcher's hardcoded fallback (not a registered executor).
+  registerExecutorsForOpt(interpreter.registry, interpreter.optimization);
 
   // Collect JIT compilations for generatedJS output and profiling
   const jitSections: string[] = [];
@@ -778,7 +774,6 @@ export function executeCode(
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
           : "// No JS generated",
-      generatedC: "/* No C generated */",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -817,7 +812,6 @@ export function executeCode(
       jitSections.length > 0
         ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
         : "// No JS generated";
-    const generatedC = "/* No C generated */";
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {
@@ -826,7 +820,6 @@ export function executeCode(
       }
       if (!e.fileSources) e.fileSources = interpreter.fileSources;
       (e as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
-      (e as RuntimeError & { generatedC?: string }).generatedC = generatedC;
       throw e;
     }
     const re = new RuntimeError(e instanceof Error ? e.message : String(e));
@@ -836,7 +829,6 @@ export function executeCode(
     }
     re.fileSources = interpreter.fileSources;
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
-    (re as RuntimeError & { generatedC?: string }).generatedC = generatedC;
     throw re;
   } finally {
     // Reset JIT profiling hooks to no-ops

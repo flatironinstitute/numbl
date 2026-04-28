@@ -23,19 +23,6 @@ Emits an ES function as a string, then materializes it with `new Function(args, 
 - **Inline emission** via `IBuiltin.jitEmit` produces a literal expression string for fast scalar/real-tensor paths. When absent or unsuitable, codegen falls back to the `$h.ib_<name>` trampoline.
 - **Bail expressions** throw a typed bail object that the JIT caller unwinds.
 
-## C kernels under `--opt e1`
-
-Under `--opt e1`, the JS-JIT outer can splice in compiled C kernels at two
-boundaries: fusible tensor chains (inside a JS function body) and pure-scalar
-user functions (the whole body becomes a C kernel). Kernel source is generated
-by the e1 emitters and the shared `generateC` in `jit/c/assemble.ts`, then
-compiled via `cc` (configurable via `NUMBL_CC` / `NUMBL_CFLAGS`) and loaded
-through koffi. The JS wrapper dispatches calls inline. See
-[e1-kernels.md](e1-kernels.md).
-
-- `IBuiltin.jitEmitC` (when defined) emits the C expression for a builtin call inside a kernel body.
-- For tensor ops with a `jitCapabilities` annotation, the kernel issues the corresponding op-code call into the native ops library — the same kernels used by the interpreter's ops layer.
-
 ## Fusion
 
-Element-wise assignment runs are detected and collapsed into a single per-element loop by a shared analysis. The JS-JIT and the e1 kernel emitters consume the same fusion plan and emit their own fused form. See [fusion.md](fusion.md).
+Element-wise assignment runs are detected and collapsed into a single per-element loop by a shared analysis. See [fusion.md](fusion.md).

@@ -61,36 +61,6 @@
           "libraries": [ "-framework Accelerate" ]
         }]
       ]
-    },
-    {
-      "target_name": "numbl_ops",
-      "type": "static_library",
-      "sources": [
-        "native/ops/numbl_ops.c",
-        "native/ops/real_binary_elemwise.c",
-        "native/ops/complex_binary_elemwise.c",
-        "native/ops/real_unary_elemwise.c",
-        "native/ops/complex_unary_elemwise.c",
-        "native/ops/comparison.c",
-        "native/ops/reduce.c",
-        "native/ops/bessel.c"
-      ],
-      "include_dirs": [ "native/ops" ],
-      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ],
-      "conditions": [
-        ['OS=="linux"', {
-          "cflags_c": [ "-fopenmp" ]
-        }]
-      ]
-    },
-    {
-      "target_name": "numbl_jit_runtime",
-      "type": "static_library",
-      "sources": [
-        "native/jit_runtime/jit_runtime.c"
-      ],
-      "include_dirs": [ "native/jit_runtime", "native/ops" ],
-      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math", "-fPIC" ]
     }
   ]
 }

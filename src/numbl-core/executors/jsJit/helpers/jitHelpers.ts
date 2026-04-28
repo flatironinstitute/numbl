@@ -19,7 +19,6 @@ import {
   type RuntimeValue,
 } from "../../../runtime/types.js";
 
-import { uninitFloat64 } from "../../../runtime/alloc.js";
 import {
   getTicTime,
   setTicTime,
@@ -236,41 +235,6 @@ export const jitHelpers = {
   // codegen; the non-fused interpreter path already routes through the
   // math.ts matlabRound helper.
   round: (x: number) => Math.sign(x) * Math.round(Math.abs(x)),
-
-  // e1 kernels (populated by the Node-only install shim; see
-  // jit/e1/install.ts). Keys are kernel hash names (`nk_<hex>`) so the
-  // same chain used from two JITs dedupes to a single compile.
-  $kernels: {} as Record<string, (...args: unknown[]) => unknown>,
-  /** Stub — replaced on Node by jit/e1/install.ts. Throws otherwise,
-   *  so a stray e1-compiled helper running in the web bundle surfaces
-   *  as a clear error rather than a silent fallback. */
-  compileKernel: ((
-    cSource: string,
-    koffiSig: string
-  ): ((...args: unknown[]) => unknown) => {
-    throw new Error(
-      "--opt e1: compileKernel unavailable (Node-only; stub present in bundle). " +
-        `kernel sig='${koffiSig}', source len=${cSource.length}`
-    );
-  }) as (cSource: string, koffiSig: string) => (...args: unknown[]) => unknown,
-
-  // Fused-loop helpers (raw Float64Array allocation + wrapping)
-  uninit: uninitFloat64,
-  // Allocate a fresh Float64Array of length `n` and seed it from `src`
-  // (used when the fused loop both reads and writes the same dest name:
-  // the input data must survive the free+alloc path so per-element
-  // self-reads get the original values).
-  uninitCopy: (src: ArrayLike<number>, n: number) => {
-    const buf = uninitFloat64(n);
-    buf.set(src);
-    return buf;
-  },
-  wrapF64: (data: Float64Array, shape: number[]) =>
-    makeTensor(data, undefined, shape.slice()),
-  // Paired-buffer wrap for complex tensors. Used by e1's complex fused
-  // kernel path when writing back a complex output.
-  wrapF64c: (reData: Float64Array, imData: Float64Array, shape: number[]) =>
-    makeTensor(reData, imData, shape.slice()),
 
   // Tensor binary ops
   tAdd,

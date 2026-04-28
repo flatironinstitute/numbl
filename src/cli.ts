@@ -311,6 +311,7 @@ Options (for run and eval):
   --opt <level>      Optimization level (default: 1)
                        0 — interpreter (no JIT)
                        1 — JS-JIT: type-specialize hot functions/loops to JS
+                       2 — JS-JIT plus C-JIT optimizers (Node only)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -419,12 +420,16 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.optimization = parseInt(args[i], 10);
         if (isNaN(opts.optimization)) {
-          console.error("Error: --opt requires a valid number (0 or 1)");
+          console.error("Error: --opt requires a valid number (0, 1, or 2)");
           process.exit(1);
         }
-        if (opts.optimization !== 0 && opts.optimization !== 1) {
+        if (
+          opts.optimization !== 0 &&
+          opts.optimization !== 1 &&
+          opts.optimization !== 2
+        ) {
           console.error(
-            `Error: --opt level must be 0 or 1 (got ${opts.optimization}).`
+            `Error: --opt level must be 0, 1, or 2 (got ${opts.optimization}).`
           );
           process.exit(1);
         }

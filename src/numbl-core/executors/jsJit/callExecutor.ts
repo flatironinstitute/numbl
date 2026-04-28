@@ -9,10 +9,8 @@
  *   - `propose()` filters on `lowered.kind === "call"`, applies
  *     IO+bail-risk feasibility check. Returns null to decline.
  *
- *   - `compile()` calls `generateCallJS` against the lowered IR
- *     (which internally tries the e1 scalar kernel under --opt e1
- *     and falls back to the regular JS body). Cached by the
- *     registry under the classification's cacheKey.
+ *   - `compile()` calls `generateCallJS` against the lowered IR.
+ *     Cached by the registry under the classification's cacheKey.
  *
  *   - `run()` calls `runCallCompiled`. JitBailToInterpreter →
  *     transient bail.

@@ -30,7 +30,7 @@ export interface InterpreterContext {
   evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
-  /** Optimization level (0 = JIT disabled, 1 = JIT scalar functions). */
+  /** Optimization level: 0 = no JIT, 1 = JS-JIT, 2 = JS-JIT + C-JIT. */
   optimization: number;
   /** Resolve a workspace function or class name to its source file,
    *  or undefined if no workspace file provides that name.

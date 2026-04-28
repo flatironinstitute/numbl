@@ -14,8 +14,8 @@ It is not part of the library surface — it is a separate deployable.
 
 ## Why it exists
 
-The browser worker has no LAPACK/FFTW addon and no inline C kernels (`--opt e1`). For workloads where that matters, the web IDE can optionally offload execution to a server that does have those things installed. The same `.m` files run in both places; the server is just a faster backend.
+The browser worker has no LAPACK/FFTW addon and no C-JIT (`--opt 2`). For workloads where that matters, the web IDE can optionally offload execution to a server that does have those things installed. The same `.m` files run in both places; the server is just a faster backend.
 
 ## Deployment notes
 
-The server is expected to be run under a process supervisor (a PM2 ecosystem file is included). It spawns the CLI per request in an isolated temp directory; it does not share state across requests. Environment variables on the server control the C compiler and flags the spawned CLI inherits.
+The server is expected to be run under a process supervisor (a PM2 ecosystem file is included). It spawns the CLI per request in an isolated temp directory; it does not share state across requests.

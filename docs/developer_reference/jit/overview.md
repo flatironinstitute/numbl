@@ -1,6 +1,6 @@
 # JIT Overview
 
-The JIT sits on top of the interpreter. It type-specializes hot code paths to JavaScript (run in V8), optionally splicing in compiled C kernels at fusion boundaries under `--opt e1`. The interpreter remains authoritative: anything the JIT cannot handle falls back to the interpreter transparently.
+The JIT sits on top of the interpreter. It type-specializes hot code paths to JavaScript (run in V8). The interpreter remains authoritative: anything the JIT cannot handle falls back to the interpreter transparently.
 
 ## Trigger points
 
@@ -15,9 +15,8 @@ All three share the same lowering pipeline and IR. Specializations are cached ke
 ## Optimization levels (`--opt`)
 
 - `--opt 0` — interpreter only. No JIT.
-- `--opt 1` — **JS-JIT**. Lowers AST → JIT IR → JavaScript source, materialized via `new Function(...)`. Fast to compile, runs in-process.
-- `--opt e1` — JS-JIT outer with on-demand C kernels for fusible tensor chains and pure-scalar user functions. Compiles with `cc`, loads via koffi, dispatches inline from JS when N is large enough to amortise koffi overhead. See [e1-kernels.md](e1-kernels.md).
-- `--opt e2` — pure interpreter outer (no JS-JIT) with per-assign C kernels. The interpreter, when about to execute an `Assign` whose RHS is a whitelisted elemwise expression over large enough tensor inputs, lowers the expression to C, compiles via `cc` + koffi, allocates a fresh output buffer, and dispatches. Compile failures are hard errors; non-classifiable expressions silently fall through to the interpreter. See [e2-kernels.md](e2-kernels.md).
+- `--opt 1` — **JS-JIT** (default). Lowers AST → JIT IR → JavaScript source, materialized via `new Function(...)`. Fast to compile, runs in-process.
+- `--opt 2` — JS-JIT plus C-JIT optimizers (Node only). A registry of named C-codegen optimizers compete with the JS-JIT executors for each dispatch; the lowest-cost candidate wins. (Implementation in progress; see [executors.md](../executors.md).)
 
 ## Bailouts
 
@@ -27,4 +26,4 @@ A separate safety pass classifies constructs that have observable side effects t
 
 ## Debugging JIT output
 
-`--dump-js <file>` writes the generated JavaScript source to disk for inspection; under `--opt e1` the inline C kernel source is embedded as a JS string literal so you can see both together. `--dump-c <file>` (only meaningful with `--opt e2`) writes one C function per per-assign kernel, prefixed with a header that names the file:line and the LHS variable. `--verbose` adds compilation events to stderr.
+`--dump-js <file>` writes the generated JavaScript source to disk for inspection. `--verbose` adds compilation events to stderr.

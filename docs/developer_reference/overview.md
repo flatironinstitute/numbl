@@ -19,10 +19,10 @@ source .m ──► Lexer ──► Parser ──► AST
               ┌─────────────────────┘
               ▼
            JS-JIT
-        (opt 1 or e1)
-              │   (under opt e1: splice in compiled C
-              │    kernels for fusible chains and
-              │    pure-scalar user functions)
+          (opt 1)
+              │   (under opt 2: named C-JIT optimizers
+              │    compete with the JS-JIT executors via
+              │    the executor registry)
               │
               ▼
            RuntimeValue
@@ -38,10 +38,8 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [compiler/type-system.md](compiler/type-system.md) — `JitType`, unification, type refinement.
 - [executors.md](executors.md) — pluggable executor registry that unifies the interpreter and JIT dispatch hooks.
 - [jit/overview.md](jit/overview.md) — when the JIT runs, opt levels, bailouts.
-- [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS backend / inline C kernels.
+- [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS backend.
 - [jit/fusion.md](jit/fusion.md) — element-wise fusion.
-- [jit/e1-kernels.md](jit/e1-kernels.md) — e1 kernel pipeline (chain kernels + scalar-function kernels).
-- [jit/e2-kernels.md](jit/e2-kernels.md) — e2 per-assign C-kernel pipeline (interpreter outer, no JS-JIT).
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
 - [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.

@@ -8,12 +8,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import type { JitType } from "../../jitTypes.js";
-import {
-  defineBuiltin,
-  predicateCases,
-  scalarConstantJitEmitC,
-  unaryPredicateJitEmitC,
-} from "./types.js";
+import { defineBuiltin, predicateCases } from "./types.js";
 
 // ── isnan ───────────────────────────────────────────────────────────────
 
@@ -31,7 +26,6 @@ defineBuiltin({
     if (k === "number" || k === "boolean") return `Number.isNaN(${args[0]})`;
     return null;
   },
-  jitEmitC: unaryPredicateJitEmitC("numbl_is_nan"),
 });
 
 // ── isinf ───────────────────────────────────────────────────────────────
@@ -55,7 +49,6 @@ defineBuiltin({
       return `(Math.abs(${args[0]}) === Infinity)`;
     return null;
   },
-  jitEmitC: unaryPredicateJitEmitC("numbl_is_inf"),
 });
 
 // ── isfinite ────────────────────────────────────────────────────────────
@@ -74,7 +67,6 @@ defineBuiltin({
     if (k === "number" || k === "boolean") return `isFinite(${args[0]})`;
     return null;
   },
-  jitEmitC: unaryPredicateJitEmitC("numbl_is_finite"),
 });
 
 // ── isreal ──────────────────────────────────────────────────────────────
@@ -110,7 +102,4 @@ defineBuiltin({
       return "true";
     return null;
   },
-  // Real scalars (C-JIT tensors are always real too) are always real.
-  // Complex never reaches the C-JIT scalar path.
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });

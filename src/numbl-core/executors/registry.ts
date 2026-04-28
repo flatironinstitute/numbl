@@ -158,13 +158,19 @@ export class Registry {
 
     // Try best (if any), then backups in cost order. Each may bail.
     if (bestExec) {
-      const r = this.runStmtCandidate(stmt, ctx, bestExec, bestData);
+      const r = this.runStmtCandidate(stmt, ctx, bestExec, bestData, lowered);
       if (r) return r;
       if (backups) {
         backups.sort((a, b) => a.total - b.total);
         for (let k = 0; k < backups.length; k++) {
           const c = backups[k];
-          const r2 = this.runStmtCandidate(stmt, ctx, c.executor, c.data);
+          const r2 = this.runStmtCandidate(
+            stmt,
+            ctx,
+            c.executor,
+            c.data,
+            lowered
+          );
           if (r2) return r2;
         }
       }
@@ -180,7 +186,8 @@ export class Registry {
     stmt: Stmt,
     ctx: DispatchContext,
     executor: Executor,
-    data: unknown
+    data: unknown,
+    lowered: import("./lowering.js").LoweredStmt
   ): DispatchResult | null {
     const key = executor.cacheKey(data);
 
@@ -210,6 +217,7 @@ export class Registry {
       return null;
     }
     if ("consumed" in result) {
+      ctx.interp.onExecutorFired?.(executor.name, lowered.kind);
       return { consumed: result.consumed, signal: null };
     }
     // Type system forbids reaching here (stmt-shape executors return
@@ -306,6 +314,7 @@ export class Registry {
       return null;
     }
     if ("result" in result) {
+      ctx.interp.onExecutorFired?.(executor.name, "call");
       return { result: result.result };
     }
     // Type system forbids reaching here (call-shape executors return

@@ -17,8 +17,6 @@ This split lets a builtin have a sophisticated general implementation while prov
 - `help` — structured metadata (signatures, description) surfaced by the `help` command. Required for user-facing builtins.
 - `resolve(argTypes, nargout)` — decides whether this builtin accepts the given argument types. Returns `{ outputTypes, apply }` on success or `null` to reject (falling back to the next lookup or erroring).
 - `jitEmit(argCode, argTypes)` — optional; returns a JS expression string or `null` to skip.
-- `jitEmitC(argCode, argTypes)` — optional; same idea for the inline C kernel path used under `--opt e1`.
-- `jitCapabilities` — optional metadata describing how this builtin maps onto the ops-layer op codes, used by the e1 kernel emitters for tensor-level dispatch.
 
 ## Registration helpers
 

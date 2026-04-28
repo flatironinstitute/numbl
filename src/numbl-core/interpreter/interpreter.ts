@@ -79,20 +79,28 @@ export class Interpreter {
   /**
    * Optimization level:
    *   0 — pure AST interpreter, no JIT.
-   *   1 — JS-JIT (default): type-specialize hot functions/loops to JS via `new Function()`.
+   *   1 — JS-JIT (default): type-specialize hot functions/loops to JS
+   *       via `new Function()`.
+   *   2 — JS-JIT plus C-JIT optimizers (Node only).
    */
   optimization: number = 1;
 
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 
+  /** Telemetry: invoked after a registered executor's `run()` succeeds.
+   *  Used to track which optimizers fire in a session. The kind is the
+   *  LoweredStmt kind the executor handled ("top-level", "loop", "call",
+   *  ...). Hot path — keep the callback cheap. */
+  onExecutorFired?: (name: string, kind: string) => void;
+
   /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
 
-  /** Executor registry. Holds the strategies (interpreter, JS-JIT,
-   *  C-kernel, ...) the dispatcher selects among at runtime. The
-   *  always-on interpreter executor is registered at construction;
-   *  mode-driven plugins (`--opt 1`/`e1`/`e2`) register additional
+  /** Executor registry. Holds the strategies (JS-JIT, C-kernel, ...)
+   *  the dispatcher selects among at runtime. The AST interpreter is
+   *  the dispatcher's hardcoded fallback (not a registered executor).
+   *  Mode-driven plugins (`--opt 1`, `--opt 2`, ...) register
    *  executors during `executeCode` setup. See
    *  docs/developer_reference/executors.md. */
   readonly registry: import("../executors/registry.js").Registry;

@@ -25,12 +25,7 @@ import {
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
-import {
-  defineBuiltin,
-  type BuiltinCase,
-  makeTensor,
-  scalarConstantJitEmitC,
-} from "./types.js";
+import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -90,7 +85,6 @@ defineBuiltin({
       return "false";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "0.0" }),
 });
 
 defineBuiltin({
@@ -116,16 +110,12 @@ defineBuiltin({
       return "false";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "0.0" }),
 });
 
 defineBuiltin({
   name: "isinteger",
   cases: [anyToLogicalCase(() => false)],
   jitEmit: () => "false",
-  // C-JIT scalars are doubles/booleans — neither is an integer class in
-  // MATLAB's sense, so the answer is always false.
-  jitEmitC: scalarConstantJitEmitC({ number: "0.0", boolean: "0.0" }),
 });
 
 defineBuiltin({
@@ -156,7 +146,6 @@ defineBuiltin({
       return "false";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "0.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -234,7 +223,6 @@ defineBuiltin({
     if (k === "string") return "true";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -265,10 +253,6 @@ defineBuiltin({
       return "false";
     return null;
   },
-  // The tensor-Var case is handled directly in jit/c/emit/scalar.ts
-  // (length / isempty read the tensor's `_len` local). This hook
-  // covers only the scalar case — any scalar is non-empty.
-  jitEmitC: scalarConstantJitEmitC({ number: "0.0", boolean: "0.0" }),
 });
 
 defineBuiltin({
@@ -285,7 +269,6 @@ defineBuiltin({
       return "true";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -302,7 +285,6 @@ defineBuiltin({
       return "true";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -319,7 +301,6 @@ defineBuiltin({
       return "true";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -329,10 +310,6 @@ defineBuiltin({
     if (types[0]?.kind !== "unknown") return "true";
     return null;
   },
-  // Scalars are always matrices; shape-aware tensor check stays out of
-  // scope (3D tensors are not matrices — the helper returns null and
-  // the C-JIT bails to JS-JIT for that path).
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 // ── Shape queries ────────────────────────────────────────────────────────
@@ -371,7 +348,6 @@ defineBuiltin({
       return "1";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -414,10 +390,6 @@ defineBuiltin({
       return "1";
     return null;
   },
-  // The tensor-Var case is handled directly in jit/c/emit/scalar.ts
-  // (reads the tensor's `_len` / shape locals). This hook covers the
-  // scalar case.
-  jitEmitC: scalarConstantJitEmitC({ number: "1.0", boolean: "1.0" }),
 });
 
 defineBuiltin({
@@ -447,7 +419,6 @@ defineBuiltin({
       return "2";
     return null;
   },
-  jitEmitC: scalarConstantJitEmitC({ number: "2.0", boolean: "2.0" }),
 });
 
 defineBuiltin({
