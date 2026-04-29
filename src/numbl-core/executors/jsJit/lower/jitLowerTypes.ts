@@ -127,6 +127,22 @@ export function combineSigns(
     case BinaryOperation.Mul:
     case BinaryOperation.ElemMul:
       return mulSigns(a, b);
+    // Division has the same sign rule as multiplication for nonzero
+    // denominators (a/b has same sign as a*b). Zero-denominator edge
+    // cases produce ±Inf or NaN; the sign tag is a best-effort hint
+    // used to keep `sqrt` real on provably-nonneg inputs (chunkerfunc:
+    // `err1 = sqrt(errs/errs0/k)` with all operands positive).
+    case BinaryOperation.Div:
+    case BinaryOperation.ElemDiv:
+      return mulSigns(a, b);
+    // Pow/ElemPow with a nonneg base stays nonneg (positive base stays
+    // positive). The bail check upstream rejects non-nonneg base, so
+    // when this case fires we know `a` is nonneg or positive.
+    case BinaryOperation.Pow:
+    case BinaryOperation.ElemPow:
+      if (a === "positive") return "positive";
+      if (a === "nonneg") return "nonneg";
+      return undefined;
     default:
       return undefined;
   }
@@ -270,17 +286,31 @@ export function binaryResultType(
     const ndim = shape ? undefined : (lt?.ndim ?? rt?.ndim);
     const isComplex =
       anyComplex || (lt?.isComplex ?? false) || (rt?.isComplex ?? false);
-    // Propagate nonneg through tensor add/mul when both operands are
-    // nonneg. Division isn't safe (0/0 = NaN, and negative-zero edge
-    // cases); subtraction isn't safe either. This lets `log(1 + u)` and
-    // `sqrt(u*v)` take the fast path when u,v are nonneg.
+    // Propagate nonneg through tensor add/mul/div when both operands
+    // are nonneg. 0/0 = NaN, but NaN is still a real number (sqrt(NaN)
+    // stays real), so for `sqrt(errs/errs0/k)`-style chains the nonneg
+    // tag is sound. Subtraction isn't safe (nonneg − nonneg can go
+    // negative).
     let nonneg =
       !isComplex &&
       (op === BinaryOperation.Add ||
         op === BinaryOperation.Mul ||
-        op === BinaryOperation.ElemMul) &&
+        op === BinaryOperation.ElemMul ||
+        op === BinaryOperation.Div ||
+        op === BinaryOperation.ElemDiv) &&
       isNonneg(effLeft) &&
       isNonneg(effRight);
+    // Nonneg ^ any-real stays nonneg (NaN for 0^neg). Hot in chunkie's
+    // `abs(cfs(1:k)).^2` chain so the downstream `sqrt` keeps the
+    // result real instead of widening to complex_or_number.
+    if (
+      !nonneg &&
+      !isComplex &&
+      (op === BinaryOperation.Pow || op === BinaryOperation.ElemPow) &&
+      isNonneg(effLeft)
+    ) {
+      nonneg = true;
+    }
     // Structural nonneg: `x .* x` (same real Var squared) is always
     // nonneg elementwise, regardless of x's sign. The type-only path
     // can't see this; we need the lowered operand identity.

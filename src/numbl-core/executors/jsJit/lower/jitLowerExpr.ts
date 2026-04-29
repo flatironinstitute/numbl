@@ -20,6 +20,7 @@ import {
   jitTypeKey,
   computeJitFnName,
   signFromNumber,
+  unifyJitTypes,
 } from "../../../jitTypes.js";
 import {
   KNOWN_CONSTANTS,
@@ -111,7 +112,12 @@ function bailExpr(ctx: LowerCtx, expr: Expr, reason: string): null {
 
 export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
   if (LOG_CJIT_MISSES) {
-    ctx.lastExprType = expr.type;
+    ctx.lastExprType =
+      expr.type === "Ident"
+        ? `Ident(${expr.name})`
+        : expr.type === "FuncCall"
+          ? `FuncCall(${expr.name})`
+          : expr.type;
     if (expr.span && ctx.lineTable) {
       ctx.lastExprLine = offsetToLineFast(ctx.lineTable, expr.span.start);
     }
@@ -742,15 +748,52 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       // index (set by a prior `cell{i} = v` write within the same JIT
       // spec), use that type instead of `unknown` — unblocks the
       // chunkerfunc pattern `[out{1:3}] = fcurve(ts); r = out{1}; …`.
+      // For non-literal indices, if every tracked element shares one
+      // unifiable JitType (and the cell shape pins down the index
+      // range), all reads return that common type — needed for
+      // chunkerfunc's `for j = nout+1:3; out{j} = out{j-1}*M; end`
+      // dead-but-still-lowering inner loop.
       let resultType: JitType = { kind: "unknown" };
-      if (
-        cellType.elements &&
-        cellIdx.tag === "NumberLiteral" &&
-        typeof cellIdx.value === "number" &&
-        Number.isInteger(cellIdx.value)
-      ) {
-        const tracked = cellType.elements[cellIdx.value];
-        if (tracked && tracked.kind !== "unknown") resultType = tracked;
+      if (cellType.elements) {
+        if (
+          cellIdx.tag === "NumberLiteral" &&
+          typeof cellIdx.value === "number" &&
+          Number.isInteger(cellIdx.value)
+        ) {
+          const tracked = cellType.elements[cellIdx.value];
+          if (tracked && tracked.kind !== "unknown") resultType = tracked;
+        } else {
+          // Non-literal index: try common element type. Only safe when
+          // every position in the cell's shape is in the elements map
+          // (so the runtime index can't land on an unknown slot).
+          const cellLen =
+            cellType.shape && cellType.shape.every(d => d > 0)
+              ? cellType.shape.reduce((a, b) => a * b, 1)
+              : -1;
+          if (cellLen > 0) {
+            let common: JitType | undefined;
+            let allCovered = true;
+            for (let k = 1; k <= cellLen; k++) {
+              const t = cellType.elements[k];
+              if (!t || t.kind === "unknown") {
+                allCovered = false;
+                break;
+              }
+              common = common === undefined ? t : unifyJitTypes(common, t);
+              if (common.kind === "unknown") {
+                allCovered = false;
+                break;
+              }
+            }
+            if (
+              allCovered &&
+              common !== undefined &&
+              common.kind !== "unknown"
+            ) {
+              resultType = common;
+            }
+          }
+        }
       }
       return {
         tag: "Call",
@@ -1743,20 +1786,19 @@ function representativeValue(t: JitType): unknown | undefined {
     case "complex_or_number":
       return 1;
     case "tensor": {
-      // Probe-time synthesis: a tensor of zeros with the static shape.
-      // Used so a function handle whose arg is a Var of known tensor
-      // type but unbound at JIT-compile time (loop-local, e.g.
-      // chunkerfunc's `ts = a + (b-a)*(xs2+1)/2; fcurve(ts)`) can be
-      // probed to discover its return type.
+      // Probe-time synthesis: a tensor of zeros with a concrete shape.
+      // Unknown dims (-1) get substituted with a small default so we
+      // can still probe handles whose arg shape isn't fully pinned at
+      // JIT-compile time — the probe only needs the right *kind*
+      // (tensor real/complex), not exact dims, since downstream
+      // tensor ops are shape-permissive.
       const shape = t.shape;
       if (!shape || shape.length === 0) return undefined;
-      // Reject unknown dims (-1) — synthesizing an arbitrary fill size
-      // can mislead a handle whose return shape is data-dependent.
-      if (shape.some(d => d <= 0)) return undefined;
-      const total = shape.reduce((a, b) => a * b, 1);
+      const concrete = shape.map(d => (d > 0 ? d : 1));
+      const total = concrete.reduce((a, b) => a * b, 1);
       const data = new FloatXArray(total);
       const imag = t.isComplex ? new FloatXArray(total) : undefined;
-      return RTV.tensor(data, [...shape], imag);
+      return RTV.tensor(data, concrete, imag);
     }
     default:
       // Structs, cells, function handles, strings — too varied to

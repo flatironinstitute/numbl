@@ -31,11 +31,12 @@ import {
   buildJitSourceComment,
   gatherTypedEnvInputs,
   generateSyntheticFnJS,
-  lowerSyntheticFn,
   runSyntheticFnAgainstEnv,
   widenAgainst,
   type SyntheticFnRunResult,
 } from "./shared.js";
+import type { FunctionDef } from "../../interpreter/types.js";
+import { lowerFunction } from "./lower/jitLower.js";
 
 export type LoopKind = "for" | "while";
 
@@ -124,20 +125,46 @@ export function classifyLoop(
   };
 }
 
+const LOG_CJIT_MISSES =
+  typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
+
 export function lowerLoop(
   interp: Interpreter,
   classification: LoopClassification
 ): LoopLowered | null {
   const { stmt, kind, inputs, inputTypes, outputs } = classification;
-  const result = lowerSyntheticFn(
-    interp,
-    `$loop_${kind}`,
-    inputs,
-    inputTypes,
-    outputs,
-    [stmt]
+  // Build the synthetic FunctionDef inline (rather than calling
+  // lowerSyntheticFn) so we can read its `_lastLowerBailReason` after
+  // a failed lowering for the [loop-jit miss] diagnostic.
+  const syntheticFn: FunctionDef = {
+    name: `$loop_${kind}`,
+    params: [...inputs],
+    outputs: [...outputs],
+    body: [stmt],
+  };
+  const result = lowerFunction(
+    syntheticFn,
+    [...inputTypes],
+    outputs.length,
+    interp
   );
-  if (!result) return null;
+  if (!result) {
+    if (LOG_CJIT_MISSES) {
+      const reason =
+        (syntheticFn as { _lastLowerBailReason?: string })
+          ._lastLowerBailReason ?? "unknown";
+      const loc = stmt.span
+        ? `${stmt.span.file}:${stmt.span.start}`
+        : `loop:${kind}`;
+      const typeKey = inputs
+        .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
+        .join(",");
+      process.stderr.write(
+        `[loop-jit miss] ${loc} ${kind} (${typeKey}) → ${reason}\n`
+      );
+    }
+    return null;
+  }
   return { classification, result };
 }
 

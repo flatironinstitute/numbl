@@ -36,9 +36,28 @@ for i = 1:n
     acc2 = acc2 + out2{1}(1) + out2{2}(1) + out2{3}(1);
 end
 
+% 3) Cell-write with non-literal (loop-variable) index after a
+%    cell-list-unpack. The chunkerfunc resolve loop has a small inner
+%    `for j = nout+1:3; out{j} = out{j-1}*M*c; end` — the body is dead
+%    when nout==3 but lowering still has to type-check it. Reads of
+%    out{j-1} must resolve to a known type when every tracked
+%    element shares one, so the Binary RHS lowers.
+out3 = cell(3, 1);
+M = ones(2, 2);
+acc3 = 0;
+for i = 1:n
+    %!numbl:assert_jit
+    [out3{1:3}] = fcurve3(base_ts);
+    for j = 4:3  % statically empty range — body is dead but still has to lower
+        out3{j} = out3{j-1} * M * 2;
+    end
+    acc3 = acc3 + out3{1}(1);
+end
+
 % Correctness check
 expected = n * (cos(0) - sin(0) - cos(0));
 assert(abs(acc1 - expected) < 1e-12, '1: acc1');
 assert(abs(acc2 - expected) < 1e-12, '2: acc2');
+assert(abs(acc3 - n * cos(0)) < 1e-12, '3: acc3');
 
 disp('SUCCESS')

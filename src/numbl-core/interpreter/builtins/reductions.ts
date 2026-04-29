@@ -108,9 +108,26 @@ function reductionOutputType(
     inputType.kind === "complex_or_number" ||
     (inputType.kind === "tensor" && inputType.isComplex === true);
 
+  // Standard reductions (sum, prod, mean, max, min, cumsum, ...) all
+  // preserve non-negativity: any combination of nonneg values via
+  // those ops stays nonneg. Pulling this through to the output type
+  // lets `sqrt(sum(...))` keep its real-valued type instead of
+  // widening to `complex_or_number` (which then bails downstream
+  // comparisons like `err1 > eps`).
+  const inputNonneg =
+    inputType.kind === "boolean" ||
+    (inputType.kind === "number" &&
+      (inputType.sign === "nonneg" || inputType.sign === "positive")) ||
+    (inputType.kind === "tensor" && inputType.nonneg === true);
+
   const scalarOut = (): JitType => {
     if (opts?.logicalOutput) return { kind: "boolean" };
-    if (opts?.alwaysReal || !isComplex) return { kind: "number" };
+    if (opts?.alwaysReal || !isComplex) {
+      return {
+        kind: "number",
+        ...(inputNonneg ? { sign: "nonneg" as const } : {}),
+      };
+    }
     return { kind: "complex_or_number" };
   };
 
@@ -121,6 +138,7 @@ function reductionOutputType(
       kind: "tensor",
       isComplex,
       ...(shape ? { shape } : {}),
+      ...(!isComplex && inputNonneg ? { nonneg: true as const } : {}),
     };
   };
 
