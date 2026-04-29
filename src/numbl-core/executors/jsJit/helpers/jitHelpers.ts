@@ -13,6 +13,7 @@
 
 import {
   FloatXArray,
+  type FloatXArrayType,
   type RuntimeTensor,
   type RuntimeFunction,
   type RuntimeStruct,
@@ -427,15 +428,21 @@ export const jitHelpers = {
     return makeTensor(out, imag, [rows, totalCols]);
   },
 
-  // Extract a row or column slice from a 2D tensor as a real tensor.
+  // Extract a row or column slice from a 2D tensor.
   // colonPos=0 → column slice (fix col, vary row): A(:, fixedIdx)
   // colonPos=1 → row slice (fix row, vary col): A(fixedIdx, :)
+  // Preserves complex parts: a complex base produces a complex slice;
+  // a real base produces a real slice. Without this, JIT'ing
+  //   vals(:, jj)
+  // on a complex `vals` (e.g. chunkie adapgausskerneval's scratch
+  // buffer) is blocked at lowering time.
   __extractSlice2d: (
     base: RuntimeTensor,
     fixedIdx: number,
     colonPos: number
   ): RuntimeTensor => {
     const d = base.data;
+    const dim = base.imag;
     const d0 = base.shape[0]; // number of rows (column-major stride)
     const d1 = base.shape[1]; // number of cols
     const fi = Math.round(fixedIdx) - 1; // 0-based fixed index
@@ -444,12 +451,22 @@ export const jitHelpers = {
       const out = new FloatXArray(d0);
       const offset = fi * d0;
       for (let i = 0; i < d0; i++) out[i] = d[offset + i];
-      return makeTensor(out, undefined, [d0, 1]);
+      let outIm: FloatXArrayType | undefined;
+      if (dim) {
+        outIm = new FloatXArray(d0);
+        for (let i = 0; i < d0; i++) outIm[i] = dim[offset + i];
+      }
+      return makeTensor(out, outIm, [d0, 1]);
     } else {
       // Row slice: A(fi, :) — strided in column-major, length d1.
       const out = new FloatXArray(d1);
       for (let j = 0; j < d1; j++) out[j] = d[j * d0 + fi];
-      return makeTensor(out, undefined, [1, d1]);
+      let outIm: FloatXArrayType | undefined;
+      if (dim) {
+        outIm = new FloatXArray(d1);
+        for (let j = 0; j < d1; j++) outIm[j] = dim[j * d0 + fi];
+      }
+      return makeTensor(out, outIm, [1, d1]);
     }
   },
 

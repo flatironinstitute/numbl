@@ -239,8 +239,11 @@ function tryLowerAsSliceBind(
   // From here on, any failure is a hard bail — the caller can't fall back
   // to normal Index lowering because Colon isn't supported there.
 
-  // Real tensors only.
-  if (baseType.isComplex === true) return "bail";
+  // Slice-alias bind is for real tensors only — for complex bases, fall
+  // through to normal Index lowering which handles the 2D-colon case via
+  // `__extractSlice2d` (preserves the imag part). Returning null (not
+  // "bail") triggers the fallthrough.
+  if (baseType.isComplex === true) return null;
   // Shape must exist so we can check ndim and colon-dim sizes.
   if (!baseType.shape) return "bail";
   // Range indices aren't supported yet (only bare `:`).

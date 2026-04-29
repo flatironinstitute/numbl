@@ -951,13 +951,14 @@ function lowerIndexExpr(
     };
   }
 
-  // 2D colon-slice read: A(i, :) or A(:, j) on a real-tensor base produces
+  // 2D colon-slice read: A(i, :) or A(:, j) on a 2D tensor base produces
   // a row/column vector. Catch this before the per-index lowering loop so
   // the Colon indices don't fall through to lowerExpr's default bail.
+  // Both real and complex bases are supported — `__extractSlice2d`
+  // preserves the imag part when present.
   if (
     input.indices.length === 2 &&
     base.jitType.kind === "tensor" &&
-    base.jitType.isComplex === false &&
     base.jitType.shape &&
     base.jitType.shape.length === 2
   ) {
@@ -974,6 +975,7 @@ function lowerIndexExpr(
         const colonPos = colonLeft ? 0 : 1;
         const sliceLen = base.jitType.shape[colonPos];
         const outShape = colonPos === 0 ? [sliceLen, 1] : [1, sliceLen];
+        const isComplex = base.jitType.isComplex === true;
         ctx._hasTensorOps = true;
         return {
           tag: "Call",
@@ -987,7 +989,11 @@ function lowerIndexExpr(
               jitType: { kind: "number", exact: colonPos },
             },
           ],
-          jitType: { kind: "tensor", isComplex: false, shape: outShape },
+          jitType: {
+            kind: "tensor",
+            isComplex,
+            shape: outShape,
+          },
         };
       }
     }
