@@ -13,9 +13,15 @@
  * leaves. Broadcasting, complex tensors, and in-place mutation are
  * not handled yet.
  */
-import { BinaryOperation, type Expr, type Stmt } from "../../parser/types.js";
+import { type Expr, type Stmt } from "../../parser/types.js";
 import type { Environment } from "../../interpreter/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
+import { ELEMWISE_REAL_BUILTINS } from "./builtins.js";
+import {
+  binaryOpNeedsScalarCheck,
+  isElemwiseBinaryOp,
+  isElemwiseUnaryOp,
+} from "./elemwiseStructural.js";
 
 /** Per-leaf classification: tensor, scalar (number), or literal. */
 export type LeafKind = "tensor" | "scalar";
@@ -37,29 +43,6 @@ export interface FuseClassification {
    *  `tN[i]` (tensor) or `sN` (scalar). */
   readonly kindOf: ReadonlyMap<string, LeafKind>;
 }
-
-/** Whitelisted unary-elementwise builtins. The C codegen emits a
- *  bare `<name>(arg)` for these. `abs` → `fabs`. */
-const FUSE_UNARY_BUILTINS: ReadonlySet<string> = new Set([
-  "exp",
-  "log",
-  "log2",
-  "log10",
-  "sin",
-  "cos",
-  "tan",
-  "asin",
-  "acos",
-  "atan",
-  "sinh",
-  "cosh",
-  "tanh",
-  "sqrt",
-  "abs",
-  "floor",
-  "ceil",
-  "round",
-]);
 
 /** Determine whether `stmt` is a fusable Assign and, if so, return
  *  its classification. Returns null on any structural mismatch. */
@@ -138,13 +121,12 @@ function walkExpr(e: Expr, env: Environment, ctx: WalkCtx): boolean {
       if (!isFusableBinary(e, env, ctx)) return false;
       return walkExpr(e.left, env, ctx) && walkExpr(e.right, env, ctx);
     case "Unary":
-      // Plus / Minus are element-wise. Not (~) is allowed but
-      // produces a logical — we restrict to numeric tensors so skip
-      // it for v0.
-      if (e.op !== "Plus" && e.op !== "Minus") return false;
+      // Not (~) produces a logical — we restrict to numeric tensors,
+      // so the shared structural check (Plus/Minus only) is exactly right.
+      if (!isElemwiseUnaryOp(e.op)) return false;
       return walkExpr(e.operand, env, ctx);
     case "FuncCall":
-      if (!FUSE_UNARY_BUILTINS.has(e.name)) return false;
+      if (!ELEMWISE_REAL_BUILTINS.has(e.name)) return false;
       if (e.args.length !== 1) return false;
       return walkExpr(e.args[0], env, ctx);
     default:
@@ -152,32 +134,23 @@ function walkExpr(e: Expr, env: Environment, ctx: WalkCtx): boolean {
   }
 }
 
-/** Element-wise feasibility for a Binary node. The expression's
- *  leaves are walked separately by `walkExpr`. */
+/** Element-wise feasibility for a Binary node. Layered on top of the
+ *  shared structural check: `Mul`/`Div` need a runtime check that at
+ *  least one operand is a scalar (matrix forms degenerate to elementwise
+ *  only in that case). The expression's leaves are walked separately
+ *  by `walkExpr`. */
 function isFusableBinary(
   e: Expr & { type: "Binary" },
   env: Environment,
   ctx: WalkCtx
 ): boolean {
-  switch (e.op) {
-    case BinaryOperation.Add:
-    case BinaryOperation.Sub:
-    case BinaryOperation.ElemMul:
-    case BinaryOperation.ElemDiv:
-      return true;
-    case BinaryOperation.Mul:
-    case BinaryOperation.Div:
-      // Plain `*` and `/` are matrix ops between two tensors but
-      // act element-wise (broadcasting) when at least one operand
-      // is a scalar. Walk both operands to determine their kinds.
-      // This is a peek — we re-walk in walkExpr; the cost is tiny.
-      return (
-        atLeastOneScalar(e.left, env, ctx) ||
-        atLeastOneScalar(e.right, env, ctx)
-      );
-    default:
-      return false;
+  if (!isElemwiseBinaryOp(e.op)) return false;
+  if (binaryOpNeedsScalarCheck(e.op)) {
+    return (
+      atLeastOneScalar(e.left, env, ctx) || atLeastOneScalar(e.right, env, ctx)
+    );
   }
+  return true;
 }
 
 /** True if the expression is statically a scalar (literal or scalar

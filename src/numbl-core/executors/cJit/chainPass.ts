@@ -22,28 +22,8 @@
  * pass just operates on the immediate stmt list.
  */
 
-import { BinaryOperation, type Expr, type Stmt } from "../../parser/types.js";
-
-const FUSE_UNARY_BUILTINS: ReadonlySet<string> = new Set([
-  "exp",
-  "log",
-  "log2",
-  "log10",
-  "sin",
-  "cos",
-  "tan",
-  "asin",
-  "acos",
-  "atan",
-  "sinh",
-  "cosh",
-  "tanh",
-  "sqrt",
-  "abs",
-  "floor",
-  "ceil",
-  "round",
-]);
+import { type Expr, type Stmt } from "../../parser/types.js";
+import { isElemwiseStructuralExpr } from "./elemwiseStructural.js";
 
 /** Per-stmt classification used by the chain executor. The data
  *  carried on each Synth node is `ChainAnalysis`. */
@@ -100,40 +80,7 @@ function buildSynth(assigns: readonly (Stmt & { type: "Assign" })[]): Stmt {
 
 function isFusableAssign(stmt: Stmt): boolean {
   if (stmt.type !== "Assign") return false;
-  return isFusableExpr(stmt.expr);
-}
-
-function isFusableExpr(e: Expr): boolean {
-  switch (e.type) {
-    case "Number":
-      return true;
-    case "Ident":
-      // Runtime check determines whether this is a tensor or scalar
-      // (and whether dimensions match). Here we just verify the
-      // structural shape is fusable.
-      return true;
-    case "Binary":
-      switch (e.op) {
-        case BinaryOperation.Add:
-        case BinaryOperation.Sub:
-        case BinaryOperation.Mul:
-        case BinaryOperation.Div:
-        case BinaryOperation.ElemMul:
-        case BinaryOperation.ElemDiv:
-          return isFusableExpr(e.left) && isFusableExpr(e.right);
-        default:
-          return false;
-      }
-    case "Unary":
-      if (e.op !== "Plus" && e.op !== "Minus") return false;
-      return isFusableExpr(e.operand);
-    case "FuncCall":
-      if (!FUSE_UNARY_BUILTINS.has(e.name)) return false;
-      if (e.args.length !== 1) return false;
-      return isFusableExpr(e.args[0]);
-    default:
-      return false;
-  }
+  return isElemwiseStructuralExpr(stmt.expr);
 }
 
 /** Stable-hashable string that encodes the AST shape of every Assign

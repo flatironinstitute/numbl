@@ -19,7 +19,6 @@ import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import type { LoweredStmt } from "../lowering.js";
 import type { LoopLowered } from "../jsJit/jitLoop.js";
-import type { JitType } from "../../jitTypes.js";
 import { jitTypeKey } from "../../jitTypes.js";
 import { RTV } from "../../runtime/constructors.js";
 import type { RuntimeValue } from "../../runtime/types.js";
@@ -28,7 +27,6 @@ import {
   generateCSource,
   inferVarEncodings,
   totalSlotCount,
-  varSlotCount,
   type VarEncoding,
 } from "./codegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
@@ -223,7 +221,6 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
         slot += 1;
       }
     }
-    void varSlotCount;
     return { ok: true };
   },
 };
@@ -250,6 +247,3 @@ function toComplexPair(v: unknown): { re: number; im: number } | null {
   }
   return null;
 }
-
-// Keep the JitType import alive for downstream readers.
-void (null as unknown as JitType);

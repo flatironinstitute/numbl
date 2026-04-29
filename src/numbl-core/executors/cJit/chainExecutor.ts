@@ -26,6 +26,7 @@ import {
   resolveChain,
   type ChainResolution,
 } from "./chainCodegen.js";
+import { collectIdents } from "./elemwiseCodegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
 
 /** Minimum tensor numel to pay the koffi-dispatch + per-call alloc
@@ -66,7 +67,7 @@ export const cJitChainExecutor: Executor<
     for (const a of analysis.assigns) {
       if (a.type !== "Assign") continue;
       const rhsNames = new Set<string>();
-      collectIdentsToSet(a.expr, rhsNames);
+      collectIdents(a.expr, rhsNames);
       for (const name of rhsNames) {
         if (writtenSoFar.has(name)) continue; // local already
         if (seenRhsRead.has(name)) continue;
@@ -255,26 +256,3 @@ export const cJitChainExecutor: Executor<
     return { ok: true };
   },
 };
-
-function collectIdentsToSet(
-  e: import("../../parser/types.js").Expr,
-  out: Set<string>
-): void {
-  switch (e.type) {
-    case "Ident":
-      out.add(e.name);
-      return;
-    case "Number":
-      return;
-    case "Binary":
-      collectIdentsToSet(e.left, out);
-      collectIdentsToSet(e.right, out);
-      return;
-    case "Unary":
-      collectIdentsToSet(e.operand, out);
-      return;
-    case "FuncCall":
-      for (const a of e.args) collectIdentsToSet(a, out);
-      return;
-  }
-}

@@ -40,6 +40,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [jit/overview.md](jit/overview.md) — when the JIT runs, opt levels, bailouts.
 - [jit/ir-codegen.md](jit/ir-codegen.md) — JIT IR and the JS backend.
 - [jit/fusion.md](jit/fusion.md) — element-wise fusion.
+- [jit/cjit.md](jit/cjit.md) — C-JIT (`--opt e3`): what it's for and the three trigger contexts.
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
 - [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.

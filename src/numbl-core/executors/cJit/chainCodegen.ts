@@ -27,12 +27,8 @@
  *       double <nameC>, double <nameD>, ...);
  */
 
-import {
-  BinaryOperation,
-  type Expr,
-  UnaryOperation,
-} from "../../parser/types.js";
 import type { ChainAnalysis } from "./chainPass.js";
+import { collectIdents, emitElemwiseExpr } from "./elemwiseCodegen.js";
 
 /** Per-name role (decided at compile time using env types). */
 export type NameRole =
@@ -74,7 +70,7 @@ export function resolveChain(
     // RHS reads first (so a `r = r + 1;` correctly classifies r as
     // input-then-local, not local-only).
     const rhsNames = new Set<string>();
-    collectRhsIdents(a.expr, rhsNames);
+    collectIdents(a.expr, rhsNames);
     for (const name of rhsNames) {
       if (roles.has(name)) continue;
       if (writtenSoFar.has(name)) continue;
@@ -120,26 +116,6 @@ export function resolveChain(
     tensorInputs,
     scalarInputs,
   };
-}
-
-function collectRhsIdents(e: Expr, out: Set<string>): void {
-  switch (e.type) {
-    case "Ident":
-      out.add(e.name);
-      return;
-    case "Number":
-      return;
-    case "Binary":
-      collectRhsIdents(e.left, out);
-      collectRhsIdents(e.right, out);
-      return;
-    case "Unary":
-      collectRhsIdents(e.operand, out);
-      return;
-    case "FuncCall":
-      for (const a of e.args) collectRhsIdents(a, out);
-      return;
-  }
 }
 
 /** Build the koffi function declaration string. */
@@ -188,10 +164,8 @@ export function generateChainCSource(
 
   // Declare every local-tensor name as a `double` local. If the role
   // says `readsFromInput`, initialize from the input pointer.
-  const declared = new Set<string>();
   for (const [name, role] of res.roles) {
     if (role.kind !== "local-tensor") continue;
-    declared.add(name);
     if (role.readsFromInput) {
       lines.push(`    double ${name} = in_${name}[i];`);
     } else {
@@ -199,8 +173,15 @@ export function generateChainCSource(
     }
   }
 
+  const identToC = (name: string): string => {
+    const role = res.roles.get(name);
+    if (!role) throw new Error(`chain codegen: unknown name ${name}`);
+    if (role.kind === "input-tensor") return `in_${name}[i]`;
+    // input-scalar or local-tensor: read the local C name.
+    return name;
+  };
   for (const a of cls.assigns) {
-    lines.push(`    ${a.name} = ${emitExpr(a.expr, res)};`);
+    lines.push(`    ${a.name} = ${emitElemwiseExpr(a.expr, identToC)};`);
   }
 
   // Writebacks for every live-out.
@@ -209,75 +190,5 @@ export function generateChainCSource(
   }
   lines.push(`  }`);
   lines.push(`}`);
-  void declared;
   return lines.join("\n") + "\n";
-}
-
-function emitExpr(e: Expr, res: ChainResolution): string {
-  switch (e.type) {
-    case "Number":
-      return formatDouble(parseFloat(e.value));
-    case "Ident": {
-      const role = res.roles.get(e.name);
-      if (!role) throw new Error(`chain codegen: unknown name ${e.name}`);
-      if (role.kind === "input-tensor") return `in_${e.name}[i]`;
-      if (role.kind === "input-scalar") return e.name;
-      // local-tensor — read the local
-      return e.name;
-    }
-    case "Binary":
-      return emitBinary(e, res);
-    case "Unary": {
-      const x = emitExpr(e.operand, res);
-      switch (e.op) {
-        case UnaryOperation.Plus:
-          return `(+${x})`;
-        case UnaryOperation.Minus:
-          return `(-${x})`;
-        default:
-          throw new Error(`chain codegen: unsupported unary op ${e.op}`);
-      }
-    }
-    case "FuncCall": {
-      const name = e.name === "abs" ? "fabs" : e.name;
-      const arg = emitExpr(e.args[0], res);
-      return `${name}(${arg})`;
-    }
-    default:
-      throw new Error(
-        `chain codegen: unsupported expr ${(e as { type: string }).type}`
-      );
-  }
-}
-
-function emitBinary(
-  e: Expr & { type: "Binary" },
-  res: ChainResolution
-): string {
-  const l = emitExpr(e.left, res);
-  const r = emitExpr(e.right, res);
-  switch (e.op) {
-    case BinaryOperation.Add:
-      return `(${l} + ${r})`;
-    case BinaryOperation.Sub:
-      return `(${l} - ${r})`;
-    case BinaryOperation.Mul:
-    case BinaryOperation.ElemMul:
-      return `(${l} * ${r})`;
-    case BinaryOperation.Div:
-    case BinaryOperation.ElemDiv:
-      return `(${l} / ${r})`;
-    default:
-      throw new Error(`chain codegen: unsupported binary op ${e.op}`);
-  }
-}
-
-function formatDouble(v: number): string {
-  if (Number.isNaN(v)) return "((double)NAN)";
-  if (v === Infinity) return "((double)INFINITY)";
-  if (v === -Infinity) return "(-(double)INFINITY)";
-  if (Number.isInteger(v)) return `${v}.0`;
-  const s = String(v);
-  if (/[.eE]/.test(s)) return s;
-  return `${s}.0`;
 }

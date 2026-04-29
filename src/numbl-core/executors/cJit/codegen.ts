@@ -519,15 +519,9 @@ function emitBinary(e: JitExpr & { tag: "Binary" }, ctx: EmitCtx): Emitted {
       };
     case BinaryOperation.Div:
     case BinaryOperation.ElemDiv: {
-      // (a + bi) / (c + di) = ((ac + bd) + (bc - ad)i) / (c^2 + d^2)
-      // Hoist the denominator into a temp to keep the emitted
-      // expression compact and let the compiler share the divide.
-      const t = ++ctx.tmpCounter;
-      // Use comma operator + statement-expr macro? Simpler: emit two
-      // C exprs with shared temp via inline struct. Easier: just
-      // duplicate `(c*c + d*d)` and trust the compiler to CSE it.
+      // (a + bi) / (c + di) = ((ac + bd) + (bc - ad)i) / (c^2 + d^2).
+      // Repeat (c*c + d*d) and trust the C compiler to CSE it.
       const denom = `(${rc.re} * ${rc.re} + ${rc.im} * ${rc.im})`;
-      void t;
       return {
         kind: "complex",
         re: `((${lc.re} * ${rc.re} + ${lc.im} * ${rc.im}) / ${denom})`,

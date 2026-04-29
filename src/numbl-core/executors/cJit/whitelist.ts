@@ -12,40 +12,10 @@
  */
 
 import type { JitExpr, JitStmt, JitType } from "../../jitTypes.js";
-
-/** Builtin scalar-math functions the C codegen knows how to emit on
- *  REAL arguments. Complex args are rejected for these (would require
- *  C99 _Complex or hand-rolled identities). */
-const C_REAL_MATH_BUILTINS: ReadonlySet<string> = new Set([
-  "sin",
-  "cos",
-  "tan",
-  "asin",
-  "acos",
-  "atan",
-  "atan2",
-  "sinh",
-  "cosh",
-  "tanh",
-  "exp",
-  "log",
-  "log2",
-  "log10",
-  "sqrt",
-  "abs",
-  "floor",
-  "ceil",
-  "round",
-]);
-
-/** Complex-only builtins: parts/conjugate. Accept either real or
- *  complex args (real(x) on real → x; imag(x) on real → 0; conj(x)
- *  on real → x). */
-const C_COMPLEX_PROJECTION_BUILTINS: ReadonlySet<string> = new Set([
-  "real",
-  "imag",
-  "conj",
-]);
+import {
+  LOOP_REAL_MATH_BUILTINS,
+  LOOP_COMPLEX_PROJECTION_BUILTINS,
+} from "./builtins.js";
 
 export function isCScalarType(t: JitType): boolean {
   if (t.kind === "number") return true;
@@ -120,12 +90,12 @@ function exprFeasible(e: JitExpr): boolean {
     case "Unary":
       return exprFeasible(e.operand);
     case "Call":
-      if (C_COMPLEX_PROJECTION_BUILTINS.has(e.name)) {
+      if (LOOP_COMPLEX_PROJECTION_BUILTINS.has(e.name)) {
         // real / imag / conj — accept any scalar arg shape.
         for (const a of e.args) if (!exprFeasible(a)) return false;
         return true;
       }
-      if (C_REAL_MATH_BUILTINS.has(e.name)) {
+      if (LOOP_REAL_MATH_BUILTINS.has(e.name)) {
         // Real-only math: all args must be real.
         for (const a of e.args) {
           if (!exprFeasible(a)) return false;
