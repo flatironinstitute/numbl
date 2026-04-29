@@ -548,13 +548,35 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
       const args = stmt.args.map(a => emitExpr(a));
       const nargout = stmt.names.length;
       const tmp = `$ma${++_tmpCounter}`;
-      lines.push(
-        `${indent}const ${tmp} = $h.ibcall(${JSON.stringify(stmt.callName)}, ${nargout}, ${args.join(", ")});`
-      );
+      const argList = args.length > 0 ? `, ${args.join(", ")}` : "";
+      const kind = stmt.kind ?? "ibuiltin";
+      if (kind === "func_handle") {
+        // `callName` is a function-handle var name. Load the handle and
+        // invoke its jsFn (or fall back to dispatch) with the requested
+        // nargout, returning an array we then unpack.
+        lines.push(
+          `${indent}const ${tmp} = $h.callFuncHandleMulti($rt, ${mangle(stmt.callName)}, ${nargout}${argList});`
+        );
+      } else if (kind === "user") {
+        // Soft-bail user-call multi-output: dispatch through the
+        // interpreter; no specialized callee artifact.
+        lines.push(
+          `${indent}const ${tmp} = $h.callUserFuncMulti($rt, ${JSON.stringify(stmt.callName)}, ${nargout}${argList});`
+        );
+      } else {
+        lines.push(
+          `${indent}const ${tmp} = $h.ibcall(${JSON.stringify(stmt.callName)}, ${nargout}${argList});`
+        );
+      }
       for (let i = 0; i < stmt.names.length; i++) {
         const name = stmt.names[i];
         if (name !== null) {
           lines.push(`${indent}${mangle(name)} = ${tmp}[${i}];`);
+          // Refresh hoisted .data / .shape aliases when the LHS var is a
+          // tensor that's read via the hoist path elsewhere in the loop.
+          // Without this, `[r, d] = fcurve(ts); ... r(1)` reads from a
+          // stale (undefined) `$r_data` alias and crashes at runtime.
+          emitHoistRefresh(lines, name, indent);
         }
       }
       break;

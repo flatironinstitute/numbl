@@ -1,0 +1,44 @@
+% Cell-list-unpack patterns inside JIT loops. The chunkie/chunkerfunc
+% resolve loop uses `[out{1:nout}] = fcurve(ts)` plus dynamic `out{j}`
+% reads/writes; today the JIT bails on all of them.
+%
+% Each %!numbl:assert_jit pins one shape. Cases 1-2 currently fail —
+% they document the gap so the cell-on-LHS / cell-with-non-literal-
+% index work (Option 2/3 in the e2 plan) can drive against them.
+
+fcurve3 = @(t) deal(cos(t), -sin(t), -cos(t));
+base_ts = linspace(0, 1, 32).';
+[a0, b0, c0] = fcurve3(base_ts);  % warmup
+
+n = 20;
+
+% 1) Cell-list-unpack with literal range: the form chunkerfunc uses
+%    after substituting the introspected nout. `lowerMultiAssign`
+%    only supports plain Var lvalues today; cell-element lvalues
+%    bail.
+out = cell(3, 1);
+acc1 = 0;
+for i = 1:n
+    %!numbl:assert_jit
+    [out{1:3}] = fcurve3(base_ts);
+    acc1 = acc1 + out{1}(1) + out{2}(1) + out{3}(1);
+end
+
+% 2) Cell-list-unpack with a Var range (chunkerfunc's literal
+%    `[out{1:nout}] = fcurve(ts)` — nout is 3 throughout the spec but
+%    is a Var in the source).
+nout = 3;
+out2 = cell(3, 1);
+acc2 = 0;
+for i = 1:n
+    %!numbl:assert_jit
+    [out2{1:nout}] = fcurve3(base_ts);
+    acc2 = acc2 + out2{1}(1) + out2{2}(1) + out2{3}(1);
+end
+
+% Correctness check
+expected = n * (cos(0) - sin(0) - cos(0));
+assert(abs(acc1 - expected) < 1e-12, '1: acc1');
+assert(abs(acc2 - expected) < 1e-12, '2: acc2');
+
+disp('SUCCESS')

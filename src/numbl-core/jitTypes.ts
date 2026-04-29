@@ -41,7 +41,16 @@ export type JitType =
       fields?: Record<string, JitType>;
     }
   | { kind: "sparse_matrix"; isComplex: boolean; m?: number; n?: number }
-  | { kind: "cell"; shape?: number[] }
+  | {
+      kind: "cell";
+      shape?: number[];
+      /** Per-index element types (1-based), tracked when literal-index
+       *  writes happen with a known type. Reads with a literal index in
+       *  the map return the tracked type instead of `unknown`, which
+       *  unblocks chunkerfunc's `[out{1:3}] = fcurve(ts); r = out{1}; …`
+       *  pattern. Sparse — missing keys mean "unknown". */
+      elements?: Record<number, JitType>;
+    }
   | { kind: "dictionary" }
   | { kind: "function_handle" }
   | { kind: "unknown" };
@@ -320,7 +329,24 @@ export function unifyJitTypes(a: JitType, b: JitType): JitType {
       if (a.shape && b.shape && a.shape.length === b.shape.length) {
         shape = a.shape.map((d, i) => (d === b.shape![i] ? d : -1));
       }
-      return { kind: "cell", ...(shape ? { shape } : {}) };
+      // Unify per-index element types: keep only entries that are
+      // present in both with a non-unknown unification.
+      let elements: Record<number, JitType> | undefined;
+      if (a.elements && b.elements) {
+        for (const k of Object.keys(a.elements)) {
+          const idx = Number(k);
+          const bt = b.elements[idx];
+          if (!bt) continue;
+          const u = unifyJitTypes(a.elements[idx], bt);
+          if (u.kind === "unknown") continue;
+          (elements ??= {})[idx] = u;
+        }
+      }
+      return {
+        kind: "cell",
+        ...(shape ? { shape } : {}),
+        ...(elements ? { elements } : {}),
+      };
     }
     if (a.kind === "sparse_matrix" && b.kind === "sparse_matrix") {
       return {
@@ -690,6 +716,14 @@ export type JitStmt =
       callName: string;
       args: JitExpr[];
       outputTypes: JitType[];
+      /** Dispatch shape:
+       *  - "ibuiltin" (default) — IBuiltin called via $h.ibcall.
+       *  - "func_handle" — `callName` is a function-handle var name; the
+       *    JIT loads the handle and calls jsFn with the requested nargout.
+       *  - "user" — `callName` is a user-fn name dispatched through the
+       *    interpreter (no specialized JIT artifact for the callee yet).
+       */
+      kind?: "ibuiltin" | "func_handle" | "user";
     }
   | {
       /**

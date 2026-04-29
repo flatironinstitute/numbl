@@ -17,7 +17,11 @@ import { cloneEnv, mergeEnvs, envsEqual } from "./jitLowerTypes.js";
 import { getIBuiltin } from "../../../interpreter/builtins/index.js";
 import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx } from "./jitLower.js";
-import { lowerExpr, lowerIBuiltinCall } from "./jitLowerExpr.js";
+import {
+  lowerExpr,
+  lowerIBuiltinCall,
+  probeFuncHandleMultiReturnTypes,
+} from "./jitLowerExpr.js";
 import { JIT_IO_BUILTINS as JIT_VOID_IO_BUILTINS } from "./jitBailSafety.js";
 
 const LOG_CJIT_MISSES =
@@ -322,6 +326,14 @@ function tryLowerAsSliceBind(
  * interpreter. Notably: slice writes (`t(a:b) = src`) and complex tensors
  * are not yet supported.
  */
+/** Pull a literal positive-integer index out of an Expr (used by cell
+ *  literal-index detection in both single and multi cell writes). */
+function literalCellIndex(e: Expr): number | null {
+  if (e.type !== "Number") return null;
+  const v = parseFloat(e.value);
+  return Number.isInteger(v) && v >= 1 ? v : null;
+}
+
 function lowerAssignLValue(
   ctx: LowerCtx,
   stmt: Stmt & { type: "AssignLValue" }
@@ -345,6 +357,19 @@ function lowerAssignLValue(
     ctx._hasTensorOps = true;
     ctx.assignedVars.add(lv.base.name);
     if (!ctx.params.has(lv.base.name)) ctx.localVars.add(lv.base.name);
+    // Track per-index element type when the index is a literal positive
+    // integer. Literal-index reads later in the spec (e.g. `r = out{1}`)
+    // will recover the value's static type instead of bailing on
+    // unknown.
+    const litIdx = literalCellIndex(lv.indices[0]);
+    if (litIdx !== null && rhs.jitType.kind !== "unknown") {
+      const next: JitType = {
+        kind: "cell",
+        ...(cellType.shape ? { shape: cellType.shape } : {}),
+        elements: { ...(cellType.elements ?? {}), [litIdx]: rhs.jitType },
+      };
+      ctx.env.set(lv.base.name, next);
+    }
     return [
       {
         tag: "Assign",
@@ -826,15 +851,106 @@ function lowerMultiAssign(
   ctx: LowerCtx,
   stmt: Stmt & { type: "MultiAssign" }
 ): JitStmt[] | null {
-  const nargout = stmt.lvalues.length;
-
-  // Only support simple variable lvalues and ~ (Ignore)
-  const names: (string | null)[] = [];
+  // Lvalue normalization. Each output slot becomes either a plain Var
+  // or a (cell, index) target. Cell-target slots get a synthetic temp
+  // var; after the multi-assign runs, a sequence of `cell{idx} = $tmp`
+  // writes copies the values into the cell. Two lvalue shapes are
+  // supported for cell targets:
+  //   (a) per-output IndexCell with a literal positive integer index
+  //       — `[out{1}, out{2}, out{3}] = f(...)`.
+  //   (b) one IndexCell with a literal `Range(start, end)` index —
+  //       `[out{1:3}] = f(...)`. Expanded into N (a)-style slots.
+  // The chunkie/chunkerfunc resolve loop uses (b).
+  type Slot =
+    | { kind: "var"; name: string }
+    | { kind: "ignore" }
+    | { kind: "cell"; tempName: string; cellName: string; idx: number };
+  const slots: Slot[] = [];
+  let cellTempCounter = 0;
+  // Resolve a literal positive-integer index either from a Number node
+  // or from an Ident whose env type carries an `exact` integer value
+  // (e.g. `nout = 3` → `[out{1:nout}]` becomes [out{1}, out{2}, out{3}]).
+  const resolveLiteralInt = (e: Expr): number | null => {
+    if (e.type === "Number") {
+      const v = parseFloat(e.value);
+      return Number.isInteger(v) && v >= 1 ? v : null;
+    }
+    if (e.type === "Ident") {
+      const t = ctx.env.get(e.name);
+      if (
+        t &&
+        t.kind === "number" &&
+        t.exact !== undefined &&
+        Number.isInteger(t.exact) &&
+        t.exact >= 1
+      ) {
+        return t.exact;
+      }
+      // Fallback: look up the live runtime value. The lowering pipeline
+      // strips `exact` from JIT type signatures to avoid spec
+      // proliferation, but for cell-unpack range bounds (e.g. `nout` in
+      // `[out{1:nout}] = …`) we want to read the current value at JIT
+      // compile time. The spec is keyed on (caller's) argTypes, so a
+      // change in `nout` produces a fresh spec via the type system
+      // anyway when the param type changes.
+      if (ctx.interp) {
+        const v = ctx.interp.env.get(e.name);
+        if (typeof v === "number" && Number.isInteger(v) && v >= 1) return v;
+      }
+    }
+    return null;
+  };
   for (const lv of stmt.lvalues) {
-    if (lv.type === "Var") names.push(lv.name);
-    else if (lv.type === "Ignore") names.push(null);
-    else return null; // unsupported lvalue (index, member, etc.)
+    if (lv.type === "Var") {
+      slots.push({ kind: "var", name: lv.name });
+      continue;
+    }
+    if (lv.type === "Ignore") {
+      slots.push({ kind: "ignore" });
+      continue;
+    }
+    if (
+      lv.type === "IndexCell" &&
+      lv.base.type === "Ident" &&
+      lv.indices.length === 1
+    ) {
+      const cellName = lv.base.name;
+      const cellType = ctx.env.get(cellName);
+      if (!cellType || cellType.kind !== "cell") return null;
+      const idxExpr = lv.indices[0];
+      const single = resolveLiteralInt(idxExpr);
+      if (single !== null) {
+        slots.push({
+          kind: "cell",
+          tempName: `$mavc_${cellTempCounter++}`,
+          cellName,
+          idx: single,
+        });
+        continue;
+      }
+      if (idxExpr.type === "Range" && idxExpr.step === null) {
+        const a = resolveLiteralInt(idxExpr.start);
+        const b = resolveLiteralInt(idxExpr.end);
+        if (a === null || b === null || b < a) return null;
+        for (let k = a; k <= b; k++) {
+          slots.push({
+            kind: "cell",
+            tempName: `$mavc_${cellTempCounter++}`,
+            cellName,
+            idx: k,
+          });
+        }
+        continue;
+      }
+      return null;
+    }
+    return null;
   }
+  if (slots.length === 0) return null;
+  const nargout = slots.length;
+  const names: (string | null)[] = slots.map(s =>
+    s.kind === "ignore" ? null : s.kind === "var" ? s.name : s.tempName
+  );
 
   // RHS must be a FuncCall (either IBuiltin or user function)
   const rhs = stmt.expr;
@@ -845,6 +961,114 @@ function lowerMultiAssign(
   if (args.some(a => a === null)) return null;
   const loweredArgs = args as JitExpr[];
   const argJitTypes = loweredArgs.map(a => a.jitType);
+
+  // Function-handle RHS: `[a, b, c] = fhandle(args...)`. Probe the handle
+  // with the requested nargout to discover output types, then emit a
+  // MultiAssign with kind="func_handle" so the codegen calls
+  // $h.callFuncHandleMulti at runtime. Hot in chunkie-style code where
+  // an inner loop binds `fcurve = @(t) starfish(t,...)` and unpacks
+  // multiple outputs per iteration.
+  // Build the list of cell-write follow-up statements. Each cell-target
+  // slot got a synthetic temp Var assigned by the MultiAssign; we now
+  // emit `cell{idx} = $tmp` to copy it into the cell. Mirrors the
+  // single-write `out{i} = v` lowering in lowerAssignLValue. As a
+  // side effect this updates the cell's per-index element types in the
+  // env so later literal-index reads see the right type instead of
+  // unknown.
+  const buildCellWrites = (outputTypes: JitType[]): JitStmt[] => {
+    const writes: JitStmt[] = [];
+    const cellsTouched = new Set<string>();
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      if (s.kind !== "cell") continue;
+      const cellType = ctx.env.get(s.cellName);
+      if (!cellType || cellType.kind !== "cell") continue;
+      cellsTouched.add(s.cellName);
+      const tempType = outputTypes[i];
+      // Update env's per-index element type. Mutate in place after
+      // cloning to ensure later writes see prior writes' updates.
+      if (tempType.kind !== "unknown") {
+        const cur = ctx.env.get(s.cellName);
+        if (cur && cur.kind === "cell") {
+          ctx.env.set(s.cellName, {
+            kind: "cell",
+            ...(cur.shape ? { shape: cur.shape } : {}),
+            elements: { ...(cur.elements ?? {}), [s.idx]: tempType },
+          });
+        }
+      }
+      // Re-read cellType from env so each write sees the updated type
+      // (reflects prior cell writes in this block).
+      const updatedCellType = ctx.env.get(s.cellName);
+      if (!updatedCellType || updatedCellType.kind !== "cell") continue;
+      writes.push({
+        tag: "Assign",
+        name: s.cellName,
+        expr: {
+          tag: "Call",
+          name: "__cellWrite",
+          args: [
+            { tag: "Var", name: s.cellName, jitType: updatedCellType },
+            {
+              tag: "NumberLiteral",
+              value: s.idx,
+              jitType: { kind: "number", exact: s.idx, isInteger: true },
+            },
+            { tag: "Var", name: s.tempName, jitType: tempType },
+          ],
+          jitType: updatedCellType,
+        },
+      });
+    }
+    for (const c of cellsTouched) {
+      ctx.assignedVars.add(c);
+      if (!ctx.params.has(c)) ctx.localVars.add(c);
+    }
+    return writes;
+  };
+
+  // Mark slot vars (incl. cell-target temps) as locals + record output
+  // types in env. Cell targets keep the cell variable's existing type;
+  // the temp's type is the output type from the call.
+  const recordOutputTypes = (outputTypes: JitType[]): void => {
+    for (let i = 0; i < slots.length; i++) {
+      const s = slots[i];
+      const t = outputTypes[i];
+      if (s.kind === "var") {
+        ctx.env.set(s.name, t);
+        ctx.assignedVars.add(s.name);
+        if (!ctx.params.has(s.name)) ctx.localVars.add(s.name);
+      } else if (s.kind === "cell") {
+        ctx.env.set(s.tempName, t);
+        ctx.assignedVars.add(s.tempName);
+        ctx.localVars.add(s.tempName);
+      }
+    }
+  };
+
+  const varType = ctx.interp ? ctx.env.get(rhs.name) : undefined;
+  if (varType && varType.kind === "function_handle" && ctx.interp) {
+    const types = probeFuncHandleMultiReturnTypes(
+      ctx.interp,
+      rhs.name,
+      loweredArgs,
+      nargout
+    );
+    if (!types) return null;
+    recordOutputTypes(types);
+    ctx._hasTensorOps = true;
+    return [
+      {
+        tag: "MultiAssign",
+        names,
+        callName: rhs.name,
+        args: loweredArgs,
+        outputTypes: types,
+        kind: "func_handle",
+      },
+      ...buildCellWrites(types),
+    ];
+  }
 
   // Try IBuiltin resolution with actual nargout. Per-context JS user
   // functions (.numbl.js) take priority over native builtins.
@@ -860,16 +1084,7 @@ function lowerMultiAssign(
   // runtime state and must go through dispatch.
   if (outputTypes.some(t => t.kind === "unknown")) return null;
 
-  // Update type environment for each output variable
-  for (let i = 0; i < names.length; i++) {
-    const name = names[i];
-    if (name !== null) {
-      ctx.env.set(name, outputTypes[i]);
-      ctx.assignedVars.add(name);
-      if (!ctx.params.has(name)) ctx.localVars.add(name);
-    }
-  }
-
+  recordOutputTypes(outputTypes);
   ctx._hasTensorOps = true;
 
   return [
@@ -880,6 +1095,7 @@ function lowerMultiAssign(
       args: loweredArgs,
       outputTypes,
     },
+    ...buildCellWrites(outputTypes),
   ];
 }
 

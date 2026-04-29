@@ -784,6 +784,102 @@ export const jitHelpers = {
     }
     return result;
   },
+
+  // Multi-output function-handle dispatch: `[a, b, c] = fhandle(args...)`.
+  // Returns an array of nargout values (the JIT codegen unpacks).
+  // jsFnExpectsNargout is true for anonymous handles (interpreterExec
+  // fixes that flag); the slow dispatch path handles named handles
+  // whose jsFn isn't set up. The caller is expected to have probed
+  // return types; mismatches surface as a JitFuncHandleBailError.
+  callFuncHandleMulti: (
+    rt: {
+      pushCallFrame: (name: string) => void;
+      popCallFrame: () => void;
+      pushCleanupScope: () => void;
+      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
+      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
+      annotateError: (e: unknown) => void;
+    },
+    fn: RuntimeFunction,
+    nargout: number,
+    ...args: unknown[]
+  ): unknown[] => {
+    let result: unknown;
+    if (fn.jsFn) {
+      result = fn.jsFnExpectsNargout
+        ? fn.jsFn(nargout, ...args)
+        : fn.jsFn(...args);
+    } else {
+      rt.pushCallFrame(fn.name);
+      rt.pushCleanupScope();
+      try {
+        result = rt.dispatch(fn.name, nargout, args);
+      } catch (e) {
+        rt.annotateError(e);
+        throw e;
+      } finally {
+        rt.popAndRunCleanups((cfn: RuntimeFunction) => {
+          if (cfn.jsFn) {
+            if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
+            else cfn.jsFn();
+          } else {
+            rt.dispatch(cfn.name, 0, []);
+          }
+        });
+        rt.popCallFrame();
+      }
+    }
+    if (Array.isArray(result)) {
+      return result.length >= nargout
+        ? result
+        : [...result, ...Array(nargout - result.length).fill(undefined)];
+    }
+    // nargout==1 single-value case shouldn't reach here (lowerMultiAssign
+    // requires nargout >= 2), but guard defensively.
+    return [result, ...Array(nargout - 1).fill(undefined)];
+  },
+
+  // Soft-bail user-call with multiple outputs. Mirrors callUserFunc but
+  // returns an array per nargout for JIT to unpack into LHS vars.
+  callUserFuncMulti: (
+    rt: {
+      pushCallFrame: (name: string) => void;
+      popCallFrame: () => void;
+      pushCleanupScope: () => void;
+      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
+      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
+      annotateError: (e: unknown) => void;
+    },
+    name: string,
+    nargout: number,
+    ...args: unknown[]
+  ): unknown[] => {
+    let result: unknown;
+    rt.pushCallFrame(name);
+    rt.pushCleanupScope();
+    try {
+      result = rt.dispatch(name, nargout, args);
+    } catch (e) {
+      rt.annotateError(e);
+      throw e;
+    } finally {
+      rt.popAndRunCleanups((cfn: RuntimeFunction) => {
+        if (cfn.jsFn) {
+          if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
+          else cfn.jsFn();
+        } else {
+          rt.dispatch(cfn.name, 0, []);
+        }
+      });
+      rt.popCallFrame();
+    }
+    if (Array.isArray(result)) {
+      return result.length >= nargout
+        ? result
+        : [...result, ...Array(nargout - result.length).fill(undefined)];
+    }
+    return [result, ...Array(nargout - 1).fill(undefined)];
+  },
 } as Record<string, unknown>;
 
 // ── IBuiltin integration ───────────────────────────────────────────────

@@ -33,6 +33,8 @@ import {
 } from "../../../interpreter/builtins/index.js";
 import { isRuntimeFunction } from "../../../runtime/types.js";
 import type { RuntimeValue } from "../../../runtime/types.js";
+import { FloatXArray } from "../../../runtime/types.js";
+import { RTV } from "../../../runtime/constructors.js";
 import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
@@ -736,9 +738,20 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       )
         return null;
       ctx._hasTensorOps = true;
-      // Result type is unknown — the cell element could be any type.
-      // Downstream operations that need a specific type (e.g. horzcat)
-      // handle this via runtime dispatch in the helper.
+      // When the cell tracks a per-index element type for this literal
+      // index (set by a prior `cell{i} = v` write within the same JIT
+      // spec), use that type instead of `unknown` — unblocks the
+      // chunkerfunc pattern `[out{1:3}] = fcurve(ts); r = out{1}; …`.
+      let resultType: JitType = { kind: "unknown" };
+      if (
+        cellType.elements &&
+        cellIdx.tag === "NumberLiteral" &&
+        typeof cellIdx.value === "number" &&
+        Number.isInteger(cellIdx.value)
+      ) {
+        const tracked = cellType.elements[cellIdx.value];
+        if (tracked && tracked.kind !== "unknown") resultType = tracked;
+      }
       return {
         tag: "Call",
         name: "__cellRead",
@@ -746,7 +759,7 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           { tag: "Var", name: expr.base.name, jitType: cellType },
           cellIdx,
         ],
-        jitType: { kind: "unknown" },
+        jitType: resultType,
       };
     }
 
@@ -1454,6 +1467,59 @@ function getGeneratedFnReturnType(
  * If the probe fails for any reason, returns null and the caller bails
  * (falls back to interpretation for the whole loop).
  */
+/**
+ * Multi-output variant of probeFuncHandleReturnType. Calls the handle
+ * with the requested nargout and returns one JitType per output. Bails
+ * (returns null) on the same conditions as the single-output probe
+ * (handle without jsFn, args we can't synthesize, output containing
+ * unknown), or when the result isn't an array of the expected length.
+ */
+export function probeFuncHandleMultiReturnTypes(
+  interp: Interpreter,
+  fnName: string,
+  loweredArgs: JitExpr[],
+  nargout: number
+): JitType[] | null {
+  try {
+    const fnVal = interp.env.get(fnName);
+    if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
+    const fn = fnVal as import("../../../runtime/types.js").RuntimeFunction;
+    if (!fn.jsFn) return null;
+
+    const argVals: unknown[] = [];
+    for (const arg of loweredArgs) {
+      if (arg.tag === "NumberLiteral") {
+        argVals.push(arg.value);
+        continue;
+      }
+      if (arg.tag === "Var") {
+        const val = interp.env.get(arg.name);
+        if (val !== undefined) {
+          argVals.push(val);
+          continue;
+        }
+      }
+      const rep = representativeValue(arg.jitType);
+      if (rep === undefined) return null;
+      argVals.push(rep);
+    }
+
+    const result = fn.jsFnExpectsNargout
+      ? fn.jsFn(nargout, ...argVals)
+      : fn.jsFn(...argVals);
+    if (!Array.isArray(result) || result.length < nargout) return null;
+    const types: JitType[] = [];
+    for (let i = 0; i < nargout; i++) {
+      const t = inferJitType(result[i]);
+      if (t.kind === "unknown") return null;
+      types.push(t);
+    }
+    return types;
+  } catch {
+    return null;
+  }
+}
+
 function probeFuncHandleReturnType(
   interp: Interpreter,
   fnName: string,
@@ -1470,29 +1536,30 @@ function probeFuncHandleReturnType(
     if (!fn.jsFn) return null;
 
     // Collect argument values for the probe. For each lowered arg:
-    // - Var: use the actual value from the env, or synthesize a
-    //   representative value from its JIT type (handles loop variables
-    //   that don't exist in the env yet at JIT compile time)
     // - NumberLiteral: use the literal value
-    // - Other: can't cheaply evaluate, bail
+    // - Var: use the env value when bound; otherwise synthesize from
+    //   its JIT type (handles loop-local args that don't exist at
+    //   JIT-compile time, e.g. chunkerfunc's `ts = a + ...; fcurve(ts)`)
+    // - Other (Binary, Unary, Call, ...): synthesize from the lowered
+    //   expr's JIT type. The probe only cares about the return type,
+    //   so a representative tensor of the right shape suffices —
+    //   we don't try to faithfully evaluate the arg expression.
     const argVals: unknown[] = [];
     for (const arg of loweredArgs) {
       if (arg.tag === "NumberLiteral") {
         argVals.push(arg.value);
-      } else if (arg.tag === "Var") {
+        continue;
+      }
+      if (arg.tag === "Var") {
         const val = interp.env.get(arg.name);
         if (val !== undefined) {
           argVals.push(val);
-        } else {
-          // Variable not in env (e.g. loop iterator before loop starts).
-          // Synthesize a representative value from its JIT type.
-          const rep = representativeValue(arg.jitType);
-          if (rep === undefined) return null;
-          argVals.push(rep);
+          continue;
         }
-      } else {
-        return null;
       }
+      const rep = representativeValue(arg.jitType);
+      if (rep === undefined) return null;
+      argVals.push(rep);
     }
 
     // Call the function handle once to determine its return type
@@ -1675,9 +1742,25 @@ function representativeValue(t: JitType): unknown | undefined {
       return true;
     case "complex_or_number":
       return 1;
+    case "tensor": {
+      // Probe-time synthesis: a tensor of zeros with the static shape.
+      // Used so a function handle whose arg is a Var of known tensor
+      // type but unbound at JIT-compile time (loop-local, e.g.
+      // chunkerfunc's `ts = a + (b-a)*(xs2+1)/2; fcurve(ts)`) can be
+      // probed to discover its return type.
+      const shape = t.shape;
+      if (!shape || shape.length === 0) return undefined;
+      // Reject unknown dims (-1) — synthesizing an arbitrary fill size
+      // can mislead a handle whose return shape is data-dependent.
+      if (shape.some(d => d <= 0)) return undefined;
+      const total = shape.reduce((a, b) => a * b, 1);
+      const data = new FloatXArray(total);
+      const imag = t.isComplex ? new FloatXArray(total) : undefined;
+      return RTV.tensor(data, [...shape], imag);
+    }
     default:
-      // For tensors, structs, etc. we can't cheaply synthesize a value
-      // that would be meaningful to an arbitrary function handle.
+      // Structs, cells, function handles, strings — too varied to
+      // synthesize cheaply and probe usefully.
       return undefined;
   }
 }
