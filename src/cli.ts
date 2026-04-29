@@ -41,6 +41,10 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { isOptLevel } from "./numbl-core/executors/plugins.js";
+// Side-effect: registers the C-JIT (e3) executors with plugins.ts so
+// the browser bundle (which never imports this file) stays free of
+// the cJit/compile.ts node-module dependency graph.
+import "./numbl-core/executors/cJit/register.js";
 import type { PlotInstruction } from "./graphics/types.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";

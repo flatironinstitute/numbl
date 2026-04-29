@@ -8,14 +8,19 @@
  * The AST interpreter is the dispatcher's hardcoded last-resort
  * fallback (see `Registry.dispatch`); it doesn't need to be a
  * registered executor.
+ *
+ * The C-JIT (e3) executors are registered via an injected callback
+ * (`setCJitRegistrar`). A Node-only entry point (`cli.ts`) imports
+ * `executors/cJit/register.ts`, which calls `setCJitRegistrar` at
+ * load time. The browser worker never imports that module, so the
+ * cJit subtree (which pulls in `node:fs`/`node:os`/`node:child_process`
+ * via `compile.ts`) stays out of the web bundle.
  */
 
 import type { Registry } from "./registry.js";
 import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
 import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 import { jsJitCallExecutor } from "./jsJit/callExecutor.js";
-import { cJitLoopExecutor } from "./cJit/loopExecutor.js";
-import { cJitFuseExecutor } from "./cJit/fuseExecutor.js";
 
 /** Optimization mode label.
  *
@@ -34,6 +39,16 @@ export function isOptLevel(s: string): s is OptLevel {
   return (OPT_LEVELS as readonly string[]).includes(s);
 }
 
+type CJitRegistrar = (registry: Registry) => void;
+let cJitRegistrar: CJitRegistrar | null = null;
+
+/** Wire up the C-JIT (e3) executors. Called from a Node-only entry
+ *  point at startup so the browser bundle never reaches the cJit
+ *  module graph. */
+export function setCJitRegistrar(fn: CJitRegistrar): void {
+  cJitRegistrar = fn;
+}
+
 /** Register the executors for a given optimization mode. */
 export function registerExecutorsForOpt(
   registry: Registry,
@@ -48,8 +63,13 @@ export function registerExecutorsForOpt(
       registry.register(jsJitCallExecutor);
       return;
     case "e3":
-      registry.register(cJitLoopExecutor);
-      registry.register(cJitFuseExecutor);
+      if (!cJitRegistrar) {
+        throw new Error(
+          "--opt e3 (C-JIT) is only available in the Node CLI; " +
+            "cJit registrar not set"
+        );
+      }
+      cJitRegistrar(registry);
       return;
   }
 }

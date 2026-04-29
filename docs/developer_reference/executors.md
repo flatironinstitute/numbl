@@ -139,7 +139,9 @@ Every successful `run()` call invokes `interp.onExecutorFired?.(name, lowered.ki
 | ------- | -------------------------------------------------- |
 | 0       | (none — AST interpreter is the hardcoded fallback) |
 | 1       | js-jit-top-level, js-jit-loop, js-jit-call         |
-| 2       | js-jit-\* + C-JIT optimizers (in development)      |
+| e3      | c-jit-loop, c-jit-fuse (Node only — see below)     |
+
+The C-JIT (e3) executors are wired in via `setCJitRegistrar` rather than imported directly by `plugins.ts`. A Node-only entry point (`cli.ts`, `lib.ts`) imports `executors/cJit/register.ts` for its side effect, which calls `setCJitRegistrar(...)`. The browser worker bundle never imports that file, so `cJit/compile.ts` (which uses `node:fs`/`node:os`/`node:child_process`) stays out of the web build's module graph. Passing `--opt e3` in a context where the registrar was never set throws.
 
 ## Files
 
@@ -151,7 +153,7 @@ executors/
   context.ts        DispatchContext, DispatchScope
   cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
   lowering.ts       tryLower / tryLowerCall + LoweringCache
-  plugins.ts        registerExecutorsForOpt
+  plugins.ts        registerExecutorsForOpt + setCJitRegistrar
   jsJit/
     topLevelExecutor.ts  js-jit-top-level
     loopExecutor.ts      js-jit-loop
@@ -164,4 +166,13 @@ executors/
                          jitBailSafety, blockAnalysis, scalarEmit)
     codegen/             JS codegen (jitCodegen, jsMultiReduction, ...)
     helpers/             $h runtime (jitHelpers, jitHelpersTensor, ...)
+  cJit/
+    register.ts          Node-only side-effect that wires the cJit
+                         executors into plugins.ts
+    loopExecutor.ts      c-jit-loop
+    fuseExecutor.ts      c-jit-fuse
+    compile.ts           cc-invoke + dlopen (Node only)
+    codegen.ts           IR -> C source
+    fuseAnalyze.ts       fuse classification (browser-safe)
+    whitelist.ts         feasibility filter
 ```
