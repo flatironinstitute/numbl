@@ -1800,9 +1800,26 @@ function representativeValue(t: JitType): unknown | undefined {
       const imag = t.isComplex ? new FloatXArray(total) : undefined;
       return RTV.tensor(data, concrete, imag);
     }
+    case "struct": {
+      // Struct probe-time synthesis: build a runtime struct whose fields
+      // are recursively-synthesized representatives. Unblocks
+      // function-handle probing on the chunkie `oneintp` pattern —
+      //   srcinfo = []; srcinfo.r = rint; ... ; kern(srcinfo, targinfo)
+      // — where the struct is built inside the loop so no live value
+      // exists in the env at JIT-compile time. Generic structs (no
+      // fields map) stay unsupported.
+      if (!t.fields) return undefined;
+      const obj: Record<string, RuntimeValue> = {};
+      for (const name of Object.keys(t.fields)) {
+        const fieldVal = representativeValue(t.fields[name]);
+        if (fieldVal === undefined) return undefined;
+        obj[name] = fieldVal as RuntimeValue;
+      }
+      return RTV.struct(obj);
+    }
     default:
-      // Structs, cells, function handles, strings — too varied to
-      // synthesize cheaply and probe usefully.
+      // Cells, function handles, strings — too varied to synthesize
+      // cheaply and probe usefully.
       return undefined;
   }
 }
