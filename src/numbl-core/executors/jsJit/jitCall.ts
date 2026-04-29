@@ -28,6 +28,7 @@ import { JitBailToInterpreter } from "./helpers/jitHelpers.js";
 import { inferJitType } from "../../interpreter/builtins/types.js";
 import {
   assembleJsBody,
+  buildJitSourceComment,
   instantiateJsFn,
   pruneArgType,
   widenAgainst,
@@ -122,11 +123,22 @@ export function generateCallJS(
         `${o}: ${result.outputType ? jitTypeKey(result.outputType) : "unknown"}`
     )
     .join(", ");
+  const bodyStmts = fn.body;
+  const definedIn = bodyStmts[0]?.span?.file ?? interp.currentFile;
+  const sourceComment =
+    bodyStmts.length > 0 && bodyStmts[0].span
+      ? buildJitSourceComment(
+          interp,
+          bodyStmts[0].span.file,
+          bodyStmts[0].span.start,
+          bodyStmts[bodyStmts.length - 1].span.end
+        ) + "\n"
+      : "";
   const fnComment = [
     `// JIT: ${fn.name}(${paramComments}) -> (${outputComments})`,
-    `// from: ${interp.currentFile}`,
+    `// from: ${definedIn}`,
   ].join("\n");
-  const source = `${fnComment}\nfunction ${fn.name}(${fn.params.join(", ")}) {\n${jsBody}\n}`;
+  const source = `${sourceComment}${fnComment}\nfunction ${fn.name}(${fn.params.join(", ")}) {\n${jsBody}\n}`;
   const typeDesc = argTypes.map(jitTypeKey).join(", ");
   const line = interp.rt.$line ?? 0;
   interp.onJitCompile?.(

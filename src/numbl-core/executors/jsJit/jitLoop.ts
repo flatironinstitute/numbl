@@ -28,6 +28,7 @@ import {
   collectReadsFromSiblings,
 } from "./lower/blockAnalysis.js";
 import {
+  buildJitSourceComment,
   gatherTypedEnvInputs,
   generateSyntheticFnJS,
   lowerSyntheticFn,
@@ -159,7 +160,16 @@ export function generateLoopJS(
     .map((p, i) => `${p}: ${jitTypeKey(inputTypes[i])}`)
     .join(", ");
   const name = `$loop_${kind}`;
-  const source = `// JIT loop (${kind}): (${paramComments})\nfunction ${name}(${inputs.join(", ")}) {\n${generated.jsBody}\n}`;
+  const stmt = classification.stmt;
+  const sourceComment = stmt.span
+    ? buildJitSourceComment(
+        interp,
+        stmt.span.file,
+        stmt.span.start,
+        stmt.span.end
+      ) + "\n"
+    : "";
+  const source = `${sourceComment}// JIT loop (${kind}): (${paramComments})\nfunction ${name}(${inputs.join(", ")}) {\n${generated.jsBody}\n}`;
 
   const line = interp.rt.$line ?? 0;
   interp.onJitCompile?.(`loop:${kind}@${line}(${paramComments})`, source);

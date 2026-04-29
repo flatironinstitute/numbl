@@ -36,6 +36,7 @@ import type { RuntimeValue } from "../../../runtime/types.js";
 import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
+import { buildJitSourceComment } from "../shared.js";
 
 const LOG_CJIT_MISSES =
   typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
@@ -1122,11 +1123,22 @@ function lowerUserFuncCall(
           `${o}: ${jitTypeKey(calleeResult.outputType ?? { kind: "number" })}`
       )
       .join(", ");
+    const calleeBody = calleeFn.body;
+    const definedIn = calleeBody[0]?.span?.file ?? interp.currentFile;
+    const sourceComment =
+      calleeBody.length > 0 && calleeBody[0].span
+        ? buildJitSourceComment(
+            interp,
+            calleeBody[0].span.file,
+            calleeBody[0].span.start,
+            calleeBody[calleeBody.length - 1].span.end
+          ) + "\n"
+        : "";
     const comment = [
       `// JIT: ${calleeFn.name}(${paramComments}) -> (${outputComments})`,
-      `// from: ${interp.currentFile}`,
+      `// from: ${definedIn}`,
     ].join("\n");
-    const wrappedJS = `${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
+    const wrappedJS = `${sourceComment}${comment}\nfunction ${jitName}(${calleeFn.params.join(", ")}) {\n${calleeJS}\n}`;
     ctx.generatedFns.set(jitName, wrappedJS);
     // Cache the lowered IR alongside the JS source. The C-JIT reads this
     // in feasibility / generateC; JS-JIT ignores it.

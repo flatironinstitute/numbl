@@ -22,6 +22,7 @@ import { jitTypeKey } from "../../jitTypes.js";
 import type { LoweringResult } from "./lower/jitLower.js";
 import { analyzeTopLevel } from "./lower/blockAnalysis.js";
 import {
+  buildJitSourceComment,
   gatherTypedEnvInputs,
   generateSyntheticFnJS,
   lowerSyntheticFn,
@@ -137,7 +138,17 @@ export function generateTopLevelJS(
   const paramComments = inputs
     .map((p, i) => `${p}: ${jitTypeKey(inputTypes[i])}`)
     .join(", ");
-  const source = `// JIT top-level: (${paramComments})\nfunction ${SYNTHETIC_NAME}(${inputs.join(", ")}) {\n${generated.jsBody}\n}`;
+  const stmts = classification.stmts;
+  const sourceComment =
+    stmts.length > 0 && stmts[0].span
+      ? buildJitSourceComment(
+          interp,
+          stmts[0].span.file,
+          stmts[0].span.start,
+          stmts[stmts.length - 1].span.end
+        ) + "\n"
+      : "";
+  const source = `${sourceComment}// JIT top-level: (${paramComments})\nfunction ${SYNTHETIC_NAME}(${inputs.join(", ")}) {\n${generated.jsBody}\n}`;
 
   interp.onJitCompile?.(`top-level@${currentFile}(${paramComments})`, source);
 

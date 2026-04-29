@@ -101,6 +101,36 @@ export function gatherTypedEnvInputs(
 }
 
 /**
+ * Build a `// File: …` + indented source-slice comment block for the
+ * code being JIT-compiled. Used by `--dump-js` so each emitted JS
+ * section is annotated with the .m source it came from. Falls back
+ * gracefully when the source isn't in `interp.fileSources`.
+ *
+ * `start` is rewound to the beginning of its line so the first line
+ * keeps its original indentation (Stmt spans start at the first
+ * non-whitespace char, which would otherwise leave the first line
+ * dedented relative to the rest).
+ */
+export function buildJitSourceComment(
+  interp: Interpreter,
+  file: string,
+  start: number,
+  end: number
+): string {
+  const src = interp.fileSources.get(file);
+  if (src === undefined) {
+    return `// File: ${file}\n// Source: (unavailable)`;
+  }
+  const lineStart = src.lastIndexOf("\n", start - 1) + 1;
+  const slice = src.slice(lineStart, end);
+  const indented = slice
+    .split("\n")
+    .map(l => `//   ${l}`)
+    .join("\n");
+  return `// File: ${file}\n// Source:\n${indented}`;
+}
+
+/**
  * Read the live env values for `inputs` in order. Used at run time
  * to bind the compiled fn's parameters before invocation.
  */
