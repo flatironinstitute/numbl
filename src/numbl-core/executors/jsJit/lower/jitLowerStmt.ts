@@ -357,16 +357,25 @@ function lowerAssignLValue(
     ctx._hasTensorOps = true;
     ctx.assignedVars.add(lv.base.name);
     if (!ctx.params.has(lv.base.name)) ctx.localVars.add(lv.base.name);
-    // Track per-index element type when the index is a literal positive
-    // integer. Literal-index reads later in the spec (e.g. `r = out{1}`)
-    // will recover the value's static type instead of bailing on
-    // unknown.
+    // Per-index element-type tracking. A literal-index write updates
+    // the slot's tracked type; a non-literal-index write COULD touch
+    // any slot, so we conservatively drop all tracked element types
+    // (any of them could now hold the rhs value at runtime). Without
+    // this drop, a later literal-index read would use a stale static
+    // type and JIT-emit code (e.g. scalar JS `+`) that mishandles the
+    // actual runtime value.
     const litIdx = literalCellIndex(lv.indices[0]);
     if (litIdx !== null && rhs.jitType.kind !== "unknown") {
       const next: JitType = {
         kind: "cell",
         ...(cellType.shape ? { shape: cellType.shape } : {}),
         elements: { ...(cellType.elements ?? {}), [litIdx]: rhs.jitType },
+      };
+      ctx.env.set(lv.base.name, next);
+    } else if (litIdx === null && cellType.elements) {
+      const next: JitType = {
+        kind: "cell",
+        ...(cellType.shape ? { shape: cellType.shape } : {}),
       };
       ctx.env.set(lv.base.name, next);
     }
@@ -1225,6 +1234,33 @@ function lowerFor(
     return null;
   const end = lowerExpr(ctx, stmt.expr.end);
   if (!end || !isNumericScalarType(end.jitType)) return null;
+
+  // Statically-empty range elimination. Mirrors dead-branch elimination
+  // for `if false`: if the range bounds are both literal numbers and
+  // the range is empty, drop the body (and its env-side-effects) so
+  // dead bodies can't bail-out the surrounding loop. Hot in
+  // chunkerfunc's `for j = nout+1:3 ... end` when nout==3.
+  const startLit =
+    start.tag === "NumberLiteral" && typeof start.value === "number"
+      ? start.value
+      : null;
+  const endLit =
+    end.tag === "NumberLiteral" && typeof end.value === "number"
+      ? end.value
+      : null;
+  const stepLit =
+    step === null
+      ? 1
+      : step.tag === "NumberLiteral" && typeof step.value === "number"
+        ? step.value
+        : null;
+  if (startLit !== null && endLit !== null && stepLit !== null) {
+    const empty =
+      stepLit === 0 ||
+      (stepLit > 0 && startLit > endLit) ||
+      (stepLit < 0 && startLit < endLit);
+    if (empty) return [];
+  }
 
   // Save env BEFORE setting the loop variable so that in the zero-iteration
   // case, the merge doesn't leak the loop variable's type into the post-loop
