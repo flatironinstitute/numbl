@@ -885,6 +885,36 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       };
     }
 
+    case "MethodCall": {
+      // Namespace function call: `pkg.fn(args)` where `pkg` is a
+      // package prefix (e.g. `chnk.perp(dint)` in chunkie's oneintp).
+      // Detected by: base is a plain Ident that is NOT a variable in
+      // env. Resolve as the dotted workspace function name and route
+      // through the regular user-function call lowering — which then
+      // recursively lowers the callee or soft-bails to a dispatch.
+      // Other MethodCall shapes (struct/class field-then-call,
+      // chained-index, etc.) stay bailed for now.
+      if (
+        expr.base.type === "Ident" &&
+        ctx.env.get(expr.base.name) === undefined &&
+        !ctx.sliceAliases.has(expr.base.name)
+      ) {
+        const synthCall: Expr & { type: "FuncCall" } = {
+          type: "FuncCall",
+          name: `${expr.base.name}.${expr.name}`,
+          args: expr.args,
+          span: expr.span,
+        };
+        const userResult = lowerUserFuncCall(ctx, synthCall);
+        if (userResult !== undefined) return userResult;
+        // Fall through to IBuiltin (covers builtins exposed under a
+        // dotted name); preserves the existing bail message if neither
+        // user nor builtin resolves.
+        return lowerIBuiltinCall(ctx, synthCall);
+      }
+      return bailExpr(ctx, expr, "unsupported expression");
+    }
+
     default:
       return bailExpr(ctx, expr, "unsupported expression");
   }
