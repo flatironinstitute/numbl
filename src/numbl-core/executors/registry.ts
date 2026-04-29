@@ -33,6 +33,14 @@ interface Candidate {
   readonly total: number;
 }
 
+/** AST stmt-list transformer. Receives a stmt list and returns a
+ *  list of the same semantics, possibly with `Synth` stmts inserted
+ *  where the transformer can collapse a contiguous run of stmts into
+ *  a unit handled by a specialized executor. The transform is
+ *  shallow — recursive descent into For/While/If bodies happens
+ *  lazily on the next call to `transformStmts`, cached separately. */
+export type StmtTransformer = (stmts: readonly Stmt[]) => Stmt[];
+
 export interface DispatchResult {
   /** Control signal from interpreter execution (break/continue/return),
    *  if any. */
@@ -55,6 +63,14 @@ export class Registry {
   /** Whole-scope executors (top-level). Iterated only by
    *  `tryRunWholeScope`, separate from per-stmt dispatch. */
   private readonly wholeScopeExecutors: Executor[] = [];
+  /** AST stmt-list transformers. Run lazily on each stmt list before
+   *  the per-stmt loop walks it; result cached per input list. */
+  private readonly transformers: StmtTransformer[] = [];
+  /** Memoize transformed lists by input list identity. WeakMap so
+   *  entries vanish when the AST is dropped. The transformed list
+   *  is also stored mapped to itself so a second call with the
+   *  result hits the cache (idempotency). */
+  private transformCache = new WeakMap<readonly Stmt[], Stmt[]>();
   private cache = new ExecutorCache();
   private loweringCache = new LoweringCache();
   /** Pre-allocated context reused for `dispatchCall`. Avoids the
@@ -85,6 +101,37 @@ export class Registry {
     this.wholeScopeExecutors.push(executor);
   }
 
+  /** Register an AST stmt-list transformer. Transformers run on every
+   *  stmt list the interpreter is about to walk (script body, function
+   *  body, loop body, if branch, ...) before the per-stmt loop kicks
+   *  in. They typically wrap contiguous runs of stmts in `Synth`
+   *  nodes that a matching executor will recognize. Adding new
+   *  transformers is additive — they compose in registration order. */
+  registerStmtTransformer(fn: StmtTransformer): void {
+    this.transformers.push(fn);
+    // Different transformer set ⇒ stale cached results.
+    this.transformCache = new WeakMap();
+  }
+
+  /** Transform a stmt list, applying all registered transformers in
+   *  registration order. Cached per input-list identity (WeakMap).
+   *  When no transformers are registered, returns the input unchanged
+   *  without populating the cache (saves a Map lookup per dispatch). */
+  transformStmts(stmts: readonly Stmt[]): Stmt[] {
+    if (this.transformers.length === 0) return stmts as Stmt[];
+    const cached = this.transformCache.get(stmts);
+    if (cached) return cached;
+    let result: Stmt[] = stmts as Stmt[];
+    for (const t of this.transformers) {
+      result = t(result);
+    }
+    this.transformCache.set(stmts, result);
+    // Idempotency: walking the result list later (e.g. via a different
+    // entry point) should not re-run the transformers.
+    if (result !== (stmts as Stmt[])) this.transformCache.set(result, result);
+    return result;
+  }
+
   /** Number of registered per-stmt executors. Mainly for tests. */
   get size(): number {
     return this.executors.length;
@@ -93,10 +140,11 @@ export class Registry {
   /** Drop all cached compiled artifacts. Called from
    *  `Interpreter.clearAllCaches()` after addpath/rmpath etc. */
   clearCache(): void {
-    // ExecutorCache and LoweringCache use WeakMaps, so we just throw
-    // away the whole instance and start fresh.
+    // ExecutorCache, LoweringCache, and transformCache use WeakMaps,
+    // so we just throw away the whole instance and start fresh.
     this.cache = new ExecutorCache();
     this.loweringCache = new LoweringCache();
+    this.transformCache = new WeakMap();
   }
 
   /**

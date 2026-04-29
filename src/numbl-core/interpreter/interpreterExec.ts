@@ -306,6 +306,17 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       // Unknown directives are silently ignored.
       return null;
     }
+
+    case "Synth": {
+      // Fallback: a transformer-built Synth node reached the
+      // interpreter (no specialized executor matched, or the matching
+      // executor bailed). Just run the original sub-stmts in order.
+      for (const sub of stmt.subStmts) {
+        const sig = this.execStmt(sub);
+        if (sig) return sig;
+      }
+      return null;
+    }
   }
 }
 
@@ -313,13 +324,18 @@ export function execStmts(
   this: Interpreter,
   stmts: Stmt[]
 ): ControlSignal | null {
+  // Apply registered AST transformers before walking. Cached per
+  // input-list identity (WeakMap), so the cost is paid once per
+  // unique stmt list. With no transformers registered (--opt 0/1),
+  // returns the input unchanged with no cache lookup.
+  const transformed = this.registry.transformStmts(stmts);
   // Allocate one DispatchContext for the whole sibling loop; reset
   // per-dispatch state between stmts. Hot-path code — a fresh ctx
   // per stmt would allocate a Map + Set per dispatch.
   const ctx = makeRootContext(this, this.registry);
-  for (let i = 0; i < stmts.length; i++) {
+  for (let i = 0; i < transformed.length; i++) {
     ctx.resetForNextDispatch();
-    const result = this.registry.dispatch(stmts, i, ctx);
+    const result = this.registry.dispatch(transformed, i, ctx);
     if (result.signal) return result.signal;
   }
   return null;

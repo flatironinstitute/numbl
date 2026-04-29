@@ -234,6 +234,27 @@ export type Stmt =
       directive: string;
       args: string[];
       span: Span;
+    }
+  | {
+      /** Synthetic stmt produced by an executor-registered AST
+       *  transformer (e.g. the C-JIT chain pass). Wraps a contiguous
+       *  run of original stmts so a specialized executor can claim
+       *  them as a unit; the interpreter falls back to executing
+       *  `subStmts` in order when the executor isn't registered or
+       *  declines.
+       *
+       *  Never produced by the parser. */
+      type: "Synth";
+      /** Identifies the executor that this synth node was built for
+       *  (e.g. `"c-jit-chain"`). The matching executor reads `data`. */
+      tag: string;
+      /** Original adjacent stmts, in source order. Used by the
+       *  interpreter fallback. */
+      subStmts: Stmt[];
+      /** Executor-specific pre-computed analysis. Opaque to the
+       *  interpreter. */
+      data: unknown;
+      span: Span;
     };
 
 // ── AST Root ─────────────────────────────────────────────────────────────

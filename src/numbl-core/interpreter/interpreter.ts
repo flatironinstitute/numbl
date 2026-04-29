@@ -254,15 +254,19 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
+      // Apply registered AST transformers (e.g. the C-JIT chain
+      // pass under --opt e3). Cached per input-list identity, so this
+      // is paid once per stmt list per Registry.
+      const transformed = this.registry.transformStmts(nonFuncStmts);
       // First, try to handle the entire script body as a unit (e.g.
       // JS-JIT top-level). If a whole-scope executor matches, the
       // per-stmt loop is skipped.
-      const wholeScope = this.registry.tryRunWholeScope(nonFuncStmts, this);
+      const wholeScope = this.registry.tryRunWholeScope(transformed, this);
       if (wholeScope === null) {
         const ctx = makeRootContext(this, this.registry);
-        for (let i = 0; i < nonFuncStmts.length; i++) {
+        for (let i = 0; i < transformed.length; i++) {
           ctx.resetForNextDispatch();
-          const result = this.registry.dispatch(nonFuncStmts, i, ctx);
+          const result = this.registry.dispatch(transformed, i, ctx);
           if (result.signal) break;
         }
       }

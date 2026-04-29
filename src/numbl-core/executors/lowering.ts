@@ -68,7 +68,8 @@ export type LoweredStmt =
   | TopLevelLoweredStmt
   | LoopLoweredStmt
   | CallLoweredStmt
-  | FuseLoweredStmt;
+  | FuseLoweredStmt
+  | SynthLoweredStmt;
 
 /** Top-level shape: script body lowered to JS-JIT IR. */
 export interface TopLevelLoweredStmt {
@@ -137,6 +138,16 @@ export interface CallFlags {
 export interface FuseLoweredStmt {
   readonly kind: "fuse";
   readonly classification: FuseClassification;
+}
+
+/** Synth shape: a `Synth` AST stmt produced by a registered AST
+ *  transformer. The matching executor reads `data` (analysis the
+ *  transformer pre-computed) and the `tag` discriminates among
+ *  multiple registered transformers. */
+export interface SynthLoweredStmt {
+  readonly kind: "synth";
+  readonly tag: string;
+  readonly data: unknown;
 }
 
 const BAILED = Symbol("LOWERING_BAILED");
@@ -229,6 +240,13 @@ export function tryLower(
   cache: LoweringCache
 ): LoweredStmt | null {
   const head = siblings[i];
+
+  // Synth shape: a stmt that a registered AST transformer wrapped
+  // up for a specialized executor. No further lowering needed —
+  // the analysis was done at transform time.
+  if (head.type === "Synth") {
+    return { kind: "synth", tag: head.tag, data: head.data };
+  }
 
   // Loop shape: For/While stmts.
   if (head.type === "For" || head.type === "While") {

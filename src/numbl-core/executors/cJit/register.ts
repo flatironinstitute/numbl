@@ -11,8 +11,14 @@
 import { setCJitRegistrar } from "../plugins.js";
 import { cJitLoopExecutor } from "./loopExecutor.js";
 import { cJitFuseExecutor } from "./fuseExecutor.js";
+import { cJitChainExecutor } from "./chainExecutor.js";
+import { chainPass } from "./chainPass.js";
 
 setCJitRegistrar(registry => {
   registry.register(cJitLoopExecutor);
   registry.register(cJitFuseExecutor);
+  registry.register(cJitChainExecutor);
+  // The chain pass runs at every stmt-list entry; produces Synth
+  // nodes (tag: "c-jit-chain") wrapping runs of >= 2 fusable Assigns.
+  registry.registerStmtTransformer(chainPass);
 });
