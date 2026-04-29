@@ -175,10 +175,25 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       // the JIT doesn't yet model.
       // Exception: `nargout` is a constant within a given JIT specialization
       // (the JIT specializes per nargout). Inline it as a number literal.
-      // `nargin` isn't quite as simple — callers can omit trailing args so
-      // nargin != ctx.params.size — leave it to the bail path for now.
+      // `nargin` is also constant per spec when the callee is varargin
+      // (classifyCall pins down args.length per cacheKey); inlining lets
+      // `if nargin > K` guards constant-fold so unreachable `varargin{K}`
+      // accesses on the dead side never have to lower.
       if (expr.name === "nargout" && ctx.nargout !== undefined) {
         const v = ctx.nargout;
+        return {
+          tag: "NumberLiteral",
+          value: v,
+          jitType: {
+            kind: "number",
+            exact: v,
+            isInteger: true,
+            sign: "nonneg",
+          },
+        };
+      }
+      if (expr.name === "nargin" && ctx.nargin !== undefined) {
+        const v = ctx.nargin;
         return {
           tag: "NumberLiteral",
           value: v,
@@ -203,6 +218,29 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     case "Binary": {
       const left = lowerExpr(ctx, expr.left);
       if (!left) return null;
+      // Short-circuit folding for `&&` / `||` matches MATLAB semantics
+      // and — more importantly — lets unreachable RHS skip lowering. The
+      // common pattern is `if nargin > K && ~isempty(varargin{K})`: with
+      // nargin folded to a literal, the LHS comparison is constant; if
+      // it's `false`, the RHS (which would access an out-of-range
+      // varargin{K} for this spec) never has to lower.
+      if (
+        expr.op === BinaryOperation.AndAnd ||
+        expr.op === BinaryOperation.OrOr
+      ) {
+        const lv = literalNumber(left);
+        if (lv !== null) {
+          const isAnd = expr.op === BinaryOperation.AndAnd;
+          if ((isAnd && lv === 0) || (!isAnd && lv !== 0)) {
+            const v = isAnd ? 0 : 1;
+            return {
+              tag: "NumberLiteral",
+              value: v,
+              jitType: { kind: "boolean", value: v === 1 },
+            };
+          }
+        }
+      }
       const right = lowerExpr(ctx, expr.right);
       if (!right) return null;
       // Constant fold comparisons and a handful of arithmetic ops when both
@@ -608,6 +646,34 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     case "IndexCell": {
       // Cell array scalar read: c{i}
       if (expr.base.type !== "Ident") return null;
+
+      // varargin{k} with literal k → direct read of the synthetic
+      // `$va_{k-1}` param holding the (k-1)-th variadic arg. This makes
+      // varargin-using functions JIT cleanly: the per-spec types are
+      // already pinned (classifyCall), so `varargin{1}` here resolves to
+      // a regular Var with the type from argTypes.
+      if (
+        expr.base.name === "varargin" &&
+        ctx.nVarargin !== undefined &&
+        ctx.regularParamCount !== undefined &&
+        expr.indices.length === 1
+      ) {
+        const idxExpr = expr.indices[0];
+        const litIdx =
+          idxExpr.type === "Number" ? parseFloat(idxExpr.value) : null;
+        if (litIdx !== null && Number.isInteger(litIdx) && litIdx >= 1) {
+          if (litIdx > ctx.nVarargin) return null;
+          const name = `$va_${litIdx - 1}`;
+          const t = ctx.env.get(name);
+          if (!t) return null;
+          return { tag: "Var", name, jitType: t };
+        }
+        // Non-literal index into varargin — bail. A future extension
+        // could support a known-bounded loop variable, but the common
+        // pattern is `varargin{1}` / `varargin{2}` (literal).
+        return null;
+      }
+
       const cellType = ctx.env.get(expr.base.name);
       if (!cellType || cellType.kind !== "cell") return null;
       if (expr.indices.length !== 1) return null;

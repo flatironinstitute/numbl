@@ -120,6 +120,19 @@ export interface LowerCtx {
    *  the body reads the `nargout` identifier, since the JIT specializes per
    *  nargout already. */
   nargout?: number;
+  /** The nargin this specialization was requested with. Set whenever the
+   *  function is varargin (the call shape pins down nargin per spec).
+   *  Reads of bare `nargin` get inlined to this constant; `nargin > K`
+   *  guards then constant-fold so dead branches don't have to lower. */
+  nargin?: number;
+  /** Number of variadic args bound for this specialization (0 for
+   *  non-varargin callees). Used by `varargin{i}` lowering to redirect to
+   *  the synthetic `$va_*` param holding the i-th variadic arg. */
+  nVarargin?: number;
+  /** Number of regular params (declared params minus the trailing
+   *  `varargin`). The (k-1)-th variadic arg lives in
+   *  `effectiveParams[regularParamCount + k - 1]`, name `$va_{k-1}`. */
+  regularParamCount?: number;
   generatedFns: Map<string, string>;
   generatedIRBodies: Map<string, GeneratedFn>;
   loweringInProgress: Set<string>;
@@ -148,16 +161,42 @@ export function lowerFunction(
   interp?: Interpreter,
   generatedFns?: Map<string, string>,
   loweringInProgress?: Set<string>,
-  generatedIRBodies?: Map<string, GeneratedFn>
+  generatedIRBodies?: Map<string, GeneratedFn>,
+  varargs?: { effectiveParams: string[]; nVarargin: number }
 ): LoweringResult | null {
-  if (argTypes.length !== fn.params.length) return null;
+  // Effective params expands a trailing `varargin` into one synthetic
+  // name per variadic arg (`$va_0`, `$va_1`, …). For non-varargin calls
+  // and for non-call lowerings (loops, top-level), this is just
+  // fn.params. argTypes is one-to-one with effectiveParams.
+  const fnHasVarargin =
+    fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
+  let effectiveParams: string[];
+  let nVarargin: number;
+  if (varargs) {
+    effectiveParams = varargs.effectiveParams;
+    nVarargin = varargs.nVarargin;
+  } else if (fnHasVarargin && argTypes.length >= fn.params.length - 1) {
+    // Recursive lowering path: classifyCall ran for the outer dispatch
+    // and built argTypes, but inner call sites (e.g. soft-bail probing)
+    // skip classifyCall. Reconstruct the expansion from arg count alone.
+    const regularParamCount = fn.params.length - 1;
+    nVarargin = argTypes.length - regularParamCount;
+    effectiveParams = [
+      ...fn.params.slice(0, regularParamCount),
+      ...Array.from({ length: nVarargin }, (_, k) => `$va_${k}`),
+    ];
+  } else {
+    effectiveParams = fn.params;
+    nVarargin = 0;
+  }
+  if (argTypes.length !== effectiveParams.length) return null;
 
   const env: TypeEnv = new Map();
   const localVars = new Set<string>();
 
   // Initialize parameters
-  for (let i = 0; i < fn.params.length; i++) {
-    env.set(fn.params[i], argTypes[i]);
+  for (let i = 0; i < effectiveParams.length; i++) {
+    env.set(effectiveParams[i], argTypes[i]);
   }
 
   // Reserve output variables as locals without assigning a default type.
@@ -196,11 +235,17 @@ export function lowerFunction(
   const ctx: LowerCtx = {
     env,
     localVars,
-    params: new Set(fn.params),
-    assignedVars: new Set(fn.params),
+    params: new Set(effectiveParams),
+    assignedVars: new Set(effectiveParams),
     sliceAliases: new Map(),
     interp,
     nargout,
+    // Pin nargin per spec for any varargin function (including the
+    // zero-variadic case). Without this, `nargin > K` guards inside the
+    // body don't fold and the bail path on `varargin{K}` re-engages.
+    nargin: fnHasVarargin ? effectiveParams.length : undefined,
+    nVarargin,
+    regularParamCount: effectiveParams.length - nVarargin,
     generatedFns: sharedGeneratedFns,
     generatedIRBodies: sharedGeneratedIRBodies,
     loweringInProgress: sharedInProgress,
