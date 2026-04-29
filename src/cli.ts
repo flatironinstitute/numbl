@@ -286,7 +286,7 @@ Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon
+  build-addon        Build native LAPACK addon (pass --fast-math to enable -ffast-math)
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
@@ -317,6 +317,10 @@ Options (for run and eval):
                        0  — interpreter (no JIT)
                        1  — JS-JIT: type-specialize hot functions/loops to JS
                        e3 — C-JIT scalar loops only (Node only)
+  --fast-math        Compile C-JIT kernels with -ffast-math
+                     (libmvec-vectorized transcendentals; reductions
+                     become reorder-allowed, so results may drift
+                     by FP-noise levels)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -336,6 +340,7 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   optimization: import("./numbl-core/executors/plugins.js").OptLevel;
+  fastMath: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -351,6 +356,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: "1",
+    fastMath: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -385,6 +391,9 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.dumpC = resolve(process.cwd(), args[i]);
+        break;
+      case "--fast-math":
+        opts.fastMath = true;
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -647,6 +656,7 @@ async function executeWithOptions(
             onInput,
 
             optimization: opts.optimization,
+            fastMath: opts.fastMath,
           },
           workspaceFiles,
           mainFileName,
@@ -705,6 +715,7 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
+          fastMath: opts.fastMath,
         },
         workspaceFiles,
         mainFileName,
@@ -743,6 +754,7 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
+          fastMath: opts.fastMath,
         },
         workspaceFiles,
         mainFileName,
@@ -811,7 +823,14 @@ function finalizeDumpFile(
   writeFileSync(dumpFile, header + jsCode + "\n");
 }
 
-async function cmdBuildAddon() {
+async function cmdBuildAddon(args: string[]) {
+  const fastMath = args.includes("--fast-math");
+  for (const a of args) {
+    if (a !== "--fast-math") {
+      console.error(`Unknown option: ${a}`);
+      process.exit(1);
+    }
+  }
   const bindingGyp = join(packageDir, "binding.gyp");
   if (!existsSync(bindingGyp)) {
     console.error(
@@ -822,11 +841,21 @@ async function cmdBuildAddon() {
   console.log("Building native LAPACK addon...");
   console.log("Package directory: " + packageDir);
   console.log("Prerequisites: C++ compiler, libopenblas-dev (or equivalent)");
+  console.log(
+    `-ffast-math: ${fastMath ? "ENABLED (--fast-math)" : "disabled (default)"}`
+  );
   console.log("");
   try {
+    // node-gyp picks up NUMBL_FAST_MATH at gyp-time via the
+    // `fast_math%` variable in binding.gyp.
+    const env = {
+      ...process.env,
+      NUMBL_FAST_MATH: fastMath ? "true" : "false",
+    };
     execSync("npx node-gyp rebuild", {
       cwd: packageDir,
       stdio: "inherit",
+      env,
     });
     console.log("");
     console.log("Native LAPACK addon built successfully.");
@@ -1160,7 +1189,7 @@ async function main() {
       break;
     }
     case "build-addon":
-      await cmdBuildAddon();
+      await cmdBuildAddon(rest);
       break;
     case "info":
       cmdInfo();

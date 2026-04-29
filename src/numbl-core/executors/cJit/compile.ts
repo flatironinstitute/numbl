@@ -35,6 +35,14 @@ export interface CompiledC {
   readonly cacheHit: boolean;
 }
 
+export interface CompileOptions {
+  /** Enable `-ffast-math`. Off by default to keep FP semantics
+   *  bitwise-deterministic. Opt in via the CLI's `--fast-math` flag
+   *  for ~30% speedup on element-wise tensor benchmarks (libmvec
+   *  vectorization of transcendentals). */
+  readonly fastMath?: boolean;
+}
+
 /** koffi's runtime-shaped lib object. */
 interface KoffiLib {
   func(declaration: string): CFn;
@@ -49,14 +57,38 @@ interface KoffiLib {
 export function compileAndLoad(
   source: string,
   declaration: string,
-  bridge: NativeBridge
+  bridge: NativeBridge,
+  options?: CompileOptions
 ): CompiledC {
   if (!existsSync(CACHE_DIR)) {
     mkdirSync(CACHE_DIR, { recursive: true });
   }
 
+  const cc = process.env.NUMBL_CC || "cc";
+  // `#pragma omp simd` (emitted by fuseCodegen) plus -ffast-math
+  // unlocks libmvec autovectorization of transcendentals. -ffast-math
+  // is opt-in (CLI: --fast-math) because it changes FP reduction
+  // ordering — element-wise fuse kernels are reduction-free so
+  // results stay bitwise-identical, but reductions elsewhere drift.
+  // On Linux we link -lmvec to resolve the `_ZGVdN4v_*` symbols.
+  const flags = [
+    "-O3",
+    "-fPIC",
+    "-shared",
+    "-std=c11",
+    "-march=native",
+    "-fopenmp-simd",
+    "-fno-math-errno",
+    "-Wall",
+  ];
+  if (options?.fastMath) flags.push("-ffast-math");
+  const libs = process.platform === "linux" ? ["-lmvec", "-lm"] : ["-lm"];
+
+  // Cache key includes the flag string so different compile settings
+  // (e.g., --fast-math on vs off) get distinct .so artifacts.
+  const flagKey = `${flags.join(" ")} ${libs.join(" ")}`;
   const hash = createHash("sha256")
-    .update(`${declaration}\n${source}`)
+    .update(`${flagKey}\n${declaration}\n${source}`)
     .digest("hex")
     .slice(0, 32);
   const libPath = join(CACHE_DIR, `${hash}.so`);
@@ -66,21 +98,13 @@ export function compileAndLoad(
   if (!existsSync(libPath)) {
     cacheHit = false;
     writeFileSync(srcPath, source);
-
-    const cc = process.env.NUMBL_CC || "cc";
-    const flags = [
-      "-O2",
-      "-fPIC",
-      "-shared",
-      "-std=c11",
-      "-march=native",
-      "-fno-math-errno",
-      "-Wall",
-    ];
     try {
-      execSync(`${cc} ${flags.join(" ")} -o ${libPath} ${srcPath}`, {
-        stdio: ["ignore", "ignore", "pipe"],
-      });
+      execSync(
+        `${cc} ${flags.join(" ")} -o ${libPath} ${srcPath} ${libs.join(" ")}`,
+        {
+          stdio: ["ignore", "ignore", "pipe"],
+        }
+      );
     } catch (e) {
       const stderr =
         e && typeof e === "object" && "stderr" in e

@@ -1,4 +1,11 @@
 {
+  "variables": {
+    # Whether to compile the native addon with -ffast-math. Default is
+    # off — keeps reductions bitwise-deterministic. Opt in via:
+    #   npx numbl build-addon --fast-math      (sets NUMBL_FAST_MATH=true)
+    #   NUMBL_FAST_MATH=true npm run build:addon
+    "fast_math%": "<!(node -p \"process.env.NUMBL_FAST_MATH === 'true' ? 'true' : 'false'\")"
+  },
   "targets": [
     {
       "target_name": "numbl_addon",
@@ -44,10 +51,15 @@
         "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
         "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
       ],
-      "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
-      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
-      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffast-math" ],
+      "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno" ],
+      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno" ],
+      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno" ],
       "conditions": [
+        ['fast_math == "true"', {
+          "cflags": [ "-ffast-math" ],
+          "cflags_c": [ "-ffast-math" ],
+          "cflags_cc": [ "-ffast-math" ]
+        }],
         ['OS=="linux"', {
           "cflags_c": [ "-fopenmp" ],
           "cflags_cc": [ "-fopenmp" ],

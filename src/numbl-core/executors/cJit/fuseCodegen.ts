@@ -31,6 +31,12 @@ export function generateFuseCSource(
   cls.scalarInputs.forEach((n, i) => scalarIndex.set(n, i));
 
   const params: string[] = [];
+  // Inputs are NOT restrict-qualified: two distinct names can refer
+  // to the same underlying Float64Array (MATLAB copy-on-write makes
+  // `b = a` share buffers), so we must allow input aliasing. `out`
+  // IS restrict-qualified: the executor always allocates a fresh
+  // Float64Array, so no input pointer can alias it. That alone is
+  // usually enough to unlock vectorization.
   for (let i = 0; i < cls.tensorInputs.length; i++) {
     params.push(`const double *t${i}`);
   }
@@ -44,8 +50,13 @@ export function generateFuseCSource(
   lines.push(`#include <math.h>`);
   lines.push(``);
   lines.push(
-    `void ${fnName}(double *out, long n${params.length > 0 ? ", " + params.join(", ") : ""}) {`
+    `void ${fnName}(double *restrict out, long n${params.length > 0 ? ", " + params.join(", ") : ""}) {`
   );
+  // `#pragma omp simd` asks the compiler to vectorize the loop even
+  // when it would otherwise be conservative (e.g., due to function-
+  // call boundaries on math.h calls). Combined with `restrict out`,
+  // GCC/Clang will emit straight-line SIMD code on -march=native.
+  lines.push(`  #pragma omp simd`);
   lines.push(`  for (long i = 0; i < n; i++) {`);
   lines.push(`    out[i] = ${body};`);
   lines.push(`  }`);

@@ -100,6 +100,12 @@ export class Interpreter {
    *  declines when undefined. */
   nativeBridge?: import("../workspace/types.js").NativeBridge;
 
+  /** Compile c-jit kernels with `-ffast-math`. Off by default to keep
+   *  reductions bitwise-deterministic; opt in via the CLI's
+   *  `--fast-math` flag for libmvec-vectorized transcendentals
+   *  (~30% speedup on element-wise tensor benchmarks). */
+  fastMath: boolean = false;
+
   /** Telemetry: invoked after a registered executor's `run()` succeeds.
    *  Used to track which optimizers fire in a session. The kind is the
    *  LoweredStmt kind the executor handled ("top-level", "loop", "call",

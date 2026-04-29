@@ -114,7 +114,9 @@ export const cJitFuseExecutor: Executor<FuseLoweredStmt, CFuseCompiled | null> =
 
       let compiled: CompiledC;
       try {
-        compiled = compileAndLoad(source, declaration, bridge);
+        compiled = compileAndLoad(source, declaration, bridge, {
+          fastMath: ctx.interp.fastMath,
+        });
       } catch (e) {
         console.warn(
           `Warning: c-jit-fuse compile failed; falling back to interpreter. ${
