@@ -15,7 +15,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
-import { type JitType, shapeAfterReduction } from "../../jitTypes.js";
+import { type JitType, isNonneg, shapeAfterReduction } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { sparseSum } from "../../helpers/reduction-helpers.js";
 import { uninitFloatX } from "../../runtime/alloc.js";
@@ -109,16 +109,10 @@ function reductionOutputType(
     (inputType.kind === "tensor" && inputType.isComplex === true);
 
   // Standard reductions (sum, prod, mean, max, min, cumsum, ...) all
-  // preserve non-negativity: any combination of nonneg values via
-  // those ops stays nonneg. Pulling this through to the output type
-  // lets `sqrt(sum(...))` keep its real-valued type instead of
-  // widening to `complex_or_number` (which then bails downstream
-  // comparisons like `err1 > eps`).
-  const inputNonneg =
-    inputType.kind === "boolean" ||
-    (inputType.kind === "number" &&
-      (inputType.sign === "nonneg" || inputType.sign === "positive")) ||
-    (inputType.kind === "tensor" && inputType.nonneg === true);
+  // preserve non-negativity, so a `sqrt(sum(...))` chain keeps its
+  // real-valued type instead of widening to `complex_or_number` (which
+  // would bail downstream comparisons like `err1 > eps`).
+  const inputNonneg = isNonneg(inputType);
 
   const scalarOut = (): JitType => {
     if (opts?.logicalOutput) return { kind: "boolean" };

@@ -187,32 +187,7 @@ export function inferJitType(value: unknown): JitType {
     (value as { kind?: string }).kind === "cell"
   ) {
     const c = value as import("../../runtime/types.js").RuntimeCell;
-    // Infer per-index element types when every slot is bound to a
-    // value with a known JitType. This propagates into nested-loop
-    // specs (e.g. chunkerfunc's `[out{1:nout}] = fcurve(ts); for j =
-    // nout+1:3; out{j} = out{j-1}*M; end` — the inner for-j loop
-    // gathers its own input types via inferJitType, and without per-
-    // element tracking would lose visibility of out{j-1}'s real type).
-    let elements: Record<number, JitType> | undefined;
-    let allCovered = true;
-    for (let i = 0; i < c.data.length; i++) {
-      const v = c.data[i];
-      if (v === undefined) {
-        allCovered = false;
-        break;
-      }
-      const t = inferJitType(v);
-      if (t.kind === "unknown") {
-        allCovered = false;
-        break;
-      }
-      (elements ??= {})[i + 1] = t;
-    }
-    return {
-      kind: "cell",
-      shape: c.shape.slice(),
-      ...(allCovered && elements ? { elements } : {}),
-    };
+    return { kind: "cell", shape: c.shape.slice() };
   }
   if (
     typeof value === "object" &&

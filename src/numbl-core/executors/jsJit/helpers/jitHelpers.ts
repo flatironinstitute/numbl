@@ -202,6 +202,49 @@ function mod(a: number, b: number): number {
   return r;
 }
 
+// ── Call-frame ceremony ────────────────────────────────────────────────
+
+/** Runtime surface used by the JIT call helpers. Kept narrow so the
+ *  JIT helpers don't depend on the full Runtime class. */
+interface CallRt {
+  pushCallFrame: (name: string) => void;
+  popCallFrame: () => void;
+  pushCleanupScope: () => void;
+  popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
+  dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
+  annotateError: (e: unknown) => void;
+}
+
+/** Cleanup callback shared by every call helper that pops a frame:
+ *  invoke the cleanup fn directly when it has a jsFn closure,
+ *  otherwise dispatch through the runtime. */
+function runCleanup(rt: CallRt, cfn: RuntimeFunction): void {
+  if (cfn.jsFn) {
+    if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
+    else cfn.jsFn();
+  } else {
+    rt.dispatch(cfn.name, 0, []);
+  }
+}
+
+/** Run `body` inside a pushed call frame + cleanup scope, annotating
+ *  any thrown error with the current call context before rethrowing.
+ *  Wraps the push/try/catch/finally/pop dance shared by every helper
+ *  that dispatches through the runtime. */
+function withCallFrame<T>(rt: CallRt, name: string, body: () => T): T {
+  rt.pushCallFrame(name);
+  rt.pushCleanupScope();
+  try {
+    return body();
+  } catch (e) {
+    rt.annotateError(e);
+    throw e;
+  } finally {
+    rt.popAndRunCleanups(cfn => runCleanup(rt, cfn));
+    rt.popCallFrame();
+  }
+}
+
 // ── Assembled helpers object ───────────────────────────────────────────
 
 export const jitHelpers = {
@@ -334,21 +377,23 @@ export const jitHelpers = {
     const isComplex = !!(a.imag || b.imag);
     const out = new FloatXArray(N);
     const imag = isComplex ? new FloatXArray(N) : undefined;
+    // Each output column is contiguous in column-major storage, so use
+    // TypedArray.set with subarray views to copy aRows + bRows elements
+    // per column in two helper calls (V8 inlines memmove).
     for (let c = 0; c < cols; c++) {
       const dstColBase = c * totalRows;
-      const aColBase = c * aRows;
-      for (let i = 0; i < aRows; i++)
-        out[dstColBase + i] = a.data[aColBase + i];
-      if (imag && a.imag) {
-        for (let i = 0; i < aRows; i++)
-          imag[dstColBase + i] = a.imag[aColBase + i];
-      }
-      const bColBase = c * bRows;
-      for (let i = 0; i < bRows; i++)
-        out[dstColBase + aRows + i] = b.data[bColBase + i];
-      if (imag && b.imag) {
-        for (let i = 0; i < bRows; i++)
-          imag[dstColBase + aRows + i] = b.imag[bColBase + i];
+      out.set(a.data.subarray(c * aRows, (c + 1) * aRows), dstColBase);
+      out.set(b.data.subarray(c * bRows, (c + 1) * bRows), dstColBase + aRows);
+      if (imag) {
+        if (a.imag) {
+          imag.set(a.imag.subarray(c * aRows, (c + 1) * aRows), dstColBase);
+        }
+        if (b.imag) {
+          imag.set(
+            b.imag.subarray(c * bRows, (c + 1) * bRows),
+            dstColBase + aRows
+          );
+        }
       }
     }
     return makeTensor(out, imag, [totalRows, cols]);
@@ -643,37 +688,13 @@ export const jitHelpers = {
   // decremented _rc; if it didn't, leaving _rc over-counted just means a
   // future mutation in the caller takes an extra copy — safe and rare.
   callUser: (
-    rt: {
-      pushCallFrame: (name: string) => void;
-      popCallFrame: () => void;
-      pushCleanupScope: () => void;
-      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
-      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
-      annotateError: (e: unknown) => void;
-    },
+    rt: CallRt,
     name: string,
     fn: (...args: unknown[]) => unknown,
     ...args: unknown[]
   ) => {
     for (let i = 0; i < args.length; i++) shareTensor(args[i]);
-    rt.pushCallFrame(name);
-    rt.pushCleanupScope();
-    try {
-      return fn(...args);
-    } catch (e) {
-      rt.annotateError(e);
-      throw e;
-    } finally {
-      rt.popAndRunCleanups((cfn: RuntimeFunction) => {
-        if (cfn.jsFn) {
-          if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
-          else cfn.jsFn();
-        } else {
-          rt.dispatch(cfn.name, 0, []);
-        }
-      });
-      rt.popCallFrame();
-    }
+    return withCallFrame(rt, name, () => fn(...args));
   },
 
   // Indirect call through a function handle variable. Used by the JIT for
@@ -691,45 +712,16 @@ export const jitHelpers = {
   // matters in hot loops where per-call frame management dominates.
   // The slow path (dispatch) still uses full call frame tracking.
   callFuncHandle: (
-    rt: {
-      pushCallFrame: (name: string) => void;
-      popCallFrame: () => void;
-      pushCleanupScope: () => void;
-      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
-      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
-      annotateError: (e: unknown) => void;
-    },
+    rt: CallRt,
     fn: RuntimeFunction,
     expectedType: string,
     ...args: unknown[]
   ) => {
-    let result: unknown;
-    // Fast path: direct jsFn call without frame overhead
-    if (fn.jsFn) {
-      if (fn.jsFnExpectsNargout) result = fn.jsFn(1, ...args);
-      else result = fn.jsFn(...args);
-    } else {
-      // Slow path: dispatch through runtime with full call frame tracking
-      rt.pushCallFrame(fn.name);
-      rt.pushCleanupScope();
-      try {
-        result = rt.dispatch(fn.name, 1, args);
-      } catch (e) {
-        rt.annotateError(e);
-        throw e;
-      } finally {
-        rt.popAndRunCleanups((cfn: RuntimeFunction) => {
-          if (cfn.jsFn) {
-            if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
-            else cfn.jsFn();
-          } else {
-            rt.dispatch(cfn.name, 0, []);
-          }
-        });
-        rt.popCallFrame();
-      }
-    }
-    // Verify the result type matches what the JIT expected
+    const result = fn.jsFn
+      ? fn.jsFnExpectsNargout
+        ? fn.jsFn(1, ...args)
+        : fn.jsFn(...args)
+      : withCallFrame(rt, fn.name, () => rt.dispatch(fn.name, 1, args));
     const actualType = typeTagOf(result);
     if (actualType !== expectedType) {
       throw new JitFuncHandleBailError(fn.name, expectedType, actualType);
@@ -747,37 +739,12 @@ export const jitHelpers = {
   // can have cleanup handlers, throw errors, and maintain persistent
   // state — all of which need frame tracking for correct semantics.
   callUserFunc: (
-    rt: {
-      pushCallFrame: (name: string) => void;
-      popCallFrame: () => void;
-      pushCleanupScope: () => void;
-      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
-      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
-      annotateError: (e: unknown) => void;
-    },
+    rt: CallRt,
     name: string,
     expectedType: string,
     ...args: unknown[]
   ) => {
-    let result: unknown;
-    rt.pushCallFrame(name);
-    rt.pushCleanupScope();
-    try {
-      result = rt.dispatch(name, 1, args);
-    } catch (e) {
-      rt.annotateError(e);
-      throw e;
-    } finally {
-      rt.popAndRunCleanups((cfn: RuntimeFunction) => {
-        if (cfn.jsFn) {
-          if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
-          else cfn.jsFn();
-        } else {
-          rt.dispatch(cfn.name, 0, []);
-        }
-      });
-      rt.popCallFrame();
-    }
+    const result = withCallFrame(rt, name, () => rt.dispatch(name, 1, args));
     const actualType = typeTagOf(result);
     if (actualType !== expectedType) {
       throw new JitFuncHandleBailError(name, expectedType, actualType);
@@ -792,95 +759,46 @@ export const jitHelpers = {
   // whose jsFn isn't set up. The caller is expected to have probed
   // return types; mismatches surface as a JitFuncHandleBailError.
   callFuncHandleMulti: (
-    rt: {
-      pushCallFrame: (name: string) => void;
-      popCallFrame: () => void;
-      pushCleanupScope: () => void;
-      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
-      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
-      annotateError: (e: unknown) => void;
-    },
+    rt: CallRt,
     fn: RuntimeFunction,
     nargout: number,
     ...args: unknown[]
   ): unknown[] => {
-    let result: unknown;
-    if (fn.jsFn) {
-      result = fn.jsFnExpectsNargout
+    const result = fn.jsFn
+      ? fn.jsFnExpectsNargout
         ? fn.jsFn(nargout, ...args)
-        : fn.jsFn(...args);
-    } else {
-      rt.pushCallFrame(fn.name);
-      rt.pushCleanupScope();
-      try {
-        result = rt.dispatch(fn.name, nargout, args);
-      } catch (e) {
-        rt.annotateError(e);
-        throw e;
-      } finally {
-        rt.popAndRunCleanups((cfn: RuntimeFunction) => {
-          if (cfn.jsFn) {
-            if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
-            else cfn.jsFn();
-          } else {
-            rt.dispatch(cfn.name, 0, []);
-          }
-        });
-        rt.popCallFrame();
-      }
-    }
-    if (Array.isArray(result)) {
-      return result.length >= nargout
-        ? result
-        : [...result, ...Array(nargout - result.length).fill(undefined)];
-    }
-    // nargout==1 single-value case shouldn't reach here (lowerMultiAssign
-    // requires nargout >= 2), but guard defensively.
-    return [result, ...Array(nargout - 1).fill(undefined)];
+        : fn.jsFn(...args)
+      : withCallFrame(rt, fn.name, () => rt.dispatch(fn.name, nargout, args));
+    return padMultiResult(result, nargout);
   },
 
   // Soft-bail user-call with multiple outputs. Mirrors callUserFunc but
   // returns an array per nargout for JIT to unpack into LHS vars.
   callUserFuncMulti: (
-    rt: {
-      pushCallFrame: (name: string) => void;
-      popCallFrame: () => void;
-      pushCleanupScope: () => void;
-      popAndRunCleanups: (callFn: (fn: RuntimeFunction) => void) => void;
-      dispatch: (name: string, nargout: number, args: unknown[]) => unknown;
-      annotateError: (e: unknown) => void;
-    },
+    rt: CallRt,
     name: string,
     nargout: number,
     ...args: unknown[]
   ): unknown[] => {
-    let result: unknown;
-    rt.pushCallFrame(name);
-    rt.pushCleanupScope();
-    try {
-      result = rt.dispatch(name, nargout, args);
-    } catch (e) {
-      rt.annotateError(e);
-      throw e;
-    } finally {
-      rt.popAndRunCleanups((cfn: RuntimeFunction) => {
-        if (cfn.jsFn) {
-          if (cfn.jsFnExpectsNargout) cfn.jsFn(0);
-          else cfn.jsFn();
-        } else {
-          rt.dispatch(cfn.name, 0, []);
-        }
-      });
-      rt.popCallFrame();
-    }
-    if (Array.isArray(result)) {
-      return result.length >= nargout
-        ? result
-        : [...result, ...Array(nargout - result.length).fill(undefined)];
-    }
-    return [result, ...Array(nargout - 1).fill(undefined)];
+    const result = withCallFrame(rt, name, () =>
+      rt.dispatch(name, nargout, args)
+    );
+    return padMultiResult(result, nargout);
   },
 } as Record<string, unknown>;
+
+/** Normalize a multi-output dispatch result to a length-nargout array.
+ *  Anonymous-fn jsFns return an Array directly when nargout > 1; named
+ *  dispatch may return a single value when nargout==1. Pad with undef
+ *  if the function under-supplied. */
+function padMultiResult(result: unknown, nargout: number): unknown[] {
+  if (Array.isArray(result)) {
+    return result.length >= nargout
+      ? result
+      : [...result, ...Array(nargout - result.length).fill(undefined)];
+  }
+  return [result, ...Array(nargout - 1).fill(undefined)];
+}
 
 // ── IBuiltin integration ───────────────────────────────────────────────
 

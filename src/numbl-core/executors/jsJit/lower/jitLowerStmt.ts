@@ -326,12 +326,75 @@ function tryLowerAsSliceBind(
  * interpreter. Notably: slice writes (`t(a:b) = src`) and complex tensors
  * are not yet supported.
  */
-/** Pull a literal positive-integer index out of an Expr (used by cell
- *  literal-index detection in both single and multi cell writes). */
-function literalCellIndex(e: Expr): number | null {
-  if (e.type !== "Number") return null;
-  const v = parseFloat(e.value);
-  return Number.isInteger(v) && v >= 1 ? v : null;
+/**
+ * Cell-element-type env update for a literal-index write. Records the
+ * rhs type at `idx` so a subsequent literal-index read recovers it
+ * (chunkerfunc's `[out{1:3}] = fcurve(ts); r = out{1}; …`). No-op when
+ * the rhs has no useful type to track.
+ */
+function setCellElementType(
+  ctx: LowerCtx,
+  cellName: string,
+  cellType: Extract<JitType, { kind: "cell" }>,
+  idx: number,
+  rhsType: JitType
+): void {
+  if (rhsType.kind === "unknown") return;
+  if (cellType.elements?.[idx] === rhsType) return;
+  ctx.env.set(cellName, {
+    kind: "cell",
+    ...(cellType.shape ? { shape: cellType.shape } : {}),
+    elements: { ...(cellType.elements ?? {}), [idx]: rhsType },
+  });
+}
+
+/**
+ * Drop all per-index element tracking on a cell. Used after a non-
+ * literal-index write since the runtime index could touch any slot.
+ */
+function clearCellElementsTracking(
+  ctx: LowerCtx,
+  cellName: string,
+  cellType: Extract<JitType, { kind: "cell" }>
+): void {
+  if (!cellType.elements) return;
+  ctx.env.set(cellName, {
+    kind: "cell",
+    ...(cellType.shape ? { shape: cellType.shape } : {}),
+  });
+}
+
+/**
+ * Resolve an Expr to a literal positive-integer index, used for cell
+ * literal-index detection. Tries (in order): a Number literal, an
+ * Ident whose env type carries an `exact` integer, and finally the
+ * live runtime value via `ctx.interp.env`. The runtime fallback is
+ * what handles chunkerfunc-style `[out{1:nout}]` where `nout` survives
+ * to the loop spec without an `exact` (the lowering pipeline strips
+ * `exact` to avoid spec proliferation).
+ */
+function resolveLiteralInt(ctx: LowerCtx, e: Expr): number | null {
+  if (e.type === "Number") {
+    const v = parseFloat(e.value);
+    return Number.isInteger(v) && v >= 1 ? v : null;
+  }
+  if (e.type === "Ident") {
+    const t = ctx.env.get(e.name);
+    if (
+      t &&
+      t.kind === "number" &&
+      t.exact !== undefined &&
+      Number.isInteger(t.exact) &&
+      t.exact >= 1
+    ) {
+      return t.exact;
+    }
+    if (ctx.interp) {
+      const v = ctx.interp.env.get(e.name);
+      if (typeof v === "number" && Number.isInteger(v) && v >= 1) return v;
+    }
+  }
+  return null;
 }
 
 function lowerAssignLValue(
@@ -364,20 +427,11 @@ function lowerAssignLValue(
     // this drop, a later literal-index read would use a stale static
     // type and JIT-emit code (e.g. scalar JS `+`) that mishandles the
     // actual runtime value.
-    const litIdx = literalCellIndex(lv.indices[0]);
-    if (litIdx !== null && rhs.jitType.kind !== "unknown") {
-      const next: JitType = {
-        kind: "cell",
-        ...(cellType.shape ? { shape: cellType.shape } : {}),
-        elements: { ...(cellType.elements ?? {}), [litIdx]: rhs.jitType },
-      };
-      ctx.env.set(lv.base.name, next);
-    } else if (litIdx === null && cellType.elements) {
-      const next: JitType = {
-        kind: "cell",
-        ...(cellType.shape ? { shape: cellType.shape } : {}),
-      };
-      ctx.env.set(lv.base.name, next);
+    const litIdx = resolveLiteralInt(ctx, lv.indices[0]);
+    if (litIdx !== null) {
+      setCellElementType(ctx, lv.base.name, cellType, litIdx, rhs.jitType);
+    } else {
+      clearCellElementsTracking(ctx, lv.base.name, cellType);
     }
     return [
       {
@@ -876,39 +930,6 @@ function lowerMultiAssign(
     | { kind: "cell"; tempName: string; cellName: string; idx: number };
   const slots: Slot[] = [];
   let cellTempCounter = 0;
-  // Resolve a literal positive-integer index either from a Number node
-  // or from an Ident whose env type carries an `exact` integer value
-  // (e.g. `nout = 3` → `[out{1:nout}]` becomes [out{1}, out{2}, out{3}]).
-  const resolveLiteralInt = (e: Expr): number | null => {
-    if (e.type === "Number") {
-      const v = parseFloat(e.value);
-      return Number.isInteger(v) && v >= 1 ? v : null;
-    }
-    if (e.type === "Ident") {
-      const t = ctx.env.get(e.name);
-      if (
-        t &&
-        t.kind === "number" &&
-        t.exact !== undefined &&
-        Number.isInteger(t.exact) &&
-        t.exact >= 1
-      ) {
-        return t.exact;
-      }
-      // Fallback: look up the live runtime value. The lowering pipeline
-      // strips `exact` from JIT type signatures to avoid spec
-      // proliferation, but for cell-unpack range bounds (e.g. `nout` in
-      // `[out{1:nout}] = …`) we want to read the current value at JIT
-      // compile time. The spec is keyed on (caller's) argTypes, so a
-      // change in `nout` produces a fresh spec via the type system
-      // anyway when the param type changes.
-      if (ctx.interp) {
-        const v = ctx.interp.env.get(e.name);
-        if (typeof v === "number" && Number.isInteger(v) && v >= 1) return v;
-      }
-    }
-    return null;
-  };
   for (const lv of stmt.lvalues) {
     if (lv.type === "Var") {
       slots.push({ kind: "var", name: lv.name });
@@ -927,7 +948,7 @@ function lowerMultiAssign(
       const cellType = ctx.env.get(cellName);
       if (!cellType || cellType.kind !== "cell") return null;
       const idxExpr = lv.indices[0];
-      const single = resolveLiteralInt(idxExpr);
+      const single = resolveLiteralInt(ctx, idxExpr);
       if (single !== null) {
         slots.push({
           kind: "cell",
@@ -938,8 +959,8 @@ function lowerMultiAssign(
         continue;
       }
       if (idxExpr.type === "Range" && idxExpr.step === null) {
-        const a = resolveLiteralInt(idxExpr.start);
-        const b = resolveLiteralInt(idxExpr.end);
+        const a = resolveLiteralInt(ctx, idxExpr.start);
+        const b = resolveLiteralInt(ctx, idxExpr.end);
         if (a === null || b === null || b < a) return null;
         for (let k = a; k <= b; k++) {
           slots.push({
@@ -994,22 +1015,14 @@ function lowerMultiAssign(
       if (!cellType || cellType.kind !== "cell") continue;
       cellsTouched.add(s.cellName);
       const tempType = outputTypes[i];
-      // Update env's per-index element type. Mutate in place after
-      // cloning to ensure later writes see prior writes' updates.
-      if (tempType.kind !== "unknown") {
-        const cur = ctx.env.get(s.cellName);
-        if (cur && cur.kind === "cell") {
-          ctx.env.set(s.cellName, {
-            kind: "cell",
-            ...(cur.shape ? { shape: cur.shape } : {}),
-            elements: { ...(cur.elements ?? {}), [s.idx]: tempType },
-          });
-        }
-      }
-      // Re-read cellType from env so each write sees the updated type
-      // (reflects prior cell writes in this block).
-      const updatedCellType = ctx.env.get(s.cellName);
-      if (!updatedCellType || updatedCellType.kind !== "cell") continue;
+      // Update env's per-index element type so subsequent writes/reads
+      // in this block see the new tracking. Re-read cellType from env
+      // before each helper call (prior writes may have updated it).
+      setCellElementType(ctx, s.cellName, cellType, s.idx, tempType);
+      const updatedCellType = ctx.env.get(s.cellName) as Extract<
+        JitType,
+        { kind: "cell" }
+      >;
       writes.push({
         tag: "Assign",
         name: s.cellName,

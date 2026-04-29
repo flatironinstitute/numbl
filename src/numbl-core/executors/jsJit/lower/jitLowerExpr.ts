@@ -345,8 +345,7 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
           b.jitType.kind === "tensor"
         ) {
           const isComplex =
-            (a.jitType.isComplex === true || b.jitType.isComplex === true) ??
-            false;
+            a.jitType.isComplex === true || b.jitType.isComplex === true;
           // Compute output shape when both inputs have full static shape:
           // [aRows + bRows, sharedCols].
           const aShape = a.jitType.shape;
@@ -714,7 +713,6 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       if (
         expr.base.name === "varargin" &&
         ctx.nVarargin !== undefined &&
-        ctx.regularParamCount !== undefined &&
         expr.indices.length === 1
       ) {
         const idxExpr = expr.indices[0];
@@ -1511,6 +1509,62 @@ function getGeneratedFnReturnType(
  * (falls back to interpretation for the whole loop).
  */
 /**
+ * Resolve an array of probe-time argument values from lowered JitExpr
+ * args. Used by both single- and multi-output handle probes.
+ *
+ * - NumberLiteral: use the literal value.
+ * - Var: use the env value when bound; otherwise synthesize from the
+ *   JIT type (covers loop-local args that don't exist at JIT-compile
+ *   time, e.g. chunkerfunc's `ts = a + ...; fcurve(ts)`).
+ * - Other (Binary, Unary, Call, ...): synthesize from the lowered
+ *   expr's JIT type. The probe only cares about the return type,
+ *   so a representative value of the right kind/shape suffices.
+ *
+ * Returns null when any arg's type can't be synthesized (unknown
+ * struct/cell/etc.) — caller bails.
+ */
+function collectProbeArgs(
+  interp: Interpreter,
+  loweredArgs: JitExpr[]
+): unknown[] | null {
+  const argVals: unknown[] = [];
+  for (const arg of loweredArgs) {
+    if (arg.tag === "NumberLiteral") {
+      argVals.push(arg.value);
+      continue;
+    }
+    if (arg.tag === "Var") {
+      const val = interp.env.get(arg.name);
+      if (val !== undefined) {
+        argVals.push(val);
+        continue;
+      }
+    }
+    const rep = representativeValue(arg.jitType);
+    if (rep === undefined) return null;
+    argVals.push(rep);
+  }
+  return argVals;
+}
+
+/**
+ * Resolve a function handle from the live interpreter env. Only direct
+ * jsFn closures (anonymous functions and named function references) are
+ * probeable — builtins that require full interpreter dispatch are too
+ * expensive to probe. Returns null on any miss.
+ */
+function resolveProbeFn(
+  interp: Interpreter,
+  fnName: string
+): import("../../../runtime/types.js").RuntimeFunction | null {
+  const fnVal = interp.env.get(fnName);
+  if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
+  const fn = fnVal as import("../../../runtime/types.js").RuntimeFunction;
+  if (!fn.jsFn) return null;
+  return fn;
+}
+
+/**
  * Multi-output variant of probeFuncHandleReturnType. Calls the handle
  * with the requested nargout and returns one JitType per output. Bails
  * (returns null) on the same conditions as the single-output probe
@@ -1524,32 +1578,13 @@ export function probeFuncHandleMultiReturnTypes(
   nargout: number
 ): JitType[] | null {
   try {
-    const fnVal = interp.env.get(fnName);
-    if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
-    const fn = fnVal as import("../../../runtime/types.js").RuntimeFunction;
-    if (!fn.jsFn) return null;
-
-    const argVals: unknown[] = [];
-    for (const arg of loweredArgs) {
-      if (arg.tag === "NumberLiteral") {
-        argVals.push(arg.value);
-        continue;
-      }
-      if (arg.tag === "Var") {
-        const val = interp.env.get(arg.name);
-        if (val !== undefined) {
-          argVals.push(val);
-          continue;
-        }
-      }
-      const rep = representativeValue(arg.jitType);
-      if (rep === undefined) return null;
-      argVals.push(rep);
-    }
-
+    const fn = resolveProbeFn(interp, fnName);
+    if (!fn) return null;
+    const argVals = collectProbeArgs(interp, loweredArgs);
+    if (!argVals) return null;
     const result = fn.jsFnExpectsNargout
-      ? fn.jsFn(nargout, ...argVals)
-      : fn.jsFn(...argVals);
+      ? fn.jsFn!(nargout, ...argVals)
+      : fn.jsFn!(...argVals);
     if (!Array.isArray(result) || result.length < nargout) return null;
     const types: JitType[] = [];
     for (let i = 0; i < nargout; i++) {
@@ -1569,52 +1604,17 @@ function probeFuncHandleReturnType(
   loweredArgs: JitExpr[]
 ): JitType | null {
   try {
-    const fnVal = interp.env.get(fnName);
-    if (!fnVal || !isRuntimeFunction(fnVal as RuntimeValue)) return null;
-    const fn = fnVal as import("../../../runtime/types.js").RuntimeFunction;
-
-    // Only probe function handles that have a direct JS closure — these
-    // are anonymous functions and named function references. Builtins
-    // that require full interpreter dispatch are too expensive to probe.
-    if (!fn.jsFn) return null;
-
-    // Collect argument values for the probe. For each lowered arg:
-    // - NumberLiteral: use the literal value
-    // - Var: use the env value when bound; otherwise synthesize from
-    //   its JIT type (handles loop-local args that don't exist at
-    //   JIT-compile time, e.g. chunkerfunc's `ts = a + ...; fcurve(ts)`)
-    // - Other (Binary, Unary, Call, ...): synthesize from the lowered
-    //   expr's JIT type. The probe only cares about the return type,
-    //   so a representative tensor of the right shape suffices —
-    //   we don't try to faithfully evaluate the arg expression.
-    const argVals: unknown[] = [];
-    for (const arg of loweredArgs) {
-      if (arg.tag === "NumberLiteral") {
-        argVals.push(arg.value);
-        continue;
-      }
-      if (arg.tag === "Var") {
-        const val = interp.env.get(arg.name);
-        if (val !== undefined) {
-          argVals.push(val);
-          continue;
-        }
-      }
-      const rep = representativeValue(arg.jitType);
-      if (rep === undefined) return null;
-      argVals.push(rep);
-    }
-
-    // Call the function handle once to determine its return type
+    const fn = resolveProbeFn(interp, fnName);
+    if (!fn) return null;
+    const argVals = collectProbeArgs(interp, loweredArgs);
+    if (!argVals) return null;
     const result = fn.jsFnExpectsNargout
-      ? fn.jsFn(1, ...argVals)
-      : fn.jsFn(...argVals);
+      ? fn.jsFn!(1, ...argVals)
+      : fn.jsFn!(...argVals);
     const resultType = inferJitType(result);
-    // Don't accept unknown — that would make downstream lowering bail anyway
     if (resultType.kind === "unknown") return null;
     return resultType;
   } catch {
-    // Probe failed (function errored) — bail
     return null;
   }
 }

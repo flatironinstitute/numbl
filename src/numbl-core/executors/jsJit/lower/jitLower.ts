@@ -127,12 +127,10 @@ export interface LowerCtx {
   nargin?: number;
   /** Number of variadic args bound for this specialization (0 for
    *  non-varargin callees). Used by `varargin{i}` lowering to redirect to
-   *  the synthetic `$va_*` param holding the i-th variadic arg. */
+   *  the synthetic `$va_*` param holding the i-th variadic arg. The
+   *  varargin lowering only needs the count — the synthetic name is
+   *  derived from the literal index alone. */
   nVarargin?: number;
-  /** Number of regular params (declared params minus the trailing
-   *  `varargin`). The (k-1)-th variadic arg lives in
-   *  `effectiveParams[regularParamCount + k - 1]`, name `$va_{k-1}`. */
-  regularParamCount?: number;
   generatedFns: Map<string, string>;
   generatedIRBodies: Map<string, GeneratedFn>;
   loweringInProgress: Set<string>;
@@ -245,7 +243,6 @@ export function lowerFunction(
     // body don't fold and the bail path on `varargin{K}` re-engages.
     nargin: fnHasVarargin ? effectiveParams.length : undefined,
     nVarargin,
-    regularParamCount: effectiveParams.length - nVarargin,
     generatedFns: sharedGeneratedFns,
     generatedIRBodies: sharedGeneratedIRBodies,
     loweringInProgress: sharedInProgress,
