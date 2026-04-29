@@ -109,16 +109,24 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
 
     const inputEncodings = cls.inputs.map(n => varTypes.get(n) ?? "real");
     const outputEncodings = cls.outputs.map(n => varTypes.get(n) ?? "real");
-    const nInputSlots = totalSlotCount(cls.inputs, varTypes);
     const nOutputSlots = totalSlotCount(cls.outputs, varTypes);
+
+    const params: string[] = [];
+    for (let i = 0; i < cls.inputs.length; i++) {
+      if (inputEncodings[i] === "complex") {
+        params.push(`double a${i}re`);
+        params.push(`double a${i}im`);
+      } else {
+        params.push(`double a${i}`);
+      }
+    }
+    const declaration = `void ${fnName}(double *out${
+      params.length > 0 ? ", " + params.join(", ") : ""
+    })`;
 
     let compiled: CompiledC;
     try {
-      compiled = compileAndLoad(
-        source,
-        { fnName, nInputs: nInputSlots, nOutputs: nOutputSlots },
-        bridge
-      );
+      compiled = compileAndLoad(source, declaration, bridge);
     } catch (e) {
       console.warn(
         `Warning: c-jit-loop compile failed; falling back to interpreter. ${
@@ -183,7 +191,7 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
 
     const out = new Float64Array(compiled.outputSlots);
     try {
-      compiled.compiled.fn(out, ...args);
+      (compiled.compiled.fn as (...a: unknown[]) => unknown)(out, ...args);
     } catch (e) {
       return {
         bail: {

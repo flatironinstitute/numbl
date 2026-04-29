@@ -15,6 +15,7 @@ import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
 import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
 import { jsJitCallExecutor } from "./jsJit/callExecutor.js";
 import { cJitLoopExecutor } from "./cJit/loopExecutor.js";
+import { cJitFuseExecutor } from "./cJit/fuseExecutor.js";
 
 /** Optimization mode label.
  *
@@ -48,6 +49,7 @@ export function registerExecutorsForOpt(
       return;
     case "e3":
       registry.register(cJitLoopExecutor);
+      registry.register(cJitFuseExecutor);
       return;
   }
 }

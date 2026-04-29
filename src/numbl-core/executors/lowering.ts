@@ -58,6 +58,7 @@ import {
   irHasBailRisk,
   irHasIO,
 } from "./jsJit/lower/jitBailSafety.js";
+import { analyzeFuse, type FuseClassification } from "./cJit/fuseAnalyze.js";
 
 /** What `propose()` receives — a discriminated union of the
  *  specialized shapes the dispatcher knows how to lower. Stmts with
@@ -66,7 +67,8 @@ import {
 export type LoweredStmt =
   | TopLevelLoweredStmt
   | LoopLoweredStmt
-  | CallLoweredStmt;
+  | CallLoweredStmt
+  | FuseLoweredStmt;
 
 /** Top-level shape: script body lowered to JS-JIT IR. */
 export interface TopLevelLoweredStmt {
@@ -127,6 +129,14 @@ export interface CallLoweredStmt {
 export interface CallFlags {
   readonly hasIO: boolean;
   readonly hasBailRisk: boolean;
+}
+
+/** Fuse shape: a single AST `Assign` whose RHS is a fusable
+ *  element-wise expression tree. Produced by `analyzeFuse` over the
+ *  raw AST stmt. */
+export interface FuseLoweredStmt {
+  readonly kind: "fuse";
+  readonly classification: FuseClassification;
 }
 
 const BAILED = Symbol("LOWERING_BAILED");
@@ -227,7 +237,30 @@ export function tryLower(
     return tryBuildLoop(ctx.interp, head, siblings, i, cache);
   }
 
+  // Fuse shape: a single Assign whose RHS is element-wise on tensors.
+  if (head.type === "Assign") {
+    return tryBuildFuse(ctx.interp, head, cache);
+  }
+
   return null;
+}
+
+function tryBuildFuse(
+  interp: Interpreter,
+  head: Stmt,
+  cache: LoweringCache
+): FuseLoweredStmt | null {
+  const classification = analyzeFuse(head, interp.env);
+  if (!classification) return null;
+
+  const hit = cache.get(head, classification.cacheKey);
+  if (hit !== undefined) {
+    return cache.isBailed(hit) ? null : (hit as FuseLoweredStmt);
+  }
+
+  const entry: FuseLoweredStmt = { kind: "fuse", classification };
+  cache.set(head, classification.cacheKey, entry);
+  return entry;
 }
 
 function tryBuildTopLevel(
