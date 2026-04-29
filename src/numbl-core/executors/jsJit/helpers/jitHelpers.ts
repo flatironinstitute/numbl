@@ -296,6 +296,92 @@ export const jitHelpers = {
   tDouble,
   tSum,
 
+  // x(:) — column-vector linearization. Produces a fresh [N, 1] tensor
+  // with the same column-major data order as the source. The source's
+  // underlying buffer IS already column-major, so this is a fixed-cost
+  // copy (defensive — letting the result share buffers with the source
+  // would require coordinated rc bookkeeping that the helper layer
+  // doesn't have access to).
+  __colonAll: (base: RuntimeTensor): RuntimeTensor => {
+    const N = base.data.length;
+    const out = new FloatXArray(N);
+    out.set(base.data);
+    let imag: typeof base.imag = undefined;
+    if (base.imag) {
+      imag = new FloatXArray(N);
+      imag.set(base.imag);
+    }
+    return makeTensor(out, imag, [N, 1]);
+  },
+
+  // [a; b] — 2-arg vertical concat. Stacks `a` above `b` along axis 0;
+  // both must have matching column counts. Pure scalar concat is handled
+  // by the existing TensorLiteral path; this helper covers the common
+  // tensor-of-tensors case (e.g. chunkie's `r = [(xs(:)).'; (ys(:)).']`).
+  __vertcat2: (a: RuntimeTensor, b: RuntimeTensor): RuntimeTensor => {
+    const aRows = a.shape[0] ?? 1;
+    const aCols = a.shape.length >= 2 ? a.shape[1] : a.data.length;
+    const bRows = b.shape[0] ?? 1;
+    const bCols = b.shape.length >= 2 ? b.shape[1] : b.data.length;
+    if (aCols !== bCols) {
+      throw new Error(
+        `Dimensions of arrays being concatenated are not consistent.`
+      );
+    }
+    const totalRows = aRows + bRows;
+    const cols = aCols;
+    const N = totalRows * cols;
+    const isComplex = !!(a.imag || b.imag);
+    const out = new FloatXArray(N);
+    const imag = isComplex ? new FloatXArray(N) : undefined;
+    for (let c = 0; c < cols; c++) {
+      const dstColBase = c * totalRows;
+      const aColBase = c * aRows;
+      for (let i = 0; i < aRows; i++)
+        out[dstColBase + i] = a.data[aColBase + i];
+      if (imag && a.imag) {
+        for (let i = 0; i < aRows; i++)
+          imag[dstColBase + i] = a.imag[aColBase + i];
+      }
+      const bColBase = c * bRows;
+      for (let i = 0; i < bRows; i++)
+        out[dstColBase + aRows + i] = b.data[bColBase + i];
+      if (imag && b.imag) {
+        for (let i = 0; i < bRows; i++)
+          imag[dstColBase + aRows + i] = b.imag[bColBase + i];
+      }
+    }
+    return makeTensor(out, imag, [totalRows, cols]);
+  },
+
+  // [a, b] — 2-arg horizontal concat. Concatenates `a` and `b` along
+  // axis 1; both must have matching row counts.
+  __horzcat2: (a: RuntimeTensor, b: RuntimeTensor): RuntimeTensor => {
+    const aRows = a.shape[0] ?? 1;
+    const aCols = a.shape.length >= 2 ? a.shape[1] : a.data.length;
+    const bRows = b.shape[0] ?? 1;
+    const bCols = b.shape.length >= 2 ? b.shape[1] : b.data.length;
+    if (aRows !== bRows) {
+      throw new Error(
+        `Dimensions of arrays being concatenated are not consistent.`
+      );
+    }
+    const rows = aRows;
+    const totalCols = aCols + bCols;
+    const N = rows * totalCols;
+    const isComplex = !!(a.imag || b.imag);
+    const out = new FloatXArray(N);
+    const imag = isComplex ? new FloatXArray(N) : undefined;
+    // Column-major: a's columns come first, b's columns come after.
+    out.set(a.data, 0);
+    out.set(b.data, aCols * rows);
+    if (imag) {
+      if (a.imag) imag.set(a.imag, 0);
+      if (b.imag) imag.set(b.imag, aCols * rows);
+    }
+    return makeTensor(out, imag, [rows, totalCols]);
+  },
+
   // Extract a row or column slice from a 2D tensor as a real tensor.
   // colonPos=0 → column slice (fix col, vary row): A(:, fixedIdx)
   // colonPos=1 → row slice (fix row, vary col): A(fixedIdx, :)

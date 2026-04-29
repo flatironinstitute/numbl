@@ -64,6 +64,14 @@ export function pruneArgType(t: JitType): JitType {
  * Progressive type widening: in-place unify each entry of `types`
  * with the corresponding entry of `prev`. No-op when shapes don't
  * match (different arity → different specialization, no widening).
+ *
+ * Widening that would collapse a known type to `unknown` is rejected
+ * — keep this call's concrete type so a fresh, specific spec gets
+ * built. Without this, a 1st call with (number, …) followed by a 2nd
+ * call with (tensor, …) would unify the first arg to `unknown` and
+ * poison every subsequent specialization with the same arg shape
+ * (chunkie hits this with `fcurve(ta)` (scalar discovery) followed
+ * by `fcurve(ts)` (tensor)).
  */
 export function widenAgainst(
   types: JitType[],
@@ -71,7 +79,10 @@ export function widenAgainst(
 ): void {
   if (!prev || prev.length !== types.length) return;
   for (let i = 0; i < types.length; i++) {
-    types[i] = unifyJitTypes(types[i], prev[i]);
+    if (types[i].kind === "unknown" || prev[i].kind === "unknown") continue;
+    const widened = unifyJitTypes(types[i], prev[i]);
+    if (widened.kind === "unknown") continue;
+    types[i] = widened;
   }
 }
 

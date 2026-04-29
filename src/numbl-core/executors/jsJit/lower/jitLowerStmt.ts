@@ -226,6 +226,12 @@ function tryLowerAsSliceBind(
   const hasColon = rawIndices.some(idx => idx.type === "Colon");
   if (!hasColon) return null;
 
+  // Single-colon `name = base(:)` is column-vector linearization, not a
+  // slice alias bind. Fall through to lowerExpr's `__colonAll` path so
+  // shape-mismatched (e.g. 1D-colon on a 2D base) cases lower cleanly
+  // instead of hard-bailing.
+  if (rawIndices.length === 1 && rawIndices[0].type === "Colon") return null;
+
   // From here on, any failure is a hard bail — the caller can't fall back
   // to normal Index lowering because Colon isn't supported there.
 

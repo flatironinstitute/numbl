@@ -319,6 +319,57 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "Tensor": {
+      // [tensor_a; tensor_b] — 2-row vertical concat where each row is a
+      // single tensor element. Common in chunkie/MATLAB code shaping
+      // outputs as `[xs.'; ys.']`. Must run before VConcatGrow (which
+      // only matches a scalar second element).
+      if (
+        expr.rows.length === 2 &&
+        expr.rows[0].length === 1 &&
+        expr.rows[1].length === 1
+      ) {
+        const a = lowerExpr(ctx, expr.rows[0][0]);
+        const b = a !== null ? lowerExpr(ctx, expr.rows[1][0]) : null;
+        if (
+          a &&
+          b &&
+          a.jitType.kind === "tensor" &&
+          b.jitType.kind === "tensor"
+        ) {
+          const isComplex =
+            (a.jitType.isComplex === true || b.jitType.isComplex === true) ??
+            false;
+          // Compute output shape when both inputs have full static shape:
+          // [aRows + bRows, sharedCols].
+          const aShape = a.jitType.shape;
+          const bShape = b.jitType.shape;
+          let outShape: number[] | undefined;
+          if (
+            aShape &&
+            bShape &&
+            aShape.length === 2 &&
+            bShape.length === 2 &&
+            aShape[1] === bShape[1] &&
+            aShape[0] >= 0 &&
+            bShape[0] >= 0 &&
+            aShape[1] >= 0
+          ) {
+            outShape = [aShape[0] + bShape[0], aShape[1]];
+          }
+          ctx._hasTensorOps = true;
+          return {
+            tag: "Call",
+            name: "__vertcat2",
+            args: [a, b],
+            jitType: {
+              kind: "tensor",
+              isComplex,
+              ...(outShape ? { shape: outShape } : {}),
+              ndim: 2,
+            },
+          };
+        }
+      }
       // Stage 11 vertical-concat-growth fast path: `[base; value]` where
       // `base` is a real tensor (empty or column vector) and `value` is
       // a numeric scalar. Mirrors the chunkie `it = [it; i]` grow-a-list
@@ -792,6 +843,29 @@ function lowerIndexExpr(
   input: { base: JitExpr; indices: Expr[] }
 ): JitExpr | null {
   const { base } = input;
+  if (
+    input.indices.length === 1 &&
+    input.indices[0].type === "Colon" &&
+    base.jitType.kind === "tensor"
+  ) {
+    const bt = base.jitType;
+    const N =
+      bt.shape && bt.shape.every(d => d > 0)
+        ? bt.shape.reduce((a, b) => a * b, 1)
+        : undefined;
+    ctx._hasTensorOps = true;
+    return {
+      tag: "Call",
+      name: "__colonAll",
+      args: [base],
+      jitType: {
+        kind: "tensor",
+        isComplex: bt.isComplex ?? false,
+        ...(N !== undefined ? { shape: [N, 1] } : {}),
+        ndim: 2,
+      },
+    };
+  }
 
   // 2D colon-slice read: A(i, :) or A(:, j) on a real-tensor base produces
   // a row/column vector. Catch this before the per-index lowering loop so
