@@ -1,18 +1,18 @@
 /**
  * Executor registry and dispatch.
  *
- * The dispatcher is the single place that decides which executor
- * handles each statement (or run of statements) — and each user-
- * function call. Plugins register executors at startup; the dispatcher
- * selects among them at runtime based on cost estimates, with the AST
- * interpreter as the always-matching last-resort fallback for stmts.
+ * Three entry points, three concerns:
+ *   - `dispatch(siblings, i, ctx)` — per-stmt dispatch. Each executor
+ *     handles exactly one stmt (no consumed-N).
+ *   - `dispatchCall(fn, args, nargout, interp)` — user-function call.
+ *   - `tryRunWholeScope(siblings, interp)` — whole-script attempt,
+ *     called once before the per-stmt loop runs. Top-level executors
+ *     register here separately from per-stmt ones.
  *
- * Stmt-shape and call-shape work share the same Executor interface:
- * the dispatcher's lowering pass produces a discriminated `LoweredStmt`
- * (kind: "top-level" / "loop" / "call" / "stmt"), and each executor's
- * `propose()` filters on that kind. There are two entry points
- * (`dispatch` for stmts, `dispatchCall` for calls) because the inputs
- * and outputs differ, but both iterate the same `executors` array.
+ * Plugins register executors at startup; the dispatcher selects among
+ * them at runtime based on cost estimates. The AST interpreter is the
+ * always-matching last-resort fallback for per-stmt dispatch and isn't
+ * a registered executor.
  */
 
 import type { Stmt } from "../parser/types.js";
@@ -20,7 +20,12 @@ import type { ControlSignal, FunctionDef } from "../interpreter/types.js";
 import type { Executor, RunResult } from "./types.js";
 import { DispatchContext } from "./context.js";
 import { ExecutorCache } from "./cache.js";
-import { LoweringCache, tryLower, tryLowerCall } from "./lowering.js";
+import {
+  LoweringCache,
+  tryLower,
+  tryLowerCall,
+  tryLowerTopLevel,
+} from "./lowering.js";
 
 interface Candidate {
   readonly executor: Executor;
@@ -29,8 +34,6 @@ interface Candidate {
 }
 
 export interface DispatchResult {
-  /** Number of sibling stmts consumed (>= 1). */
-  consumed: number;
   /** Control signal from interpreter execution (break/continue/return),
    *  if any. */
   signal: ControlSignal | null;
@@ -41,8 +44,17 @@ export interface DispatchResult {
  *  interpreter-execution path. */
 export type CallDispatchResult = { result: unknown } | null;
 
+/** Result from `tryRunWholeScope`. `null` means no whole-scope
+ *  executor matched (or all bailed) — the caller should fall through
+ *  to the per-stmt dispatch loop. */
+export type WholeScopeResult = { signal: ControlSignal | null } | null;
+
 export class Registry {
+  /** Per-stmt executors (loop, call, fuse). */
   private readonly executors: Executor[] = [];
+  /** Whole-scope executors (top-level). Iterated only by
+   *  `tryRunWholeScope`, separate from per-stmt dispatch. */
+  private readonly wholeScopeExecutors: Executor[] = [];
   private cache = new ExecutorCache();
   private loweringCache = new LoweringCache();
   /** Pre-allocated context reused for `dispatchCall`. Avoids the
@@ -61,7 +73,19 @@ export class Registry {
     this.executors.push(executor);
   }
 
-  /** Number of registered executors. Mainly for tests. */
+  /** Register an executor that handles a whole stmt list as a unit
+   *  (e.g. JS-JIT top-level). Iterated only by `tryRunWholeScope`
+   *  and never seen by per-stmt dispatch. */
+  registerWholeScope(executor: Executor): void {
+    if (this.wholeScopeExecutors.some(e => e.name === executor.name)) {
+      throw new Error(
+        `Whole-scope executor already registered: ${executor.name}`
+      );
+    }
+    this.wholeScopeExecutors.push(executor);
+  }
+
+  /** Number of registered per-stmt executors. Mainly for tests. */
   get size(): number {
     return this.executors.length;
   }
@@ -76,9 +100,9 @@ export class Registry {
   }
 
   /**
-   * Dispatch one statement (or run of statements) starting at
-   * `siblings[i]`. Returns the number of stmts consumed and any
-   * control signal raised by the underlying execution.
+   * Dispatch one statement at `siblings[i]`. Each executor handles
+   * exactly one stmt — the dispatcher always advances by one on
+   * success.
    *
    * Hot path. Two optimizations matter for the chunkie-helmholtz-
    * scale workloads:
@@ -101,20 +125,20 @@ export class Registry {
     i: number,
     ctx: DispatchContext
   ): DispatchResult {
-    // Set position info on ctx so peekSibling / remainingSiblings /
-    // isFirstInScope work for executors that consult them. Most
-    // executors only see the single stmt and don't care.
+    // Set position info on ctx so peekSibling / siblings work for
+    // executors that consult them. Most executors only see the
+    // single stmt and don't care.
     ctx._setPosition(siblings, i);
 
     // Pre-propose lowering pass. Returns the lowered IR for stmts
-    // that match a specialized shape (top-level, loop, ...), or null
-    // for stmts with no shape — those skip the proposal loop entirely
+    // that match a specialized shape (loop, fuse, ...), or null for
+    // stmts with no shape — those skip the proposal loop entirely
     // and go straight to the hardcoded interpreter fallback.
     const stmt = siblings[i];
     const lowered = tryLower(siblings, i, ctx, this.loweringCache);
     if (lowered === null) {
       const signal = ctx.interp.execStmt(stmt);
-      return { consumed: 1, signal };
+      return { signal };
     }
 
     // Single linear pass: collect proposals, keep the lowest-cost one
@@ -175,7 +199,7 @@ export class Registry {
     // Fallback: AST interpreter, called directly. Reached when every
     // proposal bailed.
     const signal = ctx.interp.execStmt(stmt);
-    return { consumed: 1, signal };
+    return { signal };
   }
 
   private runStmtCandidate(
@@ -187,9 +211,9 @@ export class Registry {
   ): DispatchResult | null {
     const result = this.executeCandidate(ctx, executor, stmt, data, stmt);
     if (!result) return null;
-    if ("consumed" in result) {
+    if ("ok" in result) {
       ctx.interp.onExecutorFired?.(executor.name, lowered.kind);
-      return { consumed: result.consumed, signal: null };
+      return { signal: null };
     }
     throw new Error(
       `Stmt-shape executor ${executor.name} returned an invalid RunResult`
@@ -324,23 +348,101 @@ export class Registry {
   ): DispatchContext {
     let ctx = this.callCtx;
     if (!ctx) {
-      ctx = new DispatchContext(interp, this, false, undefined, "nested");
+      ctx = new DispatchContext(interp, this, false, undefined);
       this.callCtx = ctx;
     } else {
       ctx.resetForNextDispatch();
     }
     return ctx;
   }
+
+  /**
+   * Whole-scope dispatch: try to handle the entire stmt list as a
+   * single unit (e.g. JS-JIT top-level). Called by the Interpreter
+   * once before the per-stmt loop runs. Returns:
+   *   - `{ signal }` when a whole-scope executor handled the body.
+   *     The caller should skip the per-stmt loop entirely.
+   *   - `null` when no whole-scope executor matched (or all bailed).
+   *     The caller falls through to per-stmt dispatch.
+   */
+  tryRunWholeScope(
+    siblings: readonly Stmt[],
+    interp: import("../interpreter/interpreter.js").Interpreter
+  ): WholeScopeResult {
+    if (this.wholeScopeExecutors.length === 0) return null;
+
+    const lowered = tryLowerTopLevel(interp, siblings, this.loweringCache);
+    if (!lowered) return null;
+
+    const ctx = new DispatchContext(interp, this, false, undefined);
+    ctx._setPosition(siblings, 0);
+
+    let bestExec: Executor | null = null;
+    let bestData: unknown = null;
+    let bestTotal = Infinity;
+    let backups: Candidate[] | null = null;
+    const requireNoBail = ctx.requireNoBail;
+    const executors = this.wholeScopeExecutors;
+    for (let k = 0; k < executors.length; k++) {
+      const executor = executors[k];
+      const p = executor.propose(lowered, ctx);
+      if (!p) continue;
+      if (requireNoBail && p.bailRisk) continue;
+      const total = p.cost.perCallNs + p.cost.runNs;
+      if (total < bestTotal) {
+        if (bestExec) {
+          (backups ??= []).push({
+            executor: bestExec,
+            data: bestData,
+            total: bestTotal,
+          });
+        }
+        bestExec = executor;
+        bestData = p.data;
+        bestTotal = total;
+      } else {
+        (backups ??= []).push({ executor, data: p.data, total });
+      }
+    }
+
+    if (!bestExec) return null;
+
+    // Whole-scope artifacts are cached against the head Stmt as
+    // owner — same scheme stmt-shape executors use.
+    const owner = siblings[0];
+    const r = this.executeCandidate(ctx, bestExec, owner, bestData, null);
+    if (r) return this.finishWholeScope(interp, bestExec, lowered, r);
+    if (backups) {
+      backups.sort((a, b) => a.total - b.total);
+      for (let k = 0; k < backups.length; k++) {
+        const c = backups[k];
+        const r2 = this.executeCandidate(ctx, c.executor, owner, c.data, null);
+        if (r2) return this.finishWholeScope(interp, c.executor, lowered, r2);
+      }
+    }
+    return null;
+  }
+
+  private finishWholeScope(
+    interp: import("../interpreter/interpreter.js").Interpreter,
+    executor: Executor,
+    lowered: import("./lowering.js").LoweredStmt,
+    result: RunResult
+  ): WholeScopeResult {
+    if ("ok" in result) {
+      interp.onExecutorFired?.(executor.name, lowered.kind);
+      return { signal: null };
+    }
+    throw new Error(
+      `Whole-scope executor ${executor.name} returned an invalid RunResult`
+    );
+  }
 }
 
-/** Build a fresh dispatch context. `scope` defaults to `"nested"` —
- *  pass `"top-level"` only from `Interpreter.run()`'s script-body
- *  loop, where whole-script executors (e.g., JS-JIT top-level) are
- *  eligible. */
+/** Build a fresh dispatch context. */
 export function makeRootContext(
   interp: import("../interpreter/interpreter.js").Interpreter,
-  registry: Registry,
-  scope: import("./context.js").DispatchScope = "nested"
+  registry: Registry
 ): DispatchContext {
-  return new DispatchContext(interp, registry, false, undefined, scope);
+  return new DispatchContext(interp, registry, false, undefined);
 }

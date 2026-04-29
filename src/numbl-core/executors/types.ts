@@ -36,11 +36,11 @@ export interface BailReason {
 }
 
 export type RunResult =
-  /** Stmt-shape success — claims `consumed` consecutive sibling stmts
-   *  starting at the current head. Registered executors don't produce
-   *  control signals (break/continue/return); only the hardcoded
-   *  interpreter fallback in `Registry.dispatch` does. */
-  | { consumed: number }
+  /** Stmt-shape success — handled the head stmt. Registered executors
+   *  don't produce control signals (break/continue/return); only the
+   *  hardcoded interpreter fallback in `Registry.dispatch` does.
+   *  The dispatcher always advances by exactly one stmt on success. */
+  | { ok: true }
   /** Call-shape success — used by executors that handle a
    *  CallLoweredStmt. The dispatcher's call entry point
    *  (`dispatchCall`) returns this `result` to the caller. */

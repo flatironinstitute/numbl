@@ -43,7 +43,7 @@ export function registerExecutorsForOpt(
     case "0":
       return;
     case "1":
-      registry.register(jsJitTopLevelExecutor);
+      registry.registerWholeScope(jsJitTopLevelExecutor);
       registry.register(jsJitLoopExecutor);
       registry.register(jsJitCallExecutor);
       return;

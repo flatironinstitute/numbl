@@ -217,6 +217,10 @@ export class LoweringCache {
  * info. Returns a `LoweredStmt` for stmts that match a specialized
  * shape, or `null` for stmts with no shape — the dispatcher falls
  * through to its hardcoded interpreter path in that case.
+ *
+ * Whole-scope shapes (`top-level`) are NOT produced here — they're
+ * lowered separately via `tryLowerTopLevel` and dispatched through
+ * `Registry.tryRunWholeScope` before the per-stmt loop runs.
  */
 export function tryLower(
   siblings: readonly Stmt[],
@@ -225,12 +229,6 @@ export function tryLower(
   cache: LoweringCache
 ): LoweredStmt | null {
   const head = siblings[i];
-
-  // Top-level shape: only at the script's root, on the first stmt.
-  if (ctx.scope === "top-level" && i === 0) {
-    const entry = tryBuildTopLevel(ctx.interp, siblings, head, cache);
-    if (entry) return entry;
-  }
 
   // Loop shape: For/While stmts.
   if (head.type === "For" || head.type === "While") {
@@ -261,6 +259,21 @@ function tryBuildFuse(
   const entry: FuseLoweredStmt = { kind: "fuse", classification };
   cache.set(head, classification.cacheKey, entry);
   return entry;
+}
+
+/**
+ * Lower a script body as a whole-scope unit. Called by the registry
+ * before the per-stmt dispatch loop runs; returns a TopLevelLoweredStmt
+ * for whole-scope executors to consider, or null when the lowering
+ * declines.
+ */
+export function tryLowerTopLevel(
+  interp: Interpreter,
+  siblings: readonly Stmt[],
+  cache: LoweringCache
+): TopLevelLoweredStmt | null {
+  if (siblings.length === 0) return null;
+  return tryBuildTopLevel(interp, siblings, siblings[0], cache);
 }
 
 function tryBuildTopLevel(

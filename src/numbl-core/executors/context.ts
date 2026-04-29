@@ -14,20 +14,6 @@ import type { Registry } from "./registry.js";
 import { type JitType } from "../jitTypes.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
 
-/** Where the dispatcher is currently running.
- *
- *   - `top-level` — the script body's top-level stmt list. Only set by
- *     `Interpreter.run()`. Whole-script executors (e.g. JS-JIT
- *     top-level) match only when this is set and the dispatch is at
- *     `isFirstInScope`.
- *   - `nested` — a function body, loop body, or any other block.
- *     Default for everything other than the script's top-level loop.
- *
- *  Sub-dispatch within an executor's compiled artifact always sets
- *  `nested` regardless of the parent — once you're inside a compiled
- *  artifact, you're no longer at the script's top level. */
-export type DispatchScope = "top-level" | "nested";
-
 export class DispatchContext {
   readonly interp: Interpreter;
   readonly registry: Registry;
@@ -35,7 +21,6 @@ export class DispatchContext {
    *  caller's compiled artifact has emitted observable side effects
    *  that mustn't repeat. */
   readonly requireNoBail: boolean;
-  readonly scope: DispatchScope;
 
   /** Per-dispatch memoization of typeOf(name) lookups. */
   private readonly typeCache = new Map<string, JitType>();
@@ -46,9 +31,8 @@ export class DispatchContext {
   private readonly active: Set<string>;
 
   /** Sibling list and head index for the current dispatch. Set by
-   *  Registry.dispatch before calling executors; read by peekSibling /
-   *  remainingSiblings / isFirstInScope. Most executors don't read
-   *  these directly. */
+   *  Registry.dispatch before calling executors; read by peekSibling.
+   *  Most executors don't read these directly. */
   private _siblings: readonly Stmt[] = [];
   private _i: number = 0;
 
@@ -56,14 +40,12 @@ export class DispatchContext {
     interp: Interpreter,
     registry: Registry,
     requireNoBail: boolean,
-    active?: Set<string>,
-    scope: DispatchScope = "nested"
+    active?: Set<string>
   ) {
     this.interp = interp;
     this.registry = registry;
     this.requireNoBail = requireNoBail;
     this.active = active ?? new Set();
-    this.scope = scope;
   }
 
   /** Look up a name's JitType from the interpreter env, memoized. */
@@ -79,13 +61,6 @@ export class DispatchContext {
   /** Read a value from env (no inference). Returns undefined if unbound. */
   envValue(name: string): unknown {
     return this.interp.env.get(name);
-  }
-
-  /** True when the current dispatch is the first stmt in its scope —
-   *  used by whole-scope executors (e.g. JS-JIT top-level) that should
-   *  fire only once per scope, claiming the entire stmt list. */
-  get isFirstInScope(): boolean {
-    return this._i === 0;
   }
 
   /** Peek at a sibling stmt at `offset` from the current head.
@@ -128,16 +103,13 @@ export class DispatchContext {
 
   /** Construct a child context for sub-dispatch. `requireNoBail` is
    *  the OR of the parent flag and the parent executor's
-   *  `requireNoBailInChildren` declaration. Scope always becomes
-   *  `nested` — sub-dispatches happen inside an executor's artifact
-   *  and are never at script top level. */
+   *  `requireNoBailInChildren` declaration. */
   childContext(requireNoBail: boolean): DispatchContext {
     return new DispatchContext(
       this.interp,
       this.registry,
       this.requireNoBail || requireNoBail,
-      this.active,
-      "nested"
+      this.active
     );
   }
 

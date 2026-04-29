@@ -224,7 +224,7 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
       }
     }
     void varSlotCount;
-    return { consumed: 1 };
+    return { ok: true };
   },
 };
 

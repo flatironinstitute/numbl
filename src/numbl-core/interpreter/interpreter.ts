@@ -254,12 +254,17 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      const ctx = makeRootContext(this, this.registry, "top-level");
-      for (let i = 0; i < nonFuncStmts.length; ) {
-        ctx.resetForNextDispatch();
-        const result = this.registry.dispatch(nonFuncStmts, i, ctx);
-        i += result.consumed;
-        if (result.signal) break;
+      // First, try to handle the entire script body as a unit (e.g.
+      // JS-JIT top-level). If a whole-scope executor matches, the
+      // per-stmt loop is skipped.
+      const wholeScope = this.registry.tryRunWholeScope(nonFuncStmts, this);
+      if (wholeScope === null) {
+        const ctx = makeRootContext(this, this.registry);
+        for (let i = 0; i < nonFuncStmts.length; i++) {
+          ctx.resetForNextDispatch();
+          const result = this.registry.dispatch(nonFuncStmts, i, ctx);
+          if (result.signal) break;
+        }
       }
     }
   }

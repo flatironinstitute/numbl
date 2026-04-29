@@ -66,7 +66,7 @@ export const jsJitTopLevelExecutor: Executor<
       return { bail: { message: "js-jit-top-level: codegen rejected" } };
     }
     const r = runTopLevelCompiled(ctx.interp, compiled, d.classification);
-    if (r.ok) return { consumed: d.classification.stmts.length };
+    if (r.ok) return { ok: true };
     return {
       bail: { message: "js-jit-top-level: bailed at runtime" },
       ...(r.transient ? { transient: true } : {}),

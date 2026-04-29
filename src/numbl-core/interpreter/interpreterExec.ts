@@ -317,10 +317,9 @@ export function execStmts(
   // per-dispatch state between stmts. Hot-path code — a fresh ctx
   // per stmt would allocate a Map + Set per dispatch.
   const ctx = makeRootContext(this, this.registry);
-  for (let i = 0; i < stmts.length; ) {
+  for (let i = 0; i < stmts.length; i++) {
     ctx.resetForNextDispatch();
     const result = this.registry.dispatch(stmts, i, ctx);
-    i += result.consumed;
     if (result.signal) return result.signal;
   }
   return null;

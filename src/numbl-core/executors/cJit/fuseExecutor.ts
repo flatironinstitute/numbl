@@ -224,6 +224,6 @@ export const cJitFuseExecutor: Executor<FuseLoweredStmt, CFuseCompiled | null> =
         _rc: 1,
       };
       interp.env.set(d.classification.outputName, result as RuntimeValue);
-      return { consumed: 1 };
+      return { ok: true };
     },
   };

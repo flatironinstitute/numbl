@@ -12,9 +12,12 @@ export type {
   Proposal,
 } from "./types.js";
 export { Registry, makeRootContext } from "./registry.js";
-export type { DispatchResult, CallDispatchResult } from "./registry.js";
+export type {
+  DispatchResult,
+  CallDispatchResult,
+  WholeScopeResult,
+} from "./registry.js";
 export { DispatchContext } from "./context.js";
-export type { DispatchScope } from "./context.js";
 export { ExecutorCache } from "./cache.js";
 export type { JitType, SignCategory } from "../jitTypes.js";
 export {

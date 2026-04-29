@@ -56,7 +56,7 @@ export const jsJitLoopExecutor: Executor<LoopLowered, LoopCompiled | null> = {
       return { bail: { message: "js-jit-loop: codegen rejected" } };
     }
     const r = runLoopCompiled(ctx.interp, compiled, d.classification);
-    if (r.ok) return { consumed: 1 };
+    if (r.ok) return { ok: true };
     return {
       bail: { message: "js-jit-loop: bailed at runtime" },
       ...(r.transient ? { transient: true } : {}),
