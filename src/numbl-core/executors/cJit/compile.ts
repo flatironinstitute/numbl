@@ -36,10 +36,10 @@ export interface CompiledC {
 }
 
 export interface CompileOptions {
-  /** Enable `-ffast-math`. Off by default to keep FP semantics
-   *  bitwise-deterministic. Opt in via the CLI's `--fast-math` flag
-   *  for ~30% speedup on element-wise tensor benchmarks (libmvec
-   *  vectorization of transcendentals). */
+  /** Enable `-ffast-math`. On by default for ~30% speedup on
+   *  element-wise tensor benchmarks (libmvec vectorization of
+   *  transcendentals). Opt out via the CLI's `--no-fast-math` flag
+   *  to keep FP semantics bitwise-deterministic. */
   readonly fastMath?: boolean;
 }
 
@@ -67,9 +67,9 @@ export function compileAndLoad(
   const cc = process.env.NUMBL_CC || "cc";
   // `#pragma omp simd` (emitted by fuseCodegen) plus -ffast-math
   // unlocks libmvec autovectorization of transcendentals. -ffast-math
-  // is opt-in (CLI: --fast-math) because it changes FP reduction
-  // ordering — element-wise fuse kernels are reduction-free so
-  // results stay bitwise-identical, but reductions elsewhere drift.
+  // is on by default (opt out via CLI: --no-fast-math); it changes FP
+  // reduction ordering — element-wise fuse kernels are reduction-free
+  // so results stay bitwise-identical, but reductions elsewhere drift.
   // On Linux we link -lmvec to resolve the `_ZGVdN4v_*` symbols.
   const flags = [
     "-O3",
@@ -85,7 +85,7 @@ export function compileAndLoad(
   const libs = process.platform === "linux" ? ["-lmvec", "-lm"] : ["-lm"];
 
   // Cache key includes the flag string so different compile settings
-  // (e.g., --fast-math on vs off) get distinct .so artifacts.
+  // (e.g., --no-fast-math on vs off) get distinct .so artifacts.
   const flagKey = `${flags.join(" ")} ${libs.join(" ")}`;
   const hash = createHash("sha256")
     .update(`${flagKey}\n${declaration}\n${source}`)

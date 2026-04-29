@@ -68,7 +68,8 @@ export interface ExecOptions {
    *  scalar-loop only. */
   optimization?: import("./executors/plugins.js").OptLevel;
   /** Compile C-JIT kernels with `-ffast-math` (libmvec-vectorized
-   *  transcendentals; reductions are reorder-allowed). Default false. */
+   *  transcendentals; reductions are reorder-allowed). Default true;
+   *  opt out via the CLI's `--no-fast-math` flag. */
   fastMath?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
@@ -359,7 +360,7 @@ export function executeCode(
 
   interpreter.optimization = options.optimization ?? "1";
   interpreter.nativeBridge = nativeBridge;
-  interpreter.fastMath = options.fastMath ?? false;
+  interpreter.fastMath = options.fastMath ?? true;
   interpreter.log = options.log;
 
   // Register mode-specific executor plugins. The AST interpreter is

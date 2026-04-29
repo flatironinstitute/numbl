@@ -106,7 +106,7 @@ Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon
+  build-addon        Build native LAPACK addon (pass --no-fast-math to disable -ffast-math)
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
@@ -126,16 +126,21 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-c <file>    Write C-JIT-generated C source to file
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
   --path <dir>       Add extra workspace directory
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
-  --opt <level>      Optimization level (default: 1)
-                       0 — interpreter (no JIT)
-                       1 — JS-JIT: type-specialize hot functions/loops to JS
-                       2 — JS-JIT plus C-JIT optimizers (Node only)
+  --opt <mode>       Optimization mode (default: 1)
+                       0  — interpreter (no JIT)
+                       1  — JS-JIT: type-specialize hot functions/loops to JS
+                       e3 — C-JIT scalar loops only (Node only)
+  --no-fast-math     Disable -ffast-math for C-JIT kernels
+                     (default is on: libmvec-vectorized transcendentals,
+                     reductions reorder-allowed; opt out for
+                     bitwise-deterministic FP semantics)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)

@@ -10,6 +10,7 @@ import {
   appendFileSync,
   mkdirSync,
   rmSync,
+  copyFileSync,
 } from "fs";
 import { delimiter, dirname, join, relative, resolve } from "path";
 import { homedir } from "os";
@@ -54,32 +55,51 @@ import { unzipToFiles } from "./vfs/unzipToFiles.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const packageDir = join(__dirname, "..");
-const addonPath = join(packageDir, "build", "Release", "numbl_addon.node");
+const addonBuildPath = join(packageDir, "build", "Release", "numbl_addon.node");
+
+/** Variant-specific addon path. Build-addon copies the freshly built
+ *  `numbl_addon.node` here so both fast-math and no-fast-math variants
+ *  can coexist; the loader picks the one matching the runtime
+ *  `--no-fast-math` choice. */
+function variantAddonPath(fastMath: boolean): string {
+  const name = fastMath
+    ? "numbl_addon.fastmath.node"
+    : "numbl_addon.nofastmath.node";
+  return join(packageDir, "build", "Release", name);
+}
 
 // ── Try to load the native LAPACK addon ──────────────────────────────────────
 
 import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge.js";
 
-let nativeAddonLoaded = false;
-if (!process.env.NUMBL_NO_NATIVE) {
+function loadNativeAddon(fastMath: boolean): void {
+  if (process.env.NUMBL_NO_NATIVE) return;
+  const variantPath = variantAddonPath(fastMath);
+  const flag = fastMath ? "" : " --no-fast-math";
+  if (!existsSync(variantPath)) {
+    console.error(
+      `Warning: native addon not built${fastMath ? " with fast-math" : " with --no-fast-math"}. ` +
+        `Run "npx numbl build-addon${flag}" to build it. Using JS fallbacks.`
+    );
+    return;
+  }
   try {
     const req = createRequire(import.meta.url);
-    const addon = req(addonPath);
+    const addon = req(variantPath);
     const addonVer =
       typeof addon.addonVersion === "function" ? addon.addonVersion() : 0;
     if (addonVer !== NATIVE_ADDON_EXPECTED_VERSION) {
       console.error(
         `Warning: native addon version mismatch (got ${addonVer}, expected ${NATIVE_ADDON_EXPECTED_VERSION}). ` +
-          `Run "npx numbl build-addon" to rebuild. Using JS fallbacks.`
+          `Run "npx numbl build-addon${flag}" to rebuild. Using JS fallbacks.`
       );
-    } else {
-      setLapackBridge(addon);
-      setLapackBridgeNew(addon);
-      nativeAddonLoaded = true;
+      return;
     }
-  } catch {
+    setLapackBridge(addon);
+    setLapackBridgeNew(addon);
+  } catch (e) {
     console.error(
-      `Warning: native addon not found. Run "npx numbl build-addon" to build it. Using JS fallbacks.`
+      `Warning: failed to load native addon at ${variantPath}: ${(e as Error).message}. Using JS fallbacks.`
     );
   }
 }
@@ -205,8 +225,10 @@ function findTestFiles(dir: string): string[] {
 
 async function runTests(
   dir: string,
-  optimization?: import("./numbl-core/executors/plugins.js").OptLevel
+  optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
+  fastMath?: boolean
 ) {
+  loadNativeAddon(fastMath ?? true);
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
@@ -233,6 +255,7 @@ async function runTests(
         {
           displayResults: true,
           optimization: optimization ?? 1,
+          fastMath,
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -290,7 +313,7 @@ Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon (pass --fast-math to enable -ffast-math)
+  build-addon        Build native LAPACK addon (pass --no-fast-math to disable -ffast-math)
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
@@ -321,10 +344,10 @@ Options (for run and eval):
                        0  — interpreter (no JIT)
                        1  — JS-JIT: type-specialize hot functions/loops to JS
                        e3 — C-JIT scalar loops only (Node only)
-  --fast-math        Compile C-JIT kernels with -ffast-math
-                     (libmvec-vectorized transcendentals; reductions
-                     become reorder-allowed, so results may drift
-                     by FP-noise levels)
+  --no-fast-math     Disable -ffast-math for C-JIT kernels
+                     (default is on: libmvec-vectorized transcendentals,
+                     reductions reorder-allowed; opt out for
+                     bitwise-deterministic FP semantics)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -360,7 +383,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: "1",
-    fastMath: false,
+    fastMath: true,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -396,8 +419,8 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.dumpC = resolve(process.cwd(), args[i]);
         break;
-      case "--fast-math":
-        opts.fastMath = true;
+      case "--no-fast-math":
+        opts.fastMath = false;
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -553,6 +576,7 @@ async function executeWithOptions(
   opts: ParsedOptions,
   searchPaths?: string[]
 ) {
+  loadNativeAddon(opts.fastMath);
   const profiling = !!opts.profileOutput;
   const totalStart = performance.now();
 
@@ -828,9 +852,9 @@ function finalizeDumpFile(
 }
 
 async function cmdBuildAddon(args: string[]) {
-  const fastMath = args.includes("--fast-math");
+  const fastMath = !args.includes("--no-fast-math");
   for (const a of args) {
-    if (a !== "--fast-math") {
+    if (a !== "--no-fast-math") {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
     }
@@ -846,7 +870,7 @@ async function cmdBuildAddon(args: string[]) {
   console.log("Package directory: " + packageDir);
   console.log("Prerequisites: C++ compiler, libopenblas-dev (or equivalent)");
   console.log(
-    `-ffast-math: ${fastMath ? "ENABLED (--fast-math)" : "disabled (default)"}`
+    `-ffast-math: ${fastMath ? "enabled (default)" : "DISABLED (--no-fast-math)"}`
   );
   console.log("");
   try {
@@ -861,8 +885,17 @@ async function cmdBuildAddon(args: string[]) {
       stdio: "inherit",
       env,
     });
+    // Copy the freshly built addon to a variant-specific path so both
+    // fast-math and no-fast-math builds can coexist. The unversioned
+    // numbl_addon.node gets overwritten on each rebuild; the loader
+    // always reads the variant-specific path.
+    if (!existsSync(addonBuildPath)) {
+      throw new Error(`expected built addon at ${addonBuildPath}`);
+    }
+    const variantPath = variantAddonPath(fastMath);
+    copyFileSync(addonBuildPath, variantPath);
     console.log("");
-    console.log("Native LAPACK addon built successfully.");
+    console.log(`Native LAPACK addon built: ${variantPath}`);
     console.log("Restart numbl to use it.");
   } catch {
     console.error("");
@@ -875,11 +908,18 @@ async function cmdBuildAddon(args: string[]) {
 }
 
 function cmdInfo() {
+  const fastMathPath = variantAddonPath(true);
+  const noFastMathPath = variantAddonPath(false);
+  const fastMathPresent = existsSync(fastMathPath);
+  const noFastMathPresent = existsSync(noFastMathPath);
   process.stdout.write(
     JSON.stringify({
       version: NUMBL_VERSION,
-      nativeAddon: nativeAddonLoaded,
-      nativeAddonPath: addonPath,
+      nativeAddon: fastMathPresent || noFastMathPresent,
+      nativeAddonVariants: {
+        fastMath: fastMathPresent ? fastMathPath : null,
+        noFastMath: noFastMathPresent ? noFastMathPath : null,
+      },
       packageDir,
     }) + "\n"
   );
@@ -897,6 +937,7 @@ function cmdListBuiltins(flags: string[]) {
 async function cmdRepl(args: string[]) {
   const opts = parseOptions(args);
 
+  loadNativeAddon(opts.fastMath);
   await ensureMipCorePackage();
 
   const replSearchPaths = [...opts.extraPaths];
@@ -918,7 +959,8 @@ async function cmdRepl(args: string[]) {
     replDrawnow,
     replSearchPaths,
     nativeBridge,
-    opts.optimization
+    opts.optimization,
+    opts.fastMath
   );
 }
 
@@ -1189,7 +1231,7 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.optimization);
+      await runTests(dir, testOpts.optimization, testOpts.fastMath);
       break;
     }
     case "build-addon":

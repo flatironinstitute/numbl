@@ -1,10 +1,11 @@
 {
   "variables": {
     # Whether to compile the native addon with -ffast-math. Default is
-    # off — keeps reductions bitwise-deterministic. Opt in via:
-    #   npx numbl build-addon --fast-math      (sets NUMBL_FAST_MATH=true)
-    #   NUMBL_FAST_MATH=true npm run build:addon
-    "fast_math%": "<!(node -p \"process.env.NUMBL_FAST_MATH === 'true' ? 'true' : 'false'\")"
+    # on — libmvec-vectorized transcendentals; reductions become
+    # reorder-allowed, so results may drift by FP-noise levels. Opt out via:
+    #   npx numbl build-addon --no-fast-math   (sets NUMBL_FAST_MATH=false)
+    #   NUMBL_FAST_MATH=false npm run build:addon
+    "fast_math%": "<!(node -p \"process.env.NUMBL_FAST_MATH === 'false' ? 'false' : 'true'\")"
   },
   "targets": [
     {
