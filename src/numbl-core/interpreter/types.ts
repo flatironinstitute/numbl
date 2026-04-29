@@ -97,6 +97,21 @@ export class Environment {
     this.vars.set(name, value);
   }
 
+  /** Remove a variable from this scope's local map.
+   *  Returns true if the name was present locally. Does not touch
+   *  the parent scope, globals, or persistent registrations — those
+   *  are removed via `clear global` / `clear functions` (not yet
+   *  implemented). */
+  delete(name: string): boolean {
+    return this.vars.delete(name);
+  }
+
+  /** Remove all local variables from this scope. Globals,
+   *  persistents, and nested function defs are preserved. */
+  clearLocals(): void {
+    this.vars.clear();
+  }
+
   has(name: string): boolean {
     if (
       this._globalNames !== undefined &&

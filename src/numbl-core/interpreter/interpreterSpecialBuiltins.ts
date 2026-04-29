@@ -124,6 +124,37 @@ register("assignin", (ctx, args) => {
   return undefined;
 });
 
+register("clear", (ctx, args) => {
+  // `clear` (no args): remove all locals in the current scope.
+  // `clear name1 name2 ...`: remove the named locals.
+  // Reserved-word args like 'all', 'global', 'functions', 'classes',
+  // '-regexp', etc. are not (yet) supported — fall through to the
+  // IBuiltin no-op stub so existing scripts that pass them keep
+  // running without error.
+  if (args.length === 0) {
+    ctx.env.clearLocals();
+    return undefined;
+  }
+  const RESERVED = new Set([
+    "all",
+    "global",
+    "functions",
+    "classes",
+    "import",
+    "java",
+    "mex",
+    "variables",
+    "-regexp",
+    "-except",
+  ]);
+  for (const arg of args) {
+    const name = toString(ensureRuntimeValue(arg));
+    if (RESERVED.has(name)) return FALL_THROUGH;
+    ctx.env.delete(name);
+  }
+  return undefined;
+});
+
 register("feval", (ctx, args, nargout) => {
   if (args.length < 1) return FALL_THROUGH;
   const first = ensureRuntimeValue(args[0]);

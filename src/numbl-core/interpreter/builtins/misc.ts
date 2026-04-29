@@ -296,7 +296,10 @@ registerIBuiltin({
   jitEmit: (_args, types) => (types.length === 1 ? "false" : null),
 });
 
-// ── clear / clc / clf stubs ──────────────────────────────────────────────
+// ── clc / clf stubs ──────────────────────────────────────────────────────
+// `clear` is handled by interpreterSpecialBuiltins (it needs env access);
+// the no-op IBuiltin only covers reserved-word forms (`clear functions`,
+// `clear global`, …) which fall through from the special handler.
 
 for (const name of ["clear", "clc", "clf"]) {
   registerIBuiltin({
