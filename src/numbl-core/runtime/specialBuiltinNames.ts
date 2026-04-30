@@ -60,6 +60,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "piechart",
   "donutchart",
   "heatmap",
+  "quiver",
   "streamline",
   "stream2",
   "ishold",

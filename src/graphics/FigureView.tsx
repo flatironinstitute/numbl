@@ -178,6 +178,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       boxTraces={axes.boxTraces}
       pieTrace={axes.pieTrace}
       heatmapTrace={axes.heatmapTrace}
+      quiverTraces={axes.quiverTraces}
       areaTraces={axes.areaTraces}
       areaBaseValue={axes.areaBaseValue}
       shading={axes.shading}
@@ -208,6 +209,7 @@ function PlotCanvas({
   boxTraces,
   pieTrace,
   heatmapTrace,
+  quiverTraces,
   areaTraces,
   areaBaseValue,
   shading,
@@ -234,6 +236,7 @@ function PlotCanvas({
   boxTraces?: AxesState["boxTraces"];
   pieTrace?: AxesState["pieTrace"];
   heatmapTrace?: AxesState["heatmapTrace"];
+  quiverTraces?: AxesState["quiverTraces"];
   areaTraces?: AxesState["areaTraces"];
   areaBaseValue?: number;
   shading?: AxesState["shading"];
@@ -273,7 +276,8 @@ function PlotCanvas({
       colorbar,
       colorbarLocation,
       caxis,
-      colormapData
+      colormapData,
+      quiverTraces
     );
   }, [
     traces,
@@ -301,6 +305,7 @@ function PlotCanvas({
     colorbar,
     colorbarLocation,
     caxis,
+    quiverTraces,
   ]);
 
   useEffect(() => {

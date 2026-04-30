@@ -11,6 +11,7 @@ import type {
   BoxTrace,
   PieTrace,
   HeatmapTrace,
+  QuiverTrace,
   PlotInstruction,
 } from "./types.js";
 
@@ -30,6 +31,7 @@ export type AxesState = {
   boxTraces: BoxTrace[];
   pieTrace?: PieTrace;
   heatmapTrace?: HeatmapTrace;
+  quiverTraces: QuiverTrace[];
   areaTraces: PlotTrace[];
   areaBaseValue: number;
   title?: string;
@@ -79,6 +81,7 @@ const defaultAxes: AxesState = {
   bar3hTraces: [],
   errorBarTraces: [],
   boxTraces: [],
+  quiverTraces: [],
   areaTraces: [],
   areaBaseValue: 0,
 };
@@ -144,6 +147,7 @@ function addTraces(
       | "boxTraces"
       | "pieTrace"
       | "heatmapTrace"
+      | "quiverTraces"
       | "areaTraces"
       | "areaBaseValue"
     >
@@ -173,6 +177,7 @@ function addTraces(
         pieTrace: update.pieTrace ?? (hold ? axes.pieTrace : undefined),
         heatmapTrace:
           update.heatmapTrace ?? (hold ? axes.heatmapTrace : undefined),
+        quiverTraces: update.quiverTraces ?? (hold ? axes.quiverTraces : []),
         areaTraces: update.areaTraces ?? (hold ? axes.areaTraces : []),
         areaBaseValue: update.areaBaseValue ?? axes.areaBaseValue,
         ...(update.imagescTrace !== undefined
@@ -310,6 +315,15 @@ export const figuresReducer = (
 
     case "heatmap":
       return addTraces(state, { heatmapTrace: action.trace });
+
+    case "quiver": {
+      const axes = getAxes(ensureFig(state));
+      return addTraces(state, {
+        quiverTraces: axes.holdOn
+          ? [...axes.quiverTraces, ...action.traces]
+          : [...action.traces],
+      });
+    }
 
     case "area": {
       const axes = getAxes(ensureFig(state));

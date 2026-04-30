@@ -129,6 +129,7 @@ import {
   piechartCall as _piechartCall,
   donutchartCall as _donutchartCall,
   heatmapCall as _heatmapCall,
+  quiverCall as _quiverCall,
   viewCall as _viewCall,
   legendCall as _legendCall,
   streamlineCall as _streamlineCall,
@@ -470,6 +471,9 @@ export class Runtime {
     };
     this.builtins["heatmap"] = (_nargout: number, args: unknown[]) => {
       this.heatmap_call(args.map(a => ensureRuntimeValue(a)));
+    };
+    this.builtins["quiver"] = (_nargout: number, args: unknown[]) => {
+      this.quiver_call(args.map(a => ensureRuntimeValue(a)));
     };
     this.builtins["streamline"] = (_nargout: number, args: unknown[]) => {
       const h = this.streamline_call(args.map(a => ensureRuntimeValue(a)));
@@ -1827,6 +1831,9 @@ export class Runtime {
 
   public heatmap_call(args: RuntimeValue[]): void {
     _heatmapCall(this.plotInstructions, args);
+  }
+  public quiver_call(args: RuntimeValue[]): void {
+    _quiverCall(this.plotInstructions, args);
   }
 
   public streamline_call(args: RuntimeValue[]): RuntimeValue {

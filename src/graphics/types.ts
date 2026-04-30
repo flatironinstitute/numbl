@@ -199,6 +199,28 @@ export interface PieTrace {
   colors?: [number, number, number][];
 }
 
+// ── QuiverTrace type ────────────────────────────────────────────────────
+
+export interface QuiverTrace {
+  /** Tail x-coordinates (flat array) */
+  x: number[];
+  /** Tail y-coordinates (flat array) */
+  y: number[];
+  /** x-component of each arrow (already scaled to data units) */
+  u: number[];
+  /** y-component of each arrow (already scaled to data units) */
+  v: number[];
+  /** Whether to draw arrowheads */
+  showArrowHead: boolean;
+  /** Arrow color as RGB triple [0–1] */
+  color?: [number, number, number];
+  lineStyle?: string;
+  lineWidth?: number;
+  marker?: string;
+  /** Whether the marker should be filled */
+  markerFilled?: boolean;
+}
+
 // ── HeatmapTrace type ───────────────────────────────────────────────────
 
 export interface HeatmapTrace {
@@ -232,6 +254,7 @@ export type PlotInstruction =
   | { type: "boxchart"; traces: BoxTrace[] }
   | { type: "piechart"; trace: PieTrace }
   | { type: "heatmap"; trace: HeatmapTrace }
+  | { type: "quiver"; traces: QuiverTrace[] }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }

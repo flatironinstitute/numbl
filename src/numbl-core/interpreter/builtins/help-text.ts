@@ -1564,6 +1564,16 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["figure", "figure(H)"],
     description: "Create or set current figure.",
   },
+  quiver: {
+    signatures: [
+      "quiver(X, Y, U, V)",
+      "quiver(U, V)",
+      "quiver(..., scale)",
+      "quiver(..., LineSpec)",
+    ],
+    description:
+      "Draw arrows for a 2D vector field. Pass scale=0 (or 'off') to disable auto-scaling.",
+  },
   subplot: {
     signatures: ["subplot(M, N, P)"],
     description: "Create subplot in M-by-N grid at position P.",
