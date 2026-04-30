@@ -960,7 +960,12 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
     const narg = typeof nargout === "number" ? nargout : 1;
     const nested = capturedEnv.getNestedFunction(name);
     if (nested) {
-      return this.callNestedFunction(nested.fn, nested.env, actualArgs, narg);
+      return this.withFileContext(
+        capturedFile,
+        capturedClassName,
+        capturedMethodName,
+        () => this.callNestedFunction(nested.fn, nested.env, actualArgs, narg)
+      );
     }
     return this.withFileContext(
       capturedFile,
