@@ -662,6 +662,17 @@ async function executeWithOptions(
 
   try {
     if (opts.stream) {
+      // Force stdout to blocking mode so large writes (e.g. drawnow events
+      // carrying megabytes of plot data) are fully flushed before
+      // process.exit(0) below. With the default non-blocking pipe behavior,
+      // exit can drop the tail of a write, which the parent then sees as
+      // an unparseable line and surfaces as raw output text.
+      const stdoutHandle = (
+        process.stdout as unknown as {
+          _handle?: { setBlocking?: (b: boolean) => void };
+        }
+      )._handle;
+      stdoutHandle?.setBlocking?.(true);
       const streamLine = (obj: Record<string, unknown>) => {
         process.stdout.write(JSON.stringify(obj) + "\n");
       };
