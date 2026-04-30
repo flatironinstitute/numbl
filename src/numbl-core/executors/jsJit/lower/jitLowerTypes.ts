@@ -241,10 +241,15 @@ export function binaryResultType(
 
   // Pow/ElemPow with a potentially negative base produces a complex result
   // for fractional exponents. The JIT emits `Math.pow`, which returns NaN in
-  // that case. Bail out whenever the base's sign can't be proved nonneg so
-  // the interpreter handles it (which correctly returns complex).
+  // that case. Bail out whenever the base's sign can't be proved nonneg AND
+  // the exponent isn't a known integer (integer exponent is always real
+  // regardless of base sign).
   if (op === BinaryOperation.Pow || op === BinaryOperation.ElemPow) {
-    if (!isComplexType(effLeft) && !isNonneg(effLeft)) return null;
+    const rightIsIntExponent =
+      effRight.kind === "number" && effRight.isInteger === true;
+    if (!isComplexType(effLeft) && !isNonneg(effLeft) && !rightIsIntExponent) {
+      return null;
+    }
   }
 
   const anyComplex = isComplexType(effLeft) || isComplexType(effRight);
