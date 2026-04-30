@@ -283,6 +283,19 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
             : undefined;
         const isComplex = (lt.isComplex || rt.isComplex) ?? false;
         ctx._hasTensorOps = true;
+        // Match mMul's runtime unwrap1x1: a known-1×1 result collapses to a
+        // scalar at runtime, so the JIT type must match (otherwise downstream
+        // .data hoisting reads undefined.length).
+        if (outShape && outShape[0] === 1 && outShape[1] === 1) {
+          return {
+            tag: "Call",
+            name: "__mtimes",
+            args: [left, right],
+            jitType: isComplex
+              ? { kind: "complex_or_number" }
+              : { kind: "number" },
+          };
+        }
         return {
           tag: "Call",
           name: "__mtimes",
@@ -1439,6 +1452,15 @@ function resolveUserFunction(
   if (target.kind === "localFunction" && target.source.from === "main") {
     return interp.mainLocalFunctions.get(target.name) ?? null;
   }
+  if (
+    target.kind === "localFunction" &&
+    target.source.from === "workspaceFile"
+  ) {
+    return (
+      interp.findFunctionInWorkspaceFile(target.source.wsName, target.name) ??
+      null
+    );
+  }
 
   if (target.kind === "classMethod") {
     const definingClass = interp.ctx.findDefiningClass(
@@ -1790,7 +1812,9 @@ function probeUserFuncReturnType(
     for (const arg of loweredArgs) {
       if (arg.tag === "NumberLiteral") {
         argVals.push(arg.value);
-      } else if (arg.tag === "Var") {
+        continue;
+      }
+      if (arg.tag === "Var") {
         const val = interp.env.get(arg.name);
         if (val !== undefined) {
           argVals.push(val);
@@ -1799,9 +1823,19 @@ function probeUserFuncReturnType(
           if (rep === undefined) return null;
           argVals.push(rep);
         }
-      } else {
-        return null;
+        continue;
       }
+      // Constant-foldable expression (e.g. unary `-1` parses as Unary(Neg, 1)
+      // and isn't pre-folded by Unary lowering, but has an exact jitType).
+      const lit = literalNumber(arg);
+      if (lit !== null) {
+        argVals.push(lit);
+        continue;
+      }
+      // Fall back to a representative value when the type is concrete enough.
+      const rep = representativeValue(arg.jitType);
+      if (rep === undefined) return null;
+      argVals.push(rep);
     }
     const result = interp.rt.dispatch(fnName, 1, argVals);
     const resultType = inferJitType(result);

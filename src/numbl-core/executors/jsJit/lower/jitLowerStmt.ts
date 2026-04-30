@@ -789,20 +789,87 @@ function tryLowerColAssign(
   if (baseType.kind !== "tensor" || baseType.isComplex === true) return null;
   if (!baseType.shape || baseType.shape.length !== 2) return null;
 
-  // RHS: plain Ident referring to a real-tensor variable in the env.
-  // Matches the chunkie `vals(:, jj+1) = v2;` shape. Slice-alias names
-  // don't correspond to a real tensor at runtime, so skip them.
-  if (rhsExpr.type !== "Ident") return null;
-  if (ctx.sliceAliases.has(rhsExpr.name)) return null;
-  const srcName = rhsExpr.name;
-  const srcType = ctx.env.get(srcName);
-  if (!srcType || srcType.kind !== "tensor" || srcType.isComplex === true)
-    return null;
-
   const colIndex = lowerExpr(ctx, colIdxExpr);
   if (!colIndex) return null;
   if (colIndex.jitType.kind !== "number" && colIndex.jitType.kind !== "boolean")
     return null;
+
+  // Resolve a name we can use as the source for setCol2r_h. The fast path
+  // is a plain Ident referring to an existing real-tensor variable
+  // (chunkie `vals(:, jj+1) = v2;`). For scalar RHS into a size-1-rows
+  // column, degenerate to `dst(1, colIdx) = scalar` (chunkie
+  // `vals(:, 1) = oneintp(...)` where opdims(1)=1 so the result is scalar).
+  // For other tensor RHS expressions, hoist into a synthetic local then
+  // run the same col-write.
+  let srcName: string;
+  let srcType: JitType;
+  const prelude: JitStmt[] = [];
+  if (rhsExpr.type === "Ident" && !ctx.sliceAliases.has(rhsExpr.name)) {
+    const t = ctx.env.get(rhsExpr.name);
+    if (!t) return null;
+    if (
+      (t.kind === "number" || t.kind === "boolean") &&
+      baseType.shape[0] === 1
+    ) {
+      const rhs = lowerExpr(ctx, rhsExpr);
+      if (!rhs) return null;
+      ctx.assignedVars.add(baseName);
+      ctx._hasTensorOps = true;
+      return [
+        {
+          tag: "AssignIndex",
+          baseName,
+          indices: [
+            {
+              tag: "NumberLiteral",
+              value: 1,
+              jitType: { kind: "number", exact: 1, isInteger: true },
+            },
+            colIndex,
+          ],
+          value: rhs,
+          baseType,
+        },
+      ];
+    }
+    if (t.kind !== "tensor" || t.isComplex === true) return null;
+    srcName = rhsExpr.name;
+    srcType = t;
+  } else {
+    const rhs = lowerExpr(ctx, rhsExpr);
+    if (!rhs) return null;
+    if (
+      (rhs.jitType.kind === "number" || rhs.jitType.kind === "boolean") &&
+      baseType.shape[0] === 1
+    ) {
+      ctx.assignedVars.add(baseName);
+      ctx._hasTensorOps = true;
+      return [
+        {
+          tag: "AssignIndex",
+          baseName,
+          indices: [
+            {
+              tag: "NumberLiteral",
+              value: 1,
+              jitType: { kind: "number", exact: 1, isInteger: true },
+            },
+            colIndex,
+          ],
+          value: rhs,
+          baseType,
+        },
+      ];
+    }
+    if (rhs.jitType.kind !== "tensor" || rhs.jitType.isComplex === true)
+      return null;
+    srcName = `_colsrc_${baseName}`;
+    srcType = rhs.jitType;
+    ctx.env.set(srcName, srcType);
+    ctx.assignedVars.add(srcName);
+    ctx.localVars.add(srcName);
+    prelude.push({ tag: "Assign", name: srcName, expr: rhs });
+  }
 
   // Mark dst as assigned (write-target → unshare-on-entry hoist); clear
   // any prior slice alias defensively, matching the range-assign path.
@@ -811,6 +878,7 @@ function tryLowerColAssign(
   ctx._hasTensorOps = true;
 
   return [
+    ...prelude,
     {
       tag: "AssignIndexCol",
       baseName,

@@ -371,8 +371,10 @@ export function unaryResultType(
     case UnaryOperation.Minus:
       if (operand.kind === "number") {
         const sign = flipSign(operand.sign);
+        const exact = operand.exact !== undefined ? -operand.exact : undefined;
         return {
           kind: "number",
+          ...(exact !== undefined ? { exact } : {}),
           ...(sign ? { sign } : {}),
           ...(operand.isInteger ? { isInteger: true } : {}),
         };
