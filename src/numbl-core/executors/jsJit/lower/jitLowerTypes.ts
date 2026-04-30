@@ -316,6 +316,21 @@ export function binaryResultType(
     ) {
       nonneg = true;
     }
+    // Any-real ^ even-positive-integer is nonneg. Drives chunkie's
+    // `sqrt(sum(dint.^2, 1))` chain (signed dint, exponent 2 → keeps
+    // result real, so the downstream sqrt doesn't widen to complex).
+    if (
+      !nonneg &&
+      !isComplex &&
+      (op === BinaryOperation.Pow || op === BinaryOperation.ElemPow) &&
+      effRight.kind === "number" &&
+      effRight.isInteger === true &&
+      effRight.exact !== undefined &&
+      effRight.exact > 0 &&
+      effRight.exact % 2 === 0
+    ) {
+      nonneg = true;
+    }
     // Structural nonneg: `x .* x` (same real Var squared) is always
     // nonneg elementwise, regardless of x's sign. The type-only path
     // can't see this; we need the lowered operand identity.

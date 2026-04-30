@@ -108,6 +108,76 @@ function bailExpr(ctx: LowerCtx, expr: Expr, reason: string): null {
   return null;
 }
 
+/**
+ * Recognize `reshape(x, size(y))` and refine the output type to `y`'s
+ * tensor type. The runtime call still goes through `ib_reshape`; the
+ * only thing this does is give the JIT a precise output shape so
+ * downstream operations (e.g. struct-field probes) don't lose
+ * shape info. Mirrors a common chunkie pattern (`chnk.perp` ends with
+ * `reshape(n, size(tau))`, semantically a no-op for 2D `tau`).
+ *
+ * Returns null when the pattern doesn't match, so the caller falls
+ * back to the generic IBuiltin path.
+ */
+function tryRefineReshapeWithSizeOf(
+  ctx: LowerCtx,
+  expr: Expr & { type: "FuncCall" }
+): JitExpr | null {
+  if (expr.name !== "reshape") return null;
+  if (expr.args.length !== 2) return null;
+  const second = expr.args[1];
+  // size(y) parses as FuncCall when `size` isn't a local variable.
+  if (
+    second.type !== "FuncCall" ||
+    second.name !== "size" ||
+    second.args.length !== 1
+  )
+    return null;
+  if (ctx.env.has("size")) return null; // shadowed — not the builtin
+  const yExpr = second.args[0];
+  if (yExpr.type !== "Ident") return null;
+  const yType = ctx.env.get(yExpr.name);
+  if (!yType || yType.kind !== "tensor" || !yType.shape) return null;
+  // Lower the args normally (the call itself runs through ib_reshape).
+  const loweredArgs: JitExpr[] = [];
+  for (const a of expr.args) {
+    const la = lowerExpr(ctx, a);
+    if (!la) return null;
+    loweredArgs.push(la);
+  }
+  ctx._hasTensorOps = true;
+  return {
+    tag: "Call",
+    name: "reshape",
+    args: loweredArgs,
+    jitType: {
+      kind: "tensor",
+      isComplex: yType.isComplex ?? false,
+      shape: [...yType.shape],
+    },
+  };
+}
+
+/**
+ * Mirror of interpreterExec.ts `tryExtractDottedName`, but with the
+ * strict-dispatch shadow check applied at every step: each segment of
+ * the chain must NOT be a known variable / slice alias in the current
+ * env. Returns null if any segment is shadowed (so the JIT bails to
+ * the interpreter, which can dispatch correctly at runtime).
+ */
+function tryExtractJitDottedName(ctx: LowerCtx, expr: Expr): string | null {
+  if (expr.type === "Ident") {
+    if (ctx.env.has(expr.name)) return null;
+    if (ctx.sliceAliases.has(expr.name)) return null;
+    return expr.name;
+  }
+  if (expr.type === "Member") {
+    const baseChain = tryExtractJitDottedName(ctx, expr.base);
+    if (baseChain) return `${baseChain}.${expr.name}`;
+  }
+  return null;
+}
+
 // ── Expression lowering ─────────────────────────────────────────────────
 
 export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
@@ -319,6 +389,39 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
         right.jitType.kind === "complex_or_number"
       ) {
         ctx._hasTensorOps = true;
+      }
+
+      // Tensor–tensor with mismatched shapes needs broadcasting; the
+      // tAdd/tSub/tMul/tDiv codegen helpers only support same-shape pairs.
+      // Route to the broadcast-aware mAdd/mSub/mElemMul/mElemDiv helpers
+      // instead. (Same-shape stays on the fast Binary/tXxx path.)
+      if (isTensorType(left.jitType) && isTensorType(right.jitType)) {
+        const lt = left.jitType as Extract<JitType, { kind: "tensor" }>;
+        const rt = right.jitType as Extract<JitType, { kind: "tensor" }>;
+        const broadcasts =
+          lt.shape !== undefined &&
+          rt.shape !== undefined &&
+          (lt.shape.length !== rt.shape.length ||
+            lt.shape.some((d, i) => d !== rt.shape![i]));
+        if (broadcasts) {
+          const broadcastHelper: Partial<Record<BinaryOperation, string>> = {
+            [BinaryOperation.Add]: "__mAdd",
+            [BinaryOperation.Sub]: "__mSub",
+            [BinaryOperation.Mul]: "__mElemMul",
+            [BinaryOperation.ElemMul]: "__mElemMul",
+            [BinaryOperation.Div]: "__mElemDiv",
+            [BinaryOperation.ElemDiv]: "__mElemDiv",
+          };
+          const helper = broadcastHelper[expr.op];
+          if (helper) {
+            return {
+              tag: "Call",
+              name: helper,
+              args: [left, right],
+              jitType: resultType,
+            };
+          }
+        }
       }
 
       return { tag: "Binary", op: expr.op, left, right, jitType: resultType };
@@ -660,6 +763,13 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
       const userResult = lowerUserFuncCall(ctx, expr);
       if (userResult !== undefined) return userResult;
 
+      // `reshape(x, size(y))` — common chunkie pattern (e.g. `chnk.perp`'s
+      // `reshape(n, size(tau))`). The output statically has y's shape, so
+      // emit the IBuiltin call but refine the JIT type. Without this, the
+      // generic reshape rule reports `unknown` output → bail.
+      const reshapeRefined = tryRefineReshapeWithSizeOf(ctx, expr);
+      if (reshapeRefined) return reshapeRefined;
+
       // Try IBuiltin resolution (same priority as builtins — last)
       return lowerIBuiltinCall(ctx, expr);
     }
@@ -899,31 +1009,37 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
     }
 
     case "MethodCall": {
-      // Namespace function call: `pkg.fn(args)` where `pkg` is a
-      // package prefix (e.g. `chnk.perp(dint)` in chunkie's oneintp).
-      // Detected by: base is a plain Ident that is NOT a variable in
-      // env. Resolve as the dotted workspace function name and route
-      // through the regular user-function call lowering — which then
-      // recursively lowers the callee or soft-bails to a dispatch.
-      // Other MethodCall shapes (struct/class field-then-call,
-      // chained-index, etc.) stay bailed for now.
-      if (
-        expr.base.type === "Ident" &&
-        ctx.env.get(expr.base.name) === undefined &&
-        !ctx.sliceAliases.has(expr.base.name)
-      ) {
-        const synthCall: Expr & { type: "FuncCall" } = {
-          type: "FuncCall",
-          name: `${expr.base.name}.${expr.name}`,
-          args: expr.args,
-          span: expr.span,
-        };
-        const userResult = lowerUserFuncCall(ctx, synthCall);
-        if (userResult !== undefined) return userResult;
-        // Fall through to IBuiltin (covers builtins exposed under a
-        // dotted name); preserves the existing bail message if neither
-        // user nor builtin resolves.
-        return lowerIBuiltinCall(ctx, synthCall);
+      // Package-namespace function call: `pkg.fn(args)` (e.g.
+      // `chnk.perp(dint)` in chunkie's oneintp). The interpreter (see
+      // interpreterExec.ts case "MethodCall") routes this to
+      // `callFunction(qualifiedName, ...)` only when:
+      //   (1) the prefix is a dotted name not shadowed by a local var;
+      //   (2) the qualified name matches a registered workspace
+      //       function in the FunctionIndex.
+      // The JIT must mirror those checks exactly, otherwise we'd
+      // dispatch differently than the interpreter would (e.g. when the
+      // prefix shadows a struct or names a class with overloaded
+      // methods). On any uncertainty, bail.
+      const dottedPrefix = tryExtractJitDottedName(ctx, expr.base);
+      if (dottedPrefix && ctx.interp) {
+        const qualifiedName = `${dottedPrefix}.${expr.name}`;
+        const isWorkspaceFn =
+          ctx.interp.functionIndex.workspaceFunctions.has(qualifiedName);
+        if (isWorkspaceFn) {
+          const synthCall: Expr & { type: "FuncCall" } = {
+            type: "FuncCall",
+            name: qualifiedName,
+            args: expr.args,
+            span: expr.span,
+          };
+          const userResult = lowerUserFuncCall(ctx, synthCall);
+          // userResult `undefined` means resolveUserFunction returned
+          // null — for a confirmed workspace-fn name that should never
+          // happen, but if it does treat as bail rather than falling
+          // through to builtins (the dispatch context is package-aware,
+          // not builtin-aware).
+          if (userResult !== undefined) return userResult;
+        }
       }
       return bailExpr(ctx, expr, "unsupported expression");
     }
@@ -1331,16 +1447,23 @@ function lowerUserFuncCall(
       if (callerAwareBuiltinInBody(calleeFn.body)) {
         return null;
       }
+      // Use the call-site name (`expr.name`) for dispatch, not the
+      // declared function name. They differ for package fns: a call
+      // written `chnk.perp(x)` needs `rt.dispatch("chnk.perp", ...)`,
+      // not `rt.dispatch("perp", ...)`, since a non-package caller
+      // file can't resolve the bare name. (For local/nested calls the
+      // two names match, so existing call sites are unaffected.)
+      const dispatchName = expr.name;
       const returnType = probeUserFuncReturnType(
         interp,
-        calleeFn.name,
+        dispatchName,
         loweredArgs
       );
       if (!returnType) return null;
       ctx._hasTensorOps = true;
       return {
         tag: "UserDispatchCall",
-        name: calleeFn.name,
+        name: dispatchName,
         args: loweredArgs,
         jitType: returnType,
       };
