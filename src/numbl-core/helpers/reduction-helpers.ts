@@ -84,22 +84,134 @@ export function copyTensor(v: RuntimeTensor): RuntimeValue {
 // ── Generic reduction along a dimension ────────────────────────────────
 
 /**
+ * 2D real fast path for dim-reduction with a known opCode.
+ * Returns undefined when not applicable (caller falls back to generic path).
+ *
+ * Avoids the per-slice srcIndices Array allocation and the polymorphic
+ * reduceFn closure call that V8 can't reliably inline.
+ */
+function dimReduce2DReal(
+  v: RuntimeTensor,
+  dim: number,
+  opCode: number,
+  initialValue: number,
+  finalizeFn?: (acc: number, count: number) => number
+): RuntimeValue | undefined {
+  if (v.shape.length !== 2) return undefined;
+  if (v.imag) return undefined;
+  const m = v.shape[0];
+  const n = v.shape[1];
+  const data = v.data;
+  if (dim === 1) {
+    const result = uninitFloatX(n);
+    const count = m;
+    if (opCode === OpReduce.SUM || opCode === OpReduce.MEAN) {
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        let acc = initialValue;
+        for (let i = 0; i < m; i++) acc += data[base + i];
+        result[j] = finalizeFn ? finalizeFn(acc, count) : acc;
+      }
+    } else if (opCode === OpReduce.PROD) {
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        let acc = initialValue;
+        for (let i = 0; i < m; i++) acc *= data[base + i];
+        result[j] = finalizeFn ? finalizeFn(acc, count) : acc;
+      }
+    } else if (opCode === OpReduce.MIN) {
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        let acc = initialValue;
+        for (let i = 0; i < m; i++) {
+          const x = data[base + i];
+          if (x < acc) acc = x;
+        }
+        result[j] = finalizeFn ? finalizeFn(acc, count) : acc;
+      }
+    } else if (opCode === OpReduce.MAX) {
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        let acc = initialValue;
+        for (let i = 0; i < m; i++) {
+          const x = data[base + i];
+          if (x > acc) acc = x;
+        }
+        result[j] = finalizeFn ? finalizeFn(acc, count) : acc;
+      }
+    } else {
+      return undefined;
+    }
+    return RTV.tensor(result, [1, n]);
+  }
+  if (dim === 2) {
+    const result = uninitFloatX(m);
+    const count = n;
+    if (opCode === OpReduce.SUM || opCode === OpReduce.MEAN) {
+      for (let i = 0; i < m; i++) result[i] = initialValue;
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        for (let i = 0; i < m; i++) result[i] += data[base + i];
+      }
+    } else if (opCode === OpReduce.PROD) {
+      for (let i = 0; i < m; i++) result[i] = initialValue;
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        for (let i = 0; i < m; i++) result[i] *= data[base + i];
+      }
+    } else if (opCode === OpReduce.MIN) {
+      for (let i = 0; i < m; i++) result[i] = initialValue;
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        for (let i = 0; i < m; i++) {
+          const x = data[base + i];
+          if (x < result[i]) result[i] = x;
+        }
+      }
+    } else if (opCode === OpReduce.MAX) {
+      for (let i = 0; i < m; i++) result[i] = initialValue;
+      for (let j = 0; j < n; j++) {
+        const base = j * m;
+        for (let i = 0; i < m; i++) {
+          const x = data[base + i];
+          if (x > result[i]) result[i] = x;
+        }
+      }
+    } else {
+      return undefined;
+    }
+    if (finalizeFn) {
+      for (let i = 0; i < m; i++) result[i] = finalizeFn(result[i], count);
+    }
+    return RTV.tensor(result, [m, 1]);
+  }
+  return undefined;
+}
+
+/**
  * Reduce a tensor along a dimension using an accumulator function.
  * @param v The tensor to reduce
  * @param dim The dimension along which to reduce (1-based)
  * @param reduceFn Function that takes (accumulator, value) and returns new accumulator
  * @param initialValue Initial accumulator value
  * @param finalizeFn Optional function to transform final result (e.g., divide by count for mean)
+ * @param opCode Optional OpReduce.* code; enables a 2D real fast path
  */
 function dimReduce(
   v: RuntimeValue,
   dim: number,
   reduceFn: (acc: number, val: number) => number,
   initialValue: number,
-  finalizeFn?: (acc: number, count: number) => number
+  finalizeFn?: (acc: number, count: number) => number,
+  opCode?: number
 ): RuntimeValue {
   if (!isRuntimeTensor(v))
     throw new RuntimeError("dimReduce: argument must be a tensor");
+
+  if (opCode !== undefined) {
+    const fast = dimReduce2DReal(v, dim, opCode, initialValue, finalizeFn);
+    if (fast !== undefined) return fast;
+  }
 
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return copyTensor(v);
@@ -477,7 +589,8 @@ export function accumKernel(
       }
       return RTV.num(re);
     },
-    reduceDim: (v, dim) => dimReduce(v, dim, reduceFn, initial, finalizeFn),
+    reduceDim: (v, dim) =>
+      dimReduce(v, dim, reduceFn, initial, finalizeFn, opCode),
   };
 }
 
