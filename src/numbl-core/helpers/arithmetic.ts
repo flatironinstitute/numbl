@@ -694,7 +694,7 @@ export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_ADD, false);
     if (nr) return nr;
   }
-  return binaryOp(a, b, (x, y) => x + y);
+  return binaryOp(a, b, (x, y) => x + y, BIN_OP_ADD);
 }
 
 /** Subtract two RuntimeValues */
@@ -757,7 +757,7 @@ export function mSub(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_SUB, false);
     if (nr) return nr;
   }
-  return binaryOp(a, b, (x, y) => x - y);
+  return binaryOp(a, b, (x, y) => x - y, BIN_OP_SUB);
 }
 
 /** Multiply two RuntimeValues (matrix multiply for 2D tensors, scalar otherwise) */
@@ -790,7 +790,7 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_MUL, false);
     if (nr) return nr;
   }
-  return binaryOp(a, b, (x, y) => x * y);
+  return binaryOp(a, b, (x, y) => x * y, BIN_OP_MUL);
 }
 
 /** Element-wise multiply */
@@ -853,7 +853,7 @@ export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_MUL, false);
     if (nr) return nr;
   }
-  return binaryOp(a, b, (x, y) => x * y);
+  return binaryOp(a, b, (x, y) => x * y, BIN_OP_MUL);
 }
 
 /** Divide */
@@ -877,7 +877,7 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, complexDivide, ELEMWISE_DIV);
   }
-  return binaryOp(a, b, (x, y) => x / y);
+  return binaryOp(a, b, (x, y) => x / y, BIN_OP_DIV);
 }
 
 /** Element-wise divide */
@@ -924,7 +924,7 @@ export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const nr = tryNativeElemwiseScalar(b as number, a, ELEMWISE_DIV, false);
     if (nr) return nr;
   }
-  return binaryOp(a, b, (x, y) => x / y);
+  return binaryOp(a, b, (x, y) => x / y, BIN_OP_DIV);
 }
 
 /** Left division (mldivide): a \ b — for scalars b/a, for matrices solve a*x = b */
@@ -1498,12 +1498,85 @@ export function broadcastIterate(
   }
 }
 
+/** Op codes for inlined arithmetic in the broadcast fast path. */
+const BIN_OP_ADD = 0;
+const BIN_OP_SUB = 1;
+const BIN_OP_MUL = 2;
+const BIN_OP_DIV = 3;
+
 function broadcastBinary(
   a: RuntimeTensor,
   b: RuntimeTensor,
   outShape: number[],
-  op: (x: number, y: number) => number
+  op: (x: number, y: number) => number,
+  opCode?: number
 ): RuntimeTensor {
+  // 2D fast path: avoid callback indirection by inlining the iteration
+  // directly. The dominant bsxfun pattern in numerical code (small
+  // matrices with one or both operands having a singleton dim) is 2D.
+  if (outShape.length === 2) {
+    const m = outShape[0];
+    const n = outShape[1];
+    const result = uninitFloatX(m * n);
+    const aShape = a.shape;
+    const bShape = b.shape;
+    const aM = aShape.length >= 1 ? aShape[0] : 1;
+    const aN = aShape.length >= 2 ? aShape[1] : 1;
+    const bM = bShape.length >= 1 ? bShape[0] : 1;
+    const bN = bShape.length >= 2 ? bShape[1] : 1;
+    const aS0 = aM === 1 ? 0 : 1;
+    const aS1 = aN === 1 ? 0 : aM;
+    const bS0 = bM === 1 ? 0 : 1;
+    const bS1 = bN === 1 ? 0 : bM;
+    const aD = a.data;
+    const bD = b.data;
+    let outIdx = 0;
+    // Inlined arithmetic per opCode — avoids the per-element op closure
+    // call that V8 can't reliably inline (op site is polymorphic across
+    // mAdd/mSub/mElemMul/mElemDiv).
+    if (opCode === BIN_OP_ADD) {
+      for (let j = 0; j < n; j++) {
+        const aBase = j * aS1;
+        const bBase = j * bS1;
+        for (let i = 0; i < m; i++) {
+          result[outIdx++] = aD[aBase + i * aS0] + bD[bBase + i * bS0];
+        }
+      }
+    } else if (opCode === BIN_OP_SUB) {
+      for (let j = 0; j < n; j++) {
+        const aBase = j * aS1;
+        const bBase = j * bS1;
+        for (let i = 0; i < m; i++) {
+          result[outIdx++] = aD[aBase + i * aS0] - bD[bBase + i * bS0];
+        }
+      }
+    } else if (opCode === BIN_OP_MUL) {
+      for (let j = 0; j < n; j++) {
+        const aBase = j * aS1;
+        const bBase = j * bS1;
+        for (let i = 0; i < m; i++) {
+          result[outIdx++] = aD[aBase + i * aS0] * bD[bBase + i * bS0];
+        }
+      }
+    } else if (opCode === BIN_OP_DIV) {
+      for (let j = 0; j < n; j++) {
+        const aBase = j * aS1;
+        const bBase = j * bS1;
+        for (let i = 0; i < m; i++) {
+          result[outIdx++] = aD[aBase + i * aS0] / bD[bBase + i * bS0];
+        }
+      }
+    } else {
+      for (let j = 0; j < n; j++) {
+        const aBase = j * aS1;
+        const bBase = j * bS1;
+        for (let i = 0; i < m; i++) {
+          result[outIdx++] = op(aD[aBase + i * aS0], bD[bBase + i * bS0]);
+        }
+      }
+    }
+    return RTV.tensor(result, outShape) as RuntimeTensor;
+  }
   const result = uninitFloatX(outShape.reduce((acc, d) => acc * d, 1));
   broadcastIterate(a.shape, b.shape, outShape, (aIdx, bIdx, i) => {
     result[i] = op(a.data[aIdx], b.data[bIdx]);
@@ -1571,7 +1644,8 @@ function broadcastComparison(
 function binaryOp(
   a: RuntimeValue,
   b: RuntimeValue,
-  op: (x: number, y: number) => number
+  op: (x: number, y: number) => number,
+  opCode?: number
 ): RuntimeValue {
   // Fast path: real tensor op real tensor (most common in vectorized code)
   if (isRuntimeTensor(a) && a.data.length > 1) {
@@ -1591,7 +1665,7 @@ function binaryOp(
       // Try broadcasting
       const broadcastShape = getBroadcastShape(a.shape, b.shape);
       if (broadcastShape !== null) {
-        return broadcastBinary(a, b, broadcastShape, op);
+        return broadcastBinary(a, b, broadcastShape, op, opCode);
       }
       throw new RuntimeError(
         `Matrix dimensions must agree: [${a.shape.join(",")}] vs [${b.shape.join(",")}]`
@@ -1670,7 +1744,7 @@ function binaryOp(
   // Try broadcasting
   const broadcastShape = getBroadcastShape(at.shape, bt.shape);
   if (broadcastShape !== null) {
-    return broadcastBinary(at, bt, broadcastShape, op);
+    return broadcastBinary(at, bt, broadcastShape, op, opCode);
   }
 
   // Incompatible shapes
