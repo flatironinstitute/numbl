@@ -251,8 +251,10 @@ function tryLowerAsSliceBind(
   // Require exact-arity multi-dim indexing.
   if (rawIndices.length !== baseType.shape.length) return "bail";
   // Can't rebind a param or an already-assigned local into a slice alias.
-  if (ctx.params.has(name)) return "bail";
-  if (ctx.assignedVars.has(name) && !ctx.sliceAliases.has(name)) return "bail";
+  // Falling through (returning null) lets lowerIndexExpr handle 1D/2D colon
+  // slicing via __colonAll / __extractSlice2d when applicable.
+  if (ctx.params.has(name)) return null;
+  if (ctx.assignedVars.has(name) && !ctx.sliceAliases.has(name)) return null;
 
   const template: ({ kind: "colon" } | { kind: "expr"; expr: JitExpr })[] = [];
   const sliceShape: number[] = [];
