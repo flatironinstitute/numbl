@@ -1578,6 +1578,20 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["subplot(M, N, P)"],
     description: "Create subplot in M-by-N grid at position P.",
   },
+  tiledlayout: {
+    signatures: [
+      "tiledlayout(M, N)",
+      "tiledlayout(arrangement)",
+      "tiledlayout",
+    ],
+    description:
+      "Create a tiled chart layout. Arrangement may be 'flow', 'vertical', or 'horizontal'. Use nexttile to add axes.",
+  },
+  nexttile: {
+    signatures: ["nexttile", "nexttile(IDX)"],
+    description:
+      "Advance to the next tile in the current tiled layout, or move to tile IDX. Auto-creates a flow layout if none exists.",
+  },
   title: {
     signatures: ["title(TXT)"],
     description: "Set title of current axes.",

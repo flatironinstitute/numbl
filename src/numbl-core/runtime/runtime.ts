@@ -148,6 +148,16 @@ export class Runtime {
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
 
+  // tiledlayout/nexttile state. Reset by tiledlayout, advanced by nexttile.
+  // mode: "fixed" uses the rows/cols verbatim; "flow"/"vertical"/"horizontal"
+  // grow the grid as tiles are added.
+  tiledLayoutState: {
+    rows: number;
+    cols: number;
+    mode: "fixed" | "flow" | "vertical" | "horizontal";
+    count: number;
+  } | null = null;
+
   // Cooperative cancellation
   private cancelFlag: Int32Array | null = null;
 

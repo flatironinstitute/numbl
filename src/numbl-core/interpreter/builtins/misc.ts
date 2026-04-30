@@ -570,6 +570,8 @@ for (const name of [
   "ylabel",
   "shading",
   "subplot",
+  "tiledlayout",
+  "nexttile",
   "legend",
   "sgtitle",
   "zlabel",

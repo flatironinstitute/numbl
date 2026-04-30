@@ -66,6 +66,8 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "ishold",
   "figure",
   "subplot",
+  "tiledlayout",
+  "nexttile",
   "title",
   "xlabel",
   "ylabel",

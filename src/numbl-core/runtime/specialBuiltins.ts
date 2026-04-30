@@ -1711,6 +1711,99 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return nargout >= 1 ? RTV.num(0) : undefined;
   });
 
+  // Compute a flow grid (rows × cols) that fits n tiles with a roughly
+  // square arrangement.
+  const flowGrid = (n: number): { rows: number; cols: number } => {
+    const k = Math.max(1, n);
+    const cols = Math.max(1, Math.ceil(Math.sqrt(k)));
+    const rows = Math.max(1, Math.ceil(k / cols));
+    return { rows, cols };
+  };
+
+  registerSpecial("tiledlayout", (nargout, args) => {
+    let mode: "fixed" | "flow" | "vertical" | "horizontal" = "flow";
+    let rows = 1;
+    let cols = 1;
+    let pos = 0;
+    if (args.length === 0) {
+      mode = "flow";
+    } else {
+      const first = args[0];
+      if (isRuntimeNumber(first)) {
+        if (args.length < 2 || !isRuntimeNumber(args[1])) {
+          throw new RuntimeError(
+            "tiledlayout: numeric form requires both M and N"
+          );
+        }
+        rows = Math.max(1, Math.floor(toNumber(first)));
+        cols = Math.max(1, Math.floor(toNumber(args[1])));
+        mode = "fixed";
+        pos = 2;
+      } else {
+        const s = toString(first).toLowerCase();
+        if (s === "flow" || s === "vertical" || s === "horizontal") {
+          mode = s;
+          pos = 1;
+        } else {
+          throw new RuntimeError(
+            `tiledlayout: unknown arrangement '${toString(first)}'`
+          );
+        }
+      }
+    }
+    // Silently consume remaining name-value pairs (TileSpacing, Padding, etc.).
+    while (pos + 1 < args.length) pos += 2;
+    // Replace any existing layout/axes — MATLAB does this automatically.
+    _plotInstr(rt.plotInstructions, { type: "clf" });
+    rt.tiledLayoutState = { rows, cols, mode, count: 0 };
+    return nargout >= 1 ? RTV.num(0) : undefined;
+  });
+
+  registerSpecial("nexttile", (nargout, args) => {
+    if (!rt.tiledLayoutState) {
+      _plotInstr(rt.plotInstructions, { type: "clf" });
+      rt.tiledLayoutState = { rows: 1, cols: 1, mode: "flow", count: 0 };
+    }
+    const st = rt.tiledLayoutState;
+    let targetIndex: number | null = null;
+    if (args.length >= 1 && isRuntimeNumber(args[0])) {
+      targetIndex = Math.max(1, Math.floor(toNumber(args[0])));
+    }
+    // Span argument [r c] is accepted for compatibility but not rendered as
+    // a true span; we still place the axes at its upper-left index.
+    if (targetIndex === null) {
+      st.count += 1;
+      targetIndex = st.count;
+    } else if (targetIndex > st.count) {
+      st.count = targetIndex;
+    }
+    let { rows, cols } = st;
+    if (st.mode === "flow") {
+      const g = flowGrid(st.count);
+      rows = g.rows;
+      cols = g.cols;
+      st.rows = rows;
+      st.cols = cols;
+    } else if (st.mode === "vertical") {
+      rows = Math.max(1, st.count);
+      cols = 1;
+      st.rows = rows;
+      st.cols = cols;
+    } else if (st.mode === "horizontal") {
+      rows = 1;
+      cols = Math.max(1, st.count);
+      st.rows = rows;
+      st.cols = cols;
+    }
+    _plotInstr(rt.plotInstructions, {
+      type: "set_subplot",
+      rows,
+      cols,
+      index: targetIndex,
+    });
+    return nargout >= 1 ? RTV.num(0) : undefined;
+  });
+
   registerSpecial("title", (nargout, args) => {
     if (args.length > 0) {
       _plotInstr(rt.plotInstructions, { type: "set_title", text: args[0] });
