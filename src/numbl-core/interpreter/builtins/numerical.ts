@@ -24,6 +24,7 @@ import {
   isRuntimeChar,
   isRuntimeString,
   isRuntimeFunction,
+  isRuntimeStruct,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
@@ -1005,6 +1006,333 @@ defineBuiltin({
           }
         }
         return RTV.tensor(result, [ncols, ncols]);
+      },
+    },
+  ],
+});
+
+// ── histc ────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "histc",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length < 2 || argTypes.length > 3) return null;
+        const out: JitType = { kind: "unknown" };
+        return nargout > 1 ? [out, out] : [out];
+      },
+      apply: (args, nargout) => {
+        const xArg = args[0];
+        const edges = toFloatArray(args[1]);
+        const N = edges.length;
+
+        const findBin = (v: number): number => {
+          if (Number.isNaN(v)) return 0;
+          if (v < edges[0] || v > edges[N - 1]) return 0;
+          if (v === edges[N - 1]) return N;
+          let lo = 0,
+            hi = N - 1;
+          while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (edges[mid] <= v) lo = mid;
+            else hi = mid;
+          }
+          return lo + 1;
+        };
+
+        // Determine x shape and decide working dimension.
+        let xRows: number, xCols: number;
+        let xData: FloatXArrayType;
+        let xShape: number[];
+        if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
+          xRows = 1;
+          xCols = 1;
+          xData = new FloatXArray([
+            isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number),
+          ]);
+          xShape = [1, 1];
+        } else if (isRuntimeTensor(xArg)) {
+          [xRows, xCols] = tensorSize2D(xArg);
+          xData = xArg.data;
+          xShape = xArg.shape.slice();
+        } else {
+          throw new RuntimeError("histc: x must be numeric");
+        }
+
+        let dim: number;
+        if (args.length >= 3) {
+          dim = Math.round(toNumber(args[2]));
+          if (dim !== 1 && dim !== 2)
+            throw new RuntimeError("histc: dim must be 1 or 2");
+        } else if (xRows === 1 || xCols === 1) {
+          // Vector input: operate along the non-singleton dimension.
+          dim = xRows === 1 ? 2 : 1;
+        } else {
+          dim = 1;
+        }
+
+        // Output bincounts shape: replace dim with N.
+        let countShape: number[];
+        if (dim === 1) countShape = [N, xCols];
+        else countShape = [xRows, N];
+
+        const counts = new FloatXArray(countShape[0] * countShape[1]);
+        const indData = new FloatXArray(xRows * xCols);
+
+        if (dim === 1) {
+          // Iterate columns; each column is a separate series.
+          for (let c = 0; c < xCols; c++) {
+            for (let r = 0; r < xRows; r++) {
+              const v = xData[c * xRows + r];
+              const bin = findBin(v);
+              indData[c * xRows + r] = bin;
+              if (bin > 0) counts[c * N + (bin - 1)] += 1;
+            }
+          }
+        } else {
+          // dim === 2: iterate rows; each row is a separate series.
+          for (let r = 0; r < xRows; r++) {
+            for (let c = 0; c < xCols; c++) {
+              const v = xData[c * xRows + r];
+              const bin = findBin(v);
+              indData[c * xRows + r] = bin;
+              if (bin > 0) counts[(bin - 1) * xRows + r] += 1;
+            }
+          }
+        }
+
+        const isVectorX = xRows === 1 || xCols === 1;
+        let countsResult: RuntimeValue;
+        if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
+          // Scalar x — bincounts is a vector of length N (row).
+          countsResult = RTV.tensor(counts, [1, N]);
+        } else if (isVectorX) {
+          // Vector x — bincounts vector matching x orientation.
+          const isRow = xRows === 1;
+          countsResult = RTV.tensor(counts, isRow ? [1, N] : [N, 1]);
+        } else {
+          countsResult = RTV.tensor(counts, countShape);
+        }
+
+        if (nargout <= 1) return countsResult;
+        const indResult: RuntimeValue =
+          isRuntimeNumber(xArg) || isRuntimeLogical(xArg)
+            ? RTV.num(indData[0])
+            : RTV.tensor(indData, xShape);
+        return [countsResult, indResult];
+      },
+    },
+  ],
+});
+
+// ── mkpp / ppval ─────────────────────────────────────────────────────
+
+function dimArgToVec(v: RuntimeValue): number[] {
+  if (isRuntimeNumber(v)) return [Math.round(v as number)];
+  if (isRuntimeLogical(v)) return [v ? 1 : 0];
+  if (isRuntimeTensor(v)) {
+    const out: number[] = [];
+    for (let i = 0; i < v.data.length; i++) out.push(Math.round(v.data[i]));
+    return out;
+  }
+  throw new RuntimeError("mkpp: dim must be a numeric scalar or vector");
+}
+
+defineBuiltin({
+  name: "mkpp",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2 || argTypes.length > 3) return null;
+        return [{ kind: "struct", fields: {} }];
+      },
+      apply: args => {
+        const breaks = toFloatArray(args[0]);
+        const Lp1 = breaks.length;
+        if (Lp1 < 2)
+          throw new RuntimeError("mkpp: breaks must have at least 2 elements");
+        const L = Lp1 - 1;
+        for (let i = 0; i < L; i++) {
+          if (!(breaks[i] < breaks[i + 1]))
+            throw new RuntimeError("mkpp: breaks must be strictly increasing");
+        }
+
+        let dim: number[] = [1];
+        if (args.length >= 3) {
+          dim = dimArgToVec(args[2]);
+          if (dim.length === 0) dim = [1];
+          for (const d of dim)
+            if (!(d >= 0))
+              throw new RuntimeError("mkpp: dim entries must be non-negative");
+        }
+        const dProd = dim.reduce((a, b) => a * b, 1);
+
+        const coefsArg = args[1];
+        let rows: number, cols: number, coefData: FloatXArrayType;
+        if (isRuntimeNumber(coefsArg) || isRuntimeLogical(coefsArg)) {
+          rows = 1;
+          cols = 1;
+          coefData = new FloatXArray([
+            isRuntimeLogical(coefsArg)
+              ? coefsArg
+                ? 1
+                : 0
+              : (coefsArg as number),
+          ]);
+        } else if (isRuntimeTensor(coefsArg)) {
+          [rows, cols] = tensorSize2D(coefsArg);
+          coefData = new FloatXArray(coefsArg.data);
+        } else {
+          throw new RuntimeError("mkpp: coefs must be numeric");
+        }
+
+        if (rows !== dProd * L)
+          throw new RuntimeError(
+            `mkpp: coefs has ${rows} rows; expected ${dProd * L} (prod(dim)*pieces)`
+          );
+        const k = cols;
+
+        const breaksOut = new FloatXArray(Lp1);
+        for (let i = 0; i < Lp1; i++) breaksOut[i] = breaks[i];
+
+        const fields = new Map<string, RuntimeValue>();
+        fields.set("form", "pp");
+        fields.set("breaks", RTV.tensor(breaksOut, [1, Lp1]));
+        fields.set("coefs", RTV.tensor(coefData, [rows, cols]));
+        fields.set("pieces", L);
+        fields.set("order", k);
+        if (dim.length === 1) {
+          fields.set("dim", dim[0]);
+        } else {
+          fields.set("dim", RTV.tensor(new FloatXArray(dim), [1, dim.length]));
+        }
+        return RTV.struct(fields);
+      },
+    },
+  ],
+});
+
+defineBuiltin({
+  name: "ppval",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const pp = args[0];
+        if (!isRuntimeStruct(pp))
+          throw new RuntimeError("ppval: first argument must be a pp struct");
+        const formVal = pp.fields.get("form");
+        const formStr =
+          formVal === undefined
+            ? ""
+            : isRuntimeChar(formVal)
+              ? formVal.value
+              : isRuntimeString(formVal)
+                ? (formVal as string)
+                : "";
+        if (formStr !== "pp")
+          throw new RuntimeError("ppval: pp.form must be 'pp'");
+
+        const breaksRT = pp.fields.get("breaks");
+        const coefsRT = pp.fields.get("coefs");
+        const piecesRT = pp.fields.get("pieces");
+        const orderRT = pp.fields.get("order");
+        const dimRT = pp.fields.get("dim");
+        if (
+          breaksRT === undefined ||
+          coefsRT === undefined ||
+          piecesRT === undefined ||
+          orderRT === undefined ||
+          dimRT === undefined
+        )
+          throw new RuntimeError("ppval: pp struct missing required fields");
+
+        const breaks = toFloatArray(breaksRT);
+        const L = Math.round(toNumber(piecesRT));
+        const k = Math.round(toNumber(orderRT));
+        const dim: number[] = dimArgToVec(dimRT);
+        const dProd = dim.reduce((a, b) => a * b, 1);
+
+        if (!isRuntimeTensor(coefsRT))
+          throw new RuntimeError("ppval: pp.coefs must be a matrix");
+        const coefs = coefsRT.data;
+        const [rows, cols] = tensorSize2D(coefsRT);
+        if (rows !== dProd * L || cols !== k)
+          throw new RuntimeError(
+            "ppval: pp.coefs shape inconsistent with pieces/order/dim"
+          );
+
+        const findPiece = (x: number): number => {
+          if (x < breaks[1]) return 0;
+          if (x >= breaks[L - 1]) return L - 1;
+          let lo = 0,
+            hi = L;
+          while (hi - lo > 1) {
+            const mid = (lo + hi) >> 1;
+            if (breaks[mid] <= x) lo = mid;
+            else hi = mid;
+          }
+          return lo;
+        };
+
+        const evalAt = (x: number, out: FloatXArrayType, off: number) => {
+          const i = findPiece(x);
+          const dx = x - breaks[i];
+          const baseRow = i * dProd;
+          for (let j = 0; j < dProd; j++) {
+            const r = baseRow + j;
+            let result = coefs[0 * rows + r];
+            for (let c = 1; c < k; c++) {
+              result = result * dx + coefs[c * rows + r];
+            }
+            out[off + j] = result;
+          }
+        };
+
+        const xq = args[1];
+        const isScalarDim = dim.length === 1 && dim[0] === 1;
+
+        if (isRuntimeNumber(xq) || isRuntimeLogical(xq)) {
+          const xv = isRuntimeLogical(xq) ? (xq ? 1 : 0) : (xq as number);
+          if (isScalarDim) {
+            const out = new FloatXArray(1);
+            evalAt(xv, out, 0);
+            return RTV.num(out[0]);
+          }
+          const out = new FloatXArray(dProd);
+          evalAt(xv, out, 0);
+          const outShape = dim.length === 1 ? [dim[0], 1] : [...dim];
+          return RTV.tensor(out, outShape);
+        }
+
+        if (!isRuntimeTensor(xq))
+          throw new RuntimeError("ppval: query points must be numeric");
+
+        const N = xq.data.length;
+        const xqShape = xq.shape.slice();
+
+        if (isScalarDim) {
+          const out = new FloatXArray(N);
+          for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i);
+          return RTV.tensor(out, xqShape);
+        }
+
+        const out = new FloatXArray(dProd * N);
+        for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i * dProd);
+
+        const xqIsRowVec = xqShape.length === 2 && xqShape[0] === 1;
+        const xqIsColVec = xqShape.length === 2 && xqShape[1] === 1;
+        let outShape: number[];
+        if (xqIsRowVec || xqIsColVec) {
+          outShape = [...dim, N];
+        } else {
+          outShape = [...dim, ...xqShape];
+        }
+        return RTV.tensor(out, outShape);
       },
     },
   ],
