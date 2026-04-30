@@ -139,6 +139,7 @@ import {
 } from "./runtimePlot.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
+import { BufferPool, setActivePool } from "./bufferPool.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -197,6 +198,12 @@ export class Runtime {
 
   // Constructor helpers
   public RTV = RTV;
+
+  /** Per-Runtime tensor buffer pool. The constructor installs this as the
+   *  active pool so `uninitFloat64` / `uninitFloatX` route through it.
+   *  Serial Runtimes (REPL, tests, worker) get their own buffers — no
+   *  cross-contamination. */
+  public _bufferPool: BufferPool = new BufferPool();
 
   // Persistent variable storage: funcJsId → varName → value
   private persistentStore = new Map<string, Map<string, RuntimeValue>>();
@@ -347,6 +354,7 @@ export class Runtime {
     private options: ExecOptions,
     private initialVariableValues?: Record<string, RuntimeValue>
   ) {
+    setActivePool(this._bufferPool);
     this.profilingEnabled = !!options.profile;
     this.fileIO = options.fileIO;
     this.system = options.system;

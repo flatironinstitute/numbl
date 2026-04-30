@@ -2,22 +2,22 @@
  * Allocate an UNINITIALIZED typed array — skips the zero-fill that
  * `new Float64Array(n)` / `new FloatXArray(n)` perform by default.
  *
- * On Node, `Buffer.allocUnsafe` returns un-zeroed memory; wrapping it
- * in a TypedArray view costs ~10× less than the zero-fill for a 16 MB
- * buffer (~45 µs vs ~470 µs at N=2M doubles).
+ * Routes through the active `BufferPool` (see `bufferPool.ts`): if a
+ * matching-length buffer was previously released, it is handed back without
+ * any allocation. On a miss, the pool falls through to `Buffer.allocUnsafe`
+ * on Node (un-zeroed slab — ~10× cheaper than the zero-fill at large N) and
+ * to `new FloatXArray(n)` elsewhere.
  *
  * SAFETY CONTRACT (very important):
- *   The caller MUST write every element before reading it.  Any element
- *   that is read before being written will contain arbitrary stale bytes
- *   from recently-freed memory.  If you cannot guarantee full coverage,
- *   use `new Float64Array(n)` / `new FloatXArray(n)` instead.
- *
- * In non-Node environments (browser, Deno without node-compat, …) where
- * `Buffer` is unavailable, we fall back to the zero-filling constructor
- * — still correct, just slower.
+ *   The caller MUST write every element before reading it. Any element that
+ *   is read before being written will contain arbitrary stale bytes from
+ *   recently-freed memory or from a previously-released buffer. If you
+ *   cannot guarantee full coverage, use `new Float64Array(n)` /
+ *   `new FloatXArray(n)` instead.
  */
 
 import { FloatXArray } from "./types.js";
+import { acquireFloatX, getActivePool } from "./bufferPool.js";
 
 // Type of `new FloatXArray(n)` — resolves to Float32Array<ArrayBuffer> |
 // Float64Array<ArrayBuffer>.  We use this as the return type (rather than the
@@ -26,28 +26,10 @@ import { FloatXArray } from "./types.js";
 // generics keep type-checking.
 type FloatXInstance = InstanceType<typeof FloatXArray>;
 
-const hasBuffer = typeof Buffer !== "undefined";
-
 export function uninitFloat64(n: number): Float64Array<ArrayBuffer> {
-  if (hasBuffer) {
-    const buf = Buffer.allocUnsafe(n * 8);
-    // Buffer.allocUnsafe's .buffer is always a plain ArrayBuffer at runtime
-    // (it comes from Node's pool), but typed as ArrayBufferLike.  Cast to
-    // the narrower Float64Array<ArrayBuffer> so consumers that still use the
-    // default TypedArray typing keep working.
-    return new Float64Array(buf.buffer as ArrayBuffer, buf.byteOffset, n);
-  }
-  return new Float64Array(n);
+  return getActivePool().acquireF64(n) as Float64Array<ArrayBuffer>;
 }
 
 export function uninitFloatX(n: number): FloatXInstance {
-  if (hasBuffer) {
-    const buf = Buffer.allocUnsafe(n * FloatXArray.BYTES_PER_ELEMENT);
-    return new FloatXArray(
-      buf.buffer as ArrayBuffer,
-      buf.byteOffset,
-      n
-    ) as FloatXInstance;
-  }
-  return new FloatXArray(n) as FloatXInstance;
+  return acquireFloatX(n) as FloatXInstance;
 }
