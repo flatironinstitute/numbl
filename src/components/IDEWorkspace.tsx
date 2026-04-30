@@ -14,6 +14,7 @@ import StopIcon from "@mui/icons-material/Stop";
 import ComputerIcon from "@mui/icons-material/Computer";
 import DnsIcon from "@mui/icons-material/Dns";
 import MenuIcon from "@mui/icons-material/Menu";
+import NoteAddIcon from "@mui/icons-material/NoteAdd";
 import {
   Box,
   Button,
@@ -893,7 +894,32 @@ export function IDEWorkspace({
       </Tabs>
 
       <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
-        {editorTab === 0 || useRemoteExecution ? (
+        {(editorTab === 0 || useRemoteExecution) && !activeFile ? (
+          <Box
+            sx={{
+              height: "100%",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexDirection: "column",
+              gap: 2,
+              p: 3,
+            }}
+          >
+            <Typography variant="body2" color="text.secondary">
+              No file open
+            </Typography>
+            <Button
+              variant="contained"
+              size="small"
+              startIcon={<NoteAddIcon />}
+              onClick={() => addFile()}
+              sx={{ textTransform: "none" }}
+            >
+              New file
+            </Button>
+          </Box>
+        ) : editorTab === 0 || useRemoteExecution ? (
           <Box
             sx={{
               height: "100%",

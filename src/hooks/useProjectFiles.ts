@@ -374,17 +374,12 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
 
   const handleDeleteFile = useCallback(
     async (fileId: string) => {
-      if (files.length === 1) {
-        alert("Cannot delete the last file");
-        return;
-      }
-
       try {
         await deleteFile(fileId);
         contentCacheRef.current.delete(fileId);
         if (activeFileId === fileId) {
           const newFiles = files.filter(f => f.id !== fileId);
-          if (newFiles.length > 0) setActiveFileId(newFiles[0].id);
+          setActiveFileId(newFiles.length > 0 ? newFiles[0].id : "");
         }
         dispatch({ type: "DELETE_FILE", fileId });
       } catch (error) {
