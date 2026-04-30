@@ -1256,8 +1256,8 @@ function storeIntoTensor(
   }
 
   // COW: if data is shared, copy before mutating
-  if (base._rc > 1) {
-    base._rc--;
+  if (base._refs.c > 1) {
+    base._refs.c--;
     const cowImag = base.imag ? new FloatXArray(base.imag) : undefined;
     base = RTV.tensor(new FloatXArray(base.data), [...base.shape], cowImag);
   }
@@ -2077,7 +2077,7 @@ export function storeIntoRTValueIndex(
         if (imag && S.pi) imag[idx] = S.pi[k];
       }
     }
-    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n], _rc: 1 };
+    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n], _refs: { c: 1 } };
   }
 
   if (isRuntimeTensor(base)) {

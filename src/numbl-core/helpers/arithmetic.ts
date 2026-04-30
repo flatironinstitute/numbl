@@ -1390,7 +1390,7 @@ function asNumeric(
         kind: "tensor",
         data: codes,
         shape: [1, v.value.length],
-        _rc: 1,
+        _refs: { c: 1 },
       },
     };
   }

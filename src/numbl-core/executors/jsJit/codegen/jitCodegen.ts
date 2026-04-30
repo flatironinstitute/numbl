@@ -434,9 +434,9 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
 function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign": {
-      // Var-to-var tensor assign: bump _rc on the aliased tensor so later
-      // ops don't reuse its buffer in place (which would corrupt the other
-      // binding). Non-tensor RHS skips this.
+      // Var-to-var tensor assign: bump _refs.c on the aliased tensor so
+      // later ops don't reuse its buffer in place (which would corrupt the
+      // other binding). Non-tensor RHS skips this.
       if (stmt.expr.tag === "Var" && isTensorType(stmt.expr.jitType)) {
         lines.push(
           `${indent}${mangle(stmt.name)} = $h.shareTensor(${mangle(stmt.expr.name)});`
@@ -989,7 +989,7 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
  * For write-target tensors, the refresh also calls `$h.unshare(name)` to
  * detach from any sharing the new RHS may have introduced (e.g. via
  * `tmp = base; ...; base(i) = v`). For fresh-from-`zeros(...)` tensors
- * unshare is a no-op fast return on `_rc <= 1`.
+ * unshare is a no-op fast return on `_refs.c <= 1`.
  */
 function emitHoistRefresh(lines: string[], name: string, indent: string): void {
   const alias = _hoistedAliases.get(name);

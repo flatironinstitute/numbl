@@ -86,7 +86,7 @@ describe("tensorSize2D", () => {
       kind: "tensor" as const,
       data: new FloatXArray(1),
       shape: [],
-      _rc: 1,
+      _refs: { c: 1 },
     };
     expect(tensorSize2D(t)).toEqual([1, 1]);
   });
@@ -96,7 +96,7 @@ describe("tensorSize2D", () => {
       kind: "tensor" as const,
       data: new FloatXArray(3),
       shape: [3],
-      _rc: 1,
+      _refs: { c: 1 },
     };
     expect(tensorSize2D(t)).toEqual([1, 3]);
   });
@@ -106,7 +106,7 @@ describe("tensorSize2D", () => {
       kind: "tensor" as const,
       data: new FloatXArray(6),
       shape: [2, 3],
-      _rc: 1,
+      _refs: { c: 1 },
     };
     expect(tensorSize2D(t)).toEqual([2, 3]);
   });

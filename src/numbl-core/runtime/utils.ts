@@ -73,14 +73,14 @@ export function sub2ind(shape: number[], subs: number[]): number {
  */
 export function shareRuntimeValue(v: RuntimeValue): RuntimeValue {
   if (isRuntimeTensor(v)) {
-    v._rc++;
+    v._refs.c++;
     return {
       kind: "tensor",
       data: v.data,
       imag: v.imag,
       shape: v.shape,
       _isLogical: v._isLogical,
-      _rc: v._rc,
+      _refs: v._refs,
     };
   }
   if (isRuntimeCell(v)) {

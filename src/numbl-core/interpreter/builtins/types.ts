@@ -369,7 +369,12 @@ export function makeTensor(
   // Strip trailing singleton dimensions (always keep minimum 2D)
   const s = [...shape];
   while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-  const t: RuntimeTensor = { kind: "tensor", data, shape: s, _rc: 1 };
+  const t: RuntimeTensor = {
+    kind: "tensor",
+    data,
+    shape: s,
+    _refs: { c: 1 },
+  };
   if (imag) t.imag = imag;
   return t;
 }

@@ -258,7 +258,7 @@ defineBuiltin({
           throw new RuntimeError("reshape: number of elements must not change");
         }
         if (isRuntimeTensor(v)) {
-          v._rc++;
+          v._refs.c++;
           const s = [...shape];
           while (s.length > 2 && s[s.length - 1] === 1) s.pop();
           return {
@@ -267,7 +267,7 @@ defineBuiltin({
             imag,
             shape: s,
             _isLogical: v._isLogical,
-            _rc: v._rc,
+            _refs: v._refs,
           } as RuntimeTensor;
         }
         return RTV.tensor(

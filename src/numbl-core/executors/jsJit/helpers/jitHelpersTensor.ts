@@ -43,7 +43,12 @@ export function makeTensor(
 ): RuntimeTensor {
   const s = [...shape];
   while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-  const t: RuntimeTensor = { kind: "tensor", data, shape: s, _rc: 1 };
+  const t: RuntimeTensor = {
+    kind: "tensor",
+    data,
+    shape: s,
+    _refs: { c: 1 },
+  };
   if (imag) t.imag = imag;
   return t;
 }
@@ -66,7 +71,11 @@ function reuseRealBuffer(dest: unknown, n: number): Float64Array | undefined {
     (dest as RuntimeTensor).kind === "tensor"
   ) {
     const t = dest as RuntimeTensor;
-    if (t._rc === 1 && t.data instanceof Float64Array && t.data.length === n) {
+    if (
+      t._refs.c === 1 &&
+      t.data instanceof Float64Array &&
+      t.data.length === n
+    ) {
       return t.data as Float64Array;
     }
   }
@@ -84,7 +93,7 @@ function reuseComplexBuffers(
   ) {
     const t = dest as RuntimeTensor;
     if (
-      t._rc === 1 &&
+      t._refs.c === 1 &&
       t.data instanceof Float64Array &&
       t.data.length === n &&
       t.imag instanceof Float64Array &&
@@ -161,7 +170,7 @@ export function shareTensor(v: unknown): unknown {
     v !== null &&
     (v as RuntimeTensor).kind === "tensor"
   ) {
-    (v as RuntimeTensor)._rc++;
+    (v as RuntimeTensor)._refs.c++;
   }
   return v;
 }
@@ -410,8 +419,8 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
 // `double(x)` is an identity for non-logical numeric tensors and just
 // strips the _isLogical flag for logical ones. The interpreter builtin
 // allocates a fresh copy when the input is logical; when the tensor is
-// uniquely owned (rc==1, typically a JIT scratch) we can clear the flag
-// in place instead.
+// uniquely owned (_refs.c==1, typically a JIT scratch) we can clear the
+// flag in place instead.
 
 export function tDouble(v: unknown): unknown {
   if (typeof v === "number" || typeof v === "boolean") return +v;
@@ -422,7 +431,7 @@ export function tDouble(v: unknown): unknown {
   ) {
     const t = v as RuntimeTensor;
     if (!t._isLogical) return t;
-    if (t._rc <= 1) {
+    if (t._refs.c <= 1) {
       t._isLogical = undefined;
       return t;
     }
@@ -433,7 +442,7 @@ export function tDouble(v: unknown): unknown {
       kind: "tensor",
       data: newData,
       shape: t.shape.slice(),
-      _rc: 1,
+      _refs: { c: 1 },
     } as RuntimeTensor;
   }
   return v;
@@ -501,8 +510,8 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
 
 export function unshare(t: unknown): RuntimeTensor {
   const tt = t as RuntimeTensor;
-  if (tt._rc <= 1) return tt;
-  tt._rc--;
+  if (tt._refs.c <= 1) return tt;
+  tt._refs.c--;
   const newData = uninitFloatX(tt.data.length);
   newData.set(tt.data);
   let newImag: FloatXArrayType | undefined;
@@ -514,7 +523,7 @@ export function unshare(t: unknown): RuntimeTensor {
     kind: "tensor",
     data: newData,
     shape: tt.shape.slice(),
-    _rc: 1,
+    _refs: { c: 1 },
   };
   if (newImag) copy.imag = newImag;
   if (tt._isLogical) copy._isLogical = tt._isLogical;

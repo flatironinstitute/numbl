@@ -332,8 +332,8 @@ export const jitHelpers = {
   tLog10: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log10),
   tSign: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sign),
 
-  // Var-to-var share: bumps _rc so the aliased tensor is no longer
-  // eligible for in-place buffer reuse by later ops.
+  // Var-to-var share: bumps the shared _refs.c so the aliased tensor is
+  // no longer eligible for in-place buffer reuse by later ops.
   shareTensor,
 
   // Fast paths for common scalar-producing / identity builtins.
@@ -698,12 +698,13 @@ export const jitHelpers = {
   //
   // Tensor args are bumped with shareTensor before the call. The caller
   // still holds each tensor variable, and the callee's parameter is a
-  // second alias — unshare() inside the callee only copies on `_rc > 1`,
+  // second alias — unshare() inside the callee only copies on `_refs.c > 1`,
   // so without the bump the callee's in-place writes would leak back to
   // the caller's buffer (COW violation). The bump is intentionally not
   // undone on return: if the callee called unshare, it already
-  // decremented _rc; if it didn't, leaving _rc over-counted just means a
-  // future mutation in the caller takes an extra copy — safe and rare.
+  // decremented _refs.c; if it didn't, leaving _refs.c over-counted just
+  // means a future mutation in the caller takes an extra copy — safe and
+  // rare.
   callUser: (
     rt: CallRt,
     name: string,
