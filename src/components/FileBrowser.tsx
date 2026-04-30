@@ -1,4 +1,5 @@
 import AddIcon from "@mui/icons-material/Add";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import CreateNewFolderIcon from "@mui/icons-material/CreateNewFolder";
 import DeleteIcon from "@mui/icons-material/Delete";
 import EditIcon from "@mui/icons-material/Edit";
@@ -34,6 +35,7 @@ interface FileBrowserProps {
   onAddFolder: (parentPath?: string) => void;
   onDeleteFile: (fileId: string) => void;
   onRenameFile: (fileId: string, newName: string) => void;
+  onDuplicateFile: (fileId: string) => void;
   onDeleteFolder: (folderPath: string) => void;
   onRenameFolder: (oldPath: string, newName: string) => void;
   onMoveFile: (fileId: string, targetFolder: string | null) => void;
@@ -164,6 +166,7 @@ function TreeNodeItem({
   onCommitRename,
   onCancelRename,
   onDelete,
+  onDuplicate,
   onAddFile,
   onAddFolder,
   onDeleteFolder,
@@ -186,6 +189,7 @@ function TreeNodeItem({
   onCommitRename: (value: string) => void;
   onCancelRename: () => void;
   onDelete: (fileId: string) => void;
+  onDuplicate: (fileId: string) => void;
   onAddFile: (folderPath?: string) => void;
   onAddFolder: (parentPath?: string) => void;
   onDeleteFolder: (folderPath: string) => void;
@@ -369,6 +373,7 @@ function TreeNodeItem({
               onCommitRename={onCommitRename}
               onCancelRename={onCancelRename}
               onDelete={onDelete}
+              onDuplicate={onDuplicate}
               onAddFile={onAddFile}
               onAddFolder={onAddFolder}
               onDeleteFolder={onDeleteFolder}
@@ -449,6 +454,21 @@ function TreeNodeItem({
             >
               <EditIcon sx={{ fontSize: 14 }} />
             </IconButton>
+            <IconButton
+              size="small"
+              onClick={e => {
+                e.stopPropagation();
+                if (node.file) onDuplicate(node.file.id);
+              }}
+              title="Duplicate"
+              sx={{
+                color: "#bbbbbb",
+                "&:hover": { color: "#ffffff" },
+                p: 0.25,
+              }}
+            >
+              <ContentCopyIcon sx={{ fontSize: 14 }} />
+            </IconButton>
             {fileCount > 1 && (
               <IconButton
                 size="small"
@@ -503,6 +523,7 @@ export function FileBrowser({
   onAddFolder,
   onDeleteFile,
   onRenameFile,
+  onDuplicateFile,
   onDeleteFolder,
   onRenameFolder,
   onMoveFile,
@@ -853,6 +874,7 @@ export function FileBrowser({
             onCommitRename={commitRename}
             onCancelRename={cancelRename}
             onDelete={onDeleteFile}
+            onDuplicate={onDuplicateFile}
             onAddFile={handleAddFile}
             onAddFolder={handleAddFolder}
             onDeleteFolder={onDeleteFolder}

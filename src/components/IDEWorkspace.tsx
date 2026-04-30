@@ -89,6 +89,7 @@ export interface IDEWorkspaceProps {
   renameFile: (fileId: string, newName: string) => void;
   renameFolder: (oldPath: string, newName: string) => void;
   moveFile: (fileId: string, targetFolder: string | null) => void;
+  duplicateFile: (fileId: string) => Promise<string>;
   uploadFiles: (
     entries: { path: string; content: string }[],
     targetFolder?: string
@@ -120,6 +121,7 @@ export function IDEWorkspace({
   renameFile,
   renameFolder,
   moveFile,
+  duplicateFile,
   uploadFiles,
   headerContent,
   projectName,
@@ -139,6 +141,7 @@ export function IDEWorkspace({
     renameSystemFile,
     renameSystemFolder,
     moveSystemFile,
+    duplicateSystemFile,
     loadSystemFileContent,
     getSystemVfsFiles,
     getSystemWorkspaceFiles,
@@ -1366,6 +1369,12 @@ export function IDEWorkspace({
           ? moveSystemFile(fileId, targetFolder)
           : moveFile(fileId, targetFolder)
       }
+      onDuplicateFile={async fileId => {
+        const id = isSystemFileId(fileId)
+          ? await duplicateSystemFile(fileId)
+          : await duplicateFile(fileId);
+        if (id) setTriggerRenameId(id);
+      }}
       onUploadFiles={uploadFiles}
       fileCount={allFiles.length}
       triggerRenameId={triggerRenameId}

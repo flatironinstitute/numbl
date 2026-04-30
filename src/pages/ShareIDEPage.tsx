@@ -42,6 +42,7 @@ export function ShareIDEPage() {
     renameFile,
     renameFolder,
     moveFile,
+    duplicateFile,
     uploadFiles,
     loadFileContent,
     loadAllContents,
@@ -177,6 +178,7 @@ export function ShareIDEPage() {
         renameFile={renameFile}
         renameFolder={renameFolder}
         moveFile={moveFile}
+        duplicateFile={duplicateFile}
         uploadFiles={uploadFiles}
         headerContent={headerContent}
         loadFileContent={loadFileContent}

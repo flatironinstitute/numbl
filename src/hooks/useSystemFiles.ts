@@ -9,6 +9,7 @@ import {
   SYSTEM_PROJECT_NAME,
 } from "../db/operations";
 import type { WorkspaceFile } from "./useProjectFiles";
+import { generateDuplicateName } from "./useProjectFiles";
 
 const SYSTEM_PREFIX = "system/";
 
@@ -244,6 +245,37 @@ export function useSystemFiles() {
     [systemFiles]
   );
 
+  const duplicateFile = useCallback(
+    async (fileId: string): Promise<string> => {
+      const source = systemFiles.find(f => f.id === fileId);
+      if (!source) return "";
+      const newName = generateDuplicateName(systemFiles, source.name);
+      const systemPath = newName.startsWith(SYSTEM_PREFIX)
+        ? newName.slice(SYSTEM_PREFIX.length)
+        : newName;
+      const sourceData =
+        contentCacheRef.current.get(fileId) ?? (await getFileContent(fileId));
+      const dataCopy = new Uint8Array(sourceData);
+      const now = Date.now();
+      const id = crypto.randomUUID();
+      await ensureSystemProject();
+      await db.transaction("rw", db.files, db.fileContents, async () => {
+        await db.files.add({
+          id,
+          projectName: SYSTEM_PROJECT_NAME,
+          path: systemPath,
+          createdAt: now,
+          updatedAt: now,
+        });
+        await db.fileContents.add({ id, data: dataCopy });
+      });
+      contentCacheRef.current.set(id, dataCopy);
+      setSystemFiles(prev => [...prev, { id, name: newName }]);
+      return id;
+    },
+    [systemFiles]
+  );
+
   const moveFile = useCallback(
     async (fileId: string, targetFolder: string | null) => {
       const file = systemFiles.find(f => f.id === fileId);
@@ -277,6 +309,7 @@ export function useSystemFiles() {
     renameSystemFile: renameFile,
     renameSystemFolder: renameFolder,
     moveSystemFile: moveFile,
+    duplicateSystemFile: duplicateFile,
     loadSystemFileContent: loadFileContent,
     loadAllSystemContents,
     getSystemVfsFiles,

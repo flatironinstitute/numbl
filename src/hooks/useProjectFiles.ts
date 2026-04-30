@@ -118,6 +118,7 @@ export interface UseProjectFilesResult {
   renameFile: (fileId: string, newName: string) => void;
   renameFolder: (oldPath: string, newName: string) => void;
   moveFile: (fileId: string, targetFolder: string | null) => void;
+  duplicateFile: (fileId: string) => Promise<string>;
   uploadFiles: (
     entries: { path: string; content: string }[],
     targetFolder?: string
@@ -158,6 +159,25 @@ function generateUniqueName(
     const baseName = `untitled${i === 1 ? "" : i}.m`;
     const fullName = folderPath ? `${folderPath}/${baseName}` : baseName;
     if (!existing.has(fullName)) return baseName;
+  }
+}
+
+export function generateDuplicateName(
+  files: WorkspaceFile[],
+  sourcePath: string
+): string {
+  const slash = sourcePath.lastIndexOf("/");
+  const folder = slash >= 0 ? sourcePath.slice(0, slash) : "";
+  const base = slash >= 0 ? sourcePath.slice(slash + 1) : sourcePath;
+  const dot = base.lastIndexOf(".");
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : "";
+  const existing = new Set(files.map(f => f.name));
+  for (let i = 1; ; i++) {
+    const suffix = i === 1 ? "_copy" : `_copy${i}`;
+    const candidate = `${stem}${suffix}${ext}`;
+    const fullName = folder ? `${folder}/${candidate}` : candidate;
+    if (!existing.has(fullName)) return fullName;
   }
 }
 
@@ -490,6 +510,28 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     [files]
   );
 
+  const handleDuplicateFile = useCallback(
+    async (fileId: string): Promise<string> => {
+      const source = files.find(f => f.id === fileId);
+      if (!source) return "";
+      const newName = generateDuplicateName(files, source.name);
+      const sourceData =
+        contentCacheRef.current.get(fileId) ?? (await getFileContent(fileId));
+      const dataCopy = new Uint8Array(sourceData);
+      try {
+        const file = await createFile(projectName, newName, dataCopy);
+        dispatch({ type: "ADD_FILE", file: { id: file.id, name: newName } });
+        contentCacheRef.current.set(file.id, dataCopy);
+        setActiveFileId(file.id);
+        return file.id;
+      } catch (error) {
+        console.error("Failed to duplicate file:", error);
+        return "";
+      }
+    },
+    [files, projectName, setActiveFileId]
+  );
+
   const handleUploadFiles = useCallback(
     async (
       entries: { path: string; content: string }[],
@@ -563,6 +605,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     renameFile: handleRenameFile,
     renameFolder: handleRenameFolder,
     moveFile: handleMoveFile,
+    duplicateFile: handleDuplicateFile,
     uploadFiles: handleUploadFiles,
     reload,
     loadFileContent,

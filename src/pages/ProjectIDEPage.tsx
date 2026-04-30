@@ -38,6 +38,7 @@ export function ProjectIDEPage() {
     renameFile,
     renameFolder,
     moveFile,
+    duplicateFile,
     uploadFiles,
     loadFileContent,
     loadAllContents,
@@ -147,6 +148,7 @@ export function ProjectIDEPage() {
       renameFile={renameFile}
       renameFolder={renameFolder}
       moveFile={moveFile}
+      duplicateFile={duplicateFile}
       uploadFiles={uploadFiles}
       headerContent={headerContent}
       projectName={projectName}

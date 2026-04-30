@@ -6,8 +6,8 @@ import {
   useEffect,
   useRef,
 } from "react";
-import type { WorkspaceFile } from "./useProjectFiles";
-import type { UseProjectFilesResult } from "./useProjectFiles";
+import { generateDuplicateName } from "./useProjectFiles";
+import type { WorkspaceFile, UseProjectFilesResult } from "./useProjectFiles";
 import {
   encodeShareData,
   decodeShareData,
@@ -293,6 +293,22 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
     [files]
   );
 
+  const handleDuplicateFile = useCallback(
+    async (fileId: string): Promise<string> => {
+      const source = files.find(f => f.id === fileId);
+      if (!source) return "";
+      const newName = generateDuplicateName(files, source.name);
+      const sourceData = contentMapRef.current.get(fileId) ?? new Uint8Array(0);
+      const dataCopy = new Uint8Array(sourceData);
+      const id = crypto.randomUUID();
+      contentMapRef.current.set(id, dataCopy);
+      dispatch({ type: "ADD_FILE", file: { id, name: newName } });
+      setActiveFileId(id);
+      return id;
+    },
+    [files]
+  );
+
   const handleUploadFiles = useCallback(
     async (
       entries: { path: string; content: string }[],
@@ -373,6 +389,7 @@ export function useShareProjectFiles(): UseProjectFilesResult & {
     renameFile: handleRenameFile,
     renameFolder: handleRenameFolder,
     moveFile: handleMoveFile,
+    duplicateFile: handleDuplicateFile,
     uploadFiles: handleUploadFiles,
     reload,
     loadFileContent,
