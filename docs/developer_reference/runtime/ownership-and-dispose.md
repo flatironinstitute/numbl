@@ -238,72 +238,88 @@ buffer. Safe but wasteful — the chunkie repro2 allocates ~78,000 buffers
 in a script that touches ~30 distinct tensors. The pool recycles, but
 bytes still flow through `copyFloatX` for every clone.
 
-The target model is **wrapper-level reference counting**:
+The target model is **buffer-level reference counting**:
 
-> Every `RuntimeTensor` carries `_refcount`. A borrowed seam ↑refcount
-> instead of cloning. A mutation seam (indexed write, in-place binop
-> output, setter body) checks `_refcount > 1` and clones-then-mutates
-> when it would otherwise corrupt a co-owner. `disposeValue` becomes a
-> ↓refcount; the buffer goes to the pool only when refcount hits 0.
+> A `RuntimeTensor` wrapper holds a shared `refcount: { count: number }`
+> cell. The cell is shared across every wrapper that aliases the same
+> `data` / `imag` typed-arrays; `shape` and `_isLogical` stay
+> wrapper-local. Borrowed seams produce a fresh wrapper (cheap JS
+> object) that copies the data/imag/refcount references and bumps the
+> cell. Mutation seams (indexed write, in-place binop output, setter
+> body) check `count > 1` and clone-then-mutate when it would corrupt a
+> co-owner. `disposeValue` decrements the cell; the buffer goes to the
+> pool only on the transition to zero.
 
-Sharing unit: the `RuntimeTensor` wrapper, not the underlying
-Float64Array. Slicing always allocates (MATLAB semantics — `b = a(2:5)`
-is a copy), so buffer-level sharing across reshape views buys nothing.
-Wrapper-level keeps the dispose API unchanged: `disposeFloatX(buf)` is
-still the leaf call, just gated by refcount.
+Why a boxed cell instead of a per-wrapper count: it lets multiple
+wrappers (different shapes — reshape views, transpose marker,
+complex/real flag toggles) share one buffer with one count. Slicing
+still always allocates (MATLAB semantics: `b = a(2:5)` is a copy), but
+reshape and other shape-only transforms become "alloc a wrapper, bump
+the cell" instead of "copy 1056 doubles".
 
 ### Migration phases
 
-1. **Plumbing.** Add `_refcount?: number` to `RuntimeTensor` (absent
-   means 1). Add `retain(t)` (`++_refcount`) and `release(t)`
-   (`--_refcount`; pool the buffer at zero) in `runtime/utils.ts`.
-   `disposeValue`'s tensor branch routes through `release`. No seams
-   convert yet — every existing deep-clone still happens, so the
-   behavior is identical and dispose-balance tests stay green.
+1. **Plumbing (landed).** `RuntimeTensor.refcount?: { count: number }`
+   (absent means count=1). `release(t)` decrements; pools the buffer at
+   zero. `disposeValue` tensor branch routes through `release`. The
+   COW gate inside `storeIntoTensor` clones-then-mutates when the cell
+   has `count > 1`. Dormant until Phase 2 starts producing shares — so
+   far every wrapper has either no cell or count=1, and every release
+   pools immediately, exactly like before.
 
-2. **Convert one read seam at a time.** Each of these currently
-   deep-clones a borrowed rhs/arg; replace the clone with `retain`:
-   - function-arg entry (`callUserFunction` line 524) — biggest single
-     win, especially for class instances passed to getters/setters
-   - `Assign` / `AssignLValue` borrowed-rhs branch
-   - closure snapshot (`Environment.snapshot`)
-   - `setRTValueField` unchanged-field reuse (already shares; just
-     needs an explicit retain so refcount accounting is honest)
+2. **Convert read seams to share (on hold).** Make `cloneTensor` (the
+   tensor branch of `deepCloneValue`) share the buffer + bump the cell
+   instead of allocating a fresh one. This single change activates COW
+   at every existing borrowed seam at once: function-arg entry, Assign
+   / AssignLValue borrowed rhs, `setRTValueField` unchanged-field
+   reuse, closure snapshot. The COW gate at `storeIntoTensor` protects
+   interpreter mutations.
 
-   Each seam lands as its own commit with regression tests.
+   **Blocker:** the JIT mutates tensor buffers directly via inline
+   `data[i] = val` codegen (`set1r_h` / `set2r_h` / `set3r_h` in
+   `jitCodegen.ts`); it doesn't consult the refcount cell. Activating
+   Phase 2 globally without updating the JIT corrupts caller views
+   anywhere a JIT-compiled function mutates one of its tensor args.
+   Other secondary places to audit: any path that reads from an env
+   binding and returns the wrapper (e.g. `evalin`) — under sharing,
+   the returned wrapper must be a `cloneTensor` (own cell entry) or
+   the callee's `release` would decrement the caller's view.
 
-3. **Mutation seams gain a COW check.** Anywhere a buffer is modified
-   in place — `indexStore`, in-place binop output reuse, setter body's
-   indexed writes — gate on `_refcount > 1` and substitute a fresh
-   buffer (clone-then-mutate) when shared. Single-owner mutations stay
-   in place.
+3. **Teach the JIT to honor refcounts.** Two viable approaches:
+   - At JIT entry, walk tensor params (top level + container fields)
+     and ensure-exclusive each one — break any share by copying the
+     buffer. One-shot per call; no per-mutation overhead. Equivalent
+     to today's per-call deep-copy cost, so JIT-targeted callsites are
+     no worse off than pre-COW. Ship Phase 2 + this in the same commit.
+   - Or: insert an inline COW check at each JIT mutation site
+     (`if (cell.count > 1) data = cloneBuffer(data, cell)`). Per-write
+     overhead but lets the JIT amortize when the share is genuinely
+     shared.
 
-4. **Retire `envCaptured` stickiness.** Once the snapshot path retains,
+   The first is simpler and recovers Phase 2's win for interpreter-
+   only paths immediately; the second is a follow-up optimization.
+
+4. **Retire `envCaptured` stickiness.** Once the snapshot path shares,
    the captured wrappers are protected by their refcounts. The
    function-exit dispose pass and `clear` no longer need the
    `envCaptured` / `capturedNames` skip — release lets refcount math
-   sort it out. Big simplification of `Environment` + the binding-
-   overwrite paths in `interpreterExec.ts`.
-
-5. **Class-instance COW.** `cloneClassInstance` (the chunkie hot path)
-   currently clones every field's tensor. After Phase 2, it can clone
-   the fields _Map_ but `retain` each field value — every getter call
-   goes from "clone N tensors" to "bump N refcounts". Mutation inside
-   a setter triggers the Phase 3 COW path on whatever field it writes.
+   sort it out. Simplifies `Environment` and the binding-overwrite
+   paths in `interpreterExec.ts`.
 
 ### Invariants
 
-- `_refcount` for a tensor is the count of distinct _owning_ paths
-  through the runtime state graph. Borrows held during expression
-  evaluation do not count.
-- `retain` and `release` are paired exactly: every retain has exactly
-  one matching release. Missing release leaks; extra release
-  double-disposes the buffer once it hits zero.
-- A mutation seam observing `_refcount > 1` MUST clone before writing.
-  No exceptions — that's the COW invariant.
-- A wrapper handed across a seam is either retained-and-shared (the
+- The `refcount` cell on a tensor is the count of distinct _owning_
+  paths through the runtime state graph that hold any wrapper aliasing
+  that buffer. Borrows held during expression evaluation do not count.
+- Every `cloneTensor` has exactly one matching `release` later.
+  Missing release leaks; extra release double-disposes the buffer
+  once the cell hits zero.
+- A mutation seam observing `count > 1` MUST clone the buffer (and
+  allocate a fresh cell) before writing. No exceptions — that is the
+  COW invariant.
+- A wrapper handed across a seam is either shared-and-bumped (the
   borrowed case) or moved (the owned case). It is never "borrowed
-  without retaining" across a function-call boundary; closures and
+  without bumping" across a function-call boundary; closures and
   structs all hold owning paths.
 - `disposeValue` on a non-tensor (cell, struct, class instance) still
   recurses; the leaves are tensors that go through `release`.

@@ -1254,8 +1254,24 @@ function storeIntoTensor(
     return deleteTensorRowsOrCols(base, indices);
   }
 
-  // No COW check needed: deep-clone-on-call and deep-clone-on-assignment
-  // mean `base` is never aliased — mutating its buffer in place is safe.
+  // Copy-on-write gate: if the buffer is shared (refcount cell present
+  // with count > 1), a co-owner observes it and would see in-place
+  // mutation. Allocate a fresh buffer + fresh refcount cell and switch
+  // `base` to the new wrapper; the original wrapper's refcount stays
+  // intact for its other owners, and the caller's dispose-of-old-base
+  // path will release our share normally. The caller writes our result
+  // back into its binding; co-owners' views stay untouched.
+  // See ownership-and-dispose.md §8a.
+  if (base.refcount && base.refcount.count > 1) {
+    base = {
+      kind: "tensor",
+      data: copyFloatX(base.data) as typeof base.data,
+      shape: base.shape.slice(),
+      refcount: { count: 1 },
+      ...(base.imag ? { imag: copyFloatX(base.imag) as typeof base.imag } : {}),
+      ...(base._isLogical ? { _isLogical: true } : {}),
+    };
+  }
 
   if (indices.length === 1) {
     return storeIntoTensor1D(base, indices[0], rhs);

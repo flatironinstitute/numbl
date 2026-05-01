@@ -119,9 +119,14 @@ export function deepCloneValue(v: RuntimeValue): RuntimeValue {
 }
 
 function cloneTensor(t: RuntimeTensor): RuntimeTensor {
-  // Route through copyFloatX/copyFloat64 (not the typed-array .slice()
-  // method) so the new buffer is counted by the allocator tally and
-  // can later be returned to the pool symmetrically with how it came in.
+  // Value-semantics clone: produces an independent wrapper with its own
+  // buffer. (Phase 2 of the COW plan — flipping this to share the
+  // buffer via a refcount cell — is on hold until the JIT path honors
+  // refcounts. The boxed refcount field on RuntimeTensor and the COW
+  // gate inside storeIntoTensor are in place; once the JIT either
+  // checks the cell at mutation seams or does its own ensure-exclusive
+  // at function entry, this body becomes a refcount bump + buffer
+  // share. See ownership-and-dispose.md §8a.)
   const out: RuntimeTensor = {
     kind: "tensor",
     data: copyFloatX(t.data) as typeof t.data,
@@ -207,39 +212,32 @@ function cloneClassInstanceArray(
  *  finish the migration off the COW API name. */
 export const shareRuntimeValue = deepCloneValue;
 
-// ── Refcount helpers (Phase 1 of the COW plan) ──────────────────────────
+// ── Refcount helpers (COW plan §8a) ─────────────────────────────────────
 //
-// Wrapper-level reference counting. `_refcount` absent means 1
-// (the default for a freshly-allocated tensor). `retain` bumps it,
-// `release` decrements; the underlying buffer is returned to the pool
-// only on the transition to 0. As of Phase 1, no read seam retains —
-// every existing deep-clone still happens — so refcounts stay at 1
-// for every live tensor and `release` always pools immediately.
-// See ownership-and-dispose.md §8a.
-
-/** Increment a tensor's refcount and return the same wrapper. Use at a
- *  borrowed seam in place of `cloneTensor` once Phase 2 starts
- *  converting them. The caller now owns one of the wrapper's
- *  references and must `release` it later. */
-export function retain(t: RuntimeTensor): RuntimeTensor {
-  t._refcount = (t._refcount ?? 1) + 1;
-  return t;
-}
+// Buffer-level reference counting via a shared `{ count: number }` cell
+// hung off `RuntimeTensor.refcount`. Absent means count=1 — the wrapper
+// is the sole owner of its buffer. Every value-semantics seam that used
+// to deep-copy now goes through `cloneTensor`, which produces a fresh
+// wrapper that *shares* the buffer and bumps the cell. `release`
+// decrements; the underlying buffer goes back to the pool only on the
+// transition to zero.
 
 /** Decrement a tensor's refcount; pool the buffer at zero. Pre-condition:
- *  the caller owned one of the wrapper's references (created via alloc /
- *  clone, or earlier `retain`). */
+ *  the caller owned one of the wrapper's references (created via alloc,
+ *  via `cloneTensor`, or via a builtin that returned a fresh wrapper). */
 export function release(t: RuntimeTensor): void {
-  const rc = (t._refcount ?? 1) - 1;
-  if (rc <= 0) {
-    // Mark as released so a stray retain after dispose is detectable
-    // (would underflow on the next release). The buffer goes home.
-    t._refcount = 0;
+  const rc = t.refcount;
+  if (!rc) {
+    // No cell allocated → implicit count=1; this release is the last.
     disposeFloatX(t.data);
     if (t.imag) disposeFloatX(t.imag);
     return;
   }
-  t._refcount = rc;
+  rc.count--;
+  if (rc.count <= 0) {
+    disposeFloatX(t.data);
+    if (t.imag) disposeFloatX(t.imag);
+  }
 }
 
 // ── Dispose ─────────────────────────────────────────────────────────────
