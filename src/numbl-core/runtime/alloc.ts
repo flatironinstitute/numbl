@@ -56,6 +56,24 @@ const poolX: Map<number, FloatXInstance[]> = FLOATX_IS_FLOAT64
   ? (pool64 as unknown as Map<number, FloatXInstance[]>)
   : new Map<number, FloatXInstance[]>();
 
+/** Tracks buffers currently in the pool. Disposing a buffer that's
+ *  already here is a hard error — it means two paths in the runtime
+ *  thought they uniquely owned the buffer. WeakSet auto-cleans entries
+ *  when the buffer is GC'd (e.g. after clearPool drops bucket
+ *  references and no other holder remains). */
+const _disposed = new WeakSet<
+  Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>
+>();
+
+class DoubleDisposeError extends Error {
+  constructor(n: number) {
+    super(
+      `Buffer (length ${n}) disposed twice — the runtime aliased a buffer it thought it uniquely owned. Investigate the most recent change to dispose sites.`
+    );
+    this.name = "DoubleDisposeError";
+  }
+}
+
 // ── Tally ─────────────────────────────────────────────────────────────
 
 export interface AllocStats {
@@ -129,6 +147,7 @@ function popFromPool64(n: number): Float64Array | undefined {
   const bucket = pool64.get(n);
   if (!bucket || bucket.length === 0) return undefined;
   const buf = bucket.pop()!;
+  _disposed.delete(buf);
   _poolBuffersHeld--;
   _poolBytesHeld -= n * 8;
   _poolHits++;
@@ -139,6 +158,7 @@ function popFromPoolX(n: number): FloatXInstance | undefined {
   const bucket = poolX.get(n);
   if (!bucket || bucket.length === 0) return undefined;
   const buf = bucket.pop()!;
+  _disposed.delete(buf);
   _poolBuffersHeld--;
   _poolBytesHeld -= n * FLOATX_BYTES;
   _poolHits++;
@@ -238,12 +258,22 @@ export function copyFloatX(
 
 /** Return a Float64Array to the pool. Caller asserts no other reference
  *  to the buffer is live — handing the same buffer twice or while it is
- *  still aliased corrupts the pool. */
+ *  still aliased corrupts the pool.
+ *
+ *  Poisons the buffer with NaN before pooling. Any caller that still
+ *  holds a stale reference and reads from it will see NaN propagate
+ *  into downstream computations / asserts, surfacing the use-after-
+ *  dispose bug instead of silently producing wrong numbers. The next
+ *  `zeroed`/`copy` alloc overwrites the poison; the uninitialized
+ *  `alloc` contractually requires the caller to write before reading,
+ *  so a conformant caller never observes the NaN. */
 export function disposeFloat64(buf: Float64Array<ArrayBufferLike>): void {
   const n = buf.length;
   if (n === 0) return;
+  if (_disposed.has(buf)) throw new DoubleDisposeError(n);
   _disposeCount++;
   _disposeBytes += n * 8;
+  buf.fill(NaN);
   if (_poolBytesHeld >= MAX_BYTES_HELD) return;
   let bucket = pool64.get(n);
   if (!bucket) {
@@ -252,11 +282,13 @@ export function disposeFloat64(buf: Float64Array<ArrayBufferLike>): void {
   }
   if (bucket.length >= MAX_BUCKET_SIZE) return;
   bucket.push(buf);
+  _disposed.add(buf);
   _poolBuffersHeld++;
   _poolBytesHeld += n * 8;
 }
 
-/** Return a FloatXArray to the pool. */
+/** Return a FloatXArray to the pool. Poisons with NaN — see
+ *  `disposeFloat64` for rationale. */
 export function disposeFloatX(
   buf: Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>
 ): void {
@@ -266,8 +298,10 @@ export function disposeFloatX(
   }
   const n = buf.length;
   if (n === 0) return;
+  if (_disposed.has(buf)) throw new DoubleDisposeError(n);
   _disposeCount++;
   _disposeBytes += n * FLOATX_BYTES;
+  buf.fill(NaN);
   if (_poolBytesHeld >= MAX_BYTES_HELD) return;
   let bucket = poolX.get(n);
   if (!bucket) {
@@ -276,6 +310,7 @@ export function disposeFloatX(
   }
   if (bucket.length >= MAX_BUCKET_SIZE) return;
   bucket.push(buf as FloatXInstance);
+  _disposed.add(buf);
   _poolBuffersHeld++;
   _poolBytesHeld += n * FLOATX_BYTES;
 }

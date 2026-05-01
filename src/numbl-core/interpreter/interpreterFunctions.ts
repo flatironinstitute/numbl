@@ -641,6 +641,19 @@ export function callUserFunction(
     } else {
       const keep = new Set<RuntimeValue>(outputs);
       if (this.ans !== undefined) keep.add(this.ans);
+      // Persistent values were just stored into the runtime's persistent
+      // map; disposing them here would corrupt that map.
+      for (const name of fnEnv.persistentNames) {
+        const v = fnEnv.get(name);
+        if (v !== undefined) keep.add(v);
+      }
+      // For varargout, the outputs are entries inside the cell wrapper —
+      // disposing the wrapper would recurse into and dispose the same
+      // entries we just extracted. Keep the wrapper.
+      if (hasVarargoutDecl) {
+        const v = fnEnv.get("varargout");
+        if (v !== undefined) keep.add(v);
+      }
       fnEnv.disposeLocalsExcept(keep);
     }
 
@@ -656,6 +669,10 @@ export function callUserFunction(
     } else {
       const keep = new Set<RuntimeValue>();
       if (this.ans !== undefined) keep.add(this.ans);
+      for (const name of fnEnv.persistentNames) {
+        const v = fnEnv.get(name);
+        if (v !== undefined) keep.add(v);
+      }
       fnEnv.disposeLocalsExcept(keep);
     }
     this.rt.annotateError(e);

@@ -136,6 +136,18 @@ export class Environment {
     this.vars.clear();
   }
 
+  /** Recursively dispose every local value, then clear the map. No-op
+   *  when the env is captured by a closure. Used by `clear` / `clear all`
+   *  and similar workspace-reset paths. */
+  disposeAllLocals(): void {
+    if (this.envCaptured) {
+      this.vars.clear();
+      return;
+    }
+    for (const v of this.vars.values()) disposeValue(v);
+    this.vars.clear();
+  }
+
   has(name: string): boolean {
     if (
       this._globalNames !== undefined &&

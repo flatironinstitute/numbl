@@ -14,6 +14,7 @@ import {
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
+import { disposeValue } from "../runtime/utils.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin } from "./builtins/index.js";
 import { toNumber, toString } from "../runtime/convert.js";
@@ -125,32 +126,38 @@ register("assignin", (ctx, args) => {
 });
 
 register("clear", (ctx, args) => {
-  // `clear` (no args): remove all locals in the current scope.
-  // `clear name1 name2 ...`: remove the named locals.
-  // Reserved-word args like 'all', 'global', 'functions', 'classes',
-  // '-regexp', etc. are not (yet) supported — fall through to the
-  // IBuiltin no-op stub so existing scripts that pass them keep
-  // running without error.
+  // `clear` / `clear all` / `clear variables`: dispose every local in
+  // this scope (returning dense buffers to the pool) then clear the map.
+  // Globals and persistents are intentionally left alive for now.
+  // `clear name1 name2 ...`: dispose and remove the named locals.
+  // Other reserved-word args (`functions`, `classes`, `-regexp`, etc.)
+  // fall through to the IBuiltin no-op stub.
   if (args.length === 0) {
-    ctx.env.clearLocals();
+    ctx.env.disposeAllLocals();
     return undefined;
   }
+  const CLEAR_ALL = new Set(["all", "variables"]);
   const RESERVED = new Set([
-    "all",
     "global",
     "functions",
     "classes",
     "import",
     "java",
     "mex",
-    "variables",
     "-regexp",
     "-except",
   ]);
   for (const arg of args) {
     const name = toString(ensureRuntimeValue(arg));
+    if (CLEAR_ALL.has(name)) {
+      ctx.env.disposeAllLocals();
+      continue;
+    }
     if (RESERVED.has(name)) return FALL_THROUGH;
-    ctx.env.delete(name);
+    const v = ctx.env.get(name);
+    if (ctx.env.delete(name) && v !== undefined && !ctx.env.envCaptured) {
+      disposeValue(v);
+    }
   }
   return undefined;
 });
