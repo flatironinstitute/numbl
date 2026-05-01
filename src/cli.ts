@@ -1189,6 +1189,7 @@ function cmdShowProfile(args: string[]) {
     | {
         allocCount: number;
         allocBytes: number;
+        freshAllocBytes: number;
         disposeCount: number;
         disposeBytes: number;
         poolHits: number;
@@ -1212,6 +1213,7 @@ function cmdShowProfile(args: string[]) {
     console.log(
       `  Allocations:   ${mem.allocCount} calls, ${fmtBytes(mem.allocBytes)}`
     );
+    console.log(`  Fresh bytes:   ${fmtBytes(mem.freshAllocBytes)}`);
     console.log(
       `  Disposals:     ${mem.disposeCount} calls, ${fmtBytes(mem.disposeBytes)}`
     );

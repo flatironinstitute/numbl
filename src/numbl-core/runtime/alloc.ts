@@ -83,8 +83,12 @@ export interface AllocStats {
   /** Number of allocator calls that returned a fresh-or-recycled buffer
    *  (zero-length skipped). */
   allocCount: number;
-  /** Total bytes returned across all allocator calls. */
+  /** Total bytes returned across all allocator calls (includes bytes
+   *  satisfied from the pool). */
   allocBytes: number;
+  /** Total bytes that came from real (system-memory) allocations —
+   *  i.e. bytes for pool-miss paths only. Pool hits do not count. */
+  freshAllocBytes: number;
   /** Number of dispose calls (zero-length skipped). */
   disposeCount: number;
   /** Total bytes passed to dispose. */
@@ -101,6 +105,7 @@ export interface AllocStats {
 
 let _allocCount = 0;
 let _allocBytes = 0;
+let _freshAllocBytes = 0;
 let _disposeCount = 0;
 let _disposeBytes = 0;
 let _poolHits = 0;
@@ -243,6 +248,7 @@ export function getAllocStats(): AllocStats {
   return {
     allocCount: _allocCount,
     allocBytes: _allocBytes,
+    freshAllocBytes: _freshAllocBytes,
     disposeCount: _disposeCount,
     disposeBytes: _disposeBytes,
     poolHits: _poolHits,
@@ -258,6 +264,7 @@ export function getAllocStats(): AllocStats {
 export function resetAllocStats(): void {
   _allocCount = 0;
   _allocBytes = 0;
+  _freshAllocBytes = 0;
   _disposeCount = 0;
   _disposeBytes = 0;
   _poolHits = 0;
@@ -312,6 +319,7 @@ export function allocFloat64(n: number): Float64Array<ArrayBuffer> {
     return pooled as Float64Array<ArrayBuffer>;
   }
   _poolMisses++;
+  _freshAllocBytes += n * 8;
   let buf: Float64Array<ArrayBuffer>;
   if (hasBuffer) {
     const b = Buffer.allocUnsafe(n * 8);
@@ -336,6 +344,7 @@ export function allocFloatX(n: number): FloatXInstance {
     return pooled;
   }
   _poolMisses++;
+  _freshAllocBytes += n * FLOATX_BYTES;
   let buf: FloatXInstance;
   if (hasBuffer) {
     const b = Buffer.allocUnsafe(n * FLOATX_BYTES);
@@ -365,6 +374,7 @@ export function zeroedFloat64(n: number): Float64Array<ArrayBuffer> {
     return pooled as Float64Array<ArrayBuffer>;
   }
   _poolMisses++;
+  _freshAllocBytes += n * 8;
   const buf = new Float64Array(n);
   recordAlloc(buf, n, 8);
   return buf;
@@ -382,6 +392,7 @@ export function zeroedFloatX(n: number): FloatXInstance {
     return pooled;
   }
   _poolMisses++;
+  _freshAllocBytes += n * FLOATX_BYTES;
   const buf = new FloatXArray(n) as FloatXInstance;
   recordAlloc(buf, n, FLOATX_BYTES);
   return buf;

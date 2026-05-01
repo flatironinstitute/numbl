@@ -112,6 +112,7 @@ export interface IDEWorkspaceProps {
 interface MemoryStats {
   allocCount: number;
   allocBytes: number;
+  freshAllocBytes: number;
   disposeCount: number;
   disposeBytes: number;
   poolHits: number;
@@ -137,6 +138,7 @@ function MemoryStatsView({ stats }: { stats: MemoryStats }) {
       rows: [
         ["Calls", stats.allocCount.toLocaleString()],
         ["Bytes", fmtBytes(stats.allocBytes)],
+        ["Fresh bytes", fmtBytes(stats.freshAllocBytes)],
       ],
     },
     {
@@ -275,6 +277,7 @@ export function IDEWorkspace({
   const [allocStats, setAllocStats] = useState<{
     allocCount: number;
     allocBytes: number;
+    freshAllocBytes: number;
     disposeCount: number;
     disposeBytes: number;
     poolHits: number;

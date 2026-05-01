@@ -19,6 +19,7 @@ const FLOATX_BYTES = (FloatXArray as unknown) === Float32Array ? 4 : 8;
 const ZERO_STATS = {
   allocCount: 0,
   allocBytes: 0,
+  freshAllocBytes: 0,
   disposeCount: 0,
   disposeBytes: 0,
   poolHits: 0,

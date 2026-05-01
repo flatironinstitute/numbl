@@ -826,6 +826,7 @@ export function executeCode(
       result.allocStats = {
         allocCount: end.allocCount - allocBaseline.allocCount,
         allocBytes: end.allocBytes - allocBaseline.allocBytes,
+        freshAllocBytes: end.freshAllocBytes - allocBaseline.freshAllocBytes,
         disposeCount: end.disposeCount - allocBaseline.disposeCount,
         disposeBytes: end.disposeBytes - allocBaseline.disposeBytes,
         poolHits: end.poolHits - allocBaseline.poolHits,
