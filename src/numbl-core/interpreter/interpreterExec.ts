@@ -82,7 +82,28 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "Assign": {
       const rawVal = this.evalExpr(stmt.expr);
       const val = Array.isArray(rawVal) ? rawVal[0] : rawVal;
-      const rv = this.rt.share(val) as RuntimeValue;
+      // Skip share for "definitely fresh" RHS expressions whose result
+      // can't already be in another slot (Binary/Unary/Range/Number/etc.).
+      // The default of always-sharing over-counts `_refs.c` for fresh
+      // values and keeps the buffer from ever reaching 0 → pool on the
+      // next overwrite. We deliberately keep share for FuncCall and
+      // Index — those can return wrappers that other state still
+      // aliases (e.g. `assignin`/`evalin` dynamic frames, struct field
+      // copies), and skipping share there surfaces pre-existing aliasing
+      // bugs unrelated to PR 3.
+      const t = stmt.expr.type;
+      const isFresh =
+        t === "Binary" ||
+        t === "Unary" ||
+        t === "Range" ||
+        t === "AnonFunc" ||
+        t === "FuncHandle" ||
+        t === "Tensor" ||
+        t === "Cell" ||
+        t === "ClassInstantiation";
+      const rv = (
+        isFresh ? (val as RuntimeValue) : this.rt.share(val)
+      ) as RuntimeValue;
       this.env.set(stmt.name, rv);
       this.ans = rv;
       if (!stmt.suppressed) {
@@ -150,6 +171,9 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "AssignLValue": {
       const val = this.evalExpr(stmt.expr);
+      // Always share for AssignLValue: the lvalue is a member or indexed
+      // store path that may alias caller-visible state (struct fields,
+      // cell elements, etc.) — keep the existing conservative bump.
       const rv = this.rt.share(val) as RuntimeValue;
       this.assignLValue(stmt.lvalue, rv);
       if (!stmt.suppressed) {

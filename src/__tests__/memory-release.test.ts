@@ -259,3 +259,106 @@ describe("release on isRuntimeTensor checks", () => {
     expect(isRuntimeTensor(t)).toBe(true);
   });
 });
+
+describe("refcount underflow detection", () => {
+  it("releasing a uniquely-owned tensor twice throws", () => {
+    const pool = new BufferPool();
+    setActivePool(pool);
+    const t = RTV.tensor(uninitFloat64(8), [1, 8]) as RuntimeTensor;
+    expect(t._refs.c).toBe(1);
+    releaseTensor(t); // c -> 0, buffer pooled
+    expect(() => releaseTensor(t)).toThrow(/underflow/);
+  });
+
+  it("releaseIfTensor on a c=0 wrapper also throws (treated as a double-release bug)", () => {
+    const pool = new BufferPool();
+    setActivePool(pool);
+    const t = RTV.tensor(uninitFloat64(4), [1, 4]) as RuntimeTensor;
+    releaseTensor(t); // c -> 0
+    expect(() => releaseIfTensor(t)).toThrow(/underflow/);
+  });
+});
+
+describe("BufferPool telemetry counters", () => {
+  let pool: BufferPool;
+  beforeEach(() => {
+    pool = new BufferPool();
+    setActivePool(pool);
+  });
+
+  it("counters start at zero", () => {
+    const s = pool.stats();
+    expect(s.acquireCount).toBe(0);
+    expect(s.acquireBytes).toBe(0);
+    expect(s.acquireHits).toBe(0);
+    expect(s.releaseCount).toBe(0);
+    expect(s.releaseBytes).toBe(0);
+    expect(s.currentBytes).toBe(0);
+  });
+
+  it("acquireF64 increments count and bytes; first call is a miss", () => {
+    pool.acquireF64(100);
+    const s = pool.stats();
+    expect(s.acquireCount).toBe(1);
+    expect(s.acquireBytes).toBe(800);
+    expect(s.acquireHits).toBe(0);
+  });
+
+  it("acquireF32 tracks bytes at 4 per element", () => {
+    pool.acquireF32(50);
+    const s = pool.stats();
+    expect(s.acquireCount).toBe(1);
+    expect(s.acquireBytes).toBe(200);
+  });
+
+  it("releasing a buffer to a non-empty bucket counts as a release; subsequent acquire is a hit", () => {
+    const a = pool.acquireF64(16); // miss
+    pool.release(a);
+    const b = pool.acquireF64(16); // hit
+    expect(b).toBe(a);
+    const s = pool.stats();
+    expect(s.acquireCount).toBe(2);
+    expect(s.acquireHits).toBe(1);
+    expect(s.releaseCount).toBe(1);
+    expect(s.releaseBytes).toBe(128);
+  });
+
+  it("zero-length acquires/releases are not counted", () => {
+    pool.acquireF64(0);
+    pool.release(new Float64Array(0));
+    const s = pool.stats();
+    expect(s.acquireCount).toBe(0);
+    expect(s.releaseCount).toBe(0);
+  });
+
+  it("releases discarded by the bucket cap are still counted as releases (audit trail)", () => {
+    const tinyPool = new BufferPool({ maxPerBucket: 1 });
+    const a = tinyPool.acquireF64(8);
+    const b = tinyPool.acquireF64(8);
+    tinyPool.release(a); // pooled
+    tinyPool.release(b); // discarded by cap
+    const s = tinyPool.stats();
+    expect(s.releaseCount).toBe(2);
+    expect(s.releaseBytes).toBe(128);
+    expect(tinyPool.bucketSize("f64", 8)).toBe(1);
+  });
+
+  it("clear() resets bucket state but preserves telemetry counters", () => {
+    pool.release(pool.acquireF64(8));
+    const before = pool.stats();
+    pool.clear();
+    const after = pool.stats();
+    expect(after.acquireCount).toBe(before.acquireCount);
+    expect(after.releaseCount).toBe(before.releaseCount);
+    expect(after.currentBytes).toBe(0);
+  });
+
+  it("end-to-end: a tensor allocated via uninitFloat64 + releaseTensor leaves clean stats", () => {
+    const t = RTV.tensor(uninitFloat64(20), [4, 5]) as RuntimeTensor;
+    releaseTensor(t);
+    const s = pool.stats();
+    expect(s.acquireCount).toBe(1);
+    expect(s.releaseCount).toBe(1);
+    expect(s.acquireBytes).toBe(s.releaseBytes);
+  });
+});

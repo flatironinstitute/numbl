@@ -77,6 +77,111 @@ import type { VfsChanges } from "../vfs/VirtualFileSystem";
 import { useSystemFiles } from "../hooks/useSystemFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
 
+interface BufferPoolStats {
+  acquireCount: number;
+  acquireBytes: number;
+  acquireHits: number;
+  releaseCount: number;
+  releaseBytes: number;
+  currentBytes: number;
+}
+
+function formatBytes(n: number): string {
+  const sign = n < 0 ? "-" : "";
+  const abs = Math.abs(n);
+  if (abs < 1024) return `${sign}${abs} B`;
+  if (abs < 1024 * 1024) return `${sign}${(abs / 1024).toFixed(1)} KB`;
+  if (abs < 1024 * 1024 * 1024)
+    return `${sign}${(abs / (1024 * 1024)).toFixed(1)} MB`;
+  return `${sign}${(abs / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function BufferPoolStatsView({ stats }: { stats: BufferPoolStats }) {
+  const reuseRate =
+    stats.acquireCount > 0
+      ? ((stats.acquireHits / stats.acquireCount) * 100).toFixed(1)
+      : "0.0";
+  // Net alloc = bytes the pool's `acquire*` vended out that haven't yet
+  // been seen on the release side. Direct `new FloatXArray` allocations
+  // bypass `acquire*` but their data still funnels through release on
+  // rebind, so this can go negative under steady state — that's fine.
+  const netAllocBytes = stats.acquireBytes - stats.releaseBytes;
+  const rows: { label: string; value: string; hint?: string }[] = [
+    {
+      label: "Acquires",
+      value: `${stats.acquireCount.toLocaleString()} / ${formatBytes(stats.acquireBytes)}`,
+      hint: "Pool acquireF64/F32 calls (uninitFloat* path)",
+    },
+    {
+      label: "  pool reuse",
+      value: `${stats.acquireHits.toLocaleString()} hits (${reuseRate}%)`,
+      hint: "Subset of acquires served from the free list",
+    },
+    {
+      label: "Releases",
+      value: `${stats.releaseCount.toLocaleString()} / ${formatBytes(stats.releaseBytes)}`,
+      hint: "Total release() calls (incl. those discarded by caps)",
+    },
+    {
+      label: "Resident in pool",
+      value: formatBytes(stats.currentBytes),
+      hint: "Bytes currently held in the free list, ready to recycle",
+    },
+    {
+      label: "Net (acquire − release)",
+      value: formatBytes(netAllocBytes),
+      hint:
+        "Negative is normal when COW / zeros / etc. allocate directly " +
+        "but route releases through the pool",
+    },
+  ];
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary" sx={{ mb: 1 }}>
+        Tensor buffer pool — counters since this runtime started.
+      </Typography>
+      <Box
+        sx={{
+          fontFamily: "monospace",
+          fontSize: "13px",
+          mt: 1,
+        }}
+      >
+        {rows.map(r => (
+          <Box
+            key={r.label}
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "200px 1fr",
+              alignItems: "baseline",
+              py: 0.25,
+            }}
+          >
+            <Box sx={{ color: "text.secondary", whiteSpace: "pre" }}>
+              {r.label}
+            </Box>
+            <Box>
+              {r.value}
+              {r.hint && (
+                <Box
+                  component="span"
+                  sx={{
+                    color: "text.secondary",
+                    fontSize: "0.75rem",
+                    ml: 1,
+                  }}
+                >
+                  — {r.hint}
+                </Box>
+              )}
+            </Box>
+          </Box>
+        ))}
+      </Box>
+    </Box>
+  );
+}
+
 export interface IDEWorkspaceProps {
   files: WorkspaceFile[];
   activeFileId: string;
@@ -179,8 +284,16 @@ export function IDEWorkspace({
   );
   const [outputTab, setOutputTab] = useState(0);
   const [internalsSubTab, setInternalsSubTab] = useState<
-    "js" | "ast" | "dispatch"
+    "js" | "ast" | "dispatch" | "memory"
   >("js");
+  const [bufferPoolStats, setBufferPoolStats] = useState<{
+    acquireCount: number;
+    acquireBytes: number;
+    acquireHits: number;
+    releaseCount: number;
+    releaseBytes: number;
+    currentBytes: number;
+  } | null>(null);
   const [allFilesRep, setAllFilesRep] = useState<
     { name: string; ast: unknown; irProgram: unknown }[]
   >([]);
@@ -457,6 +570,7 @@ export function IDEWorkspace({
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
+          setBufferPoolStats(msg.bufferPool ?? null);
           setIsRunning(false);
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
@@ -1228,6 +1342,17 @@ export function IDEWorkspace({
                 >
                   Dispatch
                 </ToggleButton>
+                <ToggleButton
+                  value="memory"
+                  sx={{
+                    py: 0,
+                    px: 1,
+                    fontSize: "0.75rem",
+                    textTransform: "none",
+                  }}
+                >
+                  Memory
+                </ToggleButton>
               </ToggleButtonGroup>
             </Box>
             <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
@@ -1269,6 +1394,17 @@ export function IDEWorkspace({
                   ) : (
                     <Typography variant="body2" color="text.secondary">
                       No dispatchUnknown calls
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {internalsSubTab === "memory" && (
+                <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
+                  {bufferPoolStats ? (
+                    <BufferPoolStatsView stats={bufferPoolStats} />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Run a script to see tensor buffer pool statistics
                     </Typography>
                   )}
                 </Box>

@@ -43,6 +43,28 @@ const DEFAULT_MAX_PER_BUCKET = 256;
 
 const hasBuffer = typeof Buffer !== "undefined";
 
+/** Telemetry snapshot of a BufferPool. Exposed via ProfileData so the
+ *  --profile output can show acquire / release totals and the pool's
+ *  effectiveness — divergence between `acquireBytes` and `releaseBytes`
+ *  signals a leak. */
+export interface BufferPoolStats {
+  /** Total acquireF64 + acquireF32 calls (excluding zero-length). */
+  acquireCount: number;
+  /** Total bytes returned by acquire calls. */
+  acquireBytes: number;
+  /** Subset of acquireCount that came from the pool's free list (vs. a
+   *  fresh allocation). `acquireHits / acquireCount` is the reuse rate. */
+  acquireHits: number;
+  /** Total release() calls that ran (including those that were discarded
+   *  due to caps). */
+  releaseCount: number;
+  /** Total bytes that were attempted to be released. */
+  releaseBytes: number;
+  /** Bytes currently sitting in the pool's buckets (not yet handed back
+   *  to a caller). */
+  currentBytes: number;
+}
+
 export class BufferPool {
   private f64: Map<number, Float64Array[]> = new Map();
   private f32: Map<number, Float32Array[]> = new Map();
@@ -50,6 +72,14 @@ export class BufferPool {
   readonly maxBytes: number;
   readonly maxPerBucket: number;
   readonly debug: boolean;
+
+  // ── Telemetry counters ───────────────────────────────────────────────
+  // Always tracked (negligible cost); surfaced via stats() / --profile.
+  private acquireCount = 0;
+  private acquireBytes = 0;
+  private acquireHits = 0;
+  private releaseCount = 0;
+  private releaseBytes = 0;
 
   constructor(opts?: BufferPoolOptions) {
     this.maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -59,10 +89,13 @@ export class BufferPool {
 
   acquireF64(n: number): Float64Array {
     if (n === 0) return new Float64Array(0);
+    this.acquireCount++;
+    this.acquireBytes += n * 8;
     const bucket = this.f64.get(n);
     if (bucket && bucket.length > 0) {
       const buf = bucket.pop()!;
       this.bytesInPool -= n * 8;
+      this.acquireHits++;
       return buf;
     }
     return allocF64(n);
@@ -70,10 +103,13 @@ export class BufferPool {
 
   acquireF32(n: number): Float32Array {
     if (n === 0) return new Float32Array(0);
+    this.acquireCount++;
+    this.acquireBytes += n * 4;
     const bucket = this.f32.get(n);
     if (bucket && bucket.length > 0) {
       const buf = bucket.pop()!;
       this.bytesInPool -= n * 4;
+      this.acquireHits++;
       return buf;
     }
     return allocF32(n);
@@ -86,6 +122,8 @@ export class BufferPool {
     const n = buf.length;
     if (n === 0) return false;
     const bytes = buf.BYTES_PER_ELEMENT * n;
+    this.releaseCount++;
+    this.releaseBytes += bytes;
     let bucketMap: Map<number, Float64Array[] | Float32Array[]>;
     if (buf instanceof Float64Array) {
       bucketMap = this.f64;
@@ -118,11 +156,23 @@ export class BufferPool {
     return m.get(n)?.length ?? 0;
   }
 
-  /** Drop all retained buffers. */
+  /** Drop all retained buffers. Does not reset telemetry counters. */
   clear(): void {
     this.f64.clear();
     this.f32.clear();
     this.bytesInPool = 0;
+  }
+
+  /** Snapshot of acquire/release telemetry. */
+  stats(): BufferPoolStats {
+    return {
+      acquireCount: this.acquireCount,
+      acquireBytes: this.acquireBytes,
+      acquireHits: this.acquireHits,
+      releaseCount: this.releaseCount,
+      releaseBytes: this.releaseBytes,
+      currentBytes: this.bytesInPool,
+    };
   }
 }
 
@@ -169,11 +219,20 @@ export function acquireFloatX(n: number): InstanceType<typeof FloatXArray> {
 // shared `_refs.c` and pool the buffer when the count hits zero.
 
 /** Decrement a tensor's shared refcount; if the buffer becomes unaliased,
- *  return its data (and imag, if present) to the active pool. */
+ *  return its data (and imag, if present) to the active pool. Throws if
+ *  the count would go negative — that indicates a double-release bug in
+ *  the runtime and is never legal. */
 export function releaseTensor(t: RuntimeTensor): void {
-  if (--t._refs.c === 0) {
+  const next = --t._refs.c;
+  if (next === 0) {
     _activePool.release(t.data);
     if (t.imag) _activePool.release(t.imag);
+  } else if (next < 0) {
+    throw new Error(
+      `Tensor refcount underflow: _refs.c went to ${next}. ` +
+        `This indicates a double-release in the runtime — a slot dropped ` +
+        `an alias that was never registered (or was released twice).`
+    );
   }
 }
 
