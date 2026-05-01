@@ -133,6 +133,13 @@ export type RuntimeTensor = {
   shape: number[]; // e.g. [3,4] for 3x4 matrix
   /** When true, this tensor represents a logical (boolean) array from comparisons/logical ops. */
   _isLogical?: boolean;
+  /** Reference count — how many distinct owning paths through the
+   *  runtime state graph hold this wrapper. Absent means 1 (default
+   *  for freshly-allocated wrappers). Phase 1 of the COW plan only
+   *  routes `disposeValue` through release; no seams retain yet, so
+   *  `_refcount` stays at 1 for every tensor and behavior is
+   *  unchanged. See ownership-and-dispose.md §8a. */
+  _refcount?: number;
 };
 
 export type RuntimeChar = {

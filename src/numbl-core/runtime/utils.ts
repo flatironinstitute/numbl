@@ -207,6 +207,41 @@ function cloneClassInstanceArray(
  *  finish the migration off the COW API name. */
 export const shareRuntimeValue = deepCloneValue;
 
+// ── Refcount helpers (Phase 1 of the COW plan) ──────────────────────────
+//
+// Wrapper-level reference counting. `_refcount` absent means 1
+// (the default for a freshly-allocated tensor). `retain` bumps it,
+// `release` decrements; the underlying buffer is returned to the pool
+// only on the transition to 0. As of Phase 1, no read seam retains —
+// every existing deep-clone still happens — so refcounts stay at 1
+// for every live tensor and `release` always pools immediately.
+// See ownership-and-dispose.md §8a.
+
+/** Increment a tensor's refcount and return the same wrapper. Use at a
+ *  borrowed seam in place of `cloneTensor` once Phase 2 starts
+ *  converting them. The caller now owns one of the wrapper's
+ *  references and must `release` it later. */
+export function retain(t: RuntimeTensor): RuntimeTensor {
+  t._refcount = (t._refcount ?? 1) + 1;
+  return t;
+}
+
+/** Decrement a tensor's refcount; pool the buffer at zero. Pre-condition:
+ *  the caller owned one of the wrapper's references (created via alloc /
+ *  clone, or earlier `retain`). */
+export function release(t: RuntimeTensor): void {
+  const rc = (t._refcount ?? 1) - 1;
+  if (rc <= 0) {
+    // Mark as released so a stray retain after dispose is detectable
+    // (would underflow on the next release). The buffer goes home.
+    t._refcount = 0;
+    disposeFloatX(t.data);
+    if (t.imag) disposeFloatX(t.imag);
+    return;
+  }
+  t._refcount = rc;
+}
+
 // ── Dispose ─────────────────────────────────────────────────────────────
 
 /**
@@ -215,6 +250,11 @@ export const shareRuntimeValue = deepCloneValue;
  * tensor / buffer reachable from it) has no other live references — a
  * stray alias becomes a use-after-free once the pool hands the buffer
  * out again.
+ *
+ * Tensors route through `release`: at refcount 1 (the only case in
+ * Phase 1) the buffer is pooled immediately; later phases will share
+ * wrappers and let release decrement to a non-zero value, leaving the
+ * buffer alive for the remaining co-owners.
  *
  * Skipped (left to GC):
  *   - Handle-class instances (and arrays of them): shared by reference.
@@ -226,8 +266,7 @@ export function disposeValue(v: RuntimeValue): void {
   if (v === null || v === undefined) return;
   if (typeof v !== "object") return;
   if (isRuntimeTensor(v)) {
-    disposeFloatX(v.data);
-    if (v.imag) disposeFloatX(v.imag);
+    release(v);
     return;
   }
   if (isRuntimeCell(v)) {

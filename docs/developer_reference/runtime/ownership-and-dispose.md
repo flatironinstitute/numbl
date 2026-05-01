@@ -230,6 +230,84 @@ specific commits):
 When closing a gap, update this table; when opening a new behavior,
 extend §3–§7 first, then implement.
 
+## 8a. Copy-on-write plan (in progress)
+
+Today, every borrowed seam (Assign with Ident rhs, function-arg entry,
+struct/cell field set, closure snapshot) eager-deep-clones the tensor
+buffer. Safe but wasteful — the chunkie repro2 allocates ~78,000 buffers
+in a script that touches ~30 distinct tensors. The pool recycles, but
+bytes still flow through `copyFloatX` for every clone.
+
+The target model is **wrapper-level reference counting**:
+
+> Every `RuntimeTensor` carries `_refcount`. A borrowed seam ↑refcount
+> instead of cloning. A mutation seam (indexed write, in-place binop
+> output, setter body) checks `_refcount > 1` and clones-then-mutates
+> when it would otherwise corrupt a co-owner. `disposeValue` becomes a
+> ↓refcount; the buffer goes to the pool only when refcount hits 0.
+
+Sharing unit: the `RuntimeTensor` wrapper, not the underlying
+Float64Array. Slicing always allocates (MATLAB semantics — `b = a(2:5)`
+is a copy), so buffer-level sharing across reshape views buys nothing.
+Wrapper-level keeps the dispose API unchanged: `disposeFloatX(buf)` is
+still the leaf call, just gated by refcount.
+
+### Migration phases
+
+1. **Plumbing.** Add `_refcount?: number` to `RuntimeTensor` (absent
+   means 1). Add `retain(t)` (`++_refcount`) and `release(t)`
+   (`--_refcount`; pool the buffer at zero) in `runtime/utils.ts`.
+   `disposeValue`'s tensor branch routes through `release`. No seams
+   convert yet — every existing deep-clone still happens, so the
+   behavior is identical and dispose-balance tests stay green.
+
+2. **Convert one read seam at a time.** Each of these currently
+   deep-clones a borrowed rhs/arg; replace the clone with `retain`:
+   - function-arg entry (`callUserFunction` line 524) — biggest single
+     win, especially for class instances passed to getters/setters
+   - `Assign` / `AssignLValue` borrowed-rhs branch
+   - closure snapshot (`Environment.snapshot`)
+   - `setRTValueField` unchanged-field reuse (already shares; just
+     needs an explicit retain so refcount accounting is honest)
+
+   Each seam lands as its own commit with regression tests.
+
+3. **Mutation seams gain a COW check.** Anywhere a buffer is modified
+   in place — `indexStore`, in-place binop output reuse, setter body's
+   indexed writes — gate on `_refcount > 1` and substitute a fresh
+   buffer (clone-then-mutate) when shared. Single-owner mutations stay
+   in place.
+
+4. **Retire `envCaptured` stickiness.** Once the snapshot path retains,
+   the captured wrappers are protected by their refcounts. The
+   function-exit dispose pass and `clear` no longer need the
+   `envCaptured` / `capturedNames` skip — release lets refcount math
+   sort it out. Big simplification of `Environment` + the binding-
+   overwrite paths in `interpreterExec.ts`.
+
+5. **Class-instance COW.** `cloneClassInstance` (the chunkie hot path)
+   currently clones every field's tensor. After Phase 2, it can clone
+   the fields _Map_ but `retain` each field value — every getter call
+   goes from "clone N tensors" to "bump N refcounts". Mutation inside
+   a setter triggers the Phase 3 COW path on whatever field it writes.
+
+### Invariants
+
+- `_refcount` for a tensor is the count of distinct _owning_ paths
+  through the runtime state graph. Borrows held during expression
+  evaluation do not count.
+- `retain` and `release` are paired exactly: every retain has exactly
+  one matching release. Missing release leaks; extra release
+  double-disposes the buffer once it hits zero.
+- A mutation seam observing `_refcount > 1` MUST clone before writing.
+  No exceptions — that's the COW invariant.
+- A wrapper handed across a seam is either retained-and-shared (the
+  borrowed case) or moved (the owned case). It is never "borrowed
+  without retaining" across a function-call boundary; closures and
+  structs all hold owning paths.
+- `disposeValue` on a non-tensor (cell, struct, class instance) still
+  recurses; the leaves are tensors that go through `release`.
+
 ## 9. Worked examples
 
 ### 9.1 `a = [1 2 3]`
