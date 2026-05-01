@@ -290,6 +290,26 @@ describe("dispose-balance: multi-output assignment", () => {
   });
 });
 
+describe("dispose-balance: method calls and function-handles", () => {
+  // MethodCall and function-handle index paths previously used the
+  // untracked `evalArgs` / `evalIndicesWithEnd` and leaked their owned
+  // tensor args.
+  it("function handle invocation with owned arg", () => {
+    expectBalanced(`
+      f = @(x) x + 1;
+      r = f(1:5);
+      clear all;
+    `);
+  });
+
+  it("max of owned binop", () => {
+    expectBalanced(`
+      r = max([1 2 3] + 1);
+      clear all;
+    `);
+  });
+});
+
 describe("dispose-balance: indexed read with owned index", () => {
   // `x(1:N)` — the range tensor used as the index is owned, never
   // bound to a variable, and consumed by the index implementation

@@ -608,11 +608,25 @@ export function evalExprNargout(
           // Not a struct field
         }
       }
-      const args =
+      const argResult =
         fieldVal !== undefined
-          ? this.evalIndicesWithEnd(fieldVal, expr.args)
-          : this.evalArgs(expr.args);
-      return this.rt.methodDispatch(expr.name, nargout, [base, ...args]);
+          ? this.evalIndicesWithEndTracked(fieldVal, expr.args)
+          : this.evalArgsTracked(expr.args);
+      const args = argResult.args;
+      const ownedArgs = argResult.ownedArgs;
+      const result = this.rt.methodDispatch(expr.name, nargout, [
+        base,
+        ...args,
+      ]);
+      if (ownedArgs.length > 0) {
+        const resultRv = ensureRuntimeValue(
+          Array.isArray(result) ? result[0] : result
+        );
+        for (const a of ownedArgs) {
+          if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+        }
+      }
+      return result;
     }
 
     case "SuperMethodCall": {
@@ -907,8 +921,17 @@ export function evalFuncCall(
   if (varVal !== undefined) {
     const rv = ensureRuntimeValue(varVal);
     if (isRuntimeFunction(rv)) {
-      const args = this.evalArgs(expr.args);
-      return this.rt.index(rv, args, nargout);
+      const { args, ownedArgs } = this.evalArgsTracked(expr.args);
+      const result = this.rt.index(rv, args, nargout);
+      if (ownedArgs.length > 0) {
+        const resultRv = ensureRuntimeValue(
+          Array.isArray(result) ? result[0] : result
+        );
+        for (const a of ownedArgs) {
+          if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+        }
+      }
+      return result;
     }
     const { args, ownedArgs } = this.evalIndicesWithEndTracked(
       varVal,
@@ -1450,12 +1473,17 @@ export function assignLValue(
         lv.base.type === "Ident"
           ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
           : this.evalLValueBase(lv.base, RTV.cell([], [0, 0]));
-      const indices = this.evalIndicesWithEnd(base, lv.indices);
+      const { args: indices, ownedArgs: ownedCellIdxArgs } =
+        this.evalIndicesWithEndTracked(base, lv.indices);
       const result = this.rt.indexCellStore(base, indices, value);
+      const cellResultRv = ensureRuntimeValue(result);
       if (lv.base.type === "Ident") {
-        this.env.set(lv.base.name, ensureRuntimeValue(result));
+        this.env.set(lv.base.name, cellResultRv);
       } else {
-        this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+        this.writeLValueBase(lv.base, cellResultRv);
+      }
+      for (const a of ownedCellIdxArgs) {
+        if (a !== cellResultRv && isRuntimeTensor(a)) disposeValue(a);
       }
       break;
     }
@@ -1559,17 +1587,27 @@ export function writeLValueBase(
       base.base,
       RTV.tensor(zeroedFloatX(0), [0, 0])
     );
-    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
+    const { args: indices, ownedArgs: ownedIdx } =
+      this.evalIndicesWithEndTracked(baseVal, base.indices);
     // Use builtinIndexStore for compound assignment store-back —
     // this bypasses subsasgn for class instances (the compound decomposition
     // already handled the field set; the store-back should use builtin mechanics)
     const result = this.rt.builtinIndexStore(baseVal, indices, value);
-    this.writeLValueBase(base.base, ensureRuntimeValue(result));
+    const resultRv = ensureRuntimeValue(result);
+    this.writeLValueBase(base.base, resultRv);
+    for (const a of ownedIdx) {
+      if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+    }
   } else if (base.type === "IndexCell") {
     const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
-    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
+    const { args: indices, ownedArgs: ownedIdx } =
+      this.evalIndicesWithEndTracked(baseVal, base.indices);
     const result = this.rt.indexCellStore(baseVal, indices, value);
-    this.writeLValueBase(base.base, ensureRuntimeValue(result));
+    const resultRv = ensureRuntimeValue(result);
+    this.writeLValueBase(base.base, resultRv);
+    for (const a of ownedIdx) {
+      if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+    }
   }
 }
 
@@ -1601,7 +1639,8 @@ export function evalLValueBase(
   }
   if (base.type === "Index") {
     const baseVal = this.evalLValueBase(base.base, RTV.struct({}));
-    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
+    const { args: indices, ownedArgs: ownedIdx } =
+      this.evalIndicesWithEndTracked(baseVal, base.indices);
     try {
       let skipSubsref: boolean | string = false;
       if (this.currentClassName) {
@@ -1613,17 +1652,42 @@ export function evalLValueBase(
           skipSubsref = true;
         }
       }
-      return this.rt.index(baseVal, indices, 1, skipSubsref);
+      const result = this.rt.index(baseVal, indices, 1, skipSubsref);
+      if (ownedIdx.length > 0) {
+        const resultRv = ensureRuntimeValue(
+          Array.isArray(result) ? result[0] : result
+        );
+        for (const a of ownedIdx) {
+          if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+        }
+      }
+      return result;
     } catch {
+      for (const a of ownedIdx) {
+        if (isRuntimeTensor(a)) disposeValue(a);
+      }
       return defaultVal;
     }
   }
   if (base.type === "IndexCell") {
     const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
-    const indices = this.evalIndicesWithEnd(baseVal, base.indices);
+    const { args: indices, ownedArgs: ownedIdx } =
+      this.evalIndicesWithEndTracked(baseVal, base.indices);
     try {
-      return this.rt.indexCell(baseVal, indices);
+      const result = this.rt.indexCell(baseVal, indices);
+      if (ownedIdx.length > 0) {
+        const resultRv = ensureRuntimeValue(
+          Array.isArray(result) ? result[0] : result
+        );
+        for (const a of ownedIdx) {
+          if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+        }
+      }
+      return result;
     } catch {
+      for (const a of ownedIdx) {
+        if (isRuntimeTensor(a)) disposeValue(a);
+      }
       return defaultVal;
     }
   }

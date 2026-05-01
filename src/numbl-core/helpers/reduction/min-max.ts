@@ -30,6 +30,7 @@ import { tensorOps, OpReduce } from "../../ops/index.js";
 import {
   allocFloatX,
   copyFloatX,
+  disposeFloat64,
   zeroedFloat64,
   zeroedFloatX,
 } from "../../runtime/alloc.js";
@@ -361,7 +362,11 @@ export function minMaxImpl(
           const out = zeroedFloat64(1);
           const op = name === "min" ? OpReduce.MIN : OpReduce.MAX;
           tensorOps.realFlatReduce(op, v.data.length, v.data, out);
-          return v._isLogical ? RTV.logical(out[0] !== 0) : RTV.num(out[0]);
+          const result = out[0];
+          // The 1-element scratch is consumed; the scalar return owns
+          // no buffer. Recycle the scratch.
+          disposeFloat64(out);
+          return v._isLogical ? RTV.logical(result !== 0) : RTV.num(result);
         }
         const { mRe, mIm, mIdx } = minMaxScanDirect(
           v.data,
