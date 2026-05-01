@@ -1535,19 +1535,22 @@ export function assignLValue(
         }
         oldLeaf = cur;
       }
+      let memberResult: RuntimeValue;
       if (isRuntimeClassInstance(rootRv)) {
         // Use memberChainAssign which routes through subsasgn if needed
         const result = this.rt.memberChainAssign(rootBase, names, value);
+        memberResult = ensureRuntimeValue(result);
         if (cursor.type === "Ident") {
-          this.env.set(cursor.name, ensureRuntimeValue(result));
+          this.env.set(cursor.name, memberResult);
         } else {
-          this.writeLValueBase(cursor, ensureRuntimeValue(result));
+          this.writeLValueBase(cursor, memberResult);
         }
       } else {
         // Non-class: use direct field set with store-back chain
         const base = this.evalLValueBase(lv.base, RTV.struct({}));
         const result = this.rt.setMemberReturn(base, lv.name, value);
-        this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+        memberResult = ensureRuntimeValue(result);
+        this.writeLValueBase(lv.base, memberResult);
       }
       if (
         oldLeaf !== undefined &&
@@ -1557,6 +1560,31 @@ export function assignLValue(
         isRuntimeTensor(oldLeaf as RuntimeValue)
       ) {
         disposeValue(oldLeaf as RuntimeValue);
+      }
+      // If a property setter (or subsasgn override) intercepted the
+      // assignment, the rhs was deep-cloned at the user-fn entry; the
+      // outer caller's `value` is no longer referenced. Detect this by
+      // walking the chain in the result and checking whether the leaf
+      // wrapper is the same object we passed in. If different, our
+      // value can be recycled.
+      if (
+        isRuntimeTensor(value) &&
+        value !== memberResult &&
+        !memberRootCapture
+      ) {
+        let leaf: RuntimeValue | undefined = memberResult;
+        for (const n of names) {
+          if (leaf === undefined) break;
+          if (isRuntimeClassInstance(leaf) || isRuntimeStruct(leaf)) {
+            leaf = leaf.fields.get(n);
+          } else {
+            leaf = undefined;
+            break;
+          }
+        }
+        if (leaf !== value) {
+          disposeValue(value);
+        }
       }
       break;
     }
