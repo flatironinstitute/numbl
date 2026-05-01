@@ -37,6 +37,7 @@ import {
 
 import {
   deepCloneValue,
+  disposeValue,
   ensureExclusiveValue,
 } from "../../../runtime/utils.js";
 
@@ -245,6 +246,41 @@ function withCallFrame<T>(rt: CallRt, name: string, body: () => T): T {
   } finally {
     rt.popAndRunCleanups(cfn => runCleanup(rt, cfn));
     rt.popCallFrame();
+  }
+}
+
+/** Walk a value tree and collect every tensor wrapper reachable through
+ *  containers (cells, structs, struct arrays, value-class instances,
+ *  arrays — for multi-output returns). Used by `callUser` to skip
+ *  releasing cloned-arg wrappers that the callee returned. */
+function collectReachableTensors(v: unknown, out: Set<unknown>): void {
+  if (v === null || v === undefined || typeof v !== "object") return;
+  const kind = (v as { kind?: string }).kind;
+  if (kind === "tensor") {
+    out.add(v);
+    return;
+  }
+  if (Array.isArray(v)) {
+    for (const e of v) collectReachableTensors(e, out);
+    return;
+  }
+  if (kind === "cell") {
+    const data = (v as { data: unknown[] }).data;
+    for (const e of data) collectReachableTensors(e, out);
+    return;
+  }
+  if (kind === "struct" || kind === "class_instance") {
+    const fields = (v as { fields: Map<string, unknown> }).fields;
+    for (const fv of fields.values()) collectReachableTensors(fv, out);
+    return;
+  }
+  if (kind === "struct_array" || kind === "class_instance_array") {
+    const elements = (v as { elements: { fields: Map<string, unknown> }[] })
+      .elements;
+    for (const e of elements) {
+      for (const fv of e.fields.values()) collectReachableTensors(fv, out);
+    }
+    return;
   }
 }
 
@@ -667,6 +703,23 @@ export const jitHelpers = {
   re,
   im,
 
+  // Recursively dispose a RuntimeValue — same semantics as the
+  // interpreter's `disposeValue`. Handles tensors (release the
+  // refcount cell), cells (recurse entries), structs / class instances
+  // (recurse fields), etc. Called at JIT function exit on every local
+  // not in the outputs, and at end-of-statement on scratch values
+  // that the statement didn't pin into persistent storage.
+  dispose: disposeValue,
+
+  // Value-semantics clone — same semantics as the interpreter's
+  // `deepCloneValue`. For tensors it shares the buffer via the COW
+  // refcount cell (no new buffer); for cells / structs / class
+  // instances it produces a fresh wrapper / Map and recurses. Used at
+  // JIT codegen sites that pin a value into persistent storage
+  // (struct field set, etc.) so the storage location ends up with its
+  // own owning reference.
+  clone: deepCloneValue,
+
   // User function call with call frame tracking.
   //
   // Each non-primitive argument is deep-cloned at the call boundary
@@ -678,6 +731,11 @@ export const jitHelpers = {
   // ensure-exclusive, any shared buffer would leak writes back to the
   // caller's binding. Handle classes / function handles / graphics
   // handles deliberately keep reference semantics — see deepCloneValue.
+  //
+  // After the callee returns, each cloned tensor wrapper is released —
+  // its buffer goes back to the pool unless the callee captured it
+  // (e.g. by binding to an output). This matches the interpreter's
+  // function-exit dispose pass.
   callUser: (
     rt: CallRt,
     name: string,
@@ -692,7 +750,26 @@ export const jitHelpers = {
           ? ensureExclusiveValue(c as RuntimeValue)
           : c;
     }
-    return withCallFrame(rt, name, () => fn(...cloned));
+    let result: unknown;
+    try {
+      result = withCallFrame(rt, name, () => fn(...cloned));
+    } finally {
+      // A cloned arg whose wrapper appears in the result (e.g. when the
+      // callee returned a param directly: `function a = f(a)`) is now
+      // owned by the caller's binding — disposing it here would free
+      // the buffer the caller is about to receive. Walk the result and
+      // collect the tensor wrappers it transitively reaches, then skip
+      // disposing any cloned wrapper that's in the set.
+      const reachable = new Set<unknown>();
+      collectReachableTensors(result, reachable);
+      for (let i = 0; i < cloned.length; i++) {
+        const c = cloned[i];
+        if (c !== null && typeof c === "object" && !reachable.has(c)) {
+          disposeValue(c as RuntimeValue);
+        }
+      }
+    }
+    return result;
   },
 
   // Indirect call through a function handle variable. Used by the JIT for

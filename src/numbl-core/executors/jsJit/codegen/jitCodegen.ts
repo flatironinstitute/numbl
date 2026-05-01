@@ -378,10 +378,36 @@ export function generateJS(
   if (_scratchLocals.length > 0) {
     lines.push(`${indent}var ${_scratchLocals.join(", ")};`);
   }
-  lines.push(...bodyLines);
 
-  // Return
-  lines.push(`${indent}return ${_returnExpr};`);
+  // Function-exit cleanup: release every local tensor back to the pool,
+  // except the names whose values are actually returned. Wrapping in
+  // try-finally so the cleanup runs on every exit (early `return`,
+  // thrown errors). Params are NOT released here — they are borrowed
+  // (loop case) or owned-by-caller (callUser case); for the latter,
+  // `callUser` releases its cloned args after the call. Outputs aren't
+  // on the release list — the caller takes ownership of their buffers.
+  // Scratch locals ($sN) are released at end-of-statement by emitStmts,
+  // so they're omitted here too.
+  const outputSet = new Set(effectiveOutputs);
+  const releaseStmts: string[] = [];
+  for (const l of locals) {
+    if (!outputSet.has(l)) {
+      releaseStmts.push(`${indent}  $h.dispose(${mangle(l)});`);
+    }
+  }
+
+  if (releaseStmts.length > 0) {
+    lines.push(`${indent}try {`);
+    // Indent body lines one extra level
+    for (const bl of bodyLines) lines.push("  " + bl);
+    lines.push(`${indent}  return ${_returnExpr};`);
+    lines.push(`${indent}} finally {`);
+    lines.push(...releaseStmts);
+    lines.push(`${indent}}`);
+  } else {
+    lines.push(...bodyLines);
+    lines.push(`${indent}return ${_returnExpr};`);
+  }
 
   return lines.join("\n");
 }
@@ -393,6 +419,7 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
   // (`acc = f(sum(x), mean(x), max(x), ...)`) collapsed into a
   // single-pass JS loop instead of N separate reduction helper calls.
   for (const stmt of stmts) {
+    const scratchStart = _scratchLocals.length;
     const mr = tryMatchMultiReduction(stmt);
     if (mr) {
       emitMultiReductionBlock(lines, indent, mr, mangle, (expr, subst) => {
@@ -407,6 +434,23 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
       emitHoistRefresh(lines, mr.stmt.name, indent);
     } else {
       emitStmt(lines, stmt, indent);
+    }
+    // Dispose any scratch values this statement allocated. Without
+    // this, each per-iteration intermediate buffer leaks into JS GC
+    // instead of returning to the allocator pool. The slot is nulled
+    // after dispose so a transitive parent emitStmts pass (e.g. the
+    // outer for-statement that contains us) re-iterating
+    // `_scratchLocals` sees `undefined` and the dispose call no-ops
+    // instead of double-disposing.
+    //
+    // Statements that pin the value into persistent storage (struct
+    // field set, indexed cell store) are responsible for cloning the
+    // value via `$h.clone` before storing — that gives the storage
+    // location its own owning reference, so disposing the scratch
+    // here just decrements the refcount and the buffer survives.
+    for (let i = scratchStart; i < _scratchLocals.length; i++) {
+      const s = _scratchLocals[i];
+      lines.push(`${indent}$h.dispose(${s}); ${s} = undefined;`);
     }
   }
 }
@@ -1026,9 +1070,15 @@ function emitAssignMember(
   // Emit a direct `fields.set(...)` to avoid a helper-hop per assign.
   // `structSetField_h` exists in the helpers for symmetry with the
   // read path and for clients that want a function reference.
+  //
+  // The value goes through `$h.clone` so the field gets its own
+  // wrapper sharing the buffer via the COW refcount cell, matching
+  // the interpreter's `setRTValueField` behavior. Without this, a
+  // dispose of either the source variable or the struct would free
+  // the buffer the other still references.
   const value = emitExpr(stmt.value);
   const fieldLit = JSON.stringify(stmt.fieldName);
-  lines.push(`${indent}${base}.fields.set(${fieldLit}, ${value});`);
+  lines.push(`${indent}${base}.fields.set(${fieldLit}, $h.clone(${value}));`);
 }
 
 function emitAssignIndexCol(stmt: JitStmt & { tag: "AssignIndexCol" }): string {

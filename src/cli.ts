@@ -367,6 +367,7 @@ interface ParsedOptions {
   positional: string[];
   profileOutput: string | undefined;
   leakReport: boolean;
+  fastDispose: boolean;
   optimization: import("./numbl-core/executors/plugins.js").OptLevel;
   fastMath: boolean;
 }
@@ -384,6 +385,7 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     leakReport: false,
+    fastDispose: false,
     optimization: "1",
     fastMath: true,
   };
@@ -467,6 +469,9 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--leak-report":
         opts.leakReport = true;
+        break;
+      case "--fast-dispose":
+        opts.fastDispose = true;
         break;
       case "--opt":
         i++;
@@ -588,6 +593,10 @@ async function executeWithOptions(
   if (opts.leakReport) {
     const { setLeakTracking } = await import("./numbl-core/runtime/alloc.js");
     setLeakTracking(true);
+  }
+  if (opts.fastDispose) {
+    const { setAllocSafety } = await import("./numbl-core/runtime/alloc.js");
+    setAllocSafety(false);
   }
 
   const writeLeakReportIfNeeded = async () => {

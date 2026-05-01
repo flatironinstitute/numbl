@@ -153,6 +153,30 @@ export function setLeakTracking(enabled: boolean): void {
   }
 }
 
+// ── Safety machinery toggle ──────────────────────────────────────────
+//
+// `disposeFloat*` does two safety things on every dispose:
+//   1. NaN-poison the buffer so use-after-free reads surface as NaN.
+//   2. Track the buffer in a WeakSet so a double-dispose throws
+//      DoubleDisposeError instead of silently corrupting the pool.
+// Both are valuable during development but together account for most
+// of the per-dispose overhead. Toggle off (`setAllocSafety(false)`,
+// or `NUMBL_FAST_DISPOSE=1`) when benchmarking or in production once
+// the dispose seams are trusted.
+const _fastByDefault =
+  typeof process !== "undefined" &&
+  !!process.env?.NUMBL_FAST_DISPOSE &&
+  process.env.NUMBL_FAST_DISPOSE !== "0";
+let _allocSafety = !_fastByDefault;
+
+export function setAllocSafety(enabled: boolean): void {
+  _allocSafety = enabled;
+}
+
+export function getAllocSafety(): boolean {
+  return _allocSafety;
+}
+
 export function isLeakTracking(): boolean {
   return _leakTracking;
 }
@@ -287,7 +311,7 @@ function popFromPool64(n: number): Float64Array | undefined {
   const bucket = pool64.get(n);
   if (!bucket || bucket.length === 0) return undefined;
   const buf = bucket.pop()!;
-  _disposed.delete(buf);
+  if (_allocSafety) _disposed.delete(buf);
   _poolBuffersHeld--;
   _poolBytesHeld -= n * 8;
   _poolHits++;
@@ -298,7 +322,7 @@ function popFromPoolX(n: number): FloatXInstance | undefined {
   const bucket = poolX.get(n);
   if (!bucket || bucket.length === 0) return undefined;
   const buf = bucket.pop()!;
-  _disposed.delete(buf);
+  if (_allocSafety) _disposed.delete(buf);
   _poolBuffersHeld--;
   _poolBytesHeld -= n * FLOATX_BYTES;
   _poolHits++;
@@ -434,11 +458,15 @@ export function copyFloatX(
 export function disposeFloat64(buf: Float64Array<ArrayBufferLike>): void {
   const n = buf.length;
   if (n === 0) return;
-  if (_disposed.has(buf)) throw new DoubleDisposeError(n);
-  recordDispose(buf);
+  if (_allocSafety) {
+    if (_disposed.has(buf)) throw new DoubleDisposeError(n);
+    recordDispose(buf);
+    buf.fill(NaN);
+  } else {
+    recordDispose(buf);
+  }
   _disposeCount++;
   _disposeBytes += n * 8;
-  buf.fill(NaN);
   if (_poolBytesHeld >= MAX_BYTES_HELD) return;
   let bucket = pool64.get(n);
   if (!bucket) {
@@ -447,7 +475,7 @@ export function disposeFloat64(buf: Float64Array<ArrayBufferLike>): void {
   }
   if (bucket.length >= MAX_BUCKET_SIZE) return;
   bucket.push(buf);
-  _disposed.add(buf);
+  if (_allocSafety) _disposed.add(buf);
   _poolBuffersHeld++;
   _poolBytesHeld += n * 8;
 }
@@ -463,11 +491,15 @@ export function disposeFloatX(
   }
   const n = buf.length;
   if (n === 0) return;
-  if (_disposed.has(buf)) throw new DoubleDisposeError(n);
-  recordDispose(buf);
+  if (_allocSafety) {
+    if (_disposed.has(buf)) throw new DoubleDisposeError(n);
+    recordDispose(buf);
+    buf.fill(NaN);
+  } else {
+    recordDispose(buf);
+  }
   _disposeCount++;
   _disposeBytes += n * FLOATX_BYTES;
-  buf.fill(NaN);
   if (_poolBytesHeld >= MAX_BYTES_HELD) return;
   let bucket = poolX.get(n);
   if (!bucket) {
@@ -476,7 +508,7 @@ export function disposeFloatX(
   }
   if (bucket.length >= MAX_BUCKET_SIZE) return;
   bucket.push(buf as FloatXInstance);
-  _disposed.add(buf);
+  if (_allocSafety) _disposed.add(buf);
   _poolBuffersHeld++;
   _poolBytesHeld += n * FLOATX_BYTES;
 }
