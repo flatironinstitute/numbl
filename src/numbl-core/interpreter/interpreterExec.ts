@@ -45,6 +45,31 @@ import {
 import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
 import { zeroedFloatX } from "../runtime/alloc.js";
+import { disposeValue, deepCloneValue } from "../runtime/utils.js";
+
+// ── Ownership classification ─────────────────────────────────────────────
+
+/** True when `expr`'s evaluation result is **owned** by the caller —
+ *  a fresh value with no other live reference. See
+ *  `docs/developer_reference/runtime/ownership-and-dispose.md` §3.
+ *
+ *  Conservative: any expression not on this list is treated as
+ *  *borrowed* and cloned at binding seams. Only list nodes whose
+ *  evaluators *always* return a fresh top-level value.
+ */
+function isOwnedExpr(expr: Expr): boolean {
+  switch (expr.type) {
+    case "Tensor":
+    case "Range":
+    case "Binary":
+    case "Unary":
+    case "FuncCall":
+    case "MethodCall":
+      return true;
+    default:
+      return false;
+  }
+}
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -82,11 +107,25 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "Assign": {
       const rawVal = this.evalExpr(stmt.expr);
       const val = Array.isArray(rawVal) ? rawVal[0] : rawVal;
-      // Always deep-clone the RHS. This is the safe-but-inefficient
-      // baseline: every assignment produces a value the LHS uniquely
-      // owns. A future sharing/COW scheme will sit on top of this.
-      const rv = this.rt.share(val) as RuntimeValue;
+      // Owned rhs (TensorLit / Binary / Unary / Range / FuncCall /
+      // MethodCall) is moved into the binding without a clone — the
+      // expression evaluator already produced a fresh value with no
+      // other live reference. Borrowed rhs (Ident / Member / IndexCell /
+      // etc.) is deep-cloned so the new binding owns its own buffer.
+      // See ownership-and-dispose.md §4.1.
+      const valRv = ensureRuntimeValue(val);
+      const rv: RuntimeValue = isOwnedExpr(stmt.expr)
+        ? valRv
+        : (deepCloneValue(valRv) as RuntimeValue);
+      const old = this.env.get(stmt.name);
       this.env.set(stmt.name, rv);
+      // Plain Var Assign produces a uniquely-owned new binding, so the
+      // previous value becomes garbage and can be recycled. Unsafe at
+      // AssignLValue (container mutation shares unchanged fields with
+      // the new container — see §5).
+      if (old !== undefined && old !== rv && !this.env.envCaptured) {
+        disposeValue(old);
+      }
       this.ans = rv;
       if (!stmt.suppressed) {
         this.rt.displayAssign(stmt.name, rv);
@@ -626,6 +665,32 @@ export function evalArgs(this: Interpreter, argExprs: Expr[]): unknown[] {
     }
   }
   return args;
+}
+
+/** Like `evalArgs`, but additionally records each *owned* expression
+ *  result so the caller can dispose them after the function call
+ *  returns. The callee's `callUserFunction` deep-clones each arg at
+ *  entry, so post-call the originals are unreferenced and recyclable.
+ *  Multi-output / array-splat results are conservatively treated as
+ *  borrowed (not disposed). */
+export function evalArgsTracked(
+  this: Interpreter,
+  argExprs: Expr[]
+): { args: unknown[]; ownedArgs: RuntimeValue[] } {
+  const args: unknown[] = [];
+  const ownedArgs: RuntimeValue[] = [];
+  for (const a of argExprs) {
+    const val = this.evalExpr(a);
+    if (Array.isArray(val)) {
+      for (const elem of val) args.push(elem);
+      continue;
+    }
+    args.push(val);
+    if (isOwnedExpr(a) && val !== null && typeof val === "object") {
+      ownedArgs.push(val as RuntimeValue);
+    }
+  }
+  return { args, ownedArgs };
 }
 
 // ── Binary operators ─────────────────────────────────────────────────────

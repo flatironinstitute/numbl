@@ -296,6 +296,10 @@ export class Interpreter {
   ) => unknown;
   declare evalIndicesWithEnd: (base: unknown, indexExprs: Expr[]) => unknown[];
   declare evalArgs: (argExprs: Expr[]) => unknown[];
+  declare evalArgsTracked: (argExprs: Expr[]) => {
+    args: unknown[];
+    ownedArgs: RuntimeValue[];
+  };
   declare evalMember: (
     expr: Extract<Expr, { type: "Member" }>,
     nargout: number

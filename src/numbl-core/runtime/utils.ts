@@ -22,7 +22,12 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
 } from "./types.js";
-import { copyFloat64, disposeFloat64, disposeFloatX } from "./alloc.js";
+import {
+  copyFloat64,
+  copyFloatX,
+  disposeFloat64,
+  disposeFloatX,
+} from "./alloc.js";
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
 
@@ -114,12 +119,15 @@ export function deepCloneValue(v: RuntimeValue): RuntimeValue {
 }
 
 function cloneTensor(t: RuntimeTensor): RuntimeTensor {
+  // Route through copyFloatX/copyFloat64 (not the typed-array .slice()
+  // method) so the new buffer is counted by the allocator tally and
+  // can later be returned to the pool symmetrically with how it came in.
   const out: RuntimeTensor = {
     kind: "tensor",
-    data: t.data.slice() as typeof t.data,
+    data: copyFloatX(t.data) as typeof t.data,
     shape: t.shape.slice(),
   };
-  if (t.imag) out.imag = t.imag.slice() as typeof t.imag;
+  if (t.imag) out.imag = copyFloatX(t.imag) as typeof t.imag;
   if (t._isLogical) out._isLogical = true;
   return out;
 }

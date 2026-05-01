@@ -48,6 +48,7 @@ import {
   mElemDiv,
 } from "../../numbl-core/helpers/arithmetic.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
+import { deepCloneValue } from "./utils.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
@@ -289,14 +290,19 @@ export function callSuperConstructor(
   const targetObj = ensureRuntimeValue(target);
   const superObj = ensureRuntimeValue(superInstance);
   if (isRuntimeClassInstance(targetObj) && isRuntimeClassInstance(superObj)) {
-    // Class-to-class inheritance: merge fields from super into target
+    // Class-to-class inheritance: merge fields from super into target.
+    // Deep-clone each value so the target owns its own buffers (otherwise
+    // the caller's binding for the super instance and the target share
+    // the same buffer — see ownership-and-dispose.md §5).
     for (const [key, val] of superObj.fields) {
-      targetObj.fields.set(key, val);
+      targetObj.fields.set(key, deepCloneValue(val));
     }
   } else if (isRuntimeClassInstance(targetObj)) {
-    // Built-in type superclass (e.g. classdef Foo < double):
-    // store the result as _builtinData
-    targetObj._builtinData = superObj;
+    // Built-in type superclass (e.g. classdef Foo < double): store the
+    // result as _builtinData. Clone for the same reason as above —
+    // otherwise the caller's `data` parameter and `obj._builtinData`
+    // alias the same tensor buffer.
+    targetObj._builtinData = deepCloneValue(superObj);
   }
   return targetObj;
 }

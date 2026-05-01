@@ -26,6 +26,7 @@ import { numel } from "./utils.js";
 import {
   zeroedFloatX,
   copyFloatX,
+  disposeFloatX,
   copyFloat64,
   zeroedFloat64,
 } from "./alloc.js";
@@ -360,34 +361,85 @@ function sparseCatAlongDim(
   }
 }
 
+/** Single-tensor early-return path: catAlongDim must hand back an
+ *  *owned* tensor (so that the surrounding Tensor-literal `[…]` is owned
+ *  per ownership-and-dispose.md §3). When the lone surviving input is a
+ *  caller-borrowed tensor, clone it; when it's one of our internally-
+ *  created scalar wrappers, transfer ownership directly. */
+function finalizeSinglePass(
+  t: RuntimeTensor,
+  transients: Set<RuntimeTensor>,
+  disposeTransients: (except?: RuntimeTensor) => void
+): RuntimeTensor {
+  if (transients.has(t)) {
+    transients.delete(t);
+    disposeTransients();
+    return t;
+  }
+  // Borrowed input — clone the buffer(s) so the caller owns the result.
+  const out: RuntimeTensor = {
+    kind: "tensor",
+    data: copyFloatX(t.data) as typeof t.data,
+    shape: t.shape.slice(),
+  };
+  if (t.imag) out.imag = copyFloatX(t.imag) as typeof t.imag;
+  if (t._isLogical) out._isLogical = true;
+  disposeTransients();
+  return out;
+}
+
 /** N-D concatenation along a 0-based dimension index */
 function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   // Track whether all inputs are logical so we can propagate _isLogical.
   const allLogical = values.every(
     v => isRuntimeLogical(v) || (isRuntimeTensor(v) && v._isLogical === true)
   );
+  // Track wrapper tensors created from scalars: their buffers are owned
+  // exclusively by this function and can be returned to the pool once
+  // the result is built (or once we early-return a different tensor).
+  const transients = new Set<RuntimeTensor>();
+  const disposeTransients = (except?: RuntimeTensor) => {
+    for (const t of transients) {
+      if (t === except) continue;
+      disposeFloatX(t.data);
+      if (t.imag) disposeFloatX(t.imag);
+    }
+  };
+
   let tensors: RuntimeTensor[] = values.map(v => {
-    if (isRuntimeNumber(v))
-      return RTV.tensor(copyFloatX([v]), [1, 1]) as RuntimeTensor;
+    if (isRuntimeNumber(v)) {
+      const t = RTV.tensor(copyFloatX([v]), [1, 1]) as RuntimeTensor;
+      transients.add(t);
+      return t;
+    }
     if (isRuntimeLogical(v)) {
       const t = RTV.tensor(copyFloatX([v ? 1 : 0]), [1, 1]) as RuntimeTensor;
       t._isLogical = true;
+      transients.add(t);
       return t;
     }
-    if (isRuntimeComplexNumber(v))
-      return RTV.tensor(
+    if (isRuntimeComplexNumber(v)) {
+      const t = RTV.tensor(
         copyFloatX([v.re]),
         [1, 1],
         copyFloatX([v.im])
       ) as RuntimeTensor;
+      transients.add(t);
+      return t;
+    }
     if (isRuntimeTensor(v)) return v;
     throw new RuntimeError(`Cannot concatenate ${kstr(v)} into matrix`);
   });
 
   // Filter out [0,0] tensors (always safe to drop).
   tensors = tensors.filter(t => t.shape.some(d => d > 0));
-  if (tensors.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
-  if (tensors.length === 1) return tensors[0];
+  if (tensors.length === 0) {
+    disposeTransients();
+    return RTV.tensor(zeroedFloatX(0), [0, 0]);
+  }
+  if (tensors.length === 1) {
+    return finalizeSinglePass(tensors[0], transients, disposeTransients);
+  }
 
   // Determine max ndim across all tensors (at least 2)
   const ndim = Math.max(2, ...tensors.map(t => t.shape.length));
@@ -415,8 +467,13 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
     });
     tensors = tensors.filter((_, i) => keep[i]);
     shapes = shapes.filter((_, i) => keep[i]);
-    if (tensors.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
-    if (tensors.length === 1) return tensors[0];
+    if (tensors.length === 0) {
+      disposeTransients();
+      return RTV.tensor(zeroedFloatX(0), [0, 0]);
+    }
+    if (tensors.length === 1) {
+      return finalizeSinglePass(tensors[0], transients, disposeTransients);
+    }
   }
 
   // Verify all non-cat dimensions match
@@ -473,6 +530,9 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
 
   const result = RTV.tensor(resultRe, resultShape, resultIm) as RuntimeTensor;
   if (allLogical) result._isLogical = true;
+  // The fresh result owns a new buffer; every transient wrapper has been
+  // fully consumed by the copy loops above and is safe to recycle.
+  disposeTransients();
   return result;
 }
 

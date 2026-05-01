@@ -62,7 +62,10 @@ function epsOfScalar(x: number): number {
   if (!isFinite(x) || isNaN(x)) return NaN;
   if (x === 0) return Number.MIN_VALUE; // smallest positive subnormal ≈ 5e-324
   const buf = zeroedFloat64(1);
-  const view = new DataView(buf.buffer);
+  // Pool-recycled buffers may live at non-zero byteOffset within a
+  // shared ArrayBuffer (Buffer.allocUnsafe slices), so the DataView
+  // must be anchored to buf's view, not the underlying buffer.
+  const view = new DataView(buf.buffer, buf.byteOffset, 8);
   buf[0] = x;
   const bits = view.getBigUint64(0, true);
   view.setBigUint64(0, bits + 1n, true);
