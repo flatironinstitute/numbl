@@ -108,6 +108,90 @@ let _poolMisses = 0;
 let _poolBuffersHeld = 0;
 let _poolBytesHeld = 0;
 
+// ── Per-callsite leak tracking (opt-in) ──────────────────────────────
+//
+// When NUMBL_TRACK_ALLOCS=1 (or `setLeakTracking(true)`), every allocation
+// captures a stack trace and stores it keyed by the buffer. Dispose removes
+// the entry. At the end of execution the still-live entries are the leaks
+// — i.e. buffers that were allocated but never disposed.
+//
+// This is a debugging tool; the strong-Map keeps every live buffer rooted
+// (preventing GC cleanup) so leak counts include both true leaks and
+// buffers whose owners are still legitimately holding them.
+
+const _trackByDefault =
+  typeof process !== "undefined" &&
+  !!process.env?.NUMBL_TRACK_ALLOCS &&
+  process.env.NUMBL_TRACK_ALLOCS !== "0";
+
+let _leakTracking = _trackByDefault;
+const _liveBuffers = new Map<
+  Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>,
+  { stack: string; n: number; bytes: number }
+>();
+
+export function setLeakTracking(enabled: boolean): void {
+  _leakTracking = enabled;
+  if (!enabled) _liveBuffers.clear();
+}
+
+export function isLeakTracking(): boolean {
+  return _leakTracking;
+}
+
+function captureStack(): string {
+  const e = new Error();
+  // Skip first 4 lines: "Error", captureStack, the alloc fn, the public alloc fn
+  const lines = (e.stack ?? "").split("\n").slice(4, 14);
+  return lines.join("\n");
+}
+
+function recordAlloc(
+  buf: Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>,
+  n: number,
+  bytesPerElt: number
+): void {
+  if (!_leakTracking) return;
+  _liveBuffers.set(buf, {
+    stack: captureStack(),
+    n,
+    bytes: n * bytesPerElt,
+  });
+}
+
+function recordDispose(
+  buf: Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>
+): void {
+  if (!_leakTracking) return;
+  _liveBuffers.delete(buf);
+}
+
+export interface LeakReportEntry {
+  stack: string;
+  count: number;
+  totalBytes: number;
+  sizes: number[];
+}
+
+/** Aggregate live buffers (allocated but never disposed) by their
+ *  capture stack. Returns sorted by totalBytes descending. */
+export function getLeakReport(topN = 20): LeakReportEntry[] {
+  const byStack = new Map<string, LeakReportEntry>();
+  for (const info of _liveBuffers.values()) {
+    let entry = byStack.get(info.stack);
+    if (!entry) {
+      entry = { stack: info.stack, count: 0, totalBytes: 0, sizes: [] };
+      byStack.set(info.stack, entry);
+    }
+    entry.count++;
+    entry.totalBytes += info.bytes;
+    if (entry.sizes.length < 5) entry.sizes.push(info.n);
+  }
+  return Array.from(byStack.values())
+    .sort((a, b) => b.totalBytes - a.totalBytes)
+    .slice(0, topN);
+}
+
 /** Snapshot of current allocation totals. Cheap; safe to call often. */
 export function getAllocStats(): AllocStats {
   return {
@@ -177,13 +261,20 @@ export function allocFloat64(n: number): Float64Array<ArrayBuffer> {
   _allocCount++;
   _allocBytes += n * 8;
   const pooled = popFromPool64(n);
-  if (pooled) return pooled as Float64Array<ArrayBuffer>;
+  if (pooled) {
+    recordAlloc(pooled, n, 8);
+    return pooled as Float64Array<ArrayBuffer>;
+  }
   _poolMisses++;
+  let buf: Float64Array<ArrayBuffer>;
   if (hasBuffer) {
     const b = Buffer.allocUnsafe(n * 8);
-    return new Float64Array(b.buffer as ArrayBuffer, b.byteOffset, n);
+    buf = new Float64Array(b.buffer as ArrayBuffer, b.byteOffset, n);
+  } else {
+    buf = new Float64Array(n);
   }
-  return new Float64Array(n);
+  recordAlloc(buf, n, 8);
+  return buf;
 }
 
 /** Allocate an uninitialized FloatXArray (Float64 by default, Float32
@@ -194,17 +285,24 @@ export function allocFloatX(n: number): FloatXInstance {
   _allocCount++;
   _allocBytes += n * FLOATX_BYTES;
   const pooled = popFromPoolX(n);
-  if (pooled) return pooled;
+  if (pooled) {
+    recordAlloc(pooled, n, FLOATX_BYTES);
+    return pooled;
+  }
   _poolMisses++;
+  let buf: FloatXInstance;
   if (hasBuffer) {
     const b = Buffer.allocUnsafe(n * FLOATX_BYTES);
-    return new FloatXArray(
+    buf = new FloatXArray(
       b.buffer as ArrayBuffer,
       b.byteOffset,
       n
     ) as FloatXInstance;
+  } else {
+    buf = new FloatXArray(n) as FloatXInstance;
   }
-  return new FloatXArray(n) as FloatXInstance;
+  recordAlloc(buf, n, FLOATX_BYTES);
+  return buf;
 }
 
 // ── Zero-filled ───────────────────────────────────────────────────────
@@ -217,10 +315,13 @@ export function zeroedFloat64(n: number): Float64Array<ArrayBuffer> {
   const pooled = popFromPool64(n);
   if (pooled) {
     pooled.fill(0);
+    recordAlloc(pooled, n, 8);
     return pooled as Float64Array<ArrayBuffer>;
   }
   _poolMisses++;
-  return new Float64Array(n);
+  const buf = new Float64Array(n);
+  recordAlloc(buf, n, 8);
+  return buf;
 }
 
 /** Allocate a zero-filled FloatXArray of length `n`. */
@@ -231,10 +332,13 @@ export function zeroedFloatX(n: number): FloatXInstance {
   const pooled = popFromPoolX(n);
   if (pooled) {
     pooled.fill(0);
+    recordAlloc(pooled, n, FLOATX_BYTES);
     return pooled;
   }
   _poolMisses++;
-  return new FloatXArray(n) as FloatXInstance;
+  const buf = new FloatXArray(n) as FloatXInstance;
+  recordAlloc(buf, n, FLOATX_BYTES);
+  return buf;
 }
 
 // ── Copy ──────────────────────────────────────────────────────────────
@@ -274,6 +378,7 @@ export function disposeFloat64(buf: Float64Array<ArrayBufferLike>): void {
   const n = buf.length;
   if (n === 0) return;
   if (_disposed.has(buf)) throw new DoubleDisposeError(n);
+  recordDispose(buf);
   _disposeCount++;
   _disposeBytes += n * 8;
   buf.fill(NaN);
@@ -302,6 +407,7 @@ export function disposeFloatX(
   const n = buf.length;
   if (n === 0) return;
   if (_disposed.has(buf)) throw new DoubleDisposeError(n);
+  recordDispose(buf);
   _disposeCount++;
   _disposeBytes += n * FLOATX_BYTES;
   buf.fill(NaN);

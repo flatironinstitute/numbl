@@ -366,6 +366,7 @@ interface ParsedOptions {
   extraPaths: string[];
   positional: string[];
   profileOutput: string | undefined;
+  leakReport: boolean;
   optimization: import("./numbl-core/executors/plugins.js").OptLevel;
   fastMath: boolean;
 }
@@ -382,6 +383,7 @@ function parseOptions(args: string[]): ParsedOptions {
     extraPaths: [],
     positional: [],
     profileOutput: undefined,
+    leakReport: false,
     optimization: "1",
     fastMath: true,
   };
@@ -462,6 +464,9 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.profileOutput = resolve(process.cwd(), args[i]);
+        break;
+      case "--leak-report":
+        opts.leakReport = true;
         break;
       case "--opt":
         i++;
@@ -579,6 +584,34 @@ async function executeWithOptions(
   loadNativeAddon(opts.fastMath);
   const profiling = !!opts.profileOutput;
   const totalStart = performance.now();
+
+  if (opts.leakReport) {
+    const { setLeakTracking } = await import("./numbl-core/runtime/alloc.js");
+    setLeakTracking(true);
+  }
+
+  const writeLeakReportIfNeeded = async () => {
+    if (!opts.leakReport) return;
+    const { getLeakReport, getAllocStats } =
+      await import("./numbl-core/runtime/alloc.js");
+    const stats = getAllocStats();
+    const report = getLeakReport(40);
+    process.stderr.write("\n=== Allocation summary ===\n");
+    process.stderr.write(
+      `allocCount=${stats.allocCount}  disposeCount=${stats.disposeCount}  gap=${stats.allocCount - stats.disposeCount}\n`
+    );
+    process.stderr.write(
+      `pool: hits=${stats.poolHits}  misses=${stats.poolMisses}  held=${stats.poolBuffersHeld}\n`
+    );
+    process.stderr.write(
+      "\n=== Top live (un-disposed) buffers, grouped by alloc stack ===\n"
+    );
+    for (const e of report) {
+      process.stderr.write(
+        `\n[${e.count} bufs, ${(e.totalBytes / 1024).toFixed(1)} KiB, sizes=${e.sizes.join(",")}${e.sizes.length < e.count ? ",…" : ""}]\n${e.stack}\n`
+      );
+    }
+  };
 
   // Helper to write profile data after execution completes
   const writeProfileIfNeeded = (result: {
@@ -717,6 +750,7 @@ async function executeWithOptions(
         if (opts.dumpC) {
           finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
         }
+        await writeLeakReportIfNeeded();
         streamLine({
           type: "done",
           generatedJS: result.generatedJS || undefined,
@@ -764,6 +798,7 @@ async function executeWithOptions(
         nativeBridge
       );
       writeProfileIfNeeded(result);
+      await writeLeakReportIfNeeded();
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
       }
@@ -803,6 +838,7 @@ async function executeWithOptions(
         nativeBridge
       );
       writeProfileIfNeeded(result);
+      await writeLeakReportIfNeeded();
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
       }

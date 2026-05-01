@@ -200,13 +200,32 @@ Layered. From bottom up:
 The implementation does not yet match every rule in this doc. Tracked
 gaps:
 
-| Gap                                                                                                      | Impact                                                              | Notes                                                                                                                                                                                                                                                              |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Owned `FuncCall` args at the call site are not disposed after the call                                   | every owned arg leaks one buffer (e.g. `helper([1 2 3])`'s literal) | A first attempt added auto-dispose at `evalFuncCall` and broke pass-through builtins like `uplus(x)` which return `x` unchanged. Audit pass-through builtins to either clone the input or label themselves as identity returns; then re-add the post-call dispose. |
-| `catAlongDim` allocates 1-element wrapper tensors per scalar (`[1 2 3]` → 3 length-1 + 1 length-3 alloc) | tensor-literal cost ~Nx + 1 instead of 1                            | the wrappers ARE disposed (gap closed for accounting), but the redundant alloc remains; could be eliminated by a scalar-fast-path in catAlongDim                                                                                                                   |
-| Cell literal entries aliased to evaluator output                                                         | `{a, b}` shares with outer bindings if a/b were ident               | currently saved by Assign-clone of the cell after construction                                                                                                                                                                                                     |
-| `setRTValueField` shallow-copies unchanged fields                                                        | blocks dispose-on-overwrite at env.set                              | tighten by deep-clone-on-rebuild later                                                                                                                                                                                                                             |
-| `for` loop's iteration value (e.g. `1:N`) is not disposed when the loop ends                             | one buffer per `for` loop                                           | dispose at the For case once iteration finishes (after the last `iterItems` extraction)                                                                                                                                                                            |
+| Gap                                                                                                      | Impact                                                | Notes                                                                                                                                            |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `catAlongDim` allocates 1-element wrapper tensors per scalar (`[1 2 3]` → 3 length-1 + 1 length-3 alloc) | tensor-literal cost ~Nx + 1 instead of 1              | the wrappers ARE disposed (gap closed for accounting), but the redundant alloc remains; could be eliminated by a scalar-fast-path in catAlongDim |
+| Cell literal entries aliased to evaluator output                                                         | `{a, b}` shares with outer bindings if a/b were ident | currently saved by Assign-clone of the cell after construction                                                                                   |
+| `setRTValueField` shallow-copies unchanged fields                                                        | blocks dispose-on-overwrite at env.set                | tighten by deep-clone-on-rebuild later                                                                                                           |
+
+Closed gaps (kept here as historical context — see git log for the
+specific commits):
+
+- **Owned `FuncCall` args not disposed at call site** — closed by
+  threading `evalArgsTracked` through `evalFuncCall`, plus defensive
+  clones in pass-through builtins (`uplus`, `deal`, `struct`,
+  `squeeze`, `assignin`).
+- **`for` loop's iteration value not disposed at loop end** — closed by
+  disposing `iterVal` (when owned) after the For case finishes, plus
+  disposing the previous iter-var binding when iterating columns of a
+  matrix.
+- **`Unary` owned operand intermediates leak** — closed by mirroring
+  the `evalBinary` dispose pattern in `evalUnary`.
+- **`AssignLValue` always-clones the rhs even when owned** — closed by
+  applying the same owned-vs-borrowed decision as `Assign`, plus
+  disposing the rhs after a tensor-base index store consumes it.
+- **`growTensor2D` leaks the old base buffer when extending past the
+  current shape** — closed by disposing the old base in the
+  `assignLValue → Index` path; the scalar-promo temp inside `indexStore`
+  is also disposed.
 
 When closing a gap, update this table; when opening a new behavior,
 extend §3–§7 first, then implement.

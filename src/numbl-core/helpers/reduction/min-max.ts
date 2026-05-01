@@ -33,6 +33,7 @@ import {
   zeroedFloat64,
   zeroedFloatX,
 } from "../../runtime/alloc.js";
+import { disposeValue } from "../../runtime/utils.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 
@@ -427,7 +428,19 @@ export function minMaxImpl(
           isBetter,
           twoArgFn
         );
-        result = Array.isArray(r) ? r[0] : r;
+        const next = Array.isArray(r) ? r[0] : r;
+        // Each pass produces a fresh tensor; the prior intermediate is
+        // unreferenced (the first-pass `result` is the borrowed input
+        // `v`, which we must NOT dispose).
+        if (
+          result !== v &&
+          result !== next &&
+          typeof result === "object" &&
+          result !== null
+        ) {
+          disposeValue(result);
+        }
+        result = next;
       }
       return result;
     }

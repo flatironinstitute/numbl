@@ -26,6 +26,7 @@ import {
 } from "../runtime/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
+import { deepCloneValue } from "./utils.js";
 import {
   arrayfunImpl as _arrayfunImpl,
   cellfunImpl as _cellfunImpl,
@@ -1414,10 +1415,18 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         "assignin: first argument must be 'base', 'caller', or 'workspace'"
       );
     const varName = toString(margs[1]);
+    // assignin stores the value into another scope by reference; the
+    // caller still owns the original. Clone so the stored copy is
+    // independent — otherwise an evalFuncCall post-call dispose of the
+    // arg would corrupt the assigned variable.
+    const stored =
+      args[2] !== undefined && args[2] !== null && typeof args[2] === "object"
+        ? deepCloneValue(args[2] as RuntimeValue)
+        : args[2];
     if (ws === "caller") {
-      rt.setCallerVariable(varName, args[2]);
+      rt.setCallerVariable(varName, stored);
     } else {
-      rt.setWorkspaceVariable(varName, args[2]);
+      rt.setWorkspaceVariable(varName, stored);
     }
   });
 

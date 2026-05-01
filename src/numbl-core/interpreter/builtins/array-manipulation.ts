@@ -37,6 +37,7 @@ import {
   copyFloatX,
   copyFloat64,
   zeroedFloat64,
+  disposeFloatX,
 } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -976,19 +977,28 @@ defineBuiltin({
           ) {
             effectiveShape.pop();
           }
+          // squeeze is a shape-only transformation, but the result must
+          // own its own buffers (FuncCall results are owned per §3) —
+          // the caller may dispose the original after the call.
+          const reCopy = copyFloatX(v.data);
+          const imCopy = v.imag ? copyFloatX(v.imag) : undefined;
           if (effectiveShape.length <= 2) {
-            return RTV.tensor(v.data, effectiveShape, v.imag);
+            return RTV.tensor(reCopy, effectiveShape, imCopy);
           }
           const newShape = effectiveShape.filter(d => d !== 1);
           if (newShape.length === 0) {
-            if (v.imag && v.imag[0] !== 0)
-              return RTV.complex(v.data[0], v.imag[0]);
-            return RTV.num(v.data[0]);
+            const resRe = reCopy[0];
+            const resIm = imCopy ? imCopy[0] : 0;
+            // Buffers were just allocated; we're collapsing to scalar.
+            disposeFloatX(reCopy);
+            if (imCopy) disposeFloatX(imCopy);
+            if (resIm !== 0) return RTV.complex(resRe, resIm);
+            return RTV.num(resRe);
           }
           if (newShape.length === 1) {
-            return RTV.tensor(v.data, [newShape[0], 1], v.imag);
+            return RTV.tensor(reCopy, [newShape[0], 1], imCopy);
           }
-          return RTV.tensor(v.data, newShape, v.imag);
+          return RTV.tensor(reCopy, newShape, imCopy);
         }
         throw new RuntimeError("squeeze: argument must be numeric");
       },

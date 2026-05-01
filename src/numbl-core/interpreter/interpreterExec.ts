@@ -192,10 +192,14 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "AssignLValue": {
       const val = this.evalExpr(stmt.expr);
-      // Always share for AssignLValue: the lvalue is a member or indexed
-      // store path that may alias caller-visible state (struct fields,
-      // cell elements, etc.) — keep the existing conservative bump.
-      const rv = this.rt.share(val) as RuntimeValue;
+      const valRv = ensureRuntimeValue(Array.isArray(val) ? val[0] : val);
+      // Same owned-vs-borrowed rule as Assign (§4.1): owned rhs is moved
+      // into the lvalue's container without a clone; borrowed rhs is
+      // deep-cloned so the target owns its own buffer (otherwise the
+      // new container aliases the original env binding / member chain).
+      const rv: RuntimeValue = isOwnedExpr(stmt.expr)
+        ? valRv
+        : (deepCloneValue(valRv) as RuntimeValue);
       this.assignLValue(stmt.lvalue, rv);
       if (!stmt.suppressed) {
         if (stmt.lvalue.type === "Var") {
@@ -247,18 +251,46 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       const iterVal = this.evalExpr(stmt.expr);
       const rv = ensureRuntimeValue(iterVal);
       const iterItems = forIter(rv);
+      let returnSignal: ReturnSignal | null = null;
+      let iterCount = 0;
       for (let _i = 0; _i < iterItems.length; _i++) {
         this.rt.checkCancel();
+        iterCount = _i + 1;
+        // Iterating columns of a 2-D matrix produces a fresh tensor per
+        // step (§3 forIter); the previous iteration's binding becomes
+        // unreferenced when the new column is set. Recycle it here so
+        // the loop doesn't accumulate one buffer per column.
+        const prev = this.env.get(stmt.varName);
         this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
+        if (
+          prev !== undefined &&
+          prev !== null &&
+          !this.env.envCaptured &&
+          typeof prev === "object"
+        ) {
+          disposeValue(prev as RuntimeValue);
+        }
         const signal = this.execStmts(stmt.body);
         if (signal instanceof BreakSignal) break;
         if (signal instanceof ContinueSignal) continue;
         if (signal instanceof ReturnSignal) {
-          recordHotLoop(this, stmt, "for", _i + 1, _forStart);
-          return signal;
+          returnSignal = signal;
+          break;
         }
       }
-      recordHotLoop(this, stmt, "for", iterItems.length, _forStart);
+      // The iteration expression result (e.g. `1:N`) was held by the
+      // `for` itself; once iteration completes it has no other holder.
+      // Closes the gap §8 "for loop's iteration value is not disposed".
+      if (
+        isOwnedExpr(stmt.expr) &&
+        rv !== null &&
+        typeof rv === "object" &&
+        !this.env.envCaptured
+      ) {
+        disposeValue(rv as RuntimeValue);
+      }
+      recordHotLoop(this, stmt, "for", iterCount, _forStart);
+      if (returnSignal) return returnSignal;
       return null;
     }
 
@@ -790,22 +822,42 @@ export function evalUnary(
   expr: Extract<Expr, { type: "Unary" }>
 ): unknown {
   const operand = this.evalExpr(expr.operand);
+  let result: unknown;
   switch (expr.op) {
     case UnaryOperation.Plus:
-      return uplus(operand);
+      result = uplus(operand);
+      break;
     case UnaryOperation.Minus:
-      return this.rt.uminus(operand);
-    case UnaryOperation.Not: {
-      if (typeof operand === "number") return RTV.logical(operand === 0);
-      return this.rt.not(operand);
-    }
+      result = this.rt.uminus(operand);
+      break;
+    case UnaryOperation.Not:
+      result =
+        typeof operand === "number"
+          ? RTV.logical(operand === 0)
+          : this.rt.not(operand);
+      break;
     case UnaryOperation.Transpose:
       // ' = conjugate transpose
-      return this.rt.ctranspose(operand);
+      result = this.rt.ctranspose(operand);
+      break;
     case UnaryOperation.NonConjugateTranspose:
       // .' = non-conjugate transpose
-      return this.rt.transpose(operand);
+      result = this.rt.transpose(operand);
+      break;
   }
+  // Mirror evalBinary: an owned operand intermediate (e.g. `(a+b)'`)
+  // becomes unreferenced once the unary op produces its fresh result.
+  // Skip when operand IS the result — runtime `uplus` returns its
+  // input verbatim, and a real-scalar transpose / not is a passthrough.
+  if (
+    isOwnedExpr(expr.operand) &&
+    isRuntimeTensor(operand as RuntimeValue) &&
+    operand !== result &&
+    operand !== ensureRuntimeValue(result)
+  ) {
+    disposeValue(operand as RuntimeValue);
+  }
+  return result;
 }
 
 // ── Range ────────────────────────────────────────────────────────────────
@@ -846,13 +898,30 @@ export function evalFuncCall(
     }
     return this.rt.index(varVal, args, nargout, skipSubsref);
   }
-  const args = this.evalArgs(expr.args);
+  const { args, ownedArgs } = this.evalArgsTracked(expr.args);
   // Constant called as zero-arg function? e.g. eps(), pi(), inf()
   if (args.length === 0) {
     const c = getConstant(expr.name);
     if (c !== undefined) return c;
   }
-  return this.callFunction(expr.name, args, nargout);
+  const result = this.callFunction(expr.name, args, nargout);
+  // Owned arg tensors (TensorLit / Binary / Unary / Range / FuncCall /
+  // MethodCall results) are deep-cloned at the user-fn entry boundary
+  // (callUserFunction) and consumed-and-copied by builtins, so the
+  // outer result no longer references their buffers. Recycle them.
+  // Skip an arg if it is the same object as the result — defends
+  // against any remaining identity-return builtins.
+  if (ownedArgs.length > 0) {
+    const resultRv = ensureRuntimeValue(
+      Array.isArray(result) ? result[0] : result
+    );
+    for (const a of ownedArgs) {
+      if (a !== resultRv && isRuntimeTensor(a)) {
+        disposeValue(a);
+      }
+    }
+  }
+  return result;
 }
 
 // ── Member access ────────────────────────────────────────────────────────
@@ -1093,6 +1162,9 @@ export function evalTensorLiteral(
     return RTV.tensor(zeroedFloatX(0), [0, 0]);
   }
   const rowValues: unknown[] = [];
+  // Track which entries in rowValues are freshly-allocated horzcat
+  // results (so they can be disposed once vertcat consumes them).
+  const horzcatResults: number[] = [];
   for (const row of expr.rows) {
     const vals: unknown[] = [];
     for (const e of row) {
@@ -1106,13 +1178,29 @@ export function evalTensorLiteral(
     if (vals.length === 1) {
       rowValues.push(vals[0]);
     } else {
+      horzcatResults.push(rowValues.length);
       rowValues.push(this.rt.horzcat(vals));
     }
   }
   if (rowValues.length === 1) {
     return rowValues[0];
   }
-  return this.rt.vertcat(rowValues);
+  const result = this.rt.vertcat(rowValues);
+  // vertcat copies values out of each row into a fresh buffer; the
+  // freshly-allocated horzcat-row tensors are no longer referenced.
+  const resultRv = ensureRuntimeValue(result);
+  for (const idx of horzcatResults) {
+    const row = rowValues[idx];
+    if (
+      row !== resultRv &&
+      row !== null &&
+      typeof row === "object" &&
+      isRuntimeTensor(row as RuntimeValue)
+    ) {
+      disposeValue(row as RuntimeValue);
+    }
+  }
+  return result;
 }
 
 export function evalCellLiteral(
@@ -1182,11 +1270,47 @@ export function assignLValue(
           skipSubsasgn = true;
         }
       }
+      const baseIsTensor =
+        base !== undefined &&
+        base !== null &&
+        isRuntimeTensor(base as RuntimeValue);
       const result = this.rt.indexStore(base, indices, value, skipSubsasgn);
+      const resultRv = ensureRuntimeValue(result);
       if (lv.base.type === "Ident") {
-        this.env.set(lv.base.name, ensureRuntimeValue(result));
+        this.env.set(lv.base.name, resultRv);
       } else {
-        this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+        this.writeLValueBase(lv.base, resultRv);
+      }
+      // When indexStore allocates a fresh tensor (e.g. growTensor2D when
+      // the assignment extends past the current shape, or scalar→tensor
+      // conversion), the OLD tensor's buffers are no longer reachable
+      // from the binding and can be recycled. Restrict to tensor bases:
+      // dict / cell / struct(-array) "rebuild" by sharing unchanged
+      // entries with the new container, so disposing the old container
+      // would corrupt the new one (see ownership-and-dispose.md §5).
+      // Skip when the env is captured by a closure snapshot (§6).
+      if (
+        base !== undefined &&
+        base !== null &&
+        base !== resultRv &&
+        !this.env.envCaptured &&
+        isRuntimeTensor(base as RuntimeValue)
+      ) {
+        disposeValue(base as RuntimeValue);
+      }
+      // Tensor-base indexStore reads values out of `value` (assignSlice
+      // / assignStripe) into the base buffer; the rhs wrapper is no
+      // longer referenced afterwards. Recycle its buffer. Skip when
+      // value === base / value === resultRv (some paths return rhs
+      // verbatim, e.g. struct overwrite — but here baseIsTensor implies
+      // the tensor path, which always copies values out).
+      if (
+        baseIsTensor &&
+        isRuntimeTensor(value) &&
+        value !== resultRv &&
+        !this.env.envCaptured
+      ) {
+        disposeValue(value);
       }
       break;
     }

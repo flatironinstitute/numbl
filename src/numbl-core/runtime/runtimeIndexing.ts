@@ -46,7 +46,7 @@ import {
 import { resolveHorzcat as _resolveHorzcat } from "./runtimeOperators.js";
 import type { Runtime } from "./runtime.js";
 import { zeroedFloatX, copyFloatX } from "./alloc.js";
-import { deepCloneValue } from "./utils.js";
+import { deepCloneValue, disposeValue } from "./utils.js";
 
 /**
  * Resolve indices that may contain END or COLON sentinels, deferred ranges, or functions.
@@ -698,10 +698,21 @@ export function indexStore(
     result._isLogical = true;
   }
   if (wasScalar && isRuntimeTensor(result) && result.data.length === 1) {
-    if (result.imag && result.imag[0] !== 0) {
-      return RTV.complex(result.data[0], result.imag[0]);
-    }
-    return result.data[0];
+    const re = result.data[0];
+    const im = result.imag ? result.imag[0] : 0;
+    // The temp tensor's buffers are now redundant — we're returning a
+    // scalar. Dispose them. (When mIndexStore mutated `mv` in-place,
+    // result === mv and we dispose once.)
+    disposeValue(result);
+    if (mv !== result) disposeValue(mv);
+    if (im !== 0) return RTV.complex(re, im);
+    return re;
+  }
+  // Scalar-promoted temp `mv` is internally owned by this function.
+  // If mIndexStore allocated a fresh tensor (growth path), the temp
+  // is now orphaned; dispose it to recycle its buffers.
+  if (wasScalar && mv !== result) {
+    disposeValue(mv);
   }
   return result;
 }

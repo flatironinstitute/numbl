@@ -14,7 +14,7 @@ import {
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import { disposeValue } from "../runtime/utils.js";
+import { deepCloneValue, disposeValue } from "../runtime/utils.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin } from "./builtins/index.js";
 import { toNumber, toString } from "../runtime/convert.js";
@@ -111,6 +111,13 @@ register("assignin", (ctx, args) => {
   const scope = toString(ensureRuntimeValue(args[0]));
   const varName = toString(ensureRuntimeValue(args[1]));
   const val = ensureRuntimeValue(args[2]);
+  // assignin stores `val` by reference into another scope; the caller
+  // still owns args[2] and may dispose it after the call. Clone so the
+  // stored copy has independent buffers.
+  const stored =
+    val !== null && typeof val === "object"
+      ? (deepCloneValue(val) as typeof val)
+      : val;
   const targetEnv =
     scope === "caller"
       ? ctx.callerEnv
@@ -118,9 +125,9 @@ register("assignin", (ctx, args) => {
         ? ctx.workspaceEnv
         : undefined;
   if (targetEnv) {
-    targetEnv.set(varName, val);
+    targetEnv.set(varName, stored);
   } else {
-    ctx.env.set(varName, val);
+    ctx.env.set(varName, stored);
   }
   return undefined;
 });
