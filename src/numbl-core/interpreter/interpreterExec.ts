@@ -153,7 +153,8 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
           lv.base.type === "Ident"
             ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
             : this.evalExpr(lv.base);
-        const indices = this.evalIndicesWithEnd(cellBase, lv.indices);
+        const { args: indices, ownedArgs: ownedIdxArgs } =
+          this.evalIndicesWithEndTracked(cellBase, lv.indices);
         // Determine nargout from index count
         let expandedCount = 1;
         const idx0 = indices[0];
@@ -169,6 +170,36 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
             expandedCount = 1;
           }
         }
+        // Pre-fetch the old entries about to be replaced. Each one is
+        // unreachable from the new cell (multiOutputCellAssign rebuilds
+        // cell-by-cell). Skip when the env-binding name is captured.
+        const cellRootCapture =
+          lv.base.type === "Ident"
+            ? this.env.isNameCaptured(lv.base.name)
+            : this.env.envCaptured;
+        const oldEntries: RuntimeValue[] = [];
+        if (!cellRootCapture) {
+          const baseRv = ensureRuntimeValue(cellBase);
+          if (isRuntimeCell(baseRv)) {
+            const collectIdx = (k0: number) => {
+              if (k0 >= 0 && k0 < baseRv.data.length) {
+                oldEntries.push(baseRv.data[k0]);
+              }
+            };
+            if (idx0 === COLON_SENTINEL) {
+              for (let i = 0; i < baseRv.data.length; i++) collectIdx(i);
+            } else {
+              const idxVal = ensureRuntimeValue(idx0);
+              if (isRuntimeTensor(idxVal)) {
+                for (let i = 0; i < idxVal.data.length; i++) {
+                  collectIdx(Math.round(idxVal.data[i]) - 1);
+                }
+              } else if (typeof idxVal === "number") {
+                collectIdx(Math.round(idxVal) - 1);
+              }
+            }
+          }
+        }
         const val = this.evalExprNargout(stmt.expr, expandedCount);
         const values = Array.isArray(val) ? val : [val];
         const result = this.rt.multiOutputCellAssign(
@@ -176,8 +207,23 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
           idx0,
           values.map(v => ensureRuntimeValue(v))
         );
+        const resultRv = ensureRuntimeValue(result);
         if (lv.base.type === "Ident") {
-          this.env.set(lv.base.name, ensureRuntimeValue(result));
+          this.env.set(lv.base.name, resultRv);
+        }
+        for (const e of oldEntries) {
+          if (
+            e !== null &&
+            typeof e === "object" &&
+            isRuntimeTensor(e as RuntimeValue)
+          ) {
+            disposeValue(e as RuntimeValue);
+          }
+        }
+        // Owned index expressions (e.g. `1:N` in `out{1:N}`) are
+        // consumed by multiOutputCellAssign — recycle.
+        for (const a of ownedIdxArgs) {
+          if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
         }
         return null;
       }
@@ -1474,8 +1520,15 @@ export function assignLValue(
       // / assignStripe) into the base buffer; the rhs wrapper is no
       // longer referenced afterwards. The rhs is a fresh owned/cloned
       // wrapper (per AssignLValue), never in env.vars — independent of
-      // any capture state.
-      if (baseIsTensor && isRuntimeTensor(value) && value !== resultRv) {
+      // any capture state. Also covers the auto-create case (base is
+      // undefined / 0×0 empty): indexStore allocates the new tensor
+      // and copies values out of rhs.
+      const resultIsTensor = isRuntimeTensor(resultRv);
+      if (
+        (baseIsTensor || resultIsTensor) &&
+        isRuntimeTensor(value) &&
+        value !== resultRv
+      ) {
         disposeValue(value);
       }
       // Owned index expressions (e.g. `x(1:N) = …`) — indexStore reads

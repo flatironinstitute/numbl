@@ -177,6 +177,23 @@ describe("dispose-balance: indexed-assignment growth", () => {
     `);
   });
 
+  it("auto-create-from-undefined indexed assign", () => {
+    // `ders(:,1) = zeros(N,1)` when `ders` doesn't exist yet — the
+    // index store synthesizes a 0×0 base, then grows it. The rhs is
+    // copied out into the new buffer and is no longer referenced.
+    expectBalanced(`
+      ders(:, 1) = zeros(5, 1);
+      clear all;
+    `);
+  });
+
+  it("auto-create scalar indexed assign", () => {
+    expectBalanced(`
+      x(3) = 7;
+      clear all;
+    `);
+  });
+
   it("indexed assignment past existing extent (no loop)", () => {
     expectBalanced(`
       x = zeros(2, 2);
@@ -436,6 +453,36 @@ describe("dispose-balance: cell entry overwrite", () => {
       a = [10 20];
       c{1} = a + 1;
       clear all;
+    `);
+  });
+
+  it("multi-output cell assign overwrites entries", () => {
+    // `[out{1:N}] = func()` — every replaced entry leaks unless the
+    // OLD entries are disposed at the seam. Mirrors the pattern at
+    // chunkerfunc.m:216 inside its for-loop.
+    expectBalanced(`
+      out = {zeros(1,3), zeros(1,3)};
+      [out{1:2}] = pair([10 20 30]);
+      clear all;
+      function [a, b] = pair(x)
+        a = x;
+        b = x * 2;
+      end
+    `);
+  });
+
+  it("multi-output cell assign in a loop", () => {
+    expectBalanced(`
+      out = {[], [], []};
+      for k = 1:3
+        [out{1:3}] = triple([k k+1]);
+      end
+      clear all;
+      function [a, b, c] = triple(x)
+        a = x;
+        b = x + 1;
+        c = x + 2;
+      end
     `);
   });
 });
