@@ -36,6 +36,7 @@ import {
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
+import { getAllocStats, type AllocStats } from "./runtime/alloc.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -125,6 +126,9 @@ export interface ExecResult {
   holdState: boolean;
   profileData?: ProfileData;
   dispatchUnknownCounts?: Record<string, number>;
+  /** Allocator / pool / dispose tally over this run. Captured from
+   *  module-level counters by snapshotting at start and end. */
+  allocStats?: AllocStats;
   /** Updated search paths (set when addpath/rmpath was called). */
   searchPaths?: string[];
   /** Updated workspace files (set when addpath/rmpath was called). */
@@ -784,6 +788,9 @@ export function executeCode(
   };
 
   // ── 5. Run ─────────────────────────────────────────────────────────
+  // Snapshot tally counters so we can report this run's deltas. Pool
+  // *held* counters are live state, not deltas — read at end.
+  const allocBaseline = getAllocStats();
   try {
     const execStart = performance.now();
     interpreter.run(ast);
@@ -812,6 +819,20 @@ export function executeCode(
         builtins: rt.getBuiltinProfile(),
         dispatches: rt.getDispatchProfile(),
         hotLoops: [...rt.hotLoops.values()],
+      };
+    }
+    {
+      const end = getAllocStats();
+      result.allocStats = {
+        allocCount: end.allocCount - allocBaseline.allocCount,
+        allocBytes: end.allocBytes - allocBaseline.allocBytes,
+        disposeCount: end.disposeCount - allocBaseline.disposeCount,
+        disposeBytes: end.disposeBytes - allocBaseline.disposeBytes,
+        poolHits: end.poolHits - allocBaseline.poolHits,
+        poolMisses: end.poolMisses - allocBaseline.poolMisses,
+        // poolBuffersHeld / poolBytesHeld are live state, not deltas.
+        poolBuffersHeld: end.poolBuffersHeld,
+        poolBytesHeld: end.poolBytesHeld,
       };
     }
     // Propagate path changes so callers (e.g. REPL) can persist them

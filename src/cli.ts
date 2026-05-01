@@ -583,6 +583,7 @@ async function executeWithOptions(
   // Helper to write profile data after execution completes
   const writeProfileIfNeeded = (result: {
     profileData?: import("./numbl-core/executeCode.js").ProfileData;
+    allocStats?: import("./numbl-core/executeCode.js").ExecResult["allocStats"];
   }) => {
     if (!opts.profileOutput || !result.profileData) return;
     const pd = result.profileData;
@@ -615,6 +616,7 @@ async function executeWithOptions(
       builtins,
       dispatches,
       hotLoops: pd.hotLoops ?? [],
+      memory: result.allocStats ?? null,
     };
     writeFileSync(opts.profileOutput, JSON.stringify(profile, null, 2) + "\n");
     console.error(`Profile written to ${opts.profileOutput}`);
@@ -1132,6 +1134,45 @@ function cmdShowProfile(args: string[]) {
     }
   } else {
     console.log("\nNo builtin functions were called.");
+  }
+
+  // Memory: allocator / pool / dispose tally
+  const mem = data.memory as
+    | {
+        allocCount: number;
+        allocBytes: number;
+        disposeCount: number;
+        disposeBytes: number;
+        poolHits: number;
+        poolMisses: number;
+        poolBuffersHeld: number;
+        poolBytesHeld: number;
+      }
+    | null
+    | undefined;
+  if (mem) {
+    const fmtBytes = (b: number) => {
+      if (b < 1024) return `${b} B`;
+      if (b < 1024 * 1024) return `${fmt(b / 1024, 1)} KiB`;
+      if (b < 1024 * 1024 * 1024) return `${fmt(b / (1024 * 1024), 1)} MiB`;
+      return `${fmt(b / (1024 * 1024 * 1024), 2)} GiB`;
+    };
+    const totalAllocCalls = mem.allocCount;
+    const hitRatePct =
+      totalAllocCalls > 0 ? (mem.poolHits / totalAllocCalls) * 100 : 0;
+    console.log("\nMemory (dense float buffers):");
+    console.log(
+      `  Allocations:   ${mem.allocCount} calls, ${fmtBytes(mem.allocBytes)}`
+    );
+    console.log(
+      `  Disposals:     ${mem.disposeCount} calls, ${fmtBytes(mem.disposeBytes)}`
+    );
+    console.log(
+      `  Pool hits:     ${mem.poolHits} / ${mem.poolMisses} miss (${fmt(hitRatePct, 1)}% hit rate)`
+    );
+    console.log(
+      `  Pool held:     ${mem.poolBuffersHeld} buffers, ${fmtBytes(mem.poolBytesHeld)}`
+    );
   }
 
   // Hot interpreted loops (>1000 iterations)

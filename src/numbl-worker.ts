@@ -312,6 +312,7 @@ self.onmessage = (e: MessageEvent) => {
         workspaceRep,
         plotInstructions: result.plotInstructions,
         dispatchUnknownCounts: result.dispatchUnknownCounts,
+        allocStats: result.allocStats,
         vfsChanges,
       });
     } catch (error: unknown) {

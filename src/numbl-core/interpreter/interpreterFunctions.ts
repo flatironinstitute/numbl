@@ -624,12 +624,24 @@ export function callUserFunction(
       }
     }
 
-    // Drop local bindings to release them for GC. Skip when a `@nestedFn`
-    // handle was created during this function's execution: that handle's
-    // closure references `fnEnv`, and clearing its vars would strand the
-    // handle if it escaped via an output / persistent / global.
-    if (!fnEnv.nestedHandleCreated) {
+    // Drop local bindings now that outputs are collected. Three cases:
+    //  - nestedHandleCreated: the handle's closure may have escaped via
+    //    output/persistent/global; leaving the env intact is the existing
+    //    safety net.
+    //  - envCaptured (anonymous fn snapshot): closures still reference the
+    //    wrappers, but the env's *map* can be cleared without touching the
+    //    wrappers — disposing them would corrupt the closure.
+    //  - Else: it is safe to recycle every local except those whose object
+    //    identity is still reachable from the caller (via the outputs
+    //    array, or via the interpreter's `ans` field).
+    if (fnEnv.nestedHandleCreated) {
+      // leave intact
+    } else if (fnEnv.envCaptured) {
       fnEnv.clearLocals();
+    } else {
+      const keep = new Set<RuntimeValue>(outputs);
+      if (this.ans !== undefined) keep.add(this.ans);
+      fnEnv.disposeLocalsExcept(keep);
     }
 
     if (nargout <= 1) {
@@ -637,7 +649,15 @@ export function callUserFunction(
     }
     return outputs;
   } catch (e) {
-    if (!fnEnv.nestedHandleCreated) fnEnv.clearLocals();
+    if (fnEnv.nestedHandleCreated) {
+      // leave intact
+    } else if (fnEnv.envCaptured) {
+      fnEnv.clearLocals();
+    } else {
+      const keep = new Set<RuntimeValue>();
+      if (this.ans !== undefined) keep.add(this.ans);
+      fnEnv.disposeLocalsExcept(keep);
+    }
     this.rt.annotateError(e);
     throw e;
   } finally {

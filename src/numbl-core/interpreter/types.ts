@@ -5,6 +5,7 @@
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
+import { disposeValue } from "../runtime/utils.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -61,6 +62,12 @@ export class Environment {
    *  (or an ancestor). Tells the function-exit cleanup that clearing this
    *  env would strand the handle's closure, so locals must be left alive. */
   nestedHandleCreated = false;
+  /** Set when this env's wrappers have been captured by a closure snapshot
+   *  (anonymous function or @nestedFn). Disposing the values would corrupt
+   *  the closure's view, so the function-exit dispose path must skip this
+   *  env. Strictly conservative: set whenever a snapshot includes this env,
+   *  even if the resulting closure never escapes. */
+  envCaptured = false;
 
   constructor(private parent?: Environment) {}
 
@@ -116,6 +123,19 @@ export class Environment {
     this.vars.clear();
   }
 
+  /** Recursively dispose every local value (returning their dense buffers
+   *  to the allocator pool) except those whose object identity is in
+   *  `keep`, then clear the local map. Caller must verify the env is NOT
+   *  captured (see `envCaptured` / `nestedHandleCreated`) — disposing a
+   *  buffer still referenced by a closure leads to use-after-free
+   *  corruption when the pool hands the buffer back out. */
+  disposeLocalsExcept(keep: Set<RuntimeValue>): void {
+    for (const v of this.vars.values()) {
+      if (!keep.has(v)) disposeValue(v);
+    }
+    this.vars.clear();
+  }
+
   has(name: string): boolean {
     if (
       this._globalNames !== undefined &&
@@ -159,6 +179,7 @@ export class Environment {
     let e: Environment | undefined = this;
     while (e) {
       e.nestedHandleCreated = true;
+      e.envCaptured = true;
       if (e._nestedFunctions?.has(name)) return true;
       e = e.parent;
     }
@@ -172,11 +193,16 @@ export class Environment {
   /** Create a snapshot of this environment.
    *  Used for anonymous functions which capture values at definition time.
    *  Captures the wrappers directly: callers/closures get value semantics
-   *  via deep-clone-on-call/assignment elsewhere. */
+   *  via deep-clone-on-call/assignment elsewhere.
+   *
+   *  Each env visited is marked `envCaptured` — its wrappers are now
+   *  reachable through the snapshot, so the function-exit dispose path
+   *  must leave its locals alone. */
   snapshot(): Environment {
     const snap = new Environment();
     const copyVars = (env: Environment) => {
       if (env.parent) copyVars(env.parent);
+      env.envCaptured = true;
       for (const [k, v] of env.vars) {
         snap.vars.set(k, v);
       }

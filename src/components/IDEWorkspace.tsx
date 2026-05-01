@@ -109,6 +109,107 @@ export interface IDEWorkspaceProps {
   }) => void;
 }
 
+interface MemoryStats {
+  allocCount: number;
+  allocBytes: number;
+  disposeCount: number;
+  disposeBytes: number;
+  poolHits: number;
+  poolMisses: number;
+  poolBuffersHeld: number;
+  poolBytesHeld: number;
+}
+
+function fmtBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KiB`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+function MemoryStatsView({ stats }: { stats: MemoryStats }) {
+  const totalAttempts = stats.allocCount;
+  const hitRatePct =
+    totalAttempts > 0 ? (stats.poolHits / totalAttempts) * 100 : 0;
+  const sections: { title: string; rows: [string, string][] }[] = [
+    {
+      title: "Allocations",
+      rows: [
+        ["Calls", stats.allocCount.toLocaleString()],
+        ["Bytes", fmtBytes(stats.allocBytes)],
+      ],
+    },
+    {
+      title: "Disposals",
+      rows: [
+        ["Calls", stats.disposeCount.toLocaleString()],
+        ["Bytes", fmtBytes(stats.disposeBytes)],
+      ],
+    },
+    {
+      title: "Pool",
+      rows: [
+        ["Hits", stats.poolHits.toLocaleString()],
+        ["Misses", stats.poolMisses.toLocaleString()],
+        ["Hit rate", `${hitRatePct.toFixed(1)}%`],
+        ["Buffers held", stats.poolBuffersHeld.toLocaleString()],
+        ["Bytes held", fmtBytes(stats.poolBytesHeld)],
+      ],
+    },
+  ];
+  return (
+    <Box sx={{ maxWidth: 360 }}>
+      <Box
+        component="table"
+        sx={{
+          width: "100%",
+          borderCollapse: "collapse",
+          fontSize: "13px",
+          "& td": {
+            py: "3px",
+            px: 1,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+          },
+          "& td.value": {
+            textAlign: "right",
+            fontFamily:
+              'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Courier New", monospace',
+            fontVariantNumeric: "tabular-nums",
+            whiteSpace: "nowrap",
+          },
+          "& tr.section td": {
+            pt: 1.5,
+            pb: 0.5,
+            borderBottom: "1px solid",
+            borderColor: "divider",
+            fontWeight: 600,
+            color: "text.secondary",
+            textTransform: "uppercase",
+            fontSize: "11px",
+            letterSpacing: "0.05em",
+          },
+          "& tr.section:first-of-type td": { pt: 0 },
+        }}
+      >
+        <tbody>
+          {sections.flatMap(s => [
+            <tr className="section" key={`h-${s.title}`}>
+              <td colSpan={2}>{s.title}</td>
+            </tr>,
+            ...s.rows.map(([label, value]) => (
+              <tr key={`${s.title}-${label}`}>
+                <td>{label}</td>
+                <td className="value">{value}</td>
+              </tr>
+            )),
+          ])}
+        </tbody>
+      </Box>
+    </Box>
+  );
+}
+
 export function IDEWorkspace({
   files,
   activeFileId,
@@ -171,6 +272,16 @@ export function IDEWorkspace({
     string,
     number
   > | null>(null);
+  const [allocStats, setAllocStats] = useState<{
+    allocCount: number;
+    allocBytes: number;
+    disposeCount: number;
+    disposeBytes: number;
+    poolHits: number;
+    poolMisses: number;
+    poolBuffersHeld: number;
+    poolBytesHeld: number;
+  } | null>(null);
   const [generatedJS, setGeneratedJS] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [figures, figuresDispatch] = useReducer(
@@ -179,7 +290,7 @@ export function IDEWorkspace({
   );
   const [outputTab, setOutputTab] = useState(0);
   const [internalsSubTab, setInternalsSubTab] = useState<
-    "js" | "ast" | "dispatch"
+    "js" | "ast" | "dispatch" | "memory"
   >("js");
   const [allFilesRep, setAllFilesRep] = useState<
     { name: string; ast: unknown; irProgram: unknown }[]
@@ -457,6 +568,7 @@ export function IDEWorkspace({
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
+          setAllocStats(msg.allocStats ?? null);
           setIsRunning(false);
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
@@ -560,6 +672,7 @@ export function IDEWorkspace({
     setIsRunning(true);
     setOutput("");
     setDispatchUnknownCounts(null);
+    setAllocStats(null);
     setAllFilesRep([]);
     setFileSources(null);
     figuresDispatch({ type: "clear" });
@@ -1228,6 +1341,17 @@ export function IDEWorkspace({
                 >
                   Dispatch
                 </ToggleButton>
+                <ToggleButton
+                  value="memory"
+                  sx={{
+                    py: 0,
+                    px: 1,
+                    fontSize: "0.75rem",
+                    textTransform: "none",
+                  }}
+                >
+                  Memory
+                </ToggleButton>
               </ToggleButtonGroup>
             </Box>
             <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
@@ -1269,6 +1393,17 @@ export function IDEWorkspace({
                   ) : (
                     <Typography variant="body2" color="text.secondary">
                       No dispatchUnknown calls
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {internalsSubTab === "memory" && (
+                <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
+                  {allocStats ? (
+                    <MemoryStatsView stats={allocStats} />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      Run a script to see memory stats
                     </Typography>
                   )}
                 </Box>

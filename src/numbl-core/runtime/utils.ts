@@ -22,7 +22,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
 } from "./types.js";
-import { copyFloat64 } from "./alloc.js";
+import { copyFloat64, disposeFloat64, disposeFloatX } from "./alloc.js";
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
 
@@ -198,3 +198,65 @@ function cloneClassInstanceArray(
 /** Back-compat alias — kept so existing call sites keep working while we
  *  finish the migration off the COW API name. */
 export const shareRuntimeValue = deepCloneValue;
+
+// ── Dispose ─────────────────────────────────────────────────────────────
+
+/**
+ * Recursively dispose a RuntimeValue, returning every dense float buffer
+ * inside it to the allocator pool. Caller asserts the value (and every
+ * tensor / buffer reachable from it) has no other live references — a
+ * stray alias becomes a use-after-free once the pool hands the buffer
+ * out again.
+ *
+ * Skipped (left to GC):
+ *   - Handle-class instances (and arrays of them): shared by reference.
+ *   - Function handles: closure may keep the captured snapshot live.
+ *   - Graphics handles, dummy handles: refer to host-side state.
+ *   - RuntimeChar (no buffer), primitives, complex numbers (numeric fields).
+ */
+export function disposeValue(v: RuntimeValue): void {
+  if (v === null || v === undefined) return;
+  if (typeof v !== "object") return;
+  if (isRuntimeTensor(v)) {
+    disposeFloatX(v.data);
+    if (v.imag) disposeFloatX(v.imag);
+    return;
+  }
+  if (isRuntimeCell(v)) {
+    for (const e of v.data) disposeValue(e);
+    return;
+  }
+  if (isRuntimeStruct(v)) {
+    for (const fv of v.fields.values()) disposeValue(fv);
+    return;
+  }
+  if (isRuntimeStructArray(v)) {
+    for (const e of v.elements) disposeValue(e);
+    return;
+  }
+  if (isRuntimeSparseMatrix(v)) {
+    disposeFloat64(v.pr);
+    if (v.pi) disposeFloat64(v.pi);
+    return;
+  }
+  if (isRuntimeDictionary(v)) {
+    for (const e of v.entries.values()) {
+      disposeValue(e.key);
+      disposeValue(e.value);
+    }
+    return;
+  }
+  if (isRuntimeClassInstance(v)) {
+    if (v.isHandleClass) return;
+    for (const fv of v.fields.values()) disposeValue(fv);
+    if (v._builtinData) disposeValue(v._builtinData);
+    return;
+  }
+  if (isRuntimeClassInstanceArray(v)) {
+    if (v.elements.length > 0 && v.elements[0].isHandleClass) return;
+    for (const e of v.elements) disposeValue(e);
+    return;
+  }
+  // RuntimeChar, RuntimeComplexNumber, RuntimeFunction, RuntimeDummyHandle,
+  // RuntimeGraphicsHandle: nothing to dispose.
+}
