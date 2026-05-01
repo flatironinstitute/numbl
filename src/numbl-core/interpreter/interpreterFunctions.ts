@@ -571,6 +571,12 @@ export function callUserFunction(
 
   const savedEnv = this.env;
   const savedCallerEnv = this.callerEnv;
+  // `ans` in MATLAB is a workspace-local concept; an Assign inside the
+  // callee shouldn't leave the caller's `ans` pointing into the
+  // callee's scope. Save and reset so the function-exit dispose pass
+  // doesn't preserve a stale callee-local value via the keep set.
+  const savedAns = this.ans;
+  this.ans = undefined;
   this.callerEnv = savedEnv;
   this.env = fnEnv;
   this.rt.pushCallFrame(fn.name);
@@ -638,8 +644,12 @@ export function callUserFunction(
     if (fnEnv.nestedHandleCreated) {
       // leave intact
     } else {
+      // `ans` is workspace-local in MATLAB — Assigns inside the callee
+      // shouldn't pin a callee-local value across the fn-exit dispose.
+      // Reset before constructing keep; the savedAns is reinstated in
+      // `finally` so the caller's view is unchanged.
+      this.ans = undefined;
       const keep = new Set<RuntimeValue>(outputs);
-      if (this.ans !== undefined) keep.add(this.ans);
       for (const name of fnEnv.persistentNames) {
         const v = fnEnv.get(name);
         if (v !== undefined) keep.add(v);
@@ -666,8 +676,8 @@ export function callUserFunction(
     if (fnEnv.nestedHandleCreated) {
       // leave intact
     } else {
+      this.ans = undefined;
       const keep = new Set<RuntimeValue>();
-      if (this.ans !== undefined) keep.add(this.ans);
       for (const name of fnEnv.persistentNames) {
         const v = fnEnv.get(name);
         if (v !== undefined) keep.add(v);
@@ -692,6 +702,7 @@ export function callUserFunction(
     this.rt.popCallFrame();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
+    this.ans = savedAns;
   }
 }
 

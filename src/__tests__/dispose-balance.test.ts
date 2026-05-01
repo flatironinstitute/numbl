@@ -16,15 +16,26 @@
 
 import { describe, it, beforeEach } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
+import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 
-function balanceFor(src: string): {
+function balanceFor(
+  src: string,
+  workspaceFiles?: WorkspaceFile[],
+  searchPaths?: string[]
+): {
   allocs: number;
   disposes: number;
   diff: number;
 } {
   // Pin to interpreter (--opt 0) for now; JIT-compiled code paths
   // don't yet implement the function-exit dispose pass.
-  const result = executeCode(src, { optimization: "0" });
+  const result = executeCode(
+    src,
+    { optimization: "0" },
+    workspaceFiles,
+    "script.m",
+    searchPaths
+  );
   const s = result.allocStats!;
   return {
     allocs: s.allocCount,
@@ -33,8 +44,12 @@ function balanceFor(src: string): {
   };
 }
 
-function expectBalanced(src: string) {
-  const r = balanceFor(src);
+function expectBalanced(
+  src: string,
+  workspaceFiles?: WorkspaceFile[],
+  searchPaths?: string[]
+) {
+  const r = balanceFor(src, workspaceFiles, searchPaths);
   if (r.diff !== 0) {
     throw new Error(
       `dispose imbalance: ${r.allocs} allocs vs ${r.disposes} disposes (diff ${r.diff})\n--- script ---\n${src}`
@@ -646,6 +661,115 @@ describe("dispose-balance: known gaps", () => {
         y = x * 3;
       end
       clear all;
+    `);
+  });
+});
+
+// ── Class-instance member assignment via property setters ─────────────
+//
+// `obj.x = val` where `x` is a Dependent property with a `set.x`
+// accessor: setMemberReturn calls the setter, callUserFunction
+// deep-clones the entire class instance at entry, the setter mutates
+// that clone and returns it. The new outer binding is the fresh clone
+// — the OLD root's buffers (every field) are now orphaned. The
+// AssignLValue Member path's old-leaf walk returns undefined for a
+// dependent name (no real field), so without root-level disposal those
+// buffers leak.
+describe("dispose-balance: class instance setter", () => {
+  const simpleClassFile: WorkspaceFile = {
+    name: "/tmp/disp_test_classes/@SimpleC/SimpleC.m",
+    source: `classdef SimpleC
+  properties
+    xstor
+    nch
+  end
+  methods
+    function obj = SimpleC()
+      obj.xstor = zeros(2, 100);
+      obj.nch = 5;
+    end
+    function v = get.x(obj)
+      v = obj.xstor(:, 1:obj.nch);
+    end
+    function obj = set.x(obj, val)
+      obj.xstor(:, 1:obj.nch) = val;
+    end
+  end
+end
+`,
+  };
+  const searchPaths = ["/tmp/disp_test_classes"];
+
+  it("dependent-property setter rebinds root", () => {
+    expectBalanced(
+      `
+        c = SimpleC();
+        xtmp = c.x;
+        c.x = xtmp;
+        clear all;
+      `,
+      [simpleClassFile],
+      searchPaths
+    );
+  });
+
+  it("dependent-property setter inside user function", () => {
+    expectBalanced(
+      `
+        c = SimpleC();
+        c = roundtrip(c);
+        clear all;
+        function obj = roundtrip(obj)
+          tmp = obj.x;
+          obj.x = tmp;
+        end
+      `,
+      [simpleClassFile],
+      searchPaths
+    );
+  });
+
+  // Tensor `x(idx)` is parsed as FuncCall when x is an Ident, but when
+  // the indexed expression is non-Ident (e.g. `obj.field(idx)`) it
+  // parses as `Index`. The Index result is freshly allocated by
+  // indexIntoTensor, so treating it as borrowed (and deep-cloning at
+  // the binding seam) leaks the original. Regression test covering the
+  // Index-on-tensor case for both class field and struct field bases.
+  it("index expression on class field returns owned", () => {
+    expectBalanced(
+      `
+        c = SimpleC();
+        slice = c.xstor(:, 1:3);
+        clear all;
+      `,
+      [simpleClassFile],
+      searchPaths
+    );
+  });
+
+  it("index expression on struct field returns owned", () => {
+    expectBalanced(`
+      s.x = zeros(2, 100);
+      slice = s.x(:, 1:3);
+      clear all;
+    `);
+  });
+});
+
+// `ans` is workspace-local in MATLAB. Plain `Assign` inside a user fn
+// sets `this.ans` on the interpreter; without a per-frame reset, that
+// value stays in the function-exit `keep` set and pins the assigned
+// wrapper across the dispose pass — leaking any local that was the
+// last RHS before return.
+describe("dispose-balance: ans across function call", () => {
+  it("assignment inside user fn does not pin local across exit", () => {
+    expectBalanced(`
+      x = helper();
+      clear all;
+      function r = helper()
+        scratch = [10 20 30];
+        r = scratch + 1;
+      end
     `);
   });
 });

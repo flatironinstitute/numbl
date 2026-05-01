@@ -73,6 +73,27 @@ function isOwnedExpr(expr: Expr): boolean {
   }
 }
 
+/** Member access on a class instance that resolves to a `get.<name>`
+ *  accessor returns a freshly-allocated value (the getter body produces
+ *  it; callUserFunction returns the body's output to its caller). The
+ *  resulting wrapper has no other live reference, so an Assign /
+ *  AssignLValue rhs of this shape is effectively owned — treating it as
+ *  borrowed (deep-clone) leaves the original unreferenced and leaks it.
+ *  Direct field access on a class/struct returns the aliased wrapper, so
+ *  the check is gated on the getter actually being defined and the field
+ *  not being a real property. */
+function isFreshMemberRhs(
+  rt: Interpreter["rt"],
+  baseRv: RuntimeValue,
+  name: string
+): boolean {
+  return (
+    isRuntimeClassInstance(baseRv) &&
+    !baseRv.fields.has(name) &&
+    rt.cachedResolveClassMethod(baseRv.className, `get.${name}`) != null
+  );
+}
+
 // ── Statement execution ──────────────────────────────────────────────────
 
 export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
@@ -118,9 +139,39 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       // expression evaluator already produced a fresh value with no
       // other live reference. Borrowed rhs (Ident / Member / IndexCell /
       // etc.) is deep-cloned so the new binding owns its own buffer.
+      // Class-instance Member access that goes through a `get.<name>`
+      // accessor also yields a fresh value (the getter body owns it),
+      // so it is treated as owned — cloning would leave the original
+      // unreferenced and leak it.
       // See ownership-and-dispose.md §4.1.
       const valRv = ensureRuntimeValue(val);
-      const rv: RuntimeValue = isOwnedExpr(stmt.expr)
+      let rhsOwned = isOwnedExpr(stmt.expr);
+      if (!rhsOwned) {
+        if (stmt.expr.type === "Member") {
+          const memExpr = stmt.expr;
+          // Re-fetch the base wrapper; evalExpr above already evaluated
+          // it, but we need the type to decide ownership. For an Ident
+          // base this is a cheap env lookup; for a chain it walks the
+          // resolved member tree without re-running side effects.
+          const baseVal =
+            memExpr.base.type === "Ident"
+              ? this.env.get(memExpr.base.name)
+              : undefined;
+          if (baseVal !== undefined) {
+            const baseRv = ensureRuntimeValue(baseVal);
+            if (isFreshMemberRhs(this.rt, baseRv, memExpr.name))
+              rhsOwned = true;
+          }
+        } else if (stmt.expr.type === "Index" && isRuntimeTensor(valRv)) {
+          // Tensor `()` indexing always copies values into a freshly
+          // allocated buffer (indexIntoTensor). The result has no other
+          // live reference, so cloning it for the binding leaks the
+          // original. (Cell / struct-array indexing returns aliased
+          // entries — those still need the borrowed-rhs clone.)
+          rhsOwned = true;
+        }
+      }
+      const rv: RuntimeValue = rhsOwned
         ? valRv
         : (deepCloneValue(valRv) as RuntimeValue);
       const old = this.env.get(stmt.name);
@@ -274,7 +325,27 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       // into the lvalue's container without a clone; borrowed rhs is
       // deep-cloned so the target owns its own buffer (otherwise the
       // new container aliases the original env binding / member chain).
-      const rv: RuntimeValue = isOwnedExpr(stmt.expr)
+      // Class-instance Member access via `get.<name>` accessor returns a
+      // freshly-allocated value — treat it as owned to avoid orphaning
+      // the original.
+      let rhsOwned = isOwnedExpr(stmt.expr);
+      if (!rhsOwned) {
+        if (stmt.expr.type === "Member") {
+          const memExpr = stmt.expr;
+          const baseVal =
+            memExpr.base.type === "Ident"
+              ? this.env.get(memExpr.base.name)
+              : undefined;
+          if (baseVal !== undefined) {
+            const baseRv = ensureRuntimeValue(baseVal);
+            if (isFreshMemberRhs(this.rt, baseRv, memExpr.name))
+              rhsOwned = true;
+          }
+        } else if (stmt.expr.type === "Index" && isRuntimeTensor(valRv)) {
+          rhsOwned = true;
+        }
+      }
+      const rv: RuntimeValue = rhsOwned
         ? valRv
         : (deepCloneValue(valRv) as RuntimeValue);
       this.assignLValue(stmt.lvalue, rv);
@@ -1645,6 +1716,22 @@ export function assignLValue(
         }
         oldLeaf = cur;
       }
+      // Detect property-setter dispatch ahead of time. A `set.<name>`
+      // accessor on a single-level class-instance member assign means
+      // the setter receives a deep-cloned instance (callUserFunction
+      // line 526) and returns a fresh class instance whose field
+      // wrappers are completely disjoint from the old root. The old
+      // root's buffers are then orphaned and must be disposed at root
+      // granularity — the leaf walk above returns undefined for a
+      // Dependent property (no real field), so the old-leaf path
+      // wouldn't catch them.
+      const setterPath =
+        names.length === 1 &&
+        isRuntimeClassInstance(rootRv) &&
+        !rootRv.isHandleClass &&
+        !memberRootCapture &&
+        this.rt.cachedResolveClassMethod(rootRv.className, `set.${names[0]}`) !=
+          null;
       let memberResult: RuntimeValue;
       if (isRuntimeClassInstance(rootRv)) {
         // Use memberChainAssign which routes through subsasgn if needed
@@ -1662,7 +1749,12 @@ export function assignLValue(
         memberResult = ensureRuntimeValue(result);
         this.writeLValueBase(lv.base, memberResult);
       }
-      if (
+      if (setterPath && rootRv !== memberResult) {
+        // Setter returned a fresh clone — old root's entire field tree
+        // is orphaned. Recursive dispose returns every reachable buffer
+        // (including the leaf, so skip the old-leaf branch below).
+        disposeValue(rootRv);
+      } else if (
         oldLeaf !== undefined &&
         oldLeaf !== value &&
         oldLeaf !== null &&
