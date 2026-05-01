@@ -3,7 +3,6 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeTensor,
   type RuntimeTensor,
   type RuntimeValue,
@@ -21,6 +20,7 @@ import {
   shapeAfterReduction,
   unifySign,
 } from "../../jitTypes.js";
+import { zeroedFloatX } from "../../runtime/alloc.js";
 
 // ── Tensor-capable binary helper ─────────────────────────────────────────
 
@@ -46,14 +46,14 @@ function applyBinaryElemwise(
 
   if (aIsNum && bTensor) {
     const n = bTensor.data.length;
-    const out = new FloatXArray(n);
+    const out = zeroedFloatX(n);
     const av = a as number;
     for (let i = 0; i < n; i++) out[i] = fn(av, bTensor.data[i]);
     return makeTensor(out, undefined, bTensor.shape.slice());
   }
   if (aTensor && bIsNum) {
     const n = aTensor.data.length;
-    const out = new FloatXArray(n);
+    const out = zeroedFloatX(n);
     const bv = b as number;
     for (let i = 0; i < n; i++) out[i] = fn(aTensor.data[i], bv);
     return makeTensor(out, undefined, aTensor.shape.slice());
@@ -61,7 +61,7 @@ function applyBinaryElemwise(
   if (aTensor && bTensor) {
     const n = aTensor.data.length;
     if (n !== bTensor.data.length) throw new Error(`${name}: size mismatch`);
-    const out = new FloatXArray(n);
+    const out = zeroedFloatX(n);
     for (let i = 0; i < n; i++) out[i] = fn(aTensor.data[i], bTensor.data[i]);
     return makeTensor(out, undefined, aTensor.shape.slice());
   }

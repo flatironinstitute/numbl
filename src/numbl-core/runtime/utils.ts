@@ -22,6 +22,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
 } from "./types.js";
+import { copyFloat64 } from "./alloc.js";
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
 
@@ -150,8 +151,8 @@ function cloneSparse(s: RuntimeSparseMatrix): RuntimeSparseMatrix {
     n: s.n,
     ir: new Int32Array(s.ir),
     jc: new Int32Array(s.jc),
-    pr: new Float64Array(s.pr),
-    pi: s.pi ? new Float64Array(s.pi) : undefined,
+    pr: copyFloat64(s.pr),
+    pi: s.pi ? copyFloat64(s.pi) : undefined,
   };
 }
 

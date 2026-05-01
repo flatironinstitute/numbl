@@ -4,7 +4,6 @@
  */
 
 import {
-  FloatXArray,
   type FloatXArrayType,
   isRuntimeChar,
   isRuntimeNumber,
@@ -13,10 +12,11 @@ import {
 import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
 import { RuntimeError } from "../runtime/index.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/types.js";
+import { zeroedFloatX, copyFloatX, copyFloat64 } from "../runtime/alloc.js";
 
 /** Ensure data is Float64Array (needed by LAPACK bridges). */
 export function toF64(data: FloatXArrayType): Float64Array {
-  return data instanceof Float64Array ? data : new Float64Array(data);
+  return data instanceof Float64Array ? data : copyFloat64(data);
 }
 
 /**
@@ -64,11 +64,11 @@ export function buildEigenvectorMatrix(
   hasComplex: boolean
 ) {
   if (!hasComplex) {
-    return RTV.tensor(new FloatXArray(packedV), [n, n]);
+    return RTV.tensor(copyFloatX(packedV), [n, n]);
   }
 
-  const realPart = new FloatXArray(n * n);
-  const imagPart = new FloatXArray(n * n);
+  const realPart = zeroedFloatX(n * n);
+  const imagPart = zeroedFloatX(n * n);
 
   let j = 0;
   while (j < n) {
@@ -102,8 +102,8 @@ export function maybeComplexTensor(
   shape: number[],
   im: FloatXArrayType | Float64Array | undefined
 ): ReturnType<typeof RTV.tensor> {
-  const imag = im && im.some(v => v !== 0) ? new FloatXArray(im) : undefined;
-  return RTV.tensor(new FloatXArray(re), shape, imag);
+  const imag = im && im.some(v => v !== 0) ? copyFloatX(im) : undefined;
+  return RTV.tensor(copyFloatX(re), shape, imag);
 }
 
 /**
@@ -118,10 +118,10 @@ export function buildDiagMatrix(
 ): ReturnType<typeof RTV.tensor> {
   const [rows, cols] = typeof size === "number" ? [size, size] : size;
   const k = Math.min(rows, cols, realVals.length);
-  const dReal = new FloatXArray(rows * cols);
+  const dReal = zeroedFloatX(rows * cols);
   for (let i = 0; i < k; i++) dReal[colMajorIndex(i, i, rows)] = realVals[i];
   if (imagVals && imagVals.some(v => v !== 0)) {
-    const dImag = new FloatXArray(rows * cols);
+    const dImag = zeroedFloatX(rows * cols);
     for (let i = 0; i < k; i++) dImag[colMajorIndex(i, i, rows)] = imagVals[i];
     return RTV.tensor(dReal, [rows, cols], dImag);
   }

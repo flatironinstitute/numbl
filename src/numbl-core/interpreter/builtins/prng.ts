@@ -3,7 +3,6 @@
  */
 
 import {
-  FloatXArray,
   type FloatXArrayType,
   isRuntimeString,
   isRuntimeChar,
@@ -24,6 +23,7 @@ import {
   getRngStateStruct,
   restoreRngState,
 } from "../../helpers/prng.js";
+import { zeroedFloatX } from "../../runtime/alloc.js";
 
 // ── Shape parsing (local, mirrors builtins/shape-utils.ts) ──────────────
 
@@ -127,7 +127,7 @@ function registerRandBuiltin(
           const shape = parseShapeArgs(args);
           if (shape.length === 1) shape.push(shape[0]);
           const n = numel(shape);
-          const data = new FloatXArray(n);
+          const data = zeroedFloatX(n);
           if (bulkFill) {
             bulkFill(data);
           } else {
@@ -179,7 +179,7 @@ defineBuiltin({
         const shape = parseShapeArgs(shapeArgs);
         if (shape.length === 1) shape.push(shape[0]);
         const n = numel(shape);
-        const data = new FloatXArray(n);
+        const data = zeroedFloatX(n);
         for (let i = 0; i < n; i++)
           data[i] = Math.floor(rngRandom() * range) + imin;
         return RTV.tensor(data, shape);
@@ -203,7 +203,7 @@ defineBuiltin({
         const k = args.length === 2 ? Math.round(toNumber(args[1])) : n;
         if (k > n)
           throw new RuntimeError("randperm: K must be less than or equal to N");
-        const perm = new FloatXArray(n);
+        const perm = zeroedFloatX(n);
         for (let i = 0; i < n; i++) perm[i] = i + 1;
         for (let i = n - 1; i > 0; i--) {
           const j = Math.floor(rngRandom() * (i + 1));

@@ -3,7 +3,6 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
@@ -16,6 +15,7 @@ import {
   mkc,
   makeTensor,
 } from "./types.js";
+import { zeroedFloatX } from "../../runtime/alloc.js";
 
 // ── real ────────────────────────────────────────────────────────────────
 
@@ -102,10 +102,10 @@ const conjCases: BuiltinCase[] = [
       if (!isRuntimeTensor(v))
         throw new Error("conj: unsupported argument type");
       const n = v.data.length;
-      const outR = new FloatXArray(n);
+      const outR = zeroedFloatX(n);
       outR.set(v.data);
       if (!v.imag) return makeTensor(outR, undefined, v.shape.slice());
-      const outI = new FloatXArray(n);
+      const outI = zeroedFloatX(n);
       for (let i = 0; i < n; i++) outI[i] = -v.imag[i];
       return makeTensor(outR, outI, v.shape.slice());
     },

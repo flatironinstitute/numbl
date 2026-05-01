@@ -74,6 +74,7 @@ import {
   elementWiseLogicalOp,
   switchValuesMatch,
 } from "./runtimeHelpers.js";
+import { zeroedFloatX, copyFloatX } from "./alloc.js";
 
 // ── Unary operators ─────────────────────────────────────────────────────
 
@@ -105,7 +106,7 @@ export function not(v: unknown): RuntimeLogical | RuntimeTensor {
   if (isRuntimeLogical(mv)) return RTV.logical(!mv);
   if (isRuntimeSparseMatrix(mv)) return not(sparseToDenseFn(mv));
   if (isRuntimeTensor(mv)) {
-    const result = new FloatXArray(mv.data.length);
+    const result = zeroedFloatX(mv.data.length);
     for (let i = 0; i < mv.data.length; i++)
       result[i] = mv.data[i] === 0 && (!mv.imag || mv.imag[i] === 0) ? 1 : 0;
     const t = RTV.tensor(result, mv.shape);
@@ -218,7 +219,7 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
       }
       const tensorA = isRuntimeSparseMatrix(ma) ? sparseToDenseFn(ma) : ma;
       const tensorB = isRuntimeNumber(mb)
-        ? RTV.tensor(new FloatXArray([mb]), [1, 1])
+        ? RTV.tensor(copyFloatX([mb]), [1, 1])
         : isRuntimeSparseMatrix(mb)
           ? sparseToDenseFn(mb)
           : mb;
@@ -234,25 +235,21 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         );
       // Empty matrix: return empty result (nA × nB)
       if (mA === 0 || nA === 0 || nB === 0) {
-        result = RTV.tensor(new FloatXArray(nA * nB), [nA, nB]);
+        result = RTV.tensor(zeroedFloatX(nA * nB), [nA, nB]);
         break;
       }
       if (tensorA.imag || tensorB.imag) {
         const ARe = tensorA.data;
-        const AIm = tensorA.imag ?? new FloatXArray(tensorA.data.length);
+        const AIm = tensorA.imag ?? zeroedFloatX(tensorA.data.length);
         const BRe = tensorB.data;
-        const BIm = tensorB.imag ?? new FloatXArray(tensorB.data.length);
+        const BIm = tensorB.imag ?? zeroedFloatX(tensorB.data.length);
         const X = linsolveComplexLapack(ARe, AIm, mA, nA, BRe, BIm, nB);
-        result = RTV.tensor(
-          new FloatXArray(X.re),
-          [nA, nB],
-          new FloatXArray(X.im)
-        );
+        result = RTV.tensor(copyFloatX(X.re), [nA, nB], copyFloatX(X.im));
         break;
       }
       const X = linsolveLapack(tensorA.data, mA, nA, tensorB.data, nB);
       if (!X) throw new RuntimeError("LeftDiv (\\): LAPACK bridge unavailable");
-      result = RTV.tensor(new FloatXArray(X), [nA, nB]);
+      result = RTV.tensor(copyFloatX(X), [nA, nB]);
       break;
     }
     case BinaryOperation.ElemLeftDiv:
@@ -362,11 +359,11 @@ export function forIter(v: unknown): unknown[] {
     const totalCols = mv.data.length / rows;
     const result: RuntimeValue[] = [];
     for (let c = 0; c < totalCols; c++) {
-      const colData = new FloatXArray(rows);
+      const colData = zeroedFloatX(rows);
       for (let r = 0; r < rows; r++) colData[r] = mv.data[c * rows + r];
       let colImag: InstanceType<typeof FloatXArray> | undefined;
       if (mv.imag) {
-        colImag = new FloatXArray(rows);
+        colImag = zeroedFloatX(rows);
         for (let r = 0; r < rows; r++) colImag[r] = mv.imag[c * rows + r];
       }
       result.push(RTV.tensor(colData, [rows, 1], colImag));
@@ -395,7 +392,7 @@ export function forIter(v: unknown): unknown[] {
 // ── Tensor/cell construction ────────────────────────────────────────────
 
 export function emptyTensor(): RuntimeTensor {
-  return RTV.tensor(new FloatXArray(0), [0, 0]);
+  return RTV.tensor(zeroedFloatX(0), [0, 0]);
 }
 
 export function emptyStruct(): RuntimeStruct {
@@ -416,7 +413,7 @@ export function opHorzcat(elems: unknown[]): unknown {
   if (flat.some(e => e === END_SENTINEL || isDeferredRange(e))) {
     return { _deferredHorzcat: true, elems: flat } as DeferredHorzcat;
   }
-  if (flat.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+  if (flat.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
   if (flat.length === 1) {
     const e = flat[0];
     if (typeof e === "number") return RTV.num(e);
@@ -442,7 +439,7 @@ export function resolveHorzcat(
 }
 
 export function opVertcat(rows: unknown[]): unknown {
-  if (rows.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+  if (rows.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
   const mvals = rows.map(r => ensureRuntimeValue(r));
   return mVertcat(...mvals);
 }

@@ -28,6 +28,7 @@ import {
 } from "./chainCodegen.js";
 import { collectIdents } from "./elemwiseCodegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
+import { zeroedFloat64 } from "../../runtime/alloc.js";
 
 /** Minimum tensor numel to pay the koffi-dispatch + per-call alloc
  *  overhead. Below this, the interpreter / individual c-jit-fuse
@@ -221,7 +222,7 @@ export const cJitChainExecutor: Executor<
     // Allocate one fresh Float64Array per live-out.
     const outs: Float64Array[] = [];
     for (let k = 0; k < res.liveOuts.length; k++) {
-      outs.push(new Float64Array(n));
+      outs.push(zeroedFloat64(n));
     }
 
     try {

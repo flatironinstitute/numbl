@@ -3,12 +3,9 @@
  */
 
 import { RuntimeValue, RTV, toNumber, RuntimeError } from "../runtime/index.js";
-import {
-  FloatXArray,
-  type FloatXArrayType,
-  isRuntimeTensor,
-} from "../runtime/types.js";
+import { type FloatXArrayType, isRuntimeTensor } from "../runtime/types.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
+import { zeroedFloatX, copyFloatX } from "../runtime/alloc.js";
 
 // ── Seedable PRNG (xoshiro128**) ────────────────────────────────────────
 
@@ -145,8 +142,8 @@ export function fillRandn(data: FloatXArrayType): void {
 /** Return the current RNG state as a struct {Type, Seed, State} */
 export function getRngStateStruct(): RuntimeValue {
   const stateArray = _rngState
-    ? RTV.tensor(new FloatXArray(Array.from(_rngState).map(v => v)), [4, 1])
-    : RTV.tensor(new FloatXArray(0), [0, 1]);
+    ? RTV.tensor(copyFloatX(Array.from(_rngState).map(v => v)), [4, 1])
+    : RTV.tensor(zeroedFloatX(0), [0, 1]);
   return RTV.struct({
     Type: RTV.char("twister"),
     Seed: RTV.num(_rngSeed),

@@ -11,7 +11,6 @@ import {
   isRuntimeTensor,
   isRuntimeFunction,
   isRuntimeCell,
-  FloatXArray,
   type RuntimeTensor,
   type RuntimeCell,
 } from "../runtime/types.js";
@@ -57,6 +56,7 @@ import {
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
+import { zeroedFloatX, copyFloatX, zeroedFloat64 } from "./alloc.js";
 
 /** Resolve an unknown value (possibly a RuntimeValue) to a string. */
 function resolveStr(val: unknown): string {
@@ -457,14 +457,14 @@ export function fplotCall(
 
   // Generate sample points
   const nPoints = 200;
-  const t = new Float64Array(nPoints);
+  const t = zeroedFloat64(nPoints);
   for (let i = 0; i < nPoints; i++) {
     t[i] = interval[0] + ((interval[1] - interval[0]) * i) / (nPoints - 1);
   }
 
   // Evaluate function(s)
-  const xArr = new Float64Array(nPoints);
-  const yArr = new Float64Array(nPoints);
+  const xArr = zeroedFloat64(nPoints);
+  const yArr = zeroedFloat64(nPoints);
 
   if (fn2) {
     // Parametric: x = fn1(t), y = fn2(t)
@@ -481,8 +481,8 @@ export function fplotCall(
   }
 
   // Build synthetic args: X tensor, Y tensor, then any remaining LineSpec/Name-Value args
-  const xTensor = RTV.tensor(new FloatXArray(xArr), [1, nPoints]);
-  const yTensor = RTV.tensor(new FloatXArray(yArr), [1, nPoints]);
+  const xTensor = RTV.tensor(copyFloatX(xArr), [1, nPoints]);
+  const yTensor = RTV.tensor(copyFloatX(yArr), [1, nPoints]);
   const synthArgs: RuntimeValue[] = [
     xTensor,
     yTensor,
@@ -526,15 +526,15 @@ export function fplot3Call(
 
   // Generate sample points
   const nPoints = 200;
-  const tArr = new Float64Array(nPoints);
+  const tArr = zeroedFloat64(nPoints);
   for (let i = 0; i < nPoints; i++) {
     tArr[i] = interval[0] + ((interval[1] - interval[0]) * i) / (nPoints - 1);
   }
 
   // Evaluate functions
-  const xArr = new Float64Array(nPoints);
-  const yArr = new Float64Array(nPoints);
-  const zArr = new Float64Array(nPoints);
+  const xArr = zeroedFloat64(nPoints);
+  const yArr = zeroedFloat64(nPoints);
+  const zArr = zeroedFloat64(nPoints);
 
   for (let i = 0; i < nPoints; i++) {
     xArr[i] = evalFnAtScalar(rt, funx, tArr[i]);
@@ -543,9 +543,9 @@ export function fplot3Call(
   }
 
   // Build synthetic args for plot3
-  const xTensor = RTV.tensor(new FloatXArray(xArr), [1, nPoints]);
-  const yTensor = RTV.tensor(new FloatXArray(yArr), [1, nPoints]);
-  const zTensor = RTV.tensor(new FloatXArray(zArr), [1, nPoints]);
+  const xTensor = RTV.tensor(copyFloatX(xArr), [1, nPoints]);
+  const yTensor = RTV.tensor(copyFloatX(yArr), [1, nPoints]);
+  const zTensor = RTV.tensor(copyFloatX(zArr), [1, nPoints]);
   const synthArgs: RuntimeValue[] = [
     xTensor,
     yTensor,
@@ -928,8 +928,8 @@ function parseStreamlineArgs(args: RuntimeValue[]):
     const rows = U.shape[0];
     const cols = U.shape[1];
     // Default coordinates: X = 1:cols, Y = 1:rows (meshgrid convention)
-    const xData = new FloatXArray(rows * cols);
-    const yData = new FloatXArray(rows * cols);
+    const xData = zeroedFloatX(rows * cols);
+    const yData = zeroedFloatX(rows * cols);
     for (let j = 0; j < cols; j++) {
       for (let i = 0; i < rows; i++) {
         xData[i + j * rows] = j + 1;
@@ -1055,7 +1055,7 @@ export function stream2Call(args: RuntimeValue[]): RuntimeValue {
   // Convert to cell array of Nx2 matrices
   const cellData: RuntimeValue[] = streamlines.map(s => {
     const n = s.x.length;
-    const data = new FloatXArray(n * 2);
+    const data = zeroedFloatX(n * 2);
     for (let i = 0; i < n; i++) {
       data[i] = s.x[i]; // column 0
       data[i + n] = s.y[i]; // column 1

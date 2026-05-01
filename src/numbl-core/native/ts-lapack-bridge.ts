@@ -26,10 +26,11 @@ import { NOTRANS, UPPER, LOWER } from "../../ts-lapack/src/utils/constants.js";
 import { dorgqr_optimized } from "../../ts-lapack/src/SRC/dorgqr_optimized.js";
 import { dgeqrf_optimized } from "../../ts-lapack/src/SRC/dgeqrf_optimized.js";
 import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
+import { allocFloat64, zeroedFloat64, copyFloat64 } from "../runtime/alloc.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
   // Copy — dgetrf/dgetri operate in place
-  const a = new Float64Array(data);
+  const a = copyFloat64(data);
   const ipiv = new Int32Array(n);
 
   const info1 = dgetrf(n, n, a, n, ipiv);
@@ -50,7 +51,7 @@ function matmul(
   B: Float64Array,
   n: number
 ): Float64Array {
-  const c = new Float64Array(m * n);
+  const c = allocFloat64(m * n);
   // Even this optimized version is around 50 times slower than the native
   // openblas addon, for multiplying two 1000x1000 matrices. The
   // WebGPU-accelerated version is much faster thank this typescript version,
@@ -98,8 +99,8 @@ function qr(
   const k = Math.min(m, n);
 
   // Step 1: QR factorisation (dgeqrf) — operates in place on a copy
-  const a = new Float64Array(data);
-  const tau = new Float64Array(k);
+  const a = copyFloat64(data);
+  const tau = zeroedFloat64(k);
 
   // In browser, the _optimized versions are around 15 times faster than the
   // non-optimized versions for 1000x1000 matrix. Unfortunately, this is still
@@ -110,7 +111,7 @@ function qr(
 
   // Step 2: Extract R from the upper triangle of the factored matrix
   const rRows = econ ? k : m;
-  const R = new Float64Array(rRows * n);
+  const R = zeroedFloat64(rRows * n);
   for (let j = 0; j < n; j++) {
     const ilim = Math.min(j, k - 1); // min(j, k-1) — 0-based
     for (let i = 0; i <= ilim; i++) {
@@ -124,7 +125,7 @@ function qr(
 
   if (wantQ) {
     // Build buffer of size m×qCols containing first qCols columns of a
-    const qBuf = new Float64Array(m * qCols);
+    const qBuf = zeroedFloat64(m * qCols);
     const colsToCopy = Math.min(n, qCols);
     for (let j = 0; j < colsToCopy; j++) {
       for (let i = 0; i < m; i++) {
@@ -169,8 +170,8 @@ function linsolve(
 ): Float64Array {
   if (m === n) {
     // ── Square: LU factorisation + solve ───────────────────────────────────────
-    const a = new Float64Array(A);
-    const b = new Float64Array(B); // n × nrhs column-major
+    const a = copyFloat64(A);
+    const b = copyFloat64(B); // n × nrhs column-major
     const ipiv = new Int32Array(n);
 
     const info1 = dgetrf(n, n, a, n, ipiv);
@@ -211,12 +212,12 @@ function linsolve(
   } else if (m > n) {
     // ── Overdetermined: thin QR then solve R * X = Q^T * B ────────────────────
     const kk = n; // k = min(m,n) = n  (since m > n)
-    const a = new Float64Array(A);
-    const tau = new Float64Array(kk);
+    const a = copyFloat64(A);
+    const tau = zeroedFloat64(kk);
     dgeqrf_optimized(m, n, a, 0, m, tau, 0);
 
     // Apply Q^T to B in place: Q^T = H_0 * H_1 * … * H_{k-1}
-    const b = new Float64Array(B); // m × nrhs
+    const b = copyFloat64(B); // m × nrhs
     for (let j = 0; j < kk; j++) {
       const tauJ = tau[j];
       if (tauJ === 0) continue;
@@ -236,7 +237,7 @@ function linsolve(
 
     // Back-substitute: solve R * X = (Q^T*B)[0:n, :]
     // R is in the upper triangle of a; a[i + j*m] for i <= j  (lda = m)
-    const x = new Float64Array(n * nrhs);
+    const x = allocFloat64(n * nrhs);
     for (let c = 0; c < nrhs; c++) {
       for (let i = n - 1; i >= 0; i--) {
         let val = b[i + c * m];
@@ -251,7 +252,7 @@ function linsolve(
   } else {
     // ── Underdetermined (m < n): LQ via QR of A^T, minimum-norm solve ─────────
     // Transpose A → At is n×m
-    const At = new Float64Array(n * m);
+    const At = allocFloat64(n * m);
     for (let i = 0; i < m; i++) {
       for (let j = 0; j < n; j++) {
         At[j + i * n] = A[i + j * m];
@@ -259,14 +260,14 @@ function linsolve(
     }
 
     const kk = m; // k = min(n,m) = m  (since n > m)
-    const tauT = new Float64Array(kk);
+    const tauT = zeroedFloat64(kk);
     dgeqrf_optimized(n, m, At, 0, n, tauT, 0);
     // At now holds: R (m×m upper tri at At[i + j*n] for i<=j<m)
     //               Householder vectors for Q of A^T (n×m)
 
     // Forward substitution: solve R^T * Y = B
     // R^T is lower triangular: R^T[i,j] = R[j,i] = At[j + i*n]  (j <= i)
-    const Y = new Float64Array(m * nrhs);
+    const Y = allocFloat64(m * nrhs);
     for (let c = 0; c < nrhs; c++) {
       for (let i = 0; i < m; i++) {
         let val = B[i + c * m];
@@ -279,7 +280,7 @@ function linsolve(
 
     // Compute X = Q * Y  where Q is n×m stored as Householder reflectors in At
     // Initialise x = [Y; 0]  (n × nrhs, zero-padded below row m)
-    const x = new Float64Array(n * nrhs);
+    const x = zeroedFloat64(n * nrhs);
     for (let i = 0; i < m; i++) {
       for (let c = 0; c < nrhs; c++) {
         x[i + c * n] = Y[i + c * m];
@@ -327,19 +328,19 @@ function eig(
   VL?: Float64Array;
   VR?: Float64Array;
 } {
-  const a = new Float64Array(data); // dgeev overwrites A
-  const wr = new Float64Array(n);
-  const wi = new Float64Array(n);
+  const a = copyFloat64(data); // dgeev overwrites A
+  const wr = zeroedFloat64(n);
+  const wi = zeroedFloat64(n);
   const ldvl = computeVL ? n : 1;
   const ldvr = computeVR ? n : 1;
-  const vl = new Float64Array(ldvl * (computeVL ? n : 0));
-  const vr = new Float64Array(ldvr * (computeVR ? n : 0));
+  const vl = zeroedFloat64(ldvl * (computeVL ? n : 0));
+  const vr = zeroedFloat64(ldvr * (computeVR ? n : 0));
 
   const jobvl = computeVL ? 1 : 0; // 0='N', 1='V'
   const jobvr = computeVR ? 1 : 0;
 
   // Workspace query
-  const workQuery = new Float64Array(1);
+  const workQuery = zeroedFloat64(1);
   dgeev(
     jobvl,
     jobvr,
@@ -363,7 +364,7 @@ function eig(
     balance
   );
   const lwork = Math.max(1, Math.floor(workQuery[0]));
-  const work = new Float64Array(lwork);
+  const work = zeroedFloat64(lwork);
 
   // Reset a since workspace query may have modified it
   a.set(data);
@@ -413,10 +414,10 @@ function linsolveComplex(
 ): { re: Float64Array; im: Float64Array } {
   if (m === n) {
     // ── Square: complex LU with partial pivoting ────────────────────────────
-    const aRe = new Float64Array(ARe);
-    const aIm = new Float64Array(AIm);
-    const bRe = new Float64Array(BRe);
-    const bIm = new Float64Array(BIm);
+    const aRe = copyFloat64(ARe);
+    const aIm = copyFloat64(AIm);
+    const bRe = copyFloat64(BRe);
+    const bIm = copyFloat64(BIm);
     const ipiv = new Int32Array(n);
 
     for (let k = 0; k < n; k++) {
@@ -516,10 +517,10 @@ function linsolveComplex(
   } else if (m > n) {
     // ── Overdetermined: complex Householder QR, solve R*X = Q^H*B ───────────
     const kk = n;
-    const aRe = new Float64Array(ARe);
-    const aIm = new Float64Array(AIm);
-    const tauRe = new Float64Array(kk);
-    const tauIm = new Float64Array(kk);
+    const aRe = copyFloat64(ARe);
+    const aIm = copyFloat64(AIm);
+    const tauRe = zeroedFloat64(kk);
+    const tauIm = zeroedFloat64(kk);
 
     // Complex Householder QR factorization
     for (let j = 0; j < kk; j++) {
@@ -591,8 +592,8 @@ function linsolveComplex(
     }
 
     // Apply Q^H to B: Q^H = H_{k-1} * ... * H_1 * H_0 (each H is Hermitian)
-    const bRe = new Float64Array(BRe);
-    const bIm = new Float64Array(BIm);
+    const bRe = copyFloat64(BRe);
+    const bIm = copyFloat64(BIm);
     for (let j = 0; j < kk; j++) {
       if (tauRe[j] === 0 && tauIm[j] === 0) continue;
       for (let c = 0; c < nrhs; c++) {
@@ -620,8 +621,8 @@ function linsolveComplex(
     }
 
     // Back-substitute: R * X = (Q^H*B)[0:n, :]
-    const xRe = new Float64Array(n * nrhs);
-    const xIm = new Float64Array(n * nrhs);
+    const xRe = allocFloat64(n * nrhs);
+    const xIm = allocFloat64(n * nrhs);
     for (let c = 0; c < nrhs; c++) {
       for (let i = n - 1; i >= 0; i--) {
         let valRe = bRe[i + c * m];
@@ -644,8 +645,8 @@ function linsolveComplex(
   } else {
     // ── Underdetermined (m < n): QR of A^H, minimum-norm solve ──────────────
     // Conjugate-transpose A → AH is n×m
-    const ahRe = new Float64Array(n * m);
-    const ahIm = new Float64Array(n * m);
+    const ahRe = allocFloat64(n * m);
+    const ahIm = allocFloat64(n * m);
     for (let i = 0; i < m; i++) {
       for (let j = 0; j < n; j++) {
         ahRe[j + i * n] = ARe[i + j * m];
@@ -654,8 +655,8 @@ function linsolveComplex(
     }
 
     const kk = m;
-    const tauRe = new Float64Array(kk);
-    const tauIm = new Float64Array(kk);
+    const tauRe = zeroedFloat64(kk);
+    const tauIm = zeroedFloat64(kk);
 
     // Complex Householder QR of A^H (n×m)
     for (let j = 0; j < kk; j++) {
@@ -719,8 +720,8 @@ function linsolveComplex(
 
     // Forward substitution: R^H * Y = B
     // R is upper triangular in ahRe/ahIm; R^H[i,k] = conj(R[k,i]) = conj(ah[k + i*n])
-    const yRe = new Float64Array(m * nrhs);
-    const yIm = new Float64Array(m * nrhs);
+    const yRe = allocFloat64(m * nrhs);
+    const yIm = allocFloat64(m * nrhs);
     for (let c = 0; c < nrhs; c++) {
       for (let i = 0; i < m; i++) {
         let valRe = BRe[i + c * m];
@@ -742,8 +743,8 @@ function linsolveComplex(
     }
 
     // X = Q * Y: apply Householder reflectors in reverse order
-    const xRe = new Float64Array(n * nrhs);
-    const xIm = new Float64Array(n * nrhs);
+    const xRe = zeroedFloat64(n * nrhs);
+    const xIm = zeroedFloat64(n * nrhs);
     for (let i = 0; i < m; i++) {
       for (let c = 0; c < nrhs; c++) {
         xRe[i + c * n] = yRe[i + c * m];
@@ -784,7 +785,7 @@ function lu(
   m: number,
   n: number
 ): { LU: Float64Array; ipiv: Int32Array } {
-  const a = new Float64Array(data);
+  const a = copyFloat64(data);
   const k = Math.min(m, n);
   const ipiv = new Int32Array(k);
 
@@ -810,9 +811,9 @@ function svd(
   computeUV: boolean
 ): { U?: Float64Array; S: Float64Array; V?: Float64Array } {
   const k = Math.min(m, n);
-  const a = new Float64Array(data); // dgesvd overwrites A
+  const a = copyFloat64(data); // dgesvd overwrites A
 
-  const s = new Float64Array(k);
+  const s = zeroedFloat64(k);
 
   // JOBU/JOBVT encoding: 0='A', 1='S', 2='O', 3='N'
   const JOBU_A = 0;
@@ -846,11 +847,11 @@ function svd(
 
   const ldu = computeUV ? Math.max(1, m) : 1;
   const ldvt = computeUV ? Math.max(1, vtRows) : 1;
-  const u = new Float64Array(ldu * uCols);
-  const vt = new Float64Array(ldvt * n);
+  const u = zeroedFloat64(ldu * uCols);
+  const vt = zeroedFloat64(ldvt * n);
 
   // Workspace query
-  const workQuery = new Float64Array(1);
+  const workQuery = zeroedFloat64(1);
   _dgesvd(
     jobu,
     jobvt,
@@ -872,7 +873,7 @@ function svd(
     -1
   );
   const lwork = Math.max(1, Math.floor(workQuery[0]));
-  const work = new Float64Array(lwork);
+  const work = zeroedFloat64(lwork);
 
   // Reset a since workspace query may have modified it
   a.set(data);
@@ -906,7 +907,7 @@ function svd(
 
   // Transpose VT to get V (bridge interface returns V, not VT)
   const vCols = econ ? k : n;
-  const v = new Float64Array(n * vCols);
+  const v = allocFloat64(n * vCols);
   for (let j = 0; j < vCols; j++) {
     for (let i = 0; i < n; i++) {
       v[i + j * n] = vt[j + i * ldvt]; // V(i,j) = VT(j,i)
@@ -921,7 +922,7 @@ function chol(
   n: number,
   upper: boolean
 ): { R: Float64Array; info: number } {
-  const a = new Float64Array(data);
+  const a = copyFloat64(data);
   const info = dpotf2(upper ? UPPER : LOWER, n, a, 0, n);
 
   // Zero the opposite triangle (matching native C++ addon behavior)
@@ -941,8 +942,8 @@ function cholComplex(
   n: number,
   upper: boolean
 ): { RRe: Float64Array; RIm: Float64Array; info: number } {
-  const re = new Float64Array(dataRe);
-  const im = new Float64Array(dataIm);
+  const re = copyFloat64(dataRe);
+  const im = copyFloat64(dataIm);
   let info = 0;
 
   if (upper) {
@@ -1050,7 +1051,7 @@ function gmres(
 } {
   // Matvec callback: y = A*x (manual column-major loop)
   const matvecFn: MatvecFn = (x: Float64Array): Float64Array => {
-    const y = new Float64Array(n);
+    const y = allocFloat64(n);
     for (let i = 0; i < n; i++) {
       let s = 0;
       for (let j = 0; j < n; j++) s += A[i + j * n] * x[j];
@@ -1062,20 +1063,20 @@ function gmres(
   // Pre-factor preconditioners and create solve callback
   let precSolveFn: PrecSolveFn | null = null;
   if (M1 || M2) {
-    const m1lu = M1 ? new Float64Array(M1) : null;
+    const m1lu = M1 ? copyFloat64(M1) : null;
     const m1ipiv = M1 ? new Int32Array(n) : null;
     if (m1lu && m1ipiv) {
       const info = dgetrf(n, n, m1lu, n, m1ipiv);
       if (info > 0) throw new Error("gmres: preconditioner M1 is singular");
     }
-    const m2lu = M2 ? new Float64Array(M2) : null;
+    const m2lu = M2 ? copyFloat64(M2) : null;
     const m2ipiv = M2 ? new Int32Array(n) : null;
     if (m2lu && m2ipiv) {
       const info = dgetrf(n, n, m2lu, n, m2ipiv);
       if (info > 0) throw new Error("gmres: preconditioner M2 is singular");
     }
     precSolveFn = (r: Float64Array): Float64Array => {
-      const z = new Float64Array(r);
+      const z = copyFloat64(r);
       if (m1lu && m1ipiv) luSolveInPlace(n, m1lu, m1ipiv, z);
       if (m2lu && m2ipiv) luSolveInPlace(n, m2lu, m2ipiv, z);
       return z;
@@ -1130,8 +1131,8 @@ function gmresComplex(
 } {
   // Complex matvec: y = A*x (manual column-major)
   const matvecFn: ComplexMatvecFn = x => {
-    const yRe = new Float64Array(n);
-    const yIm = new Float64Array(n);
+    const yRe = allocFloat64(n);
+    const yIm = allocFloat64(n);
     for (let i = 0; i < n; i++) {
       let sRe = 0,
         sIm = 0;
@@ -1150,8 +1151,8 @@ function gmresComplex(
   // Pre-factor preconditioners
   let precSolveFn: ComplexPrecSolveFn | null = null;
   if (M1Re || M2Re) {
-    const m1luRe = M1Re ? new Float64Array(M1Re) : null;
-    const m1luIm = M1Im ? new Float64Array(M1Im) : null;
+    const m1luRe = M1Re ? copyFloat64(M1Re) : null;
+    const m1luIm = M1Im ? copyFloat64(M1Im) : null;
     const m1ipiv = M1Re ? new Int32Array(n) : null;
     if (m1luRe && m1luIm && m1ipiv) {
       // Complex LU via manual zgetrf equivalent: use the real dgetrf on
@@ -1159,15 +1160,15 @@ function gmresComplex(
       // Use our own complexLuFactor.
       complexLuFactor(n, m1luRe, m1luIm, m1ipiv);
     }
-    const m2luRe = M2Re ? new Float64Array(M2Re) : null;
-    const m2luIm = M2Im ? new Float64Array(M2Im) : null;
+    const m2luRe = M2Re ? copyFloat64(M2Re) : null;
+    const m2luIm = M2Im ? copyFloat64(M2Im) : null;
     const m2ipiv = M2Re ? new Int32Array(n) : null;
     if (m2luRe && m2luIm && m2ipiv) {
       complexLuFactor(n, m2luRe, m2luIm, m2ipiv);
     }
     precSolveFn = r => {
-      const zRe = new Float64Array(r.re);
-      const zIm = new Float64Array(r.im);
+      const zRe = copyFloat64(r.re);
+      const zIm = copyFloat64(r.im);
       if (m1luRe && m1luIm && m1ipiv)
         complexLuSolveInPlace(n, m1luRe, m1luIm, m1ipiv, zRe, zIm);
       if (m2luRe && m2luIm && m2ipiv)

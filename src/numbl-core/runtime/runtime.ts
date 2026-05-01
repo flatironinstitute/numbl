@@ -35,7 +35,6 @@ import {
   isRuntimeCell,
   isRuntimeLogical,
   isRuntimeSparseMatrix,
-  FloatXArray,
   RuntimeChar,
   RuntimeCell,
   type RuntimeComplexNumber,
@@ -139,6 +138,7 @@ import {
 } from "./runtimePlot.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
+import { zeroedFloatX, copyFloatX } from "./alloc.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -982,10 +982,7 @@ export class Runtime {
     return RTV.struct(
       new Map<string, RuntimeValue>([
         ["name", RTV.char(info.name)],
-        [
-          "size",
-          RTV.tensor(new FloatXArray(info.shape), [1, info.shape.length]),
-        ],
+        ["size", RTV.tensor(copyFloatX(info.shape), [1, info.shape.length])],
         ["bytes", RTV.num(info.bytes)],
         ["class", RTV.char(info.cls)],
         ["global", RTV.logical(false)],
@@ -1184,7 +1181,7 @@ export class Runtime {
 
   public getPersistent(funcId: string, varName: string): RuntimeValue {
     const val = this.persistentStore.get(funcId)?.get(varName);
-    if (val === undefined) return RTV.tensor(new FloatXArray(0), [0, 0]);
+    if (val === undefined) return RTV.tensor(zeroedFloatX(0), [0, 0]);
     return val;
   }
 

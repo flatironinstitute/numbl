@@ -6,7 +6,6 @@ import {
   type RuntimeValue,
   type RuntimeSparseMatrix,
   type RuntimeTensor,
-  FloatXArray,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
@@ -16,6 +15,7 @@ import {
 import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D } from "../runtime/utils.js";
+import { zeroedFloatX, copyFloat64, zeroedFloat64 } from "../runtime/alloc.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
@@ -41,15 +41,15 @@ function isZero(re: number, im: number): boolean {
 /** Build optional pi array: return undefined if all zeros. */
 function maybePi(piList: number[]): Float64Array | undefined {
   for (let i = 0; i < piList.length; i++) {
-    if (piList[i] !== 0) return new Float64Array(piList);
+    if (piList[i] !== 0) return copyFloat64(piList);
   }
   return undefined;
 }
 
 /** Convert a sparse matrix to dense. */
 function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
-  const data = new FloatXArray(S.m * S.n);
-  const imag = S.pi ? new FloatXArray(S.m * S.n) : undefined;
+  const data = zeroedFloatX(S.m * S.n);
+  const imag = S.pi ? zeroedFloatX(S.m * S.n) : undefined;
   for (let col = 0; col < S.n; col++) {
     for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
       const idx = col * S.m + S.ir[k];
@@ -142,7 +142,7 @@ function sparseAdd(
     a.n,
     new Int32Array(irList),
     jc,
-    new Float64Array(prList),
+    copyFloat64(prList),
     hasImag ? maybePi(piList) : undefined
   );
 }
@@ -211,7 +211,7 @@ function sparseSub(
     a.n,
     new Int32Array(irList),
     jc,
-    new Float64Array(prList),
+    copyFloat64(prList),
     hasImag ? maybePi(piList) : undefined
   );
 }
@@ -229,12 +229,12 @@ function sparseScaleComplex(
       S.n,
       new Int32Array(0),
       new Int32Array(S.n + 1),
-      new Float64Array(0)
+      zeroedFloat64(0)
     );
   }
   const nnz = S.pr.length;
-  const pr = new Float64Array(nnz);
-  const pi = new Float64Array(nnz);
+  const pr = zeroedFloat64(nnz);
+  const pi = zeroedFloat64(nnz);
   for (let i = 0; i < nnz; i++) {
     const aRe = S.pr[i];
     const aIm = S.pi ? S.pi[i] : 0;
@@ -263,12 +263,12 @@ function sparseScale(
       S.n,
       new Int32Array(0),
       new Int32Array(S.n + 1),
-      new Float64Array(0)
+      zeroedFloat64(0)
     );
   }
-  const pr = new Float64Array(S.pr.length);
+  const pr = zeroedFloat64(S.pr.length);
   for (let i = 0; i < pr.length; i++) pr[i] = S.pr[i] * scalar;
-  const pi = S.pi ? new Float64Array(S.pi.length) : undefined;
+  const pi = S.pi ? zeroedFloat64(S.pi.length) : undefined;
   if (pi && S.pi) {
     for (let i = 0; i < pi.length; i++) pi[i] = S.pi[i] * scalar;
   }
@@ -285,9 +285,9 @@ function sparseScale(
 // ── -S (negation) ───────────────────────────────────────────────────────
 
 export function sparseNeg(S: RuntimeSparseMatrix): RuntimeSparseMatrix {
-  const pr = new Float64Array(S.pr.length);
+  const pr = zeroedFloat64(S.pr.length);
   for (let i = 0; i < pr.length; i++) pr[i] = -S.pr[i];
-  const pi = S.pi ? new Float64Array(S.pi.length) : undefined;
+  const pi = S.pi ? zeroedFloat64(S.pi.length) : undefined;
   if (pi && S.pi) {
     for (let i = 0; i < pi.length; i++) pi[i] = -S.pi[i];
   }
@@ -307,8 +307,8 @@ export function sparseTranspose(S: RuntimeSparseMatrix): RuntimeSparseMatrix {
   const nnz = S.jc[S.n];
   const tIr = new Int32Array(nnz);
   const tJc = new Int32Array(S.m + 1);
-  const tPr = new Float64Array(nnz);
-  const tPi = S.pi ? new Float64Array(nnz) : undefined;
+  const tPr = zeroedFloat64(nnz);
+  const tPi = S.pi ? zeroedFloat64(nnz) : undefined;
 
   // Count entries per row of S (= per column of S')
   for (let k = 0; k < nnz; k++) tJc[S.ir[k] + 1]++;
@@ -338,8 +338,8 @@ export function sparseConjugateTranspose(
   const nnz = S.jc[S.n];
   const tIr = new Int32Array(nnz);
   const tJc = new Int32Array(S.m + 1);
-  const tPr = new Float64Array(nnz);
-  const tPi = new Float64Array(nnz);
+  const tPr = zeroedFloat64(nnz);
+  const tPi = zeroedFloat64(nnz);
 
   for (let k = 0; k < nnz; k++) tJc[S.ir[k] + 1]++;
   for (let i = 0; i < S.m; i++) tJc[i + 1] += tJc[i];
@@ -374,8 +374,8 @@ function sparseMatMul(
   const prList: number[] = [];
   const piList: number[] = [];
   const jc = new Int32Array(n + 1);
-  const accRe = new Float64Array(m);
-  const accIm = hasImag ? new Float64Array(m) : null;
+  const accRe = zeroedFloat64(m);
+  const accIm = hasImag ? zeroedFloat64(m) : null;
   const marker = new Int32Array(m).fill(-1);
 
   for (let col = 0; col < n; col++) {
@@ -421,7 +421,7 @@ function sparseMatMul(
     n,
     new Int32Array(irList),
     jc,
-    new Float64Array(prList),
+    copyFloat64(prList),
     hasImag ? maybePi(piList) : undefined
   );
 }
@@ -476,7 +476,7 @@ function sparseElemMul(
     a.n,
     new Int32Array(irList),
     jc,
-    new Float64Array(prList),
+    copyFloat64(prList),
     hasImag ? maybePi(piList) : undefined
   );
 }
@@ -522,7 +522,7 @@ function sparseElemMulDense(
     S.n,
     new Int32Array(irList),
     jc,
-    new Float64Array(prList),
+    copyFloat64(prList),
     hasImag ? maybePi(piList) : undefined
   );
 }
@@ -538,12 +538,12 @@ export function mAddSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const cs = complexScalarVal(b);
     if (cs) {
       const dense = sparseToDense(a);
-      const data = new FloatXArray(dense.data.length);
+      const data = zeroedFloatX(dense.data.length);
       for (let i = 0; i < data.length; i++) data[i] = dense.data[i] + cs.re;
       const imag =
         cs.im !== 0 || dense.imag
           ? (() => {
-              const r = new FloatXArray(data.length);
+              const r = zeroedFloatX(data.length);
               for (let i = 0; i < r.length; i++)
                 r[i] = (dense.imag ? dense.imag[i] : 0) + cs.im;
               return r;
@@ -556,12 +556,12 @@ export function mAddSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const cs = complexScalarVal(a);
     if (cs) {
       const dense = sparseToDense(b);
-      const data = new FloatXArray(dense.data.length);
+      const data = zeroedFloatX(dense.data.length);
       for (let i = 0; i < data.length; i++) data[i] = cs.re + dense.data[i];
       const imag =
         cs.im !== 0 || dense.imag
           ? (() => {
-              const r = new FloatXArray(data.length);
+              const r = zeroedFloatX(data.length);
               for (let i = 0; i < r.length; i++)
                 r[i] = cs.im + (dense.imag ? dense.imag[i] : 0);
               return r;
@@ -573,14 +573,14 @@ export function mAddSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   // sparse + dense tensor → dense
   if (isRuntimeSparseMatrix(a) && isRuntimeTensor(b)) {
     const dense = sparseToDense(a);
-    const data = new FloatXArray(dense.data.length);
+    const data = zeroedFloatX(dense.data.length);
     for (let i = 0; i < data.length; i++) data[i] = dense.data[i] + b.data[i];
     const imag = mergeImag(dense.imag, b.imag, data.length, (x, y) => x + y);
     return RTV.tensor(data, dense.shape, imag);
   }
   if (isRuntimeTensor(a) && isRuntimeSparseMatrix(b)) {
     const dense = sparseToDense(b);
-    const data = new FloatXArray(dense.data.length);
+    const data = zeroedFloatX(dense.data.length);
     for (let i = 0; i < data.length; i++) data[i] = a.data[i] + dense.data[i];
     const imag = mergeImag(a.imag, dense.imag, data.length, (x, y) => x + y);
     return RTV.tensor(data, a.shape, imag);
@@ -596,12 +596,12 @@ export function mSubSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const cs = complexScalarVal(b);
     if (cs) {
       const dense = sparseToDense(a);
-      const data = new FloatXArray(dense.data.length);
+      const data = zeroedFloatX(dense.data.length);
       for (let i = 0; i < data.length; i++) data[i] = dense.data[i] - cs.re;
       const imag =
         cs.im !== 0 || dense.imag
           ? (() => {
-              const r = new FloatXArray(data.length);
+              const r = zeroedFloatX(data.length);
               for (let i = 0; i < r.length; i++)
                 r[i] = (dense.imag ? dense.imag[i] : 0) - cs.im;
               return r;
@@ -614,12 +614,12 @@ export function mSubSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const cs = complexScalarVal(a);
     if (cs) {
       const dense = sparseToDense(b);
-      const data = new FloatXArray(dense.data.length);
+      const data = zeroedFloatX(dense.data.length);
       for (let i = 0; i < data.length; i++) data[i] = cs.re - dense.data[i];
       const imag =
         cs.im !== 0 || dense.imag
           ? (() => {
-              const r = new FloatXArray(data.length);
+              const r = zeroedFloatX(data.length);
               for (let i = 0; i < r.length; i++)
                 r[i] = cs.im - (dense.imag ? dense.imag[i] : 0);
               return r;
@@ -630,14 +630,14 @@ export function mSubSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   }
   if (isRuntimeSparseMatrix(a) && isRuntimeTensor(b)) {
     const dense = sparseToDense(a);
-    const data = new FloatXArray(dense.data.length);
+    const data = zeroedFloatX(dense.data.length);
     for (let i = 0; i < data.length; i++) data[i] = dense.data[i] - b.data[i];
     const imag = mergeImag(dense.imag, b.imag, data.length, (x, y) => x - y);
     return RTV.tensor(data, dense.shape, imag);
   }
   if (isRuntimeTensor(a) && isRuntimeSparseMatrix(b)) {
     const dense = sparseToDense(b);
-    const data = new FloatXArray(dense.data.length);
+    const data = zeroedFloatX(dense.data.length);
     for (let i = 0; i < data.length; i++) data[i] = a.data[i] - dense.data[i];
     const imag = mergeImag(a.imag, dense.imag, data.length, (x, y) => x - y);
     return RTV.tensor(data, a.shape, imag);
@@ -653,7 +653,7 @@ function mergeImag(
   op: (x: number, y: number) => number
 ): import("../runtime/types.js").FloatXArrayType | undefined {
   if (!a && !b) return undefined;
-  const result = new FloatXArray(len);
+  const result = zeroedFloatX(len);
   for (let i = 0; i < len; i++) {
     result[i] = op(a ? a[i] : 0, b ? b[i] : 0);
   }
@@ -689,8 +689,8 @@ export function mMulSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       );
     const m = a.m;
     const hasImag = isComplexSparse(a) || b.imag !== undefined;
-    const result = new FloatXArray(m * bCols);
-    const resultImag = hasImag ? new FloatXArray(m * bCols) : undefined;
+    const result = zeroedFloatX(m * bCols);
+    const resultImag = hasImag ? zeroedFloatX(m * bCols) : undefined;
     for (let col = 0; col < bCols; col++) {
       for (let k = 0; k < a.n; k++) {
         const bRe = b.data[col * bRows + k];
@@ -715,8 +715,8 @@ export function mMulSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
         `Inner matrix dimensions must agree: ${aCols} vs ${b.m}`
       );
     const hasImag = a.imag !== undefined || isComplexSparse(b);
-    const result = new FloatXArray(aRows * b.n);
-    const resultImag = hasImag ? new FloatXArray(aRows * b.n) : undefined;
+    const result = zeroedFloatX(aRows * b.n);
+    const resultImag = hasImag ? zeroedFloatX(aRows * b.n) : undefined;
     for (let col = 0; col < b.n; col++) {
       for (let kb = b.jc[col]; kb < b.jc[col + 1]; kb++) {
         const k = b.ir[kb];
@@ -785,8 +785,8 @@ export function mElemDivSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
       const bDense = sparseToDense(b);
       const len = bDense.data.length;
       const hasImag = cs.im !== 0 || bDense.imag !== undefined;
-      const data = new FloatXArray(len);
-      const imag = hasImag ? new FloatXArray(len) : undefined;
+      const data = zeroedFloatX(len);
+      const imag = hasImag ? zeroedFloatX(len) : undefined;
       for (let i = 0; i < len; i++) {
         const bRe = bDense.data[i];
         const bIm = bDense.imag ? bDense.imag[i] : 0;
@@ -807,8 +807,8 @@ export function mElemDivSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (!isRuntimeTensor(aDense) || !isRuntimeTensor(bDense))
     throw new RuntimeError("mElemDivSparse: unexpected operand types");
   const hasImag = aDense.imag !== undefined || bDense.imag !== undefined;
-  const data = new FloatXArray(aDense.data.length);
-  const imag = hasImag ? new FloatXArray(aDense.data.length) : undefined;
+  const data = zeroedFloatX(aDense.data.length);
+  const imag = hasImag ? zeroedFloatX(aDense.data.length) : undefined;
   for (let i = 0; i < data.length; i++) {
     const bRe = bDense.data[i];
     const bIm = bDense.imag ? bDense.imag[i] : 0;

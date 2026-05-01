@@ -11,12 +11,12 @@
  */
 
 import {
-  FloatXArray,
   type FloatXArrayType,
   type RuntimeTensor,
 } from "../../../runtime/types.js";
 import { makeTensor } from "./jitHelpersTensor.js";
 import { mkc } from "./jitHelpersComplex.js";
+import { zeroedFloatX } from "../../../runtime/alloc.js";
 
 // ── Soft bail to interpreter ───────────────────────────────────────────
 //
@@ -323,11 +323,11 @@ export function subarrayCopy1r(
   const e = (end - 1) | 0;
   const n = e - s + 1;
   if (n <= 0) {
-    return makeTensor(new FloatXArray(0), undefined, [0, 1]);
+    return makeTensor(zeroedFloatX(0), undefined, [0, 1]);
   }
   if (s >>> 0 >= srcLen) bce();
   if (e >>> 0 >= srcLen) bce();
-  const out = new FloatXArray(n);
+  const out = zeroedFloatX(n);
   out.set(srcData.subarray(s, e + 1));
   return makeTensor(out, undefined, [n, 1]);
 }
@@ -346,11 +346,11 @@ export function subarrayCopy1rRow(
   const e = (end - 1) | 0;
   const n = e - s + 1;
   if (n <= 0) {
-    return makeTensor(new FloatXArray(0), undefined, [1, 0]);
+    return makeTensor(zeroedFloatX(0), undefined, [1, 0]);
   }
   if (s >>> 0 >= srcLen) bce();
   if (e >>> 0 >= srcLen) bce();
-  const out = new FloatXArray(n);
+  const out = zeroedFloatX(n);
   out.set(srcData.subarray(s, e + 1));
   return makeTensor(out, undefined, [1, n]);
 }

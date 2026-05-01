@@ -9,12 +9,12 @@ import {
   RuntimeError,
 } from "../../runtime/index.js";
 import {
-  FloatXArray,
   isRuntimeNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { sparseToDense } from "../sparse-arithmetic.js";
+import { copyFloatX, zeroedFloatX } from "../../runtime/alloc.js";
 
 // ── Generic cumulative operation ───────────────────────────────────────
 
@@ -54,15 +54,15 @@ export function cumOp(
     // If dim exceeds dimensions, return a copy (dim has size 1)
     if (dimIdx >= shape.length) {
       return RTV.tensor(
-        new FloatXArray(v.data),
+        copyFloatX(v.data),
         [...shape],
-        hasImag ? new FloatXArray(v.imag!) : undefined
+        hasImag ? copyFloatX(v.imag!) : undefined
       );
     }
 
     const dimSize = shape[dimIdx];
-    const result = new FloatXArray(v.data.length);
-    const resultImag = hasImag ? new FloatXArray(v.data.length) : undefined;
+    const result = zeroedFloatX(v.data.length);
+    const resultImag = hasImag ? zeroedFloatX(v.data.length) : undefined;
 
     const accumOne = (
       acc: number,
@@ -144,7 +144,7 @@ export function cumOp(
 
 export function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
   if (isRuntimeNumber(v)) {
-    return RTV.tensor(new FloatXArray(0), [0, 0]);
+    return RTV.tensor(zeroedFloatX(0), [0, 0]);
   }
   if (isRuntimeTensor(v)) {
     const shape = v.shape;
@@ -162,14 +162,14 @@ export function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
     if (dimSize <= 1) {
       const newShape = [...shape];
       if (opDim < newShape.length) newShape[opDim] = 0;
-      return RTV.tensor(new FloatXArray(0), newShape);
+      return RTV.tensor(zeroedFloatX(0), newShape);
     }
 
     const newShape = [...shape];
     newShape[opDim] = dimSize - 1;
     const totalOut = newShape.reduce((a, b) => a * b, 1);
-    const result = new FloatXArray(totalOut);
-    const resultImag = v.imag ? new FloatXArray(totalOut) : undefined;
+    const result = zeroedFloatX(totalOut);
+    const resultImag = v.imag ? zeroedFloatX(totalOut) : undefined;
 
     let innerCount = 1;
     for (let d = 0; d < opDim; d++) innerCount *= shape[d];

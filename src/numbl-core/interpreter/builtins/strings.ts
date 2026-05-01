@@ -13,7 +13,6 @@ import {
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
-  FloatXArray,
 } from "../../runtime/types.js";
 import {
   RTV,
@@ -25,6 +24,7 @@ import {
 import type { JitType } from "../../jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { sprintfFormat } from "../../helpers/string.js";
+import { copyFloatX, zeroedFloatX } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────
 
@@ -451,7 +451,7 @@ function strcmpApply(
     const cellA = a as import("../../runtime/types.js").RuntimeCell;
     const cellB = b as import("../../runtime/types.js").RuntimeCell;
     const len = cellA.data.length;
-    const result = new FloatXArray(len);
+    const result = zeroedFloatX(len);
     for (let i = 0; i < len; i++) {
       const ai = cellA.data[i];
       const bi = cellB.data[i];
@@ -472,7 +472,7 @@ function strcmpApply(
   ) as import("../../runtime/types.js").RuntimeCell;
   const scalar = aIsCell ? b : a;
   const len = cell.data.length;
-  const result = new FloatXArray(len);
+  const result = zeroedFloatX(len);
   for (let i = 0; i < len; i++) {
     const elem = cell.data[i];
     const [s1, s2] = aIsCell ? [elem, scalar] : [scalar, elem];
@@ -604,7 +604,7 @@ function logicalRowFromString(
   shape?: number[]
 ): RuntimeValue {
   const cps = stringCodePoints(s);
-  const data = new FloatXArray(cps.length);
+  const data = zeroedFloatX(cps.length);
   for (let i = 0; i < cps.length; i++) data[i] = pred(cps[i]) ? 1 : 0;
   return {
     kind: "tensor",
@@ -620,7 +620,7 @@ function logicalFromNumericTensor(
   shape: number[],
   pred: (cp: number) => boolean
 ): RuntimeValue {
-  const out = new FloatXArray(data.length);
+  const out = zeroedFloatX(data.length);
   for (let i = 0; i < data.length; i++) {
     out[i] = pred(Math.round(data[i])) ? 1 : 0;
   }
@@ -678,7 +678,7 @@ function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
     result = logicalFromNumericTensor(v.data, v.shape, pred);
   } else if (isRuntimeNumber(v) || isRuntimeLogical(v)) {
     const cp = Math.round(toNumber(v));
-    const data = new FloatXArray(1);
+    const data = zeroedFloatX(1);
     data[0] = pred(cp) ? 1 : 0;
     result = {
       kind: "tensor",
@@ -872,7 +872,7 @@ registerIBuiltin({
           )
             throw new RuntimeError("str2double: expected cell array");
           const c = cell as import("../../runtime/types.js").RuntimeCell;
-          const data = new FloatXArray(c.data.length);
+          const data = zeroedFloatX(c.data.length);
           for (let i = 0; i < c.data.length; i++) {
             const el = c.data[i];
             if (isRuntimeString(el) || isRuntimeChar(el)) {
@@ -901,7 +901,7 @@ registerIBuiltin({
         const s = toString(args[0]);
         const n = Number(s);
         return Number.isNaN(n)
-          ? RTV.tensor(new FloatXArray(0), [0, 0])
+          ? RTV.tensor(zeroedFloatX(0), [0, 0])
           : RTV.num(n);
       },
     };
@@ -974,9 +974,9 @@ registerIBuiltin({
           pos = idx + 1;
         }
         if (indices.length === 0) {
-          return RTV.tensor(new FloatXArray(0), [1, 0]);
+          return RTV.tensor(zeroedFloatX(0), [1, 0]);
         }
-        const data = new FloatXArray(indices.length);
+        const data = zeroedFloatX(indices.length);
         indices.forEach((v, i) => (data[i] = v));
         return RTV.tensor(data, [1, indices.length]);
       },
@@ -1429,7 +1429,7 @@ registerIBuiltin({
         const vals =
           results.length === 1
             ? RTV.num(results[0])
-            : RTV.tensor(new FloatXArray(results), [results.length, 1]);
+            : RTV.tensor(copyFloatX(results), [results.length, 1]);
         if (nout >= 2) {
           return [vals, RTV.num(results.length)];
         }

@@ -3,7 +3,7 @@
  * strsplit, strjoin, regexp, regexpi, regexprep, symvar.
  */
 
-import { FloatXArray, isRuntimeCell } from "../../runtime/types.js";
+import { isRuntimeCell } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
@@ -13,6 +13,7 @@ import { registerIBuiltin } from "./types.js";
 import { parseMFile, type Stmt, type Expr } from "../../parser/index.js";
 import { BUILTIN_CONSTANTS } from "../../lowering/constants.js";
 import { getIBuiltin } from "./types.js";
+import { zeroedFloatX, copyFloatX } from "../../runtime/alloc.js";
 
 // ── strsplit ────────────────────────────────────────────────────────────
 
@@ -118,15 +119,15 @@ function regexpImpl(
       if (matchOnce)
         return starts.length > 0
           ? RTV.num(starts[0])
-          : RTV.tensor(new FloatXArray(0), [1, 0]);
-      return RTV.tensor(new FloatXArray(starts), [1, starts.length]);
+          : RTV.tensor(zeroedFloatX(0), [1, 0]);
+      return RTV.tensor(copyFloatX(starts), [1, starts.length]);
     }
     if (mode === "end") {
       if (matchOnce)
         return ends.length > 0
           ? RTV.num(ends[0])
-          : RTV.tensor(new FloatXArray(0), [1, 0]);
-      return RTV.tensor(new FloatXArray(ends), [1, ends.length]);
+          : RTV.tensor(zeroedFloatX(0), [1, 0]);
+      return RTV.tensor(copyFloatX(ends), [1, ends.length]);
     }
     if (mode === "match") {
       if (matchOnce)
@@ -155,7 +156,7 @@ function regexpImpl(
       );
     }
     if (mode === "names") {
-      if (starts.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+      if (starts.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
       const namedRe = new RegExp(pat, flags);
       const namedMatches: Record<string, string>[] = [];
       let nm: RegExpExecArray | null;
@@ -175,8 +176,7 @@ function regexpImpl(
         }
         return RTV.struct(fields);
       }
-      if (namedMatches.length === 0)
-        return RTV.tensor(new FloatXArray(0), [0, 0]);
+      if (namedMatches.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
       const keys = Object.keys(namedMatches[0]);
       const elements = namedMatches.map(nm2 => {
         const fields: Record<string, RuntimeValue> = {};
@@ -186,8 +186,8 @@ function regexpImpl(
       return RTV.structArray(keys, elements);
     }
     // tokenextents
-    if (matchOnce) return RTV.tensor(new FloatXArray(0), [1, 0]);
-    return RTV.tensor(new FloatXArray(0), [1, 0]);
+    if (matchOnce) return RTV.tensor(zeroedFloatX(0), [1, 0]);
+    return RTV.tensor(zeroedFloatX(0), [1, 0]);
   }
 
   if (outModes.length === 1) return buildOutput(outModes[0]);

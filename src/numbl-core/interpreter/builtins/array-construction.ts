@@ -2,11 +2,12 @@
  * Array construction builtins: zeros, ones, nan/NaN, eye, linspace, logspace.
  */
 
-import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
+import { isRuntimeTensor } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { toNumber, numel, RuntimeError } from "../../runtime/index.js";
 import type { SignCategory } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
+import { zeroedFloatX, copyFloatX } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -114,7 +115,7 @@ function arrayConstructorCases(
 defineBuiltin({
   name: "zeros",
   cases: arrayConstructorCases(
-    shape => makeTensor(new FloatXArray(numel(shape)), undefined, shape),
+    shape => makeTensor(zeroedFloatX(numel(shape)), undefined, shape),
     0,
     { scalarSign: "nonneg", nonneg: true }
   ),
@@ -126,7 +127,7 @@ defineBuiltin({
   name: "ones",
   cases: arrayConstructorCases(
     shape => {
-      const data = new FloatXArray(numel(shape));
+      const data = zeroedFloatX(numel(shape));
       data.fill(1);
       return makeTensor(data, undefined, shape);
     },
@@ -138,7 +139,7 @@ defineBuiltin({
 // ── nan / NaN ────────────────────────────────────────────────────────────
 
 function nanFill(shape: number[]): RuntimeValue {
-  const data = new FloatXArray(numel(shape));
+  const data = zeroedFloatX(numel(shape));
   data.fill(NaN);
   return makeTensor(data, undefined, shape);
 }
@@ -156,7 +157,7 @@ defineBuiltin({
 // ── inf / Inf ────────────────────────────────────────────────────────────
 
 function infFill(shape: number[]): RuntimeValue {
-  const data = new FloatXArray(numel(shape));
+  const data = zeroedFloatX(numel(shape));
   data.fill(Infinity);
   return makeTensor(data, undefined, shape);
 }
@@ -201,7 +202,7 @@ defineBuiltin({
               rows = validateDim(toNumber(args[0]));
               cols = validateDim(toNumber(args[1]));
             }
-            const data = new FloatXArray(rows * cols);
+            const data = zeroedFloatX(rows * cols);
             const minDim = Math.min(rows, cols);
             for (let i = 0; i < minDim; i++) {
               data[i * rows + i] = 1;
@@ -231,10 +232,9 @@ defineBuiltin({
         const start = toNumber(args[0]);
         const end = toNumber(args[1]);
         const n = args.length === 3 ? Math.round(toNumber(args[2])) : 100;
-        if (n <= 0) return makeTensor(new FloatXArray(0), undefined, [1, 0]);
-        if (n === 1)
-          return makeTensor(new FloatXArray([end]), undefined, [1, 1]);
-        const data = new FloatXArray(n);
+        if (n <= 0) return makeTensor(zeroedFloatX(0), undefined, [1, 0]);
+        if (n === 1) return makeTensor(copyFloatX([end]), undefined, [1, 1]);
+        const data = zeroedFloatX(n);
         // MATLAB preserves both endpoints exactly (so NaN/Inf at one end
         // don't contaminate the other).
         data[0] = start;
@@ -277,13 +277,12 @@ defineBuiltin({
         const a = toNumber(args[0]);
         const b = toNumber(args[1]);
         const n = args.length === 3 ? Math.round(toNumber(args[2])) : 50;
-        if (n <= 0) return makeTensor(new FloatXArray(0), undefined, [1, 0]);
+        if (n <= 0) return makeTensor(zeroedFloatX(0), undefined, [1, 0]);
         const isPi = b === Math.PI;
         const endVal = isPi ? Math.PI : Math.pow(10, b);
         const startVal = Math.pow(10, a);
-        if (n === 1)
-          return makeTensor(new FloatXArray([endVal]), undefined, [1, 1]);
-        const data = new FloatXArray(n);
+        if (n === 1) return makeTensor(copyFloatX([endVal]), undefined, [1, 1]);
+        const data = zeroedFloatX(n);
         if (isPi) {
           const logStart = Math.log10(startVal);
           const logEnd = Math.log10(Math.PI);

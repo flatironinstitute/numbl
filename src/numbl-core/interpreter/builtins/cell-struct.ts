@@ -4,7 +4,6 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeCell,
   isRuntimeChar,
   isRuntimeComplexNumber,
@@ -22,6 +21,7 @@ import type {
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
 import { registerIBuiltin } from "./types.js";
+import { zeroedFloatX, copyFloatX } from "../../runtime/alloc.js";
 
 // ── helpers ─────────────────────────────────────────────────────────────
 
@@ -34,12 +34,10 @@ function toNumericVector(v: RuntimeValue, name: string): number[] {
 
 function coerceToTensor(v: RuntimeValue, name: string): RuntimeTensor {
   if (isRuntimeTensor(v)) return v;
-  if (isRuntimeNumber(v))
-    return RTV.tensor(new FloatXArray([v as number]), [1, 1]);
-  if (isRuntimeLogical(v))
-    return RTV.tensor(new FloatXArray([v ? 1 : 0]), [1, 1]);
+  if (isRuntimeNumber(v)) return RTV.tensor(copyFloatX([v as number]), [1, 1]);
+  if (isRuntimeLogical(v)) return RTV.tensor(copyFloatX([v ? 1 : 0]), [1, 1]);
   if (isRuntimeComplexNumber(v))
-    return RTV.tensor(new FloatXArray([v.re]), [1, 1], new FloatXArray([v.im]));
+    return RTV.tensor(copyFloatX([v.re]), [1, 1], copyFloatX([v.im]));
   throw new RuntimeError(`${name}: argument must be numeric`);
 }
 
@@ -62,21 +60,21 @@ registerIBuiltin({
         const asTensor = (v: RuntimeValue) => {
           if (isRuntimeNumber(v))
             return {
-              data: new FloatXArray([v as number]),
+              data: copyFloatX([v as number]),
               shape: [1, 1],
               imag: undefined,
             };
           if (isRuntimeComplexNumber(v))
             return {
-              data: new FloatXArray([v.re]),
+              data: copyFloatX([v.re]),
               shape: [1, 1],
-              imag: new FloatXArray([v.im]),
+              imag: copyFloatX([v.im]),
             };
           if (isRuntimeTensor(v))
             return { data: v.data, shape: v.shape, imag: v.imag };
           if (isRuntimeLogical(v))
             return {
-              data: new FloatXArray([v ? 1 : 0]),
+              data: copyFloatX([v ? 1 : 0]),
               shape: [1, 1],
               imag: undefined,
             };
@@ -98,7 +96,7 @@ registerIBuiltin({
 
         const totalRows = rowHeights.reduce((a, b) => a + b, 0);
         const totalCols = colWidths.reduce((a, b) => a + b, 0);
-        const resultData = new FloatXArray(totalRows * totalCols);
+        const resultData = zeroedFloatX(totalRows * totalCols);
         let hasImag = false;
         for (let k = 0; k < C.data.length; k++) {
           if (asTensor(C.data[k]).imag) {
@@ -107,7 +105,7 @@ registerIBuiltin({
           }
         }
         const resultImag = hasImag
-          ? new FloatXArray(totalRows * totalCols)
+          ? zeroedFloatX(totalRows * totalCols)
           : undefined;
 
         let colOffset = 0;
@@ -202,9 +200,9 @@ registerIBuiltin({
                 cellData[cj * nCellRows + ci] = RTV.num(A.data[idx]);
               }
             } else {
-              const subData = new FloatXArray(subRows * subCols);
+              const subData = zeroedFloatX(subRows * subCols);
               const subImag = hasImag
-                ? new FloatXArray(subRows * subCols)
+                ? zeroedFloatX(subRows * subCols)
                 : undefined;
               for (let j = 0; j < subCols; j++) {
                 for (let i = 0; i < subRows; i++) {
@@ -242,11 +240,11 @@ registerIBuiltin({
         let A = args[0];
         if (isRuntimeNumber(A)) {
           if (args.length === 1) return RTV.cell([A], [1, 1]);
-          A = RTV.tensor(new FloatXArray([A as number]), [1, 1]);
+          A = RTV.tensor(copyFloatX([A as number]), [1, 1]);
         }
         if (isRuntimeLogical(A)) {
           if (args.length === 1) return RTV.cell([A], [1, 1]);
-          A = RTV.tensor(new FloatXArray([A ? 1 : 0]), [1, 1]);
+          A = RTV.tensor(copyFloatX([A ? 1 : 0]), [1, 1]);
         }
         if (!isRuntimeTensor(A))
           throw new RuntimeError(
@@ -268,7 +266,7 @@ registerIBuiltin({
         if (dim === 1) {
           const cellData: RuntimeValue[] = new Array(cols);
           for (let j = 0; j < cols; j++) {
-            const colData = new FloatXArray(rows);
+            const colData = zeroedFloatX(rows);
             for (let i = 0; i < rows; i++) colData[i] = A.data[j * rows + i];
             cellData[j] = RTV.tensor(colData, [rows, 1]);
           }
@@ -276,7 +274,7 @@ registerIBuiltin({
         } else if (dim === 2) {
           const cellData: RuntimeValue[] = new Array(rows);
           for (let i = 0; i < rows; i++) {
-            const rowData = new FloatXArray(cols);
+            const rowData = zeroedFloatX(cols);
             for (let j = 0; j < cols; j++) rowData[j] = A.data[j * rows + i];
             cellData[i] = RTV.tensor(rowData, [1, cols]);
           }

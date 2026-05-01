@@ -9,7 +9,6 @@
 
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import {
-  FloatXArray,
   isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeNumber,
@@ -52,6 +51,12 @@ import {
   linsolveLapack,
   linsolveComplexLapack,
 } from "../../helpers/linsolve.js";
+import {
+  copyFloatX,
+  zeroedFloat64,
+  zeroedFloatX,
+  copyFloat64,
+} from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 
@@ -190,7 +195,7 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
       return RTV.num(m);
     }
     if (vp === 2) {
-      const mags = new Float64Array(v.data.length);
+      const mags = zeroedFloat64(v.data.length);
       for (let i = 0; i < v.data.length; i++)
         mags[i] = elemMag(v.data, imag, i);
       return RTV.num(scaledEuclid(mags, mags.length));
@@ -205,7 +210,7 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
 
   // Matrix norms
   if (p === "fro" || (typeof p === "number" && isNaN(p))) {
-    const mags = new Float64Array(v.data.length);
+    const mags = zeroedFloat64(v.data.length);
     for (let i = 0; i < v.data.length; i++) mags[i] = elemMag(v.data, imag, i);
     return RTV.num(scaledEuclid(mags, mags.length));
   }
@@ -240,8 +245,7 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
   if (p === 2) {
     const bridge = getEffectiveBridge("norm", "svd");
     if (bridge && bridge.svd) {
-      const f64 =
-        v.data instanceof Float64Array ? v.data : new Float64Array(v.data);
+      const f64 = v.data instanceof Float64Array ? v.data : copyFloat64(v.data);
       const result = bridge.svd(f64, rows, cols, false, false);
       return RTV.num(result.S[0]);
     }
@@ -301,7 +305,7 @@ function vecnormAlongDim(
 ): RuntimeValue {
   const dimIdx = dim - 1;
   if (dimIdx >= v.shape.length) {
-    const result = new FloatXArray(v.data.length);
+    const result = zeroedFloatX(v.data.length);
     const imag = v.imag;
     for (let i = 0; i < v.data.length; i++) {
       result[i] = imag ? Math.hypot(v.data[i], imag[i]) : Math.abs(v.data[i]);
@@ -310,7 +314,7 @@ function vecnormAlongDim(
   }
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return copyTensor(v);
-  const result = new FloatXArray(info.totalElems);
+  const result = zeroedFloatX(info.totalElems);
   const imag = v.imag;
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     if (p === Infinity) {
@@ -407,20 +411,20 @@ defineBuiltin({
           aIm = a.imag ?? null;
           aShape = a.shape;
         } else if (isRuntimeNumber(a)) {
-          aRe = new FloatXArray([a]);
+          aRe = copyFloatX([a]);
         } else if (isRuntimeComplexNumber(a)) {
-          aRe = new FloatXArray([a.re]);
-          aIm = new FloatXArray([a.im]);
+          aRe = copyFloatX([a.re]);
+          aIm = copyFloatX([a.im]);
         }
 
         if (isRuntimeTensor(b)) {
           bRe = b.data;
           bIm = b.imag ?? null;
         } else if (isRuntimeNumber(b)) {
-          bRe = new FloatXArray([b]);
+          bRe = copyFloatX([b]);
         } else if (isRuntimeComplexNumber(b)) {
-          bRe = new FloatXArray([b.re]);
-          bIm = new FloatXArray([b.im]);
+          bRe = copyFloatX([b.re]);
+          bIm = copyFloatX([b.im]);
         }
 
         if (!aRe || !bRe)
@@ -434,8 +438,8 @@ defineBuiltin({
         const isMatrix = rows > 1 && cols > 1;
 
         if (isMatrix) {
-          const resultRe = new FloatXArray(cols);
-          const resultIm = hasComplex ? new FloatXArray(cols) : null;
+          const resultRe = zeroedFloatX(cols);
+          const resultIm = hasComplex ? zeroedFloatX(cols) : null;
           for (let c = 0; c < cols; c++) {
             let sRe = 0,
               sIm = 0;
@@ -512,7 +516,7 @@ defineBuiltin({
 });
 
 function detJS(data: Float32Array | Float64Array, n: number): number {
-  const a = new Float64Array(n * n);
+  const a = zeroedFloat64(n * n);
   for (let r = 0; r < n; r++)
     for (let c = 0; c < n; c++) a[r * n + c] = data[r + c * n];
   let det = 1;
@@ -550,8 +554,8 @@ function detComplexJS(
   dataIm: Float32Array | Float64Array,
   n: number
 ): [number, number] {
-  const re = new Float64Array(n * n);
-  const im = new Float64Array(n * n);
+  const re = zeroedFloat64(n * n);
+  const im = zeroedFloat64(n * n);
   for (let r = 0; r < n; r++)
     for (let c = 0; c < n; c++) {
       re[r * n + c] = dataRe[r + c * n];
@@ -681,7 +685,7 @@ defineBuiltin({
             `cross: size(A,${dim}) and size(B,${dim}) must be 3`
           );
         const totalLen = a.data.length;
-        const result = new FloatXArray(totalLen);
+        const result = zeroedFloatX(totalLen);
         const strides = new Array(shape.length);
         strides[0] = 1;
         for (let d = 1; d < shape.length; d++)
@@ -762,19 +766,16 @@ defineBuiltin({
             const result = bridge.invComplex(toF64(A.data), toF64(A.imag), n);
             if (result)
               return RTV.tensor(
-                new FloatXArray(result.re),
+                copyFloatX(result.re),
                 [n, n],
-                new FloatXArray(result.im)
+                copyFloatX(result.im)
               );
           }
           const result = invComplexJS(A.data, A.imag, n);
           return RTV.tensor(result.re, [n, n], result.im);
         }
         const bridge = getEffectiveBridge("inv");
-        return RTV.tensor(new FloatXArray(bridge.inv(toF64(A.data), n)), [
-          n,
-          n,
-        ]);
+        return RTV.tensor(copyFloatX(bridge.inv(toF64(A.data), n)), [n, n]);
       },
     },
   ],
@@ -785,8 +786,8 @@ function invComplexJS(
   dataIm: FloatXArrayType,
   n: number
 ): { re: FloatXArrayType; im: FloatXArrayType } {
-  const augRe = new Float64Array(n * 2 * n);
-  const augIm = new Float64Array(n * 2 * n);
+  const augRe = zeroedFloat64(n * 2 * n);
+  const augIm = zeroedFloat64(n * 2 * n);
   for (let row = 0; row < n; row++) {
     for (let col = 0; col < n; col++) {
       augRe[row * 2 * n + col] = dataRe[row + col * n];
@@ -842,8 +843,8 @@ function invComplexJS(
       }
     }
   }
-  const resultRe = new FloatXArray(n * n);
-  const resultIm = new FloatXArray(n * n);
+  const resultRe = zeroedFloatX(n * n);
+  const resultIm = zeroedFloatX(n * n);
   for (let row = 0; row < n; row++)
     for (let col = 0; col < n; col++) {
       resultRe[row + col * n] = augRe[row * 2 * n + n + col];
@@ -881,11 +882,11 @@ function svdApply(
   const A = args[0];
   if (isRuntimeNumber(A)) {
     const val = Math.abs(A);
-    if (nargout <= 1) return RTV.tensor(new FloatXArray([val]), [1, 1]);
+    if (nargout <= 1) return RTV.tensor(copyFloatX([val]), [1, 1]);
     return [
-      RTV.tensor(new FloatXArray([A >= 0 ? 1 : -1]), [1, 1]),
-      RTV.tensor(new FloatXArray([val]), [1, 1]),
-      RTV.tensor(new FloatXArray([1]), [1, 1]),
+      RTV.tensor(copyFloatX([A >= 0 ? 1 : -1]), [1, 1]),
+      RTV.tensor(copyFloatX([val]), [1, 1]),
+      RTV.tensor(copyFloatX([1]), [1, 1]),
     ];
   }
   if (!isRuntimeTensor(A))
@@ -908,34 +909,26 @@ function svdApply(
       nargout === 3
     );
     if (!result) throw new RuntimeError("svd: complex SVD failed");
-    if (nargout <= 1) return RTV.tensor(new FloatXArray(result.S), [k, 1]);
+    if (nargout <= 1) return RTV.tensor(copyFloatX(result.S), [k, 1]);
     const uCols = econ ? k : m;
     const vCols = econ ? k : n;
     return [
-      RTV.tensor(
-        new FloatXArray(result.URe!),
-        [m, uCols],
-        new FloatXArray(result.UIm!)
-      ),
+      RTV.tensor(copyFloatX(result.URe!), [m, uCols], copyFloatX(result.UIm!)),
       buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-      RTV.tensor(
-        new FloatXArray(result.VRe!),
-        [n, vCols],
-        new FloatXArray(result.VIm!)
-      ),
+      RTV.tensor(copyFloatX(result.VRe!), [n, vCols], copyFloatX(result.VIm!)),
     ];
   }
   const bridge = getEffectiveBridge("svd", "svd");
   if (bridge?.svd) {
     const result = bridge.svd(toF64(A.data), m, n, econ, nargout === 3);
     if (result) {
-      if (nargout <= 1) return RTV.tensor(new FloatXArray(result.S), [k, 1]);
+      if (nargout <= 1) return RTV.tensor(copyFloatX(result.S), [k, 1]);
       const uCols = econ ? k : m;
       const vCols = econ ? k : n;
       return [
-        RTV.tensor(new FloatXArray(result.U!), [m, uCols]),
+        RTV.tensor(copyFloatX(result.U!), [m, uCols]),
         buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-        RTV.tensor(new FloatXArray(result.V!), [n, vCols]),
+        RTV.tensor(copyFloatX(result.V!), [n, vCols]),
       ];
     }
   }
@@ -946,7 +939,7 @@ function svdApply(
   const ATA = computeATA(A.data, m, n);
   const eigenvalues = powerIterationEigenvalues(ATA, n, k);
   return RTV.tensor(
-    new FloatXArray(eigenvalues.map(ev => Math.sqrt(Math.max(0, ev)))),
+    copyFloatX(eigenvalues.map(ev => Math.sqrt(Math.max(0, ev)))),
     [k, 1]
   );
 }
@@ -956,7 +949,7 @@ function computeATA(
   m: number,
   n: number
 ): FloatXArrayType {
-  const result = new FloatXArray(n * n);
+  const result = zeroedFloatX(n * n);
   for (let j = 0; j < n; j++)
     for (let i = 0; i <= j; i++) {
       let sum = 0;
@@ -974,9 +967,9 @@ function powerIterationEigenvalues(
   numEigenvalues: number
 ): number[] {
   const eigenvalues: number[] = [];
-  const A_copy = new FloatXArray(A_data);
+  const A_copy = copyFloatX(A_data);
   for (let ev = 0; ev < numEigenvalues; ev++) {
-    const v = new FloatXArray(n);
+    const v = zeroedFloatX(n);
     for (let i = 0; i < n; i++) v[i] = Math.random();
     let norm = 0;
     for (let i = 0; i < n; i++) norm += v[i] * v[i];
@@ -984,7 +977,7 @@ function powerIterationEigenvalues(
     for (let i = 0; i < n; i++) v[i] /= norm;
     let lambda = 0;
     for (let iter = 0; iter < 100; iter++) {
-      const Av = new FloatXArray(n);
+      const Av = zeroedFloatX(n);
       for (let i = 0; i < n; i++) {
         let sum = 0;
         for (let j = 0; j < n; j++)
@@ -1043,16 +1036,16 @@ function qrApply(
   if (isRuntimeNumber(A)) {
     const val = A;
     const s = val >= 0 ? 1 : -1;
-    if (nargout <= 1) return RTV.tensor(new FloatXArray([s * val]), [1, 1]);
+    if (nargout <= 1) return RTV.tensor(copyFloatX([s * val]), [1, 1]);
     if (nargout === 3)
       return [
-        RTV.tensor(new FloatXArray([s]), [1, 1]),
-        RTV.tensor(new FloatXArray([s * val]), [1, 1]),
-        RTV.tensor(new FloatXArray([1]), [1, 1]),
+        RTV.tensor(copyFloatX([s]), [1, 1]),
+        RTV.tensor(copyFloatX([s * val]), [1, 1]),
+        RTV.tensor(copyFloatX([1]), [1, 1]),
       ];
     return [
-      RTV.tensor(new FloatXArray([s]), [1, 1]),
-      RTV.tensor(new FloatXArray([s * val]), [1, 1]),
+      RTV.tensor(copyFloatX([s]), [1, 1]),
+      RTV.tensor(copyFloatX([s * val]), [1, 1]),
     ];
   }
   if (!isRuntimeTensor(A))
@@ -1082,22 +1075,18 @@ function qrApply(
     if (nargout <= 1) {
       const rRows = econ ? k : m;
       return RTV.tensor(
-        new FloatXArray(result.RRe),
+        copyFloatX(result.RRe),
         [rRows, n],
-        new FloatXArray(result.RIm)
+        copyFloatX(result.RIm)
       );
     }
     const qCols = econ ? k : m;
     return [
+      RTV.tensor(copyFloatX(result.QRe!), [m, qCols], copyFloatX(result.QIm!)),
       RTV.tensor(
-        new FloatXArray(result.QRe!),
-        [m, qCols],
-        new FloatXArray(result.QIm!)
-      ),
-      RTV.tensor(
-        new FloatXArray(result.RRe),
+        copyFloatX(result.RRe),
         [econ ? k : m, n],
-        new FloatXArray(result.RIm)
+        copyFloatX(result.RIm)
       ),
     ];
   }
@@ -1107,34 +1096,34 @@ function qrApply(
     const result = bridge.qr(toF64(A.data), m, n, econ, nargout === 2);
     if (result) {
       if (nargout <= 1)
-        return RTV.tensor(new FloatXArray(result.R), [econ ? k : m, n]);
+        return RTV.tensor(copyFloatX(result.R), [econ ? k : m, n]);
       const qCols = econ ? k : m;
       return [
-        RTV.tensor(new FloatXArray(result.Q), [m, qCols]),
-        RTV.tensor(new FloatXArray(result.R), [econ ? k : m, n]),
+        RTV.tensor(copyFloatX(result.Q), [m, qCols]),
+        RTV.tensor(copyFloatX(result.R), [econ ? k : m, n]),
       ];
     }
   }
 
   // JS fallback (Householder)
-  const R_data = new FloatXArray(A.data);
+  const R_data = copyFloatX(A.data);
   const vecs: FloatXArrayType[] = [];
   const taus: number[] = [];
   for (let j = 0; j < k; j++) {
     const len = m - j;
-    const x = new FloatXArray(len);
+    const x = zeroedFloatX(len);
     for (let i = 0; i < len; i++) x[i] = R_data[colMajorIndex(j + i, j, m)];
     let normx = 0;
     for (let i = 0; i < len; i++) normx += x[i] * x[i];
     normx = Math.sqrt(normx);
     if (normx === 0) {
-      vecs.push(new FloatXArray(len));
+      vecs.push(zeroedFloatX(len));
       taus.push(0);
       continue;
     }
     const sign = x[0] >= 0 ? 1 : -1;
     const alpha = -sign * normx;
-    const v = new FloatXArray(len);
+    const v = zeroedFloatX(len);
     v[0] = x[0] - alpha;
     for (let i = 1; i < len; i++) v[i] = x[i];
     let vnorm = 0;
@@ -1154,18 +1143,18 @@ function qrApply(
 
   if (nargout <= 1) {
     if (econ) {
-      const R_econ = new FloatXArray(k * n);
+      const R_econ = zeroedFloatX(k * n);
       for (let r = 0; r < k; r++)
         for (let c = 0; c < n; c++)
           R_econ[colMajorIndex(r, c, k)] = R_data[colMajorIndex(r, c, m)];
       return RTV.tensor(R_econ, [k, n]);
     }
-    return RTV.tensor(new FloatXArray(R_data.slice(0, m * n)), [m, n]);
+    return RTV.tensor(copyFloatX(R_data.slice(0, m * n)), [m, n]);
   }
 
   if (econ) {
     const qCols = k;
-    const Q_data = new FloatXArray(m * qCols);
+    const Q_data = zeroedFloatX(m * qCols);
     for (let i = 0; i < Math.min(m, qCols); i++)
       Q_data[colMajorIndex(i, i, m)] = 1;
     for (let j = k - 1; j >= 0; j--) {
@@ -1182,14 +1171,14 @@ function qrApply(
           Q_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
       }
     }
-    const R_econ = new FloatXArray(k * n);
+    const R_econ = zeroedFloatX(k * n);
     for (let r = 0; r < k; r++)
       for (let c = 0; c < n; c++)
         R_econ[colMajorIndex(r, c, k)] = R_data[colMajorIndex(r, c, m)];
     return [RTV.tensor(Q_data, [m, qCols]), RTV.tensor(R_econ, [k, n])];
   }
 
-  const Q_data = new FloatXArray(m * m);
+  const Q_data = zeroedFloatX(m * m);
   for (let i = 0; i < m; i++) Q_data[colMajorIndex(i, i, m)] = 1;
   for (let j = k - 1; j >= 0; j--) {
     const v = vecs[j],
@@ -1207,7 +1196,7 @@ function qrApply(
   }
   return [
     RTV.tensor(Q_data, [m, m]),
-    RTV.tensor(new FloatXArray(R_data.slice(0, m * n)), [m, n]),
+    RTV.tensor(copyFloatX(R_data.slice(0, m * n)), [m, n]),
   ];
 }
 
@@ -1217,11 +1206,11 @@ function permResult(
   n: number,
   econ: boolean
 ): RuntimeValue {
-  const perm = new FloatXArray(n);
+  const perm = zeroedFloatX(n);
   for (let i = 0; i < n; i++) perm[i] = jpvt[i];
   if (econ) return RTV.tensor(perm, [1, n]);
   // Non-economy: return n×n permutation matrix
-  const mat = new FloatXArray(n * n);
+  const mat = zeroedFloatX(n * n);
   for (let j = 0; j < n; j++) mat[colMajorIndex(jpvt[j] - 1, j, n)] = 1;
   return RTV.tensor(mat, [n, n]);
 }
@@ -1249,16 +1238,8 @@ function qrPivotApply(
     const rRows = econ ? k : m;
     const qCols = econ ? k : m;
     return [
-      RTV.tensor(
-        new FloatXArray(result.QRe),
-        [m, qCols],
-        new FloatXArray(result.QIm)
-      ),
-      RTV.tensor(
-        new FloatXArray(result.RRe),
-        [rRows, n],
-        new FloatXArray(result.RIm)
-      ),
+      RTV.tensor(copyFloatX(result.QRe), [m, qCols], copyFloatX(result.QIm)),
+      RTV.tensor(copyFloatX(result.RRe), [rRows, n], copyFloatX(result.RIm)),
       permResult(result.jpvt, n, econ),
     ];
   }
@@ -1270,20 +1251,20 @@ function qrPivotApply(
       const rRows = econ ? k : m;
       const qCols = econ ? k : m;
       return [
-        RTV.tensor(new FloatXArray(result.Q), [m, qCols]),
-        RTV.tensor(new FloatXArray(result.R), [rRows, n]),
+        RTV.tensor(copyFloatX(result.Q), [m, qCols]),
+        RTV.tensor(copyFloatX(result.R), [rRows, n]),
         permResult(result.jpvt, n, econ),
       ];
     }
   }
 
   // JS fallback: Householder QR with column pivoting
-  const R_data = new FloatXArray(A.data);
-  const perm = new Float64Array(n);
+  const R_data = copyFloatX(A.data);
+  const perm = zeroedFloat64(n);
   for (let i = 0; i < n; i++) perm[i] = i; // 0-based during computation
 
   // Compute initial column norms
-  const colNorms = new Float64Array(n);
+  const colNorms = zeroedFloat64(n);
   for (let j = 0; j < n; j++) {
     let s = 0;
     for (let i = 0; i < m; i++) {
@@ -1325,13 +1306,13 @@ function qrPivotApply(
 
     // Householder reflector for column j
     const len = m - j;
-    const x = new FloatXArray(len);
+    const x = zeroedFloatX(len);
     for (let i = 0; i < len; i++) x[i] = R_data[colMajorIndex(j + i, j, m)];
     let normx = 0;
     for (let i = 0; i < len; i++) normx += x[i] * x[i];
     normx = Math.sqrt(normx);
     if (normx === 0) {
-      vecs.push(new FloatXArray(len));
+      vecs.push(zeroedFloatX(len));
       taus.push(0);
       // Update remaining column norms
       for (let c = j + 1; c < n; c++) {
@@ -1343,7 +1324,7 @@ function qrPivotApply(
     }
     const sign = x[0] >= 0 ? 1 : -1;
     const alpha = -sign * normx;
-    const v = new FloatXArray(len);
+    const v = zeroedFloatX(len);
     v[0] = x[0] - alpha;
     for (let i = 1; i < len; i++) v[i] = x[i];
     let vnorm = 0;
@@ -1369,7 +1350,7 @@ function qrPivotApply(
 
   // Build Q
   const qCols = econ ? k : m;
-  const Q_data = new FloatXArray(m * qCols);
+  const Q_data = zeroedFloatX(m * qCols);
   for (let i = 0; i < Math.min(m, qCols); i++)
     Q_data[colMajorIndex(i, i, m)] = 1;
   for (let j = k - 1; j >= 0; j--) {
@@ -1389,13 +1370,13 @@ function qrPivotApply(
 
   // Build R
   const rRows = econ ? k : m;
-  const R_out = new FloatXArray(rRows * n);
+  const R_out = zeroedFloatX(rRows * n);
   for (let r = 0; r < rRows; r++)
     for (let c = r; c < n; c++)
       R_out[colMajorIndex(r, c, rRows)] = R_data[colMajorIndex(r, c, m)];
 
   // Convert perm to 1-based MATLAB convention
-  const permOut = new FloatXArray(n);
+  const permOut = zeroedFloatX(n);
   for (let i = 0; i < n; i++) permOut[i] = perm[i] + 1;
 
   return [
@@ -1435,15 +1416,15 @@ function luApply(
   if (isRuntimeNumber(A)) {
     const val = A as number;
     if (nargout <= 2) {
-      const L = RTV.tensor(new FloatXArray([1]), [1, 1]);
-      const U = RTV.tensor(new FloatXArray([val]), [1, 1]);
+      const L = RTV.tensor(copyFloatX([1]), [1, 1]);
+      const U = RTV.tensor(copyFloatX([val]), [1, 1]);
       if (nargout <= 1) return L;
       return [L, U];
     }
-    const L = RTV.tensor(new FloatXArray([1]), [1, 1]);
-    const U = RTV.tensor(new FloatXArray([val]), [1, 1]);
+    const L = RTV.tensor(copyFloatX([1]), [1, 1]);
+    const U = RTV.tensor(copyFloatX([val]), [1, 1]);
     if (outputForm === "vector") return [L, U, RTV.num(1)];
-    return [L, U, RTV.tensor(new FloatXArray([1]), [1, 1])];
+    return [L, U, RTV.tensor(copyFloatX([1]), [1, 1])];
   }
   if (!isRuntimeTensor(A))
     throw new RuntimeError("lu: argument must be numeric");
@@ -1468,8 +1449,8 @@ function luApply(
     LU_re = result.LU;
     ipiv = result.ipiv;
   }
-  const U_re = new FloatXArray(k * n);
-  const U_im = isComplex ? new FloatXArray(k * n) : undefined;
+  const U_re = zeroedFloatX(k * n);
+  const U_im = isComplex ? zeroedFloatX(k * n) : undefined;
   for (let j = 0; j < n; j++) {
     const imax = Math.min(j, k - 1);
     for (let i = 0; i <= imax; i++) {
@@ -1479,14 +1460,14 @@ function luApply(
   }
   if (nargout <= 1)
     return RTV.tensor(
-      new FloatXArray(LU_re),
+      copyFloatX(LU_re),
       [m, n],
-      LU_im ? new FloatXArray(LU_im) : undefined
+      LU_im ? copyFloatX(LU_im) : undefined
     );
   const perm = ipivToPermVector(ipiv, m);
   if (nargout === 2) {
-    const L_unit_re = new FloatXArray(m * k);
-    const L_unit_im = isComplex ? new FloatXArray(m * k) : undefined;
+    const L_unit_re = zeroedFloatX(m * k);
+    const L_unit_im = isComplex ? zeroedFloatX(m * k) : undefined;
     for (let j = 0; j < k; j++) {
       L_unit_re[j + j * m] = 1;
       for (let i = j + 1; i < m; i++) {
@@ -1494,8 +1475,8 @@ function luApply(
         if (L_unit_im && LU_im) L_unit_im[i + j * m] = LU_im[i + j * m];
       }
     }
-    const L_re = new FloatXArray(m * k);
-    const L_im = isComplex ? new FloatXArray(m * k) : undefined;
+    const L_re = zeroedFloatX(m * k);
+    const L_im = isComplex ? zeroedFloatX(m * k) : undefined;
     for (let i = 0; i < m; i++) {
       for (let j = 0; j < k; j++) {
         L_re[perm[i] + j * m] = L_unit_re[i + j * m];
@@ -1505,8 +1486,8 @@ function luApply(
     return [RTV.tensor(L_re, [m, k], L_im), RTV.tensor(U_re, [k, n], U_im)];
   }
   // nargout === 3
-  const L_re = new FloatXArray(m * k);
-  const L_im = isComplex ? new FloatXArray(m * k) : undefined;
+  const L_re = zeroedFloatX(m * k);
+  const L_im = isComplex ? zeroedFloatX(m * k) : undefined;
   for (let j = 0; j < k; j++) {
     L_re[j + j * m] = 1;
     for (let i = j + 1; i < m; i++) {
@@ -1515,7 +1496,7 @@ function luApply(
     }
   }
   if (outputForm === "vector") {
-    const P_data = new FloatXArray(m);
+    const P_data = zeroedFloatX(m);
     for (let i = 0; i < m; i++) P_data[i] = perm[i] + 1;
     return [
       RTV.tensor(L_re, [m, k], L_im),
@@ -1523,7 +1504,7 @@ function luApply(
       RTV.tensor(P_data, [m, 1]),
     ];
   }
-  const P_data = new FloatXArray(m * m);
+  const P_data = zeroedFloatX(m * m);
   for (let i = 0; i < m; i++) P_data[i + perm[i] * m] = 1;
   return [
     RTV.tensor(L_re, [m, k], L_im),
@@ -1587,16 +1568,16 @@ function eigApply(
   if (isRuntimeNumber(A)) {
     const val = A;
     if (nargout <= 1) return RTV.num(val);
-    const V = RTV.tensor(new FloatXArray([1]), [1, 1]);
+    const V = RTV.tensor(copyFloatX([1]), [1, 1]);
     if (nargout === 2) {
       if (outputForm === "vector") return [V, RTV.num(val)];
-      return [V, RTV.tensor(new FloatXArray([val]), [1, 1])];
+      return [V, RTV.tensor(copyFloatX([val]), [1, 1])];
     }
     const D =
       outputForm === "vector"
         ? RTV.num(val)
-        : RTV.tensor(new FloatXArray([val]), [1, 1]);
-    return [V, D, RTV.tensor(new FloatXArray([1]), [1, 1])];
+        : RTV.tensor(copyFloatX([val]), [1, 1]);
+    return [V, D, RTV.tensor(copyFloatX([1]), [1, 1])];
   }
   if (!isRuntimeTensor(A))
     throw new RuntimeError("eig: argument must be numeric");
@@ -1623,7 +1604,7 @@ function eigApply(
     const Vout =
       computeVR && VRRe && VRIm
         ? maybeComplexTensor(VRRe, [n, n], VRIm)
-        : RTV.tensor(new FloatXArray(n * n), [n, n]);
+        : RTV.tensor(zeroedFloatX(n * n), [n, n]);
     const Dout =
       outputForm === "vector"
         ? maybeComplexTensor(wRe, [n, 1], wIm)
@@ -1632,7 +1613,7 @@ function eigApply(
     const Wout =
       computeVL && VLRe && VLIm
         ? maybeComplexTensor(VLRe, [n, n], VLIm)
-        : RTV.tensor(new FloatXArray(n * n), [n, n]);
+        : RTV.tensor(zeroedFloatX(n * n), [n, n]);
     return [Vout, Dout, Wout];
   }
   const bridge = getEffectiveBridge("eig", "eig");
@@ -1645,7 +1626,7 @@ function eigApply(
   const Vout =
     computeVR && VR
       ? buildEigenvectorMatrix(VR, wi, n, hasComplex)
-      : RTV.tensor(new FloatXArray(n * n), [n, n]);
+      : RTV.tensor(zeroedFloatX(n * n), [n, n]);
   const Dout =
     outputForm === "vector"
       ? maybeComplexTensor(wr, [n, 1], wi)
@@ -1654,7 +1635,7 @@ function eigApply(
   const Wout =
     computeVL && VL
       ? buildEigenvectorMatrix(VL, wi, n, hasComplex)
-      : RTV.tensor(new FloatXArray(n * n), [n, n]);
+      : RTV.tensor(zeroedFloatX(n * n), [n, n]);
   return [Vout, Dout, Wout];
 }
 
@@ -1735,13 +1716,12 @@ function cholApply(
     const val = A as number;
     if (val <= 0) {
       if (nargout >= 2)
-        return [RTV.tensor(new FloatXArray([0]), [1, 1]), RTV.num(1)];
+        return [RTV.tensor(copyFloatX([0]), [1, 1]), RTV.num(1)];
       throw new RuntimeError("chol: Matrix must be positive definite.");
     }
     const r = Math.sqrt(val);
-    if (nargout >= 2)
-      return [RTV.tensor(new FloatXArray([r]), [1, 1]), RTV.num(0)];
-    return RTV.tensor(new FloatXArray([r]), [1, 1]);
+    if (nargout >= 2) return [RTV.tensor(copyFloatX([r]), [1, 1]), RTV.num(0)];
+    return RTV.tensor(copyFloatX([r]), [1, 1]);
   }
   if (!isRuntimeTensor(A))
     throw new RuntimeError("chol: argument must be numeric");
@@ -1775,8 +1755,8 @@ function cholApply(
       // 3-output partial result
       let partialR: RuntimeValue;
       if (upper) {
-        const pr = new FloatXArray(k * n);
-        const pi = isComplex ? new FloatXArray(k * n) : undefined;
+        const pr = zeroedFloatX(k * n);
+        const pi = isComplex ? zeroedFloatX(k * n) : undefined;
         for (let j = 0; j < n; j++)
           for (let i = 0; i <= Math.min(j, k - 1); i++) {
             pr[i + j * k] = (R_re as FloatXArrayType)[i + j * n];
@@ -1785,8 +1765,8 @@ function cholApply(
           }
         partialR = RTV.tensor(pr, [k, n], pi);
       } else {
-        const pr = new FloatXArray(n * k);
-        const pi = isComplex ? new FloatXArray(n * k) : undefined;
+        const pr = zeroedFloatX(n * k);
+        const pi = isComplex ? zeroedFloatX(n * k) : undefined;
         for (let j = 0; j < k; j++)
           for (let i = j; i < n; i++) {
             pr[i + j * n] = (R_re as FloatXArrayType)[i + j * n];
@@ -1797,12 +1777,12 @@ function cholApply(
       }
       const permOut =
         outputForm === "vector"
-          ? RTV.tensor(
-              new FloatXArray(Array.from({ length: n }, (_, i) => i + 1)),
-              [n, 1]
-            )
+          ? RTV.tensor(copyFloatX(Array.from({ length: n }, (_, i) => i + 1)), [
+              n,
+              1,
+            ])
           : (() => {
-              const P = new FloatXArray(n * n);
+              const P = zeroedFloatX(n * n);
               for (let i = 0; i < n; i++) P[i + i * n] = 1;
               return RTV.tensor(P, [n, n]);
             })();
@@ -1811,8 +1791,8 @@ function cholApply(
     // 2-output partial result
     let partialR: RuntimeValue;
     if (upper) {
-      const pr = new FloatXArray(k * k);
-      const pi = isComplex ? new FloatXArray(k * k) : undefined;
+      const pr = zeroedFloatX(k * k);
+      const pi = isComplex ? zeroedFloatX(k * k) : undefined;
       for (let j = 0; j < k; j++)
         for (let i = 0; i <= j; i++) {
           pr[i + j * k] = (R_re as FloatXArrayType)[i + j * n];
@@ -1820,8 +1800,8 @@ function cholApply(
         }
       partialR = RTV.tensor(pr, [k, k], pi);
     } else {
-      const pr = new FloatXArray(k * k);
-      const pi = isComplex ? new FloatXArray(k * k) : undefined;
+      const pr = zeroedFloatX(k * k);
+      const pi = isComplex ? zeroedFloatX(k * k) : undefined;
       for (let j = 0; j < k; j++)
         for (let i = j; i < k; i++) {
           pr[i + j * k] = (R_re as FloatXArrayType)[i + j * n];
@@ -1833,19 +1813,19 @@ function cholApply(
   }
   if (nargout >= 2) {
     const R = RTV.tensor(
-      new FloatXArray(R_re as ArrayLike<number>),
+      copyFloatX(R_re as ArrayLike<number>),
       [n, n],
-      R_im ? new FloatXArray(R_im as ArrayLike<number>) : undefined
+      R_im ? copyFloatX(R_im as ArrayLike<number>) : undefined
     );
     if (nargout >= 3) {
       const permOut =
         outputForm === "vector"
-          ? RTV.tensor(
-              new FloatXArray(Array.from({ length: n }, (_, i) => i + 1)),
-              [n, 1]
-            )
+          ? RTV.tensor(copyFloatX(Array.from({ length: n }, (_, i) => i + 1)), [
+              n,
+              1,
+            ])
           : (() => {
-              const P = new FloatXArray(n * n);
+              const P = zeroedFloatX(n * n);
               for (let i = 0; i < n; i++) P[i + i * n] = 1;
               return RTV.tensor(P, [n, n]);
             })();
@@ -1856,9 +1836,9 @@ function cholApply(
   if (info_val > 0)
     throw new RuntimeError("chol: Matrix must be positive definite.");
   return RTV.tensor(
-    new FloatXArray(R_re as ArrayLike<number>),
+    copyFloatX(R_re as ArrayLike<number>),
     [n, n],
-    R_im ? new FloatXArray(R_im as ArrayLike<number>) : undefined
+    R_im ? copyFloatX(R_im as ArrayLike<number>) : undefined
   );
 }
 
@@ -1880,10 +1860,10 @@ defineBuiltin({
         const rawA = args[0],
           rawB = args[1];
         const A = isRuntimeNumber(rawA)
-          ? RTV.tensor(new FloatXArray([rawA]), [1, 1])
+          ? RTV.tensor(copyFloatX([rawA]), [1, 1])
           : rawA;
         const B = isRuntimeNumber(rawB)
-          ? RTV.tensor(new FloatXArray([rawB]), [1, 1])
+          ? RTV.tensor(copyFloatX([rawB]), [1, 1])
           : rawB;
         if (!isRuntimeTensor(A) || !isRuntimeTensor(B))
           throw new RuntimeError(
@@ -1897,19 +1877,15 @@ defineBuiltin({
           );
         if (A.imag || B.imag) {
           const ARe = A.data,
-            AIm = A.imag ?? new FloatXArray(A.data.length);
+            AIm = A.imag ?? zeroedFloatX(A.data.length);
           const BRe = B.data,
-            BIm = B.imag ?? new FloatXArray(B.data.length);
+            BIm = B.imag ?? zeroedFloatX(B.data.length);
           const X = linsolveComplexLapack(ARe, AIm, m, n, BRe, BIm, p);
-          return RTV.tensor(
-            new FloatXArray(X.re),
-            [n, p],
-            new FloatXArray(X.im)
-          );
+          return RTV.tensor(copyFloatX(X.re), [n, p], copyFloatX(X.im));
         }
         const X = linsolveLapack(A.data, m, n, B.data, p);
         if (!X) throw new RuntimeError("linsolve: LAPACK bridge unavailable");
-        return RTV.tensor(new FloatXArray(X), [n, p]);
+        return RTV.tensor(copyFloatX(X), [n, p]);
       },
     },
   ],
@@ -2068,7 +2044,7 @@ defineBuiltin({
               ? args[1]
               : 0
             : Math.max(m, n) * S[0] * 2.220446049250313e-16;
-        const result = new FloatXArray(n * m);
+        const result = zeroedFloatX(n * m);
         for (let i = 0; i < n; i++)
           for (let j = 0; j < m; j++) {
             let sum = 0;
@@ -2093,47 +2069,47 @@ function pinvFallback(
       allZero = false;
       break;
     }
-  if (allZero) return RTV.tensor(new FloatXArray(n * m), [n, m]);
-  const AT = new FloatXArray(n * m);
+  if (allZero) return RTV.tensor(zeroedFloatX(n * m), [n, m]);
+  const AT = zeroedFloatX(n * m);
   for (let i = 0; i < m; i++)
     for (let j = 0; j < n; j++) AT[i * n + j] = data[j * m + i];
   if (m >= n) {
-    const ATA = new FloatXArray(n * n);
+    const ATA = zeroedFloatX(n * n);
     for (let i = 0; i < n; i++)
       for (let j = 0; j < n; j++) {
         let sum = 0;
         for (let k = 0; k < m; k++) sum += data[i * m + k] * data[j * m + k];
         ATA[j * n + i] = sum;
       }
-    const augmented = new FloatXArray(n * (n + m));
+    const augmented = zeroedFloatX(n * (n + m));
     for (let i = 0; i < n; i++) {
       for (let j = 0; j < n; j++) augmented[j * n + i] = ATA[j * n + i];
       for (let j = 0; j < m; j++) augmented[(n + j) * n + i] = AT[j * n + i];
     }
     gaussJordanEliminate(augmented, n, n + m);
-    const result = new FloatXArray(n * m);
+    const result = zeroedFloatX(n * m);
     for (let i = 0; i < n; i++)
       for (let j = 0; j < m; j++)
         result[j * n + i] = augmented[(n + j) * n + i];
     return RTV.tensor(result, [n, m]);
   }
-  const AAT = new FloatXArray(m * m);
+  const AAT = zeroedFloatX(m * m);
   for (let i = 0; i < m; i++)
     for (let j = 0; j < m; j++) {
       let sum = 0;
       for (let k = 0; k < n; k++) sum += data[k * m + i] * data[k * m + j];
       AAT[j * m + i] = sum;
     }
-  const augmented = new FloatXArray(m * 2 * m);
+  const augmented = zeroedFloatX(m * 2 * m);
   for (let i = 0; i < m; i++) {
     for (let j = 0; j < m; j++) augmented[j * m + i] = AAT[j * m + i];
     augmented[(m + i) * m + i] = 1;
   }
   gaussJordanEliminate(augmented, m, 2 * m);
-  const AATinv = new FloatXArray(m * m);
+  const AATinv = zeroedFloatX(m * m);
   for (let i = 0; i < m; i++)
     for (let j = 0; j < m; j++) AATinv[j * m + i] = augmented[(m + j) * m + i];
-  const result = new FloatXArray(n * m);
+  const result = zeroedFloatX(n * m);
   for (let i = 0; i < n; i++)
     for (let j = 0; j < m; j++) {
       let sum = 0;
@@ -2159,8 +2135,7 @@ defineBuiltin({
         if (args.length !== 2)
           throw new RuntimeError("kron requires 2 arguments");
         const coerce = (v: RuntimeValue): RuntimeTensor => {
-          if (isRuntimeNumber(v))
-            return RTV.tensor(new FloatXArray([v]), [1, 1]);
+          if (isRuntimeNumber(v)) return RTV.tensor(copyFloatX([v]), [1, 1]);
           if (isRuntimeSparseMatrix(v)) return sparseToDense(v);
           if (isRuntimeTensor(v)) return v;
           throw new RuntimeError("kron: arguments must be numeric");
@@ -2171,7 +2146,7 @@ defineBuiltin({
         const [p, q] = tensorSize2D(B);
         const rows = m * p,
           cols = n * q;
-        const result = new FloatXArray(rows * cols);
+        const result = zeroedFloatX(rows * cols);
         for (let ja = 0; ja < n; ja++)
           for (let ia = 0; ia < m; ia++) {
             const aVal = A.data[ia + ja * m];
@@ -2202,8 +2177,7 @@ defineBuiltin({
         if (args.length === 0)
           throw new RuntimeError("blkdiag requires at least 1 argument");
         const blocks = args.map(a => {
-          if (isRuntimeNumber(a))
-            return RTV.tensor(new FloatXArray([a]), [1, 1]);
+          if (isRuntimeNumber(a)) return RTV.tensor(copyFloatX([a]), [1, 1]);
           if (!isRuntimeTensor(a))
             throw new RuntimeError("blkdiag: arguments must be numeric");
           return a;
@@ -2217,7 +2191,7 @@ defineBuiltin({
           totalRows += m;
           totalCols += n;
         }
-        const result = new FloatXArray(totalRows * totalCols);
+        const result = zeroedFloatX(totalRows * totalCols);
         let rowOffset = 0,
           colOffset = 0;
         for (let k = 0; k < blocks.length; k++) {
@@ -2285,16 +2259,10 @@ defineBuiltin({
         } else throw new RuntimeError("pagemtimes requires 2 or 4 arguments");
 
         const xT: RuntimeTensor = isRuntimeNumber(X)
-          ? (RTV.tensor(
-              new FloatXArray([X as number]),
-              [1, 1]
-            ) as RuntimeTensor)
+          ? (RTV.tensor(copyFloatX([X as number]), [1, 1]) as RuntimeTensor)
           : (X as RuntimeTensor);
         const yT: RuntimeTensor = isRuntimeNumber(Y)
-          ? (RTV.tensor(
-              new FloatXArray([Y as number]),
-              [1, 1]
-            ) as RuntimeTensor)
+          ? (RTV.tensor(copyFloatX([Y as number]), [1, 1]) as RuntimeTensor)
           : (Y as RuntimeTensor);
         if (!isRuntimeTensor(xT) || !isRuntimeTensor(yT))
           throw new RuntimeError("pagemtimes: arguments must be numeric");
@@ -2332,11 +2300,11 @@ defineBuiltin({
         const xPageSize = xShape[0] * xShape[1],
           yPageSize = yShape[0] * yShape[1];
         const totalPages = outExtra.reduce((a, b) => a * b, 1);
-        const result = new FloatXArray(pageSize * totalPages);
+        const result = zeroedFloatX(pageSize * totalPages);
         const needTranspX = transpX === "transpose" || transpX === "ctranspose";
         const needTranspY = transpY === "transpose" || transpY === "ctranspose";
-        const xTransBuf = needTranspX ? new FloatXArray(xPageSize) : null;
-        const yTransBuf = needTranspY ? new FloatXArray(yPageSize) : null;
+        const xTransBuf = needTranspX ? zeroedFloatX(xPageSize) : null;
+        const yTransBuf = needTranspY ? zeroedFloatX(yPageSize) : null;
         const xExtraStrides: number[] = [],
           yExtraStrides: number[] = [];
         let xStride = 1,
@@ -2432,7 +2400,7 @@ defineBuiltin({
         const extraDims = xShape.slice(2);
         const totalPages = extraDims.reduce((a: number, b: number) => a * b, 1);
         const pageSize = rows * cols;
-        const outData = new FloatXArray(X.data.length);
+        const outData = zeroedFloatX(X.data.length);
         const outShape = [cols, rows, ...extraDims];
         for (let p = 0; p < totalPages; p++) {
           const inOff = p * pageSize,
@@ -2489,9 +2457,9 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
   if (isComplex) {
     const nn = n * n;
     const aRe = toF64(A.data),
-      aIm = A.imag ? toF64(A.imag) : new Float64Array(nn);
+      aIm = A.imag ? toF64(A.imag) : zeroedFloat64(nn);
     const bRe = toF64(B.data),
-      bIm = B.imag ? toF64(B.imag) : new Float64Array(nn);
+      bIm = B.imag ? toF64(B.imag) : zeroedFloat64(nn);
     const bridge = getEffectiveBridge("qzComplex", "qzComplex");
     if (!bridge.qzComplex)
       throw new RuntimeError(
@@ -2500,24 +2468,24 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
     const result = bridge.qzComplex(aRe, aIm, bRe, bIm, n, computeEigvecs);
     if (!result) throw new RuntimeError("qz: complex QZ failed");
     const AAout = RTV.tensor(
-      new FloatXArray(result.AARe),
+      copyFloatX(result.AARe),
       [n, n],
-      new FloatXArray(result.AAIm)
+      copyFloatX(result.AAIm)
     );
     const BBout = RTV.tensor(
-      new FloatXArray(result.BBRe),
+      copyFloatX(result.BBRe),
       [n, n],
-      new FloatXArray(result.BBIm)
+      copyFloatX(result.BBIm)
     );
     const Qout = RTV.tensor(
-      new FloatXArray(result.QRe),
+      copyFloatX(result.QRe),
       [n, n],
-      new FloatXArray(result.QIm)
+      copyFloatX(result.QIm)
     );
     const Zout = RTV.tensor(
-      new FloatXArray(result.ZRe),
+      copyFloatX(result.ZRe),
       [n, n],
-      new FloatXArray(result.ZIm)
+      copyFloatX(result.ZIm)
     );
     if (nargout === 4) return [AAout, BBout, Qout, Zout];
     const { VRe, VIm, WRe, WIm } = result;
@@ -2528,18 +2496,18 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
       BBout,
       Qout,
       Zout,
-      RTV.tensor(new FloatXArray(VRe), [n, n], new FloatXArray(VIm)),
-      RTV.tensor(new FloatXArray(WRe), [n, n], new FloatXArray(WIm)),
+      RTV.tensor(copyFloatX(VRe), [n, n], copyFloatX(VIm)),
+      RTV.tensor(copyFloatX(WRe), [n, n], copyFloatX(WIm)),
     ];
   }
   const bridge = getEffectiveBridge("qz", "qz");
   if (!bridge.qz) throw new RuntimeError("qz: LAPACK bridge not available");
   const result = bridge.qz(toF64(A.data), toF64(B.data), n, computeEigvecs);
   if (!result) throw new RuntimeError("qz: real QZ failed");
-  const AAout = RTV.tensor(new FloatXArray(result.AA), [n, n]);
-  const BBout = RTV.tensor(new FloatXArray(result.BB), [n, n]);
-  const Qout = RTV.tensor(new FloatXArray(result.Q), [n, n]);
-  const Zout = RTV.tensor(new FloatXArray(result.Z), [n, n]);
+  const AAout = RTV.tensor(copyFloatX(result.AA), [n, n]);
+  const BBout = RTV.tensor(copyFloatX(result.BB), [n, n]);
+  const Qout = RTV.tensor(copyFloatX(result.Q), [n, n]);
+  const Zout = RTV.tensor(copyFloatX(result.Z), [n, n]);
   if (nargout === 4) return [AAout, BBout, Qout, Zout];
   const { alphai, V, W } = result;
   if (!V || !W)

@@ -3,7 +3,6 @@
  * setappdata, getappdata, rmappdata, isappdata.
  */
 import {
-  FloatXArray,
   isRuntimeCell,
   isRuntimeChar,
   isRuntimeFunction,
@@ -36,6 +35,7 @@ import {
   mGreaterEqual,
   mNeg,
 } from "../../helpers/arithmetic.js";
+import { zeroedFloatX, zeroedFloat64 } from "../../runtime/alloc.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 
@@ -167,7 +167,7 @@ registerIBuiltin({
         if (val !== undefined) return val;
       }
       // Return empty if not found (matches MATLAB)
-      return RTV.tensor(new FloatXArray(0), [0, 0]);
+      return RTV.tensor(zeroedFloatX(0), [0, 0]);
     },
   }),
 });
@@ -185,7 +185,7 @@ registerIBuiltin({
             ? (args[0] as number)
             : toNumber(args[0])
           : 49;
-      const data = new FloatXArray(n * n);
+      const data = zeroedFloatX(n * n);
       for (let j = 0; j < n; j++) {
         const y = -3 + (6 * j) / (n - 1);
         for (let i = 0; i < n; i++) {
@@ -371,8 +371,8 @@ for (const [name, fillVal] of [
         const cols = shape[1] ?? rows;
         const t = RTV.tensor(
           fillVal
-            ? new FloatXArray(rows * cols).fill(1)
-            : new FloatXArray(rows * cols),
+            ? zeroedFloatX(rows * cols).fill(1)
+            : zeroedFloatX(rows * cols),
           [rows, cols]
         );
         t._isLogical = true;
@@ -470,7 +470,7 @@ registerIBuiltin({
             : "";
         if (propStr.toLowerCase() === "colormap") {
           const n = 64;
-          const data = new Float64Array(n * 3);
+          const data = zeroedFloat64(n * 3);
           for (let i = 0; i < n; i++) {
             const t = i / (n - 1);
             // Simplified parula: dark blue → cyan → yellow
@@ -643,7 +643,7 @@ for (const name of ["xlim", "ylim"]) {
     name,
     resolve: () => ({
       outputTypes: [{ kind: "tensor", isComplex: false }],
-      apply: () => RTV.tensor(new FloatXArray(0), [0, 0]),
+      apply: () => RTV.tensor(zeroedFloatX(0), [0, 0]),
     }),
   });
 }
@@ -738,7 +738,7 @@ registerIBuiltin({
           const name = toString(args[1]);
           const bucket = appdataStore.get(key);
           if (!bucket || !bucket.has(name))
-            return RTV.tensor(new FloatXArray(0), [0, 0]);
+            return RTV.tensor(zeroedFloatX(0), [0, 0]);
           return bucket.get(name)!;
         },
       };
@@ -825,7 +825,7 @@ function convertJsonObject(obj: Record<string, unknown>): RuntimeValue {
 }
 
 function convertJsonArray(arr: unknown[]): RuntimeValue {
-  if (arr.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+  if (arr.length === 0) return RTV.tensor(zeroedFloatX(0), [0, 0]);
 
   // Classify elements
   let allBooleans = true;
@@ -845,7 +845,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
   // but only if ALL are booleans (not mixed with numbers)
   if (allBooleans && !allNumbers) {
     // Array of booleans → logical column vector
-    const data = new FloatXArray(arr.length);
+    const data = zeroedFloatX(arr.length);
     for (let i = 0; i < arr.length; i++) {
       data[i] = arr[i] === null ? 0 : arr[i] ? 1 : 0;
     }
@@ -856,7 +856,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
 
   if (allNumbers) {
     // Array of numbers → double column vector (null → NaN)
-    const data = new FloatXArray(arr.length);
+    const data = zeroedFloatX(arr.length);
     for (let i = 0; i < arr.length; i++) {
       data[i] = arr[i] === null ? NaN : (arr[i] as number);
     }
@@ -865,7 +865,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
 
   // All booleans (with no nulls that would make allNumbers true too)
   if (allBooleans) {
-    const data = new FloatXArray(arr.length);
+    const data = zeroedFloatX(arr.length);
     for (let i = 0; i < arr.length; i++) {
       data[i] = arr[i] ? 1 : 0;
     }

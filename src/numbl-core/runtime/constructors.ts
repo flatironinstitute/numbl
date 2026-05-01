@@ -26,6 +26,7 @@ import {
   isRuntimeLogical,
   isRuntimeString,
 } from "./types.js";
+import { zeroedFloatX, copyFloatX } from "./alloc.js";
 
 export const RTV = {
   num(value: number): RuntimeNumber {
@@ -37,11 +38,11 @@ export const RTV = {
     shape: number[],
     imag?: FloatXArrayType | number[]
   ): RuntimeTensor {
-    const d = data instanceof FloatXArray ? data : new FloatXArray(data);
+    const d = data instanceof FloatXArray ? data : copyFloatX(data);
     const im = imag
       ? imag instanceof FloatXArray
         ? imag
-        : new FloatXArray(imag)
+        : copyFloatX(imag)
       : undefined;
     // Strip trailing singleton dimensions (always keeps minimum 2D)
     const s = [...shape];
@@ -61,10 +62,10 @@ export const RTV = {
 
   /** Create a row vector [1 x n] */
   row(data: number[], imag?: number[]): RuntimeTensor {
-    const im = imag ? new FloatXArray(imag) : undefined;
+    const im = imag ? copyFloatX(imag) : undefined;
     return {
       kind: "tensor",
-      data: new FloatXArray(data),
+      data: copyFloatX(data),
       imag: im,
       shape: [1, data.length],
     };
@@ -72,10 +73,10 @@ export const RTV = {
 
   /** Create a column vector [n x 1] */
   col(data: number[], imag?: number[]): RuntimeTensor {
-    const im = imag ? new FloatXArray(imag) : undefined;
+    const im = imag ? copyFloatX(imag) : undefined;
     return {
       kind: "tensor",
-      data: new FloatXArray(data),
+      data: copyFloatX(data),
       imag: im,
       shape: [data.length, 1],
     };
@@ -88,11 +89,11 @@ export const RTV = {
     data: number[] | FloatXArrayType,
     imag?: number[] | FloatXArrayType
   ): RuntimeTensor {
-    const d = data instanceof FloatXArray ? data : new FloatXArray(data);
+    const d = data instanceof FloatXArray ? data : copyFloatX(data);
     const im = imag
       ? imag instanceof FloatXArray
         ? imag
-        : new FloatXArray(imag)
+        : copyFloatX(imag)
       : undefined;
     return {
       kind: "tensor",
@@ -145,7 +146,7 @@ export const RTV = {
       // Default for unspecified properties is [] (empty double)
       fields.set(
         name,
-        defaults?.get(name) ?? RTV.tensor(new FloatXArray(0), [0, 0])
+        defaults?.get(name) ?? RTV.tensor(zeroedFloatX(0), [0, 0])
       );
     }
     return {

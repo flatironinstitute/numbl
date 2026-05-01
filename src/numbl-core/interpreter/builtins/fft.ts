@@ -7,7 +7,6 @@
 
 import type { RuntimeValue } from "../../runtime/types.js";
 import {
-  FloatXArray,
   type FloatXArrayType,
   isRuntimeComplexNumber,
   isRuntimeNumber,
@@ -17,6 +16,12 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin } from "./types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
+import {
+  zeroedFloatX,
+  copyFloatX,
+  zeroedFloat64,
+  copyFloat64,
+} from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 
@@ -89,22 +94,22 @@ function bluesteinFFT(
 ): [Float64Array, Float64Array] {
   const N = inRe.length;
   const sign = inverse ? 1 : -1;
-  const chirpRe = new Float64Array(N),
-    chirpIm = new Float64Array(N);
+  const chirpRe = zeroedFloat64(N),
+    chirpIm = zeroedFloat64(N);
   for (let k = 0; k < N; k++) {
     const angle = (sign * Math.PI * ((k * k) % (2 * N))) / N;
     chirpRe[k] = Math.cos(angle);
     chirpIm[k] = Math.sin(angle);
   }
   const M = nextPow2(2 * N - 1);
-  const aRe = new Float64Array(M),
-    aIm = new Float64Array(M);
+  const aRe = zeroedFloat64(M),
+    aIm = zeroedFloat64(M);
   for (let n = 0; n < N; n++) {
     aRe[n] = inRe[n] * chirpRe[n] - inIm[n] * chirpIm[n];
     aIm[n] = inRe[n] * chirpIm[n] + inIm[n] * chirpRe[n];
   }
-  const bRe = new Float64Array(M),
-    bIm = new Float64Array(M);
+  const bRe = zeroedFloat64(M),
+    bIm = zeroedFloat64(M);
   bRe[0] = chirpRe[0];
   bIm[0] = -chirpIm[0];
   for (let k = 1; k < N; k++) {
@@ -127,8 +132,8 @@ function bluesteinFFT(
     aRe[i] *= invM;
     aIm[i] *= invM;
   }
-  const outRe = new Float64Array(N),
-    outIm = new Float64Array(N);
+  const outRe = zeroedFloat64(N),
+    outIm = zeroedFloat64(N);
   for (let k = 0; k < N; k++) {
     outRe[k] = aRe[k] * chirpRe[k] - aIm[k] * chirpIm[k];
     outIm[k] = aRe[k] * chirpIm[k] + aIm[k] * chirpRe[k];
@@ -147,8 +152,8 @@ function computeFFT1D(
     return [result.re, result.im];
   }
   if (isPowerOf2(inRe.length)) {
-    const re = new Float64Array(inRe),
-      im = new Float64Array(inIm);
+    const re = copyFloat64(inRe),
+      im = copyFloat64(inIm);
     fftInPlace(re, im, inverse);
     return [re, im];
   }
@@ -229,11 +234,11 @@ function applyFFTAlongDim(
   const bridge = getLapackBridge();
   if (bridge?.fftAlongDim) {
     const inRe64 =
-      inData instanceof Float64Array ? inData : new Float64Array(inData);
+      inData instanceof Float64Array ? inData : copyFloat64(inData);
     const inIm64: Float64Array | null = inImag
       ? inImag instanceof Float64Array
         ? inImag
-        : new Float64Array(inImag)
+        : copyFloat64(inImag)
       : null;
     const result = bridge.fftAlongDim(inRe64, inIm64, shape, dim, n, inverse);
     if (result) {
@@ -273,21 +278,19 @@ function applyFFTAlongDim(
           break;
         }
       return {
-        outData: new FloatXArray(outRe) as FloatXArrayType,
-        outImag: anyImag
-          ? (new FloatXArray(outIm) as FloatXArrayType)
-          : undefined,
+        outData: copyFloatX(outRe) as FloatXArrayType,
+        outImag: anyImag ? (copyFloatX(outIm) as FloatXArrayType) : undefined,
         outShape,
       };
     }
   }
 
   // JS fallback
-  const outData = new FloatXArray(totalOut);
-  const outImag = new FloatXArray(totalOut);
+  const outData = zeroedFloatX(totalOut);
+  const outImag = zeroedFloatX(totalOut);
   let anyImag = false;
-  const fiberIn = new Float64Array(n),
-    fiberInI = new Float64Array(n);
+  const fiberIn = zeroedFloat64(n),
+    fiberInI = zeroedFloat64(n);
   const copyLen = Math.min(dimSize, n);
   for (let outer = 0; outer < numAbove; outer++) {
     for (let inner = 0; inner < strideDim; inner++) {
@@ -334,8 +337,8 @@ function applyFFT(args: RuntimeValue[], inverse: boolean): RuntimeValue {
     const n = nArg !== undefined ? Math.round(nArg) : 1;
     if (n <= 0) throw new RuntimeError("fft: n must be a positive integer");
     if (n === 1) return xim === 0 ? RTV.num(xre) : RTV.complex(xre, xim);
-    const re = new Float64Array(n),
-      im = new Float64Array(n);
+    const re = zeroedFloat64(n),
+      im = zeroedFloat64(n);
     re[0] = xre;
     im[0] = xim;
     const [outRe, outIm] = computeFFT1D(re, im, inverse);
@@ -351,8 +354,8 @@ function applyFFT(args: RuntimeValue[], inverse: boolean): RuntimeValue {
       for (let i = 0; i < n; i++) outIm[i] = 0;
     }
     const allReal = outIm.every(v => Math.abs(v) < 1e-15);
-    const outD = new FloatXArray(n);
-    const outI = allReal ? undefined : new FloatXArray(n);
+    const outD = zeroedFloatX(n);
+    const outI = allReal ? undefined : zeroedFloatX(n);
     for (let i = 0; i < n; i++) {
       outD[i] = outRe[i];
       if (outI) outI[i] = outIm[i];
@@ -402,15 +405,13 @@ function circshiftAlongDim(
   shift = ((shift % n) + n) % n;
   if (shift === 0) {
     return {
-      outData: new FloatXArray(data) as FloatXArrayType,
-      outImag: imag ? (new FloatXArray(imag) as FloatXArrayType) : undefined,
+      outData: copyFloatX(data) as FloatXArrayType,
+      outImag: imag ? (copyFloatX(imag) as FloatXArrayType) : undefined,
     };
   }
   const total = data.length;
-  const outData = new FloatXArray(total) as FloatXArrayType;
-  const outImag = imag
-    ? (new FloatXArray(total) as FloatXArrayType)
-    : undefined;
+  const outData = zeroedFloatX(total) as FloatXArrayType;
+  const outImag = imag ? (zeroedFloatX(total) as FloatXArrayType) : undefined;
   let strideDim = 1;
   for (let d = 0; d < dim; d++) strideDim *= shape[d];
   let numAbove = 1;
