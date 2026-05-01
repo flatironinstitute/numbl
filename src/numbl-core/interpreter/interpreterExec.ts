@@ -746,18 +746,41 @@ export function evalBinary(
   }
 
   // Profile non-scalar binary ops (tensor arithmetic)
+  let result: unknown;
   if (
     this.rt.profilingEnabled &&
     (typeof left !== "number" || typeof right !== "number")
   ) {
     const opName = binopProfileName[expr.op] ?? expr.op;
     this.rt.profileEnter("builtin:interp:" + opName);
-    const result = binop(expr.op, left, right);
+    result = binop(expr.op, left, right);
     this.rt.profileLeave();
-    return result;
+  } else {
+    result = binop(expr.op, left, right);
   }
 
-  return binop(expr.op, left, right);
+  // Owned operand intermediates (`a*2`'s tensor in `a*2 + 1`) become
+  // unreferenced once the binop produces its fresh result. Recycle them
+  // here so chained binops don't leak per stage. Skip when the operand
+  // is also the result (defensive — current binop builtins always
+  // allocate fresh, but a future identity case shouldn't double-dispose).
+  if (
+    isOwnedExpr(expr.left) &&
+    isRuntimeTensor(lv) &&
+    lv !== result &&
+    lv !== ensureRuntimeValue(result)
+  ) {
+    disposeValue(lv);
+  }
+  if (
+    isOwnedExpr(expr.right) &&
+    isRuntimeTensor(rv) &&
+    rv !== result &&
+    rv !== ensureRuntimeValue(result)
+  ) {
+    disposeValue(rv);
+  }
+  return result;
 }
 
 // ── Unary operators ──────────────────────────────────────────────────────

@@ -102,21 +102,22 @@ describe("dispose-balance: control flow", () => {
   });
 });
 
+describe("dispose-balance: chained binop intermediates", () => {
+  // Closed by `evalBinary` disposing owned operand intermediates after
+  // the binop produces its fresh result. Without that, `a*2`'s buffer
+  // is fed to `+ 1` and then unreferenced — one leak per stage.
+  it("chain of binary ops", () => {
+    expectBalanced(`a = [1 2 3]; b = a * 2 + 1 - 3; clear all;`);
+  });
+});
+
 // ── Known gaps ────────────────────────────────────────────────────────
 //
-// These tests describe the desired behavior but don't balance yet.
 // `it.fails` passes while the test still fails; once a gap closes the
 // test will report as unexpectedly-passing, prompting promotion to
 // `it`. See ownership-and-dispose.md §8 for the gap list.
 
 describe("dispose-balance: known gaps", () => {
-  // GAP: chained binary ops leave intermediate buffers unrecycled
-  // (`a*2`'s result feeds the `+ 1` operand and is then unreferenced —
-  // the binop site doesn't dispose the LHS owned operand after consumption).
-  it.fails("chain of binary ops", () => {
-    expectBalanced(`a = [1 2 3]; b = a * 2 + 1 - 3; clear all;`);
-  });
-
   // GAP: FuncCall arg passing — the caller passes an owned value
   // (TensorLit, FuncCall result, etc.) to a function. callUserFunction
   // deep-clones at entry, so the original goes unreferenced after the
@@ -173,9 +174,8 @@ describe("dispose-balance: known gaps", () => {
     `);
   });
 
-  // GAP: `for` loop iteration with rebinding leaves one buffer per
-  // iteration unrecycled — `total = total + 1` allocates fresh, but the
-  // previous iteration's buffer is the rhs operand and not yet disposed.
+  // GAP: `for` loop's iteration value (the result of `1:N` etc.) is
+  // not disposed when the loop ends.
   it.fails("for loop accumulator", () => {
     expectBalanced(`
       total = zeros(1, 5);
@@ -186,9 +186,8 @@ describe("dispose-balance: known gaps", () => {
     `);
   });
 
-  // GAP: same as nested-function — owned FuncCall arg (`x * 2`) inside
-  // the chosen branch leaks since the binop site doesn't dispose its
-  // owned operand after consumption.
+  // GAP: same as nested-function — owned FuncCall arg (`sum(x)` arg)
+  // is not disposed at the call site.
   it.fails("if/else branches", () => {
     expectBalanced(`
       x = [1 2 3];
