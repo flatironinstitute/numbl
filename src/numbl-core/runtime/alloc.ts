@@ -127,16 +127,37 @@ const _trackByDefault =
 let _leakTracking = _trackByDefault;
 const _liveBuffers = new Map<
   Float32Array<ArrayBufferLike> | Float64Array<ArrayBufferLike>,
-  { stack: string; n: number; bytes: number }
+  {
+    stack: string;
+    source: { file: string; line: number } | null;
+    n: number;
+    bytes: number;
+  }
 >();
+
+/** Most recent .m source location set by the interpreter via
+ *  `setAllocSource`. Captured by `recordAlloc` so the leak report can
+ *  point at the actual user-visible site. */
+let _currentSource: { file: string; line: number } | null = null;
 
 export function setLeakTracking(enabled: boolean): void {
   _leakTracking = enabled;
-  if (!enabled) _liveBuffers.clear();
+  if (!enabled) {
+    _liveBuffers.clear();
+    _currentSource = null;
+  }
 }
 
 export function isLeakTracking(): boolean {
   return _leakTracking;
+}
+
+/** Set the current .m source location for subsequent allocations.
+ *  Called by the interpreter on each statement entry. No-op when leak
+ *  tracking is off (so the runtime path stays cheap by default). */
+export function setAllocSource(file: string, line: number): void {
+  if (!_leakTracking) return;
+  _currentSource = file ? { file, line } : null;
 }
 
 function captureStack(): string {
@@ -154,6 +175,7 @@ function recordAlloc(
   if (!_leakTracking) return;
   _liveBuffers.set(buf, {
     stack: captureStack(),
+    source: _currentSource,
     n,
     bytes: n * bytesPerElt,
   });
@@ -168,6 +190,11 @@ function recordDispose(
 
 export interface LeakReportEntry {
   stack: string;
+  /** Aggregated `.m` source locations for the live buffers in this
+   *  group (the interpreter's $file/$line at alloc time), with
+   *  per-source counts. Empty when the alloc happened before any
+   *  statement set a source. */
+  sources: { file: string; line: number; count: number }[];
   count: number;
   totalBytes: number;
   sizes: number[];
@@ -180,12 +207,31 @@ export function getLeakReport(topN = 20): LeakReportEntry[] {
   for (const info of _liveBuffers.values()) {
     let entry = byStack.get(info.stack);
     if (!entry) {
-      entry = { stack: info.stack, count: 0, totalBytes: 0, sizes: [] };
+      entry = {
+        stack: info.stack,
+        sources: [],
+        count: 0,
+        totalBytes: 0,
+        sizes: [],
+      };
       byStack.set(info.stack, entry);
     }
     entry.count++;
     entry.totalBytes += info.bytes;
     if (entry.sizes.length < 5) entry.sizes.push(info.n);
+    if (info.source) {
+      const existing = entry.sources.find(
+        s => s.file === info.source!.file && s.line === info.source!.line
+      );
+      if (existing) {
+        existing.count++;
+      } else {
+        entry.sources.push({ ...info.source, count: 1 });
+      }
+    }
+  }
+  for (const e of byStack.values()) {
+    e.sources.sort((a, b) => b.count - a.count);
   }
   return Array.from(byStack.values())
     .sort((a, b) => b.totalBytes - a.totalBytes)

@@ -45,7 +45,7 @@ import {
 
 import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
-import { zeroedFloatX } from "../runtime/alloc.js";
+import { zeroedFloatX, setAllocSource } from "../runtime/alloc.js";
 import { disposeValue, deepCloneValue } from "../runtime/utils.js";
 
 // ── Ownership classification ─────────────────────────────────────────────
@@ -61,6 +61,7 @@ import { disposeValue, deepCloneValue } from "../runtime/utils.js";
 function isOwnedExpr(expr: Expr): boolean {
   switch (expr.type) {
     case "Tensor":
+    case "Cell":
     case "Range":
     case "Binary":
     case "Unary":
@@ -85,6 +86,10 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       this.lineTableCache.set(stmt.span.file, table);
     }
     this.rt.$line = offsetToLineFast(table, stmt.span.start);
+    // Forward the .m source location to the leak tracker so it can
+    // tag any allocations the upcoming statement makes. No-op when
+    // tracking is off (default), so the runtime path stays cheap.
+    setAllocSource(this.rt.$file, this.rt.$line);
   }
 
   switch (stmt.type) {
@@ -1350,14 +1355,31 @@ export function evalCellLiteral(
   if (expr.rows.length === 0) {
     return RTV.cell([], [0, 0]);
   }
+  // Each cell entry must be the cell's unique owner. Borrowed entries
+  // (an Ident `{a}` is the env binding's wrapper) are deep-cloned so
+  // the cell doesn't alias caller state. Owned entries (TensorLit /
+  // Binary / FuncCall result, etc.) move into the cell directly.
+  const takeEntry = (e: Expr, v: unknown): RuntimeValue => {
+    const rv = ensureRuntimeValue(v);
+    if (
+      isOwnedExpr(e) ||
+      typeof rv !== "object" ||
+      rv === null ||
+      isRuntimeFunction(rv)
+    ) {
+      return rv;
+    }
+    return deepCloneValue(rv) as RuntimeValue;
+  };
   if (expr.rows.length === 1) {
     const elements: RuntimeValue[] = [];
     for (const e of expr.rows[0]) {
       const v = this.evalExpr(e);
       if (Array.isArray(v)) {
+        // Multi-output expansion: each result is owned per §4.4.
         for (const elem of v) elements.push(ensureRuntimeValue(elem));
       } else {
-        elements.push(ensureRuntimeValue(v));
+        elements.push(takeEntry(e, v));
       }
     }
     return RTV.cell(elements, [1, elements.length]);
@@ -1367,7 +1389,8 @@ export function evalCellLiteral(
   const elements: RuntimeValue[] = [];
   for (let c = 0; c < numCols; c++) {
     for (let r = 0; r < numRows; r++) {
-      elements.push(ensureRuntimeValue(this.evalExpr(expr.rows[r][c])));
+      const e = expr.rows[r][c];
+      elements.push(takeEntry(e, this.evalExpr(e)));
     }
   }
   return RTV.cell(elements, [numRows, numCols]);
@@ -1475,12 +1498,46 @@ export function assignLValue(
           : this.evalLValueBase(lv.base, RTV.cell([], [0, 0]));
       const { args: indices, ownedArgs: ownedCellIdxArgs } =
         this.evalIndicesWithEndTracked(base, lv.indices);
+      // Pre-fetch the old entry at the cell index. indexCellStore
+      // rebuilds the cell, sharing the unchanged entries with the new
+      // cell — but the entry at the targeted index is replaced. The
+      // old entry is no longer referenced from the new cell. Skip
+      // when the env is captured by a closure snapshot, or for
+      // multi-index stores (we'd need to dispose multiple entries).
+      const cellRootCapture =
+        lv.base.type === "Ident"
+          ? this.env.isNameCaptured(lv.base.name)
+          : this.env.envCaptured;
+      let oldCellEntry: RuntimeValue | undefined;
+      if (
+        !cellRootCapture &&
+        indices.length === 1 &&
+        isRuntimeCell(ensureRuntimeValue(base))
+      ) {
+        const cell = ensureRuntimeValue(
+          base
+        ) as import("../runtime/types.js").RuntimeCell;
+        const idxVal = ensureRuntimeValue(indices[0]);
+        if (typeof idxVal === "number") {
+          const k = Math.round(idxVal) - 1;
+          if (k >= 0 && k < cell.data.length) oldCellEntry = cell.data[k];
+        }
+      }
       const result = this.rt.indexCellStore(base, indices, value);
       const cellResultRv = ensureRuntimeValue(result);
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, cellResultRv);
       } else {
         this.writeLValueBase(lv.base, cellResultRv);
+      }
+      if (
+        oldCellEntry !== undefined &&
+        oldCellEntry !== value &&
+        oldCellEntry !== null &&
+        typeof oldCellEntry === "object" &&
+        isRuntimeTensor(oldCellEntry as RuntimeValue)
+      ) {
+        disposeValue(oldCellEntry as RuntimeValue);
       }
       for (const a of ownedCellIdxArgs) {
         if (a !== cellResultRv && isRuntimeTensor(a)) disposeValue(a);

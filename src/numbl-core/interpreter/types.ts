@@ -162,22 +162,48 @@ export class Environment {
     this.vars.clear();
   }
 
-  /** Recursively dispose every local value, then clear the map. When
-   *  the env is captured by a closure, bindings whose names were live
-   *  at snapshot time are skipped (their wrappers may still be reached
-   *  via the snapshot's vars Map). Bindings created later are
-   *  disposed normally. Used by `clear` / `clear all` and similar
-   *  workspace-reset paths. */
+  /** Recursively dispose every local value, then clear the map. Used
+   *  by `clear` / `clear all` and similar workspace-reset paths.
+   *
+   *  Two-pass to defang the closure-capture problem. Snapshots in
+   *  `capturedNames` reference the same wrappers as the live env via
+   *  function values stored in `vars`; if those function values are
+   *  also being cleared, the snapshots become unreachable and the
+   *  captured wrappers are safe to dispose.
+   *
+   *  Pass 1: dispose every function value first — this drops the
+   *  snapshot references they hold (the snapshots themselves are
+   *  just plain Environment objects that JS GC will reclaim).
+   *  Pass 2: dispose the rest. By now no captured-name skipping is
+   *  needed: every snapshot-referenced wrapper is either still
+   *  reachable via the function value (impossible — we just dropped
+   *  them) or was itself captured by a function value the user did
+   *  NOT clear (e.g. a closure stored in a struct field that was
+   *  itself stored elsewhere; not relevant for `clear all`).
+   *  An escaped closure (returned from a function) is not in this
+   *  env's vars at all, so disposing this env's locals doesn't
+   *  affect it. */
   disposeAllLocals(): void {
-    if (this.envCaptured) {
-      for (const [name, v] of this.vars) {
-        if (this.capturedNames.has(name)) continue;
+    for (const v of this.vars.values()) {
+      if (
+        v !== null &&
+        typeof v === "object" &&
+        "kind" in v &&
+        (v as { kind: string }).kind === "function"
+      ) {
         disposeValue(v);
       }
-      this.vars.clear();
-      return;
     }
-    for (const v of this.vars.values()) disposeValue(v);
+    for (const v of this.vars.values()) {
+      if (
+        v === null ||
+        typeof v !== "object" ||
+        !("kind" in v) ||
+        (v as { kind: string }).kind !== "function"
+      ) {
+        disposeValue(v);
+      }
+    }
     this.vars.clear();
   }
 

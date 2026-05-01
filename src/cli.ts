@@ -608,8 +608,20 @@ async function executeWithOptions(
     );
     for (const e of report) {
       process.stderr.write(
-        `\n[${e.count} bufs, ${(e.totalBytes / 1024).toFixed(1)} KiB, sizes=${e.sizes.join(",")}${e.sizes.length < e.count ? ",…" : ""}]\n${e.stack}\n`
+        `\n[${e.count} bufs, ${(e.totalBytes / 1024).toFixed(1)} KiB, sizes=${e.sizes.join(",")}${e.sizes.length < e.count ? ",…" : ""}]\n`
       );
+      if (e.sources.length > 0) {
+        const top = e.sources.slice(0, 5);
+        const srcStr = top
+          .map(s => `${s.file}:${s.line} (${s.count})`)
+          .join(", ");
+        const more =
+          e.sources.length > top.length
+            ? ` +${e.sources.length - top.length} more`
+            : "";
+        process.stderr.write(`  source: ${srcStr}${more}\n`);
+      }
+      process.stderr.write(`${e.stack}\n`);
     }
   };
 

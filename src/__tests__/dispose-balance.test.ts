@@ -408,6 +408,38 @@ describe("dispose-balance: captured-name granularity", () => {
   });
 });
 
+describe("dispose-balance: cell entry overwrite", () => {
+  // `c{k} = newval` rebuilds the cell with a new entry at k; the OLD
+  // entry's wrapper is no longer referenced from the new cell and can
+  // be recycled.
+  it("scalar cell entry overwrite", () => {
+    expectBalanced(`
+      c = {[1 2 3], [4 5 6]};
+      c{1} = [7 8 9];
+      clear all;
+    `);
+  });
+
+  it("loop overwriting cell entries", () => {
+    expectBalanced(`
+      c = {zeros(1, 3), zeros(1, 3), zeros(1, 3)};
+      for k = 1:3
+        c{k} = [k k+1 k+2];
+      end
+      clear all;
+    `);
+  });
+
+  it("cell entry overwrite with binop rhs", () => {
+    expectBalanced(`
+      c = {[1 2], [3 4]};
+      a = [10 20];
+      c{1} = a + 1;
+      clear all;
+    `);
+  });
+});
+
 describe("dispose-balance: tensor literal element disposal", () => {
   // Inside `[...]` literal: each element coming from an owned expr
   // (Range / Binary / FuncCall …) gets its values copied out by
