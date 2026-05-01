@@ -19,23 +19,27 @@
  */
 
 import { FloatXArray } from "./types.js";
+import type { RuntimeTensor } from "./types.js";
 
 const debugFromEnv =
-  import.meta.env?.NUMBL_DEBUG_POOL === "true" ? true : false;
+  import.meta.env?.NUMBL_DEBUG_POOL === "true" ||
+  (typeof process !== "undefined" && process.env?.NUMBL_DEBUG_POOL === "true")
+    ? true
+    : false;
 
 const useFloat32 = (FloatXArray as unknown) === Float32Array;
 
 export interface BufferPoolOptions {
-  /** Global cap on bytes held in the pool. Defaults to 256 MB. */
+  /** Global cap on bytes held in the pool. Defaults to 1 GB. */
   maxBytes?: number;
-  /** Per-length cap on the number of buffers retained. Defaults to 16. */
+  /** Per-length cap on the number of buffers retained. Defaults to 256. */
   maxPerBucket?: number;
   /** Scribble released buffers with NaN to make use-after-release visible. */
   debug?: boolean;
 }
 
-const DEFAULT_MAX_BYTES = 256 * 1024 * 1024;
-const DEFAULT_MAX_PER_BUCKET = 16;
+const DEFAULT_MAX_BYTES = 1024 * 1024 * 1024; // 1 GB
+const DEFAULT_MAX_PER_BUCKET = 256;
 
 const hasBuffer = typeof Buffer !== "undefined";
 
@@ -156,4 +160,56 @@ export function acquireFloatX(n: number): InstanceType<typeof FloatXArray> {
   return (
     useFloat32 ? _activePool.acquireF32(n) : _activePool.acquireF64(n)
   ) as InstanceType<typeof FloatXArray>;
+}
+
+// ── Tensor release helpers ─────────────────────────────────────────────
+//
+// PR 3 wiring: every binding seam (Environment overwrites, function exit,
+// JIT Assign overwrites and epilogues) calls one of these to decrement the
+// shared `_refs.c` and pool the buffer when the count hits zero.
+
+/** Decrement a tensor's shared refcount; if the buffer becomes unaliased,
+ *  return its data (and imag, if present) to the active pool. */
+export function releaseTensor(t: RuntimeTensor): void {
+  if (--t._refs.c === 0) {
+    _activePool.release(t.data);
+    if (t.imag) _activePool.release(t.imag);
+  }
+}
+
+/** Release `v` only if it is a RuntimeTensor. Cheap no-op for everything
+ *  else — usable as a blanket cleanup at scope exits where the slot type
+ *  is not statically known. */
+export function releaseIfTensor(v: unknown): void {
+  if (
+    typeof v === "object" &&
+    v !== null &&
+    (v as RuntimeTensor).kind === "tensor"
+  ) {
+    releaseTensor(v as RuntimeTensor);
+  }
+}
+
+/** Bump the shared refcount for a tensor wrapper. Used when a value gains
+ *  a new aliasing slot (function output, persistent store, return-value
+ *  bump before clearLocals) so that the matching release at the other end
+ *  doesn't pool a still-aliased buffer. No-op for non-tensors. */
+export function retainIfTensor(v: unknown): void {
+  if (
+    typeof v === "object" &&
+    v !== null &&
+    (v as RuntimeTensor).kind === "tensor"
+  ) {
+    (v as RuntimeTensor)._refs.c++;
+  }
+}
+
+/** Assign-with-release: release `prev` (if a tensor and not the same
+ *  wrapper as `next`) and return `next`. Used by JIT codegen so the dest-
+ *  hint reuse path stays intact: when the RHS op writes into prev's buffer
+ *  in place, it returns the same wrapper, prev === next, and no release
+ *  fires. */
+export function assignReleasing<T>(prev: unknown, next: T): T {
+  if (prev !== next && prev !== undefined) releaseIfTensor(prev);
+  return next;
 }

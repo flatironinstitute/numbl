@@ -9,6 +9,7 @@ import { isRuntimeCell } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { shareRuntimeValue } from "../runtime/utils.js";
+import { retainIfTensor } from "../runtime/bufferPool.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
@@ -626,11 +627,30 @@ export function callUserFunction(
       }
     }
 
+    // Retain output tensors before clearLocals would otherwise release
+    // them — the caller is about to take ownership and needs the buffer
+    // alive. Then drop the local aliases (balances shareRuntimeValue
+    // bumps from the call entry and lets unreferenced buffers reach the
+    // pool).
+    //
+    // Skip when a `@nestedFn` handle was created during this function's
+    // execution: that handle's closure references `fnEnv`, and clearing
+    // its vars would strand the handle if it escaped via an output /
+    // persistent / global. Defining a nested function alone is fine —
+    // only escaping handles matter.
+    if (!fnEnv.nestedHandleCreated) {
+      for (const o of outputs) retainIfTensor(o);
+      fnEnv.clearLocals();
+    }
+
     if (nargout <= 1) {
       return outputs[0];
     }
     return outputs;
   } catch (e) {
+    // Even on error, drop local aliases so refcounts stay balanced for
+    // any caller-held wrappers — same handle caveat as above.
+    if (!fnEnv.nestedHandleCreated) fnEnv.clearLocals();
     this.rt.annotateError(e);
     throw e;
   } finally {

@@ -954,6 +954,14 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   const capturedMethodName = this.currentMethodName;
   const capturedEnv = this.env;
 
+  // If `name` resolves to a nested function defined here or in an ancestor,
+  // the handle keeps that env alive via closure. Mark the chain so the
+  // function-exit cleanup skips clearLocals — tearing the env down would
+  // strand the handle if it escapes via an output / persistent / global.
+  // Builtin/user-function handles don't need this marker; their dispatch
+  // doesn't depend on `capturedEnv`'s vars.
+  capturedEnv.markChainForNestedHandle(name);
+
   const fn = RTV.func(name, "builtin");
   fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
     const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;

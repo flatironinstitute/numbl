@@ -5,6 +5,7 @@
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
+import { releaseIfTensor, retainIfTensor } from "../runtime/bufferPool.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -57,6 +58,10 @@ export class Environment {
   persistentFuncId: string | undefined;
   /** Back-reference to the runtime (needed for global/persistent access) */
   rt: Runtime | null = null;
+  /** Set when a `@nestedFn` handle has been created that captures this env
+   *  (or an ancestor). Tells the function-exit cleanup that clearing this
+   *  env would strand the handle's closure, so locals must be left alive. */
+  nestedHandleCreated = false;
 
   constructor(private parent?: Environment) {}
 
@@ -79,6 +84,8 @@ export class Environment {
       this._globalNames.has(name) &&
       this.rt
     ) {
+      const priorGlobal = this.rt.$g[name];
+      if (priorGlobal !== value) releaseIfTensor(priorGlobal);
       this.rt.$g[name] = value;
       return;
     }
@@ -89,11 +96,15 @@ export class Environment {
         return;
       }
     }
+    const prior = this.vars.get(name);
+    if (prior !== undefined && prior !== value) releaseIfTensor(prior);
     this.vars.set(name, value);
   }
 
   /** Always writes to this scope (for parameter binding). */
   setLocal(name: string, value: RuntimeValue): void {
+    const prior = this.vars.get(name);
+    if (prior !== undefined && prior !== value) releaseIfTensor(prior);
     this.vars.set(name, value);
   }
 
@@ -103,12 +114,15 @@ export class Environment {
    *  are removed via `clear global` / `clear functions` (not yet
    *  implemented). */
   delete(name: string): boolean {
+    const prior = this.vars.get(name);
+    if (prior !== undefined) releaseIfTensor(prior);
     return this.vars.delete(name);
   }
 
   /** Remove all local variables from this scope. Globals,
    *  persistents, and nested function defs are preserved. */
   clearLocals(): void {
+    for (const v of this.vars.values()) releaseIfTensor(v);
     this.vars.clear();
   }
 
@@ -145,21 +159,39 @@ export class Environment {
     );
   }
 
+  /** Mark this env and every ancestor up to (and including) the env that
+   *  defines `name` as having had a nested-function handle created. The
+   *  handle's closure references this env, so any of those scopes' locals
+   *  must stay alive after the function exits. Returns true if `name`
+   *  was found as a nested-function definition somewhere in the chain. */
+  markChainForNestedHandle(name: string): boolean {
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    let e: Environment | undefined = this;
+    while (e) {
+      e.nestedHandleCreated = true;
+      if (e._nestedFunctions?.has(name)) return true;
+      e = e.parent;
+    }
+    return false;
+  }
+
   localNames(): string[] {
     return [...this.vars.keys()];
   }
 
   /** Create a snapshot of this environment (copies all variables by value).
-   *  Used for anonymous functions which capture values at definition time. */
+   *  Used for anonymous functions which capture values at definition time.
+   *  Tensor wrappers are retained — the snapshot is its own alias of each
+   *  buffer, so when the original env is later cleared the buffer stays
+   *  alive for the lambda. */
   snapshot(): Environment {
     const snap = new Environment();
-    // Copy all variables from the entire chain
     const copyVars = (env: Environment) => {
       if (env.parent) copyVars(env.parent);
       for (const [k, v] of env.vars) {
+        retainIfTensor(v);
         snap.vars.set(k, v);
       }
-      // Also copy nested function registrations
       for (const [k, v] of env.nestedFunctions) {
         snap.nestedFunctions.set(k, v);
       }
