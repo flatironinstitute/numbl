@@ -88,7 +88,17 @@ register("evalin", (ctx, args) => {
     // Simple variable name — just look it up
     if (/^[a-zA-Z_]\w*$/.test(code)) {
       const val = targetEnv.get(code);
-      if (val !== undefined) return val;
+      if (val !== undefined) {
+        // Hand the caller a fresh wrapper, not the target scope's
+        // binding. Under the COW share model, returning the binding
+        // directly means caller's release would decrement the
+        // target scope's refcount cell as if it were its own.
+        // deepCloneValue produces a wrapper that aliases the buffer
+        // via the shared cell — independent dispose.
+        return val !== null && typeof val === "object"
+          ? (deepCloneValue(val as RuntimeValue) as typeof val)
+          : val;
+      }
       if (args.length >= 3) return ensureRuntimeValue(args[2]);
       throw new RuntimeError(
         `Variable '${code}' does not exist in ${scope} scope`

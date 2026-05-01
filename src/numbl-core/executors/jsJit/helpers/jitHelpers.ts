@@ -35,7 +35,10 @@ import {
   mElemPow,
 } from "../../../helpers/arithmetic.js";
 
-import { deepCloneValue } from "../../../runtime/utils.js";
+import {
+  deepCloneValue,
+  ensureExclusiveValue,
+} from "../../../runtime/utils.js";
 
 // Re-export sub-modules for direct import where needed
 export {
@@ -666,11 +669,15 @@ export const jitHelpers = {
 
   // User function call with call frame tracking.
   //
-  // Each non-primitive argument is deep-cloned at the call boundary so
-  // that the callee can mutate freely without the writes leaking back
-  // into the caller's binding. Handle classes / function handles /
-  // graphics handles deliberately keep reference semantics — see
-  // deepCloneValue.
+  // Each non-primitive argument is deep-cloned at the call boundary
+  // (`deepCloneValue` produces a fresh wrapper that aliases the buffer
+  // via the COW refcount cell) and then passed through
+  // `ensureExclusiveValue` so the JIT-compiled callee receives buffers
+  // it can mutate freely. The JIT mutates tensor data via inline
+  // codegen and bypasses the runtime's COW gate; without
+  // ensure-exclusive, any shared buffer would leak writes back to the
+  // caller's binding. Handle classes / function handles / graphics
+  // handles deliberately keep reference semantics — see deepCloneValue.
   callUser: (
     rt: CallRt,
     name: string,
@@ -679,7 +686,11 @@ export const jitHelpers = {
   ) => {
     const cloned = new Array(args.length);
     for (let i = 0; i < args.length; i++) {
-      cloned[i] = deepCloneValue(args[i] as RuntimeValue);
+      const c = deepCloneValue(args[i] as RuntimeValue);
+      cloned[i] =
+        c !== null && typeof c === "object"
+          ? ensureExclusiveValue(c as RuntimeValue)
+          : c;
     }
     return withCallFrame(rt, name, () => fn(...cloned));
   },

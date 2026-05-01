@@ -8,7 +8,7 @@ import type { RuntimeValue } from "../runtime/types.js";
 import { isRuntimeCell } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import { deepCloneValue } from "../runtime/utils.js";
+import { deepCloneValue, ensureExclusiveValue } from "../runtime/utils.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
@@ -531,7 +531,23 @@ export function callUserFunction(
   // filtering on lowered.kind === "call" compete in cost order; if
   // all decline or bail, we fall through to the regular interpreter
   // call path below.
+  //
+  // The JIT mutates tensor buffers directly via inline codegen
+  // (set1r_h / set2r_h / set3r_h) and doesn't consult the COW
+  // refcount cell. Walk sharedArgs and break any shares before the
+  // JIT sees them — `deepCloneValue` above already gave us fresh
+  // container wrappers with fresh internal Maps/arrays, so
+  // ensureExclusiveValue can swap leaf tensors for exclusive copies
+  // without disturbing the JIT's container-identity assumptions.
+  // Per-call cost is one walk plus a `copyFloatX` for each shared
+  // tensor — equivalent to the pre-COW deep-clone path.
   if (narginOverride === undefined && this.registry.size > 0) {
+    for (let i = 0; i < sharedArgs.length; i++) {
+      const a = sharedArgs[i];
+      if (a !== undefined && a !== null && typeof a === "object") {
+        sharedArgs[i] = ensureExclusiveValue(a as RuntimeValue);
+      }
+    }
     const r = this.registry.dispatchCall(fn, sharedArgs, nargout, this);
     if (r) return r.result;
   }

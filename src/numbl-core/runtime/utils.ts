@@ -119,20 +119,20 @@ export function deepCloneValue(v: RuntimeValue): RuntimeValue {
 }
 
 function cloneTensor(t: RuntimeTensor): RuntimeTensor {
-  // Value-semantics clone: produces an independent wrapper with its own
-  // buffer. (Phase 2 of the COW plan — flipping this to share the
-  // buffer via a refcount cell — is on hold until the JIT path honors
-  // refcounts. The boxed refcount field on RuntimeTensor and the COW
-  // gate inside storeIntoTensor are in place; once the JIT either
-  // checks the cell at mutation seams or does its own ensure-exclusive
-  // at function entry, this body becomes a refcount bump + buffer
-  // share. See ownership-and-dispose.md §8a.)
+  // Value-semantics clone via buffer sharing (COW). A fresh wrapper
+  // aliases `t.data` and `t.imag` and bumps the shared refcount cell;
+  // shape and `_isLogical` are wrapper-local. Mutation seams check the
+  // cell and clone-then-mutate when count > 1 (see storeIntoTensor),
+  // so callers see value semantics. See ownership-and-dispose.md §8a.
+  const rc = (t.refcount ??= { count: 1 });
+  rc.count++;
   const out: RuntimeTensor = {
     kind: "tensor",
-    data: copyFloatX(t.data) as typeof t.data,
+    data: t.data,
     shape: t.shape.slice(),
+    refcount: rc,
   };
-  if (t.imag) out.imag = copyFloatX(t.imag) as typeof t.imag;
+  if (t.imag) out.imag = t.imag;
   if (t._isLogical) out._isLogical = true;
   return out;
 }
@@ -238,6 +238,87 @@ export function release(t: RuntimeTensor): void {
     disposeFloatX(t.data);
     if (t.imag) disposeFloatX(t.imag);
   }
+}
+
+/** If the wrapper aliases its buffer with co-owners (refcount cell
+ *  count > 1), break the share by allocating a fresh buffer and a
+ *  fresh refcount cell; decrement the old cell so the remaining
+ *  co-owners' count is correct. Otherwise return the wrapper
+ *  unchanged. Used at boundaries that hand a tensor to non-COW-aware
+ *  code (the JIT, native helpers that mutate in place). */
+export function ensureExclusiveTensor(t: RuntimeTensor): RuntimeTensor {
+  const rc = t.refcount;
+  if (!rc || rc.count <= 1) return t;
+  rc.count--;
+  const out: RuntimeTensor = {
+    kind: "tensor",
+    data: copyFloatX(t.data) as typeof t.data,
+    shape: t.shape.slice(),
+    refcount: { count: 1 },
+  };
+  if (t.imag) out.imag = copyFloatX(t.imag) as typeof t.imag;
+  if (t._isLogical) out._isLogical = true;
+  return out;
+}
+
+/** Walk a RuntimeValue produced by `deepCloneValue` and break every
+ *  tensor's buffer share. Containers (cells, structs, struct arrays,
+ *  class instances) keep their wrapper identity — `deepCloneValue`
+ *  already produced fresh container wrappers with fresh internal
+ *  collections, so we mutate those collections in place to swap in
+ *  exclusive tensor leaves. Use at the JIT-dispatch boundary in
+ *  `callUserFunction`: the JIT mutates tensor buffers directly via
+ *  inline codegen, bypassing the COW gate inside `storeIntoTensor`,
+ *  so any shared buffer it sees would corrupt the caller's view. */
+export function ensureExclusiveValue(v: RuntimeValue): RuntimeValue {
+  if (v === null || typeof v !== "object") return v;
+  if (isRuntimeTensor(v)) return ensureExclusiveTensor(v);
+  if (isRuntimeCell(v)) {
+    for (let i = 0; i < v.data.length; i++) {
+      const replacement = ensureExclusiveValue(v.data[i]);
+      if (replacement !== v.data[i]) v.data[i] = replacement;
+    }
+    return v;
+  }
+  if (isRuntimeStruct(v)) {
+    for (const [k, fv] of v.fields) {
+      const replacement = ensureExclusiveValue(fv);
+      if (replacement !== fv) v.fields.set(k, replacement);
+    }
+    return v;
+  }
+  if (isRuntimeStructArray(v)) {
+    for (const elem of v.elements) {
+      for (const [k, fv] of elem.fields) {
+        const replacement = ensureExclusiveValue(fv);
+        if (replacement !== fv) elem.fields.set(k, replacement);
+      }
+    }
+    return v;
+  }
+  if (isRuntimeClassInstance(v)) {
+    if (v.isHandleClass) return v;
+    for (const [k, fv] of v.fields) {
+      const replacement = ensureExclusiveValue(fv);
+      if (replacement !== fv) v.fields.set(k, replacement);
+    }
+    if (v._builtinData) {
+      const replacement = ensureExclusiveValue(v._builtinData);
+      if (replacement !== v._builtinData) v._builtinData = replacement;
+    }
+    return v;
+  }
+  if (isRuntimeClassInstanceArray(v)) {
+    if (v.elements.length > 0 && v.elements[0].isHandleClass) return v;
+    for (const elem of v.elements) {
+      for (const [k, fv] of elem.fields) {
+        const replacement = ensureExclusiveValue(fv);
+        if (replacement !== fv) elem.fields.set(k, replacement);
+      }
+    }
+    return v;
+  }
+  return v;
 }
 
 // ── Dispose ─────────────────────────────────────────────────────────────
