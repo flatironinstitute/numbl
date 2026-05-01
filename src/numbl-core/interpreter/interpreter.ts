@@ -295,6 +295,10 @@ export class Interpreter {
     expr: Extract<Expr, { type: "IndexCell" }>
   ) => unknown;
   declare evalIndicesWithEnd: (base: unknown, indexExprs: Expr[]) => unknown[];
+  declare evalIndicesWithEndTracked: (
+    base: unknown,
+    indexExprs: Expr[]
+  ) => { args: unknown[]; ownedArgs: RuntimeValue[] };
   declare evalArgs: (argExprs: Expr[]) => unknown[];
   declare evalArgsTracked: (argExprs: Expr[]) => {
     args: unknown[];

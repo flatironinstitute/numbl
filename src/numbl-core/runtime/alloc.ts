@@ -142,7 +142,7 @@ export function isLeakTracking(): boolean {
 function captureStack(): string {
   const e = new Error();
   // Skip first 4 lines: "Error", captureStack, the alloc fn, the public alloc fn
-  const lines = (e.stack ?? "").split("\n").slice(4, 14);
+  const lines = (e.stack ?? "").split("\n").slice(4, 24);
   return lines.join("\n");
 }
 

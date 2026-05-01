@@ -13,6 +13,7 @@ import {
   isRuntimeCell,
   isRuntimeClassInstance,
   isRuntimeFunction,
+  isRuntimeStruct,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
 } from "../runtime/types.js";
@@ -122,8 +123,14 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       // Plain Var Assign produces a uniquely-owned new binding, so the
       // previous value becomes garbage and can be recycled. Unsafe at
       // AssignLValue (container mutation shares unchanged fields with
-      // the new container — see §5).
-      if (old !== undefined && old !== rv && !this.env.envCaptured) {
+      // the new container — see §5). Also unsafe when the binding's
+      // current wrapper is captured by a closure snapshot — but
+      // bindings created after all snapshots are independent (§6).
+      if (
+        old !== undefined &&
+        old !== rv &&
+        !this.env.isNameCaptured(stmt.name)
+      ) {
         disposeValue(old);
       }
       this.ans = rv;
@@ -173,10 +180,29 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       const nargout = stmt.lvalues.length;
       const val = this.evalExprNargout(stmt.expr, nargout);
       const values = Array.isArray(val) ? val : [val];
+      // Owned multi-output expressions (FuncCall / MethodCall) hand
+      // each declared-output value over by ownership transfer at exit
+      // (see ownership-and-dispose.md §4.4); the lvalues here become
+      // the new owners with no clone needed. Borrowed expressions
+      // would alias caller state, so deep-clone defensively.
+      const isOwned = isOwnedExpr(stmt.expr);
       for (let i = 0; i < stmt.lvalues.length; i++) {
         const lv = stmt.lvalues[i];
-        if (lv.type === "Ignore") continue;
-        const rv = this.rt.share(i < values.length ? values[i] : undefined);
+        const raw = i < values.length ? values[i] : undefined;
+        if (lv.type === "Ignore") {
+          // Owned output dropped on the floor (`[~, i] = f(...)`); the
+          // value never gets a holder.
+          if (
+            isOwned &&
+            raw !== undefined &&
+            raw !== null &&
+            typeof raw === "object"
+          ) {
+            disposeValue(raw as RuntimeValue);
+          }
+          continue;
+        }
+        const rv = isOwned ? (raw as RuntimeValue) : this.rt.share(raw);
         this.assignLValue(lv, rv);
       }
       if (!stmt.suppressed) {
@@ -280,13 +306,11 @@ export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
       }
       // The iteration expression result (e.g. `1:N`) was held by the
       // `for` itself; once iteration completes it has no other holder.
-      // Closes the gap §8 "for loop's iteration value is not disposed".
-      if (
-        isOwnedExpr(stmt.expr) &&
-        rv !== null &&
-        typeof rv === "object" &&
-        !this.env.envCaptured
-      ) {
+      // It's a fresh value that never lived in env.vars, so any
+      // closure snapshot taken in scope cannot reference it — the
+      // envCaptured check that applies to binding-overwrite seams
+      // does not apply here.
+      if (isOwnedExpr(stmt.expr) && rv !== null && typeof rv === "object") {
         disposeValue(rv as RuntimeValue);
       }
       recordHotLoop(this, stmt, "for", iterCount, _forStart);
@@ -886,7 +910,10 @@ export function evalFuncCall(
       const args = this.evalArgs(expr.args);
       return this.rt.index(rv, args, nargout);
     }
-    const args = this.evalIndicesWithEnd(varVal, expr.args);
+    const { args, ownedArgs } = this.evalIndicesWithEndTracked(
+      varVal,
+      expr.args
+    );
     // Inside class methods, bypass overloaded subsref for same-class instances
     let skipSubsref: boolean | string = false;
     if (
@@ -896,7 +923,22 @@ export function evalFuncCall(
     ) {
       skipSubsref = true;
     }
-    return this.rt.index(varVal, args, nargout, skipSubsref);
+    const result = this.rt.index(varVal, args, nargout, skipSubsref);
+    // Owned index expressions (e.g. `x(1:N)`'s range tensor) are
+    // consumed by the index path which copies values out into the slice
+    // result. Defend against identity-return: skip args that are the
+    // result itself.
+    if (ownedArgs.length > 0) {
+      const resultRv = ensureRuntimeValue(
+        Array.isArray(result) ? result[0] : result
+      );
+      for (const a of ownedArgs) {
+        if (a !== resultRv && isRuntimeTensor(a)) {
+          disposeValue(a);
+        }
+      }
+    }
+    return result;
   }
   const { args, ownedArgs } = this.evalArgsTracked(expr.args);
   // Constant called as zero-arg function? e.g. eps(), pi(), inf()
@@ -983,7 +1025,10 @@ export function evalIndex(
   expr: Extract<Expr, { type: "Index" }>
 ): unknown {
   const base = this.evalExpr(expr.base);
-  const indices = this.evalIndicesWithEnd(base, expr.indices);
+  const { args: indices, ownedArgs } = this.evalIndicesWithEndTracked(
+    base,
+    expr.indices
+  );
   // Inside class methods, bypass overloaded subsref for same-class instances
   let skipSubsref: boolean | string = false;
   if (this.currentClassName) {
@@ -995,7 +1040,16 @@ export function evalIndex(
       skipSubsref = true;
     }
   }
-  return this.rt.index(base, indices, 1, skipSubsref);
+  const result = this.rt.index(base, indices, 1, skipSubsref);
+  if (ownedArgs.length > 0) {
+    const resultRv = ensureRuntimeValue(
+      Array.isArray(result) ? result[0] : result
+    );
+    for (const a of ownedArgs) {
+      if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+    }
+  }
+  return result;
 }
 
 export function evalIndexCell(
@@ -1003,8 +1057,20 @@ export function evalIndexCell(
   expr: Extract<Expr, { type: "IndexCell" }>
 ): unknown {
   const base = this.evalExpr(expr.base);
-  const indices = this.evalIndicesWithEnd(base, expr.indices);
-  return this.rt.indexCell(base, indices);
+  const { args: indices, ownedArgs } = this.evalIndicesWithEndTracked(
+    base,
+    expr.indices
+  );
+  const result = this.rt.indexCell(base, indices);
+  if (ownedArgs.length > 0) {
+    const resultRv = ensureRuntimeValue(
+      Array.isArray(result) ? result[0] : result
+    );
+    for (const a of ownedArgs) {
+      if (a !== resultRv && isRuntimeTensor(a)) disposeValue(a);
+    }
+  }
+  return result;
 }
 
 export function evalIndicesWithEnd(
@@ -1021,6 +1087,36 @@ export function evalIndicesWithEnd(
       this.endContextStack.pop();
     }
   });
+}
+
+/** Like evalIndicesWithEnd but additionally records each owned index
+ *  expression's result so the caller can dispose it after the index
+ *  call has consumed it. Mirrors `evalArgsTracked`. */
+export function evalIndicesWithEndTracked(
+  this: Interpreter,
+  base: unknown,
+  indexExprs: Expr[]
+): { args: unknown[]; ownedArgs: RuntimeValue[] } {
+  const numIndices = indexExprs.length;
+  const ownedArgs: RuntimeValue[] = [];
+  const args = indexExprs.map((idx, dimIndex) => {
+    this.endContextStack.push({ base, dimIndex, numIndices });
+    try {
+      const v = this.evalExpr(idx);
+      if (
+        isOwnedExpr(idx) &&
+        v !== null &&
+        v !== undefined &&
+        typeof v === "object"
+      ) {
+        ownedArgs.push(v as RuntimeValue);
+      }
+      return v;
+    } finally {
+      this.endContextStack.pop();
+    }
+  });
+  return { args, ownedArgs };
 }
 
 // ── Anonymous functions ──────────────────────────────────────────────────
@@ -1165,6 +1261,11 @@ export function evalTensorLiteral(
   // Track which entries in rowValues are freshly-allocated horzcat
   // results (so they can be disposed once vertcat consumes them).
   const horzcatResults: number[] = [];
+  // Per-element owned tensors (one entry per element across all rows
+  // that came from an `isOwnedExpr` AST node). horzcat / single-element
+  // pickup only references the buffer; the wrapper tensor is no longer
+  // needed afterwards.
+  const ownedRowElements: unknown[] = [];
   for (const row of expr.rows) {
     const vals: unknown[] = [];
     for (const e of row) {
@@ -1173,6 +1274,7 @@ export function evalTensorLiteral(
         for (const elem of v) vals.push(elem);
       } else {
         vals.push(v);
+        if (isOwnedExpr(e)) ownedRowElements.push(v);
       }
     }
     if (vals.length === 1) {
@@ -1182,10 +1284,12 @@ export function evalTensorLiteral(
       rowValues.push(this.rt.horzcat(vals));
     }
   }
+  let result: unknown;
   if (rowValues.length === 1) {
-    return rowValues[0];
+    result = rowValues[0];
+  } else {
+    result = this.rt.vertcat(rowValues);
   }
-  const result = this.rt.vertcat(rowValues);
   // vertcat copies values out of each row into a fresh buffer; the
   // freshly-allocated horzcat-row tensors are no longer referenced.
   const resultRv = ensureRuntimeValue(result);
@@ -1198,6 +1302,19 @@ export function evalTensorLiteral(
       isRuntimeTensor(row as RuntimeValue)
     ) {
       disposeValue(row as RuntimeValue);
+    }
+  }
+  // Per-element owned tensors that were passed into horzcat / used as
+  // a sole row value. horzcat/vertcat copy values out, so the original
+  // tensor wrappers are now garbage.
+  for (const v of ownedRowElements) {
+    if (
+      v !== resultRv &&
+      v !== null &&
+      typeof v === "object" &&
+      isRuntimeTensor(v as RuntimeValue)
+    ) {
+      disposeValue(v as RuntimeValue);
     }
   }
   return result;
@@ -1255,10 +1372,11 @@ export function assignLValue(
         lv.base.type === "Ident"
           ? this.env.get(lv.base.name)
           : this.evalLValueBase(lv.base, RTV.tensor(zeroedFloatX(0), [0, 0]));
-      const indices = this.evalIndicesWithEnd(
-        base ?? RTV.tensor(zeroedFloatX(0), [0, 0]),
-        lv.indices
-      );
+      const { args: indices, ownedArgs: ownedIdxArgs } =
+        this.evalIndicesWithEndTracked(
+          base ?? RTV.tensor(zeroedFloatX(0), [0, 0]),
+          lv.indices
+        );
       // Inside class methods, bypass overloaded subsasgn for same-class instances
       let skipSubsasgn = false;
       if (this.currentClassName && base != null) {
@@ -1289,28 +1407,40 @@ export function assignLValue(
       // entries with the new container, so disposing the old container
       // would corrupt the new one (see ownership-and-dispose.md §5).
       // Skip when the env is captured by a closure snapshot (§6).
+      // The Ident-rooted base case: the binding's wrapper is captured
+      // only when the *named* binding existed at snapshot time. For
+      // compound bases (Member/Index), conservatively use envCaptured
+      // since we don't know which name the dispose would affect.
+      const baseCapture =
+        lv.base.type === "Ident"
+          ? this.env.isNameCaptured(lv.base.name)
+          : this.env.envCaptured;
       if (
         base !== undefined &&
         base !== null &&
         base !== resultRv &&
-        !this.env.envCaptured &&
+        !baseCapture &&
         isRuntimeTensor(base as RuntimeValue)
       ) {
         disposeValue(base as RuntimeValue);
       }
       // Tensor-base indexStore reads values out of `value` (assignSlice
       // / assignStripe) into the base buffer; the rhs wrapper is no
-      // longer referenced afterwards. Recycle its buffer. Skip when
-      // value === base / value === resultRv (some paths return rhs
-      // verbatim, e.g. struct overwrite — but here baseIsTensor implies
-      // the tensor path, which always copies values out).
-      if (
-        baseIsTensor &&
-        isRuntimeTensor(value) &&
-        value !== resultRv &&
-        !this.env.envCaptured
-      ) {
+      // longer referenced afterwards. The rhs is a fresh owned/cloned
+      // wrapper (per AssignLValue), never in env.vars — independent of
+      // any capture state.
+      if (baseIsTensor && isRuntimeTensor(value) && value !== resultRv) {
         disposeValue(value);
+      }
+      // Owned index expressions (e.g. `x(1:N) = …`) — indexStore reads
+      // their values to compute slot positions, then the original
+      // tensor wrappers are unreferenced. Fresh values, never live in
+      // env.vars, so the envCaptured check that guards binding-overwrite
+      // does not apply.
+      for (const a of ownedIdxArgs) {
+        if (a !== resultRv && a !== value && isRuntimeTensor(a)) {
+          disposeValue(a);
+        }
       }
       break;
     }
@@ -1344,6 +1474,39 @@ export function assignLValue(
           ? (this.env.get(cursor.name) ?? RTV.struct({}))
           : this.evalLValueBase(cursor, RTV.struct({}));
       const rootRv = ensureRuntimeValue(rootBase);
+      // Pre-fetch the old leaf so we can recycle it after the
+      // assignment. setMemberReturn / memberChainAssign rebuild the
+      // container, sharing every unchanged sibling field with the new
+      // container — but the leaf field at the end of the chain is
+      // replaced. The old leaf has no other live owner. Skip when env
+      // is captured by a closure snapshot, or when the root is a
+      // handle class (other handles may still observe it).
+      // For Ident-rooted member chains, the root binding's capture
+      // determines safety: if the binding existed at snapshot time,
+      // the snapshot's wrapper graph still reaches the leaf field via
+      // the unchanged-field-sharing chain (§5). Bindings created later
+      // are independent — disposing their old leaves is safe.
+      const memberRootCapture =
+        cursor.type === "Ident"
+          ? this.env.isNameCaptured(cursor.name)
+          : this.env.envCaptured;
+      let oldLeaf: RuntimeValue | undefined;
+      if (
+        !memberRootCapture &&
+        !(isRuntimeClassInstance(rootRv) && rootRv.isHandleClass)
+      ) {
+        let cur: RuntimeValue | undefined = rootRv;
+        for (const n of names) {
+          if (cur === undefined) break;
+          if (isRuntimeClassInstance(cur) || isRuntimeStruct(cur)) {
+            cur = cur.fields.get(n);
+          } else {
+            cur = undefined;
+            break;
+          }
+        }
+        oldLeaf = cur;
+      }
       if (isRuntimeClassInstance(rootRv)) {
         // Use memberChainAssign which routes through subsasgn if needed
         const result = this.rt.memberChainAssign(rootBase, names, value);
@@ -1357,6 +1520,15 @@ export function assignLValue(
         const base = this.evalLValueBase(lv.base, RTV.struct({}));
         const result = this.rt.setMemberReturn(base, lv.name, value);
         this.writeLValueBase(lv.base, ensureRuntimeValue(result));
+      }
+      if (
+        oldLeaf !== undefined &&
+        oldLeaf !== value &&
+        oldLeaf !== null &&
+        typeof oldLeaf === "object" &&
+        isRuntimeTensor(oldLeaf as RuntimeValue)
+      ) {
+        disposeValue(oldLeaf as RuntimeValue);
       }
       break;
     }

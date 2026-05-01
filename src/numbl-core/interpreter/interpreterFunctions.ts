@@ -628,33 +628,34 @@ export function callUserFunction(
     //  - nestedHandleCreated: the handle's closure may have escaped via
     //    output/persistent/global; leaving the env intact is the existing
     //    safety net.
-    //  - envCaptured (anonymous fn snapshot): closures still reference the
-    //    wrappers, but the env's *map* can be cleared without touching the
-    //    wrappers — disposing them would corrupt the closure.
+    //  - envCaptured (anonymous fn snapshot): closures reference the
+    //    wrappers of names that existed AT snapshot time. Bindings
+    //    created later (`capturedNames` membership says no) are
+    //    independent and can still be recycled.
     //  - Else: it is safe to recycle every local except those whose object
     //    identity is still reachable from the caller (via the outputs
     //    array, or via the interpreter's `ans` field).
     if (fnEnv.nestedHandleCreated) {
       // leave intact
-    } else if (fnEnv.envCaptured) {
-      fnEnv.clearLocals();
     } else {
       const keep = new Set<RuntimeValue>(outputs);
       if (this.ans !== undefined) keep.add(this.ans);
-      // Persistent values were just stored into the runtime's persistent
-      // map; disposing them here would corrupt that map.
       for (const name of fnEnv.persistentNames) {
         const v = fnEnv.get(name);
         if (v !== undefined) keep.add(v);
       }
-      // For varargout, the outputs are entries inside the cell wrapper —
-      // disposing the wrapper would recurse into and dispose the same
-      // entries we just extracted. Keep the wrapper.
       if (hasVarargoutDecl) {
         const v = fnEnv.get("varargout");
         if (v !== undefined) keep.add(v);
       }
-      fnEnv.disposeLocalsExcept(keep);
+      // When envCaptured, bindings whose names are in capturedNames
+      // must be skipped — the snapshot's vars Map references those
+      // wrappers. Bindings added later are safe.
+      if (fnEnv.envCaptured) {
+        fnEnv.disposeUncapturedExcept(keep);
+      } else {
+        fnEnv.disposeLocalsExcept(keep);
+      }
     }
 
     if (nargout <= 1) {
@@ -664,8 +665,6 @@ export function callUserFunction(
   } catch (e) {
     if (fnEnv.nestedHandleCreated) {
       // leave intact
-    } else if (fnEnv.envCaptured) {
-      fnEnv.clearLocals();
     } else {
       const keep = new Set<RuntimeValue>();
       if (this.ans !== undefined) keep.add(this.ans);
@@ -673,7 +672,11 @@ export function callUserFunction(
         const v = fnEnv.get(name);
         if (v !== undefined) keep.add(v);
       }
-      fnEnv.disposeLocalsExcept(keep);
+      if (fnEnv.envCaptured) {
+        fnEnv.disposeUncapturedExcept(keep);
+      } else {
+        fnEnv.disposeLocalsExcept(keep);
+      }
     }
     this.rt.annotateError(e);
     throw e;

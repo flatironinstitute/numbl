@@ -259,6 +259,150 @@ describe("dispose-balance: indexed-assignment growth", () => {
   });
 });
 
+describe("dispose-balance: multi-output assignment", () => {
+  // `[a, b] = f(...)` previously deep-cloned each output via
+  // Runtime.share before assigning, even though FuncCall outputs are
+  // owned and could be moved into the lvalues directly. The clones
+  // leaked one buffer per output.
+  it("multi-output user function (Var lvalues)", () => {
+    expectBalanced(`
+      [a, b] = pair([1 2 3]);
+      clear all;
+      function [y, z] = pair(x)
+        y = x + 1;
+        z = x * 2;
+      end
+    `);
+  });
+
+  it("multi-output sort returns vector + indices", () => {
+    expectBalanced(`
+      [s, i] = sort([3 1 2]);
+      clear all;
+    `);
+  });
+
+  it("multi-output with one Ignore", () => {
+    expectBalanced(`
+      [~, i] = sort([3 1 2]);
+      clear all;
+    `);
+  });
+});
+
+describe("dispose-balance: indexed read with owned index", () => {
+  // `x(1:N)` — the range tensor used as the index is owned, never
+  // bound to a variable, and consumed by the index implementation
+  // when it copies values out into the slice. Without dispose, every
+  // such read leaks the index buffer.
+  it("range used as slice index", () => {
+    expectBalanced(`
+      x = 1:10;
+      y = x(2:8);
+      clear all;
+    `);
+  });
+
+  it("range index used in index-assign rhs", () => {
+    expectBalanced(`
+      x = zeros(1, 10);
+      x(2:5) = 99;
+      clear all;
+    `);
+  });
+
+  it("range index on tensor function call", () => {
+    expectBalanced(`
+      a = ones(5, 5);
+      r = a(2:4, 1:3);
+      clear all;
+    `);
+  });
+
+  it("cell with range index", () => {
+    expectBalanced(`
+      c = {10, 20, 30, 40, 50};
+      v = c(2:4);
+      clear all;
+    `);
+  });
+});
+
+describe("dispose-balance: captured-name granularity", () => {
+  // §6: a closure snapshot freezes the env's wrappers as of snapshot
+  // time. Bindings created AFTER the snapshot are not in the snapshot
+  // so disposing them on overwrite is safe.
+  it("Var overwrite of post-snapshot binding (with closure)", () => {
+    expectBalanced(`
+      f = @(x) x + 1;
+      a = [1 2 3];
+      a = [4 5 6];
+      clear all;
+    `);
+  });
+
+  it("struct field overwrite of post-snapshot binding (with closure)", () => {
+    expectBalanced(`
+      f = @(x) x + 1;
+      s.x = [1 2 3];
+      s.x = [4 5 6];
+      clear all;
+    `);
+  });
+
+  it("indexed-assign growth of post-snapshot binding (with closure)", () => {
+    expectBalanced(`
+      f = @(x) x + 1;
+      a = zeros(2, 2);
+      a(3, 3) = 9;
+      clear all;
+    `);
+  });
+
+  it("for-loop iteration value still disposed (with closure)", () => {
+    // iterVal is never bound to env.vars, so capturedNames doesn't
+    // matter — the dispose should run regardless of envCaptured.
+    expectBalanced(`
+      f = @(x) x + 1;
+      total = 0;
+      for k = 1:10
+        total = total + k;
+      end
+      clear all;
+    `);
+  });
+});
+
+describe("dispose-balance: tensor literal element disposal", () => {
+  // Inside `[...]` literal: each element coming from an owned expr
+  // (Range / Binary / FuncCall …) gets its values copied out by
+  // horzcat/vertcat. Without disposal, every per-row element leaks one
+  // buffer.
+  it("row of binops", () => {
+    expectBalanced(`
+      a = [1 2 3];
+      b = [4 5 6];
+      c = [a+b, a-b, a*2];
+      clear all;
+    `);
+  });
+
+  it("multi-row of FuncCall results", () => {
+    expectBalanced(`
+      x = linspace(0, 1, 5);
+      M = [cos(x); sin(x)];
+      clear all;
+    `);
+  });
+
+  it("vector of ranges", () => {
+    expectBalanced(`
+      M = [1:5; 6:10; 11:15];
+      clear all;
+    `);
+  });
+});
+
 // ── Known gaps ────────────────────────────────────────────────────────
 //
 // `it.fails` passes while the test still fails; once a gap closes the

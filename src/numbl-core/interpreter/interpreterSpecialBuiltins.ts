@@ -162,7 +162,11 @@ register("clear", (ctx, args) => {
     }
     if (RESERVED.has(name)) return FALL_THROUGH;
     const v = ctx.env.get(name);
-    if (ctx.env.delete(name) && v !== undefined && !ctx.env.envCaptured) {
+    if (
+      ctx.env.delete(name) &&
+      v !== undefined &&
+      !ctx.env.isNameCaptured(name)
+    ) {
       disposeValue(v);
     }
   }

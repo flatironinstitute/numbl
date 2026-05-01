@@ -68,6 +68,20 @@ export class Environment {
    *  env. Strictly conservative: set whenever a snapshot includes this env,
    *  even if the resulting closure never escapes. */
   envCaptured = false;
+  /** Names that were live in this env at the moment a snapshot was taken
+   *  (any snapshot — set is union over all snapshots). The snapshot's
+   *  vars Map references the same wrappers, so disposing the value of
+   *  a captured name would NaN-poison the closure's view. Bindings
+   *  created AFTER all snapshots are NOT in this set and may be
+   *  disposed on overwrite as usual. */
+  capturedNames: Set<string> = new Set();
+
+  /** Returns true if a snapshot captured this env AND the named binding
+   *  was alive at snapshot time. Used by binding-overwrite dispose
+   *  seams to decide whether the old value is closure-reachable. */
+  isNameCaptured(name: string): boolean {
+    return this.envCaptured && this.capturedNames.has(name);
+  }
 
   constructor(private parent?: Environment) {}
 
@@ -136,11 +150,30 @@ export class Environment {
     this.vars.clear();
   }
 
-  /** Recursively dispose every local value, then clear the map. No-op
-   *  when the env is captured by a closure. Used by `clear` / `clear all`
-   *  and similar workspace-reset paths. */
+  /** Like `disposeLocalsExcept`, but additionally skips bindings whose
+   *  names are captured by a closure snapshot (their wrappers are
+   *  referenced from the snapshot's vars Map). Names added AFTER all
+   *  snapshots may still be recycled. The vars Map is fully cleared. */
+  disposeUncapturedExcept(keep: Set<RuntimeValue>): void {
+    for (const [name, v] of this.vars) {
+      if (this.capturedNames.has(name)) continue;
+      if (!keep.has(v)) disposeValue(v);
+    }
+    this.vars.clear();
+  }
+
+  /** Recursively dispose every local value, then clear the map. When
+   *  the env is captured by a closure, bindings whose names were live
+   *  at snapshot time are skipped (their wrappers may still be reached
+   *  via the snapshot's vars Map). Bindings created later are
+   *  disposed normally. Used by `clear` / `clear all` and similar
+   *  workspace-reset paths. */
   disposeAllLocals(): void {
     if (this.envCaptured) {
+      for (const [name, v] of this.vars) {
+        if (this.capturedNames.has(name)) continue;
+        disposeValue(v);
+      }
       this.vars.clear();
       return;
     }
@@ -192,6 +225,9 @@ export class Environment {
     while (e) {
       e.nestedHandleCreated = true;
       e.envCaptured = true;
+      // The handle's closure reaches every binding currently alive in
+      // this scope; bindings created later are independent.
+      for (const k of e.vars.keys()) e.capturedNames.add(k);
       if (e._nestedFunctions?.has(name)) return true;
       e = e.parent;
     }
@@ -217,6 +253,7 @@ export class Environment {
       env.envCaptured = true;
       for (const [k, v] of env.vars) {
         snap.vars.set(k, v);
+        env.capturedNames.add(k);
       }
       for (const [k, v] of env.nestedFunctions) {
         snap.nestedFunctions.set(k, v);
