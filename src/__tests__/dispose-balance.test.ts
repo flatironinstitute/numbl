@@ -308,6 +308,21 @@ describe("dispose-balance: method calls and function-handles", () => {
       clear all;
     `);
   });
+
+  it("min of owned binop (real flat reduce path)", () => {
+    expectBalanced(`
+      r = min([5 3 4] * 2);
+      clear all;
+    `);
+  });
+
+  it("max with vector dim arg (multi-dim recursion)", () => {
+    expectBalanced(`
+      A = reshape(1:24, [2, 3, 4]);
+      r = max(A, [], [1, 3]);
+      clear all;
+    `);
+  });
 });
 
 describe("dispose-balance: indexed read with owned index", () => {
