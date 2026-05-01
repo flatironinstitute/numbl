@@ -71,10 +71,7 @@ class DoubleDisposeError extends Error {
       `Buffer (length ${n}) disposed twice — the runtime aliased a buffer it thought it uniquely owned. Investigate the most recent change to dispose sites.`
     );
     this.name = "DoubleDisposeError";
-    if (
-      typeof process !== "undefined" &&
-      process.env?.NUMBL_TRACE_DOUBLE_DISPOSE
-    ) {
+    if (typeof process !== "undefined") {
       console.error(this.stack);
     }
   }

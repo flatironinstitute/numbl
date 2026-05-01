@@ -46,6 +46,7 @@ import {
 import { resolveHorzcat as _resolveHorzcat } from "./runtimeOperators.js";
 import type { Runtime } from "./runtime.js";
 import { zeroedFloatX, copyFloatX } from "./alloc.js";
+import { deepCloneValue } from "./utils.js";
 
 /**
  * Resolve indices that may contain END or COLON sentinels, deferred ranges, or functions.
@@ -281,6 +282,9 @@ function classInstanceParenIndex(
 
   // Default: scalar class instance indexing.
   // F(1), F(:), F(1,1), F(:,1), F(1,:), F(:,:) etc. all return F itself.
+  // Deep-clone so the result is an independent value — otherwise
+  // `tmp = obj(1)` aliases tmp with obj, and a later `tmp = ...` rebind
+  // disposes obj's buffers via the Assign dispose path.
   {
     let valid = true;
     for (const rawIdx of indices) {
@@ -290,7 +294,7 @@ function classInstanceParenIndex(
       valid = false;
       break;
     }
-    if (valid) return base;
+    if (valid) return deepCloneValue(mv);
   }
   throw new RuntimeError(`Index exceeds class instance dimensions`);
 }
