@@ -24,12 +24,7 @@ import {
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
-import {
-  tensorSize2D,
-  colMajorIndex,
-  sub2ind,
-  shareRuntimeValue,
-} from "./utils.js";
+import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
 
 // ── Colon index sentinel ─────────────────────────────────────────────────
@@ -1255,14 +1250,8 @@ function storeIntoTensor(
     return deleteTensorRowsOrCols(base, indices);
   }
 
-  // COW: if data is shared, copy before mutating. PR 3 note: we do NOT
-  // decrement base._refs.c here. The caller will rebind the result via
-  // env.set / assignReleasing, whose release-on-overwrite handles the
-  // alias drop. Decrementing here too would double-release.
-  if (base._refs.c > 1) {
-    const cowImag = base.imag ? new FloatXArray(base.imag) : undefined;
-    base = RTV.tensor(new FloatXArray(base.data), [...base.shape], cowImag);
-  }
+  // No COW check needed: deep-clone-on-call and deep-clone-on-assignment
+  // mean `base` is never aliased — mutating its buffer in place is safe.
 
   if (indices.length === 1) {
     return storeIntoTensor1D(base, indices[0], rhs);
@@ -1896,12 +1885,7 @@ function storeIntoCell(
   rhs: RuntimeValue,
   parenAssign = false
 ): RuntimeValue {
-  // COW
-  if (base._rc > 1) {
-    base._rc--;
-    const sharedData = base.data.map(elem => shareRuntimeValue(elem));
-    base = RTV.cell(sharedData, [...base.shape]);
-  }
+  // No COW: deep-clone-on-call/assign keeps `base` unaliased.
 
   const updateShapeAfterLinearAssign = (oldLen: number) => {
     const c = base as RuntimeCell;
@@ -2079,7 +2063,7 @@ export function storeIntoRTValueIndex(
         if (imag && S.pi) imag[idx] = S.pi[k];
       }
     }
-    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n], _refs: { c: 1 } };
+    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n] };
   }
 
   if (isRuntimeTensor(base)) {

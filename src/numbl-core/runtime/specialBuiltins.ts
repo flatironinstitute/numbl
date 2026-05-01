@@ -74,8 +74,13 @@ import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import { toF64 } from "../helpers/check-helpers.js";
 import { sparseToDense } from "../helpers/sparse-arithmetic.js";
 
-/** Map sol structs to their dense output step data for deval. */
-const _solStepData = new WeakMap<object, StepData[]>();
+/** Dense-output step data for `deval`, keyed by an opaque numeric ID. The
+ *  ode45 result struct stores its ID under the `__solStepDataId` field, which
+ *  survives deep-cloning at function-call / assignment boundaries — so the
+ *  data stays reachable even after the struct is copied. */
+const _solStepData = new Map<number, StepData[]>();
+let _nextSolStepDataId = 1;
+const SOL_STEP_DATA_FIELD = "__solStepDataId";
 
 export { SPECIAL_BUILTIN_NAMES } from "./specialBuiltinNames.js";
 
@@ -2161,8 +2166,10 @@ function _ode45Impl(
       ]);
     }
 
+    const solDataId = _nextSolStepDataId++;
+    _solStepData.set(solDataId, solSteps);
+    solFields[SOL_STEP_DATA_FIELD] = solDataId;
     const solStruct = RTV.struct(solFields);
-    _solStepData.set(solStruct, solSteps);
     return solStruct;
   }
 
@@ -2232,8 +2239,12 @@ function _devalImpl(args: RuntimeValue[]): RuntimeValue {
     throw new RuntimeError("deval: second argument must be a numeric vector");
   }
 
-  // Retrieve dense output step data
-  const steps = _solStepData.get(sol);
+  // Retrieve dense output step data via the opaque ID stored as a struct
+  // field. This survives deep-clone-on-assignment / -on-call (whereas a
+  // WeakMap keyed by struct identity would not).
+  const idValue = sol.fields.get(SOL_STEP_DATA_FIELD);
+  const solDataId = typeof idValue === "number" ? idValue : Number.NaN;
+  const steps = _solStepData.get(solDataId);
   if (!steps || steps.length === 0)
     throw new RuntimeError(
       "deval: solution structure has no dense output data"

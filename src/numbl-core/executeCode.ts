@@ -125,10 +125,6 @@ export interface ExecResult {
   holdState: boolean;
   profileData?: ProfileData;
   dispatchUnknownCounts?: Record<string, number>;
-  /** Tensor buffer pool telemetry — total acquires/releases and bytes,
-   *  plus pool's resident size. Always populated (cheap counters) so
-   *  callers can monitor tensor lifetimes without enabling full profile. */
-  bufferPool?: import("./runtime/bufferPool.js").BufferPoolStats;
   /** Updated search paths (set when addpath/rmpath was called). */
   searchPaths?: string[];
   /** Updated workspace files (set when addpath/rmpath was called). */
@@ -818,10 +814,6 @@ export function executeCode(
         hotLoops: [...rt.hotLoops.values()],
       };
     }
-    // Pool stats are always populated — they're tiny (six counters) and
-    // useful for monitoring tensor lifetimes regardless of full profile.
-    result.bufferPool = rt._bufferPool.stats();
-
     // Propagate path changes so callers (e.g. REPL) can persist them
     if (pathsModified) {
       result.searchPaths = ctx.registry.searchPaths.filter(

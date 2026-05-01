@@ -1,15 +1,26 @@
 /**
- * Tensor shape/indexing utilities and copy-on-write helpers.
+ * Tensor shape/indexing utilities and the deep-clone helper used at every
+ * value-semantics seam (function call boundary, var-to-var assignment).
  */
 
 import {
   type RuntimeValue,
   type RuntimeTensor,
   type RuntimeCell,
+  type RuntimeStruct,
+  type RuntimeStructArray,
   type RuntimeClassInstance,
+  type RuntimeClassInstanceArray,
+  type RuntimeSparseMatrix,
+  type RuntimeDictionary,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeCell,
   isRuntimeTensor,
+  isRuntimeStruct,
+  isRuntimeStructArray,
+  isRuntimeSparseMatrix,
+  isRuntimeDictionary,
 } from "./types.js";
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
@@ -64,50 +75,125 @@ export function sub2ind(shape: number[], subs: number[]): number {
   return idx;
 }
 
-// ── Copy-on-write helpers ───────────────────────────────────────────────
+// ── Deep clone ──────────────────────────────────────────────────────────
 
 /**
- * Share an RuntimeValue for assignment (COW): increments refcount on tensors/cells
- * so that mIndexStore knows to copy before mutating.
- * Returns a new wrapper object that shares the same underlying data.
+ * Recursively deep-clone a RuntimeValue so that the result can be mutated
+ * without affecting the original. Handle classes, function handles, dummy
+ * handles, and graphics handles are deliberately NOT cloned — they have
+ * reference semantics.
+ *
+ * Used at every value-semantics seam: function call entry (caller's args
+ * become callee's locals) and plain var-to-var assignment (`a = b`).
+ *
+ * This is the safe-but-inefficient replacement for the previous COW
+ * machinery — every assignment / call gets its own buffer.
  */
-export function shareRuntimeValue(v: RuntimeValue): RuntimeValue {
-  if (isRuntimeTensor(v)) {
-    v._refs.c++;
-    return {
-      kind: "tensor",
-      data: v.data,
-      imag: v.imag,
-      shape: v.shape,
-      _isLogical: v._isLogical,
-      _refs: v._refs,
-    };
+export function deepCloneValue(v: RuntimeValue): RuntimeValue {
+  if (v === null || v === undefined) return v;
+  if (typeof v !== "object") return v;
+  if (isRuntimeTensor(v)) return cloneTensor(v);
+  if (isRuntimeCell(v)) return cloneCell(v);
+  if (isRuntimeStruct(v)) return cloneStruct(v);
+  if (isRuntimeStructArray(v)) return cloneStructArray(v);
+  if (isRuntimeSparseMatrix(v)) return cloneSparse(v);
+  if (isRuntimeDictionary(v)) return cloneDictionary(v);
+  if (isRuntimeClassInstance(v)) {
+    if (v.isHandleClass) return v;
+    return cloneClassInstance(v);
   }
-  if (isRuntimeCell(v)) {
-    v._rc++;
-    return {
-      kind: "cell",
-      data: v.data,
-      shape: v.shape,
-      _rc: v._rc,
-    } as RuntimeCell;
+  if (isRuntimeClassInstanceArray(v)) {
+    if (v.elements.length > 0 && v.elements[0].isHandleClass) return v;
+    return cloneClassInstanceArray(v);
   }
-  // Value class instances: create a new instance with its own fields Map,
-  // sharing each field value via shareRuntimeValue for COW semantics.
-  if (isRuntimeClassInstance(v) && !v.isHandleClass) {
-    const newFields = new Map<string, RuntimeValue>();
-    for (const [k, fv] of v.fields) {
-      newFields.set(k, shareRuntimeValue(fv));
-    }
-    const copy: RuntimeClassInstance = {
-      kind: "class_instance",
-      className: v.className,
-      fields: newFields,
-      isHandleClass: false,
-    };
-    if (v._builtinData) copy._builtinData = shareRuntimeValue(v._builtinData);
-    return copy;
-  }
-  // Scalars, strings, logicals, functions, structs, handle classes are immutable or already copied on mutation
+  // RuntimeChar (immutable string), RuntimeComplexNumber (primitive fields),
+  // RuntimeFunction (closure — keep reference), RuntimeDummyHandle,
+  // RuntimeGraphicsHandle: pass through.
   return v;
 }
+
+function cloneTensor(t: RuntimeTensor): RuntimeTensor {
+  const out: RuntimeTensor = {
+    kind: "tensor",
+    data: t.data.slice() as typeof t.data,
+    shape: t.shape.slice(),
+  };
+  if (t.imag) out.imag = t.imag.slice() as typeof t.imag;
+  if (t._isLogical) out._isLogical = true;
+  return out;
+}
+
+function cloneCell(c: RuntimeCell): RuntimeCell {
+  const data = new Array(c.data.length);
+  for (let i = 0; i < c.data.length; i++) data[i] = deepCloneValue(c.data[i]);
+  return { kind: "cell", data, shape: c.shape.slice() };
+}
+
+function cloneStruct(s: RuntimeStruct): RuntimeStruct {
+  const fields = new Map<string, RuntimeValue>();
+  for (const [k, v] of s.fields) fields.set(k, deepCloneValue(v));
+  return { kind: "struct", fields };
+}
+
+function cloneStructArray(sa: RuntimeStructArray): RuntimeStructArray {
+  return {
+    kind: "struct_array",
+    fieldNames: sa.fieldNames.slice(),
+    elements: sa.elements.map(cloneStruct),
+  };
+}
+
+function cloneSparse(s: RuntimeSparseMatrix): RuntimeSparseMatrix {
+  return {
+    kind: "sparse_matrix",
+    m: s.m,
+    n: s.n,
+    ir: new Int32Array(s.ir),
+    jc: new Int32Array(s.jc),
+    pr: new Float64Array(s.pr),
+    pi: s.pi ? new Float64Array(s.pi) : undefined,
+  };
+}
+
+function cloneDictionary(d: RuntimeDictionary): RuntimeDictionary {
+  const entries = new Map<string, { key: RuntimeValue; value: RuntimeValue }>();
+  for (const [k, e] of d.entries) {
+    entries.set(k, {
+      key: deepCloneValue(e.key),
+      value: deepCloneValue(e.value),
+    });
+  }
+  return {
+    kind: "dictionary",
+    entries,
+    keyType: d.keyType,
+    valueType: d.valueType,
+  };
+}
+
+function cloneClassInstance(ci: RuntimeClassInstance): RuntimeClassInstance {
+  const fields = new Map<string, RuntimeValue>();
+  for (const [k, v] of ci.fields) fields.set(k, deepCloneValue(v));
+  const out: RuntimeClassInstance = {
+    kind: "class_instance",
+    className: ci.className,
+    fields,
+    isHandleClass: false,
+  };
+  if (ci._builtinData) out._builtinData = deepCloneValue(ci._builtinData);
+  return out;
+}
+
+function cloneClassInstanceArray(
+  cia: RuntimeClassInstanceArray
+): RuntimeClassInstanceArray {
+  return {
+    kind: "class_instance_array",
+    className: cia.className,
+    elements: cia.elements.map(cloneClassInstance),
+  };
+}
+
+/** Back-compat alias — kept so existing call sites keep working while we
+ *  finish the migration off the COW API name. */
+export const shareRuntimeValue = deepCloneValue;

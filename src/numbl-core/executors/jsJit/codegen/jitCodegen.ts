@@ -434,17 +434,18 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
 function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign": {
-      // Var-to-var tensor assign: bump _refs.c on the aliased tensor so
-      // later ops don't reuse its buffer in place (which would corrupt the
-      // other binding). Non-tensor RHS skips this.
+      // Var-to-var tensor assign: deep-clone so the LHS owns an
+      // independent buffer (`shareTensor` is now a deep-clone helper —
+      // it kept its name through the COW removal so the codegen API
+      // stays stable). Non-tensor RHS skips this.
       if (stmt.expr.tag === "Var" && isTensorType(stmt.expr.jitType)) {
         lines.push(
           `${indent}${mangle(stmt.name)} = $h.shareTensor(${mangle(stmt.expr.name)});`
         );
       } else {
-        // Pass the LHS name as a dest hint so the top-level RHS op (tensor
-        // binary / unary / compare / builtin) can write into the previous
-        // value's buffer when uniquely owned.
+        // The dest-hint param is now ignored by every helper (the COW
+        // in-place reuse path is gone) but we keep emitting the LHS name
+        // for compatibility with helper signatures.
         lines.push(
           `${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr, stmt.name)};`
         );
@@ -986,10 +987,9 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
  * and shape into the hoisted aliases. Called from emitStmt for the
  * `Assign` case (and only does work if the name has a hoisted alias).
  *
- * For write-target tensors, the refresh also calls `$h.unshare(name)` to
- * detach from any sharing the new RHS may have introduced (e.g. via
- * `tmp = base; ...; base(i) = v`). For fresh-from-`zeros(...)` tensors
- * unshare is a no-op fast return on `_refs.c <= 1`.
+ * The `$h.unshare(name)` call for write-target tensors is a leftover from
+ * the COW era and is now an identity helper — kept for now until the
+ * emission is fully retired.
  */
 function emitHoistRefresh(lines: string[], name: string, indent: string): void {
   const alias = _hoistedAliases.get(name);

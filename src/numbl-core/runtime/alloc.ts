@@ -2,34 +2,42 @@
  * Allocate an UNINITIALIZED typed array — skips the zero-fill that
  * `new Float64Array(n)` / `new FloatXArray(n)` perform by default.
  *
- * Routes through the active `BufferPool` (see `bufferPool.ts`): if a
- * matching-length buffer was previously released, it is handed back without
- * any allocation. On a miss, the pool falls through to `Buffer.allocUnsafe`
- * on Node (un-zeroed slab — ~10× cheaper than the zero-fill at large N) and
- * to `new FloatXArray(n)` elsewhere.
+ * On Node, `Buffer.allocUnsafe(...)` returns un-zeroed slab memory (~10×
+ * cheaper than the zero-fill at large N). On other runtimes, fall back to
+ * the zero-filled `new FloatXArray(n)`.
  *
- * SAFETY CONTRACT (very important):
- *   The caller MUST write every element before reading it. Any element that
- *   is read before being written will contain arbitrary stale bytes from
- *   recently-freed memory or from a previously-released buffer. If you
- *   cannot guarantee full coverage, use `new Float64Array(n)` /
+ * SAFETY CONTRACT:
+ *   The caller MUST write every element before reading it. Any element
+ *   that is read before being written will contain arbitrary stale bytes.
+ *   If you cannot guarantee full coverage, use `new Float64Array(n)` /
  *   `new FloatXArray(n)` instead.
  */
 
 import { FloatXArray } from "./types.js";
-import { acquireFloatX, getActivePool } from "./bufferPool.js";
 
-// Type of `new FloatXArray(n)` — resolves to Float32Array<ArrayBuffer> |
-// Float64Array<ArrayBuffer>.  We use this as the return type (rather than the
-// exported FloatXArrayType, which uses the default <ArrayBufferLike>), so
-// callers that pass the result into APIs typed with concrete ArrayBuffer
-// generics keep type-checking.
 type FloatXInstance = InstanceType<typeof FloatXArray>;
 
+const hasBuffer = typeof Buffer !== "undefined";
+
 export function uninitFloat64(n: number): Float64Array<ArrayBuffer> {
-  return getActivePool().acquireF64(n) as Float64Array<ArrayBuffer>;
+  if (n === 0) return new Float64Array(0);
+  if (hasBuffer) {
+    const b = Buffer.allocUnsafe(n * 8);
+    return new Float64Array(b.buffer as ArrayBuffer, b.byteOffset, n);
+  }
+  return new Float64Array(n);
 }
 
 export function uninitFloatX(n: number): FloatXInstance {
-  return acquireFloatX(n) as FloatXInstance;
+  if (n === 0) return new FloatXArray(0) as FloatXInstance;
+  if (hasBuffer) {
+    const bytes = (FloatXArray as unknown) === Float32Array ? 4 : 8;
+    const b = Buffer.allocUnsafe(n * bytes);
+    return new FloatXArray(
+      b.buffer as ArrayBuffer,
+      b.byteOffset,
+      n
+    ) as FloatXInstance;
+  }
+  return new FloatXArray(n) as FloatXInstance;
 }

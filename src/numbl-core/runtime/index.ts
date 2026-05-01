@@ -21,6 +21,7 @@ export {
   tensorSize2D,
   numel,
   colMajorIndex,
+  deepCloneValue,
   shareRuntimeValue,
 } from "./utils.js";
 

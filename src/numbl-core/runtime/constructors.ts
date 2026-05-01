@@ -46,12 +46,12 @@ export const RTV = {
     // Strip trailing singleton dimensions (always keeps minimum 2D)
     const s = [...shape];
     while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-    return { kind: "tensor", data: d, imag: im, shape: s, _refs: { c: 1 } };
+    return { kind: "tensor", data: d, imag: im, shape: s };
   },
 
   /** Fast tensor constructor — data must be FloatXArray, shape already normalized (no trailing singletons). */
   tensorRaw(data: FloatXArrayType, shape: number[]): RuntimeTensor {
-    return { kind: "tensor", data, imag: undefined, shape, _refs: { c: 1 } };
+    return { kind: "tensor", data, imag: undefined, shape };
   },
 
   /** Create a scalar tensor (1x1) */
@@ -67,7 +67,6 @@ export const RTV = {
       data: new FloatXArray(data),
       imag: im,
       shape: [1, data.length],
-      _refs: { c: 1 },
     };
   },
 
@@ -79,7 +78,6 @@ export const RTV = {
       data: new FloatXArray(data),
       imag: im,
       shape: [data.length, 1],
-      _refs: { c: 1 },
     };
   },
 
@@ -101,7 +99,6 @@ export const RTV = {
       data: d,
       imag: im,
       shape: [rows, cols],
-      _refs: { c: 1 },
     };
   },
 
@@ -118,7 +115,7 @@ export const RTV = {
   },
 
   cell(data: RuntimeValue[], shape: number[]): RuntimeCell {
-    return { kind: "cell", data, shape: [...shape], _rc: 1 };
+    return { kind: "cell", data, shape: [...shape] };
   },
 
   struct(
@@ -189,7 +186,7 @@ export const RTV = {
     pr: Float64Array,
     pi?: Float64Array
   ): RuntimeSparseMatrix {
-    return { kind: "sparse_matrix", m, n, ir, jc, pr, pi, _rc: 1 };
+    return { kind: "sparse_matrix", m, n, ir, jc, pr, pi };
   },
 
   dictionary(

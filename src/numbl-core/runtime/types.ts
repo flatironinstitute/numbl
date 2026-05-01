@@ -126,11 +126,6 @@ export const kstr = (value: RuntimeValue): string => {
   return "unknown";
 };
 
-/** Refcount header shared across every RuntimeTensor wrapper that aliases the
- *  same `data`/`imag` buffer. Per-buffer (not per-wrapper) so all aliases see
- *  the same count — a prerequisite for safely returning buffers to a pool. */
-export type BufRefs = { c: number };
-
 export type RuntimeTensor = {
   kind: "tensor";
   data: FloatXArrayType; // real part
@@ -138,10 +133,6 @@ export type RuntimeTensor = {
   shape: number[]; // e.g. [3,4] for 3x4 matrix
   /** When true, this tensor represents a logical (boolean) array from comparisons/logical ops. */
   _isLogical?: boolean;
-  /** Shared refcount header. When `_refs.c > 1`, the buffer is aliased and
-   *  must be copied before mutation. Every wrapper for this buffer points
-   *  at the same `_refs` object. */
-  _refs: BufRefs;
 };
 
 export type RuntimeChar = {
@@ -156,8 +147,6 @@ export type RuntimeCell = {
   kind: "cell";
   data: RuntimeValue[];
   shape: number[]; // e.g. [1,3] for {a, b, c}
-  /** Reference count for copy-on-write. When > 1, data is shared and must be copied before mutation. */
-  _rc: number;
 };
 
 export type RuntimeStruct = {
@@ -232,7 +221,6 @@ export type RuntimeSparseMatrix = {
   jc: Int32Array; // column pointers (length = n + 1)
   pr: Float64Array; // nonzero values (length = nnz)
   pi?: Float64Array; // imaginary values (length = nnz), undefined means real
-  _rc: number; // reference count for copy-on-write
 };
 
 /** Dictionary mapping unique keys to values (MATLAB R2022b+). */

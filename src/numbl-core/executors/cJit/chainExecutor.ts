@@ -249,7 +249,6 @@ export const cJitChainExecutor: Executor<
         data: outs[k],
         imag: undefined,
         shape: [...templateShape],
-        _refs: { c: 1 },
       };
       interp.env.set(name, result as RuntimeValue);
     }

@@ -257,24 +257,16 @@ defineBuiltin({
         if (n !== data.length) {
           throw new RuntimeError("reshape: number of elements must not change");
         }
-        if (isRuntimeTensor(v)) {
-          v._refs.c++;
-          const s = [...shape];
-          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          return {
-            kind: "tensor",
-            data,
-            imag,
-            shape: s,
-            _isLogical: v._isLogical,
-            _refs: v._refs,
-          } as RuntimeTensor;
-        }
-        return RTV.tensor(
+        // Without refcounts we can't safely alias the input buffer, so the
+        // reshape always allocates a fresh copy. RTV.tensor strips trailing
+        // singleton dims and preserves _isLogical via the wrapper below.
+        const out = RTV.tensor(
           new FloatXArray(data),
           shape,
           imag ? new FloatXArray(imag) : undefined
         );
+        if (isRuntimeTensor(v) && v._isLogical) out._isLogical = true;
+        return out;
       },
     },
   ],

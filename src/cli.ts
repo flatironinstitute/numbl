@@ -580,20 +580,9 @@ async function executeWithOptions(
   const profiling = !!opts.profileOutput;
   const totalStart = performance.now();
 
-  const formatBytes = (n: number): string => {
-    const sign = n < 0 ? "-" : "";
-    const abs = Math.abs(n);
-    if (abs < 1024) return `${sign}${abs}B`;
-    if (abs < 1024 * 1024) return `${sign}${(abs / 1024).toFixed(1)}KB`;
-    if (abs < 1024 * 1024 * 1024)
-      return `${sign}${(abs / (1024 * 1024)).toFixed(1)}MB`;
-    return `${sign}${(abs / (1024 * 1024 * 1024)).toFixed(2)}GB`;
-  };
-
   // Helper to write profile data after execution completes
   const writeProfileIfNeeded = (result: {
     profileData?: import("./numbl-core/executeCode.js").ProfileData;
-    bufferPool?: import("./numbl-core/runtime/bufferPool.js").BufferPoolStats;
   }) => {
     if (!opts.profileOutput || !result.profileData) return;
     const pd = result.profileData;
@@ -626,26 +615,9 @@ async function executeWithOptions(
       builtins,
       dispatches,
       hotLoops: pd.hotLoops ?? [],
-      bufferPool: result.bufferPool,
     };
     writeFileSync(opts.profileOutput, JSON.stringify(profile, null, 2) + "\n");
     console.error(`Profile written to ${opts.profileOutput}`);
-    const bp = result.bufferPool;
-    if (!bp) return;
-    const hitRate =
-      bp.acquireCount > 0
-        ? ((bp.acquireHits / bp.acquireCount) * 100).toFixed(1)
-        : "0.0";
-    // Note: acquireCount tracks calls that went through pool.acquire* (i.e.,
-    // uninitFloat64 / uninitFloatX). Direct `new FloatXArray(...)` sites
-    // (zeros, ones, COW copy, etc.) bypass acquire but still funnel through
-    // release on rebind, so releaseCount > acquireCount is normal.
-    console.error(
-      `Buffer pool: acquires ${bp.acquireCount} / ${formatBytes(bp.acquireBytes)} ` +
-        `(${hitRate}% pool reuse), ` +
-        `releases ${bp.releaseCount} / ${formatBytes(bp.releaseBytes)}, ` +
-        `${formatBytes(bp.currentBytes)} resident in pool`
-    );
   };
 
   // If --dump-ast is used alone (without running), just dump and exit

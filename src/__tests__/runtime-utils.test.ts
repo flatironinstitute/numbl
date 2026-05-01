@@ -86,7 +86,6 @@ describe("tensorSize2D", () => {
       kind: "tensor" as const,
       data: new FloatXArray(1),
       shape: [],
-      _refs: { c: 1 },
     };
     expect(tensorSize2D(t)).toEqual([1, 1]);
   });
@@ -96,7 +95,6 @@ describe("tensorSize2D", () => {
       kind: "tensor" as const,
       data: new FloatXArray(3),
       shape: [3],
-      _refs: { c: 1 },
     };
     expect(tensorSize2D(t)).toEqual([1, 3]);
   });
@@ -106,7 +104,6 @@ describe("tensorSize2D", () => {
       kind: "tensor" as const,
       data: new FloatXArray(6),
       shape: [2, 3],
-      _refs: { c: 1 },
     };
     expect(tensorSize2D(t)).toEqual([2, 3]);
   });
@@ -139,7 +136,7 @@ describe("type guards", () => {
   });
 
   it("isRuntimeCell", () => {
-    const c = { kind: "cell" as const, data: [1, "hi"], shape: [1, 2], _rc: 1 };
+    const c = { kind: "cell" as const, data: [1, "hi"], shape: [1, 2] };
     expect(isRuntimeCell(c)).toBe(true);
     expect(isRuntimeCell(42)).toBe(false);
   });

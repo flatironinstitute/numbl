@@ -903,7 +903,7 @@ function uniqueCharVector(
 }
 
 function uniqueCellOfStrings(
-  v: { kind: "cell"; data: RuntimeValue[]; shape: number[]; _rc: number },
+  v: { kind: "cell"; data: RuntimeValue[]; shape: number[] },
   nargout: number,
   stable: boolean
 ): RuntimeValue | RuntimeValue[] {
@@ -930,7 +930,6 @@ function uniqueCellOfStrings(
     kind: "cell",
     data: resultData,
     shape: resultShape,
-    _rc: 1,
   };
   if (nargout <= 1) return result;
   const ia = RTV.tensor(

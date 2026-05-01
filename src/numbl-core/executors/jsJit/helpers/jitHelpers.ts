@@ -36,6 +36,8 @@ import {
   mElemPow,
 } from "../../../helpers/arithmetic.js";
 
+import { deepCloneValue } from "../../../runtime/utils.js";
+
 // Re-export sub-modules for direct import where needed
 export {
   re,
@@ -522,19 +524,11 @@ export const jitHelpers = {
   ): void => {
     s.fields.set(field, value);
   },
-  // Clone a struct's fields map so subsequent mutations don't leak
-  // back to the caller. Mirrors the interpreter's `setRTValueField`
-  // copy-on-write semantics for struct params. Called once at function
-  // entry for any struct param that is a target of AssignMember.
-  structUnshare_h: (s: unknown): unknown => {
-    if (s !== null && typeof s === "object") {
-      const rs = s as RuntimeStruct;
-      if (rs.kind === "struct") {
-        return { kind: "struct", fields: new Map(rs.fields) };
-      }
-    }
-    return s;
-  },
+  // Identity pass-through. Used to clone a struct param's fields Map
+  // for the COW era; with deep-clone-on-call the param is already an
+  // independent copy, so this is a no-op now. Kept so the codegen-emitted
+  // call still resolves until that emission is dropped.
+  structUnshare_h: (s: unknown): unknown => s,
 
   // Tensor indexing (generic)
   idx1,
@@ -620,27 +614,15 @@ export const jitHelpers = {
   },
 
   __cellWrite: (cell: unknown, idx: number, value: unknown): unknown => {
-    let c = cell as {
+    const c = cell as {
       kind: "cell";
       data: unknown[];
       shape: number[];
-      _rc: number;
     };
     const k = Math.round(idx) - 1;
     if (k < 0 || k >= c.data.length)
       throw new Error("Index exceeds cell bounds");
-    // COW: if the cell wrapper is shared (rc > 1, typically because it was
-    // passed in as a function arg), copy before mutating so the caller's
-    // cell is unaffected.
-    if (c._rc > 1) {
-      c._rc--;
-      c = {
-        kind: "cell",
-        data: c.data.slice(),
-        shape: c.shape.slice(),
-        _rc: 1,
-      };
-    }
+    // No COW: deep-clone-on-call keeps the cell wrapper unaliased.
     c.data[k] = value;
     return c;
   },
@@ -696,23 +678,22 @@ export const jitHelpers = {
 
   // User function call with call frame tracking.
   //
-  // Tensor args are bumped with shareTensor before the call. The caller
-  // still holds each tensor variable, and the callee's parameter is a
-  // second alias — unshare() inside the callee only copies on `_refs.c > 1`,
-  // so without the bump the callee's in-place writes would leak back to
-  // the caller's buffer (COW violation). The bump is intentionally not
-  // undone on return: if the callee called unshare, it already
-  // decremented _refs.c; if it didn't, leaving _refs.c over-counted just
-  // means a future mutation in the caller takes an extra copy — safe and
-  // rare.
+  // Each non-primitive argument is deep-cloned at the call boundary so
+  // that the callee can mutate freely without the writes leaking back
+  // into the caller's binding. Handle classes / function handles /
+  // graphics handles deliberately keep reference semantics — see
+  // deepCloneValue.
   callUser: (
     rt: CallRt,
     name: string,
     fn: (...args: unknown[]) => unknown,
     ...args: unknown[]
   ) => {
-    for (let i = 0; i < args.length; i++) shareTensor(args[i]);
-    return withCallFrame(rt, name, () => fn(...args));
+    const cloned = new Array(args.length);
+    for (let i = 0; i < args.length; i++) {
+      cloned[i] = deepCloneValue(args[i] as RuntimeValue);
+    }
+    return withCallFrame(rt, name, () => fn(...cloned));
   },
 
   // Indirect call through a function handle variable. Used by the JIT for

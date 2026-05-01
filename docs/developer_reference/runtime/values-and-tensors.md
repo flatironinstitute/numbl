@@ -31,13 +31,17 @@ A `RuntimeTensor` holds:
 - `data` — a typed array for the real part.
 - `imag` — an optional typed array for the imaginary part. Absent means the tensor is real.
 - `shape` — integer dimensions, column-major (Fortran) order.
-- Flags — e.g., logical, integer, reference count.
+- `_isLogical` — flag set on the result of comparison/logical ops.
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
 **Precision.** The typed-array class is configurable globally: `Float64Array` by default, `Float32Array` when `NUMBL_USE_FLOAT32` is set. A tensor constructed in float64 mode is not portable to float32 mode and vice-versa.
 
-**Copy-on-write.** Tensors carry a reference count. Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writes to a shared buffer clone first. This is transparent to user code but matters for anyone writing a new tensor op — use the provided COW helpers rather than mutating buffers in place.
+**Value semantics via deep-clone.** Numbl previously implemented MATLAB's pass-by-value semantics with a refcount + copy-on-write scheme. That layer was removed in favor of a simpler "always deep-clone" model: at every function-call boundary, each non-handle argument is deep-cloned (`deepCloneValue` in [`runtime/utils.ts`](../../../src/numbl-core/runtime/utils.ts)). Plain `a = b` assignments where the RHS is a variable / member / index reference also deep-clone. Fresh expressions (`a + b`, function-call returns, etc.) are not cloned because deep-clone-on-call already guarantees the producer's inputs were independent. Mutating ops (indexed store, in-place updates) can therefore mutate buffers directly — no aliasing exists to worry about.
+
+The trade-off is correctness for cost: the implementation is straightforward but every assignment of a tensor variable copies the full data buffer. Reintroducing a sharing scheme is a planned follow-up; the current shape is the safe baseline to build it back on top of.
+
+Handle classes (`RuntimeClassInstance.isHandleClass`), graphics handles, dummy handles, and function handles (closures) are exempt from the deep-clone — they pass by reference, matching MATLAB's `handle` semantics.
 
 ## Tensor ops
 

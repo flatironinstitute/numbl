@@ -22,7 +22,7 @@ import {
   toNumber,
   toBool,
   displayValue,
-  shareRuntimeValue,
+  deepCloneValue,
   RuntimeError,
   CancellationError,
   type CallFrame,
@@ -139,12 +139,6 @@ import {
 } from "./runtimePlot.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
-import {
-  BufferPool,
-  setActivePool,
-  retainIfTensor,
-  releaseIfTensor,
-} from "./bufferPool.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -203,12 +197,6 @@ export class Runtime {
 
   // Constructor helpers
   public RTV = RTV;
-
-  /** Per-Runtime tensor buffer pool. The constructor installs this as the
-   *  active pool so `uninitFloat64` / `uninitFloatX` route through it.
-   *  Serial Runtimes (REPL, tests, worker) get their own buffers — no
-   *  cross-contamination. */
-  public _bufferPool: BufferPool = new BufferPool();
 
   // Persistent variable storage: funcJsId → varName → value
   private persistentStore = new Map<string, Map<string, RuntimeValue>>();
@@ -359,7 +347,6 @@ export class Runtime {
     private options: ExecOptions,
     private initialVariableValues?: Record<string, RuntimeValue>
   ) {
-    setActivePool(this._bufferPool);
     this.profilingEnabled = !!options.profile;
     this.fileIO = options.fileIO;
     this.system = options.system;
@@ -782,7 +769,7 @@ export class Runtime {
     )
       return v;
     if (v && typeof v === "object" && "kind" in v) {
-      return shareRuntimeValue(v as RuntimeValue);
+      return deepCloneValue(v as RuntimeValue);
     }
     return v as RuntimeValue;
   }
@@ -1198,11 +1185,6 @@ export class Runtime {
   public getPersistent(funcId: string, varName: string): RuntimeValue {
     const val = this.persistentStore.get(funcId)?.get(varName);
     if (val === undefined) return RTV.tensor(new FloatXArray(0), [0, 0]);
-    // Caller will alias this value (typically by binding into the function's
-    // local scope). Retain so the persistent store and the new alias each
-    // have their own count, and clearLocals at function exit doesn't drop
-    // the persistent's buffer to the pool.
-    retainIfTensor(val);
     return val;
   }
 
@@ -1215,13 +1197,6 @@ export class Runtime {
     if (!funcMap) {
       funcMap = new Map();
       this.persistentStore.set(funcId, funcMap);
-    }
-    const old = funcMap.get(varName);
-    if (old !== value) {
-      // Slot is replacing its current alias: drop the old, take the new.
-      // No-op for the same-wrapper case (same alias, no count change).
-      if (old !== undefined) releaseIfTensor(old);
-      retainIfTensor(value);
     }
     funcMap.set(varName, value);
   }

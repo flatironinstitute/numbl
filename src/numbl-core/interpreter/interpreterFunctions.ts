@@ -8,8 +8,7 @@ import type { RuntimeValue } from "../runtime/types.js";
 import { isRuntimeCell } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import { shareRuntimeValue } from "../runtime/utils.js";
-import { retainIfTensor } from "../runtime/bufferPool.js";
+import { deepCloneValue } from "../runtime/utils.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
@@ -517,16 +516,14 @@ export function callUserFunction(
     throw new RuntimeError("Too many output arguments.");
   }
 
-  // Share each argument at the call boundary so mutations inside the
-  // function don't leak back into the caller's variable (MATLAB pass-by-
-  // value / copy-on-write). shareRuntimeValue is a no-op on primitives and
-  // bumps the refcount on tensors/cells/value-class instances, ensuring
-  // any in-place write inside the callee goes through the COW copy path.
-  // Without this, the caller's wrapper sees its refcount decrement on the
-  // first call's COW; the second call then finds rc==1 and mutates in place.
+  // Deep-clone each non-handle argument at the call boundary. The callee
+  // owns its own copy of every tensor / cell / struct / value-class
+  // instance, so any mutation inside the function cannot affect the
+  // caller's binding. Handle classes / function handles / graphics
+  // handles are passed by reference (see deepCloneValue).
   const sharedArgs = args.map(a =>
     a !== undefined && a !== null && typeof a === "object"
-      ? shareRuntimeValue(a as RuntimeValue)
+      ? deepCloneValue(a as RuntimeValue)
       : a
   );
 
@@ -627,19 +624,11 @@ export function callUserFunction(
       }
     }
 
-    // Retain output tensors before clearLocals would otherwise release
-    // them — the caller is about to take ownership and needs the buffer
-    // alive. Then drop the local aliases (balances shareRuntimeValue
-    // bumps from the call entry and lets unreferenced buffers reach the
-    // pool).
-    //
-    // Skip when a `@nestedFn` handle was created during this function's
-    // execution: that handle's closure references `fnEnv`, and clearing
-    // its vars would strand the handle if it escaped via an output /
-    // persistent / global. Defining a nested function alone is fine —
-    // only escaping handles matter.
+    // Drop local bindings to release them for GC. Skip when a `@nestedFn`
+    // handle was created during this function's execution: that handle's
+    // closure references `fnEnv`, and clearing its vars would strand the
+    // handle if it escaped via an output / persistent / global.
     if (!fnEnv.nestedHandleCreated) {
-      for (const o of outputs) retainIfTensor(o);
       fnEnv.clearLocals();
     }
 
@@ -648,8 +637,6 @@ export function callUserFunction(
     }
     return outputs;
   } catch (e) {
-    // Even on error, drop local aliases so refcounts stay balanced for
-    // any caller-held wrappers — same handle caveat as above.
     if (!fnEnv.nestedHandleCreated) fnEnv.clearLocals();
     this.rt.annotateError(e);
     throw e;
