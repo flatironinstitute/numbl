@@ -22,6 +22,7 @@ import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
 import { zeroedFloatX, copyFloatX } from "../../runtime/alloc.js";
+import { deepCloneValue } from "../../runtime/utils.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 
@@ -507,10 +508,20 @@ defineBuiltin({
               );
           }
         }
+        // Deep-clone every value into the struct's fields. Without
+        // cloning, two fields built from the same arg (e.g.
+        // `struct('a', t, 'b', t)`) share `t`, and recursive dispose
+        // hits the same buffer twice. Same for the struct-array case
+        // when the same cell is used for multiple fields:
+        // `struct('ctr', e, 'xi', e, ...)` made each element's `ctr`
+        // and `xi` alias the same `e.data[k]`.
         if (!hasCell) {
           const fields = new Map<string, RuntimeValue>();
           for (let i = 0; i < fieldNames.length; i++) {
-            fields.set(fieldNames[i], fieldValues[i]);
+            fields.set(
+              fieldNames[i],
+              deepCloneValue(fieldValues[i] as RuntimeValue)
+            );
           }
           return RTV.struct(fields);
         }
@@ -521,9 +532,12 @@ defineBuiltin({
           for (let i = 0; i < fieldNames.length; i++) {
             const val = fieldValues[i];
             if (isRuntimeCell(val)) {
-              fields.set(fieldNames[i], val.data[k]);
+              fields.set(
+                fieldNames[i],
+                deepCloneValue(val.data[k] as RuntimeValue)
+              );
             } else {
-              fields.set(fieldNames[i], val);
+              fields.set(fieldNames[i], deepCloneValue(val as RuntimeValue));
             }
           }
           elements.push(RTV.struct(fields));
@@ -605,17 +619,25 @@ registerIBuiltin({
   resolve: (argTypes, nargout) => {
     if (argTypes.length === 0) return null;
     if (argTypes.length === 1) {
-      // Replicate single input to nargout outputs
+      // Replicate single input to nargout outputs. Each output must
+      // own its buffer — sharing a single reference across multiple
+      // outputs would alias them (e.g. `[a, b] = deal(x)` with shared
+      // refs corrupts when either binding is rewritten / disposed).
       const outTypes = new Array(Math.max(nargout, 1)).fill(argTypes[0]);
       return {
         outputTypes: outTypes,
         apply: (args, nargout) => {
-          if (nargout <= 1) return args[0];
-          return new Array(nargout).fill(args[0]);
+          const v = args[0] as RuntimeValue;
+          if (nargout <= 1) return deepCloneValue(v);
+          const outs = new Array(nargout);
+          for (let i = 0; i < nargout; i++) outs[i] = deepCloneValue(v);
+          return outs;
         },
       };
     }
-    // N inputs → N outputs
+    // N inputs → N outputs. Clone each output so the args list and
+    // the returned tuple don't share buffers (the caller may dispose
+    // owned args after the call).
     return {
       outputTypes: argTypes.slice(),
       apply: (args, nargout) => {
@@ -623,8 +645,8 @@ registerIBuiltin({
           throw new RuntimeError(
             `deal: number of inputs (${args.length}) must match number of outputs (${nargout})`
           );
-        if (nargout <= 1) return args[0];
-        return args;
+        if (nargout <= 1) return deepCloneValue(args[0] as RuntimeValue);
+        return args.map(a => deepCloneValue(a as RuntimeValue));
       },
     };
   },

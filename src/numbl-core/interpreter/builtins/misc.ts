@@ -16,6 +16,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
 import { toString } from "../../runtime/convert.js";
 import { registerIBuiltin, getIBuiltin } from "./types.js";
+import { deepCloneValue } from "../../runtime/utils.js";
 import { tryDatetimeDurationBinop } from "./datetime.js";
 import {
   mAdd,
@@ -436,7 +437,11 @@ registerIBuiltin({
     if (argTypes.length !== 1) return null;
     return {
       outputTypes: [{ kind: "unknown" }],
-      apply: args => args[0],
+      // Clone so the result is independent of the input — matches the
+      // contract that FuncCall results are owned. Without this, callers
+      // that auto-dispose owned args at the call site would corrupt
+      // the returned alias.
+      apply: args => deepCloneValue(args[0] as RuntimeValue),
     };
   },
 });

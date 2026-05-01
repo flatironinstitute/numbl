@@ -121,9 +121,10 @@ describe("dispose-balance: known gaps", () => {
   // GAP: FuncCall arg passing — the caller passes an owned value
   // (TensorLit, FuncCall result, etc.) to a function. callUserFunction
   // deep-clones at entry, so the original goes unreferenced after the
-  // call. We could dispose the original at the call site, but some
-  // builtins (e.g. `uplus`) return their input verbatim and would
-  // double-dispose. Audit / fix pass-through builtins first.
+  // call. A first attempt at evalFuncCall post-call dispose broke
+  // builtins like `squeeze` and `assignin` that share buffers between
+  // arg and result (or store args durably). Needs an audit pass over
+  // builtins to label "pure" vs "aliasing/storing" before re-enabling.
   it.fails("user function with single output", () => {
     expectBalanced(`
       a = helper([1 2 3]);
@@ -156,11 +157,6 @@ describe("dispose-balance: known gaps", () => {
     `);
   });
 
-  // GAP: nested user-function calls leak the inner call's return value
-  // when the caller passes it as an arg to another user function (the
-  // caller cannot safely auto-dispose owned FuncCall args because some
-  // builtins like `uplus` return their input verbatim — see the
-  // commit history's reverted attempt). Audit pass-through builtins.
   it.fails("nested function calls", () => {
     expectBalanced(`
       a = outer([1 2 3]);
