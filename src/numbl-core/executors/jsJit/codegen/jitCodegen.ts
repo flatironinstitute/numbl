@@ -715,12 +715,19 @@ function emitExpr(expr: JitExpr, destName?: string): string {
     case "MemberRead": {
       const key = structFieldKey(expr.baseName, expr.fieldName);
       const alias = _hoistedStructFields.get(key);
-      if (alias) return alias;
-      // Fallback: the hoist pass should have registered every MemberRead
-      // (collectStructFieldReads walks the same IR). This branch only
-      // fires if a future code path synthesizes a MemberRead after the
-      // hoist walk completes — emit the Map lookup directly.
-      return `${mangle(expr.baseName)}.fields.get(${JSON.stringify(expr.fieldName)})`;
+      const lookup =
+        alias ??
+        `${mangle(expr.baseName)}.fields.get(${JSON.stringify(expr.fieldName)})`;
+      // Tensor field reads are borrowed — the field still owns the
+      // wrapper, so the consuming binding must take a value-semantics
+      // clone (`$h.clone` shares the buffer via the COW refcount cell)
+      // to avoid disposing the field's buffer at the consumer's
+      // function exit. Non-tensor fields (numbers, etc.) are
+      // value-typed and can pass through.
+      if (expr.jitType.kind === "tensor") {
+        return `$h.clone(${lookup})`;
+      }
+      return lookup;
     }
 
     case "StructArrayMemberRead": {
@@ -736,13 +743,12 @@ function emitExpr(expr: JitExpr, destName?: string): string {
       // for 0-based JS array access. Same rounding strategy used by
       // the tensor index helpers.
       const raw = `${elementsAlias}[Math.round(${idxCode}) - 1].fields.get(${JSON.stringify(expr.leafFieldName)})`;
-      // If the leaf type is a tensor, the field might hold a bare
-      // scalar number at runtime (a chunkie quirk — leaf nodes with a
-      // single point store `xi = 87` instead of a 1x1 tensor). Wrap
-      // in asTensor so downstream tensor-read helpers always see a
-      // real RuntimeTensor.
+      // Tensor field reads are borrowed — see MemberRead. `$h.clone`
+      // gives the consumer its own refcount share. The asTensor wrap
+      // handles the chunkie quirk of bare-scalar fields ('xi = 87'
+      // for single-point leaf nodes).
       if (expr.jitType.kind === "tensor") {
-        return `$h.asTensor(${raw})`;
+        return `$h.clone($h.asTensor(${raw}))`;
       }
       return raw;
     }
