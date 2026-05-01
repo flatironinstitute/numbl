@@ -80,8 +80,7 @@ export {
   tensorUnary,
   tensorNeg,
   vconcatGrow1r,
-  unshare,
-  shareTensor,
+  cloneTensor,
   asTensor,
   tDouble,
   tSum,
@@ -136,8 +135,7 @@ import {
   makeTensor,
   tensorNeg,
   vconcatGrow1r,
-  unshare,
-  shareTensor,
+  cloneTensor,
   asTensor,
   tDouble,
   tSum,
@@ -334,9 +332,9 @@ export const jitHelpers = {
   tLog10: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log10),
   tSign: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sign),
 
-  // Var-to-var share: bumps the shared _refs.c so the aliased tensor is
-  // no longer eligible for in-place buffer reuse by later ops.
-  shareTensor,
+  // Var-to-var assign: deep-clones the RHS tensor so the LHS owns an
+  // independent buffer.
+  cloneTensor,
 
   // Fast paths for common scalar-producing / identity builtins.
   tDouble,
@@ -524,12 +522,6 @@ export const jitHelpers = {
   ): void => {
     s.fields.set(field, value);
   },
-  // Identity pass-through. Used to clone a struct param's fields Map
-  // for the COW era; with deep-clone-on-call the param is already an
-  // independent copy, so this is a no-op now. Kept so the codegen-emitted
-  // call still resolves until that emission is dropped.
-  structUnshare_h: (s: unknown): unknown => s,
-
   // Tensor indexing (generic)
   idx1,
   idx2,
@@ -564,9 +556,6 @@ export const jitHelpers = {
 
   // Vertical concat growth
   vconcatGrow1r,
-
-  // Copy-on-write unshare
-  unshare,
 
   // Scalar → tensor coercion
   asTensor,

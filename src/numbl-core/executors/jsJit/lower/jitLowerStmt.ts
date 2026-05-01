@@ -563,7 +563,7 @@ function lowerAssignLValue(
 
   // The base var is both read and written. Mark it assigned so the JIT
   // loop output-set filter keeps it live, and so the hoist logic knows
-  // it's a write-target (will go through `unshare` at loop entry).
+  // it's a write-target.
   ctx.assignedVars.add(baseName);
   // Don't touch ctx.env for baseName — its tensor type is unchanged
   // (same shape, still real — we're only updating one element).
@@ -680,7 +680,7 @@ function tryLowerRangeAssign(
 
   // The dst is both read (existing data preserved outside the range) and
   // written. Mark it assigned so the JIT loop output filter keeps it live
-  // and the codegen hoist treats it as a write target (unshare-on-entry).
+  // and the codegen hoist treats it as a write target.
   ctx.assignedVars.add(baseName);
   // Plain reassignment of dst would invalidate any prior slice alias on
   // it. A range write doesn't change the type — clear the alias defensively
@@ -871,8 +871,8 @@ function tryLowerColAssign(
     prelude.push({ tag: "Assign", name: srcName, expr: rhs });
   }
 
-  // Mark dst as assigned (write-target → unshare-on-entry hoist); clear
-  // any prior slice alias defensively, matching the range-assign path.
+  // Mark dst as assigned (write-target → entry-time hoist); clear any
+  // prior slice alias defensively, matching the range-assign path.
   ctx.assignedVars.add(baseName);
   ctx.sliceAliases.delete(baseName);
   ctx._hasTensorOps = true;

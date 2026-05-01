@@ -255,7 +255,7 @@ export function generateJS(
   // We walk the JIT IR (rather than param types) so the pass naturally
   // covers four cases:
   //   * read-only param tensors          — entry-time hoist only
-  //   * write-target param tensors       — entry-time hoist + unshare
+  //   * write-target param tensors       — entry-time hoist
   //   * tensor locals (created in body)  — declared at entry, filled by
   //                                        the per-Assign refresh path
   //   * params reassigned in the body    — entry-time hoist that's then
@@ -304,12 +304,9 @@ export function generateJS(
     });
 
     if (isParam) {
-      // Initialize at function entry from the param value.
-      if (isWriteTarget) {
-        // Unshare reassigns the param local to the un-COW'd tensor so
-        // the hoisted `.data` alias points at a buffer we own.
-        lines.push(`${indent}${m} = $h.unshare(${m});`);
-      }
+      // Initialize at function entry from the param value. Deep-clone-on-
+      // call already guarantees the param tensor is exclusively owned, so
+      // no extra unshare/clone is needed at the entry seam.
       const decls: string[] = [];
       decls.push(`${dataAlias} = ${m}.data`);
       decls.push(`${lenAlias} = ${dataAlias}.length`);
@@ -326,24 +323,6 @@ export function generateJS(
     }
   }
 
-  // Stage 22: for any struct param that is a target of an AssignMember
-  // inside the body, emit a one-time `$h.structUnshare_h(s)` clone at
-  // function entry. This preserves MATLAB value semantics when the
-  // caller passes a struct and the callee mutates a field — without
-  // the unshare, `s.fields.set(...)` inside a JIT'd function would
-  // leak the mutation back to the caller's binding.
-  //
-  // Locals (created inside the body via `s = []` + promote, or `s =
-  // struct()`) skip the unshare because they're already freshly
-  // allocated — no alias to clone away from.
-  const structMemberWrites = collectStructMemberWrites(body);
-  for (const name of [...structMemberWrites].sort()) {
-    if (!paramSet.has(name)) continue;
-    lines.push(
-      `${indent}${mangle(name)} = $h.structUnshare_h(${mangle(name)});`
-    );
-  }
-
   // Stage 12: hoist scalar struct-field reads for PARAM bases that are
   // NOT reassigned inside the body. Walk the IR to find every
   // `MemberRead` node, collect unique `(baseName, fieldName)` pairs,
@@ -356,6 +335,7 @@ export function generateJS(
   // `base.fields.get("field")` form in emitExpr so reads always see
   // current state.
   const plainAssignTargets = collectPlainAssignTargets(body);
+  const structMemberWrites = collectStructMemberWrites(body);
   const structFieldReads = collectStructFieldReads(body);
   const structFieldKeys = [...structFieldReads.keys()].sort();
   for (const key of structFieldKeys) {
@@ -435,12 +415,10 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign": {
       // Var-to-var tensor assign: deep-clone so the LHS owns an
-      // independent buffer (`shareTensor` is now a deep-clone helper —
-      // it kept its name through the COW removal so the codegen API
-      // stays stable). Non-tensor RHS skips this.
+      // independent buffer. Non-tensor RHS skips this.
       if (stmt.expr.tag === "Var" && isTensorType(stmt.expr.jitType)) {
         lines.push(
-          `${indent}${mangle(stmt.name)} = $h.shareTensor(${mangle(stmt.expr.name)});`
+          `${indent}${mangle(stmt.name)} = $h.cloneTensor(${mangle(stmt.expr.name)});`
         );
       } else {
         // The dest-hint param is now ignored by every helper (the COW
@@ -986,18 +964,11 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
  * After a plain `Assign` to a hoisted tensor variable, re-read its `.data`
  * and shape into the hoisted aliases. Called from emitStmt for the
  * `Assign` case (and only does work if the name has a hoisted alias).
- *
- * The `$h.unshare(name)` call for write-target tensors is a leftover from
- * the COW era and is now an identity helper — kept for now until the
- * emission is fully retired.
  */
 function emitHoistRefresh(lines: string[], name: string, indent: string): void {
   const alias = _hoistedAliases.get(name);
   if (!alias) return;
   const m = mangle(name);
-  if (alias.isWriteTarget) {
-    lines.push(`${indent}${m} = $h.unshare(${m});`);
-  }
   lines.push(`${indent}${alias.data} = ${m}.data;`);
   lines.push(`${indent}${alias.len} = ${alias.data}.length;`);
   if (alias.maxDim >= 2) {

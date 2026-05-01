@@ -77,9 +77,8 @@ function finalizeSplit(
 }
 
 /** Deep-clone a tensor (or pass through non-tensor values). Used at JIT
- *  var-to-var assignments and at the call boundary so each binding owns
- *  its own buffer. */
-export function shareTensor(v: unknown): unknown {
+ *  var-to-var assignments so each binding owns its own buffer. */
+export function cloneTensor(v: unknown): unknown {
   if (
     typeof v === "object" &&
     v !== null &&
@@ -411,17 +410,6 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
   out.set(bt.data);
   out[baseLen] = v;
   return makeTensor(out, undefined, [baseLen + 1, 1]);
-}
-
-// ── Unshare (legacy hook from the COW era) ────────────────────────────
-//
-// With deep-clone-on-call/assign there's no aliasing for the JIT to
-// detach from, so this is now an identity pass-through. The codegen
-// hoist-refresh path still references it (and will until that emission
-// is removed), so the export stays.
-
-export function unshare(t: unknown): RuntimeTensor {
-  return t as RuntimeTensor;
 }
 
 // ── Scalar → 1x1 tensor coercion ──────────────────────────────────────
