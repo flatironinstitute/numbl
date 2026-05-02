@@ -11,6 +11,7 @@ import {
   isRuntimeCell,
   isRuntimeClassInstance,
   isRuntimeFunction,
+  RuntimeValue,
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
