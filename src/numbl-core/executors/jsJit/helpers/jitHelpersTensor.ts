@@ -510,12 +510,12 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
 
 export function unshare(t: unknown): RuntimeTensor {
   const tt = t as RuntimeTensor;
-  if (tt._refs.c <= 1) return tt;
-  // PR 3 note: we do NOT decrement tt._refs.c here, mirroring the COW
-  // writer in indexing.ts. The caller is responsible for releasing the
-  // old wrapper when it rebinds (env.set's release-on-overwrite for the
-  // interpreter, or assignReleasing in JIT-emitted code). Decrementing
-  // here would double-release on those paths.
+  // Conservative COW: always copy, regardless of refcount.
+  // We do NOT decrement tt._refs.c here, mirroring the COW writer in
+  // indexing.ts. The caller is responsible for releasing the old wrapper
+  // when it rebinds (env.set's release-on-overwrite for the interpreter,
+  // or assignReleasing in JIT-emitted code). Decrementing here would
+  // double-release on those paths.
   const newData = uninitFloatX(tt.data.length);
   newData.set(tt.data);
   let newImag: FloatXArrayType | undefined;

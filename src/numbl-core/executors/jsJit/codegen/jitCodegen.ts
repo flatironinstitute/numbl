@@ -988,8 +988,8 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
  *
  * For write-target tensors, the refresh also calls `$h.unshare(name)` to
  * detach from any sharing the new RHS may have introduced (e.g. via
- * `tmp = base; ...; base(i) = v`). For fresh-from-`zeros(...)` tensors
- * unshare is a no-op fast return on `_refs.c <= 1`.
+ * `tmp = base; ...; base(i) = v`). Conservative COW: unshare always
+ * copies, regardless of refcount.
  */
 function emitHoistRefresh(lines: string[], name: string, indent: string): void {
   const alias = _hoistedAliases.get(name);

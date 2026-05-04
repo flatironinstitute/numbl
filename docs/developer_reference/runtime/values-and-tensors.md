@@ -37,7 +37,7 @@ A `RuntimeTensor` holds:
 
 **Precision.** The typed-array class is configurable globally: `Float64Array` by default, `Float32Array` when `NUMBL_USE_FLOAT32` is set. A tensor constructed in float64 mode is not portable to float32 mode and vice-versa.
 
-**Copy-on-write.** Tensors carry a reference count. Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writes to a shared buffer clone first. This is transparent to user code but matters for anyone writing a new tensor op — use the provided COW helpers rather than mutating buffers in place.
+**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writers always clone first (conservative COW) — the refcount on the buffer is no longer consulted by COW, only by the buffer-pool release path. This is transparent to user code but matters for anyone writing a new tensor op — use the provided COW helpers rather than mutating buffers in place.
 
 ## Tensor ops
 

@@ -1255,11 +1255,11 @@ function storeIntoTensor(
     return deleteTensorRowsOrCols(base, indices);
   }
 
-  // COW: if data is shared, copy before mutating. PR 3 note: we do NOT
-  // decrement base._refs.c here. The caller will rebind the result via
-  // env.set / assignReleasing, whose release-on-overwrite handles the
-  // alias drop. Decrementing here too would double-release.
-  if (base._refs.c > 1) {
+  // Conservative COW: always copy before mutating, regardless of refcount.
+  // We do NOT decrement base._refs.c here. The caller will rebind the
+  // result via env.set / assignReleasing, whose release-on-overwrite
+  // handles the alias drop. Decrementing here too would double-release.
+  {
     const cowImag = base.imag ? new FloatXArray(base.imag) : undefined;
     base = RTV.tensor(new FloatXArray(base.data), [...base.shape], cowImag);
   }
@@ -1896,8 +1896,8 @@ function storeIntoCell(
   rhs: RuntimeValue,
   parenAssign = false
 ): RuntimeValue {
-  // COW
-  if (base._rc > 1) {
+  // Conservative COW: always copy before mutating, regardless of refcount.
+  {
     base._rc--;
     const sharedData = base.data.map(elem => shareRuntimeValue(elem));
     base = RTV.cell(sharedData, [...base.shape]);

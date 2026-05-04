@@ -629,10 +629,8 @@ export const jitHelpers = {
     const k = Math.round(idx) - 1;
     if (k < 0 || k >= c.data.length)
       throw new Error("Index exceeds cell bounds");
-    // COW: if the cell wrapper is shared (rc > 1, typically because it was
-    // passed in as a function arg), copy before mutating so the caller's
-    // cell is unaffected.
-    if (c._rc > 1) {
+    // Conservative COW: always copy before mutating, regardless of refcount.
+    {
       c._rc--;
       c = {
         kind: "cell",
@@ -696,15 +694,11 @@ export const jitHelpers = {
 
   // User function call with call frame tracking.
   //
-  // Tensor args are bumped with shareTensor before the call. The caller
-  // still holds each tensor variable, and the callee's parameter is a
-  // second alias — unshare() inside the callee only copies on `_refs.c > 1`,
-  // so without the bump the callee's in-place writes would leak back to
-  // the caller's buffer (COW violation). The bump is intentionally not
-  // undone on return: if the callee called unshare, it already
-  // decremented _refs.c; if it didn't, leaving _refs.c over-counted just
-  // means a future mutation in the caller takes an extra copy — safe and
-  // rare.
+  // Tensor args are bumped with shareTensor before the call so the
+  // refcount tracks the additional callee alias. With conservative COW,
+  // unshare() always copies regardless of refcount, so this bump is no
+  // longer strictly required for COW correctness — but it keeps the
+  // refcount accurate for the buffer-pool release path.
   callUser: (
     rt: CallRt,
     name: string,

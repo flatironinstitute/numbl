@@ -128,7 +128,9 @@ export const kstr = (value: RuntimeValue): string => {
 
 /** Refcount header shared across every RuntimeTensor wrapper that aliases the
  *  same `data`/`imag` buffer. Per-buffer (not per-wrapper) so all aliases see
- *  the same count — a prerequisite for safely returning buffers to a pool. */
+ *  the same count — a prerequisite for safely returning buffers to a pool.
+ *  COW no longer consults this count (writers always copy); it is retained
+ *  only for the buffer-pool release path. */
 export type BufRefs = { c: number };
 
 export type RuntimeTensor = {
@@ -138,9 +140,9 @@ export type RuntimeTensor = {
   shape: number[]; // e.g. [3,4] for 3x4 matrix
   /** When true, this tensor represents a logical (boolean) array from comparisons/logical ops. */
   _isLogical?: boolean;
-  /** Shared refcount header. When `_refs.c > 1`, the buffer is aliased and
-   *  must be copied before mutation. Every wrapper for this buffer points
-   *  at the same `_refs` object. */
+  /** Shared refcount header. Tracks how many wrappers alias the same
+   *  buffer, so the pool only reclaims it when all aliases are released.
+   *  COW no longer consults this count — writers always copy. */
   _refs: BufRefs;
 };
 
@@ -156,7 +158,8 @@ export type RuntimeCell = {
   kind: "cell";
   data: RuntimeValue[];
   shape: number[]; // e.g. [1,3] for {a, b, c}
-  /** Reference count for copy-on-write. When > 1, data is shared and must be copied before mutation. */
+  /** Legacy reference count. COW now always copies regardless of value;
+   *  retained for now while the refcount system is being phased out. */
   _rc: number;
 };
 
