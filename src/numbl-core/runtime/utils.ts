@@ -1,16 +1,8 @@
 /**
- * Tensor shape/indexing utilities and copy-on-write helpers.
+ * Tensor shape/indexing utilities.
  */
 
-import {
-  type RuntimeValue,
-  type RuntimeTensor,
-  type RuntimeCell,
-  type RuntimeClassInstance,
-  isRuntimeClassInstance,
-  isRuntimeCell,
-  isRuntimeTensor,
-} from "./types.js";
+import { type RuntimeTensor } from "./types.js";
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
 
@@ -62,52 +54,4 @@ export function sub2ind(shape: number[], subs: number[]): number {
     stride *= shape[i];
   }
   return idx;
-}
-
-// ── Copy-on-write helpers ───────────────────────────────────────────────
-
-/**
- * Share an RuntimeValue for assignment (COW): increments refcount on tensors/cells
- * so that mIndexStore knows to copy before mutating.
- * Returns a new wrapper object that shares the same underlying data.
- */
-export function shareRuntimeValue(v: RuntimeValue): RuntimeValue {
-  if (isRuntimeTensor(v)) {
-    v._refs.c++;
-    return {
-      kind: "tensor",
-      data: v.data,
-      imag: v.imag,
-      shape: v.shape,
-      _isLogical: v._isLogical,
-      _refs: v._refs,
-    };
-  }
-  if (isRuntimeCell(v)) {
-    v._rc++;
-    return {
-      kind: "cell",
-      data: v.data,
-      shape: v.shape,
-      _rc: v._rc,
-    } as RuntimeCell;
-  }
-  // Value class instances: create a new instance with its own fields Map,
-  // sharing each field value via shareRuntimeValue for COW semantics.
-  if (isRuntimeClassInstance(v) && !v.isHandleClass) {
-    const newFields = new Map<string, RuntimeValue>();
-    for (const [k, fv] of v.fields) {
-      newFields.set(k, shareRuntimeValue(fv));
-    }
-    const copy: RuntimeClassInstance = {
-      kind: "class_instance",
-      className: v.className,
-      fields: newFields,
-      isHandleClass: false,
-    };
-    if (v._builtinData) copy._builtinData = shareRuntimeValue(v._builtinData);
-    return copy;
-  }
-  // Scalars, strings, logicals, functions, structs, handle classes are immutable or already copied on mutation
-  return v;
 }

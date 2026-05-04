@@ -81,8 +81,6 @@ interface BufferPoolStats {
   acquireCount: number;
   acquireBytes: number;
   acquireHits: number;
-  releaseCount: number;
-  releaseBytes: number;
   currentBytes: number;
 }
 
@@ -101,11 +99,6 @@ function BufferPoolStatsView({ stats }: { stats: BufferPoolStats }) {
     stats.acquireCount > 0
       ? ((stats.acquireHits / stats.acquireCount) * 100).toFixed(1)
       : "0.0";
-  // Net alloc = bytes the pool's `acquire*` vended out that haven't yet
-  // been seen on the release side. Direct `new FloatXArray` allocations
-  // bypass `acquire*` but their data still funnels through release on
-  // rebind, so this can go negative under steady state — that's fine.
-  const netAllocBytes = stats.acquireBytes - stats.releaseBytes;
   const rows: { label: string; value: string; hint?: string }[] = [
     {
       label: "Acquires",
@@ -118,21 +111,9 @@ function BufferPoolStatsView({ stats }: { stats: BufferPoolStats }) {
       hint: "Subset of acquires served from the free list",
     },
     {
-      label: "Releases",
-      value: `${stats.releaseCount.toLocaleString()} / ${formatBytes(stats.releaseBytes)}`,
-      hint: "Total release() calls (incl. those discarded by caps)",
-    },
-    {
       label: "Resident in pool",
       value: formatBytes(stats.currentBytes),
       hint: "Bytes currently held in the free list, ready to recycle",
-    },
-    {
-      label: "Net (acquire − release)",
-      value: formatBytes(netAllocBytes),
-      hint:
-        "Negative is normal when COW / zeros / etc. allocate directly " +
-        "but route releases through the pool",
     },
   ];
   return (
@@ -290,8 +271,6 @@ export function IDEWorkspace({
     acquireCount: number;
     acquireBytes: number;
     acquireHits: number;
-    releaseCount: number;
-    releaseBytes: number;
     currentBytes: number;
   } | null>(null);
   const [allFilesRep, setAllFilesRep] = useState<

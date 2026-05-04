@@ -636,14 +636,9 @@ async function executeWithOptions(
       bp.acquireCount > 0
         ? ((bp.acquireHits / bp.acquireCount) * 100).toFixed(1)
         : "0.0";
-    // Note: acquireCount tracks calls that went through pool.acquire* (i.e.,
-    // uninitFloat64 / uninitFloatX). Direct `new FloatXArray(...)` sites
-    // (zeros, ones, COW copy, etc.) bypass acquire but still funnel through
-    // release on rebind, so releaseCount > acquireCount is normal.
     console.error(
       `Buffer pool: acquires ${bp.acquireCount} / ${formatBytes(bp.acquireBytes)} ` +
         `(${hitRate}% pool reuse), ` +
-        `releases ${bp.releaseCount} / ${formatBytes(bp.releaseBytes)}, ` +
         `${formatBytes(bp.currentBytes)} resident in pool`
     );
   };

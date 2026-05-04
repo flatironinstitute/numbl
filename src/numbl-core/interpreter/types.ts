@@ -5,7 +5,6 @@
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import { releaseIfTensor, retainIfTensor } from "../runtime/bufferPool.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -84,8 +83,6 @@ export class Environment {
       this._globalNames.has(name) &&
       this.rt
     ) {
-      const priorGlobal = this.rt.$g[name];
-      if (priorGlobal !== value) releaseIfTensor(priorGlobal);
       this.rt.$g[name] = value;
       return;
     }
@@ -96,15 +93,11 @@ export class Environment {
         return;
       }
     }
-    const prior = this.vars.get(name);
-    if (prior !== undefined && prior !== value) releaseIfTensor(prior);
     this.vars.set(name, value);
   }
 
   /** Always writes to this scope (for parameter binding). */
   setLocal(name: string, value: RuntimeValue): void {
-    const prior = this.vars.get(name);
-    if (prior !== undefined && prior !== value) releaseIfTensor(prior);
     this.vars.set(name, value);
   }
 
@@ -114,15 +107,12 @@ export class Environment {
    *  are removed via `clear global` / `clear functions` (not yet
    *  implemented). */
   delete(name: string): boolean {
-    const prior = this.vars.get(name);
-    if (prior !== undefined) releaseIfTensor(prior);
     return this.vars.delete(name);
   }
 
   /** Remove all local variables from this scope. Globals,
    *  persistents, and nested function defs are preserved. */
   clearLocals(): void {
-    for (const v of this.vars.values()) releaseIfTensor(v);
     this.vars.clear();
   }
 
@@ -180,16 +170,12 @@ export class Environment {
   }
 
   /** Create a snapshot of this environment (copies all variables by value).
-   *  Used for anonymous functions which capture values at definition time.
-   *  Tensor wrappers are retained — the snapshot is its own alias of each
-   *  buffer, so when the original env is later cleared the buffer stays
-   *  alive for the lambda. */
+   *  Used for anonymous functions which capture values at definition time. */
   snapshot(): Environment {
     const snap = new Environment();
     const copyVars = (env: Environment) => {
       if (env.parent) copyVars(env.parent);
       for (const [k, v] of env.vars) {
-        retainIfTensor(v);
         snap.vars.set(k, v);
       }
       for (const [k, v] of env.nestedFunctions) {

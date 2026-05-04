@@ -221,7 +221,6 @@ export const cJitFuseExecutor: Executor<FuseLoweredStmt, CFuseCompiled | null> =
         data: out,
         imag: undefined,
         shape: [...templateShape],
-        _refs: { c: 1 },
       };
       interp.env.set(d.classification.outputName, result as RuntimeValue);
       return { ok: true };

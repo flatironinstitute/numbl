@@ -79,7 +79,6 @@ export {
   tensorNeg,
   vconcatGrow1r,
   unshare,
-  shareTensor,
   asTensor,
   tDouble,
   tSum,
@@ -135,7 +134,6 @@ import {
   tensorNeg,
   vconcatGrow1r,
   unshare,
-  shareTensor,
   asTensor,
   tDouble,
   tSum,
@@ -331,10 +329,6 @@ export const jitHelpers = {
   tLog2: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log2),
   tLog10: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.log10),
   tSign: (dest: unknown, a: RuntimeTensor) => tensorUnary(dest, a, Math.sign),
-
-  // Var-to-var share: bumps the shared _refs.c so the aliased tensor is
-  // no longer eligible for in-place buffer reuse by later ops.
-  shareTensor,
 
   // Fast paths for common scalar-producing / identity builtins.
   tDouble,
@@ -620,25 +614,20 @@ export const jitHelpers = {
   },
 
   __cellWrite: (cell: unknown, idx: number, value: unknown): unknown => {
-    let c = cell as {
+    const orig = cell as {
       kind: "cell";
       data: unknown[];
       shape: number[];
-      _rc: number;
     };
     const k = Math.round(idx) - 1;
-    if (k < 0 || k >= c.data.length)
+    if (k < 0 || k >= orig.data.length)
       throw new Error("Index exceeds cell bounds");
-    // Conservative COW: always copy before mutating, regardless of refcount.
-    {
-      c._rc--;
-      c = {
-        kind: "cell",
-        data: c.data.slice(),
-        shape: c.shape.slice(),
-        _rc: 1,
-      };
-    }
+    // Conservative COW: always copy before mutating.
+    const c = {
+      kind: "cell" as const,
+      data: orig.data.slice(),
+      shape: orig.shape.slice(),
+    };
     c.data[k] = value;
     return c;
   },
@@ -693,19 +682,12 @@ export const jitHelpers = {
   im,
 
   // User function call with call frame tracking.
-  //
-  // Tensor args are bumped with shareTensor before the call so the
-  // refcount tracks the additional callee alias. With conservative COW,
-  // unshare() always copies regardless of refcount, so this bump is no
-  // longer strictly required for COW correctness — but it keeps the
-  // refcount accurate for the buffer-pool release path.
   callUser: (
     rt: CallRt,
     name: string,
     fn: (...args: unknown[]) => unknown,
     ...args: unknown[]
   ) => {
-    for (let i = 0; i < args.length; i++) shareTensor(args[i]);
     return withCallFrame(rt, name, () => fn(...args));
   },
 

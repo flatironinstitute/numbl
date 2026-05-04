@@ -373,7 +373,6 @@ export function makeTensor(
     kind: "tensor",
     data,
     shape: s,
-    _refs: { c: 1 },
   };
   if (imag) t.imag = imag;
   return t;

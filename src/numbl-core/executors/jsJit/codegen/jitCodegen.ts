@@ -434,21 +434,12 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
 function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign": {
-      // Var-to-var tensor assign: bump _refs.c on the aliased tensor so
-      // later ops don't reuse its buffer in place (which would corrupt the
-      // other binding). Non-tensor RHS skips this.
-      if (stmt.expr.tag === "Var" && isTensorType(stmt.expr.jitType)) {
-        lines.push(
-          `${indent}${mangle(stmt.name)} = $h.shareTensor(${mangle(stmt.expr.name)});`
-        );
-      } else {
-        // Pass the LHS name as a dest hint so the top-level RHS op (tensor
-        // binary / unary / compare / builtin) can write into the previous
-        // value's buffer when uniquely owned.
-        lines.push(
-          `${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr, stmt.name)};`
-        );
-      }
+      // Plain rebind: emit the RHS into the LHS slot. Conservative COW
+      // means later mutations of either alias clone the buffer first, so
+      // var-to-var tensor assigns don't need any retain/share dance.
+      lines.push(
+        `${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr, stmt.name)};`
+      );
       // If `name` is a hoisted tensor variable, refresh its hoisted aliases
       // (`.data`, `.length`, shape) so subsequent reads/writes see the new
       // value. Without this, `out_pt = zeros(N*2, 1)` followed by

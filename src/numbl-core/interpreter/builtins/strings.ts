@@ -463,7 +463,6 @@ function strcmpApply(
       data: result,
       shape: cellA.shape.slice(),
       _isLogical: true,
-      _refs: { c: 1 },
     };
   }
 
@@ -485,7 +484,6 @@ function strcmpApply(
     data: result,
     shape: cell.shape.slice(),
     _isLogical: true,
-    _refs: { c: 1 },
   };
 }
 
@@ -613,7 +611,6 @@ function logicalRowFromString(
     data,
     shape: shape ?? [1, cps.length],
     _isLogical: true,
-    _refs: { c: 1 },
   };
 }
 
@@ -632,7 +629,6 @@ function logicalFromNumericTensor(
     data: out,
     shape: [...shape],
     _isLogical: true,
-    _refs: { c: 1 },
   };
 }
 
@@ -689,7 +685,6 @@ function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
       data,
       shape: [1, 1],
       _isLogical: true,
-      _refs: { c: 1 },
     };
   } else {
     throw new RuntimeError("isstrprop: unsupported input type");

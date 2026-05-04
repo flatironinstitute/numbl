@@ -47,7 +47,6 @@ export function makeTensor(
     kind: "tensor",
     data,
     shape: s,
-    _refs: { c: 1 },
   };
   if (imag) t.imag = imag;
   return t;
@@ -55,58 +54,23 @@ export function makeTensor(
 
 // ── Output-buffer reuse (dest-hint) ────────────────────────────────────
 //
-// If the caller passed a dest tensor that is uniquely owned (rc === 1),
-// real Float64, and matches the needed element count, its `.data` buffer
-// is a safe output target for elementwise ops (aliasing with inputs is OK
-// because each kernel reads index i before writing index i).
-//
-// The wrapper itself is also reusable: `finalizeReused` mutates shape /
-// imag / _isLogical in place, avoiding the per-op RuntimeTensor object
-// allocation on top of the Float64Array allocation.
+// Disabled with the refcount removal: without a uniqueness signal we
+// can't safely reuse a dest tensor's buffer. Keep the helpers as stubs
+// that always force a fresh allocation; they will be redesigned along
+// with the new anti-aliasing system.
 
-function reuseRealBuffer(dest: unknown, n: number): Float64Array | undefined {
-  if (
-    typeof dest === "object" &&
-    dest !== null &&
-    (dest as RuntimeTensor).kind === "tensor"
-  ) {
-    const t = dest as RuntimeTensor;
-    if (
-      t._refs.c === 1 &&
-      t.data instanceof Float64Array &&
-      t.data.length === n
-    ) {
-      return t.data as Float64Array;
-    }
-  }
+/* eslint-disable @typescript-eslint/no-unused-vars */
+function reuseRealBuffer(_dest: unknown, _n: number): Float64Array | undefined {
   return undefined;
 }
 
 function reuseComplexBuffers(
-  dest: unknown,
-  n: number
+  _dest: unknown,
+  _n: number
 ): { outRe: Float64Array; outIm: Float64Array } | undefined {
-  if (
-    typeof dest === "object" &&
-    dest !== null &&
-    (dest as RuntimeTensor).kind === "tensor"
-  ) {
-    const t = dest as RuntimeTensor;
-    if (
-      t._refs.c === 1 &&
-      t.data instanceof Float64Array &&
-      t.data.length === n &&
-      t.imag instanceof Float64Array &&
-      t.imag.length === n
-    ) {
-      return {
-        outRe: t.data as Float64Array,
-        outIm: t.imag as Float64Array,
-      };
-    }
-  }
   return undefined;
 }
+/* eslint-enable @typescript-eslint/no-unused-vars */
 
 /** Rewrap a real result: reuse dest's wrapper if we reused its buffer. */
 function finalizeReal(
@@ -159,20 +123,6 @@ function finalizeSplitReused(
   return realOnly
     ? makeTensor(outRe, undefined, shape)
     : makeTensor(outRe, outIm, shape);
-}
-
-/** Bump rc on a tensor (no-op for non-tensor values). Used for var-to-var
- *  JIT assignments so the aliased tensor is no longer eligible for
- *  in-place buffer reuse. */
-export function shareTensor(v: unknown): unknown {
-  if (
-    typeof v === "object" &&
-    v !== null &&
-    (v as RuntimeTensor).kind === "tensor"
-  ) {
-    (v as RuntimeTensor)._refs.c++;
-  }
-  return v;
 }
 
 // ── Element-wise tensor binary operations ──────────────────────────────
@@ -416,11 +366,8 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
 
 // ── double() fast path ────────────────────────────────────────────────
 //
-// `double(x)` is an identity for non-logical numeric tensors and just
-// strips the _isLogical flag for logical ones. The interpreter builtin
-// allocates a fresh copy when the input is logical; when the tensor is
-// uniquely owned (_refs.c==1, typically a JIT scratch) we can clear the
-// flag in place instead.
+// `double(x)` is an identity for non-logical numeric tensors. For logical
+// tensors we conservatively allocate a fresh copy with the flag cleared.
 
 export function tDouble(v: unknown): unknown {
   if (typeof v === "number" || typeof v === "boolean") return +v;
@@ -431,18 +378,12 @@ export function tDouble(v: unknown): unknown {
   ) {
     const t = v as RuntimeTensor;
     if (!t._isLogical) return t;
-    if (t._refs.c <= 1) {
-      t._isLogical = undefined;
-      return t;
-    }
-    // Shared: can't mutate; fall back to copying the data buffer.
     const newData = uninitFloat64(t.data.length);
     newData.set(t.data as Float64Array);
     return {
       kind: "tensor",
       data: newData,
       shape: t.shape.slice(),
-      _refs: { c: 1 },
     } as RuntimeTensor;
   }
   return v;
@@ -508,14 +449,11 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
 
 // ── Copy-on-write unsharing ────────────────────────────────────────────
 
+/** Conservative COW: always allocate a fresh wrapper + buffer for the
+ *  tensor `t`. The caller can mutate the result without affecting any
+ *  other alias of the input. */
 export function unshare(t: unknown): RuntimeTensor {
   const tt = t as RuntimeTensor;
-  // Conservative COW: always copy, regardless of refcount.
-  // We do NOT decrement tt._refs.c here, mirroring the COW writer in
-  // indexing.ts. The caller is responsible for releasing the old wrapper
-  // when it rebinds (env.set's release-on-overwrite for the interpreter,
-  // or assignReleasing in JIT-emitted code). Decrementing here would
-  // double-release on those paths.
   const newData = uninitFloatX(tt.data.length);
   newData.set(tt.data);
   let newImag: FloatXArrayType | undefined;
@@ -527,7 +465,6 @@ export function unshare(t: unknown): RuntimeTensor {
     kind: "tensor",
     data: newData,
     shape: tt.shape.slice(),
-    _refs: { c: 1 },
   };
   if (newImag) copy.imag = newImag;
   if (tt._isLogical) copy._isLogical = tt._isLogical;

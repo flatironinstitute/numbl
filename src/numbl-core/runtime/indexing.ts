@@ -24,12 +24,7 @@ import {
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
-import {
-  tensorSize2D,
-  colMajorIndex,
-  sub2ind,
-  shareRuntimeValue,
-} from "./utils.js";
+import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
 
 // ── Colon index sentinel ─────────────────────────────────────────────────
@@ -1255,10 +1250,7 @@ function storeIntoTensor(
     return deleteTensorRowsOrCols(base, indices);
   }
 
-  // Conservative COW: always copy before mutating, regardless of refcount.
-  // We do NOT decrement base._refs.c here. The caller will rebind the
-  // result via env.set / assignReleasing, whose release-on-overwrite
-  // handles the alias drop. Decrementing here too would double-release.
+  // Conservative COW: always copy before mutating.
   {
     const cowImag = base.imag ? new FloatXArray(base.imag) : undefined;
     base = RTV.tensor(new FloatXArray(base.data), [...base.shape], cowImag);
@@ -1896,12 +1888,8 @@ function storeIntoCell(
   rhs: RuntimeValue,
   parenAssign = false
 ): RuntimeValue {
-  // Conservative COW: always copy before mutating, regardless of refcount.
-  {
-    base._rc--;
-    const sharedData = base.data.map(elem => shareRuntimeValue(elem));
-    base = RTV.cell(sharedData, [...base.shape]);
-  }
+  // Conservative COW: always copy before mutating.
+  base = RTV.cell(base.data.slice(), [...base.shape]);
 
   const updateShapeAfterLinearAssign = (oldLen: number) => {
     const c = base as RuntimeCell;
@@ -2079,7 +2067,7 @@ export function storeIntoRTValueIndex(
         if (imag && S.pi) imag[idx] = S.pi[k];
       }
     }
-    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n], _refs: { c: 1 } };
+    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n] };
   }
 
   if (isRuntimeTensor(base)) {

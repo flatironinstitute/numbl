@@ -31,13 +31,13 @@ A `RuntimeTensor` holds:
 - `data` — a typed array for the real part.
 - `imag` — an optional typed array for the imaginary part. Absent means the tensor is real.
 - `shape` — integer dimensions, column-major (Fortran) order.
-- Flags — e.g., logical, integer, reference count.
+- Flags — e.g., `_isLogical` for boolean arrays from comparisons.
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
 **Precision.** The typed-array class is configurable globally: `Float64Array` by default, `Float32Array` when `NUMBL_USE_FLOAT32` is set. A tensor constructed in float64 mode is not portable to float32 mode and vice-versa.
 
-**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writers always clone first (conservative COW) — the refcount on the buffer is no longer consulted by COW, only by the buffer-pool release path. This is transparent to user code but matters for anyone writing a new tensor op — use the provided COW helpers rather than mutating buffers in place.
+**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writers unconditionally clone before mutating (conservative COW); there is no refcount or aliasing tracking — the previous refcount-based system was removed, and a new anti-aliasing design is being prepared.
 
 ## Tensor ops
 

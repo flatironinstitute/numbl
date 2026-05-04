@@ -22,7 +22,6 @@ import {
   toNumber,
   toBool,
   displayValue,
-  shareRuntimeValue,
   RuntimeError,
   CancellationError,
   type CallFrame,
@@ -139,12 +138,7 @@ import {
 } from "./runtimePlot.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
-import {
-  BufferPool,
-  setActivePool,
-  retainIfTensor,
-  releaseIfTensor,
-} from "./bufferPool.js";
+import { BufferPool, setActivePool } from "./bufferPool.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -774,19 +768,6 @@ export class Runtime {
     return r;
   }
 
-  public share(v: unknown): RuntimeValue {
-    if (
-      typeof v === "number" ||
-      typeof v === "boolean" ||
-      typeof v === "string"
-    )
-      return v;
-    if (v && typeof v === "object" && "kind" in v) {
-      return shareRuntimeValue(v as RuntimeValue);
-    }
-    return v as RuntimeValue;
-  }
-
   // ── Display ─────────────────────────────────────────────────────────
 
   public get displayResults(): boolean {
@@ -1198,11 +1179,6 @@ export class Runtime {
   public getPersistent(funcId: string, varName: string): RuntimeValue {
     const val = this.persistentStore.get(funcId)?.get(varName);
     if (val === undefined) return RTV.tensor(new FloatXArray(0), [0, 0]);
-    // Caller will alias this value (typically by binding into the function's
-    // local scope). Retain so the persistent store and the new alias each
-    // have their own count, and clearLocals at function exit doesn't drop
-    // the persistent's buffer to the pool.
-    retainIfTensor(val);
     return val;
   }
 
@@ -1215,13 +1191,6 @@ export class Runtime {
     if (!funcMap) {
       funcMap = new Map();
       this.persistentStore.set(funcId, funcMap);
-    }
-    const old = funcMap.get(varName);
-    if (old !== value) {
-      // Slot is replacing its current alias: drop the old, take the new.
-      // No-op for the same-wrapper case (same alias, no count change).
-      if (old !== undefined) releaseIfTensor(old);
-      retainIfTensor(value);
     }
     funcMap.set(varName, value);
   }

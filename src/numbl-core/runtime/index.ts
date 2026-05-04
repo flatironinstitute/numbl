@@ -17,12 +17,7 @@ export {
 } from "./error.js";
 export type { CallFrame } from "./error.js";
 
-export {
-  tensorSize2D,
-  numel,
-  colMajorIndex,
-  shareRuntimeValue,
-} from "./utils.js";
+export { tensorSize2D, numel, colMajorIndex } from "./utils.js";
 
 export { toNumber, toBool, toString } from "./convert.js";
 export { valuesAreEqual } from "./compare.js";
