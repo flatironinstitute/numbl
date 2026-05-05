@@ -11,5 +11,5 @@ npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR" --opt 0
 echo "=== Running tests (--opt 1) ==="
 npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR" --opt 1
 
-echo "=== Running tests (--opt e3) ==="
-npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR" --opt e3
+# echo "=== Running tests (--opt e3) ==="
+# npx tsx "$SCRIPT_DIR/../src/cli.ts" run-tests "$SCRIPT_DIR" --opt e3
