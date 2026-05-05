@@ -895,6 +895,7 @@ export function evalAnonFunc(
     const narg = typeof nargoutArg === "number" ? nargoutArg : 1;
     const savedEnv = this.env;
     this.env = fnEnv;
+    this.rt._envStack.push(savedEnv);
     return this.withFileContext(
       capturedFile,
       capturedClassName,
@@ -912,6 +913,7 @@ export function evalAnonFunc(
           }
           return result;
         } finally {
+          this.rt._envStack.pop();
           this.env = savedEnv;
         }
       }
@@ -1091,7 +1093,21 @@ export function assignLValue(
           skipSubsasgn = true;
         }
       }
-      const result = this.rt.indexStore(base, indices, value, skipSubsasgn);
+      // Set the alias-sweep context so `storeIntoTensor` / `storeIntoCell`
+      // can skip the COW when the LHS slot is the only place that holds
+      // the tensor. The exclude-binding name is null when the LHS is a
+      // computed expression (e.g. `f().x(1) = ...`) — sweep then treats
+      // every slot, including the destination, as a potential alias.
+      this.rt._aliasCtx = {
+        env: this.env,
+        bindingName: lv.base.type === "Ident" ? lv.base.name : null,
+      };
+      let result;
+      try {
+        result = this.rt.indexStore(base, indices, value, skipSubsasgn);
+      } finally {
+        this.rt._aliasCtx = null;
+      }
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, ensureRuntimeValue(result));
       } else {
@@ -1106,7 +1122,16 @@ export function assignLValue(
           ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
           : this.evalLValueBase(lv.base, RTV.cell([], [0, 0]));
       const indices = this.evalIndicesWithEnd(base, lv.indices);
-      const result = this.rt.indexCellStore(base, indices, value);
+      this.rt._aliasCtx = {
+        env: this.env,
+        bindingName: lv.base.type === "Ident" ? lv.base.name : null,
+      };
+      let result;
+      try {
+        result = this.rt.indexCellStore(base, indices, value);
+      } finally {
+        this.rt._aliasCtx = null;
+      }
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, ensureRuntimeValue(result));
       } else {

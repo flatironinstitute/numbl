@@ -307,6 +307,9 @@ export function interpretWorkspaceFunction(
       return this.withFileContext(entry.fileName, undefined, undefined, () => {
         const savedEnv = this.env;
         this.env = new Environment();
+        // Track caller env so the alias sweep can find tensors held in
+        // the caller's scope (function envs have no `parent` link back).
+        this.rt._envStack.push(savedEnv);
         try {
           for (const stmt of ast.body) {
             if (stmt.type === "Function") continue;
@@ -315,6 +318,7 @@ export function interpretWorkspaceFunction(
           }
           return this.ans;
         } finally {
+          this.rt._envStack.pop();
           this.env = savedEnv;
         }
       });
@@ -566,6 +570,9 @@ export function callUserFunction(
   const savedCallerEnv = this.callerEnv;
   this.callerEnv = savedEnv;
   this.env = fnEnv;
+  // Track caller env so the alias sweep can see tensors held in the
+  // caller's scope across the function boundary.
+  this.rt._envStack.push(savedEnv);
   this.rt.pushCallFrame(fn.name);
   this.rt.pushCleanupScope();
 
@@ -644,6 +651,7 @@ export function callUserFunction(
       }
     });
     this.rt.popCallFrame();
+    this.rt._envStack.pop();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
   }
@@ -686,6 +694,7 @@ export function callNestedFunction(
 
   const savedEnv = this.env;
   this.env = fnEnv;
+  this.rt._envStack.push(savedEnv);
   this.rt.pushCleanupScope();
 
   try {
@@ -743,6 +752,7 @@ export function callNestedFunction(
         this.rt.dispatch(fn.name, 0, []);
       }
     });
+    this.rt._envStack.pop();
     this.env = savedEnv;
   }
 }

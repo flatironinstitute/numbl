@@ -205,11 +205,31 @@ export class Runtime {
   public _bufferPool: BufferPool = new BufferPool();
 
   // Persistent variable storage: funcJsId → varName → value
-  private persistentStore = new Map<string, Map<string, RuntimeValue>>();
+  // Public so the alias sweep can traverse it as a root.
+  public persistentStore = new Map<string, Map<string, RuntimeValue>>();
 
   // Global variable storage: varName → value (shared across all functions)
   // Public object so generated code can read/write as $rt.$g["name"]
   public $g: Record<string, RuntimeValue> = {};
+
+  // ── Anti-aliasing (sweep-based COW) state ────────────────────────────
+  //
+  // The interpreter sets `_aliasCtx` immediately before an indexed store
+  // and clears it after. `storeIntoTensor` / `storeIntoCell` consult it
+  // to sweep with the LHS slot excluded; if the target tensor is reached
+  // from anywhere else, COW fires.
+  //
+  // `_envStack` tracks caller envs across function calls. Function envs
+  // have no `parent` pointer back to their caller, so the interpreter
+  // pushes the saved env on call entry and pops on exit; the sweep walks
+  // every entry. Single-threaded JS — no contention concerns.
+
+  public _aliasCtx: {
+    env: import("./aliasing.js").AliasEnv;
+    bindingName: string | null;
+  } | null = null;
+
+  public _envStack: import("./aliasing.js").AliasEnv[] = [];
 
   // Accessor guard: prevents recursive getter/setter/subsref calls
   public activeAccessors = new Set<string>();
@@ -1598,7 +1618,7 @@ export class Runtime {
     indices: unknown[],
     rhs: unknown
   ): unknown {
-    return _indexCellStore(base, indices, rhs);
+    return _indexCellStore(base, indices, rhs, this);
   }
 
   public multiOutputCellAssign(

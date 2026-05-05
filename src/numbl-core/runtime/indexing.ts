@@ -26,6 +26,19 @@ import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
+import { isAliased, type AliasRuntime } from "./aliasing.js";
+
+// ── Anti-aliasing helper ─────────────────────────────────────────────────
+
+/** True if `base` must be cloned before mutation. Returns true if no
+ *  alias context is set (safe default — assume aliased), otherwise runs
+ *  the sweep with the LHS slot excluded. */
+function mustCopyForAlias(base: object, rt?: AliasRuntime): boolean {
+  if (!rt) return true;
+  const ctx = rt._aliasCtx;
+  if (!ctx) return true;
+  return isAliased(rt, ctx.env, base, ctx.env, ctx.bindingName);
+}
 
 // ── Colon index sentinel ─────────────────────────────────────────────────
 
@@ -1228,7 +1241,8 @@ export function indexIntoRTValue(
 function storeIntoTensor(
   base: RuntimeTensor,
   indices: RuntimeValue[],
-  rhs: RuntimeValue
+  rhs: RuntimeValue,
+  rt?: AliasRuntime
 ): RuntimeValue {
   // Element deletion: base(idx) = []
   if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 1) {
@@ -1250,8 +1264,10 @@ function storeIntoTensor(
     return deleteTensorRowsOrCols(base, indices);
   }
 
-  // Conservative COW: always copy before mutating.
-  {
+  // Sweep-based COW: copy iff the base tensor is reachable from any
+  // slot OTHER than the LHS we're about to overwrite. Without an alias
+  // context, fall back to always-copy (safe default).
+  if (mustCopyForAlias(base, rt)) {
     const cowImag = base.imag ? new FloatXArray(base.imag) : undefined;
     base = RTV.tensor(new FloatXArray(base.data), [...base.shape], cowImag);
   }
@@ -1886,10 +1902,13 @@ function storeIntoCell(
   base: RuntimeCell,
   indices: RuntimeValue[],
   rhs: RuntimeValue,
-  parenAssign = false
+  parenAssign = false,
+  rt?: AliasRuntime
 ): RuntimeValue {
-  // Conservative COW: always copy before mutating.
-  base = RTV.cell(base.data.slice(), [...base.shape]);
+  // Sweep-based COW for the cell wrapper.
+  if (mustCopyForAlias(base, rt)) {
+    base = RTV.cell(base.data.slice(), [...base.shape]);
+  }
 
   const updateShapeAfterLinearAssign = (oldLen: number) => {
     const c = base as RuntimeCell;
@@ -2049,7 +2068,8 @@ export function storeIntoRTValueIndex(
   base: RuntimeValue,
   indices: RuntimeValue[],
   rhs: RuntimeValue,
-  parenAssign = false
+  parenAssign = false,
+  rt?: AliasRuntime
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(base)) {
     return storeIntoSparse(base, indices, rhs);
@@ -2071,11 +2091,11 @@ export function storeIntoRTValueIndex(
   }
 
   if (isRuntimeTensor(base)) {
-    return storeIntoTensor(base, indices, rhs);
+    return storeIntoTensor(base, indices, rhs, rt);
   }
 
   if (isRuntimeCell(base)) {
-    return storeIntoCell(base, indices, rhs, parenAssign);
+    return storeIntoCell(base, indices, rhs, parenAssign, rt);
   }
 
   throw new RuntimeError(`Cannot index-assign into ${kstr(base)}`);

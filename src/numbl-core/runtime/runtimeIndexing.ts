@@ -619,7 +619,7 @@ export function indexStore(
   if (isRuntimeCell(mv)) {
     const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
     const rhsMv = ensureRuntimeValue(rhs);
-    return mIndexStore(mv, idxMvals, rhsMv, true);
+    return mIndexStore(mv, idxMvals, rhsMv, true, rt);
   }
   // Struct scalar indexed assignment
   if (isRuntimeStruct(mv)) {
@@ -655,7 +655,7 @@ export function indexStore(
   if (isRuntimeSparseMatrix(mv)) {
     const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
     const rhsMv = ensureRuntimeValue(rhs);
-    return mIndexStore(mv, idxMvals, rhsMv);
+    return mIndexStore(mv, idxMvals, rhsMv, false, rt);
   }
   // When the base is a scalar number and the RHS is a class instance or struct,
   // replace the variable entirely
@@ -689,7 +689,7 @@ export function indexStore(
   }
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
   const rhsMv = ensureRuntimeValue(rhs);
-  const result = mIndexStore(mv, idxMvals, rhsMv);
+  const result = mIndexStore(mv, idxMvals, rhsMv, false, rt);
   // Preserve _isLogical flag when assigning logical values into a logical tensor
   if (
     isRuntimeTensor(result) &&
@@ -715,7 +715,8 @@ export function indexStore(
 export function indexCellStore(
   base: unknown,
   indices: unknown[],
-  rhs: unknown
+  rhs: unknown,
+  rt?: import("./aliasing.js").AliasRuntime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);
@@ -734,7 +735,7 @@ export function indexCellStore(
   if (!isRuntimeCell(mv)) mv = RTV.cell([], [0, 0]);
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
   const rhsMv = ensureRuntimeValue(rhs);
-  return mIndexStore(mv, idxMvals, rhsMv);
+  return mIndexStore(mv, idxMvals, rhsMv, false, rt);
 }
 
 /**

@@ -24,7 +24,10 @@ export type ControlSignal = BreakSignal | ContinueSignal | ReturnSignal;
 // ── Environment (variable scope) ─────────────────────────────────────────
 
 export class Environment {
-  private vars = new Map<string, RuntimeValue>();
+  // Public so the alias sweep (runtime/aliasing.ts) can iterate the
+  // local bindings of every env in the chain. Treat as read-only outside
+  // this class — use set/get/setLocal/clearLocals to mutate.
+  public vars = new Map<string, RuntimeValue>();
   /** When true, writes to variables found in parent go to the parent (nested function semantics). */
   isNested = false;
   /** Nested function definitions registered during execution. Lazy-initialized. */
@@ -62,7 +65,9 @@ export class Environment {
    *  env would strand the handle's closure, so locals must be left alive. */
   nestedHandleCreated = false;
 
-  constructor(private parent?: Environment) {}
+  // `parent` is public so the alias sweep can walk the chain. Read-only
+  // outside this class.
+  constructor(public parent?: Environment) {}
 
   get(name: string): RuntimeValue | undefined {
     if (
