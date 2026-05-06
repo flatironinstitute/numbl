@@ -13,7 +13,6 @@ import {
   isRuntimeLogical,
   isRuntimeString,
   isRuntimeChar,
-  FloatXArray,
 } from "./types.js";
 import { toNumber, toString } from "./convert.js";
 
@@ -49,6 +48,7 @@ import type {
   HeatmapTrace,
   QuiverTrace,
 } from "../../graphics/types.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
 
@@ -2187,7 +2187,7 @@ export function parseSwarmchart3Args(args: RuntimeValue[]): Plot3Trace[] {
 function tensorFromArray(arr: number[]): RuntimeValue {
   return {
     kind: "tensor",
-    data: new FloatXArray(arr),
+    data: allocFloat64Array(arr),
     shape: [1, arr.length],
   } as RuntimeTensor;
 }

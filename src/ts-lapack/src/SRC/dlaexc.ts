@@ -23,6 +23,7 @@ import { dlange } from "./dlange.js";
 import { dlartg } from "./dlartg.js";
 import { drot } from "../BLAS/drot.js";
 import { MACH_PREC, MACH_SFMIN, LEFT, RIGHT } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // "ALL" uplo constant for dlacpy (anything other than UPPER/LOWER)
 const ALL = -1;
@@ -116,7 +117,7 @@ export function dlaexc(
     // Copy the diagonal block of order N1+N2 to the local array D
     // and compute its norm.
     const nd = n1 + n2;
-    const d = new Float64Array(LDD * 4);
+    const d = allocFloat64Array(LDD * 4);
     dlacpy(ALL, nd, nd, t, T_(j1, j1), ldt, d, 0, LDD);
     const dnorm = dlange(NORM_MAX, nd, nd, d, 0, LDD, work, workOff);
 
@@ -126,7 +127,7 @@ export function dlaexc(
     const thresh = Math.max(TEN * eps * dnorm, smlnum);
 
     // Solve T11*X - X*T22 = scale*T12 for X.
-    const x = new Float64Array(LDX * 2);
+    const x = allocFloat64Array(LDX * 2);
     const solveRes = dlasy2(
       false,
       false,
@@ -155,7 +156,7 @@ export function dlaexc(
     if (k === 1) {
       // N1 = 1, N2 = 2: generate elementary reflector H so that:
       //   ( scale, X11, X12 ) H = ( 0, 0, * )
-      const uArr = new Float64Array(3);
+      const uArr = allocFloat64Array(3);
       uArr[0] = scale;
       uArr[1] = x[X(1, 1)];
       uArr[2] = x[X(1, 2)];
@@ -209,7 +210,7 @@ export function dlaexc(
       //   H ( -X11 ) = ( * )
       //     ( -X21 )   ( 0 )
       //     ( scale)   ( 0 )
-      const uArr = new Float64Array(3);
+      const uArr = allocFloat64Array(3);
       uArr[0] = -x[X(1, 1)];
       uArr[1] = -x[X(2, 1)];
       uArr[2] = scale;
@@ -248,7 +249,7 @@ export function dlaexc(
       }
     } else if (k === 3) {
       // N1 = 2, N2 = 2: generate elementary reflectors H(1) and H(2)
-      const u1 = new Float64Array(3);
+      const u1 = allocFloat64Array(3);
       u1[0] = -x[X(1, 1)];
       u1[1] = -x[X(2, 1)];
       u1[2] = scale;
@@ -257,7 +258,7 @@ export function dlaexc(
       const tau1 = rfg1.tau;
 
       const temp = -tau1 * (x[X(1, 2)] + u1[1] * x[X(2, 2)]);
-      const u2 = new Float64Array(3);
+      const u2 = allocFloat64Array(3);
       u2[0] = -temp * u1[1] - x[X(2, 2)];
       u2[1] = -temp * u1[2];
       u2[2] = scale;

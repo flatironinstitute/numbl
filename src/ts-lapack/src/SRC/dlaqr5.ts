@@ -22,6 +22,7 @@ import { dlaqr1 } from "./dlaqr1.js";
 import { dlarfg } from "./dlarfg.js";
 import { dlaset } from "./dlaset.js";
 import { MACH_SFMIN, MACH_PREC, TRANS, NOTRANS } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // "ALL" uplo constant for dlacpy/dlaset (anything other than UPPER/LOWER)
 const ALL = -1;
@@ -155,7 +156,7 @@ export function dlaqr5(
   const kdu = 4 * nbmps;
 
   // Local array
-  const vt = new Float64Array(3);
+  const vt = allocFloat64Array(3);
 
   // Create and chase chains of NBMPS bulges
   for (

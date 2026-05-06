@@ -29,6 +29,7 @@
 import { dorg2r } from "./dorg2r.js";
 import { ilaenv } from "../utils/ilaenv.js";
 import { xerbla } from "../utils/xerbla.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 export function dorgqr(
   m: number,
@@ -91,7 +92,7 @@ export function dorgqr(
 
   // Use unblocked code for the last or only block
   if (kk < n) {
-    const work = new Float64Array(Math.max(1, n));
+    const work = allocFloat64Array(Math.max(1, n));
     dorg2r(
       m - kk,
       n - kk,
@@ -109,7 +110,7 @@ export function dorgqr(
   if (kk > 0) {
     // Blocked code (in practice unreachable with ilaenv returning 1)
     const ldwork = n;
-    const work = new Float64Array(iws);
+    const work = allocFloat64Array(iws);
     const ki = Math.floor((k - nx - 1) / nb) * nb;
     for (let i = ki + 1; i >= 1; i -= nb) {
       const ib = Math.min(nb, k - i + 1);

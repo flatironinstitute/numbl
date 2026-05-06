@@ -2,7 +2,7 @@
  * Unary math builtins: trig, hyperbolic, exp/log, rounding, abs, sqrt, sign.
  */
 
-import { FloatXArray, isRuntimeTensor } from "../../runtime/types.js";
+import { isRuntimeTensor } from "../../runtime/types.js";
 import {
   defineBuiltin,
   unaryElemwiseCases,
@@ -26,6 +26,7 @@ import {
   erfcxScalar,
 } from "../../helpers/erf.js";
 import { lanczosGamma } from "../../helpers/bessel.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 
@@ -281,8 +282,8 @@ defineBuiltin({
         }
         if (isRuntimeTensor(v) && !v.imag) {
           const n = v.data.length;
-          const fData = new FloatXArray(n);
-          const eData = new FloatXArray(n);
+          const fData = allocFloat64Array(n);
+          const eData = allocFloat64Array(n);
           for (let i = 0; i < n; i++) {
             const { f, e } = frexpScalar(v.data[i]);
             fData[i] = f;

@@ -35,6 +35,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { allocFloat64Array } from "../src/numbl-core/executors/jsJit/helpers/alloc";
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -208,10 +209,10 @@ function main(): void {
   // Parity check at a moderate N: JS and C should agree to ~FP rounding.
   {
     const N = 10_000;
-    const x = new Float64Array(N);
+    const x = allocFloat64Array(N);
     for (let i = 0; i < N; i++) x[i] = (i + 1) / N; // (0, 1]
-    const yJs = new Float64Array(N);
-    const yC = new Float64Array(N);
+    const yJs = allocFloat64Array(N);
+    const yC = allocFloat64Array(N);
     for (let i = 0; i < N; i++) yJs[i] = Math.exp(1 + Math.sqrt(x[i]));
     fused(N, x, yC);
     let maxAbs = 0;
@@ -225,8 +226,8 @@ function main(): void {
   }
 
   // Measure koffi call overhead once — N-independent for noop paths.
-  const xDummy = new Float64Array(1);
-  const yDummy = new Float64Array(1);
+  const xDummy = allocFloat64Array(1);
+  const yDummy = allocFloat64Array(1);
   const noopOnce = timePerCall(() => noop(), targetMs);
   const noopArgsOnce = timePerCall(() => noopArgs(1, xDummy, yDummy), targetMs);
   console.log(
@@ -254,9 +255,9 @@ function main(): void {
   console.log("-".repeat(header.length));
 
   for (const N of sizes) {
-    const x = new Float64Array(N);
+    const x = allocFloat64Array(N);
     for (let i = 0; i < N; i++) x[i] = (i + 1) / N;
-    const y = new Float64Array(N);
+    const y = allocFloat64Array(N);
 
     const jsFn = (): void => {
       for (let i = 0; i < N; i++) y[i] = Math.exp(1 + Math.sqrt(x[i]));
@@ -299,9 +300,9 @@ function main(): void {
   // Estimate b, c from the largest N we swept; a from noop-args.
   const largestN = sizes[sizes.length - 1];
   {
-    const x = new Float64Array(largestN);
+    const x = allocFloat64Array(largestN);
     for (let i = 0; i < largestN; i++) x[i] = (i + 1) / largestN;
-    const y = new Float64Array(largestN);
+    const y = allocFloat64Array(largestN);
     const jsT = timePerCall(() => {
       for (let i = 0; i < largestN; i++) y[i] = Math.exp(1 + Math.sqrt(x[i]));
     }, targetMs);

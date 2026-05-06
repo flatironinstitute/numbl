@@ -19,10 +19,10 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeChar,
   isRuntimeString,
-  FloatXArray,
 } from "../runtime/types.js";
 import { sparseToDense } from "../../numbl-core/helpers/sparse-arithmetic.js";
 import { END_SENTINEL } from "./sentinels.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Deferred Range ──────────────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ function isRuntimeValue(v: unknown): v is RuntimeValue {
 }
 
 export function ensureRuntimeValue(v: unknown): RuntimeValue {
-  if (v === undefined) return RTV.tensor(new FloatXArray(0), [0]);
+  if (v === undefined) return RTV.tensor(allocFloat64Array(0), [0]);
   if (!isRuntimeValue(v)) {
     throw new RuntimeError(
       `Expected a runtime value, got ${JSON.stringify(v)}`
@@ -107,26 +107,26 @@ export function elementWiseLogicalOp(
     return elementWiseLogicalOp(a, sparseToDense(b), op);
   const aIsT = isRuntimeTensor(a);
   const bIsT = isRuntimeTensor(b);
-  const aData = aIsT ? a.data : new FloatXArray([toNumber(a)]);
-  const bData = bIsT ? b.data : new FloatXArray([toNumber(b)]);
+  const aData = aIsT ? a.data : allocFloat64Array([toNumber(a)]);
+  const bData = bIsT ? b.data : allocFloat64Array([toNumber(b)]);
   const aShape = aIsT ? a.shape : [1, 1];
   const bShape = bIsT ? b.shape : [1, 1];
   if (aData.length === bData.length) {
-    const result = new FloatXArray(aData.length);
+    const result = allocFloat64Array(aData.length);
     for (let i = 0; i < aData.length; i++) result[i] = op(aData[i], bData[i]);
     const t = RTV.tensor(result, aIsT ? aShape : bShape);
     t._isLogical = true;
     return t;
   }
   if (aData.length === 1) {
-    const result = new FloatXArray(bData.length);
+    const result = allocFloat64Array(bData.length);
     for (let i = 0; i < bData.length; i++) result[i] = op(aData[0], bData[i]);
     const t = RTV.tensor(result, bShape);
     t._isLogical = true;
     return t;
   }
   if (bData.length === 1) {
-    const result = new FloatXArray(aData.length);
+    const result = allocFloat64Array(aData.length);
     for (let i = 0; i < aData.length; i++) result[i] = op(aData[i], bData[0]);
     const t = RTV.tensor(result, aShape);
     t._isLogical = true;

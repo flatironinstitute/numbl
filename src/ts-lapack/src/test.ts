@@ -5,6 +5,7 @@
 //   dgetrf: factor A = P*L*U, reconstruct P^-1*L*U and compare to original A
 //   dgetri: factor then invert A, verify A_inv * A ≈ I
 
+import { allocFloat64Array } from "../../numbl-core/executors/jsJit/helpers/alloc.js";
 import { dgetrf } from "./SRC/dgetrf.js";
 import { dgetri } from "./SRC/dgetri.js";
 
@@ -19,7 +20,7 @@ function idx(i: number, j: number, lda: number): number {
 
 /** Matrix-matrix multiply C = A*B, all n×n, column-major */
 function matmul(a: Float64Array, b: Float64Array, n: number): Float64Array {
-  const c = new Float64Array(n * n);
+  const c = allocFloat64Array(n * n);
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= n; j++) {
       let s = 0.0;
@@ -39,21 +40,21 @@ function maxabs(v: Float64Array): number {
 
 /** Subtract two Float64Arrays element-wise */
 function sub(a: Float64Array, b: Float64Array): Float64Array {
-  const r = new Float64Array(a.length);
+  const r = allocFloat64Array(a.length);
   for (let i = 0; i < a.length; i++) r[i] = a[i] - b[i];
   return r;
 }
 
 /** Identity matrix n×n, column-major */
 function eye(n: number): Float64Array {
-  const I = new Float64Array(n * n);
+  const I = allocFloat64Array(n * n);
   for (let i = 1; i <= n; i++) I[idx(i, i, n)] = 1.0;
   return I;
 }
 
 /** Seeded pseudo-random matrix (deterministic) */
 function randMatrix(n: number, seed: number): Float64Array {
-  const a = new Float64Array(n * n);
+  const a = allocFloat64Array(n * n);
   let s = seed;
   for (let i = 0; i < n * n; i++) {
     s = (s * 1664525 + 1013904223) >>> 0;
@@ -100,8 +101,8 @@ function testDgetrf(n: number, label: string): void {
   }
 
   // Extract L and U from the packed LU
-  const L = new Float64Array(n * n);
-  const U = new Float64Array(n * n);
+  const L = allocFloat64Array(n * n);
+  const U = allocFloat64Array(n * n);
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= n; j++) {
       if (i > j) L[idx(i, j, n)] = A[idx(i, j, n)];

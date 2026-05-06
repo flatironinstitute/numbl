@@ -45,6 +45,7 @@ import {
   LEFT,
   RIGHT,
 } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // "ALL" uplo constant for dlacpy/dlaset (anything other than UPPER/LOWER)
 const ALL = -1;
@@ -913,7 +914,7 @@ export function dlaqr0(
     let ndec = -1;
 
     // Dummy 1x1 Z array for non-wantz recursive calls
-    const zdum = new Float64Array(1);
+    const zdum = allocFloat64Array(1);
 
     // ==== Main Loop ====
     for (let it = 1; it <= itmax; it++) {

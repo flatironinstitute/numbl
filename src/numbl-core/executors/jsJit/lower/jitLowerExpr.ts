@@ -34,12 +34,12 @@ import {
 } from "../../../interpreter/builtins/index.js";
 import { isRuntimeFunction } from "../../../runtime/types.js";
 import type { RuntimeValue } from "../../../runtime/types.js";
-import { FloatXArray } from "../../../runtime/types.js";
 import { RTV } from "../../../runtime/constructors.js";
 import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
 import { buildJitSourceComment } from "../shared.js";
+import { allocFloat64Array } from "../helpers/alloc.js";
 
 const LOG_CJIT_MISSES =
   typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;
@@ -1989,8 +1989,8 @@ function representativeValue(t: JitType): unknown | undefined {
       if (!shape || shape.length === 0) return undefined;
       const concrete = shape.map(d => (d > 0 ? d : 1));
       const total = concrete.reduce((a, b) => a * b, 1);
-      const data = new FloatXArray(total);
-      const imag = t.isComplex ? new FloatXArray(total) : undefined;
+      const data = allocFloat64Array(total);
+      const imag = t.isComplex ? allocFloat64Array(total) : undefined;
       return RTV.tensor(data, concrete, imag);
     }
     case "struct": {

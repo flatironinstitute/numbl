@@ -30,7 +30,6 @@ import {
   isRuntimeClassInstanceArray,
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
-  FloatXArray,
   type RuntimeClassInstanceArray,
 } from "../runtime/types.js";
 import {
@@ -46,6 +45,7 @@ import {
 } from "./runtimeHelpers.js";
 import { resolveHorzcat as _resolveHorzcat } from "./runtimeOperators.js";
 import type { Runtime } from "./runtime.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 /**
  * Resolve indices that may contain END or COLON sentinels, deferred ranges, or functions.
@@ -499,7 +499,7 @@ export function indexStore(
     if (isRuntimeClassInstance(rhsCheck)) {
       return rhsCheck;
     }
-    base = RTV.tensor(new FloatXArray(0), [0, 0]);
+    base = RTV.tensor(allocFloat64Array(0), [0, 0]);
   }
   let mv = ensureRuntimeValue(base);
   // Dictionary paren-indexed assignment: d(key) = value or d(key) = [] for removal
@@ -545,7 +545,7 @@ export function indexStore(
         const el = existingElements[ei];
         for (const f of allFieldNames) {
           if (!el.fields.has(f)) {
-            el.fields.set(f, RTV.tensor(new FloatXArray(0), [0, 0]));
+            el.fields.set(f, RTV.tensor(allocFloat64Array(0), [0, 0]));
           }
         }
       }
@@ -555,7 +555,7 @@ export function indexStore(
             new Map(
               allFieldNames.map(f => [
                 f,
-                RTV.tensor(new FloatXArray(0), [0, 0]),
+                RTV.tensor(allocFloat64Array(0), [0, 0]),
               ])
             )
           )
@@ -669,22 +669,22 @@ export function indexStore(
   let wasScalar = false;
   if (!isRuntimeTensor(mv)) {
     if (isRuntimeNumber(mv)) {
-      mv = RTV.tensor(new FloatXArray([mv]), [1, 1]);
+      mv = RTV.tensor(allocFloat64Array([mv]), [1, 1]);
       wasScalar = true;
     } else if (isRuntimeLogical(mv)) {
-      const t = RTV.tensor(new FloatXArray([mv ? 1 : 0]), [1, 1]);
+      const t = RTV.tensor(allocFloat64Array([mv ? 1 : 0]), [1, 1]);
       t._isLogical = true;
       mv = t;
       wasScalar = true;
     } else if (isRuntimeComplexNumber(mv)) {
       mv = RTV.tensor(
-        new FloatXArray([mv.re]),
+        allocFloat64Array([mv.re]),
         [1, 1],
-        new FloatXArray([mv.im])
+        allocFloat64Array([mv.im])
       );
       wasScalar = true;
     } else {
-      mv = RTV.tensor(new FloatXArray(0), [0, 0]);
+      mv = RTV.tensor(allocFloat64Array(0), [0, 0]);
     }
   }
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));

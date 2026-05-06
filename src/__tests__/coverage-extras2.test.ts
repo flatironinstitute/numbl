@@ -12,11 +12,11 @@ import { displayValue } from "../numbl-core/runtime/display.js";
 import { valuesAreEqual } from "../numbl-core/runtime/compare.js";
 import { RTV } from "../numbl-core/runtime/constructors.js";
 import {
-  FloatXArray,
   type RuntimeValue,
   type RuntimeClassInstance,
   type RuntimeFunction,
 } from "../numbl-core/runtime/types.js";
+import { allocFloat64Array } from "../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // ── RuntimeError ────────────────────────────────────────────────────
 
@@ -196,13 +196,13 @@ describe("toNumber", () => {
   });
 
   it("converts 1x1 tensor to number", () => {
-    expect(toNumber(RTV.tensor(new FloatXArray([42]), [1, 1]))).toBe(42);
+    expect(toNumber(RTV.tensor(allocFloat64Array([42]), [1, 1]))).toBe(42);
   });
 
   it("throws for non-scalar tensor", () => {
-    expect(() => toNumber(RTV.tensor(new FloatXArray([1, 2]), [1, 2]))).toThrow(
-      "non-scalar"
-    );
+    expect(() =>
+      toNumber(RTV.tensor(allocFloat64Array([1, 2]), [1, 2]))
+    ).toThrow("non-scalar");
   });
 
   it("converts complex with zero imag", () => {
@@ -226,26 +226,28 @@ describe("toNumber", () => {
 
 describe("toBool", () => {
   it("tensor with all nonzero is truthy", () => {
-    expect(toBool(RTV.tensor(new FloatXArray([1, 2, 3]), [1, 3]))).toBe(true);
+    expect(toBool(RTV.tensor(allocFloat64Array([1, 2, 3]), [1, 3]))).toBe(true);
   });
 
   it("tensor with a zero is falsy", () => {
-    expect(toBool(RTV.tensor(new FloatXArray([1, 0, 3]), [1, 3]))).toBe(false);
+    expect(toBool(RTV.tensor(allocFloat64Array([1, 0, 3]), [1, 3]))).toBe(
+      false
+    );
   });
 
   it("empty tensor is falsy", () => {
-    expect(toBool(RTV.tensor(new FloatXArray([]), [0, 0]))).toBe(false);
+    expect(toBool(RTV.tensor(allocFloat64Array([]), [0, 0]))).toBe(false);
   });
 
   it("complex tensor all nonzero is truthy", () => {
-    const t = RTV.tensor(new FloatXArray([0, 0]), [1, 2]);
-    t.imag = new FloatXArray([1, 1]);
+    const t = RTV.tensor(allocFloat64Array([0, 0]), [1, 2]);
+    t.imag = allocFloat64Array([1, 1]);
     expect(toBool(t)).toBe(true);
   });
 
   it("complex tensor with both zero is falsy", () => {
-    const t = RTV.tensor(new FloatXArray([0, 1]), [1, 2]);
-    t.imag = new FloatXArray([0, 0]);
+    const t = RTV.tensor(allocFloat64Array([0, 1]), [1, 2]);
+    t.imag = allocFloat64Array([0, 0]);
     expect(toBool(t)).toBe(false);
   });
 
@@ -296,7 +298,7 @@ describe("toString", () => {
   });
 
   it("throws for tensor", () => {
-    expect(() => toString(RTV.tensor(new FloatXArray([1]), [1, 1]))).toThrow(
+    expect(() => toString(RTV.tensor(allocFloat64Array([1]), [1, 1]))).toThrow(
       "Cannot convert"
     );
   });
@@ -316,16 +318,18 @@ describe("displayValue", () => {
   });
 
   it("displays empty tensor as []", () => {
-    expect(displayValue(RTV.tensor(new FloatXArray([]), [0, 0]))).toBe("[]");
+    expect(displayValue(RTV.tensor(allocFloat64Array([]), [0, 0]))).toBe("[]");
   });
 
   it("displays scalar tensor", () => {
-    expect(displayValue(RTV.tensor(new FloatXArray([42]), [1, 1]))).toBe("42");
+    expect(displayValue(RTV.tensor(allocFloat64Array([42]), [1, 1]))).toBe(
+      "42"
+    );
   });
 
   it("displays complex scalar tensor", () => {
-    const t = RTV.tensor(new FloatXArray([3]), [1, 1]);
-    t.imag = new FloatXArray([4]);
+    const t = RTV.tensor(allocFloat64Array([3]), [1, 1]);
+    t.imag = allocFloat64Array([4]);
     const s = displayValue(t);
     expect(s).toContain("3");
     expect(s).toContain("4");
@@ -393,7 +397,7 @@ describe("displayValue", () => {
   });
 
   it("displays 3D tensor page by page", () => {
-    const data = new FloatXArray([1, 2, 3, 4, 5, 6, 7, 8]);
+    const data = allocFloat64Array([1, 2, 3, 4, 5, 6, 7, 8]);
     const t = RTV.tensor(data, [2, 2, 2]);
     const s = displayValue(t);
     expect(s).toContain("(:,:,1)");
@@ -429,17 +433,17 @@ describe("valuesAreEqual additional", () => {
   });
 
   it("compares tensors with different imag presence", () => {
-    const a = RTV.tensor(new FloatXArray([1]), [1, 1]);
-    const b = RTV.tensor(new FloatXArray([1]), [1, 1]);
-    a.imag = new FloatXArray([0]);
+    const a = RTV.tensor(allocFloat64Array([1]), [1, 1]);
+    const b = RTV.tensor(allocFloat64Array([1]), [1, 1]);
+    a.imag = allocFloat64Array([0]);
     expect(valuesAreEqual(a, b)).toBe(false);
   });
 
   it("compares tensors with different imag values", () => {
-    const a = RTV.tensor(new FloatXArray([1]), [1, 1]);
-    const b = RTV.tensor(new FloatXArray([1]), [1, 1]);
-    a.imag = new FloatXArray([1]);
-    b.imag = new FloatXArray([2]);
+    const a = RTV.tensor(allocFloat64Array([1]), [1, 1]);
+    const b = RTV.tensor(allocFloat64Array([1]), [1, 1]);
+    a.imag = allocFloat64Array([1]);
+    b.imag = allocFloat64Array([2]);
     expect(valuesAreEqual(a, b)).toBe(false);
   });
 

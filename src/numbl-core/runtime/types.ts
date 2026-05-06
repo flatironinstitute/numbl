@@ -2,8 +2,6 @@
 const useFloat32 = import.meta.env?.NUMBL_USE_FLOAT32 === "true" ? true : false;
 
 export const USE_FLOAT32 = useFloat32;
-export const FloatXArray = useFloat32 ? Float32Array : Float64Array;
-export type FloatXArrayType = Float32Array | Float64Array;
 
 export type RuntimeValue =
   | number
@@ -128,8 +126,8 @@ export const kstr = (value: RuntimeValue): string => {
 
 export type RuntimeTensor = {
   kind: "tensor";
-  data: FloatXArrayType; // real part
-  imag?: FloatXArrayType; // imaginary part (optional, undefined means all zeros)
+  data: Float64Array; // real part
+  imag?: Float64Array; // imaginary part (optional, undefined means all zeros)
   shape: number[]; // e.g. [3,4] for 3x4 matrix
   /** When true, this tensor represents a logical (boolean) array from comparisons/logical ops. */
   _isLogical?: boolean;

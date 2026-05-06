@@ -7,7 +7,6 @@ import {
   type RuntimeTensor,
   type RuntimeCell,
   type RuntimeStruct,
-  FloatXArray,
   isRuntimeCell,
   isRuntimeTensor,
   isRuntimeComplexNumber,
@@ -24,6 +23,7 @@ import {
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { numel } from "./utils.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 /** Create a range start:end or start:step:end */
 export function makeRangeTensor(
@@ -41,10 +41,10 @@ export function makeRangeTensor(
     n = 0;
   }
   if (n === 0) {
-    return RTV.tensor(new FloatXArray(0), [1, 0]) as RuntimeTensor;
+    return RTV.tensor(allocFloat64Array(0), [1, 0]) as RuntimeTensor;
   }
   // Compute each element as start + i*step to avoid accumulating error
-  const values = new FloatXArray(n);
+  const values = allocFloat64Array(n);
   for (let i = 0; i < n; i++) {
     values[i] = start + i * step;
   }
@@ -61,7 +61,7 @@ export function makeRangeTensor(
 
 /** Horizontal concatenation [A, B] */
 export function horzcat(...values: RuntimeValue[]): RuntimeValue {
-  if (values.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+  if (values.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
   if (values.length === 1) return values[0];
 
   // If any element is sparse, concatenate as sparse
@@ -108,7 +108,7 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
 
 /** Vertical concatenation [A; B] */
 export function vertcat(...values: RuntimeValue[]): RuntimeValue {
-  if (values.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+  if (values.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
   if (values.length === 1) return values[0];
 
   // If any element is sparse, concatenate as sparse
@@ -186,14 +186,14 @@ function toSparseForCat(v: RuntimeValue): RuntimeSparseMatrix {
         1,
         new Int32Array(0),
         new Int32Array([0, 0]),
-        new Float64Array(0)
+        allocFloat64Array(0)
       );
     return RTV.sparseMatrix(
       1,
       1,
       new Int32Array([0]),
       new Int32Array([0, 1]),
-      new Float64Array([v])
+      allocFloat64Array([v])
     );
   }
   if (isRuntimeLogical(v)) {
@@ -204,14 +204,14 @@ function toSparseForCat(v: RuntimeValue): RuntimeSparseMatrix {
         1,
         new Int32Array(0),
         new Int32Array([0, 0]),
-        new Float64Array(0)
+        allocFloat64Array(0)
       );
     return RTV.sparseMatrix(
       1,
       1,
       new Int32Array([0]),
       new Int32Array([0, 1]),
-      new Float64Array([val])
+      allocFloat64Array([val])
     );
   }
   if (isRuntimeComplexNumber(v)) {
@@ -221,15 +221,15 @@ function toSparseForCat(v: RuntimeValue): RuntimeSparseMatrix {
         1,
         new Int32Array(0),
         new Int32Array([0, 0]),
-        new Float64Array(0)
+        allocFloat64Array(0)
       );
     return RTV.sparseMatrix(
       1,
       1,
       new Int32Array([0]),
       new Int32Array([0, 1]),
-      new Float64Array([v.re]),
-      v.im !== 0 ? new Float64Array([v.im]) : undefined
+      allocFloat64Array([v.re]),
+      v.im !== 0 ? allocFloat64Array([v.im]) : undefined
     );
   }
   if (isRuntimeTensor(v)) {
@@ -260,8 +260,8 @@ function toSparseForCat(v: RuntimeValue): RuntimeSparseMatrix {
       n,
       new Int32Array(irArr),
       jc,
-      new Float64Array(prArr),
-      isComplex ? new Float64Array(piArr) : undefined
+      allocFloat64Array(prArr),
+      isComplex ? allocFloat64Array(piArr) : undefined
     );
   }
   throw new RuntimeError(`Cannot concatenate ${kstr(v)} into sparse matrix`);
@@ -280,7 +280,7 @@ function sparseCatAlongDim(
       0,
       new Int32Array(0),
       new Int32Array([0]),
-      new Float64Array(0)
+      allocFloat64Array(0)
     );
   if (parts.length === 1) return parts[0];
 
@@ -299,8 +299,8 @@ function sparseCatAlongDim(
     const isComplex = parts.some(p => p.pi !== undefined);
     const totalNnz = parts.reduce((s, p) => s + p.jc[p.n], 0);
     const ir = new Int32Array(totalNnz);
-    const pr = new Float64Array(totalNnz);
-    const pi = isComplex ? new Float64Array(totalNnz) : undefined;
+    const pr = allocFloat64Array(totalNnz);
+    const pi = isComplex ? allocFloat64Array(totalNnz) : undefined;
     const jc = new Int32Array(totalN + 1);
     let nnzOff = 0;
     let colOff = 0;
@@ -332,8 +332,8 @@ function sparseCatAlongDim(
     const isComplex = parts.some(p => p.pi !== undefined);
     const totalNnz = parts.reduce((s, p) => s + p.jc[p.n], 0);
     const ir = new Int32Array(totalNnz);
-    const pr = new Float64Array(totalNnz);
-    const pi = isComplex ? new Float64Array(totalNnz) : undefined;
+    const pr = allocFloat64Array(totalNnz);
+    const pi = isComplex ? allocFloat64Array(totalNnz) : undefined;
     const jc = new Int32Array(n + 1);
     let nnzOff = 0;
     // For each column, concatenate all parts' entries for that column
@@ -363,10 +363,10 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   );
   let tensors: RuntimeTensor[] = values.map(v => {
     if (isRuntimeNumber(v))
-      return RTV.tensor(new FloatXArray([v]), [1, 1]) as RuntimeTensor;
+      return RTV.tensor(allocFloat64Array([v]), [1, 1]) as RuntimeTensor;
     if (isRuntimeLogical(v)) {
       const t = RTV.tensor(
-        new FloatXArray([v ? 1 : 0]),
+        allocFloat64Array([v ? 1 : 0]),
         [1, 1]
       ) as RuntimeTensor;
       t._isLogical = true;
@@ -374,9 +374,9 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
     }
     if (isRuntimeComplexNumber(v))
       return RTV.tensor(
-        new FloatXArray([v.re]),
+        allocFloat64Array([v.re]),
         [1, 1],
-        new FloatXArray([v.im])
+        allocFloat64Array([v.im])
       ) as RuntimeTensor;
     if (isRuntimeTensor(v)) return v;
     throw new RuntimeError(`Cannot concatenate ${kstr(v)} into matrix`);
@@ -384,7 +384,7 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
 
   // Filter out [0,0] tensors (always safe to drop).
   tensors = tensors.filter(t => t.shape.some(d => d > 0));
-  if (tensors.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+  if (tensors.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
   if (tensors.length === 1) return tensors[0];
 
   // Determine max ndim across all tensors (at least 2)
@@ -413,7 +413,7 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
     });
     tensors = tensors.filter((_, i) => keep[i]);
     shapes = shapes.filter((_, i) => keep[i]);
-    if (tensors.length === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+    if (tensors.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
     if (tensors.length === 1) return tensors[0];
   }
 
@@ -435,8 +435,8 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
   const totalElems = numel(resultShape);
 
   const isComplex = tensors.some(t => t.imag !== undefined);
-  const resultRe = new FloatXArray(totalElems);
-  const resultIm = isComplex ? new FloatXArray(totalElems) : undefined;
+  const resultRe = allocFloat64Array(totalElems);
+  const resultIm = isComplex ? allocFloat64Array(totalElems) : undefined;
 
   // Copy blocks using stride-based arithmetic (column-major layout).
   // strideDim = product of dims below dimIdx (size of one contiguous "column" block)

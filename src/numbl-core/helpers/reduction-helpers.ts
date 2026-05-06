@@ -5,7 +5,6 @@
 
 import { RuntimeValue, RTV, toString, RuntimeError } from "../runtime/index.js";
 import {
-  FloatXArray,
   isRuntimeChar,
   isRuntimeNumber,
   isRuntimeTensor,
@@ -13,7 +12,7 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
-import { uninitFloatX } from "../executors/jsJit/helpers/jitHelpersTensor.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
@@ -75,9 +74,9 @@ export function firstReduceDim(shape: number[]): number {
 /** Return a deep copy of a tensor (data + shape + optional imag). */
 export function copyTensor(v: RuntimeTensor): RuntimeValue {
   return RTV.tensor(
-    new FloatXArray(v.data),
+    allocFloat64Array(v.data),
     [...v.shape],
-    v.imag ? new FloatXArray(v.imag) : undefined
+    v.imag ? allocFloat64Array(v.imag) : undefined
   );
 }
 
@@ -103,7 +102,7 @@ function dimReduce2DReal(
   const n = v.shape[1];
   const data = v.data;
   if (dim === 1) {
-    const result = uninitFloatX(n);
+    const result = allocFloat64Array(n);
     const count = m;
     if (opCode === OpReduce.SUM || opCode === OpReduce.MEAN) {
       for (let j = 0; j < n; j++) {
@@ -145,7 +144,7 @@ function dimReduce2DReal(
     return RTV.tensor(result, [1, n]);
   }
   if (dim === 2) {
-    const result = uninitFloatX(m);
+    const result = allocFloat64Array(m);
     const count = n;
     if (opCode === OpReduce.SUM || opCode === OpReduce.MEAN) {
       for (let i = 0; i < m; i++) result[i] = initialValue;
@@ -216,8 +215,8 @@ function dimReduce(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return copyTensor(v);
 
-  const result = uninitFloatX(info.totalElems);
-  const resultImag = v.imag ? uninitFloatX(info.totalElems) : undefined;
+  const result = allocFloat64Array(info.totalElems);
+  const resultImag = v.imag ? allocFloat64Array(info.totalElems) : undefined;
 
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let acc = initialValue;
@@ -252,7 +251,7 @@ function dimReduceOmitNaN(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) return copyTensor(v);
 
-  const result = uninitFloatX(info.totalElems);
+  const result = allocFloat64Array(info.totalElems);
 
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let acc = initialValue;
@@ -277,11 +276,11 @@ function sliceDimReduce(
   sliceFn: (slice: ArrayLike<number>) => number
 ): RuntimeValue {
   const info = forEachSlice(v.shape, dim, () => {});
-  if (!info) return RTV.tensor(new FloatXArray(v.data), [...v.shape]);
+  if (!info) return RTV.tensor(allocFloat64Array(v.data), [...v.shape]);
 
-  const result = uninitFloatX(info.totalElems);
+  const result = allocFloat64Array(info.totalElems);
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
-    const slice = uninitFloatX(srcIndices.length);
+    const slice = allocFloat64Array(srcIndices.length);
     for (let k = 0; k < srcIndices.length; k++) {
       slice[k] = v.data[srcIndices[k]];
     }
@@ -304,8 +303,8 @@ export function complexProd(v: RuntimeTensor, dim?: number): RuntimeValue {
     const info = forEachSlice(v.shape, dim, () => {});
     if (!info) return copyTensor(v);
 
-    const resultRe = uninitFloatX(info.totalElems);
-    const resultIm = uninitFloatX(info.totalElems);
+    const resultRe = allocFloat64Array(info.totalElems);
+    const resultIm = allocFloat64Array(info.totalElems);
     forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
       let accRe = 1,
         accIm = 0;
@@ -352,7 +351,7 @@ export function scanLogical(
   // Fast path via tensor-ops layer when data is Float64Array.
   if (data instanceof Float64Array && (!imag || imag instanceof Float64Array)) {
     const op = mode === "any" ? OpReduce.ANY : OpReduce.ALL;
-    const out = new Float64Array(1);
+    const out = allocFloat64Array(1);
     if (imag) {
       tensorOps.complexFlatReduce(
         op,
@@ -384,7 +383,7 @@ export function logicalAlongDim(
   const info = forEachSlice(v.shape, dim, () => {});
   if (!info) {
     // dim exceeds rank: element-wise cast to logical
-    const result = uninitFloatX(v.data.length);
+    const result = allocFloat64Array(v.data.length);
     for (let i = 0; i < v.data.length; i++)
       result[i] = v.data[i] !== 0 || (v.imag && v.imag[i] !== 0) ? 1 : 0;
     const t = RTV.tensor(result, [...v.shape]);
@@ -392,7 +391,7 @@ export function logicalAlongDim(
     return t;
   }
 
-  const result = uninitFloatX(info.totalElems);
+  const result = allocFloat64Array(info.totalElems);
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     let val: boolean = mode === "all";
     for (let k = 0; k < srcIndices.length; k++) {
@@ -447,13 +446,13 @@ export function sparseSum(v: RuntimeSparseMatrix, dim: number): RuntimeValue {
       v.n,
       new Int32Array(irArr),
       jc,
-      new Float64Array(prArr),
-      isComplex ? new Float64Array(piArr) : undefined
+      allocFloat64Array(prArr),
+      isComplex ? allocFloat64Array(piArr) : undefined
     );
   }
   // dim === 2: Sum along rows → m × 1 dense column
-  const result = new FloatXArray(v.m);
-  const resultIm = isComplex ? new FloatXArray(v.m) : undefined;
+  const result = allocFloat64Array(v.m);
+  const resultIm = isComplex ? allocFloat64Array(v.m) : undefined;
   for (let c = 0; c < v.n; c++) {
     for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
       result[v.ir[k]] += v.pr[k];
@@ -490,7 +489,7 @@ export function sparseAnyAll(
       v.n,
       new Int32Array(irArr),
       jc,
-      new Float64Array(prArr)
+      allocFloat64Array(prArr)
     );
   }
   // dim === 2: Along rows
@@ -503,7 +502,7 @@ export function sparseAnyAll(
       if (nnzPerRow) nnzPerRow[v.ir[k]]++;
     }
   }
-  const result = uninitFloatX(v.m);
+  const result = allocFloat64Array(v.m);
   for (let r = 0; r < v.m; r++) {
     if (mode === "any") result[r] = hasNonzero[r] ? 1 : 0;
     else result[r] = nnzPerRow![r] === v.n ? 1 : 0;
@@ -542,7 +541,7 @@ export function filterNaN(arr: ArrayLike<number>): Float64Array {
   for (let i = 0; i < arr.length; i++) {
     if (!isNaN(arr[i] as number)) out.push(arr[i] as number);
   }
-  return new Float64Array(out);
+  return allocFloat64Array(out);
 }
 
 // ── Reduction factories ────────────────────────────────────────────────
@@ -567,7 +566,7 @@ export function accumKernel(
   return {
     reduceAll: v => {
       if (opCode !== undefined && v.data instanceof Float64Array) {
-        const out = new Float64Array(1);
+        const out = allocFloat64Array(1);
         tensorOps.realFlatReduce(opCode, v.data.length, v.data, out);
         const re = finalizeFn ? finalizeFn(out[0], v.data.length) : out[0];
         if (v.imag && v.imag instanceof Float64Array) {

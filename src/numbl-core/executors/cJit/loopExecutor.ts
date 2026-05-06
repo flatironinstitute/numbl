@@ -30,6 +30,7 @@ import {
   type VarEncoding,
 } from "./codegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
+import { allocFloat64Array } from "../jsJit/helpers/alloc.js";
 
 interface CLoopCompiled {
   readonly compiled: CompiledC;
@@ -189,7 +190,7 @@ export const cJitLoopExecutor: Executor<LoopLowered, CLoopCompiled | null> = {
       }
     }
 
-    const out = new Float64Array(compiled.outputSlots);
+    const out = allocFloat64Array(compiled.outputSlots);
     try {
       (compiled.compiled.fn as (...a: unknown[]) => unknown)(out, ...args);
     } catch (e) {

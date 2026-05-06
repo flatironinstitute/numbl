@@ -40,6 +40,7 @@ import {
   NONUNIT,
   RIGHT,
 } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 export function dgetri(
   n: number,
@@ -74,7 +75,7 @@ export function dgetri(
 
   // Allocate workspace internally (size = lwkopt)
   const lwork = lwkopt;
-  const work = new Float64Array(lwork);
+  const work = allocFloat64Array(lwork);
   const ldwork = n; // leading dimension of WORK-as-matrix
 
   // Decide effective block size

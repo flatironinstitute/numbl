@@ -7,7 +7,6 @@ import {
   type RuntimeTensor,
   type RuntimeCell,
   type RuntimeSparseMatrix,
-  FloatXArray,
   isRuntimeTensor,
   isRuntimeLogical,
   isRuntimeNumber,
@@ -27,6 +26,7 @@ import { RTV } from "./constructors.js";
 import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
 import { isAliased, type AliasRuntime } from "./aliasing.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Anti-aliasing helper ─────────────────────────────────────────────────
 
@@ -71,7 +71,7 @@ function toReIm(v: RuntimeValue): { re: number; im: number } {
 /** Ensure a tensor has an imag array (allocate if needed). */
 function ensureImag(t: RuntimeTensor): void {
   if (!t.imag) {
-    t.imag = new FloatXArray(t.data.length);
+    t.imag = allocFloat64Array(t.data.length);
   }
 }
 
@@ -148,9 +148,9 @@ function growTensor2D(
   if (newRows <= curRows && newCols <= curCols) return base;
   const nr = Math.max(curRows, newRows);
   const nc = Math.max(curCols, newCols);
-  const newData = new FloatXArray(nr * nc);
+  const newData = allocFloat64Array(nr * nc);
   const hasImag = base.imag !== undefined;
-  const newIm = hasImag ? new FloatXArray(nr * nc) : undefined;
+  const newIm = hasImag ? allocFloat64Array(nr * nc) : undefined;
   for (let c = 0; c < curCols; c++) {
     for (let r = 0; r < curRows; r++) {
       newData[r + c * nr] = base.data[r + c * curRows];
@@ -312,8 +312,8 @@ function sparseSubmatrix(
     nCols,
     new Int32Array(irArr),
     jcNew,
-    new Float64Array(prArr),
-    isComplex ? new Float64Array(piArr) : undefined
+    allocFloat64Array(prArr),
+    isComplex ? allocFloat64Array(piArr) : undefined
   );
 }
 
@@ -351,8 +351,8 @@ function storeIntoSparse(
 
   const nR = rowIdx.length;
   const nC = colIdx.length;
-  const rhsRe = new Float64Array(nR * nC);
-  const rhsIm = new Float64Array(nR * nC);
+  const rhsRe = allocFloat64Array(nR * nC);
+  const rhsIm = allocFloat64Array(nR * nC);
   let rhsHasImag = false;
 
   if (isRuntimeNumber(rhs)) {
@@ -458,8 +458,8 @@ function storeIntoSparse(
     base.n,
     new Int32Array(irArr),
     jc,
-    new Float64Array(prArr),
-    isComplex ? new Float64Array(piArr) : undefined
+    allocFloat64Array(prArr),
+    isComplex ? allocFloat64Array(piArr) : undefined
   );
 }
 
@@ -494,8 +494,8 @@ function indexIntoSparse(
         1,
         new Int32Array(irArr),
         jcNew,
-        new Float64Array(prArr),
-        isComplex ? new Float64Array(piArr) : undefined
+        allocFloat64Array(prArr),
+        isComplex ? allocFloat64Array(piArr) : undefined
       );
     }
 
@@ -539,8 +539,8 @@ function indexIntoSparse(
         n,
         new Int32Array(irArr),
         jcNew,
-        new Float64Array(prArr),
-        isComplex ? new Float64Array(piArr) : undefined
+        allocFloat64Array(prArr),
+        isComplex ? allocFloat64Array(piArr) : undefined
       );
     }
   }
@@ -556,14 +556,14 @@ function indexIntoSparse(
         const end = base.jc[col + 1];
         const nnz = end - start;
         const ir = new Int32Array(nnz);
-        const pr = new Float64Array(nnz);
+        const pr = allocFloat64Array(nnz);
         let pi: Float64Array | undefined;
         for (let k = 0; k < nnz; k++) {
           ir[k] = base.ir[start + k];
           pr[k] = base.pr[start + k];
         }
         if (base.pi !== undefined) {
-          pi = new Float64Array(nnz);
+          pi = allocFloat64Array(nnz);
           for (let k = 0; k < nnz; k++) pi[k] = base.pi[start + k];
         }
         const jc = new Int32Array([0, nnz]);
@@ -591,8 +591,8 @@ function indexIntoSparse(
         nCols,
         new Int32Array(irArr),
         jcNew,
-        new Float64Array(prArr),
-        isComplex ? new Float64Array(piArr) : undefined
+        allocFloat64Array(prArr),
+        isComplex ? allocFloat64Array(piArr) : undefined
       );
     }
 
@@ -627,7 +627,7 @@ function indexIntoScalar(
         if (isRuntimeTensor(idx)) return idx.data.length;
         return 1;
       };
-      return RTV.tensor(new FloatXArray(0), [
+      return RTV.tensor(allocFloat64Array(0), [
         dimSize(indices[0]),
         dimSize(indices[1]),
       ]);
@@ -637,24 +637,24 @@ function indexIntoScalar(
       const is0x0 =
         idx.shape.length === 2 && idx.shape[0] === 0 && idx.shape[1] === 0;
       const outShape = is0x0 ? [0, 0] : [...idx.shape];
-      return RTV.tensor(new FloatXArray(0), outShape);
+      return RTV.tensor(allocFloat64Array(0), outShape);
     }
   }
   // Logical indexing on scalar
   if (indices.length === 1) {
     const idx = indices[0];
     if (isRuntimeLogical(idx)) {
-      if (!idx) return RTV.tensor(new FloatXArray(0), [0, 0]);
+      if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
       return base;
     }
     if (isRuntimeTensor(idx) && idx._isLogical) {
       let count = 0;
       for (let j = 0; j < idx.data.length; j++) if (idx.data[j]) count++;
-      if (count === 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
-      const out = new FloatXArray(count);
+      if (count === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+      const out = allocFloat64Array(count);
       out.fill(isRuntimeNumber(base) ? base : (base as { re: number }).re);
       if (isRuntimeComplexNumber(base) && base.im !== 0) {
-        const imOut = new FloatXArray(count);
+        const imOut = allocFloat64Array(count);
         imOut.fill(base.im);
         return RTV.tensor(out, [1, count], imOut);
       }
@@ -672,10 +672,10 @@ function indexIntoScalar(
     }
     const n = idx.data.length;
     const scalarRe = isRuntimeNumber(base) ? base : (base as { re: number }).re;
-    const data = new FloatXArray(n);
+    const data = allocFloat64Array(n);
     data.fill(scalarRe);
     if (isRuntimeComplexNumber(base) && base.im !== 0) {
-      const im = new FloatXArray(n);
+      const im = allocFloat64Array(n);
       im.fill(base.im);
       return RTV.tensor(data, [...idx.shape], im);
     }
@@ -729,12 +729,16 @@ function indexIntoTensor1D(
 ): RuntimeValue {
   // Colon: base(:) → column vector
   if (isColonIndex(idx)) {
-    const imag = base.imag ? new FloatXArray(base.imag) : undefined;
-    return RTV.tensor(new FloatXArray(base.data), [base.data.length, 1], imag);
+    const imag = base.imag ? allocFloat64Array(base.imag) : undefined;
+    return RTV.tensor(
+      allocFloat64Array(base.data),
+      [base.data.length, 1],
+      imag
+    );
   }
 
   if (isRuntimeLogical(idx)) {
-    if (!idx) return RTV.tensor(new FloatXArray(0), [0, 0]);
+    if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
     return extractTensorElement(base, 0);
   }
 
@@ -771,8 +775,8 @@ function indexIntoTensor2D(
     const r = Math.round(rowIdx as number) - 1;
     if (r < 0 || r >= rows)
       throw new RuntimeError("Index exceeds array bounds");
-    const resultData = new FloatXArray(cols);
-    const resultImag = base.imag ? new FloatXArray(cols) : undefined;
+    const resultData = allocFloat64Array(cols);
+    const resultImag = base.imag ? allocFloat64Array(cols) : undefined;
     for (let ci = 0; ci < cols; ci++) {
       resultData[ci] = base.data[r + ci * rows];
       if (resultImag && base.imag) resultImag[ci] = base.imag[r + ci * rows];
@@ -786,9 +790,9 @@ function indexIntoTensor2D(
     if (c < 0 || c >= cols)
       throw new RuntimeError("Index exceeds array bounds");
     const offset = c * rows;
-    const resultData = new FloatXArray(rows);
+    const resultData = allocFloat64Array(rows);
     for (let ri = 0; ri < rows; ri++) resultData[ri] = base.data[offset + ri];
-    const resultImag = base.imag ? new FloatXArray(rows) : undefined;
+    const resultImag = base.imag ? allocFloat64Array(rows) : undefined;
     if (resultImag && base.imag)
       for (let ri = 0; ri < rows; ri++) resultImag[ri] = base.imag[offset + ri];
     return markLogical(RTV.tensor(resultData, [rows, 1], resultImag));
@@ -805,8 +809,8 @@ function indexIntoTensor2D(
     return extractTensorElement(base, linearIdx);
   }
 
-  const resultData = new FloatXArray(numR * numC);
-  const resultImag = base.imag ? new FloatXArray(numR * numC) : undefined;
+  const resultData = allocFloat64Array(numR * numC);
+  const resultImag = base.imag ? allocFloat64Array(numR * numC) : undefined;
   for (let ci = 0; ci < numC; ci++) {
     for (let ri = 0; ri < numR; ri++) {
       const srcIdx = colMajorIndex(rowIdxArr[ri], colIdxArr[ci], rows);
@@ -842,8 +846,8 @@ function indexIntoTensorND(
     resultShape.pop();
   }
   const totalElems = resultShape.reduce((a, b) => a * b, 1);
-  const resultData = new FloatXArray(totalElems);
-  const resultImag = base.imag ? new FloatXArray(totalElems) : undefined;
+  const resultData = allocFloat64Array(totalElems);
+  const resultImag = base.imag ? allocFloat64Array(totalElems) : undefined;
 
   const ndimIdx = dimIndices.length;
   const srcStrides = new Array(ndimIdx);
@@ -1054,21 +1058,21 @@ function indexIntoLogical(
     const idx = indices[0];
     if (isColonIndex(idx)) return base;
     if (isRuntimeTensor(idx) && idx.data.length === 0) {
-      return RTV.tensor(new FloatXArray(0), [0, 0]);
+      return RTV.tensor(allocFloat64Array(0), [0, 0]);
     }
     if (isRuntimeTensor(idx)) {
       for (let i = 0; i < idx.data.length; i++) {
         const vi = Math.round(idx.data[i]);
         if (vi !== 1) throw new RuntimeError("Index exceeds array bounds");
       }
-      const data = new FloatXArray(idx.data.length);
+      const data = allocFloat64Array(idx.data.length);
       data.fill(base ? 1 : 0);
       const result = RTV.tensor(data, [1, idx.data.length]);
       result._isLogical = true;
       return result;
     }
     if (isRuntimeLogical(idx)) {
-      if (!idx) return RTV.tensor(new FloatXArray(0), [0, 0]);
+      if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
       return base;
     }
     const i = Math.round(toNumber(idx));
@@ -1079,7 +1083,7 @@ function indexIntoLogical(
   for (const idx of indices) {
     if (isColonIndex(idx)) continue;
     if (isRuntimeLogical(idx)) {
-      if (!idx) return RTV.tensor(new FloatXArray(0), [0, 0]);
+      if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
       continue;
     }
     const i = Math.round(toNumber(idx));
@@ -1111,14 +1115,14 @@ function indexIntoTensorWithTensor(
     }
     const imOut =
       hasImag && selectedIm.some(x => x !== 0)
-        ? new FloatXArray(selectedIm)
+        ? allocFloat64Array(selectedIm)
         : undefined;
     const isRow = base.shape.length === 2 && base.shape[0] === 1;
     const outShape: number[] = isRow
       ? [1, selected.length]
       : [selected.length, 1];
     const result = RTV.tensor(
-      new FloatXArray(selected),
+      allocFloat64Array(selected),
       outShape,
       imOut
     ) as RuntimeTensor;
@@ -1153,10 +1157,10 @@ function indexIntoTensorWithTensor(
       : idx.shape;
   const imOut =
     hasImag && imIndices.some(x => x !== 0)
-      ? new FloatXArray(imIndices)
+      ? allocFloat64Array(imIndices)
       : undefined;
   const result = RTV.tensor(
-    new FloatXArray(resultData),
+    allocFloat64Array(resultData),
     outShape,
     imOut
   ) as RuntimeTensor;
@@ -1268,8 +1272,8 @@ function storeIntoTensor(
   // slot OTHER than the LHS we're about to overwrite. Without an alias
   // context, fall back to always-copy (safe default).
   if (mustCopyForAlias(base, rt)) {
-    const cowImag = base.imag ? new FloatXArray(base.imag) : undefined;
-    base = RTV.tensor(new FloatXArray(base.data), [...base.shape], cowImag);
+    const cowImag = base.imag ? allocFloat64Array(base.imag) : undefined;
+    base = RTV.tensor(allocFloat64Array(base.data), [...base.shape], cowImag);
   }
 
   if (indices.length === 1) {
@@ -1303,7 +1307,7 @@ function deleteTensorElements(
       toDelete.add(Math.round(idx.data[i]) - 1);
     }
   } else if (isColonIndex(idx)) {
-    return RTV.tensor(new FloatXArray(0), [0, 0]);
+    return RTV.tensor(allocFloat64Array(0), [0, 0]);
   }
   const newData: number[] = [];
   const newIm: number[] = [];
@@ -1318,8 +1322,8 @@ function deleteTensorElements(
     base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] !== 1;
   const outShape = baseIsColVec ? [newData.length, 1] : [1, newData.length];
   const imOut =
-    hasImag && newIm.some(x => x !== 0) ? new FloatXArray(newIm) : undefined;
-  return RTV.tensor(new FloatXArray(newData), outShape, imOut);
+    hasImag && newIm.some(x => x !== 0) ? allocFloat64Array(newIm) : undefined;
+  return RTV.tensor(allocFloat64Array(newData), outShape, imOut);
 }
 
 /** Collect a set of 0-based indices to delete from a dimension. */
@@ -1357,8 +1361,8 @@ function deleteTensorRowsOrCols(
       i => !delRows.has(i)
     );
     const newNrows = keepRows.length;
-    const newData = new FloatXArray(newNrows * ncols);
-    const newIm = hasImag ? new FloatXArray(newNrows * ncols) : undefined;
+    const newData = allocFloat64Array(newNrows * ncols);
+    const newIm = hasImag ? allocFloat64Array(newNrows * ncols) : undefined;
     for (let j = 0; j < ncols; j++) {
       for (let ki = 0; ki < keepRows.length; ki++) {
         const srcIdx = keepRows[ki] + j * nrows;
@@ -1376,8 +1380,8 @@ function deleteTensorRowsOrCols(
       j => !delCols.has(j)
     );
     const newNcols = keepCols.length;
-    const newData = new FloatXArray(nrows * newNcols);
-    const newIm = hasImag ? new FloatXArray(nrows * newNcols) : undefined;
+    const newData = allocFloat64Array(nrows * newNcols);
+    const newIm = hasImag ? allocFloat64Array(nrows * newNcols) : undefined;
     for (let ki = 0; ki < keepCols.length; ki++) {
       const srcCol = keepCols[ki];
       for (let i = 0; i < nrows; i++) {
@@ -1452,12 +1456,12 @@ function storeIntoTensor1D(
   const i = Math.round(toNumber(idx)) - 1;
   if (i < 0) throw new RuntimeError("Index exceeds array bounds");
   if (i >= base.data.length) {
-    const grown = new FloatXArray(i + 1);
+    const grown = allocFloat64Array(i + 1);
     grown.set(base.data);
     grown[i] = rhsRe;
-    let grownImag: InstanceType<typeof FloatXArray> | undefined;
+    let grownImag: Float64Array | undefined;
     if (rhsIm !== 0 || base.imag) {
-      grownImag = new FloatXArray(i + 1);
+      grownImag = allocFloat64Array(i + 1);
       if (base.imag) grownImag.set(base.imag);
       grownImag[i] = rhsIm;
     }
@@ -1515,11 +1519,11 @@ function storeIntoTensorByVector(
   }
   if (maxLi >= base.data.length) {
     const newLen = maxLi + 1;
-    const grown = new FloatXArray(newLen);
+    const grown = allocFloat64Array(newLen);
     grown.set(base.data);
-    let grownImag: InstanceType<typeof FloatXArray> | undefined;
+    let grownImag: Float64Array | undefined;
     if (base.imag) {
-      grownImag = new FloatXArray(newLen);
+      grownImag = allocFloat64Array(newLen);
       grownImag.set(base.imag);
     }
     const isColVec =
@@ -1706,12 +1710,12 @@ function storeIntoTensorColonRow(
   if (curRows === 0 && isRuntimeTensor(rhs) && rhs.data.length > 0) {
     curRows = rhs.data.length;
     const newCols = c + 1;
-    base = RTV.tensor(new FloatXArray(curRows * newCols), [curRows, newCols]);
+    base = RTV.tensor(allocFloat64Array(curRows * newCols), [curRows, newCols]);
     curCols = newCols;
   } else if (curRows === 0 && (isRuntimeNumber(rhs) || isRuntimeLogical(rhs))) {
     curRows = 1;
     const newCols = c + 1;
-    base = RTV.tensor(new FloatXArray(curRows * newCols), [curRows, newCols]);
+    base = RTV.tensor(allocFloat64Array(curRows * newCols), [curRows, newCols]);
     curCols = newCols;
   }
   if (c >= curCols) {
@@ -1750,12 +1754,12 @@ function storeIntoTensorColonCol(
   if (curCols === 0 && isRuntimeTensor(rhs) && rhs.data.length > 0) {
     curCols = rhs.data.length;
     const newRows = r + 1;
-    base = RTV.tensor(new FloatXArray(newRows * curCols), [newRows, curCols]);
+    base = RTV.tensor(allocFloat64Array(newRows * curCols), [newRows, curCols]);
     curRows = newRows;
   } else if (curCols === 0 && (isRuntimeNumber(rhs) || isRuntimeLogical(rhs))) {
     curCols = 1;
     const newRows = r + 1;
-    base = RTV.tensor(new FloatXArray(newRows * curCols), [newRows, curCols]);
+    base = RTV.tensor(allocFloat64Array(newRows * curCols), [newRows, curCols]);
     curRows = newRows;
   }
   if (r >= curRows) {
@@ -1809,8 +1813,8 @@ function storeIntoTensorND(
   }
   if (needGrow || base.data.length === 0) {
     const newTotal = requiredShape.reduce((a, b) => a * b, 1);
-    const newData = new FloatXArray(newTotal);
-    const newImag = base.imag ? new FloatXArray(newTotal) : undefined;
+    const newData = allocFloat64Array(newTotal);
+    const newImag = base.imag ? allocFloat64Array(newTotal) : undefined;
     if (base.data.length > 0) {
       const oldShape = [...shape];
       while (oldShape.length < requiredShape.length) oldShape.push(1);
@@ -1959,7 +1963,7 @@ function storeIntoCell1D(
       if (pos < 0) throw new RuntimeError("Cell index exceeds bounds");
       const oldLen = base.data.length;
       while (base.data.length <= pos)
-        base.data.push(RTV.tensor(new FloatXArray(0), [0, 0]));
+        base.data.push(RTV.tensor(allocFloat64Array(0), [0, 0]));
       base.data[pos] = rhs;
       updateShape(oldLen);
       return base;
@@ -1979,7 +1983,7 @@ function storeIntoCell1D(
       if (pos > maxIdx) maxIdx = pos;
     }
     while (base.data.length <= maxIdx)
-      base.data.push(RTV.tensor(new FloatXArray(0), [0, 0]));
+      base.data.push(RTV.tensor(allocFloat64Array(0), [0, 0]));
     for (let j = 0; j < positions.length; j++) {
       const pos = positions[j];
       base.data[pos] = scalarExpand ? rhs.data[0] : rhs.data[j];
@@ -1994,7 +1998,7 @@ function storeIntoCell1D(
   const oldLen = base.data.length;
   if (i >= base.data.length) {
     while (base.data.length <= i)
-      base.data.push(RTV.tensor(new FloatXArray(0), [0, 0]));
+      base.data.push(RTV.tensor(allocFloat64Array(0), [0, 0]));
   }
   // Unwrap 1x1 cell RHS only for paren assignment: c(i) = {val} stores val
   base.data[i] =
@@ -2024,7 +2028,7 @@ function storeIntoCell2D(
   const newRows = Math.max(rows, maxRow);
   const newCols = Math.max(cols, maxCol);
   if (newRows > rows || newCols > cols) {
-    const emptyVal = () => RTV.tensor(new FloatXArray(0), [0, 0]);
+    const emptyVal = () => RTV.tensor(allocFloat64Array(0), [0, 0]);
     const newData: RuntimeValue[] = new Array(newRows * newCols);
     for (let k = 0; k < newData.length; k++) newData[k] = emptyVal();
     for (let j = 0; j < cols; j++) {
@@ -2078,8 +2082,8 @@ export function storeIntoRTValueIndex(
   // Auto-convert sparse RHS to dense when assigning into a dense tensor
   if (isRuntimeSparseMatrix(rhs) && isRuntimeTensor(base)) {
     const S = rhs;
-    const data = new FloatXArray(S.m * S.n);
-    const imag = S.pi ? new FloatXArray(S.m * S.n) : undefined;
+    const data = allocFloat64Array(S.m * S.n);
+    const imag = S.pi ? allocFloat64Array(S.m * S.n) : undefined;
     for (let col = 0; col < S.n; col++) {
       for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
         const idx = col * S.m + S.ir[k];

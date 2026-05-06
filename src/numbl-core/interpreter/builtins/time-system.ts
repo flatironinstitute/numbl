@@ -3,14 +3,11 @@
  * ismac, ispc, isunix.
  */
 
-import {
-  FloatXArray,
-  isRuntimeChar,
-  isRuntimeTensor,
-} from "../../runtime/types.js";
+import { isRuntimeChar, isRuntimeTensor } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { defineBuiltin, registerIBuiltin } from "./types.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── tic / toc ───────────────────────────────────────────────────────────
 
@@ -57,7 +54,7 @@ defineBuiltin({
       apply: () => {
         const now = new Date();
         return RTV.tensor(
-          new FloatXArray([
+          allocFloat64Array([
             now.getFullYear(),
             now.getMonth() + 1,
             now.getDate(),

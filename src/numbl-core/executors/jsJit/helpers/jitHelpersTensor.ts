@@ -4,24 +4,13 @@
  * tensor coercion for struct-array field access.
  */
 
-import {
-  FloatXArray,
-  type FloatXArrayType,
-  type RuntimeTensor,
-} from "../../../runtime/types.js";
+import { type RuntimeTensor } from "../../../runtime/types.js";
 import type { RuntimeComplexNumber } from "../../../runtime/types.js";
 import { re, im, mkc, cAdd, cSub, cMul, cDiv } from "./jitHelpersComplex.js";
 import { tensorOps, OpRealBin } from "../../../ops/index.js";
+import { allocFloat64Array } from "./alloc.js";
 // Real/complex binary op codes are aligned (ADD=0, SUB=1, MUL=2, DIV=3) so
 // the same OpRealBin value is passed to tensorOps.complexBinaryElemwise too.
-
-export function uninitFloatX(n: number): FloatXArrayType {
-  return new Float64Array(n);
-}
-
-export function uninitFloat64(n: number): Float64Array {
-  return new Float64Array(n);
-}
 
 // ── Type checks ────────────────────────────────────────────────────────
 
@@ -44,8 +33,8 @@ function isComplex(v: unknown): v is RuntimeComplexNumber {
 // ── Tensor creation ────────────────────────────────────────────────────
 
 export function makeTensor(
-  data: FloatXArrayType,
-  imag: FloatXArrayType | undefined,
+  data: Float64Array,
+  imag: Float64Array | undefined,
   shape: number[]
 ): RuntimeTensor {
   const s = [...shape];
@@ -81,7 +70,7 @@ function reuseComplexBuffers(
 
 /** Rewrap a real result: reuse dest's wrapper if we reused its buffer. */
 function finalizeReal(
-  out: FloatXArrayType,
+  out: Float64Array,
   shape: number[],
   dest: unknown,
   isLogical: boolean
@@ -105,15 +94,17 @@ function finalizeReal(
 /** Split-complex finalize that optionally reuses dest's wrapper. */
 function finalizeSplitReused(
   outRe: Float64Array,
-  outIm: Float64Array,
+  outIm: Float64Array | undefined,
   shape: number[],
   dest: unknown
 ): RuntimeTensor {
   let realOnly = true;
-  for (let i = 0; i < outIm.length; i++) {
-    if (outIm[i] !== 0) {
-      realOnly = false;
-      break;
+  if (outIm) {
+    for (let i = 0; i < outIm.length; i++) {
+      if (outIm[i] !== 0) {
+        realOnly = false;
+        break;
+      }
     }
   }
   if (
@@ -155,12 +146,12 @@ export function tensorBinaryOp(
     const bHasImag = !!bt.imag;
 
     if (!aHasImag && !bHasImag) {
-      const out = uninitFloatX(n);
+      const out = allocFloat64Array(n);
       for (let i = 0; i < n; i++) out[i] = realOp(at.data[i], bt.data[i]);
       return makeTensor(out, undefined, at.shape.slice());
     }
-    const outR = uninitFloatX(n);
-    const outI = uninitFloatX(n);
+    const outR = allocFloat64Array(n);
+    const outI = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       const av: ScalarVal = aHasImag
         ? mkc(at.data[i], at.imag![i])
@@ -183,12 +174,12 @@ export function tensorBinaryOp(
 
     if (!aHasImag && !bIsC) {
       const bv = b as number;
-      const out = uninitFloatX(n);
+      const out = allocFloat64Array(n);
       for (let i = 0; i < n; i++) out[i] = realOp(at.data[i], bv);
       return makeTensor(out, undefined, at.shape.slice());
     }
-    const outR = uninitFloatX(n);
-    const outI = uninitFloatX(n);
+    const outR = allocFloat64Array(n);
+    const outI = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       const av: ScalarVal = aHasImag
         ? mkc(at.data[i], at.imag![i])
@@ -208,12 +199,12 @@ export function tensorBinaryOp(
 
     if (!bHasImag && !aIsC) {
       const av = a as number;
-      const out = uninitFloatX(n);
+      const out = allocFloat64Array(n);
       for (let i = 0; i < n; i++) out[i] = realOp(av, bt.data[i]);
       return makeTensor(out, undefined, bt.shape.slice());
     }
-    const outR = uninitFloatX(n);
-    const outI = uninitFloatX(n);
+    const outR = allocFloat64Array(n);
+    const outI = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       const bv: ScalarVal = bHasImag
         ? mkc(bt.data[i], bt.imag![i])
@@ -244,7 +235,7 @@ export function tensorCompareOp(
     if (at.data.length !== bt.data.length)
       throw new Error("Matrix dimensions must agree.");
     const n = at.data.length;
-    const out = uninitFloatX(n);
+    const out = allocFloat64Array(n);
     for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bt.data[i]) ? 1 : 0;
     const r = makeTensor(out, undefined, at.shape.slice());
     r._isLogical = true;
@@ -257,7 +248,7 @@ export function tensorCompareOp(
     const at = a as RuntimeTensor;
     const n = at.data.length;
     const bv = +(b as number);
-    const out = uninitFloatX(n);
+    const out = allocFloat64Array(n);
     for (let i = 0; i < n; i++) out[i] = cmp(at.data[i], bv) ? 1 : 0;
     const r = makeTensor(out, undefined, at.shape.slice());
     r._isLogical = true;
@@ -271,7 +262,7 @@ export function tensorCompareOp(
   const bt = b as RuntimeTensor;
   const n = bt.data.length;
   const av = +(a as number);
-  const out = uninitFloatX(n);
+  const out = allocFloat64Array(n);
   for (let i = 0; i < n; i++) out[i] = cmp(av, bt.data[i]) ? 1 : 0;
   const r = makeTensor(out, undefined, bt.shape.slice());
   r._isLogical = true;
@@ -315,7 +306,7 @@ export function tensorUnary(
   if (opCode !== undefined && a.data instanceof Float64Array) {
     // Real input → real output: existing fast path.
     if (!a.imag) {
-      const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+      const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
       tensorOps.realUnaryElemwise(opCode, n, a.data, out);
       return finalizeReal(out, a.shape.slice(), dest, false);
     }
@@ -323,20 +314,20 @@ export function tensorUnary(
     // output (complexUnaryElemwise). Both native where available.
     if (a.imag instanceof Float64Array) {
       if (opCode === OP_ABS) {
-        const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+        const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
         tensorOps.complexAbs(n, a.data, a.imag, out);
         return finalizeReal(out, a.shape.slice(), dest, false);
       }
       const reuse = reuseComplexBuffers(dest, n);
-      const outRe = reuse ? reuse.outRe : uninitFloat64(n);
-      const outIm = reuse ? reuse.outIm : uninitFloat64(n);
+      const outRe = reuse ? reuse.outRe : allocFloat64Array(n);
+      const outIm = reuse ? reuse.outIm : allocFloat64Array(n);
       tensorOps.complexUnaryElemwise(opCode, n, a.data, a.imag, outRe, outIm);
       return finalizeSplitReused(outRe, outIm, a.shape.slice(), dest);
     }
   }
   // Slow fallback: scalar closure. Only reachable for non-op-coded `fn`s
   // on real tensors (the old real-only slow path).
-  const out = uninitFloatX(n);
+  const out = allocFloat64Array(n);
   for (let i = 0; i < n; i++) out[i] = fn(a.data[i]);
   return makeTensor(out, undefined, a.shape.slice());
 }
@@ -345,7 +336,7 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
   const n = a.data.length;
   if (!a.imag && a.data instanceof Float64Array) {
     const destBuf = reuseRealBuffer(dest, n);
-    const outR = destBuf ?? uninitFloat64(n);
+    const outR = destBuf ?? allocFloat64Array(n);
     const aData = a.data;
     for (let i = 0; i < n; i++) outR[i] = -aData[i];
     return finalizeReal(outR, a.shape.slice(), dest, false);
@@ -353,19 +344,22 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
   // Complex negation: reuse split buffers when possible.
   if (a.data instanceof Float64Array && a.imag instanceof Float64Array) {
     const reuse = reuseComplexBuffers(dest, n);
-    const outR = reuse ? reuse.outRe : uninitFloat64(n);
-    const outI = reuse ? reuse.outIm : uninitFloat64(n);
+    const outR = reuse ? reuse.outRe : allocFloat64Array(n);
     const aData = a.data;
     const aImag = a.imag;
     for (let i = 0; i < n; i++) outR[i] = -aData[i];
-    for (let i = 0; i < n; i++) outI[i] = -aImag[i];
+    let outI: Float64Array | undefined;
+    if (aImag) {
+      const outI = reuse ? reuse.outIm : allocFloat64Array(n);
+      for (let i = 0; i < n; i++) outI[i] = -aImag[i];
+    }
     return finalizeSplitReused(outR, outI, a.shape.slice(), dest);
   }
-  const outR = uninitFloatX(n);
+  const outR = allocFloat64Array(n);
   for (let i = 0; i < n; i++) outR[i] = -a.data[i];
-  let outI: FloatXArrayType | undefined;
+  let outI: Float64Array | undefined;
   if (a.imag) {
-    outI = uninitFloatX(n);
+    outI = allocFloat64Array(n);
     for (let i = 0; i < n; i++) outI[i] = -a.imag[i];
   }
   return makeTensor(outR, outI, a.shape.slice());
@@ -385,7 +379,7 @@ export function tDouble(v: unknown): unknown {
   ) {
     const t = v as RuntimeTensor;
     if (!t._isLogical) return t;
-    const newData = uninitFloat64(t.data.length);
+    const newData = allocFloat64Array(t.data.length);
     newData.set(t.data as Float64Array);
     return {
       kind: "tensor",
@@ -434,7 +428,7 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
   const bt = base as RuntimeTensor;
   const baseLen = bt.data.length;
   if (baseLen === 0) {
-    const out = new FloatXArray(1);
+    const out = allocFloat64Array(1);
     out[0] = v;
     return makeTensor(out, undefined, [1, 1]);
   }
@@ -448,7 +442,7 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
       "Dimensions of arrays being concatenated are not consistent."
     );
   }
-  const out = uninitFloatX(baseLen + 1);
+  const out = allocFloat64Array(baseLen + 1);
   out.set(bt.data);
   out[baseLen] = v;
   return makeTensor(out, undefined, [baseLen + 1, 1]);
@@ -461,11 +455,11 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
  *  other alias of the input. */
 export function unshare(t: unknown): RuntimeTensor {
   const tt = t as RuntimeTensor;
-  const newData = uninitFloatX(tt.data.length);
+  const newData = allocFloat64Array(tt.data.length);
   newData.set(tt.data);
-  let newImag: FloatXArrayType | undefined;
+  let newImag: Float64Array | undefined;
   if (tt.imag) {
-    newImag = uninitFloatX(tt.imag.length);
+    newImag = allocFloat64Array(tt.imag.length);
     newImag.set(tt.imag);
   }
   const copy: RuntimeTensor = {
@@ -482,10 +476,10 @@ export function unshare(t: unknown): RuntimeTensor {
 
 export function asTensor(v: unknown): RuntimeTensor {
   if (typeof v === "number") {
-    return makeTensor(new FloatXArray([v]), undefined, [1, 1]);
+    return makeTensor(allocFloat64Array([v]), undefined, [1, 1]);
   }
   if (typeof v === "boolean") {
-    return makeTensor(new FloatXArray([v ? 1 : 0]), undefined, [1, 1]);
+    return makeTensor(allocFloat64Array([v ? 1 : 0]), undefined, [1, 1]);
   }
   return v as RuntimeTensor;
 }
@@ -519,13 +513,13 @@ function fastBinaryOp(
     ) {
       const n = at.data.length;
       if (!at.imag && !bt.imag) {
-        const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+        const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
         tensorOps.realBinaryElemwise(opCode, n, at.data, bt.data, out);
         return finalizeReal(out, at.shape.slice(), dest, false);
       }
       const complexReuse = reuseComplexBuffers(dest, n);
-      const outRe = complexReuse ? complexReuse.outRe : uninitFloat64(n);
-      const outIm = complexReuse ? complexReuse.outIm : uninitFloat64(n);
+      const outRe = complexReuse ? complexReuse.outRe : allocFloat64Array(n);
+      const outIm = complexReuse ? complexReuse.outIm : allocFloat64Array(n);
       tensorOps.complexBinaryElemwise(
         opCode,
         n,
@@ -548,13 +542,13 @@ function fastBinaryOp(
     ) {
       const n = at.data.length;
       if (!at.imag) {
-        const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+        const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
         tensorOps.realScalarBinaryElemwise(opCode, n, b, at.data, false, out);
         return finalizeReal(out, at.shape.slice(), dest, false);
       }
       const complexReuse = reuseComplexBuffers(dest, n);
-      const outRe = complexReuse ? complexReuse.outRe : uninitFloat64(n);
-      const outIm = complexReuse ? complexReuse.outIm : uninitFloat64(n);
+      const outRe = complexReuse ? complexReuse.outRe : allocFloat64Array(n);
+      const outIm = complexReuse ? complexReuse.outIm : allocFloat64Array(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -578,13 +572,13 @@ function fastBinaryOp(
     ) {
       const n = bt.data.length;
       if (!bt.imag) {
-        const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+        const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
         tensorOps.realScalarBinaryElemwise(opCode, n, a, bt.data, true, out);
         return finalizeReal(out, bt.shape.slice(), dest, false);
       }
       const complexReuse = reuseComplexBuffers(dest, n);
-      const outRe = complexReuse ? complexReuse.outRe : uninitFloat64(n);
-      const outIm = complexReuse ? complexReuse.outIm : uninitFloat64(n);
+      const outRe = complexReuse ? complexReuse.outRe : allocFloat64Array(n);
+      const outIm = complexReuse ? complexReuse.outIm : allocFloat64Array(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -609,8 +603,8 @@ function fastBinaryOp(
     ) {
       const n = at.data.length;
       const complexReuse = reuseComplexBuffers(dest, n);
-      const outRe = complexReuse ? complexReuse.outRe : uninitFloat64(n);
-      const outIm = complexReuse ? complexReuse.outIm : uninitFloat64(n);
+      const outRe = complexReuse ? complexReuse.outRe : allocFloat64Array(n);
+      const outIm = complexReuse ? complexReuse.outIm : allocFloat64Array(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -634,8 +628,8 @@ function fastBinaryOp(
     ) {
       const n = bt.data.length;
       const complexReuse = reuseComplexBuffers(dest, n);
-      const outRe = complexReuse ? complexReuse.outRe : uninitFloat64(n);
-      const outIm = complexReuse ? complexReuse.outIm : uninitFloat64(n);
+      const outRe = complexReuse ? complexReuse.outRe : allocFloat64Array(n);
+      const outIm = complexReuse ? complexReuse.outIm : allocFloat64Array(n);
       tensorOps.complexScalarBinaryElemwise(
         opCode,
         n,
@@ -684,7 +678,7 @@ function fastCompareOp(
       at.data.length === bt.data.length
     ) {
       const n = at.data.length;
-      const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+      const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
       tensorOps.realComparison(opCode, n, at.data, bt.data, out);
       return finalizeReal(out, at.shape.slice(), dest, true);
     }
@@ -693,7 +687,7 @@ function fastCompareOp(
     const at = a as RuntimeTensor;
     if (at.data instanceof Float64Array) {
       const n = at.data.length;
-      const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+      const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
       tensorOps.realScalarComparison(opCode, n, b, at.data, false, out);
       return finalizeReal(out, at.shape.slice(), dest, true);
     }
@@ -702,7 +696,7 @@ function fastCompareOp(
     const bt = b as RuntimeTensor;
     if (bt.data instanceof Float64Array) {
       const n = bt.data.length;
-      const out = reuseRealBuffer(dest, n) ?? uninitFloat64(n);
+      const out = reuseRealBuffer(dest, n) ?? allocFloat64Array(n);
       tensorOps.realScalarComparison(opCode, n, a, bt.data, true, out);
       return finalizeReal(out, bt.shape.slice(), dest, true);
     }

@@ -18,6 +18,7 @@ import { dlarfg } from "./dlarfg.js";
 import { dcopy } from "../BLAS/dcopy.js";
 import { drot } from "../BLAS/drot.js";
 import { MACH_SFMIN, MACH_PREC } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 /**
  * DLAHQR computes the eigenvalues and optionally the Schur factorization
@@ -123,7 +124,7 @@ export function dlahqr(
   let i = ihi;
 
   // Local arrays
-  const v = new Float64Array(3);
+  const v = allocFloat64Array(3);
 
   // Outer loop (label 20 in Fortran)
   outer: while (true) {

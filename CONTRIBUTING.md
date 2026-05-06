@@ -107,7 +107,6 @@ There are two test suites. Both count toward coverage, so use whichever is more 
 
 ```bash
 npm test                # run tests with float64 precision
-npm run test:float32    # run tests with float32 precision
 ```
 
 Unit tests use [Vitest](https://vitest.dev/) and are best for testing individual functions, edge cases, and internal logic.

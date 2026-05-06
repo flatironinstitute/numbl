@@ -9,7 +9,6 @@ import {
   RuntimeError,
 } from "../../runtime/index.js";
 import {
-  FloatXArray,
   isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeLogical,
@@ -28,7 +27,7 @@ import {
   copyTensor,
 } from "../reduction-helpers.js";
 import { tensorOps, OpReduce } from "../../ops/index.js";
-import { uninitFloatX } from "../../executors/jsJit/helpers/jitHelpersTensor.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 
@@ -147,9 +146,9 @@ function minMaxAlongDim(
   if (!info) return copyTensor(v);
 
   if (v.imag) {
-    const resultRe = uninitFloatX(info.totalElems);
-    const resultIm = uninitFloatX(info.totalElems);
-    const idxArr = nargout > 1 ? uninitFloatX(info.totalElems) : undefined;
+    const resultRe = allocFloat64Array(info.totalElems);
+    const resultIm = allocFloat64Array(info.totalElems);
+    const idxArr = nargout > 1 ? allocFloat64Array(info.totalElems) : undefined;
     forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
       const { mRe, mIm, mIdx } = minMaxScan(
         v.data,
@@ -173,8 +172,8 @@ function minMaxAlongDim(
     return out;
   }
 
-  const result = uninitFloatX(info.totalElems);
-  const idxArr = nargout > 1 ? uninitFloatX(info.totalElems) : undefined;
+  const result = allocFloat64Array(info.totalElems);
+  const idxArr = nargout > 1 ? allocFloat64Array(info.totalElems) : undefined;
   forEachSlice(v.shape, dim, (outIdx, srcIndices) => {
     const { mRe, mIdx } = minMaxScan(
       v.data,
@@ -198,11 +197,11 @@ function minMaxAlongDim(
 function scalarToTensor(v: RuntimeValue): RuntimeTensor {
   if (isRuntimeTensor(v)) return v;
   if (isRuntimeComplexNumber(v)) {
-    const t = RTV.tensor(new FloatXArray([v.re]), [1, 1]) as RuntimeTensor;
-    t.imag = new FloatXArray([v.im]);
+    const t = RTV.tensor(allocFloat64Array([v.re]), [1, 1]) as RuntimeTensor;
+    t.imag = allocFloat64Array([v.im]);
     return t;
   }
-  return RTV.tensor(new FloatXArray([toNumber(v)]), [1, 1]) as RuntimeTensor;
+  return RTV.tensor(allocFloat64Array([toNumber(v)]), [1, 1]) as RuntimeTensor;
 }
 
 function minMaxElementwise(
@@ -261,7 +260,7 @@ function minMaxElementwise(
   if (!outShape)
     throw new RuntimeError(`${name}: non-singleton dimensions must match`);
   const n = outShape.reduce((acc, d) => acc * d, 1);
-  const result = uninitFloatX(n);
+  const result = allocFloat64Array(n);
 
   if (!anyComplex) {
     // Real-only fast path
@@ -282,7 +281,7 @@ function minMaxElementwise(
   // Complex element-wise path
   const aIm = aT.imag;
   const bIm = bT.imag;
-  const resultImag = uninitFloatX(n);
+  const resultImag = allocFloat64Array(n);
   let hasImag = false;
   broadcastIterate(aT.shape, bT.shape, outShape, (aIdx, bIdx, i) => {
     const aRe = aT.data[aIdx],
@@ -339,7 +338,7 @@ export function minMaxImpl(
     }
     if (isRuntimeTensor(v)) {
       if (v.data.length === 0) {
-        const empty = RTV.tensor(new FloatXArray(0), [0, 0]);
+        const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
         if (nargout > 1) return [empty, empty];
         return empty;
       }
@@ -353,7 +352,7 @@ export function minMaxImpl(
           v.data instanceof Float64Array &&
           (name === "min" || name === "max")
         ) {
-          const out = new Float64Array(1);
+          const out = allocFloat64Array(1);
           const op = name === "min" ? OpReduce.MIN : OpReduce.MAX;
           tensorOps.realFlatReduce(op, v.data.length, v.data, out);
           return v._isLogical ? RTV.logical(out[0] !== 0) : RTV.num(out[0]);

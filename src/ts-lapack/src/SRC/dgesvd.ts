@@ -40,6 +40,7 @@ import {
   MACH_EPS,
   MACH_SFMIN,
 } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // JOBU encoding
 const JOBU_A = 0;
@@ -407,7 +408,7 @@ export function dgesvd(
   const bignum = ONE / smlnum;
 
   // Scale A if max element outside range [SMLNUM, BIGNUM]
-  const dum = new Float64Array(1);
+  const dum = allocFloat64Array(1);
   const anrm = dlange(NORM_MAX, m, n, a, aOff, lda, dum, 0);
   let iscl = 0;
   if (anrm > ZERO && anrm < smlnum) {
@@ -420,7 +421,7 @@ export function dgesvd(
 
   // Allocate generous internal workspace
   const iwrkSize = Math.max(maxwrk, 1);
-  const w = new Float64Array(iwrkSize + 1); // 1-based indexing workspace
+  const w = allocFloat64Array(iwrkSize + 1); // 1-based indexing workspace
   // We'll use 0-based offset = 0 for w, and use wOff = 0
   // Fortran WORK(I) => w[I-1] with 1-based index I => w[(I-1)]
   // But we'll track offsets as 0-based into w

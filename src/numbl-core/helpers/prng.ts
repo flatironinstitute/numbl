@@ -3,12 +3,9 @@
  */
 
 import { RuntimeValue, RTV, toNumber, RuntimeError } from "../runtime/index.js";
-import {
-  FloatXArray,
-  type FloatXArrayType,
-  isRuntimeTensor,
-} from "../runtime/types.js";
+import { isRuntimeTensor } from "../runtime/types.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Seedable PRNG (xoshiro128**) ────────────────────────────────────────
 
@@ -96,7 +93,7 @@ export function boxMullerRandom(): number {
 }
 
 /** Fill a typed array with normal random values (bulk polar method) */
-export function fillRandn(data: FloatXArrayType): void {
+export function fillRandn(data: Float64Array): void {
   // Native fast path: seeded PRNG + addon available
   if (_rngState !== null) {
     const bridge = getLapackBridge();
@@ -110,11 +107,7 @@ export function fillRandn(data: FloatXArrayType): void {
       // State was mutated in-place by the addon. Update spare.
       _bmSpare = r.hasSpare ? r.spare : null;
       // Copy result into caller's typed array
-      if (data instanceof Float64Array) {
-        data.set(r.data);
-      } else {
-        for (let i = 0; i < data.length; i++) data[i] = r.data[i];
-      }
+      data.set(r.data);
       return;
     }
   }
@@ -145,8 +138,8 @@ export function fillRandn(data: FloatXArrayType): void {
 /** Return the current RNG state as a struct {Type, Seed, State} */
 export function getRngStateStruct(): RuntimeValue {
   const stateArray = _rngState
-    ? RTV.tensor(new FloatXArray(Array.from(_rngState).map(v => v)), [4, 1])
-    : RTV.tensor(new FloatXArray(0), [0, 1]);
+    ? RTV.tensor(allocFloat64Array(Array.from(_rngState).map(v => v)), [4, 1])
+    : RTV.tensor(allocFloat64Array(0), [0, 1]);
   return RTV.struct({
     Type: RTV.char("twister"),
     Seed: RTV.num(_rngSeed),

@@ -42,6 +42,7 @@ import {
   MACH_SFMIN,
   MACH_PREC,
 } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // "ALL" uplo constant for dlacpy/dlaset (anything other than UPPER/LOWER)
 const ALL = -1;
@@ -960,7 +961,7 @@ export function dlaqr4(
             ks = kbot - ns + 1;
             const kt2 = n - ns + 1;
             dlacpy(ALL, ns, ns, h, H(ks, ks), ldh, h, H(kt2, 1), ldh);
-            const zdum = new Float64Array(1);
+            const zdum = allocFloat64Array(1);
             const inf = dlahqr(
               false,
               false,

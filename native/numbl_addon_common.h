@@ -227,14 +227,14 @@ inline std::vector<lapack_complex_double> splitToInterleaved(
   return out;
 }
 
-// Create a new Float64Array from a std::vector<double>.
+// Create a allocFloat64Array from a std::vector<double>.
 inline Napi::Float64Array vecToF64(Napi::Env env, const std::vector<double>& v) {
   auto arr = Napi::Float64Array::New(env, v.size());
   std::memcpy(arr.Data(), v.data(), v.size() * sizeof(double));
   return arr;
 }
 
-// Create a new Float64Array from raw pointer + count.
+// Create a allocFloat64Array from raw pointer + count.
 inline Napi::Float64Array ptrToF64(Napi::Env env, const double* data, size_t n) {
   auto arr = Napi::Float64Array::New(env, n);
   std::memcpy(arr.Data(), data, n * sizeof(double));

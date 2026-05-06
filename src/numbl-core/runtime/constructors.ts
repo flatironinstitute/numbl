@@ -2,6 +2,7 @@
  * RuntimeValue constructor helpers (the MV namespace).
  */
 
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 import { ItemType } from "../lowering/itemTypes.js";
 import {
   type RuntimeNumber,
@@ -20,8 +21,6 @@ import {
   type RuntimeSparseMatrix,
   type RuntimeDictionary,
   type RuntimeValue,
-  type FloatXArrayType,
-  FloatXArray,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeString,
@@ -33,15 +32,15 @@ export const RTV = {
   },
 
   tensor(
-    data: FloatXArrayType | number[],
+    data: Float64Array | number[],
     shape: number[],
-    imag?: FloatXArrayType | number[]
+    imag?: Float64Array | number[]
   ): RuntimeTensor {
-    const d = data instanceof FloatXArray ? data : new FloatXArray(data);
+    const d = data instanceof Float64Array ? data : allocFloat64Array(data);
     const im = imag
-      ? imag instanceof FloatXArray
+      ? imag instanceof Float64Array
         ? imag
-        : new FloatXArray(imag)
+        : allocFloat64Array(imag)
       : undefined;
     // Strip trailing singleton dimensions (always keeps minimum 2D)
     const s = [...shape];
@@ -49,8 +48,8 @@ export const RTV = {
     return { kind: "tensor", data: d, imag: im, shape: s };
   },
 
-  /** Fast tensor constructor — data must be FloatXArray, shape already normalized (no trailing singletons). */
-  tensorRaw(data: FloatXArrayType, shape: number[]): RuntimeTensor {
+  /** Fast tensor constructor — data must be Float64Array, shape already normalized (no trailing singletons). */
+  tensorRaw(data: Float64Array, shape: number[]): RuntimeTensor {
     return { kind: "tensor", data, imag: undefined, shape };
   },
 
@@ -61,10 +60,10 @@ export const RTV = {
 
   /** Create a row vector [1 x n] */
   row(data: number[], imag?: number[]): RuntimeTensor {
-    const im = imag ? new FloatXArray(imag) : undefined;
+    const im = imag ? allocFloat64Array(imag) : undefined;
     return {
       kind: "tensor",
-      data: new FloatXArray(data),
+      data: allocFloat64Array(data),
       imag: im,
       shape: [1, data.length],
     };
@@ -72,10 +71,10 @@ export const RTV = {
 
   /** Create a column vector [n x 1] */
   col(data: number[], imag?: number[]): RuntimeTensor {
-    const im = imag ? new FloatXArray(imag) : undefined;
+    const im = imag ? allocFloat64Array(imag) : undefined;
     return {
       kind: "tensor",
-      data: new FloatXArray(data),
+      data: allocFloat64Array(data),
       imag: im,
       shape: [data.length, 1],
     };
@@ -85,14 +84,14 @@ export const RTV = {
   matrix(
     rows: number,
     cols: number,
-    data: number[] | FloatXArrayType,
-    imag?: number[] | FloatXArrayType
+    data: number[] | Float64Array,
+    imag?: number[] | Float64Array
   ): RuntimeTensor {
-    const d = data instanceof FloatXArray ? data : new FloatXArray(data);
+    const d = data instanceof Float64Array ? data : allocFloat64Array(data);
     const im = imag
-      ? imag instanceof FloatXArray
+      ? imag instanceof Float64Array
         ? imag
-        : new FloatXArray(imag)
+        : allocFloat64Array(imag)
       : undefined;
     return {
       kind: "tensor",
@@ -145,7 +144,7 @@ export const RTV = {
       // Default for unspecified properties is [] (empty double)
       fields.set(
         name,
-        defaults?.get(name) ?? RTV.tensor(new FloatXArray(0), [0, 0])
+        defaults?.get(name) ?? RTV.tensor(allocFloat64Array(0), [0, 0])
       );
     }
     return {

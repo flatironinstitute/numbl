@@ -22,7 +22,6 @@ import {
   isRuntimeNumber,
   isRuntimeDictionary,
   isRuntimeStruct,
-  FloatXArray,
   isRuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
@@ -73,6 +72,7 @@ import { dgetrf as _dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import { toF64 } from "../helpers/check-helpers.js";
 import { sparseToDense } from "../helpers/sparse-arithmetic.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 /** Map sol structs to their dense output step data for deval. */
 const _solStepData = new WeakMap<object, StepData[]>();
@@ -344,7 +344,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     // Vectorized integrand: pass the 15 nodes as a 1x15 row vector and
     // expect a 1x15 (or 15x1) numeric result.
     const integrand = (pts: number[]): number[] => {
-      const vecData = new FloatXArray(pts);
+      const vecData = allocFloat64Array(pts);
       const vec = RTV.tensor(vecData, [1, pts.length]);
       const resultRaw = rt.index(fnArg, [vec], 1);
       const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
@@ -828,20 +828,20 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       const str = String.fromCharCode(...values);
       result = RTV.char(str);
     } else if (count === 0) {
-      result = RTV.tensor(new FloatXArray(0), [0, 0]);
+      result = RTV.tensor(allocFloat64Array(0), [0, 0]);
     } else if (count === 1 && m !== Infinity && n !== Infinity) {
-      result = RTV.tensor(new FloatXArray(values), [m, n]);
+      result = RTV.tensor(allocFloat64Array(values), [m, n]);
     } else if (m === Infinity || (m !== Infinity && n === Infinity)) {
       if (m === Infinity) {
-        result = RTV.tensor(new FloatXArray(values), [count, 1]);
+        result = RTV.tensor(allocFloat64Array(values), [count, 1]);
       } else {
         const cols = Math.ceil(count / m);
         while (values.length < m * cols) values.push(0);
-        result = RTV.tensor(new FloatXArray(values), [m, cols]);
+        result = RTV.tensor(allocFloat64Array(values), [m, cols]);
       }
     } else {
       while (values.length < m * n) values.push(0);
-      result = RTV.tensor(new FloatXArray(values.slice(0, m * n)), [m, n]);
+      result = RTV.tensor(allocFloat64Array(values.slice(0, m * n)), [m, n]);
     }
 
     if (nargout >= 2) {
@@ -1550,7 +1550,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
     // Numeric/expression mode: empty input returns []
     if (line.trim() === "") {
-      return RTV.tensor(new Float64Array(0), [0, 0]);
+      return RTV.tensor(allocFloat64Array(0), [0, 0]);
     }
 
     // Evaluate the expression in the current workspace
@@ -2052,7 +2052,7 @@ function _ode45Impl(
           const yTensor =
             neq === 1
               ? (y[0] as RuntimeValue)
-              : RTV.tensor(new FloatXArray(y), [neq, 1]);
+              : RTV.tensor(allocFloat64Array(y), [neq, 1]);
           const result = rt.index(evHandle, [t as RuntimeValue, yTensor], 3);
           const resultArr = result as RuntimeValue[];
 
@@ -2077,7 +2077,7 @@ function _ode45Impl(
     const yVal: RuntimeValue =
       neq === 1
         ? (y[0] as RuntimeValue)
-        : RTV.tensor(new FloatXArray(y), [neq, 1]);
+        : RTV.tensor(allocFloat64Array(y), [neq, 1]);
     const resultRaw = rt.index(odefun, [t as RuntimeValue, yVal], 1);
     const result = ensureRuntimeValue(resultRaw as RuntimeValue);
     if (isRuntimeNumber(result)) return [result as number];
@@ -2121,14 +2121,14 @@ function _ode45Impl(
     // sol.x = row vector of step boundary times
     const solSteps = odeResult.steps;
     const nSolPts = solSteps.length + 1;
-    const xData = new FloatXArray(nSolPts);
+    const xData = allocFloat64Array(nSolPts);
     xData[0] = solSteps.length > 0 ? solSteps[0].tOld : tspan[0];
     for (let j = 0; j < solSteps.length; j++) {
       xData[j + 1] = solSteps[j].tNew;
     }
 
     // sol.y = neq x nSolPts (each column is solution at a step boundary)
-    const yData = new FloatXArray(neq * nSolPts);
+    const yData = allocFloat64Array(neq * nSolPts);
     const y0sol = solSteps.length > 0 ? solSteps[0].yOld : y0;
     for (let i = 0; i < neq; i++) yData[i] = y0sol[i];
     for (let j = 0; j < solSteps.length; j++) {
@@ -2144,18 +2144,18 @@ function _ode45Impl(
     };
 
     if (odeResult.te.length > 0) {
-      solFields.xe = RTV.tensor(new FloatXArray(odeResult.te), [
+      solFields.xe = RTV.tensor(allocFloat64Array(odeResult.te), [
         1,
         odeResult.te.length,
       ]);
-      const yeData = new FloatXArray(neq * odeResult.ye.length);
+      const yeData = allocFloat64Array(neq * odeResult.ye.length);
       for (let j = 0; j < odeResult.ye.length; j++) {
         for (let i = 0; i < neq; i++) {
           yeData[j * neq + i] = odeResult.ye[j][i];
         }
       }
       solFields.ye = RTV.tensor(yeData, [neq, odeResult.ye.length]);
-      solFields.ie = RTV.tensor(new FloatXArray(odeResult.ie), [
+      solFields.ie = RTV.tensor(allocFloat64Array(odeResult.ie), [
         odeResult.ie.length,
         1,
       ]);
@@ -2167,9 +2167,9 @@ function _ode45Impl(
   }
 
   // Build [t, y] output (t is column vector, y is nPoints x neq matrix)
-  const tData = new FloatXArray(nPoints);
+  const tData = allocFloat64Array(nPoints);
   // Column-major: y(i,j) at index j*nPoints + i
-  const yData = new FloatXArray(nPoints * neq);
+  const yData = allocFloat64Array(nPoints * neq);
   for (let j = 0; j < nPoints; j++) {
     tData[j] = tVals[j];
     for (let i = 0; i < neq; i++) {
@@ -2186,12 +2186,12 @@ function _ode45Impl(
   const nEvents = odeResult.te.length;
   const teTensor =
     nEvents > 0
-      ? RTV.tensor(new FloatXArray(odeResult.te), [nEvents, 1])
-      : RTV.tensor(new FloatXArray(0), [0, 1]);
+      ? RTV.tensor(allocFloat64Array(odeResult.te), [nEvents, 1])
+      : RTV.tensor(allocFloat64Array(0), [0, 1]);
 
   let yeTensor: RuntimeValue;
   if (nEvents > 0) {
-    const yeData2 = new FloatXArray(nEvents * neq);
+    const yeData2 = allocFloat64Array(nEvents * neq);
     for (let j = 0; j < nEvents; j++) {
       for (let i = 0; i < neq; i++) {
         yeData2[i * nEvents + j] = odeResult.ye[j][i];
@@ -2199,13 +2199,13 @@ function _ode45Impl(
     }
     yeTensor = RTV.tensor(yeData2, [nEvents, neq]);
   } else {
-    yeTensor = RTV.tensor(new FloatXArray(0), [0, neq]);
+    yeTensor = RTV.tensor(allocFloat64Array(0), [0, neq]);
   }
 
   const ieTensor =
     nEvents > 0
-      ? RTV.tensor(new FloatXArray(odeResult.ie), [nEvents, 1])
-      : RTV.tensor(new FloatXArray(0), [0, 1]);
+      ? RTV.tensor(allocFloat64Array(odeResult.ie), [nEvents, 1])
+      : RTV.tensor(allocFloat64Array(0), [0, 1]);
 
   return [tTensor, yTensor, teTensor, yeTensor, ieTensor];
 }
@@ -2242,7 +2242,7 @@ function _devalImpl(args: RuntimeValue[]): RuntimeValue {
   const neq = steps[0].yOld.length;
   const nSteps = steps.length;
   const nPts = xint.length;
-  const yData = new FloatXArray(neq * nPts);
+  const yData = allocFloat64Array(neq * nPts);
 
   for (let p = 0; p < nPts; p++) {
     const t = xint[p];
@@ -2381,9 +2381,9 @@ function _gmresImpl(
         iter = [r.iter[0], r.iter[1]];
         resvec = r.resvec;
         xTensor = RTV.tensor(
-          new FloatXArray(r.xRe),
+          allocFloat64Array(r.xRe),
           [n, 1],
-          new FloatXArray(r.xIm)
+          allocFloat64Array(r.xIm)
         );
       } else {
         // Fallback: use gmresCoreComplex with matrix callbacks
@@ -2404,9 +2404,9 @@ function _gmresImpl(
         iter = r.iter;
         resvec = r.resvec;
         xTensor = RTV.tensor(
-          new FloatXArray(r.x.re),
+          allocFloat64Array(r.x.re),
           [n, 1],
-          new FloatXArray(r.x.im)
+          allocFloat64Array(r.x.im)
         );
       }
     } else {
@@ -2428,23 +2428,24 @@ function _gmresImpl(
       iter = r.iter;
       resvec = r.resvec;
       xTensor = RTV.tensor(
-        new FloatXArray(r.x.re),
+        allocFloat64Array(r.x.re),
         [n, 1],
-        new FloatXArray(r.x.im)
+        allocFloat64Array(r.x.im)
       );
     }
   } else {
     // ── Real path ─────────────────────────────────────────────────────────
     let bData: Float64Array;
     if (isRuntimeNumber(bArg)) {
-      bData = new Float64Array([bArg as number]);
+      bData = allocFloat64Array([bArg as number]);
     } else {
       bData = toF64((bArg as import("../runtime/types.js").RuntimeTensor).data);
     }
     let x0: Float64Array | null = null;
     if (x0Arg !== null && !_isEmpty(x0Arg)) {
       if (isRuntimeTensor(x0Arg)) x0 = toF64(x0Arg.data);
-      else if (isRuntimeNumber(x0Arg)) x0 = new Float64Array([x0Arg as number]);
+      else if (isRuntimeNumber(x0Arg))
+        x0 = allocFloat64Array([x0Arg as number]);
     }
 
     let xResult: Float64Array;
@@ -2503,7 +2504,7 @@ function _gmresImpl(
       iter = r.iter;
       resvec = r.resvec;
     }
-    xTensor = RTV.tensor(new FloatXArray(xResult), [n, 1]);
+    xTensor = RTV.tensor(allocFloat64Array(xResult), [n, 1]);
   }
 
   // Print convergence message when flag output is not requested
@@ -2523,12 +2524,18 @@ function _gmresImpl(
   if (nargout === 2) return [xTensor, flag];
   if (nargout === 3) return [xTensor, flag, relres];
   if (nargout === 4) {
-    const iterTensor = RTV.tensor(new FloatXArray([iter[0], iter[1]]), [1, 2]);
+    const iterTensor = RTV.tensor(
+      allocFloat64Array([iter[0], iter[1]]),
+      [1, 2]
+    );
     return [xTensor, flag, relres, iterTensor];
   }
   // nargout >= 5
-  const iterTensor = RTV.tensor(new FloatXArray([iter[0], iter[1]]), [1, 2]);
-  const resvecTensor = RTV.tensor(new FloatXArray(resvec), [resvec.length, 1]);
+  const iterTensor = RTV.tensor(allocFloat64Array([iter[0], iter[1]]), [1, 2]);
+  const resvecTensor = RTV.tensor(allocFloat64Array(resvec), [
+    resvec.length,
+    1,
+  ]);
   return [xTensor, flag, relres, iterTensor, resvecTensor];
 }
 
@@ -2547,7 +2554,7 @@ function _toNum(v: RuntimeValue, ctx: string): number {
 
 function _extractMatrix(arg: RuntimeValue | null): Float64Array | null {
   if (arg === null || _isEmpty(arg)) return null;
-  if (isRuntimeNumber(arg)) return new Float64Array([arg as number]);
+  if (isRuntimeNumber(arg)) return allocFloat64Array([arg as number]);
   if (isRuntimeSparseMatrix(arg)) {
     const dense = sparseToDense(arg);
     return toF64(dense.data);
@@ -2560,10 +2567,10 @@ function _extractMatrix(arg: RuntimeValue | null): Float64Array | null {
 function _makeMatvec(rt: Runtime, Aarg: RuntimeValue, n: number): MatvecFn {
   if (isRuntimeFunction(Aarg)) {
     return (x: Float64Array): Float64Array => {
-      const xTensor = RTV.tensor(new FloatXArray(x), [n, 1]);
+      const xTensor = RTV.tensor(allocFloat64Array(x), [n, 1]);
       const resultRaw = rt.index(Aarg, [xTensor], 1);
       const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
-      if (isRuntimeNumber(rv)) return new Float64Array([rv as number]);
+      if (isRuntimeNumber(rv)) return allocFloat64Array([rv as number]);
       if (isRuntimeTensor(rv)) return toF64(rv.data);
       throw new RuntimeError("gmres: A(x) must return a numeric vector");
     };
@@ -2571,7 +2578,7 @@ function _makeMatvec(rt: Runtime, Aarg: RuntimeValue, n: number): MatvecFn {
   // Matrix case
   let Adata: Float64Array;
   if (isRuntimeNumber(Aarg)) {
-    Adata = new Float64Array([Aarg as number]);
+    Adata = allocFloat64Array([Aarg as number]);
   } else if (isRuntimeSparseMatrix(Aarg)) {
     Adata = toF64(sparseToDense(Aarg).data);
   } else if (isRuntimeTensor(Aarg)) {
@@ -2580,7 +2587,7 @@ function _makeMatvec(rt: Runtime, Aarg: RuntimeValue, n: number): MatvecFn {
     throw new RuntimeError("gmres: A must be a matrix or function handle");
   }
   return (x: Float64Array): Float64Array => {
-    const y = new Float64Array(n);
+    const y = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       let s = 0;
       for (let j = 0; j < n; j++) s += Adata[i + j * n] * x[j];
@@ -2620,10 +2627,10 @@ function _makeSinglePrecSolve(
 ): (r: Float64Array) => Float64Array {
   if (isRuntimeFunction(Marg)) {
     return (r: Float64Array): Float64Array => {
-      const rTensor = RTV.tensor(new FloatXArray(r), [n, 1]);
+      const rTensor = RTV.tensor(allocFloat64Array(r), [n, 1]);
       const resultRaw = rt.index(Marg, [rTensor], 1);
       const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
-      if (isRuntimeNumber(rv)) return new Float64Array([rv as number]);
+      if (isRuntimeNumber(rv)) return allocFloat64Array([rv as number]);
       if (isRuntimeTensor(rv)) return toF64(rv.data);
       throw new RuntimeError("gmres: M(x) must return a numeric vector");
     };
@@ -2631,7 +2638,7 @@ function _makeSinglePrecSolve(
   // Matrix: pre-factor with LU and apply solve
   let Mdata: Float64Array;
   if (isRuntimeNumber(Marg)) {
-    Mdata = new Float64Array([Marg as number]);
+    Mdata = allocFloat64Array([Marg as number]);
   } else if (isRuntimeSparseMatrix(Marg)) {
     Mdata = toF64(sparseToDense(Marg).data);
   } else if (isRuntimeTensor(Marg)) {
@@ -2642,14 +2649,14 @@ function _makeSinglePrecSolve(
     );
   }
   // Pre-factor
-  const LU = new Float64Array(Mdata);
+  const LU = allocFloat64Array(Mdata);
   const ipiv = new Int32Array(n);
   const info = _dgetrf(n, n, LU, n, ipiv);
   if (info > 0)
     throw new RuntimeError("gmres: preconditioner matrix is singular");
 
   return (r: Float64Array): Float64Array => {
-    const z = new Float64Array(r);
+    const z = allocFloat64Array(r);
     luSolveInPlace(n, LU, ipiv, z);
     return z;
   };
@@ -2668,7 +2675,7 @@ function _gmresWithCallbacks(
   x0: Float64Array | null
 ): import("../helpers/gmres.js").GmresResult {
   const matvec: MatvecFn = (x: Float64Array): Float64Array => {
-    const y = new Float64Array(n);
+    const y = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       let s = 0;
       for (let j = 0; j < n; j++) s += A[i + j * n] * x[j];
@@ -2679,15 +2686,15 @@ function _gmresWithCallbacks(
 
   let precSolve: PrecSolveFn | null = null;
   if (M1 || M2) {
-    const m1lu = M1 ? new Float64Array(M1) : null;
+    const m1lu = M1 ? allocFloat64Array(M1) : null;
     const m1ipiv = M1 ? new Int32Array(n) : null;
     if (m1lu && m1ipiv) _dgetrf(n, n, m1lu, n, m1ipiv);
-    const m2lu = M2 ? new Float64Array(M2) : null;
+    const m2lu = M2 ? allocFloat64Array(M2) : null;
     const m2ipiv = M2 ? new Int32Array(n) : null;
     if (m2lu && m2ipiv) _dgetrf(n, n, m2lu, n, m2ipiv);
 
     precSolve = (r: Float64Array): Float64Array => {
-      const z = new Float64Array(r);
+      const z = allocFloat64Array(r);
       if (m1lu && m1ipiv) luSolveInPlace(n, m1lu, m1ipiv, z);
       if (m2lu && m2ipiv) luSolveInPlace(n, m2lu, m2ipiv, z);
       return z;
@@ -2720,7 +2727,7 @@ function _isMatrixArg(v: RuntimeValue | null): boolean {
 
 function _extractRealMatrix(arg: RuntimeValue | null): Float64Array | null {
   if (arg === null) return null;
-  if (isRuntimeNumber(arg)) return new Float64Array([arg as number]);
+  if (isRuntimeNumber(arg)) return allocFloat64Array([arg as number]);
   if (isRuntimeSparseMatrix(arg)) return toF64(sparseToDense(arg).data);
   if (isRuntimeTensor(arg)) return toF64(arg.data);
   return null;
@@ -2728,18 +2735,18 @@ function _extractRealMatrix(arg: RuntimeValue | null): Float64Array | null {
 
 function _toComplexVec(v: RuntimeValue, n: number): ComplexVec {
   if (isRuntimeComplexNumber(v)) {
-    return { re: new Float64Array([v.re]), im: new Float64Array([v.im]) };
+    return { re: allocFloat64Array([v.re]), im: allocFloat64Array([v.im]) };
   }
   if (isRuntimeTensor(v)) {
     return {
-      re: new Float64Array(toF64(v.data)),
-      im: v.imag ? new Float64Array(toF64(v.imag)) : new Float64Array(n),
+      re: allocFloat64Array(toF64(v.data)),
+      im: v.imag ? allocFloat64Array(toF64(v.imag)) : allocFloat64Array(n),
     };
   }
   if (isRuntimeNumber(v)) {
-    const re = new Float64Array(1);
+    const re = allocFloat64Array(1);
     re[0] = v as number;
-    return { re, im: new Float64Array(1) };
+    return { re, im: allocFloat64Array(1) };
   }
   throw new RuntimeError("gmres: cannot convert argument to complex vector");
 }
@@ -2750,23 +2757,23 @@ function _toComplexMatrix(
 ): { re: Float64Array; im: Float64Array } {
   if (isRuntimeTensor(v)) {
     return {
-      re: new Float64Array(toF64(v.data)),
-      im: v.imag ? new Float64Array(toF64(v.imag)) : new Float64Array(len),
+      re: allocFloat64Array(toF64(v.data)),
+      im: v.imag ? allocFloat64Array(toF64(v.imag)) : allocFloat64Array(len),
     };
   }
   if (isRuntimeSparseMatrix(v)) {
     const dense = sparseToDense(v);
     return {
-      re: new Float64Array(toF64(dense.data)),
+      re: allocFloat64Array(toF64(dense.data)),
       im: dense.imag
-        ? new Float64Array(toF64(dense.imag))
-        : new Float64Array(len),
+        ? allocFloat64Array(toF64(dense.imag))
+        : allocFloat64Array(len),
     };
   }
   if (isRuntimeNumber(v)) {
-    const re = new Float64Array(1);
+    const re = allocFloat64Array(1);
     re[0] = v as number;
-    return { re, im: new Float64Array(1) };
+    return { re, im: allocFloat64Array(1) };
   }
   throw new RuntimeError("gmres: cannot convert to complex matrix");
 }
@@ -2787,25 +2794,30 @@ function _makeComplexMatvec(
   if (isRuntimeFunction(Aarg)) {
     return (x: ComplexVec): ComplexVec => {
       const xTensor = RTV.tensor(
-        new FloatXArray(x.re),
+        allocFloat64Array(x.re),
         [n, 1],
-        new FloatXArray(x.im)
+        allocFloat64Array(x.im)
       );
       const resultRaw = rt.index(Aarg, [xTensor], 1);
       const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
       if (isRuntimeTensor(rv)) {
         return {
-          re: new Float64Array(toF64(rv.data)),
-          im: rv.imag ? new Float64Array(toF64(rv.imag)) : new Float64Array(n),
+          re: allocFloat64Array(toF64(rv.data)),
+          im: rv.imag
+            ? allocFloat64Array(toF64(rv.imag))
+            : allocFloat64Array(n),
         };
       }
       if (isRuntimeComplexNumber(rv)) {
-        return { re: new Float64Array([rv.re]), im: new Float64Array([rv.im]) };
+        return {
+          re: allocFloat64Array([rv.re]),
+          im: allocFloat64Array([rv.im]),
+        };
       }
       if (isRuntimeNumber(rv)) {
-        const re = new Float64Array(1);
+        const re = allocFloat64Array(1);
         re[0] = rv as number;
-        return { re, im: new Float64Array(1) };
+        return { re, im: allocFloat64Array(1) };
       }
       throw new RuntimeError("gmres: A(x) must return a numeric vector");
     };
@@ -2813,8 +2825,8 @@ function _makeComplexMatvec(
   // Matrix case — complex matvec
   const { re: ARe, im: AIm } = _toComplexMatrix(Aarg, n * n);
   return (x: ComplexVec): ComplexVec => {
-    const yRe = new Float64Array(n);
-    const yIm = new Float64Array(n);
+    const yRe = allocFloat64Array(n);
+    const yIm = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       let sR = 0,
         sI = 0;
@@ -2860,16 +2872,18 @@ function _makeSingleComplexPrecSolve(
   if (isRuntimeFunction(Marg)) {
     return (r: ComplexVec): ComplexVec => {
       const rTensor = RTV.tensor(
-        new FloatXArray(r.re),
+        allocFloat64Array(r.re),
         [n, 1],
-        new FloatXArray(r.im)
+        allocFloat64Array(r.im)
       );
       const resultRaw = rt.index(Marg, [rTensor], 1);
       const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
       if (isRuntimeTensor(rv)) {
         return {
-          re: new Float64Array(toF64(rv.data)),
-          im: rv.imag ? new Float64Array(toF64(rv.imag)) : new Float64Array(n),
+          re: allocFloat64Array(toF64(rv.data)),
+          im: rv.imag
+            ? allocFloat64Array(toF64(rv.imag))
+            : allocFloat64Array(n),
         };
       }
       throw new RuntimeError("gmres: M(x) must return a numeric vector");
@@ -2881,8 +2895,8 @@ function _makeSingleComplexPrecSolve(
   _complexLuFactor(n, MRe, MIm, ipiv);
 
   return (r: ComplexVec): ComplexVec => {
-    const zRe = new Float64Array(r.re);
-    const zIm = new Float64Array(r.im);
+    const zRe = allocFloat64Array(r.re);
+    const zIm = allocFloat64Array(r.im);
     complexLuSolveInPlace(n, MRe, MIm, ipiv, zRe, zIm);
     return { re: zRe, im: zIm };
   };

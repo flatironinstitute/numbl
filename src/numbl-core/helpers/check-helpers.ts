@@ -4,8 +4,6 @@
  */
 
 import {
-  FloatXArray,
-  type FloatXArrayType,
   isRuntimeChar,
   isRuntimeNumber,
   isRuntimeString,
@@ -13,10 +11,11 @@ import {
 import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
 import { RuntimeError } from "../runtime/index.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/types.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 /** Ensure data is Float64Array (needed by LAPACK bridges). */
-export function toF64(data: FloatXArrayType): Float64Array {
-  return data instanceof Float64Array ? data : new Float64Array(data);
+export function toF64(data: Float64Array): Float64Array {
+  return data instanceof Float64Array ? data : allocFloat64Array(data);
 }
 
 /**
@@ -64,11 +63,11 @@ export function buildEigenvectorMatrix(
   hasComplex: boolean
 ) {
   if (!hasComplex) {
-    return RTV.tensor(new FloatXArray(packedV), [n, n]);
+    return RTV.tensor(allocFloat64Array(packedV), [n, n]);
   }
 
-  const realPart = new FloatXArray(n * n);
-  const imagPart = new FloatXArray(n * n);
+  const realPart = allocFloat64Array(n * n);
+  const imagPart = allocFloat64Array(n * n);
 
   let j = 0;
   while (j < n) {
@@ -98,12 +97,12 @@ export function buildEigenvectorMatrix(
  * Replaces the repeated `hasComplex ? RTV.tensor(re, shape, im) : RTV.tensor(re, shape)` pattern.
  */
 export function maybeComplexTensor(
-  re: FloatXArrayType | Float64Array,
+  re: Float64Array | Float64Array,
   shape: number[],
-  im: FloatXArrayType | Float64Array | undefined
+  im: Float64Array | Float64Array | undefined
 ): ReturnType<typeof RTV.tensor> {
-  const imag = im && im.some(v => v !== 0) ? new FloatXArray(im) : undefined;
-  return RTV.tensor(new FloatXArray(re), shape, imag);
+  const imag = im && im.some(v => v !== 0) ? allocFloat64Array(im) : undefined;
+  return RTV.tensor(allocFloat64Array(re), shape, imag);
 }
 
 /**
@@ -112,16 +111,16 @@ export function maybeComplexTensor(
  * Optionally includes an imaginary diagonal.
  */
 export function buildDiagMatrix(
-  realVals: Float64Array | FloatXArrayType,
-  imagVals: Float64Array | FloatXArrayType | undefined,
+  realVals: Float64Array | Float64Array,
+  imagVals: Float64Array | Float64Array | undefined,
   size: number | [number, number]
 ): ReturnType<typeof RTV.tensor> {
   const [rows, cols] = typeof size === "number" ? [size, size] : size;
   const k = Math.min(rows, cols, realVals.length);
-  const dReal = new FloatXArray(rows * cols);
+  const dReal = allocFloat64Array(rows * cols);
   for (let i = 0; i < k; i++) dReal[colMajorIndex(i, i, rows)] = realVals[i];
   if (imagVals && imagVals.some(v => v !== 0)) {
-    const dImag = new FloatXArray(rows * cols);
+    const dImag = allocFloat64Array(rows * cols);
     for (let i = 0; i < k; i++) dImag[colMajorIndex(i, i, rows)] = imagVals[i];
     return RTV.tensor(dReal, [rows, cols], dImag);
   }
@@ -133,7 +132,7 @@ export function buildDiagMatrix(
  * augmented matrix [A | B] of size `rows × totalCols`.
  */
 export function gaussJordanEliminate(
-  aug: FloatXArrayType,
+  aug: Float64Array,
   rows: number,
   totalCols: number
 ): void {

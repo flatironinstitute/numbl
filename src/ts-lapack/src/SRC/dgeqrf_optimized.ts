@@ -40,6 +40,8 @@
 //   A(I,J)  =>  a[aOff + (I-1) + (J-1)*lda]   (I,J are 1-based)
 //   TAU(I)  =>  tau[tauOff + (I-1)]             (I is 1-based)
 
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc";
+
 // ─── Module-level machine constants (dlamch inlined, evaluated once) ─────────
 // eps = Number.EPSILON * 0.5   →  dlamch('E'), machine epsilon / 2
 const _EPS = Number.EPSILON * 0.5;
@@ -90,7 +92,7 @@ export function dgeqrf_optimized(
 
   // Pre-allocate once to avoid GC pressure inside the loop.
   // v[0..m-1]: unaliased copy of the current Householder vector.
-  const v = new Float64Array(m);
+  const v = allocFloat64Array(m);
 
   // ═══ dgeqr2 inlined ═══════════════════════════════════════════════════════
   for (let i = 1; i <= k; i++) {

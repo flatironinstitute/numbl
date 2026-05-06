@@ -14,7 +14,6 @@
 
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
 import { RTV, RuntimeError } from "./runtime/index.js";
-import { FloatXArray } from "./runtime/types.js";
 import type { IBuiltin } from "./interpreter/builtins/types.js";
 
 /** A loaded JS user function ready for registration in the workspace. */
@@ -251,7 +250,7 @@ export function loadJsUserFunctions(
     const factory = new Function(
       "RTV",
       "RuntimeError",
-      "FloatXArray",
+      "Float64Array",
       "register",
       "wasm",
       "native",
@@ -261,7 +260,7 @@ export function loadJsUserFunctions(
     const exports = factory(
       RTV,
       RuntimeError,
-      FloatXArray,
+      Float64Array,
       dummyRegister,
       wasmInstance,
       nativeLib,
@@ -309,7 +308,7 @@ export function loadJsUserFunctions(
       const factory = new Function(
         "RTV",
         "RuntimeError",
-        "FloatXArray",
+        "Float64Array",
         "register",
         "wasm",
         "native",
@@ -319,7 +318,7 @@ export function loadJsUserFunctions(
       factory(
         RTV,
         RuntimeError,
-        FloatXArray,
+        Float64Array,
         registerFn,
         wasmInstance,
         nativeLib,

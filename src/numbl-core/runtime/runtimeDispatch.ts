@@ -30,7 +30,6 @@ import {
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
   isRuntimeDictionary,
-  FloatXArray,
   kstr,
 } from "../runtime/types.js";
 import { isBuiltin } from "../helpers/registry.js";
@@ -51,6 +50,7 @@ import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Plot dispatch helper ─────────────────────────────────────────────────
 
@@ -153,7 +153,7 @@ function packResults(results: RuntimeValue[], shape: number[]): RuntimeValue {
       (isRuntimeTensor(r) && r.data.length === 1)
   );
   if (allScalar) {
-    const data = new FloatXArray(results.length);
+    const data = allocFloat64Array(results.length);
     const allLogical = results.every(r => isRuntimeLogical(r));
     for (let i = 0; i < results.length; i++) {
       data[i] = toNumber(results[i]);
@@ -174,10 +174,14 @@ function coerceToTensor(
   which: string
 ): RuntimeTensor {
   if (isRuntimeNumber(v)) {
-    return RTV.tensor(new FloatXArray([v]), [1, 1]);
+    return RTV.tensor(allocFloat64Array([v]), [1, 1]);
   }
   if (isRuntimeComplexNumber(v)) {
-    return RTV.tensor(new FloatXArray([v.re]), [1, 1], new FloatXArray([v.im]));
+    return RTV.tensor(
+      allocFloat64Array([v.re]),
+      [1, 1],
+      allocFloat64Array([v.im])
+    );
   }
   if (isRuntimeTensor(v)) {
     return v;
@@ -677,7 +681,7 @@ function arrayfunCellfunImpl(
       }
       return RTV.cell(results, [...arrArg.shape]);
     }
-    const resultData = new FloatXArray(arrArg.data.length);
+    const resultData = allocFloat64Array(arrArg.data.length);
     let allLogical = true;
     for (let i = 0; i < arrArg.data.length; i++) {
       const r = callFn(collectArgs(i));
@@ -774,7 +778,7 @@ export function cellfunImpl(
           );
         const className =
           typeof classNameRv === "string" ? classNameRv : classNameRv.value;
-        const data = new FloatXArray(cellArg.data.length);
+        const data = allocFloat64Array(cellArg.data.length);
         for (let i = 0; i < cellArg.data.length; i++) {
           data[i] = numblClass(cellArg.data[i]) === className ? 1 : 0;
         }
@@ -842,7 +846,7 @@ export function structfunImpl(
 
   if (uniformOutput) {
     // Collect results into a column vector
-    const data = new FloatXArray(fieldNames.length);
+    const data = allocFloat64Array(fieldNames.length);
     for (let i = 0; i < fieldNames.length; i++) {
       const val = sArg.fields.get(fieldNames[i])!;
       const r = callFn(val);
@@ -931,8 +935,8 @@ export function bsxfunImpl(
     );
 
   const totalElems = outShape.reduce((acc, d) => acc * d, 1);
-  const resultData = new FloatXArray(totalElems);
-  let resultImag: InstanceType<typeof FloatXArray> | undefined;
+  const resultData = allocFloat64Array(totalElems);
+  let resultImag: Float64Array | undefined;
 
   const aIsReal = !a.imag;
   const bIsReal = !b.imag;
@@ -981,7 +985,7 @@ export function bsxfunImpl(
       const rv = ensureRuntimeValue(r);
       if (isRuntimeComplexNumber(rv)) {
         resultData[i] = rv.re;
-        if (!resultImag) resultImag = new FloatXArray(totalElems);
+        if (!resultImag) resultImag = allocFloat64Array(totalElems);
         resultImag[i] = rv.im;
       } else {
         resultData[i] = toNumber(rv);

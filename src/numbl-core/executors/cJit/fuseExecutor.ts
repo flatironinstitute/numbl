@@ -22,6 +22,7 @@ import type { LoweredStmt, FuseLoweredStmt } from "../lowering.js";
 import type { RuntimeTensor, RuntimeValue } from "../../runtime/types.js";
 import { generateFuseCSource } from "./fuseCodegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
+import { allocFloat64Array } from "../jsJit/helpers/alloc.js";
 
 /** Minimum tensor numel to pay the koffi-dispatch overhead. Below
  *  this, the interpreter's vectorized builtin path (Float64Array
@@ -197,7 +198,7 @@ export const cJitFuseExecutor: Executor<FuseLoweredStmt, CFuseCompiled | null> =
         }
       }
 
-      const out = new Float64Array(n);
+      const out = allocFloat64Array(n);
       try {
         (compiled.compiled.fn as (...a: unknown[]) => unknown)(
           out,

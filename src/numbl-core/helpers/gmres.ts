@@ -6,6 +6,8 @@
  * (dispatched through the runtime).
  */
 
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc";
+
 export interface GmresResult {
   x: Float64Array;
   flag: number; // 0=converged, 1=max iterations
@@ -40,7 +42,7 @@ export function gmresCore(
   x0: Float64Array | null
 ): GmresResult {
   // Initial guess
-  const x = x0 ? new Float64Array(x0) : new Float64Array(n);
+  const x = x0 ? allocFloat64Array(x0) : allocFloat64Array(n);
 
   if (restart <= 0 || restart > n) restart = n;
 
@@ -52,7 +54,7 @@ export function gmresCore(
   // Preconditioned RHS norm for relative residual
   let normMb: number;
   if (precSolve) {
-    normMb = nrm2(precSolve(new Float64Array(b)), n);
+    normMb = nrm2(precSolve(allocFloat64Array(b)), n);
   } else {
     normMb = nrm2(b, n);
   }
@@ -67,7 +69,7 @@ export function gmresCore(
       flag: 0,
       relres: beta / normMb,
       iter: [0, 0],
-      resvec: new Float64Array(resvecList),
+      resvec: allocFloat64Array(resvecList),
     };
   }
 
@@ -79,17 +81,17 @@ export function gmresCore(
     outerIter = outer;
 
     // Arnoldi vectors V[n × (restart+1)]
-    const V = new Float64Array(n * (restart + 1));
+    const V = allocFloat64Array(n * (restart + 1));
     // V(:,0) = r / beta
     for (let i = 0; i < n; i++) V[i] = r[i] / beta;
 
     // Upper Hessenberg matrix H[(restart+1) × restart]
-    const H = new Float64Array((restart + 1) * restart);
-    const cs = new Float64Array(restart);
-    const sn = new Float64Array(restart);
+    const H = allocFloat64Array((restart + 1) * restart);
+    const cs = allocFloat64Array(restart);
+    const sn = allocFloat64Array(restart);
 
     // RHS of the least-squares problem: g = beta * e1
-    const g = new Float64Array(restart + 1);
+    const g = allocFloat64Array(restart + 1);
     g[0] = beta;
 
     let converged = false;
@@ -189,7 +191,7 @@ export function gmresCore(
     flag,
     relres,
     iter: [outerIter, innerIter],
-    resvec: new Float64Array(resvecList),
+    resvec: allocFloat64Array(resvecList),
   };
 }
 
@@ -202,7 +204,7 @@ function nrm2(a: Float64Array, n: number): number {
 }
 
 function sub(a: Float64Array, b: Float64Array, n: number): Float64Array {
-  const r = new Float64Array(n);
+  const r = allocFloat64Array(n);
   for (let i = 0; i < n; i++) r[i] = a[i] - b[i];
   return r;
 }
@@ -226,7 +228,7 @@ function backSolve(
   m: number,
   ldh: number
 ): Float64Array {
-  const y = new Float64Array(m);
+  const y = allocFloat64Array(m);
   for (let i = 0; i < m; i++) y[i] = g[i];
   for (let i = m - 1; i >= 0; i--) {
     for (let j = i + 1; j < m; j++) y[i] -= H[i + j * ldh] * y[j];
@@ -266,23 +268,23 @@ export function gmresCoreComplex(
   maxit: number,
   x0: ComplexVec | null
 ): GmresComplexResult {
-  const xRe = x0 ? new Float64Array(x0.re) : new Float64Array(n);
-  const xIm = x0 ? new Float64Array(x0.im) : new Float64Array(n);
+  const xRe = x0 ? allocFloat64Array(x0.re) : allocFloat64Array(n);
+  const xIm = x0 ? allocFloat64Array(x0.im) : allocFloat64Array(n);
 
   if (restart <= 0 || restart > n) restart = n;
 
   // r = M\(b - A*x)
   const ax = matvec({ re: xRe, im: xIm });
-  let rRe = new Float64Array(n);
-  let rIm = new Float64Array(n);
+  let rRe = allocFloat64Array(n);
+  let rIm = allocFloat64Array(n);
   for (let i = 0; i < n; i++) {
     rRe[i] = b.re[i] - ax.re[i];
     rIm[i] = b.im[i] - ax.im[i];
   }
   if (precSolve) {
     const pr = precSolve({ re: rRe, im: rIm });
-    rRe = new Float64Array(pr.re);
-    rIm = new Float64Array(pr.im);
+    rRe = allocFloat64Array(pr.re);
+    rIm = allocFloat64Array(pr.im);
   }
   let beta = cnrm2(rRe, rIm, n);
 
@@ -290,8 +292,8 @@ export function gmresCoreComplex(
   let normMb: number;
   if (precSolve) {
     const mb = precSolve({
-      re: new Float64Array(b.re),
-      im: new Float64Array(b.im),
+      re: allocFloat64Array(b.re),
+      im: allocFloat64Array(b.im),
     });
     normMb = cnrm2(mb.re, mb.im, n);
   } else {
@@ -307,7 +309,7 @@ export function gmresCoreComplex(
       flag: 0,
       relres: beta / normMb,
       iter: [0, 0],
-      resvec: new Float64Array(resvecList),
+      resvec: allocFloat64Array(resvecList),
     };
   }
 
@@ -319,8 +321,8 @@ export function gmresCoreComplex(
     outerIter = outer;
 
     // Arnoldi vectors (split re/im)
-    const VRe = new Float64Array(n * (restart + 1));
-    const VIm = new Float64Array(n * (restart + 1));
+    const VRe = allocFloat64Array(n * (restart + 1));
+    const VIm = allocFloat64Array(n * (restart + 1));
     for (let i = 0; i < n; i++) {
       VRe[i] = rRe[i] / beta;
       VIm[i] = rIm[i] / beta;
@@ -328,13 +330,13 @@ export function gmresCoreComplex(
 
     // Complex Hessenberg H, Givens (c real, s complex), g complex
     const ldh = restart + 1;
-    const HRe = new Float64Array(ldh * restart);
-    const HIm = new Float64Array(ldh * restart);
-    const cs = new Float64Array(restart); // c is real
-    const snRe = new Float64Array(restart);
-    const snIm = new Float64Array(restart);
-    const gRe = new Float64Array(restart + 1);
-    const gIm = new Float64Array(restart + 1);
+    const HRe = allocFloat64Array(ldh * restart);
+    const HIm = allocFloat64Array(ldh * restart);
+    const cs = allocFloat64Array(restart); // c is real
+    const snRe = allocFloat64Array(restart);
+    const snIm = allocFloat64Array(restart);
+    const gRe = allocFloat64Array(restart + 1);
+    const gIm = allocFloat64Array(restart + 1);
     gRe[0] = beta;
 
     let converged = false;
@@ -357,8 +359,8 @@ export function gmresCoreComplex(
         wIm = pw.im;
       }
       // Ensure we own the arrays (matvec/precSolve may return views)
-      if (wRe.length !== n) wRe = new Float64Array(wRe);
-      if (wIm.length !== n) wIm = new Float64Array(wIm);
+      if (wRe.length !== n) wRe = allocFloat64Array(wRe);
+      if (wIm.length !== n) wIm = allocFloat64Array(wIm);
 
       // Modified Gram-Schmidt (conjugate dot product)
       for (let i = 0; i <= j; i++) {
@@ -470,16 +472,16 @@ export function gmresCoreComplex(
 
     // Recompute residual
     const ax2 = matvec({ re: xRe, im: xIm });
-    rRe = new Float64Array(n);
-    rIm = new Float64Array(n);
+    rRe = allocFloat64Array(n);
+    rIm = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       rRe[i] = b.re[i] - ax2.re[i];
       rIm[i] = b.im[i] - ax2.im[i];
     }
     if (precSolve) {
       const pr = precSolve({ re: rRe, im: rIm });
-      rRe = new Float64Array(pr.re);
-      rIm = new Float64Array(pr.im);
+      rRe = allocFloat64Array(pr.re);
+      rIm = allocFloat64Array(pr.im);
     }
     beta = cnrm2(rRe, rIm, n);
 
@@ -493,16 +495,16 @@ export function gmresCoreComplex(
   let relres: number;
   if (flag === 0) {
     const ax3 = matvec({ re: xRe, im: xIm });
-    let fRe = new Float64Array(n),
-      fIm = new Float64Array(n);
+    let fRe = allocFloat64Array(n),
+      fIm = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       fRe[i] = b.re[i] - ax3.re[i];
       fIm[i] = b.im[i] - ax3.im[i];
     }
     if (precSolve) {
       const pr = precSolve({ re: fRe, im: fIm });
-      fRe = new Float64Array(pr.re);
-      fIm = new Float64Array(pr.im);
+      fRe = allocFloat64Array(pr.re);
+      fIm = allocFloat64Array(pr.im);
     }
     relres = cnrm2(fRe, fIm, n) / normMb;
   } else {
@@ -514,7 +516,7 @@ export function gmresCoreComplex(
     flag,
     relres,
     iter: [outerIter, innerIter],
-    resvec: new Float64Array(resvecList),
+    resvec: allocFloat64Array(resvecList),
   };
 }
 
@@ -558,8 +560,8 @@ function complexBackSolve(
   m: number,
   ldh: number
 ): { yRe: Float64Array; yIm: Float64Array } {
-  const yRe = new Float64Array(m);
-  const yIm = new Float64Array(m);
+  const yRe = allocFloat64Array(m);
+  const yIm = allocFloat64Array(m);
   for (let i = 0; i < m; i++) {
     yRe[i] = gRe[i];
     yIm[i] = gIm[i];

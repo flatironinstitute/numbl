@@ -15,7 +15,6 @@ import {
   isRuntimeFunction,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
-  FloatXArray,
 } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
@@ -45,6 +44,7 @@ import {
 
 import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -547,7 +547,7 @@ export function evalExprNargout(
           const data =
             args.length > 0
               ? ensureRuntimeValue(args[0])
-              : RTV.tensor(new FloatXArray(0), [0, 0]);
+              : RTV.tensor(allocFloat64Array(0), [0, 0]);
           return this.rt.callSuperConstructor(objVal, data);
         }
         const { propertyNames, propertyDefaults } = this.collectClassProperties(
@@ -998,7 +998,7 @@ export function evalTensorLiteral(
   expr: Extract<Expr, { type: "Tensor" }>
 ): unknown {
   if (expr.rows.length === 0) {
-    return RTV.tensor(new FloatXArray(0), [0, 0]);
+    return RTV.tensor(allocFloat64Array(0), [0, 0]);
   }
   const rowValues: unknown[] = [];
   for (const row of expr.rows) {
@@ -1076,10 +1076,10 @@ export function assignLValue(
           ? this.env.get(lv.base.name)
           : this.evalLValueBase(
               lv.base,
-              RTV.tensor(new FloatXArray(0), [0, 0])
+              RTV.tensor(allocFloat64Array(0), [0, 0])
             );
       const indices = this.evalIndicesWithEnd(
-        base ?? RTV.tensor(new FloatXArray(0), [0, 0]),
+        base ?? RTV.tensor(allocFloat64Array(0), [0, 0]),
         lv.indices
       );
       // Inside class methods, bypass overloaded subsasgn for same-class instances
@@ -1195,7 +1195,7 @@ export function writeLValueBase(
   } else if (base.type === "Index") {
     const baseVal = this.evalLValueBase(
       base.base,
-      RTV.tensor(new FloatXArray(0), [0, 0])
+      RTV.tensor(allocFloat64Array(0), [0, 0])
     );
     const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     // Use builtinIndexStore for compound assignment store-back —

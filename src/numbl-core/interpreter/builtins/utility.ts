@@ -13,7 +13,6 @@ import {
   isRuntimeStruct,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
-  FloatXArray,
 } from "../../runtime/types.js";
 import type {
   RuntimeValue,
@@ -25,12 +24,13 @@ import { RuntimeError } from "../../runtime/error.js";
 import { sprintfFormat } from "../../helpers/string.js";
 import { RTV } from "../../runtime/constructors.js";
 import { emptyStackField } from "../../runtime/runtime.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 
 function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
-  const data = new FloatXArray(S.m * S.n);
-  const imag = S.pi ? new FloatXArray(S.m * S.n) : undefined;
+  const data = allocFloat64Array(S.m * S.n);
+  const imag = S.pi ? allocFloat64Array(S.m * S.n) : undefined;
   for (let col = 0; col < S.n; col++) {
     for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
       const idx = col * S.m + S.ir[k];

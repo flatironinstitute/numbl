@@ -16,8 +16,6 @@ import {
   tensorSize2D,
 } from "../../runtime/index.js";
 import {
-  FloatXArray,
-  type FloatXArrayType,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
@@ -30,11 +28,12 @@ import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { linsolveLapack } from "../../helpers/linsolve.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
-function toFloatArray(v: RuntimeValue): FloatXArrayType {
-  if (isRuntimeNumber(v)) return new FloatXArray([v as number]);
-  if (isRuntimeLogical(v)) return new FloatXArray([v ? 1 : 0]);
-  if (isRuntimeTensor(v)) return new FloatXArray(v.data);
+function toFloatArray(v: RuntimeValue): Float64Array {
+  if (isRuntimeNumber(v)) return allocFloat64Array([v as number]);
+  if (isRuntimeLogical(v)) return allocFloat64Array([v ? 1 : 0]);
+  if (isRuntimeTensor(v)) return allocFloat64Array(v.data);
   throw new RuntimeError("Expected numeric argument");
 }
 
@@ -56,7 +55,7 @@ function epsOfScalar(x: number): number {
   x = Math.abs(x);
   if (!isFinite(x) || isNaN(x)) return NaN;
   if (x === 0) return Number.MIN_VALUE; // smallest positive subnormal ≈ 5e-324
-  const buf = new Float64Array(1);
+  const buf = allocFloat64Array(1);
   const view = new DataView(buf.buffer);
   buf[0] = x;
   const bits = view.getBigUint64(0, true);
@@ -125,7 +124,7 @@ defineBuiltin({
         if (!isRuntimeTensor(v))
           throw new RuntimeError("eps: expected numeric argument");
         const n = v.data.length;
-        const out = new FloatXArray(n);
+        const out = allocFloat64Array(n);
         for (let i = 0; i < n; i++) out[i] = epsOfScalar(v.data[i]);
         return RTV.tensor(out, v.shape.slice());
       },
@@ -151,7 +150,7 @@ defineBuiltin({
         const colVec = isColumnVector(args[0]);
 
         const fullLen = m + n - 1;
-        const full = new FloatXArray(fullLen);
+        const full = allocFloat64Array(fullLen);
         for (let i = 0; i < m; i++) {
           for (let j = 0; j < n; j++) {
             full[i + j] += a[i] * b[j];
@@ -166,17 +165,17 @@ defineBuiltin({
           else throw new RuntimeError("conv: third argument must be a string");
         }
 
-        let result: FloatXArrayType;
+        let result: Float64Array;
         if (shape === "full") {
           result = full;
         } else if (shape === "same") {
           const start = Math.floor(n / 2);
-          result = new FloatXArray(m);
+          result = allocFloat64Array(m);
           for (let i = 0; i < m; i++) result[i] = full[start + i];
         } else if (shape === "valid") {
           const validLen = Math.max(m, n) - Math.min(m, n) + 1;
           const start = Math.min(m, n) - 1;
-          result = new FloatXArray(validLen);
+          result = allocFloat64Array(validLen);
           for (let i = 0; i < validLen; i++) result[i] = full[start + i];
         } else {
           throw new RuntimeError(`conv: unknown shape '${shape}'`);
@@ -218,15 +217,16 @@ defineBuiltin({
 
         const nq = nb - na + 1;
         if (nq <= 0) {
-          if (nargout <= 1) return RTV.tensor(new FloatXArray([0]), mkShape(1));
+          if (nargout <= 1)
+            return RTV.tensor(allocFloat64Array([0]), mkShape(1));
           return [
-            RTV.tensor(new FloatXArray([0]), mkShape(1)),
-            RTV.tensor(new FloatXArray(b), mkShape(nb)),
+            RTV.tensor(allocFloat64Array([0]), mkShape(1)),
+            RTV.tensor(allocFloat64Array(b), mkShape(nb)),
           ];
         }
 
-        const r = new FloatXArray(b);
-        const q = new FloatXArray(nq);
+        const r = allocFloat64Array(b);
+        const q = allocFloat64Array(nq);
         for (let i = 0; i < nq; i++) {
           q[i] = r[i] / a[0];
           for (let j = 0; j < na; j++) {
@@ -265,7 +265,7 @@ defineBuiltin({
         if (isRuntimeNumber(x)) return RTV.num(horner(x as number));
 
         if (isRuntimeTensor(x)) {
-          const result = new FloatXArray(x.data.length);
+          const result = allocFloat64Array(x.data.length);
           for (let i = 0; i < x.data.length; i++) result[i] = horner(x.data[i]);
           return RTV.tensor(result, [...x.shape]);
         }
@@ -299,7 +299,7 @@ defineBuiltin({
 
         const ncols = n + 1;
 
-        const V = new FloatXArray(m * ncols);
+        const V = allocFloat64Array(m * ncols);
         for (let j = 0; j < ncols; j++) {
           const power = n - j;
           for (let i = 0; i < m; i++) {
@@ -307,13 +307,13 @@ defineBuiltin({
           }
         }
 
-        const B = new FloatXArray(m);
+        const B = allocFloat64Array(m);
         for (let i = 0; i < m; i++) B[i] = yArr[i];
 
         const X = linsolveLapack(V, m, ncols, B, 1);
         if (!X) throw new RuntimeError("polyfit: LAPACK bridge unavailable");
 
-        const result = new FloatXArray(ncols);
+        const result = allocFloat64Array(ncols);
         for (let i = 0; i < ncols; i++) result[i] = X[i];
         return RTV.tensor(result, [1, ncols]);
       },
@@ -332,8 +332,8 @@ defineBuiltin({
         return [{ kind: "number" }];
       },
       apply: args => {
-        let x: FloatXArrayType | null = null;
-        let y: FloatXArrayType;
+        let x: Float64Array | null = null;
+        let y: Float64Array;
 
         if (args.length === 1) {
           y = toFloatArray(args[0]);
@@ -365,8 +365,8 @@ defineBuiltin({
     {
       match: varargMatch,
       apply: args => {
-        let x: FloatXArrayType | null = null;
-        let y: FloatXArrayType;
+        let x: Float64Array | null = null;
+        let y: Float64Array;
         const yArg = args.length === 1 ? args[0] : args[1];
 
         if (args.length === 1) {
@@ -381,7 +381,7 @@ defineBuiltin({
         }
 
         const n = y.length;
-        const result = new FloatXArray(n);
+        const result = allocFloat64Array(n);
         result[0] = 0;
         for (let i = 1; i < n; i++) {
           const dx = x ? x[i] - x[i - 1] : 1;
@@ -410,13 +410,13 @@ defineBuiltin({
         const f = args[0];
 
         let hScalar: number | null = 1;
-        let hVec: FloatXArrayType | null = null;
+        let hVec: Float64Array | null = null;
         if (args.length === 2) {
           const spacing = args[1];
           if (isRuntimeNumber(spacing)) {
             hScalar = spacing as number;
           } else if (isRuntimeTensor(spacing)) {
-            hVec = new FloatXArray(spacing.data);
+            hVec = allocFloat64Array(spacing.data);
             hScalar = null;
           } else {
             hScalar = toNumber(spacing);
@@ -424,11 +424,11 @@ defineBuiltin({
         }
 
         const grad1dUniform = (
-          data: FloatXArrayType,
+          data: Float64Array,
           len: number,
           spacing: number
-        ): FloatXArrayType => {
-          const result = new FloatXArray(len);
+        ): Float64Array => {
+          const result = allocFloat64Array(len);
           if (len < 2) {
             result[0] = 0;
             return result;
@@ -442,11 +442,11 @@ defineBuiltin({
         };
 
         const grad1dNonUniform = (
-          data: FloatXArrayType,
+          data: Float64Array,
           len: number,
-          coords: FloatXArrayType
-        ): FloatXArrayType => {
-          const result = new FloatXArray(len);
+          coords: Float64Array
+        ): Float64Array => {
+          const result = allocFloat64Array(len);
           if (len < 2) {
             result[0] = 0;
             return result;
@@ -483,9 +483,9 @@ defineBuiltin({
         }
 
         const sp = hScalar ?? 1;
-        const fxData = new FloatXArray(nRows * nCols);
+        const fxData = allocFloat64Array(nRows * nCols);
         for (let r = 0; r < nRows; r++) {
-          const rowSlice = new FloatXArray(nCols);
+          const rowSlice = allocFloat64Array(nCols);
           for (let c = 0; c < nCols; c++) rowSlice[c] = f.data[c * nRows + r];
           const rowGrad = grad1dUniform(rowSlice, nCols, sp);
           for (let c = 0; c < nCols; c++) fxData[c * nRows + r] = rowGrad[c];
@@ -493,9 +493,9 @@ defineBuiltin({
         const fx = RTV.tensor(fxData, [nRows, nCols]);
 
         if (nargout >= 2) {
-          const fyData = new FloatXArray(nRows * nCols);
+          const fyData = allocFloat64Array(nRows * nCols);
           for (let c = 0; c < nCols; c++) {
-            const colSlice = new FloatXArray(nRows);
+            const colSlice = allocFloat64Array(nRows);
             for (let r = 0; r < nRows; r++) colSlice[r] = f.data[c * nRows + r];
             const colGrad = grad1dUniform(colSlice, nRows, sp);
             for (let r = 0; r < nRows; r++) fyData[c * nRows + r] = colGrad[r];
@@ -524,9 +524,9 @@ defineBuiltin({
         );
         const nSubs = subs.length;
 
-        let vals: FloatXArrayType;
+        let vals: Float64Array;
         if (isRuntimeNumber(args[1])) {
-          vals = new FloatXArray(nSubs);
+          vals = allocFloat64Array(nSubs);
           vals.fill(args[1] as number);
         } else {
           vals = toFloatArray(args[1]);
@@ -589,7 +589,7 @@ defineBuiltin({
           groups[subs[i] - 1].push(vals[i]);
         }
 
-        const result = new FloatXArray(maxIdx);
+        const result = allocFloat64Array(maxIdx);
         for (let i = 0; i < maxIdx; i++) {
           if (groups[i].length > 0) result[i] = reduceFn(groups[i]);
         }
@@ -671,7 +671,7 @@ defineBuiltin({
         if (isRuntimeNumber(xqArg)) return RTV.num(interpOne(xqArg as number));
 
         if (isRuntimeTensor(xqArg)) {
-          const result = new FloatXArray(xqArg.data.length);
+          const result = allocFloat64Array(xqArg.data.length);
           for (let i = 0; i < xqArg.data.length; i++)
             result[i] = interpOne(xqArg.data[i]);
           return RTV.tensor(result, [...xqArg.shape]);
@@ -697,15 +697,15 @@ defineBuiltin({
         const p = toFloatArray(args[0]);
         const n = p.length - 1;
 
-        if (n <= 0) return RTV.tensor(new FloatXArray(0), [0, 0]);
+        if (n <= 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
 
-        const C = new FloatXArray(n * n);
+        const C = allocFloat64Array(n * n);
         for (let i = 0; i < n - 1; i++) C[(i + 1) * n + i] = 1;
         for (let i = 0; i < n; i++) C[i] = -p[i + 1] / p[0];
 
         const bridge = getEffectiveBridge("roots", "eig");
         if (bridge.eig) {
-          const f64 = C instanceof Float64Array ? C : new Float64Array(C);
+          const f64 = C instanceof Float64Array ? C : allocFloat64Array(C);
           const eigResult = bridge.eig(
             f64 as Float64Array,
             n,
@@ -722,22 +722,22 @@ defineBuiltin({
               }
             }
             if (hasComplex) {
-              const realPart = new FloatXArray(n);
-              const imagPart = new FloatXArray(n);
+              const realPart = allocFloat64Array(n);
+              const imagPart = allocFloat64Array(n);
               for (let i = 0; i < n; i++) {
                 realPart[i] = eigResult.wr[i];
                 imagPart[i] = eigResult.wi[i];
               }
               return RTV.tensor(realPart, [n, 1], imagPart);
             }
-            const result = new FloatXArray(n);
+            const result = allocFloat64Array(n);
             for (let i = 0; i < n; i++) result[i] = eigResult.wr[i];
             return RTV.tensor(result, [n, 1]);
           }
         }
 
         if (n === 1) {
-          return RTV.tensor(new FloatXArray([-p[1] / p[0]]), [1, 1]);
+          return RTV.tensor(allocFloat64Array([-p[1] / p[0]]), [1, 1]);
         }
         if (n === 2) {
           const a = p[0],
@@ -746,7 +746,7 @@ defineBuiltin({
           const disc = b * b - 4 * a * c;
           if (disc >= 0) {
             return RTV.tensor(
-              new FloatXArray([
+              allocFloat64Array([
                 (-b + Math.sqrt(disc)) / (2 * a),
                 (-b - Math.sqrt(disc)) / (2 * a),
               ]),
@@ -754,9 +754,9 @@ defineBuiltin({
             );
           }
           return RTV.tensor(
-            new FloatXArray([-b / (2 * a), -b / (2 * a)]),
+            allocFloat64Array([-b / (2 * a), -b / (2 * a)]),
             [2, 1],
-            new FloatXArray([
+            allocFloat64Array([
               Math.sqrt(-disc) / (2 * a),
               -Math.sqrt(-disc) / (2 * a),
             ])
@@ -785,7 +785,7 @@ defineBuiltin({
         const A = args[0];
 
         if (isRuntimeNumber(A)) {
-          return RTV.tensor(new FloatXArray([1, -(A as number)]), [1, 2]);
+          return RTV.tensor(allocFloat64Array([1, -(A as number)]), [1, 2]);
         }
 
         if (!isRuntimeTensor(A))
@@ -796,10 +796,10 @@ defineBuiltin({
         if (m === 1 || n === 1) {
           const roots = toFloatArray(A);
           const nr = roots.length;
-          let coeffs = new FloatXArray(nr + 1);
+          let coeffs = allocFloat64Array(nr + 1);
           coeffs[0] = 1;
           for (let i = 0; i < nr; i++) {
-            const newCoeffs = new FloatXArray(nr + 1);
+            const newCoeffs = allocFloat64Array(nr + 1);
             newCoeffs[0] = coeffs[0];
             for (let j = 1; j <= i + 1; j++) {
               newCoeffs[j] = coeffs[j] - roots[i] * coeffs[j - 1];
@@ -814,7 +814,7 @@ defineBuiltin({
         const bridge = getEffectiveBridge("poly", "eig");
         if (bridge.eig) {
           const f64 =
-            A.data instanceof Float64Array ? A.data : new Float64Array(A.data);
+            A.data instanceof Float64Array ? A.data : allocFloat64Array(A.data);
           const eigResult = bridge.eig(
             f64 as Float64Array,
             n,
@@ -823,12 +823,12 @@ defineBuiltin({
             true
           );
           if (eigResult) {
-            const roots = new FloatXArray(n);
+            const roots = allocFloat64Array(n);
             for (let i = 0; i < n; i++) roots[i] = eigResult.wr[i];
-            let coeffs = new FloatXArray(n + 1);
+            let coeffs = allocFloat64Array(n + 1);
             coeffs[0] = 1;
             for (let i = 0; i < n; i++) {
-              const newCoeffs = new FloatXArray(n + 1);
+              const newCoeffs = allocFloat64Array(n + 1);
               newCoeffs[0] = coeffs[0];
               for (let j = 1; j <= i + 1; j++) {
                 newCoeffs[j] = coeffs[j] - roots[i] * coeffs[j - 1];
@@ -846,7 +846,7 @@ defineBuiltin({
             a11 = A.data[m + 1];
           const tr = a00 + a11;
           const dt = a00 * a11 - a01 * a10;
-          return RTV.tensor(new FloatXArray([1, -tr, dt]), [1, 3]);
+          return RTV.tensor(allocFloat64Array([1, -tr, dt]), [1, 3]);
         }
 
         throw new RuntimeError(
@@ -896,7 +896,7 @@ defineBuiltin({
           }
           const d = n - 1;
           return RTV.tensor(
-            new FloatXArray([sxx / d, sxy / d, sxy / d, syy / d]),
+            allocFloat64Array([sxx / d, sxy / d, sxy / d, syy / d]),
             [2, 2]
           );
         }
@@ -919,14 +919,14 @@ defineBuiltin({
           return RTV.num(s / (n - 1));
         }
 
-        const means = new FloatXArray(ncols);
+        const means = allocFloat64Array(ncols);
         for (let j = 0; j < ncols; j++) {
           let s = 0;
           for (let i = 0; i < m; i++) s += X.data[j * m + i];
           means[j] = s / m;
         }
 
-        const result = new FloatXArray(ncols * ncols);
+        const result = allocFloat64Array(ncols * ncols);
         for (let p = 0; p < ncols; p++) {
           for (let q = 0; q < ncols; q++) {
             let s = 0;
@@ -954,7 +954,7 @@ defineBuiltin({
         return [{ kind: "unknown" }];
       },
       apply: args => {
-        let data: FloatXArrayType;
+        let data: Float64Array;
         let m: number, ncols: number;
 
         if (args.length === 2) {
@@ -963,7 +963,7 @@ defineBuiltin({
           const n = x.length;
           m = n;
           ncols = 2;
-          data = new FloatXArray(n * 2);
+          data = allocFloat64Array(n * 2);
           for (let i = 0; i < n; i++) {
             data[i] = x[i];
             data[n + i] = y[i];
@@ -974,17 +974,17 @@ defineBuiltin({
             throw new RuntimeError("corrcoef: argument must be numeric");
           [m, ncols] = tensorSize2D(X);
           if (m === 1 || ncols === 1) return RTV.num(1);
-          data = new FloatXArray(X.data);
+          data = allocFloat64Array(X.data);
         }
 
-        const means = new FloatXArray(ncols);
+        const means = allocFloat64Array(ncols);
         for (let j = 0; j < ncols; j++) {
           let s = 0;
           for (let i = 0; i < m; i++) s += data[j * m + i];
           means[j] = s / m;
         }
 
-        const covMat = new FloatXArray(ncols * ncols);
+        const covMat = allocFloat64Array(ncols * ncols);
         for (let p = 0; p < ncols; p++) {
           for (let q = 0; q < ncols; q++) {
             let s = 0;
@@ -995,7 +995,7 @@ defineBuiltin({
           }
         }
 
-        const result = new FloatXArray(ncols * ncols);
+        const result = allocFloat64Array(ncols * ncols);
         for (let p = 0; p < ncols; p++) {
           for (let q = 0; q < ncols; q++) {
             const denom = Math.sqrt(
@@ -1043,12 +1043,12 @@ defineBuiltin({
 
         // Determine x shape and decide working dimension.
         let xRows: number, xCols: number;
-        let xData: FloatXArrayType;
+        let xData: Float64Array;
         let xShape: number[];
         if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
           xRows = 1;
           xCols = 1;
-          xData = new FloatXArray([
+          xData = allocFloat64Array([
             isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number),
           ]);
           xShape = [1, 1];
@@ -1077,8 +1077,8 @@ defineBuiltin({
         if (dim === 1) countShape = [N, xCols];
         else countShape = [xRows, N];
 
-        const counts = new FloatXArray(countShape[0] * countShape[1]);
-        const indData = new FloatXArray(xRows * xCols);
+        const counts = allocFloat64Array(countShape[0] * countShape[1]);
+        const indData = allocFloat64Array(xRows * xCols);
 
         if (dim === 1) {
           // Iterate columns; each column is a separate series.
@@ -1169,11 +1169,11 @@ defineBuiltin({
         const dProd = dim.reduce((a, b) => a * b, 1);
 
         const coefsArg = args[1];
-        let rows: number, cols: number, coefData: FloatXArrayType;
+        let rows: number, cols: number, coefData: Float64Array;
         if (isRuntimeNumber(coefsArg) || isRuntimeLogical(coefsArg)) {
           rows = 1;
           cols = 1;
-          coefData = new FloatXArray([
+          coefData = allocFloat64Array([
             isRuntimeLogical(coefsArg)
               ? coefsArg
                 ? 1
@@ -1182,7 +1182,7 @@ defineBuiltin({
           ]);
         } else if (isRuntimeTensor(coefsArg)) {
           [rows, cols] = tensorSize2D(coefsArg);
-          coefData = new FloatXArray(coefsArg.data);
+          coefData = allocFloat64Array(coefsArg.data);
         } else {
           throw new RuntimeError("mkpp: coefs must be numeric");
         }
@@ -1193,7 +1193,7 @@ defineBuiltin({
           );
         const k = cols;
 
-        const breaksOut = new FloatXArray(Lp1);
+        const breaksOut = allocFloat64Array(Lp1);
         for (let i = 0; i < Lp1; i++) breaksOut[i] = breaks[i];
 
         const fields = new Map<string, RuntimeValue>();
@@ -1205,7 +1205,10 @@ defineBuiltin({
         if (dim.length === 1) {
           fields.set("dim", dim[0]);
         } else {
-          fields.set("dim", RTV.tensor(new FloatXArray(dim), [1, dim.length]));
+          fields.set(
+            "dim",
+            RTV.tensor(allocFloat64Array(dim), [1, dim.length])
+          );
         }
         return RTV.struct(fields);
       },
@@ -1279,7 +1282,7 @@ defineBuiltin({
           return lo;
         };
 
-        const evalAt = (x: number, out: FloatXArrayType, off: number) => {
+        const evalAt = (x: number, out: Float64Array, off: number) => {
           const i = findPiece(x);
           const dx = x - breaks[i];
           const baseRow = i * dProd;
@@ -1299,11 +1302,11 @@ defineBuiltin({
         if (isRuntimeNumber(xq) || isRuntimeLogical(xq)) {
           const xv = isRuntimeLogical(xq) ? (xq ? 1 : 0) : (xq as number);
           if (isScalarDim) {
-            const out = new FloatXArray(1);
+            const out = allocFloat64Array(1);
             evalAt(xv, out, 0);
             return RTV.num(out[0]);
           }
-          const out = new FloatXArray(dProd);
+          const out = allocFloat64Array(dProd);
           evalAt(xv, out, 0);
           const outShape = dim.length === 1 ? [dim[0], 1] : [...dim];
           return RTV.tensor(out, outShape);
@@ -1316,12 +1319,12 @@ defineBuiltin({
         const xqShape = xq.shape.slice();
 
         if (isScalarDim) {
-          const out = new FloatXArray(N);
+          const out = allocFloat64Array(N);
           for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i);
           return RTV.tensor(out, xqShape);
         }
 
-        const out = new FloatXArray(dProd * N);
+        const out = allocFloat64Array(dProd * N);
         for (let i = 0; i < N; i++) evalAt(xq.data[i], out, i * dProd);
 
         const xqIsRowVec = xqShape.length === 2 && xqShape[0] === 1;

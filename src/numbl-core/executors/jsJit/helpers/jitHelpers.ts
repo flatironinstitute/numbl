@@ -12,8 +12,6 @@
  */
 
 import {
-  FloatXArray,
-  type FloatXArrayType,
   type RuntimeTensor,
   type RuntimeFunction,
   type RuntimeStruct,
@@ -342,11 +340,11 @@ export const jitHelpers = {
   // doesn't have access to).
   __colonAll: (base: RuntimeTensor): RuntimeTensor => {
     const N = base.data.length;
-    const out = new FloatXArray(N);
+    const out = allocFloat64Array(N);
     out.set(base.data);
     let imag: typeof base.imag = undefined;
     if (base.imag) {
-      imag = new FloatXArray(N);
+      imag = allocFloat64Array(N);
       imag.set(base.imag);
     }
     return makeTensor(out, imag, [N, 1]);
@@ -370,8 +368,8 @@ export const jitHelpers = {
     const cols = aCols;
     const N = totalRows * cols;
     const isComplex = !!(a.imag || b.imag);
-    const out = new FloatXArray(N);
-    const imag = isComplex ? new FloatXArray(N) : undefined;
+    const out = allocFloat64Array(N);
+    const imag = isComplex ? allocFloat64Array(N) : undefined;
     // Each output column is contiguous in column-major storage, so use
     // TypedArray.set with subarray views to copy aRows + bRows elements
     // per column in two helper calls (V8 inlines memmove).
@@ -410,8 +408,8 @@ export const jitHelpers = {
     const totalCols = aCols + bCols;
     const N = rows * totalCols;
     const isComplex = !!(a.imag || b.imag);
-    const out = new FloatXArray(N);
-    const imag = isComplex ? new FloatXArray(N) : undefined;
+    const out = allocFloat64Array(N);
+    const imag = isComplex ? allocFloat64Array(N) : undefined;
     // Column-major: a's columns come first, b's columns come after.
     out.set(a.data, 0);
     out.set(b.data, aCols * rows);
@@ -442,22 +440,22 @@ export const jitHelpers = {
     const fi = Math.round(fixedIdx) - 1; // 0-based fixed index
     if (colonPos === 0) {
       // Column slice: A(:, fi) — contiguous in column-major, length d0.
-      const out = new FloatXArray(d0);
+      const out = allocFloat64Array(d0);
       const offset = fi * d0;
       for (let i = 0; i < d0; i++) out[i] = d[offset + i];
-      let outIm: FloatXArrayType | undefined;
+      let outIm: Float64Array | undefined;
       if (dim) {
-        outIm = new FloatXArray(d0);
+        outIm = allocFloat64Array(d0);
         for (let i = 0; i < d0; i++) outIm[i] = dim[offset + i];
       }
       return makeTensor(out, outIm, [d0, 1]);
     } else {
       // Row slice: A(fi, :) — strided in column-major, length d1.
-      const out = new FloatXArray(d1);
+      const out = allocFloat64Array(d1);
       for (let j = 0; j < d1; j++) out[j] = d[j * d0 + fi];
-      let outIm: FloatXArrayType | undefined;
+      let outIm: Float64Array | undefined;
       if (dim) {
-        outIm = new FloatXArray(d1);
+        outIm = allocFloat64Array(d1);
         for (let j = 0; j < d1; j++) outIm[j] = dim[j * d0 + fi];
       }
       return makeTensor(out, outIm, [1, d1]);
@@ -479,7 +477,7 @@ export const jitHelpers = {
     const pageSize = d0 * d1;
     const pageOffset = (Math.round(k) - 1) * pageSize;
     if (rhs.imag && !base.imag) {
-      base.imag = new FloatXArray(base.data.length);
+      base.imag = allocFloat64Array(base.data.length);
     }
     const rdata = rhs.data;
     for (let i = 0; i < pageSize; i++) base.data[pageOffset + i] = rdata[i];
@@ -496,9 +494,9 @@ export const jitHelpers = {
 
   // Tensor literal construction
   mkTensor: (data: number[], shape: number[]) =>
-    makeTensor(new FloatXArray(data), undefined, shape),
+    makeTensor(allocFloat64Array(data), undefined, shape),
   mkTensorC: (reData: number[], imData: number[], shape: number[]) =>
-    makeTensor(new FloatXArray(reData), new FloatXArray(imData), shape),
+    makeTensor(allocFloat64Array(reData), allocFloat64Array(imData), shape),
 
   // Struct construction + field write (stage 22)
   //
@@ -592,10 +590,10 @@ export const jitHelpers = {
       const shape: [number, number] = isRowVector
         ? [1, out.length]
         : [out.length, 1];
-      return makeTensor(new FloatXArray(out), undefined, shape);
+      return makeTensor(allocFloat64Array(out), undefined, shape);
     }
     const n = idx.data.length;
-    const result = new FloatXArray(n);
+    const result = allocFloat64Array(n);
     for (let i = 0; i < n; i++) {
       const k = Math.round(idx.data[i] as number) - 1;
       if (k < 0 || k >= bl) throw new Error("Index exceeds array bounds");
@@ -670,11 +668,11 @@ export const jitHelpers = {
       }
     }
     if (parts.length === 0) {
-      return makeTensor(new FloatXArray(0), undefined, [0, 0]);
+      return makeTensor(allocFloat64Array(0), undefined, [0, 0]);
     }
     if (nRows <= 0) nRows = 1;
     const nCols = parts.length / nRows;
-    return makeTensor(new FloatXArray(parts), undefined, [nRows, nCols]);
+    return makeTensor(allocFloat64Array(parts), undefined, [nRows, nCols]);
   },
 
   // Scalar accessors
@@ -804,6 +802,7 @@ Object.assign(jitHelpers, buildIBuiltinHelpers());
 
 import type { IBuiltin } from "../../../interpreter/builtins/index.js";
 import { inferJitType as _ijt } from "../../../interpreter/builtins/index.js";
+import { allocFloat64Array } from "./alloc.js";
 setDynamicRegisterHook((b: IBuiltin) => {
   const h = jitHelpers as Record<string, unknown>;
   h[`ib_${b.name}`] = (...args: unknown[]) => {

@@ -2,9 +2,9 @@
  * Shared shape/size argument parsing and value coercion for builtins.
  */
 
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 import { type RuntimeValue, RTV, RuntimeError } from "../runtime/index.js";
 import {
-  FloatXArray,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeTensor,
@@ -16,14 +16,14 @@ import {
 export function coerceToTensor(v: RuntimeValue, name: string): RuntimeTensor {
   if (isRuntimeTensor(v)) return v;
   if (isRuntimeNumber(v))
-    return RTV.tensor(new FloatXArray([v]), [1, 1]) as RuntimeTensor;
+    return RTV.tensor(allocFloat64Array([v]), [1, 1]) as RuntimeTensor;
   if (isRuntimeLogical(v))
-    return RTV.tensor(new FloatXArray([v ? 1 : 0]), [1, 1]) as RuntimeTensor;
+    return RTV.tensor(allocFloat64Array([v ? 1 : 0]), [1, 1]) as RuntimeTensor;
   if (isRuntimeComplexNumber(v))
     return RTV.tensor(
-      new FloatXArray([v.re]),
+      allocFloat64Array([v.re]),
       [1, 1],
-      new FloatXArray([v.im])
+      allocFloat64Array([v.im])
     ) as RuntimeTensor;
   throw new RuntimeError(`${name}: argument must be numeric`);
 }

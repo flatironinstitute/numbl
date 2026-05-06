@@ -32,6 +32,7 @@ import { ddot } from "../BLAS/ddot.js";
 import { dgemm } from "../BLAS/dgemm.js";
 import { dgemv } from "../BLAS/dgemv.js";
 import { idamax } from "../BLAS/idamax.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // SIDE constants
 const BOTH = 2; // 'B' — compute both left and right eigenvectors
@@ -221,7 +222,7 @@ export function dtrevc3(
   }
 
   // Local 2x2 array X(2,2), stored column-major as flat array of length 4
-  const x = new Float64Array(4);
+  const x = allocFloat64Array(4);
 
   // ISCOMPLEX array for blocked back-transform (0-based, size NBMAX)
   const iscomplex = new Int32Array(NBMAX);

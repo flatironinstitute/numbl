@@ -11,7 +11,6 @@
  */
 
 import { RuntimeError } from "../runtime/index.js";
-import { FloatXArrayType } from "../runtime/types.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import { toF64 } from "./check-helpers.js";
 
@@ -23,10 +22,10 @@ import { toF64 } from "./check-helpers.js";
  * in practice since ts-lapack always has it).
  */
 export function linsolveLapack(
-  A: FloatXArrayType,
+  A: Float64Array,
   m: number,
   n: number,
-  B: FloatXArrayType,
+  B: Float64Array,
   nrhs: number
 ): Float64Array | null {
   const bridge = getEffectiveBridge("linsolve", "linsolve");
@@ -40,12 +39,12 @@ export function linsolveLapack(
  * The ts-lapack fallback throws — native addon is required for complex linsolve.
  */
 export function linsolveComplexLapack(
-  ARe: FloatXArrayType,
-  AIm: FloatXArrayType,
+  ARe: Float64Array,
+  AIm: Float64Array,
   m: number,
   n: number,
-  BRe: FloatXArrayType,
-  BIm: FloatXArrayType,
+  BRe: Float64Array,
+  BIm: Float64Array,
   nrhs: number
 ): { re: Float64Array; im: Float64Array } {
   const bridge = getEffectiveBridge("linsolveComplex", "linsolveComplex");

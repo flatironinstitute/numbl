@@ -16,6 +16,7 @@ import { dlacpy } from "./dlacpy.js";
 import { dlaset } from "./dlaset.js";
 import { ilaenv } from "../utils/ilaenv.js";
 import { LOWER } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // "ALL" uplo constant for dlacpy/dlaset (anything other than UPPER/LOWER)
 const ALL = -1;
@@ -271,8 +272,8 @@ export function dhseqr(
           //      tiny matrices must be copied into a larger
           //      array before calling DLAQR0. ====
 
-          const hl = new Float64Array(NL * NL);
-          const workl = new Float64Array(NL);
+          const hl = allocFloat64Array(NL * NL);
+          const workl = allocFloat64Array(NL);
 
           dlacpy(ALL, n, n, h, hOff, ldh, hl, 0, NL);
           // HL(N+1, N) = ZERO

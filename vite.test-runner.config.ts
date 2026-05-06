@@ -60,11 +60,6 @@ export default defineConfig({
   root: "src/test-runner",
   // Relative so the entry works regardless of the deploy subpath.
   base: "./",
-  define: {
-    "import.meta.env.NUMBL_USE_FLOAT32": JSON.stringify(
-      process.env.NUMBL_USE_FLOAT32
-    ),
-  },
   build: {
     outDir: "../../dist/test-runner",
     emptyOutDir: true,

@@ -3,7 +3,6 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeLogical,
@@ -26,6 +25,7 @@ import {
   besselk,
 } from "../../helpers/bessel.js";
 import { tensorOps, OpBessel } from "../../ops/index.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -37,20 +37,20 @@ function binaryApply(
   const aIsT = isRuntimeTensor(a);
   const bIsT = isRuntimeTensor(b);
   if (aIsT && bIsT) {
-    const result = new FloatXArray(a.data.length);
+    const result = allocFloat64Array(a.data.length);
     for (let i = 0; i < a.data.length; i++)
       result[i] = fn(a.data[i], b.data[i]);
     return RTV.tensor(result, a.shape);
   }
   if (aIsT) {
     const bv = toNumber(b);
-    const result = new FloatXArray(a.data.length);
+    const result = allocFloat64Array(a.data.length);
     for (let i = 0; i < a.data.length; i++) result[i] = fn(a.data[i], bv);
     return RTV.tensor(result, a.shape);
   }
   if (bIsT) {
     const av = toNumber(a);
-    const result = new FloatXArray(b.data.length);
+    const result = allocFloat64Array(b.data.length);
     for (let i = 0; i < b.data.length; i++) result[i] = fn(av, b.data[i]);
     return RTV.tensor(result, b.shape);
   }
@@ -127,7 +127,7 @@ for (const [name, fn, scaleFn, opCode] of besselDefs) {
         ) {
           const nu = toNumber(nuArg);
           const zT = zArg as RuntimeTensor;
-          const out = new FloatXArray(zT.data.length);
+          const out = allocFloat64Array(zT.data.length);
           tensorOps.besselReal(
             opCode,
             nu,
@@ -208,8 +208,8 @@ function binaryApplyComplex(
     shape: number[],
     iter: (i: number) => { re: number; im: number }
   ): RuntimeValue => {
-    const re = new FloatXArray(len);
-    const im = new FloatXArray(len);
+    const re = allocFloat64Array(len);
+    const im = allocFloat64Array(len);
     let hasImag = false;
     for (let i = 0; i < len; i++) {
       const r = iter(i);
@@ -267,8 +267,8 @@ registerIBuiltin({
         const nu = toNumber(nuArg);
         const zT = zArg as RuntimeTensor;
         const len = zT.data.length;
-        const outRe = new FloatXArray(len);
-        const outIm = new FloatXArray(len);
+        const outRe = allocFloat64Array(len);
+        const outIm = allocFloat64Array(len);
         tensorOps.besselH(
           k,
           nu,
@@ -313,8 +313,8 @@ function applyAiryElementwise(
   }
   if (isRuntimeTensor(xArg) && xArg.imag !== undefined) {
     const len = xArg.data.length;
-    const resultRe = new FloatXArray(len);
-    const resultIm = new FloatXArray(len);
+    const resultRe = allocFloat64Array(len);
+    const resultIm = allocFloat64Array(len);
     for (let i = 0; i < len; i++) {
       const all = airyAllComplex(xArg.data[i], xArg.imag[i]);
       const r = all[airyComplexKeys[n]];
@@ -326,7 +326,7 @@ function applyAiryElementwise(
   }
   const fn = airyFns[n];
   if (isRuntimeTensor(xArg)) {
-    const result = new FloatXArray(xArg.data.length);
+    const result = allocFloat64Array(xArg.data.length);
     for (let i = 0; i < xArg.data.length; i++) {
       const val = fn(xArg.data[i]);
       result[i] = scaled ? scaleAiry(n, xArg.data[i], val) : val;
@@ -421,9 +421,9 @@ registerIBuiltin({
         const effNargout = Math.max(nargout, 1);
 
         const buildResult = (
-          snArr: InstanceType<typeof FloatXArray>,
-          cnArr: InstanceType<typeof FloatXArray>,
-          dnArr: InstanceType<typeof FloatXArray>,
+          snArr: Float64Array,
+          cnArr: Float64Array,
+          dnArr: Float64Array,
           shape: number[]
         ): RuntimeValue | RuntimeValue[] => {
           const results: RuntimeValue[] = [];
@@ -445,9 +445,9 @@ registerIBuiltin({
         if (uIsT && !mIsT) {
           const mv = toNumber(mArg);
           const len = uArg.data.length;
-          const snArr = new FloatXArray(len);
-          const cnArr = new FloatXArray(len);
-          const dnArr = new FloatXArray(len);
+          const snArr = allocFloat64Array(len);
+          const cnArr = allocFloat64Array(len);
+          const dnArr = allocFloat64Array(len);
           for (let i = 0; i < len; i++) {
             const r = ellipjScalar(uArg.data[i], mv, tol);
             snArr[i] = r.sn;
@@ -461,9 +461,9 @@ registerIBuiltin({
           const uv = toNumber(uArg);
           const mT = mArg as RuntimeTensor;
           const len = mT.data.length;
-          const snArr = new FloatXArray(len);
-          const cnArr = new FloatXArray(len);
-          const dnArr = new FloatXArray(len);
+          const snArr = allocFloat64Array(len);
+          const cnArr = allocFloat64Array(len);
+          const dnArr = allocFloat64Array(len);
           for (let i = 0; i < len; i++) {
             const r = ellipjScalar(uv, mT.data[i], tol);
             snArr[i] = r.sn;
@@ -477,9 +477,9 @@ registerIBuiltin({
         const uT = uArg as RuntimeTensor;
         const mT = mArg as RuntimeTensor;
         const len = uT.data.length;
-        const snArr = new FloatXArray(len);
-        const cnArr = new FloatXArray(len);
-        const dnArr = new FloatXArray(len);
+        const snArr = allocFloat64Array(len);
+        const cnArr = allocFloat64Array(len);
+        const dnArr = allocFloat64Array(len);
         for (let i = 0; i < len; i++) {
           const r = ellipjScalar(uT.data[i], mT.data[i], tol);
           snArr[i] = r.sn;
@@ -591,7 +591,7 @@ registerIBuiltin({
       const numX = xValues.length;
       const numOrders = n + 1;
       const outSize = numOrders * numX;
-      const result = new FloatXArray(outSize);
+      const result = allocFloat64Array(outSize);
 
       for (let xi = 0; xi < numX; xi++) {
         const x = xValues[xi];

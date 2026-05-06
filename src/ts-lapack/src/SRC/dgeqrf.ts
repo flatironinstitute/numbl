@@ -34,6 +34,7 @@
 import { dgeqr2 } from "./dgeqr2.js";
 import { ilaenv } from "../utils/ilaenv.js";
 import { xerbla } from "../utils/xerbla.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 export function dgeqrf(
   m: number,
@@ -83,7 +84,7 @@ export function dgeqrf(
 
   if (nb >= nbmin && nb < k && nx < k) {
     // Blocked code path (in practice skipped since ilaenv returns 1 for DGEQRF)
-    const work = new Float64Array(iws);
+    const work = allocFloat64Array(iws);
     for (i = 1; i <= k - nx; i += nb) {
       const ib = Math.min(k - i + 1, nb);
       // Factor block A(i:m, i:i+ib-1)
@@ -104,7 +105,7 @@ export function dgeqrf(
 
   // Use unblocked code for the last or only block
   if (i <= k) {
-    const work = new Float64Array(n);
+    const work = allocFloat64Array(n);
     dgeqr2(
       m - i + 1,
       n - i + 1,

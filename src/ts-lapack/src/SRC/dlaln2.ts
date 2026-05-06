@@ -11,6 +11,7 @@
 import { dlamch } from "./dlamch.js";
 import { dladiv } from "./dladiv.js";
 import { MACH_SFMIN } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // ZSWAP: indexed 1..4 (Fortran DATA), stored as 0..3 here
 const ZSWAP = [false, false, true, true];
@@ -132,8 +133,8 @@ export function dlaln2(
     // Compute the real part of  C = ca A - w D  (or  ca A**T - w D)
     // CR and CI are 2x2 matrices stored as flat arrays (column-major):
     //   crv[0] = CR(1,1), crv[1] = CR(2,1), crv[2] = CR(1,2), crv[3] = CR(2,2)
-    const crv = new Float64Array(4);
-    const civ = new Float64Array(4);
+    const crv = allocFloat64Array(4);
+    const civ = allocFloat64Array(4);
 
     // CR(1,1) = ca*A(1,1) - wr*D1
     crv[0] = ca * A(1, 1) - wr * d1;

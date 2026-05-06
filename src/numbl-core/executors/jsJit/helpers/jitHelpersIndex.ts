@@ -10,13 +10,10 @@
  * checks to ensure consistency with the interpreter.
  */
 
-import {
-  FloatXArray,
-  type FloatXArrayType,
-  type RuntimeTensor,
-} from "../../../runtime/types.js";
+import { type RuntimeTensor } from "../../../runtime/types.js";
 import { makeTensor } from "./jitHelpersTensor.js";
 import { mkc } from "./jitHelpersComplex.js";
+import { allocFloat64Array } from "./alloc.js";
 
 // ── Soft bail to interpreter ───────────────────────────────────────────
 //
@@ -172,14 +169,14 @@ export function idx3r(
 // scalar arguments. The JIT codegen hoists these reads ONCE at the
 // top of a loop function, so per-iter cost is just register reads.
 
-export function idx1r_h(data: FloatXArrayType, len: number, i: number): number {
+export function idx1r_h(data: Float64Array, len: number, i: number): number {
   const idx = (i - 1) | 0;
   if (idx >>> 0 >= len) bce();
   return data[idx];
 }
 
 export function idx2r_h(
-  data: FloatXArrayType,
+  data: Float64Array,
   len: number,
   rows: number,
   ri: number,
@@ -195,7 +192,7 @@ export function idx2r_h(
 }
 
 export function idx3r_h(
-  data: FloatXArrayType,
+  data: Float64Array,
   len: number,
   d0: number,
   d1: number,
@@ -223,7 +220,7 @@ export function idx3r_h(
 const GROW_BAIL_MSG = "scalar index write requires tensor growth";
 
 export function set1r_h(
-  data: FloatXArrayType,
+  data: Float64Array,
   len: number,
   i: number,
   v: number
@@ -234,7 +231,7 @@ export function set1r_h(
 }
 
 export function set2r_h(
-  data: FloatXArrayType,
+  data: Float64Array,
   len: number,
   rows: number,
   ri: number,
@@ -252,7 +249,7 @@ export function set2r_h(
 }
 
 export function set3r_h(
-  data: FloatXArrayType,
+  data: Float64Array,
   len: number,
   d0: number,
   d1: number,
@@ -278,11 +275,11 @@ export function set3r_h(
 // ranges. Uses TypedArray.prototype.set which handles overlapping memory.
 
 export function setRange1r_h(
-  dstData: FloatXArrayType,
+  dstData: Float64Array,
   dstLen: number,
   dstStart: number,
   dstEnd: number,
-  srcData: FloatXArrayType,
+  srcData: Float64Array,
   srcLen: number,
   srcStart: number,
   srcEnd: number
@@ -314,7 +311,7 @@ export function setRange1r_h(
 // stage-5 slice-alias path; small slices are cheap in V8 young-gen.
 
 export function subarrayCopy1r(
-  srcData: FloatXArrayType,
+  srcData: Float64Array,
   srcLen: number,
   start: number,
   end: number
@@ -323,11 +320,11 @@ export function subarrayCopy1r(
   const e = (end - 1) | 0;
   const n = e - s + 1;
   if (n <= 0) {
-    return makeTensor(new FloatXArray(0), undefined, [0, 1]);
+    return makeTensor(allocFloat64Array(0), undefined, [0, 1]);
   }
   if (s >>> 0 >= srcLen) bce();
   if (e >>> 0 >= srcLen) bce();
-  const out = new FloatXArray(n);
+  const out = allocFloat64Array(n);
   out.set(srcData.subarray(s, e + 1));
   return makeTensor(out, undefined, [n, 1]);
 }
@@ -337,7 +334,7 @@ export function subarrayCopy1r(
 // needed for downstream shape-sensitive ops like isequal.
 
 export function subarrayCopy1rRow(
-  srcData: FloatXArrayType,
+  srcData: Float64Array,
   srcLen: number,
   start: number,
   end: number
@@ -346,11 +343,11 @@ export function subarrayCopy1rRow(
   const e = (end - 1) | 0;
   const n = e - s + 1;
   if (n <= 0) {
-    return makeTensor(new FloatXArray(0), undefined, [1, 0]);
+    return makeTensor(allocFloat64Array(0), undefined, [1, 0]);
   }
   if (s >>> 0 >= srcLen) bce();
   if (e >>> 0 >= srcLen) bce();
-  const out = new FloatXArray(n);
+  const out = allocFloat64Array(n);
   out.set(srcData.subarray(s, e + 1));
   return makeTensor(out, undefined, [1, n]);
 }
@@ -363,11 +360,11 @@ export function subarrayCopy1rRow(
 // whose linear length matches — MATLAB's behavior for this shape).
 
 export function setCol2r_h(
-  dstData: FloatXArrayType,
+  dstData: Float64Array,
   dstRows: number,
   dstLen: number,
   col: number,
-  srcData: FloatXArrayType,
+  srcData: Float64Array,
   srcLen: number
 ): void {
   if (srcLen !== dstRows) {

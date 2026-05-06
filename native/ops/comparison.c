@@ -1,6 +1,6 @@
 /**
  * Real + complex comparison ops.  Output is a logical tensor stored as
- * 0.0 / 1.0 in a double buffer (numbl stores logicals as FloatXArray with
+ * 0.0 / 1.0 in a double buffer (numbl stores logicals as Float64Array with
  * an _isLogical flag on the runtime tensor).
  *
  * Caller-allocated input/output buffers; never copies.

@@ -4,7 +4,6 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeChar,
   isRuntimeClassInstance,
   isRuntimeComplexNumber,
@@ -22,6 +21,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 
@@ -55,7 +55,7 @@ defineBuiltin({
         const v = args[0];
         if (isRuntimeChar(v)) {
           if (v.value.length === 0)
-            return RTV.tensor(new FloatXArray(0), [0, 0]);
+            return RTV.tensor(allocFloat64Array(0), [0, 0]);
           if (v.value.length === 1) return RTV.num(v.value.charCodeAt(0));
           const codes = Array.from(v.value).map(c => c.charCodeAt(0));
           return RTV.row(codes);
@@ -65,7 +65,7 @@ defineBuiltin({
         if (isRuntimeComplexNumber(v)) return v.re;
         if (isRuntimeTensor(v)) {
           if (v._isLogical) {
-            return RTV.tensor(new FloatXArray(v.data), v.shape);
+            return RTV.tensor(allocFloat64Array(v.data), v.shape);
           }
           return v;
         }
@@ -166,19 +166,19 @@ for (const { name, min, max } of INT_RANGES) {
             return RTV.num(saturateRoundToward(v.re, min, max));
           if (isRuntimeChar(v)) {
             if (v.value.length === 0)
-              return RTV.tensor(new FloatXArray(0), [0, 0]);
+              return RTV.tensor(allocFloat64Array(0), [0, 0]);
             if (v.value.length === 1)
               return RTV.num(
                 saturateRoundToward(v.value.charCodeAt(0), min, max)
               );
-            const out = new FloatXArray(v.value.length);
+            const out = allocFloat64Array(v.value.length);
             for (let i = 0; i < v.value.length; i++) {
               out[i] = saturateRoundToward(v.value.charCodeAt(i), min, max);
             }
             return RTV.row(Array.from(out));
           }
           if (isRuntimeTensor(v)) {
-            const data = new FloatXArray(v.data.length);
+            const data = allocFloat64Array(v.data.length);
             for (let i = 0; i < v.data.length; i++) {
               data[i] = saturateRoundToward(v.data[i], min, max);
             }
@@ -251,14 +251,14 @@ defineBuiltin({
         }
         if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
           const bv = b as number;
-          const data = new FloatXArray(a.data.length);
+          const data = allocFloat64Array(a.data.length);
           for (let i = 0; i < a.data.length; i++)
             data[i] = divFn(a.data[i], bv);
           return RTV.tensor(data, [...a.shape]);
         }
         if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
           const av = a as number;
-          const data = new FloatXArray(b.data.length);
+          const data = allocFloat64Array(b.data.length);
           for (let i = 0; i < b.data.length; i++)
             data[i] = divFn(av, b.data[i]);
           return RTV.tensor(data, [...b.shape]);
@@ -266,7 +266,7 @@ defineBuiltin({
         if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
           if (a.data.length !== b.data.length)
             throw new RuntimeError("idivide: arrays must be the same size");
-          const data = new FloatXArray(a.data.length);
+          const data = allocFloat64Array(a.data.length);
           for (let i = 0; i < a.data.length; i++)
             data[i] = divFn(a.data[i], b.data[i]);
           return RTV.tensor(data, [...a.shape]);
@@ -303,7 +303,7 @@ defineBuiltin({
       apply: args => {
         const v = args[0];
         if (isRuntimeTensor(v)) {
-          const result = new FloatXArray(v.data.length);
+          const result = allocFloat64Array(v.data.length);
           for (let i = 0; i < v.data.length; i++) {
             result[i] = v.data[i] !== 0 ? 1 : 0;
           }
@@ -345,10 +345,10 @@ defineBuiltin({
         if (isRuntimeNumber(a)) return RTV.complex(a, 0);
         if (isRuntimeLogical(a)) return RTV.complex(a ? 1 : 0, 0);
         if (isRuntimeTensor(a)) {
-          const im = a.imag || new FloatXArray(a.data.length);
+          const im = a.imag || allocFloat64Array(a.data.length);
           return makeTensor(
-            new FloatXArray(a.data),
-            new FloatXArray(im),
+            allocFloat64Array(a.data),
+            allocFloat64Array(im),
             a.shape.slice()
           );
         }
@@ -401,8 +401,8 @@ defineBuiltin({
           const len = aIsT
             ? (a as RuntimeTensor).data.length
             : (b as RuntimeTensor).data.length;
-          const reArr = new FloatXArray(len);
-          const imArr = new FloatXArray(len);
+          const reArr = allocFloat64Array(len);
+          const imArr = allocFloat64Array(len);
           const aScalar = !aIsT ? toNumber(a) : 0;
           const bScalar = !bIsT ? toNumber(b) : 0;
           for (let i = 0; i < len; i++) {
@@ -440,7 +440,7 @@ defineBuiltin({
         return null;
       },
       apply: args => {
-        const empty = () => RTV.tensor(new FloatXArray(0), [0, 0]);
+        const empty = () => RTV.tensor(allocFloat64Array(0), [0, 0]);
         if (args.length === 0) return RTV.cell([], [0, 0]);
         if (args.length === 1) {
           const arg = args[0];
@@ -563,8 +563,8 @@ defineBuiltin({
         const v = args[0];
         if (!isRuntimeSparseMatrix(v)) return v; // passthrough for non-sparse
         const { m, n, ir, jc, pr, pi } = v;
-        const data = new FloatXArray(m * n);
-        const imag = pi ? new FloatXArray(m * n) : undefined;
+        const data = allocFloat64Array(m * n);
+        const imag = pi ? allocFloat64Array(m * n) : undefined;
         for (let col = 0; col < n; col++) {
           for (let k = jc[col]; k < jc[col + 1]; k++) {
             data[col * m + ir[k]] = pr[k]; // column-major

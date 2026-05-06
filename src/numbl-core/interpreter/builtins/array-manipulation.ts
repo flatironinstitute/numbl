@@ -16,8 +16,6 @@ import {
   vertcat,
 } from "../../runtime/index.js";
 import {
-  FloatXArray,
-  type FloatXArrayType,
   type RuntimeTensor,
   type RuntimeValue,
   isRuntimeNumber,
@@ -32,6 +30,7 @@ import type { JitType } from "../../jitTypes.js";
 import { coerceToTensor } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -39,8 +38,8 @@ import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
 function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
   const shape = v.shape;
   const totalElems = numel(shape);
-  const result = new FloatXArray(totalElems);
-  const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
+  const result = allocFloat64Array(totalElems);
+  const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
   const dimSize = dimIdx < shape.length ? shape[dimIdx] : 1;
 
   let strideDim = 1;
@@ -73,8 +72,8 @@ function flipSparse(
 
   if (dimIdx === 1) {
     const ir = new Int32Array(nnz);
-    const pr = new Float64Array(nnz);
-    const pi = isComplex ? new Float64Array(nnz) : undefined;
+    const pr = allocFloat64Array(nnz);
+    const pi = isComplex ? allocFloat64Array(nnz) : undefined;
     const jc = new Int32Array(v.n + 1);
     let dst = 0;
     for (let c = 0; c < v.n; c++) {
@@ -91,8 +90,8 @@ function flipSparse(
     return RTV.sparseMatrix(v.m, v.n, ir, jc, pr, pi);
   }
   const ir = new Int32Array(nnz);
-  const pr = new Float64Array(nnz);
-  const pi = isComplex ? new Float64Array(nnz) : undefined;
+  const pr = allocFloat64Array(nnz);
+  const pi = isComplex ? allocFloat64Array(nnz) : undefined;
   const jc = new Int32Array(v.n + 1);
   let dst = 0;
   for (let c = 0; c < v.n; c++) {
@@ -186,8 +185,8 @@ defineBuiltin({
           }
           triplets.sort((a, b) => a.col - b.col || a.row - b.row);
           const ir = new Int32Array(nnz);
-          const pr = new Float64Array(nnz);
-          const pi = v.pi ? new Float64Array(nnz) : undefined;
+          const pr = allocFloat64Array(nnz);
+          const pi = v.pi ? allocFloat64Array(nnz) : undefined;
           const jc = new Int32Array(newN + 1);
           let ti = 0;
           for (let c = 0; c < newN; c++) {
@@ -212,12 +211,12 @@ defineBuiltin({
         const data = isRuntimeTensor(v)
           ? v.data
           : isRuntimeComplexNumber(v)
-            ? new FloatXArray([v.re])
-            : new FloatXArray([v as number]);
+            ? allocFloat64Array([v.re])
+            : allocFloat64Array([v as number]);
         const imag = isRuntimeTensor(v)
           ? v.imag
           : isRuntimeComplexNumber(v)
-            ? new FloatXArray([v.im])
+            ? allocFloat64Array([v.im])
             : undefined;
 
         let rawDims: (number | null)[];
@@ -269,9 +268,9 @@ defineBuiltin({
           } as RuntimeTensor;
         }
         return RTV.tensor(
-          new FloatXArray(data),
+          allocFloat64Array(data),
           shape,
-          imag ? new FloatXArray(imag) : undefined
+          imag ? allocFloat64Array(imag) : undefined
         );
       },
     },
@@ -322,7 +321,7 @@ defineBuiltin({
         const absK = Math.abs(k);
         if (isRuntimeNumber(v)) {
           const m = 1 + absK;
-          const data = new FloatXArray(m * m);
+          const data = allocFloat64Array(m * m);
           const r = k < 0 ? -k : 0;
           const c = k > 0 ? k : 0;
           data[colMajorIndex(r, c, m)] = v as number;
@@ -330,8 +329,8 @@ defineBuiltin({
         }
         if (isRuntimeComplexNumber(v)) {
           const m = 1 + absK;
-          const data = new FloatXArray(m * m);
-          const imag = new FloatXArray(m * m);
+          const data = allocFloat64Array(m * m);
+          const imag = allocFloat64Array(m * m);
           const r = k < 0 ? -k : 0;
           const c = k > 0 ? k : 0;
           data[colMajorIndex(r, c, m)] = v.re;
@@ -384,9 +383,9 @@ defineBuiltin({
             }
             entries.sort((a2, b) => a2.col - b.col || a2.row - b.row);
             const newIr = new Int32Array(entries.length);
-            const newPr = new Float64Array(entries.length);
+            const newPr = allocFloat64Array(entries.length);
             const newPi = isComplex
-              ? new Float64Array(entries.length)
+              ? allocFloat64Array(entries.length)
               : undefined;
             const jc = new Int32Array(sz + 1);
             let ti = 0;
@@ -412,7 +411,7 @@ defineBuiltin({
               1,
               new Int32Array(0),
               new Int32Array([0]),
-              new Float64Array(0)
+              allocFloat64Array(0)
             );
           }
           const isComplex = v.pi !== undefined;
@@ -437,8 +436,8 @@ defineBuiltin({
             1,
             new Int32Array(dIr),
             jcOut,
-            new Float64Array(dPr),
-            isComplex ? new Float64Array(dPi) : undefined
+            allocFloat64Array(dPr),
+            isComplex ? allocFloat64Array(dPi) : undefined
           );
         }
 
@@ -448,8 +447,8 @@ defineBuiltin({
         if (rows === 1 || cols === 1) {
           const vecLen = Math.max(rows, cols);
           const m2 = vecLen + absK;
-          const data = new FloatXArray(m2 * m2);
-          const imag = v.imag ? new FloatXArray(m2 * m2) : undefined;
+          const data = allocFloat64Array(m2 * m2);
+          const imag = v.imag ? allocFloat64Array(m2 * m2) : undefined;
           for (let i = 0; i < vecLen; i++) {
             const r = k < 0 ? i - k : i;
             const c = k > 0 ? i + k : i;
@@ -462,8 +461,8 @@ defineBuiltin({
           k >= 0
             ? Math.max(0, Math.min(rows, cols - k))
             : Math.max(0, Math.min(rows + k, cols));
-        const data = new FloatXArray(diagLen);
-        const imag = v.imag ? new FloatXArray(diagLen) : undefined;
+        const data = allocFloat64Array(diagLen);
+        const imag = v.imag ? allocFloat64Array(diagLen) : undefined;
         for (let i = 0; i < diagLen; i++) {
           const r = k < 0 ? i - k : i;
           const c = k > 0 ? i + k : i;
@@ -497,8 +496,8 @@ defineBuiltin({
         const tensors = arrays.map(a => {
           if (isRuntimeNumber(a))
             return {
-              data: new FloatXArray([a as number]),
-              imag: null as FloatXArrayType | null,
+              data: allocFloat64Array([a as number]),
+              imag: null as Float64Array | null,
               shape: [1, 1],
             };
           if (!isRuntimeTensor(a))
@@ -522,8 +521,10 @@ defineBuiltin({
         const resultShape = [...refShape];
         resultShape[dimIdx] = tensors.reduce((s, t) => s + t.shape[dimIdx], 0);
         const totalElems = numel(resultShape);
-        const result = new FloatXArray(totalElems);
-        const resultImag = hasComplex ? new FloatXArray(totalElems) : undefined;
+        const result = allocFloat64Array(totalElems);
+        const resultImag = hasComplex
+          ? allocFloat64Array(totalElems)
+          : undefined;
 
         const ndim = resultShape.length;
         let strideDim = 1;
@@ -673,9 +674,9 @@ defineBuiltin({
         k = ((k % 4) + 4) % 4;
         if (k === 0) {
           const result = RTV.tensor(
-            new FloatXArray(v.data),
+            allocFloat64Array(v.data),
             [...v.shape],
-            v.imag ? new FloatXArray(v.imag) : undefined
+            v.imag ? allocFloat64Array(v.imag) : undefined
           );
           if (v._isLogical) result._isLogical = true;
           return result;
@@ -686,8 +687,8 @@ defineBuiltin({
         let r = rows,
           c = cols;
         for (let iter = 0; iter < k; iter++) {
-          const newData = new FloatXArray(r * c);
-          const newImag = imag ? new FloatXArray(r * c) : undefined;
+          const newData = allocFloat64Array(r * c);
+          const newImag = imag ? allocFloat64Array(r * c) : undefined;
           for (let i = 0; i < c; i++) {
             for (let j = 0; j < r; j++) {
               const srcIdx = (c - 1 - i) * r + j;
@@ -751,12 +752,12 @@ defineBuiltin({
         }
         if (isRuntimeNumber(v)) {
           const total = reps.reduce((a, b) => a * b, 1);
-          const data = new FloatXArray(total).fill(v as number);
+          const data = allocFloat64Array(total).fill(v as number);
           return RTV.tensor(data, reps.length >= 2 ? reps : [reps[0], reps[0]]);
         }
         if (isRuntimeLogical(v)) {
           const total = reps.reduce((a, b) => a * b, 1);
-          const data = new FloatXArray(total).fill(v ? 1 : 0);
+          const data = allocFloat64Array(total).fill(v ? 1 : 0);
           const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
           const t = RTV.tensor(data, shape);
           t._isLogical = true;
@@ -774,8 +775,8 @@ defineBuiltin({
         }
         if (isRuntimeComplexNumber(v)) {
           const total = reps.reduce((a, b) => a * b, 1);
-          const data = new FloatXArray(total).fill(v.re);
-          const imag = new FloatXArray(total).fill(v.im);
+          const data = allocFloat64Array(total).fill(v.re);
+          const imag = allocFloat64Array(total).fill(v.im);
           const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
           return RTV.tensor(data, shape, imag);
         }
@@ -784,9 +785,9 @@ defineBuiltin({
         // Fast path: all reps are 1 → return copy without data duplication
         if (reps.every(r => r === 1)) {
           return RTV.tensor(
-            new FloatXArray(v.data),
+            allocFloat64Array(v.data),
             v.shape,
-            v.imag ? new FloatXArray(v.imag) : undefined
+            v.imag ? allocFloat64Array(v.imag) : undefined
           );
         }
         const srcShape = v.shape.length >= 2 ? v.shape : [1, v.shape[0] || 1];
@@ -797,11 +798,9 @@ defineBuiltin({
         while (padReps.length < ndim) padReps.push(1);
         const resultShape = padSrc.map((s, i) => s * padReps[i]);
 
-        let curData: FloatXArrayType = new FloatXArray(
-          v.data
-        ) as FloatXArrayType;
-        let curImag: FloatXArrayType | undefined = v.imag
-          ? (new FloatXArray(v.imag) as FloatXArrayType)
+        let curData: Float64Array = allocFloat64Array(v.data) as Float64Array;
+        let curImag: Float64Array | undefined = v.imag
+          ? (allocFloat64Array(v.imag) as Float64Array)
           : undefined;
         const curShape = [...padSrc];
 
@@ -810,8 +809,8 @@ defineBuiltin({
           if (rep === 1) continue;
           const curTotal = curData.length;
           const newTotal = curTotal * rep;
-          const newData = new FloatXArray(newTotal);
-          const newImag = curImag ? new FloatXArray(newTotal) : undefined;
+          const newData = allocFloat64Array(newTotal);
+          const newImag = curImag ? allocFloat64Array(newTotal) : undefined;
 
           let blockSize = 1;
           for (let i = 0; i <= d; i++) blockSize *= curShape[i];
@@ -906,14 +905,14 @@ defineBuiltin({
         if (args.length === 2) {
           const n = Math.round(toNumber(args[1]));
           if (isRuntimeNumber(v)) {
-            const data = new FloatXArray(n).fill(v as number);
+            const data = allocFloat64Array(n).fill(v as number);
             return RTV.tensor(data, [1, n]);
           }
           if (!isRuntimeTensor(v))
             throw new RuntimeError("repelem: first argument must be numeric");
           const len = v.data.length;
-          const result = new FloatXArray(len * n);
-          const resultImag = v.imag ? new FloatXArray(len * n) : undefined;
+          const result = allocFloat64Array(len * n);
+          const resultImag = v.imag ? allocFloat64Array(len * n) : undefined;
           const isCol = v.shape.length === 2 && v.shape[1] === 1;
           for (let i = 0; i < len; i++) {
             for (let j = 0; j < n; j++) {
@@ -927,7 +926,7 @@ defineBuiltin({
         const rRep = Math.round(toNumber(args[1]));
         const cRep = Math.round(toNumber(args[2]));
         if (isRuntimeNumber(v)) {
-          const data = new FloatXArray(rRep * cRep).fill(v as number);
+          const data = allocFloat64Array(rRep * cRep).fill(v as number);
           return RTV.tensor(data, [rRep, cRep]);
         }
         if (!isRuntimeTensor(v))
@@ -935,9 +934,9 @@ defineBuiltin({
         const [rows, cols] = tensorSize2D(v);
         const newRows = rows * rRep;
         const newCols = cols * cRep;
-        const result = new FloatXArray(newRows * newCols);
+        const result = allocFloat64Array(newRows * newCols);
         const resultImag = v.imag
-          ? new FloatXArray(newRows * newCols)
+          ? allocFloat64Array(newRows * newCols)
           : undefined;
         for (let c = 0; c < cols; c++) {
           for (let r = 0; r < rows; r++) {
@@ -1031,8 +1030,8 @@ defineBuiltin({
         }
 
         const totalElems = v.data.length;
-        const result = new FloatXArray(totalElems);
-        const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
+        const result = allocFloat64Array(totalElems);
+        const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
 
         const ndimCS = shape.length;
         const strides = new Array(ndimCS);
@@ -1101,8 +1100,8 @@ defineBuiltin({
         while (padShape.length < maxDim) padShape.push(1);
         const newShape = perm.map(d => padShape[d]);
         const totalElems = v.data.length;
-        const result = new FloatXArray(totalElems);
-        const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
+        const result = allocFloat64Array(totalElems);
+        const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
 
         const ndim = perm.length;
         const srcStrides = new Array(padShape.length);
@@ -1160,8 +1159,8 @@ defineBuiltin({
         while (padShape.length < maxDim) padShape.push(1);
         const newShape = invPerm.map((d: number) => padShape[d]);
         const totalElems = v.data.length;
-        const result = new FloatXArray(totalElems);
-        const resultImag = v.imag ? new FloatXArray(totalElems) : undefined;
+        const result = allocFloat64Array(totalElems);
+        const resultImag = v.imag ? allocFloat64Array(totalElems) : undefined;
 
         const ndim = invPerm.length;
         const srcStrides = new Array(padShape.length);
@@ -1226,7 +1225,7 @@ defineBuiltin({
 
         const outputs = [];
         for (let k = 0; k < n; k++) {
-          const data = new FloatXArray(totalElems);
+          const data = allocFloat64Array(totalElems);
           let stride = 1;
           for (let d = 0; d < k; d++) stride *= shape[d];
           const dimLen = shape[k];
@@ -1276,7 +1275,7 @@ defineBuiltin({
 
         const ndgridOuts = [];
         for (let k = 0; k < n; k++) {
-          const data = new FloatXArray(totalElems);
+          const data = allocFloat64Array(totalElems);
           let stride = 1;
           for (let d = 0; d < k; d++) stride *= shape[d];
           const dimLen = shape[k];
@@ -1335,7 +1334,7 @@ defineBuiltin({
           strides[d] = strides[d - 1] * shape[d - 1];
         }
 
-        const result = new FloatXArray(n);
+        const result = allocFloat64Array(n);
         for (let i = 0; i < n; i++) {
           let idx = 0;
           for (let d = 0; d < subscriptArgs.length; d++) {
@@ -1414,8 +1413,8 @@ defineBuiltin({
           );
         }
 
-        const outputs: InstanceType<typeof FloatXArray>[] = [];
-        for (let d = 0; d < ndims; d++) outputs.push(new FloatXArray(n));
+        const outputs: Float64Array[] = [];
+        for (let d = 0; d < ndims; d++) outputs.push(allocFloat64Array(n));
 
         for (let i = 0; i < n; i++) {
           let rem = indices[i] - 1;

@@ -1,7 +1,7 @@
 % Regression: a C-JIT fixed tensor output whose length differs from the
 % first tensor param's length triggers a heap overflow / truncated return.
 % The JS wrapper in cJitInstall.ts used to size the fixed-output buffer
-% to `uninitFloat64(firstTensorLen)`, so `y = x2` with len(x2) != len(x1)
+% to `allocFloat64Array(firstTensorLen)`, so `y = x2` with len(x2) != len(x1)
 % would memcpy the wrong number of doubles into a mis-sized Float64Array.
 %
 % Each test function contains a `for` loop so `bodyWorthCrossing` lets the

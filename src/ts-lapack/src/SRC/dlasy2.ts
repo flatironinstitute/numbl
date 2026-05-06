@@ -14,6 +14,7 @@
 
 import { dlamch } from "./dlamch.js";
 import { MACH_PREC, MACH_SFMIN } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 // Lookup tables (matching Fortran DATA statements, 0-indexed)
 // Fortran: LOCU12 / 3, 4, 1, 2 /
@@ -105,7 +106,7 @@ export function dlasy2(
         ),
       smlnum
     );
-    const tmp = new Float64Array(4);
+    const tmp = allocFloat64Array(4);
     tmp[0] = tl[tlOff] + sgn * tr[trOff];
     tmp[3] = tl[tlOff] + sgn * tr[trOff + 1 + ldtr];
     if (ltranr) {
@@ -115,7 +116,7 @@ export function dlasy2(
       tmp[1] = sgn * tr[trOff + ldtr]; // SGN*TR(1,2)
       tmp[2] = sgn * tr[trOff + 1]; // SGN*TR(2,1)
     }
-    const btmp = new Float64Array(4);
+    const btmp = allocFloat64Array(4);
     btmp[0] = b[bOff];
     btmp[1] = b[bOff + ldb];
 
@@ -137,7 +138,7 @@ export function dlasy2(
         ),
       smlnum
     );
-    const tmp = new Float64Array(4);
+    const tmp = allocFloat64Array(4);
     tmp[0] = tl[tlOff] + sgn * tr[trOff];
     tmp[3] = tl[tlOff + 1 + ldtl] + sgn * tr[trOff];
     if (ltranl) {
@@ -147,7 +148,7 @@ export function dlasy2(
       tmp[1] = tl[tlOff + 1]; // TL(2,1)
       tmp[2] = tl[tlOff + ldtl]; // TL(1,2)
     }
-    const btmp = new Float64Array(4);
+    const btmp = allocFloat64Array(4);
     btmp[0] = b[bOff];
     btmp[1] = b[bOff + 1];
 
@@ -176,7 +177,7 @@ export function dlasy2(
   smin = Math.max(eps * smin, smlnum);
 
   // T16 is 4x4, stored column-major: T16(i,j) => t16[(i-1) + (j-1)*4], 1-based
-  const t16 = new Float64Array(16); // initialized to zero
+  const t16 = allocFloat64Array(16); // initialized to zero
 
   t16[0] = tl[tlOff] + sgn * tr[trOff]; // T16(1,1)
   t16[1 + 1 * 4] = tl[tlOff + 1 + ldtl] + sgn * tr[trOff]; // T16(2,2)
@@ -207,7 +208,7 @@ export function dlasy2(
     t16[3 + 1 * 4] = sgn * tr[trOff + ldtr]; // T16(4,2) = SGN*TR(1,2)
   }
 
-  const btmp = new Float64Array(4);
+  const btmp = allocFloat64Array(4);
   btmp[0] = b[bOff]; // B(1,1)
   btmp[1] = b[bOff + 1]; // B(2,1)
   btmp[2] = b[bOff + ldb]; // B(1,2)
@@ -295,7 +296,7 @@ export function dlasy2(
   }
 
   // Back-substitution
-  const tmp = new Float64Array(4);
+  const tmp = allocFloat64Array(4);
   for (let i = 0; i < 4; i++) {
     const kk = 3 - i; // k = 4,3,2,1 in Fortran => 3,2,1,0 in 0-based
     const temp = 1.0 / t16[kk + kk * 4];

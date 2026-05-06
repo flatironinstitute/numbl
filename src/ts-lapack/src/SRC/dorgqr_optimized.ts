@@ -33,6 +33,8 @@
 //   A(I,J)  =>  a[aOff + (I-1) + (J-1)*lda]   (I,J are 1-based)
 //   TAU(I)  =>  tau[tauOff + (I-1)]             (I is 1-based)
 
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc";
+
 export function dorgqr_optimized(
   m: number,
   n: number,
@@ -66,7 +68,7 @@ export function dorgqr_optimized(
 
   // Pre-allocate the Householder vector buffer once.
   // Reused each outer iteration; holds at most m elements.
-  const v = new Float64Array(m);
+  const v = allocFloat64Array(m);
 
   // Initialize columns k+1..n (0-based k..n-1) to identity columns.
   for (let j = k; j < n; j++) {

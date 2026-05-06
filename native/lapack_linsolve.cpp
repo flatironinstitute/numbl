@@ -9,7 +9,7 @@
  *                   BRe: Float64Array, BIm: Float64Array, nrhs: number): {re, im}
  *
  *   A is m×n in column-major order; B is m×nrhs.
- *   Returns X (n×nrhs) in a new Float64Array in column-major order.
+ *   Returns X (n×nrhs) in a allocFloat64Array in column-major order.
  *
  *   Square (m == n):
  *     Uses dgesv / zgesv (LU with partial pivoting).  Throws if A is singular.

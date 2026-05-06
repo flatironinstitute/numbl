@@ -22,11 +22,6 @@ export default defineConfig({
     plugins: () => [wasm()],
   },
   base: "/",
-  define: {
-    "import.meta.env.NUMBL_USE_FLOAT32": JSON.stringify(
-      process.env.NUMBL_USE_FLOAT32
-    ),
-  },
   test: {
     // tests-browser/ is driven by Playwright, not Vitest.
     exclude: ["**/node_modules/**", "**/dist/**", "**/tests-browser/**"],

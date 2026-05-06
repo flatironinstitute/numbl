@@ -2,6 +2,7 @@
  * Cumulative and difference builtins: cumsum, cumprod, cummax, cummin, diff.
  */
 
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 import {
   RuntimeValue,
   RTV,
@@ -9,7 +10,6 @@ import {
   RuntimeError,
 } from "../../runtime/index.js";
 import {
-  FloatXArray,
   isRuntimeNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
@@ -54,15 +54,15 @@ export function cumOp(
     // If dim exceeds dimensions, return a copy (dim has size 1)
     if (dimIdx >= shape.length) {
       return RTV.tensor(
-        new FloatXArray(v.data),
+        allocFloat64Array(v.data),
         [...shape],
-        hasImag ? new FloatXArray(v.imag!) : undefined
+        hasImag ? allocFloat64Array(v.imag!) : undefined
       );
     }
 
     const dimSize = shape[dimIdx];
-    const result = new FloatXArray(v.data.length);
-    const resultImag = hasImag ? new FloatXArray(v.data.length) : undefined;
+    const result = allocFloat64Array(v.data.length);
+    const resultImag = hasImag ? allocFloat64Array(v.data.length) : undefined;
 
     const accumOne = (
       acc: number,
@@ -144,7 +144,7 @@ export function cumOp(
 
 export function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
   if (isRuntimeNumber(v)) {
-    return RTV.tensor(new FloatXArray(0), [0, 0]);
+    return RTV.tensor(allocFloat64Array(0), [0, 0]);
   }
   if (isRuntimeTensor(v)) {
     const shape = v.shape;
@@ -162,14 +162,14 @@ export function diffOnce(v: RuntimeValue, dim?: number): RuntimeValue {
     if (dimSize <= 1) {
       const newShape = [...shape];
       if (opDim < newShape.length) newShape[opDim] = 0;
-      return RTV.tensor(new FloatXArray(0), newShape);
+      return RTV.tensor(allocFloat64Array(0), newShape);
     }
 
     const newShape = [...shape];
     newShape[opDim] = dimSize - 1;
     const totalOut = newShape.reduce((a, b) => a * b, 1);
-    const result = new FloatXArray(totalOut);
-    const resultImag = v.imag ? new FloatXArray(totalOut) : undefined;
+    const result = allocFloat64Array(totalOut);
+    const resultImag = v.imag ? allocFloat64Array(totalOut) : undefined;
 
     let innerCount = 1;
     for (let d = 0; d < opDim; d++) innerCount *= shape[d];

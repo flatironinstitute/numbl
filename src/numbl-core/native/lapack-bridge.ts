@@ -29,7 +29,7 @@ export interface LapackBridge {
    * Invert an n×n real matrix stored in column-major order (MATLAB/LAPACK convention).
    * @param data  Column-major Float64Array of length n*n (not modified).
    * @param n     Matrix dimension.
-   * @returns     Inverted matrix as a new Float64Array in column-major order.
+   * @returns     Inverted matrix as a allocFloat64Array in column-major order.
    * @throws      Error if the matrix is singular.
    */
   inv(data: Float64Array, n: number): Float64Array;
@@ -176,7 +176,7 @@ export interface LapackBridge {
    * @param k  Number of columns in A and rows in B.
    * @param B  Column-major Float64Array of length k*n  (B is k×n, not modified).
    * @param n  Number of columns in B and C.
-   * @returns  C = A*B as a new Float64Array of length m*n in column-major order.
+   * @returns  C = A*B as a allocFloat64Array of length m*n in column-major order.
    */
   matmul?(
     A: Float64Array,
@@ -219,7 +219,7 @@ export interface LapackBridge {
    * @param n     Number of columns in A; also the number of rows in the result X.
    * @param B     Column-major Float64Array of length m*nrhs  (B is m×nrhs, not modified).
    * @param nrhs  Number of right-hand sides (columns of B and X).
-   * @returns     X as a new Float64Array of length n*nrhs in column-major order.
+   * @returns     X as a allocFloat64Array of length n*nrhs in column-major order.
    */
   linsolve?(
     A: Float64Array,

@@ -5,7 +5,6 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
@@ -26,6 +25,7 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -476,7 +476,10 @@ defineBuiltin({
           }
           return result;
         }
-        return makeTensor(new FloatXArray(shape), undefined, [1, shape.length]);
+        return makeTensor(allocFloat64Array(shape), undefined, [
+          1,
+          shape.length,
+        ]);
       },
     },
   ],

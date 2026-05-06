@@ -3,10 +3,9 @@
  * bitwise ops, and coordinate transforms.
  */
 
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 import { RTV, toNumber, RuntimeError, mRange } from "../../runtime/index.js";
 import {
-  FloatXArray,
-  type FloatXArrayType,
   type RuntimeValue,
   isRuntimeNumber,
   isRuntimeTensor,
@@ -74,16 +73,16 @@ function triPart(
       v.n,
       new Int32Array(irArr),
       jc,
-      new Float64Array(prArr),
-      isComplex ? new Float64Array(piArr) : undefined
+      allocFloat64Array(prArr),
+      isComplex ? allocFloat64Array(piArr) : undefined
     );
   }
   if (!isRuntimeTensor(v))
     throw new RuntimeError(`${name}: argument must be a matrix`);
   const nrows = v.shape[0] ?? 1;
   const ncols = v.shape.length >= 2 ? v.shape[1] : 1;
-  const data = new FloatXArray(nrows * ncols);
-  const idata = v.imag ? new FloatXArray(nrows * ncols) : undefined;
+  const data = allocFloat64Array(nrows * ncols);
+  const idata = v.imag ? allocFloat64Array(nrows * ncols) : undefined;
   for (let j = 0; j < ncols; j++) {
     for (let i = 0; i < nrows; i++) {
       if (keepFn(i, j, k)) {
@@ -134,20 +133,20 @@ defineBuiltin({
       },
       apply: args => {
         function vecData(v: RuntimeValue): {
-          re: FloatXArrayType;
-          im: FloatXArrayType | undefined;
+          re: Float64Array;
+          im: Float64Array | undefined;
           len: number;
         } {
           if (isRuntimeNumber(v))
             return {
-              re: new FloatXArray([v as number]),
+              re: allocFloat64Array([v as number]),
               im: undefined,
               len: 1,
             };
           if (isRuntimeComplexNumber(v))
             return {
-              re: new FloatXArray([v.re]),
-              im: new FloatXArray([v.im]),
+              re: allocFloat64Array([v.re]),
+              im: allocFloat64Array([v.im]),
               len: 1,
             };
           if (isRuntimeTensor(v))
@@ -155,11 +154,11 @@ defineBuiltin({
           throw new RuntimeError("toeplitz: arguments must be numeric vectors");
         }
 
-        let colRe: FloatXArrayType,
-          colIm: FloatXArrayType | undefined,
+        let colRe: Float64Array,
+          colIm: Float64Array | undefined,
           colLen: number,
-          rowRe: FloatXArrayType,
-          rowIm: FloatXArrayType | undefined,
+          rowRe: Float64Array,
+          rowIm: Float64Array | undefined,
           rowLen: number;
 
         if (args.length === 1) {
@@ -167,10 +166,10 @@ defineBuiltin({
           rowRe = re;
           rowIm = im;
           rowLen = len;
-          colRe = new FloatXArray(re);
+          colRe = allocFloat64Array(re);
           colLen = len;
           if (im) {
-            const ci = new FloatXArray(im);
+            const ci = allocFloat64Array(im);
             for (let k = 1; k < len; k++) ci[k] = -im[k];
             colIm = ci;
           }
@@ -188,8 +187,8 @@ defineBuiltin({
         const m = colLen;
         const n = rowLen;
         const isComplex = colIm !== undefined || rowIm !== undefined;
-        const data = new FloatXArray(m * n);
-        const idata = isComplex ? new FloatXArray(m * n) : undefined;
+        const data = allocFloat64Array(m * n);
+        const idata = isComplex ? allocFloat64Array(m * n) : undefined;
 
         for (let j = 0; j < n; j++) {
           for (let i = 0; i < m; i++) {
@@ -324,7 +323,7 @@ defineBuiltin({
           }
         }
 
-        return RTV.tensor(new FloatXArray(M), [n, n]);
+        return RTV.tensor(allocFloat64Array(M), [n, n]);
       },
     },
   ],
@@ -343,7 +342,7 @@ function bitwiseOp(
   }
   if (isRuntimeTensor(a) && isRuntimeNumber(b)) {
     const bv = Math.round(b as number);
-    const result = new FloatXArray(a.data.length);
+    const result = allocFloat64Array(a.data.length);
     for (let i = 0; i < a.data.length; i++) {
       result[i] = op(Math.round(a.data[i]), bv);
     }
@@ -351,7 +350,7 @@ function bitwiseOp(
   }
   if (isRuntimeNumber(a) && isRuntimeTensor(b)) {
     const av = Math.round(a as number);
-    const result = new FloatXArray(b.data.length);
+    const result = allocFloat64Array(b.data.length);
     for (let i = 0; i < b.data.length; i++) {
       result[i] = op(av, Math.round(b.data[i]));
     }
@@ -360,7 +359,7 @@ function bitwiseOp(
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
     if (a.data.length !== b.data.length)
       throw new RuntimeError(`${name}: arrays must be the same size`);
-    const result = new FloatXArray(a.data.length);
+    const result = allocFloat64Array(a.data.length);
     for (let i = 0; i < a.data.length; i++) {
       result[i] = op(Math.round(a.data[i]), Math.round(b.data[i]));
     }
@@ -430,14 +429,14 @@ defineBuiltin({
           return RTV.num(shift(aVal as number, kVal as number));
         }
         if (isRuntimeTensor(aVal) && isRuntimeNumber(kVal)) {
-          const result = new FloatXArray(aVal.data.length);
+          const result = allocFloat64Array(aVal.data.length);
           for (let i = 0; i < aVal.data.length; i++) {
             result[i] = shift(aVal.data[i], kVal as number);
           }
           return RTV.tensor(result, [...aVal.shape]);
         }
         if (isRuntimeNumber(aVal) && isRuntimeTensor(kVal)) {
-          const result = new FloatXArray(kVal.data.length);
+          const result = allocFloat64Array(kVal.data.length);
           for (let i = 0; i < kVal.data.length; i++) {
             result[i] = shift(aVal as number, kVal.data[i]);
           }
@@ -446,7 +445,7 @@ defineBuiltin({
         if (isRuntimeTensor(aVal) && isRuntimeTensor(kVal)) {
           if (aVal.data.length !== kVal.data.length)
             throw new RuntimeError("bitshift: arrays must be the same size");
-          const result = new FloatXArray(aVal.data.length);
+          const result = allocFloat64Array(aVal.data.length);
           for (let i = 0; i < aVal.data.length; i++) {
             result[i] = shift(aVal.data[i], kVal.data[i]);
           }
@@ -552,9 +551,8 @@ function coordTransform(
             const len = refT.data.length;
             const datas = tensors.map(t => (t ? t.data : null));
             const scalars = args.map((a, i) => (datas[i] ? 0 : toNumber(a)));
-            const outArrays = Array.from(
-              { length: nOut },
-              () => new FloatXArray(len)
+            const outArrays = Array.from({ length: nOut }, () =>
+              allocFloat64Array(len)
             );
             for (let i = 0; i < len; i++) {
               const vals = datas.map((d, j) => (d ? d[i] : scalars[j]));
@@ -565,7 +563,7 @@ function coordTransform(
             const outTensors = outArrays.map(d => RTV.tensor(d, shape));
             if (nArgs === "2or3" && n === 3 && nOut === 2) {
               const zd = datas[2];
-              const zOut = new FloatXArray(len);
+              const zOut = allocFloat64Array(len);
               for (let i = 0; i < len; i++) zOut[i] = zd ? zd[i] : scalars[2];
               outTensors.push(RTV.tensor(zOut, shape));
             }

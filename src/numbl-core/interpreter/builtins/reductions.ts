@@ -765,7 +765,7 @@ import {
   getBroadcastShape,
   broadcastIterate,
 } from "../../helpers/arithmetic.js";
-import { uninitFloatX } from "../../executors/jsJit/helpers/jitHelpersTensor.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 defineBuiltin({
   name: "xor",
@@ -826,7 +826,7 @@ defineBuiltin({
             if (!outShape)
               throw new RuntimeError("xor: incompatible array sizes");
             const n = outShape.reduce((p, c) => p * c, 1);
-            const out = uninitFloatX(n);
+            const out = allocFloat64Array(n);
             broadcastIterate(a.shape, b.shape, outShape, (ai, bi, oi) => {
               out[oi] = (a.data[ai] !== 0) !== (b.data[bi] !== 0) ? 1 : 0;
             });
@@ -835,7 +835,7 @@ defineBuiltin({
             return result;
           }
           const n = a.data.length;
-          const out = uninitFloatX(n);
+          const out = allocFloat64Array(n);
           for (let i = 0; i < n; i++) {
             out[i] = (a.data[i] !== 0) !== (b.data[i] !== 0) ? 1 : 0;
           }
@@ -848,7 +848,7 @@ defineBuiltin({
         if (!isRuntimeTensor(t))
           throw new RuntimeError("xor: unexpected state");
         const n = t.data.length;
-        const out = uninitFloatX(n);
+        const out = allocFloat64Array(n);
         for (let i = 0; i < n; i++) {
           out[i] = (t.data[i] !== 0) !== (s !== 0) ? 1 : 0;
         }

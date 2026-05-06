@@ -14,8 +14,8 @@ import {
   isRuntimeString,
   isRuntimeTensor,
   isRuntimeCell,
-  FloatXArray,
 } from "../numbl-core/runtime/types.js";
+import { allocFloat64Array } from "../numbl-core/executors/jsJit/helpers/alloc.js";
 
 describe("numel", () => {
   it("returns 1 for scalar shape", () => {
@@ -84,7 +84,7 @@ describe("tensorSize2D", () => {
   it("returns [1,1] for empty shape", () => {
     const t = {
       kind: "tensor" as const,
-      data: new FloatXArray(1),
+      data: allocFloat64Array(1),
       shape: [],
     };
     expect(tensorSize2D(t)).toEqual([1, 1]);
@@ -93,7 +93,7 @@ describe("tensorSize2D", () => {
   it("returns [1,n] for 1D shape", () => {
     const t = {
       kind: "tensor" as const,
-      data: new FloatXArray(3),
+      data: allocFloat64Array(3),
       shape: [3],
     };
     expect(tensorSize2D(t)).toEqual([1, 3]);
@@ -102,7 +102,7 @@ describe("tensorSize2D", () => {
   it("returns shape for 2D", () => {
     const t = {
       kind: "tensor" as const,
-      data: new FloatXArray(6),
+      data: allocFloat64Array(6),
       shape: [2, 3],
     };
     expect(tensorSize2D(t)).toEqual([2, 3]);

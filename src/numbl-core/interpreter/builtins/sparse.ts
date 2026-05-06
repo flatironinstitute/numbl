@@ -3,21 +3,17 @@
  */
 
 import {
-  FloatXArray,
   isRuntimeComplexNumber,
   isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import type {
-  RuntimeValue,
-  RuntimeSparseMatrix,
-  FloatXArrayType,
-} from "../../runtime/types.js";
+import type { RuntimeValue, RuntimeSparseMatrix } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
 import { registerIBuiltin } from "./types.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -86,8 +82,8 @@ function buildSparseFromTriplets(
     n,
     new Int32Array(mergedIr),
     jc,
-    new Float64Array(mergedPr),
-    isComplex ? new Float64Array(mergedPi) : undefined
+    allocFloat64Array(mergedPr),
+    isComplex ? allocFloat64Array(mergedPi) : undefined
   );
 }
 
@@ -108,14 +104,14 @@ registerIBuiltin({
               1,
               new Int32Array(0),
               new Int32Array(2),
-              new Float64Array(0)
+              allocFloat64Array(0)
             );
           return RTV.sparseMatrix(
             1,
             1,
             new Int32Array([0]),
             new Int32Array([0, 1]),
-            new Float64Array([v])
+            allocFloat64Array([v])
           );
         }
         if (isRuntimeLogical(v)) {
@@ -126,14 +122,14 @@ registerIBuiltin({
               1,
               new Int32Array(0),
               new Int32Array(2),
-              new Float64Array(0)
+              allocFloat64Array(0)
             );
           return RTV.sparseMatrix(
             1,
             1,
             new Int32Array([0]),
             new Int32Array([0, 1]),
-            new Float64Array([nv])
+            allocFloat64Array([nv])
           );
         }
         if (isRuntimeComplexNumber(v)) {
@@ -143,15 +139,15 @@ registerIBuiltin({
               1,
               new Int32Array(0),
               new Int32Array(2),
-              new Float64Array(0)
+              allocFloat64Array(0)
             );
           return RTV.sparseMatrix(
             1,
             1,
             new Int32Array([0]),
             new Int32Array([0, 1]),
-            new Float64Array([v.re]),
-            v.im !== 0 ? new Float64Array([v.im]) : undefined
+            allocFloat64Array([v.re]),
+            v.im !== 0 ? allocFloat64Array([v.im]) : undefined
           );
         }
         if (!isRuntimeTensor(v))
@@ -182,8 +178,8 @@ registerIBuiltin({
           cols,
           new Int32Array(irList),
           jcArr,
-          new Float64Array(prList),
-          piList ? new Float64Array(piList) : undefined
+          allocFloat64Array(prList),
+          piList ? allocFloat64Array(piList) : undefined
         );
       }
       if (args.length === 2) {
@@ -194,7 +190,7 @@ registerIBuiltin({
           n,
           new Int32Array(0),
           new Int32Array(n + 1),
-          new Float64Array(0)
+          allocFloat64Array(0)
         );
       }
       if (args.length >= 3) {
@@ -270,7 +266,7 @@ registerIBuiltin({
       }
       const k = Math.min(rows, cols);
       const ir = new Int32Array(k);
-      const pr = new Float64Array(k);
+      const pr = allocFloat64Array(k);
       const jc = new Int32Array(cols + 1);
       for (let i = 0; i < k; i++) {
         ir[i] = i;
@@ -348,28 +344,28 @@ registerIBuiltin({
       function matInfo(v: RuntimeValue) {
         if (isRuntimeNumber(v))
           return {
-            re: new FloatXArray([v]),
-            im: undefined as FloatXArrayType | undefined,
+            re: allocFloat64Array([v]),
+            im: undefined as Float64Array | undefined,
             rows: 1,
             cols: 1,
           };
         if (isRuntimeComplexNumber(v))
           return {
-            re: new FloatXArray([v.re]),
-            im: new FloatXArray([v.im]) as FloatXArrayType | undefined,
+            re: allocFloat64Array([v.re]),
+            im: allocFloat64Array([v.im]) as Float64Array | undefined,
             rows: 1,
             cols: 1,
           };
         if (isRuntimeTensor(v))
           return {
             re: v.data,
-            im: v.imag as FloatXArrayType | undefined,
+            im: v.imag as Float64Array | undefined,
             rows: v.shape[0] ?? 1,
             cols: v.shape.length >= 2 ? v.shape[1] : 1,
           };
         if (isRuntimeSparseMatrix(v)) {
-          const data = new FloatXArray(v.m * v.n);
-          const imag = v.pi ? new FloatXArray(v.m * v.n) : undefined;
+          const data = allocFloat64Array(v.m * v.n);
+          const imag = v.pi ? allocFloat64Array(v.m * v.n) : undefined;
           for (let c = 0; c < v.n; c++) {
             for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
               data[c * v.m + v.ir[k]] = v.pr[k];
@@ -378,7 +374,7 @@ registerIBuiltin({
           }
           return {
             re: data,
-            im: imag as FloatXArrayType | undefined,
+            im: imag as Float64Array | undefined,
             rows: v.m,
             cols: v.n,
           };
@@ -434,8 +430,8 @@ registerIBuiltin({
         triplets.sort((a, b) => a.col - b.col || a.row - b.row);
         const nnz = triplets.length;
         const ir = new Int32Array(nnz);
-        const pr = new Float64Array(nnz);
-        const pi = isComplex ? new Float64Array(nnz) : undefined;
+        const pr = allocFloat64Array(nnz);
+        const pi = isComplex ? allocFloat64Array(nnz) : undefined;
         const jc = new Int32Array(n + 1);
         let ti = 0;
         for (let c = 0; c < n; c++) {
@@ -465,12 +461,12 @@ registerIBuiltin({
           throw new RuntimeError("spdiags: third argument must be a matrix");
         const m = A.shape[0];
         const n = A.shape.length >= 2 ? A.shape[1] : 1;
-        const data = new FloatXArray(A.data);
+        const data = allocFloat64Array(A.data);
         const isComplex = binIm !== undefined || A.imag !== undefined;
         const idata = isComplex
           ? A.imag
-            ? new FloatXArray(A.imag)
-            : new FloatXArray(m * n)
+            ? allocFloat64Array(A.imag)
+            : allocFloat64Array(m * n)
           : undefined;
 
         for (let k = 0; k < diags.length; k++) {
@@ -498,9 +494,9 @@ registerIBuiltin({
         const diags = getDiags(args[1]);
         const minMN = Math.min(m, n);
         const p = diags.length;
-        const data = new FloatXArray(minMN * p);
+        const data = allocFloat64Array(minMN * p);
         const isComplex = aIm !== undefined;
-        const idata = isComplex ? new FloatXArray(minMN * p) : undefined;
+        const idata = isComplex ? allocFloat64Array(minMN * p) : undefined;
 
         for (let k = 0; k < p; k++) {
           const dk = diags[k];
@@ -540,14 +536,14 @@ registerIBuiltin({
 
         const p = nonzeroDiags.length;
         if (p === 0) {
-          const empty = RTV.tensor(new FloatXArray(0), [minMN, 0]);
+          const empty = RTV.tensor(allocFloat64Array(0), [minMN, 0]);
           if (nargout <= 1) return empty;
-          return [empty, RTV.tensor(new FloatXArray(0), [0, 1])];
+          return [empty, RTV.tensor(allocFloat64Array(0), [0, 1])];
         }
 
-        const data = new FloatXArray(minMN * p);
+        const data = allocFloat64Array(minMN * p);
         const isComplex = aIm !== undefined;
-        const idata = isComplex ? new FloatXArray(minMN * p) : undefined;
+        const idata = isComplex ? allocFloat64Array(minMN * p) : undefined;
 
         for (let k = 0; k < p; k++) {
           const dk = nonzeroDiags[k];
@@ -565,7 +561,7 @@ registerIBuiltin({
 
         const Bout = RTV.tensor(data, [minMN, p], idata);
         if (nargout <= 1) return Bout;
-        const idData = new FloatXArray(p);
+        const idData = allocFloat64Array(p);
         for (let i = 0; i < p; i++) idData[i] = nonzeroDiags[i];
         return [Bout, RTV.tensor(idData, [p, 1])];
       }

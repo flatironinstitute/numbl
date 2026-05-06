@@ -33,12 +33,9 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Disable WebGPU because this is not supported in GitHub runner, it seems
       - name: Run tests
         run: |
-          # NUMBL_DISABLE_WEBGPU=true npm run test:float32
-          NUMBL_DISABLE_WEBGPU=true npm run test:float64
-          NUMBL_DISABLE_WEBGPU=true npm run test:scripts
+          npm run test
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

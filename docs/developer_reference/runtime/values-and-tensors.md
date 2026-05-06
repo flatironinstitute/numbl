@@ -35,8 +35,6 @@ A `RuntimeTensor` holds:
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
-**Precision.** The typed-array class is configurable globally: `Float64Array` by default, `Float32Array` when `NUMBL_USE_FLOAT32` is set. A tensor constructed in float64 mode is not portable to float32 mode and vice-versa.
-
 **Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writers unconditionally clone before mutating (conservative COW); there is no refcount or aliasing tracking — the previous refcount-based system was removed, and a new anti-aliasing design is being prepared.
 
 ## Tensor ops

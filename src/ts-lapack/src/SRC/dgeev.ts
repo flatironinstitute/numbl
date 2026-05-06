@@ -85,6 +85,7 @@ import {
   RIGHT,
   LOWER,
 } from "../utils/constants.js";
+import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
 
 const ZERO = 0.0;
 const ONE = 1.0;
@@ -349,7 +350,7 @@ export function dgeev(
   bignum = ONE / smlnum;
 
   // Scale A if max element outside range [SMLNUM,BIGNUM]
-  const dum = new Float64Array(1);
+  const dum = allocFloat64Array(1);
   const anrm = dlange(NORM_MAX, n, n, a, aOff, lda, dum, 0);
   let scalea = false;
   let cscale = 0.0;

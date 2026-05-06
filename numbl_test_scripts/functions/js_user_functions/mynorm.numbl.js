@@ -16,7 +16,7 @@ register({
         if (wasm) {
           var n = data.length;
           var ptr = wasm.exports.alloc_doubles(n);
-          var mem = new Float64Array(wasm.exports.memory.buffer, ptr, n);
+          var mem = allocFloat64Array(wasm.exports.memory.buffer, ptr, n);
           mem.set(data);
           var result = wasm.exports.mynorm(n, ptr);
           wasm.exports.free_doubles();
