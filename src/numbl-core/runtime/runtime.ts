@@ -241,8 +241,13 @@ export class Runtime {
    *  owned buffers back to `this.pool`. */
   public poolReclaim: boolean = true;
 
-  /** When true, `decref` on a zero count throws. Default off until
-   *  phase 6 of the refcount rollout flips it on. */
+  /** When true, `decref` on a zero count throws (loud at the
+   *  underflow site rather than silently leaking or, in `poolReclaim`
+   *  mode, double-releasing a buffer). Off by default — chained-lvalue
+   *  assignments (e.g. `T.x(1).y = 10`) currently produce harmless
+   *  underflows during scope drain, so flipping this on requires a
+   *  cleanup pass over `setMemberReturn` / `indexStore` callbacks.
+   *  Enabled in tests as a debugging aid. */
   public strictRefcount: boolean = false;
 
   // Accessor guard: prevents recursive getter/setter/subsref calls

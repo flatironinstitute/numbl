@@ -42,6 +42,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [jit/fusion.md](jit/fusion.md) — element-wise fusion.
 - [jit/cjit.md](jit/cjit.md) — C-JIT (`--opt e3`): what it's for and the three trigger contexts.
 - [runtime/values-and-tensors.md](runtime/values-and-tensors.md) — `RuntimeValue`, tensors, memory layout.
+- [runtime/refcount.md](runtime/refcount.md) — refcount-driven pool reclamation, slot ownership, transient scopes.
 - [runtime/native-addon.md](runtime/native-addon.md) — LAPACK/FFTW bindings and JS fallbacks.
 - [builtins.md](builtins.md) — the `IBuiltin` registry, resolution, JIT emission.
 - [stdlib.md](stdlib.md) — `.m`-defined standard library and bundle generation.
