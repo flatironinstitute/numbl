@@ -645,6 +645,18 @@ export function callUserFunction(
     // closure references `fnEnv`, and clearing its vars would strand the
     // handle if it escaped via an output / persistent / global. Defining
     // a nested function alone is fine — only escaping handles matter.
+    //
+    // Note: an escaping nested-fn handle creates a refcount cycle —
+    // fnEnv holds the handle (via `vars`), the handle holds fnEnv (via
+    // its jsFn closure). The handle's `releaseExtra` clears fnEnv when
+    // the handle's external refs drop, but the cycle prevents that
+    // path from firing. Result: 1 buffer per escaping nested handle
+    // can stay in the pool's liveSet for the runtime's lifetime.
+    // Acceptable trade-off: breaking the cycle (e.g. by deleting the
+    // output's binding from fnEnv) would strand recursive / mutually-
+    // recursive nested handles whose bodies refer to each other by
+    // their parent-local names — see
+    // `numbl_test_scripts/functions/recursive_nested_handles.m`.
     if (!fnEnv.nestedHandleCreated) {
       fnEnv.clearLocals();
     }
@@ -755,6 +767,14 @@ export function callNestedFunction(
       }
     }
 
+    // Adopt outputs into the caller's transient scope before locals are
+    // cleared. The locals decref drops the binding's count; the caller's
+    // scope keeps a fresh ref so the value survives until the caller's
+    // statement scope drains (or it gets bound to a slot).
+    if (this.rt.currentScope) {
+      for (const v of outputs) this.rt.currentScope.adopt(v);
+    }
+
     if (nargout <= 1) {
       return outputs[0];
     }
@@ -768,6 +788,11 @@ export function callNestedFunction(
         this.rt.dispatch(fn.name, 0, []);
       }
     });
+    // Drop locals after collecting outputs. Skip if a nested handle was
+    // created during this call (its closure references fnEnv).
+    if (!fnEnv.nestedHandleCreated) {
+      fnEnv.clearLocals();
+    }
     this.rt._envStack.pop();
     this.env = savedEnv;
   }

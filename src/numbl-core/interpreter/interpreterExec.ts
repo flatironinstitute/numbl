@@ -992,7 +992,7 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   // strand the handle if it escapes via an output / persistent / global.
   // Builtin/user-function handles don't need this marker; their dispatch
   // doesn't depend on `capturedEnv`'s vars.
-  capturedEnv.markChainForNestedHandle(name);
+  const isNested = capturedEnv.markChainForNestedHandle(name);
 
   const fn = RTV.func(name, "builtin");
   fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
@@ -1018,6 +1018,12 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   // Populate nargin for builtin handles (e.g. nargin(@sin) == 1)
   const narg = getIBuiltinNargin(name);
   if (narg !== undefined) fn.nargin = narg;
+  // For nested-function handles, the function-exit cleanup skipped
+  // clearLocals (so the closure could keep its captured env alive).
+  // When the handle dies, release those captures by clearing the env.
+  if (isNested) {
+    fn.releaseExtra = () => capturedEnv.clearLocals();
+  }
   return fn;
 }
 
