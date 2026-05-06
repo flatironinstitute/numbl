@@ -716,7 +716,8 @@ export function indexCellStore(
   base: unknown,
   indices: unknown[],
   rhs: unknown,
-  rt?: import("./aliasing.js").AliasRuntime
+  rt?: import("./aliasing.js").AliasRuntime &
+    import("./refcount.js").RefcountRuntime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);

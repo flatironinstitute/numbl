@@ -26,7 +26,12 @@ import { RTV } from "./constructors.js";
 import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
 import { isAliased, type AliasRuntime } from "./aliasing.js";
+import { type RefcountRuntime, decref } from "./refcount.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+
+/** Runtime surface needed by index-store mutations: alias-sweep + refcount.
+ *  The full Runtime class satisfies both structurally. */
+type StoreRuntime = AliasRuntime & RefcountRuntime;
 
 // ── Anti-aliasing helper ─────────────────────────────────────────────────
 
@@ -1907,7 +1912,7 @@ function storeIntoCell(
   indices: RuntimeValue[],
   rhs: RuntimeValue,
   parenAssign = false,
-  rt?: AliasRuntime
+  rt?: StoreRuntime
 ): RuntimeValue {
   // Sweep-based COW for the cell wrapper.
   if (mustCopyForAlias(base, rt)) {
@@ -1928,14 +1933,40 @@ function storeIntoCell(
       indices[0],
       rhs,
       updateShapeAfterLinearAssign,
-      parenAssign
+      parenAssign,
+      rt
     );
   }
   if (indices.length === 2) {
-    return storeIntoCell2D(base, indices, rhs, parenAssign);
+    return storeIntoCell2D(base, indices, rhs, parenAssign, rt);
   }
 
   throw new RuntimeError(`Cannot index-assign into cell`);
+}
+
+/** Append a fresh empty tensor onto cell.data with proper incref so the
+ *  cell takes ownership. The empty tensor has rc=0 at construction; after
+ *  this helper, it has rc=1 (owned by the cell). */
+function appendEmptyCellSlot(cell: RuntimeCell, rt?: RefcountRuntime): void {
+  const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
+  if (rt) empty.incref();
+  cell.data.push(empty);
+}
+
+/** Replace cell.data[pos] with rhs, decref-old / incref-new. The cell's
+ *  data is mutated in place; if rt is unavailable, refcount work is
+ *  skipped (lax mode). */
+function setCellElement(
+  cell: RuntimeCell,
+  pos: number,
+  value: RuntimeValue,
+  rt?: RefcountRuntime
+): void {
+  if (rt) {
+    cell.bindElement(rt, pos, value);
+  } else {
+    cell.data[pos] = value;
+  }
 }
 
 function storeIntoCell1D(
@@ -1943,7 +1974,8 @@ function storeIntoCell1D(
   idx: RuntimeValue,
   rhs: RuntimeValue,
   updateShape: (oldLen: number) => void,
-  parenAssign = false
+  parenAssign = false,
+  rt?: RefcountRuntime
 ): RuntimeValue {
   // Vector index
   if (isRuntimeTensor(idx)) {
@@ -1962,9 +1994,8 @@ function storeIntoCell1D(
       const pos = positions[0];
       if (pos < 0) throw new RuntimeError("Cell index exceeds bounds");
       const oldLen = base.data.length;
-      while (base.data.length <= pos)
-        base.data.push(RTV.tensor(allocFloat64Array(0), [0, 0]));
-      base.data[pos] = rhs;
+      while (base.data.length <= pos) appendEmptyCellSlot(base, rt);
+      setCellElement(base, pos, rhs, rt);
       updateShape(oldLen);
       return base;
     }
@@ -1982,11 +2013,10 @@ function storeIntoCell1D(
       if (pos < 0) throw new RuntimeError("Cell index exceeds bounds");
       if (pos > maxIdx) maxIdx = pos;
     }
-    while (base.data.length <= maxIdx)
-      base.data.push(RTV.tensor(allocFloat64Array(0), [0, 0]));
+    while (base.data.length <= maxIdx) appendEmptyCellSlot(base, rt);
     for (let j = 0; j < positions.length; j++) {
       const pos = positions[j];
-      base.data[pos] = scalarExpand ? rhs.data[0] : rhs.data[j];
+      setCellElement(base, pos, scalarExpand ? rhs.data[0] : rhs.data[j], rt);
     }
     updateShape(oldLen);
     return base;
@@ -1997,14 +2027,14 @@ function storeIntoCell1D(
   if (i < 0) throw new RuntimeError("Cell index exceeds bounds");
   const oldLen = base.data.length;
   if (i >= base.data.length) {
-    while (base.data.length <= i)
-      base.data.push(RTV.tensor(allocFloat64Array(0), [0, 0]));
+    while (base.data.length <= i) appendEmptyCellSlot(base, rt);
   }
   // Unwrap 1x1 cell RHS only for paren assignment: c(i) = {val} stores val
-  base.data[i] =
+  const newVal =
     parenAssign && isRuntimeCell(rhs) && rhs.data.length === 1
       ? rhs.data[0]
       : rhs;
+  setCellElement(base, i, newVal, rt);
   updateShape(oldLen);
   return base;
 }
@@ -2013,7 +2043,8 @@ function storeIntoCell2D(
   base: RuntimeCell,
   indices: RuntimeValue[],
   rhs: RuntimeValue,
-  parenAssign = false
+  parenAssign = false,
+  rt?: RefcountRuntime
 ): RuntimeValue {
   let rows = base.shape[0];
   let cols = base.shape.length >= 2 ? base.shape[1] : 1;
@@ -2028,14 +2059,26 @@ function storeIntoCell2D(
   const newRows = Math.max(rows, maxRow);
   const newCols = Math.max(cols, maxCol);
   if (newRows > rows || newCols > cols) {
-    const emptyVal = () => RTV.tensor(allocFloat64Array(0), [0, 0]);
     const newData: RuntimeValue[] = new Array(newRows * newCols);
-    for (let k = 0; k < newData.length; k++) newData[k] = emptyVal();
+    for (let k = 0; k < newData.length; k++) {
+      const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
+      if (rt) empty.incref();
+      newData[k] = empty;
+    }
+    // Move existing elements (refcount unchanged — cell already owned them).
     for (let j = 0; j < cols; j++) {
       for (let i = 0; i < rows; i++) {
+        const oldEmpty = newData[j * newRows + i];
         newData[j * newRows + i] = base.data[j * rows + i];
+        if (rt) decref(rt, oldEmpty);
       }
     }
+    // Decref the old (smaller) data array's elements that are no longer held.
+    // base.data's elements were either copied above or are now slots in
+    // newData; the "moved" ones are held in newData with the same refcount.
+    // Since we've already replaced their slot in newData (from empty to old),
+    // those old elements' rc is unchanged. The empty placeholders we
+    // overwrote were decref'd above.
     base.data = newData;
     base.shape = [newRows, newCols];
     rows = newRows;
@@ -2055,12 +2098,17 @@ function storeIntoCell2D(
     for (let cj = 0; cj < nSelectedCols; cj++) {
       for (let ri = 0; ri < nSelectedRows; ri++) {
         const linearIdx = colIndices[cj] * rows + rowIndices[ri];
-        base.data[linearIdx] = scalarExpand ? rhs.data[0] : rhs.data[k++];
+        setCellElement(
+          base,
+          linearIdx,
+          scalarExpand ? rhs.data[0] : rhs.data[k++],
+          rt
+        );
       }
     }
   } else {
     const linearIdx = colIndices[0] * rows + rowIndices[0];
-    base.data[linearIdx] = rhs;
+    setCellElement(base, linearIdx, rhs, rt);
   }
   return base;
 }
@@ -2073,7 +2121,7 @@ export function storeIntoRTValueIndex(
   indices: RuntimeValue[],
   rhs: RuntimeValue,
   parenAssign = false,
-  rt?: AliasRuntime
+  rt?: StoreRuntime
 ): RuntimeValue {
   if (isRuntimeSparseMatrix(base)) {
     return storeIntoSparse(base, indices, rhs);
