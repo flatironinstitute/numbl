@@ -19,7 +19,7 @@ The interpreter has its own builtin system in `src/numbl-core/interpreter/builti
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
 - **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor implements one strategy (JS-JIT top-level / loop / call, eventually C-JIT optimizers). The dispatcher lowers each statement once via the shared lowering pipeline (`executors/lowering.ts`) and lets executors compete by cost estimate. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
+The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor implements one strategy (JS-JIT top-level / loop / call under `--opt 1`; C-JIT loop / fuse / chain under `--opt e3`, Node only). The dispatcher lowers each statement once via the shared lowering pipeline (`executors/lowering.ts`) and lets executors compete by cost estimate. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
 
 ## Style
 

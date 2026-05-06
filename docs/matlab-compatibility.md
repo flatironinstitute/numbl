@@ -57,35 +57,35 @@ More than 400 builtin functions are available. Run `numbl list-builtins` for the
 
 ## Language Features
 
-| Feature                   | Status                                                                           |
-| ------------------------- | -------------------------------------------------------------------------------- |
-| Arithmetic operators      | `+` `-` `*` `/` `\` `^` `.*` `./` `.\` `.^`                                      |
-| Comparison operators      | `==` `~=` `<` `<=` `>` `>=`                                                      |
-| Logical operators         | `&&` `\|\|` `&` `\|` `~` `xor`                                                   |
-| Transpose                 | `'` `.'`                                                                         |
-| Matrix literals           | `[a b; c d]`                                                                     |
-| Colon ranges              | `a:b`, `a:b:c`                                                                   |
-| `end` indexing            | `A(end)`, `A(end-1, :)`                                                          |
-| Logical indexing          | `A(A > 0)`                                                                       |
-| Cell arrays               | `{...}` construction and `{...}` indexing                                        |
-| Structs                   | dot access, dynamic field `s.(name)`                                             |
-| if / elseif / else        | Supported                                                                        |
-| for / while               | Supported                                                                        |
-| switch / case / otherwise | Supported                                                                        |
-| try / catch               | Supported                                                                        |
-| break / continue / return | Supported                                                                        |
-| Function definitions      | Regular, anonymous `@(x) ...`, handles `@func`, nested, subfunctions             |
-| Multiple return values    | `[a, b] = func(...)`                                                             |
-| varargin / varargout      | Supported                                                                        |
-| nargin / nargout          | Supported                                                                        |
-| Classes (classdef)        | Properties, methods, inheritance, static methods, abstract classes, enumerations |
-| Global variables          | `global` keyword                                                                 |
-| Persistent variables      | `persistent` keyword                                                             |
-| Sparse matrices           | Full arithmetic support (CSC format)                                             |
-| Complex numbers           | Full support throughout                                                          |
-| Regular expressions       | regexp, regexpi, regexprep                                                       |
-| String and char types     | Both `"string"` and `'char'` literals as distinct types                          |
-| Comments                  | `%` line comments, `%{ %}` block comments                                        |
+| Feature                   | Status                                                                                                                                                                                                                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Arithmetic operators      | `+` `-` `*` `/` `\` `^` `.*` `./` `.\` `.^`                                                                                                                                                                               |
+| Comparison operators      | `==` `~=` `<` `<=` `>` `>=`                                                                                                                                                                                               |
+| Logical operators         | `&&` `\|\|` `&` `\|` `~` `xor`                                                                                                                                                                                            |
+| Transpose                 | `'` `.'`                                                                                                                                                                                                                  |
+| Matrix literals           | `[a b; c d]`                                                                                                                                                                                                              |
+| Colon ranges              | `a:b`, `a:b:c`                                                                                                                                                                                                            |
+| `end` indexing            | `A(end)`, `A(end-1, :)`                                                                                                                                                                                                   |
+| Logical indexing          | `A(A > 0)`                                                                                                                                                                                                                |
+| Cell arrays               | `{...}` construction and `{...}` indexing                                                                                                                                                                                 |
+| Structs                   | dot access, dynamic field `s.(name)`                                                                                                                                                                                      |
+| if / elseif / else        | Supported                                                                                                                                                                                                                 |
+| for / while               | Supported                                                                                                                                                                                                                 |
+| switch / case / otherwise | Supported                                                                                                                                                                                                                 |
+| try / catch               | Supported                                                                                                                                                                                                                 |
+| break / continue / return | Supported                                                                                                                                                                                                                 |
+| Function definitions      | Regular, anonymous `@(x) ...`, handles `@func`, nested, subfunctions                                                                                                                                                      |
+| Multiple return values    | `[a, b] = func(...)`                                                                                                                                                                                                      |
+| varargin / varargout      | Supported                                                                                                                                                                                                                 |
+| nargin / nargout          | Supported                                                                                                                                                                                                                 |
+| Classes (classdef)        | Properties, methods, inheritance, static methods, handle vs. value classes, abstract method signatures (parsed; no subclass-coverage enforcement). Enumeration blocks are parsed but not yet wired into runtime behavior. |
+| Global variables          | `global` keyword                                                                                                                                                                                                          |
+| Persistent variables      | `persistent` keyword                                                                                                                                                                                                      |
+| Sparse matrices           | Full arithmetic support (CSC format)                                                                                                                                                                                      |
+| Complex numbers           | Full support throughout                                                                                                                                                                                                   |
+| Regular expressions       | regexp, regexpi, regexprep                                                                                                                                                                                                |
+| String and char types     | Both `"string"` and `'char'` literals as distinct types                                                                                                                                                                   |
+| Comments                  | `%` line comments, `%{ %}` block comments                                                                                                                                                                                 |
 
 ## Data Types
 

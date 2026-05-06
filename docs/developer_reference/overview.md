@@ -20,9 +20,9 @@ source .m ──► Lexer ──► Parser ──► AST
               ▼
            JS-JIT
           (opt 1)
-              │   (under opt 2: named C-JIT optimizers
-              │    compete with the JS-JIT executors via
-              │    the executor registry)
+              │   (under opt e3: named C-JIT optimizers
+              │    compete via the executor registry; the
+              │    JS-JIT set is not registered at e3)
               │
               ▼
            RuntimeValue

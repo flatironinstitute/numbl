@@ -7,7 +7,7 @@ Pluggable strategies for handling AST execution. The interpreter delegates each 
 - **Modularity** — each strategy is a self-contained executor with a uniform interface. Adding a strategy means adding one file, not threading a flag through several layers.
 - **Composition** — an outer executor (e.g., JS-JIT loop) can delegate sub-statements to the registry rather than re-implementing them.
 - **Runtime-driven dispatch** — selection happens at the moment of execution, with full live runtime info (shapes, exact values, etc.).
-- **Mode-driven registration** — `--opt 0/1/2` selects which executors get registered. The browser bundle simply omits executors whose dependencies it can't satisfy.
+- **Mode-driven registration** — `--opt 0/1/e3` selects which executors get registered. The browser bundle simply omits executors whose dependencies it can't satisfy.
 
 ## Concepts
 
@@ -135,11 +135,11 @@ Every successful `run()` call invokes `interp.onExecutorFired?.(name, lowered.ki
 
 `registerExecutorsForOpt(registry, opt)` in `executors/plugins.ts` is the single switch from an `--opt` level to a set of registered executors. Adding a new mode means extending that function — no other call-site changes.
 
-| `--opt` | Executors registered                               |
-| ------- | -------------------------------------------------- |
-| 0       | (none — AST interpreter is the hardcoded fallback) |
-| 1       | js-jit-top-level, js-jit-loop, js-jit-call         |
-| e3      | c-jit-loop, c-jit-fuse (Node only — see below)     |
+| `--opt` | Executors registered                                                                     |
+| ------- | ---------------------------------------------------------------------------------------- |
+| 0       | (none — AST interpreter is the hardcoded fallback)                                       |
+| 1       | js-jit-top-level, js-jit-loop, js-jit-call                                               |
+| e3      | c-jit-loop, c-jit-fuse, c-jit-chain (Node only — see below; **excludes** the JS-JIT set) |
 
 The C-JIT (e3) executors are wired in via `setCJitRegistrar` rather than imported directly by `plugins.ts`. A Node-only entry point (`cli.ts`, `lib.ts`) imports `executors/cJit/register.ts` for its side effect, which calls `setCJitRegistrar(...)`. The browser worker bundle never imports that file, so `cJit/compile.ts` (which uses `node:fs`/`node:os`/`node:child_process`) stays out of the web build's module graph. Passing `--opt e3` in a context where the registrar was never set throws.
 
@@ -171,8 +171,15 @@ executors/
                          executors into plugins.ts
     loopExecutor.ts      c-jit-loop
     fuseExecutor.ts      c-jit-fuse
-    compile.ts           cc-invoke + dlopen (Node only)
-    codegen.ts           IR -> C source
+    chainExecutor.ts     c-jit-chain
+    chainPass.ts         stmt-list pass that builds c-jit-chain Synth nodes
+    compile.ts           cc-invoke + koffi load (Node only)
+    codegen.ts           IR -> C source (loop shape)
+    fuseCodegen.ts       IR -> C source (fuse shape)
+    chainCodegen.ts      IR -> C source (chain shape)
+    elemwiseCodegen.ts   shared elementwise C-expression emission
+    elemwiseStructural.ts elementwise AST classifier shared by fuse/chain
     fuseAnalyze.ts       fuse classification (browser-safe)
+    builtins.ts          builtin set permitted under c-jit
     whitelist.ts         feasibility filter
 ```

@@ -16,7 +16,7 @@ All three share the same lowering pipeline and IR. Specializations are cached ke
 
 - `--opt 0` — interpreter only. No JIT.
 - `--opt 1` — **JS-JIT** (default). Lowers AST → JIT IR → JavaScript source, materialized via `new Function(...)`. Fast to compile, runs in-process.
-- `--opt 2` — JS-JIT plus C-JIT optimizers (Node only). A registry of named C-codegen optimizers compete with the JS-JIT executors for each dispatch; the lowest-cost candidate wins. (Implementation in progress; see [executors.md](../executors.md).)
+- `--opt e3` — JS-JIT plus the C-JIT scalar-loop optimizer (Node only). Three named C-codegen executors (`c-jit-loop`, `c-jit-fuse`, `c-jit-chain`) compete with the JS-JIT executors via the executor registry; the lowest-cost candidate wins each dispatch. See [executors.md](../executors.md) and [cjit.md](cjit.md).
 
 ## Bailouts
 

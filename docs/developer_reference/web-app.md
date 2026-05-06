@@ -32,6 +32,6 @@ Figures render in a separate Vite-built bundle that the browser app embeds (and 
 ## Environment differences from the CLI
 
 - No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks.
-- No C-JIT (no C compiler); `--opt 2` is unavailable in the browser.
+- No C-JIT (no C compiler); `--opt e3` is unavailable in the browser.
 - File I/O is VFS-only; scripts cannot reach the real disk.
 - `input()` is interactive through the UI, not `stdin`.

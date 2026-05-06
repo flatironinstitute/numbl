@@ -7,7 +7,7 @@ Built-in functions (numbl's `IBuiltin`s) are the implementations of MATLAB's non
 Each builtin is consulted in two ways:
 
 1. **Interpreter path** — the interpreter calls `resolve(argTypes, nargout)`, receives a specialized `apply` function, and invokes it on the runtime values. This path always works.
-2. **JIT path** — when the JIT is lowering a call site, it uses the same `resolve` to propagate output types. For codegen, it prefers the builtin's `jitEmit` (an inline JavaScript expression) or `jitEmitC` (a C expression). If neither is provided or neither is applicable to the argument types, the JIT emits a trampoline call into the runtime apply function.
+2. **JIT path** — when the JIT is lowering a call site, it uses the same `resolve` to propagate output types. For JS codegen, it prefers the builtin's optional `jitEmit` (an inline JavaScript expression). If `jitEmit` is missing or returns `null` for the given argument types, the JIT emits a trampoline call into the runtime apply function (`$h.ib_<name>`). The C-JIT path (executors under `cJit/`) uses its own whitelist and codegen rather than a per-builtin C-emission hook.
 
 This split lets a builtin have a sophisticated general implementation while providing a tight fast path for common cases.
 
