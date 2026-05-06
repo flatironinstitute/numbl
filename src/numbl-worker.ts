@@ -9,6 +9,7 @@
  *   Main -> Worker:  { type: "run", code, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
  *   Main -> Worker:  { type: "execute", code, cancelSAB? }
  *   Main -> Worker:  { type: "set_optimization", optimization }
+ *   Main -> Worker:  { type: "set_mem_pool", memPool }
  *   Main -> Worker:  { type: "update_workspace", workspaceFiles, vfsFiles, searchPaths? }
  *   Main -> Worker:  { type: "set_input_sab", inputSAB }
  *   Main -> Worker:  { type: "clear" }
@@ -47,6 +48,7 @@ let persistentSearchPaths: string[] | undefined;
 let implicitCwdPath: string | null | undefined;
 let optimizationLevel: import("./numbl-core/executors/plugins.js").OptLevel =
   "1";
+let memPoolEnabled = true;
 let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();
@@ -156,6 +158,11 @@ self.onmessage = (e: MessageEvent) => {
     return;
   }
 
+  if (type === "set_mem_pool") {
+    memPoolEnabled = e.data.memPool ?? true;
+    return;
+  }
+
   if (type === "update_workspace") {
     persistentWorkspaceFiles = e.data.workspaceFiles || [];
     if (e.data.searchPaths !== undefined) {
@@ -259,6 +266,7 @@ self.onmessage = (e: MessageEvent) => {
           displayResults: options?.displayResults ?? true,
           maxIterations: options?.maxIterations ?? 10000000,
           optimization: options?.optimization ?? optimizationLevel,
+          memPool: memPoolEnabled,
           initialVariableValues: useVariableValues,
           initialHoldState: useHoldState,
           fileIO: adapter,
@@ -392,6 +400,7 @@ self.onmessage = (e: MessageEvent) => {
         displayResults: true,
         maxIterations: 10000000,
         optimization: optimizationLevel,
+        memPool: memPoolEnabled,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
         fileIO: adapter,

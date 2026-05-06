@@ -1,5 +1,5 @@
 /**
- * Refcount-driven pool reclamation for RuntimeValue containers.
+ * Refcount-driven memory-pool reclamation for RuntimeValue containers.
  *
  * Every container kind extends `Refcounted`. The count starts at 0
  * (newly-constructed value, not yet bound to anything). It's incremented
@@ -9,9 +9,10 @@
  * any owned buffers are returned to the pool.
  *
  * Strict mode (`rt.strictRefcount`) makes a decref of an already-zero
- * count throw. Pool reclamation is gated by `rt.poolReclaim` — until
- * the flag is on, `_destroy` skips the buffer release. Both flags
- * default off until later phases of the refcount rollout finish.
+ * count throw. The memory pool is gated by `rt.memPool` — when off,
+ * `_destroy` skips the buffer release so every allocation is a fresh
+ * `new Float64Array` and no buffer is ever recycled. Useful for
+ * isolating bugs that may be caused by buffer recycling.
  */
 
 import { getCurrentRuntime } from "./memoryPool.js";
@@ -27,8 +28,12 @@ export interface RefcountRuntime {
   };
   /** When true, decref of a zero count throws. */
   strictRefcount?: boolean;
-  /** When true, `RuntimeTensor._destroy` etc. release buffers to the pool. */
-  poolReclaim?: boolean;
+  /** When true, `RuntimeTensor._destroy` etc. release buffers back to
+   *  the pool for reuse. When false, buffers are dropped on the floor
+   *  (JS GC reclaims the wrapper; the underlying `Float64Array` is
+   *  collected with it) and every allocation is a fresh
+   *  `new Float64Array`. */
+  memPool?: boolean;
   /** Optional transients harness. Constructors push freshly-built values
    *  here so an unbound expression result is decref'd at end of statement. */
   currentScope?: RefScope | null;

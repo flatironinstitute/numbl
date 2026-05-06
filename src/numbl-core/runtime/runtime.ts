@@ -238,11 +238,14 @@ export class Runtime {
   public currentScope: RefScope | null = null;
 
   /** When true, RuntimeTensor / RuntimeSparseMatrix `_destroy` releases
-   *  owned buffers back to `this.pool`. */
-  public poolReclaim: boolean = true;
+   *  owned buffers back to `this.pool` for reuse. When false, buffers
+   *  are dropped on the floor (JS GC reclaims them) and every
+   *  allocation is a fresh `new Float64Array` — useful for isolating
+   *  bugs that may be caused by buffer recycling. CLI: `--no-mem-pool`. */
+  public memPool: boolean = true;
 
   /** When true, `decref` on a zero count throws (loud at the
-   *  underflow site rather than silently leaking or, in `poolReclaim`
+   *  underflow site rather than silently leaking or, in `memPool`
    *  mode, double-releasing a buffer). Off by default — chained-lvalue
    *  assignments (e.g. `T.x(1).y = 10`) currently produce harmless
    *  underflows during scope drain, so flipping this on requires a

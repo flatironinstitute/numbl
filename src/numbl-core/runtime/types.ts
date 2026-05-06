@@ -162,7 +162,7 @@ export class RuntimeTensor extends Refcounted {
   }
 
   protected _destroy(rt: RefcountRuntime): void {
-    if (rt.poolReclaim) {
+    if (rt.memPool) {
       rt.pool.release(this.data);
       if (this.imag !== undefined) rt.pool.release(this.imag);
     }
@@ -410,7 +410,7 @@ export class RuntimeSparseMatrix extends Refcounted {
   }
 
   protected _destroy(rt: RefcountRuntime): void {
-    if (rt.poolReclaim) {
+    if (rt.memPool) {
       rt.pool.release(this.pr);
       if (this.pi !== undefined) rt.pool.release(this.pi);
     }

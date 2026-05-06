@@ -76,6 +76,13 @@ export interface ExecOptions {
    *  transcendentals; reductions are reorder-allowed). Default true;
    *  opt out via the CLI's `--no-fast-math` flag. */
   fastMath?: boolean;
+  /** Reclaim Float64Array buffers back to the per-runtime pool when
+   *  the owning wrapper's refcount hits zero. Default true; opt out
+   *  via the CLI's `--no-mem-pool` flag (or the worker's
+   *  `set_mem_pool` message) to isolate bugs that may be caused by
+   *  buffer recycling. With the flag off, every allocation is a
+   *  fresh `new Float64Array` and no buffer is ever released. */
+  memPool?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -335,6 +342,7 @@ export function executeCode(
   }
 
   const rt = new Runtime(options, options.initialVariableValues);
+  rt.memPool = options.memPool ?? true;
 
   // Build the per-runtime jitHelpers ($h) snapshot. This must happen AFTER
   // Runtime construction so it captures the special-builtin closures bound

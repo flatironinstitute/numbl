@@ -2,7 +2,7 @@
 
 The runtime tracks reference counts on every container kind so that `Float64Array` buffers are released back to the per-runtime memory pool when their owning wrapper is no longer reachable. Strict ownership is enforced by an API on the container classes; the surrounding interpreter, JIT, and store paths thread the runtime through so every binding mutation goes through the API.
 
-This system is for **pool reclamation only**. Copy-on-write decisions still go through the sweep in [`runtime/aliasing.ts`](../../../src/numbl-core/runtime/aliasing.ts); refcount being slightly off is a leak or, in `poolReclaim` mode, a premature buffer release — never silent data corruption from missed COW.
+This system is for **buffer reclamation only**. Copy-on-write decisions still go through the sweep in [`runtime/aliasing.ts`](../../../src/numbl-core/runtime/aliasing.ts); refcount being slightly off is a leak or, with `memPool` on, a premature buffer release — never silent data corruption from missed COW.
 
 ## `Refcounted`
 
@@ -11,7 +11,7 @@ Defined in [`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.ts).
 - `_rc: number` — starts at 0. A "newborn" wrapper is owned by no slot.
 - `incref()` — bumps `_rc`.
 - `decref(rt)` — decrements; if the count hits 0, runs `_destroy(rt)`.
-- `_destroy(rt)` — kind-specific. Tensors and sparse matrices release their `Float64Array` buffers via `rt.pool.release(...)` (gated by `rt.poolReclaim`). Containers with child refs decref each child.
+- `_destroy(rt)` — kind-specific. Tensors and sparse matrices release their `Float64Array` buffers via `rt.pool.release(...)` (gated by `rt.memPool`). Containers with child refs decref each child.
 
 The free helpers `incref(v)` and `decref(rt, v)` are noops on primitives (`number | boolean | string`).
 
@@ -78,7 +78,7 @@ b = a;        % a is already in env at rc=1
 
 ## Runtime flags
 
-- **`rt.poolReclaim`** (default true) — when on, `RuntimeTensor._destroy` and `RuntimeSparseMatrix._destroy` release `data`/`imag`/`pr`/`pi` buffers to `rt.pool`. The pool poisons released buffers with `NaN`, so any use-after-free shows up loudly in test output rather than as a silent zero-fill match.
+- **`rt.memPool`** (default true) — when on, `RuntimeTensor._destroy` and `RuntimeSparseMatrix._destroy` release `data`/`imag`/`pr`/`pi` buffers to `rt.pool` for reuse. The pool poisons released buffers with `NaN`, so any use-after-free shows up loudly in test output rather than as a silent zero-fill match. Disable with the CLI's `--no-mem-pool` flag (or via the worker's `set_mem_pool` message in the browser IDE) to isolate bugs that may stem from buffer recycling: with the flag off, every allocation is a fresh `new Float64Array` and no buffer is ever released.
 - **`rt.strictRefcount`** (default false) — when on, `decref` on a zero-count throws. Off by default because chained-lvalue assignments (e.g. `T.x(1).y = 10`) currently produce harmless underflows during scope drain. Flipping it on requires a cleanup pass over the back-write chain in `setMemberReturn` / indexed-store callbacks.
 
 ## Buffer-sharing constraint

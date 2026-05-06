@@ -222,6 +222,7 @@ export function IDEWorkspace({
   );
   const [optimization, setOptimization] =
     useState<import("../numbl-core/executors/plugins.js").OptLevel>("1");
+  const [memPool, setMemPool] = useState(true);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
@@ -361,6 +362,14 @@ export function IDEWorkspace({
       optimization,
     });
   }, [optimization]);
+
+  // Sync memPool flag to worker when toggled
+  useEffect(() => {
+    workerRef.current?.postMessage({
+      type: "set_mem_pool",
+      memPool,
+    });
+  }, [memPool]);
 
   // Panel sizing
   const initialSidebarWidth = window.innerWidth >= 1200 ? 260 : 200;
@@ -1125,6 +1134,31 @@ export function IDEWorkspace({
                   }}
                 >
                   {optimization === "0" ? "no jit" : "jit"}
+                </Typography>
+              </Tooltip>
+              <Tooltip
+                title={
+                  memPool
+                    ? "Memory pool on (refcounted Float64Array buffers reused; click to disable for debugging)"
+                    : "Memory pool off (every alloc is a fresh new Float64Array; click to re-enable)"
+                }
+              >
+                <Typography
+                  variant="caption"
+                  onClick={() => setMemPool(p => !p)}
+                  sx={{
+                    cursor: "pointer",
+                    fontSize: "0.7rem",
+                    px: 0.5,
+                    py: 0.1,
+                    borderRadius: 0.5,
+                    bgcolor: memPool ? "action.selected" : "transparent",
+                    opacity: memPool ? 1 : 0.5,
+                    "&:hover": { opacity: 1 },
+                    userSelect: "none",
+                  }}
+                >
+                  {memPool ? "mem pool" : "no mem pool"}
                 </Typography>
               </Tooltip>
               {activeFile && (
