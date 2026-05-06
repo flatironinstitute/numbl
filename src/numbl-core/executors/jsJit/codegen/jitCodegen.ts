@@ -155,20 +155,19 @@ let _fileEmitted = false;
 /**
  * Scratch locals for inner tensor-producing sub-expressions.
  *
- * Each tensor-producing sub-expression that doesn't have a LHS dest (i.e.
- * isn't the top-level RHS of an Assign) is given a fresh scratch local at
- * emit time. On first iteration the helper allocates a fresh tensor and
- * the JS `$sN = $h.tXxx($sN, ...)` pattern stores it; on subsequent
- * iterations the helper reuses the scratch's buffer.
+ * Each tensor-producing sub-expression without a LHS dest (i.e. not the
+ * top-level RHS of an Assign) is given a fresh scratch local at emit
+ * time. The emitted JS is `$sN = $h.tXxx($sN, ...)` so that the helper
+ * sees the previous scratch value as its `dest` hint.
  *
- * Scratches are declared `undefined` at function entry, so the first-iter
- * reuse-check naturally fails and allocates. Each call site gets its own
- * scratch so coexisting temps in the same expression tree don't collide
- * (e.g. `(a+b) + (c+d)` uses two scratches).
+ * Scratches are declared `undefined` at function entry. Each call site
+ * gets its own scratch so coexisting temps in the same expression tree
+ * don't collide (e.g. `(a+b) + (c+d)` uses two scratches).
  *
- * Only real-Float64 tensor sub-expressions are wrapped — complex paths
- * would need a matching imag buffer to benefit, and the conservative
- * reuse-check already falls back to allocation for size/type mismatches.
+ * Buffer reuse via the `dest` hint is currently disabled at the helper
+ * level (see `reuseRealBuffer` in jitHelpersTensor.ts). Each iteration
+ * allocates fresh; the hooks remain in place so memory-management work
+ * can re-enable reuse without a codegen change.
  */
 let _scratchLocals: string[] = [];
 

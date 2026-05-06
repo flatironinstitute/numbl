@@ -1,8 +1,9 @@
 % Regression: the JIT must not mutate the caller's tensor when a function
 % with `function a = f(a)` (param name == output name) is called from a
-% JIT-hot loop. The JS-JIT unshare(t) path returned the original tensor
-% when _rc == 1, and callUser never bumped _rc on its args, so writes
-% inside the callee reached the caller's buffer.
+% JIT-hot loop. Originated under the refcount scheme; under the current
+% sweep-based aliasing the JIT's hoisted-param `unshare(t)` clone (or, on
+% the indexed-store path, the runtime sweep) must still detect that the
+% caller holds the same tensor and keep the callee's writes off it.
 
 function a = scalar_index_assign(a)
   for k = 1:length(a)
