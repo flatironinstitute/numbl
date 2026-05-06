@@ -541,12 +541,17 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
 function filterUrl(url: string): string {
   // If the url is of the form
   // https://github.com/*/releases/download/*
-  // then we need to route through a CORS proxy since GitHub doesn't send CORS headers on release assets.
+  // then we need to route through a CORS proxy since GitHub doesn't send
+  // CORS headers on release assets. Append a per-call cachebust so the
+  // browser / proxy don't serve a stale .mhl when a release tag is
+  // republished (mip-numbl is a moving tag — same URL, new content).
   if (/^https:\/\/github\.com\/.+\/releases\/download\/.+/.test(url)) {
     url = url.replace(
       "https://github.com/",
       "https://mip-cors-proxy.figurl.workers.dev/gh/"
     );
+    url += url.includes("?") ? "&" : "?";
+    url += "t=" + Date.now();
   }
   return url;
 }
