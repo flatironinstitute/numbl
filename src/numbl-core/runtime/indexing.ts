@@ -715,16 +715,20 @@ function indexIntoTensor(
       tail *= base.shape[d];
     }
     collapsedShape.push(tail);
-    const view = new RuntimeTensor(
-      base.data,
-      collapsedShape,
-      base.imag,
-      base._isLogical
-    );
-    if (indices.length === 2) {
-      return indexIntoTensor2D(view, indices[0], indices[1]);
+    // Swap base.shape for the call duration so the indexing helpers see
+    // the collapsed view without us constructing a new wrapper that
+    // shares base.data (which would tie the buffer's pool-release to
+    // two wrappers).
+    const savedShape = base.shape;
+    base.shape = collapsedShape;
+    try {
+      if (indices.length === 2) {
+        return indexIntoTensor2D(base, indices[0], indices[1]);
+      }
+      return indexIntoTensorND(base, indices);
+    } finally {
+      base.shape = savedShape;
     }
-    return indexIntoTensorND(view, indices);
   }
   if (indices.length === 2) {
     return indexIntoTensor2D(base, indices[0], indices[1]);

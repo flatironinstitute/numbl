@@ -238,9 +238,8 @@ export class Runtime {
   public currentScope: RefScope | null = null;
 
   /** When true, RuntimeTensor / RuntimeSparseMatrix `_destroy` releases
-   *  owned buffers back to `this.pool`. Default off until phase 4 of
-   *  the refcount rollout flips it on. */
-  public poolReclaim: boolean = false;
+   *  owned buffers back to `this.pool`. */
+  public poolReclaim: boolean = true;
 
   /** When true, `decref` on a zero count throws. Default off until
    *  phase 6 of the refcount rollout flips it on. */
@@ -1431,7 +1430,7 @@ export class Runtime {
     target: unknown,
     superInstance: unknown
   ): unknown {
-    return _callSuperConstructor(target, superInstance);
+    return _callSuperConstructor(target, superInstance, this);
   }
   public createClassInstance(
     className: string,
@@ -1660,7 +1659,7 @@ export class Runtime {
     indices: unknown,
     results: unknown[]
   ): unknown {
-    return _multiOutputCellAssign(base, indices, results);
+    return _multiOutputCellAssign(base, indices, results, this);
   }
 
   // ── Member access ───────────────────────────────────────────────────

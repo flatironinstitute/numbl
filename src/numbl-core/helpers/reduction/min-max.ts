@@ -399,7 +399,11 @@ export function minMaxImpl(
         name,
         [
           isRuntimeTensor(v)
-            ? RTV.tensor(v.data, [1, v.data.length], v.imag)
+            ? RTV.tensor(
+                allocFloat64Array(v.data),
+                [1, v.data.length],
+                v.imag ? allocFloat64Array(v.imag) : undefined
+              )
             : v,
         ],
         nargout,

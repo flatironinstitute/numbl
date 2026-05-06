@@ -746,7 +746,9 @@ export function indexCellStore(
 export function multiOutputCellAssign(
   base: unknown,
   indices: unknown,
-  results: unknown[]
+  results: unknown[],
+  rt?: import("./aliasing.js").AliasRuntime &
+    import("./refcount.js").RefcountRuntime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);
@@ -775,7 +777,7 @@ export function multiOutputCellAssign(
     const idx = idxArray[i];
     const rhsMv = ensureRuntimeValue(results[i]);
     const idxMvals = resolveIndices([idx], endResolver(mv, 1));
-    mv = mIndexStore(mv, idxMvals, rhsMv) as typeof mv;
+    mv = mIndexStore(mv, idxMvals, rhsMv, false, rt) as typeof mv;
   }
 
   return mv;
