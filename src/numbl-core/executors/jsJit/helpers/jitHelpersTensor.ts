@@ -4,7 +4,7 @@
  * tensor coercion for struct-array field access.
  */
 
-import { type RuntimeTensor } from "../../../runtime/types.js";
+import { RuntimeTensor } from "../../../runtime/types.js";
 import type { RuntimeComplexNumber } from "../../../runtime/types.js";
 import { re, im, mkc, cAdd, cSub, cMul, cDiv } from "./jitHelpersComplex.js";
 import { tensorOps, OpRealBin } from "../../../ops/index.js";
@@ -39,13 +39,7 @@ export function makeTensor(
 ): RuntimeTensor {
   const s = [...shape];
   while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-  const t: RuntimeTensor = {
-    kind: "tensor",
-    data,
-    shape: s,
-  };
-  if (imag) t.imag = imag;
-  return t;
+  return new RuntimeTensor(data, s, imag);
 }
 
 // ── Output-buffer reuse (dest-hint) ────────────────────────────────────
@@ -465,14 +459,12 @@ export function unshare(t: unknown): RuntimeTensor {
     newImag = allocFloat64Array(tt.imag.length);
     newImag.set(tt.imag);
   }
-  const copy: RuntimeTensor = {
-    kind: "tensor",
-    data: newData,
-    shape: tt.shape.slice(),
-  };
-  if (newImag) copy.imag = newImag;
-  if (tt._isLogical) copy._isLogical = tt._isLogical;
-  return copy;
+  return new RuntimeTensor(
+    newData,
+    tt.shape.slice(),
+    newImag,
+    tt._isLogical || undefined
+  );
 }
 
 // ── Scalar → 1x1 tensor coercion ──────────────────────────────────────

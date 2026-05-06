@@ -19,7 +19,7 @@
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import type { LoweredStmt, FuseLoweredStmt } from "../lowering.js";
-import type { RuntimeTensor, RuntimeValue } from "../../runtime/types.js";
+import { RuntimeTensor, type RuntimeValue } from "../../runtime/types.js";
 import { generateFuseCSource } from "./fuseCodegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
 import { allocFloat64Array } from "../jsJit/helpers/alloc.js";
@@ -217,12 +217,7 @@ export const cJitFuseExecutor: Executor<FuseLoweredStmt, CFuseCompiled | null> =
       }
 
       // Wrap as RuntimeTensor preserving the input's shape.
-      const result: RuntimeTensor = {
-        kind: "tensor",
-        data: out,
-        imag: undefined,
-        shape: [...templateShape],
-      };
+      const result = new RuntimeTensor(out, [...templateShape]);
       interp.env.set(d.classification.outputName, result as RuntimeValue);
       return { ok: true };
     },

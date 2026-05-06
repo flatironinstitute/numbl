@@ -34,13 +34,42 @@ describe("MemoryPool", () => {
     expect(s.attemptedAllocs).toBe(s.actualAllocs + s.cacheHits);
   });
 
-  it("nothing is released or pooled without explicit release()", () => {
-    const result = executeCode("for k=1:50; x = zeros(100, 1); end");
+  it("refcount-driven reclamation: a discarded transient is released", () => {
+    // The intermediate `zeros(100, 1)` is bound to env.x then immediately
+    // overwritten with a different size, so its 100-length buffer drops
+    // to rc=0 on the second statement and is released to the pool.
+    const result = executeCode(
+      "x = zeros(100, 1); x = zeros(50, 1); clear x;",
+      { optimization: "0" }
+    );
     const s = result.memoryStats!;
-    // No automatic reclamation: every alloc goes through `new Float64Array`.
-    expect(s.cacheHits).toBe(0);
-    expect(s.releases).toBe(0);
-    expect(s.freePoolBufferCount).toBe(0);
+    expect(s.releases).toBeGreaterThan(0);
+    // Eventually the pool's freePool holds buffers for reuse.
+    expect(s.freePoolBufferCount + s.cacheHits).toBeGreaterThan(0);
+  });
+
+  it("refcount-driven reclamation: in a tight loop (interpreter), buffers are reused", () => {
+    // With opt 0 (interpreter), each iteration is its own statement-level
+    // scope. The previous iteration's tensor is decref'd to 0 and pooled
+    // before the next iteration runs, so most allocations should hit the
+    // pool's free buckets.
+    const result = executeCode("for k=1:50; x = zeros(100, 1); end", {
+      optimization: "0",
+    });
+    const s = result.memoryStats!;
+    expect(s.releases).toBeGreaterThanOrEqual(40);
+    expect(s.cacheHits).toBeGreaterThanOrEqual(40);
+  });
+
+  it("refcount-driven reclamation: JIT top-level releases after the synthetic fn returns", () => {
+    // The JIT-compiled top-level wraps the whole script in one scope, so
+    // mid-loop releases don't happen, but at scope drain every dead
+    // wrapper's buffer is reclaimed.
+    const result = executeCode("for k=1:50; x = zeros(100, 1); end", {
+      optimization: "1",
+    });
+    const s = result.memoryStats!;
+    expect(s.releases).toBeGreaterThanOrEqual(40);
   });
 
   it("manual release() puts a buffer in the free pool, next acquire reuses it", () => {

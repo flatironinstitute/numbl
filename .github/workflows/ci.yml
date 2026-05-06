@@ -55,10 +55,7 @@ jobs:
         run: npm run build
 
       - name: Run tests (float64)
-        run: npm run test:float64
-
-      - name: Run tests (scripts)
-        run: npm run test:scripts
+        run: npm run test
 
   test-browser:
     name: Test Browser (Playwright)

@@ -141,6 +141,12 @@ Options (for run and eval):
                      (default is on: libmvec-vectorized transcendentals,
                      reductions reorder-allowed; opt out for
                      bitwise-deterministic FP semantics)
+  --no-mem-pool      Disable buffer reuse from the per-runtime memory pool
+                     (default is on: refcounted Float64Array buffers are
+                     released to the pool and reused on next allocation;
+                     opt out to make every allocation a fresh
+                     new Float64Array, isolating bugs that may stem from
+                     buffer recycling)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)

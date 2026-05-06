@@ -896,7 +896,7 @@ function convertJsonArray(arr: unknown[]): RuntimeValue {
         for (const [key, value] of Object.entries(o)) {
           fields.set(makeValidFieldName(key), convertJsonValue(value));
         }
-        return { kind: "struct" as const, fields };
+        return RTV.struct(fields);
       });
       return RTV.structArray(fieldNames, elements);
     }

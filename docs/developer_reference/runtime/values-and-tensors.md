@@ -2,11 +2,11 @@
 
 ## `RuntimeValue`
 
-The runtime universe. A discriminated union of all values a numbl program can hold:
+The runtime universe. A union of primitives plus refcounted classes:
 
-- `number` — JavaScript number (real scalar).
-- `boolean` — logical scalar.
-- `string` — MATLAB string (distinct from char).
+- `number` — JavaScript number (real scalar). Not refcounted.
+- `boolean` — logical scalar. Not refcounted.
+- `string` — MATLAB string (distinct from char). Not refcounted.
 - `RuntimeChar` — MATLAB char array.
 - `RuntimeTensor` — real or complex, any rank, any shape.
 - `RuntimeComplexNumber` — complex scalar.
@@ -16,7 +16,9 @@ The runtime universe. A discriminated union of all values a numbl program can ho
 - `RuntimeFunction` / function handle — callable reference.
 - Sparse matrix, dictionary, and a few others.
 
-Type-guard predicates follow the pattern `isRuntimeTensor(v)`, `isRuntimeChar(v)`, etc. Use these instead of examining shape fields directly.
+Every container kind is a class extending `Refcounted` (`runtime/refcount.ts`). Each instance carries a `_rc` field (starts at 0) and `incref()` / `decref(rt)` methods enforced by a strict slot API; see [refcount.md](refcount.md) for the lifecycle.
+
+Type-guard predicates follow the pattern `isRuntimeTensor(v)`, `isRuntimeChar(v)`, etc. — they check `value.kind === "..."` and continue to work on the class instances. Use these instead of examining shape fields directly or using `instanceof`.
 
 ## `RTV` constructors
 
@@ -35,7 +37,9 @@ A `RuntimeTensor` holds:
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
-**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Before an indexed store mutates a tensor, the runtime decides whether to clone by running an on-demand reachability sweep from a small set of roots (active env chain, caller-env stack `rt._envStack`, globals, persistents) — see [`runtime/aliasing.ts`](../../../src/numbl-core/runtime/aliasing.ts). The LHS slot is excluded from the sweep, so a tensor that's only reachable through the slot being overwritten is treated as uniquely owned and mutated in place. The sweep also flags buffer-sharing aliases (e.g. zero-copy `reshape` returns a new wrapper whose `data` is the same `Float64Array`). A hard visit budget caps worst-case cost; on exhaustion the sweep returns true (conservative copy). There is no per-tensor refcount or other incremental bookkeeping.
+**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Before an indexed store mutates a tensor, the runtime decides whether to clone by running an on-demand reachability sweep from a small set of roots (active env chain, caller-env stack `rt._envStack`, globals, persistents) — see [`runtime/aliasing.ts`](../../../src/numbl-core/runtime/aliasing.ts). The LHS slot is excluded from the sweep, so a tensor that's only reachable through the slot being overwritten is treated as uniquely owned and mutated in place. A hard visit budget caps worst-case cost; on exhaustion the sweep returns true (conservative copy). The refcount system runs alongside the sweep but does not drive COW; see [refcount.md](refcount.md).
+
+**No buffer sharing across wrappers.** `reshape` and `squeeze` previously returned a new `RuntimeTensor` whose `data` aliased the source's buffer (zero-copy). With refcount-driven pool reclamation in place, two wrappers cannot co-own one buffer — the second `_destroy` would release an already-pooled buffer. These ops now copy the data instead. Trade: one extra `Float64Array` copy per reshape/squeeze, in exchange for a single owner per buffer.
 
 ## Tensor ops
 

@@ -3,6 +3,7 @@
  */
 
 import {
+  RuntimeClassInstance,
   isRuntimeClassInstance,
   isRuntimeNumber,
   isRuntimeStruct,
@@ -10,6 +11,7 @@ import {
   kstr,
   type RuntimeValue,
 } from "./types.js";
+import type { RefcountRuntime } from "./refcount.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { horzcat } from "./tensor-construction.js";
@@ -46,24 +48,31 @@ export function getRTValueField(
 export function setRTValueField(
   base: RuntimeValue,
   field: string,
-  value: RuntimeValue
+  value: RuntimeValue,
+  rt?: RefcountRuntime
 ): RuntimeValue {
   if (isRuntimeClassInstance(base)) {
     if (base.isHandleClass) {
-      // Handle class: mutate shared fields in place and return same reference
-      base.fields.set(field, value);
+      // Handle class: mutate shared fields in place and return same reference.
+      // bindField does decref-old / incref-new so the slot's refcount stays
+      // accurate. If rt isn't provided the bookkeeping is skipped (lax-mode
+      // — phase 6 will require rt at every call site).
+      if (rt) {
+        base.bindField(rt, field, value);
+      } else {
+        base.fields.set(field, value);
+      }
       return base;
     }
     // Value class: return a new instance with copied fields
     const newFields = new Map(base.fields);
     newFields.set(field, value);
-    return {
-      kind: "class_instance",
-      className: base.className,
-      fields: newFields,
-      isHandleClass: false,
-      _builtinData: base._builtinData,
-    };
+    return new RuntimeClassInstance(
+      base.className,
+      newFields,
+      false,
+      base._builtinData
+    );
   }
   if (isRuntimeStruct(base)) {
     const newFields = new Map(base.fields);

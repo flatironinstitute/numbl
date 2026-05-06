@@ -226,7 +226,8 @@ function findTestFiles(dir: string): string[] {
 async function runTests(
   dir: string,
   optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
-  fastMath?: boolean
+  fastMath?: boolean,
+  memPool?: boolean
 ) {
   loadNativeAddon(fastMath ?? true);
   const absDir = resolve(process.cwd(), dir);
@@ -256,6 +257,7 @@ async function runTests(
           displayResults: true,
           optimization: optimization ?? 1,
           fastMath,
+          memPool,
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -348,6 +350,12 @@ Options (for run and eval):
                      (default is on: libmvec-vectorized transcendentals,
                      reductions reorder-allowed; opt out for
                      bitwise-deterministic FP semantics)
+  --no-mem-pool      Disable buffer reuse from the per-runtime memory pool
+                     (default is on: refcounted Float64Array buffers are
+                     released to the pool and reused on next allocation;
+                     opt out to make every allocation a fresh
+                     new Float64Array, isolating bugs that may stem from
+                     buffer recycling)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -368,6 +376,7 @@ interface ParsedOptions {
   profileOutput: string | undefined;
   optimization: import("./numbl-core/executors/plugins.js").OptLevel;
   fastMath: boolean;
+  memPool: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -384,6 +393,7 @@ function parseOptions(args: string[]): ParsedOptions {
     profileOutput: undefined,
     optimization: "1",
     fastMath: true,
+    memPool: true,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -421,6 +431,9 @@ function parseOptions(args: string[]): ParsedOptions {
         break;
       case "--no-fast-math":
         opts.fastMath = false;
+        break;
+      case "--no-mem-pool":
+        opts.memPool = false;
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -696,6 +709,7 @@ async function executeWithOptions(
 
             optimization: opts.optimization,
             fastMath: opts.fastMath,
+            memPool: opts.memPool,
           },
           workspaceFiles,
           mainFileName,
@@ -755,6 +769,7 @@ async function executeWithOptions(
           onInput,
           optimization: opts.optimization,
           fastMath: opts.fastMath,
+          memPool: opts.memPool,
         },
         workspaceFiles,
         mainFileName,
@@ -794,6 +809,7 @@ async function executeWithOptions(
           onInput,
           optimization: opts.optimization,
           fastMath: opts.fastMath,
+          memPool: opts.memPool,
         },
         workspaceFiles,
         mainFileName,
@@ -1242,7 +1258,12 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.optimization, testOpts.fastMath);
+      await runTests(
+        dir,
+        testOpts.optimization,
+        testOpts.fastMath,
+        testOpts.memPool
+      );
       break;
     }
     case "build-addon":

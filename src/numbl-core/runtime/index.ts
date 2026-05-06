@@ -1,8 +1,6 @@
-export type {
-  RuntimeValue,
+export type { RuntimeValue, RuntimeString, RuntimeLogical } from "./types.js";
+export {
   RuntimeTensor,
-  RuntimeString,
-  RuntimeLogical,
   RuntimeCell,
   RuntimeStruct,
   RuntimeFunction,

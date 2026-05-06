@@ -14,7 +14,7 @@
 import {
   type RuntimeTensor,
   type RuntimeFunction,
-  type RuntimeStruct,
+  RuntimeStruct,
   type RuntimeValue,
 } from "../../../runtime/types.js";
 
@@ -503,10 +503,7 @@ export const jitHelpers = {
   // Used by AssignMember codegen to (re)initialize a variable as a
   // fresh empty struct (for the MATLAB `s = []; s.f = v` idiom or a
   // write-only local) and to set a field on an existing struct.
-  structNew_h: (): RuntimeStruct => ({
-    kind: "struct",
-    fields: new Map(),
-  }),
+  structNew_h: (): RuntimeStruct => new RuntimeStruct(new Map()),
   structSetField_h: (
     s: RuntimeStruct,
     field: string,

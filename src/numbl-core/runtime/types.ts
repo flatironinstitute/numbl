@@ -1,4 +1,11 @@
 // Determine float precision from environment variable
+import {
+  Refcounted,
+  type RefcountRuntime,
+  incref,
+  decref,
+} from "./refcount.js";
+
 const useFloat32 = import.meta.env?.NUMBL_USE_FLOAT32 === "true" ? true : false;
 
 export const USE_FLOAT32 = useFloat32;
@@ -124,108 +131,320 @@ export const kstr = (value: RuntimeValue): string => {
   return "unknown";
 };
 
-export type RuntimeTensor = {
-  kind: "tensor";
-  data: Float64Array; // real part
-  imag?: Float64Array; // imaginary part (optional, undefined means all zeros)
-  shape: number[]; // e.g. [3,4] for 3x4 matrix
-  /** When true, this tensor represents a logical (boolean) array from comparisons/logical ops. */
-  _isLogical?: boolean;
-};
+// ── Container classes ────────────────────────────────────────────────────
+//
+// Each class extends Refcounted. The `kind` field is preserved as an
+// instance property so the existing `value.kind === "..."` checks still
+// narrow correctly. Public mutable fields are kept for now — strict-API
+// enforcement comes in phase 3 when mutation methods replace direct
+// field writes.
 
-export type RuntimeChar = {
-  kind: "char";
+export class RuntimeTensor extends Refcounted {
+  readonly kind = "tensor" as const;
+  data: Float64Array;
+  imag: Float64Array | undefined;
+  shape: number[];
+  /** When true, this tensor represents a logical (boolean) array from
+   *  comparisons/logical ops. */
+  _isLogical: boolean | undefined;
+
+  constructor(
+    data: Float64Array,
+    shape: number[],
+    imag?: Float64Array,
+    _isLogical?: boolean
+  ) {
+    super();
+    this.data = data;
+    this.imag = imag;
+    this.shape = shape;
+    this._isLogical = _isLogical;
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    if (rt.memPool) {
+      rt.pool.release(this.data);
+      if (this.imag !== undefined) rt.pool.release(this.imag);
+    }
+  }
+}
+
+export class RuntimeChar extends Refcounted {
+  readonly kind = "char" as const;
   value: string;
-  /** Optional shape for multi-row char arrays. If absent, shape is [1, value.length].
-   *  For multi-row arrays, value contains all rows concatenated (each row is shape[1] chars). */
-  shape?: number[];
-};
+  /** Optional shape for multi-row char arrays. If absent, shape is
+   *  [1, value.length]. For multi-row arrays, value contains all rows
+   *  concatenated (each row is shape[1] chars). */
+  shape: number[] | undefined;
 
-export type RuntimeCell = {
-  kind: "cell";
+  constructor(value: string, shape?: number[]) {
+    super();
+    this.value = value;
+    this.shape = shape;
+  }
+}
+
+export class RuntimeCell extends Refcounted {
+  readonly kind = "cell" as const;
   data: RuntimeValue[];
-  shape: number[]; // e.g. [1,3] for {a, b, c}
-};
+  shape: number[];
 
-export type RuntimeStruct = {
-  kind: "struct";
+  constructor(data: RuntimeValue[], shape: number[]) {
+    super();
+    this.data = data;
+    this.shape = shape;
+    for (const v of data) incref(v);
+  }
+
+  /** Replace element at idx, decref-old / incref-new. Caller resizes the
+   *  shape if necessary; this method does not touch shape. */
+  bindElement(rt: RefcountRuntime, idx: number, value: RuntimeValue): void {
+    const old = this.data[idx];
+    incref(value);
+    this.data[idx] = value;
+    if (old !== undefined) decref(rt, old);
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const v of this.data) decref(rt, v);
+  }
+}
+
+export class RuntimeStruct extends Refcounted {
+  readonly kind = "struct" as const;
   fields: Map<string, RuntimeValue>;
-};
 
-export type RuntimeFunction = {
-  kind: "function";
+  constructor(fields: Map<string, RuntimeValue>) {
+    super();
+    this.fields = fields;
+    for (const v of fields.values()) incref(v);
+  }
+
+  /** Set/replace a field value, decref-old / incref-new. */
+  bindField(rt: RefcountRuntime, name: string, value: RuntimeValue): void {
+    const old = this.fields.get(name);
+    incref(value);
+    this.fields.set(name, value);
+    if (old !== undefined) decref(rt, old);
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const v of this.fields.values()) decref(rt, v);
+  }
+}
+
+export class RuntimeFunction extends Refcounted {
+  readonly kind = "function" as const;
   name: string;
   /** For closures: captured variables */
   captures: RuntimeValue[];
   /** The underlying callable — either a builtin or user-defined function name */
   impl: "builtin" | "user";
   /** For anonymous functions and user function handles: the underlying JS closure */
-  jsFn?: (...args: unknown[]) => unknown;
+  jsFn: ((...args: unknown[]) => unknown) | undefined;
   /** When true, jsFn expects nargout as its first argument */
-  jsFnExpectsNargout?: boolean;
+  jsFnExpectsNargout: boolean | undefined;
   /** Number of input parameters (for nargin(handle)) */
-  nargin?: number;
-};
+  nargin: number | undefined;
 
-export type RuntimeClassInstance = {
-  kind: "class_instance";
+  constructor(
+    name: string,
+    impl: "builtin" | "user",
+    captures: RuntimeValue[],
+    jsFn?: (...args: unknown[]) => unknown,
+    jsFnExpectsNargout?: boolean,
+    nargin?: number
+  ) {
+    super();
+    this.name = name;
+    this.impl = impl;
+    this.captures = captures;
+    this.jsFn = jsFn;
+    this.jsFnExpectsNargout = jsFnExpectsNargout;
+    this.nargin = nargin;
+    for (const v of captures) incref(v);
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const v of this.captures) decref(rt, v);
+  }
+}
+
+export class RuntimeClassInstance extends Refcounted {
+  readonly kind = "class_instance" as const;
   className: string;
   fields: Map<string, RuntimeValue>;
   /** True if this class inherits from handle (reference semantics). */
   isHandleClass: boolean;
   /** For classes that inherit from built-in types (e.g. classdef Foo < double),
    *  stores the underlying built-in data. */
-  _builtinData?: RuntimeValue;
-};
+  _builtinData: RuntimeValue | undefined;
+
+  constructor(
+    className: string,
+    fields: Map<string, RuntimeValue>,
+    isHandleClass: boolean,
+    _builtinData?: RuntimeValue
+  ) {
+    super();
+    this.className = className;
+    this.fields = fields;
+    this.isHandleClass = isHandleClass;
+    this._builtinData = _builtinData;
+    for (const v of fields.values()) incref(v);
+    if (_builtinData !== undefined) incref(_builtinData);
+  }
+
+  /** Set/replace a field value (handle-class in-place mutation), with
+   *  proper decref-old / incref-new bookkeeping. Used for handle-class
+   *  field assigns; value-class field assigns construct a new instance. */
+  bindField(rt: RefcountRuntime, name: string, value: RuntimeValue): void {
+    const old = this.fields.get(name);
+    incref(value);
+    this.fields.set(name, value);
+    if (old !== undefined) decref(rt, old);
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const v of this.fields.values()) decref(rt, v);
+    if (this._builtinData !== undefined) decref(rt, this._builtinData);
+  }
+}
 
 /** A 1-D array of class instances that all share the same class.
  *  Created by default horzcat/vertcat when the class doesn't overload them. */
-export type RuntimeClassInstanceArray = {
-  kind: "class_instance_array";
+export class RuntimeClassInstanceArray extends Refcounted {
+  readonly kind = "class_instance_array" as const;
   className: string;
   elements: RuntimeClassInstance[];
-};
 
-export type RuntimeComplexNumber = {
-  kind: "complex_number";
+  constructor(className: string, elements: RuntimeClassInstance[]) {
+    super();
+    this.className = className;
+    this.elements = elements;
+    for (const el of elements) incref(el);
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const el of this.elements) decref(rt, el);
+  }
+}
+
+export class RuntimeComplexNumber extends Refcounted {
+  readonly kind = "complex_number" as const;
   re: number;
   im: number;
-};
 
-export type RuntimeDummyHandle = {
-  kind: "dummy_handle";
-};
+  constructor(re: number, im: number) {
+    super();
+    this.re = re;
+    this.im = im;
+  }
+}
+
+export class RuntimeDummyHandle extends Refcounted {
+  readonly kind = "dummy_handle" as const;
+
+  constructor() {
+    super();
+  }
+}
 
 /** Handle to a graphics object (e.g. surface returned by pcolor) with a mutable trace reference. */
-export type RuntimeGraphicsHandle = {
-  kind: "graphics_handle";
+export class RuntimeGraphicsHandle extends Refcounted {
+  readonly kind = "graphics_handle" as const;
   _trace: Record<string, unknown>;
   _traceType: string;
-};
 
-/** A 1-D array of structs that all share the same field names. **/
-export type RuntimeStructArray = {
-  kind: "struct_array";
+  constructor(_trace: Record<string, unknown>, _traceType: string) {
+    super();
+    this._trace = _trace;
+    this._traceType = _traceType;
+  }
+}
+
+/** A 1-D array of structs that all share the same field names. */
+export class RuntimeStructArray extends Refcounted {
+  readonly kind = "struct_array" as const;
   fieldNames: string[];
   elements: RuntimeStruct[];
-};
 
-/** Sparse matrix in CSC (Compressed Sparse Column) format, matching MATLAB's internal representation. */
-export type RuntimeSparseMatrix = {
-  kind: "sparse_matrix";
-  m: number; // number of rows
-  n: number; // number of columns
-  ir: Int32Array; // row indices for each nonzero (length = nnz)
-  jc: Int32Array; // column pointers (length = n + 1)
-  pr: Float64Array; // nonzero values (length = nnz)
-  pi?: Float64Array; // imaginary values (length = nnz), undefined means real
-};
+  constructor(fieldNames: string[], elements: RuntimeStruct[]) {
+    super();
+    this.fieldNames = fieldNames;
+    this.elements = elements;
+    for (const el of elements) incref(el);
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const el of this.elements) decref(rt, el);
+  }
+}
+
+/** Sparse matrix in CSC (Compressed Sparse Column) format, matching MATLAB's
+ *  internal representation. */
+export class RuntimeSparseMatrix extends Refcounted {
+  readonly kind = "sparse_matrix" as const;
+  m: number;
+  n: number;
+  ir: Int32Array;
+  jc: Int32Array;
+  pr: Float64Array;
+  pi: Float64Array | undefined;
+
+  constructor(
+    m: number,
+    n: number,
+    ir: Int32Array,
+    jc: Int32Array,
+    pr: Float64Array,
+    pi?: Float64Array
+  ) {
+    super();
+    this.m = m;
+    this.n = n;
+    this.ir = ir;
+    this.jc = jc;
+    this.pr = pr;
+    this.pi = pi;
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    if (rt.memPool) {
+      rt.pool.release(this.pr);
+      if (this.pi !== undefined) rt.pool.release(this.pi);
+    }
+    // ir/jc are Int32Array — pool is Float64-only, so they're left to JS GC.
+  }
+}
 
 /** Dictionary mapping unique keys to values (MATLAB R2022b+). */
-export type RuntimeDictionary = {
-  kind: "dictionary";
+export class RuntimeDictionary extends Refcounted {
+  readonly kind = "dictionary" as const;
   /** Entries keyed by a hash string of the RuntimeValue key, preserving insertion order. */
   entries: Map<string, { key: RuntimeValue; value: RuntimeValue }>;
-  keyType?: string; // e.g. "string", "double"; undefined = unconfigured
-  valueType?: string; // e.g. "double", "cell"; undefined = unconfigured
-};
+  keyType: string | undefined;
+  valueType: string | undefined;
+
+  constructor(
+    entries?: Map<string, { key: RuntimeValue; value: RuntimeValue }>,
+    keyType?: string,
+    valueType?: string
+  ) {
+    super();
+    this.entries = entries ?? new Map();
+    this.keyType = keyType;
+    this.valueType = valueType;
+    for (const { key, value } of this.entries.values()) {
+      incref(key);
+      incref(value);
+    }
+  }
+
+  protected _destroy(rt: RefcountRuntime): void {
+    for (const { key, value } of this.entries.values()) {
+      decref(rt, key);
+      decref(rt, value);
+    }
+  }
+}

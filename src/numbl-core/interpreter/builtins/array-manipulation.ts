@@ -16,7 +16,7 @@ import {
   vertcat,
 } from "../../runtime/index.js";
 import {
-  type RuntimeTensor,
+  RuntimeTensor,
   type RuntimeValue,
   isRuntimeNumber,
   isRuntimeLogical,
@@ -257,15 +257,17 @@ defineBuiltin({
           throw new RuntimeError("reshape: number of elements must not change");
         }
         if (isRuntimeTensor(v)) {
+          // Copy the data buffer rather than share it. Sharing buffers
+          // across wrappers would require ref-tracking the buffer
+          // itself (multiple wrappers can be alive at once), and the
+          // current refcount design ties buffer lifetime to a single
+          // wrapper. The cost is one extra Float64Array copy on
+          // reshape, traded for simpler refcount semantics.
+          const dataCopy = allocFloat64Array(data);
+          const imagCopy = imag ? allocFloat64Array(imag) : undefined;
           const s = [...shape];
           while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-          return {
-            kind: "tensor",
-            data,
-            imag,
-            shape: s,
-            _isLogical: v._isLogical,
-          } as RuntimeTensor;
+          return new RuntimeTensor(dataCopy, s, imagCopy, v._isLogical);
         }
         return RTV.tensor(
           allocFloat64Array(data),
@@ -594,10 +596,7 @@ defineBuiltin({
         const v = args[0];
         if (isRuntimeNumber(v)) return v;
         if (isRuntimeChar(v))
-          return {
-            kind: "char",
-            value: v.value.split("").reverse().join(""),
-          };
+          return RTV.char(v.value.split("").reverse().join(""));
         if (isRuntimeSparseMatrix(v)) return flipSparse(v, 1);
         if (!isRuntimeTensor(v))
           throw new RuntimeError("fliplr: argument must be numeric or char");
@@ -981,8 +980,13 @@ defineBuiltin({
           ) {
             effectiveShape.pop();
           }
+          // Copy buffers — sharing them across wrappers conflicts with
+          // refcount-driven pool reclamation (see reshape for the same
+          // tradeoff).
+          const dataCopy = allocFloat64Array(v.data);
+          const imagCopy = v.imag ? allocFloat64Array(v.imag) : undefined;
           if (effectiveShape.length <= 2) {
-            return RTV.tensor(v.data, effectiveShape, v.imag);
+            return RTV.tensor(dataCopy, effectiveShape, imagCopy);
           }
           const newShape = effectiveShape.filter(d => d !== 1);
           if (newShape.length === 0) {
@@ -991,9 +995,9 @@ defineBuiltin({
             return RTV.num(v.data[0]);
           }
           if (newShape.length === 1) {
-            return RTV.tensor(v.data, [newShape[0], 1], v.imag);
+            return RTV.tensor(dataCopy, [newShape[0], 1], imagCopy);
           }
-          return RTV.tensor(v.data, newShape, v.imag);
+          return RTV.tensor(dataCopy, newShape, imagCopy);
         }
         throw new RuntimeError("squeeze: argument must be numeric");
       },

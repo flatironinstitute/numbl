@@ -101,10 +101,11 @@ export function setMemberReturn(
     }
   }
   const rhsMv = ensureRuntimeValue(rhs);
-  return mSetField(mv, name, rhsMv);
+  return mSetField(mv, name, rhsMv, rt);
 }
 
 export function setMemberDynamicReturn(
+  rt: Runtime,
   base: unknown,
   nameExpr: unknown,
   rhs: unknown
@@ -112,7 +113,7 @@ export function setMemberDynamicReturn(
   const mv = ensureRuntimeValue(base);
   const name = toString(ensureRuntimeValue(nameExpr));
   const rhsMv = ensureRuntimeValue(rhs);
-  return mSetField(mv, name, rhsMv);
+  return mSetField(mv, name, rhsMv, rt);
 }
 
 /**

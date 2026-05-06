@@ -502,7 +502,7 @@ defineBuiltin({
 
 /** Helper to create a RuntimeChar value. */
 function mkChar(value: string): RuntimeChar {
-  return { kind: "char", value };
+  return RTV.char(value);
 }
 
 defineBuiltin({

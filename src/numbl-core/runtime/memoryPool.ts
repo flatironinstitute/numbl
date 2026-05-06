@@ -15,9 +15,13 @@
 
 // ── Runtime stack ────────────────────────────────────────────────────────
 
-interface PoolHolder {
-  pool: MemoryPool;
-}
+import type { RefcountRuntime } from "./refcount.js";
+
+/** Minimal shape needed to find the active pool + transient scope.
+ *  `Runtime` (and any test stub) must satisfy this; it intentionally
+ *  matches `RefcountRuntime` so refcount-aware code can call
+ *  `getCurrentRuntime()` and use the result without casting. */
+type PoolHolder = RefcountRuntime;
 
 const runtimeStack: PoolHolder[] = [];
 
@@ -129,13 +133,18 @@ export class MemoryPool {
 
   /**
    * Return a buffer to the free pool. Caller asserts no live wrapper still
-   * references this buffer; misuse silently corrupts data. Currently
-   * unused — exposed so a future reclamation strategy (refcount, GC-based,
-   * region-based) can plug in without touching alloc-side code.
+   * references this buffer; misuse corrupts data.
+   *
+   * Released buffers are poisoned with NaN so any subsequent read via a
+   * stale wrapper (use-after-free) surfaces as NaN rather than silently
+   * matching the zero-fill that `acquire` performs on reuse. The poison
+   * is overwritten on the next `acquire` (zero-fill) or `acquireFrom`
+   * (set from src), so live consumers never see it.
    */
   release(buf: Float64Array): void {
     if (!this.liveSet.has(buf)) return;
     this.liveSet.delete(buf);
+    buf.fill(NaN);
     let bucket = this.freePool.get(buf.length);
     if (!bucket) {
       bucket = [];

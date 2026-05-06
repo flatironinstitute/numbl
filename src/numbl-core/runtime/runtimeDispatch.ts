@@ -9,7 +9,7 @@ import {
   type RuntimeValue,
   type RuntimeLogical,
   type RuntimeTensor,
-  type RuntimeFunction,
+  RuntimeFunction,
   RTV,
   toNumber,
   toString,
@@ -33,6 +33,7 @@ import {
   kstr,
 } from "../runtime/types.js";
 import { isBuiltin } from "../helpers/registry.js";
+import { incref, decref } from "./refcount.js";
 import {
   getIBuiltin as _getIBuiltin,
   getIBuiltinNargin,
@@ -206,15 +207,7 @@ export function makeUserFuncHandle(
   jsFn: (...args: unknown[]) => unknown,
   nargin?: number
 ): RuntimeFunction {
-  return {
-    kind: "function",
-    name: "",
-    captures: [],
-    impl: "user",
-    jsFn,
-    jsFnExpectsNargout: true,
-    nargin,
-  };
+  return new RuntimeFunction("", "user", [], jsFn, true, nargin);
 }
 
 // ── isa ─────────────────────────────────────────────────────────────────
@@ -287,19 +280,36 @@ export function isa(
 
 export function callSuperConstructor(
   target: unknown,
-  superInstance: unknown
+  superInstance: unknown,
+  rt?: Runtime
 ): RuntimeValue {
   const targetObj = ensureRuntimeValue(target);
   const superObj = ensureRuntimeValue(superInstance);
   if (isRuntimeClassInstance(targetObj) && isRuntimeClassInstance(superObj)) {
-    // Class-to-class inheritance: merge fields from super into target
-    for (const [key, val] of superObj.fields) {
-      targetObj.fields.set(key, val);
+    // Class-to-class inheritance: merge fields from super into target.
+    // bindField does decref-old / incref-new so refcounts stay accurate
+    // even when the inherited field's value was already held by `superObj`.
+    if (rt) {
+      for (const [key, val] of superObj.fields) {
+        targetObj.bindField(rt, key, val);
+      }
+    } else {
+      for (const [key, val] of superObj.fields) {
+        targetObj.fields.set(key, val);
+      }
     }
   } else if (isRuntimeClassInstance(targetObj)) {
     // Built-in type superclass (e.g. classdef Foo < double):
-    // store the result as _builtinData
-    targetObj._builtinData = superObj;
+    // store the result as _builtinData. Incref-new / decref-old keeps
+    // the ownership transfer accounted for.
+    if (rt) {
+      const old = targetObj._builtinData;
+      incref(superObj);
+      targetObj._builtinData = superObj;
+      if (old !== undefined) decref(rt, old);
+    } else {
+      targetObj._builtinData = superObj;
+    }
   }
   return targetObj;
 }

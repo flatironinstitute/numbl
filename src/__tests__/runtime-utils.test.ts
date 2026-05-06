@@ -9,6 +9,9 @@ import {
 import { RTV } from "../numbl-core/runtime/constructors.js";
 import { valuesAreEqual } from "../numbl-core/runtime/compare.js";
 import {
+  RuntimeTensor,
+  RuntimeCell,
+  RuntimeComplexNumber,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeString,
@@ -82,29 +85,17 @@ describe("sub2ind", () => {
 
 describe("tensorSize2D", () => {
   it("returns [1,1] for empty shape", () => {
-    const t = {
-      kind: "tensor" as const,
-      data: allocFloat64Array(1),
-      shape: [],
-    };
+    const t = new RuntimeTensor(allocFloat64Array(1), []);
     expect(tensorSize2D(t)).toEqual([1, 1]);
   });
 
   it("returns [1,n] for 1D shape", () => {
-    const t = {
-      kind: "tensor" as const,
-      data: allocFloat64Array(3),
-      shape: [3],
-    };
+    const t = new RuntimeTensor(allocFloat64Array(3), [3]);
     expect(tensorSize2D(t)).toEqual([1, 3]);
   });
 
   it("returns shape for 2D", () => {
-    const t = {
-      kind: "tensor" as const,
-      data: allocFloat64Array(6),
-      shape: [2, 3],
-    };
+    const t = new RuntimeTensor(allocFloat64Array(6), [2, 3]);
     expect(tensorSize2D(t)).toEqual([2, 3]);
   });
 });
@@ -136,7 +127,7 @@ describe("type guards", () => {
   });
 
   it("isRuntimeCell", () => {
-    const c = { kind: "cell" as const, data: [1, "hi"], shape: [1, 2] };
+    const c = new RuntimeCell([1, "hi"], [1, 2]);
     expect(isRuntimeCell(c)).toBe(true);
     expect(isRuntimeCell(42)).toBe(false);
   });
@@ -172,9 +163,9 @@ describe("valuesAreEqual", () => {
   });
 
   it("compares complex numbers", () => {
-    const a = { kind: "complex_number" as const, re: 1, im: 2 };
-    const b = { kind: "complex_number" as const, re: 1, im: 2 };
-    const c = { kind: "complex_number" as const, re: 1, im: 3 };
+    const a = new RuntimeComplexNumber(1, 2);
+    const b = new RuntimeComplexNumber(1, 2);
+    const c = new RuntimeComplexNumber(1, 3);
     expect(valuesAreEqual(a, b)).toBe(true);
     expect(valuesAreEqual(a, c)).toBe(false);
   });

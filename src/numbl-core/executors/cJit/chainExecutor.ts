@@ -18,7 +18,7 @@
 import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import type { LoweredStmt, SynthLoweredStmt } from "../lowering.js";
-import type { RuntimeTensor, RuntimeValue } from "../../runtime/types.js";
+import { RuntimeTensor, type RuntimeValue } from "../../runtime/types.js";
 import type { ChainAnalysis } from "./chainPass.js";
 import {
   buildChainDeclaration,
@@ -245,12 +245,7 @@ export const cJitChainExecutor: Executor<
     // Wrap each live-out as a RuntimeTensor with the matching shape.
     for (let k = 0; k < res.liveOuts.length; k++) {
       const name = res.liveOuts[k];
-      const result: RuntimeTensor = {
-        kind: "tensor",
-        data: outs[k],
-        imag: undefined,
-        shape: [...templateShape],
-      };
+      const result = new RuntimeTensor(outs[k], [...templateShape]);
       interp.env.set(name, result as RuntimeValue);
     }
     return { ok: true };

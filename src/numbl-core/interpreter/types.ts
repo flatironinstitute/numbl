@@ -5,6 +5,7 @@
 import type { Stmt, ArgumentsBlock } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
+import { incref, decref } from "../runtime/refcount.js";
 
 // ── Control flow signals ─────────────────────────────────────────────────
 
@@ -81,14 +82,19 @@ export class Environment {
     return this.vars.get(name) ?? this.parent?.get(name);
   }
 
-  /** Set variable — for nested scopes, writes to parent if variable exists there. */
+  /** Set variable — for nested scopes, writes to parent if variable
+   *  exists there. Maintains refcounts: increfs the new value, decrefs
+   *  the slot's prior occupant (in that order so self-rebind is safe). */
   set(name: string, value: RuntimeValue): void {
     if (
       this._globalNames !== undefined &&
       this._globalNames.has(name) &&
       this.rt
     ) {
+      const old = this.rt.$g[name];
+      incref(value);
       this.rt.$g[name] = value;
+      if (old !== undefined) decref(this.rt, old);
       return;
     }
     if (this.isNested && !this.vars.has(name) && this.parent) {
@@ -98,12 +104,15 @@ export class Environment {
         return;
       }
     }
-    this.vars.set(name, value);
+    this.setLocal(name, value);
   }
 
   /** Always writes to this scope (for parameter binding). */
   setLocal(name: string, value: RuntimeValue): void {
+    const old = this.vars.get(name);
+    incref(value);
     this.vars.set(name, value);
+    if (old !== undefined && this.rt) decref(this.rt, old);
   }
 
   /** Remove a variable from this scope's local map.
@@ -112,12 +121,19 @@ export class Environment {
    *  are removed via `clear global` / `clear functions` (not yet
    *  implemented). */
   delete(name: string): boolean {
-    return this.vars.delete(name);
+    if (!this.vars.has(name)) return false;
+    const old = this.vars.get(name)!;
+    this.vars.delete(name);
+    if (this.rt) decref(this.rt, old);
+    return true;
   }
 
   /** Remove all local variables from this scope. Globals,
    *  persistents, and nested function defs are preserved. */
   clearLocals(): void {
+    if (this.rt) {
+      for (const v of this.vars.values()) decref(this.rt, v);
+    }
     this.vars.clear();
   }
 
@@ -175,12 +191,16 @@ export class Environment {
   }
 
   /** Create a snapshot of this environment (copies all variables by value).
-   *  Used for anonymous functions which capture values at definition time. */
+   *  Used for anonymous functions which capture values at definition time.
+   *  Each captured value is incref'd so it survives the source env's
+   *  clearLocals when the original frame returns. */
   snapshot(): Environment {
     const snap = new Environment();
+    snap.rt = this.rt;
     const copyVars = (env: Environment) => {
       if (env.parent) copyVars(env.parent);
       for (const [k, v] of env.vars) {
+        incref(v);
         snap.vars.set(k, v);
       }
       for (const [k, v] of env.nestedFunctions) {
@@ -188,7 +208,6 @@ export class Environment {
       }
     };
     copyVars(this);
-    snap.rt = this.rt;
     snap.globalNames = new Set(this.globalNames);
     return snap;
   }

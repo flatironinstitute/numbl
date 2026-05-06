@@ -26,6 +26,7 @@ import {
   CancellationError,
   type CallFrame,
 } from "../runtime/index.js";
+import { incref, decref, RefScope } from "./refcount.js";
 import {
   isRuntimeNumber,
   isRuntimeTensor,
@@ -36,9 +37,9 @@ import {
   isRuntimeSparseMatrix,
   RuntimeChar,
   RuntimeCell,
+  RuntimeClassInstanceArray,
   type RuntimeComplexNumber,
   type RuntimeClassInstance,
-  type RuntimeClassInstanceArray,
 } from "../runtime/types.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { type ItemType } from "../lowering/itemTypes.js";
@@ -226,10 +227,31 @@ export class Runtime {
   public _envStack: import("./aliasing.js").AliasEnv[] = [];
 
   /** Float64Array memory pool. Initialized in the constructor; consulted
-   *  by `allocFloat64Array`. Currently tracks allocations and reports
-   *  stats; reclamation (sweep / refcount / GC) is intentionally absent
-   *  in this iteration. */
+   *  by `allocFloat64Array`. */
   public pool!: import("./memoryPool.js").MemoryPool;
+
+  /** Active per-statement transient scope. New refcounted values are
+   *  auto-adopted into this scope (rc 0→1) on construction so they
+   *  survive long enough to be bound somewhere; on scope drain at end
+   *  of statement, anything still held only by the scope is decref'd
+   *  to 0 and destroyed. Null when no statement is in flight. */
+  public currentScope: RefScope | null = null;
+
+  /** When true, RuntimeTensor / RuntimeSparseMatrix `_destroy` releases
+   *  owned buffers back to `this.pool` for reuse. When false, buffers
+   *  are dropped on the floor (JS GC reclaims them) and every
+   *  allocation is a fresh `new Float64Array` — useful for isolating
+   *  bugs that may be caused by buffer recycling. CLI: `--no-mem-pool`. */
+  public memPool: boolean = true;
+
+  /** When true, `decref` on a zero count throws (loud at the
+   *  underflow site rather than silently leaking or, in `memPool`
+   *  mode, double-releasing a buffer). Off by default — chained-lvalue
+   *  assignments (e.g. `T.x(1).y = 10`) currently produce harmless
+   *  underflows during scope drain, so flipping this on requires a
+   *  cleanup pass over `setMemberReturn` / `indexStore` callbacks.
+   *  Enabled in tests as a debugging aid. */
+  public strictRefcount: boolean = false;
 
   // Accessor guard: prevents recursive getter/setter/subsref calls
   public activeAccessors = new Set<string>();
@@ -391,6 +413,21 @@ export class Runtime {
   checkCancel(): void {
     if (this.cancelFlag && Atomics.load(this.cancelFlag, 0) !== 0) {
       throw new CancellationError();
+    }
+  }
+
+  /** Run `fn` with a fresh RefScope as `this.currentScope`. On return,
+   *  every value adopted into the scope is decref'd. Used by `execStmt`
+   *  to bound the lifetime of expression transients to one statement. */
+  public withScope<T>(fn: () => T): T {
+    const prev = this.currentScope;
+    const scope = new RefScope();
+    this.currentScope = scope;
+    try {
+      return fn();
+    } finally {
+      this.currentScope = prev;
+      scope.drain(this);
     }
   }
 
@@ -1213,7 +1250,10 @@ export class Runtime {
       funcMap = new Map();
       this.persistentStore.set(funcId, funcMap);
     }
+    const old = funcMap.get(varName);
+    incref(value);
     funcMap.set(varName, value);
+    if (old !== undefined) decref(this, old);
   }
 
   // ── Thin wrappers to runtimeOperators ─────────────────────────────
@@ -1398,7 +1438,7 @@ export class Runtime {
     target: unknown,
     superInstance: unknown
   ): unknown {
-    return _callSuperConstructor(target, superInstance);
+    return _callSuperConstructor(target, superInstance, this);
   }
   public createClassInstance(
     className: string,
@@ -1627,7 +1667,7 @@ export class Runtime {
     indices: unknown,
     results: unknown[]
   ): unknown {
-    return _multiOutputCellAssign(base, indices, results);
+    return _multiOutputCellAssign(base, indices, results, this);
   }
 
   // ── Member access ───────────────────────────────────────────────────
@@ -1658,7 +1698,7 @@ export class Runtime {
     nameExpr: unknown,
     rhs: unknown
   ): RuntimeValue {
-    return _setMemberDynamicReturn(base, nameExpr, rhs);
+    return _setMemberDynamicReturn(this, base, nameExpr, rhs);
   }
 
   public subsrefCall(base: unknown, names: string[]): unknown {
@@ -1999,11 +2039,7 @@ function defaultClassInstanceHorzcat(
 ): RuntimeClassInstance | RuntimeClassInstanceArray {
   const elements = collectClassInstances(items);
   if (elements.length === 1) return elements[0];
-  return {
-    kind: "class_instance_array",
-    className: elements[0].className,
-    elements,
-  };
+  return new RuntimeClassInstanceArray(elements[0].className, elements);
 }
 
 /** Default vertcat for class instances: creates an N×1 class instance array. */
@@ -2012,9 +2048,5 @@ function defaultClassInstanceVertcat(
 ): RuntimeClassInstance | RuntimeClassInstanceArray {
   const elements = collectClassInstances(rows);
   if (elements.length === 1) return elements[0];
-  return {
-    kind: "class_instance_array",
-    className: elements[0].className,
-    elements,
-  };
+  return new RuntimeClassInstanceArray(elements[0].className, elements);
 }

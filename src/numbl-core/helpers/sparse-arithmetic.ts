@@ -57,7 +57,7 @@ function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
       if (imag && S.pi) imag[idx] = S.pi[k];
     }
   }
-  return { kind: "tensor", data, imag, shape: [S.m, S.n] };
+  return RTV.tensor(data, [S.m, S.n], imag);
 }
 
 /** Get scalar value (real) from a RuntimeValue, or NaN if not scalar. */

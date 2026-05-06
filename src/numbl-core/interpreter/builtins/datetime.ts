@@ -28,11 +28,9 @@
  * number as a duration.
  */
 
-import type {
-  RuntimeValue,
-  RuntimeClassInstance,
-} from "../../runtime/types.js";
+import type { RuntimeValue } from "../../runtime/types.js";
 import {
+  RuntimeClassInstance,
   isRuntimeChar,
   isRuntimeClassInstance,
   isRuntimeString,
@@ -62,12 +60,7 @@ export function makeDatetime(
     ["Minute", RTV.num(minute)],
     ["Second", RTV.num(second)],
   ]);
-  return {
-    kind: "class_instance",
-    className: "datetime",
-    fields,
-    isHandleClass: false,
-  };
+  return new RuntimeClassInstance("datetime", fields, false);
 }
 
 function datetimeFromDate(d: Date): RuntimeClassInstance {
@@ -108,12 +101,7 @@ export function makeDuration(totalSeconds: number): RuntimeClassInstance {
   const fields = new Map<string, RuntimeValue>([
     ["Seconds", RTV.num(totalSeconds)],
   ]);
-  return {
-    kind: "class_instance",
-    className: "duration",
-    fields,
-    isHandleClass: false,
-  };
+  return new RuntimeClassInstance("duration", fields, false);
 }
 
 function durationSeconds(v: RuntimeClassInstance): number {

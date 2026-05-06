@@ -1,25 +1,25 @@
 /**
- * RuntimeValue constructor helpers (the MV namespace).
+ * RuntimeValue constructor helpers (the RTV namespace).
  */
 
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 import { ItemType } from "../lowering/itemTypes.js";
 import {
   type RuntimeNumber,
-  type RuntimeTensor,
+  RuntimeTensor,
   type RuntimeString,
-  type RuntimeChar,
+  RuntimeChar,
   type RuntimeLogical,
-  type RuntimeCell,
-  type RuntimeStruct,
-  type RuntimeFunction,
-  type RuntimeClassInstance,
-  type RuntimeComplexNumber,
-  type RuntimeDummyHandle,
-  type RuntimeGraphicsHandle,
-  type RuntimeStructArray,
-  type RuntimeSparseMatrix,
-  type RuntimeDictionary,
+  RuntimeCell,
+  RuntimeStruct,
+  RuntimeFunction,
+  RuntimeClassInstance,
+  RuntimeComplexNumber,
+  RuntimeDummyHandle,
+  RuntimeGraphicsHandle,
+  RuntimeStructArray,
+  RuntimeSparseMatrix,
+  RuntimeDictionary,
   type RuntimeValue,
   isRuntimeNumber,
   isRuntimeLogical,
@@ -45,12 +45,12 @@ export const RTV = {
     // Strip trailing singleton dimensions (always keeps minimum 2D)
     const s = [...shape];
     while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-    return { kind: "tensor", data: d, imag: im, shape: s };
+    return new RuntimeTensor(d, s, im);
   },
 
   /** Fast tensor constructor — data must be Float64Array, shape already normalized (no trailing singletons). */
   tensorRaw(data: Float64Array, shape: number[]): RuntimeTensor {
-    return { kind: "tensor", data, imag: undefined, shape };
+    return new RuntimeTensor(data, shape);
   },
 
   /** Create a scalar tensor (1x1) */
@@ -61,23 +61,13 @@ export const RTV = {
   /** Create a row vector [1 x n] */
   row(data: number[], imag?: number[]): RuntimeTensor {
     const im = imag ? allocFloat64Array(imag) : undefined;
-    return {
-      kind: "tensor",
-      data: allocFloat64Array(data),
-      imag: im,
-      shape: [1, data.length],
-    };
+    return new RuntimeTensor(allocFloat64Array(data), [1, data.length], im);
   },
 
   /** Create a column vector [n x 1] */
   col(data: number[], imag?: number[]): RuntimeTensor {
     const im = imag ? allocFloat64Array(imag) : undefined;
-    return {
-      kind: "tensor",
-      data: allocFloat64Array(data),
-      imag: im,
-      shape: [data.length, 1],
-    };
+    return new RuntimeTensor(allocFloat64Array(data), [data.length, 1], im);
   },
 
   /** Create a matrix from row-major data */
@@ -93,12 +83,7 @@ export const RTV = {
         ? imag
         : allocFloat64Array(imag)
       : undefined;
-    return {
-      kind: "tensor",
-      data: d,
-      imag: im,
-      shape: [rows, cols],
-    };
+    return new RuntimeTensor(d, [rows, cols], im);
   },
 
   string(value: string): RuntimeString {
@@ -106,7 +91,7 @@ export const RTV = {
   },
 
   char(value: string): RuntimeChar {
-    return { kind: "char", value };
+    return new RuntimeChar(value);
   },
 
   logical(value: boolean): RuntimeLogical {
@@ -114,7 +99,7 @@ export const RTV = {
   },
 
   cell(data: RuntimeValue[], shape: number[]): RuntimeCell {
-    return { kind: "cell", data, shape: [...shape] };
+    return new RuntimeCell(data, [...shape]);
   },
 
   struct(
@@ -122,7 +107,7 @@ export const RTV = {
   ): RuntimeStruct {
     const map =
       fields instanceof Map ? fields : new Map(Object.entries(fields));
-    return { kind: "struct", fields: map };
+    return new RuntimeStruct(map);
   },
 
   func(
@@ -130,7 +115,7 @@ export const RTV = {
     impl: "builtin" | "user",
     captures: RuntimeValue[] = []
   ): RuntimeFunction {
-    return { kind: "function", name, impl, captures };
+    return new RuntimeFunction(name, impl, captures);
   },
 
   classInstance(
@@ -147,34 +132,29 @@ export const RTV = {
         defaults?.get(name) ?? RTV.tensor(allocFloat64Array(0), [0, 0])
       );
     }
-    return {
-      kind: "class_instance",
-      className,
-      fields,
-      isHandleClass,
-    };
+    return new RuntimeClassInstance(className, fields, isHandleClass);
   },
 
   complex(re: number, im: number): RuntimeComplexNumber {
-    return { kind: "complex_number", re, im };
+    return new RuntimeComplexNumber(re, im);
   },
 
   dummyHandle(): RuntimeDummyHandle {
-    return { kind: "dummy_handle" };
+    return new RuntimeDummyHandle();
   },
 
   graphicsHandle(
     trace: Record<string, unknown>,
     traceType: string
   ): RuntimeGraphicsHandle {
-    return { kind: "graphics_handle", _trace: trace, _traceType: traceType };
+    return new RuntimeGraphicsHandle(trace, traceType);
   },
 
   structArray(
     fieldNames: string[],
     elements: RuntimeStruct[]
   ): RuntimeStructArray {
-    return { kind: "struct_array", fieldNames, elements };
+    return new RuntimeStructArray(fieldNames, elements);
   },
 
   sparseMatrix(
@@ -185,7 +165,7 @@ export const RTV = {
     pr: Float64Array,
     pi?: Float64Array
   ): RuntimeSparseMatrix {
-    return { kind: "sparse_matrix", m, n, ir, jc, pr, pi };
+    return new RuntimeSparseMatrix(m, n, ir, jc, pr, pi);
   },
 
   dictionary(
@@ -193,12 +173,7 @@ export const RTV = {
     keyType?: string,
     valueType?: string
   ): RuntimeDictionary {
-    return {
-      kind: "dictionary",
-      entries: entries ?? new Map(),
-      keyType,
-      valueType,
-    };
+    return new RuntimeDictionary(entries, keyType, valueType);
   },
 };
 
