@@ -18,7 +18,6 @@ import { RTV, toNumber, toString, RuntimeError } from "../../runtime/index.js";
 import { type JitType, isNonneg, shapeAfterReduction } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { sparseSum } from "../../helpers/reduction-helpers.js";
-import { uninitFloatX } from "../../runtime/alloc.js";
 import { defineBuiltin } from "./types.js";
 import {
   firstReduceDim,
@@ -766,6 +765,7 @@ import {
   getBroadcastShape,
   broadcastIterate,
 } from "../../helpers/arithmetic.js";
+import { uninitFloatX } from "../../executors/jsJit/helpers/jitHelpersTensor.js";
 
 defineBuiltin({
   name: "xor",

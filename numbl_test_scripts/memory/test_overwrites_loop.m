@@ -18,8 +18,7 @@ for k = 1:200
 end
 assert(acc == 2 * sum(1:200), sprintf('expected %d, got %g', 2 * sum(1:200), acc));
 
-% Reassign with shape changes. The pool keys by length so each length
-% should be handled independently.
+% Reassign with shape changes.
 for j = 1:50
   z = ones(1, j);
   assert(length(z) == j);

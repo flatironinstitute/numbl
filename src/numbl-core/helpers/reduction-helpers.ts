@@ -13,7 +13,7 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
-import { uninitFloatX } from "../runtime/alloc.js";
+import { uninitFloatX } from "../executors/jsJit/helpers/jitHelpersTensor.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 % A tensor passed through a chain of function calls must be unaffected by
 % mutations inside any of the callees, and the caller's buffer must stay
-% alive across all the calls (no premature pool return, no use-after-free).
+% alive across all the calls.
 
 v = (1:100)';
 result = level1(v);

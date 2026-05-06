@@ -1,7 +1,4 @@
-% Cells and structs hold tensors. The cell/struct wrapper itself uses the
-% legacy per-wrapper _rc (out of scope for the pool), but the contained
-% tensors go through the new shared _refs system. Confirm that mutating /
-% reassigning cells and struct fields holding tensors is safe.
+% Cells and structs hold tensors.
 
 % Cell holding tensors.
 c = { [1, 2, 3], [4, 5, 6], [7, 8, 9] };

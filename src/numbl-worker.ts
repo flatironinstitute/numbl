@@ -15,7 +15,7 @@
  *
  *   Worker -> Main:  { type: "output", text }
  *   Worker -> Main:  { type: "drawnow", plotInstructions }
- *   Worker -> Main:  { type: "done", generatedJS, outputCount, workspaceRep?, plotInstructions?, dispatchUnknownCounts?, bufferPool?, vfsChanges? }
+ *   Worker -> Main:  { type: "done", generatedJS, outputCount, workspaceRep?, plotInstructions?, dispatchUnknownCounts?, vfsChanges? }
  *   Worker -> Main:  { type: "error", message, errorType, file, line, snippet, callStack?, generatedJS?, workspaceRep?, vfsChanges? }
  *   Worker -> Main:  { type: "result", success, output?, error?, plotInstructions?, vfsChanges? }
  *   Worker -> Main:  { type: "cleared" }
@@ -312,7 +312,6 @@ self.onmessage = (e: MessageEvent) => {
         workspaceRep,
         plotInstructions: result.plotInstructions,
         dispatchUnknownCounts: result.dispatchUnknownCounts,
-        bufferPool: result.bufferPool,
         vfsChanges,
       });
     } catch (error: unknown) {

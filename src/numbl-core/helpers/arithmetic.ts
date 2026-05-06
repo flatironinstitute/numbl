@@ -20,7 +20,6 @@ import {
 } from "../runtime/types.js";
 import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
-import { uninitFloat64, uninitFloatX } from "../runtime/alloc.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
@@ -40,6 +39,10 @@ import {
   sparseConjugateTranspose,
   sparseToDense,
 } from "./sparse-arithmetic.js";
+import {
+  uninitFloat64,
+  uninitFloatX,
+} from "../executors/jsJit/helpers/jitHelpersTensor.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────
 

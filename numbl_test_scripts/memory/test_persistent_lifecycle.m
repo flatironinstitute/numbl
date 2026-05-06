@@ -1,7 +1,6 @@
 % Persistent variable holding a tensor: must survive across many calls,
 % support in-place mutation (MATLAB semantics), and allow whole-tensor
-% reassignment. The buffer the persistent points at must never be
-% prematurely pooled.
+% reassignment.
 
 % Case 1: in-place index mutation across many calls.
 for i = 1:50

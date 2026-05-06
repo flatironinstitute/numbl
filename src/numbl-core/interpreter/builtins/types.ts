@@ -6,6 +6,7 @@ import type {
   RuntimeValue,
   RuntimeTensor,
   RuntimeComplexNumber,
+  FloatXArrayType,
 } from "../../runtime/types.js";
 import {
   FloatXArray,
@@ -20,7 +21,6 @@ import {
 } from "../../runtime/types.js";
 import { tensorOps } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
-import { uninitFloat64, uninitFloatX } from "../../runtime/alloc.js";
 import {
   type JitType,
   signFromNumber,
@@ -28,6 +28,10 @@ import {
   unifyJitTypes,
 } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import {
+  uninitFloat64,
+  uninitFloatX,
+} from "../../executors/jsJit/helpers/jitHelpersTensor.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 
@@ -362,8 +366,8 @@ export function mkc(re: number, im: number): number | RuntimeComplexNumber {
 }
 
 export function makeTensor(
-  data: InstanceType<typeof FloatXArray>,
-  imag: InstanceType<typeof FloatXArray> | undefined,
+  data: FloatXArrayType,
+  imag: FloatXArrayType | undefined,
   shape: number[]
 ): RuntimeTensor {
   // Strip trailing singleton dimensions (always keep minimum 2D)
