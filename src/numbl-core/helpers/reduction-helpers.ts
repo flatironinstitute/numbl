@@ -12,7 +12,10 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import {
+  allocFloat64Array,
+  releaseFloat64Array,
+} from "../executors/jsJit/helpers/alloc.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
@@ -285,6 +288,7 @@ function sliceDimReduce(
       slice[k] = v.data[srcIndices[k]];
     }
     result[outIdx] = sliceFn(slice);
+    releaseFloat64Array(slice);
   });
   return RTV.tensor(result, info.resultShape);
 }
@@ -364,7 +368,9 @@ export function scanLogical(
     } else {
       tensorOps.realFlatReduce(op, data.length, data, out);
     }
-    return out[0] !== 0;
+    const result = out[0] !== 0;
+    releaseFloat64Array(out);
+    return result;
   }
   const defaultResult = mode === "all";
   for (let i = 0; i < data.length; i++) {
@@ -569,12 +575,14 @@ export function accumKernel(
         const out = allocFloat64Array(1);
         tensorOps.realFlatReduce(opCode, v.data.length, v.data, out);
         const re = finalizeFn ? finalizeFn(out[0], v.data.length) : out[0];
+        let result: RuntimeValue = RTV.num(re);
         if (v.imag && v.imag instanceof Float64Array) {
           tensorOps.realFlatReduce(opCode, v.imag.length, v.imag, out);
           const im = finalizeFn ? finalizeFn(out[0], v.imag.length) : out[0];
-          if (im !== 0) return RTV.complex(re, im);
+          if (im !== 0) result = RTV.complex(re, im);
         }
-        return RTV.num(re);
+        releaseFloat64Array(out);
+        return result;
       }
       let acc = initial;
       for (let i = 0; i < v.data.length; i++) acc = reduceFn(acc, v.data[i]);

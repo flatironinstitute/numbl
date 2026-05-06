@@ -30,7 +30,10 @@ import type { JitType } from "../../jitTypes.js";
 import { coerceToTensor } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import {
+  allocFloat64Array,
+  releaseFloat64Array,
+} from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -877,6 +880,11 @@ defineBuiltin({
               }
             }
           }
+          // The prior curData/curImag are intermediate scratch buffers —
+          // not held by any wrapper. Return them to the pool so they can
+          // be reused (often by the next iteration's allocFloat64Array).
+          releaseFloat64Array(curData);
+          if (curImag) releaseFloat64Array(curImag);
           curData = newData;
           curImag = newImag;
           curShape[d] *= rep;

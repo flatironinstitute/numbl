@@ -1908,7 +1908,7 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
     const f64B =
       b.data instanceof Float64Array ? b.data : allocFloat64Array(b.data);
     const raw = bridge.matmul!(f64A, aRows, aCols, f64B, bCols);
-    return unwrap1x1(RTV.tensor(allocFloat64Array(raw), [aRows, bCols]));
+    return unwrap1x1(RTV.tensor(raw, [aRows, bCols]));
   }
 
   // Complex matrix multiplication — try native zgemm first
@@ -1932,13 +1932,7 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
       f64BIm,
       bCols
     );
-    return unwrap1x1(
-      RTV.tensor(
-        allocFloat64Array(raw.re),
-        [aRows, bCols],
-        raw.im ? allocFloat64Array(raw.im) : undefined
-      )
-    );
+    return unwrap1x1(RTV.tensor(raw.re, [aRows, bCols], raw.im));
   }
 
   // Fallback: pure JavaScript complex matmul

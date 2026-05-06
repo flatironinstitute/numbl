@@ -1059,23 +1059,26 @@ function uniqueElements(
     hasImag ? `${v.data[i]},${v.imag![i]}` : `${v.data[i]}`;
   const seen = new Map<string, number>();
   const uniqueOrder: number[] = [];
-  const icArr = allocFloat64Array(v.data.length);
+  // ic mapping is only returned for nargout >= 3, so skip the buffer
+  // unless the caller asked for it.
+  const wantIc = nargout >= 3;
+  const icArr = wantIc ? allocFloat64Array(v.data.length) : null;
 
   for (let i = 0; i < v.data.length; i++) {
     if (isNaNVal(i)) {
       const idx = uniqueOrder.length;
       uniqueOrder.push(i);
-      icArr[i] = idx + 1;
+      if (icArr) icArr[i] = idx + 1;
       continue;
     }
     const key = valKey(i);
     if (seen.has(key)) {
-      icArr[i] = seen.get(key)! + 1;
+      if (icArr) icArr[i] = seen.get(key)! + 1;
     } else {
       const idx = uniqueOrder.length;
       seen.set(key, idx);
       uniqueOrder.push(i);
-      icArr[i] = idx + 1;
+      if (icArr) icArr[i] = idx + 1;
     }
   }
 
@@ -1100,8 +1103,10 @@ function uniqueElements(
     indices.forEach((origIdx, newIdx) => {
       reindex[origIdx] = newIdx;
     });
-    for (let i = 0; i < icArr.length; i++) {
-      icArr[i] = reindex[icArr[i] - 1] + 1;
+    if (icArr) {
+      for (let i = 0; i < icArr.length; i++) {
+        icArr[i] = reindex[icArr[i] - 1] + 1;
+      }
     }
     uniqueRe = indices.map(i => uniqueRe[i]);
     if (uniqueIm) uniqueIm = indices.map(i => uniqueIm![i]);
@@ -1126,8 +1131,8 @@ function uniqueElements(
     uniqueRe.length,
     1,
   ]);
-  const icTensor = RTV.tensor(icArr, [v.data.length, 1]);
   if (nargout === 2) return [C, ia];
+  const icTensor = RTV.tensor(icArr!, [v.data.length, 1]);
   return [C, ia, icTensor];
 }
 

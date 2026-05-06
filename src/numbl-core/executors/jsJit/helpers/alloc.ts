@@ -49,3 +49,18 @@ export function allocFloat64Array(
   if (typeof x === "number") return rt.pool.acquire(x);
   return rt.pool.acquireFrom(x);
 }
+
+/** Release a Float64Array back to the active runtime's pool, if any.
+ *
+ *  Use this for *scratch* buffers that a builtin allocs, fills, reads,
+ *  and discards within a single call — buffers that never become part
+ *  of any wrapper's `data`/`imag` and so won't be reclaimed by refcount.
+ *
+ *  Safe to call on buffers that weren't pool-acquired (no active runtime,
+ *  `memPool` off, small-alloc fast path, plain `new Float64Array`); the
+ *  pool's `release` checks `liveSet.has(buf)` and bails on miss. */
+export function releaseFloat64Array(buf: Float64Array): void {
+  const rt = getCurrentRuntime();
+  if (!rt || !rt.memPool) return;
+  rt.pool.release(buf);
+}

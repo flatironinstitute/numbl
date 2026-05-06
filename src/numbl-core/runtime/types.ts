@@ -246,6 +246,10 @@ export class RuntimeFunction extends Refcounted {
   jsFnExpectsNargout: boolean | undefined;
   /** Number of input parameters (for nargin(handle)) */
   nargin: number | undefined;
+  /** Cleanup hook fired by `_destroy`. Anonymous functions use this to
+   *  decref values held in their captured environment snapshot, since
+   *  those refs live in the JS closure (not in `captures`). */
+  releaseExtra: ((rt: RefcountRuntime) => void) | undefined;
 
   constructor(
     name: string,
@@ -267,6 +271,7 @@ export class RuntimeFunction extends Refcounted {
 
   protected _destroy(rt: RefcountRuntime): void {
     for (const v of this.captures) decref(rt, v);
+    this.releaseExtra?.(rt);
   }
 }
 

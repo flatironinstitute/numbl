@@ -884,6 +884,7 @@ export function evalAnonFunc(
   const fn = RTV.func("anonymous", "user");
   fn.jsFn = (nargoutArg: unknown, ...rest: unknown[]) => {
     const fnEnv = new Environment(capturedEnv);
+    fnEnv.rt = this.rt;
     const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
     for (let i = 0; i < regularParams.length; i++) {
       if (i < actualArgs.length) {
@@ -915,8 +916,21 @@ export function evalAnonFunc(
           if (narg > 1 && !(Array.isArray(result) && result.length >= narg)) {
             throw new RuntimeError("Too many output arguments.");
           }
+          // Adopt the result into the caller's transient scope before the
+          // fnEnv clearLocals below decrefs any locals (the result may be
+          // a parameter or a value derived from one). After adoption, the
+          // caller's scope owns a ref so the value survives the local
+          // teardown.
+          if (this.rt.currentScope) {
+            if (Array.isArray(result)) {
+              for (const v of result) this.rt.currentScope.adopt(v);
+            } else {
+              this.rt.currentScope.adopt(result as RuntimeValue);
+            }
+          }
           return result;
         } finally {
+          fnEnv.clearLocals();
           this.rt._envStack.pop();
           this.env = savedEnv;
         }
@@ -925,6 +939,11 @@ export function evalAnonFunc(
   };
   fn.jsFnExpectsNargout = true;
   fn.nargin = paramNames.length;
+  // The snapshot incref'd every captured value; balance that with a
+  // matching clearLocals when the function wrapper is destroyed.
+  // Without this, captured Float64Array buffers stay in the pool's
+  // liveSet for the rest of the runtime's life.
+  fn.releaseExtra = () => capturedEnv.clearLocals();
   return fn;
 }
 
