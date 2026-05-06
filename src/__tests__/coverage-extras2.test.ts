@@ -13,8 +13,9 @@ import { valuesAreEqual } from "../numbl-core/runtime/compare.js";
 import { RTV } from "../numbl-core/runtime/constructors.js";
 import {
   type RuntimeValue,
-  type RuntimeClassInstance,
-  type RuntimeFunction,
+  RuntimeClassInstance,
+  RuntimeFunction,
+  RuntimeChar,
 } from "../numbl-core/runtime/types.js";
 import { allocFloat64Array } from "../numbl-core/executors/jsJit/helpers/alloc.js";
 
@@ -355,12 +356,7 @@ describe("displayValue", () => {
   });
 
   it("displays function handle", () => {
-    const fn: RuntimeFunction = {
-      kind: "function",
-      name: "sin",
-      captures: [],
-      impl: "builtin",
-    };
+    const fn: RuntimeFunction = new RuntimeFunction("sin", "builtin", []);
     expect(displayValue(fn)).toBe("@sin");
   });
 
@@ -385,12 +381,11 @@ describe("displayValue", () => {
   });
 
   it("displays class instance", () => {
-    const inst: RuntimeClassInstance = {
-      kind: "class_instance",
-      className: "MyClass",
-      fields: new Map([["val", 42]]),
-      isHandleClass: false,
-    };
+    const inst: RuntimeClassInstance = new RuntimeClassInstance(
+      "MyClass",
+      new Map([["val", 42]]),
+      false
+    );
     const s = displayValue(inst);
     expect(s).toContain("MyClass");
     expect(s).toContain("val:");
@@ -405,7 +400,7 @@ describe("displayValue", () => {
   });
 
   it("displays multi-row char array", () => {
-    const c = { kind: "char" as const, value: "abcdef", shape: [2, 3] };
+    const c = new RuntimeChar("abcdef", [2, 3]);
     const s = displayValue(c);
     expect(s).toBe("abc\ndef");
   });
