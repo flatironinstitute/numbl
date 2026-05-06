@@ -26,7 +26,7 @@ import {
   CancellationError,
   type CallFrame,
 } from "../runtime/index.js";
-import { incref, decref } from "./refcount.js";
+import { incref, decref, RefScope } from "./refcount.js";
 import {
   isRuntimeNumber,
   isRuntimeTensor,
@@ -227,10 +227,24 @@ export class Runtime {
   public _envStack: import("./aliasing.js").AliasEnv[] = [];
 
   /** Float64Array memory pool. Initialized in the constructor; consulted
-   *  by `allocFloat64Array`. Currently tracks allocations and reports
-   *  stats; reclamation (sweep / refcount / GC) is intentionally absent
-   *  in this iteration. */
+   *  by `allocFloat64Array`. */
   public pool!: import("./memoryPool.js").MemoryPool;
+
+  /** Active per-statement transient scope. New refcounted values are
+   *  auto-adopted into this scope (rc 0→1) on construction so they
+   *  survive long enough to be bound somewhere; on scope drain at end
+   *  of statement, anything still held only by the scope is decref'd
+   *  to 0 and destroyed. Null when no statement is in flight. */
+  public currentScope: RefScope | null = null;
+
+  /** When true, RuntimeTensor / RuntimeSparseMatrix `_destroy` releases
+   *  owned buffers back to `this.pool`. Default off until phase 4 of
+   *  the refcount rollout flips it on. */
+  public poolReclaim: boolean = false;
+
+  /** When true, `decref` on a zero count throws. Default off until
+   *  phase 6 of the refcount rollout flips it on. */
+  public strictRefcount: boolean = false;
 
   // Accessor guard: prevents recursive getter/setter/subsref calls
   public activeAccessors = new Set<string>();
@@ -392,6 +406,21 @@ export class Runtime {
   checkCancel(): void {
     if (this.cancelFlag && Atomics.load(this.cancelFlag, 0) !== 0) {
       throw new CancellationError();
+    }
+  }
+
+  /** Run `fn` with a fresh RefScope as `this.currentScope`. On return,
+   *  every value adopted into the scope is decref'd. Used by `execStmt`
+   *  to bound the lifetime of expression transients to one statement. */
+  public withScope<T>(fn: () => T): T {
+    const prev = this.currentScope;
+    const scope = new RefScope();
+    this.currentScope = scope;
+    try {
+      return fn();
+    } finally {
+      this.currentScope = prev;
+      scope.drain(this);
     }
   }
 

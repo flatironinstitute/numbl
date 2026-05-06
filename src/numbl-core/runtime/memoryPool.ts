@@ -15,9 +15,13 @@
 
 // ── Runtime stack ────────────────────────────────────────────────────────
 
-interface PoolHolder {
-  pool: MemoryPool;
-}
+import type { RefcountRuntime } from "./refcount.js";
+
+/** Minimal shape needed to find the active pool + transient scope.
+ *  `Runtime` (and any test stub) must satisfy this; it intentionally
+ *  matches `RefcountRuntime` so refcount-aware code can call
+ *  `getCurrentRuntime()` and use the result without casting. */
+type PoolHolder = RefcountRuntime;
 
 const runtimeStack: PoolHolder[] = [];
 

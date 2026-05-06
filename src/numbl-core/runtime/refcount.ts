@@ -14,11 +14,17 @@
  * default off until later phases of the refcount rollout finish.
  */
 
+import { getCurrentRuntime } from "./memoryPool.js";
+
 /** Minimal runtime surface used by the refcount API. The real `Runtime`
  *  class satisfies this, but using an interface here avoids a circular
  *  import between refcount.ts ↔ runtime.ts ↔ types.ts. */
 export interface RefcountRuntime {
-  pool: { release(buf: Float64Array): void };
+  pool: {
+    acquire(size: number): Float64Array;
+    acquireFrom(src: number[] | Float64Array): Float64Array;
+    release(buf: Float64Array): void;
+  };
   /** When true, decref of a zero count throws. */
   strictRefcount?: boolean;
   /** When true, `RuntimeTensor._destroy` etc. release buffers to the pool. */
@@ -36,6 +42,21 @@ export abstract class Refcounted {
 
   /** Reference count. Starts at 0; incremented when bound to a slot. */
   _rc: number = 0;
+
+  constructor() {
+    // Auto-adopt into the active runtime's transient scope (if any). The
+    // scope owns one ref (rc=0 → 1) so the value survives until the
+    // current statement finishes. Statements that bind the value to a
+    // slot (env, struct field, cell element, ...) add their own refs;
+    // statements that don't get the value released on scope drain.
+    //
+    // In production code the current runtime is always set during
+    // execution. Test harnesses that build values without an active
+    // runtime simply skip adoption — the rc stays at 0 and JS GC
+    // collects the wrapper on its own.
+    const rt = getCurrentRuntime();
+    if (rt && rt.currentScope) rt.currentScope.adopt(this);
+  }
 
   incref(): void {
     this._rc++;

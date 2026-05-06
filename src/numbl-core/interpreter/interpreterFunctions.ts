@@ -626,6 +626,20 @@ export function callUserFunction(
       }
     }
 
+    // Adopt every output into the CALLER's transient scope. After
+    // clearLocals decrefs the fnEnv binding the output is held only by
+    // the caller's scope (rc=1) — surviving this function's exit and
+    // available for the caller to bind. If the caller doesn't bind it,
+    // the caller's scope drain releases it normally.
+    //
+    // savedEnv was the caller's env when we entered; rt.currentScope at
+    // this moment is whatever scope the caller's execStmt established
+    // (callUserFunction itself doesn't push a scope — it just executes
+    // the callee statements, each of which manages its own scope).
+    if (this.rt.currentScope) {
+      for (const v of outputs) this.rt.currentScope.adopt(v);
+    }
+
     // Drop locals after collecting outputs. Skip when a `@nestedFn`
     // handle was created during this function's execution: that handle's
     // closure references `fnEnv`, and clearing its vars would strand the

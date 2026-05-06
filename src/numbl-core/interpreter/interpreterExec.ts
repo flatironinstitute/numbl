@@ -49,6 +49,10 @@ import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 // ── Statement execution ──────────────────────────────────────────────────
 
 export function execStmt(this: Interpreter, stmt: Stmt): ControlSignal | null {
+  return this.rt.withScope(() => execStmtInner.call(this, stmt));
+}
+
+function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
   if (stmt.span) {
     this.rt.$file = stmt.span.file;
     // Compute line number from character offset using cached line table
