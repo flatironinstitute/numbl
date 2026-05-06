@@ -50,10 +50,12 @@ export function makeTensor(
 
 // ── Output-buffer reuse (dest-hint) ────────────────────────────────────
 //
-// Disabled with the refcount removal: without a uniqueness signal we
-// can't safely reuse a dest tensor's buffer. Keep the helpers as stubs
-// that always force a fresh allocation; they will be redesigned along
-// with the new anti-aliasing system.
+// `tAdd` / `tSub` / etc. accept a `dest` hint from the JIT codegen so the
+// helpers can later return a pre-existing buffer instead of allocating a
+// fresh one. Currently disabled: without a uniqueness signal at the
+// helper boundary we can't prove `dest` isn't aliased, so the helpers
+// always allocate. The hooks remain so this can be re-enabled by the
+// upcoming memory-management work without a codegen change.
 
 /* eslint-disable @typescript-eslint/no-unused-vars */
 function reuseRealBuffer(_dest: unknown, _n: number): Float64Array | undefined {
@@ -450,9 +452,10 @@ export function vconcatGrow1r(base: unknown, v: number): RuntimeTensor {
 
 // ── Copy-on-write unsharing ────────────────────────────────────────────
 
-/** Conservative COW: always allocate a fresh wrapper + buffer for the
- *  tensor `t`. The caller can mutate the result without affecting any
- *  other alias of the input. */
+/** Unconditionally allocate a fresh wrapper + buffer for `t`. The caller
+ *  can mutate the result without affecting any other alias of the input.
+ *  Used by the JIT path on entry to a write-target hoisted alias; the
+ *  runtime indexed-store path uses the sweep instead. */
 export function unshare(t: unknown): RuntimeTensor {
   const tt = t as RuntimeTensor;
   const newData = allocFloat64Array(tt.data.length);

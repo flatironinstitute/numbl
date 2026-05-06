@@ -620,7 +620,9 @@ export const jitHelpers = {
     const k = Math.round(idx) - 1;
     if (k < 0 || k >= orig.data.length)
       throw new Error("Index exceeds cell bounds");
-    // Conservative COW: always copy before mutating.
+    // JIT cell write: always clone the wrapper. Unlike the runtime's
+    // sweep-based decision, this path predates the new anti-aliasing
+    // and unconditionally copies.
     const c = {
       kind: "cell" as const,
       data: orig.data.slice(),

@@ -1,6 +1,7 @@
-% Recursive functions create a chain of frames each holding refcount-bumped
-% aliases of the same buffer. Each return must release exactly the bump it
-% added, leaving the caller's view intact.
+% Recursive functions create a chain of frames each holding an alias of
+% the same buffer through `_envStack`. The aliasing sweep must walk the
+% entire stack, so every level that mutates correctly clones, leaving the
+% original caller's view intact.
 
 v = (1:50)';
 out = recursive_sum(v, 50);

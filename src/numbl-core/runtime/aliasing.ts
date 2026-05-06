@@ -1,10 +1,9 @@
 /**
  * Anti-aliasing via on-demand graph sweep from runtime roots.
  *
- * Replaces incremental refcounting. Mutation sites (`storeIntoTensor`,
- * `storeIntoCell`) call `isAliased` to decide whether to copy-on-write.
- * No per-tensor state, no inc/dec bookkeeping — truth is recomputed
- * each time from the live root set.
+ * Mutation sites (`storeIntoTensor`, `storeIntoCell`) call `isAliased`
+ * to decide whether to copy-on-write. No per-tensor state, no inc/dec
+ * bookkeeping — truth is recomputed each time from the live root set.
  *
  * Roots traversed:
  *   - the active env chain (env.parent links)

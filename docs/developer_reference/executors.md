@@ -6,7 +6,7 @@ Pluggable strategies for handling AST execution. The interpreter delegates each 
 
 - **Modularity** — each strategy is a self-contained executor with a uniform interface. Adding a strategy means adding one file, not threading a flag through several layers.
 - **Composition** — an outer executor (e.g., JS-JIT loop) can delegate sub-statements to the registry rather than re-implementing them.
-- **Runtime-driven dispatch** — selection happens at the moment of execution, with full live runtime info (shapes, exact values, ref counts).
+- **Runtime-driven dispatch** — selection happens at the moment of execution, with full live runtime info (shapes, exact values, etc.).
 - **Mode-driven registration** — `--opt 0/1/2` selects which executors get registered. The browser bundle simply omits executors whose dependencies it can't satisfy.
 
 ## Concepts

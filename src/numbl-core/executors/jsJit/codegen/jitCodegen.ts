@@ -434,9 +434,9 @@ function emitStmts(lines: string[], stmts: JitStmt[], indent: string): void {
 function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
   switch (stmt.tag) {
     case "Assign": {
-      // Plain rebind: emit the RHS into the LHS slot. Conservative COW
-      // means later mutations of either alias clone the buffer first, so
-      // var-to-var tensor assigns don't need any retain/share dance.
+      // Plain rebind: emit the RHS into the LHS slot. Indexed stores run
+      // the alias sweep before mutating, so var-to-var tensor assigns
+      // don't need any retain/share dance.
       lines.push(
         `${indent}${mangle(stmt.name)} = ${emitExpr(stmt.expr, stmt.name)};`
       );
@@ -979,8 +979,9 @@ function emitIndex(expr: JitExpr & { tag: "Index" }): string {
  *
  * For write-target tensors, the refresh also calls `$h.unshare(name)` to
  * detach from any sharing the new RHS may have introduced (e.g. via
- * `tmp = base; ...; base(i) = v`). Conservative COW: unshare always
- * copies, regardless of refcount.
+ * `tmp = base; ...; base(i) = v`). `unshare` unconditionally allocates a
+ * fresh buffer — the JIT path predates the runtime's sweep-based aliasing
+ * decision and may be revisited as memory management evolves.
  */
 function emitHoistRefresh(lines: string[], name: string, indent: string): void {
   const alias = _hoistedAliases.get(name);

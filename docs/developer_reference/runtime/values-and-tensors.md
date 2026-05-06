@@ -35,7 +35,7 @@ A `RuntimeTensor` holds:
 
 **Column-major layout.** Element `(i, j)` of an `[m, n]` matrix is at flat index `j * m + i`. All tensor code assumes this; any new operation must preserve it.
 
-**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Writers unconditionally clone before mutating (conservative COW); there is no refcount or aliasing tracking — the previous refcount-based system was removed, and a new anti-aliasing design is being prepared.
+**Copy-on-write.** Assigning a tensor variable or passing it as an argument shares the same underlying buffer. Before an indexed store mutates a tensor, the runtime decides whether to clone by running an on-demand reachability sweep from a small set of roots (active env chain, caller-env stack `rt._envStack`, globals, persistents) — see [`runtime/aliasing.ts`](../../../src/numbl-core/runtime/aliasing.ts). The LHS slot is excluded from the sweep, so a tensor that's only reachable through the slot being overwritten is treated as uniquely owned and mutated in place. The sweep also flags buffer-sharing aliases (e.g. zero-copy `reshape` returns a new wrapper whose `data` is the same `Float64Array`). A hard visit budget caps worst-case cost; on exhaustion the sweep returns true (conservative copy). There is no per-tensor refcount or other incremental bookkeeping.
 
 ## Tensor ops
 

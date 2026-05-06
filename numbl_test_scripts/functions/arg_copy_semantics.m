@@ -2,10 +2,10 @@
 % function mutates a passed argument, the caller's copy is unaffected.
 %
 % Each case calls the mutating helper multiple times with the same
-% caller-side variable. A single call happens to work, because the tensor
-% wrapper is already marked shared (refcount > 1). But on the second call
-% the prior COW decremented the wrapper's refcount to 1, so the mutation
-% lands directly on the caller's data.
+% caller-side variable. The aliasing sweep must detect the caller's
+% binding on every call and force a clone before mutating — repeating
+% the call exercises that the decision is recomputed each time, not
+% cached from the first invocation.
 
 % ── Scalar index assignment on a tensor argument ───────────────────────
 v = [1, 2, 3, 4, 5];

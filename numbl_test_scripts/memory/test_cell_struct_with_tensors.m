@@ -4,7 +4,7 @@
 c = { [1, 2, 3], [4, 5, 6], [7, 8, 9] };
 assert(isequal(c{1}, [1, 2, 3]));
 
-% Reassign a cell entry — the old tensor's refcount must drop.
+% Reassign a cell entry — the old tensor is no longer reachable.
 c{2} = [40, 50, 60];
 assert(isequal(c{2}, [40, 50, 60]));
 assert(isequal(c{1}, [1, 2, 3]) && isequal(c{3}, [7, 8, 9]));

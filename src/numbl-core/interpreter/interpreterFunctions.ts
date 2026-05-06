@@ -519,9 +519,11 @@ export function callUserFunction(
     throw new RuntimeError("Too many output arguments.");
   }
 
-  // Conservative COW means any mutation inside the callee already clones
-  // before writing, so we don't need to retain or copy args at the call
-  // boundary — pass-by-reference of the wrapper is safe.
+  // Indexed stores inside the callee run the alias sweep before mutating
+  // (the caller env is on `_envStack`, so any tensor reachable from the
+  // caller's bindings is detected and cloned). Passing wrappers by
+  // reference at the call boundary is therefore safe — no retain or copy
+  // needed here.
   const sharedArgs = args;
 
   // Try the function-call dispatch path. Registered executors
