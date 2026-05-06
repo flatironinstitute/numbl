@@ -291,20 +291,30 @@ export function runSyntheticFnAgainstEnv(
 ): SyntheticFnRunResult {
   const inputValues = gatherEnvValues(interp, inputs);
 
-  let result: unknown;
-  try {
-    result = fn(...inputValues);
-  } catch (e) {
-    if (e instanceof JitFuncHandleBailError) {
-      console.warn(`Warning: ${e.message}`);
-      return { ok: false, transient: false };
+  // Establish a transient scope around the synthetic fn call. Tensors
+  // built inside the JIT-compiled body auto-adopt into this scope on
+  // construction; intermediate values that get overwritten in JS-local
+  // vars (e.g. the loop body's `x = zeros(...)` rebinding each iter)
+  // are decref'd when the scope drains, releasing their buffers to the
+  // pool. The scope also wraps writeBackOutputs so the returned values
+  // get bound to env BEFORE the scope drains — keeping their slot
+  // refcount intact.
+  return interp.rt.withScope(() => {
+    let result: unknown;
+    try {
+      result = fn(...inputValues);
+    } catch (e) {
+      if (e instanceof JitFuncHandleBailError) {
+        console.warn(`Warning: ${e.message}`);
+        return { ok: false, transient: false };
+      }
+      if (e instanceof JitBailToInterpreter) {
+        return { ok: false, transient: true };
+      }
+      throw e;
     }
-    if (e instanceof JitBailToInterpreter) {
-      return { ok: false, transient: true };
-    }
-    throw e;
-  }
 
-  writeBackOutputs(interp, outputs, result);
-  return { ok: true };
+    writeBackOutputs(interp, outputs, result);
+    return { ok: true };
+  });
 }
