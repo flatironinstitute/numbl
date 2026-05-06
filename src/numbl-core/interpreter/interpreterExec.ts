@@ -927,28 +927,35 @@ export function evalAnonFunc(
 // ── Function handles ─────────────────────────────────────────────────────
 
 export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
-  // Handle dotted names like @ClassName.method (static method handles)
+  // Handle dotted names. @ClassName.method is a static-method handle; anything
+  // else (e.g. @pkg.fn or @pkg.subpkg.fn) is a package-function handle that
+  // dispatches through the normal function-resolution path.
   const dotIdx = name.indexOf(".");
   if (dotIdx > 0) {
     const className = name.slice(0, dotIdx);
     const methodName = name.slice(dotIdx + 1);
-    const fn = RTV.func(name, "builtin");
-    fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
-      const actualArgs = Array.isArray(rest[0]) ? (rest[0] as unknown[]) : rest;
-      const narg = typeof nargout === "number" ? nargout : 1;
-      const target: ResolvedTarget = {
-        kind: "classMethod",
-        className,
-        methodName,
-        compileArgTypes: actualArgs.map(a =>
-          getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-        ),
-        stripInstance: false,
+    if (this.ctx.getClassInfo(className)) {
+      const fn = RTV.func(name, "builtin");
+      fn.jsFn = (nargout: unknown, ...rest: unknown[]) => {
+        const actualArgs = Array.isArray(rest[0])
+          ? (rest[0] as unknown[])
+          : rest;
+        const narg = typeof nargout === "number" ? nargout : 1;
+        const target: ResolvedTarget = {
+          kind: "classMethod",
+          className,
+          methodName,
+          compileArgTypes: actualArgs.map(a =>
+            getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
+          ),
+          stripInstance: false,
+        };
+        return this.interpretTarget(target, actualArgs, narg);
       };
-      return this.interpretTarget(target, actualArgs, narg);
-    };
-    fn.jsFnExpectsNargout = true;
-    return fn;
+      fn.jsFnExpectsNargout = true;
+      return fn;
+    }
+    // Not a class — fall through to the package/workspace handle path below.
   }
 
   const capturedFile = this.currentFile;
