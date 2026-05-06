@@ -46,6 +46,22 @@ export function getCurrentRuntime(): PoolHolder | null {
 
 // ── Stats ────────────────────────────────────────────────────────────────
 
+/** Per-size bucket telemetry. `count` reflects current free-list depth;
+ *  the four counters are cumulative across the run. */
+export interface MemoryPoolBucket {
+  size: number;
+  /** Currently-pooled (released, awaiting reuse) buffers at this size. */
+  count: number;
+  /** Total `acquire` / `acquireFrom` calls for this size. */
+  attempts: number;
+  /** Subset of attempts served from the free list. */
+  cacheHits: number;
+  /** Subset of attempts that fell through to `new Float64Array`. */
+  news: number;
+  /** Total `release` calls for this size. */
+  releases: number;
+}
+
 export interface MemoryPoolStats {
   // counts
   attemptedAllocs: number;
@@ -61,14 +77,26 @@ export interface MemoryPoolStats {
   liveSetSize: number;
   freePoolBufferCount: number;
   freePoolBytes: number;
-  freePoolBuckets: Array<{ size: number; count: number }>;
+  freePoolBuckets: MemoryPoolBucket[];
 }
 
 // ── MemoryPool ───────────────────────────────────────────────────────────
 
+/** Mutable per-size counter bag, kept in `_bucketStats`. */
+interface BucketCounters {
+  attempts: number;
+  cacheHits: number;
+  news: number;
+  releases: number;
+}
+
 export class MemoryPool {
   private liveSet = new Set<Float64Array>();
   private freePool = new Map<number, Float64Array[]>();
+  /** Per-size cumulative counters. Survives even after a size's free
+   *  bucket empties out, so the report can show "size N had X attempts"
+   *  even when no buffers of that size are currently pooled. */
+  private _bucketStats = new Map<number, BucketCounters>();
 
   // Counters (never reset within an execution).
   private _attemptedAllocs = 0;
@@ -82,11 +110,22 @@ export class MemoryPool {
   private _freePoolBufferCount = 0;
   private _freePoolBytes = 0;
 
+  private bucketCounters(size: number): BucketCounters {
+    let c = this._bucketStats.get(size);
+    if (!c) {
+      c = { attempts: 0, cacheHits: 0, news: 0, releases: 0 };
+      this._bucketStats.set(size, c);
+    }
+    return c;
+  }
+
   /** Allocate (or reuse) a zero-filled Float64Array of length `size`. */
   acquire(size: number): Float64Array {
     const bytes = 8 * size;
     this._attemptedAllocs++;
     this._attemptedBytes += bytes;
+    const bc = this.bucketCounters(size);
+    bc.attempts++;
 
     const bucket = this.freePool.get(size);
     let buf: Float64Array;
@@ -97,10 +136,12 @@ export class MemoryPool {
       this._cacheHitBytes += bytes;
       this._freePoolBufferCount--;
       this._freePoolBytes -= bytes;
+      bc.cacheHits++;
     } else {
       buf = new Float64Array(size);
       this._actualAllocs++;
       this._actualAllocBytes += bytes;
+      bc.news++;
     }
     this.liveSet.add(buf);
     return buf;
@@ -112,6 +153,8 @@ export class MemoryPool {
     const bytes = 8 * n;
     this._attemptedAllocs++;
     this._attemptedBytes += bytes;
+    const bc = this.bucketCounters(n);
+    bc.attempts++;
 
     const bucket = this.freePool.get(n);
     let buf: Float64Array;
@@ -122,10 +165,12 @@ export class MemoryPool {
       this._cacheHitBytes += bytes;
       this._freePoolBufferCount--;
       this._freePoolBytes -= bytes;
+      bc.cacheHits++;
     } else {
       buf = new Float64Array(src);
       this._actualAllocs++;
       this._actualAllocBytes += bytes;
+      bc.news++;
     }
     this.liveSet.add(buf);
     return buf;
@@ -156,15 +201,30 @@ export class MemoryPool {
     this._releaseBytes += bytes;
     this._freePoolBufferCount++;
     this._freePoolBytes += bytes;
+    this.bucketCounters(buf.length).releases++;
   }
 
-  /** Snapshot the pool's stats into a plain JSON-serializable object. */
+  /** Snapshot the pool's stats into a plain JSON-serializable object.
+   *  Buckets are returned sorted by size descending and capped at 200
+   *  (the cap is for display surfaces that paginate poorly). Every size
+   *  ever touched by `acquire` / `release` shows up — even if its
+   *  current free-list depth is 0 — so the counters tell the full
+   *  history. */
   getStats(): MemoryPoolStats {
-    const buckets: Array<{ size: number; count: number }> = [];
-    for (const [size, arr] of this.freePool) {
-      if (arr.length > 0) buckets.push({ size, count: arr.length });
+    const buckets: MemoryPoolBucket[] = [];
+    for (const [size, c] of this._bucketStats) {
+      const free = this.freePool.get(size);
+      buckets.push({
+        size,
+        count: free ? free.length : 0,
+        attempts: c.attempts,
+        cacheHits: c.cacheHits,
+        news: c.news,
+        releases: c.releases,
+      });
     }
-    buckets.sort((a, b) => a.size - b.size);
+    buckets.sort((a, b) => b.size - a.size);
+    const capped = buckets.length > 200 ? buckets.slice(0, 200) : buckets;
 
     return {
       attemptedAllocs: this._attemptedAllocs,
@@ -178,7 +238,7 @@ export class MemoryPool {
       liveSetSize: this.liveSet.size,
       freePoolBufferCount: this._freePoolBufferCount,
       freePoolBytes: this._freePoolBytes,
-      freePoolBuckets: buckets,
+      freePoolBuckets: capped,
     };
   }
 }

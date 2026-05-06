@@ -115,18 +115,17 @@ function formatMemoryStats(s: MemoryPoolStats): string {
 
   if (s.freePoolBuckets.length > 0) {
     lines.push("");
-    lines.push("Free-pool buckets (size × count = bytes)");
-    const sorted = [...s.freePoolBuckets].sort(
-      (a, b) => b.count * b.size - a.count * a.size
+    lines.push(
+      "Free-pool buckets (sorted by size descending; up to 200 shown)"
     );
-    const shown = sorted.slice(0, 20);
-    for (const b of shown) {
+    const padNum = (n: number, w: number) => String(n).padStart(w);
+    lines.push(
+      `  ${"size".padStart(10)}  ${"pooled".padStart(7)}  ${"attempts".padStart(9)}  ${"hits".padStart(7)}  ${"news".padStart(7)}  ${"rel.".padStart(7)}`
+    );
+    for (const b of s.freePoolBuckets) {
       lines.push(
-        `  ${String(b.size).padStart(10)} × ${String(b.count).padStart(6)} = ${formatBytes(b.size * b.count * 8)}`
+        `  ${padNum(b.size, 10)}  ${padNum(b.count, 7)}  ${padNum(b.attempts, 9)}  ${padNum(b.cacheHits, 7)}  ${padNum(b.news, 7)}  ${padNum(b.releases, 7)}`
       );
-    }
-    if (sorted.length > shown.length) {
-      lines.push(`  ... and ${sorted.length - shown.length} more buckets`);
     }
   }
 
