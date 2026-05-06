@@ -36,6 +36,11 @@ import {
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
+import {
+  pushCurrentRuntime,
+  popCurrentRuntime,
+  type MemoryPoolStats,
+} from "./runtime/memoryPool.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -111,6 +116,7 @@ export interface ProfileData {
   builtins: Record<string, BuiltinProfileBreakdown>;
   dispatches: Record<string, BuiltinProfileEntry>;
   hotLoops: HotLoopEntry[];
+  memoryPool: MemoryPoolStats;
 }
 
 export interface ExecResult {
@@ -124,6 +130,10 @@ export interface ExecResult {
   variableValues: Record<string, RuntimeValue>;
   holdState: boolean;
   profileData?: ProfileData;
+  /** Float64Array memory-pool telemetry. Always populated (independent of
+   *  --profile) so the IDE's Memory tab can render without enabling full
+   *  profiling. */
+  memoryStats?: MemoryPoolStats;
   dispatchUnknownCounts?: Record<string, number>;
   /** Updated search paths (set when addpath/rmpath was called). */
   searchPaths?: string[];
@@ -784,6 +794,7 @@ export function executeCode(
   };
 
   // ── 5. Run ─────────────────────────────────────────────────────────
+  pushCurrentRuntime(rt);
   try {
     const execStart = performance.now();
     interpreter.run(ast);
@@ -803,6 +814,7 @@ export function executeCode(
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
       holdState: rt.holdState,
+      memoryStats: rt.pool.getStats(),
     };
 
     if (options.profile) {
@@ -812,6 +824,7 @@ export function executeCode(
         builtins: rt.getBuiltinProfile(),
         dispatches: rt.getDispatchProfile(),
         hotLoops: [...rt.hotLoops.values()],
+        memoryPool: result.memoryStats!,
       };
     }
 
@@ -856,6 +869,10 @@ export function executeCode(
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
     throw re;
   } finally {
+    // Pop the runtime stack before the special-builtin restore so any
+    // lingering allocations in that block (currently none, but defensive)
+    // don't track to a popped runtime.
+    popCurrentRuntime(rt);
     // Reset JIT profiling hooks to no-ops
     if (options.profile) {
       (jitHelpers as Record<string, unknown>)._profileEnter =

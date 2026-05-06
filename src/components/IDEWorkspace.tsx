@@ -76,6 +76,62 @@ import {
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
 import { useSystemFiles } from "../hooks/useSystemFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
+import type { MemoryPoolStats } from "../numbl-core/runtime/memoryPool.js";
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatMemoryStats(s: MemoryPoolStats): string {
+  const lines: string[] = [];
+  const hitRate =
+    s.attemptedAllocs > 0
+      ? ((s.cacheHits / s.attemptedAllocs) * 100).toFixed(1)
+      : "0.0";
+  const pad = (label: string, w = 22) => label.padEnd(w);
+
+  lines.push(`Float64Array memory pool`);
+  lines.push("");
+  lines.push(
+    `${pad("Allocations attempted")} ${s.attemptedAllocs}  (${formatBytes(s.attemptedBytes)})`
+  );
+  lines.push(
+    `${pad("  from new")} ${s.actualAllocs}  (${formatBytes(s.actualAllocBytes)})`
+  );
+  lines.push(
+    `${pad("  from pool (cache hit)")} ${s.cacheHits}  (${formatBytes(s.cacheHitBytes)})  hit rate ${hitRate}%`
+  );
+  lines.push(
+    `${pad("Releases")} ${s.releases}  (${formatBytes(s.releaseBytes)})`
+  );
+  lines.push("");
+  lines.push(`${pad("Live set")} ${s.liveSetSize} buffers`);
+  lines.push(
+    `${pad("Free pool")} ${s.freePoolBufferCount} buffers  (${formatBytes(s.freePoolBytes)})`
+  );
+
+  if (s.freePoolBuckets.length > 0) {
+    lines.push("");
+    lines.push("Free-pool buckets (size × count = bytes)");
+    const sorted = [...s.freePoolBuckets].sort(
+      (a, b) => b.count * b.size - a.count * a.size
+    );
+    const shown = sorted.slice(0, 20);
+    for (const b of shown) {
+      lines.push(
+        `  ${String(b.size).padStart(10)} × ${String(b.count).padStart(6)} = ${formatBytes(b.size * b.count * 8)}`
+      );
+    }
+    if (sorted.length > shown.length) {
+      lines.push(`  ... and ${sorted.length - shown.length} more buckets`);
+    }
+  }
+
+  return lines.join("\n");
+}
 
 export interface IDEWorkspaceProps {
   files: WorkspaceFile[];
@@ -172,6 +228,7 @@ export function IDEWorkspace({
     number
   > | null>(null);
   const [generatedJS, setGeneratedJS] = useState("");
+  const [memoryStats, setMemoryStats] = useState<MemoryPoolStats | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -457,6 +514,7 @@ export function IDEWorkspace({
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
+          setMemoryStats(msg.memoryStats ?? null);
           setIsRunning(false);
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
@@ -1280,6 +1338,26 @@ export function IDEWorkspace({
                   ) : (
                     <Typography variant="body2" color="text.secondary">
                       No dispatchUnknown calls
+                    </Typography>
+                  )}
+                </Box>
+              )}
+              {internalsSubTab === "memory" && (
+                <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
+                  {memoryStats ? (
+                    <pre
+                      style={{
+                        margin: 0,
+                        fontFamily: "monospace",
+                        fontSize: "13px",
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      {formatMemoryStats(memoryStats)}
+                    </pre>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      No memory stats yet — run a script.
                     </Typography>
                   )}
                 </Box>

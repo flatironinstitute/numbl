@@ -138,6 +138,7 @@ import {
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { MemoryPool } from "./memoryPool.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -223,6 +224,12 @@ export class Runtime {
   } | null = null;
 
   public _envStack: import("./aliasing.js").AliasEnv[] = [];
+
+  /** Float64Array memory pool. Initialized in the constructor; consulted
+   *  by `allocFloat64Array`. Currently tracks allocations and reports
+   *  stats; reclamation (sweep / refcount / GC) is intentionally absent
+   *  in this iteration. */
+  public pool!: import("./memoryPool.js").MemoryPool;
 
   // Accessor guard: prevents recursive getter/setter/subsref calls
   public activeAccessors = new Set<string>();
@@ -375,6 +382,8 @@ export class Runtime {
     if (options.cancelSAB) {
       this.cancelFlag = new Int32Array(options.cancelSAB);
     }
+    // Per-runtime Float64Array allocation tracker.
+    this.pool = new MemoryPool();
     this.initBuiltins();
   }
 
