@@ -80,6 +80,60 @@ export interface MemoryPoolStats {
   freePoolBuckets: MemoryPoolBucket[];
 }
 
+/** Recursively collect every Float64Array reachable from `v` into `out`.
+ *  Used by `MemoryPool.withScratch` to find which buffers should survive
+ *  the scratch-release pass.
+ *
+ *  Walks: Float64Array (collect), Array, Map, plain objects.
+ *  For runtime container classes (RuntimeTensor, RuntimeCell, etc.),
+ *  walks well-known `data`/`imag`/`fields`/`captures`/`elements` slots.
+ *  Tracks visited objects so cycles in the runtime graph terminate. */
+function collectFloat64Arrays(
+  v: unknown,
+  out: Set<Float64Array>,
+  visited?: Set<object>
+): void {
+  if (v === null || v === undefined) return;
+  if (v instanceof Float64Array) {
+    out.add(v);
+    return;
+  }
+  if (typeof v !== "object") return;
+  const seen = visited ?? new Set<object>();
+  if (seen.has(v as object)) return;
+  seen.add(v as object);
+  if (Array.isArray(v)) {
+    for (const item of v) collectFloat64Arrays(item, out, seen);
+    return;
+  }
+  if (v instanceof Map) {
+    for (const val of v.values()) collectFloat64Arrays(val, out, seen);
+    return;
+  }
+  if (v instanceof Set) {
+    for (const val of v) collectFloat64Arrays(val, out, seen);
+    return;
+  }
+  // Plain object: walk own values.
+  if (Object.getPrototypeOf(v) === Object.prototype) {
+    for (const key of Object.keys(v)) {
+      collectFloat64Arrays((v as Record<string, unknown>)[key], out, seen);
+    }
+    return;
+  }
+  // Runtime container classes — walk known buffer-bearing slots.
+  const r = v as Record<string, unknown>;
+  if (r.data !== undefined) collectFloat64Arrays(r.data, out, seen);
+  if (r.imag !== undefined) collectFloat64Arrays(r.imag, out, seen);
+  if (r.pr !== undefined) collectFloat64Arrays(r.pr, out, seen);
+  if (r.pi !== undefined) collectFloat64Arrays(r.pi, out, seen);
+  if (r.fields !== undefined) collectFloat64Arrays(r.fields, out, seen);
+  if (r.elements !== undefined) collectFloat64Arrays(r.elements, out, seen);
+  if (r.captures !== undefined) collectFloat64Arrays(r.captures, out, seen);
+  if (r._builtinData !== undefined)
+    collectFloat64Arrays(r._builtinData, out, seen);
+}
+
 // ── MemoryPool ───────────────────────────────────────────────────────────
 
 /** Mutable per-size counter bag, kept in `_bucketStats`. */
@@ -93,6 +147,11 @@ interface BucketCounters {
 export class MemoryPool {
   private liveSet = new Set<Float64Array>();
   private freePool = new Map<number, Float64Array[]>();
+  /** Stack of scratch trackers. While a tracker is active, every fresh
+   *  `acquire` registers in the topmost tracker. Used by `withScratch`
+   *  to auto-release buffers allocated by deep internals (LAPACK
+   *  workspaces, etc.) that aren't returned to the caller. */
+  private scratchStack: Set<Float64Array>[] = [];
   /** Per-size cumulative counters. Survives even after a size's free
    *  bucket empties out, so the report can show "size N had X attempts"
    *  even when no buffers of that size are currently pooled. */
@@ -144,6 +203,8 @@ export class MemoryPool {
       bc.news++;
     }
     this.liveSet.add(buf);
+    const top = this.scratchStack[this.scratchStack.length - 1];
+    if (top) top.add(buf);
     return buf;
   }
 
@@ -173,6 +234,8 @@ export class MemoryPool {
       bc.news++;
     }
     this.liveSet.add(buf);
+    const top = this.scratchStack[this.scratchStack.length - 1];
+    if (top) top.add(buf);
     return buf;
   }
 
@@ -202,6 +265,43 @@ export class MemoryPool {
     this._freePoolBufferCount++;
     this._freePoolBytes += bytes;
     this.bucketCounters(buf.length).releases++;
+  }
+
+  /** Run `fn` with a scratch tracker active. Every `acquire` /
+   *  `acquireFrom` made during `fn` registers in the tracker; on
+   *  return, the result is walked for any Float64Arrays — those are
+   *  the buffers the caller wants to keep — and every other tracked
+   *  buffer is released back to the pool.
+   *
+   *  Use this around bridge calls (LAPACK etc.) whose deep internals
+   *  allocate workspace buffers that don't escape. Without it, those
+   *  workspaces would stay in `liveSet` forever, never reused.
+   *
+   *  Nested `withScratch` is safe — kept buffers transfer to the
+   *  parent's tracker so the outer scope can manage them. */
+  withScratch<T>(fn: () => T): T {
+    const tracker = new Set<Float64Array>();
+    this.scratchStack.push(tracker);
+    let result: T;
+    try {
+      result = fn();
+    } finally {
+      this.scratchStack.pop();
+    }
+    // Walk result to collect every Float64Array that should survive.
+    const keep = new Set<Float64Array>();
+    collectFloat64Arrays(result, keep);
+    const outer = this.scratchStack[this.scratchStack.length - 1];
+    for (const buf of tracker) {
+      if (keep.has(buf)) {
+        // Returned to caller — hand off to the outer tracker (if any)
+        // so the caller's scope can manage release.
+        if (outer) outer.add(buf);
+      } else {
+        this.release(buf);
+      }
+    }
+    return result;
   }
 
   /** Snapshot the pool's stats into a plain JSON-serializable object.

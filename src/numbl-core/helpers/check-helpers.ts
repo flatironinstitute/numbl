@@ -11,7 +11,10 @@ import {
 import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
 import { RuntimeError } from "../runtime/index.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/types.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import {
+  allocFloat64Array,
+  releaseFloat64Array,
+} from "../executors/jsJit/helpers/alloc.js";
 
 /** Ensure data is Float64Array (needed by LAPACK bridges). */
 export function toF64(data: Float64Array): Float64Array {
@@ -63,7 +66,7 @@ export function buildEigenvectorMatrix(
   hasComplex: boolean
 ) {
   if (!hasComplex) {
-    return RTV.tensor(allocFloat64Array(packedV), [n, n]);
+    return RTV.tensor(packedV, [n, n]);
   }
 
   const realPart = allocFloat64Array(n * n);
@@ -89,6 +92,9 @@ export function buildEigenvectorMatrix(
     }
   }
 
+  // packedV was consumed (we copied its contents into realPart/imagPart).
+  // Release it so it can be reused by the next acquire.
+  releaseFloat64Array(packedV);
   return RTV.tensor(realPart, [n, n], imagPart);
 }
 
@@ -101,8 +107,13 @@ export function maybeComplexTensor(
   shape: number[],
   im: Float64Array | Float64Array | undefined
 ): ReturnType<typeof RTV.tensor> {
-  const imag = im && im.some(v => v !== 0) ? allocFloat64Array(im) : undefined;
-  return RTV.tensor(allocFloat64Array(re), shape, imag);
+  if (im && im.some(v => v !== 0)) {
+    return RTV.tensor(re, shape, im);
+  }
+  // Imag part is all zero (or absent) — drop the buffer back to the pool
+  // so the caller's bridge-tracked buffer doesn't linger in liveSet.
+  if (im) releaseFloat64Array(im);
+  return RTV.tensor(re, shape);
 }
 
 /**
@@ -119,11 +130,16 @@ export function buildDiagMatrix(
   const k = Math.min(rows, cols, realVals.length);
   const dReal = allocFloat64Array(rows * cols);
   for (let i = 0; i < k; i++) dReal[colMajorIndex(i, i, rows)] = realVals[i];
+  // realVals/imagVals are consumed (values copied into dReal/dImag); release
+  // so bridge-tracked buffers don't linger in liveSet.
+  releaseFloat64Array(realVals);
   if (imagVals && imagVals.some(v => v !== 0)) {
     const dImag = allocFloat64Array(rows * cols);
     for (let i = 0; i < k; i++) dImag[colMajorIndex(i, i, rows)] = imagVals[i];
+    releaseFloat64Array(imagVals);
     return RTV.tensor(dReal, [rows, cols], dImag);
   }
+  if (imagVals) releaseFloat64Array(imagVals);
   return RTV.tensor(dReal, [rows, cols]);
 }
 

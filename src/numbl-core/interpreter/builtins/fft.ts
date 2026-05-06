@@ -15,7 +15,10 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin } from "./types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import {
+  allocFloat64Array,
+  withScratch,
+} from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 
@@ -465,7 +468,7 @@ defineBuiltin({
         if (!isNumericJitType(argTypes[0])) return null;
         return [{ kind: "tensor", isComplex: true }];
       },
-      apply: args => applyFFT(args, false),
+      apply: args => withScratch(() => applyFFT(args, false)),
     },
   ],
 });
@@ -479,7 +482,7 @@ defineBuiltin({
         if (!isNumericJitType(argTypes[0])) return null;
         return [{ kind: "tensor", isComplex: true }];
       },
-      apply: args => applyFFT(args, true),
+      apply: args => withScratch(() => applyFFT(args, true)),
     },
   ],
 });
@@ -500,7 +503,7 @@ defineBuiltin({
           return [{ kind: "complex_or_number" }];
         return null;
       },
-      apply: args => applyFFTShift(args, false),
+      apply: args => withScratch(() => applyFFTShift(args, false)),
     },
   ],
 });
@@ -521,7 +524,7 @@ defineBuiltin({
           return [{ kind: "complex_or_number" }];
         return null;
       },
-      apply: args => applyFFTShift(args, true),
+      apply: args => withScratch(() => applyFFTShift(args, true)),
     },
   ],
 });

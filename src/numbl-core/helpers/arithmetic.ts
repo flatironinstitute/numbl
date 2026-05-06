@@ -961,13 +961,11 @@ export function mLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const BRe = tensorB.data;
     const BIm = tensorB.imag ?? allocFloat64Array(tensorB.data.length);
     const X = linsolveComplexLapack(ARe, AIm, mA, nA, BRe, BIm, nB);
-    return unwrap1x1(
-      RTV.tensor(allocFloat64Array(X.re), [nA, nB], allocFloat64Array(X.im))
-    );
+    return unwrap1x1(RTV.tensor(X.re, [nA, nB], X.im));
   }
   const X = linsolveLapack(tensorA.data, mA, nA, tensorB.data, nB);
   if (!X) throw new RuntimeError("mldivide (\\): LAPACK bridge unavailable");
-  return unwrap1x1(RTV.tensor(allocFloat64Array(X), [nA, nB]));
+  return unwrap1x1(RTV.tensor(X, [nA, nB]));
 }
 
 /** Element-wise left division (ldivide): a .\ b = b ./ a */

@@ -243,16 +243,12 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         const BRe = tensorB.data;
         const BIm = tensorB.imag ?? allocFloat64Array(tensorB.data.length);
         const X = linsolveComplexLapack(ARe, AIm, mA, nA, BRe, BIm, nB);
-        result = RTV.tensor(
-          allocFloat64Array(X.re),
-          [nA, nB],
-          allocFloat64Array(X.im)
-        );
+        result = RTV.tensor(X.re, [nA, nB], X.im);
         break;
       }
       const X = linsolveLapack(tensorA.data, mA, nA, tensorB.data, nB);
       if (!X) throw new RuntimeError("LeftDiv (\\): LAPACK bridge unavailable");
-      result = RTV.tensor(allocFloat64Array(X), [nA, nB]);
+      result = RTV.tensor(X, [nA, nB]);
       break;
     }
     case BinaryOperation.ElemLeftDiv:

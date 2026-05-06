@@ -64,3 +64,19 @@ export function releaseFloat64Array(buf: Float64Array): void {
   if (!rt || !rt.memPool) return;
   rt.pool.release(buf);
 }
+
+/** Run `fn` with a scratch tracker active on the current pool. Any
+ *  `Float64Array` allocated during `fn` that does NOT appear in `fn`'s
+ *  return value gets released back to the pool when `fn` returns.
+ *
+ *  Wrap bridge calls (LAPACK, FFT, etc.) whose deep internals allocate
+ *  workspace buffers — without this, every workspace buffer stays in
+ *  `liveSet` forever and never gets reused.
+ *
+ *  When no runtime is active or `memPool` is off, this is a pass-through
+ *  (no tracking, no release). */
+export function withScratch<T>(fn: () => T): T {
+  const rt = getCurrentRuntime();
+  if (!rt || !rt.memPool) return fn();
+  return rt.pool.withScratch(fn);
+}

@@ -26,7 +26,10 @@ import { NOTRANS, UPPER, LOWER } from "../../ts-lapack/src/utils/constants.js";
 import { dorgqr_optimized } from "../../ts-lapack/src/SRC/dorgqr_optimized.js";
 import { dgeqrf_optimized } from "../../ts-lapack/src/SRC/dgeqrf_optimized.js";
 import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import {
+  allocFloat64Array,
+  withScratch,
+} from "../executors/jsJit/helpers/alloc.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
   // Copy — dgetrf/dgetri operate in place
@@ -1253,19 +1256,29 @@ function complexLuFactor(
   }
 }
 
+/** Wrap each bridge function so its workspace allocations (deep ts-lapack
+ *  internals) are released back to the pool when the call returns. The
+ *  scratch tracker walks the result for any Float64Arrays — those are the
+ *  buffers the caller owns — and releases everything else. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function wrapScratch<F extends (...args: any[]) => any>(fn: F): F {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return ((...args: any[]) => withScratch(() => fn(...args))) as F;
+}
+
 const _bridge: LapackBridge = {
-  inv,
-  matmul,
-  qr,
-  linsolve,
-  linsolveComplex,
-  eig,
-  lu,
-  svd,
-  chol,
-  cholComplex,
-  gmres,
-  gmresComplex,
+  inv: wrapScratch(inv),
+  matmul: wrapScratch(matmul),
+  qr: wrapScratch(qr),
+  linsolve: wrapScratch(linsolve),
+  linsolveComplex: wrapScratch(linsolveComplex),
+  eig: wrapScratch(eig),
+  lu: wrapScratch(lu),
+  svd: wrapScratch(svd),
+  chol: wrapScratch(chol),
+  cholComplex: wrapScratch(cholComplex),
+  gmres: wrapScratch(gmres),
+  gmresComplex: wrapScratch(gmresComplex),
 };
 
 export function getTsLapackBridge(): LapackBridge {

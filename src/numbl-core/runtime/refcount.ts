@@ -25,6 +25,7 @@ export interface RefcountRuntime {
     acquire(size: number): Float64Array;
     acquireFrom(src: number[] | Float64Array): Float64Array;
     release(buf: Float64Array): void;
+    withScratch<T>(fn: () => T): T;
   };
   /** When true, decref of a zero count throws. */
   strictRefcount?: boolean;

@@ -48,7 +48,10 @@ import {
   linsolveLapack,
   linsolveComplexLapack,
 } from "../../helpers/linsolve.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import {
+  allocFloat64Array,
+  withScratch,
+} from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 
@@ -97,8 +100,9 @@ defineBuiltin({
         return [NUM];
       },
       apply: args => {
-        // Import the implementation inline to avoid circular deps
-        return normApply(args);
+        // norm returns a scalar but normImplTensor may allocate scratch
+        // for matrix-norm via SVD or other paths — release on return.
+        return withScratch(() => normApply(args));
       },
     },
   ],
@@ -497,12 +501,20 @@ defineBuiltin({
           throw new RuntimeError("det: argument must be a matrix");
         const [m, n] = tensorSize2D(A);
         if (m !== n) throw new RuntimeError("det: matrix must be square");
-        if (A.imag) {
-          const [detRe, detIm] = detComplexJS(toF64(A.data), toF64(A.imag), n);
-          if (Math.abs(detIm) < 1e-15) return RTV.num(detRe);
-          return RTV.complex(detRe, detIm);
-        }
-        return RTV.num(detJS(toF64(A.data), n));
+        // detJS / detComplexJS allocate working buffers but return a scalar
+        // — wrap so those scratch allocations release on return.
+        return withScratch(() => {
+          if (A.imag) {
+            const [detRe, detIm] = detComplexJS(
+              toF64(A.data),
+              toF64(A.imag),
+              n
+            );
+            if (Math.abs(detIm) < 1e-15) return RTV.num(detRe);
+            return RTV.complex(detRe, detIm);
+          }
+          return RTV.num(detJS(toF64(A.data), n));
+        });
       },
     },
   ],
@@ -757,21 +769,13 @@ defineBuiltin({
           const bridge = getLapackBridge();
           if (bridge?.invComplex) {
             const result = bridge.invComplex(toF64(A.data), toF64(A.imag), n);
-            if (result)
-              return RTV.tensor(
-                allocFloat64Array(result.re),
-                [n, n],
-                allocFloat64Array(result.im)
-              );
+            if (result) return RTV.tensor(result.re, [n, n], result.im);
           }
           const result = invComplexJS(A.data, A.imag, n);
           return RTV.tensor(result.re, [n, n], result.im);
         }
         const bridge = getEffectiveBridge("inv");
-        return RTV.tensor(allocFloat64Array(bridge.inv(toF64(A.data), n)), [
-          n,
-          n,
-        ]);
+        return RTV.tensor(bridge.inv(toF64(A.data), n), [n, n]);
       },
     },
   ],
@@ -905,34 +909,26 @@ function svdApply(
       nargout === 3
     );
     if (!result) throw new RuntimeError("svd: complex SVD failed");
-    if (nargout <= 1) return RTV.tensor(allocFloat64Array(result.S), [k, 1]);
+    if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
     const uCols = econ ? k : m;
     const vCols = econ ? k : n;
     return [
-      RTV.tensor(
-        allocFloat64Array(result.URe!),
-        [m, uCols],
-        allocFloat64Array(result.UIm!)
-      ),
+      RTV.tensor(result.URe!, [m, uCols], result.UIm!),
       buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-      RTV.tensor(
-        allocFloat64Array(result.VRe!),
-        [n, vCols],
-        allocFloat64Array(result.VIm!)
-      ),
+      RTV.tensor(result.VRe!, [n, vCols], result.VIm!),
     ];
   }
   const bridge = getEffectiveBridge("svd", "svd");
   if (bridge?.svd) {
     const result = bridge.svd(toF64(A.data), m, n, econ, nargout === 3);
     if (result) {
-      if (nargout <= 1) return RTV.tensor(allocFloat64Array(result.S), [k, 1]);
+      if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
       const uCols = econ ? k : m;
       const vCols = econ ? k : n;
       return [
-        RTV.tensor(allocFloat64Array(result.U!), [m, uCols]),
+        RTV.tensor(result.U!, [m, uCols]),
         buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-        RTV.tensor(allocFloat64Array(result.V!), [n, vCols]),
+        RTV.tensor(result.V!, [n, vCols]),
       ];
     }
   }
@@ -1074,24 +1070,12 @@ function qrApply(
     if (!result) throw new RuntimeError("qr: complex QR failed");
     if (nargout <= 1) {
       const rRows = econ ? k : m;
-      return RTV.tensor(
-        allocFloat64Array(result.RRe),
-        [rRows, n],
-        allocFloat64Array(result.RIm)
-      );
+      return RTV.tensor(result.RRe, [rRows, n], result.RIm);
     }
     const qCols = econ ? k : m;
     return [
-      RTV.tensor(
-        allocFloat64Array(result.QRe!),
-        [m, qCols],
-        allocFloat64Array(result.QIm!)
-      ),
-      RTV.tensor(
-        allocFloat64Array(result.RRe),
-        [econ ? k : m, n],
-        allocFloat64Array(result.RIm)
-      ),
+      RTV.tensor(result.QRe!, [m, qCols], result.QIm!),
+      RTV.tensor(result.RRe, [econ ? k : m, n], result.RIm),
     ];
   }
 
@@ -1099,12 +1083,11 @@ function qrApply(
   if (bridge?.qr) {
     const result = bridge.qr(toF64(A.data), m, n, econ, nargout === 2);
     if (result) {
-      if (nargout <= 1)
-        return RTV.tensor(allocFloat64Array(result.R), [econ ? k : m, n]);
+      if (nargout <= 1) return RTV.tensor(result.R, [econ ? k : m, n]);
       const qCols = econ ? k : m;
       return [
-        RTV.tensor(allocFloat64Array(result.Q), [m, qCols]),
-        RTV.tensor(allocFloat64Array(result.R), [econ ? k : m, n]),
+        RTV.tensor(result.Q, [m, qCols]),
+        RTV.tensor(result.R, [econ ? k : m, n]),
       ];
     }
   }
@@ -1242,16 +1225,8 @@ function qrPivotApply(
     const rRows = econ ? k : m;
     const qCols = econ ? k : m;
     return [
-      RTV.tensor(
-        allocFloat64Array(result.QRe),
-        [m, qCols],
-        allocFloat64Array(result.QIm)
-      ),
-      RTV.tensor(
-        allocFloat64Array(result.RRe),
-        [rRows, n],
-        allocFloat64Array(result.RIm)
-      ),
+      RTV.tensor(result.QRe, [m, qCols], result.QIm),
+      RTV.tensor(result.RRe, [rRows, n], result.RIm),
       permResult(result.jpvt, n, econ),
     ];
   }
@@ -1263,8 +1238,8 @@ function qrPivotApply(
       const rRows = econ ? k : m;
       const qCols = econ ? k : m;
       return [
-        RTV.tensor(allocFloat64Array(result.Q), [m, qCols]),
-        RTV.tensor(allocFloat64Array(result.R), [rRows, n]),
+        RTV.tensor(result.Q, [m, qCols]),
+        RTV.tensor(result.R, [rRows, n]),
         permResult(result.jpvt, n, econ),
       ];
     }
@@ -1407,11 +1382,11 @@ registerIBuiltin({
     if (argTypes.length < 1 || argTypes.length > 2) return null;
     if (!isNumericJitType(argTypes[0])) return null;
     const t = tensorType();
-    if (nargout <= 1)
-      return { outputTypes: [t], apply: (args, n) => luApply(args, n) };
-    if (nargout === 2)
-      return { outputTypes: [t, t], apply: (args, n) => luApply(args, n) };
-    return { outputTypes: [t, t, t], apply: (args, n) => luApply(args, n) };
+    const wrapped = (args: RuntimeValue[], n: number) =>
+      withScratch(() => luApply(args, n));
+    if (nargout <= 1) return { outputTypes: [t], apply: wrapped };
+    if (nargout === 2) return { outputTypes: [t, t], apply: wrapped };
+    return { outputTypes: [t, t, t], apply: wrapped };
   },
 });
 
@@ -1468,12 +1443,7 @@ function luApply(
       if (U_im && LU_im) U_im[i + j * k] = LU_im[i + j * m];
     }
   }
-  if (nargout <= 1)
-    return RTV.tensor(
-      allocFloat64Array(LU_re),
-      [m, n],
-      LU_im ? allocFloat64Array(LU_im) : undefined
-    );
+  if (nargout <= 1) return RTV.tensor(LU_re, [m, n], LU_im);
   const perm = ipivToPermVector(ipiv, m);
   if (nargout === 2) {
     const L_unit_re = allocFloat64Array(m * k);
@@ -1682,11 +1652,11 @@ registerIBuiltin({
       return null;
     if (!isNumericJitType(argTypes[0])) return null;
     const t = tensorType();
-    if (nargout <= 1)
-      return { outputTypes: [t], apply: (args, n) => cholApply(args, n) };
-    if (nargout === 2)
-      return { outputTypes: [t, NUM], apply: (args, n) => cholApply(args, n) };
-    return { outputTypes: [t, NUM, t], apply: (args, n) => cholApply(args, n) };
+    const wrapped = (args: RuntimeValue[], n: number) =>
+      withScratch(() => cholApply(args, n));
+    if (nargout <= 1) return { outputTypes: [t], apply: wrapped };
+    if (nargout === 2) return { outputTypes: [t, NUM], apply: wrapped };
+    return { outputTypes: [t, NUM, t], apply: wrapped };
   },
 });
 
@@ -1888,15 +1858,11 @@ defineBuiltin({
           const BRe = B.data,
             BIm = B.imag ?? allocFloat64Array(B.data.length);
           const X = linsolveComplexLapack(ARe, AIm, m, n, BRe, BIm, p);
-          return RTV.tensor(
-            allocFloat64Array(X.re),
-            [n, p],
-            allocFloat64Array(X.im)
-          );
+          return RTV.tensor(X.re, [n, p], X.im);
         }
         const X = linsolveLapack(A.data, m, n, B.data, p);
         if (!X) throw new RuntimeError("linsolve: LAPACK bridge unavailable");
-        return RTV.tensor(allocFloat64Array(X), [n, p]);
+        return RTV.tensor(X, [n, p]);
       },
     },
   ],
@@ -2034,37 +2000,38 @@ defineBuiltin({
         if (a.kind === "number" || a.kind === "boolean") return [NUM];
         return [tensorType()];
       },
-      apply: args => {
-        if (args.length < 1 || args.length > 2)
-          throw new RuntimeError("pinv requires 1 or 2 arguments");
-        const A = args[0];
-        if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1 / A);
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("pinv: argument must be numeric");
-        const [m, n] = tensorSize2D(A);
-        const k = Math.min(m, n);
-        const bridge = getLapackBridge();
-        if (!bridge || !bridge.svd) return pinvFallback(A.data, m, n);
-        const svdResult = bridge.svd(toF64(A.data), m, n, true, true);
-        if (!svdResult || !svdResult.U || !svdResult.V)
-          throw new RuntimeError("pinv: SVD computation failed");
-        const { U, S, V } = svdResult;
-        const tol =
-          args.length >= 2
-            ? isRuntimeNumber(args[1])
-              ? args[1]
-              : 0
-            : Math.max(m, n) * S[0] * 2.220446049250313e-16;
-        const result = allocFloat64Array(n * m);
-        for (let i = 0; i < n; i++)
-          for (let j = 0; j < m; j++) {
-            let sum = 0;
-            for (let l = 0; l < k; l++)
-              if (S[l] > tol) sum += V[l * n + i] * (1 / S[l]) * U[l * m + j];
-            result[j * n + i] = sum;
-          }
-        return RTV.tensor(result, [n, m]);
-      },
+      apply: args =>
+        withScratch(() => {
+          if (args.length < 1 || args.length > 2)
+            throw new RuntimeError("pinv requires 1 or 2 arguments");
+          const A = args[0];
+          if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1 / A);
+          if (!isRuntimeTensor(A))
+            throw new RuntimeError("pinv: argument must be numeric");
+          const [m, n] = tensorSize2D(A);
+          const k = Math.min(m, n);
+          const bridge = getLapackBridge();
+          if (!bridge || !bridge.svd) return pinvFallback(A.data, m, n);
+          const svdResult = bridge.svd(toF64(A.data), m, n, true, true);
+          if (!svdResult || !svdResult.U || !svdResult.V)
+            throw new RuntimeError("pinv: SVD computation failed");
+          const { U, S, V } = svdResult;
+          const tol =
+            args.length >= 2
+              ? isRuntimeNumber(args[1])
+                ? args[1]
+                : 0
+              : Math.max(m, n) * S[0] * 2.220446049250313e-16;
+          const result = allocFloat64Array(n * m);
+          for (let i = 0; i < n; i++)
+            for (let j = 0; j < m; j++) {
+              let sum = 0;
+              for (let l = 0; l < k; l++)
+                if (S[l] > tol) sum += V[l * n + i] * (1 / S[l]) * U[l * m + j];
+              result[j * n + i] = sum;
+            }
+          return RTV.tensor(result, [n, m]);
+        }),
     },
   ],
 });
@@ -2486,26 +2453,10 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
       );
     const result = bridge.qzComplex(aRe, aIm, bRe, bIm, n, computeEigvecs);
     if (!result) throw new RuntimeError("qz: complex QZ failed");
-    const AAout = RTV.tensor(
-      allocFloat64Array(result.AARe),
-      [n, n],
-      allocFloat64Array(result.AAIm)
-    );
-    const BBout = RTV.tensor(
-      allocFloat64Array(result.BBRe),
-      [n, n],
-      allocFloat64Array(result.BBIm)
-    );
-    const Qout = RTV.tensor(
-      allocFloat64Array(result.QRe),
-      [n, n],
-      allocFloat64Array(result.QIm)
-    );
-    const Zout = RTV.tensor(
-      allocFloat64Array(result.ZRe),
-      [n, n],
-      allocFloat64Array(result.ZIm)
-    );
+    const AAout = RTV.tensor(result.AARe, [n, n], result.AAIm);
+    const BBout = RTV.tensor(result.BBRe, [n, n], result.BBIm);
+    const Qout = RTV.tensor(result.QRe, [n, n], result.QIm);
+    const Zout = RTV.tensor(result.ZRe, [n, n], result.ZIm);
     if (nargout === 4) return [AAout, BBout, Qout, Zout];
     const { VRe, VIm, WRe, WIm } = result;
     if (!VRe || !VIm || !WRe || !WIm)
@@ -2523,10 +2474,10 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
   if (!bridge.qz) throw new RuntimeError("qz: LAPACK bridge not available");
   const result = bridge.qz(toF64(A.data), toF64(B.data), n, computeEigvecs);
   if (!result) throw new RuntimeError("qz: real QZ failed");
-  const AAout = RTV.tensor(allocFloat64Array(result.AA), [n, n]);
-  const BBout = RTV.tensor(allocFloat64Array(result.BB), [n, n]);
-  const Qout = RTV.tensor(allocFloat64Array(result.Q), [n, n]);
-  const Zout = RTV.tensor(allocFloat64Array(result.Z), [n, n]);
+  const AAout = RTV.tensor(result.AA, [n, n]);
+  const BBout = RTV.tensor(result.BB, [n, n]);
+  const Qout = RTV.tensor(result.Q, [n, n]);
+  const Zout = RTV.tensor(result.Z, [n, n]);
   if (nargout === 4) return [AAout, BBout, Qout, Zout];
   const { alphai, V, W } = result;
   if (!V || !W)
