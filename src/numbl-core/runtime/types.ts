@@ -1,5 +1,10 @@
 // Determine float precision from environment variable
-import { Refcounted, type RefcountRuntime, decref } from "./refcount.js";
+import {
+  Refcounted,
+  type RefcountRuntime,
+  incref,
+  decref,
+} from "./refcount.js";
 
 const useFloat32 = import.meta.env?.NUMBL_USE_FLOAT32 === "true" ? true : false;
 
@@ -188,6 +193,16 @@ export class RuntimeCell extends Refcounted {
     super();
     this.data = data;
     this.shape = shape;
+    for (const v of data) incref(v);
+  }
+
+  /** Replace element at idx, decref-old / incref-new. Caller resizes the
+   *  shape if necessary; this method does not touch shape. */
+  bindElement(rt: RefcountRuntime, idx: number, value: RuntimeValue): void {
+    const old = this.data[idx];
+    incref(value);
+    this.data[idx] = value;
+    if (old !== undefined) decref(rt, old);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -202,6 +217,15 @@ export class RuntimeStruct extends Refcounted {
   constructor(fields: Map<string, RuntimeValue>) {
     super();
     this.fields = fields;
+    for (const v of fields.values()) incref(v);
+  }
+
+  /** Set/replace a field value, decref-old / incref-new. */
+  bindField(rt: RefcountRuntime, name: string, value: RuntimeValue): void {
+    const old = this.fields.get(name);
+    incref(value);
+    this.fields.set(name, value);
+    if (old !== undefined) decref(rt, old);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -238,6 +262,7 @@ export class RuntimeFunction extends Refcounted {
     this.jsFn = jsFn;
     this.jsFnExpectsNargout = jsFnExpectsNargout;
     this.nargin = nargin;
+    for (const v of captures) incref(v);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -266,6 +291,18 @@ export class RuntimeClassInstance extends Refcounted {
     this.fields = fields;
     this.isHandleClass = isHandleClass;
     this._builtinData = _builtinData;
+    for (const v of fields.values()) incref(v);
+    if (_builtinData !== undefined) incref(_builtinData);
+  }
+
+  /** Set/replace a field value (handle-class in-place mutation), with
+   *  proper decref-old / incref-new bookkeeping. Used for handle-class
+   *  field assigns; value-class field assigns construct a new instance. */
+  bindField(rt: RefcountRuntime, name: string, value: RuntimeValue): void {
+    const old = this.fields.get(name);
+    incref(value);
+    this.fields.set(name, value);
+    if (old !== undefined) decref(rt, old);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -285,6 +322,7 @@ export class RuntimeClassInstanceArray extends Refcounted {
     super();
     this.className = className;
     this.elements = elements;
+    for (const el of elements) incref(el);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -335,6 +373,7 @@ export class RuntimeStructArray extends Refcounted {
     super();
     this.fieldNames = fieldNames;
     this.elements = elements;
+    for (const el of elements) incref(el);
   }
 
   protected _destroy(rt: RefcountRuntime): void {
@@ -396,6 +435,10 @@ export class RuntimeDictionary extends Refcounted {
     this.entries = entries ?? new Map();
     this.keyType = keyType;
     this.valueType = valueType;
+    for (const { key, value } of this.entries.values()) {
+      incref(key);
+      incref(value);
+    }
   }
 
   protected _destroy(rt: RefcountRuntime): void {

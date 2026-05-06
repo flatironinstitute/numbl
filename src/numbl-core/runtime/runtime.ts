@@ -1662,7 +1662,7 @@ export class Runtime {
     nameExpr: unknown,
     rhs: unknown
   ): RuntimeValue {
-    return _setMemberDynamicReturn(base, nameExpr, rhs);
+    return _setMemberDynamicReturn(this, base, nameExpr, rhs);
   }
 
   public subsrefCall(base: unknown, names: string[]): unknown {
