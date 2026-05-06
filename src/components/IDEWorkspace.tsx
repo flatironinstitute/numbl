@@ -1578,6 +1578,16 @@ export function IDEWorkspace({
                     }}
                   />
                   <Tab
+                    label="Figures"
+                    sx={{
+                      minHeight: 32,
+                      py: 0,
+                      fontSize: "0.75rem",
+                      minWidth: 0,
+                      px: 1,
+                    }}
+                  />
+                  <Tab
                     label="JS"
                     sx={{
                       minHeight: 32,
@@ -1598,7 +1608,7 @@ export function IDEWorkspace({
                     }}
                   />
                   <Tab
-                    label="Figures"
+                    label="Memory"
                     sx={{
                       minHeight: 32,
                       py: 0,
@@ -1624,24 +1634,6 @@ export function IDEWorkspace({
                     </Box>
                   )}
                   {mobileOutputTab === 1 && (
-                    <Box sx={{ height: "100%", overflow: "auto" }}>
-                      <SyntaxHighlighter
-                        language="javascript"
-                        style={githubGist}
-                        customStyle={{ margin: 0, fontSize: 12 }}
-                      >
-                        {generatedJS || ""}
-                      </SyntaxHighlighter>
-                    </Box>
-                  )}
-                  {mobileOutputTab === 2 && (
-                    <TreeViewer
-                      data={astData}
-                      label="ast"
-                      fileSources={fileSources}
-                    />
-                  )}
-                  {mobileOutputTab === 3 && (
                     <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
                       {sortedFigureHandles.length > 0 ? (
                         <>
@@ -1675,6 +1667,44 @@ export function IDEWorkspace({
                       ) : (
                         <Typography variant="body2" color="text.secondary">
                           No figures
+                        </Typography>
+                      )}
+                    </Box>
+                  )}
+                  {mobileOutputTab === 2 && (
+                    <Box sx={{ height: "100%", overflow: "auto" }}>
+                      <SyntaxHighlighter
+                        language="javascript"
+                        style={githubGist}
+                        customStyle={{ margin: 0, fontSize: 12 }}
+                      >
+                        {generatedJS || ""}
+                      </SyntaxHighlighter>
+                    </Box>
+                  )}
+                  {mobileOutputTab === 3 && (
+                    <TreeViewer
+                      data={astData}
+                      label="ast"
+                      fileSources={fileSources}
+                    />
+                  )}
+                  {mobileOutputTab === 4 && (
+                    <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
+                      {memoryStats ? (
+                        <pre
+                          style={{
+                            margin: 0,
+                            fontFamily: "monospace",
+                            fontSize: "13px",
+                            whiteSpace: "pre-wrap",
+                          }}
+                        >
+                          {formatMemoryStats(memoryStats)}
+                        </pre>
+                      ) : (
+                        <Typography variant="body2" color="text.secondary">
+                          No memory stats yet — run a script.
                         </Typography>
                       )}
                     </Box>
