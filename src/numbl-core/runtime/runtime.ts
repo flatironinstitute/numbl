@@ -26,6 +26,7 @@ import {
   CancellationError,
   type CallFrame,
 } from "../runtime/index.js";
+import { incref, decref } from "./refcount.js";
 import {
   isRuntimeNumber,
   isRuntimeTensor,
@@ -1213,7 +1214,10 @@ export class Runtime {
       funcMap = new Map();
       this.persistentStore.set(funcId, funcMap);
     }
+    const old = funcMap.get(varName);
+    incref(value);
     funcMap.set(varName, value);
+    if (old !== undefined) decref(this, old);
   }
 
   // ── Thin wrappers to runtimeOperators ─────────────────────────────
