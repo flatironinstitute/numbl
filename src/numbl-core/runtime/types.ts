@@ -250,6 +250,14 @@ export class RuntimeFunction extends Refcounted {
    *  decref values held in their captured environment snapshot, since
    *  those refs live in the JS closure (not in `captures`). */
   releaseExtra: ((rt: RefcountRuntime) => void) | undefined;
+  /** For anonymous-function snapshots: the captured environment, made
+   *  visible to the alias sweep so a tensor stored both here and in
+   *  the parent env triggers copy-on-write on parent-side mutations.
+   *  (Only the structural shape `{ vars, parent }` is needed; typed
+   *  loosely to avoid a runtime↔interpreter circular import.) */
+  capturedEnv:
+    | { vars: Map<string, RuntimeValue>; parent?: unknown }
+    | undefined;
 
   constructor(
     name: string,

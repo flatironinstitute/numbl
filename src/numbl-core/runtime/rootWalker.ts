@@ -89,6 +89,12 @@ export function walkRoots(
       for (const el of v.elements) if (visitVal(el)) return true;
     } else if (isRuntimeFunction(v)) {
       for (const c of v.captures) if (visitVal(c)) return true;
+      // Anonymous-function snapshot env: walk it so tensors stored in
+      // the snapshot are visible to the alias sweep (preserving the
+      // by-value capture semantics — parent mutations COW).
+      if (v.capturedEnv) {
+        if (visitEnv(v.capturedEnv as AliasEnv)) return true;
+      }
     }
     return false;
   };

@@ -944,6 +944,10 @@ export function evalAnonFunc(
   // Without this, captured Float64Array buffers stay in the pool's
   // liveSet for the rest of the runtime's life.
   fn.releaseExtra = () => capturedEnv.clearLocals();
+  // Expose the snapshot to the alias sweep so a tensor held both in the
+  // snapshot and in the parent env triggers COW on parent-side mutation
+  // — preserves MATLAB's by-value capture semantics.
+  fn.capturedEnv = capturedEnv;
   return fn;
 }
 
