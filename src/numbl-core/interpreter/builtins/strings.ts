@@ -7,6 +7,8 @@
 
 import type { RuntimeValue } from "../../runtime/types.js";
 import {
+  RuntimeTensor,
+  RuntimeChar,
   isRuntimeChar,
   isRuntimeCell,
   isRuntimeLogical,
@@ -458,12 +460,7 @@ function strcmpApply(
       result[i] =
         isText(ai) && isText(bi) && cmp(toString(ai), toString(bi)) ? 1 : 0;
     }
-    return {
-      kind: "tensor",
-      data: result,
-      shape: cellA.shape.slice(),
-      _isLogical: true,
-    };
+    return new RuntimeTensor(result, cellA.shape.slice(), undefined, true);
   }
 
   // One cell, one scalar
@@ -479,12 +476,7 @@ function strcmpApply(
     result[i] =
       isText(s1) && isText(s2) && cmp(toString(s1), toString(s2)) ? 1 : 0;
   }
-  return {
-    kind: "tensor",
-    data: result,
-    shape: cell.shape.slice(),
-    _isLogical: true,
-  };
+  return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
 }
 
 registerIBuiltin({
@@ -606,12 +598,7 @@ function logicalRowFromString(
   const cps = stringCodePoints(s);
   const data = allocFloat64Array(cps.length);
   for (let i = 0; i < cps.length; i++) data[i] = pred(cps[i]) ? 1 : 0;
-  return {
-    kind: "tensor",
-    data,
-    shape: shape ?? [1, cps.length],
-    _isLogical: true,
-  };
+  return new RuntimeTensor(data, shape ?? [1, cps.length], undefined, true);
 }
 
 /** Build a logical tensor by applying a predicate to each element of a numeric tensor. */
@@ -624,12 +611,7 @@ function logicalFromNumericTensor(
   for (let i = 0; i < data.length; i++) {
     out[i] = pred(Math.round(data[i])) ? 1 : 0;
   }
-  return {
-    kind: "tensor",
-    data: out,
-    shape: [...shape],
-    _isLogical: true,
-  };
+  return new RuntimeTensor(out, [...shape], undefined, true);
 }
 
 function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
@@ -680,12 +662,7 @@ function isstrpropApply(args: RuntimeValue[]): RuntimeValue {
     const cp = Math.round(toNumber(v));
     const data = allocFloat64Array(1);
     data[0] = pred(cp) ? 1 : 0;
-    result = {
-      kind: "tensor",
-      data,
-      shape: [1, 1],
-      _isLogical: true,
-    };
+    result = new RuntimeTensor(data, [1, 1], undefined, true);
   } else {
     throw new RuntimeError("isstrprop: unsupported input type");
   }
@@ -1190,11 +1167,7 @@ registerIBuiltin({
           if (nRows === 1) return RTV.char(rowStrs[0]);
           const rowWidth = rowStrs[0].length;
           const paddedRows = rowStrs.map(r => r.padEnd(rowWidth));
-          return {
-            kind: "char" as const,
-            value: paddedRows.join(""),
-            shape: [nRows, rowWidth],
-          };
+          return new RuntimeChar(paddedRows.join(""), [nRows, rowWidth]);
         }
         return RTV.char(String(toNumber(v)));
       },

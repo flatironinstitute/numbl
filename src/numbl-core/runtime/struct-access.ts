@@ -3,6 +3,7 @@
  */
 
 import {
+  RuntimeClassInstance,
   isRuntimeClassInstance,
   isRuntimeNumber,
   isRuntimeStruct,
@@ -57,13 +58,12 @@ export function setRTValueField(
     // Value class: return a new instance with copied fields
     const newFields = new Map(base.fields);
     newFields.set(field, value);
-    return {
-      kind: "class_instance",
-      className: base.className,
-      fields: newFields,
-      isHandleClass: false,
-      _builtinData: base._builtinData,
-    };
+    return new RuntimeClassInstance(
+      base.className,
+      newFields,
+      false,
+      base._builtinData
+    );
   }
   if (isRuntimeStruct(base)) {
     const newFields = new Map(base.fields);

@@ -4,9 +4,10 @@
 
 import {
   type RuntimeValue,
-  type RuntimeTensor,
+  RuntimeTensor,
   type RuntimeCell,
   type RuntimeSparseMatrix,
+  RuntimeChar,
   isRuntimeTensor,
   isRuntimeLogical,
   isRuntimeNumber,
@@ -19,7 +20,6 @@ import {
   isRuntimeStruct,
   isRuntimeClassInstance,
   isRuntimeChar,
-  type RuntimeChar,
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
@@ -710,7 +710,12 @@ function indexIntoTensor(
       tail *= base.shape[d];
     }
     collapsedShape.push(tail);
-    const view: RuntimeTensor = { ...base, shape: collapsedShape };
+    const view = new RuntimeTensor(
+      base.data,
+      collapsedShape,
+      base.imag,
+      base._isLogical
+    );
     if (indices.length === 2) {
       return indexIntoTensor2D(view, indices[0], indices[1]);
     }
@@ -1039,12 +1044,7 @@ function indexIntoChar(
     }
 
     if (rows.length <= 1) return RTV.char(result);
-    const resultChar: RuntimeChar = {
-      kind: "char",
-      value: result,
-      shape: [rows.length, cols.length],
-    };
-    return resultChar;
+    return new RuntimeChar(result, [rows.length, cols.length]);
   }
 
   throw new RuntimeError("Char indexing supports 1 or 2 dimensions");
@@ -2091,7 +2091,7 @@ export function storeIntoRTValueIndex(
         if (imag && S.pi) imag[idx] = S.pi[k];
       }
     }
-    rhs = { kind: "tensor", data, imag, shape: [S.m, S.n] };
+    rhs = RTV.tensor(data, [S.m, S.n], imag);
   }
 
   if (isRuntimeTensor(base)) {

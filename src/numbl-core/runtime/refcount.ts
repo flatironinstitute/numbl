@@ -56,8 +56,13 @@ export abstract class Refcounted {
   }
 
   /** Subclasses release child refs and any owned buffers. Idempotent
-   *  must NOT be assumed — callers guarantee this fires exactly once. */
-  protected abstract _destroy(rt: RefcountRuntime): void;
+   *  must NOT be assumed — callers guarantee this fires exactly once.
+   *  Default is a no-op for kinds that own no buffers and have no child
+   *  refs (RuntimeChar, RuntimeComplexNumber, RuntimeDummyHandle, etc.). */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  protected _destroy(_rt: RefcountRuntime): void {
+    // no-op default
+  }
 }
 
 /** True if the value is a container that participates in refcounting.

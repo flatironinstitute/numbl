@@ -9,7 +9,7 @@ import {
   type RuntimeValue,
   type RuntimeLogical,
   type RuntimeTensor,
-  type RuntimeFunction,
+  RuntimeFunction,
   RTV,
   toNumber,
   toString,
@@ -206,15 +206,7 @@ export function makeUserFuncHandle(
   jsFn: (...args: unknown[]) => unknown,
   nargin?: number
 ): RuntimeFunction {
-  return {
-    kind: "function",
-    name: "",
-    captures: [],
-    impl: "user",
-    jsFn,
-    jsFnExpectsNargout: true,
-    nargin,
-  };
+  return new RuntimeFunction("", "user", [], jsFn, true, nargin);
 }
 
 // ── isa ─────────────────────────────────────────────────────────────────

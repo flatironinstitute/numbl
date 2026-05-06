@@ -36,9 +36,9 @@ import {
   isRuntimeSparseMatrix,
   RuntimeChar,
   RuntimeCell,
+  RuntimeClassInstanceArray,
   type RuntimeComplexNumber,
   type RuntimeClassInstance,
-  type RuntimeClassInstanceArray,
 } from "../runtime/types.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { type ItemType } from "../lowering/itemTypes.js";
@@ -1999,11 +1999,7 @@ function defaultClassInstanceHorzcat(
 ): RuntimeClassInstance | RuntimeClassInstanceArray {
   const elements = collectClassInstances(items);
   if (elements.length === 1) return elements[0];
-  return {
-    kind: "class_instance_array",
-    className: elements[0].className,
-    elements,
-  };
+  return new RuntimeClassInstanceArray(elements[0].className, elements);
 }
 
 /** Default vertcat for class instances: creates an N×1 class instance array. */
@@ -2012,9 +2008,5 @@ function defaultClassInstanceVertcat(
 ): RuntimeClassInstance | RuntimeClassInstanceArray {
   const elements = collectClassInstances(rows);
   if (elements.length === 1) return elements[0];
-  return {
-    kind: "class_instance_array",
-    className: elements[0].className,
-    elements,
-  };
+  return new RuntimeClassInstanceArray(elements[0].className, elements);
 }

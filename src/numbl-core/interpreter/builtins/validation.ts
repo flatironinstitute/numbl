@@ -263,7 +263,7 @@ function matchesOneClass(v: RuntimeValue, cls: string): boolean {
 function getShapeOf(v: RuntimeValue): number[] {
   if (typeof v === "number" || typeof v === "boolean" || typeof v === "string")
     return [1, 1];
-  const obj = v as Record<string, unknown>;
+  const obj = v as unknown as Record<string, unknown>;
   switch (obj.kind) {
     case "tensor":
       return ((obj.shape as number[]) ?? []).length === 0

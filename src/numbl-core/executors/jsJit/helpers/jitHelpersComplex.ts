@@ -3,7 +3,7 @@
  * These are pure functions used by the $h helpers object.
  */
 
-import type { RuntimeComplexNumber } from "../../../runtime/types.js";
+import { RuntimeComplexNumber } from "../../../runtime/types.js";
 
 export function re(v: unknown): number {
   if (typeof v === "number") return v;
@@ -17,7 +17,7 @@ export function im(v: unknown): number {
 
 export function mkc(r: number, i: number): number | RuntimeComplexNumber {
   if (i === 0) return r;
-  return { kind: "complex_number", re: r, im: i };
+  return new RuntimeComplexNumber(r, i);
 }
 
 export function cAdd(a: unknown, b: unknown): number | RuntimeComplexNumber {

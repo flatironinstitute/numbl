@@ -929,11 +929,7 @@ function uniqueCellOfStrings(
   const resultData = order.map(i => v.data[i]);
   const isRow = v.shape[0] === 1;
   const resultShape = isRow ? [1, order.length] : [order.length, 1];
-  const result: RuntimeValue = {
-    kind: "cell",
-    data: resultData,
-    shape: resultShape,
-  };
+  const result: RuntimeValue = RTV.cell(resultData, resultShape);
   if (nargout <= 1) return result;
   const ia = RTV.tensor(
     allocFloat64Array(order.map(i => i + 1)),

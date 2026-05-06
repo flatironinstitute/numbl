@@ -2,12 +2,10 @@
  * IBuiltin interface, registry, and shared helpers for interpreter builtins.
  */
 
-import type {
-  RuntimeValue,
+import type { RuntimeValue } from "../../runtime/types.js";
+import {
   RuntimeTensor,
   RuntimeComplexNumber,
-} from "../../runtime/types.js";
-import {
   isRuntimeChar,
   isRuntimeClassInstance,
   isRuntimeComplexNumber,
@@ -357,7 +355,7 @@ export function buildIBuiltinHelpers(): Record<
 
 export function mkc(re: number, im: number): number | RuntimeComplexNumber {
   if (im === 0) return re;
-  return { kind: "complex_number", re, im };
+  return new RuntimeComplexNumber(re, im);
 }
 
 export function makeTensor(
@@ -368,13 +366,7 @@ export function makeTensor(
   // Strip trailing singleton dimensions (always keep minimum 2D)
   const s = [...shape];
   while (s.length > 2 && s[s.length - 1] === 1) s.pop();
-  const t: RuntimeTensor = {
-    kind: "tensor",
-    data,
-    shape: s,
-  };
-  if (imag) t.imag = imag;
-  return t;
+  return new RuntimeTensor(data, s, imag);
 }
 
 // ── Type rule helpers ───────────────────────────────────────────────────

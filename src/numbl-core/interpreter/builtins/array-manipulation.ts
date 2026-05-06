@@ -594,10 +594,7 @@ defineBuiltin({
         const v = args[0];
         if (isRuntimeNumber(v)) return v;
         if (isRuntimeChar(v))
-          return {
-            kind: "char",
-            value: v.value.split("").reverse().join(""),
-          };
+          return RTV.char(v.value.split("").reverse().join(""));
         if (isRuntimeSparseMatrix(v)) return flipSparse(v, 1);
         if (!isRuntimeTensor(v))
           throw new RuntimeError("fliplr: argument must be numeric or char");

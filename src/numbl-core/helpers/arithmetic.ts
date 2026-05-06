@@ -1384,11 +1384,7 @@ function asNumeric(
     );
     return {
       scalar: false,
-      tensor: {
-        kind: "tensor",
-        data: codes,
-        shape: [1, v.value.length],
-      },
+      tensor: RTV.tensorRaw(codes, [1, v.value.length]),
     };
   }
   throw new RuntimeError(`Cannot use ${kstr(v)} in numeric operation`);
