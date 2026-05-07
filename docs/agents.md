@@ -79,10 +79,10 @@ Do **not** run `npm run format` manually. Prettier runs automatically via a pre-
 
 New builtins go in `src/numbl-core/interpreter/builtins/`. Each file registers IBuiltins via `registerIBuiltin()` from `types.ts`. Key patterns:
 
-- `resolveUnaryElemwise(typeRule, realFn, complexFn, name)` for unary element-wise math
-- `resolveUnaryRealResult(realFn, complexFn, name)` for unary functions that always return real (e.g., abs)
-- `resolveBinaryScalar(fn, name)` for two-argument scalar functions
-- Custom `resolve` for anything more complex (shape-dependent, multi-output, etc.)
+- `unaryElemwiseCases({ realFn, complexFn, maybeComplex }, name)` for unary element-wise math
+- `unaryRealResultCases(realFn, complexFn, name)` for unary functions that always return real (e.g., abs)
+- For two-argument scalar functions, build a case manually with `match: argTypes => binaryNumberOnly(argTypes)` and `apply: args => applyBinaryScalar(args, fn, name)`
+- Custom `match` / `apply` cases for anything more complex (shape-dependent, multi-output, etc.)
 
 New builtins should include inline `help` via the `help` field on `defineBuiltin`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
 

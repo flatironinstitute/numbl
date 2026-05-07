@@ -15,10 +15,12 @@
  * The LHS slot of the in-progress indexed store is excluded so a tensor
  * that's only reachable through that slot is treated as uniquely owned.
  *
- * Buffer sharing: zero-copy `reshape` returns a new RuntimeTensor wrapper
- * that shares the data buffer with the source. Object identity alone
- * misses this — when the target is a tensor, sweep also flags any tensor
- * whose `data` (or `imag`) buffer matches.
+ * Buffer sharing: refcount-driven pool reclamation forbids two
+ * RuntimeTensor wrappers from co-owning one Float64Array, so reshape and
+ * squeeze now copy the buffer rather than alias it. The sweep still
+ * flags tensors whose `data` (or `imag`) buffer matches the target's,
+ * which can happen transiently during indexed-store paths or when
+ * read-only ops borrow a buffer; object identity alone would miss those.
  *
  * Bounded traversal: a hard visit budget caps worst-case cost. On
  * exhaustion the visitor returns true (conservative — we copy).

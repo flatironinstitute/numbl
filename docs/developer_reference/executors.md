@@ -14,7 +14,7 @@ Pluggable strategies for handling AST execution. The interpreter delegates each 
 - **Executor** — handles a piece of work. Typically one or more consecutive statements, or a user-function call. Implements the `Executor` interface below.
 - **Registry** — holds executors, dispatches at runtime, owns per-executor caches.
 - **Dispatch context** (`DispatchContext`) — passed to every executor call. Provides env access, the runtime, type-info queries, and runtime callbacks.
-- **LoweredStmt** — the dispatcher's pre-propose lowering pass produces a discriminated union (`top-level` / `loop` / `call`) carrying the lowered IR plus pre-computed feasibility flags (`hasReturn`, `hasIO`, `hasBailRisk`, ...). Executors filter on the kind in `propose()`.
+- **LoweredStmt** — the dispatcher's pre-propose lowering pass produces a discriminated union (`top-level` / `loop` / `call` / `fuse` / `synth`) carrying the lowered IR plus pre-computed feasibility flags (`hasReturn`, `hasIO`, `hasBailRisk`, ...). Executors filter on the kind in `propose()`.
 - **CacheKey** — per-executor projection of the proposal data into a stable string. Drops volatile bits (e.g., exact scalar values) so unrelated runs of the same code reuse compiled artifacts.
 - **Cost estimate** — three numbers the executor returns with each proposal: estimated compile time (ms, paid once on cache miss), per-call overhead (ns, paid every dispatch), and run time (ns, the actual work).
 - **Bail-risk** — whether a specific proposal's compiled artifact may fail an invariant mid-execution. Per-proposal because a single executor can produce both bail-risky and bail-safe proposals depending on its inputs. The dispatcher refuses bail-risk proposals when the surrounding context has observable side effects that mustn't repeat.
@@ -40,10 +40,10 @@ interface Executor<D = unknown, C = unknown> {
   // (stmt-shape) or the FunctionDef (call-shape).
   compile(data: D, ctx: DispatchContext): C;
 
-  // Execute. Returns how many sibling stmts were consumed (stmt-shape)
-  // or the call result (call-shape), or a bail signalling that the
-  // cache entry should be invalidated and the next executor (or the
-  // interpreter) tried.
+  // Execute. Stmt-shape success returns `{ ok: true }` and the
+  // dispatcher advances by exactly one stmt. Call-shape success
+  // returns `{ result }`. A bail signals the cache entry should be
+  // invalidated and the next executor (or the interpreter) tried.
   run(compiled: C, data: D, ctx: DispatchContext): RunResult;
 }
 
@@ -60,7 +60,7 @@ interface CostEstimate {
 }
 
 type RunResult =
-  | { consumed: number } // stmt-shape success
+  | { ok: true } // stmt-shape success (advances by one stmt)
   | { result: unknown } // call-shape success
   | { bail: BailReason; transient?: boolean };
 ```
@@ -90,7 +90,7 @@ dispatch(siblings, i, ctx):
     if result.bail:
       cache.invalidate(...)               // unless transient
       continue                            // try next candidate
-    return result.consumed                // success
+    return                                // success (advances by one stmt)
 
   // All candidates bailed: AST interpreter, called directly.
   interp.execStmt(siblings[i])
@@ -104,9 +104,11 @@ Lowering is shared across all executors. The dispatcher calls `tryLower(siblings
 
 Today's specialized shapes:
 
-- `top-level` — script body (top-level scope, first stmt). Whole script lowered as a synthetic FunctionDef.
+- `top-level` — script body (top-level scope, first stmt). Whole script lowered as a synthetic FunctionDef. Lowered separately via `tryLowerTopLevel` and dispatched through `Registry.tryRunWholeScope` before the per-stmt loop runs, not through `tryLower`.
 - `loop` — for/while loop stmt. Loop body lowered as a synthetic FunctionDef.
 - `call` — user-function call. Lowered via `tryLowerCall` from `dispatchCall`.
+- `fuse` — a single AST `Assign` whose RHS is a fusable element-wise expression tree (consumed by `c-jit-fuse`).
+- `synth` — a `Synth` AST stmt produced by a registered AST stmt-list transformer that collapses a contiguous run of stmts into a unit (e.g., `c-jit-chain`). The `tag` field discriminates among multiple registered transformers.
 
 Stmts with no shape (e.g. a single Assign at non-top-level) skip the proposal loop and go straight to the hardcoded interpreter fallback — there are no executors that consume "raw" stmts.
 
@@ -116,7 +118,7 @@ Lowerings are cached in `LoweringCache`, keyed by (head Stmt or FunctionDef, cla
 
 Two patterns, both first-class:
 
-1. **Window composition** — an executor's `run()` may consume more than one stmt. The executor reads ahead via `ctx.peekSibling(offset)` and reports `{ consumed: N }`.
+1. **AST stmt-list transformers (Synth)** — each executor handles exactly one stmt, but a registered AST transformer can rewrite a contiguous run of stmts into a single `Synth` stmt before dispatch. The matching `synth`-shape executor then handles that one rewritten stmt as a unit. `c-jit-chain` is the current consumer. Lookahead at `propose()` time is also available via `ctx.peekSibling(offset)` and `ctx.siblings`.
 2. **Sub-dispatch** — within `compile` or `run`, an executor calls back into the registry to handle sub-stmts. Sub-dispatch can recurse; the dispatcher guards against re-entering the same executor on the same stmt.
 
 ## Bailouts
@@ -129,7 +131,7 @@ A bail happens _during_ `run`, after the executor has already started producing 
 
 ## Telemetry
 
-Every successful `run()` call invokes `interp.onExecutorFired?.(name, lowered.kind)`. Use this to track which optimizers fire in a session — a session-wide counter, a log entry per dispatch, etc. The hot path uses an `?.` undefined-check and pays nothing when no telemetry consumer is wired up.
+Every successful `run()` call invokes `interp.onExecutorFired?.(executor.name, kind)`. For stmt-shape and whole-scope success the kind is `lowered.kind` (`top-level`, `loop`, `fuse`, `synth`); for call-shape success (via `dispatchCall`) the kind is hardcoded to `"call"`. Use this to track which optimizers fire in a session — a session-wide counter, a log entry per dispatch, etc. The hot path uses an `?.` undefined-check and pays nothing when no telemetry consumer is wired up.
 
 ## Mode-driven registration
 

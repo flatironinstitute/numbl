@@ -11,10 +11,15 @@ The runtime universe. A union of primitives plus refcounted classes:
 - `RuntimeTensor` — real or complex, any rank, any shape.
 - `RuntimeComplexNumber` — complex scalar.
 - `RuntimeCell` — heterogeneous cell array.
-- `RuntimeStruct` / struct array — record values.
-- `RuntimeClassInstance` — `classdef` instance.
+- `RuntimeStruct` — scalar struct.
+- `RuntimeStructArray` — struct array (separate type from scalar struct).
+- `RuntimeClassInstance` — scalar `classdef` instance.
+- `RuntimeClassInstanceArray` — class-instance array (separate type from scalar instance).
 - `RuntimeFunction` / function handle — callable reference.
-- Sparse matrix, dictionary, and a few others.
+- `RuntimeSparseMatrix` — sparse 2-D matrix.
+- `RuntimeDictionary` — MATLAB dictionary.
+- `RuntimeDummyHandle` — placeholder handle for graphics-style APIs.
+- `RuntimeGraphicsHandle` — graphics object handle (figure, axes, etc.).
 
 Every container kind is a class extending `Refcounted` (`runtime/refcount.ts`). Each instance carries a `_rc` field (starts at 0) and `incref()` / `decref(rt)` methods enforced by a strict slot API; see [refcount.md](refcount.md) for the lifecycle.
 
