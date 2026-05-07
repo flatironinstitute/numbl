@@ -916,11 +916,11 @@ export function evalAnonFunc(
           if (narg > 1 && !(Array.isArray(result) && result.length >= narg)) {
             throw new RuntimeError("Too many output arguments.");
           }
-          // Adopt the result into the caller's transient scope before the
-          // fnEnv clearLocals below decrefs any locals (the result may be
-          // a parameter or a value derived from one). After adoption, the
-          // caller's scope owns a ref so the value survives the local
-          // teardown.
+          // Adopt the result into the caller's transient scope before
+          // fnEnv.clearLocals decrefs every binding — without this an
+          // anonymous-function output that's the only ref to a value
+          // would drop to rc=0 (and _destroy fire) before the caller
+          // can bind it.
           if (this.rt.currentScope) {
             if (Array.isArray(result)) {
               for (const v of result) this.rt.currentScope.adopt(v);

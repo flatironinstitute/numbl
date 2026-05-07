@@ -188,16 +188,11 @@ interface ModeSpec {
   args: string[];
 }
 
-// `--no-mem-pool` is set on every mode while we chase a memory-pool
-// leak that has been OOM-killing the Linux runner (16 GB, no swap).
-// The pool is a perf-and-debug feature; bypassing it keeps the
-// benchmark numbers comparable to the historical baseline (which
-// predates the pool) and unblocks CI.
 const MODES: ModeSpec[] = [
   {
     label: "--opt 1",
     slug: "opt-1",
-    args: ["--opt", "1", "--no-mem-pool"],
+    args: ["--opt", "1"],
   },
 ];
 

@@ -1,8 +1,8 @@
-# Refcount and Pool Reclamation
+# Refcount
 
-The runtime tracks reference counts on every container kind so that `Float64Array` buffers are released back to the per-runtime memory pool when their owning wrapper is no longer reachable. Strict ownership is enforced by an API on the container classes; the surrounding interpreter, JIT, and store paths thread the runtime through so every binding mutation goes through the API.
+The runtime tracks reference counts on every container kind. Strict ownership is enforced by an API on the container classes; the surrounding interpreter, JIT, and store paths thread the runtime through so every binding mutation goes through the API.
 
-This system is for **buffer reclamation only**. Copy-on-write decisions still go through the sweep in [`runtime/aliasing.ts`](../../../src/numbl-core/runtime/aliasing.ts); refcount being slightly off is a leak or, with `memPool` on, a premature buffer release — never silent data corruption from missed COW.
+This system is kept for the upcoming COW overhaul: the count will be consulted to decide whether a write needs to copy. There is no buffer-pool reclamation today — V8 GC reclaims wrappers and their backing `Float64Array` buffers automatically once they're unreachable.
 
 ## `Refcounted`
 
@@ -11,7 +11,7 @@ Defined in [`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.ts).
 - `_rc: number` — starts at 0. A "newborn" wrapper is owned by no slot.
 - `incref()` — bumps `_rc`.
 - `decref(rt)` — decrements; if the count hits 0, runs `_destroy(rt)`.
-- `_destroy(rt)` — kind-specific. Tensors and sparse matrices release their `Float64Array` buffers via `rt.pool.release(...)` (gated by `rt.memPool`). Containers with child refs decref each child.
+- `_destroy(rt)` — kind-specific. Containers with child refs decref each child. Tensors and sparse matrices have no children; their default `_destroy` is a no-op (V8 GC reclaims the buffer).
 
 The free helpers `incref(v)` and `decref(rt, v)` are noops on primitives (`number | boolean | string`).
 
@@ -35,11 +35,11 @@ Every "slot" — env binding, struct field, cell element, function capture, dict
 A `RefScope` ([`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.ts)) is established per top-level statement via `Runtime.withScope(fn)`. Every fresh container's auto-adopt routes into the active scope (`rc 0 → 1`). On scope drain at end of statement, every adopted value is decref'd:
 
 - Values bound to a slot during the statement got an extra incref from the slot, so they survive drain at slot count.
-- Unbound transients drop to `rc = 0` and self-destruct, releasing their buffers.
+- Unbound transients drop to `rc = 0` and self-destruct (decreffing children).
 
 `execStmt` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) wraps the statement body in `withScope`. The JIT synthetic-fn runner ([`executors/jsJit/shared.ts`](../../../src/numbl-core/executors/jsJit/shared.ts) `runSyntheticFnAgainstEnv`) wraps the JIT-compiled function call so intermediates created by JIT'd loop bodies are subject to scope drain.
 
-`callUserFunction` ([`interpreter/interpreterFunctions.ts`](../../../src/numbl-core/interpreter/interpreterFunctions.ts)) adopts every output value into the **caller's** scope before running `fnEnv.clearLocals()` — outputs are otherwise held only by the callee's slot binding which is about to be decref'd to 0.
+`callUserFunction` ([`interpreter/interpreterFunctions.ts`](../../../src/numbl-core/interpreter/interpreterFunctions.ts)) adopts every output value into the **caller's** scope before running `fnEnv.clearLocals()` — outputs are otherwise held only by the callee's slot binding which is about to be decref'd to 0. The same adoption happens in `evalAnonFunc`'s synthetic-fn body so closure invocations don't drop their results.
 
 ## Walk-throughs
 
@@ -74,11 +74,10 @@ b = a;        % a is already in env at rc=1
 1. Inside `f()`, outputs are read from `fnEnv`. Before `clearLocals`, each output is adopted into the **caller's** scope: `out_i.rc++`.
 2. `fnEnv.clearLocals()` decrefs each binding: `out_i.rc--`.
 3. Caller's `MultiAssign` binds `x` (incref). The `~` lvalue does nothing.
-4. Caller's drain: every output decref'd. `x`'s tensor lands at `rc=1` (env.x); the `~` tensor lands at `rc=0` and is released.
+4. Caller's drain: every output decref'd. `x`'s tensor lands at `rc=1` (env.x); the `~` tensor lands at `rc=0` and self-destructs (decreffing children if it has any).
 
 ## Runtime flags
 
-- **`rt.memPool`** (default true) — when on, `RuntimeTensor._destroy` and `RuntimeSparseMatrix._destroy` release `data`/`imag`/`pr`/`pi` buffers to `rt.pool` for reuse. The pool poisons released buffers with `NaN`, so any use-after-free shows up loudly in test output rather than as a silent zero-fill match. Disable with the CLI's `--no-mem-pool` flag (or via the worker's `set_mem_pool` message in the browser IDE) to isolate bugs that may stem from buffer recycling: with the flag off, every allocation is a fresh `new Float64Array` and no buffer is ever released.
 - **`rt.strictRefcount`** (default false) — when on, `decref` on a zero-count throws. Off by default because chained-lvalue assignments (e.g. `T.x(1).y = 10`) currently produce harmless underflows during scope drain. Flipping it on requires a cleanup pass over the back-write chain in `setMemberReturn` / indexed-store callbacks.
 
 ## Buffer-sharing constraint

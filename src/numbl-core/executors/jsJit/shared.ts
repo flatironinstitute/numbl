@@ -291,14 +291,10 @@ export function runSyntheticFnAgainstEnv(
 ): SyntheticFnRunResult {
   const inputValues = gatherEnvValues(interp, inputs);
 
-  // Establish a transient scope around the synthetic fn call. Tensors
-  // built inside the JIT-compiled body auto-adopt into this scope on
-  // construction; intermediate values that get overwritten in JS-local
-  // vars (e.g. the loop body's `x = zeros(...)` rebinding each iter)
-  // are decref'd when the scope drains, releasing their buffers to the
-  // pool. The scope also wraps writeBackOutputs so the returned values
-  // get bound to env BEFORE the scope drains — keeping their slot
-  // refcount intact.
+  // Establish a transient scope around the synthetic fn call so values
+  // built inside the JIT-compiled body auto-adopt into it on construction
+  // and the writeBackOutputs phase can bind outputs to env before the
+  // scope drains.
   return interp.rt.withScope(() => {
     let result: unknown;
     try {

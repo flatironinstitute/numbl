@@ -36,11 +36,7 @@ import {
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
-import {
-  pushCurrentRuntime,
-  popCurrentRuntime,
-  type MemoryPoolStats,
-} from "./runtime/memoryPool.js";
+import { pushCurrentRuntime, popCurrentRuntime } from "./runtime/refcount.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -76,13 +72,6 @@ export interface ExecOptions {
    *  transcendentals; reductions are reorder-allowed). Default true;
    *  opt out via the CLI's `--no-fast-math` flag. */
   fastMath?: boolean;
-  /** Reclaim Float64Array buffers back to the per-runtime pool when
-   *  the owning wrapper's refcount hits zero. Default true; opt out
-   *  via the CLI's `--no-mem-pool` flag (or the worker's
-   *  `set_mem_pool` message) to isolate bugs that may be caused by
-   *  buffer recycling. With the flag off, every allocation is a
-   *  fresh `new Float64Array` and no buffer is ever released. */
-  memPool?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -123,7 +112,6 @@ export interface ProfileData {
   builtins: Record<string, BuiltinProfileBreakdown>;
   dispatches: Record<string, BuiltinProfileEntry>;
   hotLoops: HotLoopEntry[];
-  memoryPool: MemoryPoolStats;
 }
 
 export interface ExecResult {
@@ -137,10 +125,6 @@ export interface ExecResult {
   variableValues: Record<string, RuntimeValue>;
   holdState: boolean;
   profileData?: ProfileData;
-  /** Float64Array memory-pool telemetry. Always populated (independent of
-   *  --profile) so the IDE's Memory tab can render without enabling full
-   *  profiling. */
-  memoryStats?: MemoryPoolStats;
   dispatchUnknownCounts?: Record<string, number>;
   /** Updated search paths (set when addpath/rmpath was called). */
   searchPaths?: string[];
@@ -342,7 +326,6 @@ export function executeCode(
   }
 
   const rt = new Runtime(options, options.initialVariableValues);
-  rt.memPool = options.memPool ?? true;
 
   // Build the per-runtime jitHelpers ($h) snapshot. This must happen AFTER
   // Runtime construction so it captures the special-builtin closures bound
@@ -822,7 +805,6 @@ export function executeCode(
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
       holdState: rt.holdState,
-      memoryStats: rt.pool.getStats(),
     };
 
     if (options.profile) {
@@ -832,7 +814,6 @@ export function executeCode(
         builtins: rt.getBuiltinProfile(),
         dispatches: rt.getDispatchProfile(),
         hotLoops: [...rt.hotLoops.values()],
-        memoryPool: result.memoryStats!,
       };
     }
 
@@ -877,9 +858,6 @@ export function executeCode(
     (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
     throw re;
   } finally {
-    // Pop the runtime stack before the special-builtin restore so any
-    // lingering allocations in that block (currently none, but defensive)
-    // don't track to a popped runtime.
     popCurrentRuntime(rt);
     // Reset JIT profiling hooks to no-ops
     if (options.profile) {

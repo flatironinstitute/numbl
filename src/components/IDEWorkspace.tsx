@@ -76,61 +76,6 @@ import {
 import type { VfsChanges } from "../vfs/VirtualFileSystem";
 import { useSystemFiles } from "../hooks/useSystemFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
-import type { MemoryPoolStats } from "../numbl-core/runtime/memoryPool.js";
-
-function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(2)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
-}
-
-function formatMemoryStats(s: MemoryPoolStats): string {
-  const lines: string[] = [];
-  const hitRate =
-    s.attemptedAllocs > 0
-      ? ((s.cacheHits / s.attemptedAllocs) * 100).toFixed(1)
-      : "0.0";
-  const pad = (label: string, w = 22) => label.padEnd(w);
-
-  lines.push(`Float64Array memory pool`);
-  lines.push("");
-  lines.push(
-    `${pad("Allocations attempted")} ${s.attemptedAllocs}  (${formatBytes(s.attemptedBytes)})`
-  );
-  lines.push(
-    `${pad("  from new")} ${s.actualAllocs}  (${formatBytes(s.actualAllocBytes)})`
-  );
-  lines.push(
-    `${pad("  from pool (cache hit)")} ${s.cacheHits}  (${formatBytes(s.cacheHitBytes)})  hit rate ${hitRate}%`
-  );
-  lines.push(
-    `${pad("Releases")} ${s.releases}  (${formatBytes(s.releaseBytes)})`
-  );
-  lines.push("");
-  lines.push(`${pad("Live set")} ${s.liveSetSize} buffers`);
-  lines.push(
-    `${pad("Free pool")} ${s.freePoolBufferCount} buffers  (${formatBytes(s.freePoolBytes)})`
-  );
-
-  if (s.freePoolBuckets.length > 0) {
-    lines.push("");
-    lines.push(
-      "Free-pool buckets (sorted by size descending; up to 200 shown)"
-    );
-    const padNum = (n: number, w: number) => String(n).padStart(w);
-    lines.push(
-      `  ${"size".padStart(10)}  ${"pooled".padStart(7)}  ${"attempts".padStart(9)}  ${"hits".padStart(7)}  ${"news".padStart(7)}  ${"rel.".padStart(7)}`
-    );
-    for (const b of s.freePoolBuckets) {
-      lines.push(
-        `  ${padNum(b.size, 10)}  ${padNum(b.count, 7)}  ${padNum(b.attempts, 9)}  ${padNum(b.cacheHits, 7)}  ${padNum(b.news, 7)}  ${padNum(b.releases, 7)}`
-      );
-    }
-  }
-
-  return lines.join("\n");
-}
 
 export interface IDEWorkspaceProps {
   files: WorkspaceFile[];
@@ -221,14 +166,12 @@ export function IDEWorkspace({
   );
   const [optimization, setOptimization] =
     useState<import("../numbl-core/executors/plugins.js").OptLevel>("1");
-  const [memPool, setMemPool] = useState(true);
   const [output, setOutput] = useState("");
   const [dispatchUnknownCounts, setDispatchUnknownCounts] = useState<Record<
     string,
     number
   > | null>(null);
   const [generatedJS, setGeneratedJS] = useState("");
-  const [memoryStats, setMemoryStats] = useState<MemoryPoolStats | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [figures, figuresDispatch] = useReducer(
     figuresReducer,
@@ -236,7 +179,7 @@ export function IDEWorkspace({
   );
   const [outputTab, setOutputTab] = useState(0);
   const [internalsSubTab, setInternalsSubTab] = useState<
-    "js" | "ast" | "dispatch" | "memory"
+    "js" | "ast" | "dispatch"
   >("js");
   const [allFilesRep, setAllFilesRep] = useState<
     { name: string; ast: unknown; irProgram: unknown }[]
@@ -361,14 +304,6 @@ export function IDEWorkspace({
       optimization,
     });
   }, [optimization]);
-
-  // Sync memPool flag to worker when toggled
-  useEffect(() => {
-    workerRef.current?.postMessage({
-      type: "set_mem_pool",
-      memPool,
-    });
-  }, [memPool]);
 
   // Panel sizing
   const initialSidebarWidth = window.innerWidth >= 1200 ? 260 : 200;
@@ -522,7 +457,6 @@ export function IDEWorkspace({
           setAllFilesRep(extractAllFilesRep(msg.workspaceRep));
           setFileSources(msg.workspaceRep?.fileSources ?? null);
           setDispatchUnknownCounts(msg.dispatchUnknownCounts ?? null);
-          setMemoryStats(msg.memoryStats ?? null);
           setIsRunning(false);
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
@@ -1135,31 +1069,6 @@ export function IDEWorkspace({
                   {optimization === "0" ? "no jit" : "jit"}
                 </Typography>
               </Tooltip>
-              <Tooltip
-                title={
-                  memPool
-                    ? "Memory pool on (refcounted Float64Array buffers reused; click to disable for debugging)"
-                    : "Memory pool off (every alloc is a fresh new Float64Array; click to re-enable)"
-                }
-              >
-                <Typography
-                  variant="caption"
-                  onClick={() => setMemPool(p => !p)}
-                  sx={{
-                    cursor: "pointer",
-                    fontSize: "0.7rem",
-                    px: 0.5,
-                    py: 0.1,
-                    borderRadius: 0.5,
-                    bgcolor: memPool ? "action.selected" : "transparent",
-                    opacity: memPool ? 1 : 0.5,
-                    "&:hover": { opacity: 1 },
-                    userSelect: "none",
-                  }}
-                >
-                  {memPool ? "mem pool" : "no mem pool"}
-                </Typography>
-              </Tooltip>
               {activeFile && (
                 <Typography
                   variant="caption"
@@ -1319,17 +1228,6 @@ export function IDEWorkspace({
                 >
                   Dispatch
                 </ToggleButton>
-                <ToggleButton
-                  value="memory"
-                  sx={{
-                    py: 0,
-                    px: 1,
-                    fontSize: "0.75rem",
-                    textTransform: "none",
-                  }}
-                >
-                  Memory
-                </ToggleButton>
               </ToggleButtonGroup>
             </Box>
             <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
@@ -1371,26 +1269,6 @@ export function IDEWorkspace({
                   ) : (
                     <Typography variant="body2" color="text.secondary">
                       No dispatchUnknown calls
-                    </Typography>
-                  )}
-                </Box>
-              )}
-              {internalsSubTab === "memory" && (
-                <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
-                  {memoryStats ? (
-                    <pre
-                      style={{
-                        margin: 0,
-                        fontFamily: "monospace",
-                        fontSize: "13px",
-                        whiteSpace: "pre-wrap",
-                      }}
-                    >
-                      {formatMemoryStats(memoryStats)}
-                    </pre>
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">
-                      No memory stats yet — run a script.
                     </Typography>
                   )}
                 </Box>
@@ -1607,16 +1485,6 @@ export function IDEWorkspace({
                       px: 1,
                     }}
                   />
-                  <Tab
-                    label="Memory"
-                    sx={{
-                      minHeight: 32,
-                      py: 0,
-                      fontSize: "0.75rem",
-                      minWidth: 0,
-                      px: 1,
-                    }}
-                  />
                 </Tabs>
                 <Box sx={{ flexGrow: 1, overflow: "hidden" }}>
                   {mobileOutputTab === 0 && (
@@ -1688,26 +1556,6 @@ export function IDEWorkspace({
                       label="ast"
                       fileSources={fileSources}
                     />
-                  )}
-                  {mobileOutputTab === 4 && (
-                    <Box sx={{ height: "100%", overflow: "auto", p: 1 }}>
-                      {memoryStats ? (
-                        <pre
-                          style={{
-                            margin: 0,
-                            fontFamily: "monospace",
-                            fontSize: "13px",
-                            whiteSpace: "pre-wrap",
-                          }}
-                        >
-                          {formatMemoryStats(memoryStats)}
-                        </pre>
-                      ) : (
-                        <Typography variant="body2" color="text.secondary">
-                          No memory stats yet — run a script.
-                        </Typography>
-                      )}
-                    </Box>
                   )}
                 </Box>
               </Box>

@@ -27,10 +27,7 @@ import {
   copyTensor,
 } from "../reduction-helpers.js";
 import { tensorOps, OpReduce } from "../../ops/index.js";
-import {
-  allocFloat64Array,
-  releaseFloat64Array,
-} from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 
@@ -359,7 +356,6 @@ export function minMaxImpl(
           const op = name === "min" ? OpReduce.MIN : OpReduce.MAX;
           tensorOps.realFlatReduce(op, v.data.length, v.data, out);
           const val = out[0];
-          releaseFloat64Array(out);
           return v._isLogical ? RTV.logical(val !== 0) : RTV.num(val);
         }
         const { mRe, mIm, mIdx } = minMaxScanDirect(

@@ -139,7 +139,6 @@ import {
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
-import { MemoryPool } from "./memoryPool.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -226,10 +225,6 @@ export class Runtime {
 
   public _envStack: import("./aliasing.js").AliasEnv[] = [];
 
-  /** Float64Array memory pool. Initialized in the constructor; consulted
-   *  by `allocFloat64Array`. */
-  public pool!: import("./memoryPool.js").MemoryPool;
-
   /** Active per-statement transient scope. New refcounted values are
    *  auto-adopted into this scope (rc 0→1) on construction so they
    *  survive long enough to be bound somewhere; on scope drain at end
@@ -237,19 +232,11 @@ export class Runtime {
    *  to 0 and destroyed. Null when no statement is in flight. */
   public currentScope: RefScope | null = null;
 
-  /** When true, RuntimeTensor / RuntimeSparseMatrix `_destroy` releases
-   *  owned buffers back to `this.pool` for reuse. When false, buffers
-   *  are dropped on the floor (JS GC reclaims them) and every
-   *  allocation is a fresh `new Float64Array` — useful for isolating
-   *  bugs that may be caused by buffer recycling. CLI: `--no-mem-pool`. */
-  public memPool: boolean = true;
-
   /** When true, `decref` on a zero count throws (loud at the
-   *  underflow site rather than silently leaking or, in `memPool`
-   *  mode, double-releasing a buffer). Off by default — chained-lvalue
-   *  assignments (e.g. `T.x(1).y = 10`) currently produce harmless
-   *  underflows during scope drain, so flipping this on requires a
-   *  cleanup pass over `setMemberReturn` / `indexStore` callbacks.
+   *  underflow site rather than silently leaking). Off by default —
+   *  chained-lvalue assignments (e.g. `T.x(1).y = 10`) currently
+   *  produce harmless underflows. Flipping it on requires a cleanup
+   *  pass over `setMemberReturn` / `indexStore` callbacks.
    *  Enabled in tests as a debugging aid. */
   public strictRefcount: boolean = false;
 
@@ -404,8 +391,6 @@ export class Runtime {
     if (options.cancelSAB) {
       this.cancelFlag = new Int32Array(options.cancelSAB);
     }
-    // Per-runtime Float64Array allocation tracker.
-    this.pool = new MemoryPool();
     this.initBuiltins();
   }
 
@@ -416,7 +401,7 @@ export class Runtime {
     }
   }
 
-  /** Run `fn` with a fresh RefScope as `this.currentScope`. On return,
+  /** Run `fn` with a fresh `RefScope` as `this.currentScope`. On return,
    *  every value adopted into the scope is decref'd. Used by `execStmt`
    *  to bound the lifetime of expression transients to one statement. */
   public withScope<T>(fn: () => T): T {

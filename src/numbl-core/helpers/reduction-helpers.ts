@@ -12,10 +12,7 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
-import {
-  allocFloat64Array,
-  releaseFloat64Array,
-} from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
@@ -288,7 +285,6 @@ function sliceDimReduce(
       slice[k] = v.data[srcIndices[k]];
     }
     result[outIdx] = sliceFn(slice);
-    releaseFloat64Array(slice);
   });
   return RTV.tensor(result, info.resultShape);
 }
@@ -368,9 +364,7 @@ export function scanLogical(
     } else {
       tensorOps.realFlatReduce(op, data.length, data, out);
     }
-    const result = out[0] !== 0;
-    releaseFloat64Array(out);
-    return result;
+    return out[0] !== 0;
   }
   const defaultResult = mode === "all";
   for (let i = 0; i < data.length; i++) {
@@ -581,7 +575,6 @@ export function accumKernel(
           const im = finalizeFn ? finalizeFn(out[0], v.imag.length) : out[0];
           if (im !== 0) result = RTV.complex(re, im);
         }
-        releaseFloat64Array(out);
         return result;
       }
       let acc = initial;

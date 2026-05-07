@@ -160,13 +160,6 @@ export class RuntimeTensor extends Refcounted {
     this.shape = shape;
     this._isLogical = _isLogical;
   }
-
-  protected _destroy(rt: RefcountRuntime): void {
-    if (rt.memPool) {
-      rt.pool.release(this.data);
-      if (this.imag !== undefined) rt.pool.release(this.imag);
-    }
-  }
 }
 
 export class RuntimeChar extends Refcounted {
@@ -420,14 +413,6 @@ export class RuntimeSparseMatrix extends Refcounted {
     this.jc = jc;
     this.pr = pr;
     this.pi = pi;
-  }
-
-  protected _destroy(rt: RefcountRuntime): void {
-    if (rt.memPool) {
-      rt.pool.release(this.pr);
-      if (this.pi !== undefined) rt.pool.release(this.pi);
-    }
-    // ir/jc are Int32Array — pool is Float64-only, so they're left to JS GC.
   }
 }
 
