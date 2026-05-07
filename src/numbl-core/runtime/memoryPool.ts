@@ -1,12 +1,23 @@
 /**
  * Float64Array memory pool — alloc-tracking only, no sweep.
  *
- * Every Float64Array handed out by `allocFloat64Array` is recorded in
- * `liveSet` and counters are bumped. The pool exposes a `release(buf)`
+ * Every Float64Array handed out by `allocFloat64Array` is tagged in
+ * `liveSet` (a WeakSet so V8 can still GC unreleased buffers) and a
+ * `_liveCount` counter is bumped. The pool exposes a `release(buf)`
  * method that moves a buffer to `freePool` (one bucket per size, unbounded);
  * subsequent `acquire(N)` calls pop from the bucket instead of allocating
  * fresh. Nothing currently calls `release` automatically — sweep-based
  * reclamation is intentionally absent in this iteration.
+ *
+ * Why WeakSet for liveSet: a strong-ref Set would pin every acquired
+ * buffer for the runtime's lifetime, defeating V8 GC for any buffer
+ * whose wrapper is collected without `_destroy` calling `release`
+ * (refcount edge cases). The WeakSet still answers `has(buf)` correctly
+ * for any buffer the caller hands back to `release`, since the caller
+ * holds it live across the call. The numeric `_liveCount` keeps telemetry
+ * (IDE Memory tab + refcount-balance tests) honest — it tracks
+ * acquires-minus-releases, so a leak (acquire without release) shows up
+ * as a positive count even after V8 reclaims the buffer.
  *
  * Per-runtime: each Runtime owns its own pool. A module-level stack tracks
  * the *currently active* runtime so `allocFloat64Array` can find it
@@ -145,7 +156,12 @@ interface BucketCounters {
 }
 
 export class MemoryPool {
-  private liveSet = new Set<Float64Array>();
+  /** Weak membership set — answers "did this pool hand out `buf`?" without
+   *  pinning the buffer. Cannot be enumerated and has no `.size`; for the
+   *  live-buffer count, see `_liveCount`. */
+  private liveSet = new WeakSet<Float64Array>();
+  /** Acquires minus releases. Reports as `liveSetSize` in stats. */
+  private _liveCount = 0;
   private freePool = new Map<number, Float64Array[]>();
   /** Stack of scratch trackers. While a tracker is active, every fresh
    *  `acquire` registers in the topmost tracker. Used by `withScratch`
@@ -203,6 +219,7 @@ export class MemoryPool {
       bc.news++;
     }
     this.liveSet.add(buf);
+    this._liveCount++;
     const top = this.scratchStack[this.scratchStack.length - 1];
     if (top) top.add(buf);
     return buf;
@@ -234,6 +251,7 @@ export class MemoryPool {
       bc.news++;
     }
     this.liveSet.add(buf);
+    this._liveCount++;
     const top = this.scratchStack[this.scratchStack.length - 1];
     if (top) top.add(buf);
     return buf;
@@ -252,6 +270,7 @@ export class MemoryPool {
   release(buf: Float64Array): void {
     if (!this.liveSet.has(buf)) return;
     this.liveSet.delete(buf);
+    this._liveCount--;
     buf.fill(NaN);
     let bucket = this.freePool.get(buf.length);
     if (!bucket) {
@@ -335,7 +354,7 @@ export class MemoryPool {
       actualAllocBytes: this._actualAllocBytes,
       cacheHitBytes: this._cacheHitBytes,
       releaseBytes: this._releaseBytes,
-      liveSetSize: this.liveSet.size,
+      liveSetSize: this._liveCount,
       freePoolBufferCount: this._freePoolBufferCount,
       freePoolBytes: this._freePoolBytes,
       freePoolBuckets: capped,
