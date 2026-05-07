@@ -116,6 +116,11 @@ function mangle(name: string): string {
 // `false === 0` is false under strict equality, but `+false === +0`
 // is true, and `(+false) !== 0` correctly treats `false` as falsy.
 
+/** `__`-prefixed helpers that need `$rt` injected as their first
+ *  argument (so they can route through `bindElement` / `bindField`
+ *  for refcount bookkeeping). */
+const RT_INJECTING_HELPERS = new Set(["__cellWrite"]);
+
 const JS_SCALAR_TARGET: ScalarOpTarget = {
   binAdd: (l, r) => `(${l} + ${r})`,
   binSub: (l, r) => `(${l} - ${r})`,
@@ -1043,12 +1048,15 @@ function emitAssignMember(
     // this and go straight to the fields-map mutate.
     lines.push(`${indent}${base} = $h.structNew_h();`);
   }
-  // Emit a direct `fields.set(...)` to avoid a helper-hop per assign.
-  // `structSetField_h` exists in the helpers for symmetry with the
-  // read path and for clients that want a function reference.
+  // Route through `structSetField_h` so the assignment goes through
+  // `bindField` (incref new, decref old). Direct `fields.set(...)`
+  // would skip refcount bookkeeping and produce decref underflows when
+  // the struct is destroyed and its `_destroy` decrefs each field.
   const value = emitExpr(stmt.value);
   const fieldLit = JSON.stringify(stmt.fieldName);
-  lines.push(`${indent}${base}.fields.set(${fieldLit}, ${value});`);
+  lines.push(
+    `${indent}$h.structSetField_h($rt, ${base}, ${fieldLit}, ${value});`
+  );
 }
 
 function emitAssignIndexCol(stmt: JitStmt & { tag: "AssignIndexCol" }): string {
@@ -1124,8 +1132,14 @@ function emitCall(expr: JitExpr & { tag: "Call" }, destName?: string): string {
     if (temp !== undefined) return temp;
   }
   const args = expr.args.map(a => emitExpr(a));
-  // Internal helper calls (prefixed with __) go directly to $h
+  // Internal helper calls (prefixed with __) go directly to $h.
+  // Helpers that mutate refcounted containers receive `$rt` as the
+  // first argument so they can route through `bindElement` /
+  // `bindField` (incref/decref).
   if (expr.name.startsWith("__")) {
+    if (RT_INJECTING_HELPERS.has(expr.name)) {
+      return `$h.${expr.name}($rt, ${args.join(", ")})`;
+    }
     return `$h.${expr.name}(${args.join(", ")})`;
   }
   // Try fast-path emission if the IBuiltin provides one. `getDest` is

@@ -159,6 +159,7 @@ assert(b(1) == 10, '17a: b unchanged');
 assert(a(1) == 30, '17b: a(1) is 30');
 
 % ── 18. Deeply nested chain with mixed shapes ────────────────────────
+clear s
 s.a.b{1}.c.d = [1 2 3];
 t = s;
 t.a.b{1}.c.d(2) = 999;
@@ -166,6 +167,7 @@ assert(s.a.b{1}.c.d(2) == 2, '18a: s deep unchanged');
 assert(t.a.b{1}.c.d(2) == 999, '18b: t deep mutated');
 
 % ── 19. Sibling chains share an inner object ─────────────────────────
+clear s
 inner_struct = struct('v', [1 2 3]);
 s.left = inner_struct;
 s.right = inner_struct;

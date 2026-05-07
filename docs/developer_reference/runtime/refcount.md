@@ -89,7 +89,7 @@ s = t; s.a.b(1) = 99;        % s and t share a struct
 
 ## Runtime flags
 
-- **`rt.strictRefcount`** (default false) — when on, `decref` on a zero-count throws. Off by default; lax mode silently ignores underflow so plumbing can be incomplete during migration. The COW system is correctness-tolerant of underflow as long as the rebind chain produces a fresh wrapper before the original's ref count reaches zero.
+- **`rt.strictRefcount`** (default true) — when on, `decref` on a zero-count throws. Refcount-driven COW relies on accurate counts to make correct mutate-vs-copy decisions; an underflow indicates a missed incref or a double decref somewhere in the bookkeeping, so we want it loud rather than silently masked. Set to false only as a temporary debug aid while migrating new mutation paths.
 
 ## Buffer-sharing constraint
 

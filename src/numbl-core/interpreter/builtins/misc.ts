@@ -36,6 +36,7 @@ import {
   mNeg,
 } from "../../helpers/arithmetic.js";
 import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 
@@ -688,8 +689,17 @@ for (const cm of [
 // Survives clear all because it's module-level state.
 const appdataStore = new Map<number, Map<string, RuntimeValue>>();
 
-/** Clear all appdata — called at the start of each executeCode to isolate runs. */
+/** Clear all appdata — called at the start of each executeCode to isolate
+ *  runs. Decrefs every stored value so the previous run's containers can
+ *  hit rc=0 cleanly; if the previous runtime is gone (test harness), we
+ *  just drop the JS references and let GC reclaim them. */
 export function resetAppdataStore(): void {
+  const rt = getCurrentRuntime();
+  if (rt) {
+    for (const bucket of appdataStore.values()) {
+      for (const v of bucket.values()) decref(rt, v);
+    }
+  }
   appdataStore.clear();
 }
 
@@ -720,7 +730,16 @@ registerIBuiltin({
         const key = getObjKey(args[0]);
         const name = toString(args[1]);
         const bucket = ensureBucket(key);
+        // Manage refcount: bucket takes ownership of the value, dropping
+        // any prior occupant. Without this the bucket holds a dangling
+        // reference once the caller's local goes out of scope, and a
+        // later getappdata + bind would underflow on the value's
+        // already-zero refcount.
+        const rt = getCurrentRuntime();
+        const old = bucket.get(name);
+        incref(args[2]);
         bucket.set(name, args[2]);
+        if (old !== undefined && rt) decref(rt, old);
         return [] as unknown as RuntimeValue;
       },
     };
@@ -770,7 +789,13 @@ registerIBuiltin({
         const key = getObjKey(args[0]);
         const name = toString(args[1]);
         const bucket = appdataStore.get(key);
-        if (bucket) bucket.delete(name);
+        if (bucket) {
+          const old = bucket.get(name);
+          if (bucket.delete(name) && old !== undefined) {
+            const rt = getCurrentRuntime();
+            if (rt) decref(rt, old);
+          }
+        }
         return [] as unknown as RuntimeValue;
       },
     };

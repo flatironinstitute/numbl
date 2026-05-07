@@ -33,6 +33,7 @@ import {
   pruneArgType,
   widenAgainst,
 } from "./shared.js";
+import { incref, decref } from "../../runtime/refcount.js";
 
 /** Cheap pre-lowering data. */
 export interface CallClassification {
@@ -209,6 +210,11 @@ export function runCallCompiled(
 ): CallRunOutcome {
   interp.rt.pushCallFrame(fn.name);
   interp.rt.pushCleanupScope();
+  // Mirror the interpreter's `callUserFunction`: incref each arg so its
+  // refcount inside the callee reflects "caller still holds it", forcing
+  // a COW on any in-callee mutation through the parameter. The matching
+  // decref runs in `finally` regardless of how the call exits.
+  for (const a of args) incref(a);
   try {
     const result = compiled.fn(...args);
     return { ok: true, result };
@@ -219,6 +225,7 @@ export function runCallCompiled(
     interp.rt.annotateError(e);
     throw e;
   } finally {
+    for (const a of args) decref(interp.rt, a);
     interp.rt.popAndRunCleanups(cf => {
       if (cf.jsFn) {
         if (cf.jsFnExpectsNargout) cf.jsFn(0);

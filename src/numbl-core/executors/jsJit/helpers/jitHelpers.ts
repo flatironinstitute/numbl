@@ -15,8 +15,10 @@ import {
   type RuntimeTensor,
   type RuntimeFunction,
   RuntimeStruct,
+  RuntimeCell,
   type RuntimeValue,
 } from "../../../runtime/types.js";
+import { isShared } from "../../../runtime/refcount.js";
 
 import {
   getTicTime,
@@ -505,21 +507,23 @@ export const jitHelpers = {
   // write-only local) and to set a field on an existing struct.
   structNew_h: (): RuntimeStruct => new RuntimeStruct(new Map()),
   structSetField_h: (
+    rt: import("../../../runtime/refcount.js").RefcountRuntime,
     s: RuntimeStruct,
     field: string,
     value: RuntimeValue
   ): void => {
-    s.fields.set(field, value);
+    s.bindField(rt, field, value);
   },
-  // Clone a struct's fields map so subsequent mutations don't leak
-  // back to the caller. Mirrors the interpreter's `setRTValueField`
-  // copy-on-write semantics for struct params. Called once at function
-  // entry for any struct param that is a target of AssignMember.
+  // Clone a struct so subsequent mutations don't leak back to the
+  // caller. Mirrors `cowCopy(struct)`: the constructor increfs every
+  // field, so the new struct owns its child refs independently of the
+  // source. Called once at function entry for any struct param that
+  // is a target of AssignMember.
   structUnshare_h: (s: unknown): unknown => {
     if (s !== null && typeof s === "object") {
       const rs = s as RuntimeStruct;
       if (rs.kind === "struct") {
-        return { kind: "struct", fields: new Map(rs.fields) };
+        return new RuntimeStruct(new Map(rs.fields));
       }
     }
     return s;
@@ -608,25 +612,25 @@ export const jitHelpers = {
     return c.data[k];
   },
 
-  __cellWrite: (cell: unknown, idx: number, value: unknown): unknown => {
-    const orig = cell as {
-      kind: "cell";
-      data: unknown[];
-      shape: number[];
-    };
+  __cellWrite: (
+    rt: import("../../../runtime/refcount.js").RefcountRuntime,
+    cell: unknown,
+    idx: number,
+    value: unknown
+  ): unknown => {
+    const orig = cell as RuntimeCell;
     const k = Math.round(idx) - 1;
     if (k < 0 || k >= orig.data.length)
       throw new Error("Index exceeds cell bounds");
-    // JIT cell write: always clone the wrapper. Unlike the runtime's
-    // sweep-based decision, this path predates the new anti-aliasing
-    // and unconditionally copies.
-    const c = {
-      kind: "cell" as const,
-      data: orig.data.slice(),
-      shape: orig.shape.slice(),
-    };
-    c.data[k] = value;
-    return c;
+    // Refcount-driven COW: copy the cell only if it's shared with
+    // another holder; otherwise mutate in place. `bindElement` does
+    // the incref-new / decref-old bookkeeping so the new value is
+    // properly tracked and the displaced slot's old value is released.
+    const target = isShared(orig)
+      ? new RuntimeCell(orig.data.slice(), [...orig.shape])
+      : orig;
+    target.bindElement(rt, k, value as RuntimeValue);
+    return target;
   },
 
   // Horizontal concatenation with row-count validation

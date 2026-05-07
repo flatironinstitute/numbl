@@ -1253,16 +1253,22 @@ export function evalLValueBase(
     try {
       return this.rt.getMember(parentBase, base.name);
     } catch {
-      const newStruct = RTV.struct({});
+      // Field doesn't exist — auto-create using the caller-supplied
+      // default. The default reflects what the next lvalue level needs
+      // (empty struct for `.member`, empty tensor for `(...)` /
+      // `{...}`), so `s.a(3) = 5` initializes `s.a` as an empty tensor
+      // that the subsequent indexStore can grow to `[0 0 5]`, while
+      // `s.a.b = 5` keeps the existing empty-struct path.
+      const newValue = defaultVal;
       const updatedParent = this.rt.setMemberReturn(
         parentRv,
         base.name,
-        newStruct
+        newValue
       );
       if (base.base.type === "Ident") {
         this.env.set(base.base.name, ensureRuntimeValue(updatedParent));
       }
-      return newStruct;
+      return newValue;
     }
   }
   if (base.type === "Index") {

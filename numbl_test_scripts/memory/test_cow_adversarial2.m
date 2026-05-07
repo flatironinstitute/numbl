@@ -148,19 +148,12 @@ arr2(1).cells{1}(1) = 99;
 assert(arr(1).cells{1}(1) == 1, '17a: arr unchanged');
 assert(arr2(1).cells{1}(1) == 99, '17b: arr2 mutated');
 
-% ── 18. Sharing into cell elements (unrolled) ───────────────────────
-% NOTE: An equivalent pattern inside a `for k = 1:N; copies{k} = master; end`
-% loop currently corrupts `copies` under the JIT executor (--opt 1). The
-% JIT's `__cellWrite` helper bypasses refcount tracking — it builds a
-% POJO cell wrapper instead of a `RuntimeCell` and skips the
-% incref/decref bookkeeping for inserted values. The interpreter path
-% (--opt 0) handles the same loop correctly. Tracked as a follow-up
-% for the JIT COW pass.
+% ── 18. for-loop with sharing inside loop body ──────────────────────
 master = [1 2 3 4 5];
 copies = cell(1, 3);
-copies{1} = master;
-copies{2} = master;
-copies{3} = master;
+for k = 1:3
+  copies{k} = master;
+end
 master(1) = 999;
 for k = 1:3
   assert(copies{k}(1) == 1, sprintf('18: copy %d corrupted', k));

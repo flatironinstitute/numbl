@@ -214,12 +214,10 @@ export class Runtime {
   public currentScope: RefScope | null = null;
 
   /** When true, `decref` on a zero count throws (loud at the
-   *  underflow site rather than silently leaking). Off by default —
-   *  chained-lvalue assignments (e.g. `T.x(1).y = 10`) currently
-   *  produce harmless underflows. Flipping it on requires a cleanup
-   *  pass over `setMemberReturn` / `indexStore` callbacks.
-   *  Enabled in tests as a debugging aid. */
-  public strictRefcount: boolean = false;
+   *  underflow site rather than silently leaking). On by default — the
+   *  refcount-driven COW system relies on accurate refcounts to make
+   *  correct mutate-vs-copy decisions. */
+  public strictRefcount: boolean = true;
 
   // Accessor guard: prevents recursive getter/setter/subsref calls
   public activeAccessors = new Set<string>();
