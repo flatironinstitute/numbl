@@ -25,25 +25,12 @@ import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
-import { isAliased, type AliasRuntime } from "./aliasing.js";
-import { type RefcountRuntime, decref } from "./refcount.js";
+import { type RefcountRuntime, decref, isShared } from "./refcount.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
 
-/** Runtime surface needed by index-store mutations: alias-sweep + refcount.
- *  The full Runtime class satisfies both structurally. */
-type StoreRuntime = AliasRuntime & RefcountRuntime;
-
-// ── Anti-aliasing helper ─────────────────────────────────────────────────
-
-/** True if `base` must be cloned before mutation. Returns true if no
- *  alias context is set (safe default — assume aliased), otherwise runs
- *  the sweep with the LHS slot excluded. */
-function mustCopyForAlias(base: object, rt?: AliasRuntime): boolean {
-  if (!rt) return true;
-  const ctx = rt._aliasCtx;
-  if (!ctx) return true;
-  return isAliased(rt, ctx.env, base, ctx.env, ctx.bindingName);
-}
+/** Runtime surface needed by index-store mutations. The full Runtime
+ *  class satisfies this structurally. */
+type StoreRuntime = RefcountRuntime;
 
 // ── Colon index sentinel ─────────────────────────────────────────────────
 
@@ -1255,7 +1242,8 @@ function storeIntoTensor(
   base: RuntimeTensor,
   indices: RuntimeValue[],
   rhs: RuntimeValue,
-  rt?: AliasRuntime
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _rt?: StoreRuntime
 ): RuntimeValue {
   // Element deletion: base(idx) = []
   if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 1) {
@@ -1277,10 +1265,12 @@ function storeIntoTensor(
     return deleteTensorRowsOrCols(base, indices);
   }
 
-  // Sweep-based COW: copy iff the base tensor is reachable from any
-  // slot OTHER than the LHS we're about to overwrite. Without an alias
-  // context, fall back to always-copy (safe default).
-  if (mustCopyForAlias(base, rt)) {
+  // Refcount-driven COW: copy iff `base` has external holders beyond the
+  // LHS slot. The lvalue chain walker (`evalLValueBase`) has already
+  // ensured every container in the chain from env → base's parent is
+  // uniquely owned, so any sharing detected here is real (held by a
+  // different binding, struct field, cell element, etc.).
+  if (isShared(base)) {
     const cowImag = base.imag ? allocFloat64Array(base.imag) : undefined;
     base = RTV.tensor(allocFloat64Array(base.data), [...base.shape], cowImag);
   }
@@ -1918,8 +1908,8 @@ function storeIntoCell(
   parenAssign = false,
   rt?: StoreRuntime
 ): RuntimeValue {
-  // Sweep-based COW for the cell wrapper.
-  if (mustCopyForAlias(base, rt)) {
+  // Refcount-driven COW for the cell wrapper.
+  if (isShared(base)) {
     base = RTV.cell(base.data.slice(), [...base.shape]);
   }
 

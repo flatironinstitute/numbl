@@ -307,9 +307,6 @@ export function interpretWorkspaceFunction(
       return this.withFileContext(entry.fileName, undefined, undefined, () => {
         const savedEnv = this.env;
         this.env = new Environment();
-        // Track caller env so the alias sweep can find tensors held in
-        // the caller's scope (function envs have no `parent` link back).
-        this.rt._envStack.push(savedEnv);
         try {
           for (const stmt of ast.body) {
             if (stmt.type === "Function") continue;
@@ -318,7 +315,6 @@ export function interpretWorkspaceFunction(
           }
           return this.ans;
         } finally {
-          this.rt._envStack.pop();
           this.env = savedEnv;
         }
       });
@@ -519,11 +515,10 @@ export function callUserFunction(
     throw new RuntimeError("Too many output arguments.");
   }
 
-  // Indexed stores inside the callee run the alias sweep before mutating
-  // (the caller env is on `_envStack`, so any tensor reachable from the
-  // caller's bindings is detected and cloned). Passing wrappers by
-  // reference at the call boundary is therefore safe — no retain or copy
-  // needed here.
+  // Refcount-driven COW handles aliasing across function boundaries:
+  // each arg's incref at parameter binding inflates the count, so any
+  // mutation through the parameter sees rc>1 and copies. Passing
+  // wrappers by reference at the call boundary is safe.
   const sharedArgs = args;
 
   // Try the function-call dispatch path. Registered executors
@@ -572,9 +567,6 @@ export function callUserFunction(
   const savedCallerEnv = this.callerEnv;
   this.callerEnv = savedEnv;
   this.env = fnEnv;
-  // Track caller env so the alias sweep can see tensors held in the
-  // caller's scope across the function boundary.
-  this.rt._envStack.push(savedEnv);
   this.rt.pushCallFrame(fn.name);
   this.rt.pushCleanupScope();
 
@@ -673,7 +665,6 @@ export function callUserFunction(
       }
     });
     this.rt.popCallFrame();
-    this.rt._envStack.pop();
     this.env = savedEnv;
     this.callerEnv = savedCallerEnv;
   }
@@ -716,7 +707,6 @@ export function callNestedFunction(
 
   const savedEnv = this.env;
   this.env = fnEnv;
-  this.rt._envStack.push(savedEnv);
   this.rt.pushCleanupScope();
 
   try {
@@ -785,7 +775,6 @@ export function callNestedFunction(
     if (!fnEnv.nestedHandleCreated) {
       fnEnv.clearLocals();
     }
-    this.rt._envStack.pop();
     this.env = savedEnv;
   }
 }

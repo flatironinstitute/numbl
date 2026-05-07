@@ -716,8 +716,7 @@ export function indexCellStore(
   base: unknown,
   indices: unknown[],
   rhs: unknown,
-  rt?: import("./aliasing.js").AliasRuntime &
-    import("./refcount.js").RefcountRuntime
+  rt?: import("./refcount.js").RefcountRuntime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);
@@ -747,8 +746,7 @@ export function multiOutputCellAssign(
   base: unknown,
   indices: unknown,
   results: unknown[],
-  rt?: import("./aliasing.js").AliasRuntime &
-    import("./refcount.js").RefcountRuntime
+  rt?: import("./refcount.js").RefcountRuntime
 ): unknown {
   if (base === undefined || base === null) base = RTV.cell([], [0, 0]);
   let mv = ensureRuntimeValue(base);

@@ -206,25 +206,6 @@ export class Runtime {
   // Public object so generated code can read/write as $rt.$g["name"]
   public $g: Record<string, RuntimeValue> = {};
 
-  // ── Anti-aliasing (sweep-based COW) state ────────────────────────────
-  //
-  // The interpreter sets `_aliasCtx` immediately before an indexed store
-  // and clears it after. `storeIntoTensor` / `storeIntoCell` consult it
-  // to sweep with the LHS slot excluded; if the target tensor is reached
-  // from anywhere else, COW fires.
-  //
-  // `_envStack` tracks caller envs across function calls. Function envs
-  // have no `parent` pointer back to their caller, so the interpreter
-  // pushes the saved env on call entry and pops on exit; the sweep walks
-  // every entry. Single-threaded JS — no contention concerns.
-
-  public _aliasCtx: {
-    env: import("./aliasing.js").AliasEnv;
-    bindingName: string | null;
-  } | null = null;
-
-  public _envStack: import("./aliasing.js").AliasEnv[] = [];
-
   /** Active per-statement transient scope. New refcounted values are
    *  auto-adopted into this scope (rc 0→1) on construction so they
    *  survive long enough to be bound somewhere; on scope drain at end

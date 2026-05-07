@@ -45,6 +45,8 @@ import {
 import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { cowCopy } from "../runtime/cow.js";
+import { isShared } from "../runtime/refcount.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -900,7 +902,6 @@ export function evalAnonFunc(
     const narg = typeof nargoutArg === "number" ? nargoutArg : 1;
     const savedEnv = this.env;
     this.env = fnEnv;
-    this.rt._envStack.push(savedEnv);
     return this.withFileContext(
       capturedFile,
       capturedClassName,
@@ -931,7 +932,6 @@ export function evalAnonFunc(
           return result;
         } finally {
           fnEnv.clearLocals();
-          this.rt._envStack.pop();
           this.env = savedEnv;
         }
       }
@@ -1133,21 +1133,7 @@ export function assignLValue(
           skipSubsasgn = true;
         }
       }
-      // Set the alias-sweep context so `storeIntoTensor` / `storeIntoCell`
-      // can skip the COW when the LHS slot is the only place that holds
-      // the tensor. The exclude-binding name is null when the LHS is a
-      // computed expression (e.g. `f().x(1) = ...`) — sweep then treats
-      // every slot, including the destination, as a potential alias.
-      this.rt._aliasCtx = {
-        env: this.env,
-        bindingName: lv.base.type === "Ident" ? lv.base.name : null,
-      };
-      let result;
-      try {
-        result = this.rt.indexStore(base, indices, value, skipSubsasgn);
-      } finally {
-        this.rt._aliasCtx = null;
-      }
+      const result = this.rt.indexStore(base, indices, value, skipSubsasgn);
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, ensureRuntimeValue(result));
       } else {
@@ -1162,16 +1148,7 @@ export function assignLValue(
           ? (this.env.get(lv.base.name) ?? RTV.cell([], [0, 0]))
           : this.evalLValueBase(lv.base, RTV.cell([], [0, 0]));
       const indices = this.evalIndicesWithEnd(base, lv.indices);
-      this.rt._aliasCtx = {
-        env: this.env,
-        bindingName: lv.base.type === "Ident" ? lv.base.name : null,
-      };
-      let result;
-      try {
-        result = this.rt.indexCellStore(base, indices, value);
-      } finally {
-        this.rt._aliasCtx = null;
-      }
+      const result = this.rt.indexCellStore(base, indices, value);
       if (lv.base.type === "Ident") {
         this.env.set(lv.base.name, ensureRuntimeValue(result));
       } else {
@@ -1260,8 +1237,19 @@ export function evalLValueBase(
     return this.env.get(base.name) ?? defaultVal;
   }
   if (base.type === "Member") {
-    const parentBase = this.evalLValueBase(base.base, RTV.struct({}));
-    const parentRv = ensureRuntimeValue(parentBase);
+    let parentBase = this.evalLValueBase(base.base, RTV.struct({}));
+    let parentRv = ensureRuntimeValue(parentBase);
+    // Refcount-driven COW: if the parent is shared with another
+    // binding (env, struct field, cell element, …), copy it now and
+    // rebind in its location. After this, the chain from env root to
+    // `parent` is uniquely owned, so mutations through this slot won't
+    // leak to the other holder.
+    if (isShared(parentRv)) {
+      const cowed = cowCopy(parentRv);
+      this.writeLValueBase(base.base, cowed);
+      parentBase = cowed;
+      parentRv = cowed;
+    }
     try {
       return this.rt.getMember(parentBase, base.name);
     } catch {
@@ -1278,15 +1266,21 @@ export function evalLValueBase(
     }
   }
   if (base.type === "Index") {
-    const baseVal = this.evalLValueBase(base.base, RTV.struct({}));
+    let baseVal = this.evalLValueBase(base.base, RTV.struct({}));
+    let baseRv = ensureRuntimeValue(baseVal);
+    if (isShared(baseRv)) {
+      const cowed = cowCopy(baseRv);
+      this.writeLValueBase(base.base, cowed);
+      baseVal = cowed;
+      baseRv = cowed;
+    }
     const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     try {
       let skipSubsref: boolean | string = false;
       if (this.currentClassName) {
-        const bRv = ensureRuntimeValue(baseVal);
         if (
-          isRuntimeClassInstance(bRv) &&
-          bRv.className === this.currentClassName
+          isRuntimeClassInstance(baseRv) &&
+          baseRv.className === this.currentClassName
         ) {
           skipSubsref = true;
         }
@@ -1297,7 +1291,14 @@ export function evalLValueBase(
     }
   }
   if (base.type === "IndexCell") {
-    const baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
+    let baseVal = this.evalLValueBase(base.base, RTV.cell([], [0, 0]));
+    let baseRv = ensureRuntimeValue(baseVal);
+    if (isShared(baseRv)) {
+      const cowed = cowCopy(baseRv);
+      this.writeLValueBase(base.base, cowed);
+      baseVal = cowed;
+      baseRv = cowed;
+    }
     const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     try {
       return this.rt.indexCell(baseVal, indices);

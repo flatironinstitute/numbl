@@ -11,7 +11,7 @@ import {
   kstr,
   type RuntimeValue,
 } from "./types.js";
-import type { RefcountRuntime } from "./refcount.js";
+import { isShared, type RefcountRuntime } from "./refcount.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { horzcat } from "./tensor-construction.js";
@@ -64,7 +64,13 @@ export function setRTValueField(
       }
       return base;
     }
-    // Value class: return a new instance with copied fields
+    // Value class. Mutate in place if uniquely owned (the lvalue chain
+    // walker has already COWed any shared ancestor); otherwise return a
+    // new instance with copied fields.
+    if (rt && !isShared(base)) {
+      base.bindField(rt, field, value);
+      return base;
+    }
     const newFields = new Map(base.fields);
     newFields.set(field, value);
     return new RuntimeClassInstance(
@@ -75,6 +81,10 @@ export function setRTValueField(
     );
   }
   if (isRuntimeStruct(base)) {
+    if (rt && !isShared(base)) {
+      base.bindField(rt, field, value);
+      return base;
+    }
     const newFields = new Map(base.fields);
     newFields.set(field, value);
     return RTV.struct(newFields);

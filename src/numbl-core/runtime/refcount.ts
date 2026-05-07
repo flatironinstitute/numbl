@@ -1,16 +1,18 @@
 /**
- * Reference counting for RuntimeValue containers.
+ * Reference counting for RuntimeValue containers, used both for
+ * lifecycle (decref → _destroy chain) and for refcount-driven COW.
  *
  * Every container kind extends `Refcounted`. The count starts at 0
- * (newly-constructed value, not yet bound to anything). It's incremented
+ * (newly-constructed value, not yet bound to anything), is incremented
  * when a slot (env binding, struct field, cell element, ...) takes
  * ownership, and decremented when the slot releases ownership. When the
  * count reaches 0, `_destroy` runs and decrefs every child value.
  *
- * Kept in place for the upcoming COW overhaul, which will use the count
- * to decide whether a write needs to copy. No buffer-pool reclamation
- * happens here — V8 GC reclaims wrappers and their backing buffers
- * automatically once they're unreachable.
+ * COW uses `effectiveRc(v)` — the count minus the number of currently
+ * active per-statement scopes that hold the value. Scope adoption is
+ * a transient lifecycle artifact (it keeps the wrapper alive across an
+ * expression's evaluation); it isn't an ownership relationship that
+ * should force a copy.
  *
  * Strict mode (`rt.strictRefcount`) makes a decref of an already-zero
  * count throw.
@@ -63,6 +65,13 @@ export abstract class Refcounted {
 
   /** Reference count. Starts at 0; incremented when bound to a slot. */
   _rc: number = 0;
+
+  /** Subset of `_rc` contributed by active per-statement scopes. The
+   *  COW check uses `_rc - _scopeHolds` so transient scope holds don't
+   *  force unnecessary copies (a value freshly constructed during a
+   *  statement and passed to a function would otherwise look "shared"
+   *  to the callee). */
+  _scopeHolds: number = 0;
 
   constructor() {
     // Auto-adopt into the active runtime's transient scope (if any).
@@ -122,10 +131,24 @@ export function decref(rt: RefcountRuntime, v: unknown): void {
   if (v instanceof Refcounted) v.decref(rt);
 }
 
+/** True if `v` has more than one external (non-scope) holder — i.e. a
+ *  mutation through one slot would observably affect another holder.
+ *  Primitives return false; primitives can never be "shared" since
+ *  every slot stores a copy of the value. */
+export function isShared(v: unknown): boolean {
+  if (!(v instanceof Refcounted)) return false;
+  return v._rc - v._scopeHolds > 1;
+}
+
 /** Per-statement transients harness. Fresh values produced by constructors
  *  and operators are adopted here at rc=1; on `drain`, every member is
  *  decref'd. Anything bound to a slot during the statement gets an extra
- *  incref from the slot, so it survives drain at slot count. */
+ *  incref from the slot, so it survives drain at slot count.
+ *
+ *  Each adopt also increments the value's `_scopeHolds`, which the COW
+ *  check (`isShared`) subtracts from `_rc` — the scope's hold is a
+ *  lifecycle artifact, not an ownership relationship that should force
+ *  a copy. */
 export class RefScope {
   private members: Refcounted[] = [];
 
@@ -133,6 +156,7 @@ export class RefScope {
   adopt(v: unknown): void {
     if (v instanceof Refcounted) {
       v.incref();
+      v._scopeHolds++;
       this.members.push(v);
     }
   }
@@ -140,6 +164,7 @@ export class RefScope {
   /** Release every adopted value. Called in `withScope`'s finally. */
   drain(rt: RefcountRuntime): void {
     for (const v of this.members) {
+      v._scopeHolds--;
       v.decref(rt);
     }
     this.members.length = 0;
