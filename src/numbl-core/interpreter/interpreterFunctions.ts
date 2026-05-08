@@ -56,11 +56,26 @@ export function callFunction(
       optimization: this.optimization,
       lookupWorkspaceFile: n => {
         const entry = this.ctx.registry.filesByFuncName.get(n);
-        if (entry) return { path: entry.fileName, kind: "function" };
+        if (entry)
+          return {
+            path: entry.fileName,
+            kind: "function",
+            source: entry.source,
+          };
         const classInfo = this.ctx.getClassInfo(n);
-        if (classInfo) return { path: classInfo.fileName, kind: "class" };
+        if (classInfo)
+          return {
+            path: classInfo.fileName,
+            kind: "class",
+            source: classInfo.source,
+          };
         const jsEntry = this.ctx.registry.jsUserFunctionsByName.get(n);
-        if (jsEntry) return { path: jsEntry.fileName, kind: "jsfunction" };
+        if (jsEntry)
+          return {
+            path: jsEntry.fileName,
+            kind: "jsfunction",
+            source: "",
+          };
         return undefined;
       },
     };

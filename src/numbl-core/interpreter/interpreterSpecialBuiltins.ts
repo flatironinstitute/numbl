@@ -15,7 +15,8 @@ import {
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { getIBuiltin } from "./builtins/index.js";
+import { getIBuiltin, getIBuiltinHelp } from "./builtins/index.js";
+import { getAllBuiltinNames } from "../helpers/registry.js";
 import { toNumber, toString } from "../runtime/convert.js";
 import type { Environment } from "./types.js";
 import type { Runtime } from "../runtime/runtime.js";
@@ -35,10 +36,16 @@ export interface InterpreterContext {
   /** Resolve a workspace function or class name to its source file,
    *  or undefined if no workspace file provides that name.
    *  `kind` distinguishes a regular .m function from a .numbl.js
-   *  user function (treated as a MEX-equivalent) or a class file. */
-  lookupWorkspaceFile: (
-    name: string
-  ) => { path: string; kind: "function" | "jsfunction" | "class" } | undefined;
+   *  user function (treated as a MEX-equivalent) or a class file.
+   *  `source` is the raw .m source for "function"/"class" kinds, or empty
+   *  for "jsfunction" (where the implementation is JS, not .m text). */
+  lookupWorkspaceFile: (name: string) =>
+    | {
+        path: string;
+        kind: "function" | "jsfunction" | "class";
+        source: string;
+      }
+    | undefined;
 }
 
 export const FALL_THROUGH: unique symbol = Symbol("FALL_THROUGH");
@@ -153,6 +160,79 @@ register("clear", (ctx, args) => {
     ctx.env.delete(name);
   }
   return undefined;
+});
+
+/** Extract the leading help comment block from a .m source file.
+ *  MATLAB convention: comment lines immediately following the
+ *  function/classdef declaration (or the top of a script), terminated
+ *  by the first non-comment line. The leading `%` and one optional
+ *  space are stripped from each line. */
+function extractMHelp(source: string): string {
+  const lines = source.split(/\r?\n/);
+  let i = 0;
+  // Skip an optional leading function/classdef declaration, including
+  // line continuations (lines ending in `...`).
+  if (i < lines.length && /^\s*(function|classdef)\b/.test(lines[i])) {
+    while (i < lines.length && /\.\.\.\s*(%[^\n]*)?$/.test(lines[i])) i++;
+    i++;
+  }
+  // Collect consecutive comment lines (allow blank lines only inside the block).
+  const helpLines: string[] = [];
+  let sawComment = false;
+  while (i < lines.length) {
+    const trimmed = lines[i].trimStart();
+    if (trimmed.startsWith("%")) {
+      let line = trimmed.slice(1);
+      if (line.startsWith(" ")) line = line.slice(1);
+      helpLines.push(line);
+      sawComment = true;
+      i++;
+    } else if (!sawComment && trimmed === "") {
+      // Allow blank lines before the first comment (after the decl line).
+      i++;
+    } else {
+      break;
+    }
+  }
+  return helpLines.join("\n");
+}
+
+/** Convert a path-style help target (e.g. `+mip/install.m`) into the
+ *  workspace function name that numbl uses internally (`mip.install`).
+ *  Returns the input unchanged if it doesn't look like a path. */
+function helpPathToFuncName(name: string): string {
+  if (!/[/\\]/.test(name) && !name.endsWith(".m")) return name;
+  const stripped = name.replace(/\.m$/, "");
+  const parts = stripped.split(/[/\\]/).filter(p => p.length > 0);
+  return parts.map(p => (p.startsWith("+") ? p.slice(1) : p)).join(".");
+}
+
+register("help", (ctx, args, nargout) => {
+  // 0-arg form is handled by the IBuiltin (lists builtins).
+  if (args.length === 0) return FALL_THROUGH;
+  const rawName = toString(ensureRuntimeValue(args[0]));
+  // Builtins (with or without registered help) take precedence — let the
+  // existing IBuiltin handle them so messages stay consistent.
+  if (getIBuiltinHelp(rawName) || getAllBuiltinNames().includes(rawName)) {
+    return FALL_THROUGH;
+  }
+  // Workspace .m function or class — extract leading comment block.
+  // Accept both bare names ("mip", "mip.install") and path-style targets
+  // ("+mip/install.m") as MATLAB's help() does.
+  const lookupName = helpPathToFuncName(rawName);
+  const ws =
+    ctx.lookupWorkspaceFile(lookupName) ??
+    (lookupName !== rawName ? ctx.lookupWorkspaceFile(rawName) : undefined);
+  if (ws && ws.kind !== "jsfunction") {
+    const text = extractMHelp(ws.source);
+    if (text) {
+      const out = text + "\n";
+      if (nargout === 0) ctx.rt.output(out);
+      return nargout >= 1 ? RTV.char(out) : undefined;
+    }
+  }
+  // Fall back to the IBuiltin's "Unknown function" / "No help available" path.
+  return FALL_THROUGH;
 });
 
 register("feval", (ctx, args, nargout) => {
