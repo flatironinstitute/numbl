@@ -101,11 +101,15 @@ function formatNumber(n: number): string {
   }
   // 4 decimal places for most numbers
   const s = n.toPrecision(5);
-  // Remove trailing zeros after decimal
-  if (s.includes(".")) {
-    return s.replace(/\.?0+$/, "") || "0";
-  }
-  return s;
+  // Split off exponent so trailing-zero stripping doesn't eat exponent digits
+  const eIdx = s.search(/[eE]/);
+  const mantissa = eIdx === -1 ? s : s.slice(0, eIdx);
+  const exponent = eIdx === -1 ? "" : s.slice(eIdx);
+  // Remove trailing zeros after decimal in the mantissa only
+  const trimmed = mantissa.includes(".")
+    ? mantissa.replace(/\.?0+$/, "") || "0"
+    : mantissa;
+  return trimmed + exponent;
 }
 
 /** Max rows/cols to display before truncating with "..." */
