@@ -862,7 +862,10 @@ function emitUnary(
       case UnaryOperation.Minus:
         return `$h.cNeg(${operand})`;
       case UnaryOperation.Plus:
+      case UnaryOperation.NonConjugateTranspose:
         return operand;
+      case UnaryOperation.Transpose:
+        return `$h.cConj(${operand})`;
       default:
         throw new Error(`JIT codegen: unsupported complex unary op ${expr.op}`);
     }
