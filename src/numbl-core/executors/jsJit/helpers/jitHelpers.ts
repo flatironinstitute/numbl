@@ -34,6 +34,12 @@ import {
   mElemMul,
   mElemDiv,
   mElemPow,
+  mEqual,
+  mNotEqual,
+  mLess,
+  mLessEqual,
+  mGreater,
+  mGreaterEqual,
 } from "../../../helpers/arithmetic.js";
 
 // Re-export sub-modules for direct import where needed
@@ -305,6 +311,17 @@ export const jitHelpers = {
   __mElemMul: mElemMul,
   __mElemDiv: mElemDiv,
   __mElemPow: mElemPow,
+
+  // Broadcasting-aware comparisons. The same-shape JIT fast path lives
+  // in $h.tensorCompareOp and rejects mismatched shapes; mismatched
+  // shapes fall through here to the broadcasting helpers from the
+  // interpreter's arithmetic module.
+  __mEqual: mEqual,
+  __mNotEqual: mNotEqual,
+  __mLess: mLess,
+  __mLessEqual: mLessEqual,
+  __mGreater: mGreater,
+  __mGreaterEqual: mGreaterEqual,
 
   // Tensor math (real only). `dest` is the previous value of the LHS
   // variable (or undefined); when it's a rc==1 Float64 tensor of matching

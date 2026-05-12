@@ -411,6 +411,14 @@ export function lowerExpr(ctx: LowerCtx, expr: Expr): JitExpr | null {
             [BinaryOperation.ElemMul]: "__mElemMul",
             [BinaryOperation.Div]: "__mElemDiv",
             [BinaryOperation.ElemDiv]: "__mElemDiv",
+            // Comparisons: same-shape JIT fast path lives in
+            // $h.tensorCompareOp; mismatched shapes route here.
+            [BinaryOperation.Equal]: "__mEqual",
+            [BinaryOperation.NotEqual]: "__mNotEqual",
+            [BinaryOperation.Less]: "__mLess",
+            [BinaryOperation.LessEqual]: "__mLessEqual",
+            [BinaryOperation.Greater]: "__mGreater",
+            [BinaryOperation.GreaterEqual]: "__mGreaterEqual",
           };
           const helper = broadcastHelper[expr.op];
           if (helper) {
