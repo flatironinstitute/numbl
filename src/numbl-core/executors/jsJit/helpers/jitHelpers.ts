@@ -637,8 +637,7 @@ export const jitHelpers = {
   ): unknown => {
     const orig = cell as RuntimeCell;
     const k = Math.round(idx) - 1;
-    if (k < 0 || k >= orig.data.length)
-      throw new Error("Index exceeds cell bounds");
+    if (k < 0) throw new Error("Index exceeds cell bounds");
     // Refcount-driven COW: copy the cell only if it's shared with
     // another holder; otherwise mutate in place. `bindElement` does
     // the incref-new / decref-old bookkeeping so the new value is
@@ -646,6 +645,21 @@ export const jitHelpers = {
     const target = isShared(orig)
       ? new RuntimeCell(orig.data.slice(), [...orig.shape])
       : orig;
+    if (k >= target.data.length) {
+      // Auto-grow: append empty tensors, then update shape (row by
+      // default; preserve column-vector orientation if base was one).
+      const oldLen = target.data.length;
+      while (target.data.length <= k) {
+        const empty = makeTensor(allocFloat64Array(0), undefined, [0, 0]);
+        empty.incref();
+        target.data.push(empty);
+      }
+      const newLen = target.data.length;
+      if (newLen !== oldLen) {
+        const isColVec = target.shape[0] > 1 && target.shape[1] === 1;
+        target.shape = isColVec ? [newLen, 1] : [1, newLen];
+      }
+    }
     target.bindElement(rt, k, value as RuntimeValue);
     return target;
   },

@@ -34,6 +34,22 @@ assert(numel(c4) == 3);
 assert(strcmp(c4{1}, 'a'));
 assert(strcmp(c4{3}, 'c'));
 
+%% Cell auto-growth inside a for-loop (exercises JIT __cellWrite path)
+c4b = {};
+for j = 1:3
+    c4b{j} = j;
+end
+assert(numel(c4b) == 3);
+assert(isequal(size(c4b), [1 3]));
+assert(c4b{1} == 1 && c4b{2} == 2 && c4b{3} == 3);
+
+% Skipping growth preserves orientation of an existing column-vector cell
+c4c = {10; 20};
+c4c{4} = 40;
+assert(isequal(size(c4c), [4 1]));
+assert(c4c{1} == 10 && c4c{2} == 20 && c4c{4} == 40);
+assert(isempty(c4c{3}));
+
 %% Empty cell array
 c5 = {};
 assert(iscell(c5));
