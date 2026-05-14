@@ -60,6 +60,30 @@ function literalNumber(e: JitExpr): number | null {
 
 /** Fold a Binary expression whose operands are both literal. Only covers
  *  the ops we need for dead-branch elimination on `if nargout > K`. */
+/** Conservative purity check used by `tryConstantFoldBinary`. The
+ *  fold drops both operand JitExprs and emits a fresh NumberLiteral
+ *  — so we must NOT fold when either side contains a Call /
+ *  UserCall / UserDispatchCall / Index, whose evaluation has
+ *  observable effects (I/O, mutation, allocation, bounds checks).
+ *  Pure Var reads / literals / Unary / Binary on those compose
+ *  freely. */
+function exprIsSideEffectFree(e: JitExpr): boolean {
+  switch (e.tag) {
+    case "NumberLiteral":
+    case "ImagLiteral":
+    case "StringLiteral":
+    case "Var":
+    case "MemberRead":
+      return true;
+    case "Unary":
+      return exprIsSideEffectFree(e.operand);
+    case "Binary":
+      return exprIsSideEffectFree(e.left) && exprIsSideEffectFree(e.right);
+    default:
+      return false;
+  }
+}
+
 function tryConstantFoldBinary(
   op: BinaryOperation,
   left: JitExpr,
@@ -68,6 +92,15 @@ function tryConstantFoldBinary(
   const a = literalNumber(left);
   const b = literalNumber(right);
   if (a === null || b === null) return null;
+  // Refuse to fold when either operand can have side effects: a
+  // dropped UserCall (whose return type carried `exact`) would skip
+  // the callee body entirely. The cond expression's COMPUTATION must
+  // still happen at runtime even when its result is statically
+  // known. For the common dead-branch case (`if nargin > K` where
+  // both sides are Var/literal), purity is trivially satisfied.
+  if (!exprIsSideEffectFree(left) || !exprIsSideEffectFree(right)) {
+    return null;
+  }
   let v: number | null = null;
   switch (op) {
     case BinaryOperation.Equal:

@@ -41,6 +41,27 @@ function constantBool(e: JitExpr): boolean | null {
   return null;
 }
 
+/** Conservative purity check used by `lowerIf`'s dead-branch path:
+ *  literals / variable reads / pure arithmetic on those return true.
+ *  Anything that can call user code (Call / UserCall / Index with
+ *  bounds-check side effects / etc.) returns false so the cond's
+ *  side effects still emit when the branch is folded. */
+function exprIsPure(e: JitExpr): boolean {
+  switch (e.tag) {
+    case "NumberLiteral":
+    case "ImagLiteral":
+    case "StringLiteral":
+    case "Var":
+      return true;
+    case "Unary":
+      return exprIsPure(e.operand);
+    case "Binary":
+      return exprIsPure(e.left) && exprIsPure(e.right);
+    default:
+      return false;
+  }
+}
+
 // ── Statement lowering ──────────────────────────────────────────────────
 
 export function lowerStmts(ctx: LowerCtx, stmts: Stmt[]): JitStmt[] | null {
@@ -1205,25 +1226,38 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
 
   // Dead-branch elimination: if the cond folded to a constant (e.g.
   // `nargout > 1` with nargout inlined to a literal), lower only the live
-  // branch so unreachable code can't bail.
+  // branch so unreachable code can't bail. The cond's COMPUTATION is
+  // still emitted as an `ExprStmt` prefix so any side-effecting
+  // subexpression (e.g. a `disp(...)` inside a user fn whose
+  // specialization returns an exact literal) still runs at runtime —
+  // only the BRANCH decision is folded out. `exprIsPure` skips the
+  // prefix when no side effect is reachable from cond, keeping the
+  // common `if true` / `if 5 > 0` case clean.
+  const sideEffectStmt = (e: JitExpr): JitStmt[] =>
+    exprIsPure(e) ? [] : [{ tag: "ExprStmt", expr: e }];
   const constBool = constantBool(cond);
   if (constBool === true) {
     const thenBody = lowerStmts(ctx, stmt.thenBody);
-    return thenBody ?? null;
+    if (!thenBody) return null;
+    return [...sideEffectStmt(cond), ...thenBody];
   }
   if (constBool === false) {
+    const prefix: JitStmt[] = [...sideEffectStmt(cond)];
     for (const eib of stmt.elseifBlocks) {
       const eibCond = lowerExpr(ctx, eib.cond);
       if (!eibCond) return null;
       const eibConst = constantBool(eibCond);
       if (eibConst === true) {
-        return lowerStmts(ctx, eib.body) ?? null;
+        const body = lowerStmts(ctx, eib.body);
+        if (!body) return null;
+        return [...prefix, ...sideEffectStmt(eibCond), ...body];
       }
       if (eibConst !== false) {
         // Non-constant elseif with dead then → fall back to normal path
         // rather than half-specializing.
         break;
       }
+      prefix.push(...sideEffectStmt(eibCond));
     }
     if (stmt.elseBody && constBool === false) {
       // Check that all elseifs were also constant-false before taking the else.
@@ -1232,10 +1266,13 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
         return c !== null && constantBool(c) === false;
       });
       if (allElseifFalse) {
-        return lowerStmts(ctx, stmt.elseBody) ?? null;
+        const body = lowerStmts(ctx, stmt.elseBody);
+        if (!body) return null;
+        return [...prefix, ...body];
       }
     }
-    // No elseif matched and no else (or else not fully dead): emit nothing.
+    // No elseif matched and no else (or else not fully dead): emit nothing
+    // beyond the cond side-effects already accumulated in `prefix`.
     if (
       !stmt.elseBody &&
       stmt.elseifBlocks.every(eib => {
@@ -1243,7 +1280,7 @@ function lowerIf(ctx: LowerCtx, stmt: Stmt & { type: "If" }): JitStmt[] | null {
         return c !== null && constantBool(c) === false;
       })
     ) {
-      return [];
+      return prefix;
     }
     // Fall through to normal handling otherwise.
   }
