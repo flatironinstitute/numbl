@@ -1396,10 +1396,16 @@ function lowerUserFuncCall(
   const calleeFn = resolveUserFunction(interp, expr.name, argJitTypes);
   if (!calleeFn) return undefined; // no user function found — fall through to builtins
 
-  // Build identity string for unique naming
+  // Build identity string for unique naming. Use the call-site name
+  // (`expr.name`) rather than the AST function name (`calleeFn.name`):
+  // for packaged workspace calls these differ (`pkg.foo` vs `foo`), and
+  // two packages with same-named functions (e.g. `+pkg/foo.m` and
+  // `+other/foo.m`) must hash to distinct identities. The displayed
+  // jitName still prefers the bare name for readability — collision is
+  // already prevented by the identity hash.
   const calleeNargout = 1; // nested calls always expect 1 output
   const typeKey = argJitTypes.map(jitTypeKey).join(":");
-  const identity = `${interp.currentFile}:${calleeFn.name}:${calleeNargout}:${typeKey}`;
+  const identity = `${interp.currentFile}:${expr.name}:${calleeNargout}:${typeKey}`;
   const jitName = computeJitFnName(identity, calleeFn.name);
 
   // Already generated? Reuse.
