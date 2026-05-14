@@ -494,22 +494,36 @@ function emitStmt(lines: string[], stmt: JitStmt, indent: string): void {
     case "For": {
       const v = mangle(stmt.varName);
       const t = `$t${++_tmpCounter}`;
-      const start = emitExpr(stmt.start);
-      const end = emitExpr(stmt.end);
-      const step = stmt.step ? emitExpr(stmt.step) : "1";
+      const startExpr = emitExpr(stmt.start);
+      const endExpr = emitExpr(stmt.end);
+      const stepExpr = stmt.step ? emitExpr(stmt.step) : null;
+      // Snapshot start/end/step into locals once at loop entry — MATLAB
+      // semantics evaluate `1:n` to a vector at loop start, so a body
+      // that mutates `n` must NOT extend the loop. Re-emitting the raw
+      // expression inside the for-clause re-reads the live binding
+      // every iteration. Pinning to consts also makes this match the
+      // interpreter (`Math.max(0, Math.floor((end-start)/step + 1 + 1e-10))`
+      // is computed once over the snapshotted bounds).
+      const sn = _tmpCounter;
+      const startTmp = `$start${sn}`;
+      const endTmp = `$end${sn}`;
+      lines.push(`${indent}const ${startTmp} = ${startExpr};`);
+      lines.push(`${indent}const ${endTmp} = ${endExpr};`);
       // Use a separate temp loop variable and assign the iterator inside
       // the body. This is important for two reasons:
       // 1. The iterator variable must retain the last value actually used
       //    in the loop body (MATLAB semantics), not the incremented value
       //    that failed the loop condition.
       // 2. This pattern appears to be faster in V8 (reason unclear).
-      if (stmt.step) {
+      if (stepExpr !== null) {
+        const stepTmp = `$step${sn}`;
+        lines.push(`${indent}const ${stepTmp} = ${stepExpr};`);
         lines.push(
-          `${indent}for (var ${t} = ${start}; ${step} !== 0 && (${step} > 0 ? ${t} <= ${end} : ${t} >= ${end}); ${t} += ${step}) {`
+          `${indent}for (var ${t} = ${startTmp}; ${stepTmp} !== 0 && (${stepTmp} > 0 ? ${t} <= ${endTmp} : ${t} >= ${endTmp}); ${t} += ${stepTmp}) {`
         );
       } else {
         lines.push(
-          `${indent}for (var ${t} = ${start}; ${t} <= ${end}; ${t} += 1) {`
+          `${indent}for (var ${t} = ${startTmp}; ${t} <= ${endTmp}; ${t} += 1) {`
         );
       }
       lines.push(`${indent}  $rt.checkCancel();`);

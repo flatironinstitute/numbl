@@ -319,17 +319,30 @@ function emitStmt(
     case "For": {
       const v = mangle(s.varName);
       const t = `__t${++ctx.tmpCounter}`;
-      const start = realExpr(emitExpr(s.start, ctx));
-      const end = realExpr(emitExpr(s.end, ctx));
+      const sn = ctx.tmpCounter;
+      const startExpr = realExpr(emitExpr(s.start, ctx));
+      const endExpr = realExpr(emitExpr(s.end, ctx));
+      // Snapshot start/end (and step) once at loop entry. MATLAB
+      // semantics evaluate `1:n` to a vector on entry, so a body
+      // that mutates `n` MUST NOT extend the loop. Re-emitting the
+      // raw expressions inside the for-clause re-reads the live
+      // bindings every iteration. Pinning to locals matches the
+      // interpreter (which calls `forIter` on the once-evaluated
+      // range value).
+      const startTmp = `__start${sn}`;
+      const endTmp = `__end${sn}`;
+      lines.push(`${indent}const double ${startTmp} = ${startExpr};`);
+      lines.push(`${indent}const double ${endTmp} = ${endExpr};`);
       if (s.step === null) {
         lines.push(
-          `${indent}for (double ${t} = ${start}; ${t} <= ${end}; ${t} += 1.0) {`
+          `${indent}for (double ${t} = ${startTmp}; ${t} <= ${endTmp}; ${t} += 1.0) {`
         );
       } else {
-        const step = realExpr(emitExpr(s.step, ctx));
-        const sn = ctx.tmpCounter;
+        const stepExpr = realExpr(emitExpr(s.step, ctx));
+        const stepTmp = `__step${sn}`;
+        lines.push(`${indent}const double ${stepTmp} = ${stepExpr};`);
         lines.push(
-          `${indent}for (double ${t} = ${start}, __step${sn} = ${step}; __step${sn} != 0.0 && (__step${sn} > 0.0 ? ${t} <= ${end} : ${t} >= ${end}); ${t} += __step${sn}) {`
+          `${indent}for (double ${t} = ${startTmp}; ${stepTmp} != 0.0 && (${stepTmp} > 0.0 ? ${t} <= ${endTmp} : ${t} >= ${endTmp}); ${t} += ${stepTmp}) {`
         );
       }
       lines.push(`${indent}  ${v} = ${t};`);
