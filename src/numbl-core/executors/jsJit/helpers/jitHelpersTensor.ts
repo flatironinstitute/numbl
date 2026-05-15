@@ -344,9 +344,13 @@ export function tensorNeg(dest: unknown, a: RuntimeTensor): RuntimeTensor {
     const aData = a.data;
     const aImag = a.imag;
     for (let i = 0; i < n; i++) outR[i] = -aData[i];
+    // The inner `outI` previously shadowed this declaration, so the
+    // outer `outI` stayed `undefined` and the imag lane was dropped
+    // — `disp(-z)` on a complex tensor rendered the negated real
+    // parts only. Reuse the outer binding so the imag lane survives.
     let outI: Float64Array | undefined;
     if (aImag) {
-      const outI = reuse ? reuse.outIm : allocFloat64Array(n);
+      outI = reuse ? reuse.outIm : allocFloat64Array(n);
       for (let i = 0; i < n; i++) outI[i] = -aImag[i];
     }
     return finalizeSplitReused(outR, outI, a.shape.slice(), dest);
