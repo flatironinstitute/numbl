@@ -17,11 +17,8 @@ import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execSync } from "child_process";
-import {
-  startPlotServer,
-  type PlotServer,
-  type PlotServerOptions,
-} from "./cli-plot-server.js";
+import { type PlotServerOptions } from "./cli-plot-server.js";
+import { createPlotHandler } from "./cli-plot-handler.js";
 import {
   getAllIBuiltinNames,
   getIBuiltinHelp,
@@ -46,7 +43,6 @@ import { isOptLevel } from "./numbl-core/executors/plugins.js";
 // the browser bundle (which never imports this file) stays free of
 // the cJit/compile.ts node-module dependency graph.
 import "./numbl-core/executors/cJit/register.js";
-import type { PlotInstruction } from "./graphics/types.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
 
@@ -973,54 +969,6 @@ async function cmdRepl(args: string[]) {
     opts.optimization,
     opts.fastMath
   );
-}
-
-// ── Plot handler ─────────────────────────────────────────────────────────────
-
-function createPlotHandler(disabled: boolean, plotOpts?: PlotServerOptions) {
-  if (disabled) {
-    return {
-      onDrawnow: undefined,
-      flushAndWait: async () => {},
-    };
-  }
-
-  let plotServer: PlotServer | null = null;
-  let serverStarting: Promise<PlotServer> | null = null;
-  const pendingBatches: PlotInstruction[][] = [];
-
-  const onDrawnow = (instructions: PlotInstruction[]) => {
-    if (plotServer) {
-      plotServer.sendInstructions(instructions);
-    } else {
-      pendingBatches.push(instructions);
-      if (!serverStarting) {
-        serverStarting = startPlotServer(plotOpts).then(ps => {
-          plotServer = ps;
-          for (const batch of pendingBatches) {
-            ps.sendInstructions(batch);
-          }
-          pendingBatches.length = 0;
-          return ps;
-        });
-      }
-    }
-  };
-
-  const flushAndWait = async (remaining: PlotInstruction[]) => {
-    if (remaining.length > 0) {
-      onDrawnow(remaining);
-    }
-    if (serverStarting) {
-      plotServer = await serverStarting;
-    }
-    if (plotServer) {
-      plotServer.scriptDone();
-      await plotServer.closed;
-    }
-  };
-
-  return { onDrawnow, flushAndWait };
 }
 
 // ── Show Profile ─────────────────────────────────────────────────────────────
