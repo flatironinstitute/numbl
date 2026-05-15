@@ -52,92 +52,94 @@ import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { dispatchPlotBuiltin } from "./plotBuiltinDispatch.js";
+import {
+  fplotCall as _fplotCall,
+  fplot3Call as _fplot3Call,
+  streamlineCall as _streamlineCall,
+  stream2Call as _stream2Call,
+} from "./runtimePlot.js";
 
 // ── Plot dispatch helper ─────────────────────────────────────────────────
 
+/** Names this dispatcher accepts. Same set as before the refactor — a
+ *  superset would be wrong because (a) graphics ops like `figure`,
+ *  `title`, `hold`, etc. are also registered as IBuiltins via
+ *  `registerSpecial`, and handling them HERE in addition would
+ *  double-push; (b) the data-bearing names below are pre-IBuiltin and
+ *  bypass that registry on this path. The interpreter path
+ *  (`interpreterFunctions.ts → rt.builtins[name]`) and this JIT path
+ *  both end up at `dispatchPlotBuiltin` exactly once. */
+const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
+  "plot",
+  "plot3",
+  "surf",
+  "scatter",
+  "imagesc",
+  "pcolor",
+  "contour",
+  "contourf",
+  "mesh",
+  "waterfall",
+  "bar",
+  "barh",
+  "bar3",
+  "bar3h",
+  "stairs",
+  "errorbar",
+  "semilogx",
+  "semilogy",
+  "loglog",
+  "area",
+  "scatter3",
+  "histogram",
+  "histogram2",
+  "boxchart",
+  "swarmchart",
+  "swarmchart3",
+  "piechart",
+  "donutchart",
+  "heatmap",
+  "quiver",
+]);
+
 /**
- * Dispatches plot/graphics function calls.
- * Returns the result if `name` is a plotting function, or `undefined` otherwise.
+ * Dispatches plot/graphics function calls used directly by the JIT
+ * (`rt.dispatch` / `rt.callBuiltin`). Side-effect-only names route
+ * through the shared `dispatchPlotBuiltin` in
+ * `plotBuiltinDispatch.ts`; names with non-trivial return values or
+ * that need to evaluate a numbl function handle (`fplot`, `fplot3`,
+ * `streamline`, `stream2`) keep custom handlers.
+ *
+ * Returns the result if `name` is a plotting function, or `undefined`
+ * otherwise.
  */
 function dispatchPlotCall(
   rt: Runtime,
   name: string,
   args: unknown[]
 ): unknown | undefined {
+  if (PLOT_DISPATCH_NAMES_JIT.has(name)) {
+    dispatchPlotBuiltin(
+      name,
+      args.map(a => ensureRuntimeValue(a)),
+      rt.plotInstructions,
+      rt
+    );
+    return undefined;
+  }
+  const margs = args.map(a => ensureRuntimeValue(a));
   switch (name) {
-    case "plot":
-      return rt.plot_call(args.map(a => ensureRuntimeValue(a)));
-    case "plot3":
-      return rt.plot3_call(args.map(a => ensureRuntimeValue(a)));
-    case "surf":
-      return rt.surf_call(args.map(a => ensureRuntimeValue(a)));
-    case "scatter":
-      return rt.scatter_call(args.map(a => ensureRuntimeValue(a)));
-    case "imagesc":
-      return rt.imagesc_call(args.map(a => ensureRuntimeValue(a)));
-    case "pcolor":
-      return rt.pcolor_call(args.map(a => ensureRuntimeValue(a)));
-    case "contour":
-      return rt.contour_call(
-        args.map(a => ensureRuntimeValue(a)),
-        false
-      );
-    case "contourf":
-      return rt.contour_call(
-        args.map(a => ensureRuntimeValue(a)),
-        true
-      );
-    case "mesh":
-    case "waterfall":
-      return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-    case "bar":
-      return rt.bar_call(args.map(a => ensureRuntimeValue(a)));
-    case "barh":
-      return rt.barh_call(args.map(a => ensureRuntimeValue(a)));
-    case "bar3":
-      return rt.bar3_call(args.map(a => ensureRuntimeValue(a)));
-    case "bar3h":
-      return rt.bar3h_call(args.map(a => ensureRuntimeValue(a)));
-    case "stairs":
-      return rt.stairs_call(args.map(a => ensureRuntimeValue(a)));
-    case "errorbar":
-      return rt.errorbar_call(args.map(a => ensureRuntimeValue(a)));
-    case "semilogx":
-      return rt.semilogx_call(args.map(a => ensureRuntimeValue(a)));
-    case "semilogy":
-      return rt.semilogy_call(args.map(a => ensureRuntimeValue(a)));
-    case "loglog":
-      return rt.loglog_call(args.map(a => ensureRuntimeValue(a)));
-    case "area":
-      return rt.area_call(args.map(a => ensureRuntimeValue(a)));
     case "fplot":
-      return rt.fplot_call(args.map(a => ensureRuntimeValue(a)));
+      _fplotCall(rt, rt.plotInstructions, margs);
+      return undefined;
     case "fplot3":
-      return rt.fplot3_call(args.map(a => ensureRuntimeValue(a)));
-    case "scatter3":
-      return rt.scatter3_call(args.map(a => ensureRuntimeValue(a)));
-    case "histogram":
-      return rt.histogram_call(args.map(a => ensureRuntimeValue(a)));
-    case "histogram2":
-      return rt.histogram2_call(args.map(a => ensureRuntimeValue(a)));
-    case "boxchart":
-      return rt.boxchart_call(args.map(a => ensureRuntimeValue(a)));
-    case "swarmchart":
-      return rt.swarmchart_call(args.map(a => ensureRuntimeValue(a)));
-    case "swarmchart3":
-      return rt.swarmchart3_call(args.map(a => ensureRuntimeValue(a)));
-    case "piechart":
-      return rt.piechart_call(args.map(a => ensureRuntimeValue(a)));
-    case "donutchart":
-      return rt.donutchart_call(args.map(a => ensureRuntimeValue(a)));
-    case "heatmap":
-      return rt.heatmap_call(args.map(a => ensureRuntimeValue(a)));
-    case "quiver":
-      return rt.quiver_call(args.map(a => ensureRuntimeValue(a)));
+      _fplot3Call(rt, rt.plotInstructions, margs);
+      return undefined;
     case "streamline":
-      return rt.streamline_call(args.map(a => ensureRuntimeValue(a)));
+      return _streamlineCall(rt.plotInstructions, margs);
     case "stream2":
-      return rt.stream2_call(args.map(a => ensureRuntimeValue(a)));
+      return _stream2Call(margs);
     default:
       return undefined;
   }

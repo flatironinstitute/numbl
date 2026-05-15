@@ -43,10 +43,7 @@ import { getAllBuiltinNames } from "../helpers/registry.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
 import { getTicTime } from "../interpreter/builtins/time-system.js";
 import { hashKey } from "../interpreter/builtins/dictionary.js";
-import {
-  plotInstr as _plotInstr,
-  legendCall as _legendCall,
-} from "./runtimePlot.js";
+import { dispatchPlotBuiltin } from "./plotBuiltinDispatch.js";
 import {
   solveRK,
   dormandPrince45,
@@ -1693,247 +1690,87 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
   registerSpecial("figure", (nargout, args) => {
     const handle = args.length > 0 ? args[0] : 1;
-    _plotInstr(rt.plotInstructions, { type: "set_figure_handle", handle });
+    dispatchPlotBuiltin(
+      "figure",
+      args.map(ensureRuntimeValue),
+      rt.plotInstructions,
+      rt
+    );
     return nargout >= 1
       ? RTV.num(toNumber(ensureRuntimeValue(handle)))
       : undefined;
   });
 
-  registerSpecial("subplot", (nargout, args) => {
-    if (args.length >= 3) {
-      _plotInstr(rt.plotInstructions, {
-        type: "set_subplot",
-        rows: args[0],
-        cols: args[1],
-        index: args[2],
-      });
-    }
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
-
-  // Compute a flow grid (rows × cols) that fits n tiles with a roughly
-  // square arrangement.
-  const flowGrid = (n: number): { rows: number; cols: number } => {
-    const k = Math.max(1, n);
-    const cols = Math.max(1, Math.ceil(Math.sqrt(k)));
-    const rows = Math.max(1, Math.ceil(k / cols));
-    return { rows, cols };
-  };
-
-  registerSpecial("tiledlayout", (nargout, args) => {
-    let mode: "fixed" | "flow" | "vertical" | "horizontal" = "flow";
-    let rows = 1;
-    let cols = 1;
-    let pos = 0;
-    if (args.length === 0) {
-      mode = "flow";
-    } else {
-      const first = args[0];
-      if (isRuntimeNumber(first)) {
-        if (args.length < 2 || !isRuntimeNumber(args[1])) {
-          throw new RuntimeError(
-            "tiledlayout: numeric form requires both M and N"
-          );
-        }
-        rows = Math.max(1, Math.floor(toNumber(first)));
-        cols = Math.max(1, Math.floor(toNumber(args[1])));
-        mode = "fixed";
-        pos = 2;
-      } else {
-        const s = toString(first).toLowerCase();
-        if (s === "flow" || s === "vertical" || s === "horizontal") {
-          mode = s;
-          pos = 1;
-        } else {
-          throw new RuntimeError(
-            `tiledlayout: unknown arrangement '${toString(first)}'`
-          );
-        }
-      }
-    }
-    // Silently consume remaining name-value pairs (TileSpacing, Padding, etc.).
-    while (pos + 1 < args.length) pos += 2;
-    // Replace any existing layout/axes — MATLAB does this automatically.
-    _plotInstr(rt.plotInstructions, { type: "clf" });
-    rt.tiledLayoutState = { rows, cols, mode, count: 0 };
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
-
-  registerSpecial("nexttile", (nargout, args) => {
-    if (!rt.tiledLayoutState) {
-      _plotInstr(rt.plotInstructions, { type: "clf" });
-      rt.tiledLayoutState = { rows: 1, cols: 1, mode: "flow", count: 0 };
-    }
-    const st = rt.tiledLayoutState;
-    let targetIndex: number | null = null;
-    if (args.length >= 1 && isRuntimeNumber(args[0])) {
-      targetIndex = Math.max(1, Math.floor(toNumber(args[0])));
-    }
-    // Span argument [r c] is accepted for compatibility but not rendered as
-    // a true span; we still place the axes at its upper-left index.
-    if (targetIndex === null) {
-      st.count += 1;
-      targetIndex = st.count;
-    } else if (targetIndex > st.count) {
-      st.count = targetIndex;
-    }
-    let { rows, cols } = st;
-    if (st.mode === "flow") {
-      const g = flowGrid(st.count);
-      rows = g.rows;
-      cols = g.cols;
-      st.rows = rows;
-      st.cols = cols;
-    } else if (st.mode === "vertical") {
-      rows = Math.max(1, st.count);
-      cols = 1;
-      st.rows = rows;
-      st.cols = cols;
-    } else if (st.mode === "horizontal") {
-      rows = 1;
-      cols = Math.max(1, st.count);
-      st.rows = rows;
-      st.cols = cols;
-    }
-    _plotInstr(rt.plotInstructions, {
-      type: "set_subplot",
-      rows,
-      cols,
-      index: targetIndex,
+  // Bulk register graphics ops that share the simple
+  //   "push instruction, return RTV.num(<placeholder>) when nargout>=1"
+  // pattern. The push side lives in plotBuiltinDispatch.ts — one source
+  // of truth for the (name → set_xxx) mapping.
+  const PLOT_RETURNS_ZERO = [
+    "subplot",
+    "tiledlayout",
+    "nexttile",
+    "title",
+    "xlabel",
+    "ylabel",
+    "sgtitle",
+    "legend",
+  ];
+  for (const name of PLOT_RETURNS_ZERO) {
+    registerSpecial(name, (nargout, args) => {
+      dispatchPlotBuiltin(
+        name,
+        args.map(ensureRuntimeValue),
+        rt.plotInstructions,
+        rt
+      );
+      return nargout >= 1 ? RTV.num(0) : undefined;
     });
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
+  }
 
-  registerSpecial("title", (nargout, args) => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, { type: "set_title", text: args[0] });
-    }
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
+  const PLOT_RETURNS_ONE = ["close", "clf"];
+  for (const name of PLOT_RETURNS_ONE) {
+    registerSpecial(name, (nargout, args) => {
+      dispatchPlotBuiltin(
+        name,
+        args.map(ensureRuntimeValue),
+        rt.plotInstructions,
+        rt
+      );
+      return nargout >= 1 ? RTV.num(1) : undefined;
+    });
+  }
 
-  registerSpecial("xlabel", (nargout, args) => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, { type: "set_xlabel", text: args[0] });
-    }
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
+  // `hold`, `grid`, `shading` are truly void in MATLAB (they error on
+  // `r = hold`). registerSpecialVoid surfaces that as
+  // "Too many output arguments." when nargout > 0.
+  const PLOT_VOID = ["hold", "grid", "shading"];
+  for (const name of PLOT_VOID) {
+    registerSpecialVoid(name, args => {
+      dispatchPlotBuiltin(
+        name,
+        args.map(ensureRuntimeValue),
+        rt.plotInstructions,
+        rt
+      );
+    });
+  }
 
-  registerSpecial("ylabel", (nargout, args) => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, { type: "set_ylabel", text: args[0] });
-    }
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
-
-  // `hold` and `grid` are truly void in MATLAB (they error on `r = hold`).
-  registerSpecialVoid("hold", args => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, { type: "set_hold", value: args[0] });
-      // Also update rt.holdState so ishold() returns the correct value.
-      const last = rt.plotInstructions[rt.plotInstructions.length - 1];
-      if (last && last.type === "set_hold") {
-        rt.holdState = last.value;
-      }
-    }
-  });
-
-  registerSpecialVoid("grid", args => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, { type: "set_grid", value: args[0] });
-    }
-  });
-
-  registerSpecial("legend", (nargout, args) => {
-    _legendCall(rt.plotInstructions, args);
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
-
-  registerSpecial("close", (nargout, args) => {
-    if (args.length > 0) {
-      const val = toString(args[0]);
-      if (val === "all") {
-        _plotInstr(rt.plotInstructions, { type: "close_all" });
-      } else {
-        _plotInstr(rt.plotInstructions, { type: "close" });
-      }
-    } else {
-      _plotInstr(rt.plotInstructions, { type: "close" });
-    }
-    return nargout >= 1 ? RTV.num(1) : undefined;
-  });
-
-  registerSpecial("sgtitle", (nargout, args) => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, { type: "set_sgtitle", text: args[0] });
-    }
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
-
-  // `shading` is truly void in MATLAB.
-  registerSpecialVoid("shading", args => {
-    if (args.length > 0) {
-      _plotInstr(rt.plotInstructions, {
-        type: "set_shading",
-        shading: args[0],
-      });
-    }
-  });
-
-  registerSpecial("clf", nargout => {
-    _plotInstr(rt.plotInstructions, { type: "clf" });
-    return nargout >= 1 ? RTV.num(1) : undefined;
-  });
-
+  // `colorbar` returns a handle-shaped struct when an output is
+  // requested — kept as a custom registration so we can build the
+  // struct from the args we just parsed. The push side still goes
+  // through dispatchPlotBuiltin (which re-parses the args to produce
+  // the same set_colorbar instruction).
   registerSpecial("colorbar", (nargout, args) => {
-    // Recognized location keywords (MATLAB).
-    const LOCATIONS = new Set([
-      "east",
-      "west",
-      "north",
-      "south",
-      "eastoutside",
-      "westoutside",
-      "northoutside",
-      "southoutside",
-    ]);
-    let value = "on";
-    let location: string | undefined;
-    // Walk positional string args. We accept 'off', a location keyword, or
-    // name-value pairs (which we skip silently).
-    let i = 0;
-    while (i < args.length) {
-      let s: string;
-      try {
-        s = toString(args[i]);
-      } catch {
-        break;
-      }
-      const lower = s.toLowerCase();
-      if (lower === "off") {
-        value = "off";
-        i++;
-        continue;
-      }
-      if (LOCATIONS.has(lower)) {
-        location = lower;
-        i++;
-        continue;
-      }
-      // Name-value pairs (Direction, Ticks, etc.) — accept and skip silently.
-      i += 2;
-    }
-    _plotInstr(rt.plotInstructions, {
-      type: "set_colorbar",
-      value,
-      location,
-    });
-    // MATLAB returns a ColorBar handle when an output is requested. We don't
-    // model real handle objects, so return a placeholder struct.
+    const margs = args.map(ensureRuntimeValue);
+    dispatchPlotBuiltin("colorbar", margs, rt.plotInstructions, rt);
     if (nargout >= 1) {
-      return RTV.struct({
-        Location: RTV.char(location ?? "eastoutside"),
-        Visible: RTV.char(value === "off" ? "off" : "on"),
-      });
+      const last = rt.plotInstructions[rt.plotInstructions.length - 1];
+      if (last && last.type === "set_colorbar") {
+        return RTV.struct({
+          Location: RTV.char(last.location ?? "eastoutside"),
+          Visible: RTV.char(last.value === "off" ? "off" : "on"),
+        });
+      }
     }
     return undefined;
   });

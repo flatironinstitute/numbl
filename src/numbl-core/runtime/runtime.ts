@@ -98,44 +98,18 @@ import {
   memberChainAssign as _memberChainAssign,
 } from "./runtimeMemberAccess.js";
 import {
-  plotInstr as _plotInstr,
-  plotCall as _plotCall,
-  plot3Call as _plot3Call,
-  surfCall as _surfCall,
-  scatterCall as _scatterCall,
-  imagescCall as _imagescCall,
   pcolorCall as _pcolorCall,
-  contourCall as _contourCall,
-  meshCall as _meshCall,
-  barCall as _barCall,
-  barhCall as _barhCall,
-  bar3Call as _bar3Call,
-  bar3hCall as _bar3hCall,
-  stairsCall as _stairsCall,
-  errorbarCall as _errorbarCall,
-  semilogxCall as _semilogxCall,
-  semilogyCall as _semilogyCall,
-  loglogCall as _loglogCall,
-  areaCall as _areaCall,
   fplotCall as _fplotCall,
   fplot3Call as _fplot3Call,
-  scatter3Call as _scatter3Call,
-  histogramCall as _histogramCall,
-  histogram2Call as _histogram2Call,
-  boxchartCall as _boxchartCall,
-  swarmchartCall as _swarmchartCall,
-  swarmchart3Call as _swarmchart3Call,
-  piechartCall as _piechartCall,
-  donutchartCall as _donutchartCall,
-  heatmapCall as _heatmapCall,
-  quiverCall as _quiverCall,
-  viewCall as _viewCall,
-  legendCall as _legendCall,
   streamlineCall as _streamlineCall,
   stream2Call as _stream2Call,
   drawnow as _drawnow,
   pause as _pause,
 } from "./runtimePlot.js";
+import {
+  dispatchPlotBuiltin,
+  PLOT_DISPATCH_NAMES,
+} from "./plotBuiltinDispatch.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
 import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
@@ -401,24 +375,28 @@ export class Runtime {
     // Register special builtins
     registerSpecialBuiltins(this);
 
-    // Register plot and surf as builtins so they can be called via $rt.builtins["plot"]/$rt.builtins["surf"]
-    this.builtins["plot"] = (_nargout: number, args: unknown[]) => {
-      this.plot_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["plot3"] = (_nargout: number, args: unknown[]) => {
-      this.plot3_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["surf"] = (_nargout: number, args: unknown[]) => {
-      this.surf_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["scatter"] = (_nargout: number, args: unknown[]) => {
-      this.scatter_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["imagesc"] = (_nargout: number, args: unknown[]) => {
-      this.imagesc_call(args.map(a => ensureRuntimeValue(a)));
-    };
+    // ── Plot builtins (data-bearing + graphics ops) ────────────────────
+    // Side-effect-only names route through the shared
+    // `dispatchPlotBuiltin` helper. The exceptional ones (pcolor's
+    // nargout handle return, fplot/fplot3's Runtime-dependent
+    // evaluation, streamline/stream2's return values) keep custom
+    // registrations below.
+    for (const name of PLOT_DISPATCH_NAMES) {
+      this.builtins[name] = (_nargout: number, args: unknown[]) => {
+        dispatchPlotBuiltin(
+          name,
+          args.map(a => ensureRuntimeValue(a)),
+          this.plotInstructions,
+          this
+        );
+      };
+    }
+    // `pcolor` returns a graphics handle when an output is requested —
+    // the dispatch table pushes the instruction, and we read back the
+    // freshly-pushed trace for the handle. Override the loop entry.
     this.builtins["pcolor"] = (_nargout: number, args: unknown[]) => {
-      this.pcolor_call(args.map(a => ensureRuntimeValue(a)));
+      const margs = args.map(a => ensureRuntimeValue(a));
+      _pcolorCall(this.plotInstructions, margs);
       if (_nargout >= 1) {
         const last = this.plotInstructions[this.plotInstructions.length - 1];
         if (last && last.type === "pcolor") {
@@ -430,150 +408,25 @@ export class Runtime {
         return RTV.dummyHandle();
       }
     };
-    this.builtins["contour"] = (_nargout: number, args: unknown[]) => {
-      this.contour_call(
-        args.map(a => ensureRuntimeValue(a)),
-        false
-      );
-    };
-    this.builtins["contourf"] = (_nargout: number, args: unknown[]) => {
-      this.contour_call(
-        args.map(a => ensureRuntimeValue(a)),
-        true
-      );
-    };
-    this.builtins["mesh"] = (_nargout: number, args: unknown[]) => {
-      this.mesh_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["waterfall"] = (_nargout: number, args: unknown[]) => {
-      this.mesh_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["bar"] = (_nargout: number, args: unknown[]) => {
-      this.bar_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["barh"] = (_nargout: number, args: unknown[]) => {
-      this.barh_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["bar3"] = (_nargout: number, args: unknown[]) => {
-      this.bar3_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["bar3h"] = (_nargout: number, args: unknown[]) => {
-      this.bar3h_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["stairs"] = (_nargout: number, args: unknown[]) => {
-      this.stairs_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["errorbar"] = (_nargout: number, args: unknown[]) => {
-      this.errorbar_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["semilogx"] = (_nargout: number, args: unknown[]) => {
-      this.semilogx_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["semilogy"] = (_nargout: number, args: unknown[]) => {
-      this.semilogy_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["loglog"] = (_nargout: number, args: unknown[]) => {
-      this.loglog_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["area"] = (_nargout: number, args: unknown[]) => {
-      this.area_call(args.map(a => ensureRuntimeValue(a)));
-    };
+    // `fplot` / `fplot3` evaluate a user function-handle and so need
+    // the full Runtime context — kept as explicit registrations.
     this.builtins["fplot"] = (_nargout: number, args: unknown[]) => {
-      this.fplot_call(args.map(a => ensureRuntimeValue(a)));
+      _fplotCall(this, this.plotInstructions, args.map(ensureRuntimeValue));
     };
     this.builtins["fplot3"] = (_nargout: number, args: unknown[]) => {
-      this.fplot3_call(args.map(a => ensureRuntimeValue(a)));
+      _fplot3Call(this, this.plotInstructions, args.map(ensureRuntimeValue));
     };
-    this.builtins["scatter3"] = (_nargout: number, args: unknown[]) => {
-      this.scatter3_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["histogram"] = (_nargout: number, args: unknown[]) => {
-      this.histogram_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["histogram2"] = (_nargout: number, args: unknown[]) => {
-      this.histogram2_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["boxchart"] = (_nargout: number, args: unknown[]) => {
-      this.boxchart_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["swarmchart"] = (_nargout: number, args: unknown[]) => {
-      this.swarmchart_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["swarmchart3"] = (_nargout: number, args: unknown[]) => {
-      this.swarmchart3_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["piechart"] = (_nargout: number, args: unknown[]) => {
-      this.piechart_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["donutchart"] = (_nargout: number, args: unknown[]) => {
-      this.donutchart_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["heatmap"] = (_nargout: number, args: unknown[]) => {
-      this.heatmap_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["quiver"] = (_nargout: number, args: unknown[]) => {
-      this.quiver_call(args.map(a => ensureRuntimeValue(a)));
-    };
+    // `streamline` / `stream2` return non-trivial values (handle / matrix).
     this.builtins["streamline"] = (_nargout: number, args: unknown[]) => {
-      const h = this.streamline_call(args.map(a => ensureRuntimeValue(a)));
+      const h = _streamlineCall(
+        this.plotInstructions,
+        args.map(ensureRuntimeValue)
+      );
       if (_nargout >= 1) return h;
     };
     this.builtins["stream2"] = (_nargout: number, args: unknown[]) => {
-      return this.stream2_call(args.map(a => ensureRuntimeValue(a)));
+      return _stream2Call(args.map(ensureRuntimeValue));
     };
-    this.builtins["colormap"] = (_nargout: number, args: unknown[]) => {
-      if (args.length > 0) {
-        const rv = ensureRuntimeValue(args[0]);
-        if (isRuntimeTensor(rv) && rv.shape.length === 2 && rv.shape[1] === 3) {
-          // N×3 custom colormap matrix
-          const rows = rv.shape[0];
-          const data: number[][] = [];
-          for (let i = 0; i < rows; i++) {
-            data.push([rv.data[i], rv.data[rows + i], rv.data[2 * rows + i]]);
-          }
-          _plotInstr(this.plotInstructions, {
-            type: "set_colormap",
-            name: "__custom__",
-            data,
-          });
-        } else {
-          const name = _toString(rv).replace(/^"|"$/g, "");
-          _plotInstr(this.plotInstructions, { type: "set_colormap", name });
-        }
-      }
-    };
-    this.builtins["view"] = (_nargout: number, args: unknown[]) => {
-      this.view_call(args.map(a => ensureRuntimeValue(a)));
-    };
-    this.builtins["zlabel"] = (_nargout: number, args: unknown[]) => {
-      if (args.length > 0) {
-        _plotInstr(this.plotInstructions, {
-          type: "set_zlabel",
-          text: args[0],
-        });
-      }
-    };
-    this.builtins["axis"] = (_nargout: number, args: unknown[]) => {
-      if (args.length > 0) {
-        const val = _toString(ensureRuntimeValue(args[0])).replace(
-          /^"|"$/g,
-          ""
-        );
-        _plotInstr(this.plotInstructions, { type: "set_axis", value: val });
-      }
-    };
-    this.builtins["caxis"] = (_nargout: number, args: unknown[]) => {
-      if (args.length > 0) {
-        const rv = ensureRuntimeValue(args[0]);
-        if (isRuntimeTensor(rv) && rv.data.length >= 2) {
-          _plotInstr(this.plotInstructions, {
-            type: "set_caxis",
-            limits: [rv.data[0], rv.data[1]],
-          });
-        }
-      }
-    };
-    this.builtins["clim"] = this.builtins["caxis"];
   }
 
   public profileEnter(key: string): void {
@@ -1717,168 +1570,11 @@ export class Runtime {
     if (n > hi) throw new RuntimeError("Too many output arguments.");
   }
 
-  // ── Plot instructions ───────────────────────────────────────────────
+  // ── Plot helpers (state-bearing) ────────────────────────────────────
 
-  public plot_instr(
-    instr:
-      | { type: "set_figure_handle"; handle: unknown }
-      | { type: "plot"; x: unknown; y: unknown }
-      | { type: "set_hold"; value: unknown }
-      | { type: "close" }
-      | { type: "close_all" }
-      | { type: "clf" }
-      | { type: "set_subplot"; rows: unknown; cols: unknown; index: unknown }
-      | { type: "set_sgtitle"; text: unknown }
-      | { type: "set_grid"; value: unknown }
-  ): void {
-    _plotInstr(this.plotInstructions, instr);
-    if (instr.type === "set_hold") {
-      // Track the hold state so ishold() can query it.
-      // runtimePlot already parsed the value; read it from the last instruction.
-      const last = this.plotInstructions[this.plotInstructions.length - 1];
-      if (last && last.type === "set_hold") {
-        this.holdState = last.value;
-      }
-    }
-  }
-
+  /** Read the hold state, for `ishold()` queries. */
   public ishold(): RuntimeValue {
     return RTV.logical(this.holdState);
-  }
-
-  public plot_call(args: RuntimeValue[]): void {
-    _plotCall(this.plotInstructions, args);
-  }
-
-  public plot3_call(args: RuntimeValue[]): void {
-    _plot3Call(this.plotInstructions, args);
-  }
-
-  public surf_call(args: RuntimeValue[]): void {
-    _surfCall(this.plotInstructions, args);
-  }
-
-  public scatter_call(args: RuntimeValue[]): void {
-    _scatterCall(this.plotInstructions, args);
-  }
-
-  public imagesc_call(args: RuntimeValue[]): void {
-    _imagescCall(this.plotInstructions, args);
-  }
-
-  public pcolor_call(args: RuntimeValue[]): void {
-    _pcolorCall(this.plotInstructions, args);
-  }
-
-  public contour_call(args: RuntimeValue[], filled: boolean): void {
-    _contourCall(this.plotInstructions, args, filled);
-  }
-
-  public mesh_call(args: RuntimeValue[]): void {
-    _meshCall(this.plotInstructions, args);
-  }
-
-  public bar_call(args: RuntimeValue[]): void {
-    _barCall(this.plotInstructions, args);
-  }
-
-  public barh_call(args: RuntimeValue[]): void {
-    _barhCall(this.plotInstructions, args);
-  }
-
-  public bar3_call(args: RuntimeValue[]): void {
-    _bar3Call(this.plotInstructions, args);
-  }
-
-  public bar3h_call(args: RuntimeValue[]): void {
-    _bar3hCall(this.plotInstructions, args);
-  }
-
-  public stairs_call(args: RuntimeValue[]): void {
-    _stairsCall(this.plotInstructions, args);
-  }
-
-  public errorbar_call(args: RuntimeValue[]): void {
-    _errorbarCall(this.plotInstructions, args);
-  }
-
-  public semilogx_call(args: RuntimeValue[]): void {
-    _semilogxCall(this.plotInstructions, args);
-  }
-
-  public semilogy_call(args: RuntimeValue[]): void {
-    _semilogyCall(this.plotInstructions, args);
-  }
-
-  public loglog_call(args: RuntimeValue[]): void {
-    _loglogCall(this.plotInstructions, args);
-  }
-
-  public area_call(args: RuntimeValue[]): void {
-    _areaCall(this.plotInstructions, args);
-  }
-
-  public fplot_call(args: RuntimeValue[]): void {
-    _fplotCall(this, this.plotInstructions, args);
-  }
-
-  public fplot3_call(args: RuntimeValue[]): void {
-    _fplot3Call(this, this.plotInstructions, args);
-  }
-
-  public scatter3_call(args: RuntimeValue[]): void {
-    _scatter3Call(this.plotInstructions, args);
-  }
-
-  public histogram_call(args: RuntimeValue[]): void {
-    _histogramCall(this.plotInstructions, args);
-  }
-
-  public histogram2_call(args: RuntimeValue[]): void {
-    _histogram2Call(this.plotInstructions, args);
-  }
-
-  public boxchart_call(args: RuntimeValue[]): void {
-    _boxchartCall(this.plotInstructions, args);
-  }
-
-  public swarmchart_call(args: RuntimeValue[]): void {
-    _swarmchartCall(this.plotInstructions, args);
-  }
-
-  public swarmchart3_call(args: RuntimeValue[]): void {
-    _swarmchart3Call(this.plotInstructions, args);
-  }
-
-  public piechart_call(args: RuntimeValue[]): void {
-    _piechartCall(this.plotInstructions, args);
-  }
-
-  public donutchart_call(args: RuntimeValue[]): void {
-    _donutchartCall(this.plotInstructions, args);
-  }
-
-  public heatmap_call(args: RuntimeValue[]): void {
-    _heatmapCall(this.plotInstructions, args);
-  }
-  public quiver_call(args: RuntimeValue[]): void {
-    _quiverCall(this.plotInstructions, args);
-  }
-
-  public streamline_call(args: RuntimeValue[]): RuntimeValue {
-    return _streamlineCall(this.plotInstructions, args);
-  }
-
-  public stream2_call(args: RuntimeValue[]): RuntimeValue {
-    return _stream2Call(args);
-  }
-
-  public view_call(args: RuntimeValue[]): void {
-    _viewCall(this.plotInstructions, args);
-  }
-
-  public legend_call(args: RuntimeValue[]): void {
-    _legendCall(this.plotInstructions, args);
   }
 
   // ── Drawnow / Pause ─────────────────────────────────────────────────
