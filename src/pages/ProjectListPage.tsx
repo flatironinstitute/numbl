@@ -80,6 +80,9 @@ plot(x, y, 'LineWidth', 2);
 title('Damped sine wave');
 xlabel('x'); ylabel('y');`;
 
+const CHUNKIE_EXAMPLE_HASH =
+  "eJztWntv4zYS_ypEgIUph_JayqtrY4G-tr0CRXG4Pdz-4aSBItM2a70qSo6dov3sNzMkJfmVR7MFDocusLFNDofD4fA3D_K3k5lKpD4ZTX47yaJUnoxO4kWdLZW8levh8FZXUTlTejFIT8RJnGeVzCqgecO-LvN7LcsRCy4GVxdMy_g6e8O-lXpZ5QW0hk3rdZaqgiV5NGW-rzLgmCQsjeZJlE3fuk876fg6q1Q8xkFvWAE98j5aSTaVM5WpSuWZxq7lSsbsPQuH_Ukw9oPBxQ2MeFhCU5aXKcduD1ra8e_Zl9QqSo_JdcED1dd1yu_0elZn_MtKpVILJOAjT5R8JEYe_Bv0rCBTpeNSVuoBJMnTSGXYnEVlqoHzBRBFaQHfhgP8Hi-yZQm_aEWyhAli_iWvPOZUyStBYwWM8oSuyjqueC-N1jQikVlPnL99WHqenf2uVsmUffPdDx8YaIrpPFlJ7JkB9wwmwg-Z8N5CJmlP9OKeeFiKSSD8h2U_UDfIRm90GlWtUPCDk5yCmGyRwCr6ciNN_2DZN5-wLI-dMkNFgpULXL3fKJk7_ZkBVovIOU-AcJ6WUnMzXsBYMbkRgfSDMxEMh26pchUldVRJBpKAtuayov1eB8AgAdMpolhy_0yciXMzaLJeI53YbPDjBshgJxfzUk35OhDrAGksI-iz1CAkbK0ZQt9vaHqVtQpSYOilykurJcsCueU1KukPldGYWsddvdJWwBq6yhWwfscAdALj7c7WNOG2_g4Q1lWOM9BMIO3pkwPM0ckrOnnRukalRGse3WmOvDjaNpDN1LwuJffg5DwgEzw9UcY1WDk3eiIy08mROUoBDKBx8b6I8wTUs6V-oeA0czPA7Lys-EL0Pkzn8hskB-vM8kz2YM5FDjadZ3hIc2eLvR9VJj-pabXoiRBoorXSTP5aRwmr1HwBC6JJ06jgpZzeJbUEohip-MTHlQr8c-Phwqs8Hp_8Lg6BWnAbqzJO5B6kfVjDiUwkC0bsGyRndcEiZojp6KGsbC7zVFblBk4Dok2U6MGLMa5FuRJGAJKNWVwhaEyCwXDsDw2i4cwAH4ReoH2kOGUwoD-Jc80rMl1vrFXmvhs7JmUGOwhkeRn7QOUQghgTCFCNyay7F4Ho3fnrrY36tVYrWTbdZe_gDh3ReXh7t0nz6XGdhyP2EezG14uokFMLswb34efdBjcih6XKt_gHHEuppGazvGTVQqJSVP26fcjmfAgrQiERKkogzHgQCIAQRo2gJmgPBgG5DjxNpjkcyWxqjtShPUR1hYfcAfYM4rpcST0wygHHQCwF8PEO7lS4v1Ph4zsVvnSnzo67fLdXZ3A-kkhrFTc-zW7Ya3bgUX969myHelBvZ_t6O3tcb2cv1dv5rZNPVUc1dz5i36kKbFkXCZoxbT-rcqZNf5GD49GA9Sqbs5afYPeqWiCur6Jyg31Vnkgw0djgUpSxvMDoiFgB64rdyepeymyb8ec4IBkFXuhW0SvpvKx42C9UHw8Mz-C44AaY-GffvmElkxD3Ff7j59WN2S6Qnvwznhj8PlCzOMm1RGyE-Ei65riIyijdJrVtA1lgO4QUZ66nKOVsixQbBhgmBpcHAjVV8VKgInUr1IC0GVV2YxppaKwunhq9J9u78RG-M_Aj8hBe_AmpHhu-czCu3MGoIAuYJtEG_DwPRSiuT_4NLR8h4AJzuz6B33Gewq_q-gQZZXJd4ZAx6_rvJR6oMRyUKpFcFxhFzfj1CcgFEr2ZCgZ6eI87BAzbsBL52TNo2ZU8EBSIh_jRu5v2js2pi5fMep0xTqqrYFGeE0IXrxYjfL4U79y04WdY_IvmPbb6lwlyBP4ubu-i8k4myVHsuxixf-V1NoVDXeTJZg5oxe0Yj61U5EwWO18DVADhdCYIf6YyzQd2Fh4OhgL_B-a_507MeXtecHJOHA4el_N9P3L-uB85f6kfubyFg3aHUc9RTV6C_zU04EkqAF4NcVAKeo3zYsPyGfqX_ViKHAX6kMMjbJgL5pPjeDAR-JXWSaV8PPkQtmeV01Lrj0A8rTRKyAA57qNy6hMooY_6DNHxG1ZKyLwxI8Qwz8poY1DvL4ien46dd0RCt5enPro3UroVDgO1zxVShp8rpgyb9LDMwXtIAUuZJTIGr4zGUUqwWm2WhUuxE13Ys1SG6PQXsoowa1Vvz8e7BBcDw5cTlXeo38zHYXh4uJ9E4E7OaIbxv99YbNcKuiIrOPE5ZASQ62MYZBlfOsYBsPvKljYg_vCDMQtYgKqkvZ5AQ1e1OA46TtlXpvhxOd5leLknKRiFxJpBV0KwdDVt9WmqN3GEPRWcynuIznL8Ck5a4xHJNKoCPo0NXaCZRGvTCAm8azSkl13SS0t62SW9tPZzYVfOaYZTYmm7Lrtdl9RFo8DZOFGMBD6jwbbPTWOmNH00zqwOeZ71kcdbJN7XHqiW-zi91-2jwUc1DmNwLVbdqSznFqwAmfZwylXpaOgVVYWAnk-MCo3ju7w5CPGo9R2Iv7IQP2aNg-xC_NVLIf7q1pWXjkL8FSYKYC5oOzbKw-h-QWumoQa1-c7KPQJlAwsO-LeyCTfcHPmV0iAu1jWBdfo3Uv8PIrU05V9cARlx48-t8XmHYPoILiNqvx6W_8bW_2dsfQ5kvmFYYUcEqqSuLEAZ1XU1d2U111XcFXLYrufjMDhfWLzFTxi02e8Pbb85GZP1Wmw2u-X-DZX7C1fqN2V-ttl0avxvWvxE0R8r-l-JJml-eNgujtvCOFcZocIhN3KJCQEGSq5ODvKKhwdY3NGi-PgFLuSL2yQqEtDOUQ_yxYj9aEjYT7JOoyxjX__nn-hFot2qHWVfJuL3k2gjS3PoilJqF1GZiJ-O2yfGQVy8xvGAaF4nUakeiIhFU8zu4OBVC7zAWUhkpCWIN_WX6M5Qw_MSVodrpCGwXkUpm7pL5OscUOP23G2dmaHJhzorftYtXXsBh2lrVG4w25nSLeQAK9J6k5qLADwHFodojmpBq6KlgpVhUe5BljmY5r1zcyXojtLrwc_hoG9S7LG7UyMye_9WgsWYVvjLR04kc-c3sjkWm4LdrmC5K-mEcXu_va04jKpW7s4QrAjsD8sGqbFACq6iqlTrA3pExl__8OGx-0Qzw9aFov1yunOzCAcVbxStLZlGJ4G949RqnkYH7g63UAjvADBWw5xz76oQS1lnzVXhAcxorwiPosYT94IkTV0fQIitG01YUk16NOEYGYxJsmlvGM_yivKYdi89u2H7-9Uzc1oAOnz5SEMFqdDIyUcC6I_cANmgdw-y6vpRyGJEe4fJ4nbxyFUEG5rtW7sjsPbuFi-xgVP1cBTY3o3YPxwRaBWOpq_zWYUursLNAeXSdVEho6yGZiyCiFbrpmphKiz-TEkQmuPdureDeOxbcL6qv-x__OtQyYi4Xadpo1CIJMMLAaEk_B0KF0SZ8Hk4HjYh1Z--XEJnGEMUBQkTXSqz9q0FohZY6D7ygUkCFUx51ofQTvgk1Bau2fcVSNZvHwG41wJPQxs9dDD23u7B1vMO4EzBTS5nRk_ChwkfligKDoxhWztnZtE8iqARz0U5xsnlIWj9wGZlnsLKbOjwS50W3lMoiFI8FwefB3vuycSw-2RiDwMZd3J6e3B4IS7-Sjj8jTj8_kxANOcVDN-cwryuMKQXqH8KJVrrJAICvD-eQjzU-g7o_WFRrx3uvp1aV7tFaV_9PBshIcNMOMDkc3FyDw3HDMKzNeu80qjNGw2YUKV84mO3wD83nSL99suJZe8oqAb4iCtfAhAcfe8wxMt3JGGzJL9nWCw2JZUi2fgwIoPkEMv2qoBIQi3dKyiLqlRTxszMoapxaJbjDqqiWXA81h-9CW3TTRNZIp-sThKyVeBWQt5HYz7Zk29DhdfhMZgZCOeAbbTlJjrYGw4IdEVwBHQNm9cgb9aKoaQeMVgaLMKkt1q40iaF053SpmZRKTtldysODnu2NORRaDVekyRaBi71btqIgLJvUgvk8-EoFAz_3ozZhA8HV4RoYZ_7AUSzHHs8jwk2GMBGMfjH_SNENzdbzN03pAz6pgZD6GE7Gt1FWssU0gW7l6eweWqGBmqV19YFrT7sGhNQGS6i3UAUALHzF0zjRt3J6AESSt-pM1mVjA91BIM0X0G6jFoVlgcgyi8kdEO-JQH9MINRDplNW4duku-GbC8TWckkj1W1Yfz7qNZaRRkryhyfcro64badC8pAsA_gQ2pY272ammICqsD57gk6b9-kI5CZvOVhH-h-xqSbGGizIYbAozoc-CXzJG7GW702r_9Y022-8E6aMzFNjnPYD4b9RsnoFkXguaz9MLZ0ogSIENB-fUzG09pm5eQQQFWdYAChEGB5Cq09kdboA-L-Tqd2nc_Oh-LH4gDg1px6dGe4baCjlGpWhwDvOttBvDY5akMO_PCbUCLst8EELOnT5w0onJvfDyjOBlcQUeCf0HDY7OdfwWMBx-bVAcdmJ-CYhMLFHOQv0f0ciUWaU0ThnTGtIkdYVVFCAQOlTISL5CD4I4EHMDuQbcH6s4wqRc3TTOClIaQwkxrHCTuvCwyxQdtNv7FKa8V2FbtmjM3H7bjpHXef2NBrkO3nMkj4ZDJJMuwvURx9XHI8ZkJOL46Xrk-KqKyTyLxAORIG7TwiHbO2pEZvbjt7CdsbCIQp0doFW20ThLsE1xhslPT2qbHyQvmFehuEolCn5ks4bChLQtl37_oHXLFhZaMD45DdMIwHzXgqE43Nj03baitGQJ5QI4ShKb4pc3m7WAnDyHxs3HtcnWyrSPSc6u9NDHkjTqIYyw_fgTf56bHXs7__Fw2sZek";
+
 export function ProjectListPage() {
   const [projects, setProjects] = useState<ProjectWithMetadata[]>([]);
   const [loading, setLoading] = useState(true);
@@ -498,6 +501,55 @@ export function ProjectListPage() {
         >
           Run
         </Button>
+        <Box
+          sx={{
+            mt: 2,
+            p: 2.5,
+            borderRadius: 2,
+            border: "1px solid",
+            borderColor: "primary.light",
+            background:
+              "linear-gradient(135deg, rgba(37,99,235,0.06) 0%, rgba(124,58,237,0.06) 50%, rgba(219,39,119,0.06) 100%)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 2,
+            flexWrap: "wrap",
+          }}
+        >
+          <Box>
+            <Typography
+              variant="subtitle2"
+              sx={{ fontWeight: 700, fontSize: "0.95rem", mb: 0.25 }}
+            >
+              Featured example: chunkie
+            </Typography>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ fontSize: "0.85rem", lineHeight: 1.5 }}
+            >
+              Boundary integral equation solver.
+            </Typography>
+          </Box>
+          <Button
+            variant="contained"
+            onClick={() => navigate(`/share#${CHUNKIE_EXAMPLE_HASH}`)}
+            sx={{
+              textTransform: "none",
+              fontWeight: 600,
+              borderRadius: 1.5,
+              px: 2.5,
+              py: 0.75,
+              fontSize: "0.9rem",
+              boxShadow: "none",
+              flexShrink: 0,
+              "&:hover": { boxShadow: "none" },
+            }}
+          >
+            Open chunkie example →
+          </Button>
+        </Box>
       </Box>
 
       {/* Projects Section */}
