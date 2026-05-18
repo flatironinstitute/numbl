@@ -161,6 +161,13 @@ export function interpretTarget(
       return this.interpretWorkspaceFunction(target, args, nargout);
     case "jsUserFunction":
       return this.interpretJsUserFunction(target, args, nargout);
+    case "mtoc2UserFunction":
+      // `.mtoc2.js` user functions are mtoc2-only — numbl never
+      // evaluates them. Surface a clear pointer to mtoc2.
+      throw new RuntimeError(
+        `function '${target.name}' is defined in a .mtoc2.js file; ` +
+          `run it through mtoc2 (this is not supported by numbl's interpreter)`
+      );
     case "classMethod":
       return this.interpretClassMethod(target, args, nargout);
     case "workspaceClassConstructor":

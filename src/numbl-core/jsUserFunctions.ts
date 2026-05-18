@@ -86,6 +86,21 @@ export function isNumblJsFile(fileName: string): boolean {
   return fileName.endsWith(".numbl.js");
 }
 
+/** Returns true if the file is an mtoc2-only user function file (`*.mtoc2.js`).
+ *  Numbl recognizes the extension for workspace discovery + function-name
+ *  resolution, but never executes the body — mtoc2's loader does that. */
+export function isMtoc2JsFile(fileName: string): boolean {
+  return fileName.endsWith(".mtoc2.js");
+}
+
+/** Derive a function name from a `.mtoc2.js` workspace file path.
+ *    "myadd.mtoc2.js"            → "myadd"
+ *    "/path/to/myadd.mtoc2.js"   → "myadd" */
+export function funcNameFromMtoc2JsFile(fileName: string): string {
+  const base = fileName.split("/").pop()!;
+  return base.replace(/\.mtoc2\.js$/, "");
+}
+
 /**
  * Resolve a platform-appropriate shared library filename from a base name.
  * E.g., "wadd" → "wadd.so" (Linux), "wadd.dll" (Windows), "wadd.dylib" (macOS)
