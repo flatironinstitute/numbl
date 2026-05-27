@@ -28,6 +28,11 @@ export function Splitter({
 }: SplitterProps) {
   const [size, setSize] = useState(initialSize);
   const [isDragging, setIsDragging] = useState(false);
+  // Live container size in the splitter's axis, refreshed by a
+  // ResizeObserver. Used to compute the effective rendered size each
+  // frame so the first panel can shrink when the window gets smaller
+  // without overwriting the user's stored `size` preference.
+  const [containerAxis, setContainerAxis] = useState<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartPosRef = useRef<number>(0);
   const dragStartSizeRef = useRef<number>(0);
@@ -74,6 +79,25 @@ export function Splitter({
     setIsDragging(false);
   }, []);
 
+  // Track container size so the first panel can be clamped to fit when
+  // the parent shrinks (e.g. window resize). Without this the
+  // pixel-fixed first panel keeps its stored size and overflows the
+  // splitter root's `overflow: hidden`, clipping content below the
+  // visible area even though the inner scrollbar still spans the
+  // original (now off-screen) height.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      setContainerAxis(isVertical ? rect.width : rect.height);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [isVertical]);
+
   useEffect(() => {
     if (isDragging) {
       // Add listeners to document to handle dragging outside the component
@@ -92,6 +116,19 @@ export function Splitter({
     }
   }, [isDragging, handleMouseMove, handleMouseUp, isVertical]);
 
+  // Effective rendered size: clamp the stored `size` to fit the live
+  // container. We DON'T `setSize(clamped)` — that would persist the
+  // shrunken value to localStorage and forget the user's preference.
+  // Just render at the clamped size; when the container grows back, we
+  // re-expand to the original stored size.
+  const effectiveSize =
+    containerAxis !== null
+      ? Math.max(
+          minSize,
+          Math.min(size, Math.max(minSize, containerAxis - minSize - 4))
+        )
+      : size;
+
   return (
     <Box
       ref={containerRef}
@@ -106,9 +143,9 @@ export function Splitter({
       {/* First Panel */}
       <Box
         sx={{
-          [isVertical ? "width" : "height"]: `${size}px`,
-          [isVertical ? "minWidth" : "minHeight"]: `${size}px`,
-          [isVertical ? "maxWidth" : "maxHeight"]: `${size}px`,
+          [isVertical ? "width" : "height"]: `${effectiveSize}px`,
+          [isVertical ? "minWidth" : "minHeight"]: `${effectiveSize}px`,
+          [isVertical ? "maxWidth" : "maxHeight"]: `${effectiveSize}px`,
           overflow: "hidden",
           display: "flex",
           flexDirection: "column",
