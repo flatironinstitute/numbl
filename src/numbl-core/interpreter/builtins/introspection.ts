@@ -307,8 +307,16 @@ defineBuiltin({
   name: "ismatrix",
   cases: [anyToLogicalCase(args => getShape(args[0]).length <= 2)],
   jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "true";
-    return null;
+    const t = types[0];
+    if (t === undefined || t.kind === "unknown") return null;
+    // Only N-D tensors can exceed 2 dimensions. Everything else
+    // (scalars, strings, chars, structs, …) is at most 2-D.
+    if (t.kind === "tensor") {
+      const rank = t.ndim ?? t.shape?.length;
+      if (rank === undefined) return null; // unknown rank → runtime apply
+      return rank <= 2 ? "true" : "false";
+    }
+    return "true";
   },
 });
 
