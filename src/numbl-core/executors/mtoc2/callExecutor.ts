@@ -163,7 +163,14 @@ export const mtoc2CallExecutor: Executor<
   },
 
   cacheKey(d): string {
-    return d.fn.name + "|" + d.argTypes.map(jitTypeKey).join(",");
+    // Include nargout so two calls to the same function with different
+    // output counts (e.g. `[a,b] = f()` then `[a,b,c] = f()`) get
+    // distinct compiled artifacts. mtoc2 specializes on nargout
+    // internally; the executor's cache key has to match or the
+    // artifact from the first call is wrongly reused.
+    return (
+      d.fn.name + "|" + d.argTypes.map(jitTypeKey).join(",") + "|n=" + d.nargout
+    );
   },
 
   compile(d, ctx: DispatchContext): CompiledArtifact | null {
