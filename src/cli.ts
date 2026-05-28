@@ -39,8 +39,15 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { isOptLevel } from "./numbl-core/executors/plugins.js";
+import { registerNodeCompileC } from "./numbl-core/executors/mtoc2/compileC.node.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
+
+// Install the Node-side koffi C-JIT implementation into the
+// browser-safe stub in `compileC.ts`. Keeping the `node:fs` /
+// `node:child_process` imports inside `compileC.node.ts` (only loaded
+// here) is what lets the browser bundle stay green.
+registerNodeCompileC();
 
 // ── Package directory & native addon paths ───────────────────────────────────
 

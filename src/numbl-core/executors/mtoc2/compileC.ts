@@ -1,29 +1,20 @@
 /**
- * Compile + cache + load for the mtoc2-emitted C-JIT pipeline.
+ * Browser-safe surface for the koffi C-JIT pipeline.
  *
- * Cache layout: `~/.cache/numbl/mtoc2-c-jit/<sha>.so` (one per unique
- * `(declaration, source, flags)` triple). On hit, `dlopen` and reuse —
- * no `cc` invocation. On miss, write `<sha>.c`, exec `cc`, then
- * `dlopen`.
+ * The real implementation (`compileAndLoadCImpl`) lives in
+ * `compileC.node.ts` because it imports Node-only modules (`node:fs`,
+ * `node:child_process`, `node:os`, `node:crypto`) that vite/rollup
+ * cannot bundle for the browser. The CLI's bootstrap registers the
+ * Node implementation here at startup via `setCompileAndLoadCImpl()`;
+ * any browser bundle leaves it unregistered, so the koffi-backed
+ * executors decline (their proposals already gate on
+ * `bridge.koffi !== undefined`).
  *
- * The koffi function declaration is owned by the caller — each
- * executor (call / loop / top-level) builds the prototype that matches
- * its spec's signature. This module is `source-string in → koffi-callable
- * + dlopen handle out`.
- *
- * Adapted from the retired in-tree C-JIT's `compile.ts`; the only
- * meaningful difference is the cache directory and a friendlier error
- * message that calls out the mtoc2 emit pipeline.
+ * Types stay in this file so the koffi executors can import them
+ * without dragging Node-only deps into the static dep graph.
  */
 
-import { createHash } from "crypto";
-import { execSync } from "child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { join } from "path";
-import { homedir } from "os";
 import type { NativeBridge } from "../../workspace/types.js";
-
-const CACHE_DIR = join(homedir(), ".cache", "numbl", "mtoc2-c-jit");
 
 /** The koffi function reference returned by `lib.func(decl)`. The
  *  actual call signature is controlled by the caller's declaration —
@@ -48,76 +39,52 @@ export interface KoffiLib {
   func(declaration: string): CFn;
 }
 
-/**
- * Compile (or look up cached) and load. The cache key is the SHA of
- * `(flags, declaration, source)` so two different signatures or
- * compile-flag sets against the same source get distinct artifacts.
- */
+/** Signature of the real compile-and-load. The CLI registers an
+ *  implementation that shells out to `cc` and `dlopen`s the result
+ *  via koffi. */
+export type CompileAndLoadCImpl = (
+  source: string,
+  declaration: string,
+  bridge: NativeBridge
+) => CompiledC;
+
+let impl: CompileAndLoadCImpl | null = null;
+
+/** Install the Node-side C-JIT implementation. Called by `cli.ts`
+ *  during CLI bootstrap; browser bundles never call this, so `impl`
+ *  stays null and the koffi executors decline. */
+export function setCompileAndLoadCImpl(fn: CompileAndLoadCImpl): void {
+  impl = fn;
+}
+
+/** Compile (or look up cached) and load. Delegates to whatever was
+ *  registered via `setCompileAndLoadCImpl()`; throws if no
+ *  implementation is available (= running in a browser host that
+ *  somehow got past the koffi executor's `bridge.koffi` gate). */
 export function compileAndLoadC(
   source: string,
   declaration: string,
   bridge: NativeBridge
 ): CompiledC {
-  if (!existsSync(CACHE_DIR)) {
-    mkdirSync(CACHE_DIR, { recursive: true });
+  if (impl === null) {
+    throw new Error(
+      "compileAndLoadC: no Node-side implementation registered " +
+        "(call setCompileAndLoadCImpl from cli.ts during bootstrap)"
+    );
   }
-
-  const cc = process.env.NUMBL_CC || "cc";
-  // -O3 + -march=native for the JIT specialization payoff.
-  // -fPIC + -shared for the .so build. -std=c11 because mtoc2's
-  // emitted helpers use designated initializers and _Complex_I.
-  // -fno-math-errno avoids errno-update overhead in transcendentals
-  // (numbl's interpreter doesn't surface errno either; matches
-  // semantics). -ffast-math is OFF by default — reduction ordering
-  // and signed-zero / NaN handling are observable, and the cross-
-  // boundary copy already costs more than libmvec vectorization
-  // typically saves.
-  const flags = [
-    "-O3",
-    "-fPIC",
-    "-shared",
-    "-std=c11",
-    "-march=native",
-    "-fopenmp-simd",
-    "-fno-math-errno",
-    "-Wall",
-  ];
-  const libs = process.platform === "linux" ? ["-lm"] : ["-lm"];
-
-  const flagKey = `${flags.join(" ")} ${libs.join(" ")}`;
-  const hash = createHash("sha256")
-    .update(`${flagKey}\n${declaration}\n${source}`)
-    .digest("hex")
-    .slice(0, 32);
-  const libPath = join(CACHE_DIR, `${hash}.so`);
-  const srcPath = join(CACHE_DIR, `${hash}.c`);
-
-  let cacheHit = true;
-  if (!existsSync(libPath)) {
-    cacheHit = false;
-    writeFileSync(srcPath, source);
-    try {
-      execSync(
-        `${cc} ${flags.join(" ")} -o ${libPath} ${srcPath} ${libs.join(" ")}`,
-        { stdio: ["ignore", "ignore", "pipe"] }
-      );
-    } catch (e) {
-      const stderr =
-        e && typeof e === "object" && "stderr" in e
-          ? String((e as { stderr?: Buffer }).stderr ?? "")
-          : "";
-      throw new Error(`mtoc2-c-jit compile failed for ${srcPath}\n${stderr}`);
-    }
-  }
-
-  const lib = bridge.load(libPath) as KoffiLib;
-  const fn = lib.func(declaration);
-  return { fn, lib, libPath, cacheHit };
+  return impl(source, declaration, bridge);
 }
 
-/** Read a previously-compiled C source from disk. Diagnostic helper. */
+/** Read a previously-compiled C source from disk. Diagnostic helper.
+ *  Set alongside the main impl in the Node bootstrap. */
+let readCachedCSourceImpl: ((hash: string) => string | null) | null = null;
+
+export function setReadCachedCSourceImpl(
+  fn: (hash: string) => string | null
+): void {
+  readCachedCSourceImpl = fn;
+}
+
 export function readCachedCSource(hash: string): string | null {
-  const srcPath = join(CACHE_DIR, `${hash}.c`);
-  if (!existsSync(srcPath)) return null;
-  return readFileSync(srcPath, "utf8");
+  return readCachedCSourceImpl?.(hash) ?? null;
 }
