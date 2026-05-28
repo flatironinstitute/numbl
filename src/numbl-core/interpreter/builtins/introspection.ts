@@ -74,17 +74,6 @@ defineBuiltin({
       return false;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "complex_or_number") return "true";
-    if (k === "tensor")
-      return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-        ? "false"
-        : "true";
-    if (k === "boolean" || k === "string" || k === "char" || k === "struct")
-      return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -99,23 +88,11 @@ defineBuiltin({
       return false;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "complex_or_number") return "true";
-    if (k === "tensor")
-      return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-        ? "false"
-        : "true";
-    if (k === "boolean" || k === "string" || k === "char" || k === "struct")
-      return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
   name: "isinteger",
   cases: [anyToLogicalCase(() => false)],
-  jitEmit: () => "false",
 });
 
 defineBuiltin({
@@ -128,55 +105,21 @@ defineBuiltin({
       return false;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "boolean") return "true";
-    if (k === "tensor")
-      return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-        ? "true"
-        : "false";
-    if (
-      k === "number" ||
-      k === "complex_or_number" ||
-      k === "string" ||
-      k === "char" ||
-      k === "struct" ||
-      k === "class_instance"
-    )
-      return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
   name: "ischar",
   cases: [anyToLogicalCase(args => isRuntimeChar(args[0]))],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "char") return "true";
-    if (k !== "unknown") return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
   name: "isstring",
   cases: [anyToLogicalCase(args => isRuntimeString(args[0]))],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "string") return "true";
-    if (k !== "unknown") return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
   name: "iscell",
   cases: [anyToLogicalCase(args => isRuntimeCell(args[0]))],
-  jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -186,21 +129,11 @@ defineBuiltin({
       args => isRuntimeStruct(args[0]) || isRuntimeStructArray(args[0])
     ),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "struct") return "true";
-    if (k !== "unknown") return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
   name: "issparse",
   cases: [anyToLogicalCase(args => isRuntimeSparseMatrix(args[0]))],
-  jitEmit: (_args, types) => {
-    if (types[0]?.kind !== "unknown") return "false";
-    return null;
-  },
 });
 
 // ── Shape predicates ─────────────────────────────────────────────────────
@@ -216,13 +149,6 @@ defineBuiltin({
       return false;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "true";
-    if (k === "string") return "true";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -242,17 +168,6 @@ defineBuiltin({
       return false;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (
-      k === "number" ||
-      k === "boolean" ||
-      k === "complex_or_number" ||
-      k === "string"
-    )
-      return "false";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -263,12 +178,6 @@ defineBuiltin({
       return shape.filter(d => d > 1).length <= 1;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "true";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -279,12 +188,6 @@ defineBuiltin({
       return shape.length === 2 && shape[0] === 1;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "true";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -295,29 +198,11 @@ defineBuiltin({
       return shape.length === 2 && shape[1] === 1;
     }),
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean" || k === "complex_or_number")
-      return "true";
-    return null;
-  },
 });
 
 defineBuiltin({
   name: "ismatrix",
   cases: [anyToLogicalCase(args => getShape(args[0]).length <= 2)],
-  jitEmit: (_args, types) => {
-    const t = types[0];
-    if (t === undefined || t.kind === "unknown") return null;
-    // Only N-D tensors can exceed 2 dimensions. Everything else
-    // (scalars, strings, chars, structs, …) is at most 2-D.
-    if (t.kind === "tensor") {
-      const rank = t.ndim ?? t.shape?.length;
-      if (rank === undefined) return null; // unknown rank → runtime apply
-      return rank <= 2 ? "true" : "false";
-    }
-    return "true";
-  },
 });
 
 // ── Shape queries ────────────────────────────────────────────────────────
@@ -345,17 +230,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (
-      k === "number" ||
-      k === "boolean" ||
-      k === "complex_or_number" ||
-      k === "string"
-    )
-      return "1";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -387,17 +261,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (
-      k === "number" ||
-      k === "boolean" ||
-      k === "complex_or_number" ||
-      k === "string"
-    )
-      return "1";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -415,18 +278,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (
-      k === "number" ||
-      k === "boolean" ||
-      k === "complex_or_number" ||
-      k === "string" ||
-      k === "char"
-    )
-      return "2";
-    return null;
-  },
 });
 
 defineBuiltin({
@@ -491,19 +342,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (args, types) => {
-    if (args.length === 2) {
-      const k = types[0]?.kind;
-      if (
-        k === "number" ||
-        k === "boolean" ||
-        k === "complex_or_number" ||
-        k === "string"
-      )
-        return "1";
-    }
-    return null;
-  },
 });
 
 // ── class() ──────────────────────────────────────────────────────────────
@@ -545,33 +383,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    const wrap = (s: string) => `{kind:"char",value:"${s}"}`;
-    switch (k) {
-      case "number":
-      case "complex_or_number":
-        return wrap("double");
-      case "boolean":
-        return wrap("logical");
-      case "tensor":
-        return (types[0] as Extract<JitType, { kind: "tensor" }>).isLogical
-          ? wrap("logical")
-          : wrap("double");
-      case "string":
-        return wrap("string");
-      case "char":
-        return wrap("char");
-      case "struct":
-        return wrap("struct");
-      case "class_instance":
-        return wrap(
-          (types[0] as Extract<JitType, { kind: "class_instance" }>).className
-        );
-      default:
-        return null;
-    }
-  },
 });
 
 // ── fieldnames / fields ──────────────────────────────────────────────────

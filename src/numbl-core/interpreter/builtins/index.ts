@@ -38,8 +38,6 @@ export {
   getIBuiltinHelp,
   getIBuiltinNargin,
   getAllIBuiltinNames,
-  buildIBuiltinHelpers,
-  setDynamicRegisterHook,
   registerBuiltinHelp,
   inferJitType,
 } from "./types.js";

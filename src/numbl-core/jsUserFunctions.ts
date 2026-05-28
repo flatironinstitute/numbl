@@ -2,7 +2,7 @@
  * Loader for .numbl.js user functions.
  *
  * Evaluates .numbl.js files that define IBuiltins via
- *   register({ resolve, jitEmit? }).
+ *   register({ resolve }).
  * Supports optional WASM and native shared library bindings via directives:
  *   // wasm: <name>
  *   // native: <name>
@@ -184,7 +184,7 @@ const LOADING = Symbol("loading");
  * records. Each loaded record carries the function name, source file name,
  * and the IBuiltin object built from the file's `register()` call.
  *
- * Each .numbl.js file calls register({ resolve, jitEmit? }) to define an
+ * Each .numbl.js file calls register({ resolve }) to define an
  * IBuiltin. resolve(argTypes, nargout) returns { outputTypes, apply } or null.
  *
  * A .numbl.js file can specify bindings via directives at the top of the file:
@@ -291,10 +291,7 @@ export function loadJsUserFunctions(
     try {
       let builtin: IBuiltin | null = null;
 
-      const registerFn = (spec: {
-        resolve: IBuiltin["resolve"];
-        jitEmit?: IBuiltin["jitEmit"];
-      }) => {
+      const registerFn = (spec: { resolve: IBuiltin["resolve"] }) => {
         if (typeof spec.resolve !== "function") {
           throw new Error("register(): spec must have a resolve function");
         }
@@ -306,7 +303,6 @@ export function loadJsUserFunctions(
         builtin = {
           name: funcName,
           resolve: spec.resolve as IBuiltin["resolve"],
-          jitEmit: spec.jitEmit as IBuiltin["jitEmit"],
         };
       };
 

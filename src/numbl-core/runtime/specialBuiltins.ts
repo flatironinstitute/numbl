@@ -180,11 +180,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         },
       };
     },
-    jitEmit: (_argCode, argTypes) => {
-      // Only 0-arg toc is JIT-able
-      if (argTypes.length !== 0) return null;
-      return `$h.__toc()`;
-    },
   });
 
   registerSpecial("warning", (nargout, args) => {

@@ -32,10 +32,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_argCode, argTypes) => {
-    if (argTypes.length !== 0) return null;
-    return `$h.__tic()`;
-  },
 });
 
 // toc is registered as a special builtin in specialBuiltins.ts

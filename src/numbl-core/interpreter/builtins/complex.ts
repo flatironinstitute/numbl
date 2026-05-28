@@ -26,13 +26,6 @@ defineBuiltin({
     re => re,
     "real"
   ),
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number" || k === "boolean") return `(+${argCode[0]})`;
-    if (k === "complex_or_number") return `$h.re(${argCode[0]})`;
-    return null;
-  },
 });
 
 // ── imag ────────────────────────────────────────────────────────────────
@@ -44,13 +37,6 @@ defineBuiltin({
     (_re, im) => im,
     "imag"
   ),
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number" || k === "boolean") return "0";
-    if (k === "complex_or_number") return `$h.im(${argCode[0]})`;
-    return null;
-  },
 });
 
 // ── conj ────────────────────────────────────────────────────────────────
@@ -131,13 +117,6 @@ const conjCases: BuiltinCase[] = [
 defineBuiltin({
   name: "conj",
   cases: conjCases,
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number" || k === "boolean") return argCode[0];
-    if (k === "complex_or_number") return `$h.cConj(${argCode[0]})`;
-    return null;
-  },
 });
 
 // ── angle ───────────────────────────────────────────────────────────────
@@ -149,13 +128,4 @@ defineBuiltin({
     (re, im) => Math.atan2(im, re),
     "angle"
   ),
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const k = argTypes[0].kind;
-    if (k === "number")
-      return `(Number.isNaN(${argCode[0]}) ? NaN : ${argCode[0]} >= 0 ? 0 : Math.PI)`;
-    if (k === "boolean") return "0";
-    if (k === "complex_or_number") return `$h.cAngle(${argCode[0]})`;
-    return null;
-  },
 });

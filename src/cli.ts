@@ -39,10 +39,6 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { isOptLevel } from "./numbl-core/executors/plugins.js";
-// Side-effect: registers the C-JIT (e3) executors with plugins.ts so
-// the browser bundle (which never imports this file) stays free of
-// the cJit/compile.ts node-module dependency graph.
-import "./numbl-core/executors/cJit/register.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
 
@@ -250,8 +246,7 @@ async function runTests(
         source,
         {
           displayResults: true,
-          optimization: optimization ?? 1,
-          fastMath,
+          optimization: optimization ?? "1",
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -329,7 +324,6 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write C-JIT-generated C source to file
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -338,12 +332,10 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --opt <mode>       Optimization mode (default: 1)
                        0  — interpreter (no JIT)
-                       1  — JS-JIT: type-specialize hot functions/loops to JS
-                       e3 — C-JIT scalar loops only (Node only)
-  --no-fast-math     Disable -ffast-math for C-JIT kernels
-                     (default is on: libmvec-vectorized transcendentals,
-                     reductions reorder-allowed; opt out for
-                     bitwise-deterministic FP semantics)
+                       1  — mtoc2 JIT: type-specialize hot user functions
+  --no-fast-math     Build/load the native LAPACK addon without
+                     -ffast-math (reductions stay bitwise-deterministic;
+                     transcendentals lose libmvec vectorization)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -353,7 +345,6 @@ Environment variables:
 
 interface ParsedOptions {
   dumpJs: string | undefined;
-  dumpC: string | undefined;
   dumpAst: boolean;
   verbose: boolean;
   stream: boolean;
@@ -369,7 +360,6 @@ interface ParsedOptions {
 function parseOptions(args: string[]): ParsedOptions {
   const opts: ParsedOptions = {
     dumpJs: undefined,
-    dumpC: undefined,
     dumpAst: false,
     verbose: false,
     stream: false,
@@ -406,14 +396,6 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.dumpJs = resolve(process.cwd(), args[i]);
-        break;
-      case "--dump-c":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --dump-c requires an output filename");
-          process.exit(1);
-        }
-        opts.dumpC = resolve(process.cwd(), args[i]);
         break;
       case "--no-fast-math":
         opts.fastMath = false;
@@ -462,13 +444,13 @@ function parseOptions(args: string[]): ParsedOptions {
       case "--opt":
         i++;
         if (i >= args.length) {
-          console.error("Error: --opt requires a value (0, 1, or e3)");
+          console.error("Error: --opt requires a value (0 or 1)");
           process.exit(1);
         }
         {
           const v = args[i];
           if (!isOptLevel(v)) {
-            console.error(`Error: --opt must be 0, 1, or e3 (got ${v}).`);
+            console.error(`Error: --opt must be 0 or 1 (got ${v}).`);
             process.exit(1);
           }
           opts.optimization = v;
@@ -642,18 +624,14 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js / --dump-c: compilations are collected in
-  // result.generatedJS / result.generatedC by executeCode and written
-  // by finalizeDumpFile at the end. Just clear any previous dump file
-  // here.
+  // Set up --dump-js: compilations are collected in result.generatedJS
+  // by executeCode and written by finalizeDumpFile at the end. Just
+  // clear any previous dump file here.
   const onJitCompile:
     | ((description: string, jsCode: string) => void)
     | undefined = undefined;
   if (opts.dumpJs) {
     writeFileSync(opts.dumpJs, "");
-  }
-  if (opts.dumpC) {
-    writeFileSync(opts.dumpC, "");
   }
 
   try {
@@ -691,7 +669,6 @@ async function executeWithOptions(
             onInput,
 
             optimization: opts.optimization,
-            fastMath: opts.fastMath,
           },
           workspaceFiles,
           mainFileName,
@@ -707,9 +684,6 @@ async function executeWithOptions(
         writeProfileIfNeeded(result);
         if (opts.dumpJs) {
           finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-        }
-        if (opts.dumpC) {
-          finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
         }
         streamLine({
           type: "done",
@@ -750,7 +724,6 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
-          fastMath: opts.fastMath,
         },
         workspaceFiles,
         mainFileName,
@@ -760,9 +733,6 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     } else {
@@ -789,7 +759,6 @@ async function executeWithOptions(
           system,
           onInput,
           optimization: opts.optimization,
-          fastMath: opts.fastMath,
         },
         workspaceFiles,
         mainFileName,
@@ -799,9 +768,6 @@ async function executeWithOptions(
       writeProfileIfNeeded(result);
       if (opts.dumpJs) {
         finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
       }
       await flushAndWait(result.plotInstructions);
     }
@@ -820,14 +786,6 @@ async function executeWithOptions(
         opts.dumpJs,
         mainFileName,
         errWithInfo.generatedJS ?? "// (main script JS not available)"
-      );
-    }
-    if (opts.dumpC) {
-      const errWithInfo = error as Error & { generatedC?: string };
-      finalizeDumpFile(
-        opts.dumpC,
-        mainFileName,
-        errWithInfo.generatedC ?? "/* (main script C not available) */"
       );
     }
 
@@ -966,8 +924,7 @@ async function cmdRepl(args: string[]) {
     replDrawnow,
     replSearchPaths,
     nativeBridge,
-    opts.optimization,
-    opts.fastMath
+    opts.optimization
   );
 }
 

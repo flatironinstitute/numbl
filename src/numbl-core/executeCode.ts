@@ -29,10 +29,6 @@ import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
-import {
-  jitHelpers,
-  buildPerRuntimeJitHelpers,
-} from "./executors/jsJit/helpers/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
@@ -52,8 +48,6 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
-  /** Called each time a C-JIT artifact is compiled, with a description and the generated C source. */
-  onCJitCompile?: (description: string, cCode: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -65,13 +59,8 @@ export interface ExecOptions {
   system?: SystemAdapter;
   /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
   onInput?: (prompt: string) => string;
-  /** Optimization mode: `"0"` interpreter, `"1"` JS-JIT, `"e3"` C-JIT
-   *  scalar-loop only. */
+  /** Optimization mode: `"0"` interpreter, `"1"` mtoc2 JIT. */
   optimization?: import("./executors/plugins.js").OptLevel;
-  /** Compile C-JIT kernels with `-ffast-math` (libmvec-vectorized
-   *  transcendentals; reductions are reorder-allowed). Default true;
-   *  opt out via the CLI's `--no-fast-math` flag. */
-  fastMath?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -117,9 +106,6 @@ export interface ProfileData {
 export interface ExecResult {
   output: string[];
   generatedJS: string;
-  /** Collected C source from C-JIT compilations during this run, or
-   *  empty when no C-JIT artifact was produced. */
-  generatedC: string;
   plotInstructions: PlotInstruction[];
   returnValue: RuntimeValue;
   variableValues: Record<string, RuntimeValue>;
@@ -327,16 +313,6 @@ export function executeCode(
 
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Build the per-runtime jitHelpers ($h) snapshot. This must happen AFTER
-  // Runtime construction so it captures the special-builtin closures bound
-  // to *this* rt, and AFTER js user functions are loaded so their ib_*
-  // entries are present.
-  const jsBuiltinMap = new Map<string, IBuiltin>();
-  for (const [n, e] of ctx.registry.jsUserFunctionsByName.entries()) {
-    jsBuiltinMap.set(n, e.builtin);
-  }
-  rt.jitHelpers = buildPerRuntimeJitHelpers(jsBuiltinMap);
-
   // Apply custom builtins (both to rt.builtins fallback and to customBuiltins
   // which take priority over IBuiltins in the interpreter)
   if (options.customBuiltins) {
@@ -361,7 +337,6 @@ export function executeCode(
 
   interpreter.optimization = options.optimization ?? "1";
   interpreter.nativeBridge = nativeBridge;
-  interpreter.fastMath = options.fastMath ?? true;
   interpreter.log = options.log;
 
   // Register mode-specific executor plugins. The AST interpreter is
@@ -377,23 +352,6 @@ export function executeCode(
     options.onJitCompile?.(description, jsCode);
   };
 
-  // Collect C-JIT compilations for generatedC output.
-  const cJitSections: string[] = [];
-  interpreter.onCJitCompile = (description: string, cCode: string) => {
-    cJitSections.push(
-      `/* ${"=".repeat(60)}\n * C-JIT: ${description}\n * ${"=".repeat(60)} */\n\n${cCode}`
-    );
-    options.onCJitCompile?.(description, cCode);
-  };
-
-  // Wire up JIT builtin profiling hooks when profiling is enabled
-  if (options.profile) {
-    (jitHelpers as Record<string, unknown>)._profileEnter = (key: string) =>
-      rt.profileEnter(key);
-    (jitHelpers as Record<string, unknown>)._profileLeave = () =>
-      rt.profileLeave();
-  }
-
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
 
@@ -407,15 +365,6 @@ export function executeCode(
   // by addpath/rmpath/cd handlers below; sorted by search-path priority on
   // rebuild so first-wins matches `mWorkspaceFiles` semantics.
   const loadedJsUserFunctions: LoadedJsUserFunction[] = [...jsUserFunctions];
-
-  /** Rebuild rt.jitHelpers from the current jsUserFunctionsByName registry. */
-  const rebuildJitHelpers = () => {
-    const map = new Map<string, IBuiltin>();
-    for (const [n, e] of ctx.registry.jsUserFunctionsByName.entries()) {
-      map.set(n, e.builtin);
-    }
-    rt.jitHelpers = buildPerRuntimeJitHelpers(map);
-  };
 
   // Shared rebuild logic used by both onPathChange and onCwdChange.
   // Re-sorts mWorkspaceFiles by search path order, then re-registers
@@ -454,7 +403,6 @@ export function executeCode(
     const newIndex = ctx.buildFunctionIndex();
     interpreter.functionIndex = newIndex;
     interpreter.clearAllCaches();
-    rebuildJitHelpers();
     pathsModified = true;
   };
 
@@ -797,10 +745,6 @@ export function executeCode(
         jitSections.length > 0
           ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
           : "// No JS generated",
-      generatedC:
-        cJitSections.length > 0
-          ? cJitSections.join("\n\n")
-          : "/* No C generated */",
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -859,13 +803,6 @@ export function executeCode(
     throw re;
   } finally {
     popCurrentRuntime(rt);
-    // Reset JIT profiling hooks to no-ops
-    if (options.profile) {
-      (jitHelpers as Record<string, unknown>)._profileEnter =
-        Function.prototype;
-      (jitHelpers as Record<string, unknown>)._profileLeave =
-        Function.prototype;
-    }
     // Restore the parent runtime's special-builtin registrations. Our
     // Runtime constructor replaced these with closures over our rt; the
     // parent (or a still-running outer executeCode) needs its own closures

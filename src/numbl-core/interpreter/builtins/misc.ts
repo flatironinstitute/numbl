@@ -294,7 +294,6 @@ registerIBuiltin({
       apply: () => false,
     };
   },
-  jitEmit: (_args, types) => (types.length === 1 ? "false" : null),
 });
 
 // ── clc / clf stubs ──────────────────────────────────────────────────────
@@ -605,10 +604,6 @@ registerIBuiltin({
       outputTypes: [{ kind: "boolean" }],
       apply: () => true,
     };
-  },
-  jitEmit: (_args, types) => {
-    if (types.length !== 0) return null;
-    return "true";
   },
 });
 

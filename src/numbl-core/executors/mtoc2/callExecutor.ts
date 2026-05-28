@@ -44,6 +44,7 @@ import {
 import { jitTypeToMtoc2Type } from "./typeAdapter.js";
 import { numblToMtoc2, mtoc2ToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
+import { buildHostHelpers, type Mtoc2HostHelpers } from "./hostHelpers.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -172,11 +173,10 @@ export const mtoc2CallExecutor: Executor<
         `mtoc2-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
         source
       );
-      const factory = new Function(source)() as ($h: {
-        write: (s: string) => void;
-      }) => (...args: unknown[]) => unknown;
-      const rt = interp.rt;
-      const specFn = factory({ write: (s: string) => rt.output(s) });
+      const factory = new Function(source)() as (
+        $h: Mtoc2HostHelpers
+      ) => (...args: unknown[]) => unknown;
+      const specFn = factory(buildHostHelpers(interp.rt));
       return { specFn };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof Mtoc2TypeError) {

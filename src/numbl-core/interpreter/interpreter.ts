@@ -89,33 +89,18 @@ export class Interpreter {
 
   /**
    * Optimization mode:
-   *   "0"  — pure AST interpreter, no JIT.
-   *   "1"  — JS-JIT (default): type-specialize hot functions/loops to JS
-   *          via `new Function()`.
-   *   "e3" — C-JIT scalar-loop only (Node only). No JS-JIT suite is
-   *          registered alongside; loops either match the C-JIT
-   *          executor or fall back to the AST interpreter.
+   *   "0" — pure AST interpreter, no JIT.
+   *   "1" — mtoc2 JIT (default): top-level + call shapes get
+   *         type-specialized JS via mtoc2's `compileSpec`.
    */
   optimization: import("../executors/plugins.js").OptLevel = "1";
 
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 
-  /** Callback for C-JIT compilation logging (C codegen). Invoked once
-   *  per cache miss, before the C source is compiled. */
-  onCJitCompile?: (description: string, cCode: string) => void;
-
-  /** Bridge for loading native shared libraries — used by the C-JIT
-   *  loop executor (`--opt e3`) to dlopen freshly-compiled `.so`
-   *  artifacts via koffi. Undefined in browser contexts; the executor
-   *  declines when undefined. */
+  /** Bridge for loading native shared libraries. Undefined in browser
+   *  contexts. */
   nativeBridge?: import("../workspace/types.js").NativeBridge;
-
-  /** Compile c-jit kernels with `-ffast-math`. On by default for
-   *  libmvec-vectorized transcendentals (~30% speedup on element-wise
-   *  tensor benchmarks); opt out via the CLI's `--no-fast-math` flag
-   *  to keep reductions bitwise-deterministic. */
-  fastMath: boolean = true;
 
   /** Telemetry: invoked after a registered executor's `run()` succeeds.
    *  Used to track which optimizers fire in a session. The kind is the
@@ -265,12 +250,11 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      // Apply registered AST transformers (e.g. the C-JIT chain
-      // pass under --opt e3). Cached per input-list identity, so this
-      // is paid once per stmt list per Registry.
+      // Apply registered AST transformers. Cached per input-list
+      // identity, so this is paid once per stmt list per Registry.
       const transformed = this.registry.transformStmts(nonFuncStmts);
       // First, try to handle the entire script body as a unit (e.g.
-      // JS-JIT top-level). If a whole-scope executor matches, the
+      // mtoc2 top-level JIT). If a whole-scope executor matches, the
       // per-stmt loop is skipped.
       const wholeScope = this.registry.tryRunWholeScope(transformed, this);
       if (wholeScope === null) {
