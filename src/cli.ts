@@ -102,7 +102,7 @@ let nativeBridge: NativeBridge | undefined;
 try {
   const req = createRequire(import.meta.url);
   const koffi = req("koffi");
-  nativeBridge = { load: (path: string) => koffi.load(path) };
+  nativeBridge = { load: (path: string) => koffi.load(path), koffi };
 } catch {
   // koffi not installed — native shared library support disabled
 }

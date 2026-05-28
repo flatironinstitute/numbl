@@ -19,6 +19,15 @@ export {
   type CompileSpecResult,
 } from "mtoc2/src/jit/compileSpec.js";
 
+export {
+  compileSpecC,
+  type CompileSpecCArgs,
+  type CompileSpecCResult,
+  type SpecCSignature,
+  type SpecCParam,
+  type SpecCOutput,
+} from "mtoc2/src/jit/compileSpecC.js";
+
 export { Workspace } from "mtoc2/src/workspace/workspace.js";
 export type { WorkspaceFile } from "mtoc2/src/workspace/workspace.js";
 
@@ -38,9 +47,10 @@ export {
   tensorDoubleFromDims,
   tensorComplexFromDims,
   withoutExact,
+  isMultiElement,
   UNKNOWN,
   VOID,
   DIM_ONE,
 } from "mtoc2/src/lowering/types.js";
 
-export type { Type, DimInfo } from "mtoc2/src/lowering/types.js";
+export type { Type, DimInfo, NumericType } from "mtoc2/src/lowering/types.js";
