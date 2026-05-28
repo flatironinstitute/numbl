@@ -40,6 +40,7 @@ export {
   withoutExact,
   UNKNOWN,
   VOID,
+  DIM_ONE,
 } from "mtoc2/src/lowering/types.js";
 
-export type { Type } from "mtoc2/src/lowering/types.js";
+export type { Type, DimInfo } from "mtoc2/src/lowering/types.js";

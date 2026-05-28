@@ -18,17 +18,19 @@
  */
 
 import type { Registry } from "./registry.js";
-import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
-import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
-import { jsJitCallExecutor } from "./jsJit/callExecutor.js";
+import { mtoc2CallExecutor } from "./mtoc2/callExecutor.js";
 
 /** Optimization mode label.
  *
  *   - `"0"`  — pure AST interpreter, no executors registered.
- *   - `"1"`  — JS-JIT suite (top-level / loop / call).
+ *   - `"1"`  — mtoc2 JIT (call shape only). Hot-loop and top-level
+ *     triggers are intentionally dropped vs the legacy JS-JIT: mtoc2
+ *     has no natural loop-body entry point, and top-level scripts run
+ *     well enough on the interpreter. Function calls get type-
+ *     specialized JS via `compileSpec`.
  *   - `"e3"` — C-JIT scalar-loop only. Targets compute-bound scalar
  *     loops by compiling the loop body to C and loading via koffi.
- *     Does NOT register the JS-JIT suite — the C-JIT loop executor
+ *     Does NOT register the mtoc2 suite — the C-JIT loop executor
  *     either matches (and runs in C) or falls back to the AST
  *     interpreter. */
 export type OptLevel = "0" | "1" | "e3";
@@ -58,9 +60,7 @@ export function registerExecutorsForOpt(
     case "0":
       return;
     case "1":
-      registry.registerWholeScope(jsJitTopLevelExecutor);
-      registry.register(jsJitLoopExecutor);
-      registry.register(jsJitCallExecutor);
+      registry.register(mtoc2CallExecutor);
       return;
     case "e3":
       if (!cJitRegistrar) {

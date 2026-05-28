@@ -298,18 +298,12 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       return null;
 
     case "Directive": {
-      if (stmt.directive === "assert_jit") {
-        // Only enforce assert_jit at --opt 1 (JS-JIT). Other opt
-        // modes (e3 etc.) cover narrower shapes than JS-JIT, so a
-        // directive surviving to the interpreter is expected and
-        // doesn't represent a regression. At --opt 0 it's a no-op.
-        if (this.optimization !== "1") return null;
-        const wantC = stmt.args.includes("c");
-        throw new RuntimeError(
-          `%!numbl:assert_jit${wantC ? " c" : ""}: expected the surrounding loop or function body to be JIT-compiled, but it was interpreted. Run with --opt 0 to silence.`
-        );
-      }
-      // Unknown directives are silently ignored.
+      // `assert_jit` was a JS-JIT-era enforcement marker (the JS-JIT
+      // had broader trigger shapes — top-level / loop / call — than
+      // mtoc2's call-only JIT). With mtoc2 at --opt 1, a directive
+      // sitting in a top-level loop will always trip because mtoc2
+      // doesn't JIT loop bodies, so we silently no-op it everywhere.
+      // Unknown directives are also ignored.
       return null;
     }
 
