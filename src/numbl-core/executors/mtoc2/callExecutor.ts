@@ -17,8 +17,15 @@
  *   + Lowerer pair per LoweringContext (i.e. per execution session);
  *   accumulating specs persist across calls so a function called
  *   repeatedly with the same arg signature reuses the prior compile.
- * - **First-cut scope.** `nargout === 1` only; other counts decline.
- *   Coverage grows as the type/value adapters fill in.
+ * - **Output-count support.** `nargout >= 1` (single-output and
+ *   multi-output `[a, b, ...] = f(x)`). `nargout === 0` (bare-stmt
+ *   `f();`) is declined because mtoc2's nargout=0 spec emits a no-
+ *   return body, but numbl's interpreter still uses the first
+ *   declared output for `ans` binding — let the interpreter handle.
+ * - **Loop-depth gate.** Declines when `interp.loopDepth > 0` so a
+ *   hot loop iterating function calls doesn't pay per-call JIT
+ *   propose / spec-cache overhead. Once an outer call is JIT'd, its
+ *   loops run inside mtoc2's compiled code anyway.
  */
 
 import type { Executor, Proposal, RunResult } from "../types.js";
