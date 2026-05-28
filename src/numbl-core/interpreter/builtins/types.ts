@@ -24,7 +24,7 @@ import {
   unifyJitTypes,
 } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 

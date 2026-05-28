@@ -6,7 +6,7 @@
  * (dispatched through the runtime).
  */
 
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc";
+import { allocFloat64Array } from "../runtime/alloc";
 
 export interface GmresResult {
   x: Float64Array;

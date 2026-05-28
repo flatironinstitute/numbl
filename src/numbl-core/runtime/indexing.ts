@@ -26,7 +26,7 @@ import { RTV } from "./constructors.js";
 import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
 import { type RefcountRuntime, decref, isShared } from "./refcount.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Runtime surface needed by index-store mutations. The full Runtime
  *  class satisfies this structurally. */

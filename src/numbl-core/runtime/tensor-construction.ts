@@ -23,7 +23,7 @@ import {
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { numel } from "./utils.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Create a range start:end or start:step:end */
 export function makeRangeTensor(

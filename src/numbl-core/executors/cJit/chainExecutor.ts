@@ -28,7 +28,7 @@ import {
 } from "./chainCodegen.js";
 import { collectIdents } from "./elemwiseCodegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
-import { allocFloat64Array } from "../jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 /** Minimum tensor numel to pay the koffi-dispatch + per-call alloc
  *  overhead. Below this, the interpreter / individual c-jit-fuse

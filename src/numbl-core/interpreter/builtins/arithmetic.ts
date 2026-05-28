@@ -20,7 +20,7 @@ import {
   shapeAfterReduction,
   unifySign,
 } from "../../jitTypes.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Tensor-capable binary helper ─────────────────────────────────────────
 

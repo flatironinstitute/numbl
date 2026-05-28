@@ -40,7 +40,7 @@ import {
   MACH_EPS,
   MACH_SFMIN,
 } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 // JOBU encoding
 const JOBU_A = 0;

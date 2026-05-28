@@ -112,7 +112,7 @@ import {
 } from "./plotBuiltinDispatch.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 

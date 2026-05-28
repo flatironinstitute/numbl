@@ -22,7 +22,7 @@ import type { LoweredStmt, FuseLoweredStmt } from "../lowering.js";
 import { RuntimeTensor, type RuntimeValue } from "../../runtime/types.js";
 import { generateFuseCSource } from "./fuseCodegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
-import { allocFloat64Array } from "../jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 /** Minimum tensor numel to pay the koffi-dispatch overhead. Below
  *  this, the interpreter's vectorized builtin path (Float64Array

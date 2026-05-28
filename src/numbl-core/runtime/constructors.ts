@@ -2,7 +2,7 @@
  * RuntimeValue constructor helpers (the RTV namespace).
  */
 
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 import { ItemType } from "../lowering/itemTypes.js";
 import {
   type RuntimeNumber,

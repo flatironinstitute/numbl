@@ -13,7 +13,7 @@ import { registerIBuiltin } from "./types.js";
 import { parseMFile, type Stmt, type Expr } from "../../parser/index.js";
 import { BUILTIN_CONSTANTS } from "../../lowering/constants.js";
 import { getIBuiltin } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── strsplit ────────────────────────────────────────────────────────────
 

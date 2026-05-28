@@ -13,7 +13,7 @@ import type { RuntimeValue, RuntimeSparseMatrix } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
 import { registerIBuiltin } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

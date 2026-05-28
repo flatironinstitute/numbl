@@ -14,7 +14,7 @@
 
 import { dlamch } from "./dlamch.js";
 import { MACH_PREC, MACH_SFMIN } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 // Lookup tables (matching Fortran DATA statements, 0-indexed)
 // Fortran: LOCU12 / 3, 4, 1, 2 /

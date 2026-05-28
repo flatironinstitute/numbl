@@ -85,7 +85,7 @@ import {
   RIGHT,
   LOWER,
 } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 const ZERO = 0.0;
 const ONE = 1.0;

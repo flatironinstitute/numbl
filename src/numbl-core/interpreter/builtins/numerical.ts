@@ -28,10 +28,7 @@ import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
 import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { linsolveLapack } from "../../helpers/linsolve.js";
-import {
-  allocFloat64Array,
-  withScratch,
-} from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
 function toFloatArray(v: RuntimeValue): Float64Array {
   if (isRuntimeNumber(v)) return allocFloat64Array([v as number]);

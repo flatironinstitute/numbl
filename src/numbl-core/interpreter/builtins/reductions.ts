@@ -765,7 +765,7 @@ import {
   getBroadcastShape,
   broadcastIterate,
 } from "../../helpers/arithmetic.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 defineBuiltin({
   name: "xor",

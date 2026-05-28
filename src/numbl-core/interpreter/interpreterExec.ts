@@ -44,7 +44,7 @@ import {
 
 import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 import { cowCopy } from "../runtime/cow.js";
 import { isShared } from "../runtime/refcount.js";
 

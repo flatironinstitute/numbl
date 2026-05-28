@@ -32,7 +32,7 @@ import { ddot } from "../BLAS/ddot.js";
 import { dgemm } from "../BLAS/dgemm.js";
 import { dgemv } from "../BLAS/dgemv.js";
 import { idamax } from "../BLAS/idamax.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 // SIDE constants
 const BOTH = 2; // 'B' — compute both left and right eigenvectors

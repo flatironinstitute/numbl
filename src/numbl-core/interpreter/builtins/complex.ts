@@ -15,7 +15,7 @@ import {
   mkc,
   makeTensor,
 } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── real ────────────────────────────────────────────────────────────────
 

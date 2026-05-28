@@ -26,7 +26,7 @@ import { NOTRANS, UPPER, LOWER } from "../../ts-lapack/src/utils/constants.js";
 import { dorgqr_optimized } from "../../ts-lapack/src/SRC/dorgqr_optimized.js";
 import { dgeqrf_optimized } from "../../ts-lapack/src/SRC/dgeqrf_optimized.js";
 import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
   // Copy — dgetrf/dgetri operate in place

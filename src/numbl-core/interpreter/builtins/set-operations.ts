@@ -28,7 +28,7 @@ import { rstr } from "../../runtime/runtime.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase } from "./types.js";
 import { toNumArray } from "../../helpers/reduction-helpers.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── find ─────────────────────────────────────────────────────────────────
 

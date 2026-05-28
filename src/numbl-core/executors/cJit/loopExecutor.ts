@@ -30,7 +30,7 @@ import {
   type VarEncoding,
 } from "./codegen.js";
 import { compileAndLoad, type CompiledC } from "./compile.js";
-import { allocFloat64Array } from "../jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 interface CLoopCompiled {
   readonly compiled: CompiledC;

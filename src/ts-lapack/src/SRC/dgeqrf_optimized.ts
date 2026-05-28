@@ -40,7 +40,7 @@
 //   A(I,J)  =>  a[aOff + (I-1) + (J-1)*lda]   (I,J are 1-based)
 //   TAU(I)  =>  tau[tauOff + (I-1)]             (I is 1-based)
 
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc";
 
 // ─── Module-level machine constants (dlamch inlined, evaluated once) ─────────
 // eps = Number.EPSILON * 0.5   →  dlamch('E'), machine epsilon / 2

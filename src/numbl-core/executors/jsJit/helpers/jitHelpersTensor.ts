@@ -8,7 +8,7 @@ import { RuntimeTensor } from "../../../runtime/types.js";
 import type { RuntimeComplexNumber } from "../../../runtime/types.js";
 import { re, im, mkc, cAdd, cSub, cMul, cDiv } from "./jitHelpersComplex.js";
 import { tensorOps, OpRealBin } from "../../../ops/index.js";
-import { allocFloat64Array } from "./alloc.js";
+import { allocFloat64Array } from "../../../runtime/alloc.js";
 // Real/complex binary op codes are aligned (ADD=0, SUB=1, MUL=2, DIV=3) so
 // the same OpRealBin value is passed to tensorOps.complexBinaryElemwise too.
 

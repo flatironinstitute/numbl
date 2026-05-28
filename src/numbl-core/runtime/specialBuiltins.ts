@@ -69,7 +69,7 @@ import { dgetrf as _dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import { toF64 } from "../helpers/check-helpers.js";
 import { sparseToDense } from "../helpers/sparse-arithmetic.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Map sol structs to their dense output step data for deval. */
 const _solStepData = new WeakMap<object, StepData[]>();

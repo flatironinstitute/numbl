@@ -16,7 +16,7 @@ import { dlacpy } from "./dlacpy.js";
 import { dlaset } from "./dlaset.js";
 import { ilaenv } from "../utils/ilaenv.js";
 import { LOWER } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 // "ALL" uplo constant for dlacpy/dlaset (anything other than UPPER/LOWER)
 const ALL = -1;

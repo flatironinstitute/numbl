@@ -26,7 +26,7 @@ import {
 import type { JitType } from "../../jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { sprintfFormat } from "../../helpers/string.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────
 

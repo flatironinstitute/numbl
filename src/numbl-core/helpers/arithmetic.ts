@@ -37,7 +37,7 @@ import {
   sparseConjugateTranspose,
   sparseToDense,
 } from "./sparse-arithmetic.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────
 

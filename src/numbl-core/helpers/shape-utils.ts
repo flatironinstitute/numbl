@@ -2,7 +2,7 @@
  * Shared shape/size argument parsing and value coercion for builtins.
  */
 
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 import { type RuntimeValue, RTV, RuntimeError } from "../runtime/index.js";
 import {
   isRuntimeNumber,

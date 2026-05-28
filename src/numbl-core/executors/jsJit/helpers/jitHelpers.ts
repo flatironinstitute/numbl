@@ -836,7 +836,7 @@ Object.assign(jitHelpers, buildIBuiltinHelpers());
 
 import type { IBuiltin } from "../../../interpreter/builtins/index.js";
 import { inferJitType as _ijt } from "../../../interpreter/builtins/index.js";
-import { allocFloat64Array } from "./alloc.js";
+import { allocFloat64Array } from "../../../runtime/alloc.js";
 setDynamicRegisterHook((b: IBuiltin) => {
   const h = jitHelpers as Record<string, unknown>;
   h[`ib_${b.name}`] = (...args: unknown[]) => {

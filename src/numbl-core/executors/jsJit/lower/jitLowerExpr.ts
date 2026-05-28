@@ -39,7 +39,7 @@ import { offsetToLineFast } from "../../../runtime/error.js";
 import type { LowerCtx, SliceAlias } from "./jitLower.js";
 import { lowerFunction, setBailReason } from "./jitLower.js";
 import { buildJitSourceComment } from "../shared.js";
-import { allocFloat64Array } from "../helpers/alloc.js";
+import { allocFloat64Array } from "../../../runtime/alloc.js";
 
 const LOG_CJIT_MISSES =
   typeof process !== "undefined" && !!process.env.NUMBL_LOG_CJIT_MISSES;

@@ -45,7 +45,7 @@ import {
 } from "./runtimeHelpers.js";
 import { resolveHorzcat as _resolveHorzcat } from "./runtimeOperators.js";
 import type { Runtime } from "./runtime.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /**
  * Resolve indices that may contain END or COLON sentinels, deferred ranges, or functions.

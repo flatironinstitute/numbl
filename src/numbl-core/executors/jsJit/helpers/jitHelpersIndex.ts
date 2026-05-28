@@ -13,7 +13,7 @@
 import { type RuntimeTensor } from "../../../runtime/types.js";
 import { makeTensor } from "./jitHelpersTensor.js";
 import { mkc } from "./jitHelpersComplex.js";
-import { allocFloat64Array } from "./alloc.js";
+import { allocFloat64Array } from "../../../runtime/alloc.js";
 
 // ── Soft bail to interpreter ───────────────────────────────────────────
 //

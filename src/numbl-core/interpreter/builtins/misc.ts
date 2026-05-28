@@ -35,7 +35,7 @@ import {
   mGreaterEqual,
   mNeg,
 } from "../../helpers/arithmetic.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
 
 // ── substruct ────────────────────────────────────────────────────────────

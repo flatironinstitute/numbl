@@ -5,7 +5,7 @@
 import { RuntimeValue, RTV, toNumber, RuntimeError } from "../runtime/index.js";
 import { isRuntimeTensor } from "../runtime/types.js";
 import { getLapackBridge } from "../native/lapack-bridge.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Seedable PRNG (xoshiro128**) ────────────────────────────────────────
 

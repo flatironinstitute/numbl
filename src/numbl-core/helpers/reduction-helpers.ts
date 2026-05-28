@@ -12,7 +12,7 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 

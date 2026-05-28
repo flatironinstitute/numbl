@@ -34,7 +34,7 @@
 import { dgeqr2 } from "./dgeqr2.js";
 import { ilaenv } from "../utils/ilaenv.js";
 import { xerbla } from "../utils/xerbla.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 export function dgeqrf(
   m: number,

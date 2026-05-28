@@ -21,7 +21,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 

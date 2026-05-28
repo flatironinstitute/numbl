@@ -26,7 +26,7 @@ import {
   erfcxScalar,
 } from "../../helpers/erf.js";
 import { lanczosGamma } from "../../helpers/bessel.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 

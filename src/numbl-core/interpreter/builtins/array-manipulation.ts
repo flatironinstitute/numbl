@@ -30,10 +30,7 @@ import type { JitType } from "../../jitTypes.js";
 import { coerceToTensor } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
-import {
-  allocFloat64Array,
-  releaseFloat64Array,
-} from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array, releaseFloat64Array } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 

@@ -15,10 +15,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin } from "./types.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
-import {
-  allocFloat64Array,
-  withScratch,
-} from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 

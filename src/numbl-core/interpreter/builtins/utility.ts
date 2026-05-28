@@ -24,7 +24,7 @@ import { RuntimeError } from "../../runtime/error.js";
 import { sprintfFormat } from "../../helpers/string.js";
 import { RTV } from "../../runtime/constructors.js";
 import { emptyStackField } from "../../runtime/runtime.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
 

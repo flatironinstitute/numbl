@@ -51,7 +51,7 @@ import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 import { dispatchPlotBuiltin } from "./plotBuiltinDispatch.js";
 import {
   fplotCall as _fplotCall,
