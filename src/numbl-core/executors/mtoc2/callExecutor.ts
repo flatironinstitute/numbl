@@ -119,12 +119,25 @@ export const mtoc2CallExecutor: Executor<
 > = {
   name: "mtoc2-call",
 
-  propose(lowered: LoweredStmt): Proposal<Mtoc2CallData> | null {
+  propose(
+    lowered: LoweredStmt,
+    ctx: DispatchContext
+  ): Proposal<Mtoc2CallData> | null {
     if (lowered.kind !== "call") return null;
+    // Disable JIT inside any enclosing for/while loop body. Once an
+    // outer call has been JIT'd, its loops execute inside mtoc2's
+    // compiled code and never reach the interpreter; so this only
+    // gates calls the interpreter is dispatching directly while
+    // iterating a hot loop, where per-call propose() / spec-cache
+    // overhead is a net loss.
+    if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
-    // First-cut: single-output only. Multi-output requires a return-
-    // array unwrap in run() that's straightforward but not yet wired.
-    if (classification.nargout !== 1) return null;
+    // nargout=0 (bare-statement call like `f();`) is interpreter-only.
+    // numbl's convention is that the function STILL returns its first
+    // declared output for `ans` binding even with nargout=0, but
+    // mtoc2's nargout=0 spec emits a no-return body, dropping the
+    // value. Decline and let the interpreter handle the ans semantics.
+    if (classification.nargout === 0) return null;
 
     // Map every JitType to mtoc2; any rejection aborts the proposal.
     const mtoc2ArgTypes: Mtoc2Type[] = [];
@@ -193,6 +206,21 @@ export const mtoc2CallExecutor: Executor<
     try {
       const mtoc2Args = d.args.map(v => numblToMtoc2(v as never));
       const result = compiled.specFn(...mtoc2Args);
+      // mtoc2 return-shape convention:
+      //   nargout = 0 → undefined (no value)
+      //   nargout = 1 → bare value
+      //   nargout >= 2 → array of values
+      // numbl's interpreter convention matches at the boundary
+      // (`callUserFunction` returns `outputs[0]` for nargout<=1 else
+      // `outputs`), so we mirror the shape on the way out.
+      if (d.nargout >= 2) {
+        if (!Array.isArray(result)) {
+          throw new Error(
+            `mtoc2-call: expected array for nargout=${d.nargout}, got ${typeof result}`
+          );
+        }
+        return { result: result.map(v => mtoc2ToNumbl(v)) };
+      }
       return { result: mtoc2ToNumbl(result) };
     } catch (e) {
       return {

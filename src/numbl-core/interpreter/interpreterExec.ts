@@ -186,18 +186,27 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "While": {
       const _whileStart = this.rt.profilingEnabled ? performance.now() : 0;
       let _whileIters = 0;
-      while (true) {
-        this.rt.checkCancel();
-        const cond = this.evalExpr(stmt.cond);
-        if (!this.rt.toBool(cond)) break;
-        _whileIters++;
-        const signal = this.execStmts(stmt.body);
-        if (signal instanceof BreakSignal) break;
-        if (signal instanceof ContinueSignal) continue;
-        if (signal instanceof ReturnSignal) {
-          recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
-          return signal;
+      // `loopDepth` gates per-call JIT proposals — see comment on
+      // the field in `Interpreter`. Bumped around the body only, not
+      // the cond eval (the cond is evaluated once per iteration but
+      // is conceptually loop-control, not a hot inner call).
+      this.loopDepth++;
+      try {
+        while (true) {
+          this.rt.checkCancel();
+          const cond = this.evalExpr(stmt.cond);
+          if (!this.rt.toBool(cond)) break;
+          _whileIters++;
+          const signal = this.execStmts(stmt.body);
+          if (signal instanceof BreakSignal) break;
+          if (signal instanceof ContinueSignal) continue;
+          if (signal instanceof ReturnSignal) {
+            recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
+            return signal;
+          }
         }
+      } finally {
+        this.loopDepth--;
       }
       recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
       return null;
@@ -208,16 +217,21 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       const iterVal = this.evalExpr(stmt.expr);
       const rv = ensureRuntimeValue(iterVal);
       const iterItems = forIter(rv);
-      for (let _i = 0; _i < iterItems.length; _i++) {
-        this.rt.checkCancel();
-        this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
-        const signal = this.execStmts(stmt.body);
-        if (signal instanceof BreakSignal) break;
-        if (signal instanceof ContinueSignal) continue;
-        if (signal instanceof ReturnSignal) {
-          recordHotLoop(this, stmt, "for", _i + 1, _forStart);
-          return signal;
+      this.loopDepth++;
+      try {
+        for (let _i = 0; _i < iterItems.length; _i++) {
+          this.rt.checkCancel();
+          this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
+          const signal = this.execStmts(stmt.body);
+          if (signal instanceof BreakSignal) break;
+          if (signal instanceof ContinueSignal) continue;
+          if (signal instanceof ReturnSignal) {
+            recordHotLoop(this, stmt, "for", _i + 1, _forStart);
+            return signal;
+          }
         }
+      } finally {
+        this.loopDepth--;
       }
       recordHotLoop(this, stmt, "for", iterItems.length, _forStart);
       return null;
