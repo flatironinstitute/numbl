@@ -26,14 +26,13 @@ import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import {
   compileSpec,
-  Workspace,
-  Lowerer,
   UnsupportedConstruct,
   Mtoc2TypeError,
   type Type as Mtoc2Type,
 } from "../../mtoc2/index.js";
 import { jitTypeToMtoc2Type } from "./typeAdapter.js";
 import { numblToMtoc2, mtoc2ToNumbl } from "./valueAdapter.js";
+import { getOrCreateSession } from "./session.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -52,32 +51,6 @@ interface Mtoc2TopLevelData {
 interface CompiledArtifact {
   readonly specFn: (...args: unknown[]) => unknown;
   readonly nargout: number;
-}
-
-interface SessionState {
-  workspace: Workspace;
-  lowerer: Lowerer;
-}
-
-/** Per-LoweringContext session state. Shared with mtoc2-call so the
- *  same Workspace + Lowerer (and therefore the same spec cache)
- *  serves both top-level and per-call compilation. WeakMap keyed on
- *  the LoweringContext object — auto-cleans when the session ends. */
-const sessionStateByCtx = new WeakMap<object, SessionState>();
-
-function getOrCreateSession(interp: Interpreter): SessionState {
-  const key = interp.ctx;
-  let s = sessionStateByCtx.get(key);
-  if (!s) {
-    const workspace = Workspace.fromExistingContext(
-      interp.ctx,
-      interp.ctx.mainFileName,
-      []
-    );
-    s = { workspace, lowerer: new Lowerer(workspace) };
-    sessionStateByCtx.set(key, s);
-  }
-  return s;
 }
 
 /** True when every top-level stmt is suppressed (or is a kind that

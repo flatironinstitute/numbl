@@ -37,14 +37,13 @@ import type { Stmt, Span } from "../../parser/index.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import {
   compileSpec,
-  Workspace,
-  Lowerer,
   UnsupportedConstruct,
   Mtoc2TypeError,
   type Type as Mtoc2Type,
 } from "../../mtoc2/index.js";
 import { jitTypeToMtoc2Type } from "./typeAdapter.js";
 import { numblToMtoc2, mtoc2ToNumbl } from "./valueAdapter.js";
+import { getOrCreateSession } from "./session.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -60,32 +59,6 @@ interface Mtoc2CallData {
 
 interface CompiledArtifact {
   readonly specFn: (...args: unknown[]) => unknown;
-}
-
-interface SessionState {
-  workspace: Workspace;
-  lowerer: Lowerer;
-}
-
-/** Per-LoweringContext mtoc2 session state. Survives across all
- *  mtoc2-call dispatches in a single execution session so spec
- *  compilations are reused. WeakMap auto-cleans when the context is
- *  GC'd. */
-const sessionStateByCtx = new WeakMap<object, SessionState>();
-
-function getOrCreateSession(ctx: DispatchContext): SessionState {
-  const key = ctx.interp.ctx;
-  let s = sessionStateByCtx.get(key);
-  if (!s) {
-    const workspace = Workspace.fromExistingContext(
-      ctx.interp.ctx,
-      ctx.interp.ctx.mainFileName,
-      []
-    );
-    s = { workspace, lowerer: new Lowerer(workspace) };
-    sessionStateByCtx.set(key, s);
-  }
-  return s;
 }
 
 /** Build a parser-shaped `FuncStmt` from numbl's `FunctionDef`.
@@ -181,7 +154,7 @@ export const mtoc2CallExecutor: Executor<
   },
 
   compile(d, ctx: DispatchContext): CompiledArtifact | null {
-    const { workspace, lowerer } = getOrCreateSession(ctx);
+    const { workspace, lowerer } = getOrCreateSession(ctx.interp);
     try {
       const { source, cName } = compileSpec({
         workspace,
