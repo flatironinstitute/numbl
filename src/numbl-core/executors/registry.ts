@@ -183,7 +183,7 @@ export class Registry {
     // stmts with no shape — those skip the proposal loop entirely
     // and go straight to the hardcoded interpreter fallback.
     const stmt = siblings[i];
-    const lowered = tryLower(siblings, i);
+    const lowered = tryLower(siblings, i, ctx.interp, this.loweringCache);
     if (lowered === null) {
       const signal = ctx.interp.execStmt(stmt);
       return { signal };

@@ -158,6 +158,84 @@ export function classifyTopLevel(
   };
 }
 
+// ── Loop classification ─────────────────────────────────────────────────
+
+export interface LoopClassification {
+  /** The single For/While stmt this classification describes. */
+  readonly stmt: Stmt & { type: "For" | "While" };
+  readonly inputs: readonly string[];
+  readonly inputTypes: readonly JitType[];
+  /** Loop-local writes that are read by code AFTER the loop in the
+   *  same sibling list. Loop-internal-only temporaries are filtered
+   *  out so a JIT artifact doesn't need to write them back to env. */
+  readonly outputs: readonly string[];
+  readonly currentFile: string;
+  readonly hasReturn: boolean;
+  readonly cacheKey: string;
+}
+
+/**
+ * Classify a single For/While loop at `siblings[siblingIndex]`. The
+ * post-loop tail of the sibling list is scanned to filter the
+ * loop's assigned-set down to names that are actually live-out
+ * (read after the loop) — purely loop-internal scratch never makes
+ * it into the synthetic function's outputs.
+ */
+export function classifyLoop(
+  interp: Interpreter,
+  stmt: Stmt & { type: "For" | "While" },
+  siblings: readonly Stmt[],
+  siblingIndex: number,
+  prevInputTypes: readonly JitType[] | undefined
+): LoopClassification | null {
+  const analysis = analyzeLoop(stmt);
+
+  // Candidate input order: referenced names first, then assigned
+  // names that also exist in env (so the loop body's first iter sees
+  // the pre-loop value if it reads-then-writes).
+  const seen = new Set<string>();
+  const inputCandidates: string[] = [];
+  for (const name of [...analysis.inputs, ...analysis.outputs]) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    inputCandidates.push(name);
+  }
+
+  const gathered = gatherTypedEnvInputs(interp, inputCandidates);
+  if (!gathered) return null;
+  const { inputs, inputTypes } = gathered;
+
+  // Live-out set: inputs (every input the loop touched must round-trip
+  // to env so a post-loop reference — direct or via `disp(...)` etc. —
+  // sees the loop's final value), plus the For-loop variable, plus any
+  // name read in the post-loop tail of this sibling list. Loop-internal
+  // scratch (assigned but never read post-loop, and not in env) drops
+  // out of the writeback set so the JIT artifact doesn't pay a Map.set.
+  const liveOut = new Set<string>(inputs);
+  if (stmt.type === "For") liveOut.add(stmt.varName);
+  collectReadsFromSiblings(siblings as Stmt[], siblingIndex + 1, liveOut);
+  const outputs = [...new Set(analysis.outputs)].filter(n => liveOut.has(n));
+
+  widenAgainst(inputTypes, prevInputTypes);
+
+  const typeKey = inputs
+    .map((n, i) => `${n}:${jitTypeKey(inputTypes[i])}`)
+    .join(",");
+  const outputKey = outputs.join(",");
+  const lineLabel = stmt.span?.start ?? 0;
+  const cacheKey = `$loop:${interp.currentFile}@${lineLabel}|${typeKey}|out=${outputKey}`;
+
+  return {
+    stmt,
+    inputs,
+    inputTypes,
+    outputs,
+    currentFile: interp.currentFile,
+    hasReturn: analysis.hasReturn,
+    cacheKey,
+  };
+}
+
 // ── Call classification ─────────────────────────────────────────────────
 
 export interface CallClassification {
@@ -239,6 +317,35 @@ function analyzeTopLevel(stmts: Stmt[]): BlockVarInfo {
     outputs: [...assigned],
     hasReturn,
   };
+}
+
+/** Analyze a single For/While loop stmt — collects read/written
+ *  variable names by walking the loop's header expr/cond + body. */
+function analyzeLoop(stmt: Stmt & { type: "For" | "While" }): BlockVarInfo {
+  const assigned = new Set<string>();
+  const referenced = new Set<string>();
+  const hasReturn = walkStmt(stmt, assigned, referenced);
+  return {
+    inputs: [...referenced],
+    outputs: [...assigned],
+    hasReturn,
+  };
+}
+
+/** Mark every name read in the tail of a sibling list (from
+ *  `startIdx` onward). Used by the loop classifier to filter the
+ *  writeback set down to names that are live after the loop. The
+ *  walker conflates lvalue bases with reads (which is fine here —
+ *  any name appearing textually is conservatively "live"). */
+function collectReadsFromSiblings(
+  stmts: Stmt[],
+  startIdx: number,
+  out: Set<string>
+): void {
+  const sink = new Set<string>();
+  for (let i = startIdx; i < stmts.length; i++) {
+    walkStmt(stmts[i], sink, out);
+  }
 }
 
 function walkStmts(

@@ -33,8 +33,10 @@ import type { Interpreter } from "../interpreter/interpreter.js";
 import {
   classifyTopLevel,
   classifyCall,
+  classifyLoop,
   type TopLevelClassification,
   type CallClassification,
+  type LoopClassification,
 } from "./classification.js";
 
 /** What `propose()` receives — a discriminated union of the
@@ -43,6 +45,7 @@ import {
  *  falls through to its hardcoded interpreter path. */
 export type LoweredStmt =
   | TopLevelLoweredStmt
+  | LoopLoweredStmt
   | CallLoweredStmt
   | SynthLoweredStmt;
 
@@ -50,6 +53,13 @@ export type LoweredStmt =
 export interface TopLevelLoweredStmt {
   readonly kind: "top-level";
   readonly classification: TopLevelClassification;
+}
+
+/** Loop shape: a single For/While stmt analysed for loop codegen.
+ *  Produced by `tryLower` when the head stmt is a For/While. */
+export interface LoopLoweredStmt {
+  readonly kind: "loop";
+  readonly classification: LoopClassification;
 }
 
 /** Call shape: a user-function call analysed for call codegen.
@@ -160,7 +170,9 @@ export class LoweringCache {
  */
 export function tryLower(
   siblings: readonly Stmt[],
-  i: number
+  i: number,
+  interp: Interpreter,
+  cache: LoweringCache
 ): LoweredStmt | null {
   const head = siblings[i];
 
@@ -171,7 +183,37 @@ export function tryLower(
     return { kind: "synth", tag: head.tag, data: head.data };
   }
 
+  // Loop shape: a single For/While stmt. Classification needs the
+  // post-loop tail of the sibling list (to filter outputs) and the
+  // interpreter env (for input type inference), so it can't be done
+  // by an executor's `propose()` in isolation.
+  if (head.type === "For" || head.type === "While") {
+    return tryBuildLoop(interp, head, siblings, i, cache);
+  }
+
   return null;
+}
+
+function tryBuildLoop(
+  interp: Interpreter,
+  head: Stmt & { type: "For" | "While" },
+  siblings: readonly Stmt[],
+  i: number,
+  cache: LoweringCache
+): LoopLoweredStmt | null {
+  const prev = cache.getLastInputTypes(head, "");
+  const classification = classifyLoop(interp, head, siblings, i, prev);
+  if (!classification) return null;
+  cache.setLastInputTypes(head, "", classification.inputTypes);
+
+  const hit = cache.get(head, classification.cacheKey);
+  if (hit !== undefined) {
+    return cache.isBailed(hit) ? null : (hit as LoopLoweredStmt);
+  }
+
+  const entry: LoopLoweredStmt = { kind: "loop", classification };
+  cache.set(head, classification.cacheKey, entry);
+  return entry;
 }
 
 /**
