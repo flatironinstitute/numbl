@@ -25,6 +25,7 @@ import type { Executor, Proposal, RunResult } from "../types.js";
 import type { DispatchContext } from "../context.js";
 import type { LoweredStmt } from "../lowering.js";
 import { jitTypeKey, type JitType } from "../../jitTypes.js";
+import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { Stmt, Span } from "../../parser/index.js";
 import type { FunctionDef } from "../../interpreter/types.js";
 import {
@@ -143,17 +144,26 @@ export const mtoc2CallExecutor: Executor<
   compile(d, ctx: DispatchContext): CompiledArtifact | null {
     const { workspace, lowerer } = getOrCreateSession(ctx);
     try {
-      const { source } = compileSpec({
+      const { source, cName } = compileSpec({
         workspace,
         lowerer,
         funcDecl: synthesizeFuncStmt(d.fn),
         argTypes: d.mtoc2ArgTypes as Mtoc2Type[],
         nargout: d.nargout,
       });
+      // Surface the emitted JS through the same hook the legacy JS-JIT
+      // used so it shows up in the IDE's "internals" view and the CLI
+      // `--dump-js` flag.
+      const interp = ctx.interp as Interpreter;
+      const typeDesc = d.argTypes.map(jitTypeKey).join(", ");
+      interp.onJitCompile?.(
+        `mtoc2-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
+        source
+      );
       const factory = new Function(source)() as ($h: {
         write: (s: string) => void;
       }) => (...args: unknown[]) => unknown;
-      const rt = ctx.interp.rt;
+      const rt = interp.rt;
       const specFn = factory({ write: (s: string) => rt.output(s) });
       return { specFn };
     } catch (e) {
