@@ -19,6 +19,7 @@
 
 import type { Registry } from "./registry.js";
 import { mtoc2CallExecutor } from "./mtoc2/callExecutor.js";
+import { mtoc2TopLevelExecutor } from "./mtoc2/topLevelExecutor.js";
 
 /** Optimization mode label.
  *
@@ -60,6 +61,7 @@ export function registerExecutorsForOpt(
     case "0":
       return;
     case "1":
+      registry.registerWholeScope(mtoc2TopLevelExecutor);
       registry.register(mtoc2CallExecutor);
       return;
     case "e3":
