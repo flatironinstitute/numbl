@@ -82,13 +82,25 @@ function getOrCreateSession(ctx: DispatchContext): SessionState {
 }
 
 /** Build a parser-shaped `FuncStmt` from numbl's `FunctionDef`.
+ *
  *  Numbl drops the span when projecting parsed Function stmts into
- *  `FunctionDef`; we synthesize a placeholder span here. mtoc2 keys
- *  its spec cache on (span.file, argTypes, nargout) — using a
- *  constant "<jit>" file is fine because the source function name
- *  prefix already distinguishes different functions. */
+ *  `FunctionDef`. mtoc2 keys its spec cache on
+ *  `(span.file, argTypes, nargout)`, so we must derive the *real*
+ *  defining file — otherwise two functions with the same name from
+ *  different files (e.g. when numbl's addpath/rmpath shadows a
+ *  workspace function) would collide on a single spec entry and the
+ *  old body would be reused after the path change.
+ *
+ *  The file comes from the first body statement's span. Empty
+ *  bodies fall back to `<jit>` (a function with no body has no
+ *  shadowing concern). */
 function synthesizeFuncStmt(fd: FunctionDef): FuncStmt {
-  const span: Span = { file: "<jit>", start: 0, end: 0 };
+  const fromBody = fd.body[0]?.span?.file;
+  const span: Span = {
+    file: fromBody ?? "<jit>",
+    start: 0,
+    end: 0,
+  };
   return {
     type: "Function",
     name: fd.name,

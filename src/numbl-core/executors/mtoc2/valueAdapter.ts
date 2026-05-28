@@ -4,9 +4,17 @@
  * Numbl wraps tensors / chars / complex / structs in Refcounted
  * classes (`RuntimeTensor`, `RuntimeChar`, `RuntimeComplexNumber`)
  * keyed by a `kind:` discriminator. mtoc2's emitted JS uses plain
- * objects keyed by `mtoc2Tag:` (no class wrapper, no refcount). Field
- * shapes are otherwise identical (shape / data / imag, value, re/im),
- * so the adapter copies field references — no buffer copy.
+ * objects keyed by `mtoc2Tag:` (no class wrapper, no refcount).
+ *
+ * **Pass-by-value at the boundary.** MATLAB function calls are
+ * pass-by-value; a JIT'd function that mutates its argument must
+ * not leak the mutation to the caller. mtoc2's whole-program
+ * codegen handles this by wrapping every call-site argument in
+ * `mtoc2_deep_clone(...)` — but the JIT executor is a *new* call
+ * site that mtoc2 doesn't know about, so we have to clone the
+ * tensor data buffer ourselves on the way in. On the way out, we
+ * take ownership of the returned buffer directly (mtoc2's spec
+ * always returns a freshly-owned tensor).
  *
  * The executor only invokes these adapters on values whose JitType
  * was accepted by `jitTypeToMtoc2Type`. Unsupported value kinds
@@ -27,15 +35,29 @@ import {
   type RuntimeValue,
 } from "../../runtime/types.js";
 
-/** numbl RuntimeValue → mtoc2 emit-JS value shape. */
+/** numbl RuntimeValue → mtoc2 emit-JS value shape. Owned-typed
+ *  values (tensors) get their data buffer cloned so mtoc2's spec
+ *  body can mutate freely without leaking the change back through
+ *  numbl's caller-side env. */
 export function numblToMtoc2(v: RuntimeValue): unknown {
   if (isRuntimeNumber(v)) return v;
   if (isRuntimeLogical(v)) return v ? 1 : 0;
   if (isRuntimeString(v)) return v;
   if (isRuntimeTensor(v)) {
-    return v.imag !== undefined
-      ? { mtoc2Tag: "tensor", shape: v.shape, data: v.data, imag: v.imag }
-      : { mtoc2Tag: "tensor", shape: v.shape, data: v.data };
+    // Clone the data buffer. mtoc2's emitted body mutates parameters
+    // in place (it expects the caller to have cloned at call site).
+    const out: {
+      mtoc2Tag: "tensor";
+      shape: number[];
+      data: Float64Array;
+      imag?: Float64Array;
+    } = {
+      mtoc2Tag: "tensor",
+      shape: [...v.shape],
+      data: new Float64Array(v.data),
+    };
+    if (v.imag !== undefined) out.imag = new Float64Array(v.imag);
+    return out;
   }
   if (isRuntimeChar(v)) {
     return { mtoc2Tag: "char", value: v.value };
