@@ -33,11 +33,11 @@ import {
   tensorComplexFromDims,
   type Type,
   type DimInfo,
-} from "../../mtoc2/index.js";
+} from "../../jit/index.js";
 
 /** Translate a numbl `JitType` to the matching mtoc2 `Type`.
  *  Returns `null` for kinds the mtoc2 JIT path doesn't accept (yet). */
-export function jitTypeToMtoc2Type(jt: JitType): Type | null {
+export function jitTypeToCompilerType(jt: JitType): Type | null {
   switch (jt.kind) {
     case "number":
       return scalarDouble("unknown");

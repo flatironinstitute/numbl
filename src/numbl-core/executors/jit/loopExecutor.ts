@@ -1,5 +1,5 @@
 /**
- * mtoc2-loop — compiles a single For/While stmt via mtoc2's
+ * jit-loop — compiles a single For/While stmt via mtoc2's
  * `compileSpec` with the loop wrapped as a synthetic user function
  * whose params are the variables the loop reads (env inputs) and
  * whose outputs are the variables it assigns that are live after the
@@ -29,24 +29,24 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import {
   compileSpec,
   UnsupportedConstruct,
-  Mtoc2TypeError,
-  type Type as Mtoc2Type,
-} from "../../mtoc2/index.js";
-import { jitTypeToMtoc2Type } from "./typeAdapter.js";
-import { numblToMtoc2, mtoc2ToNumbl } from "./valueAdapter.js";
+  JitTypeError,
+  type Type as CompilerType,
+} from "../../jit/index.js";
+import { jitTypeToCompilerType } from "./typeAdapter.js";
+import { numblToJit, jitToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
-import { buildHostHelpers, type Mtoc2HostHelpers } from "./hostHelpers.js";
+import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
 const LOOP_COST = { compileMs: 50, perCallNs: 500, runNs: 500 };
 
-interface Mtoc2LoopData {
+interface JitLoopData {
   readonly loopStmt: Stmt & { type: "For" | "While" };
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
   readonly inputTypes: readonly JitType[];
-  readonly mtoc2InputTypes: readonly Mtoc2Type[];
+  readonly compilerInputTypes: readonly CompilerType[];
   readonly currentFile: string;
   readonly cacheKey: string;
 }
@@ -81,16 +81,13 @@ function synthesizeLoopFuncStmt(
   };
 }
 
-export const mtoc2LoopExecutor: Executor<
-  Mtoc2LoopData,
-  CompiledArtifact | null
-> = {
-  name: "mtoc2-loop",
+export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
+  name: "jit-loop",
 
   propose(
     lowered: LoweredStmt,
     ctx: DispatchContext
-  ): Proposal<Mtoc2LoopData> | null {
+  ): Proposal<JitLoopData> | null {
     if (lowered.kind !== "loop") return null;
     // Outer-loop only. Inner loops will execute inside the outer
     // loop's compiled artifact once the outer attempt succeeds.
@@ -101,11 +98,11 @@ export const mtoc2LoopExecutor: Executor<
     // the interpreter handles control flow correctly.
     if (classification.hasReturn) return null;
 
-    const mtoc2InputTypes: Mtoc2Type[] = [];
+    const compilerInputTypes: CompilerType[] = [];
     for (const jt of classification.inputTypes) {
-      const mt = jitTypeToMtoc2Type(jt);
+      const mt = jitTypeToCompilerType(jt);
       if (mt === null) return null;
-      mtoc2InputTypes.push(mt);
+      compilerInputTypes.push(mt);
     }
 
     return {
@@ -114,7 +111,7 @@ export const mtoc2LoopExecutor: Executor<
         inputs: classification.inputs,
         outputs: classification.outputs,
         inputTypes: classification.inputTypes,
-        mtoc2InputTypes,
+        compilerInputTypes,
         currentFile: classification.currentFile,
         cacheKey: classification.cacheKey,
       },
@@ -142,21 +139,21 @@ export const mtoc2LoopExecutor: Executor<
         workspace,
         lowerer,
         funcDecl,
-        argTypes: d.mtoc2InputTypes as Mtoc2Type[],
+        argTypes: d.compilerInputTypes as CompilerType[],
         nargout,
       });
       const typeDesc = d.inputTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
-        `mtoc2-loop:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
+        `jit-loop:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
         source
       );
       const factory = new Function(source)() as (
-        $h: Mtoc2HostHelpers
+        $h: JitHostHelpers
       ) => (...args: unknown[]) => unknown;
       const specFn = factory(buildHostHelpers(interp.rt));
       return { specFn };
     } catch (e) {
-      if (e instanceof UnsupportedConstruct || e instanceof Mtoc2TypeError) {
+      if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         return null;
       }
       throw e;
@@ -165,14 +162,14 @@ export const mtoc2LoopExecutor: Executor<
 
   run(compiled, d, ctx: DispatchContext): RunResult {
     if (compiled === null) {
-      return { bail: { message: "mtoc2-loop: codegen declined" } };
+      return { bail: { message: "jit-loop: codegen declined" } };
     }
     const interp = ctx.interp as Interpreter;
     try {
       const inputValues: unknown[] = [];
       for (const name of d.inputs) {
         const rv = interp.env.get(name);
-        inputValues.push(rv === undefined ? undefined : numblToMtoc2(rv));
+        inputValues.push(rv === undefined ? undefined : numblToJit(rv));
       }
       const result = compiled.specFn(...inputValues);
       // Writeback shape mirrors mtoc2's nargout convention.
@@ -180,19 +177,19 @@ export const mtoc2LoopExecutor: Executor<
         // No live-after-loop assigns — nothing to write back.
       } else if (d.outputs.length === 1) {
         if (result !== undefined) {
-          const rv = ensureRuntimeValue(mtoc2ToNumbl(result)) as RuntimeValue;
+          const rv = ensureRuntimeValue(jitToNumbl(result)) as RuntimeValue;
           interp.env.set(d.outputs[0], rv);
         }
       } else {
         if (!Array.isArray(result)) {
           throw new Error(
-            `mtoc2-loop: expected array for outputs.length=${d.outputs.length}`
+            `jit-loop: expected array for outputs.length=${d.outputs.length}`
           );
         }
         for (let i = 0; i < d.outputs.length; i++) {
           const elt = result[i];
           if (elt !== undefined) {
-            const rv = ensureRuntimeValue(mtoc2ToNumbl(elt)) as RuntimeValue;
+            const rv = ensureRuntimeValue(jitToNumbl(elt)) as RuntimeValue;
             interp.env.set(d.outputs[i], rv);
           }
         }
@@ -201,7 +198,7 @@ export const mtoc2LoopExecutor: Executor<
     } catch (e) {
       return {
         bail: {
-          message: `mtoc2-loop: runtime error: ${e instanceof Error ? e.message : String(e)}`,
+          message: `jit-loop: runtime error: ${e instanceof Error ? e.message : String(e)}`,
         },
       };
     }

@@ -28,7 +28,7 @@ export { Lowerer } from "./lowering/lower.js";
 
 export {
   UnsupportedConstruct,
-  TypeError as Mtoc2TypeError,
+  TypeError as JitTypeError,
 } from "./lowering/errors.js";
 
 export {

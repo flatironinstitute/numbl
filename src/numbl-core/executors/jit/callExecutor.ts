@@ -1,5 +1,5 @@
 /**
- * mtoc2-call — executor that compiles user-function calls via mtoc2's
+ * jit-call — executor that compiles user-function calls via mtoc2's
  * `compileSpec` JIT entry point and runs the emitted JS in-process.
  *
  * Replaces the JS-JIT call executor at `--opt 1`. The shape of the
@@ -38,23 +38,23 @@ import type { FunctionDef } from "../../interpreter/types.js";
 import {
   compileSpec,
   UnsupportedConstruct,
-  Mtoc2TypeError,
-  type Type as Mtoc2Type,
-} from "../../mtoc2/index.js";
-import { jitTypeToMtoc2Type } from "./typeAdapter.js";
-import { numblToMtoc2, mtoc2ToNumbl } from "./valueAdapter.js";
+  JitTypeError,
+  type Type as CompilerType,
+} from "../../jit/index.js";
+import { jitTypeToCompilerType } from "./typeAdapter.js";
+import { numblToJit, jitToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
-import { buildHostHelpers, type Mtoc2HostHelpers } from "./hostHelpers.js";
+import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
 const COST = { compileMs: 30, perCallNs: 100, runNs: 100 };
 
-interface Mtoc2CallData {
+interface JitCallData {
   readonly fn: FunctionDef;
   readonly nargout: number;
   readonly argTypes: readonly JitType[];
-  readonly mtoc2ArgTypes: readonly Mtoc2Type[];
+  readonly compilerArgTypes: readonly CompilerType[];
   readonly args: readonly unknown[];
 }
 
@@ -94,16 +94,13 @@ function synthesizeFuncStmt(fd: FunctionDef): FuncStmt {
   };
 }
 
-export const mtoc2CallExecutor: Executor<
-  Mtoc2CallData,
-  CompiledArtifact | null
-> = {
-  name: "mtoc2-call",
+export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
+  name: "jit-call",
 
   propose(
     lowered: LoweredStmt,
     ctx: DispatchContext
-  ): Proposal<Mtoc2CallData> | null {
+  ): Proposal<JitCallData> | null {
     if (lowered.kind !== "call") return null;
     // Disable JIT inside any enclosing for/while loop body. Once an
     // outer call has been JIT'd, its loops execute inside mtoc2's
@@ -121,11 +118,11 @@ export const mtoc2CallExecutor: Executor<
     if (classification.nargout === 0) return null;
 
     // Map every JitType to mtoc2; any rejection aborts the proposal.
-    const mtoc2ArgTypes: Mtoc2Type[] = [];
+    const compilerArgTypes: CompilerType[] = [];
     for (const jt of classification.argTypes) {
-      const mt = jitTypeToMtoc2Type(jt);
+      const mt = jitTypeToCompilerType(jt);
       if (mt === null) return null;
-      mtoc2ArgTypes.push(mt);
+      compilerArgTypes.push(mt);
     }
 
     return {
@@ -133,7 +130,7 @@ export const mtoc2CallExecutor: Executor<
         fn: classification.fn,
         nargout: classification.nargout,
         argTypes: classification.argTypes,
-        mtoc2ArgTypes,
+        compilerArgTypes,
         args: lowered.args,
       },
       cost: COST,
@@ -161,7 +158,7 @@ export const mtoc2CallExecutor: Executor<
         workspace,
         lowerer,
         funcDecl: synthesizeFuncStmt(d.fn),
-        argTypes: d.mtoc2ArgTypes as Mtoc2Type[],
+        argTypes: d.compilerArgTypes as CompilerType[],
         nargout: d.nargout,
       });
       // Surface the emitted JS through the same hook the legacy JS-JIT
@@ -170,16 +167,16 @@ export const mtoc2CallExecutor: Executor<
       const interp = ctx.interp as Interpreter;
       const typeDesc = d.argTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
-        `mtoc2-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
+        `jit-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
         source
       );
       const factory = new Function(source)() as (
-        $h: Mtoc2HostHelpers
+        $h: JitHostHelpers
       ) => (...args: unknown[]) => unknown;
       const specFn = factory(buildHostHelpers(interp.rt));
       return { specFn };
     } catch (e) {
-      if (e instanceof UnsupportedConstruct || e instanceof Mtoc2TypeError) {
+      if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         return null;
       }
       throw e;
@@ -188,11 +185,11 @@ export const mtoc2CallExecutor: Executor<
 
   run(compiled, d): RunResult {
     if (compiled === null) {
-      return { bail: { message: "mtoc2-call: codegen declined" } };
+      return { bail: { message: "jit-call: codegen declined" } };
     }
     try {
-      const mtoc2Args = d.args.map(v => numblToMtoc2(v as never));
-      const result = compiled.specFn(...mtoc2Args);
+      const compilerArgs = d.args.map(v => numblToJit(v as never));
+      const result = compiled.specFn(...compilerArgs);
       // mtoc2 return-shape convention:
       //   nargout = 0 → undefined (no value)
       //   nargout = 1 → bare value
@@ -203,16 +200,16 @@ export const mtoc2CallExecutor: Executor<
       if (d.nargout >= 2) {
         if (!Array.isArray(result)) {
           throw new Error(
-            `mtoc2-call: expected array for nargout=${d.nargout}, got ${typeof result}`
+            `jit-call: expected array for nargout=${d.nargout}, got ${typeof result}`
           );
         }
-        return { result: result.map(v => mtoc2ToNumbl(v)) };
+        return { result: result.map(v => jitToNumbl(v)) };
       }
-      return { result: mtoc2ToNumbl(result) };
+      return { result: jitToNumbl(result) };
     } catch (e) {
       return {
         bail: {
-          message: `mtoc2-call: runtime error: ${e instanceof Error ? e.message : String(e)}`,
+          message: `jit-call: runtime error: ${e instanceof Error ? e.message : String(e)}`,
         },
       };
     }

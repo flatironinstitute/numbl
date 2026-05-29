@@ -39,7 +39,7 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { isOptLevel } from "./numbl-core/executors/plugins.js";
-import { registerNodeCompileC } from "./numbl-core/executors/mtoc2/compileC.node.js";
+import { registerNodeCompileC } from "./numbl-core/executors/jit/compileC.node.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
 

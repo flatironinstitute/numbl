@@ -11,19 +11,19 @@
  */
 
 import type { Registry } from "./registry.js";
-import { mtoc2CallExecutor } from "./mtoc2/callExecutor.js";
-import { mtoc2LoopExecutor } from "./mtoc2/loopExecutor.js";
-import { mtoc2TopLevelExecutor } from "./mtoc2/topLevelExecutor.js";
-import { mtoc2CJitCallExecutor } from "./mtoc2/cJitCallExecutor.js";
-import { mtoc2CJitLoopExecutor } from "./mtoc2/cJitLoopExecutor.js";
-import { mtoc2CJitTopLevelExecutor } from "./mtoc2/cJitTopLevelExecutor.js";
+import { jitCallExecutor } from "./jit/callExecutor.js";
+import { jitLoopExecutor } from "./jit/loopExecutor.js";
+import { jitTopLevelExecutor } from "./jit/topLevelExecutor.js";
+import { cJitCallExecutor } from "./jit/cJitCallExecutor.js";
+import { cJitLoopExecutor } from "./jit/cJitLoopExecutor.js";
+import { cJitTopLevelExecutor } from "./jit/cJitTopLevelExecutor.js";
 
 /** Optimization mode label.
  *
  *   - `"0"` — pure AST interpreter, no executors registered.
  *   - `"1"` — mtoc2 JS-JIT: all three shapes (top-level, loop,
  *     call) emit JS via `compileSpec`. mtoc2 declines
- *     (`UnsupportedConstruct` / `Mtoc2TypeError`) fall back to the
+ *     (`UnsupportedConstruct` / `JitTypeError`) fall back to the
  *     interpreter cleanly.
  *   - `"2"` — mtoc2 C-JIT-first with JS-JIT fallback. Both backends
  *     register their executors; the dispatcher picks based on cost,
@@ -50,9 +50,9 @@ export function registerExecutorsForOpt(
     case "0":
       return;
     case "1":
-      registry.registerWholeScope(mtoc2TopLevelExecutor);
-      registry.register(mtoc2LoopExecutor);
-      registry.register(mtoc2CallExecutor);
+      registry.registerWholeScope(jitTopLevelExecutor);
+      registry.register(jitLoopExecutor);
+      registry.register(jitCallExecutor);
       return;
     case "2":
       // C-JIT first, JS-JIT as fallback. Both compete via the
@@ -60,12 +60,12 @@ export function registerExecutorsForOpt(
       // marshal the types, and its lower per-call/run cost wins
       // when both match. Outside its acceptance set, JS-JIT picks
       // up unchanged.
-      registry.registerWholeScope(mtoc2CJitTopLevelExecutor);
-      registry.registerWholeScope(mtoc2TopLevelExecutor);
-      registry.register(mtoc2CJitCallExecutor);
-      registry.register(mtoc2CJitLoopExecutor);
-      registry.register(mtoc2LoopExecutor);
-      registry.register(mtoc2CallExecutor);
+      registry.registerWholeScope(cJitTopLevelExecutor);
+      registry.registerWholeScope(jitTopLevelExecutor);
+      registry.register(cJitCallExecutor);
+      registry.register(cJitLoopExecutor);
+      registry.register(jitLoopExecutor);
+      registry.register(jitCallExecutor);
       return;
   }
 }

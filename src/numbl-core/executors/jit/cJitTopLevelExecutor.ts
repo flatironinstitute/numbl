@@ -1,9 +1,11 @@
 /**
- * mtoc2-cjit-loop — C-backed JIT executor for outermost For/While
- * loops. Mirrors `loopExecutor.ts` (JS-emit sibling) but routes
- * through `compileSpecC` → `cc -shared` → `koffi`. See
- * `cJitCallExecutor.ts` for the marshaling protocol; this file just
- * adapts the loop-shape `data` to the same C-side pipeline.
+ * cjit-top-level — C-backed JIT executor for whole-script bodies.
+ *
+ * Mirrors `topLevelExecutor.ts` (JS-emit sibling) but routes through
+ * `compileSpecC` → `cc -shared` → `koffi`. See `cJitCallExecutor.ts`
+ * for the marshaling protocol. Same `isAllSuppressed` gate as the JS
+ * sibling so `displayAssign`/`displayResult` semantics stay on the
+ * interpreter path.
  */
 
 import type { Executor, Proposal, RunResult } from "../types.js";
@@ -17,17 +19,17 @@ import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import {
   compileSpecC,
   UnsupportedConstruct,
-  Mtoc2TypeError,
-  type Type as Mtoc2Type,
+  JitTypeError,
+  type Type as CompilerType,
   type SpecCSignature,
-} from "../../mtoc2/index.js";
-import { jitTypeToMtoc2Type } from "./typeAdapter.js";
+} from "../../jit/index.js";
+import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { compileAndLoadC, type CompiledC } from "./compileC.js";
 import {
   buildCDeclaration,
-  mtoc2TypeToCDecl,
-  registerMtoc2TensorStruct,
+  compilerTypeToCDecl,
+  registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
   makeCMarshalCtx,
@@ -38,14 +40,14 @@ import {
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
-const LOOP_COST = { compileMs: 200, perCallNs: 80, runNs: 80 };
+const TOP_LEVEL_COST = { compileMs: 200, perCallNs: 200, runNs: 200 };
 
-interface Mtoc2CJitLoopData {
-  readonly loopStmt: Stmt & { type: "For" | "While" };
+interface CJitTopLevelData {
+  readonly stmts: readonly Stmt[];
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
   readonly inputTypes: readonly JitType[];
-  readonly mtoc2InputTypes: readonly Mtoc2Type[];
+  readonly compilerInputTypes: readonly CompilerType[];
   readonly currentFile: string;
   readonly cacheKey: string;
 }
@@ -55,63 +57,74 @@ interface CompiledArtifact {
   readonly signature: SpecCSignature;
 }
 
-function synthesizeLoopFuncStmt(
-  loopStmt: Stmt & { type: "For" | "While" },
+/** Same shape as the JS sibling's gate — decline scripts whose top
+ *  level has any unsuppressed Assign/MultiAssign/ExprStmt, since
+ *  those trigger numbl's display hooks. */
+function isAllSuppressed(stmts: readonly Stmt[]): boolean {
+  for (const s of stmts) {
+    if (s.type === "ExprStmt" && !s.suppressed) return false;
+    if (s.type === "Assign" && !s.suppressed) return false;
+    if (s.type === "MultiAssign" && !s.suppressed) return false;
+  }
+  return true;
+}
+
+function synthesizeTopLevelFuncStmt(
+  stmts: readonly Stmt[],
   inputs: readonly string[],
   outputs: readonly string[],
   fileName: string
 ): FuncStmt {
-  const offset = loopStmt.span?.start ?? 0;
-  const name = `$loop_${offset}`;
   const span: Span = { file: fileName, start: 0, end: 0 };
   return {
     type: "Function",
-    name,
-    functionId: name,
+    name: "$top",
+    functionId: "$top",
     params: [...inputs],
     outputs: [...outputs],
-    body: [loopStmt],
+    body: [...stmts] as Stmt[],
     argumentsBlocks: [],
     span,
   };
 }
 
-export const mtoc2CJitLoopExecutor: Executor<
-  Mtoc2CJitLoopData,
+export const cJitTopLevelExecutor: Executor<
+  CJitTopLevelData,
   CompiledArtifact | null
 > = {
-  name: "mtoc2-cjit-loop",
+  name: "cjit-top-level",
 
   propose(
     lowered: LoweredStmt,
     ctx: DispatchContext
-  ): Proposal<Mtoc2CJitLoopData> | null {
-    if (lowered.kind !== "loop") return null;
+  ): Proposal<CJitTopLevelData> | null {
+    if (lowered.kind !== "top-level") return null;
     const bridge = ctx.interp.nativeBridge;
     if (!bridge || !bridge.koffi) return null;
     if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
     if (classification.hasReturn) return null;
+    if (!isAllSuppressed(classification.stmts)) return null;
 
-    const mtoc2InputTypes: Mtoc2Type[] = [];
+    const compilerInputTypes: CompilerType[] = [];
     for (const jt of classification.inputTypes) {
-      const mt = jitTypeToMtoc2Type(jt);
+      const mt = jitTypeToCompilerType(jt);
       if (mt === null) return null;
-      if (mtoc2TypeToCDecl(mt) === null) return null;
-      mtoc2InputTypes.push(mt);
+      if (compilerTypeToCDecl(mt) === null) return null;
+      compilerInputTypes.push(mt);
     }
 
     return {
       data: {
-        loopStmt: classification.stmt,
+        stmts: classification.stmts,
         inputs: classification.inputs,
         outputs: classification.outputs,
         inputTypes: classification.inputTypes,
-        mtoc2InputTypes,
+        compilerInputTypes,
         currentFile: classification.currentFile,
         cacheKey: classification.cacheKey,
       },
-      cost: LOOP_COST,
+      cost: TOP_LEVEL_COST,
       bailRisk: false,
     };
   },
@@ -125,8 +138,8 @@ export const mtoc2CJitLoopExecutor: Executor<
     const bridge = interp.nativeBridge;
     if (!bridge || !bridge.koffi) return null;
     const { workspace, lowerer } = getOrCreateSession(interp);
-    const funcDecl = synthesizeLoopFuncStmt(
-      d.loopStmt,
+    const funcDecl = synthesizeTopLevelFuncStmt(
+      d.stmts,
       d.inputs,
       d.outputs,
       d.currentFile
@@ -140,25 +153,25 @@ export const mtoc2CJitLoopExecutor: Executor<
         workspace,
         lowerer,
         funcDecl,
-        argTypes: d.mtoc2InputTypes as Mtoc2Type[],
+        argTypes: d.compilerInputTypes as CompilerType[],
         nargout,
       });
       source = r.source;
       signature = r.signature;
       cName = r.cName;
     } catch (e) {
-      if (e instanceof UnsupportedConstruct || e instanceof Mtoc2TypeError) {
+      if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         return null;
       }
       throw e;
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    registerMtoc2TensorStruct(bridge.koffi as any);
+    registerTensorStruct(bridge.koffi as any);
     const declaration = buildCDeclaration(signature);
     if (declaration === null) return null;
     const typeDesc = d.inputTypes.map(jitTypeKey).join(", ");
     interp.onJitCompile?.(
-      `mtoc2-cjit-loop:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
+      `cjit-top-level:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
       source
     );
     const compiled = compileAndLoadC(source, declaration, bridge);
@@ -167,12 +180,12 @@ export const mtoc2CJitLoopExecutor: Executor<
 
   run(compiled, d, ctx: DispatchContext): RunResult {
     if (compiled === null) {
-      return { bail: { message: "mtoc2-cjit-loop: codegen declined" } };
+      return { bail: { message: "cjit-top-level: codegen declined" } };
     }
     const interp = ctx.interp as Interpreter;
     const bridge = interp.nativeBridge;
     if (!bridge || !bridge.koffi) {
-      return { bail: { message: "mtoc2-cjit-loop: nativeBridge gone" } };
+      return { bail: { message: "cjit-top-level: nativeBridge gone" } };
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ctxC = makeCMarshalCtx(bridge.koffi as any, compiled.compiled.lib);
@@ -188,7 +201,7 @@ export const mtoc2CJitLoopExecutor: Executor<
       );
       if (inputs === null) {
         return {
-          bail: { message: "mtoc2-cjit-loop: input marshal declined" },
+          bail: { message: "cjit-top-level: input marshal declined" },
         };
       }
       const nOut = sig.outputs.length;
@@ -196,7 +209,7 @@ export const mtoc2CJitLoopExecutor: Executor<
       if (nOut >= 2) {
         for (let i = 0; i < nOut; i++) {
           const oTy = sig.outputs[i].ty;
-          const cTy = mtoc2TypeToCDecl(oTy);
+          const cTy = compilerTypeToCDecl(oTy);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const buf = (bridge.koffi as any).alloc(cTy, 1);
           outAllocs.push(buf);
@@ -205,9 +218,8 @@ export const mtoc2CJitLoopExecutor: Executor<
       }
       const ret = compiled.compiled.fn(...inputs.args);
       inputs.release();
-      // Write outputs back into env.
       if (nOut === 0) {
-        // No live-after-loop assigns.
+        // Suppressed top-level with no live-out assigns.
       } else if (nOut === 1) {
         const oTy = sig.outputs[0].ty;
         let value: unknown;
@@ -258,7 +270,7 @@ export const mtoc2CJitLoopExecutor: Executor<
     } catch (e) {
       return {
         bail: {
-          message: `mtoc2-cjit-loop: runtime error: ${e instanceof Error ? e.message : String(e)}`,
+          message: `cjit-top-level: runtime error: ${e instanceof Error ? e.message : String(e)}`,
         },
       };
     }

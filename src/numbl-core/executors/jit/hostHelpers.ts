@@ -8,7 +8,7 @@
  *    mtoc2's emitted `mtoc2_plot_dispatch(...)` calls this in
  *    preference to the standalone-mode JSON-on-stdout wire format.
  *    We translate args from mtoc2's emit shape into `RuntimeValue`
- *    via `mtoc2ToNumbl` and call numbl's `dispatchPlotBuiltin`,
+ *    via `jitToNumbl` and call numbl's `dispatchPlotBuiltin`,
  *    pushing the resulting instruction onto `rt.plotInstructions` —
  *    so `colorbar('off')` / `pcolor(...)` / etc. produce the same
  *    plot-instruction stream as the interpreter would.
@@ -23,18 +23,18 @@
 import type { Runtime } from "../../runtime/runtime.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { dispatchPlotBuiltin } from "../../runtime/plotBuiltinDispatch.js";
-import { mtoc2ToNumbl } from "./valueAdapter.js";
+import { jitToNumbl } from "./valueAdapter.js";
 
-export interface Mtoc2HostHelpers {
+export interface JitHostHelpers {
   write: (s: string) => void;
   plotDispatch: (name: string, args: unknown[]) => void;
 }
 
-export function buildHostHelpers(rt: Runtime): Mtoc2HostHelpers {
+export function buildHostHelpers(rt: Runtime): JitHostHelpers {
   return {
     write: (s: string) => rt.output(s),
     plotDispatch: (name: string, args: unknown[]) => {
-      const runtimeArgs: RuntimeValue[] = args.map(a => mtoc2ToNumbl(a));
+      const runtimeArgs: RuntimeValue[] = args.map(a => jitToNumbl(a));
       const handled = dispatchPlotBuiltin(
         name,
         runtimeArgs,

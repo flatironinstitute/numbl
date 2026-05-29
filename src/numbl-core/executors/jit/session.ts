@@ -1,6 +1,6 @@
 /**
  * Per-LoweringContext mtoc2 session state shared between
- * `mtoc2CallExecutor` and `mtoc2TopLevelExecutor`. One `Workspace`
+ * `jitCallExecutor` and `jitTopLevelExecutor`. One `Workspace`
  * (built from numbl's existing `LoweringContext`) and one `Lowerer`
  * per execution session, so the `Lowerer.specializations` cache
  * persists across whole-scope + per-call dispatches.
@@ -10,7 +10,7 @@
  */
 
 import type { Interpreter } from "../../interpreter/interpreter.js";
-import { Workspace, Lowerer, type WorkspaceFile } from "../../mtoc2/index.js";
+import { Workspace, Lowerer, type WorkspaceFile } from "../../jit/index.js";
 
 export interface SessionState {
   workspace: Workspace;

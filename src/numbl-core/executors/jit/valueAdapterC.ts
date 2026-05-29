@@ -30,10 +30,10 @@ import {
   isRuntimeLogical,
   type RuntimeValue,
 } from "../../runtime/types.js";
-import type { Type, NumericType } from "../../mtoc2/index.js";
-import { isMultiElement } from "../../mtoc2/index.js";
+import type { Type, NumericType } from "../../jit/index.js";
+import { isMultiElement } from "../../jit/index.js";
 import type { KoffiLib } from "./compileC.js";
-import { MTOC2_MAX_NDIM } from "./typeAdapterC.js";
+import { JIT_MAX_NDIM } from "./typeAdapterC.js";
 
 /** Loose koffi typing — same shape as in typeAdapterC.ts. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -151,8 +151,8 @@ function marshalTensorInput(ctx: MarshalCtx, v: RuntimeTensor): unknown {
   // C layout based on the `mtoc2_tensor_t` struct registration.
   const shape = [...v.shape];
   while (shape.length < 2) shape.push(1); // mtoc2 minimum ndim is 2.
-  const dims = new Array(MTOC2_MAX_NDIM).fill(0);
-  for (let k = 0; k < shape.length && k < MTOC2_MAX_NDIM; k++) {
+  const dims = new Array(JIT_MAX_NDIM).fill(0);
+  for (let k = 0; k < shape.length && k < JIT_MAX_NDIM; k++) {
     dims[k] = shape[k];
   }
   return {

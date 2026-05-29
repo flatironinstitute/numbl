@@ -1,5 +1,5 @@
 /**
- * mtoc2-top-level — compiles a script body via mtoc2's `compileSpec`
+ * jit-top-level — compiles a script body via mtoc2's `compileSpec`
  * with the body wrapped as a synthetic user function whose params are
  * the variables the body reads (env inputs) and whose outputs are the
  * variables it assigns (env outputs).
@@ -8,7 +8,7 @@
  * start; we register this via `registerWholeScope`. On compile
  * success the entire script runs in mtoc2-emitted JS; on
  * `UnsupportedConstruct` / `TypeError` we decline and the dispatcher
- * falls through to per-stmt dispatch (where mtoc2-call still handles
+ * falls through to per-stmt dispatch (where jit-call still handles
  * individual user-function calls).
  *
  * Top-level loops *inside* the script execute as part of the
@@ -27,24 +27,24 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import {
   compileSpec,
   UnsupportedConstruct,
-  Mtoc2TypeError,
-  type Type as Mtoc2Type,
-} from "../../mtoc2/index.js";
-import { jitTypeToMtoc2Type } from "./typeAdapter.js";
-import { numblToMtoc2, mtoc2ToNumbl } from "./valueAdapter.js";
+  JitTypeError,
+  type Type as CompilerType,
+} from "../../jit/index.js";
+import { jitTypeToCompilerType } from "./typeAdapter.js";
+import { numblToJit, jitToNumbl } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
-import { buildHostHelpers, type Mtoc2HostHelpers } from "./hostHelpers.js";
+import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
 const TOP_LEVEL_COST = { compileMs: 100, perCallNs: 1000, runNs: 1000 };
 
-interface Mtoc2TopLevelData {
+interface JitTopLevelData {
   readonly stmts: readonly Stmt[];
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
   readonly inputTypes: readonly JitType[];
-  readonly mtoc2InputTypes: readonly Mtoc2Type[];
+  readonly compilerInputTypes: readonly CompilerType[];
   readonly currentFile: string;
   readonly cacheKey: string;
 }
@@ -101,16 +101,16 @@ function synthesizeTopLevelFuncStmt(
   };
 }
 
-export const mtoc2TopLevelExecutor: Executor<
-  Mtoc2TopLevelData,
+export const jitTopLevelExecutor: Executor<
+  JitTopLevelData,
   CompiledArtifact | null
 > = {
-  name: "mtoc2-top-level",
+  name: "jit-top-level",
 
   propose(
     lowered: LoweredStmt,
     ctx: DispatchContext
-  ): Proposal<Mtoc2TopLevelData> | null {
+  ): Proposal<JitTopLevelData> | null {
     if (lowered.kind !== "top-level") return null;
     // Defensive: whole-scope only fires at script entry, before any
     // loop body has run.
@@ -127,11 +127,11 @@ export const mtoc2TopLevelExecutor: Executor<
     // like `disp(...)`) can still JIT.
     if (!isAllSuppressed(classification.stmts)) return null;
 
-    const mtoc2InputTypes: Mtoc2Type[] = [];
+    const compilerInputTypes: CompilerType[] = [];
     for (const jt of classification.inputTypes) {
-      const mt = jitTypeToMtoc2Type(jt);
+      const mt = jitTypeToCompilerType(jt);
       if (mt === null) return null;
-      mtoc2InputTypes.push(mt);
+      compilerInputTypes.push(mt);
     }
 
     return {
@@ -140,7 +140,7 @@ export const mtoc2TopLevelExecutor: Executor<
         inputs: classification.inputs,
         outputs: classification.outputs,
         inputTypes: classification.inputTypes,
-        mtoc2InputTypes,
+        compilerInputTypes,
         currentFile: classification.currentFile,
         cacheKey: classification.cacheKey,
       },
@@ -168,21 +168,21 @@ export const mtoc2TopLevelExecutor: Executor<
         workspace,
         lowerer,
         funcDecl,
-        argTypes: d.mtoc2InputTypes as Mtoc2Type[],
+        argTypes: d.compilerInputTypes as CompilerType[],
         nargout,
       });
       const typeDesc = d.inputTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
-        `mtoc2-top-level:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
+        `jit-top-level:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
         source
       );
       const factory = new Function(source)() as (
-        $h: Mtoc2HostHelpers
+        $h: JitHostHelpers
       ) => (...args: unknown[]) => unknown;
       const specFn = factory(buildHostHelpers(interp.rt));
       return { specFn, nargout };
     } catch (e) {
-      if (e instanceof UnsupportedConstruct || e instanceof Mtoc2TypeError) {
+      if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         return null;
       }
       throw e;
@@ -191,7 +191,7 @@ export const mtoc2TopLevelExecutor: Executor<
 
   run(compiled, d, ctx: DispatchContext): RunResult {
     if (compiled === null) {
-      return { bail: { message: "mtoc2-top-level: codegen declined" } };
+      return { bail: { message: "jit-top-level: codegen declined" } };
     }
     const interp = ctx.interp as Interpreter;
     try {
@@ -202,7 +202,7 @@ export const mtoc2TopLevelExecutor: Executor<
       const inputValues: unknown[] = [];
       for (const name of d.inputs) {
         const rv = interp.env.get(name);
-        inputValues.push(rv === undefined ? undefined : numblToMtoc2(rv));
+        inputValues.push(rv === undefined ? undefined : numblToJit(rv));
       }
       const result = compiled.specFn(...inputValues);
       // Write outputs back to numbl's env. The shape mirrors
@@ -212,19 +212,19 @@ export const mtoc2TopLevelExecutor: Executor<
         // No-op (rare — script with no top-level assignments).
       } else if (d.outputs.length === 1) {
         if (result !== undefined) {
-          const rv = ensureRuntimeValue(mtoc2ToNumbl(result)) as RuntimeValue;
+          const rv = ensureRuntimeValue(jitToNumbl(result)) as RuntimeValue;
           interp.env.set(d.outputs[0], rv);
         }
       } else {
         if (!Array.isArray(result)) {
           throw new Error(
-            `mtoc2-top-level: expected array for outputs.length=${d.outputs.length}`
+            `jit-top-level: expected array for outputs.length=${d.outputs.length}`
           );
         }
         for (let i = 0; i < d.outputs.length; i++) {
           const elt = result[i];
           if (elt !== undefined) {
-            const rv = ensureRuntimeValue(mtoc2ToNumbl(elt)) as RuntimeValue;
+            const rv = ensureRuntimeValue(jitToNumbl(elt)) as RuntimeValue;
             interp.env.set(d.outputs[i], rv);
           }
         }
@@ -233,7 +233,7 @@ export const mtoc2TopLevelExecutor: Executor<
     } catch (e) {
       return {
         bail: {
-          message: `mtoc2-top-level: runtime error: ${e instanceof Error ? e.message : String(e)}`,
+          message: `jit-top-level: runtime error: ${e instanceof Error ? e.message : String(e)}`,
         },
       };
     }
