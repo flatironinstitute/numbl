@@ -312,11 +312,23 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       return null;
 
     case "Directive": {
-      // `assert_jit` was a legacy enforcement marker from an earlier
-      // JIT whose trigger shapes differed from the current one. It can
-      // no longer be enforced uniformly across opt levels, so we
-      // silently no-op it everywhere. Unknown directives are also
-      // ignored.
+      // `%!numbl:assert_jit` asserts that the enclosing loop / function /
+      // script body is JIT-compiled. The lowerer treats the directive as
+      // a no-op, so a JIT'd unit compiles it away and the interpreter
+      // never reaches it. If we DO reach it here, the enclosing unit ran
+      // in the interpreter — i.e. it was not JIT'd — so fail (at --opt 0
+      // there is no JIT, so it's a no-op). The opt-2 case where a unit
+      // JS-JITs instead of C-JITs is handled by the JS-JIT executors
+      // declining assert_jit units at --opt 2, which routes them here.
+      if (stmt.directive === "assert_jit" && this.optimization !== "0") {
+        const want = this.optimization === "2" ? "C-JIT" : "JS-JIT";
+        throw new RuntimeError(
+          `%!numbl:assert_jit: expected the enclosing loop/function/script ` +
+            `to be ${want}-compiled at --opt ${this.optimization}, but it ran ` +
+            `in the interpreter. (Run with --opt 0 to silence.)`
+        );
+      }
+      // Unknown directives (and assert_jit at --opt 0) are no-ops.
       return null;
     }
 

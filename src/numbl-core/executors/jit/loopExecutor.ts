@@ -93,6 +93,12 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
     // loop's compiled artifact once the outer attempt succeeds.
     if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
+    // `%!numbl:assert_jit` requires C-JIT at --opt 2 — decline the JS
+    // path so the loop C-JITs or falls through to the interpreter (which
+    // raises). At --opt 1 JS-JIT is the intended target.
+    if (ctx.interp.optimization === "2" && classification.assertsJit) {
+      return null;
+    }
     // mtoc2's user-function body model has no place to put a
     // top-of-function `return`. If the body contains one, decline so
     // the interpreter handles control flow correctly.

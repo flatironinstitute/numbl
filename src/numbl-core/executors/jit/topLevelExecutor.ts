@@ -116,6 +116,12 @@ export const jitTopLevelExecutor: Executor<
     // loop body has run.
     if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
+    // `%!numbl:assert_jit` requires C-JIT at --opt 2 — decline the JS
+    // path so the script C-JITs or falls through to the interpreter
+    // (which raises). At --opt 1 JS-JIT is the intended target.
+    if (ctx.interp.optimization === "2" && classification.assertsJit) {
+      return null;
+    }
     // Top-level scripts with `return` are interpreter-only — mtoc2's
     // user-function body model doesn't accept a top-level return.
     if (classification.hasReturn) return null;

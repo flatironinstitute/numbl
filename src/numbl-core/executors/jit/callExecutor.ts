@@ -110,6 +110,14 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
     // overhead is a net loss.
     if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
+    // `%!numbl:assert_jit` requires C-JIT at --opt 2. Decline the JS path
+    // for such units so they either C-JIT or fall through to the
+    // interpreter — which then raises on the directive (see
+    // interpreterExec.ts). At --opt 1 JS-JIT is the intended target, so
+    // no decline.
+    if (ctx.interp.optimization === "2" && classification.assertsJit) {
+      return null;
+    }
     // nargout=0 (bare-statement call like `f();`) is interpreter-only.
     // numbl's convention is that the function STILL returns its first
     // declared output for `ans` binding even with nargout=0, but

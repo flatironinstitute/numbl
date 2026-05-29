@@ -110,6 +110,9 @@ export interface TopLevelClassification {
   readonly outputs: readonly string[];
   readonly currentFile: string;
   readonly hasReturn: boolean;
+  /** Body contains a `%!numbl:assert_jit` directive (see
+   *  `containsAssertJit`). Enforced by the executors / interpreter. */
+  readonly assertsJit: boolean;
   readonly cacheKey: string;
 }
 
@@ -153,6 +156,7 @@ export function classifyTopLevel(
     outputs,
     currentFile: interp.currentFile,
     hasReturn: analysis.hasReturn,
+    assertsJit: containsAssertJit(stmts),
     cacheKey,
   };
 }
@@ -170,6 +174,8 @@ export interface LoopClassification {
   readonly outputs: readonly string[];
   readonly currentFile: string;
   readonly hasReturn: boolean;
+  /** Loop body contains a `%!numbl:assert_jit` directive. */
+  readonly assertsJit: boolean;
   readonly cacheKey: string;
 }
 
@@ -231,6 +237,7 @@ export function classifyLoop(
     outputs,
     currentFile: interp.currentFile,
     hasReturn: analysis.hasReturn,
+    assertsJit: containsAssertJit(stmt.body),
     cacheKey,
   };
 }
@@ -252,6 +259,8 @@ export interface CallClassification {
   readonly effectiveParams: readonly string[];
   /** Number of variadic args (0 when fn has no varargin). */
   readonly nVarargin: number;
+  /** Function body contains a `%!numbl:assert_jit` directive. */
+  readonly assertsJit: boolean;
 }
 
 export function classifyCall(
@@ -296,7 +305,54 @@ export function classifyCall(
 
   const cacheKey = JSON.stringify({ nargout, argTypes });
 
-  return { fn, nargout, argTypes, cacheKey, effectiveParams, nVarargin };
+  return {
+    fn,
+    nargout,
+    argTypes,
+    cacheKey,
+    effectiveParams,
+    nVarargin,
+    assertsJit: containsAssertJit(fn.body),
+  };
+}
+
+// ── assert_jit detection ────────────────────────────────────────────────
+
+/** True if any statement in `stmts` is a `%!numbl:assert_jit` directive,
+ *  recursing into control-flow bodies (if / for / while / switch / try)
+ *  but NOT into nested function definitions — a directive inside a nested
+ *  function belongs to that function's own unit. A unit whose body returns
+ *  true must be JIT-compiled at `--opt >= 1`: if the interpreter ever
+ *  executes the directive, the enclosing unit was not JIT'd (see the
+ *  `Directive` case in interpreterExec.ts and the opt-2 decline in the
+ *  JS-JIT executors). */
+export function containsAssertJit(stmts: readonly Stmt[]): boolean {
+  for (const s of stmts) {
+    switch (s.type) {
+      case "Directive":
+        if (s.directive === "assert_jit") return true;
+        break;
+      case "If":
+        if (containsAssertJit(s.thenBody)) return true;
+        for (const eib of s.elseifBlocks)
+          if (containsAssertJit(eib.body)) return true;
+        if (s.elseBody && containsAssertJit(s.elseBody)) return true;
+        break;
+      case "For":
+      case "While":
+        if (containsAssertJit(s.body)) return true;
+        break;
+      case "Switch":
+        for (const c of s.cases) if (containsAssertJit(c.body)) return true;
+        if (s.otherwise && containsAssertJit(s.otherwise)) return true;
+        break;
+      case "TryCatch":
+        if (containsAssertJit(s.tryBody)) return true;
+        if (containsAssertJit(s.catchBody)) return true;
+        break;
+    }
+  }
+  return false;
 }
 
 // ── AST analysis (input/output/return) ─────────────────────────────────
