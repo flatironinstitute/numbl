@@ -110,9 +110,11 @@ export interface TopLevelClassification {
   readonly outputs: readonly string[];
   readonly currentFile: string;
   readonly hasReturn: boolean;
-  /** Body contains a `%!numbl:assert_jit` directive (see
-   *  `containsAssertJit`). Enforced by the executors / interpreter. */
-  readonly assertsJit: boolean;
+  /** Body contains a `%!numbl:assert_jit c` directive (the C-JIT
+   *  variant) — see `containsAssertJitC`. Makes the JS-JIT executors
+   *  decline at `--opt 2` so the unit must C-JIT (or fall to the
+   *  interpreter, which raises). */
+  readonly assertsCJit: boolean;
   readonly cacheKey: string;
 }
 
@@ -156,7 +158,7 @@ export function classifyTopLevel(
     outputs,
     currentFile: interp.currentFile,
     hasReturn: analysis.hasReturn,
-    assertsJit: containsAssertJit(stmts),
+    assertsCJit: containsAssertJitC(stmts),
     cacheKey,
   };
 }
@@ -174,8 +176,8 @@ export interface LoopClassification {
   readonly outputs: readonly string[];
   readonly currentFile: string;
   readonly hasReturn: boolean;
-  /** Loop body contains a `%!numbl:assert_jit` directive. */
-  readonly assertsJit: boolean;
+  /** Loop body contains a `%!numbl:assert_jit c` directive (C-JIT variant). */
+  readonly assertsCJit: boolean;
   readonly cacheKey: string;
 }
 
@@ -237,7 +239,7 @@ export function classifyLoop(
     outputs,
     currentFile: interp.currentFile,
     hasReturn: analysis.hasReturn,
-    assertsJit: containsAssertJit(stmt.body),
+    assertsCJit: containsAssertJitC(stmt.body),
     cacheKey,
   };
 }
@@ -259,8 +261,8 @@ export interface CallClassification {
   readonly effectiveParams: readonly string[];
   /** Number of variadic args (0 when fn has no varargin). */
   readonly nVarargin: number;
-  /** Function body contains a `%!numbl:assert_jit` directive. */
-  readonly assertsJit: boolean;
+  /** Function body contains a `%!numbl:assert_jit c` directive (C-JIT variant). */
+  readonly assertsCJit: boolean;
 }
 
 export function classifyCall(
@@ -312,43 +314,46 @@ export function classifyCall(
     cacheKey,
     effectiveParams,
     nVarargin,
-    assertsJit: containsAssertJit(fn.body),
+    assertsCJit: containsAssertJitC(fn.body),
   };
 }
 
 // ── assert_jit detection ────────────────────────────────────────────────
 
-/** True if any statement in `stmts` is a `%!numbl:assert_jit` directive,
- *  recursing into control-flow bodies (if / for / while / switch / try)
- *  but NOT into nested function definitions — a directive inside a nested
- *  function belongs to that function's own unit. A unit whose body returns
- *  true must be JIT-compiled at `--opt >= 1`: if the interpreter ever
- *  executes the directive, the enclosing unit was not JIT'd (see the
- *  `Directive` case in interpreterExec.ts and the opt-2 decline in the
- *  JS-JIT executors). */
-export function containsAssertJit(stmts: readonly Stmt[]): boolean {
+/** True if any statement in `stmts` is a `%!numbl:assert_jit c` directive
+ *  (the C-JIT variant), recursing into control-flow bodies (if / for /
+ *  while / switch / try) but NOT into nested function definitions — a
+ *  directive inside a nested function belongs to that function's own unit.
+ *
+ *  Only the `c` variant matters here: it requires C-JIT at `--opt 2`, so
+ *  the JS-JIT executors decline such a unit at `--opt 2` to force either
+ *  C-JIT or an interpreter fallthrough (which then raises). The plain
+ *  `%!numbl:assert_jit` (require JS-JIT at `--opt 1` only) needs no
+ *  executor change — the interpreter's `Directive` handler raises if it
+ *  reaches the directive at `--opt 1`. */
+export function containsAssertJitC(stmts: readonly Stmt[]): boolean {
   for (const s of stmts) {
     switch (s.type) {
       case "Directive":
-        if (s.directive === "assert_jit") return true;
+        if (s.directive === "assert_jit" && s.args.includes("c")) return true;
         break;
       case "If":
-        if (containsAssertJit(s.thenBody)) return true;
+        if (containsAssertJitC(s.thenBody)) return true;
         for (const eib of s.elseifBlocks)
-          if (containsAssertJit(eib.body)) return true;
-        if (s.elseBody && containsAssertJit(s.elseBody)) return true;
+          if (containsAssertJitC(eib.body)) return true;
+        if (s.elseBody && containsAssertJitC(s.elseBody)) return true;
         break;
       case "For":
       case "While":
-        if (containsAssertJit(s.body)) return true;
+        if (containsAssertJitC(s.body)) return true;
         break;
       case "Switch":
-        for (const c of s.cases) if (containsAssertJit(c.body)) return true;
-        if (s.otherwise && containsAssertJit(s.otherwise)) return true;
+        for (const c of s.cases) if (containsAssertJitC(c.body)) return true;
+        if (s.otherwise && containsAssertJitC(s.otherwise)) return true;
         break;
       case "TryCatch":
-        if (containsAssertJit(s.tryBody)) return true;
-        if (containsAssertJit(s.catchBody)) return true;
+        if (containsAssertJitC(s.tryBody)) return true;
+        if (containsAssertJitC(s.catchBody)) return true;
         break;
     }
   }

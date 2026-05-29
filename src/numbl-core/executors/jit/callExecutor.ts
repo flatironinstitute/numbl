@@ -110,12 +110,12 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
     // overhead is a net loss.
     if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
-    // `%!numbl:assert_jit` requires C-JIT at --opt 2. Decline the JS path
-    // for such units so they either C-JIT or fall through to the
+    // `%!numbl:assert_jit c` requires C-JIT at --opt 2. Decline the JS
+    // path for such units so they either C-JIT or fall through to the
     // interpreter — which then raises on the directive (see
-    // interpreterExec.ts). At --opt 1 JS-JIT is the intended target, so
-    // no decline.
-    if (ctx.interp.optimization === "2" && classification.assertsJit) {
+    // interpreterExec.ts). Plain `assert_jit` only requires JS-JIT at
+    // --opt 1, so it does not gate here.
+    if (ctx.interp.optimization === "2" && classification.assertsCJit) {
       return null;
     }
     // nargout=0 (bare-statement call like `f();`) is interpreter-only.

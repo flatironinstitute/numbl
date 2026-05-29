@@ -316,19 +316,34 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       // script body is JIT-compiled. The lowerer treats the directive as
       // a no-op, so a JIT'd unit compiles it away and the interpreter
       // never reaches it. If we DO reach it here, the enclosing unit ran
-      // in the interpreter — i.e. it was not JIT'd — so fail (at --opt 0
-      // there is no JIT, so it's a no-op). The opt-2 case where a unit
-      // JS-JITs instead of C-JITs is handled by the JS-JIT executors
-      // declining assert_jit units at --opt 2, which routes them here.
-      if (stmt.directive === "assert_jit" && this.optimization !== "0") {
-        const want = this.optimization === "2" ? "C-JIT" : "JS-JIT";
-        throw new RuntimeError(
-          `%!numbl:assert_jit: expected the enclosing loop/function/script ` +
-            `to be ${want}-compiled at --opt ${this.optimization}, but it ran ` +
-            `in the interpreter. (Run with --opt 0 to silence.)`
-        );
+      // in the interpreter — i.e. it was not JIT'd.
+      //
+      //   - plain `assert_jit`   requires JS-JIT at --opt 1 only.
+      //   - `assert_jit c`       additionally requires C-JIT at --opt 2.
+      //
+      // --opt 0 is always a no-op. The --opt 2 case where a `c` unit
+      // JS-JITs instead of C-JITs is forced here too: the JS-JIT
+      // executors decline `c` units at --opt 2, routing them to the
+      // interpreter when C-JIT also declines.
+      if (stmt.directive === "assert_jit") {
+        const wantC = stmt.args.includes("c");
+        if (this.optimization === "1") {
+          throw new RuntimeError(
+            `%!numbl:assert_jit: expected the enclosing loop/function/script ` +
+              `to be JS-JIT-compiled at --opt 1, but it ran in the ` +
+              `interpreter. (Run with --opt 0 to silence.)`
+          );
+        }
+        if (this.optimization === "2" && wantC) {
+          throw new RuntimeError(
+            `%!numbl:assert_jit c: expected the enclosing loop/function/` +
+              `script to be C-JIT-compiled at --opt 2, but it ran in the ` +
+              `interpreter. (Run with --opt 0 to silence.)`
+          );
+        }
       }
-      // Unknown directives (and assert_jit at --opt 0) are no-ops.
+      // No-ops: any directive at --opt 0; plain assert_jit at --opt 2;
+      // unknown directives.
       return null;
     }
 
