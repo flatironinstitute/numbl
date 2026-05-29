@@ -6,9 +6,8 @@
  * executors consume to decide whether they can lower a stmt list /
  * call and to key their caches.
  *
- * Lives outside `jsJit/` and `cJit/` because the analysis is purely
- * AST + type inference and is consumed by the mtoc2 executors
- * (`executors/mtoc2/`) — no JS-JIT IR or C-JIT path involved.
+ * The analysis is purely AST + type inference and is consumed by the
+ * JIT executors (`executors/jit/`) — no backend-specific IR involved.
  */
 
 import type { Interpreter } from "../interpreter/interpreter.js";

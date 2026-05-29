@@ -90,8 +90,9 @@ export class Interpreter {
   /**
    * Optimization mode:
    *   "0" — pure AST interpreter, no JIT.
-   *   "1" — mtoc2 JIT (default): top-level + call shapes get
-   *         type-specialized JS via mtoc2's `compileSpec`.
+   *   "1" — JS-JIT (default): top-level + call shapes get
+   *         type-specialized JS via the JIT's `compileSpec`.
+   *   "2" — C-JIT: scalar/tensor kernels via `compileSpecC` + koffi.
    */
   optimization: import("../executors/plugins.js").OptLevel = "1";
 

@@ -59,7 +59,7 @@ export interface ExecOptions {
   system?: SystemAdapter;
   /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
   onInput?: (prompt: string) => string;
-  /** Optimization mode: `"0"` interpreter, `"1"` mtoc2 JIT. */
+  /** Optimization mode: `"0"` interpreter, `"1"` JS-JIT, `"2"` C-JIT. */
   optimization?: import("./executors/plugins.js").OptLevel;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.

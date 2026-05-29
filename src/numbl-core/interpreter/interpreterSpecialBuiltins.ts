@@ -31,7 +31,7 @@ export interface InterpreterContext {
   evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
-  /** Optimization mode: "0" = no JIT, "1" = mtoc2 JIT. */
+  /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "2" = C-JIT. */
   optimization: import("../executors/plugins.js").OptLevel;
   /** Resolve a workspace function or class name to its source file,
    *  or undefined if no workspace file provides that name.

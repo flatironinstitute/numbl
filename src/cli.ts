@@ -339,7 +339,9 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --opt <mode>       Optimization mode (default: 1)
                        0  — interpreter (no JIT)
-                       1  — mtoc2 JIT: type-specialize hot user functions
+                       1  — JS-JIT: type-specialize hot user functions to JS
+                       2  — C-JIT: scalar/tensor kernels via cc + koffi
+                            (Node only; falls back to JS-JIT otherwise)
   --no-fast-math     Build/load the native LAPACK addon without
                      -ffast-math (reductions stay bitwise-deterministic;
                      transcendentals lose libmvec vectorization)

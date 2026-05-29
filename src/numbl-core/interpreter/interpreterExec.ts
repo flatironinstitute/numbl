@@ -312,12 +312,11 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       return null;
 
     case "Directive": {
-      // `assert_jit` was a JS-JIT-era enforcement marker (the JS-JIT
-      // had broader trigger shapes — top-level / loop / call — than
-      // mtoc2's call-only JIT). With mtoc2 at --opt 1, a directive
-      // sitting in a top-level loop will always trip because mtoc2
-      // doesn't JIT loop bodies, so we silently no-op it everywhere.
-      // Unknown directives are also ignored.
+      // `assert_jit` was a legacy enforcement marker from an earlier
+      // JIT whose trigger shapes differed from the current one. It can
+      // no longer be enforced uniformly across opt levels, so we
+      // silently no-op it everywhere. Unknown directives are also
+      // ignored.
       return null;
     }
 

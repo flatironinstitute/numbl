@@ -11,9 +11,9 @@
  * Lowering here is *classification only*: it analyses inputs/outputs,
  * infers types, and synthesizes a cacheKey. It does NOT make
  * codegen-feasibility decisions — those live in the codegen executor's
- * `propose`. This keeps the dispatcher free of dependencies on any
- * specific JIT backend (mtoc2 today; the legacy JS-JIT / C-JIT
- * backends have been retired).
+ * `propose`. This keeps the dispatcher free of dependencies on the
+ * JIT backend's internals (the in-tree compiler under
+ * `src/numbl-core/jit`).
  *
  * Shapes today:
  *   - `top-level` — script body (top-level scope). Whole script

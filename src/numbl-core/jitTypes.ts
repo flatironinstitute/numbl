@@ -1,7 +1,7 @@
 /**
  * JIT type system.
  *
- * Used by the executor classification phase and by the mtoc2 type
+ * Used by the executor classification phase and by the JIT type
  * adapter to map numbl runtime values onto JIT specializations.
  * The IR node definitions that previously lived alongside this file
  * (`JitExpr` / `JitStmt` / `JitCacheEntry`) belonged to the legacy

@@ -21,11 +21,11 @@ import { cJitTopLevelExecutor } from "./jit/cJitTopLevelExecutor.js";
 /** Optimization mode label.
  *
  *   - `"0"` — pure AST interpreter, no executors registered.
- *   - `"1"` — mtoc2 JS-JIT: all three shapes (top-level, loop,
- *     call) emit JS via `compileSpec`. mtoc2 declines
+ *   - `"1"` — JS-JIT: all three shapes (top-level, loop,
+ *     call) emit JS via `compileSpec`. JIT declines
  *     (`UnsupportedConstruct` / `JitTypeError`) fall back to the
  *     interpreter cleanly.
- *   - `"2"` — mtoc2 C-JIT-first with JS-JIT fallback. Both backends
+ *   - `"2"` — C-JIT-first with JS-JIT fallback. Both backends
  *     register their executors; the dispatcher picks based on cost,
  *     so the C path wins where it applies (scalar / tensor numeric
  *     types with a wired `nativeBridge`) and the JS path picks up
