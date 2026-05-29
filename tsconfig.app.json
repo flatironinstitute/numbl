@@ -26,7 +26,7 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["src", "../mtoc2/src/builtins/runtime/runtime-globals.d.ts"],
+  "include": ["src"],
   "exclude": [
     "src/cli.ts",
     "src/cli-fileio.ts",
