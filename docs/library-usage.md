@@ -36,7 +36,7 @@ Pass an `ExecOptions` object to control execution:
 const result = executeCode(code, {
   onOutput: text => console.log(text), // streaming output callback
   displayResults: true, // show expression results
-  optimization: "1", // "0"=interpreter only, "1"=JS-JIT (default), "e3"=C-JIT (Node only)
+  optimization: "1", // "0"=interpreter only, "1"=JS-JIT (default), "2"=C-JIT (Node only)
 });
 ```
 

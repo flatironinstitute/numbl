@@ -23,7 +23,7 @@ The CLI provides:
 
 ## Options of note
 
-- `--opt <0|1|e3>` — interpreter only / JS-JIT (default) / JS-JIT plus the C-JIT scalar-loop optimizer (Node only). See [jit/overview.md](jit/overview.md).
+- `--opt <0|1|2>` — interpreter only / JS-JIT (default) / C-JIT via `cc` + koffi (Node only; falls back to JS-JIT when unavailable). See [jit/overview.md](jit/overview.md).
 - `--dump-js` — write JIT-generated JavaScript to disk for inspection.
 - `--dump-ast` — print the parsed AST as JSON.
 - `--stream` — NDJSON output, suitable for programmatic consumers.

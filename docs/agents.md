@@ -17,9 +17,10 @@ The execution pipeline is: Parse → AST-walk via the `Interpreter` class (`src/
 The interpreter has its own builtin system in `src/numbl-core/interpreter/builtins/`. These use the `IBuiltin` interface (`types.ts`) with:
 
 - **`resolve(argTypes, nargout)`**: Given JIT type info for arguments, returns output types and a specialized `apply` function — or `null` to reject.
-- **`jitEmit(argCode, argTypes)`** (optional): Fast-path JS code emission for the JIT compiler. Returns an inline JS expression or `null` to fall back to the `$h.ib_<name>` helper.
 
-The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor implements one strategy (JS-JIT top-level / loop / call under `--opt 1`; C-JIT loop / fuse / chain under `--opt e3`, Node only). The dispatcher lowers each statement once via the shared lowering pipeline (`executors/lowering.ts`) and lets executors compete by cost estimate. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
+(The JIT compiler does **not** emit through `IBuiltin`; it has its own builtin registry with `emitJs`/`emitC` hooks under `src/numbl-core/jit/builtins/`.)
+
+The JIT sits on top of the interpreter as a registry of named executors (`src/numbl-core/executors/`). Each executor implements one strategy (JS-JIT top-level / loop / call under `--opt 1`; C-JIT top-level / loop / call under `--opt 2`, Node only). The executors call numbl's in-tree JIT compiler, a self-contained subsystem under `src/numbl-core/jit/` (lowering → IR → JS/C codegen, builtins, runtime snippets) with no external dependency. The dispatcher lowers each statement once via the shared lowering pipeline (`executors/lowering.ts`) and lets executors compete by cost estimate. See [developer_reference/executors.md](developer_reference/executors.md) for the registry design and [developer_reference/jit/overview.md](developer_reference/jit/overview.md) for JIT trigger points and `--opt` levels.
 
 ## Style
 
@@ -88,7 +89,7 @@ New builtins should include inline `help` via the `help` field on `defineBuiltin
 
 Type rules must handle all relevant JitType kinds (`number`, `boolean`, `complex_or_number`, `tensor`, `string`, `char`, `struct`, `class_instance`, and others — see [developer_reference/compiler/type-system.md](developer_reference/compiler/type-system.md) for the full list). Return `null` for unsupported types to fall back to the interpreter.
 
-Optional `jitEmit` provides fast-path JS code for scalar/real-tensor cases. Use helpers like `unaryMathJitEmit(mathFn, tensorHelper)` and `binaryMathJitEmit(mathFn)`.
+To make a builtin JIT-compilable, add a matching definition to the JIT compiler's own builtin set under `src/numbl-core/jit/builtins/defs/` (with `emitJs`/`emitC` hooks); a source builtin with no JIT counterpart simply runs on the interpreter.
 
 Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, `RTV.logical()`. Use `toNumber(arg)` to extract a scalar. Check types with `isRuntimeNumber()`, `isRuntimeTensor()`, `isRuntimeChar()`, etc.
 
@@ -126,7 +127,6 @@ Options (for REPL):
 
 Options (for run and eval):
   --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write C-JIT-generated C source to file
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -135,12 +135,12 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --opt <mode>       Optimization mode (default: 1)
                        0  — interpreter (no JIT)
-                       1  — JS-JIT: type-specialize hot functions/loops to JS
-                       e3 — C-JIT scalar loops only (Node only)
-  --no-fast-math     Disable -ffast-math for C-JIT kernels
-                     (default is on: libmvec-vectorized transcendentals,
-                     reductions reorder-allowed; opt out for
-                     bitwise-deterministic FP semantics)
+                       1  — JS-JIT: type-specialize hot user functions to JS
+                       2  — C-JIT: scalar/tensor kernels via cc + koffi
+                            (Node only; falls back to JS-JIT otherwise)
+  --no-fast-math     Build/load the native LAPACK addon without
+                     -ffast-math (reductions stay bitwise-deterministic;
+                     transcendentals lose libmvec vectorization)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)

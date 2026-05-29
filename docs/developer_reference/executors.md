@@ -1,20 +1,20 @@
 # Executor Registry
 
-Pluggable strategies for handling AST execution. The interpreter delegates each statement (or run of statements) — and each user-function call — to a registry of _executors_. Each executor implements one strategy (JS-JIT top-level, JS-JIT loop, JS-JIT call, eventually C-JIT specializations, ...). The AST-walking interpreter is the dispatcher's hardcoded last-resort fallback — it is not a registered executor.
+Pluggable strategies for handling AST execution. The interpreter delegates each statement (or run of statements) — and each user-function call — to a registry of _executors_. Each executor implements one strategy (JS-JIT top-level/loop/call at `--opt 1`; C-JIT top-level/loop/call at `--opt 2`). The AST-walking interpreter is the dispatcher's hardcoded last-resort fallback — it is not a registered executor.
 
 ## Goals
 
 - **Modularity** — each strategy is a self-contained executor with a uniform interface. Adding a strategy means adding one file, not threading a flag through several layers.
 - **Composition** — an outer executor (e.g., JS-JIT loop) can delegate sub-statements to the registry rather than re-implementing them.
 - **Runtime-driven dispatch** — selection happens at the moment of execution, with full live runtime info (shapes, exact values, etc.).
-- **Mode-driven registration** — `--opt 0/1/e3` selects which executors get registered. The browser bundle simply omits executors whose dependencies it can't satisfy.
+- **Mode-driven registration** — `--opt 0/1/2` selects which executors get registered. The browser bundle simply omits executors whose dependencies it can't satisfy (the C-JIT path needs `cc` + `koffi`, Node only).
 
 ## Concepts
 
 - **Executor** — handles a piece of work. Typically one or more consecutive statements, or a user-function call. Implements the `Executor` interface below.
 - **Registry** — holds executors, dispatches at runtime, owns per-executor caches.
 - **Dispatch context** (`DispatchContext`) — passed to every executor call. Provides env access, the runtime, type-info queries, and runtime callbacks.
-- **LoweredStmt** — the dispatcher's pre-propose lowering pass produces a discriminated union (`top-level` / `loop` / `call` / `fuse` / `synth`) carrying the lowered IR plus pre-computed feasibility flags (`hasReturn`, `hasIO`, `hasBailRisk`, ...). Executors filter on the kind in `propose()`.
+- **LoweredStmt** — the dispatcher's pre-propose lowering pass produces a discriminated union (`top-level` / `loop` / `call` / `synth`) carrying the lowered IR plus pre-computed feasibility flags (`hasReturn`, `hasIO`, ...). Executors filter on the kind in `propose()`.
 - **CacheKey** — per-executor projection of the proposal data into a stable string. Drops volatile bits (e.g., exact scalar values) so unrelated runs of the same code reuse compiled artifacts.
 - **Cost estimate** — three numbers the executor returns with each proposal: estimated compile time (ms, paid once on cache miss), per-call overhead (ns, paid every dispatch), and run time (ns, the actual work).
 - **Bail-risk** — whether a specific proposal's compiled artifact may fail an invariant mid-execution. Per-proposal because a single executor can produce both bail-risky and bail-safe proposals depending on its inputs. The dispatcher refuses bail-risk proposals when the surrounding context has observable side effects that mustn't repeat.
@@ -107,8 +107,7 @@ Today's specialized shapes:
 - `top-level` — script body (top-level scope, first stmt). Whole script lowered as a synthetic FunctionDef. Lowered separately via `tryLowerTopLevel` and dispatched through `Registry.tryRunWholeScope` before the per-stmt loop runs, not through `tryLower`.
 - `loop` — for/while loop stmt. Loop body lowered as a synthetic FunctionDef.
 - `call` — user-function call. Lowered via `tryLowerCall` from `dispatchCall`.
-- `fuse` — a single AST `Assign` whose RHS is a fusable element-wise expression tree (consumed by `c-jit-fuse`).
-- `synth` — a `Synth` AST stmt produced by a registered AST stmt-list transformer that collapses a contiguous run of stmts into a unit (e.g., `c-jit-chain`). The `tag` field discriminates among multiple registered transformers.
+- `synth` — a `Synth` AST stmt produced by a registered AST stmt-list transformer that collapses a contiguous run of stmts into a unit. The `tag` field discriminates among transformers. (No transformer is registered today; the shape remains in the union for future use.)
 
 Stmts with no shape (e.g. a single Assign at non-top-level) skip the proposal loop and go straight to the hardcoded interpreter fallback — there are no executors that consume "raw" stmts.
 
@@ -118,16 +117,18 @@ Lowerings are cached in `LoweringCache`, keyed by (head Stmt or FunctionDef, cla
 
 Two patterns, both first-class:
 
-1. **AST stmt-list transformers (Synth)** — each executor handles exactly one stmt, but a registered AST transformer can rewrite a contiguous run of stmts into a single `Synth` stmt before dispatch. The matching `synth`-shape executor then handles that one rewritten stmt as a unit. `c-jit-chain` is the current consumer. Lookahead at `propose()` time is also available via `ctx.peekSibling(offset)` and `ctx.siblings`.
+1. **AST stmt-list transformers (Synth)** — each executor handles exactly one stmt, but a registered AST transformer can rewrite a contiguous run of stmts into a single `Synth` stmt before dispatch. The matching `synth`-shape executor then handles that one rewritten stmt as a unit. (No transformer is registered today.) Lookahead at `propose()` time is also available via `ctx.peekSibling(offset)` and `ctx.siblings`.
 2. **Sub-dispatch** — within `compile` or `run`, an executor calls back into the registry to handle sub-stmts. Sub-dispatch can recurse; the dispatcher guards against re-entering the same executor on the same stmt.
 
 ## Bailouts
 
-A runtime invariant violation inside `run` — a complex value where the kernel was specialized for real, a tensor that grew, etc. — raises a Bail. The dispatcher invalidates the cache entry (unless `transient: true`) and tries the next candidate. Since the AST interpreter always matches and never bails, recovery is guaranteed.
+The dispatcher supports bailing: a `{ bail }` from `run` invalidates the cache entry (unless `transient: true`) and falls through to the next candidate, and since the AST interpreter always matches and never bails, recovery is guaranteed.
+
+In practice the current JIT executors (`src/numbl-core/jit`) **reject statically** rather than bailing mid-run: the compiler either lowers a spec cleanly or throws `UnsupportedConstruct` / `JitTypeError` at `compile()` time, which the executor catches and declines from. So once `compile()` returns an artifact it runs to completion, and the JIT executors report `bailRisk: false`. The `{ bail }` path is still used for hard runtime errors surfaced by the emitted code (re-routed to the interpreter), but there is no per-operation type-guard bailout.
 
 ### Bail-risk and side effects
 
-A bail happens _during_ `run`, after the executor has already started producing output. If that output included observable side effects (`disp`, `fprintf`, file writes, plot commands, …), re-running on the interpreter would emit them a second time. To prevent this, `propose()` sets `bailRisk: true` when the proposed artifact may fail an invariant after starting to emit output. The lowering pipeline pre-computes `hasIO` and `hasBailRisk` flags on the LoweredStmt; executors typically reject the proposal when both are true.
+`bailRisk: true` marks a proposal whose artifact might fail an invariant _after_ it has already emitted observable output (`disp`, `fprintf`, file writes, plot commands, …) — re-running on the interpreter would emit it twice. The dispatcher filters such proposals out of `requireNoBail` contexts. Because the current JIT declines statically, its executors set `bailRisk: false`; the field and the dispatcher filtering remain for executors that need them.
 
 ## Telemetry
 
@@ -137,15 +138,19 @@ Every successful `run()` call invokes `interp.onExecutorFired?.(executor.name, k
 
 `registerExecutorsForOpt(registry, opt)` in `executors/plugins.ts` is the single switch from an `--opt` level to a set of registered executors. Adding a new mode means extending that function — no other call-site changes.
 
-| `--opt` | Executors registered                                                                     |
-| ------- | ---------------------------------------------------------------------------------------- |
-| 0       | (none — AST interpreter is the hardcoded fallback)                                       |
-| 1       | js-jit-top-level, js-jit-loop, js-jit-call                                               |
-| e3      | c-jit-loop, c-jit-fuse, c-jit-chain (Node only — see below; **excludes** the JS-JIT set) |
+| `--opt` | Executors registered                                                                                       |
+| ------- | ---------------------------------------------------------------------------------------------------------- |
+| 0       | (none — AST interpreter is the hardcoded fallback)                                                         |
+| 1       | jit-top-level, jit-loop, jit-call (JS-JIT)                                                                 |
+| 2       | cjit-top-level, cjit-loop, cjit-call (C-JIT) + the JS-JIT set as fallback (Node only — needs `cc`+`koffi`) |
 
-The C-JIT (e3) executors are wired in via `setCJitRegistrar` rather than imported directly by `plugins.ts`. A Node-only entry point (`cli.ts`, `lib.ts`) imports `executors/cJit/register.ts` for its side effect, which calls `setCJitRegistrar(...)`. The browser worker bundle never imports that file, so `cJit/compile.ts` (which uses `node:fs`/`node:os`/`node:child_process`) stays out of the web build's module graph. Passing `--opt e3` in a context where the registrar was never set throws.
+At `--opt 2` both the C-JIT and JS-JIT executors are registered; they compete via the cost model. C-JIT proposes only where it can marshal the argument types and its lower per-call/run cost wins; everything else falls through to JS-JIT, then the interpreter.
+
+The C-JIT native compile/load step (`cc` + `koffi` `dlopen`) lives behind a browser-safe stub: `executors/jit/compileC.ts` exposes `compileAndLoadC` whose implementation is `null` until a Node entry point calls `setCompileAndLoadCImpl(...)`. `cli.ts` does this at bootstrap via `registerNodeCompileC()` (from `executors/jit/compileC.node.ts`, which uses `node:fs`/`node:child_process`). The browser worker bundle never imports `compileC.node.ts`, so those Node modules stay out of the web build's graph; if `--opt 2` runs without the impl wired (or without `koffi`), the C-JIT executors decline and dispatch collapses to JS-JIT.
 
 ## Files
+
+The executor _registry_ and the per-shape JIT/C-JIT _executors_ live under `executors/`; the JIT _compiler_ they call (lowering → IR → JS/C codegen, builtins, runtime snippets) is the self-contained, in-tree subsystem under [`src/numbl-core/jit`](jit/overview.md) — no external dependency.
 
 ```
 executors/
@@ -155,33 +160,23 @@ executors/
   context.ts        DispatchContext, DispatchScope
   cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
   lowering.ts       tryLower / tryLowerCall + LoweringCache
-  plugins.ts        registerExecutorsForOpt + setCJitRegistrar
-  jsJit/
-    topLevelExecutor.ts  js-jit-top-level
-    loopExecutor.ts      js-jit-loop
-    callExecutor.ts      js-jit-call
-    jitTopLevel.ts       classify/lower/generate/run for top-level shape
-    jitLoop.ts           classify/lower/generate/run for loop shape
-    jitCall.ts           classify/lower/generate/run for call shape
-    shared.ts            cross-shape helpers
-    lower/               IR lowering (jitLower, jitLowerExpr/Stmt/Types,
-                         jitBailSafety, blockAnalysis, scalarEmit)
-    codegen/             JS codegen (jitCodegen, jsMultiReduction, ...)
-    helpers/             $h runtime (jitHelpers, jitHelpersTensor, ...)
-  cJit/
-    register.ts          Node-only side-effect that wires the cJit
-                         executors into plugins.ts
-    loopExecutor.ts      c-jit-loop
-    fuseExecutor.ts      c-jit-fuse
-    chainExecutor.ts     c-jit-chain
-    chainPass.ts         stmt-list pass that builds c-jit-chain Synth nodes
-    compile.ts           cc-invoke + koffi load (Node only)
-    codegen.ts           IR -> C source (loop shape)
-    fuseCodegen.ts       IR -> C source (fuse shape)
-    chainCodegen.ts      IR -> C source (chain shape)
-    elemwiseCodegen.ts   shared elementwise C-expression emission
-    elemwiseStructural.ts elementwise AST classifier shared by fuse/chain
-    fuseAnalyze.ts       fuse classification (browser-safe)
-    builtins.ts          builtin set permitted under c-jit
-    whitelist.ts         feasibility filter
+  classification.ts top-level / call classification (backend-independent)
+  plugins.ts        registerExecutorsForOpt (the --opt → executors switch)
+  jit/
+    topLevelExecutor.ts  jit-top-level   (JS-JIT, opt 1)
+    loopExecutor.ts      jit-loop        (JS-JIT, opt 1)
+    callExecutor.ts      jit-call        (JS-JIT, opt 1)
+    cJitTopLevelExecutor.ts cjit-top-level (C-JIT, opt 2)
+    cJitLoopExecutor.ts     cjit-loop      (C-JIT, opt 2)
+    cJitCallExecutor.ts     cjit-call      (C-JIT, opt 2)
+    session.ts           per-context Workspace + Lowerer (the spec cache)
+    typeAdapter.ts       numbl JitType → compiler Type (JS path)
+    valueAdapter.ts      RuntimeValue ↔ emit-JS value shape
+    typeAdapterC.ts      JitType → koffi C decl (C path)
+    valueAdapterC.ts     RuntimeValue ↔ C ABI marshaling (koffi)
+    hostHelpers.ts       the `$h` object the emitted spec receives
+    compileC.ts          browser-safe compile/load stub
+    compileC.node.ts     cc-invoke + koffi dlopen (Node only)
 ```
+
+The compiler invoked by these executors (`compileSpec` for JS, `compileSpecC` for C, plus `Workspace`/`Lowerer`) is imported from `src/numbl-core/jit/index.ts`; see [jit/overview.md](jit/overview.md).
