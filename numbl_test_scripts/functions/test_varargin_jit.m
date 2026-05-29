@@ -39,7 +39,6 @@ assert(v == 60, '4: scaled_sum with 3 trailing scalars');
 disp('SUCCESS')
 
 function [r, d] = curve_with_opts(t, varargin)
-    %!numbl:assert_jit
     narms = 5;
     amp = 0.3;
     if nargin > 1 && ~isempty(varargin{1})

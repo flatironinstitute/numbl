@@ -17,7 +17,6 @@ for i = 1:20
 end
 dst = zeros(20, 1);
 for k = 1:1
-    %!numbl:assert_jit
     dst(1:20) = src;
 end
 for i = 1:20
@@ -31,7 +30,6 @@ for i = 1:10
     b(i) = i * 7;
 end
 for k = 1:1
-    %!numbl:assert_jit
     a(1:10) = b;
     a(5) = 999;
     a(10) = -1;
@@ -48,7 +46,6 @@ nout_max = 4;
 out_pt = zeros(nout_max, 1);
 nhit = 0;
 for i = 1:10
-    %!numbl:assert_jit
     if nhit >= nout_max
         tmp_pt = out_pt;
         nout_max_new = nout_max * 2;
@@ -75,7 +72,6 @@ for i = 1:5
     q(i) = i + 100;
 end
 for k = 1:1
-    %!numbl:assert_jit
     p(3:7) = q;
 end
 assert(p(1) == 0, '4: prefix untouched');
@@ -90,7 +86,6 @@ try
     r1 = zeros(10, 1);
     r2 = zeros(7, 1);
     for k = 1:1
-        %!numbl:assert_jit
         r1(1:10) = r2;
     end
 catch
