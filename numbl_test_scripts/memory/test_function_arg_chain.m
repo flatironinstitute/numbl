@@ -2,6 +2,7 @@
 % mutations inside any of the callees, and the caller's buffer must stay
 % alive across all the calls.
 
+%!numbl:assert_jit
 v = (1:100)';
 result = level1(v);
 assert(isequal(v, (1:100)'), 'caller v must survive deep call chain');

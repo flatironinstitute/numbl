@@ -7,6 +7,7 @@
 %   resol_speed_test = err1 > eps;
 % which previously fell back to the interpreter for the whole loop.
 
+%!numbl:assert_jit
 eps_tol = 1e-6;
 n = 20;
 k = 16;

@@ -1,5 +1,6 @@
 % 3D tensor display and additional reductions (prod, mean along dim 3)
 
+%!numbl:assert_jit
 a = reshape(1:12, 2, 3, 2);
 
 % ── disp on 3D tensor should not crash ────────────────────────────

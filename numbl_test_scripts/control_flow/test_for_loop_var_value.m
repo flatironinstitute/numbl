@@ -3,6 +3,7 @@
 % The loop variable should NOT be incremented past the end of the range.
 
 % Test 1: Basic range
+%!numbl:assert_jit
 for i = 1:5
 end
 assert(i == 5, 'loop var after 1:5 should be 5');

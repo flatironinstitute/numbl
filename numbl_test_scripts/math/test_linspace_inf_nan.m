@@ -1,5 +1,6 @@
 % linspace with Inf/NaN bounds: MATLAB preserves endpoints exactly and
 % samples midpoints in a way that doesn't produce spurious NaN.
+%!numbl:assert_jit
 r1 = linspace(-Inf, Inf, 3);
 % MATLAB: [-Inf, 0, Inf]
 if r1(1) ~= -Inf, error('linspace(-Inf,Inf,3)(1)=%g', r1(1)); end

@@ -1,5 +1,6 @@
 % Reductions with explicit dimension argument on 3D tensors
 
+%!numbl:assert_jit
 A = reshape(1:12, 2, 3, 2);
 
 % ── sum along dim 1: [2,3,2] → [1,3,2] ─────────────────────────

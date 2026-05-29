@@ -1,6 +1,7 @@
 % Test that sprintf flattens array arguments (MATLAB behavior)
 
 % Basic array flattening: vector arg expands to multiple scalars
+%!numbl:assert_jit
 s1 = sprintf('%g %g', [3.14, 2.71]);
 assert(strcmp(s1, '3.14 2.71'), sprintf('Test 1 failed: got "%s"', s1));
 

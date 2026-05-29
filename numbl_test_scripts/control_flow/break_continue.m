@@ -1,6 +1,7 @@
 % Test break and continue in loops
 
 % break out of for loop
+%!numbl:assert_jit
 total = 0;
 for i = 1:10
   if i == 5

@@ -1,4 +1,5 @@
 %% NaN with no args returns scalar NaN
+%!numbl:assert_jit
 x = NaN;
 assert(isnan(x));
 assert(numel(x) == 1);

@@ -1,6 +1,7 @@
 % Test rounding and modulo functions
 
 % floor
+%!numbl:assert_jit
 assert(floor(3.7) == 3);
 assert(floor(-3.7) == -4);
 assert(floor(3.0) == 3);

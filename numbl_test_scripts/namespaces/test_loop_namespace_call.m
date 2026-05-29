@@ -14,6 +14,7 @@
 %
 % Uses the +mymath package already in this directory for resolution.
 
+%!numbl:assert_jit
 n = 100;
 
 % 1) Namespace call with scalar args — the simplest shape.

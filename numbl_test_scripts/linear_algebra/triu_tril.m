@@ -1,6 +1,7 @@
 % Test triu and tril builtins
 
 % Test 1: triu of ones(4)
+%!numbl:assert_jit
 A = ones(4);
 B = triu(A);
 assert(B(1,1) == 1); assert(B(1,4) == 1); assert(B(4,4) == 1);

@@ -1,5 +1,6 @@
 % Row vectors and basic operations
 
+%!numbl:assert_jit
 v = [1, 2, 3, 4, 5];
 assert(length(v) == 5)
 assert(v(1) == 1)

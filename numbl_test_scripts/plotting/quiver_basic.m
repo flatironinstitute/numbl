@@ -1,5 +1,6 @@
 % Basic quiver smoke test: a swirling 2D vector field.
 
+%!numbl:assert_jit
 theta = linspace(0, 2*pi, 8);
 r = linspace(0.5, 2, 4);
 [T, R] = meshgrid(theta, r);

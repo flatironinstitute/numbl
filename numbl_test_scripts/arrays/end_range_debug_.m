@@ -1,3 +1,4 @@
+%!numbl:assert_jit
 v = [10, 20, 30, 40, 50];
 sub = v(3:end);
 assert(length(sub) == 3)

@@ -1,6 +1,7 @@
 % Test sprintf %d with non-integer floats and %u format specifier
 
 % %d with integer values works normally
+%!numbl:assert_jit
 assert(strcmp(sprintf('%d', 42), '42'));
 assert(strcmp(sprintf('%d', 0), '0'));
 assert(strcmp(sprintf('%d', -5), '-5'));

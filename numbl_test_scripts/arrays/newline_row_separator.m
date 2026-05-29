@@ -1,6 +1,7 @@
 % Test: Newlines inside [] should act as row separators
 
 % Basic 3x3 matrix with newline row separators
+%!numbl:assert_jit
 M1 = [1 2 3
       4 5 6
       7 8 9];

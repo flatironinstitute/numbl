@@ -1,6 +1,7 @@
 % Test matrix creation functions
 
 % zeros
+%!numbl:assert_jit
 Z = zeros(3, 3);
 assert(Z(1,1) == 0);
 assert(Z(2,2) == 0);

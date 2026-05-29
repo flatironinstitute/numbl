@@ -1,6 +1,7 @@
 % 3D tensor concatenation: cat along dim 3
 
 % ── cat(3, A, B) — stack two 2D matrices along 3rd dimension ────────
+%!numbl:assert_jit
 A = [1 2; 3 4];
 B = [5 6; 7 8];
 C = cat(3, A, B);

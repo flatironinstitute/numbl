@@ -2,6 +2,7 @@
 % MATLAB guarantees the last element equals the endpoint exactly
 
 % 0:0.1:1 should end at exactly 1.0
+%!numbl:assert_jit
 x = 0:0.1:1;
 assert(length(x) == 11, '0:0.1:1 should have 11 elements');
 assert(x(end) == 1, '0:0.1:1 last element should be exactly 1');

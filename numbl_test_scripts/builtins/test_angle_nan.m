@@ -1,6 +1,7 @@
 % Test angle(NaN) should return NaN
 % MATLAB: angle(NaN) = NaN, angle(Inf) = 0, angle(-Inf) = pi
 
+%!numbl:assert_jit
 assert(isnan(angle(NaN)), 'angle(NaN) should be NaN');
 assert(angle(Inf) == 0, 'angle(Inf) should be 0');
 assert(abs(angle(-Inf) - pi) < 1e-10, 'angle(-Inf) should be pi');

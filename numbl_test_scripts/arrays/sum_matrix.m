@@ -1,6 +1,7 @@
 % sum/prod/mean on matrices should reduce along dim 1
 
 % ── sum on matrix: column sums → row vector ──────────────────────
+%!numbl:assert_jit
 A = [1 3; 2 4];
 B = sum(A);
 % Column 1: 1+2=3.  Column 2: 3+4=7

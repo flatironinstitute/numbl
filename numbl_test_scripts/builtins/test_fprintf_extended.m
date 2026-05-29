@@ -1,6 +1,7 @@
 % Test fprintf with various format strings (specialBuiltins.ts coverage)
 
 % Basic string
+%!numbl:assert_jit
 fprintf('hello\n');
 
 % Format with integer

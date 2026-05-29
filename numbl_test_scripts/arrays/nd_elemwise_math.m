@@ -1,5 +1,6 @@
 % 3D tensor: element-wise math functions
 
+%!numbl:assert_jit
 a = reshape(1:8, 2, 2, 2);
 
 % ── abs on 3D ─────────────────────────────────────────────────────

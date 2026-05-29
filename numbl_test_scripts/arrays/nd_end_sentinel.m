@@ -1,5 +1,6 @@
 % 3D tensor: end sentinel in various indexing contexts
 
+%!numbl:assert_jit
 a = reshape(1:24, 2, 3, 4);
 
 % ── end as scalar index in each dimension ─────────────────────────

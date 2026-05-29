@@ -8,6 +8,7 @@
 % it, this function is only called once and JS-JIT handles it. Twenty
 % iterations is enough to tip over the compile threshold.
 
+%!numbl:assert_jit
 function y = fuse_self(y, x)
   y = y .* x + 3.0;
 end

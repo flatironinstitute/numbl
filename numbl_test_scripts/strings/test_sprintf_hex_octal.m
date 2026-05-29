@@ -1,6 +1,7 @@
 % Test sprintf %x (hex), %X (upper hex), and %o (octal)
 
 % Hexadecimal lowercase
+%!numbl:assert_jit
 assert(strcmp(sprintf('%x', 255), 'ff'), 'sprintf %x 255');
 assert(strcmp(sprintf('%x', 0), '0'), 'sprintf %x 0');
 assert(strcmp(sprintf('%x', 16), '10'), 'sprintf %x 16');

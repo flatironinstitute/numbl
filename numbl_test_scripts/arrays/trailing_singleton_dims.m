@@ -2,6 +2,7 @@
 % MATLAB always drops trailing singleton dimensions from tensor shapes.
 
 % reshape with trailing singleton
+%!numbl:assert_jit
 x = [1 2 3 4 5 6];
 y = reshape(x, [2 3 1]);
 assert(ndims(y) == 2, 'reshape [2 3 1]: expected ndims=2');

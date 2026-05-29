@@ -10,6 +10,7 @@
 % survives to the interpreter (because lowering bailed), it throws.
 
 % 1) Basic `and(a, b)` of scalar comparisons in an if-condition
+%!numbl:assert_jit
 total_and = 0;
 for i = 1:200
     %!numbl:assert_jit

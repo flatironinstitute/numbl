@@ -4,6 +4,7 @@
 % ((a%b)+b)%b formula has for very large |b|.
 
 % Inf divisor: result has the sign of b (or equals a when signs match).
+%!numbl:assert_jit
 assert(mod(3,  Inf)  == 3);
 assert(mod(-3, Inf)  == Inf);
 assert(mod(3, -Inf)  == -Inf);

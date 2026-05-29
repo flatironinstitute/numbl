@@ -4,6 +4,7 @@
 % x = diag(A,k) returns column vector of elements on kth diagonal of A
 
 % Superdiagonal (k=1)
+%!numbl:assert_jit
 v = [1; 2; 3];
 A = diag(v, 1);
 assert(isequal(size(A), [4, 4]));
