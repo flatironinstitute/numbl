@@ -61,15 +61,15 @@ interface CompiledArtifact {
  *  interpreter and mtoc2's emit has no equivalent. */
 function isAllSuppressed(stmts: readonly Stmt[]): boolean {
   for (const s of stmts) {
-    if (s.type === "ExprStmt" && !s.suppressed) {
-      // `disp(...)` / `fprintf(...)` work either way — the function
-      // call itself performs the display via mtoc2's emit. But a
-      // value-yielding bare expr like `1 + 2` would trigger numbl's
-      // `displayResult` ("ans = 3") which mtoc2 doesn't replicate.
-      // Distinguishing is non-trivial at the AST level; be
-      // conservative and decline any unsuppressed ExprStmt.
-      return false;
-    }
+    // Unsuppressed bare expressions are NOT declined here. A void call
+    // (`disp(...)`, `fprintf(...)`, `assert(...)`, `error/warning`)
+    // performs its own output via the emit and has no value to echo, so
+    // it JITs fine. A value-yielding bare expr (`1 + 2`) would trigger
+    // numbl's `displayResult` ("ans = 3") which the emit doesn't
+    // replicate — but `compileSpec`'s `assertNoNonVoidBareExprStmts`
+    // rejects exactly those (non-Void bare exprs), declining the spec so
+    // the interpreter handles the `ans` echo. So the compiler is the
+    // backstop; we only gate on display-*assigns* here.
     if (s.type === "Assign" && !s.suppressed) return false;
     if (s.type === "MultiAssign" && !s.suppressed) return false;
   }

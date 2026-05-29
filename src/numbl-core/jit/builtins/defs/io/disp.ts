@@ -31,29 +31,29 @@ export const disp: Builtin = {
     }
     const t = argTypes[0];
     if (isScalarRealNumeric(t)) {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     if (isNumeric(t) && isScalar(t) && t.isComplex && t.elem === "double") {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     if (
       isNumeric(t) &&
       !t.isComplex &&
       (t.elem === "double" || t.elem === "logical")
     ) {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     if (isNumeric(t) && t.isComplex && !isScalar(t) && t.elem === "double") {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     if (isText(t)) {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     if (t.kind === "Struct") {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     if (isCell(t)) {
-      return [{ kind: "Unknown" }];
+      return [{ kind: "Void" }];
     }
     throw new TypeError(
       `'disp' arg must be a scalar numeric, a real or complex tensor, text, a struct, or a cell ` +

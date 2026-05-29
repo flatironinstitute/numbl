@@ -77,7 +77,10 @@ export const assert: Builtin = {
       }
     }
 
-    return [{ kind: "Unknown" }];
+    // assert has no return value; typing it Void lets a bare
+    // `assert(...)` statement pass compileSpec's non-void-bare-expr
+    // check and JIT (matching fprintf / error / warning).
+    return [{ kind: "Void" }];
   },
   emitC({ argsC, argTypes, useRuntime }) {
     useRuntime("mtoc2_assert_scalar");
