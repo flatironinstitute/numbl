@@ -250,8 +250,7 @@ static void mtoc2__emit_int(mtoc2__writer_fn writer, void *ctx,
                              const char *spec, long spec_len,
                              mtoc2__arg_iter_t *it, char type_ch,
                              double raw) {
-  int is_int = isfinite(raw) && raw == (double)(long long)raw
-               && fabs(raw) < 1e18;
+  int is_int = isfinite(raw) && raw == floor(raw) && fabs(raw) < 1e21;
   int can_int = is_int;
   if (type_ch == 'u' && raw < 0.0) can_int = 0;
   long width;
@@ -259,6 +258,15 @@ static void mtoc2__emit_int(mtoc2__writer_fn writer, void *ctx,
   if (!mtoc2__parse_spec(spec, spec_len, it,
                          &width, &prec, &has_plus, &has_space,
                          &left_align, &zero_pad)) {
+    return;
+  }
+  /* Non-finite under %d/%i/%u: numbl's int branch routes through
+     raw.toExponential(6), and (Inf).toExponential() === "Infinity",
+     (NaN) === "NaN" — not libc's "inf"/"-nan". Match the JS strings. */
+  if (!isfinite(raw)) {
+    const char *s = isnan(raw) ? "NaN" : (raw > 0 ? "Infinity" : "-Infinity");
+    mtoc2__emit_padded(writer, ctx, s, (long)strlen(s), width,
+                       ' ', left_align);
     return;
   }
   if (!can_int) {
@@ -281,13 +289,22 @@ static void mtoc2__emit_int(mtoc2__writer_fn writer, void *ctx,
                        zero_pad ? '0' : ' ', left_align);
     return;
   }
-  /* Integer formatting. */
-  char ibuf[32];
-  long long n_int = (long long)raw;
-  long ilen = (long)snprintf(ibuf, sizeof(ibuf), "%lld",
-                              n_int < 0 ? -n_int : n_int);
+  /* Integer formatting. |raw| < ~9e18 fits a long long; larger
+     integer-valued doubles (up to the 1e21 cap above) overflow it, so
+     print the full decimal of the magnitude with %.0f — matching JS
+     String(Math.abs(n)) (e.g. 1e19 -> "10000000000000000000"). */
+  char ibuf[400];
+  long ilen;
+  int is_neg = raw < 0.0;
+  if (fabs(raw) < 9.0e18) {
+    long long n_int = (long long)raw;
+    if (n_int < 0) n_int = -n_int;
+    ilen = (long)snprintf(ibuf, sizeof(ibuf), "%lld", n_int);
+  } else {
+    ilen = (long)snprintf(ibuf, sizeof(ibuf), "%.0f", fabs(raw));
+  }
   char sign_ch = 0;
-  if (n_int < 0) sign_ch = '-';
+  if (is_neg) sign_ch = '-';
   else if (has_plus) sign_ch = '+';
   else if (has_space) sign_ch = ' ';
   long sign_len = sign_ch ? 1 : 0;
@@ -327,7 +344,10 @@ static void mtoc2__emit_float(mtoc2__writer_fn writer, void *ctx,
     return;
   }
   if (!isfinite(x)) {
-    const char *s = isnan(x) ? "NaN" : (x > 0 ? "Infinity" : "-Infinity");
+    /* numbl's %f/%e/%g non-finite spelling comes from numStr(): "Inf" /
+       "-Inf" / "NaN" — NOT libc's "Infinity"/"inf". (The %d path differs:
+       see mtoc2__emit_int, which uses toExponential -> "Infinity".) */
+    const char *s = isnan(x) ? "NaN" : (x > 0 ? "Inf" : "-Inf");
     long slen = (long)strlen(s);
     mtoc2__emit_padded(writer, ctx, s, slen, width, ' ', left_align);
     return;
@@ -442,7 +462,12 @@ static void mtoc2__emit_xo(mtoc2__writer_fn writer, void *ctx,
                          &left_align, &zero_pad)) {
     return;
   }
-  long long n = (long long)floor(fabs(raw) + 0.5);
+  /* Round the SIGNED value with Math.round semantics (ties toward +Inf),
+     then take the magnitude — matching JS Math.abs(Math.round(raw)).
+     Rounding fabs(raw) instead flips negative half-way values (e.g.
+     -1.5 -> 2 instead of the correct 1). */
+  long long sn = (long long)floor(raw + 0.5);
+  long long n = sn < 0 ? -sn : sn;
   char buf[32];
   long len = 0;
   if (type_ch == 'o') {
