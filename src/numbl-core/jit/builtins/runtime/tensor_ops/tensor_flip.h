@@ -37,7 +37,10 @@ static mtoc2_tensor_t mtoc2_tensor_flip(mtoc2_tensor_t a, long dimIdx) {
   for (int i = 0; i < a.ndim; i++) r.dims[i] = a.dims[i];
 
   long axisSize = (dimIdx >= 0 && dimIdx < (long)a.ndim) ? a.dims[dimIdx] : 1;
-  if (axisSize <= 1) {
+  // total==0 (empty along some axis) must short-circuit BEFORE the slab math:
+  // if a dim below the axis is 0, slabSize becomes 0 and total/slabSize is a
+  // 0/0 integer division (SIGILL). An empty result needs no copy anyway.
+  if (axisSize <= 1 || total == 0) {
     // Nothing to flip — just deep-copy the buffer.
     if (total > 0) memcpy(r.real, a.real, (size_t)total * sizeof(double));
     return r;
@@ -70,7 +73,9 @@ static mtoc2_tensor_t mtoc2_tensor_flip_complex(mtoc2_tensor_t a, long dimIdx) {
   int srcHasImag = (a.imag != NULL);
 
   long axisSize = (dimIdx >= 0 && dimIdx < (long)a.ndim) ? a.dims[dimIdx] : 1;
-  if (axisSize <= 1) {
+  // See mtoc2_tensor_flip: total==0 must short-circuit before slab math to
+  // avoid a 0/0 division when a dim below the axis is 0.
+  if (axisSize <= 1 || total == 0) {
     if (total > 0) {
       memcpy(r.real, a.real, (size_t)total * sizeof(double));
       if (srcHasImag) {
