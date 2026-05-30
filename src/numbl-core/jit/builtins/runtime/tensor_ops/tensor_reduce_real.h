@@ -244,7 +244,10 @@ MTOC2_DEFINE_ACCUM_REDUCTION(mean, 0.0, MTOC2_ACC_SUM, MTOC2_FIN_MEAN)
 MTOC2_DEFINE_MINMAX_REDUCTION(min, <)
 MTOC2_DEFINE_MINMAX_REDUCTION(max, >)
 
+/* `any` ignores NaN (MATLAB: any(NaN) is 0); `x == x` excludes it so a
+ * NaN doesn't wrongly short-circuit to true. `all` tests `x == 0.0`,
+ * which NaN already fails, so it needs no guard. */
 MTOC2_DEFINE_LOGICAL_REDUCTION(any, 0,
-  if (x != 0.0) { acc = 1.0; break; })
+  if (x != 0.0 && x == x) { acc = 1.0; break; })
 MTOC2_DEFINE_LOGICAL_REDUCTION(all, 1,
   if (x == 0.0) { acc = 0.0; break; })

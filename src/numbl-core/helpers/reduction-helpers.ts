@@ -348,27 +348,17 @@ export function scanLogical(
   imag: ArrayLike<number> | undefined,
   mode: "any" | "all"
 ): boolean {
-  // Fast path via tensor-ops layer when data is Float64Array.
-  if (data instanceof Float64Array && (!imag || imag instanceof Float64Array)) {
-    const op = mode === "any" ? OpReduce.ANY : OpReduce.ALL;
-    const out = allocFloat64Array(1);
-    if (imag) {
-      tensorOps.complexFlatReduce(
-        op,
-        data.length,
-        data,
-        imag as Float64Array,
-        out,
-        null
-      );
-    } else {
-      tensorOps.realFlatReduce(op, data.length, data, out);
-    }
-    return out[0] !== 0;
-  }
+  // Scalar short-circuiting scan that IGNORES NaN, matching MATLAB
+  // (`any(NaN)` is 0, `all(NaN)` is 1, `any([0 NaN])` is 0). We do not
+  // use the native fast-math realFlatReduce here: built with
+  // -ffinite-math-only it mishandles NaN differently again. The loop
+  // short-circuits, so it isn't slower than the full-array native scan.
   const defaultResult = mode === "all";
   for (let i = 0; i < data.length; i++) {
-    const isNonZero = data[i] !== 0 || (imag !== undefined && imag[i] !== 0);
+    const re = data[i];
+    const im = imag !== undefined ? imag[i] : 0;
+    if (re !== re || im !== im) continue; // skip NaN
+    const isNonZero = re !== 0 || im !== 0;
     if (isNonZero !== defaultResult) return !defaultResult;
   }
   return defaultResult;

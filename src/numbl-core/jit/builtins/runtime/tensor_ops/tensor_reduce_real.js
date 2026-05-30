@@ -189,8 +189,12 @@ export const mtoc2_max_all = t => minmax_all(t, "max");
 export const mtoc2_max_dim = (t, d) => minmax_dim(t, d, "max");
 
 // ── Any / all ───────────────────────────────────────────────────────────
-// any: short-circuits on nonzero; emptyResult = 0.
-const anyShort = x => x !== 0;
+// any: short-circuits on a non-NaN nonzero; emptyResult = 0. NaN is
+// ignored (MATLAB: any(NaN) is 0, any([0 NaN]) is 0), so `x === x`
+// excludes it — without that, NaN wrongly short-circuited to true.
+// (`all` needs no such guard: allShort tests `x === 0`, which NaN
+// already fails, so a NaN simply doesn't force all to false.)
+const anyShort = x => x !== 0 && x === x;
 export const mtoc2_any_all = t => logical_all(t, 0, anyShort);
 export const mtoc2_any_dim = (t, d) => logical_dim(t, d, 0, anyShort);
 // all: short-circuits on zero; emptyResult = 1.
