@@ -15,10 +15,28 @@
 import type { Expr, LValue, Span } from "../parser/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRStmt, IndexSliceArg } from "./ir.js";
-import { isMultiElement, isNumeric, isScalar, typeToString } from "./types.js";
+import {
+  isMultiElement,
+  isNumeric,
+  isScalar,
+  typeToString,
+  type Type,
+} from "./types.js";
 import type { Lowerer } from "./lower.js";
 import { lowerSliceArg } from "./lowerIndexSlice.js";
 import { resolveIndexLvalueBase } from "./indexResolve.js";
+
+/** Statically-known element count of a numeric type, or null if any
+ *  dimension is non-exact (runtime-only). */
+function staticNumel(t: Type): number | null {
+  if (!isNumeric(t)) return null;
+  let n = 1;
+  for (const d of t.dims) {
+    if (d.kind !== "exact") return null;
+    n *= d.value;
+  }
+  return n;
+}
 
 export function lowerIndexSliceStore(
   this: Lowerer,
@@ -58,6 +76,24 @@ export function lowerIndexSliceStore(
       });
     } else {
       slots.push(slot);
+    }
+  }
+  // Logical-mask store that could GROW the base — a truthy bit past the
+  // end resizes the array (MATLAB: x(logical([0 0 0 1]))=9 grows it). The
+  // JIT compiles against the static pre-write shape and would silently
+  // drop the out-of-range write (JS) or abort (C). When both lengths are
+  // statically known and the mask is the longer one, a truthy bit *could*
+  // land past the end, so decline to the interpreter (which grows). The
+  // common `a(a>2) = v` (mask length == base length) is unaffected.
+  if (isSingleSlot && slots[0].kind === "LogicalMask") {
+    const baseN = staticNumel(r.baseTy);
+    const maskN = staticNumel(slots[0].expr.ty);
+    if (baseN !== null && maskN !== null && maskN > baseN) {
+      throw new UnsupportedConstruct(
+        `logical-mask store with a statically-longer mask may grow the ` +
+          `base; deferring to the interpreter`,
+        slots[0].span
+      );
     }
   }
   // Per-axis logical-mask writes (e.g. `M(:, mask) = rhs`) aren't yet

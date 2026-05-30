@@ -28,6 +28,7 @@ import {
   cellUniform,
   classMethodSpecSource,
   emptyDoubleTensorType,
+  isCell,
   isHandle,
   isMultiElement,
   isNumeric,
@@ -487,6 +488,18 @@ function lowerStructConstructor(
     seen.add(fname);
     const v = this.lowerExpr(e.args[i + 1]);
     this.requireValueType(v, `value for field '${fname}'`);
+    // A cell-valued field triggers MATLAB's cell-expansion form:
+    // `struct('a', {1,2,3})` builds a 1x3 struct ARRAY, and even a 1x1
+    // cell unwraps its content into the scalar field. The JIT stores the
+    // cell as the field value verbatim (wrong arity / no unwrap), so
+    // decline this form to the interpreter.
+    if (isCell(v.ty)) {
+      throw new UnsupportedConstruct(
+        `'struct' with a cell-valued field (cell-expansion / struct-array ` +
+          `construction) is not JIT-compiled; the interpreter handles it`,
+        e.args[i + 1].span
+      );
+    }
     // Only types that have a stable owned-or-POD C representation
     // are allowed as struct field values. Reject handles (POD but
     // their typedef matrix gets messy), void, and Unknown.

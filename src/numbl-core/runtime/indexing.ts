@@ -1489,6 +1489,27 @@ function storeIntoTensorByVector(
     const { re: rhsRe, im: rhsIm } = isRuntimeTensor(rhs)
       ? { re: null, im: null }
       : toReIm(rhs);
+    // A truthy mask bit past the end GROWS the array in MATLAB
+    // (x(logical([0 0 0 1])) = 9 on [1 2 3] -> [1 2 3 9]). Without this
+    // the base.data[i] write is a silent no-op for an out-of-range i.
+    let maxTruthy = -1;
+    for (let i = 0; i < idx.data.length; i++) {
+      if (idx.data[i] !== 0) maxTruthy = i;
+    }
+    if (maxTruthy >= base.data.length) {
+      const newLen = maxTruthy + 1;
+      const grown = allocFloat64Array(newLen);
+      grown.set(base.data);
+      let grownImag: Float64Array | undefined;
+      if (base.imag) {
+        grownImag = allocFloat64Array(newLen);
+        grownImag.set(base.imag);
+      }
+      const isColVec =
+        base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
+      const newShape = isColVec ? [newLen, 1] : [1, newLen];
+      base = RTV.tensor(grown, newShape, grownImag);
+    }
     let k = 0;
     for (let i = 0; i < idx.data.length; i++) {
       if (idx.data[i] !== 0) {
