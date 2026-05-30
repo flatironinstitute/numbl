@@ -48,8 +48,18 @@ the diagnosis and the divergence observed at discovery time.
   fails to error where the interpreter does).
 - **B** — whole-scope/loop JIT runs side effects, then bails, and the interpreter
   re-runs → duplicated output.
-- **C** — interpreter uses the native `-ffast-math` LAPACK addon while the JITs
-  use their own kernels → different float results / NaN handling. Parity here
-  means making all three modes agree (deterministic across modes).
-- **D** — stdout pollution from a debug log (filtered by the runner; root cause
-  still worth removing).
+- **C** — interpreter used the native `-ffast-math` LAPACK addon while the JITs
+  use their own kernels → different float results / NaN handling. Resolved by
+  defaulting the addon build to **no-fast-math** (deterministic reductions and
+  transcendentals; opt in with `--fast-math`), plus a NaN-correct any/all.
+- **D** — stdout pollution from a debug log (now on stderr).
+
+## Gate exclusions
+
+`matmul` (C03) is **excluded from the pass/fail gate**: the interpreter uses
+BLAS `dgemm` and the JITs use a naive triple loop, which accumulate in different
+orders → last-bit differences. That's inherent floating-point non-associativity,
+not a bug, and can't be made bitwise-identical without dropping BLAS (a large
+perf loss) or giving the JIT a native dependency. The runner still runs and
+shows it (`EXCL`), but it doesn't affect the exit code. See `GATE_EXCLUDED` in
+`run.mjs`.

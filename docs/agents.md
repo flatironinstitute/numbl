@@ -107,7 +107,7 @@ Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon (pass --no-fast-math to disable -ffast-math)
+  build-addon        Build native LAPACK addon (pass --fast-math to enable -ffast-math)
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
@@ -140,9 +140,12 @@ Options (for run and eval):
                        1  — JS-JIT: type-specialize hot user functions to JS
                        2  — C-JIT: scalar/tensor kernels via cc + koffi
                             (Node only; falls back to JS-JIT otherwise)
-  --no-fast-math     Build/load the native LAPACK addon without
-                     -ffast-math (reductions stay bitwise-deterministic;
-                     transcendentals lose libmvec vectorization)
+  --fast-math        Build/load the native LAPACK addon WITH -ffast-math
+                     (libmvec-vectorized transcendentals, reorder-allowed
+                     reductions — faster but FP results drift and diverge
+                     across --opt levels). Off by default so all --opt
+                     levels agree; --no-fast-math is accepted as the
+                     (now default) opt-out.
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)

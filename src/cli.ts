@@ -74,7 +74,7 @@ import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge
 function loadNativeAddon(fastMath: boolean): void {
   if (process.env.NUMBL_NO_NATIVE) return;
   const variantPath = variantAddonPath(fastMath);
-  const flag = fastMath ? "" : " --no-fast-math";
+  const flag = fastMath ? " --fast-math" : "";
   if (!existsSync(variantPath)) {
     console.error(
       `Warning: native addon not built${fastMath ? " with fast-math" : " with --no-fast-math"}. ` +
@@ -227,7 +227,7 @@ async function runTests(
   optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
   fastMath?: boolean
 ) {
-  loadNativeAddon(fastMath ?? true);
+  loadNativeAddon(fastMath ?? false);
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
@@ -311,7 +311,7 @@ Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon (pass --no-fast-math to disable -ffast-math)
+  build-addon        Build native LAPACK addon (pass --fast-math to enable -ffast-math)
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
@@ -344,9 +344,12 @@ Options (for run and eval):
                        1  — JS-JIT: type-specialize hot user functions to JS
                        2  — C-JIT: scalar/tensor kernels via cc + koffi
                             (Node only; falls back to JS-JIT otherwise)
-  --no-fast-math     Build/load the native LAPACK addon without
-                     -ffast-math (reductions stay bitwise-deterministic;
-                     transcendentals lose libmvec vectorization)
+  --fast-math        Build/load the native LAPACK addon WITH -ffast-math
+                     (libmvec-vectorized transcendentals, reorder-allowed
+                     reductions — faster but FP results drift and diverge
+                     across --opt levels). Off by default so all --opt
+                     levels agree; --no-fast-math is accepted as the
+                     (now default) opt-out.
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -382,7 +385,11 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: "1",
-    fastMath: true,
+    // Default OFF: the native addon's -ffast-math reorders reductions
+    // and vectorizes transcendentals, so results drift from the JIT
+    // kernels and diverge across --opt levels. Opt back in with
+    // `--fast-math` (and a matching `build-addon --fast-math`).
+    fastMath: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -418,7 +425,11 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.dumpC = resolve(process.cwd(), args[i]);
         break;
+      case "--fast-math":
+        opts.fastMath = true;
+        break;
       case "--no-fast-math":
+        // Accepted for back-compat; this is now the default.
         opts.fastMath = false;
         break;
       case "--dump-ast":
@@ -867,9 +878,11 @@ async function executeWithOptions(
 }
 
 async function cmdBuildAddon(args: string[]) {
-  const fastMath = !args.includes("--no-fast-math");
+  // Default OFF (deterministic, cross-mode-consistent). `--fast-math`
+  // opts in; `--no-fast-math` is accepted for back-compat (now default).
+  const fastMath = args.includes("--fast-math");
   for (const a of args) {
-    if (a !== "--no-fast-math") {
+    if (a !== "--no-fast-math" && a !== "--fast-math") {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
     }
@@ -885,7 +898,7 @@ async function cmdBuildAddon(args: string[]) {
   console.log("Package directory: " + packageDir);
   console.log("Prerequisites: C++ compiler, libopenblas-dev (or equivalent)");
   console.log(
-    `-ffast-math: ${fastMath ? "enabled (default)" : "DISABLED (--no-fast-math)"}`
+    `-ffast-math: ${fastMath ? "ENABLED (--fast-math)" : "disabled (default)"}`
   );
   console.log("");
   try {
