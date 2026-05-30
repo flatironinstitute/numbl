@@ -18,16 +18,33 @@
 //     "it correctly refused" is the contract we test, not the message text).
 //   * a run that times out is reduced to <TIMEOUT>.
 //
+// Speed: every (script, opt) pair is an independent child process, so they're
+// run through a concurrency pool sized to the machine (override with
+// --jobs=N). Two things keep each invocation cheap:
+//   1. We esbuild-bundle the CLI's first-party source into a single file ONCE
+//      at startup (deps stay external via --packages=external), then run every
+//      invocation against that bundle with plain `node`. This avoids paying
+//      tsx's whole-import-graph transpile + module-resolution cost on all ~3N
+//      invocations (it drops per-run startup from ~0.8s to ~0.2s). The bundle
+//      is rebuilt every run (so it can't go stale) into node_modules/.cache,
+//      and we fall back to `node --import tsx src/cli.ts` if the build fails or
+//      --no-bundle is passed.
+//   2. For --opt 2 the C compile is cached by content hash under ~/.cache/numbl,
+//      so re-runs skip it.
+//
 // Usage:
 //   node jit_parity/run.mjs                 # run all scripts
 //   node jit_parity/run.mjs A04 A17         # only scripts whose name matches a filter
 //   node jit_parity/run.mjs -v              # show full per-mode output on failures
 //   node jit_parity/run.mjs --no-opt2       # skip the (slower, compiling) C-JIT mode
+//   node jit_parity/run.mjs --jobs=4        # cap concurrency (default: CPU count)
+//   node jit_parity/run.mjs --no-bundle     # run via tsx instead of the bundle
 //
 // Exit code is 0 iff every (selected) script passes.
 
-import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, readdirSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -38,10 +55,22 @@ const scriptsDir = join(scriptDir, "scripts");
 const argv = process.argv.slice(2);
 const verbose = argv.includes("-v") || argv.includes("--verbose");
 const skipOpt2 = argv.includes("--no-opt2");
+const noBundle = argv.includes("--no-bundle");
+const jobsArg = argv.find((a) => a.startsWith("--jobs="));
 const filters = argv.filter((a) => !a.startsWith("-"));
 
 const OPTS = skipOpt2 ? [0, 1] : [0, 1, 2];
-const TIMEOUT_MS = 180_000;
+const TIMEOUT_MS = 120_000;
+const cpus = (() => {
+  try {
+    return availableParallelism();
+  } catch {
+    return 8;
+  }
+})();
+const JOBS = jobsArg
+  ? Math.max(1, parseInt(jobsArg.slice("--jobs=".length), 10) || cpus)
+  : Math.max(1, cpus);
 
 // Scripts excluded from the pass/fail gate: their divergence is either
 // inherent floating-point non-associativity / library-ULP differences
@@ -65,14 +94,96 @@ function exclusionReason(name) {
   return null;
 }
 
+// Build a one-shot first-party bundle of the CLI and return the args that run
+// it (`[bundle, "run", ...]`). Deps stay external (`--packages=external`), so
+// koffi / the native addon / browser-only optionals are required at runtime
+// exactly as under tsx — only our own TS is bundled, which is the slow part.
+// Rebuilt every run, so it can't go stale. Returns null (→ tsx fallback) if
+// esbuild isn't importable or the build errors.
+async function buildCliBundle() {
+  if (noBundle) return null;
+  try {
+    const esbuild = await import("esbuild");
+    const outfile = join(repoRoot, "node_modules", ".cache", "jit_parity", "cli.mjs");
+    mkdirSync(dirname(outfile), { recursive: true });
+    await esbuild.build({
+      entryPoints: [join(repoRoot, "src", "cli.ts")],
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      packages: "external",
+      outfile,
+      logLevel: "silent",
+    });
+    return outfile;
+  } catch (e) {
+    console.error(
+      `  (bundle build failed — ${(e && e.message) || e}; falling back to tsx)`,
+    );
+    return null;
+  }
+}
+
+const bundlePath = await buildCliBundle();
+const launchArgs =
+  bundlePath !== null
+    ? [bundlePath, "run"]
+    : ["--import", "tsx", join(repoRoot, "src", "cli.ts"), "run"];
+
 function runMode(file, opt) {
-  const r = spawnSync(
-    "npx",
-    ["tsx", "src/cli.ts", "run", file, "--opt", String(opt)],
-    { cwd: repoRoot, encoding: "utf8", timeout: TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 },
+  return new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      [...launchArgs, file, "--opt", String(opt)],
+      { cwd: repoRoot },
+    );
+    const cap = 64 * 1024 * 1024;
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, TIMEOUT_MS);
+    child.stdout.on("data", (d) => {
+      if (stdout.length < cap) stdout += d;
+    });
+    child.stderr.on("data", (d) => {
+      if (stderr.length < cap) stderr += d;
+    });
+    child.on("error", () => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, status: 1, timedOut });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ stdout, stderr, status: timedOut ? null : code, timedOut });
+    });
+  });
+}
+
+/** Run `jobs` through `worker` with at most `concurrency` in flight; returns
+ *  results in input order. Emits a live progress counter to stderr. */
+async function runPool(jobs, concurrency, worker) {
+  const results = new Array(jobs.length);
+  let next = 0;
+  let done = 0;
+  const showProgress = process.stderr.isTTY;
+  async function drain() {
+    while (next < jobs.length) {
+      const i = next++;
+      results[i] = await worker(jobs[i]);
+      done++;
+      if (showProgress) {
+        process.stderr.write(`\r  running ${done}/${jobs.length} …`);
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, jobs.length) }, drain),
   );
-  const timedOut = r.error && (r.error.code === "ETIMEDOUT" || r.signal === "SIGTERM");
-  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", status: r.status, timedOut };
+  if (showProgress) process.stderr.write("\r" + " ".repeat(28) + "\r");
+  return results;
 }
 
 function normalize({ stdout, status, timedOut }) {
@@ -103,8 +214,24 @@ if (!scripts.length) {
 }
 
 console.log(
-  `Comparing --opt ${OPTS.join("/")} across ${scripts.length} script(s) in jit_parity/scripts/\n`,
+  `Comparing --opt ${OPTS.join("/")} across ${scripts.length} script(s) in jit_parity/scripts/ ` +
+    `(jobs=${JOBS}, ${bundlePath !== null ? "bundled" : "tsx"})\n`,
 );
+
+// Flatten to independent (script, opt) jobs and run them through the pool, so
+// every core stays busy instead of walking scripts one mode at a time.
+const jobs = [];
+for (const name of scripts) {
+  for (const opt of OPTS) jobs.push({ name, opt });
+}
+const jobResults = await runPool(jobs, JOBS, ({ name, opt }) =>
+  runMode(join(scriptsDir, name), opt),
+);
+const resultsByScript = new Map();
+jobs.forEach((job, i) => {
+  if (!resultsByScript.has(job.name)) resultsByScript.set(job.name, {});
+  resultsByScript.get(job.name)[job.opt] = jobResults[i];
+});
 
 let passCount = 0;
 let excludedCount = 0;
@@ -112,9 +239,7 @@ let gateTotal = 0;
 const failures = [];
 
 for (const name of scripts) {
-  const file = join(scriptsDir, name);
-  const results = {};
-  for (const opt of OPTS) results[opt] = runMode(file, opt);
+  const results = resultsByScript.get(name);
   const keys = {};
   for (const opt of OPTS) keys[opt] = normalize(results[opt]);
 
