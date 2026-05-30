@@ -76,7 +76,23 @@ static inline double _Complex mtoc2_clog10(double _Complex z) {
 static inline double _Complex mtoc2_csin(double _Complex z) { return csin(z); }
 static inline double _Complex mtoc2_ccos(double _Complex z) { return ccos(z); }
 static inline double _Complex mtoc2_ctan(double _Complex z) { return ctan(z); }
-static inline double _Complex mtoc2_catan(double _Complex z) { return catan(z); }
+static inline double _Complex mtoc2_catan(double _Complex z) {
+  /* Real-valued input: clean real atan (no spurious imaginary residue,
+     no Inf/Inf NaN at large |re|). */
+  if (cimag(z) == 0.0) return mtoc2_cmake(atan(creal(z)), 0.0);
+  /* atan(z) = (i/2)*log((1 - iz)/(1 + iz)). MATLAB's branch for a
+     pure-imaginary z with |z| > 1 is -pi/2 + ... (atan(2i) = -1.5708 +
+     0.5493i); libc catan uses the opposite +pi/2 Annex-G branch. Compute
+     the formula here so the C path matches MATLAB and the JS runtime.
+     Normalize a -0 imaginary part of the quotient to +0 (via +0.0) so
+     clog picks the +pi branch — a -0 would flip it to -pi -> +pi/2. */
+  double _Complex iz = mtoc2_cmake(-cimag(z), creal(z));
+  double _Complex num = mtoc2_cmake(1.0 - creal(iz), -cimag(iz));
+  double _Complex den = mtoc2_cmake(1.0 + creal(iz), cimag(iz));
+  double _Complex q = num / den;
+  double _Complex l = clog(mtoc2_cmake(creal(q), cimag(q) + 0.0));
+  return mtoc2_cmake(-cimag(l) / 2.0, creal(l) / 2.0);
+}
 static inline double _Complex mtoc2_cfloor(double _Complex z) {
   return floor(creal(z)) + floor(cimag(z)) * I;
 }

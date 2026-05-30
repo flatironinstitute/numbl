@@ -43,15 +43,27 @@ function registerUnary(
 
 // ── Trig ────────────────────────────────────────────────────────────────
 
-registerUnary("sin", Math.sin, (re, im) => ({
-  re: Math.sin(re) * Math.cosh(im),
-  im: Math.cos(re) * Math.sinh(im),
-}));
+// Guard 0*Inf=NaN on the imaginary axis: a pure-imaginary input
+// (sin(re)/cos(re) === 0) has a 0 lane, but cosh/sinh overflow to Inf
+// for large |im| and 0*Inf would poison it. C99 csin/ccos special-case
+// this; match it so all --opt levels agree.
+registerUnary("sin", Math.sin, (re, im) => {
+  const sr = Math.sin(re);
+  const cr = Math.cos(re);
+  return {
+    re: sr === 0 ? 0 : sr * Math.cosh(im),
+    im: cr === 0 ? 0 : cr * Math.sinh(im),
+  };
+});
 
-registerUnary("cos", Math.cos, (re, im) => ({
-  re: Math.cos(re) * Math.cosh(im),
-  im: -Math.sin(re) * Math.sinh(im),
-}));
+registerUnary("cos", Math.cos, (re, im) => {
+  const cr = Math.cos(re);
+  const sr = Math.sin(re);
+  return {
+    re: cr === 0 ? 0 : cr * Math.cosh(im),
+    im: sr === 0 ? 0 : -sr * Math.sinh(im),
+  };
+});
 
 registerUnary("tan", Math.tan, (re, im) => {
   const denom = Math.cos(2 * re) + Math.cosh(2 * im);
@@ -126,6 +138,14 @@ defineBuiltin({
   ),
 });
 registerUnary("atan", Math.atan, (re, im) => {
+  // Real-valued input: clean real atan — avoids the spurious ±1e-17i
+  // residue (and the Inf/Inf NaN at large |re|) the complex formula
+  // leaves on the real axis.
+  if (im === 0) return { re: Math.atan(re), im: 0 };
+  // atan(z) = (i/2)·log((1 − iz)/(1 + iz)). MATLAB's branch for a
+  // pure-imaginary z with |z| > 1 is −π/2 + … (verified: atan(2i) =
+  // −1.5708 + 0.5493i); the libc/C99 Annex-G branch differs (+π/2), so
+  // the C runtime overrides its catan to match this.
   const w1re = 1 + im,
     w1im = -re;
   const w2re = 1 - im,

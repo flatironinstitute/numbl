@@ -51,10 +51,22 @@ export function mtoc2_cne(a, b) {
 // finite inputs; special zero / pole cases follow the same path
 // the C side picks (exp(NaN) = NaN, etc.).
 function clog(z) {
-  return { re: Math.log(Math.hypot(z.re, z.im)), im: Math.atan2(z.im, z.re) };
+  // Normalize a -0 real part to +0 so log(-0) (a real -0) gives
+  // -Inf + 0i, not -Inf + πi — MATLAB / C99 treat -0 as 0, not as an
+  // approach-from-below negative. atan2's -0 second arg only changes the
+  // result when the first arg is also 0, so this affects nothing else.
+  const reAngle = z.re === 0 ? 0 : z.re;
+  return {
+    re: Math.log(Math.hypot(z.re, z.im)),
+    im: Math.atan2(z.im, reAngle),
+  };
 }
 function cexp(z) {
   const m = Math.exp(z.re);
+  // Real-valued input (im === 0): the imaginary lane is m*sin(0) = 0, but
+  // when m overflows to Inf that becomes Inf*0 = NaN. Return a clean 0
+  // (matches the interpreter's real exp and C99 cexp).
+  if (z.im === 0) return { re: m, im: 0 };
   return { re: m * Math.cos(z.im), im: m * Math.sin(z.im) };
 }
 export function mtoc2_cpow(a, b) {
@@ -97,15 +109,23 @@ export function mtoc2_clog10(z) {
   return { re: l.re / lg10, im: l.im / lg10 };
 }
 export function mtoc2_csin(z) {
+  // Guard 0*Inf=NaN on the imaginary axis: for a pure-imaginary input
+  // (sin(z.re)===0), the real lane is 0 and the imaginary lane is
+  // ±sinh(im); cosh/sinh overflow to Inf for large |im|, and 0*Inf would
+  // poison the result. C99 csin special-cases this — match it.
+  const sr = Math.sin(z.re);
+  const cr = Math.cos(z.re);
   return {
-    re: Math.sin(z.re) * Math.cosh(z.im),
-    im: Math.cos(z.re) * Math.sinh(z.im),
+    re: sr === 0 ? 0 : sr * Math.cosh(z.im),
+    im: cr === 0 ? 0 : cr * Math.sinh(z.im),
   };
 }
 export function mtoc2_ccos(z) {
+  const cr = Math.cos(z.re);
+  const sr = Math.sin(z.re);
   return {
-    re: Math.cos(z.re) * Math.cosh(z.im),
-    im: -Math.sin(z.re) * Math.sinh(z.im),
+    re: cr === 0 ? 0 : cr * Math.cosh(z.im),
+    im: sr === 0 ? 0 : -sr * Math.sinh(z.im),
   };
 }
 export function mtoc2_ctan(z) {
@@ -117,20 +137,22 @@ export function mtoc2_ctan(z) {
   return { re: Math.sin(2 * z.re) / denom, im: Math.sinh(2 * z.im) / denom };
 }
 export function mtoc2_catan(z) {
-  // catan(z) = (i/2) * (log(1 - iz) - log(1 + iz))
-  // = (1/2) * Im[log((1+iz)/(1-iz))] / no — use the simpler real
-  // recurrence: atan(z) = (-i/2) * log((i-z)/(i+z))
+  // Real-valued input (im === 0): atan is a clean real function. The
+  // complex formula leaves a spurious ±1e-17i residue (and NaN+NaNi once
+  // 1±iz overflows, e.g. atan(1e300)). Take the real path.
+  if (z.im === 0) return { re: Math.atan(z.re), im: 0 };
+  // atan(z) = (i/2)·log((1 − iz)/(1 + iz)) — MATLAB's branch (atan(2i) =
+  // −1.5708 + 0.5493i). The C runtime overrides its libc catan (which
+  // uses the opposite +π/2 Annex-G branch) to match this.
   const iz = { re: -z.im, im: z.re }; // i*z
   const num = { re: 1 - iz.re, im: -iz.im }; // 1 - iz
   const denom = { re: 1 + iz.re, im: iz.im }; // 1 + iz
-  // (1-iz) / (1+iz)
   const dd = denom.re * denom.re + denom.im * denom.im;
   const q = {
     re: (num.re * denom.re + num.im * denom.im) / dd,
     im: (num.im * denom.re - num.re * denom.im) / dd,
   };
   const l = clog(q);
-  // (i/2) * l
   return { re: -l.im / 2, im: l.re / 2 };
 }
 export function mtoc2_cfloor(z) {
