@@ -1194,8 +1194,12 @@ registerIBuiltin({
       apply: args => {
         const v = args[0];
         const prec = args.length >= 2 ? Math.round(toNumber(args[1])) : -1;
-        const fmt = (n: number) =>
-          prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
+        const fmt = (n: number): string => {
+          // MATLAB spells these Inf / -Inf / NaN (not JS's "Infinity").
+          if (!Number.isFinite(n))
+            return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
+          return prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
+        };
         if (isRuntimeNumber(v)) return RTV.char(fmt(v));
         if (isRuntimeTensor(v)) {
           const nRows = v.shape[0] || 1;

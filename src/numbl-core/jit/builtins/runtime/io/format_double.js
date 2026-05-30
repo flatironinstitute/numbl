@@ -4,8 +4,9 @@
 
 export function mtoc2_format_double(x) {
   if (Number.isNaN(x)) return "NaN";
-  if (x === Infinity) return "Infinity";
-  if (x === -Infinity) return "-Infinity";
+  // MATLAB spells these Inf / -Inf (matches the interpreter's formatNumber).
+  if (x === Infinity) return "Inf";
+  if (x === -Infinity) return "-Inf";
   if (x === 0) x = 0;
   if (Math.abs(x) < 1e15 && x === Math.trunc(x)) return String(x);
 

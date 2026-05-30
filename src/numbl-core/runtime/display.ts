@@ -96,6 +96,10 @@ function formatComplex(re: number, im: number): string {
 }
 
 function formatNumber(n: number): string {
+  if (!Number.isFinite(n)) {
+    // MATLAB spells these Inf / -Inf / NaN (not JS's "Infinity").
+    return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
+  }
   if (Number.isInteger(n) && Math.abs(n) < 1e15) {
     return n.toString();
   }

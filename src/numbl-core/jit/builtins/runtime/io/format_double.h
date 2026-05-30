@@ -15,7 +15,8 @@
 
 static int mtoc2_format_double(char *out, size_t cap, double x) {
   if (isnan(x)) return snprintf(out, cap, "NaN");
-  if (isinf(x)) return snprintf(out, cap, x > 0 ? "Infinity" : "-Infinity");
+  /* MATLAB spells these Inf / -Inf (matches the interpreter's formatNumber). */
+  if (isinf(x)) return snprintf(out, cap, x > 0 ? "Inf" : "-Inf");
   if (x == 0.0) x = 0.0; /* normalize -0 */
 
   if (fabs(x) < 1e15 && x == (double)(long long)x) {
