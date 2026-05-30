@@ -1,7 +1,7 @@
 % Test that adding a real number to a complex number works correctly
 % (not treated as string concatenation)
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 x = [1+2i, 3+4i];
 s = sum(x);
 assert(~isreal(s));

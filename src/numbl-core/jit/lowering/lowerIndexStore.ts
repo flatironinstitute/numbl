@@ -15,8 +15,10 @@ import {
   isNumeric,
   isScalar,
   isScalarRealNumeric,
+  shapeNumel,
   typeToString,
 } from "./types.js";
+import type { Type } from "./types.js";
 import type { Lowerer } from "./lower.js";
 import { resolveIndexLvalueBase } from "./indexResolve.js";
 import { lowerIndexSliceStore } from "./lowerIndexSliceStore.js";
@@ -81,6 +83,45 @@ export function lowerIndexStore(
     indices.push(lowered);
   }
 
+  // Compile-time grow decline (Layer 1): if an index is a statically
+  // known constant that exceeds the base's statically known bounds,
+  // the store would GROW the array — valid MATLAB, but the JIT can't
+  // model the new shape (the type system fixes the carrier shape). The
+  // canonical idiom `v(end+1) = x` on a fixed-shape array folds to a
+  // constant index that provably exceeds numel, so it's caught here
+  // and declines to the interpreter from the start (no side-effect
+  // replay). Dynamic OOB stores — whose index only exceeds bounds at
+  // runtime — can't be proven here; those are caught by the grow-aware
+  // runtime bounds-check helpers (Layer 2). We decline ONLY when growth
+  // is provable, so in-bounds dynamic stores keep JITting.
+  if (isNumeric(baseTy) && baseTy.shape !== undefined) {
+    if (numSlots === 1) {
+      const k = exactIndexVal(indices[0].ty);
+      const numel = shapeNumel(baseTy.shape);
+      if (k !== undefined && k > numel) {
+        throw new UnsupportedConstruct(
+          `indexed assignment to '${displayName}' grows the array ` +
+            `(index ${k} exceeds the ${numel}-element static shape); ` +
+            `array growth is not supported in the JIT`,
+          span
+        );
+      }
+    } else {
+      for (let slot = 0; slot < numSlots; slot++) {
+        const k = exactIndexVal(indices[slot].ty);
+        const dim = slot < baseTy.shape.length ? baseTy.shape[slot] : 1;
+        if (k !== undefined && k > dim) {
+          throw new UnsupportedConstruct(
+            `indexed assignment to '${displayName}' grows axis ${slot + 1} ` +
+              `(index ${k} exceeds static dim ${dim}); array growth is not ` +
+              `supported in the JIT`,
+            span
+          );
+        }
+      }
+    }
+  }
+
   const rhs = this.lowerExpr(exprAst);
   if (baseTy.isComplex) {
     // Base is complex: RHS may be either real or complex scalar.
@@ -120,4 +161,14 @@ export function lowerIndexStore(
     ...(fieldPath !== undefined ? { fieldPath, leafTy } : {}),
   };
   return stmt;
+}
+
+/** The statically-known integer value of an index expression's type,
+ *  or `undefined` when it isn't a compile-time-known scalar. Reads the
+ *  NumericType `exact` carrier directly (scalar `+`/`-`/`*` fold their
+ *  operands' exacts, so `end + 1` arrives here with `exact` set).
+ *  Kept local rather than importing `exactDouble` from `builtins/` to
+ *  avoid inverting the lowering→builtins dependency direction. */
+function exactIndexVal(ty: Type): number | undefined {
+  return isNumeric(ty) && typeof ty.exact === "number" ? ty.exact : undefined;
 }

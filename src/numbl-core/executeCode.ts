@@ -48,6 +48,10 @@ export interface ExecOptions {
   profile?: boolean;
   /** Called each time a JIT function is compiled, with a description and the generated JS. */
   onJitCompile?: (description: string, jsCode: string) => void;
+  /** Called when a JIT-compiled unit bails to the interpreter at runtime
+   *  (e.g. an indexed-store array growth the JIT can't model). Surfaced
+   *  as a warning; the CLI routes it to stderr. */
+  onJitBail?: (message: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -351,6 +355,7 @@ export function executeCode(
     );
     options.onJitCompile?.(description, jsCode);
   };
+  if (options.onJitBail) interpreter.onJitBail = options.onJitBail;
 
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();

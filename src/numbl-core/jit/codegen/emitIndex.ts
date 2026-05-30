@@ -30,21 +30,36 @@ import { emitExpr } from "./emitExpr.js";
  *  so an OOB access aborts with a numbl-style "Index exceeds array
  *  bounds" message instead of silently reading/writing past the
  *  buffer. Mirrors mtoc's `emitNdScalarOffset` — one source of truth
- *  for the offset formula. */
+ *  for the offset formula.
+ *
+ *  `grow` selects the indexed-STORE variant: the `*_grow` bounds
+ *  checks bail (longjmp to the host-entry guard → host re-runs on the
+ *  interpreter) instead of aborting when the index exceeds the extent,
+ *  because a store past the end GROWS the array in MATLAB — which the
+ *  JIT can't model. Reads pass `grow = false` (OOB is a genuine
+ *  error). See `grow_bail.h`. */
 export function emitNdScalarOffset(
   state: RuntimeState,
   indices: ReadonlyArray<IRExpr>,
-  baseCName: string
+  baseCName: string,
+  grow = false
 ): string {
-  useRuntimeByName(state, "mtoc2_oob_abort");
+  if (grow) {
+    useRuntimeByName(state, "mtoc2_grow_bail");
+    state.usedGrowBail = true;
+  } else {
+    useRuntimeByName(state, "mtoc2_oob_abort");
+  }
+  const linFn = grow ? "mtoc2_idx_lin_grow" : "mtoc2_idx_lin";
+  const axisFn = grow ? "mtoc2_idx_axis_grow" : "mtoc2_idx_axis";
   if (indices.length === 1) {
     const loc = locStringOf(indices[0].span);
-    return `mtoc2_idx_lin(&${baseCName}, mtoc2_to_idx(${emitExpr(indices[0], state)}), ${loc})`;
+    return `${linFn}(&${baseCName}, mtoc2_to_idx(${emitExpr(indices[0], state)}), ${loc})`;
   }
   const terms: string[] = [];
   for (let i = 0; i < indices.length; i++) {
     const loc = locStringOf(indices[i].span);
-    const checked = `mtoc2_idx_axis(&${baseCName}, ${i}, mtoc2_to_idx(${emitExpr(indices[i], state)}), ${loc})`;
+    const checked = `${axisFn}(&${baseCName}, ${i}, mtoc2_to_idx(${emitExpr(indices[i], state)}), ${loc})`;
     if (i === 0) {
       terms.push(checked);
     } else {

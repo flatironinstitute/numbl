@@ -1,7 +1,7 @@
 % Test that dot product of complex vectors returns correct type
 % and that arithmetic on the result works correctly
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 a = [1+1i, 2+2i];
 b = [1-1i, 1+1i];
 

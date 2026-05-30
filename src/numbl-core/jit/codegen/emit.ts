@@ -104,6 +104,20 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
     }
   }
 
+  // Grow-bail pre-pass: scan every function for a scalar IndexStore
+  // (the only construct that emits the grow-aware `*_grow` bounds
+  // checks). Done up front — before any function body is emitted — so
+  // the host-entry function's `setjmp` guard is emitted regardless of
+  // whether the growing store sits in the entry itself or in a callee
+  // emitted later in the loop below. (Snippet activation still happens
+  // lazily during body emission, in `emitNdScalarOffset`.)
+  for (const fn of prog.functions.values()) {
+    if (bodyHasIndexStore(fn.body)) {
+      state.usedGrowBail = true;
+      break;
+    }
+  }
+
   // Struct / class / handle typedefs — one per distinct shape.
   // Emitted ahead of forward decls so user code can refer to them,
   // and in dependency-topological order so any typedef that references
@@ -319,6 +333,23 @@ type NamedType = StructType | ClassType | HandleType | CellType;
  *  is the only thing the IR mentions directly. Also walks `HandleLit`
  *  capture value types — those drive the per-capture C field types
  *  even when the outer expression's `ty` is enough by itself. */
+/** True if `stmts` (recursing into control-flow bodies, but NOT into
+ *  nested function defs — those are separate IRFuncs) contains a
+ *  scalar `IndexStore`. Drives the grow-bail `setjmp` guard decision. */
+function bodyHasIndexStore(stmts: ReadonlyArray<IRStmt>): boolean {
+  for (const s of stmts) {
+    if (s.kind === "IndexStore") return true;
+    if (s.kind === "If") {
+      if (bodyHasIndexStore(s.thenBody) || bodyHasIndexStore(s.elseBody)) {
+        return true;
+      }
+    } else if (s.kind === "While" || s.kind === "For") {
+      if (bodyHasIndexStore(s.body)) return true;
+    }
+  }
+  return false;
+}
+
 function collectNamedTypedefs(prog: IRProgram): NamedType[] {
   const seen = new Map<string, NamedType>();
 

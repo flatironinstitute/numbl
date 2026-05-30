@@ -31,7 +31,7 @@ import {
   type Type as CompilerType,
 } from "../../jit/index.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
-import { numblToJit, jitToNumbl } from "./valueAdapter.js";
+import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
@@ -237,6 +237,11 @@ export const jitTopLevelExecutor: Executor<
       }
       return { ok: true };
     } catch (e) {
+      if (isGrowBail(e)) {
+        interp.onJitBail?.(
+          "jit-top-level: indexed-store array growth; falling back to interpreter"
+        );
+      }
       return {
         bail: {
           message: `jit-top-level: runtime error: ${e instanceof Error ? e.message : String(e)}`,

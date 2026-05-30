@@ -42,7 +42,7 @@ import {
   type Type as CompilerType,
 } from "../../jit/index.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
-import { numblToJit, jitToNumbl } from "./valueAdapter.js";
+import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
@@ -191,7 +191,7 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
     }
   },
 
-  run(compiled, d): RunResult {
+  run(compiled, d, ctx: DispatchContext): RunResult {
     if (compiled === null) {
       return { bail: { message: "jit-call: codegen declined" } };
     }
@@ -215,6 +215,11 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
       }
       return { result: jitToNumbl(result) };
     } catch (e) {
+      if (isGrowBail(e)) {
+        ctx.interp.onJitBail?.(
+          "jit-call: indexed-store array growth; falling back to interpreter"
+        );
+      }
       return {
         bail: {
           message: `jit-call: runtime error: ${e instanceof Error ? e.message : String(e)}`,

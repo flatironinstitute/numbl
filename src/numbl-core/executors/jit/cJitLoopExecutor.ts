@@ -30,6 +30,7 @@ import {
   registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
+  bindGrowBail,
   bindHostWrite,
   makeCMarshalCtx,
   marshalInputs,
@@ -181,6 +182,7 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
         compiled.compiled.lib,
         (s: string) => interp.rt.output(s)
       );
+      const growBail = bindGrowBail(compiled.compiled.lib);
       try {
         const sig = compiled.signature;
         const values: (RuntimeValue | undefined)[] = d.inputs.map(name =>
@@ -208,8 +210,21 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
             inputs.args.push(buf);
           }
         }
+        growBail.reset();
         const ret = compiled.compiled.fn(...inputs.args);
         inputs.release();
+        if (growBail.bailed()) {
+          interp.onJitBail?.(
+            "cjit-loop: indexed-store array growth; falling back to interpreter"
+          );
+          return {
+            bail: {
+              message:
+                "cjit-loop: array growth via indexed assignment; " +
+                "re-running on the interpreter",
+            },
+          };
+        }
         // Write outputs back into env.
         if (nOut === 0) {
           // No live-after-loop assigns.
@@ -246,6 +261,12 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
                   "mtoc2_tensor_t"
                 );
                 value = unmarshalTensorOutput(ctxC, struct, oTy);
+              } else if (oTy.isComplex) {
+                // Complex scalar outputs ride the `mtoc2_cscalar_t`
+                // struct slot — see typeAdapterC.ts.
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const c = (bridge.koffi as any).decode(buf, "mtoc2_cscalar_t");
+                value = unmarshalScalarOutput(c, oTy);
               } else {
                 // Logical scalar outputs ride the `double` slot in
                 // mtoc2's C ABI — see typeAdapterC.ts.

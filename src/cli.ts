@@ -643,6 +643,15 @@ async function executeWithOptions(
     writeFileSync(opts.dumpJs, "");
   }
 
+  // Surface a runtime JIT bail (e.g. an indexed-store array growth the
+  // JIT can't model) as a stderr warning. The scope still runs
+  // correctly — the interpreter takes over — so this is informational,
+  // not an error; it goes to stderr to leave stdout (program output)
+  // untouched.
+  const onJitBail = (message: string): void => {
+    process.stderr.write(`warning: JIT bailed to interpreter — ${message}\n`);
+  };
+
   try {
     if (opts.stream) {
       // Force stdout to blocking mode so large writes (e.g. drawnow events
@@ -672,6 +681,7 @@ async function executeWithOptions(
               streamLine({ type: "drawnow", plotInstructions });
             },
             onJitCompile,
+            onJitBail,
 
             fileIO,
             system,
@@ -728,6 +738,7 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
+          onJitBail,
 
           fileIO,
           system,
@@ -763,6 +774,7 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
+          onJitBail,
 
           fileIO,
           system,

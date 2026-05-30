@@ -33,7 +33,7 @@ import {
   type Type as CompilerType,
 } from "../../jit/index.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
-import { numblToJit, jitToNumbl } from "./valueAdapter.js";
+import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
@@ -202,6 +202,16 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
       }
       return { ok: true };
     } catch (e) {
+      // A grow-store sentinel (`v(k) = x` past the runtime extent) means
+      // the array would grow — unsupported in the JIT — so warn and bail
+      // to the interpreter. Other runtime errors also bail (so the
+      // interpreter reproduces numbl's canonical error/behavior), but
+      // silently — they're not a JIT limitation.
+      if (isGrowBail(e)) {
+        interp.onJitBail?.(
+          "jit-loop: indexed-store array growth; falling back to interpreter"
+        );
+      }
       return {
         bail: {
           message: `jit-loop: runtime error: ${e instanceof Error ? e.message : String(e)}`,

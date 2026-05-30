@@ -10,12 +10,16 @@
  *   - `buildCDeclaration(signature)` assembles the full koffi prototype
  *     string from a `SpecCSignature`.
  *
- * Supported today (Phase 1):
+ * Supported today:
  *   - Scalar real numeric → `double`
- *   - Scalar complex → ⛔ deferred (koffi's `_Complex` support varies;
- *     pass-by-(re, im) pair would simplify but mtoc2's emit signature
- *     is `double _Complex` and we don't rewrite the wrapper yet).
- *   - Scalar logical → `bool`
+ *   - Scalar complex → `mtoc2_cscalar_t` (a `{double re; double im;}`
+ *     koffi struct). The emitted C signature uses `double _Complex` by
+ *     value, but on the SysV-x86-64 / AAPCS64 ABIs a 2-double struct
+ *     and `double _Complex` share the same by-value calling convention
+ *     (two SSE / SIMD registers, returned in xmm0:xmm1), so koffi
+ *     marshals the struct against the real `_Complex` function — koffi's
+ *     own prototype parser doesn't accept the `double _Complex` token.
+ *   - Scalar logical → `double` (shares the `double` ABI)
  *   - Tensor (real or complex) → `mtoc2_tensor_t` (koffi struct)
  *   - Void return → `void`
  *
@@ -38,6 +42,7 @@ interface Koffi {
 }
 
 let tensorStructRegistered = false;
+let cscalarStructRegistered = false;
 
 /** Register the `mtoc2_tensor_t` struct with koffi. Idempotent — safe
  *  to call from each compile() invocation; the second call short-
@@ -58,6 +63,10 @@ let tensorStructRegistered = false;
  */
 export const JIT_MAX_NDIM = 8;
 export function registerTensorStruct(koffi: Koffi): void {
+  // Register the complex-scalar struct too (self-gated) — kept before
+  // the tensor short-circuit so it's registered even on calls where the
+  // tensor struct already is.
+  registerCScalarStruct(koffi);
   if (tensorStructRegistered) return;
   // koffi.array("long", 8) gives a fixed-size inline array (NOT a
   // pointer-to-array); the "Array" encoding makes koffi return a JS
@@ -70,6 +79,15 @@ export function registerTensorStruct(koffi: Koffi): void {
     dims: koffi.array("long", JIT_MAX_NDIM, "Array"),
   });
   tensorStructRegistered = true;
+}
+
+/** Register the `mtoc2_cscalar_t` struct — `{double re; double im;}` —
+ *  used as the koffi stand-in for `double _Complex` scalar params and
+ *  returns (ABI-compatible by-value; see header). Idempotent. */
+export function registerCScalarStruct(koffi: Koffi): void {
+  if (cscalarStructRegistered) return;
+  koffi.struct("mtoc2_cscalar_t", { re: "double", im: "double" });
+  cscalarStructRegistered = true;
 }
 
 /** Map an mtoc2 `Type` to the C-type token used in the koffi
@@ -87,7 +105,9 @@ function numericToCDecl(ty: NumericType): string | null {
     return "mtoc2_tensor_t";
   }
   // Scalar shape (1×1).
-  if (ty.isComplex) return null; // deferred (see header).
+  // Complex scalar: the emitted C signature is `double _Complex`, but
+  // koffi marshals the ABI-identical `{re, im}` struct (see header).
+  if (ty.isComplex) return "mtoc2_cscalar_t";
   // Logical scalars share the `double` ABI with real numerics —
   // mtoc2's `cTypeFor` returns "double" uniformly for any
   // single-element Numeric. The koffi declaration must match the

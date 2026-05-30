@@ -99,6 +99,15 @@ export class Interpreter {
   /** Callback for JIT compilation logging (JS codegen). */
   onJitCompile?: (description: string, jsCode: string) => void;
 
+  /** Called when a JIT-compiled unit bails back to the interpreter at
+   *  RUNTIME (as opposed to declining at compile time). Today the sole
+   *  trigger is an indexed-store array growth that's only detectable at
+   *  runtime — the JIT can't model the grown shape, so it bails and the
+   *  interpreter re-runs the whole scope with full MATLAB semantics.
+   *  Surfaced as a warning (the CLI routes it to stderr); a compile-time
+   *  decline stays silent (it's the normal "not JIT-able" path). */
+  onJitBail?: (message: string) => void;
+
   /** Bridge for loading native shared libraries. Undefined in browser
    *  contexts. */
   nativeBridge?: import("../workspace/types.js").NativeBridge;

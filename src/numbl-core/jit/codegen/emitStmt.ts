@@ -296,6 +296,42 @@ export function emitFunction(
     fnOwnedTypes,
     fnReturnTail
   );
+  // Grow-bail guard (host-entry function only). A runtime indexed-store
+  // grow `longjmp`s here from `mtoc2_idx_*_grow` (see `grow_bail.h`);
+  // we free owned buffers and return a zero value. The flag stays set,
+  // so the host re-runs the whole scope on the interpreter (full grow
+  // semantics). Only the entry (`storageClass === ""`) arms a setjmp —
+  // inner static callees let their grow-longjmp propagate up to it.
+  // Placed after local declarations so the handler can free them, and
+  // before the body so it's armed for the body's first store.
+  if (storageClass === "" && state.usedGrowBail) {
+    const bail: string[] = [];
+    bail.push(`  if (setjmp(mtoc2_grow_bail_buf)) {`);
+    for (const o of [...owned, ...ownedParams]) {
+      const h = requireOwnedHelpers(o.ty);
+      bail.push(`    ${h.free}(&${o.cName});`);
+    }
+    for (let i = 0; i < nOutputs; i++) {
+      const outTy = fn.outputTypes[i];
+      if (outTy && isOwned(outTy)) {
+        const h = requireOwnedHelpers(outTy);
+        bail.push(`    ${h.free}(&${fn.cOutputs[i]});`);
+      }
+    }
+    if (isVoidFn || isMulti) {
+      bail.push(`    return;`);
+    } else {
+      const outTy = fn.outputTypes[0];
+      if (outTy && isOwned(outTy)) {
+        const h = requireOwnedHelpers(outTy);
+        bail.push(`    return ${h.empty}();`);
+      } else {
+        bail.push(`    return 0;`);
+      }
+    }
+    bail.push(`  }`);
+    lines.push(bail.join("\n"));
+  }
   if (bodyText.length > 0) lines.push(bodyText);
   lines.push(fnReturnTail("  "));
   lines.push(`}`);
@@ -396,7 +432,10 @@ function emitStmt(
           ? `${s.base.cName}.${s.fieldPath.join(".")}`
           : s.base.cName;
       const slotTy = s.leafTy ?? s.base.ty;
-      const offset = emitNdScalarOffset(state, s.indices, slotCName);
+      // grow=true: a store whose index exceeds the runtime extent bails
+      // (the array would grow — unsupported in the JIT) rather than
+      // aborting. See `emitNdScalarOffset` / `grow_bail.h`.
+      const offset = emitNdScalarOffset(state, s.indices, slotCName, true);
       const rhs = emitExpr(s.rhs, state);
       const baseIsComplex = isNumeric(slotTy) && slotTy.isComplex;
       const rhsIsComplex = isNumeric(s.rhs.ty) && s.rhs.ty.isComplex;

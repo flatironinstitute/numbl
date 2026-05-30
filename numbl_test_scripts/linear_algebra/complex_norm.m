@@ -1,7 +1,7 @@
 % Test norm() with complex input
 
 % Scalar complex: norm(1+2i) should be sqrt(5)
-%!numbl:assert_jit
+%!numbl:assert_jit c
 z = 1 + 2i;
 n = norm(z);
 assert(abs(n - sqrt(5)) < 1e-10);

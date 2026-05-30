@@ -360,13 +360,17 @@ function emitStmt(s: IRStmt, indent: string, state: RuntimeState): string {
           : s.base.cName;
       const slotTy = s.leafTy ?? s.base.ty;
       const idxs = s.indices.map(ix => emitExpr(ix, state));
+      // Grow-aware store subscripts: a store past the runtime extent
+      // throws a tagged `mtoc2GrowBail` sentinel (the array would grow —
+      // unsupported in the JIT) so the executor bails to the
+      // interpreter. See `scalar_index.js`.
       let offset: string;
       if (idxs.length === 1) {
-        offset = `mtoc2_idx_lin_js(${baseName}, ${idxs[0]})`;
+        offset = `mtoc2_idx_lin_grow_js(${baseName}, ${idxs[0]})`;
       } else {
         const terms: string[] = [];
         for (let i = 0; i < idxs.length; i++) {
-          const checked = `mtoc2_idx_axis_js(${baseName}, ${i}, ${idxs[i]})`;
+          const checked = `mtoc2_idx_axis_grow_js(${baseName}, ${i}, ${idxs[i]})`;
           if (i === 0) {
             terms.push(checked);
           } else {

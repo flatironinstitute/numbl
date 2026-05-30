@@ -1,7 +1,7 @@
 % Test complex number operations
 
 % Basic complex number
-%!numbl:assert_jit
+%!numbl:assert_jit c
 z = 3 + 4i;
 assert(real(z) == 3);
 assert(imag(z) == 4);

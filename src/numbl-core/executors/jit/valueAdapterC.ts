@@ -25,9 +25,11 @@
 
 import {
   RuntimeTensor,
+  RuntimeComplexNumber,
   isRuntimeTensor,
   isRuntimeNumber,
   isRuntimeLogical,
+  isRuntimeComplexNumber,
   type RuntimeValue,
 } from "../../runtime/types.js";
 import type { Type, NumericType } from "../../jit/index.js";
@@ -126,6 +128,32 @@ export function bindHostWrite(
   };
 }
 
+/** Bind the emitted `.so`'s grow-bail flag accessors. A runtime
+ *  indexed-store grow (`v(k) = x`, k past the runtime extent) sets a
+ *  flag in the `.so` and `longjmp`s back to the host-entry function's
+ *  guard (see `grow_bail.h`), which returns normally. The host calls
+ *  `reset()` before each invocation and `bailed()` after; when
+ *  `bailed()` is true it discards the outputs and bails to the
+ *  interpreter (which has full MATLAB grow semantics).
+ *
+ *  When the spec emitted no scalar indexed store, `mtoc2_grow_bail_*`
+ *  are absent from the `.so`; binding then no-ops (`bailed()` is always
+ *  false — the code can't grow). */
+export function bindGrowBail(lib: KoffiLib): {
+  reset(): void;
+  bailed(): boolean;
+} {
+  let reset: () => void;
+  let check: () => number;
+  try {
+    reset = lib.func("void mtoc2_grow_bail_reset(void)") as () => void;
+    check = lib.func("int mtoc2_grow_bail_check(void)") as () => number;
+  } catch {
+    return { reset() {}, bailed: () => false };
+  }
+  return { reset, bailed: () => check() !== 0 };
+}
+
 /** Build a marshaling context from a koffi lib handle. The host
  *  passes the lib it got from `compileAndLoadC`; we resolve `free`
  *  against that same lib (libc symbols are reachable through any
@@ -186,7 +214,16 @@ function marshalOneInput(ctx: MarshalCtx, ty: Type, v: RuntimeValue): unknown {
       if (!isRuntimeTensor(v)) return undefined;
       return marshalTensorInput(ctx, v);
     }
-    // Scalar — mtoc2's C ABI passes every single-element numeric
+    // Complex scalar — the C ABI is `double _Complex`, marshaled via
+    // the ABI-identical `{re, im}` koffi struct (see typeAdapterC.ts).
+    // A real value flowing into a complex param rides `im = 0`.
+    if (nty.isComplex) {
+      if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
+      if (isRuntimeNumber(v)) return { re: v, im: 0 };
+      if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
+      return undefined;
+    }
+    // Scalar — mtoc2's C ABI passes every single-element real numeric
     // (real, logical) as `double` (see typeAdapterC.ts's
     // numericToCDecl). Coerce booleans to 0/1 so koffi marshals a
     // proper double.
@@ -266,14 +303,20 @@ export function unmarshalTensorOutput(
   return new RuntimeTensor(realData, shape, imagData);
 }
 
-/** Convert a bare scalar return value (`double`) to a numbl
- *  RuntimeValue. Every scalar mtoc2-emitted spec returns `double`
- *  regardless of element kind (see typeAdapterC.ts), so koffi hands
- *  us a JS number; logical outputs coerce to `Boolean` here. */
+/** Convert a bare scalar return value to a numbl RuntimeValue.
+ *
+ *  Real / logical scalars ride the `double` ABI, so koffi hands us a
+ *  JS number (logical coerces to `Boolean`). Complex scalars ride the
+ *  `mtoc2_cscalar_t` struct, so koffi hands us a `{re, im}` object,
+ *  which becomes a `RuntimeComplexNumber`. */
 export function unmarshalScalarOutput(
   v: unknown,
   ty: NumericType
 ): RuntimeValue {
+  if (ty.isComplex) {
+    const c = v as { re: number; im: number };
+    return new RuntimeComplexNumber(c.re, c.im);
+  }
   if (ty.elem === "logical") return Boolean(v);
   return v as number;
 }

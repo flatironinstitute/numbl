@@ -740,6 +740,17 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // pulls in one bounds-check fn pulls in the others' definitions
   // for free.
   ["mtoc2_oob_abort", loadSnippet("oob.h", ["mtoc2_tensor_t"])],
+  // Grow-aware indexed-STORE bounds checks (`mtoc2_idx_lin_grow`,
+  // `mtoc2_idx_axis_grow`) plus the setjmp-based bail infra
+  // (`mtoc2_grow_bail_reset` / `_check`). A store past the runtime
+  // extent longjmp's to the host-entry function's guard for a clean
+  // host-side bail to the interpreter (which grows the array). See
+  // `grow_bail.h`. C-only (no `.js` sibling): the JS path's grow
+  // helpers live in `scalar_index.js` and bail via a tagged throw.
+  [
+    "mtoc2_grow_bail",
+    loadSnippet("grow_bail.h", ["mtoc2_tensor_t", "mtoc2_oob_abort"]),
+  ],
   [
     "mtoc2_tensor_make_range",
     loadSnippet("tensor_make_range.h", [
@@ -847,6 +858,14 @@ export interface RuntimeState {
    *  return matching the function's shape (bare value / array /
    *  nothing). Undefined at top level. */
   currentFnOutputs?: ReadonlyArray<string>;
+  /** Set when the program contains a scalar indexed STORE, which
+   *  emits the grow-aware `mtoc2_idx_*_grow` bounds checks. The
+   *  host-entry function (storage class `""`) then arms a `setjmp`
+   *  guard so a runtime grow (`v(k) = x`, k past the runtime extent)
+   *  `longjmp`s back and returns cleanly for a host-side bail to the
+   *  interpreter, instead of `exit(1)`. Computed by a pre-pass in
+   *  `emit.ts` so it's set regardless of function emission order. */
+  usedGrowBail?: boolean;
 }
 
 export function newRuntimeState(workspace?: WorkspaceLike): RuntimeState {

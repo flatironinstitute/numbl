@@ -11,7 +11,7 @@
 % through.
 
 % Build a complex 4x6 tensor whose entries are deterministic.
-%!numbl:assert_jit
+%!numbl:assert_jit c
 m = 4; nc = 6;
 A = zeros(m, nc) + 1i * zeros(m, nc);
 for r = 1:m

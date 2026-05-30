@@ -42,6 +42,7 @@ import {
   registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
+  bindGrowBail,
   bindHostWrite,
   makeCMarshalCtx,
   marshalInputs,
@@ -193,6 +194,7 @@ export const cJitCallExecutor: Executor<CJitCallData, CompiledArtifact | null> =
         compiled.compiled.lib,
         (s: string) => ctx.interp.rt.output(s)
       );
+      const growBail = bindGrowBail(compiled.compiled.lib);
       try {
         const sig = compiled.signature;
         const inputs = marshalInputs(
@@ -220,8 +222,21 @@ export const cJitCallExecutor: Executor<CJitCallData, CompiledArtifact | null> =
             inputs.args.push(buf);
           }
         }
+        growBail.reset();
         const ret = compiled.compiled.fn(...inputs.args);
         inputs.release();
+        if (growBail.bailed()) {
+          ctx.interp.onJitBail?.(
+            "cjit-call: indexed-store array growth; falling back to interpreter"
+          );
+          return {
+            bail: {
+              message:
+                "cjit-call: array growth via indexed assignment; " +
+                "re-running on the interpreter",
+            },
+          };
+        }
         // Materialize outputs.
         const results = readOutputs(ctxC, ret, outAllocs, sig);
         // Result shape matches the JS path: nargout==1 ⇒ bare value;
@@ -286,8 +301,14 @@ function readOutputs(
         out.push(unmarshalTensorOutput(ctxC, struct, oTy));
         continue;
       }
-      // Both `double` and `logical` scalar outputs ride the `double`
-      // slot in mtoc2's C ABI — see typeAdapterC.ts.
+      // Complex scalar outputs ride the `mtoc2_cscalar_t` struct slot;
+      // both `double` and `logical` scalars ride the `double` slot —
+      // see typeAdapterC.ts.
+      if (oTy.isComplex) {
+        const c = ctxC.koffi.decode(buf, "mtoc2_cscalar_t");
+        out.push(unmarshalScalarOutput(c, oTy));
+        continue;
+      }
       const val = ctxC.koffi.decode(buf, "double", 1)[0];
       out.push(unmarshalScalarOutput(val, oTy));
       continue;

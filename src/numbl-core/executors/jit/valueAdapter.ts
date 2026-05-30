@@ -104,3 +104,18 @@ export function jitToNumbl(v: unknown): RuntimeValue {
   }
   throw new Error(`jitToNumbl: unrecognized return shape`);
 }
+
+/** True if `e` is the grow-bail sentinel thrown by the emitted JS
+ *  store helpers (`mtoc2_idx_*_grow_js` in `scalar_index.js`) — an
+ *  indexed store whose index exceeds the runtime extent, which would
+ *  grow the array (unsupported in the JIT). The JS executors recognize
+ *  it to surface a one-time warning; they bail on it (and on any other
+ *  runtime error) so the interpreter re-runs the scope with full
+ *  MATLAB grow semantics. */
+export function isGrowBail(e: unknown): boolean {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    (e as { mtoc2GrowBail?: boolean }).mtoc2GrowBail === true
+  );
+}
