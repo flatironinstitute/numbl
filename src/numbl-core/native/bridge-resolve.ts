@@ -30,7 +30,10 @@ export function getEffectiveBridge(
   if (!_logged.has(opName)) {
     _logged.add(opName);
     const name = native ? "native LAPACK addon" : "ts-lapack (TypeScript)";
-    console.log(`[${opName}] using bridge: ${name}`);
+    // Diagnostic only — write to stderr so it never pollutes program
+    // stdout. (On stdout it leaked into captured output and diverged
+    // from the JIT, which resolves its own kernels and never logs.)
+    console.error(`[${opName}] using bridge: ${name}`);
   }
   return bridge;
 }
