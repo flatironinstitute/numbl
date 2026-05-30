@@ -939,6 +939,48 @@ defineBuiltin({
           throw new RuntimeError("repelem requires at least 2 arguments");
         const v = args[0];
         if (args.length === 2) {
+          const repArg = args[1];
+          // Per-element count vector: repelem(v, [c1 c2 ...]) repeats v(i)
+          // counts(i) times. (A 1-element count is treated as a scalar.)
+          if (isRuntimeTensor(repArg) && repArg.data.length > 1) {
+            const counts = repArg.data;
+            const vData = isRuntimeNumber(v)
+              ? Float64Array.of(v as number)
+              : isRuntimeTensor(v)
+                ? v.data
+                : null;
+            if (vData === null)
+              throw new RuntimeError("repelem: first argument must be numeric");
+            const len = vData.length;
+            if (counts.length !== len)
+              throw new RuntimeError(
+                `repelem: counts vector length (${counts.length}) must match the number of elements (${len})`
+              );
+            const vImag = isRuntimeTensor(v) ? v.imag : undefined;
+            let total = 0;
+            for (let i = 0; i < len; i++)
+              total += Math.max(0, Math.round(counts[i]));
+            const result = allocFloat64Array(total);
+            const resultImag = vImag ? allocFloat64Array(total) : undefined;
+            let k = 0;
+            for (let i = 0; i < len; i++) {
+              const c = Math.max(0, Math.round(counts[i]));
+              for (let j = 0; j < c; j++) {
+                result[k] = vData[i];
+                if (resultImag) resultImag[k] = vImag![i];
+                k++;
+              }
+            }
+            const isCol =
+              isRuntimeTensor(v) && v.shape.length === 2 && v.shape[1] === 1;
+            const out = RTV.tensor(
+              result,
+              isCol ? [total, 1] : [1, total],
+              resultImag
+            );
+            if (isRuntimeTensor(v) && v._isLogical) out._isLogical = true;
+            return out;
+          }
           const n = Math.round(toNumber(args[1]));
           if (isRuntimeNumber(v)) {
             const data = allocFloat64Array(n).fill(v as number);
