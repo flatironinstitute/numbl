@@ -481,14 +481,20 @@ export function handleType(
   return { kind: "Handle", targetName, ast, captures };
 }
 
-/** Construct a `StructType` with canonical (sorted-by-name) field
- *  order. Two structs built from the same fields end up structurally
- *  equal regardless of the order their fields were specified. */
+/** Construct a `StructType`, preserving the given field order.
+ *
+ *  Field order is OBSERVABLE in MATLAB — disp, `fieldnames`, and
+ *  `struct2cell` all report insertion order — so we must NOT sort:
+ *  sorting made the JIT display fields alphabetically while the
+ *  interpreter (and MATLAB) keep insertion order. The C typedef layout
+ *  and the JS struct object both follow this `fields` order, so keeping
+ *  insertion order aligns storage and display. The cost is that two
+ *  structs built with the same names in different orders no longer share
+ *  a typedef (they're distinct field orders, exactly as in MATLAB). */
 export function structType(
   fields: ReadonlyArray<{ name: string; ty: Type }>
 ): StructType {
-  const sorted = fields.slice().sort((a, b) => (a.name < b.name ? -1 : 1));
-  return { kind: "Struct", fields: sorted };
+  return { kind: "Struct", fields: fields.slice() };
 }
 
 /** Construct a `ClassType` with canonical (sorted-by-name) property

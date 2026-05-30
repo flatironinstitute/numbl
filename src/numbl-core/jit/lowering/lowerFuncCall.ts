@@ -509,14 +509,12 @@ function lowerStructConstructor(
     ty: f.value.ty,
   }));
   const ty = structType(tyFields);
-  // Re-order the values to match the canonical (sorted) field list
-  // so the IR's `StructLit.fields` lines up with `ty.fields`.
-  const sortedValues = fields
-    .slice()
-    .sort((a, b) => (a.name < b.name ? -1 : 1));
+  // `StructLit.fields` must line up with `ty.fields`; both now keep the
+  // construction (insertion) order, which is what MATLAB observes for
+  // field display / fieldnames. (Previously both were sorted by name.)
   return {
     kind: "StructLit",
-    fields: sortedValues,
+    fields,
     ty,
     span: e.span,
   };
