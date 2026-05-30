@@ -169,7 +169,11 @@ export function defineUnaryPred(opts: UnaryPredOpts): Builtin {
         useRuntime(tensorHelper);
         return `mtoc2_tensor_${name}(${argsJs[0]})`;
       }
-      return jsScalar(argsJs[0]);
+      // A logical scalar is a JS boolean; coerce to a number so the
+      // numeric test (Number.isFinite, Math.abs, …) sees 0/1 rather
+      // than false/true (e.g. `Number.isFinite(true)` is wrongly false).
+      const sArg = a.elem === "double" ? argsJs[0] : `(+(${argsJs[0]}))`;
+      return jsScalar(sArg);
     },
     call({ args, argTypes }) {
       const a = argTypes[0] as Type;

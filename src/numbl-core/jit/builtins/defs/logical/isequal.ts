@@ -130,20 +130,28 @@ function pairJs(
   const ka = classify(tA);
   const kb = classify(tB);
   const useTensorHelper = () => useRuntime("mtoc2_isequal");
-  if (ka === "rs" && kb === "rs") return `(${aJs} === ${bJs} ? 1 : 0)`;
+  // A logical *scalar* is a JS boolean; coerce it to a number so a
+  // strict `===` against a numeric operand works (`true === 1` is
+  // false in JS). Logical *tensors* are Float64-backed, so only scalars
+  // need this — guard with isScalar to avoid `+tensorObject` → NaN.
+  const numJs = (t: Type, x: string): string =>
+    isNumeric(t) && isScalar(t) && t.elem === "logical" ? `(+(${x}))` : x;
+  const aN = numJs(tA, aJs);
+  const bN = numJs(tB, bJs);
+  if (ka === "rs" && kb === "rs") return `(${aN} === ${bN} ? 1 : 0)`;
   if (ka === "rs" && kb === "cs")
-    return `(${bJs}.im === 0 && ${bJs}.re === ${aJs} ? 1 : 0)`;
+    return `(${bJs}.im === 0 && ${bJs}.re === ${aN} ? 1 : 0)`;
   if (ka === "cs" && kb === "rs")
-    return `(${aJs}.im === 0 && ${aJs}.re === ${bJs} ? 1 : 0)`;
+    return `(${aJs}.im === 0 && ${aJs}.re === ${bN} ? 1 : 0)`;
   if (ka === "cs" && kb === "cs")
     return `(${aJs}.re === ${bJs}.re && ${aJs}.im === ${bJs}.im ? 1 : 0)`;
   if (ka === "rs" && kb === "rt") {
     useTensorHelper();
-    return `mtoc2_isequal_st(${aJs}, ${bJs})`;
+    return `mtoc2_isequal_st(${aN}, ${bJs})`;
   }
   if (ka === "rt" && kb === "rs") {
     useTensorHelper();
-    return `mtoc2_isequal_st(${bJs}, ${aJs})`;
+    return `mtoc2_isequal_st(${bN}, ${aJs})`;
   }
   if ((ka === "rs" && kb === "ct") || (ka === "ct" && kb === "rs")) return `0`;
   if (ka === "cs" && kb === "rt") {
