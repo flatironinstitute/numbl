@@ -330,7 +330,9 @@ Options (for REPL):
   --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
-  --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-js <file>   Write JS-JIT-generated JavaScript to file (--opt 1, and
+                       the JS fallback at --opt 2)
+  --dump-c <file>    Write C-JIT-generated C to file (--opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -354,6 +356,7 @@ Environment variables:
 
 interface ParsedOptions {
   dumpJs: string | undefined;
+  dumpC: string | undefined;
   dumpAst: boolean;
   verbose: boolean;
   stream: boolean;
@@ -369,6 +372,7 @@ interface ParsedOptions {
 function parseOptions(args: string[]): ParsedOptions {
   const opts: ParsedOptions = {
     dumpJs: undefined,
+    dumpC: undefined,
     dumpAst: false,
     verbose: false,
     stream: false,
@@ -405,6 +409,14 @@ function parseOptions(args: string[]): ParsedOptions {
           process.exit(1);
         }
         opts.dumpJs = resolve(process.cwd(), args[i]);
+        break;
+      case "--dump-c":
+        i++;
+        if (i >= args.length) {
+          console.error("Error: --dump-c requires an output filename");
+          process.exit(1);
+        }
+        opts.dumpC = resolve(process.cwd(), args[i]);
         break;
       case "--no-fast-math":
         opts.fastMath = false;
@@ -608,7 +620,13 @@ async function executeWithOptions(
   };
 
   // If --dump-ast is used alone (without running), just dump and exit
-  if (opts.dumpAst && !opts.dumpJs && !opts.stream && !opts.verbose) {
+  if (
+    opts.dumpAst &&
+    !opts.dumpJs &&
+    !opts.dumpC &&
+    !opts.stream &&
+    !opts.verbose
+  ) {
     const ast = parseMFile(code, mainFileName);
     process.stdout.write(JSON.stringify(ast, null, 2) + "\n");
     process.exit(0);
@@ -633,15 +651,59 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js: compilations are collected in result.generatedJS
-  // by executeCode and written by finalizeDumpFile at the end. Just
-  // clear any previous dump file here.
+  // Set up --dump-js / --dump-c. Each JIT section is streamed to disk the
+  // moment it compiles (in onJitCompile, which fires before the compiled
+  // code runs) rather than written in one shot at the end. This keeps the
+  // dump intact even when a hard error in compiled C terminates the
+  // process via exit(1) from inside the FFI call — that path never unwinds
+  // back to JS, so an end-of-run write would be lost. Write the header now
+  // so a crash still leaves a self-describing file.
+  const dumpHeader =
+    "// " +
+    "=".repeat(60) +
+    "\n// MAIN SCRIPT: " +
+    mainFileName +
+    "\n// " +
+    "=".repeat(60) +
+    "\n\n";
+  const dumpCounts = { js: 0, c: 0 };
+  // Start each file fresh with the header. `/dev/*` targets (e.g.
+  // `/dev/stdout`) can't be truncated, so append there instead.
+  const initDump = (file: string) => {
+    if (file.startsWith("/dev/")) appendFileSync(file, dumpHeader);
+    else writeFileSync(file, dumpHeader);
+  };
+  if (opts.dumpJs) initDump(opts.dumpJs);
+  if (opts.dumpC) initDump(opts.dumpC);
   const onJitCompile:
-    | ((description: string, jsCode: string) => void)
-    | undefined = undefined;
-  if (opts.dumpJs) {
-    writeFileSync(opts.dumpJs, "");
-  }
+    | ((description: string, code: string, lang: "js" | "c") => void)
+    | undefined =
+    opts.dumpJs || opts.dumpC
+      ? (description, code, lang) => {
+          const file = lang === "c" ? opts.dumpC : opts.dumpJs;
+          if (!file) return;
+          const banner = `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${code}\n`;
+          const prefix =
+            dumpCounts[lang] === 0
+              ? "// Interpreter mode — JIT compiled sections:\n\n"
+              : "\n";
+          appendFileSync(file, prefix + banner);
+          dumpCounts[lang]++;
+        }
+      : undefined;
+  // Append the "nothing generated" placeholder for any enabled dump file
+  // that received no sections. Safe to call more than once (guarded on
+  // count), so it runs on both the success and error paths.
+  const finalizeDumps = () => {
+    if (opts.dumpJs && dumpCounts.js === 0) {
+      appendFileSync(opts.dumpJs, "// No JS generated\n");
+      dumpCounts.js = -1;
+    }
+    if (opts.dumpC && dumpCounts.c === 0) {
+      appendFileSync(opts.dumpC, "// No C generated\n");
+      dumpCounts.c = -1;
+    }
+  };
 
   // Surface a runtime JIT bail (e.g. an indexed-store array growth the
   // JIT can't model) as a stderr warning. The scope still runs
@@ -701,12 +763,11 @@ async function executeWithOptions(
           });
         }
         writeProfileIfNeeded(result);
-        if (opts.dumpJs) {
-          finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-        }
+        finalizeDumps();
         streamLine({
           type: "done",
           generatedJS: result.generatedJS || undefined,
+          generatedC: result.generatedC || undefined,
         });
       } catch (error) {
         const diags = diagnoseErrors(error, code, mainFileName, workspaceFiles);
@@ -751,9 +812,7 @@ async function executeWithOptions(
         nativeBridge
       );
       writeProfileIfNeeded(result);
-      if (opts.dumpJs) {
-        finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
+      finalizeDumps();
       await flushAndWait(result.plotInstructions);
     } else {
       const asyncPlotOpts: PlotServerOptions | undefined =
@@ -787,9 +846,7 @@ async function executeWithOptions(
         nativeBridge
       );
       writeProfileIfNeeded(result);
-      if (opts.dumpJs) {
-        finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
+      finalizeDumps();
       await flushAndWait(result.plotInstructions);
     }
 
@@ -800,41 +857,13 @@ async function executeWithOptions(
       getSourceForFile(file, mainFileName, code, workspaceFiles);
     console.error(formatDiagnostics(diags, getSource));
 
-    // Still finalize the dump file on error so the user can inspect the generated JS
-    if (opts.dumpJs) {
-      const errWithInfo = error as Error & { generatedJS?: string };
-      finalizeDumpFile(
-        opts.dumpJs,
-        mainFileName,
-        errWithInfo.generatedJS ?? "// (main script JS not available)"
-      );
-    }
+    // The dump files were streamed as each section compiled (see
+    // onJitCompile above), so anything generated before the error is
+    // already on disk. Just cap off any file that got no sections.
+    finalizeDumps();
 
     process.exit(1);
   }
-}
-
-/** Finalize the dump file: prepend the main script header before JIT pieces. */
-function finalizeDumpFile(
-  dumpFile: string,
-  mainFileName: string,
-  jsCode: string
-) {
-  const header =
-    "// " +
-    "=".repeat(60) +
-    "\n" +
-    "// MAIN SCRIPT: " +
-    mainFileName +
-    "\n" +
-    "// " +
-    "=".repeat(60) +
-    "\n\n";
-  if (dumpFile.startsWith("/dev/")) {
-    appendFileSync(dumpFile, header + jsCode + "\n");
-    return;
-  }
-  writeFileSync(dumpFile, header + jsCode + "\n");
 }
 
 async function cmdBuildAddon(args: string[]) {

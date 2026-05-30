@@ -28,4 +28,6 @@ A separate safety pass classifies constructs with observable side effects the JI
 
 ## Debugging JIT output
 
-`--dump-js <file>` writes the generated JavaScript source to disk for inspection (`--opt 1`). `--verbose` adds compilation events to stderr.
+`--dump-js <file>` writes the generated JavaScript source to disk for inspection; `--dump-c <file>` writes the generated C source. Each flag captures only its backend's output, so at `--opt 2` (where C-JIT and JS-JIT both run) you can pass both: C kernels go to the `--dump-c` file and the JS-JIT fallbacks go to the `--dump-js` file. `--verbose` adds compilation events to stderr.
+
+Each section is written the moment it compiles, so the dump reflects everything generated up to a failure — including the case where compiled C aborts the process via `exit(1)` (e.g. an out-of-bounds index or `error(...)`), which terminates Node from inside the FFI call before any end-of-run cleanup could run.

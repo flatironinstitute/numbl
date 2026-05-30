@@ -96,8 +96,10 @@ export class Interpreter {
    */
   optimization: import("../executors/plugins.js").OptLevel = "1";
 
-  /** Callback for JIT compilation logging (JS codegen). */
-  onJitCompile?: (description: string, jsCode: string) => void;
+  /** Callback for JIT compilation logging. `lang` distinguishes the
+   *  emitted source: `"js"` for the JS-JIT backend, `"c"` for the
+   *  C-JIT backend (both can fire in a single `--opt 2` run). */
+  onJitCompile?: (description: string, code: string, lang: "js" | "c") => void;
 
   /** Called when a JIT-compiled unit bails back to the interpreter at
    *  RUNTIME (as opposed to declining at compile time). Today the sole

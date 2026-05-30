@@ -171,7 +171,8 @@ export const cJitCallExecutor: Executor<CJitCallData, CompiledArtifact | null> =
       const typeDesc = d.argTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
         `cjit-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
-        source
+        source,
+        "c"
       );
       const compiled = compileAndLoadC(source, declaration, bridge);
       return { compiled, signature };

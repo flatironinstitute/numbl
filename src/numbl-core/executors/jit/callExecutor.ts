@@ -176,7 +176,8 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
       const typeDesc = d.argTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
         `jit-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
-        source
+        source,
+        "js"
       );
       const factory = new Function(source)() as (
         $h: JitHostHelpers

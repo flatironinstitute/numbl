@@ -126,7 +126,9 @@ Options (for REPL):
   --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
-  --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-js <file>   Write JS-JIT-generated JavaScript to file (--opt 1, and
+                       the JS fallback at --opt 2)
+  --dump-c <file>    Write C-JIT-generated C to file (--opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode

@@ -188,7 +188,8 @@ export const cJitTopLevelExecutor: Executor<
     const typeDesc = d.inputTypes.map(jitTypeKey).join(", ");
     interp.onJitCompile?.(
       `cjit-top-level:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
-      source
+      source,
+      "c"
     );
     const compiled = compileAndLoadC(source, declaration, bridge);
     return { compiled, signature };

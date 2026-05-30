@@ -180,7 +180,8 @@ export const jitTopLevelExecutor: Executor<
       const typeDesc = d.inputTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
         `jit-top-level:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
-        source
+        source,
+        "js"
       );
       const factory = new Function(source)() as (
         $h: JitHostHelpers

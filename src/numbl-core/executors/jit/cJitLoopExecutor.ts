@@ -159,7 +159,8 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
       const typeDesc = d.inputTypes.map(jitTypeKey).join(", ");
       interp.onJitCompile?.(
         `cjit-loop:${cName}(${typeDesc}) -> outputs=${d.outputs.length}`,
-        source
+        source,
+        "c"
       );
       const compiled = compileAndLoadC(source, declaration, bridge);
       return { compiled, signature };
