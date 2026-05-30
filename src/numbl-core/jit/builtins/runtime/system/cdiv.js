@@ -7,6 +7,14 @@ export function mtoc2_cdiv(a, b) {
     ai = a.im;
   const br = b.re,
     bi = b.im;
+  // Zero divisor: match the interpreter (helpers/arithmetic.ts) — 0/0 is
+  // NaN, a nonzero numerator yields a signed Inf per component. Smith's
+  // algorithm below would otherwise produce NaN+NaNi here.
+  if (br === 0 && bi === 0) {
+    if (ar === 0 && ai === 0) return { re: NaN, im: 0 };
+    const signedInf = x => (x > 0 ? Infinity : x < 0 ? -Infinity : 0);
+    return { re: signedInf(ar), im: signedInf(ai) };
+  }
   if (Math.abs(br) >= Math.abs(bi)) {
     const r = bi / br;
     const den = br + r * bi;

@@ -58,11 +58,15 @@ function cexp(z) {
   return { re: m * Math.cos(z.im), im: m * Math.sin(z.im) };
 }
 export function mtoc2_cpow(a, b) {
-  // 0^0 = 1+0i per IEEE-754 / C99 conventions.
+  // Zero base: match the interpreter's complexPow (helpers/arithmetic.ts)
+  // — 0^0 = 1, a positive real part of the exponent gives 0 (regardless
+  // of the imaginary part), and anything else gives Inf+0i. The old
+  // guard required b.im===0 for the zero case and otherwise returned
+  // NaN+NaNi.
   if (a.re === 0 && a.im === 0) {
     if (b.re === 0 && b.im === 0) return { re: 1, im: 0 };
-    if (b.re > 0 && b.im === 0) return { re: 0, im: 0 };
-    return { re: NaN, im: NaN };
+    if (b.re > 0) return { re: 0, im: 0 };
+    return { re: Infinity, im: 0 };
   }
   return cexp(mtoc2_cmul(b, clog(a)));
 }
@@ -105,16 +109,12 @@ export function mtoc2_ccos(z) {
   };
 }
 export function mtoc2_ctan(z) {
-  const s = mtoc2_csin(z);
-  const c = mtoc2_ccos(z);
-  // tan = sin/cos. Stability: dispatch through cdiv if available, else
-  // inline the algebra (good enough for the type-system fold scenarios
-  // the emitter calls into here).
-  const denom = c.re * c.re + c.im * c.im;
-  return {
-    re: (s.re * c.re + s.im * c.im) / denom,
-    im: (s.im * c.re - s.re * c.im) / denom,
-  };
+  // Double-angle form, matching the interpreter (interpreter/builtins/
+  // math.ts) and C99 ctan. Computing sin(z)/cos(z) with a |cos|^2
+  // denominator loses the (tiny but nonzero) real part and overflows
+  // for large imaginary parts — e.g. tan(1+200i) collapsed to 1i.
+  const denom = Math.cos(2 * z.re) + Math.cosh(2 * z.im);
+  return { re: Math.sin(2 * z.re) / denom, im: Math.sinh(2 * z.im) / denom };
 }
 export function mtoc2_catan(z) {
   // catan(z) = (i/2) * (log(1 - iz) - log(1 + iz))
