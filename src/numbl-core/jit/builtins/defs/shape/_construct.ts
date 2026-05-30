@@ -246,7 +246,7 @@ function exactShapeOf(r: ResolvedShape): number[] | undefined {
  *  raising. */
 export const CHECK_DIM_SNIPPET: InlineSnippet = {
   name: "mtoc2_check_dim",
-  headers: ["math.h", "stdio.h", "stdlib.h"],
+  headers: ["<math.h>", "<stdio.h>", "<stdlib.h>"],
   code: `static long mtoc2_check_dim(double x) {
   if (!isfinite(x) || x != floor(x)) {
     fprintf(stderr, "Size inputs must be nonnegative integers.\\n");

@@ -27,7 +27,7 @@ import { emitExpr } from "./emitExpr.js";
  *  error. Registered on demand by the dynamic path. */
 const CONCAT_CHECK_SNIPPET = {
   name: "mtoc2_concat_check",
-  headers: ["stdio.h", "stdlib.h"],
+  headers: ["<stdio.h>", "<stdlib.h>"],
   code: `static void mtoc2_concat_check(long got, long want) {
   if (got != want) {
     fprintf(stderr,

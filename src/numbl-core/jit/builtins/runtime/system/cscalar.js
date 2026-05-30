@@ -85,6 +85,16 @@ export function mtoc2_cpow(a, b) {
 
 // Unary math.
 export function mtoc2_csqrt(z) {
+  // Pure-real input: compute directly. Smith's formula below suffers
+  // catastrophic cancellation/overflow when z.im === 0 — e.g.
+  // sqrt(-Inf) → sqrt((Inf + -Inf)/2) = sqrt(NaN) = NaN, and
+  // sqrt(-1e308) → sqrt((1e308 - -1e308)/2) overflows to Inf instead of
+  // 1e154. Mirror the interpreter's complexSqrt (math.ts) and C's libm
+  // csqrt, both of which special-case the real axis.
+  if (z.im === 0) {
+    if (z.re >= 0) return { re: Math.sqrt(z.re), im: 0 };
+    return { re: 0, im: Math.sqrt(-z.re) };
+  }
   // Smith's stable formula for hypot * sign.
   const r = Math.hypot(z.re, z.im);
   if (r === 0) return { re: 0, im: 0 };

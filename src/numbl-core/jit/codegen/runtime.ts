@@ -976,7 +976,22 @@ export function collectRuntimeHeaders(state: RuntimeState): string[] {
   const headers = new Set<string>();
   for (const name of state.active) {
     const s = lookupSnippet(state, name);
-    for (const h of s.headers) headers.add(h);
+    for (const h of s.headers) {
+      // Headers are emitted verbatim as `#include ${h}`, so each must
+      // already carry its delimiters (`<stdio.h>` or `"foo.h"`). A bare
+      // `stdio.h` would emit `#include stdio.h` — invalid C. File-loaded
+      // snippets get this for free from parseSnippetSource; inline
+      // snippets declare `headers` by hand and have silently shipped the
+      // unbracketed form, crashing the C compile instead of the include
+      // deduping against BASE_HEADERS.
+      if (!/^(<[^>]+>|"[^"]+")$/.test(h)) {
+        throw new Error(
+          `runtime snippet '${name}': header ${JSON.stringify(h)} must be ` +
+            `bracketed (<header.h>) or quoted ("header.h")`
+        );
+      }
+      headers.add(h);
+    }
   }
   return Array.from(headers);
 }

@@ -43,9 +43,28 @@ import {
   lookupBuiltin,
   makeEmitUseRuntime,
   useRuntimeByName,
+  useRuntimeInline,
+  type InlineSnippet,
   type RuntimeState,
 } from "./runtime.js";
 import { formatDouble } from "./cHelpers.js";
+
+/** Runtime shape-equality probe used to guard a fused loop whose
+ *  operand shapes are NOT statically proven equal (they share a static
+ *  dim PATTERN but carry dynamic dims, so their runtime extents may
+ *  differ — `ones(1,n) + ones(1,m)`). C-only: the JS backend never
+ *  fuses (it always routes tensor ops through the shape-checking
+ *  `tt_kernel`). */
+const FUSED_SHAPE_EQ_SNIPPET: InlineSnippet = {
+  name: "mtoc2_fused_shape_eq",
+  deps: ["mtoc2_tensor_t"],
+  code: `static int mtoc2_fused_shape_eq(mtoc2_tensor_t a, mtoc2_tensor_t b) {
+  if (a.ndim != b.ndim) return 0;
+  for (int i = 0; i < a.ndim; i++)
+    if (a.dims[i] != b.dims[i]) return 0;
+  return 1;
+}`,
+};
 
 /** Strip multi-element shape from a type, leaving a scalar variant
  *  (same elem / isComplex / sign). Used to feed builtin `emit` the
@@ -135,6 +154,50 @@ export function isFusableAssign(s: Assign): boolean {
   if (!isPureElementwiseExpr(s.expr)) return false;
   if (!everyTensorVarMatchesShape(s.expr, s.ty)) return false;
   return !rhsTouchesComplexTensor(s.expr);
+}
+
+/** Distinct cNames of the multi-element tensor Vars read in `e`, in
+ *  first-appearance order. */
+function multiElemOperandCNames(e: IRExpr): string[] {
+  const seen = new Set<string>();
+  const order: string[] = [];
+  walkExpr(e, sub => {
+    if (
+      sub.kind === "Var" &&
+      isNumeric(sub.ty) &&
+      isMultiElement(sub.ty) &&
+      !seen.has(sub.cName)
+    ) {
+      seen.add(sub.cName);
+      order.push(sub.cName);
+    }
+  });
+  return order;
+}
+
+/** A fusable Assign needs a runtime shape guard iff it reads two or more
+ *  DISTINCT multi-element operands AND at least one carries a dynamic
+ *  (non-exact) dim. In that case `isFusableAssign` matched the operands
+ *  on a shared static dim PATTERN, but their runtime extents aren't
+ *  proven equal (`ones(1,n) + ones(1,m)`), so the fused loop — which
+ *  reads every operand over the shape source's linear extent — could
+ *  read out of bounds. With all-exact dims the pattern match already
+ *  proves equality, and a single distinct operand is its own shape
+ *  source; neither needs the guard. */
+export function fusedAssignNeedsShapeGuard(s: Assign): boolean {
+  if (multiElemOperandCNames(s.expr).length < 2) return false;
+  let anyDynamic = false;
+  walkExpr(s.expr, sub => {
+    if (
+      sub.kind === "Var" &&
+      isNumeric(sub.ty) &&
+      isMultiElement(sub.ty) &&
+      sub.ty.dims.some(d => d.kind !== "exact")
+    ) {
+      anyDynamic = true;
+    }
+  });
+  return anyDynamic;
 }
 
 function rhsTouchesComplexTensor(e: IRExpr): boolean {
@@ -262,11 +325,21 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
 }
 
 /** Emit the fused inline iter loop. Pre-condition:
- *  `isFusableAssign(s)` returned true. */
+ *  `isFusableAssign(s)` returned true.
+ *
+ *  When `fallbackStmt` is supplied (the caller passes it iff
+ *  `fusedAssignNeedsShapeGuard(s)` is true), the fast loop is wrapped in
+ *  a runtime shape-equality guard: every other distinct multi-element
+ *  operand must match the shape source's runtime shape, else the assign
+ *  defers to `fallbackStmt` — the bcast-aware helper path, which
+ *  broadcasts compatible shapes and raises "Matrix dimensions must
+ *  agree" on incompatible ones. Mirrors the JS `tt_kernel` deferring to
+ *  `bcast_kernel`. */
 export function emitTensorAssignFused(
   s: Assign,
   indent: string,
-  state: RuntimeState
+  state: RuntimeState,
+  fallbackStmt?: string
 ): string {
   // Find a shape source. `isFusableAssign` guarantees at least one
   // multi-element Var in the RHS (otherwise the target couldn't be
@@ -302,15 +375,31 @@ export function emitTensorAssignFused(
   // bind to the loop count rather than the user's function parameter,
   // silently mis-computing every elementwise op against a user-named
   // scalar.
-  const lines = [
-    `${indent}{`,
-    `${indent}  mtoc2_tensor_t _r = mtoc2_tensor_alloc_nd(${shapeSrcCName}.ndim, ${shapeSrcCName}.dims);`,
-    `${indent}  long _mtoc2_n = 1;`,
-    `${indent}  for (int _mtoc2_i = 0; _mtoc2_i < _r.ndim; _mtoc2_i++) _mtoc2_n *= _r.dims[_mtoc2_i];`,
-    `${indent}  MTOC2_OMP_PARFOR_N`,
-    `${indent}  for (long _mtoc2_i = 0; _mtoc2_i < _mtoc2_n; _mtoc2_i++) _r.real[_mtoc2_i] = ${slot};`,
-    `${indent}  mtoc2_tensor_assign(&${s.cName}, _r);`,
-    `${indent}}`,
+  const fusedBlock = (ind: string): string[] => [
+    `${ind}{`,
+    `${ind}  mtoc2_tensor_t _r = mtoc2_tensor_alloc_nd(${shapeSrcCName}.ndim, ${shapeSrcCName}.dims);`,
+    `${ind}  long _mtoc2_n = 1;`,
+    `${ind}  for (int _mtoc2_i = 0; _mtoc2_i < _r.ndim; _mtoc2_i++) _mtoc2_n *= _r.dims[_mtoc2_i];`,
+    `${ind}  MTOC2_OMP_PARFOR_N`,
+    `${ind}  for (long _mtoc2_i = 0; _mtoc2_i < _mtoc2_n; _mtoc2_i++) _r.real[_mtoc2_i] = ${slot};`,
+    `${ind}  mtoc2_tensor_assign(&${s.cName}, _r);`,
+    `${ind}}`,
   ];
-  return lines.join("\n");
+
+  if (fallbackStmt === undefined) return fusedBlock(indent).join("\n");
+
+  useRuntimeInline(state, FUSED_SHAPE_EQ_SNIPPET);
+  const others = multiElemOperandCNames(s.expr).filter(
+    c => c !== shapeSrcCName
+  );
+  const cond = others
+    .map(c => `mtoc2_fused_shape_eq(${c}, ${shapeSrcCName})`)
+    .join(" && ");
+  return [
+    `${indent}if (${cond}) {`,
+    ...fusedBlock(indent + "  "),
+    `${indent}} else {`,
+    `${indent}  ${fallbackStmt}`,
+    `${indent}}`,
+  ].join("\n");
 }

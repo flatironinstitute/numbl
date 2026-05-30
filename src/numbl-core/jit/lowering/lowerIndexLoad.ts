@@ -11,7 +11,7 @@
  */
 
 import type { Expr, Span } from "../parser/index.js";
-import { TypeError } from "./errors.js";
+import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {
   isMultiElement,
@@ -73,6 +73,24 @@ export function lowerIndexLoad(
       throw new TypeError(
         `index ${slot + 1} of '${name}' must be a real scalar ` +
           `(got ${typeToString(lowered.ty)})`,
+        argExprs[slot].span
+      );
+    }
+    // A *scalar* logical slot (`A(true)` / `A(false)`) is a 1-element
+    // logical mask, not a positional index — but isScalarRealNumeric
+    // accepts it. Emitting it as a positional read takes index 0 for
+    // `false`, which aborts the C kernel at opt2 (opt1 only escapes via a
+    // runtime bail). The logical-mask codegen needs a tensor and scalar
+    // logicals are bare doubles, so decline to the interpreter, which has
+    // full logical-mask semantics.
+    if (
+      isNumeric(lowered.ty) &&
+      !lowered.ty.isComplex &&
+      lowered.ty.elem === "logical"
+    ) {
+      throw new UnsupportedConstruct(
+        `scalar logical index of '${name}' (a 1-element logical mask) is ` +
+          `not JIT-compiled`,
         argExprs[slot].span
       );
     }

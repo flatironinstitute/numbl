@@ -1736,9 +1736,15 @@ export class Lowerer {
       }
       const isOr = e.op === BinaryOperation.OrOr;
       if (lhsExact !== undefined) {
+        // NaN is excluded from BOTH folds: numbl treats a nonzero NaN as
+        // truthy (`!= 0` in C, `!== 0` in JS, `toBool` in the interpreter —
+        // see `truthy()` in emitJs and the `andand`/`oror` builtins), so
+        // `NaN || x` and `NaN && x` must defer to the builtin's RHS
+        // evaluation rather than short-circuit. Folding `NaN && x` to false
+        // here diverged opt1/opt2 (→ false) from opt0 (→ x's truthiness).
         if (
           (isOr && lhsExact !== 0 && !Number.isNaN(lhsExact)) ||
-          (!isOr && (lhsExact === 0 || Number.isNaN(lhsExact)))
+          (!isOr && lhsExact === 0)
         ) {
           return {
             kind: "NumLit",

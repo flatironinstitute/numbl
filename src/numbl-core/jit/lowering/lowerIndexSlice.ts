@@ -225,6 +225,22 @@ export function lowerSliceArg(
     } finally {
       this.endStack.pop();
     }
+    // A *scalar* logical slot (`A(true)` / `M(:, false)`) is a 1-element
+    // logical mask, not a positional index — but isScalarRealNumeric
+    // accepts it. The mask codegen needs a tensor and scalar logicals are
+    // bare doubles, so decline to the interpreter rather than emit a
+    // positional read (index 0 for `false` aborts the C kernel at opt2).
+    if (
+      isNumeric(expr.ty) &&
+      !expr.ty.isComplex &&
+      expr.ty.elem === "logical" &&
+      isScalarRealNumeric(expr.ty)
+    ) {
+      throw new UnsupportedConstruct(
+        `scalar logical index (a 1-element logical mask) is not JIT-compiled`,
+        arg.span
+      );
+    }
     if (isScalarRealNumeric(expr.ty)) {
       return { kind: "Scalar", expr, span: arg.span };
     }

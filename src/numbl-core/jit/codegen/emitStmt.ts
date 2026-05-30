@@ -30,7 +30,11 @@ import {
   type FutureTouchMap,
 } from "./liveness.js";
 import { irFuncDocComment, irStmtHeader } from "./prettyIR.js";
-import { emitTensorAssignFused, isFusableAssign } from "./emitTensorFused.js";
+import {
+  emitTensorAssignFused,
+  fusedAssignNeedsShapeGuard,
+  isFusableAssign,
+} from "./emitTensorFused.js";
 import { emitIndexSliceStore, emitNdScalarOffset } from "./emitIndex.js";
 import { emitCondToBoolExpr, emitExpr, emitOwnedRhs } from "./emitExpr.js";
 import { activateOwnedRuntime, activatedOwnedHelpers } from "./emit.js";
@@ -402,6 +406,18 @@ function emitStmt(
         // single iter loop. See `emitTensorFused.ts`.
         if (s.kind === "Assign" && isFusableAssign(s)) {
           activateOwnedRuntime(s.ty, state);
+          // When operand shapes aren't statically proven equal (dynamic
+          // dims, 2+ distinct operands), guard the fast loop with a
+          // runtime shape check that falls back to the bcast-aware helper
+          // path on mismatch — the helper broadcasts compatible shapes
+          // and errors on incompatible ones (the JS twin always takes
+          // this path via tt_kernel). Without it a runtime mismatch read
+          // past an operand and silently produced garbage.
+          if (fusedAssignNeedsShapeGuard(s)) {
+            const hf = activatedOwnedHelpers(s.ty, state);
+            const fb = `${hf.assign}(&${s.cName}, ${emitOwnedRhs(s.expr, state)});`;
+            return emitTensorAssignFused(s, indent, state, fb);
+          }
           return emitTensorAssignFused(s, indent, state);
         }
         const h = activatedOwnedHelpers(s.ty, state);

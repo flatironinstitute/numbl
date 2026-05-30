@@ -80,6 +80,22 @@ export function lowerIndexStore(
         lvalue.indices[slot].span
       );
     }
+    // A *scalar* logical slot (`A(false) = x`) is a 1-element logical-mask
+    // write, not a positional store — but isScalarRealNumeric accepts it.
+    // Emitting a positional store takes index 0 for `false`, aborting the
+    // C kernel at opt2. The mask codegen needs a tensor and scalar
+    // logicals are bare doubles, so decline to the interpreter.
+    if (
+      isNumeric(lowered.ty) &&
+      !lowered.ty.isComplex &&
+      lowered.ty.elem === "logical"
+    ) {
+      throw new UnsupportedConstruct(
+        `scalar logical index of '${displayName}' (a 1-element logical ` +
+          `mask) is not JIT-compiled`,
+        lvalue.indices[slot].span
+      );
+    }
     indices.push(lowered);
   }
 
