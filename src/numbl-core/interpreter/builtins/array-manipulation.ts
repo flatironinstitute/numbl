@@ -506,7 +506,7 @@ defineBuiltin({
         if (dim === 1) return vertcat(...arrays);
         if (dim === 2) return horzcat(...arrays);
         const dimIdx = dim - 1;
-        const tensors = arrays.map(a => {
+        let tensors = arrays.map(a => {
           if (isRuntimeNumber(a))
             return {
               data: allocFloat64Array([a as number]),
@@ -517,6 +517,14 @@ defineBuiltin({
             throw new RuntimeError("cat: arguments must be numeric");
           return { data: a.data, imag: a.imag ?? null, shape: [...a.shape] };
         });
+        // Drop fully-empty operands (all dims 0, e.g. the `[]` literal) before
+        // the dimension-equality check. MATLAB ignores empties in cat; the
+        // dim 1/2 paths (catAlongDim) already do this via shape.some(d>0), so
+        // cat(3, A, []) must too. Done on the ORIGINAL shape, before padding
+        // to `dim` adds trailing 1s (which would mask a [0,0]).
+        tensors = tensors.filter(t => t.shape.some(d => d > 0));
+        if (tensors.length === 0)
+          return RTV.tensor(allocFloat64Array(0), [0, 0]);
         const hasComplex = tensors.some(t => t.imag !== null);
         for (const t of tensors) {
           while (t.shape.length < dim) t.shape.push(1);
@@ -821,6 +829,19 @@ defineBuiltin({
           const newTotal = curTotal * rep;
           const newData = allocFloat64Array(newTotal);
           const newImag = curImag ? allocFloat64Array(newTotal) : undefined;
+
+          if (rep === 0) {
+            // 0 reps along this axis -> the result is empty (newTotal===0).
+            // Skip the copy loops: the general (blockSize>1) branch would do
+            // newData.set(subarray, ...) into a zero-length buffer (offset out
+            // of bounds). Nothing to copy; just adopt the empty buffer.
+            releaseFloat64Array(curData);
+            if (curImag) releaseFloat64Array(curImag);
+            curData = newData;
+            curImag = newImag;
+            curShape[d] = 0;
+            continue;
+          }
 
           let blockSize = 1;
           for (let i = 0; i <= d; i++) blockSize *= curShape[i];
