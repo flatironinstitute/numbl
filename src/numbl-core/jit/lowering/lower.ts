@@ -131,6 +131,26 @@ export interface EnvEntry {
   maybeUnassigned?: boolean;
 }
 
+/** Conservative purity check used by the short-circuit fold: returns true only
+ *  for IR expressions that provably have no side effects (no calls, no stores,
+ *  no indexing that could throw), so they are safe to drop. Anything else
+ *  (calls, loads, builds) is assumed to potentially have side effects. */
+function isSideEffectFreeExpr(e: IRExpr): boolean {
+  switch (e.kind) {
+    case "NumLit":
+    case "ImagLit":
+    case "StringLit":
+    case "Var":
+      return true;
+    case "Binary":
+      return isSideEffectFreeExpr(e.left) && isSideEffectFreeExpr(e.right);
+    case "Unary":
+      return isSideEffectFreeExpr(e.operand);
+    default:
+      return false;
+  }
+}
+
 export class Lowerer {
   // The members below are formally `package-internal` — used by the
   // extracted helpers in `./lower*.ts` and `./specialize.ts` via the
@@ -1746,9 +1766,29 @@ export class Lowerer {
           (isOr && lhsExact !== 0 && !Number.isNaN(lhsExact)) ||
           (!isOr && lhsExact === 0)
         ) {
-          return {
+          const folded: IRExpr = {
             kind: "NumLit",
             value: isOr ? 1 : 0,
+            ty: scalarLogical(isOr),
+            span: e.span,
+          };
+          // The LHS short-circuits the result. The LHS is ALWAYS evaluated
+          // (only the RHS is skipped), so we must not discard a side-effecting
+          // LHS — e.g. `sideEffect() && x` where `sideEffect()` is a folded
+          // user-function call. If the LHS is side-effect-free we fold to a
+          // literal (enables downstream constant use, and is load-bearing for
+          // `nargin < 1 || isempty(unfilled)` in 0-arg specs). Otherwise keep
+          // the LHS evaluated, paired with a literal RHS that native `&&`/`||`
+          // short-circuits away — crucially WITHOUT lowering the real RHS.
+          if (isSideEffectFreeExpr(lhs)) {
+            return folded;
+          }
+          return {
+            kind: "Binary",
+            builtin: isOr ? "oror" : "andand",
+            op: e.op,
+            left: lhs,
+            right: folded,
             ty: scalarLogical(isOr),
             span: e.span,
           };
