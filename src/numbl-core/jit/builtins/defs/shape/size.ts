@@ -118,6 +118,21 @@ export const size: Builtin = {
   },
   emitC({ argsC, argTypes, nargout, outArgsC, useRuntime }) {
     const a = argTypes[0] as NumericType;
+    // A statically-scalar arg is stored as a bare C `double` with no `.dims`
+    // member; a scalar is 1x1, so every dim query is 1. Short-circuit before
+    // any `.dims[]` access, which would not compile against a double (e.g.
+    // `x = 5; size(x,1)`, or `[5, []]` whose empty drops to the scalar 5).
+    if (isScalar(a)) {
+      if (nargout >= 2) {
+        const outs = outArgsC ?? [];
+        const writes = outs.slice(0, nargout).map(o => `(*${o} = 1.0)`);
+        return `((void)(${writes.join(", ")}))`;
+      }
+      if (argTypes.length === 2) return `1.0`;
+      useRuntime("mtoc2_tensor_size_row");
+      useRuntime("mtoc2_tensor_from_row");
+      return `mtoc2_tensor_from_row((double[]){1.0, 1.0}, 2)`;
+    }
     // Multi-output: emit a comma-expression that writes each requested
     // dim through its out-pointer. Each slot i is `(double)A.dims[i]`
     // when i < ndim, else `1.0`. The framework's wrapping `;` makes
@@ -156,6 +171,18 @@ export const size: Builtin = {
   },
   emitJs({ argsJs, argTypes, nargout, useRuntime }) {
     const a = argTypes[0] as NumericType;
+    // A statically-scalar arg is a bare JS number with no `.shape`; a scalar
+    // is 1x1, so every dim query is 1. Short-circuit before any `.shape[]`
+    // access (which would throw on a number and force a needless interp bail).
+    if (isScalar(a)) {
+      if (nargout >= 2) {
+        return `[${Array(nargout).fill("1").join(", ")}]`;
+      }
+      if (argTypes.length === 2) return `1`;
+      useRuntime("mtoc2_tensor_size_row");
+      useRuntime("mtoc2_tensor_from_row");
+      return `mtoc2_tensor_from_row([1, 1], 2)`;
+    }
     // Multi-output: return a JS array literal `[d1, d2, ...]` the
     // framework destructures into the out-targets. Each slot i is
     // `<arg>.shape[i] ?? 1`.
