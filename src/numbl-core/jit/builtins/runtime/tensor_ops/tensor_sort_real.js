@@ -13,6 +13,17 @@ function pair_sort_indices(a, descending) {
   idx.sort((p, q) => {
     const av = a.data[p];
     const bv = a.data[q];
+    // NaN ranks as the maximum (MATLAB): last when ascending, first
+    // when descending. Without this, NaN compares false both ways and
+    // falls through to the index tie-break, making the comparator
+    // non-transitive and corrupting the whole array.
+    const an = av !== av;
+    const bn = bv !== bv;
+    if (an || bn) {
+      if (an && bn) return p - q;
+      if (an) return descending ? -1 : 1;
+      return descending ? 1 : -1;
+    }
     if (av < bv) return descending ? 1 : -1;
     if (av > bv) return descending ? -1 : 1;
     return p - q;

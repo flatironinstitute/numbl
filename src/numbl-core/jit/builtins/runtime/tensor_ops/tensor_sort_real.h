@@ -34,11 +34,20 @@ typedef struct {
   long ix;
 } mtoc2_sort_pair_t;
 
+/* NaN ranks as the maximum (MATLAB): last when ascending, first when
+ * descending. Without this, NaN compares false both ways and falls to
+ * the index tie-break, leaving the comparator non-transitive — which is
+ * undefined behavior for qsort and corrupts the array. */
 static int mtoc2_sort_cmp_asc(const void *pa, const void *pb) {
   const mtoc2_sort_pair_t *a = (const mtoc2_sort_pair_t *)pa;
   const mtoc2_sort_pair_t *b = (const mtoc2_sort_pair_t *)pb;
-  if (a->v < b->v) return -1;
-  if (a->v > b->v) return 1;
+  int an = a->v != a->v, bn = b->v != b->v;
+  if (an || bn) {
+    if (!(an && bn)) return an ? 1 : -1; /* NaN sorts last */
+  } else {
+    if (a->v < b->v) return -1;
+    if (a->v > b->v) return 1;
+  }
   if (a->ix < b->ix) return -1;
   if (a->ix > b->ix) return 1;
   return 0;
@@ -47,8 +56,13 @@ static int mtoc2_sort_cmp_asc(const void *pa, const void *pb) {
 static int mtoc2_sort_cmp_desc(const void *pa, const void *pb) {
   const mtoc2_sort_pair_t *a = (const mtoc2_sort_pair_t *)pa;
   const mtoc2_sort_pair_t *b = (const mtoc2_sort_pair_t *)pb;
-  if (a->v > b->v) return -1;
-  if (a->v < b->v) return 1;
+  int an = a->v != a->v, bn = b->v != b->v;
+  if (an || bn) {
+    if (!(an && bn)) return an ? -1 : 1; /* NaN sorts first */
+  } else {
+    if (a->v > b->v) return -1;
+    if (a->v < b->v) return 1;
+  }
   /* Tie-break still by ascending original index — both numbl and
    * MATLAB keep ties in original order in either direction. */
   if (a->ix < b->ix) return -1;
