@@ -220,7 +220,7 @@ function resolveShape(name: string, argTypes: Type[]): ResolvedShape {
 /** Runtime dim validation for the interpreter-shim `call` path —
  *  mirrors the emitted `mtoc2_check_dim` and the interpreter's
  *  `validateDim`: reject non-finite / non-integer, clamp negative to 0. */
-function checkDimRuntime(x: number): number {
+export function checkDimRuntime(x: number): number {
   if (!Number.isFinite(x) || !Number.isInteger(x)) {
     throw new Error("Size inputs must be nonnegative integers.");
   }
@@ -244,7 +244,7 @@ function exactShapeOf(r: ResolvedShape): number[] | undefined {
  *  to 0 (empty axis). A dynamic dim previously truncated silently
  *  (`(long)` / `Math.trunc`), so `zeros(1, 3.7)` built a 1×3 instead of
  *  raising. */
-const CHECK_DIM_SNIPPET: InlineSnippet = {
+export const CHECK_DIM_SNIPPET: InlineSnippet = {
   name: "mtoc2_check_dim",
   headers: ["math.h", "stdio.h", "stdlib.h"],
   code: `static long mtoc2_check_dim(double x) {

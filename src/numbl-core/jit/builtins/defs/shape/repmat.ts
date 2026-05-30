@@ -60,6 +60,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
+import { CHECK_DIM_SNIPPET, checkDimRuntime } from "./_construct.js";
 import type { RuntimeTensor, RuntimeValue } from "../../../runtime/value.js";
 import { isComplexValue } from "../../../runtime/value.js";
 import {
@@ -125,15 +126,14 @@ function resolveReps(argTypes: Type[]): ResolvedReps {
     const reps: RepAxis[] = [];
     for (let i = 0; i < arr.length; i++) {
       const rv = arr[i];
-      if (!Number.isFinite(rv)) {
+      if (!Number.isFinite(rv) || !Number.isInteger(rv)) {
         throw new TypeError(
           `'repmat' rep ${i + 1} must be a finite integer (got ${rv})`
         );
       }
-      const rounded = Math.round(rv);
       reps.push({
         kind: "exact",
-        value: rounded < 0 ? 0 : rounded,
+        value: rv < 0 ? 0 : rv,
         argIndex: 1,
       });
     }
@@ -164,15 +164,14 @@ function resolveReps(argTypes: Type[]): ResolvedReps {
       reps.push({ kind: "dynamic", argIndex: i });
       continue;
     }
-    if (!Number.isFinite(v)) {
+    if (!Number.isFinite(v) || !Number.isInteger(v)) {
       throw new TypeError(
         `'repmat' rep arg ${i} must be a finite integer (got ${v})`
       );
     }
-    const rounded = Math.round(v);
     reps.push({
       kind: "exact",
-      value: rounded < 0 ? 0 : rounded,
+      value: v < 0 ? 0 : v,
       argIndex: i,
     });
   }
@@ -318,13 +317,15 @@ function effectiveCodegenReps(
 /** Per-axis C expression for one rep axis. */
 function repC(axis: RepAxis, argsC: string[]): string {
   if (axis.kind === "exact") return `${axis.value}L`;
-  return `(long)(${argsC[axis.argIndex]})`;
+  // A non-integer rep is an error (MATLAB + interpreter), not a silent
+  // round/truncate — mtoc2_check_dim validates then converts.
+  return `mtoc2_check_dim(${argsC[axis.argIndex]})`;
 }
 
 /** Per-axis JS expression for one rep axis. */
 function repJs(axis: RepAxis, argsJs: string[]): string {
   if (axis.kind === "exact") return String(axis.value);
-  return `Math.round(${argsJs[axis.argIndex]})`;
+  return `mtoc2_check_dim(${argsJs[axis.argIndex]})`;
 }
 
 export const repmat: Builtin = {
@@ -496,6 +497,7 @@ export const repmat: Builtin = {
       reps,
       scalarInput
     );
+    if (cgReps.some(r => r.kind === "dynamic")) useRuntime(CHECK_DIM_SNIPPET);
 
     // After the trailing-1 trim, every effective rep may still be 1.
     // For scalar input that means the output is just the scalar (no
@@ -533,6 +535,7 @@ export const repmat: Builtin = {
       reps,
       scalarInput
     );
+    if (cgReps.some(r => r.kind === "dynamic")) useRuntime(CHECK_DIM_SNIPPET);
 
     const allRepsOne = cgReps.every(r => r.kind === "exact" && r.value === 1);
     if (scalarInput) {
@@ -566,8 +569,7 @@ export const repmat: Builtin = {
       if (r.kind === "exact") return r.value;
       const v = args[r.argIndex] as RuntimeValue;
       const n = typeof v === "number" ? v : Number(v as unknown);
-      const rounded = Math.round(n);
-      return rounded < 0 ? 0 : rounded;
+      return checkDimRuntime(n);
     });
 
     if (scalarInput) {

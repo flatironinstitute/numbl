@@ -122,6 +122,17 @@ function varargMatch2(argTypes: JitType[]): JitType[] | null {
 
 // ── reshape ──────────────────────────────────────────────────────────
 
+// Size / replication args must be integers — MATLAB errors on a
+// non-integer (reshape(x,2.5,[]), repmat(x,1,2.5)), matching numbl's
+// array-construction validateDim and the JIT's mtoc2_check_dim. A
+// negative clamps to 0 (empty axis), as validateDim does.
+function validateSizeArg(x: number): number {
+  if (!Number.isFinite(x) || !Number.isInteger(x)) {
+    throw new RuntimeError("Size inputs must be nonnegative integers.");
+  }
+  return x < 0 ? 0 : x;
+}
+
 defineBuiltin({
   name: "reshape",
   cases: [
@@ -225,11 +236,11 @@ defineBuiltin({
           isRuntimeTensor(args[1]) &&
           args[1].data.length > 1
         ) {
-          rawDims = Array.from(args[1].data).map(x => Math.round(x));
+          rawDims = Array.from(args[1].data).map(x => validateSizeArg(x));
         } else {
           rawDims = args.slice(1).map(a => {
             if (isRuntimeTensor(a) && a.data.length === 0) return null;
-            return Math.round(toNumber(a));
+            return validateSizeArg(toNumber(a));
           });
         }
 
@@ -741,13 +752,13 @@ defineBuiltin({
         if (args.length === 2) {
           const arg1 = args[1];
           if (isRuntimeTensor(arg1)) {
-            reps = Array.from(arg1.data).map(x => Math.round(x));
+            reps = Array.from(arg1.data).map(x => validateSizeArg(x));
           } else {
-            const n = Math.round(toNumber(arg1));
+            const n = validateSizeArg(toNumber(arg1));
             reps = [n, n];
           }
         } else {
-          reps = args.slice(1).map(a => Math.round(toNumber(a)));
+          reps = args.slice(1).map(a => validateSizeArg(toNumber(a)));
         }
         if (isRuntimeNumber(v)) {
           const total = reps.reduce((a, b) => a * b, 1);

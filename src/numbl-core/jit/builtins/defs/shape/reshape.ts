@@ -67,6 +67,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
+import { CHECK_DIM_SNIPPET, checkDimRuntime } from "./_construct.js";
 
 /** Per-axis resolution. `argIndex` (when present) refers to the index
  *  into the original Form A dim arg list (i.e. `argTypes.slice(1)` —
@@ -228,7 +229,9 @@ function exactShape(r: ResolvedNewShape): number[] | undefined {
 function dimC(axis: ResolvedAxis, dimArgsC: string[]): string {
   if (axis.kind === "exact") return `${axis.value}L`;
   if (axis.kind === "infer") return `-1L`;
-  return `(long)(${dimArgsC[axis.argIndex]})`;
+  // A non-integer dim is an error (MATLAB + interpreter validateDim), not
+  // a silent truncation. mtoc2_check_dim validates then converts to long.
+  return `mtoc2_check_dim(${dimArgsC[axis.argIndex]})`;
 }
 
 export const reshape: Builtin = {
@@ -369,6 +372,9 @@ export const reshape: Builtin = {
     const isComplex = isNumeric(a) && a.isComplex;
     const fn = isComplex ? "mtoc2_reshape_nd_complex" : "mtoc2_reshape_nd";
     const dimArgsC = argsC.slice(1);
+    if (resolved.axes.some(ax => ax.kind === "dynamic")) {
+      useRuntime(CHECK_DIM_SNIPPET);
+    }
     const dimList = resolved.axes.map(axis => dimC(axis, dimArgsC)).join(", ");
     return `${fn}(${argsC[0]}, ${resolved.axes.length}, (long[]){${dimList}})`;
   },
@@ -380,13 +386,16 @@ export const reshape: Builtin = {
     }
     const a = argTypes[0];
     const dimArgsJs = argsJs.slice(1);
+    if (resolved.axes.some(ax => ax.kind === "dynamic")) {
+      useRuntime(CHECK_DIM_SNIPPET);
+    }
     const dimList = resolved.axes
       .map(axis =>
         axis.kind === "exact"
           ? String(axis.value)
           : axis.kind === "infer"
             ? "-1"
-            : `Math.trunc(${dimArgsJs[axis.argIndex]})`
+            : `mtoc2_check_dim(${dimArgsJs[axis.argIndex]})`
       )
       .join(", ");
     if (isNumeric(a) && a.isComplex) {
@@ -407,7 +416,9 @@ export const reshape: Builtin = {
         dims.push(-1);
       } else {
         const v = args[axis.argIndex + 1];
-        dims.push(Math.trunc(typeof v === "number" ? v : Number(v as object)));
+        dims.push(
+          checkDimRuntime(typeof v === "number" ? v : Number(v as object))
+        );
       }
     }
     const reshapeFn =

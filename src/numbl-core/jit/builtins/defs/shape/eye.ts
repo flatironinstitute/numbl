@@ -17,6 +17,7 @@ import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
 import type { RuntimeTensor } from "../../../runtime/value.js";
 import { mtoc2_eye_rect as jsEyeRect } from "../../runtime/snippets.gen.js";
+import { CHECK_DIM_SNIPPET, checkDimRuntime } from "./_construct.js";
 
 interface ResolvedAxis {
   exact: number | undefined;
@@ -113,17 +114,24 @@ export const eye: Builtin = {
     const rows = axes[0].exact;
     const cols = axes[1].exact;
     if (rows === 1 && cols === 1) return "1.0";
+    // A non-integer dynamic dim is an error (interpreter validateDim +
+    // MATLAB), not a silent truncation — validate via mtoc2_check_dim.
+    if (rows === undefined || cols === undefined) useRuntime(CHECK_DIM_SNIPPET);
     const rowsC =
-      rows !== undefined ? `${rows}L` : `(long)(${argsC[axes[0].argIndex]})`;
+      rows !== undefined
+        ? `${rows}L`
+        : `mtoc2_check_dim(${argsC[axes[0].argIndex]})`;
     const colsC =
-      cols !== undefined ? `${cols}L` : `(long)(${argsC[axes[1].argIndex]})`;
+      cols !== undefined
+        ? `${cols}L`
+        : `mtoc2_check_dim(${argsC[axes[1].argIndex]})`;
     if (
       argTypes.length === 1 &&
       rows === undefined &&
       cols === undefined &&
       axes[0].argIndex === axes[1].argIndex
     ) {
-      return `mtoc2_eye_square((long)(${argsC[axes[0].argIndex]}))`;
+      return `mtoc2_eye_square(mtoc2_check_dim(${argsC[axes[0].argIndex]}))`;
     }
     return `mtoc2_eye_rect(${rowsC}, ${colsC})`;
   },
@@ -133,21 +141,22 @@ export const eye: Builtin = {
     const rows = axes[0].exact;
     const cols = axes[1].exact;
     if (rows === 1 && cols === 1) return "1";
+    if (rows === undefined || cols === undefined) useRuntime(CHECK_DIM_SNIPPET);
     const rowsJs =
       rows !== undefined
         ? String(rows)
-        : `Math.trunc(${argsJs[axes[0].argIndex]})`;
+        : `mtoc2_check_dim(${argsJs[axes[0].argIndex]})`;
     const colsJs =
       cols !== undefined
         ? String(cols)
-        : `Math.trunc(${argsJs[axes[1].argIndex]})`;
+        : `mtoc2_check_dim(${argsJs[axes[1].argIndex]})`;
     if (
       argTypes.length === 1 &&
       rows === undefined &&
       cols === undefined &&
       axes[0].argIndex === axes[1].argIndex
     ) {
-      return `mtoc2_eye_square(Math.trunc(${argsJs[axes[0].argIndex]}))`;
+      return `mtoc2_eye_square(mtoc2_check_dim(${argsJs[axes[0].argIndex]}))`;
     }
     return `mtoc2_eye_rect(${rowsJs}, ${colsJs})`;
   },
@@ -156,7 +165,7 @@ export const eye: Builtin = {
     const rows =
       axes[0].exact !== undefined
         ? axes[0].exact
-        : Math.trunc(
+        : checkDimRuntime(
             typeof args[axes[0].argIndex] === "number"
               ? (args[axes[0].argIndex] as number)
               : Number(args[axes[0].argIndex] as object)
@@ -164,7 +173,7 @@ export const eye: Builtin = {
     const cols =
       axes[1].exact !== undefined
         ? axes[1].exact
-        : Math.trunc(
+        : checkDimRuntime(
             typeof args[axes[1].argIndex] === "number"
               ? (args[axes[1].argIndex] as number)
               : Number(args[axes[1].argIndex] as object)
