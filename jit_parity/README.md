@@ -45,7 +45,10 @@ Each filename is prefixed by category. Header comments in each `.m` file record
 the diagnosis and the divergence observed at discovery time.
 
 - **A** — genuine JIT correctness bugs (a JIT mode produces a wrong value, or
-  fails to error where the interpreter does).
+  fails to error where the interpreter does). Includes value bugs (e.g. reduce
+  along a trailing singleton axis), type-class loss (a logical array typed as
+  double), inconsistent dim/rep coercion (round vs truncate vs validate),
+  complex-transcendental edge cases, and reads of never-assigned locals/outputs.
 - **B** — whole-scope/loop JIT runs side effects, then bails, and the interpreter
   re-runs → duplicated output.
 - **C** — interpreter used the native `-ffast-math` LAPACK addon while the JITs
@@ -53,6 +56,16 @@ the diagnosis and the divergence observed at discovery time.
   defaulting the addon build to **no-fast-math** (deterministic reductions and
   transcendentals; opt in with `--fast-math`), plus a NaN-correct any/all.
 - **D** — stdout pollution from a debug log (now on stderr).
+- **E** — C-JIT (`--opt 2`) **fails to compile** a program the interpreter and
+  JS-JIT run fine (e.g. a `setjmp` grow-bail guard armed without including
+  `<setjmp.h>`, or a statically-scalar range slice typed scalar but emitted as a
+  tensor). Surfaces as `<ERROR>` only at opt2.
+- **F** — C-JIT `printf`/`disp` **formatting** diverges from the JS path (libc
+  `snprintf` rounds half-to-even vs JS half-away; non-finite spelling
+  `Infinity`/`inf` vs `Inf`; large integer-valued doubles; `%s`/`%x`/`%o` edges).
+- **G** — struct/cell `disp` writes through raw `printf`/`fputs(stdout)` instead
+  of the host-write callback the rest of output uses → reordering at opt2 (and
+  lost output under captured/streamed runs).
 
 ## Gate exclusions
 
