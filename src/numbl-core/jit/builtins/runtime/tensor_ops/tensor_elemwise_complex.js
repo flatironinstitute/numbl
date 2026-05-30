@@ -56,7 +56,9 @@ function cBcastKernel(a, b, fn) {
   while (bshape.length < ndim) bshape.push(1);
   const outShape = new Array(ndim);
   for (let i = 0; i < ndim; i++) {
-    outShape[i] = Math.max(ashape[i], bshape[i]);
+    // Singleton axis expands to the other; a 0-size axis vs a 1-size axis
+    // broadcasts to 0, not Math.max's 1 (mirrors the C (adim==1)?bdim:adim).
+    outShape[i] = ashape[i] === 1 ? bshape[i] : ashape[i];
   }
   const r = mtoc2_tensor_alloc_nd_complex(ndim, outShape);
   const aStrides = new Array(ndim);

@@ -59,7 +59,10 @@ function bcast_kernel(a, b, fn) {
     if (ashape[i] !== bshape[i] && ashape[i] !== 1 && bshape[i] !== 1) {
       throw new Error("Matrix dimensions must agree");
     }
-    outShape[i] = Math.max(ashape[i], bshape[i]);
+    // A singleton axis expands to the other; otherwise they're equal. Must
+    // NOT use Math.max: a 0-size axis vs a 1-size axis broadcasts to 0, not 1
+    // (mirrors the C twin's (adim==1)?bdim:adim).
+    outShape[i] = ashape[i] === 1 ? bshape[i] : ashape[i];
   }
   const r = mtoc2_tensor_alloc_nd(ndim, outShape);
   // Column-major strides for each operand. A singleton axis gets a
