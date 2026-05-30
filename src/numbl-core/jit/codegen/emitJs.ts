@@ -513,6 +513,7 @@ function emitIndexSliceStoreJs(
     if (slot.kind === "Range") {
       useRuntimeByName(state, "mtoc2_loop_count");
       useRuntimeByName(state, "mtoc2_range_value");
+      useRuntimeByName(state, "mtoc2_scalar_index");
       const sE = emitExpr(slot.start, state);
       const stE = emitExpr(slot.step, state);
       const eE = emitExpr(slot.end, state);
@@ -522,6 +523,11 @@ function emitIndexSliceStoreJs(
       const lenCheck = rhsIsScalar
         ? ``
         : `if (_mtoc2_rhs.data.length !== _mtoc2_n) throw new Error("Unable to perform assignment because the size of the left side is " + _mtoc2_n + " and the size of the right side is " + _mtoc2_rhs.data.length + "."); `;
+      // Each target offset goes through the grow-aware checker: a sub-1
+      // index errors, and an index past the end grow-bails to the
+      // interpreter (which has full grow semantics) — matching the
+      // canonical `v(end+1:end+k) = ...` append, which previously
+      // silently dropped the out-of-range writes here.
       return (
         `${indent}{ ` +
         `const _mtoc2_rhs = ${rhsExpr}; ` +
@@ -530,12 +536,14 @@ function emitIndexSliceStoreJs(
         lenCheck +
         `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
         `const _mtoc2_v = mtoc2_range_value(_mtoc2_s, _mtoc2_st, _mtoc2_e, _mtoc2_n, _mtoc2_k); ` +
-        `${writeAt("Math.round(_mtoc2_v) - 1", "_mtoc2_k")} ` +
+        `const _mtoc2_off = mtoc2_idx_lin_grow_js(${baseName}, _mtoc2_v); ` +
+        `${writeAt("_mtoc2_off", "_mtoc2_k")} ` +
         `} ` +
         `}`
       );
     }
     if (slot.kind === "IndexVec") {
+      useRuntimeByName(state, "mtoc2_scalar_index");
       const idxE = emitExpr(slot.expr, state);
       return (
         `${indent}{ ` +
@@ -544,7 +552,8 @@ function emitIndexSliceStoreJs(
         `const _mtoc2_ixd = _mtoc2_ix.mtoc2Tag === "tensor" ? _mtoc2_ix.data : [_mtoc2_ix]; ` +
         `const _mtoc2_n = _mtoc2_ixd.length; ` +
         `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
-        `${writeAt("Math.round(_mtoc2_ixd[_mtoc2_k]) - 1", "_mtoc2_k")} ` +
+        `const _mtoc2_off = mtoc2_idx_lin_grow_js(${baseName}, _mtoc2_ixd[_mtoc2_k]); ` +
+        `${writeAt("_mtoc2_off", "_mtoc2_k")} ` +
         `} ` +
         `}`
       );
@@ -660,13 +669,22 @@ function emitIndexSliceStoreJs(
       `${indent}  for (let _mtoc2_k_${i} = 0; _mtoc2_k_${i} < _mtoc2_n_${i}; _mtoc2_k_${i}++) {`
     );
   }
+  // Each axis index goes through the grow-aware checker: a sub-1 index
+  // errors and an index past that axis's extent grow-bails to the
+  // interpreter (which grows), instead of silently dropping the write.
+  useRuntimeByName(state, "mtoc2_scalar_index");
+  for (let i = 0; i < ndim; i++) {
+    lines.push(
+      `${indent}    const _mtoc2_ai_${i} = mtoc2_idx_axis_grow_js(${baseName}, ${i}, ${idxFns[i]});`
+    );
+  }
   const srcTerms: string[] = [];
   for (let i = 0; i < ndim; i++) {
     const strideParts: string[] = [];
     for (let j = 0; j < i; j++)
       strideParts.push(`(${baseName}.shape[${j}] ?? 1)`);
     const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-    srcTerms.push(`(Math.round(${idxFns[i]}) - 1) * ${stride}`);
+    srcTerms.push(`_mtoc2_ai_${i} * ${stride}`);
   }
   const rhsTerms: string[] = [];
   for (let i = 0; i < ndim; i++) {

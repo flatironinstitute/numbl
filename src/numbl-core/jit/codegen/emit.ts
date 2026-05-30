@@ -334,11 +334,13 @@ type NamedType = StructType | ClassType | HandleType | CellType;
  *  capture value types — those drive the per-capture C field types
  *  even when the outer expression's `ty` is enough by itself. */
 /** True if `stmts` (recursing into control-flow bodies, but NOT into
- *  nested function defs — those are separate IRFuncs) contains a
- *  scalar `IndexStore`. Drives the grow-bail `setjmp` guard decision. */
+ *  nested function defs — those are separate IRFuncs) contains a store
+ *  that can grow-bail at runtime — a scalar `IndexStore` or a slice
+ *  `IndexSliceStore`. Drives the grow-bail `setjmp` guard decision; an
+ *  unused guard (e.g. a Colon slice that can't grow) is harmless. */
 function bodyHasIndexStore(stmts: ReadonlyArray<IRStmt>): boolean {
   for (const s of stmts) {
-    if (s.kind === "IndexStore") return true;
+    if (s.kind === "IndexStore" || s.kind === "IndexSliceStore") return true;
     if (s.kind === "If") {
       if (bodyHasIndexStore(s.thenBody) || bodyHasIndexStore(s.elseBody)) {
         return true;

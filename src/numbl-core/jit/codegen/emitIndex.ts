@@ -218,13 +218,13 @@ function emitLinearRangeSetup(
   baseCName: string,
   lines: string[],
   indent: string,
-  state: RuntimeState
+  state: RuntimeState,
+  grow = false
 ): (kVar: string) => string {
   if (slot.step.kind !== "NumLit") {
     throw new Error("emit internal: index-slot Range step must be NumLit");
   }
   useRuntimeByName(state, "mtoc2_loop_count");
-  useRuntimeByName(state, "mtoc2_oob_abort");
   const startStr = emitExpr(slot.start, state);
   const endStr = emitExpr(slot.end, state);
   const stepStr = formatDouble(slot.step.value);
@@ -234,6 +234,17 @@ function emitLinearRangeSetup(
   lines.push(
     `${indent}long _mtoc2_n = mtoc2_loop_count(_mtoc2_start, _mtoc2_end, ${stepStr});`
   );
+  if (grow) {
+    // Store path: each target index is grow-aware. An index past the
+    // end grow-bails to the interpreter (which has full grow semantics
+    // — the canonical `v(end+1:end+k) = ...` append); a sub-1 index
+    // aborts. No up-front abort check — a growing range must bail, not
+    // abort.
+    useRuntimeByName(state, "mtoc2_grow_bail");
+    return k =>
+      `mtoc2_idx_lin_grow(&${baseCName}, mtoc2_to_idx(_mtoc2_start + ${stepStr} * (double)${k}), ${loc})`;
+  }
+  useRuntimeByName(state, "mtoc2_oob_abort");
   // Single-slot range slice indexes linearly over numel(base), not
   // against a single axis dim. Skip the check on an empty range
   // (MATLAB allows `v(5:4)` to yield 1×0).
@@ -521,7 +532,8 @@ export function emitIndexSliceStore(
         baseCName,
         lines,
         `${indent}  `,
-        state
+        state,
+        /*grow=*/ true
       );
     } else if (slot.kind === "LogicalMask") {
       // Single-slot linear logical-mask write: precompute the buffer of
