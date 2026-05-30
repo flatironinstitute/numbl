@@ -80,6 +80,12 @@ the diagnosis and the divergence observed at discovery time.
   `printf`/`fputs(stdout)` instead of the host-write callback (reordering at
   opt2); alphabetical field order instead of insertion order; and nested
   struct/cell members (now **declined** to the interpreter's recursive render).
+- **FG** — *golden vectors*, not a bug. Unlike every other script here (each a
+  known divergence), `FG_*` pins the format-engine surface that all three
+  modes already **agree** on, so a future edit that re-desyncs
+  `format_engine.js` (opt1) from `format_engine.h` (opt2) trips the gate. It
+  deliberately omits the known-divergent inputs (numeric space flag,
+  non-ASCII `%c`, and the dtoa cases F01/F02/F04) — see the header comment.
 
 ## Gate exclusions
 

@@ -35,6 +35,9 @@ jobs:
       - name: Type check
         run: npm run typecheck
 
+      - name: Check generated snippets are in sync
+        run: npm run build:snippets:check
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -116,3 +119,10 @@ jobs:
 
       - name: Build native addon
         run: npm run build:addon
+
+      # These two tests load the freshly-built addon directly and compare it
+      # against the pure-TS twins (op-code enums + numeric results). They
+      # skip themselves when the addon is absent, so they are no-ops in the
+      # plain `test` job — this is the only place they actually run.
+      - name: Run addon parity tests (TS twins ↔ C addon)
+        run: npx vitest run src/__tests__/op-codes-sync.test.ts src/__tests__/native-ops-parity.test.ts

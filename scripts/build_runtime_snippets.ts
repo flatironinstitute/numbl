@@ -29,6 +29,7 @@
 import { readFileSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, resolve, relative, basename } from "node:path";
+import { format, resolveConfig } from "prettier";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const runtimeDir = resolve(
@@ -99,6 +100,41 @@ function walkRuntime(dir: string): string[] {
   return out;
 }
 
+/** Snippet basenames (with extension) that are intentionally JS-only — a
+ *  `.js` runtime helper with no C-JIT counterpart. Empty today: every `.js`
+ *  snippet currently has a behavior-matching `.h` twin, and the pair must stay
+ *  in lockstep (a `.js` that drifts from its `.h` is exactly the bug class this
+ *  guard defends against). If a genuinely JS-only helper is ever needed, add
+ *  its basename here with a comment explaining why C-JIT doesn't need it. */
+const JS_ONLY_SNIPPETS = new Set<string>([]);
+
+/** Every `.js` snippet must have a sibling `.h` of the same stem (so the
+ *  JS-JIT and C-JIT runtimes stay paired), unless explicitly allowlisted as
+ *  JS-only. The reverse is NOT required: many `.h` snippets cover C-ABI
+ *  concerns (alloc/free, string/char structs, longjmp guards) that JS handles
+ *  natively and so have no `.js` twin. */
+function assertJsSnippetsHaveHTwin(
+  hPaths: ReadonlyArray<string>,
+  jsPaths: ReadonlyArray<string>
+): void {
+  const hStems = new Set(hPaths.map(p => basename(p).replace(/\.h$/, "")));
+  const orphans: string[] = [];
+  for (const p of jsPaths) {
+    const b = basename(p);
+    if (JS_ONLY_SNIPPETS.has(b)) continue;
+    if (!hStems.has(b.replace(/\.js$/, ""))) orphans.push(p);
+  }
+  if (orphans.length > 0) {
+    throw new Error(
+      `runtime snippet pairing: the following .js snippet(s) have no sibling ` +
+        `.h twin: ${orphans.join(", ")}. The JS-JIT (.js) and C-JIT (.h) ` +
+        `runtimes must stay paired; add the matching .h, or (if the helper is ` +
+        `genuinely JS-only) add its basename to JS_ONLY_SNIPPETS in ` +
+        `scripts/build_runtime_snippets.ts with a justifying comment.`
+    );
+  }
+}
+
 function assertUniqueBasenames(paths: ReadonlyArray<string>): void {
   const seen = new Map<string, string>();
   for (const p of paths) {
@@ -123,6 +159,7 @@ function generate(): string {
   // `.d.ts` files (ambient declarations) are typecheck-only and not
   // inlined; their presence on disk is enough.
   assertUniqueBasenames([...hPaths, ...jsPaths]);
+  assertJsSnippetsHaveHTwin(hPaths, jsPaths);
 
   const cEntries = hPaths.map(p => {
     const body = readFileSync(join(runtimeDir, p), "utf8");
@@ -202,7 +239,17 @@ function generate(): string {
   ].join("\n");
 }
 
-const generated = generate();
+// Format the generated source with the project's Prettier config so the
+// written file is byte-identical to what the pre-commit hook would produce.
+// Without this, `--check` compares the raw generator output (long single-line
+// entries) against the committed, Prettier-wrapped file and would always
+// report drift — making the check unusable in CI.
+const prettierConfig = await resolveConfig(outFile);
+const generated = await format(generate(), {
+  ...prettierConfig,
+  parser: "typescript",
+  filepath: outFile,
+});
 const check = process.argv.includes("--check");
 
 if (check) {
@@ -214,7 +261,8 @@ if (check) {
   }
   if (current !== generated) {
     console.error(
-      "snippets.gen.ts is out of date. Run `npm run build:snippets`."
+      "snippets.gen.ts is out of date. Run `npm run build:snippets` " +
+        "(did you edit a runtime/*.h or runtime/*.js without regenerating?)."
     );
     process.exit(1);
   }
