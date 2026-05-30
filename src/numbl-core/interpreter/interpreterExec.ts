@@ -214,15 +214,68 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "For": {
       const _forStart = this.rt.profilingEnabled ? performance.now() : 0;
-      const iterVal = this.evalExpr(stmt.expr);
-      const rv = ensureRuntimeValue(iterVal);
-      const iterItems = forIter(rv);
+      // Lazy range iteration: a `for k = a:s:b` whose materialized range
+      // would be too large/infinite to allocate is iterated without
+      // building the tensor (the JIT never materializes it either).
+      // Normal finite ranges keep the eager path below, so their
+      // behavior — including the loop variable's values — is unchanged.
+      let lazyRange: {
+        count: number;
+        start: number;
+        step: number;
+        end: number;
+      } | null = null;
+      let iterItems: unknown[] | null = null;
+      if (stmt.expr.type === "Range") {
+        const sv = this.evalExpr(stmt.expr.start);
+        const stv = stmt.expr.step ? this.evalExpr(stmt.expr.step) : 1;
+        const ev = this.evalExpr(stmt.expr.end);
+        const s = asScalarNumber(sv);
+        const st = asScalarNumber(stv);
+        const e = asScalarNumber(ev);
+        if (s !== null && st !== null && e !== null) {
+          // makeRangeTensor's raw element count (before clamping). When
+          // it's non-finite or huge, materializing throws — iterate
+          // lazily instead, using the same count formula clamped to a
+          // finite non-negative value (matches mtoc2_loop_count).
+          const rawN = st === 0 ? 0 : Math.floor((e - s) / st + 1 + 1e-10);
+          if (!Number.isFinite(rawN) || rawN > 1e7) {
+            const count = Number.isFinite(rawN) ? Math.max(0, rawN) : 0;
+            lazyRange = { count, start: s, step: st, end: e };
+          }
+        }
+        if (lazyRange === null) {
+          iterItems = forIter(ensureRuntimeValue(runtimeRange(sv, stv, ev)));
+        }
+      } else {
+        iterItems = forIter(ensureRuntimeValue(this.evalExpr(stmt.expr)));
+      }
+
+      const n = lazyRange ? lazyRange.count : iterItems!.length;
       this.loopDepth++;
+      let _ran = 0;
       try {
-        for (let _i = 0; _i < iterItems.length; _i++) {
+        for (let _i = 0; _i < n; _i++) {
           this.rt.checkCancel();
-          this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
+          let elem: unknown;
+          if (lazyRange) {
+            let v = lazyRange.start + lazyRange.step * _i;
+            // Snap the last element to exactly `end` (matches
+            // makeRangeTensor / mtoc2_range_value), multi-element only.
+            if (
+              lazyRange.count > 1 &&
+              _i === lazyRange.count - 1 &&
+              Math.abs(v - lazyRange.end) < Math.abs(lazyRange.step) * 1e-10
+            ) {
+              v = lazyRange.end;
+            }
+            elem = v;
+          } else {
+            elem = iterItems![_i];
+          }
+          this.env.set(stmt.varName, ensureRuntimeValue(elem));
           const signal = this.execStmts(stmt.body);
+          _ran = _i + 1;
           if (signal instanceof BreakSignal) break;
           if (signal instanceof ContinueSignal) continue;
           if (signal instanceof ReturnSignal) {
@@ -233,7 +286,13 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       } finally {
         this.loopDepth--;
       }
-      recordHotLoop(this, stmt, "for", iterItems.length, _forStart);
+      recordHotLoop(
+        this,
+        stmt,
+        "for",
+        lazyRange ? _ran : iterItems!.length,
+        _forStart
+      );
       return null;
     }
 
@@ -1373,6 +1432,16 @@ export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
   if (expr.type === "FuncCall") return outputFunctions.includes(expr.name);
   if (expr.type === "Ident") return outputFunctions.includes(expr.name);
   return false;
+}
+
+/** Extract a JS number from a scalar (number or 1×1 tensor) value;
+ *  null when the value isn't a scalar. Used to detect a plain numeric
+ *  range so a huge/infinite `for k = a:s:b` can iterate lazily. */
+function asScalarNumber(v: unknown): number | null {
+  const rv = ensureRuntimeValue(v);
+  if (typeof rv === "number") return rv;
+  if (isRuntimeTensor(rv) && rv.data.length === 1) return rv.data[0];
+  return null;
 }
 
 function recordHotLoop(
