@@ -28,6 +28,7 @@ export function isValueToken(tok: Token): boolean {
     tok === Token.Float ||
     tok === Token.True ||
     tok === Token.False ||
+    tok === Token.End ||
     tok === Token.RParen ||
     tok === Token.RBracket ||
     tok === Token.RBrace ||
