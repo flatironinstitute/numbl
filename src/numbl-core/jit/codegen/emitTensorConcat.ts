@@ -16,8 +16,26 @@
 
 import type { IRExpr } from "../lowering/ir.js";
 import { isScalar } from "../lowering/types.js";
-import { useRuntimeByName, type RuntimeState } from "./runtime.js";
+import {
+  useRuntimeByName,
+  useRuntimeInline,
+  type RuntimeState,
+} from "./runtime.js";
 import { emitExpr } from "./emitExpr.js";
+
+/** Runtime guard mirroring the interpreter's concatenation-consistency
+ *  error. Registered on demand by the dynamic path. */
+const CONCAT_CHECK_SNIPPET = {
+  name: "mtoc2_concat_check",
+  headers: ["stdio.h", "stdlib.h"],
+  code: `static void mtoc2_concat_check(long got, long want) {
+  if (got != want) {
+    fprintf(stderr,
+      "Dimensions of arrays being concatenated are not consistent\\n");
+    exit(1);
+  }
+}`,
+};
 
 /** Top-level entry: dispatch to the static or dynamic codegen path
  *  based on whether every per-cell dim and the output shape are
@@ -160,6 +178,13 @@ function emitTensorConcatDynamic(
       const cellStr = cellStrs[i][j];
       const rowsHere = cellRowsExpr(i, j);
       const colsHere = cellColsExpr(i, j);
+      // Within a row every cell must share the row height (cell 0 sets
+      // it); otherwise the copy walks the wrong region. Matches the
+      // interpreter's consistency error.
+      if (j > 0) {
+        useRuntimeInline(state, CONCAT_CHECK_SNIPPET);
+        lines.push(`mtoc2_concat_check(${rowsHere}, ${rhLocals[i]});`);
+      }
       const isScalarCell =
         cell.ty.kind === "Numeric" &&
         (cell.ty.dims.length === 0 || isScalar(cell.ty));
@@ -186,6 +211,9 @@ function emitTensorConcatDynamic(
         lines.push(`_mtoc2_col_off_${i} += ${cw};`);
       }
     }
+    // Each row's total width must match the result width (set by row 0).
+    useRuntimeInline(state, CONCAT_CHECK_SNIPPET);
+    lines.push(`mtoc2_concat_check(_mtoc2_col_off_${i}, _mtoc2_tc);`);
     lines.push(`_mtoc2_row_off += ${rhLocals[i]};`);
   }
   lines.push(`_mtoc2_t;`);

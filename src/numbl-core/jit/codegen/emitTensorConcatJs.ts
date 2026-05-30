@@ -182,6 +182,14 @@ function emitTensorConcatJsDynamic(
       const cellStr = cellStrs[i][j];
       const rowsHere = cellRowsExpr(i, j);
       const colsHere = cellColsExpr(i, j);
+      // Within a row every cell must share the row height (cell 0 sets
+      // it). Otherwise the copy silently reads/writes the wrong region.
+      // Matches the interpreter's consistency error.
+      if (j > 0) {
+        lines.push(
+          `if ((${rowsHere}) !== ${rhLocals[i]}) throw new Error("Dimensions of arrays being concatenated are not consistent");`
+        );
+      }
       const isScalarCell =
         cell.ty.kind === "Numeric" &&
         (cell.ty.dims.length === 0 || isScalar(cell.ty));
@@ -208,6 +216,10 @@ function emitTensorConcatJsDynamic(
         lines.push(`_mtoc2_col_off_${i} += ${cw};`);
       }
     }
+    // Each row's total width must match the result width (set by row 0).
+    lines.push(
+      `if (_mtoc2_col_off_${i} !== _mtoc2_tc) throw new Error("Dimensions of arrays being concatenated are not consistent");`
+    );
     lines.push(`_mtoc2_row_off += ${rhLocals[i]};`);
   }
   lines.push(`return _mtoc2_t;`);
