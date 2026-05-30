@@ -67,10 +67,12 @@ export const transpose: Builtin = {
         return [scalarComplex()];
       }
       const v = exactDouble(a);
-      if (v !== undefined) {
-        return [scalarDouble(signFromNumber(v), v)];
-      }
-      return [scalarDouble(a.sign)];
+      const r =
+        v !== undefined
+          ? scalarDouble(signFromNumber(v), v)
+          : scalarDouble(a.sign);
+      if (a.elem === "logical") r.elem = "logical";
+      return [r];
     }
 
     if (a.dims.length !== 2) {
@@ -104,11 +106,15 @@ export const transpose: Builtin = {
       return [tensorComplex(newShape)];
     }
 
-    if (a.exact instanceof Float64Array) {
-      const out = transposeExact(a.exact, m, n);
-      return [tensorDouble(newShape, out)];
-    }
-    return [tensorDouble(newShape)];
+    // Preserve logical element-class: class(L') === "logical" in MATLAB
+    // / the interpreter (the data stays the 0/1 carrier; only the elem
+    // tag is carried through).
+    const r =
+      a.exact instanceof Float64Array
+        ? tensorDouble(newShape, transposeExact(a.exact, m, n))
+        : tensorDouble(newShape);
+    if (a.elem === "logical") r.elem = "logical";
+    return [r];
   },
   emitC({ argsC, argTypes, useRuntime }) {
     useRuntime("mtoc2_tensor_transpose");

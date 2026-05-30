@@ -208,6 +208,15 @@ export function lowerTensorLit(
       if (allExact) exactData = data;
     }
     const ty = tensorDouble([rows, cols], exactData);
+    // Preserve logical element-class: `[true false true]` is a LOGICAL
+    // array in MATLAB / the interpreter, so class()/islogical/isa report
+    // "logical". When every cell is logical, mark the result logical —
+    // the data stays the 0/1 carrier; only the elem tag changes. (A
+    // single-cell `[true]` already collapsed to the scalar above.)
+    if (loweredFlat.every(el => isNumeric(el.ty) && el.ty.elem === "logical")) {
+      ty.elem = "logical";
+      ty.sign = "nonneg";
+    }
     return {
       kind: "TensorBuild",
       elements: loweredFlat,
