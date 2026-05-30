@@ -1099,6 +1099,11 @@ function indexIntoTensorWithTensor(
     const hasImag = base.imag !== undefined;
     for (let i = 0; i < idx.data.length; i++) {
       if (idx.data[i] !== 0) {
+        // A truthy mask bit past the end of the base is an error in MATLAB
+        // ("logical indices contain a true value outside of the array
+        // bounds"); reading base.data[i] OOB would silently yield NaN.
+        if (i >= base.data.length)
+          throw new RuntimeError("Index exceeds array bounds");
         selected.push(base.data[i]);
         if (hasImag) selectedIm.push(base.imag![i]);
       }

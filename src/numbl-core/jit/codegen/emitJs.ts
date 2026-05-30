@@ -1116,9 +1116,14 @@ function emitIndexSliceJs(
         `(() => { ` +
         `const _mtoc2_m = ${mask}; ` +
         `const _mtoc2_md = _mtoc2_m.data; ` +
+        `const _mtoc2_blen = ${baseName}.data.length; ` +
         `const _mtoc2_ix = []; ` +
         `for (let _mtoc2_mi = 0; _mtoc2_mi < _mtoc2_md.length; _mtoc2_mi++) ` +
-        `if (_mtoc2_md[_mtoc2_mi] !== 0) _mtoc2_ix.push(_mtoc2_mi); ` +
+        `if (_mtoc2_md[_mtoc2_mi] !== 0) { ` +
+        // A truthy mask bit past the base end is an error in MATLAB (the C
+        // path aborts too); without this the gather reads OOB -> NaN.
+        `if (_mtoc2_mi >= _mtoc2_blen) throw new Error("Index exceeds array bounds"); ` +
+        `_mtoc2_ix.push(_mtoc2_mi); } ` +
         `const _mtoc2_n = _mtoc2_ix.length; ` +
         `const _mtoc2_t = ${allocFn}(2, [${rows}, ${cols}]); ` +
         `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
