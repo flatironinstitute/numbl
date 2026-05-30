@@ -44,6 +44,7 @@ export function validateFormatArgs(
 const MTOC2_FA_DOUBLE = "MTOC2_FA_DOUBLE";
 const MTOC2_FA_TEXT = "MTOC2_FA_TEXT";
 const MTOC2_FA_TENSOR = "MTOC2_FA_TENSOR";
+const MTOC2_FA_CHAR = "MTOC2_FA_CHAR";
 
 /** Emit one `mtoc2_fprintf_arg_t` slot for `argsC[i]` typed `argTypes[i]`.
  *  Used to build the compound-literal slot array for fprintf / error /
@@ -59,7 +60,10 @@ export function emitFormatSlot(
     return `{.kind = ${MTOC2_FA_TEXT}, .u = {.t = mtoc2_text_from_string(${c})}}`;
   }
   if (t.kind === "Char") {
-    return `{.kind = ${MTOC2_FA_TEXT}, .u = {.t = mtoc2_text_from_char_tensor(${c})}}`;
+    // Tag as CHAR (not TEXT): under a numeric/%c conversion a char yields
+    // its code point, whereas a string is Number()-parsed. %s/%c-as-text
+    // treat both alike. Mirrors format_engine.js's toNumber distinction.
+    return `{.kind = ${MTOC2_FA_CHAR}, .u = {.t = mtoc2_text_from_char_tensor(${c})}}`;
   }
   if (isScalarRealNumeric(t)) {
     return `{.kind = ${MTOC2_FA_DOUBLE}, .u = {.d = (double)(${c})}}`;

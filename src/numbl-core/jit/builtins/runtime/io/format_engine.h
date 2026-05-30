@@ -35,8 +35,9 @@
  * Values are stable — the engine switches on them. */
 enum {
   MTOC2_FA_DOUBLE = 1,
-  MTOC2_FA_TEXT = 3,
-  MTOC2_FA_TENSOR = 4   /* real tensor */
+  MTOC2_FA_TEXT = 3,    /* string (double-quoted): Number()-parsed if numeric */
+  MTOC2_FA_TENSOR = 4,  /* real tensor */
+  MTOC2_FA_CHAR = 5     /* char array (single-quoted): code point under %d/%c */
 };
 
 typedef struct {
@@ -97,6 +98,10 @@ static int mtoc2__next_slot(mtoc2__arg_iter_t *it, mtoc2__slot_t *out) {
         out->kind = MTOC2_FA_TEXT;
         out->t = a->u.t;
         return 1;
+      case MTOC2_FA_CHAR:
+        out->kind = MTOC2_FA_CHAR;
+        out->t = a->u.t;
+        return 1;
       case MTOC2_FA_TENSOR: {
         const mtoc2_tensor_t *t = a->u.tensor;
         long n = 1;
@@ -154,6 +159,52 @@ static void mtoc2__emit_padded(mtoc2__writer_fn writer, void *ctx,
   }
 }
 
+/* Parse a numeric STRING the way JS `Number(s)` does — used when a
+ * string-typed (double-quoted) arg meets a numeric/%c conversion. Trim
+ * ASCII whitespace, then strtod the whole remainder: empty/whitespace
+ * is 0 (Number("")===0), trailing non-numeric bytes give NaN
+ * (Number("12abc")===NaN). Matches format_engine.js's `Number(v)`. */
+static double mtoc2__string_to_number(const char *data, long len) {
+  if (len <= 0 || !data) return 0.0;
+  long s = 0, e = len;
+  while (s < e && (data[s] == ' ' || data[s] == '\t' || data[s] == '\n' ||
+                   data[s] == '\r' || data[s] == '\f' || data[s] == '\v'))
+    s++;
+  while (e > s && (data[e - 1] == ' ' || data[e - 1] == '\t' ||
+                   data[e - 1] == '\n' || data[e - 1] == '\r' ||
+                   data[e - 1] == '\f' || data[e - 1] == '\v'))
+    e--;
+  if (s == e) return 0.0;
+  long n = e - s;
+  char buf[64];
+  char *tmp = buf;
+  if (n + 1 > (long)sizeof(buf)) {
+    tmp = (char *)malloc((size_t)n + 1);
+    if (!tmp) return (double)NAN;
+  }
+  memcpy(tmp, data + s, (size_t)n);
+  tmp[n] = '\0';
+  char *endp = tmp;
+  double v = strtod(tmp, &endp);
+  double result = (*endp == '\0') ? v : (double)NAN;
+  if (tmp != buf) free(tmp);
+  return result;
+}
+
+/* Convert a format slot to the numeric value a numeric/%c conversion
+ * expects, mirroring format_engine.js's `toNumber`: a char yields its
+ * first code point (the single-char case; the interpreter/JS have no
+ * scalar form for a multi-char char), a string parses via Number(), a
+ * double is itself. A bare-0.0 fallback here would have made every
+ * char/string slot print 0 / a NUL byte. */
+static double mtoc2__slot_to_double(const mtoc2__slot_t *slot) {
+  if (slot->kind == MTOC2_FA_CHAR)
+    return slot->t.len >= 1 ? (double)(unsigned char)slot->t.data[0] : 0.0;
+  if (slot->kind == MTOC2_FA_TEXT)
+    return mtoc2__string_to_number(slot->t.data, slot->t.len);
+  return slot->d;
+}
+
 /* Parse the spec body (between '%' and the type char) — fills
  * `width` (0 if absent), `prec` (-1 if absent), and the flag set.
  * Resolves '*' for width by consuming one numeric slot via the
@@ -196,7 +247,7 @@ static int mtoc2__parse_spec(const char *spec, long spec_len,
     if (c == '*') {
       mtoc2__slot_t slot;
       if (!mtoc2__next_slot(it, &slot)) return 0;
-      double v = (slot.kind == MTOC2_FA_DOUBLE) ? slot.d : 0.0;
+      double v = mtoc2__slot_to_double(&slot);
       long n = (long)floor(v + 0.5);
       width = n > 0 ? n : 0;
       continue;
@@ -499,7 +550,7 @@ static void mtoc2__emit_s(mtoc2__writer_fn writer, void *ctx,
   const char *data = (const char *)0;
   long slen = 0;
   char numbuf[64];
-  if (slot->kind == MTOC2_FA_TEXT) {
+  if (slot->kind == MTOC2_FA_TEXT || slot->kind == MTOC2_FA_CHAR) {
     data = slot->t.data;
     slen = slot->t.len > 0 ? slot->t.len : 0;
   } else {
@@ -554,7 +605,7 @@ static void mtoc2__format_walk(mtoc2__writer_fn writer, void *ctx,
           out_of_args = 1;
           break;
         }
-        double dval = (slot.kind == MTOC2_FA_DOUBLE) ? slot.d : 0.0;
+        double dval = mtoc2__slot_to_double(&slot);
         switch (type_ch) {
           case 'd':
           case 'i':
