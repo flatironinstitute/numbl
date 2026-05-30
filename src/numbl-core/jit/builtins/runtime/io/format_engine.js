@@ -22,7 +22,13 @@ function toNumber(v) {
   if (typeof v === "number") return v;
   if (typeof v === "boolean") return v ? 1 : 0;
   if (typeof v === "string") return Number(v);
-  if (isChar(v)) return Number(v.value);
+  if (isChar(v)) {
+    // Match the interpreter's toNumber (runtime/convert.ts): a single
+    // char yields its code point; a multi-char value has no scalar
+    // numeric form. `Number("A")` would wrongly give NaN.
+    if (v.value.length === 1) return v.value.charCodeAt(0);
+    throw new Error("Cannot convert multi-char to number");
+  }
   if (isTensor(v) && v.data.length === 1) return v.data[0];
   return Number(v);
 }
