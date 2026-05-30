@@ -205,13 +205,40 @@ static double mtoc2__slot_to_double(const mtoc2__slot_t *slot) {
   return slot->d;
 }
 
+/* Resolved '*' (argument-supplied) width/precision values for one spec.
+ * In C/MATLAB the '*' args come BEFORE the value arg, in left-to-right
+ * order, so they must be consumed before the value (the walker does this
+ * via mtoc2__resolve_stars); parse_spec then reads them from here. */
+typedef struct {
+  double vals[2];
+  int count;
+  int idx;
+} mtoc2__stars_t;
+
+/* Scan `spec` for '*' fields and consume one numeric slot per '*', in
+ * left-to-right order, BEFORE the value arg. Returns 1 on success, 0 if
+ * the arg stream ran out while resolving a '*'. */
+static int mtoc2__resolve_stars(const char *spec, long spec_len,
+                                mtoc2__arg_iter_t *it,
+                                mtoc2__stars_t *stars) {
+  stars->count = 0;
+  stars->idx = 0;
+  for (long i = 1; i < spec_len && stars->count < 2; i++) {
+    if (spec[i] == '*') {
+      mtoc2__slot_t slot;
+      if (!mtoc2__next_slot(it, &slot)) return 0;
+      stars->vals[stars->count++] = mtoc2__slot_to_double(&slot);
+    }
+  }
+  return 1;
+}
+
 /* Parse the spec body (between '%' and the type char) — fills
  * `width` (0 if absent), `prec` (-1 if absent), and the flag set.
- * Resolves '*' for width by consuming one numeric slot via the
- * iterator. Returns 1 on success, 0 if the iterator ran out while
- * resolving '*'. */
+ * '*' for width or precision is taken from the pre-resolved `stars`
+ * (consumed before the value arg, see mtoc2__resolve_stars). */
 static int mtoc2__parse_spec(const char *spec, long spec_len,
-                             mtoc2__arg_iter_t *it,
+                             mtoc2__stars_t *stars,
                              long *out_width, int *out_prec,
                              int *out_has_plus, int *out_has_space,
                              int *out_left_align, int *out_zero_pad) {
@@ -222,6 +249,22 @@ static int mtoc2__parse_spec(const char *spec, long spec_len,
   /* spec begins with '%'; iterate over its body. */
   for (long i = 1; i < spec_len; i++) {
     char c = spec[i];
+    /* '*' takes its value from the pre-resolved star args. Handle it
+       before the in_prec digit logic so a precision '*' (after '.') is
+       applied to the precision, not the width. */
+    if (c == '*') {
+      double v = (stars && stars->idx < stars->count)
+                     ? stars->vals[stars->idx++]
+                     : 0.0;
+      long n = (long)floor(v + 0.5);
+      if (in_prec) {
+        prec = n >= 0 ? (int)n : -1;
+        in_prec = 0;
+      } else {
+        width = n > 0 ? n : 0;
+      }
+      continue;
+    }
     if (in_prec) {
       if (c >= '0' && c <= '9') {
         if (prec < 0) prec = 0;
@@ -242,14 +285,6 @@ static int mtoc2__parse_spec(const char *spec, long spec_len,
     if (c == '0' && width == 0) { zero_pad = 1; continue; }
     if (c >= '0' && c <= '9') {
       width = width * 10 + (c - '0');
-      continue;
-    }
-    if (c == '*') {
-      mtoc2__slot_t slot;
-      if (!mtoc2__next_slot(it, &slot)) return 0;
-      double v = mtoc2__slot_to_double(&slot);
-      long n = (long)floor(v + 0.5);
-      width = n > 0 ? n : 0;
       continue;
     }
     /* Anything else is unexpected — ignore for width. */
@@ -299,14 +334,14 @@ static long mtoc2__emit_escape(mtoc2__writer_fn writer, void *ctx,
  *     and apply width/zero-pad. */
 static void mtoc2__emit_int(mtoc2__writer_fn writer, void *ctx,
                              const char *spec, long spec_len,
-                             mtoc2__arg_iter_t *it, char type_ch,
+                             mtoc2__stars_t *stars, char type_ch,
                              double raw) {
   int is_int = isfinite(raw) && raw == floor(raw) && fabs(raw) < 1e21;
   int can_int = is_int;
   if (type_ch == 'u' && raw < 0.0) can_int = 0;
   long width;
   int prec, has_plus, has_space, left_align, zero_pad;
-  if (!mtoc2__parse_spec(spec, spec_len, it,
+  if (!mtoc2__parse_spec(spec, spec_len, stars,
                          &width, &prec, &has_plus, &has_space,
                          &left_align, &zero_pad)) {
     return;
@@ -385,11 +420,11 @@ static void mtoc2__emit_int(mtoc2__writer_fn writer, void *ctx,
  * numeric body, applies sign-prefix and width afterwards. */
 static void mtoc2__emit_float(mtoc2__writer_fn writer, void *ctx,
                                const char *spec, long spec_len,
-                               mtoc2__arg_iter_t *it, char type_ch,
+                               mtoc2__stars_t *stars, char type_ch,
                                double x) {
   long width;
   int prec, has_plus, has_space, left_align, zero_pad;
-  if (!mtoc2__parse_spec(spec, spec_len, it,
+  if (!mtoc2__parse_spec(spec, spec_len, stars,
                          &width, &prec, &has_plus, &has_space,
                          &left_align, &zero_pad)) {
     return;
@@ -504,11 +539,11 @@ static void mtoc2__emit_float(mtoc2__writer_fn writer, void *ctx,
 /* Emit %x / %X / %o — round-to-int absolute value, then convert. */
 static void mtoc2__emit_xo(mtoc2__writer_fn writer, void *ctx,
                            const char *spec, long spec_len,
-                           mtoc2__arg_iter_t *it, char type_ch,
+                           mtoc2__stars_t *stars, char type_ch,
                            double raw) {
   long width;
   int prec, has_plus, has_space, left_align, zero_pad;
-  if (!mtoc2__parse_spec(spec, spec_len, it,
+  if (!mtoc2__parse_spec(spec, spec_len, stars,
                          &width, &prec, &has_plus, &has_space,
                          &left_align, &zero_pad)) {
     return;
@@ -539,10 +574,10 @@ static void mtoc2__emit_xo(mtoc2__writer_fn writer, void *ctx,
  * through `String(n)` semantics. */
 static void mtoc2__emit_s(mtoc2__writer_fn writer, void *ctx,
                           const char *spec, long spec_len,
-                          mtoc2__arg_iter_t *it, const mtoc2__slot_t *slot) {
+                          mtoc2__stars_t *stars, const mtoc2__slot_t *slot) {
   long width;
   int prec, has_plus, has_space, left_align, zero_pad;
-  if (!mtoc2__parse_spec(spec, spec_len, it,
+  if (!mtoc2__parse_spec(spec, spec_len, stars,
                          &width, &prec, &has_plus, &has_space,
                          &left_align, &zero_pad)) {
     return;
@@ -600,6 +635,13 @@ static void mtoc2__format_walk(mtoc2__writer_fn writer, void *ctx,
           writer(ctx, "%", 1);
           continue;
         }
+        /* Resolve '*' width/precision args BEFORE the value arg (C and
+           MATLAB consume them in that order). */
+        mtoc2__stars_t stars;
+        if (!mtoc2__resolve_stars(spec, spec_len, &it, &stars)) {
+          out_of_args = 1;
+          break;
+        }
         mtoc2__slot_t slot;
         if (!mtoc2__next_slot(&it, &slot)) {
           out_of_args = 1;
@@ -610,7 +652,7 @@ static void mtoc2__format_walk(mtoc2__writer_fn writer, void *ctx,
           case 'd':
           case 'i':
           case 'u':
-            mtoc2__emit_int(writer, ctx, spec, spec_len, &it,
+            mtoc2__emit_int(writer, ctx, spec, spec_len, &stars,
                             type_ch, dval);
             break;
           case 'f':
@@ -618,17 +660,17 @@ static void mtoc2__format_walk(mtoc2__writer_fn writer, void *ctx,
           case 'E':
           case 'g':
           case 'G':
-            mtoc2__emit_float(writer, ctx, spec, spec_len, &it,
+            mtoc2__emit_float(writer, ctx, spec, spec_len, &stars,
                               type_ch, dval);
             break;
           case 'x':
           case 'X':
           case 'o':
-            mtoc2__emit_xo(writer, ctx, spec, spec_len, &it,
+            mtoc2__emit_xo(writer, ctx, spec, spec_len, &stars,
                            type_ch, dval);
             break;
           case 's':
-            mtoc2__emit_s(writer, ctx, spec, spec_len, &it, &slot);
+            mtoc2__emit_s(writer, ctx, spec, spec_len, &stars, &slot);
             break;
           case 'c': {
             int code = (int)floor(dval + 0.5);
