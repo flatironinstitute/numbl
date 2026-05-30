@@ -1,6 +1,6 @@
 % Test space-separated multi-output assignment
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 AA = ones(3, 5);
 [m n] = size(AA);
 assert(m == 3);

@@ -1,7 +1,7 @@
 % min/max on matrices should reduce along dim 1
 
 % ── min on matrix: column mins → row vector ──────────────────────
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = [3 1; 2 4; 5 0];
 B = min(A);
 % Column 1: min([3;2;5]) = 2.  Column 2: min([1;4;0]) = 0

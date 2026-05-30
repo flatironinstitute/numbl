@@ -2,7 +2,7 @@
 
 % Create a 2x3x4 tensor with known values
 % In MATLAB, reshape fills column-major: varying dim1 fastest, then dim2, then dim3
-%!numbl:assert_jit
+%!numbl:assert_jit c
 v = 1:24;
 a = reshape(v, 2, 3, 4);
 

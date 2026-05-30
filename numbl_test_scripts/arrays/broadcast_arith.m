@@ -1,7 +1,7 @@
 % Broadcasting arithmetic: scalar with matrix/3D, vector with matrix
 
 % ── scalar + matrix ──────────────────────────────────────────────
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = [1 2; 3 4];
 B = A + 10;
 assert(B(1,1) == 11)

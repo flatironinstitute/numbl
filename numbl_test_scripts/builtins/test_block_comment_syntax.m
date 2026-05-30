@@ -1,4 +1,4 @@
-%!numbl:assert_jit
+%!numbl:assert_jit c
 % Test that %{ with trailing content is treated as a line comment, not a block comment
 % In MATLAB, %{ only starts a block comment when it's alone on the line.
 % If there's content after %{, it's a regular line comment.

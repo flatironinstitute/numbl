@@ -1,6 +1,6 @@
 % while loops
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 n = 1;
 while n < 32
   n = n * 2;

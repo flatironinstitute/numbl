@@ -1,6 +1,6 @@
 % 2D matrices
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = [1, 2, 3; 4, 5, 6; 7, 8, 9];
 assert(size(A, 1) == 3)
 assert(size(A, 2) == 3)

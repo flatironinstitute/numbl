@@ -1,5 +1,5 @@
 %% all(A, dim) along columns (dim=1)
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = [1 0 1; 1 1 1; 1 0 1];
 r = all(A, 1);
 assert(isequal(r, [true false true]));

@@ -2,7 +2,7 @@
 % In MATLAB, mod(a, 0) returns a (not NaN)
 
 % Scalar cases
-%!numbl:assert_jit
+%!numbl:assert_jit c
 assert(mod(5, 0) == 5, 'mod(5,0) should be 5');
 assert(mod(-3, 0) == -3, 'mod(-3,0) should be -3');
 assert(mod(0, 0) == 0, 'mod(0,0) should be 0');

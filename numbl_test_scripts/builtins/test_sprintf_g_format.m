@@ -2,7 +2,7 @@
 % %g should switch to scientific notation when exponent >= 6 or <= -5
 
 % Normal values stay as decimal
-%!numbl:assert_jit
+%!numbl:assert_jit c
 assert(strcmp(sprintf('%g', 3.14), '3.14'));
 assert(strcmp(sprintf('%g', 100), '100'));
 assert(strcmp(sprintf('%g', 100000), '100000'));

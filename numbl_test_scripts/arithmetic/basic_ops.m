@@ -1,6 +1,6 @@
 % Basic arithmetic operations
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 assert(1 + 1 == 2)
 assert(10 - 3 == 7)
 assert(3 * 4 == 12)

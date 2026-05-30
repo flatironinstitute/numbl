@@ -1,6 +1,6 @@
 % Array slicing and indexing
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 v = [10, 20, 30, 40, 50];
 
 % Range indexing

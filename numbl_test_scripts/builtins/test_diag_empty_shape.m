@@ -1,7 +1,7 @@
 % Test that diag() returns correct shape for empty diagonal extraction
 % MATLAB returns [0, 1] (empty column vector), not [0, 0]
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = zeros(2, 3);
 d = diag(A, 5);
 s = size(d);

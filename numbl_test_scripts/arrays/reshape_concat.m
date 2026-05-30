@@ -1,7 +1,7 @@
 % reshape, concatenation, linspace, colon ranges
 
 % reshape
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = [1, 2, 3, 4, 5, 6];
 B = reshape(A, 2, 3);
 assert(size(B, 1) == 2)

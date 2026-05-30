@@ -4,7 +4,7 @@
 %   double-quoted literals "hello" are string scalars
 
 % class()
-%!numbl:assert_jit
+%!numbl:assert_jit c
 assert(strcmp(class('hello'), 'char'));
 assert(strcmp(class("hello"), 'string'));
 

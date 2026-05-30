@@ -1,6 +1,6 @@
 % Indexed assignment with slices on 3D tensors
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = reshape(1:12, 2, 3, 2);
 
 % ── Assign scalar to single element ──────────────────────────────

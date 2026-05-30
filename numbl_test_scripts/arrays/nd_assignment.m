@@ -1,7 +1,7 @@
 % 3D tensor indexed assignment
 
 % ── Scalar assignment: a(r, c, p) = val ─────────────────────────────
-%!numbl:assert_jit
+%!numbl:assert_jit c
 a = zeros(2, 3, 4);
 a(1, 1, 1) = 100;
 assert(a(1, 1, 1) == 100)

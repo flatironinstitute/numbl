@@ -5,7 +5,7 @@
 % the indexed-store path, the runtime sweep) must still detect that the
 % caller holds the same tensor and keep the callee's writes off it.
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 function a = scalar_index_assign(a)
   for k = 1:length(a)
     a(k) = a(k) * 2.0;

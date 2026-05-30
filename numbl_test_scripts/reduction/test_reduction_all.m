@@ -1,6 +1,6 @@
 % Test 'all' dimension option for reduction functions
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 M = [1 2; 3 4];
 
 % sum with 'all'

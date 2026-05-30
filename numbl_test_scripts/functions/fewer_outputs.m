@@ -2,7 +2,7 @@
 % In MATLAB, you can request fewer outputs than a function declares.
 
 % Function declares 4 outputs, call with 2
-%!numbl:assert_jit
+%!numbl:assert_jit c
 [a, b] = four_outputs(10);
 assert(a == 10);
 assert(b == 20);

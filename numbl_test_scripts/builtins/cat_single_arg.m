@@ -1,5 +1,5 @@
 % Test that cat with only a dim argument returns empty
-%!numbl:assert_jit
+%!numbl:assert_jit c
 result = cat(1);
 assert(isempty(result));
 assert(isequal(size(result), [0 0]));

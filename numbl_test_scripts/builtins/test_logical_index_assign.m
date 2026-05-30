@@ -1,5 +1,5 @@
 % Test logical indexing assignment with matrix
-%!numbl:assert_jit
+%!numbl:assert_jit c
 N = 4;
 A = reshape(1:N^2, N, N);
 B = reshape(101:100+N^2, N, N);

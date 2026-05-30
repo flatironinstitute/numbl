@@ -1,6 +1,6 @@
 % 3D tensor element-wise arithmetic and broadcasting
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 a = reshape(1:24, 2, 3, 4);
 
 % ── Same-shape element-wise ops ─────────────────────────────────────

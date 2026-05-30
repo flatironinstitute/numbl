@@ -1,7 +1,7 @@
 % Test that sum works on scalar logical values
 
 % Test 1: sum of scalar true
-%!numbl:assert_jit
+%!numbl:assert_jit c
 result1 = sum(true);
 assert(result1 == 1, 'sum of true');
 

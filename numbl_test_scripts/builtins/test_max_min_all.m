@@ -1,5 +1,5 @@
 % Test max and min with 'all' flag
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = [1 5; 3 2];
 assert(max(A, [], 'all') == 5);
 assert(min(A, [], 'all') == 1);

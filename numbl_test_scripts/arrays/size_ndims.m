@@ -1,6 +1,6 @@
 % size and ndims on 3D tensors
 
-%!numbl:assert_jit
+%!numbl:assert_jit c
 A = reshape(1:24, 2, 3, 4);
 
 % ── size with dimension argument ─────────────────────────────────
