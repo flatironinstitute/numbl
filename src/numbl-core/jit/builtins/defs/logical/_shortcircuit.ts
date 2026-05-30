@@ -127,17 +127,21 @@ export function defineShortCircuit(
       const bN = argTypes[1] as NumericType;
       const anyComplex = aN.isComplex || bN.isComplex;
       if (anyComplex) useRuntime("mtoc2_cscalar");
-      // Coerce to a bool with `!!x`. The operand may be a bare double
-      // (`0`/`nonzero`) or a JS boolean from an upstream logical op;
-      // `!!` works for both. Strict `!== 0` would WRONGLY return
-      // `true` for a JS `false` because of strict-equality non-
-      // coercion (`false !== 0` is `true` in JS).
-      const lhs = aN.isComplex
-        ? `mtoc2_cnonzero(${argsJs[0]})`
-        : `!!(${argsJs[0]})`;
-      const rhs = bN.isComplex
-        ? `mtoc2_cnonzero(${argsJs[1]})`
-        : `!!(${argsJs[1]})`;
+      // Coerce each operand to a numbl-truthiness bool. The
+      // representation depends on the operand's element type:
+      //   - complex → mtoc2_cnonzero (object would be JS-truthy)
+      //   - logical → already a JS boolean, use directly
+      //   - real double → `!== 0`, NOT `!!x`: `!!NaN` is `false` in JS
+      //     but numbl treats a nonzero NaN as true. (`!== 0` would be
+      //     wrong for a JS `false`, hence the per-type branch.)
+      const coerce = (n: NumericType, x: string): string =>
+        n.isComplex
+          ? `mtoc2_cnonzero(${x})`
+          : n.elem === "logical"
+            ? `(${x})`
+            : `((${x}) !== 0)`;
+      const lhs = coerce(aN, argsJs[0]);
+      const rhs = coerce(bN, argsJs[1]);
       // Result is a bare JS bool.
       return `(${lhs} ${cOp} ${rhs})`;
     },

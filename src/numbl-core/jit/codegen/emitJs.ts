@@ -1264,17 +1264,24 @@ function makeJsUseRuntime(
 }
 
 /** Wrap a cond expression with the truthiness conversion that matches
- *  MATLAB's scalar-only short-circuit semantics — `cond !== 0` for
- *  numerics, otherwise direct (booleans, …). Real numeric scalars
- *  fall through to JS truthiness (a `0` is falsy, anything else is
- *  truthy). Complex scalars route through `mtoc2_cnonzero` — a
- *  `{re: 0, im: 0}` object is "truthy" in JS as a non-null reference,
- *  which would loop forever in `while (z)`. */
+ *  numbl/MATLAB's `toBool` semantics — a scalar is true iff it is
+ *  nonzero (`x !== 0`). Real numeric scalars must use an explicit
+ *  `!== 0` because JS truthiness disagrees: `NaN` is falsy in JS but
+ *  numbl treats a (nonzero) `NaN` as true. Logical scalars are already
+ *  JS booleans, so they pass through directly. Complex scalars route
+ *  through `mtoc2_cnonzero` — a `{re: 0, im: 0}` object is "truthy" in
+ *  JS as a non-null reference, which would loop forever in `while (z)`. */
 function truthy(e: IRExpr, state: RuntimeState): string {
   const expr = emitExpr(e, state);
-  if (e.ty.kind === "Numeric" && e.ty.isComplex) {
-    useRuntimeByName(state, "mtoc2_cscalar");
-    return `mtoc2_cnonzero(${expr})`;
+  if (e.ty.kind === "Numeric") {
+    if (e.ty.isComplex) {
+      useRuntimeByName(state, "mtoc2_cscalar");
+      return `mtoc2_cnonzero(${expr})`;
+    }
+    // Real double: NaN must be truthy (matches the C backend's
+    // `!= 0.0` and the interpreter's `toBool`). A logical scalar is
+    // already a JS boolean and passes through unchanged.
+    if (e.ty.elem === "double") return `(${expr} !== 0)`;
   }
   return expr;
 }

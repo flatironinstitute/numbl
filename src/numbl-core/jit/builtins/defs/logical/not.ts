@@ -158,7 +158,11 @@ export const notBuiltin: Builtin = {
       useRuntime("mtoc2_cscalar");
       return `(!mtoc2_cnonzero(${argsJs[0]}))`;
     }
-    return `(!(${argsJs[0]}))`;
+    // A logical scalar is a JS boolean (`!b` is correct). A real double
+    // must compare `=== 0` rather than use JS `!`, because `!NaN` is
+    // `true` in JS but numbl's `~NaN` is 0 (NaN is nonzero → not-false).
+    if (a.elem === "logical") return `(!(${argsJs[0]}))`;
+    return `((${argsJs[0]}) === 0)`;
   },
   call({ args, argTypes }) {
     const a = argTypes[0] as NumericType;
@@ -180,6 +184,7 @@ export const notBuiltin: Builtin = {
       return [!mtoc2_cnonzero(cx)];
     }
     const v = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    return [!v];
+    // `v === 0`, not `!v`: `!NaN` is `true` in JS but `~NaN` is 0.
+    return [v === 0];
   },
 };
