@@ -866,6 +866,11 @@ registerIBuiltin({
   },
 });
 
+// NOTE: the real str2num is the special builtin in
+// interpreterSpecialBuiltins.ts, which evaluates the text as `[<text>]`
+// (handling vectors / matrices / arithmetic). It intercepts before this
+// IBuiltin, which only stays registered for builtin-listing/type presence
+// and the degenerate fallback.
 registerIBuiltin({
   name: "str2num",
   resolve: argTypes => {
