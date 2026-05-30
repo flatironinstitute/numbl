@@ -40,7 +40,7 @@ import { mtoc2_deep_clone } from "../../runtime/snippets.gen.js";
  *  expose them in the emitted C. */
 function ownedHelpers(
   t: Type
-): { copy: string; assign: string; isRuntime: boolean } | null {
+): { copy: string; assign: string; cType: string; isRuntime: boolean } | null {
   if (
     t.kind === "Numeric" &&
     t.dims.some(d => d.kind !== "exact" || d.value !== 1)
@@ -50,6 +50,7 @@ function ownedHelpers(
     return {
       copy: isComplex ? "mtoc2_tensor_copy_complex" : "mtoc2_tensor_copy",
       assign: "mtoc2_tensor_assign",
+      cType: "mtoc2_tensor_t",
       isRuntime: true,
     };
   }
@@ -57,6 +58,7 @@ function ownedHelpers(
     return {
       copy: "mtoc2_string_copy",
       assign: "mtoc2_string_assign",
+      cType: "mtoc2_string_t",
       isRuntime: true,
     };
   }
@@ -64,24 +66,45 @@ function ownedHelpers(
     return {
       copy: "mtoc2_char_tensor_copy",
       assign: "mtoc2_char_tensor_assign",
+      cType: "mtoc2_char_tensor_t",
       isRuntime: true,
     };
   }
   if (t.kind === "Struct") {
     const name = structTypedefName(t);
-    return { copy: `${name}_copy`, assign: `${name}_assign`, isRuntime: false };
+    return {
+      copy: `${name}_copy`,
+      assign: `${name}_assign`,
+      cType: name,
+      isRuntime: false,
+    };
   }
   if (t.kind === "Class") {
     const name = classTypedefName(t);
-    return { copy: `${name}_copy`, assign: `${name}_assign`, isRuntime: false };
+    return {
+      copy: `${name}_copy`,
+      assign: `${name}_assign`,
+      cType: name,
+      isRuntime: false,
+    };
   }
   if (t.kind === "Handle") {
     const name = handleTypedefName(t);
-    return { copy: `${name}_copy`, assign: `${name}_assign`, isRuntime: false };
+    return {
+      copy: `${name}_copy`,
+      assign: `${name}_assign`,
+      cType: name,
+      isRuntime: false,
+    };
   }
   if (t.kind === "Cell") {
     const name = cellTypedefName(t);
-    return { copy: `${name}_copy`, assign: `${name}_assign`, isRuntime: false };
+    return {
+      copy: `${name}_copy`,
+      assign: `${name}_assign`,
+      cType: name,
+      isRuntime: false,
+    };
   }
   return null;
 }
@@ -139,29 +162,55 @@ export const deal: Builtin = {
     const slotIdx = dealSlotIndices(argTypes, nargout);
 
     // `outArgsC !== undefined` ⇔ called from MultiAssignCall (the
-    // framework only builds the out-pointer list there). Always
-    // write through the pointers in that case — even nargout=1, since
-    // `[a] = deal(x)` lands here. Scalars use `(*o<i> = arg)`; owned
-    // types use the kind's `_assign` consuming a fresh `_copy(arg)`.
-    // Join with the comma operator and cast the whole thing to void
-    // so the result is a clean statement after the framework's `;`.
+    // framework only builds the out-pointer list there). It wraps our
+    // emission in a `{ }` block, so we may declare temporaries.
     if (outArgsC !== undefined) {
-      const writes: string[] = [];
-      for (let i = 0; i < nargout; i++) {
-        const srcTy = argTypes[slotIdx[i]];
-        const argC = argsC[slotIdx[i]];
-        const h = ownedHelpers(srcTy);
-        if (h !== null) {
-          if (h.isRuntime) {
-            useRuntime(h.copy);
-            useRuntime(h.assign);
+      if (nargout >= 2) {
+        // With ≥2 outputs an output may alias a later source — the swap
+        // idiom `[a, b] = deal(b, a)`. Writing in source order without
+        // temporaries makes the second source read the value the first
+        // write already stored (and, for owned types, `_assign` frees
+        // the old buffer first → use-after-free). Snapshot EVERY source
+        // into a temporary first (the owned snapshot is a fresh `_copy`),
+        // then write all outputs from the temporaries. This matches the
+        // JS path (array literal built before destructuring) and the
+        // interpreter (reads all args before assigning).
+        const decls: string[] = [];
+        const writes: string[] = [];
+        for (let i = 0; i < nargout; i++) {
+          const srcTy = argTypes[slotIdx[i]];
+          const argC = argsC[slotIdx[i]];
+          const h = ownedHelpers(srcTy);
+          const tmp = `_mtoc2_deal_t${i}`;
+          if (h !== null) {
+            if (h.isRuntime) {
+              useRuntime(h.copy);
+              useRuntime(h.assign);
+            }
+            decls.push(`${h.cType} ${tmp} = ${h.copy}(${argC});`);
+            writes.push(`${h.assign}(${outArgsC[i]}, ${tmp})`);
+          } else {
+            // nargout ≥ 2 slots are scalar-real (transfer rejects scalar
+            // complex / unsupported types), so a `double` temp is exact.
+            decls.push(`double ${tmp} = ${argC};`);
+            writes.push(`(*${outArgsC[i]} = ${tmp})`);
           }
-          writes.push(`${h.assign}(${outArgsC[i]}, ${h.copy}(${argC}))`);
-        } else {
-          writes.push(`(*${outArgsC[i]} = ${argC})`);
         }
+        return `${decls.join(" ")} (void)(${writes.join(", ")})`;
       }
-      return `((void)(${writes.join(", ")}))`;
+      // nargout === 1 (`[a] = deal(x)`): one output, one source — no
+      // aliasing is possible, so write through the pointer directly.
+      const srcTy = argTypes[slotIdx[0]];
+      const argC = argsC[slotIdx[0]];
+      const h = ownedHelpers(srcTy);
+      if (h !== null) {
+        if (h.isRuntime) {
+          useRuntime(h.copy);
+          useRuntime(h.assign);
+        }
+        return `((void)(${h.assign}(${outArgsC[0]}, ${h.copy}(${argC}))))`;
+      }
+      return `((void)(*${outArgsC[0]} = ${argC}))`;
     }
 
     // Value position (`a = deal(x)` / `disp(deal(x))`): return an
