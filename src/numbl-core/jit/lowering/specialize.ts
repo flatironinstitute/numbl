@@ -344,6 +344,16 @@ export function specializeUserFunction(
           errSpan
         );
       }
+      if (e.maybeUnassigned) {
+        // Output assigned on only some `if` arms — the C-JIT would return
+        // its predeclared default on the unassigned path while MATLAB /
+        // the interpreter raise "Output argument not assigned". Decline.
+        throw new UnsupportedConstruct(
+          `function '${decl.name}': output '${o}' is assigned only on some ` +
+            `branches`,
+          errSpan
+        );
+      }
       return e.ty;
     });
     return { body, outputTypes };

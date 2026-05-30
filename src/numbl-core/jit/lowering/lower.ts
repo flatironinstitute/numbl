@@ -121,6 +121,14 @@ import { lowerIndexSliceStore } from "./lowerIndexSliceStore.js";
 export interface EnvEntry {
   cName: string;
   ty: Type;
+  /** True when the variable is assigned on only SOME arms of an
+   *  enclosing `if` (not all), so a read may hit a never-assigned value.
+   *  MATLAB raises "Undefined ..." at runtime on the unassigned path; the
+   *  JIT predeclares the local with a default and would silently read it,
+   *  so a read of a flagged var (or returning it as an output) declines
+   *  to the interpreter, which performs the runtime definite-assignment
+   *  check. */
+  maybeUnassigned?: boolean;
 }
 
 export class Lowerer {
@@ -1168,8 +1176,9 @@ export class Lowerer {
         branchEnvs
       );
 
-      // Merge.
-      this.env = this.mergeBranchEnvs(branchEnvs);
+      // Merge. `true` → flag variables assigned on only some arms as
+      // maybe-unassigned (definite-assignment check, see EnvEntry).
+      this.env = this.mergeBranchEnvs(branchEnvs, true);
       return {
         kind: "If",
         cond,
@@ -1596,6 +1605,17 @@ export class Lowerer {
   private lowerIdent(e: Extract<Expr, { type: "Ident" }>): IRExpr {
     const entry = this.env.get(e.name);
     if (entry !== undefined) {
+      if (entry.maybeUnassigned) {
+        // Assigned on only some `if` arms — reading it may hit the
+        // predeclared default. Decline so the interpreter applies
+        // MATLAB's runtime definite-assignment check (an error on the
+        // unassigned path) instead of the JIT silently reading 0/NaN.
+        throw new UnsupportedConstruct(
+          `'${e.name}' may be used before it is assigned (assigned only on ` +
+            `some branches)`,
+          e.span
+        );
+      }
       return {
         kind: "Var",
         name: e.name,
@@ -1841,7 +1861,8 @@ export class Lowerer {
   }
 
   private mergeBranchEnvs(
-    envs: Map<string, EnvEntry>[]
+    envs: Map<string, EnvEntry>[],
+    flagUnassigned = false
   ): Map<string, EnvEntry> {
     // Collect all keys present in any branch. Variables assigned in
     // only some branches stay in scope after the merge — MATLAB's rule
@@ -1866,7 +1887,18 @@ export class Lowerer {
       if (present.length < envs.length) {
         ty = withoutExact(ty);
       }
-      out.set(k, { cName: present[0].cName, ty });
+      // Flag a variable that some (but not all) branches assigned: a
+      // later read may hit the predeclared default instead of a real
+      // value, which MATLAB treats as a runtime "Undefined" error. Only
+      // `if`-merges flag (flagUnassigned) — loop merges don't, to keep
+      // the established loop-var / loop-body-var-after-loop behavior.
+      // Always propagate an inbound flag so nested conditionals carry it.
+      const maybeUnassigned =
+        (flagUnassigned && present.length < envs.length) ||
+        present.some(p => p.maybeUnassigned);
+      const entry: EnvEntry = { cName: present[0].cName, ty };
+      if (maybeUnassigned) entry.maybeUnassigned = true;
+      out.set(k, entry);
     }
     return out;
   }
