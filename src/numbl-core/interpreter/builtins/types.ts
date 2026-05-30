@@ -20,6 +20,10 @@ import { RTV } from "../../runtime/constructors.js";
 import { type JitType, signFromNumber, unifyJitTypes } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import {
+  getBroadcastShape,
+  broadcastIterate,
+} from "../../helpers/arithmetic.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 
@@ -566,13 +570,16 @@ export function applyBinaryElemwise(
   if (aIsTensor && bIsTensor) {
     const tA = a0 as RuntimeTensor;
     const tB = a1 as RuntimeTensor;
-    if (tA.data.length !== tB.data.length) {
-      throw new Error(`${name}: array dimensions must agree`);
+    const outShape = getBroadcastShape(tA.shape, tB.shape);
+    if (outShape === null) {
+      throw new Error(`${name}: Matrix dimensions must agree`);
     }
-    const out = allocFloat64Array(tA.data.length);
-    for (let i = 0; i < tA.data.length; i++)
-      out[i] = fn(tA.data[i], tB.data[i]);
-    return makeTensor(out, undefined, tA.shape);
+    const n = outShape.reduce((acc, d) => acc * d, 1);
+    const out = allocFloat64Array(n);
+    broadcastIterate(tA.shape, tB.shape, outShape, (ai, bi, oi) => {
+      out[oi] = fn(tA.data[ai], tB.data[bi]);
+    });
+    return makeTensor(out, undefined, outShape);
   }
   throw new Error(`${name}: unsupported argument types`);
 }

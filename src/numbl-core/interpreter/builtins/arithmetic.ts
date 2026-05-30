@@ -7,7 +7,11 @@ import {
   type RuntimeTensor,
   type RuntimeValue,
 } from "../../runtime/types.js";
-import { mElemPow } from "../../helpers/arithmetic.js";
+import {
+  mElemPow,
+  getBroadcastShape,
+  broadcastIterate,
+} from "../../helpers/arithmetic.js";
 import { minMaxImpl } from "../../helpers/reduction/min-max.js";
 import { type BuiltinCase, defineBuiltin, makeTensor } from "./types.js";
 import {
@@ -54,11 +58,15 @@ function applyBinaryElemwise(
     return makeTensor(out, undefined, aTensor.shape.slice());
   }
   if (aTensor && bTensor) {
-    const n = aTensor.data.length;
-    if (n !== bTensor.data.length) throw new Error(`${name}: size mismatch`);
+    const outShape = getBroadcastShape(aTensor.shape, bTensor.shape);
+    if (outShape === null)
+      throw new Error(`${name}: Matrix dimensions must agree`);
+    const n = outShape.reduce((acc, d) => acc * d, 1);
     const out = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) out[i] = fn(aTensor.data[i], bTensor.data[i]);
-    return makeTensor(out, undefined, aTensor.shape.slice());
+    broadcastIterate(aTensor.shape, bTensor.shape, outShape, (ai, bi, oi) => {
+      out[oi] = fn(aTensor.data[ai], bTensor.data[bi]);
+    });
+    return makeTensor(out, undefined, outShape);
   }
   throw new Error(`${name}: unsupported argument types`);
 }
