@@ -7,29 +7,68 @@
 
 import { mtoc2_format_double } from "./format_double.js";
 
+// Mirrors numbl's `runtime/display.ts` format2DSlice: matrices
+// wider/taller than 20 are truncated to the first/last 10 with a
+// "Columns 1 through N" header and a "..." elision row/column. Without
+// this the JIT printed every element on one line, diverging from the
+// interpreter.
+const MTOC2_MAX_DISPLAY_ROWS = 20;
+const MTOC2_MAX_DISPLAY_COLS = 20;
+
 function disp_real_slice(data, offset, rows, cols) {
-  const cells = new Array(rows * cols);
-  const colWidths = new Array(cols).fill(0);
-  for (let c = 0; c < cols; c++) {
-    for (let r = 0; r < rows; r++) {
-      const idx = r + c * rows;
-      const text = mtoc2_format_double(data[offset + idx]);
-      cells[idx] = text;
-      if (text.length > colWidths[c]) colWidths[c] = text.length;
-    }
+  const truncRows = rows > MTOC2_MAX_DISPLAY_ROWS;
+  const truncCols = cols > MTOC2_MAX_DISPLAY_COLS;
+  const rHi = Math.ceil(MTOC2_MAX_DISPLAY_ROWS / 2);
+  const rLo = Math.floor(MTOC2_MAX_DISPLAY_ROWS / 2);
+  const cHi = Math.ceil(MTOC2_MAX_DISPLAY_COLS / 2);
+  const cLo = Math.floor(MTOC2_MAX_DISPLAY_COLS / 2);
+  const showRows = [];
+  if (truncRows) {
+    for (let i = 0; i < rHi; i++) showRows.push(i);
+    for (let i = 0; i < rLo; i++) showRows.push(rows - rLo + i);
+  } else {
+    for (let i = 0; i < rows; i++) showRows.push(i);
   }
-  for (let r = 0; r < rows; r++) {
-    let line = "   ";
-    for (let c = 0; c < cols; c++) {
-      const idx = r + c * rows;
-      const cell = cells[idx];
-      const pad = colWidths[c] - cell.length;
-      for (let i = 0; i < pad; i++) line += " ";
-      line += cell;
-      if (c < cols - 1) line += "   ";
+  const showCols = [];
+  if (truncCols) {
+    for (let i = 0; i < cHi; i++) showCols.push(i);
+    for (let i = 0; i < cLo; i++) showCols.push(cols - cLo + i);
+  } else {
+    for (let i = 0; i < cols; i++) showCols.push(i);
+  }
+
+  if (truncRows || truncCols) {
+    $write("  Columns 1 through " + cols + "\n");
+    $write("\n");
+  }
+
+  const formatted = [];
+  const colWidths = new Array(showCols.length + (truncCols ? 1 : 0)).fill(0);
+  for (const r of showRows) {
+    const row = [];
+    let ci = 0;
+    for (const c of showCols) {
+      const text = mtoc2_format_double(data[offset + r + c * rows]);
+      row.push(text);
+      if (text.length > colWidths[ci]) colWidths[ci] = text.length;
+      ci++;
+      if (truncCols && ci === cHi) {
+        row.push("...");
+        if (colWidths[ci] < 3) colWidths[ci] = 3;
+        ci++;
+      }
     }
-    line += "\n";
-    $write(line);
+    formatted.push(row);
+  }
+
+  let fi = 0;
+  for (let si = 0; si < showRows.length; si++) {
+    if (truncRows && si === rHi) {
+      $write("   " + colWidths.map(w => "...".padStart(w)).join("   ") + "\n");
+    }
+    const parts = formatted[fi].map((s, c) => s.padStart(colWidths[c]));
+    $write("   " + parts.join("   ") + "\n");
+    fi++;
   }
 }
 

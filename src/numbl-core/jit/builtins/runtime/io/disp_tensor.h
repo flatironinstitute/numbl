@@ -24,41 +24,100 @@
  * caller already advanced past prior pages). Each row ends with
  * '\n'; no leading or trailing framing — the caller adds page
  * headers / separators. */
+/* Mirrors numbl's format2DSlice: matrices wider/taller than 20 are
+ * truncated to the first/last 10 with a "Columns 1 through N" header
+ * and a "..." elision row/column. (Without this the C path printed
+ * every element, diverging from the interpreter and the JS sibling.) */
 static void mtoc2__disp_real_slice(const double *data, long rows, long cols) {
   enum { CELL_CAP = 32 };
-  long ncells = rows * cols;
-  char *cells = (char *)malloc((size_t)ncells * CELL_CAP);
-  long *col_widths = (long *)calloc((size_t)cols, sizeof(long));
-  if (!cells || !col_widths) {
+  const long MAXR = 20, MAXC = 20;
+  int trunc_r = rows > MAXR, trunc_c = cols > MAXC;
+  long r_hi = (MAXR + 1) / 2, r_lo = MAXR / 2; /* ceil, floor */
+  long c_hi = (MAXC + 1) / 2, c_lo = MAXC / 2;
+  long n_show_r = trunc_r ? (r_hi + r_lo) : rows;
+  long n_show_c = trunc_c ? (c_hi + c_lo) : cols;
+  long n_disp_c = n_show_c + (trunc_c ? 1 : 0); /* + ellipsis column */
+
+  long *show_r = (long *)malloc(sizeof(long) * (size_t)(n_show_r > 0 ? n_show_r : 1));
+  long *show_c = (long *)malloc(sizeof(long) * (size_t)(n_show_c > 0 ? n_show_c : 1));
+  long ncells = n_show_r * n_disp_c;
+  char *cells = (char *)malloc((size_t)(ncells > 0 ? ncells : 1) * CELL_CAP);
+  long *col_widths = (long *)calloc((size_t)(n_disp_c > 0 ? n_disp_c : 1), sizeof(long));
+  if (!show_r || !show_c || !cells || !col_widths) {
+    free(show_r);
+    free(show_c);
     free(cells);
     free(col_widths);
     fprintf(stderr, "mtoc2: out of memory in mtoc2_disp_tensor\n");
     return;
   }
 
-  for (long c = 0; c < cols; c++) {
-    for (long r = 0; r < rows; r++) {
-      long idx = r + c * rows;
-      char *cell = cells + idx * CELL_CAP;
-      mtoc2_format_double(cell, CELL_CAP, data[idx]);
+  if (trunc_r) {
+    for (long i = 0; i < r_hi; i++) show_r[i] = i;
+    for (long i = 0; i < r_lo; i++) show_r[r_hi + i] = rows - r_lo + i;
+  } else {
+    for (long i = 0; i < rows; i++) show_r[i] = i;
+  }
+  if (trunc_c) {
+    for (long i = 0; i < c_hi; i++) show_c[i] = i;
+    for (long i = 0; i < c_lo; i++) show_c[c_hi + i] = cols - c_lo + i;
+  } else {
+    for (long i = 0; i < cols; i++) show_c[i] = i;
+  }
+
+  if (trunc_r || trunc_c) {
+    mtoc2_stdout_printf("  Columns 1 through %ld\n", cols);
+    mtoc2_stdout("\n", 1);
+  }
+
+  /* Format the visible cells (display-order, row-major), inserting a
+   * "..." cell after the first c_hi columns. */
+  for (long ri = 0; ri < n_show_r; ri++) {
+    long r = show_r[ri];
+    long ci = 0;
+    for (long cj = 0; cj < n_show_c; cj++) {
+      long c = show_c[cj];
+      char *cell = cells + (ri * n_disp_c + ci) * CELL_CAP;
+      mtoc2_format_double(cell, CELL_CAP, data[r + c * rows]);
       long len = (long)strlen(cell);
-      if (len > col_widths[c]) col_widths[c] = len;
+      if (len > col_widths[ci]) col_widths[ci] = len;
+      ci++;
+      if (trunc_c && cj + 1 == c_hi) {
+        char *ec = cells + (ri * n_disp_c + ci) * CELL_CAP;
+        ec[0] = '.';
+        ec[1] = '.';
+        ec[2] = '.';
+        ec[3] = '\0';
+        if (col_widths[ci] < 3) col_widths[ci] = 3;
+        ci++;
+      }
     }
   }
 
-  for (long r = 0; r < rows; r++) {
+  for (long ri = 0; ri < n_show_r; ri++) {
+    if (trunc_r && ri == r_hi) {
+      /* Ellipsis row: "..." padded to each display column's width. */
+      mtoc2_stdout("   ", 3);
+      for (long ci = 0; ci < n_disp_c; ci++) {
+        for (long i = 0; i < col_widths[ci] - 3; i++) mtoc2_stdout(" ", 1);
+        mtoc2_stdout("...", 3);
+        if (ci < n_disp_c - 1) mtoc2_stdout("   ", 3);
+      }
+      mtoc2_stdout("\n", 1);
+    }
     mtoc2_stdout("   ", 3);
-    for (long c = 0; c < cols; c++) {
-      long idx = r + c * rows;
-      char *cell = cells + idx * CELL_CAP;
+    for (long ci = 0; ci < n_disp_c; ci++) {
+      char *cell = cells + (ri * n_disp_c + ci) * CELL_CAP;
       long len = (long)strlen(cell);
-      for (long i = 0; i < col_widths[c] - len; i++) mtoc2_stdout(" ", 1);
+      for (long i = 0; i < col_widths[ci] - len; i++) mtoc2_stdout(" ", 1);
       mtoc2_stdout_s(cell);
-      if (c < cols - 1) mtoc2_stdout("   ", 3);
+      if (ci < n_disp_c - 1) mtoc2_stdout("   ", 3);
     }
     mtoc2_stdout("\n", 1);
   }
 
+  free(show_r);
+  free(show_c);
   free(cells);
   free(col_widths);
 }
