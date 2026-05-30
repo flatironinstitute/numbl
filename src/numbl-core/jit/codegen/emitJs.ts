@@ -1211,7 +1211,20 @@ function emitIndexSliceJs(
       `for (let _mtoc2_k_${i} = 0; _mtoc2_k_${i} < _mtoc2_n_${i}; _mtoc2_k_${i}++) {`
     );
   }
-  // Column-major source offset: sum_i (idxFn[i] - 1) * stride[i] where
+  // Per-axis 1-based index, rounded, with a bounds check against that
+  // axis's extent — mirrors the interpreter's "Index in position N
+  // exceeds array bounds" RuntimeError. Without it, an out-of-range
+  // axis index reads `undefined` from the buffer and silently yields
+  // NaN. Colon slots are always in range; the check is cheap and
+  // uniform across slot kinds (Range / Scalar / IndexVec / mask).
+  for (let i = 0; i < ndim; i++) {
+    lines.push(`const _mtoc2_idx_${i} = Math.round(${idxFns[i]});`);
+    lines.push(
+      `if (_mtoc2_idx_${i} < 1 || _mtoc2_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
+        `throw new Error("Index in position ${i + 1} exceeds array bounds.");`
+    );
+  }
+  // Column-major source offset: sum_i (idx[i] - 1) * stride[i] where
   // stride[i] = product of base.shape[0..i).
   const srcTerms: string[] = [];
   for (let i = 0; i < ndim; i++) {
@@ -1220,7 +1233,7 @@ function emitIndexSliceJs(
       strideParts.push(`(${baseName}.shape[${j}] ?? 1)`);
     }
     const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
-    srcTerms.push(`(Math.round(${idxFns[i]}) - 1) * ${stride}`);
+    srcTerms.push(`(_mtoc2_idx_${i} - 1) * ${stride}`);
   }
   // Column-major destination offset using the result's own dims.
   const dstTerms: string[] = [];
