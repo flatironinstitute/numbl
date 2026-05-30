@@ -104,16 +104,22 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
     }
   }
 
-  // Grow-bail pre-pass: scan every function for a scalar IndexStore
-  // (the only construct that emits the grow-aware `*_grow` bounds
-  // checks). Done up front — before any function body is emitted — so
-  // the host-entry function's `setjmp` guard is emitted regardless of
-  // whether the growing store sits in the entry itself or in a callee
-  // emitted later in the loop below. (Snippet activation still happens
-  // lazily during body emission, in `emitNdScalarOffset`.)
+  // Grow-bail pre-pass: scan every function for an indexed store. Done
+  // up front — before any function body is emitted — so the host-entry
+  // function's `setjmp` guard is emitted regardless of whether the
+  // growing store sits in the entry itself or in a callee emitted later
+  // in the loop below. The `setjmp` guard references `mtoc2_grow_bail_buf`
+  // and needs `<setjmp.h>`, both provided by the `mtoc2_grow_bail`
+  // snippet — so activate it HERE, tied to the guard decision. (Per-path
+  // activation in `emitNdScalarOffset` / `emitLinearRangeSetup` covers
+  // the scalar/linear-range *grow* helpers, but slice/colon stores arm
+  // the guard via `bodyHasIndexStore` without touching those paths, so
+  // relying on lazy activation alone left the buffer/`<setjmp.h>`
+  // undeclared and the C compile failed.)
   for (const fn of prog.functions.values()) {
     if (bodyHasIndexStore(fn.body)) {
       state.usedGrowBail = true;
+      useRuntimeByName(state, "mtoc2_grow_bail");
       break;
     }
   }

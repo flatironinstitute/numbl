@@ -418,6 +418,26 @@ export function emitIndexSliceProducer(
         "emit internal: single-slot Scalar IndexSlice should have routed to IndexLoad"
       );
     }
+    // A slice that is statically a single element — `v(2:2)`, or `v(:)`
+    // on a 1×1 base — is typed scalar at the consume site (`double y =
+    // ...`), so it must evaluate to a scalar, NOT an allocated 1×1 tensor
+    // (which is a C type mismatch). Yield the element at the first source
+    // index, reusing the setup already pushed above. (LogicalMask is never
+    // statically scalar, so srcIndexFor here is the Colon/Range form with
+    // no buffer to free.)
+    if (isScalar(e.ty)) {
+      const off = srcIndexFor("0L");
+      if (baseIsComplex) {
+        useRuntimeByName(state, "mtoc2_cscalar");
+        lines.push(`long _mtoc2_off = ${off};`);
+        lines.push(
+          `mtoc2_cmake(${baseCName}.real[_mtoc2_off], ${baseCName}.imag[_mtoc2_off]);`
+        );
+      } else {
+        lines.push(`${baseCName}.real[${off}];`);
+      }
+      return `({ ${lines.join(" ")} })`;
+    }
     lines.push(
       `mtoc2_tensor_t _mtoc2_t = ${allocFn}(2, (long[]){${resultRows}, ${resultCols}});`
     );
@@ -440,6 +460,26 @@ export function emitIndexSliceProducer(
     baseCName,
     cleanups
   );
+  // Multi-slot slice that is statically a single element — e.g. `M(1:1, 2)`
+  // — is typed scalar at the consume site, so yield the scalar element
+  // rather than a 1×1 tensor. Pin every axis loop index to 0, compute the
+  // one source offset, free any gathered-index buffers, then read.
+  if (isScalar(e.ty)) {
+    for (let i = 0; i < ndim; i++) lines.push(`long _mtoc2_k_${i} = 0;`);
+    lines.push(
+      `long _mtoc2_src_off = ${formatNdOffset(slotSrc, j => `${baseCName}.dims[${j}]`)};`
+    );
+    for (const c of cleanups) lines.push(c);
+    if (baseIsComplex) {
+      useRuntimeByName(state, "mtoc2_cscalar");
+      lines.push(
+        `mtoc2_cmake(${baseCName}.real[_mtoc2_src_off], ${baseCName}.imag[_mtoc2_src_off]);`
+      );
+    } else {
+      lines.push(`${baseCName}.real[_mtoc2_src_off];`);
+    }
+    return `({ ${lines.join(" ")} })`;
+  }
   const resultRank =
     e.ty.kind === "Numeric" ? Math.max(2, e.ty.dims.length) : 2;
   const dimsList: string[] = [];
