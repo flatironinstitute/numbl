@@ -13,7 +13,20 @@ function uminus_kernel(a) {
   return r;
 }
 
+function shapes_equal(x, y) {
+  if (x.length !== y.length) return false;
+  for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+  return true;
+}
+
 function tt_kernel(a, b, fn) {
+  // Same-shape fast path. The emitter picks `_tt` whenever it can't
+  // statically prove broadcasting is needed (unknown dims), so the
+  // shapes must be checked at runtime: equal → elementwise; otherwise
+  // defer to the broadcast kernel, which broadcasts compatible shapes
+  // and errors on incompatible ones. Without this, a runtime mismatch
+  // read past `b` and silently produced NaN.
+  if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, fn);
   const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
   for (let i = 0; i < r.data.length; i++) r.data[i] = fn(a.data[i], b.data[i]);
   return r;
@@ -42,6 +55,10 @@ function bcast_kernel(a, b, fn) {
   while (bshape.length < ndim) bshape.push(1);
   const outShape = new Array(ndim);
   for (let i = 0; i < ndim; i++) {
+    // MATLAB broadcast rule: axis sizes must be equal or one must be 1.
+    if (ashape[i] !== bshape[i] && ashape[i] !== 1 && bshape[i] !== 1) {
+      throw new Error("Matrix dimensions must agree");
+    }
     outShape[i] = Math.max(ashape[i], bshape[i]);
   }
   const r = mtoc2_tensor_alloc_nd(ndim, outShape);
