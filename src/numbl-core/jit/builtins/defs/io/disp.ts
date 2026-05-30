@@ -6,7 +6,15 @@ import {
   isNumeric,
   isScalar,
   isText,
+  type Type,
 } from "../../../lowering/types.js";
+
+/** A nested struct/cell/class value inside a struct field or cell slot
+ *  needs the interpreter's recursive display; the JIT disp helpers only
+ *  render scalar/tensor/char/string/complex members correctly. */
+function isCompoundDispTy(t: Type): boolean {
+  return t.kind === "Struct" || t.kind === "Cell" || t.kind === "Class";
+}
 import type { Builtin } from "../../registry.js";
 import { isChar, isComplexValue, isTensor } from "../../../runtime/value.js";
 import {
@@ -50,9 +58,28 @@ export const disp: Builtin = {
       return [{ kind: "Void" }];
     }
     if (t.kind === "Struct") {
+      // A struct field that is itself a struct/cell/class needs the
+      // interpreter's recursive nested rendering (the JIT disp helpers
+      // would emit a stray newline / leak the cell wrapper internals).
+      // Decline so the scope falls back to the interpreter.
+      if (t.fields.some(f => isCompoundDispTy(f.ty))) {
+        throw new UnsupportedConstruct(
+          `'disp' of a struct with a nested struct/cell field is not ` +
+            `JIT-compiled; the interpreter renders nested values`
+        );
+      }
       return [{ kind: "Void" }];
     }
     if (isCell(t)) {
+      // Likewise for a cell whose slots are themselves structs/cells.
+      const slotTys =
+        t.mode === "tuple" ? (t.elements ?? []) : t.elem ? [t.elem] : [];
+      if (slotTys.some(isCompoundDispTy)) {
+        throw new UnsupportedConstruct(
+          `'disp' of a cell containing a nested struct/cell is not ` +
+            `JIT-compiled; the interpreter renders nested values`
+        );
+      }
       return [{ kind: "Void" }];
     }
     throw new TypeError(
