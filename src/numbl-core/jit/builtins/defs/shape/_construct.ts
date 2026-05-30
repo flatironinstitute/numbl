@@ -39,7 +39,7 @@ import {
   isScalar,
 } from "../../../lowering/types.js";
 import type { DimInfo, NumericType, Type } from "../../../lowering/types.js";
-import type { Builtin } from "../../registry.js";
+import type { Builtin, InlineSnippet } from "../../registry.js";
 import { exactDouble, exactRealArray } from "../_shared.js";
 import {
   mtoc2_tensor_zeros_nd,
@@ -217,6 +217,16 @@ function resolveShape(name: string, argTypes: Type[]): ResolvedShape {
   return { axes: norm, ndim: norm.length, isSquare: false };
 }
 
+/** Runtime dim validation for the interpreter-shim `call` path —
+ *  mirrors the emitted `mtoc2_check_dim` and the interpreter's
+ *  `validateDim`: reject non-finite / non-integer, clamp negative to 0. */
+function checkDimRuntime(x: number): number {
+  if (!Number.isFinite(x) || !Number.isInteger(x)) {
+    throw new Error("Size inputs must be nonnegative integers.");
+  }
+  return x < 0 ? 0 : x;
+}
+
 /** Return the concrete number[] shape when every axis is exact;
  *  otherwise return undefined. */
 function exactShapeOf(r: ResolvedShape): number[] | undefined {
@@ -228,11 +238,34 @@ function exactShapeOf(r: ResolvedShape): number[] | undefined {
   return out;
 }
 
+/** Runtime dim validator shared by both backends. Mirrors the
+ *  interpreter's `validateDim` (interpreter/builtins/array-construction.ts):
+ *  a non-finite or non-integer size is an error, a negative size clamps
+ *  to 0 (empty axis). A dynamic dim previously truncated silently
+ *  (`(long)` / `Math.trunc`), so `zeros(1, 3.7)` built a 1×3 instead of
+ *  raising. */
+const CHECK_DIM_SNIPPET: InlineSnippet = {
+  name: "mtoc2_check_dim",
+  headers: ["math.h", "stdio.h", "stdlib.h"],
+  code: `static long mtoc2_check_dim(double x) {
+  if (!isfinite(x) || x != floor(x)) {
+    fprintf(stderr, "Size inputs must be nonnegative integers.\\n");
+    exit(1);
+  }
+  return x < 0.0 ? 0L : (long)x;
+}`,
+  jsCode: `function mtoc2_check_dim(x) {
+  if (!Number.isFinite(x) || !Number.isInteger(x))
+    throw new Error("Size inputs must be nonnegative integers.");
+  return x < 0 ? 0 : x;
+}`,
+};
+
 /** Emit the C `long`-typed dim expression for one axis: literal
- *  for exact, `(long)(argsC[i])` for dynamic. */
+ *  for exact, validated conversion for dynamic. */
 function dimC(axis: ResolvedAxis, argsC: string[]): string {
   if (axis.kind === "exact") return `${axis.value}L`;
-  return `(long)(${argsC[axis.argIndex]})`;
+  return `mtoc2_check_dim(${argsC[axis.argIndex]})`;
 }
 
 /** Options for `defineShapeConstructor`. When `cFillValue` is set, the
@@ -334,9 +367,11 @@ export function defineShapeConstructor(
         const dimList = shape.map(d => `${d}L`).join(", ");
         return `${ndHelper}(${helperPrefix}${resolved.ndim}, (long[]){${dimList}})`;
       }
+      // At least one axis is dynamic here — validate each at runtime.
+      useRuntime(CHECK_DIM_SNIPPET);
       if (resolved.isSquare) {
         const src = resolved.axes[0];
-        return `${squareHelper}(${helperPrefix}(long)(${argsC[src.argIndex]}))`;
+        return `${squareHelper}(${helperPrefix}mtoc2_check_dim(${argsC[src.argIndex]}))`;
       }
       const dimList = resolved.axes.map(a => dimC(a, argsC)).join(", ");
       return `${ndHelper}(${helperPrefix}${resolved.ndim}, (long[]){${dimList}})`;
@@ -359,15 +394,17 @@ export function defineShapeConstructor(
         const dimList = shape.join(", ");
         return `${ndHelper}(${jsPrefix}${resolved.ndim}, [${dimList}])`;
       }
+      // At least one axis is dynamic here — validate each at runtime.
+      useRuntime(CHECK_DIM_SNIPPET);
       if (resolved.isSquare) {
         const src = resolved.axes[0];
-        return `${squareHelper}(${jsPrefix}Math.trunc(${argsJs[src.argIndex]}))`;
+        return `${squareHelper}(${jsPrefix}mtoc2_check_dim(${argsJs[src.argIndex]}))`;
       }
       const dimList = resolved.axes
         .map(a =>
           a.kind === "exact"
             ? String(a.value)
-            : `Math.trunc(${argsJs[a.argIndex]})`
+            : `mtoc2_check_dim(${argsJs[a.argIndex]})`
         )
         .join(", ");
       return `${ndHelper}(${jsPrefix}${resolved.ndim}, [${dimList}])`;
@@ -397,16 +434,14 @@ export function defineShapeConstructor(
         const t = args[0] as { data: ArrayLike<number> };
         dimsArr = [];
         for (let i = 0; i < t.data.length; i++) {
-          const v = Math.trunc(t.data[i]);
-          dimsArr.push(v < 0 ? 0 : v);
+          dimsArr.push(checkDimRuntime(t.data[i]));
         }
       } else {
         dimsArr = [];
         for (let i = 0; i < args.length; i++) {
           const v = args[i];
           const n = typeof v === "number" ? v : Number(v);
-          const t = Math.trunc(n);
-          dimsArr.push(t < 0 ? 0 : t);
+          dimsArr.push(checkDimRuntime(n));
         }
         // MATLAB's `zeros(n)` / `ones(n)` is an n×n square. Treat the
         // single-scalar form as square here too.

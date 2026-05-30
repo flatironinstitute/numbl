@@ -92,8 +92,9 @@ export interface EmitJsArgs extends CommonArgs {
   /** Activate a JS-side runtime snippet. Snippets are inlined once
    *  per build at the top of the emitted module, so the call site
    *  invokes them by bare name. Mirrors the C-side `useRuntime` —
-   *  same registry, paired `.h`/`.js` source files. */
-  useRuntime(name: string): void;
+   *  same registry, paired `.h`/`.js` source files. An `InlineSnippet`
+   *  (with a `jsCode` body) defines a one-off helper from a builtin. */
+  useRuntime(spec: string | InlineSnippet): void;
 }
 
 export interface CallArgs extends CommonArgs {
