@@ -28,8 +28,14 @@ function accum_dim(t, dim, init, accum, finalize) {
     throw new Error(`reducer _dim: dim must be >= 1 (got ${dim})`);
   }
   if (dim > t.shape.length) {
-    return mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
-    // (callers expect a fresh copy; we don't memcpy though — see below)
+    // Reducing along a trailing singleton axis is the identity: every
+    // fiber has length 1, so sum/prod/mean each yield that single
+    // element unchanged. Return a same-shape COPY of the data (the C
+    // kernel memcpy's here too); allocating without copying left a
+    // zero-filled tensor — the original opt1 bug.
+    const out = mtoc2_tensor_alloc_nd(t.shape.length, t.shape.slice());
+    out.data.set(t.data);
+    return out;
   }
   const dimIdx = dim - 1;
   const axis = t.shape[dimIdx];
