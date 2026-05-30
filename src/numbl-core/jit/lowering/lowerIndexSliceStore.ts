@@ -45,11 +45,13 @@ export function lowerIndexSliceStore(
       axis,
       lvalue.indices[i]
     );
-    // The LogicalMask slot's expr is consumed at emit time as a Var
-    // (codegen reads `.real[i]` / `.dims[k]` off it). ANF it here so a
-    // non-Var producer (e.g. a Unary `~` directly in the slot) lands in
-    // a named temp before the IndexSliceStore is emitted.
-    if (slot.kind === "LogicalMask") {
+    // The LogicalMask and IndexVec slot exprs are consumed at emit time as a
+    // Var (codegen reads `.real[i]` / `.dims[k]` off them). ANF here so a
+    // non-Var producer (a Unary `~` mask, or an inline index-vector literal
+    // like `A(:,[2 4]) = ...`) lands in a named temp before the
+    // IndexSliceStore is emitted. Without this, emitSliceSlotSetup throws
+    // "IndexVec/LogicalMask slot expr must be a Var after ANF".
+    if (slot.kind === "LogicalMask" || slot.kind === "IndexVec") {
       slots.push({
         ...slot,
         expr: this.anfRequireScalarOrVar(slot.expr, slotHoists),
