@@ -118,6 +118,12 @@ import { allocFloat64Array } from "./alloc.js";
 
 export class Runtime {
   outputLines: string[] = [];
+  /** Stack of in-progress output-capture buffers. While non-empty,
+   *  `output()` appends to the top buffer instead of emitting, so a
+   *  speculative JIT attempt's side effects can be committed on success
+   *  or discarded on bail (preventing duplicated output when the
+   *  interpreter re-runs the same code). */
+  private outputCaptureStack: string[][] = [];
   plotInstructions: PlotInstruction[] = [];
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
@@ -533,8 +539,34 @@ export class Runtime {
   // ── Output ──────────────────────────────────────────────────────────
 
   output(text: string): void {
+    const depth = this.outputCaptureStack.length;
+    if (depth > 0) {
+      this.outputCaptureStack[depth - 1].push(text);
+      return;
+    }
     this.outputLines.push(text);
     this.options.onOutput?.(text);
+  }
+
+  /** Begin buffering output for a speculative execution attempt.
+   *  Pair with exactly one `commitOutputCapture()` or
+   *  `discardOutputCapture()`. */
+  beginOutputCapture(): void {
+    this.outputCaptureStack.push([]);
+  }
+
+  /** Emit the buffered output (to the parent capture frame if nested,
+   *  else to the real sink) — call when the attempt succeeded. */
+  commitOutputCapture(): void {
+    const buf = this.outputCaptureStack.pop();
+    if (buf === undefined) return;
+    for (const text of buf) this.output(text);
+  }
+
+  /** Drop the buffered output — call when the attempt bailed, so a
+   *  subsequent re-run is the only thing that emits. */
+  discardOutputCapture(): void {
+    this.outputCaptureStack.pop();
   }
 
   // ── Error handling ──────────────────────────────────────────────────

@@ -290,25 +290,41 @@ export class Registry {
       this.cache.set(executor.name, owner, key, compiled);
     }
 
-    let result: RunResult;
-    if (guardKey !== null && ctx.hasActive) {
-      ctx.pushActive(executor.name, guardKey);
-      try {
+    // Capture any output the attempt produces so a bail leaves no
+    // observable side effect: on bail we discard it and the caller
+    // falls through to the interpreter (or a backup executor), which
+    // re-runs the same code — committing here would duplicate it.
+    const rt = ctx.interp.rt;
+    rt.beginOutputCapture();
+    let committed = false;
+    try {
+      let result: RunResult;
+      if (guardKey !== null && ctx.hasActive) {
+        ctx.pushActive(executor.name, guardKey);
+        try {
+          result = executor.run(compiled, data, ctx);
+        } finally {
+          ctx.popActive(executor.name, guardKey);
+        }
+      } else {
         result = executor.run(compiled, data, ctx);
-      } finally {
-        ctx.popActive(executor.name, guardKey);
       }
-    } else {
-      result = executor.run(compiled, data, ctx);
-    }
 
-    if ("bail" in result) {
-      if (!result.transient) {
-        this.cache.markBailed(executor.name, owner, key);
+      if ("bail" in result) {
+        rt.discardOutputCapture();
+        committed = true;
+        if (!result.transient) {
+          this.cache.markBailed(executor.name, owner, key);
+        }
+        return null;
       }
-      return null;
+      rt.commitOutputCapture();
+      committed = true;
+      return result;
+    } finally {
+      // A throw from run() (not a bail) lands here with committed=false.
+      if (!committed) rt.discardOutputCapture();
     }
-    return result;
   }
 
   /**
