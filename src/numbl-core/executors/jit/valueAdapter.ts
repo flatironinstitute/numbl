@@ -34,12 +34,26 @@ import {
   isRuntimeString,
   type RuntimeValue,
 } from "../../runtime/types.js";
+import type { JitType } from "../../jitTypes.js";
 
 /** numbl RuntimeValue → mtoc2 emit-JS value shape. Owned-typed
  *  values (tensors) get their data buffer cloned so mtoc2's spec
  *  body can mutate freely without leaking the change back through
- *  numbl's caller-side env. */
-export function numblToJit(v: RuntimeValue): unknown {
+ *  numbl's caller-side env.
+ *
+ *  `targetType` is the JitType the spec was COMPILED for at this
+ *  parameter. Type-widening can reuse a complex specialization for a
+ *  later real/boolean scalar call (both keys collapse to
+ *  `complex_or_number`); the complex-typed body reads `.re`/`.im`, so a
+ *  bare JS number arriving there yields `undefined` → NaN. Box such a
+ *  scalar into `{re, im:0}` to mirror the C adapter (valueAdapterC),
+ *  which already boxes a real as a complex with `im=0`. */
+export function numblToJit(v: RuntimeValue, targetType?: JitType): unknown {
+  if (targetType?.kind === "complex_or_number") {
+    if (isRuntimeNumber(v)) return { re: v as number, im: 0 };
+    if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
+    if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
+  }
   if (isRuntimeNumber(v)) return v;
   if (isRuntimeLogical(v)) return v ? 1 : 0;
   if (isRuntimeString(v)) return v;

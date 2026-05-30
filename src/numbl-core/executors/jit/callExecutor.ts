@@ -197,7 +197,9 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
       return { bail: { message: "jit-call: codegen declined" } };
     }
     try {
-      const compilerArgs = d.args.map(v => numblToJit(v as never));
+      const compilerArgs = d.args.map((v, i) =>
+        numblToJit(v as never, d.argTypes[i])
+      );
       const result = compiled.specFn(...compilerArgs);
       // mtoc2 return-shape convention:
       //   nargout = 0 → undefined (no value)
