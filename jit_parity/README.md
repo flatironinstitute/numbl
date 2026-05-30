@@ -69,10 +69,28 @@ the diagnosis and the divergence observed at discovery time.
 
 ## Gate exclusions
 
-`matmul` (C03) is **excluded from the pass/fail gate**: the interpreter uses
-BLAS `dgemm` and the JITs use a naive triple loop, which accumulate in different
-orders → last-bit differences. That's inherent floating-point non-associativity,
-not a bug, and can't be made bitwise-identical without dropping BLAS (a large
-perf loss) or giving the JIT a native dependency. The runner still runs and
-shows it (`EXCL`), but it doesn't affect the exit code. See `GATE_EXCLUDED` in
-`run.mjs`.
+Some scripts are **excluded from the pass/fail gate** (they still run and show
+as `EXCL`, with the reason printed, but don't affect the exit code). See
+`GATE_EXCLUDED` in `run.mjs`. Two kinds:
+
+- **Inherent FP / library-ULP differences** — can't be made bitwise-identical
+  without dropping BLAS/libm:
+  - `C03 matmul` — BLAS `dgemm` (interpreter) vs a naive triple loop (JIT)
+    accumulate in different orders → last-bit differences.
+  - `A35 complex-pow` — `(-1)^(0.5+1i)` keeps a `~2.6e-18` real residue
+    (`exp(-π)·cos(π/2)`); MATLAB keeps it too, but it's the difference of
+    transcendentals, so opt2 (libm) and opt0/opt1 (V8) disagree at ULP scale
+    (same class as `C02`). The integer-power line *is* fixable; the script
+    as a whole can't be byte-stable.
+
+- **Needs a V8-equivalent dtoa in C (deferred)** — the C format engine's
+  number→string differs from V8's, and a naive fix would pass these
+  exact-representable cases while introducing *new* divergences for non-exact
+  values:
+  - `F01` / `F02` — `%f/%e/%g` and `disp()` scalar half-way rounding: libc
+    `snprintf` rounds half-to-even; V8's `toFixed`/`toExponential` correct-round
+    toward +Inf on the exact decimal.
+  - `F04` — `%s` of a non-integer needs V8's shortest round-trip form
+    (`String(0.1)` → `"0.1"`); libc `%.17g`/`%g` aren't shortest.
+
+Everything else in the corpus is expected to PASS.
