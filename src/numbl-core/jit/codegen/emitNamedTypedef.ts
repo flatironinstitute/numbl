@@ -191,6 +191,11 @@ function emitStructDisp(spec: NamedTypedefSpec, state: RuntimeState): string[] {
   // dispatch with the `disp` builtin via `emitDispCallC` so a new
   // field kind only has to land in one place.
   const useRt = (name: string) => useRuntimeByName(state, name);
+  // Field labels / framing must go through the same host-write channel
+  // as the values (mtoc2_disp_double / disp_tensor) — a raw printf would
+  // land on libc stdout while values route through mtoc2_host_write,
+  // reordering the output under a captured/streamed --opt 2 run.
+  useRt("mtoc2_host_output");
   for (const f of spec.fields) {
     if (f.ty.kind === "Class") {
       // Class / handle disp not supported in v1; emit nothing rather
@@ -204,11 +209,11 @@ function emitStructDisp(spec: NamedTypedefSpec, state: RuntimeState): string[] {
       lines.push(`  /* skipping handle-typed field '${f.name}' in disp */`);
       continue;
     }
-    lines.push(`  printf("    ${f.name}: ");`);
+    lines.push(`  mtoc2_stdout_s("    ${f.name}: ");`);
     if (f.ty.kind === "Struct") {
       // A nested struct's own _disp emits its own header/leading
       // newline; numbl prints a blank then the nested fields.
-      lines.push(`  printf("\\n");`);
+      lines.push(`  mtoc2_stdout_s("\\n");`);
       lines.push(`  ${structTypedefName(f.ty)}_disp(v.${f.name});`);
       continue;
     }

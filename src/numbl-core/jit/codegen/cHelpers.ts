@@ -158,10 +158,14 @@ export function emitDispCallC(
   }
   if (isCell(t)) {
     // The cell typedef's `_disp` renders `{e1, e2, ...}` without a
-    // trailing newline; pair it with an explicit `printf("\n")` via
-    // a comma expression so the value form has the same statement
-    // shape as the other helpers (one expression, prints + newline).
-    return `(${cellTypedefName(t)}_disp(${valueC}), printf("\\n"))`;
+    // trailing newline; pair it with an explicit newline via a comma
+    // expression so the value form has the same statement shape as the
+    // other helpers (one expression, prints + newline). The newline goes
+    // through mtoc2_stdout — NOT raw printf — so it shares the host-write
+    // channel with the cell content (a raw printf would flush separately
+    // and float to the front of captured --opt 2 output).
+    useRuntime("mtoc2_host_output");
+    return `(${cellTypedefName(t)}_disp(${valueC}), mtoc2_stdout_s("\\n"))`;
   }
   if (t.kind === "String") {
     useRuntime("mtoc2_disp_text");

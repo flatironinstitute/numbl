@@ -32,6 +32,10 @@ import { useRuntimeByName, type RuntimeState } from "./runtime.js";
 
 export function emitCellTypedef(t: CellType, state: RuntimeState): string {
   const name = cellTypedefName(t);
+  // The generated `_disp` writes its framing through mtoc2_stdout* so it
+  // shares the host-write channel with the slot values (a raw printf
+  // would reorder against fprintf / disp under a captured --opt 2 run).
+  useRuntimeByName(state, "mtoc2_host_output");
   if (t.mode === "tuple") return emitCellTupleTypedef(t, name, state);
   return emitCellUniformTypedef(t, name, state);
 }
@@ -124,17 +128,17 @@ function emitCellTupleTypedef(
   // _disp: `{e1, e2, ...}` — numbl format.
   lines.push(`static void ${name}_disp(${name} v) {`);
   if (slotCount === 0) {
-    lines.push(`  printf("{}");`);
+    lines.push(`  mtoc2_stdout_s("{}");`);
     lines.push(`}`);
     lines.push("");
     return lines.join("\n");
   }
-  lines.push(`  printf("{");`);
+  lines.push(`  mtoc2_stdout_s("{");`);
   for (let i = 0; i < slotCount; i++) {
-    if (i > 0) lines.push(`  printf(", ");`);
+    if (i > 0) lines.push(`  mtoc2_stdout_s(", ");`);
     lines.push(...emitSlotInlineDisp(elements[i], `v.slot_${i}`, state));
   }
-  lines.push(`  printf("}");`);
+  lines.push(`  mtoc2_stdout_s("}");`);
   lines.push(`}`);
   lines.push("");
 
@@ -230,13 +234,13 @@ function emitCellUniformTypedef(
 
   // _disp: same numbl format `{e1, e2, ...}`.
   lines.push(`static void ${name}_disp(${name} v) {`);
-  lines.push(`  if (v.nslots == 0) { printf("{}"); return; }`);
-  lines.push(`  printf("{");`);
+  lines.push(`  if (v.nslots == 0) { mtoc2_stdout_s("{}"); return; }`);
+  lines.push(`  mtoc2_stdout_s("{");`);
   lines.push(`  for (size_t _i = 0; _i < v.nslots; _i++) {`);
-  lines.push(`    if (_i > 0) printf(", ");`);
+  lines.push(`    if (_i > 0) mtoc2_stdout_s(", ");`);
   lines.push(...emitSlotInlineDisp(elem, `v.slots[_i]`, state, "    "));
   lines.push(`  }`);
-  lines.push(`  printf("}");`);
+  lines.push(`  mtoc2_stdout_s("}");`);
   lines.push(`}`);
   lines.push("");
 
@@ -260,29 +264,35 @@ function emitSlotInlineDisp(
   const lines: string[] = [];
   if (ty.kind === "Char") {
     // Char value is `mtoc2_char_tensor_t { data, rows, cols, owned }` —
-    // mtoc2's 1×N byte buffer. Numbl wraps with `'...'`.
-    lines.push(`${indent}printf("'");`);
+    // mtoc2's 1×N byte buffer. Numbl wraps with `'...'`. Write the raw
+    // bytes through mtoc2_stdout (not printf) so the content shares the
+    // host-write channel and isn't capped by a format buffer.
+    lines.push(`${indent}mtoc2_stdout_s("'");`);
     lines.push(
-      `${indent}printf("%.*s", (int)${expr}.cols, (const char*)${expr}.data);`
+      `${indent}mtoc2_stdout((const char*)${expr}.data, (long)${expr}.cols);`
     );
-    lines.push(`${indent}printf("'");`);
+    lines.push(`${indent}mtoc2_stdout_s("'");`);
     return lines;
   }
   if (ty.kind === "String") {
     // String is `mtoc2_string_t { data, len, owned }`; numbl
     // wraps with `"..."`.
-    lines.push(`${indent}printf("\\"");`);
+    lines.push(`${indent}mtoc2_stdout_s("\\"");`);
     lines.push(
-      `${indent}printf("%.*s", (int)${expr}.len, (const char*)${expr}.data);`
+      `${indent}mtoc2_stdout((const char*)${expr}.data, (long)${expr}.len);`
     );
-    lines.push(`${indent}printf("\\"");`);
+    lines.push(`${indent}mtoc2_stdout_s("\\"");`);
     return lines;
   }
   if (isNumeric(ty) && !isMultiElement(ty)) {
-    useRuntimeByName(state, "mtoc2_disp_double");
-    // mtoc2_disp_double prints a trailing newline normally; numbl's
-    // inline cell-disp doesn't add one. Use the raw format directly.
-    lines.push(`${indent}printf("%g", ${expr});`);
+    // Scalar slot: format exactly like `disp(x)` (numbl's formatNumber)
+    // but without the trailing newline — NOT a raw `%g`, which prints
+    // only 6 significant digits (and renders Inf/NaN as libc inf/nan).
+    useRuntimeByName(state, "mtoc2_format_double");
+    useRuntimeByName(state, "mtoc2_host_output");
+    lines.push(
+      `${indent}{ char _mtoc2_cb[64]; mtoc2_format_double(_mtoc2_cb, sizeof(_mtoc2_cb), ${expr}); mtoc2_stdout_s(_mtoc2_cb); }`
+    );
     return lines;
   }
   if (isMultiElement(ty)) {
@@ -309,7 +319,7 @@ function emitSlotInlineDisp(
   // Class / Handle in a cell slot: no disp helper. Render a stub
   // matching numbl's `displayValue` fall-through if reachable; the
   // immediate need (chunkie cells) doesn't exercise this.
-  lines.push(`${indent}printf("[unsupported cell slot disp]");`);
+  lines.push(`${indent}mtoc2_stdout_s("[unsupported cell slot disp]");`);
   return lines;
 }
 

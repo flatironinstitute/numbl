@@ -577,6 +577,7 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
     loadSnippet("disp_tensor_inline.h", [
       "mtoc2_tensor_t",
       "mtoc2_format_double",
+      "mtoc2_host_output",
     ]),
   ],
 

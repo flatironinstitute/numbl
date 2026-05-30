@@ -32,16 +32,16 @@ static void mtoc2__disp_real_slice_inline(double *data, long rows,
     }
   }
   for (long r = 0; r < rows; r++) {
-    fputs("   ", stdout);
+    mtoc2_stdout("   ", 3);
     for (long c = 0; c < cols; c++) {
       long idx = r + c * rows;
       char *cell = cells + idx * CELL_CAP;
       long len = (long)strlen(cell);
-      for (long i = 0; i < col_widths[c] - len; i++) putchar(' ');
-      fputs(cell, stdout);
-      if (c < cols - 1) fputs("   ", stdout);
+      for (long i = 0; i < col_widths[c] - len; i++) mtoc2_stdout(" ", 1);
+      mtoc2_stdout_s(cell);
+      if (c < cols - 1) mtoc2_stdout("   ", 3);
     }
-    if (r < rows - 1) putchar('\n');
+    if (r < rows - 1) mtoc2_stdout("\n", 1);
   }
   free(cells);
   free(col_widths);
@@ -49,7 +49,7 @@ static void mtoc2__disp_real_slice_inline(double *data, long rows,
 
 static void mtoc2_disp_tensor_inline(mtoc2_tensor_t t) {
   if (t.ndim == 0 || t.real == NULL) {
-    fputs("[]", stdout);
+    mtoc2_stdout_s("[]");
     return;
   }
   long rows = t.ndim >= 1 ? t.dims[0] : 1;
@@ -57,7 +57,7 @@ static void mtoc2_disp_tensor_inline(mtoc2_tensor_t t) {
   long total = 1;
   for (int i = 0; i < t.ndim; i++) total *= t.dims[i];
   if (total <= 0) {
-    fputs("[]", stdout);
+    mtoc2_stdout_s("[]");
     return;
   }
   /* Multi-page (N-D) cells flow through page headers like the
@@ -69,16 +69,16 @@ static void mtoc2_disp_tensor_inline(mtoc2_tensor_t t) {
   for (int i = 2; i < t.ndim; i++) num_pages *= t.dims[i];
   for (long p = 0; p < num_pages; p++) {
     if (t.ndim > 2) {
-      if (p > 0) putchar('\n');
+      if (p > 0) mtoc2_stdout("\n", 1);
       long rem = p;
-      fputs("(:,:", stdout);
+      mtoc2_stdout("(:,:", 4);
       for (int i = 2; i < t.ndim; i++) {
         long d = t.dims[i];
         long s = rem % d;
         rem /= d;
-        printf(",%ld", s + 1);
+        mtoc2_stdout_printf(",%ld", s + 1);
       }
-      fputs(") =\n\n", stdout);
+      mtoc2_stdout_s(") =\n\n");
     }
     mtoc2__disp_real_slice_inline(t.real + p * page_size, rows, cols);
   }

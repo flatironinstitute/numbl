@@ -12,6 +12,11 @@
  * register through this file — these helpers are js-side only.
  */
 
+// Numbl's scalar formatter (formatNumber), shared with disp so cell-slot
+// numbers print like `disp(x)` instead of raw String(v) full precision.
+// The build script strips this import when inlining all snippets.
+import { mtoc2_format_double } from "../io/format_double.js";
+
 /** Construct a cell from a flat slot list (column-major) and a shape.
  *  Caller has already produced fresh slot values (deep_clone'd where
  *  the slot was an owned alias), so we simply build the wrapper. */
@@ -72,9 +77,9 @@ function mtoc2__format_cell_slot(v) {
 function mtoc2__format_scalar(v) {
   if (typeof v === "boolean") return v ? "1" : "0";
   if (typeof v === "number") {
-    // Match numbl's scalar formatter shape used inside cells — `%g`-ish.
-    if (Number.isInteger(v)) return String(v);
-    return String(v);
+    // Format like disp(x) / numbl's formatNumber (pi -> "3.1416"), not
+    // String(v)'s full round-trip precision (-> "3.141592653589793").
+    return mtoc2_format_double(v);
   }
   return String(v);
 }
