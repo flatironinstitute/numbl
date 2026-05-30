@@ -831,6 +831,19 @@ export class Lowerer {
       return lowerCellIndexStore.call(this, lv, s.expr, s.span);
     }
     if (lv.type === "Index") {
+      // `<indexed> = []` is element/row/column DELETION, which dynamically
+      // shrinks the base. The JIT compiles indexed stores against the static
+      // pre-write shape and can't reallocate mid-spec — a masked/slice store
+      // against the 0-element [] either reads NaN (JS) or aborts on a size
+      // mismatch (C). Decline to the interpreter, which implements MATLAB's
+      // full deletion semantics.
+      if (s.expr.type === "Tensor" && s.expr.rows.length === 0) {
+        throw new UnsupportedConstruct(
+          "indexed deletion `x(idx) = []` is not JIT-compiled; resizing the " +
+            "base requires the interpreter",
+          s.span
+        );
+      }
       const result = lv.indices.some(isSliceArg)
         ? lowerIndexSliceStore.call(this, lv, s.expr, s.span)
         : lowerIndexStore.call(this, lv, s.expr, s.span);
