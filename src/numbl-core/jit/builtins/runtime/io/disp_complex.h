@@ -12,5 +12,6 @@
 static void mtoc2_disp_complex(double _Complex z) {
   char buf[160];
   mtoc2_format_complex(buf, sizeof(buf), z);
-  printf("%s\n", buf);
+  mtoc2_stdout_s(buf);
+  mtoc2_stdout("\n", 1);
 }

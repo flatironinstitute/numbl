@@ -60,6 +60,72 @@ interface MarshalCtx {
   readonly free: FreeFn;
 }
 
+/** koffi callback type for the C `void (*)(const char *, long)` host
+ *  output hook. Created once (koffi rejects re-declaring a named
+ *  proto) and reused across runs. */
+let hostWriteCbType: unknown | null = null;
+function hostWriteCallbackType(koffi: KoffiAny): unknown {
+  if (hostWriteCbType === null) {
+    // `void *` (not `const char *`): koffi auto-decodes a char* callback
+    // param to a NUL-terminated JS string, which both ignores `len` and
+    // mis-handles our non-NUL-terminated byte slices. A raw pointer lets
+    // us decode exactly `len` bytes. ABI-identical to the C side's
+    // `const char *`.
+    const proto = koffi.proto(
+      "void mtoc2_host_write_cb(void *bytes, long len)"
+    );
+    hostWriteCbType = koffi.pointer(proto);
+  }
+  return hostWriteCbType;
+}
+
+/** Bind numbl's output sink into an emitted C `.so` so program output
+ *  (disp / fprintf / …) routes through `write` instead of libc stdout
+ *  — see `runtime/io/host_output.h`. Returns a `dispose()` the caller
+ *  MUST invoke after the C call returns (success or throw) to unbind
+ *  and free the koffi callback.
+ *
+ *  When the spec emitted no output, `mtoc2_set_host_write` is absent
+ *  from the `.so`; binding then no-ops (the C code never writes). */
+export function bindHostWrite(
+  koffi: KoffiAny,
+  lib: KoffiLib,
+  write: (s: string) => void
+): { dispose(): void } {
+  let setHostWrite: (cb: unknown) => void;
+  try {
+    setHostWrite = lib.func("void mtoc2_set_host_write(void *)") as (
+      cb: unknown
+    ) => void;
+  } catch {
+    return { dispose() {} };
+  }
+  const decoder = new TextDecoder();
+  const cb = koffi.register((bytes: unknown, len: number | bigint) => {
+    const n = Number(len);
+    if (n <= 0) return;
+    const arr = koffi.decode(bytes, "uint8_t", n);
+    const u8 = new Uint8Array(n);
+    for (let i = 0; i < n; i++) u8[i] = arr[i];
+    write(decoder.decode(u8));
+  }, hostWriteCallbackType(koffi));
+  setHostWrite(cb);
+  return {
+    dispose() {
+      try {
+        setHostWrite(null);
+      } catch {
+        /* lib gone — nothing to unbind */
+      }
+      try {
+        koffi.unregister(cb);
+      } catch {
+        /* already unregistered */
+      }
+    },
+  };
+}
+
 /** Build a marshaling context from a koffi lib handle. The host
  *  passes the lib it got from `compileAndLoadC`; we resolve `free`
  *  against that same lib (libc symbols are reachable through any

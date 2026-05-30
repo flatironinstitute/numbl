@@ -42,6 +42,7 @@ import {
   registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
+  bindHostWrite,
   makeCMarshalCtx,
   marshalInputs,
   unmarshalScalarOutput,
@@ -186,6 +187,12 @@ export const cJitCallExecutor: Executor<CJitCallData, CompiledArtifact | null> =
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const ctxC = makeCMarshalCtx(bridge.koffi as any, compiled.compiled.lib);
+      const hostWrite = bindHostWrite(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bridge.koffi as any,
+        compiled.compiled.lib,
+        (s: string) => ctx.interp.rt.output(s)
+      );
       try {
         const sig = compiled.signature;
         const inputs = marshalInputs(
@@ -229,6 +236,8 @@ export const cJitCallExecutor: Executor<CJitCallData, CompiledArtifact | null> =
             message: `cjit-call: runtime error: ${e instanceof Error ? e.message : String(e)}`,
           },
         };
+      } finally {
+        hostWrite.dispose();
       }
     },
   };

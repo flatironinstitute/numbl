@@ -12,7 +12,7 @@
 
 static void mtoc2_disp_text(mtoc2_text_view_t t) {
   if (t.data && t.len > 0) {
-    fwrite(t.data, 1, (size_t)t.len, stdout);
+    mtoc2_stdout(t.data, (long)t.len);
   }
-  putchar('\n');
+  mtoc2_stdout("\n", 1);
 }

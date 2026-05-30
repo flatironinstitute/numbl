@@ -19,7 +19,8 @@
 #include <stdio.h>
 
 static void mtoc2__fprintf_writer(void *ctx, const char *bytes, long len) {
-  if (len > 0) fwrite(bytes, 1, (size_t)len, (FILE *)ctx);
+  (void)ctx; /* fid 1 and 2 both route through the host output hook */
+  mtoc2_stdout(bytes, len);
 }
 
 static void mtoc2_fprintf(FILE *f, mtoc2_text_view_t fmt,

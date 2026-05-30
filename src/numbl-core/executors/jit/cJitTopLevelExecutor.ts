@@ -32,6 +32,7 @@ import {
   registerTensorStruct,
 } from "./typeAdapterC.js";
 import {
+  bindHostWrite,
   makeCMarshalCtx,
   marshalInputs,
   unmarshalScalarOutput,
@@ -57,9 +58,18 @@ interface CompiledArtifact {
   readonly signature: SpecCSignature;
 }
 
-/** Same shape as the JS sibling's gate — decline scripts whose top
- *  level has any unsuppressed Assign/MultiAssign/ExprStmt, since
- *  those trigger numbl's display hooks. */
+/** Decline scripts whose top level has any unsuppressed
+ *  Assign/MultiAssign/ExprStmt — those would display via numbl's hooks.
+ *
+ *  Unlike the JS sibling (topLevelExecutor.ts), the C path keeps the
+ *  STRICT gate by default: although the host-write hook now captures C
+ *  output, the C whole-scope path is less battle-tested than JS, so we
+ *  don't want to silently route every display script through it at
+ *  --opt 2 (a latent C-codegen bug would surface as a runtime error
+ *  instead of a clean decline). Display scripts therefore fall to JS-JIT
+ *  at --opt 2 unless they explicitly opt in with `%!numbl:assert_jit c`
+ *  (see `propose`), which the annotator only adds after verifying the
+ *  script C-JITs correctly. */
 function isAllSuppressed(stmts: readonly Stmt[]): boolean {
   for (const s of stmts) {
     if (s.type === "ExprStmt" && !s.suppressed) return false;
@@ -104,7 +114,12 @@ export const cJitTopLevelExecutor: Executor<
     if (ctx.interp.loopDepth > 0) return null;
     const classification = lowered.classification;
     if (classification.hasReturn) return null;
-    if (!isAllSuppressed(classification.stmts)) return null;
+    // Display scripts go through C whole-scope only when they opt in with
+    // `%!numbl:assert_jit c` (assertsCJit); otherwise they fall to JS-JIT
+    // at --opt 2. Output is captured either way (host-write hook / $h).
+    if (!isAllSuppressed(classification.stmts) && !classification.assertsCJit) {
+      return null;
+    }
 
     const compilerInputTypes: CompilerType[] = [];
     for (const jt of classification.inputTypes) {
@@ -189,6 +204,12 @@ export const cJitTopLevelExecutor: Executor<
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ctxC = makeCMarshalCtx(bridge.koffi as any, compiled.compiled.lib);
+    const hostWrite = bindHostWrite(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      bridge.koffi as any,
+      compiled.compiled.lib,
+      (s: string) => interp.rt.output(s)
+    );
     try {
       const sig = compiled.signature;
       const values: (RuntimeValue | undefined)[] = d.inputs.map(name =>
@@ -273,6 +294,8 @@ export const cJitTopLevelExecutor: Executor<
           message: `cjit-top-level: runtime error: ${e instanceof Error ? e.message : String(e)}`,
         },
       };
+    } finally {
+      hostWrite.dispose();
     }
   },
 };

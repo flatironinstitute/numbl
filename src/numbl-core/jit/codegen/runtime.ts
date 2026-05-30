@@ -121,8 +121,16 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   string,
   RuntimeSnippet
 >([
+  // JIT host output hook — defines `mtoc2_stdout` (routes through a
+  // host-bound writer when present, else libc stdout) and the exported
+  // `mtoc2_set_host_write`. A dep of every snippet that emits program
+  // output so numbl can capture --opt 2 output like the other paths.
+  ["mtoc2_host_output", loadSnippet("host_output.h")],
   ["mtoc2_format_double", loadSnippet("format_double.h")],
-  ["mtoc2_disp_double", loadSnippet("disp_double.h", ["mtoc2_format_double"])],
+  [
+    "mtoc2_disp_double",
+    loadSnippet("disp_double.h", ["mtoc2_format_double", "mtoc2_host_output"]),
+  ],
 
   // ── Scalar complex helpers ────────────────────────────────────────
   // Every `double _Complex` operation in mtoc2-emitted user code routes
@@ -148,7 +156,10 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   ],
   [
     "mtoc2_disp_complex",
-    loadSnippet("disp_complex.h", ["mtoc2_format_complex"]),
+    loadSnippet("disp_complex.h", [
+      "mtoc2_format_complex",
+      "mtoc2_host_output",
+    ]),
   ],
 
   // ── Text (string + char tensor) ───────────────────────────────────
@@ -199,7 +210,10 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
     "mtoc2_text_view_t",
     loadSnippet("text_view.h", ["mtoc2_string_t", "mtoc2_char_tensor_t"]),
   ],
-  ["mtoc2_disp_text", loadSnippet("disp_text.h", ["mtoc2_text_view_t"])],
+  [
+    "mtoc2_disp_text",
+    loadSnippet("disp_text.h", ["mtoc2_text_view_t", "mtoc2_host_output"]),
+  ],
   ["mtoc2_strcmp", loadSnippet("strcmp.h", ["mtoc2_text_view_t"])],
   ["mtoc2_strcmpi", loadSnippet("strcmp.h", ["mtoc2_text_view_t"])],
   // One snippet provides `mtoc2_dot_real` (vector → scalar),
@@ -234,7 +248,10 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
     "mtoc2_format_engine",
     loadSnippet("format_engine.h", ["mtoc2_text_view_t", "mtoc2_tensor_t"]),
   ],
-  ["mtoc2_fprintf", loadSnippet("fprintf.h", ["mtoc2_format_engine"])],
+  [
+    "mtoc2_fprintf",
+    loadSnippet("fprintf.h", ["mtoc2_format_engine", "mtoc2_host_output"]),
+  ],
   ["mtoc2_error_fmt", loadSnippet("error_fmt.h", ["mtoc2_format_engine"])],
   // JS-aot identifier-bearing variant. The C side reuses
   // `mtoc2_error_fmt` (no identifier in the c-aot path) and ignores
@@ -549,7 +566,11 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   ],
   [
     "mtoc2_disp_tensor",
-    loadSnippet("disp_tensor.h", ["mtoc2_tensor_t", "mtoc2_format_double"]),
+    loadSnippet("disp_tensor.h", [
+      "mtoc2_tensor_t",
+      "mtoc2_format_double",
+      "mtoc2_host_output",
+    ]),
   ],
   [
     "mtoc2_disp_tensor_inline",
@@ -609,6 +630,7 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
       "mtoc2_tensor_t",
       "mtoc2_format_complex",
       "mtoc2_cscalar",
+      "mtoc2_host_output",
     ]),
   ],
   // Elementwise binary + unary ops on complex tensors. Mirrors the

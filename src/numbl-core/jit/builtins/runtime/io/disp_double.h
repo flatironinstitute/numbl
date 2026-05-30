@@ -10,5 +10,6 @@
 static void mtoc2_disp_double(double x) {
   char buf[64];
   mtoc2_format_double(buf, sizeof(buf), x);
-  printf("%s\n", buf);
+  mtoc2_stdout_s(buf);
+  mtoc2_stdout("\n", 1);
 }
