@@ -56,17 +56,24 @@ function accum_dim(t, dim, init, accum, finalize) {
   return out;
 }
 
-// Min/max reducer. Treats NaN like numbl: NaN > x is false, so NaN
-// wins via the explicit isNaN guard. (Numbl's `complexIsBetter`
-// matches that; here we follow the simple numeric branch.)
+// Min/max reducer. Ignores NaN like numbl/MATLAB: NaN entries are
+// skipped, and the result is NaN only when every element is NaN.
+// Mirrors the interpreter's `minMaxScan` (helpers/reduction/min-max.ts)
+// and the C kernel — seeding with data[0] would let a *leading* NaN
+// poison the result (`x < NaN` / `x > NaN` are always false).
 function minmax_all(t, op /* "min" | "max" */) {
   if (t.data.length === 0) return op === "min" ? Infinity : -Infinity;
-  let best = t.data[0];
-  for (let i = 1; i < t.data.length; i++) {
+  let best = NaN;
+  let found = false;
+  for (let i = 0; i < t.data.length; i++) {
     const x = t.data[i];
-    if (op === "min" ? x < best : x > best) best = x;
+    if (x !== x) continue; // skip NaN
+    if (!found || (op === "min" ? x < best : x > best)) {
+      best = x;
+      found = true;
+    }
   }
-  return best;
+  return found ? best : NaN;
 }
 
 function minmax_dim(t, dim, op) {
@@ -89,12 +96,17 @@ function minmax_dim(t, dim, op) {
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
-      let best = t.data[base];
-      for (let k = 1; k < axis; k++) {
+      let best = NaN;
+      let found = false;
+      for (let k = 0; k < axis; k++) {
         const x = t.data[base + k * before];
-        if (op === "min" ? x < best : x > best) best = x;
+        if (x !== x) continue; // skip NaN
+        if (!found || (op === "min" ? x < best : x > best)) {
+          best = x;
+          found = true;
+        }
       }
-      out.data[aft * before + bef] = best;
+      out.data[aft * before + bef] = found ? best : NaN;
     }
   }
   return out;
