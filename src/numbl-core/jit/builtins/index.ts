@@ -115,6 +115,8 @@ import { isinf, isfinite } from "./defs/logical/isinf.js";
 import { classBuiltin } from "./defs/logical/classBuiltin.js";
 import { cumsum } from "./defs/reduction/cumsum.js";
 import { cumprod } from "./defs/reduction/cumprod.js";
+import { cummax } from "./defs/reduction/cummax.js";
+import { cummin } from "./defs/reduction/cummin.js";
 import { repmat } from "./defs/shape/repmat.js";
 import { diag } from "./defs/shape/diag.js";
 import { triu } from "./defs/shape/triu.js";
@@ -260,6 +262,8 @@ for (const b of [
   classBuiltin,
   cumsum,
   cumprod,
+  cummax,
+  cummin,
   repmat,
   diag,
   triu,

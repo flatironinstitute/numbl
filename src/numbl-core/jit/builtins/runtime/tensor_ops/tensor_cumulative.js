@@ -84,6 +84,14 @@ export const mtoc2_tensor_cumsum_dim = (t, dim) =>
 export const mtoc2_tensor_cumprod_dim = (t, dim) =>
   cumScan(t, dim, 1, (a, x) => a * x);
 
+// cummax / cummin: `Math.max` / `Math.min` propagate NaN, matching
+// numbl's cumOp(Math.max). Seeding with ∓Infinity reproduces the
+// seed-with-first-element behaviour (Math.max(-Infinity, x) === x).
+export const mtoc2_tensor_cummax_dim = (t, dim) =>
+  cumScan(t, dim, -Infinity, Math.max);
+export const mtoc2_tensor_cummin_dim = (t, dim) =>
+  cumScan(t, dim, Infinity, Math.min);
+
 export const mtoc2_tensor_cumsum_complex_dim = (t, dim) =>
   cumScanComplex(t, dim, 0, 0, (aRe, aIm, xRe, xIm) => [aRe + xRe, aIm + xIm]);
 

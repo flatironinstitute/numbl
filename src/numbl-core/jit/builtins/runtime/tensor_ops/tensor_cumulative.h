@@ -68,6 +68,30 @@
 MTOC2_DEFINE_CUMULATIVE(cumsum,  0.0, MTOC2_CUM_ACC_SUM)
 MTOC2_DEFINE_CUMULATIVE(cumprod, 1.0, MTOC2_CUM_ACC_PROD)
 
+/* cummax / cummin scan with JS `Math.max` / `Math.min` semantics —
+ * NaN PROPAGATES (C's fmax/fmin would NaN-skip, diverging from numbl's
+ * cumOp(Math.max)). +0 is treated as greater than -0, matching JS.
+ * Seeding with -INF / +INF reproduces numbl's seed-with-the-first-
+ * element behaviour: js_max(-INF, x) == x for every x (finite, ±INF,
+ * or NaN). */
+static double mtoc2_js_max(double a, double b) {
+  if (a != a || b != b) return NAN;
+  if (a > b) return a;
+  if (b > a) return b;
+  return signbit(a) ? b : a;
+}
+static double mtoc2_js_min(double a, double b) {
+  if (a != a || b != b) return NAN;
+  if (a < b) return a;
+  if (b < a) return b;
+  return signbit(a) ? a : b;
+}
+#define MTOC2_CUM_ACC_MAX(acc, x) do { (acc) = mtoc2_js_max((acc), (x)); } while (0)
+#define MTOC2_CUM_ACC_MIN(acc, x) do { (acc) = mtoc2_js_min((acc), (x)); } while (0)
+
+MTOC2_DEFINE_CUMULATIVE(cummax, -INFINITY, MTOC2_CUM_ACC_MAX)
+MTOC2_DEFINE_CUMULATIVE(cummin,  INFINITY, MTOC2_CUM_ACC_MIN)
+
 #define MTOC2_DEFINE_CUMULATIVE_COMPLEX(name, INIT_RE, INIT_IM, ACCUM)        \
   static mtoc2_tensor_t                                                       \
   mtoc2_tensor_##name##_complex_dim(mtoc2_tensor_t a, int dim) {              \

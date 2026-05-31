@@ -48,6 +48,8 @@ type CumDimFn = (t: RuntimeTensor, dim: number) => RuntimeTensor;
 const JS_CUM_DIM: Record<string, CumDimFn> = {
   cumsum: TENSOR_CUMULATIVE.mtoc2_tensor_cumsum_dim as unknown as CumDimFn,
   cumprod: TENSOR_CUMULATIVE.mtoc2_tensor_cumprod_dim as unknown as CumDimFn,
+  cummax: TENSOR_CUMULATIVE.mtoc2_tensor_cummax_dim as unknown as CumDimFn,
+  cummin: TENSOR_CUMULATIVE.mtoc2_tensor_cummin_dim as unknown as CumDimFn,
 };
 
 const JS_CUM_DIM_COMPLEX: Record<string, CumDimFn> = {
@@ -66,8 +68,9 @@ export interface CumulativeSpec {
   /** Per-element accumulator step (real). */
   step(acc: number, x: number): number;
   /** Per-element accumulator step (complex). Takes `(accRe, accIm,
-   *  xRe, xIm)` and returns the next `[re, im]` pair. */
-  stepComplex(
+   *  xRe, xIm)` and returns the next `[re, im]` pair. Required when
+   *  `supportsComplex` is not `false`. */
+  stepComplex?(
     accRe: number,
     accIm: number,
     xRe: number,
@@ -75,6 +78,11 @@ export interface CumulativeSpec {
   ): [number, number];
   /** Sign rule on the result given the input's sign. */
   signRule(s: Sign): Sign;
+  /** Whether complex input is JIT-compiled. Defaults to `true`
+   *  (cumsum/cumprod). `cummax`/`cummin` set this `false`: numbl's
+   *  complex cummax is a quirky component-wise max that isn't worth
+   *  replicating — complex input declines to the interpreter. */
+  supportsComplex?: boolean;
 }
 
 /** Default axis pick on a concrete shape: first dim > 1, else 1.
@@ -164,6 +172,12 @@ function scanExactComplex(
   let after = 1;
   for (let i = dimIdx + 1; i < shape.length; i++) after *= shape[i];
   const initIm = 0;
+  const stepComplex = spec.stepComplex;
+  if (stepComplex === undefined) {
+    throw new Error(
+      `internal: ${spec.name} reached complex scan without stepComplex`
+    );
+  }
   for (let outer = 0; outer < after; outer++) {
     const slabBase = outer * before * axis;
     for (let inner = 0; inner < before; inner++) {
@@ -171,7 +185,7 @@ function scanExactComplex(
       let accIm = initIm;
       for (let k = 0; k < axis; k++) {
         const idx = slabBase + inner + k * before;
-        const next = spec.stepComplex(accRe, accIm, re[idx], im[idx]);
+        const next = stepComplex(accRe, accIm, re[idx], im[idx]);
         accRe = next[0];
         accIm = next[1];
         outRe[idx] = accRe;
@@ -244,6 +258,14 @@ export function defineCumulative(spec: CumulativeSpec): Builtin {
       if (inputType.elem !== "double" && inputType.elem !== "logical") {
         throw new TypeError(
           `'${spec.name}' arg must be double or logical (got ${inputType.elem})`
+        );
+      }
+      if (
+        inputType.isComplex &&
+        (spec.supportsComplex === false || spec.stepComplex === undefined)
+      ) {
+        throw new UnsupportedConstruct(
+          `'${spec.name}' on complex input is not JIT-compiled`
         );
       }
       // Validate dim arg shape; the value is used by codegen/call.
