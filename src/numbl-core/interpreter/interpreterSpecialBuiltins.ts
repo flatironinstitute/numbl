@@ -126,8 +126,7 @@ register("str2num", (ctx, args) => {
   // value: eval's returnValue is unreliable for a bare-literal result (e.g.
   // `[42]` yields 0), whereas variable propagation is exact.
   const tmp = "__numbl_str2num_result__";
-  const had = ctx.env.has(tmp);
-  const saved = had ? ctx.env.get(tmp) : undefined;
+  const saved = ctx.env.get(tmp);
   try {
     ctx.evalInLocalScope(`${tmp} = [${s}];`);
     let result = ctx.env.get(tmp);
@@ -145,7 +144,8 @@ register("str2num", (ctx, args) => {
   } catch {
     return empty();
   } finally {
-    if (had) ctx.env.set(tmp, saved as RuntimeValue);
+    // Restore any pre-existing binding; otherwise remove the temp.
+    if (saved !== undefined) ctx.env.set(tmp, saved);
     else ctx.env.delete(tmp);
   }
 });
