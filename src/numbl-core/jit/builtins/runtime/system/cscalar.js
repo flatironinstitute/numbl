@@ -165,6 +165,26 @@ export function mtoc2_catan(z) {
   const l = clog(q);
   return { re: -l.im / 2, im: l.re / 2 };
 }
+// Hyperbolic sinh/cosh/tanh — byte-for-byte with the interpreter's
+// complex formulas (interpreter/builtins/math.ts). Real-valued input
+// (im === 0) falls out cleanly: cos(0)=1, sin(0)=0, so the imaginary
+// lane is exactly 0.
+export function mtoc2_csinh(z) {
+  return {
+    re: Math.sinh(z.re) * Math.cos(z.im),
+    im: Math.cosh(z.re) * Math.sin(z.im),
+  };
+}
+export function mtoc2_ccosh(z) {
+  return {
+    re: Math.cosh(z.re) * Math.cos(z.im),
+    im: Math.sinh(z.re) * Math.sin(z.im),
+  };
+}
+export function mtoc2_ctanh(z) {
+  const denom = Math.cosh(2 * z.re) + Math.cos(2 * z.im);
+  return { re: Math.sinh(2 * z.re) / denom, im: Math.sin(2 * z.im) / denom };
+}
 export function mtoc2_cfloor(z) {
   return { re: Math.floor(z.re), im: Math.floor(z.im) };
 }

@@ -80,6 +80,28 @@ export function cTan(z: C): C {
   return cdiv(cSin(z), cCos(z));
 }
 
+export function cSinh(z: C): C {
+  return {
+    re: Math.sinh(z.re) * Math.cos(z.im),
+    im: Math.cosh(z.re) * Math.sin(z.im),
+  };
+}
+
+export function cCosh(z: C): C {
+  return {
+    re: Math.cosh(z.re) * Math.cos(z.im),
+    im: Math.sinh(z.re) * Math.sin(z.im),
+  };
+}
+
+export function cTanh(z: C): C {
+  // Double-angle form, matching `mtoc2_ctanh` (cscalar.js) and the
+  // interpreter — avoids overflow that sinh(z)/cosh(z) would hit for
+  // large real parts.
+  const denom = Math.cosh(2 * z.re) + Math.cos(2 * z.im);
+  return { re: Math.sinh(2 * z.re) / denom, im: Math.sin(2 * z.im) / denom };
+}
+
 export function cAtan(z: C): C {
   // atan(z) = (i/2) * log((1 - i*z) / (1 + i*z))
   const iz: C = { re: -z.im, im: z.re };

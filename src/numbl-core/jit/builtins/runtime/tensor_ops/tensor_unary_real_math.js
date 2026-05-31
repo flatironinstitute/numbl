@@ -26,6 +26,15 @@ export function mtoc2_tensor_tan(a) {
 export function mtoc2_tensor_atan(a) {
   return unary_kernel(a, Math.atan);
 }
+export function mtoc2_tensor_sinh(a) {
+  return unary_kernel(a, Math.sinh);
+}
+export function mtoc2_tensor_cosh(a) {
+  return unary_kernel(a, Math.cosh);
+}
+export function mtoc2_tensor_tanh(a) {
+  return unary_kernel(a, Math.tanh);
+}
 export function mtoc2_tensor_exp(a) {
   return unary_kernel(a, Math.exp);
 }

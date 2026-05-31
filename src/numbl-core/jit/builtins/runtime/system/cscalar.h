@@ -93,6 +93,12 @@ static inline double _Complex mtoc2_catan(double _Complex z) {
   double _Complex l = clog(mtoc2_cmake(creal(q), cimag(q) + 0.0));
   return mtoc2_cmake(-cimag(l) / 2.0, creal(l) / 2.0);
 }
+/* Hyperbolic sinh/cosh/tanh are entire functions (no branch cuts), so
+ * C99's csinh/ccosh/ctanh agree with the JS componentwise formulas in
+ * `cscalar.js` to within floating-point ULPs everywhere. */
+static inline double _Complex mtoc2_csinh(double _Complex z) { return csinh(z); }
+static inline double _Complex mtoc2_ccosh(double _Complex z) { return ccosh(z); }
+static inline double _Complex mtoc2_ctanh(double _Complex z) { return ctanh(z); }
 static inline double _Complex mtoc2_cfloor(double _Complex z) {
   return floor(creal(z)) + floor(cimag(z)) * I;
 }

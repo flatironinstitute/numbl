@@ -60,6 +60,9 @@ import { cos } from "./defs/math/cos.js";
 import { sin } from "./defs/math/sin.js";
 import { tan } from "./defs/math/tan.js";
 import { atan } from "./defs/math/atan.js";
+import { sinh } from "./defs/math/sinh.js";
+import { cosh } from "./defs/math/cosh.js";
+import { tanh } from "./defs/math/tanh.js";
 import { exp } from "./defs/math/exp.js";
 import { abs } from "./defs/math/abs.js";
 import { signBuiltin } from "./defs/math/sign.js";
@@ -183,6 +186,9 @@ for (const b of [
   sin,
   tan,
   atan,
+  sinh,
+  cosh,
+  tanh,
   exp,
   abs,
   signBuiltin,

@@ -15,6 +15,9 @@ import {
   mtoc2_ccos,
   mtoc2_ctan,
   mtoc2_catan,
+  mtoc2_csinh,
+  mtoc2_ccosh,
+  mtoc2_ctanh,
   mtoc2_cfloor,
   mtoc2_cceil,
   mtoc2_cround,
@@ -63,6 +66,15 @@ export function mtoc2_tensor_tan_complex(a) {
 }
 export function mtoc2_tensor_atan_complex(a) {
   return cUnary(a, mtoc2_catan);
+}
+export function mtoc2_tensor_sinh_complex(a) {
+  return cUnary(a, mtoc2_csinh);
+}
+export function mtoc2_tensor_cosh_complex(a) {
+  return cUnary(a, mtoc2_ccosh);
+}
+export function mtoc2_tensor_tanh_complex(a) {
+  return cUnary(a, mtoc2_ctanh);
 }
 export function mtoc2_tensor_floor_complex(a) {
   return cUnary(a, mtoc2_cfloor);
