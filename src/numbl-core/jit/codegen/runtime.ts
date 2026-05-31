@@ -724,6 +724,15 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
       "mtoc2_tensor_alloc_nd",
     ]),
   ],
+  // `var` / `std` two-pass reductions (mean then sum-of-squares).
+  [
+    "mtoc2_tensor_var",
+    loadSnippet("tensor_var.h", [
+      "mtoc2_tensor_t",
+      "mtoc2_alloc",
+      "mtoc2_tensor_alloc_nd",
+    ]),
+  ],
 
   // ── length / numel (tensor → scalar shape queries) ───────────────
   ["mtoc2_length", loadSnippet("length.h", ["mtoc2_tensor_t"])],

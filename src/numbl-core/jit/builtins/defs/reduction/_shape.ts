@@ -101,10 +101,10 @@ function isEmptyBracketLiteral(t: Type): boolean {
 
 // ── Axis classification ────────────────────────────────────────────────
 
-interface AxisAll {
+export interface AxisAll {
   kind: "all";
 }
-interface AxisFixed {
+export interface AxisFixed {
   kind: "fixed";
   /** 1-based axis number, statically known. */
   dim: number;
@@ -158,7 +158,10 @@ function classifyDimArg(name: string, dimType: Type | undefined): AxisChoice {
  *  scalar input), `fixed(k)` for a clearly chosen axis, or throws
  *  for the genuinely ambiguous case (`unknown` leading dim followed
  *  by at least one known-non-1 or another `unknown`). */
-function chooseDefaultAxis(name: string, t: NumericType): AxisAll | AxisFixed {
+export function chooseDefaultAxis(
+  name: string,
+  t: NumericType
+): AxisAll | AxisFixed {
   // Concrete shape: numbl's `firstReduceDim` rule
   // (helpers/reduction-helpers.ts) — count dims > 1; collapse to
   // scalar when at most one dim is > 1 (matches `sum([1 2 3]) = 6`
@@ -217,7 +220,7 @@ function squeezeTrailing<T>(arr: T[], isOne: (x: T) => boolean): T[] {
 /** Mirror of numbl's `shapeAfterReduction(shape, dim)` on a concrete
  *  shape. Returns either `{ scalar: true }` (every axis is 1 after
  *  the collapse) or `{ scalar: false, shape: [...] }`. */
-function reduceConcreteShape(
+export function reduceConcreteShape(
   shape: number[],
   dim: number
 ): { scalar: true } | { scalar: false; shape: number[] } {
@@ -235,7 +238,7 @@ function reduceConcreteShape(
 /** Same as `reduceConcreteShape` but for the lattice form. Result
  *  is either `scalar` (every dim collapses to `one`) or a new dims
  *  array, post-squeeze. */
-function reduceLatticeDims(
+export function reduceLatticeDims(
   dims: DimInfo[],
   dim: number
 ): { scalar: true } | { scalar: false; dims: DimInfo[] } {

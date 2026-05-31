@@ -39,6 +39,8 @@ import { numel } from "./defs/reduction/numel.js";
 import { sum } from "./defs/reduction/sum.js";
 import { prod } from "./defs/reduction/prod.js";
 import { mean } from "./defs/reduction/mean.js";
+import { varBuiltin } from "./defs/reduction/var.js";
+import { stdBuiltin } from "./defs/reduction/std.js";
 import { min } from "./defs/reduction/min.js";
 import { max } from "./defs/reduction/max.js";
 import { any } from "./defs/reduction/any.js";
@@ -162,6 +164,8 @@ for (const b of [
   sum,
   prod,
   mean,
+  varBuiltin,
+  stdBuiltin,
   min,
   max,
   any,
