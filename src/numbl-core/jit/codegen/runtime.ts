@@ -733,6 +733,15 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
       "mtoc2_tensor_alloc_nd",
     ]),
   ],
+  // `diff(A)` / `diff(A, 1, dim)` — first-order forward difference.
+  [
+    "mtoc2_tensor_diff",
+    loadSnippet("tensor_diff.h", [
+      "mtoc2_tensor_t",
+      "mtoc2_alloc",
+      "mtoc2_tensor_alloc_nd",
+    ]),
+  ],
 
   // ── length / numel (tensor → scalar shape queries) ───────────────
   ["mtoc2_length", loadSnippet("length.h", ["mtoc2_tensor_t"])],

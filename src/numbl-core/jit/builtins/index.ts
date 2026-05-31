@@ -117,6 +117,7 @@ import { cumsum } from "./defs/reduction/cumsum.js";
 import { cumprod } from "./defs/reduction/cumprod.js";
 import { cummax } from "./defs/reduction/cummax.js";
 import { cummin } from "./defs/reduction/cummin.js";
+import { diff } from "./defs/reduction/diff.js";
 import { repmat } from "./defs/shape/repmat.js";
 import { diag } from "./defs/shape/diag.js";
 import { triu } from "./defs/shape/triu.js";
@@ -264,6 +265,7 @@ for (const b of [
   cumprod,
   cummax,
   cummin,
+  diff,
   repmat,
   diag,
   triu,
