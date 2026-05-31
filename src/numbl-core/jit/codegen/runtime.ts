@@ -766,6 +766,12 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
     "mtoc2_tensor_linspace",
     loadSnippet("tensor_linspace.h", ["mtoc2_tensor_t", "mtoc2_tensor_alloc"]),
   ],
+  // `logspace(a, b, n)` — 1×n row of logarithmically-spaced values
+  // from 10^a to 10^b.
+  [
+    "mtoc2_tensor_logspace",
+    loadSnippet("tensor_logspace.h", ["mtoc2_tensor_t", "mtoc2_tensor_alloc"]),
+  ],
   // Logical-mask indexing — `a(mask)` linear read/write and per-axis
   // `M(:, mask)` reads. The helper scans the mask column-major and
   // writes 0-based source indices into a caller-allocated buffer;

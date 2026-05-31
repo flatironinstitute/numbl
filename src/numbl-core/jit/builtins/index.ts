@@ -80,6 +80,7 @@ import { atan2 } from "./defs/math/atan2.js";
 import { hypot } from "./defs/math/hypot.js";
 import { besselh } from "./defs/math/besselh.js";
 import { linspace } from "./defs/math/linspace.js";
+import { logspace } from "./defs/math/logspace.js";
 import { real } from "./defs/math/real.js";
 import { imag } from "./defs/math/imag.js";
 import { conj } from "./defs/math/conj.js";
@@ -90,6 +91,7 @@ import { oror } from "./defs/logical/oror.js";
 import { andand } from "./defs/logical/andand.js";
 import { orBuiltin } from "./defs/logical/or.js";
 import { andBuiltin } from "./defs/logical/and.js";
+import { xorBuiltin } from "./defs/logical/xor.js";
 import { isfield } from "./defs/logical/isfield.js";
 import { isscalar } from "./defs/logical/isscalar.js";
 import { iscell } from "./defs/logical/iscell.js";
@@ -201,6 +203,7 @@ for (const b of [
   hypot,
   besselh,
   linspace,
+  logspace,
   real,
   imag,
   conj,
@@ -216,6 +219,7 @@ for (const b of [
   andand,
   orBuiltin,
   andBuiltin,
+  xorBuiltin,
   isfield,
   isscalar,
   iscell,
@@ -331,16 +335,25 @@ export function binaryOpBuiltin(op: BinaryOperation, span: Span): string {
       return "oror";
     case BinaryOperation.AndAnd:
       return "andand";
+    // Eager elementwise `|` / `&`. The `or` / `and` builtins are
+    // scalar-only (see `_shortcircuit.ts`); for scalar operands `a | b`
+    // and `a & b` are identical to `||` / `&&` (both operands are
+    // already evaluated by the JIT before the call, so the C-level
+    // short-circuit is unobservable). Tensor operands are rejected at
+    // the builtin's transfer and fall back to the interpreter.
+    case BinaryOperation.BitOr:
+      return "or";
+    case BinaryOperation.BitAnd:
+      return "and";
     case BinaryOperation.Pow:
       return "mpower";
     case BinaryOperation.ElemPow:
       return "power";
     default:
-      // The remaining BinaryOperation cases (Pow / ElemPow / LeftDiv /
-      // ElemLeftDiv / OrOr / AndAnd / BitOr / BitAnd) are valid numbl
-      // operators that mtoc2 doesn't yet support. Surface as a span-
-      // attributed UnsupportedConstruct so the CLI prints the source
-      // location of the offending operator instead of an internal
+      // The remaining BinaryOperation cases (LeftDiv / ElemLeftDiv) are
+      // valid numbl operators that mtoc2 doesn't yet support. Surface
+      // as a span-attributed UnsupportedConstruct so the CLI prints the
+      // source location of the offending operator instead of an internal
       // "unmapped op" error.
       throw new UnsupportedConstruct(
         `binary operator '${binaryOpSurface(op)}' is not yet supported`,

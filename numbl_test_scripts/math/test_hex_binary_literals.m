@@ -2,6 +2,8 @@
 % numbl's number scanner had no 0x/0b handling, so `0x1F` lexed as Integer(0)
 % followed by Ident("x1F") -- producing 0 plus an "undefined variable" error.
 
+%!numbl:assert_jit c
+
 assert(0x1F == 31, '0x1F should be 31');
 assert(0xFF == 255, '0xFF should be 255');
 assert(0x0 == 0, '0x0 should be 0');

@@ -4,6 +4,8 @@
 % operand's shape -- giving wrong results for equal-count/different-shape
 % operands and crashing on broadcast-compatible/different-count operands.
 
+%!numbl:assert_jit c
+
 % mod / rem: 1x3 vs 3x1 -> 3x3 broadcast
 assert(isequal(mod([1 2 3], [10; 20; 30]), [1 2 3; 1 2 3; 1 2 3]), 'mod broadcast');
 assert(isequal(rem([1 2 3], [10; 20; 30]), [1 2 3; 1 2 3; 1 2 3]), 'rem broadcast');

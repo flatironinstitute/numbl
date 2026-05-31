@@ -1,5 +1,7 @@
 % Test logical operators
 
+%!numbl:assert_jit c
+
 % Basic logical
 assert(true & true);
 assert(~(true & false));

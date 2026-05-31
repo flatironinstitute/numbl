@@ -2,6 +2,8 @@
 % transpose, not as the start of a string. numbl's isValueToken set listed
 % True/False but omitted End, so `A(end')` raised "Invalid token: '''".
 
+%!numbl:assert_jit c
+
 A = [10 20 30];
 assert(isequal(A(end'), 30), 'A(end'') should be A(end) = 30');
 

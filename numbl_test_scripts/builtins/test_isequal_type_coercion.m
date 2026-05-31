@@ -1,6 +1,8 @@
 % Test isequal with mixed types (logical/double, scalar/tensor)
 % MATLAB's isequal compares values, not internal type representations
 
+%!numbl:assert_jit c
+
 % logical vs double
 assert(isequal(1, true), 'isequal(1, true)');
 assert(isequal(true, 1), 'isequal(true, 1)');
