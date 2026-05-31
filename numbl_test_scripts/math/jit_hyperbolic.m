@@ -53,4 +53,13 @@ w = sinh(1.0 + 0.5i);
 assert(abs(real(w) - sinh(1.0) * cos(0.5)) < 1e-12);
 assert(abs(imag(w) - cosh(1.0) * sin(0.5)) < 1e-12);
 
+% asinh (real-only): inverse of sinh, odd, entire on the reals
+assert(abs(asinh(0)) < 1e-12);
+assert(abs(asinh(1) - 0.881373587019543) < 1e-12);
+assert(asinh(-3) == -asinh(3));
+assert(abs(sinh(asinh(2.5)) - 2.5) < 1e-12);
+a = asinh([0 1 2 3]);
+assert(abs(a(2) - asinh(1)) < 1e-12);
+assert(max(abs(sinh(a) - [0 1 2 3])) < 1e-12);
+
 disp('SUCCESS');

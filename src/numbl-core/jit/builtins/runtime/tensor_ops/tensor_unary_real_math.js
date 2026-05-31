@@ -35,6 +35,9 @@ export function mtoc2_tensor_cosh(a) {
 export function mtoc2_tensor_tanh(a) {
   return unary_kernel(a, Math.tanh);
 }
+export function mtoc2_tensor_asinh(a) {
+  return unary_kernel(a, Math.asinh);
+}
 export function mtoc2_tensor_exp(a) {
   return unary_kernel(a, Math.exp);
 }

@@ -63,6 +63,7 @@ import { atan } from "./defs/math/atan.js";
 import { sinh } from "./defs/math/sinh.js";
 import { cosh } from "./defs/math/cosh.js";
 import { tanh } from "./defs/math/tanh.js";
+import { asinh } from "./defs/math/asinh.js";
 import { exp } from "./defs/math/exp.js";
 import { abs } from "./defs/math/abs.js";
 import { signBuiltin } from "./defs/math/sign.js";
@@ -189,6 +190,7 @@ for (const b of [
   sinh,
   cosh,
   tanh,
+  asinh,
   exp,
   abs,
   signBuiltin,
