@@ -67,6 +67,7 @@ typedef struct {
   const mtoc2_tensor_t *cur_t;
   long t_idx;
   long t_count;
+  long consumed;           /* monotonic count of slots handed out so far */
 } mtoc2__arg_iter_t;
 
 typedef void (*mtoc2__writer_fn)(void *ctx, const char *bytes, long len);
@@ -85,6 +86,7 @@ static int mtoc2__next_slot(mtoc2__arg_iter_t *it, mtoc2__slot_t *out) {
       long i = it->t_idx++;
       out->kind = MTOC2_FA_DOUBLE;
       out->d = t->real[i];
+      it->consumed++;
       return 1;
     }
     if (it->arg_idx >= it->nargs) return 0;
@@ -93,14 +95,17 @@ static int mtoc2__next_slot(mtoc2__arg_iter_t *it, mtoc2__slot_t *out) {
       case MTOC2_FA_DOUBLE:
         out->kind = MTOC2_FA_DOUBLE;
         out->d = a->u.d;
+        it->consumed++;
         return 1;
       case MTOC2_FA_TEXT:
         out->kind = MTOC2_FA_TEXT;
         out->t = a->u.t;
+        it->consumed++;
         return 1;
       case MTOC2_FA_CHAR:
         out->kind = MTOC2_FA_CHAR;
         out->t = a->u.t;
+        it->consumed++;
         return 1;
       case MTOC2_FA_TENSOR: {
         const mtoc2_tensor_t *t = a->u.tensor;
@@ -127,11 +132,11 @@ static int mtoc2__iter_has_more(const mtoc2__arg_iter_t *it) {
 }
 
 /* Number of slots consumed so far — used to detect a no-progress
- * pass over a format with no specs. */
+ * pass over a format with no specs. A true monotonic count (not
+ * reconstructed from arg_idx/t_idx, which undercounts once a prior
+ * tensor arg has expanded into multiple slots). */
 static long mtoc2__iter_consumed(const mtoc2__arg_iter_t *it) {
-  long n = (long)it->arg_idx;
-  if (it->in_tensor) n = (long)(it->arg_idx - 1) + (long)it->t_idx;
-  return n;
+  return it->consumed;
 }
 
 /* Emit a small byte buffer through the writer. */
@@ -637,6 +642,7 @@ static void mtoc2__format_walk(mtoc2__writer_fn writer, void *ctx,
   it.cur_t = (const mtoc2_tensor_t *)0;
   it.t_idx = 0;
   it.t_count = 0;
+  it.consumed = 0;
 
   long fmt_len = fmt.len > 0 ? fmt.len : 0;
   if (fmt_len == 0 || !fmt.data) return;
