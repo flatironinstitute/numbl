@@ -100,6 +100,7 @@ import {
 import {
   pcolorCall as _pcolorCall,
   contourCall as _contourCall,
+  quiver3Call as _quiver3Call,
   fplotCall as _fplotCall,
   fplot3Call as _fplot3Call,
   streamlineCall as _streamlineCall,
@@ -439,6 +440,22 @@ export class Runtime {
       };
     this.builtins["contour"] = contourOverride(false);
     this.builtins["contourf"] = contourOverride(true);
+    // `quiver3` returns a Quiver handle when an output is requested. The
+    // handle wraps the pushed trace object directly, so later property
+    // assignments (e.g. `q.ShowArrowHead = 'off'`) update the rendered plot.
+    this.builtins["quiver3"] = (_nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      _quiver3Call(this.plotInstructions, margs);
+      if (_nargout < 1) return undefined;
+      const last = this.plotInstructions[this.plotInstructions.length - 1];
+      if (last && last.type === "quiver3") {
+        return RTV.graphicsHandle(
+          last.trace as unknown as Record<string, unknown>,
+          "quiver3"
+        );
+      }
+      return RTV.dummyHandle();
+    };
     // `fplot` / `fplot3` evaluate a user function-handle and so need
     // the full Runtime context — kept as explicit registrations.
     this.builtins["fplot"] = (_nargout: number, args: unknown[]) => {

@@ -53,6 +53,7 @@ import {
   parsePiechartArgs,
   parseHeatmapArgs,
   parseQuiverArgs,
+  parseQuiver3Args,
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
@@ -669,6 +670,14 @@ export function quiverCall(
   if (traces.length > 0) {
     plotInstructions.push({ type: "quiver", traces });
   }
+}
+
+export function quiver3Call(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parseQuiver3Args(args);
+  plotInstructions.push({ type: "quiver3", trace });
 }
 
 export function legendCall(

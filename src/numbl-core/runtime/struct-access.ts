@@ -7,6 +7,9 @@ import {
   isRuntimeClassInstance,
   isRuntimeGraphicsHandle,
   isRuntimeNumber,
+  isRuntimeChar,
+  isRuntimeString,
+  isRuntimeTensor,
   isRuntimeStruct,
   isRuntimeStructArray,
   kstr,
@@ -29,6 +32,70 @@ function handlePropToRuntime(v: unknown): RuntimeValue {
     return RTV.tensor(data, [1, v.length]);
   }
   return v as RuntimeValue;
+}
+
+/** Default values for documented handle properties not stored on the trace
+ *  (e.g. `q.LineWidth` before any width is set), keyed by trace type and the
+ *  MATLAB (PascalCase) property name. */
+const HANDLE_DEFAULTS: Record<string, Record<string, unknown>> = {
+  quiver3: {
+    LineWidth: 0.5,
+    LineStyle: "-",
+    ShowArrowHead: true,
+    AutoScale: true,
+    AutoScaleFactor: 0.9,
+    Marker: "none",
+    Color: [0, 0.447, 0.741],
+  },
+};
+
+/** Resolve a graphics-handle property name to the key actually stored on the
+ *  trace. MATLAB uses PascalCase property names (`LineWidth`); numbl traces
+ *  store camelCase fields (`lineWidth`). Returns the matching key, or null. */
+function resolveHandleKey(
+  trace: Record<string, unknown>,
+  field: string
+): string | null {
+  if (field in trace) return field;
+  const camel = field.charAt(0).toLowerCase() + field.slice(1);
+  if (camel in trace) return camel;
+  // MATLAB data properties (XData, UData, …) map to short trace fields.
+  if (field.endsWith("Data")) {
+    const base = field.slice(0, -4);
+    const short = base.charAt(0).toLowerCase() + base.slice(1);
+    if (short in trace) return short;
+  }
+  return null;
+}
+
+/** Coerce a runtime value to the JS value stored on a graphics-handle trace,
+ *  matching the existing field's type. Booleans accept MATLAB on/off
+ *  semantics ('off'/'false'/'0' → false). */
+function runtimeToHandleValue(value: RuntimeValue, current: unknown): unknown {
+  if (typeof current === "boolean") {
+    if (typeof value === "boolean") return value;
+    if (typeof value === "number") return value !== 0;
+    if (isRuntimeString(value) || isRuntimeChar(value)) {
+      const s = (isRuntimeChar(value) ? value.value : value).toLowerCase();
+      return !(s === "off" || s === "false" || s === "0");
+    }
+    return true;
+  }
+  if (typeof current === "string") {
+    return isRuntimeChar(value)
+      ? value.value
+      : isRuntimeString(value)
+        ? value
+        : String(value as unknown);
+  }
+  if (typeof current === "number" || current === undefined) {
+    if (typeof value === "number") return value;
+    if (isRuntimeNumber(value)) return value;
+  }
+  if (Array.isArray(current) && isRuntimeTensor(value)) {
+    return Array.from(value.data);
+  }
+  return value;
 }
 
 export function getRTValueField(
@@ -58,7 +125,10 @@ export function getRTValueField(
     return horzcat(...values);
   }
   if (isRuntimeGraphicsHandle(base)) {
-    if (field in base._trace) return handlePropToRuntime(base._trace[field]);
+    const key = resolveHandleKey(base._trace, field);
+    if (key !== null) return handlePropToRuntime(base._trace[key]);
+    const dflt = HANDLE_DEFAULTS[base._traceType]?.[field];
+    if (dflt !== undefined) return handlePropToRuntime(dflt);
     throw new RuntimeError(
       `No property '${field}' on ${base._traceType} handle`
     );
@@ -120,6 +190,18 @@ export function setRTValueField(
     throw new RuntimeError(
       `Cannot assign field '${field}' on a non-scalar struct array without indexing`
     );
+  }
+  if (isRuntimeGraphicsHandle(base)) {
+    // Mutate the trace in place. Because the handle wraps the same trace
+    // object stored in the plot instruction, the change is reflected when
+    // the figure renders (e.g. `q.ShowArrowHead = 'off'`).
+    const key =
+      resolveHandleKey(base._trace, field) ??
+      field.charAt(0).toLowerCase() + field.slice(1);
+    const current =
+      base._trace[key] ?? HANDLE_DEFAULTS[base._traceType]?.[field];
+    base._trace[key] = runtimeToHandleValue(value, current);
+    return base;
   }
   // Auto-create struct from num 0 or undefined
   if (isRuntimeNumber(base) && base === 0) {

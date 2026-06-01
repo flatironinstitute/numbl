@@ -378,12 +378,15 @@ defineBuiltin({
         if (isRuntimeClassInstanceArray(v)) return mkChar(v.className);
         if (isRuntimeFunction(v)) return mkChar("function_handle");
         if (isRuntimeDummyHandle(v)) return mkChar("dummy_handle");
-        if (isRuntimeGraphicsHandle(v))
+        if (isRuntimeGraphicsHandle(v)) {
+          const handleClass: Record<string, string> = {
+            contour: "matlab.graphics.chart.primitive.Contour",
+            quiver3: "matlab.graphics.chart.primitive.Quiver",
+          };
           return mkChar(
-            v._traceType === "contour"
-              ? "matlab.graphics.chart.primitive.Contour"
-              : "matlab.graphics.primitive.Surface"
+            handleClass[v._traceType] ?? "matlab.graphics.primitive.Surface"
           );
+        }
         return mkChar("unknown");
       },
     },

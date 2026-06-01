@@ -4,7 +4,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
-import type { SurfTrace, Plot3Trace, Bar3Trace } from "./types.js";
+import type {
+  SurfTrace,
+  Plot3Trace,
+  Bar3Trace,
+  Quiver3Trace,
+} from "./types.js";
 import { colormapLookup } from "./surfColormap.js";
 
 // Color order for plot3 traces
@@ -23,6 +28,7 @@ interface SurfViewProps {
   plot3Traces?: Plot3Trace[];
   bar3Traces?: Bar3Trace[];
   bar3hTraces?: Bar3Trace[];
+  quiver3Traces?: Quiver3Trace[];
   shading?: "faceted" | "flat" | "interp";
   colorbar?: boolean;
   colorbarLocation?: string;
@@ -34,6 +40,7 @@ export function SurfView({
   plot3Traces = [],
   bar3Traces = [],
   bar3hTraces = [],
+  quiver3Traces = [],
   shading,
   colorbar,
   colorbarLocation,
@@ -134,7 +141,8 @@ export function SurfView({
       surfTraces.length === 0 &&
       plot3Traces.length === 0 &&
       bar3Traces.length === 0 &&
-      bar3hTraces.length === 0
+      bar3hTraces.length === 0 &&
+      quiver3Traces.length === 0
     )
       return;
 
@@ -190,6 +198,27 @@ export function SurfView({
       updateRange(trace.x, xMinRef, xMaxRef);
       // Bars extend to zero on x-axis
       if (0 < xMinRef.v) xMinRef.v = 0;
+    }
+    for (const trace of quiver3Traces) {
+      // Include both the arrow tails and the arrow heads.
+      updateRange(trace.x, xMinRef, xMaxRef);
+      updateRange(trace.y, yMinRef, yMaxRef);
+      updateRange(trace.z, zMinRef, zMaxRef);
+      updateRange(
+        trace.x.map((v, i) => v + (trace.u[i] ?? 0)),
+        xMinRef,
+        xMaxRef
+      );
+      updateRange(
+        trace.y.map((v, i) => v + (trace.v[i] ?? 0)),
+        yMinRef,
+        yMaxRef
+      );
+      updateRange(
+        trace.z.map((v, i) => v + (trace.w[i] ?? 0)),
+        zMinRef,
+        zMaxRef
+      );
     }
 
     xMin = xMinRef.v;
@@ -507,6 +536,88 @@ export function SurfView({
       }
     }
 
+    // ── Render quiver3 traces (3-D arrows) ───────────────────────────────
+    for (const trace of quiver3Traces) {
+      const { x, y, z, u, v, w } = trace;
+      const color = trace.color ?? [0, 0.447, 0.741];
+      const threeColor = new THREE.Color(color[0], color[1], color[2]);
+      const lw = trace.lineWidth ?? 0.5;
+      // data (x,y,z) → three (X, Z, Y), matching the surf/plot3 mapping.
+      const toThree = (dx: number, dy: number, dz: number) =>
+        new THREE.Vector3(norm(dx, cxData), norm(dz, czData), norm(dy, cyData));
+      const up = new THREE.Vector3(0, 1, 0);
+      const segs: number[] = []; // pairs of endpoints for LineSegments
+
+      for (let i = 0; i < x.length; i++) {
+        if (
+          !isFinite(x[i]) ||
+          !isFinite(y[i]) ||
+          !isFinite(z[i]) ||
+          !isFinite(u[i]) ||
+          !isFinite(v[i]) ||
+          !isFinite(w[i])
+        )
+          continue;
+        const tail = toThree(x[i], y[i], z[i]);
+        const head = toThree(x[i] + u[i], y[i] + v[i], z[i] + w[i]);
+        // Shaft
+        segs.push(tail.x, tail.y, tail.z, head.x, head.y, head.z);
+
+        if (trace.showArrowHead) {
+          const dir = new THREE.Vector3().subVectors(head, tail);
+          const len = dir.length();
+          if (len > 1e-9) {
+            dir.multiplyScalar(1 / len);
+            let perp = new THREE.Vector3().crossVectors(dir, up);
+            if (perp.lengthSq() < 1e-12)
+              perp = new THREE.Vector3().crossVectors(
+                dir,
+                new THREE.Vector3(1, 0, 0)
+              );
+            perp.normalize();
+            const barb = Math.min(0.3 * len, len);
+            const back = dir.clone().multiplyScalar(-1);
+            const cosA = Math.cos((20 * Math.PI) / 180);
+            const sinA = Math.sin((20 * Math.PI) / 180);
+            const b1 = head
+              .clone()
+              .addScaledVector(back, barb * cosA)
+              .addScaledVector(perp, barb * sinA);
+            const b2 = head
+              .clone()
+              .addScaledVector(back, barb * cosA)
+              .addScaledVector(perp, -barb * sinA);
+            segs.push(head.x, head.y, head.z, b1.x, b1.y, b1.z);
+            segs.push(head.x, head.y, head.z, b2.x, b2.y, b2.z);
+          }
+        }
+      }
+
+      if (segs.length > 0) {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.Float32BufferAttribute(segs, 3));
+        const mat = new THREE.LineBasicMaterial({
+          color: threeColor,
+          linewidth: lw,
+        });
+        scene.add(new THREE.LineSegments(geo, mat));
+      }
+
+      // Markers at the arrow bases (LineSpec marker or 'filled').
+      if (trace.marker && trace.marker !== "none") {
+        const markerSize = 6 / 600;
+        const markerGeo = new THREE.SphereGeometry(markerSize, 8, 8);
+        const markerMat = new THREE.MeshBasicMaterial({ color: threeColor });
+        for (let i = 0; i < x.length; i++) {
+          if (!isFinite(x[i]) || !isFinite(y[i]) || !isFinite(z[i])) continue;
+          const p = toThree(x[i], y[i], z[i]);
+          const mesh = new THREE.Mesh(markerGeo, markerMat);
+          mesh.position.set(p.x, p.y, p.z);
+          scene.add(mesh);
+        }
+      }
+    }
+
     // ── Render bar3 traces (vertical 3D bars) ────────────────────────────
     for (const trace of bar3Traces) {
       const halfW = (trace.width / 2) * 0.9; // slight shrink to show gaps
@@ -611,7 +722,14 @@ export function SurfView({
       cyData,
       czData
     );
-  }, [surfTraces, plot3Traces, bar3Traces, bar3hTraces, shading]);
+  }, [
+    surfTraces,
+    plot3Traces,
+    bar3Traces,
+    bar3hTraces,
+    quiver3Traces,
+    shading,
+  ]);
 
   // Compute color range for the colorbar from surf traces (uses C if present,
   // otherwise Z). Falls back to bar3 z values when no surf traces are present.

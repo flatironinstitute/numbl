@@ -230,6 +230,30 @@ export interface QuiverTrace {
   markerFilled?: boolean;
 }
 
+// ── Quiver3Trace type ───────────────────────────────────────────────────
+
+export interface Quiver3Trace {
+  /** Tail coordinates (flat arrays) */
+  x: number[];
+  y: number[];
+  z: number[];
+  /** Directional components, already scaled to data units */
+  u: number[];
+  v: number[];
+  w: number[];
+  /** Whether to draw arrowheads */
+  showArrowHead: boolean;
+  /** Arrow color as RGB triple [0–1] */
+  color?: [number, number, number];
+  lineStyle?: string;
+  lineWidth?: number;
+  marker?: string;
+  markerFilled?: boolean;
+  /** Whether auto-scaling was applied (for handle queries) */
+  autoScale?: boolean;
+  autoScaleFactor?: number;
+}
+
 // ── HeatmapTrace type ───────────────────────────────────────────────────
 
 export interface HeatmapTrace {
@@ -265,6 +289,7 @@ export type PlotInstruction =
   | { type: "piechart"; trace: PieTrace }
   | { type: "heatmap"; trace: HeatmapTrace }
   | { type: "quiver"; traces: QuiverTrace[] }
+  | { type: "quiver3"; trace: Quiver3Trace }
   | { type: "set_hold"; value: boolean }
   | { type: "set_title"; text: string }
   | { type: "set_xlabel"; text: string }

@@ -69,6 +69,7 @@ import {
   donutchartCall,
   heatmapCall,
   quiverCall,
+  quiver3Call,
   viewCall,
   legendCall,
 } from "./runtimePlot.js";
@@ -196,6 +197,9 @@ export function dispatchPlotBuiltin(
       return true;
     case "quiver":
       quiverCall(instructions, args);
+      return true;
+    case "quiver3":
+      quiver3Call(instructions, args);
       return true;
     case "view":
       viewCall(instructions, args);
@@ -543,6 +547,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "donutchart",
   "heatmap",
   "quiver",
+  "quiver3",
   "view",
   "legend",
   "figure",

@@ -62,6 +62,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "donutchart",
   "heatmap",
   "quiver",
+  "quiver3",
   "streamline",
   "stream2",
   "ishold",

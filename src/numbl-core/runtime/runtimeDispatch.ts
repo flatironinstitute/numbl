@@ -101,6 +101,7 @@ const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
   "donutchart",
   "heatmap",
   "quiver",
+  "quiver3",
 ]);
 
 /**

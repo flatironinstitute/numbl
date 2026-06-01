@@ -140,7 +140,8 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
     (axes.surfTraces && axes.surfTraces.length > 0) ||
     (axes.plot3Traces && axes.plot3Traces.length > 0) ||
     (axes.bar3Traces && axes.bar3Traces.length > 0) ||
-    (axes.bar3hTraces && axes.bar3hTraces.length > 0);
+    (axes.bar3hTraces && axes.bar3hTraces.length > 0) ||
+    (axes.quiver3Traces && axes.quiver3Traces.length > 0);
 
   if (has3D) {
     return (
@@ -149,6 +150,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
         plot3Traces={axes.plot3Traces ?? []}
         bar3Traces={axes.bar3Traces ?? []}
         bar3hTraces={axes.bar3hTraces ?? []}
+        quiver3Traces={axes.quiver3Traces ?? []}
         shading={axes.shading}
         colorbar={axes.colorbar}
         colorbarLocation={axes.colorbarLocation}

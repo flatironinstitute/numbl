@@ -31,6 +31,7 @@ export type {
   PieTrace,
   HeatmapTrace,
   QuiverTrace,
+  Quiver3Trace,
 } from "../../graphics/types.js";
 
 import type {
@@ -47,6 +48,7 @@ import type {
   PieTrace,
   HeatmapTrace,
   QuiverTrace,
+  Quiver3Trace,
 } from "../../graphics/types.js";
 import { allocFloat64Array } from "./alloc.js";
 
@@ -2827,6 +2829,266 @@ function computeQuiverAutoScale(
     if (m > maxMag) maxMag = m;
   }
 
+  if (maxMag === 0) return 1;
+  return (factor * spacing) / maxMag;
+}
+
+/**
+ * Parse quiver3() arguments.
+ *
+ * Supported forms:
+ *   quiver3(Z, U, V, W)
+ *   quiver3(X, Y, Z, U, V, W)
+ *   quiver3(..., scale)         — scale: nonnegative number or 'off'
+ *   quiver3(..., LineSpec)
+ *   quiver3(..., LineSpec, 'filled')
+ *   quiver3(..., Name, Value)   — Color, LineStyle, LineWidth, ShowArrowHead, …
+ */
+export function parseQuiver3Args(args: RuntimeValue[]): Quiver3Trace {
+  if (args.length < 4) throw new Error("quiver3 requires at least 4 arguments");
+
+  let numericCount = 0;
+  for (let i = 0; i < args.length; i++) {
+    if (isNumericArg(args[i])) numericCount++;
+    else break;
+  }
+
+  let pos = 0;
+  let xData: number[];
+  let yData: number[];
+  let zData: number[];
+  let uData: number[];
+  let vData: number[];
+  let wData: number[];
+  let rows: number;
+  let cols: number;
+
+  // arity 4 = quiver3(Z,U,V,W); arity 6 = quiver3(X,Y,Z,U,V,W).
+  // (counts of 5 / 7 carry a trailing positional scale.)
+  const arity: 4 | 6 = numericCount >= 6 ? 6 : 4;
+
+  if (arity === 4) {
+    const zInfo = getMatrixInfo(args[pos++]);
+    rows = zInfo.rows;
+    cols = zInfo.cols;
+    zData = zInfo.data;
+    uData = getMatrixInfo(args[pos++]).data;
+    vData = getMatrixInfo(args[pos++]).data;
+    wData = getMatrixInfo(args[pos++]).data;
+    // Base grid: x along columns, y along rows (1-based). For a vector Z,
+    // x = 1..n and y = 1. For an N-D Z, treat the trailing dimensions as
+    // additional columns so every element gets a base position.
+    const n = zData.length;
+    if (rows === 1 || cols === 1) {
+      xData = new Array(n);
+      yData = new Array(n);
+      for (let i = 0; i < n; i++) {
+        xData[i] = i + 1;
+        yData[i] = 1;
+      }
+    } else {
+      const gen = generateMeshgrid(rows, n / rows);
+      xData = gen.x;
+      yData = gen.y;
+    }
+  } else {
+    const X = args[pos++];
+    const Y = args[pos++];
+    const zInfo = getMatrixInfo(args[pos++]);
+    rows = zInfo.rows;
+    cols = zInfo.cols;
+    zData = zInfo.data;
+    uData = getMatrixInfo(args[pos++]).data;
+    vData = getMatrixInfo(args[pos++]).data;
+    wData = getMatrixInfo(args[pos++]).data;
+    // One arrow per element: when X and Y already have as many elements as
+    // U (full matrices/N-D arrays), use them directly. Only expand when they
+    // are the shorter meshgrid vectors (size [length(Y)] / [length(X)]).
+    const n = uData.length;
+    const xFlat = toNumberArray(X);
+    const yFlat = toNumberArray(Y);
+    if (xFlat.length === n && yFlat.length === n) {
+      xData = xFlat;
+      yData = yFlat;
+    } else {
+      const expanded = expandXY(X, Y, rows, cols);
+      xData = expanded.x;
+      yData = expanded.y;
+    }
+  }
+
+  let autoScale = true;
+  let autoScaleFactor = 0.9; // internal multiplier (≈ reported × 0.9)
+  let reportedASF = 0.9; // MATLAB AutoScaleFactor (default 0.9)
+
+  // Trailing positional numeric scale.
+  if (pos < args.length && isNumericArg(args[pos]) && !isStringArg(args[pos])) {
+    const s = toNumber(args[pos] as RuntimeValue);
+    if (s === 0) {
+      autoScale = false;
+    } else {
+      autoScaleFactor = s * 0.9;
+      reportedASF = s;
+    }
+    pos++;
+  }
+
+  const trace: Quiver3Trace = {
+    x: xData,
+    y: yData,
+    z: zData,
+    u: uData,
+    v: vData,
+    w: wData,
+    showArrowHead: true,
+  };
+
+  // Trailing string args: 'off' (scale), LineSpec, 'filled', or a color name.
+  while (
+    pos < args.length &&
+    isStringArg(args[pos]) &&
+    !isQuiverNameValueKey(args[pos])
+  ) {
+    const s = getStringIfString(args[pos]);
+    if (s === undefined) break;
+    if (s === "off") {
+      autoScale = false;
+      pos++;
+      continue;
+    }
+    if (s === "filled") {
+      trace.markerFilled = true;
+      pos++;
+      continue;
+    }
+    const spec = parseLineSpec(s);
+    if (spec) {
+      if (spec.color) trace.color = COLOR_SHORT[spec.color];
+      if (spec.lineStyle) trace.lineStyle = spec.lineStyle;
+      if (spec.marker) {
+        trace.marker = spec.marker;
+        trace.showArrowHead = false; // LineSpec marker hides arrowheads
+      }
+      pos++;
+      continue;
+    }
+    const c = resolveColor(s);
+    if (c) {
+      trace.color = c;
+      pos++;
+      continue;
+    }
+    break;
+  }
+
+  // Name-Value pairs.
+  while (pos < args.length) {
+    const key = isQuiverNameValueKey(args[pos]);
+    if (!key) break;
+    pos++;
+    if (pos >= args.length) break;
+    const value = args[pos++];
+    switch (key) {
+      case "color": {
+        const c = resolveColor(value);
+        if (c) trace.color = c;
+        break;
+      }
+      case "linestyle":
+        trace.lineStyle = getStringValue(value);
+        break;
+      case "linewidth":
+        trace.lineWidth = typeof value === "number" ? value : toNumber(value);
+        break;
+      case "marker": {
+        const s = getStringValue(value);
+        trace.marker = s === "none" ? undefined : s;
+        break;
+      }
+      case "showarrowhead": {
+        const s = getStringValue(value).toLowerCase();
+        trace.showArrowHead = !(s === "off" || s === "false" || s === "0");
+        break;
+      }
+      case "autoscale": {
+        const s = getStringValue(value).toLowerCase();
+        autoScale = !(s === "off" || s === "false" || s === "0");
+        break;
+      }
+      case "autoscalefactor": {
+        const n = typeof value === "number" ? value : toNumber(value);
+        autoScaleFactor = n * 0.9;
+        reportedASF = n;
+        break;
+      }
+    }
+  }
+
+  trace.autoScale = autoScale;
+  trace.autoScaleFactor = reportedASF;
+
+  if (autoScale) {
+    const factor = computeQuiver3AutoScale(
+      xData,
+      yData,
+      zData,
+      uData,
+      vData,
+      wData,
+      autoScaleFactor
+    );
+    if (factor !== 1) {
+      trace.u = uData.map(x => x * factor);
+      trace.v = vData.map(x => x * factor);
+      trace.w = wData.map(x => x * factor);
+    }
+  }
+
+  return trace;
+}
+
+/** 3-D analogue of computeQuiverAutoScale: scale arrows so the longest is
+ *  roughly `factor` times the characteristic point spacing in (x,y,z). */
+function computeQuiver3AutoScale(
+  x: number[],
+  y: number[],
+  z: number[],
+  u: number[],
+  v: number[],
+  w: number[],
+  factor: number
+): number {
+  const n = u.length;
+  if (n === 0) return 1;
+
+  const range = (a: number[]) => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const t of a) {
+      if (isFinite(t)) {
+        if (t < lo) lo = t;
+        if (t > hi) hi = t;
+      }
+    }
+    return hi > lo ? hi - lo : 0;
+  };
+  const xr = range(x);
+  const yr = range(y);
+  const zr = range(z);
+  // Bounding-box volume / N, falling back to lower dimensions when flat.
+  const dims = [xr, yr, zr].filter(d => d > 0);
+  let spacing: number;
+  if (dims.length === 3) spacing = Math.cbrt((xr * yr * zr) / n);
+  else if (dims.length === 2) spacing = Math.sqrt((dims[0] * dims[1]) / n);
+  else if (dims.length === 1) spacing = dims[0] / Math.max(1, n - 1);
+  else spacing = 1;
+  spacing = spacing || 1;
+
+  let maxMag = 0;
+  for (let i = 0; i < n; i++) {
+    const m = Math.sqrt(u[i] * u[i] + v[i] * v[i] + w[i] * w[i]);
+    if (isFinite(m) && m > maxMag) maxMag = m;
+  }
   if (maxMag === 0) return 1;
   return (factor * spacing) / maxMag;
 }
