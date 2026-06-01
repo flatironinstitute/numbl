@@ -214,11 +214,16 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "For": {
       const _forStart = this.rt.profilingEnabled ? performance.now() : 0;
-      // Lazy range iteration: a `for k = a:s:b` whose materialized range
-      // would be too large/infinite to allocate is iterated without
-      // building the tensor (the JIT never materializes it either).
-      // Normal finite ranges keep the eager path below, so their
-      // behavior — including the loop variable's values — is unchanged.
+      // Lazy range iteration: a `for k = a:s:b` over a scalar-numeric
+      // range is iterated WITHOUT materializing the range tensor or a JS
+      // array of every index. The element count and per-element value
+      // (`start + step*i`, with the last snapped to `end`) are computed
+      // by the same formula as makeRangeTensor, so loop-variable values
+      // are byte-identical — this only skips allocating a row vector
+      // whose elements we'd consume one at a time anyway (and which a
+      // `break`-heavy loop, e.g. adaptive quadrature's `for i=1:1e5`,
+      // barely touches). Char ranges ('a':'z') return null from
+      // asScalarNumber and keep the eager path, preserving char elems.
       let lazyRange: {
         count: number;
         start: number;
@@ -234,17 +239,13 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const st = asScalarNumber(stv);
         const e = asScalarNumber(ev);
         if (s !== null && st !== null && e !== null) {
-          // makeRangeTensor's raw element count (before clamping). When
-          // it's non-finite or huge, materializing throws — iterate
-          // lazily instead, using the same count formula clamped to a
-          // finite non-negative value (matches mtoc2_loop_count).
+          // makeRangeTensor's element-count formula, clamped to a finite
+          // non-negative value (matches mtoc2_loop_count). step===0 and
+          // non-finite counts yield an empty loop, same as the eager path.
           const rawN = st === 0 ? 0 : Math.floor((e - s) / st + 1 + 1e-10);
-          if (!Number.isFinite(rawN) || rawN > 1e7) {
-            const count = Number.isFinite(rawN) ? Math.max(0, rawN) : 0;
-            lazyRange = { count, start: s, step: st, end: e };
-          }
-        }
-        if (lazyRange === null) {
+          const count = Number.isFinite(rawN) ? Math.max(0, rawN) : 0;
+          lazyRange = { count, start: s, step: st, end: e };
+        } else {
           iterItems = forIter(ensureRuntimeValue(runtimeRange(sv, stv, ev)));
         }
       } else {
@@ -487,11 +488,13 @@ export function evalExprNargout(
     case "Ident": {
       const val = this.env.get(expr.name);
       if (val !== undefined) return val;
-      try {
-        return this.rt.getConstant(expr.name);
-      } catch {
-        // Not a constant
-      }
+      // Constant (pi, eps, ...)? Use the non-throwing lookup — the old
+      // throw/catch built a RuntimeError (with a V8 stack capture) for
+      // every non-variable identifier, which is a hot path: any bare
+      // function-name reference, evaluated per loop iteration, paid for
+      // a thrown-and-immediately-caught exception.
+      const c = getConstant(expr.name);
+      if (c !== undefined) return c;
       return this.callFunction(expr.name, [], nargout);
     }
 
