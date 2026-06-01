@@ -1181,9 +1181,15 @@ function indexIntoTensorWithTensor(
   const baseIsVector =
     base.shape.length <= 2 &&
     (base.shape[0] === 1 || base.shape[1] === 1 || base.shape.length === 1);
+  const idxIsVector =
+    idx.shape.length <= 2 &&
+    (idx.shape[0] === 1 || idx.shape[1] === 1 || idx.shape.length === 1);
+  // MATLAB: A(idx) is shaped like idx, EXCEPT when both A and idx are
+  // vectors — then the result follows A's orientation. A matrix index of a
+  // vector therefore keeps the index's shape (e.g. v([1 2;3 1]) is 2x2).
   const outShape = idxIs0x0
     ? [0, 0]
-    : baseIsVector
+    : baseIsVector && idxIsVector
       ? base.shape[0] === 1
         ? [1, resultData.length]
         : [resultData.length, 1]
