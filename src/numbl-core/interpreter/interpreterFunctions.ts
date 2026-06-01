@@ -962,12 +962,18 @@ export function findExternalMethod(
   }
 
   const ast = this.ctx.getCachedAST(mf.fileName);
+  // Dispatch is by file name: the method is the file's primary (first
+  // top-level) function regardless of its internal name. MATLAB tolerates a
+  // function whose declared name differs from the file name (e.g. a
+  // copy-paste mismatch); prefer a name match for safety but fall back to
+  // the primary function.
+  let primary: FunctionDef | null = null;
   for (const stmt of ast.body) {
-    if (stmt.type === "Function" && stmt.name === methodName) {
-      return funcDefFromStmt(stmt);
-    }
+    if (stmt.type !== "Function") continue;
+    if (stmt.name === methodName) return funcDefFromStmt(stmt);
+    if (!primary) primary = funcDefFromStmt(stmt);
   }
-  return null;
+  return primary;
 }
 
 // ── Class property helpers ───────────────────────────────────────────────

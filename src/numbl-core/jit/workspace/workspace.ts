@@ -467,17 +467,24 @@ export class Workspace {
           info.ast.span
         );
       }
+      // Dispatch is by file name: the primary method is the file's first
+      // top-level function regardless of its internal name. Prefer an exact
+      // name match, but fall back to the first function so files whose
+      // declared name differs from the file name (a MATLAB-tolerated
+      // mismatch) still resolve.
       let primary: FuncStmt | null = null;
+      let firstFn: FuncStmt | null = null;
       for (const stmt of ast.body) {
         if (stmt.type !== "Function") continue;
+        if (!firstFn) firstFn = stmt;
         if (stmt.name === methodName) {
           primary = stmt;
         }
       }
+      primary ??= firstFn;
       if (!primary) {
         throw new UnsupportedConstruct(
-          `external method file '${mf.fileName}' has no function named ` +
-            `'${methodName}'`,
+          `external method file '${mf.fileName}' has no function`,
           info.ast.span
         );
       }
