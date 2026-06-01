@@ -577,9 +577,11 @@ function linsolveComplex(
           wRe += vRe * aRe[j + i + col * m] - vIm * aIm[j + i + col * m];
           wIm += vRe * aIm[j + i + col * m] + vIm * aRe[j + i + col * m];
         }
-        // A(:, col) -= tau * v * w
-        const twRe = tauRe[j] * wRe - tauIm[j] * wIm;
-        const twIm = tauRe[j] * wIm + tauIm[j] * wRe;
+        // A(:, col) -= conj(tau) * v * w. zgeqr2 reduces the trailing
+        // columns with H^H (zlarf called with DCONJG(TAU)); a complex
+        // reflector is not Hermitian, so conj(tau) is required here.
+        const twRe = tauRe[j] * wRe + tauIm[j] * wIm;
+        const twIm = tauRe[j] * wIm - tauIm[j] * wRe;
         aRe[j + col * m] -= twRe;
         aIm[j + col * m] -= twIm;
         for (let i = 1; i < m - j; i++) {
@@ -591,7 +593,9 @@ function linsolveComplex(
       }
     }
 
-    // Apply Q^H to B: Q^H = H_{k-1} * ... * H_1 * H_0 (each H is Hermitian)
+    // Apply Q^H to B: Q^H = H_{k-1}^H * ... * H_1^H * H_0^H. A complex
+    // reflector H = I - tau v v^H is not Hermitian, so each H_j^H uses
+    // conj(tau).
     const bRe = allocFloat64Array(BRe);
     const bIm = allocFloat64Array(BIm);
     for (let j = 0; j < kk; j++) {
@@ -606,9 +610,9 @@ function linsolveComplex(
           wRe += vRe * bRe[j + i + c * m] - vIm * bIm[j + i + c * m];
           wIm += vRe * bIm[j + i + c * m] + vIm * bRe[j + i + c * m];
         }
-        // b -= tau * v * w
-        const twRe = tauRe[j] * wRe - tauIm[j] * wIm;
-        const twIm = tauRe[j] * wIm + tauIm[j] * wRe;
+        // b -= conj(tau) * v * w  (applying H^H)
+        const twRe = tauRe[j] * wRe + tauIm[j] * wIm;
+        const twIm = tauRe[j] * wIm - tauIm[j] * wRe;
         bRe[j + c * m] -= twRe;
         bIm[j + c * m] -= twIm;
         for (let i = 1; i < m - j; i++) {
@@ -705,8 +709,9 @@ function linsolveComplex(
           wRe += vRe * ahRe[j + i + col * n] - vIm * ahIm[j + i + col * n];
           wIm += vRe * ahIm[j + i + col * n] + vIm * ahRe[j + i + col * n];
         }
-        const twRe = tauRe[j] * wRe - tauIm[j] * wIm;
-        const twIm = tauRe[j] * wIm + tauIm[j] * wRe;
+        // conj(tau): zgeqr2 reduces trailing columns with H^H.
+        const twRe = tauRe[j] * wRe + tauIm[j] * wIm;
+        const twIm = tauRe[j] * wIm - tauIm[j] * wRe;
         ahRe[j + col * n] -= twRe;
         ahIm[j + col * n] -= twIm;
         for (let i = 1; i < n - j; i++) {
