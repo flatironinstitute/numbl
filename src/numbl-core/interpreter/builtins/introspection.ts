@@ -54,7 +54,7 @@ function getShape(v: RuntimeValue): number[] {
   if (isRuntimeSparseMatrix(v)) return [v.m, v.n];
   if (isRuntimeCell(v)) return v.shape;
   if (isRuntimeStructArray(v)) return [1, v.elements.length];
-  if (isRuntimeClassInstanceArray(v)) return [1, v.elements.length];
+  if (isRuntimeClassInstanceArray(v)) return [...v.shape];
   return [1, 1];
 }
 
@@ -256,7 +256,8 @@ defineBuiltin({
         }
         if (isRuntimeString(v)) return 1;
         if (isRuntimeStructArray(v)) return v.elements.length;
-        if (isRuntimeClassInstanceArray(v)) return v.elements.length;
+        if (isRuntimeClassInstanceArray(v))
+          return v.elements.length === 0 ? 0 : Math.max(...v.shape);
         return 1;
       },
     },

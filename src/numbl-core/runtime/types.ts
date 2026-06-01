@@ -330,17 +330,25 @@ export class RuntimeClassInstance extends Refcounted {
   }
 }
 
-/** A 1-D array of class instances that all share the same class.
- *  Created by default horzcat/vertcat when the class doesn't overload them. */
+/** An array of class instances that all share the same class. Created by
+ *  default horzcat/vertcat when the class doesn't overload them. `elements`
+ *  are stored in column-major order; `shape` is the 2-D `[rows, cols]` size
+ *  (defaults to a `1×N` row vector when omitted). */
 export class RuntimeClassInstanceArray extends Refcounted {
   readonly kind = "class_instance_array" as const;
   className: string;
   elements: RuntimeClassInstance[];
+  shape: [number, number];
 
-  constructor(className: string, elements: RuntimeClassInstance[]) {
+  constructor(
+    className: string,
+    elements: RuntimeClassInstance[],
+    shape?: [number, number]
+  ) {
     super();
     this.className = className;
     this.elements = elements;
+    this.shape = shape ?? [1, elements.length];
     for (const el of elements) incref(el);
   }
 

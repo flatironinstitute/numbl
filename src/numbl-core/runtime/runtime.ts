@@ -1114,14 +1114,15 @@ export class Runtime {
   public transpose(v: unknown): unknown {
     if (typeof v !== "number") {
       const mv = ensureRuntimeValue(v);
-      if (isRuntimeClassInstance(mv)) return this.dispatch("transpose", 1, [v]);
+      if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv))
+        return this.dispatch("transpose", 1, [v]);
     }
     return _transpose(v);
   }
   public ctranspose(v: unknown): unknown {
     if (typeof v !== "number") {
       const mv = ensureRuntimeValue(v);
-      if (isRuntimeClassInstance(mv))
+      if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv))
         return this.dispatch("ctranspose", 1, [v]);
     }
     return _ctranspose(v);
@@ -1218,7 +1219,11 @@ export class Runtime {
     const mvals = flat.map(e =>
       typeof e === "number" ? null : ensureRuntimeValue(e)
     );
-    if (mvals.some(v => v && isRuntimeClassInstance(v))) {
+    if (
+      mvals.some(
+        v => v && (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+      )
+    ) {
       // If the class overloads horzcat, dispatch to it
       if (this._classHasMethod(mvals, "horzcat")) {
         return this.dispatch("horzcat", 1, flat);
@@ -1234,7 +1239,11 @@ export class Runtime {
     const mvals = rows.map(r =>
       typeof r === "number" ? null : ensureRuntimeValue(r)
     );
-    if (mvals.some(v => v && isRuntimeClassInstance(v))) {
+    if (
+      mvals.some(
+        v => v && (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+      )
+    ) {
       // If the class overloads vertcat, dispatch to it
       if (this._classHasMethod(mvals, "vertcat")) {
         return this.dispatch("vertcat", 1, rows);
@@ -1251,7 +1260,7 @@ export class Runtime {
   ): boolean {
     if (!this.resolveClassMethod) return false;
     for (const v of mvals) {
-      if (v && isRuntimeClassInstance(v)) {
+      if (v && (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))) {
         if (this.resolveClassMethod(v.className, methodName) !== null) {
           return true;
         }
@@ -1701,38 +1710,92 @@ export function buildStackField(e: RuntimeError): RuntimeValue {
 
 // ── Default class instance array concatenation ─────────────────────────
 
-/** Collect class instances (and class instance arrays) into a flat list. */
-function collectClassInstances(items: unknown[]): RuntimeClassInstance[] {
-  const out: RuntimeClassInstance[] = [];
-  for (const item of items) {
-    const rv = ensureRuntimeValue(item);
-    if (isRuntimeClassInstance(rv)) {
-      out.push(rv);
-    } else if (isRuntimeClassInstanceArray(rv)) {
-      out.push(...rv.elements);
-    } else {
-      throw new RuntimeError(
-        `Cannot concatenate ${kstr(rv)} with class instances`
-      );
-    }
-  }
-  return out;
+interface ObjArrayParts {
+  rows: number;
+  cols: number;
+  elements: RuntimeClassInstance[]; // column-major
+  className: string;
 }
 
-/** Default horzcat for class instances: creates a 1×N class instance array. */
+/** View an operand as 2-D object-array parts (column-major). Scalars are
+ *  1×1; numeric `[]` is treated as an ignorable empty. */
+function asObjArrayParts(item: unknown): ObjArrayParts | null {
+  const rv = ensureRuntimeValue(item);
+  if (isRuntimeClassInstance(rv))
+    return { rows: 1, cols: 1, elements: [rv], className: rv.className };
+  if (isRuntimeClassInstanceArray(rv))
+    return {
+      rows: rv.shape[0],
+      cols: rv.shape[1],
+      elements: rv.elements,
+      className: rv.className,
+    };
+  // Empty numeric [] is dropped from concatenation (MATLAB semantics).
+  if (isRuntimeTensor(rv) && rv.data.length === 0) return null;
+  throw new RuntimeError(`Cannot concatenate ${kstr(rv)} with class instances`);
+}
+
+/** Extract column `j` (0-based) of a column-major operand. */
+function objColumn(p: ObjArrayParts, j: number): RuntimeClassInstance[] {
+  return p.elements.slice(j * p.rows, j * p.rows + p.rows);
+}
+
+/** Default horzcat for class instances: concatenates operands along columns
+ *  (dim 2). Rows must agree. Column-major storage means appending columns is
+ *  simply appending element lists. */
 function defaultClassInstanceHorzcat(
   items: unknown[]
 ): RuntimeClassInstance | RuntimeClassInstanceArray {
-  const elements = collectClassInstances(items);
+  const parts = items
+    .map(asObjArrayParts)
+    .filter((p): p is ObjArrayParts => p !== null && p.elements.length > 0);
+  if (parts.length === 0)
+    throw new RuntimeError("Cannot concatenate empty class instances");
+  const rows = parts[0].rows;
+  let cols = 0;
+  const elements: RuntimeClassInstance[] = [];
+  for (const p of parts) {
+    if (p.rows !== rows)
+      throw new RuntimeError(
+        "Dimensions of arrays being concatenated are not consistent"
+      );
+    elements.push(...p.elements);
+    cols += p.cols;
+  }
   if (elements.length === 1) return elements[0];
-  return new RuntimeClassInstanceArray(elements[0].className, elements);
+  return new RuntimeClassInstanceArray(parts[0].className, elements, [
+    rows,
+    cols,
+  ]);
 }
 
-/** Default vertcat for class instances: creates an N×1 class instance array. */
+/** Default vertcat for class instances: concatenates operands along rows
+ *  (dim 1). Columns must agree. Column-major storage means each output column
+ *  interleaves that column from every operand top to bottom. */
 function defaultClassInstanceVertcat(
   rows: unknown[]
 ): RuntimeClassInstance | RuntimeClassInstanceArray {
-  const elements = collectClassInstances(rows);
+  const parts = rows
+    .map(asObjArrayParts)
+    .filter((p): p is ObjArrayParts => p !== null && p.elements.length > 0);
+  if (parts.length === 0)
+    throw new RuntimeError("Cannot concatenate empty class instances");
+  const cols = parts[0].cols;
+  let totalRows = 0;
+  for (const p of parts) {
+    if (p.cols !== cols)
+      throw new RuntimeError(
+        "Dimensions of arrays being concatenated are not consistent"
+      );
+    totalRows += p.rows;
+  }
+  const elements: RuntimeClassInstance[] = [];
+  for (let j = 0; j < cols; j++) {
+    for (const p of parts) elements.push(...objColumn(p, j));
+  }
   if (elements.length === 1) return elements[0];
-  return new RuntimeClassInstanceArray(elements[0].className, elements);
+  return new RuntimeClassInstanceArray(parts[0].className, elements, [
+    totalRows,
+    cols,
+  ]);
 }

@@ -14,6 +14,9 @@ import {
   isRuntimeCell,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+  RuntimeClassInstanceArray,
   kstr,
 } from "../runtime/types.js";
 import { RuntimeError } from "../runtime/error.js";
@@ -1217,6 +1220,22 @@ function transposeCore(v: RuntimeTensor, conjugate: boolean): RuntimeValue {
   return t;
 }
 
+/** Transpose an object array: swap the 2-D shape and permute the
+ *  column-major elements so out(j,i) = in(i,j). For a scalar or vector this
+ *  leaves the element order unchanged and only flips the orientation. */
+function transposeClassInstanceArray(
+  v: RuntimeClassInstanceArray
+): RuntimeValue {
+  const [r, c] = v.shape;
+  const out = new Array<(typeof v.elements)[number]>(v.elements.length);
+  for (let i = 0; i < r; i++) {
+    for (let j = 0; j < c; j++) {
+      out[i * c + j] = v.elements[j * r + i];
+    }
+  }
+  return new RuntimeClassInstanceArray(v.className, out, [c, r]);
+}
+
 /** Transpose (non-conjugate for complex scalars and tensors) */
 export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(v)) return sparseTranspose(v);
@@ -1224,6 +1243,11 @@ export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
   if (isRuntimeChar(v)) return v;
+  // Object values without a class `transpose` method: MATLAB's built-in
+  // array transpose permutes the elements. Reached only as the fallback
+  // after method dispatch declines. A scalar instance is an identity.
+  if (isRuntimeClassInstance(v)) return v;
+  if (isRuntimeClassInstanceArray(v)) return transposeClassInstanceArray(v);
   if (!isRuntimeTensor(v))
     throw new RuntimeError("Cannot transpose non-numeric value");
   return transposeCore(v, false);
@@ -1236,6 +1260,11 @@ export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
   if (isRuntimeChar(v)) return v;
+  // Object values without a class `ctranspose` method: the default array
+  // operation rearranges elements (objects are not element-wise conjugated),
+  // identical to mTranspose. A scalar instance is an identity.
+  if (isRuntimeClassInstance(v)) return v;
+  if (isRuntimeClassInstanceArray(v)) return transposeClassInstanceArray(v);
   if (!isRuntimeTensor(v))
     throw new RuntimeError("Cannot transpose non-numeric value");
   return transposeCore(v, true);

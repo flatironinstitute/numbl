@@ -297,51 +297,94 @@ function classInstanceParenIndex(
   throw new RuntimeError(`Index exceeds class instance dimensions`);
 }
 
-/** Handle arr(k) on a class instance array — returns element(s). */
+/** Resolve one raw subscript against a dimension of `dimSize` to a list of
+ *  0-based indices. Supports `:`, scalar numbers, numeric vectors, and
+ *  logical masks. */
+function resolveObjSubscript(raw: unknown, dimSize: number): number[] {
+  if (raw === COLON_SENTINEL) {
+    return Array.from({ length: dimSize }, (_, i) => i);
+  }
+  if (typeof raw === "number") return [Math.round(raw) - 1];
+  const rv = ensureRuntimeValue(raw);
+  if (isRuntimeNumber(rv)) return [Math.round(toNumber(rv)) - 1];
+  if (isRuntimeLogical(rv)) return rv ? [0] : [];
+  if (isRuntimeTensor(rv)) {
+    if (rv._isLogical) {
+      const out: number[] = [];
+      for (let k = 0; k < rv.data.length; k++) if (rv.data[k]) out.push(k);
+      return out;
+    }
+    return Array.from(rv.data, x => Math.round(x) - 1);
+  }
+  throw new RuntimeError("Invalid index type for class instance array");
+}
+
+/** Build a class instance array (or unwrap to a scalar instance). Mirrors the
+ *  borrow-without-incref convention used elsewhere in this module. */
+function makeObjResult(
+  className: string,
+  elements: import("../runtime/types.js").RuntimeClassInstance[],
+  shape: [number, number]
+): unknown {
+  if (elements.length === 1) return elements[0];
+  return {
+    kind: "class_instance_array" as const,
+    className,
+    elements,
+    shape,
+  };
+}
+
+/** Handle arr(k) / arr(i,j) on a class instance array — returns element(s). */
 function classInstanceArrayParenIndex(
   mv: RuntimeClassInstanceArray,
   indices: unknown[]
 ): unknown {
+  const [rows, cols] = mv.shape;
+  const total = mv.elements.length;
+
+  // Two-subscript indexing: arr(i, j), column-major.
+  if (indices.length === 2) {
+    const ri = resolveObjSubscript(indices[0], rows);
+    const ci = resolveObjSubscript(indices[1], cols);
+    const selected: import("../runtime/types.js").RuntimeClassInstance[] = [];
+    for (const j of ci) {
+      if (j < 0 || j >= cols)
+        throw new RuntimeError("Index exceeds array bounds");
+      for (const i of ri) {
+        if (i < 0 || i >= rows)
+          throw new RuntimeError("Index exceeds array bounds");
+        selected.push(mv.elements[j * rows + i]);
+      }
+    }
+    return makeObjResult(mv.className, selected, [ri.length, ci.length]);
+  }
+
   if (indices.length !== 1) {
     throw new RuntimeError(
-      "Class instance arrays only support single-subscript indexing"
+      "Class instance arrays support one- or two-subscript indexing"
     );
   }
+
   const idx = indices[0];
   if (idx === COLON_SENTINEL) {
-    // arr(:) returns the full array
-    return mv;
+    // arr(:) returns a column vector of all elements (column-major order).
+    return makeObjResult(mv.className, mv.elements.slice(), [total, 1]);
   }
-  if (typeof idx === "number") {
-    const i = Math.round(idx) - 1;
-    if (i < 0 || i >= mv.elements.length)
+  const linear = resolveObjSubscript(idx, total);
+  const selected: import("../runtime/types.js").RuntimeClassInstance[] = [];
+  for (const i of linear) {
+    if (i < 0 || i >= total)
       throw new RuntimeError("Index exceeds array bounds");
-    return mv.elements[i];
+    selected.push(mv.elements[i]);
   }
-  const rv = ensureRuntimeValue(idx);
-  if (isRuntimeLogical(rv)) {
-    const i = rv ? 0 : -1;
-    if (i < 0 || i >= mv.elements.length)
-      throw new RuntimeError("Index exceeds array bounds");
-    return mv.elements[i];
-  }
-  if (isRuntimeTensor(rv)) {
-    // Tensor index — return an array of selected elements
-    const selected: import("../runtime/types.js").RuntimeClassInstance[] = [];
-    for (let k = 0; k < rv.data.length; k++) {
-      const i = Math.round(rv.data[k]) - 1;
-      if (i < 0 || i >= mv.elements.length)
-        throw new RuntimeError("Index exceeds array bounds");
-      selected.push(mv.elements[i]);
-    }
-    if (selected.length === 1) return selected[0];
-    return {
-      kind: "class_instance_array" as const,
-      className: mv.className,
-      elements: selected,
-    };
-  }
-  throw new RuntimeError("Invalid index type for class instance array");
+  // Linear indexing of a vector preserves the source orientation; otherwise
+  // (a matrix indexed linearly) MATLAB returns a row.
+  const isColumn = cols === 1 && rows !== 1;
+  const shape: [number, number] = isColumn
+    ? [selected.length, 1]
+    : [1, selected.length];
+  return makeObjResult(mv.className, selected, shape);
 }
 
 /** Resolve raw index arguments for a class instance before passing to subsref.
