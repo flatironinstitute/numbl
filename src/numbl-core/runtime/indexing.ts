@@ -1351,6 +1351,11 @@ function deleteTensorElements(
   } else if (isColonIndex(idx)) {
     return RTV.tensor(allocFloat64Array(0), [0, 0]);
   }
+  // Deleting an empty index set (`A([]) = []`, `A(j:j-1) = []`) is a no-op:
+  // MATLAB leaves A unchanged, preserving its class and shape. Return base
+  // as-is instead of rebuilding the whole array (which also wrongly
+  // linearized matrices).
+  if (toDelete.size === 0) return base;
   const newData: number[] = [];
   const newIm: number[] = [];
   const hasImag = base.imag !== undefined;
