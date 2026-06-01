@@ -226,6 +226,16 @@ export const figuresReducer = (
       });
     }
 
+    case "surface": {
+      // Unlike `surf`, the primitive `surface` does not call newplot and
+      // ignores hold/NextPlot: it always adds the surface to the current
+      // axes without deleting other graphics objects or resetting props.
+      const axes = getAxes(ensureFig(state));
+      return updateAxes(state, {
+        surfTraces: [...axes.surfTraces, action.trace],
+      });
+    }
+
     case "imagesc":
       return addTraces(state, { imagescTrace: action.trace });
 
@@ -406,6 +416,43 @@ export const figuresReducer = (
         figs: {
           ...state.figs,
           [state.currentHandle]: { ...defaultFigure },
+        },
+      };
+    }
+
+    case "cla": {
+      // Clear the current axes (creating the figure/axes if needed).
+      //   reset=false → delete the plotted graphics objects (the data
+      //     traces, which have visible handles) but keep the title, axis
+      //     labels, and appearance properties — these have hidden handles
+      //     in MATLAB and survive a plain `cla`.
+      //   reset=true  → reset the axes entirely to its default state.
+      const fig = ensureFig(state);
+      const prev = getAxes(fig);
+      const cleared: AxesState = action.reset
+        ? { ...defaultAxes }
+        : {
+            ...defaultAxes,
+            title: prev.title,
+            xlabel: prev.xlabel,
+            ylabel: prev.ylabel,
+            zlabel: prev.zlabel,
+            gridOn: prev.gridOn,
+            colorbar: prev.colorbar,
+            colorbarLocation: prev.colorbarLocation,
+            colormap: prev.colormap,
+            colormapData: prev.colormapData,
+            view: prev.view,
+            axisMode: prev.axisMode,
+            axisScale: prev.axisScale,
+            caxis: prev.caxis,
+            shading: prev.shading,
+          };
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: setAxes(fig, cleared),
         },
       };
     }

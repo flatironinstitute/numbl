@@ -454,6 +454,20 @@ for (const name of ["groot", "gcf", "gca", "shg", "newplot"]) {
   });
 }
 
+// camlight — numbl's plot viewer has no lighting model, so this is a
+// stub. It accepts every argument form (position, az/el, style, and a
+// leading light/axes handle) and returns a placeholder Light handle when
+// one is requested (`cl = camlight(...)`). As a statement it produces no
+// output, so `ans` is left untouched.
+registerIBuiltin({
+  name: "camlight",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: (_args, nargout) =>
+      nargout >= 1 ? RTV.dummyHandle() : (undefined as unknown as RuntimeValue),
+  }),
+});
+
 // get(handle, propName) — return property value or dummy handle
 registerIBuiltin({
   name: "get",

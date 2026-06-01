@@ -43,6 +43,7 @@ import {
   plotCall,
   plot3Call,
   surfCall,
+  surfaceCall,
   scatterCall,
   imagescCall,
   pcolorCall,
@@ -113,6 +114,9 @@ export function dispatchPlotBuiltin(
       return true;
     case "surf":
       surfCall(instructions, args);
+      return true;
+    case "surface":
+      surfaceCall(instructions, args);
       return true;
     case "scatter":
       scatterCall(instructions, args);
@@ -271,6 +275,27 @@ export function dispatchPlotBuiltin(
     case "clf":
       plotInstr(instructions, { type: "clf" });
       return true;
+    case "cla": {
+      // cla / cla(ax) / cla reset / cla(ax,'reset'). numbl has no real
+      // axes handles, so an `ax` argument is accepted and ignored — we
+      // always act on the current axes. Any 'reset' argument also resets
+      // the axes properties to their defaults.
+      let reset = false;
+      for (const a of args) {
+        try {
+          if (
+            toString(a)
+              .toLowerCase()
+              .replace(/^["']|["']$/g, "") === "reset"
+          )
+            reset = true;
+        } catch {
+          // Non-string arg (the ax handle) — ignore.
+        }
+      }
+      plotInstr(instructions, { type: "cla", reset });
+      return true;
+    }
     case "shading": {
       if (args.length > 0) {
         plotInstr(instructions, { type: "set_shading", shading: args[0] });
@@ -490,6 +515,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "plot",
   "plot3",
   "surf",
+  "surface",
   "scatter",
   "imagesc",
   "pcolor",
@@ -532,6 +558,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "grid",
   "close",
   "clf",
+  "cla",
   "shading",
   "colorbar",
   "colormap",

@@ -92,6 +92,7 @@ export function plotInstr(
     | { type: "close" }
     | { type: "close_all" }
     | { type: "clf" }
+    | { type: "cla"; reset: boolean }
     | { type: "set_subplot"; rows: unknown; cols: unknown; index: unknown }
     | { type: "set_sgtitle"; text: unknown }
     | { type: "set_grid"; value: unknown }
@@ -144,6 +145,9 @@ export function plotInstr(
     case "close_all":
     case "clf":
       plotInstructions.push({ type: instr.type });
+      break;
+    case "cla":
+      plotInstructions.push({ type: "cla", reset: instr.reset });
       break;
     case "set_subplot":
       plotInstructions.push({
@@ -250,6 +254,16 @@ export function surfCall(
 ): void {
   const trace = parseSurfArgs(args);
   plotInstructions.push({ type: "surf", trace });
+}
+
+export function surfaceCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  // Same argument parsing as surf; the difference (add vs. replace) is
+  // handled by the reducer's "surface" case.
+  const trace = parseSurfArgs(args);
+  plotInstructions.push({ type: "surface", trace });
 }
 
 export function imagescCall(

@@ -1735,10 +1735,10 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     });
   }
 
-  // `hold`, `grid`, `shading` are truly void in MATLAB (they error on
-  // `r = hold`). registerSpecialVoid surfaces that as
+  // `hold`, `grid`, `shading`, `cla` are truly void in MATLAB (they error
+  // on `r = hold`). registerSpecialVoid surfaces that as
   // "Too many output arguments." when nargout > 0.
-  const PLOT_VOID = ["hold", "grid", "shading"];
+  const PLOT_VOID = ["hold", "grid", "shading", "cla"];
   for (const name of PLOT_VOID) {
     registerSpecialVoid(name, args => {
       dispatchPlotBuiltin(

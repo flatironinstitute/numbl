@@ -241,6 +241,7 @@ export type PlotInstruction =
   | { type: "plot"; traces: PlotTrace[] }
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "surf"; trace: SurfTrace }
+  | { type: "surface"; trace: SurfTrace }
   | { type: "imagesc"; trace: ImagescTrace }
   | { type: "pcolor"; trace: PcolorTrace }
   | { type: "contour"; trace: ContourTrace }
@@ -264,6 +265,7 @@ export type PlotInstruction =
   | { type: "close" }
   | { type: "close_all" }
   | { type: "clf" }
+  | { type: "cla"; reset: boolean }
   | { type: "set_subplot"; rows: number; cols: number; index: number }
   | { type: "set_legend"; labels: string[] }
   | { type: "set_sgtitle"; text: string }

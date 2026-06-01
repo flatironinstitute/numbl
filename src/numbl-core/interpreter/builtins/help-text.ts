@@ -1592,6 +1592,11 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Advance to the next tile in the current tiled layout, or move to tile IDX. Auto-creates a flow layout if none exists.",
   },
+  surface: {
+    signatures: ["surface(X,Y,Z)", "surface(Z)", "surface(X,Y,Z,C)"],
+    description:
+      "Primitive surface plot. Like surf, but adds to the current axes without clearing existing objects (does not respect hold).",
+  },
   title: {
     signatures: ["title(TXT)"],
     description: "Set title of current axes.",
@@ -1627,6 +1632,11 @@ const H: Record<string, BuiltinHelp> = {
   clf: {
     signatures: ["clf"],
     description: "Clear current figure.",
+  },
+  cla: {
+    signatures: ["cla", "cla(ax)", "cla reset", "cla(ax,'reset')"],
+    description:
+      "Clear current axes. With 'reset', also reset axes properties to defaults.",
   },
   sgtitle: {
     signatures: ["sgtitle(TXT)"],
@@ -1679,6 +1689,11 @@ const H: Record<string, BuiltinHelp> = {
   shg: {
     signatures: ["shg"],
     description: "Show current figure.",
+  },
+  camlight: {
+    signatures: ["camlight", "camlight(position)", "cl = camlight(___)"],
+    description:
+      "Create a light in camera coordinates. Stub in numbl (no lighting model): accepts all arguments and returns a placeholder handle.",
   },
   newplot: {
     signatures: ["newplot"],
