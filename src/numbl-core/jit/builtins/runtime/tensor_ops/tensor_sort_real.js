@@ -35,6 +35,40 @@ function complex_sort_indices(a, descending) {
   const n = a.data.length;
   const im = a.imag;
   const idx = new Array(n);
+  for (let i = 0; i < n; i++) idx[i] = i;
+
+  // All-zero imaginary lane → order by signed real value (matches the
+  // interpreter and MATLAB on real data), not by magnitude. NaNs sort
+  // last when ascending, first when descending.
+  let realMode = true;
+  if (im !== undefined) {
+    for (let i = 0; i < n; i++) {
+      if (im[i] !== 0) {
+        realMode = false;
+        break;
+      }
+    }
+  }
+  if (realMode) {
+    const re = a.data;
+    idx.sort((p, q) => {
+      const rp = re[p];
+      const rq = re[q];
+      const pNaN = rp !== rp;
+      const qNaN = rq !== rq;
+      if (pNaN && qNaN) return 0;
+      if (descending) {
+        if (pNaN) return -1;
+        if (qNaN) return 1;
+        return rp < rq ? 1 : rp > rq ? -1 : 0;
+      }
+      if (pNaN) return 1;
+      if (qNaN) return -1;
+      return rp < rq ? -1 : rp > rq ? 1 : 0;
+    });
+    return idx;
+  }
+
   const mag = new Float64Array(n);
   const ph = new Float64Array(n);
   for (let i = 0; i < n; i++) {
@@ -42,7 +76,6 @@ function complex_sort_indices(a, descending) {
     const xi = im !== undefined ? im[i] : 0;
     mag[i] = Math.hypot(re, xi);
     ph[i] = Math.atan2(xi, re);
-    idx[i] = i;
   }
   idx.sort((p, q) => {
     if (mag[p] < mag[q]) return descending ? 1 : -1;

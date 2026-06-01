@@ -101,9 +101,23 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
     return out;                                                               \
   }
 
+/* True when the tensor carries no imaginary content (NULL lane or every
+ * element zero). Such a tensor is real in value — min/max must order by
+ * value, not magnitude, to match the interpreter and MATLAB on real data. */
+static int mtoc2__creduce_all_imag_zero(mtoc2_tensor_t a) {
+  if (a.imag == NULL) return 1;
+  long n = 1;
+  for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
+  for (long i = 0; i < n; i++) {
+    if (a.imag[i] != 0.0) return 0;
+  }
+  return 1;
+}
+
 /* min/max template — complex compare via magnitude + atan2 tiebreak.
- * NaN-skip on either lane. Accumulator seed is NaN+NaN; first non-
- * NaN element captures, later non-NaN elements compare. */
+ * When the whole tensor is real (all-zero imag) we order by value
+ * instead. NaN-skip on either lane. Accumulator seed is NaN+NaN; first
+ * non-NaN element captures, later non-NaN elements compare. */
 #define MTOC2_DEFINE_CMINMAX_REDUCTION(name, CMP)                              \
   static int mtoc2__##name##_complex_better(                                  \
       double aRe, double aIm, double bRe, double bIm) {                       \
@@ -115,13 +129,16 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
   static double _Complex mtoc2_##name##_complex_all(mtoc2_tensor_t a) {       \
     long n = 1;                                                               \
     for (int i = 0; i < a.ndim; i++) n *= a.dims[i];                          \
+    int realMode = mtoc2__creduce_all_imag_zero(a);                           \
     int found = 0;                                                            \
     double mRe = NAN, mIm = 0.0;                                              \
     for (long i = 0; i < n; i++) {                                            \
       double xr = a.real[i];                                                  \
       double xi = (a.imag != NULL) ? a.imag[i] : 0.0;                         \
       if (xr != xr || xi != xi) continue;                                     \
-      if (!found || mtoc2__##name##_complex_better(xr, xi, mRe, mIm)) {       \
+      int better = realMode ? (xr CMP mRe)                                    \
+                            : mtoc2__##name##_complex_better(xr, xi, mRe, mIm); \
+      if (!found || better) {                                                 \
         mRe = xr;                                                             \
         mIm = xi;                                                             \
         found = 1;                                                            \
@@ -161,6 +178,7 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
     mtoc2__squeeze_trailing_c(&out_ndim, out_dims);                           \
     mtoc2_tensor_t out = mtoc2_tensor_alloc_nd_complex(out_ndim, out_dims);   \
     long slab = before * axis;                                                \
+    int realMode = mtoc2__creduce_all_imag_zero(a);                           \
     for (long outer = 0; outer < after; outer++) {                            \
       long slabBase = outer * slab;                                           \
       for (long inner = 0; inner < before; inner++) {                         \
@@ -171,7 +189,9 @@ static void mtoc2__squeeze_trailing_c(int *ndim, long *dims) {
           double xr = a.real[off];                                            \
           double xi = (a.imag != NULL) ? a.imag[off] : 0.0;                   \
           if (xr != xr || xi != xi) continue;                                 \
-          if (!found || mtoc2__##name##_complex_better(xr, xi, mRe, mIm)) {   \
+          int better = realMode ? (xr CMP mRe)                                \
+                                : mtoc2__##name##_complex_better(xr, xi, mRe, mIm); \
+          if (!found || better) {                                             \
             mRe = xr;                                                         \
             mIm = xi;                                                         \
             found = 1;                                                        \

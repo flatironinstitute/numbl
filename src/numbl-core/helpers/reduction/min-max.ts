@@ -28,6 +28,7 @@ import {
 } from "../reduction-helpers.js";
 import { tensorOps, OpReduce } from "../../ops/index.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { stripZeroImagValue } from "../effectively-real.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 
@@ -324,6 +325,12 @@ export function minMaxImpl(
 
   // Densify sparse arguments
   args = args.map(a => (isRuntimeSparseMatrix(a) ? sparseToDense(a) : a));
+
+  // Drop an all-zero imaginary lane so complex-but-real tensors (e.g. a
+  // JIT `sqrt` that lifted to complex without leaving the real domain)
+  // order by value rather than by magnitude — matching `--opt 0` and
+  // MATLAB on real data. Genuinely complex tensors are untouched.
+  args = args.map(stripZeroImagValue);
 
   // --- 1-arg: reduce to scalar or along default dim ---
   if (args.length === 1) {

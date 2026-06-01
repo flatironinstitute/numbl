@@ -8,6 +8,7 @@ import {
   isRuntimeTensor,
 } from "../../runtime/types.js";
 import { defineBuiltin, predicateCases } from "./types.js";
+import { imagAllZero } from "../../helpers/effectively-real.js";
 
 // ── isnan ───────────────────────────────────────────────────────────────
 
@@ -69,8 +70,12 @@ defineBuiltin({
         if (typeof v === "number") return true;
         if (typeof v === "boolean") return true;
         if (isRuntimeComplexNumber(v)) return v.im === 0;
-        if (isRuntimeTensor(v)) return !v.imag;
-        if (isRuntimeSparseMatrix(v)) return !v.pi;
+        // A complex tensor whose imaginary lane is entirely zero is real
+        // in value (consistent with the complex-scalar `v.im === 0` test
+        // above, and with the JIT, which routinely produces such tensors
+        // when it cannot prove realness at compile time).
+        if (isRuntimeTensor(v)) return imagAllZero(v.imag);
+        if (isRuntimeSparseMatrix(v)) return !v.pi || imagAllZero(v.pi);
         return true;
       },
     },

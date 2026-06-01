@@ -683,6 +683,13 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
       "mtoc2_cdiv",
     ]),
   ],
+  // `isreal` on a complex-typed tensor: scan the imag lane (true iff all
+  // zero). Lets the JIT report realness by value, matching the
+  // interpreter on tensors the type system could not prove real.
+  [
+    "mtoc2_tensor_imag_all_zero",
+    loadSnippet("tensor_imag_all_zero.h", ["mtoc2_tensor_t"]),
+  ],
 
   // ── Elementwise binary/unary on real tensors ──────────────────────
   // One snippet covers all 11 funcs (4×_tt, 4×_ts, 2×_st, 1×uminus).

@@ -29,6 +29,7 @@ import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase } from "./types.js";
 import { toNumArray } from "../../helpers/reduction-helpers.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { stripZeroImagTensor } from "../../helpers/effectively-real.js";
 
 // ── find ─────────────────────────────────────────────────────────────────
 
@@ -239,7 +240,10 @@ defineBuiltin({
           return v;
         }
         if (isRuntimeTensor(v)) {
-          return sortTensor(v, dim, descend, nargout);
+          // An all-zero imaginary lane (e.g. a JIT `sqrt` that lifted to
+          // complex without leaving the real domain) sorts by value, not
+          // magnitude, and returns a real result.
+          return sortTensor(stripZeroImagTensor(v), dim, descend, nargout);
         }
         if (isRuntimeCell(v)) {
           return sortCell(v as RuntimeCell, descend, nargout);

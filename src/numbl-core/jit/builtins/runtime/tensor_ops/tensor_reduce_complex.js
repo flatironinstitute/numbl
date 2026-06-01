@@ -14,6 +14,17 @@ function cReduceLaneIm(t, i) {
   return t.imag !== undefined ? t.imag[i] : 0;
 }
 
+// True when the tensor carries no imaginary content (no lane, or every
+// element zero). Such a tensor is real in value — min/max must order by
+// value, not magnitude, to match the interpreter and MATLAB on real data.
+function cReduceAllImagZero(t) {
+  if (t.imag === undefined) return true;
+  for (let i = 0; i < t.imag.length; i++) {
+    if (t.imag[i] !== 0) return false;
+  }
+  return true;
+}
+
 // Numeric (sum/prod/mean) — complex accumulator { re, im }.
 function complexAccumAll(t, init, accum, finalize) {
   let acc = { ...init };
@@ -86,6 +97,7 @@ export const mtoc2_mean_complex_dim = (t, d) =>
 // Min / max — magnitude compare with atan2 tiebreak (numbl's
 // complexIsBetter). Skip NaN-lane elements; result is complex.
 function complexMinmaxAll(t, cmp) {
+  const realMode = cReduceAllImagZero(t);
   let found = false;
   let mRe = NaN;
   let mIm = 0;
@@ -93,7 +105,12 @@ function complexMinmaxAll(t, cmp) {
     const xr = t.data[i];
     const xi = cReduceLaneIm(t, i);
     if (xr !== xr || xi !== xi) continue;
-    if (!found || complexBetter(xr, xi, mRe, mIm, cmp)) {
+    const better = realMode
+      ? cmp === "<"
+        ? xr < mRe
+        : xr > mRe
+      : complexBetter(xr, xi, mRe, mIm, cmp);
+    if (!found || better) {
       mRe = xr;
       mIm = xi;
       found = true;
@@ -120,6 +137,7 @@ function complexMinmaxDim(t, dim, cmp) {
     return out;
   }
   const dimIdx = dim - 1;
+  const realMode = cReduceAllImagZero(t);
   const axis = t.shape[dimIdx];
   let before = 1;
   for (let i = 0; i < dimIdx; i++) before *= t.shape[i];
@@ -140,7 +158,12 @@ function complexMinmaxDim(t, dim, cmp) {
         const xr = t.data[off];
         const xi = cReduceLaneIm(t, off);
         if (xr !== xr || xi !== xi) continue;
-        if (!found || complexBetter(xr, xi, mRe, mIm, cmp)) {
+        const better = realMode
+          ? cmp === "<"
+            ? xr < mRe
+            : xr > mRe
+          : complexBetter(xr, xi, mRe, mIm, cmp);
+        if (!found || better) {
           mRe = xr;
           mIm = xi;
           found = true;

@@ -163,6 +163,54 @@ static int mtoc2_sort_cmp_complex_desc(const void *pa, const void *pb) {
   return 0;
 }
 
+/* Real-value comparators used when the input's imaginary lane is all
+ * zero: order by signed value (the `mag` field holds the signed real
+ * part in that mode), NaNs last (asc) / first (desc), tiebreak by index.
+ * Matches the interpreter and MATLAB on real data. */
+static int mtoc2_sort_cmp_real_asc(const void *pa, const void *pb) {
+  const mtoc2_sort_complex_pair_t *a = (const mtoc2_sort_complex_pair_t *)pa;
+  const mtoc2_sort_complex_pair_t *b = (const mtoc2_sort_complex_pair_t *)pb;
+  int aNaN = a->mag != a->mag;
+  int bNaN = b->mag != b->mag;
+  if (!(aNaN && bNaN)) {
+    if (aNaN) return 1;
+    if (bNaN) return -1;
+    if (a->mag < b->mag) return -1;
+    if (a->mag > b->mag) return 1;
+  }
+  if (a->ix < b->ix) return -1;
+  if (a->ix > b->ix) return 1;
+  return 0;
+}
+
+static int mtoc2_sort_cmp_real_desc(const void *pa, const void *pb) {
+  const mtoc2_sort_complex_pair_t *a = (const mtoc2_sort_complex_pair_t *)pa;
+  const mtoc2_sort_complex_pair_t *b = (const mtoc2_sort_complex_pair_t *)pb;
+  int aNaN = a->mag != a->mag;
+  int bNaN = b->mag != b->mag;
+  if (!(aNaN && bNaN)) {
+    if (aNaN) return -1;
+    if (bNaN) return 1;
+    if (a->mag > b->mag) return -1;
+    if (a->mag < b->mag) return 1;
+  }
+  if (a->ix < b->ix) return -1;
+  if (a->ix > b->ix) return 1;
+  return 0;
+}
+
+/* True when the tensor carries no imaginary content (NULL lane or all
+ * elements zero) — then sort orders by signed real value. */
+static int mtoc2_sort_all_imag_zero(mtoc2_tensor_t a) {
+  if (a.imag == NULL) return 1;
+  long n = 1;
+  for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
+  for (long i = 0; i < n; i++) {
+    if (a.imag[i] != 0.0) return 0;
+  }
+  return 1;
+}
+
 static mtoc2_tensor_t mtoc2_sort_complex(mtoc2_tensor_t a, int descending) {
   long n = 1;
   for (int i = 0; i < a.ndim; i++) n *= a.dims[i];
@@ -170,6 +218,7 @@ static mtoc2_tensor_t mtoc2_sort_complex(mtoc2_tensor_t a, int descending) {
   if (n == 0) return r;
   int srcHasImag = (a.imag != NULL);
   if (!srcHasImag) memset(r.imag, 0, (size_t)n * sizeof(double));
+  int realMode = mtoc2_sort_all_imag_zero(a);
   mtoc2_sort_complex_pair_t *buf =
     (mtoc2_sort_complex_pair_t *)malloc(
       (size_t)n * sizeof(mtoc2_sort_complex_pair_t));
@@ -180,13 +229,15 @@ static mtoc2_tensor_t mtoc2_sort_complex(mtoc2_tensor_t a, int descending) {
   for (long i = 0; i < n; i++) {
     double re = a.real[i];
     double im = srcHasImag ? a.imag[i] : 0.0;
-    buf[i].mag = hypot(re, im);
-    buf[i].phase = atan2(im, re);
+    buf[i].mag = realMode ? re : hypot(re, im);
+    buf[i].phase = realMode ? 0.0 : atan2(im, re);
     buf[i].ix = i;
   }
   qsort(buf, (size_t)n, sizeof(mtoc2_sort_complex_pair_t),
-        descending ? mtoc2_sort_cmp_complex_desc
-                   : mtoc2_sort_cmp_complex_asc);
+        realMode ? (descending ? mtoc2_sort_cmp_real_desc
+                               : mtoc2_sort_cmp_real_asc)
+                 : (descending ? mtoc2_sort_cmp_complex_desc
+                               : mtoc2_sort_cmp_complex_asc));
   for (long i = 0; i < n; i++) {
     r.real[i] = a.real[buf[i].ix];
     r.imag[i] = srcHasImag ? a.imag[buf[i].ix] : 0.0;
@@ -208,6 +259,7 @@ static void mtoc2_sort_complex_2(mtoc2_tensor_t a, int descending,
   if (n > 0) {
     int srcHasImag = (a.imag != NULL);
     if (!srcHasImag) memset(v.imag, 0, (size_t)n * sizeof(double));
+    int realMode = mtoc2_sort_all_imag_zero(a);
     mtoc2_sort_complex_pair_t *buf =
       (mtoc2_sort_complex_pair_t *)malloc(
         (size_t)n * sizeof(mtoc2_sort_complex_pair_t));
@@ -218,13 +270,15 @@ static void mtoc2_sort_complex_2(mtoc2_tensor_t a, int descending,
     for (long i = 0; i < n; i++) {
       double re = a.real[i];
       double im = srcHasImag ? a.imag[i] : 0.0;
-      buf[i].mag = hypot(re, im);
-      buf[i].phase = atan2(im, re);
+      buf[i].mag = realMode ? re : hypot(re, im);
+      buf[i].phase = realMode ? 0.0 : atan2(im, re);
       buf[i].ix = i;
     }
     qsort(buf, (size_t)n, sizeof(mtoc2_sort_complex_pair_t),
-          descending ? mtoc2_sort_cmp_complex_desc
-                     : mtoc2_sort_cmp_complex_asc);
+          realMode ? (descending ? mtoc2_sort_cmp_real_desc
+                                 : mtoc2_sort_cmp_real_asc)
+                   : (descending ? mtoc2_sort_cmp_complex_desc
+                                 : mtoc2_sort_cmp_complex_asc));
     for (long i = 0; i < n; i++) {
       v.real[i] = a.real[buf[i].ix];
       v.imag[i] = srcHasImag ? a.imag[buf[i].ix] : 0.0;
