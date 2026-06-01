@@ -9,6 +9,14 @@
     "outDir": "dist-lib",
     "strict": true,
     "skipLibCheck": true,
+    // The generated runtime snippet registry (snippets.gen.ts) re-exports
+    // helpers via `export * from "./…js"` pointing at the real `.js` runtime
+    // snippet files (the interpreter executes those directly via ESM). Without
+    // `allowJs` tsc can't resolve those re-exports and reports every member as
+    // missing. `checkJs: false` keeps the `.js` snippets out of type-checking,
+    // matching tsconfig.app.json (used by the dev/CI `tsc -b` typecheck).
+    "allowJs": true,
+    "checkJs": false,
     "lib": ["ES2022", "DOM"],
     "types": ["vite/client", "node"],
     "erasableSyntaxOnly": false

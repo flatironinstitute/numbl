@@ -25,6 +25,7 @@ dist-ssr
 dist-cli
 dist-lib
 dist-plot-viewer
+dist-site-viewer
 server/dist
 *.local
 .env

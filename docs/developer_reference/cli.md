@@ -9,6 +9,7 @@ The `numbl` command-line entry point is a small orchestration layer over `execut
 - **REPL** — interactive session with persistent variables between inputs.
 - **Test runner** — run `.m` test scripts under a directory, gathering `SUCCESS` markers.
 - **Addon builder** — compile the native addon from source.
+- **Site builder** — `numbl build-site` bundles a project directory plus the prebuilt browser IDE (`dist-site-viewer/`) into a static, deployable site. See [web-app.md](web-app.md#static-site-viewer).
 - **Introspection** — machine-readable system/version info, list of registered builtins.
 - **Execution server** — local HTTP server (`numbl serve`) used by the browser IDE to run code outside the worker sandbox.
 

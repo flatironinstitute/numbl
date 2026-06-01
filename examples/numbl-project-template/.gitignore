@@ -1,0 +1,4 @@
+# Local build output from `numbl build-site`
+/_site/
+/dist/
+node_modules/

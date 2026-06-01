@@ -33,13 +33,16 @@
     "dist-lib/",
     "dist-cli/",
     "dist-plot-viewer/",
+    "dist-site-viewer/",
     "native/",
     "binding.gyp"
   ],
   "scripts": {
     "dev": "npm run build:snippets && npm run bundle:stdlib && vite",
-    "build": "npm run build:web && npm run build:test-runner && npm run copy:test-scripts && npm run build:cli && npm run build:plot-viewer",
+    "build": "npm run build:web && npm run build:test-runner && npm run copy:test-scripts && npm run build:cli && npm run build:plot-viewer && npm run build:site-viewer",
     "build:plot-viewer": "vite build --config vite.plot-viewer.config.ts",
+    "build:site-viewer": "npm run build:snippets && npm run bundle:stdlib && vite build --config vite.site-viewer.config.ts",
+    "dev:site-viewer": "npm run build:snippets && npm run bundle:stdlib && vite --config vite.site-viewer.config.ts",
     "build:test-runner": "npm run build:snippets && npm run bundle:stdlib && vite build --config vite.test-runner.config.ts",
     "dev:test-runner": "npm run build:snippets && npm run bundle:stdlib && vite --config vite.test-runner.config.ts",
     "copy:test-scripts": "tsx scripts/copy-test-scripts.ts",
@@ -66,7 +69,7 @@
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
     "bump": "tsx scripts/bump-version.ts",
-    "prepublishOnly": "npm run build:lib && npm run build:cli && npm run build:plot-viewer",
+    "prepublishOnly": "npm run build:lib && npm run build:cli && npm run build:plot-viewer && npm run build:site-viewer",
     "prepare": "husky"
   },
   "dependencies": {

@@ -29,6 +29,24 @@ MATLAB code that calls `input(...)` expects to block until the user types a resp
 
 Figures render in a separate Vite-built bundle that the browser app embeds (and the CLI's `--plot` flag serves over HTTP). See [plotting.md](plotting.md). Unit tests do not exercise this bundle — changes under the graphics source tree need a rebuild before they show up.
 
+## Static site viewer
+
+A second Vite entry (`src/site-viewer/`, built to `dist-site-viewer/` via
+`vite.site-viewer.config.ts`) packages the same `IDEWorkspace` as a standalone,
+deployable app. Instead of IndexedDB or the URL hash, it loads files from a
+baked-in `project.zip` through the `useStaticProjectFiles` hook (a binary-safe
+sibling of `useShareProjectFiles` — edits live in memory and reset on reload).
+It uses a relative asset base (`base: "./"`) so it works under any deploy
+subpath.
+
+The `numbl build-site` CLI command copies this bundle into an output directory,
+zips a project tree into `project.zip` (honoring `.numblignore`), writes an
+optional `numbl-project.json` manifest (title + entry file), and injects the
+deploy base. A reusable GitHub Action (`.github/actions/build-site/`) and a
+starter template (`examples/numbl-project-template/`) wire it to GitHub Pages.
+Markdown files render via the shared `MarkdownView` component (also used by the
+docs page), with a rendered/source toggle in the editor pane.
+
 ## Environment differences from the CLI
 
 - No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks.

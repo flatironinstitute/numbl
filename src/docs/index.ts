@@ -3,6 +3,7 @@ import language from "./language.md?raw";
 import builtins from "./builtins.md?raw";
 import plotting from "./plotting.md?raw";
 import library from "./library.md?raw";
+import deploying from "./deploying.md?raw";
 import differences from "./differences.md?raw";
 
 export interface DocEntry {
@@ -21,6 +22,11 @@ export const docs: DocEntry[] = [
   { slug: "builtins", title: "Built-in Functions", content: builtins },
   { slug: "plotting", title: "Plotting", content: plotting },
   { slug: "library", title: "Library Usage", content: library },
+  {
+    slug: "deploying",
+    title: "Deploying Projects",
+    content: deploying,
+  },
   {
     slug: "differences",
     title: "Differences from MATLAB",

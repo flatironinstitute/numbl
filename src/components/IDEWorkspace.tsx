@@ -58,6 +58,7 @@ import { FileBrowser } from "./FileBrowser";
 import { FigureView } from "../graphics/FigureView.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
+import { MarkdownView } from "./MarkdownView";
 import {
   fileText,
   isBinaryData,
@@ -216,6 +217,11 @@ export function IDEWorkspace({
   );
   const [figureTab, setFigureTab] = useState(0);
   const [triggerRenameId, setTriggerRenameId] = useState<string | undefined>();
+
+  // Markdown view mode for .md files
+  const [mdViewMode, setMdViewMode] = useState<"rendered" | "source">(
+    "rendered"
+  );
 
   // REPL state
   const [editorTab, setEditorTab] = useState(0);
@@ -801,6 +807,7 @@ export function IDEWorkspace({
   const activeFileIsBinary = activeFileData
     ? isBinaryData(activeFileData)
     : false;
+  const isMarkdown = !!activeFile?.name.toLowerCase().endsWith(".md");
 
   // Load active file content from DB when file changes
   useEffect(() => {
@@ -824,6 +831,19 @@ export function IDEWorkspace({
       cancelled = true;
     };
   }, [activeFileId, systemFiles, loadSystemFileContent, loadFileContent]);
+
+  // The Monaco editor unmounts when a binary file or the rendered-Markdown
+  // view is shown. Drop the stale ref so the content-sync effect below doesn't
+  // call setValue on a disposed editor; it remounts (with the right
+  // defaultValue) when the editor is shown again.
+  const editorHidden =
+    activeFileIsBinary || (isMarkdown && mdViewMode === "rendered");
+  useEffect(() => {
+    if (editorHidden) {
+      editorRef.current = null;
+      lastActiveFileId.current = "";
+    }
+  }, [editorHidden]);
 
   useEffect(() => {
     if (!editorRef.current) return;
@@ -1065,6 +1085,28 @@ export function IDEWorkspace({
                   {optimization === "0" ? "no jit" : "jit"}
                 </Typography>
               </Tooltip>
+              {isMarkdown && (
+                <ToggleButtonGroup
+                  value={mdViewMode}
+                  exclusive
+                  size="small"
+                  onChange={(_, v) => {
+                    if (v) setMdViewMode(v);
+                  }}
+                  sx={{
+                    "& .MuiToggleButton-root": {
+                      py: 0,
+                      px: 1,
+                      fontSize: "0.7rem",
+                      textTransform: "none",
+                      lineHeight: 1.6,
+                    },
+                  }}
+                >
+                  <ToggleButton value="rendered">Rendered</ToggleButton>
+                  <ToggleButton value="source">Source</ToggleButton>
+                </ToggleButtonGroup>
+              )}
               {activeFile && (
                 <Typography
                   variant="caption"
@@ -1091,11 +1133,21 @@ export function IDEWorkspace({
                     Binary file ({activeFileData?.length ?? 0} bytes)
                   </Typography>
                 </Box>
+              ) : isMarkdown && mdViewMode === "rendered" ? (
+                <Box sx={{ height: "100%", overflow: "auto", p: 3 }}>
+                  <MarkdownView
+                    source={activeFileData ? fileText(activeFileData) : ""}
+                  />
+                </Box>
               ) : (
                 <Editor
                   height="100%"
                   language={
-                    activeFile?.name.endsWith(".js") ? "javascript" : "numbl"
+                    activeFile?.name.endsWith(".js")
+                      ? "javascript"
+                      : isMarkdown
+                        ? "markdown"
+                        : "numbl"
                   }
                   defaultValue={activeFileData ? fileText(activeFileData) : ""}
                   onChange={value => {
