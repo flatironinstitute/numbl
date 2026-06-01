@@ -1507,7 +1507,11 @@ function storeIntoTensor1D(
       if (base.imag) grownImag.set(base.imag);
       grownImag[i] = rhsIm;
     }
-    return RTV.tensor(grown, [1, i + 1], grownImag);
+    // Preserve column orientation when growing a column vector (matches the
+    // multi-element vector-store path below).
+    const isColVec =
+      base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
+    return RTV.tensor(grown, isColVec ? [i + 1, 1] : [1, i + 1], grownImag);
   }
   base.data[i] = rhsRe;
   if (rhsIm !== 0 || base.imag) {
