@@ -8,45 +8,37 @@
  * The AST interpreter is the dispatcher's hardcoded last-resort
  * fallback (see `Registry.dispatch`); it doesn't need to be a
  * registered executor.
- *
- * The C-JIT (e3) executors are registered via an injected callback
- * (`setCJitRegistrar`). A Node-only entry point (`cli.ts`) imports
- * `executors/cJit/register.ts`, which calls `setCJitRegistrar` at
- * load time. The browser worker never imports that module, so the
- * cJit subtree (which pulls in `node:fs`/`node:os`/`node:child_process`
- * via `compile.ts`) stays out of the web bundle.
  */
 
 import type { Registry } from "./registry.js";
-import { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
-import { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
-import { jsJitCallExecutor } from "./jsJit/callExecutor.js";
+import { jitCallExecutor } from "./jit/callExecutor.js";
+import { jitLoopExecutor } from "./jit/loopExecutor.js";
+import { jitTopLevelExecutor } from "./jit/topLevelExecutor.js";
+import { cJitCallExecutor } from "./jit/cJitCallExecutor.js";
+import { cJitLoopExecutor } from "./jit/cJitLoopExecutor.js";
+import { cJitTopLevelExecutor } from "./jit/cJitTopLevelExecutor.js";
 
 /** Optimization mode label.
  *
- *   - `"0"`  — pure AST interpreter, no executors registered.
- *   - `"1"`  — JS-JIT suite (top-level / loop / call).
- *   - `"e3"` — C-JIT scalar-loop only. Targets compute-bound scalar
- *     loops by compiling the loop body to C and loading via koffi.
- *     Does NOT register the JS-JIT suite — the C-JIT loop executor
- *     either matches (and runs in C) or falls back to the AST
- *     interpreter. */
-export type OptLevel = "0" | "1" | "e3";
+ *   - `"0"` — pure AST interpreter, no executors registered.
+ *   - `"1"` — JS-JIT: all three shapes (top-level, loop,
+ *     call) emit JS via `compileSpec`. JIT declines
+ *     (`UnsupportedConstruct` / `JitTypeError`) fall back to the
+ *     interpreter cleanly.
+ *   - `"2"` — C-JIT-first with JS-JIT fallback. Both backends
+ *     register their executors; the dispatcher picks based on cost,
+ *     so the C path wins where it applies (scalar / tensor numeric
+ *     types with a wired `nativeBridge`) and the JS path picks up
+ *     the slack (struct / class / handle / no-cc-available).
+ *     Requires `cc` on the PATH and `koffi` installed; without
+ *     either, the C executors decline and `"2"` collapses to the
+ *     same behaviour as `"1"`. */
+export type OptLevel = "0" | "1" | "2";
 
-export const OPT_LEVELS: readonly OptLevel[] = ["0", "1", "e3"];
+export const OPT_LEVELS: readonly OptLevel[] = ["0", "1", "2"];
 
 export function isOptLevel(s: string): s is OptLevel {
   return (OPT_LEVELS as readonly string[]).includes(s);
-}
-
-type CJitRegistrar = (registry: Registry) => void;
-let cJitRegistrar: CJitRegistrar | null = null;
-
-/** Wire up the C-JIT (e3) executors. Called from a Node-only entry
- *  point at startup so the browser bundle never reaches the cJit
- *  module graph. */
-export function setCJitRegistrar(fn: CJitRegistrar): void {
-  cJitRegistrar = fn;
 }
 
 /** Register the executors for a given optimization mode. */
@@ -58,18 +50,22 @@ export function registerExecutorsForOpt(
     case "0":
       return;
     case "1":
-      registry.registerWholeScope(jsJitTopLevelExecutor);
-      registry.register(jsJitLoopExecutor);
-      registry.register(jsJitCallExecutor);
+      registry.registerWholeScope(jitTopLevelExecutor);
+      registry.register(jitLoopExecutor);
+      registry.register(jitCallExecutor);
       return;
-    case "e3":
-      if (!cJitRegistrar) {
-        throw new Error(
-          "--opt e3 (C-JIT) is only available in the Node CLI; " +
-            "cJit registrar not set"
-        );
-      }
-      cJitRegistrar(registry);
+    case "2":
+      // C-JIT first, JS-JIT as fallback. Both compete via the
+      // dispatcher's cost model — C-JIT proposes only where it can
+      // marshal the types, and its lower per-call/run cost wins
+      // when both match. Outside its acceptance set, JS-JIT picks
+      // up unchanged.
+      registry.registerWholeScope(cJitTopLevelExecutor);
+      registry.registerWholeScope(jitTopLevelExecutor);
+      registry.register(cJitCallExecutor);
+      registry.register(cJitLoopExecutor);
+      registry.register(jitLoopExecutor);
+      registry.register(jitCallExecutor);
       return;
   }
 }

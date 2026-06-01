@@ -7,7 +7,6 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeTensor,
 } from "../../runtime/types.js";
-import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, predicateCases } from "./types.js";
 
 // ── isnan ───────────────────────────────────────────────────────────────
@@ -21,11 +20,6 @@ defineBuiltin({
     (re, im) => Number.isNaN(re) || Number.isNaN(im),
     "isnan"
   ),
-  jitEmit: (args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean") return `Number.isNaN(${args[0]})`;
-    return null;
-  },
 });
 
 // ── isinf ───────────────────────────────────────────────────────────────
@@ -43,12 +37,6 @@ defineBuiltin({
     (re, im) => isInfVal(re) || isInfVal(im),
     "isinf"
   ),
-  jitEmit: (args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean")
-      return `(Math.abs(${args[0]}) === Infinity)`;
-    return null;
-  },
 });
 
 // ── isfinite ────────────────────────────────────────────────────────────
@@ -62,11 +50,6 @@ defineBuiltin({
     (re, im) => isFinite(re) && isFinite(im),
     "isfinite"
   ),
-  jitEmit: (args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean") return `isFinite(${args[0]})`;
-    return null;
-  },
 });
 
 // ── isreal ──────────────────────────────────────────────────────────────
@@ -92,14 +75,4 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_args, types) => {
-    const k = types[0]?.kind;
-    if (k === "number" || k === "boolean") return "true";
-    if (
-      k === "tensor" &&
-      (types[0] as Extract<JitType, { kind: "tensor" }>).isComplex === false
-    )
-      return "true";
-    return null;
-  },
 });

@@ -1,28 +1,22 @@
 # JIT IR and Codegen
 
+The JIT compiler is the in-tree subsystem under `src/numbl-core/jit`. It lowers the parser AST to a typed intermediate representation, then emits target code — JavaScript (`--opt 1`) or C (`--opt 2`) — from the same IR.
+
 ## IR
 
-The JIT lowers the parser AST to a typed intermediate representation before emitting target code. Expressions and statements are tagged discriminated unions.
-
-- **Expressions (`JitExpr`)** — number literal, variable, binary/unary op, generic call, user call, index read, range-slice read, tensor literal, vertical-concat growth, member read, struct-array member read, function-handle call, user-dispatch call.
-- **Statements (`JitStmt`)** — assign, assign-via-index (full and specialized column / 3-D-page / range forms), assign-member, if, for, while, multi-assign, break/continue/return, set-location (for diagnostics).
-
-Every IR node carries its resolved `JitType`. This is the contract between lowering and codegen: types are fixed at this point, so codegen never re-decides what an operation means.
+`jit/lowering/ir.ts` defines the IR: discriminated-union expression and statement nodes, each carrying its resolved `Type` (`jit/lowering/types.ts`). Expression kinds include numeric / imaginary / string literals, variables, binary/unary ops, calls (user-function specialization, builtin, runtime helper), tensor build, index load / slice, member load, and cell / struct / handle nodes. Statement kinds include assign, indexed / sliced / member / cell stores, `if` / `while` / `for`, multi-assign, and control flow. Types are fixed at lowering time — codegen never re-decides what an operation means.
 
 ## Lowering
 
-Lowering walks the parser AST top-down, tracking variable types in a per-scope environment. For each call it invokes the callee's `IBuiltin.resolve` to get output types and an `apply` function. Loop heads join types from the entry and back-edge; a widening triggers recompilation.
+`jit/lowering/lower.ts` (the `Lowerer`) walks the AST top-down, tracking variable types per scope and resolving callees through the workspace (`jit/workspace/workspace.ts`, which delegates to numbl's `resolveFunction`). `specialize.ts` produces one `IRFunc` per `(function, arg-type signature, nargout)` and caches it in `Lowerer.specializations`, so repeated calls with the same signature reuse the lowering. A construct the IR can't represent throws `UnsupportedConstruct` / `TypeError` (`jit/lowering/errors.ts`); the executor catches it and declines to the interpreter.
 
-If any construct is unsupported — an uncommon builtin, an unusual control flow pattern, a type the JIT doesn't represent — lowering aborts and the interpreter keeps control.
+## Backends
 
-## JS backend
+Both backends walk the same IR program — `compileSpec` → `jit/codegen/emitJs.ts` for JS; `compileSpecC` → `jit/codegen/emit.ts` for C:
 
-Emits an ES function as a string, then materializes it with `new Function(args, body)`. Key ingredients:
+- **JS** emits an ES module string returning `($h) => specFn`, materialized with `new Function(...)`. `$h` carries the host hooks (output sink, plot dispatch).
+- **C** emits C source compiled to a `.so` with `cc` and called via koffi; multi-output specs use out-pointer params (see `executors/jit/typeAdapterC.ts`).
 
-- A **helpers object** (conventionally `$h`) holds all runtime functions the generated code calls into: tensor allocation, indexed read/write, binary ops, complex arithmetic, copy-on-write helpers, builtin trampolines (`$h.ib_<name>`). The helpers object is fresh per compilation.
-- **Inline emission** via `IBuiltin.jitEmit` produces a literal expression string for fast scalar/real-tensor paths. When absent or unsuitable, codegen falls back to the `$h.ib_<name>` trampoline.
-- **Bail expressions** throw a typed bail object that the JIT caller unwinds.
+Builtins emit through the JIT compiler's own registry (`jit/builtins`): each def supplies `emitJs` / `emitC`. **Runtime snippets** (`jit/builtins/runtime/*.h` C bodies + `*.js` siblings) are generated into `snippets.gen.ts` by `scripts/build_runtime_snippets.ts` and inlined into the emitted module **lazily** — only snippets activated by the emitted code are included.
 
-## Fusion
-
-Element-wise assignment runs are detected and collapsed into a single per-element loop by a shared analysis. See [fusion.md](fusion.md).
+See [executors.md](../executors.md) for how the executors invoke `compileSpec` / `compileSpecC` and marshal values across the boundary, and [cjit.md](cjit.md) for the C backend specifics.

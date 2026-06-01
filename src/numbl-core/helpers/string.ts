@@ -3,7 +3,11 @@
  */
 
 import { type RuntimeValue, toNumber, toString } from "../runtime/index.js";
-import { isRuntimeTensor } from "../runtime/types.js";
+import {
+  isRuntimeTensor,
+  isRuntimeNumber,
+  isRuntimeLogical,
+} from "../runtime/types.js";
 
 /** Convert a number to string.
  *  Uses short-g style: ~5 significant digits,
@@ -250,7 +254,13 @@ export function sprintfFormat(fmt: string, args: RuntimeValue[]): string {
               result += applyWidth(spec, gStr);
             }
           } else if (ch === "s") {
-            const sVal = toString(flatArgs[argIdx++]);
+            const sArg = flatArgs[argIdx++];
+            // A numeric/logical argument to %s is interpreted as a character
+            // code, matching MATLAB (sprintf('%s', 65) -> 'A').
+            const sVal =
+              isRuntimeNumber(sArg) || isRuntimeLogical(sArg)
+                ? String.fromCharCode(Math.round(toNumber(sArg)))
+                : toString(sArg);
             const sFlags = spec.slice(1);
             const sLeftAlign = sFlags.includes("-");
             const sWidthMatch = spec.match(/^%[^0-9]*(\d+)/);

@@ -1,6 +1,7 @@
 % Test isscalar, any, all with complex numbers
 
 %% isscalar with complex numbers
+%!numbl:assert_jit c
 z = 1 + 2i;
 assert(isscalar(z), 'isscalar should be true for complex scalar');
 assert(isscalar(3i), 'isscalar should be true for pure imaginary');

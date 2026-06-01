@@ -1,6 +1,7 @@
 % Test that min/max of complex tensors returns complex values
 % and that arithmetic on the result works correctly
 
+%!numbl:assert_jit c
 x = [1+2i, 3+4i, 5+6i];
 
 % max should return a complex number

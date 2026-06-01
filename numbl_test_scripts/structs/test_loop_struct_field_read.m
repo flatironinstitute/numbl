@@ -20,7 +20,6 @@ opts.tol = 1e-6;
 opts.rho = 1.8;
 total = 0;
 for i = 1:100
-    %!numbl:assert_jit
     total = total + opts.k * i;
 end
 % sum(i=1..100) = 5050; * 16 = 80800
@@ -30,7 +29,6 @@ assert(total == 80800, '1: basic sum');
 acc1 = 0;
 acc2 = 0;
 for i = 1:50
-    %!numbl:assert_jit
     v = opts.k * i + opts.rho;
     if v > opts.tol
         acc1 = acc1 + v;
@@ -49,7 +47,6 @@ opts2.n = 30;
 opts2.scale = 2.5;
 sum3 = 0;
 for i = 1:opts2.n
-    %!numbl:assert_jit
     sum3 = sum3 + i * opts2.scale;
 end
 % sum(i=1..30) = 465; * 2.5 = 1162.5
@@ -60,7 +57,6 @@ cfg.active = true;
 cfg.step = 3;
 cnt = 0;
 for i = 1:20
-    %!numbl:assert_jit
     if cfg.active
         cnt = cnt + cfg.step;
     end
@@ -73,7 +69,6 @@ params.a = 5;
 params.b = 2;
 grand = 0;
 for i = 1:10
-    %!numbl:assert_jit
     for j = 1:5
         grand = grand + params.a * i + params.b * j;
     end
@@ -87,7 +82,6 @@ assert(grand == 1675, '5: nested loop struct reads');
 consts.pi_approx = 3.14159;
 s6 = 0;
 for i = 1:10
-    %!numbl:assert_jit
     s6 = s6 + consts.pi_approx + consts.pi_approx * i;
 end
 % = 10 * pi + pi * sum(1..10) = 10 * 3.14159 + 3.14159 * 55 = 65 * 3.14159

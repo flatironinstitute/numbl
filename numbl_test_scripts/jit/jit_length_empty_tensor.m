@@ -3,6 +3,7 @@
 % The emitter previously returned max(d0, d1) when the tensor had
 % hasFreshAlloc, ignoring the emptiness check.
 
+%!numbl:assert_jit c
 function [l1, l2, l3, l4, l5] = get_lengths()
   a = zeros(0, 5);
   l1 = length(a);

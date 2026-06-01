@@ -17,14 +17,13 @@ import {
 } from "../../runtime/types.js";
 import { tensorOps } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
-import {
-  type JitType,
-  signFromNumber,
-  isNonneg,
-  unifyJitTypes,
-} from "../../jitTypes.js";
+import { type JitType, signFromNumber, unifyJitTypes } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
+import {
+  getBroadcastShape,
+  broadcastIterate,
+} from "../../helpers/arithmetic.js";
 
 // ── IBuiltin interface ──────────────────────────────────────────────────
 
@@ -46,12 +45,6 @@ export interface IBuiltin {
   help?: BuiltinHelp;
   /** Given input JIT types + nargout, return output types and a specialized apply, or null. */
   resolve: (argTypes: JitType[], nargout: number) => IBuiltinResolution | null;
-  /** Optional fast-path JS code emission for JIT. Return null to fall back to $h.ib_<name>. */
-  jitEmit?: (
-    argCode: string[],
-    argTypes: JitType[],
-    getDest?: () => string
-  ) => string | null;
 }
 
 // ── Registry ────────────────────────────────────────────────────────────
@@ -69,21 +62,10 @@ export function registerIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
 }
 
-/** Callback invoked when a dynamic IBuiltin is registered, so jitHelpers can be updated. */
-let _onDynamicRegister: ((b: IBuiltin) => void) | null = null;
-
-/** Set a callback for dynamic IBuiltin registration (called by jitHelpers setup). */
-export function setDynamicRegisterHook(
-  hook: ((b: IBuiltin) => void) | null
-): void {
-  _onDynamicRegister = hook;
-}
-
 /** Register a dynamic IBuiltin (e.g. .js user functions), replacing any
  *  existing entry with the same name without error. */
 export function registerDynamicIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
-  _onDynamicRegister?.(b);
 }
 
 export function unregisterIBuiltin(name: string): void {
@@ -290,65 +272,6 @@ function unifyStructArrayFieldTypes(a: JitType, b: JitType): JitType {
     return { kind: "tensor", isComplex: false };
   }
   return normal;
-}
-
-/** Pass-through — JS booleans are numbl's scalar `logical` representation
- * and must flow through JIT code unchanged so `class(x)` reports `logical`.
- * The JIT scalar codegen coerces booleans with `+` where it needs numeric
- * behavior, so downstream arithmetic/comparison paths are not affected. */
-function coerceBooleans(v: unknown): unknown {
-  return v;
-}
-
-/** Build the ib_* entries for the jitHelpers object.
- *  The returned object also has _profileEnter/_profileLeave hooks (no-ops by default)
- *  that the runtime replaces when profiling is enabled. */
-export function buildIBuiltinHelpers(): Record<
-  string,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  any
-> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const helpers: Record<string, any> = {};
-  // Profiling hooks — no-ops by default, replaced by Runtime when profiling is enabled
-  helpers._profileEnter = Function.prototype;
-  helpers._profileLeave = Function.prototype;
-  for (const [name, ib] of registry) {
-    helpers[`ib_${name}`] = (...args: unknown[]) => {
-      helpers._profileEnter("builtin:jit:" + name);
-      const rtArgs = args as RuntimeValue[];
-      const argTypes = rtArgs.map(inferJitType);
-      const res = ib.resolve(argTypes, 1);
-      if (!res) {
-        helpers._profileLeave();
-        throw new Error(`JIT ib_${name}: resolve failed`);
-      }
-      const result = coerceBooleans(res.apply(rtArgs, 1));
-      helpers._profileLeave();
-      return result;
-    };
-  }
-  // Generic multi-output caller: ibcall(name, nargout, ...args)
-  helpers["ibcall"] = (name: unknown, nargout: unknown, ...args: unknown[]) => {
-    helpers._profileEnter("builtin:jit:" + (name as string));
-    const ib = registry.get(name as string);
-    if (!ib) {
-      helpers._profileLeave();
-      throw new Error(`JIT ibcall: unknown builtin ${name}`);
-    }
-    const rtArgs = args as RuntimeValue[];
-    const argTypes = rtArgs.map(inferJitType);
-    const res = ib.resolve(argTypes, nargout as number);
-    if (!res) {
-      helpers._profileLeave();
-      throw new Error(`JIT ibcall: resolve failed for ${name}`);
-    }
-    const result = res.apply(rtArgs, nargout as number);
-    helpers._profileLeave();
-    if (Array.isArray(result)) return result.map(coerceBooleans);
-    return [coerceBooleans(result)];
-  };
-  return helpers;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────
@@ -647,13 +570,16 @@ export function applyBinaryElemwise(
   if (aIsTensor && bIsTensor) {
     const tA = a0 as RuntimeTensor;
     const tB = a1 as RuntimeTensor;
-    if (tA.data.length !== tB.data.length) {
-      throw new Error(`${name}: array dimensions must agree`);
+    const outShape = getBroadcastShape(tA.shape, tB.shape);
+    if (outShape === null) {
+      throw new Error(`${name}: Matrix dimensions must agree`);
     }
-    const out = allocFloat64Array(tA.data.length);
-    for (let i = 0; i < tA.data.length; i++)
-      out[i] = fn(tA.data[i], tB.data[i]);
-    return makeTensor(out, undefined, tA.shape);
+    const n = outShape.reduce((acc, d) => acc * d, 1);
+    const out = allocFloat64Array(n);
+    broadcastIterate(tA.shape, tB.shape, outShape, (ai, bi, oi) => {
+      out[oi] = fn(tA.data[ai], tB.data[bi]);
+    });
+    return makeTensor(out, undefined, outShape);
   }
   throw new Error(`${name}: unsupported argument types`);
 }
@@ -692,11 +618,6 @@ export function defineBuiltin(opts: {
   name: string;
   help?: BuiltinHelp;
   cases: BuiltinCase[];
-  jitEmit?: (
-    argCode: string[],
-    argTypes: JitType[],
-    getDest?: () => string
-  ) => string | null;
 }): void {
   registerIBuiltin({
     name: opts.name,
@@ -708,7 +629,6 @@ export function defineBuiltin(opts: {
       }
       return null;
     },
-    jitEmit: opts.jitEmit,
   });
 }
 
@@ -945,57 +865,4 @@ export function predicateCases(
       },
     },
   ];
-}
-
-// ── JIT emit helpers ───────────────────────────────────────────────────
-
-/** Fast-path emitter for unary Math.* functions.
- *  Emits Math.fn(x) for scalar numbers, $h.tHelper(dest, x) for real
- *  tensors. `getDest` is a lazy callback returning the dest local: either
- *  a mangled LHS (top-level Assign) or a fresh scratch (inner tensor
- *  sub-expression). It's only invoked when the tensor fast path is
- *  actually taken, so scalar / rejected paths don't burn a scratch. */
-export function unaryMathJitEmit(
-  mathFn: string,
-  tensorHelper: string,
-  requireNonneg?: boolean
-): (
-  argCode: string[],
-  argTypes: JitType[],
-  getDest?: () => string
-) => string | null {
-  return (argCode, argTypes, getDest) => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "boolean") {
-      if (requireNonneg && !isNonneg(a)) return null;
-      return `${mathFn}(${argCode[0]})`;
-    }
-    if (a.kind === "tensor") {
-      // For complex input the `requireNonneg` gate is irrelevant — the
-      // complex kernels return the principal-branch complex result, which
-      // is the correct MATLAB behavior for log(-1), sqrt(-1), etc.
-      if (requireNonneg && a.isComplex !== true && !isNonneg(a)) return null;
-      const dest = getDest?.() ?? "undefined";
-      return `$h.${tensorHelper}(${dest}, ${argCode[0]})`;
-    }
-    return null;
-  };
-}
-
-/** Fast-path emitter for binary Math.* functions on two scalar numbers. */
-export function binaryMathJitEmit(
-  mathFn: string
-): (argCode: string[], argTypes: JitType[]) => string | null {
-  return (argCode, argTypes) => {
-    if (argTypes.length !== 2) return null;
-    const k0 = argTypes[0].kind,
-      k1 = argTypes[1].kind;
-    if (
-      (k0 !== "number" && k0 !== "boolean") ||
-      (k1 !== "number" && k1 !== "boolean")
-    )
-      return null;
-    return `${mathFn}(${argCode[0]}, ${argCode[1]})`;
-  };
 }

@@ -8,7 +8,9 @@
 #include <math.h>
 
 static inline double rsign(double x) {
-  return x > 0.0 ? 1.0 : x < 0.0 ? -1.0 : 0.0;
+  // MATLAB: sign(NaN) is NaN; sign(0) is 0. The bare comparison chain
+  // would map NaN -> 0 (both x>0 and x<0 are false), so guard NaN first.
+  return x > 0.0 ? 1.0 : x < 0.0 ? -1.0 : (x == 0.0 ? 0.0 : NAN);
 }
 
 int numbl_real_unary_elemwise(int op, size_t n,

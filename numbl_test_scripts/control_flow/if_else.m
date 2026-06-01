@@ -1,5 +1,6 @@
 % if / elseif / else
 
+%!numbl:assert_jit
 x = 10;
 if x > 5
   result = 'big';

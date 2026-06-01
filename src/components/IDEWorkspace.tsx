@@ -749,10 +749,6 @@ export function IDEWorkspace({
       if (newMode !== null) {
         const isLocal = newMode === "local";
         setUseRemoteExecution(isLocal);
-        // C-JIT is only available on the local server
-        if (!isLocal) {
-          setOptimization(o => (o === "e3" ? "1" : o));
-        }
       }
     },
     []
@@ -1046,8 +1042,8 @@ export function IDEWorkspace({
               <Tooltip
                 title={
                   optimization === "0"
-                    ? "Interpreter only (click for JS-JIT)"
-                    : "JS-JIT (click to disable)"
+                    ? "Interpreter only (click for JIT)"
+                    : "JIT (click to disable)"
                 }
               >
                 <Typography

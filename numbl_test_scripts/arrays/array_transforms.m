@@ -1,6 +1,7 @@
 % Test array transformation functions
 
 % fliplr
+%!numbl:assert_jit c
 v = [1, 2, 3, 4, 5];
 vf = fliplr(v);
 assert(vf(1) == 5);

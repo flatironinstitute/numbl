@@ -21,7 +21,7 @@ import type {
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
 import { registerIBuiltin } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── helpers ─────────────────────────────────────────────────────────────
 

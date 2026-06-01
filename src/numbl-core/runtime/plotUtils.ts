@@ -48,7 +48,7 @@ import type {
   HeatmapTrace,
   QuiverTrace,
 } from "../../graphics/types.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
 

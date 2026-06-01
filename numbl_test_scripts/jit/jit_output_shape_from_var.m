@@ -14,6 +14,7 @@
 % Each test function carries a `for` loop so `bodyWorthCrossing` lets the
 % hybrid-callees path compile it even when the outer fails feasibility.
 
+%!numbl:assert_jit c
 function y = seq_alias(x)
   for i = 1:1
     y = x + 0;   % first assign marks y as fresh/dynamic

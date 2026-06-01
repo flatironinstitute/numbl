@@ -40,7 +40,7 @@ import {
   NONUNIT,
   RIGHT,
 } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 export function dgetri(
   n: number,

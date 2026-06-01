@@ -31,7 +31,6 @@ assert(abs(acc - 50 * 1.5) < 1e-12, 'hot-loop accumulation');
 disp('SUCCESS')
 
 function [r, d, d2] = starfish_local(t, varargin)
-    %!numbl:assert_jit
     narms = 5;
     amp = 0.3;
     x0 = 0.0;

@@ -26,7 +26,7 @@ import {
 import type { JitType } from "../../jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { sprintfFormat } from "../../helpers/string.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────
 
@@ -866,6 +866,11 @@ registerIBuiltin({
   },
 });
 
+// NOTE: the real str2num is the special builtin in
+// interpreterSpecialBuiltins.ts, which evaluates the text as `[<text>]`
+// (handling vectors / matrices / arithmetic). It intercepts before this
+// IBuiltin, which only stays registered for builtin-listing/type presence
+// and the degenerate fallback.
 registerIBuiltin({
   name: "str2num",
   resolve: argTypes => {
@@ -1189,8 +1194,12 @@ registerIBuiltin({
       apply: args => {
         const v = args[0];
         const prec = args.length >= 2 ? Math.round(toNumber(args[1])) : -1;
-        const fmt = (n: number) =>
-          prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
+        const fmt = (n: number): string => {
+          // MATLAB spells these Inf / -Inf / NaN (not JS's "Infinity").
+          if (!Number.isFinite(n))
+            return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
+          return prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
+        };
         if (isRuntimeNumber(v)) return RTV.char(fmt(v));
         if (isRuntimeTensor(v)) {
           const nRows = v.shape[0] || 1;

@@ -1,6 +1,8 @@
 % Test NaN handling in sort
 % MATLAB puts NaN at the end for ascending, at the beginning for descending.
 
+%!numbl:assert_jit c
+
 % Test 1: sort ascending with NaN
 r = sort([3 NaN 1 2]);
 assert(r(1) == 1, 'sorted(1) should be 1');

@@ -44,7 +44,7 @@ import {
 
 import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 import { cowCopy } from "../runtime/cow.js";
 import { isShared } from "../runtime/refcount.js";
 
@@ -169,16 +169,16 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "If": {
       const cond = this.evalExpr(stmt.cond);
       if (this.rt.toBool(cond)) {
-        return this.execStmts(stmt.thenBody);
+        return this.execBlockStmts(stmt.thenBody);
       }
       for (const elseif of stmt.elseifBlocks) {
         const elseifCond = this.evalExpr(elseif.cond);
         if (this.rt.toBool(elseifCond)) {
-          return this.execStmts(elseif.body);
+          return this.execBlockStmts(elseif.body);
         }
       }
       if (stmt.elseBody) {
-        return this.execStmts(stmt.elseBody);
+        return this.execBlockStmts(stmt.elseBody);
       }
       return null;
     }
@@ -186,18 +186,27 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "While": {
       const _whileStart = this.rt.profilingEnabled ? performance.now() : 0;
       let _whileIters = 0;
-      while (true) {
-        this.rt.checkCancel();
-        const cond = this.evalExpr(stmt.cond);
-        if (!this.rt.toBool(cond)) break;
-        _whileIters++;
-        const signal = this.execStmts(stmt.body);
-        if (signal instanceof BreakSignal) break;
-        if (signal instanceof ContinueSignal) continue;
-        if (signal instanceof ReturnSignal) {
-          recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
-          return signal;
+      // `loopDepth` gates per-call JIT proposals — see comment on
+      // the field in `Interpreter`. Bumped around the body only, not
+      // the cond eval (the cond is evaluated once per iteration but
+      // is conceptually loop-control, not a hot inner call).
+      this.loopDepth++;
+      try {
+        while (true) {
+          this.rt.checkCancel();
+          const cond = this.evalExpr(stmt.cond);
+          if (!this.rt.toBool(cond)) break;
+          _whileIters++;
+          const signal = this.execStmts(stmt.body);
+          if (signal instanceof BreakSignal) break;
+          if (signal instanceof ContinueSignal) continue;
+          if (signal instanceof ReturnSignal) {
+            recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
+            return signal;
+          }
         }
+      } finally {
+        this.loopDepth--;
       }
       recordHotLoop(this, stmt, "while", _whileIters, _whileStart);
       return null;
@@ -205,21 +214,86 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "For": {
       const _forStart = this.rt.profilingEnabled ? performance.now() : 0;
-      const iterVal = this.evalExpr(stmt.expr);
-      const rv = ensureRuntimeValue(iterVal);
-      const iterItems = forIter(rv);
-      for (let _i = 0; _i < iterItems.length; _i++) {
-        this.rt.checkCancel();
-        this.env.set(stmt.varName, ensureRuntimeValue(iterItems[_i]));
-        const signal = this.execStmts(stmt.body);
-        if (signal instanceof BreakSignal) break;
-        if (signal instanceof ContinueSignal) continue;
-        if (signal instanceof ReturnSignal) {
-          recordHotLoop(this, stmt, "for", _i + 1, _forStart);
-          return signal;
+      // Lazy range iteration: a `for k = a:s:b` over a scalar-numeric
+      // range is iterated WITHOUT materializing the range tensor or a JS
+      // array of every index. The element count and per-element value
+      // (`start + step*i`, with the last snapped to `end`) are computed
+      // by the same formula as makeRangeTensor, so loop-variable values
+      // are byte-identical — this only skips allocating a row vector
+      // whose elements we'd consume one at a time anyway (and which a
+      // `break`-heavy loop, e.g. adaptive quadrature's `for i=1:1e5`,
+      // barely touches). Char ranges ('a':'z') return null from
+      // asScalarNumber and keep the eager path, preserving char elems.
+      let lazyRange: {
+        count: number;
+        start: number;
+        step: number;
+        end: number;
+      } | null = null;
+      let iterItems: unknown[] | null = null;
+      if (stmt.expr.type === "Range") {
+        const sv = this.evalExpr(stmt.expr.start);
+        const stv = stmt.expr.step ? this.evalExpr(stmt.expr.step) : 1;
+        const ev = this.evalExpr(stmt.expr.end);
+        const s = asScalarNumber(sv);
+        const st = asScalarNumber(stv);
+        const e = asScalarNumber(ev);
+        if (s !== null && st !== null && e !== null) {
+          // makeRangeTensor's element-count formula, clamped to a finite
+          // non-negative value (matches mtoc2_loop_count). step===0 and
+          // non-finite counts yield an empty loop, same as the eager path.
+          const rawN = st === 0 ? 0 : Math.floor((e - s) / st + 1 + 1e-10);
+          const count = Number.isFinite(rawN) ? Math.max(0, rawN) : 0;
+          lazyRange = { count, start: s, step: st, end: e };
+        } else {
+          iterItems = forIter(ensureRuntimeValue(runtimeRange(sv, stv, ev)));
         }
+      } else {
+        iterItems = forIter(ensureRuntimeValue(this.evalExpr(stmt.expr)));
       }
-      recordHotLoop(this, stmt, "for", iterItems.length, _forStart);
+
+      const n = lazyRange ? lazyRange.count : iterItems!.length;
+      this.loopDepth++;
+      let _ran = 0;
+      try {
+        for (let _i = 0; _i < n; _i++) {
+          this.rt.checkCancel();
+          let elem: unknown;
+          if (lazyRange) {
+            let v = lazyRange.start + lazyRange.step * _i;
+            // Snap the last element to exactly `end` (matches
+            // makeRangeTensor / mtoc2_range_value), multi-element only.
+            if (
+              lazyRange.count > 1 &&
+              _i === lazyRange.count - 1 &&
+              Math.abs(v - lazyRange.end) < Math.abs(lazyRange.step) * 1e-10
+            ) {
+              v = lazyRange.end;
+            }
+            elem = v;
+          } else {
+            elem = iterItems![_i];
+          }
+          this.env.set(stmt.varName, ensureRuntimeValue(elem));
+          const signal = this.execStmts(stmt.body);
+          _ran = _i + 1;
+          if (signal instanceof BreakSignal) break;
+          if (signal instanceof ContinueSignal) continue;
+          if (signal instanceof ReturnSignal) {
+            recordHotLoop(this, stmt, "for", _i + 1, _forStart);
+            return signal;
+          }
+        }
+      } finally {
+        this.loopDepth--;
+      }
+      recordHotLoop(
+        this,
+        stmt,
+        "for",
+        lazyRange ? _ran : iterItems!.length,
+        _forStart
+      );
       return null;
     }
 
@@ -230,26 +304,26 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const caseVal = this.evalExpr(c.value);
         if (this.switchMatch(switchVal, caseVal)) {
           matched = true;
-          const signal = this.execStmts(c.body);
+          const signal = this.execBlockStmts(c.body);
           if (signal) return signal;
           break;
         }
       }
       if (!matched && stmt.otherwise) {
-        return this.execStmts(stmt.otherwise);
+        return this.execBlockStmts(stmt.otherwise);
       }
       return null;
     }
 
     case "TryCatch": {
       try {
-        const signal = this.execStmts(stmt.tryBody);
+        const signal = this.execBlockStmts(stmt.tryBody);
         if (signal) return signal;
       } catch (e) {
         if (stmt.catchVar) {
           this.env.set(stmt.catchVar, this.rt.wrapError(e));
         }
-        const signal = this.execStmts(stmt.catchBody);
+        const signal = this.execBlockStmts(stmt.catchBody);
         if (signal) return signal;
       }
       return null;
@@ -298,18 +372,38 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       return null;
 
     case "Directive": {
+      // `%!numbl:assert_jit` asserts that the enclosing loop / function /
+      // script body is JIT-compiled. The lowerer treats the directive as
+      // a no-op, so a JIT'd unit compiles it away and the interpreter
+      // never reaches it. If we DO reach it here, the enclosing unit ran
+      // in the interpreter — i.e. it was not JIT'd.
+      //
+      //   - plain `assert_jit`   requires JS-JIT at --opt 1 only.
+      //   - `assert_jit c`       additionally requires C-JIT at --opt 2.
+      //
+      // --opt 0 is always a no-op. The --opt 2 case where a `c` unit
+      // JS-JITs instead of C-JITs is forced here too: the JS-JIT
+      // executors decline `c` units at --opt 2, routing them to the
+      // interpreter when C-JIT also declines.
       if (stmt.directive === "assert_jit") {
-        // Only enforce assert_jit at --opt 1 (JS-JIT). Other opt
-        // modes (e3 etc.) cover narrower shapes than JS-JIT, so a
-        // directive surviving to the interpreter is expected and
-        // doesn't represent a regression. At --opt 0 it's a no-op.
-        if (this.optimization !== "1") return null;
         const wantC = stmt.args.includes("c");
-        throw new RuntimeError(
-          `%!numbl:assert_jit${wantC ? " c" : ""}: expected the surrounding loop or function body to be JIT-compiled, but it was interpreted. Run with --opt 0 to silence.`
-        );
+        if (this.optimization === "1") {
+          throw new RuntimeError(
+            `%!numbl:assert_jit: expected the enclosing loop/function/script ` +
+              `to be JS-JIT-compiled at --opt 1, but it ran in the ` +
+              `interpreter. (Run with --opt 0 to silence.)`
+          );
+        }
+        if (this.optimization === "2" && wantC) {
+          throw new RuntimeError(
+            `%!numbl:assert_jit c: expected the enclosing loop/function/` +
+              `script to be C-JIT-compiled at --opt 2, but it ran in the ` +
+              `interpreter. (Run with --opt 0 to silence.)`
+          );
+        }
       }
-      // Unknown directives are silently ignored.
+      // No-ops: any directive at --opt 0; plain assert_jit at --opt 2;
+      // unknown directives.
       return null;
     }
 
@@ -347,6 +441,23 @@ export function execStmts(
   return null;
 }
 
+/** Execute a conditional-block body (`if` / `switch` / `try`), tracking
+ *  `condBlockDepth` so a loop dispatched inside knows its sibling list is
+ *  a nested block — the loop classifier then keeps every loop-assigned
+ *  name live-out (the post-loop liveness scan can't see reads after the
+ *  enclosing block). */
+export function execBlockStmts(
+  this: Interpreter,
+  stmts: Stmt[]
+): ControlSignal | null {
+  this.condBlockDepth++;
+  try {
+    return this.execStmts(stmts);
+  } finally {
+    this.condBlockDepth--;
+  }
+}
+
 // ── Expression evaluation ────────────────────────────────────────────────
 
 export function evalExpr(this: Interpreter, expr: Expr): unknown {
@@ -377,11 +488,13 @@ export function evalExprNargout(
     case "Ident": {
       const val = this.env.get(expr.name);
       if (val !== undefined) return val;
-      try {
-        return this.rt.getConstant(expr.name);
-      } catch {
-        // Not a constant
-      }
+      // Constant (pi, eps, ...)? Use the non-throwing lookup — the old
+      // throw/catch built a RuntimeError (with a V8 stack capture) for
+      // every non-variable identifier, which is a hot path: any bare
+      // function-name reference, evaluated per loop iteration, paid for
+      // a thrown-and-immediately-caught exception.
+      const c = getConstant(expr.name);
+      if (c !== undefined) return c;
       return this.callFunction(expr.name, [], nargout);
     }
 
@@ -948,6 +1061,10 @@ export function evalAnonFunc(
   // snapshot and in the parent env triggers COW on parent-side mutation
   // — preserves MATLAB's by-value capture semantics.
   fn.capturedEnv = capturedEnv;
+  // Retain the defining AST + file so the JIT can inline a capture-free
+  // handle that later crosses a compile boundary (loop input / call arg).
+  fn.handleAst = expr;
+  fn.handleDefFile = capturedFile;
   return fn;
 }
 
@@ -1027,6 +1144,18 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   // When the handle dies, release those captures by clearing the env.
   if (isNested) {
     fn.releaseExtra = () => capturedEnv.clearLocals();
+  } else {
+    // A plain `@name` handle to a workspace/local/package function (no
+    // captured env). Retain its AST + file so the JIT can inline it as
+    // an in-scope `@name` constant when it crosses a compile boundary.
+    // Nested-function handles are excluded: they depend on capturedEnv,
+    // which the inlined form can't reconstruct.
+    fn.handleAst = {
+      type: "FuncHandle",
+      name,
+      span: { file: capturedFile, start: 0, end: 0 },
+    };
+    fn.handleDefFile = capturedFile;
   }
   return fn;
 }
@@ -1339,6 +1468,16 @@ export function isOutputExpr(this: Interpreter, expr: Expr): boolean {
   if (expr.type === "FuncCall") return outputFunctions.includes(expr.name);
   if (expr.type === "Ident") return outputFunctions.includes(expr.name);
   return false;
+}
+
+/** Extract a JS number from a scalar (number or 1×1 tensor) value;
+ *  null when the value isn't a scalar. Used to detect a plain numeric
+ *  range so a huge/infinite `for k = a:s:b` can iterate lazily. */
+function asScalarNumber(v: unknown): number | null {
+  const rv = ensureRuntimeValue(v);
+  if (typeof rv === "number") return rv;
+  if (isRuntimeTensor(rv) && rv.data.length === 1) return rv.data[0];
+  return null;
 }
 
 function recordHotLoop(

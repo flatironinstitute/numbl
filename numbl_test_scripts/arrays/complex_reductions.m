@@ -1,5 +1,6 @@
 % Complex tensor reductions: sum, mean, cumsum
 
+%!numbl:assert_jit c
 cv = [1+2i, 3+4i, 5+6i];
 
 % ── sum on complex row vector → scalar ───────────────────────────

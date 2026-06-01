@@ -69,8 +69,7 @@ export async function runRepl(
   onDrawnow?: (instructions: PlotInstruction[]) => void,
   initialSearchPaths?: string[],
   nativeBridge?: NativeBridge,
-  optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
-  fastMath?: boolean
+  optimization?: import("./numbl-core/executors/plugins.js").OptLevel
 ): Promise<void> {
   let variableValues: Record<string, RuntimeValue> = {};
   let holdState = false;
@@ -132,7 +131,6 @@ export async function runRepl(
             initialVariableValues: variableValues,
             initialHoldState: holdState,
             optimization,
-            fastMath,
             fileIO,
             system,
             implicitCwdPath,
@@ -271,7 +269,6 @@ export async function runRepl(
           initialVariableValues: variableValues,
           initialHoldState: holdState,
           optimization,
-          fastMath,
           fileIO,
           system,
           implicitCwdPath,

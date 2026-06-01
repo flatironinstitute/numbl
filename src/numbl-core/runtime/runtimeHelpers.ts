@@ -22,7 +22,7 @@ import {
 } from "../runtime/types.js";
 import { sparseToDense } from "../../numbl-core/helpers/sparse-arithmetic.js";
 import { END_SENTINEL } from "./sentinels.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 // ── Deferred Range ──────────────────────────────────────────────────────
 

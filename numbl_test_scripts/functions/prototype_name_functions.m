@@ -2,6 +2,7 @@
 % (constructor, toString, valueOf, hasOwnProperty) must not be
 % misinterpreted as plot intrinsics or other built-in dispatches.
 
+%!numbl:assert_jit c
 assert(constructor(3) == 9);
 assert(toString(5) == 10);
 assert(valueOf(7) == 14);

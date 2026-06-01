@@ -7,20 +7,19 @@ import {
   type RuntimeTensor,
   type RuntimeValue,
 } from "../../runtime/types.js";
-import { mElemPow } from "../../helpers/arithmetic.js";
-import { minMaxImpl } from "../../helpers/reduction/min-max.js";
 import {
-  type BuiltinCase,
-  defineBuiltin,
-  makeTensor,
-  binaryMathJitEmit,
-} from "./types.js";
+  mElemPow,
+  getBroadcastShape,
+  broadcastIterate,
+} from "../../helpers/arithmetic.js";
+import { minMaxImpl } from "../../helpers/reduction/min-max.js";
+import { type BuiltinCase, defineBuiltin, makeTensor } from "./types.js";
 import {
   type JitType,
   shapeAfterReduction,
   unifySign,
 } from "../../jitTypes.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Tensor-capable binary helper ─────────────────────────────────────────
 
@@ -59,11 +58,15 @@ function applyBinaryElemwise(
     return makeTensor(out, undefined, aTensor.shape.slice());
   }
   if (aTensor && bTensor) {
-    const n = aTensor.data.length;
-    if (n !== bTensor.data.length) throw new Error(`${name}: size mismatch`);
+    const outShape = getBroadcastShape(aTensor.shape, bTensor.shape);
+    if (outShape === null)
+      throw new Error(`${name}: Matrix dimensions must agree`);
+    const n = outShape.reduce((acc, d) => acc * d, 1);
     const out = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) out[i] = fn(aTensor.data[i], bTensor.data[i]);
-    return makeTensor(out, undefined, aTensor.shape.slice());
+    broadcastIterate(aTensor.shape, bTensor.shape, outShape, (ai, bi, oi) => {
+      out[oi] = fn(aTensor.data[ai], bTensor.data[bi]);
+    });
+    return makeTensor(out, undefined, outShape);
   }
   throw new Error(`${name}: unsupported argument types`);
 }
@@ -123,7 +126,6 @@ function binaryRealElemwiseCases(
 defineBuiltin({
   name: "atan2",
   cases: binaryRealElemwiseCases(Math.atan2, "atan2"),
-  jitEmit: binaryMathJitEmit("Math.atan2"),
 });
 
 // ── min / max ───────────────────────────────────────────────────────────
@@ -324,17 +326,6 @@ function modFn(a: number, b: number): number {
 defineBuiltin({
   name: "mod",
   cases: binaryRealElemwiseCases(modFn, "mod"),
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 2) return null;
-    const k0 = argTypes[0].kind,
-      k1 = argTypes[1].kind;
-    if (
-      (k0 !== "number" && k0 !== "boolean") ||
-      (k1 !== "number" && k1 !== "boolean")
-    )
-      return null;
-    return `$h.mod(${argCode[0]}, ${argCode[1]})`;
-  },
 });
 
 // ── rem ──────────────────────────────────────────────────────────────────
@@ -342,17 +333,6 @@ defineBuiltin({
 defineBuiltin({
   name: "rem",
   cases: binaryRealElemwiseCases((a, b) => a % b, "rem"),
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 2) return null;
-    const k0 = argTypes[0].kind,
-      k1 = argTypes[1].kind;
-    if (
-      (k0 !== "number" && k0 !== "boolean") ||
-      (k1 !== "number" && k1 !== "boolean")
-    )
-      return null;
-    return `(${argCode[0]} % ${argCode[1]})`;
-  },
 });
 
 // ── power ────────────────────────────────────────────────────────────────
@@ -399,5 +379,4 @@ defineBuiltin({
       apply: args => mElemPow(args[0] as RuntimeValue, args[1] as RuntimeValue),
     },
   ],
-  jitEmit: binaryMathJitEmit("Math.pow"),
 });

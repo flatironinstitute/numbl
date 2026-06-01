@@ -30,10 +30,7 @@ import type { JitType } from "../../jitTypes.js";
 import { coerceToTensor } from "../../helpers/shape-utils.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 import { mTranspose, mConjugateTranspose } from "../../helpers/arithmetic.js";
-import {
-  allocFloat64Array,
-  releaseFloat64Array,
-} from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array, releaseFloat64Array } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
@@ -124,6 +121,17 @@ function varargMatch2(argTypes: JitType[]): JitType[] | null {
 }
 
 // ── reshape ──────────────────────────────────────────────────────────
+
+// Size / replication args must be integers — MATLAB errors on a
+// non-integer (reshape(x,2.5,[]), repmat(x,1,2.5)), matching numbl's
+// array-construction validateDim and the JIT's mtoc2_check_dim. A
+// negative clamps to 0 (empty axis), as validateDim does.
+function validateSizeArg(x: number): number {
+  if (!Number.isFinite(x) || !Number.isInteger(x)) {
+    throw new RuntimeError("Size inputs must be nonnegative integers.");
+  }
+  return x < 0 ? 0 : x;
+}
 
 defineBuiltin({
   name: "reshape",
@@ -228,11 +236,11 @@ defineBuiltin({
           isRuntimeTensor(args[1]) &&
           args[1].data.length > 1
         ) {
-          rawDims = Array.from(args[1].data).map(x => Math.round(x));
+          rawDims = Array.from(args[1].data).map(x => validateSizeArg(x));
         } else {
           rawDims = args.slice(1).map(a => {
             if (isRuntimeTensor(a) && a.data.length === 0) return null;
-            return Math.round(toNumber(a));
+            return validateSizeArg(toNumber(a));
           });
         }
 
@@ -498,7 +506,7 @@ defineBuiltin({
         if (dim === 1) return vertcat(...arrays);
         if (dim === 2) return horzcat(...arrays);
         const dimIdx = dim - 1;
-        const tensors = arrays.map(a => {
+        let tensors = arrays.map(a => {
           if (isRuntimeNumber(a))
             return {
               data: allocFloat64Array([a as number]),
@@ -509,6 +517,14 @@ defineBuiltin({
             throw new RuntimeError("cat: arguments must be numeric");
           return { data: a.data, imag: a.imag ?? null, shape: [...a.shape] };
         });
+        // Drop fully-empty operands (all dims 0, e.g. the `[]` literal) before
+        // the dimension-equality check. MATLAB ignores empties in cat; the
+        // dim 1/2 paths (catAlongDim) already do this via shape.some(d>0), so
+        // cat(3, A, []) must too. Done on the ORIGINAL shape, before padding
+        // to `dim` adds trailing 1s (which would mask a [0,0]).
+        tensors = tensors.filter(t => t.shape.some(d => d > 0));
+        if (tensors.length === 0)
+          return RTV.tensor(allocFloat64Array(0), [0, 0]);
         const hasComplex = tensors.some(t => t.imag !== null);
         for (const t of tensors) {
           while (t.shape.length < dim) t.shape.push(1);
@@ -744,13 +760,13 @@ defineBuiltin({
         if (args.length === 2) {
           const arg1 = args[1];
           if (isRuntimeTensor(arg1)) {
-            reps = Array.from(arg1.data).map(x => Math.round(x));
+            reps = Array.from(arg1.data).map(x => validateSizeArg(x));
           } else {
-            const n = Math.round(toNumber(arg1));
+            const n = validateSizeArg(toNumber(arg1));
             reps = [n, n];
           }
         } else {
-          reps = args.slice(1).map(a => Math.round(toNumber(a)));
+          reps = args.slice(1).map(a => validateSizeArg(toNumber(a)));
         }
         if (isRuntimeNumber(v)) {
           const total = reps.reduce((a, b) => a * b, 1);
@@ -813,6 +829,19 @@ defineBuiltin({
           const newTotal = curTotal * rep;
           const newData = allocFloat64Array(newTotal);
           const newImag = curImag ? allocFloat64Array(newTotal) : undefined;
+
+          if (rep === 0) {
+            // 0 reps along this axis -> the result is empty (newTotal===0).
+            // Skip the copy loops: the general (blockSize>1) branch would do
+            // newData.set(subarray, ...) into a zero-length buffer (offset out
+            // of bounds). Nothing to copy; just adopt the empty buffer.
+            releaseFloat64Array(curData);
+            if (curImag) releaseFloat64Array(curImag);
+            curData = newData;
+            curImag = newImag;
+            curShape[d] = 0;
+            continue;
+          }
 
           let blockSize = 1;
           for (let i = 0; i <= d; i++) blockSize *= curShape[i];
@@ -910,6 +939,48 @@ defineBuiltin({
           throw new RuntimeError("repelem requires at least 2 arguments");
         const v = args[0];
         if (args.length === 2) {
+          const repArg = args[1];
+          // Per-element count vector: repelem(v, [c1 c2 ...]) repeats v(i)
+          // counts(i) times. (A 1-element count is treated as a scalar.)
+          if (isRuntimeTensor(repArg) && repArg.data.length > 1) {
+            const counts = repArg.data;
+            const vData = isRuntimeNumber(v)
+              ? Float64Array.of(v as number)
+              : isRuntimeTensor(v)
+                ? v.data
+                : null;
+            if (vData === null)
+              throw new RuntimeError("repelem: first argument must be numeric");
+            const len = vData.length;
+            if (counts.length !== len)
+              throw new RuntimeError(
+                `repelem: counts vector length (${counts.length}) must match the number of elements (${len})`
+              );
+            const vImag = isRuntimeTensor(v) ? v.imag : undefined;
+            let total = 0;
+            for (let i = 0; i < len; i++)
+              total += Math.max(0, Math.round(counts[i]));
+            const result = allocFloat64Array(total);
+            const resultImag = vImag ? allocFloat64Array(total) : undefined;
+            let k = 0;
+            for (let i = 0; i < len; i++) {
+              const c = Math.max(0, Math.round(counts[i]));
+              for (let j = 0; j < c; j++) {
+                result[k] = vData[i];
+                if (resultImag) resultImag[k] = vImag![i];
+                k++;
+              }
+            }
+            const isCol =
+              isRuntimeTensor(v) && v.shape.length === 2 && v.shape[1] === 1;
+            const out = RTV.tensor(
+              result,
+              isCol ? [total, 1] : [1, total],
+              resultImag
+            );
+            if (isRuntimeTensor(v) && v._isLogical) out._isLogical = true;
+            return out;
+          }
           const n = Math.round(toNumber(args[1]));
           if (isRuntimeNumber(v)) {
             const data = allocFloat64Array(n).fill(v as number);

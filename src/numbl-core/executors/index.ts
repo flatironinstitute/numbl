@@ -29,7 +29,4 @@ export {
   isKnownInteger,
 } from "../jitTypes.js";
 export { inferJitType } from "../interpreter/builtins/types.js";
-export { jsJitTopLevelExecutor } from "./jsJit/topLevelExecutor.js";
-export { jsJitLoopExecutor } from "./jsJit/loopExecutor.js";
-export { jsJitCallExecutor } from "./jsJit/callExecutor.js";
 export { registerExecutorsForOpt } from "./plugins.js";

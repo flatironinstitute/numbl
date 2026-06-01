@@ -11,7 +11,7 @@ import {
 import { colMajorIndex, RTV, RuntimeValue } from "../runtime/index.js";
 import { RuntimeError } from "../runtime/index.js";
 import { getIBuiltin, inferJitType } from "../interpreter/builtins/types.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 /** Ensure data is Float64Array (needed by LAPACK bridges). */
 export function toF64(data: Float64Array): Float64Array {

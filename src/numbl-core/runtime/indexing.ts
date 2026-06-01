@@ -26,7 +26,7 @@ import { RTV } from "./constructors.js";
 import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
 import { type RefcountRuntime, decref, isShared } from "./refcount.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Runtime surface needed by index-store mutations. The full Runtime
  *  class satisfies this structurally. */
@@ -58,6 +58,38 @@ function toReIm(v: RuntimeValue): { re: number; im: number } {
     return { re, im };
   }
   throw new RuntimeError(`Cannot convert ${kstr(v)} to number for assignment`);
+}
+
+/** Convert a char value to a numeric (column-major) tensor of its code
+ *  points. A RuntimeChar stores its `value` row-major (each of `shape[0]`
+ *  rows is `shape[1]` chars, concatenated), so we transpose into the
+ *  tensor's column-major layout. Used so indexed assignment into / from a
+ *  char array runs on the numeric tensor machinery (MATLAB treats char as
+ *  numeric for indexed assignment). */
+export function charToNumericTensor(c: RuntimeChar): RuntimeTensor {
+  const rows = c.shape ? c.shape[0] : 1;
+  const cols = c.shape ? c.shape[1] : c.value.length;
+  const data = allocFloat64Array(rows * cols);
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      data[col * rows + r] = c.value.charCodeAt(r * cols + col);
+    }
+  }
+  return RTV.tensor(data, [rows, cols]);
+}
+
+/** Inverse of charToNumericTensor: read a numeric tensor's column-major
+ *  data into a row-major char value, rounding codes to integers. */
+export function numericTensorToChar(t: RuntimeTensor): RuntimeChar {
+  const rows = t.shape.length >= 2 ? (t.shape[0] ?? 0) : 1;
+  const cols = t.shape.length >= 2 ? (t.shape[1] ?? 0) : t.data.length;
+  let s = "";
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      s += String.fromCharCode(Math.round(t.data[col * rows + r]));
+    }
+  }
+  return rows > 1 ? new RuntimeChar(s, [rows, cols]) : RTV.char(s);
 }
 
 /** Ensure a tensor has an imag array (allocate if needed). */
@@ -1099,6 +1131,11 @@ function indexIntoTensorWithTensor(
     const hasImag = base.imag !== undefined;
     for (let i = 0; i < idx.data.length; i++) {
       if (idx.data[i] !== 0) {
+        // A truthy mask bit past the end of the base is an error in MATLAB
+        // ("logical indices contain a true value outside of the array
+        // bounds"); reading base.data[i] OOB would silently yield NaN.
+        if (i >= base.data.length)
+          throw new RuntimeError("Index exceeds array bounds");
         selected.push(base.data[i]);
         if (hasImag) selectedIm.push(base.imag![i]);
       }
@@ -1144,9 +1181,15 @@ function indexIntoTensorWithTensor(
   const baseIsVector =
     base.shape.length <= 2 &&
     (base.shape[0] === 1 || base.shape[1] === 1 || base.shape.length === 1);
+  const idxIsVector =
+    idx.shape.length <= 2 &&
+    (idx.shape[0] === 1 || idx.shape[1] === 1 || idx.shape.length === 1);
+  // MATLAB: A(idx) is shaped like idx, EXCEPT when both A and idx are
+  // vectors — then the result follows A's orientation. A matrix index of a
+  // vector therefore keeps the index's shape (e.g. v([1 2;3 1]) is 2x2).
   const outShape = idxIs0x0
     ? [0, 0]
-    : baseIsVector
+    : baseIsVector && idxIsVector
       ? base.shape[0] === 1
         ? [1, resultData.length]
         : [resultData.length, 1]
@@ -1308,6 +1351,11 @@ function deleteTensorElements(
   } else if (isColonIndex(idx)) {
     return RTV.tensor(allocFloat64Array(0), [0, 0]);
   }
+  // Deleting an empty index set (`A([]) = []`, `A(j:j-1) = []`) is a no-op:
+  // MATLAB leaves A unchanged, preserving its class and shape. Return base
+  // as-is instead of rebuilding the whole array (which also wrongly
+  // linearized matrices).
+  if (toDelete.size === 0) return base;
   const newData: number[] = [];
   const newIm: number[] = [];
   const hasImag = base.imag !== undefined;
@@ -1464,7 +1512,11 @@ function storeIntoTensor1D(
       if (base.imag) grownImag.set(base.imag);
       grownImag[i] = rhsIm;
     }
-    return RTV.tensor(grown, [1, i + 1], grownImag);
+    // Preserve column orientation when growing a column vector (matches the
+    // multi-element vector-store path below).
+    const isColVec =
+      base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
+    return RTV.tensor(grown, isColVec ? [i + 1, 1] : [1, i + 1], grownImag);
   }
   base.data[i] = rhsRe;
   if (rhsIm !== 0 || base.imag) {
@@ -1484,6 +1536,27 @@ function storeIntoTensorByVector(
     const { re: rhsRe, im: rhsIm } = isRuntimeTensor(rhs)
       ? { re: null, im: null }
       : toReIm(rhs);
+    // A truthy mask bit past the end GROWS the array in MATLAB
+    // (x(logical([0 0 0 1])) = 9 on [1 2 3] -> [1 2 3 9]). Without this
+    // the base.data[i] write is a silent no-op for an out-of-range i.
+    let maxTruthy = -1;
+    for (let i = 0; i < idx.data.length; i++) {
+      if (idx.data[i] !== 0) maxTruthy = i;
+    }
+    if (maxTruthy >= base.data.length) {
+      const newLen = maxTruthy + 1;
+      const grown = allocFloat64Array(newLen);
+      grown.set(base.data);
+      let grownImag: Float64Array | undefined;
+      if (base.imag) {
+        grownImag = allocFloat64Array(newLen);
+        grownImag.set(base.imag);
+      }
+      const isColVec =
+        base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
+      const newShape = isColVec ? [newLen, 1] : [1, newLen];
+      base = RTV.tensor(grown, newShape, grownImag);
+    }
     let k = 0;
     for (let i = 0; i < idx.data.length; i++) {
       if (idx.data[i] !== 0) {

@@ -23,7 +23,6 @@ n = 20;
 % 1) Single-output handle, Var arg from outer scope. Currently JITs.
 acc1 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     r = fcurve1(base_ts);
     acc1 = acc1 + r(1);
 end
@@ -34,7 +33,6 @@ end
 %    when the loop-local var hasn't been bound yet.
 acc2 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     ts = base_ts + i;
     r = fcurve1(ts);
     acc2 = acc2 + r(1);
@@ -45,7 +43,6 @@ end
 %    / NumberLiteral lowered args.
 acc3 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     r = fcurve1(base_ts + i);
     acc3 = acc3 + r(1);
 end
@@ -55,7 +52,6 @@ end
 %    "user function multi-output not yet supported"), so this bails.
 acc4 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     [aa, bb, cc] = fcurve3(base_ts);
     acc4 = acc4 + aa(1) + bb(1) + cc(1);
 end

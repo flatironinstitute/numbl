@@ -56,7 +56,7 @@ import {
 } from "../runtime/plotUtils.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import { syncSleep } from "./syncChannel.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Resolve an unknown value (possibly a RuntimeValue) to a string. */
 function resolveStr(val: unknown): string {

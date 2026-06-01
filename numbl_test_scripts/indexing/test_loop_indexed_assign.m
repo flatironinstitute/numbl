@@ -3,6 +3,7 @@
 % to the wrong slot, the assertions below will catch it.
 
 % 1D scalar write
+%!numbl:assert_jit c
 t = zeros(100, 1);
 for i = 1:100
     t(i) = i * 2;

@@ -12,7 +12,7 @@ import {
   type RuntimeSparseMatrix,
 } from "../runtime/types.js";
 import { tensorOps, OpReduce } from "../ops/index.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Dimension iteration helpers ─────────────────────────────────────────
 
@@ -64,11 +64,21 @@ export function forEachSlice(
   return { resultShape, totalElems };
 }
 
-/** Return 1-based dim to reduce along (first non-singleton), or 0 for "reduce to scalar". */
+/** Return 1-based dim to reduce along (first dim whose size != 1), or 0 for
+ *  "reduce to scalar". A size-0 dimension counts as non-singleton (MATLAB
+ *  reduces along it), so `sum(zeros(0,3))` is `[0 0 0]` not a scalar — the
+ *  previous `d > 1` test wrongly treated a size-0 dim as singleton. */
 export function firstReduceDim(shape: number[]): number {
-  const numNonSingleton = shape.filter(d => d > 1).length;
+  // 0x0 (or all-zero N-D) empty is MATLAB's special case: the reduction
+  // returns the identity scalar (sum([])=0, prod([])=1), not an empty.
+  if (shape.length > 0 && shape.every(d => d === 0)) return 0;
+  // The result collapses to a scalar iff exactly one dim has size != 1
+  // (reducing it leaves every other dim size 1). This keeps row/column
+  // vectors collapsing to a scalar while reducing matrices and size-0
+  // arrays along their first non-unit dimension.
+  const numNonSingleton = shape.filter(d => d !== 1).length;
   if (numNonSingleton <= 1) return 0;
-  return shape.findIndex(d => d > 1) + 1;
+  return shape.findIndex(d => d !== 1) + 1;
 }
 
 /** Return a deep copy of a tensor (data + shape + optional imag). */
@@ -348,27 +358,17 @@ export function scanLogical(
   imag: ArrayLike<number> | undefined,
   mode: "any" | "all"
 ): boolean {
-  // Fast path via tensor-ops layer when data is Float64Array.
-  if (data instanceof Float64Array && (!imag || imag instanceof Float64Array)) {
-    const op = mode === "any" ? OpReduce.ANY : OpReduce.ALL;
-    const out = allocFloat64Array(1);
-    if (imag) {
-      tensorOps.complexFlatReduce(
-        op,
-        data.length,
-        data,
-        imag as Float64Array,
-        out,
-        null
-      );
-    } else {
-      tensorOps.realFlatReduce(op, data.length, data, out);
-    }
-    return out[0] !== 0;
-  }
+  // Scalar short-circuiting scan that IGNORES NaN, matching MATLAB
+  // (`any(NaN)` is 0, `all(NaN)` is 1, `any([0 NaN])` is 0). We do not
+  // use the native fast-math realFlatReduce here: built with
+  // -ffinite-math-only it mishandles NaN differently again. The loop
+  // short-circuits, so it isn't slower than the full-array native scan.
   const defaultResult = mode === "all";
   for (let i = 0; i < data.length; i++) {
-    const isNonZero = data[i] !== 0 || (imag !== undefined && imag[i] !== 0);
+    const re = data[i];
+    const im = imag !== undefined ? imag[i] : 0;
+    if (re !== re || im !== im) continue; // skip NaN
+    const isNonZero = re !== 0 || im !== 0;
     if (isNonZero !== defaultResult) return !defaultResult;
   }
   return defaultResult;

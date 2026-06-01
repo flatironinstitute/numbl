@@ -1,6 +1,7 @@
 % Test sprintf %e/%E exponent zero-padding
 % MATLAB always pads exponents to at least 2 digits
 
+%!numbl:assert_jit c
 assert(strcmp(sprintf('%e', 1000), '1.000000e+03'), 'sprintf %e 1000');
 assert(strcmp(sprintf('%e', 0.001), '1.000000e-03'), 'sprintf %e 0.001');
 assert(strcmp(sprintf('%E', 1000), '1.000000E+03'), 'sprintf %E 1000');

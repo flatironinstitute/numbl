@@ -25,7 +25,7 @@ import {
   besselk,
 } from "../../helpers/bessel.js";
 import { tensorOps, OpBessel } from "../../ops/index.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

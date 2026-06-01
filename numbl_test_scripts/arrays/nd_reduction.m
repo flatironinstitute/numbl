@@ -1,5 +1,6 @@
 % 3D tensor reductions: sum, prod, mean along various dimensions
 
+%!numbl:assert_jit c
 a = reshape(1:24, 2, 3, 4);
 
 % ── sum with no dim arg on 3D tensor ────────────────────────────────

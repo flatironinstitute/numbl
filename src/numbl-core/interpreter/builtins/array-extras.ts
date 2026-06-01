@@ -3,7 +3,7 @@
  * bitwise ops, and coordinate transforms.
  */
 
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 import { RTV, toNumber, RuntimeError, mRange } from "../../runtime/index.js";
 import {
   type RuntimeValue,

@@ -38,7 +38,7 @@ A `RefScope` ([`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.t
 - Values bound to a slot during the statement got an extra incref from the slot, so they survive drain at slot count.
 - Unbound transients drop to `rc = 0` and self-destruct (decreffing children).
 
-`execStmt` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) wraps the statement body in `withScope`. The JIT synthetic-fn runner ([`executors/jsJit/shared.ts`](../../../src/numbl-core/executors/jsJit/shared.ts) `runSyntheticFnAgainstEnv`) wraps the JIT-compiled function call so intermediates created by JIT'd loop bodies are subject to scope drain.
+`execStmt` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) wraps the statement body in `withScope`. The JIT executors ([`executors/jit/`](../../../src/numbl-core/executors/jit)) cross the boundary through a value adapter ([`valueAdapter.ts`](../../../src/numbl-core/executors/jit/valueAdapter.ts)): owned inputs are cloned on the way in (MATLAB pass-by-value), and the spec returns a freshly-owned buffer that numbl takes ownership of on the way out — so a JIT'd call neither leaks into nor double-frees the caller's pooled slots.
 
 `callUserFunction` ([`interpreter/interpreterFunctions.ts`](../../../src/numbl-core/interpreter/interpreterFunctions.ts)) adopts every output value into the **caller's** scope before running `fnEnv.clearLocals()` — outputs are otherwise held only by the callee's slot binding which is about to be decref'd to 0. The same adoption happens in `evalAnonFunc`'s synthetic-fn body so closure invocations don't drop their results.
 

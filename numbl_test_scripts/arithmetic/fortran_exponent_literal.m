@@ -2,6 +2,7 @@
 % identically to e/E exponent markers. MATLAB accepts both.
 
 % ── Basic forms ────────────────────────────────────────────────────
+%!numbl:assert_jit c
 assert(2.0d0 == 2.0)
 assert(2.0D0 == 2.0)
 assert(1d2 == 100)

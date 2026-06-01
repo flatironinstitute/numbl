@@ -29,7 +29,7 @@
 import { dorg2r } from "./dorg2r.js";
 import { ilaenv } from "../utils/ilaenv.js";
 import { xerbla } from "../utils/xerbla.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 export function dorgqr(
   m: number,

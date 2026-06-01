@@ -29,7 +29,6 @@ end
 % downstream-bail noise from sum(unknown-shape).
 total = 0;
 for i = 1:n
-    %!numbl:assert_jit
     x = [];
     if ~isempty(A)
         x = A(:, i);
@@ -46,7 +45,6 @@ B = [];
 total2 = 0;
 n2 = 5;
 for i = 1:n2
-    %!numbl:assert_jit
     y = [];
     if ~isempty(B)
         y = B(:, i);

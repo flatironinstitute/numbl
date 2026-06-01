@@ -1,5 +1,6 @@
 % pcolor with explicit X/Y vertex coordinates from meshgrid.
 
+%!numbl:assert_jit c
 x = linspace(-2, 2, 30);
 y = linspace(-1, 1, 20);
 [X, Y] = meshgrid(x, y);

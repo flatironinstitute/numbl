@@ -1,5 +1,6 @@
 % Smoke test for tiledlayout / nexttile.
 
+%!numbl:assert_jit c
 x = linspace(0, 2*pi, 50);
 
 % Fixed 2x2 grid

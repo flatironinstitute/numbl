@@ -2,6 +2,7 @@
 % (not wrapped in deferred lambdas meant for index resolution)
 
 % First call a different static method
+%!numbl:assert_jit c
 x = StaticArgTest.add(3, 4);
 assert(x == 7);
 

@@ -11,7 +11,7 @@
 import { dlamch } from "./dlamch.js";
 import { dladiv } from "./dladiv.js";
 import { MACH_SFMIN } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 // ZSWAP: indexed 1..4 (Fortran DATA), stored as 0..3 here
 const ZSWAP = [false, false, true, true];

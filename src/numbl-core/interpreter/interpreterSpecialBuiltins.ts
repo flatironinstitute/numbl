@@ -31,7 +31,7 @@ export interface InterpreterContext {
   evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
-  /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "e3" = C-JIT scalar loops. */
+  /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "2" = C-JIT. */
   optimization: import("../executors/plugins.js").OptLevel;
   /** Resolve a workspace function or class name to its source file,
    *  or undefined if no workspace file provides that name.
@@ -110,6 +110,44 @@ register("evalin", (ctx, args) => {
     }
   }
   return ctx.evalInLocalScope(args[1]);
+});
+
+register("str2num", (ctx, args) => {
+  // MATLAB's str2num evaluates the text as the expression `[<text>]`, so it
+  // handles vectors, matrices and arithmetic -- not just a single scalar.
+  // (The strings.ts IBuiltin only covers the degenerate non-text fallback.)
+  // Returns [] if the text can't be evaluated.
+  if (args.length !== 1) return FALL_THROUGH;
+  const v = ensureRuntimeValue(args[0]);
+  if (!isRuntimeChar(v) && !isRuntimeString(v)) return FALL_THROUGH;
+  const empty = () => RTV.tensor(new Float64Array(0), [0, 0]);
+  const s = toString(v);
+  // Capture the result through a temp variable rather than eval's return
+  // value: eval's returnValue is unreliable for a bare-literal result (e.g.
+  // `[42]` yields 0), whereas variable propagation is exact.
+  const tmp = "__numbl_str2num_result__";
+  const saved = ctx.env.get(tmp);
+  try {
+    ctx.evalInLocalScope(`${tmp} = [${s}];`);
+    let result = ctx.env.get(tmp);
+    if (result === undefined || result === null) return empty();
+    // The `[...]` wrapper yields a tensor even for a single value; demote a
+    // 1x1 result to a scalar so str2num('42') matches MATLAB's scalar double
+    // (numbl distinguishes a scalar number from a 1x1 tensor).
+    if (isRuntimeTensor(result) && result.data.length === 1) {
+      result =
+        result.imag && result.imag[0] !== 0
+          ? RTV.complex(result.data[0], result.imag[0])
+          : RTV.num(result.data[0]);
+    }
+    return result;
+  } catch {
+    return empty();
+  } finally {
+    // Restore any pre-existing binding; otherwise remove the temp.
+    if (saved !== undefined) ctx.env.set(tmp, saved);
+    else ctx.env.delete(tmp);
+  }
 });
 
 register("assignin", (ctx, args) => {

@@ -1,5 +1,7 @@
 % Test complex division by zero returns Inf, not NaN
 
+%!numbl:assert_jit c
+
 % Non-zero complex / 0
 r = (5 + 3i) / 0;
 assert(real(r) == Inf, 'real(5+3i)/0 should be Inf');

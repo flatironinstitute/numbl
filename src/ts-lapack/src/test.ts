@@ -5,7 +5,7 @@
 //   dgetrf: factor A = P*L*U, reconstruct P^-1*L*U and compare to original A
 //   dgetri: factor then invert A, verify A_inv * A ≈ I
 
-import { allocFloat64Array } from "../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../numbl-core/runtime/alloc.js";
 import { dgetrf } from "./SRC/dgetrf.js";
 import { dgetri } from "./SRC/dgetri.js";
 

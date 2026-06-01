@@ -2,6 +2,7 @@
 % %Nd should space-pad, %0Nd should zero-pad
 
 % Space-padding (default)
+%!numbl:assert_jit c
 assert(strcmp(sprintf('%10d', 42), '        42'));
 assert(strcmp(sprintf('%5d', 7), '    7'));
 assert(strcmp(sprintf('%3d', 100), '100'));  % exact width, no padding needed

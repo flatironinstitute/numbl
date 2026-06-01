@@ -35,7 +35,7 @@ import {
   mGreaterEqual,
   mNeg,
 } from "../../helpers/arithmetic.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
@@ -294,7 +294,6 @@ registerIBuiltin({
       apply: () => false,
     };
   },
-  jitEmit: (_args, types) => (types.length === 1 ? "false" : null),
 });
 
 // ── clc / clf stubs ──────────────────────────────────────────────────────
@@ -605,10 +604,6 @@ registerIBuiltin({
       outputTypes: [{ kind: "boolean" }],
       apply: () => true,
     };
-  },
-  jitEmit: (_args, types) => {
-    if (types.length !== 0) return null;
-    return "true";
   },
 });
 

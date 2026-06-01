@@ -2,6 +2,7 @@
 % (matching MATLAB behavior where negative dims are treated as 0)
 
 % ones with negative first dimension
+%!numbl:assert_jit c
 A = ones(-1, 1);
 assert(isempty(A));
 assert(size(A, 1) == 0);

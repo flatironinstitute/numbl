@@ -1,5 +1,6 @@
 % 3D tensor manipulation: fliplr, flipud, repmat
 
+%!numbl:assert_jit c
 a = reshape(1:12, 2, 3, 2);
 
 % ── fliplr on 3D: flip columns (dim 2) on each page ──────────────

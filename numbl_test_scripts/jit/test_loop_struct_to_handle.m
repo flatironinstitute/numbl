@@ -31,7 +31,6 @@ n = 20;
 %    that breaks scalar-handle probing fails this test too.
 acc1 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     a = i * 1.5;
     b = i + 2.5;
     acc1 = acc1 + a + b;
@@ -42,7 +41,6 @@ end
 %    representative struct {x: number, y: number}.
 acc2 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     s = [];
     s.x = i * 1.0;
     t = [];
@@ -55,7 +53,6 @@ end
 %    function handle whose body is opaque to the JIT.
 acc3 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     rint = base_r * i;
     dint = base_r + i;
     srcinfo = [];

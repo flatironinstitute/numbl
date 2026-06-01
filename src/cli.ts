@@ -39,12 +39,15 @@ import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import { isOptLevel } from "./numbl-core/executors/plugins.js";
-// Side-effect: registers the C-JIT (e3) executors with plugins.ts so
-// the browser bundle (which never imports this file) stays free of
-// the cJit/compile.ts node-module dependency graph.
-import "./numbl-core/executors/cJit/register.js";
+import { registerNodeCompileC } from "./numbl-core/executors/jit/compileC.node.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
+
+// Install the Node-side koffi C-JIT implementation into the
+// browser-safe stub in `compileC.ts`. Keeping the `node:fs` /
+// `node:child_process` imports inside `compileC.node.ts` (only loaded
+// here) is what lets the browser bundle stay green.
+registerNodeCompileC();
 
 // ── Package directory & native addon paths ───────────────────────────────────
 
@@ -71,7 +74,7 @@ import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge
 function loadNativeAddon(fastMath: boolean): void {
   if (process.env.NUMBL_NO_NATIVE) return;
   const variantPath = variantAddonPath(fastMath);
-  const flag = fastMath ? "" : " --no-fast-math";
+  const flag = fastMath ? " --fast-math" : "";
   if (!existsSync(variantPath)) {
     console.error(
       `Warning: native addon not built${fastMath ? " with fast-math" : " with --no-fast-math"}. ` +
@@ -106,7 +109,7 @@ let nativeBridge: NativeBridge | undefined;
 try {
   const req = createRequire(import.meta.url);
   const koffi = req("koffi");
-  nativeBridge = { load: (path: string) => koffi.load(path) };
+  nativeBridge = { load: (path: string) => koffi.load(path), koffi };
 } catch {
   // koffi not installed — native shared library support disabled
 }
@@ -224,7 +227,7 @@ async function runTests(
   optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
   fastMath?: boolean
 ) {
-  loadNativeAddon(fastMath ?? true);
+  loadNativeAddon(fastMath ?? false);
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
@@ -250,8 +253,7 @@ async function runTests(
         source,
         {
           displayResults: true,
-          optimization: optimization ?? 1,
-          fastMath,
+          optimization: optimization ?? "1",
           fileIO: new NodeFileIOAdapter(),
           system: new NodeSystemAdapter(),
         },
@@ -310,7 +312,7 @@ Commands:
   eval "<code>"      Evaluate inline code
   parse <file.m>     Tokenize, lex, and parse a .m file (no execution)
   run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
-  build-addon        Build native LAPACK addon (pass --no-fast-math to disable -ffast-math)
+  build-addon        Build native LAPACK addon (pass --fast-math to enable -ffast-math)
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions (--no-help: only those without help text)
   serve              Start local execution server for the browser IDE
@@ -332,8 +334,9 @@ Options (for REPL):
   --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
-  --dump-js <file>   Write JIT-generated JavaScript to file
-  --dump-c <file>    Write C-JIT-generated C source to file
+  --dump-js <file>   Write JS-JIT-generated JavaScript to file (--opt 1, and
+                       the JS fallback at --opt 2)
+  --dump-c <file>    Write C-JIT-generated C to file (--opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
@@ -342,12 +345,15 @@ Options (for run and eval):
   --plot-port <port> Set plot server port (implies --plot)
   --opt <mode>       Optimization mode (default: 1)
                        0  — interpreter (no JIT)
-                       1  — JS-JIT: type-specialize hot functions/loops to JS
-                       e3 — C-JIT scalar loops only (Node only)
-  --no-fast-math     Disable -ffast-math for C-JIT kernels
-                     (default is on: libmvec-vectorized transcendentals,
-                     reductions reorder-allowed; opt out for
-                     bitwise-deterministic FP semantics)
+                       1  — JS-JIT: type-specialize hot user functions to JS
+                       2  — C-JIT: scalar/tensor kernels via cc + koffi
+                            (Node only; falls back to JS-JIT otherwise)
+  --fast-math        Build/load the native LAPACK addon WITH -ffast-math
+                     (libmvec-vectorized transcendentals, reorder-allowed
+                     reductions — faster but FP results drift and diverge
+                     across --opt levels). Off by default so all --opt
+                     levels agree; --no-fast-math is accepted as the
+                     (now default) opt-out.
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
@@ -383,7 +389,11 @@ function parseOptions(args: string[]): ParsedOptions {
     positional: [],
     profileOutput: undefined,
     optimization: "1",
-    fastMath: true,
+    // Default OFF: the native addon's -ffast-math reorders reductions
+    // and vectorizes transcendentals, so results drift from the JIT
+    // kernels and diverge across --opt levels. Opt back in with
+    // `--fast-math` (and a matching `build-addon --fast-math`).
+    fastMath: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -419,7 +429,11 @@ function parseOptions(args: string[]): ParsedOptions {
         }
         opts.dumpC = resolve(process.cwd(), args[i]);
         break;
+      case "--fast-math":
+        opts.fastMath = true;
+        break;
       case "--no-fast-math":
+        // Accepted for back-compat; this is now the default.
         opts.fastMath = false;
         break;
       case "--dump-ast":
@@ -466,13 +480,13 @@ function parseOptions(args: string[]): ParsedOptions {
       case "--opt":
         i++;
         if (i >= args.length) {
-          console.error("Error: --opt requires a value (0, 1, or e3)");
+          console.error("Error: --opt requires a value (0 or 1)");
           process.exit(1);
         }
         {
           const v = args[i];
           if (!isOptLevel(v)) {
-            console.error(`Error: --opt must be 0, 1, or e3 (got ${v}).`);
+            console.error(`Error: --opt must be 0 or 1 (got ${v}).`);
             process.exit(1);
           }
           opts.optimization = v;
@@ -670,7 +684,13 @@ async function executeWithOptions(
   };
 
   // If --dump-ast is used alone (without running), just dump and exit
-  if (opts.dumpAst && !opts.dumpJs && !opts.stream && !opts.verbose) {
+  if (
+    opts.dumpAst &&
+    !opts.dumpJs &&
+    !opts.dumpC &&
+    !opts.stream &&
+    !opts.verbose
+  ) {
     const ast = parseMFile(code, mainFileName);
     process.stdout.write(JSON.stringify(ast, null, 2) + "\n");
     process.exit(0);
@@ -695,19 +715,68 @@ async function executeWithOptions(
     return line;
   };
 
-  // Set up --dump-js / --dump-c: compilations are collected in
-  // result.generatedJS / result.generatedC by executeCode and written
-  // by finalizeDumpFile at the end. Just clear any previous dump file
-  // here.
+  // Set up --dump-js / --dump-c. Each JIT section is streamed to disk the
+  // moment it compiles (in onJitCompile, which fires before the compiled
+  // code runs) rather than written in one shot at the end. This keeps the
+  // dump intact even when a hard error in compiled C terminates the
+  // process via exit(1) from inside the FFI call — that path never unwinds
+  // back to JS, so an end-of-run write would be lost. Write the header now
+  // so a crash still leaves a self-describing file.
+  const dumpHeader =
+    "// " +
+    "=".repeat(60) +
+    "\n// MAIN SCRIPT: " +
+    mainFileName +
+    "\n// " +
+    "=".repeat(60) +
+    "\n\n";
+  const dumpCounts = { js: 0, c: 0 };
+  // Start each file fresh with the header. `/dev/*` targets (e.g.
+  // `/dev/stdout`) can't be truncated, so append there instead.
+  const initDump = (file: string) => {
+    if (file.startsWith("/dev/")) appendFileSync(file, dumpHeader);
+    else writeFileSync(file, dumpHeader);
+  };
+  if (opts.dumpJs) initDump(opts.dumpJs);
+  if (opts.dumpC) initDump(opts.dumpC);
   const onJitCompile:
-    | ((description: string, jsCode: string) => void)
-    | undefined = undefined;
-  if (opts.dumpJs) {
-    writeFileSync(opts.dumpJs, "");
-  }
-  if (opts.dumpC) {
-    writeFileSync(opts.dumpC, "");
-  }
+    | ((description: string, code: string, lang: "js" | "c") => void)
+    | undefined =
+    opts.dumpJs || opts.dumpC
+      ? (description, code, lang) => {
+          const file = lang === "c" ? opts.dumpC : opts.dumpJs;
+          if (!file) return;
+          const banner = `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${code}\n`;
+          const prefix =
+            dumpCounts[lang] === 0
+              ? "// Interpreter mode — JIT compiled sections:\n\n"
+              : "\n";
+          appendFileSync(file, prefix + banner);
+          dumpCounts[lang]++;
+        }
+      : undefined;
+  // Append the "nothing generated" placeholder for any enabled dump file
+  // that received no sections. Safe to call more than once (guarded on
+  // count), so it runs on both the success and error paths.
+  const finalizeDumps = () => {
+    if (opts.dumpJs && dumpCounts.js === 0) {
+      appendFileSync(opts.dumpJs, "// No JS generated\n");
+      dumpCounts.js = -1;
+    }
+    if (opts.dumpC && dumpCounts.c === 0) {
+      appendFileSync(opts.dumpC, "// No C generated\n");
+      dumpCounts.c = -1;
+    }
+  };
+
+  // Surface a runtime JIT bail (e.g. an indexed-store array growth the
+  // JIT can't model) as a stderr warning. The scope still runs
+  // correctly — the interpreter takes over — so this is informational,
+  // not an error; it goes to stderr to leave stdout (program output)
+  // untouched.
+  const onJitBail = (message: string): void => {
+    process.stderr.write(`warning: JIT bailed to interpreter — ${message}\n`);
+  };
 
   try {
     if (opts.stream) {
@@ -738,13 +807,13 @@ async function executeWithOptions(
               streamLine({ type: "drawnow", plotInstructions });
             },
             onJitCompile,
+            onJitBail,
 
             fileIO,
             system,
             onInput,
 
             optimization: opts.optimization,
-            fastMath: opts.fastMath,
           },
           workspaceFiles,
           mainFileName,
@@ -758,15 +827,11 @@ async function executeWithOptions(
           });
         }
         writeProfileIfNeeded(result);
-        if (opts.dumpJs) {
-          finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-        }
-        if (opts.dumpC) {
-          finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
-        }
+        finalizeDumps();
         streamLine({
           type: "done",
           generatedJS: result.generatedJS || undefined,
+          generatedC: result.generatedC || undefined,
         });
       } catch (error) {
         const diags = diagnoseErrors(error, code, mainFileName, workspaceFiles);
@@ -798,12 +863,12 @@ async function executeWithOptions(
           onDrawnow,
           log,
           onJitCompile,
+          onJitBail,
 
           fileIO,
           system,
           onInput,
           optimization: opts.optimization,
-          fastMath: opts.fastMath,
         },
         workspaceFiles,
         mainFileName,
@@ -811,12 +876,7 @@ async function executeWithOptions(
         nativeBridge
       );
       writeProfileIfNeeded(result);
-      if (opts.dumpJs) {
-        finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
-      }
+      finalizeDumps();
       await flushAndWait(result.plotInstructions);
     } else {
       const asyncPlotOpts: PlotServerOptions | undefined =
@@ -837,12 +897,12 @@ async function executeWithOptions(
           },
           onDrawnow,
           onJitCompile,
+          onJitBail,
 
           fileIO,
           system,
           onInput,
           optimization: opts.optimization,
-          fastMath: opts.fastMath,
         },
         workspaceFiles,
         mainFileName,
@@ -850,12 +910,7 @@ async function executeWithOptions(
         nativeBridge
       );
       writeProfileIfNeeded(result);
-      if (opts.dumpJs) {
-        finalizeDumpFile(opts.dumpJs, mainFileName, result.generatedJS);
-      }
-      if (opts.dumpC) {
-        finalizeDumpFile(opts.dumpC, mainFileName, result.generatedC);
-      }
+      finalizeDumps();
       await flushAndWait(result.plotInstructions);
     }
 
@@ -866,55 +921,21 @@ async function executeWithOptions(
       getSourceForFile(file, mainFileName, code, workspaceFiles);
     console.error(formatDiagnostics(diags, getSource));
 
-    // Still finalize the dump file on error so the user can inspect the generated JS
-    if (opts.dumpJs) {
-      const errWithInfo = error as Error & { generatedJS?: string };
-      finalizeDumpFile(
-        opts.dumpJs,
-        mainFileName,
-        errWithInfo.generatedJS ?? "// (main script JS not available)"
-      );
-    }
-    if (opts.dumpC) {
-      const errWithInfo = error as Error & { generatedC?: string };
-      finalizeDumpFile(
-        opts.dumpC,
-        mainFileName,
-        errWithInfo.generatedC ?? "/* (main script C not available) */"
-      );
-    }
+    // The dump files were streamed as each section compiled (see
+    // onJitCompile above), so anything generated before the error is
+    // already on disk. Just cap off any file that got no sections.
+    finalizeDumps();
 
     process.exit(1);
   }
 }
 
-/** Finalize the dump file: prepend the main script header before JIT pieces. */
-function finalizeDumpFile(
-  dumpFile: string,
-  mainFileName: string,
-  jsCode: string
-) {
-  const header =
-    "// " +
-    "=".repeat(60) +
-    "\n" +
-    "// MAIN SCRIPT: " +
-    mainFileName +
-    "\n" +
-    "// " +
-    "=".repeat(60) +
-    "\n\n";
-  if (dumpFile.startsWith("/dev/")) {
-    appendFileSync(dumpFile, header + jsCode + "\n");
-    return;
-  }
-  writeFileSync(dumpFile, header + jsCode + "\n");
-}
-
 async function cmdBuildAddon(args: string[]) {
-  const fastMath = !args.includes("--no-fast-math");
+  // Default OFF (deterministic, cross-mode-consistent). `--fast-math`
+  // opts in; `--no-fast-math` is accepted for back-compat (now default).
+  const fastMath = args.includes("--fast-math");
   for (const a of args) {
-    if (a !== "--no-fast-math") {
+    if (a !== "--no-fast-math" && a !== "--fast-math") {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
     }
@@ -930,7 +951,7 @@ async function cmdBuildAddon(args: string[]) {
   console.log("Package directory: " + packageDir);
   console.log("Prerequisites: C++ compiler, libopenblas-dev (or equivalent)");
   console.log(
-    `-ffast-math: ${fastMath ? "enabled (default)" : "DISABLED (--no-fast-math)"}`
+    `-ffast-math: ${fastMath ? "ENABLED (--fast-math)" : "disabled (default)"}`
   );
   console.log("");
   try {
@@ -1019,8 +1040,7 @@ async function cmdRepl(args: string[]) {
     replDrawnow,
     replSearchPaths,
     nativeBridge,
-    opts.optimization,
-    opts.fastMath
+    opts.optimization
   );
 }
 

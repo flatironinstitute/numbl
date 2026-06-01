@@ -22,7 +22,7 @@ import {
   type RuntimeValue,
 } from "./types.js";
 import { isShared, type RefcountRuntime } from "./refcount.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Return a fresh wrapper that shadows `v`'s contents but has rc=0
  *  (modulo scope adoption from the constructor). The new wrapper holds

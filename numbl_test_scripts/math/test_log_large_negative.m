@@ -1,4 +1,5 @@
 % log / log2 / log10 of a large-magnitude negative must not overflow
+%!numbl:assert_jit c
 x = log(-1e200);
 if ~isfinite(real(x))
     error('log(-1e200) re not finite: %g', real(x));

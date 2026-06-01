@@ -2,6 +2,7 @@
 % the same statement: the prior wrapper must not be released before the
 % RHS finishes evaluating.
 
+%!numbl:assert_jit c
 x = [10, 20, 30, 40, 50];
 
 % RHS is the same variable. Identity assignment must not corrupt x.

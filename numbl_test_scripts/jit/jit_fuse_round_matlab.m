@@ -4,6 +4,7 @@
 % MATLAB-compatible helper; the fused scalar-emit path fell through to
 % Math.round.
 
+%!numbl:assert_jit c
 function [r1, r2, r3] = round_variants(a)
   % Three independent fused chains so whichever emitter kicks in gets
   % tested. The inputs are chosen to straddle the half-value ties that

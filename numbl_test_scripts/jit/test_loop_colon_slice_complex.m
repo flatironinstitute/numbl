@@ -11,6 +11,7 @@
 % through.
 
 % Build a complex 4x6 tensor whose entries are deterministic.
+%!numbl:assert_jit c
 m = 4; nc = 6;
 A = zeros(m, nc) + 1i * zeros(m, nc);
 for r = 1:m
@@ -22,7 +23,6 @@ end
 % --- 1) Column slice A(:, j) — fix column, vary row.
 acc1 = 0 + 0i;
 for j = 1:nc
-    %!numbl:assert_jit
     col = A(:, j);
     acc1 = acc1 + sum(col);
 end
@@ -32,7 +32,6 @@ assert(abs(acc1 - expected1) < 1e-12, '1: column slice complex sum');
 % --- 2) Row slice A(j, :) — fix row, vary column.
 acc2 = 0 + 0i;
 for r = 1:m
-    %!numbl:assert_jit
     row = A(r, :);
     acc2 = acc2 + sum(row);
 end

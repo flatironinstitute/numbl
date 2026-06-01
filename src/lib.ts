@@ -7,11 +7,6 @@
  *   console.log(result.output); // ["hello"]
  */
 
-// Side-effect: registers the C-JIT (e3) executors so Node consumers
-// can pass `optimization: "e3"` to executeCode. The browser worker
-// uses a different entry that does not import this module.
-import "./numbl-core/executors/cJit/register.js";
-
 export { executeCode } from "./numbl-core/executeCode.js";
 export type {
   ExecOptions,

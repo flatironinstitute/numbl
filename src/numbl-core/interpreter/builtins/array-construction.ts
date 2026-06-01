@@ -7,7 +7,7 @@ import type { RuntimeValue } from "../../runtime/types.js";
 import { toNumber, numel, RuntimeError } from "../../runtime/index.js";
 import type { SignCategory } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 

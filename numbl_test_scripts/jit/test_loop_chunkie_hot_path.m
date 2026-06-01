@@ -35,7 +35,6 @@ function jit_loop_chunkie_main()
     vals = zeros(1, 200);
 
     for ii = 1:5
-        %!numbl:assert_jit
         vals(:, 1) = oneintp_scalar(-1, 1, a, b);
         v2 = oneintp_scalar(-1, 0, a, b);
         vals(:, ii + 1) = v2;

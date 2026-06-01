@@ -15,7 +15,7 @@ import {
 import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D } from "../runtime/utils.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 

@@ -18,7 +18,7 @@ import { dlarfg } from "./dlarfg.js";
 import { dcopy } from "../BLAS/dcopy.js";
 import { drot } from "../BLAS/drot.js";
 import { MACH_SFMIN, MACH_PREC } from "../utils/constants.js";
-import { allocFloat64Array } from "../../../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../../numbl-core/runtime/alloc.js";
 
 /**
  * DLAHQR computes the eigenvalues and optionally the Schur factorization

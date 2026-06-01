@@ -18,7 +18,7 @@ import {
   isRuntimeTensor,
   isRuntimeCell,
 } from "../numbl-core/runtime/types.js";
-import { allocFloat64Array } from "../numbl-core/executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../numbl-core/runtime/alloc.js";
 
 describe("numel", () => {
   it("returns 1 for scalar shape", () => {

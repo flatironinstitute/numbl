@@ -21,7 +21,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 
@@ -76,18 +76,6 @@ defineBuiltin({
       },
     },
   ],
-  // Scalar: `(+x)` coerces. Tensor: $h.tDouble strips _isLogical in place
-  // when the tensor is uniquely owned (typical for JIT scratches); falls
-  // back to copying otherwise. Identity for non-logical numeric tensors.
-  jitEmit: (argCode, argTypes) => {
-    if (argTypes.length !== 1) return null;
-    const a = argTypes[0];
-    if (a.kind === "number" || a.kind === "boolean") {
-      return `(+${argCode[0]})`;
-    }
-    if (a.kind === "tensor") return `$h.tDouble(${argCode[0]})`;
-    return null;
-  },
 });
 
 // ── Integer types ───────────────────────────────────────────────────────

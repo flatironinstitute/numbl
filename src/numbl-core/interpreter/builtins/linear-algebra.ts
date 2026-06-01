@@ -48,10 +48,7 @@ import {
   linsolveLapack,
   linsolveComplexLapack,
 } from "../../helpers/linsolve.js";
-import {
-  allocFloat64Array,
-  withScratch,
-} from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 

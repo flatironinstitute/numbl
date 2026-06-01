@@ -29,7 +29,6 @@ T.nodes(4).val = 40;
 T.nodes(5).val = 50;
 total = 0;
 for i = 1:100
-    %!numbl:assert_jit
     inode = mod(i - 1, 5) + 1;
     total = total + T.nodes(inode).val;
 end
@@ -42,7 +41,6 @@ T2.nodes(2).chld = [1; 2; 3; 4];
 T2.nodes(3).chld = [5; 6; 7; 8];
 s2 = 0;
 for i = 1:60
-    %!numbl:assert_jit
     inode = mod(i - 1, 3) + 1;
     chld = T2.nodes(inode).chld;
     s2 = s2 + chld(1) + chld(4);
@@ -59,7 +57,6 @@ T3.nodes(3).val = 5;   T3.nodes(3).chld = [500; 600];
 acc_val = 0;
 acc_chld = 0;
 for i = 1:30
-    %!numbl:assert_jit
     inode = mod(i - 1, 3) + 1;
     acc_val = acc_val + T3.nodes(inode).val;
     chld = T3.nodes(inode).chld;
@@ -77,7 +74,6 @@ T4.nodes(3).val = 3;
 T4.nodes(4).val = 4;
 grand = 0;
 for i = 1:4
-    %!numbl:assert_jit
     for j = 1:5
         grand = grand + T4.nodes(i).val * j;
     end
@@ -92,7 +88,6 @@ T5.nodes(3).a = 3; T5.nodes(3).b = 300;
 sa = 0;
 sb = 0;
 for i = 1:30
-    %!numbl:assert_jit
     inode = mod(i - 1, 3) + 1;
     sa = sa + T5.nodes(inode).a;
     sb = sb + T5.nodes(inode).b;
@@ -109,7 +104,6 @@ T6.nodes(1).k = 7;
 T6.nodes(2).k = 11;
 s6 = 0;
 for i = 1:20
-    %!numbl:assert_jit
     inode = mod(i - 1, 2) + 1;
     s6 = s6 + T6.nodes(inode).k + T6.nodes(inode).k * 2;
 end

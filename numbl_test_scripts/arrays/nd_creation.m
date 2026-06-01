@@ -1,6 +1,7 @@
 % 3D tensor creation: zeros, ones, reshape, size, ndims
 
 % ── zeros with 3 dimensions ─────────────────────────────────────────
+%!numbl:assert_jit c
 a = zeros(2, 3, 4);
 assert(ndims(a) == 3)
 assert(size(a, 1) == 2)

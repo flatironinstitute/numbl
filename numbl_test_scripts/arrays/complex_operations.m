@@ -2,6 +2,7 @@
 
 % ── prod on complex vector ───────────────────────────────────────
 % (1+2i)*(3+4i) = 3+4i+6i+8i^2 = -5+10i
+%!numbl:assert_jit c
 p = prod([1+2i, 3+4i]);
 assert(abs(real(p) - (-5)) < 1e-10)
 assert(abs(imag(p) - 10) < 1e-10)

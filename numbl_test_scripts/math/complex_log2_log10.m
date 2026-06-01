@@ -5,6 +5,7 @@
 % log2(2+2i)
 % log(2+2i) = log(2*sqrt(2)) + i*pi/4
 % / log(2) = 3/2 + i*pi/(4*log(2))
+%!numbl:assert_jit c
 z = 2 + 2i;
 r = log2(z);
 expected_re = 3/2;

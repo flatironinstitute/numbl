@@ -1,6 +1,6 @@
 # Element-Wise Fusion
 
-Fusion collapses a run of element-wise tensor assignments into a single per-element loop. The goal is fewer allocations, fewer passes over memory, and better cache behavior.
+Fusion collapses a run of element-wise tensor assignments into a single per-element loop. The goal is fewer allocations, fewer passes over memory, and better cache behavior. The pass lives in the JIT compiler's codegen (`src/numbl-core/jit/codegen/emitTensorFused.ts`).
 
 ## What is fused
 
@@ -16,7 +16,7 @@ A trailing reduction (`sum`, `prod`, `max`, `min`, etc.) can be absorbed into th
 
 A single analysis pass inspects the IR and produces a fusion plan: which statements merge, which variables remain live, which intermediates become scalar temporaries inside the loop. The JS backend then emits a plain `for (let i = 0; i < n; i++)` loop with typed-array access and scalar temporaries.
 
-If the fused form cannot be emitted (complex tensors the backend doesn't handle, an op without a usable `jitEmit`), fusion is skipped for that chain and the individual assignments are emitted.
+If the fused form cannot be emitted (a type or op the fused path doesn't handle), fusion is skipped for that chain and the individual assignments are emitted normally.
 
 ## What breaks fusion
 

@@ -19,7 +19,6 @@ n = 20;
 out = cell(3, 1);
 acc1 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     [out{1:3}] = fcurve3(base_ts);
     acc1 = acc1 + out{1}(1) + out{2}(1) + out{3}(1);
 end
@@ -31,7 +30,6 @@ nout = 3;
 out2 = cell(3, 1);
 acc2 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     [out2{1:nout}] = fcurve3(base_ts);
     acc2 = acc2 + out2{1}(1) + out2{2}(1) + out2{3}(1);
 end
@@ -46,7 +44,6 @@ out3 = cell(3, 1);
 M = ones(2, 2);
 acc3 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     [out3{1:3}] = fcurve3(base_ts);
     for j = 4:3  % statically empty range — body is dead but still has to lower
         out3{j} = out3{j-1} * M * 2;

@@ -1,5 +1,7 @@
 % Test logspace builtin
 
+%!numbl:assert_jit c
+
 %% Basic usage
 v = logspace(1, 3, 3);
 assert(length(v) == 3);

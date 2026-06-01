@@ -1,6 +1,7 @@
 % Test special values: NaN, Inf, isnan, isinf, isempty
 
 % NaN
+%!numbl:assert_jit c
 n = NaN;
 assert(isnan(n));
 assert(~isnan(3.14));

@@ -27,7 +27,7 @@ import {
   copyTensor,
 } from "../reduction-helpers.js";
 import { tensorOps, OpReduce } from "../../ops/index.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Scan helpers ───────────────────────────────────────────────────────
 

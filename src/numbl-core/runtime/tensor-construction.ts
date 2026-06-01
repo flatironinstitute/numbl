@@ -18,12 +18,13 @@ import {
   isRuntimeStruct,
   isRuntimeStructArray,
   type RuntimeSparseMatrix,
+  RuntimeChar,
   kstr,
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { numel } from "./utils.js";
-import { allocFloat64Array } from "../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "./alloc.js";
 
 /** Create a range start:end or start:step:end */
 export function makeRangeTensor(
@@ -116,6 +117,11 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
     return sparseCatAlongDim(values, 0);
   }
 
+  // If any element is a char, build a 2-D char array (rows stacked).
+  if (values.some(v => isRuntimeChar(v))) {
+    return vertcatChars(values);
+  }
+
   // Cell concatenation: [cellA; cellB]
   if (values.some(v => isRuntimeCell(v))) {
     return cellCatAlongDim(values, 0);
@@ -127,6 +133,61 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
   }
 
   return catAlongDim(values, 0); // dim 1 = 0-based index 0
+}
+
+/** Vertical concatenation when at least one operand is a char array.
+ *  Char arrays store rows row-major (each row is `shape[1]` chars), so
+ *  stacking rows is just concatenating the row-major values. All operands
+ *  must share a common column width; numeric/string operands are coerced
+ *  to char rows (numeric → code points). */
+function vertcatChars(values: RuntimeValue[]): RuntimeValue {
+  let cols: number | null = null;
+  let totalRows = 0;
+  let out = "";
+  for (const v of values) {
+    let rows: number;
+    let width: number;
+    let rowMajor: string;
+    if (isRuntimeChar(v)) {
+      rows = v.shape ? v.shape[0] : 1;
+      width = v.shape ? v.shape[1] : v.value.length;
+      rowMajor = v.value;
+    } else if (isRuntimeString(v)) {
+      rows = 1;
+      width = (v as string).length;
+      rowMajor = v as string;
+    } else if (isRuntimeNumber(v)) {
+      rows = 1;
+      width = 1;
+      rowMajor = String.fromCharCode(Math.round(v as number));
+    } else if (isRuntimeTensor(v)) {
+      const t = v as RuntimeTensor;
+      const m = t.shape[0] ?? 0;
+      const n = t.shape[1] ?? 0;
+      rows = m;
+      width = n;
+      let s = "";
+      // Tensor data is column-major; emit row-major code points.
+      for (let r = 0; r < m; r++) {
+        for (let c = 0; c < n; c++) {
+          s += String.fromCharCode(Math.round(t.data[c * m + r]));
+        }
+      }
+      rowMajor = s;
+    } else {
+      throw new RuntimeError(`Cannot concatenate ${kstr(v)} into char`);
+    }
+    if (cols === null) cols = width;
+    else if (width !== cols) {
+      throw new RuntimeError(
+        "Dimensions of arrays being concatenated are not consistent"
+      );
+    }
+    totalRows += rows;
+    out += rowMajor;
+  }
+  if (totalRows <= 1) return RTV.char(out);
+  return new RuntimeChar(out, [totalRows, cols ?? 0]);
 }
 
 /** Concatenate struct scalars and struct arrays into a flat struct array.

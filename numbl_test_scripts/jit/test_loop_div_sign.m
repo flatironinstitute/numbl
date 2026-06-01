@@ -7,12 +7,12 @@
 %   resol_speed_test = err1 > eps;
 % which previously fell back to the interpreter for the whole loop.
 
+%!numbl:assert_jit c
 eps_tol = 1e-6;
 n = 20;
 k = 16;
 acc = 0;
 for i = 1:n
-    %!numbl:assert_jit
     err1 = sqrt(0.5 / 0.5 / k);
     resol_speed_test = err1 > eps_tol;
     if resol_speed_test
@@ -27,7 +27,6 @@ assert(acc == n, 'every iteration should pass the threshold');
 v = ones(1, 8) * 2;
 acc2 = 0;
 for i = 1:n
-    %!numbl:assert_jit
     w = sqrt(v ./ k);
     acc2 = acc2 + sum(w);
 end

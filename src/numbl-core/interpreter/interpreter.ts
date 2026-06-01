@@ -64,6 +64,25 @@ export class Interpreter {
     numIndices: number;
   }> = [];
 
+  /** @internal Number of enclosing `for` / `while` loop bodies the
+   *  interpreter is currently inside. Bumped on body entry, decremented
+   *  on exit. Read by the executor registry's `propose()` to gate JIT
+   *  attempts: when `loopDepth > 0`, the interpreter is iterating a
+   *  hot loop and per-call JIT lookup overhead / spec-cache thrashing
+   *  is a net loss. Once mtoc2 successfully JITs an outer call, the
+   *  nested loops execute inside the compiled artifact and the
+   *  interpreter never sees them, so this gate only fires on calls
+   *  that genuinely happen at the interpreter level inside a loop. */
+  loopDepth: number = 0;
+
+  /** @internal Number of enclosing conditional blocks (`if` / `switch` /
+   *  `try`) whose bodies the interpreter is currently executing. Used by
+   *  the loop classifier: when a loop is dispatched with `condBlockDepth >
+   *  0` (or `loopDepth > 0`), its sibling list is a nested block, so the
+   *  post-loop liveness scan can't see reads after the enclosing block —
+   *  the classifier must then keep every loop-assigned name live-out. */
+  condBlockDepth: number = 0;
+
   /** @internal */
   functionDefCache = new Map<string, FunctionDef>();
 
@@ -78,33 +97,30 @@ export class Interpreter {
 
   /**
    * Optimization mode:
-   *   "0"  — pure AST interpreter, no JIT.
-   *   "1"  — JS-JIT (default): type-specialize hot functions/loops to JS
-   *          via `new Function()`.
-   *   "e3" — C-JIT scalar-loop only (Node only). No JS-JIT suite is
-   *          registered alongside; loops either match the C-JIT
-   *          executor or fall back to the AST interpreter.
+   *   "0" — pure AST interpreter, no JIT.
+   *   "1" — JS-JIT (default): top-level + call shapes get
+   *         type-specialized JS via the JIT's `compileSpec`.
+   *   "2" — C-JIT: scalar/tensor kernels via `compileSpecC` + koffi.
    */
   optimization: import("../executors/plugins.js").OptLevel = "1";
 
-  /** Callback for JIT compilation logging (JS codegen). */
-  onJitCompile?: (description: string, jsCode: string) => void;
+  /** Callback for JIT compilation logging. `lang` distinguishes the
+   *  emitted source: `"js"` for the JS-JIT backend, `"c"` for the
+   *  C-JIT backend (both can fire in a single `--opt 2` run). */
+  onJitCompile?: (description: string, code: string, lang: "js" | "c") => void;
 
-  /** Callback for C-JIT compilation logging (C codegen). Invoked once
-   *  per cache miss, before the C source is compiled. */
-  onCJitCompile?: (description: string, cCode: string) => void;
+  /** Called when a JIT-compiled unit bails back to the interpreter at
+   *  RUNTIME (as opposed to declining at compile time). Today the sole
+   *  trigger is an indexed-store array growth that's only detectable at
+   *  runtime — the JIT can't model the grown shape, so it bails and the
+   *  interpreter re-runs the whole scope with full MATLAB semantics.
+   *  Surfaced as a warning (the CLI routes it to stderr); a compile-time
+   *  decline stays silent (it's the normal "not JIT-able" path). */
+  onJitBail?: (message: string) => void;
 
-  /** Bridge for loading native shared libraries — used by the C-JIT
-   *  loop executor (`--opt e3`) to dlopen freshly-compiled `.so`
-   *  artifacts via koffi. Undefined in browser contexts; the executor
-   *  declines when undefined. */
+  /** Bridge for loading native shared libraries. Undefined in browser
+   *  contexts. */
   nativeBridge?: import("../workspace/types.js").NativeBridge;
-
-  /** Compile c-jit kernels with `-ffast-math`. On by default for
-   *  libmvec-vectorized transcendentals (~30% speedup on element-wise
-   *  tensor benchmarks); opt out via the CLI's `--no-fast-math` flag
-   *  to keep reductions bitwise-deterministic. */
-  fastMath: boolean = true;
 
   /** Telemetry: invoked after a registered executor's `run()` succeeds.
    *  Used to track which optimizers fire in a session. The kind is the
@@ -254,12 +270,11 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      // Apply registered AST transformers (e.g. the C-JIT chain
-      // pass under --opt e3). Cached per input-list identity, so this
-      // is paid once per stmt list per Registry.
+      // Apply registered AST transformers. Cached per input-list
+      // identity, so this is paid once per stmt list per Registry.
       const transformed = this.registry.transformStmts(nonFuncStmts);
       // First, try to handle the entire script body as a unit (e.g.
-      // JS-JIT top-level). If a whole-scope executor matches, the
+      // mtoc2 top-level JIT). If a whole-scope executor matches, the
       // per-stmt loop is skipped.
       const wholeScope = this.registry.tryRunWholeScope(transformed, this);
       if (wholeScope === null) {
@@ -281,6 +296,7 @@ export class Interpreter {
   // Methods added by interpreterExec.ts
   declare execStmt: (stmt: Stmt) => ControlSignal | null;
   declare execStmts: (stmts: Stmt[]) => ControlSignal | null;
+  declare execBlockStmts: (stmts: Stmt[]) => ControlSignal | null;
   declare evalExpr: (expr: Expr) => unknown;
   declare evalExprNargout: (expr: Expr, nargout: number) => unknown;
   declare evalBinary: (expr: Extract<Expr, { type: "Binary" }>) => unknown;

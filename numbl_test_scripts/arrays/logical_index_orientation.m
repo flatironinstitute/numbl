@@ -1,5 +1,7 @@
 % Test that logical indexing preserves vector orientation
 
+%!numbl:assert_jit c
+
 % Row vector with logical index should stay row
 r = [10 20 30 40];
 mask = [true true false true];

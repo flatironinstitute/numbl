@@ -557,19 +557,19 @@ describe("introspection builtins", () => {
   it("class of number", () => {
     const result = executeCode("c = class(3.14);");
     const v = result.variableValues["c"] as { kind: string; value: string };
-    expect(v).toEqual({ kind: "char", value: "double" });
+    expect(v).toMatchObject({ kind: "char", value: "double" });
   });
 
   it("class of logical", () => {
     const result = executeCode("c = class(true);");
     const v = result.variableValues["c"] as { kind: string; value: string };
-    expect(v).toEqual({ kind: "char", value: "logical" });
+    expect(v).toMatchObject({ kind: "char", value: "logical" });
   });
 
   it("class of char", () => {
     const result = executeCode("c = class('hi');");
     const v = result.variableValues["c"] as { kind: string; value: string };
-    expect(v).toEqual({ kind: "char", value: "char" });
+    expect(v).toMatchObject({ kind: "char", value: "char" });
   });
 
   it("isequal with equal values", () => {

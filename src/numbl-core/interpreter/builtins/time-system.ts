@@ -7,7 +7,7 @@ import { isRuntimeChar, isRuntimeTensor } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { defineBuiltin, registerIBuiltin } from "./types.js";
-import { allocFloat64Array } from "../../executors/jsJit/helpers/alloc.js";
+import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── tic / toc ───────────────────────────────────────────────────────────
 
@@ -32,10 +32,6 @@ defineBuiltin({
       },
     },
   ],
-  jitEmit: (_argCode, argTypes) => {
-    if (argTypes.length !== 0) return null;
-    return `$h.__tic()`;
-  },
 });
 
 // toc is registered as a special builtin in specialBuiltins.ts

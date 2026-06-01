@@ -358,6 +358,44 @@ export function tokenizeDetailed(input: string): SpannedToken[] {
       const numCfg = TOKEN_CONFIG.numbers;
       const start = pos;
 
+      // Hexadecimal (0x..) / binary (0b..) integer literals (MATLAB R2019b+).
+      // Normalize to a decimal lexeme so every downstream consumer
+      // (interpreter parseFloat, JIT Number()) reads the same value.
+      if (ch === "0" && pos + 1 < input.length) {
+        const radixCh = input[pos + 1];
+        const isHex = radixCh === "x" || radixCh === "X";
+        const isBin = radixCh === "b" || radixCh === "B";
+        if (isHex || isBin) {
+          let p = pos + 2;
+          const isRadixDigit = (c: string): boolean =>
+            isHex ? /[0-9a-fA-F]/.test(c) : c === "0" || c === "1";
+          const digitStart = p;
+          while (
+            p < input.length &&
+            (isRadixDigit(input[p]) ||
+              (numCfg.allowUnderscores && input[p] === "_"))
+          ) {
+            p++;
+          }
+          if (p > digitStart) {
+            let digits = input.slice(digitStart, p);
+            if (numCfg.stripUnderscores) digits = digits.replace(/_/g, "");
+            const value = parseInt(digits, isHex ? 16 : 2);
+            lineStart = false;
+            out.push({
+              token: Token[numCfg.integerToken as keyof typeof Token],
+              lexeme: String(value),
+              start,
+              end: p,
+            });
+            pos = p;
+            continue;
+          }
+          // No valid digits after the prefix — fall through to the normal
+          // scan (yields `0` followed by an identifier), matching MATLAB.
+        }
+      }
+
       let isFloat = false;
 
       if (ch === ".") {

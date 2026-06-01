@@ -29,10 +29,6 @@ import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
-import {
-  jitHelpers,
-  buildPerRuntimeJitHelpers,
-} from "./executors/jsJit/helpers/jitHelpers.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
@@ -50,10 +46,13 @@ export interface ExecOptions {
   log?: (message: string) => void;
   /** Enable profiling of builtin function calls. */
   profile?: boolean;
-  /** Called each time a JIT function is compiled, with a description and the generated JS. */
-  onJitCompile?: (description: string, jsCode: string) => void;
-  /** Called each time a C-JIT artifact is compiled, with a description and the generated C source. */
-  onCJitCompile?: (description: string, cCode: string) => void;
+  /** Called each time a JIT function is compiled, with a description, the
+   *  generated source, and the backend language (`"js"` or `"c"`). */
+  onJitCompile?: (description: string, code: string, lang: "js" | "c") => void;
+  /** Called when a JIT-compiled unit bails to the interpreter at runtime
+   *  (e.g. an indexed-store array growth the JIT can't model). Surfaced
+   *  as a warning; the CLI routes it to stderr. */
+  onJitBail?: (message: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
   /** Override or add builtins for this execution only. */
@@ -65,13 +64,8 @@ export interface ExecOptions {
   system?: SystemAdapter;
   /** Synchronous callback for the `input()` builtin. Displays prompt, returns user's line. */
   onInput?: (prompt: string) => string;
-  /** Optimization mode: `"0"` interpreter, `"1"` JS-JIT, `"e3"` C-JIT
-   *  scalar-loop only. */
+  /** Optimization mode: `"0"` interpreter, `"1"` JS-JIT, `"2"` C-JIT. */
   optimization?: import("./executors/plugins.js").OptLevel;
-  /** Compile C-JIT kernels with `-ffast-math` (libmvec-vectorized
-   *  transcendentals; reductions are reorder-allowed). Default true;
-   *  opt out via the CLI's `--no-fast-math` flag. */
-  fastMath?: boolean;
   /**
    * Initial implicit cwd path for the MATLAB-style "cwd is the first search path" feature.
    * - undefined → auto-detect from `system.cwd()` and scan its files.
@@ -117,8 +111,8 @@ export interface ProfileData {
 export interface ExecResult {
   output: string[];
   generatedJS: string;
-  /** Collected C source from C-JIT compilations during this run, or
-   *  empty when no C-JIT artifact was produced. */
+  /** C source emitted by the C-JIT backend (`--opt 2`). Empty placeholder
+   *  when no C was generated (e.g. `--opt 0`/`1`). */
   generatedC: string;
   plotInstructions: PlotInstruction[];
   returnValue: RuntimeValue;
@@ -327,16 +321,6 @@ export function executeCode(
 
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Build the per-runtime jitHelpers ($h) snapshot. This must happen AFTER
-  // Runtime construction so it captures the special-builtin closures bound
-  // to *this* rt, and AFTER js user functions are loaded so their ib_*
-  // entries are present.
-  const jsBuiltinMap = new Map<string, IBuiltin>();
-  for (const [n, e] of ctx.registry.jsUserFunctionsByName.entries()) {
-    jsBuiltinMap.set(n, e.builtin);
-  }
-  rt.jitHelpers = buildPerRuntimeJitHelpers(jsBuiltinMap);
-
   // Apply custom builtins (both to rt.builtins fallback and to customBuiltins
   // which take priority over IBuiltins in the interpreter)
   if (options.customBuiltins) {
@@ -361,38 +345,32 @@ export function executeCode(
 
   interpreter.optimization = options.optimization ?? "1";
   interpreter.nativeBridge = nativeBridge;
-  interpreter.fastMath = options.fastMath ?? true;
   interpreter.log = options.log;
 
   // Register mode-specific executor plugins. The AST interpreter is
   // the dispatcher's hardcoded fallback (not a registered executor).
   registerExecutorsForOpt(interpreter.registry, interpreter.optimization);
 
-  // Collect JIT compilations for generatedJS output and profiling
-  const jitSections: string[] = [];
-  interpreter.onJitCompile = (description: string, jsCode: string) => {
-    jitSections.push(
-      `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${jsCode}`
-    );
-    options.onJitCompile?.(description, jsCode);
+  // Collect JIT compilations for generatedJS/generatedC output and
+  // profiling. JS-JIT and C-JIT sections are kept apart so the CLI's
+  // `--dump-js` and `--dump-c` flags route to the right file — at
+  // `--opt 2` both backends can fire in a single run.
+  const jsSections: string[] = [];
+  const cSections: string[] = [];
+  interpreter.onJitCompile = (
+    description: string,
+    code: string,
+    lang: "js" | "c"
+  ) => {
+    const banner = `// ${"=".repeat(60)}\n// JIT: ${description}\n// ${"=".repeat(60)}\n\n${code}`;
+    (lang === "c" ? cSections : jsSections).push(banner);
+    options.onJitCompile?.(description, code, lang);
   };
-
-  // Collect C-JIT compilations for generatedC output.
-  const cJitSections: string[] = [];
-  interpreter.onCJitCompile = (description: string, cCode: string) => {
-    cJitSections.push(
-      `/* ${"=".repeat(60)}\n * C-JIT: ${description}\n * ${"=".repeat(60)} */\n\n${cCode}`
-    );
-    options.onCJitCompile?.(description, cCode);
-  };
-
-  // Wire up JIT builtin profiling hooks when profiling is enabled
-  if (options.profile) {
-    (jitHelpers as Record<string, unknown>)._profileEnter = (key: string) =>
-      rt.profileEnter(key);
-    (jitHelpers as Record<string, unknown>)._profileLeave = () =>
-      rt.profileLeave();
-  }
+  const buildDump = (sections: string[], label: "JS" | "C"): string =>
+    sections.length > 0
+      ? `// Interpreter mode — JIT compiled sections:\n\n${sections.join("\n\n")}`
+      : `// No ${label} generated`;
+  if (options.onJitBail) interpreter.onJitBail = options.onJitBail;
 
   // Wire up compileSpecialized so runtime dispatch routes through interpreter
   interpreter.installRuntimeCallbacks();
@@ -407,15 +385,6 @@ export function executeCode(
   // by addpath/rmpath/cd handlers below; sorted by search-path priority on
   // rebuild so first-wins matches `mWorkspaceFiles` semantics.
   const loadedJsUserFunctions: LoadedJsUserFunction[] = [...jsUserFunctions];
-
-  /** Rebuild rt.jitHelpers from the current jsUserFunctionsByName registry. */
-  const rebuildJitHelpers = () => {
-    const map = new Map<string, IBuiltin>();
-    for (const [n, e] of ctx.registry.jsUserFunctionsByName.entries()) {
-      map.set(n, e.builtin);
-    }
-    rt.jitHelpers = buildPerRuntimeJitHelpers(map);
-  };
 
   // Shared rebuild logic used by both onPathChange and onCwdChange.
   // Re-sorts mWorkspaceFiles by search path order, then re-registers
@@ -454,7 +423,6 @@ export function executeCode(
     const newIndex = ctx.buildFunctionIndex();
     interpreter.functionIndex = newIndex;
     interpreter.clearAllCaches();
-    rebuildJitHelpers();
     pathsModified = true;
   };
 
@@ -793,14 +761,8 @@ export function executeCode(
 
     const result: ExecResult = {
       output: rt.outputLines,
-      generatedJS:
-        jitSections.length > 0
-          ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
-          : "// No JS generated",
-      generatedC:
-        cJitSections.length > 0
-          ? cJitSections.join("\n\n")
-          : "/* No C generated */",
+      generatedJS: buildDump(jsSections, "JS"),
+      generatedC: buildDump(cSections, "C"),
       plotInstructions: rt.plotInstructions,
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
@@ -834,11 +796,11 @@ export function executeCode(
 
     return result;
   } catch (e) {
-    // Attach collected JIT code to the error so callers (e.g. --dump-js) can inspect it
-    const generatedJS =
-      jitSections.length > 0
-        ? `// Interpreter mode — JIT compiled sections:\n\n${jitSections.join("\n\n")}`
-        : "// No JS generated";
+    // Attach collected JIT code to the error so callers (e.g. --dump-js /
+    // --dump-c) can inspect it.
+    const generatedJS = buildDump(jsSections, "JS");
+    const generatedC = buildDump(cSections, "C");
+    type WithGen = { generatedJS?: string; generatedC?: string };
     if (e instanceof RuntimeError) {
       // Annotate with file/line info
       if (e.line === null && rt.$file && rt.$line > 0) {
@@ -846,7 +808,8 @@ export function executeCode(
         e.line = rt.$line;
       }
       if (!e.fileSources) e.fileSources = interpreter.fileSources;
-      (e as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
+      (e as RuntimeError & WithGen).generatedJS = generatedJS;
+      (e as RuntimeError & WithGen).generatedC = generatedC;
       throw e;
     }
     const re = new RuntimeError(e instanceof Error ? e.message : String(e));
@@ -855,17 +818,11 @@ export function executeCode(
       re.line = rt.$line;
     }
     re.fileSources = interpreter.fileSources;
-    (re as RuntimeError & { generatedJS?: string }).generatedJS = generatedJS;
+    (re as RuntimeError & WithGen).generatedJS = generatedJS;
+    (re as RuntimeError & WithGen).generatedC = generatedC;
     throw re;
   } finally {
     popCurrentRuntime(rt);
-    // Reset JIT profiling hooks to no-ops
-    if (options.profile) {
-      (jitHelpers as Record<string, unknown>)._profileEnter =
-        Function.prototype;
-      (jitHelpers as Record<string, unknown>)._profileLeave =
-        Function.prototype;
-    }
     // Restore the parent runtime's special-builtin registrations. Our
     // Runtime constructor replaced these with closures over our rt; the
     // parent (or a still-running outer executeCode) needs its own closures

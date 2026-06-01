@@ -1,6 +1,7 @@
 % Test that double() on logical arrays clears the logical type
 
 % Scalar logical -> double
+%!numbl:assert_jit c
 assert(~islogical(double(true)));
 assert(~islogical(double(false)));
 assert(double(true) == 1);
