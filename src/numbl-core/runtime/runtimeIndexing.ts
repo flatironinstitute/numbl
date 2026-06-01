@@ -14,6 +14,8 @@ import {
   mRange,
   RuntimeError,
   COLON_INDEX,
+  charToNumericTensor,
+  numericTensorToChar,
 } from "../runtime/index.js";
 import {
   isRuntimeNumber,
@@ -667,6 +669,9 @@ export function indexStore(
   }
   // Convert scalar number/logical/complex to 1x1 tensor for indexed assignment
   let wasScalar = false;
+  // A char base stays char: index-assign on its numeric code points, then
+  // convert back (MATLAB: x='abc'; x(2)=66 -> 'aBc', class char).
+  let wasChar = false;
   if (!isRuntimeTensor(mv)) {
     if (isRuntimeNumber(mv)) {
       mv = RTV.tensor(allocFloat64Array([mv]), [1, 1]);
@@ -683,13 +688,22 @@ export function indexStore(
         allocFloat64Array([mv.im])
       );
       wasScalar = true;
+    } else if (isRuntimeChar(mv)) {
+      mv = charToNumericTensor(mv);
+      wasChar = true;
     } else {
       mv = RTV.tensor(allocFloat64Array(0), [0, 0]);
     }
   }
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
-  const rhsMv = ensureRuntimeValue(rhs);
+  let rhsMv = ensureRuntimeValue(rhs);
+  // A char RHS assigned into a numeric/char array becomes its code point(s)
+  // (MATLAB: x=[1 2 3]; x(2)='A' -> [1 65 3]).
+  if (isRuntimeChar(rhsMv)) rhsMv = charToNumericTensor(rhsMv);
   const result = mIndexStore(mv, idxMvals, rhsMv, false, rt);
+  if (wasChar && isRuntimeTensor(result)) {
+    return numericTensorToChar(result);
+  }
   // Preserve _isLogical flag when assigning logical values into a logical tensor
   if (
     isRuntimeTensor(result) &&

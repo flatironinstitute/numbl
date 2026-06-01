@@ -48,6 +48,8 @@ export {
   COLON_INDEX,
   indexIntoRTValue as mIndex,
   storeIntoRTValueIndex as mIndexStore,
+  charToNumericTensor,
+  numericTensorToChar,
 } from "./indexing.js";
 export {
   getRTValueField as mGetField,

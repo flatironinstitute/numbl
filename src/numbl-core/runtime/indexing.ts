@@ -60,6 +60,38 @@ function toReIm(v: RuntimeValue): { re: number; im: number } {
   throw new RuntimeError(`Cannot convert ${kstr(v)} to number for assignment`);
 }
 
+/** Convert a char value to a numeric (column-major) tensor of its code
+ *  points. A RuntimeChar stores its `value` row-major (each of `shape[0]`
+ *  rows is `shape[1]` chars, concatenated), so we transpose into the
+ *  tensor's column-major layout. Used so indexed assignment into / from a
+ *  char array runs on the numeric tensor machinery (MATLAB treats char as
+ *  numeric for indexed assignment). */
+export function charToNumericTensor(c: RuntimeChar): RuntimeTensor {
+  const rows = c.shape ? c.shape[0] : 1;
+  const cols = c.shape ? c.shape[1] : c.value.length;
+  const data = allocFloat64Array(rows * cols);
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      data[col * rows + r] = c.value.charCodeAt(r * cols + col);
+    }
+  }
+  return RTV.tensor(data, [rows, cols]);
+}
+
+/** Inverse of charToNumericTensor: read a numeric tensor's column-major
+ *  data into a row-major char value, rounding codes to integers. */
+export function numericTensorToChar(t: RuntimeTensor): RuntimeChar {
+  const rows = t.shape.length >= 2 ? (t.shape[0] ?? 0) : 1;
+  const cols = t.shape.length >= 2 ? (t.shape[1] ?? 0) : t.data.length;
+  let s = "";
+  for (let r = 0; r < rows; r++) {
+    for (let col = 0; col < cols; col++) {
+      s += String.fromCharCode(Math.round(t.data[col * rows + r]));
+    }
+  }
+  return rows > 1 ? new RuntimeChar(s, [rows, cols]) : RTV.char(s);
+}
+
 /** Ensure a tensor has an imag array (allocate if needed). */
 function ensureImag(t: RuntimeTensor): void {
   if (!t.imag) {
