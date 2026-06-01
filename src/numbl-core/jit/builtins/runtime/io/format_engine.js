@@ -235,7 +235,13 @@ export function mtoc2_sprintf_format(fmt, args) {
               result += applyWidth(spec, gStr);
             }
           } else if (ch === "s") {
-            const sVal = toString(flat[argIdx++]);
+            const sArg = flat[argIdx++];
+            // A numeric/logical argument to %s is a character code (MATLAB:
+            // sprintf('%s', 65) -> 'A').
+            const sVal =
+              typeof sArg === "number" || typeof sArg === "boolean"
+                ? String.fromCharCode(Math.round(toNumber(sArg)))
+                : toString(sArg);
             const sFlags = spec.slice(1);
             const sLeftAlign = sFlags.includes("-");
             const sWidthMatch = spec.match(/^%[^0-9]*(\d+)/);

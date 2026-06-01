@@ -570,8 +570,35 @@ static void mtoc2__emit_xo(mtoc2__writer_fn writer, void *ctx,
                      zero_pad ? '0' : ' ', left_align);
 }
 
-/* Emit %s — text view goes through verbatim; a numeric slot routes
- * through `String(n)` semantics. */
+/* UTF-8 encode a code point into `buf` (>= 4 bytes); returns byte count.
+ * Mirrors JS String.fromCharCode + UTF-8 output. */
+static long mtoc2__utf8_encode(char *buf, long code) {
+  if (code < 0) code = 0;
+  if (code > 0x10FFFF) code = 0;
+  if (code < 0x80) {
+    buf[0] = (char)code;
+    return 1;
+  }
+  if (code < 0x800) {
+    buf[0] = (char)(0xC0 | (code >> 6));
+    buf[1] = (char)(0x80 | (code & 0x3F));
+    return 2;
+  }
+  if (code < 0x10000) {
+    buf[0] = (char)(0xE0 | (code >> 12));
+    buf[1] = (char)(0x80 | ((code >> 6) & 0x3F));
+    buf[2] = (char)(0x80 | (code & 0x3F));
+    return 3;
+  }
+  buf[0] = (char)(0xF0 | (code >> 18));
+  buf[1] = (char)(0x80 | ((code >> 12) & 0x3F));
+  buf[2] = (char)(0x80 | ((code >> 6) & 0x3F));
+  buf[3] = (char)(0x80 | (code & 0x3F));
+  return 4;
+}
+
+/* Emit %s — text view goes through verbatim; a numeric slot is a
+ * character code (MATLAB: sprintf('%s', 65) -> 'A'). */
 static void mtoc2__emit_s(mtoc2__writer_fn writer, void *ctx,
                           const char *spec, long spec_len,
                           mtoc2__stars_t *stars, const mtoc2__slot_t *slot) {
@@ -589,7 +616,7 @@ static void mtoc2__emit_s(mtoc2__writer_fn writer, void *ctx,
     data = slot->t.data;
     slen = slot->t.len > 0 ? slot->t.len : 0;
   } else {
-    slen = mtoc2__num_to_str(numbuf, sizeof(numbuf), slot->d);
+    slen = mtoc2__utf8_encode(numbuf, (long)floor(slot->d + 0.5));
     data = numbuf;
   }
   mtoc2__emit_padded(writer, ctx, data, slen, width, ' ', left_align);
