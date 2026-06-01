@@ -15,6 +15,23 @@ import type { FunctionDef } from "../interpreter/types.js";
 import type { Stmt, Expr } from "../parser/types.js";
 import { jitTypeKey, unifyJitTypes, type JitType } from "../jitTypes.js";
 import { inferJitType } from "../interpreter/builtins/types.js";
+import { inlinableHandleExpr } from "./handleInline.js";
+
+/** A capture-free function handle the JIT inlines into the spec body as
+ *  an in-scope `@...` constant instead of taking it as a runtime input.
+ *  `identity` keys the spec cache (distinct handles → distinct specs). */
+export interface ConstHandle {
+  readonly name: string;
+  readonly expr: Expr;
+  readonly identity: string;
+}
+
+/** Stable identity for a handle's defining AST, for cache keying. */
+function handleIdentity(expr: Expr): string {
+  if (expr.type === "FuncHandle") return `@${expr.name}`;
+  // Anonymous: the source span uniquely identifies this `@(...)` site.
+  return `anon@${expr.span?.start ?? 0}`;
+}
 
 // ── Type-inference helpers ──────────────────────────────────────────────
 
@@ -178,6 +195,9 @@ export interface LoopClassification {
   readonly hasReturn: boolean;
   /** Loop body contains a `%!numbl:assert_jit c` directive (C-JIT variant). */
   readonly assertsCJit: boolean;
+  /** Capture-free handle inputs to inline as in-scope `@...` constants
+   *  in the synthesized spec body (instead of runtime inputs). */
+  readonly constHandles: readonly ConstHandle[];
   readonly cacheKey: string;
 }
 
@@ -210,7 +230,34 @@ export function classifyLoop(
 
   const gathered = gatherTypedEnvInputs(interp, inputCandidates);
   if (!gathered) return null;
-  const { inputs, inputTypes } = gathered;
+
+  // Partition out capture-free handle inputs: instead of taking them as
+  // runtime inputs (which the JIT can't type — `function_handle` maps to
+  // null), inline their `@...` definition as an in-scope constant in the
+  // spec body. A handle reassigned in the loop (`analysis.outputs`) is
+  // not constant, so it stays a regular (declining) input.
+  const rawOutputs = new Set(analysis.outputs);
+  const constHandles: ConstHandle[] = [];
+  const inputs: string[] = [];
+  const inputTypes: JitType[] = [];
+  for (let i = 0; i < gathered.inputs.length; i++) {
+    const name = gathered.inputs[i];
+    if (
+      gathered.inputTypes[i].kind === "function_handle" &&
+      !rawOutputs.has(name)
+    ) {
+      const expr = inlinableHandleExpr(
+        interp.env.get(name),
+        interp.currentFile
+      );
+      if (expr) {
+        constHandles.push({ name, expr, identity: handleIdentity(expr) });
+        continue;
+      }
+    }
+    inputs.push(name);
+    inputTypes.push(gathered.inputTypes[i]);
+  }
 
   // Live-out set: inputs (every input the loop touched must round-trip
   // to env so a post-loop reference — direct or via `disp(...)` etc. —
@@ -243,7 +290,10 @@ export function classifyLoop(
     .join(",");
   const outputKey = outputs.join(",");
   const lineLabel = stmt.span?.start ?? 0;
-  const cacheKey = `$loop:${interp.currentFile}@${lineLabel}|${typeKey}|out=${outputKey}`;
+  // Const-handle identities salt the key: a different handle bound to the
+  // same variable (or a switch from inlinable to not) must recompile.
+  const handleKey = constHandles.map(h => `${h.name}=${h.identity}`).join(",");
+  const cacheKey = `$loop:${interp.currentFile}@${lineLabel}|${typeKey}|out=${outputKey}|h=${handleKey}`;
 
   return {
     stmt,
@@ -253,6 +303,7 @@ export function classifyLoop(
     currentFile: interp.currentFile,
     hasReturn: analysis.hasReturn,
     assertsCJit: containsAssertJitC(stmt.body),
+    constHandles,
     cacheKey,
   };
 }

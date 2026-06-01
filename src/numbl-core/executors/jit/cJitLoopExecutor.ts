@@ -11,6 +11,7 @@ import type { DispatchContext } from "../context.js";
 import type { LoweredStmt } from "../lowering.js";
 import { jitTypeKey, type JitType } from "../../jitTypes.js";
 import type { Stmt, Span } from "../../parser/index.js";
+import type { ConstHandle } from "../classification.js";
 import type { Interpreter } from "../../interpreter/interpreter.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
@@ -48,6 +49,7 @@ interface CJitLoopData {
   readonly outputs: readonly string[];
   readonly inputTypes: readonly JitType[];
   readonly compilerInputTypes: readonly CompilerType[];
+  readonly constHandles: readonly ConstHandle[];
   readonly currentFile: string;
   readonly cacheKey: string;
 }
@@ -61,18 +63,28 @@ function synthesizeLoopFuncStmt(
   loopStmt: Stmt & { type: "For" | "While" },
   inputs: readonly string[],
   outputs: readonly string[],
+  constHandles: readonly ConstHandle[],
   fileName: string
 ): FuncStmt {
   const offset = loopStmt.span?.start ?? 0;
   const name = `$loop_${offset}`;
   const span: Span = { file: fileName, start: 0, end: 0 };
+  // Inline capture-free handle inputs as in-scope `<name> = @...`
+  // assignments (see loopExecutor.ts for the rationale).
+  const handleDefs: Stmt[] = constHandles.map(h => ({
+    type: "Assign",
+    name: h.name,
+    expr: h.expr,
+    suppressed: true,
+    span,
+  }));
   return {
     type: "Function",
     name,
     functionId: name,
     params: [...inputs],
     outputs: [...outputs],
-    body: [loopStmt],
+    body: [...handleDefs, loopStmt],
     argumentsBlocks: [],
     span,
   };
@@ -108,6 +120,7 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
           outputs: classification.outputs,
           inputTypes: classification.inputTypes,
           compilerInputTypes,
+          constHandles: classification.constHandles,
           currentFile: classification.currentFile,
           cacheKey: classification.cacheKey,
         },
@@ -129,6 +142,7 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
         d.loopStmt,
         d.inputs,
         d.outputs,
+        d.constHandles,
         d.currentFile
       );
       const nargout = d.outputs.length;

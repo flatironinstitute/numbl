@@ -1061,6 +1061,10 @@ export function evalAnonFunc(
   // snapshot and in the parent env triggers COW on parent-side mutation
   // — preserves MATLAB's by-value capture semantics.
   fn.capturedEnv = capturedEnv;
+  // Retain the defining AST + file so the JIT can inline a capture-free
+  // handle that later crosses a compile boundary (loop input / call arg).
+  fn.handleAst = expr;
+  fn.handleDefFile = capturedFile;
   return fn;
 }
 
@@ -1140,6 +1144,18 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   // When the handle dies, release those captures by clearing the env.
   if (isNested) {
     fn.releaseExtra = () => capturedEnv.clearLocals();
+  } else {
+    // A plain `@name` handle to a workspace/local/package function (no
+    // captured env). Retain its AST + file so the JIT can inline it as
+    // an in-scope `@name` constant when it crosses a compile boundary.
+    // Nested-function handles are excluded: they depend on capturedEnv,
+    // which the inlined form can't reconstruct.
+    fn.handleAst = {
+      type: "FuncHandle",
+      name,
+      span: { file: capturedFile, start: 0, end: 0 },
+    };
+    fn.handleDefFile = capturedFile;
   }
   return fn;
 }

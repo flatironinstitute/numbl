@@ -105,7 +105,7 @@ Lowering is shared across all executors. The dispatcher calls `tryLower(siblings
 Today's specialized shapes:
 
 - `top-level` — script body (top-level scope, first stmt). Whole script lowered as a synthetic FunctionDef. Lowered separately via `tryLowerTopLevel` and dispatched through `Registry.tryRunWholeScope` before the per-stmt loop runs, not through `tryLower`.
-- `loop` — for/while loop stmt. Loop body lowered as a synthetic FunctionDef.
+- `loop` — for/while loop stmt. Loop body lowered as a synthetic FunctionDef. A capture-free function-handle _input_ (defined before the loop, e.g. `f = @(t) …;` or `f = @name;`) would otherwise be an opaque `function_handle` the JIT can't type. Classification (`classifyLoop`) detects these and, instead of taking them as runtime inputs, emits them as `ConstHandle`s that the loop executors inline as in-scope `<name> = @…` assignments prepended to the synthetic body — reducing the boundary case to the supported in-scope handle case, identically on both backends. The inliner (`handleInline.ts`) reuses the handle's recorded defining AST + env (stored on `RuntimeFunction`) and only fires when capture-free and same-file.
 - `call` — user-function call. Lowered via `tryLowerCall` from `dispatchCall`.
 - `synth` — a `Synth` AST stmt produced by a registered AST stmt-list transformer that collapses a contiguous run of stmts into a unit. The `tag` field discriminates among transformers. (No transformer is registered today; the shape remains in the union for future use.)
 

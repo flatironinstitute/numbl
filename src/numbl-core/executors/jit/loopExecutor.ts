@@ -34,6 +34,7 @@ import {
 } from "../../jit/index.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
+import type { ConstHandle } from "../classification.js";
 import { getOrCreateSession } from "./session.js";
 import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
 
@@ -47,6 +48,7 @@ interface JitLoopData {
   readonly outputs: readonly string[];
   readonly inputTypes: readonly JitType[];
   readonly compilerInputTypes: readonly CompilerType[];
+  readonly constHandles: readonly ConstHandle[];
   readonly currentFile: string;
   readonly cacheKey: string;
 }
@@ -64,18 +66,29 @@ function synthesizeLoopFuncStmt(
   loopStmt: Stmt & { type: "For" | "While" },
   inputs: readonly string[],
   outputs: readonly string[],
+  constHandles: readonly ConstHandle[],
   fileName: string
 ): FuncStmt {
   const offset = loopStmt.span?.start ?? 0;
   const name = `$loop_${offset}`;
   const span: Span = { file: fileName, start: 0, end: 0 };
+  // Capture-free handle inputs are inlined as in-scope `<name> = @...`
+  // assignments at the top of the body (not params), reducing the
+  // boundary case to the supported in-scope handle case.
+  const handleDefs: Stmt[] = constHandles.map(h => ({
+    type: "Assign",
+    name: h.name,
+    expr: h.expr,
+    suppressed: true,
+    span,
+  }));
   return {
     type: "Function",
     name,
     functionId: name,
     params: [...inputs],
     outputs: [...outputs],
-    body: [loopStmt],
+    body: [...handleDefs, loopStmt],
     argumentsBlocks: [],
     span,
   };
@@ -118,6 +131,7 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
         outputs: classification.outputs,
         inputTypes: classification.inputTypes,
         compilerInputTypes,
+        constHandles: classification.constHandles,
         currentFile: classification.currentFile,
         cacheKey: classification.cacheKey,
       },
@@ -137,6 +151,7 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
       d.loopStmt,
       d.inputs,
       d.outputs,
+      d.constHandles,
       d.currentFile
     );
     const nargout = d.outputs.length;

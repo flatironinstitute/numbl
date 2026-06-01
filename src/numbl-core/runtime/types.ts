@@ -251,6 +251,19 @@ export class RuntimeFunction extends Refcounted {
   capturedEnv:
     | { vars: Map<string, RuntimeValue>; parent?: unknown }
     | undefined;
+  /** The defining AST of this handle — an `AnonFunc` (`@(p) body`) or
+   *  `FuncHandle` (`@name`) parser Expr. Lets the JIT recover the
+   *  handle's source so a capture-free handle that crosses a
+   *  compile boundary (a loop input / call arg) can be inlined as an
+   *  in-scope handle constant. Typed loosely (parser Expr) to avoid a
+   *  runtime→parser layering dependency; consumers cast. Undefined for
+   *  handles created by paths that don't set it (e.g. builtins). */
+  handleAst: unknown;
+  /** Source file the handle was defined in. The inliner only reuses a
+   *  handle's AST when this matches the file being compiled, so a
+   *  named-handle target (`@foo`) resolves to the same `foo` it did at
+   *  definition (file-local functions can shadow across files). */
+  handleDefFile: string | undefined;
 
   constructor(
     name: string,
