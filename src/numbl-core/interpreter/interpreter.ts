@@ -420,10 +420,7 @@ export class Interpreter {
   };
   declare isHandleClass: (classInfo: ClassInfo) => boolean;
   declare evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
-  declare processArgumentsBlocks: (
-    fn: FunctionDef,
-    args: unknown[]
-  ) => unknown[];
+  declare processArgumentsBlocks: (fn: FunctionDef, args: unknown[]) => void;
 }
 
 // ── Prototype augmentation ───────────────────────────────────────────────

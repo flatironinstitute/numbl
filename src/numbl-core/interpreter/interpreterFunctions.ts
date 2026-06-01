@@ -556,18 +556,34 @@ export function callUserFunction(
   fnEnv.rt = this.rt;
   fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
 
-  const processedArgs = this.processArgumentsBlocks(fn, sharedArgs);
-
   const hasVarargin =
     fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
   const regularParams = hasVarargin ? fn.params.slice(0, -1) : fn.params;
-  for (let i = 0; i < regularParams.length; i++) {
-    if (i < processedArgs.length) {
-      fnEnv.set(regularParams[i], ensureRuntimeValue(processedArgs[i]));
+
+  // Count leading positional parameters. Name-value struct parameters
+  // declared in an `arguments` block (entries like `opts.method`) are filled
+  // from trailing arguments by processArgumentsBlocks below, not bound
+  // positionally, so positional binding stops before them.
+  let numPositional = regularParams.length;
+  const inputBlocks = (fn.argumentsBlocks ?? []).filter(
+    b => b.kind !== "Output"
+  );
+  for (const block of inputBlocks) {
+    for (const e of block.entries) {
+      const dot = e.name.indexOf(".");
+      if (dot < 0) continue;
+      const idx = fn.params.indexOf(e.name.slice(0, dot));
+      if (idx >= 0 && idx < numPositional) numPositional = idx;
+    }
+  }
+
+  for (let i = 0; i < numPositional && i < regularParams.length; i++) {
+    if (i < sharedArgs.length && sharedArgs[i] !== undefined) {
+      fnEnv.set(regularParams[i], ensureRuntimeValue(sharedArgs[i]));
     }
   }
   if (hasVarargin) {
-    const extraArgs = processedArgs
+    const extraArgs = sharedArgs
       .slice(regularParams.length)
       .map(a => ensureRuntimeValue(a));
     fnEnv.set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
@@ -593,6 +609,11 @@ export function callUserFunction(
   this.rt.pushCleanupScope();
 
   try {
+    // Apply `arguments`-block defaults / name-value structs now that the
+    // function scope is active and provided args are bound, so defaults can
+    // reference earlier arguments.
+    this.processArgumentsBlocks(fn, sharedArgs);
+
     this.execStmts(fn.body);
 
     if (fnEnv.persistentFuncId) {
@@ -1071,19 +1092,32 @@ export function evalInLocalScope(
 
 // ── Arguments block processing ──────────────────────────────────────────
 
+/**
+ * Apply `arguments`-block defaults and build name-value struct parameters,
+ * binding the results into the *current* function environment.
+ *
+ * Must be called with `this.env` already set to the function scope and the
+ * caller-supplied positional arguments already bound to their parameters.
+ * Default expressions are evaluated in that scope so they can reference
+ * earlier arguments (e.g. `mergeIdx = surfaceop.defaultIdx(dom)`), matching
+ * MATLAB. Entries are matched to parameters by name via `fn.params`, which
+ * also handles the constructor case where the output variable is prepended
+ * to `params` (shifting argument positions by one).
+ */
 export function processArgumentsBlocks(
   this: Interpreter,
   fn: FunctionDef,
   args: unknown[]
-): unknown[] {
+): void {
   const argBlocks = fn.argumentsBlocks;
-  if (!argBlocks || argBlocks.length === 0) return args;
+  if (!argBlocks || argBlocks.length === 0) return;
 
   for (const block of argBlocks) {
     if (block.kind === "Output") continue;
     const entries = block.entries;
     if (!entries || entries.length === 0) continue;
 
+    // Split dotted entries (name-value struct fields) from positional ones.
     const nvGroups = new Map<
       string,
       { field: string; defaultExpr: Expr | null }[]
@@ -1104,53 +1138,31 @@ export function processArgumentsBlocks(
       return true;
     });
 
-    if (nvGroups.size > 0) {
-      const processedArgs = [...args];
-      const nvParamIndex = regularEntries.length;
-
-      for (const [paramName, fields] of nvGroups) {
-        const nvArgs = args.slice(nvParamIndex);
-        const defaults: Record<string, unknown> = {};
-        for (const { field, defaultExpr } of fields) {
-          if (defaultExpr) {
-            try {
-              defaults[field] = this.evalExpr(defaultExpr);
-            } catch {
-              // skip
-            }
-          }
-        }
-        const struct = this.rt.buildNameValueStruct(nvArgs, defaults);
-        const paramIdx = fn.params.indexOf(paramName);
-        const targetIdx = paramIdx >= 0 ? paramIdx : nvParamIndex;
-        processedArgs.length = Math.max(processedArgs.length, targetIdx + 1);
-        processedArgs[targetIdx] = struct;
-      }
-
-      for (let i = 0; i < regularEntries.length; i++) {
-        if (processedArgs[i] === undefined && regularEntries[i].defaultValue) {
-          try {
-            processedArgs[i] = this.evalExpr(regularEntries[i].defaultValue!);
-          } catch {
-            // skip
-          }
-        }
-      }
-      return processedArgs;
-    }
-
-    const processedArgs = [...args];
-    for (let i = 0; i < entries.length; i++) {
-      if (processedArgs[i] === undefined && entries[i].defaultValue) {
-        try {
-          processedArgs[i] = this.evalExpr(entries[i].defaultValue!);
-        } catch {
-          // skip
-        }
+    // Fill any unsupplied positional argument from its default expression, in
+    // declaration order, binding each into the scope so later defaults can
+    // see it.
+    for (const entry of regularEntries) {
+      const pIdx = fn.params.indexOf(entry.name);
+      if (pIdx < 0) continue;
+      const provided = pIdx < args.length && args[pIdx] !== undefined;
+      if (!provided && entry.defaultValue) {
+        this.env.set(
+          entry.name,
+          ensureRuntimeValue(this.evalExpr(entry.defaultValue))
+        );
       }
     }
-    return processedArgs;
+
+    // Assemble each name-value struct parameter from the trailing arguments
+    // (those past the struct parameter's position) plus field defaults.
+    for (const [paramName, fields] of nvGroups) {
+      const pIdx = fn.params.indexOf(paramName);
+      const nvArgs = args.slice(pIdx >= 0 ? pIdx : args.length);
+      const defaults: Record<string, unknown> = {};
+      for (const { field, defaultExpr } of fields) {
+        if (defaultExpr) defaults[field] = this.evalExpr(defaultExpr);
+      }
+      this.env.set(paramName, this.rt.buildNameValueStruct(nvArgs, defaults));
+    }
   }
-
-  return args;
 }

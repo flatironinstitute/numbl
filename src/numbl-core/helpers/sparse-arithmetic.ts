@@ -488,10 +488,14 @@ function sparseElemMulDense(
   D: RuntimeTensor
 ): RuntimeSparseMatrix {
   const [dRows, dCols] = tensorSize2D(D);
-  if (S.m !== dRows || S.n !== dCols)
+  // Allow MATLAB implicit expansion of the dense operand: a scalar (1×1),
+  // a column (m×1), or a row (1×n) broadcasts against the sparse matrix.
+  if (!(dRows === S.m || dRows === 1) || !(dCols === S.n || dCols === 1))
     throw new RuntimeError(
       `Matrix dimensions must agree: [${S.m},${S.n}] vs [${dRows},${dCols}]`
     );
+  const denseIdx = (row: number, col: number) =>
+    (dCols === 1 ? 0 : col) * dRows + (dRows === 1 ? 0 : row);
   const hasImag = isComplexSparse(S) || D.imag !== undefined;
   const irList: number[] = [];
   const prList: number[] = [];
@@ -502,7 +506,7 @@ function sparseElemMulDense(
     jc[col] = irList.length;
     for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
       const row = S.ir[k];
-      const idx = col * S.m + row;
+      const idx = denseIdx(row, col);
       const aRe = S.pr[k],
         aIm = S.pi ? S.pi[k] : 0;
       const bRe = D.data[idx],

@@ -2155,6 +2155,7 @@ defineBuiltin({
         const blocks = args.map(a => {
           if (isRuntimeNumber(a))
             return RTV.tensor(allocFloat64Array([a]), [1, 1]);
+          if (isRuntimeSparseMatrix(a)) return sparseToDense(a);
           if (!isRuntimeTensor(a))
             throw new RuntimeError("blkdiag: arguments must be numeric");
           return a;
