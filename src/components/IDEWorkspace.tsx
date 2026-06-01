@@ -562,6 +562,8 @@ export function IDEWorkspace({
 
   const executeCode = useCallback(async () => {
     if (!activeFile) return;
+    // Only .m files are runnable.
+    if (!activeFile.name.toLowerCase().endsWith(".m")) return;
 
     setIsRunning(true);
     setOutput("");
@@ -808,6 +810,8 @@ export function IDEWorkspace({
     ? isBinaryData(activeFileData)
     : false;
   const isMarkdown = !!activeFile?.name.toLowerCase().endsWith(".md");
+  // Only .m files can be executed; non-.m files hide the run controls.
+  const isRunnable = !!activeFile?.name.toLowerCase().endsWith(".m");
 
   // Load active file content from DB when file changes
   useEffect(() => {
@@ -958,133 +962,141 @@ export function IDEWorkspace({
                 bgcolor: "background.default",
               }}
             >
-              <Button
-                variant="contained"
-                color={isRunning ? "error" : "success"}
-                size="small"
-                startIcon={isRunning ? <StopIcon /> : <PlayArrowIcon />}
-                onClick={isRunning ? stopExecution : executeCode}
-                sx={{
-                  py: 0.25,
-                  px: 2,
-                  fontSize: "0.8rem",
-                  fontWeight: 600,
-                  textTransform: "none",
-                  borderRadius: 1.5,
-                  boxShadow: "none",
-                  "&:hover": { boxShadow: "none" },
-                }}
-              >
-                {isRunning ? "Stop" : "Run"}
-              </Button>
-              <Tooltip
-                title={
-                  executionMode === "browser"
-                    ? "Executing in browser"
-                    : "Executing on local server" +
-                      (remoteServerStatus === "disconnected"
-                        ? " (not connected)"
-                        : "") +
-                      (remoteNativeAddon === true
-                        ? " (native)"
-                        : remoteNativeAddon === false
-                          ? " (no native addon)"
-                          : "")
-                }
-              >
-                <IconButton
-                  size="small"
-                  onClick={() => {
-                    setLocalServerUrlDraft(remoteServiceUrl);
-                    setLocalServerSettingsOpen(true);
-                  }}
-                  sx={{ opacity: 0.5, "&:hover": { opacity: 1 } }}
-                >
-                  {executionMode === "browser" ? (
-                    <ComputerIcon sx={{ fontSize: "0.9rem" }} />
-                  ) : (
-                    <DnsIcon
-                      sx={{
-                        fontSize: "0.9rem",
-                        color: "error.main",
-                      }}
-                    />
-                  )}
-                </IconButton>
-              </Tooltip>
-              {executionMode === "localhost" && (
-                <Typography
-                  variant="caption"
-                  sx={{
-                    fontSize: "0.65rem",
-                    opacity: 0.5,
-                    color: "error.main",
-                  }}
-                >
-                  {remoteServerStatus === "disconnected"
-                    ? "no server"
-                    : remoteNativeAddon
-                      ? "native"
-                      : remoteNativeAddon === false
-                        ? "no native"
-                        : "local"}
-                </Typography>
-              )}
-              {!useRemoteExecution && (
-                <Tooltip
-                  title={
-                    persistWorkspace
-                      ? "Workspace persists across runs and REPL (click for fresh each run)"
-                      : "Fresh workspace each run (click to persist across runs and REPL)"
-                  }
-                >
-                  <Typography
-                    variant="caption"
-                    onClick={() => setPersistWorkspace(p => !p)}
+              {isRunnable && (
+                <>
+                  <Button
+                    variant="contained"
+                    color={isRunning ? "error" : "success"}
+                    size="small"
+                    startIcon={isRunning ? <StopIcon /> : <PlayArrowIcon />}
+                    onClick={isRunning ? stopExecution : executeCode}
                     sx={{
-                      cursor: "pointer",
-                      fontSize: "0.7rem",
-                      px: 0.5,
-                      py: 0.1,
-                      borderRadius: 0.5,
-                      bgcolor: persistWorkspace
-                        ? "action.selected"
-                        : "transparent",
-                      opacity: persistWorkspace ? 1 : 0.5,
-                      "&:hover": { opacity: 1 },
-                      userSelect: "none",
+                      py: 0.25,
+                      px: 2,
+                      fontSize: "0.8rem",
+                      fontWeight: 600,
+                      textTransform: "none",
+                      borderRadius: 1.5,
+                      boxShadow: "none",
+                      "&:hover": { boxShadow: "none" },
                     }}
                   >
-                    {persistWorkspace ? "persist" : "1x"}
-                  </Typography>
-                </Tooltip>
+                    {isRunning ? "Stop" : "Run"}
+                  </Button>
+                  <Tooltip
+                    title={
+                      executionMode === "browser"
+                        ? "Executing in browser"
+                        : "Executing on local server" +
+                          (remoteServerStatus === "disconnected"
+                            ? " (not connected)"
+                            : "") +
+                          (remoteNativeAddon === true
+                            ? " (native)"
+                            : remoteNativeAddon === false
+                              ? " (no native addon)"
+                              : "")
+                    }
+                  >
+                    <IconButton
+                      size="small"
+                      onClick={() => {
+                        setLocalServerUrlDraft(remoteServiceUrl);
+                        setLocalServerSettingsOpen(true);
+                      }}
+                      sx={{ opacity: 0.5, "&:hover": { opacity: 1 } }}
+                    >
+                      {executionMode === "browser" ? (
+                        <ComputerIcon sx={{ fontSize: "0.9rem" }} />
+                      ) : (
+                        <DnsIcon
+                          sx={{
+                            fontSize: "0.9rem",
+                            color: "error.main",
+                          }}
+                        />
+                      )}
+                    </IconButton>
+                  </Tooltip>
+                  {executionMode === "localhost" && (
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        fontSize: "0.65rem",
+                        opacity: 0.5,
+                        color: "error.main",
+                      }}
+                    >
+                      {remoteServerStatus === "disconnected"
+                        ? "no server"
+                        : remoteNativeAddon
+                          ? "native"
+                          : remoteNativeAddon === false
+                            ? "no native"
+                            : "local"}
+                    </Typography>
+                  )}
+                  {!useRemoteExecution && (
+                    <Tooltip
+                      title={
+                        persistWorkspace
+                          ? "Workspace persists across runs and REPL (click for fresh each run)"
+                          : "Fresh workspace each run (click to persist across runs and REPL)"
+                      }
+                    >
+                      <Typography
+                        variant="caption"
+                        onClick={() => setPersistWorkspace(p => !p)}
+                        sx={{
+                          cursor: "pointer",
+                          fontSize: "0.7rem",
+                          px: 0.5,
+                          py: 0.1,
+                          borderRadius: 0.5,
+                          bgcolor: persistWorkspace
+                            ? "action.selected"
+                            : "transparent",
+                          opacity: persistWorkspace ? 1 : 0.5,
+                          "&:hover": { opacity: 1 },
+                          userSelect: "none",
+                        }}
+                      >
+                        {persistWorkspace ? "persist" : "1x"}
+                      </Typography>
+                    </Tooltip>
+                  )}
+                  <Tooltip
+                    title={
+                      optimization === "0"
+                        ? "Interpreter only (click for JIT)"
+                        : "JIT (click to disable)"
+                    }
+                  >
+                    <Typography
+                      variant="caption"
+                      onClick={() =>
+                        setOptimization(o => (o === "0" ? "1" : "0"))
+                      }
+                      sx={{
+                        cursor: "pointer",
+                        fontSize: "0.7rem",
+                        px: 0.5,
+                        py: 0.1,
+                        borderRadius: 0.5,
+                        bgcolor:
+                          optimization !== "0"
+                            ? "action.selected"
+                            : "transparent",
+                        opacity: optimization !== "0" ? 1 : 0.5,
+                        "&:hover": { opacity: 1 },
+                        userSelect: "none",
+                      }}
+                    >
+                      {optimization === "0" ? "no jit" : "jit"}
+                    </Typography>
+                  </Tooltip>
+                </>
               )}
-              <Tooltip
-                title={
-                  optimization === "0"
-                    ? "Interpreter only (click for JIT)"
-                    : "JIT (click to disable)"
-                }
-              >
-                <Typography
-                  variant="caption"
-                  onClick={() => setOptimization(o => (o === "0" ? "1" : "0"))}
-                  sx={{
-                    cursor: "pointer",
-                    fontSize: "0.7rem",
-                    px: 0.5,
-                    py: 0.1,
-                    borderRadius: 0.5,
-                    bgcolor:
-                      optimization !== "0" ? "action.selected" : "transparent",
-                    opacity: optimization !== "0" ? 1 : 0.5,
-                    "&:hover": { opacity: 1 },
-                    userSelect: "none",
-                  }}
-                >
-                  {optimization === "0" ? "no jit" : "jit"}
-                </Typography>
-              </Tooltip>
               {isMarkdown && (
                 <ToggleButtonGroup
                   value={mdViewMode}
