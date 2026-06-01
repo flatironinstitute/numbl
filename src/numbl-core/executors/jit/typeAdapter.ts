@@ -49,24 +49,31 @@ export function jitTypeToCompilerType(jt: JitType): Type | null {
       // imag=0; the value adapter handles the boundary copy.
       return scalarComplex();
     case "tensor": {
-      // Logical tensors are treated as real-double tensors at the
-      // mtoc2 type level — mtoc2 has no public logical-tensor factory,
-      // and 0/1-valued doubles round-trip correctly through arithmetic.
+      const logical = jt.isLogical === true && !jt.isComplex;
+      let t: Type;
       if (jt.shape !== undefined && jt.shape.every(d => d >= 0)) {
-        return jt.isComplex ? tensorComplex(jt.shape) : tensorDouble(jt.shape);
+        t = jt.isComplex ? tensorComplex(jt.shape) : tensorDouble(jt.shape);
+      } else {
+        // Shape partly or entirely unknown — fall back to per-axis dims.
+        const ndim = jt.shape?.length ?? jt.ndim ?? 2;
+        const dims: DimInfo[] = jt.shape
+          ? jt.shape.map(d =>
+              d >= 0
+                ? { kind: "exact" as const, value: d }
+                : { kind: "unknown" as const }
+            )
+          : Array.from({ length: ndim }, () => ({ kind: "unknown" as const }));
+        t = jt.isComplex
+          ? tensorComplexFromDims(dims)
+          : tensorDoubleFromDims(dims);
       }
-      // Shape partly or entirely unknown — fall back to per-axis dims.
-      const ndim = jt.shape?.length ?? jt.ndim ?? 2;
-      const dims: DimInfo[] = jt.shape
-        ? jt.shape.map(d =>
-            d >= 0
-              ? { kind: "exact" as const, value: d }
-              : { kind: "unknown" as const }
-          )
-        : Array.from({ length: ndim }, () => ({ kind: "unknown" as const }));
-      return jt.isComplex
-        ? tensorComplexFromDims(dims)
-        : tensorDoubleFromDims(dims);
+      // Preserve logical-ness: a logical tensor used as a per-axis index is
+      // a MASK, not a numeric gather. Dropping the flag (treating it as a
+      // double tensor) makes index lowering take the gather path and
+      // silently return the wrong elements. The `elem: "logical"` lattice
+      // value still behaves as 0/1-valued doubles through arithmetic.
+      if (logical && t.kind === "Numeric") t.elem = "logical";
+      return t;
     }
     case "string":
       return { kind: "String" };
