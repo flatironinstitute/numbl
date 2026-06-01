@@ -265,10 +265,31 @@ export function SurfView({
     // Normalize a data point to [-0.5, 0.5] range
     const norm = (v: number, center: number) => (v - center) / rangeMax;
 
+    // Color range (caxis) for surf vertex colors: the explicit color data C
+    // when present (surf(x,y,z,C)), otherwise the height Z, taken globally
+    // across all surf traces. This is independent of the geometry's z extent
+    // — using the z extent washes out a surface whose C range is much smaller
+    // (e.g. a solution plotted on a curved surface), and would disagree with
+    // the colorbar (which already uses the C range).
+    let cMin = Infinity;
+    let cMax = -Infinity;
+    for (const trace of surfTraces) {
+      for (const v of trace.c ?? trace.z) {
+        if (isFinite(v)) {
+          if (v < cMin) cMin = v;
+          if (v > cMax) cMax = v;
+        }
+      }
+    }
+    if (!isFinite(cMin)) {
+      cMin = zMin;
+      cMax = zMax;
+    }
+    const cRange = cMax - cMin || 1;
+
     // ── Render surf traces ──────────────────────────────────────────────
     for (const trace of surfTraces) {
       const { rows, cols, x, y, z } = trace;
-      const zRange = zMax - zMin || 1;
       const alpha = trace.faceAlpha ?? 1;
 
       // Build indexed geometry
@@ -290,9 +311,8 @@ export function SurfView({
           positions[vi * 3 + 1] = nz;
           positions[vi * 3 + 2] = ny;
 
-          const t = trace.c
-            ? (trace.c[idx] - zMin) / zRange
-            : (z[idx] - zMin) / zRange;
+          const cval = trace.c ? trace.c[idx] : z[idx];
+          const t = (cval - cMin) / cRange;
           const [r, g, b] = colormapLookup(t);
           colors[vi * 3] = r;
           colors[vi * 3 + 1] = g;
