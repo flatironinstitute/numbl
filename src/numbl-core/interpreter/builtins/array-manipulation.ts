@@ -24,6 +24,7 @@ import {
   isRuntimeTensor,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
+  isRuntimeCell,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
@@ -797,6 +798,23 @@ defineBuiltin({
           const imag = allocFloat64Array(total).fill(v.im);
           const shape = reps.length >= 2 ? reps : [reps[0], reps[0]];
           return RTV.tensor(data, shape, imag);
+        }
+        if (isRuntimeCell(v)) {
+          // Tile a cell array (column-major), like any other array type.
+          const srcShape =
+            v.shape.length >= 2 ? v.shape : [1, v.shape[0] ?? v.data.length];
+          const [sm, sn] = [srcShape[0], srcShape[1]];
+          const r0 = reps[0] ?? 1;
+          const r1 = reps.length >= 2 ? reps[1] : (reps[0] ?? 1);
+          const om = sm * r0;
+          const on = sn * r1;
+          const out: RuntimeValue[] = new Array(om * on);
+          for (let J = 0; J < on; J++) {
+            for (let I = 0; I < om; I++) {
+              out[I + J * om] = v.data[(I % sm) + (J % sn) * sm];
+            }
+          }
+          return RTV.cell(out, [om, on]);
         }
         if (!isRuntimeTensor(v))
           throw new RuntimeError("repmat: first argument must be numeric");
