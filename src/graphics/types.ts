@@ -106,8 +106,17 @@ export interface ContourTrace {
   z: number[];
   rows: number;
   cols: number;
-  /** Number of contour levels */
+  /** Number of contour levels (used only when `levels` is not given) */
   nLevels: number;
+  /** Explicit contour levels (from `contour(...,V)` or `LevelList`). When
+   *  absent, levels are chosen automatically from the data range. */
+  levels?: number[];
+  /** Line width from a `'LineWidth'` name-value pair. */
+  lineWidth?: number;
+  /** Line style from a `'LineStyle'` name-value pair (e.g. '-', '--'). */
+  lineStyle?: string;
+  /** Line color: an RGB triple, or a colormap keyword like 'flat'. */
+  lineColor?: number[] | string;
   /** Whether this is a filled contour (contourf) */
   filled: boolean;
 }

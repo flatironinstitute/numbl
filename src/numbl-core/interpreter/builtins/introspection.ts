@@ -379,7 +379,11 @@ defineBuiltin({
         if (isRuntimeFunction(v)) return mkChar("function_handle");
         if (isRuntimeDummyHandle(v)) return mkChar("dummy_handle");
         if (isRuntimeGraphicsHandle(v))
-          return mkChar("matlab.graphics.primitive.Surface");
+          return mkChar(
+            v._traceType === "contour"
+              ? "matlab.graphics.chart.primitive.Contour"
+              : "matlab.graphics.primitive.Surface"
+          );
         return mkChar("unknown");
       },
     },

@@ -1208,6 +1208,15 @@ export function parseContourArgs(
   let rows: number;
   let cols: number;
   let nLevels = 10;
+  let levels: number[] | undefined;
+
+  // The optional level argument that follows Z may be a scalar N (number of
+  // levels) or a vector of explicit levels — see contour(...,levels).
+  const applyLevelArg = (arg: RuntimeValue): void => {
+    const vals = toNumberArray(arg);
+    if (vals.length <= 1) nLevels = vals.length === 1 ? vals[0] : nLevels;
+    else levels = vals;
+  };
 
   if (numericCount === 1) {
     // contour(Z)
@@ -1219,16 +1228,12 @@ export function parseContourArgs(
     xData = gen.x;
     yData = gen.y;
   } else if (numericCount === 2) {
-    // contour(Z, N)
+    // contour(Z, levels)
     const info = getMatrixInfo(args[pos++]);
     rows = info.rows;
     cols = info.cols;
     zData = info.data;
-    nLevels =
-      typeof args[pos] === "number"
-        ? (args[pos] as number)
-        : toNumber(args[pos]);
-    pos++;
+    applyLevelArg(args[pos++]);
     const gen = generateMeshgrid(rows, cols);
     xData = gen.x;
     yData = gen.y;
@@ -1244,18 +1249,14 @@ export function parseContourArgs(
     xData = expanded.x;
     yData = expanded.y;
   } else if (numericCount >= 4) {
-    // contour(X, Y, Z, N)
+    // contour(X, Y, Z, levels)
     const x = args[pos++];
     const y = args[pos++];
     const zInfo = getMatrixInfo(args[pos++]);
     rows = zInfo.rows;
     cols = zInfo.cols;
     zData = zInfo.data;
-    nLevels =
-      typeof args[pos] === "number"
-        ? (args[pos] as number)
-        : toNumber(args[pos]);
-    pos++;
+    applyLevelArg(args[pos++]);
     const expanded = expandXY(x, y, rows, cols);
     xData = expanded.x;
     yData = expanded.y;
@@ -1263,8 +1264,192 @@ export function parseContourArgs(
     throw new Error("contour requires at least 1 argument");
   }
 
-  // Skip name-value pairs
-  return { x: xData, y: yData, z: zData, rows, cols, nLevels, filled };
+  // Trailing Name-Value pairs (e.g. 'LineWidth', 2 / 'LineColor', 'flat').
+  let lineWidth: number | undefined;
+  let lineStyle: string | undefined;
+  let lineColor: number[] | string | undefined;
+  for (; pos + 1 < args.length; pos += 2) {
+    if (!isStringArg(args[pos])) break;
+    const name = getStringValue(args[pos] as RuntimeValue).toLowerCase();
+    const val = args[pos + 1];
+    switch (name) {
+      case "linewidth":
+        lineWidth = toNumber(val);
+        break;
+      case "linestyle":
+        lineStyle = getStringValue(val as RuntimeValue);
+        break;
+      case "linecolor":
+      case "color":
+        lineColor = isStringArg(val)
+          ? getStringValue(val as RuntimeValue)
+          : toNumberArray(val as RuntimeValue);
+        break;
+      case "levellist":
+      case "levels": {
+        const vals = toNumberArray(val as RuntimeValue);
+        if (vals.length >= 1) levels = vals;
+        break;
+      }
+      // Unknown options are ignored (numbl renders a subset of properties).
+    }
+  }
+
+  if (levels) nLevels = levels.length;
+  return {
+    x: xData,
+    y: yData,
+    z: zData,
+    rows,
+    cols,
+    nLevels,
+    ...(levels ? { levels } : {}),
+    ...(lineWidth !== undefined ? { lineWidth } : {}),
+    ...(lineStyle !== undefined ? { lineStyle } : {}),
+    ...(lineColor !== undefined ? { lineColor } : {}),
+    filled,
+  };
+}
+
+/** Line segments [x1,y1,x2,y2][] for a single marching-squares cell.
+ *  Corners: 00=(i,j) 10=(i+1,j) 01=(i,j+1) 11=(i+1,j+1). */
+function marchingSquaresCell(
+  z00: number,
+  z10: number,
+  z01: number,
+  z11: number,
+  x00: number,
+  y00: number,
+  x10: number,
+  y10: number,
+  x01: number,
+  y01: number,
+  x11: number,
+  y11: number,
+  level: number
+): [number, number, number, number][] {
+  const code =
+    (z00 >= level ? 1 : 0) |
+    (z10 >= level ? 2 : 0) |
+    (z01 >= level ? 4 : 0) |
+    (z11 >= level ? 8 : 0);
+  if (code === 0 || code === 15) return [];
+
+  const lerp = (a: number, b: number, za: number, zb: number) =>
+    a + ((level - za) / (zb - za || 1)) * (b - a);
+
+  // Edge crossings: bottom (00-10), right (10-11), top (01-11), left (00-01).
+  const bx = lerp(x00, x10, z00, z10),
+    by = lerp(y00, y10, z00, z10);
+  const rx = lerp(x10, x11, z10, z11),
+    ry = lerp(y10, y11, z10, z11);
+  const tx = lerp(x01, x11, z01, z11),
+    ty = lerp(y01, y11, z01, z11);
+  const lx = lerp(x00, x01, z00, z01),
+    ly = lerp(y00, y01, z00, z01);
+
+  const segs: [number, number, number, number][] = [];
+  switch (code) {
+    case 1:
+    case 14:
+      segs.push([bx, by, lx, ly]);
+      break;
+    case 2:
+    case 13:
+      segs.push([bx, by, rx, ry]);
+      break;
+    case 3:
+    case 12:
+      segs.push([lx, ly, rx, ry]);
+      break;
+    case 4:
+    case 11:
+      segs.push([lx, ly, tx, ty]);
+      break;
+    case 5:
+    case 10:
+      segs.push([bx, by, tx, ty]);
+      break;
+    case 6:
+    case 9:
+      segs.push([bx, by, lx, ly]);
+      segs.push([tx, ty, rx, ry]);
+      break;
+    case 7:
+    case 8:
+      segs.push([tx, ty, rx, ry]);
+      break;
+  }
+  return segs;
+}
+
+/** Result of computing contour geometry: the MATLAB contour matrix `C`
+ *  (column-major `2 × n` data) plus the level list actually used. */
+export interface ContourMatrix {
+  /** Column-major `2 × n` data for a `RTV.tensor(data, [2, n])`. */
+  data: number[];
+  n: number;
+  levelList: number[];
+}
+
+/** Compute the MATLAB contour matrix for a parsed contour trace via marching
+ *  squares. Each marching-squares segment is emitted as its own two-vertex
+ *  contour line (header `[level; 2]` followed by the two `[x; y]` vertices) —
+ *  a valid contour matrix whose geometry matches MATLAB's connected polylines
+ *  segment-for-segment. */
+export function computeContourMatrix(trace: ContourTrace): ContourMatrix {
+  const { x, y, z, rows, cols } = trace;
+  const at = (a: number[], i: number, j: number) => a[j * rows + i];
+
+  let zMin = Infinity;
+  let zMax = -Infinity;
+  for (const v of z) {
+    if (Number.isFinite(v)) {
+      if (v < zMin) zMin = v;
+      if (v > zMax) zMax = v;
+    }
+  }
+
+  let levelList: number[];
+  if (trace.levels && trace.levels.length > 0) {
+    levelList = trace.levels.filter(v => Number.isFinite(v));
+  } else {
+    const n = Math.max(1, Math.round(trace.nLevels));
+    levelList = [];
+    if (Number.isFinite(zMin) && Number.isFinite(zMax) && zMax > zMin) {
+      // Interior levels, mirroring MATLAB's exclusion of the data extremes.
+      const step = (zMax - zMin) / (n + 1);
+      for (let k = 1; k <= n; k++) levelList.push(zMin + k * step);
+    }
+  }
+
+  const data: number[] = [];
+  for (const level of levelList) {
+    for (let j = 0; j < cols - 1; j++) {
+      for (let i = 0; i < rows - 1; i++) {
+        const segs = marchingSquaresCell(
+          at(z, i, j),
+          at(z, i + 1, j),
+          at(z, i, j + 1),
+          at(z, i + 1, j + 1),
+          at(x, i, j),
+          at(y, i, j),
+          at(x, i + 1, j),
+          at(y, i + 1, j),
+          at(x, i, j + 1),
+          at(y, i, j + 1),
+          at(x, i + 1, j + 1),
+          at(y, i + 1, j + 1),
+          level
+        );
+        for (const [x1, y1, x2, y2] of segs) {
+          // header column, then the two vertex columns (column-major).
+          data.push(level, 2, x1, y1, x2, y2);
+        }
+      }
+    }
+  }
+  return { data, n: data.length / 2, levelList };
 }
 
 // ── Mesh argument parser ─────────────────────────────────────────────────

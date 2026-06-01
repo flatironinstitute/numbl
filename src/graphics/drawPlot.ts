@@ -1153,10 +1153,18 @@ function drawContour(
   if (!isFinite(zMin)) return;
   const zRange = zMax - zMin || 1;
 
-  // Generate contour levels
-  const levels: number[] = [];
-  for (let i = 0; i <= nLevels; i++) {
-    levels.push(zMin + (i / nLevels) * zRange);
+  // Contour levels: use the explicit list when given, else evenly spaced
+  // across the data range. The line-contour loop below skips the first and
+  // last entries (open boundary contours), so pad an explicit list with
+  // sentinel endpoints to keep every requested level drawn.
+  let levels: number[];
+  if (trace.levels && trace.levels.length > 0) {
+    levels = [zMin - zRange, ...trace.levels, zMax + zRange];
+  } else {
+    levels = [];
+    for (let i = 0; i <= nLevels; i++) {
+      levels.push(zMin + (i / nLevels) * zRange);
+    }
   }
 
   // Helper to get z value at grid position (row i, col j)
@@ -1195,7 +1203,7 @@ function drawContour(
       const t = (level - zMin) / zRange;
       const [r, g, b] = colormapLookup(t, colormap);
       ctx.strokeStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = trace.lineWidth ?? 1;
 
       for (let j = 0; j < cols - 1; j++) {
         for (let i = 0; i < rows - 1; i++) {

@@ -667,9 +667,10 @@ registerIBuiltin({
   }),
 });
 
-// Colormap name functions — return the name as a char
+// Colormap name functions — return the name as a char (so `colormap(jet)`
+// works). `parula` additionally supports `parula(m)` returning an m×3 RGB
+// matrix, matching MATLAB, for callers that index into the colormap.
 for (const cm of [
-  "parula",
   "jet",
   "hsv",
   "hot",
@@ -691,6 +692,54 @@ for (const cm of [
     }),
   });
 }
+
+// Anchor samples of MATLAB's parula colormap (blue → teal → green → yellow),
+// linearly interpolated to the requested length.
+const PARULA_ANCHORS: [number, number, number][] = [
+  [0.2422, 0.1504, 0.6603],
+  [0.278, 0.3556, 0.9777],
+  [0.1085, 0.5267, 0.8943],
+  [0.0469, 0.6353, 0.7861],
+  [0.2161, 0.7269, 0.6499],
+  [0.5044, 0.7993, 0.4519],
+  [0.8328, 0.8056, 0.2008],
+  [0.9871, 0.8092, 0.1432],
+  [0.9763, 0.9831, 0.0538],
+];
+
+/** Build an `m × 3` parula colormap (column-major) by interpolating the
+ *  anchor table. */
+function parulaColormap(m: number): RuntimeValue {
+  const data = allocFloat64Array(m * 3);
+  const last = PARULA_ANCHORS.length - 1;
+  for (let i = 0; i < m; i++) {
+    const t = m <= 1 ? 0 : (i / (m - 1)) * last;
+    const k = Math.min(last - 1, Math.floor(t));
+    const f = t - k;
+    const a = PARULA_ANCHORS[k];
+    const b = PARULA_ANCHORS[Math.min(last, k + 1)];
+    for (let c = 0; c < 3; c++) {
+      data[c * m + i] = a[c] + f * (b[c] - a[c]); // column-major [m, 3]
+    }
+  }
+  return RTV.tensor(data, [m, 3]);
+}
+
+registerIBuiltin({
+  name: "parula",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: (args: RuntimeValue[]) => {
+      if (
+        args.length >= 1 &&
+        (isRuntimeNumber(args[0]) || isRuntimeTensor(args[0]))
+      ) {
+        return parulaColormap(Math.max(0, Math.round(toNumber(args[0]))));
+      }
+      return RTV.char("parula");
+    },
+  }),
+});
 
 // ── setappdata / getappdata / rmappdata / isappdata ────────────────────
 

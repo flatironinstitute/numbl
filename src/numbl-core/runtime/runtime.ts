@@ -99,6 +99,7 @@ import {
 } from "./runtimeMemberAccess.js";
 import {
   pcolorCall as _pcolorCall,
+  contourCall as _contourCall,
   fplotCall as _fplotCall,
   fplot3Call as _fplot3Call,
   streamlineCall as _streamlineCall,
@@ -106,6 +107,7 @@ import {
   drawnow as _drawnow,
   pause as _pause,
 } from "./runtimePlot.js";
+import { computeContourMatrix } from "./plotUtils.js";
 import {
   dispatchPlotBuiltin,
   PLOT_DISPATCH_NAMES,
@@ -408,6 +410,35 @@ export class Runtime {
         return RTV.dummyHandle();
       }
     };
+    // `contour` / `contourf` push the plot instruction and, when an output
+    // is requested, also return the MATLAB contour matrix `C` (computed via
+    // marching squares) and a contour handle `H` exposing the line
+    // properties / level list. Mirrors `[C,H] = contour(...)`.
+    const contourOverride =
+      (filled: boolean) => (_nargout: number, args: unknown[]) => {
+        const margs = args.map(a => ensureRuntimeValue(a));
+        _contourCall(this.plotInstructions, margs, filled);
+        if (_nargout < 1) return undefined;
+        const last = this.plotInstructions[this.plotInstructions.length - 1];
+        if (!last || last.type !== "contour") return RTV.dummyHandle();
+        const trace = last.trace;
+        const cm = computeContourMatrix(trace);
+        const C = RTV.tensor(allocFloat64Array(cm.data), [2, cm.n] as number[]);
+        if (_nargout < 2) return C;
+        const H = RTV.graphicsHandle(
+          {
+            LineWidth: trace.lineWidth ?? 0.5,
+            LineStyle: trace.lineStyle ?? "-",
+            LineColor: trace.lineColor ?? "flat",
+            LevelList: cm.levelList,
+            __instruction: last,
+          },
+          "contour"
+        );
+        return [C, H];
+      };
+    this.builtins["contour"] = contourOverride(false);
+    this.builtins["contourf"] = contourOverride(true);
     // `fplot` / `fplot3` evaluate a user function-handle and so need
     // the full Runtime context — kept as explicit registrations.
     this.builtins["fplot"] = (_nargout: number, args: unknown[]) => {

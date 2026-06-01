@@ -64,7 +64,10 @@ import {
   type ComplexPrecSolveFn,
   type ComplexVec,
 } from "../helpers/gmres.js";
-import { isRuntimeComplexNumber } from "../runtime/types.js";
+import {
+  isRuntimeComplexNumber,
+  isRuntimeGraphicsHandle,
+} from "../runtime/types.js";
 import { dgetrf as _dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
 import { getEffectiveBridge } from "../native/bridge-resolve.js";
 import { toF64 } from "../helpers/check-helpers.js";
@@ -1102,13 +1105,23 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   // ── delete (file deletion) ──────────────────────────────────────────
 
   registerSpecialVoid("delete", args => {
-    const io = requireFileIO();
-    if (!io.deleteFile)
-      throw new RuntimeError("delete is not available in this environment");
     const margs = args.map(a => ensureRuntimeValue(a));
     if (margs.length < 1)
       throw new RuntimeError("delete requires at least 1 argument");
     for (const arg of margs) {
+      // delete(handle): remove the graphics object's plot instruction.
+      if (isRuntimeGraphicsHandle(arg)) {
+        const instr = arg._trace.__instruction;
+        if (instr) {
+          const idx = rt.plotInstructions.indexOf(instr as never);
+          if (idx >= 0) rt.plotInstructions.splice(idx, 1);
+        }
+        continue;
+      }
+      // delete(filename): remove a file.
+      const io = requireFileIO();
+      if (!io.deleteFile)
+        throw new RuntimeError("delete is not available in this environment");
       io.deleteFile(toString(arg));
     }
   });

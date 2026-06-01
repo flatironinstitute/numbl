@@ -5,6 +5,7 @@
 import {
   RuntimeClassInstance,
   isRuntimeClassInstance,
+  isRuntimeGraphicsHandle,
   isRuntimeNumber,
   isRuntimeStruct,
   isRuntimeStructArray,
@@ -14,7 +15,21 @@ import {
 import { isShared, type RefcountRuntime } from "./refcount.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
+import { allocFloat64Array } from "./alloc.js";
 import { horzcat } from "./tensor-construction.js";
+
+/** Convert a plain JS value stored on a graphics-handle trace into a runtime
+ *  value when read as a property (e.g. `H.LineWidth`). */
+function handlePropToRuntime(v: unknown): RuntimeValue {
+  if (typeof v === "number") return RTV.num(v);
+  if (typeof v === "boolean") return RTV.logical(v);
+  if (typeof v === "string") return RTV.char(v);
+  if (Array.isArray(v)) {
+    const data = allocFloat64Array(v as number[]);
+    return RTV.tensor(data, [1, v.length]);
+  }
+  return v as RuntimeValue;
+}
 
 export function getRTValueField(
   base: RuntimeValue,
@@ -41,6 +56,12 @@ export function getRTValueField(
       return val;
     });
     return horzcat(...values);
+  }
+  if (isRuntimeGraphicsHandle(base)) {
+    if (field in base._trace) return handlePropToRuntime(base._trace[field]);
+    throw new RuntimeError(
+      `No property '${field}' on ${base._traceType} handle`
+    );
   }
   throw new RuntimeError(`Cannot access field ${field} on ${kstr(base)}`);
 }
