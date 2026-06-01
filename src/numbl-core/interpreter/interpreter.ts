@@ -75,6 +75,14 @@ export class Interpreter {
    *  that genuinely happen at the interpreter level inside a loop. */
   loopDepth: number = 0;
 
+  /** @internal Number of enclosing conditional blocks (`if` / `switch` /
+   *  `try`) whose bodies the interpreter is currently executing. Used by
+   *  the loop classifier: when a loop is dispatched with `condBlockDepth >
+   *  0` (or `loopDepth > 0`), its sibling list is a nested block, so the
+   *  post-loop liveness scan can't see reads after the enclosing block —
+   *  the classifier must then keep every loop-assigned name live-out. */
+  condBlockDepth: number = 0;
+
   /** @internal */
   functionDefCache = new Map<string, FunctionDef>();
 
@@ -288,6 +296,7 @@ export class Interpreter {
   // Methods added by interpreterExec.ts
   declare execStmt: (stmt: Stmt) => ControlSignal | null;
   declare execStmts: (stmts: Stmt[]) => ControlSignal | null;
+  declare execBlockStmts: (stmts: Stmt[]) => ControlSignal | null;
   declare evalExpr: (expr: Expr) => unknown;
   declare evalExprNargout: (expr: Expr, nargout: number) => unknown;
   declare evalBinary: (expr: Extract<Expr, { type: "Binary" }>) => unknown;

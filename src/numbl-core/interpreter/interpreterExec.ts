@@ -169,16 +169,16 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "If": {
       const cond = this.evalExpr(stmt.cond);
       if (this.rt.toBool(cond)) {
-        return this.execStmts(stmt.thenBody);
+        return this.execBlockStmts(stmt.thenBody);
       }
       for (const elseif of stmt.elseifBlocks) {
         const elseifCond = this.evalExpr(elseif.cond);
         if (this.rt.toBool(elseifCond)) {
-          return this.execStmts(elseif.body);
+          return this.execBlockStmts(elseif.body);
         }
       }
       if (stmt.elseBody) {
-        return this.execStmts(stmt.elseBody);
+        return this.execBlockStmts(stmt.elseBody);
       }
       return null;
     }
@@ -303,26 +303,26 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const caseVal = this.evalExpr(c.value);
         if (this.switchMatch(switchVal, caseVal)) {
           matched = true;
-          const signal = this.execStmts(c.body);
+          const signal = this.execBlockStmts(c.body);
           if (signal) return signal;
           break;
         }
       }
       if (!matched && stmt.otherwise) {
-        return this.execStmts(stmt.otherwise);
+        return this.execBlockStmts(stmt.otherwise);
       }
       return null;
     }
 
     case "TryCatch": {
       try {
-        const signal = this.execStmts(stmt.tryBody);
+        const signal = this.execBlockStmts(stmt.tryBody);
         if (signal) return signal;
       } catch (e) {
         if (stmt.catchVar) {
           this.env.set(stmt.catchVar, this.rt.wrapError(e));
         }
-        const signal = this.execStmts(stmt.catchBody);
+        const signal = this.execBlockStmts(stmt.catchBody);
         if (signal) return signal;
       }
       return null;
@@ -438,6 +438,23 @@ export function execStmts(
     if (result.signal) return result.signal;
   }
   return null;
+}
+
+/** Execute a conditional-block body (`if` / `switch` / `try`), tracking
+ *  `condBlockDepth` so a loop dispatched inside knows its sibling list is
+ *  a nested block — the loop classifier then keeps every loop-assigned
+ *  name live-out (the post-loop liveness scan can't see reads after the
+ *  enclosing block). */
+export function execBlockStmts(
+  this: Interpreter,
+  stmts: Stmt[]
+): ControlSignal | null {
+  this.condBlockDepth++;
+  try {
+    return this.execStmts(stmts);
+  } finally {
+    this.condBlockDepth--;
+  }
 }
 
 // ── Expression evaluation ────────────────────────────────────────────────

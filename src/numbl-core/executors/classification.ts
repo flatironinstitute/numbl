@@ -218,10 +218,23 @@ export function classifyLoop(
   // name read in the post-loop tail of this sibling list. Loop-internal
   // scratch (assigned but never read post-loop, and not in env) drops
   // out of the writeback set so the JIT artifact doesn't pay a Map.set.
-  const liveOut = new Set<string>(inputs);
-  if (stmt.type === "For") liveOut.add(stmt.varName);
-  collectReadsFromSiblings(siblings as Stmt[], siblingIndex + 1, liveOut);
-  const outputs = [...new Set(analysis.outputs)].filter(n => liveOut.has(n));
+  // When the loop is nested inside an enclosing block (another loop, or an
+  // if/switch/try), `siblings` is that block's body — the post-loop tail
+  // scan can't see reads after the enclosing block, so a name read there
+  // would be wrongly dropped. In MATLAB every loop-assigned name persists
+  // in the function scope, so in that case keep them all live-out. Only at
+  // the outermost (function/script) level is the scan complete enough to
+  // safely prune dead scratch.
+  const nested = interp.loopDepth > 0 || interp.condBlockDepth > 0;
+  let outputs: string[];
+  if (nested) {
+    outputs = [...new Set(analysis.outputs)];
+  } else {
+    const liveOut = new Set<string>(inputs);
+    if (stmt.type === "For") liveOut.add(stmt.varName);
+    collectReadsFromSiblings(siblings as Stmt[], siblingIndex + 1, liveOut);
+    outputs = [...new Set(analysis.outputs)].filter(n => liveOut.has(n));
+  }
 
   widenAgainst(inputTypes, prevInputTypes);
 
