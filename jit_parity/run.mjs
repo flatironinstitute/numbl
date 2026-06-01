@@ -56,8 +56,8 @@ const argv = process.argv.slice(2);
 const verbose = argv.includes("-v") || argv.includes("--verbose");
 const skipOpt2 = argv.includes("--no-opt2");
 const noBundle = argv.includes("--no-bundle");
-const jobsArg = argv.find((a) => a.startsWith("--jobs="));
-const filters = argv.filter((a) => !a.startsWith("-"));
+const jobsArg = argv.find(a => a.startsWith("--jobs="));
+const filters = argv.filter(a => !a.startsWith("-"));
 
 const OPTS = skipOpt2 ? [0, 1] : [0, 1, 2];
 const TIMEOUT_MS = 120_000;
@@ -81,11 +81,16 @@ const JOBS = jobsArg
 // shown (EXCL) so the divergence stays visible, but don't count toward
 // pass/fail or the exit code. Keyed by filename substring → reason.
 const GATE_EXCLUDED = {
-  C03_matmul: "matmul: BLAS dgemm (interpreter) vs naive triple-loop (JIT) accumulate in different orders → last-bit differences. Inherent FP non-associativity.",
-  "A35_complex-pow": "(-1)^(0.5+1i) leaves a ~2.6e-18 real residue from exp(b·log(a)) (= exp(-π)·cos(π/2)); MATLAB keeps it, but it's the difference of transcendentals → sensitive to libm (opt2) vs V8 (opt0/opt1) ULP, like C02. The integer-power line is fixable; the script can't be byte-stable.",
-  "F01_sprintf-half-even": "%f/%e/%g half-way rounding: libc snprintf rounds half-to-even; matching V8's toFixed/toExponential (correct-rounding toward +Inf on the exact decimal) byte-for-byte needs a V8-style dtoa in C. Deferred — a naive scale-and-round would pass these exact-representable cases but diverge on non-exact values.",
-  "F02_disp-scalar-half-even": "disp() scalar half-way rounding: same root cause as F01 (format_double.h snprintf %.4e half-to-even vs V8 toExponential). Deferred pending a V8-equivalent dtoa.",
-  "F04_s-noninteger": "%s of a non-integer needs V8's shortest round-trip form (String(0.1)='0.1'); libc %.17g/%g aren't shortest. Deferred pending a dtoa.",
+  C03_matmul:
+    "matmul: BLAS dgemm (interpreter) vs naive triple-loop (JIT) accumulate in different orders → last-bit differences. Inherent FP non-associativity.",
+  "A35_complex-pow":
+    "(-1)^(0.5+1i) leaves a ~2.6e-18 real residue from exp(b·log(a)) (= exp(-π)·cos(π/2)); MATLAB keeps it, but it's the difference of transcendentals → sensitive to libm (opt2) vs V8 (opt0/opt1) ULP, like C02. The integer-power line is fixable; the script can't be byte-stable.",
+  "F01_sprintf-half-even":
+    "%f/%e/%g half-way rounding: libc snprintf rounds half-to-even; matching V8's toFixed/toExponential (correct-rounding toward +Inf on the exact decimal) byte-for-byte needs a V8-style dtoa in C. Deferred — a naive scale-and-round would pass these exact-representable cases but diverge on non-exact values.",
+  "F02_disp-scalar-half-even":
+    "disp() scalar half-way rounding: same root cause as F01 (format_double.h snprintf %.4e half-to-even vs V8 toExponential). Deferred pending a V8-equivalent dtoa.",
+  "F04_s-noninteger":
+    "%s of a non-integer needs V8's shortest round-trip form (String(0.1)='0.1'); libc %.17g/%g aren't shortest. Deferred pending a dtoa.",
 };
 function exclusionReason(name) {
   for (const [sub, reason] of Object.entries(GATE_EXCLUDED)) {
@@ -104,7 +109,13 @@ async function buildCliBundle() {
   if (noBundle) return null;
   try {
     const esbuild = await import("esbuild");
-    const outfile = join(repoRoot, "node_modules", ".cache", "jit_parity", "cli.mjs");
+    const outfile = join(
+      repoRoot,
+      "node_modules",
+      ".cache",
+      "jit_parity",
+      "cli.mjs"
+    );
     mkdirSync(dirname(outfile), { recursive: true });
     await esbuild.build({
       entryPoints: [join(repoRoot, "src", "cli.ts")],
@@ -118,7 +129,7 @@ async function buildCliBundle() {
     return outfile;
   } catch (e) {
     console.error(
-      `  (bundle build failed — ${(e && e.message) || e}; falling back to tsx)`,
+      `  (bundle build failed — ${(e && e.message) || e}; falling back to tsx)`
     );
     return null;
   }
@@ -131,11 +142,11 @@ const launchArgs =
     : ["--import", "tsx", join(repoRoot, "src", "cli.ts"), "run"];
 
 function runMode(file, opt) {
-  return new Promise((resolve) => {
+  return new Promise(resolve => {
     const child = spawn(
       process.execPath,
       [...launchArgs, file, "--opt", String(opt)],
-      { cwd: repoRoot },
+      { cwd: repoRoot }
     );
     const cap = 64 * 1024 * 1024;
     let stdout = "";
@@ -145,17 +156,17 @@ function runMode(file, opt) {
       timedOut = true;
       child.kill("SIGKILL");
     }, TIMEOUT_MS);
-    child.stdout.on("data", (d) => {
+    child.stdout.on("data", d => {
       if (stdout.length < cap) stdout += d;
     });
-    child.stderr.on("data", (d) => {
+    child.stderr.on("data", d => {
       if (stderr.length < cap) stderr += d;
     });
     child.on("error", () => {
       clearTimeout(timer);
       resolve({ stdout, stderr, status: 1, timedOut });
     });
-    child.on("close", (code) => {
+    child.on("close", code => {
       clearTimeout(timer);
       resolve({ stdout, stderr, status: timedOut ? null : code, timedOut });
     });
@@ -180,7 +191,7 @@ async function runPool(jobs, concurrency, worker) {
     }
   }
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, jobs.length) }, drain),
+    Array.from({ length: Math.min(concurrency, jobs.length) }, drain)
   );
   if (showProgress) process.stderr.write("\r" + " ".repeat(28) + "\r");
   return results;
@@ -191,22 +202,25 @@ function normalize({ stdout, status, timedOut }) {
   if (status !== 0) return "<ERROR>";
   const kept = stdout
     .split("\n")
-    .filter((l) => !/using bridge:/.test(l) && !/^\s*warning:/i.test(l));
+    .filter(l => !/using bridge:/.test(l) && !/^\s*warning:/i.test(l));
   return kept.join("\n").replace(/\s+$/, "");
 }
 
 function previewBlock(s, label) {
-  const body = s === "<ERROR>" || s === "<TIMEOUT>" ? s : s.length ? s : "(empty)";
+  const body =
+    s === "<ERROR>" || s === "<TIMEOUT>" ? s : s.length ? s : "(empty)";
   const lines = body.split("\n");
   const shown = lines.slice(0, 12);
-  const tail = lines.length > 12 ? `\n        … (${lines.length - 12} more line(s))` : "";
-  return `      ${label}:\n` + shown.map((l) => "        " + l).join("\n") + tail;
+  const tail =
+    lines.length > 12 ? `\n        … (${lines.length - 12} more line(s))` : "";
+  return `      ${label}:\n` + shown.map(l => "        " + l).join("\n") + tail;
 }
 
 let scripts = readdirSync(scriptsDir)
-  .filter((f) => f.endsWith(".m"))
+  .filter(f => f.endsWith(".m"))
   .sort();
-if (filters.length) scripts = scripts.filter((f) => filters.some((q) => f.includes(q)));
+if (filters.length)
+  scripts = scripts.filter(f => filters.some(q => f.includes(q)));
 
 if (!scripts.length) {
   console.error("No matching scripts.");
@@ -215,7 +229,7 @@ if (!scripts.length) {
 
 console.log(
   `Comparing --opt ${OPTS.join("/")} across ${scripts.length} script(s) in jit_parity/scripts/ ` +
-    `(jobs=${JOBS}, ${bundlePath !== null ? "bundled" : "tsx"})\n`,
+    `(jobs=${JOBS}, ${bundlePath !== null ? "bundled" : "tsx"})\n`
 );
 
 // Flatten to independent (script, opt) jobs and run them through the pool, so
@@ -225,7 +239,7 @@ for (const name of scripts) {
   for (const opt of OPTS) jobs.push({ name, opt });
 }
 const jobResults = await runPool(jobs, JOBS, ({ name, opt }) =>
-  runMode(join(scriptsDir, name), opt),
+  runMode(join(scriptsDir, name), opt)
 );
 const resultsByScript = new Map();
 jobs.forEach((job, i) => {
@@ -255,10 +269,16 @@ for (const name of scripts) {
   const excluded = exclusionReason(name);
   const showGroups = () => {
     for (const [k, modes] of groups) {
-      const label = modes.map((o) => `opt${o}`).join(",");
+      const label = modes.map(o => `opt${o}`).join(",");
       const oneLine = k.includes("\n") ? null : k === "" ? "(empty)" : k;
       if (oneLine !== null) console.log(`        ${label}: ${oneLine}`);
-      else console.log(`        ${label}:\n${k.split("\n").map((l) => "          " + l).join("\n")}`);
+      else
+        console.log(
+          `        ${label}:\n${k
+            .split("\n")
+            .map(l => "          " + l)
+            .join("\n")}`
+        );
     }
   };
 
@@ -283,21 +303,30 @@ for (const name of scripts) {
 }
 
 if (verbose && failures.length) {
-  console.log("\n──────── failure detail (raw per-mode stdout/stderr) ────────");
+  console.log(
+    "\n──────── failure detail (raw per-mode stdout/stderr) ────────"
+  );
   for (const { name, results } of failures) {
     console.log(`\n### ${name}`);
     for (const opt of OPTS) {
       const r = results[opt];
       const status = r.timedOut ? "TIMEOUT" : `exit=${r.status}`;
       console.log(`  --opt ${opt} [${status}]`);
-      if (r.stdout.trim()) console.log(previewBlock(r.stdout.replace(/\s+$/, ""), "stdout"));
-      if (r.stderr.trim()) console.log(previewBlock(r.stderr.trim().split("\n").slice(0, 3).join("\n"), "stderr"));
+      if (r.stdout.trim())
+        console.log(previewBlock(r.stdout.replace(/\s+$/, ""), "stdout"));
+      if (r.stderr.trim())
+        console.log(
+          previewBlock(
+            r.stderr.trim().split("\n").slice(0, 3).join("\n"),
+            "stderr"
+          )
+        );
     }
   }
 }
 
 const exclNote = excludedCount ? ` (${excludedCount} excluded from gate)` : "";
 console.log(
-  `\n${passCount}/${gateTotal} passed, ${gateTotal - passCount} failed${exclNote}.`,
+  `\n${passCount}/${gateTotal} passed, ${gateTotal - passCount} failed${exclNote}.`
 );
 process.exit(passCount === gateTotal ? 0 : 1);
