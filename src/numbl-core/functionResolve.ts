@@ -92,6 +92,86 @@ function getEffectiveDir(fileName: string, searchPaths: string[]): string {
   return parts.length > 0 ? parts.join("/") + "/" : "";
 }
 
+// ── Resolution memoization ───────────────────────────────────────────
+// `resolveFunction` is hot: it runs on every interpreter call, redoing
+// the same Map lookups + path-splitting (`getEffectiveDir`) for the same
+// call site every time. The decision depends only on `(name, callSite,
+// and the class-names of any ClassInstance args)` — for the common
+// numeric call it depends only on `(name, callSite)`. We cache the
+// resolved target per FunctionIndex (a WeakMap, so a rebuilt index gets
+// a fresh cache and there's no manual invalidation: the index's maps are
+// never mutated in place). On a hit we re-inject the *live* argTypes,
+// since downstream specialization keys on them.
+const resolveCaches = new WeakMap<
+  FunctionIndex,
+  Map<string, ResolvedTarget | null>
+>();
+
+function getResolveCache(
+  index: FunctionIndex
+): Map<string, ResolvedTarget | null> {
+  let c = resolveCaches.get(index);
+  if (c === undefined) {
+    c = new Map();
+    resolveCaches.set(index, c);
+  }
+  return c;
+}
+
+/** Build a cache key. Only ClassInstance args (by position + class name)
+ *  affect resolution; everything else is interchangeable, so non-class
+ *  calls collapse to a single signature (`"-"`) and skip string-building
+ *  on the hot path. */
+function makeResolveKey(
+  name: string,
+  callSite: CallSite,
+  argTypes: ItemType[]
+): string {
+  let sig = "-";
+  for (let i = 0; i < argTypes.length; i++) {
+    const t = argTypes[i];
+    if (t !== undefined && t.kind === "ClassInstance") {
+      if (sig === "-") sig = "";
+      sig += i + ":" + t.className + ";";
+    }
+  }
+  return (
+    callSite.file +
+    "\u0000" +
+    (callSite.className ?? "") +
+    "\u0000" +
+    (callSite.methodName ?? "") +
+    "\u0000" +
+    (callSite.targetClassName ?? "") +
+    "\u0000" +
+    name +
+    "\u0000" +
+    sig
+  );
+}
+
+/** Return a target carrying the current call's argTypes. The cached
+ *  template embeds the first call's argTypes; all other fields (source,
+ *  callerFile, className, stripInstance) are fixed by the cache key, so
+ *  only the argTypes vary between hits. */
+function rebindArgTypes(
+  t: ResolvedTarget | null,
+  argTypes: ItemType[]
+): ResolvedTarget | null {
+  if (t === null) return null;
+  switch (t.kind) {
+    case "builtin":
+      return t; // no argTypes to rebind
+    case "classMethod":
+      return {
+        ...t,
+        compileArgTypes: t.stripInstance ? argTypes.slice(1) : argTypes,
+      };
+    default:
+      return { ...t, argTypes };
+  }
+}
+
 /**
  * Try to resolve a name via import entries for the calling file.
  * @param wildcardOnly - if true, only check wildcard imports; if false, only explicit.
@@ -174,6 +254,23 @@ function resolveViaImports(
  * @param index - The upfront function index
  */
 export function resolveFunction(
+  name: string,
+  argTypes: ItemType[],
+  callSite: CallSite,
+  index: FunctionIndex
+): ResolvedTarget | null {
+  const cache = getResolveCache(index);
+  const key = makeResolveKey(name, callSite, argTypes);
+  // Stored values are `ResolvedTarget | null` (a cached miss), never
+  // `undefined`, so `undefined` unambiguously means "not yet cached".
+  const cached = cache.get(key);
+  if (cached !== undefined) return rebindArgTypes(cached, argTypes);
+  const result = resolveFunctionImpl(name, argTypes, callSite, index);
+  cache.set(key, result);
+  return result;
+}
+
+function resolveFunctionImpl(
   name: string,
   argTypes: ItemType[],
   callSite: CallSite,
