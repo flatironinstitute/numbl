@@ -2048,6 +2048,65 @@ defineBuiltin({
   ],
 });
 
+// ── rcond ───────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "rcond",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (nargout > 1 || argTypes.length !== 1) return null;
+        if (!isNumericJitType(argTypes[0])) return null;
+        return [NUM];
+      },
+      // inv() allocates the full inverse; wrap so that scratch releases on
+      // return (the result is a scalar, so it survives).
+      apply: args => withScratch(() => rcondApply(args)),
+    },
+  ],
+});
+
+/**
+ * Estimate of the reciprocal 1-norm condition number,
+ * 1 / (norm(A,1) * norm(inv(A),1)). Near 1 for well-conditioned matrices,
+ * near 0 for badly conditioned ones. Unlike cond, a singular matrix yields 0
+ * rather than Inf. (MATLAB's rcond uses an LU-based estimator; forming the
+ * inverse here gives a value that agrees to several significant figures.)
+ */
+function rcondApply(args: RuntimeValue[]): RuntimeValue {
+  if (args.length !== 1) throw new RuntimeError("rcond requires 1 argument");
+  const A = args[0];
+  // Scalars: well-conditioned (1) unless zero, which is singular (0).
+  if (isRuntimeNumber(A)) return RTV.num(A === 0 ? 0 : 1);
+  if (typeof A === "boolean") return RTV.num(A ? 1 : 0);
+  if (isRuntimeComplexNumber(A))
+    return RTV.num(A.re === 0 && A.im === 0 ? 0 : 1);
+  if (isRuntimeSparseMatrix(A)) return rcondApply([sparseToDense(A)]);
+  if (!isRuntimeTensor(A))
+    throw new RuntimeError("rcond: argument must be numeric");
+  const [rows, cols] = tensorSize2D(A);
+  if (rows !== cols) throw new RuntimeError("rcond: matrix must be square");
+  if (rows === 0) return RTV.num(Infinity); // rcond([]) = Inf
+  const normA = toNumber(normApply([A, RTV.num(1)]));
+  if (!(normA > 0)) return RTV.num(0); // zero matrix (or NaN) → singular
+  let invA: RuntimeValue;
+  try {
+    const invIb = getIBuiltin("inv")!;
+    const invRes = invIb.resolve([inferJitType(A)], 1);
+    if (!invRes) throw new RuntimeError("rcond: inv resolve failed");
+    invA = invRes.apply([A], 1) as RuntimeValue;
+  } catch (e) {
+    // A singular matrix has rcond 0 (MATLAB does not error here).
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/singular/i.test(msg)) return RTV.num(0);
+    throw e;
+  }
+  const normInvA = toNumber(normApply([invA, RTV.num(1)]));
+  if (!isFinite(normInvA) || normInvA === 0) return RTV.num(0);
+  const rc = 1 / (normA * normInvA);
+  return RTV.num(isFinite(rc) ? rc : 0);
+}
+
 // ── rank ────────────────────────────────────────────────────────────────
 
 defineBuiltin({

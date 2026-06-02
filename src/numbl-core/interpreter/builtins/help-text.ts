@@ -820,6 +820,11 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["C = cond(A)", "C = cond(A, P)"],
     description: "Condition number of matrix.",
   },
+  rcond: {
+    signatures: ["C = rcond(A)"],
+    description:
+      "Reciprocal condition number estimate in 1-norm. Near 1.0 if A is well conditioned, near 0 if A is badly conditioned or singular.",
+  },
   kron: {
     signatures: ["K = kron(A, B)"],
     description: "Kronecker tensor product.",
