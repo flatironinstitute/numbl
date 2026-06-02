@@ -48,6 +48,7 @@ import {
   linsolveLapack,
   linsolveComplexLapack,
 } from "../../helpers/linsolve.js";
+import { mAdd, mSub, mMul, mLeftDiv } from "../../helpers/arithmetic.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────────
@@ -848,6 +849,112 @@ function invComplexJS(
       resultIm[row + col * n] = augIm[row * 2 * n + n + col];
     }
   return { re: resultRe, im: resultIm };
+}
+
+// ── expm ───────────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "expm",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length !== 1 || nargout > 1) return null;
+        if (!isNumericJitType(argTypes[0])) return null;
+        const a = argTypes[0];
+        if (a.kind === "number" || a.kind === "boolean") return [NUM];
+        if (a.kind === "complex_or_number") return [COMPLEX_OR_NUM];
+        if (a.kind === "tensor")
+          return [{ kind: "tensor", isComplex: a.isComplex }];
+        return null;
+      },
+      apply: args => expmApply(args),
+    },
+  ],
+});
+
+/**
+ * Matrix exponential via scaling-and-squaring with a degree-6 Padé
+ * approximant (Moler & Van Loan; the algorithm MATLAB's expm uses). It
+ * reuses the runtime matrix-multiply (mMul) and linear-solve (mLeftDiv)
+ * helpers, so it handles both real and complex matrices in every
+ * environment — unlike the textbook V*diag(exp(λ))/V form, which would
+ * need a complex eigendecomposition (Node + native LAPACK only).
+ */
+function expmApply(args: RuntimeValue[]): RuntimeValue {
+  if (args.length !== 1) throw new RuntimeError("expm requires 1 argument");
+  const A = args[0];
+  // Scalar fast paths: expm of a scalar is just exp of that scalar.
+  if (isRuntimeNumber(A)) return RTV.num(Math.exp(A));
+  if (isRuntimeComplexNumber(A)) {
+    const ex = Math.exp(A.re);
+    return RTV.complex(ex * Math.cos(A.im), ex * Math.sin(A.im));
+  }
+  if (!isRuntimeTensor(A))
+    throw new RuntimeError("expm: argument must be a numeric matrix");
+  const [m, n] = tensorSize2D(A);
+  if (m !== n) throw new RuntimeError("expm: input must be a square matrix");
+  if (n === 0) return A; // expm([]) = []
+  if (n === 1) {
+    const ex = Math.exp(A.data[0]);
+    if (A.imag)
+      return RTV.tensor(
+        Float64Array.of(ex * Math.cos(A.imag[0])),
+        [1, 1],
+        Float64Array.of(ex * Math.sin(A.imag[0]))
+      );
+    return RTV.tensor(Float64Array.of(ex), [1, 1]);
+  }
+
+  // Scale A so that ||A / 2^s||_1 <= 1/2, which keeps the Padé approximant
+  // accurate; the squaring loop at the end undoes the scaling.
+  let s = 0;
+  for (let scaled = matrixOneNorm(A, n); scaled > 0.5; scaled /= 2) s++;
+  const As = mMul(A, RTV.num(Math.pow(2, -s))); // scalar * matrix (element-wise)
+
+  // Degree-6 Padé approximant of exp(As): R = D \ E.
+  const q = 6;
+  const I = identityTensor(n);
+  let c = 0.5;
+  let E = mAdd(I, mMul(As, RTV.num(c))); // numerator   N = I + c*As
+  let D = mSub(I, mMul(As, RTV.num(c))); // denominator D = I - c*As
+  let X = As;
+  let plus = true;
+  for (let k = 2; k <= q; k++) {
+    c = (c * (q - k + 1)) / (k * (2 * q - k + 1));
+    X = mMul(As, X); // As^k
+    const cX = mMul(X, RTV.num(c));
+    E = mAdd(E, cX);
+    D = plus ? mAdd(D, cX) : mSub(D, cX);
+    plus = !plus;
+  }
+  let R = mLeftDiv(D, E); // solve D * R = E
+
+  // Undo the scaling: square the result s times.
+  for (let i = 0; i < s; i++) R = mMul(R, R);
+  return R;
+}
+
+/** 1-norm (max absolute column sum) of a square (possibly complex) matrix. */
+function matrixOneNorm(A: RuntimeTensor, n: number): number {
+  const re = A.data;
+  const im = A.imag;
+  let maxSum = 0;
+  for (let j = 0; j < n; j++) {
+    let colSum = 0;
+    for (let i = 0; i < n; i++) {
+      const idx = i + j * n;
+      colSum += im ? Math.hypot(re[idx], im[idx]) : Math.abs(re[idx]);
+    }
+    if (colSum > maxSum) maxSum = colSum;
+  }
+  return maxSum;
+}
+
+/** n×n identity matrix as a runtime tensor. */
+function identityTensor(n: number): RuntimeValue {
+  const data = allocFloat64Array(n * n);
+  for (let i = 0; i < n; i++) data[i + i * n] = 1;
+  return RTV.tensor(data, [n, n]);
 }
 
 // ── svd ──────────────────────────────────────────────────────────────────

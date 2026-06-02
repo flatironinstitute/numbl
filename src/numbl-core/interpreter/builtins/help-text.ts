@@ -748,6 +748,11 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["B = inv(A)"],
     description: "Matrix inverse.",
   },
+  expm: {
+    signatures: ["Y = expm(X)"],
+    description:
+      "Matrix exponential of square matrix X (scaling-and-squaring Padé). Use exp for the element-wise exponential.",
+  },
   trace: {
     signatures: ["T = trace(A)"],
     description: "Sum of diagonal elements.",

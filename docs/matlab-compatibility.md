@@ -17,7 +17,7 @@ More than 400 builtin functions are available. Run `numbl list-builtins` for the
 | Array manipulation        | reshape, squeeze, permute, repmat, repelem, cat, horzcat, vertcat, flip, fliplr, flipud, rot90, circshift                                                |
 | Array queries             | size, length, numel, ndims, isempty, isscalar, isvector, ismatrix                                                                                        |
 | Reductions                | sum, prod, mean, median, std, var, min, max, all, any, cumsum, cumprod, cummax, cummin                                                                   |
-| Linear algebra            | inv, pinv, det, trace, rank, cond, norm, eig, svd, lu, qr, qz, chol, linsolve, mldivide, mrdivide                                                        |
+| Linear algebra            | inv, pinv, det, trace, rank, cond, norm, eig, svd, lu, qr, qz, chol, expm, kron, linsolve, mldivide, mrdivide                                            |
 | FFT                       | fft, ifft, fftshift, ifftshift                                                                                                                           |
 | Polynomials               | poly, polyfit, polyval, roots, conv, deconv                                                                                                              |
 | Set operations            | unique, union, intersect, setdiff, ismember, uniquetol                                                                                                   |
