@@ -33,6 +33,8 @@ interface SurfViewProps {
   colorbar?: boolean;
   colorbarLocation?: string;
   colormap?: string;
+  /** `axis off` hides the axes box/lines (the plotted surfaces remain). */
+  axisVisible?: boolean;
 }
 
 export function SurfView({
@@ -45,6 +47,7 @@ export function SurfView({
   colorbar,
   colorbarLocation,
   colormap,
+  axisVisible,
 }: SurfViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<{
@@ -728,20 +731,22 @@ export function SurfView({
       }
     }
 
-    // Axis lines
-    addAxisLines(
-      scene,
-      xMin,
-      xMax,
-      yMin,
-      yMax,
-      zMin,
-      zMax,
-      rangeMax,
-      cxData,
-      cyData,
-      czData
-    );
+    // Axis lines (hidden by `axis off`)
+    if (axisVisible !== false) {
+      addAxisLines(
+        scene,
+        xMin,
+        xMax,
+        yMin,
+        yMax,
+        zMin,
+        zMax,
+        rangeMax,
+        cxData,
+        cyData,
+        czData
+      );
+    }
   }, [
     surfTraces,
     plot3Traces,
@@ -749,6 +754,7 @@ export function SurfView({
     bar3hTraces,
     quiver3Traces,
     shading,
+    axisVisible,
   ]);
 
   // Compute color range for the colorbar from surf traces (uses C if present,

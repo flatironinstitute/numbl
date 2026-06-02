@@ -155,6 +155,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
         colorbar={axes.colorbar}
         colorbarLocation={axes.colorbarLocation}
         colormap={axes.colormap}
+        axisVisible={axes.axisVisible}
       />
     );
   }
@@ -187,6 +188,10 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       colorbar={axes.colorbar}
       colorbarLocation={axes.colorbarLocation}
       caxis={axes.caxis}
+      xlim={axes.xlim}
+      ylim={axes.ylim}
+      yDir={axes.yDir}
+      axisVisible={axes.axisVisible}
     />
   );
 }
@@ -218,6 +223,10 @@ function PlotCanvas({
   colorbar,
   colorbarLocation,
   caxis,
+  xlim,
+  ylim,
+  yDir,
+  axisVisible,
 }: {
   traces: PlotTrace[];
   title?: string;
@@ -245,6 +254,10 @@ function PlotCanvas({
   colorbar?: boolean;
   colorbarLocation?: string;
   caxis?: [number, number];
+  xlim?: AxesState["xlim"];
+  ylim?: AxesState["ylim"];
+  yDir?: AxesState["yDir"];
+  axisVisible?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -279,7 +292,11 @@ function PlotCanvas({
       colorbarLocation,
       caxis,
       colormapData,
-      quiverTraces
+      quiverTraces,
+      xlim,
+      ylim,
+      yDir,
+      axisVisible
     );
   }, [
     traces,
@@ -308,6 +325,10 @@ function PlotCanvas({
     colorbarLocation,
     caxis,
     quiverTraces,
+    xlim,
+    ylim,
+    yDir,
+    axisVisible,
   ]);
 
   useEffect(() => {

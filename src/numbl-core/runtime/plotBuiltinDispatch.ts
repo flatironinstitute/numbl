@@ -73,6 +73,7 @@ import {
   viewCall,
   legendCall,
 } from "./runtimePlot.js";
+import { applyAxisCommand } from "./axisCommand.js";
 
 /** State carried by graphics ops that need to remember things between
  *  calls. `holdState` is read by `ishold()` so `hold on; if ishold ...`
@@ -313,10 +314,11 @@ export function dispatchPlotBuiltin(
       dispatchColormap(args, instructions);
       return true;
     case "axis": {
-      if (args.length > 0) {
-        const val = toString(args[0]).replace(/^"|"$/g, "");
-        plotInstr(instructions, { type: "set_axis", value: val });
-      }
+      // The query form (`lim = axis`) needs the runtime's accumulated state
+      // and is handled by the Runtime's own `axis` override; here we only
+      // apply the setting forms. `manual`-freeze is likewise a Runtime-only
+      // concern (no current-limits provider in this generic path).
+      applyAxisCommand(args, instructions);
       return true;
     }
     case "caxis":

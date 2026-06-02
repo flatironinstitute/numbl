@@ -76,7 +76,11 @@ export function drawPlot(
   colorbarLocation?: string,
   caxis?: [number, number],
   colormapData?: number[][],
-  quiverTraces?: QuiverTrace[]
+  quiverTraces?: QuiverTrace[],
+  xlim?: [number | null, number | null],
+  ylim?: [number | null, number | null],
+  yDir?: "normal" | "reverse",
+  axisVisible?: boolean
 ) {
   _activeColormapData = colormapData;
   const ctx = canvas.getContext("2d");
@@ -350,9 +354,16 @@ export function drawPlot(
     yMax += 1;
   }
 
-  // Parse axis mode flags
-  const isTight = axisMode?.includes("tight") ?? false;
-  const isEqual = axisMode?.includes("equal") ?? false;
+  // Parse axis mode flags. `image` is equal+tight; `square` makes the plot
+  // box square (without forcing equal data units); `padded` widens the
+  // default margin.
+  const isImage = axisMode?.includes("image") ?? false;
+  const isTight = (axisMode?.includes("tight") ?? false) || isImage;
+  const isEqual = (axisMode?.includes("equal") ?? false) || isImage;
+  const isSquare = axisMode?.includes("square") ?? false;
+  const isPadded = axisMode?.includes("padded") ?? false;
+  const showAxes = axisVisible !== false;
+  const yReversed = yDir === "reverse";
 
   const logX = axisScale === "semilogx" || axisScale === "loglog";
   const logY = axisScale === "semilogy" || axisScale === "loglog";
@@ -361,27 +372,47 @@ export function drawPlot(
   if (logX && xMin <= 0) xMin = xMax > 0 ? xMax * 1e-6 : 1;
   if (logY && yMin <= 0) yMin = yMax > 0 ? yMax * 1e-6 : 1;
 
-  // Small margin around data (skip if tight)
+  // Small margin around data (skip if tight). `padded` uses a wider margin.
   if (!isTight) {
+    const frac = isPadded ? 0.07 : 0.05;
     if (logX) {
       // Pad in log space
-      const logPad = (Math.log10(xMax) - Math.log10(xMin)) * 0.05;
+      const logPad = (Math.log10(xMax) - Math.log10(xMin)) * frac;
       xMin = Math.pow(10, Math.log10(xMin) - logPad);
       xMax = Math.pow(10, Math.log10(xMax) + logPad);
     } else {
-      const xPad = (xMax - xMin) * 0.05;
+      const xPad = (xMax - xMin) * frac;
       xMin -= xPad;
       xMax += xPad;
     }
     if (logY) {
-      const logPad = (Math.log10(yMax) - Math.log10(yMin)) * 0.05;
+      const logPad = (Math.log10(yMax) - Math.log10(yMin)) * frac;
       yMin = Math.pow(10, Math.log10(yMin) - logPad);
       yMax = Math.pow(10, Math.log10(yMax) + logPad);
     } else {
-      const yPad = (yMax - yMin) * 0.05;
+      const yPad = (yMax - yMin) * frac;
       yMin -= yPad;
       yMax += yPad;
     }
+  }
+
+  // Explicit limits from `axis([...])` / `xlim` / `ylim` override the
+  // computed bounds. A `null` bound keeps the automatic value.
+  if (xlim) {
+    if (xlim[0] != null) xMin = xlim[0];
+    if (xlim[1] != null) xMax = xlim[1];
+  }
+  if (ylim) {
+    if (ylim[0] != null) yMin = ylim[0];
+    if (ylim[1] != null) yMax = ylim[1];
+  }
+  if (xMax === xMin) {
+    xMin -= 1;
+    xMax += 1;
+  }
+  if (yMax === yMin) {
+    yMin -= 1;
+    yMax += 1;
   }
 
   // axis equal: ensure 1 data unit = same pixel length on both axes
@@ -420,6 +451,14 @@ export function drawPlot(
         xMax = xCenter + newXRange / 2;
       }
     }
+  } else if (isSquare) {
+    // axis square: make the plot box square (equal axis-line lengths),
+    // without forcing equal data units. Shrink the longer side and center.
+    const side = Math.min(plotW, plotH);
+    effMarginLeft = margin.left + (plotW - side) / 2;
+    effMarginTop = margin.top + (plotH - side) / 2;
+    effPlotW = side;
+    effPlotH = side;
   }
 
   const toCanvasX = logX
@@ -430,22 +469,27 @@ export function drawPlot(
         return effMarginLeft + ((logV - logMin) / (logMax - logMin)) * effPlotW;
       }
     : (v: number) => effMarginLeft + ((v - xMin) / (xMax - xMin)) * effPlotW;
+  // `axis ij` (yReversed) places the origin at the top-left: y increases
+  // downward instead of upward.
   const toCanvasY = logY
     ? (v: number) => {
         const logV = Math.log10(Math.max(v, Number.MIN_VALUE));
         const logMin = Math.log10(Math.max(yMin, Number.MIN_VALUE));
         const logMax = Math.log10(Math.max(yMax, Number.MIN_VALUE));
-        return (
-          effMarginTop +
-          effPlotH -
-          ((logV - logMin) / (logMax - logMin)) * effPlotH
-        );
+        const frac = (logV - logMin) / (logMax - logMin);
+        return yReversed
+          ? effMarginTop + frac * effPlotH
+          : effMarginTop + effPlotH - frac * effPlotH;
       }
-    : (v: number) =>
-        effMarginTop + effPlotH - ((v - yMin) / (yMax - yMin)) * effPlotH;
+    : (v: number) => {
+        const frac = (v - yMin) / (yMax - yMin);
+        return yReversed
+          ? effMarginTop + frac * effPlotH
+          : effMarginTop + effPlotH - frac * effPlotH;
+      };
 
   // Grid (only when gridOn is true or undefined — default on for backward compat)
-  if (gridOn !== false) {
+  if (gridOn !== false && showAxes) {
     ctx.strokeStyle = "#ddd";
     ctx.lineWidth = 0.5;
 
@@ -472,41 +516,44 @@ export function drawPlot(
     }
   }
 
-  // Plot border
-  ctx.strokeStyle = "#333";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(effMarginLeft, effMarginTop, effPlotW, effPlotH);
+  // Plot border + tick labels. Hidden by `axis off` (Visible='off'), which
+  // suppresses the axes lines, ticks, and tick labels.
+  if (showAxes) {
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(effMarginLeft, effMarginTop, effPlotW, effPlotH);
 
-  // Tick labels
-  const xTicks = logX
-    ? generateLogTicks(xMin, xMax)
-    : generateTicks(xMin, xMax, Math.max(3, Math.floor(effPlotW / 80)));
-  const yTicks = logY
-    ? generateLogTicks(yMin, yMax)
-    : generateTicks(yMin, yMax, Math.max(3, Math.floor(effPlotH / 50)));
+    const xTicks = logX
+      ? generateLogTicks(xMin, xMax)
+      : generateTicks(xMin, xMax, Math.max(3, Math.floor(effPlotW / 80)));
+    const yTicks = logY
+      ? generateLogTicks(yMin, yMax)
+      : generateTicks(yMin, yMax, Math.max(3, Math.floor(effPlotH / 50)));
 
-  ctx.fillStyle = "#333";
-  ctx.font = "11px monospace";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "top";
-  for (const tx of xTicks) {
-    ctx.fillText(
-      logX ? formatLogTick(tx) : formatTick(tx),
-      toCanvasX(tx),
-      effMarginTop + effPlotH + 5
-    );
+    ctx.fillStyle = "#333";
+    ctx.font = "11px monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    for (const tx of xTicks) {
+      ctx.fillText(
+        logX ? formatLogTick(tx) : formatTick(tx),
+        toCanvasX(tx),
+        effMarginTop + effPlotH + 5
+      );
+    }
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (const ty of yTicks) {
+      ctx.fillText(
+        logY ? formatLogTick(ty) : formatTick(ty),
+        effMarginLeft - 5,
+        toCanvasY(ty)
+      );
+    }
   }
-  ctx.textAlign = "right";
-  ctx.textBaseline = "middle";
-  for (const ty of yTicks) {
-    ctx.fillText(
-      logY ? formatLogTick(ty) : formatTick(ty),
-      effMarginLeft - 5,
-      toCanvasY(ty)
-    );
-  }
 
-  // Labels
+  // Labels. The title stays visible with `axis off` (it tracks the axes
+  // title, not the axis lines); the x/y axis labels are hidden.
   ctx.fillStyle = "#222";
   if (title) {
     ctx.font = "bold 13px sans-serif";
@@ -514,13 +561,13 @@ export function drawPlot(
     ctx.textBaseline = "middle";
     ctx.fillText(title, effMarginLeft + effPlotW / 2, effMarginTop / 2);
   }
-  if (xlabel) {
+  if (xlabel && showAxes) {
     ctx.font = "12px sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
     ctx.fillText(xlabel, effMarginLeft + effPlotW / 2, ch - 4);
   }
-  if (ylabel) {
+  if (ylabel && showAxes) {
     ctx.font = "12px sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";

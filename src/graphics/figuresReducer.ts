@@ -51,6 +51,16 @@ export type AxesState = {
   axisMode?: string;
   axisScale?: "linear" | "semilogx" | "semilogy" | "loglog";
   caxis?: [number, number];
+  /** Explicit axis limits from `axis([...])` / `xlim` / `ylim`. Each bound
+   *  may be `null`, meaning "use the data-derived bound" (partial limits). An
+   *  absent field means the whole axis is automatic. */
+  xlim?: [number | null, number | null];
+  ylim?: [number | null, number | null];
+  zlim?: [number | null, number | null];
+  /** y-axis direction: "reverse" is `axis ij` (origin at top-left). */
+  yDir?: "normal" | "reverse";
+  /** Axes lines/background visibility (`axis off` sets this false). */
+  axisVisible?: boolean;
 };
 
 export type FigureState = {
@@ -417,6 +427,26 @@ export const figuresReducer = (
       return updateAxes(state, { view: { az: action.az, el: action.el } });
     case "set_axis":
       return updateAxes(state, { axisMode: action.value });
+    case "set_axis_limits": {
+      const axes = getAxes(ensureFig(state));
+      const resolve = (
+        prev: [number | null, number | null] | undefined,
+        spec: typeof action.xlim
+      ): [number | null, number | null] | undefined => {
+        if (spec === undefined) return prev; // leave unchanged
+        if (spec === "auto") return undefined; // back to data-fit
+        return spec;
+      };
+      return updateAxes(state, {
+        xlim: resolve(axes.xlim, action.xlim),
+        ylim: resolve(axes.ylim, action.ylim),
+        zlim: resolve(axes.zlim, action.zlim),
+      });
+    }
+    case "set_axis_ydir":
+      return updateAxes(state, { yDir: action.dir });
+    case "set_axis_visible":
+      return updateAxes(state, { axisVisible: action.value });
     case "set_axis_scale":
       return updateAxes(state, { axisScale: action.value });
     case "set_caxis":
@@ -460,6 +490,11 @@ export const figuresReducer = (
             axisMode: prev.axisMode,
             axisScale: prev.axisScale,
             caxis: prev.caxis,
+            xlim: prev.xlim,
+            ylim: prev.ylim,
+            zlim: prev.zlim,
+            yDir: prev.yDir,
+            axisVisible: prev.axisVisible,
             shading: prev.shading,
           };
       return {

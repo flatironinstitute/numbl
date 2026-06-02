@@ -113,6 +113,12 @@ import {
   dispatchPlotBuiltin,
   PLOT_DISPATCH_NAMES,
 } from "./plotBuiltinDispatch.js";
+import { applyAxisCommand } from "./axisCommand.js";
+import {
+  figuresReducer,
+  initialFiguresState,
+} from "../../graphics/figuresReducer.js";
+import { computeAxisLimits } from "../../graphics/axisLimits.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
 import { allocFloat64Array } from "./alloc.js";
@@ -455,6 +461,20 @@ export class Runtime {
         );
       }
       return RTV.dummyHandle();
+    };
+    // `axis` has a query form (`lim = axis` / `lim = axis(ax)`) that returns
+    // the current limits, and an `axis manual` form that freezes the current
+    // limits — both need the runtime's accumulated plot state, so they are
+    // handled here rather than in the generic dispatch.
+    this.builtins["axis"] = (nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      const applied = applyAxisCommand(margs, this.plotInstructions, () =>
+        this.currentAxisLimits()
+      );
+      if (!applied && nargout >= 1) {
+        return RTV.row(this.currentAxisLimits());
+      }
+      return undefined;
     };
     // `fplot` / `fplot3` evaluate a user function-handle and so need
     // the full Runtime context — kept as explicit registrations.
@@ -1658,6 +1678,22 @@ export class Runtime {
   /** Read the hold state, for `ishold()` queries. */
   public ishold(): RuntimeValue {
     return RTV.logical(this.holdState);
+  }
+
+  /** Current axis limits of the active axes, as MATLAB's `axis` query
+   *  returns them: `[xmin xmax ymin ymax]` (2-D) or with `zmin zmax`
+   *  appended (3-D). Reduces the accumulated plot instructions into a figure
+   *  state and reads the current axes' explicit/data-derived limits. */
+  public currentAxisLimits(): number[] {
+    let state = initialFiguresState;
+    for (const instr of this.plotInstructions) {
+      state = figuresReducer(state, instr);
+    }
+    const fig = state.figs[state.currentHandle];
+    if (!fig) return [0, 1, 0, 1];
+    const axes = fig.axes[fig.currentAxesIndex];
+    if (!axes) return [0, 1, 0, 1];
+    return computeAxisLimits(axes);
   }
 
   // ── Drawnow / Pause ─────────────────────────────────────────────────

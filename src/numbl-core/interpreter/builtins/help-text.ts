@@ -1650,6 +1650,23 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["colorbar", "colorbar(MODE)"],
     description: "Display colorbar on current axes.",
   },
+  axis: {
+    signatures: [
+      "axis([xmin xmax ymin ymax])",
+      "axis STYLE",
+      "axis MODE",
+      "axis ij | xy",
+      "axis on | off",
+      "LIM = axis",
+    ],
+    description:
+      "Set or query axis limits, scaling, direction, and visibility. " +
+      "LIMITS is a 4-, 6-, or 8-element vector (inf bounds stay automatic). " +
+      "STYLE is tight | padded | fill | equal | image | square | vis3d | " +
+      "normal | tickaligned. MODE is manual | auto | 'auto x' | 'auto y' | " +
+      "'auto z' (and xy combinations). 'ij' reverses the y-axis; 'off' hides " +
+      "the axes lines and background. LIM = axis returns the current limits.",
+  },
   xlim: {
     signatures: ["xlim(LIMITS)"],
     description: "Set x-axis limits.",

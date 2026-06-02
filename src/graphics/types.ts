@@ -267,6 +267,15 @@ export interface HeatmapTrace {
   yLabels?: string[];
 }
 
+// ── Axis limit spec ──────────────────────────────────────────────────────
+
+/** A single axis's limit request from `axis([...])` / `axis auto`.
+ *  - A `[lo, hi]` pair, where either bound may be `null` to mean "keep the
+ *    automatically-chosen bound" (from `inf`/`-inf` in the limits vector).
+ *  - The string `"auto"` clears any explicit limit so the axis refits to its
+ *    data (from `axis auto` / `axis 'auto x'`). */
+export type AxisLimitSpec = [number | null, number | null] | "auto";
+
 // ── Plot Instructions ───────────────────────────────────────────────────
 
 export type PlotInstruction =
@@ -307,6 +316,14 @@ export type PlotInstruction =
   | { type: "set_colorbar"; value: string; location?: string }
   | { type: "set_colormap"; name: string; data?: number[][] }
   | { type: "set_axis"; value: string }
+  | {
+      type: "set_axis_limits";
+      xlim?: AxisLimitSpec;
+      ylim?: AxisLimitSpec;
+      zlim?: AxisLimitSpec;
+    }
+  | { type: "set_axis_ydir"; dir: "normal" | "reverse" }
+  | { type: "set_axis_visible"; value: boolean }
   | {
       type: "set_axis_scale";
       value: "linear" | "semilogx" | "semilogy" | "loglog";
