@@ -166,8 +166,17 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
     }
   }
 
-  // Secondary fast path: booleans as numbers
-  if (typeof a !== "object" || typeof b !== "object") {
+  // Secondary fast path: convert non-number primitives (e.g. booleans)
+  // to numbers and retry. Skip when BOTH operands are already plain
+  // numbers — the primary numeric fast path above already processed them,
+  // and a Pow/ElemPow whose Math.pow result was NaN deliberately `break`s
+  // out of that switch to reach the RuntimeValue slow path (for complex /
+  // NaN handling). Re-entering here with the same two numbers would
+  // recurse forever (e.g. `1 .^ Inf`, where Math.pow(1, Inf) stays NaN).
+  if (
+    (typeof a !== "object" || typeof b !== "object") &&
+    !(typeof a === "number" && typeof b === "number")
+  ) {
     const an = asNumber(a);
     const bn = asNumber(b);
     if (an !== null && bn !== null) {
