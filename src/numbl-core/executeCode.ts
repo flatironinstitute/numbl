@@ -5,6 +5,11 @@
  * creates an Interpreter, and runs the AST.
  */
 
+// legacy user-defined functions
+(
+  globalThis as typeof globalThis & { FloatXArray: typeof Float64Array }
+).FloatXArray = Float64Array;
+
 import type { RuntimeValue } from "./runtime/index.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import type { FileIOAdapter } from "./fileIOAdapter.js";
