@@ -21,6 +21,8 @@ The worker is the only thing that ever calls `executeCode`. The main thread neve
 
 An in-memory filesystem (`VirtualFileSystem`) on the main thread provides the user's files. A companion adapter (`BrowserFileIOAdapter`) wraps it to implement the core's `FileIOAdapter` interface inside the worker. Changes the running script makes (via `writematrix`, `save`, etc.) are captured as a delta and replayed back to the main thread after each run so the UI stays consistent.
 
+When the worker runs a script, it first sets the VFS cwd to the directory of that script — mirroring the CLI `run` command, which chdir's into `dirname(filepath)`. The script's folder thus becomes the first-priority implicit search path (see `executeCode`'s cwd-as-search-path handling), so a driver script in a subdirectory resolves sibling functions and relative file I/O against its own folder rather than the project root.
+
 ## Synchronous input in an async world
 
 MATLAB code that calls `input(...)` expects to block until the user types a response. In the worker this is implemented with a `SharedArrayBuffer` plus `Atomics.wait`/`Atomics.notify`: the worker blocks on the shared buffer, the main thread collects the response from the UI and writes it back, and `Atomics.notify` wakes the worker. This is the only synchronous cross-thread bridge; everything else uses normal async messaging.
