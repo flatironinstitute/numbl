@@ -189,9 +189,11 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
     const interp = ctx.interp as Interpreter;
     try {
       const inputValues: unknown[] = [];
-      for (const name of d.inputs) {
-        const rv = interp.env.get(name);
-        inputValues.push(rv === undefined ? undefined : numblToJit(rv));
+      for (let i = 0; i < d.inputs.length; i++) {
+        const rv = interp.env.get(d.inputs[i]);
+        inputValues.push(
+          rv === undefined ? undefined : numblToJit(rv, d.compilerInputTypes[i])
+        );
       }
       const result = compiled.specFn(...inputValues);
       // Writeback shape mirrors mtoc2's nargout convention.

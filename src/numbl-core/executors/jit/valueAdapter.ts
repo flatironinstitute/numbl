@@ -34,25 +34,44 @@ import {
   isRuntimeString,
   type RuntimeValue,
 } from "../../runtime/types.js";
-import type { JitType } from "../../jitTypes.js";
+import type { Type, NumericType } from "../../jit/index.js";
+import { isMultiElement } from "../../jit/index.js";
 
 /** numbl RuntimeValue → mtoc2 emit-JS value shape. Owned-typed
  *  values (tensors) get their data buffer cloned so mtoc2's spec
  *  body can mutate freely without leaking the change back through
  *  numbl's caller-side env.
  *
- *  `targetType` is the JitType the spec was COMPILED for at this
- *  parameter. Type-widening can reuse a complex specialization for a
- *  later real/boolean scalar call (both keys collapse to
- *  `complex_or_number`); the complex-typed body reads `.re`/`.im`, so a
- *  bare JS number arriving there yields `undefined` → NaN. Box such a
- *  scalar into `{re, im:0}` to mirror the C adapter (valueAdapterC),
- *  which already boxes a real as a complex with `im=0`. */
-export function numblToJit(v: RuntimeValue, targetType?: JitType): unknown {
-  if (targetType?.kind === "complex_or_number") {
-    if (isRuntimeNumber(v)) return { re: v as number, im: 0 };
-    if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
-    if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
+ *  `paramType` is the compiler `Type` the spec was COMPILED for at this
+ *  parameter. It reconciles two value/type mismatches at the boundary,
+ *  both mirroring the C adapter (valueAdapterC):
+ *
+ *   1. **1×1 tensor → scalar param.** The compiler collapses a [1,1]
+ *      tensor type to a scalar `double`/`complex` (`!isMultiElement`),
+ *      so scalar codegen reads a bare number / `{re, im}`. A 1×1
+ *      `RuntimeTensor` value must therefore be unwrapped to its element;
+ *      otherwise the tensor OBJECT leaks into scalar arithmetic and
+ *      `a.data[i] + b` becomes `number + object = NaN`.
+ *   2. **real → complex-scalar param.** Type-widening can reuse a complex
+ *      specialization for a later real/boolean scalar call; the
+ *      complex-typed body reads `.re`/`.im`, so a bare number must be
+ *      boxed into `{re, im:0}`. */
+export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
+  if (paramType?.kind === "Numeric" && !isMultiElement(paramType)) {
+    const nty = paramType as NumericType;
+    // (1) Unwrap a 1×1 tensor flowing into a scalar param to its element.
+    if (isRuntimeTensor(v) && v.data.length === 1) {
+      if (nty.isComplex || v.imag !== undefined) {
+        return { re: v.data[0], im: v.imag?.[0] ?? 0 };
+      }
+      return v.data[0];
+    }
+    // (2) Box a real/logical/complex scalar for a complex-scalar param.
+    if (nty.isComplex) {
+      if (isRuntimeNumber(v)) return { re: v as number, im: 0 };
+      if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
+      if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
+    }
   }
   if (isRuntimeNumber(v)) return v;
   if (isRuntimeLogical(v)) return v ? 1 : 0;

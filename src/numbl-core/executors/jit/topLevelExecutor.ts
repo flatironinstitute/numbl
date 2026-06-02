@@ -207,9 +207,11 @@ export const jitTopLevelExecutor: Executor<
       // tracks textual references); pass undefined through and let
       // mtoc2's spec body fail at the first use if so.
       const inputValues: unknown[] = [];
-      for (const name of d.inputs) {
-        const rv = interp.env.get(name);
-        inputValues.push(rv === undefined ? undefined : numblToJit(rv));
+      for (let i = 0; i < d.inputs.length; i++) {
+        const rv = interp.env.get(d.inputs[i]);
+        inputValues.push(
+          rv === undefined ? undefined : numblToJit(rv, d.compilerInputTypes[i])
+        );
       }
       const result = compiled.specFn(...inputValues);
       // Write outputs back to numbl's env. The shape mirrors

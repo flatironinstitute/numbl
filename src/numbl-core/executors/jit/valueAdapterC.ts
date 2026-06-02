@@ -221,6 +221,12 @@ function marshalOneInput(ctx: MarshalCtx, ty: Type, v: RuntimeValue): unknown {
       if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
       if (isRuntimeNumber(v)) return { re: v, im: 0 };
       if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
+      // A 1×1 tensor compiled as a scalar param: unwrap to its element
+      // (the compiler collapses [1,1] to a scalar; without this the
+      // tensor value has no scalar slot → undefined → NaN).
+      if (isRuntimeTensor(v) && v.data.length === 1) {
+        return { re: v.data[0], im: v.imag?.[0] ?? 0 };
+      }
       return undefined;
     }
     // Scalar — mtoc2's C ABI passes every single-element real numeric
@@ -229,6 +235,8 @@ function marshalOneInput(ctx: MarshalCtx, ty: Type, v: RuntimeValue): unknown {
     // proper double.
     if (isRuntimeNumber(v)) return v;
     if (isRuntimeLogical(v)) return v ? 1 : 0;
+    // A 1×1 tensor compiled as a scalar param: unwrap to its element.
+    if (isRuntimeTensor(v) && v.data.length === 1) return v.data[0];
     return undefined;
   }
   return undefined;

@@ -198,7 +198,7 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
     }
     try {
       const compilerArgs = d.args.map((v, i) =>
-        numblToJit(v as never, d.argTypes[i])
+        numblToJit(v as never, d.compilerArgTypes[i])
       );
       const result = compiled.specFn(...compilerArgs);
       // mtoc2 return-shape convention:
