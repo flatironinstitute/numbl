@@ -1,6 +1,20 @@
-import { Box, CircularProgress, Link, Typography } from "@mui/material";
+import ShareIcon from "@mui/icons-material/Share";
+import {
+  Box,
+  CircularProgress,
+  IconButton,
+  Link,
+  Tooltip,
+  Typography,
+} from "@mui/material";
+import { useCallback, useState } from "react";
 import { useStaticProjectFiles } from "../hooks/useStaticProjectFiles";
 import { IDEWorkspace } from "../components/IDEWorkspace";
+import { encodeShareData } from "../utils/shareUrl";
+
+// Shared links always point at the canonical numbl IDE, not the host this
+// static bundle happens to be deployed on (GitHub Pages, custom domain, etc.).
+const NUMBL_ORIGIN = "https://numbl.org";
 
 /**
  * Standalone app for a statically-deployed numbl project. Loads the baked-in
@@ -29,6 +43,28 @@ export function SiteApp() {
     loadAllContents,
     contentCache,
   } = useStaticProjectFiles();
+
+  const [copyFeedback, setCopyFeedback] = useState(false);
+
+  const handleShare = useCallback(async () => {
+    try {
+      const allContents = await loadAllContents();
+      const encoded = encodeShareData(files, allContents, activeFileId);
+      const url = `${NUMBL_ORIGIN}/share#${encoded}`;
+      if (url.length > 64000) {
+        alert(
+          "Project is too large to share via URL. Try reducing the number or size of files."
+        );
+        return;
+      }
+      await navigator.clipboard.writeText(url);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    } catch (e) {
+      console.error("Failed to generate share URL:", e);
+      alert("Failed to generate share URL.");
+    }
+  }, [files, activeFileId, loadAllContents]);
 
   if (loading) {
     return (
@@ -65,6 +101,11 @@ export function SiteApp() {
           </Typography>
         )}
       </Typography>
+      <Tooltip title={copyFeedback ? "Copied!" : "Copy shareable URL"}>
+        <IconButton size="small" onClick={handleShare} sx={{ mr: 0.5 }}>
+          <ShareIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
       <Link
         href="https://numbl.org"
         target="_blank"
