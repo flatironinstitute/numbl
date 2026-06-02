@@ -80,7 +80,8 @@ export function drawPlot(
   xlim?: [number | null, number | null],
   ylim?: [number | null, number | null],
   yDir?: "normal" | "reverse",
-  axisVisible?: boolean
+  axisVisible?: boolean,
+  boxOn?: boolean
 ) {
   _activeColormapData = colormapData;
   const ctx = canvas.getContext("2d");
@@ -521,7 +522,17 @@ export function drawPlot(
   if (showAxes) {
     ctx.strokeStyle = "#333";
     ctx.lineWidth = 1;
-    ctx.strokeRect(effMarginLeft, effMarginTop, effPlotW, effPlotH);
+    // `box on` (default) draws the full rectangle; `box off` draws only the
+    // left and bottom axis lines (MATLAB's L-shaped axes).
+    if (boxOn === false) {
+      ctx.beginPath();
+      ctx.moveTo(effMarginLeft, effMarginTop);
+      ctx.lineTo(effMarginLeft, effMarginTop + effPlotH);
+      ctx.lineTo(effMarginLeft + effPlotW, effMarginTop + effPlotH);
+      ctx.stroke();
+    } else {
+      ctx.strokeRect(effMarginLeft, effMarginTop, effPlotW, effPlotH);
+    }
 
     const xTicks = logX
       ? generateLogTicks(xMin, xMax)

@@ -313,6 +313,7 @@ export type PlotInstruction =
   | { type: "set_legend"; labels: string[] }
   | { type: "set_sgtitle"; text: string }
   | { type: "set_grid"; value: boolean }
+  | { type: "set_box"; value: boolean }
   | { type: "set_colorbar"; value: string; location?: string }
   | { type: "set_colormap"; name: string; data?: number[][] }
   | { type: "set_axis"; value: string }

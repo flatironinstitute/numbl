@@ -97,6 +97,7 @@ export function plotInstr(
     | { type: "set_subplot"; rows: unknown; cols: unknown; index: unknown }
     | { type: "set_sgtitle"; text: unknown }
     | { type: "set_grid"; value: unknown }
+    | { type: "set_box"; value: unknown }
     | { type: "set_zlabel"; text: unknown }
     | { type: "set_colorbar"; value: unknown; location?: unknown }
     | { type: "set_colormap"; name: unknown; data?: number[][] }
@@ -161,6 +162,12 @@ export function plotInstr(
     case "set_grid":
       plotInstructions.push({
         type: "set_grid",
+        value: resolveOnOff(instr.value),
+      });
+      break;
+    case "set_box":
+      plotInstructions.push({
+        type: "set_box",
         value: resolveOnOff(instr.value),
       });
       break;

@@ -43,6 +43,9 @@ export type AxesState = {
   shading?: "faceted" | "flat" | "interp";
   legend?: string[];
   gridOn?: boolean;
+  /** Axes border. Undefined/true → full rectangle (numbl's default, matching
+   *  MATLAB `box on`); false → only the left and bottom axis lines (`box off`). */
+  boxOn?: boolean;
   colorbar?: boolean;
   colorbarLocation?: string;
   colormap?: string;
@@ -413,6 +416,8 @@ export const figuresReducer = (
     }
     case "set_grid":
       return updateAxes(state, { gridOn: action.value });
+    case "set_box":
+      return updateAxes(state, { boxOn: action.value });
     case "set_colorbar":
       return updateAxes(state, {
         colorbar: action.value !== "off",
@@ -482,6 +487,7 @@ export const figuresReducer = (
             ylabel: prev.ylabel,
             zlabel: prev.zlabel,
             gridOn: prev.gridOn,
+            boxOn: prev.boxOn,
             colorbar: prev.colorbar,
             colorbarLocation: prev.colorbarLocation,
             colormap: prev.colormap,

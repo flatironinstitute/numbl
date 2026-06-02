@@ -269,6 +269,12 @@ export function dispatchPlotBuiltin(
       }
       return true;
     }
+    case "box": {
+      if (args.length > 0) {
+        plotInstr(instructions, { type: "set_box", value: args[0] });
+      }
+      return true;
+    }
     case "close": {
       if (args.length > 0 && toString(args[0]) === "all") {
         plotInstr(instructions, { type: "close_all" });
@@ -563,6 +569,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "sgtitle",
   "hold",
   "grid",
+  "box",
   "close",
   "clf",
   "cla",

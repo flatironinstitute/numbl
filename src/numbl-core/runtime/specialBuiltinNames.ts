@@ -75,6 +75,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "ylabel",
   "hold",
   "grid",
+  "box",
   "legend",
   "close",
   "sgtitle",

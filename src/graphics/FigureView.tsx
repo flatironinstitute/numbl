@@ -168,6 +168,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       ylabel={axes.ylabel}
       legend={axes.legend}
       gridOn={axes.gridOn}
+      boxOn={axes.boxOn}
       imagescTrace={axes.imagescTrace}
       pcolorTraces={axes.pcolorTraces}
       contourTraces={axes.contourTraces}
@@ -203,6 +204,7 @@ function PlotCanvas({
   ylabel,
   legend,
   gridOn,
+  boxOn,
   imagescTrace,
   pcolorTraces,
   contourTraces,
@@ -234,6 +236,7 @@ function PlotCanvas({
   ylabel?: string;
   legend?: string[];
   gridOn?: boolean;
+  boxOn?: boolean;
   imagescTrace?: AxesState["imagescTrace"];
   pcolorTraces?: AxesState["pcolorTraces"];
   contourTraces?: AxesState["contourTraces"];
@@ -296,7 +299,8 @@ function PlotCanvas({
       xlim,
       ylim,
       yDir,
-      axisVisible
+      axisVisible,
+      boxOn
     );
   }, [
     traces,
@@ -329,6 +333,7 @@ function PlotCanvas({
     ylim,
     yDir,
     axisVisible,
+    boxOn,
   ]);
 
   useEffect(() => {
