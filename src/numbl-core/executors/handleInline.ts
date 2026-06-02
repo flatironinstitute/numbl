@@ -19,6 +19,20 @@
  * detect captures against the handle's own recorded definition
  * environment, so the test reflects what the handle actually closed
  * over, not a syntactic guess.
+ *
+ * A second constraint applies at the relocation site. A body name that
+ * is NOT a variable in the def env resolves at definition time to a
+ * function (or is undefined). After relocation into the loop's synthetic
+ * scope, that same name may be bound as a variable (a loop input or
+ * assigned local). Re-lowering would then capture the loop variable
+ * instead of resolving the function/undefined the handle saw — silently
+ * turning `@(t) sq(t)` from a function call into an array index, or
+ * masking an undefined-variable error. So the caller passes the set of
+ * names that will be in scope at the relocation site, and we decline
+ * when a free body name collides with it. A name that is purely a
+ * function (never an env variable) is not in that set, so the common
+ * `@(t) sq(t)` case still inlines; only the genuine shadowing case
+ * declines (and falls back to the interpreter).
  */
 
 import {
@@ -104,7 +118,9 @@ function collectReferenced(e: Expr, out: Set<string>): void {
  *    shadow across files), AND
  *  - for an anonymous handle, it is capture-free: no name its body
  *    references (other than its own params) exists as a variable in the
- *    handle's recorded definition environment.
+ *    handle's recorded definition environment, AND no free body name
+ *    collides with `relocScopeNames` (the names that will be in scope
+ *    where the handle is inlined).
  *
  * Named (`@name`) handles are always capture-free. Anything the lowerer
  * ultimately can't compile (e.g. a builtin target) simply makes the
@@ -112,7 +128,8 @@ function collectReferenced(e: Expr, out: Set<string>): void {
  */
 export function inlinableHandleExpr(
   val: unknown,
-  compileFile: string
+  compileFile: string,
+  relocScopeNames?: ReadonlySet<string>
 ): Expr | null {
   if (!isRuntimeFunction(val as RuntimeValue)) return null;
   const fn = val as RuntimeFunction;
@@ -131,6 +148,10 @@ export function inlinableHandleExpr(
   for (const name of referenced) {
     if (params.has(name)) continue;
     if (env.vars.has(name)) return null; // a real capture — not inlinable
+    // A non-captured free name resolved to a function/undefined at
+    // definition time. If the relocation scope binds it as a variable,
+    // inlining would silently re-resolve it to that variable — decline.
+    if (relocScopeNames?.has(name)) return null;
   }
   return ast;
 }

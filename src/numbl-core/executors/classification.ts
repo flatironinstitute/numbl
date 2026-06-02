@@ -237,6 +237,14 @@ export function classifyLoop(
   // spec body. A handle reassigned in the loop (`analysis.outputs`) is
   // not constant, so it stays a regular (declining) input.
   const rawOutputs = new Set(analysis.outputs);
+  // Names that will be in scope inside the loop's synthetic spec, against
+  // which a handle's free body names must not collide (a collision would
+  // make the inlined handle re-resolve a function/undefined to a loop
+  // variable). The loop's env inputs, its assigned locals, and the For
+  // variable all become in-scope variables of the synthetic function.
+  const relocScopeNames = new Set<string>(gathered.inputs);
+  for (const o of analysis.outputs) relocScopeNames.add(o);
+  if (stmt.type === "For") relocScopeNames.add(stmt.varName);
   const constHandles: ConstHandle[] = [];
   const inputs: string[] = [];
   const inputTypes: JitType[] = [];
@@ -248,7 +256,8 @@ export function classifyLoop(
     ) {
       const expr = inlinableHandleExpr(
         interp.env.get(name),
-        interp.currentFile
+        interp.currentFile,
+        relocScopeNames
       );
       if (expr) {
         constHandles.push({ name, expr, identity: handleIdentity(expr) });
