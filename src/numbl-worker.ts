@@ -196,6 +196,7 @@ self.onmessage = (e: MessageEvent) => {
     // Choose VFS/adapter/variables based on persistent flag
     let adapter: BrowserFileIOAdapter | undefined;
     let sysAdapter: BrowserSystemAdapter;
+    let runVfs: VirtualFileSystem;
     let useVariableValues: Record<string, RuntimeValue>;
     let useHoldState: boolean | undefined;
     let useWorkspaceFiles: WorkspaceFile[];
@@ -219,6 +220,7 @@ self.onmessage = (e: MessageEvent) => {
       }
       adapter = new BrowserFileIOAdapter(vfs);
       sysAdapter = systemAdapter;
+      runVfs = vfs;
       useVariableValues = variableValues;
       useHoldState = holdState;
       useWorkspaceFiles =
@@ -238,11 +240,25 @@ self.onmessage = (e: MessageEvent) => {
       }
       adapter = new BrowserFileIOAdapter(freshVfs);
       sysAdapter = new BrowserSystemAdapter(freshVfs);
+      runVfs = freshVfs;
       useVariableValues = {};
       useHoldState = undefined;
       useWorkspaceFiles = wsFiles;
       useSearchPaths = searchPaths;
     }
+
+    // Treat the directory of the script being run as the current working
+    // directory, mirroring the CLI `run` command (which chdir's into
+    // dirname(filepath)). Project files were written relative to the VFS
+    // root, so resolving the script's project-relative name against the
+    // current cwd (the root at this point) yields its absolute path; chdir
+    // into its parent. A root-level script resolves to the root, leaving the
+    // cwd unchanged. The directory then becomes the first-priority implicit
+    // search path (see executeCode), so sibling functions and relative file
+    // I/O resolve against the script's folder.
+    const mainAbsPath = runVfs.normalizePath(activeFileName);
+    const lastSlash = mainAbsPath.lastIndexOf("/");
+    runVfs.setCwd(lastSlash > 0 ? mainAbsPath.slice(0, lastSlash) : "/");
 
     const runInputSAB = e.data.inputSAB ?? inputSAB;
 
