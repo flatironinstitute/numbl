@@ -60,6 +60,7 @@ export class StatementParser extends ClassParser {
       case Token.If:
         return this.parseIf();
       case Token.For:
+      case Token.ParFor:
         return this.parseFor();
       case Token.While:
         return this.parseWhile();

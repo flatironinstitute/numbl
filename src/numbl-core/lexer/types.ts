@@ -14,6 +14,7 @@ export enum Token {
   Else,
   ElseIf,
   For,
+  ParFor,
   While,
   Break,
   Continue,

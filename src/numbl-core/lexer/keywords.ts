@@ -8,6 +8,7 @@ export const KEYWORDS: ReadonlyMap<string, Token> = new Map([
   ["else", Token.Else],
   ["elseif", Token.ElseIf],
   ["for", Token.For],
+  ["parfor", Token.ParFor],
   ["while", Token.While],
   ["break", Token.Break],
   ["continue", Token.Continue],

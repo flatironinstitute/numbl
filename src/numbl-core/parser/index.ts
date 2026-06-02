@@ -61,6 +61,7 @@ function parseWithOptions(
 const BLOCK_OPENERS = new Set<Token>([
   Token.If,
   Token.For,
+  Token.ParFor,
   Token.While,
   Token.Switch,
   Token.Try,

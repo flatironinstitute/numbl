@@ -59,13 +59,22 @@ export class ControlFlowParser extends CommandParser {
 
   parseFor(): Stmt {
     const start = this.tokens[this.pos].position;
-    this.consume(Token.For);
+    // `parfor` parses exactly like `for` and runs serially (results are
+    // order-independent). Accept both opener tokens.
+    if (!this.consume(Token.For)) {
+      this.consume(Token.ParFor);
+    }
     const hasParen = this.consume(Token.LParen);
     const varName = this.expectIdent();
     if (!this.consume(Token.Assign)) {
       throw this.error("expected '='");
     }
     const expr = this.parseExpr();
+    // parfor's optional worker-count argument, e.g. `parfor (n=1:N, W)` — parse
+    // and ignore it (serial execution is correct for order-independent bodies).
+    if (hasParen && this.consume(Token.Comma)) {
+      this.parseExpr();
+    }
     if (hasParen && !this.consume(Token.RParen)) {
       throw this.error("expected ')' to close for loop");
     }
