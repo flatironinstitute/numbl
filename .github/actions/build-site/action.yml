@@ -18,8 +18,14 @@ inputs:
     description: "Default file to open in the viewer, e.g. main.m."
     default: ""
   numbl-version:
-    description: "numbl npm version to use (must include the build-site command)."
+    description: "numbl npm version to use (ignored when numbl-ref is set)."
     default: "latest"
+  numbl-ref:
+    description: "Build numbl from source at this git ref (branch, tag, or SHA) instead of the published npm package — no release required. Leave empty to use the npm package (numbl-version)."
+    default: ""
+  numbl-repo:
+    description: "GitHub repository (owner/name) to build numbl from when numbl-ref is set."
+    default: "flatironinstitute/numbl"
   node-version:
     description: "Node.js version."
     default: "20"
@@ -40,9 +46,19 @@ runs:
       env:
         REPO_NAME: ${{ github.event.repository.name }}
         OWNER: ${{ github.repository_owner }}
+        IN_BASE: ${{ inputs.base }}
+        PROJECT_DIR: ${{ inputs.project-dir }}
+        OUT_DIR: ${{ inputs.out-dir }}
+        IN_TITLE: ${{ inputs.title }}
+        IN_ENTRY: ${{ inputs.entry }}
+        NUMBL_VERSION: ${{ inputs.numbl-version }}
+        NUMBL_REF: ${{ inputs.numbl-ref }}
+        NUMBL_REPO: ${{ inputs.numbl-repo }}
       run: |
         set -euo pipefail
-        BASE='${{ inputs.base }}'
+
+        # Resolve the deploy base path (e.g. /my-repo/) if not given explicitly.
+        BASE="$IN_BASE"
         if [ -z "$BASE" ]; then
           repo_lc=$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
           owner_lc=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
@@ -52,11 +68,38 @@ runs:
             BASE="/$REPO_NAME/"
           fi
         fi
-        args=( '${{ inputs.project-dir }}' --out '${{ inputs.out-dir }}' --base "$BASE" )
-        if [ -n '${{ inputs.title }}' ]; then args+=( --title '${{ inputs.title }}' ); fi
-        if [ -n '${{ inputs.entry }}' ]; then args+=( --entry '${{ inputs.entry }}' ); fi
-        echo "numbl build-site ${args[*]}"
-        npx --yes "numbl@${{ inputs.numbl-version }}" build-site "${args[@]}"
+
+        if [ -z "$NUMBL_REF" ]; then
+          # Default: use the published npm package.
+          args=( "$PROJECT_DIR" --out "$OUT_DIR" --base "$BASE" )
+          if [ -n "$IN_TITLE" ]; then args+=( --title "$IN_TITLE" ); fi
+          if [ -n "$IN_ENTRY" ]; then args+=( --entry "$IN_ENTRY" ); fi
+          echo "numbl@$NUMBL_VERSION build-site ${args[*]}"
+          npx --yes "numbl@$NUMBL_VERSION" build-site "${args[@]}"
+        else
+          # Opt-in: build numbl from source at NUMBL_REF (no release required).
+          # Use absolute paths since build-site runs from the numbl source tree,
+          # and clone outside the workspace so the source is not bundled.
+          PROJECT_ABS=$(realpath "$PROJECT_DIR")
+          OUT_ABS=$(realpath -m "$OUT_DIR")
+          SRC="$RUNNER_TEMP/numbl-src"
+          echo "Building numbl from source: $NUMBL_REPO@$NUMBL_REF"
+          rm -rf "$SRC"
+          git init -q "$SRC"
+          git -C "$SRC" remote add origin "https://github.com/$NUMBL_REPO.git"
+          git -C "$SRC" fetch -q --depth 1 origin "$NUMBL_REF"
+          git -C "$SRC" checkout -q FETCH_HEAD
+          (
+            cd "$SRC"
+            npm ci
+            npm run build:site-viewer   # produces dist-site-viewer/ that build-site bundles
+            args=( "$PROJECT_ABS" --out "$OUT_ABS" --base "$BASE" )
+            if [ -n "$IN_TITLE" ]; then args+=( --title "$IN_TITLE" ); fi
+            if [ -n "$IN_ENTRY" ]; then args+=( --entry "$IN_ENTRY" ); fi
+            echo "numbl (source $NUMBL_REF) build-site ${args[*]}"
+            npx tsx src/cli.ts build-site "${args[@]}"
+          )
+        fi
 
     - name: Configure Pages
       if: ${{ inputs.upload-artifact == 'true' }}
