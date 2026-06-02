@@ -156,6 +156,7 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
           funcDecl,
           argTypes: d.compilerInputTypes as CompilerType[],
           nargout,
+          entrySynthetic: true,
         });
         source = r.source;
         signature = r.signature;

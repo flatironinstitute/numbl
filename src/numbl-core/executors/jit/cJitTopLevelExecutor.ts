@@ -171,6 +171,7 @@ export const cJitTopLevelExecutor: Executor<
         funcDecl,
         argTypes: d.compilerInputTypes as CompilerType[],
         nargout,
+        entrySynthetic: true,
       });
       source = r.source;
       signature = r.signature;

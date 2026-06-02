@@ -32,6 +32,7 @@ import { withoutExact, type Type } from "./lowering/types.js";
 import { emitProgram } from "./codegen/emit.js";
 import type { IRFunc, IRProgram, IRStmt } from "./lowering/ir.js";
 import { UnsupportedConstruct } from "./lowering/errors.js";
+import { assertDefiniteAssignment } from "./lowering/definiteAssign.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -83,6 +84,13 @@ export interface CompileSpecCArgs {
   argTypes: Type[];
   /** Number of outputs the call site requests. Salts the spec key. */
   nargout: number;
+  /** True when the entry `funcDecl` is a synthetic wrapper (loop or
+   *  top-level body), whose declared outputs may include the loop variable
+   *  and other loop-body locals that are legitimately unassigned on a
+   *  zero-iteration run. Suppresses the output-definite-assignment check on
+   *  the entry spec (callees are still fully checked). Defaults to false
+   *  (a real user-function entry, e.g. the call executor). */
+  entrySynthetic?: boolean;
 }
 
 export interface CompileSpecCResult {
@@ -116,10 +124,24 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
   // Same boundary check the JS path uses: bare non-void ExprStmts
   // would bind to numbl's `ans`, which mtoc2 has no protocol for.
   assertNoNonVoidBareExprStmts(spec);
+  // Decline (fall back to JS-JIT / interpreter) when any function may read a
+  // local before it is definitely assigned. C predeclares locals to 0, so it
+  // would silently return that default instead of raising MATLAB's
+  // undefined-variable error like --opt 0/1 do. See definiteAssign.ts.
   const prog: IRProgram = {
     topLevelStmts: [],
     functions: new Map(lowerer.specializations),
   };
+  // The entry `spec` is a synthetic wrapper for the loop/top-level
+  // executors (its "outputs" include the loop variable, legitimately
+  // unassigned on a zero-iteration run), so only run the output-assignment
+  // check on it for a real user-function entry (the call executor).
+  const checkEntryOutputs = args.entrySynthetic !== true;
+  assertDefiniteAssignment(spec, { checkOutputs: checkEntryOutputs });
+  for (const fn of prog.functions.values()) {
+    if (fn.cName === spec.cName) continue; // already checked above
+    assertDefiniteAssignment(fn, { checkOutputs: true });
+  }
   const source = emitProgram(prog, {
     workspace,
     exposeSpec: spec.cName,
