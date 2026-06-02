@@ -1130,7 +1130,7 @@ export function IDEWorkspace({
               )}
             </Box>
 
-            <Box sx={{ flexGrow: 1 }}>
+            <Box sx={{ flexGrow: 1, minHeight: 0 }}>
               {activeFileIsBinary ? (
                 <Box
                   sx={{
