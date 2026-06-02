@@ -550,12 +550,20 @@ function emitIndexSliceStoreJs(
     if (slot.kind === "IndexVec") {
       useRuntimeByName(state, "mtoc2_scalar_index");
       const idxE = emitExpr(slot.expr, state);
+      // Tensor RHS must match the number of selected positions; a
+      // mismatch is a "Subscripted assignment dimension mismatch" in the
+      // interpreter (--opt 0). Without the check the gather reads past
+      // the RHS end → silent NaN/truncation.
+      const lenCheck = rhsIsScalar
+        ? ``
+        : `if (_mtoc2_rhs.data.length !== _mtoc2_n) throw new Error("Subscripted assignment dimension mismatch"); `;
       return (
         `${indent}{ ` +
         `const _mtoc2_rhs = ${rhsExpr}; ` +
         `const _mtoc2_ix = ${idxE}; ` +
         `const _mtoc2_ixd = _mtoc2_ix.mtoc2Tag === "tensor" ? _mtoc2_ix.data : [_mtoc2_ix]; ` +
         `const _mtoc2_n = _mtoc2_ixd.length; ` +
+        lenCheck +
         `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
         `const _mtoc2_off = mtoc2_idx_lin_grow_js(${baseName}, _mtoc2_ixd[_mtoc2_k]); ` +
         `${writeAt("_mtoc2_off", "_mtoc2_k")} ` +
@@ -568,6 +576,14 @@ function emitIndexSliceStoreJs(
       // truthy positions, write the RHS into each. Scalar RHS
       // broadcasts; tensor RHS reads positionally.
       const maskE = emitExpr(slot.expr, state);
+      // Tensor RHS must have exactly as many elements as truthy mask
+      // positions; otherwise the interpreter (--opt 0) raises
+      // "Subscripted assignment dimension mismatch". Without this check
+      // the per-slot write reads past the RHS end (short RHS → NaN) or
+      // ignores trailing RHS elements (long RHS → silent truncation).
+      const lenCheck = rhsIsScalar
+        ? ``
+        : `if (_mtoc2_rhs.data.length !== _mtoc2_n) throw new Error("Subscripted assignment dimension mismatch"); `;
       return (
         `${indent}{ ` +
         `const _mtoc2_rhs = ${rhsExpr}; ` +
@@ -577,6 +593,7 @@ function emitIndexSliceStoreJs(
         `for (let _mtoc2_mi = 0; _mtoc2_mi < _mtoc2_md.length; _mtoc2_mi++) ` +
         `if (_mtoc2_md[_mtoc2_mi] !== 0) _mtoc2_ix.push(_mtoc2_mi); ` +
         `const _mtoc2_n = _mtoc2_ix.length; ` +
+        lenCheck +
         `for (let _mtoc2_k = 0; _mtoc2_k < _mtoc2_n; _mtoc2_k++) { ` +
         `${writeAt("_mtoc2_ix[_mtoc2_k]", "_mtoc2_k")} ` +
         `} ` +
