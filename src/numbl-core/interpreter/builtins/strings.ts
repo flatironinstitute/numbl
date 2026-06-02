@@ -15,6 +15,7 @@ import {
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
+  isRuntimeComplexNumber,
 } from "../../runtime/types.js";
 import {
   RTV,
@@ -1187,7 +1188,12 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length < 1 || argTypes.length > 2) return null;
     const a = argTypes[0];
-    if (a.kind !== "number" && a.kind !== "boolean" && a.kind !== "tensor")
+    if (
+      a.kind !== "number" &&
+      a.kind !== "boolean" &&
+      a.kind !== "tensor" &&
+      a.kind !== "complex_or_number"
+    )
       return null;
     return {
       outputTypes: [{ kind: "char" }],
@@ -1200,16 +1206,24 @@ registerIBuiltin({
             return Number.isNaN(n) ? "NaN" : n > 0 ? "Inf" : "-Inf";
           return prec >= 0 ? Number(n.toPrecision(prec)).toString() : String(n);
         };
+        // Complex element: MATLAB writes `re+imi` / `re-imi` (always an
+        // explicit imaginary part for a complex-typed value, e.g. `0+1i`).
+        const fmtC = (re: number, im: number): string =>
+          fmt(re) + (im < 0 ? "-" : "+") + fmt(Math.abs(im)) + "i";
+        if (isRuntimeComplexNumber(v)) return RTV.char(fmtC(v.re, v.im));
         if (isRuntimeNumber(v)) return RTV.char(fmt(v));
         if (isRuntimeTensor(v)) {
+          const im = v.imag;
+          const cell = (k: number): string =>
+            im !== undefined ? fmtC(v.data[k], im[k]) : fmt(v.data[k]);
           const nRows = v.shape[0] || 1;
           const nCols = v.data.length / nRows;
-          if (nRows === 1 && nCols === 1) return RTV.char(fmt(v.data[0]));
+          if (nRows === 1 && nCols === 1) return RTV.char(cell(0));
           const rows: string[] = [];
           for (let r = 0; r < nRows; r++) {
             const elems: string[] = [];
             for (let c = 0; c < nCols; c++) {
-              elems.push(fmt(v.data[c * nRows + r]));
+              elems.push(cell(c * nRows + r));
             }
             rows.push(elems.join(" "));
           }
