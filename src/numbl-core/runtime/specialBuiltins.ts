@@ -24,6 +24,7 @@ import {
   isRuntimeDictionary,
   isRuntimeStruct,
   isRuntimeSparseMatrix,
+  type RuntimeTensor,
 } from "../runtime/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
@@ -1843,19 +1844,17 @@ function eigsReIm(v: RuntimeValue): { re: number[]; im: number[] } {
 }
 
 /** Coerce a dispatch result (number or tensor) to a RuntimeTensor. */
-function eigsAsTensor(v: unknown): RuntimeValue & { data: Float64Array } {
+function eigsAsTensor(v: unknown): RuntimeTensor {
   const rv = ensureRuntimeValue(v as RuntimeValue);
-  if (isRuntimeTensor(rv)) return rv as RuntimeValue & { data: Float64Array };
+  if (isRuntimeTensor(rv)) return rv;
   if (isRuntimeNumber(rv))
-    return RTV.tensor(allocFloat64Array([rv]), [1, 1]) as RuntimeValue & {
-      data: Float64Array;
-    };
+    return RTV.tensor(allocFloat64Array([rv]), [1, 1]) as RuntimeTensor;
   if (isRuntimeComplexNumber(rv))
     return RTV.tensor(
       allocFloat64Array([rv.re]),
       [1, 1],
       allocFloat64Array([rv.im])
-    ) as RuntimeValue & { data: Float64Array };
+    ) as RuntimeTensor;
   throw new RuntimeError("eigs: expected a numeric matrix");
 }
 
