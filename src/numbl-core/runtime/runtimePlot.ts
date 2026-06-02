@@ -694,7 +694,14 @@ export function legendCall(
   // Collect string arguments as labels, ignoring name-value pairs like 'Location','best'
   const labels: string[] = [];
   for (let i = 0; i < args.length; i++) {
-    const s = toString(args[i]);
+    // legend({'a','b'}, ...): a cell array of labels expands into the label
+    // list (MATLAB accepts both this and the flat legend('a','b') form).
+    const arg = args[i];
+    if (isRuntimeCell(arg)) {
+      for (const elem of arg.data) labels.push(toString(elem));
+      continue;
+    }
+    const s = toString(arg);
     // Skip known name-value pairs
     if (
       s === "Location" ||
@@ -703,7 +710,17 @@ export function legendCall(
       s === "Box" ||
       s === "Color" ||
       s === "EdgeColor" ||
-      s === "TextColor"
+      s === "TextColor" ||
+      s === "Interpreter" ||
+      s === "AutoUpdate" ||
+      s === "NumColumns" ||
+      s === "NumColumnsMode" ||
+      s === "Position" ||
+      s === "Units" ||
+      s === "FontName" ||
+      s === "FontWeight" ||
+      s === "FontAngle" ||
+      s === "LineWidth"
     ) {
       i++; // skip the value
       continue;
