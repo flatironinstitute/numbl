@@ -26,6 +26,16 @@ static double mtoc2_mod_real(double a, double b) {
   return r;
 }
 
+/* Power matching ECMAScript `Math.pow` (which numbl's interpreter and
+ * JS-JIT both use), NOT C99 `pow`. They differ only when |base| == 1 and
+ * the exponent is non-finite: C99 `pow(±1, ±inf) == pow(1, nan) == 1`,
+ * but `Math.pow` returns NaN there. Using bare C `pow` here would make
+ * the C-JIT (`--opt 2`) disagree with `--opt 0/1` for e.g. `1 .^ NaN`. */
+static double mtoc2_pow_real(double a, double b) {
+  if ((a == 1.0 || a == -1.0) && !isfinite(b)) return NAN;
+  return pow(a, b);
+}
+
 #define MTOC2_DEFINE_ELEMWISE_TT_FN(name, FN)                               \
   static mtoc2_tensor_t name(mtoc2_tensor_t a, mtoc2_tensor_t b) {          \
     long n = 1;                                                             \
@@ -115,13 +125,13 @@ MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_mod_tt,   mtoc2_mod_real)
 MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_rem_tt,   fmod)
 MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_atan2_tt, atan2)
 MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_hypot_tt, hypot)
-MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_power_tt, pow)
+MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_power_tt, mtoc2_pow_real)
 
 MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_mod_ts,   mtoc2_mod_real)
 MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_rem_ts,   fmod)
 MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_atan2_ts, atan2)
 MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_hypot_ts, hypot)
-MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_power_ts, pow)
+MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_power_ts, mtoc2_pow_real)
 
 /* Non-commutative non-fn ops (mod, rem, atan2, power) need scalar-
  * first variants. `hypot` is commutative; the builtin emits `_ts`
@@ -129,10 +139,10 @@ MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_power_ts, pow)
 MTOC2_DEFINE_ELEMWISE_ST_FN(mtoc2_tensor_mod_st,   mtoc2_mod_real)
 MTOC2_DEFINE_ELEMWISE_ST_FN(mtoc2_tensor_rem_st,   fmod)
 MTOC2_DEFINE_ELEMWISE_ST_FN(mtoc2_tensor_atan2_st, atan2)
-MTOC2_DEFINE_ELEMWISE_ST_FN(mtoc2_tensor_power_st, pow)
+MTOC2_DEFINE_ELEMWISE_ST_FN(mtoc2_tensor_power_st, mtoc2_pow_real)
 
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_mod_bcast_tt,   mtoc2_mod_real)
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_rem_bcast_tt,   fmod)
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_atan2_bcast_tt, atan2)
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_hypot_bcast_tt, hypot)
-MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_power_bcast_tt, pow)
+MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_power_bcast_tt, mtoc2_pow_real)

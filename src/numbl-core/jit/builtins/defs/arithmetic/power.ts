@@ -247,7 +247,11 @@ export const power: Builtin = {
         useRuntime("mtoc2_cscalar");
         return `mtoc2_cpow(${argsC[0]}, ${argsC[1]})`;
       }
-      return `pow(${argsC[0]}, ${argsC[1]})`;
+      // `mtoc2_pow_real`, not bare C `pow`: the interpreter and JS-JIT use
+      // `Math.pow`, which returns NaN for |base|==1 with a non-finite
+      // exponent (C99 `pow` returns 1). Keeps `--opt 2` in agreement.
+      useRuntime("mtoc2_tensor_elemwise_real_fn");
+      return `mtoc2_pow_real(${argsC[0]}, ${argsC[1]})`;
     }
     useRuntime("mtoc2_tensor_elemwise_real_fn");
     if (aMulti && bMulti) {
