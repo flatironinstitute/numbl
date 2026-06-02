@@ -27,6 +27,7 @@ import { dorgqr_optimized } from "../../ts-lapack/src/SRC/dorgqr_optimized.js";
 import { dgeqrf_optimized } from "../../ts-lapack/src/SRC/dgeqrf_optimized.js";
 import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
+import { eigComplexTs } from "./ts-lapack-eig-complex.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
   // Copy — dgetrf/dgetri operate in place
@@ -1265,6 +1266,7 @@ const _bridge: LapackBridge = {
   linsolve,
   linsolveComplex,
   eig,
+  eigComplex: eigComplexTs,
   lu,
   svd,
   chol,
