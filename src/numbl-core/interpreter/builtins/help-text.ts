@@ -757,6 +757,23 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Eigenvalues and eigenvectors of square matrix. With three outputs, W contains left eigenvectors.",
   },
+  eigs: {
+    signatures: [
+      "d = eigs(A)",
+      "d = eigs(A, k)",
+      "d = eigs(A, k, sigma)",
+      "d = eigs(A, B, ...)",
+      "d = eigs(Afun, n, ...)",
+      "[V, D, flag] = eigs(...)",
+    ],
+    description:
+      "Subset of k eigenvalues/eigenvectors (default 6). sigma selects which: " +
+      "'largestabs' (default), 'smallestabs', 'largestreal', 'smallestreal', " +
+      "'bothendsreal', 'largestimag', 'smallestimag', 'bothendsimag', or a " +
+      "scalar (eigenvalues closest to it). Supports the generalized problem " +
+      "A*V = B*V*D and a function handle Afun. Computed densely via eig, so " +
+      "convergence options are accepted but ignored and flag is always 0.",
+  },
   svd: {
     signatures: [
       "S = svd(A)",
