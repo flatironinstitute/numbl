@@ -324,6 +324,31 @@ export function IDEWorkspace({
     [allFiles, activeFileId]
   );
 
+  // Open the workspace file targeted by a relative Markdown link (e.g. a
+  // README linking to a script). Matches on the full relative path first,
+  // then on the file's base name as a fallback.
+  const handleMarkdownFileLink = useCallback(
+    (href: string) => {
+      let path = href.split(/[?#]/)[0];
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        /* keep raw path if it isn't valid percent-encoding */
+      }
+      path = path.replace(/^\.\//, "");
+      if (!path) return;
+      const base = (s: string) => s.split("/").pop() ?? s;
+      const match =
+        allFiles.find(f => f.name === path) ??
+        allFiles.find(f => base(f.name) === base(path));
+      if (match) {
+        setActiveFileId(match.id);
+        if (isMobile) setDrawerOpen(false);
+      }
+    },
+    [allFiles, setActiveFileId, isMobile]
+  );
+
   const sortedFigureHandles = useMemo(() => {
     return Object.keys(figures.figs)
       .map(k => Number(k))
@@ -1149,6 +1174,7 @@ export function IDEWorkspace({
                 <Box sx={{ height: "100%", overflow: "auto", p: 3 }}>
                   <MarkdownView
                     source={activeFileData ? fileText(activeFileData) : ""}
+                    onFileLink={handleMarkdownFileLink}
                   />
                 </Box>
               ) : (

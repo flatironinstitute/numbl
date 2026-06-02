@@ -19,6 +19,16 @@ const LANG_ALIAS: Record<string, string> = {
   octave: "matlab",
 };
 
+/**
+ * A relative link that should resolve to a workspace file — i.e. not an
+ * external URL (scheme:// or mailto:), not protocol-relative (//), not
+ * site-absolute (/...), and not an in-page anchor (#...).
+ */
+function isInternalFileLink(href?: string): boolean {
+  if (!href) return false;
+  return !/^([a-z][a-z0-9+.-]*:|\/\/|\/|#)/i.test(href);
+}
+
 /** Styling for rendered Markdown — shared by the docs page and the IDE. */
 const MARKDOWN_SX = {
   "& h1": {
@@ -101,18 +111,51 @@ const MARKDOWN_SX = {
 
 export interface MarkdownViewProps {
   source: string;
+  /**
+   * Called when a relative (in-workspace) link is clicked, with the link's
+   * href. When provided, such links open the target instead of navigating
+   * the browser — used by the IDE to open a linked file in the editor.
+   * External links (http(s), mailto, …) are unaffected.
+   */
+  onFileLink?: (href: string) => void;
 }
 
 /**
  * Renders Markdown (GFM) with syntax-highlighted code fences. Used by the docs
  * page and the IDE's rendered-Markdown view. The caller controls sizing/scroll.
  */
-export function MarkdownView({ source }: MarkdownViewProps) {
+export function MarkdownView({ source, onFileLink }: MarkdownViewProps) {
   return (
     <Box sx={MARKDOWN_SX}>
       <Markdown
         remarkPlugins={[remarkGfm]}
         components={{
+          a({ href, children }) {
+            // Relative link to a workspace file: open it in the editor.
+            if (onFileLink && isInternalFileLink(href)) {
+              return (
+                <a
+                  href={href}
+                  onClick={e => {
+                    e.preventDefault();
+                    onFileLink(href as string);
+                  }}
+                >
+                  {children}
+                </a>
+              );
+            }
+            // External / absolute / anchor links keep default behavior;
+            // open true external URLs in a new tab.
+            const external = !!href && /^[a-z][a-z0-9+.-]*:\/\//i.test(href);
+            return external ? (
+              <a href={href} target="_blank" rel="noopener noreferrer">
+                {children}
+              </a>
+            ) : (
+              <a href={href}>{children}</a>
+            );
+          },
           pre({ children }) {
             const codeEl = children as
               | { props?: { className?: string; children?: unknown } }
