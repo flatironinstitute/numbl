@@ -45,4 +45,21 @@ assert(strcmp(S{1}, 'test'));
 assert(strcmp(S{2}, 'test'));
 assert(strcmp(S{3}, 'test'));
 
+% Linear colon scalar-expand into a 2-D cell
+G = cell(2, 3);
+G(:) = { zeros(2, 2) };
+assert(isequal(size(G), [2 3]));
+assert(isequal(G{1, 1}, zeros(2, 2)));
+assert(isequal(G{2, 3}, zeros(2, 2)));
+% Mutating one slot must not alias the others
+G{1, 1}(1, 1) = 7;
+assert(G{2, 3}(1, 1) == 0);
+
+% Linear colon element-wise (count matches)
+H = cell(1, 3);
+H(:) = { 1, 2, 3 };
+assert(H{1} == 1);
+assert(H{2} == 2);
+assert(H{3} == 3);
+
 disp('SUCCESS');

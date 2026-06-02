@@ -2044,6 +2044,27 @@ function storeIntoCell1D(
   parenAssign = false,
   rt?: RefcountRuntime
 ): RuntimeValue {
+  // Colon: c(:) = rhs assigns to every existing slot (no growth). RHS must
+  // be a 1×1 cell (scalar-expanded) or a cell matching the element count.
+  if (isColonIndex(idx)) {
+    const n = base.data.length;
+    if (n === 1 && !isRuntimeCell(rhs)) {
+      setCellElement(base, 0, rhs, rt);
+      return base;
+    }
+    if (
+      !isRuntimeCell(rhs) ||
+      (rhs.data.length !== n && rhs.data.length !== 1)
+    ) {
+      throw new RuntimeError("Subscripted assignment dimension mismatch");
+    }
+    const scalarExpand = rhs.data.length === 1;
+    for (let j = 0; j < n; j++) {
+      setCellElement(base, j, scalarExpand ? rhs.data[0] : rhs.data[j], rt);
+    }
+    return base;
+  }
+
   // Vector index
   if (isRuntimeTensor(idx)) {
     let positions: number[];
