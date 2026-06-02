@@ -43,7 +43,12 @@ import type {
   MultiAssignCall,
 } from "../lowering/ir.js";
 import { UnsupportedConstruct } from "../lowering/errors.js";
-import { isColVecTy, isOwned, isRowVecTy } from "../lowering/types.js";
+import {
+  isColVecTy,
+  isOwned,
+  isRowVecTy,
+  isScalar,
+} from "../lowering/types.js";
 import { requireEmitJs } from "../builtins/registry.js";
 import {
   lookupBuiltin,
@@ -1040,6 +1045,49 @@ function emitIndexSliceJs(
     const baseNum = e.base.ty.kind === "Numeric" ? e.base.ty : undefined;
     const isColVec = baseNum !== undefined && isColVecTy(baseNum);
     const isRowVec = baseNum !== undefined && isRowVecTy(baseNum);
+    // A slice that is statically a single element — `v(2:2)`, `v(:)` on a
+    // 1×1 base, or `v([k])` — is typed scalar at the consume site (`y = …`
+    // then used as a number), so it MUST evaluate to a scalar value (a JS
+    // number, or `{re, im}` for a complex base), NOT an allocated 1×1
+    // tensor object. The C producer (emitIndex.ts) already does this;
+    // without it the JS backend leaks a tensor object into scalar
+    // arithmetic/conditions (e.g. `v(2:2) + 1` → `"[object Object]1"`,
+    // `if v(2:2) > 15` taking the wrong branch). LogicalMask is never
+    // statically single-element, so it is not handled here.
+    if (isScalar(e.ty)) {
+      let off: string;
+      if (slot.kind === "Colon") {
+        off = "0";
+      } else if (slot.kind === "Range") {
+        useRuntimeByName(state, "mtoc2_loop_count");
+        useRuntimeByName(state, "mtoc2_range_value");
+        const s = emitExpr(slot.start, state);
+        const st = emitExpr(slot.step, state);
+        const en = emitExpr(slot.end, state);
+        off =
+          `(() => { const _mtoc2_s = ${s}, _mtoc2_e = ${en}, _mtoc2_st = ${st}; ` +
+          `const _mtoc2_n = mtoc2_loop_count(_mtoc2_s, _mtoc2_e, _mtoc2_st); ` +
+          `const _mtoc2_idx = Math.round(mtoc2_range_value(_mtoc2_s, _mtoc2_st, _mtoc2_e, _mtoc2_n, 0)); ` +
+          `const _mtoc2_len = ${baseName}.data.length; ` +
+          `if (_mtoc2_idx < 1 || _mtoc2_idx > _mtoc2_len) throw new Error("Index in position 1 exceeds array bounds. Index must not exceed " + _mtoc2_len + "."); ` +
+          `return _mtoc2_idx - 1; })()`;
+      } else if (slot.kind === "IndexVec") {
+        const idx = emitExpr(slot.expr, state);
+        off =
+          `(() => { const _mtoc2_ix = ${idx}; ` +
+          `const _mtoc2_ixd = _mtoc2_ix.mtoc2Tag === "tensor" ? _mtoc2_ix.data : [_mtoc2_ix]; ` +
+          `return Math.round(_mtoc2_ixd[0]) - 1; })()`;
+      } else {
+        throw new UnsupportedConstruct(
+          `emitJs internal: scalar IndexSlice slot kind ${slot.kind}`,
+          e.span
+        );
+      }
+      if (isComplexBase) {
+        return `(() => { const _o = ${off}; return {re: ${baseName}.data[_o], im: ${baseName}.imag[_o]}; })()`;
+      }
+      return `${baseName}.data[${off}]`;
+    }
     if (slot.kind === "Colon") {
       return (
         `(() => { ` +
@@ -1213,6 +1261,41 @@ function emitIndexSliceJs(
       );
     }
   }
+  // Multi-slot slice that is statically a single element — e.g.
+  // `M(1:1, 2)` or `M(i, 2:2)` — is typed scalar at the consume site, so
+  // yield the scalar element rather than a 1×1 tensor object (mirrors the
+  // C producer in emitIndex.ts). Pin every axis loop index to 0, compute
+  // the one source offset (with the same per-axis bounds checks), read.
+  if (isScalar(e.ty)) {
+    const slines: string[] = [];
+    for (const s of setup) slines.push(s);
+    for (let i = 0; i < ndim; i++) slines.push(`const _mtoc2_k_${i} = 0;`);
+    for (let i = 0; i < ndim; i++) {
+      slines.push(`const _mtoc2_idx_${i} = Math.round(${idxFns[i]});`);
+      slines.push(
+        `if (_mtoc2_idx_${i} < 1 || _mtoc2_idx_${i} > (${baseName}.shape[${i}] ?? 1)) ` +
+          `throw new Error("Index in position ${i + 1} exceeds array bounds.");`
+      );
+    }
+    const srcTerms: string[] = [];
+    for (let i = 0; i < ndim; i++) {
+      const strideParts: string[] = [];
+      for (let j = 0; j < i; j++)
+        strideParts.push(`(${baseName}.shape[${j}] ?? 1)`);
+      const stride = strideParts.length === 0 ? "1" : strideParts.join(" * ");
+      srcTerms.push(`(_mtoc2_idx_${i} - 1) * ${stride}`);
+    }
+    slines.push(`const _mtoc2_off = ${srcTerms.join(" + ")};`);
+    if (isComplexBase) {
+      slines.push(
+        `return {re: ${baseName}.data[_mtoc2_off], im: ${baseName}.imag[_mtoc2_off]};`
+      );
+    } else {
+      slines.push(`return ${baseName}.data[_mtoc2_off];`);
+    }
+    return `(() => { ${slines.join(" ")} })()`;
+  }
+
   // Result shape canonicalization: trim trailing statically-known-1
   // axes down to a 2-axis floor, then pad up to 2 if shorter. Mirrors
   // numbl's display convention so `t(:, :, 2)` (slot pattern Colon /
