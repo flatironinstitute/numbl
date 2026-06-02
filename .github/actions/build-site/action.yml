@@ -28,7 +28,7 @@ inputs:
     default: "flatironinstitute/numbl"
   node-version:
     description: "Node.js version."
-    default: "20"
+    default: "24"
   upload-artifact:
     description: "Upload the output as a GitHub Pages artifact (set false to only build)."
     default: "true"
