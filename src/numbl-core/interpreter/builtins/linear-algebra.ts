@@ -623,20 +623,30 @@ defineBuiltin({
       match: (argTypes, nargout) => {
         if (argTypes.length !== 1 || nargout > 1) return null;
         if (!isNumericJitType(argTypes[0])) return null;
-        return [NUM];
+        const hasComplex =
+          argTypes[0].kind === "complex_or_number" ||
+          (argTypes[0].kind === "tensor" && argTypes[0].isComplex);
+        return [hasComplex ? COMPLEX_OR_NUM : NUM];
       },
       apply: args => {
         if (args.length !== 1)
           throw new RuntimeError("trace requires 1 argument");
         const A = args[0];
         if (isRuntimeNumber(A)) return A;
+        if (isRuntimeComplexNumber(A)) return A;
         if (!isRuntimeTensor(A))
           throw new RuntimeError("trace: argument must be a matrix");
         const [rows, cols] = tensorSize2D(A);
         const n = Math.min(rows, cols);
-        let sum = 0;
-        for (let i = 0; i < n; i++) sum += A.data[i + i * rows];
-        return RTV.num(sum);
+        let sumRe = 0;
+        let sumIm = 0;
+        for (let i = 0; i < n; i++) {
+          sumRe += A.data[i + i * rows];
+          if (A.imag) sumIm += A.imag[i + i * rows];
+        }
+        if (A.imag && Math.abs(sumIm) >= 1e-15)
+          return RTV.complex(sumRe, sumIm);
+        return RTV.num(sumRe);
       },
     },
   ],
