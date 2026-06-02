@@ -6,20 +6,20 @@ The interpreter is an AST walker. Given a parsed program and a `LoweringContext`
 
 - **Interpreter** — holds the `Runtime` and the active `LoweringContext`. Walks `Stmt` and `Expr` nodes.
 - **Environment** — one per activation (script, function call, class method). Resolves variable reads and writes. Routes `global` and `persistent` declarations through shared stores on the runtime so their values outlive the call.
-- **Runtime** — shared state across a single execution: global/persistent stores, output router, plot instruction accumulator, RNG state, JIT caches.
+- **Runtime** — shared state across a single execution: global/persistent stores, output router, plot instruction accumulator, JIT caches. (RNG state is held in module-level variables in [`helpers/prng.ts`](../../../src/numbl-core/helpers/prng.ts), not on the `Runtime`.)
 - **LoweringContext** — workspace resolver. Indexes `.m` files by function name, maintains per-file and per-class sub-contexts, caches parsed ASTs, and stores external-access directive metadata. A shared `WorkspaceRegistry` is carried by reference across derived contexts so a single workspace view is visible everywhere.
 
 ## Control flow
 
-Control-flow transfers (break, continue, return) are signalled by throwing typed signal objects that the enclosing loop or function body catches. Regular runtime errors flow as normal exceptions and end up in the diagnostics layer.
+Control-flow transfers (break, continue, return) are signalled by typed signal objects (`BreakSignal` / `ContinueSignal` / `ReturnSignal`, none of which extend `Error`) that `execStmt` **returns** (its type is `ControlSignal | null`); the enclosing loop or function body inspects the return value with `instanceof` and propagates it upward. They are not thrown. Regular runtime errors, by contrast, flow as normal exceptions and end up in the diagnostics layer.
 
 ## Builtin dispatch
 
-When the interpreter encounters a call expression:
+When the interpreter encounters a call expression, name resolution (`resolveFunctionImpl` in [`functionResolve.ts`](../../../src/numbl-core/functionResolve.ts)) tries, in order:
 
-1. Look up the name in the local workspace (user-defined function).
-2. Otherwise, look it up in the `IBuiltin` registry.
-3. Otherwise, look it up in the stdlib-bundled functions.
+1. The local workspace — user-defined functions. **The stdlib bundle is part of this tier**: bundled stdlib `.m` files are registered as workspace functions, so a stdlib function (and any user `.m` of the same name) is found here, _before_ the builtin registry. This means a workspace/stdlib `.m` shadows a builtin of the same name.
+2. JS user functions and workspace classes.
+3. The `IBuiltin` registry (and the runtime's built-in table).
 4. Otherwise, error.
 
 Builtin calls go through the builtin's `resolve(argTypes, nargout)` to produce a specialized `apply` function, which the interpreter invokes. See [builtins.md](../builtins.md).

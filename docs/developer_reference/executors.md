@@ -132,7 +132,7 @@ In practice the current JIT executors (`src/numbl-core/jit`) **reject statically
 
 ## Telemetry
 
-Every successful `run()` call invokes `interp.onExecutorFired?.(executor.name, kind)`. For stmt-shape and whole-scope success the kind is `lowered.kind` (`top-level`, `loop`, `fuse`, `synth`); for call-shape success (via `dispatchCall`) the kind is hardcoded to `"call"`. Use this to track which optimizers fire in a session — a session-wide counter, a log entry per dispatch, etc. The hot path uses an `?.` undefined-check and pays nothing when no telemetry consumer is wired up.
+Every successful `run()` call invokes `interp.onExecutorFired?.(executor.name, kind)`. For stmt-shape and whole-scope success the kind is `lowered.kind` (`top-level`, `loop`, `call`, `synth` — the variants of the `LoweredStmt` union); for call-shape success (via `dispatchCall`) the kind is hardcoded to `"call"`. Use this to track which optimizers fire in a session — a session-wide counter, a log entry per dispatch, etc. The hot path uses an `?.` undefined-check and pays nothing when no telemetry consumer is wired up.
 
 ## Mode-driven registration
 
@@ -157,10 +157,11 @@ executors/
   index.ts          public surface
   types.ts          Executor / Proposal / RunResult / CostEstimate
   registry.ts       Registry, dispatch, dispatchCall, makeRootContext
-  context.ts        DispatchContext, DispatchScope
+  context.ts        DispatchContext
   cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
   lowering.ts       tryLower / tryLowerCall + LoweringCache
   classification.ts top-level / call classification (backend-independent)
+  handleInline.ts   inlines capture-free function-handle inputs into loop bodies
   plugins.ts        registerExecutorsForOpt (the --opt → executors switch)
   jit/
     topLevelExecutor.ts  jit-top-level   (JS-JIT, opt 1)
@@ -172,7 +173,7 @@ executors/
     session.ts           per-context Workspace + Lowerer (the spec cache)
     typeAdapter.ts       numbl JitType → compiler Type (JS path)
     valueAdapter.ts      RuntimeValue ↔ emit-JS value shape
-    typeAdapterC.ts      JitType → koffi C decl (C path)
+    typeAdapterC.ts      compiler Type → C decl (C path; `compilerTypeToCDecl`)
     valueAdapterC.ts     RuntimeValue ↔ C ABI marshaling (koffi)
     hostHelpers.ts       the `$h` object the emitted spec receives
     compileC.ts          browser-safe compile/load stub

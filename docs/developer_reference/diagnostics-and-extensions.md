@@ -4,8 +4,8 @@
 
 Errors that escape the interpreter — syntax errors, semantic errors, runtime errors — are converted to structured `DiagnosticInfo` objects before being reported. Each diagnostic carries:
 
-- error class (syntax / semantic / runtime);
-- source location (file, line, byte span);
+- error class (`errorType`: syntax / semantic / runtime / unknown);
+- source location (file, line);
 - a source snippet with a pointer caret;
 - the call stack when it is a runtime error.
 

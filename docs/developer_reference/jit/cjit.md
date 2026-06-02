@@ -14,7 +14,7 @@ At `--opt 2` both the C-JIT and JS-JIT executors are registered and compete via 
 
 ## Type marshaling boundary
 
-What C-JIT can accept is gated by `executors/jit/typeAdapterC.ts` (numbl `JitType` → C decl) and `valueAdapterC.ts` (`RuntimeValue` ↔ C ABI via koffi). Scalars (real double, logical) pass as `double`; tensors pass as the `mtoc2_tensor_t` struct (real/imag pointers + dims). Types the adapter can't marshal cause the executor to decline — the spec still lowers, but the call routes to JS-JIT/interpreter instead.
+What C-JIT can accept is gated by `executors/jit/typeAdapter.ts` (numbl `JitType` → compiler `Type`), `typeAdapterC.ts` (compiler `Type` → C decl, via `compilerTypeToCDecl`), and `valueAdapterC.ts` (`RuntimeValue` ↔ C ABI via koffi). Scalars (real double, logical) pass as `double`; tensors pass as the `mtoc2_tensor_t` struct (real/imag pointers + dims). Types the adapter can't marshal cause the executor to decline — the spec still lowers, but the call routes to JS-JIT/interpreter instead.
 
 ## Native compile/load
 

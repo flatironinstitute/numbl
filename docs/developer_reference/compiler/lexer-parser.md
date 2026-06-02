@@ -13,11 +13,11 @@ The lexer is table-driven from a token configuration. Add or change tokens by up
 
 ## Parser
 
-A recursive-descent parser, split into focused sub-parsers by category (expressions, statements, control flow, functions, classes, command form, argument blocks). Output is an `AbstractSyntaxTree` — an array of `Stmt` nodes.
+A recursive-descent parser, split into focused sub-parsers by category (expressions, statements, control flow, functions, classes, command form, argument blocks). Output is an `AbstractSyntaxTree` — an object wrapping the statement list: `{ body: Stmt[] }`.
 
 ### AST shape
 
-- `Stmt` is the discriminated union of statements: assignment, expression-statement, if/for/while/switch/try, function/class declarations, arguments block, etc.
+- `Stmt` is the discriminated union of statements: assignment, expression-statement, if/for/while/switch/try, function/class declarations, etc. (Arguments blocks are not a `Stmt` variant — they are stored as an `argumentsBlocks: ArgumentsBlock[]` field on the `Function` node.)
 - `Expr` is the discriminated union of expressions: literals (number, char, string), identifier, binary/unary, range, function or method call, indexing (parens) and cell indexing (braces), member access, lambda, matrix and cell literals, `:` (colon), `end`.
 - Every node carries a `span` recording its source location. Spans drive error messages and diagnostics.
 

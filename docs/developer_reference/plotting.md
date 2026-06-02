@@ -15,8 +15,8 @@ This keeps numbl-core free of any rendering code and lets every platform surface
 A separate Vite-built bundle that consumes `PlotInstruction` streams and draws to an HTML canvas. It owns:
 
 - figure state management (multiple figures, active figure, hold semantics);
-- 2-D plot rendering (lines, scatter, bars, images, colorbar);
-- 3-D plot rendering (surf, mesh, contour);
+- 2-D plot rendering (lines, scatter, bars, images, contour, colorbar);
+- 3-D plot rendering (surf, mesh, plot3);
 - axes, labels, legends, and interaction (zoom, pan).
 
 Because the viewer is its own bundle, it does not rebuild with the rest of numbl-core. **After changing anything under the graphics source tree, rebuild the viewer explicitly** — unit tests will not catch a stale bundle.

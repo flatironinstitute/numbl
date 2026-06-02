@@ -38,7 +38,7 @@ A `RefScope` ([`runtime/refcount.ts`](../../../src/numbl-core/runtime/refcount.t
 - Values bound to a slot during the statement got an extra incref from the slot, so they survive drain at slot count.
 - Unbound transients drop to `rc = 0` and self-destruct (decreffing children).
 
-`execStmt` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) wraps the statement body in `withScope`. The JIT executors ([`executors/jit/`](../../../src/numbl-core/executors/jit)) cross the boundary through a value adapter ([`valueAdapter.ts`](../../../src/numbl-core/executors/jit/valueAdapter.ts)): owned inputs are cloned on the way in (MATLAB pass-by-value), and the spec returns a freshly-owned buffer that numbl takes ownership of on the way out — so a JIT'd call neither leaks into nor double-frees the caller's pooled slots.
+`execStmt` ([`interpreter/interpreterExec.ts`](../../../src/numbl-core/interpreter/interpreterExec.ts)) wraps the statement body in `withScope`. The JIT executors ([`executors/jit/`](../../../src/numbl-core/executors/jit)) cross the boundary through a value adapter ([`valueAdapter.ts`](../../../src/numbl-core/executors/jit/valueAdapter.ts)): owned inputs are cloned on the way in (MATLAB pass-by-value), and the spec returns a freshly-owned buffer that numbl takes ownership of on the way out — so a JIT'd call neither leaks into nor double-frees the caller's slots.
 
 `callUserFunction` ([`interpreter/interpreterFunctions.ts`](../../../src/numbl-core/interpreter/interpreterFunctions.ts)) adopts every output value into the **caller's** scope before running `fnEnv.clearLocals()` — outputs are otherwise held only by the callee's slot binding which is about to be decref'd to 0. The same adoption happens in `evalAnonFunc`'s synthetic-fn body so closure invocations don't drop their results.
 
@@ -56,10 +56,12 @@ Handle-class instances bypass COW unconditionally — they have reference semant
 ## Walk-throughs
 
 ```
-c = 2 + 2;
+c = [1 2] + [3 4];
 ```
 
-1. Fresh tensor `T` from `2+2`. Refcounted ctor adopts: `T.rc=1`, `T.scopeHolds=1`.
+(A scalar expression like `2 + 2` returns a primitive JS `number`, which is **not** refcounted — `incref`/`decref` are no-ops on primitives. The walk-through below needs a tensor-producing RHS.)
+
+1. Fresh tensor `T` from `[1 2] + [3 4]`. Refcounted ctor adopts: `T.rc=1`, `T.scopeHolds=1`.
 2. `env.set("c", T)`: incref → `T.rc=2`, `T.scopeHolds=1`; old `c` undefined, no decref.
 3. End of statement, scope drains: decref → `T.rc=1`, `T.scopeHolds=0` (just `env.c`).
 

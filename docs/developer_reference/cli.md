@@ -6,6 +6,7 @@ The `numbl` command-line entry point is a small orchestration layer over `execut
 
 - **Script runner** — run a `.m` file and exit.
 - **Eval** — evaluate an inline code string.
+- **Parse** — tokenize, lex, and parse a `.m` file without executing it (optionally dumping the AST).
 - **REPL** — interactive session with persistent variables between inputs.
 - **Test runner** — run `.m` test scripts under a directory, gathering `SUCCESS` markers.
 - **Addon builder** — compile the native addon from source.
@@ -34,6 +35,6 @@ The CLI provides:
 
 ## REPL specifics
 
-The REPL keeps a long-lived `Environment` across inputs so variables persist. It also maintains plot hold state so a sequence of plot commands composes as expected. Errors do not tear down the session; they are formatted by the diagnostics layer and the prompt returns.
+The REPL persists variables across inputs by re-invoking `executeCode` for each line and threading a `variableValues` record (`Record<string, RuntimeValue>`) in and out — each call builds a fresh `Environment` seeded from that record, rather than holding one long-lived `Environment` object. It also maintains plot hold state so a sequence of plot commands composes as expected. Errors do not tear down the session; they are formatted by the diagnostics layer and the prompt returns.
 
 See `numbl --help` for the current, canonical option list; this file describes roles, not the exact option set.

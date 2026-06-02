@@ -2,7 +2,7 @@
 
 The JIT sits on top of the interpreter. It type-specializes hot code paths to JavaScript (run in V8) or, at `--opt 2`, to C compiled to a native `.so` and called via koffi. The interpreter remains authoritative: anything the JIT cannot handle falls back to the interpreter transparently.
 
-The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/jit` (lowering → IR → JS/C codegen, builtins, runtime snippets, workspace) with **no external dependency**. The per-shape executors that invoke it — `compileSpec` for JS, `compileSpecC` for C — live under `src/numbl-core/executors/jit/`; see [executors.md](../executors.md).
+The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/jit` (lowering → IR → JS/C codegen, builtins, runtime snippets, workspace) with **no external dependency**. Its per-spec entry points — `compileSpec` for JS ([`jit/compileSpec.ts`](../../../src/numbl-core/jit/compileSpec.ts)) and `compileSpecC` for C ([`jit/compileSpecC.ts`](../../../src/numbl-core/jit/compileSpecC.ts)), both re-exported from `jit/index.ts` — are called by the per-shape executors under `src/numbl-core/executors/jit/`; see [executors.md](../executors.md).
 
 ## Trigger points
 

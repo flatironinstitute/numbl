@@ -10,10 +10,10 @@ The plotting system has two halves joined by a shared type:
 Runtime (numbl-core/)                   Graphics (graphics/)
 ─────────────────────                   ─────────────────────
 .m script calls bar(x,y)
-  → runtimeDispatch.ts                  figuresReducer.ts
+  → builtin wrapper / rt.dispatch       figuresReducer.ts
       routes name "bar"                   AxesState holds barTraces[]
-  → runtime.ts                            ↓
-      bar_call() method                 FigureView.tsx
+  → plotBuiltinDispatch.ts                ↓
+      dispatchPlotBuiltin()             FigureView.tsx
   → runtimePlot.ts                        passes traces to renderer
       barCall() parses args               ↓
   → pushes PlotInstruction ──────────→  drawPlot.ts
@@ -37,17 +37,17 @@ If you're adding a 2D plot type, you'll work with `drawPlot.ts`. If 3D, you'll w
 
 ## Files to edit (in order)
 
-| Step | File                                            | What to add                                           |
-| ---- | ----------------------------------------------- | ----------------------------------------------------- |
-| 1    | `src/graphics/types.ts`                         | Trace interface + `PlotInstruction` variant           |
-| 2    | `src/numbl-core/runtime/plotUtils.ts`           | Argument parser (`parseXxxArgs`)                      |
-| 3    | `src/numbl-core/runtime/runtimePlot.ts`         | Call function (`xxxCall`)                             |
-| 4    | `src/numbl-core/runtime/runtimeDispatch.ts`     | Dispatch case in `dispatchPlotCall`                   |
-| 5    | `src/numbl-core/runtime/runtime.ts`             | Import, public method, builtin registration           |
-| 6    | `src/numbl-core/runtime/specialBuiltinNames.ts` | Add function name to the array                        |
-| 7    | `src/graphics/figuresReducer.ts`                | `AxesState`, `defaultAxes`, `addTraces`, reducer case |
-| 8    | `src/graphics/FigureView.tsx`                   | Pass new traces through to the drawing function       |
-| 9    | `src/graphics/drawPlot.ts`                      | Rendering logic (data bounds + canvas drawing)        |
+| Step | File                                            | What to add                                                                  |
+| ---- | ----------------------------------------------- | ---------------------------------------------------------------------------- |
+| 1    | `src/graphics/types.ts`                         | Trace interface + `PlotInstruction` variant                                  |
+| 2    | `src/numbl-core/runtime/plotUtils.ts`           | Argument parser (`parseXxxArgs`)                                             |
+| 3    | `src/numbl-core/runtime/runtimePlot.ts`         | Call function (`xxxCall`)                                                    |
+| 4    | `src/numbl-core/runtime/plotBuiltinDispatch.ts` | Import `*Call`, add `switch` case, add to `PLOT_DISPATCH_NAMES`              |
+| 5    | `src/numbl-core/runtime/runtimeDispatch.ts`     | Add name to `PLOT_DISPATCH_NAMES_JIT` (runtime.ts registration is automatic) |
+| 6    | `src/numbl-core/runtime/specialBuiltinNames.ts` | Add function name to the array                                               |
+| 7    | `src/graphics/figuresReducer.ts`                | `AxesState`, `defaultAxes`, `addTraces`, reducer case                        |
+| 8    | `src/graphics/FigureView.tsx`                   | Pass new traces through to the drawing function                              |
+| 9    | `src/graphics/drawPlot.ts`                      | Rendering logic (data bounds + canvas drawing)                               |
 
 ## Step-by-step
 
@@ -239,76 +239,56 @@ export function barCall(
 
 This pattern is the same for every plot function — parse args, push instruction. The first parameter is always the `plotInstructions` array (accumulated during script execution), and the second is the raw runtime arguments.
 
-### 4. Dispatch — `src/numbl-core/runtime/runtimeDispatch.ts`
+### 4. Dispatch — `src/numbl-core/runtime/plotBuiltinDispatch.ts`
 
-This file routes function names to the appropriate `*_call` method on the Runtime object. There is a `dispatchPlotCall` function with a `switch` statement.
+`dispatchPlotBuiltin` is the single source of truth for the `(name, args) → PlotInstruction[]` mapping. Every data-bearing plot builtin is a `case` in its `switch (name)` that calls the matching `*Call` function and returns `true`.
 
-**Add a case** in the `switch (name)` block inside `dispatchPlotCall`:
-
-```ts
-function dispatchPlotCall(
-  rt: Runtime,
-  name: string,
-  args: unknown[]
-): unknown | undefined {
-  switch (name) {
-    case "plot":
-      return rt.plot_call(args.map(a => ensureRuntimeValue(a)));
-    // ... existing cases ...
-    case "mesh":
-    case "waterfall":
-      return rt.mesh_call(args.map(a => ensureRuntimeValue(a)));
-    case "bar": // ← add
-      return rt.bar_call(args.map(a => ensureRuntimeValue(a))); // ← add
-    default:
-      return undefined;
-  }
-}
-```
-
-Note: `args.map(a => ensureRuntimeValue(a))` converts raw `unknown[]` to `RuntimeValue[]`. This is required because the dispatch layer receives untyped args.
-
-### 5. Runtime registration — `src/numbl-core/runtime/runtime.ts`
-
-Three changes in this file. The `Runtime` class is large; search for the existing plot-related code to find insertion points.
-
-**5a. Import** — add to the import block from `"./runtimePlot.js"` (~line 97):
+**4a. Import** your call function (in the import block from `./runtimePlot.js`):
 
 ```ts
 import {
-  plotInstr as _plotInstr,
-  plotCall as _plotCall,
-  plot3Call as _plot3Call,
-  surfCall as _surfCall,
-  scatterCall as _scatterCall,
-  imagescCall as _imagescCall,
-  contourCall as _contourCall,
-  meshCall as _meshCall,
-  barCall as _barCall, // ← add
-  viewCall as _viewCall,
-  legendCall as _legendCall,
-  drawnow as _drawnow,
-  pause as _pause,
+  plotCall,
+  // ... existing ...
+  barCall, // ← add
 } from "./runtimePlot.js";
 ```
 
-**5b. Public method** — add alongside the other `*_call` methods (search for `public mesh_call`):
+**4b. Add a `case`** to the `switch (name)` inside `dispatchPlotBuiltin`:
 
 ```ts
-public bar_call(args: RuntimeValue[]): void {
-  _barCall(this.plotInstructions, args);
-}
+case "bar":
+  barCall(instructions, args);
+  return true;
 ```
 
-**5c. Builtin registration** — add in the `initBuiltins()` method, after the other plot builtin registrations (search for `this.builtins["waterfall"]`):
+`instructions` is the `PlotInstruction[]` passed in by the caller (it is `rt.plotInstructions` in the live runtime); `args` is already `RuntimeValue[]`, so no `ensureRuntimeValue` mapping is needed here.
+
+**4c. Register the name** in the `PLOT_DISPATCH_NAMES` array (lower in the same file):
 
 ```ts
-this.builtins["bar"] = (_nargout: number, args: unknown[]) => {
-  this.bar_call(args.map(a => ensureRuntimeValue(a)));
-};
+export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
+  // ... existing ...
+  "bar", // ← add
+  // ...
+];
 ```
 
-The builtin registration is what makes the function callable from .m scripts. Without this, `bar(...)` would produce an "undefined function" error.
+`PLOT_DISPATCH_NAMES` is the list the Runtime loops over to auto-register builtins (step 5), so adding the name here is what makes `bar(...)` resolve from interpreted `.m` code.
+
+### 5. Make it reachable from the dispatch/JIT path — `src/numbl-core/runtime/runtimeDispatch.ts`
+
+There is **no per-function edit in `runtime.ts`**. `initBuiltins` registers every name in `PLOT_DISPATCH_NAMES` with a one-line wrapper that calls `dispatchPlotBuiltin` (see the `for (const name of PLOT_DISPATCH_NAMES)` loop in `runtime.ts`). Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get a manual override after that loop.
+
+For calls routed through the JIT / `rt.dispatch` path, add the name to the `PLOT_DISPATCH_NAMES_JIT` set in `runtimeDispatch.ts` so `dispatchPlotCall` forwards it to `dispatchPlotBuiltin`:
+
+```ts
+const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
+  // ... existing ...
+  "bar", // ← add
+]);
+```
+
+Functions that need the full Runtime context (`fplot`, `fplot3`, `streamline`, `stream2`) keep their own `case` in `dispatchPlotCall` instead.
 
 ### 6. Special builtin name — `src/numbl-core/runtime/specialBuiltinNames.ts`
 
