@@ -1,6 +1,6 @@
 # Numbl
 
-A MATLAB-compatible numerical computing environment with 400+ built-in functions. Runs in your browser or on the command line.
+A numerical computing environment compatible with MATLAB syntax, featuring 400+ built-in functions. Runs in your browser or on the command line.
 
 [![numbl REPL](docs/repl-preview.svg)](https://numbl.org/embed-repl)
 
@@ -61,3 +61,7 @@ Jeremy Magland and Dan Fortunato, Center for Computational Mathematics, Flatiron
 ## License
 
 Apache 2.0
+
+## Disclaimer
+
+numbl is not affiliated with, endorsed by, or supported by MathWorks, Inc. MATLAB is a registered trademark of MathWorks, Inc.

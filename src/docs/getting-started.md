@@ -1,6 +1,6 @@
 # Getting Started
 
-numbl is a MATLAB-compatible numerical computing environment that runs in your browser or on the command line.
+numbl is a numerical computing environment compatible with MATLAB syntax that runs in your browser or on the command line.
 
 ## Browser
 
@@ -90,3 +90,7 @@ numbl build-addon
 ```
 
 This requires LAPACK and FFTW development libraries on your system. The addon provides native implementations for operations like matrix decompositions, eigenvalue problems, and FFT.
+
+## Disclaimer
+
+numbl is not affiliated with, endorsed by, or supported by MathWorks, Inc. MATLAB is a registered trademark of MathWorks, Inc.

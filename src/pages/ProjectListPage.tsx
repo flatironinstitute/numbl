@@ -232,9 +232,9 @@ export function ProjectListPage() {
             mx: "auto",
           }}
         >
-          A MATLAB-compatible numerical computing environment with{" "}
-          {builtinCount} built-in functions. Runs in your browser or on the
-          command line.
+          A numerical computing environment compatible with MATLAB syntax,
+          featuring {builtinCount} built-in functions. Runs in your browser or
+          on the command line.
         </Typography>
 
         {/* Primary CTAs */}
@@ -395,7 +395,7 @@ export function ProjectListPage() {
               "No server required. IDE, interactive REPL, and embeddable components for sharing code.",
           },
           {
-            title: "MATLAB-compatible",
+            title: "Compatible with MATLAB syntax",
             description: `${builtinCount} built-in functions. Classes & inheritance, closures, namespaces, and more.`,
           },
           {
@@ -627,8 +627,8 @@ export function ProjectListPage() {
               color="text.secondary"
               sx={{ mb: 3, maxWidth: 360, mx: "auto" }}
             >
-              Create a project to start writing and running MATLAB-compatible
-              code in your browser.
+              Create a project to start writing and running code compatible with
+              MATLAB syntax in your browser.
             </Typography>
             <Button
               variant="contained"
@@ -746,6 +746,23 @@ export function ProjectListPage() {
           </TableContainer>
         )}
       </Box>
+
+      {/* Trademark disclaimer */}
+      <Typography
+        variant="caption"
+        component="p"
+        color="text.secondary"
+        sx={{
+          mt: { xs: 4, sm: 6 },
+          textAlign: "center",
+          fontSize: "0.7rem",
+          lineHeight: 1.6,
+          opacity: 0.8,
+        }}
+      >
+        numbl is not affiliated with, endorsed by, or supported by MathWorks,
+        Inc. MATLAB is a registered trademark of MathWorks, Inc.
+      </Typography>
 
       {/* Create Dialog */}
       <CreateProjectDialog

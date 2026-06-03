@@ -143,3 +143,7 @@ The directive registers getter/setter accessors for the listed variables, pre-de
 **Dynamic fallback:** If `evalin`/`assignin` references a variable _not_ in `% external-access`, Numbl stores it in a separate dynamic map (per-workspace or per-call-frame). These dynamic variables are only accessible through `evalin`/`assignin`, not as bare variable names — unlike MATLAB where they would appear in the local workspace.
 
 Most MATLAB code does not use `evalin`/`assignin` and needs no directives.
+
+## Disclaimer
+
+numbl is not affiliated with, endorsed by, or supported by MathWorks, Inc. MATLAB is a registered trademark of MathWorks, Inc.

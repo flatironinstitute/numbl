@@ -1,6 +1,6 @@
 # Numbl Overview
 
-Numbl is a MATLAB-compatible numerical computing environment written in TypeScript. It runs in Node (CLI, REPL, execution server) and in the browser (web IDE, embeddable worker). A program is a set of `.m` files that are parsed, interpreted, and optionally JIT-specialized to JavaScript (optionally with inline compiled C kernels).
+Numbl is a numerical computing environment compatible with MATLAB syntax, written in TypeScript. It runs in Node (CLI, REPL, execution server) and in the browser (web IDE, embeddable worker). A program is a set of `.m` files that are parsed, interpreted, and optionally JIT-specialized to JavaScript (optionally with inline compiled C kernels).
 
 ## Execution pipeline
 
