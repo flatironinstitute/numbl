@@ -9,6 +9,7 @@ import {
   isRuntimeComplexNumber,
   isRuntimeLogical,
   isRuntimeNumber,
+  isRuntimeString,
   isRuntimeTensor,
   isRuntimeCell,
   isRuntimeStruct,
@@ -16,7 +17,12 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeFunction,
 } from "../../runtime/types.js";
-import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
+import type {
+  RuntimeValue,
+  RuntimeTensor,
+  RuntimeCell,
+  RuntimeStruct,
+} from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
@@ -178,6 +184,191 @@ for (const { name, min, max } of INT_RANGES) {
     ],
   });
 }
+
+// ── typecast ────────────────────────────────────────────────────────────
+//
+// Reinterpret the raw bytes of a numeric array as another numeric class.
+// numbl stores all numerics as double, so the INPUT is treated as
+// double-precision (8 bytes/element) and its IEEE-754 little-endian bytes are
+// reinterpreted as the requested class. This is the "serialize to bytes"
+// direction (e.g. `typecast(double(x), 'uint8')` to write binary data); the
+// reverse (bytes -> double) is not supported because numbl cannot represent a
+// genuine integer-typed array.
+
+const TYPECAST_VIEWS: Record<
+  string,
+  (b: ArrayBufferLike) => ArrayLike<number>
+> = {
+  uint8: b => new Uint8Array(b),
+  int8: b => new Int8Array(b),
+  uint16: b => new Uint16Array(b),
+  int16: b => new Int16Array(b),
+  uint32: b => new Uint32Array(b),
+  int32: b => new Int32Array(b),
+  single: b => new Float32Array(b),
+  double: b => new Float64Array(b),
+};
+
+defineBuiltin({
+  name: "typecast",
+  help: {
+    signatures: ["B = typecast(X, CLASS)"],
+    description:
+      "Reinterpret the raw bytes of numeric array X as CLASS (e.g. 'uint8', 'single', 'int32'). numbl stores all numerics as double, so X is treated as double-precision; this is mainly for serializing numeric data to bytes, e.g. typecast(double(x), 'uint8').",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        const a = argTypes[0];
+        if (
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          a.kind === "tensor" ||
+          a.kind === "complex_or_number"
+        )
+          return [{ kind: "tensor", isComplex: false }];
+        return null;
+      },
+      apply: args => {
+        const X = args[0];
+        const cls = toString(args[1]).toLowerCase();
+        const makeView = TYPECAST_VIEWS[cls];
+        if (!makeView)
+          throw new RuntimeError(`typecast: unsupported class '${cls}'`);
+
+        let src: Float64Array;
+        if (isRuntimeNumber(X)) src = Float64Array.of(X);
+        else if (isRuntimeLogical(X)) src = Float64Array.of(X ? 1 : 0);
+        else if (isRuntimeTensor(X)) {
+          if (X.imag)
+            throw new RuntimeError("typecast: complex input not supported");
+          src = X.data;
+        } else {
+          throw new RuntimeError("typecast: X must be a numeric array");
+        }
+
+        // Copy to a tightly-packed buffer so the typed-array view is aligned.
+        const buffer = src.buffer.slice(
+          src.byteOffset,
+          src.byteOffset + src.byteLength
+        );
+        const view = makeView(buffer);
+        const out = allocFloat64Array(view.length);
+        for (let i = 0; i < view.length; i++) out[i] = view[i];
+        return RTV.tensor(out, [1, view.length]);
+      },
+    },
+  ],
+});
+
+// ── jsonencode ──────────────────────────────────────────────────────────
+//
+// Encode a numbl value as a JSON string (returned as a char row vector).
+// Mirrors MATLAB's jsonencode for the common cases: struct -> object,
+// cell -> array, char/string -> string, logical -> true/false, numeric
+// scalar -> number, numeric vector/matrix -> (nested) array, [] -> [].
+// Non-finite numbers (NaN/Inf) are emitted as null to keep the output valid
+// JSON.
+
+function jsonEncodeNumber(x: number): string {
+  return Number.isFinite(x) ? String(x) : "null";
+}
+
+function jsonEncodeTensor(v: RuntimeTensor): string {
+  if (v.imag)
+    throw new RuntimeError("jsonencode: complex values are not supported");
+  const data = v.data;
+  const n = data.length;
+  const enc = v._isLogical
+    ? (x: number) => (x ? "true" : "false")
+    : jsonEncodeNumber;
+  const shape = v.shape ?? [n];
+  // scalar
+  if (n === 1 && shape.every(s => s === 1)) return enc(data[0]);
+  if (n === 0) return "[]";
+  // vector (at most one non-singleton dimension)
+  const nonSingleton = shape.filter(s => s > 1).length;
+  if (shape.length <= 1 || nonSingleton <= 1) {
+    const parts: string[] = [];
+    for (let i = 0; i < n; i++) parts.push(enc(data[i]));
+    return "[" + parts.join(",") + "]";
+  }
+  // 2-D matrix: nest by rows (column-major storage -> data[j*m + i])
+  if (shape.length === 2) {
+    const [m, cols] = shape;
+    const rows: string[] = [];
+    for (let i = 0; i < m; i++) {
+      const rowParts: string[] = [];
+      for (let j = 0; j < cols; j++) rowParts.push(enc(data[j * m + i]));
+      rows.push("[" + rowParts.join(",") + "]");
+    }
+    return "[" + rows.join(",") + "]";
+  }
+  // N-D fallback: flat array
+  const parts: string[] = [];
+  for (let i = 0; i < n; i++) parts.push(enc(data[i]));
+  return "[" + parts.join(",") + "]";
+}
+
+function jsonEncodeCell(v: RuntimeCell): string {
+  if (v.data.length === 0) return "[]";
+  return "[" + v.data.map(jsonEncodeValue).join(",") + "]";
+}
+
+function jsonEncodeStruct(v: RuntimeStruct): string {
+  const parts: string[] = [];
+  for (const [key, val] of v.fields) {
+    parts.push(JSON.stringify(key) + ":" + jsonEncodeValue(val));
+  }
+  return "{" + parts.join(",") + "}";
+}
+
+function jsonEncodeValue(v: RuntimeValue): string {
+  if (v === undefined || v === null) return "null";
+  if (isRuntimeNumber(v)) return jsonEncodeNumber(v);
+  if (isRuntimeLogical(v)) return v ? "true" : "false";
+  if (isRuntimeString(v)) return JSON.stringify(v);
+  if (isRuntimeChar(v)) {
+    // Multi-row char array -> array of row strings; otherwise a single string.
+    if (v.shape && v.shape.length === 2 && v.shape[0] > 1) {
+      const rows = v.shape[0];
+      const cols = v.shape[1];
+      const out: string[] = [];
+      for (let i = 0; i < rows; i++) {
+        let row = "";
+        for (let j = 0; j < cols; j++) row += v.value[j * rows + i] ?? "";
+        out.push(JSON.stringify(row));
+      }
+      return "[" + out.join(",") + "]";
+    }
+    return JSON.stringify(v.value);
+  }
+  if (isRuntimeTensor(v)) return jsonEncodeTensor(v);
+  if (isRuntimeCell(v)) return jsonEncodeCell(v);
+  if (isRuntimeStruct(v)) return jsonEncodeStruct(v);
+  if (isRuntimeStructArray(v))
+    return "[" + v.elements.map(jsonEncodeStruct).join(",") + "]";
+  throw new RuntimeError("jsonencode: unsupported value type");
+}
+
+defineBuiltin({
+  name: "jsonencode",
+  help: {
+    signatures: ["txt = jsonencode(V)"],
+    description:
+      "Encode value V (struct, cell, char/string, logical, or numeric array) as a JSON-formatted char row vector.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 1) return null;
+        return [{ kind: "char" }];
+      },
+      apply: args => RTV.char(jsonEncodeValue(args[0])),
+    },
+  ],
+});
 
 // ── idivide ─────────────────────────────────────────────────────────────
 //
