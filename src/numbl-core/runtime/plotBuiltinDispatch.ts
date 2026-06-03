@@ -227,6 +227,16 @@ export function dispatchPlotBuiltin(
           cols: args[1],
           index: args[2],
         });
+      } else if (args.length === 1) {
+        // Single three-digit form: subplot(mnp), e.g. subplot(131) is
+        // shorthand for subplot(1,3,1). Each digit must be 1-9.
+        const mnp = toNumber(args[0]);
+        const rows = Math.floor(mnp / 100);
+        const cols = Math.floor((mnp % 100) / 10);
+        const index = mnp % 10;
+        if (rows >= 1 && cols >= 1 && index >= 1 && index <= rows * cols) {
+          plotInstr(instructions, { type: "set_subplot", rows, cols, index });
+        }
       }
       return true;
     }
