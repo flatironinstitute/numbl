@@ -75,8 +75,9 @@ export type FigureState = {
   axes: { [index: number]: AxesState };
   /** When set, this figure is an HTML UI component (MATLAB `uihtml`): the
    *  `html` string is rendered in an iframe instead of the axes/trace canvas.
-   *  Takes precedence over `axes`. */
-  uihtml?: { id: string; html: string };
+   *  Takes precedence over `axes`. `data` is the JSON-encoded `Data` property
+   *  (from `jsonencode`), pushed into the page's `htmlComponent`. */
+  uihtml?: { id: string; html: string; data?: string };
 };
 
 export type FiguresState = {
@@ -233,7 +234,7 @@ export const figuresReducer = (
           ...state.figs,
           [state.currentHandle]: {
             ...fig,
-            uihtml: { id: action.id, html: action.html },
+            uihtml: { id: action.id, html: action.html, data: action.data },
           },
         },
       };

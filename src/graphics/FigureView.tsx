@@ -4,6 +4,7 @@ import type { PlotTrace } from "./types.js";
 import type { AxesState, FigureState } from "./figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
+import { buildUihtmlSrcDoc } from "./uihtmlSrcDoc.js";
 
 class AxesErrorBoundary extends Component<
   { children: ReactNode },
@@ -52,16 +53,16 @@ interface FigureViewProps {
 export function FigureView({ figure }: FigureViewProps) {
   const { subplotGrid, sgtitle, axes } = figure;
 
-  // A directory figure (set via `webfigure`) is rendered as an iframe and
-  // takes precedence over the axes/trace canvas.
+  // An HTML UI component (MATLAB `uihtml`) renders its self-contained HTML in
+  // an iframe, taking precedence over the axes/trace canvas. A srcdoc document
+  // needs no server; key by id to remount when HTMLSource/Data changes. The
+  // srcdoc embeds the `htmlComponent` data bridge (see buildUihtmlSrcDoc).
   if (figure.uihtml) {
-    // An HTML UI component (uihtml) renders its self-contained HTML in an
-    // iframe. A srcdoc document needs no server; key by id to remount on change.
     return (
       <iframe
         key={figure.uihtml.id}
         title={`uihtml-${figure.uihtml.id}`}
-        srcDoc={figure.uihtml.html}
+        srcDoc={buildUihtmlSrcDoc(figure.uihtml.html, figure.uihtml.data)}
         style={{
           width: "100%",
           height: "100%",

@@ -1717,15 +1717,25 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return nargout >= 1 ? RTV.num(rt.currentFigureHandle) : undefined;
   });
 
-  // `drawuihtml(html)` — native emit primitive behind the `uihtml` component.
-  // Pushes a `uihtml` PlotInstruction (rendered as an iframe by FigureView)
-  // onto the current figure. A fresh id per call makes the viewer remount the
-  // iframe when HTMLSource changes.
+  // `drawuihtml(html[, dataJson])` — native emit primitive behind the `uihtml`
+  // component. Pushes a `uihtml` PlotInstruction (rendered as an iframe by
+  // FigureView) onto the current figure. A fresh id per call makes the viewer
+  // remount the iframe when HTMLSource or Data changes. `dataJson`, when given,
+  // is the `Data` property already JSON-encoded (the shim calls `jsonencode`);
+  // the renderer parses it and feeds it to the page's `htmlComponent` so the
+  // `setup`/`"DataChanged"` bridge fires.
   let uihtmlSeq = 0;
   registerSpecial("drawuihtml", (_nargout, args) => {
     const html = args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "";
+    const data =
+      args.length > 1 ? toString(ensureRuntimeValue(args[1])) : undefined;
     uihtmlSeq += 1;
-    rt.plotInstructions.push({ type: "uihtml", id: "uh" + uihtmlSeq, html });
+    rt.plotInstructions.push({
+      type: "uihtml",
+      id: "uh" + uihtmlSeq,
+      html,
+      ...(data !== undefined ? { data } : {}),
+    });
     return undefined;
   });
 

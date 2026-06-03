@@ -5,11 +5,21 @@ classdef uihtml < handle
     %   figure) is accepted and ignored. Supported name-value options:
     %   HTMLSource, Data, Position.
     %
+    %   H = UIHTML('HTMLSource', HTML, 'Data', X) also sends X into the page.
+    %   Mirroring MATLAB, X is encoded with jsonencode, parsed in the page with
+    %   JSON.parse, and set on the JavaScript `htmlComponent.Data` object,
+    %   firing any "DataChanged" listener registered in the page's
+    %   `function setup(htmlComponent)`. To update the data after construction,
+    %   set H.Data and call show(H) (numbl re-renders the component):
+    %
+    %       h = uihtml('HTMLSource', html, 'Data', struct('n', 1));
+    %       h.Data = struct('n', 2);
+    %       show(h);
+    %
     %   numbl currently supports HTMLSource given as an HTML markup string (a
-    %   single self-contained document). The component renders when HTMLSource
-    %   is set at construction; call show(h) to re-render after changing it.
-    %   (HTML file paths, supporting files, and the Data/event bridge are not
-    %   yet supported.)
+    %   single self-contained document). HTML file paths, supporting files, and
+    %   the JavaScript-to-MATLAB reverse channel (DataChangedFcn,
+    %   HTMLEventReceivedFcn, sendEventToMATLAB) are not yet supported.
     properties
         HTMLSource = ''
         Data = []
@@ -35,12 +45,20 @@ classdef uihtml < handle
                 end
             end
             if ~isempty(obj.HTMLSource)
-                drawuihtml(obj.HTMLSource);
+                if isempty(obj.Data)
+                    drawuihtml(obj.HTMLSource);
+                else
+                    drawuihtml(obj.HTMLSource, jsonencode(obj.Data));
+                end
             end
         end
 
         function show(obj)
-            drawuihtml(obj.HTMLSource);
+            if isempty(obj.Data)
+                drawuihtml(obj.HTMLSource);
+            else
+                drawuihtml(obj.HTMLSource, jsonencode(obj.Data));
+            end
         end
     end
 end

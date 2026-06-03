@@ -319,10 +319,14 @@ export type PlotInstruction =
   | {
       /** An HTML UI component (MATLAB `uihtml`): renders self-contained HTML
        *  markup in an iframe, bypassing the axes/trace model. `html` is the
-       *  full HTMLSource string; `id` is a stable per-component key. */
+       *  full HTMLSource string; `id` is a stable per-component key. `data`, when
+       *  present, is the `Data` property JSON-encoded (via `jsonencode`); the
+       *  renderer parses it and pushes it to the page's `htmlComponent` so the
+       *  `setup`/`"DataChanged"` bridge fires (MATLAB `h.Data` → JavaScript). */
       type: "uihtml";
       id: string;
       html: string;
+      data?: string;
     }
   | { type: "plot"; traces: PlotTrace[] }
   | { type: "plot3"; traces: Plot3Trace[] }
