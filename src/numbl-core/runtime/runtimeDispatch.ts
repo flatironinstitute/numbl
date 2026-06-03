@@ -74,6 +74,8 @@ const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
   "plot",
   "plot3",
   "line",
+  "patch",
+  "fill",
   "surf",
   "scatter",
   "imagesc",

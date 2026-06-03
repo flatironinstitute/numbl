@@ -1,6 +1,7 @@
 import type {
   PlotTrace,
   Plot3Trace,
+  PatchTrace,
   SurfTrace,
   ImagescTrace,
   PcolorTrace,
@@ -36,6 +37,7 @@ export type AxesState = {
   quiver3Traces: Quiver3Trace[];
   areaTraces: PlotTrace[];
   areaBaseValue: number;
+  patchTraces: PatchTrace[];
   title?: string;
   xlabel?: string;
   ylabel?: string;
@@ -100,6 +102,7 @@ const defaultAxes: AxesState = {
   quiver3Traces: [],
   areaTraces: [],
   areaBaseValue: 0,
+  patchTraces: [],
 };
 
 function getAxes(fig: FigureState): AxesState {
@@ -167,6 +170,7 @@ function addTraces(
       | "quiver3Traces"
       | "areaTraces"
       | "areaBaseValue"
+      | "patchTraces"
     >
   >
 ): FiguresState {
@@ -198,6 +202,7 @@ function addTraces(
         quiver3Traces: update.quiver3Traces ?? (hold ? axes.quiver3Traces : []),
         areaTraces: update.areaTraces ?? (hold ? axes.areaTraces : []),
         areaBaseValue: update.areaBaseValue ?? axes.areaBaseValue,
+        patchTraces: update.patchTraces ?? (hold ? axes.patchTraces : []),
         ...(update.imagescTrace !== undefined
           ? { imagescTrace: update.imagescTrace }
           : {}),
@@ -253,6 +258,15 @@ export const figuresReducer = (
       });
     }
 
+    case "patch": {
+      // patch adds polygons to the current axes without clearing other objects
+      // or respecting hold (it does not call newplot).
+      const axes = getAxes(ensureFig(state));
+      return updateAxes(state, {
+        patchTraces: [...axes.patchTraces, action.trace],
+      });
+    }
+
     case "update_trace": {
       // Live-update a previously-created trace identified by `id` (from a
       // graphics handle, e.g. `set(h,'XData',...)`). Because plot batches are
@@ -275,6 +289,7 @@ export const figuresReducer = (
       return updateAxes(state, {
         traces: patch(axes.traces),
         plot3Traces: patch(axes.plot3Traces),
+        patchTraces: patch(axes.patchTraces),
       });
     }
 

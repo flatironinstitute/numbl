@@ -100,6 +100,8 @@ import {
 import {
   pcolorCall as _pcolorCall,
   lineCall as _lineCall,
+  patchCall as _patchCall,
+  fillCall as _fillCall,
   contourCall as _contourCall,
   quiver3Call as _quiver3Call,
   fplotCall as _fplotCall,
@@ -443,6 +445,48 @@ export class Runtime {
           }
         }
         return RTV.dummyHandle();
+      }
+    };
+    // `patch` returns a Patch handle when an output is requested
+    // (`p = patch(...)`). Wrap the freshly-pushed trace and tag it with an id
+    // so `set(p,'FaceColor',...)` can live-update the rendered patch.
+    this.builtins["patch"] = (_nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      _patchCall(this.plotInstructions, margs);
+      if (_nargout >= 1) {
+        const last = this.plotInstructions[this.plotInstructions.length - 1];
+        if (last && last.type === "patch") {
+          last.trace.id = this.graphicsIdCounter++;
+          return RTV.graphicsHandle(
+            last.trace as unknown as Record<string, unknown>,
+            "patch"
+          );
+        }
+        return RTV.dummyHandle();
+      }
+    };
+    // `fill` creates filled 2-D patches (one per X,Y,C group). It reuses the
+    // patch trace/handle machinery; `p = fill(...)` returns the handle of the
+    // first patch created (MATLAB returns a vector when there are several).
+    this.builtins["fill"] = (_nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      const start = this.plotInstructions.length;
+      _fillCall(this.plotInstructions, margs);
+      if (_nargout >= 1) {
+        let firstHandle: RuntimeValue | undefined;
+        for (let i = start; i < this.plotInstructions.length; i++) {
+          const instr = this.plotInstructions[i];
+          if (instr.type === "patch") {
+            instr.trace.id = this.graphicsIdCounter++;
+            if (!firstHandle) {
+              firstHandle = RTV.graphicsHandle(
+                instr.trace as unknown as Record<string, unknown>,
+                "patch"
+              );
+            }
+          }
+        }
+        return firstHandle ?? RTV.dummyHandle();
       }
     };
     // `contour` / `contourf` push the plot instruction and, when an output

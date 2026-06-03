@@ -20,7 +20,8 @@ import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { allocFloat64Array } from "./alloc.js";
 import { horzcat } from "./tensor-construction.js";
-import { resolveColor } from "./plotUtils.js";
+import { resolveColor, applyPatchProp } from "./plotUtils.js";
+import type { PatchTrace } from "../../graphics/types.js";
 
 /** Convert a plain JS value stored on a graphics-handle trace into a runtime
  *  value when read as a property (e.g. `H.LineWidth`). */
@@ -45,6 +46,14 @@ const HANDLE_DEFAULTS: Record<string, Record<string, unknown>> = {
     LineWidth: 0.5,
     Marker: "none",
     MarkerSize: 6,
+  },
+  patch: {
+    FaceColor: [0, 0.447, 0.741],
+    EdgeColor: [0, 0, 0],
+    FaceAlpha: 1,
+    LineStyle: "-",
+    LineWidth: 0.5,
+    Marker: "none",
   },
   quiver3: {
     LineWidth: 0.5,
@@ -132,12 +141,35 @@ function runtimeToHandleValue(value: RuntimeValue, current: unknown): unknown {
  *  Returns the resolved trace key and the stored JS value so callers (e.g.
  *  `set`) can re-emit the change as an `update_trace` instruction. Shared by
  *  dot-assignment (`h.Prop = v`) and `set(h,'Prop',v,...)`. */
+/** MATLAB patch property (lower-case) → PatchTrace field name. */
+const PATCH_FIELD_MAP: Record<string, string> = {
+  facecolor: "faceColor",
+  edgecolor: "edgeColor",
+  facealpha: "faceAlpha",
+  linewidth: "lineWidth",
+  linestyle: "lineStyle",
+  marker: "marker",
+  markerfacecolor: "markerFaceColor",
+  facevertexcdata: "faceVertexCData",
+  cdata: "faceVertexCData",
+};
+
 export function applyHandleProperty(
   trace: Record<string, unknown>,
   traceType: string,
   field: string,
   value: RuntimeValue
 ): { key: string; value: unknown } {
+  // Patch color/style props need patch-specific normalization (keywords like
+  // 'flat'/'interp'/'none', color names → RGB, color-data arrays).
+  if (traceType === "patch") {
+    const lower = field.toLowerCase();
+    const tkey = PATCH_FIELD_MAP[lower];
+    if (tkey) {
+      applyPatchProp(trace as unknown as PatchTrace, lower, value);
+      return { key: tkey, value: trace[tkey] };
+    }
+  }
   const key =
     resolveHandleKey(trace, field) ??
     field.charAt(0).toLowerCase() + field.slice(1);

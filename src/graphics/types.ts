@@ -46,6 +46,36 @@ export interface Plot3Trace {
   id?: number;
 }
 
+// ── PatchTrace type ─────────────────────────────────────────────────────
+
+/** A patch object: one or more colored polygons sharing a single set of
+ *  vertices. Mirrors MATLAB's Faces/Vertices model — `patch(X,Y,C)` and the
+ *  name-value forms are all canonicalized to this shape at parse time. */
+export interface PatchTrace {
+  /** Unique vertices: `vertices[k] = [x, y]` (2-D) or `[x, y, z]` (3-D). */
+  vertices: number[][];
+  /** Faces as 0-based vertex-index arrays — one polygon per face. */
+  faces: number[][];
+  /** Single RGB for all faces, a colormap keyword, or 'none'. */
+  faceColor?: [number, number, number] | "flat" | "interp" | "none";
+  /** Edge color (default black [0,0,0]). */
+  edgeColor?: [number, number, number] | "flat" | "interp" | "none";
+  /** Face transparency in [0,1]. */
+  faceAlpha?: number;
+  lineWidth?: number;
+  lineStyle?: string;
+  marker?: string;
+  markerFaceColor?: [number, number, number] | "flat" | "none";
+  /** Color data driving 'flat'/'interp': one entry per face (flat) or per
+   *  vertex (interp). Each entry is a scalar (mapped through the colormap) or
+   *  an RGB triplet. */
+  faceVertexCData?: (number | [number, number, number])[];
+  /** True when vertices carry a z-coordinate (3-D patch). */
+  is3D?: boolean;
+  /** See PlotTrace.id — lets `set(p,...)` live-update this patch. */
+  id?: number;
+}
+
 // ── SurfTrace type ──────────────────────────────────────────────────────
 
 export interface SurfTrace {
@@ -290,6 +320,7 @@ export type PlotInstruction =
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "line"; traces: PlotTrace[] }
   | { type: "line3"; traces: Plot3Trace[] }
+  | { type: "patch"; trace: PatchTrace }
   | { type: "update_trace"; id: number; props: Record<string, unknown> }
   | { type: "surf"; trace: SurfTrace }
   | { type: "surface"; trace: SurfTrace }

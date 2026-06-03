@@ -1635,6 +1635,29 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Create primitive line(s) in the current axes. Like surface, line adds to the current axes without clearing existing objects or respecting hold. Vector inputs draw a single line; matrix inputs draw one line per column. With no arguments, draws a line from (0,0) to (1,1). The low-level form, line('XData',X,'YData',Y), draws a black line. Name-Value pairs (Color, LineStyle, LineWidth, Marker, MarkerSize) set appearance.",
   },
+  patch: {
+    signatures: [
+      "patch(X, Y, C)",
+      "patch(X, Y, Z, C)",
+      "patch('XData', X, 'YData', Y)",
+      "patch('Faces', F, 'Vertices', V)",
+      "patch(S)",
+      "patch(___, Name, Value)",
+      "P = patch(___)",
+    ],
+    description:
+      "Create one or more colored polygons (a patch). Specify vertices with X/Y(/Z) coordinate vectors or matrices (one polygon per column), with a Faces/Vertices pair, or with a struct S of patch properties. C sets the color: a color name or RGB triplet for a single color, one value per face (FaceColor 'flat'), or one value per vertex (FaceColor 'interp'). Like line, patch adds to the current axes without clearing or respecting hold. Name-Value pairs include FaceColor, EdgeColor, FaceAlpha, LineWidth, LineStyle, Marker, and FaceVertexCData.",
+  },
+  fill: {
+    signatures: [
+      "fill(X, Y, C)",
+      "fill(X1, Y1, C1, ..., Xn, Yn, Cn)",
+      "fill(___, Name, Value)",
+      "P = fill(___)",
+    ],
+    description:
+      "Plot filled 2-D polygonal regions as patches with vertices at the (X,Y) locations. Use vectors for one region or matrices (one column per region) for several. C sets the fill color (color name, RGB triplet, one colormap index per region for 'flat', or one per vertex for 'interp'). Multiple X,Y,C groups draw several regions at once. Accepts the same Name-Value patch properties (FaceColor, EdgeColor, FaceAlpha, LineWidth, LineStyle).",
+  },
   title: {
     signatures: ["title(TXT)"],
     description: "Set title of current axes.",

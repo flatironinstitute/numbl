@@ -43,6 +43,8 @@ import {
   plotCall,
   plot3Call,
   lineCall,
+  patchCall,
+  fillCall,
   surfCall,
   surfaceCall,
   scatterCall,
@@ -117,6 +119,12 @@ export function dispatchPlotBuiltin(
       return true;
     case "line":
       lineCall(instructions, args);
+      return true;
+    case "patch":
+      patchCall(instructions, args);
+      return true;
+    case "fill":
+      fillCall(instructions, args);
       return true;
     case "surf":
       surfCall(instructions, args);
@@ -541,6 +549,8 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "plot",
   "plot3",
   "line",
+  "patch",
+  "fill",
   "surf",
   "surface",
   "scatter",

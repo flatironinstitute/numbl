@@ -33,6 +33,8 @@ import {
   parsePlotArgs,
   parsePlot3Args,
   parseLineArgs,
+  parsePatchArgs,
+  parseFillArgs,
   parseSurfArgs,
   parseScatterArgs,
   parseImagescArgs,
@@ -268,6 +270,25 @@ export function lineCall(
     }
   } else if (parsed.traces.length > 0) {
     plotInstructions.push({ type: "line", traces: parsed.traces });
+  }
+}
+
+export function patchCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const trace = parsePatchArgs(args);
+  plotInstructions.push({ type: "patch", trace });
+}
+
+export function fillCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  // fill is patch's 2-D form over one or more (X,Y,C) groups — one patch
+  // instruction per group.
+  for (const trace of parseFillArgs(args)) {
+    plotInstructions.push({ type: "patch", trace });
   }
 }
 

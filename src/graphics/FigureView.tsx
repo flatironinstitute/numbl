@@ -185,6 +185,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
       quiverTraces={axes.quiverTraces}
       areaTraces={axes.areaTraces}
       areaBaseValue={axes.areaBaseValue}
+      patchTraces={axes.patchTraces}
       shading={axes.shading}
       colorbar={axes.colorbar}
       colorbarLocation={axes.colorbarLocation}
@@ -221,6 +222,7 @@ function PlotCanvas({
   quiverTraces,
   areaTraces,
   areaBaseValue,
+  patchTraces,
   shading,
   colorbar,
   colorbarLocation,
@@ -253,6 +255,7 @@ function PlotCanvas({
   quiverTraces?: AxesState["quiverTraces"];
   areaTraces?: AxesState["areaTraces"];
   areaBaseValue?: number;
+  patchTraces?: AxesState["patchTraces"];
   shading?: AxesState["shading"];
   colorbar?: boolean;
   colorbarLocation?: string;
@@ -300,7 +303,8 @@ function PlotCanvas({
       ylim,
       yDir,
       axisVisible,
-      boxOn
+      boxOn,
+      patchTraces
     );
   }, [
     traces,
@@ -334,6 +338,7 @@ function PlotCanvas({
     yDir,
     axisVisible,
     boxOn,
+    patchTraces,
   ]);
 
   useEffect(() => {

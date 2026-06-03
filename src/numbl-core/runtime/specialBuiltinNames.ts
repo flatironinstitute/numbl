@@ -33,6 +33,8 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "plot",
   "plot3",
   "line",
+  "patch",
+  "fill",
   "surf",
   "surface",
   "scatter",
