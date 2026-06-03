@@ -46,25 +46,36 @@ Usage: numbl <command> [options]
 Commands:
   run <file.m>       Run a .m file
   eval "<code>"      Evaluate inline code
-  run-tests [dir]    Run .m test scripts
-  build-addon        Build native LAPACK addon
+  run-tests [dir]    Run .m test scripts (default: numbl_test_scripts/)
+  build-addon        Build native LAPACK addon (--fast-math to enable -ffast-math)
+  build-site <dir>   Build a static, browser-runnable site for a numbl project
   info               Print machine-readable info (JSON)
   list-builtins      List available built-in functions
   (no command)       Start interactive REPL
+
+Global options:
+  --version, -V      Print version and exit
+  --help, -h         Print this help message
 
 Options (for REPL):
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
 
 Options (for run and eval):
-  --dump-js <file>   Write JIT-generated JavaScript to file
+  --dump-js <file>   Write JS-JIT-generated JavaScript to file
+  --dump-c <file>    Write C-JIT-generated C to file (--opt 2)
   --dump-ast         Print AST as JSON
   --verbose          Detailed logging to stderr
   --stream           NDJSON output mode
   --path <dir>       Add extra workspace directory
   --plot             Enable plot server
   --plot-port <port> Set plot server port (implies --plot)
-  --opt <level>      Optimization level (0=none, 1=JIT; default: 1)
+  --opt <mode>       Optimization mode (default: 1)
+                       0  interpreter (no JIT)
+                       1  JS-JIT: type-specialize hot functions to JS
+                       2  C-JIT: native kernels (Node only; falls back to JS-JIT)
+  --fast-math        Build/load the native addon with -ffast-math: faster, but
+                     FP results drift across --opt levels. Off by default.
 
 Environment variables:
   NUMBL_PATH         Extra workspace directories (separated by :)
