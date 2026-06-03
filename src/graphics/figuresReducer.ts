@@ -73,6 +73,10 @@ export type FigureState = {
   currentAxesIndex: number; // 1-based
   sgtitle?: string;
   axes: { [index: number]: AxesState };
+  /** When set, this figure is a "directory figure" (see the `webfigure`
+   *  PlotInstruction): a self-contained static-file bundle rendered in an
+   *  iframe instead of the axes/trace canvas. Takes precedence over `axes`. */
+  bundle?: { id: string; files: Map<string, string | Uint8Array> };
 };
 
 export type FiguresState = {
@@ -218,6 +222,25 @@ export const figuresReducer = (
   switch (action.type) {
     case "set_figure_handle":
       return { ...state, currentHandle: action.handle };
+
+    case "webfigure": {
+      // A directory figure replaces the current figure's content with a
+      // static-file bundle (rendered as an iframe by FigureView).
+      const fig = ensureFig(state);
+      return {
+        ...state,
+        figs: {
+          ...state.figs,
+          [state.currentHandle]: {
+            ...fig,
+            // When `files` is absent (CLI: the host serves the bundle), keep
+            // an empty map — BundleFigureView then just points the iframe at
+            // the host-served URL instead of publishing to the SW cache.
+            bundle: { id: action.id, files: action.files ?? new Map() },
+          },
+        },
+      };
+    }
 
     case "set_hold":
       return updateAxes(state, { holdOn: action.value });

@@ -71,6 +71,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "stream2",
   "ishold",
   "figure",
+  "drawwebfigure",
   "subplot",
   "tiledlayout",
   "nexttile",

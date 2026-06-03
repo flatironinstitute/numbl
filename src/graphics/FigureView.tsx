@@ -4,6 +4,7 @@ import type { PlotTrace } from "./types.js";
 import type { AxesState, FigureState } from "./figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
+import { BundleFigureView } from "./BundleFigureView.js";
 
 class AxesErrorBoundary extends Component<
   { children: ReactNode },
@@ -51,6 +52,19 @@ interface FigureViewProps {
 
 export function FigureView({ figure }: FigureViewProps) {
   const { subplotGrid, sgtitle, axes } = figure;
+
+  // A directory figure (set via `webfigure`) is rendered as an iframe and
+  // takes precedence over the axes/trace canvas.
+  if (figure.bundle) {
+    // key by id so a new directory figure remounts with fresh state.
+    return (
+      <BundleFigureView
+        key={figure.bundle.id}
+        id={figure.bundle.id}
+        files={figure.bundle.files}
+      />
+    );
+  }
 
   const axesIndices = Object.keys(axes)
     .map(Number)

@@ -1,4 +1,8 @@
-import { createServer, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type ServerResponse,
+  type IncomingMessage,
+} from "node:http";
 import { exec } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { join, extname } from "node:path";
@@ -50,8 +54,78 @@ export async function startPlotServer(
   let messageId = 0;
   const pendingMessages: string[] = [];
 
+  // In-memory store for "directory figures" (the `webfigure` builtin). The
+  // files arrive in the instruction stream on the Node side; we keep them here
+  // and serve them at /figs/<id>/... so the browser viewer renders them in an
+  // iframe. This is the CLI counterpart to the browser IDE's service worker.
+  const figureFiles = new Map<string, Map<string, string | Uint8Array>>();
+
+  function serveFigureFile(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL
+  ): void {
+    const rest = decodeURIComponent(url.pathname.slice("/figs/".length));
+    const slash = rest.indexOf("/");
+    const id = slash >= 0 ? rest.slice(0, slash) : rest;
+    let filePath = slash >= 0 ? rest.slice(slash + 1) : "";
+    if (filePath === "") filePath = "index.html";
+
+    const content = figureFiles.get(id)?.get(filePath);
+    if (content === undefined) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("Not found: " + url.pathname);
+      return;
+    }
+
+    const buf =
+      typeof content === "string"
+        ? Buffer.from(content, "utf-8")
+        : Buffer.from(content.buffer, content.byteOffset, content.byteLength);
+    const contentType =
+      MIME_TYPES[extname(filePath)] || "application/octet-stream";
+
+    // Honor byte-range requests (figpack and other viewers read chunked data
+    // this way) with a 206 response.
+    const range = req.headers.range;
+    if (range) {
+      const m = /bytes=(\d*)-(\d*)/.exec(range);
+      let start = m && m[1] ? parseInt(m[1], 10) : 0;
+      let end = m && m[2] ? parseInt(m[2], 10) : buf.length - 1;
+      if (isNaN(start)) start = 0;
+      if (isNaN(end) || end >= buf.length) end = buf.length - 1;
+      if (start > end || start >= buf.length) {
+        res.writeHead(416, { "Content-Range": `bytes */${buf.length}` });
+        res.end();
+        return;
+      }
+      const slice = buf.subarray(start, end + 1);
+      res.writeHead(206, {
+        "Content-Type": contentType,
+        "Content-Range": `bytes ${start}-${end}/${buf.length}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": String(slice.length),
+      });
+      res.end(slice);
+      return;
+    }
+
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Accept-Ranges": "bytes",
+      "Content-Length": String(buf.length),
+    });
+    res.end(buf);
+  }
+
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost`);
+
+    // Directory-figure files, served from memory.
+    if (url.pathname.startsWith("/figs/")) {
+      serveFigureFile(req, res, url);
+      return;
+    }
 
     // SSE endpoint
     if (url.pathname === "/events") {
@@ -138,8 +212,19 @@ export async function startPlotServer(
   process.on("SIGTERM", onExit);
 
   function sendInstructions(instructions: PlotInstruction[]): void {
+    // Pull "directory figure" files out of the stream and keep them
+    // server-side; forward only a lightweight `{type, id}` reference over SSE
+    // (a Map of binary files doesn't survive JSON, and the files are served
+    // from /figs/<id>/ instead).
+    const outgoing = instructions.map(instr => {
+      if (instr.type === "webfigure") {
+        if (instr.files) figureFiles.set(instr.id, instr.files);
+        return { type: "webfigure", id: instr.id };
+      }
+      return instr;
+    });
     messageId++;
-    const payload = `id: ${messageId}\ndata: ${JSON.stringify(instructions)}\n\n`;
+    const payload = `id: ${messageId}\ndata: ${JSON.stringify(outgoing)}\n\n`;
     if (sseClients.length === 0) {
       pendingMessages.push(payload);
     } else {

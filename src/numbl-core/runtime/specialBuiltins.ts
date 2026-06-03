@@ -24,6 +24,7 @@ import {
   isRuntimeDictionary,
   isRuntimeStruct,
   isRuntimeSparseMatrix,
+  isRuntimeCell,
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { applyHandleProperty } from "./struct-access.js";
@@ -1716,6 +1717,47 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return nargout >= 1
       ? RTV.num(toNumber(ensureRuntimeValue(handle)))
       : undefined;
+  });
+
+  // `drawwebfigure(paths, contents)` — the native emit primitive behind the
+  // `webfigure` stdlib function. It takes two cell arrays (file paths and
+  // their contents, char for text or uint8 for binary), assembles them into a
+  // directory bundle, and pushes a `webfigure` PlotInstruction onto the
+  // current figure. The Map traversal lives in webfigure.m so this stays a
+  // simple cell→Map marshal. `id` is a per-call key for the iframe/cache.
+  let webFigureSeq = 0;
+  registerSpecial("drawwebfigure", (_nargout, args) => {
+    const margs = args.map(ensureRuntimeValue);
+    const pathsCell = margs[0];
+    const contentsCell = margs[1];
+    if (!isRuntimeCell(pathsCell) || !isRuntimeCell(contentsCell)) {
+      throw new RuntimeError(
+        "drawwebfigure: expected two cell arrays (paths, contents)"
+      );
+    }
+    const paths = pathsCell.data;
+    const contents = contentsCell.data;
+    const files = new Map<string, string | Uint8Array>();
+    for (let i = 0; i < paths.length; i++) {
+      const path = toString(paths[i]);
+      const c = contents[i];
+      let content: string | Uint8Array;
+      if (c !== undefined && isRuntimeChar(c)) {
+        content = toString(c);
+      } else if (c !== undefined && isRuntimeTensor(c)) {
+        content = Uint8Array.from(c.data as ArrayLike<number>);
+      } else {
+        content = toString(ensureRuntimeValue(c));
+      }
+      files.set(path, content);
+    }
+    webFigureSeq += 1;
+    rt.plotInstructions.push({
+      type: "webfigure",
+      id: "wf" + webFigureSeq,
+      files,
+    });
+    return undefined;
   });
 
   // Bulk register graphics ops that share the simple
