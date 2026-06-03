@@ -42,12 +42,23 @@ disp('Hello from numbl!')
 disp(['Sum of squares: ', num2str(sum(y))])
 `;
 
+// Decode a base64 script parameter as UTF-8. The encoder (numbl-embed.js)
+// base64-encodes the UTF-8 bytes so scripts may contain non-ASCII characters
+// (em dashes, Greek letters, …). For pure-ASCII input this matches a plain
+// atob(), so older base64 links still decode correctly.
+function base64ToUtf8(b64: string): string {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
 function getQueryScript(): string {
   const params = new URLSearchParams(window.location.search);
   const scriptParam = params.get("script");
   if (scriptParam) {
     try {
-      return atob(scriptParam);
+      return base64ToUtf8(scriptParam);
     } catch {
       console.error("Failed to decode script parameter");
     }
@@ -74,12 +85,19 @@ export function EmbedPage() {
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
     figuresDispatch(instruction);
 
-    // Switch to figure tab when plot data arrives
-    if (
-      instruction.type === "plot" ||
-      instruction.type === "plot3" ||
-      instruction.type === "surf"
-    ) {
+    // Embed-specific: switch to the Figure tab as soon as a run draws anything.
+    // A drawing instruction is any that isn't a control/setter (set_*) or a
+    // clear/close. Keying on that — rather than a fixed plot/plot3/surf list —
+    // covers every plot type (surf, surface, quiver, contour, …), which is why
+    // surfacefun figures previously failed to bring the tab forward.
+    const t = instruction.type;
+    const isControl =
+      t.startsWith("set_") ||
+      t === "cla" ||
+      t === "clf" ||
+      t === "close" ||
+      t === "close_all";
+    if (!isControl) {
       setOutputTab(1);
     }
   }, []);
@@ -146,6 +164,7 @@ export function EmbedPage() {
     if (!workerRef.current) return;
     setIsRunning(true);
     setOutput("");
+    setOutputTab(0); // start on Console; switch to Figure when one is drawn
     figuresDispatch({ type: "clear" });
 
     const [wsFiles, vfsFiles] = await Promise.all([
