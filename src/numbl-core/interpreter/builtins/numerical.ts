@@ -190,6 +190,177 @@ defineBuiltin({
   ],
 });
 
+// ── conv2 ────────────────────────────────────────────────────────────
+
+/** A 2-D matrix view used by conv2: column-major real (+ optional imag). */
+interface ConvMat {
+  re: Float64Array;
+  im?: Float64Array;
+  m: number; // rows
+  n: number; // cols
+}
+
+/** Coerce a conv2 argument (scalar / logical / tensor) to a 2-D matrix. */
+function conv2Matrix(v: RuntimeValue, who: string): ConvMat {
+  if (isRuntimeNumber(v))
+    return { re: allocFloat64Array([v as number]), m: 1, n: 1 };
+  if (isRuntimeLogical(v))
+    return { re: allocFloat64Array([v ? 1 : 0]), m: 1, n: 1 };
+  if (isRuntimeTensor(v)) {
+    const s = v.shape;
+    for (let i = 2; i < s.length; i++) {
+      if (s[i] !== 1)
+        throw new RuntimeError("conv2: N-D arrays are not supported.");
+    }
+    const m = s.length >= 1 ? s[0] : 0;
+    const n = s.length >= 2 ? s[1] : 1;
+    return { re: v.data, im: v.imag, m, n };
+  }
+  throw new RuntimeError(`conv2: ${who} must be numeric`);
+}
+
+/** Outer product u(:) * v(:).' — the kernel of the separable conv2(u,v,A). */
+function conv2Outer(u: ConvMat, v: ConvMat): ConvMat {
+  const p = u.re.length; // numel(u)
+  const q = v.re.length; // numel(v)
+  const re = allocFloat64Array(p * q);
+  const complex = !!u.im || !!v.im;
+  const im = complex ? allocFloat64Array(p * q) : undefined;
+  for (let j = 0; j < q; j++) {
+    const vr = v.re[j];
+    const vi = v.im ? v.im[j] : 0;
+    for (let i = 0; i < p; i++) {
+      const ur = u.re[i];
+      const ui = u.im ? u.im[i] : 0;
+      const idx = i + j * p;
+      re[idx] = ur * vr - ui * vi;
+      if (im) im[idx] = ur * vi + ui * vr;
+    }
+  }
+  return { re, im, m: p, n: q };
+}
+
+/** Full 2-D convolution C(i+bi, j+bj) += A(i,j) * B(bi,bj). */
+function conv2Core(A: ConvMat, B: ConvMat): ConvMat {
+  const { re: Are, im: Aim, m, n } = A;
+  const { re: Bre, im: Bim, m: p, n: q } = B;
+  const Cm = m + p - 1;
+  const Cn = n + q - 1;
+  if (Cm <= 0 || Cn <= 0 || m === 0 || n === 0 || p === 0 || q === 0) {
+    return { re: allocFloat64Array(0), m: Math.max(Cm, 0), n: Math.max(Cn, 0) };
+  }
+  const complex = !!Aim || !!Bim;
+  const Cre = allocFloat64Array(Cm * Cn);
+  const Cim = complex ? allocFloat64Array(Cm * Cn) : undefined;
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < m; i++) {
+      const aIdx = i + j * m;
+      const ar = Are[aIdx];
+      const ai = Aim ? Aim[aIdx] : 0;
+      if (ar === 0 && ai === 0) continue;
+      for (let bj = 0; bj < q; bj++) {
+        const colBase = (j + bj) * Cm;
+        const bColBase = bj * p;
+        for (let bi = 0; bi < p; bi++) {
+          const br = Bre[bColBase + bi];
+          const cIdx = colBase + (i + bi);
+          if (Cim) {
+            const bi2 = Bim ? Bim[bColBase + bi] : 0;
+            Cre[cIdx] += ar * br - ai * bi2;
+            Cim[cIdx] += ar * bi2 + ai * br;
+          } else {
+            Cre[cIdx] += ar * br;
+          }
+        }
+      }
+    }
+  }
+  return { re: Cre, im: Cim, m: Cm, n: Cn };
+}
+
+/** Crop a full convolution to 'full' | 'same' | 'valid' (relative to A). */
+function conv2Crop(
+  C: ConvMat,
+  shape: string,
+  aM: number,
+  aN: number,
+  bM: number,
+  bN: number
+): ConvMat {
+  if (shape === "full") return C;
+  let rows: number, cols: number, offR: number, offC: number;
+  if (shape === "same") {
+    rows = aM;
+    cols = aN;
+    offR = Math.floor(bM / 2);
+    offC = Math.floor(bN / 2);
+  } else if (shape === "valid") {
+    rows = Math.max(aM - bM + 1, 0);
+    cols = Math.max(aN - bN + 1, 0);
+    offR = bM - 1;
+    offC = bN - 1;
+  } else {
+    throw new RuntimeError(`conv2: unknown shape '${shape}'`);
+  }
+  const re = allocFloat64Array(rows * cols);
+  const im = C.im ? allocFloat64Array(rows * cols) : undefined;
+  for (let j = 0; j < cols; j++) {
+    const srcCol = (j + offC) * C.m;
+    const dstCol = j * rows;
+    for (let i = 0; i < rows; i++) {
+      const s = srcCol + (i + offR);
+      re[dstCol + i] = C.re[s];
+      if (im) im[dstCol + i] = C.im![s];
+    }
+  }
+  return { re, im, m: rows, n: cols };
+}
+
+defineBuiltin({
+  name: "conv2",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length < 2 || argTypes.length > 4) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        // Optional trailing shape string.
+        let shape = "full";
+        let numeric = args;
+        const last = args[args.length - 1];
+        if (isRuntimeChar(last) || isRuntimeString(last)) {
+          shape = (isRuntimeChar(last) ? last.value : (last as string))
+            .trim()
+            .toLowerCase();
+          numeric = args.slice(0, -1);
+        }
+
+        let A: ConvMat;
+        let B: ConvMat;
+        if (numeric.length === 2) {
+          // conv2(A, B)
+          A = conv2Matrix(numeric[0], "A");
+          B = conv2Matrix(numeric[1], "B");
+        } else if (numeric.length === 3) {
+          // conv2(u, v, A): separable, equivalent to conv2(A, u(:)*v(:).')
+          const u = conv2Matrix(numeric[0], "u");
+          const v = conv2Matrix(numeric[1], "v");
+          A = conv2Matrix(numeric[2], "A");
+          B = conv2Outer(u, v);
+        } else {
+          throw new RuntimeError(
+            "conv2: expected conv2(A,B), conv2(u,v,A), optionally with a shape"
+          );
+        }
+
+        const C = conv2Crop(conv2Core(A, B), shape, A.m, A.n, B.m, B.n);
+        return RTV.tensor(C.re, [C.m, C.n], C.im);
+      },
+    },
+  ],
+});
+
 // ── deconv ───────────────────────────────────────────────────────────
 
 defineBuiltin({

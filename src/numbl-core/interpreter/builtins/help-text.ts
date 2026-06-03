@@ -1134,6 +1134,15 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Convolution of two vectors. SHAPE: 'full' (default), 'same', 'valid'.",
   },
+  conv2: {
+    signatures: [
+      "C = conv2(A, B)",
+      "C = conv2(u, v, A)",
+      "C = conv2(___, SHAPE)",
+    ],
+    description:
+      "2-D convolution of matrices A and B. conv2(u,v,A) convolves columns of A with u then rows with v (separable). SHAPE: 'full' (default), 'same' (same size as A), 'valid'.",
+  },
   trapz: {
     signatures: ["Q = trapz(Y)", "Q = trapz(X, Y)"],
     description: "Trapezoidal numerical integration.",
