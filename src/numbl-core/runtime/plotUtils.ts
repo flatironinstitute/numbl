@@ -76,7 +76,7 @@ const COLOR_NAMES: Record<string, [number, number, number]> = {
   white: [1, 1, 1],
 };
 
-function resolveColor(
+export function resolveColor(
   v: RuntimeValue | string
 ): [number, number, number] | undefined {
   if (typeof v === "string") {
@@ -619,6 +619,119 @@ function applyPlot3NameValue(
       break;
     }
   }
+}
+
+// ── line argument parser ─────────────────────────────────────────────────
+
+/** Result of parsing line() arguments: a set of 2-D or 3-D traces. */
+export type ParsedLine =
+  | { kind: "2d"; traces: PlotTrace[] }
+  | { kind: "3d"; traces: Plot3Trace[] };
+
+/** A leading argument that should be skipped as an axes handle. numbl has no
+ *  real axes handles, so `line(ax, ___)` is accepted and the handle ignored. */
+function isAxesHandleArg(v: RuntimeValue): boolean {
+  return (
+    !!v &&
+    typeof v === "object" &&
+    "kind" in v &&
+    ((v as RuntimeValue & { kind: string }).kind === "graphics_handle" ||
+      (v as RuntimeValue & { kind: string }).kind === "dummy_handle")
+  );
+}
+
+/**
+ * Parse line() arguments.
+ *
+ * Supported forms:
+ *   line                                  — line from (0,0) to (1,1)
+ *   line(x, y)                            — 2-D line(s)
+ *   line(x, y, z)                         — 3-D line(s)
+ *   line(___, Name, Value)               — Color/LineStyle/LineWidth/Marker/...
+ *   line('XData', x, 'YData', y, ...)    — low-level form (black line)
+ *   line(ax, ___)                        — leading axes handle (ignored)
+ *
+ * Like plot/plot3, vector inputs make a single line and matrix inputs make one
+ * line per column.
+ */
+export function parseLineArgs(args: RuntimeValue[]): ParsedLine {
+  // Drop a leading axes handle: line(ax, ___).
+  let a = args;
+  if (a.length > 0 && isAxesHandleArg(a[0])) a = a.slice(1);
+
+  // line  →  a line from (0,0) to (1,1) with default properties.
+  if (a.length === 0) {
+    return { kind: "2d", traces: [{ x: [0, 1], y: [0, 1] }] };
+  }
+
+  // Low-level form: data supplied via Name-Value pairs. Resulting line is
+  // black (per MATLAB), unless an explicit Color is also given.
+  if (isStringArg(a[0])) {
+    return parseLowLevelLine(a);
+  }
+
+  // High-level form: x, y[, z], then optional Name-Value pairs. Three or more
+  // leading numeric arguments means a 3-D line.
+  let numericCount = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (isNumericArg(a[i])) numericCount++;
+    else break;
+  }
+  if (numericCount >= 3) {
+    return { kind: "3d", traces: parsePlot3Args(a) };
+  }
+  return { kind: "2d", traces: parsePlotArgs(a) };
+}
+
+/** Parse the low-level `line('XData',x,'YData',y,...)` form. */
+function parseLowLevelLine(args: RuntimeValue[]): ParsedLine {
+  let xData: number[] | undefined;
+  let yData: number[] | undefined;
+  let zData: number[] | undefined;
+  const styleArgs: RuntimeValue[] = [];
+
+  let i = 0;
+  while (i + 1 < args.length) {
+    if (!isStringArg(args[i])) break;
+    const key = getStringValue(args[i] as RuntimeValue).toLowerCase();
+    const val = args[i + 1];
+    if (key === "xdata") {
+      xData = toNumberArray(val);
+    } else if (key === "ydata") {
+      yData = toNumberArray(val);
+    } else if (key === "zdata") {
+      zData = toNumberArray(val);
+    } else {
+      // Styling pair (Color, LineStyle, LineWidth, Marker, ...). Defer to the
+      // shared Name-Value application so color names/RGB triplets resolve.
+      styleArgs.push(args[i], val);
+    }
+    i += 2;
+  }
+
+  // Omitted coordinates default to [0 1] (MATLAB's default line endpoints).
+  if (!xData) xData = [0, 1];
+  if (!yData) yData = [0, 1];
+
+  if (zData) {
+    const trace: Plot3Trace = {
+      x: xData,
+      y: yData,
+      z: zData,
+      color: [0, 0, 0],
+    };
+    for (let k = 0; k + 1 < styleArgs.length; k += 2) {
+      const nv = isNameValueKey(styleArgs[k]);
+      if (nv) applyPlot3NameValue([trace], nv, styleArgs[k + 1]);
+    }
+    return { kind: "3d", traces: [trace] };
+  }
+  const trace: PlotTrace = { x: xData, y: yData, color: [0, 0, 0] };
+  for (let k = 0; k + 1 < styleArgs.length; k += 2) {
+    const nv = isNameValueKey(styleArgs[k]);
+    if (nv) applyNameValue([trace], nv, styleArgs[k + 1]);
+  }
+  return { kind: "2d", traces: [trace] };
 }
 
 // ── Surf Name-Value key detection ────────────────────────────────────────

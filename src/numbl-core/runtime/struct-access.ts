@@ -20,6 +20,7 @@ import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { allocFloat64Array } from "./alloc.js";
 import { horzcat } from "./tensor-construction.js";
+import { resolveColor } from "./plotUtils.js";
 
 /** Convert a plain JS value stored on a graphics-handle trace into a runtime
  *  value when read as a property (e.g. `H.LineWidth`). */
@@ -38,6 +39,13 @@ function handlePropToRuntime(v: unknown): RuntimeValue {
  *  (e.g. `q.LineWidth` before any width is set), keyed by trace type and the
  *  MATLAB (PascalCase) property name. */
 const HANDLE_DEFAULTS: Record<string, Record<string, unknown>> = {
+  line: {
+    Color: [0, 0.447, 0.741],
+    LineStyle: "-",
+    LineWidth: 0.5,
+    Marker: "none",
+    MarkerSize: 6,
+  },
   quiver3: {
     LineWidth: 0.5,
     LineStyle: "-",
@@ -59,11 +67,19 @@ function resolveHandleKey(
   if (field in trace) return field;
   const camel = field.charAt(0).toLowerCase() + field.slice(1);
   if (camel in trace) return camel;
-  // MATLAB data properties (XData, UData, …) map to short trace fields.
-  if (field.endsWith("Data")) {
-    const base = field.slice(0, -4);
-    const short = base.charAt(0).toLowerCase() + base.slice(1);
-    if (short in trace) return short;
+  // MATLAB property names are case-insensitive (`XData` ≡ `xdata`), so match
+  // any existing trace key ignoring case.
+  const lower = field.toLowerCase();
+  for (const k of Object.keys(trace)) {
+    if (k.toLowerCase() === lower) return k;
+  }
+  // MATLAB data properties (XData, YData, ZData, UData, …) map to the short
+  // trace fields (x, y, z, u, …). Handled case-insensitively.
+  if (lower.endsWith("data")) {
+    const short = lower.slice(0, -4);
+    for (const k of Object.keys(trace)) {
+      if (k.toLowerCase() === short) return k;
+    }
   }
   return null;
 }
@@ -72,6 +88,17 @@ function resolveHandleKey(
  *  matching the existing field's type. Booleans accept MATLAB on/off
  *  semantics ('off'/'false'/'0' → false). */
 function runtimeToHandleValue(value: RuntimeValue, current: unknown): unknown {
+  // A named/short color string assigned to an RGB-triplet property (e.g.
+  // `pl.Color = 'green'`) resolves to its [r,g,b] triplet, since the renderer
+  // expects a triplet — not the raw string.
+  if (
+    Array.isArray(current) &&
+    current.length === 3 &&
+    (isRuntimeString(value) || isRuntimeChar(value))
+  ) {
+    const rgb = resolveColor(value);
+    if (rgb) return rgb;
+  }
   if (typeof current === "boolean") {
     if (typeof value === "boolean") return value;
     if (typeof value === "number") return value !== 0;
@@ -92,10 +119,32 @@ function runtimeToHandleValue(value: RuntimeValue, current: unknown): unknown {
     if (typeof value === "number") return value;
     if (isRuntimeNumber(value)) return value;
   }
-  if (Array.isArray(current) && isRuntimeTensor(value)) {
-    return Array.from(value.data);
+  if (Array.isArray(current)) {
+    // Coordinate/data properties (XData, YData, …) hold number arrays. A tensor
+    // becomes its flat data; a scalar becomes a one-element array.
+    if (isRuntimeTensor(value)) return Array.from(value.data);
+    if (typeof value === "number") return [value];
   }
   return value;
+}
+
+/** Apply one property to a graphics-handle trace, mutating it in place.
+ *  Returns the resolved trace key and the stored JS value so callers (e.g.
+ *  `set`) can re-emit the change as an `update_trace` instruction. Shared by
+ *  dot-assignment (`h.Prop = v`) and `set(h,'Prop',v,...)`. */
+export function applyHandleProperty(
+  trace: Record<string, unknown>,
+  traceType: string,
+  field: string,
+  value: RuntimeValue
+): { key: string; value: unknown } {
+  const key =
+    resolveHandleKey(trace, field) ??
+    field.charAt(0).toLowerCase() + field.slice(1);
+  const current = trace[key] ?? HANDLE_DEFAULTS[traceType]?.[field];
+  const stored = runtimeToHandleValue(value, current);
+  trace[key] = stored;
+  return { key, value: stored };
 }
 
 export function getRTValueField(
@@ -195,12 +244,7 @@ export function setRTValueField(
     // Mutate the trace in place. Because the handle wraps the same trace
     // object stored in the plot instruction, the change is reflected when
     // the figure renders (e.g. `q.ShowArrowHead = 'off'`).
-    const key =
-      resolveHandleKey(base._trace, field) ??
-      field.charAt(0).toLowerCase() + field.slice(1);
-    const current =
-      base._trace[key] ?? HANDLE_DEFAULTS[base._traceType]?.[field];
-    base._trace[key] = runtimeToHandleValue(value, current);
+    applyHandleProperty(base._trace, base._traceType, field, value);
     return base;
   }
   // Auto-create struct from num 0 or undefined

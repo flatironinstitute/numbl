@@ -22,6 +22,10 @@ export interface PlotTrace {
   markerEdgeColor?: [number, number, number];
   markerFaceColor?: [number, number, number];
   markerIndices?: number[];
+  /** Stable identity for a trace returned as a graphics handle (e.g. from
+   *  `line`). Lets `set(h,'XData',...)` / `update_trace` find and mutate this
+   *  exact trace in the renderer's accumulated state across `drawnow`. */
+  id?: number;
 }
 
 // ── Plot3Trace type ─────────────────────────────────────────────────────
@@ -38,6 +42,8 @@ export interface Plot3Trace {
   markerEdgeColor?: [number, number, number];
   markerFaceColor?: [number, number, number];
   markerIndices?: number[];
+  /** See PlotTrace.id. */
+  id?: number;
 }
 
 // ── SurfTrace type ──────────────────────────────────────────────────────
@@ -282,6 +288,9 @@ export type PlotInstruction =
   | { type: "set_figure_handle"; handle: number }
   | { type: "plot"; traces: PlotTrace[] }
   | { type: "plot3"; traces: Plot3Trace[] }
+  | { type: "line"; traces: PlotTrace[] }
+  | { type: "line3"; traces: Plot3Trace[] }
+  | { type: "update_trace"; id: number; props: Record<string, unknown> }
   | { type: "surf"; trace: SurfTrace }
   | { type: "surface"; trace: SurfTrace }
   | { type: "imagesc"; trace: ImagescTrace }

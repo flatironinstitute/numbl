@@ -6,7 +6,6 @@ import {
   isRuntimeCell,
   isRuntimeChar,
   isRuntimeFunction,
-  isRuntimeGraphicsHandle,
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
@@ -508,70 +507,9 @@ registerIBuiltin({
   }),
 });
 
-// set(handle, 'PropName', value, ...) — apply properties to graphics handles
-registerIBuiltin({
-  name: "set",
-  resolve: () => ({
-    outputTypes: [],
-    apply: (args: RuntimeValue[]) => {
-      const handle = args[0];
-      if (isRuntimeGraphicsHandle(handle)) {
-        for (let i = 1; i + 1 < args.length; i += 2) {
-          const keyArg = args[i];
-          const val = args[i + 1];
-          const key = isRuntimeString(keyArg)
-            ? keyArg
-            : isRuntimeChar(keyArg)
-              ? keyArg.value
-              : null;
-          if (key) applyGraphicsProperty(handle, key, val);
-        }
-      }
-      return undefined as unknown as RuntimeValue;
-    },
-  }),
-});
-
-function applyGraphicsProperty(
-  handle: import("../../runtime/types.js").RuntimeGraphicsHandle,
-  key: string,
-  value: RuntimeValue
-): void {
-  const lower = key.toLowerCase();
-  switch (lower) {
-    case "edgecolor": {
-      const s = isRuntimeString(value)
-        ? value
-        : isRuntimeChar(value)
-          ? value.value
-          : null;
-      if (s && s.toLowerCase() === "none") {
-        handle._trace.edgeColor = "none";
-      } else if (isRuntimeTensor(value) && value.data.length === 3) {
-        handle._trace.edgeColor = [value.data[0], value.data[1], value.data[2]];
-      }
-      break;
-    }
-    case "facecolor": {
-      const s = isRuntimeString(value)
-        ? value
-        : isRuntimeChar(value)
-          ? value.value
-          : null;
-      if (s && s.toLowerCase() === "interp") {
-        handle._trace.faceColor = "interp";
-      } else if (s && s.toLowerCase() === "flat") {
-        handle._trace.faceColor = "flat";
-      }
-      break;
-    }
-    case "facealpha": {
-      const n = typeof value === "number" ? value : toNumber(value);
-      handle._trace.faceAlpha = n;
-      break;
-    }
-  }
-}
+// `set(handle, 'PropName', value, ...)` is registered as a runtime-closured
+// special builtin in specialBuiltins.ts (it needs to push `update_trace`
+// instructions so live edits reach the serialized plot viewer).
 
 // Graphics stubs that return nothing
 for (const name of [

@@ -1624,6 +1624,17 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Primitive surface plot. Like surf, but adds to the current axes without clearing existing objects (does not respect hold).",
   },
+  line: {
+    signatures: [
+      "line(X, Y)",
+      "line(X, Y, Z)",
+      "line(___, Name, Value)",
+      "line('XData', X, 'YData', Y)",
+      "PL = line(___)",
+    ],
+    description:
+      "Create primitive line(s) in the current axes. Like surface, line adds to the current axes without clearing existing objects or respecting hold. Vector inputs draw a single line; matrix inputs draw one line per column. With no arguments, draws a line from (0,0) to (1,1). The low-level form, line('XData',X,'YData',Y), draws a black line. Name-Value pairs (Color, LineStyle, LineWidth, Marker, MarkerSize) set appearance.",
+  },
   title: {
     signatures: ["title(TXT)"],
     description: "Set title of current axes.",

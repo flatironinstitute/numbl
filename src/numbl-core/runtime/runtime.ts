@@ -99,6 +99,7 @@ import {
 } from "./runtimeMemberAccess.js";
 import {
   pcolorCall as _pcolorCall,
+  lineCall as _lineCall,
   contourCall as _contourCall,
   quiver3Call as _quiver3Call,
   fplotCall as _fplotCall,
@@ -136,6 +137,9 @@ export class Runtime {
   plotInstructions: PlotInstruction[] = [];
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
+  /** Monotonic id source for graphics handles whose trace can be live-updated
+   *  via `set` / `update_trace` (e.g. lines returned by `line`). */
+  graphicsIdCounter = 1;
 
   // tiledlayout/nexttile state. Reset by tiledlayout, advanced by nexttile.
   // mode: "fixed" uses the rows/cols verbatim; "flow"/"vertical"/"horizontal"
@@ -413,6 +417,30 @@ export class Runtime {
             last.trace as unknown as Record<string, unknown>,
             "pcolor"
           );
+        }
+        return RTV.dummyHandle();
+      }
+    };
+    // `line` returns a primitive Line handle when an output is requested
+    // (`pl = line(...)`). Like pcolor, the dispatch table pushes the
+    // instruction and we wrap the freshly-pushed trace so later property
+    // assignments (e.g. `pl.Color = 'green'`) update the rendered line.
+    this.builtins["line"] = (_nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      _lineCall(this.plotInstructions, margs);
+      if (_nargout >= 1) {
+        const last = this.plotInstructions[this.plotInstructions.length - 1];
+        if (last && (last.type === "line" || last.type === "line3")) {
+          const traces = last.traces;
+          if (traces.length > 0) {
+            // Tag the returned trace so later `set(pl,'XData',...)` calls can
+            // find and live-update it via an `update_trace` instruction.
+            traces[0].id = this.graphicsIdCounter++;
+            return RTV.graphicsHandle(
+              traces[0] as unknown as Record<string, unknown>,
+              "line"
+            );
+          }
         }
         return RTV.dummyHandle();
       }

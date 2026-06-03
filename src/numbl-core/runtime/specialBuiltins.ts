@@ -26,6 +26,8 @@ import {
   isRuntimeSparseMatrix,
   type RuntimeTensor,
 } from "../runtime/types.js";
+import { applyHandleProperty } from "./struct-access.js";
+import type { PlotInstruction } from "../../graphics/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import {
@@ -1720,16 +1722,7 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   //   "push instruction, return RTV.num(<placeholder>) when nargout>=1"
   // pattern. The push side lives in plotBuiltinDispatch.ts — one source
   // of truth for the (name → set_xxx) mapping.
-  const PLOT_RETURNS_ZERO = [
-    "subplot",
-    "tiledlayout",
-    "nexttile",
-    "title",
-    "xlabel",
-    "ylabel",
-    "sgtitle",
-    "legend",
-  ];
+  const PLOT_RETURNS_ZERO = ["subplot", "tiledlayout", "nexttile", "legend"];
   for (const name of PLOT_RETURNS_ZERO) {
     registerSpecial(name, (nargout, args) => {
       dispatchPlotBuiltin(
@@ -1741,6 +1734,85 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       return nargout >= 1 ? RTV.num(0) : undefined;
     });
   }
+
+  // Text-creating ops (`title`, `xlabel`, …) push their instruction and, when
+  // an output is requested (`tt = title(...)`), return a text handle. The
+  // handle remembers which instruction sets its string so `set(tt,'String',s)`
+  // can re-emit it — letting titles/labels animate across `drawnow`.
+  const TEXT_LABELS: Record<
+    string,
+    "set_title" | "set_xlabel" | "set_ylabel" | "set_zlabel" | "set_sgtitle"
+  > = {
+    title: "set_title",
+    xlabel: "set_xlabel",
+    ylabel: "set_ylabel",
+    zlabel: "set_zlabel",
+    sgtitle: "set_sgtitle",
+  };
+  for (const [name, instrType] of Object.entries(TEXT_LABELS)) {
+    registerSpecial(name, (nargout, args) => {
+      const margs = args.map(ensureRuntimeValue);
+      dispatchPlotBuiltin(name, margs, rt.plotInstructions, rt);
+      if (nargout >= 1) {
+        const text = margs.length > 0 ? toString(margs[0]) : "";
+        return RTV.graphicsHandle(
+          { string: text, __target: instrType },
+          "text"
+        );
+      }
+      return undefined;
+    });
+  }
+
+  // `set(handle, 'Prop', value, ...)` updates graphics-handle properties. For
+  // a live-updatable trace (e.g. a line returned by `line`) it mutates the
+  // wrapped trace AND re-emits an `update_trace` instruction, since plot
+  // batches are serialized to the viewer and an already-flushed instruction
+  // can't be reached by mutation alone. `set` on a dummy handle (gca/gcf) or a
+  // non-handle is accepted as a no-op.
+  registerSpecial("set", (_nargout, args) => {
+    const margs = args.map(ensureRuntimeValue);
+    const handle = margs[0];
+    if (!isRuntimeGraphicsHandle(handle)) return undefined;
+    const props: Record<string, unknown> = {};
+    for (let i = 1; i + 1 < margs.length; i += 2) {
+      const keyArg = margs[i];
+      const key = isRuntimeString(keyArg)
+        ? keyArg
+        : isRuntimeChar(keyArg)
+          ? keyArg.value
+          : null;
+      if (!key) continue;
+      const val = margs[i + 1];
+      if (handle._traceType === "text") {
+        // Title/label handle: 'String' updates the text; re-emit the matching
+        // label instruction. Other text props (FontSize, …) aren't modeled.
+        if (key.toLowerCase() === "string") {
+          const text = toString(val);
+          handle._trace.string = text;
+          const target = handle._trace.__target as
+            | PlotInstruction["type"]
+            | undefined;
+          if (target) {
+            rt.plotInstructions.push({ type: target, text } as PlotInstruction);
+          }
+        }
+        continue;
+      }
+      const { key: tkey, value: stored } = applyHandleProperty(
+        handle._trace,
+        handle._traceType,
+        key,
+        val
+      );
+      props[tkey] = stored;
+    }
+    const id = handle._trace.id;
+    if (typeof id === "number" && Object.keys(props).length > 0) {
+      rt.plotInstructions.push({ type: "update_trace", id, props });
+    }
+    return undefined;
+  });
 
   const PLOT_RETURNS_ONE = ["close", "clf"];
   for (const name of PLOT_RETURNS_ONE) {

@@ -42,6 +42,7 @@ import {
   plotInstr,
   plotCall,
   plot3Call,
+  lineCall,
   surfCall,
   surfaceCall,
   scatterCall,
@@ -113,6 +114,9 @@ export function dispatchPlotBuiltin(
       return true;
     case "plot3":
       plot3Call(instructions, args);
+      return true;
+    case "line":
+      lineCall(instructions, args);
       return true;
     case "surf":
       surfCall(instructions, args);
@@ -526,6 +530,7 @@ function dispatchColormap(
 export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "plot",
   "plot3",
+  "line",
   "surf",
   "surface",
   "scatter",

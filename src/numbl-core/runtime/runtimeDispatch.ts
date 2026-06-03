@@ -73,6 +73,7 @@ import {
 const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
   "plot",
   "plot3",
+  "line",
   "surf",
   "scatter",
   "imagesc",

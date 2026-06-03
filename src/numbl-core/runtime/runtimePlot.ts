@@ -32,6 +32,7 @@ function runtimeValueToNumberArray(v: RuntimeValue): number[] {
 import {
   parsePlotArgs,
   parsePlot3Args,
+  parseLineArgs,
   parseSurfArgs,
   parseScatterArgs,
   parseImagescArgs,
@@ -253,6 +254,20 @@ export function plot3Call(
   const traces = parsePlot3Args(args);
   if (traces.length > 0) {
     plotInstructions.push({ type: "plot3", traces });
+  }
+}
+
+export function lineCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  const parsed = parseLineArgs(args);
+  if (parsed.kind === "3d") {
+    if (parsed.traces.length > 0) {
+      plotInstructions.push({ type: "line3", traces: parsed.traces });
+    }
+  } else if (parsed.traces.length > 0) {
+    plotInstructions.push({ type: "line", traces: parsed.traces });
   }
 }
 

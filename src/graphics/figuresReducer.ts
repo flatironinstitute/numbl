@@ -235,6 +235,49 @@ export const figuresReducer = (
       });
     }
 
+    case "line": {
+      // Unlike `plot`, the primitive `line` does not call newplot and
+      // ignores hold/NextPlot: it always adds the line(s) to the current
+      // axes without deleting other graphics objects or resetting props.
+      const axes = getAxes(ensureFig(state));
+      return updateAxes(state, {
+        traces: [...axes.traces, ...action.traces],
+      });
+    }
+
+    case "line3": {
+      // 3-D primitive line — same always-add semantics as `line`.
+      const axes = getAxes(ensureFig(state));
+      return updateAxes(state, {
+        plot3Traces: [...axes.plot3Traces, ...action.traces],
+      });
+    }
+
+    case "update_trace": {
+      // Live-update a previously-created trace identified by `id` (from a
+      // graphics handle, e.g. `set(h,'XData',...)`). Because plot batches are
+      // serialized to the viewer, mutating the handle's trace can't reach an
+      // already-flushed instruction — the change is re-emitted as this action
+      // and applied to the renderer's accumulated state here. New objects are
+      // returned so React re-renders.
+      const axes = getAxes(ensureFig(state));
+      const patch = <T extends { id?: number }>(arr: T[]): T[] => {
+        let changed = false;
+        const next = arr.map(t => {
+          if (t.id === action.id) {
+            changed = true;
+            return { ...t, ...action.props } as T;
+          }
+          return t;
+        });
+        return changed ? next : arr;
+      };
+      return updateAxes(state, {
+        traces: patch(axes.traces),
+        plot3Traces: patch(axes.plot3Traces),
+      });
+    }
+
     case "surf": {
       const axes = getAxes(ensureFig(state));
       return addTraces(state, {
