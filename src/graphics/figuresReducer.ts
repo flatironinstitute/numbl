@@ -73,10 +73,10 @@ export type FigureState = {
   currentAxesIndex: number; // 1-based
   sgtitle?: string;
   axes: { [index: number]: AxesState };
-  /** When set, this figure is a "directory figure" (see the `webfigure`
-   *  PlotInstruction): a self-contained static-file bundle rendered in an
-   *  iframe instead of the axes/trace canvas. Takes precedence over `axes`. */
-  bundle?: { id: string; files: Map<string, string | Uint8Array> };
+  /** When set, this figure is an HTML UI component (MATLAB `uihtml`): the
+   *  `html` string is rendered in an iframe instead of the axes/trace canvas.
+   *  Takes precedence over `axes`. */
+  uihtml?: { id: string; html: string };
 };
 
 export type FiguresState = {
@@ -223,9 +223,9 @@ export const figuresReducer = (
     case "set_figure_handle":
       return { ...state, currentHandle: action.handle };
 
-    case "webfigure": {
-      // A directory figure replaces the current figure's content with a
-      // static-file bundle (rendered as an iframe by FigureView).
+    case "uihtml": {
+      // An HTML UI component sets the current figure's content to rendered
+      // HTML (shown as an iframe by FigureView).
       const fig = ensureFig(state);
       return {
         ...state,
@@ -233,10 +233,7 @@ export const figuresReducer = (
           ...state.figs,
           [state.currentHandle]: {
             ...fig,
-            // When `files` is absent (CLI: the host serves the bundle), keep
-            // an empty map — BundleFigureView then just points the iframe at
-            // the host-served URL instead of publishing to the SW cache.
-            bundle: { id: action.id, files: action.files ?? new Map() },
+            uihtml: { id: action.id, html: action.html },
           },
         },
       };

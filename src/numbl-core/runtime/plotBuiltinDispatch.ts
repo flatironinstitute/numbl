@@ -86,6 +86,12 @@ import { applyAxisCommand } from "./axisCommand.js";
 export interface PlotDispatchState {
   holdState: boolean;
   tiledLayoutState: TiledLayoutState | null;
+  /** Current figure handle (0 = none created yet). */
+  currentFigureHandle?: number;
+  /** Highest figure handle allocated so far. `figure` with no argument
+   *  creates a NEW figure with handle `maxFigureHandle + 1` (MATLAB
+   *  semantics), rather than always reusing handle 1. */
+  maxFigureHandle?: number;
 }
 
 /** Active tiled-layout grid. `mode` controls how the grid grows: in
@@ -223,7 +229,17 @@ export function dispatchPlotBuiltin(
 
     // ── Graphics ops: figure / labels / hold / layout ──────────────
     case "figure": {
-      const handle = args.length > 0 ? args[0] : 1;
+      // `figure(n)` selects/creates figure n; `figure` (no argument) creates a
+      // NEW figure (next handle after the highest seen), matching MATLAB.
+      let handle: number;
+      if (args.length > 0) {
+        handle = toNumber(args[0]);
+        state.maxFigureHandle = Math.max(state.maxFigureHandle ?? 0, handle);
+      } else {
+        handle = (state.maxFigureHandle ?? 0) + 1;
+        state.maxFigureHandle = handle;
+      }
+      state.currentFigureHandle = handle;
       plotInstr(instructions, { type: "set_figure_handle", handle });
       return true;
     }

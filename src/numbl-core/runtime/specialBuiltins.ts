@@ -24,7 +24,6 @@ import {
   isRuntimeDictionary,
   isRuntimeStruct,
   isRuntimeSparseMatrix,
-  isRuntimeCell,
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { applyHandleProperty } from "./struct-access.js";
@@ -1707,58 +1706,36 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   });
 
   registerSpecial("figure", (nargout, args) => {
-    const handle = args.length > 0 ? args[0] : 1;
     dispatchPlotBuiltin(
       "figure",
       args.map(ensureRuntimeValue),
       rt.plotInstructions,
       rt
     );
-    return nargout >= 1
-      ? RTV.num(toNumber(ensureRuntimeValue(handle)))
-      : undefined;
+    // dispatchPlotBuiltin set rt.currentFigureHandle to the (possibly newly
+    // allocated) handle; return it so `h = figure` gets the right value.
+    return nargout >= 1 ? RTV.num(rt.currentFigureHandle) : undefined;
   });
 
-  // `drawwebfigure(paths, contents)` — the native emit primitive behind the
-  // `webfigure` stdlib function. It takes two cell arrays (file paths and
-  // their contents, char for text or uint8 for binary), assembles them into a
-  // directory bundle, and pushes a `webfigure` PlotInstruction onto the
-  // current figure. The Map traversal lives in webfigure.m so this stays a
-  // simple cell→Map marshal. `id` is a per-call key for the iframe/cache.
-  let webFigureSeq = 0;
-  registerSpecial("drawwebfigure", (_nargout, args) => {
-    const margs = args.map(ensureRuntimeValue);
-    const pathsCell = margs[0];
-    const contentsCell = margs[1];
-    if (!isRuntimeCell(pathsCell) || !isRuntimeCell(contentsCell)) {
-      throw new RuntimeError(
-        "drawwebfigure: expected two cell arrays (paths, contents)"
-      );
-    }
-    const paths = pathsCell.data;
-    const contents = contentsCell.data;
-    const files = new Map<string, string | Uint8Array>();
-    for (let i = 0; i < paths.length; i++) {
-      const path = toString(paths[i]);
-      const c = contents[i];
-      let content: string | Uint8Array;
-      if (c !== undefined && isRuntimeChar(c)) {
-        content = toString(c);
-      } else if (c !== undefined && isRuntimeTensor(c)) {
-        content = Uint8Array.from(c.data as ArrayLike<number>);
-      } else {
-        content = toString(ensureRuntimeValue(c));
-      }
-      files.set(path, content);
-    }
-    webFigureSeq += 1;
-    rt.plotInstructions.push({
-      type: "webfigure",
-      id: "wf" + webFigureSeq,
-      files,
-    });
+  // `drawuihtml(html)` — native emit primitive behind the `uihtml` component.
+  // Pushes a `uihtml` PlotInstruction (rendered as an iframe by FigureView)
+  // onto the current figure. A fresh id per call makes the viewer remount the
+  // iframe when HTMLSource changes.
+  let uihtmlSeq = 0;
+  registerSpecial("drawuihtml", (_nargout, args) => {
+    const html = args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "";
+    uihtmlSeq += 1;
+    rt.plotInstructions.push({ type: "uihtml", id: "uh" + uihtmlSeq, html });
     return undefined;
   });
+
+  // MATLAB `uigridlayout` shim so standard layout-wrapped uihtml code runs
+  // unchanged in numbl. numbl fills the figure pane regardless of layout, so
+  // this is a no-op container handle (parent/sizing args are ignored). Use a
+  // plain `figure` as the parent.
+  registerSpecial("uigridlayout", nargout =>
+    nargout >= 1 ? RTV.num(0) : undefined
+  );
 
   // Bulk register graphics ops that share the simple
   //   "push instruction, return RTV.num(<placeholder>) when nargout>=1"

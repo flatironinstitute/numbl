@@ -317,19 +317,12 @@ export type AxisLimitSpec = [number | null, number | null] | "auto";
 export type PlotInstruction =
   | { type: "set_figure_handle"; handle: number }
   | {
-      /** A "directory figure": a self-contained set of static files (an
-       *  `index.html` plus its assets/data) rendered in an iframe, bypassing
-       *  the axes/trace model entirely. `files` maps a relative path to its
-       *  content — `string` for text, `Uint8Array` for binary. `id` is a
-       *  per-call unique key used for the iframe URL / service-worker cache.
-       *
-       *  `files` is omitted when the host already serves the bundle directly
-       *  (e.g. numbl's CLI plot server keeps the files in memory and serves
-       *  them at `/figs/<id>/...`); in that case the viewer just points the
-       *  iframe at the URL rather than publishing to a service-worker cache. */
-      type: "webfigure";
+      /** An HTML UI component (MATLAB `uihtml`): renders self-contained HTML
+       *  markup in an iframe, bypassing the axes/trace model. `html` is the
+       *  full HTMLSource string; `id` is a stable per-component key. */
+      type: "uihtml";
       id: string;
-      files?: Map<string, string | Uint8Array>;
+      html: string;
     }
   | { type: "plot"; traces: PlotTrace[] }
   | { type: "plot3"; traces: Plot3Trace[] }

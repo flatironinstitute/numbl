@@ -4,7 +4,6 @@ import type { PlotTrace } from "./types.js";
 import type { AxesState, FigureState } from "./figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
-import { BundleFigureView } from "./BundleFigureView.js";
 
 class AxesErrorBoundary extends Component<
   { children: ReactNode },
@@ -55,13 +54,20 @@ export function FigureView({ figure }: FigureViewProps) {
 
   // A directory figure (set via `webfigure`) is rendered as an iframe and
   // takes precedence over the axes/trace canvas.
-  if (figure.bundle) {
-    // key by id so a new directory figure remounts with fresh state.
+  if (figure.uihtml) {
+    // An HTML UI component (uihtml) renders its self-contained HTML in an
+    // iframe. A srcdoc document needs no server; key by id to remount on change.
     return (
-      <BundleFigureView
-        key={figure.bundle.id}
-        id={figure.bundle.id}
-        files={figure.bundle.files}
+      <iframe
+        key={figure.uihtml.id}
+        title={`uihtml-${figure.uihtml.id}`}
+        srcDoc={figure.uihtml.html}
+        style={{
+          width: "100%",
+          height: "100%",
+          border: "none",
+          display: "block",
+        }}
       />
     );
   }

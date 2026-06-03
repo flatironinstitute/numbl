@@ -139,6 +139,10 @@ export class Runtime {
   plotInstructions: PlotInstruction[] = [];
   variableValues: Record<string, RuntimeValue> = {};
   holdState = false;
+  /** Figure-handle tracking for MATLAB-style `figure` allocation: `figure`
+   *  with no argument creates a new figure (`maxFigureHandle + 1`). */
+  currentFigureHandle = 0;
+  maxFigureHandle = 0;
   /** Monotonic id source for graphics handles whose trace can be live-updated
    *  via `set` / `update_trace` (e.g. lines returned by `line`). */
   graphicsIdCounter = 1;
@@ -386,6 +390,16 @@ export class Runtime {
 
   // ── Builtin initialization ──────────────────────────────────────────
 
+  /** Register the implicit default figure (handle 1) the first time a graphics
+   *  op runs without an explicit `figure`, so a later no-arg `figure` allocates
+   *  a new handle instead of reusing 1 (MATLAB semantics). */
+  ensureCurrentFigure(): void {
+    if (!this.currentFigureHandle) {
+      this.currentFigureHandle = 1;
+      this.maxFigureHandle = Math.max(this.maxFigureHandle, 1);
+    }
+  }
+
   private initBuiltins(): void {
     // Register special builtins
     registerSpecialBuiltins(this);
@@ -567,6 +581,28 @@ export class Runtime {
     this.builtins["stream2"] = (_nargout: number, args: unknown[]) => {
       return _stream2Call(args.map(ensureRuntimeValue));
     };
+
+    // Any graphics op (other than figure/close/clf/cla and the `axis` query
+    // form) implies a current figure: register the implicit figure 1 on first
+    // use so a later no-arg `figure` allocates a NEW handle instead of
+    // colliding with it. Wraps both the dispatch-routed builtins and the
+    // custom overrides above.
+    const NO_AUTO_FIGURE = new Set(["figure", "close", "clf", "cla", "axis"]);
+    for (const name of [
+      ...PLOT_DISPATCH_NAMES,
+      "fplot",
+      "fplot3",
+      "streamline",
+      "stream2",
+    ]) {
+      if (NO_AUTO_FIGURE.has(name)) continue;
+      const orig = this.builtins[name];
+      if (!orig) continue;
+      this.builtins[name] = (n: number, a: unknown[]) => {
+        this.ensureCurrentFigure();
+        return orig(n, a);
+      };
+    }
   }
 
   public profileEnter(key: string): void {
