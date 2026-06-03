@@ -71,3 +71,4 @@ try {
 
 - [numbl-example-node](https://github.com/magland/numbl-example-node) — Node.js usage
 - [numbl-example-browser](https://github.com/magland/numbl-example-browser) — Browser usage with Vite
+- [numbl-image-filter](https://github.com/magland/numbl-image-filter) ([live demo](https://magland.github.io/numbl-image-filter/)) — React app that filters images with a numbl script, passing image data in and out as tensors via a Web Worker
