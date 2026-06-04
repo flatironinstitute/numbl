@@ -62,7 +62,11 @@ export function FigureView({ figure }: FigureViewProps) {
       <iframe
         key={figure.uihtml.id}
         title={`uihtml-${figure.uihtml.id}`}
-        srcDoc={buildUihtmlSrcDoc(figure.uihtml.html, figure.uihtml.data)}
+        srcDoc={buildUihtmlSrcDoc(
+          figure.uihtml.html,
+          figure.uihtml.data,
+          figure.uihtml.id
+        )}
         style={{
           width: "100%",
           height: "100%",

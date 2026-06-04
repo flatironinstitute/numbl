@@ -371,6 +371,25 @@ export function IDEWorkspace({
     figuresDispatch(instruction);
   }, []);
 
+  // uihtml reverse channel: a uihtml iframe posts events to the window
+  // (JS sendEventToMATLAB / Data setter). Forward them to the worker, which
+  // re-enters the live interpreter and fires HTMLEventReceivedFcn/DataChangedFcn.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data;
+      if (!d || d.source !== "numbl-uihtml") return;
+      workerRef.current?.postMessage({
+        type: "html_event",
+        compId: d.compId,
+        kind: d.kind,
+        name: d.name,
+        data: d.data,
+      });
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
   /** Build VFS + workspace text files for sending to workers. Loads all content from DB. */
   const buildWorkerFiles = useCallback(
     async (wsFiles: WorkspaceFile[], excludeFileId?: string) => {
@@ -478,6 +497,27 @@ export function IDEWorkspace({
               handlePlotInstruction(instr);
             }
           }
+          return;
+        }
+
+        // uihtml reverse channel: MATLAB -> JS event (sendEventToHTMLSource).
+        // Relay it into the matching uihtml iframe; its bootstrap filters by
+        // compId and fires the page's addEventListener(name) listeners.
+        if (msg.type === "html_source_event") {
+          const frames = document.querySelectorAll<HTMLIFrameElement>(
+            `iframe[title="uihtml-${msg.compId}"]`
+          );
+          frames.forEach(f =>
+            f.contentWindow?.postMessage(
+              {
+                source: "numbl-host",
+                compId: msg.compId,
+                name: msg.name,
+                dataJson: msg.dataJson,
+              },
+              "*"
+            )
+          );
           return;
         }
 

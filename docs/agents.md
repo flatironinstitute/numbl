@@ -95,6 +95,14 @@ Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, 
 
 Tensors use column-major (Fortran) storage order — element `(i, j)` of an `[m, n]` matrix is at index `j * m + i`.
 
+## Interactive HTML figures (`uihtml`)
+
+To build figures that render custom HTML and call back into the interpreter
+(buttons, widgets, third-party JS visualizations) — and that run unchanged in
+both numbl and real MATLAB — see [uihtml-figures.md](uihtml-figures.md) for
+authoring and [developer_reference/uihtml.md](developer_reference/uihtml.md) for
+the internals (data bridge, reverse-channel session, lifetime).
+
 ## CLI usage for numbl
 
 Keep this section in sync with `npx tsx src/cli.ts --help`. Whenever the CLI interface changes (new command, new/renamed flag, new environment variable, changed defaults), re-run `--help` and paste the updated output here in the same change.

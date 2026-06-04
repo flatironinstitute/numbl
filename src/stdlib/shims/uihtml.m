@@ -17,13 +17,21 @@ classdef uihtml < handle
     %       show(h);
     %
     %   numbl currently supports HTMLSource given as an HTML markup string (a
-    %   single self-contained document). HTML file paths, supporting files, and
-    %   the JavaScript-to-MATLAB reverse channel (DataChangedFcn,
-    %   HTMLEventReceivedFcn, sendEventToMATLAB) are not yet supported.
+    %   single self-contained document). HTML file paths and supporting files
+    %   are not yet supported.
+    %
+    %   The reverse channel (page -> MATLAB) is supported for the IDE:
+    %   HTMLEventReceivedFcn fires when JS calls
+    %   htmlComponent.sendEventToMATLAB(name,data); inside the callback use
+    %   sendEventToHTMLSource(src,name,data) to send back to the page.
+    %   DataChangedFcn fires when JS sets htmlComponent.Data. Register callbacks
+    %   at construction (name-value) since numbl renders at construction.
     properties
         HTMLSource = ''
         Data = []
         Position = [100 100 100 100]
+        HTMLEventReceivedFcn = []
+        DataChangedFcn = []
     end
     methods
         function obj = uihtml(varargin)
@@ -42,22 +50,34 @@ classdef uihtml < handle
                     obj.Data = val;
                 elseif strcmpi(name, 'Position')
                     obj.Position = val;
+                elseif strcmpi(name, 'HTMLEventReceivedFcn')
+                    obj.HTMLEventReceivedFcn = val;
+                elseif strcmpi(name, 'DataChangedFcn')
+                    obj.DataChangedFcn = val;
                 end
             end
-            if ~isempty(obj.HTMLSource)
-                if isempty(obj.Data)
-                    drawuihtml(obj.HTMLSource);
-                else
-                    drawuihtml(obj.HTMLSource, jsonencode(obj.Data));
-                end
-            end
+            render(obj);
         end
 
         function show(obj)
+            render(obj);
+        end
+
+        function render(obj)
+            if isempty(obj.HTMLSource)
+                return;
+            end
             if isempty(obj.Data)
-                drawuihtml(obj.HTMLSource);
+                id = drawuihtml(obj.HTMLSource);
             else
-                drawuihtml(obj.HTMLSource, jsonencode(obj.Data));
+                id = drawuihtml(obj.HTMLSource, jsonencode(obj.Data));
+            end
+            if ~isempty(obj.HTMLEventReceivedFcn)
+                registeruihtmlcallback(id, 'HTMLEventReceived', ...
+                                       obj.HTMLEventReceivedFcn);
+            end
+            if ~isempty(obj.DataChangedFcn)
+                registeruihtmlcallback(id, 'DataChanged', obj.DataChangedFcn);
             end
         end
     end

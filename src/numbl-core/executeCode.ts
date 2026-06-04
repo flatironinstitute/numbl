@@ -38,6 +38,12 @@ import { resetAppdataStore } from "./interpreter/builtins/misc.js";
 import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
 import { pushCurrentRuntime, popCurrentRuntime } from "./runtime/refcount.js";
+import {
+  createUihtmlSession,
+  type UihtmlSession,
+} from "./runtime/uihtmlSession.js";
+
+export type { UihtmlSession } from "./runtime/uihtmlSession.js";
 
 // ── Public API types ────────────────────────────────────────────────────
 
@@ -80,6 +86,10 @@ export interface ExecOptions {
   implicitCwdPath?: string | null;
   /** SharedArrayBuffer for cooperative cancellation. Int32[0] != 0 means cancelled. */
   cancelSAB?: SharedArrayBuffer;
+  /** Hook for `sendEventToHTMLSource(src,name,data)` — pushes an event from a
+   *  uihtml callback back to the component's page (MATLAB → JS). `dataJson` is
+   *  the data already `jsonencode`d. The host forwards it to the iframe. */
+  onHtmlSourceEvent?: (compId: string, name: string, dataJson: string) => void;
 }
 
 export interface BuiltinProfileEntry {
@@ -131,6 +141,10 @@ export interface ExecResult {
   workspaceFiles?: WorkspaceFile[];
   /** Final implicit cwd path (for REPL persistence across commands). */
   implicitCwdPath?: string | null;
+  /** Present when the run left `uihtml` reverse-channel callbacks registered.
+   *  The host retains this to dispatch later iframe events into the still-live
+   *  interpreter (see UihtmlSession). Absent for normal runs (no overhead). */
+  uihtmlSession?: UihtmlSession;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────
@@ -773,6 +787,24 @@ export function executeCode(
       variableValues: interpreter.getVariableValues(),
       holdState: rt.holdState,
     };
+
+    // If the run registered uihtml reverse-channel callbacks, hand the caller a
+    // session over this still-live runtime. Snapshot this runtime's special
+    // builtins now (still installed globally inside the try, before the finally
+    // restores them) so the session can re-activate them for each callback
+    // without re-registering (which would reset their counters).
+    if (rt.uihtmlCallbacks.size > 0) {
+      const activeSpecials = new Map<string, IBuiltin>();
+      for (const name of SPECIAL_BUILTIN_NAMES) {
+        const ex = getIBuiltin(name);
+        if (ex) activeSpecials.set(name, ex);
+      }
+      result.uihtmlSession = createUihtmlSession(
+        rt,
+        activeSpecials,
+        options.onDrawnow
+      );
+    }
 
     if (options.profile) {
       result.profileData = {

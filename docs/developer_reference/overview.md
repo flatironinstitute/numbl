@@ -50,6 +50,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [web-app.md](web-app.md) — browser IDE, worker, VFS, blocking input.
 - [server.md](server.md) — optional remote execution service.
 - [plotting.md](plotting.md) — graphics instructions and the plot viewer.
+- [uihtml.md](uihtml.md) — interactive HTML figures and the two-way data/event bridge to the interpreter.
 - [testing.md](testing.md) — unit and integration test suites.
 - [diagnostics-and-extensions.md](diagnostics-and-extensions.md) — error reporting, external-access directives, JS user functions.
 

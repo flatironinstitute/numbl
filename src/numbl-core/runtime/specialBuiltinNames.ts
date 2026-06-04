@@ -72,6 +72,8 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "ishold",
   "figure",
   "drawuihtml",
+  "registeruihtmlcallback",
+  "sendEventToHTMLSource",
   "uigridlayout",
   "subplot",
   "tiledlayout",

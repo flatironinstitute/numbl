@@ -27,6 +27,7 @@ import {
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { applyHandleProperty } from "./struct-access.js";
+import { incref, decref } from "./refcount.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
@@ -1725,17 +1726,68 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   // the renderer parses it and feeds it to the page's `htmlComponent` so the
   // `setup`/`"DataChanged"` bridge fires.
   let uihtmlSeq = 0;
-  registerSpecial("drawuihtml", (_nargout, args) => {
+  registerSpecial("drawuihtml", (nargout, args) => {
     const html = args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "";
     const data =
       args.length > 1 ? toString(ensureRuntimeValue(args[1])) : undefined;
     uihtmlSeq += 1;
+    const id = "uh" + uihtmlSeq;
     rt.plotInstructions.push({
       type: "uihtml",
-      id: "uh" + uihtmlSeq,
+      id,
       html,
       ...(data !== undefined ? { data } : {}),
     });
+    // Return the component id so the shim can register reverse-channel
+    // callbacks (HTMLEventReceivedFcn / DataChangedFcn) against it.
+    return nargout >= 1 ? RTV.char(id) : undefined;
+  });
+
+  // `registeruihtmlcallback(compId, eventType, fcnHandle)` — record a callback
+  // for a uihtml component's reverse channel (HTML → MATLAB). `eventType` is
+  // "HTMLEventReceived" (from JS `sendEventToMATLAB`) or "DataChanged" (from JS
+  // setting `htmlComponent.Data`). The handle is incref'd so it survives after
+  // the run while the host keeps this runtime alive to dispatch events. A new
+  // registration for the same component replaces (and decrefs) the old one.
+  registerSpecial("registeruihtmlcallback", (_nargout, args) => {
+    if (args.length < 3) return undefined;
+    const compId = toString(ensureRuntimeValue(args[0]));
+    const eventType = toString(ensureRuntimeValue(args[1]));
+    const fcn = ensureRuntimeValue(args[2]);
+    if (eventType !== "HTMLEventReceived" && eventType !== "DataChanged") {
+      return undefined;
+    }
+    if (!isRuntimeFunction(fcn)) return undefined;
+    const entry = rt.uihtmlCallbacks.get(compId) ?? {};
+    const prev = entry[eventType];
+    if (prev) decref(rt, prev);
+    incref(fcn);
+    entry[eventType] = fcn;
+    rt.uihtmlCallbacks.set(compId, entry);
+    return undefined;
+  });
+
+  // `sendEventToHTMLSource(src, name, data)` — push an event from MATLAB back to
+  // a uihtml component's page (MATLAB → JS). `src` is the struct passed to the
+  // callback (carrying ComponentId); `data` is jsonencode'd and the host
+  // forwards it to the iframe, where it fires the page's addEventListener(name).
+  registerSpecial("sendEventToHTMLSource", (_nargout, args) => {
+    if (args.length < 2) {
+      throw new RuntimeError("sendEventToHTMLSource requires src and name");
+    }
+    const src = ensureRuntimeValue(args[0]);
+    if (!isRuntimeStruct(src) || !src.fields.has("ComponentId")) {
+      throw new RuntimeError(
+        "sendEventToHTMLSource: src must be the component passed to the callback"
+      );
+    }
+    const compId = toString(src.fields.get("ComponentId")!);
+    const name = toString(ensureRuntimeValue(args[1]));
+    const dataArg = args.length > 2 ? ensureRuntimeValue(args[2]) : RTV.num(0);
+    const dataJson = toString(
+      ensureRuntimeValue(rt.dispatch("jsonencode", 1, [dataArg]))
+    );
+    rt.onHtmlSourceEvent?.(compId, name, dataJson);
     return undefined;
   });
 

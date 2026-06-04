@@ -51,6 +51,31 @@ let vfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();
 
+// ── uihtml reverse channel (HTML → MATLAB) ──────────────────────────────
+// When a run registers uihtml callbacks, we keep its session (and the live
+// interpreter behind it) so iframe events can re-enter and fire the callbacks.
+// A new run/execute or clear disposes it first (one armed runtime at a time).
+let liveUihtmlSession:
+  | import("./numbl-core/executeCode.js").UihtmlSession
+  | null = null;
+
+function disposeUihtmlSession(): void {
+  if (liveUihtmlSession) {
+    liveUihtmlSession.dispose();
+    liveUihtmlSession = null;
+  }
+}
+
+/** ExecOptions hook: forward a `sendEventToHTMLSource` call to the host, which
+ *  relays it into the target iframe. */
+function onHtmlSourceEvent(
+  compId: string,
+  name: string,
+  dataJson: string
+): void {
+  self.postMessage({ type: "html_source_event", compId, name, dataJson });
+}
+
 // ── Snippet helpers (used by REPL error formatting) ─────────────────────
 
 function extractSnippetByLine(
@@ -139,10 +164,30 @@ self.onmessage = (e: MessageEvent) => {
   // ── Configuration messages ──────────────────────────────────────────
 
   if (type === "clear") {
+    disposeUihtmlSession();
     variableValues = {};
     holdState = false;
     vfs = null;
     self.postMessage({ type: "cleared" });
+    return;
+  }
+
+  // ── uihtml reverse channel: an iframe event re-enters the live runtime ──
+  if (type === "html_event") {
+    if (!liveUihtmlSession) return;
+    const { compId, kind, name, data } = e.data;
+    const eventType =
+      kind === "dataChanged" ? "DataChanged" : "HTMLEventReceived";
+    try {
+      liveUihtmlSession.dispatchEvent(compId, eventType, { name, data });
+    } catch (err) {
+      self.postMessage({
+        type: "output",
+        text: `Error in uihtml callback: ${
+          err instanceof Error ? err.message : String(err)
+        }\n`,
+      });
+    }
     return;
   }
 
@@ -188,6 +233,9 @@ self.onmessage = (e: MessageEvent) => {
       persistent,
       cancelSAB,
     } = e.data;
+
+    // A new run supersedes any armed uihtml session from a prior run.
+    disposeUihtmlSession();
 
     const wsFiles: WorkspaceFile[] = workspaceFiles;
     const activeFileName: string = mainFileName ?? "script.m";
@@ -280,6 +328,7 @@ self.onmessage = (e: MessageEvent) => {
           fileIO: adapter,
           system: sysAdapter,
           onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
+          onHtmlSourceEvent,
           cancelSAB,
         },
         useWorkspaceFiles,
@@ -289,6 +338,10 @@ self.onmessage = (e: MessageEvent) => {
           "/system/mip/packages/gh/mip-org/core/mip/mip",
         ]
       );
+
+      // Keep the session alive if the run registered uihtml callbacks, so
+      // iframe events can re-enter the interpreter (see "html_event").
+      liveUihtmlSession = result.uihtmlSession ?? null;
 
       // Update persistent state if in persistent mode
       if (persistent) {
@@ -387,6 +440,9 @@ self.onmessage = (e: MessageEvent) => {
 
   const { code, cancelSAB } = e.data;
 
+  // A new REPL command supersedes any armed uihtml session.
+  disposeUihtmlSession();
+
   // Create adapter from persistent VFS
   if (!vfs) {
     vfs = new VirtualFileSystem();
@@ -412,6 +468,7 @@ self.onmessage = (e: MessageEvent) => {
         fileIO: adapter,
         system: systemAdapter,
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+        onHtmlSourceEvent,
         implicitCwdPath,
         cancelSAB,
       },
@@ -422,6 +479,9 @@ self.onmessage = (e: MessageEvent) => {
         "/system/mip/packages/gh/mip-org/core/mip/mip",
       ]
     );
+
+    // Keep the session if this command registered uihtml callbacks.
+    liveUihtmlSession = result.uihtmlSession ?? null;
 
     // Update persistent state on success
     variableValues = result.variableValues;

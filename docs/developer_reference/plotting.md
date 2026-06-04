@@ -32,3 +32,11 @@ The common shape is:
 5. Add tests — preferably integration scripts that exercise the command end-to-end.
 
 See `docs/adding-plot-functions.md` for the specific checklist.
+
+## Interactive HTML figures
+
+`uihtml` is a different kind of figure: instead of axes/traces it renders a
+self-contained HTML document in an iframe and exposes a two-way data/event
+bridge to the interpreter (the standard MATLAB `uihtml` API). See
+[uihtml.md](uihtml.md) for the architecture and
+[../uihtml-figures.md](../uihtml-figures.md) for authoring guidance.

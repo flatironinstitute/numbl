@@ -146,6 +146,20 @@ export class Runtime {
   /** Monotonic id source for graphics handles whose trace can be live-updated
    *  via `set` / `update_trace` (e.g. lines returned by `line`). */
   graphicsIdCounter = 1;
+  /** Reverse channel for `uihtml` components (HTML → MATLAB). Maps a component
+   *  id (the `uihtml` instruction's `id`) to the callback handles registered
+   *  for it. When non-empty after a run, the host keeps this runtime alive so
+   *  iframe events can re-enter the interpreter and invoke these handles.
+   *  Handles are incref'd while stored (see registeruihtmlcallback). */
+  uihtmlCallbacks: Map<
+    string,
+    { HTMLEventReceived?: RuntimeValue; DataChanged?: RuntimeValue }
+  > = new Map();
+  /** Hook invoked by `sendEventToHTMLSource(src, name, data)` to push an event
+   *  from MATLAB back to a uihtml component's page. `dataJson` is the data
+   *  already `jsonencode`d. Set from ExecOptions; the host forwards it to the
+   *  iframe. */
+  onHtmlSourceEvent?: (compId: string, name: string, dataJson: string) => void;
 
   // tiledlayout/nexttile state. Reset by tiledlayout, advanced by nexttile.
   // mode: "fixed" uses the rows/cols verbatim; "flow"/"vertical"/"horizontal"
@@ -357,6 +371,7 @@ export class Runtime {
     this.profilingEnabled = !!options.profile;
     this.fileIO = options.fileIO;
     this.system = options.system;
+    this.onHtmlSourceEvent = options.onHtmlSourceEvent;
     if (options.initialHoldState) {
       this.holdState = options.initialHoldState;
     }
