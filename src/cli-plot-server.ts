@@ -5,9 +5,25 @@ import { join, extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PlotInstruction } from "./graphics/types.js";
 
+/** A uihtml event POSTed back from the viewer (page → interpreter): a JS
+ *  `sendEventToMATLAB` (`kind: "htmlEvent"`) or `Data` setter
+ *  (`kind: "dataChanged"`). `data` is the structured value as JSON-parsed. */
+export interface UihtmlClientEvent {
+  compId: string;
+  kind: "htmlEvent" | "dataChanged";
+  name?: string;
+  data: unknown;
+}
+
 export interface PlotServer {
   /** Send a batch of plot instructions to all connected SSE clients */
   sendInstructions(instructions: PlotInstruction[]): void;
+  /** Push a uihtml event to the viewer (interpreter → page), relayed to the
+   *  matching iframe (from `sendEventToHTMLSource`). `dataJson` is jsonencode'd. */
+  sendUihtmlEvent(compId: string, name: string, dataJson: string): void;
+  /** Register the handler for uihtml events POSTed back from the viewer
+   *  (page → interpreter). Set after the run, once the session exists. */
+  setUihtmlEventHandler(fn: (e: UihtmlClientEvent) => void): void;
   /** Signal that the script has finished. Server stays alive until Ctrl+C. */
   scriptDone(): void;
   /** The port the server is listening on */
@@ -49,9 +65,38 @@ export async function startPlotServer(
   const sseClients: ServerResponse[] = [];
   let messageId = 0;
   const pendingMessages: string[] = [];
+  let uihtmlHandler: ((e: UihtmlClientEvent) => void) | undefined;
 
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost`);
+
+    // uihtml reverse channel: events POSTed back from the viewer
+    // (page → interpreter). Localhost-only by default; figures are trusted.
+    if (req.method === "POST" && url.pathname === "/uihtml-event") {
+      const chunks: Buffer[] = [];
+      let size = 0;
+      let aborted = false;
+      req.on("data", chunk => {
+        size += chunk.length;
+        if (size > 5_000_000) {
+          aborted = true;
+          req.destroy();
+        } else {
+          chunks.push(chunk as Buffer);
+        }
+      });
+      req.on("end", () => {
+        if (aborted) return;
+        try {
+          uihtmlHandler?.(JSON.parse(Buffer.concat(chunks).toString("utf-8")));
+        } catch {
+          // ignore malformed payloads
+        }
+        res.writeHead(204);
+        res.end();
+      });
+      return;
+    }
 
     // SSE endpoint
     if (url.pathname === "/events") {
@@ -137,9 +182,7 @@ export async function startPlotServer(
   process.on("SIGINT", onExit);
   process.on("SIGTERM", onExit);
 
-  function sendInstructions(instructions: PlotInstruction[]): void {
-    messageId++;
-    const payload = `id: ${messageId}\ndata: ${JSON.stringify(instructions)}\n\n`;
+  function broadcast(payload: string): void {
     if (sseClients.length === 0) {
       pendingMessages.push(payload);
     } else {
@@ -147,22 +190,41 @@ export async function startPlotServer(
         client.write(payload);
       }
     }
+  }
+
+  function sendInstructions(instructions: PlotInstruction[]): void {
+    messageId++;
+    broadcast(`id: ${messageId}\ndata: ${JSON.stringify(instructions)}\n\n`);
+  }
+
+  function sendUihtmlEvent(
+    compId: string,
+    name: string,
+    dataJson: string
+  ): void {
+    messageId++;
+    const data = JSON.stringify({ compId, name, dataJson });
+    broadcast(`id: ${messageId}\nevent: uihtml\ndata: ${data}\n\n`);
+  }
+
+  function setUihtmlEventHandler(fn: (e: UihtmlClientEvent) => void): void {
+    uihtmlHandler = fn;
   }
 
   function scriptDone(): void {
     messageId++;
-    const payload = `id: ${messageId}\nevent: done\ndata: {}\n\n`;
-    if (sseClients.length === 0) {
-      pendingMessages.push(payload);
-    } else {
-      for (const client of sseClients) {
-        client.write(payload);
-      }
-    }
+    broadcast(`id: ${messageId}\nevent: done\ndata: {}\n\n`);
     // Server stays alive until Ctrl+C (SIGINT handler above)
   }
 
-  return { sendInstructions, scriptDone, port, closed };
+  return {
+    sendInstructions,
+    sendUihtmlEvent,
+    setUihtmlEventHandler,
+    scriptDone,
+    port,
+    closed,
+  };
 }
 
 function openBrowser(url: string): void {

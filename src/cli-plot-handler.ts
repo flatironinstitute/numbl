@@ -28,6 +28,7 @@ import {
   type PlotServerOptions,
 } from "./cli-plot-server.js";
 import type { PlotInstruction } from "./graphics/types.js";
+import type { UihtmlSession } from "./numbl-core/executeCode.js";
 
 export interface PlotHandler {
   /** Called per batch of instructions (typically by the runtime's
@@ -39,6 +40,12 @@ export interface PlotHandler {
    *  for the user to Ctrl+C). Always safe to call; no-op when the
    *  server never started. */
   flushAndWait: (remaining?: PlotInstruction[]) => Promise<void>;
+  /** Push a uihtml event to the viewer (interpreter → page). Use as the
+   *  runtime's `onHtmlSourceEvent` hook. No-op when disabled / no server. */
+  sendUihtmlEvent: (compId: string, name: string, dataJson: string) => void;
+  /** Set the live session so events POSTed back from the viewer re-enter the
+   *  interpreter. Call after the run with `result.uihtmlSession`. */
+  setUihtmlSession: (session: UihtmlSession | null) => void;
 }
 
 export function createPlotHandler(
@@ -49,12 +56,36 @@ export function createPlotHandler(
     return {
       onDrawnow: undefined,
       flushAndWait: async () => {},
+      sendUihtmlEvent: () => {},
+      setUihtmlSession: () => {},
     };
   }
 
   let plotServer: PlotServer | null = null;
   let serverStarting: Promise<PlotServer> | null = null;
   const pendingBatches: PlotInstruction[][] = [];
+  let session: UihtmlSession | null = null;
+
+  // Wire viewer-posted events (page → interpreter) into the live session.
+  const wireServer = (ps: PlotServer) => {
+    ps.setUihtmlEventHandler(e => {
+      if (!session) return;
+      const eventType =
+        e.kind === "dataChanged" ? "DataChanged" : "HTMLEventReceived";
+      try {
+        session.dispatchEvent(e.compId, eventType, {
+          name: e.name,
+          data: e.data,
+        });
+      } catch (err) {
+        process.stderr.write(
+          `Error in uihtml callback: ${
+            err instanceof Error ? err.message : String(err)
+          }\n`
+        );
+      }
+    });
+  };
 
   const onDrawnow = (instructions: PlotInstruction[]) => {
     if (plotServer) {
@@ -64,6 +95,7 @@ export function createPlotHandler(
       if (!serverStarting) {
         serverStarting = startPlotServer(plotOpts).then(ps => {
           plotServer = ps;
+          wireServer(ps);
           for (const batch of pendingBatches) {
             ps.sendInstructions(batch);
           }
@@ -87,5 +119,13 @@ export function createPlotHandler(
     }
   };
 
-  return { onDrawnow, flushAndWait };
+  const sendUihtmlEvent = (compId: string, name: string, dataJson: string) => {
+    plotServer?.sendUihtmlEvent(compId, name, dataJson);
+  };
+
+  const setUihtmlSession = (s: UihtmlSession | null) => {
+    session = s;
+  };
+
+  return { onDrawnow, flushAndWait, sendUihtmlEvent, setUihtmlSession };
 }

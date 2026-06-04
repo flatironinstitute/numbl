@@ -869,9 +869,7 @@ async function executeWithOptions(
       process.exit(0);
     } else if (opts.verbose) {
       const log = (msg: string) => console.error(`[verbose] ${msg}`);
-      const { onDrawnow, flushAndWait } = createPlotHandler(
-        !opts.plot || opts.stream
-      );
+      const plot = createPlotHandler(!opts.plot || opts.stream);
       const result = executeCode(
         code,
         {
@@ -880,7 +878,8 @@ async function executeWithOptions(
           onOutput: (text: string) => {
             process.stdout.write(text);
           },
-          onDrawnow,
+          onDrawnow: plot.onDrawnow,
+          onHtmlSourceEvent: plot.sendUihtmlEvent,
           log,
           onJitCompile,
           onJitBail,
@@ -897,16 +896,14 @@ async function executeWithOptions(
       );
       writeProfileIfNeeded(result);
       finalizeDumps();
-      await flushAndWait(result.plotInstructions);
+      plot.setUihtmlSession(result.uihtmlSession ?? null);
+      await plot.flushAndWait(result.plotInstructions);
     } else {
       const asyncPlotOpts: PlotServerOptions | undefined =
         opts.plotPort !== undefined
           ? { port: opts.plotPort, host: "0.0.0.0" }
           : undefined;
-      const { onDrawnow, flushAndWait } = createPlotHandler(
-        !opts.plot,
-        asyncPlotOpts
-      );
+      const plot = createPlotHandler(!opts.plot, asyncPlotOpts);
       const result = executeCode(
         code,
         {
@@ -915,7 +912,8 @@ async function executeWithOptions(
           onOutput: (text: string) => {
             process.stdout.write(text);
           },
-          onDrawnow,
+          onDrawnow: plot.onDrawnow,
+          onHtmlSourceEvent: plot.sendUihtmlEvent,
           onJitCompile,
           onJitBail,
 
@@ -931,7 +929,8 @@ async function executeWithOptions(
       );
       writeProfileIfNeeded(result);
       finalizeDumps();
-      await flushAndWait(result.plotInstructions);
+      plot.setUihtmlSession(result.uihtmlSession ?? null);
+      await plot.flushAndWait(result.plotInstructions);
     }
 
     process.exit(0);

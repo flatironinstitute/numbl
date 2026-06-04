@@ -67,11 +67,18 @@ callback, and a blocking `input()` cannot overlap; events queue until idle.
 
 ## Surfaces
 
-- **Browser IDE** — full reverse channel (the worker holds the session;
-  `window` message relays connect iframe ↔ worker).
+The session machinery above is transport-agnostic; each surface differs only in
+how iframe events reach the runtime and how outgoing events reach the iframe.
+
+- **Browser IDE** — interpreter (worker) and figure (iframe) share a page, so
+  the relay is `postMessage`: the IDE forwards the iframe's `window` message to
+  the worker, and forwards the worker's outgoing event to the iframe.
+- **CLI `numbl run --plot`** — interpreter (Node) and figure (a browser tab)
+  are separate processes bridged over HTTP. The plot server gains a
+  `POST /uihtml-event` endpoint (page → interpreter, dispatched into the held
+  session) and a `uihtml` server-sent event (interpreter → page, relayed to the
+  iframe). The CLI already stays alive after the run to keep the figure open,
+  which is exactly the window in which events are dispatched. Only `run --plot`
+  is wired; the CLI REPL is not.
 - **MATLAB** — native `uihtml`; the portable authoring rules keep one `.m`
-  working in both.
-- **CLI `--plot`** — renders and accepts data, but has no reverse channel: the
-  process keeps no live interpreter after the run, and the transport is one-way
-  (server-sent events). Adding it would need a client→server event endpoint and
-  a retained runtime.
+  working across all of these.

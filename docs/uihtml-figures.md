@@ -13,9 +13,10 @@ when you want arbitrary HTML, your own interaction, or a JS charting library.
 >
 > - **numbl browser IDE** — full support: data in, events back to the interpreter.
 > - **real MATLAB** — full support (this is a standard MATLAB component).
-> - **numbl CLI (`--plot`)** — renders and receives data, but the **page→script
->   reverse channel does not fire** (the CLI has no live interpreter after the
->   run). Use the IDE to exercise callbacks.
+> - **numbl CLI (`numbl run --plot`)** — full support: the figure opens in a
+>   browser window and events round-trip back into the interpreter, which stays
+>   alive until you Ctrl+C. (The CLI **REPL** with `--plot` renders but does not
+>   yet dispatch callbacks.)
 
 ---
 
@@ -276,9 +277,10 @@ end
 
 ## 8. numbl specifics and limitations
 
-- **Reverse channel is browser-IDE only.** Events back into the interpreter
-  fire in the numbl IDE and in MATLAB, but **not** under the numbl CLI
-  (`--plot`), which has no live interpreter once the script finishes.
+- **Reverse channel** fires in the numbl IDE, in MATLAB, and under
+  `numbl run --plot` (the CLI keeps the runtime alive while the figure window is
+  open). The CLI **REPL** with `--plot` renders but does not yet dispatch
+  callbacks.
 - **Re-render on data change** with `show(h)` — a bare `h.Data = ...` updates the
   property but numbl won't auto-redraw (MATLAB does).
 - **Callback lifetime:** when a script registers a callback, numbl keeps the

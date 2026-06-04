@@ -53,8 +53,51 @@ export function PlotViewerApp() {
       setScriptDone(true);
     });
 
+    // uihtml reverse channel: MATLAB -> JS event (sendEventToHTMLSource).
+    // Relay it into the matching uihtml iframe; its bootstrap filters by compId.
+    evtSource.addEventListener("uihtml", event => {
+      try {
+        const { compId, name, dataJson } = JSON.parse(
+          (event as MessageEvent).data
+        );
+        const frames = document.querySelectorAll<HTMLIFrameElement>(
+          `iframe[title="uihtml-${compId}"]`
+        );
+        frames.forEach(f =>
+          f.contentWindow?.postMessage(
+            { source: "numbl-host", compId, name, dataJson },
+            "*"
+          )
+        );
+      } catch {
+        // ignore malformed event
+      }
+    });
+
     return () => evtSource.close();
   }, [handlePlotInstruction]);
+
+  // uihtml reverse channel: a uihtml iframe posts events to the window
+  // (JS sendEventToMATLAB / Data setter). POST them to the CLI, which re-enters
+  // the interpreter and fires HTMLEventReceivedFcn / DataChangedFcn.
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const d = e.data;
+      if (!d || d.source !== "numbl-uihtml") return;
+      fetch("/uihtml-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          compId: d.compId,
+          kind: d.kind,
+          name: d.name,
+          data: d.data,
+        }),
+      }).catch(() => {});
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
 
   const handles = Object.keys(figures.figs)
     .map(Number)
