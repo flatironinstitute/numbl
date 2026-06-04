@@ -238,7 +238,7 @@ self.onmessage = (e: MessageEvent) => {
     disposeUihtmlSession();
 
     const wsFiles: WorkspaceFile[] = workspaceFiles;
-    const activeFileName: string = mainFileName ?? "script.m";
+    let activeFileName: string = mainFileName ?? "script.m";
     let generatedJS: string | undefined;
 
     // Choose VFS/adapter/variables based on persistent flag
@@ -307,6 +307,11 @@ self.onmessage = (e: MessageEvent) => {
     const mainAbsPath = runVfs.normalizePath(activeFileName);
     const lastSlash = mainAbsPath.lastIndexOf("/");
     runVfs.setCwd(lastSlash > 0 ? mainAbsPath.slice(0, lastSlash) : "/");
+
+    // Run under the script's absolute VFS path so `mfilename('fullpath')` and
+    // `fileparts(mfilename('fullpath'))` resolve to the project directory (e.g.
+    // /project/refine_demo). Otherwise a bare name yields an empty directory.
+    activeFileName = mainAbsPath;
 
     const runInputSAB = e.data.inputSAB ?? inputSAB;
 

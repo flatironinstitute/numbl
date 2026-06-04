@@ -87,6 +87,30 @@ describe("worker run: cwd is the script's directory", () => {
     expect(output).toContain("DONE");
   });
 
+  it("mfilename('fullpath') resolves to the script's absolute VFS path", () => {
+    // Regression: a bare mainFileName left fileparts(mfilename('fullpath'))
+    // empty, so e.g. fullfile(here,'app','dist','index.html') resolved to
+    // /app/... instead of /project/app/...
+    const driver = [
+      "fp = mfilename('fullpath');",
+      "disp(fp)",
+      "disp(fileparts(fp))",
+      "disp('MFDONE')",
+    ].join("\n");
+    const { output, msgs } = run({
+      code: driver,
+      mainFileName: "refine_demo.m",
+      options: { displayResults: true, optimization: "0" },
+      workspaceFiles: [{ name: "refine_demo.m", source: driver }],
+      vfsFiles: [file("refine_demo.m", driver)],
+      persistent: false,
+    });
+    expect(msgs.some(m => m.type === "error")).toBe(false);
+    expect(output).toContain("/project/refine_demo");
+    expect(output).toContain("/project\n");
+    expect(output).toContain("MFDONE");
+  });
+
   it("leaves the cwd at the project root for a root-level script", () => {
     const driver = "disp(pwd)\ndisp('ROOTDONE')";
     const { output, msgs } = run({
