@@ -28,6 +28,7 @@ import { toNumber, toBool, toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, registerIBuiltin, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { imagAllZero } from "../../helpers/effectively-real.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 
@@ -276,7 +277,11 @@ function jsonEncodeNumber(x: number): string {
 }
 
 function jsonEncodeTensor(v: RuntimeTensor): string {
-  if (v.imag)
+  // A tensor with an all-zero imaginary lane is real in value (the JIT often
+  // produces such tensors when it can't prove realness at compile time). Treat
+  // it as real — matching `isreal` — instead of rejecting on the lane's mere
+  // presence. Genuinely complex data is unsupported (as in MATLAB).
+  if (v.imag && !imagAllZero(v.imag))
     throw new RuntimeError("jsonencode: complex values are not supported");
   const data = v.data;
   const n = data.length;
@@ -343,6 +348,13 @@ function jsonEncodeValue(v: RuntimeValue): string {
       return "[" + out.join(",") + "]";
     }
     return JSON.stringify(v.value);
+  }
+  if (isRuntimeComplexNumber(v)) {
+    // A complex scalar with zero imaginary part is real in value (consistent
+    // with the all-zero-lane tensor case and with `isreal`).
+    if (v.im !== 0)
+      throw new RuntimeError("jsonencode: complex values are not supported");
+    return jsonEncodeNumber(v.re);
   }
   if (isRuntimeTensor(v)) return jsonEncodeTensor(v);
   if (isRuntimeCell(v)) return jsonEncodeCell(v);
