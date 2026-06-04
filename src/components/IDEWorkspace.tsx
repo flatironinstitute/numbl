@@ -15,6 +15,8 @@ import ComputerIcon from "@mui/icons-material/Computer";
 import DnsIcon from "@mui/icons-material/Dns";
 import MenuIcon from "@mui/icons-material/Menu";
 import NoteAddIcon from "@mui/icons-material/NoteAdd";
+import FullscreenIcon from "@mui/icons-material/Fullscreen";
+import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import {
   Box,
   Button,
@@ -216,6 +218,9 @@ export function IDEWorkspace({
     null
   );
   const [figureTab, setFigureTab] = useState(0);
+  // When true, the figures panel overlays the whole window for a larger,
+  // distraction-free view of the figures (toggle in the panel header / Escape).
+  const [figuresExpanded, setFiguresExpanded] = useState(false);
   const [triggerRenameId, setTriggerRenameId] = useState<string | undefined>();
 
   // Markdown view mode for .md files
@@ -389,6 +394,16 @@ export function IDEWorkspace({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, []);
+
+  // Escape collapses the expanded (full-window) figures panel.
+  useEffect(() => {
+    if (!figuresExpanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setFiguresExpanded(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [figuresExpanded]);
 
   /** Build VFS + workspace text files for sending to workers. Loads all content from DB. */
   const buildWorkerFiles = useCallback(
@@ -1407,29 +1422,69 @@ export function IDEWorkspace({
   );
 
   const figuresPanel = (
-    <Box sx={{ height: "100%", display: "flex", flexDirection: "column" }}>
-      <Tabs
-        value={figureTab}
-        onChange={(_, newValue) => setFigureTab(newValue)}
-        variant="scrollable"
-        scrollButtons="auto"
+    <Box
+      sx={
+        figuresExpanded
+          ? {
+              position: "fixed",
+              inset: 0,
+              zIndex: 1250,
+              bgcolor: "background.paper",
+              display: "flex",
+              flexDirection: "column",
+            }
+          : { height: "100%", display: "flex", flexDirection: "column" }
+      }
+    >
+      <Box
         sx={{
+          display: "flex",
+          alignItems: "center",
           borderBottom: 1,
           borderColor: "divider",
-          minHeight: 34,
-          "& .MuiTab-root": {
-            textTransform: "none",
-            fontWeight: 500,
-            fontSize: "0.8rem",
-            minHeight: 34,
-            py: 0,
-          },
         }}
       >
-        {sortedFigureHandles.map(h => (
-          <Tab key={h} label={`Figure ${h}`} />
-        ))}
-      </Tabs>
+        <Tabs
+          value={figureTab}
+          onChange={(_, newValue) => setFigureTab(newValue)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{
+            flexGrow: 1,
+            minHeight: 34,
+            "& .MuiTab-root": {
+              textTransform: "none",
+              fontWeight: 500,
+              fontSize: "0.8rem",
+              minHeight: 34,
+              py: 0,
+            },
+          }}
+        >
+          {sortedFigureHandles.map(h => (
+            <Tab key={h} label={`Figure ${h}`} />
+          ))}
+        </Tabs>
+        <Tooltip
+          title={
+            figuresExpanded
+              ? "Collapse figures (Esc)"
+              : "Expand figures to full window"
+          }
+        >
+          <IconButton
+            size="small"
+            onClick={() => setFiguresExpanded(v => !v)}
+            sx={{ mx: 0.5, flexShrink: 0 }}
+          >
+            {figuresExpanded ? (
+              <FullscreenExitIcon fontSize="small" />
+            ) : (
+              <FullscreenIcon fontSize="small" />
+            )}
+          </IconButton>
+        </Tooltip>
+      </Box>
       <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
         {sortedFigureHandles.length > 0 ? (
           <FigureView figure={figures.figs[sortedFigureHandles[figureTab]]} />
