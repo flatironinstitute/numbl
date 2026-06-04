@@ -237,6 +237,22 @@ export async function ensureSystemProject(): Promise<void> {
   }
 }
 
+/** Relative path prefix (within the __system__ project) of the mip core package. */
+const MIP_CORE_PREFIX = "mip/packages/gh/mip-org/core/mip/";
+
+/** True if the mip core package is present in the system directory. */
+export async function isMipCoreInstalled(): Promise<boolean> {
+  const upper = MIP_CORE_PREFIX + "￿";
+  const first = await db.files
+    .where("[projectName+path]")
+    .between(
+      [SYSTEM_PROJECT_NAME, MIP_CORE_PREFIX],
+      [SYSTEM_PROJECT_NAME, upper]
+    )
+    .first();
+  return first !== undefined;
+}
+
 /** Delete every file (and its content) under the system project. */
 export async function clearSystemFiles(): Promise<void> {
   await db.transaction("rw", db.files, db.fileContents, async () => {

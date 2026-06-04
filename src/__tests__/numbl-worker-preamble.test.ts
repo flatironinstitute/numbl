@@ -34,12 +34,6 @@ function run(message: WorkerMessage): {
   return { output, msgs: posted };
 }
 
-/** Reset the worker's module-level state (including the persisted embed VFS). */
-function clearWorker() {
-  posted = [];
-  onmessage({ data: { type: "clear" } });
-}
-
 beforeAll(async () => {
   (globalThis as unknown as { self: unknown }).self = {
     postMessage: (m: WorkerMessage) => posted.push(m),
@@ -124,77 +118,28 @@ describe("worker run: preamble", () => {
     expect(msgs.some(m => m.type === "preamble_done")).toBe(false);
   });
 
-  it("persistVfs keeps the VFS across runs so a preamble install caches", () => {
-    clearWorker();
-    // Run 1: the preamble "installs" a file into the persisted VFS.
-    const main1 = "disp('RUN1')";
-    const r1 = run({
-      code: main1,
+  it("reports files a preamble installs under /system/ in done's vfsChanges", () => {
+    // The host persists these to the durable system directory so later runs and
+    // other embeds reuse them. A /system/ seed file makes the directory exist;
+    // the preamble then writes a sibling, which must show up as a created change
+    // (the seeded file itself is cleared from change tracking before the run).
+    const main = "disp('MAIN')";
+    const { msgs } = run({
+      code: main,
       preamble:
-        "fid = fopen('pkg_marker.txt', 'w');\nfprintf(fid, 'INSTALLED');\nfclose(fid);",
-      persistVfs: true,
+        "fid = fopen('/system/pkg/installed.m', 'w');\nfprintf(fid, 'function installed(); end');\nfclose(fid);",
       mainFileName: "script.m",
       options: { displayResults: true, optimization: "0" },
-      workspaceFiles: [{ name: "script.m", source: main1 }],
-      vfsFiles: [file("script.m", main1)],
-    });
-    expect(r1.msgs.some(m => m.type === "error")).toBe(false);
-    expect(r1.output).toContain("RUN1");
-
-    // Run 2: NO preamble at all — the installed file must still be present,
-    // proving the VFS survived between runs (so a real `mip load --install`
-    // would find the package already installed and skip the download).
-    const main2 = [
-      "fid = fopen('pkg_marker.txt', 'r');",
-      "if fid < 0",
-      "  disp('ABSENT')",
-      "else",
-      "  disp(fgetl(fid)); fclose(fid);",
-      "end",
-      "disp('RUN2')",
-    ].join("\n");
-    const r2 = run({
-      code: main2,
-      persistVfs: true,
-      mainFileName: "script.m",
-      options: { displayResults: true, optimization: "0" },
-      workspaceFiles: [{ name: "script.m", source: main2 }],
-      vfsFiles: [file("script.m", main2)],
-    });
-    expect(r2.msgs.some(m => m.type === "error")).toBe(false);
-    expect(r2.output).toContain("INSTALLED");
-    expect(r2.output).not.toContain("ABSENT");
-    expect(r2.output).toContain("RUN2");
-  });
-
-  it("without persistVfs each run gets a fresh VFS (no caching)", () => {
-    clearWorker();
-    const main1 = "disp('RUN1')";
-    run({
-      code: main1,
-      preamble:
-        "fid = fopen('pkg_marker2.txt', 'w');\nfprintf(fid, 'X');\nfclose(fid);",
-      mainFileName: "script.m",
-      options: { displayResults: true, optimization: "0" },
-      workspaceFiles: [{ name: "script.m", source: main1 }],
-      vfsFiles: [file("script.m", main1)],
+      workspaceFiles: [{ name: "script.m", source: main }],
+      vfsFiles: [file("script.m", main), file("/system/pkg/seed.m", "% seed")],
     });
 
-    const main2 = [
-      "fid = fopen('pkg_marker2.txt', 'r');",
-      "if fid < 0; disp('ABSENT'); else; disp('FOUND'); fclose(fid); end",
-      "disp('RUN2')",
-    ].join("\n");
-    const r2 = run({
-      code: main2,
-      mainFileName: "script.m",
-      options: { displayResults: true, optimization: "0" },
-      workspaceFiles: [{ name: "script.m", source: main2 }],
-      vfsFiles: [file("script.m", main2)],
-    });
-    expect(r2.msgs.some(m => m.type === "error")).toBe(false);
-    expect(r2.output).toContain("ABSENT");
-    expect(r2.output).toContain("RUN2");
+    expect(msgs.some(m => m.type === "error")).toBe(false);
+    const done = msgs.find(m => m.type === "done");
+    expect(done).toBeDefined();
+    const created = (done?.vfsChanges as { created?: { path: string }[] })
+      ?.created;
+    expect(created?.some(c => c.path === "/system/pkg/installed.m")).toBe(true);
   });
 
   it("behaves exactly as before when no preamble is given", () => {

@@ -55,16 +55,24 @@ export function useSystemFiles() {
     return map;
   }, []);
 
-  /** Build VFS files for workers. Loads all content from DB. */
+  /**
+   * Build VFS files for workers. Reads the file list AND contents straight
+   * from IndexedDB (not the `systemFiles` React state) so each run sees the
+   * current system directory — including packages installed by an earlier run
+   * or another embed since this component mounted.
+   */
   const getSystemVfsFiles = useCallback(async (): Promise<
     { path: string; content: Uint8Array }[]
   > => {
-    const contentsMap = await loadAllSystemContents();
-    return systemFiles.map(f => ({
-      path: "/system/" + f.name.slice(SYSTEM_PREFIX.length),
+    const [files, contentsMap] = await Promise.all([
+      getSystemFiles(),
+      getSystemFileContents(),
+    ]);
+    return files.map(f => ({
+      path: "/system/" + f.path,
       content: contentsMap.get(f.id) ?? new Uint8Array(0),
     }));
-  }, [systemFiles, loadAllSystemContents]);
+  }, []);
 
   /**
    * Build workspace files (text) for workers. Loads all content from DB.
@@ -86,14 +94,17 @@ export function useSystemFiles() {
     { name: string; source: string }[]
   > => {
     const decoder = new TextDecoder("utf-8");
-    const contentsMap = await loadAllSystemContents();
-    return systemFiles
-      .filter(f => f.name.endsWith(".m"))
+    const [files, contentsMap] = await Promise.all([
+      getSystemFiles(),
+      getSystemFileContents(),
+    ]);
+    return files
+      .filter(f => f.path.endsWith(".m"))
       .map(f => ({
-        name: "/system/" + f.name.slice(SYSTEM_PREFIX.length),
+        name: "/system/" + f.path,
         source: decoder.decode(contentsMap.get(f.id) ?? new Uint8Array(0)),
       }));
-  }, [systemFiles, loadAllSystemContents]);
+  }, []);
 
   const updateFileContent = useCallback(
     async (fileId: string, data: Uint8Array) => {

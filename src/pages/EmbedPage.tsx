@@ -25,7 +25,11 @@ import {
 } from "../numblLanguage.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { useSystemFiles } from "../hooks/useSystemFiles.js";
-import { useMipCorePackage } from "../hooks/useMipCorePackage.js";
+import {
+  useMipCorePackage,
+  markSystemActivity,
+} from "../hooks/useMipCorePackage.js";
+import { syncSystemVfsChanges } from "../vfs/syncVfsChanges.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
@@ -183,6 +187,15 @@ export function EmbedPage() {
         } else if (msg.type === "done") {
           setIsRunning(false);
           setRunPhase(null);
+          // Persist anything the run installed under /system/ (e.g. a package
+          // a preamble's `mip load --install` downloaded) to the durable system
+          // directory, so later runs and other embeds reuse it instead of
+          // re-downloading.
+          if (msg.vfsChanges) {
+            void syncSystemVfsChanges(msg.vfsChanges).then(changed => {
+              if (changed) reloadSystemFiles();
+            });
+          }
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
               handlePlotInstruction(instr);
@@ -195,7 +208,7 @@ export function EmbedPage() {
         }
       };
     },
-    [handlePlotInstruction]
+    [handlePlotInstruction, reloadSystemFiles]
   );
 
   // Initialize worker
@@ -219,6 +232,10 @@ export function EmbedPage() {
     setOutputTab(0); // start on Console; switch to Figure when one is drawn
     figuresDispatch({ type: "clear" });
 
+    // Keep the persistent system directory from being wiped out from under an
+    // actively-used embed (see useMipCorePackage's inactivity policy).
+    markSystemActivity();
+
     const [wsFiles, vfsFiles] = await Promise.all([
       getSystemWorkspaceFiles(),
       getSystemVfsFiles(),
@@ -228,10 +245,6 @@ export function EmbedPage() {
       type: "run",
       code,
       preamble: preamble.trim() ? preamble : undefined,
-      // Keep the worker's VFS across runs so a preamble install (e.g.
-      // `mip load --install ...`) only downloads once per session; variables
-      // still start fresh each run.
-      persistVfs: true,
       options: {
         displayResults: true,
         maxIterations: 10000000,
