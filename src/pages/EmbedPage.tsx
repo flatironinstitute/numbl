@@ -228,6 +228,10 @@ export function EmbedPage() {
       type: "run",
       code,
       preamble: preamble.trim() ? preamble : undefined,
+      // Keep the worker's VFS across runs so a preamble install (e.g.
+      // `mip load --install ...`) only downloads once per session; variables
+      // still start fresh each run.
+      persistVfs: true,
       options: {
         displayResults: true,
         maxIterations: 10000000,

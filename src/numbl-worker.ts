@@ -6,7 +6,7 @@
  *   - "execute": REPL execution (always uses persistent state)
  *
  * Protocol:
- *   Main -> Worker:  { type: "run", code, preamble?, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
+ *   Main -> Worker:  { type: "run", code, preamble?, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, persistVfs?, cancelSAB? }
  *   Main -> Worker:  { type: "execute", code, cancelSAB? }
  *   Main -> Worker:  { type: "set_optimization", optimization }
  *   Main -> Worker:  { type: "update_workspace", workspaceFiles, vfsFiles, searchPaths? }
@@ -50,6 +50,12 @@ let implicitCwdPath: string | null | undefined;
 let optimizationLevel: import("./numbl-core/executors/plugins.js").OptLevel =
   "1";
 let vfs: VirtualFileSystem | null = null;
+// VFS that persists across runs for `persistVfs` runs (the embed). Lets a
+// preamble install (e.g. `mip load --install ...`) survive between runs so the
+// install only downloads once per worker session — mip skips the download when
+// the package directory already exists. Variables are NOT persisted; each run
+// starts clean (see the persistVfs branch in the "run" handler).
+let embedFsVfs: VirtualFileSystem | null = null;
 let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();
 
@@ -170,6 +176,7 @@ self.onmessage = (e: MessageEvent) => {
     variableValues = {};
     holdState = false;
     vfs = null;
+    embedFsVfs = null;
     self.postMessage({ type: "cleared" });
     return;
   }
@@ -234,6 +241,7 @@ self.onmessage = (e: MessageEvent) => {
       searchPaths,
       vfsFiles,
       persistent,
+      persistVfs,
       cancelSAB,
     } = e.data;
 
@@ -277,6 +285,29 @@ self.onmessage = (e: MessageEvent) => {
       useWorkspaceFiles =
         wsFiles.length > 0 ? wsFiles : persistentWorkspaceFiles;
       useSearchPaths = searchPaths ?? persistentSearchPaths;
+    } else if (persistVfs) {
+      // Persistent-VFS mode (the embed): the file system survives across runs
+      // so a preamble install caches, but variables/exec state are fresh each
+      // run. Incoming vfsFiles (the system/mip-core files) are merged in,
+      // overwriting their own paths but leaving anything installed by an
+      // earlier run (e.g. a downloaded package) in place.
+      if (!embedFsVfs) embedFsVfs = new VirtualFileSystem();
+      if (vfsFiles) {
+        for (const f of vfsFiles as {
+          path: string;
+          content: Uint8Array;
+        }[]) {
+          embedFsVfs.writeFile(f.path, f.content);
+        }
+      }
+      embedFsVfs.clearChangeTracking();
+      adapter = new BrowserFileIOAdapter(embedFsVfs);
+      sysAdapter = new BrowserSystemAdapter(embedFsVfs);
+      runVfs = embedFsVfs;
+      useVariableValues = {};
+      useHoldState = undefined;
+      useWorkspaceFiles = wsFiles;
+      useSearchPaths = searchPaths;
     } else {
       // Non-persistent mode: fresh state
       const freshVfs = new VirtualFileSystem();
