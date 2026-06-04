@@ -66,14 +66,51 @@ function getQueryScript(): string {
   return DEFAULT_SCRIPT;
 }
 
+// Optional setup code that runs before the visible script on every Run. Kept
+// out of the editor; its output is hidden behind a "Preparing…" message unless
+// it errors. Used by docs to factor out boilerplate like `mip load --install`.
+function getQueryPreamble(): string {
+  const params = new URLSearchParams(window.location.search);
+  const preambleParam = params.get("preamble");
+  if (preambleParam) {
+    try {
+      return base64ToUtf8(preambleParam);
+    } catch {
+      console.error("Failed to decode preamble parameter");
+    }
+  }
+  return "";
+}
+
+// Message shown while the preamble runs. Defaults to "Preparing...", but a
+// page can override it (e.g. "Installing...") via the `preparing` param.
+const DEFAULT_PREPARING_LABEL = "Preparing...";
+function getQueryPreparingLabel(): string {
+  const params = new URLSearchParams(window.location.search);
+  const labelParam = params.get("preparing");
+  if (labelParam) {
+    try {
+      return base64ToUtf8(labelParam);
+    } catch {
+      console.error("Failed to decode preparing parameter");
+    }
+  }
+  return DEFAULT_PREPARING_LABEL;
+}
+
 export function EmbedPage() {
   const initialScript = getQueryScript();
+  const preamble = useMemo(() => getQueryPreamble(), []);
+  const preparingLabel = useMemo(() => getQueryPreparingLabel(), []);
   const { reloadSystemFiles, getSystemVfsFiles, getSystemWorkspaceFiles } =
     useSystemFiles();
   useMipCorePackage(reloadSystemFiles);
   const [code, setCode] = useState<string>(initialScript);
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
+  // While a run is in progress, which phase: the hidden preamble ("Preparing…")
+  // or the visible main script ("Running…"). null when idle.
+  const [runPhase, setRunPhase] = useState<"preamble" | "main" | null>(null);
   const [outputTab, setOutputTab] = useState(0); // 0=Console, 1=Figure
   const workerRef = useRef<Worker | null>(null);
   const inputSAB = useRef<SharedArrayBuffer | null>(createInputSAB());
@@ -125,6 +162,18 @@ export function EmbedPage() {
         }
         if (msg.type === "output") {
           setOutput(prev => prev + msg.text);
+        } else if (msg.type === "preamble_done") {
+          // Preamble succeeded; the visible script is now running.
+          setRunPhase("main");
+        } else if (msg.type === "preamble_error") {
+          // Preamble failed — reveal its (otherwise hidden) output and error.
+          setIsRunning(false);
+          setRunPhase(null);
+          setOutputTab(0);
+          const preText = msg.text ? `${msg.text}\n` : "";
+          setOutput(
+            `${preText}Error while preparing this example:\n${formatDiagnostic(msg)}\n`
+          );
         } else if (msg.type === "drawnow") {
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
@@ -133,6 +182,7 @@ export function EmbedPage() {
           }
         } else if (msg.type === "done") {
           setIsRunning(false);
+          setRunPhase(null);
           if (msg.plotInstructions?.length) {
             for (const instr of msg.plotInstructions) {
               handlePlotInstruction(instr);
@@ -140,6 +190,7 @@ export function EmbedPage() {
           }
         } else if (msg.type === "error") {
           setIsRunning(false);
+          setRunPhase(null);
           setOutput(prev => prev + `\n${formatDiagnostic(msg)}\n`);
         }
       };
@@ -164,6 +215,7 @@ export function EmbedPage() {
     if (!workerRef.current) return;
     setIsRunning(true);
     setOutput("");
+    setRunPhase(preamble.trim() ? "preamble" : "main");
     setOutputTab(0); // start on Console; switch to Figure when one is drawn
     figuresDispatch({ type: "clear" });
 
@@ -175,6 +227,7 @@ export function EmbedPage() {
     workerRef.current.postMessage({
       type: "run",
       code,
+      preamble: preamble.trim() ? preamble : undefined,
       options: {
         displayResults: true,
         maxIterations: 10000000,
@@ -185,7 +238,7 @@ export function EmbedPage() {
       mainFileName: "script.m",
       inputSAB: inputSAB.current ?? undefined,
     });
-  }, [code, getSystemWorkspaceFiles, getSystemVfsFiles]);
+  }, [code, preamble, getSystemWorkspaceFiles, getSystemVfsFiles]);
 
   const handleStop = useCallback(() => {
     if (workerRef.current) {
@@ -196,6 +249,7 @@ export function EmbedPage() {
       );
       setupWorkerHandler(workerRef.current);
       setIsRunning(false);
+      setRunPhase(null);
       setOutput(prev => prev + "\n--- Execution stopped ---\n");
     }
   }, [setupWorkerHandler]);
@@ -299,7 +353,9 @@ export function EmbedPage() {
           {isRunning && !output && (
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <CircularProgress size={14} sx={{ color: "#d4d4d4" }} />
-              <span>Running...</span>
+              <span>
+                {runPhase === "preamble" ? preparingLabel : "Running..."}
+              </span>
             </Box>
           )}
           {output ||

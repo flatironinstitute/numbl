@@ -6,7 +6,7 @@
  *   - "execute": REPL execution (always uses persistent state)
  *
  * Protocol:
- *   Main -> Worker:  { type: "run", code, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
+ *   Main -> Worker:  { type: "run", code, preamble?, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
  *   Main -> Worker:  { type: "execute", code, cancelSAB? }
  *   Main -> Worker:  { type: "set_optimization", optimization }
  *   Main -> Worker:  { type: "update_workspace", workspaceFiles, vfsFiles, searchPaths? }
@@ -14,6 +14,8 @@
  *   Main -> Worker:  { type: "clear" }
  *
  *   Worker -> Main:  { type: "output", text }
+ *   Worker -> Main:  { type: "preamble_done" } (preamble ran OK; main run starting)
+ *   Worker -> Main:  { type: "preamble_error", text, message, errorType, file, line, snippet, callStack }
  *   Worker -> Main:  { type: "drawnow", plotInstructions }
  *   Worker -> Main:  { type: "done", generatedJS, outputCount, workspaceRep?, plotInstructions?, dispatchUnknownCounts?, vfsChanges? }
  *   Worker -> Main:  { type: "error", message, errorType, file, line, snippet, callStack?, generatedJS?, workspaceRep?, vfsChanges? }
@@ -225,6 +227,7 @@ self.onmessage = (e: MessageEvent) => {
   if (type === "run") {
     const {
       code,
+      preamble,
       options,
       workspaceFiles,
       mainFileName,
@@ -314,6 +317,74 @@ self.onmessage = (e: MessageEvent) => {
     activeFileName = mainAbsPath;
 
     const runInputSAB = e.data.inputSAB ?? inputSAB;
+
+    // ── Preamble phase ──────────────────────────────────────────────────
+    // Optional setup code (e.g. `mip load --install ...`) that runs before the
+    // visible script, sharing the SAME VFS so anything it installs is available
+    // to the main run. Its console output is captured (not forwarded) and is
+    // surfaced only if the preamble itself fails — the embed page shows a
+    // "Preparing…" message in the meantime. Threads the preamble's resulting
+    // variables / search paths / workspace files into the main run.
+    if (typeof preamble === "string" && preamble.trim()) {
+      const preambleOutput: string[] = [];
+      try {
+        const pre = executeCode(
+          preamble,
+          {
+            onOutput: (text: string) => {
+              preambleOutput.push(text);
+            },
+            onDrawnow: () => {},
+            displayResults: false,
+            maxIterations: options?.maxIterations ?? 10000000,
+            optimization: options?.optimization ?? optimizationLevel,
+            initialVariableValues: useVariableValues,
+            fileIO: adapter,
+            system: sysAdapter,
+            onInput: runInputSAB ? workerOnInput(runInputSAB) : undefined,
+            cancelSAB,
+          },
+          useWorkspaceFiles,
+          runVfs.normalizePath("preamble.m"),
+          [
+            ...(useSearchPaths ?? []),
+            "/system/mip/packages/gh/mip-org/core/mip/mip",
+          ]
+        );
+        // Thread the preamble's resulting state into the main run.
+        useVariableValues = pre.variableValues;
+        if (pre.searchPaths) useSearchPaths = pre.searchPaths;
+        if (pre.workspaceFiles) useWorkspaceFiles = pre.workspaceFiles;
+        // Don't report the package install as user-visible VFS changes.
+        runVfs.clearChangeTracking();
+        self.postMessage({ type: "preamble_done" });
+      } catch (error: unknown) {
+        if (error instanceof CancellationError) {
+          self.postMessage({
+            type: "done",
+            generatedJS: undefined,
+            outputCount: 0,
+            workspaceRep: null,
+            plotInstructions: [],
+            vfsChanges: adapter?.getChanges(),
+          });
+          return;
+        }
+        const diags = diagnoseErrors(error, preamble, "preamble.m", wsFiles);
+        const first = diags[0];
+        self.postMessage({
+          type: "preamble_error",
+          text: preambleOutput.join(""),
+          message: first?.message ?? String(error),
+          errorType: first?.errorType ?? "unknown",
+          file: first?.file ?? null,
+          line: first?.line ?? null,
+          snippet: first?.snippet ?? null,
+          callStack: first?.callStack ?? null,
+        });
+        return;
+      }
+    }
 
     try {
       const result = executeCode(
