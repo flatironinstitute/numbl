@@ -1112,6 +1112,29 @@ describe("parseMFile - classdef advanced", () => {
     }
   });
 
+  it("treats contextual classdef keywords as identifiers outside classdef", () => {
+    // properties/methods/events/enumeration/arguments are only keywords inside
+    // a classdef (or, for arguments, a function body). As plain variables they
+    // must parse as identifiers.
+    for (const name of [
+      "events",
+      "properties",
+      "methods",
+      "enumeration",
+      "arguments",
+    ]) {
+      const stmt = parseFirst(`${name} = 5;`);
+      expect(stmt.type).toBe("Assign");
+      if (stmt.type === "Assign") expect(stmt.name).toBe(name);
+    }
+  });
+
+  it("treats contextual keywords as identifiers inside expressions", () => {
+    // e.g. events used as an indexed value: edges = [events(1,1) events(1,2)]
+    const stmt = parseFirst("y = sortrows([events ti], 5);");
+    expect(stmt.type).toBe("Assign");
+  });
+
   it("parses classdef with qualified superclass name", () => {
     const stmt = parseFirst(
       "classdef MyClass < pkg.BaseClass\n  properties\n    x\n  end\nend"

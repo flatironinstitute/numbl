@@ -56,6 +56,132 @@ function parseWithOptions(
 }
 
 /**
+ * Contextual keywords: words that MATLAB only treats as keywords inside a
+ * specific enclosing block, and as ordinary identifiers everywhere else.
+ * `properties`/`methods`/`events`/`enumeration` open blocks only directly
+ * inside a `classdef`; `arguments` opens a block only at the top of a function
+ * body. Outside those contexts they are valid variable/function names
+ * (e.g. `events = sortrows(...)`, `methods(obj)`).
+ */
+const CONTEXTUAL_KEYWORDS = new Set<Token>([
+  Token.Properties,
+  Token.Methods,
+  Token.Events,
+  Token.Enumeration,
+  Token.Arguments,
+]);
+
+/** Plain (non-OOP, non-function) block openers that pair with a single 'end'. */
+const SIMPLE_BLOCK_OPENERS = new Set<Token>([
+  Token.If,
+  Token.For,
+  Token.ParFor,
+  Token.While,
+  Token.Switch,
+  Token.Try,
+]);
+
+/**
+ * Decide whether a contextual keyword at index `i` is opening a block (as
+ * opposed to being used as an identifier). A block keyword is followed either
+ * by a newline (no attributes) or by a parenthesized attribute/size list that
+ * is NOT a `(...) =` indexed assignment.
+ */
+function contextualKeywordOpensBlock(tokens: TokenInfo[], i: number): boolean {
+  const nt = tokens[i + 1];
+  if (!nt) return false;
+  if (nt.token === Token.Newline) return true;
+  if (nt.token === Token.LParen) {
+    let depth = 0;
+    let j = i + 1;
+    for (; j < tokens.length; j++) {
+      const tt = tokens[j].token;
+      if (tt === Token.LParen) depth++;
+      else if (tt === Token.RParen) {
+        depth--;
+        if (depth === 0) {
+          j++;
+          break;
+        }
+      }
+    }
+    return tokens[j]?.token !== Token.Assign;
+  }
+  return false;
+}
+
+/**
+ * The lexer is context-free and always emits the keyword token for contextual
+ * keywords. Walk the token stream tracking block nesting and demote any
+ * contextual keyword that is really an identifier back to `Token.Ident`.
+ */
+function reclassifyContextualKeywords(tokens: TokenInfo[]): void {
+  const blockStack: ("classdef" | "function" | "block")[] = [];
+  let groupDepth = 0;
+  let atStmtStart = true;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = tokens[i];
+    const t = tok.token;
+
+    if (t === Token.LParen || t === Token.LBracket || t === Token.LBrace) {
+      groupDepth++;
+      atStmtStart = false;
+      continue;
+    }
+    if (t === Token.RParen || t === Token.RBracket || t === Token.RBrace) {
+      groupDepth--;
+      atStmtStart = false;
+      continue;
+    }
+    // Statement separators reset "start of statement" (only at top level).
+    if (
+      t === Token.Newline ||
+      t === Token.Semicolon ||
+      (t === Token.Comma && groupDepth === 0)
+    ) {
+      atStmtStart = true;
+      continue;
+    }
+
+    if (CONTEXTUAL_KEYWORDS.has(t)) {
+      const ctx = blockStack[blockStack.length - 1];
+      // `arguments` opens a block at the top of a function body; the other
+      // contextual keywords open blocks directly inside a classdef. (numbl
+      // also accepts an `arguments` block as a classdef member.)
+      const ctxOK =
+        t === Token.Arguments
+          ? ctx === "function" || ctx === "classdef"
+          : ctx === "classdef";
+      // A contextual keyword can only open a block at the start of a statement
+      // (top level) in the right enclosing block; anywhere else it's an
+      // ordinary identifier.
+      if (
+        groupDepth === 0 &&
+        atStmtStart &&
+        ctxOK &&
+        contextualKeywordOpensBlock(tokens, i)
+      ) {
+        blockStack.push("block");
+      } else {
+        tok.token = Token.Ident;
+      }
+      atStmtStart = false;
+      continue;
+    }
+
+    if (groupDepth === 0) {
+      if (t === Token.ClassDef) blockStack.push("classdef");
+      else if (t === Token.Function) blockStack.push("function");
+      else if (SIMPLE_BLOCK_OPENERS.has(t)) blockStack.push("block");
+      else if (t === Token.End) blockStack.pop();
+    }
+
+    atStmtStart = false;
+  }
+}
+
+/**
  * Tokens that open a block requiring a matching 'end' keyword.
  */
 const BLOCK_OPENERS = new Set<Token>([
@@ -235,6 +361,8 @@ function tokenizeInput(input: string): TokenInfo[] {
       end: t.end,
     });
   }
+
+  reclassifyContextualKeywords(tokens);
 
   return tokens;
 }

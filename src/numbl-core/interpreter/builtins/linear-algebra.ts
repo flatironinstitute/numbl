@@ -373,9 +373,108 @@ function vecnormAlongDim(
 
 // ── dot ──────────────────────────────────────────────────────────────────
 
+/** Extract real/imag data and shape from a numeric runtime value, or null if
+ *  the value is not numeric. */
+function toReImShape(
+  v: RuntimeValue
+): { re: Float64Array; im: Float64Array | null; shape: number[] } | null {
+  if (isRuntimeTensor(v)) {
+    return { re: v.data, im: v.imag ?? null, shape: v.shape };
+  }
+  if (isRuntimeNumber(v)) {
+    return { re: allocFloat64Array([v]), im: null, shape: [1, 1] };
+  }
+  if (isRuntimeComplexNumber(v)) {
+    return {
+      re: allocFloat64Array([v.re]),
+      im: allocFloat64Array([v.im]),
+      shape: [1, 1],
+    };
+  }
+  return null;
+}
+
 defineBuiltin({
   name: "dot",
   cases: [
+    {
+      // dot(A, B, dim): dot product along dimension `dim`, i.e.
+      // sum(conj(A) .* B, dim).
+      match: (argTypes, nargout) => {
+        if (nargout > 1 || argTypes.length !== 3) return null;
+        if (
+          !isNumericJitType(argTypes[0]) ||
+          !isNumericJitType(argTypes[1]) ||
+          !isNumericJitType(argTypes[2])
+        )
+          return null;
+        const hasComplex = argTypes.some(
+          t =>
+            t.kind === "complex_or_number" ||
+            (t.kind === "tensor" && t.isComplex)
+        );
+        return [tensorType(hasComplex)];
+      },
+      apply: args => {
+        const a = args[0],
+          b = args[1];
+        const dim = Math.round(toNumber(args[2]));
+        if (!(dim >= 1))
+          throw new RuntimeError("dot: dimension must be a positive integer");
+
+        const ad = toReImShape(a);
+        const bd = toReImShape(b);
+        if (!ad || !bd)
+          throw new RuntimeError("dot: arguments must be numeric");
+        if (ad.re.length !== bd.re.length)
+          throw new RuntimeError("dot: A and B must be the same size");
+
+        const aRe = ad.re,
+          aIm = ad.im,
+          bRe = bd.re,
+          bIm = bd.im;
+        const hasComplex = aIm !== null || bIm !== null;
+        const n = aRe.length;
+
+        // dim beyond the tensor rank: the reduction is over a singleton
+        // dimension, so the result is the element-wise product conj(A).*B.
+        const collapse = forEachSlice(ad.shape, dim, () => {});
+        if (collapse === null) {
+          const outRe = allocFloat64Array(n);
+          const outIm = hasComplex ? allocFloat64Array(n) : null;
+          for (let i = 0; i < n; i++) {
+            const aRei = aRe[i],
+              aImi = aIm ? aIm[i] : 0;
+            const bRei = bRe[i],
+              bImi = bIm ? bIm[i] : 0;
+            outRe[i] = aRei * bRei + aImi * bImi;
+            if (outIm) outIm[i] = aRei * bImi - aImi * bRei;
+          }
+          return RTV.tensor(outRe, [...ad.shape], outIm ?? undefined);
+        }
+
+        const outRe = allocFloat64Array(collapse.totalElems);
+        const outIm = hasComplex
+          ? allocFloat64Array(collapse.totalElems)
+          : null;
+        forEachSlice(ad.shape, dim, (outIdx, srcIndices) => {
+          let sRe = 0,
+            sIm = 0;
+          for (let k = 0; k < srcIndices.length; k++) {
+            const idx = srcIndices[k];
+            const aRei = aRe[idx],
+              aImi = aIm ? aIm[idx] : 0;
+            const bRei = bRe[idx],
+              bImi = bIm ? bIm[idx] : 0;
+            sRe += aRei * bRei + aImi * bImi;
+            sIm += aRei * bImi - aImi * bRei;
+          }
+          outRe[outIdx] = sRe;
+          if (outIm) outIm[outIdx] = sIm;
+        });
+        return RTV.tensor(outRe, collapse.resultShape, outIm ?? undefined);
+      },
+    },
     {
       match: (argTypes, nargout) => {
         if (nargout > 1 || argTypes.length !== 2) return null;
