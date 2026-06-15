@@ -4,6 +4,7 @@
  */
 
 import { isRuntimeChar, isRuntimeTensor } from "../../runtime/types.js";
+import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
 import { defineBuiltin, registerIBuiltin } from "./types.js";
@@ -105,6 +106,30 @@ defineBuiltin({
       apply: () => RTV.char("9.14.0"),
     },
   ],
+});
+
+// `ver` / `ver('product')` — version information. MATLAB returns a struct with
+// fields Name, Version, Release, Date (a struct array for the no-argument
+// form). numbl reports a single product struct matching `version` (9.14.0,
+// R2023a); the named-product form just echoes the requested name.
+registerIBuiltin({
+  name: "ver",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: (args, nargout) => {
+      const name =
+        args.length >= 1 && isRuntimeChar(args[0])
+          ? toString(args[0])
+          : "MATLAB";
+      if (nargout < 1) return undefined as unknown as RuntimeValue;
+      return RTV.struct({
+        Name: RTV.char(name),
+        Version: RTV.char("9.14"),
+        Release: RTV.char("(R2023a)"),
+        Date: RTV.char("2023-02-09"),
+      });
+    },
+  }),
 });
 
 function getComputerStrings(): { str: string; arch: string } {

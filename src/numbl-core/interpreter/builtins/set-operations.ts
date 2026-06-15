@@ -31,6 +31,103 @@ import { toNumArray } from "../../helpers/reduction-helpers.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { stripZeroImagTensor } from "../../helpers/effectively-real.js";
 
+// ── cellstr set-operation helpers ──────────────────────────────────────────
+// union/intersect/setdiff also accept cell arrays of character vectors (and
+// plain char/string scalars), matching MATLAB. Results are returned as column
+// cell vectors of sorted unique strings, with optional index outputs.
+
+function isCellstr(x: RuntimeValue): boolean {
+  return (
+    isRuntimeCell(x) &&
+    (x as RuntimeCell).data.every(
+      (e: RuntimeValue) => isRuntimeString(e) || isRuntimeChar(e)
+    )
+  );
+}
+
+/** True if a set op on (a, b) should run in text mode rather than numeric. */
+function isTextSetOp(a: RuntimeValue, b: RuntimeValue): boolean {
+  return isCellstr(a) || isCellstr(b);
+}
+
+function toStringList(x: RuntimeValue): string[] {
+  if (isRuntimeString(x) || isRuntimeChar(x)) return [toString(x)];
+  if (isRuntimeCell(x))
+    return (x as RuntimeCell).data.map((e: RuntimeValue) => toString(e));
+  throw new RuntimeError("set operation: expected text or cellstr argument");
+}
+
+function strColumnCell(strs: string[]): RuntimeValue {
+  return RTV.cell(
+    strs.map(s => RTV.char(s)),
+    [strs.length, 1]
+  );
+}
+
+function firstIndexMap(strs: string[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (let i = 0; i < strs.length; i++)
+    if (!m.has(strs[i])) m.set(strs[i], i + 1);
+  return m;
+}
+
+const colVec = (idx: number[]): RuntimeValue =>
+  RTV.tensor(allocFloat64Array(idx), [idx.length, 1]);
+
+function unionStrings(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const aStrs = toStringList(a);
+  const bStrs = toStringList(b);
+  const inA = firstIndexMap(aStrs);
+  const inB = firstIndexMap(bStrs);
+  const all = [...new Set([...aStrs, ...bStrs])].sort();
+  const C = strColumnCell(all);
+  if (nargout <= 1) return C;
+  const ia: number[] = [];
+  const ib: number[] = [];
+  for (const s of all) {
+    if (inA.has(s)) ia.push(inA.get(s)!);
+    else ib.push(inB.get(s)!);
+  }
+  return [C, colVec(ia), colVec(ib)];
+}
+
+function intersectStrings(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const aStrs = toStringList(a);
+  const bStrs = toStringList(b);
+  const inA = firstIndexMap(aStrs);
+  const inB = firstIndexMap(bStrs);
+  const common = [...new Set(aStrs.filter(s => inB.has(s)))].sort();
+  const C = strColumnCell(common);
+  if (nargout <= 1) return C;
+  return [
+    C,
+    colVec(common.map(s => inA.get(s)!)),
+    colVec(common.map(s => inB.get(s)!)),
+  ];
+}
+
+function setdiffStrings(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const aStrs = toStringList(a);
+  const bSet = new Set(toStringList(b));
+  const inA = firstIndexMap(aStrs);
+  const diff = [...new Set(aStrs.filter(s => !bSet.has(s)))].sort();
+  const C = strColumnCell(diff);
+  if (nargout <= 1) return C;
+  return [C, colVec(diff.map(s => inA.get(s)!))];
+}
+
 // ── find ─────────────────────────────────────────────────────────────────
 
 defineBuiltin({
@@ -411,6 +508,8 @@ defineBuiltin({
       apply: (args, nargout) => {
         if (args.length < 2)
           throw new RuntimeError("setdiff requires 2 arguments");
+        if (isTextSetOp(args[0], args[1]))
+          return setdiffStrings(args[0], args[1], nargout);
         const a = toNumArray(args[0], "setdiff");
         const bSet = new Set(toNumArray(args[1], "setdiff"));
         const seen = new Set<number>();
@@ -598,11 +697,14 @@ defineBuiltin({
   name: "intersect",
   cases: [
     {
-      match: argTypes => {
+      match: (argTypes, nargout) => {
         if (argTypes.length < 2) return null;
-        return [{ kind: "unknown" }];
+        const out: JitType = { kind: "unknown" };
+        return nargout > 1 ? [out, out, out] : [out];
       },
-      apply: args => {
+      apply: (args, nargout) => {
+        if (isTextSetOp(args[0], args[1]))
+          return intersectStrings(args[0], args[1], nargout);
         const a = toNumArray(args[0], "intersect");
         const bSet = new Set(toNumArray(args[1], "intersect"));
         const result = [...new Set(a.filter(x => bSet.has(x)))].sort((x, y) => {
@@ -629,11 +731,14 @@ defineBuiltin({
   name: "union",
   cases: [
     {
-      match: argTypes => {
+      match: (argTypes, nargout) => {
         if (argTypes.length < 2) return null;
-        return [{ kind: "unknown" }];
+        const out: JitType = { kind: "unknown" };
+        return nargout > 1 ? [out, out, out] : [out];
       },
-      apply: args => {
+      apply: (args, nargout) => {
+        if (isTextSetOp(args[0], args[1]))
+          return unionStrings(args[0], args[1], nargout);
         const a = toNumArray(args[0], "union");
         const b = toNumArray(args[1], "union");
         const result = [...new Set([...a, ...b])].sort((x, y) => {

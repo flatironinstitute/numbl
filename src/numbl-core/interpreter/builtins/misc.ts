@@ -5,7 +5,10 @@
 import {
   isRuntimeCell,
   isRuntimeChar,
+  isRuntimeDummyHandle,
   isRuntimeFunction,
+  isRuntimeGraphicsHandle,
+  isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeString,
   isRuntimeTensor,
@@ -450,6 +453,44 @@ for (const name of ["groot", "gcf", "gca", "shg", "newplot"]) {
       outputTypes: [{ kind: "unknown" }],
       apply: () => RTV.dummyHandle(),
     }),
+  });
+}
+
+// ishandle / ishghandle / isgraphics — test whether the argument is a graphics
+// handle. numbl represents handles either as handle objects (gcf/gca/...) or as
+// numeric figure handles (`figure` returns a figure number). A numeric value is
+// treated as a valid handle when it is a finite, non-negative real (0 is the
+// root/groot handle, positive integers are figure numbers). Operates
+// element-wise on tensors, returning a logical of the same size.
+function ishandleScalar(x: number): boolean {
+  return Number.isFinite(x) && x >= 0;
+}
+for (const name of ["ishandle", "ishghandle", "isgraphics"]) {
+  registerIBuiltin({
+    name,
+    resolve: argTypes => {
+      if (argTypes.length < 1) return null;
+      return {
+        outputTypes: [{ kind: "unknown" }],
+        apply: args => {
+          const v = args[0];
+          if (isRuntimeDummyHandle(v) || isRuntimeGraphicsHandle(v))
+            return RTV.logical(true);
+          if (isRuntimeNumber(v)) return RTV.logical(ishandleScalar(v));
+          if (isRuntimeLogical(v))
+            return RTV.logical(ishandleScalar(v ? 1 : 0));
+          if (isRuntimeTensor(v)) {
+            const out = allocFloat64Array(v.data.length);
+            for (let i = 0; i < v.data.length; i++)
+              out[i] = ishandleScalar(v.data[i]) ? 1 : 0;
+            const t = RTV.tensor(out, [...v.shape]);
+            t._isLogical = true;
+            return t;
+          }
+          return RTV.logical(false);
+        },
+      };
+    },
   });
 }
 

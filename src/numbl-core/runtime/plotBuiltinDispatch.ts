@@ -229,10 +229,20 @@ export function dispatchPlotBuiltin(
 
     // ── Graphics ops: figure / labels / hold / layout ──────────────
     case "figure": {
-      // `figure(n)` selects/creates figure n; `figure` (no argument) creates a
-      // NEW figure (next handle after the highest seen), matching MATLAB.
+      // Forms (MATLAB):
+      //   figure                 — create a NEW figure (next handle)
+      //   figure(n) / figure(f)  — select/create figure n (numeric handle)
+      //   figure(Name,Value,...) — create a NEW figure, set properties
+      // A numeric first argument selects/creates that figure number; anything
+      // else (a string property name) starts name-value pairs and creates a
+      // new figure. The properties (Visible, Color, Name, Position, ...) have
+      // no effect on numbl's headless rendering, so they are accepted and
+      // ignored rather than coerced to a number (which used to crash).
       let handle: number;
-      if (args.length > 0) {
+      if (
+        args.length > 0 &&
+        (isRuntimeNumber(args[0]) || isRuntimeTensor(args[0]))
+      ) {
         handle = toNumber(args[0]);
         state.maxFigureHandle = Math.max(state.maxFigureHandle ?? 0, handle);
       } else {

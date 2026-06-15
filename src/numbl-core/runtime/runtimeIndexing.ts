@@ -585,12 +585,15 @@ export function indexStore(
       const allFieldNames = [
         ...new Set([...existingFieldNames, ...[...rhsMv.fields.keys()]]),
       ];
-      // Ensure existing elements have all field names
+      // Ensure existing elements have all field names. Use bindField (not a
+      // raw fields.set) so the default value is incref'd — otherwise the
+      // scope-adopted tensor is freed out from under the struct and a later
+      // reassignment of that field underflows its refcount.
       for (let ei = 0; ei < existingElements.length; ei++) {
         const el = existingElements[ei];
         for (const f of allFieldNames) {
           if (!el.fields.has(f)) {
-            el.fields.set(f, RTV.tensor(allocFloat64Array(0), [0, 0]));
+            el.bindField(rt, f, RTV.tensor(allocFloat64Array(0), [0, 0]));
           }
         }
       }

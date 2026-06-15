@@ -455,6 +455,18 @@ export function callClassMethod(
 
 // ── methodDispatch ──────────────────────────────────────────────────────
 
+/** Flatten comma-separated lists: a JS array in the argument list represents
+ *  a cs-list (e.g. from `c{:}` or `varargin{:}`) and expands into individual
+ *  arguments. Single runtime values pass through unchanged. */
+function flattenCsLists(args: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const a of args) {
+    if (Array.isArray(a)) out.push(...a);
+    else out.push(a);
+  }
+  return out;
+}
+
 export function methodDispatch(
   rt: Runtime,
   name: string,
@@ -482,12 +494,17 @@ export function methodDispatch(
         const remaining = args.slice(1);
         const fieldRV = ensureRuntimeValue(fieldVal);
         if (isRuntimeFunction(fieldRV)) {
+          // Flatten comma-separated lists (e.g. `s.fn(a, c{:})`) into
+          // individual arguments. The indexing branch below routes through
+          // rt.index, which already expands cs-lists; the function-handle
+          // call here must do the same before invoking the handle.
+          const callArgs = flattenCsLists(remaining);
           if (fieldRV.jsFn) {
             return fieldRV.jsFnExpectsNargout
-              ? fieldRV.jsFn(nargout, ...remaining)
-              : fieldRV.jsFn(...remaining);
+              ? fieldRV.jsFn(nargout, ...callArgs)
+              : fieldRV.jsFn(...callArgs);
           }
-          return dispatch(rt, fieldRV.name, nargout, remaining);
+          return dispatch(rt, fieldRV.name, nargout, callArgs);
         }
         if (remaining.length > 0) {
           return rt.index(fieldVal, remaining, nargout);
