@@ -141,13 +141,11 @@ defineBuiltin({
 defineBuiltin({
   name: "isscalar",
   cases: [
-    anyToLogicalCase(args => {
-      const v = args[0];
-      if (typeof v === "number" || typeof v === "boolean") return true;
-      if (isRuntimeComplexNumber(v)) return true;
-      if (isRuntimeTensor(v)) return v.data.length === 1;
-      return false;
-    }),
+    // isscalar is numel(x)==1 for ANY type (cells, structs, strings, ...),
+    // not just numeric arrays.
+    anyToLogicalCase(
+      args => getShape(args[0]).reduce((a, b) => a * b, 1) === 1
+    ),
   ],
 });
 

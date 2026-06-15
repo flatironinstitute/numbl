@@ -783,11 +783,38 @@ defineBuiltin({
       },
       apply: args => {
         const xArr = toFloatArray(args[0]);
-        const yArr = toFloatArray(args[1]);
         const xqArg = args[2];
         const nn = xArr.length;
 
-        if (xArr.length !== yArr.length)
+        // y may be a vector (single data set) or a matrix whose columns are
+        // each interpolated against x (MATLAB: size(y,1) == length(x)).
+        const yVal = args[1];
+        let yCols: number; // number of data sets (matrix columns)
+        let yColData: (col: number) => Float64Array;
+        let yIsMatrix = false;
+        if (isRuntimeTensor(yVal)) {
+          const rows = yVal.shape[0] ?? 1;
+          const cols = yVal.shape.length >= 2 ? yVal.shape[1] : 1;
+          const isVector = rows === 1 || cols === 1;
+          if (isVector) {
+            const flat = yVal.data;
+            yCols = 1;
+            yColData = () => flat;
+          } else {
+            yIsMatrix = true;
+            yCols = cols;
+            // Column-major: column c occupies data[c*rows .. c*rows+rows-1].
+            yColData = c =>
+              yVal.data.subarray(c * rows, c * rows + rows) as Float64Array;
+          }
+        } else {
+          const flat = toFloatArray(yVal);
+          yCols = 1;
+          yColData = () => flat;
+        }
+
+        // Each data set must have one sample per x.
+        if (yColData(0).length !== nn)
           throw new RuntimeError("interp1: x and y must have the same length");
 
         let method = "linear";
@@ -805,7 +832,7 @@ defineBuiltin({
           }
         }
 
-        const interpOne = (xq: number): number => {
+        const interpOne = (yArr: Float64Array, xq: number): number => {
           if (xq < xArr[0] || xq > xArr[nn - 1]) {
             if (!doExtrap) return NaN;
             if (method === "linear") {
@@ -839,16 +866,37 @@ defineBuiltin({
           return yArr[lo] + t * (yArr[hi] - yArr[lo]);
         };
 
-        if (isRuntimeNumber(xqArg)) return RTV.num(interpOne(xqArg as number));
+        // Scalar query against a single-column y → scalar result.
+        if (isRuntimeNumber(xqArg) && !yIsMatrix)
+          return RTV.num(interpOne(yColData(0), xqArg as number));
 
-        if (isRuntimeTensor(xqArg)) {
-          const result = allocFloat64Array(xqArg.data.length);
-          for (let i = 0; i < xqArg.data.length; i++)
-            result[i] = interpOne(xqArg.data[i]);
-          return RTV.tensor(result, [...xqArg.shape]);
+        const xqData = isRuntimeNumber(xqArg)
+          ? allocFloat64Array([xqArg as number])
+          : isRuntimeTensor(xqArg)
+            ? xqArg.data
+            : null;
+        if (!xqData)
+          throw new RuntimeError("interp1: query points must be numeric");
+        const nq = xqData.length;
+
+        if (yIsMatrix) {
+          // Result is nq-by-(number of columns), column-major.
+          const result = allocFloat64Array(nq * yCols);
+          for (let c = 0; c < yCols; c++) {
+            const col = yColData(c);
+            for (let i = 0; i < nq; i++)
+              result[c * nq + i] = interpOne(col, xqData[i]);
+          }
+          return RTV.tensor(result, [nq, yCols]);
         }
 
-        throw new RuntimeError("interp1: query points must be numeric");
+        const col = yColData(0);
+        const result = allocFloat64Array(nq);
+        for (let i = 0; i < nq; i++) result[i] = interpOne(col, xqData[i]);
+        return RTV.tensor(
+          result,
+          isRuntimeTensor(xqArg) ? [...xqArg.shape] : [1, 1]
+        );
       },
     },
   ],
