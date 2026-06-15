@@ -514,9 +514,9 @@ export class ExpressionParser extends ParserBase {
         if (this.consume(Token.LParen)) {
           const params: string[] = [];
           if (!this.consume(Token.RParen)) {
-            params.push(this.expectIdent());
+            params.push(this.expectIdentOrTilde());
             while (this.consume(Token.Comma)) {
-              params.push(this.expectIdent());
+              params.push(this.expectIdentOrTilde());
             }
             if (!this.consume(Token.RParen)) {
               throw this.error(

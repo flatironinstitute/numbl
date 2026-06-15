@@ -331,10 +331,13 @@ export class ClassParser extends FunctionParser {
 
     // Check for output arguments
     if (this.consume(Token.LBracket)) {
-      // Multiple outputs: [out1, out2, ...] =
-      outputs.push(this.expectIdent());
-      while (this.consume(Token.Comma)) {
+      // Empty output list: `function [] = name(...)` (no outputs)
+      if (this.peekToken() !== Token.RBracket) {
+        // Multiple outputs: [out1, out2, ...] =
         outputs.push(this.expectIdent());
+        while (this.consume(Token.Comma)) {
+          outputs.push(this.expectIdent());
+        }
       }
       if (!this.consume(Token.RBracket)) {
         throw this.errorWithExpected(

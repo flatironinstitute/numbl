@@ -15,9 +15,12 @@ export class FunctionParser extends ArgumentsParser {
 
     const outputs: string[] = [];
     if (this.consume(Token.LBracket)) {
-      outputs.push(this.expectIdentOrTilde());
-      while (this.consume(Token.Comma)) {
+      // Empty output list: `function [] = name(...)` (no outputs)
+      if (this.peekToken() !== Token.RBracket) {
         outputs.push(this.expectIdentOrTilde());
+        while (this.consume(Token.Comma)) {
+          outputs.push(this.expectIdentOrTilde());
+        }
       }
       if (!this.consume(Token.RBracket)) {
         throw this.error("expected ']'");
