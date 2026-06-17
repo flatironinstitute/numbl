@@ -39,6 +39,7 @@ import {
 } from "../../helpers/arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
+import { stripClassNameArgs } from "./array-construction.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 
@@ -366,7 +367,9 @@ for (const [name, fillVal] of [
     name,
     resolve: () => ({
       outputTypes: [{ kind: "unknown" }],
-      apply: args => {
+      apply: rawArgs => {
+        // true/false accept a trailing 'logical' class spec; numbl ignores it.
+        const args = stripClassNameArgs(rawArgs);
         if (args.length === 0) return RTV.logical(fillVal === 1);
         const shape = parseShapeArgs(args);
         const rows = shape[0];

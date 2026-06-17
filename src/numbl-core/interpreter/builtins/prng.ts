@@ -23,10 +23,15 @@ import {
   restoreRngState,
 } from "../../helpers/prng.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import {
+  stripClassNameArgs,
+  stripClassNameTypes,
+} from "./array-construction.js";
 
 // ── Shape parsing (local, mirrors builtins/shape-utils.ts) ──────────────
 
-function parseShapeArgs(args: RuntimeValue[]): number[] {
+function parseShapeArgs(rawArgs: RuntimeValue[]): number[] {
+  const args = stripClassNameArgs(rawArgs);
   if (args.length === 1 && isRuntimeTensor(args[0])) {
     const t = args[0];
     const shape: number[] = [];
@@ -105,9 +110,11 @@ function registerRandBuiltin(
           return RTV.num(0);
         },
       },
-      // rand(), rand(n), rand(m,n), rand([m,n])
+      // rand(), rand(n), rand(m,n), rand([m,n]), with an optional trailing
+      // class-name string (rand(n,'single')) that numbl ignores.
       {
-        match: argTypes => {
+        match: rawTypes => {
+          const argTypes = stripClassNameTypes(rawTypes);
           if (argTypes.length === 0) return [{ kind: "number" }];
           for (const a of argTypes) {
             if (
@@ -121,7 +128,8 @@ function registerRandBuiltin(
             return [{ kind: "tensor", isComplex: false }];
           return [{ kind: "tensor", isComplex: false }];
         },
-        apply: args => {
+        apply: rawArgs => {
+          const args = stripClassNameArgs(rawArgs);
           if (args.length === 0) return RTV.num(gen());
           const shape = parseShapeArgs(args);
           if (shape.length === 1) shape.push(shape[0]);
@@ -172,7 +180,7 @@ defineBuiltin({
         if (imin > imax)
           throw new RuntimeError("randi: range must satisfy IMIN <= IMAX");
         const range = imax - imin + 1;
-        const shapeArgs = args.slice(1);
+        const shapeArgs = stripClassNameArgs(args.slice(1));
         if (shapeArgs.length === 0)
           return RTV.num(Math.floor(rngRandom() * range) + imin);
         const shape = parseShapeArgs(shapeArgs);

@@ -2,14 +2,63 @@
  * Array construction builtins: zeros, ones, nan/NaN, eye, linspace, logspace.
  */
 
-import { isRuntimeTensor } from "../../runtime/types.js";
+import {
+  isRuntimeTensor,
+  isRuntimeChar,
+  isRuntimeString,
+} from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import { toNumber, numel, RuntimeError } from "../../runtime/index.js";
-import type { SignCategory } from "../../jitTypes.js";
+import {
+  toNumber,
+  toString,
+  numel,
+  RuntimeError,
+} from "../../runtime/index.js";
+import type { JitType, SignCategory } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
+
+// MATLAB's size constructors (zeros, ones, eye, rand, …) accept a trailing
+// class-name string — `zeros(2,3,'int32')` — and the `'like'` prototype form
+// — `zeros(sz,'like',p)`. numbl only has the double type, so we accept and
+// silently ignore the class spec rather than erroring on the extra arg.
+
+function isClassNameType(t: JitType): boolean {
+  return t.kind === "char" || t.kind === "string";
+}
+
+/** Drop a trailing class-name spec from the JIT arg types (used in `match`
+ *  so the size cases still apply when a class string is present). */
+export function stripClassNameTypes(argTypes: JitType[]): JitType[] {
+  const n = argTypes.length;
+  if (n === 0) return argTypes;
+  // `..., 'like', proto`: a string followed by a non-string prototype.
+  if (
+    n >= 2 &&
+    isClassNameType(argTypes[n - 2]) &&
+    !isClassNameType(argTypes[n - 1])
+  )
+    return argTypes.slice(0, n - 2);
+  // `..., classname`
+  if (isClassNameType(argTypes[n - 1])) return argTypes.slice(0, n - 1);
+  return argTypes;
+}
+
+/** Drop a trailing class-name spec from the runtime args (used in `apply`). */
+export function stripClassNameArgs(args: RuntimeValue[]): RuntimeValue[] {
+  const n = args.length;
+  if (n === 0) return args;
+  const isStr = (v: RuntimeValue) => isRuntimeChar(v) || isRuntimeString(v);
+  // `'like'` keyword: drop it and the prototype (and anything after).
+  for (let i = 0; i < n; i++) {
+    if (isStr(args[i]) && toString(args[i]).toLowerCase() === "like")
+      return args.slice(0, i);
+  }
+  if (isStr(args[n - 1])) return args.slice(0, n - 1);
+  return args;
+}
 
 /** Validate one dimension value: MATLAB rejects NaN, Inf, and non-integer
  *  sizes; negative integers are silently clamped to 0. */
@@ -37,7 +86,7 @@ function arrayConstructorCases(
   scalarValue: RuntimeValue,
   opts?: { scalarSign?: SignCategory; nonneg?: boolean }
 ): BuiltinCase[] {
-  return [
+  const cases: BuiltinCase[] = [
     // No args: return scalar
     {
       match: argTypes => {
@@ -108,6 +157,13 @@ function arrayConstructorCases(
       },
     },
   ];
+  // Accept (and ignore) a trailing class-name spec on every case.
+  return cases.map(c => ({
+    match: (argTypes: JitType[], nargout: number) =>
+      c.match(stripClassNameTypes(argTypes), nargout),
+    apply: (args: RuntimeValue[], nargout: number) =>
+      c.apply(stripClassNameArgs(args), nargout),
+  }));
 }
 
 // ── zeros ────────────────────────────────────────────────────────────────
@@ -187,7 +243,8 @@ defineBuiltin({
       ? c
       : {
           ...c,
-          apply: (args: RuntimeValue[]) => {
+          apply: (rawArgs: RuntimeValue[]) => {
+            const args = stripClassNameArgs(rawArgs);
             let rows: number, cols: number;
             if (args.length === 1) {
               const shape = parseShapeArgs(args);
