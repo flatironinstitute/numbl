@@ -31,6 +31,24 @@ function includeAll(e: Extent, vs: ArrayLike<number> | undefined): void {
   for (let i = 0; i < vs.length; i++) include(e, vs[i]);
 }
 
+/** A patch is 3-D content only when its vertices span a non-trivial z range;
+ *  a flat patch (e.g. trimesh(...,0*x,...) under view(2)) stays 2-D. Mirrors
+ *  the renderer's routing in FigureView. */
+function patchIs3D(axes: AxesState): boolean {
+  for (const p of axes.patchTraces ?? []) {
+    if (!p.is3D) continue;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const v of p.vertices) {
+      const z = v[2] ?? 0;
+      if (z < lo) lo = z;
+      if (z > hi) hi = z;
+    }
+    if (hi - lo > 1e-9) return true;
+  }
+  return false;
+}
+
 /** Does this axes hold any 3-D content (so limits are a 6-vector)? */
 export function axesIs3D(axes: AxesState): boolean {
   return (
@@ -38,7 +56,8 @@ export function axesIs3D(axes: AxesState): boolean {
     (axes.plot3Traces?.length ?? 0) > 0 ||
     (axes.bar3Traces?.length ?? 0) > 0 ||
     (axes.bar3hTraces?.length ?? 0) > 0 ||
-    (axes.quiver3Traces?.length ?? 0) > 0
+    (axes.quiver3Traces?.length ?? 0) > 0 ||
+    patchIs3D(axes)
   );
 }
 
@@ -75,6 +94,13 @@ function dataExtents(axes: AxesState): { x: Extent; y: Extent; z: Extent } {
   for (const t of axes.contourTraces ?? []) {
     includeAll(x, t.x);
     includeAll(y, t.y);
+  }
+  for (const t of axes.patchTraces ?? []) {
+    for (const v of t.vertices) {
+      include(x, v[0]);
+      include(y, v[1]);
+      include(z, v[2] ?? 0);
+    }
   }
   for (const bt of axes.barTraces ?? []) {
     const hw = bt.width / 2;

@@ -6,6 +6,7 @@ import {
   type FiguresState,
 } from "../graphics/figuresReducer.js";
 import type { AxesState } from "../graphics/figuresReducer.js";
+import { computeAxisLimits } from "../graphics/axisLimits.js";
 
 /** Reduce all emitted plot instructions (as the viewer does) and return the
  *  current axes — the rendered state after the script runs. */
@@ -75,5 +76,30 @@ describe("trimesh", () => {
     // z is not constant, so the vertices span a real z range.
     const zs = p.vertices.map(v => v[2]);
     expect(Math.max(...zs) - Math.min(...zs)).toBeGreaterThan(0.1);
+  });
+
+  it("axis() reflects a flat patch's extent (DistMesh simpplot pattern)", () => {
+    // A flat mesh spanning [-1,1]x[-1,1]. simpplot does `ax=axis;
+    // axis(ax*1.001)`, so axis() must cover the patch — not default to
+    // [0 1 0 1], which previously cropped the view to one quadrant.
+    const axes = renderedAxes(
+      "trimesh([1 2 3; 1 3 4], [-1;1;1;-1], [-1;-1;1;1], 0*[-1;1;1;-1]);"
+    );
+    const lim = computeAxisLimits(axes);
+    expect(lim).toHaveLength(4); // flat patch -> 2-D limits
+    expect(lim[0]).toBeLessThanOrEqual(-1);
+    expect(lim[1]).toBeGreaterThanOrEqual(1);
+    expect(lim[2]).toBeLessThanOrEqual(-1);
+    expect(lim[3]).toBeGreaterThanOrEqual(1);
+  });
+
+  it("axis() returns a 6-vector for a z-varying 3-D mesh", () => {
+    const axes = renderedAxes(
+      "trimesh([1 2 3; 1 3 4], [0;1;1;0], [0;0;1;1], [0;0;5;5]);"
+    );
+    const lim = computeAxisLimits(axes);
+    expect(lim).toHaveLength(6);
+    expect(lim[4]).toBeLessThanOrEqual(0);
+    expect(lim[5]).toBeGreaterThanOrEqual(5);
   });
 });
