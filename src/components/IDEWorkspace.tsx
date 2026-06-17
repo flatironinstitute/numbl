@@ -235,6 +235,10 @@ export function IDEWorkspace({
 
   // Mobile layout
   const isMobile = useMediaQuery("(max-width:768px)");
+  // Keep the latest value in a ref so the stable handlePlotInstruction callback
+  // can read it without being recreated (which would churn the worker).
+  const isMobileRef = useRef(isMobile);
+  isMobileRef.current = isMobile;
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mobileOutputTab, setMobileOutputTab] = useState(0);
 
@@ -374,6 +378,22 @@ export function IDEWorkspace({
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
     figuresDispatch(instruction);
+
+    // On the mobile/compact layout, figures live behind a tab (desktop shows
+    // them in a dedicated side panel). Bring that tab forward as soon as a run
+    // draws something — same behavior as the embed widget. A drawing
+    // instruction is any that isn't a control/setter (set_*) or a clear/close,
+    // so this covers every plot type (surf, quiver, contour, …), not just a
+    // fixed plot/plot3/surf list.
+    if (!isMobileRef.current) return;
+    const t = instruction.type;
+    const isControl =
+      t.startsWith("set_") ||
+      t === "cla" ||
+      t === "clf" ||
+      t === "close" ||
+      t === "close_all";
+    if (!isControl) setMobileOutputTab(1);
   }, []);
 
   // uihtml reverse channel: a uihtml iframe posts events to the window
@@ -651,6 +671,10 @@ export function IDEWorkspace({
     setAllFilesRep([]);
     setFileSources(null);
     figuresDispatch({ type: "clear" });
+    // On mobile, start on the Output tab; handlePlotInstruction switches to
+    // Figures when the run draws one (matches the embed widget, and avoids
+    // stranding the user on an empty Figures tab when a re-run draws nothing).
+    setMobileOutputTab(0);
 
     // Load all file contents from DB
     const { vfsFiles, workspaceFiles, projectContents } =
