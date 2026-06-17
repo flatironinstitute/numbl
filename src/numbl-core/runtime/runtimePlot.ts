@@ -34,6 +34,7 @@ import {
   parsePlot3Args,
   parseLineArgs,
   parsePatchArgs,
+  parseTriMeshArgs,
   parseFillArgs,
   parseSurfArgs,
   parseScatterArgs,
@@ -278,6 +279,16 @@ export function patchCall(
   args: RuntimeValue[]
 ): void {
   const trace = parsePatchArgs(args);
+  plotInstructions.push({ type: "patch", trace });
+}
+
+export function trimeshCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  // trimesh renders a triangular mesh as a patch (MATLAB returns a patch
+  // object), so it reuses the "patch" instruction.
+  const trace = parseTriMeshArgs(args);
   plotInstructions.push({ type: "patch", trace });
 }
 

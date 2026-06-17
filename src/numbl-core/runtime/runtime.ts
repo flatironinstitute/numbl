@@ -101,6 +101,7 @@ import {
   pcolorCall as _pcolorCall,
   lineCall as _lineCall,
   patchCall as _patchCall,
+  trimeshCall as _trimeshCall,
   fillCall as _fillCall,
   contourCall as _contourCall,
   quiver3Call as _quiver3Call,
@@ -482,6 +483,23 @@ export class Runtime {
     this.builtins["patch"] = (_nargout: number, args: unknown[]) => {
       const margs = args.map(a => ensureRuntimeValue(a));
       _patchCall(this.plotInstructions, margs);
+      if (_nargout >= 1) {
+        const last = this.plotInstructions[this.plotInstructions.length - 1];
+        if (last && last.type === "patch") {
+          last.trace.id = this.graphicsIdCounter++;
+          return RTV.graphicsHandle(
+            last.trace as unknown as Record<string, unknown>,
+            "patch"
+          );
+        }
+        return RTV.dummyHandle();
+      }
+    };
+    // `trimesh` draws a triangular mesh as a patch; `h = trimesh(...)`
+    // returns the patch handle so later property assignments update the mesh.
+    this.builtins["trimesh"] = (_nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      _trimeshCall(this.plotInstructions, margs);
       if (_nargout >= 1) {
         const last = this.plotInstructions[this.plotInstructions.length - 1];
         if (last && last.type === "patch") {

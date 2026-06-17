@@ -1165,6 +1165,123 @@ export function parseFillArgs(args: RuntimeValue[]): PatchTrace[] {
   return traces.map(finalizePatch);
 }
 
+/** Build 0-based triangle faces from a connectivity matrix T (1-based vertex
+ *  indices, one triangle per row). Non-finite entries are dropped so ragged
+ *  rows are tolerated. */
+function facesFromConnectivity(fv: RuntimeValue): number[][] {
+  const fInfo = getMatrixInfo(fv);
+  const faces: number[][] = [];
+  for (let r = 0; r < fInfo.rows; r++) {
+    const face: number[] = [];
+    for (let c = 0; c < fInfo.cols; c++) {
+      const idx = fInfo.data[c * fInfo.rows + r];
+      if (Number.isFinite(idx)) face.push(idx - 1);
+    }
+    if (face.length > 0) faces.push(face);
+  }
+  return faces;
+}
+
+/** trimesh color defaults, per the MATLAB docs: light-gray faces, black
+ *  edges. Explicit Name-Value colors set earlier are preserved. */
+function finalizeTriMesh(trace: PatchTrace): PatchTrace {
+  if (trace.faceColor === undefined) trace.faceColor = [0.85, 0.85, 0.85];
+  if (trace.edgeColor === undefined) trace.edgeColor = [0, 0, 0];
+  return trace;
+}
+
+/**
+ * Parse trimesh() arguments into a canonical PatchTrace.
+ *
+ * trimesh draws a triangular mesh and (per the MATLAB docs) returns a patch
+ * object, so it maps onto the PatchTrace model: the connectivity matrix T
+ * supplies the faces (one triangle per row, 1-based vertex indices) and the
+ * x/y[/z] vectors supply the vertices.
+ *
+ * Supported forms:
+ *   trimesh(T, x, y)              — 2-D triangular mesh
+ *   trimesh(T, x, y, z)           — 3-D triangular mesh
+ *   trimesh(T, x, y, z, c)        — c is per-vertex color data
+ *   trimesh(TO)                   — triangulation object (struct exposing
+ *                                   ConnectivityList + Points)
+ *   trimesh(___, Name, Value)     — patch properties
+ *   trimesh(ax, ___)              — leading axes handle (ignored)
+ */
+export function parseTriMeshArgs(args: RuntimeValue[]): PatchTrace {
+  let a = args;
+  if (a.length > 0 && isAxesHandleArg(a[0])) a = a.slice(1);
+  if (a.length === 0) throw new Error("trimesh requires input arguments");
+
+  // trimesh(TO): triangulation / delaunayTriangulation object, modeled as a
+  // struct with ConnectivityList and Points fields.
+  if (isRuntimeStruct(a[0])) {
+    const s = a[0] as RuntimeStruct;
+    const get = (name: string): RuntimeValue | undefined => {
+      for (const [k, v] of s.fields) if (k.toLowerCase() === name) return v;
+      return undefined;
+    };
+    const conn = get("connectivitylist");
+    const pts = get("points");
+    if (!conn || !pts) {
+      throw new Error(
+        "trimesh: triangulation object must have ConnectivityList and Points fields"
+      );
+    }
+    const pInfo = getMatrixInfo(pts);
+    const np = pInfo.rows;
+    const is3D = pInfo.cols >= 3;
+    const vertices: number[][] = [];
+    for (let i = 0; i < np; i++) {
+      const x = pInfo.data[i];
+      const y = pInfo.data[np + i];
+      vertices.push(is3D ? [x, y, pInfo.data[2 * np + i]] : [x, y]);
+    }
+    const trace: PatchTrace = {
+      vertices,
+      faces: facesFromConnectivity(conn),
+      is3D,
+    };
+    applyPatchNameValues(trace, a, 1);
+    return finalizeTriMesh(trace);
+  }
+
+  if (a.length < 3) throw new Error("trimesh: expected T, x and y");
+
+  // Positional T, x, y [, z [, c]] followed by Name-Value pairs.
+  let pos = 3;
+  let zv: RuntimeValue | undefined;
+  let cv: RuntimeValue | undefined;
+  if (a.length > 3 && isNumericArg(a[3])) {
+    zv = a[3];
+    pos = 4;
+    if (a.length > 4 && isNumericArg(a[4])) {
+      cv = a[4];
+      pos = 5;
+    }
+  }
+
+  const xi = getMatrixInfo(a[1]);
+  const yi = getMatrixInfo(a[2]);
+  const zi = zv ? getMatrixInfo(zv) : undefined;
+  const nv = xi.data.length;
+  const vertices: number[][] = [];
+  for (let i = 0; i < nv; i++) {
+    const x = xi.data[i];
+    const y = yi.data[Math.min(i, yi.data.length - 1)];
+    if (zi) vertices.push([x, y, zi.data[Math.min(i, zi.data.length - 1)]]);
+    else vertices.push([x, y]);
+  }
+
+  const trace: PatchTrace = {
+    vertices,
+    faces: facesFromConnectivity(a[0]),
+    is3D: !!zi,
+  };
+  if (cv) trace.faceVertexCData = toCData(cv);
+  applyPatchNameValues(trace, a, pos);
+  return finalizeTriMesh(trace);
+}
+
 // ── Surf Name-Value key detection ────────────────────────────────────────
 
 const SURF_NAME_VALUE_KEYS = new Set(["edgecolor", "facecolor", "facealpha"]);
