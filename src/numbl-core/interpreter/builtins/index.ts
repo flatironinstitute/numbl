@@ -29,6 +29,7 @@ import "./time-system.js";
 import "./datetime.js";
 import "./sparse.js";
 import "./special-math.js";
+import "./geometry.js";
 import "./misc.js";
 import "./dictionary.js";
 import "./help-text.js";
