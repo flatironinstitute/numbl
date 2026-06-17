@@ -492,6 +492,84 @@ function sortCell(
 
 // ── setdiff ──────────────────────────────────────────────────────────────
 
+/** True if a trailing argument is the 'rows' flag. */
+function hasRowsFlag(args: RuntimeValue[]): boolean {
+  for (let i = 2; i < args.length; i++) {
+    const a = args[i];
+    if (
+      (isRuntimeString(a) || isRuntimeChar(a)) &&
+      toString(a).toLowerCase() === "rows"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Build a comma-joined key for row `r` of a column-major tensor. */
+function makeRowKey(data: ArrayLike<number>, rows: number, cols: number) {
+  return (r: number): string => {
+    let key = "" + data[r];
+    for (let c = 1; c < cols; c++) key += "," + data[c * rows + r];
+    return key;
+  };
+}
+
+/** setdiff(A, B, 'rows'): the unique rows of A not present in B, sorted in
+ *  ascending (lexicographic) order. `[C, IA]` returns the first-occurrence
+ *  row indices into A such that `C = A(IA,:)`. */
+function setdiffByRows(
+  av: RuntimeTensor,
+  bv: RuntimeTensor,
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const [aRows, aCols] = tensorSize2D(av);
+  const [bRows, bCols] = tensorSize2D(bv);
+  if (aRows > 0 && bRows > 0 && aCols !== bCols) {
+    throw new RuntimeError(
+      "setdiff: 'rows' requires the same number of columns in A and B"
+    );
+  }
+  const cols = aCols;
+  const aKey = makeRowKey(av.data, aRows, cols);
+  const bKey = makeRowKey(bv.data, bRows, bCols);
+
+  const bSet = new Set<string>();
+  for (let r = 0; r < bRows; r++) bSet.add(bKey(r));
+
+  const seen = new Set<string>();
+  const order: number[] = [];
+  for (let r = 0; r < aRows; r++) {
+    const k = aKey(r);
+    if (!bSet.has(k) && !seen.has(k)) {
+      seen.add(k);
+      order.push(r);
+    }
+  }
+  order.sort((x, y) => {
+    for (let c = 0; c < cols; c++) {
+      const vx = av.data[c * aRows + x];
+      const vy = av.data[c * aRows + y];
+      if (vx !== vy) return vx - vy;
+    }
+    return 0;
+  });
+
+  const n = order.length;
+  const resultData = allocFloat64Array(n * cols);
+  for (let c = 0; c < cols; c++) {
+    for (let u = 0; u < n; u++) {
+      resultData[c * n + u] = av.data[c * aRows + order[u]];
+    }
+  }
+  const c = RTV.tensor(resultData, [n, cols]);
+  if (nargout > 1) {
+    const ia = allocFloat64Array(order.map(r => r + 1));
+    return [c, RTV.tensor(ia, [n, 1])];
+  }
+  return c;
+}
+
 defineBuiltin({
   name: "setdiff",
   cases: [
@@ -510,6 +588,23 @@ defineBuiltin({
           throw new RuntimeError("setdiff requires 2 arguments");
         if (isTextSetOp(args[0], args[1]))
           return setdiffStrings(args[0], args[1], nargout);
+        if (hasRowsFlag(args)) {
+          // 'rows' treats each row of A/B as one element. A non-tensor
+          // operand (scalar/vector) becomes a column so each entry is a row.
+          const asRowsTensor = (x: RuntimeValue): RuntimeTensor => {
+            if (isRuntimeTensor(x)) return x;
+            const arr = toNumArray(x, "setdiff");
+            return RTV.tensor(allocFloat64Array(arr), [
+              arr.length,
+              1,
+            ]) as RuntimeTensor;
+          };
+          return setdiffByRows(
+            asRowsTensor(args[0]),
+            asRowsTensor(args[1]),
+            nargout ?? 1
+          );
+        }
         const a = toNumArray(args[0], "setdiff");
         const bSet = new Set(toNumArray(args[1], "setdiff"));
         const seen = new Set<number>();
