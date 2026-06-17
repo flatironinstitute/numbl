@@ -14,13 +14,24 @@
  * pulls dependencies in first.
  */
 
-import {
-  C_SNIPPETS,
-  JS_SNIPPETS,
-  JS_IMPORTS,
-} from "../builtins/runtime/snippets.gen.js";
+import { JS_SNIPPETS, JS_IMPORTS } from "../builtins/runtime/snippets.gen.js";
 import { getBuiltin } from "../builtins/index.js";
 import type { Builtin } from "../builtins/registry.js";
+
+/**
+ * C runtime-snippet table, registered at bootstrap (Node only) rather than
+ * imported statically. C-JIT (`--opt 2`) is Node-only, so its ~300 KB of C
+ * source strings must not land in the browser worker bundle. The Node C-JIT
+ * bootstrap (`executors/jit/compileC.node.ts`) calls `setCSnippets` with the
+ * table from `snippets.c.gen.ts`; the browser never registers it and never
+ * reaches C codegen, so it stays out of the browser dep graph.
+ */
+let cSnippets: Record<string, string> | null = null;
+
+/** Register the C runtime-snippet table. Called once at Node bootstrap. */
+export function setCSnippets(snippets: Record<string, string>): void {
+  cSnippets = snippets;
+}
 
 /** Minimal Workspace shape consulted at emit time. Importing the
  *  concrete Workspace class would create a cycle (workspace ↔ codegen);
@@ -86,26 +97,49 @@ export function parseSnippetSource(raw: string): {
   return { headers, code: bodyLines.join("\n") + "\n" };
 }
 
+/** Parse a `.h` body out of the registered C-snippet table. Only the C
+ *  codegen path (`renderRuntimeBodies` / `collectRuntimeHeaders`) reaches
+ *  this, and only under Node where `setCSnippets` has run. */
+function parseCSnippet(filename: string): { headers: string[]; code: string } {
+  if (cSnippets === null) {
+    throw new Error(
+      "C runtime snippets not registered; call setCSnippets at bootstrap " +
+        "(C-JIT is Node-only — see executors/jit/compileC.node.ts)"
+    );
+  }
+  const raw = cSnippets[filename];
+  if (raw === undefined) {
+    throw new Error(
+      `runtime snippet '${filename}' not found in snippets.c.gen.ts; ` +
+        `re-run 'npm run build:snippets' after adding the .h file`
+    );
+  }
+  return parseSnippetSource(raw);
+}
+
 function loadSnippet(
   filename: string,
   deps: ReadonlyArray<string> = []
 ): RuntimeSnippet {
-  const raw = C_SNIPPETS[filename];
-  if (raw === undefined) {
-    throw new Error(
-      `runtime snippet '${filename}' not found in snippets.gen.ts; ` +
-        `re-run 'npm run build:snippets' after adding the .h file`
-    );
-  }
-  const { headers, code } = parseSnippetSource(raw);
-  // Optional paired `.js` sibling (same basename) — auto-bound when
-  // present so `emitJs` can render the JS body without each call
-  // site looking it up separately.
+  // The JS sibling (`code`'s paired `.js`) is bound eagerly so emitJs can
+  // render it directly. The C `headers`/`code` are resolved lazily via
+  // getters: C-JIT is Node-only, so deferring access keeps the ~300 KB C
+  // table out of the browser bundle (the getters never fire there) and lets
+  // this registry initialize before the Node bootstrap registers the table.
   const jsName = filename.replace(/\.h$/, ".js");
   const jsCode = JS_SNIPPETS[jsName];
+  let parsed: { headers: string[]; code: string } | null = null;
+  const resolveC = (): { headers: string[]; code: string } => {
+    if (parsed === null) parsed = parseCSnippet(filename);
+    return parsed;
+  };
   const snippet: RuntimeSnippet = {
-    headers,
-    code,
+    get headers() {
+      return resolveC().headers;
+    },
+    get code() {
+      return resolveC().code;
+    },
     deps,
     srcFilename: filename,
   };
