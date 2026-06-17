@@ -9,6 +9,7 @@ import type {
   Plot3Trace,
   Bar3Trace,
   Quiver3Trace,
+  PatchTrace,
 } from "./types.js";
 import { colormapLookup } from "./surfColormap.js";
 
@@ -29,6 +30,8 @@ interface SurfViewProps {
   bar3Traces?: Bar3Trace[];
   bar3hTraces?: Bar3Trace[];
   quiver3Traces?: Quiver3Trace[];
+  /** 3-D patches (e.g. from trimesh(T,x,y,z)). 2-D patches are placed at z=0. */
+  patchTraces?: PatchTrace[];
   shading?: "faceted" | "flat" | "interp";
   colorbar?: boolean;
   colorbarLocation?: string;
@@ -43,6 +46,7 @@ export function SurfView({
   bar3Traces = [],
   bar3hTraces = [],
   quiver3Traces = [],
+  patchTraces = [],
   shading,
   colorbar,
   colorbarLocation,
@@ -145,7 +149,8 @@ export function SurfView({
       plot3Traces.length === 0 &&
       bar3Traces.length === 0 &&
       bar3hTraces.length === 0 &&
-      quiver3Traces.length === 0
+      quiver3Traces.length === 0 &&
+      patchTraces.length === 0
     )
       return;
 
@@ -201,6 +206,23 @@ export function SurfView({
       updateRange(trace.x, xMinRef, xMaxRef);
       // Bars extend to zero on x-axis
       if (0 < xMinRef.v) xMinRef.v = 0;
+    }
+    for (const trace of patchTraces) {
+      updateRange(
+        trace.vertices.map(v => v[0]),
+        xMinRef,
+        xMaxRef
+      );
+      updateRange(
+        trace.vertices.map(v => v[1]),
+        yMinRef,
+        yMaxRef
+      );
+      updateRange(
+        trace.vertices.map(v => v[2] ?? 0),
+        zMinRef,
+        zMaxRef
+      );
     }
     for (const trace of quiver3Traces) {
       // Include both the arrow tails and the arrow heads.
@@ -444,6 +466,131 @@ export function SurfView({
             transparent: true,
           });
         }
+        scene.add(new THREE.LineSegments(edgeGeometry, edgeMat));
+      }
+    }
+
+    // ── Render patch traces (e.g. trimesh 3-D triangular meshes) ────────
+    for (const trace of patchTraces) {
+      const verts = trace.vertices;
+      if (verts.length === 0 || trace.faces.length === 0) continue;
+      const alpha = trace.faceAlpha ?? 1;
+
+      // Shared vertex buffer (data X→three X, data Z→three Y, data Y→three Z).
+      const positions = new Float32Array(verts.length * 3);
+      for (let i = 0; i < verts.length; i++) {
+        positions[i * 3] = norm(verts[i][0], cxData);
+        positions[i * 3 + 1] = norm(verts[i][2] ?? 0, czData);
+        positions[i * 3 + 2] = norm(verts[i][1], cyData);
+      }
+
+      // Per-vertex colors when the patch carries CData ('flat'/'interp').
+      const useVertexColor =
+        (trace.faceColor === "flat" || trace.faceColor === "interp") &&
+        trace.faceVertexCData !== undefined;
+      let vertexColors: Float32Array | undefined;
+      if (useVertexColor) {
+        const cdata = trace.faceVertexCData!;
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (const c of cdata) {
+          const v = typeof c === "number" ? c : 0;
+          if (isFinite(v)) {
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+          }
+        }
+        const range = hi - lo || 1;
+        vertexColors = new Float32Array(verts.length * 3);
+        for (let i = 0; i < verts.length; i++) {
+          const c = cdata[Math.min(i, cdata.length - 1)];
+          let r: number, g: number, b: number;
+          if (Array.isArray(c)) {
+            [r, g, b] = c;
+          } else {
+            [r, g, b] = colormapLookup(((c as number) - lo) / range);
+          }
+          vertexColors[i * 3] = r;
+          vertexColors[i * 3 + 1] = g;
+          vertexColors[i * 3 + 2] = b;
+        }
+      }
+
+      // Fan-triangulate each face into the index buffer.
+      const indices: number[] = [];
+      for (const face of trace.faces) {
+        for (let k = 1; k + 1 < face.length; k++) {
+          indices.push(face[0], face[k], face[k + 1]);
+        }
+      }
+
+      const showFaces = trace.faceColor !== "none";
+      if (showFaces && indices.length > 0) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute(
+          "position",
+          new THREE.BufferAttribute(positions.slice(), 3)
+        );
+        if (vertexColors) {
+          geometry.setAttribute(
+            "color",
+            new THREE.BufferAttribute(vertexColors, 3)
+          );
+        }
+        geometry.setIndex(indices);
+        geometry.computeVertexNormals();
+        const faceMaterial = vertexColors
+          ? new THREE.MeshPhongMaterial({
+              vertexColors: true,
+              flatShading: true,
+              opacity: alpha,
+              transparent: alpha < 1,
+              side: THREE.DoubleSide,
+            })
+          : new THREE.MeshPhongMaterial({
+              color: new THREE.Color(
+                ...((Array.isArray(trace.faceColor)
+                  ? trace.faceColor
+                  : [0.85, 0.85, 0.85]) as [number, number, number])
+              ),
+              flatShading: true,
+              opacity: alpha,
+              transparent: alpha < 1,
+              side: THREE.DoubleSide,
+            });
+        scene.add(new THREE.Mesh(geometry, faceMaterial));
+      }
+
+      // Edge wireframe (skipped when EdgeColor is 'none').
+      const showEdges =
+        trace.edgeColor !== "none" && trace.lineStyle !== "none";
+      if (showEdges) {
+        const edgePositions: number[] = [];
+        for (const face of trace.faces) {
+          for (let k = 0; k < face.length; k++) {
+            const a = face[k];
+            const b = face[(k + 1) % face.length];
+            edgePositions.push(
+              positions[a * 3],
+              positions[a * 3 + 1],
+              positions[a * 3 + 2],
+              positions[b * 3],
+              positions[b * 3 + 1],
+              positions[b * 3 + 2]
+            );
+          }
+        }
+        const edgeGeometry = new THREE.BufferGeometry();
+        edgeGeometry.setAttribute(
+          "position",
+          new THREE.Float32BufferAttribute(edgePositions, 3)
+        );
+        const edgeColor = Array.isArray(trace.edgeColor)
+          ? trace.edgeColor
+          : [0, 0, 0];
+        const edgeMat = new THREE.LineBasicMaterial({
+          color: new THREE.Color(edgeColor[0], edgeColor[1], edgeColor[2]),
+        });
         scene.add(new THREE.LineSegments(edgeGeometry, edgeMat));
       }
     }
@@ -753,6 +900,7 @@ export function SurfView({
     bar3Traces,
     bar3hTraces,
     quiver3Traces,
+    patchTraces,
     shading,
     axisVisible,
   ]);

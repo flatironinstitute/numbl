@@ -1,6 +1,6 @@
 import { Component, useRef, useEffect, useCallback } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import type { PlotTrace } from "./types.js";
+import type { PlotTrace, PatchTrace } from "./types.js";
 import type { AxesState, FigureState } from "./figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
@@ -160,13 +160,35 @@ export function FigureView({ figure }: FigureViewProps) {
   );
 }
 
+/** True when a 3-D patch has a non-trivial z extent. A flat patch (all z
+ *  equal, including the 2-D case where z defaults to 0) renders correctly in
+ *  the 2-D canvas, so it should not force the 3-D viewer. */
+function hasZVariation(patch: PatchTrace): boolean {
+  if (!patch.is3D) return false;
+  let lo = Infinity;
+  let hi = -Infinity;
+  for (const v of patch.vertices) {
+    const z = v[2] ?? 0;
+    if (z < lo) lo = z;
+    if (z > hi) hi = z;
+  }
+  return hi - lo > 1e-9;
+}
+
 function SingleAxesView({ axes }: { axes: AxesState }) {
+  // A patch with varying z-coordinates (e.g. trimesh(T,x,y,z)) makes the axes
+  // 3-D, the same as a surf/plot3/bar3 trace — otherwise it renders flattened
+  // in the 2-D canvas, dropping z. A flat patch (z all equal, e.g. simpplot's
+  // trimesh(...,0*x,...) under view(2)) stays in the 2-D canvas, which the
+  // 3-D viewer's free-orbit camera cannot reproduce.
+  const patch3D = (axes.patchTraces ?? []).filter(hasZVariation);
   const has3D =
     (axes.surfTraces && axes.surfTraces.length > 0) ||
     (axes.plot3Traces && axes.plot3Traces.length > 0) ||
     (axes.bar3Traces && axes.bar3Traces.length > 0) ||
     (axes.bar3hTraces && axes.bar3hTraces.length > 0) ||
-    (axes.quiver3Traces && axes.quiver3Traces.length > 0);
+    (axes.quiver3Traces && axes.quiver3Traces.length > 0) ||
+    patch3D.length > 0;
 
   if (has3D) {
     return (
@@ -176,6 +198,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
         bar3Traces={axes.bar3Traces ?? []}
         bar3hTraces={axes.bar3hTraces ?? []}
         quiver3Traces={axes.quiver3Traces ?? []}
+        patchTraces={axes.patchTraces ?? []}
         shading={axes.shading}
         colorbar={axes.colorbar}
         colorbarLocation={axes.colorbarLocation}
