@@ -46,6 +46,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "mesh",
   "waterfall",
   "isosurface",
+  "cameratoolbar",
   "bar",
   "barh",
   "bar3",

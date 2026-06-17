@@ -674,6 +674,13 @@ export class Runtime {
     this.builtins["stream2"] = (_nargout: number, args: unknown[]) => {
       return _stream2Call(args.map(ensureRuntimeValue));
     };
+    // `cameratoolbar` — accepted as a no-op (numbl has no interactive camera
+    // toolbar). State/SetMode/Get… arguments are ignored. Returns a dummy
+    // handle only when an output is requested, so the bare-statement form
+    // (used by simpplot/distmeshsurface) does not print an `ans`.
+    this.builtins["cameratoolbar"] = (_nargout: number) => {
+      if (_nargout >= 1) return RTV.dummyHandle();
+    };
 
     // Any graphics op (other than figure/close/clf/cla and the `axis` query
     // form) implies a current figure: register the implicit figure 1 on first
