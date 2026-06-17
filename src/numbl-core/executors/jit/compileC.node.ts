@@ -25,6 +25,12 @@ import {
   type CompiledC,
   type KoffiLib,
 } from "./compileC.js";
+import { setCSnippets } from "../../jit/codegen/runtime.js";
+import { C_SNIPPETS } from "../../jit/builtins/runtime/snippets.c.gen.js";
+import { registerCJitExecutors } from "../plugins.js";
+import { cJitTopLevelExecutor } from "./cJitTopLevelExecutor.js";
+import { cJitLoopExecutor } from "./cJitLoopExecutor.js";
+import { cJitCallExecutor } from "./cJitCallExecutor.js";
 
 const CACHE_DIR = join(homedir(), ".cache", "numbl", "mtoc2-c-jit");
 
@@ -105,4 +111,16 @@ export function readCachedCSource(hash: string): string | null {
 export function registerNodeCompileC(): void {
   setCompileAndLoadCImpl(compileAndLoadC);
   setReadCachedCSourceImpl(readCachedCSource);
+  // Feed the C runtime-snippet table to the codegen runtime. Kept here (not
+  // a static import in codegen/runtime.ts) so the ~300 KB of C source stays
+  // out of the browser worker bundle.
+  setCSnippets(C_SNIPPETS);
+  // Register the C-JIT executors so `--opt 2` engages them. Importing them
+  // here (Node-only bootstrap) keeps the C compile/codegen graph out of the
+  // browser worker bundle.
+  registerCJitExecutors({
+    topLevel: cJitTopLevelExecutor,
+    loop: cJitLoopExecutor,
+    call: cJitCallExecutor,
+  });
 }

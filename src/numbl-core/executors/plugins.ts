@@ -11,12 +11,33 @@
  */
 
 import type { Registry } from "./registry.js";
+import type { Executor } from "./types.js";
 import { jitCallExecutor } from "./jit/callExecutor.js";
 import { jitLoopExecutor } from "./jit/loopExecutor.js";
 import { jitTopLevelExecutor } from "./jit/topLevelExecutor.js";
-import { cJitCallExecutor } from "./jit/cJitCallExecutor.js";
-import { cJitLoopExecutor } from "./jit/cJitLoopExecutor.js";
-import { cJitTopLevelExecutor } from "./jit/cJitTopLevelExecutor.js";
+
+/** The three C-JIT executors, registered at Node bootstrap. */
+export interface CJitExecutors {
+  topLevel: Executor;
+  loop: Executor;
+  call: Executor;
+}
+
+/**
+ * C-JIT executors, injected at Node bootstrap rather than imported
+ * statically. They shell out to `cc` + koffi and pull in the C
+ * compile/codegen graph (`compileSpecC`, the C type/value adapters, the
+ * marshaling helpers) — all Node-only. Keeping them out of this module's
+ * static imports means the browser worker bundle never pulls that graph in;
+ * `registerNodeCompileC` (`executors/jit/compileC.node.ts`) registers them.
+ * When unregistered (browser), `--opt 2` collapses to `--opt 1`.
+ */
+let cJitExecutors: CJitExecutors | null = null;
+
+/** Register the C-JIT executors. Called once at Node bootstrap. */
+export function registerCJitExecutors(execs: CJitExecutors): void {
+  cJitExecutors = execs;
+}
 
 /** Optimization mode label.
  *
@@ -59,11 +80,14 @@ export function registerExecutorsForOpt(
       // dispatcher's cost model — C-JIT proposes only where it can
       // marshal the types, and its lower per-call/run cost wins
       // when both match. Outside its acceptance set, JS-JIT picks
-      // up unchanged.
-      registry.registerWholeScope(cJitTopLevelExecutor);
+      // up unchanged. When the C executors aren't registered (browser),
+      // only the JS-JIT executors register, so `--opt 2` == `--opt 1`.
+      if (cJitExecutors) registry.registerWholeScope(cJitExecutors.topLevel);
       registry.registerWholeScope(jitTopLevelExecutor);
-      registry.register(cJitCallExecutor);
-      registry.register(cJitLoopExecutor);
+      if (cJitExecutors) {
+        registry.register(cJitExecutors.call);
+        registry.register(cJitExecutors.loop);
+      }
       registry.register(jitLoopExecutor);
       registry.register(jitCallExecutor);
       return;
