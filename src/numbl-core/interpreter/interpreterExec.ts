@@ -167,12 +167,12 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
     }
 
     case "If": {
-      const cond = this.evalExpr(stmt.cond);
+      const cond = this.evalCondition(stmt.cond);
       if (this.rt.toBool(cond)) {
         return this.execBlockStmts(stmt.thenBody);
       }
       for (const elseif of stmt.elseifBlocks) {
-        const elseifCond = this.evalExpr(elseif.cond);
+        const elseifCond = this.evalCondition(elseif.cond);
         if (this.rt.toBool(elseifCond)) {
           return this.execBlockStmts(elseif.body);
         }
@@ -194,7 +194,7 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       try {
         while (true) {
           this.rt.checkCancel();
-          const cond = this.evalExpr(stmt.cond);
+          const cond = this.evalCondition(stmt.cond);
           if (!this.rt.toBool(cond)) break;
           _whileIters++;
           const signal = this.execStmts(stmt.body);
@@ -806,6 +806,50 @@ export function evalBinary(
   }
 
   return binop(expr.op, left, right);
+}
+
+/** A value counts as scalar (numel === 1) for condition short-circuiting. */
+function isScalarValue(v: unknown): boolean {
+  if (typeof v === "number" || typeof v === "boolean") return true;
+  const rv = ensureRuntimeValue(v);
+  if (typeof rv === "number" || typeof rv === "boolean") return true;
+  if (typeof rv === "string") return false; // treat char/string as non-scalar
+  const shape = (rv as { shape?: number[] }).shape;
+  if (shape) return numel(shape) === 1;
+  return true; // complex_number and other scalar kinds
+}
+
+/**
+ * Evaluate an `if`/`while`/`elseif` condition.
+ *
+ * MATLAB short-circuits the element-wise `&` and `|` operators when they
+ * appear at the top of a conditional expression and the left operand is
+ * scalar — e.g. `if nargin<4 | isempty(x)` must NOT evaluate `isempty(x)`
+ * when `nargin<4` (otherwise `x` may be undefined). Outside this context
+ * `&`/`|` evaluate both operands element-wise, so the special handling
+ * lives here rather than in `evalBinary`.
+ */
+export function evalCondition(this: Interpreter, expr: Expr): unknown {
+  if (
+    expr.type === "Binary" &&
+    (expr.op === BinaryOperation.BitOr || expr.op === BinaryOperation.BitAnd)
+  ) {
+    const left = this.evalCondition(expr.left);
+    if (isScalarValue(left)) {
+      const lb = this.rt.toBool(left);
+      if (expr.op === BinaryOperation.BitOr) {
+        if (lb) return RTV.logical(true);
+      } else if (!lb) {
+        return RTV.logical(false);
+      }
+      // Left scalar didn't decide it; the result follows the right side.
+      return this.evalCondition(expr.right);
+    }
+    // Non-scalar left: no short-circuit, evaluate element-wise as usual.
+    const right = this.evalExpr(expr.right);
+    return binop(expr.op, left, right);
+  }
+  return this.evalExpr(expr);
 }
 
 // ── Unary operators ──────────────────────────────────────────────────────

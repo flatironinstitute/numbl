@@ -300,6 +300,7 @@ export class Interpreter {
   declare evalExpr: (expr: Expr) => unknown;
   declare evalExprNargout: (expr: Expr, nargout: number) => unknown;
   declare evalBinary: (expr: Extract<Expr, { type: "Binary" }>) => unknown;
+  declare evalCondition: (expr: Expr) => unknown;
   declare evalUnary: (expr: Extract<Expr, { type: "Unary" }>) => unknown;
   declare evalRange: (expr: Extract<Expr, { type: "Range" }>) => unknown;
   declare evalFuncCall: (
