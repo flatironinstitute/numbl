@@ -126,6 +126,7 @@ import { computeAxisLimits } from "../../graphics/axisLimits.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { toString as _toString } from "./convert.js";
 import { allocFloat64Array } from "./alloc.js";
+import { isosurfaceFromArgs } from "../helpers/marching-cubes.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -511,6 +512,65 @@ export class Runtime {
         }
         return RTV.dummyHandle();
       }
+    };
+    // `isosurface` extracts a triangulated surface from a 3-D volume via
+    // marching cubes. With no output it draws a 3-D patch (reusing the patch
+    // renderer); otherwise it returns the geometry as a struct `{vertices,
+    // faces}` (nargout 1), `[faces, verts]` (2), or `[faces, verts, colors]`
+    // (3). Faces are 1-based in the returned data (MATLAB convention) but
+    // 0-based in the patch trace.
+    this.builtins["isosurface"] = (_nargout: number, args: unknown[]) => {
+      const margs = args.map(a => ensureRuntimeValue(a));
+      const mesh = isosurfaceFromArgs(margs);
+      const nv = mesh.vertices.length;
+      const nf = mesh.faces.length;
+      const vertsTensor = (): RuntimeValue => {
+        const d = allocFloat64Array(nv * 3);
+        for (let c = 0; c < 3; c++)
+          for (let r = 0; r < nv; r++) d[c * nv + r] = mesh.vertices[r][c];
+        return RTV.tensor(d, [nv, 3]);
+      };
+      const facesTensor = (): RuntimeValue => {
+        const d = allocFloat64Array(nf * 3);
+        for (let c = 0; c < 3; c++)
+          for (let r = 0; r < nf; r++) d[c * nf + r] = mesh.faces[r][c] + 1;
+        return RTV.tensor(d, [nf, 3]);
+      };
+      const colorsTensor = (): RuntimeValue =>
+        RTV.tensor(allocFloat64Array(mesh.colors ?? []), [
+          mesh.colors?.length ?? 0,
+          mesh.colors && mesh.colors.length > 0 ? 1 : 0,
+        ]);
+
+      if (_nargout === 0) {
+        // Draw: push a 3-D patch trace (0-based faces).
+        const trace: Record<string, unknown> = {
+          vertices: mesh.vertices,
+          faces: mesh.faces,
+          is3D: true,
+          faceColor: [0.8, 0.9, 1] as [number, number, number],
+          edgeColor: "none",
+        };
+        if (mesh.colors) {
+          trace.faceVertexCData = mesh.colors;
+          trace.faceColor = "interp";
+        }
+        this.plotInstructions.push({
+          type: "patch",
+          trace: trace as never,
+        });
+        return undefined;
+      }
+      if (_nargout === 1) {
+        const fields: Record<string, RuntimeValue> = {
+          vertices: vertsTensor(),
+          faces: facesTensor(),
+        };
+        if (mesh.colors) fields.facevertexcdata = colorsTensor();
+        return RTV.struct(fields);
+      }
+      if (_nargout === 2) return [facesTensor(), vertsTensor()];
+      return [facesTensor(), vertsTensor(), colorsTensor()];
     };
     // `fill` creates filled 2-D patches (one per X,Y,C group). It reuses the
     // patch trace/handle machinery; `p = fill(...)` returns the handle of the

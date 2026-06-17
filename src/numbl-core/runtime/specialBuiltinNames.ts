@@ -45,6 +45,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "contourf",
   "mesh",
   "waterfall",
+  "isosurface",
   "bar",
   "barh",
   "bar3",

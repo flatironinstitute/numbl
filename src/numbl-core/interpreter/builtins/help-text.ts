@@ -1662,6 +1662,25 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Create primitive line(s) in the current axes. Like surface, line adds to the current axes without clearing existing objects or respecting hold. Vector inputs draw a single line; matrix inputs draw one line per column. With no arguments, draws a line from (0,0) to (1,1). The low-level form, line('XData',X,'YData',Y), draws a black line. Name-Value pairs (Color, LineStyle, LineWidth, Marker, MarkerSize) set appearance.",
   },
+  isosurface: {
+    signatures: [
+      "isosurface(X,Y,Z,V,isovalue)",
+      "s = isosurface(X,Y,Z,V,isovalue)",
+      "s = isosurface(V,isovalue)",
+      "[faces,verts] = isosurface(___)",
+      "[faces,verts,colors] = isosurface(___)",
+    ],
+    description:
+      "Extract the isosurface of a 3-D scalar volume V at the given isovalue " +
+      "using marching cubes. With no output, draws a 3-D patch; otherwise " +
+      "returns a struct with fields vertices and faces (nargout 1), or the " +
+      "faces/vertices(/colors) arrays. X,Y,Z give the grid coordinates (3-D " +
+      "arrays or vectors); omit them to use a 1-based index grid. A trailing " +
+      "colors array (same size as V) is interpolated onto the vertices. " +
+      "Vertices are shared across cells by default; pass 'noshare' to opt " +
+      "out. If isovalue is omitted it is chosen automatically (approximate; " +
+      "does not match MATLAB's histogram heuristic).",
+  },
   patch: {
     signatures: [
       "patch(X, Y, C)",
