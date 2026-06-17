@@ -74,16 +74,36 @@ function firstIndexMap(strs: string[]): Map<string, number> {
 const colVec = (idx: number[]): RuntimeValue =>
   RTV.tensor(allocFloat64Array(idx), [idx.length, 1]);
 
+/** Dedup a string list preserving first-appearance order. */
+function uniqueStable(strs: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const s of strs) {
+    if (!seen.has(s)) {
+      seen.add(s);
+      out.push(s);
+    }
+  }
+  return out;
+}
+
 function unionStrings(
   a: RuntimeValue,
   b: RuntimeValue,
-  nargout: number
+  nargout: number,
+  order: SetOrder = "sorted"
 ): RuntimeValue | RuntimeValue[] {
   const aStrs = toStringList(a);
   const bStrs = toStringList(b);
   const inA = firstIndexMap(aStrs);
   const inB = firstIndexMap(bStrs);
-  const all = [...new Set([...aStrs, ...bStrs])].sort();
+  const all =
+    order === "stable"
+      ? [
+          ...uniqueStable(aStrs),
+          ...uniqueStable(bStrs).filter(s => !inA.has(s)),
+        ]
+      : [...new Set([...aStrs, ...bStrs])].sort();
   const C = strColumnCell(all);
   if (nargout <= 1) return C;
   const ia: number[] = [];
@@ -98,13 +118,15 @@ function unionStrings(
 function intersectStrings(
   a: RuntimeValue,
   b: RuntimeValue,
-  nargout: number
+  nargout: number,
+  order: SetOrder = "sorted"
 ): RuntimeValue | RuntimeValue[] {
   const aStrs = toStringList(a);
   const bStrs = toStringList(b);
   const inA = firstIndexMap(aStrs);
   const inB = firstIndexMap(bStrs);
-  const common = [...new Set(aStrs.filter(s => inB.has(s)))].sort();
+  const filtered = uniqueStable(aStrs.filter(s => inB.has(s)));
+  const common = order === "stable" ? filtered : [...filtered].sort();
   const C = strColumnCell(common);
   if (nargout <= 1) return C;
   return [
@@ -117,12 +139,14 @@ function intersectStrings(
 function setdiffStrings(
   a: RuntimeValue,
   b: RuntimeValue,
-  nargout: number
+  nargout: number,
+  order: SetOrder = "sorted"
 ): RuntimeValue | RuntimeValue[] {
   const aStrs = toStringList(a);
   const bSet = new Set(toStringList(b));
   const inA = firstIndexMap(aStrs);
-  const diff = [...new Set(aStrs.filter(s => !bSet.has(s)))].sort();
+  const filtered = uniqueStable(aStrs.filter(s => !bSet.has(s)));
+  const diff = order === "stable" ? filtered : [...filtered].sort();
   const C = strColumnCell(diff);
   if (nargout <= 1) return C;
   return [C, colVec(diff.map(s => inA.get(s)!))];
@@ -490,20 +514,34 @@ function sortCell(
   return sorted;
 }
 
-// ── setdiff ──────────────────────────────────────────────────────────────
+// ── shared set-op engine (setdiff / intersect / union) ─────────────────────
+// All three accept an optional `setOrder` ('sorted' default | 'stable') and a
+// `'rows'` flag (treat each row as one element). The numeric paths share one
+// engine so the option handling, NaN-last ordering, and index outputs stay
+// consistent. Text/cellstr inputs are handled separately (the 'rows' option
+// does not apply to cell arrays, per MATLAB).
 
-/** True if a trailing argument is the 'rows' flag. */
-function hasRowsFlag(args: RuntimeValue[]): boolean {
+type SetOrder = "sorted" | "stable";
+
+/** Parse the trailing options common to setdiff/intersect/union. */
+function parseSetOptions(
+  args: RuntimeValue[],
+  name: string
+): { rows: boolean; order: SetOrder } {
+  let rows = false;
+  let order: SetOrder = "sorted";
   for (let i = 2; i < args.length; i++) {
     const a = args[i];
-    if (
-      (isRuntimeString(a) || isRuntimeChar(a)) &&
-      toString(a).toLowerCase() === "rows"
-    ) {
-      return true;
-    }
+    if (!(isRuntimeString(a) || isRuntimeChar(a))) continue;
+    const s = toString(a).toLowerCase();
+    if (s === "rows") rows = true;
+    else if (s === "sorted") order = "sorted";
+    else if (s === "stable") order = "stable";
+    else if (s === "legacy")
+      throw new RuntimeError(`${name}: 'legacy' option is not supported`);
+    // Unknown flags are ignored, matching MATLAB's lenient parsing.
   }
-  return false;
+  return { rows, order };
 }
 
 /** Build a comma-joined key for row `r` of a column-major tensor. */
@@ -515,60 +553,173 @@ function makeRowKey(data: ArrayLike<number>, rows: number, cols: number) {
   };
 }
 
-/** setdiff(A, B, 'rows'): the unique rows of A not present in B, sorted in
- *  ascending (lexicographic) order. `[C, IA]` returns the first-occurrence
- *  row indices into A such that `C = A(IA,:)`. */
-function setdiffByRows(
-  av: RuntimeTensor,
-  bv: RuntimeTensor,
+/** Lexicographic compare of two value tuples, with NaN sorting last. */
+function cmpTuple(x: number[], y: number[]): number {
+  const n = Math.max(x.length, y.length);
+  for (let k = 0; k < n; k++) {
+    const a = x[k];
+    const b = y[k];
+    const an = a !== a;
+    const bn = b !== b;
+    if (an && bn) continue;
+    if (an) return 1;
+    if (bn) return -1;
+    if (a !== b) return a - b;
+  }
+  return 0;
+}
+
+/** One operand of a set op, abstracting element-wise vs. row-wise access. */
+interface SetItems {
+  n: number;
+  cols: number;
+  /** Membership/dedup key for item i. */
+  key(i: number): string;
+  /** Comparison/output tuple (column values) for item i. */
+  tuple(i: number): number[];
+}
+
+function elementItems(arr: number[]): SetItems {
+  return {
+    n: arr.length,
+    cols: 1,
+    key: i => String(arr[i]),
+    tuple: i => [arr[i]],
+  };
+}
+
+function rowItems(t: RuntimeTensor): SetItems {
+  const [rows, cols] = tensorSize2D(t);
+  const key = makeRowKey(t.data, rows, cols);
+  return {
+    n: rows,
+    cols,
+    key,
+    tuple: r => {
+      const out = new Array<number>(cols);
+      for (let c = 0; c < cols; c++) out[c] = t.data[c * rows + r];
+      return out;
+    },
+  };
+}
+
+/** Coerce an operand to the SetItems view for the requested mode. A non-tensor
+ *  operand in 'rows' mode becomes a column so each entry is a 1-column row. */
+function toItems(v: RuntimeValue, rows: boolean, name: string): SetItems {
+  if (rows) {
+    const t = isRuntimeTensor(v)
+      ? v
+      : (RTV.tensor(allocFloat64Array(toNumArray(v, name)), [
+          toNumArray(v, name).length,
+          1,
+        ]) as RuntimeTensor);
+    return rowItems(t);
+  }
+  return elementItems(toNumArray(v, name));
+}
+
+type SetKind = "setdiff" | "intersect" | "union";
+
+/** A selected output element and its source indices (1-based). */
+interface Pick {
+  tuple: number[];
+  ia?: number;
+  ib?: number;
+}
+
+/** Numeric/row set operation shared by setdiff, intersect and union. */
+function runSetOp(
+  kind: SetKind,
+  aVal: RuntimeValue,
+  bVal: RuntimeValue,
+  rows: boolean,
+  order: SetOrder,
   nargout: number
 ): RuntimeValue | RuntimeValue[] {
-  const [aRows, aCols] = tensorSize2D(av);
-  const [bRows, bCols] = tensorSize2D(bv);
-  if (aRows > 0 && bRows > 0 && aCols !== bCols) {
+  const A = toItems(aVal, rows, kind);
+  const B = toItems(bVal, rows, kind);
+  if (rows && A.n > 0 && B.n > 0 && A.cols !== B.cols) {
     throw new RuntimeError(
-      "setdiff: 'rows' requires the same number of columns in A and B"
+      `${kind}: 'rows' requires the same number of columns in A and B`
     );
   }
-  const cols = aCols;
-  const aKey = makeRowKey(av.data, aRows, cols);
-  const bKey = makeRowKey(bv.data, bRows, bCols);
+  const cols = A.n > 0 ? A.cols : B.cols;
 
-  const bSet = new Set<string>();
-  for (let r = 0; r < bRows; r++) bSet.add(bKey(r));
+  // First-occurrence index maps (1-based) for membership/index outputs.
+  const bFirst = new Map<string, number>();
+  for (let i = 0; i < B.n; i++) {
+    const k = B.key(i);
+    if (!bFirst.has(k)) bFirst.set(k, i + 1);
+  }
+  const aKeys = new Set<string>();
+  if (kind === "union") {
+    for (let i = 0; i < A.n; i++) aKeys.add(A.key(i));
+  }
 
+  const picks: Pick[] = [];
   const seen = new Set<string>();
-  const order: number[] = [];
-  for (let r = 0; r < aRows; r++) {
-    const k = aKey(r);
-    if (!bSet.has(k) && !seen.has(k)) {
+  if (kind === "setdiff" || kind === "intersect") {
+    for (let i = 0; i < A.n; i++) {
+      const k = A.key(i);
+      if (seen.has(k)) continue;
+      const inB = bFirst.has(k);
+      if ((kind === "setdiff" && !inB) || (kind === "intersect" && inB)) {
+        seen.add(k);
+        picks.push({
+          tuple: A.tuple(i),
+          ia: i + 1,
+          ib: kind === "intersect" ? bFirst.get(k) : undefined,
+        });
+      }
+    }
+  } else {
+    // union: every unique A element, then B elements not in A.
+    for (let i = 0; i < A.n; i++) {
+      const k = A.key(i);
+      if (seen.has(k)) continue;
       seen.add(k);
-      order.push(r);
+      picks.push({ tuple: A.tuple(i), ia: i + 1 });
+    }
+    const seenB = new Set<string>();
+    for (let i = 0; i < B.n; i++) {
+      const k = B.key(i);
+      if (aKeys.has(k) || seenB.has(k)) continue;
+      seenB.add(k);
+      picks.push({ tuple: B.tuple(i), ib: i + 1 });
     }
   }
-  order.sort((x, y) => {
-    for (let c = 0; c < cols; c++) {
-      const vx = av.data[c * aRows + x];
-      const vy = av.data[c * aRows + y];
-      if (vx !== vy) return vx - vy;
-    }
-    return 0;
-  });
 
-  const n = order.length;
-  const resultData = allocFloat64Array(n * cols);
-  for (let c = 0; c < cols; c++) {
-    for (let u = 0; u < n; u++) {
-      resultData[c * n + u] = av.data[c * aRows + order[u]];
+  if (order === "sorted") picks.sort((p, q) => cmpTuple(p.tuple, q.tuple));
+
+  // Materialize C.
+  const n = picks.length;
+  let C: RuntimeValue;
+  if (rows) {
+    const data = allocFloat64Array(n * cols);
+    for (let c = 0; c < cols; c++) {
+      for (let u = 0; u < n; u++) data[c * n + u] = picks[u].tuple[c];
     }
+    C = RTV.tensor(data, [n, cols]);
+  } else {
+    // Vector orientation follows A (column iff A is a column vector).
+    const isCol =
+      isRuntimeTensor(aVal) &&
+      aVal.shape[0] > 1 &&
+      (aVal.shape.length < 2 || aVal.shape[1] === 1);
+    C = RTV.tensor(
+      allocFloat64Array(picks.map(p => p.tuple[0])),
+      isCol ? [n, 1] : [1, n]
+    );
   }
-  const c = RTV.tensor(resultData, [n, cols]);
-  if (nargout > 1) {
-    const ia = allocFloat64Array(order.map(r => r + 1));
-    return [c, RTV.tensor(ia, [n, 1])];
-  }
-  return c;
+  if (nargout <= 1) return C;
+
+  const ia = colVec(picks.filter(p => p.ia !== undefined).map(p => p.ia!));
+  if (kind === "setdiff") return [C, ia];
+  const ib = colVec(picks.filter(p => p.ib !== undefined).map(p => p.ib!));
+  return [C, ia, ib];
 }
+
+// ── setdiff ──────────────────────────────────────────────────────────────
 
 defineBuiltin({
   name: "setdiff",
@@ -586,54 +737,10 @@ defineBuiltin({
       apply: (args, nargout) => {
         if (args.length < 2)
           throw new RuntimeError("setdiff requires 2 arguments");
-        if (isTextSetOp(args[0], args[1]))
-          return setdiffStrings(args[0], args[1], nargout);
-        if (hasRowsFlag(args)) {
-          // 'rows' treats each row of A/B as one element. A non-tensor
-          // operand (scalar/vector) becomes a column so each entry is a row.
-          const asRowsTensor = (x: RuntimeValue): RuntimeTensor => {
-            if (isRuntimeTensor(x)) return x;
-            const arr = toNumArray(x, "setdiff");
-            return RTV.tensor(allocFloat64Array(arr), [
-              arr.length,
-              1,
-            ]) as RuntimeTensor;
-          };
-          return setdiffByRows(
-            asRowsTensor(args[0]),
-            asRowsTensor(args[1]),
-            nargout ?? 1
-          );
-        }
-        const a = toNumArray(args[0], "setdiff");
-        const bSet = new Set(toNumArray(args[1], "setdiff"));
-        const seen = new Set<number>();
-        const pairs: { val: number; idx: number }[] = [];
-        for (let i = 0; i < a.length; i++) {
-          if (!bSet.has(a[i]) && !seen.has(a[i])) {
-            seen.add(a[i]);
-            pairs.push({ val: a[i], idx: i + 1 });
-          }
-        }
-        pairs.sort((x, y) => {
-          if (x.val !== x.val) return 1;
-          if (y.val !== y.val) return -1;
-          return x.val - y.val;
-        });
-        const result = allocFloat64Array(pairs.map(p => p.val));
-        const isCol =
-          isRuntimeTensor(args[0]) &&
-          args[0].shape[0] > 1 &&
-          (args[0].shape.length < 2 || args[0].shape[1] === 1);
-        const outShape: [number, number] = isCol
-          ? [result.length, 1]
-          : [1, result.length];
-        const c = RTV.tensor(result, outShape);
-        if (nargout > 1) {
-          const ia = allocFloat64Array(pairs.map(p => p.idx));
-          return [c, RTV.tensor(ia, [ia.length, 1])];
-        }
-        return c;
+        const { rows, order } = parseSetOptions(args, "setdiff");
+        if (!rows && isTextSetOp(args[0], args[1]))
+          return setdiffStrings(args[0], args[1], nargout, order);
+        return runSetOp("setdiff", args[0], args[1], rows, order, nargout ?? 1);
       },
     },
   ],
@@ -798,23 +905,19 @@ defineBuiltin({
         return nargout > 1 ? [out, out, out] : [out];
       },
       apply: (args, nargout) => {
-        if (isTextSetOp(args[0], args[1]))
-          return intersectStrings(args[0], args[1], nargout);
-        const a = toNumArray(args[0], "intersect");
-        const bSet = new Set(toNumArray(args[1], "intersect"));
-        const result = [...new Set(a.filter(x => bSet.has(x)))].sort((x, y) => {
-          if (x !== x) return 1;
-          if (y !== y) return -1;
-          return x - y;
-        });
-        const isCol =
-          isRuntimeTensor(args[0]) &&
-          args[0].shape[0] > 1 &&
-          (args[0].shape.length < 2 || args[0].shape[1] === 1);
-        const outShape: [number, number] = isCol
-          ? [result.length, 1]
-          : [1, result.length];
-        return RTV.tensor(allocFloat64Array(result), outShape);
+        if (args.length < 2)
+          throw new RuntimeError("intersect requires 2 arguments");
+        const { rows, order } = parseSetOptions(args, "intersect");
+        if (!rows && isTextSetOp(args[0], args[1]))
+          return intersectStrings(args[0], args[1], nargout, order);
+        return runSetOp(
+          "intersect",
+          args[0],
+          args[1],
+          rows,
+          order,
+          nargout ?? 1
+        );
       },
     },
   ],
@@ -832,23 +935,12 @@ defineBuiltin({
         return nargout > 1 ? [out, out, out] : [out];
       },
       apply: (args, nargout) => {
-        if (isTextSetOp(args[0], args[1]))
-          return unionStrings(args[0], args[1], nargout);
-        const a = toNumArray(args[0], "union");
-        const b = toNumArray(args[1], "union");
-        const result = [...new Set([...a, ...b])].sort((x, y) => {
-          if (x !== x) return 1;
-          if (y !== y) return -1;
-          return x - y;
-        });
-        const isCol =
-          isRuntimeTensor(args[0]) &&
-          args[0].shape[0] > 1 &&
-          (args[0].shape.length < 2 || args[0].shape[1] === 1);
-        const outShape: [number, number] = isCol
-          ? [result.length, 1]
-          : [1, result.length];
-        return RTV.tensor(allocFloat64Array(result), outShape);
+        if (args.length < 2)
+          throw new RuntimeError("union requires 2 arguments");
+        const { rows, order } = parseSetOptions(args, "union");
+        if (!rows && isTextSetOp(args[0], args[1]))
+          return unionStrings(args[0], args[1], nargout, order);
+        return runSetOp("union", args[0], args[1], rows, order, nargout ?? 1);
       },
     },
   ],

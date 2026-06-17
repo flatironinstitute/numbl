@@ -703,16 +703,34 @@ const H: Record<string, BuiltinHelp> = {
     description: "Find indices of nonzero elements.",
   },
   intersect: {
-    signatures: ["C = intersect(A, B)"],
-    description: "Set intersection of two arrays.",
+    signatures: [
+      "C = intersect(A, B)",
+      "C = intersect(A, B, setOrder)",
+      "[C, ia, ib] = intersect(A, B, ..., 'rows')",
+    ],
+    description:
+      "Set intersection of two arrays. setOrder is 'sorted' (default) or " +
+      "'stable'; 'rows' treats each row as a single element.",
   },
   union: {
-    signatures: ["C = union(A, B)"],
-    description: "Set union of two arrays.",
+    signatures: [
+      "C = union(A, B)",
+      "C = union(A, B, setOrder)",
+      "[C, ia, ib] = union(A, B, ..., 'rows')",
+    ],
+    description:
+      "Set union of two arrays. setOrder is 'sorted' (default) or 'stable'; " +
+      "'rows' treats each row as a single element.",
   },
   setdiff: {
-    signatures: ["C = setdiff(A, B)", "[C, IA] = setdiff(A, B)"],
-    description: "Set difference: elements in A that are not in B.",
+    signatures: [
+      "C = setdiff(A, B)",
+      "C = setdiff(A, B, setOrder)",
+      "[C, ia] = setdiff(A, B, ..., 'rows')",
+    ],
+    description:
+      "Set difference: elements in A that are not in B. setOrder is 'sorted' " +
+      "(default) or 'stable'; 'rows' treats each row as a single element.",
   },
   ismember: {
     signatures: ["TF = ismember(A, B)", "[TF, LOC] = ismember(A, B)"],
