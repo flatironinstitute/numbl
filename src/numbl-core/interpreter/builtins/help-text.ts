@@ -113,6 +113,11 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["Y = factorial(N)"],
     description: "Factorial of non-negative integer N, element-wise.",
   },
+  nchoosek: {
+    signatures: ["B = nchoosek(N, K)", "C = nchoosek(V, K)"],
+    description:
+      "Binomial coefficient or all combinations. For scalar N, returns the binomial coefficient N!/((N-K)!K!). For vector V, returns a matrix whose rows are all combinations of the elements of V taken K at a time.",
+  },
   nthroot: {
     signatures: ["Y = nthroot(X, N)"],
     description:

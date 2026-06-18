@@ -11,6 +11,8 @@ import {
   isRuntimeTensor,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
+  isRuntimeChar,
+  RuntimeChar,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 
@@ -609,3 +611,100 @@ coordTransform("pol2cart", "2or3", 2, (theta, rho) => [
   rho * Math.cos(theta),
   rho * Math.sin(theta),
 ]);
+
+// ── nchoosek ───────────────────────────────────────────────────────────
+
+/** Binomial coefficient n!/((n-k)!k!) via the multiplicative formula. */
+function binomial(n: number, k: number): number {
+  if (k < 0 || k > n) return 0;
+  k = Math.min(k, n - k);
+  let result = 1;
+  for (let i = 0; i < k; i++) {
+    result = (result * (n - i)) / (i + 1);
+  }
+  return Math.round(result);
+}
+
+/** Invoke cb on each k-combination of indices 0..m-1, in lexicographic
+ *  order (matching MATLAB's row order). The same `idx` array is reused
+ *  across calls, so callers must read it before returning. */
+function forEachCombination(
+  m: number,
+  k: number,
+  cb: (idx: number[]) => void
+): void {
+  if (k < 0 || k > m) return;
+  const idx = Array.from({ length: k }, (_, i) => i);
+  for (;;) {
+    cb(idx);
+    let i = k - 1;
+    while (i >= 0 && idx[i] === m - k + i) i--;
+    if (i < 0) break;
+    idx[i]++;
+    for (let j = i + 1; j < k; j++) idx[j] = idx[j - 1] + 1;
+  }
+}
+
+defineBuiltin({
+  name: "nchoosek",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const v = args[0];
+        const k = Math.round(toNumber(args[1]));
+        if (!Number.isFinite(k) || k < 0)
+          throw new RuntimeError(
+            "nchoosek: K must be a nonnegative integer scalar"
+          );
+
+        // numel == 1 (a MATLAB scalar) → binomial coefficient b = nchoosek(n,k).
+        const numel = isRuntimeTensor(v)
+          ? v.data.length
+          : isRuntimeChar(v)
+            ? v.value.length
+            : 1;
+        if (numel === 1) {
+          const n = Math.round(toNumber(v));
+          if (!Number.isFinite(n) || n < 0)
+            throw new RuntimeError(
+              "nchoosek: N must be a nonnegative integer scalar"
+            );
+          return RTV.num(binomial(n, k));
+        }
+
+        // Otherwise C = nchoosek(v,k): all combinations of vector v.
+        const rows = binomial(numel, k);
+
+        if (isRuntimeChar(v)) {
+          const chars = v.value;
+          let out = "";
+          forEachCombination(numel, k, idx => {
+            for (let c = 0; c < k; c++) out += chars[idx[c]];
+          });
+          return new RuntimeChar(out, [rows, k]);
+        }
+
+        if (!isRuntimeTensor(v))
+          throw new RuntimeError("nchoosek: V must be a vector");
+
+        const re = allocFloat64Array(rows * k);
+        const im = v.imag ? allocFloat64Array(rows * k) : undefined;
+        let r = 0;
+        forEachCombination(numel, k, idx => {
+          for (let c = 0; c < k; c++) {
+            re[c * rows + r] = v.data[idx[c]];
+            if (im) im[c * rows + r] = v.imag![idx[c]];
+          }
+          r++;
+        });
+        const result = RTV.tensor(re, [rows, k], im);
+        if (v._isLogical) result._isLogical = true;
+        return result;
+      },
+    },
+  ],
+});
