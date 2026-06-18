@@ -4,6 +4,7 @@ import type { WorkspaceFile } from "../numbl-core/workspace/types.js";
 import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
+import { ensureQhullBackend } from "../numbl-core/native/qhull-browser.js";
 
 const GITHUB_BASE =
   "https://github.com/flatironinstitute/numbl/blob/main/numbl_test_scripts";
@@ -113,6 +114,9 @@ export default function App() {
     });
 
   const runAll = async (m: Manifest) => {
+    // Install the qhull Delaunay backend before running scripts (mirrors the
+    // worker and CLI) so delaunay/delaunayn are available.
+    await ensureQhullBackend();
     const t0 = performance.now();
     const updated: TestRow[] = m.tests.map(t => ({
       path: t.path,

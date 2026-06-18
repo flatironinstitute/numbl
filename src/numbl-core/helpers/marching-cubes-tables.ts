@@ -1,8 +1,7 @@
 /**
  * Marching-cubes lookup tables (Paul Bourke / Lorensen-Cline).
  *
- * Vendored verbatim from mikolalysenko/isosurface (MIT, the author of the
- * delaunay-triangulate package numbl already uses). Generated from
+ * Vendored verbatim from mikolalysenko/isosurface (MIT). Generated from
  * lib/marchingcubes.js; do not edit by hand.
  */
 

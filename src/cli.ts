@@ -113,6 +113,24 @@ function loadNativeAddon(fastMath: boolean): void {
   }
 }
 
+// ── Try to load the qhull WASM Delaunay backend ──────────────────────────────
+
+import { loadQhullNodeBackend } from "./numbl-core/native/qhull-node.js";
+
+let qhullLoaded = false;
+async function loadQhullBackend(): Promise<void> {
+  if (qhullLoaded || process.env.NUMBL_NO_QHULL) return;
+  qhullLoaded = true;
+  try {
+    await loadQhullNodeBackend();
+  } catch (e) {
+    console.error(
+      `Warning: failed to load qhull WASM backend: ${(e as Error).message}. ` +
+        `delaunay/delaunayn will be unavailable.`
+    );
+  }
+}
+
 // ── Try to load koffi for native FFI bridge ───────────────────────────────────
 
 let nativeBridge: NativeBridge | undefined;
@@ -660,6 +678,7 @@ async function executeWithOptions(
   searchPaths?: string[]
 ) {
   loadNativeAddon(opts.fastMath);
+  await loadQhullBackend();
   const profiling = !!opts.profileOutput;
   const totalStart = performance.now();
 

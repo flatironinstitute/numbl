@@ -8,6 +8,14 @@
  */
 
 export { executeCode } from "./numbl-core/executeCode.js";
+
+// Delaunay triangulation (delaunay/delaunayn) is backed by the qhull WASM
+// module, which loads asynchronously. Call loadDelaunayBackend() once before
+// running code that uses those builtins; otherwise they throw.
+// setDelaunayBackend lets you supply a custom backend (e.g. a browser loader).
+export { loadQhullNodeBackend as loadDelaunayBackend } from "./numbl-core/native/qhull-node.js";
+export { setDelaunayBackend } from "./numbl-core/native/geometry-bridge.js";
+
 export type {
   ExecOptions,
   ExecResult,
