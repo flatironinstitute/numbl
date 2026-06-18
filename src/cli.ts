@@ -26,6 +26,7 @@ import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execSync } from "child_process";
+import { createHash } from "crypto";
 import { type PlotServerOptions } from "./cli-plot-server.js";
 import { createPlotHandler } from "./cli-plot-handler.js";
 import {
@@ -363,6 +364,8 @@ Options (for build-site):
   --title <text>     Site title (default: from numbl-project.json or dir name)
   --entry <file>     Default file to open, e.g. main.m (default: README.md or
                        the first script)
+  --repo-url <url>   Source repository URL, shown as a link in the deployed
+                       site (default: from numbl-project.json)
 
 Options (for parse):
   --dump-ast <file>  Write the AST as indented JSON to <file> (default: stdout)
@@ -1112,6 +1115,7 @@ async function cmdBuildSite(args: string[]) {
   let base: string | undefined;
   let title: string | undefined;
   let entry: string | undefined;
+  let repoUrl: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1119,6 +1123,7 @@ async function cmdBuildSite(args: string[]) {
     else if (a === "--base") base = args[++i];
     else if (a === "--title") title = args[++i];
     else if (a === "--entry") entry = args[++i];
+    else if (a === "--repo-url") repoUrl = args[++i];
     else if (a.startsWith("-")) {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
@@ -1172,7 +1177,7 @@ async function cmdBuildSite(args: string[]) {
   }
 
   // 3. Manifest = existing numbl-project.json (if any) merged with flags.
-  let manifest: { title?: string; entry?: string } = {};
+  let manifest: { title?: string; entry?: string; repository?: string } = {};
   const existing = collected.find(f => f.path === "numbl-project.json");
   if (existing) {
     try {
@@ -1183,6 +1188,7 @@ async function cmdBuildSite(args: string[]) {
   }
   if (title !== undefined) manifest.title = title;
   if (entry !== undefined) manifest.entry = entry;
+  if (repoUrl !== undefined) manifest.repository = repoUrl;
   if (!manifest.title) manifest.title = basename(projectDirAbs);
 
   // 4. Build project.zip (manifest replaces any tree copy of itself).
@@ -1206,18 +1212,25 @@ async function cmdBuildSite(args: string[]) {
     );
   }
 
-  // 5. Inject the deploy base (optional). Assets are relative, so this is only
-  //    needed to make project.zip resolve under a subpath if client routes are
-  //    ever added; it also future-proofs the bundle.
+  // A build id derived from the bundle contents. Injected into the page and
+  // used as a cache-busting query on the project.zip fetch: a redeploy changes
+  // the bundle (and thus the id) so clients fetch the new zip, while reloads of
+  // the same build keep the same id and stay cached.
+  const buildId = createHash("sha256").update(zip).digest("hex").slice(0, 16);
+
+  // 5. Inject runtime globals into the page: the build id (always) and the
+  //    deploy base (when set, so project.zip resolves under a subpath).
   const indexPath = join(outDirAbs, "index.html");
+  let injectJs = `window.__NUMBL_BUILD_ID__=${JSON.stringify(buildId)};`;
   if (normBase) {
-    let indexHtml = readFileSync(indexPath, "utf-8");
-    const inject = `<script>window.__NUMBL_BASE__=${JSON.stringify(normBase)};</script>`;
-    indexHtml = indexHtml.includes("<!-- numbl:base -->")
-      ? indexHtml.replace("<!-- numbl:base -->", inject)
-      : indexHtml.replace("</head>", `  ${inject}\n  </head>`);
-    writeFileSync(indexPath, indexHtml);
+    injectJs += `window.__NUMBL_BASE__=${JSON.stringify(normBase)};`;
   }
+  const inject = `<script>${injectJs}</script>`;
+  let indexHtml = readFileSync(indexPath, "utf-8");
+  indexHtml = indexHtml.includes("<!-- numbl:base -->")
+    ? indexHtml.replace("<!-- numbl:base -->", inject)
+    : indexHtml.replace("</head>", `  ${inject}\n  </head>`);
+  writeFileSync(indexPath, indexHtml);
 
   // 6. A 404 that bounces to the deploy root, plus .nojekyll for GitHub Pages.
   const redirectTarget = normBase ?? "/";

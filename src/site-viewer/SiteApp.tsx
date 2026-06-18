@@ -1,4 +1,5 @@
 import ShareIcon from "@mui/icons-material/Share";
+import GitHubIcon from "@mui/icons-material/GitHub";
 import {
   Box,
   CircularProgress,
@@ -27,6 +28,7 @@ export function SiteApp() {
     activeFileId,
     loading,
     title,
+    repository,
     loadError,
     setActiveFileId,
     updateFileContent,
@@ -101,6 +103,20 @@ export function SiteApp() {
           </Typography>
         )}
       </Typography>
+      {repository && (
+        <Tooltip title="View source repository">
+          <IconButton
+            size="small"
+            component="a"
+            href={repository}
+            target="_blank"
+            rel="noopener noreferrer"
+            sx={{ mr: 0.5 }}
+          >
+            <GitHubIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      )}
       <Tooltip title={copyFeedback ? "Copied!" : "Copy shareable URL"}>
         <IconButton size="small" onClick={handleShare} sx={{ mr: 0.5 }}>
           <ShareIcon fontSize="small" />

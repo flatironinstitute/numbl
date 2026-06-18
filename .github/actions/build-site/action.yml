@@ -17,6 +17,9 @@ inputs:
   entry:
     description: "Default file to open in the viewer, e.g. main.m."
     default: ""
+  repo-url:
+    description: "Source repository URL shown as a link in the deployed site. Defaults to this repository (<server-url>/<owner>/<repo>)."
+    default: ""
   numbl-version:
     description: "numbl npm version to use (ignored when numbl-ref is set)."
     default: "latest"
@@ -51,6 +54,7 @@ runs:
         OUT_DIR: ${{ inputs.out-dir }}
         IN_TITLE: ${{ inputs.title }}
         IN_ENTRY: ${{ inputs.entry }}
+        IN_REPO_URL: ${{ inputs.repo-url }}
         NUMBL_VERSION: ${{ inputs.numbl-version }}
         NUMBL_REF: ${{ inputs.numbl-ref }}
         NUMBL_REPO: ${{ inputs.numbl-repo }}
@@ -69,11 +73,19 @@ runs:
           fi
         fi
 
+        # Source repository link shown in the deployed site. Default to this
+        # repo (e.g. https://github.com/<owner>/<repo>).
+        REPO_URL="$IN_REPO_URL"
+        if [ -z "$REPO_URL" ]; then
+          REPO_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+        fi
+
         if [ -z "$NUMBL_REF" ]; then
           # Default: use the published npm package.
           args=( "$PROJECT_DIR" --out "$OUT_DIR" --base "$BASE" )
           if [ -n "$IN_TITLE" ]; then args+=( --title "$IN_TITLE" ); fi
           if [ -n "$IN_ENTRY" ]; then args+=( --entry "$IN_ENTRY" ); fi
+          if [ -n "$REPO_URL" ]; then args+=( --repo-url "$REPO_URL" ); fi
           echo "numbl@$NUMBL_VERSION build-site ${args[*]}"
           npx --yes "numbl@$NUMBL_VERSION" build-site "${args[@]}"
         else
@@ -96,6 +108,7 @@ runs:
             args=( "$PROJECT_ABS" --out "$OUT_ABS" --base "$BASE" )
             if [ -n "$IN_TITLE" ]; then args+=( --title "$IN_TITLE" ); fi
             if [ -n "$IN_ENTRY" ]; then args+=( --entry "$IN_ENTRY" ); fi
+            if [ -n "$REPO_URL" ]; then args+=( --repo-url "$REPO_URL" ); fi
             echo "numbl (source $NUMBL_REF) build-site ${args[*]}"
             npx tsx src/cli.ts build-site "${args[@]}"
           )

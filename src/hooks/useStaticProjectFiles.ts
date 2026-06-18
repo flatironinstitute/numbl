@@ -14,9 +14,19 @@ const textEncoder = new TextEncoder();
 interface ProjectManifest {
   entry?: string;
   title?: string;
+  repository?: string;
 }
 
 const MANIFEST_NAME = "numbl-project.json";
+
+/** Build id injected by `build-site` (a hash of the bundle). Used to
+ *  cache-bust the project.zip fetch per build, without busting on every
+ *  reload. Undefined in dev / older bundles. */
+function getBuildId(): string | undefined {
+  return typeof window !== "undefined"
+    ? (window as unknown as { __NUMBL_BUILD_ID__?: string }).__NUMBL_BUILD_ID__
+    : undefined;
+}
 
 /** Resolve the deploy base path (where `project.zip` lives). */
 function getSiteBase(): string {
@@ -130,6 +140,8 @@ function pickActiveFile(files: WorkspaceFile[], entry?: string): string {
 export interface UseStaticProjectFilesResult extends UseProjectFilesResult {
   /** Title from the bundle manifest, if any. */
   title: string | null;
+  /** Source repository URL from the bundle manifest, if any. */
+  repository: string | null;
   /** True if the bundle failed to load. */
   loadError: string | null;
 }
@@ -148,6 +160,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
   const [activeFileId, setActiveFileId] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState<string | null>(null);
+  const [repository, setRepository] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const contentMapRef = useRef(new Map<string, Uint8Array>());
 
@@ -155,7 +168,12 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch(getSiteBase() + "project.zip");
+        const buildId = getBuildId();
+        const zipUrl =
+          getSiteBase() +
+          "project.zip" +
+          (buildId ? `?v=${encodeURIComponent(buildId)}` : "");
+        const resp = await fetch(zipUrl);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const buf = new Uint8Array(await resp.arrayBuffer());
         if (cancelled) return;
@@ -189,6 +207,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
         dispatch({ type: "SET_FILES", files: wsFiles });
         setActiveFileId(pickActiveFile(wsFiles, manifest.entry));
         setTitle(manifest.title ?? null);
+        setRepository(manifest.repository ?? null);
       } catch (e) {
         if (cancelled) return;
         console.error("Failed to load project bundle:", e);
@@ -422,6 +441,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
     loadAllContents,
     contentCache: contentMapRef,
     title,
+    repository,
     loadError,
     mergeVfsChanges: useCallback(() => {
       // No-op for static mode.
