@@ -332,7 +332,7 @@ export type PlotInstruction =
   | { type: "plot3"; traces: Plot3Trace[] }
   | { type: "line"; traces: PlotTrace[] }
   | { type: "line3"; traces: Plot3Trace[] }
-  | { type: "patch"; trace: PatchTrace }
+  | { type: "patch"; trace: PatchTrace; newplot?: boolean }
   | { type: "update_trace"; id: number; props: Record<string, unknown> }
   | { type: "surf"; trace: SurfTrace }
   | { type: "surface"; trace: SurfTrace }

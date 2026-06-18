@@ -93,6 +93,41 @@ describe("trimesh", () => {
     expect(lim[3]).toBeGreaterThanOrEqual(1);
   });
 
+  it("redraws replace the previous mesh when hold is off (no accumulation)", () => {
+    // trimesh is a high-level function (calls newplot), so re-drawing with hold
+    // off replaces the axes contents — an animation/iteration loop must not
+    // accumulate overlaid meshes (the DistMesh simpplot bug).
+    const axes = renderedAxes(
+      "trimesh([1 2 3], [0;1;0], [0;0;1], [0;0;0]);" +
+        "trimesh([1 2 3], [0;2;0], [0;0;2], [0;0;0]);"
+    );
+    expect(axes.patchTraces).toHaveLength(1);
+    // Only the second mesh survives.
+    expect(axes.patchTraces[0].vertices).toEqual([
+      [0, 0, 0],
+      [2, 0, 0],
+      [0, 2, 0],
+    ]);
+  });
+
+  it("accumulates meshes across calls when hold is on", () => {
+    const axes = renderedAxes(
+      "hold on;" +
+        "trimesh([1 2 3], [0;1;0], [0;0;1], [0;0;0]);" +
+        "trimesh([1 2 3], [0;2;0], [0;0;2], [0;0;0]);"
+    );
+    expect(axes.patchTraces).toHaveLength(2);
+  });
+
+  it("a hold-off redraw also clears other trace types (newplot)", () => {
+    // plot() then trimesh() with hold off: the trimesh replaces the line.
+    const axes = renderedAxes(
+      "plot([0 1],[0 1]); trimesh([1 2 3], [0;1;0], [0;0;1], [0;0;0]);"
+    );
+    expect(axes.patchTraces).toHaveLength(1);
+    expect(axes.traces).toHaveLength(0);
+  });
+
   it("axis() returns a 6-vector for a z-varying 3-D mesh", () => {
     const axes = renderedAxes(
       "trimesh([1 2 3; 1 3 4], [0;1;1;0], [0;0;1;1], [0;0;5;5]);"

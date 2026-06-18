@@ -287,9 +287,12 @@ export function trimeshCall(
   args: RuntimeValue[]
 ): void {
   // trimesh renders a triangular mesh as a patch (MATLAB returns a patch
-  // object), so it reuses the "patch" instruction.
+  // object), so it reuses the "patch" instruction. Unlike the low-level patch()
+  // builtin, trimesh is a high-level function that calls newplot — with hold
+  // off it replaces the axes contents (so e.g. an animation loop that redraws
+  // each iteration doesn't accumulate overlaid meshes).
   const trace = parseTriMeshArgs(args);
-  plotInstructions.push({ type: "patch", trace });
+  plotInstructions.push({ type: "patch", trace, newplot: true });
 }
 
 export function fillCall(
@@ -297,10 +300,13 @@ export function fillCall(
   args: RuntimeValue[]
 ): void {
   // fill is patch's 2-D form over one or more (X,Y,C) groups — one patch
-  // instruction per group.
-  for (const trace of parseFillArgs(args)) {
-    plotInstructions.push({ type: "patch", trace });
-  }
+  // instruction per group. fill is a high-level function (calls newplot), so
+  // the first group replaces the axes contents when hold is off; the remaining
+  // groups in the same call always add.
+  const traces = parseFillArgs(args);
+  traces.forEach((trace, i) => {
+    plotInstructions.push({ type: "patch", trace, newplot: i === 0 });
+  });
 }
 
 export function surfCall(

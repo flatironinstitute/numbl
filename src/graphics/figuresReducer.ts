@@ -280,9 +280,18 @@ export const figuresReducer = (
     }
 
     case "patch": {
-      // patch adds polygons to the current axes without clearing other objects
-      // or respecting hold (it does not call newplot).
       const axes = getAxes(ensureFig(state));
+      // High-level producers (trimesh, fill) set newplot: they call newplot, so
+      // with hold off they replace the axes contents and with hold on they add.
+      // The low-level patch() builtin sets no flag and always adds without
+      // clearing other objects or respecting hold.
+      if (action.newplot) {
+        return addTraces(state, {
+          patchTraces: axes.holdOn
+            ? [...axes.patchTraces, action.trace]
+            : [action.trace],
+        });
+      }
       return updateAxes(state, {
         patchTraces: [...axes.patchTraces, action.trace],
       });
