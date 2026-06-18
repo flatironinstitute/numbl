@@ -16,7 +16,7 @@
  */
 
 import type { FigureState, AxesState } from "./figuresReducer.js";
-import { FIGURE_HDF5_VERSION } from "./figureHdf5Schema.js";
+import { FIGURE_HDF5_VERSION, GRID_FIELDS } from "./figureHdf5Schema.js";
 
 // ── h5wasm minimal typings (we only use a slice of its API) ────────────────
 
@@ -85,20 +85,6 @@ const STYLE_ATTRS = new Set([
 
 /** number[][] fields handled specially (not as plain 1-D datasets). */
 const MATRIX_FIELDS = new Set(["vertices", "faces", "faceVertexCData"]);
-
-/** Per-kind fields that are flat column-major rows×cols grids → reshaped to
- *  row-major [rows, cols] datasets. */
-const GRID_FIELDS: Record<string, string[]> = {
-  surf: ["x", "y", "z", "c"],
-  surface: ["x", "y", "z", "c"],
-  mesh: ["x", "y", "z", "c"],
-  pcolor: ["x", "y", "c"],
-  contour: ["x", "y", "z"],
-  heatmap: ["data"],
-  imagesc: ["z"],
-  bar3: ["z"],
-  bar3h: ["z"],
-};
 
 const GZIP_LEVEL = 4;
 

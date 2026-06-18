@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "dist-graphics",
+    "outDir": "dist-graphics",
+    "strict": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"]
+  },
+  "include": [
+    "src/graphics-lib.ts",
+    "src/graphics/**/*.ts",
+    "src/graphics/**/*.tsx"
+  ]
+}

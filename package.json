@@ -24,6 +24,10 @@
     ".": {
       "types": "./dist-lib/lib.d.ts",
       "import": "./dist-lib/lib.js"
+    },
+    "./graphics": {
+      "types": "./dist-graphics/graphics-lib.d.ts",
+      "import": "./dist-graphics/index.js"
     }
   },
   "bin": {
@@ -31,6 +35,7 @@
   },
   "files": [
     "dist-lib/",
+    "dist-graphics/",
     "dist-cli/",
     "dist-plot-viewer/",
     "dist-site-viewer/",
@@ -52,6 +57,7 @@
     "build:web": "npm run build:snippets && npm run bundle:stdlib && tsc -b && vite build",
     "build:lib": "npm run build:snippets && npm run bundle:stdlib && esbuild src/lib.ts --bundle --platform=node --format=esm --outfile=dist-lib/lib.js --packages=external --loader:.wasm=file && tsc -p tsconfig.lib.json",
     "build:cli": "npm run build:snippets && npm run bundle:stdlib && esbuild src/cli.ts --bundle --platform=node --format=esm --outfile=dist-cli/cli.js --packages=external --loader:.wasm=file",
+    "build:graphics": "esbuild src/graphics-lib.ts --bundle --platform=browser --format=esm --outfile=dist-graphics/index.js --external:react --external:react-dom --external:react/jsx-runtime --external:h5wasm --jsx=automatic && tsc -p tsconfig.graphics.json",
     "install": "true",
     "build:addon": "node-gyp rebuild",
     "format": "prettier --write .",
@@ -69,7 +75,7 @@
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
     "bump": "tsx scripts/bump-version.ts",
-    "prepublishOnly": "npm run build:lib && npm run build:cli && npm run build:plot-viewer && npm run build:site-viewer",
+    "prepublishOnly": "npm run build:lib && npm run build:graphics && npm run build:cli && npm run build:plot-viewer && npm run build:site-viewer",
     "prepare": "husky"
   },
   "dependencies": {
@@ -82,6 +88,18 @@
     "react-syntax-highlighter": "^16.1.1",
     "remark-gfm": "^4.0.1",
     "three": "^0.183.2"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@emotion/react": "^11.14.0",

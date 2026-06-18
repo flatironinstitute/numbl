@@ -24,6 +24,7 @@ dist
 dist-ssr
 dist-cli
 dist-lib
+dist-graphics
 dist-plot-viewer
 dist-site-viewer
 server/dist

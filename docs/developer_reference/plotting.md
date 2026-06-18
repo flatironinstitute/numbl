@@ -55,3 +55,19 @@ is a single-file build (the wasm is embedded in the JS, so nothing extra needs
 to be served) and is loaded **lazily** via dynamic `import()` — its ~1 MB
 (gzipped) chunk is fetched only when a user actually downloads, never in the main
 bundle.
+
+The inverse, [../../src/graphics/importFigureHdf5.ts](../../src/graphics/importFigureHdf5.ts),
+reads such a file back into a `FigureState`. The shared schema tables live in
+[../../src/graphics/figureHdf5Schema.ts](../../src/graphics/figureHdf5Schema.ts)
+so the writer and reader stay in sync.
+
+### `numbl/graphics` package export
+
+The figure renderer and the HDF5 import/export are published from a browser
+subpath export so external apps can display numbl figures without numbl-core.
+The entry is [../../src/graphics-lib.ts](../../src/graphics-lib.ts) (built by
+`npm run build:graphics` to `dist-graphics/`), exposing `FigureView`,
+`FigureState`/`AxesState`, `figuresReducer`, and `importFigureHdf5`/
+`exportFigureHdf5`. `react`/`react-dom` are optional peer deps; `three` is
+bundled; `h5wasm` stays lazy. Example consumer: the `numbl-figure-viewer` app
+(`import { importFigureHdf5, FigureView } from "numbl/graphics"`).
