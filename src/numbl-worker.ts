@@ -39,6 +39,14 @@ import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
 import { workerOnInput } from "./syncInputChannel.js";
+import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
+
+// Start loading the qhull Delaunay backend as soon as the worker spins up, so
+// it is installed well before any user-triggered run. Fire-and-forget: it
+// resolves on its own, so the synchronous message handler below never needs to
+// await it. A delaunay/delaunayn call issued before it finishes loading (or if
+// loading fails) throws "backend not initialized".
+void ensureQhullBackend();
 
 // ── Persistent state (used by REPL execute and persistent script runs) ──
 

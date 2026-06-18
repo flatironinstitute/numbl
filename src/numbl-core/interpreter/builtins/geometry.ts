@@ -2,9 +2,10 @@
  * Interpreter IBuiltins for computational geometry functions: delaunay,
  * delaunayn, inpolygon.
  *
- * delaunay/delaunayn are backed by the `delaunay-triangulate` npm package
- * (Delaunay triangulation in arbitrary dimension via lift-to-paraboloid +
- * incremental convex hull).
+ * delaunay/delaunayn are backed by the qhull WASM module, installed as the
+ * Delaunay backend at startup (see geometry-bridge.ts and the qhull-node /
+ * qhull-browser loaders). The backend must be installed before these builtins
+ * run; otherwise they throw.
  */
 
 import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
@@ -13,7 +14,7 @@ import { RTV, RuntimeError, tensorSize2D } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import delaunayTriangulate from "delaunay-triangulate";
+import { getDelaunayBackend } from "../../native/geometry-bridge.js";
 
 /** Extract a flat list of numbers from a scalar or tensor argument. */
 function toFlatArray(v: RuntimeValue, name: string): number[] {
@@ -39,10 +40,78 @@ function matrixToPoints(P: RuntimeTensor, name: string): number[][] {
   return points;
 }
 
+/** Absolute volume of a dim-simplex (1/d! * |det| of its edge-vector matrix),
+ *  used to detect degenerate (flat, zero-volume) simplices. */
+function simplexVolume(
+  points: number[][],
+  cell: number[],
+  dim: number
+): number {
+  const M: number[][] = [];
+  const p0 = points[cell[0]];
+  for (let r = 0; r < dim; r++) {
+    const pr = points[cell[r + 1]];
+    const row = new Array<number>(dim);
+    for (let c = 0; c < dim; c++) row[c] = pr[c] - p0[c];
+    M.push(row);
+  }
+  // Determinant via Gaussian elimination with partial pivoting.
+  let det = 1;
+  for (let col = 0; col < dim; col++) {
+    let piv = col;
+    for (let r = col + 1; r < dim; r++) {
+      if (Math.abs(M[r][col]) > Math.abs(M[piv][col])) piv = r;
+    }
+    if (M[piv][col] === 0) return 0;
+    if (piv !== col) {
+      [M[piv], M[col]] = [M[col], M[piv]];
+      det = -det;
+    }
+    det *= M[col][col];
+    for (let r = col + 1; r < dim; r++) {
+      const f = M[r][col] / M[col][col];
+      for (let c = col; c < dim; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  let fact = 1;
+  for (let k = 2; k <= dim; k++) fact *= k;
+  return Math.abs(det) / fact;
+}
+
 /** Triangulate points and pack the resulting simplices into a numt-by-(dim+1)
  *  tensor of 1-based vertex indices. */
 function triangulateToTensor(points: number[][], dim: number): RuntimeTensor {
-  const cells = delaunayTriangulate(points);
+  // The qhull WASM backend (exact and robust to cospherical/coplanar input
+  // such as a regular grid) is installed at startup. It must be present.
+  const backend = getDelaunayBackend();
+  if (!backend)
+    throw new RuntimeError(
+      "delaunay/delaunayn: triangulation backend not initialized. " +
+        "In Node call loadQhullNodeBackend() (the CLI and library do this " +
+        "automatically); in the browser worker it loads on startup."
+    );
+  const raw = backend(points, dim);
+  // Discard degenerate (zero-volume) simplices. Triangulating cospherical /
+  // coplanar facets (e.g. a regular grid) emits flat slivers — qhull's "Qt"
+  // does this, and the JS fallback does too — which corrupt downstream use
+  // (e.g. DistMesh edge forces). MATLAB's delaunayn likewise discards them.
+  // The threshold is tiny relative to the data scale so only numerically-zero
+  // volumes are removed, never legitimately thin simplices.
+  let scale = 0;
+  for (let c = 0; c < dim; c++) {
+    let lo = Infinity,
+      hi = -Infinity;
+    for (const p of points) {
+      if (p[c] < lo) lo = p[c];
+      if (p[c] > hi) hi = p[c];
+    }
+    scale = Math.max(scale, hi - lo);
+  }
+  const volTol = scale > 0 ? Math.pow(scale, dim) * 1e-10 : 0;
+  const cells =
+    volTol > 0
+      ? raw.filter(cell => simplexVolume(points, cell, dim) > volTol)
+      : raw;
   const numCells = cells.length;
   const cols = dim + 1;
   const out = allocFloat64Array(numCells * cols);
@@ -122,30 +191,11 @@ defineBuiltin({
 //
 // DIMENSION LIMITATION (n <= 3 only)
 // ----------------------------------
-// MATLAB's delaunayn supports arbitrary n, but our `delaunay-triangulate`
-// backend only produces CORRECT results for n = 2 and n = 3. We deliberately
-// reject n >= 4 rather than return wrong triangulations.
-//
-// Root cause: delaunay-triangulate computes the n-D Delaunay triangulation as
-// the lower convex hull of the points lifted onto a paraboloid in (n+1)
-// dimensions. That hull (via `incremental-convex-hull`) relies on the
-// `robust-orientation` predicate, which must evaluate the orientation of
-// (n+2) points in (n+1)-D space.
-//
-// `robust-orientation` only implements exact predicates up to 5 points
-// (NUM_EXPAND = 5, with hardcoded orientation_3 / _4 / _5 routines). For more
-// than 5 points its `orientation(k)` dispatch silently falls back to the
-// 5-point routine `orientation_5`, which ignores the extra arguments and
-// returns a meaningless sign. n-D Delaunay needs (n+2) points, so:
-//     n + 2 <= 5   =>   n <= 3
-// is the largest dimension that is actually correct. Empirically n=2 and n=3
-// match MATLAB exactly, while n>=4 yields wrong or empty results (e.g. only 3
-// of the expected 11 simplices for 8 points in 4-D, with some input vertices
-// missing entirely).
-//
-// To lift this cap in the future we would need robust orientation/insphere
-// predicates valid in arbitrary dimension (Shewchuk-style adaptive precision),
-// which neither robust-orientation nor mourner's robust-predicates provide.
+// MATLAB's delaunayn supports arbitrary n. The qhull backend does too, but we
+// have only validated n = 2 and n = 3 against MATLAB (and the WASM wrapper is
+// exercised only in those dimensions), so we conservatively reject n >= 4 for
+// now rather than return unvalidated triangulations. Raising this cap is a
+// matter of validating qhull's higher-dimensional output.
 
 const DELAUNAYN_MAX_DIM = 3;
 
@@ -179,11 +229,10 @@ defineBuiltin({
         if (n < 2)
           throw new RuntimeError("delaunayn: X must have at least 2 columns");
         if (n > DELAUNAYN_MAX_DIM)
-          // See the dimension-limitation note above: the backend's robust
-          // orientation predicate is only correct up to 4-D space (n <= 3).
+          // See the dimension-limitation note above: only n <= 3 is validated.
           throw new RuntimeError(
             `delaunayn: only 2-D and 3-D triangulations are supported (got ${n}-D); ` +
-              `higher dimensions are not reliable with the current backend`
+              `higher dimensions are not yet validated`
           );
         if (m < n + 1)
           throw new RuntimeError(
