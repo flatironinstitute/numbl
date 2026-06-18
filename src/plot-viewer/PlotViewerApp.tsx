@@ -6,11 +6,13 @@ import {
   initialFiguresState,
 } from "../graphics/figuresReducer.js";
 import { restoreNaNs } from "../graphics/restoreNaNs.js";
+import { downloadFigureHdf5 } from "../graphics/exportFigureHdf5.js";
 
 export function PlotViewerApp() {
   const [figures, dispatch] = useReducer(figuresReducer, initialFiguresState);
   const [scriptDone, setScriptDone] = useState(false);
   const [activeFigure, setActiveFigure] = useState(1);
+  const [downloading, setDownloading] = useState(false);
   const activeFigureRef = useRef(activeFigure);
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
@@ -104,20 +106,46 @@ export function PlotViewerApp() {
     .sort((a, b) => a - b);
   const currentFig = figures.figs[effectiveActiveFigure];
 
+  const handleDownload = async () => {
+    if (!currentFig) return;
+    setDownloading(true);
+    try {
+      await downloadFigureHdf5(currentFig, effectiveActiveFigure);
+    } catch (e) {
+      console.error("Figure HDF5 export failed:", e);
+      alert(
+        "Failed to export figure data: " +
+          (e instanceof Error ? e.message : String(e))
+      );
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
-      {/* Tab bar */}
-      {handles.length > 1 && (
+      {/* Tab bar + download */}
+      {currentFig && (
         <div style={tabBarStyle}>
-          {handles.map(h => (
-            <button
-              key={h}
-              onClick={() => setActiveFigure(h)}
-              style={h === effectiveActiveFigure ? activeTabStyle : tabStyle}
-            >
-              Figure {h}
-            </button>
-          ))}
+          {handles.length > 1 &&
+            handles.map(h => (
+              <button
+                key={h}
+                onClick={() => setActiveFigure(h)}
+                style={h === effectiveActiveFigure ? activeTabStyle : tabStyle}
+              >
+                Figure {h}
+              </button>
+            ))}
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            style={downloadBtnStyle}
+            title="Download this figure's data as an HDF5 (.h5) file"
+          >
+            {downloading ? "Saving…" : "⬇ Data (.h5)"}
+          </button>
         </div>
       )}
 
@@ -160,10 +188,22 @@ export function PlotViewerApp() {
 
 const tabBarStyle: React.CSSProperties = {
   display: "flex",
+  alignItems: "center",
   gap: 2,
   padding: "4px 8px",
   background: "#f0f0f0",
   borderBottom: "1px solid #ccc",
+};
+
+const downloadBtnStyle: React.CSSProperties = {
+  padding: "4px 10px",
+  border: "1px solid #ccc",
+  background: "#fff",
+  cursor: "pointer",
+  fontFamily: "sans-serif",
+  fontSize: 12,
+  borderRadius: 4,
+  flexShrink: 0,
 };
 
 const tabStyle: React.CSSProperties = {

@@ -17,6 +17,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import NoteAddIcon from "@mui/icons-material/NoteAdd";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
+import SaveAltIcon from "@mui/icons-material/SaveAlt";
 import {
   Box,
   Button,
@@ -58,6 +59,7 @@ import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { Splitter } from "./Splitter";
 import { FileBrowser } from "./FileBrowser";
 import { FigureView } from "../graphics/FigureView.js";
+import { downloadFigureHdf5 } from "../graphics/exportFigureHdf5.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
 import { MarkdownView } from "./MarkdownView";
@@ -363,6 +365,21 @@ export function IDEWorkspace({
       .map(k => Number(k))
       .sort((a, b) => a - b);
   }, [figures.figs]);
+
+  const [downloadingFigure, setDownloadingFigure] = useState(false);
+  const handleDownloadFigure = useCallback(async () => {
+    const handle = sortedFigureHandles[figureTab];
+    const fig = figures.figs[handle];
+    if (!fig) return;
+    setDownloadingFigure(true);
+    try {
+      await downloadFigureHdf5(fig, handle);
+    } catch (e) {
+      console.error("Figure HDF5 export failed:", e);
+    } finally {
+      setDownloadingFigure(false);
+    }
+  }, [figures.figs, sortedFigureHandles, figureTab]);
 
   useEffect(() => {
     const handles = Object.keys(figures.figs)
@@ -1489,6 +1506,18 @@ export function IDEWorkspace({
             <Tab key={h} label={`Figure ${h}`} />
           ))}
         </Tabs>
+        <Tooltip title="Download this figure's data as HDF5 (.h5)">
+          <span>
+            <IconButton
+              size="small"
+              onClick={handleDownloadFigure}
+              disabled={downloadingFigure || sortedFigureHandles.length === 0}
+              sx={{ mx: 0.5, flexShrink: 0 }}
+            >
+              <SaveAltIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Tooltip
           title={
             figuresExpanded

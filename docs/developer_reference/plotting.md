@@ -40,3 +40,18 @@ self-contained HTML document in an iframe and exposes a two-way data/event
 bridge to the interpreter (the standard MATLAB `uihtml` API). See
 [uihtml.md](uihtml.md) for the architecture and
 [../uihtml-figures.md](../uihtml-figures.md) for authoring guidance.
+
+## Downloading figure data (HDF5)
+
+The plot viewer and the IDE figure panel offer a "download data" control that
+serializes a figure's `FigureState` to a self-describing HDF5 file (numeric data
+as gzip-compressed datasets, styling/layout as attributes). The writer is
+[../../src/graphics/exportFigureHdf5.ts](../../src/graphics/exportFigureHdf5.ts);
+the on-disk schema is documented in
+[../figure-hdf5-format.md](../figure-hdf5-format.md).
+
+[h5wasm](https://github.com/usnistgov/h5wasm) is the in-browser HDF5 writer. It
+is a single-file build (the wasm is embedded in the JS, so nothing extra needs
+to be served) and is loaded **lazily** via dynamic `import()` — its ~1 MB
+(gzipped) chunk is fetched only when a user actually downloads, never in the main
+bundle.
