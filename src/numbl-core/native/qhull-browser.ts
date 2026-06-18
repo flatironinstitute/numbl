@@ -12,7 +12,7 @@
  * installed and a later `delaunay`/`delaunayn` call throws (see geometry.ts).
  */
 
-import { setDelaunayBackend } from "./geometry-bridge.js";
+import { setDelaunayBackend, setConvexHullBackend } from "./geometry-bridge.js";
 import { loadQhull } from "qhull-wasm";
 import qhullWasmUrl from "qhull-wasm/dist/qhull.wasm?url";
 
@@ -30,9 +30,10 @@ async function load(): Promise<void> {
     const wasmBinary = new Uint8Array(await resp.arrayBuffer());
     const qhull = await loadQhull({ wasmBinary });
     setDelaunayBackend((points, dim) => qhull.delaunay(points, dim).facets);
+    setConvexHullBackend((points, dim) => qhull.convexHull(points, dim).facets);
   } catch (e) {
     console.error(
-      "qhull WASM backend failed to load; delaunay/delaunayn will be unavailable:",
+      "qhull WASM backend failed to load; delaunay/delaunayn/convhull/convhulln will be unavailable:",
       e instanceof Error ? e.message : String(e)
     );
   }

@@ -10,7 +10,7 @@
  * Idempotent: the first call starts loading and caches the promise.
  */
 
-import { setDelaunayBackend } from "./geometry-bridge.js";
+import { setDelaunayBackend, setConvexHullBackend } from "./geometry-bridge.js";
 
 let promise: Promise<void> | null = null;
 
@@ -24,4 +24,5 @@ async function load(): Promise<void> {
   const { loadQhull } = await import("qhull-wasm");
   const qhull = await loadQhull();
   setDelaunayBackend((points, dim) => qhull.delaunay(points, dim).facets);
+  setConvexHullBackend((points, dim) => qhull.convexHull(points, dim).facets);
 }
