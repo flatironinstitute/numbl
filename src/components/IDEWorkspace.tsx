@@ -18,7 +18,9 @@ import NoteAddIcon from "@mui/icons-material/NoteAdd";
 import FullscreenIcon from "@mui/icons-material/Fullscreen";
 import FullscreenExitIcon from "@mui/icons-material/FullscreenExit";
 import SaveAltIcon from "@mui/icons-material/SaveAlt";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import {
+  Alert,
   Box,
   Button,
   Dialog,
@@ -26,6 +28,8 @@ import {
   DialogContent,
   DialogTitle,
   Drawer,
+  Link,
+  Snackbar,
   Tab,
   Tabs,
   TextField,
@@ -60,6 +64,8 @@ import { Splitter } from "./Splitter";
 import { FileBrowser } from "./FileBrowser";
 import { FigureView } from "../graphics/FigureView.js";
 import { downloadFigureHdf5 } from "../graphics/exportFigureHdf5.js";
+import { buildFigureViewerLink } from "../graphics/openInFigureViewer.js";
+import { uploadFigureForViewer } from "../graphics/figureUpload.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
 import { MarkdownView } from "./MarkdownView";
@@ -378,6 +384,31 @@ export function IDEWorkspace({
       console.error("Figure HDF5 export failed:", e);
     } finally {
       setDownloadingFigure(false);
+    }
+  }, [figures.figs, sortedFigureHandles, figureTab]);
+
+  // Hand-off banner state for figures too large to open via a direct link.
+  const [viewerHandoff, setViewerHandoff] = useState<
+    | { kind: "uploading" }
+    | { kind: "ready"; url: string }
+    | { kind: "failed"; baseUrl: string }
+    | null
+  >(null);
+  const handleOpenFigureInViewer = useCallback(async () => {
+    const fig = figures.figs[sortedFigureHandles[figureTab]];
+    if (!fig) return;
+    const link = buildFigureViewerLink(fig);
+    if (link.url) {
+      window.open(link.url, "_blank");
+      setViewerHandoff(null);
+      return;
+    }
+    setViewerHandoff({ kind: "uploading" });
+    try {
+      const url = await uploadFigureForViewer(fig);
+      setViewerHandoff({ kind: "ready", url });
+    } catch {
+      setViewerHandoff({ kind: "failed", baseUrl: link.baseUrl });
     }
   }, [figures.figs, sortedFigureHandles, figureTab]);
 
@@ -1463,95 +1494,151 @@ export function IDEWorkspace({
   );
 
   const figuresPanel = (
-    <Box
-      sx={
-        figuresExpanded
-          ? {
-              position: "fixed",
-              inset: 0,
-              zIndex: 1250,
-              bgcolor: "background.paper",
-              display: "flex",
-              flexDirection: "column",
-            }
-          : { height: "100%", display: "flex", flexDirection: "column" }
-      }
-    >
+    <>
       <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          borderBottom: 1,
-          borderColor: "divider",
-        }}
+        sx={
+          figuresExpanded
+            ? {
+                position: "fixed",
+                inset: 0,
+                zIndex: 1250,
+                bgcolor: "background.paper",
+                display: "flex",
+                flexDirection: "column",
+              }
+            : { height: "100%", display: "flex", flexDirection: "column" }
+        }
       >
-        <Tabs
-          value={figureTab}
-          onChange={(_, newValue) => setFigureTab(newValue)}
-          variant="scrollable"
-          scrollButtons="auto"
+        <Box
           sx={{
-            flexGrow: 1,
-            minHeight: 34,
-            "& .MuiTab-root": {
-              textTransform: "none",
-              fontWeight: 500,
-              fontSize: "0.8rem",
-              minHeight: 34,
-              py: 0,
-            },
+            display: "flex",
+            alignItems: "center",
+            borderBottom: 1,
+            borderColor: "divider",
           }}
         >
-          {sortedFigureHandles.map(h => (
-            <Tab key={h} label={`Figure ${h}`} />
-          ))}
-        </Tabs>
-        <Tooltip title="Download this figure's data as HDF5 (.h5)">
-          <span>
+          <Tabs
+            value={figureTab}
+            onChange={(_, newValue) => setFigureTab(newValue)}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              flexGrow: 1,
+              minHeight: 34,
+              "& .MuiTab-root": {
+                textTransform: "none",
+                fontWeight: 500,
+                fontSize: "0.8rem",
+                minHeight: 34,
+                py: 0,
+              },
+            }}
+          >
+            {sortedFigureHandles.map(h => (
+              <Tab key={h} label={`Figure ${h}`} />
+            ))}
+          </Tabs>
+          <Tooltip title="Open this figure in the numbl figure viewer (new tab)">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleOpenFigureInViewer}
+                disabled={sortedFigureHandles.length === 0}
+                sx={{ mx: 0.5, flexShrink: 0 }}
+              >
+                <OpenInNewIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip title="Download this figure's data as HDF5 (.h5)">
+            <span>
+              <IconButton
+                size="small"
+                onClick={handleDownloadFigure}
+                disabled={downloadingFigure || sortedFigureHandles.length === 0}
+                sx={{ mx: 0.5, flexShrink: 0 }}
+              >
+                <SaveAltIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Tooltip
+            title={
+              figuresExpanded
+                ? "Collapse figures (Esc)"
+                : "Expand figures to full window"
+            }
+          >
             <IconButton
               size="small"
-              onClick={handleDownloadFigure}
-              disabled={downloadingFigure || sortedFigureHandles.length === 0}
+              onClick={() => setFiguresExpanded(v => !v)}
               sx={{ mx: 0.5, flexShrink: 0 }}
             >
-              <SaveAltIcon fontSize="small" />
+              {figuresExpanded ? (
+                <FullscreenExitIcon fontSize="small" />
+              ) : (
+                <FullscreenIcon fontSize="small" />
+              )}
             </IconButton>
-          </span>
-        </Tooltip>
-        <Tooltip
-          title={
-            figuresExpanded
-              ? "Collapse figures (Esc)"
-              : "Expand figures to full window"
-          }
+          </Tooltip>
+        </Box>
+        <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
+          {sortedFigureHandles.length > 0 ? (
+            <FigureView figure={figures.figs[sortedFigureHandles[figureTab]]} />
+          ) : (
+            <Typography
+              variant="body2"
+              color="text.disabled"
+              sx={{ p: 2, textAlign: "center", fontStyle: "italic" }}
+            >
+              No figures
+            </Typography>
+          )}
+        </Box>
+      </Box>
+      <Snackbar
+        open={viewerHandoff !== null}
+        onClose={() => setViewerHandoff(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert
+          severity={viewerHandoff?.kind === "failed" ? "warning" : "info"}
+          onClose={() => setViewerHandoff(null)}
+          sx={{ width: "100%" }}
         >
-          <IconButton
-            size="small"
-            onClick={() => setFiguresExpanded(v => !v)}
-            sx={{ mx: 0.5, flexShrink: 0 }}
-          >
-            {figuresExpanded ? (
-              <FullscreenExitIcon fontSize="small" />
-            ) : (
-              <FullscreenIcon fontSize="small" />
-            )}
-          </IconButton>
-        </Tooltip>
-      </Box>
-      <Box sx={{ flexGrow: 1, overflow: "auto", p: 1 }}>
-        {sortedFigureHandles.length > 0 ? (
-          <FigureView figure={figures.figs[sortedFigureHandles[figureTab]]} />
-        ) : (
-          <Typography
-            variant="body2"
-            color="text.disabled"
-            sx={{ p: 2, textAlign: "center", fontStyle: "italic" }}
-          >
-            No figures
-          </Typography>
-        )}
-      </Box>
-    </Box>
+          {viewerHandoff?.kind === "uploading" &&
+            "Preparing a temporary link to the figure viewer…"}
+          {viewerHandoff?.kind === "ready" && (
+            <>
+              Figure too large for a direct link — uploaded (encrypted,
+              temporary).{" "}
+              <Link href={viewerHandoff.url} target="_blank" rel="noreferrer">
+                Open in figure viewer
+              </Link>
+            </>
+          )}
+          {viewerHandoff?.kind === "failed" && (
+            <>
+              This figure is too large to open through a link, and the temporary
+              upload failed. Download it (
+              <SaveAltIcon
+                fontSize="inherit"
+                sx={{ verticalAlign: "middle" }}
+              />
+              ) and{" "}
+              <Link
+                href={viewerHandoff.baseUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                open the figure viewer
+              </Link>
+              , then load the file.
+            </>
+          )}
+        </Alert>
+      </Snackbar>
+    </>
   );
 
   const fileBrowserContent = (

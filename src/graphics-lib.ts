@@ -29,3 +29,20 @@ export {
 } from "./graphics/exportFigureHdf5.js";
 export { importFigureHdf5 } from "./graphics/importFigureHdf5.js";
 export { FIGURE_HDF5_VERSION } from "./graphics/figureHdf5Schema.js";
+export {
+  buildFigureViewerLink,
+  DEFAULT_FIGURE_VIEWER_URL,
+} from "./graphics/openInFigureViewer.js";
+export type { FigureViewerLink } from "./graphics/openInFigureViewer.js";
+export {
+  uploadFigureForViewer,
+  loadFigureFromHash,
+  numblStoreUploader,
+  setFigureUploader,
+  DEFAULT_FIGURE_STORE_URL,
+} from "./graphics/figureUpload.js";
+export type { FigureUploader } from "./graphics/figureUpload.js";
+export {
+  encodeFigureToHash,
+  decodeFigureFromHash,
+} from "./graphics/figureHashTransport.js";

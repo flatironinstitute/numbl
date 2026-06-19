@@ -7,12 +7,21 @@ import {
 } from "../graphics/figuresReducer.js";
 import { restoreNaNs } from "../graphics/restoreNaNs.js";
 import { downloadFigureHdf5 } from "../graphics/exportFigureHdf5.js";
+import { buildFigureViewerLink } from "../graphics/openInFigureViewer.js";
+import { uploadFigureForViewer } from "../graphics/figureUpload.js";
 
 export function PlotViewerApp() {
   const [figures, dispatch] = useReducer(figuresReducer, initialFiguresState);
   const [scriptDone, setScriptDone] = useState(false);
   const [activeFigure, setActiveFigure] = useState(1);
   const [downloading, setDownloading] = useState(false);
+  // Hand-off banner state for figures too large to open via a direct link.
+  const [viewerHandoff, setViewerHandoff] = useState<
+    | { kind: "uploading" }
+    | { kind: "ready"; url: string }
+    | { kind: "failed"; baseUrl: string }
+    | null
+  >(null);
   const activeFigureRef = useRef(activeFigure);
 
   const handlePlotInstruction = useCallback((instruction: PlotInstruction) => {
@@ -122,6 +131,24 @@ export function PlotViewerApp() {
     }
   };
 
+  const handleOpenInViewer = async () => {
+    if (!currentFig) return;
+    const link = buildFigureViewerLink(currentFig);
+    if (link.url) {
+      window.open(link.url, "_blank");
+      setViewerHandoff(null);
+      return;
+    }
+    // Too large for a direct link: upload (encrypted) to a temporary host.
+    setViewerHandoff({ kind: "uploading" });
+    try {
+      const url = await uploadFigureForViewer(currentFig);
+      setViewerHandoff({ kind: "ready", url });
+    } catch {
+      setViewerHandoff({ kind: "failed", baseUrl: link.baseUrl });
+    }
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
       {/* Tab bar + download */}
@@ -139,12 +166,53 @@ export function PlotViewerApp() {
             ))}
           <div style={{ flex: 1 }} />
           <button
+            onClick={handleOpenInViewer}
+            style={downloadBtnStyle}
+            title="Open this figure in the numbl figure viewer (new tab)"
+          >
+            ↗ Viewer
+          </button>
+          <button
             onClick={handleDownload}
             disabled={downloading}
             style={downloadBtnStyle}
             title="Download this figure's data as an HDF5 (.h5) file"
           >
             {downloading ? "Saving…" : "⬇ Data (.h5)"}
+          </button>
+        </div>
+      )}
+
+      {viewerHandoff && (
+        <div style={noticeStyle}>
+          {viewerHandoff.kind === "uploading" && (
+            <span>Preparing a temporary link to the figure viewer…</span>
+          )}
+          {viewerHandoff.kind === "ready" && (
+            <span>
+              This figure was too large for a direct link, so it was uploaded
+              (encrypted, temporary).{" "}
+              <a href={viewerHandoff.url} target="_blank" rel="noreferrer">
+                Open in figure viewer
+              </a>
+            </span>
+          )}
+          {viewerHandoff.kind === "failed" && (
+            <span>
+              This figure is too large to open through a link, and the temporary
+              upload failed. Download it with “⬇ Data (.h5)”, then{" "}
+              <a href={viewerHandoff.baseUrl} target="_blank" rel="noreferrer">
+                open the figure viewer
+              </a>{" "}
+              and load the file.
+            </span>
+          )}
+          <button
+            onClick={() => setViewerHandoff(null)}
+            style={noticeDismissStyle}
+            title="Dismiss"
+          >
+            ✕
           </button>
         </div>
       )}
@@ -193,6 +261,27 @@ const tabBarStyle: React.CSSProperties = {
   padding: "4px 8px",
   background: "#f0f0f0",
   borderBottom: "1px solid #ccc",
+};
+
+const noticeStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  padding: "8px 12px",
+  background: "#fff8e1",
+  borderBottom: "1px solid #f0e0a0",
+  fontFamily: "sans-serif",
+  fontSize: 13,
+  color: "#5c4a00",
+};
+
+const noticeDismissStyle: React.CSSProperties = {
+  marginLeft: "auto",
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  fontSize: 14,
+  color: "#5c4a00",
 };
 
 const downloadBtnStyle: React.CSSProperties = {
