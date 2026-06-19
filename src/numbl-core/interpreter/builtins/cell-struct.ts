@@ -252,6 +252,18 @@ registerIBuiltin({
           if (args.length === 1) return RTV.cell([A], [1, 1]);
           A = RTV.tensor(allocFloat64Array([A ? 1 : 0]), [1, 1]);
         }
+        // MATLAB num2cell wraps each element of ANY array — including struct
+        // arrays — in a 1x1 cell. A scalar struct -> a 1x1 cell; a struct array
+        // (modelled as 1xN in numbl, matching size()) -> a 1xN cell of scalar
+        // structs. RTV.cell increfs its contents, so sharing the existing
+        // struct elements is safe.
+        if (isRuntimeStruct(A)) {
+          return RTV.cell([A], [1, 1]);
+        }
+        if (isRuntimeStructArray(A)) {
+          const elems = A.elements as RuntimeValue[];
+          return RTV.cell([...elems], [1, elems.length]);
+        }
         if (!isRuntimeTensor(A))
           throw new RuntimeError(
             "num2cell: first argument must be a numeric array"
