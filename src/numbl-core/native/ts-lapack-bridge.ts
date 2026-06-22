@@ -817,6 +817,28 @@ function svd(
   computeUV: boolean
 ): { U?: Float64Array; S: Float64Array; V?: Float64Array } {
   const k = Math.min(m, n);
+
+  // Match MATLAB / the native addon: non-finite input yields NaN outputs
+  // rather than a DBDSQR-convergence error from dgesvd.
+  let finite = true;
+  for (let i = 0; i < data.length; i++) {
+    if (!Number.isFinite(data[i])) {
+      finite = false;
+      break;
+    }
+  }
+  if (!finite) {
+    const sNan = allocFloat64Array(k).fill(NaN);
+    if (!computeUV) return { S: sNan };
+    const uCols = econ ? k : m;
+    const vCols = econ ? k : n;
+    return {
+      U: allocFloat64Array(m * uCols).fill(NaN),
+      S: sNan,
+      V: allocFloat64Array(n * vCols).fill(NaN),
+    };
+  }
+
   const a = allocFloat64Array(data); // dgesvd overwrites A
 
   const s = allocFloat64Array(k);

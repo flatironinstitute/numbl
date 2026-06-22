@@ -15,6 +15,8 @@
 
 #include "numbl_addon_common.h"
 #include <string>
+#include <cmath>
+#include <limits>
 
 // ── svd() ─────────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,28 @@ Napi::Value Svd(const Napi::CallbackInfo& info) {
 
   double* u_ptr  = (jobz == 'N') ? nullptr : u_vec.data();
   double* vt_ptr = (jobz == 'N') ? nullptr : vt_vec.data();
+
+  // MATLAB's svd/norm return NaN for non-finite input rather than erroring.
+  // LAPACK's dgesdd instead reports an illegal argument (and OpenBLAS prints
+  // xerbla noise to stderr), so short-circuit here with NaN-filled outputs.
+  {
+    bool finite = true;
+    for (int i = 0; i < m * n; i++)
+      if (!std::isfinite(a[i])) { finite = false; break; }
+    if (!finite) {
+      const double qnan = std::numeric_limits<double>::quiet_NaN();
+      std::fill(s.begin(), s.end(), qnan);
+      auto result = Napi::Object::New(env);
+      result.Set("S", vecToF64(env, s));
+      if (computeUV) {
+        std::fill(u_vec.begin(), u_vec.end(), qnan);
+        result.Set("U", vecToF64(env, u_vec));
+        std::vector<double> v_nan(vt_vec.size(), qnan);
+        result.Set("V", vecToF64(env, v_nan));
+      }
+      return result;
+    }
+  }
 
   int lwork = -1;
   double work_query = 0.0;
@@ -191,6 +215,32 @@ Napi::Value SvdComplex(const Napi::CallbackInfo& info) {
 
   lapack_complex_double* u_ptr  = (jobz == 'N') ? nullptr : u_vec.data();
   lapack_complex_double* vt_ptr = (jobz == 'N') ? nullptr : vt_vec.data();
+
+  // Match MATLAB: non-finite input yields NaN outputs rather than a LAPACK
+  // illegal-argument error (and OpenBLAS xerbla noise on stderr).
+  {
+    bool finite = true;
+    for (int i = 0; i < m * n; i++)
+      if (!std::isfinite(a[i].real) || !std::isfinite(a[i].imag)) {
+        finite = false; break;
+      }
+    if (!finite) {
+      const double qnan = std::numeric_limits<double>::quiet_NaN();
+      std::vector<double> s_nan(k, qnan);
+      auto result = Napi::Object::New(env);
+      result.Set("S", vecToF64(env, s_nan));
+      if (computeUV) {
+        int u_size = (jobz == 'S') ? m * k : m * m;
+        int v_size = (jobz == 'S') ? k * n : n * n;
+        std::vector<double> u_nan(u_size, qnan), v_nan(v_size, qnan);
+        result.Set("URe", vecToF64(env, u_nan));
+        result.Set("UIm", vecToF64(env, u_nan));
+        result.Set("VRe", vecToF64(env, v_nan));
+        result.Set("VIm", vecToF64(env, v_nan));
+      }
+      return result;
+    }
+  }
 
   // rwork size for zgesdd
   int rwork_size;

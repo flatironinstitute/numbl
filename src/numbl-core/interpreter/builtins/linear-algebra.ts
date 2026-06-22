@@ -237,8 +237,42 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
     return RTV.num(maxRowSum);
   }
   if (p === 2) {
+    // Match MATLAB: a matrix with any NaN has 2-norm NaN; otherwise any Inf
+    // gives 2-norm Inf. (svd of non-finite input returns NaN, so handle here.)
+    let anyNaN = false;
+    let anyInf = false;
+    for (let i = 0; i < v.data.length; i++) {
+      const re = v.data[i];
+      const im = imag ? imag[i] : 0;
+      if (Number.isNaN(re) || Number.isNaN(im)) anyNaN = true;
+      else if (!isFinite(re) || !isFinite(im)) anyInf = true;
+    }
+    if (anyNaN) return RTV.num(NaN);
+    if (anyInf) return RTV.num(Infinity);
+
+    // The matrix 2-norm is the largest singular value. For complex A = X + iY,
+    // use the real embedding R = [X -Y; Y X] (2m×2n): its singular values are
+    // those of A (each doubled), so max(svd(R)) = ‖A‖₂. This lets the complex
+    // 2-norm use the real SVD (available on both bridges); using only the real
+    // part would be wrong.
     const bridge = getEffectiveBridge("norm", "svd");
     if (bridge && bridge.svd) {
+      if (imag) {
+        const R = allocFloat64Array(4 * rows * cols);
+        const tm = 2 * rows;
+        for (let j = 0; j < cols; j++) {
+          for (let i = 0; i < rows; i++) {
+            const a = v.data[j * rows + i];
+            const b = imag[j * rows + i];
+            R[j * tm + i] = a; // top-left   X
+            R[j * tm + (rows + i)] = b; // bottom-left  Y
+            R[(cols + j) * tm + i] = -b; // top-right   -Y
+            R[(cols + j) * tm + (rows + i)] = a; // bottom-right X
+          }
+        }
+        const result = bridge.svd(R, tm, 2 * cols, false, false);
+        return RTV.num(result.S[0]);
+      }
       const f64 =
         v.data instanceof Float64Array ? v.data : allocFloat64Array(v.data);
       const result = bridge.svd(f64, rows, cols, false, false);
