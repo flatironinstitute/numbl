@@ -682,10 +682,11 @@ function arrayfunCellfunImpl(
     throw new RuntimeError(`${name}: first argument must be a function`);
   };
 
-  // Helper to get the i-th element from an input array (cell or tensor)
+  // Helper to get the i-th element from an input array (cell, tensor, or struct array)
   const getElem = (arr: RuntimeValue, i: number): unknown => {
     if (isRuntimeCell(arr)) return arr.data[i];
     if (isRuntimeTensor(arr)) return arr.data[i];
+    if (isRuntimeStructArray(arr)) return arr.elements[i];
     return arr; // scalar - broadcast
   };
 
@@ -693,6 +694,7 @@ function arrayfunCellfunImpl(
   const getLen = (arr: RuntimeValue): number => {
     if (isRuntimeCell(arr)) return arr.data.length;
     if (isRuntimeTensor(arr)) return arr.data.length;
+    if (isRuntimeStructArray(arr)) return arr.elements.length;
     return 1;
   };
 
@@ -731,11 +733,15 @@ function arrayfunCellfunImpl(
     if (allLogical && arrArg.data.length > 0) result._isLogical = true;
     return result;
   }
-  if (isRuntimeCell(arrArg) || extraInputs.length > 0 || nargout > 1) {
+  if (
+    isRuntimeCell(arrArg) ||
+    isRuntimeStructArray(arrArg) ||
+    extraInputs.length > 0 ||
+    nargout > 1
+  ) {
     const len = getLen(arrArg);
-    const shape = isRuntimeCell(arrArg)
-      ? [...arrArg.shape]
-      : isRuntimeTensor(arrArg)
+    const shape =
+      isRuntimeCell(arrArg) || isRuntimeTensor(arrArg)
         ? [...arrArg.shape]
         : [1, len];
 

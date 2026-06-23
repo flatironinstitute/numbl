@@ -13,4 +13,10 @@ assert(isstruct(w2));
 assert(strcmp(w2.identifier, 'MATLAB:nearlySingularMatrix'));
 warning(w2.state, w2.identifier);
 
+% warning('query', 'ID') returns the current state struct (without changing it)
+wq = warning('query', 'nrbderiv:SecondDerivative');
+assert(isstruct(wq));
+assert(strcmp(wq.state, 'on'));
+assert(strcmp(wq.identifier, 'nrbderiv:SecondDerivative'));
+
 disp('SUCCESS')

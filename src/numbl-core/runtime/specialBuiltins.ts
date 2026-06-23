@@ -198,15 +198,24 @@ export function registerSpecialBuiltins(rt: Runtime): void {
   registerSpecial("warning", (nargout, args) => {
     if (args.length === 0) return nargout >= 1 ? RTV.num(0) : undefined;
     const margs = args.map(a => ensureRuntimeValue(a));
-    // warning('on'/'off', id) — state query/set form
+    // warning('on'/'off'/'query', id) — state query/set form
     if (
       margs.length === 2 &&
       isRuntimeChar(margs[0]) &&
       isRuntimeChar(margs[1])
     ) {
-      const state = toString(margs[0]);
-      if (state === "on" || state === "off") {
+      const mode = toString(margs[0]);
+      if (mode === "on" || mode === "off") {
         if (nargout === 0) return undefined;
+        return RTV.struct(
+          new Map<string, RuntimeValue>([
+            ["state", RTV.char("on")],
+            ["identifier", margs[1]],
+          ])
+        );
+      }
+      if (mode === "query") {
+        // numbl does not track per-id enable state, so report 'on'.
         return RTV.struct(
           new Map<string, RuntimeValue>([
             ["state", RTV.char("on")],
