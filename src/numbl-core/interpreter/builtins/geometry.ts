@@ -83,7 +83,11 @@ function simplexVolume(
 
 /** Triangulate points and pack the resulting simplices into a numt-by-(dim+1)
  *  tensor of 1-based vertex indices. */
-function triangulateToTensor(points: number[][], dim: number): RuntimeTensor {
+function triangulateToTensor(
+  points: number[][],
+  dim: number,
+  orientCCW = false
+): RuntimeTensor {
   // The qhull WASM backend (exact and robust to cospherical/coplanar input
   // such as a regular grid) is installed at startup. It must be present.
   const backend = getDelaunayBackend();
@@ -117,6 +121,22 @@ function triangulateToTensor(points: number[][], dim: number): RuntimeTensor {
       : raw;
   const numCells = cells.length;
   const cols = dim + 1;
+  // MATLAB's delaunay returns 2-D triangles with a consistent CCW winding
+  // (positive signed area). Swap the last two vertices of any clockwise
+  // triangle so downstream code (boundary tracing, signed areas) can rely on
+  // it. Tetrahedra (3-D) carry no analogous MATLAB guarantee.
+  if (orientCCW && dim === 2) {
+    for (const cell of cells) {
+      const [a, b, c] = cell;
+      const signedArea2 =
+        (points[b][0] - points[a][0]) * (points[c][1] - points[a][1]) -
+        (points[c][0] - points[a][0]) * (points[b][1] - points[a][1]);
+      if (signedArea2 < 0) {
+        cell[1] = c;
+        cell[2] = b;
+      }
+    }
+  }
   const out = allocFloat64Array(numCells * cols);
   // Store column-major, converting 0-based indices to 1-based.
   for (let i = 0; i < numCells; i++) {
@@ -184,7 +204,7 @@ defineBuiltin({
             `delaunay: need at least ${dim + 1} points for a ${dim}-D triangulation`
           );
 
-        return triangulateToTensor(points, dim);
+        return triangulateToTensor(points, dim, true);
       },
     },
   ],
