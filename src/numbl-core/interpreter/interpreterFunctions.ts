@@ -80,7 +80,13 @@ export function callFunction(
       },
     };
     const result = specialHandler(ctx, args, nargout);
-    if (result !== FALL_THROUGH) return result;
+    if (result !== FALL_THROUGH) {
+      // A special builtin handled the call without reaching callUserFunction,
+      // so the pendingInputNames set for this call site (and any callbacks the
+      // builtin invokes, e.g. feval/cellfun) must not leak to a later call.
+      this.pendingInputNames = undefined;
+      return result;
+    }
   }
 
   // 1. Check nested functions (share parent scope)
@@ -555,6 +561,12 @@ export function callUserFunction(
     throw new RuntimeError("Too many output arguments.");
   }
 
+  // Consume the call-site argument names recorded by evalFuncCall (for
+  // inputname). One-shot: clear immediately so it never leaks to a later
+  // call that did not originate from an interpreted call expression.
+  const callInputNames = this.pendingInputNames;
+  this.pendingInputNames = undefined;
+
   // Refcount-driven COW handles aliasing across function boundaries:
   // each arg's incref at parameter binding inflates the count, so any
   // mutation through the parameter sees rc>1 and copies. Passing
@@ -608,6 +620,7 @@ export function callUserFunction(
   }
   fnEnv.set("$nargin", narginOverride ?? args.length);
   fnEnv.set("$nargout", nargout);
+  fnEnv.inputArgNames = callInputNames;
 
   // Pre-register nested function definitions (hoisted, like MATLAB)
   for (const stmt of fn.body) {
@@ -744,6 +757,12 @@ export function callNestedFunction(
   // functions as pure (parameter-only), so it cannot handle shared state.
   // Always use the interpreter for nested calls.
 
+  // Consume the call-site argument names (for inputname), same as
+  // callUserFunction. Without this a nested function would have no names of
+  // its own (and must not inherit the parent frame's).
+  const callInputNames = this.pendingInputNames;
+  this.pendingInputNames = undefined;
+
   const fnEnv = new Environment(parentEnv);
   fnEnv.isNested = true;
   fnEnv.rt = this.rt;
@@ -765,6 +784,7 @@ export function callNestedFunction(
   }
   fnEnv.setLocal("$nargin", args.length);
   fnEnv.setLocal("$nargout", nargout);
+  fnEnv.inputArgNames = callInputNames;
 
   const savedEnv = this.env;
   this.env = fnEnv;

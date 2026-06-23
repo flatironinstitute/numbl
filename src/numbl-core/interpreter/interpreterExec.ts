@@ -734,6 +734,44 @@ export function evalExprNargout(
   }
 }
 
+/** Compute the call-site variable names for `inputname`, aligned to the
+ *  argument expressions. Entry i is the name of the variable passed as
+ *  argument i+1, or '' if that argument is not a plain workspace variable.
+ *
+ *  Per MATLAB: an argument that uses cell `{}` or dot `.` indexing produces
+ *  a comma-separated list, making the position of every following argument
+ *  dynamic — so that argument and all subsequent ones report ''. Plain
+ *  literals, expressions, and paren-indexing report '' only for themselves.
+ *
+ *  The returned array may be shorter than the flattened arg count (when an
+ *  argument expanded to a CSL); callers treat out-of-range indices as ''.
+ */
+export function computeInputNames(
+  argExprs: Expr[],
+  callerEnv: Environment
+): string[] {
+  const names: string[] = [];
+  let blanked = false;
+  for (const a of argExprs) {
+    if (blanked) {
+      names.push("");
+    } else if (a.type === "Ident" && callerEnv.has(a.name)) {
+      names.push(a.name);
+    } else if (
+      a.type === "IndexCell" ||
+      a.type === "Member" ||
+      a.type === "MemberDynamic"
+    ) {
+      // cell / dot indexing: '' here and for everything after it
+      names.push("");
+      blanked = true;
+    } else {
+      names.push("");
+    }
+  }
+  return names;
+}
+
 export function evalArgs(this: Interpreter, argExprs: Expr[]): unknown[] {
   const args: unknown[] = [];
   for (const a of argExprs) {
@@ -929,6 +967,11 @@ export function evalFuncCall(
     const c = getConstant(expr.name);
     if (c !== undefined) return c;
   }
+  // Record call-site argument names so the callee's inputname() can read
+  // them. Set after evalArgs (which may itself make calls) and consumed at
+  // the start of callUserFunction.
+  this.pendingInputNames =
+    expr.args.length > 0 ? computeInputNames(expr.args, this.env) : undefined;
   return this.callFunction(expr.name, args, nargout);
 }
 

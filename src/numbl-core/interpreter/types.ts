@@ -59,6 +59,13 @@ export class Environment {
   }
   /** Function ID for persistent variable storage */
   persistentFuncId: string | undefined;
+  /** Call-site variable names of this frame's arguments, for `inputname`.
+   *  Entry i is the name of the variable passed as argument i+1, or '' if
+   *  that argument was not a plain variable. Undefined when the call did
+   *  not originate from an interpreted call expression (e.g. feval, JIT).
+   *  Read directly off the executing frame — the interpreter has only
+   *  function-level scoping, so `this.env` is the frame while a body runs. */
+  inputArgNames: string[] | undefined;
   /** Back-reference to the runtime (needed for global/persistent access) */
   rt: Runtime | null = null;
   /** Set when a `@nestedFn` handle has been created that captures this env

@@ -488,6 +488,31 @@ register("nargout", (ctx, args) => {
   return v !== undefined ? v : 0;
 });
 
+register("inputname", (ctx, args) => {
+  if (args.length !== 1) return FALL_THROUGH;
+  // inputname is only meaningful inside a function; $nargin marks a frame.
+  const narginVal = ctx.env.get("$nargin");
+  if (typeof narginVal !== "number") {
+    throw new RuntimeError(
+      "You can only call 'inputname' from within a MATLAB function."
+    );
+  }
+  const k = toNumber(ensureRuntimeValue(args[0]));
+  if (!Number.isInteger(k) || k < 1) {
+    throw new RuntimeError(
+      "Argument number must be a positive integer scalar."
+    );
+  }
+  if (k > narginVal) {
+    throw new RuntimeError(
+      "Argument number exceeds number of function input arguments."
+    );
+  }
+  const names = ctx.env.inputArgNames;
+  const name = names && k <= names.length ? names[k - 1] : "";
+  return RTV.char(name);
+});
+
 register("narginchk", (ctx, args) => {
   if (args.length !== 2) return FALL_THROUGH;
   const narginVal = ctx.env.get("$nargin");

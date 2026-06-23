@@ -57,6 +57,11 @@ export class Interpreter {
   /** @internal The caller's environment — for evalin/assignin('caller', ...) */
   callerEnv: Environment | undefined;
 
+  /** @internal Call-site variable names for the next user-function call, set
+   *  by `evalFuncCall` and consumed by `callUserFunction` to support
+   *  `inputname`. One-shot: cleared as soon as it is consumed. */
+  pendingInputNames: string[] | undefined;
+
   /** @internal Stack of [base, dimIndex, numIndices] for resolving `end` keyword in indexing. */
   endContextStack: Array<{
     base: unknown;
