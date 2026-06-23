@@ -46,7 +46,7 @@ import type { Interpreter } from "./interpreter.js";
 import { makeRootContext } from "../executors/registry.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 import { cowCopy } from "../runtime/cow.js";
-import { isShared } from "../runtime/refcount.js";
+import { incref, isShared } from "../runtime/refcount.js";
 
 // ── Statement execution ──────────────────────────────────────────────────
 
@@ -349,6 +349,14 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
     case "Global": {
       for (const name of stmt.names) {
         this.env.globalNames.add(name);
+        // MATLAB: declaring a global that doesn't exist yet creates it,
+        // initialized to []. This makes reads (e.g. isempty(x)) work
+        // before any assignment instead of erroring as undefined.
+        if (this.rt && !(name in this.rt.$g)) {
+          const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
+          incref(empty);
+          this.rt.$g[name] = empty;
+        }
       }
       return null;
     }
