@@ -1054,6 +1054,18 @@ function indexIntoChar(
   if (indices.length === 1) {
     const idx = indices[0];
     if (isColonIndex(idx)) return base;
+    if (isRuntimeTensor(idx) && idx._isLogical) {
+      // Logical mask: select chars where the mask is true.
+      let result = "";
+      for (let k = 0; k < idx.data.length; k++) {
+        if (idx.data[k] !== 0) {
+          if (k >= base.value.length)
+            throw new RuntimeError("Index exceeds char array length");
+          result += base.value[k];
+        }
+      }
+      return RTV.char(result);
+    }
     if (isRuntimeTensor(idx)) {
       let result = "";
       for (let k = 0; k < idx.data.length; k++) {
@@ -1074,23 +1086,27 @@ function indexIntoChar(
     const rowIdx = indices[0];
     const colIdx = indices[1];
 
-    let rows: number[];
-    if (isColonIndex(rowIdx)) {
-      rows = Array.from({ length: nRows }, (_, i) => i);
-    } else if (isRuntimeTensor(rowIdx)) {
-      rows = Array.from(rowIdx.data, (v: number) => Math.round(v) - 1);
-    } else {
-      rows = [Math.round(toNumber(rowIdx)) - 1];
-    }
+    // Logical masks select the positions where the mask is true; numeric
+    // indices are 1-based.
+    const toPositions = (idx: RuntimeValue): number[] => {
+      if (isRuntimeTensor(idx) && idx._isLogical) {
+        const out: number[] = [];
+        for (let i = 0; i < idx.data.length; i++)
+          if (idx.data[i] !== 0) out.push(i);
+        return out;
+      }
+      if (isRuntimeTensor(idx))
+        return Array.from(idx.data, (v: number) => Math.round(v) - 1);
+      return [Math.round(toNumber(idx)) - 1];
+    };
 
-    let cols: number[];
-    if (isColonIndex(colIdx)) {
-      cols = Array.from({ length: nCols }, (_, i) => i);
-    } else if (isRuntimeTensor(colIdx)) {
-      cols = Array.from(colIdx.data, (v: number) => Math.round(v) - 1);
-    } else {
-      cols = [Math.round(toNumber(colIdx)) - 1];
-    }
+    const rows: number[] = isColonIndex(rowIdx)
+      ? Array.from({ length: nRows }, (_, i) => i)
+      : toPositions(rowIdx);
+
+    const cols: number[] = isColonIndex(colIdx)
+      ? Array.from({ length: nCols }, (_, i) => i)
+      : toPositions(colIdx);
 
     let result = "";
     for (const r of rows) {
@@ -1593,6 +1609,14 @@ function storeIntoTensorByVector(
 ): RuntimeValue {
   // Logical indexing: base(mask) = rhs
   if (idx._isLogical) {
+    // A 1×1 RHS acts as a scalar and broadcasts to every masked position
+    // (MATLAB: x(mask) = c). Larger RHS must match the count exactly.
+    if (isRuntimeTensor(rhs) && rhs.data.length === 1) {
+      rhs =
+        rhs.imag && rhs.imag[0] !== 0
+          ? RTV.complex(rhs.data[0], rhs.imag[0])
+          : RTV.num(rhs.data[0]);
+    }
     const { re: rhsRe, im: rhsIm } = isRuntimeTensor(rhs)
       ? { re: null, im: null }
       : toReIm(rhs);

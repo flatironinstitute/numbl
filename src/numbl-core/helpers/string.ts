@@ -289,6 +289,24 @@ export function sprintfFormat(fmt: string, args: RuntimeValue[]): string {
           case "t":
             result += "\t";
             break;
+          case "r":
+            result += "\r";
+            break;
+          case "a":
+            result += "\x07"; // alarm/bell
+            break;
+          case "b":
+            result += "\b";
+            break;
+          case "f":
+            result += "\f";
+            break;
+          case "v":
+            result += "\v";
+            break;
+          case "0":
+            result += "\0";
+            break;
           case "\\":
             result += "\\";
             break;

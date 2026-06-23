@@ -339,6 +339,10 @@ function bitwiseOp(
   op: (a: number, b: number) => number,
   name: string
 ): RuntimeValue {
+  // MATLAB accepts logical operands, treating them as 0/1. (Logical tensors
+  // are RuntimeTensors and flow through the tensor cases below.)
+  if (typeof a === "boolean") a = a ? 1 : 0;
+  if (typeof b === "boolean") b = b ? 1 : 0;
   if (isRuntimeNumber(a) && isRuntimeNumber(b)) {
     return RTV.num(op(Math.round(a as number), Math.round(b as number)));
   }
