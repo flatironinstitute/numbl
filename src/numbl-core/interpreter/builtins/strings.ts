@@ -51,7 +51,14 @@ function applyTextFn(v: RuntimeValue, fn: (s: string) => string): RuntimeValue {
     }
     return RTV.cell(out, [...v.shape]);
   }
-  if (isRuntimeChar(v)) return RTV.char(fn(v.value));
+  if (isRuntimeChar(v)) {
+    // Preserve multi-row char-matrix shape (e.g. lower/upper of a padded
+    // char matrix): map fn over each row, then re-stack.
+    if (v.shape && (v.shape[0] ?? 1) > 1) {
+      return charRowsToMatrix(valueToCharRows(v).map(fn));
+    }
+    return RTV.char(fn(v.value));
+  }
   if (isRuntimeString(v)) return RTV.string(fn(toString(v)));
   return v;
 }
@@ -1279,6 +1286,112 @@ registerIBuiltin({
 
 // ── Type conversion: char, string ─────────────────────────────────────
 
+/** Collect the char rows of a char matrix / string / cellstr, flattening a
+ *  cell array element-wise (column-major). */
+function collectRows(v: RuntimeValue): string[] {
+  if (isRuntimeCell(v)) {
+    const rows: string[] = [];
+    for (const el of v.data) rows.push(...valueToCharRows(el));
+    return rows;
+  }
+  return valueToCharRows(v);
+}
+
+// strmatch (legacy): find rows of a text array that begin with (or, with
+// 'exact', equal) a pattern. Ported from MATLAB's strmatch.m.
+registerIBuiltin({
+  name: "strmatch",
+  help: {
+    signatures: [
+      "x = strmatch(str, strarray)",
+      "x = strmatch(str, strarray, 'exact')",
+    ],
+    description:
+      "(Legacy) Find rows of STRARRAY that begin with STR, or that equal STR when 'exact' is given. Returns a column vector of matching row indices.",
+  },
+  resolve: argTypes => {
+    if (argTypes.length < 2 || argTypes.length > 3) return null;
+    if (!isTextType(argTypes[0])) return null;
+    const sa = argTypes[1];
+    if (sa.kind !== "char" && sa.kind !== "string" && sa.kind !== "cell")
+      return null;
+    return {
+      outputTypes: [{ kind: "tensor", isComplex: false }],
+      apply: args => {
+        const str = toString(args[0]);
+        let rows = collectRows(args[1]);
+        const n = rows.length === 0 ? 0 : Math.max(...rows.map(r => r.length));
+        rows = rows.map(r => r.padEnd(n, " "));
+        const exactMatch = args.length === 3;
+        let s = str;
+        let len = s.length;
+        if (len > n) {
+          return RTV.tensor(allocFloat64Array(0), [0, 1]);
+        }
+        if (exactMatch && len < n) {
+          // Pad pattern with nulls if the last column holds a null, else
+          // spaces (matches MATLAB's strmatch.m).
+          const useNull = rows.some(r => r.charCodeAt(n - 1) === 0);
+          s = s.padEnd(n, useNull ? "\0" : " ");
+          len = n;
+        }
+        const matches: number[] = [];
+        for (let r = 0; r < rows.length; r++) {
+          let ok = true;
+          for (let i = 0; i < len; i++) {
+            if (rows[r][i] !== s[i]) {
+              ok = false;
+              break;
+            }
+          }
+          if (ok) matches.push(r + 1);
+        }
+        return RTV.tensor(allocFloat64Array(matches), [matches.length, 1]);
+      },
+    };
+  },
+});
+
+/** Extract the character rows of a value (one entry per row), for char() of
+ *  a cell array. A char matrix yields its rows; a string/scalar yields one
+ *  row; a numeric array yields one row of char codes per matrix row. */
+function valueToCharRows(v: RuntimeValue): string[] {
+  if (isRuntimeChar(v)) {
+    const cols = v.shape ? (v.shape[1] ?? v.value.length) : v.value.length;
+    const numRows = v.shape ? (v.shape[0] ?? 1) : 1;
+    if (numRows <= 1) return [v.value];
+    const out: string[] = [];
+    for (let r = 0; r < numRows; r++)
+      out.push(v.value.slice(r * cols, (r + 1) * cols));
+    return out;
+  }
+  if (isRuntimeString(v)) return [v];
+  if (isRuntimeNumber(v)) return [String.fromCharCode(Math.round(v))];
+  if (isRuntimeTensor(v)) {
+    const rows = v.shape.length >= 2 ? (v.shape[0] ?? 1) : 1;
+    const cols = v.shape.length >= 2 ? (v.shape[1] ?? 0) : v.data.length;
+    const out: string[] = [];
+    for (let r = 0; r < rows; r++) {
+      let s = "";
+      for (let c = 0; c < cols; c++)
+        s += String.fromCharCode(Math.round(v.data[c * rows + r]));
+      out.push(s);
+    }
+    return out;
+  }
+  throw new RuntimeError("char: unsupported cell element type");
+}
+
+/** Stack char rows into a row-major RuntimeChar matrix, right-padding each
+ *  row with spaces to the widest row. */
+function charRowsToMatrix(rows: string[]): RuntimeChar {
+  if (rows.length === 0) return RTV.char("");
+  const width = Math.max(...rows.map(r => r.length));
+  const padded = rows.map(r => r.padEnd(width, " "));
+  if (rows.length === 1) return RTV.char(padded[0]);
+  return new RuntimeChar(padded.join(""), [rows.length, width]);
+}
+
 registerIBuiltin({
   name: "char",
   resolve: argTypes => {
@@ -1288,7 +1401,8 @@ registerIBuiltin({
       a.kind !== "char" &&
       a.kind !== "string" &&
       a.kind !== "number" &&
-      a.kind !== "tensor"
+      a.kind !== "tensor" &&
+      a.kind !== "cell"
     )
       return null;
     return {
@@ -1305,6 +1419,14 @@ registerIBuiltin({
             chars.push(String.fromCharCode(Math.round(v.data[i])));
           }
           return RTV.char(chars.join(""));
+        }
+        // char(cellArray): each element becomes one or more rows, all
+        // right-padded with spaces to the widest row. Matches MATLAB's
+        // conversion of a cellstr to a padded char matrix.
+        if (isRuntimeCell(v)) {
+          const rows: string[] = [];
+          for (const el of v.data) rows.push(...valueToCharRows(el));
+          return charRowsToMatrix(rows);
         }
         throw new RuntimeError("char: unsupported arguments");
       },

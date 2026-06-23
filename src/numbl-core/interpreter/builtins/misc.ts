@@ -511,6 +511,20 @@ registerIBuiltin({
   }),
 });
 
+// waitbar — numbl is headless, so the progress dialog renders nothing. All
+// forms (waitbar(x), waitbar(x,msg), waitbar(x,h), waitbar(x,h,msg),
+// waitbar(...,'Name',value)) are accepted; a placeholder figure handle is
+// returned when one is requested (`h = waitbar(...)`). `close(h)` already
+// ignores its argument, so the handle can be passed straight back.
+registerIBuiltin({
+  name: "waitbar",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: (_args, nargout) =>
+      nargout >= 1 ? RTV.dummyHandle() : (undefined as unknown as RuntimeValue),
+  }),
+});
+
 // get(handle, propName) — return property value or dummy handle
 registerIBuiltin({
   name: "get",

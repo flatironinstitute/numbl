@@ -112,6 +112,12 @@ defineBuiltin({
   cases: [anyToLogicalCase(args => isRuntimeChar(args[0]))],
 });
 
+// Legacy alias for ischar (removed from modern MATLAB docs but still works).
+defineBuiltin({
+  name: "isstr",
+  cases: [anyToLogicalCase(args => isRuntimeChar(args[0]))],
+});
+
 defineBuiltin({
   name: "isstring",
   cases: [anyToLogicalCase(args => isRuntimeString(args[0]))],
@@ -501,6 +507,37 @@ defineBuiltin({
     },
   ],
 });
+
+// ── superiorto / inferiorto ───────────────────────────────────────────────
+// Old-style (pre-classdef) class-precedence declarations. Called inside a
+// constructor to rank the class being defined relative to other classes for
+// function dispatch. numbl already dispatches to class methods ahead of
+// builtins when an argument is a class instance, so these are accepted as
+// no-ops (they take one or more class-name strings and return nothing).
+
+for (const name of ["superiorto", "inferiorto"]) {
+  defineBuiltin({
+    name,
+    help: {
+      signatures: [`${name}('Class1', 'Class2', ...)`],
+      description:
+        name === "superiorto"
+          ? "Establish superior class relationship (old-style class precedence). Accepted as a no-op."
+          : "Establish inferior class relationship (old-style class precedence). Accepted as a no-op.",
+    },
+    cases: [
+      {
+        match: argTypes => {
+          for (const t of argTypes) {
+            if (t.kind !== "char" && t.kind !== "string") return null;
+          }
+          return [];
+        },
+        apply: () => undefined as unknown as RuntimeValue,
+      },
+    ],
+  });
+}
 
 // ── fieldnames / fields ──────────────────────────────────────────────────
 

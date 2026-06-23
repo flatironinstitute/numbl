@@ -34,7 +34,12 @@
  */
 
 import type { RuntimeValue } from "./types.js";
-import { isRuntimeNumber, isRuntimeTensor } from "./types.js";
+import {
+  isRuntimeNumber,
+  isRuntimeTensor,
+  isRuntimeChar,
+  isRuntimeString,
+} from "./types.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import { toNumber, toString } from "./convert.js";
 import { RuntimeError } from "./error.js";
@@ -328,7 +333,14 @@ export function dispatchPlotBuiltin(
       return true;
     }
     case "close": {
-      if (args.length > 0 && toString(args[0]) === "all") {
+      // close all | close('all') closes every figure. A handle argument
+      // (numeric figure number or a handle object) closes that figure; we
+      // have no per-handle model, so it maps to a plain close. Only attempt
+      // to stringify a text argument — a handle object cannot be stringified.
+      const a0 = args[0];
+      const isText =
+        a0 !== undefined && (isRuntimeChar(a0) || isRuntimeString(a0));
+      if (isText && toString(a0) === "all") {
         plotInstr(instructions, { type: "close_all" });
       } else {
         plotInstr(instructions, { type: "close" });

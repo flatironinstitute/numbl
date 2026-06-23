@@ -516,7 +516,10 @@ function anyAllApply(name: string, mode: "any" | "all") {
     if (isRuntimeComplexNumber(v)) return RTV.logical(v.re !== 0 || v.im !== 0);
     if (isRuntimeTensor(v)) {
       if (args.length === 1) {
-        if (v.data.length === 0) return RTV.logical(mode === "all");
+        // Empties are NOT all scalars: MATLAB reduces along the first
+        // non-singleton dimension, so any(zeros(4,0)) is 1x0 and
+        // any(zeros(0,4)) is 1x4. firstReduceDim returns 0 only for the
+        // genuine scalar-result empties (0x0, row/col vectors).
         const d = firstReduceDim(v.shape);
         if (d === 0) return RTV.logical(scanLogical(v.data, v.imag, mode));
         return logicalAlongDim(v, d, mode);

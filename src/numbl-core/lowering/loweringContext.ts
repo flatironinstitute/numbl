@@ -1033,12 +1033,53 @@ export class LoweringContext {
       }
     }
 
-    // 12. File imports — collect import statements from all file ASTs
+    // 12. File imports — collect import statements from all file ASTs.
+    // `import` is function-scoped in MATLAB, so a function file's imports live
+    // inside the function body (and may appear inside nested blocks). numbl
+    // tracks imports at file granularity, so recurse through nested statement
+    // bodies and merge every import into the file's entry list.
     const fileImports = new Map<string, ImportEntry[]>();
+    const gatherImports = (
+      body: Stmt[],
+      out: (Stmt & { type: "Import" })[]
+    ): void => {
+      for (const stmt of body) {
+        switch (stmt.type) {
+          case "Import":
+            out.push(stmt);
+            break;
+          case "Function":
+          case "While":
+          case "For":
+            gatherImports(stmt.body, out);
+            break;
+          case "If":
+            gatherImports(stmt.thenBody, out);
+            for (const b of stmt.elseifBlocks) gatherImports(b.body, out);
+            if (stmt.elseBody) gatherImports(stmt.elseBody, out);
+            break;
+          case "Switch":
+            for (const c of stmt.cases) gatherImports(c.body, out);
+            if (stmt.otherwise) gatherImports(stmt.otherwise, out);
+            break;
+          case "TryCatch":
+            gatherImports(stmt.tryBody, out);
+            gatherImports(stmt.catchBody, out);
+            break;
+          case "ClassDef":
+            // Methods (incl. the constructor) carry function-scoped imports.
+            for (const member of stmt.members) {
+              if (member.type === "Methods") gatherImports(member.body, out);
+            }
+            break;
+        }
+      }
+    };
     const collectImportsFromBody = (body: Stmt[], fileName: string): void => {
       const entries: ImportEntry[] = [];
-      for (const stmt of body) {
-        if (stmt.type !== "Import") continue;
+      const importStmts: (Stmt & { type: "Import" })[] = [];
+      gatherImports(body, importStmts);
+      for (const stmt of importStmts) {
         if (stmt.wildcard) {
           entries.push({ wildcard: true, namespace: stmt.path.join(".") });
         } else {

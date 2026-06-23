@@ -398,6 +398,84 @@ registerIBuiltin({
   },
 });
 
+// ── getfield / setfield ─────────────────────────────────────────────────
+
+registerIBuiltin({
+  name: "getfield",
+  resolve: argTypes => {
+    if (argTypes.length < 2) return null;
+    return {
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => {
+        // getfield(S, field1, ..., fieldN): walk a chain of field names.
+        // Cell-array {idx} subscripts are not supported.
+        let v = args[0];
+        for (let i = 1; i < args.length; i++) {
+          if (isRuntimeCell(args[i]))
+            throw new RuntimeError(
+              "getfield: index ({}) subscripts are not supported"
+            );
+          if (!isRuntimeStruct(v))
+            throw new RuntimeError("getfield: argument must be a structure");
+          const name = toString(args[i]);
+          if (!v.fields.has(name))
+            throw new RuntimeError(
+              `Reference to non-existent field '${name}'.`
+            );
+          v = v.fields.get(name)!;
+        }
+        return v;
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "setfield",
+  resolve: argTypes => {
+    if (argTypes.length < 3) return null;
+    return {
+      outputTypes: [{ kind: "struct", fields: {} }],
+      apply: args => {
+        // setfield(S, field1, ..., fieldN, value): set a (possibly nested)
+        // field, returning a new struct. Cell-array {idx} subscripts are
+        // not supported.
+        const value = args[args.length - 1];
+        const fieldArgs = args.slice(1, args.length - 1);
+        const setChain = (s: RuntimeValue, depth: number): RuntimeValue => {
+          const fa = fieldArgs[depth];
+          if (isRuntimeCell(fa))
+            throw new RuntimeError(
+              "setfield: index ({}) subscripts are not supported"
+            );
+          const name = toString(fa);
+          // An empty [] target becomes a fresh struct (matches MATLAB).
+          const base = isRuntimeStruct(s)
+            ? s.fields
+            : new Map<string, RuntimeValue>();
+          if (
+            !isRuntimeStruct(s) &&
+            !(isRuntimeTensor(s) && s.data.length === 0)
+          )
+            throw new RuntimeError("setfield: argument must be a structure");
+          const newFields = new Map(base);
+          if (depth === fieldArgs.length - 1) {
+            newFields.set(name, value);
+          } else {
+            const child = newFields.get(name);
+            newFields.set(
+              name,
+              setChain(child ?? RTV.struct(new Map()), depth + 1)
+            );
+          }
+          return RTV.struct(newFields);
+        };
+        return setChain(args[0], 0);
+      },
+    };
+  },
+});
+
 // ── namedargs2cell ──────────────────────────────────────────────────────
 
 registerIBuiltin({
