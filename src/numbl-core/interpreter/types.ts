@@ -72,6 +72,12 @@ export class Environment {
    *  (or an ancestor). Tells the function-exit cleanup that clearing this
    *  env would strand the handle's closure, so locals must be left alive. */
   nestedHandleCreated = false;
+  /** For a nested-function frame: the names of this function's own formal
+   *  input/output arguments. These are always local — a write must never be
+   *  redirected to a same-named variable in the parent, even before the
+   *  output has been assigned. (MATLAB scopes a nested function's formal
+   *  arguments to that function; only other variables are shared.) */
+  nestedLocalNames: Set<string> | undefined;
 
   // `parent` is public so the alias sweep can walk the chain. Read-only
   // outside this class.
@@ -104,7 +110,12 @@ export class Environment {
       if (old !== undefined) decref(this.rt, old);
       return;
     }
-    if (this.isNested && !this.vars.has(name) && this.parent) {
+    if (
+      this.isNested &&
+      !this.vars.has(name) &&
+      this.parent &&
+      !this.nestedLocalNames?.has(name)
+    ) {
       const owner = this.findOwner(name);
       if (owner) {
         owner.setLocal(name, value);

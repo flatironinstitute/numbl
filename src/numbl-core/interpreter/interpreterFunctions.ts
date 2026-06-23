@@ -870,6 +870,10 @@ export function callNestedFunction(
   fnEnv.isNested = true;
   fnEnv.rt = this.rt;
   fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
+  // A nested function's own formal in/out arguments are local to it: writes to
+  // them must never be redirected to a same-named variable in the parent
+  // workspace (e.g. an output `s` that shadows the parent's `s`).
+  fnEnv.nestedLocalNames = new Set([...fn.params, ...fn.outputs]);
 
   const hasVarargin =
     fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";

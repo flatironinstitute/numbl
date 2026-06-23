@@ -761,6 +761,49 @@ defineBuiltin({
 
 // ── repmat ───────────────────────────────────────────────────────────
 
+/** repmat for class instances / object arrays. Tiles the source array
+ *  rRep×cRep times (column-major), mirroring numeric repmat but for objects.
+ *  Value-class elements are deep-copied; handle-class elements are shared
+ *  (see copyClassInstance). Only 2-D tiling is supported. */
+function repmatObjects(
+  v: RuntimeClassInstance | RuntimeClassInstanceArray,
+  repArgs: RuntimeValue[]
+): RuntimeValue {
+  const srcElements = isRuntimeClassInstanceArray(v) ? v.elements : [v];
+  const [rows, cols]: [number, number] = isRuntimeClassInstanceArray(v)
+    ? v.shape
+    : [1, 1];
+  const className = v.className;
+
+  let reps: number[];
+  if (repArgs.length === 1) {
+    const arg1 = repArgs[0];
+    if (isRuntimeTensor(arg1)) {
+      reps = Array.from(arg1.data).map(x => validateSizeArg(x));
+    } else {
+      const n = validateSizeArg(toNumber(arg1));
+      reps = [n, n];
+    }
+  } else {
+    reps = repArgs.map(a => validateSizeArg(toNumber(a)));
+  }
+  const rRep = reps[0] ?? 1;
+  const cRep = reps.length >= 2 ? reps[1] : (reps[0] ?? 1);
+
+  const newRows = rows * rRep;
+  const newCols = cols * cRep;
+  const out: RuntimeClassInstance[] = new Array(Math.max(0, newRows * newCols));
+  for (let J = 0; J < newCols; J++) {
+    for (let I = 0; I < newRows; I++) {
+      const src = srcElements[(I % rows) + (J % cols) * rows];
+      out[I + J * newRows] = copyClassInstance(src);
+    }
+  }
+  return out.length === 1
+    ? out[0]
+    : RTV.classInstanceArray(className, out, [newRows, newCols]);
+}
+
 defineBuiltin({
   name: "repmat",
   cases: [
@@ -785,6 +828,8 @@ defineBuiltin({
         if (args.length < 2)
           throw new RuntimeError("repmat requires at least 2 arguments");
         let v = args[0];
+        if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+          return repmatObjects(v, args.slice(1));
         if (isRuntimeSparseMatrix(v)) v = sparseToDense(v);
         let reps: number[];
         if (args.length === 2) {
