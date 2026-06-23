@@ -16,10 +16,10 @@ import {
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeFunction,
+  RuntimeTensor,
 } from "../../runtime/types.js";
 import type {
   RuntimeValue,
-  RuntimeTensor,
   RuntimeCell,
   RuntimeStruct,
 } from "../../runtime/types.js";
@@ -780,11 +780,21 @@ defineBuiltin({
       },
       apply: args => {
         const v = args[0];
-        if (isRuntimeStructArray(v))
-          return RTV.logical(v.fieldNames.includes(toString(args[1])));
-        if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v))
-          return RTV.logical(false);
-        return RTV.logical(v.fields.has(toString(args[1])));
+        const hasField = (name: string): boolean => {
+          if (isRuntimeStructArray(v)) return v.fieldNames.includes(name);
+          if (!isRuntimeStruct(v) && !isRuntimeClassInstance(v)) return false;
+          return v.fields.has(name);
+        };
+        // Cell array of field names → logical array of the same size
+        if (isRuntimeCell(args[1])) {
+          const cell = args[1] as RuntimeCell;
+          const result = allocFloat64Array(cell.data.length);
+          for (let i = 0; i < cell.data.length; i++) {
+            result[i] = hasField(toString(cell.data[i])) ? 1 : 0;
+          }
+          return new RuntimeTensor(result, cell.shape.slice(), undefined, true);
+        }
+        return RTV.logical(hasField(toString(args[1])));
       },
     },
   ],

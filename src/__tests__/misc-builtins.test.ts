@@ -126,6 +126,12 @@ describe("isfield", () => {
   it("returns false for non-existing field", () => {
     expect(bool("s = struct('x', 1); v = isfield(s, 'y');", "v")).toBe(false);
   });
+
+  it("returns a logical array for a cell array of field names", () => {
+    const code = "s = struct('x', 1, 'y', 2); v = isfield(s, {'x', 'z', 'y'});";
+    expect(tensorData(code, "v")).toEqual([1, 0, 1]);
+    expect(tensorShape(code, "v")).toEqual([1, 3]);
+  });
 });
 
 // ── rmfield ───────────────────────────────────────────────────────────
