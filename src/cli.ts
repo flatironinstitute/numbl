@@ -257,6 +257,7 @@ async function runTests(
   fastMath?: boolean
 ) {
   loadNativeAddon(fastMath ?? false);
+  await loadQhullBackend();
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
 
