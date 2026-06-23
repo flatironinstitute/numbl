@@ -343,6 +343,7 @@ export class Interpreter {
     args: unknown[],
     nargout: number
   ) => unknown;
+  declare declaredNargin: (name: string) => number | undefined;
   declare interpretTarget: (
     target: ResolvedTarget,
     args: unknown[],

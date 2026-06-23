@@ -682,7 +682,15 @@ export function indexStore(
   // replacement of a scalar instance (`obj(1) = other`, k === 0) is left to
   // the subsasgn dispatch below so that custom/overloaded subsasgn and the
   // in-method bypass semantics are preserved.
-  if (indices.length === 1 && isRuntimeClassInstance(ensureRuntimeValue(rhs))) {
+  if (
+    indices.length === 1 &&
+    isRuntimeClassInstance(ensureRuntimeValue(rhs)) &&
+    // Object-array growth uses a numeric position. A char/string index (e.g. a
+    // key into a containers.Map whose value happens to be a class instance)
+    // must fall through to the subsasgn dispatch below, not be coerced to a
+    // number — `toNumber` on a multi-char value throws.
+    !isRuntimeChar(ensureRuntimeValue(indices[0]))
+  ) {
     const k = Math.round(toNumber(ensureRuntimeValue(indices[0]))) - 1;
     const growsArray =
       isRuntimeClassInstanceArray(mv) ||

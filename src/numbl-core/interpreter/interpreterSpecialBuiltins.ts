@@ -10,6 +10,7 @@ import {
   isRuntimeString,
   isRuntimeCell,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeFunction,
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
@@ -46,6 +47,10 @@ export interface InterpreterContext {
         source: string;
       }
     | undefined;
+  /** Public (GetAccess public) property names of a class, including inherited
+   *  ones, in declaration order. Returns undefined if `className` is not a
+   *  known class. Backs `properties(obj)`. */
+  classPublicProperties: (className: string) => string[] | undefined;
 }
 
 export const FALL_THROUGH: unique symbol = Symbol("FALL_THROUGH");
@@ -511,6 +516,25 @@ register("inputname", (ctx, args) => {
   const names = ctx.env.inputArgNames;
   const name = names && k <= names.length ? names[k - 1] : "";
   return RTV.char(name);
+});
+
+register("properties", (ctx, args) => {
+  if (args.length !== 1) return FALL_THROUGH;
+  const v = ensureRuntimeValue(args[0]);
+  // MATLAB: a class object/array lists its public properties; a char/string
+  // that names a class lists that class's properties; everything else
+  // (numeric, char-not-a-class, struct, cell, logical, ...) yields a 0x1 cell.
+  let names: string[] | undefined;
+  if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v)) {
+    names = ctx.classPublicProperties(v.className);
+  } else if (isRuntimeChar(v) || isRuntimeString(v)) {
+    names = ctx.classPublicProperties(toString(v));
+  }
+  if (!names) return RTV.cell([], [0, 1]);
+  return RTV.cell(
+    names.map(n => RTV.string(n)),
+    [names.length, 1]
+  );
 });
 
 register("narginchk", (ctx, args) => {

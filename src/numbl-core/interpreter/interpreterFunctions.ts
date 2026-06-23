@@ -78,6 +78,7 @@ export function callFunction(
           };
         return undefined;
       },
+      classPublicProperties: n => classPublicProperties(this, n),
     };
     const result = specialHandler(ctx, args, nargout);
     if (result !== FALL_THROUGH) {
@@ -110,6 +111,108 @@ export function callFunction(
   }
 
   throw new RuntimeError(`Undefined function or variable '${name}'`);
+}
+
+// ── nargin of a function handle ──────────────────────────────────────────
+
+/** MATLAB `nargin`: the declared input count, negated when the last
+ *  parameter is `varargin`. */
+function narginFromParams(params: string[]): number {
+  const hasVarargin =
+    params.length > 0 && params[params.length - 1] === "varargin";
+  return hasVarargin ? -params.length : params.length;
+}
+
+/** Scan a file's AST for the top-level function `funcName` and return its
+ *  declared parameters. */
+function paramsInFile(
+  interp: Interpreter,
+  fileName: string,
+  funcName: string
+): string[] | undefined {
+  const ast = interp.ctx.getCachedAST(fileName);
+  for (const stmt of ast.body) {
+    if (stmt.type === "Function" && stmt.name === funcName) return stmt.params;
+  }
+  return undefined;
+}
+
+/** Declared input count of the user function a `@name` handle points to,
+ *  resolved the same way a call to `name` would resolve. Returns undefined
+ *  when the target is a builtin or otherwise has no resolvable user-function
+ *  AST (caller falls back to probing / 0). Used to populate
+ *  `nargin(@name)`. */
+export function declaredNargin(
+  this: Interpreter,
+  name: string
+): number | undefined {
+  // Nested functions share the parent scope (checked first, like callFunction).
+  const nested = this.env.getNestedFunction(name);
+  if (nested) return narginFromParams(nested.fn.params);
+
+  const callSite: CallSite = {
+    file: this.currentFile,
+    ...(this.currentClassName ? { className: this.currentClassName } : {}),
+    ...(this.currentMethodName ? { methodName: this.currentMethodName } : {}),
+  };
+  const target = resolveFunction(name, [], callSite, this.functionIndex);
+  if (!target) return undefined;
+
+  let params: string[] | undefined;
+  switch (target.kind) {
+    case "localFunction": {
+      const { source } = target;
+      if (source.from === "main") {
+        params = this.mainLocalFunctions.get(target.name)?.params;
+      } else if (source.from === "workspaceFile") {
+        params =
+          this.findFunctionInWorkspaceFile(source.wsName, target.name)
+            ?.params ?? undefined;
+      } else if (source.from === "classFile") {
+        params =
+          this.findFunctionInClassFile(
+            source.className,
+            target.name,
+            source.methodScope
+          )?.params ?? undefined;
+      } else if (source.from === "privateFile") {
+        params = paramsInFile(this, source.callerFile, target.name);
+      }
+      break;
+    }
+    case "workspaceFunction": {
+      const dotIdx = target.name.lastIndexOf(".");
+      const primaryName =
+        dotIdx >= 0 ? target.name.slice(dotIdx + 1) : target.name;
+      params =
+        this.findFunctionInWorkspaceFile(target.name, primaryName)?.params ??
+        undefined;
+      if (params === undefined) {
+        const entry = this.ctx.registry.filesByFuncName.get(target.name);
+        if (entry) {
+          const ast = this.ctx.getCachedAST(entry.fileName);
+          for (const stmt of ast.body) {
+            if (stmt.type === "Function") {
+              params = stmt.params;
+              break;
+            }
+          }
+        }
+      }
+      break;
+    }
+    case "privateFunction": {
+      const entry = this.ctx.getPrivateFileEntry(
+        target.callerFile,
+        target.name
+      );
+      if (entry) params = paramsInFile(this, entry.fileName, target.name);
+      break;
+    }
+    // Builtins, class constructors/methods, JS/mtoc2 user functions: no
+    // resolvable plain user-function AST here — leave undefined.
+  }
+  return params !== undefined ? narginFromParams(params) : undefined;
 }
 
 // ── Target interpretation ────────────────────────────────────────────────
@@ -1067,6 +1170,45 @@ export function collectClassProperties(
     parentName = parentInfo.superClass;
   }
   return { propertyNames, propertyDefaults };
+}
+
+/** Public (GetAccess public) property names of a class, including inherited
+ *  ones, in declaration order. A Properties block whose `Access` or
+ *  `GetAccess` is `private`/`protected` is excluded — matching MATLAB's
+ *  `properties(obj)`, which lists only publicly-gettable properties. Returns
+ *  undefined when `className` is not a known class. */
+function classPublicProperties(
+  interp: Interpreter,
+  className: string
+): string[] | undefined {
+  let info = interp.ctx.getClassInfo(className);
+  if (!info) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  while (info) {
+    const ast = info.ast;
+    if (ast) {
+      for (const member of ast.members) {
+        if (member.type !== "Properties") continue;
+        const hidden = member.attributes.some(a => {
+          const n = a.name.toLowerCase();
+          if (n !== "access" && n !== "getaccess") return false;
+          const val = (a.value ?? "").toLowerCase();
+          return val === "private" || val === "protected";
+        });
+        if (hidden) continue;
+        for (const pn of member.names) {
+          if (!seen.has(pn)) {
+            seen.add(pn);
+            out.push(pn);
+          }
+        }
+      }
+    }
+    if (!info.superClass || info.superClass === "handle") break;
+    info = interp.ctx.getClassInfo(info.superClass);
+  }
+  return out;
 }
 
 export function isHandleClass(
