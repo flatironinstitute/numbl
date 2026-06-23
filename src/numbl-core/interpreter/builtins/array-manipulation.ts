@@ -18,7 +18,9 @@ import {
 import {
   RuntimeTensor,
   RuntimeChar,
+  RuntimeClassInstance,
   type RuntimeValue,
+  type RuntimeClassInstanceArray,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeChar,
@@ -26,6 +28,8 @@ import {
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeCell,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
@@ -972,6 +976,82 @@ defineBuiltin({
 
 // ── repelem ──────────────────────────────────────────────────────────
 
+/** Copy a class instance for value-class replication (handle instances are
+ *  shared by reference, matching MATLAB's repelem on object arrays). */
+function copyClassInstance(inst: RuntimeClassInstance): RuntimeClassInstance {
+  if (inst.isHandleClass) return inst;
+  return new RuntimeClassInstance(
+    inst.className,
+    new Map(inst.fields),
+    inst.isHandleClass,
+    inst._builtinData
+  );
+}
+
+/** repelem for class instances / object arrays. Mirrors the numeric cases but
+ *  operates on the column-major element list and produces an object array. */
+function repelemObjects(
+  v: RuntimeClassInstance | RuntimeClassInstanceArray,
+  repArgs: RuntimeValue[]
+): RuntimeValue {
+  const srcElements = isRuntimeClassInstanceArray(v) ? v.elements : [v];
+  const [rows, cols]: [number, number] = isRuntimeClassInstanceArray(v)
+    ? v.shape
+    : [1, 1];
+  const className = v.className;
+
+  const wrap = (elements: RuntimeClassInstance[], shape: [number, number]) =>
+    elements.length === 1
+      ? elements[0]
+      : RTV.classInstanceArray(className, elements, shape);
+
+  if (repArgs.length === 1) {
+    const repArg = repArgs[0];
+    // Per-element count vector: repelem(v, [c1 c2 ...]).
+    if (isRuntimeTensor(repArg) && repArg.data.length > 1) {
+      const counts = repArg.data;
+      if (counts.length !== srcElements.length)
+        throw new RuntimeError(
+          `repelem: counts vector length (${counts.length}) must match the number of elements (${srcElements.length})`
+        );
+      const out: RuntimeClassInstance[] = [];
+      for (let i = 0; i < srcElements.length; i++) {
+        const c = Math.max(0, Math.round(counts[i]));
+        for (let j = 0; j < c; j++) out.push(copyClassInstance(srcElements[i]));
+      }
+      const isCol = cols === 1 && rows !== 1;
+      return wrap(out, isCol ? [out.length, 1] : [1, out.length]);
+    }
+    // Scalar count: repeat each element n times, preserving vector orientation.
+    const n = Math.max(0, Math.round(toNumber(repArg)));
+    const out: RuntimeClassInstance[] = [];
+    for (const el of srcElements)
+      for (let j = 0; j < n; j++) out.push(copyClassInstance(el));
+    const isCol = cols === 1 && rows !== 1;
+    return wrap(out, isCol ? [out.length, 1] : [1, out.length]);
+  }
+
+  // Block form: repelem(v, rRep, cRep) — replicate each element rRep×cRep.
+  const rRep = Math.max(0, Math.round(toNumber(repArgs[0])));
+  const cRep = Math.max(0, Math.round(toNumber(repArgs[1])));
+  const newRows = rows * rRep;
+  const newCols = cols * cRep;
+  const out: RuntimeClassInstance[] = new Array(newRows * newCols);
+  for (let c = 0; c < cols; c++) {
+    for (let r = 0; r < rows; r++) {
+      const src = srcElements[c * rows + r];
+      for (let dc = 0; dc < cRep; dc++) {
+        for (let dr = 0; dr < rRep; dr++) {
+          const dstRow = r * rRep + dr;
+          const dstCol = c * cRep + dc;
+          out[dstCol * newRows + dstRow] = copyClassInstance(src);
+        }
+      }
+    }
+  }
+  return wrap(out, [newRows, newCols]);
+}
+
 defineBuiltin({
   name: "repelem",
   cases: [
@@ -981,6 +1061,8 @@ defineBuiltin({
         if (args.length < 2)
           throw new RuntimeError("repelem requires at least 2 arguments");
         const v = args[0];
+        if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
+          return repelemObjects(v, args.slice(1));
         if (args.length === 2) {
           const repArg = args[1];
           // Per-element count vector: repelem(v, [c1 c2 ...]) repeats v(i)

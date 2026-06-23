@@ -1191,6 +1191,129 @@ function svdApply(
   );
 }
 
+// ── null ───────────────────────────────────────────────────────────────────
+
+/** null(A): orthonormal basis (columns) for the null space of A, via SVD.
+ *  null(A, tol) overrides the singular-value tolerance. */
+function nullApply(args: RuntimeValue[]): RuntimeValue {
+  let A = args[0];
+  if (isRuntimeNumber(A) || isRuntimeComplexNumber(A)) {
+    // Treat a scalar as a 1×1 matrix.
+    A = isRuntimeNumber(A)
+      ? RTV.tensor(allocFloat64Array([A as number]), [1, 1])
+      : RTV.tensor(
+          allocFloat64Array([(A as { re: number }).re]),
+          [1, 1],
+          allocFloat64Array([(A as { im: number }).im])
+        );
+  }
+  if (!isRuntimeTensor(A))
+    throw new RuntimeError("null: argument must be a numeric matrix");
+  const [m, n] = tensorSize2D(A);
+
+  // Full SVD: V is n×n; the trailing columns span the null space.
+  const [, Sdiag, V] = svdApply([A], 3) as RuntimeTensor[];
+  const k = Math.min(m, n);
+  const s: number[] = [];
+  for (let i = 0; i < k; i++) s.push(Sdiag.data[colMajorIndex(i, i, m)]);
+  const maxS = s.length > 0 ? Math.max(...s) : 0;
+
+  // Tolerance: explicit second arg, else max(m,n)*eps(max singular value).
+  const tol =
+    args.length > 1 && args[1] !== undefined
+      ? toNumber(args[1])
+      : Math.max(m, n) * epsOf(maxS);
+  let r = 0;
+  for (const sv of s) if (sv > tol) r++;
+
+  // Extract columns r .. n-1 of V (n×n) into an n×(n-r) matrix.
+  const cols = n - r;
+  const out = allocFloat64Array(n * cols);
+  const outImag = V.imag ? allocFloat64Array(n * cols) : undefined;
+  for (let c = 0; c < cols; c++) {
+    for (let i = 0; i < n; i++) {
+      const src = colMajorIndex(i, r + c, n);
+      out[colMajorIndex(i, c, n)] = V.data[src];
+      if (outImag) outImag[colMajorIndex(i, c, n)] = V.imag![src];
+    }
+  }
+  return RTV.tensor(out, [n, cols], outImag);
+}
+
+registerIBuiltin({
+  name: "null",
+  resolve: (argTypes, nargout) => {
+    if (nargout > 1 || argTypes.length < 1 || argTypes.length > 2) return null;
+    if (!isNumericJitType(argTypes[0])) return null;
+    const isComplex = argTypes[0].kind === "tensor" && argTypes[0].isComplex;
+    return {
+      outputTypes: [tensorType(isComplex || undefined)],
+      apply: args => nullApply(args),
+    };
+  },
+});
+
+// ── bandwidth ───────────────────────────────────────────────────────────────
+
+/** Lower/upper bandwidth of a matrix: the max distance below/above the
+ *  diagonal at which a nonzero entry appears. */
+function computeBandwidth(A: RuntimeValue): [number, number] {
+  let lower = 0;
+  let upper = 0;
+  const note = (i: number, j: number) => {
+    if (i > j) lower = Math.max(lower, i - j);
+    else if (j > i) upper = Math.max(upper, j - i);
+  };
+  if (isRuntimeNumber(A) || isRuntimeComplexNumber(A)) return [0, 0];
+  if (isRuntimeSparseMatrix(A)) {
+    for (let j = 0; j < A.n; j++) {
+      for (let k = A.jc[j]; k < A.jc[j + 1]; k++) {
+        if (A.pr[k] === 0 && (!A.pi || A.pi[k] === 0)) continue;
+        note(A.ir[k], j);
+      }
+    }
+    return [lower, upper];
+  }
+  if (isRuntimeTensor(A)) {
+    const [m, n] = tensorSize2D(A);
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < m; i++) {
+        const idx = colMajorIndex(i, j, m);
+        if (A.data[idx] === 0 && (!A.imag || A.imag[idx] === 0)) continue;
+        note(i, j);
+      }
+    }
+    return [lower, upper];
+  }
+  throw new RuntimeError("bandwidth: first argument must be a numeric matrix");
+}
+
+function bandwidthApply(
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  const [lower, upper] = computeBandwidth(args[0]);
+  if (args.length >= 2 && args[1] !== undefined) {
+    const type = parseStringArgLower(args[1]);
+    if (type === "lower") return RTV.num(lower);
+    if (type === "upper") return RTV.num(upper);
+    throw new RuntimeError("bandwidth: TYPE must be 'lower' or 'upper'");
+  }
+  // No TYPE: `[lower,upper] = bandwidth(A)`, or `B = bandwidth(A)` -> lower.
+  if (nargout >= 2) return [RTV.num(lower), RTV.num(upper)];
+  return RTV.num(lower);
+}
+
+registerIBuiltin({
+  name: "bandwidth",
+  resolve: (argTypes, nargout) => {
+    if (nargout > 2 || argTypes.length < 1 || argTypes.length > 2) return null;
+    if (!isNumericJitType(argTypes[0])) return null;
+    const outs = nargout >= 2 ? [NUM, NUM] : [NUM];
+    return { outputTypes: outs, apply: (args, n) => bandwidthApply(args, n) };
+  },
+});
+
 function computeATA(A_data: Float64Array, m: number, n: number): Float64Array {
   const result = allocFloat64Array(n * n);
   for (let j = 0; j < n; j++)

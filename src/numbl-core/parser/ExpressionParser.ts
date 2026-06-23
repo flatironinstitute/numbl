@@ -348,9 +348,10 @@ export class ExpressionParser extends ParserBase {
         this.peekToken() === Token.At &&
         this.peekTokenAt(1) === Token.Ident
       ) {
-        // superMethod@ClassName(args) or obj@SuperClass(args)
+        // superMethod@ClassName(args) or obj@SuperClass(args).
+        // The superclass may be package-qualified, e.g. obj@ultraSEM.Quad(...).
         this.pos++; // consume '@'
-        const className = this.expectIdent();
+        const className = this.parseQualifiedName();
         if (!this.consume(Token.LParen)) {
           throw this.error("expected '(' after superclass name in super call");
         }

@@ -844,6 +844,16 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["B = pinv(A)", "B = pinv(A, TOL)"],
     description: "Moore-Penrose pseudoinverse.",
   },
+  null: {
+    signatures: ["Z = null(A)", "Z = null(A, TOL)"],
+    description:
+      "Orthonormal basis for the null space of A (columns of Z), computed via the SVD. TOL overrides the singular-value tolerance.",
+  },
+  bandwidth: {
+    signatures: ["[lower, upper] = bandwidth(A)", "B = bandwidth(A, TYPE)"],
+    description:
+      "Lower and upper matrix bandwidth. TYPE is 'lower' or 'upper'; a single output without TYPE returns the lower bandwidth.",
+  },
   cond: {
     signatures: ["C = cond(A)", "C = cond(A, P)"],
     description: "Condition number of matrix.",
@@ -1100,6 +1110,11 @@ const H: Record<string, BuiltinHelp> = {
   double: {
     signatures: ["Y = double(X)"],
     description: "Convert to double precision.",
+  },
+  single: {
+    signatures: ["Y = single(X)"],
+    description:
+      "Round to single precision. numbl stores all numerics as double, so the result reports class 'double', but the low-order bits are dropped as in MATLAB.",
   },
   logical: {
     signatures: ["Y = logical(X)"],
@@ -1523,6 +1538,19 @@ const H: Record<string, BuiltinHelp> = {
       "S = spdiags(BIN, D, A)",
     ],
     description: "Extract or create sparse banded/diagonal matrices.",
+  },
+  spparms: {
+    signatures: [
+      "spparms",
+      "values = spparms",
+      "[keys, values] = spparms",
+      "value = spparms(KEY)",
+      "spparms(KEY, VALUE)",
+      "spparms('default')",
+      "spparms(values)",
+    ],
+    description:
+      "Get/set sparse direct-solver parameters. numbl's sparse solver ignores these knobs; values are stored so they round-trip through get/set/restore but have no effect.",
   },
 
   // ── Linear algebra extras ─────────────────────────────────────────────

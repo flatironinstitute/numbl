@@ -549,48 +549,52 @@ export function methodDispatch(
             }
           }
         }
-        // Try class method first (direct or JIT-compiled)
-        try {
-          return callClassMethod(rt, firstRV.className, name, nargout, args);
-        } catch (e) {
-          // If no method found and class has subsref, route through it.
-          // This handles obj.name() where name is resolved via custom subsref
-          // (e.g., chebfunpref.tech() where tech is a field of an internal struct).
-          if (e instanceof RuntimeError) {
-            const guardKey = `${firstRV.className}.subsref`;
-            if (!rt.activeAccessors.has(guardKey)) {
-              const subsrefFn = rt.cachedResolveClassMethod(
-                firstRV.className,
-                "subsref"
-              );
-              if (subsrefFn) {
-                const remaining = args.slice(1);
-                // Build compound subsref indices: [{'.', name}, {'()', {args...}}]
-                const sEntries = [
-                  RTV.struct({
-                    type: RTV.char("."),
-                    subs: RTV.char(name),
-                  }),
-                  RTV.struct({
-                    type: RTV.char("()"),
-                    subs: RTV.cell(
-                      remaining.map(a => ensureRuntimeValue(a)),
-                      [1, remaining.length]
-                    ),
-                  }),
-                ];
-                const S = RTV.structArray(["type", "subs"], sEntries);
-                rt.activeAccessors.add(guardKey);
-                try {
-                  return subsrefFn(nargout, first, S);
-                } finally {
-                  rt.activeAccessors.delete(guardKey);
-                }
+        // If the name is NOT a real method of the class but the class
+        // overloads subsref, route the `obj.name(...)` through subsref.
+        // This handles cases where `name` is resolved via custom subsref
+        // (e.g., chebfunpref.tech() where tech is a field of an internal
+        // struct). We must check method existence *first* — otherwise an
+        // error thrown from inside a real method would be masked by a
+        // spurious subsref reroute (e.g. ultraSEM's obj.initialize(...)).
+        const methodExists =
+          rt.cachedResolveClassMethod(firstRV.className, name) !== null;
+        if (!methodExists) {
+          const guardKey = `${firstRV.className}.subsref`;
+          if (!rt.activeAccessors.has(guardKey)) {
+            const subsrefFn = rt.cachedResolveClassMethod(
+              firstRV.className,
+              "subsref"
+            );
+            if (subsrefFn) {
+              const remaining = args.slice(1);
+              // Build compound subsref indices: [{'.', name}, {'()', {args...}}]
+              const sEntries = [
+                RTV.struct({
+                  type: RTV.char("."),
+                  subs: RTV.char(name),
+                }),
+                RTV.struct({
+                  type: RTV.char("()"),
+                  subs: RTV.cell(
+                    remaining.map(a => ensureRuntimeValue(a)),
+                    [1, remaining.length]
+                  ),
+                }),
+              ];
+              const S = RTV.structArray(["type", "subs"], sEntries);
+              rt.activeAccessors.add(guardKey);
+              try {
+                return subsrefFn(nargout, first, S);
+              } finally {
+                rt.activeAccessors.delete(guardKey);
               }
             }
           }
-          throw e;
         }
+        // The method exists (call it; errors propagate untouched) or there's
+        // no subsref to handle a missing name (callClassMethod throws the
+        // proper "No method 'name' for class" error).
+        return callClassMethod(rt, firstRV.className, name, nargout, args);
       }
     }
 

@@ -85,6 +85,72 @@ defineBuiltin({
   ],
 });
 
+// ── single ──────────────────────────────────────────────────────────────
+//
+// numbl stores all numerics as double, so `single` cannot produce a distinct
+// runtime class. It DOES, however, round values to single precision (via
+// Math.fround), which is observable: code relies on `single(x)` to drop the
+// low-order bits (e.g. ultraSEM classifies boundary points with `single(x) ==
+// real(single(x))`). The result reports class 'double' in numbl.
+
+function froundArray(src: Float64Array): Float64Array {
+  const out = allocFloat64Array(src.length);
+  for (let i = 0; i < src.length; i++) out[i] = Math.fround(src[i]);
+  return out;
+}
+
+function singleApply(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeChar(v)) {
+    if (v.value.length === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
+    if (v.value.length === 1)
+      return RTV.num(Math.fround(v.value.charCodeAt(0)));
+    return RTV.row(Array.from(v.value).map(c => Math.fround(c.charCodeAt(0))));
+  }
+  if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
+  if (isRuntimeNumber(v)) return RTV.num(Math.fround(v));
+  if (isRuntimeComplexNumber(v))
+    return RTV.complex(Math.fround(v.re), Math.fround(v.im));
+  if (isRuntimeTensor(v)) {
+    const imag = v.imag ? froundArray(v.imag) : undefined;
+    return RTV.tensor(froundArray(v.data), v.shape.slice(), imag);
+  }
+  if (isRuntimeClassInstance(v) && v._builtinData !== undefined)
+    return singleApply(v._builtinData);
+  return RTV.num(Math.fround(toNumber(v)));
+}
+
+defineBuiltin({
+  name: "single",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 1) return null;
+        const a = argTypes[0];
+        if (
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          a.kind === "char" ||
+          a.kind === "class_instance"
+        )
+          return [{ kind: "number" }];
+        if (a.kind === "complex_or_number")
+          return [{ kind: "complex_or_number" }];
+        if (a.kind === "tensor")
+          return [
+            {
+              kind: "tensor",
+              isComplex: a.isComplex,
+              shape: a.shape,
+              ndim: a.ndim,
+            },
+          ];
+        return null;
+      },
+      apply: args => singleApply(args[0]),
+    },
+  ],
+});
+
 // ── Integer types ───────────────────────────────────────────────────────
 //
 // numbl represents all numeric data as double-precision floats, so the

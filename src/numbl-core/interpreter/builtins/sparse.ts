@@ -3,15 +3,19 @@
  */
 
 import {
+  isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeSparseMatrix,
+  isRuntimeString,
   isRuntimeTensor,
+  RuntimeChar,
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeSparseMatrix } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
+import { parseStringArgLower } from "../../helpers/check-helpers.js";
 import { registerIBuiltin } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
@@ -592,4 +596,110 @@ registerIBuiltin({
       throw new RuntimeError("spdiags requires 1 to 4 arguments");
     },
   }),
+});
+
+// ── spparms ────────────────────────────────────────────────────────────────
+//
+// spparms tunes MATLAB's sparse direct-solver heuristics. numbl's sparse
+// backslash ignores these knobs, so this is a faithful state-holding stub:
+// values round-trip through get/set/restore (the pattern ultraSEM relies on:
+// `p = spparms; spparms('bandden',0); ...; spparms(p)`), but they have no
+// effect on the solver. Key order and defaults match MATLAB R2025b.
+
+const SPPARMS_KEYS = [
+  "spumoni",
+  "thr_rel",
+  "thr_abs",
+  "exact_d",
+  "supernd",
+  "rreduce",
+  "wh_frac",
+  "autommd",
+  "autoamd",
+  "piv_tol",
+  "bandden",
+  "umfpack",
+  "sym_tol",
+  "ldl_tol",
+  "usema57",
+  "spqrtol",
+  "sp_ctor",
+  "reorder",
+  "no_redo",
+];
+const SPPARMS_DEFAULTS = [
+  0, 1.1, 1.0, 0, 3, 3, 0.5, 1, 1, 0.1, 0.5, 1, 0.001, 0.01, 1, -2, 0, 0, 0,
+];
+let spparmsState = Float64Array.from(SPPARMS_DEFAULTS);
+
+function spparmsVector(): RuntimeValue {
+  return RTV.tensor(allocFloat64Array(Array.from(spparmsState)), [
+    spparmsState.length,
+    1,
+  ]);
+}
+
+registerIBuiltin({
+  name: "spparms",
+  resolve: (argTypes, nargout) => {
+    if (argTypes.length > 2) return null;
+    const tensorOut = { kind: "tensor" as const, isComplex: false };
+    const outputTypes =
+      nargout >= 2 ? [{ kind: "char" as const }, tensorOut] : [tensorOut];
+    return {
+      outputTypes,
+      apply: (args, n) => {
+        if (args.length === 0) {
+          if (n >= 2) {
+            // [keys, vals] = spparms
+            const width = Math.max(...SPPARMS_KEYS.map(k => k.length));
+            const padded = SPPARMS_KEYS.map(k => k.padEnd(width)).join("");
+            return [
+              new RuntimeChar(padded, [SPPARMS_KEYS.length, width]),
+              spparmsVector(),
+            ];
+          }
+          return spparmsVector();
+        }
+        const first = args[0];
+        if (isRuntimeChar(first) || isRuntimeString(first)) {
+          const key = parseStringArgLower(first);
+          if (args.length >= 2) {
+            // spparms('key', value) — store (no solver effect).
+            const idx = SPPARMS_KEYS.indexOf(key);
+            if (idx >= 0) spparmsState[idx] = toNumber(args[1]);
+            return RTV.num(0);
+          }
+          if (key === "default") {
+            spparmsState = Float64Array.from(SPPARMS_DEFAULTS);
+            return RTV.num(0);
+          }
+          if (key === "tight") {
+            // MATLAB's 'tight' preset; numbl ignores the knobs, so leave
+            // the stored values in place.
+            return RTV.num(0);
+          }
+          // spparms('key') — query a single parameter value.
+          const idx = SPPARMS_KEYS.indexOf(key);
+          if (idx >= 0) return RTV.num(spparmsState[idx]);
+          throw new RuntimeError(`spparms: unknown parameter '${key}'`);
+        }
+        // spparms(values) — restore from a vector.
+        const vals = isRuntimeNumber(first)
+          ? [first]
+          : isRuntimeTensor(first)
+            ? Array.from(first.data)
+            : null;
+        if (vals === null)
+          throw new RuntimeError(
+            "spparms: argument must be a parameter name or value vector"
+          );
+        const next = Float64Array.from(spparmsState);
+        for (let i = 0; i < Math.min(vals.length, next.length); i++)
+          next[i] = vals[i];
+        spparmsState = next;
+        return RTV.num(0);
+      },
+    };
+  },
 });
