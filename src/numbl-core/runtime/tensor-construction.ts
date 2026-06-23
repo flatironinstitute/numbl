@@ -70,6 +70,13 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
     return sparseCatAlongDim(values, 1);
   }
 
+  // Cell concatenation: [cellA, cellB]. MATLAB: if any operand is a cell,
+  // the result is a cell and non-cell operands are wrapped — so this must
+  // win over the char/string paths below.
+  if (values.some(v => isRuntimeCell(v))) {
+    return cellCatAlongDim(values, 1);
+  }
+
   // If any element is a char, concatenate as char array
   if (values.some(v => isRuntimeChar(v))) {
     let result = "";
@@ -94,11 +101,6 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
     return RTV.string(result);
   }
 
-  // Cell concatenation: [cellA, cellB]
-  if (values.some(v => isRuntimeCell(v))) {
-    return cellCatAlongDim(values, 1);
-  }
-
   // Struct / struct-array concatenation: [sA, sB]
   if (values.some(v => isRuntimeStruct(v) || isRuntimeStructArray(v))) {
     return structCat(values);
@@ -117,14 +119,15 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
     return sparseCatAlongDim(values, 0);
   }
 
+  // Cell concatenation: [cellA; cellB]. As in horzcat, a cell operand makes
+  // the whole result a cell (must win over the char path below).
+  if (values.some(v => isRuntimeCell(v))) {
+    return cellCatAlongDim(values, 0);
+  }
+
   // If any element is a char, build a 2-D char array (rows stacked).
   if (values.some(v => isRuntimeChar(v))) {
     return vertcatChars(values);
-  }
-
-  // Cell concatenation: [cellA; cellB]
-  if (values.some(v => isRuntimeCell(v))) {
-    return cellCatAlongDim(values, 0);
   }
 
   // Struct / struct-array concatenation: [sA; sB]
@@ -536,14 +539,30 @@ function catAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeValue {
 }
 
 /** Concatenate cell arrays along a 0-based dimension index */
-function cellCatAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeCell {
-  // Convert all inputs to cells: scalars/tensors become 1x1 cells
-  let cells: RuntimeCell[] = values.map(v => {
-    if (isRuntimeCell(v)) return v;
-    return RTV.cell([v], [1, 1]);
-  });
+/** True for empty non-cell operands ('' or []) that MATLAB drops when
+ *  concatenating into a cell. */
+function isEmptyNonCellOperand(v: RuntimeValue): boolean {
+  if (isRuntimeChar(v)) return v.value.length === 0;
+  if (isRuntimeTensor(v)) return v.data.length === 0;
+  return false;
+}
 
-  // Filter out empty cells
+function cellCatAlongDim(values: RuntimeValue[], dimIdx: number): RuntimeCell {
+  // Convert inputs to cells: a non-cell operand is wrapped as a single 1x1
+  // cell ([5, {'x'}] -> {5,'x'} — the value is preserved, not char-coerced).
+  // MATLAB drops empty operands ('' / []) during concatenation, so skip them.
+  let cells: RuntimeCell[] = [];
+  for (const v of values) {
+    if (isRuntimeCell(v)) {
+      cells.push(v);
+    } else if (isEmptyNonCellOperand(v)) {
+      continue;
+    } else {
+      cells.push(RTV.cell([v], [1, 1]));
+    }
+  }
+
+  // Filter out empty cells ({})
   cells = cells.filter(c => c.data.length > 0);
   if (cells.length === 0) return RTV.cell([], [0, 0]);
   if (cells.length === 1) return cells[0];

@@ -17,6 +17,7 @@ import {
 } from "../../runtime/index.js";
 import {
   RuntimeTensor,
+  RuntimeChar,
   type RuntimeValue,
   isRuntimeNumber,
   isRuntimeLogical,
@@ -134,6 +135,41 @@ function validateSizeArg(x: number): number {
   return x < 0 ? 0 : x;
 }
 
+/** Resolve reshape's target shape from its dimension arguments (args[1..])
+ *  against a known element count. Handles the [] auto-dimension and the
+ *  reshape(x, [d1 d2 ...]) vector form, and validates the element count. */
+function parseReshapeDims(args: RuntimeValue[], total: number): number[] {
+  let rawDims: (number | null)[];
+  if (
+    args.length === 2 &&
+    isRuntimeTensor(args[1]) &&
+    args[1].data.length > 1
+  ) {
+    rawDims = Array.from(args[1].data).map(x => validateSizeArg(x));
+  } else {
+    rawDims = args.slice(1).map(a => {
+      if (isRuntimeTensor(a) && a.data.length === 0) return null;
+      return validateSizeArg(toNumber(a));
+    });
+  }
+  const autoCount = rawDims.filter(d => d === null).length;
+  if (autoCount > 1)
+    throw new RuntimeError("reshape: only one dimension size can be []");
+  let shape: number[];
+  if (autoCount === 1) {
+    const known = rawDims.filter(d => d !== null) as number[];
+    const knownProduct = known.reduce((a, b) => a * b, 1);
+    if (knownProduct === 0 || total % knownProduct !== 0)
+      throw new RuntimeError("reshape: number of elements must not change");
+    shape = rawDims.map(d => (d === null ? total / knownProduct : d));
+  } else {
+    shape = rawDims as number[];
+  }
+  if (numel(shape) !== total)
+    throw new RuntimeError("reshape: number of elements must not change");
+  return shape;
+}
+
 defineBuiltin({
   name: "reshape",
   cases: [
@@ -214,6 +250,31 @@ defineBuiltin({
           return RTV.sparseMatrix(newM, newN, ir, jc, pr, pi);
         }
 
+        // Char arrays reshape too (MATLAB accepts any type). Reorder the
+        // characters column-major into the new 2-D shape.
+        if (isRuntimeChar(v)) {
+          const srcRows = v.shape ? v.shape[0] : 1;
+          const srcCols = v.shape ? (v.shape[1] ?? 0) : v.value.length;
+          const total = v.value.length;
+          const reqShape = parseReshapeDims(args, total);
+          const s = [...reqShape];
+          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+          if (s.length > 2)
+            throw new RuntimeError("reshape: char arrays must be 2-D");
+          const nr = s[0];
+          const nc = s.length >= 2 ? s[1] : 1;
+          // column-major linear order of the source (stored row-major)
+          const linear: string[] = new Array(total);
+          for (let j = 0; j < srcCols; j++)
+            for (let i = 0; i < srcRows; i++)
+              linear[j * srcRows + i] = v.value[i * srcCols + j];
+          const chars: string[] = new Array(total);
+          for (let j2 = 0; j2 < nc; j2++)
+            for (let i2 = 0; i2 < nr; i2++)
+              chars[i2 * nc + j2] = linear[j2 * nr + i2];
+          return new RuntimeChar(chars.join(""), [nr, nc]);
+        }
+
         if (
           !isRuntimeTensor(v) &&
           !isRuntimeNumber(v) &&
@@ -231,43 +292,7 @@ defineBuiltin({
             ? allocFloat64Array([v.im])
             : undefined;
 
-        let rawDims: (number | null)[];
-        if (
-          args.length === 2 &&
-          isRuntimeTensor(args[1]) &&
-          args[1].data.length > 1
-        ) {
-          rawDims = Array.from(args[1].data).map(x => validateSizeArg(x));
-        } else {
-          rawDims = args.slice(1).map(a => {
-            if (isRuntimeTensor(a) && a.data.length === 0) return null;
-            return validateSizeArg(toNumber(a));
-          });
-        }
-
-        const autoCount = rawDims.filter(d => d === null).length;
-        if (autoCount > 1)
-          throw new RuntimeError("reshape: only one dimension size can be []");
-
-        let shape: number[];
-        if (autoCount === 1) {
-          const known = rawDims.filter(d => d !== null) as number[];
-          const knownProduct = known.reduce((a, b) => a * b, 1);
-          if (data.length % knownProduct !== 0)
-            throw new RuntimeError(
-              "reshape: number of elements must not change"
-            );
-          shape = rawDims.map(d =>
-            d === null ? data.length / knownProduct : d
-          );
-        } else {
-          shape = rawDims as number[];
-        }
-
-        const n = numel(shape);
-        if (n !== data.length) {
-          throw new RuntimeError("reshape: number of elements must not change");
-        }
+        const shape = parseReshapeDims(args, data.length);
         if (isRuntimeTensor(v)) {
           // Copy the data buffer rather than share it. Sharing buffers
           // across wrappers would require ref-tracking the buffer
@@ -1096,7 +1121,20 @@ defineBuiltin({
           }
           return RTV.tensor(dataCopy, newShape, imagCopy);
         }
-        throw new RuntimeError("squeeze: argument must be numeric");
+        // Cell arrays may carry N-D shapes; squeeze the singleton dims.
+        // Element references are shared (RuntimeCell increfs them).
+        if (isRuntimeCell(v)) {
+          const shape = [...v.shape];
+          while (shape.length > 2 && shape[shape.length - 1] === 1) shape.pop();
+          if (shape.length <= 2) return RTV.cell(v.data, shape);
+          const newShape = shape.filter(d => d !== 1);
+          while (newShape.length < 2) newShape.push(1);
+          return RTV.cell(v.data, newShape);
+        }
+        // All other array kinds (structs, struct/class arrays, char, string)
+        // are at most 2-D in numbl, so squeeze is a no-op — return as-is, like
+        // MATLAB, which accepts any type.
+        return v;
       },
     },
   ],

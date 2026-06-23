@@ -241,7 +241,8 @@ registerIBuiltin({
         const str = toString(args[0]);
         const pat = toString(args[1]);
         const rep = toString(args[2]);
-        let flags = "g";
+        // `s` (dotAll): MATLAB's `.` matches newline by default, unlike JS.
+        let flags = "gs";
         for (let i = 3; i < args.length; i++) {
           const opt = toString(args[i]).toLowerCase();
           if (opt === "ignorecase") flags += "i";
@@ -707,6 +708,47 @@ registerIBuiltin({
         ? [{ kind: "cell" }]
         : [{ kind: "tensor", isComplex: false, isLogical: true }],
       apply: args => isstrpropApply(args),
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "isspace",
+  help: {
+    signatures: ["TF = isspace(str)"],
+    description:
+      "Return a logical array the same size as str, true where the character is whitespace. Numeric input is treated as Unicode code points.",
+  },
+  resolve: argTypes => {
+    if (argTypes.length !== 1) return null;
+    const k = argTypes[0].kind;
+    if (
+      k !== "char" &&
+      k !== "string" &&
+      k !== "number" &&
+      k !== "boolean" &&
+      k !== "tensor"
+    ) {
+      return null;
+    }
+    const pred = (cp: number) => RE_WSPACE.test(String.fromCodePoint(cp));
+    return {
+      outputTypes: [{ kind: "tensor", isComplex: false, isLogical: true }],
+      apply: args => {
+        const v = args[0];
+        if (isRuntimeChar(v)) {
+          return logicalRowFromString(
+            v.value,
+            pred,
+            v.shape ? [...v.shape] : undefined
+          );
+        }
+        if (isRuntimeString(v)) return logicalRowFromString(toString(v), pred);
+        if (isRuntimeTensor(v))
+          return logicalFromNumericTensor(v.data, v.shape, pred);
+        // scalar number / boolean → code point
+        return logicalFromNumericTensor([toNumber(v)], [1, 1], pred);
+      },
     };
   },
 });
@@ -1345,6 +1387,8 @@ registerIBuiltin({
     if (!isTextType(argTypes[0]) || !isTextType(argTypes[1])) return null;
     const outputTypes: JitType[] = [{ kind: "number" }];
     if (nargout >= 2) outputTypes.push({ kind: "number" });
+    if (nargout >= 3) outputTypes.push({ kind: "char" }); // errmsg
+    if (nargout >= 4) outputTypes.push({ kind: "number" }); // nextindex
     return {
       outputTypes,
       apply: (args, nout) => {
@@ -1354,6 +1398,7 @@ registerIBuiltin({
         const results: number[] = [];
         let strPos = 0;
         let fmtPos = 0;
+        let matchFailure = false;
 
         while (
           fmtPos < fmt.length &&
@@ -1370,24 +1415,36 @@ registerIBuiltin({
             }
             if (spec === "d" || spec === "i") {
               const m = str.slice(strPos).match(/^[+-]?\d+/);
-              if (!m) break;
+              if (!m) {
+                matchFailure = true;
+                break;
+              }
               results.push(parseInt(m[0], 10));
               strPos += m[0].length;
             } else if (spec === "f" || spec === "e" || spec === "g") {
               const m = str
                 .slice(strPos)
                 .match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
-              if (!m) break;
+              if (!m) {
+                matchFailure = true;
+                break;
+              }
               results.push(parseFloat(m[0]));
               strPos += m[0].length;
             } else if (spec === "x") {
               const m = str.slice(strPos).match(/^[+-]?[0-9a-fA-F]+/);
-              if (!m) break;
+              if (!m) {
+                matchFailure = true;
+                break;
+              }
               results.push(parseInt(m[0], 16));
               strPos += m[0].length;
             } else if (spec === "o") {
               const m = str.slice(strPos).match(/^[+-]?[0-7]+/);
-              if (!m) break;
+              if (!m) {
+                matchFailure = true;
+                break;
+              }
               results.push(parseInt(m[0], 8));
               strPos += m[0].length;
             } else if (spec === "c") {
@@ -1395,7 +1452,10 @@ registerIBuiltin({
               strPos++;
             } else if (spec === "s") {
               const m = str.slice(strPos).match(/^\S+/);
-              if (!m) break;
+              if (!m) {
+                matchFailure = true;
+                break;
+              }
               for (
                 let ci = 0;
                 ci < m[0].length && results.length < maxCount;
@@ -1409,7 +1469,10 @@ registerIBuiltin({
             fmtPos++;
             while (strPos < str.length && /\s/.test(str[strPos])) strPos++;
           } else {
-            if (str[strPos] !== fmt[fmtPos]) break;
+            if (str[strPos] !== fmt[fmtPos]) {
+              matchFailure = true;
+              break;
+            }
             strPos++;
             fmtPos++;
           }
@@ -1427,7 +1490,19 @@ registerIBuiltin({
             ? RTV.num(results[0])
             : RTV.tensor(allocFloat64Array(results), [results.length, 1]);
         if (nout >= 2) {
-          return [vals, RTV.num(results.length)];
+          const out: RuntimeValue[] = [vals, RTV.num(results.length)];
+          if (nout >= 3) {
+            // errmsg: empty on success, non-empty when scanning stopped on a
+            // matching failure (MATLAB semantics).
+            out.push(
+              RTV.char(matchFailure ? "Matching failure in format." : "")
+            );
+          }
+          if (nout >= 4) {
+            // nextindex: 1-based position of the next unscanned character.
+            out.push(RTV.num(strPos + 1));
+          }
+          return out;
         }
         return vals;
       },

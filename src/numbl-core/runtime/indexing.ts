@@ -1237,11 +1237,19 @@ export function indexIntoRTValue(
     return indexIntoLogical(base, indices);
   }
   if (isRuntimeStruct(base) || isRuntimeClassInstance(base)) {
-    if (indices.length === 1) {
-      const i = Math.round(toNumber(indices[0]));
-      if (i !== 1) throw new RuntimeError("Index exceeds struct dimensions");
-      return base;
-    }
+    // A scalar (1x1) struct / object: any all-ones subscripting — s(1),
+    // s(1,1), s(true), ... — refers to the element itself, like MATLAB.
+    const allOnes =
+      indices.length >= 1 &&
+      indices.every(idx => {
+        if (isRuntimeNumber(idx)) return Math.round(idx) === 1;
+        if (isRuntimeLogical(idx)) return idx === true;
+        if (isRuntimeTensor(idx))
+          return idx.data.length === 1 && Math.round(idx.data[0]) === 1;
+        return false;
+      });
+    if (allOnes) return base;
+    throw new RuntimeError("Index exceeds struct dimensions");
   }
   if (isRuntimeSparseMatrix(base)) {
     return indexIntoSparse(base, indices);

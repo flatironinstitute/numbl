@@ -117,6 +117,79 @@ defineBuiltin({
   cases: [anyToLogicalCase(args => isRuntimeString(args[0]))],
 });
 
+// MATLAB's reserved words (`iskeyword` with no args). Note true/false are
+// functions, not keywords; spmd is included.
+const MATLAB_KEYWORDS: ReadonlySet<string> = new Set([
+  "break",
+  "case",
+  "catch",
+  "classdef",
+  "continue",
+  "else",
+  "elseif",
+  "end",
+  "for",
+  "function",
+  "global",
+  "if",
+  "otherwise",
+  "parfor",
+  "persistent",
+  "return",
+  "spmd",
+  "switch",
+  "try",
+  "while",
+]);
+
+/** Extract a single-row text value (char row vector or scalar string),
+ *  or null if the value is not such text. */
+function singleRowText(v: RuntimeValue): string | null {
+  if (isRuntimeChar(v)) {
+    if (v.shape && v.shape.length >= 1 && v.shape[0] > 1) return null;
+    return v.value;
+  }
+  if (isRuntimeString(v)) return v;
+  return null;
+}
+
+defineBuiltin({
+  name: "isvarname",
+  cases: [
+    anyToLogicalCase(args => {
+      const s = singleRowText(args[0]);
+      if (s === null || s.length === 0 || s.length > 63) return false;
+      if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(s)) return false;
+      return !MATLAB_KEYWORDS.has(s);
+    }),
+  ],
+});
+
+defineBuiltin({
+  name: "iskeyword",
+  cases: [
+    {
+      // iskeyword() with no args returns the list of keywords (column cell).
+      match: argTypes => {
+        if (argTypes.length === 0) return [{ kind: "cell" }];
+        if (argTypes.length === 1) return [{ kind: "boolean" }];
+        return null;
+      },
+      apply: args => {
+        if (args.length === 0) {
+          const names = [...MATLAB_KEYWORDS].sort();
+          return RTV.cell(
+            names.map(n => RTV.char(n)),
+            [names.length, 1]
+          );
+        }
+        const s = singleRowText(args[0]);
+        return RTV.logical(s !== null && MATLAB_KEYWORDS.has(s));
+      },
+    },
+  ],
+});
+
 defineBuiltin({
   name: "iscell",
   cases: [anyToLogicalCase(args => isRuntimeCell(args[0]))],

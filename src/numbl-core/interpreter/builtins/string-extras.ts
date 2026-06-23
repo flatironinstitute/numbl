@@ -96,7 +96,9 @@ function regexpImpl(
     outModes.push("start", "end", "tokenextents", "match", "tokens", "names");
   }
 
-  const flags = caseSensitive ? "g" : "gi";
+  // MATLAB's `.` matches newline by default (the 'dotall' option), unlike
+  // JS — add the `s` flag so multi-line patterns behave like MATLAB.
+  const flags = caseSensitive ? "gs" : "gis";
   const re = new RegExp(pat, flags);
   const starts: number[] = [];
   const ends: number[] = [];
