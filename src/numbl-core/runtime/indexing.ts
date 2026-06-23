@@ -705,13 +705,41 @@ function indexIntoScalar(
     }
     return RTV.tensor(data, [...idx.shape]);
   }
-  // Scalar indexing: only valid with (1) or (1,1) or (:)
+  // Scalar indexed with multiple subscripts, e.g. A(i,j) on a 1x1 A. Every
+  // subscript must select position 1; a tensor subscript such as [1;1;1]
+  // replicates the scalar. The result shape is the product of the per-
+  // dimension index lengths (a colon or scalar subscript has length 1).
+  const dimLengths: number[] = [];
+  let anyTensor = false;
   for (const idx of indices) {
-    if (isColonIndex(idx)) continue;
-    const i = toNumber(idx);
-    if (i !== 1) throw new RuntimeError("Index exceeds array bounds");
+    if (isColonIndex(idx)) {
+      dimLengths.push(1);
+    } else if (isRuntimeTensor(idx)) {
+      anyTensor = true;
+      for (let i = 0; i < idx.data.length; i++) {
+        if (Math.round(idx.data[i]) !== 1)
+          throw new RuntimeError("Index exceeds array bounds");
+      }
+      dimLengths.push(idx.data.length);
+    } else {
+      if (Math.round(toNumber(idx)) !== 1)
+        throw new RuntimeError("Index exceeds array bounds");
+      dimLengths.push(1);
+    }
   }
-  return base;
+  // No tensor subscripts → plain scalar reference, e.g. A(1), A(1,1), A(:).
+  if (!anyTensor) return base;
+  const total = dimLengths.reduce((a, b) => a * b, 1);
+  const scalarRe = isRuntimeNumber(base) ? base : (base as { re: number }).re;
+  const data = allocFloat64Array(total);
+  data.fill(scalarRe);
+  const outShape = dimLengths.length >= 2 ? dimLengths : [dimLengths[0], 1];
+  if (isRuntimeComplexNumber(base) && base.im !== 0) {
+    const im = allocFloat64Array(total);
+    im.fill(base.im);
+    return RTV.tensor(data, outShape, im);
+  }
+  return RTV.tensor(data, outShape);
 }
 
 function indexIntoTensor(
@@ -763,11 +791,13 @@ function indexIntoTensor1D(
   // Colon: base(:) → column vector
   if (isColonIndex(idx)) {
     const imag = base.imag ? allocFloat64Array(base.imag) : undefined;
-    return RTV.tensor(
+    const result = RTV.tensor(
       allocFloat64Array(base.data),
       [base.data.length, 1],
       imag
-    );
+    ) as RuntimeTensor;
+    if (base._isLogical === true) result._isLogical = true;
+    return result;
   }
 
   if (isRuntimeLogical(idx)) {
@@ -1095,7 +1125,8 @@ function indexIntoLogical(
       }
       const data = allocFloat64Array(idx.data.length);
       data.fill(base ? 1 : 0);
-      const result = RTV.tensor(data, [1, idx.data.length]);
+      // Result follows the index's shape (e.g. b([1;1;1]) is 3x1).
+      const result = RTV.tensor(data, [...idx.shape]);
       result._isLogical = true;
       return result;
     }
@@ -1107,17 +1138,38 @@ function indexIntoLogical(
     if (i !== 1) throw new RuntimeError("Index exceeds array bounds");
     return base;
   }
-  // Multi-dimensional: each index must select only position 1
+  // Multi-dimensional: every subscript must select position 1; a tensor
+  // subscript such as [1;1;1] replicates the scalar, with result shape the
+  // product of the per-dimension index lengths (colon/scalar count as 1).
+  const dimLengths: number[] = [];
+  let anyTensor = false;
   for (const idx of indices) {
-    if (isColonIndex(idx)) continue;
-    if (isRuntimeLogical(idx)) {
+    if (isColonIndex(idx)) {
+      dimLengths.push(1);
+    } else if (isRuntimeLogical(idx)) {
       if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-      continue;
+      dimLengths.push(1);
+    } else if (isRuntimeTensor(idx)) {
+      anyTensor = true;
+      for (let i = 0; i < idx.data.length; i++) {
+        if (Math.round(idx.data[i]) !== 1)
+          throw new RuntimeError("Index exceeds array bounds");
+      }
+      dimLengths.push(idx.data.length);
+    } else {
+      if (Math.round(toNumber(idx)) !== 1)
+        throw new RuntimeError("Index exceeds array bounds");
+      dimLengths.push(1);
     }
-    const i = Math.round(toNumber(idx));
-    if (i !== 1) throw new RuntimeError("Index exceeds array bounds");
   }
-  return base;
+  if (!anyTensor) return base;
+  const total = dimLengths.reduce((a, b) => a * b, 1);
+  const data = allocFloat64Array(total);
+  data.fill(base ? 1 : 0);
+  const outShape = dimLengths.length >= 2 ? dimLengths : [dimLengths[0], 1];
+  const result = RTV.tensor(data, outShape);
+  result._isLogical = true;
+  return result;
 }
 
 function indexIntoTensorWithTensor(
