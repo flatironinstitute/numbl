@@ -1859,7 +1859,13 @@ function storeIntoTensorND(
   const dimIndices: number[][] = indices.map((idx, dim) => {
     const dimSize = dim < shape.length ? shape[dim] : 1;
     if (isColonIndex(idx)) {
-      if (dimSize === 0 && rhsShape) {
+      // A colon must size from the RHS when this dimension's extent is
+      // unknown: either the dim is explicitly empty (dimSize === 0) or it is
+      // a trailing dim beyond the base's declared rank (e.g. dim 2 of a [0,0]
+      // base for `a(1,:,:) = reshape(...)` growing from an empty/undefined
+      // array). Otherwise the colon spans the existing dimension.
+      const dimSizeUnknown = dimSize === 0 || dim >= shape.length;
+      if (dimSizeUnknown && rhsShape) {
         const rDim =
           rhsDimCursor < rhsShape.length ? rhsShape[rhsDimCursor] : 1;
         rhsDimCursor++;
