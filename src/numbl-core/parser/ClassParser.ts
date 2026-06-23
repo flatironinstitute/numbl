@@ -46,7 +46,15 @@ export class ClassParser extends FunctionParser {
 
     let superClass: string | null = null;
     if (this.consume(Token.Less)) {
-      superClass = this.parseQualifiedName();
+      // A class may list multiple superclasses joined by `&` (multiple
+      // inheritance), e.g. `handle & matlab.mixin.CustomDisplay`. numbl models
+      // only a single superclass; retain `handle` if present (so reference
+      // semantics are preserved) — otherwise keep the first.
+      const supers: string[] = [this.parseQualifiedName()];
+      while (this.consume(Token.And)) {
+        supers.push(this.parseQualifiedName());
+      }
+      superClass = supers.includes("handle") ? "handle" : supers[0];
     }
 
     const members: ClassMember[] = [];

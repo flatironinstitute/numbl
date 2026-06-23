@@ -93,14 +93,15 @@ export class ArgumentsParser extends ControlFlowParser {
       dimensions = this.parseArgDimensions();
     }
 
-    // Parse optional class name (an identifier on the same line, not { or =)
+    // Parse optional class name (an identifier on the same line, not { or =).
+    // May be namespace-qualified, e.g. `matlab.io.xml.dom.Element`.
     let className: string | null = null;
-    if (
-      this.peekToken() === Token.Ident &&
-      this.peekToken() !== Token.Newline &&
-      this.peekToken() !== Token.Semicolon
-    ) {
+    if (this.peekToken() === Token.Ident) {
       className = this.next()!.lexeme;
+      while (this.peekToken() === Token.Dot) {
+        this.consume(Token.Dot);
+        className += "." + this.expectIdent();
+      }
     }
 
     // Parse optional validators: {mustBeNumeric, ...}
@@ -154,22 +155,39 @@ export class ArgumentsParser extends ControlFlowParser {
   }
 
   /**
-   * Parse validator list: {mustBeNumeric, mustBePositive}
+   * Parse validator list: {mustBeNumeric, mustBePositive}. Validators may be
+   * full function calls with arguments, e.g.
+   * `{mustBeMember(x,["a","b"]), mustBeInRange(x,0,7)}`. The validator bodies
+   * are not enforced at runtime, so we capture the top-level validator name
+   * tokens and skip past any nested `(...)`, `[...]`, `{...}` so parsing
+   * resumes correctly at the default value (`= expr`) or end of line.
    */
   private parseArgValidators(): string[] {
     this.consume(Token.LBrace);
     const validators: string[] = [];
+    let depth = 0; // nesting depth inside the validator braces
 
-    while (
-      this.peekToken() !== Token.RBrace &&
-      this.peekToken() !== undefined
-    ) {
-      if (this.consume(Token.Comma)) continue;
-      if (this.peekToken() === Token.Ident) {
-        validators.push(this.next()!.lexeme);
-      } else {
-        break;
+    while (this.peekToken() !== undefined) {
+      const tok = this.peekToken();
+      if (depth === 0 && tok === Token.RBrace) break;
+
+      if (
+        tok === Token.LParen ||
+        tok === Token.LBracket ||
+        tok === Token.LBrace
+      ) {
+        depth++;
+      } else if (
+        tok === Token.RParen ||
+        tok === Token.RBracket ||
+        tok === Token.RBrace
+      ) {
+        depth--;
+      } else if (depth === 0 && tok === Token.Ident) {
+        // Top-level identifier is a validator function name.
+        validators.push(this.peek()!.lexeme);
       }
+      this.next();
     }
 
     this.consume(Token.RBrace);

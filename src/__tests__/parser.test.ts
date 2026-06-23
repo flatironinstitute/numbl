@@ -792,6 +792,24 @@ describe("parseMFile - classdef", () => {
     }
   });
 
+  it("parses classdef with multiple superclasses, keeping handle", () => {
+    const stmt = parseFirst(
+      "classdef MyClass < handle & matlab.mixin.CustomDisplay\n  properties\n    x\n  end\nend"
+    );
+    if (stmt.type === "ClassDef") {
+      expect(stmt.superClass).toBe("handle");
+    }
+  });
+
+  it("parses classdef with a dotted superclass", () => {
+    const stmt = parseFirst(
+      "classdef MyClass < matlab.mixin.CustomDisplay\n  properties\n    x\n  end\nend"
+    );
+    if (stmt.type === "ClassDef") {
+      expect(stmt.superClass).toBe("matlab.mixin.CustomDisplay");
+    }
+  });
+
   it("parses classdef with methods", () => {
     const stmt = parseFirst(
       "classdef MyClass\n  methods\n    function foo(obj)\n    end\n  end\nend"
@@ -919,6 +937,29 @@ describe("parseMFile - arguments blocks", () => {
     );
     if (stmt.type === "Function") {
       expect(stmt.argumentsBlocks[0].entries[0].className).toBe("double");
+    }
+  });
+
+  it("parses arguments block with a dotted (namespaced) class name", () => {
+    const stmt = parseFirst(
+      "function foo(e)\n  arguments\n    e (1,1) matlab.io.xml.dom.Element\n  end\nend"
+    );
+    if (stmt.type === "Function") {
+      const entry = stmt.argumentsBlocks[0].entries[0];
+      expect(entry.className).toBe("matlab.io.xml.dom.Element");
+      expect(entry.dimensions).toEqual(["1", "1"]);
+    }
+  });
+
+  it("parses arguments block with validators that take arguments", () => {
+    const stmt = parseFirst(
+      'function foo(opts)\n  arguments\n    opts.Theme (1,1) string {mustBeMember(opts.Theme,["light","dark"])} = "auto"\n  end\nend'
+    );
+    if (stmt.type === "Function") {
+      const entry = stmt.argumentsBlocks[0].entries[0];
+      expect(entry.name).toBe("opts.Theme");
+      expect(entry.validators).toContain("mustBeMember");
+      expect(entry.defaultValue).not.toBeNull();
     }
   });
 
