@@ -466,6 +466,35 @@ register("isa", (ctx, args) => {
   return ctx.rt.isa(args[0], args[1]);
 });
 
+register("superclasses", (ctx, args) => {
+  if (args.length !== 1) return FALL_THROUGH;
+  const v = ensureRuntimeValue(args[0]);
+  // MATLAB: superclasses(obj) or superclasses('ClassName') returns a column
+  // cell array of the names of the class's superclasses (its ancestors, not
+  // including the class itself), or a 0x1 empty cell when the class has no
+  // (visible) superclasses or the input is a built-in type.
+  let className: string | undefined;
+  if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v)) {
+    className = v.className;
+  } else if (isRuntimeChar(v) || isRuntimeString(v)) {
+    className = toString(v);
+  }
+  const names: string[] = [];
+  if (className) {
+    const seen = new Set<string>([className]);
+    let current = ctx.rt.getClassParentName(className);
+    while (current && !seen.has(current)) {
+      names.push(current);
+      seen.add(current);
+      current = ctx.rt.getClassParentName(current);
+    }
+  }
+  return RTV.cell(
+    names.map(n => RTV.string(n)),
+    [names.length, 1]
+  );
+});
+
 register("__inferred_type_str", (_ctx, args) => {
   if (args.length !== 1) return FALL_THROUGH;
   const rv = ensureRuntimeValue(args[0]);

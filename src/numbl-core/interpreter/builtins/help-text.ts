@@ -391,6 +391,11 @@ const H: Record<string, BuiltinHelp> = {
     signatures: ["C = class(A)"],
     description: "Returns the class name of A as a character vector.",
   },
+  superclasses: {
+    signatures: ["S = superclasses(ClassName)", "S = superclasses(obj)"],
+    description:
+      "Names of the superclasses of a class, returned as a column cell array of character vectors. Accepts a class name (char/string) or an object. Returns an empty cell for built-in types or classes with no superclasses.",
+  },
   fieldnames: {
     signatures: ["F = fieldnames(S)"],
     description: "Returns cell array of field names of struct or object S.",
