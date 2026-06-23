@@ -243,6 +243,29 @@ registerIBuiltin({
   }),
 });
 
+// ── spalloc ──────────────────────────────────────────────────────────────
+
+// spalloc(m, n, nzmax) allocates an all-zero m×n sparse matrix with space
+// for nzmax nonzeros. numbl's CSC storage grows dynamically, so nzmax is
+// only a hint and is ignored.
+registerIBuiltin({
+  name: "spalloc",
+  resolve: () => ({
+    outputTypes: [{ kind: "unknown" }],
+    apply: args => {
+      const m = args.length >= 1 ? Math.round(toNumber(args[0])) : 0;
+      const n = args.length >= 2 ? Math.round(toNumber(args[1])) : 0;
+      return RTV.sparseMatrix(
+        m,
+        n,
+        new Int32Array(0),
+        new Int32Array(n + 1),
+        allocFloat64Array(0)
+      );
+    },
+  }),
+});
+
 // ── speye ────────────────────────────────────────────────────────────────
 
 registerIBuiltin({

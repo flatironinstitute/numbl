@@ -33,6 +33,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
   type RuntimeClassInstanceArray,
+  type RuntimeClassInstance,
 } from "../runtime/types.js";
 import {
   dictLookup,
@@ -672,6 +673,47 @@ export function indexStore(
   // Struct scalar indexed assignment
   if (isRuntimeStruct(mv)) {
     return ensureRuntimeValue(rhs);
+  }
+  // Object-array assignment/growth: arr(k) = obj where the destination is an
+  // undefined/empty slot (empty tensor), an existing class-instance array, or
+  // a scalar instance being grown into an array (k >= 2). This is the
+  // old-style pattern `s.boundary(iside) = msh_cartesian(...)` (growing from
+  // an undefined field) and `arr(k) = obj` array building. Single-element
+  // replacement of a scalar instance (`obj(1) = other`, k === 0) is left to
+  // the subsasgn dispatch below so that custom/overloaded subsasgn and the
+  // in-method bypass semantics are preserved.
+  if (indices.length === 1 && isRuntimeClassInstance(ensureRuntimeValue(rhs))) {
+    const k = Math.round(toNumber(ensureRuntimeValue(indices[0]))) - 1;
+    const growsArray =
+      isRuntimeClassInstanceArray(mv) ||
+      (isRuntimeTensor(mv) && mv.data.length === 0) ||
+      (isRuntimeClassInstance(mv) && k >= 1);
+    if (growsArray) {
+      if (k < 0) throw new RuntimeError("Index must be a positive integer");
+      const rhsInst = ensureRuntimeValue(rhs) as RuntimeClassInstance;
+      const existing = isRuntimeClassInstanceArray(mv)
+        ? [...mv.elements]
+        : isRuntimeClassInstance(mv)
+          ? [mv]
+          : [];
+      const className = isRuntimeClassInstanceArray(mv)
+        ? mv.className
+        : isRuntimeClassInstance(mv)
+          ? mv.className
+          : rhsInst.className;
+      // Pad any gap with default-constructed (empty-field) instances so the
+      // array stays contiguous (MATLAB pads object arrays this way).
+      while (existing.length < k) {
+        existing.push(
+          RTV.classInstance(className, [...rhsInst.fields.keys()], false)
+        );
+      }
+      existing[k] = rhsInst;
+      // Unwrap a single element back to a scalar instance (numbl's convention:
+      // a 1-element object array reads as a scalar).
+      if (existing.length === 1) return existing[0];
+      return RTV.classInstanceArray(className, existing, [1, existing.length]);
+    }
   }
   // Class instance paren-indexed assignment: dispatch to subsasgn if available
   if (isRuntimeClassInstance(mv)) {

@@ -12,7 +12,11 @@ import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
 import type { IBuiltin } from "../interpreter/builtins/index.js";
 import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
-import { type ClassInfo, extractClassInfo } from "./classInfo.js";
+import {
+  type ClassInfo,
+  extractClassInfo,
+  makeOldStyleClassInfo,
+} from "./classInfo.js";
 import { type ExternalAccessDirectives } from "../externalAccessDirective.js";
 
 // Re-export ClassInfo for consumers
@@ -396,17 +400,62 @@ export class LoweringContext {
     }
 
     // Second pass: register @folder class groups
+    const startsWithClassdef = (source: string): boolean => {
+      let t = source.trimStart();
+      while (t.startsWith("%")) {
+        const nl = t.indexOf("\n");
+        if (nl < 0) return false;
+        t = t.slice(nl + 1).trimStart();
+      }
+      return t.startsWith("classdef");
+    };
     for (const [className, group] of classFolderGroups) {
-      if (!group.classDefFile) {
-        // No classdef file — skip. In MATLAB, @ClassName methods without a
-        // classdef are only dispatched on instances of that class. Registering
-        // them as regular workspace functions would incorrectly shadow
-        // same-named functions from other directories.
+      // The @Name/Name.m file lands in classDefFile by name match, but for an
+      // old-style (pre-classdef) class it is a plain constructor function, not
+      // a classdef. Detect that and route to the old-style path.
+      const hasRealClassdef =
+        !!group.classDefFile && startsWithClassdef(group.classDefFile.source);
+
+      if (!hasRealClassdef) {
+        // Old-style (pre-classdef) class. The constructor is @Name/Name.m
+        // (the basename-matched file, which here sits in classDefFile); the
+        // rest are external methods dispatched on instances.
+        const dotIdx = className.lastIndexOf(".");
+        const baseName = dotIdx >= 0 ? className.slice(dotIdx + 1) : className;
+        const methodBase = (f: WorkspaceFile) =>
+          f.name.split("/").pop()!.replace(/\.m$/, "");
+        const ctorFile =
+          group.classDefFile ??
+          group.methodFiles.find(f => methodBase(f) === baseName);
+        if (!ctorFile) {
+          // No constructor file (e.g. only helper methods): cannot construct
+          // instances, so skip — same rationale as the classdef path (would
+          // shadow same-named functions from other directories).
+          continue;
+        }
+        const methodFiles = group.methodFiles
+          .filter(f => f !== ctorFile)
+          .map(f => ({
+            name: methodBase(f),
+            fileName: f.name,
+            source: f.source,
+          }));
+        if (!this.registry.classesByName.has(className)) {
+          this.registry.classesByName.set(
+            className,
+            makeOldStyleClassInfo(
+              className,
+              baseName,
+              { fileName: ctorFile.name, source: ctorFile.source },
+              methodFiles
+            )
+          );
+        }
         continue;
       }
 
       // Register the class from the classdef file
-      this.registerWorkspaceClass(className, group.classDefFile);
+      this.registerWorkspaceClass(className, group.classDefFile!);
 
       // Attach external method files to the class info
       const info = this.registry.classesByName.get(className);
@@ -708,8 +757,10 @@ export class LoweringContext {
     // Create a new context for this class file
     const ctx = new LoweringContext(info.source, info.fileName);
 
-    // Register all methods as local functions
-    for (const member of info.ast.members) {
+    // Register all methods as local functions. Old-style @folder classes have
+    // no classdef AST (info.ast === null); their methods are external files
+    // resolved separately, so there is nothing to register here.
+    for (const member of info.ast?.members ?? []) {
       if (member.type !== "Methods") continue;
       for (const methodStmt of member.body) {
         if (methodStmt.type !== "Function") continue;
@@ -926,8 +977,11 @@ export class LoweringContext {
         if (!info) break;
         for (const m of info.methodNames) instanceMethods.add(m);
         for (const m of info.staticMethodNames) staticMethods.add(m);
-        // Include external method files
+        // Include external method files. For old-style @folder classes the
+        // constructor is also an external file (@Name/Name.m); exclude it so
+        // `Name(x)` resolves as construction, not a method call.
         for (const m of info.externalMethodFiles.keys()) {
+          if (info.isOldStyle && m === info.constructorName) continue;
           if (!info.staticMethodNames.has(m)) {
             instanceMethods.add(m);
           }

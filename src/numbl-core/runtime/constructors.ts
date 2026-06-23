@@ -14,6 +14,7 @@ import {
   RuntimeStruct,
   RuntimeFunction,
   RuntimeClassInstance,
+  RuntimeClassInstanceArray,
   RuntimeComplexNumber,
   RuntimeDummyHandle,
   RuntimeGraphicsHandle,
@@ -133,6 +134,14 @@ export const RTV = {
       );
     }
     return new RuntimeClassInstance(className, fields, isHandleClass);
+  },
+
+  classInstanceArray(
+    className: string,
+    elements: RuntimeClassInstance[],
+    shape?: [number, number]
+  ): RuntimeClassInstanceArray {
+    return new RuntimeClassInstanceArray(className, elements, shape);
   },
 
   complex(re: number, im: number): RuntimeComplexNumber {

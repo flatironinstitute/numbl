@@ -136,6 +136,16 @@ defineBuiltin({
   cases: [anyToLogicalCase(args => isRuntimeSparseMatrix(args[0]))],
 });
 
+defineBuiltin({
+  name: "isobject",
+  cases: [
+    anyToLogicalCase(
+      args =>
+        isRuntimeClassInstance(args[0]) || isRuntimeClassInstanceArray(args[0])
+    ),
+  ],
+});
+
 // ── Shape predicates ─────────────────────────────────────────────────────
 
 defineBuiltin({
@@ -353,6 +363,34 @@ function mkChar(value: string): RuntimeChar {
 defineBuiltin({
   name: "class",
   cases: [
+    // Old-style (pre-classdef) constructor form: class(structData, 'ClassName')
+    // builds a value-type instance whose fields are the struct's fields. The
+    // optional class(s,'Name',parent,...) inheritance form is not supported
+    // (returns null → "unsupported argument types").
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        if (argTypes[0].kind !== "struct") return null;
+        const k = argTypes[1].kind;
+        if (k !== "char" && k !== "string") return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const s = args[0];
+        if (!isRuntimeStruct(s))
+          throw new RuntimeError(
+            "class: first argument must be a scalar struct"
+          );
+        const nameVal = args[1];
+        const className = isRuntimeChar(nameVal)
+          ? nameVal.value
+          : isRuntimeString(nameVal)
+            ? nameVal
+            : String(nameVal);
+        const fieldNames = [...s.fields.keys()];
+        return RTV.classInstance(className, fieldNames, false, s.fields);
+      },
+    },
     {
       match: argTypes => {
         if (argTypes.length !== 1) return null;

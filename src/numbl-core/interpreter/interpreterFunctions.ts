@@ -436,6 +436,24 @@ export function instantiateClass(
     return this.rt.callClassMethod(className, className, nargout, args);
   }
 
+  // Old-style (pre-classdef) class: the constructor is a plain @Name/Name.m
+  // function that builds its own instance via `class(struct, 'Name')`. Call it
+  // directly with the user args — do NOT pre-create/prepend an instance.
+  if (classInfo.isOldStyle) {
+    const ctorName = classInfo.constructorName ?? className;
+    const ctorFn = this.findExternalMethod(classInfo, ctorName);
+    if (!ctorFn)
+      throw new RuntimeError(
+        `Constructor for old-style class '${className}' not found`
+      );
+    const fileName =
+      classInfo.externalMethodFiles.get(ctorName)?.fileName ??
+      classInfo.fileName;
+    return this.withFileContext(fileName, className, ctorName, () =>
+      this.callUserFunction(ctorFn, args, nargout)
+    );
+  }
+
   const { propertyNames, propertyDefaults } =
     this.collectClassProperties(classInfo);
 
@@ -471,7 +489,7 @@ export function interpretConstructor(
   const constructorName = classInfo.constructorName;
   if (!constructorName) return args[0];
 
-  for (const member of classInfo.ast.members) {
+  for (const member of classInfo.ast?.members ?? []) {
     if (member.type !== "Methods") continue;
     for (const methodStmt of member.body) {
       if (
@@ -947,7 +965,10 @@ export function findMethodInClass(
   const cached = this.functionDefCache.get(cacheKey);
   if (cached) return cached;
 
-  for (const member of classInfo.ast.members) {
+  // Old-style @folder classes (classInfo.ast === null) define all methods as
+  // external files — skip the in-classdef scan and let the caller fall back
+  // to findExternalMethod.
+  for (const member of classInfo.ast?.members ?? []) {
     if (member.type !== "Methods") continue;
     for (const methodStmt of member.body) {
       if (methodStmt.type === "Function" && methodStmt.name === methodName) {

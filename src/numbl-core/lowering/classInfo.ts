@@ -20,7 +20,8 @@ export interface ClassInfo {
   methodNames: Set<string>; // instance method names (non-static, non-constructor)
   staticMethodNames: Set<string>;
   constructorName: string | null; // method name matching class name
-  ast: Stmt & { type: "ClassDef" }; // the parsed ClassDef AST
+  ast: (Stmt & { type: "ClassDef" }) | null; // the parsed ClassDef AST (null for old-style @folder classes)
+  isOldStyle?: boolean; // true for pre-classdef @folder classes (constructor is a plain function calling class(s,'name'))
   inferiorClasses: string[]; // classes declared inferior via InferiorClasses attribute
   externalMethodFiles: Map<string, { fileName: string; source: string }>; // method name → file info (for @folder methods)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,5 +126,53 @@ export function extractClassInfo(
     inferiorClasses,
     ast: classDef,
     externalMethodFiles: new Map(),
+  };
+}
+
+/**
+ * Build ClassInfo for an old-style (pre-classdef) `@ClassName` folder class.
+ * There is no classdef AST: the constructor is the `@Name/Name.m` plain
+ * function (which calls `obj = class(struct, 'Name')`), and every other `.m`
+ * in the folder is an external method dispatched on instances. Fields are
+ * dynamic (defined by the constructor's struct), so there are no declared
+ * property names.
+ */
+export function makeOldStyleClassInfo(
+  qualifiedName: string,
+  baseName: string,
+  constructorFile: { fileName: string; source: string },
+  methodFiles: { name: string; fileName: string; source: string }[]
+): ClassInfo {
+  const externalMethodFiles = new Map<
+    string,
+    { fileName: string; source: string }
+  >();
+  externalMethodFiles.set(baseName, {
+    fileName: constructorFile.fileName,
+    source: constructorFile.source,
+  });
+  const methodNames = new Set<string>();
+  for (const mf of methodFiles) {
+    externalMethodFiles.set(mf.name, {
+      fileName: mf.fileName,
+      source: mf.source,
+    });
+    methodNames.add(mf.name);
+  }
+  return {
+    name: baseName,
+    qualifiedName,
+    fileName: constructorFile.fileName,
+    source: constructorFile.source,
+    superClass: null,
+    propertyNames: [],
+    propertyDefaults: new Map(),
+    methodNames,
+    staticMethodNames: new Set(),
+    constructorName: baseName,
+    inferiorClasses: [],
+    ast: null,
+    isOldStyle: true,
+    externalMethodFiles,
   };
 }

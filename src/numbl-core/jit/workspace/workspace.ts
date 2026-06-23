@@ -323,9 +323,12 @@ export class Workspace {
     };
 
     for (const [name, info] of this.ctx.registry.classesByName) {
+      // Old-style (pre-classdef) @folder classes have no classdef AST and run
+      // exclusively on the interpreter — never register them with the JIT.
+      if (info.isOldStyle) continue;
       registerOrDefer(name, () =>
         registerClassDef(
-          info.ast,
+          info.ast!,
           info.fileName,
           this.collectExternalMethods(info)
         )
@@ -337,10 +340,10 @@ export class Workspace {
         // a local class with the same name is a conflict.
         throw new UnsupportedConstruct(
           `class '${name}' is defined both locally and as a workspace class`,
-          info.ast.span
+          info.ast?.span
         );
       }
-      registerOrDefer(name, () => registerClassDef(info.ast, info.fileName));
+      registerOrDefer(name, () => registerClassDef(info.ast!, info.fileName));
     }
 
     // Reject classes that shadow a registered workspace function or
@@ -464,7 +467,7 @@ export class Workspace {
         throw new UnsupportedConstruct(
           `internal: external method file '${mf.fileName}' for ` +
             `'${info.qualifiedName}.${methodName}' was not parsed`,
-          info.ast.span
+          info.ast?.span
         );
       }
       // Dispatch is by file name: the primary method is the file's first
@@ -485,7 +488,7 @@ export class Workspace {
       if (!primary) {
         throw new UnsupportedConstruct(
           `external method file '${mf.fileName}' has no function`,
-          info.ast.span
+          info.ast?.span
         );
       }
       out.set(methodName, primary);
