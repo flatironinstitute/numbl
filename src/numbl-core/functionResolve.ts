@@ -407,6 +407,11 @@ function resolveFunctionImpl(
     for (const argType of argTypes) {
       if (argType?.kind === "ClassInstance") {
         const className = argType.className;
+        // `Name(...)` where Name is the class's own constructor is always
+        // construction, never method dispatch — even when an argument is an
+        // instance of that class (e.g. SE3(anotherSE3) copies via the
+        // constructor). Let it fall through to the constructor resolution below.
+        if (index.classConstructors.get(className) === name) continue;
         if (
           !candidates.includes(className) &&
           (index.classInstanceMethods.get(className)?.has(name) ||

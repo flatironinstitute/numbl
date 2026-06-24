@@ -20,12 +20,15 @@ import {
   isRuntimeGraphicsHandle,
   isRuntimeDictionary,
   isRuntimeClassInstanceArray,
+  RuntimeTensor,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
+import { toString } from "../../runtime/convert.js";
 import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { incref } from "../../runtime/refcount.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -222,6 +225,91 @@ defineBuiltin({
       args =>
         isRuntimeClassInstance(args[0]) || isRuntimeClassInstanceArray(args[0])
     ),
+  ],
+});
+
+defineBuiltin({
+  name: "isprop",
+  help: {
+    signatures: ["tf = isprop(obj, PropertyName)"],
+    description:
+      "Return logical 1 where PropertyName is a property of object obj, else 0. The result has the same size as obj. Only class objects have properties: structs (even with that field), numeric, char and other built-in types always return false. Methods are not properties.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        return [{ kind: "boolean" }];
+      },
+      apply: args => {
+        const v = args[0];
+        const nameArg = args[1];
+        // PropertyName must be a single char row vector or string scalar;
+        // anything else (cell, string array, numeric, ...) means "no match".
+        let propName: string | null = null;
+        if (isRuntimeChar(nameArg)) propName = nameArg.value;
+        else if (isRuntimeString(nameArg)) propName = nameArg;
+        // Object arrays are homogeneous, so every element gives the same
+        // answer. A class instance's field map holds all declared properties
+        // (public and private), which is exactly what isprop reports.
+        let answer = false;
+        if (propName !== null) {
+          if (isRuntimeClassInstance(v)) answer = v.fields.has(propName);
+          else if (isRuntimeClassInstanceArray(v))
+            answer =
+              v.elements.length > 0 && v.elements[0].fields.has(propName);
+        }
+        const shape = getShape(v);
+        const n = shape.reduce((a, b) => a * b, 1);
+        if (n === 1) return RTV.logical(answer);
+        const data = allocFloat64Array(n);
+        if (answer) data.fill(1);
+        return new RuntimeTensor(data, shape, undefined, true);
+      },
+    },
+  ],
+});
+
+defineBuiltin({
+  name: "addprop",
+  help: {
+    signatures: ["p = addprop(obj, PropertyName)"],
+    description:
+      "Add a dynamic property named PropertyName to the dynamicprops (handle) object obj. The property can then be read and assigned via obj.PropertyName. Returns a meta.DynamicProperty describing the new property.",
+  },
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        return [{ kind: "unknown" }];
+      },
+      apply: args => {
+        const obj = args[0];
+        if (!isRuntimeClassInstance(obj))
+          throw new RuntimeError(
+            "addprop: first argument must be a dynamicprops object"
+          );
+        const name = toString(args[1]);
+        // Add the property (default empty value) if not already present. For a
+        // handle class this persists on the shared instance; reads/writes via
+        // obj.(name) then resolve against the field map. The default value is
+        // increfed so the field map holds a balanced reference (a later
+        // bindField on assignment decrefs the old value).
+        if (!obj.fields.has(name)) {
+          const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
+          incref(empty);
+          obj.fields.set(name, empty);
+        }
+        // Minimal meta.DynamicProperty: enough for `p.Name` and for setting
+        // accessor fields (e.g. p.SetMethod = @...) on the returned handle.
+        return RTV.classInstance(
+          "meta.DynamicProperty",
+          ["Name"],
+          true,
+          new Map([["Name", RTV.char(name)]])
+        );
+      },
+    },
   ],
 });
 

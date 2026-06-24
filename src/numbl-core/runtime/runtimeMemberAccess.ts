@@ -10,7 +10,12 @@ import {
   mSetField,
   RuntimeError,
 } from "../runtime/index.js";
-import { isRuntimeStruct, isRuntimeClassInstance } from "../runtime/types.js";
+import {
+  isRuntimeStruct,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+} from "../runtime/types.js";
+import { horzcat } from "./tensor-construction.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 
@@ -52,16 +57,29 @@ export function getMember(rt: Runtime, base: unknown, name: string): unknown {
       `No property or method '${name}' for class '${mv.className}'`
     );
   }
+  // Property access on an object array yields a comma-separated list; numbl
+  // materializes it by horzcat-ing the per-element values (mirroring struct
+  // arrays, e.g. `[obj_array.prop]`). Route each element through getMember so
+  // getters / Dependent properties are respected.
+  if (isRuntimeClassInstanceArray(mv)) {
+    const values = mv.elements.map(el =>
+      ensureRuntimeValue(getMember(rt, el, name))
+    );
+    return horzcat(...values);
+  }
   return mGetField(mv, name);
 }
 
 export function getMemberDynamic(
+  rt: Runtime,
   base: unknown,
   nameExpr: unknown
 ): RuntimeValue {
-  const mv = ensureRuntimeValue(base);
   const name = toString(ensureRuntimeValue(nameExpr));
-  return mGetField(mv, name);
+  // Route through getMember so property getters (get.Prop) and object-array
+  // expansion are honored for dynamic field access `obj.(name)`, exactly as
+  // for static `obj.Prop`.
+  return ensureRuntimeValue(getMember(rt, base, name));
 }
 
 export function getMemberOrEmpty(base: unknown, name: string): RuntimeValue {
@@ -92,7 +110,12 @@ export function setMemberReturn(
       if (setter) {
         rt.activeAccessors.add(accessorKey);
         try {
-          const result = setter(1, base, rhs);
+          // Call with nargout=0: a handle-class setter declares no output
+          // (`set.Prop(obj, v)`), so requesting an output would raise "Too
+          // many output arguments". A value-class setter
+          // (`obj = set.Prop(obj, v)`) still returns its first output even at
+          // nargout=0, so its modified object is captured below.
+          const result = setter(0, base, rhs);
           return result !== undefined ? result : base;
         } finally {
           rt.activeAccessors.delete(accessorKey);
@@ -110,10 +133,11 @@ export function setMemberDynamicReturn(
   nameExpr: unknown,
   rhs: unknown
 ): RuntimeValue {
-  const mv = ensureRuntimeValue(base);
   const name = toString(ensureRuntimeValue(nameExpr));
-  const rhsMv = ensureRuntimeValue(rhs);
-  return mSetField(mv, name, rhsMv, rt);
+  // Route through setMemberReturn so property setters (set.Prop) are honored
+  // for dynamic field assignment `obj.(name) = v`, exactly as for static
+  // `obj.Prop = v`.
+  return ensureRuntimeValue(setMemberReturn(rt, base, name, rhs));
 }
 
 /**

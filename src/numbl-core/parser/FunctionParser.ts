@@ -15,10 +15,19 @@ export class FunctionParser extends ArgumentsParser {
 
     const outputs: string[] = [];
     if (this.consume(Token.LBracket)) {
-      // Empty output list: `function [] = name(...)` (no outputs)
+      // Empty output list: `function [] = name(...)` (no outputs).
+      // Output names may be separated by commas or just whitespace, e.g.
+      // `function [a, b] = f()` and `function [a b] = f()` are both valid.
+      // Only continue while the next token can begin another output name, so
+      // malformed lists still report the expected ']' below.
       if (this.peekToken() !== Token.RBracket) {
         outputs.push(this.expectIdentOrTilde());
-        while (this.consume(Token.Comma)) {
+        while (
+          this.peekToken() === Token.Comma ||
+          this.peekToken() === Token.Ident ||
+          this.peekToken() === Token.Tilde
+        ) {
+          this.consume(Token.Comma); // optional separator
           outputs.push(this.expectIdentOrTilde());
         }
       }

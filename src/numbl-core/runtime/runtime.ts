@@ -1805,7 +1805,7 @@ export class Runtime {
   }
 
   public getMemberDynamic(base: unknown, nameExpr: unknown): RuntimeValue {
-    return _getMemberDynamic(base, nameExpr);
+    return _getMemberDynamic(this, base, nameExpr);
   }
 
   public getMemberOrEmpty(base: unknown, name: string): RuntimeValue {

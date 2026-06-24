@@ -434,20 +434,17 @@ export function interpretWorkspaceFunction(
   if (!fn) {
     const entry = this.ctx.registry.filesByFuncName.get(target.name);
     if (entry) {
+      // No top-level function in the file → it's a script. MATLAB runs a
+      // script invoked by name in the *caller's* workspace (variables are
+      // shared), not in an isolated scope, so execute the body in `this.env`.
       const ast = this.ctx.getCachedAST(entry.fileName);
       return this.withFileContext(entry.fileName, undefined, undefined, () => {
-        const savedEnv = this.env;
-        this.env = new Environment();
-        try {
-          for (const stmt of ast.body) {
-            if (stmt.type === "Function") continue;
-            const signal = this.execStmt(stmt);
-            if (signal instanceof ReturnSignal) break;
-          }
-          return this.ans;
-        } finally {
-          this.env = savedEnv;
+        for (const stmt of ast.body) {
+          if (stmt.type === "Function") continue;
+          const signal = this.execStmt(stmt);
+          if (signal instanceof ReturnSignal) break;
         }
+        return this.ans;
       });
     }
     throw new RuntimeError(`Workspace function '${target.name}' not found`);

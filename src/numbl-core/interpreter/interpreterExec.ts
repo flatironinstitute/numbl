@@ -12,6 +12,7 @@ import {
   isRuntimeString,
   isRuntimeCell,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeFunction,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
@@ -533,6 +534,10 @@ export function evalExprNargout(
         }
         if (isRuntimeStructArray(rv)) {
           return rv.elements.length;
+        }
+        if (isRuntimeClassInstanceArray(rv)) {
+          if (ctx.numIndices === 1) return rv.elements.length;
+          return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
         }
         if (isRuntimeSparseMatrix(rv)) {
           if (ctx.numIndices === 1) return rv.m * rv.n;
