@@ -68,6 +68,15 @@ function validateDim(x: number): number {
   return Math.max(0, x);
 }
 
+/** Extract a single scalar dimension. With multiple size args MATLAB requires
+ *  each to be a scalar — a 1×1 array counts, but a multi-element vector errors
+ *  with "Size inputs must be scalar." */
+function toScalarDim(v: RuntimeValue): number {
+  if (isRuntimeTensor(v) && v.data.length !== 1)
+    throw new RuntimeError("Size inputs must be scalar.");
+  return validateDim(toNumber(v));
+}
+
 /** Parse shape arguments: zeros(2,3) or zeros([2,3]) -> [2, 3].
  *  Negative dimensions are clamped to 0. */
 function parseShapeArgs(args: RuntimeValue[]): number[] {
@@ -77,7 +86,7 @@ function parseShapeArgs(args: RuntimeValue[]): number[] {
     for (let i = 0; i < t.data.length; i++) shape.push(validateDim(t.data[i]));
     return shape;
   }
-  return args.map(a => validateDim(toNumber(a)));
+  return args.map(toScalarDim);
 }
 
 /** Build cases for array constructors that take shape args and return a real tensor. */
@@ -130,12 +139,18 @@ function arrayConstructorCases(
         return fillFn(shape);
       },
     },
-    // Multiple scalar args
+    // Multiple scalar args. A 1×1 array counts as a scalar dimension, so
+    // accept `tensor` here too (apply-time validates each is scalar).
     {
       match: argTypes => {
         if (argTypes.length <= 1) return null;
         for (const a of argTypes) {
-          if (a.kind !== "number" && a.kind !== "boolean") return null;
+          if (
+            a.kind !== "number" &&
+            a.kind !== "boolean" &&
+            a.kind !== "tensor"
+          )
+            return null;
         }
         // Propagate literal `exact` per-dim so e.g. zeros(2, 3) gets
         // [2, 3] instead of [-1, -1].

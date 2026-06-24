@@ -138,8 +138,21 @@ export class ControlFlowParser extends CommandParser {
     let catchVar: string | null = null;
     let catchBody: Stmt[] = [];
     if (this.consume(Token.Catch)) {
+      // `catch e` captures the exception only when the identifier stands
+      // alone on the line (followed by a separator or `end`). `catch e = ...`
+      // or `catch e(...)` instead begins the catch body with a statement, so
+      // the identifier must not be swallowed as the exception variable.
       if (this.peekToken() === Token.Ident) {
-        catchVar = this.expectIdent();
+        const after = this.peekTokenAt(1);
+        if (
+          after === undefined ||
+          after === Token.Newline ||
+          after === Token.Semicolon ||
+          after === Token.Comma ||
+          after === Token.End
+        ) {
+          catchVar = this.expectIdent();
+        }
       }
       catchBody = this.parseBlock(t => t === Token.End);
     }

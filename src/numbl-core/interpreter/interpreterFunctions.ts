@@ -890,6 +890,18 @@ export function callNestedFunction(
   fnEnv.setLocal("$nargout", nargout);
   fnEnv.inputArgNames = callInputNames;
 
+  // Pre-register this nested function's own nested functions (hoisted, like
+  // MATLAB). A function nested inside a nested function is visible throughout
+  // its parent's body regardless of definition order.
+  for (const stmt of fn.body) {
+    if (stmt.type === "Function") {
+      fnEnv.nestedFunctions.set(stmt.name, {
+        fn: funcDefFromStmt(stmt),
+        env: fnEnv,
+      });
+    }
+  }
+
   const savedEnv = this.env;
   this.env = fnEnv;
   this.rt.pushCleanupScope();

@@ -1391,7 +1391,16 @@ function storeIntoTensor(
   // different binding, struct field, cell element, etc.).
   if (isShared(base)) {
     const cowImag = base.imag ? allocFloat64Array(base.imag) : undefined;
-    base = RTV.tensor(allocFloat64Array(base.data), [...base.shape], cowImag);
+    const copy = RTV.tensor(
+      allocFloat64Array(base.data),
+      [...base.shape],
+      cowImag
+    );
+    // Preserve the array's class (e.g. logical) across the copy, matching the
+    // in-place path; an indexed assignment must not silently promote logical
+    // to double just because the array was shared.
+    copy._isLogical = base._isLogical;
+    base = copy;
   }
 
   if (indices.length === 1) {
@@ -1425,7 +1434,9 @@ function deleteTensorElements(
       toDelete.add(Math.round(idx.data[i]) - 1);
     }
   } else if (isColonIndex(idx)) {
-    return RTV.tensor(allocFloat64Array(0), [0, 0]);
+    const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
+    empty._isLogical = base._isLogical;
+    return empty;
   }
   // Deleting an empty index set (`A([]) = []`, `A(j:j-1) = []`) is a no-op:
   // MATLAB leaves A unchanged, preserving its class and shape. Return base
@@ -1446,7 +1457,10 @@ function deleteTensorElements(
   const outShape = baseIsColVec ? [newData.length, 1] : [1, newData.length];
   const imOut =
     hasImag && newIm.some(x => x !== 0) ? allocFloat64Array(newIm) : undefined;
-  return RTV.tensor(allocFloat64Array(newData), outShape, imOut);
+  // Element deletion preserves the array's class (e.g. logical stays logical).
+  const result = RTV.tensor(allocFloat64Array(newData), outShape, imOut);
+  result._isLogical = base._isLogical;
+  return result;
 }
 
 /** Collect a set of 0-based indices to delete from a dimension. */
@@ -1494,7 +1508,9 @@ function deleteTensorRowsOrCols(
         if (newIm && base.imag) newIm[dstIdx] = base.imag[srcIdx];
       }
     }
-    return RTV.tensor(newData, [newNrows, ncols], newIm);
+    const result = RTV.tensor(newData, [newNrows, ncols], newIm);
+    result._isLogical = base._isLogical;
+    return result;
   }
   if (isColonIndex(indices[0])) {
     // base(:,colIdx) = [] — delete columns
@@ -1514,7 +1530,9 @@ function deleteTensorRowsOrCols(
         if (newIm && base.imag) newIm[dstIdx] = base.imag[srcIdx];
       }
     }
-    return RTV.tensor(newData, [nrows, newNcols], newIm);
+    const result = RTV.tensor(newData, [nrows, newNcols], newIm);
+    result._isLogical = base._isLogical;
+    return result;
   }
   throw new RuntimeError("Cannot delete from both row and column dimensions");
 }
