@@ -280,7 +280,14 @@ function insertFunctionEndTokens(tokens: TokenInfo[]): TokenInfo[] | null {
 
     if (BLOCK_OPENERS.has(tok.token)) {
       depth++;
-    } else if (tok.token === Token.End && groupDepth === 0) {
+    } else if (
+      tok.token === Token.End &&
+      groupDepth === 0 &&
+      tokens[i - 1]?.token !== Token.Dot
+    ) {
+      // `end` after `.` is a struct field named 'end' (e.g. `s.end = 1;`),
+      // not a block closer — skip it. (Index sentinels like `a(2:end)` are
+      // already excluded by the groupDepth check.)
       depth--;
       if (depth === 0 && inFunction) {
         // This 'end' closes the current top-level function
