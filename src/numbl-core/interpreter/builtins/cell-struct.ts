@@ -502,6 +502,12 @@ registerIBuiltin({
 
 // ── rmfield ─────────────────────────────────────────────────────────────
 
+/** Field-name argument to rmfield: a char/string or a cell array of them. */
+function rmfieldNames(arg: RuntimeValue): string[] {
+  if (isRuntimeCell(arg)) return arg.data.map(toString);
+  return [toString(arg)];
+}
+
 registerIBuiltin({
   name: "rmfield",
   resolve: argTypes => {
@@ -510,25 +516,26 @@ registerIBuiltin({
       outputTypes: [{ kind: "struct", fields: {} }],
       apply: args => {
         const v = args[0];
+        const names = rmfieldNames(args[1]);
         if (isRuntimeStructArray(v)) {
-          const name = toString(args[1]);
-          if (!v.fieldNames.includes(name))
-            throw new RuntimeError(`rmfield: field '${name}' does not exist`);
-          const newFieldNames = v.fieldNames.filter(n => n !== name);
+          for (const name of names)
+            if (!v.fieldNames.includes(name))
+              throw new RuntimeError(`rmfield: field '${name}' does not exist`);
+          const newFieldNames = v.fieldNames.filter(n => !names.includes(n));
           const newElements = v.elements.map(el => {
             const newFields = new Map(el.fields);
-            newFields.delete(name);
+            for (const name of names) newFields.delete(name);
             return RTV.struct(newFields);
           });
           return RTV.structArray(newFieldNames, newElements);
         }
         if (!isRuntimeStruct(v))
           throw new RuntimeError("rmfield: first argument must be a struct");
-        const name = toString(args[1]);
-        if (!v.fields.has(name))
-          throw new RuntimeError(`rmfield: field '${name}' does not exist`);
+        for (const name of names)
+          if (!v.fields.has(name))
+            throw new RuntimeError(`rmfield: field '${name}' does not exist`);
         const newFields = new Map(v.fields);
-        newFields.delete(name);
+        for (const name of names) newFields.delete(name);
         return RTV.struct(newFields);
       },
     };
