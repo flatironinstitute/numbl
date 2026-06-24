@@ -28,6 +28,7 @@ import "./cell-struct.js";
 import "./time-system.js";
 import "./datetime.js";
 import "./sparse.js";
+import "./gallery.js";
 import "./special-math.js";
 import "./geometry.js";
 import "./misc.js";
