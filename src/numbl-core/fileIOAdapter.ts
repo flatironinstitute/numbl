@@ -17,6 +17,16 @@ export interface WebOptions {
   keyValue?: string;
 }
 
+/** Subset of MATLAB's fileattrib attribute struct. `Name` is the resolved
+ *  absolute path. */
+export interface FileAttribInfo {
+  Name: string;
+  directory: boolean;
+  UserRead: boolean;
+  UserWrite: boolean;
+  UserExecute: boolean;
+}
+
 export interface FileIOAdapter {
   /** Open a file, returns an integer file identifier (fid). */
   fopen(filename: string, permission: string): number;
@@ -82,6 +92,12 @@ export interface FileIOAdapter {
 
   /** Move or rename a file or folder. If force is true, overwrites read-only files. Returns true on success. Optional. */
   movefile?(source: string, destination: string, force: boolean): boolean;
+
+  /** Copy a file or folder. If force is true, overwrites read-only files. Returns true on success. Optional. */
+  copyfile?(source: string, destination: string, force: boolean): boolean;
+
+  /** Resolve a file/dir to its absolute path and attributes, or null if it does not exist. Optional. */
+  fileattrib?(path: string): FileAttribInfo | null;
 
   /** Extract a ZIP file to an output folder. Returns list of extracted file paths. Optional. */
   unzip?(zipfilename: string, outputfolder: string): string[];

@@ -4,7 +4,11 @@
  */
 
 import { unzipSync } from "fflate";
-import type { FileIOAdapter, WebOptions } from "../numbl-core/fileIOAdapter.js";
+import type {
+  FileIOAdapter,
+  WebOptions,
+  FileAttribInfo,
+} from "../numbl-core/fileIOAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { VirtualFileSystem, type VfsChanges } from "./VirtualFileSystem.js";
 
@@ -289,6 +293,14 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
 
   movefile(source: string, destination: string): boolean {
     return this.vfs.movefile(source, destination);
+  }
+
+  copyfile(source: string, destination: string): boolean {
+    return this.vfs.copyfile(source, destination);
+  }
+
+  fileattrib(path: string): FileAttribInfo | null {
+    return this.vfs.fileattrib(path);
   }
 
   listDir(dirPath: string): {

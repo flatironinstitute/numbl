@@ -1209,6 +1209,79 @@ export function registerSpecialBuiltins(rt: Runtime): void {
         ];
   });
 
+  // ── copyfile (copy file or folder) ──────────────────────────────────
+
+  registerSpecial("copyfile", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.copyfile)
+      throw new RuntimeError("copyfile is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("copyfile requires at least 1 argument");
+    const source = toString(margs[0]);
+    // If only one argument, destination is the current folder.
+    const destination =
+      margs.length >= 2 ? toString(margs[1]) : (rt.system?.cwd() ?? ".");
+    // Third positional argument can be 'f' to force overwrite of a read-only
+    // destination (the name=value form is not supported here).
+    let force = false;
+    if (margs.length >= 3) {
+      const third = toString(margs[2]);
+      if (third.toLowerCase() === "f") force = true;
+    }
+    const ok = io.copyfile(source, destination, force);
+    if (nargout === 0) {
+      if (!ok)
+        throw new RuntimeError(
+          `copyfile: cannot copy '${source}' to '${destination}'`
+        );
+      return undefined;
+    }
+    return nargout <= 1
+      ? RTV.num(ok ? 1 : 0)
+      : [
+          RTV.num(ok ? 1 : 0),
+          RTV.char(ok ? "" : `Cannot copy '${source}' to '${destination}'`),
+          RTV.char(""),
+        ];
+  });
+
+  // ── fileattrib (resolve absolute path + attributes) ─────────────────
+
+  registerSpecial("fileattrib", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.fileattrib)
+      throw new RuntimeError("fileattrib is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 1)
+      throw new RuntimeError("fileattrib requires at least 1 argument");
+    const p = toString(margs[0]);
+    const info = io.fileattrib(p);
+    if (nargout === 0) {
+      if (!info)
+        throw new RuntimeError(
+          `fileattrib: cannot find '${p}': No such file or directory`
+        );
+      return undefined;
+    }
+    const values: RuntimeValue = info
+      ? RTV.struct(
+          new Map<string, RuntimeValue>([
+            ["Name", RTV.char(info.Name)],
+            ["archive", RTV.num(0)],
+            ["system", RTV.num(0)],
+            ["hidden", RTV.num(0)],
+            ["directory", RTV.num(info.directory ? 1 : 0)],
+            ["UserRead", RTV.num(info.UserRead ? 1 : 0)],
+            ["UserWrite", RTV.num(info.UserWrite ? 1 : 0)],
+            ["UserExecute", RTV.num(info.UserExecute ? 1 : 0)],
+          ])
+        )
+      : RTV.char(`No such file or directory: ${p}`);
+    if (nargout <= 1) return RTV.num(info ? 1 : 0);
+    return [RTV.num(info ? 1 : 0), values, RTV.char("")];
+  });
+
   // ── unzip (ZIP extraction) ──────────────────────────────────────────
 
   registerSpecial("unzip", (nargout, args) => {
@@ -1641,6 +1714,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     // getenv(varname) — return char value (empty if not set)
     return RTV.char(sys?.getEnv(toString(args[0])) ?? "");
   });
+
+  // ── maxNumCompThreads ─────────────────────────────────────────────────────
+
+  // numbl runs single-threaded, so there is always exactly one computational
+  // thread. maxNumCompThreads() reports it; maxNumCompThreads(N) / ('automatic')
+  // would set it in MATLAB and return the PREVIOUS value — here both forms just
+  // report 1 (the set is a no-op).
+  registerSpecial("maxNumCompThreads", () => RTV.num(1));
 
   // ── setenv ──────────────────────────────────────────────────────────────
 

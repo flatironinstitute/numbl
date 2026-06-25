@@ -19,6 +19,7 @@ import {
   rmdirSync,
   renameSync,
   chmodSync,
+  realpathSync,
 } from "fs";
 import { unzipSync } from "fflate";
 import { execFileSync } from "child_process";
@@ -436,6 +437,68 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       }
     } catch {
       return false;
+    }
+  }
+
+  copyfile(source: string, destination: string, force: boolean): boolean {
+    try {
+      const src = expandTilde(source);
+      const srcStat = statSync(src);
+
+      // If destination is an existing directory, copy INTO it keeping the
+      // source basename (MATLAB semantics); otherwise destination names the
+      // target file/folder directly.
+      let dst = expandTilde(destination);
+      try {
+        if (statSync(dst).isDirectory()) dst = join(dst, basename(src));
+      } catch {
+        // destination does not exist: it is the target name
+      }
+
+      if (srcStat.isDirectory()) {
+        copyDirRecursive(src, dst);
+        return true;
+      }
+
+      const parent = dirname(dst);
+      if (parent && parent !== "." && parent !== "/") {
+        mkdirSync(parent, { recursive: true });
+      }
+      // If destination exists and force is set, ensure it is writable.
+      if (force) {
+        try {
+          chmodSync(dst, 0o666);
+        } catch {
+          // ignore (does not exist yet, or chmod unsupported)
+        }
+      }
+      writeFileSync(dst, readFileSync(src));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  fileattrib(path: string): {
+    Name: string;
+    directory: boolean;
+    UserRead: boolean;
+    UserWrite: boolean;
+    UserExecute: boolean;
+  } | null {
+    try {
+      const p = expandTilde(path);
+      const st = statSync(p); // throws if the path does not exist
+      const mode = st.mode;
+      return {
+        Name: realpathSync(p),
+        directory: st.isDirectory(),
+        UserRead: (mode & 0o400) !== 0,
+        UserWrite: (mode & 0o200) !== 0,
+        UserExecute: (mode & 0o100) !== 0,
+      };
+    } catch {
+      return null;
     }
   }
 

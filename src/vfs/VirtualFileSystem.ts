@@ -193,6 +193,66 @@ export class VirtualFileSystem {
     return true;
   }
 
+  /** Copy a file or directory tree (source is left in place). True on success. */
+  copyfile(source: string, destination: string): boolean {
+    const srcNorm = this.normalizePath(source);
+    const srcType = this.exists(srcNorm);
+    if (srcType === null) return false;
+
+    let dstNorm = this.normalizePath(destination);
+    // If destination is an existing directory, copy INTO it (append basename).
+    if (this.exists(dstNorm) === "dir") {
+      const lastSlash = srcNorm.lastIndexOf("/");
+      const baseName = lastSlash >= 0 ? srcNorm.slice(lastSlash + 1) : srcNorm;
+      dstNorm = (dstNorm === "/" ? "" : dstNorm) + "/" + baseName;
+    }
+    if (srcType === "dir" && this.exists(dstNorm) === "file") return false;
+
+    if (srcType === "file") {
+      const content = this.files.get(srcNorm)!.content;
+      if (this.exists(dstNorm) === "file") this.deleteFile(dstNorm);
+      this.writeFile(dstNorm, content);
+      return true;
+    }
+
+    // Directory copy: replicate every file/dir under srcNorm at dstNorm.
+    const srcPrefix = srcNorm + "/";
+    for (const [path, file] of [...this.files]) {
+      if (path === srcNorm || path.startsWith(srcPrefix)) {
+        const rest = path === srcNorm ? "" : path.slice(srcNorm.length);
+        this.writeFile(dstNorm + rest, file.content);
+      }
+    }
+    for (const dir of [...this.directories]) {
+      if (dir === srcNorm || dir.startsWith(srcPrefix)) {
+        const rest = dir === srcNorm ? "" : dir.slice(srcNorm.length);
+        this.directories.add(dstNorm + rest);
+      }
+    }
+    this.directories.add(dstNorm);
+    return true;
+  }
+
+  /** Resolve a path to its (normalized) absolute path + attributes, or null. */
+  fileattrib(path: string): {
+    Name: string;
+    directory: boolean;
+    UserRead: boolean;
+    UserWrite: boolean;
+    UserExecute: boolean;
+  } | null {
+    const norm = this.normalizePath(path);
+    const t = this.exists(norm);
+    if (t === null) return null;
+    return {
+      Name: norm,
+      directory: t === "dir",
+      UserRead: true,
+      UserWrite: true,
+      UserExecute: t === "dir",
+    };
+  }
+
   rmdir(dirPath: string, recursive: boolean): boolean {
     const norm = this.normalizePath(dirPath);
     if (this.exists(norm) !== "dir") return false;
