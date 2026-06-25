@@ -2190,6 +2190,13 @@ function _eigsImpl(
   if (margs.length < 1)
     throw new RuntimeError("eigs requires at least 1 argument");
 
+  // eigs computes on dense matrices internally; densify any sparse inputs
+  // (e.g. a graph Laplacian) so the A / B positions are plain tensors.
+  for (let i = 0; i < margs.length; i++) {
+    const mi = margs[i];
+    if (isRuntimeSparseMatrix(mi)) margs[i] = sparseToDense(mi);
+  }
+
   // 1. Afun vs matrix input, and the matrix size n.
   let afun: RuntimeValue | null = null;
   let A: RuntimeValue | null = null;
