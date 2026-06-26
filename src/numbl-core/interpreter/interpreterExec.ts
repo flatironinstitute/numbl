@@ -20,6 +20,7 @@ import {
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
+import { getLastJitDecline } from "../jitDeclineDiagnostics.js";
 import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { mPow } from "../helpers/arithmetic.js";
 import { getIBuiltinNargin } from "./builtins/types.js";
@@ -396,18 +397,26 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
       // interpreter when C-JIT also declines.
       if (stmt.directive === "assert_jit") {
         const wantC = stmt.args.includes("c");
+        // Surface *why* the JIT declined. The guarded unit declined just
+        // before falling through to the interpreter, so the most recent
+        // recorded decline is (almost always) the relevant one.
+        const decline = getLastJitDecline();
+        const why = decline
+          ? ` Most recent JIT decline (${decline.where}, ${decline.kind}): ${decline.message}`
+          : ` (no JIT decline reason was recorded — the unit may have been ` +
+            `declined before lowering, e.g. an unsupported input type.)`;
         if (this.optimization === "1") {
           throw new RuntimeError(
             `%!numbl:assert_jit: expected the enclosing loop/function/script ` +
               `to be JS-JIT-compiled at --opt 1, but it ran in the ` +
-              `interpreter. (Run with --opt 0 to silence.)`
+              `interpreter.${why} (Run with --opt 0 to silence.)`
           );
         }
         if (this.optimization === "2" && wantC) {
           throw new RuntimeError(
             `%!numbl:assert_jit c: expected the enclosing loop/function/` +
               `script to be C-JIT-compiled at --opt 2, but it ran in the ` +
-              `interpreter. (Run with --opt 0 to silence.)`
+              `interpreter.${why} (Run with --opt 0 to silence.)`
           );
         }
       }

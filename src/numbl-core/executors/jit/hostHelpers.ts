@@ -23,16 +23,22 @@
 import type { Runtime } from "../../runtime/runtime.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { dispatchPlotBuiltin } from "../../runtime/plotBuiltinDispatch.js";
+import { rngRandom } from "../../helpers/prng.js";
 import { jitToNumbl } from "./valueAdapter.js";
 
 export interface JitHostHelpers {
   write: (s: string) => void;
   plotDispatch: (name: string, args: unknown[]) => void;
+  /** One uniform double in [0, 1). Backed by numbl's process-global PRNG
+   *  (the same `rngRandom` the interpreter uses), so JIT'd and interpreted
+   *  `rand` draw from one shared, `rng(seed)`-controllable stream. */
+  rand: () => number;
 }
 
 export function buildHostHelpers(rt: Runtime): JitHostHelpers {
   return {
     write: (s: string) => rt.output(s),
+    rand: () => rngRandom(),
     plotDispatch: (name: string, args: unknown[]) => {
       const runtimeArgs: RuntimeValue[] = args.map(a => jitToNumbl(a));
       const handled = dispatchPlotBuiltin(

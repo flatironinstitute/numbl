@@ -30,6 +30,7 @@ import {
   JitTypeError,
   type Type as CompilerType,
 } from "../../jit/index.js";
+import { recordJitDecline } from "../../jitDeclineDiagnostics.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
@@ -190,6 +191,11 @@ export const jitTopLevelExecutor: Executor<
       return { specFn, nargout };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
+        recordJitDecline({
+          message: e.message,
+          kind: e.constructor.name,
+          where: "jit-top-level",
+        });
         return null;
       }
       throw e;

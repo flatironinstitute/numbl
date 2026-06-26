@@ -41,6 +41,7 @@ import {
   JitTypeError,
   type Type as CompilerType,
 } from "../../jit/index.js";
+import { recordJitDecline } from "../../jitDeclineDiagnostics.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
 import { getOrCreateSession } from "./session.js";
@@ -186,6 +187,11 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
       return { specFn };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
+        recordJitDecline({
+          message: e.message,
+          kind: e.constructor.name,
+          where: "jit-call",
+        });
         return null;
       }
       throw e;

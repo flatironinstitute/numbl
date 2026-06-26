@@ -32,6 +32,7 @@ import {
   JitTypeError,
   type Type as CompilerType,
 } from "../../jit/index.js";
+import { recordJitDecline } from "../../jitDeclineDiagnostics.js";
 import { jitTypeToCompilerType } from "./typeAdapter.js";
 import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
 import type { ConstHandle } from "../classification.js";
@@ -176,6 +177,11 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
       return { specFn };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
+        recordJitDecline({
+          message: e.message,
+          kind: e.constructor.name,
+          where: "jit-loop",
+        });
         return null;
       }
       throw e;

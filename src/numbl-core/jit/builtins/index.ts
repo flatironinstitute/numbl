@@ -60,6 +60,7 @@ import { toc } from "./defs/system/toc.js";
 import { addpath, rmpath, savepath } from "./defs/system/pathBuiltins.js";
 import { cos } from "./defs/math/cos.js";
 import { sin } from "./defs/math/sin.js";
+import { rand } from "./defs/math/rand.js";
 import { tan } from "./defs/math/tan.js";
 import { atan } from "./defs/math/atan.js";
 import { sinh } from "./defs/math/sinh.js";
@@ -171,6 +172,7 @@ for (const b of [
   stdBuiltin,
   min,
   max,
+  rand,
   any,
   all,
   zeros,
