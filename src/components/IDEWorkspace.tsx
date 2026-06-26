@@ -113,6 +113,9 @@ export interface IDEWorkspaceProps {
   loadAllContents: () => Promise<Map<string, Uint8Array>>;
   /** Content cache ref for project files. */
   contentCache: React.RefObject<Map<string, Uint8Array>>;
+  /** Cap (px) on the initial output-panel height (desktop layout). When set,
+   *  the figure panel below it starts with more room. */
+  maxInitialOutputPanelHeight?: number;
   mergeVfsChanges?: (result: {
     addedFiles: WorkspaceFile[];
     modifiedFiles: { path: string; data: Uint8Array }[];
@@ -139,6 +142,7 @@ export function IDEWorkspace({
   loadFileContent,
   loadAllContents,
   contentCache,
+  maxInitialOutputPanelHeight,
   mergeVfsChanges,
 }: IDEWorkspaceProps) {
   const {
@@ -334,7 +338,19 @@ export function IDEWorkspace({
   const [editorWidth, setEditorWidth] = useState(
     (window.innerWidth - initialSidebarWidth) / 2
   );
-  const [outputHeight, setOutputHeight] = useState(window.innerHeight / 2);
+  // Output panel starts at half the window height, optionally capped so the
+  // figure panel below it starts larger (deployed sites can set this).
+  const [outputHeight, setOutputHeight] = useState(() =>
+    maxInitialOutputPanelHeight != null
+      ? Math.min(window.innerHeight / 2, maxInitialOutputPanelHeight)
+      : window.innerHeight / 2
+  );
+  // Let the splitter shrink to the requested initial height when it's below the
+  // usual 150px floor, so a small cap is actually honored.
+  const outputPanelMinSize =
+    maxInitialOutputPanelHeight != null
+      ? Math.min(150, maxInitialOutputPanelHeight)
+      : 150;
 
   const activeFile = useMemo(
     () => allFiles.find(f => f.id === activeFileId),
@@ -1900,7 +1916,7 @@ export function IDEWorkspace({
               <Splitter
                 direction="horizontal"
                 initialSize={outputHeight}
-                minSize={150}
+                minSize={outputPanelMinSize}
                 onSizeChange={setOutputHeight}
               >
                 {outputPanel}

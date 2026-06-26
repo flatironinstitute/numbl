@@ -367,6 +367,9 @@ Options (for build-site):
                        the first script)
   --repo-url <url>   Source repository URL, shown as a link in the deployed
                        site (default: from numbl-project.json)
+  --max-initial-output-panel-height <px>
+                     Cap the initial height (px) of the output panel so the
+                       figure panel below it starts larger (desktop layout)
 
 Options (for parse):
   --dump-ast <file>  Write the AST as indented JSON to <file> (default: stdout)
@@ -1117,6 +1120,7 @@ async function cmdBuildSite(args: string[]) {
   let title: string | undefined;
   let entry: string | undefined;
   let repoUrl: string | undefined;
+  let maxInitialOutputPanelHeight: number | undefined;
   const positional: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
@@ -1125,7 +1129,16 @@ async function cmdBuildSite(args: string[]) {
     else if (a === "--title") title = args[++i];
     else if (a === "--entry") entry = args[++i];
     else if (a === "--repo-url") repoUrl = args[++i];
-    else if (a.startsWith("-")) {
+    else if (a === "--max-initial-output-panel-height") {
+      const n = Number(args[++i]);
+      if (!Number.isFinite(n) || n <= 0) {
+        console.error(
+          "Error: --max-initial-output-panel-height must be a positive number"
+        );
+        process.exit(1);
+      }
+      maxInitialOutputPanelHeight = n;
+    } else if (a.startsWith("-")) {
       console.error(`Unknown option: ${a}`);
       process.exit(1);
     } else positional.push(a);
@@ -1178,7 +1191,12 @@ async function cmdBuildSite(args: string[]) {
   }
 
   // 3. Manifest = existing numbl-project.json (if any) merged with flags.
-  let manifest: { title?: string; entry?: string; repository?: string } = {};
+  let manifest: {
+    title?: string;
+    entry?: string;
+    repository?: string;
+    maxInitialOutputPanelHeight?: number;
+  } = {};
   const existing = collected.find(f => f.path === "numbl-project.json");
   if (existing) {
     try {
@@ -1190,6 +1208,8 @@ async function cmdBuildSite(args: string[]) {
   if (title !== undefined) manifest.title = title;
   if (entry !== undefined) manifest.entry = entry;
   if (repoUrl !== undefined) manifest.repository = repoUrl;
+  if (maxInitialOutputPanelHeight !== undefined)
+    manifest.maxInitialOutputPanelHeight = maxInitialOutputPanelHeight;
   if (!manifest.title) manifest.title = basename(projectDirAbs);
 
   // 4. Build project.zip (manifest replaces any tree copy of itself).
@@ -1231,6 +1251,15 @@ async function cmdBuildSite(args: string[]) {
   indexHtml = indexHtml.includes("<!-- numbl:base -->")
     ? indexHtml.replace("<!-- numbl:base -->", inject)
     : indexHtml.replace("</head>", `  ${inject}\n  </head>`);
+  // Set the document <title> (browser tab name) to the project title so it
+  // reflects the project rather than the generic placeholder. SiteApp also
+  // keeps document.title in sync at runtime; this avoids a flash on first paint.
+  const escapeHtml = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  indexHtml = indexHtml.replace(
+    /<title>.*?<\/title>/,
+    `<title>${escapeHtml(manifest.title)}</title>`
+  );
   writeFileSync(indexPath, indexHtml);
 
   // 6. A 404 that bounces to the deploy root, plus .nojekyll for GitHub Pages.

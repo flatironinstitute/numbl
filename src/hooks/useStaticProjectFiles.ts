@@ -15,6 +15,9 @@ interface ProjectManifest {
   entry?: string;
   title?: string;
   repository?: string;
+  /** Cap (px) on the initial output-panel height; gives the figure panel
+   *  below it more room on first load (desktop layout). */
+  maxInitialOutputPanelHeight?: number;
 }
 
 const MANIFEST_NAME = "numbl-project.json";
@@ -142,6 +145,8 @@ export interface UseStaticProjectFilesResult extends UseProjectFilesResult {
   title: string | null;
   /** Source repository URL from the bundle manifest, if any. */
   repository: string | null;
+  /** Cap (px) on the initial output-panel height from the manifest, if any. */
+  maxInitialOutputPanelHeight: number | null;
   /** True if the bundle failed to load. */
   loadError: string | null;
 }
@@ -161,6 +166,8 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState<string | null>(null);
   const [repository, setRepository] = useState<string | null>(null);
+  const [maxInitialOutputPanelHeight, setMaxInitialOutputPanelHeight] =
+    useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const contentMapRef = useRef(new Map<string, Uint8Array>());
 
@@ -208,6 +215,11 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
         setActiveFileId(pickActiveFile(wsFiles, manifest.entry));
         setTitle(manifest.title ?? null);
         setRepository(manifest.repository ?? null);
+        setMaxInitialOutputPanelHeight(
+          typeof manifest.maxInitialOutputPanelHeight === "number"
+            ? manifest.maxInitialOutputPanelHeight
+            : null
+        );
       } catch (e) {
         if (cancelled) return;
         console.error("Failed to load project bundle:", e);
@@ -442,6 +454,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
     contentCache: contentMapRef,
     title,
     repository,
+    maxInitialOutputPanelHeight,
     loadError,
     mergeVfsChanges: useCallback(() => {
       // No-op for static mode.

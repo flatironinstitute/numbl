@@ -17,6 +17,9 @@ inputs:
   entry:
     description: "Default file to open in the viewer, e.g. main.m."
     default: ""
+  max-initial-output-panel-height:
+    description: "Cap (px) on the initial height of the output panel so the figure panel below it starts larger (desktop layout). Leave empty for the default (half the window)."
+    default: ""
   repo-url:
     description: "Source repository URL shown as a link in the deployed site. Defaults to this repository (<server-url>/<owner>/<repo>)."
     default: ""
@@ -54,6 +57,7 @@ runs:
         OUT_DIR: ${{ inputs.out-dir }}
         IN_TITLE: ${{ inputs.title }}
         IN_ENTRY: ${{ inputs.entry }}
+        IN_MAX_OUTPUT_HEIGHT: ${{ inputs.max-initial-output-panel-height }}
         IN_REPO_URL: ${{ inputs.repo-url }}
         NUMBL_VERSION: ${{ inputs.numbl-version }}
         NUMBL_REF: ${{ inputs.numbl-ref }}
@@ -85,6 +89,7 @@ runs:
           args=( "$PROJECT_DIR" --out "$OUT_DIR" --base "$BASE" )
           if [ -n "$IN_TITLE" ]; then args+=( --title "$IN_TITLE" ); fi
           if [ -n "$IN_ENTRY" ]; then args+=( --entry "$IN_ENTRY" ); fi
+          if [ -n "$IN_MAX_OUTPUT_HEIGHT" ]; then args+=( --max-initial-output-panel-height "$IN_MAX_OUTPUT_HEIGHT" ); fi
           if [ -n "$REPO_URL" ]; then args+=( --repo-url "$REPO_URL" ); fi
           echo "numbl@$NUMBL_VERSION build-site ${args[*]}"
           npx --yes "numbl@$NUMBL_VERSION" build-site "${args[@]}"
@@ -108,6 +113,7 @@ runs:
             args=( "$PROJECT_ABS" --out "$OUT_ABS" --base "$BASE" )
             if [ -n "$IN_TITLE" ]; then args+=( --title "$IN_TITLE" ); fi
             if [ -n "$IN_ENTRY" ]; then args+=( --entry "$IN_ENTRY" ); fi
+            if [ -n "$IN_MAX_OUTPUT_HEIGHT" ]; then args+=( --max-initial-output-panel-height "$IN_MAX_OUTPUT_HEIGHT" ); fi
             if [ -n "$REPO_URL" ]; then args+=( --repo-url "$REPO_URL" ); fi
             echo "numbl (source $NUMBL_REF) build-site ${args[*]}"
             npx tsx src/cli.ts build-site "${args[@]}"

@@ -8,7 +8,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useStaticProjectFiles } from "../hooks/useStaticProjectFiles";
 import { IDEWorkspace } from "../components/IDEWorkspace";
 import { encodeShareData } from "../utils/shareUrl";
@@ -29,6 +29,7 @@ export function SiteApp() {
     loading,
     title,
     repository,
+    maxInitialOutputPanelHeight,
     loadError,
     setActiveFileId,
     updateFileContent,
@@ -47,6 +48,13 @@ export function SiteApp() {
   } = useStaticProjectFiles();
 
   const [copyFeedback, setCopyFeedback] = useState(false);
+
+  // Reflect the project title in the browser tab. The build-site CLI also bakes
+  // this into the static <title>, but keep it in sync here for dev and so the
+  // manifest stays the single source of truth.
+  useEffect(() => {
+    if (title) document.title = title;
+  }, [title]);
 
   const handleShare = useCallback(async () => {
     try {
@@ -154,6 +162,7 @@ export function SiteApp() {
       loadFileContent={loadFileContent}
       loadAllContents={loadAllContents}
       contentCache={contentCache}
+      maxInitialOutputPanelHeight={maxInitialOutputPanelHeight ?? undefined}
     />
   );
 }

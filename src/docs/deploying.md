@@ -66,9 +66,15 @@ Add a `numbl-project.json` at the project root to control the site:
 }
 ```
 
-- `title` — shown in the site header.
+- `title` — shown in the site header and the browser tab.
 - `entry` — the file opened first (defaults to `README.md`, then `main.m`, then
   the first script).
+- `maxInitialOutputPanelHeight` — cap (px) on the initial height of the output
+  panel so the figure panel below it starts larger (desktop layout). Omit for
+  the default (half the window).
+
+The action exposes these too — `title:`, `entry:`, and
+`max-initial-output-panel-height:` — which override `numbl-project.json`.
 
 To exclude files from the bundle, add a `.numblignore` (gitignore-style globs):
 
