@@ -1038,6 +1038,13 @@ async function cmdBuildAddon(args: string[]) {
 const SITE_DEFAULT_IGNORE_DIRS = new Set([".git", ".github", "node_modules"]);
 const SITE_MAX_FILE_BYTES = 25 * 1024 * 1024;
 
+/** Coding-agent instruction files (CLAUDE.md, AGENTS.md, AGENT*.md, GEMINI.md,
+ *  …). These are dev tooling, not project content, so build-site never bundles
+ *  them into the rendered site (matched by basename, at any depth). */
+function isAgentInstructionFile(name: string): boolean {
+  return name === "GEMINI.md" || /^(CLAUDE|AGENT)[^/]*\.md$/i.test(name);
+}
+
 /** Read .numblignore (gitignore-ish: blank/`#` lines skipped). */
 function readNumblIgnore(projectDir: string): string[] {
   const p = join(projectDir, ".numblignore");
@@ -1098,6 +1105,7 @@ function collectSiteFiles(
         walk(full);
       } else if (e.isFile()) {
         if (e.name === ".numblignore" || e.name === ".DS_Store") continue;
+        if (isAgentInstructionFile(e.name)) continue;
         const st = statSync(full);
         if (st.size > SITE_MAX_FILE_BYTES) {
           console.error(
