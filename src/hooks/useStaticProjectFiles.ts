@@ -7,6 +7,20 @@ import { unzipToFiles } from "../vfs/unzipToFiles";
 const textEncoder = new TextEncoder();
 
 /**
+ * One end-user "figure view": a named, editor-less route (`#figure/<id>`) that
+ * auto-runs `entry` and shows its output then its (interactive) figure. A
+ * project can declare several; the IDE route is unaffected.
+ */
+export interface FigureSpec {
+  /** Stable, URL-safe slug used in the `#figure/<id>` route. */
+  id: string;
+  /** Human label shown in the figure view header / browser tab. */
+  name?: string;
+  /** The `.m` script the figure view runs (relative to the bundle root). */
+  entry: string;
+}
+
+/**
  * Optional manifest baked into the project bundle. When present (as
  * `numbl-project.json` at the bundle root) it controls the entry file and
  * site title. The manifest itself is hidden from the file browser.
@@ -18,6 +32,8 @@ interface ProjectManifest {
   /** Cap (px) on the initial output-panel height; gives the figure panel
    *  below it more room on first load (desktop layout). */
   maxInitialOutputPanelHeight?: number;
+  /** End-user figure views (see FigureSpec). */
+  figures?: FigureSpec[];
 }
 
 const MANIFEST_NAME = "numbl-project.json";
@@ -147,6 +163,8 @@ export interface UseStaticProjectFilesResult extends UseProjectFilesResult {
   repository: string | null;
   /** Cap (px) on the initial output-panel height from the manifest, if any. */
   maxInitialOutputPanelHeight: number | null;
+  /** End-user figure views declared in the manifest (empty if none). */
+  figures: FigureSpec[];
   /** True if the bundle failed to load. */
   loadError: string | null;
 }
@@ -168,6 +186,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
   const [repository, setRepository] = useState<string | null>(null);
   const [maxInitialOutputPanelHeight, setMaxInitialOutputPanelHeight] =
     useState<number | null>(null);
+  const [figures, setFigures] = useState<FigureSpec[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const contentMapRef = useRef(new Map<string, Uint8Array>());
 
@@ -219,6 +238,14 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
           typeof manifest.maxInitialOutputPanelHeight === "number"
             ? manifest.maxInitialOutputPanelHeight
             : null
+        );
+        setFigures(
+          Array.isArray(manifest.figures)
+            ? manifest.figures.filter(
+                f =>
+                  f && typeof f.id === "string" && typeof f.entry === "string"
+              )
+            : []
         );
       } catch (e) {
         if (cancelled) return;
@@ -455,6 +482,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
     title,
     repository,
     maxInitialOutputPanelHeight,
+    figures,
     loadError,
     mergeVfsChanges: useCallback(() => {
       // No-op for static mode.
