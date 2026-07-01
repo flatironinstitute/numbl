@@ -26,6 +26,16 @@ export type {
 
 export type { FileIOAdapter } from "./numbl-core/fileIOAdapter.js";
 export type { SystemAdapter } from "./numbl-core/systemAdapter.js";
+
+// Browser embedding: the in-memory filesystem and its adapters, as used by
+// numbl's own web worker. Exporting them lets a third-party page run scripts
+// in its own worker (executeCode + a VFS of project files) without vendoring
+// numbl source. See ExecOptions.onHtmlSourceEvent and ExecResult.uihtmlSession
+// for the two halves of the uihtml host bridge.
+export { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
+export { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
+export { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
+export type { UihtmlSession } from "./numbl-core/executeCode.js";
 export type {
   WorkspaceFile,
   NativeBridge,

@@ -13,8 +13,53 @@
  */
 
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
-import { RTV, RuntimeError } from "./runtime/index.js";
+import { RTV, RuntimeError, toNumber } from "./runtime/index.js";
+import { getCurrentRuntime } from "./runtime/refcount.js";
 import type { IBuiltin } from "./interpreter/builtins/types.js";
+
+/** Minimal runtime surface needed to invoke a function handle from JS. */
+interface HandleCaller {
+  index(base: unknown, indices: unknown[], nargout?: number): unknown;
+}
+
+/**
+ * Invoke a numbl function handle from inside a `.numbl.js` apply.
+ *
+ * `handle` is a RuntimeFunction — the value a `function_handle` argument
+ * arrives as. `args` are runtime values or raw JS scalars (raw numbers are
+ * accepted, matching arrayfun's call path). Returns the handle's result: a
+ * runtime value for `nargout <= 1`, or an array of them when `nargout > 1`.
+ *
+ * Injected into every `.numbl.js` file as the global `callHandle`. It binds
+ * to the active runtime lazily via `getCurrentRuntime()`, so the single
+ * shared function reference works regardless of which runtime is executing.
+ */
+function callHandle(handle: unknown, args: unknown[], nargout = 1): unknown {
+  const rt = getCurrentRuntime() as HandleCaller | null;
+  if (!rt) {
+    throw new RuntimeError("callHandle: no active runtime to invoke handle");
+  }
+  return rt.index(handle, args, nargout);
+}
+
+/**
+ * Per-WASM-instance registry that exposes numbl function handles to WASM as
+ * integer ids. A `.numbl.js` apply registers a JS thunk (closing over a
+ * handle + `callHandle`) with `add()`, passes the returned id into a WASM
+ * export, and removes it once the export returns. Inside WASM the handle is
+ * invoked by calling the host-provided `env.numbl_cb_d(id, x)` import.
+ */
+export interface WasmCallbackRegistry {
+  /** Register a callback thunk; returns its integer id. */
+  add(fn: (...args: number[]) => number): number;
+  /** Drop a previously registered callback. */
+  remove(id: number): void;
+}
+
+/** A `WebAssembly.Instance` augmented with the callback registry. */
+type WasmInstanceWithCallbacks = WebAssembly.Instance & {
+  callbacks: WasmCallbackRegistry;
+};
 
 /** A loaded JS user function ready for registration in the workspace. */
 export interface LoadedJsUserFunction {
@@ -120,12 +165,24 @@ function nativeLibFilename(baseName: string): string {
 /**
  * Compile and instantiate a WASM module from raw bytes, providing
  * WASI and Emscripten stubs as needed.
+ *
+ * The returned instance carries a `callbacks` registry (see
+ * {@link WasmCallbackRegistry}) and an `env.numbl_cb_d(id, x) -> double`
+ * import that routes a WASM-side callback to the registered handle. A module
+ * only resolves imports it actually declares, so this is always provided and
+ * costs nothing for modules that never call back.
  */
-function instantiateWasm(wasmData: Uint8Array): WebAssembly.Instance {
+function instantiateWasm(wasmData: Uint8Array): WasmInstanceWithCallbacks {
   const wasmModule = new WebAssembly.Module(wasmData as BufferSource);
   const moduleImports = WebAssembly.Module.imports(wasmModule);
   const importObject: WebAssembly.Imports = {};
   const neededModules = new Set(moduleImports.map(i => i.module));
+
+  // Per-instance callback registry: maps an integer id → JS thunk so WASM
+  // can invoke a numbl function handle via the `numbl_cb_d` import below.
+  const callbacks = new Map<number, (...args: number[]) => number>();
+  let nextCbId = 1;
+
   if (neededModules.has("wasi_snapshot_preview1")) {
     importObject.wasi_snapshot_preview1 = {
       fd_write: () => 0,
@@ -144,9 +201,36 @@ function instantiateWasm(wasmData: Uint8Array): WebAssembly.Instance {
   if (neededModules.has("env")) {
     importObject.env = {
       emscripten_notify_memory_growth: () => {},
+      // Scalar callback: WASM calls back into a registered handle with one
+      // f64 and receives an f64. Exceptions thrown here (incl. a missing id)
+      // propagate out through the WASM call into the apply.
+      numbl_cb_d: (id: number, x: number): number => {
+        const fn = callbacks.get(id);
+        if (!fn) {
+          throw new RuntimeError(
+            `numbl_cb_d: no callback registered for id ${id}`
+          );
+        }
+        return fn(x);
+      },
     };
   }
-  return new WebAssembly.Instance(wasmModule, importObject);
+
+  const instance = new WebAssembly.Instance(
+    wasmModule,
+    importObject
+  ) as WasmInstanceWithCallbacks;
+  instance.callbacks = {
+    add(fn) {
+      const id = nextCbId++;
+      callbacks.set(id, fn);
+      return id;
+    },
+    remove(id) {
+      callbacks.delete(id);
+    },
+  };
+  return instance;
 }
 
 /**
@@ -270,6 +354,8 @@ export function loadJsUserFunctions(
       "wasm",
       "native",
       "importJS",
+      "callHandle",
+      "toNumber",
       libFile.source
     );
     const exports = factory(
@@ -279,7 +365,9 @@ export function loadJsUserFunctions(
       dummyRegister,
       wasmInstance,
       nativeLib,
-      importJS
+      importJS,
+      callHandle,
+      toNumber
     );
 
     libCache.set(name, exports);
@@ -324,6 +412,8 @@ export function loadJsUserFunctions(
         "wasm",
         "native",
         "importJS",
+        "callHandle",
+        "toNumber",
         file.source
       );
       factory(
@@ -333,7 +423,9 @@ export function loadJsUserFunctions(
         registerFn,
         wasmInstance,
         nativeLib,
-        importJS
+        importJS,
+        callHandle,
+        toNumber
       );
 
       if (!builtin) {

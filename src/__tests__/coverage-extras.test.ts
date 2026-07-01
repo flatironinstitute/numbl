@@ -366,3 +366,105 @@ describe("compare / isequal", () => {
     expect(result.variableValues["x"]).toBe(false);
   });
 });
+
+// ── WASM function-handle callbacks ───────────────────────────────────────
+//
+// Exercises the full chain: a numbl function handle passed into a `.numbl.js`
+// user function → registered with `wasm.callbacks.add` → handed to WASM as an
+// integer id → invoked from inside WASM via the `env.numbl_cb_d` import →
+// `callHandle` → interpreter → result back through WASM.
+//
+// `CB_WASM` is a hand-assembled standalone module (no emcc dependency):
+//   import  env.numbl_cb_d : (i32, f64) -> f64
+//   export  callcb(id: i32, x: f64) -> f64 { numbl_cb_d(id,x) + numbl_cb_d(id,x) }
+// i.e. callcb returns 2 * handle(x).
+describe("wasm function-handle callbacks", () => {
+  // prettier-ignore
+  const CB_WASM = new Uint8Array([
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // magic + version
+    // type section: one func type (i32, f64) -> f64
+    0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7c, 0x01, 0x7c,
+    // import section: env.numbl_cb_d : type 0
+    0x02, 0x12, 0x01, 0x03, 0x65, 0x6e, 0x76, 0x0a, 0x6e, 0x75,
+    0x6d, 0x62, 0x6c, 0x5f, 0x63, 0x62, 0x5f, 0x64, 0x00, 0x00,
+    // function section: one func of type 0
+    0x03, 0x02, 0x01, 0x00,
+    // export section: "callcb" -> func index 1
+    0x07, 0x0a, 0x01, 0x06, 0x63, 0x61, 0x6c, 0x6c, 0x63, 0x62, 0x00, 0x01,
+    // code section: callcb = numbl_cb_d(id,x) + numbl_cb_d(id,x)
+    0x0a, 0x11, 0x01, 0x0f, 0x00,
+    0x20, 0x00, 0x20, 0x01, 0x10, 0x00, // numbl_cb_d(id, x)
+    0x20, 0x00, 0x20, 0x01, 0x10, 0x00, // numbl_cb_d(id, x)
+    0xa0, 0x0b,                         // f64.add ; end
+  ]);
+
+  const DOUBLECB_SRC = `// wasm: cbmod
+register({
+  resolve: function () {
+    return {
+      outputTypes: [{ kind: "number" }],
+      apply: function (args) {
+        var f = args[0];
+        var x = toNumber(args[1]);
+        var id = wasm.callbacks.add(function (xx) {
+          return toNumber(callHandle(f, [xx]));
+        });
+        try {
+          return wasm.exports.callcb(id, x);
+        } finally {
+          wasm.callbacks.remove(id);
+        }
+      },
+    };
+  },
+});`;
+
+  const wasmFile = { name: "cbmod.wasm", source: "", data: CB_WASM };
+
+  it("invokes an anonymous handle from inside WASM", () => {
+    const result = executeCode("r = doublecb(@(x) x + 10, 5);", {}, [
+      { name: "doublecb.numbl.js", source: DOUBLECB_SRC },
+      wasmFile,
+    ]);
+    // handle(5) = 15; callcb doubles it.
+    expect(result.variableValues["r"]).toBe(30);
+  });
+
+  it("invokes a builtin handle from inside WASM", () => {
+    const result = executeCode("r = doublecb(@sqrt, 16);", {}, [
+      { name: "doublecb.numbl.js", source: DOUBLECB_SRC },
+      wasmFile,
+    ]);
+    // sqrt(16) = 4; doubled = 8.
+    expect(result.variableValues["r"]).toBe(8);
+  });
+
+  it("invokes a closure capturing a workspace variable", () => {
+    const result = executeCode("k = 7; r = doublecb(@(x) k * x, 3);", {}, [
+      { name: "doublecb.numbl.js", source: DOUBLECB_SRC },
+      wasmFile,
+    ]);
+    // k*x = 21; doubled = 42.
+    expect(result.variableValues["r"]).toBe(42);
+  });
+
+  it("throws when WASM calls back with an unregistered id", () => {
+    const badSrc = `// wasm: cbmod
+register({
+  resolve: function () {
+    return {
+      outputTypes: [{ kind: "number" }],
+      apply: function (args) {
+        return wasm.exports.callcb(999, toNumber(args[0]));
+      },
+    };
+  },
+});`;
+    expect(() =>
+      executeCode("r = badcb(1);", {}, [
+        { name: "badcb.numbl.js", source: badSrc },
+        wasmFile,
+      ])
+    ).toThrow(/no callback registered for id 999/);
+  });
+});
