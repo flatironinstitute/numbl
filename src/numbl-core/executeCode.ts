@@ -248,6 +248,38 @@ export function executeCode(
     }
   }
 
+  // ── Explicit search paths: scan their directories for workspace files,
+  // mirroring what a runtime addpath does (previously only addpath triggered
+  // a scan, so initial searchPaths silently resolved nothing unless the
+  // caller also threaded the files through workspaceFiles). Files already
+  // provided via workspaceFiles (matched by name) are not re-added.
+  if (searchPaths && options.fileIO?.scanDirectory) {
+    const haveM = new Set(mWorkspaceFiles.map(f => f.name));
+    for (const dir of searchPaths) {
+      try {
+        const absDir = options.fileIO.resolvePath?.(dir) ?? dir;
+        for (const f of options.fileIO.scanDirectory(absDir)) {
+          if (f.name.endsWith(".m")) {
+            if (!haveM.has(f.name)) {
+              mWorkspaceFiles.push(f);
+              haveM.add(f.name);
+            }
+          } else if (isNumblJsFile(f.name)) {
+            if (!jsWorkspaceFiles.some(e => e.name === f.name)) {
+              jsWorkspaceFiles.push(f);
+            }
+          } else if (f.name.endsWith(".wasm")) {
+            if (!wasmWorkspaceFiles.some(e => e.name === f.name)) {
+              wasmWorkspaceFiles.push(f);
+            }
+          }
+        }
+      } catch {
+        // dir missing or unscannable — same tolerance as addpath and cwd
+      }
+    }
+  }
+
   // Load .numbl.js user functions
   const jsUserFunctions: LoadedJsUserFunction[] = loadJsUserFunctions(
     jsWorkspaceFiles,

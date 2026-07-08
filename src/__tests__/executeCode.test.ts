@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
 import { isRuntimeTensor } from "../numbl-core/runtime/types.js";
+import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
+import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
+import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
 
 describe("executeCode", () => {
   it("executes a simple assignment and returns variable", () => {
@@ -150,5 +153,67 @@ result = double_it(21);
     const result = executeCode("x = 1;");
     expect(result.generatedJS).toBeTruthy();
     expect(typeof result.generatedJS).toBe("string");
+  });
+
+  it("scans initial searchPaths directories for functions", () => {
+    const vfs = new VirtualFileSystem();
+    const enc = new TextEncoder();
+    vfs.writeFile(
+      "/lib/lib_fn.m",
+      enc.encode("function y = lib_fn(x)\ny = x * 2;\nend\n")
+    );
+    vfs.writeFile("/project/main.m", enc.encode("z = lib_fn(21);\n"));
+    vfs.setCwd("/project");
+    const result = executeCode(
+      "z = lib_fn(21);\n",
+      {
+        fileIO: new BrowserFileIOAdapter(vfs),
+        system: new BrowserSystemAdapter(vfs),
+      },
+      [{ name: "main.m", source: "z = lib_fn(21);\n" }],
+      vfs.normalizePath("/project/main.m"),
+      ["/lib"]
+    );
+    expect(result.variableValues["z"]).toBe(42);
+  });
+
+  it("does not re-add searchPaths files already in workspaceFiles", () => {
+    const vfs = new VirtualFileSystem();
+    const enc = new TextEncoder();
+    const fnSource = "function y = lib_fn(x)\ny = x * 2;\nend\n";
+    vfs.writeFile("/lib/lib_fn.m", enc.encode(fnSource));
+    vfs.writeFile("/project/main.m", enc.encode("z = lib_fn(21);\n"));
+    vfs.setCwd("/project");
+    const result = executeCode(
+      "z = lib_fn(21);\n",
+      {
+        fileIO: new BrowserFileIOAdapter(vfs),
+        system: new BrowserSystemAdapter(vfs),
+      },
+      [
+        { name: "main.m", source: "z = lib_fn(21);\n" },
+        { name: "/lib/lib_fn.m", source: fnSource },
+      ],
+      vfs.normalizePath("/project/main.m"),
+      ["/lib"]
+    );
+    expect(result.variableValues["z"]).toBe(42);
+  });
+
+  it("tolerates missing searchPaths directories", () => {
+    const vfs = new VirtualFileSystem();
+    vfs.writeFile("/project/main.m", new TextEncoder().encode("x = 1;\n"));
+    vfs.setCwd("/project");
+    const result = executeCode(
+      "x = 1;\n",
+      {
+        fileIO: new BrowserFileIOAdapter(vfs),
+        system: new BrowserSystemAdapter(vfs),
+      },
+      [{ name: "main.m", source: "x = 1;\n" }],
+      vfs.normalizePath("/project/main.m"),
+      ["/does/not/exist"]
+    );
+    expect(result.variableValues["x"]).toBe(1);
   });
 });
