@@ -23,6 +23,7 @@ import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getLastJitDecline } from "../jitDeclineDiagnostics.js";
 import { binop, uplus } from "../runtime/runtimeOperators.js";
+import { enumEqualityOp } from "../runtime/runtimeEnum.js";
 import { mPow } from "../helpers/arithmetic.js";
 import { getIBuiltinNargin } from "./builtins/types.js";
 import { getConstant } from "../helpers/constants.js";
@@ -849,6 +850,10 @@ export function evalBinary(
 
   const lv = ensureRuntimeValue(left);
   const rv = ensureRuntimeValue(right);
+  // Enumeration ==/~= (member vs member / numeric / char). Handles both scalar
+  // members and member arrays; returns null for other ops / non-enum operands.
+  const enumResult = enumEqualityOp(expr.op, lv, rv);
+  if (enumResult !== null) return enumResult;
   if (isRuntimeClassInstance(lv) || isRuntimeClassInstance(rv)) {
     return this.rt.binop(expr.op, left, right);
   }
@@ -1021,6 +1026,9 @@ export function evalMember(
       if (lastDot > 0) {
         const prefix = dottedName.slice(0, lastDot);
         const methodName = dottedName.slice(lastDot + 1);
+        // Enumeration member access: `ClassName.MemberName`.
+        const enumMember = this.interpretEnumMember(prefix, methodName);
+        if (enumMember !== null) return enumMember;
         if (
           this.functionIndex.classStaticMethods.get(prefix)?.has(methodName) ||
           // Implicit static `ClassName.empty` (handled by interpretClassMethod)

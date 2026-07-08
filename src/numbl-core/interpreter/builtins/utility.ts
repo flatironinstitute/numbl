@@ -22,6 +22,7 @@ import type {
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import { RuntimeError } from "../../runtime/error.js";
+import { isEnumInstance, enumScalarEquals } from "../../runtime/runtimeEnum.js";
 import { sprintfFormat } from "../../helpers/string.js";
 import { RTV } from "../../runtime/constructors.js";
 import { emptyStackField } from "../../runtime/runtime.js";
@@ -43,6 +44,10 @@ function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
 }
 
 function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
+  // Enumeration members compare like `==` (value vs member/number, name vs
+  // char) — so `isequal(patchtype.tri, 1)` and `isequal(x, 'tri')` hold.
+  if (isEnumInstance(a)) return enumScalarEquals(a, b);
+  if (isEnumInstance(b)) return enumScalarEquals(b, a);
   {
     const aText = textValue(a);
     const bText = textValue(b);

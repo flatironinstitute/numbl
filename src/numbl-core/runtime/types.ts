@@ -332,18 +332,24 @@ export class RuntimeClassInstance extends Refcounted {
   /** For classes that inherit from built-in types (e.g. classdef Foo < double),
    *  stores the underlying built-in data. */
   _builtinData: RuntimeValue | undefined;
+  /** For enumeration-class members: the member name (e.g. "tri"). When set,
+   *  this instance is an enumeration member and `_builtinData` holds its
+   *  underlying (superclass) value. Drives ==/~=, switch, and char coercion. */
+  _enumMember: string | undefined;
 
   constructor(
     className: string,
     fields: Map<string, RuntimeValue>,
     isHandleClass: boolean,
-    _builtinData?: RuntimeValue
+    _builtinData?: RuntimeValue,
+    _enumMember?: string
   ) {
     super();
     this.className = className;
     this.fields = fields;
     this.isHandleClass = isHandleClass;
     this._builtinData = _builtinData;
+    this._enumMember = _enumMember;
     for (const v of fields.values()) incref(v);
     if (_builtinData !== undefined) incref(_builtinData);
   }

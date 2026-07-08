@@ -116,6 +116,18 @@ export function registerClassDef(
   file: string,
   externalMethods?: ReadonlyMap<string, FuncStmt>
 ): ClassRegistration {
+  // Enumeration classes run exclusively on the interpreter (member access,
+  // conversion, and ==/~=/switch semantics live in the runtime — see
+  // `runtimeEnum.ts`). Decline them here so the JIT falls back to the
+  // interpreter cleanly at the first use rather than trying to codegen an
+  // enumeration member or its numeric superclass.
+  if (s.members.some(m => m.type === "Enumeration")) {
+    throw new UnsupportedConstruct(
+      `classdef '${s.name}' is an enumeration; enumeration classes are ` +
+        `interpreter-only in the JIT`,
+      s.span
+    );
+  }
   if (s.classAttributes.length > 0) {
     throw new UnsupportedConstruct(
       `classdef '${s.name}' has class attributes; not supported in v1`,

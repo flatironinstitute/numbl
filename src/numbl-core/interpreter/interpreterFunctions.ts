@@ -10,6 +10,11 @@ import {
   isRuntimeChar,
   isRuntimeString,
   isRuntimeTensor,
+  isRuntimeNumber,
+  isRuntimeLogical,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+  RuntimeClassInstance,
 } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
@@ -554,6 +559,122 @@ export function interpretPrivateFunction(
 
 // ── Class instantiation ──────────────────────────────────────────────────
 
+// ── Enumeration classes ──────────────────────────────────────────────────
+
+/** Numeric/logical/char superclasses whose constructor produces an
+ *  enumeration member's underlying value (e.g. `patchtype < uint32`). */
+const NUMERIC_ENUM_SUPERS = new Set([
+  "double",
+  "single",
+  "int8",
+  "int16",
+  "int32",
+  "int64",
+  "uint8",
+  "uint16",
+  "uint32",
+  "uint64",
+  "logical",
+  "char",
+]);
+
+/** Underlying (superclass) value of an enumeration member from its declared
+ *  constructor args. MATLAB's default enumeration constructor passes the
+ *  member's arguments to the first superclass constructor. */
+function enumUnderlyingValue(
+  interp: Interpreter,
+  classInfo: ClassInfo,
+  argExprs: Expr[]
+): RuntimeValue | undefined {
+  if (argExprs.length === 0) return undefined;
+  const first = ensureRuntimeValue(interp.evalExpr(argExprs[0]));
+  const sc = classInfo.superClass;
+  if (sc && NUMERIC_ENUM_SUPERS.has(sc)) {
+    return ensureRuntimeValue(interp.rt.callBuiltin(sc, 1, [first]));
+  }
+  return first;
+}
+
+/** Resolve `ClassName.MemberName` to an enumeration-member instance. Returns
+ *  null when `className` is not an enumeration or has no such member. */
+export function interpretEnumMember(
+  this: Interpreter,
+  className: string,
+  memberName: string
+): RuntimeValue | null {
+  const classInfo = this.ctx.getClassInfo(className);
+  if (!classInfo || !classInfo.enumMembers) return null;
+  const memberDef = classInfo.enumMembers.find(m => m.name === memberName);
+  if (!memberDef) return null;
+  const value = enumUnderlyingValue(this, classInfo, memberDef.args);
+  return new RuntimeClassInstance(
+    className,
+    new Map(),
+    false,
+    value,
+    memberName
+  );
+}
+
+/** Enumeration constructor-as-converter: `ClassName(x)` for an enumeration
+ *  with no explicit constructor. Converts x — a member, a numeric value, a
+ *  char/string member name, or an array thereof — to member(s). */
+export function convertToEnum(
+  this: Interpreter,
+  className: string,
+  classInfo: ClassInfo,
+  args: unknown[]
+): RuntimeValue {
+  if (args.length === 0) {
+    throw new RuntimeError(
+      `${className}: enumeration requires an argument to construct`
+    );
+  }
+  const val = ensureRuntimeValue(args[0]);
+
+  // Already an instance / array of this enumeration → identity (value classes
+  // are immutable, so no copy is needed).
+  if (isRuntimeClassInstance(val) && val._enumMember !== undefined) return val;
+  if (isRuntimeClassInstanceArray(val)) return val;
+
+  const members = classInfo.enumMembers!.map(m => ({
+    name: m.name,
+    value: enumUnderlyingValue(this, classInfo, m.args),
+  }));
+  const makeMember = (name: string, value: RuntimeValue | undefined) =>
+    new RuntimeClassInstance(className, new Map(), false, value, name);
+  const fromName = (text: string): RuntimeClassInstance => {
+    const m = members.find(mm => mm.name === text);
+    if (!m)
+      throw new RuntimeError(
+        `'${text}' is not a valid member of enumeration '${className}'`
+      );
+    return makeMember(m.name, m.value);
+  };
+  const fromNumber = (num: number): RuntimeClassInstance => {
+    const m = members.find(
+      mm => mm.value !== undefined && toNumber(mm.value) === num
+    );
+    if (!m)
+      throw new RuntimeError(
+        `${num} is not a valid underlying value for enumeration '${className}'`
+      );
+    return makeMember(m.name, m.value);
+  };
+
+  if (isRuntimeChar(val)) return fromName(val.value);
+  if (isRuntimeString(val)) return fromName(val);
+  if (isRuntimeNumber(val)) return fromNumber(val);
+  if (isRuntimeLogical(val)) return fromNumber(val ? 1 : 0);
+  if (isRuntimeTensor(val)) {
+    const elems = Array.from(val.data, x => fromNumber(x));
+    if (elems.length === 1) return elems[0];
+    const shape: [number, number] = [val.shape[0] ?? 0, val.shape[1] ?? 1];
+    return RTV.classInstanceArray(className, elems, shape);
+  }
+  throw new RuntimeError(`Cannot convert value to enumeration '${className}'`);
+}
+
 export function instantiateClass(
   this: Interpreter,
   className: string,
@@ -563,6 +684,11 @@ export function instantiateClass(
   const classInfo = this.ctx.getClassInfo(className);
   if (!classInfo) {
     return this.rt.callClassMethod(className, className, nargout, args);
+  }
+
+  // Enumeration class: `ClassName(x)` converts x to a member (or member array).
+  if (classInfo.enumMembers && args.length > 0) {
+    return this.convertToEnum(className, classInfo, args);
   }
 
   // Old-style (pre-classdef) class: the constructor is a plain @Name/Name.m

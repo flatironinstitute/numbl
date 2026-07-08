@@ -753,7 +753,19 @@ export function indexStore(
       // Unwrap a single element back to a scalar instance (numbl's convention:
       // a 1-element object array reads as a scalar).
       if (existing.length === 1) return existing[0];
-      return RTV.classInstanceArray(className, existing, [1, existing.length]);
+      // Preserve orientation. An in-bounds assignment keeps the original 2-D
+      // shape; growth extends a column vector as a column and everything else
+      // as a row (matching MATLAB's vector-growth rule).
+      const origShape = isRuntimeClassInstanceArray(mv) ? mv.shape : null;
+      let shape: [number, number];
+      if (origShape && existing.length === origShape[0] * origShape[1]) {
+        shape = origShape;
+      } else if (origShape && origShape[1] === 1) {
+        shape = [existing.length, 1];
+      } else {
+        shape = [1, existing.length];
+      }
+      return RTV.classInstanceArray(className, existing, shape);
     }
   }
   // Class instance paren-indexed assignment: dispatch to subsasgn if available

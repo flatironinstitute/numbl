@@ -55,7 +55,13 @@ export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
       return a === b;
     }
     case "class_instance": {
-      // not handling class instance equality for now
+      const bi = b as typeof a;
+      // Enumeration members are equal when they name the same member (same
+      // member name and class) — value classes with no identity otherwise.
+      if (a._enumMember !== undefined || bi._enumMember !== undefined) {
+        return a._enumMember === bi._enumMember && a.className === bi.className;
+      }
+      // not handling general class instance equality for now
       return a === b;
     }
     case "complex_number": {

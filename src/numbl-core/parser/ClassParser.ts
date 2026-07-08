@@ -176,11 +176,15 @@ export class ClassParser extends FunctionParser {
       } else if (tok === Token.Enumeration) {
         this.pos++;
         const attrs = this.parseOptionalAttrList();
-        const names = this.parseNameBlock();
+        const enumMembers = this.parseEnumerationBlock();
         if (!this.consume(Token.End)) {
           throw this.error("expected 'end' after enumeration");
         }
-        members.push({ type: "Enumeration", attributes: attrs, names });
+        members.push({
+          type: "Enumeration",
+          attributes: attrs,
+          members: enumMembers,
+        });
       } else if (tok === Token.Arguments) {
         this.pos++;
         const attrs = this.parseOptionalAttrList();
@@ -226,6 +230,43 @@ export class ClassParser extends FunctionParser {
       }
     }
     return names;
+  }
+
+  /** Parse an `enumeration ... end` member list. Each member is a bare
+   *  identifier optionally followed by a parenthesized argument list
+   *  (`quad (0)`, `Error (1, 0, 0)`). Members are separated by `;`/`,`/
+   *  newline. The args are evaluated later (at member construction). */
+  private parseEnumerationBlock(): { name: string; args: Expr[] }[] {
+    const members: { name: string; args: Expr[] }[] = [];
+    while (this.peekToken() !== undefined) {
+      if (this.peekToken() === Token.End) break;
+      if (
+        this.consume(Token.Semicolon) ||
+        this.consume(Token.Comma) ||
+        this.consume(Token.Newline)
+      ) {
+        continue;
+      }
+      if (this.peekToken() !== Token.Ident) break;
+      const name = this.expectIdent();
+      const args: Expr[] = [];
+      if (this.consume(Token.LParen)) {
+        if (this.peekToken() !== Token.RParen) {
+          args.push(this.parseExpr());
+          while (this.consume(Token.Comma)) {
+            args.push(this.parseExpr());
+          }
+        }
+        if (!this.consume(Token.RParen)) {
+          throw this.errorWithExpected(
+            "expected ')' after enumeration member arguments",
+            ")"
+          );
+        }
+      }
+      members.push({ name, args });
+    }
+    return members;
   }
 
   private parsePropertiesNamesBlock(): {

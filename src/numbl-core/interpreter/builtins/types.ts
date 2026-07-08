@@ -8,6 +8,7 @@ import {
   RuntimeComplexNumber,
   isRuntimeChar,
   isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeComplexNumber,
   isRuntimeSparseMatrix,
   isRuntimeStruct,
@@ -186,6 +187,19 @@ export function inferJitType(value: unknown): JitType {
       className: ci.className,
       isHandleClass: ci.isHandleClass,
       fields,
+    };
+  }
+  if (isRuntimeClassInstanceArray(value as RuntimeValue)) {
+    // An object array dispatches like a class instance (e.g. an enumeration
+    // member array passed to `uint32`/`double`); element access is what
+    // distinguishes them, not the dispatch type.
+    const arr =
+      value as import("../../runtime/types.js").RuntimeClassInstanceArray;
+    return {
+      kind: "class_instance",
+      className: arr.className,
+      isHandleClass: false,
+      fields: {},
     };
   }
   if (

@@ -20,6 +20,9 @@ export interface ClassInfo {
   methodNames: Set<string>; // instance method names (non-static, non-constructor)
   staticMethodNames: Set<string>;
   constructorName: string | null; // method name matching class name
+  /** Enumeration members in declaration order (name + constructor-arg
+   *  exprs), or null when the class is not an enumeration. */
+  enumMembers: { name: string; args: Expr[] }[] | null;
   ast: (Stmt & { type: "ClassDef" }) | null; // the parsed ClassDef AST (null for old-style @folder classes)
   isOldStyle?: boolean; // true for pre-classdef @folder classes (constructor is a plain function calling class(s,'name'))
   inferiorClasses: string[]; // classes declared inferior via InferiorClasses attribute
@@ -42,6 +45,7 @@ export function extractClassInfo(
   const methodNames = new Set<string>();
   const staticMethodNames = new Set<string>();
   let constructorName: string | null = null;
+  let enumMembers: { name: string; args: Expr[] }[] | null = null;
 
   // The base class name (last segment for qualified names like "pkg.ClassName")
   const dotIdx = qualifiedName.lastIndexOf(".");
@@ -97,6 +101,8 @@ export function extractClassInfo(
           }
         }
       }
+    } else if (member.type === "Enumeration") {
+      enumMembers = member.members.map(m => ({ name: m.name, args: m.args }));
     }
   }
 
@@ -123,6 +129,7 @@ export function extractClassInfo(
     methodNames,
     staticMethodNames,
     constructorName,
+    enumMembers,
     inferiorClasses,
     ast: classDef,
     externalMethodFiles: new Map(),
@@ -170,6 +177,7 @@ export function makeOldStyleClassInfo(
     methodNames,
     staticMethodNames: new Set(),
     constructorName: baseName,
+    enumMembers: null,
     inferiorClasses: [],
     ast: null,
     isOldStyle: true,

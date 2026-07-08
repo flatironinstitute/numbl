@@ -1105,7 +1105,8 @@ function copyClassInstance(inst: RuntimeClassInstance): RuntimeClassInstance {
     inst.className,
     new Map(inst.fields),
     inst.isHandleClass,
-    inst._builtinData
+    inst._builtinData,
+    inst._enumMember
   );
 }
 

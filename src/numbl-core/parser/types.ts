@@ -125,7 +125,14 @@ export type ClassMember =
       signatures?: MethodSignature[];
     }
   | { type: "Events"; attributes: Attr[]; names: string[] }
-  | { type: "Enumeration"; attributes: Attr[]; names: string[] }
+  | {
+      type: "Enumeration";
+      attributes: Attr[];
+      /** Enumeration members in declaration order. Each has a name and an
+       *  optional argument list (`quad (0)` → args `[0]`). Args are passed
+       *  to the constructor / first superclass to build the member value. */
+      members: { name: string; args: Expr[] }[];
+    }
   | { type: "Arguments"; attributes: Attr[]; names: string[] };
 
 // ── Arguments Blocks ─────────────────────────────────────────────────────

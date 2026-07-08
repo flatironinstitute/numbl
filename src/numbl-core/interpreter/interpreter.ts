@@ -384,6 +384,15 @@ export class Interpreter {
     args: unknown[],
     nargout: number
   ) => unknown;
+  declare interpretEnumMember: (
+    className: string,
+    memberName: string
+  ) => RuntimeValue | null;
+  declare convertToEnum: (
+    className: string,
+    classInfo: ClassInfo,
+    args: unknown[]
+  ) => RuntimeValue;
   declare callUserFunction: (
     fn: FunctionDef,
     args: unknown[],

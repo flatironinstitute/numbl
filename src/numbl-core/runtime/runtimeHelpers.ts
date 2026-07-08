@@ -23,6 +23,7 @@ import {
 import { sparseToDense } from "../../numbl-core/helpers/sparse-arithmetic.js";
 import { END_SENTINEL } from "./sentinels.js";
 import { allocFloat64Array } from "./alloc.js";
+import { isEnumInstance, enumScalarEquals } from "./runtimeEnum.js";
 
 // ── Deferred Range ──────────────────────────────────────────────────────
 
@@ -75,6 +76,10 @@ export function ensureRuntimeValue(v: unknown): RuntimeValue {
 }
 
 export function switchValuesMatch(a: RuntimeValue, b: RuntimeValue): boolean {
+  // Enumeration member in a `switch`: match by underlying value (member vs
+  // member / numeric) or by name (member vs char case label).
+  if (isEnumInstance(a)) return enumScalarEquals(a, b);
+  if (isEnumInstance(b)) return enumScalarEquals(b, a);
   if (
     (isRuntimeChar(a) || isRuntimeString(a)) &&
     (isRuntimeChar(b) || isRuntimeString(b))

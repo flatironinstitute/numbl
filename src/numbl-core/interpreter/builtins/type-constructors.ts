@@ -17,6 +17,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeFunction,
   isRuntimeStringArray,
+  isRuntimeClassInstanceArray,
   RuntimeTensor,
 } from "../../runtime/types.js";
 import type {
@@ -32,6 +33,20 @@ import { allocFloat64Array } from "../../runtime/alloc.js";
 import { imagAllZero } from "../../helpers/effectively-real.js";
 
 // ── double ──────────────────────────────────────────────────────────────
+
+/** Underlying numeric tensor of an array of built-in-derived class instances
+ *  (e.g. an enumeration-member array), or null if `v` is not such an array.
+ *  Each element's `_builtinData` supplies one value; the array shape carries
+ *  over. */
+function classInstanceArrayNumeric(v: RuntimeValue): RuntimeTensor | null {
+  if (!isRuntimeClassInstanceArray(v)) return null;
+  const data = allocFloat64Array(v.elements.length);
+  for (let i = 0; i < v.elements.length; i++) {
+    const bd = v.elements[i]._builtinData;
+    data[i] = bd !== undefined ? toNumber(bd) : NaN;
+  }
+  return RTV.tensor(data, [v.shape[0], v.shape[1]]);
+}
 
 /** Parse string text to a double (MATLAB double(string) semantics):
  *  numeric text parses, anything else is NaN. */
@@ -100,6 +115,8 @@ defineBuiltin({
         if (isRuntimeClassInstance(v) && v._builtinData !== undefined) {
           return v._builtinData;
         }
+        const arr = classInstanceArrayNumeric(v);
+        if (arr) return arr;
         return RTV.num(toNumber(v));
       },
     },
@@ -137,6 +154,8 @@ function singleApply(v: RuntimeValue): RuntimeValue {
   }
   if (isRuntimeClassInstance(v) && v._builtinData !== undefined)
     return singleApply(v._builtinData);
+  const arr = classInstanceArrayNumeric(v);
+  if (arr) return singleApply(arr);
   return RTV.num(Math.fround(toNumber(v)));
 }
 
@@ -225,7 +244,8 @@ for (const { name, min, max } of INT_RANGES) {
             a.kind === "number" ||
             a.kind === "boolean" ||
             a.kind === "char" ||
-            a.kind === "complex_or_number"
+            a.kind === "complex_or_number" ||
+            a.kind === "class_instance"
           )
             return [{ kind: "number" }];
           if (a.kind === "tensor")
@@ -240,7 +260,13 @@ for (const { name, min, max } of INT_RANGES) {
           return null;
         },
         apply: args => {
-          const v = args[0];
+          // Enumeration member / built-in-derived instance → its underlying
+          // value (e.g. `uint32(patchtype.tri)` → the stored uint32).
+          const v =
+            isRuntimeClassInstance(args[0]) &&
+            args[0]._builtinData !== undefined
+              ? args[0]._builtinData
+              : (classInstanceArrayNumeric(args[0]) ?? args[0]);
           if (isRuntimeNumber(v))
             return RTV.num(saturateRoundToward(v as number, min, max));
           if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
@@ -564,7 +590,11 @@ defineBuiltin({
       match: argTypes => {
         if (argTypes.length !== 1) return null;
         const a = argTypes[0];
-        if (a.kind === "number" || a.kind === "boolean")
+        if (
+          a.kind === "number" ||
+          a.kind === "boolean" ||
+          a.kind === "class_instance"
+        )
           return [{ kind: "boolean" }];
         if (a.kind === "tensor")
           return [
@@ -579,7 +609,11 @@ defineBuiltin({
         return null;
       },
       apply: args => {
-        const v = args[0];
+        // Enumeration member with a `logical` superclass → underlying value.
+        const v =
+          isRuntimeClassInstance(args[0]) && args[0]._builtinData !== undefined
+            ? args[0]._builtinData
+            : (classInstanceArrayNumeric(args[0]) ?? args[0]);
         if (isRuntimeTensor(v)) {
           const result = allocFloat64Array(v.data.length);
           for (let i = 0; i < v.data.length; i++) {
