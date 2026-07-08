@@ -24,7 +24,10 @@ export function Root() {
   const hash = useHash();
   const m = /^#figure(?:\/(.*))?$/.exec(hash);
   if (m) {
-    const id = m[1] ? decodeURIComponent(m[1]) : undefined;
+    // Strip any trailing `?query` / `#fragment` that trackers (e.g. LinkedIn's
+    // `?trk=…`) tack onto a shared link, so the slug resolves cleanly.
+    const slug = m[1]?.split(/[?#]/)[0];
+    const id = slug ? decodeURIComponent(slug) : undefined;
     return <FigurePage figureId={id} />;
   }
   return <SiteApp />;
