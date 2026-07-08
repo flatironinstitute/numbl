@@ -201,6 +201,22 @@ function assignSlice(
   if (isRuntimeTensor(rhs)) {
     const nR = rowIndices.length;
     const nC = colIndices.length;
+    // A 1-element RHS broadcasts across the whole slice (MATLAB scalar
+    // expansion), regardless of storage. A 1×1 tensor from a 2-D slice
+    // (e.g. x(:,k)) must behave exactly like a scalar number here.
+    if (rhs.data.length === 1) {
+      const re = rhs.data[0];
+      const im = rhs.imag ? rhs.imag[0] : 0;
+      if (im !== 0 || base.imag) ensureImag(base);
+      for (const r of rowIndices) {
+        for (const c of colIndices) {
+          const li = colMajorIndex(r, c, curRows);
+          base.data[li] = re;
+          if (base.imag) base.imag[li] = im;
+        }
+      }
+      return;
+    }
     const [rhsRows, rhsCols] = tensorSize2D(rhs);
     const shapeMatches = rhsRows === nR && rhsCols === nC;
     // MATLAB: when the target slice is a vector (one side is 1), accept
