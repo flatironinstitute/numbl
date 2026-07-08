@@ -5,13 +5,18 @@
 
 import type { Expr } from "../parser/types.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import { isRuntimeCell } from "../runtime/types.js";
+import {
+  isRuntimeCell,
+  isRuntimeChar,
+  isRuntimeString,
+  isRuntimeTensor,
+} from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin, inferJitType } from "./builtins/index.js";
-import { toString } from "../runtime/convert.js";
+import { toString, toNumber } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
 import {
@@ -489,6 +494,24 @@ export function interpretClassMethod(
         () => this.callUserFunction(extFn, actualArgs, nargout)
       );
     }
+    // Implicit static `ClassName.empty(m,n)`: every MATLAB class inherits
+    // an `empty` method producing an empty object array.
+    if (methodName === "empty") {
+      const dims: number[] = [];
+      for (const a of args) {
+        const rv = ensureRuntimeValue(a);
+        if (isRuntimeTensor(rv)) for (const d of rv.data) dims.push(d);
+        else dims.push(toNumber(rv));
+      }
+      if (dims.length === 1) dims.push(dims[0]);
+      if (dims.length === 0) dims.push(0, 0);
+      if (!dims.some(d => d === 0)) {
+        throw new RuntimeError(
+          `${className}.empty: at least one dimension must be zero`
+        );
+      }
+      return RTV.classInstanceArray(className, [], [dims[0], dims[1]]);
+    }
     throw new RuntimeError(
       `No method '${methodName}' for class '${className}'`
     );
@@ -686,9 +709,13 @@ export function callUserFunction(
   fnEnv.rt = this.rt;
   fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
 
-  const hasVarargin =
-    fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
-  const regularParams = hasVarargin ? fn.params.slice(0, -1) : fn.params;
+  // `varargin` is normally last, but name-value struct parameters declared
+  // via dotted `arguments` entries may follow it (the parser enforces this).
+  const vararginIdx = fn.params.indexOf("varargin");
+  const hasVarargin = vararginIdx !== -1;
+  const regularParams = hasVarargin
+    ? fn.params.slice(0, vararginIdx)
+    : fn.params;
 
   // Count leading positional parameters. Name-value struct parameters
   // declared in an `arguments` block (entries like `opts.method`) are filled
@@ -713,9 +740,16 @@ export function callUserFunction(
     }
   }
   if (hasVarargin) {
-    const extraArgs = sharedArgs
-      .slice(regularParams.length)
-      .map(a => ensureRuntimeValue(a));
+    let extras = sharedArgs.slice(regularParams.length);
+    // When name-value struct params follow varargin, the repeating section
+    // ends at the first argument naming a declared option.
+    if (vararginIdx !== fn.params.length - 1) {
+      extras = extras.slice(
+        0,
+        nameValueTailStart(extras, nameValueFieldNames(fn))
+      );
+    }
+    const extraArgs = extras.map(a => ensureRuntimeValue(a));
     fnEnv.set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
   }
   fnEnv.set("$nargin", narginOverride ?? args.length);
@@ -1288,6 +1322,41 @@ export function evalInLocalScope(
 
 // ── Arguments block processing ──────────────────────────────────────────
 
+/** Field names declared by dotted (name-value) entries across a function's
+ *  input arguments blocks. */
+function nameValueFieldNames(fn: FunctionDef): Set<string> {
+  const names = new Set<string>();
+  for (const block of fn.argumentsBlocks ?? []) {
+    if (block.kind === "Output" || block.kind === "OutputRepeating") continue;
+    for (const e of block.entries) {
+      const dot = e.name.indexOf(".");
+      if (dot >= 0) names.add(e.name.slice(dot + 1));
+    }
+  }
+  return names;
+}
+
+/** Index into `extras` where the trailing name-value section starts: the
+ *  first char/string argument matching a declared option field name.
+ *  Everything before it belongs to the repeating (varargin) section. */
+function nameValueTailStart(
+  extras: unknown[],
+  fieldNames: Set<string>
+): number {
+  if (fieldNames.size === 0) return extras.length;
+  for (let i = 0; i < extras.length; i++) {
+    if (extras[i] === undefined) continue;
+    const rv = ensureRuntimeValue(extras[i]);
+    if (
+      (isRuntimeChar(rv) || isRuntimeString(rv)) &&
+      fieldNames.has(toString(rv))
+    ) {
+      return i;
+    }
+  }
+  return extras.length;
+}
+
 /**
  * Apply `arguments`-block defaults and build name-value struct parameters,
  * binding the results into the *current* function environment.
@@ -1351,9 +1420,20 @@ export function processArgumentsBlocks(
 
     // Assemble each name-value struct parameter from the trailing arguments
     // (those past the struct parameter's position) plus field defaults.
+    const vararginIdx = fn.params.indexOf("varargin");
     for (const [paramName, fields] of nvGroups) {
       const pIdx = fn.params.indexOf(paramName);
-      const nvArgs = args.slice(pIdx >= 0 ? pIdx : args.length);
+      let nvArgs: unknown[];
+      if (pIdx >= 0 && vararginIdx >= 0 && vararginIdx < pIdx) {
+        // varargin consumes a variable number of arguments; the name-value
+        // tail starts at the first declared option name after it.
+        const extras = args.slice(vararginIdx);
+        nvArgs = extras.slice(
+          nameValueTailStart(extras, nameValueFieldNames(fn))
+        );
+      } else {
+        nvArgs = args.slice(pIdx >= 0 ? pIdx : args.length);
+      }
       const defaults: Record<string, unknown> = {};
       for (const { field, defaultExpr } of fields) {
         if (defaultExpr) defaults[field] = this.evalExpr(defaultExpr);

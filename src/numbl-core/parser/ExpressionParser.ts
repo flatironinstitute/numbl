@@ -320,9 +320,9 @@ export class ExpressionParser extends ParserBase {
           if (this.consume(Token.LParen)) {
             const args: Expr[] = [];
             if (!this.consume(Token.RParen)) {
-              args.push(this.parseExpr());
+              this.parseFuncArg(args);
               while (this.consume(Token.Comma)) {
-                args.push(this.parseExpr());
+                this.parseFuncArg(args);
               }
               if (!this.consume(Token.RParen)) {
                 throw this.error("expected ')' after method arguments");
@@ -357,9 +357,9 @@ export class ExpressionParser extends ParserBase {
         }
         const args: Expr[] = [];
         if (!this.consume(Token.RParen)) {
-          args.push(this.parseExpr());
+          this.parseFuncArg(args);
           while (this.consume(Token.Comma)) {
-            args.push(this.parseExpr());
+            this.parseFuncArg(args);
           }
           if (!this.consume(Token.RParen)) {
             throw this.error("expected ')' after super call arguments");

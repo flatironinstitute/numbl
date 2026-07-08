@@ -13,6 +13,7 @@ import {
   isRuntimeStruct,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
+  isRuntimeStringArray,
 } from "../../runtime/types.js";
 import type {
   RuntimeValue,
@@ -97,6 +98,13 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     for (const [key, val] of a.fields) {
       if (!b.fields.has(key)) return false;
       if (!valuesEqualSimple(val, b.fields.get(key)!)) return false;
+    }
+    return true;
+  }
+  if (isRuntimeStringArray(a) && isRuntimeStringArray(b)) {
+    if (a.shape[0] !== b.shape[0] || a.shape[1] !== b.shape[1]) return false;
+    for (let i = 0; i < a.data.length; i++) {
+      if (a.data[i] !== b.data[i]) return false;
     }
     return true;
   }

@@ -26,7 +26,8 @@ export type RuntimeValue =
   | RuntimeStructArray
   | RuntimeClassInstanceArray
   | RuntimeSparseMatrix
-  | RuntimeDictionary;
+  | RuntimeDictionary
+  | RuntimeStringArray;
 
 export type RuntimeNumber = number;
 export type RuntimeLogical = boolean;
@@ -109,6 +110,12 @@ export const isRuntimeDictionary = (
   typeof value === "object" &&
   value !== null &&
   (value as RuntimeDictionary).kind === "dictionary";
+export const isRuntimeStringArray = (
+  value: RuntimeValue
+): value is RuntimeStringArray =>
+  typeof value === "object" &&
+  value !== null &&
+  (value as RuntimeStringArray).kind === "string_array";
 
 export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeNumber(value)) return "number";
@@ -128,6 +135,7 @@ export const kstr = (value: RuntimeValue): string => {
   if (isRuntimeStructArray(value)) return "struct array";
   if (isRuntimeSparseMatrix(value)) return "sparse matrix";
   if (isRuntimeDictionary(value)) return "dictionary";
+  if (isRuntimeStringArray(value)) return "string array";
   return "unknown";
 };
 
@@ -175,6 +183,32 @@ export class RuntimeChar extends Refcounted {
     this.value = value;
     this.shape = shape;
   }
+}
+
+export class RuntimeStringArray extends Refcounted {
+  readonly kind = "string_array" as const;
+  /** Elements in column-major order (plain JS strings). */
+  data: string[];
+  /** 2-D shape [rows, cols]; data.length === rows*cols. A 1x1 string is
+   *  normally represented as a primitive JS string, not a 1x1 array —
+   *  use stringArrayValue() to build results so scalars collapse. */
+  shape: [number, number];
+
+  constructor(data: string[], shape: [number, number]) {
+    super();
+    this.data = data;
+    this.shape = shape;
+  }
+}
+
+/** Build a string-array result, collapsing 1x1 to the primitive string
+ *  representation used for string scalars throughout the runtime. */
+export function stringArrayValue(
+  data: string[],
+  shape: [number, number]
+): RuntimeValue {
+  if (data.length === 1 && shape[0] === 1 && shape[1] === 1) return data[0];
+  return new RuntimeStringArray(data, shape);
 }
 
 export class RuntimeCell extends Refcounted {

@@ -6,7 +6,8 @@ The runtime universe. A union of primitives plus refcounted classes:
 
 - `number` — JavaScript number (real scalar). Not refcounted.
 - `boolean` — logical scalar. Not refcounted.
-- `string` — MATLAB string (distinct from char). Not refcounted.
+- `string` — MATLAB string _scalar_ (distinct from char). Not refcounted.
+- `RuntimeStringArray` — MATLAB string array (`kind: "string_array"`): column-major `data: string[]` plus a 2-D `shape`. A 1×1 string is always represented as the primitive, never a 1×1 array — build results with `stringArrayValue(data, shape)`, which collapses 1×1 to the primitive (empties stay arrays, e.g. `string([])` is 0×0).
 - `RuntimeChar` — MATLAB char array.
 - `RuntimeTensor` — real or complex, any rank, any shape.
 - `RuntimeComplexNumber` — complex scalar.

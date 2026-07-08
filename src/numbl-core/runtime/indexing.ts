@@ -20,6 +20,9 @@ import {
   isRuntimeStruct,
   isRuntimeClassInstance,
   isRuntimeChar,
+  isRuntimeStringArray,
+  RuntimeStringArray,
+  stringArrayValue,
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
@@ -1124,6 +1127,83 @@ function indexIntoChar(
   throw new RuntimeError("Char indexing supports 1 or 2 dimensions");
 }
 
+/** Resolve one subscript against a dimension of extent `extent` to 0-based
+ *  positions. Handles colon, scalars, numeric vectors, and logical masks. */
+export function stringArraySubscript(
+  idx: RuntimeValue,
+  extent: number
+): number[] {
+  if (isColonIndex(idx)) {
+    return Array.from({ length: extent }, (_, i) => i);
+  }
+  if (isRuntimeTensor(idx)) {
+    if (idx._isLogical) {
+      const out: number[] = [];
+      for (let i = 0; i < idx.data.length; i++)
+        if (idx.data[i] !== 0) out.push(i);
+      return out;
+    }
+    return Array.from(idx.data, (v: number) => Math.round(v) - 1);
+  }
+  if (isRuntimeLogical(idx)) return idx ? [0] : [];
+  return [Math.round(toNumber(idx)) - 1];
+}
+
+function indexIntoStringArray(
+  base: RuntimeStringArray,
+  indices: RuntimeValue[]
+): RuntimeValue {
+  const [rows, cols] = base.shape;
+  const total = base.data.length;
+
+  if (indices.length === 2) {
+    const ri = stringArraySubscript(indices[0], rows);
+    const ci = stringArraySubscript(indices[1], cols);
+    const out: string[] = [];
+    for (const c of ci) {
+      if (c < 0 || c >= cols)
+        throw new RuntimeError("Index exceeds array bounds");
+      for (const r of ri) {
+        if (r < 0 || r >= rows)
+          throw new RuntimeError("Index exceeds array bounds");
+        out.push(base.data[c * rows + r]);
+      }
+    }
+    return stringArrayValue(out, [ri.length, ci.length]);
+  }
+
+  if (indices.length !== 1) {
+    throw new RuntimeError("String array indexing supports 1 or 2 subscripts");
+  }
+
+  const idx = indices[0];
+  if (isColonIndex(idx)) {
+    return stringArrayValue(base.data.slice(), [total, 1]);
+  }
+  const linear = stringArraySubscript(idx, total);
+  const out: string[] = [];
+  for (const i of linear) {
+    if (i < 0 || i >= total)
+      throw new RuntimeError("Index exceeds array bounds");
+    out.push(base.data[i]);
+  }
+  // Orientation: vector sources keep their orientation; a matrix source
+  // takes the shape of a tensor index (MATLAB rule), else a row.
+  let shape: [number, number];
+  if (rows === 1 || cols === 1) {
+    shape = rows === 1 ? [1, out.length] : [out.length, 1];
+  } else if (isRuntimeTensor(idx) && !idx._isLogical) {
+    const is = idx.shape;
+    const im = is.length >= 2 ? is[0] : 1;
+    shape = [im, out.length / (im || 1)];
+  } else if (isRuntimeTensor(idx) && idx._isLogical) {
+    shape = [out.length, 1];
+  } else {
+    shape = [1, out.length];
+  }
+  return stringArrayValue(out, shape);
+}
+
 function indexIntoLogical(
   base: boolean,
   indices: RuntimeValue[]
@@ -1300,6 +1380,9 @@ export function indexIntoRTValue(
       if (i !== 1) throw new RuntimeError("Index exceeds string dimensions");
       return base;
     }
+  }
+  if (isRuntimeStringArray(base)) {
+    return indexIntoStringArray(base, indices);
   }
   if (isRuntimeLogical(base)) {
     return indexIntoLogical(base, indices);

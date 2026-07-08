@@ -32,6 +32,7 @@ import {
   isRuntimeTensor,
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
+  isRuntimeStringArray,
   isRuntimeCell,
   isRuntimeLogical,
   isRuntimeSparseMatrix,
@@ -1055,6 +1056,7 @@ export class Runtime {
         rv.shape ?? (rv.value.length === 0 ? [0, 0] : [1, rv.value.length])
       );
     if (isRuntimeString(rv)) return [1, 1];
+    if (isRuntimeStringArray(rv)) return [...rv.shape];
     if (isRuntimeClassInstance(rv)) return [1, 1];
     return [1, 1];
   }

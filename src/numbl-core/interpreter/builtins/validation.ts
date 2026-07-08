@@ -248,6 +248,8 @@ function getValClassName(v: RuntimeValue): string {
       return "double";
     case "dictionary":
       return "dictionary";
+    case "string_array":
+      return "string";
     default:
       return "unknown";
   }
@@ -281,6 +283,8 @@ function getShapeOf(v: RuntimeValue): number[] {
       return [1, 1];
     case "struct_array":
       return [1, (obj.elements as unknown[]).length];
+    case "string_array":
+      return [...(obj.shape as number[])];
     default:
       return [1, 1];
   }

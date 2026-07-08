@@ -16,7 +16,10 @@ import {
   isRuntimeString,
   isRuntimeTensor,
   isRuntimeComplexNumber,
+  isRuntimeStringArray,
+  stringArrayValue,
 } from "../../runtime/types.js";
+import { ensureRuntimeValue } from "../../runtime/runtimeHelpers.js";
 import {
   RTV,
   toNumber,
@@ -27,6 +30,8 @@ import {
 import type { JitType } from "../../jitTypes.js";
 import { registerIBuiltin } from "./types.js";
 import { sprintfFormat } from "../../helpers/string.js";
+import { scanFormat } from "../../helpers/scanFormat.js";
+import { matlabNumToString } from "../../runtime/utils.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 
 // ── Type helpers ──────────────────────────────────────────────────────
@@ -42,7 +47,8 @@ function preserveTextType(t: JitType): JitType | null {
   return null;
 }
 
-/** Apply a string function to a value, recursing into cells. */
+/** Apply a string function to a value, recursing into cells and mapping
+ *  element-wise over string arrays. */
 function applyTextFn(v: RuntimeValue, fn: (s: string) => string): RuntimeValue {
   if (isRuntimeCell(v)) {
     const out: RuntimeValue[] = new Array(v.data.length);
@@ -60,11 +66,14 @@ function applyTextFn(v: RuntimeValue, fn: (s: string) => string): RuntimeValue {
     return RTV.char(fn(v.value));
   }
   if (isRuntimeString(v)) return RTV.string(fn(toString(v)));
+  if (isRuntimeStringArray(v)) {
+    return RTV.stringArray(v.data.map(fn), [v.shape[0], v.shape[1]]);
+  }
   return v;
 }
 
 /** Resolve for a simple 1-arg text→text function that preserves char/string,
- *  and maps element-wise over cell arrays of text. */
+ *  and maps element-wise over cell arrays of text and string arrays. */
 function textPreserveResolve(fn: (s: string) => string): (
   argTypes: JitType[],
   nargout: number
@@ -79,6 +88,17 @@ function textPreserveResolve(fn: (s: string) => string): (
       return {
         outputTypes: [{ kind: "cell" }],
         apply: args => applyTextFn(args[0], fn),
+      };
+    }
+    // String arrays infer as "unknown" — accept and verify at runtime.
+    if (t.kind === "unknown") {
+      return {
+        outputTypes: [{ kind: "unknown" }],
+        apply: args => {
+          if (!isRuntimeStringArray(args[0]))
+            throw new RuntimeError("Expected a text input");
+          return applyTextFn(args[0], fn);
+        },
       };
     }
     const out = preserveTextType(t);
@@ -186,17 +206,17 @@ registerIBuiltin({
   name: "erase",
   resolve: argTypes => {
     if (argTypes.length !== 2) return null;
-    const out = preserveTextType(argTypes[0]);
+    const out =
+      argTypes[0].kind === "unknown"
+        ? { kind: "unknown" as const }
+        : preserveTextType(argTypes[0]);
     if (!out) return null;
     if (!isTextType(argTypes[1])) return null;
     return {
       outputTypes: [out],
       apply: args => {
-        const v = args[0];
-        const s = toString(v);
         const pat = toString(args[1]);
-        const result = s.split(pat).join("");
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
+        return applyTextFn(args[0], s => s.split(pat).join(""));
       },
     };
   },
@@ -213,18 +233,18 @@ function strreplaceResolve(): (
 } | null {
   return argTypes => {
     if (argTypes.length !== 3) return null;
-    const out = preserveTextType(argTypes[0]);
+    const out =
+      argTypes[0].kind === "unknown" || argTypes[0].kind === "cell"
+        ? ({ kind: argTypes[0].kind } as JitType)
+        : preserveTextType(argTypes[0]);
     if (!out) return null;
     if (!isTextType(argTypes[1]) || !isTextType(argTypes[2])) return null;
     return {
       outputTypes: [out],
       apply: args => {
-        const v = args[0];
-        const s = toString(v);
         const old = toString(args[1]);
         const rep = toString(args[2]);
-        const result = s.split(old).join(rep);
-        return isRuntimeChar(v) ? RTV.char(result) : RTV.string(result);
+        return applyTextFn(args[0], s => s.split(old).join(rep));
       },
     };
   };
@@ -441,12 +461,21 @@ function isText(v: RuntimeValue): boolean {
 }
 
 /** Element-wise strcmp helper supporting cell arrays. */
+/** View a string array as a cell of strings (for elementwise text ops). */
+function stringArrayToCell(v: RuntimeValue): RuntimeValue {
+  if (!isRuntimeStringArray(v)) return v;
+  return RTV.cell(
+    v.data.map(s => RTV.string(s)),
+    [v.shape[0], v.shape[1]]
+  );
+}
+
 function strcmpApply(
   args: RuntimeValue[],
   cmp: (a: string, b: string) => boolean
 ): RuntimeValue {
-  const a = args[0];
-  const b = args[1];
+  const a = stringArrayToCell(args[0]);
+  const b = stringArrayToCell(args[1]);
   const aIsCell = isRuntimeCell(a);
   const bIsCell = isRuntimeCell(b);
 
@@ -760,25 +789,53 @@ registerIBuiltin({
   },
 });
 
+/** Normalize a pattern argument (scalar text, cellstr, or string array) to a
+ *  list of pattern strings. */
+function patternList(pat: RuntimeValue): string[] {
+  if (isRuntimeCell(pat)) return pat.data.map(e => toString(e));
+  if (isRuntimeStringArray(pat)) return pat.data.slice();
+  return [toString(pat)];
+}
+
+/** Apply a per-element text predicate over a subject that may be scalar
+ *  text, a cellstr, or a string array. */
+function textSubjectApply(
+  subject: RuntimeValue,
+  perElem: (s: string) => boolean
+): RuntimeValue {
+  if (isRuntimeStringArray(subject)) {
+    return new RuntimeTensor(
+      allocFloat64Array(subject.data.map(s => (perElem(s) ? 1 : 0))),
+      [subject.shape[0], subject.shape[1]],
+      undefined,
+      true
+    );
+  }
+  if (isRuntimeCell(subject)) {
+    return new RuntimeTensor(
+      allocFloat64Array(subject.data.map(e => (perElem(toString(e)) ? 1 : 0))),
+      subject.shape.slice(),
+      undefined,
+      true
+    );
+  }
+  return RTV.logical(perElem(toString(subject)));
+}
+
+function subjectTypeOk(t: JitType): boolean {
+  return isTextType(t) || t.kind === "cell" || t.kind === "unknown";
+}
+
 registerIBuiltin({
   name: "contains",
   resolve: argTypes => {
     if (argTypes.length < 2) return null;
-    if (!isTextType(argTypes[0])) return null;
-    // Fall back for cell pattern arg
-    if (argTypes[1].kind === "unknown") return null;
+    if (!subjectTypeOk(argTypes[0])) return null;
     return {
       outputTypes: [{ kind: "boolean" }],
       apply: args => {
-        const s = toString(args[0]);
-        const pat = args[1];
-        if (isRuntimeCell(pat)) {
-          for (let i = 0; i < pat.data.length; i++) {
-            if (s.includes(toString(pat.data[i]))) return RTV.logical(true);
-          }
-          return RTV.logical(false);
-        }
-        return RTV.logical(s.includes(toString(pat)));
+        const pats = patternList(args[1]);
+        return textSubjectApply(args[0], s => pats.some(p => s.includes(p)));
       },
     };
   },
@@ -792,7 +849,7 @@ function resolveStartsEndsWith(
     name,
     resolve: argTypes => {
       if (argTypes.length < 2) return null;
-      if (!isTextType(argTypes[0])) return null;
+      if (!subjectTypeOk(argTypes[0])) return null;
       return {
         outputTypes: [{ kind: "boolean" }],
         apply: args => {
@@ -802,20 +859,12 @@ function resolveStartsEndsWith(
               ic = !!toNumber(args[i + 1]);
             }
           }
-          let s = toString(args[0]);
-          if (ic) s = s.toLowerCase();
-          const pat = args[1];
-          if (isRuntimeCell(pat)) {
-            for (let i = 0; i < pat.data.length; i++) {
-              let p = toString(pat.data[i]);
-              if (ic) p = p.toLowerCase();
-              if (testFn(s, p)) return RTV.logical(true);
-            }
-            return RTV.logical(false);
-          }
-          let p = toString(pat);
-          if (ic) p = p.toLowerCase();
-          return RTV.logical(testFn(s, p));
+          let pats = patternList(args[1]);
+          if (ic) pats = pats.map(p => p.toLowerCase());
+          return textSubjectApply(args[0], s0 => {
+            const s = ic ? s0.toLowerCase() : s0;
+            return pats.some(p => testFn(s, p));
+          });
         },
       };
     },
@@ -831,13 +880,19 @@ registerIBuiltin({
   name: "strlength",
   resolve: argTypes => {
     if (argTypes.length !== 1) return null;
-    if (!isTextType(argTypes[0])) return null;
+    if (!isTextType(argTypes[0]) && argTypes[0].kind !== "unknown") return null;
     return {
       outputTypes: [{ kind: "number", sign: "nonneg" }],
       apply: args => {
         const v = args[0];
         if (isRuntimeString(v)) return RTV.num(v.length);
         if (isRuntimeChar(v)) return RTV.num(v.value.length);
+        if (isRuntimeStringArray(v)) {
+          return RTV.tensor(allocFloat64Array(v.data.map(s => s.length)), [
+            v.shape[0],
+            v.shape[1],
+          ]);
+        }
         throw new RuntimeError("strlength: argument must be a string or char");
       },
     };
@@ -909,6 +964,20 @@ registerIBuiltin({
             }
           }
           return RTV.tensor(data, c.shape.slice());
+        },
+      };
+    }
+    if (t.kind === "unknown") {
+      return {
+        outputTypes: [{ kind: "tensor", isComplex: false }],
+        apply: args => {
+          const v = args[0];
+          if (!isRuntimeStringArray(v))
+            throw new RuntimeError("str2double: expected text input");
+          return RTV.tensor(
+            allocFloat64Array(v.data.map(s => str2doubleScalar(s))),
+            [v.shape[0], v.shape[1]]
+          );
         },
       };
     }
@@ -1120,29 +1189,7 @@ registerIBuiltin({
 
 // ── num2str ───────────────────────────────────────────────────────────
 
-function numStr(n: number): string {
-  if (n === Infinity) return "Inf";
-  if (n === -Infinity) return "-Inf";
-  if (isNaN(n)) return "NaN";
-  if (n === 0) return "0";
-  if (Number.isInteger(n)) return String(n);
-  const prec = 5;
-  const exp = Math.floor(Math.log10(Math.abs(n)));
-  let s: string;
-  if (exp < -4 || exp >= prec) {
-    s = n.toExponential(prec - 1);
-    const ePos = s.indexOf("e");
-    let mantissa = s.slice(0, ePos);
-    const expPart0 = s.slice(ePos);
-    if (mantissa.includes(".")) mantissa = mantissa.replace(/\.?0+$/, "");
-    const expPart = expPart0.replace(/([eE][+-])(\d)$/, "$1" + "0$2");
-    s = mantissa + expPart;
-  } else {
-    s = n.toPrecision(prec);
-    if (s.includes(".")) s = s.replace(/\.?0+$/, "");
-  }
-  return s;
-}
+const numStr = matlabNumToString;
 
 registerIBuiltin({
   name: "num2str",
@@ -1402,7 +1449,8 @@ registerIBuiltin({
       a.kind !== "string" &&
       a.kind !== "number" &&
       a.kind !== "tensor" &&
-      a.kind !== "cell"
+      a.kind !== "cell" &&
+      a.kind !== "unknown"
     )
       return null;
     return {
@@ -1428,6 +1476,11 @@ registerIBuiltin({
           for (const el of v.data) rows.push(...valueToCharRows(el));
           return charRowsToMatrix(rows);
         }
+        // char(stringArray): one row per element (column-major order),
+        // right-padded to the widest element.
+        if (isRuntimeStringArray(v)) {
+          return charRowsToMatrix(v.data.slice());
+        }
         throw new RuntimeError("char: unsupported arguments");
       },
     };
@@ -1439,14 +1492,301 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     const a = argTypes[0];
-    if (a.kind === "unknown") return null;
+    const scalarText =
+      a.kind === "char" ||
+      a.kind === "string" ||
+      a.kind === "number" ||
+      a.kind === "boolean";
     return {
-      outputTypes: [{ kind: "string" }],
+      outputTypes: [scalarText ? { kind: "string" } : { kind: "unknown" }],
       apply: args => {
+        const v = args[0];
+        if (isRuntimeString(v) || isRuntimeStringArray(v)) return v;
+        if (isRuntimeChar(v)) {
+          const rows = v.shape ? v.shape[0] : 1;
+          if (rows <= 1) return RTV.string(v.value);
+          // Char matrix: one string per row (m x 1), pad spaces preserved.
+          const width = v.shape![1];
+          const out: string[] = [];
+          for (let r = 0; r < rows; r++) {
+            out.push(v.value.slice(r * width, (r + 1) * width));
+          }
+          return RTV.stringArray(out, [rows, 1]);
+        }
+        if (isRuntimeNumber(v)) return RTV.string(numStr(v));
+        if (isRuntimeLogical(v)) return RTV.string(v ? "true" : "false");
+        if (isRuntimeTensor(v)) {
+          // Elementwise conversion, same shape ([] -> 0x0 empty string array).
+          const rows = v.shape.length >= 2 ? v.shape[0] : 1;
+          const cols =
+            v.data.length === 0
+              ? (v.shape[1] ?? 0)
+              : v.data.length / (rows || 1);
+          const out: string[] = [];
+          for (let i = 0; i < v.data.length; i++) {
+            out.push(
+              v._isLogical ? (v.data[i] ? "true" : "false") : numStr(v.data[i])
+            );
+          }
+          return stringArrayValue(out, [rows, cols]);
+        }
+        if (isRuntimeCell(v)) {
+          const rows = v.shape.length >= 2 ? v.shape[0] : 1;
+          const cols = v.data.length / (rows || 1);
+          const out = v.data.map(el => {
+            const rv = ensureRuntimeValue(el);
+            if (isRuntimeChar(rv)) return rv.value;
+            if (isRuntimeString(rv)) return rv;
+            if (isRuntimeNumber(rv)) return numStr(rv);
+            if (isRuntimeLogical(rv)) return rv ? "true" : "false";
+            throw new RuntimeError(
+              "string: cell elements must be text or numbers"
+            );
+          });
+          return stringArrayValue(out, [rows, cols]);
+        }
+        return RTV.string(displayValue(v));
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "strings",
+  help: {
+    signatures: ["strings", "strings(n)", "strings(m,n)", "strings([m n])"],
+    description:
+      'Create a string array with every element set to "" (empty string).',
+  },
+  resolve: argTypes => {
+    if (argTypes.some(t => t.kind !== "number" && t.kind !== "tensor"))
+      return null;
+    return {
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => {
+        const dims: number[] = [];
+        for (const a of args) {
+          const rv = ensureRuntimeValue(a);
+          if (isRuntimeTensor(rv)) {
+            for (const d of rv.data) dims.push(Math.max(0, Math.round(d)));
+          } else {
+            dims.push(Math.max(0, Math.round(toNumber(rv))));
+          }
+        }
+        if (dims.length === 0) dims.push(1, 1);
+        if (dims.length === 1) dims.push(dims[0]);
+        const m = dims[0];
+        const n = dims.slice(1).reduce((a, b) => a * b, 1);
+        return stringArrayValue(new Array<string>(m * n).fill(""), [m, n]);
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "newline",
+  help: {
+    signatures: ["newline"],
+    description: "Newline character, char(10).",
+  },
+  resolve: argTypes => {
+    if (argTypes.length !== 0) return null;
+    return {
+      outputTypes: [{ kind: "char" }],
+      apply: () => RTV.char("\n"),
+    };
+  },
+});
+
+// ── split / join (string arrays) ──────────────────────────────────────
+
+registerIBuiltin({
+  name: "split",
+  help: {
+    signatures: ["split(str)", "split(str, delimiter)"],
+    description:
+      "Split text at whitespace (or the given delimiter(s)) into a string array. " +
+      "A scalar input yields a column of parts.",
+  },
+  resolve: argTypes => {
+    if (argTypes.length < 1 || argTypes.length > 2) return null;
+    const a = argTypes[0];
+    if (!isTextType(a) && a.kind !== "cell" && a.kind !== "unknown")
+      return null;
+    return {
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => {
+        const delims = args.length >= 2 ? patternList(args[1]) : null;
+        const splitOne = (s: string): string[] => {
+          if (delims === null) {
+            const trimmed = s.trim();
+            return trimmed.length === 0 ? [""] : trimmed.split(/\s+/);
+          }
+          const escaped = delims
+            .map(d => d.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+            .join("|");
+          return s.split(new RegExp(escaped));
+        };
+        const v = args[0];
+        const subjects: string[] = isRuntimeStringArray(v)
+          ? v.data.slice()
+          : isRuntimeCell(v)
+            ? v.data.map(e => toString(e))
+            : [toString(v)];
+        const partsPer = subjects.map(splitOne);
+        const nParts = partsPer[0].length;
+        if (partsPer.some(p => p.length !== nParts)) {
+          throw new RuntimeError(
+            "split: all elements must split into the same number of parts"
+          );
+        }
+        if (subjects.length === 1) {
+          return stringArrayValue(partsPer[0], [nParts, 1]);
+        }
+        // Vector input of m elements -> m x nParts (column-major storage).
+        const m = subjects.length;
+        const out: string[] = new Array(m * nParts);
+        for (let i = 0; i < m; i++) {
+          for (let j = 0; j < nParts; j++) {
+            out[j * m + i] = partsPer[i][j];
+          }
+        }
+        return stringArrayValue(out, [m, nParts]);
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "join",
+  help: {
+    signatures: ["join(str)", "join(str, delimiter)"],
+    description:
+      "Combine the elements of a string array into single strings, " +
+      "separated by a space (or the given delimiter).",
+  },
+  resolve: argTypes => {
+    if (argTypes.length < 1 || argTypes.length > 2) return null;
+    const a = argTypes[0];
+    if (!isTextType(a) && a.kind !== "cell" && a.kind !== "unknown")
+      return null;
+    return {
+      outputTypes: [{ kind: "unknown" }],
+      apply: args => {
+        const delim = args.length >= 2 ? toString(args[1]) : " ";
         const v = args[0];
         if (isRuntimeString(v)) return v;
         if (isRuntimeChar(v)) return RTV.string(v.value);
-        return RTV.string(displayValue(v));
+        const elems: string[] = isRuntimeStringArray(v)
+          ? v.data
+          : isRuntimeCell(v)
+            ? v.data.map(e => toString(e))
+            : [toString(v)];
+        const shape: [number, number] = isRuntimeStringArray(v)
+          ? v.shape
+          : [1, elems.length];
+        const [m, n] = shape;
+        if (m === 1 || n === 1) {
+          return RTV.string(elems.join(delim));
+        }
+        // Matrix: join along dim 2 -> m x 1 column.
+        const out: string[] = [];
+        for (let r = 0; r < m; r++) {
+          const parts: string[] = [];
+          for (let c = 0; c < n; c++) parts.push(elems[c * m + r]);
+          out.push(parts.join(delim));
+        }
+        return stringArrayValue(out, [m, 1]);
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "cellstr",
+  help: {
+    signatures: ["cellstr(A)"],
+    description:
+      "Convert a string array, char array, or cell array of text to a " +
+      "cell array of character vectors.",
+  },
+  resolve: argTypes => {
+    if (argTypes.length !== 1) return null;
+    const a = argTypes[0];
+    if (!isTextType(a) && a.kind !== "cell" && a.kind !== "unknown")
+      return null;
+    return {
+      outputTypes: [{ kind: "cell" }],
+      apply: args => {
+        const v = args[0];
+        if (isRuntimeCell(v)) {
+          return RTV.cell(
+            v.data.map(e => RTV.char(toString(e))),
+            [...v.shape]
+          );
+        }
+        if (isRuntimeStringArray(v)) {
+          return RTV.cell(
+            v.data.map(s => RTV.char(s)),
+            [v.shape[0], v.shape[1]]
+          );
+        }
+        if (isRuntimeString(v)) return RTV.cell([RTV.char(v)], [1, 1]);
+        if (isRuntimeChar(v)) {
+          const rows = v.shape ? v.shape[0] : 1;
+          if (rows <= 1) {
+            // MATLAB deblanks each row when converting char to cellstr.
+            return RTV.cell([RTV.char(v.value.replace(/\s+$/, ""))], [1, 1]);
+          }
+          const width = v.shape![1];
+          const out: RuntimeValue[] = [];
+          for (let r = 0; r < rows; r++) {
+            out.push(
+              RTV.char(
+                v.value.slice(r * width, (r + 1) * width).replace(/\s+$/, "")
+              )
+            );
+          }
+          return RTV.cell(out, [rows, 1]);
+        }
+        throw new RuntimeError("cellstr: unsupported argument");
+      },
+    };
+  },
+});
+
+registerIBuiltin({
+  name: "ismissing",
+  help: {
+    signatures: ["ismissing(A)"],
+    description:
+      "Logical array marking missing elements. numbl has no <missing> " +
+      "value, so string inputs return all-false.",
+  },
+  resolve: argTypes => {
+    if (argTypes.length !== 1) return null;
+    return {
+      outputTypes: [{ kind: "boolean" }],
+      apply: args => {
+        const v = args[0];
+        if (isRuntimeStringArray(v)) {
+          const t = RTV.tensor(allocFloat64Array(v.data.length), [
+            v.shape[0],
+            v.shape[1],
+          ]);
+          t._isLogical = true;
+          return t;
+        }
+        if (isRuntimeTensor(v)) {
+          const t = RTV.tensor(
+            allocFloat64Array(v.data.map(x => (isNaN(x) ? 1 : 0))),
+            [...v.shape]
+          );
+          t._isLogical = true;
+          return t;
+        }
+        if (isRuntimeNumber(v)) return RTV.logical(isNaN(v));
+        return RTV.logical(false);
       },
     };
   },
@@ -1493,7 +1833,14 @@ registerIBuiltin({
       outputTypes: [outType],
       apply: args => {
         const fmt = toString(args[0]);
-        const result = sprintfFormat(fmt, args.slice(1));
+        // A string-array argument supplies one text arg per element
+        // (the format cycles over them, like numeric arrays).
+        const rest = args
+          .slice(1)
+          .flatMap(a =>
+            isRuntimeStringArray(a) ? a.data.map(s => RTV.string(s)) : [a]
+          );
+        const result = sprintfFormat(fmt, rest);
         return isChar ? RTV.char(result) : RTV.string(result);
       },
     };
@@ -1517,95 +1864,11 @@ registerIBuiltin({
         const str = toString(args[0]);
         const fmt = toString(args[1]);
         const maxCount = args.length >= 3 ? toNumber(args[2]) : Infinity;
-        const results: number[] = [];
-        let strPos = 0;
-        let fmtPos = 0;
-        let matchFailure = false;
-
-        while (
-          fmtPos < fmt.length &&
-          strPos < str.length &&
-          results.length < maxCount
-        ) {
-          if (fmt[fmtPos] === "%") {
-            fmtPos++;
-            if (fmtPos >= fmt.length) break;
-            const spec = fmt[fmtPos];
-            fmtPos++;
-            if (spec !== "c" && spec !== "s") {
-              while (strPos < str.length && /\s/.test(str[strPos])) strPos++;
-            }
-            if (spec === "d" || spec === "i") {
-              const m = str.slice(strPos).match(/^[+-]?\d+/);
-              if (!m) {
-                matchFailure = true;
-                break;
-              }
-              results.push(parseInt(m[0], 10));
-              strPos += m[0].length;
-            } else if (spec === "f" || spec === "e" || spec === "g") {
-              const m = str
-                .slice(strPos)
-                .match(/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/);
-              if (!m) {
-                matchFailure = true;
-                break;
-              }
-              results.push(parseFloat(m[0]));
-              strPos += m[0].length;
-            } else if (spec === "x") {
-              const m = str.slice(strPos).match(/^[+-]?[0-9a-fA-F]+/);
-              if (!m) {
-                matchFailure = true;
-                break;
-              }
-              results.push(parseInt(m[0], 16));
-              strPos += m[0].length;
-            } else if (spec === "o") {
-              const m = str.slice(strPos).match(/^[+-]?[0-7]+/);
-              if (!m) {
-                matchFailure = true;
-                break;
-              }
-              results.push(parseInt(m[0], 8));
-              strPos += m[0].length;
-            } else if (spec === "c") {
-              results.push(str.charCodeAt(strPos));
-              strPos++;
-            } else if (spec === "s") {
-              const m = str.slice(strPos).match(/^\S+/);
-              if (!m) {
-                matchFailure = true;
-                break;
-              }
-              for (
-                let ci = 0;
-                ci < m[0].length && results.length < maxCount;
-                ci++
-              ) {
-                results.push(m[0].charCodeAt(ci));
-              }
-              strPos += m[0].length;
-            }
-          } else if (/\s/.test(fmt[fmtPos])) {
-            fmtPos++;
-            while (strPos < str.length && /\s/.test(str[strPos])) strPos++;
-          } else {
-            if (str[strPos] !== fmt[fmtPos]) {
-              matchFailure = true;
-              break;
-            }
-            strPos++;
-            fmtPos++;
-          }
-          if (
-            fmtPos >= fmt.length &&
-            results.length < maxCount &&
-            strPos < str.length
-          ) {
-            fmtPos = 0;
-          }
-        }
+        const {
+          results,
+          consumed: strPos,
+          matchFailure,
+        } = scanFormat(str, fmt, maxCount);
 
         const vals =
           results.length === 1

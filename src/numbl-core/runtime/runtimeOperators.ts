@@ -45,6 +45,8 @@ import {
   isRuntimeCell,
   isRuntimeChar,
   isRuntimeSparseMatrix,
+  isRuntimeStringArray,
+  stringArrayValue,
 } from "../runtime/types.js";
 import { END_SENTINEL } from "./sentinels.js";
 
@@ -393,6 +395,17 @@ export function forIter(v: unknown): unknown[] {
   }
   if (isRuntimeChar(mv)) {
     return Array.from(mv.value).map(c => RTV.char(c));
+  }
+  if (isRuntimeStringArray(mv)) {
+    // Iterate columns, like tensors: each iteration value is one column.
+    const [rows, cols] = mv.shape;
+    const out: RuntimeValue[] = [];
+    for (let c = 0; c < cols; c++) {
+      out.push(
+        stringArrayValue(mv.data.slice(c * rows, (c + 1) * rows), [rows, 1])
+      );
+    }
+    return out;
   }
   return [v];
 }

@@ -15,6 +15,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "fclose",
   "fgetl",
   "fgets",
+  "fscanf",
   "fileread",
   "feof",
   "ferror",

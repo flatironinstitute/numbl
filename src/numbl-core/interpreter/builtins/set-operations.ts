@@ -16,6 +16,8 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeString,
   isRuntimeTensor,
+  isRuntimeStringArray,
+  stringArrayValue,
 } from "../../runtime/types.js";
 import {
   RTV,
@@ -329,6 +331,10 @@ defineBuiltin({
           };
           return nargout > 1 ? [out, idx] : [out];
         }
+        if (a.kind === "string" || a.kind === "unknown") {
+          const out: JitType = { kind: "unknown" };
+          return nargout > 1 ? [out, { kind: "unknown" }] : [out];
+        }
         return null;
       },
       apply: (args, nargout) => {
@@ -350,6 +356,37 @@ defineBuiltin({
           (isRuntimeString(args[2]) || isRuntimeChar(args[2]))
         ) {
           descend = rstr(args[2]).toLowerCase() === "descend";
+        }
+
+        // Sort a string array's elements (vector orientation preserved).
+        if (isRuntimeStringArray(v)) {
+          const order = v.data.map((_, i) => i);
+          order.sort((i, j) => {
+            const x = v.data[i];
+            const y = v.data[j];
+            const c = x < y ? -1 : x > y ? 1 : 0;
+            return descend ? -c : c;
+          });
+          const sorted = order.map(i => v.data[i]);
+          const isRow = v.shape[0] === 1;
+          const shape: [number, number] = isRow
+            ? [1, sorted.length]
+            : [sorted.length, 1];
+          const result = stringArrayValue(sorted, shape);
+          if (nargout > 1) {
+            return [
+              result,
+              RTV.tensor(allocFloat64Array(order.map(i => i + 1)), [
+                shape[0],
+                shape[1],
+              ]),
+            ];
+          }
+          return result;
+        }
+        if (isRuntimeString(v)) {
+          if (nargout > 1) return [v, RTV.num(1)];
+          return v;
         }
 
         if (isRuntimeNumber(v)) {
@@ -777,8 +814,16 @@ const ismemberCases: BuiltinCase[] = [
     apply: (args, nargout) => {
       if (args.length < 2)
         throw new RuntimeError("ismember requires 2 arguments");
-      const v = args[0];
-      const b = args[1];
+      // String arrays run through the cellstr text path.
+      const asCellstr = (x: RuntimeValue): RuntimeValue =>
+        isRuntimeStringArray(x)
+          ? RTV.cell(
+              x.data.map(s => RTV.string(s)),
+              [x.shape[0], x.shape[1]]
+            )
+          : x;
+      const v = asCellstr(args[0]);
+      const b = asCellstr(args[1]);
 
       const isStringLike = (x: RuntimeValue) =>
         isRuntimeString(x) || isRuntimeChar(x);
@@ -1142,6 +1187,34 @@ defineBuiltin({
           )
         ) {
           return uniqueCellOfStrings(v, nargout, stable);
+        }
+
+        // String array: unique elements, preserving vector orientation.
+        if (isRuntimeStringArray(v)) {
+          const elems = v.data;
+          const seen = new Map<string, number>();
+          for (let i = 0; i < elems.length; i++) {
+            if (!seen.has(elems[i])) seen.set(elems[i], i);
+          }
+          let vals = [...seen.keys()];
+          if (!stable) vals = vals.sort();
+          const isRow = v.shape[0] === 1;
+          const shape: [number, number] = isRow
+            ? [1, vals.length]
+            : [vals.length, 1];
+          const result = stringArrayValue(vals, shape);
+          if (nargout <= 1) return result;
+          const ia = RTV.tensor(
+            allocFloat64Array(vals.map(s => seen.get(s)! + 1)),
+            [vals.length, 1]
+          );
+          if (nargout === 2) return [result, ia];
+          const pos = new Map(vals.map((s, i) => [s, i + 1]));
+          const ic = RTV.tensor(
+            allocFloat64Array(elems.map(s => pos.get(s)!)),
+            [elems.length, 1]
+          );
+          return [result, ia, ic];
         }
 
         if (!isRuntimeTensor(v))

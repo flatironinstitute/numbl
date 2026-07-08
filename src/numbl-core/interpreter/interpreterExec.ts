@@ -16,6 +16,7 @@ import {
   isRuntimeFunction,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
+  isRuntimeStringArray,
 } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
@@ -532,14 +533,20 @@ export function evalExprNargout(
           return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
         }
         if (isRuntimeChar(rv)) return rv.value.length;
-        if (isRuntimeString(rv)) return (rv as string).length;
-        // Class instances: call overloaded end(obj, k, n) if available
+        // A string scalar is a 1x1 array: end is 1 (s(end) is s itself).
+        if (isRuntimeString(rv)) return 1;
+        // Class instances: call overloaded end(obj, k, n) if available;
+        // otherwise default to 1 (a scalar instance has extent 1 in every
+        // dimension, matching MATLAB's builtin end).
         if (isRuntimeClassInstance(rv)) {
-          return this.rt.dispatch("end", 1, [
-            rv,
-            ctx.dimIndex + 1,
-            ctx.numIndices,
-          ]);
+          if (this.rt.resolveClassMethod?.(rv.className, "end")) {
+            return this.rt.dispatch("end", 1, [
+              rv,
+              ctx.dimIndex + 1,
+              ctx.numIndices,
+            ]);
+          }
+          return 1;
         }
         if (isRuntimeStructArray(rv)) {
           return rv.elements.length;
@@ -547,6 +554,10 @@ export function evalExprNargout(
         if (isRuntimeClassInstanceArray(rv)) {
           if (ctx.numIndices === 1) return rv.elements.length;
           return ctx.dimIndex < rv.shape.length ? rv.shape[ctx.dimIndex] : 1;
+        }
+        if (isRuntimeStringArray(rv)) {
+          if (ctx.numIndices === 1) return rv.data.length;
+          return ctx.dimIndex < 2 ? rv.shape[ctx.dimIndex] : 1;
         }
         if (isRuntimeSparseMatrix(rv)) {
           if (ctx.numIndices === 1) return rv.m * rv.n;
@@ -1011,7 +1022,10 @@ export function evalMember(
         const prefix = dottedName.slice(0, lastDot);
         const methodName = dottedName.slice(lastDot + 1);
         if (
-          this.functionIndex.classStaticMethods.get(prefix)?.has(methodName)
+          this.functionIndex.classStaticMethods.get(prefix)?.has(methodName) ||
+          // Implicit static `ClassName.empty` (handled by interpretClassMethod)
+          (methodName === "empty" &&
+            this.functionIndex.workspaceClasses.has(prefix))
         ) {
           const target: ResolvedTarget = {
             kind: "classMethod",

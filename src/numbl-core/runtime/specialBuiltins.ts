@@ -24,12 +24,14 @@ import {
   isRuntimeDictionary,
   isRuntimeStruct,
   isRuntimeSparseMatrix,
+  isRuntimeStringArray,
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { applyHandleProperty } from "./struct-access.js";
 import { incref, decref } from "./refcount.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
+import { scanFormat } from "../helpers/scanFormat.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import {
   arrayfunImpl as _arrayfunImpl,
@@ -267,8 +269,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
 
       const fmt = toString(margs[fmtIdx]);
       // sprintfFormat handles tensor flattening and format cycling internally,
-      // so we can pass the remaining args through directly.
-      output = sprintfFormat(fmt, margs.slice(fmtIdx + 1));
+      // so we can pass the remaining args through directly. String arrays
+      // supply one text arg per element.
+      const rest = margs
+        .slice(fmtIdx + 1)
+        .flatMap(a =>
+          isRuntimeStringArray(a) ? a.data.map(s => RTV.string(s)) : [a]
+        );
+      output = sprintfFormat(fmt, rest);
 
       if (fid === 1 || fid === 2) {
         rt.output(output);
@@ -457,6 +465,62 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     if (margs.length < 1) throw new RuntimeError("fgets requires 1 argument");
     const result = io.fgets(toNumber(margs[0]));
     return typeof result === "number" ? RTV.num(result) : RTV.char(result);
+  });
+
+  registerSpecial("fscanf", (nargout, args) => {
+    const io = requireFileIO();
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 2)
+      throw new RuntimeError("fscanf requires at least 2 arguments");
+    if (!io.ftell || !io.fseek || !io.freadBytes)
+      throw new RuntimeError("fscanf is not supported in this environment");
+    const fid = toNumber(margs[0]);
+    const fmt = toString(margs[1]);
+
+    // Optional sizeA: scalar count (possibly Inf) or [m, n] (n possibly Inf).
+    let maxCount = Infinity;
+    let rows: number | null = null;
+    if (margs.length >= 3) {
+      const sz = margs[2];
+      if (isRuntimeTensor(sz) && sz.data.length >= 2) {
+        rows = sz.data[0];
+        maxCount = sz.data[0] * sz.data[1];
+      } else {
+        maxCount = toNumber(sz);
+      }
+    }
+
+    // Read the remainder of the file (latin-1, one char per byte), scan it,
+    // then reposition after the last consumed character.
+    const pos = io.ftell(fid);
+    const CHUNK = 1 << 16;
+    const chunks: string[] = [];
+    for (;;) {
+      const bytes = io.freadBytes(fid, CHUNK);
+      let s = "";
+      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      chunks.push(s);
+      if (bytes.length < CHUNK) break;
+    }
+    const { results, consumed } = scanFormat(chunks.join(""), fmt, maxCount);
+    io.fseek(fid, pos + consumed, -1);
+
+    const n = results.length;
+    let out: RuntimeValue;
+    if (rows !== null && Number.isFinite(rows) && rows > 0) {
+      // Column-major fill with `rows` rows; a partial final column is
+      // zero-padded.
+      const cols = Math.ceil(n / rows);
+      const data = allocFloat64Array(rows * cols);
+      for (let i = 0; i < n; i++) data[i] = results[i];
+      out = RTV.tensor(data, [rows, cols]);
+    } else if (n === 1) {
+      out = RTV.num(results[0]);
+    } else {
+      out = RTV.tensor(allocFloat64Array(results), [n, 1]);
+    }
+    if (nargout >= 2) return [out, RTV.num(n)];
+    return out;
   });
 
   registerSpecial("fileread", (_nargout, args) => {
