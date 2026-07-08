@@ -139,6 +139,11 @@ classdef Map < handle
                 else
                     result = val;
                 end
+                % The backing dictionary stores char values as strings;
+                % MATLAB's containers.Map hands back char.
+                if strcmp(obj.ValueType, 'char') && isstring(result)
+                    result = char(result);
+                end
             elseif strcmp(S(1).type, '.')
                 result = builtin('subsref', obj, S);
             elseif strcmp(S(1).type, '{}')
@@ -172,11 +177,14 @@ classdef Map < handle
             end
             k = keys(obj.data_);
             if strcmp(obj.KeyType, 'char')
-                % Return cell array of char vectors
-                if iscell(k)
-                    result = k;
-                else
-                    result = {k};
+                % Return a cellstr: the backing dictionary stores keys as
+                % strings, but MATLAB's containers.Map returns char vectors.
+                if ~iscell(k)
+                    k = {k};
+                end
+                result = cell(size(k));
+                for i = 1:numel(k)
+                    result{i} = char(k{i});
                 end
             else
                 % Numeric keys: parse back from string
@@ -207,6 +215,14 @@ classdef Map < handle
                     result = cell(1, obj.Count);
                     for i = 1:obj.Count
                         result{i} = v(i);
+                    end
+                end
+                if strcmp(obj.ValueType, 'char')
+                    % Stored as strings in the dictionary; MATLAB returns char.
+                    for i = 1:numel(result)
+                        if isstring(result{i})
+                            result{i} = char(result{i});
+                        end
                     end
                 end
             end

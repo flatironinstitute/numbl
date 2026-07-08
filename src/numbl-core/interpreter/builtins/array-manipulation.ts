@@ -20,6 +20,7 @@ import {
   RuntimeChar,
   RuntimeClassInstance,
   type RuntimeValue,
+  type RuntimeCell,
   type RuntimeClassInstanceArray,
   isRuntimeNumber,
   isRuntimeLogical,
@@ -69,6 +70,33 @@ function flipAlongDim(v: RuntimeTensor, dimIdx: number): RuntimeTensor {
   }
 
   return RTV.tensor(result, [...shape], resultImag) as RuntimeTensor;
+}
+
+/** Flip a cell array along a specific dimension (0-based dimIdx). N-D safe. */
+function flipCellAlongDim(v: RuntimeCell, dimIdx: number): RuntimeCell {
+  const shape =
+    v.shape.length >= 2 ? v.shape : [1, v.shape[0] ?? v.data.length];
+  const totalElems = v.data.length;
+  const dimSize = dimIdx < shape.length ? shape[dimIdx] : 1;
+
+  let strideDim = 1;
+  for (let d = 0; d < dimIdx; d++) strideDim *= shape[d];
+  const slabSize = strideDim * dimSize;
+  const numOuter = totalElems / slabSize;
+
+  const result: RuntimeValue[] = new Array(totalElems);
+  for (let outer = 0; outer < numOuter; outer++) {
+    const base = outer * slabSize;
+    for (let k = 0; k < dimSize; k++) {
+      const srcOff = base + k * strideDim;
+      const dstOff = base + (dimSize - 1 - k) * strideDim;
+      for (let i = 0; i < strideDim; i++) {
+        result[dstOff + i] = v.data[srcOff + i];
+      }
+    }
+  }
+
+  return RTV.cell(result, [...shape]);
 }
 
 /** Flip a sparse matrix along dimIdx: 0=rows (flipud), 1=cols (fliplr). */
@@ -691,6 +719,7 @@ defineBuiltin({
         if (isRuntimeChar(v))
           return RTV.char(v.value.split("").reverse().join(""));
         if (isRuntimeSparseMatrix(v)) return flipSparse(v, 1);
+        if (isRuntimeCell(v)) return flipCellAlongDim(v, 1);
         if (!isRuntimeTensor(v))
           throw new RuntimeError("fliplr: argument must be numeric or char");
         return flipAlongDim(v, 1);
@@ -712,6 +741,7 @@ defineBuiltin({
         if (isRuntimeNumber(v)) return v;
         if (isRuntimeChar(v)) return v;
         if (isRuntimeSparseMatrix(v)) return flipSparse(v, 0);
+        if (isRuntimeCell(v)) return flipCellAlongDim(v, 0);
         if (!isRuntimeTensor(v))
           throw new RuntimeError("flipud: argument must be numeric or char");
         return flipAlongDim(v, 0);
@@ -731,8 +761,8 @@ defineBuiltin({
       apply: args => {
         const v = args[0];
         if (isRuntimeNumber(v)) return v;
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("flip: argument must be numeric");
+        if (!isRuntimeTensor(v) && !isRuntimeCell(v))
+          throw new RuntimeError("flip: argument must be numeric or cell");
         let dimIdx = 0;
         if (args.length >= 2) {
           dimIdx = Math.round(toNumber(args[1])) - 1;
@@ -741,7 +771,9 @@ defineBuiltin({
           dimIdx = shape.findIndex(d => d > 1);
           if (dimIdx === -1) dimIdx = 0;
         }
-        return flipAlongDim(v, dimIdx);
+        return isRuntimeCell(v)
+          ? flipCellAlongDim(v, dimIdx)
+          : flipAlongDim(v, dimIdx);
       },
     },
   ],

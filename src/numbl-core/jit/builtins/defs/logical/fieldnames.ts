@@ -2,8 +2,8 @@
  * `fieldnames(s)` — returns an N×1 cell of char-array field names
  * for a struct or class instance. Matches numbl's
  * `introspection.ts:fieldnamesApply` semantics, with the result's
- * cell-element type being `char` (matches MATLAB; numbl wraps as
- * string but mtoc2 follows MATLAB by emitting chars).
+ * cell-element type being `char` (matches MATLAB and the
+ * interpreter, which also emits chars).
  *
  * Interpreter-only for now; the AOT path would need to materialize
  * a heterogeneous-len cell of chars which is a different feature

@@ -644,10 +644,11 @@ function fieldnamesApply(args: RuntimeValue[]): RuntimeValue {
   if (args.length !== 1)
     throw new RuntimeError("fieldnames requires 1 argument");
   const v = args[0];
+  // N×1 cell of char vectors (cellstr), matching MATLAB.
   if (isRuntimeStructArray(v)) {
     const names = v.fieldNames;
     return RTV.cell(
-      names.map(n => RTV.string(n)),
+      names.map(n => RTV.char(n)),
       [names.length, 1]
     );
   }
@@ -655,7 +656,7 @@ function fieldnamesApply(args: RuntimeValue[]): RuntimeValue {
     throw new RuntimeError("fieldnames: argument must be a struct");
   const names = [...v.fields.keys()];
   return RTV.cell(
-    names.map(n => RTV.string(n)),
+    names.map(n => RTV.char(n)),
     [names.length, 1]
   );
 }
