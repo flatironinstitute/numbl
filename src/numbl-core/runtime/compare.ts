@@ -64,6 +64,15 @@ export const valuesAreEqual = (a: RuntimeValue, b: RuntimeValue): boolean => {
     }
     case "dictionary":
       return a === b;
+    case "string_array": {
+      const sb = b as typeof a;
+      if (a.shape[0] !== sb.shape[0] || a.shape[1] !== sb.shape[1])
+        return false;
+      for (let i = 0; i < a.data.length; i++) {
+        if (a.data[i] !== sb.data[i]) return false;
+      }
+      return true;
+    }
     default:
       return false;
   }

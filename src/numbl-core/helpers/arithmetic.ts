@@ -17,6 +17,9 @@ import {
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
   RuntimeClassInstanceArray,
+  isRuntimeStringArray,
+  RuntimeStringArray,
+  stringArrayValue,
   kstr,
 } from "../runtime/types.js";
 import { RuntimeError } from "../runtime/error.js";
@@ -624,6 +627,29 @@ function coerceToConcatString(v: RuntimeValue): string | null {
 
 /** Add two RuntimeValues */
 export function mAdd(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  // String-array `+` appends elementwise (broadcast scalar against array).
+  if (isRuntimeStringArray(a) || isRuntimeStringArray(b)) {
+    const sa = isRuntimeStringArray(a) ? a : null;
+    const sb = isRuntimeStringArray(b) ? b : null;
+    if (sa && sb) {
+      if (sa.shape[0] !== sb.shape[0] || sa.shape[1] !== sb.shape[1]) {
+        throw new RuntimeError("Array dimensions must match for string plus");
+      }
+      return stringArrayValue(
+        sa.data.map((s, i) => s + sb.data[i]),
+        sa.shape
+      );
+    }
+    const arr = (sa ?? sb)!;
+    const other = coerceToConcatString(sa ? b : a);
+    if (other === null) {
+      throw new RuntimeError("Cannot concatenate this value with a string");
+    }
+    return stringArrayValue(
+      arr.data.map(s => (sa ? s + other : other + s)),
+      arr.shape
+    );
+  }
   // MATLAB string `+` is concatenation, not numeric addition.  When
   // either operand is a string (and the other is convertible to text),
   // return a concatenated string.
@@ -1236,6 +1262,19 @@ function transposeClassInstanceArray(
   return new RuntimeClassInstanceArray(v.className, out, [c, r]);
 }
 
+/** Transpose a string array by permuting elements (strings have no
+ *  elementwise conjugate). */
+function transposeStringArray(v: RuntimeStringArray): RuntimeValue {
+  const [r, c] = v.shape;
+  const out: string[] = new Array(r * c);
+  for (let i = 0; i < r; i++) {
+    for (let j = 0; j < c; j++) {
+      out[i * c + j] = v.data[j * r + i];
+    }
+  }
+  return stringArrayValue(out, [c, r]);
+}
+
 /** Transpose (non-conjugate for complex scalars and tensors) */
 export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeSparseMatrix(v)) return sparseTranspose(v);
@@ -1243,6 +1282,8 @@ export function mTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
   if (isRuntimeChar(v)) return v;
+  if (isRuntimeString(v)) return v;
+  if (isRuntimeStringArray(v)) return transposeStringArray(v);
   // Object values without a class `transpose` method: MATLAB's built-in
   // array transpose permutes the elements. Reached only as the fallback
   // after method dispatch declines. A scalar instance is an identity.
@@ -1260,6 +1301,8 @@ export function mConjugateTranspose(v: RuntimeValue): RuntimeValue {
   if (isRuntimeNumber(v) || isRuntimeLogical(v)) return v;
   if (isRuntimeCell(v)) return transposeCellArray(v);
   if (isRuntimeChar(v)) return v;
+  if (isRuntimeString(v)) return v;
+  if (isRuntimeStringArray(v)) return transposeStringArray(v);
   // Object values without a class `ctranspose` method: the default array
   // operation rearranges elements (objects are not element-wise conjugated),
   // identical to mTranspose. A scalar instance is an identity.
@@ -1285,11 +1328,52 @@ function asStringPair(
   return null;
 }
 
+/** View a text operand as elements + shape for elementwise comparison
+ *  (string scalar / single-row char / string array). */
+function textOperandElems(
+  v: RuntimeValue
+): { data: string[]; shape: [number, number] } | null {
+  if (isRuntimeString(v)) return { data: [v], shape: [1, 1] };
+  if (isRuntimeChar(v)) {
+    const rows = v.shape ? v.shape[0] : 1;
+    if (rows > 1) return null;
+    return { data: [v.value], shape: [1, 1] };
+  }
+  if (isRuntimeStringArray(v)) return { data: v.data, shape: v.shape };
+  return null;
+}
+
 function stringComparisonOp(
   a: RuntimeValue,
   b: RuntimeValue,
   op: (x: string, y: string) => boolean
 ): RuntimeValue | null {
+  // Elementwise comparison when either side is a string array.
+  if (isRuntimeStringArray(a) || isRuntimeStringArray(b)) {
+    const ta = textOperandElems(a);
+    const tb = textOperandElems(b);
+    if (ta === null || tb === null) return null;
+    const aScalar = ta.data.length === 1 && ta.shape[0] * ta.shape[1] === 1;
+    const bScalar = tb.data.length === 1 && tb.shape[0] * tb.shape[1] === 1;
+    if (
+      !aScalar &&
+      !bScalar &&
+      (ta.shape[0] !== tb.shape[0] || ta.shape[1] !== tb.shape[1])
+    ) {
+      throw new RuntimeError("Array dimensions must match for comparison");
+    }
+    const shape = aScalar ? tb.shape : ta.shape;
+    const n = aScalar ? tb.data.length : ta.data.length;
+    const out = allocFloat64Array(n);
+    for (let i = 0; i < n; i++) {
+      const x = aScalar ? ta.data[0] : ta.data[i];
+      const y = bScalar ? tb.data[0] : tb.data[i];
+      out[i] = op(x, y) ? 1 : 0;
+    }
+    const t = RTV.tensor(out, [shape[0], shape[1]]);
+    t._isLogical = true;
+    return t;
+  }
   const pair = asStringPair(a, b);
   if (pair === null) return null;
   return RTV.logical(op(pair[0], pair[1]));

@@ -3,7 +3,12 @@
  * strsplit, strjoin, regexp, regexpi, regexprep, symvar.
  */
 
-import { isRuntimeCell } from "../../runtime/types.js";
+import {
+  isRuntimeCell,
+  isRuntimeString,
+  isRuntimeStringArray,
+  stringArrayValue,
+} from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toString } from "../../runtime/convert.js";
@@ -33,6 +38,8 @@ registerIBuiltin({
           let delims: string[];
           if (isRuntimeCell(args[1])) {
             delims = args[1].data.map(d => toString(d));
+          } else if (isRuntimeStringArray(args[1])) {
+            delims = args[1].data.slice();
           } else {
             delims = [toString(args[1])];
           }
@@ -41,8 +48,13 @@ registerIBuiltin({
             .join("|");
           parts = s.split(new RegExp("(?:" + escaped + ")+"));
         }
+        // MATLAB: string input yields a string array; char input a cellstr
+        // (cell of CHAR vectors, so downstream [a '/' b] concat stays char).
+        if (isRuntimeString(args[0]) || isRuntimeStringArray(args[0])) {
+          return stringArrayValue(parts, [1, parts.length]);
+        }
         return RTV.cell(
-          parts.map(p => RTV.string(p)),
+          parts.map(p => RTV.char(p)),
           [1, parts.length]
         );
       },
@@ -59,11 +71,18 @@ registerIBuiltin({
     return {
       outputTypes: [{ kind: "string" }],
       apply: args => {
-        if (!isRuntimeCell(args[0]))
+        let elements: string[];
+        if (isRuntimeCell(args[0])) {
+          elements = args[0].data.map(v => toString(v));
+        } else if (isRuntimeStringArray(args[0])) {
+          elements = args[0].data.slice();
+        } else if (isRuntimeString(args[0])) {
+          elements = [args[0]];
+        } else {
           throw new RuntimeError(
-            "strjoin: first argument must be a cell array"
+            "strjoin: first argument must be a cell array or string array"
           );
-        const elements = args[0].data.map(v => toString(v));
+        }
         const delim = args.length >= 2 ? toString(args[1]) : " ";
         return RTV.string(elements.join(delim));
       },
@@ -155,6 +174,20 @@ function regexpImpl(
           )
         ),
         [1, tokensList.length]
+      );
+    }
+    if (mode === "split") {
+      // Pieces of str between matches, including leading/trailing empties.
+      const splits: string[] = [];
+      let prev = 0;
+      for (let i = 0; i < starts.length; i++) {
+        splits.push(str.slice(prev, starts[i] - 1));
+        prev = ends[i];
+      }
+      splits.push(str.slice(prev));
+      return RTV.cell(
+        splits.map(s => RTV.char(s)),
+        [1, splits.length]
       );
     }
     if (mode === "names") {

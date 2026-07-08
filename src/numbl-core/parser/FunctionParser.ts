@@ -67,13 +67,8 @@ export class FunctionParser extends ArgumentsParser {
 
     // Enforce varargs placement constraints
     const vararginIdx = params.indexOf("varargin");
-    if (vararginIdx !== -1) {
-      if (vararginIdx !== params.length - 1) {
-        throw this.error("'varargin' must be the last input parameter");
-      }
-      if (params.filter(p => p === "varargin").length > 1) {
-        throw this.error("'varargin' cannot appear more than once");
-      }
+    if (vararginIdx !== -1 && params.filter(p => p === "varargin").length > 1) {
+      throw this.error("'varargin' cannot appear more than once");
     }
     const varargoutIdx = outputs.indexOf("varargout");
     if (varargoutIdx !== -1) {
@@ -87,6 +82,26 @@ export class FunctionParser extends ArgumentsParser {
 
     // Optional arguments blocks (must appear before any executable statements)
     const argumentsBlocks = this.parseArgumentsBlocks();
+
+    // varargin must be the last input parameter, except that name-value
+    // struct parameters (declared via dotted `arguments` entries like
+    // `options.field`) may follow it, e.g. `function f(a, varargin, options)`.
+    if (vararginIdx !== -1 && vararginIdx !== params.length - 1) {
+      const nvBases = new Set<string>();
+      for (const block of argumentsBlocks) {
+        if (block.kind === "Output" || block.kind === "OutputRepeating")
+          continue;
+        for (const e of block.entries) {
+          const dot = e.name.indexOf(".");
+          if (dot >= 0) nvBases.add(e.name.slice(0, dot));
+        }
+      }
+      for (const p of params.slice(vararginIdx + 1)) {
+        if (!nvBases.has(p)) {
+          throw this.error("'varargin' must be the last input parameter");
+        }
+      }
+    }
 
     const body = this.parseBlock(t => t === Token.End);
     if (!this.consume(Token.End)) {

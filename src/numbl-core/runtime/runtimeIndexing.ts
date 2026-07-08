@@ -32,9 +32,13 @@ import {
   isRuntimeClassInstanceArray,
   isRuntimeSparseMatrix,
   isRuntimeDictionary,
+  isRuntimeStringArray,
+  stringArrayValue,
   type RuntimeClassInstanceArray,
   type RuntimeClassInstance,
 } from "../runtime/types.js";
+import { stringArraySubscript } from "./indexing.js";
+import { matlabNumToString } from "./utils.js";
 import {
   dictLookup,
   dictInsertSingle,
@@ -109,6 +113,10 @@ function endResolver(
     }
     if (isRuntimeStructArray(mv)) return mv.elements.length;
     if (isRuntimeClassInstanceArray(mv)) return mv.elements.length;
+    if (isRuntimeStringArray(mv)) {
+      if (numIndices === 1) return mv.data.length;
+      return dim < 2 ? mv.shape[dim] : 1;
+    }
     if (isRuntimeSparseMatrix(mv)) {
       if (numIndices === 1) return mv.m * mv.n;
       return dim === 0 ? mv.m : dim === 1 ? mv.n : 1;
@@ -498,6 +506,31 @@ export function indexCell(
     return val;
   }
 
+  // String brace indexing: str{i} extracts the element as a char vector
+  // (MATLAB: ["one" "two"]{2} -> 'two'; "abc"{1} -> 'abc').
+  if (isRuntimeString(mv) || isRuntimeStringArray(mv)) {
+    const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+    const elems = isRuntimeString(mv) ? [mv] : mv.data;
+    const shape: [number, number] = isRuntimeString(mv) ? [1, 1] : mv.shape;
+    let lin: number;
+    if (idxMvals.length === 1) {
+      lin = Math.round(toNumber(idxMvals[0])) - 1;
+    } else if (idxMvals.length === 2) {
+      const r = Math.round(toNumber(idxMvals[0])) - 1;
+      const c = Math.round(toNumber(idxMvals[1])) - 1;
+      if (r < 0 || r >= shape[0] || c < 0 || c >= shape[1])
+        throw new RuntimeError("Index exceeds array bounds");
+      lin = c * shape[0] + r;
+    } else {
+      throw new RuntimeError(
+        "String brace indexing supports 1 or 2 subscripts"
+      );
+    }
+    if (lin < 0 || lin >= elems.length)
+      throw new RuntimeError("Index exceeds array bounds");
+    return RTV.char(elems[lin]);
+  }
+
   if (!isRuntimeCell(mv)) throw new RuntimeError("Cell indexing on non-cell");
   const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
   // CSL for 1D cell indexing
@@ -763,6 +796,18 @@ export function indexStore(
       return rhsMv;
     }
   }
+  // String / string-array indexed assignment (element replacement, growth,
+  // deletion). A primitive string base is a 1x1 string array; an empty
+  // tensor base with a string RHS starts a fresh string array.
+  {
+    const rhsMv0 = ensureRuntimeValue(rhs);
+    const baseIsStr = isRuntimeString(mv) || isRuntimeStringArray(mv);
+    const baseEmpty = isRuntimeTensor(mv) && mv.data.length === 0;
+    const rhsIsStr = isRuntimeString(rhsMv0) || isRuntimeStringArray(rhsMv0);
+    if (baseIsStr || (baseEmpty && rhsIsStr)) {
+      return stringArrayIndexStore(mv, indices, rhsMv0);
+    }
+  }
   // Convert scalar number/logical/complex to 1x1 tensor for indexed assignment
   let wasScalar = false;
   // A char base stays char: index-assign on its numeric code points, then
@@ -817,6 +862,131 @@ export function indexStore(
     return result.data[0];
   }
   return result;
+}
+
+/** Convert an assignment RHS to string elements, or null if unsupported. */
+function rhsToStringElems(rhsMv: RuntimeValue): string[] | null {
+  if (isRuntimeString(rhsMv)) return [rhsMv];
+  if (isRuntimeStringArray(rhsMv)) return rhsMv.data.slice();
+  if (isRuntimeChar(rhsMv)) {
+    const rows = rhsMv.shape ? rhsMv.shape[0] : 1;
+    if (rows <= 1) return [rhsMv.value];
+    const width = rhsMv.shape![1];
+    const out: string[] = [];
+    for (let r = 0; r < rows; r++)
+      out.push(rhsMv.value.slice(r * width, (r + 1) * width));
+    return out;
+  }
+  if (isRuntimeNumber(rhsMv)) return [matlabNumToString(rhsMv)];
+  if (isRuntimeLogical(rhsMv)) return [rhsMv ? "true" : "false"];
+  if (isRuntimeTensor(rhsMv))
+    return Array.from(rhsMv.data, d => matlabNumToString(d));
+  return null;
+}
+
+/** Indexed assignment where the destination is a string array (or a scalar
+ *  string / empty tensor becoming one). Supports growth (gaps fill with ""
+ *  — numbl has no <missing>) and deletion via s(idx) = []. */
+function stringArrayIndexStore(
+  mv: RuntimeValue,
+  indices: unknown[],
+  rhsMv: RuntimeValue
+): RuntimeValue {
+  let data: string[];
+  let rows: number;
+  let cols: number;
+  if (isRuntimeStringArray(mv)) {
+    data = mv.data.slice();
+    [rows, cols] = mv.shape;
+  } else if (isRuntimeString(mv)) {
+    data = [mv];
+    rows = 1;
+    cols = 1;
+  } else {
+    data = [];
+    rows = 0;
+    cols = 0;
+  }
+
+  const idxMvals = resolveIndices(indices, endResolver(mv, indices.length));
+
+  // Deletion: s(idx) = []
+  if (
+    isRuntimeTensor(rhsMv) &&
+    rhsMv.data.length === 0 &&
+    idxMvals.length === 1
+  ) {
+    const del = new Set(stringArraySubscript(idxMvals[0], data.length));
+    const kept = data.filter((_, i) => !del.has(i));
+    if (cols === 1 && rows > 1) return stringArrayValue(kept, [kept.length, 1]);
+    return stringArrayValue(kept, [1, kept.length]);
+  }
+
+  const rhsElems = rhsToStringElems(rhsMv);
+  if (rhsElems === null) {
+    throw new RuntimeError("Cannot assign this value into a string array");
+  }
+
+  if (idxMvals.length === 1) {
+    const positions = stringArraySubscript(idxMvals[0], data.length);
+    const maxPos = positions.length ? Math.max(...positions) : -1;
+    if (positions.some(p => p < 0)) {
+      throw new RuntimeError("Index must be a positive integer");
+    }
+    if (maxPos >= data.length) {
+      if (rows > 1 && cols > 1) {
+        throw new RuntimeError("Index exceeds array bounds");
+      }
+      while (data.length <= maxPos) data.push("");
+    }
+    if (rhsElems.length !== 1 && rhsElems.length !== positions.length) {
+      throw new RuntimeError(
+        "Unable to perform assignment because the left and right sides have a different number of elements"
+      );
+    }
+    positions.forEach((p, k) => {
+      data[p] = rhsElems.length === 1 ? rhsElems[0] : rhsElems[k];
+    });
+    if (rows > 1 && cols > 1) return stringArrayValue(data, [rows, cols]);
+    if (cols === 1 && rows > 1) return stringArrayValue(data, [data.length, 1]);
+    return stringArrayValue(data, [1, data.length]);
+  }
+
+  if (idxMvals.length === 2) {
+    const ri = stringArraySubscript(idxMvals[0], rows);
+    const ci = stringArraySubscript(idxMvals[1], cols);
+    if (ri.some(p => p < 0) || ci.some(p => p < 0)) {
+      throw new RuntimeError("Index must be a positive integer");
+    }
+    const newRows = Math.max(rows, ri.length ? Math.max(...ri) + 1 : 0);
+    const newCols = Math.max(cols, ci.length ? Math.max(...ci) + 1 : 0);
+    let grid = data;
+    if (newRows !== rows || newCols !== cols) {
+      grid = new Array<string>(newRows * newCols).fill("");
+      for (let c = 0; c < cols; c++) {
+        for (let r = 0; r < rows; r++) {
+          grid[c * newRows + r] = data[c * rows + r];
+        }
+      }
+    }
+    const count = ri.length * ci.length;
+    if (rhsElems.length !== 1 && rhsElems.length !== count) {
+      throw new RuntimeError(
+        "Unable to perform assignment because the left and right sides have a different number of elements"
+      );
+    }
+    let k = 0;
+    for (const c of ci) {
+      for (const r of ri) {
+        grid[c * newRows + r] =
+          rhsElems.length === 1 ? rhsElems[0] : rhsElems[k];
+        k++;
+      }
+    }
+    return stringArrayValue(grid, [newRows, newCols]);
+  }
+
+  throw new RuntimeError("String array assignment supports 1 or 2 subscripts");
 }
 
 /**

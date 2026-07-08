@@ -93,6 +93,11 @@ export function toString(v: RuntimeValue): string {
   switch (v.kind) {
     case "char":
       return v.value;
+    case "string_array":
+      if (v.data.length === 1) return v.data[0];
+      throw new RuntimeError(
+        "Expected a scalar text value, got a string array"
+      );
     default:
       throw new RuntimeError(`Cannot convert ${kstr(v)} to string`);
   }

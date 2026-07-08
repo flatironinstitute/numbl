@@ -15,6 +15,7 @@ import {
   isRuntimeNumber,
   isRuntimeString,
   RuntimeStructArray,
+  RuntimeStringArray,
 } from "./types.js";
 import { colMajorIndex, ind2sub } from "./utils.js";
 
@@ -66,7 +67,37 @@ export function displayValue(v: RuntimeValue): string {
       return formatDictionary(v);
     case "class_instance_array":
       return `  ${v.shape[0]}x${v.shape[1]} ${v.className} array`;
+    case "string_array":
+      return formatStringArray(v);
   }
+}
+
+/** Quoted, column-aligned grid like MATLAB's string-array display. */
+function formatStringArray(v: RuntimeStringArray): string {
+  const [rows, cols] = v.shape;
+  if (v.data.length === 0) {
+    return `  ${rows}x${cols} empty string array`;
+  }
+  // Column widths over the quoted representations
+  const quoted = v.data.map(s => `"${s}"`);
+  const widths: number[] = [];
+  for (let c = 0; c < cols; c++) {
+    let w = 0;
+    for (let r = 0; r < rows; r++) {
+      w = Math.max(w, quoted[c * rows + r].length);
+    }
+    widths.push(w);
+  }
+  const lines: string[] = [];
+  for (let r = 0; r < rows; r++) {
+    const parts: string[] = [];
+    for (let c = 0; c < cols; c++) {
+      const q = quoted[c * rows + r];
+      parts.push(c === cols - 1 ? q : q.padEnd(widths[c]));
+    }
+    lines.push("    " + parts.join("    "));
+  }
+  return lines.join("\n");
 }
 
 const formatStructArray = (v: RuntimeStructArray): string => {

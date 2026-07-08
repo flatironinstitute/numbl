@@ -21,6 +21,7 @@ import {
   RuntimeStructArray,
   RuntimeSparseMatrix,
   RuntimeDictionary,
+  RuntimeStringArray,
   type RuntimeValue,
   isRuntimeNumber,
   isRuntimeLogical,
@@ -89,6 +90,11 @@ export const RTV = {
 
   string(value: string): RuntimeString {
     return value;
+  },
+
+  /** String array (does NOT collapse 1x1 — use stringArrayValue for that). */
+  stringArray(data: string[], shape: [number, number]): RuntimeStringArray {
+    return new RuntimeStringArray(data, shape);
   },
 
   char(value: string): RuntimeChar {

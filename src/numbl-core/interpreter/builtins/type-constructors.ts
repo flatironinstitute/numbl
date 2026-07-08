@@ -16,6 +16,7 @@ import {
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeFunction,
+  isRuntimeStringArray,
   RuntimeTensor,
 } from "../../runtime/types.js";
 import type {
@@ -32,6 +33,15 @@ import { imagAllZero } from "../../helpers/effectively-real.js";
 
 // ── double ──────────────────────────────────────────────────────────────
 
+/** Parse string text to a double (MATLAB double(string) semantics):
+ *  numeric text parses, anything else is NaN. */
+function parseDoubleText(s: string): number {
+  const t = s.trim();
+  if (t === "") return NaN;
+  if (/^[+-]?inf(inity)?$/i.test(t)) return t[0] === "-" ? -Infinity : Infinity;
+  return Number(t);
+}
+
 defineBuiltin({
   name: "double",
   cases: [
@@ -43,6 +53,8 @@ defineBuiltin({
           a.kind === "number" ||
           a.kind === "boolean" ||
           a.kind === "char" ||
+          a.kind === "string" ||
+          a.kind === "unknown" ||
           a.kind === "complex_or_number" ||
           a.kind === "class_instance"
         )
@@ -66,6 +78,15 @@ defineBuiltin({
           if (v.value.length === 1) return RTV.num(v.value.charCodeAt(0));
           const codes = Array.from(v.value).map(c => c.charCodeAt(0));
           return RTV.row(codes);
+        }
+        // Strings convert by PARSING the text (unlike char code points);
+        // non-numeric text becomes NaN.
+        if (isRuntimeString(v)) return RTV.num(parseDoubleText(v));
+        if (isRuntimeStringArray(v)) {
+          return RTV.tensor(allocFloat64Array(v.data.map(parseDoubleText)), [
+            v.shape[0],
+            v.shape[1],
+          ]);
         }
         if (isRuntimeLogical(v)) return RTV.num(v ? 1 : 0);
         if (isRuntimeNumber(v)) return v;

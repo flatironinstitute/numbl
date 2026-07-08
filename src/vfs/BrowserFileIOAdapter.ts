@@ -454,20 +454,26 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     entry.dirty = true;
   }
 
+  /**
+   * `entry.pos` stays the logical (consumed) byte position: the text buffer
+   * holds the bytes starting at `entry.pos`, and consuming a line advances
+   * `entry.pos` by its byte length. This keeps fgetl/fgets coherent with
+   * freadBytes/fseek/ftell (and fscanf, which mixes the two).
+   */
   private readLine(entry: VFSOpenFile, keepNewline: boolean): string | number {
     // Fill text buffer from binary data
     while (!entry.eof) {
       const nlIdx = entry.buffer.indexOf("\n");
       if (nlIdx !== -1) break;
 
-      const available = entry.dataLen - entry.pos;
+      const bufStart = entry.pos + TEXT_ENCODER.encode(entry.buffer).length;
+      const available = entry.dataLen - bufStart;
       if (available <= 0) {
         entry.eof = true;
         break;
       }
       const toRead = Math.min(READ_CHUNK_SIZE, available);
-      const chunk = entry.data.subarray(entry.pos, entry.pos + toRead);
-      entry.pos += toRead;
+      const chunk = entry.data.subarray(bufStart, bufStart + toRead);
       entry.buffer += TEXT_DECODER.decode(chunk, { stream: true });
     }
 
@@ -477,16 +483,17 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
 
     const nlIdx = entry.buffer.indexOf("\n");
     if (nlIdx !== -1) {
-      const line = keepNewline
-        ? entry.buffer.slice(0, nlIdx + 1)
-        : entry.buffer.slice(0, nlIdx);
+      const consumed = entry.buffer.slice(0, nlIdx + 1);
+      const line = keepNewline ? consumed : entry.buffer.slice(0, nlIdx);
       entry.buffer = entry.buffer.slice(nlIdx + 1);
+      entry.pos += TEXT_ENCODER.encode(consumed).length;
       return line;
     }
 
     // No newline found but we have data (EOF mid-line)
     const line = entry.buffer;
     entry.buffer = "";
+    entry.pos += TEXT_ENCODER.encode(line).length;
     return line;
   }
 

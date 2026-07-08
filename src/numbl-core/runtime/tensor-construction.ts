@@ -17,13 +17,15 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeStruct,
   isRuntimeStructArray,
+  isRuntimeStringArray,
+  stringArrayValue,
   type RuntimeSparseMatrix,
   RuntimeChar,
   kstr,
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
-import { numel } from "./utils.js";
+import { numel, matlabNumToString } from "./utils.js";
 import { allocFloat64Array } from "./alloc.js";
 
 /** Create a range start:end or start:step:end */
@@ -77,28 +79,21 @@ export function horzcat(...values: RuntimeValue[]): RuntimeValue {
     return cellCatAlongDim(values, 1);
   }
 
+  // If any element is a string, the result is a string ARRAY (MATLAB rule:
+  // string wins over char; each char operand becomes one string element).
+  if (values.some(v => isRuntimeString(v) || isRuntimeStringArray(v))) {
+    return stringCat(values, 1);
+  }
+
   // If any element is a char, concatenate as char array
   if (values.some(v => isRuntimeChar(v))) {
     let result = "";
     for (const v of values) {
       if (isRuntimeChar(v)) result += v.value;
-      else if (isRuntimeString(v)) result += v;
       else if (isRuntimeNumber(v)) result += String.fromCharCode(Math.round(v));
       else throw new RuntimeError(`Cannot concatenate ${kstr(v)} into char`);
     }
     return RTV.char(result);
-  }
-
-  // If any element is a string or char, concatenate as strings
-  if (values.some(v => isRuntimeString(v) || isRuntimeChar(v))) {
-    let result = "";
-    for (const v of values) {
-      if (isRuntimeString(v)) result += v;
-      else if (isRuntimeChar(v)) result += v.value;
-      else if (isRuntimeNumber(v)) result += String(v);
-      else throw new RuntimeError(`Cannot concatenate ${v} into string`);
-    }
-    return RTV.string(result);
   }
 
   // Struct / struct-array concatenation: [sA, sB]
@@ -125,6 +120,11 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
     return cellCatAlongDim(values, 0);
   }
 
+  // String operands make the result a string array (see horzcat).
+  if (values.some(v => isRuntimeString(v) || isRuntimeStringArray(v))) {
+    return stringCat(values, 0);
+  }
+
   // If any element is a char, build a 2-D char array (rows stacked).
   if (values.some(v => isRuntimeChar(v))) {
     return vertcatChars(values);
@@ -136,6 +136,107 @@ export function vertcat(...values: RuntimeValue[]): RuntimeValue {
   }
 
   return catAlongDim(values, 0); // dim 1 = 0-based index 0
+}
+
+// ── String-array concatenation ──────────────────────────────────────────
+
+interface StrBlock {
+  /** Elements in column-major order. */
+  data: string[];
+  rows: number;
+  cols: number;
+}
+
+/** Convert a concat operand to a string block, or null for empties (which
+ *  MATLAB drops from concatenations). */
+function toStringBlock(v: RuntimeValue): StrBlock | null {
+  if (isRuntimeString(v)) return { data: [v], rows: 1, cols: 1 };
+  if (isRuntimeStringArray(v)) {
+    if (v.data.length === 0) return null;
+    return { data: v.data.slice(), rows: v.shape[0], cols: v.shape[1] };
+  }
+  if (isRuntimeChar(v)) {
+    const rows = v.shape ? v.shape[0] : 1;
+    const width = v.shape ? v.shape[1] : v.value.length;
+    if (rows <= 1) return { data: [v.value], rows: 1, cols: 1 };
+    // A multi-row char matrix contributes one string element per row.
+    const out: string[] = [];
+    for (let r = 0; r < rows; r++) {
+      out.push(v.value.slice(r * width, (r + 1) * width));
+    }
+    return { data: out, rows, cols: 1 };
+  }
+  if (isRuntimeNumber(v)) {
+    return { data: [matlabNumToString(v)], rows: 1, cols: 1 };
+  }
+  if (isRuntimeLogical(v)) {
+    return { data: [v ? "true" : "false"], rows: 1, cols: 1 };
+  }
+  if (isRuntimeTensor(v)) {
+    if (v.data.length === 0) return null;
+    const rows = v.shape.length >= 2 ? v.shape[0] : 1;
+    const cols = v.data.length / (rows || 1);
+    const out: string[] = [];
+    for (let i = 0; i < v.data.length; i++) {
+      out.push(
+        v._isLogical
+          ? v.data[i]
+            ? "true"
+            : "false"
+          : matlabNumToString(v.data[i])
+      );
+    }
+    return { data: out, rows, cols };
+  }
+  throw new RuntimeError(`Cannot concatenate ${kstr(v)} into string array`);
+}
+
+/** Concatenate operands into a string array along dim (0 = rows, 1 = cols).
+ *  1x1 results collapse to a primitive string. */
+function stringCat(values: RuntimeValue[], dim: 0 | 1): RuntimeValue {
+  const blocks: StrBlock[] = [];
+  for (const v of values) {
+    const b = toStringBlock(v);
+    if (b) blocks.push(b);
+  }
+  if (blocks.length === 0) return RTV.stringArray([], [0, 0]);
+  if (dim === 1) {
+    const rows = blocks[0].rows;
+    let cols = 0;
+    for (const b of blocks) {
+      if (b.rows !== rows) {
+        throw new RuntimeError(
+          "Dimensions of arrays being concatenated are not consistent"
+        );
+      }
+      cols += b.cols;
+    }
+    // Column-major blocks placed side by side are just concatenated data.
+    const data: string[] = [];
+    for (const b of blocks) data.push(...b.data);
+    return stringArrayValue(data, [rows, cols]);
+  }
+  const cols = blocks[0].cols;
+  let rows = 0;
+  for (const b of blocks) {
+    if (b.cols !== cols) {
+      throw new RuntimeError(
+        "Dimensions of arrays being concatenated are not consistent"
+      );
+    }
+    rows += b.rows;
+  }
+  const data: string[] = new Array(rows * cols);
+  let rOff = 0;
+  for (const b of blocks) {
+    for (let c = 0; c < cols; c++) {
+      for (let r = 0; r < b.rows; r++) {
+        data[c * rows + rOff + r] = b.data[c * b.rows + r];
+      }
+    }
+    rOff += b.rows;
+  }
+  return stringArrayValue(data, [rows, cols]);
 }
 
 /** Vertical concatenation when at least one operand is a char array.

@@ -168,12 +168,12 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     // Buffer is empty and eof not yet detected — try reading to check
     const buf = Buffer.alloc(1);
     try {
-      const bytesRead = readSync(entry.fd, buf, 0, 1, null);
+      const bytesRead = readSync(entry.fd, buf, 0, 1, entry.pos);
       if (bytesRead === 0) {
         entry.eof = true;
         return 1;
       }
-      // Got data — put it back in the buffer
+      // Got data — put it back in the buffer (it starts at entry.pos)
       entry.buffer = buf.toString("utf-8", 0, bytesRead);
       return 0;
     } catch {
@@ -814,6 +814,12 @@ export class NodeFileIOAdapter implements FileIOAdapter {
 
   /**
    * Read one line from the file's buffer, refilling from the fd as needed.
+   *
+   * All reads are positional so `entry.pos` stays the single source of truth
+   * for the logical file position: the buffer always holds the bytes starting
+   * at `entry.pos`, and consuming a line advances `entry.pos` by its byte
+   * length. This keeps text I/O (fgetl/fgets) coherent with binary I/O and
+   * fscanf (freadBytes/fseek/ftell).
    * @param keepNewline - if true, keep the trailing newline (fgets); if false, strip it (fgetl)
    */
   private readLine(entry: OpenFile, keepNewline: boolean): string | number {
@@ -825,7 +831,13 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       const buf = Buffer.alloc(READ_CHUNK_SIZE);
       let bytesRead: number;
       try {
-        bytesRead = readSync(entry.fd, buf, 0, READ_CHUNK_SIZE, null);
+        bytesRead = readSync(
+          entry.fd,
+          buf,
+          0,
+          READ_CHUNK_SIZE,
+          entry.pos + Buffer.byteLength(entry.buffer, "utf-8")
+        );
         entry.lastError = "";
       } catch (e) {
         entry.lastError = e instanceof Error ? e.message : String(e);
@@ -847,16 +859,17 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     const nlIdx = entry.buffer.indexOf("\n");
     if (nlIdx !== -1) {
       // Found a newline
-      const line = keepNewline
-        ? entry.buffer.slice(0, nlIdx + 1)
-        : entry.buffer.slice(0, nlIdx);
+      const consumed = entry.buffer.slice(0, nlIdx + 1);
+      const line = keepNewline ? consumed : entry.buffer.slice(0, nlIdx);
       entry.buffer = entry.buffer.slice(nlIdx + 1);
+      entry.pos += Buffer.byteLength(consumed, "utf-8");
       return line;
     }
 
     // No newline found but we have data (EOF mid-line)
     const line = entry.buffer;
     entry.buffer = "";
+    entry.pos += Buffer.byteLength(line, "utf-8");
     return line;
   }
 }

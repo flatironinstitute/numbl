@@ -30,6 +30,9 @@ import {
   isRuntimeCell,
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
+  isRuntimeString,
+  isRuntimeStringArray,
+  stringArrayValue,
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
@@ -277,6 +280,47 @@ defineBuiltin({
             for (let i2 = 0; i2 < nr; i2++)
               chars[i2 * nc + j2] = linear[j2 * nr + i2];
           return new RuntimeChar(chars.join(""), [nr, nc]);
+        }
+
+        // String arrays: elements are stored column-major, so reshape only
+        // replaces the shape metadata.
+        if (isRuntimeStringArray(v)) {
+          const s = parseReshapeDims(args, v.data.length);
+          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+          if (s.length > 2)
+            throw new RuntimeError("reshape: string arrays must be 2-D");
+          const nr = s[0];
+          const nc = s.length >= 2 ? s[1] : 1;
+          return stringArrayValue(v.data.slice(), [nr, nc]);
+        }
+        if (isRuntimeString(v)) {
+          parseReshapeDims(args, 1); // validates the element count is 1
+          return v;
+        }
+
+        // Object arrays: elements are stored in linear order, so reshape
+        // only replaces the shape metadata.
+        if (isRuntimeClassInstanceArray(v)) {
+          const total = v.elements.length;
+          const s = parseReshapeDims(args, total);
+          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+          if (s.length > 2)
+            throw new RuntimeError("reshape: object arrays must be 2-D");
+          const nr = s[0];
+          const nc = s.length >= 2 ? s[1] : 1;
+          if (nr * nc !== total)
+            throw new RuntimeError(
+              "reshape: number of elements must not change"
+            );
+          return RTV.classInstanceArray(v.className, v.elements, [nr, nc]);
+        }
+        if (isRuntimeClassInstance(v)) {
+          const s = parseReshapeDims(args, 1);
+          if (s.reduce((a, b) => a * b, 1) !== 1)
+            throw new RuntimeError(
+              "reshape: number of elements must not change"
+            );
+          return v;
         }
 
         if (

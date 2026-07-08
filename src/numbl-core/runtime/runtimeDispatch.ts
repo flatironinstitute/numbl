@@ -258,6 +258,9 @@ export function isa(
       case "class_instance_array":
         valueClass = mv.className;
         break;
+      case "string_array":
+        valueClass = "string";
+        break;
       default:
         valueClass = "unknown";
         break;
@@ -1072,6 +1075,8 @@ export function numblClass(v: RuntimeValue): string {
       return "double";
     case "class_instance":
       return v.className;
+    case "string_array":
+      return "string";
     default:
       return "unknown";
   }

@@ -20,6 +20,7 @@ import {
   isRuntimeGraphicsHandle,
   isRuntimeDictionary,
   isRuntimeClassInstanceArray,
+  isRuntimeStringArray,
   RuntimeTensor,
 } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
@@ -58,6 +59,7 @@ function getShape(v: RuntimeValue): number[] {
   if (isRuntimeCell(v)) return v.shape;
   if (isRuntimeStructArray(v)) return [1, v.elements.length];
   if (isRuntimeClassInstanceArray(v)) return [...v.shape];
+  if (isRuntimeStringArray(v)) return [...v.shape];
   return [1, 1];
 }
 
@@ -123,7 +125,11 @@ defineBuiltin({
 
 defineBuiltin({
   name: "isstring",
-  cases: [anyToLogicalCase(args => isRuntimeString(args[0]))],
+  cases: [
+    anyToLogicalCase(
+      args => isRuntimeString(args[0]) || isRuntimeStringArray(args[0])
+    ),
+  ],
 });
 
 // MATLAB's reserved words (`iskeyword` with no args). Note true/false are
@@ -340,6 +346,7 @@ defineBuiltin({
       if (isRuntimeString(v)) return false;
       if (isRuntimeStructArray(v)) return v.elements.length === 0;
       if (isRuntimeClassInstanceArray(v)) return v.elements.length === 0;
+      if (isRuntimeStringArray(v)) return v.data.length === 0;
       return false;
     }),
   ],
@@ -401,6 +408,7 @@ defineBuiltin({
         if (isRuntimeString(v)) return 1;
         if (isRuntimeStructArray(v)) return v.elements.length;
         if (isRuntimeClassInstanceArray(v)) return v.elements.length;
+        if (isRuntimeStringArray(v)) return v.data.length;
         return 1;
       },
     },
@@ -433,6 +441,8 @@ defineBuiltin({
         if (isRuntimeStructArray(v)) return v.elements.length;
         if (isRuntimeClassInstanceArray(v))
           return v.elements.length === 0 ? 0 : Math.max(...v.shape);
+        if (isRuntimeStringArray(v))
+          return v.data.length === 0 ? 0 : Math.max(...v.shape);
         return 1;
       },
     },
@@ -572,6 +582,7 @@ defineBuiltin({
           return mkChar(v._isLogical ? "logical" : "double");
         if (isRuntimeSparseMatrix(v)) return mkChar("double");
         if (isRuntimeString(v)) return mkChar("string");
+        if (isRuntimeStringArray(v)) return mkChar("string");
         if (isRuntimeChar(v)) return mkChar("char");
         if (isRuntimeStruct(v) || isRuntimeStructArray(v))
           return mkChar("struct");
