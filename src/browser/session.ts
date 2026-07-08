@@ -28,7 +28,7 @@ export interface NumblSessionOptions {
   persistSystem?: boolean;
   /**
    * Wipe the persisted /system directory after this much inactivity, so a
-   * stale mip core / package set refreshes eventually. Default 24 h.
+   * stale mip core / package set refreshes eventually. Default 30 min.
    */
   systemInactivityMs?: number;
   optimization?: "0" | "1";
@@ -109,7 +109,7 @@ class NumblSessionImpl implements NumblSession {
       mainFile: o.mainFile,
       mip: o.mip ?? true,
       persistSystem: o.persistSystem ?? true,
-      systemInactivityMs: o.systemInactivityMs ?? 24 * 60 * 60 * 1000,
+      systemInactivityMs: o.systemInactivityMs ?? 30 * 60 * 1000,
       optimization: o.optimization ?? "1",
       maxIterations: o.maxIterations ?? 1e9,
       displayResults: o.displayResults ?? false,

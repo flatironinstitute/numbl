@@ -39,8 +39,8 @@ it.
   core + installed packages). After the run and after each dispatched
   event, the VFS change set filtered to `/system/` is written back, so
   installs survive page loads. The store is wiped after an inactivity
-  period (default 24 h, configurable), mirroring the IDE's policy for its
-  `__system__` project.
+  period (default 30 min, configurable), so a rebuilt/updated package set
+  refreshes without a manual cache clear.
 - **uihtml bridge.** uihtml plot instructions surface as components;
   `sendEventToHTMLSource` arrives via a callback; `dispatchHtmlEvent` fires
   the script's `HTMLEventReceivedFcn` and resolves/rejects when the
