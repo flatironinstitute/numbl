@@ -20,6 +20,7 @@ export interface BootMessage {
 export type ToWorker =
   | BootMessage
   | { type: "writeFile"; path: string; content: string | Uint8Array }
+  | { type: "readFile"; id: number; path: string }
   | {
       type: "dispatch";
       id: number;
@@ -44,4 +45,11 @@ export type FromWorker =
     }
   | { type: "bootError"; message: string }
   | { type: "htmlSourceEvent"; compId: string; name: string; dataJson: string }
-  | { type: "dispatchResult"; id: number; ok: boolean; message?: string };
+  | { type: "dispatchResult"; id: number; ok: boolean; message?: string }
+  | {
+      type: "readFileResult";
+      id: number;
+      ok: boolean;
+      content?: Uint8Array;
+      message?: string;
+    };

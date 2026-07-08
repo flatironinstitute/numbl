@@ -52,6 +52,11 @@ export interface NumblSession {
   /** Write a file into the session VFS (visible to later dispatched events). */
   writeFile(path: string, content: string | Uint8Array): void;
   /**
+   * Read a file from the session VFS (e.g. results the script wrote).
+   * Relative paths resolve under /project/. Rejects if the file is missing.
+   */
+  readFile(path: string): Promise<Uint8Array>;
+  /**
    * Fire the script's HTMLEventReceivedFcn (host -> MATLAB). Resolves when
    * the callback returns; rejects if it errors (the session stays usable).
    */
@@ -70,6 +75,11 @@ class NumblSessionImpl implements NumblSession {
   private pendingDispatches = new Map<
     number,
     { resolve: () => void; reject: (err: Error) => void }
+  >();
+  private nextReadId = 1;
+  private pendingReads = new Map<
+    number,
+    { resolve: (content: Uint8Array) => void; reject: (err: Error) => void }
   >();
   private readyWaiter: {
     resolve: () => void;
@@ -114,6 +124,15 @@ class NumblSessionImpl implements NumblSession {
     this.post({ type: "writeFile", path, content });
   }
 
+  readFile(path: string): Promise<Uint8Array> {
+    this.ensureUsable();
+    const id = this.nextReadId++;
+    this.post({ type: "readFile", id, path });
+    return new Promise<Uint8Array>((resolve, reject) => {
+      this.pendingReads.set(id, { resolve, reject });
+    });
+  }
+
   dispatchHtmlEvent(
     compId: string,
     name: string,
@@ -148,6 +167,8 @@ class NumblSessionImpl implements NumblSession {
     rw?.reject(err);
     for (const waiter of this.pendingDispatches.values()) waiter.reject(err);
     this.pendingDispatches.clear();
+    for (const waiter of this.pendingReads.values()) waiter.reject(err);
+    this.pendingReads.clear();
   }
 
   private handleMessage(msg: FromWorker) {
@@ -191,6 +212,14 @@ class NumblSessionImpl implements NumblSession {
         if (!waiter) break;
         if (msg.ok) waiter.resolve();
         else waiter.reject(new Error(msg.message ?? "dispatch failed"));
+        break;
+      }
+      case "readFileResult": {
+        const waiter = this.pendingReads.get(msg.id);
+        this.pendingReads.delete(msg.id);
+        if (!waiter) break;
+        if (msg.ok && msg.content) waiter.resolve(msg.content);
+        else waiter.reject(new Error(msg.message ?? "read failed"));
         break;
       }
     }

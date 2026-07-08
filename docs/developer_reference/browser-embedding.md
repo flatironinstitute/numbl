@@ -19,8 +19,13 @@ const session = await createNumblSession({
   },
 });
 session.writeFile("data.bin", bytes); // into the session VFS
+const out = await session.readFile("result.json"); // back out of the VFS
 await session.dispatchHtmlEvent(compId, "go", payload); // host -> script
 ```
+
+`readFile` lets a host run a script standalone and read back what it wrote —
+no uihtml event bridge needed when the script has nothing interactive about
+it.
 
 - **Worker inlining.** The session worker is bundled standalone at build
   time and embedded as text in the published entry; it is started from a

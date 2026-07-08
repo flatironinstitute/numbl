@@ -164,6 +164,22 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
     return;
   }
 
+  if (msg.type === "readFile") {
+    try {
+      if (!vfs) throw new Error("session not booted");
+      const content = vfs.readFile(projectPath(msg.path));
+      post({ type: "readFileResult", id: msg.id, ok: true, content });
+    } catch (err) {
+      post({
+        type: "readFileResult",
+        id: msg.id,
+        ok: false,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return;
+  }
+
   if (msg.type === "dispatch") {
     if (!session) {
       post({
