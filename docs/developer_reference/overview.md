@@ -48,6 +48,7 @@ A single entry point (the `executeCode` function) accepts source, options, and a
 - [stdlib.md](stdlib.md) — `.m`-defined standard library and bundle generation.
 - [cli.md](cli.md) — CLI commands, options, environment variables.
 - [web-app.md](web-app.md) — browser IDE, worker, VFS, blocking input.
+- [browser-embedding.md](browser-embedding.md) — `numbl/browser` managed sessions and the raw embedding primitives.
 - [server.md](server.md) — optional remote execution service.
 - [plotting.md](plotting.md) — graphics instructions and the plot viewer.
 - [uihtml.md](uihtml.md) — interactive HTML figures and the two-way data/event bridge to the interpreter.

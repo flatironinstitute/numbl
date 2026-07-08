@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "declarationDir": "dist-browser",
+    "outDir": "dist-browser",
+    "strict": true,
+    "skipLibCheck": true,
+    // See tsconfig.lib.json for why allowJs/checkJs are set this way (the
+    // generated runtime snippet registry re-exports .js files).
+    "allowJs": true,
+    "checkJs": false,
+    "lib": ["ES2022", "DOM", "WebWorker"],
+    "types": ["vite/client", "node"],
+    "erasableSyntaxOnly": false
+  },
+  "include": [
+    "src/browser/**/*.ts",
+    "src/browser/text-modules.d.ts",
+    "src/numbl-core/**/*.ts",
+    "src/vfs/**/*.ts",
+    "src/graphics/types.ts"
+  ]
+}

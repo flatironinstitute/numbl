@@ -28,6 +28,10 @@
     "./graphics": {
       "types": "./dist-graphics/graphics-lib.d.ts",
       "import": "./dist-graphics/index.js"
+    },
+    "./browser": {
+      "types": "./dist-browser/browser/index.d.ts",
+      "import": "./dist-browser/browser.js"
     }
   },
   "bin": {
@@ -35,6 +39,7 @@
   },
   "files": [
     "dist-lib/",
+    "dist-browser/",
     "dist-graphics/",
     "dist-cli/",
     "dist-plot-viewer/",
@@ -75,8 +80,9 @@
     "update-readme": "tsx scripts/update-readme-usage.ts",
     "check-readme": "tsx scripts/update-readme-usage.ts --check",
     "bump": "tsx scripts/bump-version.ts",
-    "prepublishOnly": "npm run build:lib && npm run build:graphics && npm run build:cli && npm run build:plot-viewer && npm run build:site-viewer",
-    "prepare": "husky"
+    "prepublishOnly": "npm run build:lib && npm run build:browser && npm run build:graphics && npm run build:cli && npm run build:plot-viewer && npm run build:site-viewer",
+    "prepare": "husky",
+    "build:browser": "npm run build:snippets && npm run bundle:stdlib && tsx scripts/build_browser.ts"
   },
   "dependencies": {
     "fflate": "^0.8.2",

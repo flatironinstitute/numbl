@@ -53,3 +53,5 @@ numbl_test_scripts/**/*.dylib
 *.njsproj
 *.sln
 *.sw?
+dist-browser
+src/browser/generated
