@@ -1342,7 +1342,10 @@ function indexIntoTensorWithTensor(
     idx.shape.length === 2 &&
     idx.shape[0] === 0 &&
     idx.shape[1] === 0;
+  // A 1x1 base is a scalar, not a vector: the orientation override below
+  // must not apply, so x(ones(m,1)) is m-by-1 (Tony's trick), not 1-by-m.
   const baseIsVector =
+    base.data.length !== 1 &&
     base.shape.length <= 2 &&
     (base.shape[0] === 1 || base.shape[1] === 1 || base.shape.length === 1);
   const idxIsVector =
