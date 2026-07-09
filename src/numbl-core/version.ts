@@ -1,2 +1,2 @@
 /** Numbl version, used for JIT disk cache invalidation. */
-export const NUMBL_VERSION = "0.4.11";
+export const NUMBL_VERSION = "0.4.12";
