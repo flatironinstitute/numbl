@@ -19,6 +19,18 @@ export function mtoc2_tensor_mtimes_real(a, b) {
       `mtoc2_tensor_mtimes_real: inner dimensions disagree (${k} vs ${k2})`
     );
   }
+  // Optional WASM LAPACK accelerator. When a host installs `$matmulAccel`
+  // (browser worker, after loading a bridge), delegate the multiply; a
+  // falsy return means "declined" (too small / error) and we fall through
+  // to the JS loop below. `typeof` guard is safe even when unset.
+  if (typeof $matmulAccel === "function") {
+    const accel = $matmulAccel(a.data, m, k, b.data, n);
+    if (accel) {
+      const acc = mtoc2_tensor_alloc(m, n);
+      acc.data.set(accel);
+      return acc;
+    }
+  }
   const r = mtoc2_tensor_alloc(m, n);
   for (let j = 0; j < n; j++) {
     for (let i = 0; i < m; i++) {

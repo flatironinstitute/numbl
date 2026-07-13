@@ -32,7 +32,7 @@ export interface LapackBridge {
    * @returns     Inverted matrix as a allocFloat64Array in column-major order.
    * @throws      Error if the matrix is singular.
    */
-  inv(data: Float64Array, n: number): Float64Array;
+  inv?(data: Float64Array, n: number): Float64Array;
 
   /**
    * Invert an n×n complex matrix stored in column-major order (MATLAB/LAPACK convention).

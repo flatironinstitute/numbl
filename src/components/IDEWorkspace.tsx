@@ -38,6 +38,9 @@ import {
   ToggleButton,
   ToggleButtonGroup,
   Tooltip,
+  Switch,
+  FormControlLabel,
+  Divider,
   useMediaQuery,
 } from "@mui/material";
 import {
@@ -80,6 +83,13 @@ import {
   setRemoteServiceUrl as saveRemoteServiceUrl,
   checkRemoteServiceHealth,
 } from "../utils/remoteExecution";
+import {
+  effectiveWasmBridgeUrl,
+  getWasmBridgeUrl,
+  setWasmBridgeUrl,
+  isWasmBridgeEnabled,
+  setWasmBridgeEnabled,
+} from "../utils/wasmLapackBridge";
 import {
   syncVfsChangesToProject,
   syncSystemVfsChanges,
@@ -263,6 +273,11 @@ export function IDEWorkspace({
   const [localServerUrlDraft, setLocalServerUrlDraft] = useState(
     getRemoteServiceUrl()
   );
+  // WASM matrix-acceleration settings (drafts edited in the dialog).
+  const [wasmBridgeEnabledDraft, setWasmBridgeEnabledDraft] =
+    useState(isWasmBridgeEnabled);
+  const [wasmBridgeUrlDraft, setWasmBridgeUrlDraft] =
+    useState(getWasmBridgeUrl);
   const generatePasskey = useCallback(() => {
     const key = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     sessionStorage.setItem("numbl_passkey", key);
@@ -694,6 +709,12 @@ export function IDEWorkspace({
     });
     workerRef.current = worker;
 
+    // Load the optional WASM LAPACK accelerator (if enabled) into this worker.
+    worker.postMessage({
+      type: "set_wasm_bridge",
+      url: effectiveWasmBridgeUrl(),
+    });
+
     if (workerInputSAB.current) {
       worker.postMessage({
         type: "set_input_sab",
@@ -899,6 +920,12 @@ export function IDEWorkspace({
       );
       workerRef.current = worker;
 
+      // Load the optional WASM LAPACK accelerator (if enabled) into this worker.
+      worker.postMessage({
+        type: "set_wasm_bridge",
+        url: effectiveWasmBridgeUrl(),
+      });
+
       if (workerInputSAB.current) {
         worker.postMessage({
           type: "set_input_sab",
@@ -917,8 +944,16 @@ export function IDEWorkspace({
   const handleLocalServerSettingsSave = useCallback(() => {
     setRemoteServiceUrl(localServerUrlDraft);
     saveRemoteServiceUrl(localServerUrlDraft);
+    // Persist WASM accelerator settings and push the new effective URL to
+    // the worker (null ⇒ uninstall) so it takes effect without a reload.
+    setWasmBridgeEnabled(wasmBridgeEnabledDraft);
+    setWasmBridgeUrl(wasmBridgeUrlDraft);
+    workerRef.current?.postMessage({
+      type: "set_wasm_bridge",
+      url: effectiveWasmBridgeUrl(),
+    });
     setLocalServerSettingsOpen(false);
-  }, [localServerUrlDraft]);
+  }, [localServerUrlDraft, wasmBridgeEnabledDraft, wasmBridgeUrlDraft]);
 
   const handleExecutionModeChange = useCallback(
     (_: React.MouseEvent<HTMLElement>, newMode: "browser" | "local" | null) => {
@@ -2057,6 +2092,39 @@ export function IDEWorkspace({
             >
               regenerate passkey
             </Typography>
+          </Box>
+          <Divider />
+          <Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  checked={wasmBridgeEnabledDraft}
+                  onChange={e => setWasmBridgeEnabledDraft(e.target.checked)}
+                  size="small"
+                />
+              }
+              label="Accelerate matrix math (WASM)"
+            />
+            <Typography variant="caption" color="text.secondary" component="p">
+              Loads an external WebAssembly LAPACK/BLAS bridge to speed up
+              matrix multiplication in the browser. Falls back to the built-in
+              pure-JS implementation when off or unavailable.
+            </Typography>
+            <TextField
+              label="Bridge URL"
+              value={wasmBridgeUrlDraft}
+              onChange={e => setWasmBridgeUrlDraft(e.target.value)}
+              size="small"
+              fullWidth
+              disabled={!wasmBridgeEnabledDraft}
+              sx={{ mt: 1 }}
+              slotProps={{
+                input: {
+                  style: { fontFamily: "monospace", fontSize: "0.85rem" },
+                },
+              }}
+              helperText="Base URL serving numbl-bridge.json"
+            />
           </Box>
         </DialogContent>
         <DialogActions>

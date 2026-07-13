@@ -9,6 +9,20 @@
 declare global {
   /** Append text to stdout. No implicit newline. */
   var $write: (s: string) => void;
+
+  /** Optional accelerated real matrix multiply, installed by the host when
+   *  a WASM LAPACK bridge is loaded (browser worker). Given column-major
+   *  A (m×k) and B (k×n), returns column-major C = A*B, or a falsy value to
+   *  decline (the caller then runs its own JS loop). */
+  var $matmulAccel:
+    | ((
+        a: Float64Array,
+        m: number,
+        k: number,
+        b: Float64Array,
+        n: number
+      ) => Float64Array | null | undefined)
+    | undefined;
 }
 
 export {};

@@ -9,6 +9,7 @@
  *   Main -> Worker:  { type: "run", code, preamble?, options, workspaceFiles, mainFileName, searchPaths, vfsFiles, inputSAB, persistent?, cancelSAB? }
  *   Main -> Worker:  { type: "execute", code, cancelSAB? }
  *   Main -> Worker:  { type: "set_optimization", optimization }
+ *   Main -> Worker:  { type: "set_wasm_bridge", url } (null/"" ⇒ uninstall)
  *   Main -> Worker:  { type: "update_workspace", workspaceFiles, vfsFiles, searchPaths? }
  *   Main -> Worker:  { type: "set_input_sab", inputSAB }
  *   Main -> Worker:  { type: "clear" }
@@ -40,6 +41,8 @@ import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
 import { workerOnInput } from "./syncInputChannel.js";
 import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
+import { ensureWasmLapackBridge } from "./numbl-core/native/wasm-lapack-browser.js";
+import { IdbWasmCache } from "./utils/wasmByteCache.js";
 
 // Start loading the qhull Delaunay backend as soon as the worker spins up, so
 // it is installed well before any user-triggered run. Fire-and-forget: it
@@ -47,6 +50,11 @@ import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
 // await it. A delaunay/delaunayn call issued before it finishes loading (or if
 // loading fails) throws "backend not initialized".
 void ensureQhullBackend();
+
+// Byte cache for the optional WASM LAPACK accelerator. The accelerator itself
+// is loaded lazily when the main thread sends `set_wasm_bridge` with the
+// configured URL (workers can't read localStorage).
+const wasmBridgeCache = new IdbWasmCache();
 
 // ── Persistent state (used by REPL execute and persistent script runs) ──
 
@@ -208,6 +216,13 @@ self.onmessage = (e: MessageEvent) => {
 
   if (type === "set_optimization") {
     optimizationLevel = e.data.optimization ?? optimizationLevel;
+    return;
+  }
+
+  if (type === "set_wasm_bridge") {
+    // Best-effort: loads/instantiates off the message loop and installs the
+    // accelerator when ready. A null/empty url uninstalls it.
+    void ensureWasmLapackBridge(e.data.url ?? null, { cache: wasmBridgeCache });
     return;
   }
 

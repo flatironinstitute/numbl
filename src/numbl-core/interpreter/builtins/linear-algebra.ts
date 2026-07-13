@@ -915,8 +915,8 @@ defineBuiltin({
           const result = invComplexJS(A.data, A.imag, n);
           return RTV.tensor(result.re, [n, n], result.im);
         }
-        const bridge = getEffectiveBridge("inv");
-        return RTV.tensor(bridge.inv(toF64(A.data), n), [n, n]);
+        const bridge = getEffectiveBridge("inv", "inv");
+        return RTV.tensor(bridge.inv!(toF64(A.data), n), [n, n]);
       },
     },
   ],
