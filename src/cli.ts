@@ -82,8 +82,8 @@ function variantAddonPath(fastMath: boolean): string {
 
 import { NATIVE_ADDON_EXPECTED_VERSION } from "./numbl-core/native/lapack-bridge.js";
 
-function loadNativeAddon(fastMath: boolean): void {
-  if (process.env.NUMBL_NO_NATIVE) return;
+function loadNativeAddon(fastMath: boolean, noNative = false): void {
+  if (noNative || process.env.NUMBL_NO_NATIVE) return;
   const variantPath = variantAddonPath(fastMath);
   const flag = fastMath ? " --fast-math" : "";
   if (!existsSync(variantPath)) {
@@ -254,9 +254,10 @@ function findTestFiles(dir: string): string[] {
 async function runTests(
   dir: string,
   optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
-  fastMath?: boolean
+  fastMath?: boolean,
+  noNative?: boolean
 ) {
-  loadNativeAddon(fastMath ?? false);
+  loadNativeAddon(fastMath ?? false, noNative ?? false);
   await loadQhullBackend();
   const absDir = resolve(process.cwd(), dir);
   const testFiles = findTestFiles(absDir);
@@ -399,9 +400,12 @@ Options (for run and eval):
                      across --opt levels). Off by default so all --opt
                      levels agree; --no-fast-math is accepted as the
                      (now default) opt-out.
+  --no-native        Do not load the native LAPACK addon; use the pure-JS
+                     fallbacks (same effect as NUMBL_NO_NATIVE=1)
 
 Environment variables:
-  NUMBL_PATH              Extra workspace directories (separated by ${delimiter})`);
+  NUMBL_PATH              Extra workspace directories (separated by ${delimiter})
+  NUMBL_NO_NATIVE         If set, do not load the native LAPACK addon`);
 }
 
 // ── Option parsing helpers ───────────────────────────────────────────────────
@@ -419,6 +423,7 @@ interface ParsedOptions {
   profileOutput: string | undefined;
   optimization: import("./numbl-core/executors/plugins.js").OptLevel;
   fastMath: boolean;
+  noNative: boolean;
 }
 
 function parseOptions(args: string[]): ParsedOptions {
@@ -439,6 +444,7 @@ function parseOptions(args: string[]): ParsedOptions {
     // kernels and diverge across --opt levels. Opt back in with
     // `--fast-math` (and a matching `build-addon --fast-math`).
     fastMath: false,
+    noNative: false,
   };
 
   // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
@@ -480,6 +486,9 @@ function parseOptions(args: string[]): ParsedOptions {
       case "--no-fast-math":
         // Accepted for back-compat; this is now the default.
         opts.fastMath = false;
+        break;
+      case "--no-native":
+        opts.noNative = true;
         break;
       case "--dump-ast":
         opts.dumpAst = true;
@@ -684,7 +693,7 @@ async function executeWithOptions(
   opts: ParsedOptions,
   searchPaths?: string[]
 ) {
-  loadNativeAddon(opts.fastMath);
+  loadNativeAddon(opts.fastMath, opts.noNative);
   await loadQhullBackend();
   const profiling = !!opts.profileOutput;
   const totalStart = performance.now();
@@ -1315,7 +1324,7 @@ function cmdListBuiltins(flags: string[]) {
 async function cmdRepl(args: string[]) {
   const opts = parseOptions(args);
 
-  loadNativeAddon(opts.fastMath);
+  loadNativeAddon(opts.fastMath, opts.noNative);
   await ensureMipCorePackage();
 
   const replSearchPaths = [...opts.extraPaths];
@@ -1563,7 +1572,12 @@ async function main() {
         testOpts.positional.length > 0
           ? testOpts.positional[0]
           : join(packageDir, "numbl_test_scripts");
-      await runTests(dir, testOpts.optimization, testOpts.fastMath);
+      await runTests(
+        dir,
+        testOpts.optimization,
+        testOpts.fastMath,
+        testOpts.noNative
+      );
       break;
     }
     case "build-addon":

@@ -139,6 +139,11 @@ Options (for build-site):
   --title <text>     Site title (default: from numbl-project.json or dir name)
   --entry <file>     Default file to open, e.g. main.m (default: README.md or
                        the first script)
+  --repo-url <url>   Source repository URL, shown as a link in the deployed
+                       site (default: from numbl-project.json)
+  --max-initial-output-panel-height <px>
+                     Cap the initial height (px) of the output panel so the
+                       figure panel below it starts larger (desktop layout)
 
 Options (for parse):
   --dump-ast <file>  Write the AST as indented JSON to <file> (default: stdout)
@@ -168,7 +173,10 @@ Options (for run and eval):
                      across --opt levels). Off by default so all --opt
                      levels agree; --no-fast-math is accepted as the
                      (now default) opt-out.
+  --no-native        Do not load the native LAPACK addon; use the pure-JS
+                     fallbacks (same effect as NUMBL_NO_NATIVE=1)
 
 Environment variables:
   NUMBL_PATH              Extra workspace directories (separated by :)
+  NUMBL_NO_NATIVE         If set, do not load the native LAPACK addon
 ```
