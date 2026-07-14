@@ -51,6 +51,33 @@ const result = executeCode("y = myfunc(3);", {}, [
 console.log(result.variableValues.y); // 9
 ```
 
+### Node adapters (`numbl/node`)
+
+In Node.js, real filesystem access, env vars, and directory scanning are
+provided by adapters. The implementations the numbl CLI uses are exported
+from the `numbl/node` entry point so hosts don't have to write their own:
+
+```js
+import { executeCode } from "numbl";
+import { NodeFileIOAdapter, NodeSystemAdapter, scanMFiles } from "numbl/node";
+
+// Run code that can see the .m files (including +packages and @classes)
+// under some directory, as if it were on the MATLAB path:
+const searchPaths = ["/path/to/matlab/code"];
+const workspaceFiles = searchPaths.flatMap(p => scanMFiles(p));
+
+const result = executeCode(
+  "disp(myfunc(3))",
+  {
+    fileIO: new NodeFileIOAdapter(), // fopen/fileread/websave/unzip/...
+    system: new NodeSystemAdapter(), // getenv/cd/computer/...
+  },
+  workspaceFiles,
+  "eval.m",
+  searchPaths
+);
+```
+
 ### Error handling
 
 Errors throw a `RuntimeError` with file and line information:

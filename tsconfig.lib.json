@@ -21,5 +21,13 @@
     "types": ["vite/client", "node"],
     "erasableSyntaxOnly": false
   },
-  "include": ["src/lib.ts", "src/numbl-core/**/*.ts", "src/graphics/types.ts"]
+  "include": [
+    "src/lib.ts",
+    "src/node.ts",
+    "src/cli-fileio.ts",
+    "src/cli-system.ts",
+    "src/cli-scan.ts",
+    "src/numbl-core/**/*.ts",
+    "src/graphics/types.ts"
+  ]
 }
