@@ -20,7 +20,7 @@ export { tensorSize2D, numel, colMajorIndex } from "./utils.js";
 export { toNumber, toBool, toString } from "./convert.js";
 export { valuesAreEqual } from "./compare.js";
 
-export { displayValue } from "./display.js";
+export { displayValue, formatDatetimeOrDuration } from "./display.js";
 
 export { RTV } from "./constructors.js";
 

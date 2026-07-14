@@ -95,6 +95,44 @@ function datetimeFromDatenum(dn: number): RuntimeClassInstance {
   return datetimeFromUtcMs((dn - MATLAB_EPOCH_DAYS) * 86400000);
 }
 
+/** Return a copy of a datetime with TimeZone/Format properties attached
+ *  (no-op when neither is requested). */
+function withTimeZoneFormat(
+  dt: RuntimeClassInstance,
+  timeZone: string | undefined,
+  format: string | undefined
+): RuntimeClassInstance {
+  if (timeZone === undefined && format === undefined) return dt;
+  const fields = new Map(dt.fields);
+  if (timeZone !== undefined) fields.set("TimeZone", RTV.char(timeZone));
+  if (format !== undefined) fields.set("Format", RTV.char(format));
+  return new RuntimeClassInstance("datetime", fields, false);
+}
+
+/** Calendar parts of (today + offsetDays), in local time or UTC. */
+function todayParts(
+  offsetDays: number,
+  utc: boolean
+): [number, number, number] {
+  const now = new Date();
+  if (utc) {
+    const d = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + offsetDays
+      )
+    );
+    return [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()];
+  }
+  const d = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() + offsetDays
+  );
+  return [d.getFullYear(), d.getMonth() + 1, d.getDate()];
+}
+
 // ── duration construction / introspection ─────────────────────────────────
 
 export function makeDuration(totalSeconds: number): RuntimeClassInstance {
@@ -166,10 +204,13 @@ registerIBuiltin({
       "t = datetime(Y, M, D)",
       "t = datetime(Y, M, D, H, MI, S)",
       "t = datetime(X, 'ConvertFrom', dateType)",
+      "t = datetime(..., 'TimeZone', tz, 'Format', fmt)",
     ],
     description:
       "Create a datetime value. Supported dateType values for ConvertFrom: " +
-      "'datenum', 'posixtime', 'excel', 'excel1904'.",
+      "'datenum', 'posixtime', 'excel', 'excel1904'. Trailing 'TimeZone' " +
+      "(only '', 'local', 'UTC') and 'Format' name-value pairs are " +
+      "supported; the Format pattern is used by char() and display.",
   },
   resolve: () => ({
     outputTypes: [
@@ -181,41 +222,58 @@ registerIBuiltin({
       },
     ],
     apply: args => {
-      if (args.length === 0) {
-        return datetimeFromDate(new Date());
+      // Split off trailing 'TimeZone'/'Format' name-value pairs (any order).
+      let timeZone: string | undefined;
+      let format: string | undefined;
+      let positional = args;
+      while (positional.length >= 2) {
+        const name = argToString(positional[positional.length - 2]);
+        if (name === null) break;
+        const lc = name.toLowerCase();
+        if (lc !== "timezone" && lc !== "format") break;
+        const value = argToString(positional[positional.length - 1]);
+        if (value === null)
+          throw new RuntimeError(`datetime: ${name} value must be text`);
+        if (lc === "timezone") timeZone = value;
+        else format = value;
+        positional = positional.slice(0, -2);
+      }
+      const tzLc = timeZone?.toLowerCase();
+      if (
+        tzLc !== undefined &&
+        tzLc !== "" &&
+        tzLc !== "local" &&
+        tzLc !== "utc"
+      ) {
+        throw new RuntimeError(
+          `datetime: unsupported TimeZone '${timeZone}' (supported: '', 'local', 'UTC')`
+        );
+      }
+      // With TimeZone 'UTC', current-time forms use UTC calendar components.
+      const utc = tzLc === "utc";
+      const finish = (dt: RuntimeClassInstance) =>
+        withTimeZoneFormat(dt, timeZone, format);
+
+      if (positional.length === 0) {
+        return finish(
+          utc ? datetimeFromUtcMs(Date.now()) : datetimeFromDate(new Date())
+        );
       }
 
       // datetime('now' | 'today' | 'yesterday' | 'tomorrow')
-      if (args.length === 1) {
-        const s = argToString(args[0]);
+      if (positional.length === 1) {
+        const s = argToString(positional[0]);
         if (s !== null) {
-          const now = new Date();
           const lc = s.toLowerCase();
-          if (lc === "now") return datetimeFromDate(now);
-          if (lc === "today") {
-            return makeDatetime(
-              now.getFullYear(),
-              now.getMonth() + 1,
-              now.getDate(),
-              0,
-              0,
-              0
+          if (lc === "now") {
+            return finish(
+              utc ? datetimeFromUtcMs(Date.now()) : datetimeFromDate(new Date())
             );
           }
-          if (lc === "yesterday" || lc === "tomorrow") {
-            const d = new Date(
-              now.getFullYear(),
-              now.getMonth(),
-              now.getDate() + (lc === "tomorrow" ? 1 : -1)
-            );
-            return makeDatetime(
-              d.getFullYear(),
-              d.getMonth() + 1,
-              d.getDate(),
-              0,
-              0,
-              0
-            );
+          if (lc === "today" || lc === "yesterday" || lc === "tomorrow") {
+            const offset = lc === "tomorrow" ? 1 : lc === "yesterday" ? -1 : 0;
+            const [Y, M, D] = todayParts(offset, utc);
+            return finish(makeDatetime(Y, M, D, 0, 0, 0));
           }
           throw new RuntimeError(
             `datetime: unrecognized relative-day string '${s}'`
@@ -224,21 +282,21 @@ registerIBuiltin({
       }
 
       // datetime(X, 'ConvertFrom', dateType)
-      if (args.length === 3) {
-        const flag = argToString(args[1]);
-        const kind = argToString(args[2]);
+      if (positional.length === 3) {
+        const flag = argToString(positional[1]);
+        const kind = argToString(positional[2]);
         if (flag !== null && flag.toLowerCase() === "convertfrom") {
           if (kind === null)
             throw new RuntimeError("datetime: dateType must be text");
-          const x = toNumber(args[0]);
+          const x = toNumber(positional[0]);
           const k = kind.toLowerCase();
-          if (k === "datenum") return datetimeFromDatenum(x);
-          if (k === "posixtime") return datetimeFromUtcMs(x * 1000);
+          if (k === "datenum") return finish(datetimeFromDatenum(x));
+          if (k === "posixtime") return finish(datetimeFromUtcMs(x * 1000));
           if (k === "excel") {
-            return datetimeFromUtcMs((x - 25569) * 86400000);
+            return finish(datetimeFromUtcMs((x - 25569) * 86400000));
           }
           if (k === "excel1904") {
-            return datetimeFromUtcMs((x - 24107) * 86400000);
+            return finish(datetimeFromUtcMs((x - 24107) * 86400000));
           }
           throw new RuntimeError(
             `datetime: unsupported ConvertFrom type '${kind}'`
@@ -247,15 +305,19 @@ registerIBuiltin({
       }
 
       // datetime(Y, M, D [, H, MI, S [, MS]])
-      if (args.length === 3 || args.length === 6 || args.length === 7) {
-        const Y = toNumber(args[0]);
-        const M = toNumber(args[1]);
-        const D = toNumber(args[2]);
-        const H = args.length >= 6 ? toNumber(args[3]) : 0;
-        const MI = args.length >= 6 ? toNumber(args[4]) : 0;
-        const S = args.length >= 6 ? toNumber(args[5]) : 0;
-        const MS = args.length >= 7 ? toNumber(args[6]) : 0;
-        return makeDatetime(Y, M, D, H, MI, S + MS / 1000);
+      if (
+        positional.length === 3 ||
+        positional.length === 6 ||
+        positional.length === 7
+      ) {
+        const Y = toNumber(positional[0]);
+        const M = toNumber(positional[1]);
+        const D = toNumber(positional[2]);
+        const H = positional.length >= 6 ? toNumber(positional[3]) : 0;
+        const MI = positional.length >= 6 ? toNumber(positional[4]) : 0;
+        const S = positional.length >= 6 ? toNumber(positional[5]) : 0;
+        const MS = positional.length >= 7 ? toNumber(positional[6]) : 0;
+        return finish(makeDatetime(Y, M, D, H, MI, S + MS / 1000));
       }
 
       throw new RuntimeError(

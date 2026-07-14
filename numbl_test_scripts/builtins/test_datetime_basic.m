@@ -66,4 +66,26 @@ assert(b > a)
 assert(a < b)
 assert(a ~= b)
 
+% char(datetime) uses the default display format
+f0 = char(datetime(2024, 3, 15, 10, 30, 45));
+assert(strcmp(f0, '15-Mar-2024 10:30:45'))
+
+% 'Format' name-value pair controls char() output
+f1 = char(datetime(2024, 3, 15, 10, 30, 45, 'Format', 'yyyy-MM-dd''T''HH:mm:ss''Z'''));
+assert(strcmp(f1, '2024-03-15T10:30:45Z'))
+
+% Format tokens: 2-digit year, non-padded month/day, 12-hour clock, AM/PM
+f2 = char(datetime(2024, 3, 5, 14, 7, 9, 'Format', 'M/d/yy h:mm a'));
+assert(strcmp(f2, '3/5/24 2:07 PM'))
+
+% 'TimeZone' pair is accepted and stored; 'now' with UTC stays a datetime
+tu = datetime('now', 'TimeZone', 'UTC', 'Format', 'yyyy-MM-dd HH:mm:ss');
+assert(strcmp(class(tu), 'datetime'))
+assert(strcmp(tu.TimeZone, 'UTC'))
+assert(tu.Year >= 2024)
+
+% char(duration)
+fd = char(seconds(3661));
+assert(strcmp(fd, '01:01:01'))
+
 disp('SUCCESS')

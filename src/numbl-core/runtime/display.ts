@@ -18,6 +18,7 @@ import {
   RuntimeStringArray,
 } from "./types.js";
 import { colMajorIndex, ind2sub } from "./utils.js";
+import { formatDatetimePattern } from "./datetime-format.js";
 
 /** Format a value for display */
 export function displayValue(v: RuntimeValue): string {
@@ -349,9 +350,23 @@ function numField(v: RuntimeClassInstance, name: string): number | null {
   return null;
 }
 
-function formatDatetimeOrDuration(v: RuntimeClassInstance): string | null {
+/** Format a datetime or duration instance for display / char conversion.
+ *  Returns null when the instance lacks the expected fields (or is some
+ *  other class), letting the generic class-instance display run. */
+export function formatDatetimeOrDuration(
+  v: RuntimeClassInstance
+): string | null {
   if (v.className === "datetime") return formatDatetimeInstance(v);
   if (v.className === "duration") return formatDurationInstance(v);
+  return null;
+}
+
+/** Read a text field (char or string) off a class instance, or null. */
+function textField(v: RuntimeClassInstance, name: string): string | null {
+  const fv = v.fields.get(name);
+  if (fv === undefined) return null;
+  if (isRuntimeString(fv)) return fv;
+  if (isRuntimeChar(fv)) return fv.value;
   return null;
 }
 
@@ -371,6 +386,10 @@ function formatDatetimeInstance(v: RuntimeClassInstance): string | null {
     second === null
   )
     return null;
+  const fmt = textField(v, "Format");
+  if (fmt !== null && fmt !== "") {
+    return formatDatetimePattern(fmt, year, month, day, hour, minute, second);
+  }
   const mIdx = Math.max(0, Math.min(11, Math.floor(month) - 1));
   const mon = DATETIME_MONTH_ABBR[mIdx];
   const dd = String(Math.floor(day)).padStart(2, "0");

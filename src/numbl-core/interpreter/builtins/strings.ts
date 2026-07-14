@@ -11,6 +11,7 @@ import {
   RuntimeChar,
   isRuntimeChar,
   isRuntimeCell,
+  isRuntimeClassInstance,
   isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeString,
@@ -26,6 +27,7 @@ import {
   toString,
   RuntimeError,
   displayValue,
+  formatDatetimeOrDuration,
 } from "../../runtime/index.js";
 import type { JitType } from "../../jitTypes.js";
 import { registerIBuiltin } from "./types.js";
@@ -1450,7 +1452,13 @@ registerIBuiltin({
       a.kind !== "number" &&
       a.kind !== "tensor" &&
       a.kind !== "cell" &&
-      a.kind !== "unknown"
+      a.kind !== "unknown" &&
+      // datetime/duration only — other classes keep their own char methods
+      // (or the generic "does not support these argument types" error).
+      !(
+        a.kind === "class_instance" &&
+        (a.className === "datetime" || a.className === "duration")
+      )
     )
       return null;
     return {
@@ -1458,6 +1466,12 @@ registerIBuiltin({
       apply: args => {
         const v = args[0];
         if (isRuntimeChar(v)) return v;
+        // char(datetime) / char(duration): the display text (honoring a
+        // datetime's Format property).
+        if (isRuntimeClassInstance(v)) {
+          const s = formatDatetimeOrDuration(v);
+          if (s !== null) return RTV.char(s);
+        }
         if (isRuntimeString(v)) return RTV.char(v);
         if (isRuntimeNumber(v))
           return RTV.char(String.fromCharCode(Math.round(v)));
