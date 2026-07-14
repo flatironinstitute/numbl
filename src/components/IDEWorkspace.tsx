@@ -2108,7 +2108,8 @@ export function IDEWorkspace({
             <Typography variant="caption" color="text.secondary" component="p">
               Loads an external WebAssembly LAPACK/BLAS bridge to speed up
               matrix multiplication in the browser. Falls back to the built-in
-              pure-JS implementation when off or unavailable.
+              pure-JS implementation when off or unavailable. Turning it off is
+              temporary — it re-enables on page reload.
             </Typography>
             <TextField
               label="Bridge URL"

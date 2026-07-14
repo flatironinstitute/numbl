@@ -13,9 +13,8 @@ export const DEFAULT_WASM_BRIDGE_URL =
   "https://magland.github.io/numbl-wasm-bridge/";
 
 const URL_KEY = "numbl_wasm_bridge_url";
-const ENABLED_KEY = "numbl_wasm_bridge_enabled";
 
-/** The configured endpoint base URL (or the default if unset). */
+/** The configured endpoint base URL (or the default if unset). Persisted. */
 export function getWasmBridgeUrl(): string {
   return localStorage.getItem(URL_KEY) || DEFAULT_WASM_BRIDGE_URL;
 }
@@ -24,14 +23,18 @@ export function setWasmBridgeUrl(url: string): void {
   localStorage.setItem(URL_KEY, url);
 }
 
-/** Whether the browser should auto-load the accelerator. Enabled by default
- *  (unset key ⇒ enabled); an explicit "false" opts out. */
+/** Whether the accelerator is enabled. Deliberately in-memory only (NOT
+ *  persisted): a page reload always resets it to the default (enabled), so a
+ *  temporary disable for A/B comparison can't be accidentally left off for
+ *  the next visitor/session. */
+let enabled = true;
+
 export function isWasmBridgeEnabled(): boolean {
-  return localStorage.getItem(ENABLED_KEY) !== "false";
+  return enabled;
 }
 
-export function setWasmBridgeEnabled(enabled: boolean): void {
-  localStorage.setItem(ENABLED_KEY, String(enabled));
+export function setWasmBridgeEnabled(value: boolean): void {
+  enabled = value;
 }
 
 /** The URL to hand the worker: the endpoint when enabled, else null
