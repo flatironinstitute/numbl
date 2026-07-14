@@ -304,6 +304,42 @@ describe("reshape with size vector", () => {
   });
 });
 
+// ── reshape of cell arrays ─────────────────────────────────────────────
+
+describe("reshape of cell arrays", () => {
+  it("reshapes a cell row to a column (elements keep column-major order)", () => {
+    const result = executeCode(
+      "c = reshape({1, 2, 3}, [], 1); a = c{2}; s = size(c);"
+    );
+    expect(result.variableValues["a"]).toBe(2);
+    const s = result.variableValues["s"];
+    if (!isRuntimeTensor(s)) throw new Error("s is not a tensor");
+    expect(Array.from(s.data)).toEqual([3, 1]);
+  });
+
+  it("reshapes a 2x3 cell to 3x2 keeping column-major element order", () => {
+    // c = {1 3 5; 2 4 6} stores 1..6 column-major; after reshape to 3x2,
+    // element (2,2) is the 5th linear element.
+    const result = executeCode(
+      "c = {1, 3, 5; 2, 4, 6}; d = reshape(c, 3, 2); a = d{2, 2};"
+    );
+    expect(result.variableValues["a"]).toBe(5);
+  });
+
+  it("reshapes an empty cell", () => {
+    const result = executeCode("c = reshape({}, 0, 1); s = size(c);");
+    const s = result.variableValues["s"];
+    if (!isRuntimeTensor(s)) throw new Error("s is not a tensor");
+    expect(Array.from(s.data)).toEqual([0, 1]);
+  });
+
+  it("errors when the element count changes", () => {
+    expect(() => executeCode("c = reshape({1, 2, 3}, 2, 2);")).toThrow(
+      /number of elements must not change/
+    );
+  });
+});
+
 // ── colon range ───────────────────────────────────────────────────────
 
 describe("colon range", () => {

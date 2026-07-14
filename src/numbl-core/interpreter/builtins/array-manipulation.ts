@@ -326,6 +326,19 @@ defineBuiltin({
           return v;
         }
 
+        // Cell arrays: elements are stored column-major, so reshape only
+        // replaces the shape metadata.
+        if (isRuntimeCell(v)) {
+          const total = v.data.length;
+          const s = parseReshapeDims(args, total);
+          while (s.length > 2 && s[s.length - 1] === 1) s.pop();
+          if (s.length > 2)
+            throw new RuntimeError("reshape: cell arrays must be 2-D");
+          const nr = s[0];
+          const nc = s.length >= 2 ? s[1] : 1;
+          return RTV.cell(v.data.slice(), [nr, nc]);
+        }
+
         // Object arrays: elements are stored in linear order, so reshape
         // only replaces the shape metadata.
         if (isRuntimeClassInstanceArray(v)) {
