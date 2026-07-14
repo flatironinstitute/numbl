@@ -1434,6 +1434,18 @@ export function indexIntoRTValue(
         return base.elements[i];
       }
       if (isRuntimeTensor(idx)) {
+        // Logical mask: select the elements at true positions.
+        if (idx._isLogical) {
+          const newElements = [];
+          for (let k = 0; k < idx.data.length; k++) {
+            if (idx.data[k] !== 0) {
+              if (k >= base.elements.length)
+                throw new RuntimeError("Index exceeds struct array bounds");
+              newElements.push(base.elements[k]);
+            }
+          }
+          return RTV.structArray(base.fieldNames, newElements);
+        }
         const newElements = [];
         for (let k = 0; k < idx.data.length; k++) {
           const i = Math.round(idx.data[k]) - 1;

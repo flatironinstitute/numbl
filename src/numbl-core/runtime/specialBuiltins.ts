@@ -16,6 +16,7 @@ import {
 } from "../runtime/index.js";
 import {
   isRuntimeTensor,
+  isRuntimeCell,
   isRuntimeChar,
   isRuntimeString,
   isRuntimeFunction,
@@ -1416,6 +1417,36 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     if (nargout >= 1) {
       // Return cell array of extracted file names
       const cellData: RuntimeValue[] = extracted.map(f => RTV.char(f));
+      return RTV.cell(cellData, [1, cellData.length]);
+    }
+    return undefined;
+  });
+
+  // ── zip (ZIP creation) ───────────────────────────────────────────────
+
+  registerSpecial("zip", (nargout, args) => {
+    const io = requireFileIO();
+    if (!io.zip)
+      throw new RuntimeError("zip is not available in this environment");
+    const margs = args.map(a => ensureRuntimeValue(a));
+    if (margs.length < 2)
+      throw new RuntimeError("zip requires at least 2 arguments");
+
+    // MATLAB appends .zip when the target filename has no extension
+    let zipfilename = toString(margs[0]);
+    const base = zipfilename.split(/[/\\]/).pop() ?? zipfilename;
+    if (!base.includes(".")) zipfilename += ".zip";
+
+    const fnames = margs[1];
+    const filenames: string[] = isRuntimeCell(fnames)
+      ? fnames.data.map(v => toString(ensureRuntimeValue(v)))
+      : [toString(fnames)];
+    const rootdir = margs.length >= 3 ? toString(margs[2]) : ".";
+
+    const entryNames = io.zip(zipfilename, filenames, rootdir);
+
+    if (nargout >= 1) {
+      const cellData: RuntimeValue[] = entryNames.map(f => RTV.char(f));
       return RTV.cell(cellData, [1, cellData.length]);
     }
     return undefined;

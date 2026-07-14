@@ -102,6 +102,11 @@ export interface FileIOAdapter {
   /** Extract a ZIP file to an output folder. Returns list of extracted file paths. Optional. */
   unzip?(zipfilename: string, outputfolder: string): string[];
 
+  /** Create a ZIP file from files/folders (paths resolved relative to
+   *  rootDir; folders are added recursively; simple globs in the last
+   *  path component are expanded). Returns the entry names written. Optional. */
+  zip?(zipfilename: string, filenames: string[], rootDir: string): string[];
+
   /** Return the temporary directory path. Optional. */
   tempdir?(): string;
 

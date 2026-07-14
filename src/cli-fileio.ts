@@ -21,10 +21,10 @@ import {
   chmodSync,
   realpathSync,
 } from "fs";
-import { unzipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
 import { execFileSync } from "child_process";
 import { homedir, tmpdir } from "os";
-import { join, resolve, dirname, basename } from "path";
+import { join, resolve, relative, dirname, basename } from "path";
 import type { FileIOAdapter, WebOptions } from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli-scan.js";
 
@@ -567,6 +567,80 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     return extracted;
   }
 
+  zip(zipfilename: string, filenames: string[], rootDir: string): string[] {
+    const root = resolve(expandTilde(rootDir));
+    const dest = resolve(expandTilde(zipfilename));
+    const entries: Record<string, Uint8Array> = {};
+    const names: string[] = [];
+
+    const toEntryName = (abs: string): string => {
+      const rel = relative(root, abs);
+      // Files outside rootDir are stored under their basename.
+      if (rel.startsWith("..")) return basename(abs);
+      return rel.split("\\").join("/");
+    };
+    const addFile = (abs: string) => {
+      const name = toEntryName(abs);
+      const buf = readFileSync(abs);
+      entries[name] = new Uint8Array(
+        buf.buffer,
+        buf.byteOffset,
+        buf.byteLength
+      );
+      names.push(name);
+    };
+    const addDir = (absDir: string) => {
+      for (const entry of readdirSync(absDir)) {
+        const abs = join(absDir, entry);
+        let st;
+        try {
+          st = statSync(abs);
+        } catch {
+          continue; // skip unreadable entries (e.g. dangling symlinks)
+        }
+        if (st.isDirectory()) addDir(abs);
+        else addFile(abs);
+      }
+    };
+    const addPath = (abs: string) => {
+      const st = statSync(abs); // throws if missing
+      if (st.isDirectory()) addDir(abs);
+      else addFile(abs);
+    };
+
+    for (const f of filenames) {
+      const p = expandTilde(f);
+      const abs = resolve(root, p);
+      const last = basename(p);
+      if (last.includes("*") || last.includes("?")) {
+        // Simple glob in the final path component
+        const dir = dirname(abs);
+        const re = new RegExp(
+          "^" +
+            last
+              .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+              .replace(/\*/g, ".*")
+              .replace(/\?/g, ".") +
+            "$"
+        );
+        let dirEntries: string[];
+        try {
+          dirEntries = readdirSync(dir);
+        } catch {
+          continue;
+        }
+        for (const entry of dirEntries) {
+          if (re.test(entry)) addPath(join(dir, entry));
+        }
+      } else {
+        addPath(abs);
+      }
+    }
+
+    writeFileSync(dest, zipSync(entries));
+    return names;
+  }
+
   listDir(dirPath: string): {
     name: string;
     folder: string;
@@ -722,13 +796,40 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     mtimeMs: number;
   }[] {
     // ** means recursive. Extract the base directory (everything before **)
-    const idx = pattern.indexOf("**");
-    let baseDir = pattern.slice(0, idx);
-    if (baseDir.endsWith("/") || baseDir.endsWith("\\")) {
+    // and the pattern from ** onward, which is matched against each entry's
+    // path relative to the base (so `base/**/*.mex*` only returns entries
+    // whose name matches `*.mex*`, at any depth including the base itself).
+    const norm = pattern.replace(/\\/g, "/");
+    const idx = norm.indexOf("**");
+    let baseDir = norm.slice(0, idx);
+    if (baseDir.endsWith("/")) {
       baseDir = baseDir.slice(0, -1);
     }
     if (!baseDir) baseDir = ".";
     const absBase = resolve(baseDir);
+    try {
+      if (!statSync(absBase).isDirectory()) return [];
+    } catch {
+      return []; // base does not exist — no matches
+    }
+
+    // Build a regex from the suffix: `**/` matches zero or more directory
+    // levels, `**` matches anything, `*` / `?` match within one segment.
+    const suffix = norm.slice(idx);
+    const DIRS = "\u0000"; // placeholder for `**/` (zero or more dir levels)
+    const ANY = "\u0001"; // placeholder for a bare `**`
+    const re = new RegExp(
+      "^" +
+        suffix
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*\*\//g, DIRS)
+          .replace(/\*\*/g, ANY)
+          .replace(/\*/g, "[^/]*")
+          .replace(/\?/g, "[^/]")
+          .replace(new RegExp(DIRS, "g"), "(?:.*/)?")
+          .replace(new RegExp(ANY, "g"), ".*") +
+        "$"
+    );
 
     const results: {
       name: string;
@@ -738,44 +839,35 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       mtimeMs: number;
     }[] = [];
 
-    const walkDir = (dir: string) => {
-      // Add . and .. for this directory
+    const pushIfMatch = (
+      rel: string,
+      name: string,
+      folder: string,
+      bytes: number,
+      isdir: boolean,
+      mtimeMs: number
+    ) => {
+      if (re.test(rel)) results.push({ name, folder, bytes, isdir, mtimeMs });
+    };
+
+    const walkDir = (dir: string, rel: string) => {
+      // . and .. entries for this directory (returned when they match the
+      // pattern, e.g. `**` or `**/*`, mirroring MATLAB's dir listings)
+      const relPrefix = rel ? rel + "/" : "";
+      let dirMtime = 0;
       try {
-        const ds = statSync(dir);
-        results.push({
-          name: ".",
-          folder: dir,
-          bytes: 0,
-          isdir: true,
-          mtimeMs: ds.mtimeMs,
-        });
+        dirMtime = statSync(dir).mtimeMs;
       } catch {
-        results.push({
-          name: ".",
-          folder: dir,
-          bytes: 0,
-          isdir: true,
-          mtimeMs: 0,
-        });
+        // keep 0
       }
+      pushIfMatch(relPrefix + ".", ".", dir, 0, true, dirMtime);
+      let parentMtime = 0;
       try {
-        const ps = statSync(resolve(dir, ".."));
-        results.push({
-          name: "..",
-          folder: dir,
-          bytes: 0,
-          isdir: true,
-          mtimeMs: ps.mtimeMs,
-        });
+        parentMtime = statSync(resolve(dir, "..")).mtimeMs;
       } catch {
-        results.push({
-          name: "..",
-          folder: dir,
-          bytes: 0,
-          isdir: true,
-          mtimeMs: 0,
-        });
+        // keep 0
       }
+      pushIfMatch(relPrefix + "..", "..", dir, 0, true, parentMtime);
 
       let entries: string[];
       try {
@@ -787,24 +879,25 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       for (const entry of entries) {
         try {
           const es = statSync(join(dir, entry));
-          results.push({
-            name: entry,
-            folder: dir,
-            bytes: es.isDirectory() ? 0 : es.size,
-            isdir: es.isDirectory(),
-            mtimeMs: es.mtimeMs,
-          });
+          pushIfMatch(
+            relPrefix + entry,
+            entry,
+            dir,
+            es.isDirectory() ? 0 : es.size,
+            es.isDirectory(),
+            es.mtimeMs
+          );
           if (es.isDirectory()) subdirs.push(entry);
         } catch {
           // skip
         }
       }
       for (const sub of subdirs) {
-        walkDir(join(dir, sub));
+        walkDir(join(dir, sub), relPrefix + sub);
       }
     };
 
-    walkDir(absBase);
+    walkDir(absBase, "");
     return results;
   }
 

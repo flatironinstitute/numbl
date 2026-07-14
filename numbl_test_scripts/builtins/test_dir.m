@@ -100,6 +100,34 @@ end
 listing4 = dir();
 assert(length(listing4) >= 2, 'dir() should return at least . and ..');
 
+% Test 8: Recursive pattern with filename glob (**/<glob>) applies the glob
+% at every depth (including the base dir) and excludes . / ..
+listing5 = dir(fullfile(tmpBase, '**', '*.txt'));
+assert(length(listing5) == 2, '**/*.txt should match exactly 2 files');
+found1 = false; found3 = false;
+for i = 1:length(listing5)
+    if strcmp(listing5(i).name, 'file1.txt'), found1 = true; end
+    if strcmp(listing5(i).name, 'file3.txt'), found3 = true; end
+end
+assert(found1, '**/*.txt should find file1.txt');
+assert(found3, '**/*.txt should find file3.txt');
+
+% Test 9: Recursive pattern with no matches returns empty (and logical
+% indexing on the empty result works)
+listing6 = dir(fullfile(tmpBase, '**', '*.mex*'));
+assert(isempty(listing6), '**/*.mex* should match nothing');
+listing6b = listing6(~[listing6.isdir]);
+assert(isempty(listing6b), 'logical indexing of empty dir result');
+
+% Test 10: Recursive pattern under a nonexistent base returns empty
+listing7 = dir(fullfile(tmpBase, 'no_such_dir', '**', '*.txt'));
+assert(isempty(listing7), 'nonexistent base should match nothing');
+
+% Test 11: logical-mask indexing of a dir struct array
+listing8 = dir(tmpBase);
+files8 = listing8(~[listing8.isdir]);
+assert(length(files8) == 2, 'expected 2 non-dir entries');
+
 % Cleanup
 rmdir(tmpBase, 's');
 

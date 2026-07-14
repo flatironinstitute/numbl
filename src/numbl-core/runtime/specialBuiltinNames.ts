@@ -115,6 +115,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "copyfile",
   "fileattrib",
   "unzip",
+  "zip",
   "dir",
   "warning",
   "input",
