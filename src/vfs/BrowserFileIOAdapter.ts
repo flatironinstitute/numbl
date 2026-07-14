@@ -3,7 +3,7 @@
  * Mirrors NodeFileIOAdapter patterns from cli-fileio.ts.
  */
 
-import { unzipSync } from "fflate";
+import { unzipSync, zipSync } from "fflate";
 import type {
   FileIOAdapter,
   WebOptions,
@@ -413,6 +413,70 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     return extracted;
   }
 
+  zip(zipfilename: string, filenames: string[], rootDir: string): string[] {
+    const root = this.vfs.normalizePath(rootDir);
+    const dest = this.vfs.normalizePath(zipfilename);
+    const entries: Record<string, Uint8Array> = {};
+    const names: string[] = [];
+
+    const toEntryName = (abs: string): string => {
+      const prefix = root === "/" ? "/" : root + "/";
+      // Files outside rootDir are stored under their basename.
+      if (!abs.startsWith(prefix)) return abs.slice(abs.lastIndexOf("/") + 1);
+      return abs.slice(prefix.length);
+    };
+    const addFile = (abs: string) => {
+      const name = toEntryName(abs);
+      entries[name] = this.vfs.readFile(abs);
+      names.push(name);
+    };
+    const addDir = (absDir: string) => {
+      for (const entry of this.vfs.listDir(absDir)) {
+        if (entry.name === "." || entry.name === "..") continue;
+        const abs = absDir + "/" + entry.name;
+        if (entry.isdir) addDir(abs);
+        else addFile(abs);
+      }
+    };
+    const addPath = (abs: string) => {
+      const type = this.vfs.exists(abs);
+      if (type === null) throw new Error(`zip: cannot find '${abs}'`);
+      if (type === "dir") addDir(abs);
+      else addFile(abs);
+    };
+
+    for (const f of filenames) {
+      const p = f.replace(/\\/g, "/");
+      const abs = p.startsWith("/")
+        ? this.vfs.normalizePath(p)
+        : this.vfs.normalizePath(root + "/" + p);
+      const last = p.split("/").pop() ?? p;
+      if (last.includes("*") || last.includes("?")) {
+        // Simple glob in the final path component
+        const lastSlash = abs.lastIndexOf("/");
+        const dir = lastSlash > 0 ? abs.slice(0, lastSlash) : "/";
+        const re = new RegExp(
+          "^" +
+            last
+              .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+              .replace(/\*/g, ".*")
+              .replace(/\?/g, ".") +
+            "$"
+        );
+        if (this.vfs.exists(dir) !== "dir") continue;
+        for (const entry of this.vfs.listDir(dir)) {
+          if (entry.name === "." || entry.name === "..") continue;
+          if (re.test(entry.name)) addPath(dir + "/" + entry.name);
+        }
+      } else {
+        addPath(abs);
+      }
+    }
+
+    this.vfs.writeFile(dest, zipSync(entries));
+    return names;
+  }
+
   /** Get the VFS changes for syncing back to the main thread. */
   getChanges(): VfsChanges {
     // Flush all open files first
@@ -529,10 +593,35 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     isdir: boolean;
     mtimeMs: number;
   }[] {
-    const idx = pattern.indexOf("**");
-    let baseDir = pattern.slice(0, idx);
+    // ** means recursive. Extract the base directory (everything before **)
+    // and the pattern from ** onward, which is matched against each entry's
+    // path relative to the base (so `base/**/*.mex*` only returns entries
+    // whose name matches `*.mex*`, at any depth including the base itself).
+    const norm = pattern.replace(/\\/g, "/");
+    const idx = norm.indexOf("**");
+    let baseDir = norm.slice(0, idx);
     if (baseDir.endsWith("/")) baseDir = baseDir.slice(0, -1);
     if (!baseDir) baseDir = ".";
+    const absBase = this.vfs.normalizePath(baseDir);
+    if (this.vfs.exists(absBase) !== "dir") return [];
+
+    // Build a regex from the suffix: `**/` matches zero or more directory
+    // levels, `**` matches anything, `*` / `?` match within one segment.
+    const suffix = norm.slice(idx);
+    const DIRS = "\u0000"; // placeholder for `**/` (zero or more dir levels)
+    const ANY = "\u0001"; // placeholder for a bare `**`
+    const re = new RegExp(
+      "^" +
+        suffix
+          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+          .replace(/\*\*\//g, DIRS)
+          .replace(/\*\*/g, ANY)
+          .replace(/\*/g, "[^/]*")
+          .replace(/\?/g, "[^/]")
+          .replace(new RegExp(DIRS, "g"), "(?:.*/)?")
+          .replace(new RegExp(ANY, "g"), ".*") +
+        "$"
+    );
 
     const results: {
       name: string;
@@ -542,17 +631,17 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
       mtimeMs: number;
     }[] = [];
 
-    const walkDir = (dir: string) => {
-      const entries = this.vfs.listDir(dir);
-      results.push(...entries);
-      for (const entry of entries) {
+    const walkDir = (dir: string, rel: string) => {
+      const relPrefix = rel ? rel + "/" : "";
+      for (const entry of this.vfs.listDir(dir)) {
+        if (re.test(relPrefix + entry.name)) results.push(entry);
         if (entry.isdir && entry.name !== "." && entry.name !== "..") {
-          walkDir(entry.folder + "/" + entry.name);
+          walkDir(entry.folder + "/" + entry.name, relPrefix + entry.name);
         }
       }
     };
 
-    walkDir(this.vfs.normalizePath(baseDir));
+    walkDir(absBase, "");
     return results;
   }
 }
