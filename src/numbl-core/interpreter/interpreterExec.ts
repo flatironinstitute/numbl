@@ -1048,6 +1048,16 @@ export function evalMember(
     }
   }
   const base = this.evalExpr(expr.base);
+  // Field access on a non-scalar struct array yields a comma-separated
+  // list — represented as a JS array, like c{:} — so {s.f}, [s.f], and
+  // f(s.f) expand per element. (Class-instance arrays keep their
+  // materialized-horzcat behavior in rt.getMember.)
+  const baseRv = ensureRuntimeValue(base);
+  if (isRuntimeStructArray(baseRv) && baseRv.elements.length !== 1) {
+    return baseRv.elements.map(el =>
+      ensureRuntimeValue(this.rt.getMember(el, expr.name))
+    );
+  }
   return this.rt.getMember(base, expr.name);
 }
 
@@ -1352,12 +1362,33 @@ export function evalCellLiteral(
     }
     return RTV.cell(elements, [1, elements.length]);
   }
-  const numRows = expr.rows.length;
-  const numCols = expr.rows[0].length;
+  // Multi-row: evaluate each row, expanding comma-separated lists (JS
+  // arrays, e.g. c{:} or structArray.field), then require rectangularity.
+  const rowValues: RuntimeValue[][] = expr.rows.map(row => {
+    const vals: RuntimeValue[] = [];
+    for (const e of row) {
+      const v = this.evalExpr(e);
+      if (Array.isArray(v)) {
+        for (const elem of v) vals.push(ensureRuntimeValue(elem));
+      } else {
+        vals.push(ensureRuntimeValue(v));
+      }
+    }
+    return vals;
+  });
+  const numRows = rowValues.length;
+  const numCols = rowValues[0].length;
+  for (const rv of rowValues) {
+    if (rv.length !== numCols) {
+      throw new RuntimeError(
+        "Cell array rows must have the same number of columns"
+      );
+    }
+  }
   const elements: RuntimeValue[] = [];
   for (let c = 0; c < numCols; c++) {
     for (let r = 0; r < numRows; r++) {
-      elements.push(ensureRuntimeValue(this.evalExpr(expr.rows[r][c])));
+      elements.push(rowValues[r][c]);
     }
   }
   return RTV.cell(elements, [numRows, numCols]);
