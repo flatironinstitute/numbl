@@ -6,8 +6,9 @@
  *   - spec set: d i u f e E g G x X o s c %
  *   - flags  - + 0 # space; precision `.N`; width digits; `*` consumes
  *     the next numeric arg as a width
- *   - escapes \n \t \\ interpreted AT FORMAT TIME (matching the numbl
- *     lexer, which preserves backslash bytes verbatim)
+ *   - escapes \n \t \r \a \b \f \v \0 \\ interpreted AT FORMAT TIME
+ *     (matching the numbl lexer, which preserves backslash bytes
+ *     verbatim)
  *   - numeric tensors flatten column-major into the scalar stream;
  *     format string cycles through the args until the stream is
  *     exhausted (with a "no arg consumed this pass" guard against
@@ -316,13 +317,19 @@ static long mtoc2__num_to_str(char *buf, size_t cap, double x) {
   return n;
 }
 
-/* Emit one `\` escape sequence — numbl interprets only \n, \t, \\
- * at format time; any other `\x` passes through verbatim. */
+/* Emit one `\` escape sequence — numbl interprets \n, \t, \r, \a, \b,
+ * \f, \v, \0, \\ at format time; any other `\x` passes through verbatim. */
 static long mtoc2__emit_escape(mtoc2__writer_fn writer, void *ctx,
                                 char next) {
   switch (next) {
     case 'n': writer(ctx, "\n", 1); return 1;
     case 't': writer(ctx, "\t", 1); return 1;
+    case 'r': writer(ctx, "\r", 1); return 1;
+    case 'a': writer(ctx, "\a", 1); return 1;
+    case 'b': writer(ctx, "\b", 1); return 1;
+    case 'f': writer(ctx, "\f", 1); return 1;
+    case 'v': writer(ctx, "\v", 1); return 1;
+    case '0': writer(ctx, "\0", 1); return 1;
     case '\\': writer(ctx, "\\", 1); return 1;
     default: {
       char buf[2] = { '\\', next };

@@ -6,7 +6,7 @@
 // Spec set: d i u f e E g G x X o s c %
 // Flags: - + 0 # space. Precision `.N`. Width digits. `*` consumes the
 // next numeric arg as a width.
-// Escapes interpreted AT FORMAT TIME: \n \t \\.
+// Escapes interpreted AT FORMAT TIME: \n \t \r \a \b \f \v \0 \\.
 // Numeric tensors flatten column-major into the scalar stream; the
 // format string cycles through args until consumed (with a "no arg
 // consumed this pass" guard against infinite output).
@@ -267,6 +267,24 @@ export function mtoc2_sprintf_format(fmt, args) {
             break;
           case "t":
             result += "\t";
+            break;
+          case "r":
+            result += "\r";
+            break;
+          case "a":
+            result += "\x07";
+            break;
+          case "b":
+            result += "\b";
+            break;
+          case "f":
+            result += "\f";
+            break;
+          case "v":
+            result += "\v";
+            break;
+          case "0":
+            result += "\0";
             break;
           case "\\":
             result += "\\";
