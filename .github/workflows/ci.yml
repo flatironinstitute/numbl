@@ -80,6 +80,9 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Build browser package
+        run: npm run build:browser
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
