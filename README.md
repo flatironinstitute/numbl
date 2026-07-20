@@ -50,10 +50,6 @@ Full documentation is available at **[numbl.org/docs](https://numbl.org/docs)**,
 
 The [Numbl extension for VS Code](https://marketplace.visualstudio.com/items?itemName=jmagland.numbl) provides inline error diagnostics and a built-in figure viewer.
 
-## Embedding
-
-Numbl scripts can be embedded in HTML and Markdown pages. See the [numbl-embed-example](https://magland.github.io/numbl-embed-example/) for usage and a [live demo](https://magland.github.io/numbl-embed-example/example1).
-
 ## Authors
 
 Jeremy Magland and Dan Fortunato, Center for Computational Mathematics, Flatiron Institute.
