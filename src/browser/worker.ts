@@ -1,6 +1,7 @@
 /**
  * The NumblSession worker: owns the VFS, bootstraps mip, restores/persists
- * the /system directory, runs the main script once, and keeps the resulting
+ * the /system directory, optionally runs the main script, executes further
+ * code incrementally against the persistent workspace, and keeps the latest
  * uihtml session live so dispatched events re-enter the interpreter.
  *
  * This file is bundled standalone at build time and inlined into
@@ -8,11 +9,14 @@
  * bundler support for dependency workers.
  */
 import { executeCode } from "../numbl-core/executeCode.js";
-import type { UihtmlSession } from "../numbl-core/executeCode.js";
+import type { ExecResult, UihtmlSession } from "../numbl-core/executeCode.js";
+import type { RuntimeValue } from "../numbl-core/runtime/index.js";
+import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
 import type { PlotInstruction } from "../graphics/types.js";
+import { formatExecuteError } from "../workerErrorFormat.js";
 import { fetchMipCoreFiles, MIP_MARKER_PATH, MIP_SEARCH_PATH } from "./mip.js";
 import { SystemStore } from "./system-store.js";
 import type {
@@ -30,6 +34,18 @@ let session: UihtmlSession | null = null;
 const components: UihtmlComponent[] = [];
 // Files written before boot finishes are stashed and applied once the VFS exists.
 const pendingWrites: { path: string; content: string | Uint8Array }[] = [];
+
+// Boot options reused by `execute`.
+let mipEnabled = false;
+let optimization: "0" | "1" = "1";
+let maxIterations = 1e9;
+
+// Workspace state carried across `execute` calls (REPL semantics).
+let variableValues: Record<string, RuntimeValue> = {};
+let holdState = false;
+let persistentWorkspaceFiles: WorkspaceFile[] = [];
+let persistentSearchPaths: string[] | undefined;
+let implicitCwdPath: string | null | undefined;
 
 const enc = new TextEncoder();
 
@@ -54,12 +70,38 @@ function fileExists(fs: VirtualFileSystem, path: string): boolean {
 function trackUihtml(instructions: PlotInstruction[]) {
   for (const pi of instructions) {
     if (pi.type !== "uihtml") continue;
-    const comp = { compId: pi.id, dataJson: pi.data ?? "" };
+    const comp = { compId: pi.id, html: pi.html, dataJson: pi.data ?? "" };
     const existing = components.findIndex(c => c.compId === comp.compId);
     if (existing >= 0) components[existing] = comp;
     else components.push(comp);
-    post({ type: "uihtml", compId: comp.compId, dataJson: comp.dataJson });
+    post({
+      type: "uihtml",
+      compId: comp.compId,
+      html: comp.html,
+      dataJson: comp.dataJson,
+    });
   }
+}
+
+/** Carry workspace state forward after a successful executeCode run. */
+function adoptResultState(result: ExecResult) {
+  variableValues = result.variableValues;
+  holdState = result.holdState;
+  if (result.searchPaths) {
+    persistentSearchPaths = result.searchPaths;
+    persistentWorkspaceFiles = result.workspaceFiles ?? [];
+  }
+  if (result.implicitCwdPath !== undefined) {
+    implicitCwdPath = result.implicitCwdPath;
+  }
+}
+
+function executeSearchPaths(): string[] {
+  const paths = [...(persistentSearchPaths ?? [])];
+  if (mipEnabled && !paths.includes(MIP_SEARCH_PATH)) {
+    paths.push(MIP_SEARCH_PATH);
+  }
+  return paths;
 }
 
 async function persistSystemChanges() {
@@ -71,6 +113,9 @@ async function persistSystemChanges() {
 
 async function boot(msg: BootMessage) {
   vfs = new VirtualFileSystem();
+  mipEnabled = msg.mip;
+  optimization = msg.optimization;
+  maxIterations = msg.maxIterations;
 
   if (msg.persistSystem) {
     store = new SystemStore();
@@ -90,9 +135,15 @@ async function boot(msg: BootMessage) {
     vfs.writeFile(projectPath(w.path), toBytes(w.content));
   pendingWrites.length = 0;
 
-  const mainAbs = vfs.normalizePath(projectPath(msg.mainFile));
-  const lastSlash = mainAbs.lastIndexOf("/");
-  vfs.setCwd(lastSlash > 0 ? mainAbs.slice(0, lastSlash) : "/");
+  const mainAbs = msg.mainFile
+    ? vfs.normalizePath(projectPath(msg.mainFile))
+    : null;
+  if (mainAbs) {
+    const lastSlash = mainAbs.lastIndexOf("/");
+    vfs.setCwd(lastSlash > 0 ? mainAbs.slice(0, lastSlash) : "/");
+  } else {
+    vfs.setCwd("/project");
+  }
 
   // Only changes made from here on (e.g. packages mip installs) persist.
   vfs.clearChangeTracking();
@@ -102,38 +153,42 @@ async function boot(msg: BootMessage) {
     for (const f of await fetchMipCoreFiles()) vfs.writeFile(f.path, f.content);
   }
 
-  post({ type: "progress", message: "Running main script…" });
   const decoder = new TextDecoder("utf-8");
-  const workspaceFiles = msg.files
+  persistentWorkspaceFiles = msg.files
     .filter(f => f.path.endsWith(".m"))
     .map(f => ({
       name: f.path,
       source:
         typeof f.content === "string" ? f.content : decoder.decode(f.content),
     }));
-  const mainSource =
-    workspaceFiles.find(f => f.name === msg.mainFile)?.source ??
-    decoder.decode(vfs.readFile(mainAbs));
 
-  const result = executeCode(
-    mainSource,
-    {
-      onOutput: text => post({ type: "output", text }),
-      onDrawnow: instructions => trackUihtml(instructions),
-      displayResults: msg.displayResults,
-      maxIterations: msg.maxIterations,
-      optimization: msg.optimization,
-      fileIO: new BrowserFileIOAdapter(vfs),
-      system: new BrowserSystemAdapter(vfs),
-      onHtmlSourceEvent: (compId, name, dataJson) =>
-        post({ type: "htmlSourceEvent", compId, name, dataJson }),
-    },
-    workspaceFiles,
-    mainAbs,
-    msg.mip ? [MIP_SEARCH_PATH] : []
-  );
-  trackUihtml(result.plotInstructions);
-  session = result.uihtmlSession ?? null;
+  if (mainAbs && msg.mainFile) {
+    post({ type: "progress", message: "Running main script…" });
+    const mainSource =
+      persistentWorkspaceFiles.find(f => f.name === msg.mainFile)?.source ??
+      decoder.decode(vfs.readFile(mainAbs));
+
+    const result = executeCode(
+      mainSource,
+      {
+        onOutput: text => post({ type: "output", text }),
+        onDrawnow: instructions => trackUihtml(instructions),
+        displayResults: msg.displayResults,
+        maxIterations: msg.maxIterations,
+        optimization: msg.optimization,
+        fileIO: new BrowserFileIOAdapter(vfs),
+        system: new BrowserSystemAdapter(vfs),
+        onHtmlSourceEvent: (compId, name, dataJson) =>
+          post({ type: "htmlSourceEvent", compId, name, dataJson }),
+      },
+      persistentWorkspaceFiles,
+      mainAbs,
+      msg.mip ? [MIP_SEARCH_PATH] : []
+    );
+    trackUihtml(result.plotInstructions);
+    session = result.uihtmlSession ?? null;
+    adoptResultState(result);
+  }
 
   await persistSystemChanges();
   post({
@@ -141,6 +196,74 @@ async function boot(msg: BootMessage) {
     hasUihtmlSession: session !== null,
     components: [...components],
   });
+}
+
+function execute(id: number, code: string) {
+  if (!vfs) {
+    post({
+      type: "executeResult",
+      id,
+      result: {
+        ok: false,
+        output: "",
+        plotInstructions: [],
+        error: "session not booted",
+      },
+    });
+    return;
+  }
+
+  // A new execution supersedes any armed uihtml session.
+  if (session) {
+    session.dispose();
+    session = null;
+  }
+
+  try {
+    const result = executeCode(
+      code,
+      {
+        onOutput: text => post({ type: "output", text }),
+        onDrawnow: instructions => trackUihtml(instructions),
+        displayResults: true,
+        maxIterations,
+        optimization,
+        initialVariableValues: variableValues,
+        initialHoldState: holdState,
+        fileIO: new BrowserFileIOAdapter(vfs),
+        system: new BrowserSystemAdapter(vfs),
+        onHtmlSourceEvent: (compId, name, dataJson) =>
+          post({ type: "htmlSourceEvent", compId, name, dataJson }),
+        implicitCwdPath,
+      },
+      persistentWorkspaceFiles,
+      "repl",
+      executeSearchPaths()
+    );
+    trackUihtml(result.plotInstructions);
+    session = result.uihtmlSession ?? null;
+    adoptResultState(result);
+    post({
+      type: "executeResult",
+      id,
+      result: {
+        ok: true,
+        output: result.output.join(""),
+        plotInstructions: result.plotInstructions,
+      },
+    });
+  } catch (error: unknown) {
+    // On error the workspace state is left unchanged.
+    const { message } = formatExecuteError(error, code);
+    post({
+      type: "executeResult",
+      id,
+      result: { ok: false, output: "", plotInstructions: [], error: message },
+    });
+  }
+
+  void persistSystemChanges();
+  void store?.markActivity();
 }
 
 self.onmessage = (e: MessageEvent<ToWorker>) => {
@@ -177,6 +300,11 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
         message: err instanceof Error ? err.message : String(err),
       });
     }
+    return;
+  }
+
+  if (msg.type === "execute") {
+    execute(msg.id, msg.code);
     return;
   }
 

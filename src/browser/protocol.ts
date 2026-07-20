@@ -1,5 +1,7 @@
 /** Messages between the NumblSession host and its worker. */
 
+import type { PlotInstruction } from "../graphics/types.js";
+
 export interface BootFile {
   path: string;
   content: string | Uint8Array;
@@ -8,7 +10,9 @@ export interface BootFile {
 export interface BootMessage {
   type: "boot";
   files: BootFile[];
-  mainFile: string;
+  /** Script to run at boot. When omitted, the session boots idle and code is
+   *  run incrementally via `execute`. */
+  mainFile?: string;
   mip: boolean;
   persistSystem: boolean;
   systemInactivityMs: number;
@@ -21,6 +25,7 @@ export type ToWorker =
   | BootMessage
   | { type: "writeFile"; path: string; content: string | Uint8Array }
   | { type: "readFile"; id: number; path: string }
+  | { type: "execute"; id: number; code: string }
   | {
       type: "dispatch";
       id: number;
@@ -31,13 +36,26 @@ export type ToWorker =
 
 export interface UihtmlComponent {
   compId: string;
+  /** The component's HTML markup (render with buildUihtmlSrcDoc). */
+  html: string;
+  /** The component's Data, JSON-encoded. */
   dataJson: string;
+}
+
+export interface ExecuteResult {
+  ok: boolean;
+  /** Concatenated console output (also streamed live via onOutput). */
+  output: string;
+  /** Every plot instruction the execution produced, uihtml included. */
+  plotInstructions: PlotInstruction[];
+  /** Formatted error message when `ok` is false. */
+  error?: string;
 }
 
 export type FromWorker =
   | { type: "progress"; message: string }
   | { type: "output"; text: string }
-  | { type: "uihtml"; compId: string; dataJson: string }
+  | { type: "uihtml"; compId: string; html: string; dataJson: string }
   | {
       type: "ready";
       hasUihtmlSession: boolean;
@@ -45,6 +63,7 @@ export type FromWorker =
     }
   | { type: "bootError"; message: string }
   | { type: "htmlSourceEvent"; compId: string; name: string; dataJson: string }
+  | { type: "executeResult"; id: number; result: ExecuteResult }
   | { type: "dispatchResult"; id: number; ok: boolean; message?: string }
   | {
       type: "readFileResult";

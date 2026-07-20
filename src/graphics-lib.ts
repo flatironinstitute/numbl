@@ -23,6 +23,8 @@ export type {
 
 export type * from "./graphics/types.js";
 
+export { restoreNaNs } from "./graphics/restoreNaNs.js";
+
 export {
   exportFigureHdf5,
   downloadFigureHdf5,

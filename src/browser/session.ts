@@ -6,16 +6,18 @@
 import workerCode from "./generated/worker-code.txt";
 import type {
   BootFile,
+  ExecuteResult,
   FromWorker,
   ToWorker,
   UihtmlComponent,
 } from "./protocol.js";
 
 export interface NumblSessionOptions {
-  /** Project files. Relative paths land under /project/. */
-  files: BootFile[];
-  /** The script to run, as one of the paths in `files`. */
-  mainFile: string;
+  /** Project files. Relative paths land under /project/. Default none. */
+  files?: BootFile[];
+  /** The script to run at boot, as one of the paths in `files`. When omitted
+   *  the session boots idle; run code incrementally with `execute`. */
+  mainFile?: string;
   /**
    * Bootstrap the mip package manager (fetched from its GitHub release)
    * so the script can `mip load --install <pkg>`. Default true.
@@ -38,8 +40,8 @@ export interface NumblSessionOptions {
   onOutput?: (text: string) => void;
   /** Boot progress (package downloads, engine start). */
   onProgress?: (message: string) => void;
-  /** A uihtml component was created/updated (its Data JSON-encoded). */
-  onUihtml?: (compId: string, dataJson: string) => void;
+  /** A uihtml component was created/updated (Data JSON-encoded + markup). */
+  onUihtml?: (compId: string, dataJson: string, html: string) => void;
   /** Script -> host events (MATLAB `sendEventToHTMLSource`). */
   onHtmlSourceEvent?: (compId: string, name: string, dataJson: string) => void;
 }
@@ -49,6 +51,14 @@ export interface NumblSession {
   readonly uihtmlComponents: readonly UihtmlComponent[];
   /** True if the run left a live uihtml session (events can be dispatched). */
   readonly hasUihtmlSession: boolean;
+  /**
+   * Execute code against the session's persistent workspace (REPL semantics:
+   * variables persist across calls, expression results are auto-displayed).
+   * Resolves with the run's output and plot instructions; a numbl error
+   * resolves with `ok: false` and a formatted `error` (the promise rejects
+   * only on session-level failures). Calls run sequentially in the worker.
+   */
+  execute(code: string): Promise<ExecuteResult>;
   /** Write a file into the session VFS (visible to later dispatched events). */
   writeFile(path: string, content: string | Uint8Array): void;
   /**
@@ -81,6 +91,11 @@ class NumblSessionImpl implements NumblSession {
     number,
     { resolve: (content: Uint8Array) => void; reject: (err: Error) => void }
   >();
+  private nextExecuteId = 1;
+  private pendingExecutes = new Map<
+    number,
+    { resolve: (result: ExecuteResult) => void; reject: (err: Error) => void }
+  >();
   private readyWaiter: {
     resolve: () => void;
     reject: (err: Error) => void;
@@ -105,7 +120,7 @@ class NumblSessionImpl implements NumblSession {
     const o = this.options;
     this.post({
       type: "boot",
-      files: o.files,
+      files: o.files ?? [],
       mainFile: o.mainFile,
       mip: o.mip ?? true,
       persistSystem: o.persistSystem ?? true,
@@ -116,6 +131,15 @@ class NumblSessionImpl implements NumblSession {
     });
     return new Promise<void>((resolve, reject) => {
       this.readyWaiter = { resolve, reject };
+    });
+  }
+
+  execute(code: string): Promise<ExecuteResult> {
+    this.ensureUsable();
+    const id = this.nextExecuteId++;
+    this.post({ type: "execute", id, code });
+    return new Promise<ExecuteResult>((resolve, reject) => {
+      this.pendingExecutes.set(id, { resolve, reject });
     });
   }
 
@@ -169,6 +193,8 @@ class NumblSessionImpl implements NumblSession {
     this.pendingDispatches.clear();
     for (const waiter of this.pendingReads.values()) waiter.reject(err);
     this.pendingReads.clear();
+    for (const waiter of this.pendingExecutes.values()) waiter.reject(err);
+    this.pendingExecutes.clear();
   }
 
   private handleMessage(msg: FromWorker) {
@@ -180,13 +206,17 @@ class NumblSessionImpl implements NumblSession {
         this.options.onOutput?.(msg.text);
         break;
       case "uihtml": {
-        const comp = { compId: msg.compId, dataJson: msg.dataJson };
+        const comp = {
+          compId: msg.compId,
+          html: msg.html,
+          dataJson: msg.dataJson,
+        };
         const i = this.uihtmlComponents.findIndex(
           c => c.compId === comp.compId
         );
         if (i >= 0) this.uihtmlComponents[i] = comp;
         else this.uihtmlComponents.push(comp);
-        this.options.onUihtml?.(msg.compId, msg.dataJson);
+        this.options.onUihtml?.(msg.compId, msg.dataJson, msg.html);
         break;
       }
       case "ready": {
@@ -206,6 +236,12 @@ class NumblSessionImpl implements NumblSession {
       case "htmlSourceEvent":
         this.options.onHtmlSourceEvent?.(msg.compId, msg.name, msg.dataJson);
         break;
+      case "executeResult": {
+        const waiter = this.pendingExecutes.get(msg.id);
+        this.pendingExecutes.delete(msg.id);
+        waiter?.resolve(msg.result);
+        break;
+      }
       case "dispatchResult": {
         const waiter = this.pendingDispatches.get(msg.id);
         this.pendingDispatches.delete(msg.id);
@@ -228,9 +264,10 @@ class NumblSessionImpl implements NumblSession {
 
 /**
  * Boot a numbl session in a dedicated worker: restore the persisted /system
- * directory, bootstrap mip, run `mainFile`, and keep the uihtml session live.
- * Resolves once the main script has finished (including any
- * `mip load --install` downloads it performs).
+ * directory, bootstrap mip, run `mainFile` when given, and keep the uihtml
+ * session live. Resolves once boot (and the main script, if any) has
+ * finished, including any `mip load --install` downloads it performs.
+ * Without a `mainFile` the session boots idle — run code with `execute`.
  */
 export async function createNumblSession(
   options: NumblSessionOptions

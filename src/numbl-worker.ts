@@ -26,13 +26,7 @@
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
-import { SemanticError } from "./numbl-core/lowering/errors.js";
-import {
-  offsetToColumn,
-  RuntimeError,
-  CancellationError,
-} from "./numbl-core/runtime/index.js";
-import { SyntaxError } from "./numbl-core/parser/index.js";
+import { CancellationError } from "./numbl-core/runtime/index.js";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "./numbl-core/workspace/index.js";
 import { diagnoseErrors } from "./numbl-core/diagnostics";
@@ -40,6 +34,7 @@ import { VirtualFileSystem } from "./vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "./vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "./vfs/BrowserSystemAdapter.js";
 import { workerOnInput } from "./syncInputChannel.js";
+import { formatExecuteError } from "./workerErrorFormat.js";
 import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
 import { ensureWasmLapackBridge } from "./numbl-core/native/wasm-lapack-browser.js";
 import { IdbWasmCache } from "./utils/wasmByteCache.js";
@@ -92,59 +87,6 @@ function onHtmlSourceEvent(
   dataJson: string
 ): void {
   self.postMessage({ type: "html_source_event", compId, name, dataJson });
-}
-
-// ── Snippet helpers (used by REPL error formatting) ─────────────────────
-
-function extractSnippetByLine(
-  source: string,
-  lineNumber: number,
-  contextLines = 2,
-  column?: number
-): string | null {
-  if (lineNumber < 1) return null;
-  const lines = source.split("\n");
-  if (lineNumber > lines.length) return null;
-
-  const startLine = Math.max(1, lineNumber - contextLines);
-  const endLine = Math.min(lines.length, lineNumber + contextLines);
-
-  const gutterWidth = 6;
-  const result: string[] = [];
-  for (let i = startLine; i <= endLine; i++) {
-    const num = i.toString().padStart(4, " ");
-    const marker = i === lineNumber ? ">" : " ";
-    result.push(`${marker}${num} | ${lines[i - 1]}`);
-    if (i === lineNumber && column && column >= 1) {
-      result.push(" ".repeat(gutterWidth) + " ".repeat(column - 1) + "^");
-    }
-  }
-  return result.join("\n");
-}
-
-function formatError(
-  message: string,
-  errorType: "syntax" | "semantic" | "runtime" | "unknown",
-  line: number | null,
-  snippet: string | null
-): string {
-  const parts: string[] = [];
-  const errorKind =
-    errorType === "syntax"
-      ? "Syntax error"
-      : errorType === "semantic"
-        ? "Semantic error"
-        : errorType === "runtime"
-          ? "Runtime error"
-          : "Error";
-  const loc = line !== null ? `at line ${line}` : null;
-  parts.push(loc ? `${errorKind} ${loc}:` : `${errorKind}:`);
-  parts.push(`  ${message}`);
-  if (snippet) {
-    parts.push("");
-    parts.push(snippet);
-  }
-  return parts.join("\n");
 }
 
 // ── Script run helpers ──────────────────────────────────────────────────
@@ -605,93 +547,12 @@ self.onmessage = (e: MessageEvent) => {
   } catch (error: unknown) {
     // On error, variableValues remains unchanged
     const errVfsChanges = adapter.getChanges();
-
-    if (error instanceof CancellationError) {
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: "Execution cancelled",
-        vfsChanges: errVfsChanges,
-      });
-      return;
-    }
-
-    if (error instanceof RuntimeError) {
-      const snippet =
-        error.line !== null
-          ? extractSnippetByLine(code, error.line, 2, error.column ?? undefined)
-          : null;
-      const errorMsg = formatError(
-        error.message,
-        "runtime",
-        error.line,
-        snippet
-      );
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: errorMsg,
-        vfsChanges: errVfsChanges,
-      });
-    } else if (error instanceof SyntaxError) {
-      const col = error.column ?? offsetToColumn(code, error.position);
-      const snippet =
-        error.line !== null
-          ? extractSnippetByLine(code, error.line, 2, col)
-          : null;
-      const errorMsg = formatError(
-        error.message,
-        "syntax",
-        error.line,
-        snippet
-      );
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: errorMsg,
-        vfsChanges: errVfsChanges,
-      });
-    } else if (error instanceof SemanticError && error.span !== null) {
-      const snippet =
-        error.line !== null
-          ? extractSnippetByLine(code, error.line, 2, error.column)
-          : null;
-      const errorMsg = formatError(
-        error.message,
-        "semantic",
-        error.line,
-        snippet
-      );
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: errorMsg,
-        vfsChanges: errVfsChanges,
-      });
-    } else if (error instanceof SemanticError) {
-      const errorMsg = formatError(error.message, "semantic", null, null);
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: errorMsg,
-        vfsChanges: errVfsChanges,
-      });
-    } else if (error instanceof Error) {
-      const errorMsg = formatError(error.message, "unknown", null, null);
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: errorMsg,
-        vfsChanges: errVfsChanges,
-      });
-    } else {
-      const errorMsg = formatError(String(error), "unknown", null, null);
-      self.postMessage({
-        type: "result",
-        success: false,
-        error: errorMsg,
-        vfsChanges: errVfsChanges,
-      });
-    }
+    const { message } = formatExecuteError(error, code);
+    self.postMessage({
+      type: "result",
+      success: false,
+      error: message,
+      vfsChanges: errVfsChanges,
+    });
   }
 };
