@@ -39,6 +39,11 @@ const pendingWrites: { path: string; content: string | Uint8Array }[] = [];
 let mipEnabled = false;
 let optimization: "0" | "1" = "1";
 let maxIterations = 1e9;
+// Shared cancellation flag from the host (undefined without cross-origin
+// isolation). Passed to every executeCode call so the host's interrupt() can
+// stop a runaway run cooperatively; the interpreter polls it and throws
+// CancellationError.
+let cancelSAB: SharedArrayBuffer | undefined;
 
 // Workspace state carried across `execute` calls (REPL semantics).
 let variableValues: Record<string, RuntimeValue> = {};
@@ -116,6 +121,7 @@ async function boot(msg: BootMessage) {
   mipEnabled = msg.mip;
   optimization = msg.optimization;
   maxIterations = msg.maxIterations;
+  cancelSAB = msg.cancelSAB;
 
   if (msg.persistSystem) {
     store = new SystemStore();
@@ -180,6 +186,7 @@ async function boot(msg: BootMessage) {
         system: new BrowserSystemAdapter(vfs),
         onHtmlSourceEvent: (compId, name, dataJson) =>
           post({ type: "htmlSourceEvent", compId, name, dataJson }),
+        cancelSAB,
       },
       persistentWorkspaceFiles,
       mainAbs,
@@ -235,6 +242,7 @@ function execute(id: number, code: string) {
         onHtmlSourceEvent: (compId, name, dataJson) =>
           post({ type: "htmlSourceEvent", compId, name, dataJson }),
         implicitCwdPath,
+        cancelSAB,
       },
       persistentWorkspaceFiles,
       "repl",
@@ -253,12 +261,19 @@ function execute(id: number, code: string) {
       },
     });
   } catch (error: unknown) {
-    // On error the workspace state is left unchanged.
-    const { message } = formatExecuteError(error, code);
+    // On error (or interrupt) the workspace state is left unchanged, so
+    // variables from before the run survive the abort.
+    const { message, cancelled } = formatExecuteError(error, code);
     post({
       type: "executeResult",
       id,
-      result: { ok: false, output: "", plotInstructions: [], error: message },
+      result: {
+        ok: false,
+        output: "",
+        plotInstructions: [],
+        error: message,
+        aborted: cancelled,
+      },
     });
   }
 

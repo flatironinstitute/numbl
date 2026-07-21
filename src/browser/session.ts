@@ -71,6 +71,20 @@ export interface NumblSession {
    * the callback returns; rejects if it errors (the session stays usable).
    */
   dispatchHtmlEvent(compId: string, name: string, data: unknown): Promise<void>;
+  /**
+   * Cooperatively interrupt the currently running `execute` (or boot script):
+   * sets a shared cancel flag the worker polls at loop iterations and function
+   * calls, so it throws and the pending `execute` resolves with
+   * `aborted: true`. The worker and the persistent workspace survive — only
+   * the running command is abandoned. No-op when `canInterrupt` is false.
+   */
+  interrupt(): void;
+  /**
+   * Whether `interrupt()` can actually stop a run. True only when the page is
+   * cross-origin isolated (SharedArrayBuffer available). When false, a runaway
+   * run can only be stopped by disposing the session.
+   */
+  readonly canInterrupt: boolean;
   /** Terminate the worker. The session is unusable afterwards. */
   dispose(): void;
 }
@@ -100,6 +114,20 @@ class NumblSessionImpl implements NumblSession {
     resolve: () => void;
     reject: (err: Error) => void;
   } | null = null;
+  // Cooperative-cancellation flag shared with the worker. Int32[0] != 0 means
+  // "cancel the running code". Only available when the page is cross-origin
+  // isolated (SharedArrayBuffer defined); otherwise null and interrupt() is a
+  // no-op. The same buffer serves every run — the host clears it before each
+  // execute and sets it in interrupt().
+  private readonly cancelBuffer =
+    typeof SharedArrayBuffer !== "undefined" ? new SharedArrayBuffer(4) : null;
+  private readonly cancelFlag = this.cancelBuffer
+    ? new Int32Array(this.cancelBuffer)
+    : null;
+
+  get canInterrupt(): boolean {
+    return this.cancelFlag !== null;
+  }
 
   constructor(private options: NumblSessionOptions) {
     const blob = new Blob([workerCode], { type: "text/javascript" });
@@ -128,6 +156,7 @@ class NumblSessionImpl implements NumblSession {
       optimization: o.optimization ?? "1",
       maxIterations: o.maxIterations ?? 1e9,
       displayResults: o.displayResults ?? false,
+      cancelSAB: this.cancelBuffer ?? undefined,
     });
     return new Promise<void>((resolve, reject) => {
       this.readyWaiter = { resolve, reject };
@@ -136,11 +165,23 @@ class NumblSessionImpl implements NumblSession {
 
   execute(code: string): Promise<ExecuteResult> {
     this.ensureUsable();
+    // Clear any leftover cancel signal so a prior interrupt() can't abort this
+    // fresh run (executes are sequential, so this only ever clears a stale
+    // flag from a previous, already-settled run).
+    if (this.cancelFlag) {
+      Atomics.store(this.cancelFlag, 0, 0);
+    }
     const id = this.nextExecuteId++;
     this.post({ type: "execute", id, code });
     return new Promise<ExecuteResult>((resolve, reject) => {
       this.pendingExecutes.set(id, { resolve, reject });
     });
+  }
+
+  interrupt(): void {
+    if (this.cancelFlag) {
+      Atomics.store(this.cancelFlag, 0, 1);
+    }
   }
 
   writeFile(path: string, content: string | Uint8Array): void {

@@ -17,7 +17,10 @@ import type { SystemAdapter } from "./systemAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { Runtime } from "./runtime/runtime.js";
 import { RTV } from "./runtime/constructors.js";
-import { RuntimeError } from "../numbl-core/runtime/index.js";
+import {
+  RuntimeError,
+  CancellationError,
+} from "../numbl-core/runtime/index.js";
 import {
   loadJsUserFunctions,
   isNumblJsFile,
@@ -865,6 +868,12 @@ export function executeCode(
 
     return result;
   } catch (e) {
+    // Cooperative cancellation is not an error: propagate it unchanged so
+    // callers can detect it (wrapping it in a RuntimeError below would hide
+    // it behind a bogus "Runtime error at line N").
+    if (e instanceof CancellationError) {
+      throw e;
+    }
     // Attach collected JIT code to the error so callers (e.g. --dump-js /
     // --dump-c) can inspect it.
     const generatedJS = buildDump(jsSections, "JS");

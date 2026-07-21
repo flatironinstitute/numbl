@@ -19,6 +19,13 @@ export interface BootMessage {
   optimization: "0" | "1";
   maxIterations: number;
   displayResults: boolean;
+  /**
+   * Shared cancellation flag (Int32[0] != 0 ⇒ cancel the running code). The
+   * worker keeps this reference and passes it to every executeCode call, so
+   * the host can interrupt a runaway run cooperatively. Only present when the
+   * page is cross-origin isolated (SharedArrayBuffer available).
+   */
+  cancelSAB?: SharedArrayBuffer;
 }
 
 export type ToWorker =
@@ -50,6 +57,12 @@ export interface ExecuteResult {
   plotInstructions: PlotInstruction[];
   /** Formatted error message when `ok` is false. */
   error?: string;
+  /**
+   * True when the run ended because it was interrupted via
+   * `NumblSession.interrupt()` (rather than finishing or erroring). The
+   * workspace is left at its pre-run state, so variables survive the abort.
+   */
+  aborted?: boolean;
 }
 
 export type FromWorker =

@@ -20,7 +20,7 @@ import {
 } from "../runtime/types.js";
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
-import { RuntimeError } from "../runtime/error.js";
+import { RuntimeError, CancellationError } from "../runtime/error.js";
 import { getLastJitDecline } from "../jitDeclineDiagnostics.js";
 import { binop, uplus } from "../runtime/runtimeOperators.js";
 import { enumEqualityOp } from "../runtime/runtimeEnum.js";
@@ -324,6 +324,11 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
         const signal = this.execBlockStmts(stmt.tryBody);
         if (signal) return signal;
       } catch (e) {
+        // A cancellation request (Ctrl-C / interrupt) is not catchable by
+        // user try/catch — it must unwind the whole run, like MATLAB.
+        if (e instanceof CancellationError) {
+          throw e;
+        }
         if (stmt.catchVar) {
           this.env.set(stmt.catchVar, this.rt.wrapError(e));
         }
