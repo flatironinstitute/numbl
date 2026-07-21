@@ -17,6 +17,7 @@ import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
 import type { PlotInstruction } from "../graphics/types.js";
 import { formatExecuteError } from "../workerErrorFormat.js";
+import { workerOnInput } from "../syncInputChannel.js";
 import { fetchMipCoreFiles, MIP_MARKER_PATH, MIP_SEARCH_PATH } from "./mip.js";
 import { SystemStore } from "./system-store.js";
 import type {
@@ -44,6 +45,10 @@ let maxIterations = 1e9;
 // stop a runaway run cooperatively; the interpreter polls it and throws
 // CancellationError.
 let cancelSAB: SharedArrayBuffer | undefined;
+// Shared channel for synchronous input() (undefined without cross-origin
+// isolation). workerOnInput blocks on it after posting a `request-input`
+// message, so the host can feed the reply back via provideInput().
+let inputSAB: SharedArrayBuffer | undefined;
 
 // Workspace state carried across `execute` calls (REPL semantics).
 let variableValues: Record<string, RuntimeValue> = {};
@@ -122,6 +127,7 @@ async function boot(msg: BootMessage) {
   optimization = msg.optimization;
   maxIterations = msg.maxIterations;
   cancelSAB = msg.cancelSAB;
+  inputSAB = msg.inputSAB;
 
   if (msg.persistSystem) {
     store = new SystemStore();
@@ -187,6 +193,7 @@ async function boot(msg: BootMessage) {
         onHtmlSourceEvent: (compId, name, dataJson) =>
           post({ type: "htmlSourceEvent", compId, name, dataJson }),
         cancelSAB,
+        onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
       persistentWorkspaceFiles,
       mainAbs,
@@ -243,6 +250,7 @@ function execute(id: number, code: string) {
           post({ type: "htmlSourceEvent", compId, name, dataJson }),
         implicitCwdPath,
         cancelSAB,
+        onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
       persistentWorkspaceFiles,
       "repl",

@@ -567,8 +567,16 @@ export class Lowerer {
       }
     }
     const expr = this.lowerExpr(s.expr);
-    // If the expression is a folded literal with no side effect, drop it.
-    if (expr.kind === "NumLit" || expr.kind === "ImagLit") return null;
+    // A folded literal has no side effect, so a *suppressed* one (`42;`) is
+    // dead code we can drop. But an *unsuppressed* bare literal (`42`) still
+    // sets `ans` and echoes "ans = 42" — keep it: as a non-Void bare ExprStmt
+    // it makes `assertNoNonVoidBareExprStmts` decline the spec, so the
+    // interpreter performs the `ans` echo (the same path `2+3` / `pi` take).
+    // Dropping it here silently loses that output and the `ans` update — which
+    // also breaks `eval('42')` and numeric `input()` of a bare number.
+    if ((expr.kind === "NumLit" || expr.kind === "ImagLit") && s.suppressed) {
+      return null;
+    }
     // Void-typed call (zero-output user function, fprintf-style
     // side-effecting builtin): the top-level expression itself can't
     // be hoisted (Void has no value), but its OWN-producing

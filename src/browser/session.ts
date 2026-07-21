@@ -4,6 +4,7 @@
  * any bundler — or none — can consume this without worker-loading support.
  */
 import workerCode from "./generated/worker-code.txt";
+import { createInputSAB, mainThreadRespond } from "../syncInputChannel.js";
 import type {
   BootFile,
   ExecuteResult,
@@ -40,6 +41,13 @@ export interface NumblSessionOptions {
   onOutput?: (text: string) => void;
   /** Boot progress (package downloads, engine start). */
   onProgress?: (message: string) => void;
+  /**
+   * Called when running code reaches `input()` and needs a line of input.
+   * The execution is blocked until the host calls `provideInput(text)` with
+   * the user's response. Requires cross-origin isolation (see `canInput`);
+   * without it, `input()` errors instead of calling this.
+   */
+  onInputRequest?: (prompt: string) => void;
   /** A uihtml component was created/updated (Data JSON-encoded + markup). */
   onUihtml?: (compId: string, dataJson: string, html: string) => void;
   /** Script -> host events (MATLAB `sendEventToHTMLSource`). */
@@ -85,6 +93,19 @@ export interface NumblSession {
    * run can only be stopped by disposing the session.
    */
   readonly canInterrupt: boolean;
+  /**
+   * Supply the line of input that a pending `onInputRequest` is waiting for.
+   * Unblocks the `input()` call in the running code, which resumes with this
+   * text. Call exactly once per `onInputRequest`. No-op when `canInput` is
+   * false or nothing is waiting.
+   */
+  provideInput(text: string): void;
+  /**
+   * Whether `input()` (stdin) works — true only when the page is cross-origin
+   * isolated. When false, `input()` in executed code throws instead of
+   * calling `onInputRequest`.
+   */
+  readonly canInput: boolean;
   /** Terminate the worker. The session is unusable afterwards. */
   dispose(): void;
 }
@@ -124,9 +145,16 @@ class NumblSessionImpl implements NumblSession {
   private readonly cancelFlag = this.cancelBuffer
     ? new Int32Array(this.cancelBuffer)
     : null;
+  // Shared channel for synchronous input() (null without cross-origin
+  // isolation). The worker blocks on it; provideInput() writes the reply.
+  private readonly inputBuffer = createInputSAB();
 
   get canInterrupt(): boolean {
     return this.cancelFlag !== null;
+  }
+
+  get canInput(): boolean {
+    return this.inputBuffer !== null;
   }
 
   constructor(private options: NumblSessionOptions) {
@@ -157,6 +185,7 @@ class NumblSessionImpl implements NumblSession {
       maxIterations: o.maxIterations ?? 1e9,
       displayResults: o.displayResults ?? false,
       cancelSAB: this.cancelBuffer ?? undefined,
+      inputSAB: this.inputBuffer ?? undefined,
     });
     return new Promise<void>((resolve, reject) => {
       this.readyWaiter = { resolve, reject };
@@ -181,6 +210,12 @@ class NumblSessionImpl implements NumblSession {
   interrupt(): void {
     if (this.cancelFlag) {
       Atomics.store(this.cancelFlag, 0, 1);
+    }
+  }
+
+  provideInput(text: string): void {
+    if (this.inputBuffer) {
+      mainThreadRespond(this.inputBuffer, text);
     }
   }
 
@@ -274,6 +309,9 @@ class NumblSessionImpl implements NumblSession {
         rw?.reject(new Error(msg.message));
         break;
       }
+      case "request-input":
+        this.options.onInputRequest?.(msg.prompt);
+        break;
       case "htmlSourceEvent":
         this.options.onHtmlSourceEvent?.(msg.compId, msg.name, msg.dataJson);
         break;
