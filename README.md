@@ -52,7 +52,7 @@ The [Numbl extension for VS Code](https://marketplace.visualstudio.com/items?ite
 
 ## Authors
 
-Jeremy Magland and Dan Fortunato, Center for Computational Mathematics, Flatiron Institute.
+[Jeremy Magland](https://jeremy.magland.org) and Dan Fortunato, Center for Computational Mathematics, Flatiron Institute.
 
 ## License
 
