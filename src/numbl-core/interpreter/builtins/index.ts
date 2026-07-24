@@ -34,6 +34,7 @@ import "./special-math.js";
 import "./geometry.js";
 import "./misc.js";
 import "./dictionary.js";
+import "./hash.js";
 import "./help-text.js";
 
 export {

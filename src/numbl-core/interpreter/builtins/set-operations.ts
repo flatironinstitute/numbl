@@ -1652,3 +1652,47 @@ function uniquetolElements(
   if (nargout === 2) return [C, ia];
   return [C, ia, icTensor];
 }
+
+// ismembc2(a, s): undocumented MATLAB helper — for each element of a, the
+// index of its last occurrence in the sorted array s (0 if absent).
+defineBuiltin({
+  name: "ismembc2",
+  cases: [
+    {
+      match: argTypes => {
+        if (argTypes.length !== 2) return null;
+        return [{ kind: "tensor", isComplex: false }];
+      },
+      apply: args => {
+        const toFlat = (v: RuntimeValue): ArrayLike<number> => {
+          if (isRuntimeNumber(v)) return [v];
+          if (isRuntimeLogical(v)) return [v ? 1 : 0];
+          if (isRuntimeTensor(v)) return v.data;
+          throw new RuntimeError("ismembc2: arguments must be numeric");
+        };
+        const a = toFlat(args[0]);
+        const s = toFlat(args[1]);
+        const out = allocFloat64Array(a.length);
+        for (let i = 0; i < a.length; i++) {
+          const x = a[i];
+          // binary search for the last index j with s[j] <= x
+          let lo = 0;
+          let hi = s.length - 1;
+          let res = 0;
+          while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            if (s[mid] <= x) {
+              if (s[mid] === x) res = mid + 1;
+              lo = mid + 1;
+            } else {
+              hi = mid - 1;
+            }
+          }
+          out[i] = res;
+        }
+        const shape = isRuntimeTensor(args[0]) ? [...args[0].shape] : [1, 1];
+        return RTV.tensor(out, shape);
+      },
+    },
+  ],
+});

@@ -171,6 +171,7 @@ classdef Map < handle
         end
 
         function result = keys(obj)
+            % MATLAB's containers.Map returns keys in sorted order
             if obj.Count == 0
                 result = {};
                 return;
@@ -186,6 +187,8 @@ classdef Map < handle
                 for i = 1:numel(k)
                     result{i} = char(k{i});
                 end
+                % MATLAB returns a sorted 1xN row cell
+                result = reshape(sort(result), 1, []);
             else
                 % Numeric keys: parse back from string
                 if iscell(k)
@@ -196,17 +199,27 @@ classdef Map < handle
                 else
                     result = {str2double(k)};
                 end
+                result = reshape(num2cell(sort(cell2mat(result))), 1, []);
             end
         end
 
         function result = values(obj)
+            % Ordered to correspond with keys() (i.e. key-sorted)
             if obj.Count == 0
                 result = {};
                 return;
             end
-            v = values(obj.data_);
+            sortedKeys = keys(obj);
+            v = cell(1, obj.Count);
+            for i = 1:obj.Count
+                v{i} = obj.data_(makeKey(sortedKeys{i}, obj.KeyType));
+            end
             if strcmp(obj.ValueType, 'any')
-                result = v;
+                % Values are stored cell-wrapped (see subsasgn); unwrap each
+                result = cell(1, obj.Count);
+                for i = 1:obj.Count
+                    result{i} = v{i}{1};
+                end
             else
                 if iscell(v)
                     result = v;

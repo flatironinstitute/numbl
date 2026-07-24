@@ -787,8 +787,10 @@ defineBuiltin({
   cases: [
     {
       match: argTypes => {
-        // struct() or struct(field, value, ...)
+        // struct() or struct([]) or struct(field, value, ...)
         if (argTypes.length === 0) return [{ kind: "struct", fields: {} }];
+        if (argTypes.length === 1 && argTypes[0].kind === "tensor")
+          return [{ kind: "struct", fields: {} }];
         if (argTypes.length % 2 !== 0) return null;
         // Verify field names are strings/chars
         for (let i = 0; i < argTypes.length; i += 2) {
@@ -799,6 +801,14 @@ defineBuiltin({
       },
       apply: args => {
         if (args.length === 0) return RTV.struct(new Map());
+        // struct([]) → 0x0 empty struct array with no fields
+        if (args.length === 1 && isRuntimeTensor(args[0])) {
+          if (args[0].data.length !== 0)
+            throw new RuntimeError(
+              "struct: single non-empty numeric argument is not supported"
+            );
+          return RTV.structArray([], []);
+        }
         if (args.length % 2 !== 0)
           throw new RuntimeError("struct: requires field-value pairs");
         const fieldNames: string[] = [];

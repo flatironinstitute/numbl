@@ -1063,7 +1063,7 @@ export function evalMember(
       ensureRuntimeValue(this.rt.getMember(el, expr.name))
     );
   }
-  return this.rt.getMember(base, expr.name);
+  return this.rt.getMember(base, expr.name, nargout);
 }
 
 export function tryExtractDottedName(
@@ -1084,7 +1084,16 @@ export function evalIndex(
   this: Interpreter,
   expr: Extract<Expr, { type: "Index" }>
 ): unknown {
-  const base = this.evalExpr(expr.base);
+  let base = this.evalExpr(expr.base);
+  // A brace/member chain can produce a comma-list (array); indexing is
+  // only valid when it holds exactly one value
+  if (Array.isArray(base)) {
+    if (base.length === 1) base = base[0];
+    else
+      throw new RuntimeError(
+        `Expression produced ${base.length} values where one was expected`
+      );
+  }
   const indices = this.evalIndicesWithEnd(base, expr.indices);
   // Inside class methods, bypass overloaded subsref for same-class instances
   let skipSubsref: boolean | string = false;

@@ -54,7 +54,7 @@ registerIBuiltin({
   resolve: argTypes => {
     if (argTypes.length !== 1) return null;
     return {
-      outputTypes: [{ kind: "tensor", isComplex: false }],
+      outputTypes: [{ kind: "unknown" }],
       apply: args => {
         const C = args[0];
         if (!isRuntimeCell(C))
@@ -62,6 +62,43 @@ registerIBuiltin({
 
         const cellRows = C.shape[0];
         const cellCols = C.shape.length >= 2 ? C.shape[1] : 1;
+
+        // Char contents: block-concatenate into a char array
+        if (C.data.length > 0 && C.data.some(v => isRuntimeChar(v))) {
+          const asCharBlock = (v: RuntimeValue) => {
+            if (!isRuntimeChar(v))
+              throw new RuntimeError(
+                "cell2mat: cannot mix char and non-char cell contents"
+              );
+            const rows = v.shape ? v.shape[0] : v.value.length === 0 ? 0 : 1;
+            const cols = v.shape ? v.shape[1] : v.value.length;
+            const rowStrings: string[] = [];
+            for (let r = 0; r < rows; r++)
+              rowStrings.push(v.value.slice(r * cols, (r + 1) * cols));
+            return { rows, cols, rowStrings };
+          };
+          const outRows: string[] = [];
+          for (let ci = 0; ci < cellRows; ci++) {
+            const blockHeight = asCharBlock(C.data[ci]).rows;
+            const lines: string[] = new Array(blockHeight).fill("");
+            for (let cj = 0; cj < cellCols; cj++) {
+              const b = asCharBlock(C.data[cj * cellRows + ci]);
+              if (b.rows !== blockHeight)
+                throw new RuntimeError(
+                  "cell2mat: inconsistent cell content sizes"
+                );
+              for (let r = 0; r < blockHeight; r++) lines[r] += b.rowStrings[r];
+            }
+            outRows.push(...lines);
+          }
+          const width = outRows.length > 0 ? outRows[0].length : 0;
+          if (outRows.some(r => r.length !== width))
+            throw new RuntimeError("cell2mat: inconsistent cell content sizes");
+          if (outRows.length <= 1) return RTV.char(outRows[0] ?? "");
+          const rc = RTV.char(outRows.join(""));
+          rc.shape = [outRows.length, width];
+          return rc;
+        }
 
         const asTensor = (v: RuntimeValue) => {
           if (isRuntimeNumber(v))

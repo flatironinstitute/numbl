@@ -53,7 +53,11 @@ classdef inputParser < handle
         end
 
         function addParamValue(obj, name, default, validator)
-            addParameter(obj, name, default, validator);
+            if nargin < 4
+                addParameter(obj, name, default);
+            else
+                addParameter(obj, name, default, validator);
+            end
         end
 
         function parse(obj, varargin)
@@ -74,7 +78,9 @@ classdef inputParser < handle
             end
 
             % Parse optional positional arguments
-            % An optional arg is consumed only if it is NOT a string matching a parameter name
+            % An optional arg is consumed only if it is NOT a string matching a
+            % parameter or optional name (MATLAB also accepts optionals as
+            % name-value pairs, so their names terminate positional parsing)
             for i = 1:numel(obj.optional_)
                 entry = obj.optional_{i};
                 if pos <= nargs
@@ -87,6 +93,15 @@ classdef inputParser < handle
                             if inputParser.namesMatch(paramName, pentry.name, obj.CaseSensitive)
                                 isParamName = true;
                                 break;
+                            end
+                        end
+                        if ~isParamName
+                            for k = 1:numel(obj.optional_)
+                                oentry = obj.optional_{k};
+                                if inputParser.namesMatch(paramName, oentry.name, obj.CaseSensitive)
+                                    isParamName = true;
+                                    break;
+                                end
                             end
                         end
                     end
@@ -126,8 +141,11 @@ classdef inputParser < handle
                 name = char(name);
 
                 found = false;
-                for i = 1:numel(obj.params_)
-                    entry = obj.params_{i};
+                % Optionals may also be passed by name (undocumented MATLAB
+                % behavior relied on by real-world code)
+                candidates = [obj.params_, obj.optional_];
+                for i = 1:numel(candidates)
+                    entry = candidates{i};
                     if inputParser.namesMatch(name, entry.name, obj.CaseSensitive)
                         s.(entry.name) = val;
                         % Remove from usingDefaults

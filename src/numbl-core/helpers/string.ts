@@ -125,7 +125,7 @@ export function sprintfFormat(fmt: string, args: RuntimeValue[]): string {
         // Parse format specifier. A '*' for width or precision consumes the
         // next arg as an integer and substitutes its digits into the spec.
         let spec = "%";
-        while (i < fmt.length && !"dfigeEsoxXuc%".includes(fmt[i])) {
+        while (i < fmt.length && !"dfigGeEsoxXuc%".includes(fmt[i])) {
           if (fmt[i] === "*") {
             if (argIdx >= flatArgs.length) {
               outOfArgs = true;
@@ -222,7 +222,8 @@ export function sprintfFormat(fmt: string, args: RuntimeValue[]): string {
               // C %g: use %e if exponent < -4 or >= precision, else %f
               let gStr: string;
               if (gVal === 0) {
-                gStr = "0";
+                // MATLAB (like C) preserves the sign of negative zero
+                gStr = Object.is(gVal, -0) ? "-0" : "0";
               } else {
                 const exp = Math.floor(Math.log10(Math.abs(gVal)));
                 if (exp < -4 || exp >= gPrec) {

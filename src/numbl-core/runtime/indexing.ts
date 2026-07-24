@@ -1416,6 +1416,7 @@ export function indexIntoRTValue(
         if (isRuntimeLogical(idx)) return idx === true;
         if (isRuntimeTensor(idx))
           return idx.data.length === 1 && Math.round(idx.data[0]) === 1;
+        if (isColonIndex(idx)) return true; // s(:) on 1x1 → itself
         return false;
       });
     if (allOnes) return base;
@@ -1427,6 +1428,11 @@ export function indexIntoRTValue(
   if (isRuntimeStructArray(base)) {
     if (indices.length === 1) {
       const idx = indices[0];
+      // s(:) → the whole struct array (as a column, but struct arrays
+      // are stored flat so the element list is unchanged)
+      if (isColonIndex(idx)) {
+        return RTV.structArray(base.fieldNames, [...base.elements]);
+      }
       if (isRuntimeNumber(idx)) {
         const i = Math.round(idx) - 1;
         if (i < 0 || i >= base.elements.length)

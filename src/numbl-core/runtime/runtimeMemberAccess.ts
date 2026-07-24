@@ -19,7 +19,12 @@ import { horzcat } from "./tensor-construction.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 
-export function getMember(rt: Runtime, base: unknown, name: string): unknown {
+export function getMember(
+  rt: Runtime,
+  base: unknown,
+  name: string,
+  nargout = 1
+): unknown {
   const mv = ensureRuntimeValue(base);
   // Check for property getter method (get.PropertyName)
   if (isRuntimeClassInstance(mv)) {
@@ -38,10 +43,11 @@ export function getMember(rt: Runtime, base: unknown, name: string): unknown {
     // Check stored field
     const field = mv.fields.get(name);
     if (field !== undefined) return field;
-    // Fall back to calling as a no-argument method (walks inheritance chain)
+    // Fall back to calling as a no-argument method (walks inheritance chain);
+    // nargout carries through so `[a,b] = obj.method;` binds all outputs
     const method = rt.cachedResolveClassMethod(mv.className, name);
     if (method) {
-      return method(1, base);
+      return method(nargout, base);
     }
     // Runtime fallback: if the class has a subsref method and we're not
     // already inside one, route through subsref (handles cases where

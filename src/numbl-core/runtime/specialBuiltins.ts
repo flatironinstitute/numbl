@@ -24,6 +24,7 @@ import {
   isRuntimeLogical,
   isRuntimeDictionary,
   isRuntimeStruct,
+  isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
   type RuntimeTensor,
@@ -198,9 +199,53 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     },
   });
 
+  // Per-id warning enable state ('all' covers ids without their own entry)
+  const warningStateOff = new Set<string>();
   registerSpecial("warning", (nargout, args) => {
     if (args.length === 0) return nargout >= 1 ? RTV.num(0) : undefined;
     const margs = args.map(a => ensureRuntimeValue(a));
+    const isOff = (id: string) =>
+      warningStateOff.has(id) || warningStateOff.has("all");
+    const stateStruct = (id: string) =>
+      RTV.struct(
+        new Map<string, RuntimeValue>([
+          ["identifier", RTV.char(id)],
+          ["state", RTV.char(isOff(id) ? "off" : "on")],
+        ])
+      );
+    const setState = (mode: string, id: string) => {
+      if (mode === "off") warningStateOff.add(id);
+      else {
+        warningStateOff.delete(id);
+        if (id === "all") warningStateOff.clear();
+      }
+    };
+    // warning(s) — restore state from a struct previously returned by
+    // warning('on'/'off'/'query', id)
+    const restoreFrom = (s: RuntimeValue): boolean => {
+      if (!isRuntimeStruct(s)) return false;
+      const idField = s.fields.get("identifier");
+      const stField = s.fields.get("state");
+      if (idField === undefined || stField === undefined) return false;
+      setState(toString(stField), toString(idField));
+      return true;
+    };
+    if (margs.length === 1 && isRuntimeStruct(margs[0])) {
+      if (restoreFrom(margs[0])) return nargout >= 1 ? RTV.num(0) : undefined;
+    }
+    if (margs.length === 1 && isRuntimeStructArray(margs[0])) {
+      for (const el of margs[0].elements) restoreFrom(el);
+      return nargout >= 1 ? RTV.num(0) : undefined;
+    }
+    // warning('on'/'off') — global toggle
+    if (margs.length === 1 && isRuntimeChar(margs[0])) {
+      const mode = toString(margs[0]);
+      if (mode === "on" || mode === "off") {
+        const prev = stateStruct("all");
+        setState(mode, "all");
+        return nargout >= 1 ? prev : undefined;
+      }
+    }
     // warning('on'/'off'/'query', id) — state query/set form
     if (
       margs.length === 2 &&
@@ -208,23 +253,14 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       isRuntimeChar(margs[1])
     ) {
       const mode = toString(margs[0]);
+      const id = toString(margs[1]);
       if (mode === "on" || mode === "off") {
-        if (nargout === 0) return undefined;
-        return RTV.struct(
-          new Map<string, RuntimeValue>([
-            ["state", RTV.char("on")],
-            ["identifier", margs[1]],
-          ])
-        );
+        const prev = stateStruct(id);
+        setState(mode, id);
+        return nargout >= 1 ? prev : undefined;
       }
       if (mode === "query") {
-        // numbl does not track per-id enable state, so report 'on'.
-        return RTV.struct(
-          new Map<string, RuntimeValue>([
-            ["state", RTV.char("on")],
-            ["identifier", margs[1]],
-          ])
-        );
+        return stateStruct(id);
       }
     }
     // Detect warning(msgID, msg, ...) form — msgID contains a ':'
@@ -235,6 +271,10 @@ export function registerSpecialBuiltins(rt: Runtime): void {
       toString(margs[0]).includes(":")
     ) {
       fmtIdx = 1;
+    }
+    // Suppress output for disabled warning ids
+    if (isOff(fmtIdx === 1 ? toString(margs[0]) : "all")) {
+      return nargout >= 1 ? RTV.num(0) : undefined;
     }
     const fmt = toString(margs[fmtIdx]);
     const fmtArgs: RuntimeValue[] = [];

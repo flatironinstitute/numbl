@@ -1802,8 +1802,8 @@ export class Runtime {
 
   // ── Member access ───────────────────────────────────────────────────
 
-  public getMember(base: unknown, name: string): unknown {
-    return _getMember(this, base, name);
+  public getMember(base: unknown, name: string, nargout = 1): unknown {
+    return _getMember(this, base, name, nargout);
   }
 
   public getMemberDynamic(base: unknown, nameExpr: unknown): RuntimeValue {

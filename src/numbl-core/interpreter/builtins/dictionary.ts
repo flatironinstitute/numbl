@@ -184,7 +184,8 @@ export function dictRemove(
 /** Lookup values by keys. Returns single value or tensor/cell array. */
 export function dictLookup(
   d: RuntimeDictionary,
-  keysArg: RuntimeValue
+  keysArg: RuntimeValue,
+  fallbackValue?: RuntimeValue
 ): RuntimeValue {
   const keys = expandKeys(keysArg);
   const results: RuntimeValue[] = [];
@@ -192,7 +193,13 @@ export function dictLookup(
     const coerced = d.keyType ? coerceKey(k, d.keyType) : k;
     const h = hashKey(coerced);
     const entry = d.entries.get(h);
-    if (!entry) throw new RuntimeError("Key not found in dictionary");
+    if (!entry) {
+      if (fallbackValue !== undefined) {
+        results.push(fallbackValue);
+        continue;
+      }
+      throw new RuntimeError("Key not found in dictionary");
+    }
     results.push(entry.value);
   }
   if (results.length === 1) return results[0];
@@ -473,15 +480,32 @@ registerIBuiltin({
   },
 });
 
-// lookup(d, keys)
+// lookup(d, keys) or lookup(d, keys, 'FallbackValue', fb)
 registerIBuiltin({
   name: "lookup",
   resolve: (argTypes): IBuiltinResolution | null => {
-    if (argTypes.length !== 2 || argTypes[0].kind !== "dictionary") return null;
+    if (
+      (argTypes.length !== 2 && argTypes.length !== 4) ||
+      argTypes[0].kind !== "dictionary"
+    )
+      return null;
     return {
       outputTypes: [{ kind: "unknown" }],
       apply: args => {
         const d = args[0] as RuntimeDictionary;
+        if (args.length === 4) {
+          const optName = isRuntimeChar(args[2])
+            ? args[2].value
+            : isRuntimeString(args[2])
+              ? args[2]
+              : "";
+          if (String(optName).toLowerCase() !== "fallbackvalue") {
+            throw new RuntimeError(
+              `Unrecognized option '${String(optName)}' for lookup`
+            );
+          }
+          return dictLookup(d, args[1], args[3]);
+        }
         return dictLookup(d, args[1]);
       },
     };

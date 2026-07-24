@@ -783,6 +783,55 @@ defineBuiltin({
       },
       apply: args => {
         const xArr = toFloatArray(args[0]);
+
+        // interp1(x, y, method, 'pp') → piecewise-polynomial struct
+        // (same layout as mkpp; evaluated with ppval)
+        if (
+          args.length === 4 &&
+          isRuntimeChar(args[2]) &&
+          isRuntimeChar(args[3]) &&
+          args[3].value.toLowerCase() === "pp"
+        ) {
+          const method = args[2].value.toLowerCase();
+          if (method !== "linear")
+            throw new RuntimeError(
+              `interp1: 'pp' output is only supported for 'linear' method (got '${method}')`
+            );
+          const yArr = toFloatArray(args[1]);
+          const n = xArr.length;
+          if (yArr.length !== n)
+            throw new RuntimeError(
+              "interp1: x and y must have the same length"
+            );
+          if (n < 2)
+            throw new RuntimeError(
+              "interp1: at least 2 sample points are required"
+            );
+          for (let i = 0; i + 1 < n; i++) {
+            if (!(xArr[i] < xArr[i + 1]))
+              throw new RuntimeError(
+                "interp1: sample points must be unique and sorted for 'pp' output"
+              );
+          }
+          const L = n - 1;
+          const breaksOut = allocFloat64Array(n);
+          for (let i = 0; i < n; i++) breaksOut[i] = xArr[i];
+          // coefs row i (column-major storage): [slope_i, y_i]
+          const coefs = allocFloat64Array(L * 2);
+          for (let i = 0; i < L; i++) {
+            coefs[i] = (yArr[i + 1] - yArr[i]) / (xArr[i + 1] - xArr[i]);
+            coefs[L + i] = yArr[i];
+          }
+          const fields = new Map<string, RuntimeValue>();
+          fields.set("form", "pp");
+          fields.set("breaks", RTV.tensor(breaksOut, [1, n]));
+          fields.set("coefs", RTV.tensor(coefs, [L, 2]));
+          fields.set("pieces", L);
+          fields.set("order", 2);
+          fields.set("dim", 1);
+          return RTV.struct(fields);
+        }
+
         const xqArg = args[2];
         const nn = xArr.length;
 
@@ -819,6 +868,7 @@ defineBuiltin({
 
         let method = "linear";
         let doExtrap = false;
+        let fillValue = NaN;
         for (let i = 3; i < args.length; i++) {
           const a = args[i];
           if (isRuntimeChar(a)) {
@@ -829,12 +879,16 @@ defineBuiltin({
             const s = (a as string).toLowerCase();
             if (s === "extrap") doExtrap = true;
             else method = s;
+          } else if (isRuntimeNumber(a) || isRuntimeTensor(a)) {
+            // interp1(x, y, xq, method, fillValue): numeric extrapolation
+            // value used outside the sample range
+            fillValue = toNumber(a);
           }
         }
 
         const interpOne = (yArr: Float64Array, xq: number): number => {
           if (xq < xArr[0] || xq > xArr[nn - 1]) {
-            if (!doExtrap) return NaN;
+            if (!doExtrap) return fillValue;
             if (method === "linear") {
               if (xq < xArr[0]) {
                 const slope = (yArr[1] - yArr[0]) / (xArr[1] - xArr[0]);
@@ -1360,6 +1414,76 @@ function dimArgToVec(v: RuntimeValue): number[] {
     return out;
   }
   throw new RuntimeError("mkpp: dim must be a numeric scalar or vector");
+}
+
+// fnint (MATLAB Curve Fitting Toolbox) / ppint (Octave): antiderivative of a
+// pp form, with F(breaks(1)) = 0. Scalar-valued pp only (dim == 1).
+const ppIntApply = (fname: string) => (args: RuntimeValue[]) => {
+  const pp = args[0];
+  if (!isRuntimeStruct(pp))
+    throw new RuntimeError(`${fname}: argument must be a pp struct`);
+  const breaksRT = pp.fields.get("breaks");
+  const coefsRT = pp.fields.get("coefs");
+  const piecesRT = pp.fields.get("pieces");
+  const orderRT = pp.fields.get("order");
+  const dimRT = pp.fields.get("dim");
+  if (
+    breaksRT === undefined ||
+    coefsRT === undefined ||
+    piecesRT === undefined ||
+    orderRT === undefined
+  )
+    throw new RuntimeError(`${fname}: pp struct missing required fields`);
+  const breaks = toFloatArray(breaksRT);
+  const L = Math.round(toNumber(piecesRT));
+  const k = Math.round(toNumber(orderRT));
+  const dim = dimRT === undefined ? [1] : dimArgToVec(dimRT);
+  if (dim.reduce((a, b) => a * b, 1) !== 1)
+    throw new RuntimeError(`${fname}: only scalar-valued pp is supported`);
+  if (!isRuntimeTensor(coefsRT))
+    throw new RuntimeError(`${fname}: pp.coefs must be a matrix`);
+  const coefs = coefsRT.data; // column-major, L rows x k cols
+  // New coefs: L rows x (k+1) cols. Column c (< k) is old column c divided
+  // by its new power (k - c); column k holds the accumulated constants.
+  const out = allocFloat64Array(L * (k + 1));
+  for (let c = 0; c < k; c++) {
+    for (let i = 0; i < L; i++) out[c * L + i] = coefs[c * L + i] / (k - c);
+  }
+  let A = 0;
+  for (let i = 0; i < L; i++) {
+    out[k * L + i] = A;
+    const h = breaks[i + 1] - breaks[i];
+    // Evaluate the antiderivative piece at its right end (Horner over the
+    // new coefficients)
+    let v = out[0 * L + i];
+    for (let c = 1; c <= k; c++) v = v * h + out[c * L + i];
+    A = v;
+  }
+  const fields = new Map<string, RuntimeValue>();
+  fields.set("form", "pp");
+  const breaksOut = allocFloat64Array(breaks.length);
+  for (let i = 0; i < breaks.length; i++) breaksOut[i] = breaks[i];
+  fields.set("breaks", RTV.tensor(breaksOut, [1, breaks.length]));
+  fields.set("coefs", RTV.tensor(out, [L, k + 1]));
+  fields.set("pieces", L);
+  fields.set("order", k + 1);
+  fields.set("dim", 1);
+  return RTV.struct(fields);
+};
+
+for (const fname of ["fnint", "ppint"]) {
+  defineBuiltin({
+    name: fname,
+    cases: [
+      {
+        match: argTypes => {
+          if (argTypes.length !== 1) return null;
+          return [{ kind: "struct", fields: {} }];
+        },
+        apply: ppIntApply(fname),
+      },
+    ],
+  });
 }
 
 defineBuiltin({
