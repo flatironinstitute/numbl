@@ -5,31 +5,26 @@ import plotting from "./plotting.md?raw";
 import library from "./library.md?raw";
 import deploying from "./deploying.md?raw";
 import differences from "./differences.md?raw";
+import { docsManifest, type DocMeta } from "./manifest";
 
-export interface DocEntry {
-  slug: string;
-  title: string;
+export interface DocEntry extends DocMeta {
   content: string;
 }
 
-export const docs: DocEntry[] = [
-  {
-    slug: "getting-started",
-    title: "Getting Started",
-    content: gettingStarted,
-  },
-  { slug: "language", title: "Language Features", content: language },
-  { slug: "builtins", title: "Built-in Functions", content: builtins },
-  { slug: "plotting", title: "Plotting", content: plotting },
-  { slug: "library", title: "Library Usage", content: library },
-  {
-    slug: "deploying",
-    title: "Deploying Projects",
-    content: deploying,
-  },
-  {
-    slug: "differences",
-    title: "Differences from MATLAB",
-    content: differences,
-  },
-];
+const contentByFile: Record<string, string> = {
+  "getting-started.md": gettingStarted,
+  "language.md": language,
+  "builtins.md": builtins,
+  "plotting.md": plotting,
+  "library.md": library,
+  "deploying.md": deploying,
+  "differences.md": differences,
+};
+
+export const docs: DocEntry[] = docsManifest.map(meta => {
+  const content = contentByFile[meta.file];
+  if (content === undefined) {
+    throw new Error(`No raw import for doc file ${meta.file}`);
+  }
+  return { ...meta, content };
+});

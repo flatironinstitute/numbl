@@ -14,6 +14,7 @@ import ScienceIcon from "@mui/icons-material/Science";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { MarkdownView } from "../components/MarkdownView";
 import { docs } from "../docs/index.js";
+import { usePageMeta } from "../hooks/usePageMeta";
 
 const SIDEBAR_WIDTH = 220;
 
@@ -28,6 +29,12 @@ export function DocsPage() {
   const activeDoc = docs[activeIndex];
   const prevDoc = activeIndex > 0 ? docs[activeIndex - 1] : null;
   const nextDoc = activeIndex < docs.length - 1 ? docs[activeIndex + 1] : null;
+
+  usePageMeta({
+    title: slug ? `${activeDoc.title} — numbl` : "Documentation — numbl",
+    description: activeDoc.description,
+    path: slug ? `/docs/${activeDoc.slug}` : "/docs",
+  });
 
   useEffect(() => {
     window.scrollTo(0, 0);

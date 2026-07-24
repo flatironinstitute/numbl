@@ -34,6 +34,7 @@ import MenuBookIcon from "@mui/icons-material/MenuBook";
 import CodeIcon from "@mui/icons-material/Code";
 import ScienceIcon from "@mui/icons-material/Science";
 import { useNavigate } from "react-router-dom";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { CreateProjectDialog } from "../components/CreateProjectDialog";
 import {
   listProjects,
@@ -93,6 +94,13 @@ export function ProjectListPage() {
   const [newName, setNewName] = useState("");
   const [renameError, setRenameError] = useState("");
   const navigate = useNavigate();
+
+  usePageMeta({
+    title: "numbl — MATLAB-Compatible Numerical Computing in Your Browser",
+    description:
+      "Free, open-source numerical computing environment compatible with MATLAB syntax. 400+ built-in functions, 2-D and 3-D plotting, and a browser IDE with no installation — plus a Node.js CLI.",
+    path: "/",
+  });
 
   const builtinCount = useMemo(() => {
     const dummyNames = new Set(getDummyBuiltinNames());

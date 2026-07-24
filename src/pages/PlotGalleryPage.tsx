@@ -9,6 +9,7 @@ import {
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import { makeShareHash } from "../utils/shareUrl.js";
+import { usePageMeta } from "../hooks/usePageMeta";
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { PlotInstruction } from "../graphics/types.js";
 import {
@@ -206,6 +207,12 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
 }
 
 export function PlotGalleryPage() {
+  usePageMeta({
+    title: "Plot Gallery — numbl",
+    description:
+      "A gallery of example plots created with numbl, each with its source code: line plots, surfaces, images, and 3-D visualizations in the browser.",
+    path: "/gallery",
+  });
   return (
     <Box sx={{ maxWidth: 1200, mx: "auto", p: 3 }}>
       <Typography variant="h5" gutterBottom>
