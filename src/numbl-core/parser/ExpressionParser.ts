@@ -226,6 +226,17 @@ export class ExpressionParser extends ParserBase {
       ) {
         break;
       }
+      // Likewise a '{' separated by whitespace in matrix/cell context starts
+      // a new element (a cell literal) rather than indexing the preceding
+      // expression: [c {x}] is horzcat(c, {x}), whereas [c{x}] indexes c.
+      if (
+        this.peekToken() === Token.LBrace &&
+        this.inMatrixExpr &&
+        this.pos > 0 &&
+        !this.tokensAdjacent(this.pos - 1, this.pos)
+      ) {
+        break;
+      }
       if (this.consume(Token.LParen)) {
         const start = expr.span.start;
         const args: Expr[] = [];

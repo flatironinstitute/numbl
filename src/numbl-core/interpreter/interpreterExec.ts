@@ -1622,7 +1622,19 @@ export function evalLValueBase(
     }
     const indices = this.evalIndicesWithEnd(baseVal, base.indices);
     try {
-      return this.rt.indexCell(baseVal, indices);
+      const result = this.rt.indexCell(baseVal, indices);
+      // A single cell subscript (`c{i}`) yields a one-element comma-list.
+      // As an lvalue base (e.g. `c{i}.field = ...`) it must be the bare
+      // value, since the caller feeds it straight to ensureRuntimeValue /
+      // the member store-back — it can't accept an array. This mirrors the
+      // comma-list base unwrap in evalIndex. A literal index already returns
+      // the bare value; unwrapping aligns the tensor-index path (e.g. a
+      // find()-derived 1×1 index) with it.
+      if (Array.isArray(result)) {
+        if (result.length === 1) return result[0];
+        if (result.length === 0) return defaultVal;
+      }
+      return result;
     } catch {
       return defaultVal;
     }
