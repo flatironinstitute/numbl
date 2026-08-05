@@ -194,6 +194,32 @@ export function lowerMultiAssign(
     }
   }
 
+  // `.mtoc2.js` user functions opt in the same way: their loaded
+  // `Builtin` carries the identical `transfer(argTypes, nargout)`
+  // contract (lowerFuncCall already treats them interchangeably for
+  // single-output calls), and codegen resolves their `emit` through
+  // the workspace lookup. Route through the shared builder so
+  // `[a, b] = f(x, y)` works for workspace-defined builtins too.
+  if (target?.kind === "mtoc2UserFunction") {
+    const userBuiltin = this.workspace.getUserBuiltin(target.name);
+    if (!userBuiltin) {
+      throw new UnsupportedConstruct(
+        `internal: workspace resolved '${callName}' to a .mtoc2.js ` +
+          `function but no Builtin is loaded`,
+        s.span
+      );
+    }
+    return buildBuiltinMultiAssign.call(
+      this,
+      callName,
+      userBuiltin,
+      anfArgs,
+      argTypes,
+      argHoists,
+      s
+    );
+  }
+
   if (target?.kind !== "userFunction") {
     throw new UnsupportedConstruct(
       `multi-assign of '${callName}': only user-defined functions can ` +
