@@ -49,6 +49,14 @@ starter template (`examples/numbl-project-template/`) wire it to GitHub Pages.
 Markdown files render via the shared `MarkdownView` component (also used by the
 docs page), with a rendered/source toggle in the editor pane.
 
+The base the Action passes is the one `actions/configure-pages` reports rather
+than a guess from the repository name, so a site served anywhere other than
+`<owner>.github.io/<repo>/` (a custom domain, or a host such as a git vault
+that serves pages under its own path) is built for where it will actually
+live. Should the base be wrong regardless, `useStaticProjectFiles` retries
+`project.zip` relative to the document, so a mismatch costs one 404 rather
+than an unusable site.
+
 ## Environment differences from the CLI
 
 - No access to the native addon; LAPACK and FFT use the in-tree JS fallbacks.

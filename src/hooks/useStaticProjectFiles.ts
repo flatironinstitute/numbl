@@ -61,6 +61,50 @@ function getSiteBase(): string {
   return base.endsWith("/") ? base : base + "/";
 }
 
+/** Where to look for `project.zip`, in order.
+ *
+ *  The injected base is tried first: it is absolute, so it holds even on a
+ *  host that serves index.html for a path without a trailing slash, where a
+ *  relative URL would resolve one directory too high. It is wrong, however,
+ *  when the site is served somewhere the build did not know about: under a
+ *  custom domain at the root, in a directory moved by hand, or from a git
+ *  vault that serves pages at /<collection>/<repo>/pages/ rather than at
+ *  /<repo>/. The document-relative URL is right in those cases, so we try it
+ *  as a fallback instead of reporting the bundle as missing. */
+function projectZipUrls(): string[] {
+  const buildId = getBuildId();
+  const file =
+    "project.zip" + (buildId ? `?v=${encodeURIComponent(buildId)}` : "");
+  const primary = getSiteBase() + file;
+  const relative = "./" + file;
+  const absolute = (u: string) =>
+    typeof document !== "undefined" ? new URL(u, document.baseURI).href : u;
+  return absolute(primary) === absolute(relative)
+    ? [primary]
+    : [primary, relative];
+}
+
+/** Fetch the deployed bundle, trying each candidate location in turn. */
+async function fetchProjectZip(): Promise<Uint8Array> {
+  const urls = projectZipUrls();
+  let lastError: unknown;
+  for (let i = 0; i < urls.length; i++) {
+    try {
+      const resp = await fetch(urls[i]);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      return new Uint8Array(await resp.arrayBuffer());
+    } catch (e) {
+      lastError = e;
+      if (i + 1 < urls.length) {
+        console.warn(
+          `project bundle not at ${urls[i]} (${e instanceof Error ? e.message : e}); trying ${urls[i + 1]}`
+        );
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 type FilesAction =
   | { type: "SET_FILES"; files: WorkspaceFile[] }
   | { type: "ADD_FILE"; file: WorkspaceFile }
@@ -194,14 +238,7 @@ export function useStaticProjectFiles(): UseStaticProjectFilesResult {
     let cancelled = false;
     (async () => {
       try {
-        const buildId = getBuildId();
-        const zipUrl =
-          getSiteBase() +
-          "project.zip" +
-          (buildId ? `?v=${encodeURIComponent(buildId)}` : "");
-        const resp = await fetch(zipUrl);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const buf = new Uint8Array(await resp.arrayBuffer());
+        const buf = await fetchProjectZip();
         if (cancelled) return;
 
         const extracted = unzipToFiles(buf);

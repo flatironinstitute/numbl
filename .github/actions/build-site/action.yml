@@ -47,12 +47,23 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
+    # Runs before the build so the site can be built for the path it will
+    # actually be served from: base_path is /<repo> on a GitHub Pages project
+    # site, / under a custom domain, and something else again on a host that
+    # is not GitHub Pages. Guessing it from the repository name, which is what
+    # the fallback below does, is right only in the first case.
+    - name: Configure Pages
+      id: pages
+      if: ${{ inputs.upload-artifact == 'true' }}
+      uses: actions/configure-pages@v6
+
     - name: Build numbl site
       shell: bash
       env:
         REPO_NAME: ${{ github.event.repository.name }}
         OWNER: ${{ github.repository_owner }}
         IN_BASE: ${{ inputs.base }}
+        PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
         PROJECT_DIR: ${{ inputs.project-dir }}
         OUT_DIR: ${{ inputs.out-dir }}
         IN_TITLE: ${{ inputs.title }}
@@ -65,8 +76,13 @@ runs:
       run: |
         set -euo pipefail
 
-        # Resolve the deploy base path (e.g. /my-repo/) if not given explicitly.
+        # Resolve the deploy base path (e.g. /my-repo/) if not given
+        # explicitly: what configure-pages reported, else a guess from the
+        # repository name (the GitHub Pages project-site shape).
         BASE="$IN_BASE"
+        if [ -z "$BASE" ]; then
+          BASE="${PAGES_BASE_PATH:-}"
+        fi
         if [ -z "$BASE" ]; then
           repo_lc=$(printf '%s' "$REPO_NAME" | tr '[:upper:]' '[:lower:]')
           owner_lc=$(printf '%s' "$OWNER" | tr '[:upper:]' '[:lower:]')
@@ -119,10 +135,6 @@ runs:
             npx tsx src/cli.ts build-site "${args[@]}"
           )
         fi
-
-    - name: Configure Pages
-      if: ${{ inputs.upload-artifact == 'true' }}
-      uses: actions/configure-pages@v6
 
     - name: Upload Pages artifact
       if: ${{ inputs.upload-artifact == 'true' }}
