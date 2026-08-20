@@ -64,13 +64,28 @@ static inline double _Complex mtoc2_cpow(double _Complex a, double _Complex b) {
  *
  * `mtoc2_csign(z)` matches MATLAB: `z/|z|` for nonzero, exactly
  * `0 + 0i` for the zero scalar. */
-static inline double _Complex mtoc2_csqrt(double _Complex z) { return csqrt(z); }
+/* True when z is a NaN on the real axis. The JIT lifts a real argument whose
+ * sign it cannot prove onto these complex helpers, and MATLAB's sqrt(NaN) /
+ * log(NaN) are a real NaN — so a lifted NaN must come back as NaN + 0i, not
+ * 0 + NaN i. The lift is a compilation detail and must not be observable. */
+static inline int mtoc2_nan_on_real_axis(double _Complex z) {
+  return cimag(z) == 0.0 && isnan(creal(z));
+}
+static inline double _Complex mtoc2_csqrt(double _Complex z) {
+  if (mtoc2_nan_on_real_axis(z)) return mtoc2_cmake(creal(z), 0.0);
+  return csqrt(z);
+}
 static inline double _Complex mtoc2_cexp(double _Complex z) { return cexp(z); }
-static inline double _Complex mtoc2_clog(double _Complex z) { return clog(z); }
+static inline double _Complex mtoc2_clog(double _Complex z) {
+  if (mtoc2_nan_on_real_axis(z)) return mtoc2_cmake(creal(z), 0.0);
+  return clog(z);
+}
 static inline double _Complex mtoc2_clog2(double _Complex z) {
+  if (mtoc2_nan_on_real_axis(z)) return mtoc2_cmake(creal(z), 0.0);
   return clog(z) / log(2.0);
 }
 static inline double _Complex mtoc2_clog10(double _Complex z) {
+  if (mtoc2_nan_on_real_axis(z)) return mtoc2_cmake(creal(z), 0.0);
   return clog(z) / log(10.0);
 }
 static inline double _Complex mtoc2_csin(double _Complex z) { return csin(z); }

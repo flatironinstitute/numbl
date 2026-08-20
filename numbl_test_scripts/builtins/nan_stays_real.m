@@ -32,4 +32,33 @@ assert(v(4) == 0, 'array zero slot');
 w = sqrt([NaN NaN]);
 assert(isreal(w) && all(isnan(w)), 'all-NaN array stays real');
 
+% Under the JIT the same must hold. When the compiler cannot prove an
+% argument is non-negative it lifts the call onto the complex path, and a
+% NaN lifted that way used to come back as 0 + NaN*i — a different answer
+% from the interpreter for `real`, `isreal`, `jsonencode` and display.
+x = [4 NaN -4];
+re = zeros(1, 3);
+im = zeros(1, 3);
+for k = 1:3
+    %!numbl:assert_jit
+    y = sqrt(x(k) + 0);
+    re(k) = real(y);
+    im(k) = imag(y);
+end
+assert(re(1) == 2 && im(1) == 0, 'jit sqrt(4)');
+assert(isnan(re(2)) && im(2) == 0, 'jit sqrt(NaN) keeps NaN on the real lane');
+assert(re(3) == 0 && im(3) == 2, 'jit sqrt(-4)');
+
+lre = zeros(1, 2);
+lim = zeros(1, 2);
+xs = [exp(1) NaN];
+for k = 1:2
+    %!numbl:assert_jit
+    y = log(xs(k) + 0);
+    lre(k) = real(y);
+    lim(k) = imag(y);
+end
+assert(abs(lre(1) - 1) < 1e-15 && lim(1) == 0, 'jit log(e)');
+assert(isnan(lre(2)) && lim(2) == 0, 'jit log(NaN)');
+
 disp('SUCCESS')

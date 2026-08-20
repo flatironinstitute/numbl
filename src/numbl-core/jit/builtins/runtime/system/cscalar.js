@@ -83,6 +83,18 @@ export function mtoc2_cpow(a, b) {
   return cexp(mtoc2_cmul(b, clog(a)));
 }
 
+/** True when `z` is a NaN sitting on the real axis.
+ *
+ *  These helpers are reached both from genuinely complex arithmetic and from
+ *  the *lift* the JIT performs on a real argument whose sign it cannot prove
+ *  (`sqrt(x)`, `log(x)`). MATLAB's sqrt(NaN) and log(NaN) are a real NaN, so a
+ *  lifted NaN must come back as NaN + 0i and not, say, 0 + NaN i: the lift is
+ *  a compilation detail and must not change what `real`, `isreal`,
+ *  `jsonencode` or a printed value say. */
+function nanOnRealAxis(z) {
+  return z.im === 0 && Number.isNaN(z.re);
+}
+
 // Unary math.
 export function mtoc2_csqrt(z) {
   // Pure-real input: compute directly. Smith's formula below suffers
@@ -92,6 +104,7 @@ export function mtoc2_csqrt(z) {
   // 1e154. Mirror the interpreter's complexSqrt (math.ts) and C's libm
   // csqrt, both of which special-case the real axis.
   if (z.im === 0) {
+    if (Number.isNaN(z.re)) return { re: z.re, im: 0 };
     if (z.re >= 0) return { re: Math.sqrt(z.re), im: 0 };
     return { re: 0, im: Math.sqrt(-z.re) };
   }
@@ -106,14 +119,17 @@ export function mtoc2_cexp(z) {
   return cexp(z);
 }
 export function mtoc2_clog(z) {
+  if (nanOnRealAxis(z)) return { re: z.re, im: 0 };
   return clog(z);
 }
 export function mtoc2_clog2(z) {
+  if (nanOnRealAxis(z)) return { re: z.re, im: 0 };
   const l = clog(z);
   const lg2 = Math.log(2);
   return { re: l.re / lg2, im: l.im / lg2 };
 }
 export function mtoc2_clog10(z) {
+  if (nanOnRealAxis(z)) return { re: z.re, im: 0 };
   const l = clog(z);
   const lg10 = Math.log(10);
   return { re: l.re / lg10, im: l.im / lg10 };
