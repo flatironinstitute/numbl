@@ -27,8 +27,13 @@ defineBuiltin({
   cases: [
     {
       match: argTypes => (argTypes.length === 0 ? [{ kind: "number" }] : null),
-      apply: () => {
+      apply: (_args, nargout) => {
         ticTime = performance.now();
+        // Bare `tic;` starts the stopwatch and produces nothing: MATLAB does
+        // not set `ans`, and returning a value here would also stop the JIT
+        // from compiling any loop containing it (a bare non-void expression
+        // statement can't be modelled at the JIT boundary).
+        if (nargout === 0) return undefined as unknown as RuntimeValue;
         return RTV.num(ticTime / 1000);
       },
     },

@@ -109,43 +109,18 @@ export function lowerIndexSliceStore(
       }
     }
   }
-  // Auto-grow guard: a Scalar slot that writes past the base's current
-  // dim would auto-extend the tensor in numbl. mtoc2 emits code against
-  // the pre-write static shape and can't reallocate the buffer
-  // mid-spec, so any Scalar slot whose value cannot be statically
-  // proven to lie in [1, dim] must decline — otherwise the codegen
-  // would silently write past the buffer without updating the tensor's
-  // shape (see lege.pols's `pols(:, k+2) = ...` pattern in chunkie).
+  // A Scalar slot that writes past the base's current dim would auto-extend
+  // the tensor in MATLAB, which the JIT cannot model: it emits against the
+  // pre-write static shape and cannot reallocate the buffer mid-spec. That is
+  // handled at runtime rather than statically — both backends route a store's
+  // Scalar slot through the grow-aware bounds check (`mtoc2_idx_axis_grow`),
+  // which bails to the interpreter (full MATLAB grow semantics) on an index
+  // past the extent and still aborts on a genuine sub-1 index.
   //
-  // "Provable safety" requires both endpoints to be statically known:
-  // the slot value via `t.exact`, and the dim via `dim.kind === "exact"`.
-  // Anything else (runtime slot value, unknown dim) declines so the
-  // interpreter handles the loop with full MATLAB grow semantics.
-  if (!isSingleSlot && r.baseTy.kind === "Numeric") {
-    for (let i = 0; i < slots.length; i++) {
-      const slot = slots[i];
-      if (slot.kind !== "Scalar") continue;
-      const dim = r.baseTy.dims[i];
-      const t = slot.expr.ty;
-      const dimKnown = dim !== undefined && dim.kind === "exact";
-      const valKnown = t.kind === "Numeric" && typeof t.exact === "number";
-      const provablyInBounds =
-        dimKnown &&
-        valKnown &&
-        Math.round((t as { exact: number }).exact) >= 1 &&
-        Math.round((t as { exact: number }).exact) <=
-          (dim as { value: number }).value;
-      if (!provablyInBounds) {
-        throw new UnsupportedConstruct(
-          `indexed write to '${displayName}' at axis ${i + 1}: cannot ` +
-            `statically prove the index stays within the tensor's bounds; ` +
-            `would auto-grow / OOB in MATLAB, but auto-grow is not modeled ` +
-            `in the JIT`,
-          slot.span
-        );
-      }
-    }
-  }
+  // Requiring a static proof here instead, as this pass used to, meant that
+  // `A(k, :) = row` inside `for k = 1:n` was never compiled: `k` is widened
+  // on loop entry, so its value is never statically known, and the whole loop
+  // — with everything nested inside it — fell back to the interpreter.
 
   const rawRhs = this.lowerExpr(exprAst);
   if (!isNumeric(rawRhs.ty)) {

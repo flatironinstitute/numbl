@@ -9,13 +9,15 @@
  * that the synthetic body is a single-element `[loopStmt]` instead of
  * a whole script body.
  *
- * Loop-depth gate: only fires when `interp.loopDepth === 0`. A loop
- * dispatched while the interpreter is iterating an enclosing
- * loop-body would pay per-iter propose/cache overhead with no
- * speedup, because the *outer* loop is the natural JIT entry point
- * (it captures the inner loop's body and runs it natively in mtoc2-
- * emitted code). When the outer loop fires its own JIT, the inner
- * loop never reaches the interpreter dispatcher at all.
+ * Loop-depth gate: fires when `interp.loopDepth === 0`, or when every
+ * enclosing loop has been declined by the JIT. A loop dispatched while the
+ * interpreter iterates an enclosing loop-body would pay per-iter
+ * propose/cache overhead with no speedup, because the *outer* loop is the
+ * natural JIT entry point (it captures the inner loop's body and runs it
+ * natively in mtoc2-emitted code) — but that only holds when the outer loop
+ * actually compiles. If it declined, the interpreter is walking its body and
+ * this loop is the outermost thing still compilable, so the gate lifts
+ * (`Interpreter.jitDeclinedLoopDepth`).
  */
 
 import type { Executor, Proposal, RunResult } from "../types.js";
@@ -56,6 +58,9 @@ interface JitLoopData {
 
 interface CompiledArtifact {
   readonly specFn: (...args: unknown[]) => unknown;
+  /** The synthetic spec's output types, so a struct written back into the
+   *  env is rebuilt as a struct (the emitted value is an untagged object). */
+  readonly outputTypes: ReadonlyArray<CompilerType>;
 }
 
 /** Build a synthetic `FuncStmt` whose body is a single loop stmt.
@@ -103,9 +108,11 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
     ctx: DispatchContext
   ): Proposal<JitLoopData> | null {
     if (lowered.kind !== "loop") return null;
-    // Outer-loop only. Inner loops will execute inside the outer
-    // loop's compiled artifact once the outer attempt succeeds.
-    if (ctx.interp.loopDepth > 0) return null;
+    // Outer-loop only — unless every enclosing loop was itself declined,
+    // in which case nothing above will capture this one and it gets its own
+    // chance (see Interpreter.jitDeclinedLoopDepth).
+    if (ctx.interp.loopDepth > 0 && ctx.interp.jitDeclinedLoopDepth === 0)
+      return null;
     const classification = lowered.classification;
     // `%!numbl:assert_jit c` requires C-JIT at --opt 2 — decline the JS
     // path so the loop C-JITs or falls through to the interpreter (which
@@ -157,7 +164,7 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
     );
     const nargout = d.outputs.length;
     try {
-      const { source, cName } = compileSpec({
+      const { source, cName, outputTypes } = compileSpec({
         workspace,
         lowerer,
         funcDecl,
@@ -174,12 +181,13 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
         $h: JitHostHelpers
       ) => (...args: unknown[]) => unknown;
       const specFn = factory(buildHostHelpers(interp.rt));
-      return { specFn };
+      return { specFn, outputTypes };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         recordJitDecline({
           message: e.message,
           kind: e.constructor.name,
+          at: e.span ? { file: e.span.file, start: e.span.start } : undefined,
           where: "jit-loop",
         });
         return null;
@@ -207,7 +215,9 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
         // No live-after-loop assigns — nothing to write back.
       } else if (d.outputs.length === 1) {
         if (result !== undefined) {
-          const rv = ensureRuntimeValue(jitToNumbl(result)) as RuntimeValue;
+          const rv = ensureRuntimeValue(
+            jitToNumbl(result, compiled.outputTypes[0])
+          ) as RuntimeValue;
           interp.env.set(d.outputs[0], rv);
         }
       } else {
@@ -219,7 +229,9 @@ export const jitLoopExecutor: Executor<JitLoopData, CompiledArtifact | null> = {
         for (let i = 0; i < d.outputs.length; i++) {
           const elt = result[i];
           if (elt !== undefined) {
-            const rv = ensureRuntimeValue(jitToNumbl(elt)) as RuntimeValue;
+            const rv = ensureRuntimeValue(
+              jitToNumbl(elt, compiled.outputTypes[i])
+            ) as RuntimeValue;
             interp.env.set(d.outputs[i], rv);
           }
         }

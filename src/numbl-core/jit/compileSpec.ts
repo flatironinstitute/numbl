@@ -85,36 +85,56 @@ export interface CompileSpecResult {
   source: string;
   /** Names of runtime snippets activated by emit. Diagnostic only. */
   activatedSnippets: ReadonlyArray<string>;
+  /** The spec's output types, in order. The host needs them to convert
+   *  returned values back: a struct and a class instance are both plain
+   *  JS objects in the emitted code, so only the type says which is which. */
+  outputTypes: ReadonlyArray<Type>;
 }
 
 export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
   const { workspace, lowerer, funcDecl, argTypes, nargout } = args;
   workspace.finalize();
   const widenedArgTypes = argTypes.map(withoutExact);
-  const spec = specializeUserFunction.call(
-    lowerer,
-    funcDecl,
-    widenedArgTypes,
-    undefined,
-    undefined,
-    undefined,
-    nargout,
-    undefined
-  );
-  assertNoNonVoidBareExprStmts(spec);
-  const prog: IRProgram = {
-    topLevelStmts: [],
-    functions: new Map(lowerer.specializations),
-  };
-  const { source, activatedSnippets } = emitJsProgram(prog, {
-    workspace,
-    exposeSpec: spec.cName,
-  });
-  return {
-    cName: spec.cName,
-    source,
-    activatedSnippets,
-  };
+  // Everything this call adds to the shared spec cache, so a failure can be
+  // rolled back. Without that, one spec that lowers cleanly but cannot be
+  // emitted — a builtin that rejects in `emitJs`, say a broadcast comparison —
+  // stays in `lowerer.specializations` for the rest of the session, and since
+  // the emitted module contains every spec in that map, *every subsequent*
+  // compileSpec re-emits it and rethrows. One unsupported line in one function
+  // would then stop unrelated functions from being JIT'd at all.
+  const before = new Set(lowerer.specializations.keys());
+  try {
+    const spec = specializeUserFunction.call(
+      lowerer,
+      funcDecl,
+      widenedArgTypes,
+      undefined,
+      undefined,
+      undefined,
+      nargout,
+      undefined
+    );
+    assertNoNonVoidBareExprStmts(spec);
+    const prog: IRProgram = {
+      topLevelStmts: [],
+      functions: new Map(lowerer.specializations),
+    };
+    const { source, activatedSnippets } = emitJsProgram(prog, {
+      workspace,
+      exposeSpec: spec.cName,
+    });
+    return {
+      cName: spec.cName,
+      source,
+      activatedSnippets,
+      outputTypes: spec.outputTypes,
+    };
+  } catch (err) {
+    for (const key of lowerer.specializations.keys()) {
+      if (!before.has(key)) lowerer.specializations.delete(key);
+    }
+    throw err;
+  }
 }
 
 /** Bare expression statements with a non-Void value (e.g. `sin(i);`)

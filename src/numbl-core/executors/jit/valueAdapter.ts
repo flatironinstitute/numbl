@@ -25,7 +25,9 @@
 import {
   RuntimeTensor,
   RuntimeChar,
+  RuntimeStruct,
   RuntimeComplexNumber,
+  isRuntimeStruct,
   isRuntimeTensor,
   isRuntimeChar,
   isRuntimeComplexNumber,
@@ -98,13 +100,35 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
   if (isRuntimeComplexNumber(v)) {
     return { re: v.re, im: v.im };
   }
+  if (isRuntimeStruct(v)) {
+    // mtoc2 represents a struct as a plain JS object keyed by field name
+    // (see StructLit / MemberLoad in emitJs). Each field is converted with
+    // the field type the spec was compiled for, so a 1x1 tensor field
+    // reaching a scalar-typed field is unwrapped exactly as an argument
+    // would be. Fields the spec does not know about are dropped: the spec
+    // was compiled against this struct's field set.
+    const sty = paramType?.kind === "Struct" ? paramType : undefined;
+    const out: Record<string, unknown> = {};
+    for (const [name, fv] of v.fields) {
+      const fty = sty?.fields.find(f => f.name === name)?.ty;
+      out[name] = numblToJit(fv, fty);
+    }
+    return out;
+  }
   throw new Error(
     `numblToJit: unsupported RuntimeValue (executor should have declined)`
   );
 }
 
-/** mtoc2 emit-JS return value → numbl RuntimeValue. */
-export function jitToNumbl(v: unknown): RuntimeValue {
+/** mtoc2 emit-JS return value → numbl RuntimeValue.
+ *
+ *  `retType` is the compiler type the spec declares for this output. It is
+ *  only consulted for plain untagged objects, which is how the emitted code
+ *  represents both a struct and a class instance — the value alone cannot
+ *  tell them apart, so a struct is only rebuilt when the type says Struct
+ *  and anything else untagged is rejected (the executor then bails and the
+ *  interpreter, which has full class semantics, re-runs the call). */
+export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
   if (typeof v === "number") return v;
   if (typeof v === "boolean") return v;
   if (typeof v === "string") return v;
@@ -134,6 +158,16 @@ export function jitToNumbl(v: unknown): RuntimeValue {
   }
   if (typeof tagged.re === "number" && typeof tagged.im === "number") {
     return new RuntimeComplexNumber(tagged.re, tagged.im);
+  }
+  if (retType?.kind === "Struct") {
+    // A struct: mtoc2 emits it as a plain, untagged JS object of field
+    // values, exactly as it emits a class instance — hence the type check.
+    const fields = new Map<string, RuntimeValue>();
+    for (const f of retType.fields) {
+      const fv = (v as Record<string, unknown>)[f.name];
+      if (fv !== undefined) fields.set(f.name, jitToNumbl(fv, f.ty));
+    }
+    return new RuntimeStruct(fields);
   }
   throw new Error(`jitToNumbl: unrecognized return shape`);
 }

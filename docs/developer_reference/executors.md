@@ -113,6 +113,12 @@ Stmts with no shape (e.g. a single Assign at non-top-level) skip the proposal lo
 
 Lowerings are cached in `LoweringCache`, keyed by (head Stmt or FunctionDef, classification cacheKey). The cache also tracks per-owner type-widening state so a callee invoked with shifting input types converges to a single specialization rather than thrashing.
 
+## The loop-depth gate
+
+The loop and call executors decline while `interp.loopDepth > 0`: an enclosing loop is the natural JIT entry point, since compiling it captures everything nested inside, and bidding per-iteration underneath it would pay propose / spec-cache overhead for no gain.
+
+That reasoning holds only while the enclosing loop is going to be compiled. When it is _declined_, the interpreter walks its body statement by statement and nothing above will capture what is nested inside — so the gate lifts. `Registry.interpretFallback` bumps `Interpreter.jitDeclinedLoopDepth` around the interpreter's execution of a declined loop stmt, and the executors gate on `loopDepth > 0 && jitDeclinedLoopDepth === 0`. A nested loop or an expensive callee under a declined loop then gets its own chance; declines are cached (`markBailed`), so a nested unit that also declines costs one cache lookup per iteration rather than a repeated compile.
+
 ## Composition
 
 Two patterns, both first-class:

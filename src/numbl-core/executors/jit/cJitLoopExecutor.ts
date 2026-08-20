@@ -101,7 +101,8 @@ export const cJitLoopExecutor: Executor<CJitLoopData, CompiledArtifact | null> =
       if (lowered.kind !== "loop") return null;
       const bridge = ctx.interp.nativeBridge;
       if (!bridge || !bridge.koffi) return null;
-      if (ctx.interp.loopDepth > 0) return null;
+      if (ctx.interp.loopDepth > 0 && ctx.interp.jitDeclinedLoopDepth === 0)
+        return null;
       const classification = lowered.classification;
       if (classification.hasReturn) return null;
 

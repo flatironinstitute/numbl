@@ -88,7 +88,8 @@ export function emitSliceSlotSetup(
   indent: string,
   slotsTyped: ReadonlyArray<IndexSliceArg>,
   baseCName: string,
-  cleanups?: string[]
+  cleanups?: string[],
+  grow = false
 ): string[] {
   const slotSrc: string[] = [];
   for (let i = 0; i < slotsTyped.length; i++) {
@@ -98,15 +99,26 @@ export function emitSliceSlotSetup(
       lines.push(`${indent}long _mtoc2_n_${i} = ${baseCName}.dims[${i}];`);
       slotSrc.push(kVar);
     } else if (slot.kind === "Scalar") {
-      // Per-axis bounds check at setup time. Same `mtoc2_idx_axis`
-      // helper used by scalar IndexLoad / IndexStore — aborts with
-      // a numbl-style "Index in position N exceeds array bounds".
-      useRuntimeByName(state, "mtoc2_oob_abort");
+      // Per-axis bounds check at setup time. Reads use `mtoc2_idx_axis`,
+      // which aborts with a numbl-style "Index in position N exceeds array
+      // bounds"; writes use the `_grow` variant, which bails to the
+      // interpreter for an index past the extent (MATLAB would grow the
+      // array there, which the JIT cannot model) and still aborts on a
+      // genuine sub-1 index. Without the grow variant a write like
+      // `A(k, :) = row` could not be compiled at all unless `k` were
+      // statically known — which it never is inside a loop.
+      const axisFn = grow ? "mtoc2_idx_axis_grow" : "mtoc2_idx_axis";
+      if (grow) {
+        useRuntimeByName(state, "mtoc2_grow_bail");
+        state.usedGrowBail = true;
+      } else {
+        useRuntimeByName(state, "mtoc2_oob_abort");
+      }
       const scalarStr = emitExpr(slot.expr, state);
       const loc = locStringOf(slot.span);
       lines.push(`${indent}long _mtoc2_n_${i} = 1;`);
       lines.push(
-        `${indent}long _mtoc2_src_${i} = mtoc2_idx_axis(&${baseCName}, ${i}, mtoc2_to_idx(${scalarStr}), ${loc});`
+        `${indent}long _mtoc2_src_${i} = ${axisFn}(&${baseCName}, ${i}, mtoc2_to_idx(${scalarStr}), ${loc});`
       );
       slotSrc.push(`_mtoc2_src_${i}`);
     } else if (slot.kind === "IndexVec") {
@@ -647,7 +659,9 @@ export function emitIndexSliceStore(
     lines,
     `${indent}  `,
     s.index,
-    baseCName
+    baseCName,
+    undefined,
+    /*grow=*/ true
   );
   const totalParts: string[] = [];
   for (let i = 0; i < ndim; i++) totalParts.push(`_mtoc2_n_${i}`);

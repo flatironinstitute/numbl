@@ -57,6 +57,7 @@ import {
   signFromExactArray,
   signFromNumber,
   unifySign,
+  isScalar,
   isScalarRealNumeric,
   isMultiElement,
   isNumeric,
@@ -330,6 +331,8 @@ export class Lowerer {
         return lowerMultiAssign.call(this, s);
       case "If":
         return this.lowerIf(s);
+      case "Switch":
+        return this.lowerSwitch(s);
       case "While":
         return this.lowerWhile(s);
       case "For":
@@ -452,6 +455,32 @@ export class Lowerer {
     // (reading a local) or a `classdef toc` (constructor call) doesn't
     // get hijacked. We synthesize a Void-typed Call to the runtime
     // helper directly so we don't go through builtin codegen at all.
+    // Bare `tic;` / `tic();` starts the stopwatch and produces nothing —
+    // numbl's builtin returns no value at nargout 0, matching MATLAB, so the
+    // statement is void and can be compiled. Emitted through the registered
+    // `tic` builtin (which activates the tic/toc runtime snippet); only the
+    // statement's type is forced to Void. Same shadow guards as `toc` below.
+    if (this.env.get("tic") === undefined && !this.workspace.isClass("tic")) {
+      const bareTic =
+        (s.expr.type === "Ident" && s.expr.name === "tic") ||
+        (s.expr.type === "FuncCall" &&
+          s.expr.name === "tic" &&
+          s.expr.args.length === 0);
+      if (bareTic) {
+        return {
+          kind: "ExprStmt",
+          expr: {
+            kind: "Call",
+            cName: "mtoc2_tic",
+            name: "tic",
+            args: [],
+            ty: VOID,
+            span: s.expr.span,
+          },
+          span: s.span,
+        };
+      }
+    }
     if (this.env.get("toc") === undefined && !this.workspace.isClass("toc")) {
       if (s.expr.type === "Ident" && s.expr.name === "toc") {
         return {
@@ -1273,6 +1302,139 @@ export class Lowerer {
         span: first.cond.span,
       },
     ];
+  }
+
+  /** MATLAB `switch` lowered to the equivalent if/elseif chain.
+   *
+   *  The subject is evaluated once — hoisted to a temp unless it is already a
+   *  plain variable — and each case label becomes an equality test against it:
+   *  `strcmp` for text, `==` for numbers. A `case {a, b}` list is the OR of
+   *  the individual tests. Everything after that is `lowerIf`'s problem, which
+   *  means switch inherits its branch-env merging and cond folding.
+   *
+   *  Declined (leaving the unit to the interpreter, as before this existed):
+   *  a subject that is neither a scalar number nor text, a label whose kind
+   *  does not match the subject's, and an empty `case {}`.
+   */
+  private lowerSwitch(s: Extract<Stmt, { type: "Switch" }>): IRStmt | IRStmt[] {
+    const span = s.span;
+    const pre: IRStmt[] = [];
+
+    // Evaluate the subject once. A bare variable reference is already a
+    // side-effect-free read, so it can be re-read per case test; anything
+    // else (a call, an index, an expression) goes into a temp first.
+    let subject: Expr = s.expr;
+    if (!(s.expr.type === "Ident" && this.env.has(s.expr.name))) {
+      const tmp = this.freshTempName();
+      const assign: Stmt = {
+        type: "Assign",
+        name: tmp,
+        expr: s.expr,
+        suppressed: true,
+        span,
+      };
+      const lowered = this.lowerStmt(assign);
+      if (lowered !== null) {
+        if (Array.isArray(lowered)) pre.push(...lowered);
+        else pre.push(lowered);
+      }
+      subject = { type: "Ident", name: tmp, span };
+    }
+
+    const subjTy = this.env.get((subject as { name: string }).name)?.ty;
+    if (subjTy === undefined) {
+      throw new UnsupportedConstruct(
+        "switch subject is not a value the JIT can type",
+        span
+      );
+    }
+    const subjIsText = subjTy.kind === "Char" || subjTy.kind === "String";
+    const subjIsNum = isScalarRealNumeric(subjTy) || subjTy.kind === "Numeric";
+    if (!subjIsText && !(subjIsNum && isScalar(subjTy))) {
+      throw new UnsupportedConstruct(
+        `switch on a ${typeToString(subjTy)} subject is not supported ` +
+          "(scalar numeric or text only)",
+        span
+      );
+    }
+
+    // A label is text when it is a literal, or a variable already typed as
+    // text; anything else is treated as numeric and compared with `==`.
+    const labelIsText = (label: Expr): boolean => {
+      if (label.type === "Char" || label.type === "String") return true;
+      if (label.type === "Ident") {
+        const t = this.env.get(label.name)?.ty;
+        return t !== undefined && (t.kind === "Char" || t.kind === "String");
+      }
+      return false;
+    };
+
+    const labelCond = (label: Expr): Expr => {
+      if (subjIsText) {
+        if (!labelIsText(label)) {
+          throw new UnsupportedConstruct(
+            "switch on text with a non-text case label is not supported",
+            label.span
+          );
+        }
+        return {
+          type: "FuncCall",
+          name: "strcmp",
+          args: [subject, label],
+          span: label.span,
+        };
+      }
+      if (labelIsText(label)) {
+        throw new UnsupportedConstruct(
+          "switch on a number with a text case label is not supported",
+          label.span
+        );
+      }
+      return {
+        type: "Binary",
+        left: subject,
+        op: BinaryOperation.Equal,
+        right: label,
+        span: label.span,
+      };
+    };
+
+    const caseCond = (value: Expr): Expr => {
+      if (value.type !== "Cell") return labelCond(value);
+      const items = value.rows.flat();
+      if (items.length === 0) {
+        throw new UnsupportedConstruct(
+          "switch with an empty case list is not supported",
+          value.span
+        );
+      }
+      return items.map(labelCond).reduce((acc, c) => ({
+        type: "Binary",
+        left: acc,
+        op: BinaryOperation.OrOr,
+        right: c,
+        span: value.span,
+      }));
+    };
+
+    if (s.cases.length === 0) {
+      const body = s.otherwise ? this.lowerStmts(s.otherwise) : [];
+      return [...pre, ...body];
+    }
+
+    const chain: Extract<Stmt, { type: "If" }> = {
+      type: "If",
+      cond: caseCond(s.cases[0].value),
+      thenBody: s.cases[0].body,
+      elseifBlocks: s.cases.slice(1).map(c => ({
+        cond: caseCond(c.value),
+        body: c.body,
+      })),
+      elseBody: s.otherwise,
+      span,
+    };
+    const ir = this.lowerIf(chain);
+    return [...pre, ...(Array.isArray(ir) ? ir : [ir])];
   }
 
   private lowerWhile(s: Extract<Stmt, { type: "While" }>): IRStmt {

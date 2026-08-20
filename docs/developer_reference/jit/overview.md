@@ -26,6 +26,14 @@ The compiler decides feasibility at **compile time**: it either lowers a special
 
 A separate safety pass classifies constructs with observable side effects the JIT cannot faithfully reproduce (interactive input, certain display statements at the top level, etc.) and suppresses JIT for scripts that contain them unsuppressed.
 
+Indexed **stores** are the exception to "no runtime bailout": an index past a tensor's current extent would grow it in MATLAB, which a spec compiled against a fixed shape cannot model, so the emitted store routes through a grow-aware bounds check (`mtoc2_idx_*_grow`) that bails to the interpreter at that point. Both scalar stores (`v(k) = x`) and the scalar slots of slice stores (`A(k, :) = row`) use it, which is what lets a store with a loop-variable index compile at all — the index is never statically known inside a loop.
+
+### Decline diagnostics
+
+A failed `compileSpec` rolls back whatever it added to `Lowerer.specializations`. The emitted module contains **every** spec in that map, so a spec that lowers cleanly but throws during emit would otherwise be re-emitted — and rethrow — on every later compile in the session, silently stopping unrelated functions from being JIT'd.
+
+Set `NUMBL_JIT_LOG=1` to print every decline (executor, source position, message) to stderr. `%!numbl:assert_jit` reports only the most recent one; the env var shows them all, which is what you want when a chain of calls declines for several different reasons.
+
 ## Debugging JIT output
 
 `--dump-js <file>` writes the generated JavaScript source to disk for inspection; `--dump-c <file>` writes the generated C source. Each flag captures only its backend's output, so at `--opt 2` (where C-JIT and JS-JIT both run) you can pass both: C kernels go to the `--dump-c` file and the JS-JIT fallbacks go to the `--dump-js` file. `--verbose` adds compilation events to stderr.

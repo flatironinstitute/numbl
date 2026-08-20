@@ -111,50 +111,63 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
   const { workspace, lowerer, funcDecl, argTypes, nargout } = args;
   workspace.finalize();
   const widenedArgTypes = argTypes.map(withoutExact);
-  const spec = specializeUserFunction.call(
-    lowerer,
-    funcDecl,
-    widenedArgTypes,
-    undefined,
-    undefined,
-    undefined,
-    nargout,
-    undefined
-  );
-  // Same boundary check the JS path uses: bare non-void ExprStmts
-  // would bind to numbl's `ans`, which mtoc2 has no protocol for.
-  assertNoNonVoidBareExprStmts(spec);
-  // Decline (fall back to JS-JIT / interpreter) when any function may read a
-  // local before it is definitely assigned. C predeclares locals to 0, so it
-  // would silently return that default instead of raising MATLAB's
-  // undefined-variable error like --opt 0/1 do. See definiteAssign.ts.
-  const prog: IRProgram = {
-    topLevelStmts: [],
-    functions: new Map(lowerer.specializations),
-  };
-  // The entry `spec` is a synthetic wrapper for the loop/top-level
-  // executors (its "outputs" include the loop variable, legitimately
-  // unassigned on a zero-iteration run), so only run the output-assignment
-  // check on it for a real user-function entry (the call executor).
-  const checkEntryOutputs = args.entrySynthetic !== true;
-  assertDefiniteAssignment(spec, { checkOutputs: checkEntryOutputs });
-  for (const fn of prog.functions.values()) {
-    if (fn.cName === spec.cName) continue; // already checked above
-    assertDefiniteAssignment(fn, { checkOutputs: true });
+  // Roll back on failure, for the reason `compileSpec` (JS) documents: the
+  // emitted program contains every spec in `lowerer.specializations`, and the
+  // checks below run over all of them, so a spec that lowers but does not
+  // survive emit would otherwise make every later compile in the session fail
+  // with its error.
+  const before = new Set(lowerer.specializations.keys());
+  try {
+    const spec = specializeUserFunction.call(
+      lowerer,
+      funcDecl,
+      widenedArgTypes,
+      undefined,
+      undefined,
+      undefined,
+      nargout,
+      undefined
+    );
+    // Same boundary check the JS path uses: bare non-void ExprStmts
+    // would bind to numbl's `ans`, which mtoc2 has no protocol for.
+    assertNoNonVoidBareExprStmts(spec);
+    // Decline (fall back to JS-JIT / interpreter) when any function may read a
+    // local before it is definitely assigned. C predeclares locals to 0, so it
+    // would silently return that default instead of raising MATLAB's
+    // undefined-variable error like --opt 0/1 do. See definiteAssign.ts.
+    const prog: IRProgram = {
+      topLevelStmts: [],
+      functions: new Map(lowerer.specializations),
+    };
+    // The entry `spec` is a synthetic wrapper for the loop/top-level
+    // executors (its "outputs" include the loop variable, legitimately
+    // unassigned on a zero-iteration run), so only run the output-assignment
+    // check on it for a real user-function entry (the call executor).
+    const checkEntryOutputs = args.entrySynthetic !== true;
+    assertDefiniteAssignment(spec, { checkOutputs: checkEntryOutputs });
+    for (const fn of prog.functions.values()) {
+      if (fn.cName === spec.cName) continue; // already checked above
+      assertDefiniteAssignment(fn, { checkOutputs: true });
+    }
+    const source = emitProgram(prog, {
+      workspace,
+      exposeSpec: spec.cName,
+    });
+    return {
+      cName: spec.cName,
+      source,
+      // The C emit doesn't currently expose its activated-snippet set
+      // through emitProgram's return; the .so build doesn't need it.
+      // Diagnostic field kept for symmetry with `compileSpec` (JS).
+      activatedSnippets: [],
+      signature: buildSignature(spec),
+    };
+  } catch (err) {
+    for (const key of lowerer.specializations.keys()) {
+      if (!before.has(key)) lowerer.specializations.delete(key);
+    }
+    throw err;
   }
-  const source = emitProgram(prog, {
-    workspace,
-    exposeSpec: spec.cName,
-  });
-  return {
-    cName: spec.cName,
-    source,
-    // The C emit doesn't currently expose its activated-snippet set
-    // through emitProgram's return; the .so build doesn't need it.
-    // Diagnostic field kept for symmetry with `compileSpec` (JS).
-    activatedSnippets: [],
-    signature: buildSignature(spec),
-  };
 }
 
 function buildSignature(spec: IRFunc): SpecCSignature {

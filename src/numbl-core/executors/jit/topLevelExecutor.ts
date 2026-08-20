@@ -53,6 +53,9 @@ interface JitTopLevelData {
 interface CompiledArtifact {
   readonly specFn: (...args: unknown[]) => unknown;
   readonly nargout: number;
+  /** The synthetic spec's output types, so a struct written back into the
+   *  env is rebuilt as a struct (the emitted value is an untagged object). */
+  readonly outputTypes: ReadonlyArray<CompilerType>;
 }
 
 /** True when every top-level stmt is suppressed (or is a kind that
@@ -171,7 +174,7 @@ export const jitTopLevelExecutor: Executor<
     );
     const nargout = d.outputs.length;
     try {
-      const { source, cName } = compileSpec({
+      const { source, cName, outputTypes } = compileSpec({
         workspace,
         lowerer,
         funcDecl,
@@ -188,12 +191,13 @@ export const jitTopLevelExecutor: Executor<
         $h: JitHostHelpers
       ) => (...args: unknown[]) => unknown;
       const specFn = factory(buildHostHelpers(interp.rt));
-      return { specFn, nargout };
+      return { specFn, nargout, outputTypes };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         recordJitDecline({
           message: e.message,
           kind: e.constructor.name,
+          at: e.span ? { file: e.span.file, start: e.span.start } : undefined,
           where: "jit-top-level",
         });
         return null;
@@ -227,7 +231,9 @@ export const jitTopLevelExecutor: Executor<
         // No-op (rare — script with no top-level assignments).
       } else if (d.outputs.length === 1) {
         if (result !== undefined) {
-          const rv = ensureRuntimeValue(jitToNumbl(result)) as RuntimeValue;
+          const rv = ensureRuntimeValue(
+            jitToNumbl(result, compiled.outputTypes[0])
+          ) as RuntimeValue;
           interp.env.set(d.outputs[0], rv);
         }
       } else {
@@ -239,7 +245,9 @@ export const jitTopLevelExecutor: Executor<
         for (let i = 0; i < d.outputs.length; i++) {
           const elt = result[i];
           if (elt !== undefined) {
-            const rv = ensureRuntimeValue(jitToNumbl(elt)) as RuntimeValue;
+            const rv = ensureRuntimeValue(
+              jitToNumbl(elt, compiled.outputTypes[i])
+            ) as RuntimeValue;
             interp.env.set(d.outputs[i], rv);
           }
         }

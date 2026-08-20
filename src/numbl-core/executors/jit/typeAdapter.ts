@@ -80,7 +80,22 @@ export function jitTypeToCompilerType(jt: JitType): Type | null {
     case "char":
       return { kind: "Char" };
     // Kinds the JIT path doesn't accept yet — fall through to interp.
-    case "struct":
+    case "struct": {
+      // A struct whose every field is itself a supported type maps to the
+      // compiler's StructType, so a parameter struct — the `p.tol` idiom
+      // that pervades numerical MATLAB — no longer forces the enclosing
+      // loop or call onto the interpreter. Field order is canonicalised
+      // (sorted by name) to match the lowerer's StructLit convention.
+      if (jt.fields === undefined) return null;
+      const names = Object.keys(jt.fields).sort();
+      const fields: { name: string; ty: Type }[] = [];
+      for (const name of names) {
+        const fty = jitTypeToCompilerType(jt.fields[name]);
+        if (fty === null) return null;
+        fields.push({ name, ty: fty });
+      }
+      return { kind: "Struct", fields };
+    }
     case "struct_array":
     case "class_instance":
     case "sparse_matrix":

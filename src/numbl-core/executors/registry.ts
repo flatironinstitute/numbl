@@ -185,8 +185,7 @@ export class Registry {
     const stmt = siblings[i];
     const lowered = tryLower(siblings, i, ctx.interp, this.loweringCache);
     if (lowered === null) {
-      const signal = ctx.interp.execStmt(stmt);
-      return { signal };
+      return this.interpretFallback(ctx, stmt);
     }
 
     // Single linear pass: collect proposals, keep the lowest-cost one
@@ -246,8 +245,26 @@ export class Registry {
 
     // Fallback: AST interpreter, called directly. Reached when every
     // proposal bailed.
-    const signal = ctx.interp.execStmt(stmt);
-    return { signal };
+    return this.interpretFallback(ctx, stmt);
+  }
+
+  /** Run one stmt on the AST interpreter.
+   *
+   *  When that stmt is a loop, the interpreter is about to walk its body,
+   *  which invalidates the "an enclosing loop will capture me" assumption
+   *  behind the executors' `loopDepth` gate. `jitDeclinedLoopDepth` records
+   *  that for the duration of the body so nested loops and calls can bid for
+   *  themselves instead of running interpreted all the way down. */
+  private interpretFallback(ctx: DispatchContext, stmt: Stmt): DispatchResult {
+    if (stmt.type === "For" || stmt.type === "While") {
+      ctx.interp.jitDeclinedLoopDepth++;
+      try {
+        return { signal: ctx.interp.execStmt(stmt) };
+      } finally {
+        ctx.interp.jitDeclinedLoopDepth--;
+      }
+    }
+    return { signal: ctx.interp.execStmt(stmt) };
   }
 
   private runStmtCandidate(

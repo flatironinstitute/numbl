@@ -80,6 +80,18 @@ export class Interpreter {
    *  that genuinely happen at the interpreter level inside a loop. */
   loopDepth: number = 0;
 
+  /** @internal Number of those enclosing loops that the JIT *declined*, so
+   *  the interpreter is walking their bodies statement by statement. The
+   *  `loopDepth > 0` gate above assumes an enclosing loop will be compiled
+   *  and will swallow whatever is nested inside it; when that loop was
+   *  declined instead, the assumption is false and everything below it would
+   *  run interpreted however expensive it is. The executors therefore gate on
+   *  `loopDepth > 0 && jitDeclinedLoopDepth === 0`: still no per-iteration JIT
+   *  attempts underneath a loop that is about to be compiled, but a nested
+   *  loop or call under a declined one gets its own chance. Bumped by the
+   *  registry around the interpreter fallback for a loop stmt. */
+  jitDeclinedLoopDepth: number = 0;
+
   /** @internal Number of enclosing conditional blocks (`if` / `switch` /
    *  `try`) whose bodies the interpreter is currently executing. Used by
    *  the loop classifier: when a loop is dispatched with `condBlockDepth >

@@ -406,7 +406,11 @@ export function applyUnaryElemwise(
 }
 
 /** Apply a unary element-wise function that may produce complex for out-of-domain real inputs.
- * When realFn returns NaN, complexFn is used instead (e.g., acos(2), asin(2), log(-1)). */
+ * When realFn returns NaN, complexFn is used instead (e.g., acos(2), asin(2), log(-1)).
+ *
+ * A NaN *input* is not out of domain: MATLAB's sqrt(NaN), log(NaN), asin(NaN)
+ * are all a real NaN. Only a NaN produced from a non-NaN input means the real
+ * branch has run out of domain, so NaN inputs keep the real result. */
 function applyUnaryElemwiseMaybeComplex(
   v: RuntimeValue,
   realFn: (x: number) => number,
@@ -425,7 +429,7 @@ function applyUnaryElemwiseMaybeComplex(
   if (typeof v === "boolean") v = (v ? 1 : 0) as unknown as RuntimeValue;
   if (typeof v === "number") {
     const r = realFn(v);
-    if (!Number.isNaN(r)) return r;
+    if (!Number.isNaN(r) || Number.isNaN(v)) return r;
     const c = complexFn(v, 0);
     return mkc(c.re, c.im);
   }
@@ -445,7 +449,7 @@ function applyUnaryElemwiseMaybeComplex(
         tensorOps.realUnaryElemwise(nativeOpCode, n, v.data, nativeOut);
         let firstNaN = -1;
         for (let i = 0; i < n; i++) {
-          if (Number.isNaN(nativeOut[i])) {
+          if (Number.isNaN(nativeOut[i]) && !Number.isNaN(v.data[i])) {
             firstNaN = i;
             break;
           }
@@ -458,7 +462,7 @@ function applyUnaryElemwiseMaybeComplex(
         const outI = allocFloat64Array(n); // must zero-init: only NaN slots get im written
         let hasImag = false;
         for (let i = 0; i < n; i++) {
-          if (!Number.isNaN(nativeOut[i])) {
+          if (!Number.isNaN(nativeOut[i]) || Number.isNaN(v.data[i])) {
             outR[i] = nativeOut[i];
           } else {
             const c = complexFn(v.data[i], 0);
@@ -474,7 +478,7 @@ function applyUnaryElemwiseMaybeComplex(
       let hasImag = false;
       for (let i = 0; i < n; i++) {
         const r = realFn(v.data[i]);
-        if (!Number.isNaN(r)) {
+        if (!Number.isNaN(r) || Number.isNaN(v.data[i])) {
           outR[i] = r;
           outI[i] = 0;
         } else {

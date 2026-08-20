@@ -191,7 +191,10 @@ export function registerSpecialBuiltins(rt: Runtime): void {
           }
           const elapsed = performance.now() / 1000 - startSeconds;
           if (na === 0) {
+            // Bare `toc;` prints and produces nothing — MATLAB does not set
+            // `ans` from it.
             rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
+            return undefined as unknown as RuntimeValue;
           }
           return RTV.num(elapsed);
         },

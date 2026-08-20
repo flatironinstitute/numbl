@@ -24,6 +24,9 @@ export interface JitDecline {
   kind: string;
   /** Which executor declined: "jit-top-level" | "jit-call" | "jit-loop". */
   where: string;
+  /** Source position of the offending construct, when the thrown error
+   *  carried one. Only used for diagnostics. */
+  at?: { file: string; start: number };
 }
 
 let lastDecline: JitDecline | null = null;
@@ -31,6 +34,10 @@ let lastDecline: JitDecline | null = null;
 /** Record a swallowed JIT decline reason (called from executor catch blocks). */
 export function recordJitDecline(d: JitDecline): void {
   lastDecline = d;
+  if (typeof process !== "undefined" && process.env?.NUMBL_JIT_LOG) {
+    const at = d.at ? ` [${d.at.file}@${d.at.start}]` : "";
+    console.error(`[jit-decline] ${d.where}${at}: ${d.message}`);
+  }
 }
 
 /** The most recent recorded JIT decline, or null if none seen. */

@@ -25,7 +25,10 @@
  * - **Loop-depth gate.** Declines when `interp.loopDepth > 0` so a
  *   hot loop iterating function calls doesn't pay per-call JIT
  *   propose / spec-cache overhead. Once an outer call is JIT'd, its
- *   loops run inside mtoc2's compiled code anyway.
+ *   loops run inside mtoc2's compiled code anyway. The gate lifts when
+ *   every enclosing loop was itself declined: nothing above will be
+ *   compiled then, and an expensive callee would otherwise run
+ *   interpreted all the way down (`Interpreter.jitDeclinedLoopDepth`).
  */
 
 import type { Executor, Proposal, RunResult } from "../types.js";
@@ -61,6 +64,9 @@ interface JitCallData {
 
 interface CompiledArtifact {
   readonly specFn: (...args: unknown[]) => unknown;
+  /** The spec's declared output types — needed to convert a returned
+   *  struct back (an untagged JS object otherwise). */
+  readonly outputTypes: ReadonlyArray<CompilerType>;
 }
 
 /** Build a parser-shaped `FuncStmt` from numbl's `FunctionDef`.
@@ -103,13 +109,13 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
     ctx: DispatchContext
   ): Proposal<JitCallData> | null {
     if (lowered.kind !== "call") return null;
-    // Disable JIT inside any enclosing for/while loop body. Once an
-    // outer call has been JIT'd, its loops execute inside mtoc2's
-    // compiled code and never reach the interpreter; so this only
-    // gates calls the interpreter is dispatching directly while
-    // iterating a hot loop, where per-call propose() / spec-cache
-    // overhead is a net loss.
-    if (ctx.interp.loopDepth > 0) return null;
+    // Disable JIT inside any enclosing for/while loop body that is itself
+    // being compiled. Once that outer unit is JIT'd its calls run inside
+    // mtoc2's compiled code, so proposing here would only pay per-call
+    // propose / spec-cache overhead. When the enclosing loop was declined
+    // instead, this call is the outermost compilable unit and does bid.
+    if (ctx.interp.loopDepth > 0 && ctx.interp.jitDeclinedLoopDepth === 0)
+      return null;
     const classification = lowered.classification;
     // `%!numbl:assert_jit c` requires C-JIT at --opt 2. Decline the JS
     // path for such units so they either C-JIT or fall through to the
@@ -163,7 +169,7 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
   compile(d, ctx: DispatchContext): CompiledArtifact | null {
     const { workspace, lowerer } = getOrCreateSession(ctx.interp);
     try {
-      const { source, cName } = compileSpec({
+      const { source, cName, outputTypes } = compileSpec({
         workspace,
         lowerer,
         funcDecl: synthesizeFuncStmt(d.fn),
@@ -184,12 +190,13 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
         $h: JitHostHelpers
       ) => (...args: unknown[]) => unknown;
       const specFn = factory(buildHostHelpers(interp.rt));
-      return { specFn };
+      return { specFn, outputTypes };
     } catch (e) {
       if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
         recordJitDecline({
           message: e.message,
           kind: e.constructor.name,
+          at: e.span ? { file: e.span.file, start: e.span.start } : undefined,
           where: "jit-call",
         });
         return null;
@@ -220,9 +227,11 @@ export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
             `jit-call: expected array for nargout=${d.nargout}, got ${typeof result}`
           );
         }
-        return { result: result.map(v => jitToNumbl(v)) };
+        return {
+          result: result.map((v, i) => jitToNumbl(v, compiled.outputTypes[i])),
+        };
       }
-      return { result: jitToNumbl(result) };
+      return { result: jitToNumbl(result, compiled.outputTypes[0]) };
     } catch (e) {
       if (isGrowBail(e)) {
         ctx.interp.onJitBail?.(
