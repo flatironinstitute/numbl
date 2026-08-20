@@ -429,6 +429,12 @@ export function interpretWorkspaceFunction(
   // file name still wins — the first top-level function in the file is what
   // `<filename>(...)` calls.  Fall back to that here so mismatched-name
   // function files don't get silently treated as scripts below.
+  //
+  // Only for a *function file*, though: a file is one exactly when its first
+  // statement is a function declaration. A script may also define local
+  // functions (MATLAB R2016b and later), and there the first `function` in the
+  // file is a local one — calling it in place of running the script binds no
+  // arguments, so its body fails on the first parameter read.
   if (!fn) {
     const entry = this.ctx.registry.filesByFuncName.get(target.name);
     if (entry) {
@@ -438,6 +444,7 @@ export function interpretWorkspaceFunction(
           fn = funcDefFromStmt(stmt);
           break;
         }
+        if (stmt.type !== "ClassDef" && stmt.type !== "Import") break;
       }
     }
   }
