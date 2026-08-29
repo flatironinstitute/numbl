@@ -674,6 +674,37 @@ export function isColVecTy(t: NumericType): boolean {
   );
 }
 
+/** Statically provable to have two or more non-singleton axes, i.e. to
+ *  be neither a vector nor a scalar. Requires every dim to be exact:
+ *  an unknown dim could be 1, which would make the value a vector. */
+export function provablyNotVecTy(t: NumericType): boolean {
+  if (!t.dims.every(d => d.kind === "exact")) return false;
+  return t.dims.filter(d => !isDimOne(d)).length >= 2;
+}
+
+/** Orientation of the result of a single-slot linear slice `A(idx)`.
+ *
+ *  MATLAB takes the base's orientation when the base is a vector, and
+ *  the index's own shape otherwise (`nonVecOrient`: a range index is a
+ *  row, a linear logical mask yields a column). A 1×1 base also follows
+ *  the index.
+ *
+ *  Returns `undefined` when the base shape is not pinned down enough to
+ *  decide — typically a `zeros(n, 1)` whose `n` is only known at
+ *  runtime, which is a column but has no exact leading dim. Callers
+ *  MUST NOT collapse that case into either orientation: codegen has to
+ *  branch on the runtime shape instead. Guessing here silently
+ *  transposed dynamically-sized column slices. */
+export function linearSliceOrient(
+  t: NumericType,
+  nonVecOrient: "row" | "col"
+): "row" | "col" | undefined {
+  if (isColVecTy(t)) return "col";
+  if (isRowVecTy(t)) return "row";
+  if (isScalar(t) || provablyNotVecTy(t)) return nonVecOrient;
+  return undefined;
+}
+
 /** Statically provable to contain at least one element. True iff every
  *  dim is `exact` with a positive value (equivalently, when `shape` is
  *  set, every entry is > 0). Used by reductions to decide whether the
