@@ -78,4 +78,18 @@ dk = eigs(small, 10);
 assert(numel(dk) == 2);
 assert(max(abs(sort(dk) - [2; 3])) < tol);
 
+% Test 13: symmetric matrix with repeated eigenvalues. The dense symmetric
+% path underneath must return an orthonormal basis across the degenerate
+% block, which the general path does not guarantee.
+m = 8;
+u = (1:m)' - (m + 1) / 2;  u = u / sqrt(u' * u);
+Qh = eye(m) - 2 * (u * u');
+S = Qh * diag([1 2 2 2 5 6 7 8]) * Qh';
+S = (S + S') / 2;
+assert(max(abs(eigs(S, 4) - [8; 7; 6; 5])) < tol);
+[Vs, Ds] = eigs(S, 3, 'smallestabs');
+assert(max(abs(sort(diag(Ds)) - [1; 2; 2])) < tol);
+assert(max(max(abs(S * Vs - Vs * Ds))) < tol);
+assert(max(max(abs(Vs' * Vs - eye(3)))) < tol);
+
 disp('SUCCESS')

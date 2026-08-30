@@ -17,7 +17,7 @@ More than 400 builtin functions are available. Run `numbl list-builtins` for the
 | Array manipulation        | reshape, squeeze, permute, repmat, repelem, cat, horzcat, vertcat, flip, fliplr, flipud, rot90, circshift                                                |
 | Array queries             | size, length, numel, ndims, isempty, isscalar, isvector, ismatrix                                                                                        |
 | Reductions                | sum, prod, mean, median, std, var, min, max, all, any, cumsum, cumprod, cummax, cummin                                                                   |
-| Linear algebra            | inv, pinv, det, trace, rank, cond, norm, eig, svd, lu, qr, qz, chol, expm, kron, linsolve, mldivide, mrdivide                                            |
+| Linear algebra            | inv, pinv, det, trace, rank, cond, norm, eig (see note), svd, lu, qr, qz, chol, expm, kron, linsolve, mldivide, mrdivide                                 |
 | FFT                       | fft, ifft, fftshift, ifftshift                                                                                                                           |
 | Polynomials               | poly, polyfit, polyval, roots, conv, deconv                                                                                                              |
 | Set operations            | unique, union, intersect, setdiff, ismember, uniquetol                                                                                                   |
@@ -143,6 +143,12 @@ The directive registers getter/setter accessors for the listed variables, pre-de
 **Dynamic fallback:** If `evalin`/`assignin` references a variable _not_ in `% external-access`, Numbl stores it in a separate dynamic map (per-workspace or per-call-frame). These dynamic variables are only accessible through `evalin`/`assignin`, not as bare variable names — unlike MATLAB where they would appear in the local workspace.
 
 Most MATLAB code does not use `evalin`/`assignin` and needs no directives.
+
+### `eig`
+
+`eig(A)` follows MATLAB's dispatch: exactly symmetric (or Hermitian) input goes to the symmetric eigensolver, giving real eigenvalues in ascending order and an orthonormal eigenvector basis; everything else goes to the general solver. Symmetry is tested with exact equality, as MATLAB's `isequal(A, A')` does, so a matrix that is symmetric only to within rounding takes the general path in both.
+
+`eig(A, B)` solves the generalized problem `A*v = lambda*B*v`. A symmetric/Hermitian-definite pencil is reduced through the Cholesky factor of `B` and normalized so that `V'*B*V = I`, matching MATLAB. Any other pencil is solved by QZ, which requires the native LAPACK addon; without it (in the browser, or where the addon is not built) `eig(A, B)` raises an error rather than falling back to a different algorithm. The `'chol'`, `'qz'`, `'vector'`, `'matrix'`, `'balance'` and `'nobalance'` options are supported.
 
 ## Disclaimer
 

@@ -1894,7 +1894,7 @@ registerIBuiltin({
       nargout < 0 ||
       nargout > 3 ||
       argTypes.length < 1 ||
-      argTypes.length > 3
+      argTypes.length > 4
     )
       return null;
     if (!isNumericJitType(argTypes[0])) return null;
@@ -1914,7 +1914,9 @@ function eigApply(
   if (args.length < 1)
     throw new RuntimeError("eig requires at least 1 argument");
   const A = args[0];
-  const { balance, outputForm } = parseEigOptionsRuntime(args);
+  const { B, balance, outputForm, algorithm } = parseEigOptionsRuntime(args);
+  if (B !== undefined)
+    return eigGeneralizedApply(A, B, nargout, outputForm, algorithm);
   if (isRuntimeNumber(A)) {
     const val = A;
     if (nargout <= 1) return RTV.num(val);
@@ -1935,6 +1937,15 @@ function eigApply(
   if (m !== n) throw new RuntimeError("eig: input must be a square matrix");
   const computeVL = nargout >= 3,
     computeVR = nargout >= 2;
+  // Symmetric (Hermitian) input goes to the symmetric solver, which — unlike
+  // dgeev — guarantees real eigenvalues in ascending order and an orthonormal
+  // eigenvector basis across repeated eigenvalues. The test is exact equality,
+  // as in MATLAB's isequal(A, A'); a tolerance would make the choice of
+  // algorithm depend on how close to symmetric the input happens to be.
+  if (isExactlyHermitian(A, n)) {
+    const symResult = eigSymmetricApply(A, n, nargout, outputForm);
+    if (symResult) return symResult;
+  }
   if (A.imag) {
     const bridge = getEffectiveBridge("eigComplex", "eigComplex");
     if (!bridge.eigComplex)
@@ -1989,23 +2000,503 @@ function eigApply(
   return [Vout, Dout, Wout];
 }
 
-function parseEigOptionsRuntime(args: RuntimeValue[]): {
-  balance: boolean;
-  outputForm: "vector" | "matrix";
-} {
-  let balance = true,
-    outputForm: "vector" | "matrix" = "matrix";
-  for (let i = 1; i < args.length; i++) {
-    const arg = args[i];
-    if (isRuntimeString(arg) || isRuntimeChar(arg)) {
-      const val = parseStringArgLower(arg);
-      if (val === "nobalance") balance = false;
-      else if (val === "balance") balance = true;
-      else if (val === "vector") outputForm = "vector";
-      else if (val === "matrix") outputForm = "matrix";
+/**
+ * Exact symmetry (Hermitian for complex) test, matching MATLAB's
+ * isequal(A, A'). NaN entries make it false, as they do in MATLAB.
+ */
+function isExactlyHermitian(A: RuntimeTensor, n: number): boolean {
+  const re = A.data;
+  const im = A.imag;
+  for (let j = 0; j < n; j++) {
+    if (im && im[j + j * n] !== 0) return false;
+    const dj = re[j + j * n];
+    if (Number.isNaN(dj)) return false;
+    for (let i = j + 1; i < n; i++) {
+      if (re[i + j * n] !== re[j + i * n]) return false;
+      if (im && im[i + j * n] !== -im[j + i * n]) return false;
     }
   }
-  return { balance, outputForm };
+  return true;
+}
+
+/**
+ * Symmetric / Hermitian path: dsyev (real) or zheev (complex). Returns null if
+ * the bridge in use has no symmetric entry point, so the caller falls back to
+ * the general dgeev/zgeev path rather than failing.
+ *
+ * For a Hermitian matrix the left and right eigenvectors coincide, so the
+ * third output is a copy of the second.
+ */
+function eigSymmetricApply(
+  A: RuntimeTensor,
+  n: number,
+  nargout: number,
+  outputForm: "vector" | "matrix"
+): RuntimeValue | RuntimeValue[] | null {
+  const computeV = nargout >= 2;
+  let w: Float64Array;
+  let VRe: Float64Array | undefined;
+  let VIm: Float64Array | undefined;
+  if (A.imag) {
+    const bridge = getEffectiveBridge("eigHerm", "eigHerm");
+    if (!bridge.eigHerm) return null;
+    const r = bridge.eigHerm(toF64(A.data), toF64(A.imag), n, computeV);
+    if (!r) return null;
+    w = r.w;
+    VRe = r.VRe;
+    VIm = r.VIm;
+  } else {
+    const bridge = getEffectiveBridge("eigSym", "eigSym");
+    if (!bridge.eigSym) return null;
+    const r = bridge.eigSym(toF64(A.data), n, computeV);
+    if (!r) return null;
+    w = r.w;
+    VRe = r.V;
+  }
+  if (nargout <= 1) return RTV.tensor(w, [n, 1]);
+  const makeV = () =>
+    VRe
+      ? maybeComplexTensor(
+          allocFloat64Array(VRe),
+          [n, n],
+          VIm ? allocFloat64Array(VIm) : undefined
+        )
+      : RTV.tensor(allocFloat64Array(n * n), [n, n]);
+  const Vout = makeV();
+  const Dout =
+    outputForm === "vector"
+      ? RTV.tensor(allocFloat64Array(w), [n, 1])
+      : buildDiagMatrix(w, undefined, n);
+  if (nargout === 2) return [Vout, Dout];
+  return [Vout, Dout, makeV()];
+}
+
+function parseEigOptionsRuntime(args: RuntimeValue[]): {
+  B?: RuntimeValue;
+  balance: boolean;
+  outputForm: "vector" | "matrix";
+  algorithm: "auto" | "chol" | "qz";
+} {
+  let balance = true,
+    outputForm: "vector" | "matrix" = "matrix",
+    algorithm: "auto" | "chol" | "qz" = "auto";
+  // A numeric second argument is the B of the generalized problem A*v =
+  // lambda*B*v, not an option. Before this was recognized, eig(A, B) silently
+  // returned eig(A).
+  let B: RuntimeValue | undefined;
+  let first = 1;
+  if (args.length >= 2 && !isStringLikeArg(args[1])) {
+    B = args[1];
+    first = 2;
+  }
+  for (let i = first; i < args.length; i++) {
+    const arg = args[i];
+    if (!isStringLikeArg(arg))
+      throw new RuntimeError(
+        "eig: option arguments must be character vectors or strings"
+      );
+    const val = parseStringArgLower(arg);
+    if (val === "nobalance") balance = false;
+    else if (val === "balance") balance = true;
+    else if (val === "vector") outputForm = "vector";
+    else if (val === "matrix") outputForm = "matrix";
+    else if (val === "chol" || val === "qz") algorithm = val;
+    else throw new RuntimeError(`eig: unknown option '${val}'`);
+  }
+  if (algorithm !== "auto" && B === undefined)
+    throw new RuntimeError(
+      `eig: the '${algorithm}' algorithm applies only to eig(A, B)`
+    );
+  return { B, balance, outputForm, algorithm };
+}
+
+function isStringLikeArg(arg: RuntimeValue): boolean {
+  return isRuntimeString(arg) || isRuntimeChar(arg);
+}
+
+// ── eig(A, B): the generalized eigenvalue problem ────────────────────────
+
+/** A dense n×n matrix as split real/imaginary parts (imag null when real). */
+type SplitMatrix = { re: Float64Array; im: Float64Array | null };
+
+function toSplitSquare(
+  v: RuntimeValue,
+  name: string
+): { M: SplitMatrix; n: number } {
+  if (isRuntimeNumber(v))
+    return { M: { re: allocFloat64Array([v]), im: null }, n: 1 };
+  if (isRuntimeComplexNumber(v))
+    return {
+      M: { re: allocFloat64Array([v.re]), im: allocFloat64Array([v.im]) },
+      n: 1,
+    };
+  let t = v;
+  if (isRuntimeSparseMatrix(t))
+    t = sparseToDense(
+      t as import("../../runtime/types.js").RuntimeSparseMatrix
+    );
+  if (!isRuntimeTensor(t))
+    throw new RuntimeError(`eig: ${name} must be a numeric matrix`);
+  const [rows, cols] = tensorSize2D(t);
+  if (rows !== cols)
+    throw new RuntimeError(`eig: ${name} must be a square matrix`);
+  return {
+    M: { re: toF64(t.data), im: t.imag ? toF64(t.imag) : null },
+    n: rows,
+  };
+}
+
+/** Exact symmetry / Hermitian test on a SplitMatrix. */
+function splitIsHermitian(M: SplitMatrix, n: number): boolean {
+  for (let j = 0; j < n; j++) {
+    if (M.im && M.im[j + j * n] !== 0) return false;
+    if (Number.isNaN(M.re[j + j * n])) return false;
+    for (let i = j + 1; i < n; i++) {
+      if (M.re[i + j * n] !== M.re[j + i * n]) return false;
+      if (M.im && M.im[i + j * n] !== -M.im[j + i * n]) return false;
+    }
+  }
+  return true;
+}
+
+function eigGeneralizedApply(
+  Aval: RuntimeValue,
+  Bval: RuntimeValue,
+  nargout: number,
+  outputForm: "vector" | "matrix",
+  algorithm: "auto" | "chol" | "qz"
+): RuntimeValue | RuntimeValue[] {
+  const { M: A, n } = toSplitSquare(Aval, "A");
+  const { M: B, n: nB } = toSplitSquare(Bval, "B");
+  if (n !== nB) throw new RuntimeError("eig: A and B must be the same size");
+
+  if (algorithm !== "qz" && splitIsHermitian(A, n) && splitIsHermitian(B, n)) {
+    const R = choleskyFactor(B, n);
+    if (R) return eigSymmetricDefinite(A, R, n, nargout, outputForm);
+    if (algorithm === "chol")
+      throw new RuntimeError(
+        "eig: the 'chol' algorithm requires B to be symmetric positive definite"
+      );
+  }
+  return eigGeneralizedQz(A, B, n, nargout, outputForm);
+}
+
+/**
+ * Upper-triangular Cholesky factor R with B = R'*R, or null when B is not
+ * positive definite.
+ */
+function choleskyFactor(B: SplitMatrix, n: number): SplitMatrix | null {
+  if (B.im) {
+    const bridge = getEffectiveBridge("cholComplex", "cholComplex");
+    if (!bridge.cholComplex) return null;
+    const r = bridge.cholComplex(B.re, B.im, n, true);
+    if (!r || r.info !== 0) return null;
+    return { re: r.RRe, im: r.RIm };
+  }
+  const bridge = getEffectiveBridge("chol", "chol");
+  if (!bridge.chol) return null;
+  const r = bridge.chol(B.re, n, true);
+  if (!r || r.info !== 0) return null;
+  return { re: r.R, im: null };
+}
+
+/**
+ * Symmetric-definite generalized problem A*v = lambda*B*v with B = R'*R.
+ * Reduce to the standard symmetric problem on C = R^-H * A * R^-1, solve it
+ * with the symmetric eigensolver, and map the vectors back with V = R^-1 * S.
+ * That normalization gives V'*B*V = I, as MATLAB does.
+ */
+function eigSymmetricDefinite(
+  A: SplitMatrix,
+  R: SplitMatrix,
+  n: number,
+  nargout: number,
+  outputForm: "vector" | "matrix"
+): RuntimeValue | RuntimeValue[] {
+  const complex = !!(A.im || R.im);
+  // Y = R^-H * A, then C = Y * R^-1
+  const Y = solveLeftConjTransposeUpper(R, A, n, complex);
+  const C = solveRightUpper(Y, R, n, complex);
+  // Re-symmetrize: the reduction is symmetric in exact arithmetic, and the
+  // symmetric solver reads only one triangle, so this only removes rounding
+  // asymmetry that would otherwise be silently ignored.
+  symmetrizeInPlace(C, n);
+
+  const computeV = nargout >= 2;
+  let w: Float64Array;
+  let SRe: Float64Array | undefined;
+  let SIm: Float64Array | undefined;
+  if (complex) {
+    const bridge = getEffectiveBridge("eigHerm", "eigHerm");
+    if (!bridge.eigHerm)
+      throw new RuntimeError("eig: Hermitian eig bridge not available");
+    const r = bridge.eigHerm(
+      C.re,
+      C.im ?? allocFloat64Array(n * n),
+      n,
+      computeV
+    );
+    w = r.w;
+    SRe = r.VRe;
+    SIm = r.VIm;
+  } else {
+    const bridge = getEffectiveBridge("eigSym", "eigSym");
+    if (!bridge.eigSym)
+      throw new RuntimeError("eig: symmetric eig bridge not available");
+    const r = bridge.eigSym(C.re, n, computeV);
+    w = r.w;
+    SRe = r.V;
+  }
+
+  if (nargout <= 1) return RTV.tensor(w, [n, 1]);
+  const S: SplitMatrix = {
+    re: SRe ?? allocFloat64Array(n * n),
+    im: SIm ?? null,
+  };
+  const V = SRe ? solveUpper(R, S, n, complex) : S;
+  const makeV = () =>
+    maybeComplexTensor(
+      allocFloat64Array(V.re),
+      [n, n],
+      V.im ? allocFloat64Array(V.im) : undefined
+    );
+  const Vout = makeV();
+  const Dout =
+    outputForm === "vector"
+      ? RTV.tensor(allocFloat64Array(w), [n, 1])
+      : buildDiagMatrix(w, undefined, n);
+  if (nargout === 2) return [Vout, Dout];
+  // A and B are Hermitian, so the left eigenvectors coincide with the right
+  // ones: W'*A = D*W'*B holds for W = V.
+  return [Vout, Dout, makeV()];
+}
+
+/** In-place Hermitian averaging of a square matrix. */
+function symmetrizeInPlace(M: SplitMatrix, n: number): void {
+  for (let j = 0; j < n; j++) {
+    if (M.im) M.im[j + j * n] = 0;
+    for (let i = j + 1; i < n; i++) {
+      const a = (M.re[i + j * n] + M.re[j + i * n]) / 2;
+      M.re[i + j * n] = a;
+      M.re[j + i * n] = a;
+      if (M.im) {
+        const b = (M.im[i + j * n] - M.im[j + i * n]) / 2;
+        M.im[i + j * n] = b;
+        M.im[j + i * n] = -b;
+      }
+    }
+  }
+}
+
+/** Solve R^H * X = Bm for X, R upper triangular (forward substitution). */
+function solveLeftConjTransposeUpper(
+  R: SplitMatrix,
+  Bm: SplitMatrix,
+  n: number,
+  complex: boolean
+): SplitMatrix {
+  const X: SplitMatrix = {
+    re: allocFloat64Array(n * n),
+    im: complex ? allocFloat64Array(n * n) : null,
+  };
+  for (let c = 0; c < n; c++) {
+    for (let i = 0; i < n; i++) {
+      let sr = Bm.re[i + c * n];
+      let si = Bm.im ? Bm.im[i + c * n] : 0;
+      for (let k = 0; k < i; k++) {
+        // L(i,k) = conj(R(k,i))
+        const lr = R.re[k + i * n];
+        const li = R.im ? -R.im[k + i * n] : 0;
+        const xr = X.re[k + c * n];
+        const xi = X.im ? X.im[k + c * n] : 0;
+        sr -= lr * xr - li * xi;
+        si -= lr * xi + li * xr;
+      }
+      const dr = R.re[i + i * n];
+      const di = R.im ? -R.im[i + i * n] : 0;
+      const [qr, qi] = complexDivide(sr, si, dr, di);
+      X.re[i + c * n] = qr;
+      if (X.im) X.im[i + c * n] = qi;
+    }
+  }
+  return X;
+}
+
+/** Solve C * R = Y for C, R upper triangular (column-forward substitution). */
+function solveRightUpper(
+  Y: SplitMatrix,
+  R: SplitMatrix,
+  n: number,
+  complex: boolean
+): SplitMatrix {
+  const C: SplitMatrix = {
+    re: allocFloat64Array(n * n),
+    im: complex ? allocFloat64Array(n * n) : null,
+  };
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      let sr = Y.re[i + j * n];
+      let si = Y.im ? Y.im[i + j * n] : 0;
+      for (let k = 0; k < j; k++) {
+        const cr = C.re[i + k * n];
+        const ci = C.im ? C.im[i + k * n] : 0;
+        const rr = R.re[k + j * n];
+        const ri = R.im ? R.im[k + j * n] : 0;
+        sr -= cr * rr - ci * ri;
+        si -= cr * ri + ci * rr;
+      }
+      const dr = R.re[j + j * n];
+      const di = R.im ? R.im[j + j * n] : 0;
+      const [qr, qi] = complexDivide(sr, si, dr, di);
+      C.re[i + j * n] = qr;
+      if (C.im) C.im[i + j * n] = qi;
+    }
+  }
+  return C;
+}
+
+/** Solve R * V = S for V, R upper triangular (back substitution). */
+function solveUpper(
+  R: SplitMatrix,
+  S: SplitMatrix,
+  n: number,
+  complex: boolean
+): SplitMatrix {
+  const V: SplitMatrix = {
+    re: allocFloat64Array(n * n),
+    im: complex ? allocFloat64Array(n * n) : null,
+  };
+  for (let c = 0; c < n; c++) {
+    for (let i = n - 1; i >= 0; i--) {
+      let sr = S.re[i + c * n];
+      let si = S.im ? S.im[i + c * n] : 0;
+      for (let k = i + 1; k < n; k++) {
+        const rr = R.re[i + k * n];
+        const ri = R.im ? R.im[i + k * n] : 0;
+        const vr = V.re[k + c * n];
+        const vi = V.im ? V.im[k + c * n] : 0;
+        sr -= rr * vr - ri * vi;
+        si -= rr * vi + ri * vr;
+      }
+      const dr = R.re[i + i * n];
+      const di = R.im ? R.im[i + i * n] : 0;
+      const [qr, qi] = complexDivide(sr, si, dr, di);
+      V.re[i + c * n] = qr;
+      if (V.im) V.im[i + c * n] = qi;
+    }
+  }
+  return V;
+}
+
+function complexDivide(
+  ar: number,
+  ai: number,
+  br: number,
+  bi: number
+): [number, number] {
+  if (bi === 0) return [ar / br, ai / br];
+  if (Math.abs(br) >= Math.abs(bi)) {
+    const r = bi / br;
+    const t = br + bi * r;
+    return [(ar + ai * r) / t, (ai - ar * r) / t];
+  }
+  const r = br / bi;
+  const t = br * r + bi;
+  return [(ar * r + ai) / t, (ai * r - ar) / t];
+}
+
+/**
+ * General generalized problem via the QZ (generalized Schur) factorization.
+ * ts-lapack has no dgges/dggev, so this needs the native addon; throwing is
+ * the honest outcome there, rather than answering a different problem.
+ */
+function eigGeneralizedQz(
+  A: SplitMatrix,
+  B: SplitMatrix,
+  n: number,
+  nargout: number,
+  outputForm: "vector" | "matrix"
+): RuntimeValue | RuntimeValue[] {
+  const computeEigvecs = nargout >= 2;
+  const wr = allocFloat64Array(n);
+  const wi = allocFloat64Array(n);
+  let V: RuntimeValue | null = null;
+  let W: RuntimeValue | null = null;
+
+  if (A.im || B.im) {
+    const bridge = getEffectiveBridge("qzComplex", "qzComplex");
+    if (!bridge.qzComplex) throw generalizedUnsupported();
+    const r = bridge.qzComplex(
+      A.re,
+      A.im ?? allocFloat64Array(n * n),
+      B.re,
+      B.im ?? allocFloat64Array(n * n),
+      n,
+      computeEigvecs
+    );
+    if (!r) throw new RuntimeError("eig: complex QZ failed");
+    for (let i = 0; i < n; i++) {
+      const [qr, qi] = complexDivide(
+        r.alphaRe[i],
+        r.alphaIm[i],
+        r.betaRe[i],
+        r.betaIm[i]
+      );
+      wr[i] = qr;
+      wi[i] = qi;
+    }
+    if (computeEigvecs) {
+      if (!r.VRe || !r.VIm || !r.WRe || !r.WIm)
+        throw new RuntimeError(
+          "eig: failed to compute generalized eigenvectors"
+        );
+      V = maybeComplexTensor(
+        allocFloat64Array(r.VRe),
+        [n, n],
+        allocFloat64Array(r.VIm)
+      );
+      W = maybeComplexTensor(
+        allocFloat64Array(r.WRe),
+        [n, n],
+        allocFloat64Array(r.WIm)
+      );
+    }
+  } else {
+    const bridge = getEffectiveBridge("qz", "qz");
+    if (!bridge.qz) throw generalizedUnsupported();
+    const r = bridge.qz(A.re, B.re, n, computeEigvecs);
+    if (!r) throw new RuntimeError("eig: real QZ failed");
+    let hasComplex = false;
+    for (let i = 0; i < n; i++) {
+      const beta = r.beta[i];
+      wr[i] = r.alphar[i] / beta;
+      wi[i] = r.alphai[i] === 0 && beta === 0 ? 0 : r.alphai[i] / beta;
+      if (r.alphai[i] !== 0) hasComplex = true;
+    }
+    if (computeEigvecs) {
+      if (!r.V || !r.W)
+        throw new RuntimeError(
+          "eig: failed to compute generalized eigenvectors"
+        );
+      V = buildEigenvectorMatrix(r.V, r.alphai, n, hasComplex);
+      W = buildEigenvectorMatrix(r.W, r.alphai, n, hasComplex);
+    }
+  }
+
+  if (nargout <= 1) return maybeComplexTensor(wr, [n, 1], wi);
+  const Dout =
+    outputForm === "vector"
+      ? maybeComplexTensor(wr, [n, 1], wi)
+      : buildDiagMatrix(wr, wi, n);
+  if (nargout === 2) return [V as RuntimeValue, Dout];
+  return [V as RuntimeValue, Dout, W as RuntimeValue];
+}
+
+function generalizedUnsupported(): RuntimeError {
+  return new RuntimeError(
+    "eig: the generalized eigenvalue problem eig(A, B) with a non " +
+      "symmetric-definite pencil requires the native LAPACK addon"
+  );
 }
 
 // ── chol ────────────────────────────────────────────────────────────────

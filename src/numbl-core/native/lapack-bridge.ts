@@ -19,7 +19,7 @@
  * Expected native addon version. Bump this whenever the C++ addon API changes
  * (must match ADDON_VERSION in numbl_addon.cpp).
  */
-export const NATIVE_ADDON_EXPECTED_VERSION = 8;
+export const NATIVE_ADDON_EXPECTED_VERSION = 9;
 
 export interface LapackBridge {
   /** Returns the native addon's version number. */
@@ -277,6 +277,38 @@ export interface LapackBridge {
     VL?: Float64Array;
     VR?: Float64Array;
   };
+
+  /**
+   * Eigenvalue decomposition of an n×n real *symmetric* matrix stored in
+   * column-major order. Uses LAPACK dsyev (only the lower triangle is read).
+   * Unlike `eig`, the eigenvalues are real and returned in ascending order and
+   * the eigenvectors are orthonormal, including across repeated eigenvalues.
+   * @param data      Column-major Float64Array of length n*n (not modified).
+   * @param n         Matrix dimension.
+   * @param computeV  true → also compute the orthonormal eigenvectors.
+   * @returns         Object with w (ascending eigenvalues) and optionally V.
+   */
+  eigSym?(
+    data: Float64Array,
+    n: number,
+    computeV: boolean
+  ): { w: Float64Array; V?: Float64Array };
+
+  /**
+   * Eigenvalue decomposition of an n×n complex *Hermitian* matrix stored in
+   * column-major order. Uses LAPACK zheev (only the lower triangle is read).
+   * @param dataRe    Real parts — column-major Float64Array of length n*n.
+   * @param dataIm    Imaginary parts — column-major Float64Array of length n*n.
+   * @param n         Matrix dimension.
+   * @param computeV  true → also compute the unitary eigenvector basis.
+   * @returns         Object with w (real, ascending) and optionally VRe/VIm.
+   */
+  eigHerm?(
+    dataRe: Float64Array,
+    dataIm: Float64Array,
+    n: number,
+    computeV: boolean
+  ): { w: Float64Array; VRe?: Float64Array; VIm?: Float64Array };
 
   /**
    * Eigenvalue decomposition of an n×n complex matrix stored in column-major order.

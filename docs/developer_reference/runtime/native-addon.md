@@ -4,7 +4,7 @@ An optional Node-API C++ module that provides fast implementations of numerical 
 
 ## What it provides
 
-- **LAPACK / BLAS** — eigendecomposition, SVD, LU, QR, QZ, Cholesky, general linear solve, matrix inverse, matrix-matrix and matrix-vector multiply, GMRES. Built against OpenBLAS (or a system LAPACK/BLAS).
+- **LAPACK / BLAS** — eigendecomposition (general and symmetric/Hermitian), SVD, LU, QR, QZ, Cholesky, general linear solve, matrix inverse, matrix-matrix and matrix-vector multiply, GMRES. Built against OpenBLAS (or a system LAPACK/BLAS).
 - **FFTW** — batched FFT.
 - **Element-wise ops** — the kernels referenced by the ops-layer op-code table (real and complex binary and unary ops, reductions, comparisons, Bessel functions).
 - **Random number generation** — for large draws where the JS PRNG is a bottleneck.
@@ -12,6 +12,16 @@ An optional Node-API C++ module that provides fast implementations of numerical 
 ## JS fallbacks
 
 Every addon-backed operation has a pure-JS fallback. The fallbacks are correct but slower — in particular, LAPACK fallbacks rely on a lightweight in-tree port. The fallback path is what runs in the browser (where loading a native addon is not possible) and on systems where the addon is not installed.
+
+## Eigensolver dispatch
+
+`eig` picks a bridge entry point from the shape of the problem, and the choice is made once, in `eigApply` (`src/numbl-core/interpreter/builtins/linear-algebra.ts`), so that direct `bridge.eig` callers such as `roots` and `poly` are unaffected.
+
+- **Exactly symmetric / Hermitian input → `eigSym` (dsyev) / `eigHerm` (zheev).** The test is exact element equality, matching MATLAB's `isequal(A, A')`; a tolerance would make the algorithm depend on how nearly symmetric the input happens to be. These entry points give real eigenvalues in ascending order and an orthonormal (unitary) eigenvector basis, which `dgeev` cannot: it back-substitutes eigenvectors out of the Schur form and normalizes each column separately, so across a degenerate eigenspace the columns are individually unit-length but not mutually orthogonal, and a tight cluster can even deflate as a complex pair. If a bridge has no symmetric entry point the code falls back to `eig`, so no platform regresses.
+- **Everything else → `eig` (dgeev) / `eigComplex` (zgeev)**, unchanged.
+- **`eig(A, B)`** solves the generalized problem. A symmetric/Hermitian-definite pencil is reduced through the Cholesky factor of `B` (`R = chol(B)`, solve the symmetric problem on `R^-H A R^-1`, map back with `V = R^-1 S`), which also yields MATLAB's `V'*B*V = I` normalization. Any other pencil goes through `qz`, which is native-only; the ts-lapack path raises an error there rather than answering a different problem.
+
+The pure-TypeScript side of this lives in `src/ts-lapack/src/` (`dsyev` = `dsytd2` + `dorgtr` + `dsteqr`, with `dsymv`/`dsyr2`/`dlae2`/`dlaev2`/`dlanst`/`dlansy` underneath) and, for the Hermitian case, in `src/numbl-core/native/ts-lapack-eig-hermitian.ts`, which does the complex tridiagonal reduction and reuses the same `dsteqr` for the tridiagonal QL/QR.
 
 ## Optional WASM accelerator bridge (browser)
 

@@ -28,6 +28,8 @@ import { dgeqrf_optimized } from "../../ts-lapack/src/SRC/dgeqrf_optimized.js";
 import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 import { eigComplexTs } from "./ts-lapack-eig-complex.js";
+import { eigHermTs } from "./ts-lapack-eig-hermitian.js";
+import { dsyev } from "../../ts-lapack/src/SRC/dsyev.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
   // Copy — dgetrf/dgetri operate in place
@@ -309,6 +311,43 @@ function linsolve(
 
     return x; // n × nrhs
   }
+}
+
+/**
+ * Symmetric eigenvalue decomposition: A = V * diag(w) * V^T
+ *
+ * Uses LAPACK dsyev. Only the lower triangle of A is read. Eigenvalues come
+ * back in ascending order and V is orthonormal even across repeated
+ * eigenvalues — the property the general dgeev path cannot provide.
+ */
+function eigSym(
+  data: Float64Array,
+  n: number,
+  computeV: boolean
+): { w: Float64Array; V?: Float64Array } {
+  const a = allocFloat64Array(data); // dsyev overwrites A
+  const w = allocFloat64Array(n);
+  const info = dsyev(computeV, LOWER, n, a, 0, n, w, 0);
+  if (info !== 0) {
+    throw new Error(
+      info < 0
+        ? "eig: illegal argument passed to dsyev"
+        : "QR algorithm failed to converge in dsyev"
+    );
+  }
+  return computeV ? { w, V: a } : { w };
+}
+
+/**
+ * Hermitian eigenvalue decomposition: A = V * diag(w) * V^H (zheev-equivalent).
+ */
+function eigHerm(
+  dataRe: Float64Array,
+  dataIm: Float64Array,
+  n: number,
+  computeV: boolean
+): { w: Float64Array; VRe?: Float64Array; VIm?: Float64Array } {
+  return eigHermTs(dataRe, dataIm, n, computeV);
 }
 
 /**
@@ -1288,7 +1327,9 @@ const _bridge: LapackBridge = {
   linsolve,
   linsolveComplex,
   eig,
+  eigSym,
   eigComplex: eigComplexTs,
+  eigHerm,
   lu,
   svd,
   chol,

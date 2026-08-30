@@ -8,6 +8,9 @@
  *   eigComplex(dataRe, dataIm, n, computeVL, computeVR):
  *       {wRe, wIm, VLRe?, VLIm?, VRRe?, VRIm?}
  *
+ *   eigSym(data, n, computeV): {w, V?}  — symmetric (dsyev)
+ *   eigHerm(dataRe, dataIm, n, computeV): {w, VRe?, VIm?} — Hermitian (zheev)
+ *
  *   Note: balance parameter is accepted but ignored — dgeev always balances.
  *   The ts-lapack bridge handles the nobalance case.
  */
@@ -188,6 +191,159 @@ Napi::Value EigComplex(const Napi::CallbackInfo& info) {
     setSplitComplex(env, result, "VLRe", "VLIm", vl.data(), n * n);
   if (computeVR)
     setSplitComplex(env, result, "VRRe", "VRIm", vr.data(), n * n);
+
+  return result;
+}
+
+// ── eigSym() ─────────────────────────────────────────────────────────────────
+//
+//   eigSym(data: Float64Array, n: number, computeV: boolean):
+//       {w: Float64Array, V?: Float64Array}
+//
+//   Symmetric eigenproblem via dsyev. Only the lower triangle of `data` is
+//   read. Eigenvalues come back ascending and V is orthonormal, including
+//   across repeated eigenvalues — which dgeev cannot guarantee.
+
+Napi::Value EigSym(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 3
+      || !info[0].IsTypedArray()
+      || !info[1].IsNumber()
+      || !info[2].IsBoolean()) {
+    Napi::TypeError::New(env,
+      "eigSym: expected (Float64Array data, number n, boolean computeV)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto arr = info[0].As<Napi::TypedArray>();
+  if (arr.TypedArrayType() != napi_float64_array) {
+    Napi::TypeError::New(env, "eigSym: data must be a Float64Array")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  int n         = info[1].As<Napi::Number>().Int32Value();
+  bool computeV = info[2].As<Napi::Boolean>().Value();
+
+  if (n <= 0 || static_cast<int>(arr.ElementLength()) != n * n) {
+    Napi::RangeError::New(env, "eigSym: data.length must equal n*n")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto float64arr = info[0].As<Napi::Float64Array>();
+
+  std::vector<double> a(n * n);
+  std::memcpy(a.data(), float64arr.Data(), n * n * sizeof(double));
+
+  std::vector<double> w(n);
+
+  char jobz = computeV ? 'V' : 'N';
+  char uplo = 'L';
+  int info_val = 0;
+
+  // Workspace query
+  int lwork = -1;
+  double work_query = 0.0;
+  dsyev_(&jobz, &uplo, &n, a.data(), &n, w.data(),
+         &work_query, &lwork, &info_val);
+
+  lwork = static_cast<int>(work_query);
+  if (lwork < 1) lwork = std::max(1, 3 * n - 1);
+
+  std::vector<double> work(lwork);
+
+  dsyev_(&jobz, &uplo, &n, a.data(), &n, w.data(),
+         work.data(), &lwork, &info_val);
+
+  if (!checkLapackInfo(env, info_val, "eigSym", "dsyev",
+      "QR algorithm failed to converge in dsyev"))
+    return env.Null();
+
+  auto result = Napi::Object::New(env);
+  result.Set("w", vecToF64(env, w));
+  if (computeV)
+    result.Set("V", vecToF64(env, a));
+
+  return result;
+}
+
+// ── eigHerm() ────────────────────────────────────────────────────────────────
+//
+//   eigHerm(dataRe, dataIm, n, computeV): {w, VRe?, VIm?}
+//
+//   Hermitian eigenproblem via zheev. Only the lower triangle is read.
+
+Napi::Value EigHerm(const Napi::CallbackInfo& info) {
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 4
+      || !info[0].IsTypedArray()
+      || !info[1].IsTypedArray()
+      || !info[2].IsNumber()
+      || !info[3].IsBoolean()) {
+    Napi::TypeError::New(env,
+      "eigHerm: expected (Float64Array dataRe, Float64Array dataIm, "
+      "number n, boolean computeV)")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto arrRe = info[0].As<Napi::TypedArray>();
+  auto arrIm = info[1].As<Napi::TypedArray>();
+  if (arrRe.TypedArrayType() != napi_float64_array
+      || arrIm.TypedArrayType() != napi_float64_array) {
+    Napi::TypeError::New(env, "eigHerm: data must be Float64Arrays")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  int n         = info[2].As<Napi::Number>().Int32Value();
+  bool computeV = info[3].As<Napi::Boolean>().Value();
+
+  if (n <= 0
+      || static_cast<int>(arrRe.ElementLength()) != n * n
+      || static_cast<int>(arrIm.ElementLength()) != n * n) {
+    Napi::RangeError::New(env, "eigHerm: data.length must equal n*n")
+        .ThrowAsJavaScriptException();
+    return env.Null();
+  }
+
+  auto a = splitToInterleaved(
+      info[0].As<Napi::Float64Array>(),
+      info[1].As<Napi::Float64Array>(), n * n);
+
+  std::vector<double> w(n);
+  std::vector<double> rwork(std::max(1, 3 * n - 2));
+
+  char jobz = computeV ? 'V' : 'N';
+  char uplo = 'L';
+  int info_val = 0;
+
+  // Workspace query
+  int lwork = -1;
+  lapack_complex_double work_query;
+  zheev_(&jobz, &uplo, &n, a.data(), &n, w.data(),
+         &work_query, &lwork, rwork.data(), &info_val);
+
+  lwork = static_cast<int>(work_query.real);
+  if (lwork < 1) lwork = std::max(1, 2 * n - 1);
+
+  std::vector<lapack_complex_double> work(lwork);
+
+  zheev_(&jobz, &uplo, &n, a.data(), &n, w.data(),
+         work.data(), &lwork, rwork.data(), &info_val);
+
+  if (!checkLapackInfo(env, info_val, "eigHerm", "zheev",
+      "QR algorithm failed to converge in zheev"))
+    return env.Null();
+
+  auto result = Napi::Object::New(env);
+  result.Set("w", vecToF64(env, w));
+  if (computeV)
+    setSplitComplex(env, result, "VRe", "VIm", a.data(), n * n);
 
   return result;
 }

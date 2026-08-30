@@ -15,6 +15,8 @@
  *   linsolveComplex(ARe, AIm, m, n, BRe, BIm, nrhs) — complex linear solve (lapack_linsolve.cpp)
  *   eig(data, n, computeVL, computeVR, balance) — eigenvalue decomp. (lapack_eig.cpp)
  *   eigComplex(dataRe, dataIm, n, computeVL, computeVR) — complex eigenvalue decomp. (lapack_eig.cpp)
+ *   eigSym(data, n, computeV)        — symmetric eigenvalue decomp. (lapack_eig.cpp)
+ *   eigHerm(dataRe, dataIm, n, computeV) — Hermitian eigenvalue decomp. (lapack_eig.cpp)
  *   chol(data, n, upper)             — Cholesky factorization    (lapack_chol.cpp)
  *   cholComplex(dataRe, dataIm, n, upper) — complex Cholesky     (lapack_chol.cpp)
  */
@@ -31,7 +33,7 @@ extern "C" {
 // ── Addon version ────────────────────────────────────────────────────────────
 // Bump this integer whenever the addon's API changes (new functions, signature
 // changes, etc.) so that the JS side can detect stale builds.
-static const int ADDON_VERSION = 8;
+static const int ADDON_VERSION = 9;
 
 // ── New tensor-ops layer (native/ops/) ───────────────────────────────────────
 Napi::Value TensorOpRealBinary(const Napi::CallbackInfo& info);
@@ -102,8 +104,12 @@ Napi::Object Init(Napi::Env env, Napi::Object exports) {
               Napi::Function::New(env, LinsolveComplex));
   exports.Set(Napi::String::New(env, "eig"),
               Napi::Function::New(env, Eig));
+  exports.Set(Napi::String::New(env, "eigSym"),
+              Napi::Function::New(env, EigSym));
   exports.Set(Napi::String::New(env, "eigComplex"),
               Napi::Function::New(env, EigComplex));
+  exports.Set(Napi::String::New(env, "eigHerm"),
+              Napi::Function::New(env, EigHerm));
   exports.Set(Napi::String::New(env, "chol"),
               Napi::Function::New(env, Chol));
   exports.Set(Napi::String::New(env, "cholComplex"),

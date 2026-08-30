@@ -137,6 +137,18 @@ extern "C" {
               lapack_complex_double* vr, int* ldvr,
               lapack_complex_double* work, int* lwork, double* rwork, int* info);
 
+  // Compute all eigenvalues and, optionally, eigenvectors of a real symmetric
+  // matrix A.  Eigenvalues are returned in ascending order and the
+  // eigenvectors are orthonormal.
+  void dsyev_(char* jobz, char* uplo, int* n, double* a, int* lda,
+              double* w, double* work, int* lwork, int* info);
+
+  // Compute all eigenvalues and, optionally, eigenvectors of a complex
+  // Hermitian matrix A.  Eigenvalues are real and returned in ascending order.
+  void zheev_(char* jobz, char* uplo, int* n, lapack_complex_double* a, int* lda,
+              double* w, lapack_complex_double* work, int* lwork,
+              double* rwork, int* info);
+
   // ── Cholesky factorization ─────────────────────────────────────────────────
   // Compute the Cholesky factorization of a real symmetric positive definite
   // matrix: A = U^T * U (uplo='U') or A = L * L^T (uplo='L')
@@ -297,7 +309,9 @@ Napi::Value MatmulComplex(const Napi::CallbackInfo& info);
 Napi::Value Linsolve(const Napi::CallbackInfo& info);
 Napi::Value LinsolveComplex(const Napi::CallbackInfo& info);
 Napi::Value Eig(const Napi::CallbackInfo& info);
+Napi::Value EigSym(const Napi::CallbackInfo& info);
 Napi::Value EigComplex(const Napi::CallbackInfo& info);
+Napi::Value EigHerm(const Napi::CallbackInfo& info);
 Napi::Value Chol(const Napi::CallbackInfo& info);
 Napi::Value CholComplex(const Napi::CallbackInfo& info);
 Napi::Value Qz(const Napi::CallbackInfo& info);

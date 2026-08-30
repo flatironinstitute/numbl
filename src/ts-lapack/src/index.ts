@@ -110,6 +110,18 @@ export { dorgbr } from "./SRC/dorgbr.js";
 export { dormbr } from "./SRC/dormbr.js";
 export { dgesvd } from "./SRC/dgesvd.js";
 
+// LAPACK SRC – symmetric eigenvalue problem
+export { dsymv } from "./BLAS/dsymv.js";
+export { dsyr2 } from "./BLAS/dsyr2.js";
+export { dlae2 } from "./SRC/dlae2.js";
+export { dlaev2 } from "./SRC/dlaev2.js";
+export { dlanst } from "./SRC/dlanst.js";
+export { dlansy } from "./SRC/dlansy.js";
+export { dsytd2 } from "./SRC/dsytd2.js";
+export { dorgtr } from "./SRC/dorgtr.js";
+export { dsteqr, COMPZ_N, COMPZ_V, COMPZ_I } from "./SRC/dsteqr.js";
+export { dsyev } from "./SRC/dsyev.js";
+
 // Utilities
 export { xerbla } from "./utils/xerbla.js";
 export * from "./utils/constants.js";

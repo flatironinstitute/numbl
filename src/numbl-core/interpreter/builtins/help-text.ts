@@ -786,9 +786,20 @@ const H: Record<string, BuiltinHelp> = {
     description: "Sum of diagonal elements.",
   },
   eig: {
-    signatures: ["E = eig(A)", "[V, D] = eig(A)", "[V, D, W] = eig(A)"],
+    signatures: [
+      "E = eig(A)",
+      "[V, D] = eig(A)",
+      "[V, D, W] = eig(A)",
+      "E = eig(A, B)",
+      "[V, D] = eig(A, B)",
+      "eig(A, ..., 'vector' | 'matrix' | 'nobalance' | 'chol' | 'qz')",
+    ],
     description:
-      "Eigenvalues and eigenvectors of square matrix. With three outputs, W contains left eigenvectors.",
+      "Eigenvalues and eigenvectors of a square matrix. With three outputs, W " +
+      "contains left eigenvectors. Symmetric (Hermitian) input gives real " +
+      "eigenvalues in ascending order and an orthonormal eigenvector basis. " +
+      "eig(A, B) solves the generalized problem A*v = lambda*B*v; for a " +
+      "symmetric-definite pencil V is normalized so that V'*B*V = I.",
   },
   eigs: {
     signatures: [
