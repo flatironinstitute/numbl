@@ -450,6 +450,16 @@ export class RuntimeStructArray extends Refcounted {
 
 /** Sparse matrix in CSC (Compressed Sparse Column) format, matching MATLAB's
  *  internal representation. */
+/** Cached structural analysis of a sparse matrix (see helpers/sparse-direct). */
+export interface SparseTriInfo {
+  upper: boolean;
+  lower: boolean;
+  /** Index into ir/pr of the diagonal entry of each column, or -1. */
+  diagPos: Int32Array;
+  /** Diagonal values (0 where absent). */
+  diag: Float64Array;
+}
+
 export class RuntimeSparseMatrix extends Refcounted {
   readonly kind = "sparse_matrix" as const;
   m: number;
@@ -458,6 +468,9 @@ export class RuntimeSparseMatrix extends Refcounted {
   jc: Int32Array;
   pr: Float64Array;
   pi: Float64Array | undefined;
+  /** Lazily computed by triangularInfo(); valid because sparse matrices are
+   *  never mutated in place (indexed assignment builds a new matrix). */
+  _triInfo: SparseTriInfo | undefined = undefined;
 
   constructor(
     m: number,

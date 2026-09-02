@@ -88,6 +88,7 @@ import {
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
 import { registerSpecialBuiltins } from "./specialBuiltins.js";
+import { setWarningSink } from "../helpers/warn.js";
 import {
   getMember as _getMember,
   getMemberDynamic as _getMemberDynamic,
@@ -381,6 +382,7 @@ export class Runtime {
     if (options.cancelSAB) {
       this.cancelFlag = new Int32Array(options.cancelSAB);
     }
+    setWarningSink(msg => this.output("Warning: " + msg + "\n"));
     this.initBuiltins();
   }
 

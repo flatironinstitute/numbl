@@ -66,6 +66,7 @@ import {
   linsolveComplexLapack,
 } from "../../numbl-core/helpers/linsolve.js";
 import { sparseToDense as sparseToDenseFn } from "../../numbl-core/helpers/sparse-arithmetic.js";
+import { mLeftDiv } from "../../numbl-core/helpers/arithmetic.js";
 import {
   type DeferredRange,
   type DeferredHorzcat,
@@ -227,7 +228,12 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         result = mElemDiv(mb, ma);
         break;
       }
-      const tensorA = isRuntimeSparseMatrix(ma) ? sparseToDenseFn(ma) : ma;
+      if (isRuntimeSparseMatrix(ma)) {
+        // Sparse direct solvers (with dense fallback) live in mLeftDiv.
+        result = mLeftDiv(ma, mb);
+        break;
+      }
+      const tensorA = ma;
       const tensorB = isRuntimeNumber(mb)
         ? RTV.tensor(allocFloat64Array([mb]), [1, 1])
         : isRuntimeSparseMatrix(mb)

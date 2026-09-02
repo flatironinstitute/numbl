@@ -2,7 +2,7 @@
 
 The standard library is the set of MATLAB-surface functions that numbl implements in MATLAB itself rather than as TypeScript `IBuiltin`s. These are thin wrappers, compatibility helpers, and higher-level utilities where writing the logic in MATLAB is more natural than hard-coding it in the interpreter.
 
-Examples include `inputParser`, `readmatrix`, `decomposition`, and a collection of namespace shims (e.g., under a `+matlab/+internal/` search path).
+Examples include `inputParser`, `readmatrix`, and a collection of namespace shims (e.g., under a `+matlab/+internal/` search path). (`decomposition` used to be a shim here; it is now a builtin backed by the sparse direct solvers.)
 
 ## Why it is bundled
 

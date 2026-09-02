@@ -322,6 +322,9 @@ function formatClassInstance(v: RuntimeClassInstance): string {
   }
   const lines: string[] = [`  ${v.className} with properties:\n`];
   for (const [key, val] of v.fields) {
+    // Builtin-defined objects (graph, decomposition) keep internal state in
+    // underscore-prefixed fields that are not user-visible properties.
+    if (key.startsWith("_")) continue;
     lines.push(`    ${key}: ${displayValue(val)}`);
   }
   return lines.join("\n");

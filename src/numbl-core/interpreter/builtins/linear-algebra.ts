@@ -50,6 +50,46 @@ import {
 } from "../../helpers/linsolve.js";
 import { mAdd, mSub, mMul, mLeftDiv } from "../../helpers/arithmetic.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
+import type { RuntimeSparseMatrix } from "../../runtime/types.js";
+import { sparseTranspose } from "../../helpers/sparse-arithmetic.js";
+import {
+  sparseKron,
+  sparseChol,
+  sparseLu,
+  sparseIsUpper,
+  sparseIsLower,
+  sparseInverse,
+  sparsePermute,
+  permutationMatrix,
+  permVectorTensor,
+  invertPerm,
+  identityPerm,
+  minimumDegreeOrdering,
+  columnOrdering,
+  denseToSparse,
+} from "../../helpers/sparse-direct.js";
+
+const SPARSE_TYPE: JitType = { kind: "sparse_matrix", isComplex: false };
+
+/** Coerce a numeric value to CSC for sparse-producing builtins. */
+function toSparseOperand(v: RuntimeValue, name: string): RuntimeSparseMatrix {
+  if (isRuntimeSparseMatrix(v)) return v;
+  if (isRuntimeNumber(v) || typeof v === "boolean")
+    return denseToSparse(RTV.tensor(allocFloat64Array([Number(v)]), [1, 1]));
+  if (isRuntimeTensor(v)) return denseToSparse(v);
+  throw new RuntimeError(`${name}: arguments must be numeric`);
+}
+
+function speyeSparse(n: number): RuntimeSparseMatrix {
+  const ir = new Int32Array(n);
+  const jc = new Int32Array(n + 1);
+  const pr = allocFloat64Array(n).fill(1);
+  for (let i = 0; i < n; i++) {
+    ir[i] = i;
+    jc[i + 1] = i + 1;
+  }
+  return RTV.sparseMatrix(n, n, ir, jc, pr);
+}
 
 // ── Type helpers ──────────────────────────────────────────────────────────
 
@@ -112,11 +152,58 @@ function normApply(args: RuntimeValue[]): RuntimeValue {
   const v = args[0];
   if (isRuntimeNumber(v)) return RTV.num(Math.abs(v));
   if (isRuntimeComplexNumber(v)) return RTV.num(Math.hypot(v.re, v.im));
-  if (isRuntimeSparseMatrix(v))
+  if (isRuntimeSparseMatrix(v)) {
+    const fast = sparseNormFast(v, args[1]);
+    if (fast !== null) return RTV.num(fast);
     return normApply([sparseToDense(v), ...args.slice(1)]);
+  }
   if (!isRuntimeTensor(v))
     throw new RuntimeError("norm: argument must be numeric");
   return normImplTensor(v, args);
+}
+
+/** O(nnz) matrix norms for sparse input (1, Inf, 'fro'); null otherwise. */
+function sparseNormFast(
+  S: RuntimeSparseMatrix,
+  p: RuntimeValue | undefined
+): number | null {
+  if (S.m === 1 || S.n === 1) return null; // vector norms: dense path
+  let kind: "one" | "inf" | "fro" | null = null;
+  if (p === undefined) return null;
+  if (isRuntimeNumber(p)) {
+    if (p === 1) kind = "one";
+    else if (p === Infinity) kind = "inf";
+  } else if (isRuntimeChar(p) || isRuntimeString(p)) {
+    const s = parseStringArgLower(p);
+    if (s === "fro") kind = "fro";
+    else if (s === "inf") kind = "inf";
+  }
+  if (kind === null) return null;
+  const mag = (k: number) =>
+    S.pi ? Math.hypot(S.pr[k], S.pi[k]) : Math.abs(S.pr[k]);
+  const nnz = S.jc[S.n];
+  if (kind === "fro") {
+    let sum = 0;
+    for (let k = 0; k < nnz; k++) {
+      const a = mag(k);
+      sum += a * a;
+    }
+    return Math.sqrt(sum);
+  }
+  if (kind === "one") {
+    let best = 0;
+    for (let j = 0; j < S.n; j++) {
+      let sum = 0;
+      for (let k = S.jc[j]; k < S.jc[j + 1]; k++) sum += mag(k);
+      if (sum > best) best = sum;
+    }
+    return best;
+  }
+  const rowSums = allocFloat64Array(S.m);
+  for (let k = 0; k < nnz; k++) rowSums[S.ir[k]] += mag(k);
+  let best = 0;
+  for (let i = 0; i < S.m; i++) if (rowSums[i] > best) best = rowSums[i];
+  return best;
 }
 
 // LAPACK dlassq-style Euclidean norm: finite for any inputs in double range.
@@ -879,11 +966,20 @@ defineBuiltin({
         if (a.kind === "complex_or_number") return [COMPLEX_OR_NUM];
         if (a.kind === "tensor")
           return [{ kind: "tensor", isComplex: a.isComplex }];
+        if (a.kind === "sparse_matrix")
+          return [{ kind: "sparse_matrix", isComplex: a.isComplex }];
         return null;
       },
-      apply: args => {
+      apply: function invApply(args): RuntimeValue {
         if (args.length < 1) throw new RuntimeError("inv requires 1 argument");
         const A = args[0];
+        if (isRuntimeSparseMatrix(A)) {
+          // Sparse inverse stays sparse (MATLAB). Real: solve against the
+          // identity with the sparse LU; complex: dense path, then sparsify.
+          if (!A.pi) return sparseInverse(A);
+          const dense = invApply([sparseToDense(A)]);
+          return isRuntimeTensor(dense) ? denseToSparse(dense) : dense;
+        }
         if (isRuntimeComplexNumber(A)) {
           const { re, im } = A;
           if (re === 0 && im === 0)
@@ -1311,6 +1407,75 @@ registerIBuiltin({
     if (!isNumericJitType(argTypes[0])) return null;
     const outs = nargout >= 2 ? [NUM, NUM] : [NUM];
     return { outputTypes: outs, apply: (args, n) => bandwidthApply(args, n) };
+  },
+});
+
+// ── istriu / istril / isbanded ──────────────────────────────────────────────
+
+/** True when every nonzero lies on or above (upper) / below (lower) the
+ *  diagonal. Numeric check: explicitly stored zeros do not count. */
+function isTriangularValue(A: RuntimeValue, upper: boolean): boolean {
+  if (isRuntimeNumber(A) || isRuntimeComplexNumber(A)) return true;
+  if (isRuntimeSparseMatrix(A))
+    return upper ? sparseIsUpper(A) : sparseIsLower(A);
+  if (isRuntimeTensor(A)) {
+    if (A.shape.length > 2) return false;
+    const [m, n] = tensorSize2D(A);
+    for (let j = 0; j < n; j++)
+      for (let i = 0; i < m; i++) {
+        if (upper ? i <= j : i >= j) continue;
+        const idx = colMajorIndex(i, j, m);
+        if (A.data[idx] !== 0 || (A.imag && A.imag[idx] !== 0)) return false;
+      }
+    return true;
+  }
+  throw new RuntimeError("istriu: argument must be a numeric matrix");
+}
+
+for (const [name, upper] of [
+  ["istriu", true],
+  ["istril", false],
+] as const) {
+  registerIBuiltin({
+    name,
+    help: {
+      signatures: [`tf = ${name}(A)`],
+      description: `True if A is ${upper ? "upper" : "lower"} triangular (all entries ${upper ? "below" : "above"} the main diagonal are zero). Works for dense and sparse matrices.`,
+    },
+    resolve: (argTypes, nargout) => {
+      if (nargout > 1 || argTypes.length !== 1) return null;
+      if (!isNumericJitType(argTypes[0])) return null;
+      return {
+        outputTypes: [{ kind: "boolean" }],
+        apply: args => RTV.logical(isTriangularValue(args[0], upper)),
+      };
+    },
+  });
+}
+
+registerIBuiltin({
+  name: "isbanded",
+  help: {
+    signatures: ["tf = isbanded(A, lower, upper)"],
+    description:
+      "True if A has lower bandwidth at most `lower` and upper bandwidth at most `upper`. Works for dense and sparse matrices.",
+  },
+  resolve: (argTypes, nargout) => {
+    if (nargout > 1 || argTypes.length !== 3) return null;
+    if (!isNumericJitType(argTypes[0])) return null;
+    return {
+      outputTypes: [{ kind: "boolean" }],
+      apply: args => {
+        const lo = toNumber(args[1]);
+        const up = toNumber(args[2]);
+        if (lo < 0 || up < 0 || !Number.isInteger(lo) || !Number.isInteger(up))
+          throw new RuntimeError(
+            "isbanded: bandwidths must be nonnegative integers"
+          );
+        const [l, u] = computeBandwidth(args[0]);
+        return RTV.logical(l <= lo && u <= up);
+      },
+    };
   },
 });
 
@@ -1748,17 +1913,64 @@ function qrPivotApply(
 registerIBuiltin({
   name: "lu",
   resolve: (argTypes, nargout) => {
-    if (nargout < 0 || nargout > 3) return null;
-    if (argTypes.length < 1 || argTypes.length > 2) return null;
+    if (nargout < 0 || nargout > 4) return null;
+    if (argTypes.length < 1 || argTypes.length > 3) return null;
     if (!isNumericJitType(argTypes[0])) return null;
-    const t = tensorType();
+    const sparse = argTypes[0].kind === "sparse_matrix";
+    if (!sparse && (nargout > 3 || argTypes.length > 2)) return null;
+    const t = sparse ? SPARSE_TYPE : tensorType();
     const wrapped = (args: RuntimeValue[], n: number) =>
       withScratch(() => luApply(args, n));
     if (nargout <= 1) return { outputTypes: [t], apply: wrapped };
     if (nargout === 2) return { outputTypes: [t, t], apply: wrapped };
-    return { outputTypes: [t, t, t], apply: wrapped };
+    if (nargout === 3) return { outputTypes: [t, t, t], apply: wrapped };
+    return { outputTypes: [t, t, t, t], apply: wrapped };
   },
 });
+
+/** Sparse LU: [L,U,P] = lu(S), [L,U,P,Q] = lu(S), with optional pivot
+ *  threshold and 'vector' output form. */
+function sparseLuApply(
+  S: RuntimeSparseMatrix,
+  args: RuntimeValue[],
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  let outputForm: "matrix" | "vector" = "matrix";
+  let tol = nargout >= 4 ? 0.1 : 1.0;
+  for (const opt of args.slice(1)) {
+    if (isRuntimeNumber(opt)) {
+      if (!(opt >= 0 && opt <= 1))
+        throw new RuntimeError("lu: pivot threshold must be in [0, 1]");
+      tol = opt;
+    } else {
+      const form = parseLuOutputForm(opt);
+      if (form === null)
+        throw new RuntimeError("lu: outputForm must be 'matrix' or 'vector'");
+      outputForm = form;
+    }
+  }
+  const q = nargout >= 4 ? columnOrdering(S) : null;
+  const res = sparseLu(S, q, tol);
+  const { L, U, p } = res;
+  if (nargout <= 1) {
+    // Y = L + U - I (permutation information is lost, as in MATLAB).
+    return mSub(mAdd(L, U), speyeSparse(Math.min(S.m, S.n)));
+  }
+  if (nargout === 2) {
+    // A = (P'*L) * U: unpermute the rows of L.
+    const Lperm = sparsePermute(L, invertPerm(p), identityPerm(L.n));
+    return [Lperm, U];
+  }
+  const permOut = (perm: Int32Array) =>
+    outputForm === "vector" ? permVectorTensor(perm) : permutationMatrix(perm);
+  if (nargout === 3) return [L, U, permOut(p)];
+  // P*A*Q = L*U with Q(q[k], k) = 1, i.e. Q = permutationMatrix(q)'.
+  const Q =
+    outputForm === "vector"
+      ? permVectorTensor(res.q)
+      : sparseTranspose(permutationMatrix(res.q));
+  return [L, U, permOut(p), Q];
+}
 
 function luApply(
   args: RuntimeValue[],
@@ -1766,6 +1978,15 @@ function luApply(
 ): RuntimeValue | RuntimeValue[] {
   if (args.length < 1)
     throw new RuntimeError("lu requires at least 1 argument");
+  if (isRuntimeSparseMatrix(args[0]) && !args[0].pi)
+    return sparseLuApply(args[0], args, nargout);
+  if (isRuntimeSparseMatrix(args[0])) {
+    // Complex sparse: dense factorization, sparse factors.
+    const dense = luApply([sparseToDense(args[0]), ...args.slice(1)], nargout);
+    const toSp = (v: RuntimeValue) =>
+      isRuntimeTensor(v) ? denseToSparse(v) : v;
+    return Array.isArray(dense) ? dense.map(toSp) : toSp(dense);
+  }
   const outputForm = args.length >= 2 ? parseLuOutputForm(args[1]) : "matrix";
   if (outputForm === null)
     throw new RuntimeError("lu: outputForm must be 'matrix' or 'vector'");
@@ -2512,7 +2733,7 @@ registerIBuiltin({
     )
       return null;
     if (!isNumericJitType(argTypes[0])) return null;
-    const t = tensorType();
+    const t = argTypes[0].kind === "sparse_matrix" ? SPARSE_TYPE : tensorType();
     const wrapped = (args: RuntimeValue[], n: number) =>
       withScratch(() => cholApply(args, n));
     if (nargout <= 1) return { outputTypes: [t], apply: wrapped };
@@ -2520,6 +2741,35 @@ registerIBuiltin({
     return { outputTypes: [t, NUM, t], apply: wrapped };
   },
 });
+
+/** Sparse Cholesky. Reads the upper triangle only (no symmetry check, as in
+ *  MATLAB). The three-output form applies a fill-reducing ordering. */
+function sparseCholApply(
+  S: RuntimeSparseMatrix,
+  upper: boolean,
+  outputForm: "matrix" | "vector",
+  nargout: number
+): RuntimeValue | RuntimeValue[] {
+  if (S.m !== S.n) throw new RuntimeError("chol: Matrix must be square.");
+  const n = S.n;
+  const perm = nargout >= 3 ? minimumDegreeOrdering(S) : identityPerm(n);
+  const A = nargout >= 3 ? sparsePermute(S, perm, perm) : S;
+  const res = sparseChol(A);
+  const R = upper ? sparseTranspose(res.L) : res.L;
+  const permOut = () =>
+    outputForm === "vector"
+      ? permVectorTensor(perm)
+      : permutationMatrix(invertPerm(perm));
+  if (!res.ok) {
+    if (nargout < 2)
+      throw new RuntimeError("chol: Matrix must be positive definite.");
+    if (nargout >= 3) return [R, RTV.num(res.p), permOut()];
+    return [R, RTV.num(res.p)];
+  }
+  if (nargout >= 3) return [R, RTV.num(0), permOut()];
+  if (nargout === 2) return [R, RTV.num(0)];
+  return R;
+}
 
 function cholApply(
   args: RuntimeValue[],
@@ -2531,10 +2781,10 @@ function cholApply(
   const inputIsSparse = isRuntimeSparseMatrix(A);
   if (nargout >= 3 && !inputIsSparse)
     throw new RuntimeError("Third output only available for sparse matrices.");
-  if (inputIsSparse)
-    A = sparseToDense(
-      A as import("../../runtime/types.js").RuntimeSparseMatrix
-    );
+  const sparseInput =
+    isRuntimeSparseMatrix(A) && !A.pi ? (A as RuntimeSparseMatrix) : null;
+  if (inputIsSparse && !sparseInput)
+    A = sparseToDense(A as RuntimeSparseMatrix);
   let triangle: "upper" | "lower" = "upper";
   let outputForm: "matrix" | "vector" = "matrix";
   if (args.length === 2) {
@@ -2553,6 +2803,8 @@ function cholApply(
     outputForm = form as "matrix" | "vector";
   }
   const upper = triangle === "upper";
+  if (sparseInput)
+    return sparseCholApply(sparseInput, upper, outputForm, nargout);
   if (isRuntimeNumber(A)) {
     const val = A as number;
     if (val <= 0) {
@@ -3027,15 +3279,29 @@ defineBuiltin({
         if (nargout > 1 || argTypes.length !== 2) return null;
         if (!isNumericJitType(argTypes[0]) || !isNumericJitType(argTypes[1]))
           return null;
+        if (argTypes.some(t => t.kind === "sparse_matrix"))
+          return [
+            {
+              kind: "sparse_matrix",
+              isComplex: argTypes.some(
+                t => t.kind === "sparse_matrix" && t.isComplex
+              ),
+            },
+          ];
         return [tensorType()];
       },
       apply: args => {
         if (args.length !== 2)
           throw new RuntimeError("kron requires 2 arguments");
+        // Sparse operand: the result is sparse with nnz(A)*nnz(B) entries.
+        if (isRuntimeSparseMatrix(args[0]) || isRuntimeSparseMatrix(args[1]))
+          return sparseKron(
+            toSparseOperand(args[0], "kron"),
+            toSparseOperand(args[1], "kron")
+          );
         const coerce = (v: RuntimeValue): RuntimeTensor => {
           if (isRuntimeNumber(v))
             return RTV.tensor(allocFloat64Array([v]), [1, 1]);
-          if (isRuntimeSparseMatrix(v)) return sparseToDense(v);
           if (isRuntimeTensor(v)) return v;
           throw new RuntimeError("kron: arguments must be numeric");
         };

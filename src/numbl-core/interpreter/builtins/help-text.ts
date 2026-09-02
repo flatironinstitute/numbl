@@ -774,7 +774,8 @@ const H: Record<string, BuiltinHelp> = {
   },
   inv: {
     signatures: ["B = inv(A)"],
-    description: "Matrix inverse.",
+    description:
+      "Matrix inverse. A sparse A gives a sparse B (computed by sparse LU); prefer A \\ b for solving systems.",
   },
   expm: {
     signatures: ["Y = expm(X)"],
@@ -828,9 +829,16 @@ const H: Record<string, BuiltinHelp> = {
     description: "Singular value decomposition.",
   },
   lu: {
-    signatures: ["Y = lu(A)", "[L, U] = lu(A)", "[L, U, P] = lu(A)"],
+    signatures: [
+      "Y = lu(A)",
+      "[L, U] = lu(A)",
+      "[L, U, P] = lu(A)",
+      "[L, U, P] = lu(A, 'vector')",
+      "[L, U, P, Q] = lu(S)",
+      "[L, U, P, Q] = lu(S, thresh)",
+    ],
     description:
-      "LU factorization. With 2 outputs, L includes the permutation. With 3, P is a permutation matrix.",
+      "LU factorization. With 2 outputs, L includes the permutation. With 3, P is a permutation matrix (or a row vector with 'vector'). Sparse S returns sparse factors from a left-looking LU with threshold partial pivoting; with 4 outputs, Q is a fill-reducing column permutation and P*S*Q = L*U.",
   },
   qr: {
     signatures: [
@@ -843,9 +851,15 @@ const H: Record<string, BuiltinHelp> = {
       "QR factorization. With 3 outputs, E is a column permutation matrix (or vector in economy mode).",
   },
   chol: {
-    signatures: ["R = chol(A)", "[R, P] = chol(A)"],
+    signatures: [
+      "R = chol(A)",
+      "L = chol(A, 'lower')",
+      "[R, p] = chol(A)",
+      "[R, p, P] = chol(S)",
+      "[R, p, q] = chol(S, 'vector')",
+    ],
     description:
-      "Cholesky factorization. A must be symmetric positive definite. With 2 outputs, P is 0 on success.",
+      "Cholesky factorization with R'*R = A, reading only the upper triangle. A must be symmetric positive definite; with 2 outputs, p is 0 on success and otherwise the failing column (no error). Sparse S returns a sparse factor; with 3 outputs, P is a fill-reducing permutation with R'*R = P'*S*P.",
   },
   rank: {
     signatures: ["K = rank(A)", "K = rank(A, TOL)"],
@@ -876,7 +890,8 @@ const H: Record<string, BuiltinHelp> = {
   },
   kron: {
     signatures: ["K = kron(A, B)"],
-    description: "Kronecker tensor product.",
+    description:
+      "Kronecker tensor product. If either operand is sparse, K is sparse with nnz(A)*nnz(B) entries.",
   },
   linsolve: {
     signatures: ["X = linsolve(A, B)"],

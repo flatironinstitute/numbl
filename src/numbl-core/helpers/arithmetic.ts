@@ -43,6 +43,9 @@ import {
   sparseConjugateTranspose,
   sparseToDense,
 } from "./sparse-arithmetic.js";
+import { sparseSolve, denseDataToSparse } from "./sparse-direct.js";
+import type { RuntimeSparseMatrix } from "../runtime/types.js";
+import { emitWarning } from "./warn.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Complex helpers ──────────────────────────────────────────────────────
@@ -889,6 +892,20 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   // When B is a matrix, always use matrix division (scalar A is promoted);
   // mLeftDiv will error on dimension mismatch, matching MATLAB behaviour.
   if (isRuntimeSparseMatrix(a) || isRuntimeSparseMatrix(b)) {
+    // S / scalar stays sparse (element-wise scaling).
+    if (
+      isRuntimeSparseMatrix(a) &&
+      (isRuntimeNumber(b) ||
+        isRuntimeLogical(b) ||
+        isRuntimeComplexNumber(b) ||
+        (isRuntimeTensor(b) && b.data.length === 1))
+    )
+      return mElemDivSparse(a, b);
+    // A / S with a sparse divisor: (S' \ A')' keeps the solve sparse.
+    if (isRuntimeSparseMatrix(b) && !(b.m === 1 && b.n === 1)) {
+      const result = mLeftDiv(mConjugateTranspose(b), mConjugateTranspose(a));
+      return mConjugateTranspose(result);
+    }
     return mDiv(densify(a), densify(b));
   }
   // Unwrap 1×1 tensors to scalars so scalar division path is used
@@ -954,10 +971,61 @@ export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   return binaryOp(a, b, (x, y) => x / y, BIN_OP_DIV);
 }
 
+/** Sparse A \ B via the sparse direct solvers. Returns null when the dense
+ *  path should be used instead (complex operands, non-square or nearly full
+ *  A, or a 1×1 sparse scalar). */
+function sparseLeftDiv(
+  A: RuntimeSparseMatrix,
+  b: RuntimeValue
+): RuntimeValue | null {
+  if (A.pi) return null;
+  if (A.m === 1 && A.n === 1) return null;
+  let B: Float64Array;
+  let rows: number, nrhs: number;
+  const bSparse = isRuntimeSparseMatrix(b);
+  if (isRuntimeSparseMatrix(b)) {
+    if (b.pi) return null;
+    const d = sparseToDense(b);
+    B = d.data;
+    rows = b.m;
+    nrhs = b.n;
+  } else if (isRuntimeTensor(b)) {
+    if (b.imag) return null;
+    [rows, nrhs] = tensorSize2D(b);
+    B = b.data;
+  } else if (isRuntimeNumber(b) || isRuntimeLogical(b)) {
+    B = allocFloat64Array([toNumber(b)]);
+    rows = 1;
+    nrhs = 1;
+  } else {
+    return null;
+  }
+  if (rows !== A.m)
+    throw new RuntimeError(
+      `mldivide (\\): A is ${A.m}×${A.n} but B has ${rows} rows`
+    );
+  if (A.m !== A.n) {
+    emitWarning(
+      "mldivide: sparse least-squares uses a dense factorization; " +
+        "the sparse matrix is converted to full."
+    );
+    return null;
+  }
+  const X = sparseSolve(A, B, nrhs);
+  if (X === null) return null;
+  if (bSparse) return denseDataToSparse(X, A.n, nrhs);
+  return unwrap1x1(RTV.tensor(X, [A.n, nrhs]));
+}
+
 /** Left division (mldivide): a \ b — for scalars b/a, for matrices solve a*x = b */
 export function mLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
-  // Densify sparse operands for linear solve
-  if (isRuntimeSparseMatrix(a)) return mLeftDiv(densify(a), b);
+  // Sparse A: direct sparse solve (triangular / Cholesky / LU). Falls back
+  // to the dense path for complex, non-square, or nearly full A.
+  if (isRuntimeSparseMatrix(a)) {
+    const r = sparseLeftDiv(a, b);
+    if (r !== null) return r;
+    return mLeftDiv(densify(a), densify(b));
+  }
   if (isRuntimeSparseMatrix(b)) return mLeftDiv(a, densify(b));
   // Unwrap 1×1 tensors to scalars so scalar division path is used
   if (isRuntimeTensor(a) && a.data.length === 1) a = unwrap1x1(a);

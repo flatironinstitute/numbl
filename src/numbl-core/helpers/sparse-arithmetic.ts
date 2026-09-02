@@ -694,6 +694,25 @@ export function mMulSparse(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     const m = a.m;
     const hasImag = isComplexSparse(a) || b.imag !== undefined;
     const result = allocFloat64Array(m * bCols);
+    if (!hasImag) {
+      // Real fast path: O(nnz(A) * cols(B)).
+      const ir = a.ir,
+        jc = a.jc,
+        pr = a.pr,
+        bd = b.data;
+      for (let col = 0; col < bCols; col++) {
+        const boff = col * bRows;
+        const roff = col * m;
+        for (let k = 0; k < a.n; k++) {
+          const bk = bd[boff + k];
+          if (bk === 0) continue;
+          const end = jc[k + 1];
+          for (let ka = jc[k]; ka < end; ka++)
+            result[roff + ir[ka]] += pr[ka] * bk;
+        }
+      }
+      return RTV.tensor(result, [m, bCols]);
+    }
     const resultImag = hasImag ? allocFloat64Array(m * bCols) : undefined;
     for (let col = 0; col < bCols; col++) {
       for (let k = 0; k < a.n; k++) {

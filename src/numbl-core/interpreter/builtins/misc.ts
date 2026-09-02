@@ -19,6 +19,7 @@ import { toNumber } from "../../runtime/convert.js";
 import { toString } from "../../runtime/convert.js";
 import { registerIBuiltin, getIBuiltin } from "./types.js";
 import { tryDatetimeDurationBinop } from "./datetime.js";
+import { tryDecompositionDivide } from "./sparse-solvers.js";
 import {
   mAdd,
   mSub,
@@ -417,6 +418,10 @@ for (const [name, op] of opMap) {
         apply: args => {
           const dt = tryDatetimeDurationBinop(name, args[0], args[1]);
           if (dt !== undefined) return dt;
+          if (name === "mldivide" || name === "mrdivide") {
+            const dec = tryDecompositionDivide(name, args[0], args[1]);
+            if (dec !== undefined) return dec;
+          }
           return op(args[0], args[1]);
         },
       };
