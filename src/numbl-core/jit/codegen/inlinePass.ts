@@ -47,8 +47,9 @@
  * Each pass scans producers in source order, finds the first
  * inlinable pair, substitutes, and returns the new body. Chained
  * inlining (`a → b → c`) needs multiple iterations because each
- * substitution can flip a previously-multi-use cName to single-use;
- * we cap at 32 iterations defensively.
+ * substitution can flip a previously-multi-use cName to single-use.
+ * Each substitution removes one statement, so the statement count
+ * bounds the number of iterations.
  *
  * Preserves: post-inlining the IR is still well-typed (each node's
  * `.ty` is unchanged — the substitution copies the producer's RHS
@@ -85,12 +86,11 @@ function inlineInBody(
   recurseInlineNested(stmts);
 
   let cur = stmts;
-  for (let iter = 0; iter < 32; iter++) {
+  for (;;) {
     const next = inlineOnePass(cur, protectedNames);
     if (next === cur) return cur;
     cur = next;
   }
-  return cur;
 }
 
 /** Recurse into If / While / For body fields and run inlining on

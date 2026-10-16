@@ -82,6 +82,11 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Square root, element-wise. Returns complex for negative input.",
   },
+  realsqrt: {
+    signatures: ["Y = realsqrt(X)"],
+    description:
+      "Real square root, element-wise. Errors for negative or complex input.",
+  },
   sign: {
     signatures: ["Y = sign(X)"],
     description:

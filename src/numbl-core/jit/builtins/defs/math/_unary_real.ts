@@ -55,6 +55,7 @@ import {
   mtoc2_tensor_log2,
   mtoc2_tensor_log10,
   mtoc2_tensor_sqrt,
+  mtoc2_tensor_realsqrt,
   mtoc2_tensor_abs,
   mtoc2_tensor_floor,
   mtoc2_tensor_ceil,
@@ -99,6 +100,7 @@ const JS_TENSOR_UNARY: Record<string, TensorUnary> = {
   log2: mtoc2_tensor_log2 as unknown as TensorUnary,
   log10: mtoc2_tensor_log10 as unknown as TensorUnary,
   sqrt: mtoc2_tensor_sqrt as unknown as TensorUnary,
+  realsqrt: mtoc2_tensor_realsqrt as unknown as TensorUnary,
   abs: mtoc2_tensor_abs as unknown as TensorUnary,
   floor: mtoc2_tensor_floor as unknown as TensorUnary,
   ceil: mtoc2_tensor_ceil as unknown as TensorUnary,
@@ -141,6 +143,10 @@ export interface UnaryRealMathOpts {
    *  Override for `fix` (`Math.trunc`) and `round`
    *  (custom half-away-from-zero form). */
   jsExpr?: (arg: string) => string;
+  /** Optional `mtoc2_`-prefixed helper from `tensor_unary_real_math.js`
+   *  for `emitJs`'s scalar real path. Activates that snippet and takes
+   *  precedence over `jsExpr`. */
+  jsFnReal?: string;
   /** Sign refinement on the result type. Called with the (validated)
    *  real-numeric input type. */
   signRule: (t: NumericType) => Sign;
@@ -386,6 +392,10 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
         }
         useRuntime("mtoc2_tensor_unary_real_math");
         return `mtoc2_tensor_${name}(${argsJs[0]})`;
+      }
+      if (opts.jsFnReal !== undefined) {
+        useRuntime("mtoc2_tensor_unary_real_math");
+        return `${opts.jsFnReal}(${argsJs[0]})`;
       }
       return jsExpr(argsJs[0]);
     },
