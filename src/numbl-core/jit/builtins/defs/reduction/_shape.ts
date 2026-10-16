@@ -32,6 +32,7 @@ import {
   DIM_ONE,
   EXACT_ARRAY_MAX_ELEMENTS,
   isDimOne,
+  isMultiElement,
   isNumeric,
   isScalar,
   provablyNonEmpty,
@@ -50,6 +51,7 @@ import {
   type Type,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
+import { defineElemwiseRealBinaryFn } from "../arithmetic/_elemwise.js";
 import { exactDouble, exactComplex, exactRealArray } from "../_shared.js";
 
 /** What kind of reducer we're computing. Drives the kernel pieces
@@ -581,7 +583,7 @@ export function reductionTransfer(argTypes: Type[], spec: KernelSpec): Type {
 /** `max(a, b)` / `min(a, b)` scalar-scalar transfer. Result is a scalar
  *  real double; folds when both inputs are exact (NaN-aware, matching
  *  C99 `fmax`/`fmin` — NaN is treated as missing data, so the non-NaN
- *  operand wins). Tensor and broadcast forms are deferred. */
+ *  operand wins). Tensor and broadcast forms go to `pairwiseMinMax`. */
 function elementwiseMinMaxTransfer(
   argTypes: Type[],
   name: "min" | "max"
@@ -1103,14 +1105,66 @@ export function reductionEmit(spec: {
 
 // ── Builtin assembly helper ────────────────────────────────────────────
 
+/** The two-argument, elementwise form of `max` / `min` with a tensor
+ *  argument: the same broadcasting binary-function machinery as `atan2`
+ *  and `hypot` (`tensor_elemwise_real_fn`), NaN-aware like the scalar
+ *  form. */
+function pairwiseMinMax(name: "min" | "max"): Builtin {
+  const pick = name === "max" ? Math.max : Math.min;
+  const fn = name === "max" ? "Math.max" : "Math.min";
+  return defineElemwiseRealBinaryFn({
+    name,
+    cFn: name === "max" ? "fmax" : "fmin",
+    helperBase: name,
+    commutative: true,
+    fold: (a, b) => (Number.isNaN(a) ? b : Number.isNaN(b) ? a : pick(a, b)),
+    signRule: (a, b) => elementwiseMinMaxSign(name, a.sign, b.sign),
+    runtimeDep: "mtoc2_tensor_elemwise_real_fn",
+    jsScalarExpr: (a, b) =>
+      `(((_a, _b) => isNaN(_a) ? _b : isNaN(_b) ? _a : ${fn}(_a, _b))(${a}, ${b}))`,
+  });
+}
+
+/** Whether a two-argument min/max call takes the tensor form. */
+function isPairwiseTensor(argTypes: Type[]): boolean {
+  return (
+    argTypes.length === 2 &&
+    argTypes.every(isNumeric) &&
+    argTypes.some(t => isMultiElement(t as NumericType))
+  );
+}
+
 /** Build a complete `Builtin` registration from a `KernelSpec`. */
 export function defineReducer(spec: KernelSpec): Builtin {
   const isMinMax = spec.dimArgIndex === 2;
   const minArgs = 1;
   const maxArgs = isMinMax ? 3 : 2;
+  const pairwise = isMinMax ? pairwiseMinMax(spec.name as "min" | "max") : null;
+  const emitC = reductionEmit({
+    name: spec.name,
+    dimArgIndex: spec.dimArgIndex,
+    outputElem: spec.outputElem,
+  });
+  const emitJs = reductionEmitJs({
+    name: spec.name,
+    dimArgIndex: spec.dimArgIndex,
+    outputElem: spec.outputElem,
+  });
+  const call = reductionCall({
+    name: spec.name,
+    dimArgIndex: spec.dimArgIndex,
+    outputElem: spec.outputElem,
+  });
   return {
     name: spec.name,
+    // `max(a, b)` and `min(a, b)` are pointwise; one argument, or a
+    // dimension, makes them reductions.
+    ...(isMinMax
+      ? { isElementwiseCall: (argTypes: Type[]) => argTypes.length === 2 }
+      : {}),
     transfer(argTypes, nargout) {
+      if (pairwise && isPairwiseTensor(argTypes))
+        return pairwise.transfer(argTypes, nargout);
       if (argTypes.length < minArgs || argTypes.length > maxArgs) {
         throw new TypeError(
           `'${spec.name}' expects ${minArgs}..${maxArgs} arg(s), got ${argTypes.length}`
@@ -1123,21 +1177,18 @@ export function defineReducer(spec: KernelSpec): Builtin {
       }
       return [reductionTransfer(argTypes, spec)];
     },
-    emitC: reductionEmit({
-      name: spec.name,
-      dimArgIndex: spec.dimArgIndex,
-      outputElem: spec.outputElem,
-    }),
-    emitJs: reductionEmitJs({
-      name: spec.name,
-      dimArgIndex: spec.dimArgIndex,
-      outputElem: spec.outputElem,
-    }),
-    call: reductionCall({
-      name: spec.name,
-      dimArgIndex: spec.dimArgIndex,
-      outputElem: spec.outputElem,
-    }),
+    emitC: args =>
+      pairwise && isPairwiseTensor(args.argTypes)
+        ? pairwise.emitC!(args)
+        : emitC!(args),
+    emitJs: args =>
+      pairwise && isPairwiseTensor(args.argTypes)
+        ? pairwise.emitJs!(args)
+        : emitJs!(args),
+    call: args =>
+      pairwise && isPairwiseTensor(args.argTypes)
+        ? pairwise.call!(args)
+        : call!(args),
   };
 }
 

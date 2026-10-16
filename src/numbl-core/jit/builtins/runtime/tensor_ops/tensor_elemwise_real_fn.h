@@ -1,5 +1,6 @@
 /* mtoc2 runtime helpers: elementwise binary functions on real
- * tensors (`mod`, `rem`, `atan2`, `hypot`, `power`). Sibling of
+ * tensors (`mod`, `rem`, `atan2`, `hypot`, `power`, and two-argument
+ * `max`/`min`). Sibling of
  * `tensor_elemwise_real.h`; same broadcast rules (`_tt` same-shape
  * fast path plus `_bcast_tt` for MATLAB-style implicit expansion).
  *
@@ -146,3 +147,13 @@ MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_rem_bcast_tt,   fmod)
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_atan2_bcast_tt, atan2)
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_hypot_bcast_tt, hypot)
 MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_power_bcast_tt, mtoc2_pow_real)
+
+/* Two-argument max/min. C99 fmax/fmin return the non-NaN operand when
+ * one is NaN, which is MATLAB's rule. Both are commutative, so there is
+ * no `_st`: the builtin emits `_ts` with the operands swapped. */
+MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_max_tt, fmax)
+MTOC2_DEFINE_ELEMWISE_TT_FN(mtoc2_tensor_min_tt, fmin)
+MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_max_ts, fmax)
+MTOC2_DEFINE_ELEMWISE_TS_FN(mtoc2_tensor_min_ts, fmin)
+MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_max_bcast_tt, fmax)
+MTOC2_DEFINE_ELEMWISE_BCAST_TT_FN(mtoc2_tensor_min_bcast_tt, fmin)
