@@ -40,4 +40,20 @@ describe("inlinePass", () => {
     const assigns = fn.body.filter(s => s.kind === "Assign");
     expect(assigns).toHaveLength(1);
   });
+
+  it("fuses an elementwise call on an expression into one statement", () => {
+    const source = "function y = f(x)\n  y = 1 ./ realsqrt(x .* x + 1);\nend\n";
+    const fn = lowerFn(source, [4, 1]);
+    inlinePass({ topLevelStmts: [], functions: new Map([[fn.cName, fn]]) });
+    const assigns = fn.body.filter(s => s.kind === "Assign");
+    expect(assigns).toHaveLength(1);
+  });
+
+  it("fuses two-argument max with a tensor into one statement", () => {
+    const source = "function y = f(x)\n  y = 2 * max(x .* x - 1, 0);\nend\n";
+    const fn = lowerFn(source, [4, 1]);
+    inlinePass({ topLevelStmts: [], functions: new Map([[fn.cName, fn]]) });
+    const assigns = fn.body.filter(s => s.kind === "Assign");
+    expect(assigns).toHaveLength(1);
+  });
 });

@@ -38,7 +38,7 @@ import type { Assign, IRExpr } from "../lowering/ir.js";
 import type { NumericType, Type } from "../lowering/types.js";
 import { DIM_ONE, isMultiElement, isNumeric } from "../lowering/types.js";
 import { getBuiltin } from "../builtins/index.js";
-import { requireEmitC } from "../builtins/registry.js";
+import { isElementwiseCall, requireEmitC } from "../builtins/registry.js";
 import {
   lookupBuiltin,
   makeEmitUseRuntime,
@@ -125,18 +125,53 @@ export function isPureElementwiseExpr(e: IRExpr): boolean {
     }
     case "Call": {
       const b = getBuiltin(e.name);
-      if (!b || !b.elementwise) return false;
+      if (
+        !b ||
+        !isElementwiseCall(
+          b,
+          e.args.map(a => a.ty)
+        )
+      )
+        return false;
       // The fused-loop contract requires a scalar result per slot. A
-      // tensor-producing Call (e.g. the shape-constructor form of
-      // `nan(2,3)`) flags `elementwise` for its 0-arg scalar branch
-      // but returns a fresh tensor when invoked with shape args —
-      // route those through the standard helper path instead.
-      if (isNumeric(e.ty) && isMultiElement(e.ty)) return false;
+      // tensor-producing Call made from scalars alone (e.g. the shape-
+      // constructor form of `nan(2,3)`) flags `elementwise` for its 0-arg
+      // scalar branch but returns a fresh tensor — route those through the
+      // standard helper path instead. A tensor result from tensor
+      // arguments of its own shape (`sqrt(x)`, `max(x, 0)`) is pointwise.
+      if (
+        isNumeric(e.ty) &&
+        isMultiElement(e.ty) &&
+        !isPointwiseTensorCall(e)
+      ) {
+        return false;
+      }
       return e.args.every(isPureElementwiseExpr);
     }
     default:
       return false;
   }
+}
+
+/** A tensor-valued call whose tensor arguments all have its own static
+ *  shape, and which has at least one: applied pointwise, slot by slot. */
+function isPointwiseTensorCall(e: IRExpr & { kind: "Call" }): boolean {
+  const out = (e.ty as NumericType).shape;
+  if (out === undefined) return false;
+  let any = false;
+  for (const a of e.args) {
+    if (!isNumeric(a.ty) || !isMultiElement(a.ty)) continue;
+    const s = a.ty.shape;
+    if (
+      s === undefined ||
+      s.length !== out.length ||
+      s.some((d, i) => d !== out[i])
+    ) {
+      return false;
+    }
+    any = true;
+  }
+  return any;
 }
 
 /** True iff the fused emitter can handle this Assign. Requires:
@@ -305,7 +340,13 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
     }
     case "Call": {
       const b = lookupBuiltin(state, e.name);
-      if (!b || !b.elementwise) {
+      if (
+        !b ||
+        !isElementwiseCall(
+          b,
+          e.args.map(a => a.ty)
+        )
+      ) {
         throw new Error(
           `emitTensorFused internal: builtin '${e.name}' is not elementwise`
         );

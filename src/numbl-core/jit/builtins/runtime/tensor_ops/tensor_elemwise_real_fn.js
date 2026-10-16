@@ -1,6 +1,6 @@
 // JS sibling of `tensor_elemwise_real_fn.h`. Per-op tensor kernels
 // for the function-call binary family (`atan2`, `hypot`, `mod`,
-// `rem`, `power`). Mirrors `tensor_elemwise_real.js`'s structure;
+// `rem`, `power`, two-argument `max`/`min`). Mirrors `tensor_elemwise_real.js`'s structure;
 // only the scalar fn differs.
 
 import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
@@ -98,3 +98,14 @@ export const mtoc2_tensor_mod_ts = (a, s) => ts(a, s, mtoc2_mod_real_js);
 export const mtoc2_tensor_mod_st = (s, a) => st(s, a, mtoc2_mod_real_js);
 export const mtoc2_tensor_mod_bcast_tt = (a, b) =>
   bcast(a, b, mtoc2_mod_real_js);
+
+// Two-argument max/min: the non-NaN operand wins, as in MATLAB and C99
+// fmax/fmin (JS Math.max/min propagate NaN).
+const maxFn = (a, b) => (a !== a ? b : b !== b ? a : Math.max(a, b));
+const minFn = (a, b) => (a !== a ? b : b !== b ? a : Math.min(a, b));
+export const mtoc2_tensor_max_tt = (a, b) => tt(a, b, maxFn);
+export const mtoc2_tensor_max_ts = (a, s) => ts(a, s, maxFn);
+export const mtoc2_tensor_max_bcast_tt = (a, b) => bcast(a, b, maxFn);
+export const mtoc2_tensor_min_tt = (a, b) => tt(a, b, minFn);
+export const mtoc2_tensor_min_ts = (a, s) => ts(a, s, minFn);
+export const mtoc2_tensor_min_bcast_tt = (a, b) => bcast(a, b, minFn);

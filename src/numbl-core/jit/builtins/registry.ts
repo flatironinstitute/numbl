@@ -128,6 +128,17 @@ export interface Builtin {
 
   /** Elementwise = result is computed pointwise. */
   elementwise?: boolean;
+
+  /** Optional: elementwise for these argument types only, for a builtin
+   *  whose forms differ by arity (two-argument `max(a, b)` is pointwise,
+   *  one-argument `max(a)` is a reduction). Consulted when `elementwise`
+   *  is not set. */
+  isElementwiseCall?(argTypes: Type[]): boolean;
+}
+
+/** Whether a call of `b` with these argument types is computed pointwise. */
+export function isElementwiseCall(b: Builtin, argTypes: Type[]): boolean {
+  return b.elementwise === true || b.isElementwiseCall?.(argTypes) === true;
 }
 
 /** Inline-defined runtime snippet supplied by a user `.mtoc2.js`
