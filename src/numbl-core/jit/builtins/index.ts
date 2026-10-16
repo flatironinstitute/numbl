@@ -75,6 +75,7 @@ import { ceil } from "./defs/math/ceil.js";
 import { round } from "./defs/math/round.js";
 import { fix } from "./defs/math/fix.js";
 import { sqrt } from "./defs/math/sqrt.js";
+import { realsqrt } from "./defs/math/realsqrt.js";
 import { norm } from "./defs/math/norm.js";
 import { dot } from "./defs/math/dot.js";
 import { uniquetol } from "./defs/math/uniquetol.js";
@@ -208,6 +209,7 @@ for (const b of [
   round,
   fix,
   sqrt,
+  realsqrt,
   norm,
   dot,
   uniquetol,

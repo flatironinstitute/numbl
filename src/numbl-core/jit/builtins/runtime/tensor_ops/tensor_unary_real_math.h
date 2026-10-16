@@ -10,6 +10,7 @@
  * wrapper.
  */
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 /* MATLAB convention: round(-1.5) = -2 (away from zero). C99's round()
@@ -29,6 +30,16 @@ static double mtoc2_signum(double x) {
   if (x > 0) return 1.0;
   if (x < 0) return -1.0;
   return 0.0;
+}
+
+/* realsqrt(x): MATLAB raises an error rather than returning a complex
+ * result for x < 0. NaN passes through as NaN. */
+static double mtoc2_realsqrt(double x) {
+  if (x < 0) {
+    fprintf(stderr, "Realsqrt produced complex result.\n");
+    exit(1);
+  }
+  return sqrt(x);
 }
 
 #define MTOC2_DEFINE_UNARY_MATH(name, FN)                                   \
@@ -58,6 +69,7 @@ MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_log,   log)
 MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_log2,  log2)
 MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_log10, log10)
 MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_sqrt,  sqrt)
+MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_realsqrt, mtoc2_realsqrt)
 MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_abs,   fabs)
 MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_floor, floor)
 MTOC2_DEFINE_UNARY_MATH(mtoc2_tensor_ceil,  ceil)

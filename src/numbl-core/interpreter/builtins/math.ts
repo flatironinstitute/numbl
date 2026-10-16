@@ -374,6 +374,40 @@ defineBuiltin({
   ),
 });
 
+// ── Realsqrt ────────────────────────────────────────────────────────────
+
+const REALSQRT_ERROR = "Realsqrt produced complex result.";
+
+defineBuiltin({
+  name: "realsqrt",
+  cases: unaryElemwiseCases(
+    {
+      numberType: a => ({
+        kind: "number",
+        sign: a.sign === "positive" ? "positive" : "nonneg",
+      }),
+      booleanType: () => ({ kind: "number", sign: "nonneg" }),
+      complexType: () => ({ kind: "number", sign: "nonneg" }),
+      tensorType: t => ({
+        kind: "tensor",
+        isComplex: false,
+        shape: t.shape,
+        ndim: t.ndim,
+        nonneg: true,
+      }),
+      realFn: x => {
+        if (x < 0) throw new Error(REALSQRT_ERROR);
+        return Math.sqrt(x);
+      },
+      complexFn: (re, im) => {
+        if (im !== 0 || re < 0) throw new Error(REALSQRT_ERROR);
+        return { re: Math.sqrt(re), im: 0 };
+      },
+    },
+    "realsqrt"
+  ),
+});
+
 // ── Sign ────────────────────────────────────────────────────────────────
 
 registerUnary("sign", Math.sign, (re, im) => {

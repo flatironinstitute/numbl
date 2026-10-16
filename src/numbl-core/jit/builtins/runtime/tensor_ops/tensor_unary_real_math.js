@@ -14,6 +14,13 @@ function matlabRound(x) {
   return Math.sign(x) * Math.round(Math.abs(x));
 }
 
+// realsqrt(x): MATLAB raises an error rather than returning a complex
+// result for x < 0. NaN passes through as NaN.
+export function mtoc2_realsqrt(x) {
+  if (x < 0) throw new Error("Realsqrt produced complex result.");
+  return Math.sqrt(x);
+}
+
 export function mtoc2_tensor_cos(a) {
   return unary_kernel(a, Math.cos);
 }
@@ -52,6 +59,9 @@ export function mtoc2_tensor_log10(a) {
 }
 export function mtoc2_tensor_sqrt(a) {
   return unary_kernel(a, Math.sqrt);
+}
+export function mtoc2_tensor_realsqrt(a) {
+  return unary_kernel(a, mtoc2_realsqrt);
 }
 export function mtoc2_tensor_abs(a) {
   return unary_kernel(a, Math.abs);
