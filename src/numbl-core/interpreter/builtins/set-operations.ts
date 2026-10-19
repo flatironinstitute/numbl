@@ -938,6 +938,162 @@ function ismemberNumeric(
   throw new RuntimeError("ismember: first argument must be numeric");
 }
 
+// ── ismembertol ──────────────────────────────────────────────────────
+//
+// Matches MATLAB: elements u, v are within tolerance when
+// |u - v| <= tol * DataScale, with DataScale = max(abs([A(:); B(:)])) (per
+// column with 'ByRows'). Among several matches, LocB is the index of the
+// smallest one in sorted order (lexicographic for rows).
+
+function ismembertolMatrix(
+  v: RuntimeValue,
+  name: string
+): { data: ArrayLike<number>; rows: number; cols: number; shape: number[] } {
+  if (isRuntimeNumber(v) || typeof v === "boolean")
+    return { data: [Number(v)], rows: 1, cols: 1, shape: [1, 1] };
+  if (isRuntimeTensor(v)) {
+    if (v.imag) throw new RuntimeError(`${name}: inputs must be real`);
+    const [rows, cols] = tensorSize2D(v);
+    return { data: v.data, rows, cols, shape: [...v.shape] };
+  }
+  throw new RuntimeError(`${name}: inputs must be real numeric arrays`);
+}
+
+defineBuiltin({
+  name: "ismembertol",
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length < 2) return null;
+        const out: JitType[] = [{ kind: "unknown" }];
+        if (nargout > 1) out.push({ kind: "unknown" });
+        return out;
+      },
+      apply: (args, nargout) => {
+        const A = ismembertolMatrix(args[0], "ismembertol");
+        const B = ismembertolMatrix(args[1], "ismembertol");
+        let tol = 1e-12;
+        let i = 2;
+        if (
+          i < args.length &&
+          !isRuntimeChar(args[i]) &&
+          !isRuntimeString(args[i])
+        ) {
+          tol = toNumber(args[i]);
+          i++;
+        }
+        let byRows = false;
+        let allIndices = false;
+        let dataScale: number[] | null = null;
+        for (; i < args.length; i += 2) {
+          const opt = toString(args[i]).toLowerCase();
+          if (i + 1 >= args.length)
+            throw new RuntimeError(`ismembertol: missing value for '${opt}'`);
+          const val = args[i + 1];
+          if (opt === "byrows") byRows = toNumber(val) !== 0;
+          else if (opt === "outputallindices") allIndices = toNumber(val) !== 0;
+          else if (opt === "datascale")
+            dataScale = Array.from(toNumArray(val, "ismembertol"));
+          else throw new RuntimeError(`ismembertol: unknown option '${opt}'`);
+        }
+
+        // Treat elementwise as ByRows on column vectors.
+        const nc = byRows ? A.cols : 1;
+        const na = byRows ? A.rows : A.data.length;
+        const nb = byRows ? B.rows : B.data.length;
+        if (byRows && na > 0 && nb > 0 && B.cols !== nc)
+          throw new RuntimeError(
+            "ismembertol: A and B must have the same number of columns"
+          );
+        const aAt = (r: number, c: number) =>
+          A.data[r + c * (byRows ? A.rows : 0)];
+        const bAt = (r: number, c: number) =>
+          B.data[r + c * (byRows ? B.rows : 0)];
+
+        const t = new Array<number>(nc);
+        for (let c = 0; c < nc; c++) {
+          let s: number;
+          if (dataScale) {
+            s = dataScale.length === 1 ? dataScale[0] : dataScale[c];
+          } else {
+            // NaN is ignored, as in max()
+            s = 0;
+            for (let r = 0; r < na; r++) {
+              const x = Math.abs(aAt(r, c));
+              if (x > s) s = x;
+            }
+            for (let r = 0; r < nb; r++) {
+              const x = Math.abs(bAt(r, c));
+              if (x > s) s = x;
+            }
+          }
+          t[c] = tol * s;
+        }
+
+        // B rows sorted lexicographically (stable), NaN rows dropped.
+        const order: number[] = [];
+        for (let r = 0; r < nb; r++) {
+          let ok = true;
+          for (let c = 0; c < nc; c++) if (Number.isNaN(bAt(r, c))) ok = false;
+          if (ok) order.push(r);
+        }
+        order.sort((x, y) => {
+          for (let c = 0; c < nc; c++) {
+            const d = bAt(x, c) - bAt(y, c);
+            if (d !== 0) return d;
+          }
+          return x - y;
+        });
+
+        const lia = allocFloat64Array(na);
+        const locb = allocFloat64Array(na);
+        const all: number[][] = [];
+        for (let r = 0; r < na; r++) {
+          const lo0 = aAt(r, 0) - t[0];
+          const hi0 = aAt(r, 0) + t[0];
+          let lo = 0;
+          let hi = order.length;
+          while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (bAt(order[mid], 0) < lo0) lo = mid + 1;
+            else hi = mid;
+          }
+          const hits: number[] = [];
+          for (let k = lo; k < order.length && bAt(order[k], 0) <= hi0; k++) {
+            let ok = true;
+            for (let c = 1; c < nc && ok; c++)
+              ok = Math.abs(aAt(r, c) - bAt(order[k], c)) <= t[c];
+            if (ok) {
+              if (hits.length === 0) locb[r] = order[k] + 1;
+              hits.push(order[k] + 1);
+              if (!allIndices) break;
+            }
+          }
+          lia[r] = hits.length > 0 ? 1 : 0;
+          if (allIndices)
+            all.push(hits.length ? hits.sort((x, y) => x - y) : [0]);
+        }
+
+        const shape = byRows ? [na, 1] : A.shape;
+        if (!byRows && !allIndices && isRuntimeNumber(args[0])) {
+          const l = RTV.logical(lia[0] === 1);
+          return nargout <= 1 ? l : [l, RTV.num(locb[0])];
+        }
+        const tf = RTV.tensor(lia, shape);
+        tf._isLogical = true;
+        if (nargout <= 1) return tf;
+        if (allIndices) {
+          const cells = all.map(h =>
+            RTV.tensor(allocFloat64Array(h), [h.length, 1])
+          );
+          return [tf, RTV.cell(cells, shape)];
+        }
+        return [tf, RTV.tensor(locb, shape)];
+      },
+    },
+  ],
+});
+
 // ── intersect ────────────────────────────────────────────────────────
 
 defineBuiltin({
