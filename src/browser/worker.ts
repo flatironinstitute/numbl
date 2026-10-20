@@ -9,7 +9,11 @@
  * bundler support for dependency workers.
  */
 import { executeCode } from "../numbl-core/executeCode.js";
-import type { ExecResult, UihtmlSession } from "../numbl-core/executeCode.js";
+import type {
+  ExecResult,
+  FigureHandles,
+  UihtmlSession,
+} from "../numbl-core/executeCode.js";
 import type { RuntimeValue } from "../numbl-core/runtime/index.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
@@ -53,6 +57,7 @@ let inputSAB: SharedArrayBuffer | undefined;
 // Workspace state carried across `execute` calls (REPL semantics).
 let variableValues: Record<string, RuntimeValue> = {};
 let holdState = false;
+let figureHandles: FigureHandles = { current: 0, max: 0 };
 let persistentWorkspaceFiles: WorkspaceFile[] = [];
 let persistentSearchPaths: string[] | undefined;
 let implicitCwdPath: string | null | undefined;
@@ -97,6 +102,7 @@ function trackUihtml(instructions: PlotInstruction[]) {
 function adoptResultState(result: ExecResult) {
   variableValues = result.variableValues;
   holdState = result.holdState;
+  figureHandles = result.figureHandles;
   if (result.searchPaths) {
     persistentSearchPaths = result.searchPaths;
     persistentWorkspaceFiles = result.workspaceFiles ?? [];
@@ -244,6 +250,7 @@ function execute(id: number, code: string) {
         optimization,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
+        initialFigureHandles: figureHandles,
         fileIO: new BrowserFileIOAdapter(vfs),
         system: new BrowserSystemAdapter(vfs),
         onHtmlSourceEvent: (compId, name, dataJson) =>

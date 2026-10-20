@@ -69,6 +69,9 @@ export interface ExecOptions {
   onJitBail?: (message: string) => void;
   /** Initial hold state for plotting (persisted across REPL executions). */
   initialHoldState?: boolean;
+  /** Current and largest figure handle so far (persisted across REPL
+   *  executions, so a bare `figure` keeps allocating new figures). */
+  initialFigureHandles?: FigureHandles;
   /** Override or add builtins for this execution only. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   customBuiltins?: Record<string, (nargout: number, args: any[]) => any>;
@@ -136,6 +139,7 @@ export interface ExecResult {
   returnValue: RuntimeValue;
   variableValues: Record<string, RuntimeValue>;
   holdState: boolean;
+  figureHandles: FigureHandles;
   profileData?: ProfileData;
   dispatchUnknownCounts?: Record<string, number>;
   /** Updated search paths (set when addpath/rmpath was called). */
@@ -148,6 +152,12 @@ export interface ExecResult {
    *  The host retains this to dispatch later iframe events into the still-live
    *  interpreter (see UihtmlSession). Absent for normal runs (no overhead). */
   uihtmlSession?: UihtmlSession;
+}
+
+/** Figure-handle state of a run (see Runtime.currentFigureHandle). */
+export interface FigureHandles {
+  current: number;
+  max: number;
 }
 
 // ── Implementation ──────────────────────────────────────────────────────
@@ -821,6 +831,10 @@ export function executeCode(
       returnValue: interpreter.ans ?? RTV.num(0),
       variableValues: interpreter.getVariableValues(),
       holdState: rt.holdState,
+      figureHandles: {
+        current: rt.currentFigureHandle,
+        max: rt.maxFigureHandle,
+      },
     };
 
     // If the run registered uihtml reverse-channel callbacks, hand the caller a

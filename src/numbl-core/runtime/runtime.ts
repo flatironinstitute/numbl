@@ -379,6 +379,10 @@ export class Runtime {
     if (options.initialHoldState) {
       this.holdState = options.initialHoldState;
     }
+    if (options.initialFigureHandles) {
+      this.currentFigureHandle = options.initialFigureHandles.current;
+      this.maxFigureHandle = options.initialFigureHandles.max;
+    }
     if (options.cancelSAB) {
       this.cancelFlag = new Int32Array(options.cancelSAB);
     }

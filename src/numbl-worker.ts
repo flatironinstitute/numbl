@@ -24,7 +24,7 @@
  *   Worker -> Main:  { type: "cleared" }
  */
 
-import { executeCode } from "./numbl-core/executeCode.js";
+import { executeCode, type FigureHandles } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { CancellationError } from "./numbl-core/runtime/index.js";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
@@ -55,6 +55,10 @@ const wasmBridgeCache = new IdbWasmCache();
 
 let variableValues: Record<string, RuntimeValue> = {};
 let holdState = false;
+// Figure handles after the last run or REPL command. The IDE clears its
+// figures at the start of each script run, so runs start from none; REPL
+// commands continue from here, so a bare `figure` opens a new figure.
+let figureHandles: FigureHandles = { current: 0, max: 0 };
 let persistentWorkspaceFiles: WorkspaceFile[] = [];
 let persistentSearchPaths: string[] | undefined;
 let implicitCwdPath: string | null | undefined;
@@ -127,6 +131,7 @@ self.onmessage = (e: MessageEvent) => {
     disposeUihtmlSession();
     variableValues = {};
     holdState = false;
+    figureHandles = { current: 0, max: 0 };
     vfs = null;
     self.postMessage({ type: "cleared" });
     return;
@@ -384,6 +389,7 @@ self.onmessage = (e: MessageEvent) => {
       // Keep the session alive if the run registered uihtml callbacks, so
       // iframe events can re-enter the interpreter (see "html_event").
       liveUihtmlSession = result.uihtmlSession ?? null;
+      figureHandles = result.figureHandles;
 
       // Update persistent state if in persistent mode
       if (persistent) {
@@ -507,6 +513,7 @@ self.onmessage = (e: MessageEvent) => {
         optimization: optimizationLevel,
         initialVariableValues: variableValues,
         initialHoldState: holdState,
+        initialFigureHandles: figureHandles,
         fileIO: adapter,
         system: systemAdapter,
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
@@ -528,6 +535,7 @@ self.onmessage = (e: MessageEvent) => {
     // Update persistent state on success
     variableValues = result.variableValues;
     holdState = result.holdState;
+    figureHandles = result.figureHandles;
     if (result.searchPaths) {
       persistentSearchPaths = result.searchPaths;
       persistentWorkspaceFiles = result.workspaceFiles ?? [];

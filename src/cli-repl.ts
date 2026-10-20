@@ -13,7 +13,7 @@ import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import type { PlotInstruction } from "./graphics/types.js";
-import { executeCode } from "./numbl-core/executeCode.js";
+import { executeCode, type FigureHandles } from "./numbl-core/executeCode.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
 
@@ -73,6 +73,7 @@ export async function runRepl(
 ): Promise<void> {
   let variableValues: Record<string, RuntimeValue> = {};
   let holdState = false;
+  let figureHandles: FigureHandles = { current: 0, max: 0 };
   let implicitCwdPath: string | null | undefined;
   const workspaceFiles = [...initialWorkspaceFiles];
   const searchPaths = [...(initialSearchPaths ?? [])];
@@ -130,6 +131,7 @@ export async function runRepl(
             onInput,
             initialVariableValues: variableValues,
             initialHoldState: holdState,
+            initialFigureHandles: figureHandles,
             optimization,
             fileIO,
             system,
@@ -142,6 +144,7 @@ export async function runRepl(
         );
         variableValues = result.variableValues;
         holdState = result.holdState;
+        figureHandles = result.figureHandles;
         if (result.searchPaths) {
           searchPaths.length = 0;
           searchPaths.push(...result.searchPaths);
@@ -268,6 +271,7 @@ export async function runRepl(
           onInput,
           initialVariableValues: variableValues,
           initialHoldState: holdState,
+          initialFigureHandles: figureHandles,
           optimization,
           fileIO,
           system,
@@ -280,6 +284,7 @@ export async function runRepl(
       );
       variableValues = result.variableValues;
       holdState = result.holdState;
+      figureHandles = result.figureHandles;
       if (result.searchPaths) {
         searchPaths.length = 0;
         searchPaths.push(...result.searchPaths);
