@@ -128,6 +128,7 @@
     "@types/three": "^0.183.1",
     "@vitejs/plugin-react": "^5.1.1",
     "@vitest/coverage-v8": "^4.0.18",
+    "@webgpu/types": "^0.1.74",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "dexie": "^4.3.0",

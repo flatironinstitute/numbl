@@ -61,9 +61,9 @@ describe("imagesc", () => {
     expect(limits(spike + " caxis([-5 5]);")).toEqual([-5, 5]);
     expect(limits(spike + " clim([-5 5]);")).toEqual([-5, 5]);
     expect(limits("imagesc(peaks(20), [-5 5]);")).toEqual([-5, 5]);
-    expect(limits("M = magic(3); imagesc(1:3, 1:2, M(1:2,:), [2 6]);")).toEqual([
-      2, 6,
-    ]);
+    expect(limits("M = magic(3); imagesc(1:3, 1:2, M(1:2,:), [2 6]);")).toEqual(
+      [2, 6]
+    );
     expect(() => executeCode("imagesc(magic(3), [5 1]);")).toThrow(/clims/);
   });
 

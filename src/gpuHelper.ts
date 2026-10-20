@@ -1,3 +1,4 @@
+/// <reference types="@webgpu/types" />
 /**
  * Synchronous WebGPU access for .numbl.js functions (browser worker only).
  *
