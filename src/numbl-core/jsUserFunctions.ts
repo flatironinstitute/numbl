@@ -263,6 +263,14 @@ function resolveBindings(
 /** Sentinel value indicating a library is currently being loaded. */
 const LOADING = Symbol("loading");
 
+// Injected as the `gpu` global (see src/gpuHelper.ts); null outside the
+// browser worker or when WebGPU is unavailable.
+let jsGpuHelper: unknown = null;
+
+export function setJsGpuHelper(helper: unknown): void {
+  jsGpuHelper = helper;
+}
+
 /**
  * Load .numbl.js user function files and return them as LoadedJsUserFunction
  * records. Each loaded record carries the function name, source file name,
@@ -356,6 +364,7 @@ export function loadJsUserFunctions(
       "importJS",
       "callHandle",
       "toNumber",
+      "gpu",
       libFile.source
     );
     const exports = factory(
@@ -367,7 +376,8 @@ export function loadJsUserFunctions(
       nativeLib,
       importJS,
       callHandle,
-      toNumber
+      toNumber,
+      jsGpuHelper
     );
 
     libCache.set(name, exports);
@@ -414,6 +424,7 @@ export function loadJsUserFunctions(
         "importJS",
         "callHandle",
         "toNumber",
+        "gpu",
         file.source
       );
       factory(
@@ -425,7 +436,8 @@ export function loadJsUserFunctions(
         nativeLib,
         importJS,
         callHandle,
-        toNumber
+        toNumber,
+        jsGpuHelper
       );
 
       if (!builtin) {

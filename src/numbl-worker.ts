@@ -38,6 +38,8 @@ import { formatExecuteError } from "./workerErrorFormat.js";
 import { ensureQhullBackend } from "./numbl-core/native/qhull-browser.js";
 import { ensureWasmLapackBridge } from "./numbl-core/native/wasm-lapack-browser.js";
 import { IdbWasmCache } from "./utils/wasmByteCache.js";
+import { startGpuHelper } from "./gpuHelper.js";
+import { setJsGpuHelper } from "./numbl-core/jsUserFunctions.js";
 
 // Start loading the qhull Delaunay backend as soon as the worker spins up, so
 // it is installed well before any user-triggered run. Fire-and-forget: it
@@ -45,6 +47,10 @@ import { IdbWasmCache } from "./utils/wasmByteCache.js";
 // await it. A delaunay/delaunayn call issued before it finishes loading (or if
 // loading fails) throws "backend not initialized".
 void ensureQhullBackend();
+
+// Spawn the WebGPU helper now: a worker created during a (synchronous) run
+// would not start until the run ends. See gpuHelper.ts.
+setJsGpuHelper(startGpuHelper());
 
 // Byte cache for the optional WASM LAPACK accelerator. The accelerator itself
 // is loaded lazily when the main thread sends `set_wasm_bridge` with the

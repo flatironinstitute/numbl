@@ -24,6 +24,8 @@ import { formatExecuteError } from "../workerErrorFormat.js";
 import { workerOnInput } from "../syncInputChannel.js";
 import { fetchMipCoreFiles, MIP_MARKER_PATH, MIP_SEARCH_PATH } from "./mip.js";
 import { SystemStore } from "./system-store.js";
+import { startGpuHelper } from "../gpuHelper.js";
+import { setJsGpuHelper } from "../numbl-core/jsUserFunctions.js";
 import type {
   BootMessage,
   FromWorker,
@@ -32,6 +34,10 @@ import type {
 } from "./protocol.js";
 
 const post = (msg: FromWorker) => self.postMessage(msg);
+
+// Spawn the WebGPU helper now: a worker created during a (synchronous) run
+// would not start until the run ends. See gpuHelper.ts.
+setJsGpuHelper(startGpuHelper());
 
 let vfs: VirtualFileSystem | null = null;
 let store: SystemStore | null = null;
