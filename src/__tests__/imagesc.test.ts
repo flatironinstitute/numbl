@@ -7,7 +7,10 @@ import {
   type FiguresState,
 } from "../graphics/figuresReducer.js";
 import { computeAxisLimits } from "../graphics/axisLimits.js";
-import { imagescExtent } from "../graphics/imagescExtent.js";
+import {
+  imagescColorLimits,
+  imagescExtent,
+} from "../graphics/imagescExtent.js";
 
 function renderedAxes(code: string): AxesState {
   const result = executeCode(code);
@@ -45,6 +48,23 @@ describe("imagesc", () => {
     expect(computeAxisLimits(renderedAxes("imagesc(magic(4));"))).toEqual([
       0.5, 4.5, 0.5, 4.5,
     ]);
+  });
+
+  it("maps colors over caxis/clim when set, else the data range", () => {
+    const limits = (code: string) => {
+      const ax = renderedAxes(code);
+      return imagescColorLimits(ax.imagescTrace!, ax.caxis);
+    };
+    expect(limits("imagesc([1 NaN; 3 4]);")).toEqual([1, 4]);
+    // A singular point must not set the color scale once caxis is given.
+    const spike = "Z = peaks(20); Z(10,10) = 1e6; imagesc(Z);";
+    expect(limits(spike + " caxis([-5 5]);")).toEqual([-5, 5]);
+    expect(limits(spike + " clim([-5 5]);")).toEqual([-5, 5]);
+    expect(limits("imagesc(peaks(20), [-5 5]);")).toEqual([-5, 5]);
+    expect(limits("M = magic(3); imagesc(1:3, 1:2, M(1:2,:), [2 6]);")).toEqual([
+      2, 6,
+    ]);
+    expect(() => executeCode("imagesc(magic(3), [5 1]);")).toThrow(/clims/);
   });
 
   it("reverses the y axis (axis ij) unless hold is on", () => {

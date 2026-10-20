@@ -25,3 +25,24 @@ export function imagescExtent(t: ImagescTrace): {
     y: [Math.min(ya, yb), Math.max(ya, yb)],
   };
 }
+
+/**
+ * Color limits for an imagesc trace: the axes' caxis/clim when set, else the
+ * finite data range. Values outside the limits clamp to the colormap ends.
+ * Returns null when there is no finite data and no caxis.
+ */
+export function imagescColorLimits(
+  t: ImagescTrace,
+  caxis?: [number, number]
+): [number, number] | null {
+  if (caxis) return caxis;
+  let lo = Infinity,
+    hi = -Infinity;
+  for (const v of t.z) {
+    if (isFinite(v)) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  }
+  return isFinite(lo) ? [lo, hi] : null;
+}

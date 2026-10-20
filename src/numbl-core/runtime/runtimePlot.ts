@@ -331,8 +331,9 @@ export function imagescCall(
   plotInstructions: PlotInstruction[],
   args: RuntimeValue[]
 ): void {
-  const trace = parseImagescArgs(args);
+  const { trace, clims } = parseImagescArgs(args);
   plotInstructions.push({ type: "imagesc", trace });
+  if (clims) plotInstructions.push({ type: "set_caxis", limits: clims });
 }
 
 export function pcolorCall(

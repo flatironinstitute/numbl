@@ -1813,8 +1813,25 @@ function applyNameValue(
  * Supported forms:
  *   imagesc(C)         — C is m×n matrix
  *   imagesc(x, y, C)   — x and y are vectors defining axis limits
+ *   imagesc(..., clims) — clims = [low high] sets the axes' color limits
  */
-export function parseImagescArgs(args: RuntimeValue[]): ImagescTrace {
+export function parseImagescArgs(args: RuntimeValue[]): {
+  trace: ImagescTrace;
+  clims?: [number, number];
+} {
+  if (args.length === 2 || args.length === 4) {
+    const c = toNumberArray(args[args.length - 1]);
+    if (c.length !== 2 || !(c[0] < c[1]))
+      throw new Error("imagesc: clims must be a two-element vector [low high]");
+    return {
+      trace: parseImagescTrace(args.slice(0, -1)),
+      clims: [c[0], c[1]],
+    };
+  }
+  return { trace: parseImagescTrace(args) };
+}
+
+function parseImagescTrace(args: RuntimeValue[]): ImagescTrace {
   if (args.length === 1) {
     const info = getMatrixInfo(args[0]);
     return {

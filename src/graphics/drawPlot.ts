@@ -18,7 +18,7 @@ import {
   formatTick,
 } from "./plotHelpers.js";
 import { drawMarkers } from "./plotMarkers.js";
-import { imagescExtent } from "./imagescExtent.js";
+import { imagescColorLimits, imagescExtent } from "./imagescExtent.js";
 import { drawLegend } from "./plotLegend.js";
 
 /** Generate tick values at powers of 10 for log-scale axes. */
@@ -622,7 +622,7 @@ export function drawPlot(
 
   // Imagesc rendering
   if (imagescTrace) {
-    drawImagesc(ctx, imagescTrace, toCanvasX, toCanvasY, colormap);
+    drawImagesc(ctx, imagescTrace, toCanvasX, toCanvasY, colormap, caxis);
   }
 
   // Pcolor rendering
@@ -1188,21 +1188,15 @@ function drawImagesc(
   trace: ImagescTrace,
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
-  colormap?: string
+  colormap?: string,
+  caxis?: [number, number]
 ) {
   const { rows, cols, z, x, y } = trace;
   if (rows === 0 || cols === 0) return;
 
-  // Find z range
-  let zMin = Infinity,
-    zMax = -Infinity;
-  for (const v of z) {
-    if (isFinite(v)) {
-      if (v < zMin) zMin = v;
-      if (v > zMax) zMax = v;
-    }
-  }
-  if (!isFinite(zMin)) return;
+  const limits = imagescColorLimits(trace, caxis);
+  if (!limits) return;
+  const [zMin, zMax] = limits;
   const zRange = zMax - zMin || 1;
 
   // Pixel (i, j) is centered at (x[0] + j*dx, y[0] + i*dy)
