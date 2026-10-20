@@ -31,7 +31,7 @@ export function DocsPage() {
   const nextDoc = activeIndex < docs.length - 1 ? docs[activeIndex + 1] : null;
 
   usePageMeta({
-    title: slug ? `${activeDoc.title} — numbl` : "Documentation — numbl",
+    title: slug ? `${activeDoc.title} - numbl` : "Documentation - numbl",
     description: activeDoc.description,
     path: slug ? `/docs/${activeDoc.slug}` : "/docs",
   });

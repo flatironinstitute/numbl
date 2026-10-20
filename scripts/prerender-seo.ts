@@ -23,8 +23,7 @@ const DIST = join(ROOT, "dist");
 const DOCS_DIR = join(ROOT, "src", "docs");
 
 const SITE = "https://numbl.org";
-const HOME_TITLE =
-  "numbl — MATLAB-Compatible Numerical Computing in Your Browser";
+const HOME_TITLE = "numbl";
 const HOME_DESC =
   "Free, open-source numerical computing environment compatible with MATLAB syntax. 400+ built-in functions, 2-D and 3-D plotting, and a browser IDE with no installation — plus a Node.js CLI.";
 
@@ -179,7 +178,7 @@ const routes: Route[] = [
   },
   {
     path: "/docs",
-    title: "Documentation — numbl",
+    title: "Documentation - numbl",
     description:
       "Documentation for numbl: getting started, language features, 400+ built-in functions, plotting, library usage, and differences from MATLAB.",
     bodyHtml: docsIndexBody(),
@@ -195,13 +194,13 @@ const routes: Route[] = [
   ...docsManifest.map(
     (d): Route => ({
       path: `/docs/${d.slug}`,
-      title: `${d.title} — numbl`,
+      title: `${d.title} - numbl`,
       description: d.description,
       bodyHtml: docBody(d.slug),
       jsonLd: {
         "@context": "https://schema.org",
         "@type": "TechArticle",
-        headline: `${d.title} — numbl`,
+        headline: `${d.title} - numbl`,
         description: d.description,
         url: `${SITE}/docs/${d.slug}`,
         isPartOf: { "@type": "WebSite", name: "numbl", url: `${SITE}/` },
@@ -211,7 +210,7 @@ const routes: Route[] = [
   ),
   {
     path: "/gallery",
-    title: "Plot Gallery — numbl",
+    title: "Plot Gallery - numbl",
     description:
       "A gallery of example plots created with numbl, each with its source code: line plots, surfaces, images, and 3-D visualizations in the browser.",
     bodyHtml: galleryBody,

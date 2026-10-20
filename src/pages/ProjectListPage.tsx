@@ -96,7 +96,7 @@ export function ProjectListPage() {
   const navigate = useNavigate();
 
   usePageMeta({
-    title: "numbl — MATLAB-Compatible Numerical Computing in Your Browser",
+    title: "numbl",
     description:
       "Free, open-source numerical computing environment compatible with MATLAB syntax. 400+ built-in functions, 2-D and 3-D plotting, and a browser IDE with no installation — plus a Node.js CLI.",
     path: "/",

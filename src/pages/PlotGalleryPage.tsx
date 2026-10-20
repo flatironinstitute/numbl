@@ -208,7 +208,7 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
 
 export function PlotGalleryPage() {
   usePageMeta({
-    title: "Plot Gallery — numbl",
+    title: "Plot Gallery - numbl",
     description:
       "A gallery of example plots created with numbl, each with its source code: line plots, surfaces, images, and 3-D visualizations in the browser.",
     path: "/gallery",
