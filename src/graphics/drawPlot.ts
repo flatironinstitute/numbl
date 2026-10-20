@@ -18,6 +18,7 @@ import {
   formatTick,
 } from "./plotHelpers.js";
 import { drawMarkers } from "./plotMarkers.js";
+import { imagescExtent } from "./imagescExtent.js";
 import { drawLegend } from "./plotLegend.js";
 
 /** Generate tick values at powers of 10 for log-scale axes. */
@@ -167,12 +168,13 @@ export function drawPlot(
     }
   }
 
-  // Include imagesc bounds
+  // Include imagesc bounds (pixel edges, half a pixel beyond the centers)
   if (imagescTrace) {
-    if (imagescTrace.x[0] < xMin) xMin = imagescTrace.x[0];
-    if (imagescTrace.x[1] > xMax) xMax = imagescTrace.x[1];
-    if (imagescTrace.y[0] < yMin) yMin = imagescTrace.y[0];
-    if (imagescTrace.y[1] > yMax) yMax = imagescTrace.y[1];
+    const ext = imagescExtent(imagescTrace);
+    if (ext.x[0] < xMin) xMin = ext.x[0];
+    if (ext.x[1] > xMax) xMax = ext.x[1];
+    if (ext.y[0] < yMin) yMin = ext.y[0];
+    if (ext.y[1] > yMax) yMax = ext.y[1];
   }
 
   // Include pcolor bounds
@@ -378,7 +380,11 @@ export function drawPlot(
   // box square (without forcing equal data units); `padded` widens the
   // default margin.
   const isImage = axisMode?.includes("image") ?? false;
-  const isTight = (axisMode?.includes("tight") ?? false) || isImage;
+  // As in MATLAB, axes holding an image get no margin around the data.
+  const isTight =
+    (axisMode?.includes("tight") ?? false) ||
+    isImage ||
+    imagescTrace !== undefined;
   const isEqual = (axisMode?.includes("equal") ?? false) || isImage;
   const isSquare = axisMode?.includes("square") ?? false;
   const isPadded = axisMode?.includes("padded") ?? false;
@@ -1098,8 +1104,9 @@ function drawQuiver(
 let _activeColormapData: number[][] | undefined;
 
 function colormapLookup(t: number, name?: string): [number, number, number] {
-  // t is 0..1
-  const clamped = Math.max(0, Math.min(1, t));
+  // t is 0..1. Non-finite t would give NaN components, which canvas rejects
+  // as a fillStyle (silently keeping the previous color); use 0 instead.
+  const clamped = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : 0;
   if (_activeColormapData && _activeColormapData.length > 0) {
     const data = _activeColormapData;
     const n = data.length;
@@ -1198,23 +1205,28 @@ function drawImagesc(
   if (!isFinite(zMin)) return;
   const zRange = zMax - zMin || 1;
 
-  // Cell size in data coordinates
-  const dx = (x[1] - x[0]) / cols;
-  const dy = (y[1] - y[0]) / rows;
+  // Pixel (i, j) is centered at (x[0] + j*dx, y[0] + i*dy)
+  const { dx, dy } = imagescExtent(trace);
 
   for (let j = 0; j < cols; j++) {
     for (let i = 0; i < rows; i++) {
       const val = z[j * rows + i]; // column-major
-      const t = (val - zMin) / zRange;
+      // As in MATLAB, NaN takes the first colormap color; +-Inf clamp.
+      const t = Number.isNaN(val) ? 0 : (val - zMin) / zRange;
       const [r, g, b] = colormapLookup(t, colormap);
 
-      const cx1 = toCanvasX(x[0] + j * dx);
-      const cy1 = toCanvasY(y[0] + (i + 1) * dy);
-      const cx2 = toCanvasX(x[0] + (j + 1) * dx);
-      const cy2 = toCanvasY(y[0] + i * dy);
+      const cxa = toCanvasX(x[0] + (j - 0.5) * dx);
+      const cxb = toCanvasX(x[0] + (j + 0.5) * dx);
+      const cya = toCanvasY(y[0] + (i - 0.5) * dy);
+      const cyb = toCanvasY(y[0] + (i + 0.5) * dy);
 
       ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
-      ctx.fillRect(cx1, cy1, cx2 - cx1, cy2 - cy1);
+      ctx.fillRect(
+        Math.min(cxa, cxb),
+        Math.min(cya, cyb),
+        Math.abs(cxb - cxa),
+        Math.abs(cyb - cya)
+      );
     }
   }
 }
@@ -1269,6 +1281,8 @@ function drawContour(
         const zAvg =
           (getZ(i, j) + getZ(i + 1, j) + getZ(i, j + 1) + getZ(i + 1, j + 1)) /
           4;
+        // NaN regions stay empty, as in MATLAB's contourf
+        if (Number.isNaN(zAvg)) continue;
         const t = (zAvg - zMin) / zRange;
         const [r, g, b] = colormapLookup(t, colormap);
 

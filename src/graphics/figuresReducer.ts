@@ -342,8 +342,13 @@ export const figuresReducer = (
       });
     }
 
-    case "imagesc":
-      return addTraces(state, { imagescTrace: action.trace });
+    case "imagesc": {
+      // Like MATLAB's imagesc, a new image (hold off) puts row 1 at the top
+      // (axis ij); with hold on the axes keep their direction.
+      const hold = getAxes(ensureFig(state)).holdOn;
+      const next = addTraces(state, { imagescTrace: action.trace });
+      return hold ? next : updateAxes(next, { yDir: "reverse" });
+    }
 
     case "pcolor": {
       const axes = getAxes(ensureFig(state));

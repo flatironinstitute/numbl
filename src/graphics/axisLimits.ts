@@ -14,6 +14,7 @@
  */
 
 import type { AxesState } from "./figuresReducer.js";
+import { imagescExtent } from "./imagescExtent.js";
 
 type Extent = { min: number; max: number };
 
@@ -82,10 +83,11 @@ function dataExtents(axes: AxesState): { x: Extent; y: Extent; z: Extent } {
     includeAll(z, t.z);
   }
   if (axes.imagescTrace) {
-    include(x, axes.imagescTrace.x[0]);
-    include(x, axes.imagescTrace.x[1]);
-    include(y, axes.imagescTrace.y[0]);
-    include(y, axes.imagescTrace.y[1]);
+    const ext = imagescExtent(axes.imagescTrace);
+    include(x, ext.x[0]);
+    include(x, ext.x[1]);
+    include(y, ext.y[0]);
+    include(y, ext.y[1]);
   }
   for (const t of axes.pcolorTraces ?? []) {
     includeAll(x, t.x);
@@ -209,8 +211,11 @@ function applyExplicit(
  * `[xmin xmax ymin ymax zmin zmax]` when the axes holds 3-D content.
  */
 export function computeAxisLimits(axes: AxesState): number[] {
+  // As in drawPlot, axes holding an image are tight.
   const tight =
-    axes.axisMode?.includes("tight") || axes.axisMode?.includes("image")
+    axes.axisMode?.includes("tight") ||
+    axes.axisMode?.includes("image") ||
+    axes.imagescTrace !== undefined
       ? true
       : false;
   const ext = dataExtents(axes);
