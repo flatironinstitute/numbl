@@ -1908,6 +1908,192 @@ function qrPivotApply(
   ];
 }
 
+// ── qrupdate ────────────────────────────────────────────────────────────
+
+registerIBuiltin({
+  name: "qrupdate",
+  help: {
+    signatures: ["[Q1, R1] = qrupdate(Q, R, u, v)"],
+    description:
+      "Rank-1 update of a full QR factorization: if A = Q*R (Q m-by-m), returns Q1, R1 with Q1*R1 = A + u*v'. Uses Givens rotations, O(m^2 + m*n).",
+  },
+  resolve: (argTypes, nargout) => {
+    if (nargout > 2 || argTypes.length !== 4) return null;
+    if (!argTypes.every(isNumericJitType)) return null;
+    const isComplex = argTypes.some(
+      t =>
+        t.kind === "complex_or_number" || (t.kind === "tensor" && t.isComplex)
+    );
+    const t = tensorType(isComplex || undefined);
+    return {
+      outputTypes: nargout === 2 ? [t, t] : [t],
+      apply: (args, n) => {
+        const [Q1, R1] = qrupdateApply(args);
+        return n === 2 ? [Q1, R1] : Q1;
+      },
+    };
+  },
+});
+
+/** Dense split re/im copy of a numeric argument (im null if real). */
+function qrupdateArg(v: RuntimeValue): {
+  re: Float64Array;
+  im: Float64Array | null;
+  rows: number;
+  cols: number;
+} {
+  if (isRuntimeNumber(v))
+    return { re: allocFloat64Array([v]), im: null, rows: 1, cols: 1 };
+  if (isRuntimeComplexNumber(v))
+    return {
+      re: allocFloat64Array([v.re]),
+      im: allocFloat64Array([v.im]),
+      rows: 1,
+      cols: 1,
+    };
+  if (!isRuntimeTensor(v) || v.shape.length > 2)
+    throw new RuntimeError(
+      "qrupdate: inputs must be full matrices of class single or double"
+    );
+  const [rows, cols] = tensorSize2D(v);
+  return {
+    re: allocFloat64Array(v.data),
+    im: v.imag ? allocFloat64Array(v.imag) : null,
+    rows,
+    cols,
+  };
+}
+
+function qrupdateApply(args: RuntimeValue[]): [RuntimeValue, RuntimeValue] {
+  const [Qa, Ra, ua, va] = args.map(qrupdateArg);
+  const m = Qa.rows;
+  const n = Ra.cols;
+  if (Qa.cols !== m || Ra.rows !== m)
+    throw new RuntimeError("qrupdate: matrix dimensions must agree");
+  if (ua.cols !== 1 || ua.rows !== m)
+    throw new RuntimeError(
+      `qrupdate: third argument must be a column vector of length ${m}`
+    );
+  if (va.cols !== 1 || va.rows !== n)
+    throw new RuntimeError(
+      `qrupdate: fourth argument must be a column vector of length ${n}`
+    );
+  const isComplex = !!(Qa.im || Ra.im || ua.im || va.im);
+  const Qr = Qa.re,
+    Qi = Qa.im ?? allocFloat64Array(m * m);
+  const Rr = Ra.re,
+    Ri = Ra.im ?? allocFloat64Array(m * n);
+  const ur = ua.re,
+    ui = ua.im ?? allocFloat64Array(m);
+  const vr = va.re,
+    vi = va.im ?? allocFloat64Array(n);
+
+  // Givens rotation G = [c s; -conj(s) c] (c real >= 0) with
+  // G*[f; g] = [r; 0], following the LAPACK 3.10 zlartg convention.
+  let c = 0,
+    sr = 0,
+    si = 0,
+    rr = 0,
+    ri = 0;
+  const rot = (fr: number, fi: number, gr: number, gi: number) => {
+    const nf = Math.hypot(fr, fi),
+      ng = Math.hypot(gr, gi);
+    if (ng === 0) {
+      c = 1;
+      sr = si = 0;
+      rr = fr;
+      ri = fi;
+    } else if (nf === 0) {
+      c = 0;
+      sr = gr / ng;
+      si = -gi / ng;
+      rr = ng;
+      ri = 0;
+    } else {
+      const nrm = Math.hypot(nf, ng);
+      const pr = fr / nf,
+        pi = fi / nf; // f/|f|
+      c = nf / nrm;
+      // s = (f/|f|) * conj(g) / nrm
+      sr = (pr * gr + pi * gi) / nrm;
+      si = (pi * gr - pr * gi) / nrm;
+      rr = pr * nrm;
+      ri = pi * nrm;
+    }
+  };
+  // rows i, i+1 of R (columns j0..n-1) <- G * rows
+  const rotR = (i: number, j0: number) => {
+    for (let j = j0; j < n; j++) {
+      const a = i + j * m,
+        b = a + 1;
+      const xr = Rr[a],
+        xi = Ri[a],
+        yr = Rr[b],
+        yi = Ri[b];
+      Rr[a] = c * xr + sr * yr - si * yi;
+      Ri[a] = c * xi + sr * yi + si * yr;
+      Rr[b] = c * yr - (sr * xr + si * xi);
+      Ri[b] = c * yi - (sr * xi - si * xr);
+    }
+  };
+  // columns i, i+1 of Q <- [Qi Qi1] * G'
+  const rotQ = (i: number) => {
+    for (let r = 0; r < m; r++) {
+      const a = r + i * m,
+        b = a + m;
+      const xr = Qr[a],
+        xi = Qi[a],
+        yr = Qr[b],
+        yi = Qi[b];
+      Qr[a] = c * xr + sr * yr + si * yi;
+      Qi[a] = c * xi + sr * yi - si * yr;
+      Qr[b] = c * yr - (sr * xr - si * xi);
+      Qi[b] = c * yi - (sr * xi + si * xr);
+    }
+  };
+
+  // w = Q' * u
+  const wr = allocFloat64Array(m),
+    wi = allocFloat64Array(m);
+  for (let j = 0; j < m; j++) {
+    let sumR = 0,
+      sumI = 0;
+    for (let i = 0; i < m; i++) {
+      const qr = Qr[i + j * m],
+        qi = Qi[i + j * m];
+      sumR += qr * ur[i] + qi * ui[i];
+      sumI += qr * ui[i] - qi * ur[i];
+    }
+    wr[j] = sumR;
+    wi[j] = sumI;
+  }
+  // Reduce w to a multiple of e1 from the bottom; R becomes upper Hessenberg.
+  for (let i = m - 2; i >= 0; i--) {
+    rot(wr[i], wi[i], wr[i + 1], wi[i + 1]);
+    wr[i] = rr;
+    wi[i] = ri;
+    rotR(i, i);
+    rotQ(i);
+  }
+  // R(1,:) += w(1) * v'
+  for (let j = 0; j < n; j++) {
+    Rr[j * m] += wr[0] * vr[j] + wi[0] * vi[j];
+    Ri[j * m] += wi[0] * vr[j] - wr[0] * vi[j];
+  }
+  // Retriangularize the Hessenberg R.
+  for (let j = 0; j < Math.min(m - 1, n); j++) {
+    const a = j + j * m;
+    rot(Rr[a], Ri[a], Rr[a + 1], Ri[a + 1]);
+    Rr[a] = rr;
+    Ri[a] = ri;
+    Rr[a + 1] = Ri[a + 1] = 0;
+    rotR(j, j + 1);
+    rotQ(j);
+  }
+  if (!isComplex) return [RTV.tensor(Qr, [m, m]), RTV.tensor(Rr, [m, n])];
+  return [RTV.tensor(Qr, [m, m], Qi), RTV.tensor(Rr, [m, n], Ri)];
+}
+
 // ── lu ──────────────────────────────────────────────────────────────────
 
 registerIBuiltin({
