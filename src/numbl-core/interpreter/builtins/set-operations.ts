@@ -1852,3 +1852,131 @@ defineBuiltin({
     },
   ],
 });
+
+// ── groupcounts ────────────────────────────────────────────────────────────
+
+defineBuiltin({
+  name: "groupcounts",
+  help: {
+    signatures: [
+      "GC = groupcounts(A)",
+      "[GC, GR] = groupcounts(A)",
+      "[GC, GR, GP] = groupcounts(A)",
+    ],
+    description:
+      "Number of elements in each group of A. For a numeric or logical array, each column is a grouping variable and the groups are the unique rows, sorted, with NaN as its own (last) group. A cell array of character vectors is one grouping variable. GC is a column of counts, GR the groups (a column for one grouping variable, otherwise a 1-by-N cell of columns) and GP the percentage of elements in each group. Table input, groupbins and name-value options are not supported.",
+  },
+  cases: [
+    {
+      match: (argTypes, nargout) => {
+        if (argTypes.length !== 1) return null;
+        const out: JitType = { kind: "unknown" };
+        return Array.from({ length: Math.max(1, nargout) }, () => out);
+      },
+      apply: (args, nargout) => {
+        const A = args[0];
+        let counts: number[];
+        let groups: RuntimeValue;
+        let total: number;
+        if (isRuntimeCell(A)) {
+          const cellA = A as RuntimeCell;
+          if (
+            !isCellstr(cellA) ||
+            (cellA.shape.length === 2 &&
+              cellA.shape[1] !== 1 &&
+              cellA.data.length > 0)
+          )
+            throw new RuntimeError(
+              "groupcounts: cell input must be a column cell array of character vectors"
+            );
+          const strs = cellA.data.map(e => toString(e));
+          total = strs.length;
+          const m = new Map<string, number>();
+          for (const s of strs) m.set(s, (m.get(s) ?? 0) + 1);
+          const keys = [...m.keys()].sort((a, b) =>
+            a < b ? -1 : a > b ? 1 : 0
+          );
+          counts = keys.map(k => m.get(k)!);
+          groups = RTV.cell(
+            keys.map(k => RTV.char(k)),
+            [keys.length, 1]
+          );
+        } else {
+          let data: ArrayLike<number>;
+          let rows: number, cols: number;
+          let isLogical = false;
+          if (isRuntimeNumber(A)) {
+            data = [A as number];
+            rows = cols = 1;
+          } else if (isRuntimeLogical(A)) {
+            data = [A ? 1 : 0];
+            rows = cols = 1;
+            isLogical = true;
+          } else if (isRuntimeTensor(A)) {
+            if (A.imag)
+              throw new RuntimeError("groupcounts: complex input is not supported");
+            if (A.shape.length > 2 && A.shape.slice(2).some(d => d !== 1))
+              throw new RuntimeError("groupcounts: A must be a 2-D array");
+            [rows, cols] = tensorSize2D(A);
+            data = A.data;
+            isLogical = !!A._isLogical;
+          } else {
+            throw new RuntimeError(
+              "groupcounts: A must be numeric, logical or a cell array of character vectors"
+            );
+          }
+          total = rows;
+          // Sort row indices lexicographically (NaN last), then merge equal rows
+          const cmp = (a: number, b: number): number => {
+            for (let j = 0; j < cols; j++) {
+              const x = data[j * rows + a];
+              const y = data[j * rows + b];
+              const xn = Number.isNaN(x);
+              const yn = Number.isNaN(y);
+              if (xn || yn) {
+                if (xn && yn) continue;
+                return xn ? 1 : -1;
+              }
+              if (x !== y) return x < y ? -1 : 1;
+            }
+            return 0;
+          };
+          const order = Array.from({ length: rows }, (_, i) => i).sort(cmp);
+          const firsts: number[] = [];
+          counts = [];
+          for (let k = 0; k < order.length; k++) {
+            if (k > 0 && cmp(order[k - 1], order[k]) === 0)
+              counts[counts.length - 1]++;
+            else {
+              firsts.push(order[k]);
+              counts.push(1);
+            }
+          }
+          const ng = firsts.length;
+          const groupCol = (j: number): RuntimeValue => {
+            const col = allocFloat64Array(ng);
+            for (let g = 0; g < ng; g++)
+              col[g] = data[j * rows + firsts[g]] + 0; // -0 -> 0
+            const t = RTV.tensor(col, [ng, 1]);
+            if (isLogical) t._isLogical = true;
+            return t;
+          };
+          groups =
+            cols === 1
+              ? groupCol(0)
+              : RTV.cell(
+                  Array.from({ length: cols }, (_, j) => groupCol(j)),
+                  [1, cols]
+                );
+        }
+        const ng = counts.length;
+        const gc = RTV.tensor(allocFloat64Array(counts), [ng, 1]);
+        if (nargout <= 1) return gc;
+        if (nargout === 2) return [gc, groups];
+        const gp = allocFloat64Array(ng);
+        for (let g = 0; g < ng; g++) gp[g] = (100 * counts[g]) / total;
+        return [gc, groups, RTV.tensor(gp, [ng, 1])];
+      },
+    },
+  ],
+});
