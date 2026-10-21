@@ -28,7 +28,8 @@ function zgeqr2(
   let vn1: Float64Array | undefined, vn2: Float64Array | undefined;
   const colNorm = (j: number, i0: number) => {
     let s = 0;
-    for (let i = i0; i < m; i++) s = Math.hypot(s, aRe[i + j * m], aIm[i + j * m]);
+    for (let i = i0; i < m; i++)
+      s = Math.hypot(s, aRe[i + j * m], aIm[i + j * m]);
     return s;
   };
   if (jpvt) {

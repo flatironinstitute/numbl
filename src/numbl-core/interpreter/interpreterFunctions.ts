@@ -1440,8 +1440,7 @@ function classPublicMethods(
         ];
         for (const n of names) {
           // skip property accessors (get.X / set.X) and superclass ctors
-          if (n.includes(".") || (n === info.name && n !== className))
-            continue;
+          if (n.includes(".") || (n === info.name && n !== className)) continue;
           out.add(n);
         }
       }

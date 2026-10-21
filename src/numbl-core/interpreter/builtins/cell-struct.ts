@@ -332,10 +332,14 @@ registerIBuiltin({
         }
         if (isRuntimeStructArray(A)) {
           const fieldNames = A.fieldNames;
-          return num2cellElements(A.elements, [1, A.elements.length], dimArg, els =>
-            els.length === 1
-              ? els[0]
-              : RTV.structArray(fieldNames, els as RuntimeStruct[])
+          return num2cellElements(
+            A.elements,
+            [1, A.elements.length],
+            dimArg,
+            els =>
+              els.length === 1
+                ? els[0]
+                : RTV.structArray(fieldNames, els as RuntimeStruct[])
           );
         }
         if (isRuntimeClassInstanceArray(A)) {

@@ -607,7 +607,6 @@ function tensorElemwiseComplex(
   return RTV.tensor(resultRe, at.shape, isReal ? undefined : resultIm);
 }
 
-
 // ── Mixed real/complex multiply and divide ──────────────────────────────
 // MATLAB treats a complex operand whose imaginary part is all zero as real,
 // and multiplies or divides each part of a complex operand by a real one

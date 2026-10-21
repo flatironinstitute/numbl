@@ -1914,7 +1914,9 @@ defineBuiltin({
             isLogical = true;
           } else if (isRuntimeTensor(A)) {
             if (A.imag)
-              throw new RuntimeError("groupcounts: complex input is not supported");
+              throw new RuntimeError(
+                "groupcounts: complex input is not supported"
+              );
             if (A.shape.length > 2 && A.shape.slice(2).some(d => d !== 1))
               throw new RuntimeError("groupcounts: A must be a 2-D array");
             [rows, cols] = tensorSize2D(A);

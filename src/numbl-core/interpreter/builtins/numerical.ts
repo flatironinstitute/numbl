@@ -1428,36 +1428,60 @@ defineBuiltin({
         const xArg = args[0];
         let rest = args.slice(2);
         let values: Float64Array | null = null;
-        if (rest.length > 0 && !isRuntimeChar(rest[0]) && !isRuntimeString(rest[0])) {
+        if (
+          rest.length > 0 &&
+          !isRuntimeChar(rest[0]) &&
+          !isRuntimeString(rest[0])
+        ) {
           values = toFloatArray(rest[0]);
           rest = rest.slice(1);
         }
         let right = false;
         for (let i = 0; i < rest.length; i += 2) {
-          const opt = isRuntimeChar(rest[i]) || isRuntimeString(rest[i])
-            ? (isRuntimeChar(rest[i]) ? (rest[i] as { value: string }).value : (rest[i] as string)).toLowerCase()
-            : "";
+          const opt =
+            isRuntimeChar(rest[i]) || isRuntimeString(rest[i])
+              ? (isRuntimeChar(rest[i])
+                  ? (rest[i] as { value: string }).value
+                  : (rest[i] as string)
+                ).toLowerCase()
+              : "";
           if (opt === "categorical")
-            throw new RuntimeError("discretize: categorical output is not supported");
+            throw new RuntimeError(
+              "discretize: categorical output is not supported"
+            );
           if (opt !== "includededge" || i + 1 >= rest.length)
             throw new RuntimeError("discretize: invalid option");
           const v = rest[i + 1];
           const side = (isRuntimeChar(v) ? v.value : String(v)).toLowerCase();
           if (side !== "left" && side !== "right")
-            throw new RuntimeError("discretize: IncludedEdge must be 'left' or 'right'");
+            throw new RuntimeError(
+              "discretize: IncludedEdge must be 'left' or 'right'"
+            );
           right = side === "right";
         }
         const edgesArg = args[1];
-        if (isRuntimeNumber(edgesArg) || (isRuntimeTensor(edgesArg) && edgesArg.data.length === 1))
-          throw new RuntimeError("discretize: the number-of-bins form is not supported; pass bin edges");
+        if (
+          isRuntimeNumber(edgesArg) ||
+          (isRuntimeTensor(edgesArg) && edgesArg.data.length === 1)
+        )
+          throw new RuntimeError(
+            "discretize: the number-of-bins form is not supported; pass bin edges"
+          );
         const edges = toFloatArray(edgesArg);
         const N = edges.length;
-        if (N < 2) throw new RuntimeError("discretize: edges must have at least 2 elements");
+        if (N < 2)
+          throw new RuntimeError(
+            "discretize: edges must have at least 2 elements"
+          );
         for (let i = 1; i < N; i++)
           if (!(edges[i] >= edges[i - 1]))
-            throw new RuntimeError("discretize: edges must be monotonically non-decreasing");
+            throw new RuntimeError(
+              "discretize: edges must be monotonically non-decreasing"
+            );
         if (values && values.length !== N - 1)
-          throw new RuntimeError("discretize: values must have numel(edges)-1 elements");
+          throw new RuntimeError(
+            "discretize: values must have numel(edges)-1 elements"
+          );
 
         // 1-based bin index of v, or 0 if outside
         const findBin = (v: number): number => {
@@ -1465,7 +1489,8 @@ defineBuiltin({
           if (!right) {
             if (v === edges[N - 1]) return N - 1; // last bin is closed
             // largest k with edges[k] <= v
-            let lo = 0, hi = N - 1;
+            let lo = 0,
+              hi = N - 1;
             while (hi - lo > 1) {
               const mid = (lo + hi) >> 1;
               if (edges[mid] <= v) lo = mid;
@@ -1475,7 +1500,8 @@ defineBuiltin({
           }
           if (v === edges[0]) return 1; // first bin is closed
           // smallest k >= 1 with v <= edges[k]
-          let lo = 0, hi = N - 1;
+          let lo = 0,
+            hi = N - 1;
           while (hi - lo > 1) {
             const mid = (lo + hi) >> 1;
             if (v <= edges[mid]) hi = mid;
@@ -1491,7 +1517,9 @@ defineBuiltin({
 
         let Y: RuntimeValue;
         if (isRuntimeNumber(xArg) || isRuntimeLogical(xArg)) {
-          Y = RTV.num(mapBin(isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number)));
+          Y = RTV.num(
+            mapBin(isRuntimeLogical(xArg) ? (xArg ? 1 : 0) : (xArg as number))
+          );
         } else if (isRuntimeTensor(xArg)) {
           if (xArg.imag) throw new RuntimeError("discretize: X must be real");
           const out = allocFloat64Array(xArg.data.length);
@@ -1501,7 +1529,13 @@ defineBuiltin({
           throw new RuntimeError("discretize: X must be numeric");
         }
         if (nargout <= 1) return Y;
-        return [Y, RTV.tensor(allocFloat64Array(edges), isColumnVector(edgesArg) ? [N, 1] : [1, N])];
+        return [
+          Y,
+          RTV.tensor(
+            allocFloat64Array(edges),
+            isColumnVector(edgesArg) ? [N, 1] : [1, N]
+          ),
+        ];
       },
     },
   ],
