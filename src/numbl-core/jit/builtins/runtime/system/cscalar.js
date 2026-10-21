@@ -25,6 +25,15 @@ export function mtoc2_csub(a, b) {
 export function mtoc2_cmul(a, b) {
   return { re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re };
 }
+// Scalar `*` with MATLAB's mixed real/complex rule (see `cscalar.h`): an
+// operand whose imag part is 0 acts as real and scales each part of the
+// other without promotion (a part stays 0 where the complex one's is 0).
+export function mtoc2_cmul_mixed(a, b) {
+  if (a.im === 0 && b.im === 0) return { re: a.re * b.re, im: 0 };
+  if (b.im === 0) return { re: a.re === 0 ? 0 : a.re * b.re, im: a.im * b.re };
+  if (a.im === 0) return { re: b.re === 0 ? 0 : b.re * a.re, im: b.im * a.re };
+  return mtoc2_cmul(a, b);
+}
 export function mtoc2_cneg(z) {
   return { re: -z.re, im: -z.im };
 }

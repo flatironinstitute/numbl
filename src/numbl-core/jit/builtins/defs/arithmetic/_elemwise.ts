@@ -421,7 +421,8 @@ export function defineElemwiseRealBinary(opts: {
   const defaultComplexHelper: Record<string, string | undefined> = {
     "+": "mtoc2_cadd",
     "-": "mtoc2_csub",
-    "*": "mtoc2_cmul",
+    // MATLAB's mixed real/complex rule, not the plain complex product.
+    "*": "mtoc2_cmul_mixed",
   };
   const helperName = defaultComplexHelper[opts.cOp];
   const defaultComplexScalarExpr = helperName

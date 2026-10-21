@@ -24,11 +24,34 @@
 static inline double _Complex mtoc2_cmake(double re, double im) {
   return re + im * I;
 }
+/* Pack re/im into a complex without the `im * I` trap: `INFINITY * I`
+ * is `NaN + INFINITY*i` (0*Inf in the real lane). __builtin_complex
+ * (gcc/clang) sets the components directly; CMPLX is the C11 fallback. */
+static inline double _Complex mtoc2_cpack(double re, double im) {
+#if defined(__clang__) || defined(__GNUC__)
+  return __builtin_complex(re, im);
+#else
+  return CMPLX(re, im);
+#endif
+}
 static inline double mtoc2_creal(double _Complex z) { return creal(z); }
 static inline double mtoc2_cimag(double _Complex z) { return cimag(z); }
 static inline double _Complex mtoc2_cadd(double _Complex a, double _Complex b) { return a + b; }
 static inline double _Complex mtoc2_csub(double _Complex a, double _Complex b) { return a - b; }
 static inline double _Complex mtoc2_cmul(double _Complex a, double _Complex b) { return a * b; }
+/* Scalar `*` with MATLAB's mixed real/complex rule (as the interpreter's
+ * `mixedRealComplex` in helpers/arithmetic.ts): an operand whose imag part
+ * is 0 acts as real, and a real operand scales each part of a complex one
+ * without promotion, so the real part stays 0 where the complex operand's
+ * is 0 (NaN or Inf in the real operand would otherwise give NaN*0 = NaN).
+ * `mtoc2_cmul` stays the plain complex product. */
+static inline double _Complex mtoc2_cmul_mixed(double _Complex a, double _Complex b) {
+  double ar = creal(a), ai = cimag(a), br = creal(b), bi = cimag(b);
+  if (ai == 0.0 && bi == 0.0) return mtoc2_cpack(ar * br, 0.0);
+  if (bi == 0.0) return mtoc2_cpack(ar == 0.0 ? 0.0 : ar * br, ai * br);
+  if (ai == 0.0) return mtoc2_cpack(br == 0.0 ? 0.0 : br * ar, bi * ar);
+  return mtoc2_cmul(a, b);
+}
 static inline double _Complex mtoc2_cneg(double _Complex z) { return -z; }
 static inline double _Complex mtoc2_cconj(double _Complex z) { return conj(z); }
 static inline double mtoc2_cabs(double _Complex z) {

@@ -17,18 +17,6 @@ static double mtoc2_signed_inf(double x) {
   return x > 0 ? INFINITY : (x < 0 ? -INFINITY : 0.0);
 }
 
-/* Pack re/im into a complex without the `im * I` trap: `INFINITY * I`
- * is `NaN + INFINITY*i` (0*Inf in the real lane), which would corrupt a
- * signed-Inf result. __builtin_complex (gcc/clang) sets the components
- * directly; CMPLX is the C11 fallback. */
-static double _Complex mtoc2_cpack(double re, double im) {
-#if defined(__clang__) || defined(__GNUC__)
-  return __builtin_complex(re, im);
-#else
-  return CMPLX(re, im);
-#endif
-}
-
 static double _Complex mtoc2_cdiv(double _Complex a, double _Complex b) {
   double ar = creal(a), ai = cimag(a);
   double br = creal(b), bi = cimag(b);
@@ -44,9 +32,22 @@ static double _Complex mtoc2_cdiv(double _Complex a, double _Complex b) {
   if (fabs(br) >= fabs(bi)) {
     double r = bi / br;
     double den = br + r * bi;
-    return (ar + ai * r) / den + ((ai - ar * r) / den) * I;
+    return mtoc2_cpack((ar + ai * r) / den, (ai - ar * r) / den);
   }
   double r = br / bi;
   double den = bi + r * br;
-  return (ar * r + ai) / den + ((ai * r - ar) / den) * I;
+  return mtoc2_cpack((ar * r + ai) / den, (ai * r - ar) / den);
+}
+
+/* Scalar `/` with MATLAB's mixed real/complex rule (see `mtoc2_cmul_mixed`
+ * in cscalar.h): a real divisor divides each part of the numerator (a part
+ * stays 0 where the numerator's is 0); a real numerator over a complex
+ * divisor is the plain complex quotient. */
+static double _Complex mtoc2_cdiv_mixed(double _Complex a, double _Complex b) {
+  double ar = creal(a), ai = cimag(a), br = creal(b), bi = cimag(b);
+  if (bi == 0.0) {
+    if (ai == 0.0) return mtoc2_cpack(ar / br, 0.0);
+    return mtoc2_cpack(ar == 0.0 ? 0.0 : ar / br, ai / br);
+  }
+  return mtoc2_cdiv(ai == 0.0 ? mtoc2_cpack(ar, 0.0) : a, b);
 }

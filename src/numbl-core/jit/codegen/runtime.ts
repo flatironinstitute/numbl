@@ -180,8 +180,8 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   ["mtoc2_cscalar", loadSnippet("cscalar.h")],
   // Smith's algorithm-based complex divide that matches numbl's
   // signed-Inf-on-zero-divisor behavior. Activated by `rdivide`'s
-  // complex scalar path.
-  ["mtoc2_cdiv", loadSnippet("cdiv.h")],
+  // complex scalar path. Packs results with cscalar.h's `mtoc2_cpack`.
+  ["mtoc2_cdiv", loadSnippet("cdiv.h", ["mtoc2_cscalar"])],
   // Numbl-compatible complex formatter. Mirrors `formatComplex` byte-
   // for-byte so cross-runner stdout aligns.
   [

@@ -24,3 +24,12 @@ export function mtoc2_cdiv(a, b) {
   const den = bi + r * br;
   return { re: (ar * r + ai) / den, im: (ai * r - ar) / den };
 }
+
+// Scalar `/` with MATLAB's mixed real/complex rule (see `cdiv.h`).
+export function mtoc2_cdiv_mixed(a, b) {
+  if (b.im === 0) {
+    if (a.im === 0) return { re: a.re / b.re, im: 0 };
+    return { re: a.re === 0 ? 0 : a.re / b.re, im: a.im / b.re };
+  }
+  return mtoc2_cdiv(a.im === 0 ? { re: a.re, im: 0 } : a, b);
+}
