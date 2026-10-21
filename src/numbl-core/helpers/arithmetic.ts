@@ -607,6 +607,131 @@ function tensorElemwiseComplex(
   return RTV.tensor(resultRe, at.shape, isReal ? undefined : resultIm);
 }
 
+
+// ── Mixed real/complex multiply and divide ──────────────────────────────
+// MATLAB treats a complex operand whose imaginary part is all zero as real,
+// and multiplies or divides each part of a complex operand by a real one
+// without promoting it to complex: a part stays exactly 0 where the complex
+// operand's is 0. Promoting would turn NaN or Inf in the
+// real operand into NaN imaginary parts (NaN*0).
+
+function realIfZeroImag(v: RuntimeValue): RuntimeValue {
+  if (isRuntimeComplexNumber(v)) return v.im === 0 ? v.re : v;
+  if (isRuntimeTensor(v) && v.imag) {
+    const im = v.imag;
+    for (let i = 0; i < im.length; i++) if (im[i] !== 0) return v;
+    const out = RTV.tensorRaw(v.data, v.shape);
+    if (v._isLogical) out._isLogical = true;
+    return out;
+  }
+  return v;
+}
+
+function isComplexOperand(v: RuntimeValue): boolean {
+  return (
+    isRuntimeComplexNumber(v) || (isRuntimeTensor(v) && v.imag !== undefined)
+  );
+}
+
+const MIXED_MUL = 0; // c .* r
+const MIXED_DIV = 1; // c ./ r
+const MIXED_RDIV = 2; // r ./ c
+
+/** Element-wise c.*r, c./r or r./c for complex c and real r (dense,
+ *  broadcast). Returns null for operands it does not handle (sparse,
+ *  non-numeric, incompatible shapes), leaving those to the general path. */
+function mixedRealComplex(
+  c: RuntimeValue,
+  r: RuntimeValue,
+  mode: number
+): RuntimeValue | null {
+  let cRe: ArrayLike<number>, cIm: ArrayLike<number>, cShape: number[];
+  if (isRuntimeComplexNumber(c)) {
+    cRe = [c.re];
+    cIm = [c.im];
+    cShape = [1, 1];
+  } else if (isRuntimeTensor(c) && c.imag) {
+    cRe = c.data;
+    cIm = c.imag;
+    cShape = c.shape;
+  } else return null;
+  let rd: ArrayLike<number>, rShape: number[];
+  if (isRuntimeNumber(r)) {
+    rd = [r];
+    rShape = [1, 1];
+  } else if (isRuntimeLogical(r)) {
+    rd = [r ? 1 : 0];
+    rShape = [1, 1];
+  } else if (isRuntimeTensor(r) && !r.imag) {
+    rd = r.data;
+    rShape = r.shape;
+  } else return null;
+  const nc = cRe.length,
+    nr = rd.length;
+  let outShape: number[] | null;
+  if (nc === 1) outShape = isRuntimeTensor(r) ? rShape : cShape;
+  else if (nr === 1) outShape = cShape;
+  else if (
+    nc === nr &&
+    cShape.length === rShape.length &&
+    cShape.every((d, i) => d === rShape[i])
+  )
+    outShape = cShape;
+  else outShape = getBroadcastShape(cShape, rShape);
+  if (!outShape) return null;
+  const n = outShape.reduce((acc, d) => acc * d, 1);
+  const outRe = allocFloat64Array(n),
+    outIm = allocFloat64Array(n);
+  const visit = (ci: number, ri: number, oi: number) => {
+    const x = rd[ri];
+    const re = cRe[ci],
+      im = cIm[ci];
+    if (mode === MIXED_MUL) {
+      outRe[oi] = re === 0 ? 0 : re * x;
+      outIm[oi] = im === 0 ? 0 : im * x;
+    } else if (mode === MIXED_DIV) {
+      outRe[oi] = re === 0 ? 0 : re / x;
+      outIm[oi] = im === 0 ? 0 : im / x;
+    } else if (im === 0) {
+      outRe[oi] = x / cRe[ci];
+      outIm[oi] = 0;
+    } else {
+      const q = complexDivide(x, 0, cRe[ci], im);
+      outRe[oi] = q.re;
+      outIm[oi] = q.im;
+    }
+  };
+  if (nc === 1) for (let i = 0; i < n; i++) visit(0, i, i);
+  else if (nr === 1) for (let i = 0; i < n; i++) visit(i, 0, i);
+  else if (nc === n && nr === n) for (let i = 0; i < n; i++) visit(i, i, i);
+  else broadcastIterate(cShape, rShape, outShape, visit);
+  if (!isRuntimeTensor(c) && !isRuntimeTensor(r))
+    return complexResult(outRe[0], outIm[0]);
+  for (let i = 0; i < n; i++)
+    if (outIm[i] !== 0) return RTV.tensor(outRe, outShape, outIm);
+  return RTV.tensor(outRe, outShape);
+}
+
+/** c.*r for exactly one complex operand, else null. */
+function mixedMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue | null {
+  const ac = isComplexOperand(a),
+    bc = isComplexOperand(b);
+  if (ac === bc) return null;
+  return ac
+    ? mixedRealComplex(a, b, MIXED_MUL)
+    : mixedRealComplex(b, a, MIXED_MUL);
+}
+
+/** a./b for exactly one complex operand, else null. */
+function mixedDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue | null {
+  const ac = isComplexOperand(a),
+    bc = isComplexOperand(b);
+  if (ac === bc) return null;
+  return ac
+    ? mixedRealComplex(a, b, MIXED_DIV)
+    : mixedRealComplex(b, a, MIXED_RDIV);
+}
+
 // ── Arithmetic operators ────────────────────────────────────────────────
 
 /** Format a RuntimeValue for string concatenation via `+`.
@@ -801,6 +926,11 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) {
     return matMul(a, b);
   }
+  // Scalar times scalar or tensor: element-wise, MATLAB's mixed rules
+  a = realIfZeroImag(a);
+  b = realIfZeroImag(b);
+  const mixed = mixedMul(a, b);
+  if (mixed) return mixed;
   // Complex scalar multiplication
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(
@@ -825,6 +955,12 @@ export function mMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise multiply */
 export function mElemMul(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isComplexOperand(a) || isComplexOperand(b)) {
+    a = realIfZeroImag(a);
+    b = realIfZeroImag(b);
+    const mixed = mixedMul(a, b);
+    if (mixed) return mixed;
+  }
   // Fast inline path: real tensor .* number or number .* real tensor
   if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
     const d = a.data,
@@ -918,6 +1054,10 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return mConjugateTranspose(result);
   }
   // Scalar or element-wise division (b is not a tensor)
+  a = realIfZeroImag(a);
+  b = realIfZeroImag(b);
+  const mixed = mixedDiv(a, b);
+  if (mixed) return mixed;
   if (isComplexOrMixed(a, b)) {
     return complexBinaryOp(a, b, complexDivide, ELEMWISE_DIV);
   }
@@ -926,6 +1066,12 @@ export function mDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
 
 /** Element-wise divide */
 export function mElemDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
+  if (isComplexOperand(a) || isComplexOperand(b)) {
+    a = realIfZeroImag(a);
+    b = realIfZeroImag(b);
+    const mixed = mixedDiv(a, b);
+    if (mixed) return mixed;
+  }
   // Fast inline path: real tensor ./ number or number ./ real tensor
   if (isRuntimeTensor(a) && !a.imag && isRuntimeNumber(b)) {
     const d = a.data,
