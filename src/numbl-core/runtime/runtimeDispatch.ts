@@ -492,6 +492,15 @@ export function methodDispatch(
       if (firstRV && isRuntimeDictionary(firstRV)) {
         return dispatch(rt, name, nargout, args);
       }
+      // A 1x1 struct array behaves like a scalar struct: s.field(args)
+      if (
+        firstRV &&
+        isRuntimeStructArray(firstRV) &&
+        firstRV.elements.length === 1 &&
+        firstRV.fieldNames.includes(name)
+      ) {
+        firstRV = firstRV.elements[0];
+      }
       if (firstRV && isRuntimeStruct(firstRV)) {
         const fieldVal = mGetField(firstRV, name);
         const remaining = args.slice(1);

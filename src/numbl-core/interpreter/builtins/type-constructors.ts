@@ -851,6 +851,8 @@ defineBuiltin({
           }
           elements.push(RTV.struct(fields));
         }
+        // 1x1 result (all cell values have one element) is a scalar struct
+        if (elements.length === 1) return elements[0];
         return RTV.structArray(fieldNames, elements);
       },
     },
