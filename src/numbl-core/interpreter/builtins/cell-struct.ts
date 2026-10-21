@@ -5,6 +5,8 @@
 
 import {
   isRuntimeCell,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeChar,
   isRuntimeComplexNumber,
   isRuntimeLogical,
@@ -17,6 +19,7 @@ import type {
   RuntimeValue,
   RuntimeTensor,
   RuntimeStruct,
+  RuntimeClassInstance,
 } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
@@ -273,6 +276,35 @@ registerIBuiltin({
 
 // ── num2cell ────────────────────────────────────────────────────────────
 
+/** num2cell for arrays of non-numeric elements (struct/object arrays) of a
+ *  2-D shape stored column-major. `wrap` rebuilds a sub-array of elements. */
+function num2cellElements(
+  elems: RuntimeValue[],
+  shape: [number, number],
+  dim: number | undefined,
+  wrap: (els: RuntimeValue[], shape: [number, number]) => RuntimeValue
+): RuntimeValue {
+  const [rows, cols] = shape;
+  if (dim === 1) {
+    const cellData: RuntimeValue[] = [];
+    for (let j = 0; j < cols; j++)
+      cellData.push(wrap(elems.slice(j * rows, (j + 1) * rows), [rows, 1]));
+    return RTV.cell(cellData, [1, cols]);
+  }
+  if (dim === 2) {
+    const cellData: RuntimeValue[] = [];
+    for (let i = 0; i < rows; i++) {
+      const row: RuntimeValue[] = [];
+      for (let j = 0; j < cols; j++) row.push(elems[j * rows + i]);
+      cellData.push(wrap(row, [1, cols]));
+    }
+    return RTV.cell(cellData, [rows, 1]);
+  }
+  if (dim !== undefined && dim < 1)
+    throw new RuntimeError("num2cell: dimension must be a positive integer");
+  return RTV.cell([...elems], [rows, cols]);
+}
+
 registerIBuiltin({
   name: "num2cell",
   resolve: argTypes => {
@@ -290,16 +322,33 @@ registerIBuiltin({
           A = RTV.tensor(allocFloat64Array([A ? 1 : 0]), [1, 1]);
         }
         // MATLAB num2cell wraps each element of ANY array — including struct
-        // arrays — in a 1x1 cell. A scalar struct -> a 1x1 cell; a struct array
-        // (modelled as 1xN in numbl, matching size()) -> a 1xN cell of scalar
-        // structs. RTV.cell increfs its contents, so sharing the existing
-        // struct elements is safe.
-        if (isRuntimeStruct(A)) {
+        // and object arrays — in a cell. Struct arrays are modelled as 1xN in
+        // numbl (matching size()). RTV.cell increfs its contents, so sharing
+        // the existing elements is safe.
+        const dimArg =
+          args.length > 1 ? Math.round(toNumber(args[1])) : undefined;
+        if (isRuntimeStruct(A) || isRuntimeClassInstance(A)) {
           return RTV.cell([A], [1, 1]);
         }
         if (isRuntimeStructArray(A)) {
-          const elems = A.elements as RuntimeValue[];
-          return RTV.cell([...elems], [1, elems.length]);
+          const fieldNames = A.fieldNames;
+          return num2cellElements(A.elements, [1, A.elements.length], dimArg, els =>
+            els.length === 1
+              ? els[0]
+              : RTV.structArray(fieldNames, els as RuntimeStruct[])
+          );
+        }
+        if (isRuntimeClassInstanceArray(A)) {
+          const className = A.className;
+          return num2cellElements(A.elements, A.shape, dimArg, (els, shape) =>
+            els.length === 1
+              ? els[0]
+              : RTV.classInstanceArray(
+                  className,
+                  els as RuntimeClassInstance[],
+                  shape
+                )
+          );
         }
         if (!isRuntimeTensor(A))
           throw new RuntimeError(
