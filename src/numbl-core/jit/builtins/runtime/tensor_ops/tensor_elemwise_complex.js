@@ -13,7 +13,7 @@ import {
 import { mtoc2_cdiv } from "../system/cdiv.js";
 
 function cLaneOf(t, idx) {
-  return { re: t.data[idx], im: t.imag !== undefined ? t.imag[idx] : 0 };
+  return { re: t.data[idx], im: t.imag != null ? t.imag[idx] : 0 };
 }
 
 function cTtKernel(a, b, fn) {
@@ -91,6 +91,43 @@ function cBcastKernel(a, b, fn) {
   return r;
 }
 
+// Mixed real/complex times / rdivide, as `tensor_elemwise_complex.h`
+// (and the interpreter's `mixedRealComplex`): an operand with no imag
+// lane, or an all-zero one, acts as real, and a real operand scales each
+// part of a complex one without promotion, so a result part stays 0
+// where the complex operand's part is 0 (no NaN*0 = NaN).
+function cActsReal(t) {
+  if (t.imag == null) return true;
+  for (let i = 0; i < t.imag.length; i++) if (t.imag[i] !== 0) return false;
+  return true;
+}
+
+function cTimesMixed(a, ar, b, br) {
+  if (ar && br) return { re: a.re * b.re, im: 0 };
+  if (br)
+    return {
+      re: a.re === 0 ? 0 : a.re * b.re,
+      im: a.im === 0 ? 0 : a.im * b.re,
+    };
+  if (ar)
+    return {
+      re: b.re === 0 ? 0 : b.re * a.re,
+      im: b.im === 0 ? 0 : b.im * a.re,
+    };
+  return mtoc2_cmul(a, b);
+}
+
+function cRdivideMixed(a, ar, b, br) {
+  if (ar && br) return { re: a.re / b.re, im: 0 };
+  if (br)
+    return {
+      re: a.re === 0 ? 0 : a.re / b.re,
+      im: a.im === 0 ? 0 : a.im / b.re,
+    };
+  if (ar && b.im === 0) return { re: a.re / b.re, im: 0 };
+  return mtoc2_cdiv(ar ? { re: a.re, im: 0 } : a, b);
+}
+
 // ── plus ──────────────────────────────────────────────────────────────────
 export function mtoc2_tensor_plus_complex_tt(a, b) {
   return cTtKernel(a, b, mtoc2_cadd);
@@ -116,29 +153,43 @@ export function mtoc2_tensor_minus_complex_bcast_tt(a, b) {
   return cBcastKernel(a, b, mtoc2_csub);
 }
 
-// ── times ─────────────────────────────────────────────────────────────────
+// ── times ──────────────────────────────────────────────────────────────────
 export function mtoc2_tensor_times_complex_tt(a, b) {
-  return cTtKernel(a, b, mtoc2_cmul);
+  const ar = cActsReal(a),
+    br = cActsReal(b);
+  return cTtKernel(a, b, (x, y) => cTimesMixed(x, ar, y, br));
 }
 export function mtoc2_tensor_times_complex_ts(a, s) {
-  return cTsKernel(a, s, mtoc2_cmul);
+  const ar = cActsReal(a),
+    sr = s.im === 0;
+  return cTsKernel(a, s, (x, y) => cTimesMixed(x, ar, y, sr));
 }
 export function mtoc2_tensor_times_complex_bcast_tt(a, b) {
-  return cBcastKernel(a, b, mtoc2_cmul);
+  const ar = cActsReal(a),
+    br = cActsReal(b);
+  return cBcastKernel(a, b, (x, y) => cTimesMixed(x, ar, y, br));
 }
 
 // ── rdivide ───────────────────────────────────────────────────────────────
 export function mtoc2_tensor_rdivide_complex_tt(a, b) {
-  return cTtKernel(a, b, mtoc2_cdiv);
+  const ar = cActsReal(a),
+    br = cActsReal(b);
+  return cTtKernel(a, b, (x, y) => cRdivideMixed(x, ar, y, br));
 }
 export function mtoc2_tensor_rdivide_complex_ts(a, s) {
-  return cTsKernel(a, s, mtoc2_cdiv);
+  const ar = cActsReal(a),
+    sr = s.im === 0;
+  return cTsKernel(a, s, (x, y) => cRdivideMixed(x, ar, y, sr));
 }
 export function mtoc2_tensor_rdivide_complex_st(s, a) {
-  return cStKernel(s, a, mtoc2_cdiv);
+  const sr = s.im === 0,
+    ar = cActsReal(a);
+  return cStKernel(s, a, (x, y) => cRdivideMixed(x, sr, y, ar));
 }
 export function mtoc2_tensor_rdivide_complex_bcast_tt(a, b) {
-  return cBcastKernel(a, b, mtoc2_cdiv);
+  const ar = cActsReal(a),
+    br = cActsReal(b);
+  return cBcastKernel(a, b, (x, y) => cRdivideMixed(x, ar, y, br));
 }
 
 // ── uminus ────────────────────────────────────────────────────────────────
