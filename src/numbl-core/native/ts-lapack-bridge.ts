@@ -29,6 +29,11 @@ import { dgemm_optimized } from "../../ts-lapack/src/BLAS/dgemm_optimized.js";
 import { allocFloat64Array } from "../runtime/alloc.js";
 import { eigComplexTs } from "./ts-lapack-eig-complex.js";
 import { eigHermTs } from "./ts-lapack-eig-hermitian.js";
+import {
+  qrComplexTs,
+  qrPivotComplexTs,
+  luComplexTs,
+} from "./ts-lapack-qr-lu-complex.js";
 import { dsyev } from "../../ts-lapack/src/SRC/dsyev.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
@@ -1324,6 +1329,8 @@ const _bridge: LapackBridge = {
   inv,
   matmul,
   qr,
+  qrComplex: qrComplexTs,
+  qrPivotComplex: qrPivotComplexTs,
   linsolve,
   linsolveComplex,
   eig,
@@ -1331,6 +1338,7 @@ const _bridge: LapackBridge = {
   eigComplex: eigComplexTs,
   eigHerm,
   lu,
+  luComplex: luComplexTs,
   svd,
   chol,
   cholComplex,
