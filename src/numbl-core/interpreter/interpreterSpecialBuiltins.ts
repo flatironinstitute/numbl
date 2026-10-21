@@ -51,6 +51,9 @@ export interface InterpreterContext {
    *  ones, in declaration order. Returns undefined if `className` is not a
    *  known class. Backs `properties(obj)`. */
   classPublicProperties: (className: string) => string[] | undefined;
+  /** Public method names of a class (including inherited, static and the
+   *  constructor), or undefined if not a known class. Backs `ismethod`. */
+  classPublicMethods: (className: string) => Set<string> | undefined;
 }
 
 export const FALL_THROUGH: unique symbol = Symbol("FALL_THROUGH");
@@ -564,6 +567,31 @@ register("properties", (ctx, args) => {
     names.map(n => RTV.string(n)),
     [names.length, 1]
   );
+});
+
+register("ismethod", (ctx, args) => {
+  if (args.length !== 2) return FALL_THROUGH;
+  const v = ensureRuntimeValue(args[0]);
+  const nameArg = ensureRuntimeValue(args[1]);
+  // MATLAB: true when the name is a public method of the object's class (a
+  // char/string first argument names the class). Built-in types (numeric,
+  // char, struct, cell, ...) are not modelled and return false.
+  let className: string | undefined;
+  if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v)) {
+    className = v.className;
+  } else if (isRuntimeChar(v) || isRuntimeString(v)) {
+    className = toString(v);
+  }
+  let methodName: string | undefined;
+  if (isRuntimeChar(nameArg) || isRuntimeString(nameArg))
+    methodName = toString(nameArg);
+  else if (isRuntimeCell(nameArg) && nameArg.data.length === 1) {
+    const el = nameArg.data[0];
+    if (isRuntimeChar(el) || isRuntimeString(el)) methodName = toString(el);
+  }
+  if (!className || methodName === undefined) return RTV.logical(false);
+  const names = ctx.classPublicMethods(className);
+  return RTV.logical(names !== undefined && names.has(methodName));
 });
 
 register("narginchk", (ctx, args) => {

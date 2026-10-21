@@ -401,6 +401,11 @@ const H: Record<string, BuiltinHelp> = {
     description:
       "Names of the superclasses of a class, returned as a column cell array of character vectors. Accepts a class name (char/string) or an object. Returns an empty cell for built-in types or classes with no superclasses.",
   },
+  ismethod: {
+    signatures: ["tf = ismethod(obj, methodName)"],
+    description:
+      "True if methodName is a public method of the class of obj (including inherited and static methods and the constructor). A char/string obj names the class. Built-in types return false.",
+  },
   fieldnames: {
     signatures: ["F = fieldnames(S)"],
     description: "Returns cell array of field names of struct or object S.",

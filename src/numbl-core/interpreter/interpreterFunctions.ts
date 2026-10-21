@@ -89,6 +89,7 @@ export function callFunction(
         return undefined;
       },
       classPublicProperties: n => classPublicProperties(this, n),
+      classPublicMethods: n => classPublicMethods(this, n),
     };
     const result = specialHandler(ctx, args, nargout);
     if (result !== FALL_THROUGH) {
@@ -1387,6 +1388,76 @@ function classPublicProperties(
     }
     if (!info.superClass || info.superClass === "handle") break;
     info = interp.ctx.getClassInfo(info.superClass);
+  }
+  return out;
+}
+
+/** Methods inherited from the built-in `handle` class. */
+const HANDLE_CLASS_METHODS = [
+  "addlistener",
+  "delete",
+  "eq",
+  "findobj",
+  "findprop",
+  "ge",
+  "gt",
+  "isvalid",
+  "le",
+  "listener",
+  "lt",
+  "ne",
+  "notify",
+];
+
+/** Public method names of a class (instance and static methods, the
+ *  constructor, @folder method files), including inherited ones. Methods in
+ *  a block with private/protected Access are excluded, matching MATLAB's
+ *  `ismethod`. Returns undefined when `className` is not a known class. */
+function classPublicMethods(
+  interp: Interpreter,
+  className: string
+): Set<string> | undefined {
+  let info = interp.ctx.getClassInfo(className);
+  if (!info) return undefined;
+  const out = new Set<string>();
+  if (info.constructorName) out.add(info.constructorName);
+  const seen = new Set<string>();
+  while (info && !seen.has(info.qualifiedName)) {
+    seen.add(info.qualifiedName);
+    const ast = info.ast;
+    if (ast) {
+      for (const member of ast.members) {
+        if (member.type !== "Methods") continue;
+        const hidden = member.attributes.some(a => {
+          if (a.name.toLowerCase() !== "access") return false;
+          const val = (a.value ?? "").toLowerCase();
+          return val !== "public";
+        });
+        if (hidden) continue;
+        const names = [
+          ...member.body.flatMap(m => (m.type === "Function" ? [m.name] : [])),
+          ...(member.signatures ?? []).map(sig => sig.name),
+        ];
+        for (const n of names) {
+          // skip property accessors (get.X / set.X) and superclass ctors
+          if (n.includes(".") || (n === info.name && n !== className))
+            continue;
+          out.add(n);
+        }
+      }
+    } else {
+      for (const n of info.methodNames) out.add(n);
+      for (const n of info.staticMethodNames) out.add(n);
+    }
+    for (const n of info.externalMethodFiles.keys())
+      if (n !== info.name || info.qualifiedName === className) out.add(n);
+    const parent: string | null = info.superClass;
+    if (!parent) break;
+    if (parent === "handle") {
+      for (const n of HANDLE_CLASS_METHODS) out.add(n);
+      break;
+    }
+    info = interp.ctx.getClassInfo(parent);
   }
   return out;
 }
