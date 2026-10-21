@@ -2258,7 +2258,7 @@ function luApply(
     return [
       RTV.tensor(L_re, [m, k], L_im),
       RTV.tensor(U_re, [k, n], U_im),
-      RTV.tensor(P_data, [m, 1]),
+      RTV.tensor(P_data, [1, m]),
     ];
   }
   const P_data = allocFloat64Array(m * m);

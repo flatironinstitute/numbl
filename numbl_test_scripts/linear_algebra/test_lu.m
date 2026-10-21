@@ -28,6 +28,7 @@ assert(norm(A - L2 * U2) < 1e-10, 'A should equal L*U (two-output form)');
 % Test 3: [L, U, P] = lu(A, 'vector') — permutation vector form
 [L3, U3, p] = lu(A, 'vector');
 assert(norm(A(p, :) - L3 * U3) < 1e-10, 'A(p,:) should equal L*U (vector form)');
+assert(isequal(size(p), [1 size(A, 1)]), 'permutation vector should be a row');
 
 % Test 4: Scalar
 [L4, U4, P4] = lu(5);
