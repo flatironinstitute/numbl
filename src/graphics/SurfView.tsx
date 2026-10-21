@@ -561,9 +561,12 @@ export function SurfView({
         scene.add(new THREE.Mesh(geometry, faceMaterial));
       }
 
-      // Edge wireframe (skipped when EdgeColor is 'none').
+      // Edge wireframe (skipped when EdgeColor is 'none'; like surfaces, hidden
+      // under `shading flat` / `shading interp`).
       const showEdges =
-        trace.edgeColor !== "none" && trace.lineStyle !== "none";
+        trace.edgeColor !== "none" &&
+        trace.lineStyle !== "none" &&
+        (shading ?? "faceted") === "faceted";
       if (showEdges) {
         const edgePositions: number[] = [];
         for (const face of trace.faces) {
@@ -588,8 +591,11 @@ export function SurfView({
         const edgeColor = Array.isArray(trace.edgeColor)
           ? trace.edgeColor
           : [0, 0, 0];
+        const edgeAlpha = trace.edgeAlpha ?? 1;
         const edgeMat = new THREE.LineBasicMaterial({
           color: new THREE.Color(edgeColor[0], edgeColor[1], edgeColor[2]),
+          opacity: edgeAlpha,
+          transparent: edgeAlpha < 1,
         });
         scene.add(new THREE.LineSegments(edgeGeometry, edgeMat));
       }

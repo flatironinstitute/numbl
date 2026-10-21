@@ -138,3 +138,34 @@ describe("trimesh", () => {
     expect(lim[5]).toBeGreaterThanOrEqual(5);
   });
 });
+
+describe("trisurf", () => {
+  it("defaults to flat faces colored by per-vertex z", () => {
+    const axes = renderedAxes(
+      "trisurf([1 2 3; 1 3 4], [0;1;1;0], [0;0;1;1], [0;1;2;3]);"
+    );
+    const p = axes.patchTraces[0];
+    expect(p.is3D).toBe(true);
+    expect(p.faceColor).toBe("flat");
+    expect(p.edgeColor).toEqual([0, 0, 0]);
+    expect(p.faceVertexCData).toEqual([0, 1, 2, 3]);
+  });
+
+  it("uses c for color data and passes Name-Value pairs through", () => {
+    const axes = renderedAxes(
+      "trisurf([1 2 3; 1 3 4], [0;1;1;0], [0;0;1;1], [0;1;2;3], [5;6;7;8], " +
+        "'EdgeColor', 'black', 'EdgeAlpha', 0.1, 'AmbientStrength', 0.6);"
+    );
+    const p = axes.patchTraces[0];
+    expect(p.faceVertexCData).toEqual([5, 6, 7, 8]);
+    expect(p.edgeAlpha).toBe(0.1);
+  });
+
+  it("replaces the previous plot when hold is off (newplot)", () => {
+    const axes = renderedAxes(
+      "trisurf([1 2 3], [0;1;0], [0;0;1], [0;0;1]);" +
+        "trisurf([1 2 3], [0;2;0], [0;0;2], [0;0;1]);"
+    );
+    expect(axes.patchTraces).toHaveLength(1);
+  });
+});

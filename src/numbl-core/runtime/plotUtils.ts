@@ -776,6 +776,7 @@ const PATCH_NAME_VALUE_KEYS = new Set([
   "facecolor",
   "edgecolor",
   "facealpha",
+  "edgealpha",
   "linewidth",
   "linestyle",
   "marker",
@@ -894,6 +895,9 @@ export function applyPatchProp(
     }
     case "facealpha":
       trace.faceAlpha = toNumber(val);
+      break;
+    case "edgealpha":
+      trace.edgeAlpha = toNumber(val);
       break;
     case "linewidth":
       trace.lineWidth = toNumber(val);
@@ -1191,15 +1195,15 @@ function finalizeTriMesh(trace: PatchTrace): PatchTrace {
 }
 
 /**
- * Parse trimesh() arguments into a canonical PatchTrace.
+ * Parse trimesh()/trisurf() arguments into a PatchTrace (colors not yet
+ * defaulted).
  *
- * trimesh draws a triangular mesh and (per the MATLAB docs) returns a patch
- * object, so it maps onto the PatchTrace model: the connectivity matrix T
- * supplies the faces (one triangle per row, 1-based vertex indices) and the
- * x/y[/z] vectors supply the vertices.
+ * Both draw a triangular mesh and return a patch object: the connectivity
+ * matrix T supplies the faces (one triangle per row, 1-based vertex indices)
+ * and the x/y[/z] vectors supply the vertices.
  *
  * Supported forms:
- *   trimesh(T, x, y)              — 2-D triangular mesh
+ *   trimesh(T, x, y)              — 2-D triangular mesh (trimesh only)
  *   trimesh(T, x, y, z)           — 3-D triangular mesh
  *   trimesh(T, x, y, z, c)        — c is per-vertex color data
  *   trimesh(TO)                   — triangulation object (struct exposing
@@ -1207,10 +1211,10 @@ function finalizeTriMesh(trace: PatchTrace): PatchTrace {
  *   trimesh(___, Name, Value)     — patch properties
  *   trimesh(ax, ___)              — leading axes handle (ignored)
  */
-export function parseTriMeshArgs(args: RuntimeValue[]): PatchTrace {
+function parseTriArgs(args: RuntimeValue[], fname: string): PatchTrace {
   let a = args;
   if (a.length > 0 && isAxesHandleArg(a[0])) a = a.slice(1);
-  if (a.length === 0) throw new Error("trimesh requires input arguments");
+  if (a.length === 0) throw new Error(`${fname} requires input arguments`);
 
   // trimesh(TO): triangulation / delaunayTriangulation object, modeled as a
   // struct with ConnectivityList and Points fields.
@@ -1224,7 +1228,7 @@ export function parseTriMeshArgs(args: RuntimeValue[]): PatchTrace {
     const pts = get("points");
     if (!conn || !pts) {
       throw new Error(
-        "trimesh: triangulation object must have ConnectivityList and Points fields"
+        `${fname}: triangulation object must have ConnectivityList and Points fields`
       );
     }
     const pInfo = getMatrixInfo(pts);
@@ -1242,10 +1246,10 @@ export function parseTriMeshArgs(args: RuntimeValue[]): PatchTrace {
       is3D,
     };
     applyPatchNameValues(trace, a, 1);
-    return finalizeTriMesh(trace);
+    return trace;
   }
 
-  if (a.length < 3) throw new Error("trimesh: expected T, x and y");
+  if (a.length < 3) throw new Error(`${fname}: expected T, x and y`);
 
   // Positional T, x, y [, z [, c]] followed by Name-Value pairs.
   let pos = 3;
@@ -1279,7 +1283,24 @@ export function parseTriMeshArgs(args: RuntimeValue[]): PatchTrace {
   };
   if (cv) trace.faceVertexCData = toCData(cv);
   applyPatchNameValues(trace, a, pos);
-  return finalizeTriMesh(trace);
+  return trace;
+}
+
+export function parseTriMeshArgs(args: RuntimeValue[]): PatchTrace {
+  return finalizeTriMesh(parseTriArgs(args, "trimesh"));
+}
+
+/** Parse trisurf() arguments. Same forms as trimesh, but (matching MATLAB)
+ *  the faces default to 'flat' coloring by the per-vertex z values (or c). */
+export function parseTriSurfArgs(args: RuntimeValue[]): PatchTrace {
+  const trace = parseTriArgs(args, "trisurf");
+  if (!trace.is3D) throw new Error("trisurf: expected T, x, y and z");
+  if (trace.faceVertexCData === undefined) {
+    trace.faceVertexCData = trace.vertices.map(v => v[2]);
+  }
+  if (trace.faceColor === undefined) trace.faceColor = "flat";
+  if (trace.edgeColor === undefined) trace.edgeColor = [0, 0, 0];
+  return trace;
 }
 
 // ── Surf Name-Value key detection ────────────────────────────────────────

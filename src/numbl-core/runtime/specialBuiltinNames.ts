@@ -36,6 +36,7 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "line",
   "patch",
   "trimesh",
+  "trisurf",
   "fill",
   "surf",
   "surface",

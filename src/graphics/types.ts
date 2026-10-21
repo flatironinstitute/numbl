@@ -62,6 +62,8 @@ export interface PatchTrace {
   edgeColor?: [number, number, number] | "flat" | "interp" | "none";
   /** Face transparency in [0,1]. */
   faceAlpha?: number;
+  /** Edge transparency in [0,1]. */
+  edgeAlpha?: number;
   lineWidth?: number;
   lineStyle?: string;
   marker?: string;

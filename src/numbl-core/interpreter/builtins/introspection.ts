@@ -595,6 +595,7 @@ defineBuiltin({
         if (isRuntimeGraphicsHandle(v)) {
           const handleClass: Record<string, string> = {
             contour: "matlab.graphics.chart.primitive.Contour",
+            patch: "matlab.graphics.primitive.Patch",
             quiver3: "matlab.graphics.chart.primitive.Quiver",
           };
           return mkChar(

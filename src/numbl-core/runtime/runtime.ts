@@ -104,6 +104,7 @@ import {
   lineCall as _lineCall,
   patchCall as _patchCall,
   trimeshCall as _trimeshCall,
+  trisurfCall as _trisurfCall,
   fillCall as _fillCall,
   contourCall as _contourCall,
   quiver3Call as _quiver3Call,
@@ -503,23 +504,28 @@ export class Runtime {
         return RTV.dummyHandle();
       }
     };
-    // `trimesh` draws a triangular mesh as a patch; `h = trimesh(...)`
+    // `trimesh` / `trisurf` draw a triangular mesh as a patch; `h = trimesh(...)`
     // returns the patch handle so later property assignments update the mesh.
-    this.builtins["trimesh"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      _trimeshCall(this.plotInstructions, margs);
-      if (_nargout >= 1) {
-        const last = this.plotInstructions[this.plotInstructions.length - 1];
-        if (last && last.type === "patch") {
-          last.trace.id = this.graphicsIdCounter++;
-          return RTV.graphicsHandle(
-            last.trace as unknown as Record<string, unknown>,
-            "patch"
-          );
+    for (const [name, call] of [
+      ["trimesh", _trimeshCall],
+      ["trisurf", _trisurfCall],
+    ] as const) {
+      this.builtins[name] = (_nargout: number, args: unknown[]) => {
+        const margs = args.map(a => ensureRuntimeValue(a));
+        call(this.plotInstructions, margs);
+        if (_nargout >= 1) {
+          const last = this.plotInstructions[this.plotInstructions.length - 1];
+          if (last && last.type === "patch") {
+            last.trace.id = this.graphicsIdCounter++;
+            return RTV.graphicsHandle(
+              last.trace as unknown as Record<string, unknown>,
+              "patch"
+            );
+          }
+          return RTV.dummyHandle();
         }
-        return RTV.dummyHandle();
-      }
-    };
+      };
+    }
     // `isosurface` extracts a triangulated surface from a 3-D volume via
     // marching cubes. With no output it draws a 3-D patch (reusing the patch
     // renderer); otherwise it returns the geometry as a struct `{vertices,

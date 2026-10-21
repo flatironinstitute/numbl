@@ -50,6 +50,7 @@ import {
   lineCall,
   patchCall,
   trimeshCall,
+  trisurfCall,
   fillCall,
   surfCall,
   surfaceCall,
@@ -137,6 +138,9 @@ export function dispatchPlotBuiltin(
       return true;
     case "trimesh":
       trimeshCall(instructions, args);
+      return true;
+    case "trisurf":
+      trisurfCall(instructions, args);
       return true;
     case "fill":
       fillCall(instructions, args);
@@ -593,6 +597,7 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "line",
   "patch",
   "trimesh",
+  "trisurf",
   "fill",
   "surf",
   "surface",

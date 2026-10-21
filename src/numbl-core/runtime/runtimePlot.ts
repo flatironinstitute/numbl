@@ -35,6 +35,7 @@ import {
   parseLineArgs,
   parsePatchArgs,
   parseTriMeshArgs,
+  parseTriSurfArgs,
   parseFillArgs,
   parseSurfArgs,
   parseScatterArgs,
@@ -292,6 +293,15 @@ export function trimeshCall(
   // off it replaces the axes contents (so e.g. an animation loop that redraws
   // each iteration doesn't accumulate overlaid meshes).
   const trace = parseTriMeshArgs(args);
+  plotInstructions.push({ type: "patch", trace, newplot: true });
+}
+
+export function trisurfCall(
+  plotInstructions: PlotInstruction[],
+  args: RuntimeValue[]
+): void {
+  // Like trimesh: a high-level patch producer that calls newplot.
+  const trace = parseTriSurfArgs(args);
   plotInstructions.push({ type: "patch", trace, newplot: true });
 }
 
