@@ -89,7 +89,7 @@ are datasets; everything else is an attribute.
 | `patch`                   | `vertices` `[N,D]`, `faces` `[N,M]` int (−1 pad), `faceVertexCData` | `faceColor`, `edgeColor`, `faceAlpha`                     |
 
 (Field availability follows the trace interfaces in
-[src/graphics/types.ts](../src/graphics/types.ts).)
+[src/numbl-core/plotting/types.ts](../src/numbl-core/plotting/types.ts).)
 
 ## Reading example (h5py)
 

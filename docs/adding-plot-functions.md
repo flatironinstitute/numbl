@@ -7,20 +7,21 @@ This guide walks through every file you need to touch when adding a new plot typ
 The plotting system has two halves joined by a shared type:
 
 ```
-Runtime (numbl-core/)                   Graphics (graphics/)
-─────────────────────                   ─────────────────────
+Core (numbl-core/plotting/)             Renderer (graphics/)
+───────────────────────────             ────────────────────
 .m script calls bar(x,y)
-  → builtin wrapper / rt.dispatch       figuresReducer.ts
+  → builtins.ts registration            figuresReducer.ts (core)
       routes name "bar"                   AxesState holds barTraces[]
-  → plotBuiltinDispatch.ts                ↓
+  → dispatch.ts                           ↓
       dispatchPlotBuiltin()             FigureView.tsx
-  → runtimePlot.ts                        passes traces to renderer
-      barCall() parses args               ↓
-  → pushes PlotInstruction ──────────→  drawPlot.ts
-                                          canvas 2D rendering
+  → instructions.ts                       passes traces to renderer
+      barCall()                           ↓
+  → parseArgsChart.ts                   drawPlot.ts
+      parseBarArgs()                      canvas 2D rendering
+  → pushes PlotInstruction ──────────→
 ```
 
-The **`PlotInstruction`** type (defined in `src/graphics/types.ts`) is the contract between the two halves. The runtime produces instructions; the graphics layer consumes them. This is the only shared dependency.
+The **`PlotInstruction`** type (defined in `src/numbl-core/plotting/types.ts`) is the contract between the two halves. The core produces instructions; the renderer consumes them. The dependency runs one way: `src/graphics/` imports the plot types and the pure helpers it shares with the runtime (`figuresReducer.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`) from `src/numbl-core/plotting/`, and numbl-core never imports from `src/graphics/` (an ESLint rule enforces this).
 
 ### 2D vs 3D
 
@@ -37,19 +38,19 @@ If you're adding a 2D plot type, you'll work with `drawPlot.ts`. If 3D, you'll w
 
 ## Files to edit (in order)
 
-| Step | File                                            | What to add                                                     |
-| ---- | ----------------------------------------------- | --------------------------------------------------------------- |
-| 1    | `src/graphics/types.ts`                         | Trace interface + `PlotInstruction` variant                     |
-| 2    | `src/numbl-core/runtime/plotUtils.ts`           | Argument parser (`parseXxxArgs`)                                |
-| 3    | `src/numbl-core/runtime/runtimePlot.ts`         | Call function (`xxxCall`)                                       |
-| 4    | `src/numbl-core/runtime/plotBuiltinDispatch.ts` | Import `*Call`, add `switch` case, add to `PLOT_DISPATCH_NAMES` |
-| 5    | `src/graphics/figuresReducer.ts`                | `AxesState`, `defaultAxes`, `addTraces`, reducer case           |
-| 6    | `src/graphics/FigureView.tsx`                   | Pass new traces through to the drawing function                 |
-| 7    | `src/graphics/drawPlot.ts`                      | Rendering logic (data bounds + canvas drawing)                  |
+| Step | File                                        | What to add                                                     |
+| ---- | ------------------------------------------- | --------------------------------------------------------------- |
+| 1    | `src/numbl-core/plotting/types.ts`          | Trace interface + `PlotInstruction` variant                     |
+| 2    | `src/numbl-core/plotting/parseArgs*.ts`     | Argument parser (`parseXxxArgs`)                                |
+| 3    | `src/numbl-core/plotting/instructions.ts`   | Call function (`xxxCall`)                                       |
+| 4    | `src/numbl-core/plotting/dispatch.ts`       | Import `*Call`, add `switch` case, add to `PLOT_DISPATCH_NAMES` |
+| 5    | `src/numbl-core/plotting/figuresReducer.ts` | `AxesState`, `defaultAxes`, `addTraces`, reducer case           |
+| 6    | `src/graphics/FigureView.tsx`               | Pass new traces through to the drawing function                 |
+| 7    | `src/graphics/drawPlot.ts`                  | Rendering logic (data bounds + canvas drawing)                  |
 
 ## Step-by-step
 
-### 1. Define the trace type — `src/graphics/types.ts`
+### 1. Define the trace type — `src/numbl-core/plotting/types.ts`
 
 This file is the single source of truth for all trace interfaces and the `PlotInstruction` union. Add your trace interface before the `PlotInstruction` definition, following the existing pattern (each trace type has its own section with a comment header).
 
@@ -90,32 +91,31 @@ export type PlotInstruction =
 
 Note: some instructions use `trace` (singular) and some use `traces` (array). Use `traces` if the function could produce multiple series in a single call (like `plot(x1,y1,x2,y2)`). Use `trace` if a single call always produces one trace (like `surf`).
 
-### 2. Argument parser — `src/numbl-core/runtime/plotUtils.ts`
+### 2. Argument parser — `src/numbl-core/plotting/parseArgs*.ts`
 
-This file contains parsers for all plot functions. Each parser converts `RuntimeValue[]` into the trace type(s) defined in step 1.
+Parsers are grouped by plot family:
 
-**Add to the re-export and import blocks** at the top of the file. There are two blocks that must stay in sync:
+| File                  | Parsers                                                                |
+| --------------------- | ---------------------------------------------------------------------- |
+| `parseArgsLine.ts`    | plot, plot3, line, scatter, scatter3, stairs, errorbar, area           |
+| `parseArgsPatch.ts`   | patch, fill, trimesh, trisurf                                          |
+| `parseArgsSurface.ts` | surf, mesh, pcolor, imagesc, contour, heatmap                          |
+| `parseArgsChart.ts`   | bar, barh, bar3, histogram, histogram2, boxchart, swarmchart, piechart |
+| `parseArgsQuiver.ts`  | quiver, quiver3                                                        |
+| `parseArgsCommon.ts`  | Shared helpers (colors, LineSpec, Name-Value keys, numeric conversion) |
+
+Each parser converts `RuntimeValue[]` into the trace type(s) defined in step 1. Add yours to the file for its family (here `parseArgsChart.ts`), importing the trace type from `./types.js` and any helpers from `./parseArgsCommon.js`:
 
 ```ts
-// Re-export block (~line 20)
-export type {
-  PlotTrace,
-  Plot3Trace,
-  SurfTrace,
-  ImagescTrace,
-  ContourTrace,
-  BarTrace, // ← add
-} from "../../graphics/types.js";
-
-// Import block (~line 28)
-import type {
-  PlotTrace,
-  Plot3Trace,
-  SurfTrace,
-  ImagescTrace,
-  ContourTrace,
-  BarTrace, // ← add
-} from "../../graphics/types.js";
+import type { BarTrace } from "./types.js";
+import {
+  getStringValue,
+  isNumericArg,
+  isStringArg,
+  oneBasedIndices,
+  resolveColor,
+  toNumberArray,
+} from "./parseArgsCommon.js";
 ```
 
 **Write the parser function** at the end of the file. The parser's job is to interpret the various argument patterns the function supports. For `bar`:
@@ -184,7 +184,7 @@ export function parseBarArgs(args: RuntimeValue[]): BarTrace[] {
 }
 ```
 
-**Available helper functions** (all defined earlier in plotUtils.ts):
+**Available helper functions** (exported from `parseArgsCommon.ts`):
 
 | Helper                                                                         | Purpose                                                                            |
 | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
@@ -202,23 +202,19 @@ export function parseBarArgs(args: RuntimeValue[]): BarTrace[] {
 | `parseLineSpec(s: string): ParsedLineSpec \| null`                             | Parse a LineSpec string like `'r--o'` into color/lineStyle/marker                  |
 | `isNameValueKey(v: RuntimeValue): string \| null`                              | Check if a value is a known Name-Value key like `'Color'`                          |
 
-### 3. Call function — `src/numbl-core/runtime/runtimePlot.ts`
+### 3. Call function — `src/numbl-core/plotting/instructions.ts`
 
 This file bridges the argument parsers and the `PlotInstruction` array. Each plot function has a corresponding exported function here.
 
-**Add import** of your parser (in the import block from `plotUtils.js`):
+**Add import** of your parser (in the import block for its `parseArgs*.js` file):
 
 ```ts
 import {
-  parsePlotArgs,
-  parsePlot3Args,
-  parseSurfArgs,
-  parseScatterArgs,
-  parseImagescArgs,
-  parseContourArgs,
-  parseMeshArgs,
   parseBarArgs, // ← add
-} from "../runtime/plotUtils.js";
+  parseBarHArgs,
+  parseBar3Args,
+  // ...
+} from "./parseArgsChart.js";
 ```
 
 **Add the call function** (near the other `*Call` functions, before `legendCall`):
@@ -237,18 +233,18 @@ export function barCall(
 
 This pattern is the same for every plot function — parse args, push instruction. The first parameter is always the `plotInstructions` array (accumulated during script execution), and the second is the raw runtime arguments.
 
-### 4. Dispatch — `src/numbl-core/runtime/plotBuiltinDispatch.ts`
+### 4. Dispatch — `src/numbl-core/plotting/dispatch.ts`
 
 `dispatchPlotBuiltin` is the single source of truth for the `(name, args) → PlotInstruction[]` mapping. Every data-bearing plot builtin is a `case` in its `switch (name)` that calls the matching `*Call` function and returns `true`.
 
-**4a. Import** your call function (in the import block from `./runtimePlot.js`):
+**4a. Import** your call function (in the import block from `./instructions.js`):
 
 ```ts
 import {
   plotCall,
   // ... existing ...
   barCall, // ← add
-} from "./runtimePlot.js";
+} from "./instructions.js";
 ```
 
 **4b. Add a `case`** to the `switch (name)` inside `dispatchPlotBuiltin`:
@@ -271,15 +267,13 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
 ];
 ```
 
-`PLOT_DISPATCH_NAMES` is the list the Runtime loops over to auto-register builtins (step 5), so adding the name here is what makes `bar(...)` resolve from interpreted `.m` code.
+Adding the name to `PLOT_DISPATCH_NAMES` is enough to register it: `src/numbl-core/plotting/builtins.ts` registers every name in that list as a builtin that calls `dispatchPlotBuiltin`, which is what makes `bar(...)` resolve from interpreted `.m` code. Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get an explicit registration in that file instead.
 
-Adding the name to `PLOT_DISPATCH_NAMES` is enough to register it: `src/numbl-core/runtime/plotBuiltins.ts` registers every name in that list as a builtin that calls `dispatchPlotBuiltin`. Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get an explicit `registerPlot` in that file instead.
+### 5. Figures reducer — `src/numbl-core/plotting/figuresReducer.ts`
 
-### 5. Figures reducer — `src/graphics/figuresReducer.ts`
+This file manages the state of all figures. It's a React-style reducer: each `PlotInstruction` produces a new immutable state. It lives in the core because the runtime also uses it (to answer `lim = axis`); the renderer imports it from there. There are four places to edit.
 
-This file manages the state of all figures. It's a React-style reducer: each `PlotInstruction` produces a new immutable state. There are four places to edit.
-
-**7a. Import** the trace type:
+**5a. Import** the trace type:
 
 ```ts
 import type {
@@ -293,7 +287,7 @@ import type {
 } from "./types.js";
 ```
 
-**7b. AxesState** — add the field to hold your traces:
+**5b. AxesState** — add the field to hold your traces:
 
 ```ts
 export type AxesState = {
@@ -309,7 +303,7 @@ export type AxesState = {
 };
 ```
 
-**7c. defaultAxes** — initialize to empty:
+**5c. defaultAxes** — initialize to empty:
 
 ```ts
 const defaultAxes: AxesState = {
@@ -322,7 +316,7 @@ const defaultAxes: AxesState = {
 };
 ```
 
-**7d. addTraces** — this function handles hold-state logic (clearing other trace types when hold is off). Add your field to both the `Pick` type parameter and the object spread:
+**5d. addTraces** — this function handles hold-state logic (clearing other trace types when hold is off). Add your field to both the `Pick` type parameter and the object spread:
 
 ```ts
 function addTraces(
@@ -349,7 +343,7 @@ function addTraces(
 }
 ```
 
-**7e. Reducer switch** — add a case to `figuresReducer`:
+**5e. Reducer switch** — add a case to `figuresReducer`:
 
 ```ts
 case "bar": {
@@ -370,7 +364,7 @@ This React component connects the state to the renderer. The `SingleAxesView` co
 
 There are four changes — all are about threading the new data through:
 
-**8a. PlotCanvas JSX props** (in `SingleAxesView`, add the prop):
+**6a. PlotCanvas JSX props** (in `SingleAxesView`, add the prop):
 
 ```tsx
 <PlotCanvas
@@ -381,7 +375,7 @@ There are four changes — all are about threading the new data through:
 />
 ```
 
-**8b. PlotCanvas component props type** (add to the destructured props and type annotation):
+**6b. PlotCanvas component props type** (add to the destructured props and type annotation):
 
 ```tsx
 function PlotCanvas({
@@ -397,7 +391,7 @@ function PlotCanvas({
 }) {
 ```
 
-**8c. drawPlot() call** (inside the `useCallback`):
+**6c. drawPlot() call** (inside the `useCallback`):
 
 ```ts
 drawPlot(
@@ -416,7 +410,7 @@ drawPlot(
 );
 ```
 
-**8d. useCallback dependency array**:
+**6d. useCallback dependency array**:
 
 ```ts
 }, [traces, title, xlabel, ylabel, legend, gridOn,
@@ -428,7 +422,7 @@ drawPlot(
 
 This is where you write the actual drawing code. The `drawPlot` function receives all trace data and renders to a `<canvas>` element using the Canvas 2D API.
 
-**9a. Import** the trace type:
+**7a. Import** the trace type:
 
 ```ts
 import type {
@@ -436,10 +430,10 @@ import type {
   ImagescTrace,
   ContourTrace,
   BarTrace,
-} from "./types.js";
+} from "../numbl-core/plotting/types.js";
 ```
 
-**9b. Function signature** — add the parameter at the end:
+**7b. Function signature** — add the parameter at the end:
 
 ```ts
 export function drawPlot(
@@ -458,7 +452,7 @@ export function drawPlot(
 ) {
 ```
 
-**9c. hasContent check** — the function exits early if there's nothing to draw:
+**7c. hasContent check** — the function exits early if there's nothing to draw:
 
 ```ts
 const hasContent =
@@ -468,7 +462,7 @@ const hasContent =
   (barTraces && barTraces.length > 0); // ← add
 ```
 
-**9d. Data bounds** — the function computes `xMin/xMax/yMin/yMax` across all traces to set up the coordinate system. Add a block for your trace type. This goes after the existing contour bounds block and before the `if (!isFinite(xMin)) return;` check:
+**7d. Data bounds** — the function computes `xMin/xMax/yMin/yMax` across all traces to set up the coordinate system. Add a block for your trace type. This goes after the existing contour bounds block and before the `if (!isFinite(xMin)) return;` check:
 
 ```ts
 // Include bar bounds
@@ -494,7 +488,7 @@ if (barTraces) {
 }
 ```
 
-**9e. Drawing** — add rendering code inside the clipped region. The clip region is set up earlier with `ctx.clip()`. Your drawing code goes after contour rendering and before the line-trace loop. You have access to:
+**7e. Drawing** — add rendering code inside the clipped region. The clip region is set up earlier with `ctx.clip()`. Your drawing code goes after contour rendering and before the line-trace loop. You have access to:
 
 - `ctx` — the `CanvasRenderingContext2D`
 - `toCanvasX(v)` / `toCanvasY(v)` — convert data coordinates to canvas pixel coordinates
@@ -541,7 +535,8 @@ After implementation:
 
 1. **Type check**: `npx tsc --noEmit` — must have zero errors
 2. **Unit + integration tests**: `npm test` — all existing tests must still pass
-3. **Visual test**: create an example script in `examples/plots/` and run with:
+3. **Rebuild the viewer**: `npm run build:plot-viewer` (the renderer bundle also includes the core modules it imports)
+4. **Visual test**: create an example script in `examples/plots/` and run with:
    ```bash
    npx tsx src/cli.ts run examples/plots/bar_example.m --plot
    ```

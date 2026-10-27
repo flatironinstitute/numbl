@@ -1,7 +1,7 @@
 /**
  * Single intra-repo bridge module for everything the vendored JIT
  * (`src/numbl-core/jit/*`) consumes from the rest of numbl-core. Every
- * `numbl-core/*` (and `graphics/*`) path the JIT depends on appears here
+ * `numbl-core/*` path the JIT depends on appears here
  * exactly once, so:
  *
  * - a numbl rename / move surfaces as a single tsc error in this file
