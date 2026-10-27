@@ -19,78 +19,7 @@
  */
 
 import { allocFloat64Array } from "../runtime/alloc.js";
-
-const EPS = 2.220446049250313e-16; // DLAMCH('P') (relative machine precision)
-const SAFMIN = 2.2250738585072014e-308; // DLAMCH('S') (smallest normal)
-
-/** |Re| + |Im| (LAPACK CABS1). */
-function cabs1(re: number, im: number): number {
-  return Math.abs(re) + Math.abs(im);
-}
-
-/** Robust complex divide (a/b) via Smith's algorithm (DLADIV basic path). */
-function cdiv(
-  ar: number,
-  ai: number,
-  br: number,
-  bi: number
-): [number, number] {
-  if (Math.abs(br) >= Math.abs(bi)) {
-    const r = bi / br;
-    const t = br + bi * r;
-    return [(ar + ai * r) / t, (ai - ar * r) / t];
-  } else {
-    const r = br / bi;
-    const t = br * r + bi;
-    return [(ar * r + ai) / t, (ai * r - ar) / t];
-  }
-}
-
-/** Fortran SIGN(mag, s): |mag| with the sign of s. */
-function fsign(mag: number, s: number): number {
-  return s >= 0 ? Math.abs(mag) : -Math.abs(mag);
-}
-
-/**
- * ZLARFG (no underflow-rescale loop): generate an elementary complex reflector
- * H = I - tau*v*v^H with H^H*[alpha; x] = [beta; 0], beta real. On entry
- * re/im[off] = alpha and the X vector is re/im[off + i*incx], i=1..n-1. On exit
- * re/im[off] = beta and the X part holds v(2:); returns tau.
- */
-function zlarfg(
-  n: number,
-  re: Float64Array,
-  im: Float64Array,
-  off: number,
-  incx: number
-): [number, number] {
-  if (n <= 0) return [0, 0];
-  // xnorm = ||X||_2 over the n-1 trailing elements
-  let ssq = 0;
-  for (let i = 1; i < n; i++) {
-    const o = off + i * incx;
-    ssq += re[o] * re[o] + im[o] * im[o];
-  }
-  const xnorm = Math.sqrt(ssq);
-  const alphr = re[off];
-  const alphi = im[off];
-  if (xnorm === 0 && alphi === 0) return [0, 0];
-
-  const beta = -fsign(Math.hypot(alphr, alphi, xnorm), alphr);
-  const tauRe = (beta - alphr) / beta;
-  const tauIm = -alphi / beta;
-  const [sRe, sIm] = cdiv(1, 0, alphr - beta, alphi); // 1/(alpha-beta)
-  for (let i = 1; i < n; i++) {
-    const o = off + i * incx;
-    const xr = re[o];
-    const xi = im[o];
-    re[o] = xr * sRe - xi * sIm;
-    im[o] = xr * sIm + xi * sRe;
-  }
-  re[off] = beta;
-  im[off] = 0;
-  return [tauRe, tauIm];
-}
+import { EPS, SAFMIN, cabs1, cdiv, zlarfg } from "./ts-lapack-complex.js";
 
 /**
  * Reduce a general complex matrix (in HRe/HIm) to upper Hessenberg form by

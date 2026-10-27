@@ -26,7 +26,7 @@ import { RuntimeError } from "../runtime/error.js";
 import { RTV } from "../runtime/constructors.js";
 import { tensorSize2D, colMajorIndex } from "../runtime/utils.js";
 import { toNumber } from "../runtime/convert.js";
-import { getEffectiveBridge } from "../native/bridge-resolve.js";
+import { getLapackBridge } from "../native/lapack-bridge.js";
 import { tensorOps, OpCmp } from "../ops/index.js";
 import { linsolveLapack, linsolveComplexLapack } from "./linsolve.js";
 import { applyBuiltin as applyBuiltinFn } from "./check-helpers.js";
@@ -1206,7 +1206,6 @@ export function mLeftDiv(a: RuntimeValue, b: RuntimeValue): RuntimeValue {
     return unwrap1x1(RTV.tensor(X.re, [nA, nB], X.im));
   }
   const X = linsolveLapack(tensorA.data, mA, nA, tensorB.data, nB);
-  if (!X) throw new RuntimeError("mldivide (\\): LAPACK bridge unavailable");
   return unwrap1x1(RTV.tensor(X, [nA, nB]));
 }
 
@@ -2225,66 +2224,26 @@ function matMul(a: RuntimeTensor, b: RuntimeTensor): RuntimeValue {
 
   const isComplex = a.imag !== undefined || b.imag !== undefined;
 
+  const bridge = getLapackBridge();
+  const f64ARe =
+    a.data instanceof Float64Array ? a.data : allocFloat64Array(a.data);
+  const f64BRe =
+    b.data instanceof Float64Array ? b.data : allocFloat64Array(b.data);
   if (!isComplex) {
-    const bridge = getEffectiveBridge("matmul", "matmul");
-    const f64A =
-      a.data instanceof Float64Array ? a.data : allocFloat64Array(a.data);
-    const f64B =
-      b.data instanceof Float64Array ? b.data : allocFloat64Array(b.data);
-    const raw = bridge.matmul!(f64A, aRows, aCols, f64B, bCols);
+    const raw = bridge.matmul(f64ARe, aRows, aCols, f64BRe, bCols);
     return unwrap1x1(RTV.tensor(raw, [aRows, bCols]));
   }
 
-  // Complex matrix multiplication — try native zgemm first
   const aIm = a.imag || allocFloat64Array(a.data.length);
   const bIm = b.imag || allocFloat64Array(b.data.length);
-
-  const bridge = getEffectiveBridge("matmul", "matmulComplex");
-  if (bridge.matmulComplex) {
-    const f64ARe =
-      a.data instanceof Float64Array ? a.data : allocFloat64Array(a.data);
-    const f64AIm = aIm instanceof Float64Array ? aIm : allocFloat64Array(aIm);
-    const f64BRe =
-      b.data instanceof Float64Array ? b.data : allocFloat64Array(b.data);
-    const f64BIm = bIm instanceof Float64Array ? bIm : allocFloat64Array(bIm);
-    const raw = bridge.matmulComplex(
-      f64ARe,
-      f64AIm,
-      aRows,
-      aCols,
-      f64BRe,
-      f64BIm,
-      bCols
-    );
-    return unwrap1x1(RTV.tensor(raw.re, [aRows, bCols], raw.im));
-  }
-
-  // Fallback: pure JavaScript complex matmul
-  const resultRe = allocFloat64Array(aRows * bCols);
-  const resultIm = allocFloat64Array(aRows * bCols);
-
-  for (let i = 0; i < aRows; i++) {
-    for (let j = 0; j < bCols; j++) {
-      let sumRe = 0;
-      let sumIm = 0;
-      for (let k = 0; k < aCols; k++) {
-        const aIdx = colMajorIndex(i, k, aRows);
-        const bIdx = colMajorIndex(k, j, bRows);
-        const aRe = a.data[aIdx];
-        const aI = aIm[aIdx];
-        const bRe = b.data[bIdx];
-        const bI = bIm[bIdx];
-        sumRe += aRe * bRe - aI * bI;
-        sumIm += aRe * bI + aI * bRe;
-      }
-      const outIdx = colMajorIndex(i, j, aRows);
-      resultRe[outIdx] = sumRe;
-      resultIm[outIdx] = sumIm;
-    }
-  }
-
-  const isPurelyReal = resultIm.every(x => x === 0);
-  return unwrap1x1(
-    RTV.tensor(resultRe, [aRows, bCols], isPurelyReal ? undefined : resultIm)
+  const raw = bridge.matmulComplex(
+    f64ARe,
+    aIm instanceof Float64Array ? aIm : allocFloat64Array(aIm),
+    aRows,
+    aCols,
+    f64BRe,
+    bIm instanceof Float64Array ? bIm : allocFloat64Array(bIm),
+    bCols
   );
+  return unwrap1x1(RTV.tensor(raw.re, [aRows, bCols], raw.im));
 }

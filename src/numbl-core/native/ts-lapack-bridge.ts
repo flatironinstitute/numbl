@@ -1,9 +1,8 @@
 /**
- * Pure-TypeScript LAPACK bridge — implements the LapackBridge interface using
- * the ts-lapack translations of LAPACK Fortran routines.
- *
- * This is always available (no native addon required) and is used as the
- * fallback when the native C++ addon is not loaded (e.g. in the browser).
+ * Pure-TypeScript LAPACK bridge: implements the LapackBridge interface with
+ * the ts-lapack translations of LAPACK Fortran routines and the ops-layer
+ * tensor kernels. getLapackBridge() uses it for every entry the installed
+ * (native) bridge does not provide, e.g. everything in the browser.
  */
 
 import { dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
@@ -31,9 +30,32 @@ import { eigComplexTs } from "./ts-lapack-eig-complex.js";
 import { eigHermTs } from "./ts-lapack-eig-hermitian.js";
 import {
   qrComplexTs,
+  qrPivotTs,
   qrPivotComplexTs,
   luComplexTs,
-} from "./ts-lapack-qr-lu-complex.js";
+} from "./ts-lapack-qr-lu.js";
+import { RuntimeError } from "../runtime/error.js";
+import {
+  tsRealBinaryElemwise,
+  tsRealScalarBinaryElemwise,
+} from "../ops/realBinaryElemwise.js";
+import {
+  tsComplexBinaryElemwise,
+  tsComplexScalarBinaryElemwise,
+} from "../ops/complexBinaryElemwise.js";
+import { tsRealUnaryElemwise } from "../ops/realUnaryElemwise.js";
+import {
+  tsComplexUnaryElemwise,
+  tsComplexAbs,
+} from "../ops/complexUnaryElemwise.js";
+import {
+  tsRealComparison,
+  tsRealScalarComparison,
+  tsComplexComparison,
+  tsComplexScalarComparison,
+} from "../ops/comparison.js";
+import { tsRealFlatReduce, tsComplexFlatReduce } from "../ops/reduce.js";
+import { tsBesselReal, tsBesselH } from "../ops/bessel.js";
 import { dsyev } from "../../ts-lapack/src/SRC/dsyev.js";
 
 function inv(data: Float64Array, n: number): Float64Array {
@@ -1223,28 +1245,13 @@ function gmresComplex(
   // Pre-factor preconditioners
   let precSolveFn: ComplexPrecSolveFn | null = null;
   if (M1Re || M2Re) {
-    const m1luRe = M1Re ? allocFloat64Array(M1Re) : null;
-    const m1luIm = M1Im ? allocFloat64Array(M1Im) : null;
-    const m1ipiv = M1Re ? new Int32Array(n) : null;
-    if (m1luRe && m1luIm && m1ipiv) {
-      // Complex LU via manual zgetrf equivalent: use the real dgetrf on
-      // interleaved-style manual factorization... actually we need complex LU.
-      // Use our own complexLuFactor.
-      complexLuFactor(n, m1luRe, m1luIm, m1ipiv);
-    }
-    const m2luRe = M2Re ? allocFloat64Array(M2Re) : null;
-    const m2luIm = M2Im ? allocFloat64Array(M2Im) : null;
-    const m2ipiv = M2Re ? new Int32Array(n) : null;
-    if (m2luRe && m2luIm && m2ipiv) {
-      complexLuFactor(n, m2luRe, m2luIm, m2ipiv);
-    }
+    const m1 = M1Re && M1Im ? luComplexTs(M1Re, M1Im, n, n) : null;
+    const m2 = M2Re && M2Im ? luComplexTs(M2Re, M2Im, n, n) : null;
     precSolveFn = r => {
       const zRe = allocFloat64Array(r.re);
       const zIm = allocFloat64Array(r.im);
-      if (m1luRe && m1luIm && m1ipiv)
-        complexLuSolveInPlace(n, m1luRe, m1luIm, m1ipiv, zRe, zIm);
-      if (m2luRe && m2luIm && m2ipiv)
-        complexLuSolveInPlace(n, m2luRe, m2luIm, m2ipiv, zRe, zIm);
+      if (m1) complexLuSolveInPlace(n, m1.LURe, m1.LUIm, m1.ipiv, zRe, zIm);
+      if (m2) complexLuSolveInPlace(n, m2.LURe, m2.LUIm, m2.ipiv, zRe, zIm);
       return { re: zRe, im: zIm };
     };
   }
@@ -1272,64 +1279,141 @@ function gmresComplex(
   };
 }
 
-/** Manual complex LU factorization with partial pivoting (in-place). */
-function complexLuFactor(
-  n: number,
-  re: Float64Array,
-  im: Float64Array,
-  ipiv: Int32Array
-): void {
-  for (let k = 0; k < n; k++) {
-    // Find pivot
-    let maxVal = -1;
-    let maxIdx = k;
-    for (let i = k; i < n; i++) {
-      const v = Math.sqrt(
-        re[i + k * n] * re[i + k * n] + im[i + k * n] * im[i + k * n]
-      );
-      if (v > maxVal) {
-        maxVal = v;
-        maxIdx = i;
+/** Complex inverse by Gauss-Jordan elimination with partial pivoting. */
+function invComplex(
+  dataRe: Float64Array,
+  dataIm: Float64Array,
+  n: number
+): { re: Float64Array; im: Float64Array } {
+  const augRe = allocFloat64Array(n * 2 * n);
+  const augIm = allocFloat64Array(n * 2 * n);
+  for (let row = 0; row < n; row++) {
+    for (let col = 0; col < n; col++) {
+      augRe[row * 2 * n + col] = dataRe[row + col * n];
+      augIm[row * 2 * n + col] = dataIm[row + col * n];
+    }
+    augRe[row * 2 * n + n + row] = 1;
+  }
+  for (let col = 0; col < n; col++) {
+    let maxRow = col;
+    let maxMag = augRe[col * 2 * n + col] ** 2 + augIm[col * 2 * n + col] ** 2;
+    for (let row = col + 1; row < n; row++) {
+      const mag = augRe[row * 2 * n + col] ** 2 + augIm[row * 2 * n + col] ** 2;
+      if (mag > maxMag) {
+        maxMag = mag;
+        maxRow = row;
       }
     }
-    ipiv[k] = maxIdx + 1; // 1-based
-    if (maxIdx !== k) {
-      // Swap rows k and maxIdx
-      for (let j = 0; j < n; j++) {
-        let tmp = re[k + j * n];
-        re[k + j * n] = re[maxIdx + j * n];
-        re[maxIdx + j * n] = tmp;
-        tmp = im[k + j * n];
-        im[k + j * n] = im[maxIdx + j * n];
-        im[maxIdx + j * n] = tmp;
+    if (maxMag < 1e-300)
+      throw new RuntimeError("inv: matrix is singular or nearly singular");
+    if (maxRow !== col) {
+      for (let k = 0; k < 2 * n; k++) {
+        let tmp = augRe[col * 2 * n + k];
+        augRe[col * 2 * n + k] = augRe[maxRow * 2 * n + k];
+        augRe[maxRow * 2 * n + k] = tmp;
+        tmp = augIm[col * 2 * n + k];
+        augIm[col * 2 * n + k] = augIm[maxRow * 2 * n + k];
+        augIm[maxRow * 2 * n + k] = tmp;
       }
     }
-    const dR = re[k + k * n],
-      dI = im[k + k * n];
-    const dAbs2 = dR * dR + dI * dI;
-    if (dAbs2 === 0) continue;
-    for (let i = k + 1; i < n; i++) {
-      // L(i,k) = A(i,k) / A(k,k)
-      const aR = re[i + k * n],
-        aI = im[i + k * n];
-      const lR = (aR * dR + aI * dI) / dAbs2;
-      const lI = (aI * dR - aR * dI) / dAbs2;
-      re[i + k * n] = lR;
-      im[i + k * n] = lI;
-      // A(i, k+1:n) -= L(i,k) * A(k, k+1:n)
-      for (let j = k + 1; j < n; j++) {
-        re[i + j * n] -= lR * re[k + j * n] - lI * im[k + j * n];
-        im[i + j * n] -= lR * im[k + j * n] + lI * re[k + j * n];
+    const pivotRe = augRe[col * 2 * n + col],
+      pivotIm = augIm[col * 2 * n + col];
+    const pivotMagSq = pivotRe * pivotRe + pivotIm * pivotIm;
+    const invPivotRe = pivotRe / pivotMagSq,
+      invPivotIm = -pivotIm / pivotMagSq;
+    for (let k = col; k < 2 * n; k++) {
+      const re = augRe[col * 2 * n + k],
+        im = augIm[col * 2 * n + k];
+      augRe[col * 2 * n + k] = re * invPivotRe - im * invPivotIm;
+      augIm[col * 2 * n + k] = re * invPivotIm + im * invPivotRe;
+    }
+    for (let row = 0; row < n; row++) {
+      if (row === col) continue;
+      const factorRe = augRe[row * 2 * n + col],
+        factorIm = augIm[row * 2 * n + col];
+      if (factorRe === 0 && factorIm === 0) continue;
+      for (let k = col; k < 2 * n; k++) {
+        const multRe =
+          factorRe * augRe[col * 2 * n + k] - factorIm * augIm[col * 2 * n + k];
+        const multIm =
+          factorRe * augIm[col * 2 * n + k] + factorIm * augRe[col * 2 * n + k];
+        augRe[row * 2 * n + k] -= multRe;
+        augIm[row * 2 * n + k] -= multIm;
       }
     }
   }
+  const resultRe = allocFloat64Array(n * n);
+  const resultIm = allocFloat64Array(n * n);
+  for (let row = 0; row < n; row++)
+    for (let col = 0; col < n; col++) {
+      resultRe[row + col * n] = augRe[row * 2 * n + n + col];
+      resultIm[row + col * n] = augIm[row * 2 * n + n + col];
+    }
+  return { re: resultRe, im: resultIm };
+}
+
+/** C = A * B (zgemm equivalent); im is omitted when C is exactly real. */
+function matmulComplex(
+  ARe: Float64Array,
+  AIm: Float64Array,
+  m: number,
+  k: number,
+  BRe: Float64Array,
+  BIm: Float64Array,
+  n: number
+): { re: Float64Array; im?: Float64Array } {
+  const re = allocFloat64Array(m * n);
+  const im = allocFloat64Array(m * n);
+  for (let i = 0; i < m; i++) {
+    for (let j = 0; j < n; j++) {
+      let sumRe = 0;
+      let sumIm = 0;
+      for (let p = 0; p < k; p++) {
+        const aIdx = p * m + i;
+        const bIdx = j * k + p;
+        const aRe = ARe[aIdx];
+        const aI = AIm[aIdx];
+        const bRe = BRe[bIdx];
+        const bI = BIm[bIdx];
+        sumRe += aRe * bRe - aI * bI;
+        sumIm += aRe * bI + aI * bRe;
+      }
+      re[j * m + i] = sumRe;
+      im[j * m + i] = sumIm;
+    }
+  }
+  return { re, im: im.every(x => x === 0) ? undefined : im };
+}
+
+/**
+ * Operations with no TypeScript implementation. They throw here, in one
+ * place, rather than answering a different problem; the native addon
+ * provides them.
+ */
+const TS_UNSUPPORTED = {
+  svdComplex: "svd: complex SVD",
+  qz: "QZ (qz, and eig(A, B) for a pencil that is not symmetric/Hermitian-definite)",
+  qzComplex:
+    "complex QZ (qz, and eig(A, B) for a pencil that is not symmetric/Hermitian-definite)",
+};
+
+function unsupported(what: string): () => never {
+  return () => {
+    throw new RuntimeError(
+      `${what} requires LAPACK: it is not implemented in the TypeScript ` +
+        "fallback (build the native LAPACK addon)"
+    );
+  };
 }
 
 const _bridge: LapackBridge = {
   inv,
+  invComplex,
   matmul,
+  matmulComplex,
   qr,
   qrComplex: qrComplexTs,
+  qrPivot: qrPivotTs,
   qrPivotComplex: qrPivotComplexTs,
   linsolve,
   linsolveComplex,
@@ -1340,10 +1424,28 @@ const _bridge: LapackBridge = {
   lu,
   luComplex: luComplexTs,
   svd,
+  svdComplex: unsupported(TS_UNSUPPORTED.svdComplex),
   chol,
   cholComplex,
+  qz: unsupported(TS_UNSUPPORTED.qz),
+  qzComplex: unsupported(TS_UNSUPPORTED.qzComplex),
   gmres,
   gmresComplex,
+  tensorOpRealBinary: tsRealBinaryElemwise,
+  tensorOpRealScalarBinary: tsRealScalarBinaryElemwise,
+  tensorOpComplexBinary: tsComplexBinaryElemwise,
+  tensorOpComplexScalarBinary: tsComplexScalarBinaryElemwise,
+  tensorOpRealUnary: tsRealUnaryElemwise,
+  tensorOpComplexUnary: tsComplexUnaryElemwise,
+  tensorOpComplexAbs: tsComplexAbs,
+  tensorOpRealComparison: tsRealComparison,
+  tensorOpRealScalarComparison: tsRealScalarComparison,
+  tensorOpComplexComparison: tsComplexComparison,
+  tensorOpComplexScalarComparison: tsComplexScalarComparison,
+  tensorOpRealFlatReduce: tsRealFlatReduce,
+  tensorOpComplexFlatReduce: tsComplexFlatReduce,
+  tensorOpBesselReal: tsBesselReal,
+  tensorOpBesselH: tsBesselH,
 };
 
 export function getTsLapackBridge(): LapackBridge {

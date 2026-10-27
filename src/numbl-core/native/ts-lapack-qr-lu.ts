@@ -1,13 +1,141 @@
 /**
- * Complex QR (zgeqr2/zung2r), column-pivoted QR (zlaqp2) and LU (zgetf2)
- * for the ts-lapack bridge (browser path, no native LAPACK addon).
+ * QR and LU entry points of the ts-lapack bridge that are not plain calls
+ * into src/ts-lapack: real column-pivoted QR, and complex QR (zgeqr2/zung2r),
+ * column-pivoted QR (zlaqp2) and LU (zgetf2).
  *
- * Unblocked translations that follow the LAPACK conventions (zlarfg:
- * real diagonal of R with beta = -sign(Re(alpha))*norm; izamax pivoting
- * by |re|+|im|) so results agree with MATLAB up to rounding.
+ * The complex routines are unblocked translations that follow the LAPACK
+ * conventions (zlarfg: real diagonal of R with beta = -sign(Re(alpha))*norm;
+ * izamax pivoting by |re|+|im|) so results agree with MATLAB up to rounding.
  */
 
 import { allocFloat64Array } from "../runtime/alloc.js";
+import { zlarfg } from "./ts-lapack-complex.js";
+
+/**
+ * Real column-pivoted QR, A*P = Q*R (dgeqp3 + dorgqr equivalent): Householder
+ * with greedy pivoting on downdated squared column norms. jpvt is 1-based.
+ */
+export function qrPivotTs(
+  data: Float64Array,
+  m: number,
+  n: number,
+  econ: boolean
+): { Q: Float64Array; R: Float64Array; jpvt: Int32Array } {
+  const k = Math.min(m, n);
+  const R_data = allocFloat64Array(data);
+  const perm = allocFloat64Array(n);
+  for (let i = 0; i < n; i++) perm[i] = i; // 0-based during computation
+
+  // Compute initial column norms
+  const colNorms = allocFloat64Array(n);
+  for (let j = 0; j < n; j++) {
+    let s = 0;
+    for (let i = 0; i < m; i++) {
+      const v = R_data[j * m + i];
+      s += v * v;
+    }
+    colNorms[j] = s;
+  }
+
+  const vecs: Float64Array[] = [];
+  const taus: number[] = [];
+
+  for (let j = 0; j < k; j++) {
+    // Find column with max remaining norm
+    let maxNorm = colNorms[j];
+    let maxCol = j;
+    for (let c = j + 1; c < n; c++) {
+      if (colNorms[c] > maxNorm) {
+        maxNorm = colNorms[c];
+        maxCol = c;
+      }
+    }
+    // Swap columns j and maxCol in R_data, perm, colNorms
+    if (maxCol !== j) {
+      for (let i = 0; i < m; i++) {
+        const ij = j * m + i;
+        const ic = maxCol * m + i;
+        const tmp = R_data[ij];
+        R_data[ij] = R_data[ic];
+        R_data[ic] = tmp;
+      }
+      const tmpP = perm[j];
+      perm[j] = perm[maxCol];
+      perm[maxCol] = tmpP;
+      const tmpN = colNorms[j];
+      colNorms[j] = colNorms[maxCol];
+      colNorms[maxCol] = tmpN;
+    }
+
+    // Householder reflector for column j
+    const len = m - j;
+    const x = allocFloat64Array(len);
+    for (let i = 0; i < len; i++) x[i] = R_data[j * m + j + i];
+    let normx = 0;
+    for (let i = 0; i < len; i++) normx += x[i] * x[i];
+    normx = Math.sqrt(normx);
+    if (normx === 0) {
+      vecs.push(allocFloat64Array(len));
+      taus.push(0);
+      // Update remaining column norms
+      for (let c = j + 1; c < n; c++) {
+        const vj = R_data[c * m + j];
+        colNorms[c] -= vj * vj;
+        if (colNorms[c] < 0) colNorms[c] = 0;
+      }
+      continue;
+    }
+    const sign = x[0] >= 0 ? 1 : -1;
+    const alpha = -sign * normx;
+    const v = allocFloat64Array(len);
+    v[0] = x[0] - alpha;
+    for (let i = 1; i < len; i++) v[i] = x[i];
+    let vnorm = 0;
+    for (let i = 0; i < len; i++) vnorm += v[i] * v[i];
+    const tau = vnorm === 0 ? 0 : 2.0 / vnorm;
+    vecs.push(v);
+    taus.push(tau);
+    for (let c = j; c < n; c++) {
+      let dot = 0;
+      for (let i = 0; i < len; i++) dot += v[i] * R_data[c * m + j + i];
+      const scale = tau * dot;
+      for (let i = 0; i < len; i++) R_data[c * m + j + i] -= scale * v[i];
+    }
+    // Update remaining column norms
+    for (let c = j + 1; c < n; c++) {
+      const vj = R_data[c * m + j];
+      colNorms[c] -= vj * vj;
+      if (colNorms[c] < 0) colNorms[c] = 0;
+    }
+  }
+
+  // Build Q
+  const qCols = econ ? k : m;
+  const Q_data = allocFloat64Array(m * qCols);
+  for (let i = 0; i < Math.min(m, qCols); i++) Q_data[i * m + i] = 1;
+  for (let j = k - 1; j >= 0; j--) {
+    const v = vecs[j],
+      tau = taus[j];
+    if (tau === 0) continue;
+    const len = m - j;
+    for (let c = j; c < qCols; c++) {
+      let dot = 0;
+      for (let i = 0; i < len; i++) dot += v[i] * Q_data[c * m + j + i];
+      const scale = tau * dot;
+      for (let i = 0; i < len; i++) Q_data[c * m + j + i] -= scale * v[i];
+    }
+  }
+
+  // Build R
+  const rRows = econ ? k : m;
+  const R_out = allocFloat64Array(rRows * n);
+  for (let r = 0; r < rRows; r++)
+    for (let c = r; c < n; c++) R_out[c * rRows + r] = R_data[c * m + r];
+
+  const jpvt = new Int32Array(n);
+  for (let i = 0; i < n; i++) jpvt[i] = perm[i] + 1;
+  return { Q: Q_data, R: R_out, jpvt };
+}
 
 /**
  * Householder QR in place on a (m×n, column-major split complex).
@@ -66,33 +194,13 @@ function zgeqr2(
     }
 
     // zlarfg on A(j:m-1, j)
-    const d = j + j * m;
-    const alphRe = aRe[d],
-      alphIm = aIm[d];
-    const xnorm = colNorm(j, j + 1);
-    if (xnorm === 0 && alphIm === 0) {
-      tauRe[j] = tauIm[j] = 0;
-    } else {
-      const nrm = Math.hypot(alphRe, alphIm, xnorm);
-      const beta = alphRe >= 0 ? -nrm : nrm;
-      tauRe[j] = (beta - alphRe) / beta;
-      tauIm[j] = -alphIm / beta;
-      // v = x / (alpha - beta)
-      const dr = alphRe - beta,
-        di = alphIm;
-      const dd = dr * dr + di * di;
-      for (let i = j + 1; i < m; i++) {
-        const xr = aRe[i + j * m],
-          xi = aIm[i + j * m];
-        aRe[i + j * m] = (xr * dr + xi * di) / dd;
-        aIm[i + j * m] = (xi * dr - xr * di) / dd;
-      }
-      aRe[d] = beta;
-      aIm[d] = 0;
-
+    const [tr, ti] = zlarfg(m - j, aRe, aIm, j + j * m, 1);
+    tauRe[j] = tr;
+    tauIm[j] = ti;
+    if (tr !== 0 || ti !== 0) {
       // Apply H_j^H = I - conj(tau) v v^H to A(j:m-1, j+1:n-1)
-      const ctr = tauRe[j],
-        cti = -tauIm[j];
+      const ctr = tr,
+        cti = -ti;
       for (let c = j + 1; c < n; c++) {
         let wr = aRe[j + c * m],
           wi = aIm[j + c * m];

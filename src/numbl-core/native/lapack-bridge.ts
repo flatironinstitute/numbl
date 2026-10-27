@@ -1,19 +1,18 @@
 /**
- * LAPACK bridge — a module-level singleton that holds a reference to the
- * native addon when running under Node.js.
+ * LAPACK bridge: one interface for the dense linear algebra and tensor-op
+ * kernels, satisfied both by the native addon and by the pure-TypeScript
+ * implementation (ts-lapack-bridge.ts).
  *
- * In the browser the bridge is never set (stays null) and callers fall back
- * to pure-JavaScript implementations.
- *
- * Usage (CLI startup):
- *   import { setLapackBridge } from './numbl-core/native/lapack-bridge.js';
- *   setLapackBridge(require('<path-to-addon>'));
- *
- * Usage (builtin):
- *   import { getLapackBridge } from '../native/lapack-bridge.js';
- *   const bridge = getLapackBridge();
- *   if (bridge) { ... use bridge.inv(...) ... }
+ * `getLapackBridge()` always returns a complete bridge: each entry comes from
+ * the bridge installed with `setLapackBridge` (the native addon under Node,
+ * optionally a wasm accelerator in the browser) when it provides it, and from
+ * the TypeScript implementation otherwise. Call sites therefore use
+ * `getLapackBridge().X(...)` with no availability checks. Operations the
+ * TypeScript side cannot do are listed in `TS_UNSUPPORTED` in
+ * ts-lapack-bridge.ts and throw a clear error there.
  */
+
+import { getTsLapackBridge } from "./ts-lapack-bridge.js";
 
 /**
  * Expected native addon version. Bump this whenever the C++ addon API changes
@@ -22,9 +21,6 @@
 export const NATIVE_ADDON_EXPECTED_VERSION = 10;
 
 export interface LapackBridge {
-  /** Returns the native addon's version number. */
-  addonVersion?(): number;
-
   /**
    * Invert an n×n real matrix stored in column-major order (MATLAB/LAPACK convention).
    * @param data  Column-major Float64Array of length n*n (not modified).
@@ -32,7 +28,7 @@ export interface LapackBridge {
    * @returns     Inverted matrix as a allocFloat64Array in column-major order.
    * @throws      Error if the matrix is singular.
    */
-  inv?(data: Float64Array, n: number): Float64Array;
+  inv(data: Float64Array, n: number): Float64Array;
 
   /**
    * Invert an n×n complex matrix stored in column-major order (MATLAB/LAPACK convention).
@@ -43,7 +39,7 @@ export interface LapackBridge {
    * @returns       Object with {re, im} - inverted matrix parts as Float64Arrays in column-major order.
    * @throws        Error if the matrix is singular.
    */
-  invComplex?(
+  invComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     n: number
@@ -59,7 +55,7 @@ export interface LapackBridge {
    * @param wantQ  false → skip dorgqr; Q will be absent from the returned object.
    * @returns      Object with R (always present) and Q (present only when wantQ=true).
    */
-  qr?(
+  qr(
     data: Float64Array,
     m: number,
     n: number,
@@ -75,7 +71,7 @@ export interface LapackBridge {
    * @param econ   true → economy/thin QR; false → full QR.
    * @returns      Object with Q, R, and jpvt (1-based permutation vector as Int32Array).
    */
-  qrPivot?(
+  qrPivot(
     data: Float64Array,
     m: number,
     n: number,
@@ -85,7 +81,7 @@ export interface LapackBridge {
   /**
    * Column-pivoted QR decomposition of an m×n complex matrix: A*P = Q*R via zgeqp3 + zungqr.
    */
-  qrPivotComplex?(
+  qrPivotComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     m: number,
@@ -110,7 +106,7 @@ export interface LapackBridge {
    * @param wantQ   false → skip zungqr; Q properties will be absent from the returned object.
    * @returns       Object with RRe, RIm (always present) and QRe, QIm (present only when wantQ=true).
    */
-  qrComplex?(
+  qrComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     m: number,
@@ -134,7 +130,7 @@ export interface LapackBridge {
    * @param computeUV true → compute U and V; false → compute S only.
    * @returns         Object with S (always present as vector of singular values) and optionally U and V.
    */
-  svd?(
+  svd(
     data: Float64Array,
     m: number,
     n: number,
@@ -153,7 +149,7 @@ export interface LapackBridge {
    * @param computeUV true → compute U and V; false → compute S only.
    * @returns         Object with S (real singular values) and optionally URe, UIm, VRe, VIm.
    */
-  svdComplex?(
+  svdComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     m: number,
@@ -178,7 +174,7 @@ export interface LapackBridge {
    * @param n  Number of columns in B and C.
    * @returns  C = A*B as a allocFloat64Array of length m*n in column-major order.
    */
-  matmul?(
+  matmul(
     A: Float64Array,
     m: number,
     k: number,
@@ -198,7 +194,7 @@ export interface LapackBridge {
    * @param n    Number of columns in B and C.
    * @returns    Object with {re, im?} — complex result as Float64Arrays.
    */
-  matmulComplex?(
+  matmulComplex(
     ARe: Float64Array,
     AIm: Float64Array,
     m: number,
@@ -221,7 +217,7 @@ export interface LapackBridge {
    * @param nrhs  Number of right-hand sides (columns of B and X).
    * @returns     X as a allocFloat64Array of length n*nrhs in column-major order.
    */
-  linsolve?(
+  linsolve(
     A: Float64Array,
     m: number,
     n: number,
@@ -245,7 +241,7 @@ export interface LapackBridge {
    * @param nrhs  Number of right-hand sides (columns of B and X).
    * @returns     Object with {re, im} — X as Float64Arrays of length n*nrhs in column-major order.
    */
-  linsolveComplex?(
+  linsolveComplex(
     ARe: Float64Array,
     AIm: Float64Array,
     m: number,
@@ -265,7 +261,7 @@ export interface LapackBridge {
    * @param balance    true → balance matrix before computing (default); false → no balancing.
    * @returns          Object with wr/wi (real/imag parts of eigenvalues) and optionally VL/VR.
    */
-  eig?(
+  eig(
     data: Float64Array,
     n: number,
     computeVL: boolean,
@@ -288,7 +284,7 @@ export interface LapackBridge {
    * @param computeV  true → also compute the orthonormal eigenvectors.
    * @returns         Object with w (ascending eigenvalues) and optionally V.
    */
-  eigSym?(
+  eigSym(
     data: Float64Array,
     n: number,
     computeV: boolean
@@ -303,7 +299,7 @@ export interface LapackBridge {
    * @param computeV  true → also compute the unitary eigenvector basis.
    * @returns         Object with w (real, ascending) and optionally VRe/VIm.
    */
-  eigHerm?(
+  eigHerm(
     dataRe: Float64Array,
     dataIm: Float64Array,
     n: number,
@@ -320,7 +316,7 @@ export interface LapackBridge {
    * @param computeVR  true → compute right eigenvectors.
    * @returns          Object with wRe/wIm (real/imag parts of eigenvalues) and optionally VLRe/VLIm/VRRe/VRIm.
    */
-  eigComplex?(
+  eigComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     n: number,
@@ -344,7 +340,7 @@ export interface LapackBridge {
    *   - LU: m×n Float64Array with L (unit lower) and U (upper) packed together.
    *   - ipiv: Int32Array of length min(m,n), 1-based pivot indices from dgetrf.
    */
-  lu?(
+  lu(
     data: Float64Array,
     m: number,
     n: number
@@ -360,7 +356,7 @@ export interface LapackBridge {
    *   - LURe, LUIm: m×n Float64Arrays with L (unit lower) and U (upper) packed together.
    *   - ipiv: Int32Array of length min(m,n), 1-based pivot indices from zgetrf.
    */
-  luComplex?(
+  luComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     m: number,
@@ -378,7 +374,7 @@ export interface LapackBridge {
    *   - R: n×n Float64Array with the triangular factor (opposite triangle zeroed).
    *   - info: 0 if successful, >0 if not positive definite (index of failing pivot).
    */
-  chol?(
+  chol(
     data: Float64Array,
     n: number,
     upper: boolean
@@ -396,7 +392,7 @@ export interface LapackBridge {
    *   - RRe, RIm: n×n Float64Arrays with the triangular factor.
    *   - info: 0 if successful, >0 if not positive definite.
    */
-  cholComplex?(
+  cholComplex(
     dataRe: Float64Array,
     dataIm: Float64Array,
     n: number,
@@ -419,7 +415,7 @@ export interface LapackBridge {
    *   - V?: n×n Float64Array, right generalized eigenvectors (packed, like dgeev format).
    *   - W?: n×n Float64Array, left generalized eigenvectors (packed, like dgeev format).
    */
-  qz?(
+  qz(
     dataA: Float64Array,
     dataB: Float64Array,
     n: number,
@@ -440,6 +436,260 @@ export interface LapackBridge {
    * Complex QZ factorization (generalized Schur decomposition) of an n×n complex matrix pair.
    * Uses LAPACK zgges (and ztgevc for eigenvectors).
    */
+  qzComplex(
+    dataARe: Float64Array,
+    dataAIm: Float64Array,
+    dataBRe: Float64Array,
+    dataBIm: Float64Array,
+    n: number,
+    computeEigvecs: boolean
+  ): {
+    AARe: Float64Array;
+    AAIm: Float64Array;
+    BBRe: Float64Array;
+    BBIm: Float64Array;
+    QRe: Float64Array;
+    QIm: Float64Array;
+    ZRe: Float64Array;
+    ZIm: Float64Array;
+    alphaRe: Float64Array;
+    alphaIm: Float64Array;
+    betaRe: Float64Array;
+    betaIm: Float64Array;
+    VRe?: Float64Array;
+    VIm?: Float64Array;
+    WRe?: Float64Array;
+    WIm?: Float64Array;
+  };
+
+  /**
+   * Restarted GMRES solver for A*x = b (real, dense matrices only).
+   * Uses BLAS dgemv for matvec and LAPACK dgetrf+dgetrs for preconditioner.
+   * @param A       Column-major Float64Array of length n*n (not modified).
+   * @param n       System dimension.
+   * @param b       Right-hand side Float64Array of length n.
+   * @param restart Inner iterations per restart cycle (use n for no restart).
+   * @param tol     Convergence tolerance on relative preconditioned residual.
+   * @param maxit   Maximum number of outer iterations.
+   * @param M1      Preconditioner factor 1 (n×n column-major), or null.
+   * @param M2      Preconditioner factor 2 (n×n column-major), or null.
+   * @param x0      Initial guess (length n), or null for zeros.
+   * @returns       Object with x, flag, relres, iter (Int32Array[2]), resvec.
+   */
+  gmres(
+    A: Float64Array,
+    n: number,
+    b: Float64Array,
+    restart: number,
+    tol: number,
+    maxit: number,
+    M1: Float64Array | null,
+    M2: Float64Array | null,
+    x0: Float64Array | null
+  ): {
+    x: Float64Array;
+    flag: number;
+    relres: number;
+    iter: Int32Array;
+    resvec: Float64Array;
+  };
+
+  /**
+   * Complex restarted GMRES solver for A*x = b (split real/imag dense matrices).
+   */
+  gmresComplex(
+    ARe: Float64Array,
+    AIm: Float64Array,
+    n: number,
+    bRe: Float64Array,
+    bIm: Float64Array,
+    restart: number,
+    tol: number,
+    maxit: number,
+    M1Re: Float64Array | null,
+    M1Im: Float64Array | null,
+    M2Re: Float64Array | null,
+    M2Im: Float64Array | null,
+    x0Re: Float64Array | null,
+    x0Im: Float64Array | null
+  ): {
+    xRe: Float64Array;
+    xIm: Float64Array;
+    flag: number;
+    relres: number;
+    iter: Int32Array;
+    resvec: Float64Array;
+  };
+
+  // ── New tensor-ops layer (caller-allocates output, no return value) ──────
+
+  /** Real binary elemwise: out[i] = a[i] OP b[i]. op codes per OpRealBin. */
+  tensorOpRealBinary(
+    op: number,
+    n: number,
+    a: Float64Array,
+    b: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Real scalar-tensor binary elemwise. */
+  tensorOpRealScalarBinary(
+    op: number,
+    n: number,
+    scalar: number,
+    arr: Float64Array,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void;
+
+  /** Complex binary elemwise (split storage). aIm/bIm may be null. */
+  tensorOpComplexBinary(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    bRe: Float64Array,
+    bIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  /** Complex scalar-tensor binary elemwise. arrIm may be null. */
+  tensorOpComplexScalarBinary(
+    op: number,
+    n: number,
+    sRe: number,
+    sIm: number,
+    arrRe: Float64Array,
+    arrIm: Float64Array | null,
+    scalarOnLeft: boolean,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  /** Real unary elemwise: out[i] = OP(a[i]). op codes per OpUnary. */
+  tensorOpRealUnary(
+    op: number,
+    n: number,
+    a: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Complex unary elemwise (split storage). aIm may be null. ABS unsupported. */
+  tensorOpComplexUnary(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  /** Complex absolute value (real-valued output). aIm may be null. */
+  tensorOpComplexAbs(
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    out: Float64Array
+  ): void;
+
+  /** Real comparison: out[i] = (a[i] OP b[i]) ? 1 : 0. */
+  tensorOpRealComparison(
+    op: number,
+    n: number,
+    a: Float64Array,
+    b: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Real scalar-tensor comparison. */
+  tensorOpRealScalarComparison(
+    op: number,
+    n: number,
+    scalar: number,
+    arr: Float64Array,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void;
+
+  /** Complex comparison. EQ/NE use both parts; LT/LE/GT/GE use real parts. */
+  tensorOpComplexComparison(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    bRe: Float64Array,
+    bIm: Float64Array | null,
+    out: Float64Array
+  ): void;
+
+  /** Complex scalar-tensor comparison. */
+  tensorOpComplexScalarComparison(
+    op: number,
+    n: number,
+    sRe: number,
+    sIm: number,
+    arrRe: Float64Array,
+    arrIm: Float64Array | null,
+    scalarOnLeft: boolean,
+    out: Float64Array
+  ): void;
+
+  /** Flat real reduction (output is a 1-element Float64Array). */
+  tensorOpRealFlatReduce(
+    op: number,
+    n: number,
+    a: Float64Array,
+    out: Float64Array
+  ): void;
+
+  /** Flat complex reduction.  outIm may be null for ANY/ALL. */
+  tensorOpComplexFlatReduce(
+    op: number,
+    n: number,
+    aRe: Float64Array,
+    aIm: Float64Array | null,
+    outRe: Float64Array,
+    outIm: Float64Array | null
+  ): void;
+
+  /**
+   * Real Bessel tensor op: out[i] = besselX(nu, z[i]).
+   * op codes per OpBessel. scale: 0 unscaled, 1 scaled.
+   */
+  tensorOpBesselReal(
+    op: number,
+    nu: number,
+    n: number,
+    z: Float64Array,
+    scale: number,
+    out: Float64Array
+  ): void;
+
+  /**
+   * Hankel function tensor op (complex output, real input).
+   * kKind: 1 → J + i*Y; 2 → J - i*Y.
+   */
+  tensorOpBesselH(
+    kKind: number,
+    nu: number,
+    n: number,
+    z: Float64Array,
+    scale: number,
+    outRe: Float64Array,
+    outIm: Float64Array
+  ): void;
+
+  // ── Native-only accelerators ────────────────────────────────────────────
+  // No TypeScript entry point: callers keep their own JS path for these,
+  // because the JS FFT and PRNG differ in post-processing/state handling.
+
+  /** Returns the native addon's version number. */
+  addonVersion?(): number;
+
+  /** Dump op-code enum values as a stable string (drift detection). */
+  tensorOpDumpCodes?(): string;
+
   /**
    * Forward/inverse 1D FFT on real input via FFTW.
    * Does NOT normalize for inverse — caller handles 1/n scaling.
@@ -491,32 +741,6 @@ export interface LapackBridge {
     inverse: boolean
   ): { re: Float64Array; im: Float64Array };
 
-  qzComplex?(
-    dataARe: Float64Array,
-    dataAIm: Float64Array,
-    dataBRe: Float64Array,
-    dataBIm: Float64Array,
-    n: number,
-    computeEigvecs: boolean
-  ): {
-    AARe: Float64Array;
-    AAIm: Float64Array;
-    BBRe: Float64Array;
-    BBIm: Float64Array;
-    QRe: Float64Array;
-    QIm: Float64Array;
-    ZRe: Float64Array;
-    ZIm: Float64Array;
-    alphaRe: Float64Array;
-    alphaIm: Float64Array;
-    betaRe: Float64Array;
-    betaIm: Float64Array;
-    VRe?: Float64Array;
-    VIm?: Float64Array;
-    WRe?: Float64Array;
-    WIm?: Float64Array;
-  };
-
   /**
    * Bulk fill normal random values using Marsaglia polar + xoshiro128**.
    * State is mutated in-place. Spare is passed in/out to preserve pair caching.
@@ -527,235 +751,45 @@ export interface LapackBridge {
     spare: number,
     hasSpare: boolean
   ): { data: Float64Array; spare: number; hasSpare: boolean };
-
-  /**
-   * Restarted GMRES solver for A*x = b (real, dense matrices only).
-   * Uses BLAS dgemv for matvec and LAPACK dgetrf+dgetrs for preconditioner.
-   * @param A       Column-major Float64Array of length n*n (not modified).
-   * @param n       System dimension.
-   * @param b       Right-hand side Float64Array of length n.
-   * @param restart Inner iterations per restart cycle (use n for no restart).
-   * @param tol     Convergence tolerance on relative preconditioned residual.
-   * @param maxit   Maximum number of outer iterations.
-   * @param M1      Preconditioner factor 1 (n×n column-major), or null.
-   * @param M2      Preconditioner factor 2 (n×n column-major), or null.
-   * @param x0      Initial guess (length n), or null for zeros.
-   * @returns       Object with x, flag, relres, iter (Int32Array[2]), resvec.
-   */
-  gmres?(
-    A: Float64Array,
-    n: number,
-    b: Float64Array,
-    restart: number,
-    tol: number,
-    maxit: number,
-    M1: Float64Array | null,
-    M2: Float64Array | null,
-    x0: Float64Array | null
-  ): {
-    x: Float64Array;
-    flag: number;
-    relres: number;
-    iter: Int32Array;
-    resvec: Float64Array;
-  };
-
-  /**
-   * Complex restarted GMRES solver for A*x = b (split real/imag dense matrices).
-   */
-  gmresComplex?(
-    ARe: Float64Array,
-    AIm: Float64Array,
-    n: number,
-    bRe: Float64Array,
-    bIm: Float64Array,
-    restart: number,
-    tol: number,
-    maxit: number,
-    M1Re: Float64Array | null,
-    M1Im: Float64Array | null,
-    M2Re: Float64Array | null,
-    M2Im: Float64Array | null,
-    x0Re: Float64Array | null,
-    x0Im: Float64Array | null
-  ): {
-    xRe: Float64Array;
-    xIm: Float64Array;
-    flag: number;
-    relres: number;
-    iter: Int32Array;
-    resvec: Float64Array;
-  };
-
-  // ── New tensor-ops layer (caller-allocates output, no return value) ──────
-
-  /** Real binary elemwise: out[i] = a[i] OP b[i]. op codes per OpRealBin. */
-  tensorOpRealBinary?(
-    op: number,
-    n: number,
-    a: Float64Array,
-    b: Float64Array,
-    out: Float64Array
-  ): void;
-
-  /** Real scalar-tensor binary elemwise. */
-  tensorOpRealScalarBinary?(
-    op: number,
-    n: number,
-    scalar: number,
-    arr: Float64Array,
-    scalarOnLeft: boolean,
-    out: Float64Array
-  ): void;
-
-  /** Complex binary elemwise (split storage). aIm/bIm may be null. */
-  tensorOpComplexBinary?(
-    op: number,
-    n: number,
-    aRe: Float64Array,
-    aIm: Float64Array | null,
-    bRe: Float64Array,
-    bIm: Float64Array | null,
-    outRe: Float64Array,
-    outIm: Float64Array
-  ): void;
-
-  /** Complex scalar-tensor binary elemwise. arrIm may be null. */
-  tensorOpComplexScalarBinary?(
-    op: number,
-    n: number,
-    sRe: number,
-    sIm: number,
-    arrRe: Float64Array,
-    arrIm: Float64Array | null,
-    scalarOnLeft: boolean,
-    outRe: Float64Array,
-    outIm: Float64Array
-  ): void;
-
-  /** Real unary elemwise: out[i] = OP(a[i]). op codes per OpUnary. */
-  tensorOpRealUnary?(
-    op: number,
-    n: number,
-    a: Float64Array,
-    out: Float64Array
-  ): void;
-
-  /** Complex unary elemwise (split storage). aIm may be null. ABS unsupported. */
-  tensorOpComplexUnary?(
-    op: number,
-    n: number,
-    aRe: Float64Array,
-    aIm: Float64Array | null,
-    outRe: Float64Array,
-    outIm: Float64Array
-  ): void;
-
-  /** Complex absolute value (real-valued output). aIm may be null. */
-  tensorOpComplexAbs?(
-    n: number,
-    aRe: Float64Array,
-    aIm: Float64Array | null,
-    out: Float64Array
-  ): void;
-
-  /** Real comparison: out[i] = (a[i] OP b[i]) ? 1 : 0. */
-  tensorOpRealComparison?(
-    op: number,
-    n: number,
-    a: Float64Array,
-    b: Float64Array,
-    out: Float64Array
-  ): void;
-
-  /** Real scalar-tensor comparison. */
-  tensorOpRealScalarComparison?(
-    op: number,
-    n: number,
-    scalar: number,
-    arr: Float64Array,
-    scalarOnLeft: boolean,
-    out: Float64Array
-  ): void;
-
-  /** Complex comparison. EQ/NE use both parts; LT/LE/GT/GE use real parts. */
-  tensorOpComplexComparison?(
-    op: number,
-    n: number,
-    aRe: Float64Array,
-    aIm: Float64Array | null,
-    bRe: Float64Array,
-    bIm: Float64Array | null,
-    out: Float64Array
-  ): void;
-
-  /** Complex scalar-tensor comparison. */
-  tensorOpComplexScalarComparison?(
-    op: number,
-    n: number,
-    sRe: number,
-    sIm: number,
-    arrRe: Float64Array,
-    arrIm: Float64Array | null,
-    scalarOnLeft: boolean,
-    out: Float64Array
-  ): void;
-
-  /** Flat real reduction (output is a 1-element Float64Array). */
-  tensorOpRealFlatReduce?(
-    op: number,
-    n: number,
-    a: Float64Array,
-    out: Float64Array
-  ): void;
-
-  /** Flat complex reduction.  outIm may be null for ANY/ALL. */
-  tensorOpComplexFlatReduce?(
-    op: number,
-    n: number,
-    aRe: Float64Array,
-    aIm: Float64Array | null,
-    outRe: Float64Array,
-    outIm: Float64Array | null
-  ): void;
-
-  /**
-   * Real Bessel tensor op: out[i] = besselX(nu, z[i]).
-   * op codes per OpBessel. scale: 0 unscaled, 1 scaled.
-   */
-  tensorOpBesselReal?(
-    op: number,
-    nu: number,
-    n: number,
-    z: Float64Array,
-    scale: number,
-    out: Float64Array
-  ): void;
-
-  /**
-   * Hankel function tensor op (complex output, real input).
-   * kKind: 1 → J + i*Y; 2 → J - i*Y.
-   */
-  tensorOpBesselH?(
-    kKind: number,
-    nu: number,
-    n: number,
-    z: Float64Array,
-    scale: number,
-    outRe: Float64Array,
-    outIm: Float64Array
-  ): void;
-
-  /** Dump op-code enum values as a stable string (drift detection). */
-  tensorOpDumpCodes?(): string;
 }
 
+let _installed: Partial<LapackBridge> | null = null;
 let _bridge: LapackBridge | null = null;
+let _log: ((message: string) => void) | null = null;
 
-export function setLapackBridge(bridge: LapackBridge): void {
-  _bridge = bridge;
+/** Set (or clear) the sink for the one-time "bridge in use" diagnostic. */
+export function setBridgeLog(log: ((message: string) => void) | null): void {
+  _log = log;
 }
 
-export function getLapackBridge(): LapackBridge | null {
+/**
+ * Install an accelerated bridge (native addon, wasm module, test stub), or
+ * clear it with null. Entries it omits fall back to TypeScript.
+ */
+export function setLapackBridge(bridge: Partial<LapackBridge> | null): void {
+  _installed = bridge;
+  _bridge = null;
+}
+
+/** The complete bridge: installed entries over the TypeScript ones. */
+export function getLapackBridge(): LapackBridge {
+  if (_bridge) return _bridge;
+  const ts = getTsLapackBridge();
+  if (!_installed) {
+    _bridge = ts;
+    _log?.("LAPACK bridge: ts-lapack (TypeScript)");
+    return _bridge;
+  }
+  const merged: Record<string, unknown> = { ...ts };
+  for (const [key, fn] of Object.entries(_installed))
+    if (typeof fn === "function") merged[key] = fn;
+  const fromTs = Object.keys(ts).filter(
+    k => merged[k] === ts[k as keyof LapackBridge]
+  );
+  _log?.(
+    "LAPACK bridge: installed" +
+      (fromTs.length ? `, ts-lapack for ${fromTs.join(", ")}` : "")
+  );
+  _bridge = merged as unknown as LapackBridge;
   return _bridge;
 }

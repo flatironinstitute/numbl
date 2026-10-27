@@ -1,35 +1,13 @@
 /**
- * Tensor-ops dispatcher: chooses native bridge or pure-TS fallback.
+ * Tensor-ops entry points: thin wrappers over the LAPACK bridge's tensorOp*
+ * kernels (native addon when installed, the TS kernels in this directory
+ * otherwise; see native/lapack-bridge.ts).
  *
- * All entry points have identical signatures across native and TS impls.
  * Caller owns input AND output memory; functions never allocate output.
- *
- * Selection is not cached: every call reads getLapackBridge() and uses the
- * native method if present, so a bridge set (or replaced) later takes effect.
+ * Element-wise ops skip the bridge entirely for empty inputs.
  */
 
 import { getLapackBridge } from "../native/lapack-bridge.js";
-import {
-  tsRealBinaryElemwise,
-  tsRealScalarBinaryElemwise,
-} from "./realBinaryElemwise.js";
-import {
-  tsComplexBinaryElemwise,
-  tsComplexScalarBinaryElemwise,
-} from "./complexBinaryElemwise.js";
-import { tsRealUnaryElemwise } from "./realUnaryElemwise.js";
-import {
-  tsComplexUnaryElemwise,
-  tsComplexAbs,
-} from "./complexUnaryElemwise.js";
-import {
-  tsRealComparison,
-  tsRealScalarComparison,
-  tsComplexComparison,
-  tsComplexScalarComparison,
-} from "./comparison.js";
-import { tsRealFlatReduce, tsComplexFlatReduce } from "./reduce.js";
-import { tsBesselReal, tsBesselH } from "./bessel.js";
 
 export const tensorOps = {
   realBinaryElemwise(
@@ -40,12 +18,7 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpRealBinary) {
-      bridge.tensorOpRealBinary(op, n, a, b, out);
-    } else {
-      tsRealBinaryElemwise(op, n, a, b, out);
-    }
+    getLapackBridge().tensorOpRealBinary(op, n, a, b, out);
   },
 
   realScalarBinaryElemwise(
@@ -57,12 +30,14 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpRealScalarBinary) {
-      bridge.tensorOpRealScalarBinary(op, n, scalar, arr, scalarOnLeft, out);
-    } else {
-      tsRealScalarBinaryElemwise(op, n, scalar, arr, scalarOnLeft, out);
-    }
+    getLapackBridge().tensorOpRealScalarBinary(
+      op,
+      n,
+      scalar,
+      arr,
+      scalarOnLeft,
+      out
+    );
   },
 
   complexBinaryElemwise(
@@ -76,12 +51,16 @@ export const tensorOps = {
     outIm: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexBinary) {
-      bridge.tensorOpComplexBinary(op, n, aRe, aIm, bRe, bIm, outRe, outIm);
-    } else {
-      tsComplexBinaryElemwise(op, n, aRe, aIm, bRe, bIm, outRe, outIm);
-    }
+    getLapackBridge().tensorOpComplexBinary(
+      op,
+      n,
+      aRe,
+      aIm,
+      bRe,
+      bIm,
+      outRe,
+      outIm
+    );
   },
 
   complexScalarBinaryElemwise(
@@ -96,32 +75,17 @@ export const tensorOps = {
     outIm: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexScalarBinary) {
-      bridge.tensorOpComplexScalarBinary(
-        op,
-        n,
-        sRe,
-        sIm,
-        arrRe,
-        arrIm,
-        scalarOnLeft,
-        outRe,
-        outIm
-      );
-    } else {
-      tsComplexScalarBinaryElemwise(
-        op,
-        n,
-        sRe,
-        sIm,
-        arrRe,
-        arrIm,
-        scalarOnLeft,
-        outRe,
-        outIm
-      );
-    }
+    getLapackBridge().tensorOpComplexScalarBinary(
+      op,
+      n,
+      sRe,
+      sIm,
+      arrRe,
+      arrIm,
+      scalarOnLeft,
+      outRe,
+      outIm
+    );
   },
 
   realUnaryElemwise(
@@ -131,12 +95,7 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpRealUnary) {
-      bridge.tensorOpRealUnary(op, n, a, out);
-    } else {
-      tsRealUnaryElemwise(op, n, a, out);
-    }
+    getLapackBridge().tensorOpRealUnary(op, n, a, out);
   },
 
   complexUnaryElemwise(
@@ -148,12 +107,7 @@ export const tensorOps = {
     outIm: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexUnary) {
-      bridge.tensorOpComplexUnary(op, n, aRe, aIm, outRe, outIm);
-    } else {
-      tsComplexUnaryElemwise(op, n, aRe, aIm, outRe, outIm);
-    }
+    getLapackBridge().tensorOpComplexUnary(op, n, aRe, aIm, outRe, outIm);
   },
 
   complexAbs(
@@ -163,12 +117,7 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexAbs) {
-      bridge.tensorOpComplexAbs(n, aRe, aIm, out);
-    } else {
-      tsComplexAbs(n, aRe, aIm, out);
-    }
+    getLapackBridge().tensorOpComplexAbs(n, aRe, aIm, out);
   },
 
   realComparison(
@@ -179,12 +128,7 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpRealComparison) {
-      bridge.tensorOpRealComparison(op, n, a, b, out);
-    } else {
-      tsRealComparison(op, n, a, b, out);
-    }
+    getLapackBridge().tensorOpRealComparison(op, n, a, b, out);
   },
 
   realScalarComparison(
@@ -196,19 +140,14 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpRealScalarComparison) {
-      bridge.tensorOpRealScalarComparison(
-        op,
-        n,
-        scalar,
-        arr,
-        scalarOnLeft,
-        out
-      );
-    } else {
-      tsRealScalarComparison(op, n, scalar, arr, scalarOnLeft, out);
-    }
+    getLapackBridge().tensorOpRealScalarComparison(
+      op,
+      n,
+      scalar,
+      arr,
+      scalarOnLeft,
+      out
+    );
   },
 
   complexComparison(
@@ -221,12 +160,7 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexComparison) {
-      bridge.tensorOpComplexComparison(op, n, aRe, aIm, bRe, bIm, out);
-    } else {
-      tsComplexComparison(op, n, aRe, aIm, bRe, bIm, out);
-    }
+    getLapackBridge().tensorOpComplexComparison(op, n, aRe, aIm, bRe, bIm, out);
   },
 
   complexScalarComparison(
@@ -240,30 +174,16 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexScalarComparison) {
-      bridge.tensorOpComplexScalarComparison(
-        op,
-        n,
-        sRe,
-        sIm,
-        arrRe,
-        arrIm,
-        scalarOnLeft,
-        out
-      );
-    } else {
-      tsComplexScalarComparison(
-        op,
-        n,
-        sRe,
-        sIm,
-        arrRe,
-        arrIm,
-        scalarOnLeft,
-        out
-      );
-    }
+    getLapackBridge().tensorOpComplexScalarComparison(
+      op,
+      n,
+      sRe,
+      sIm,
+      arrRe,
+      arrIm,
+      scalarOnLeft,
+      out
+    );
   },
 
   realFlatReduce(
@@ -272,12 +192,7 @@ export const tensorOps = {
     a: Float64Array,
     out: Float64Array
   ): void {
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpRealFlatReduce) {
-      bridge.tensorOpRealFlatReduce(op, n, a, out);
-    } else {
-      tsRealFlatReduce(op, n, a, out);
-    }
+    getLapackBridge().tensorOpRealFlatReduce(op, n, a, out);
   },
 
   complexFlatReduce(
@@ -288,12 +203,7 @@ export const tensorOps = {
     outRe: Float64Array,
     outIm: Float64Array | null
   ): void {
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpComplexFlatReduce) {
-      bridge.tensorOpComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
-    } else {
-      tsComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
-    }
+    getLapackBridge().tensorOpComplexFlatReduce(op, n, aRe, aIm, outRe, outIm);
   },
 
   besselReal(
@@ -305,12 +215,7 @@ export const tensorOps = {
     out: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpBesselReal) {
-      bridge.tensorOpBesselReal(op, nu, n, z, scale, out);
-    } else {
-      tsBesselReal(op, nu, n, z, scale, out);
-    }
+    getLapackBridge().tensorOpBesselReal(op, nu, n, z, scale, out);
   },
 
   besselH(
@@ -323,11 +228,6 @@ export const tensorOps = {
     outIm: Float64Array
   ): void {
     if (n === 0) return;
-    const bridge = getLapackBridge();
-    if (bridge?.tensorOpBesselH) {
-      bridge.tensorOpBesselH(kKind, nu, n, z, scale, outRe, outIm);
-    } else {
-      tsBesselH(kKind, nu, n, z, scale, outRe, outIm);
-    }
+    getLapackBridge().tensorOpBesselH(kKind, nu, n, z, scale, outRe, outIm);
   },
 };
