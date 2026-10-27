@@ -371,10 +371,8 @@ export function executeCode(
   // ── 3. Create runtime ──────────────────────────────────────────────
   const rt = new Runtime(options, options.initialVariableValues);
 
-  // Apply custom builtins (both to rt.builtins fallback and to customBuiltins
-  // which take priority over IBuiltins in the interpreter)
+  // Custom builtins take priority over registered builtins.
   if (options.customBuiltins) {
-    Object.assign(rt.builtins, options.customBuiltins);
     Object.assign(rt.customBuiltins, options.customBuiltins);
   }
 

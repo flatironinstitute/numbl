@@ -17,7 +17,10 @@ import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
 import { getIBuiltin, getIBuiltinHelp } from "./builtins/index.js";
-import { getAllBuiltinNames } from "../helpers/registry.js";
+import {
+  getAllBuiltinNames,
+  registerExtraBuiltinNames,
+} from "../helpers/registry.js";
 import { toNumber, toString } from "../runtime/convert.js";
 import type { Environment } from "./types.js";
 import type { Runtime } from "../runtime/runtime.js";
@@ -73,6 +76,7 @@ function register(
   handler: InterpreterSpecialBuiltinHandler
 ): void {
   registry.set(name, handler);
+  registerExtraBuiltinNames([name]);
 }
 
 export function getInterpreterSpecialBuiltin(
@@ -320,8 +324,7 @@ register("exist", (ctx, args) => {
   const typeArg = args.length >= 2 ? toString(ensureRuntimeValue(args[1])) : "";
 
   const fio = ctx.rt.fileIO;
-  const isBuiltin = (): boolean =>
-    !!(ctx.rt.builtins[nameArg] || getIBuiltin(nameArg));
+  const isBuiltin = (): boolean => !!getIBuiltin(nameArg);
 
   // Map a file path to a MATLAB type ID:
   // .numbl.js → 3 (MEX), everything else → 2.
@@ -439,7 +442,7 @@ register("which", (ctx, args) => {
 
   // Builtin — MATLAB returns "built-in (<path>)".  We don't track the
   // source path for numbl builtins, so return just "built-in".
-  if (ctx.rt.builtins[nameArg] || getIBuiltin(nameArg)) {
+  if (getIBuiltin(nameArg)) {
     return RTV.char("built-in");
   }
 

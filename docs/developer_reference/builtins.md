@@ -37,9 +37,11 @@ More complex builtins (multiple outputs, shape-dependent behavior, custom dispat
 - returning accurate output `JitType`s — the JIT propagates these to callers and will miscompile if they are wrong;
 - respecting integer, logical, complex, and shape refinements where possible, so downstream callers can be specialized too.
 
-## Where "special" builtins live
+## Builtins that need the runtime or the caller's scope
 
-A small set of names are handled by the interpreter itself rather than as `IBuiltin`s — I/O, display, plotting commands, and similar side-effecting constructs. These are maintained in a dedicated list so the interpreter knows to short-circuit the registry lookup. When in doubt whether a name is special, grep for it.
+Builtins that need runtime state (output, file I/O, plot instructions, figures, the search path) are ordinary `IBuiltin`s registered with `registerSpecial` / `registerSpecialVoid` (`runtime/registerSpecial.ts`); each call receives the active `Runtime` from the current-runtime stack. They live in `runtime/specialBuiltins.ts` and, for plotting, `runtime/plotBuiltins.ts`. Every caller (interpreter, JIT dispatch, `builtin(...)`, method dispatch) invokes builtins through `invokeBuiltin` in `runtime/runtimeDispatch.ts`.
+
+A few names need the calling scope's variables (`eval`, `evalin`, `assignin`, `input`, `clear`, `exist`, `nargin`, ...). These are interpreter specials in `interpreter/interpreterSpecialBuiltins.ts`, which the interpreter checks before normal function resolution.
 
 ## Sparse direct solvers
 

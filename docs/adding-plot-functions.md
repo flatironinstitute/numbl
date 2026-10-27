@@ -37,17 +37,15 @@ If you're adding a 2D plot type, you'll work with `drawPlot.ts`. If 3D, you'll w
 
 ## Files to edit (in order)
 
-| Step | File                                            | What to add                                                                  |
-| ---- | ----------------------------------------------- | ---------------------------------------------------------------------------- |
-| 1    | `src/graphics/types.ts`                         | Trace interface + `PlotInstruction` variant                                  |
-| 2    | `src/numbl-core/runtime/plotUtils.ts`           | Argument parser (`parseXxxArgs`)                                             |
-| 3    | `src/numbl-core/runtime/runtimePlot.ts`         | Call function (`xxxCall`)                                                    |
-| 4    | `src/numbl-core/runtime/plotBuiltinDispatch.ts` | Import `*Call`, add `switch` case, add to `PLOT_DISPATCH_NAMES`              |
-| 5    | `src/numbl-core/runtime/runtimeDispatch.ts`     | Add name to `PLOT_DISPATCH_NAMES_JIT` (runtime.ts registration is automatic) |
-| 6    | `src/numbl-core/runtime/specialBuiltinNames.ts` | Add function name to the array                                               |
-| 7    | `src/graphics/figuresReducer.ts`                | `AxesState`, `defaultAxes`, `addTraces`, reducer case                        |
-| 8    | `src/graphics/FigureView.tsx`                   | Pass new traces through to the drawing function                              |
-| 9    | `src/graphics/drawPlot.ts`                      | Rendering logic (data bounds + canvas drawing)                               |
+| Step | File                                            | What to add                                                     |
+| ---- | ----------------------------------------------- | --------------------------------------------------------------- |
+| 1    | `src/graphics/types.ts`                         | Trace interface + `PlotInstruction` variant                     |
+| 2    | `src/numbl-core/runtime/plotUtils.ts`           | Argument parser (`parseXxxArgs`)                                |
+| 3    | `src/numbl-core/runtime/runtimePlot.ts`         | Call function (`xxxCall`)                                       |
+| 4    | `src/numbl-core/runtime/plotBuiltinDispatch.ts` | Import `*Call`, add `switch` case, add to `PLOT_DISPATCH_NAMES` |
+| 5    | `src/graphics/figuresReducer.ts`                | `AxesState`, `defaultAxes`, `addTraces`, reducer case           |
+| 6    | `src/graphics/FigureView.tsx`                   | Pass new traces through to the drawing function                 |
+| 7    | `src/graphics/drawPlot.ts`                      | Rendering logic (data bounds + canvas drawing)                  |
 
 ## Step-by-step
 
@@ -275,41 +273,9 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
 
 `PLOT_DISPATCH_NAMES` is the list the Runtime loops over to auto-register builtins (step 5), so adding the name here is what makes `bar(...)` resolve from interpreted `.m` code.
 
-### 5. Make it reachable from the dispatch/JIT path — `src/numbl-core/runtime/runtimeDispatch.ts`
+Adding the name to `PLOT_DISPATCH_NAMES` is enough to register it: `src/numbl-core/runtime/plotBuiltins.ts` registers every name in that list as a builtin that calls `dispatchPlotBuiltin`. Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get an explicit `registerPlot` in that file instead.
 
-There is **no per-function edit in `runtime.ts`**. `initBuiltins` registers every name in `PLOT_DISPATCH_NAMES` with a one-line wrapper that calls `dispatchPlotBuiltin` (see the `for (const name of PLOT_DISPATCH_NAMES)` loop in `runtime.ts`). Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get a manual override after that loop.
-
-For calls routed through the JIT / `rt.dispatch` path, add the name to the `PLOT_DISPATCH_NAMES_JIT` set in `runtimeDispatch.ts` so `dispatchPlotCall` forwards it to `dispatchPlotBuiltin`:
-
-```ts
-const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
-  // ... existing ...
-  "bar", // ← add
-]);
-```
-
-Functions that need the full Runtime context (`fplot`, `fplot3`, `streamline`, `stream2`) keep their own `case` in `dispatchPlotCall` instead.
-
-### 6. Special builtin name — `src/numbl-core/runtime/specialBuiltinNames.ts`
-
-This file lists function names that bypass normal workspace/function resolution and go directly to the runtime. All plot functions must be listed here.
-
-**Add the name** to the `SPECIAL_BUILTIN_NAMES` array, near the other plot names:
-
-```ts
-export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
-  // ... other names ...
-  "mesh",
-  "waterfall",
-  "bar", // ← add
-  "colormap",
-  // ... rest ...
-];
-```
-
-If you forget this step, the function will only work when called directly; it will fail inside user-defined functions or when the JIT compiler is active.
-
-### 7. Figures reducer — `src/graphics/figuresReducer.ts`
+### 5. Figures reducer — `src/graphics/figuresReducer.ts`
 
 This file manages the state of all figures. It's a React-style reducer: each `PlotInstruction` produces a new immutable state. There are four places to edit.
 
@@ -398,7 +364,7 @@ case "bar": {
 
 The hold-on logic: when `hold on` is active, new traces are appended to existing ones. When off (default), they replace.
 
-### 8. FigureView — `src/graphics/FigureView.tsx`
+### 6. FigureView — `src/graphics/FigureView.tsx`
 
 This React component connects the state to the renderer. The `SingleAxesView` component decides whether to use 2D or 3D rendering, then `PlotCanvas` calls `drawPlot()`.
 
@@ -458,7 +424,7 @@ drawPlot(
     barTraces]);      // ← add
 ```
 
-### 9. Canvas rendering — `src/graphics/drawPlot.ts`
+### 7. Canvas rendering — `src/graphics/drawPlot.ts`
 
 This is where you write the actual drawing code. The `drawPlot` function receives all trace data and renders to a `<canvas>` element using the Canvas 2D API.
 

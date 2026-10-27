@@ -10,7 +10,6 @@ import { BUILTIN_CONSTANTS } from "../lowering/constants.js";
 import { getAllBuiltinNames } from "../helpers/registry.js";
 import { getAllIBuiltinNames } from "../interpreter/builtins/index.js";
 import type { IBuiltin } from "../interpreter/builtins/index.js";
-import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import {
   HANDLE_BASE_CLASSES,
@@ -858,7 +857,6 @@ export class LoweringContext {
     const builtins = new Set([
       ...getAllBuiltinNames(),
       ...getAllIBuiltinNames(),
-      ...SPECIAL_BUILTIN_NAMES,
     ]);
 
     // JS user functions are stored on the per-context registry. They resolve

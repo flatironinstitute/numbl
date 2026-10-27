@@ -49,8 +49,6 @@ import { validateProjectName } from "../utils/validation";
 import { makeShareHash } from "../utils/shareUrl.js";
 import type { Project } from "../db/schema";
 import { getAllIBuiltinNames } from "../numbl-core/interpreter/builtins/index.js";
-import { getDummyBuiltinNames } from "../numbl-core/helpers/dummy.js";
-import { SPECIAL_BUILTIN_NAMES } from "../numbl-core/runtime/specialBuiltinNames.js";
 
 interface ProjectWithMetadata extends Project {
   fileCount: number;
@@ -102,14 +100,10 @@ export function ProjectListPage() {
     path: "/",
   });
 
-  const builtinCount = useMemo(() => {
-    const dummyNames = new Set(getDummyBuiltinNames());
-    const iBuiltinNames = getAllIBuiltinNames().filter(
-      n => !dummyNames.has(n) && !n.startsWith("__")
-    );
-    const allNames = new Set([...iBuiltinNames, ...SPECIAL_BUILTIN_NAMES]);
-    return allNames.size;
-  }, []);
+  const builtinCount = useMemo(
+    () => getAllIBuiltinNames().filter(n => !n.startsWith("__")).length,
+    []
+  );
 
   useEffect(() => {
     loadProjects();
