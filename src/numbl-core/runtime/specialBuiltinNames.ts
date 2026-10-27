@@ -24,8 +24,6 @@ export const SPECIAL_BUILTIN_NAMES: readonly string[] = [
   "frewind",
   "fseek",
   "ftell",
-  "fileparts",
-  "fullfile",
   "assignin",
   "evalin",
   "set",

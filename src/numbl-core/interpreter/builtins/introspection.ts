@@ -357,7 +357,7 @@ defineBuiltin({
   cases: [
     anyToLogicalCase(args => {
       const shape = getShape(args[0]);
-      return shape.filter(d => d > 1).length <= 1;
+      return shape.length === 2 && (shape[0] === 1 || shape[1] === 1);
     }),
   ],
 });
@@ -712,26 +712,70 @@ defineBuiltin({
 
 // ── fullfile ─────────────────────────────────────────────────────────────
 
+/** Join path parts the way MATLAB's fullfile does on Unix: empty parts are
+ *  dropped, and repeated separators and `/./` collapse, except for the
+ *  leading separators. */
+function joinPath(parts: string[]): string {
+  const nonEmpty = parts.filter(p => p.length > 0);
+  if (nonEmpty.length === 0) return "";
+  const joined = nonEmpty.reduce(
+    (acc, p) => acc.replace(/\/+$/, "") + "/" + p.replace(/^\/+/, "")
+  );
+  const lead = nonEmpty[0].match(/^\/*/)![0];
+  let rest = joined.slice(lead.length).replace(/\/{2,}/g, "/");
+  while (rest.includes("/./")) rest = rest.replace("/./", "/");
+  return lead + rest;
+}
+
 defineBuiltin({
   name: "fullfile",
   cases: [
     {
       match: argTypes => {
         if (argTypes.length < 1) return null;
+        let cellOut = false;
         for (const t of argTypes) {
-          if (t.kind !== "string" && t.kind !== "char" && t.kind !== "unknown")
+          if (t.kind === "cell") cellOut = true;
+          else if (
+            t.kind !== "string" &&
+            t.kind !== "char" &&
+            t.kind !== "unknown"
+          )
             return null;
         }
-        return [{ kind: "char" } as JitType];
+        if (cellOut) return [{ kind: "unknown" } as JitType];
+        return [
+          argTypes.some(t => t.kind === "string")
+            ? ({ kind: "string" } as JitType)
+            : ({ kind: "char" } as JitType),
+        ];
       },
       apply: args => {
-        const parts: string[] = [];
-        for (const a of args) {
-          if (isRuntimeString(a)) parts.push(a);
-          else if (isRuntimeChar(a)) parts.push(a.value);
-          else throw new RuntimeError("fullfile: arguments must be strings");
+        const text = (a: RuntimeValue): string => {
+          if (isRuntimeString(a)) return a;
+          if (isRuntimeChar(a)) return a.value;
+          throw new RuntimeError(
+            "fullfile: arguments must be character vectors, strings or cell arrays of them"
+          );
+        };
+        const cells = args.filter(isRuntimeCell);
+        if (cells.length === 0) {
+          const out = joinPath(args.map(text));
+          return args.some(a => isRuntimeString(a)) ? out : RTV.char(out);
         }
-        return RTV.char(parts.join("/"));
+        const n = cells[0].data.length;
+        if (cells.some(c => c.data.length !== n))
+          throw new RuntimeError(
+            "fullfile: cell array arguments must have the same number of elements"
+          );
+        const out: RuntimeValue[] = [];
+        for (let i = 0; i < n; i++) {
+          const parts = args.map(a =>
+            isRuntimeCell(a) ? text(a.data[i]) : text(a)
+          );
+          out.push(RTV.char(joinPath(parts)));
+        }
+        return RTV.cell(out, [...cells[0].shape]);
       },
     },
   ],
