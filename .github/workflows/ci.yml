@@ -136,6 +136,10 @@ jobs:
       - name: Run .m test scripts
         run: npm run test:scripts
 
+      # The .m suite under the C-JIT; also enforces `%!numbl:assert_jit c`.
+      - name: Run .m test scripts (--opt 2)
+        run: npm run test:scripts:c
+
       # Cross-mode parity: --opt 0 / 1 / 2 must produce identical output.
       - name: Run JIT parity gate
         run: npm run jit-parity

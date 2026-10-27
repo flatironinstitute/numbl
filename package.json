@@ -79,6 +79,7 @@
     "test:coverage": "vitest run --coverage",
     "test:coverage:all": "bash scripts/coverage-all.sh",
     "test:scripts": "bash numbl_test_scripts/run_all.sh",
+    "test:scripts:c": "tsx src/cli.ts run-tests numbl_test_scripts --opt 2",
     "jit-parity": "node jit_parity/run.mjs",
     "test:browser": "playwright test",
     "build:wasm": "bash numbl_test_scripts/build_wasm.sh",
