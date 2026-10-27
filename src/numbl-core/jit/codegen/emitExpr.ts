@@ -18,11 +18,11 @@ import {
 } from "../lowering/types.js";
 import { cTypeFor, formatDouble, ownedHelpersFor } from "./cHelpers.js";
 import {
-  lookupBuiltin,
   makeEmitUseRuntime,
   useRuntimeByName,
   type RuntimeState,
 } from "./runtime.js";
+import { getBuiltin } from "../builtins/index.js";
 import { requireEmitC } from "../builtins/registry.js";
 import { cStringLiteral, dimsProductExpr } from "./cFormat.js";
 import { emitTensorConcat } from "./emitTensorConcat.js";
@@ -137,9 +137,8 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
         // Two parallel `double[]` arrays — real parts and imag parts.
         // Real-typed cells project to `(re, 0.0)`; complex cells
         // split via `mtoc2_creal` / `mtoc2_cimag`. This avoids ever
-        // passing `double _Complex *` arrays around (which c2js
-        // can't translate), and keeps each compound literal a plain
-        // real-double array.
+        // passing `double _Complex *` arrays around and keeps each
+        // compound literal a plain real-double array.
         const reParts: string[] = [];
         const imParts: string[] = [];
         for (const el of e.elements) {
@@ -183,7 +182,7 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       // (Assign RHS, user-function call) wraps in copy where needed.
       return e.cName;
     case "Binary": {
-      const b = lookupBuiltin(state, e.builtin);
+      const b = getBuiltin(e.builtin);
       if (!b) throw new Error(`emit: builtin '${e.builtin}' not found`);
       return requireEmitC(b)({
         argsC: [emitExpr(e.left, state), emitExpr(e.right, state)],
@@ -193,7 +192,7 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       });
     }
     case "Unary": {
-      const b = lookupBuiltin(state, e.builtin);
+      const b = getBuiltin(e.builtin);
       if (!b) throw new Error(`emit: builtin '${e.builtin}' not found`);
       return requireEmitC(b)({
         argsC: [emitExpr(e.operand, state)],
@@ -203,7 +202,7 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       });
     }
     case "Call": {
-      const builtinB = lookupBuiltin(state, e.name);
+      const builtinB = getBuiltin(e.name);
       if (builtinB) {
         return requireEmitC(builtinB)({
           argsC: e.args.map(a => emitExpr(a, state)),
@@ -301,8 +300,7 @@ export function emitExpr(e: IRExpr, state: RuntimeState): string {
       const offset = emitNdScalarOffset(state, e.indices, e.base.cName);
       if (isNumeric(e.base.ty) && e.base.ty.isComplex) {
         // Compose the complex value from both lanes via `mtoc2_cmake`
-        // so the c2js side reuses its `{re, im}` JS impl. Avoid
-        // recomputing the offset twice by hoisting through a GCC
+        // (parallel to the JS `{re, im}` impl). Avoid recomputing the offset twice by hoisting through a GCC
         // statement-expression — the offset may include autoinc /
         // bounds-checked sub-calls we don't want to re-evaluate.
         useRuntimeByName(state, "mtoc2_cscalar");

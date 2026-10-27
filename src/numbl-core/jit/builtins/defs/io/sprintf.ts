@@ -7,18 +7,6 @@ import {
   emitTextView,
   validateFormatArgs,
 } from "./_format_args.js";
-import {
-  mtoc2_sprintf_str as jsSprintfStr,
-  mtoc2_sprintf_char as jsSprintfChar,
-} from "../../runtime/snippets.gen.js";
-
-function unwrapFmtArg(v: unknown): unknown {
-  if (typeof v === "object" && v !== null) {
-    const o = v as { mtoc2Tag?: string; value?: string };
-    if (o.mtoc2Tag === "char" && typeof o.value === "string") return o.value;
-  }
-  return v;
-}
 
 export const sprintfBuiltin: Builtin = {
   name: "sprintf",
@@ -61,19 +49,5 @@ export const sprintfBuiltin: Builtin = {
     const fn =
       fmt.kind === "String" ? "mtoc2_sprintf_str" : "mtoc2_sprintf_char";
     return `${fn}(${argsJs.join(", ")})`;
-  },
-  call({ args, argTypes }) {
-    const unwrapped = args.map(unwrapFmtArg);
-    const fmt = unwrapped[0] as string;
-    const rest = unwrapped.slice(1);
-    if (argTypes[0].kind === "String") {
-      return [jsSprintfStr(fmt, ...rest)];
-    }
-    return [
-      jsSprintfChar(
-        fmt,
-        ...rest
-      ) as unknown as import("../../../runtime/value.js").RuntimeChar,
-    ];
   },
 };

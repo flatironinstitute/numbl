@@ -6,11 +6,6 @@
 
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import { isStruct, scalarLogical } from "../../../lowering/types.js";
-import {
-  isTensor,
-  isChar as isCharRV,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
 import type { Builtin } from "../../registry.js";
 
 export const isstruct: Builtin = {
@@ -33,22 +28,5 @@ export const isstruct: Builtin = {
   },
   emitJs({ argTypes }) {
     return isStruct(argTypes[0]) ? `true` : `false`;
-  },
-  call({ args }) {
-    const v = args[0];
-    if (
-      typeof v === "object" &&
-      v !== null &&
-      !isTensor(v as RuntimeValue) &&
-      !isCharRV(v as RuntimeValue) &&
-      // Cell / class instance / function-handle are object-but-
-      // not-struct; the tag fields exclude them.
-      (v as { mtoc2Tag?: string }).mtoc2Tag !== "cell" &&
-      (v as { mtoc2Class?: string }).mtoc2Class === undefined &&
-      (v as { mtoc2Handle?: boolean }).mtoc2Handle !== true
-    ) {
-      return [true];
-    }
-    return [false];
   },
 };

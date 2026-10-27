@@ -136,7 +136,6 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
     // would silently return that default instead of raising MATLAB's
     // undefined-variable error like --opt 0/1 do. See definiteAssign.ts.
     const prog: IRProgram = {
-      topLevelStmts: [],
       functions: new Map(lowerer.specializations),
     };
     // The entry `spec` is a synthetic wrapper for the loop/top-level
@@ -150,7 +149,6 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
       assertDefiniteAssignment(fn, { checkOutputs: true });
     }
     const source = emitProgram(prog, {
-      workspace,
       exposeSpec: spec.cName,
     });
     return {

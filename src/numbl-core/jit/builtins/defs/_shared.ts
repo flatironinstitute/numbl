@@ -6,7 +6,6 @@ import type { Span } from "../../parser/index.js";
 import { TypeError } from "../../lowering/errors.js";
 import {
   type Type,
-  type NumericType,
   isScalarRealDouble,
   isNumeric,
   isScalar,
@@ -123,11 +122,4 @@ export function exactScalarAsComplex(
   const r = exactDouble(t);
   if (r !== undefined) return { re: r, im: 0 };
   return exactComplex(t);
-}
-
-/** True when this numeric is statically known to be complex (the static
- *  flag, not the runtime value). Centralizes the predicate so callers
- *  don't sprinkle `(t as NumericType).isComplex` checks. */
-export function isStaticComplex(t: Type): t is NumericType {
-  return isNumeric(t) && t.isComplex;
 }

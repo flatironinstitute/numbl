@@ -18,12 +18,6 @@ import {
 import type { NumericType } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactComplex, exactComplexArray, exactDouble } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { isTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_transpose as jsTranspose,
-  mtoc2_tensor_transpose_complex as jsTransposeComplex,
-} from "../../runtime/snippets.gen.js";
 
 function transposeExact(src: Float64Array, m: number, n: number): Float64Array {
   const out = new Float64Array(m * n);
@@ -137,16 +131,5 @@ export const transpose: Builtin = {
     }
     useRuntime("mtoc2_tensor_transpose");
     return `mtoc2_tensor_transpose(${argsJs[0]})`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (!isMultiElement(a)) return [args[0]];
-    if (!isTensor(args[0])) {
-      throw new TypeError(
-        `'transpose' runtime arg has type-system shape tensor but runtime value isn't a tensor`
-      );
-    }
-    const fn = a.isComplex ? jsTransposeComplex : jsTranspose;
-    return [fn(args[0]) as unknown as RuntimeTensor];
   },
 };

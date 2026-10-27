@@ -7,7 +7,6 @@ import {
   emitTextView,
   validateFormatArgs,
 } from "./_format_args.js";
-import { mtoc2_fprintf as jsFprintf } from "../../runtime/snippets.gen.js";
 
 export const fprintf: Builtin = {
   name: "fprintf",
@@ -52,22 +51,4 @@ export const fprintf: Builtin = {
     useRuntime("mtoc2_fprintf");
     return `mtoc2_fprintf(${argsJs.join(", ")})`;
   },
-  call({ args, ctx }) {
-    // Unwrap Char/String wrappers to plain JS strings for the
-    // format engine. Tensors are passed as-is; the engine recognises
-    // `mtoc2Tag === "tensor"` and flattens.
-    const unwrapped = args.map(unwrapFmtArg);
-    const fmt = unwrapped[0] as string;
-    globalThis.$write = ctx.helpers.write;
-    jsFprintf(fmt, ...unwrapped.slice(1));
-    return [];
-  },
 };
-
-function unwrapFmtArg(v: unknown): unknown {
-  if (typeof v === "object" && v !== null) {
-    const o = v as { mtoc2Tag?: string; value?: string };
-    if (o.mtoc2Tag === "char" && typeof o.value === "string") return o.value;
-  }
-  return v;
-}

@@ -37,14 +37,6 @@ import {
   type Type,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import {
-  isChar,
-  isComplexValue,
-  isTensor,
-  makeComplexTensor,
-  makeTensor,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
 
 function charExactToTensorType(s: string): Type {
   if (s.length === 0) {
@@ -202,40 +194,5 @@ export const doubleBuiltin: Builtin = {
       return `mtoc2_tensor_from_row([${jsArrayFromChar(s)}], ${s.length})`;
     }
     throw new TypeError(`internal: 'double' emitJs reached on type ${t.kind}`);
-  },
-  call({ args }) {
-    const v: RuntimeValue = args[0];
-    if (typeof v === "number") return [v];
-    if (typeof v === "boolean") return [v ? 1 : 0];
-    if (isComplexValue(v)) return [v.re];
-    if (isTensor(v)) {
-      // Fresh data buffer; the resulting tensor is plain "double"
-      // (no `isLogical` flag).
-      if (v.imag !== undefined) {
-        return [
-          makeComplexTensor(
-            v.shape.slice(),
-            new Float64Array(v.data),
-            new Float64Array(v.imag)
-          ),
-        ];
-      }
-      return [makeTensor(v.shape.slice(), new Float64Array(v.data))];
-    }
-    if (isChar(v)) {
-      const s = v.value;
-      if (s.length === 0) {
-        return [makeTensor([0, 0], new Float64Array(0))];
-      }
-      if (s.length === 1) {
-        return [s.charCodeAt(0)];
-      }
-      const data = new Float64Array(s.length);
-      for (let i = 0; i < s.length; i++) data[i] = s.charCodeAt(i);
-      return [makeTensor([1, s.length], data)];
-    }
-    throw new TypeError(
-      `'double' got an unsupported runtime value (typeof = ${typeof v})`
-    );
   },
 };

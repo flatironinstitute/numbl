@@ -43,17 +43,12 @@ import {
 } from "../../../lowering/types.js";
 import type { NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import type { RuntimeTensor, RuntimeValue } from "../../../runtime/value.js";
 import {
   exactComplex,
   exactComplexArray,
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import {
-  mtoc2_tensor_cat as jsCat,
-  mtoc2_tensor_cat_complex as jsCatComplex,
-} from "../../runtime/snippets.gen.js";
 
 /** Compile-time view of an input arg for the shape-derivation passes. */
 interface InputView {
@@ -572,20 +567,5 @@ export const cat: Builtin = {
     }
     const helper = anyComplex ? "mtoc2_tensor_cat_complex" : "mtoc2_tensor_cat";
     return `${helper}(${dim}, ${nin}, [${items.join(", ")}])`;
-  },
-
-  call({ args, argTypes }) {
-    const dim = resolveDim(argTypes);
-    const anyComplex = argTypes.slice(1).some(a => isNumeric(a) && a.isComplex);
-    const inputs: RuntimeValue[] = [];
-    for (let i = 1; i < args.length; i++) {
-      inputs.push(args[i]);
-    }
-    if (anyComplex) {
-      return [
-        jsCatComplex(dim, inputs.length, inputs) as unknown as RuntimeTensor,
-      ];
-    }
-    return [jsCat(dim, inputs.length, inputs) as unknown as RuntimeTensor];
   },
 };

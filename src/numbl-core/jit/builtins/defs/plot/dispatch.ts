@@ -12,17 +12,6 @@ import {
   validateFormatArgs,
 } from "../io/_format_args.js";
 import { PLOT_ALL_NAMES } from "../../../numbl/index.js";
-import { mtoc2_plot_dispatch as jsPlotDispatch } from "../../runtime/snippets.gen.js";
-
-function unwrapPlotArg(v: unknown): unknown {
-  // Char wrappers flatten to plain strings for the encoder; everything
-  // else passes through (tensor / number / string).
-  if (typeof v === "object" && v !== null) {
-    const o = v as { mtoc2Tag?: string; value?: string };
-    if (o.mtoc2Tag === "char" && typeof o.value === "string") return o.value;
-  }
-  return v;
-}
 
 const PLOT_BUILTIN_NAMES: ReadonlyArray<string> = PLOT_ALL_NAMES;
 
@@ -63,11 +52,6 @@ function makePlotBuiltin(name: string): Builtin {
       useRuntime("mtoc2_plot_dispatch");
       const argList = [JSON.stringify(name), ...argsJs].join(", ");
       return `mtoc2_plot_dispatch(${argList})`;
-    },
-    call({ args, ctx }) {
-      globalThis.$write = ctx.helpers.write;
-      jsPlotDispatch(name, ...args.map(unwrapPlotArg));
-      return [];
     },
   };
 }

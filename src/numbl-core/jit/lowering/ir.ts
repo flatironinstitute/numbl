@@ -630,8 +630,6 @@ export interface IRFunc {
 // ── Program ─────────────────────────────────────────────────────────────
 
 export interface IRProgram {
-  /** Script-level top-level statements. */
-  topLevelStmts: IRStmt[];
   /** All specialized function definitions, keyed by their mangled cName. */
   functions: Map<string, IRFunc>;
 }

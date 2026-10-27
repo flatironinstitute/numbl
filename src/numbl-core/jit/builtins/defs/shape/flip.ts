@@ -24,11 +24,6 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_flip as jsFlip,
-  mtoc2_tensor_flip_complex as jsFlipComplex,
-} from "../../runtime/snippets.gen.js";
 
 function flipExact(
   src: Float64Array,
@@ -200,26 +195,6 @@ function defineFlip(opts: {
       }
       useRuntime("mtoc2_tensor_flip");
       return `mtoc2_tensor_flip(${argsJs[0]}, ${axisIdx})`;
-    },
-    call({ args, argTypes }) {
-      const a = argTypes[0] as NumericType;
-      if (!isMultiElement(a)) return [args[0]];
-      const axisIdx = resolveFlipAxis(
-        opts.name,
-        argTypes as NumericType[],
-        opts.fixedAxis
-      );
-      if (a.isComplex) {
-        return [
-          jsFlipComplex(
-            args[0] as RuntimeTensor,
-            axisIdx
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      return [
-        jsFlip(args[0] as RuntimeTensor, axisIdx) as unknown as RuntimeTensor,
-      ];
     },
   };
 }

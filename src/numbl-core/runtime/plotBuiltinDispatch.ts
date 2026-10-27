@@ -684,10 +684,9 @@ export const PLOT_STUB_NAMES: ReadonlyArray<string> = [
 
 /** The union of `PLOT_DISPATCH_NAMES` (renderable) and
  *  `PLOT_STUB_NAMES` (recognized-but-no-render). Every name a plotting
- *  script might invoke that numbl tolerates. Mtoc2 imports this to
- *  drive its own builtin registration so the two repos stay in
- *  lockstep — when numbl gains a new plot builtin, mtoc2 picks it up
- *  at the next `tsc` / `vite build` with no mtoc2-side edit. */
+ *  script might invoke that numbl tolerates. The JIT registers its plot
+ *  builtins from this list, so a new plot builtin needs no JIT-side
+ *  edit. */
 export const PLOT_ALL_NAMES: ReadonlyArray<string> = [
   ...PLOT_DISPATCH_NAMES,
   ...PLOT_STUB_NAMES,

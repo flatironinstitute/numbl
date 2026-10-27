@@ -14,13 +14,11 @@
  * Mirrors numbl's `triu` in `interpreter/builtins/array-extras.ts`.
  */
 
-import { defineTriangular, jsTriu, jsTriuComplex } from "./_triangular.js";
+import { defineTriangular } from "./_triangular.js";
 
 export const triu = defineTriangular({
   name: "triu",
   cHelper: "mtoc2_tensor_triu",
   cHelperComplex: "mtoc2_tensor_triu_complex",
   keep: (i, j, k) => j - i >= k,
-  jsHelper: jsTriu,
-  jsHelperComplex: jsTriuComplex,
 });

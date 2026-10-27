@@ -54,11 +54,6 @@ import {
 } from "../../../lowering/types.js";
 import type { DimInfo, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_reshape_nd as jsReshape,
-  mtoc2_reshape_nd_complex as jsReshapeComplex,
-} from "../../runtime/snippets.gen.js";
 
 const MAX_DIM_ARGS = MTOC2_MAX_NDIM;
 import {
@@ -67,7 +62,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import { CHECK_DIM_SNIPPET, checkDimRuntime } from "./_construct.js";
+import { CHECK_DIM_SNIPPET } from "./_construct.js";
 
 /** Per-axis resolution. `argIndex` (when present) refers to the index
  *  into the original Form A dim arg list (i.e. `argTypes.slice(1)` —
@@ -404,31 +399,5 @@ export const reshape: Builtin = {
     }
     useRuntime("mtoc2_reshape_nd");
     return `mtoc2_reshape_nd(${argsJs[0]}, ${resolved.axes.length}, [${dimList}])`;
-  },
-  call({ args, argTypes }) {
-    const resolved = resolveNewShape(argTypes.slice(1));
-    const a = argTypes[0];
-    const dims: number[] = [];
-    for (const axis of resolved.axes) {
-      if (axis.kind === "exact") {
-        dims.push(axis.value);
-      } else if (axis.kind === "infer") {
-        dims.push(-1);
-      } else {
-        const v = args[axis.argIndex + 1];
-        dims.push(
-          checkDimRuntime(typeof v === "number" ? v : Number(v as object))
-        );
-      }
-    }
-    const reshapeFn =
-      isNumeric(a) && a.isComplex ? jsReshapeComplex : jsReshape;
-    return [
-      reshapeFn(
-        args[0] as RuntimeTensor,
-        resolved.axes.length,
-        dims
-      ) as unknown as RuntimeTensor,
-    ];
   },
 };

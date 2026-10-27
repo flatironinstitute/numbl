@@ -21,11 +21,10 @@ import {
 } from "../../../lowering/types.js";
 import type { Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import { isTensor, isChar as isRtChar } from "../../../runtime/value.js";
 
-/** The only runtime-shaped AOT path is a numeric tensor of unknown
+/** The only runtime-shaped JIT path is a numeric tensor of unknown
  *  extent. Char of unknown length isn't representable as an
- *  `mtoc2_tensor_t`, so the AOT backends defer it to the interpreter. */
+ *  `mtoc2_tensor_t`, so the JIT defers it to the interpreter. */
 function requireNumericRuntime(t: Type): void {
   if (!isNumeric(t)) {
     throw new UnsupportedConstruct(
@@ -85,14 +84,5 @@ export const isempty: Builtin = {
     if (v === false) return "false";
     requireNumericRuntime(argTypes[0]);
     return `(${argsJs[0]}.shape.reduce((a,b)=>a*b,1) === 0)`;
-  },
-  call({ args }) {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return [false];
-    if (isTensor(v)) return [v.data.length === 0];
-    if (isRtChar(v)) return [v.value.length === 0];
-    if (typeof v === "string") return [false];
-    // struct / complex / handle
-    return [false];
   },
 };

@@ -10,11 +10,10 @@
  * it's a runtime error. mtoc2 lifts the equality check into
  * `transfer` so the mismatch is a type-time error.
  *
- * The result types are the input types as-is. The c-aot backend
- * still has to emit `_copy(...)` for owned types to satisfy the
- * "freshly-owned at every consume site" invariant; the js-aot
- * backend uses `mtoc2_deep_clone` for the same reason; the
- * interpreter follows numbl and deep-clones owned values too.
+ * The result types are the input types as-is. The C backend still
+ * has to emit `_copy(...)` for owned types to satisfy the
+ * "freshly-owned at every consume site" invariant; the JS backend
+ * uses `mtoc2_deep_clone` for the same reason.
  */
 
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
@@ -29,8 +28,6 @@ import {
   typeToString,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import type { RuntimeValue } from "../../../runtime/value.js";
-import { mtoc2_deep_clone } from "../../runtime/snippets.gen.js";
 
 /** Owned-helper-name family for a type. Returns `null` for scalar /
  *  non-owned. Mirrors `src/codegen/cHelpers.ts:ownedHelpersFor` but
@@ -247,19 +244,5 @@ export const deal: Builtin = {
     }
     // Value position: return a single expression value.
     return cloneIfOwned(0);
-  },
-
-  call({ args, argTypes, nargout }) {
-    const slotIdx = dealSlotIndices(argTypes, nargout);
-    const cloneIfOwned = (i: number): RuntimeValue => {
-      const v = args[slotIdx[i]];
-      if (isOwned(argTypes[slotIdx[i]])) {
-        return mtoc2_deep_clone(v) as RuntimeValue;
-      }
-      return v;
-    };
-    const out: RuntimeValue[] = [];
-    for (let i = 0; i < nargout; i++) out.push(cloneIfOwned(i));
-    return out;
   },
 };

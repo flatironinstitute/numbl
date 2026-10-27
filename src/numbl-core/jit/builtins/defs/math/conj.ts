@@ -26,8 +26,6 @@ import {
   exactComplexArray,
   exactRealArray,
 } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_tensor_conj_complex as jsTensorConjComplex } from "../../runtime/snippets.gen.js";
 
 export const conj: Builtin = {
   name: "conj",
@@ -109,24 +107,6 @@ export const conj: Builtin = {
       return `mtoc2_cconj(${argsJs[0]})`;
     }
     return `(${argsJs[0]})`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (isMultiElement(a)) {
-      if (a.isComplex) {
-        return [
-          jsTensorConjComplex(
-            args[0] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      return [args[0]];
-    }
-    if (a.isComplex) {
-      const z = args[0] as { re: number; im: number };
-      return [{ re: z.re, im: -z.im }];
-    }
-    return [args[0]];
   },
   elementwise: true,
 };

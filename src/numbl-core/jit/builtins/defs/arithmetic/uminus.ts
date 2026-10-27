@@ -21,16 +21,6 @@ import {
   exactComplex,
   exactComplexArray,
 } from "../_shared.js";
-import {
-  isComplexValue,
-  type RuntimeTensor,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
-import {
-  mtoc2_cneg,
-  mtoc2_tensor_uminus,
-  mtoc2_tensor_uminus_complex,
-} from "../../runtime/snippets.gen.js";
 
 export const uminus: Builtin = {
   name: "uminus",
@@ -121,30 +111,6 @@ export const uminus: Builtin = {
       return `mtoc2_cneg(${argsJs[0]})`;
     }
     return `(-${argsJs[0]})`;
-  },
-  call({ args, argTypes }) {
-    const ty = argTypes[0] as NumericType;
-    if (isMultiElement(ty)) {
-      if (ty.isComplex) {
-        return [
-          mtoc2_tensor_uminus_complex(
-            args[0] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      return [
-        mtoc2_tensor_uminus(
-          args[0] as RuntimeTensor
-        ) as unknown as RuntimeTensor,
-      ];
-    }
-    if (isNumeric(ty) && ty.isComplex) {
-      const v = args[0] as RuntimeValue;
-      const cx = isComplexValue(v) ? v : { re: Number(v), im: 0 };
-      return [mtoc2_cneg(cx)];
-    }
-    const v = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    return [-v];
   },
   elementwise: true,
 };

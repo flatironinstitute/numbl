@@ -1,8 +1,7 @@
 /* mtoc2 runtime helpers for `isequal` over real numeric values.
  *
- * Complex tensors, char / string, struct and cell comparison are
- * handled by the interpreter's `call` hook; the AOT `emitC` rejects
- * those argument combinations with `UnsupportedConstruct`. These two
+ * `emitC` rejects complex tensors, char / string, struct and cell
+ * argument combinations with `UnsupportedConstruct`. These two
  * helpers cover the dominant cases: tensor-vs-tensor and
  * scalar-vs-tensor over real data.
  *

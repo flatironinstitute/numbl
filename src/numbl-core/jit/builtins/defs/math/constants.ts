@@ -15,12 +15,7 @@
  */
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import { scalarDouble } from "../../../lowering/types.js";
-import {
-  type Builtin,
-  requireEmitC,
-  requireEmitJs,
-  requireCall,
-} from "../../registry.js";
+import { type Builtin, requireEmitC, requireEmitJs } from "../../registry.js";
 import { defineShapeConstructor } from "../shape/_construct.js";
 
 function constBuiltin(
@@ -60,9 +55,6 @@ function constBuiltin(
     },
     emitJs() {
       return jsLiteral;
-    },
-    call() {
-      return [value];
     },
     // Per-slot is the same literal — no loop-dependent context. Marking
     // elementwise lets the fused emitter accept Assigns whose RHS contains
@@ -114,10 +106,6 @@ function fillConstBuiltin(
             : "NaN";
       }
       return requireEmitJs(shape)(args);
-    },
-    call(args) {
-      if (args.argTypes.length === 0) return [value];
-      return requireCall(shape)(args);
     },
     // Per-slot is only invoked by the fused emitter for elementwise ops,
     // where the constant appears as a scalar slot. The shape-constructor

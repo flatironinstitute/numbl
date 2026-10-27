@@ -28,15 +28,4 @@ export const iscell: Builtin = {
   emitJs({ argTypes }) {
     return isCell(argTypes[0]) ? `true` : `false`;
   },
-  call({ args }) {
-    const v = args[0];
-    if (
-      typeof v === "object" &&
-      v !== null &&
-      (v as { mtoc2Tag?: string }).mtoc2Tag === "cell"
-    ) {
-      return [true];
-    }
-    return [false];
-  },
 };

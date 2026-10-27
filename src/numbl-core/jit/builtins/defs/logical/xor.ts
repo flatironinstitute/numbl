@@ -66,9 +66,4 @@ export const xorBuiltin: Builtin = {
   emitJs({ argsJs }) {
     return `((Number(${argsJs[0]}) !== 0) !== (Number(${argsJs[1]}) !== 0))`;
   },
-  call({ args }) {
-    const av = Number(args[0]);
-    const bv = Number(args[1]);
-    return [(av !== 0) !== (bv !== 0)];
-  },
 };

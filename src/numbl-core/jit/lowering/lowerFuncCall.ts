@@ -265,30 +265,6 @@ export function lowerFuncCall(
       }
       return lowerClassConstructorCall.call(this, reg, e.args, e.span);
     }
-    case "mtoc2UserFunction": {
-      // A `.mtoc2.js` user function. The evaluated `Builtin` lives on
-      // the workspace; route through its `transfer` exactly like a
-      // global builtin call. `emit` runs at codegen time via the
-      // workspace lookup the emitter consults (see
-      // `lookupBuiltinForEmit` in `src/codegen/runtime.ts`).
-      const userBuiltin = this.workspace.getUserBuiltin(target.name);
-      if (!userBuiltin) {
-        throw new UnsupportedConstruct(
-          `internal: workspace resolved '${target.name}' to a .mtoc2.js ` +
-            `function but no Builtin is loaded`,
-          e.span
-        );
-      }
-      const ty = withSpan(e.span, () => userBuiltin.transfer(argTypes, 1))[0];
-      return {
-        kind: "Call",
-        cName: e.name,
-        name: e.name,
-        args,
-        ty,
-        span: e.span,
-      };
-    }
   }
 }
 
@@ -304,7 +280,7 @@ export function lowerFuncCall(
  *
  *  Runtime-computed handle expressions (`feval(get_h(), ...)`,
  *  `feval(handles{k}, ...)`, inline `@(x) ...`) are rejected with
- *  `UnsupportedConstruct` — mtoc2's AOT call sites are specialized
+ *  `UnsupportedConstruct` — JIT call sites are specialized
  *  at lowering time, so the handle's target name must be statically
  *  visible. The user-level workaround is to bind the value to a
  *  local first (`f = ...; feval(f, ...)`). */

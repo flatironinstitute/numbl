@@ -1,8 +1,7 @@
 /**
- * Builtin registry — the contract every mtoc2 builtin (and future
- * user `.mtoc2.js` function) implements.
+ * Builtin registry — the contract every JIT builtin implements.
  *
- * Each builtin can supply up to three mirrored hooks plus the
+ * Each builtin can supply two mirrored codegen hooks plus the
  * always-required `transfer`:
  *
  *   transfer(argTypes, nargout) — required. Given input types and
@@ -32,15 +31,9 @@
  *     outputs land in these locals via the framework's destructuring
  *     wrapper. Activates JS-side runtime snippets via `useRuntime`.
  *
- *   call({args, argTypes, nargout, ctx}) — optional. Direct JS
- *     function used by the interpreter and as a JIT bailout target.
- *     Returns one runtime value per output slot. The args shape
- *     mirrors the emit hooks' shape so dispatch on `argTypes` /
- *     `nargout` stays parallel across all three.
- *
- *   elementwise? — when true, every defined emit hook (and `call`)
- *     must also produce a correct scalar output when called with
- *     scalar argTypes and scalar argsC/argsJs/args. The framework
+ *   elementwise? — when true, every defined emit hook must also
+ *     produce a correct scalar output when called with
+ *     scalar argTypes and scalar argsC/argsJs. The framework
  *     uses this for same-shape tensor fusion (and, later, broadcast
  *     / reduction-inner / mask / stencil fusion). Absence = "do not
  *     fuse me; use the regular emit on the full tensor types."
@@ -51,8 +44,6 @@
  */
 
 import type { Type } from "../lowering/types.js";
-import type { RuntimeValue } from "../runtime/value.js";
-import type { RuntimeContext } from "../runtime/context.js";
 
 // ── Shared arg-shape ────────────────────────────────────────────────────
 
@@ -76,7 +67,7 @@ export interface EmitCArgs extends CommonArgs {
   outArgsC?: string[];
   /** Activate a runtime C snippet on the current translation unit.
    *  See `runtime.ts` for the registry and `InlineSnippet` for the
-   *  user-supplied form. */
+   *  inline form. */
   useRuntime(spec: string | InlineSnippet): void;
 }
 
@@ -97,15 +88,6 @@ export interface EmitJsArgs extends CommonArgs {
   useRuntime(spec: string | InlineSnippet): void;
 }
 
-export interface CallArgs extends CommonArgs {
-  /** Per-arg runtime values, evaluated by the interpreter at the
-   *  call site. */
-  args: RuntimeValue[];
-  /** Host bag — `helpers.write` for stdout, future hooks for plot /
-   *  error / time. */
-  ctx: RuntimeContext;
-}
-
 // ── Builtin ──────────────────────────────────────────────────────────────
 
 export interface Builtin {
@@ -123,9 +105,6 @@ export interface Builtin {
   /** Optional: JS codegen. */
   emitJs?(args: EmitJsArgs): string;
 
-  /** Optional: direct JS function — interpreter / JIT bailout. */
-  call?(args: CallArgs): RuntimeValue[];
-
   /** Elementwise = result is computed pointwise. */
   elementwise?: boolean;
 
@@ -141,8 +120,8 @@ export function isElementwiseCall(b: Builtin, argTypes: Type[]): boolean {
   return b.elementwise === true || b.isElementwiseCall?.(argTypes) === true;
 }
 
-/** Inline-defined runtime snippet supplied by a user `.mtoc2.js`
- *  builtin's `emitC` / `emitJs`. Re-exported from `runtime.ts` — kept
+/** Inline-defined runtime snippet supplied by an emitter via
+ *  `useRuntime({...})`. Re-exported from `runtime.ts` — kept
  *  here for doc-locality with the `Builtin` contract. */
 export interface InlineSnippet {
   name: string;
@@ -175,21 +154,6 @@ export function allBuiltinNames(): readonly string[] {
   return Array.from(REGISTRY.keys());
 }
 
-// ── Backend capability probes ───────────────────────────────────────────
-
-export type Backend = "c" | "js" | "interpreter";
-
-export function builtinSupports(b: Builtin, backend: Backend): boolean {
-  switch (backend) {
-    case "c":
-      return b.emitC !== undefined;
-    case "js":
-      return b.emitJs !== undefined;
-    case "interpreter":
-      return b.call !== undefined;
-  }
-}
-
 // ── Internal accessors (post-backend-selection) ─────────────────────────
 //
 // After the framework has selected a backend and validated that every
@@ -215,13 +179,4 @@ export function requireEmitJs(b: Builtin): (args: EmitJsArgs) => string {
     );
   }
   return b.emitJs.bind(b);
-}
-
-export function requireCall(b: Builtin): (args: CallArgs) => RuntimeValue[] {
-  if (!b.call) {
-    throw new Error(
-      `internal: builtin '${b.name}' has no call hook (backend selection should have rejected this earlier)`
-    );
-  }
-  return b.call.bind(b);
 }

@@ -5,7 +5,7 @@
  *
  *   - argument validation (1..2 args, real-double tensor, k literal int)
  *   - `transfer` (exact-fold when input data fits)
- *   - hooks builders (emitC / emitJs / call) parameterized by the
+ *   - hooks builders (emitC / emitJs) parameterized by the
  *     family-specific predicate + runtime helper.
  *
  * Mirrors `triPart` in numbl's
@@ -26,26 +26,13 @@ import {
   typeToString,
 } from "../../../lowering/types.js";
 import type { NumericType, Type } from "../../../lowering/types.js";
-import type {
-  Builtin,
-  CallArgs,
-  EmitCArgs,
-  EmitJsArgs,
-} from "../../registry.js";
+import type { Builtin, EmitCArgs, EmitJsArgs } from "../../registry.js";
 import {
   exactComplex,
   exactComplexArray,
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { isTensor, makeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_triu as jsTriu,
-  mtoc2_tensor_tril as jsTril,
-  mtoc2_tensor_triu_complex as jsTriuComplex,
-  mtoc2_tensor_tril_complex as jsTrilComplex,
-} from "../../runtime/snippets.gen.js";
 
 /** Resolve the optional `k` argument to a JS integer. Throws on
  *  dynamic / non-integer / non-scalar k. */
@@ -84,15 +71,10 @@ interface TriangularSpec {
   cHelperComplex: string;
   /** Keep predicate matching numbl's `triPart` (column-major i,j). */
   keep(i: number, j: number, k: number): boolean;
-  /** JS-side helper for real input. */
-  jsHelper: (a: RuntimeTensor, k: number) => unknown;
-  /** JS-side helper for complex input. */
-  jsHelperComplex: (a: RuntimeTensor, k: number) => unknown;
 }
 
 export function defineTriangular(spec: TriangularSpec): Builtin {
-  const { name, cHelper, cHelperComplex, keep, jsHelper, jsHelperComplex } =
-    spec;
+  const { name, cHelper, cHelperComplex, keep } = spec;
 
   function transfer(argTypes: Type[], nargout: number): Type[] {
     if (argTypes.length < 1 || argTypes.length > 2) {
@@ -233,39 +215,5 @@ export function defineTriangular(spec: TriangularSpec): Builtin {
     return `${cHelper}(${argsJs[0]}, ${k})`;
   }
 
-  function call({ args, argTypes }: CallArgs) {
-    const a = argTypes[0] as NumericType;
-    const k = resolveK(name, argTypes);
-
-    if (isScalar(a)) {
-      if (keep(0, 0, k)) return [args[0]];
-      if (a.isComplex) return [{ re: 0, im: 0 }];
-      return [0];
-    }
-
-    if (!isTensor(args[0])) {
-      throw new TypeError(
-        `'${name}' runtime arg has tensor type but runtime value isn't a tensor`
-      );
-    }
-    const t = args[0] as RuntimeTensor;
-    const rows = t.shape[0];
-    const cols = t.shape[1];
-    // Empty matrix degenerate: just return a fresh empty tensor with
-    // the same shape (matches numbl's behavior — `triPart` allocates
-    // a zero-length data array and returns it).
-    if (rows === 0 || cols === 0) {
-      return [makeTensor([rows, cols], new Float64Array(0))];
-    }
-    if (a.isComplex) {
-      return [jsHelperComplex(t, k) as unknown as RuntimeTensor];
-    }
-    return [jsHelper(t, k) as unknown as RuntimeTensor];
-  }
-
-  return { name, transfer, emitC, emitJs, call };
+  return { name, transfer, emitC, emitJs };
 }
-
-// Re-export the JS helpers so the per-builtin files don't each have to
-// re-import them.
-export { jsTriu, jsTril, jsTriuComplex, jsTrilComplex };

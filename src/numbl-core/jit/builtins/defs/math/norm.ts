@@ -31,14 +31,6 @@ import {
 } from "../../../lowering/types.js";
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import type { Builtin } from "../../registry.js";
-import { isComplexValue, type RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_cabs,
-  mtoc2_norm2_real as jsNorm2Real,
-  mtoc2_norm2_complex as jsNorm2Complex,
-  mtoc2_norm_p_real as jsNormPReal,
-  mtoc2_norm_p_complex as jsNormPComplex,
-} from "../../runtime/snippets.gen.js";
 import {
   exactDouble,
   exactComplex,
@@ -267,25 +259,5 @@ export const norm: Builtin = {
       return `mtoc2_cabs(${argsJs[0]})`;
     }
     return `Math.abs(${argsJs[0]})`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (isMultiElement(a)) {
-      const p = resolveP(argTypes);
-      const fallbackP = p !== undefined ? p : Number(args[1]);
-      if (fallbackP === 2 && argTypes.length < 2) {
-        const fn = a.isComplex ? jsNorm2Complex : jsNorm2Real;
-        return [fn(args[0] as RuntimeTensor)];
-      }
-      const fn = a.isComplex ? jsNormPComplex : jsNormPReal;
-      return [fn(args[0] as RuntimeTensor, fallbackP)];
-    }
-    if (a.isComplex) {
-      const v = args[0];
-      const cx = isComplexValue(v) ? v : { re: Number(v), im: 0 };
-      return [mtoc2_cabs(cx)];
-    }
-    const v = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    return [Math.abs(v)];
   },
 };

@@ -21,14 +21,6 @@
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import type { Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import {
-  isChar as isRtChar,
-  isComplexValue,
-  isHandleValue,
-  isTensor,
-  makeChar,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
 
 function classNameForType(t: Type): string {
   switch (t.kind) {
@@ -101,38 +93,5 @@ export const classBuiltin: Builtin = {
   emitJs({ argTypes }) {
     const name = classNameForType(argTypes[0]);
     return `({mtoc2Tag:"char", value:${JSON.stringify(name)}})`;
-  },
-  call({ args, argTypes }) {
-    // Check the runtime value for a function handle first — the
-    // interpreter's `inferTypeFromValue` does not yet detect handles
-    // (it falls them through to struct-like), which would otherwise
-    // misclassify `class(@foo)` as "struct".
-    if (isHandleValue(args[0])) return [makeChar("function_handle")];
-    const t = argTypes[0];
-    if (t.kind !== "Unknown" && t.kind !== "Void") {
-      return [makeChar(classNameForType(t))];
-    }
-    // Fallback runtime classifier — exercised only when the static
-    // type was lost (shouldn't happen via `inferTypeFromValue`, but
-    // keep parity with numbl for safety).
-    const v: RuntimeValue = args[0];
-    if (typeof v === "number") return [makeChar("double")];
-    if (typeof v === "boolean") return [makeChar("logical")];
-    if (typeof v === "string") return [makeChar("string")];
-    if (isRtChar(v)) return [makeChar("char")];
-    if (isComplexValue(v)) return [makeChar("double")];
-    if (isTensor(v)) {
-      return [makeChar(v.isLogical ? "logical" : "double")];
-    }
-    if (isHandleValue(v)) return [makeChar("function_handle")];
-    if (v && typeof v === "object") {
-      if ((v as { mtoc2Tag?: string }).mtoc2Tag === "cell") {
-        return [makeChar("cell")];
-      }
-      const cn = (v as { mtoc2Class?: string }).mtoc2Class;
-      if (cn !== undefined) return [makeChar(cn)];
-      return [makeChar("struct")];
-    }
-    return [makeChar("unknown")];
   },
 };

@@ -47,14 +47,6 @@ export type ResolvedTarget =
       argTypes: ItemType[];
     }
   | {
-      /** mtoc2-only user function (.mtoc2.js). Numbl's interpreter
-       *  rejects calls to this kind; mtoc2's loader picks up the source
-       *  from the workspace registry and evaluates it. */
-      kind: "mtoc2UserFunction";
-      name: string;
-      argTypes: ItemType[];
-    }
-  | {
       kind: "workspaceClassConstructor";
       className: string;
       argTypes: ItemType[];
@@ -465,12 +457,6 @@ function resolveFunctionImpl(
   // but .m wins because it's checked first.
   if (index.jsUserFunctions.has(name)) {
     return { kind: "jsUserFunction", name, argTypes };
-  }
-
-  // 4c. mtoc2-only user function (.mtoc2.js). Same priority tier — .m
-  // and .numbl.js both shadow it if present with the same name.
-  if (index.mtoc2UserFunctions.has(name)) {
-    return { kind: "mtoc2UserFunction", name, argTypes };
   }
 
   // 5. Workspace class constructor

@@ -14,8 +14,6 @@ import {
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import type { Builtin } from "../../registry.js";
 import { requireRealOrComplex, exactDouble, exactComplex } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_tensor_real_complex as jsTensorRealComplex } from "../../runtime/snippets.gen.js";
 
 export const real: Builtin = {
   name: "real",
@@ -79,24 +77,6 @@ export const real: Builtin = {
       return `mtoc2_creal(${argsJs[0]})`;
     }
     return `(${argsJs[0]})`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (isMultiElement(a)) {
-      if (a.isComplex) {
-        return [
-          jsTensorRealComplex(
-            args[0] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      return [args[0]];
-    }
-    if (a.isComplex) {
-      const z = args[0] as { re: number; im: number };
-      return [z.re];
-    }
-    return [args[0]];
   },
   elementwise: true,
 };

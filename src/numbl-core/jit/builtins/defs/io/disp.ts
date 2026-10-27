@@ -16,15 +16,6 @@ function isCompoundDispTy(t: Type): boolean {
   return t.kind === "Struct" || t.kind === "Cell" || t.kind === "Class";
 }
 import type { Builtin } from "../../registry.js";
-import { isChar, isComplexValue, isTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_disp_complex,
-  mtoc2_disp_double,
-  mtoc2_disp_struct,
-  mtoc2_disp_tensor,
-  mtoc2_disp_tensor_complex,
-  mtoc2_format_cell,
-} from "../../runtime/snippets.gen.js";
 
 export const disp: Builtin = {
   name: "disp",
@@ -96,7 +87,7 @@ export const disp: Builtin = {
       // without a paired emit dispatch — fail loud rather than
       // emitting a stray `0` and confusing the C compiler.
       throw new UnsupportedConstruct(
-        `internal: 'disp' has no c-aot emit for type '${t.kind}'`
+        `internal: 'disp' has no C emit for type '${t.kind}'`
       );
     }
     return call;
@@ -143,36 +134,5 @@ export const disp: Builtin = {
     throw new UnsupportedConstruct(
       `'disp' emitJs for arg kind '${t.kind}' is not yet wired`
     );
-  },
-  call({ args, ctx }) {
-    const v = args[0];
-    globalThis.$write = ctx.helpers.write;
-    if (typeof v === "number") mtoc2_disp_double(v);
-    else if (typeof v === "boolean") mtoc2_disp_double(v ? 1 : 0);
-    else if (typeof v === "string") ctx.helpers.write(v + "\n");
-    else if (isChar(v)) ctx.helpers.write(v.value + "\n");
-    else if (isComplexValue(v)) mtoc2_disp_complex(v);
-    else if (isTensor(v)) {
-      if (v.imag !== undefined) {
-        mtoc2_disp_tensor_complex(v);
-      } else {
-        mtoc2_disp_tensor(v);
-      }
-    } else if (
-      v &&
-      typeof v === "object" &&
-      (v as { mtoc2Tag?: string }).mtoc2Tag === "cell"
-    ) {
-      ctx.helpers.write(
-        mtoc2_format_cell(v as Parameters<typeof mtoc2_format_cell>[0]) + "\n"
-      );
-    } else if (v && typeof v === "object") {
-      mtoc2_disp_struct(v as Record<string, unknown>);
-    } else {
-      throw new UnsupportedConstruct(
-        `'disp' 'call' got an unsupported value shape (got ${typeof v})`
-      );
-    }
-    return [];
   },
 };

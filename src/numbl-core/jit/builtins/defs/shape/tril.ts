@@ -14,13 +14,11 @@
  * Mirrors numbl's `tril` in `interpreter/builtins/array-extras.ts`.
  */
 
-import { defineTriangular, jsTril, jsTrilComplex } from "./_triangular.js";
+import { defineTriangular } from "./_triangular.js";
 
 export const tril = defineTriangular({
   name: "tril",
   cHelper: "mtoc2_tensor_tril",
   cHelperComplex: "mtoc2_tensor_tril_complex",
   keep: (i, j, k) => i - j >= -k,
-  jsHelper: jsTril,
-  jsHelperComplex: jsTrilComplex,
 });

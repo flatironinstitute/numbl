@@ -30,12 +30,6 @@ import {
 import type { NumericType } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
-import type { RuntimeTensor, RuntimeValue } from "../../../runtime/value.js";
-import { isTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_from_row,
-  mtoc2_tensor_size_row,
-} from "../../runtime/snippets.gen.js";
 
 export const size: Builtin = {
   name: "size",
@@ -212,36 +206,5 @@ export const size: Builtin = {
       return `mtoc2_tensor_from_row([1, 1], 2)`;
     }
     return `mtoc2_tensor_size_row(${argsJs[0]})`;
-  },
-  call({ args, argTypes, nargout }) {
-    const t = args[0] as RuntimeValue;
-    // Multi-output: one scalar per output slot. Scalars (non-tensors)
-    // report ndim=2 with [1, 1]; tensors report their actual shape;
-    // overflow slots get 1.
-    if (nargout >= 2) {
-      const shape = isTensor(t) ? t.shape : [1, 1];
-      const out: RuntimeValue[] = [];
-      for (let i = 0; i < nargout; i++) {
-        out.push(i < shape.length ? shape[i] : 1);
-      }
-      return out;
-    }
-    if (argTypes.length === 2) {
-      const kv =
-        typeof args[1] === "number" ? args[1] : Number(args[1] as object);
-      const k = Math.trunc(kv);
-      if (k < 1) {
-        throw new TypeError(
-          `'size' dim argument must be a positive integer (got ${k})`
-        );
-      }
-      if (isTensor(t)) return [k <= t.shape.length ? t.shape[k - 1] : 1];
-      return [1];
-    }
-    if (!isTensor(t)) {
-      // Scalar: pad to a 2-element row [1, 1].
-      return [mtoc2_tensor_from_row([1, 1], 2) as unknown as RuntimeTensor];
-    }
-    return [mtoc2_tensor_size_row(t) as unknown as RuntimeTensor];
   },
 };

@@ -19,8 +19,6 @@ import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import { scalarLogical, isNumeric, isScalar } from "../../../lowering/types.js";
 import type { Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import { isTensor, isComplexValue } from "../../../runtime/value.js";
-import { mtoc2_tensor_imag_all_zero } from "../../runtime/snippets.gen.js";
 
 function checkArity(argTypes: Type[], nargout: number): void {
   if (argTypes.length !== 1) {
@@ -79,12 +77,5 @@ export const isreal: Builtin = {
       return `mtoc2_tensor_imag_all_zero(${argsJs[0]})`;
     }
     return `(${argsJs[0]}.im === 0)`;
-  },
-  call({ args }) {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return [true];
-    if (isComplexValue(v)) return [v.im === 0];
-    if (isTensor(v)) return [mtoc2_tensor_imag_all_zero(v)];
-    return [true];
   },
 };

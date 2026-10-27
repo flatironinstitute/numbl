@@ -7,7 +7,6 @@ import {
   isScalar,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import { isTensor } from "../../../runtime/value.js";
 
 export const numel: Builtin = {
   name: "numel",
@@ -43,14 +42,5 @@ export const numel: Builtin = {
     if (isNumeric(t) && isScalar(t)) return `1`;
     // For a tensor, the JS representation carries `.shape`; multiply it.
     return `${argsJs[0]}.shape.reduce((a,b)=>a*b, 1)`;
-  },
-  call({ args }) {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return [1];
-    if (isTensor(v)) return [v.shape.reduce((a, b) => a * b, 1)];
-    if (typeof v === "string") return [v.length];
-    throw new TypeError(
-      `'numel' got an unsupported runtime value (typeof = ${typeof v})`
-    );
   },
 };

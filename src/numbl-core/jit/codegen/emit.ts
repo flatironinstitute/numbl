@@ -1,9 +1,9 @@
 /**
- * Single-file C codegen for mtoc2 IR. Emits:
+ * Single-file C codegen for JIT IR. Emits a shared-library module:
  *   1. Standard headers + activated runtime snippets (in dep order).
  *   2. Forward declarations for user-function specializations.
- *   3. Function specialization bodies.
- *   4. `main()` containing top-level statements.
+ *   3. Function specialization bodies; the entry spec gets extern
+ *      linkage so the host can `dlsym` it.
  *
  * Scalars compile to bare `double`. Multi-element tensors compile to
  * `mtoc2_tensor_t` — no refcount, no COW. The codegen invariant
@@ -14,16 +14,10 @@
  * later distinction uniform (the assign helper releases the prior
  * buffer, which is NULL on first call). Scope-exit emits a
  * `mtoc2_tensor_free` for every owned local.
- *
- * `includeRuntime` (default true): when false, the activated runtime
- * helpers are omitted from the output (a placeholder comment is shown
- * instead) so the IDE's "runtime helpers" toggle can show user-level
- * code in isolation. The emitted C is not compilable in that mode —
- * it's a viewing aid.
  */
 
 import type { IRExpr, IRStmt, IRProgram } from "../lowering/ir.js";
-import { cTypeFor, requireOwnedHelpers } from "./cHelpers.js";
+import { requireOwnedHelpers } from "./cHelpers.js";
 import {
   cellTypedefName,
   classTypedefName,
@@ -44,7 +38,6 @@ import {
   useRuntimeByName,
   type RuntimeState,
 } from "./runtime.js";
-import { computeFutureTouches } from "./liveness.js";
 import {
   emitNamedTypedef,
   specForClass,
@@ -52,56 +45,24 @@ import {
   specForStruct,
 } from "./emitNamedTypedef.js";
 import { emitCellTypedef } from "./emitCellTypedef.js";
-import {
-  collectLocals,
-  defaultInitFor,
-  emitBody,
-  emitFunction,
-  fnParamList,
-  fnRetType,
-  type EmitReturnTail,
-} from "./emitStmt.js";
+import { emitFunction, fnParamList, fnRetType } from "./emitStmt.js";
 
 export interface EmitOptions {
-  /** Include the activated runtime helper bodies in the output.
-   *  Default true. When false, headers + a placeholder stub replace
-   *  them so the user sees only their generated code. */
-  includeRuntime?: boolean;
-  /** Max-threads OpenMP setting. See `TranslateOptions.threads`. */
-  threads?: number | "auto";
-  /** Workspace context. Threaded through `RuntimeState` so emit-time
-   *  builtin lookups consult `.mtoc2.js` user builtins via
-   *  `getUserBuiltin`. Optional — vitest unit tests that don't drive
-   *  through a workspace can omit it. */
-  workspace?: import("./runtime.js").WorkspaceLike;
-  /** JIT-mode emit. When set, the cName of a single user-function spec
-   *  to expose at module scope (no `static` qualifier so `dlsym` /
-   *  koffi can resolve it after `dlopen`). Disables the `int main()`
-   *  emission — the module becomes a `.so` consumers load and call
-   *  into directly. Requires `prog.topLevelStmts` to be empty and
-   *  `prog.functions` to contain the named spec; every spec
-   *  transitively called by the entry must also be in
-   *  `prog.functions` so internal calls resolve. */
-  exposeSpec?: string;
+  /** cName of the entry spec to expose at module scope (no `static`
+   *  qualifier so `dlsym` / koffi can resolve it after `dlopen`).
+   *  `prog.functions` must contain it and every spec it transitively
+   *  calls. */
+  exposeSpec: string;
 }
 
-export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
-  const includeRuntime = opts.includeRuntime ?? true;
-  const threads = opts.threads;
-  const state = newRuntimeState(opts.workspace);
+export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
+  const state = newRuntimeState();
   const userParts: string[] = [];
 
-  if (opts.exposeSpec !== undefined) {
-    if (prog.topLevelStmts.length > 0) {
-      throw new Error(
-        "emitProgram: 'exposeSpec' is incompatible with non-empty 'topLevelStmts'"
-      );
-    }
-    if (!prog.functions.has(opts.exposeSpec)) {
-      throw new Error(
-        `emitProgram: 'exposeSpec' references unknown spec '${opts.exposeSpec}'`
-      );
-    }
+  if (!prog.functions.has(opts.exposeSpec)) {
+    throw new Error(
+      `emitProgram: 'exposeSpec' references unknown spec '${opts.exposeSpec}'`
+    );
   }
 
   // Grow-bail pre-pass: scan every function for an indexed store. Done
@@ -147,9 +108,8 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
   }
   if (namedTypedefs.length > 0) userParts.push("");
 
-  // Forward declarations. The exposed spec (when `exposeSpec` is set)
-  // gets `extern` linkage so `dlsym` / koffi can resolve it; everything
-  // else stays `static`.
+  // Forward declarations. The exposed spec gets `extern` linkage so
+  // `dlsym` / koffi can resolve it; everything else stays `static`.
   for (const fn of prog.functions.values()) {
     const sc = fn.cName === opts.exposeSpec ? "" : "static ";
     userParts.push(`${sc}${fnRetType(fn)} ${fn.cName}(${fnParamList(fn)});`);
@@ -163,126 +123,9 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
     userParts.push("");
   }
 
-  // JIT mode (`exposeSpec` set): skip the `int main()` emission. The
-  // module is a `.so` the host loads + calls into directly.
-  if (opts.exposeSpec !== undefined) {
-    // Headers: BASE_HEADERS ∪ activated-snippet headers, deduped.
-    const headers = new Set<string>(BASE_HEADERS);
-    for (const h of collectRuntimeHeaders(state)) headers.add(h);
-
-    const out: string[] = [];
-    // Feature-test macro: must precede every <...> include so glibc
-    // exposes POSIX.1b extensions (clock_gettime / CLOCK_MONOTONIC,
-    // used by tictoc.h). Hosts that compile mtoc2-emitted C under a
-    // strict dialect (`-std=c11`, not `-std=gnu11`) need this to see
-    // the POSIX prototypes inside <time.h>.
-    out.push("#define _POSIX_C_SOURCE 199309L");
-    out.push("");
-    for (const h of headers) out.push(`#include ${h}`);
-    out.push("");
-
-    if (state.active.size > 0) {
-      out.push(
-        includeRuntime ? renderRuntimeBodies(state) : runtimePlaceholder(state)
-      );
-    }
-
-    out.push("#ifdef I");
-    out.push("#undef I");
-    out.push("#endif");
-    out.push("#ifdef complex");
-    out.push("#undef complex");
-    out.push("#endif");
-    out.push("#ifdef imaginary");
-    out.push("#undef imaginary");
-    out.push("#endif");
-    out.push("");
-
-    out.push(...userParts);
-
-    // Allocator helpers exported as part of the .so so a JIT host
-    // (koffi) can resolve them by name without separately loading
-    // libc. `mtoc2_alloc` is used by the runtime helpers internally;
-    // `mtoc2_jit_free` is the host-side counterpart for releasing
-    // tensor buffers returned across the FFI. Both go through the
-    // same malloc/free in libc that mtoc2's emitted code already
-    // depends on transitively, so there's no allocator-mismatch
-    // risk.
-    out.push("/* JIT-host allocator wrapper. The .so already pulls in");
-    out.push(" * libc's free transitively via <stdlib.h>; this wrapper");
-    out.push(" * exposes it through the .so's own symbol table so the");
-    out.push(" * host's koffi binding doesn't need to dlopen libc");
-    out.push(" * separately. */");
-    out.push("void mtoc2_jit_free(void *p) { free(p); }");
-    out.push("");
-    return out.join("\n");
-  }
-
-  // Main.
-  userParts.push("int main(void) {");
-  // `--threads N` (numeric, >= 2) → pin the OpenMP team size at
-  // startup; subsequent `#pragma omp parallel for` regions cap at N.
-  // `--threads auto` doesn't emit anything here — OpenMP picks from
-  // `OMP_NUM_THREADS` / core count via its own defaults. The
-  // `omp_set_num_threads` symbol comes from `<omp.h>`, which the
-  // header block below pulls in conditionally on the same predicate.
-  if (typeof threads === "number" && threads > 1) {
-    userParts.push(`  omp_set_num_threads(${threads});`);
-  }
-  const mainLocals = collectLocals(prog.topLevelStmts);
-  const mainOwned = mainLocals.owned;
-  for (const o of mainOwned) {
-    const h = activatedOwnedHelpers(o.ty, state);
-    userParts.push(`  ${cTypeFor(o.ty)} ${o.cName} = ${h.empty}();`);
-  }
-  for (const o of mainLocals.scalars) {
-    userParts.push(`  ${cTypeFor(o.ty)} ${o.cName} = ${defaultInitFor()};`);
-  }
-  const mainFutureTouches = computeFutureTouches(prog.topLevelStmts);
-  const mainOwnedTypes = new Map<string, Type>(
-    mainOwned.map(o => [o.cName, o.ty])
-  );
-  // Tail closure for main: scope-exit frees + `return 0;`. Called both
-  // at every `ReturnFromFunction` inside the top-level body (inline
-  // cleanup — no goto) and at the fall-through bottom. Activates the
-  // owned `_free` runtime deps eagerly so the snippet ships even when
-  // every path is an early return.
-  for (const o of mainOwned) activateOwnedRuntime(o.ty, state);
-  const mainReturnTail: EmitReturnTail = indent => {
-    const lines: string[] = [];
-    // Early-frees null the buffer, every `_free` helper is NULL-safe,
-    // so duplicate frees across overlapping early-return + fall-through
-    // paths are redundant but safe. A prior `nullAtScopeExit`
-    // optimization tried to skip provably-NULL frees but mis-modeled
-    // early returns; we don't ship it.
-    for (const o of mainOwned) {
-      const h = requireOwnedHelpers(o.ty);
-      lines.push(`${indent}${h.free}(&${o.cName});`);
-    }
-    lines.push(`${indent}return 0;`);
-    return lines.join("\n");
-  };
-  const mainBody = emitBody(
-    prog.topLevelStmts,
-    "  ",
-    state,
-    mainFutureTouches,
-    mainOwnedTypes,
-    mainReturnTail
-  );
-  if (mainBody.length > 0) userParts.push(mainBody);
-  userParts.push(mainReturnTail("  "));
-  userParts.push("}");
-  userParts.push("");
-
   // Headers: BASE_HEADERS ∪ activated-snippet headers, deduped.
-  // `<omp.h>` only when we actually emit a call into the OpenMP API
-  // (`omp_set_num_threads(N)` for numeric `--threads N >= 2`). The
-  // `_Pragma("omp ...")` lines in the elementwise macros are
-  // preprocessor-handled and need no header.
   const headers = new Set<string>(BASE_HEADERS);
   for (const h of collectRuntimeHeaders(state)) headers.add(h);
-  if (typeof threads === "number" && threads > 1) headers.add("<omp.h>");
 
   const out: string[] = [];
   // Feature-test macro: must precede every <...> include so glibc
@@ -296,9 +139,7 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
   out.push("");
 
   if (state.active.size > 0) {
-    out.push(
-      includeRuntime ? renderRuntimeBodies(state) : runtimePlaceholder(state)
-    );
+    out.push(renderRuntimeBodies(state));
   }
 
   // Release `<complex.h>`'s lower-case macros so user code can shadow
@@ -320,13 +161,23 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions = {}): string {
   out.push("");
 
   out.push(...userParts);
-  return out.join("\n");
-}
 
-function runtimePlaceholder(state: RuntimeState): string {
-  if (state.active.size === 0) return "";
-  const names = Array.from(state.active).join(", ");
-  return `/* runtime helpers omitted (${state.active.size}): ${names} */\n`;
+  // Allocator helpers exported as part of the .so so a JIT host
+  // (koffi) can resolve them by name without separately loading
+  // libc. `mtoc2_alloc` is used by the runtime helpers internally;
+  // `mtoc2_jit_free` is the host-side counterpart for releasing
+  // tensor buffers returned across the FFI. Both go through the
+  // same malloc/free in libc that mtoc2's emitted code already
+  // depends on transitively, so there's no allocator-mismatch
+  // risk.
+  out.push("/* JIT-host allocator wrapper. The .so already pulls in");
+  out.push(" * libc's free transitively via <stdlib.h>; this wrapper");
+  out.push(" * exposes it through the .so's own symbol table so the");
+  out.push(" * host's koffi binding doesn't need to dlopen libc");
+  out.push(" * separately. */");
+  out.push("void mtoc2_jit_free(void *p) { free(p); }");
+  out.push("");
+  return out.join("\n");
 }
 
 type NamedType = StructType | ClassType | HandleType | CellType;
@@ -427,7 +278,6 @@ function collectNamedTypedefs(prog: IRProgram): NamedType[] {
     for (const ty of fn.outputTypes) considerNamed(ty);
     visitStmts(fn.body);
   }
-  visitStmts(prog.topLevelStmts);
 
   return topoSortNamedTypedefs(Array.from(seen.values()), innerTys);
 }

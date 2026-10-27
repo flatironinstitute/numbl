@@ -8,19 +8,7 @@ import {
   type NumericType,
   type Sign,
 } from "../../../lowering/types.js";
-import {
-  type Builtin,
-  requireEmitC,
-  requireEmitJs,
-  requireCall,
-} from "../../registry.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_mtimes_real,
-  mtoc2_tensor_mtimes_real_scalar,
-  mtoc2_tensor_mtimes_complex,
-  mtoc2_tensor_mtimes_complex_scalar,
-} from "../../runtime/snippets.gen.js";
+import { type Builtin, requireEmitC, requireEmitJs } from "../../registry.js";
 import { times } from "./times.js";
 import { exactRealArray, requireRealOrComplex } from "../_shared.js";
 
@@ -236,25 +224,6 @@ export const mtimes: Builtin = {
     return isComplex
       ? `mtoc2_tensor_mtimes_complex(${argsJs[0]}, ${argsJs[1]})`
       : `mtoc2_tensor_mtimes_real(${argsJs[0]}, ${argsJs[1]})`;
-  },
-  call(args) {
-    const { argTypes } = args;
-    if (!isMultiElement(argTypes[0]) || !isMultiElement(argTypes[1])) {
-      return requireCall(times)(args);
-    }
-    const a = argTypes[0] as NumericType;
-    const b = argTypes[1] as NumericType;
-    const isComplex = a.isComplex || b.isComplex;
-    const at = args.args[0] as RuntimeTensor;
-    const bt = args.args[1] as RuntimeTensor;
-    if (a.shape?.[0] === 1 && b.shape?.[1] === 1) {
-      return isComplex
-        ? [mtoc2_tensor_mtimes_complex_scalar(at, bt)]
-        : [mtoc2_tensor_mtimes_real_scalar(at, bt)];
-    }
-    return isComplex
-      ? [mtoc2_tensor_mtimes_complex(at, bt) as unknown as RuntimeTensor]
-      : [mtoc2_tensor_mtimes_real(at, bt) as unknown as RuntimeTensor];
   },
   // Elementwise per-slot template — only valid when at least one
   // operand is scalar (tensor * tensor is matrix product). The

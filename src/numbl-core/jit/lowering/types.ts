@@ -548,8 +548,8 @@ export function cellUniform(dims: DimInfo[], elem: Type): CellType {
 /** The canonical "empty `[]` double tensor" slot type — what numbl
  *  initialises every fresh slot in `cell(n, m)` to
  *  (see `numbl/.../type-constructors.ts:442-469`). Shape is `[0, 0]`,
- *  no exact data, sign unknown. Mtoc2 reuses this exact representation
- *  so cross-runner displays of an unwritten slot match byte-for-byte. */
+ *  no exact data, sign unknown. The JIT reuses this exact representation
+ *  so displays of an unwritten slot match the interpreter byte-for-byte. */
 export function emptyDoubleTensorType(): NumericType {
   return {
     kind: "Numeric",
@@ -1210,13 +1210,6 @@ export function canonicalizeType(t: Type): string {
   return JSON.stringify(canon(t));
 }
 
-/** True iff two types have the same canonical form. Convenience
- *  wrapper around `canonicalizeType` for callers that don't need the
- *  string key. */
-export function canonicalEq(a: Type, b: Type): boolean {
-  return canonicalizeType(a) === canonicalizeType(b);
-}
-
 /** Storage compatibility: do two types occupy the same C-level slot?
  *  This is COARSER than canonical equality — every multi-element
  *  tensor shares the same `mtoc2_tensor_t` storage regardless of
@@ -1348,10 +1341,6 @@ export function hashType(s: string): string {
     h = Math.imul(h, 0x01000193);
   }
   return (h >>> 0).toString(16).padStart(8, "0");
-}
-
-export function specializationKey(argTypes: Type[]): string {
-  return hashType(argTypes.map(canonicalizeType).join("|"));
 }
 
 /** Mangled C typedef name for a handle's capture shape. All no-capture

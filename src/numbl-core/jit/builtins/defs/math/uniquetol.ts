@@ -34,8 +34,6 @@ import {
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_uniquetol_real as jsUniquetolReal } from "../../runtime/snippets.gen.js";
 
 const DEFAULT_TOL = 1e-6;
 
@@ -124,25 +122,5 @@ export const uniquetol: Builtin = {
     const tolJs = argTypes.length === 2 ? argsJs[1] : String(DEFAULT_TOL);
     const rowOut = isRowInput(a) ? 1 : 0;
     return `mtoc2_uniquetol_real(${argsJs[0]}, ${tolJs}, ${rowOut})`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (isScalar(a)) {
-      return [typeof args[0] === "number" ? args[0] : Number(args[0])];
-    }
-    let tol = DEFAULT_TOL;
-    if (argTypes.length === 2) {
-      const t = argTypes[1] as NumericType;
-      const x = exactDouble(t);
-      tol = x !== undefined ? x : Number(args[1]);
-    }
-    const rowOut = isRowInput(a) ? 1 : 0;
-    return [
-      jsUniquetolReal(
-        args[0] as RuntimeTensor,
-        tol,
-        rowOut
-      ) as unknown as RuntimeTensor,
-    ];
   },
 };

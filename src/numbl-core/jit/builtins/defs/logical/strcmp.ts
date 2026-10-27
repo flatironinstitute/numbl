@@ -7,7 +7,7 @@
  *     error; the inputs simply compare unequal.
  *   - Either arg non-text → `false`. Numbl gates the comparison
  *     behind `isText(a) && isText(b)`; non-text just yields `0`
- *     silently. We mirror that to keep cross-runner output identical.
+ *     silently. We mirror that.
  *   - Cell-of-text vectorization (`strcmp({'a','b'}, 'a')`) is in
  *     numbl but cells aren't yet a feature class in mtoc2 — that
  *     overload will fall out naturally when cells land.
@@ -21,12 +21,6 @@ import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import { isText, scalarLogical, type Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { emitTextView } from "../io/_format_args.js";
-import {
-  mtoc2_strcmp as jsStrcmp,
-  mtoc2_strcmpi as jsStrcmpi,
-} from "../../runtime/snippets.gen.js";
-import { isChar as isRuntimeChar } from "../../../runtime/value.js";
-import type { RuntimeValue } from "../../../runtime/value.js";
 
 type CmpMode = "exact" | "case-fold";
 
@@ -52,14 +46,7 @@ function checkArity(name: string, argTypes: Type[], nargout: number): void {
   }
 }
 
-function runtimeText(v: RuntimeValue): string | null {
-  if (typeof v === "string") return v;
-  if (isRuntimeChar(v)) return v.value;
-  return null;
-}
-
 function makeBuiltin(name: string, mode: CmpMode, helperName: string): Builtin {
-  const jsFn = mode === "case-fold" ? jsStrcmpi : jsStrcmp;
   return {
     name,
     transfer(argTypes, nargout) {
@@ -82,12 +69,6 @@ function makeBuiltin(name: string, mode: CmpMode, helperName: string): Builtin {
       // Helper returns 0/1 (matches C signature). Wrap to bool so
       // the spec output round-trips as a JS boolean.
       return `(${helperName}(${argsJs[0]}, ${argsJs[1]}) !== 0)`;
-    },
-    call({ args }) {
-      const a = runtimeText(args[0]);
-      const b = runtimeText(args[1]);
-      if (a === null || b === null) return [false];
-      return [(jsFn(a, b) as number) !== 0];
     },
   };
 }

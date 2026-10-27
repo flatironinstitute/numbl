@@ -40,14 +40,6 @@ import {
   exactRealArray,
   exactScalarAsComplex,
 } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { isComplexValue } from "../../../runtime/value.js";
-import {
-  mtoc2_dot_real as jsDotReal,
-  mtoc2_dot_real_matrix as jsDotRealMatrix,
-  mtoc2_dot_complex as jsDotComplex,
-  mtoc2_dot_complex_matrix as jsDotComplexMatrix,
-} from "../../runtime/snippets.gen.js";
 
 function requireNumeric(t: Type, what: string): NumericType {
   if (!isNumeric(t)) {
@@ -318,63 +310,5 @@ export const dot: Builtin = {
       return `mtoc2_cmul(mtoc2_cconj(${aJs}), ${bJs})`;
     }
     return `((${argsJs[0]}) * (${argsJs[1]}))`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    const b = argTypes[1] as NumericType;
-    const anyComplex = a.isComplex || b.isComplex;
-    if (isMultiElement(a) && isMultiElement(b)) {
-      if (anyComplex) {
-        if (isVectorLike(a) || isVectorLike(b)) {
-          return [
-            jsDotComplex(
-              args[0] as RuntimeTensor,
-              args[1] as RuntimeTensor
-            ) as unknown as { re: number; im: number },
-          ];
-        }
-        return [
-          jsDotComplexMatrix(
-            args[0] as RuntimeTensor,
-            args[1] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      if (isVectorLike(a) || isVectorLike(b)) {
-        return [
-          jsDotReal(
-            args[0] as RuntimeTensor,
-            args[1] as RuntimeTensor
-          ) as number,
-        ];
-      }
-      return [
-        jsDotRealMatrix(
-          args[0] as RuntimeTensor,
-          args[1] as RuntimeTensor
-        ) as unknown as RuntimeTensor,
-      ];
-    }
-    // Scalar / scalar (including a scalar vs length-1 tensor).
-    const va = args[0];
-    const vb = args[1];
-    if (anyComplex) {
-      const toCx = (v: unknown): { re: number; im: number } => {
-        if (isComplexValue(v as never)) return v as { re: number; im: number };
-        const re = typeof v === "number" ? v : Number(v);
-        return { re, im: 0 };
-      };
-      const ax = toCx(va);
-      const bx = toCx(vb);
-      return [
-        {
-          re: ax.re * bx.re + ax.im * bx.im,
-          im: ax.re * bx.im - ax.im * bx.re,
-        },
-      ];
-    }
-    const xa = typeof va === "number" ? va : Number(va);
-    const xb = typeof vb === "number" ? vb : Number(vb);
-    return [xa * xb];
   },
 };

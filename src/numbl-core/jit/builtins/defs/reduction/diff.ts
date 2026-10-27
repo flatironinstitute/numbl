@@ -24,8 +24,6 @@ import {
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
-import { mtoc2_tensor_diff as jsDiff } from "../../runtime/tensor_ops/tensor_diff.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
 
 /** Result shape of one forward difference along the operating axis,
  *  mirroring numbl's `diffOnce` + RTV.tensor trailing-singleton squeeze
@@ -157,11 +155,5 @@ export const diff: Builtin = {
     useRuntime("mtoc2_tensor_diff");
     const { dim } = planDiff(argTypes);
     return `mtoc2_tensor_diff(${argsJs[0]}, ${dim ?? 0})`;
-  },
-  call({ args, argTypes }) {
-    const { dim } = planDiff(argTypes);
-    return [
-      jsDiff(args[0] as RuntimeTensor, dim ?? 0) as unknown as RuntimeTensor,
-    ];
   },
 };

@@ -10,23 +10,13 @@ import {
   EXACT_ARRAY_MAX_ELEMENTS,
 } from "../../../lowering/types.js";
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
-import {
-  type Builtin,
-  requireEmitC,
-  requireEmitJs,
-  requireCall,
-} from "../../registry.js";
+import { type Builtin, requireEmitC, requireEmitJs } from "../../registry.js";
 import {
   requireRealOrComplex,
   exactComplex,
   exactComplexArray,
 } from "../_shared.js";
 import { defineUnaryRealMath } from "./_unary_real.js";
-import { isComplexValue, type RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_cabs,
-  mtoc2_tensor_abs_complex as jsTensorAbsComplex,
-} from "../../runtime/snippets.gen.js";
 
 /** Real-input `abs`. Result is `nonneg` in general; `positive` when
  *  input is known to be nonzero (`positive`, `negative`, or `nonzero`). */
@@ -114,22 +104,6 @@ export const abs: Builtin = {
       return `mtoc2_cabs(${argsJs[0]})`;
     }
     return requireEmitJs(absReal)(args);
-  },
-  call(args) {
-    const a = args.argTypes[0] as NumericType;
-    if (a.isComplex) {
-      if (isMultiElement(a)) {
-        return [
-          jsTensorAbsComplex(
-            args.args[0] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      const v = args.args[0];
-      const cx = isComplexValue(v) ? v : { re: Number(v), im: 0 };
-      return [mtoc2_cabs(cx)];
-    }
-    return requireCall(absReal)(args);
   },
   elementwise: true,
 };

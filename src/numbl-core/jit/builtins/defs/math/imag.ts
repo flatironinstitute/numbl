@@ -14,8 +14,6 @@ import {
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import type { Builtin } from "../../registry.js";
 import { requireRealOrComplex, exactComplex } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_tensor_imag_complex as jsTensorImagComplex } from "../../runtime/snippets.gen.js";
 
 export const imag: Builtin = {
   name: "imag",
@@ -77,32 +75,6 @@ export const imag: Builtin = {
       return `mtoc2_cimag(${argsJs[0]})`;
     }
     return `0`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (isMultiElement(a)) {
-      if (a.isComplex) {
-        return [
-          jsTensorImagComplex(
-            args[0] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      // Real tensor → zero-filled tensor of the same shape.
-      const t = args[0] as RuntimeTensor;
-      return [
-        {
-          mtoc2Tag: "tensor" as const,
-          shape: t.shape.slice(),
-          data: new Float64Array(t.data.length),
-        },
-      ];
-    }
-    if (a.isComplex) {
-      const z = args[0] as { re: number; im: number };
-      return [z.im];
-    }
-    return [0];
   },
   elementwise: true,
 };

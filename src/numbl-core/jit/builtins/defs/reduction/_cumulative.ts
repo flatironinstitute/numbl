@@ -40,24 +40,6 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import * as TENSOR_CUMULATIVE from "../../runtime/tensor_ops/tensor_cumulative.js";
-import type { RuntimeTensor, RuntimeValue } from "../../../runtime/value.js";
-
-type CumDimFn = (t: RuntimeTensor, dim: number) => RuntimeTensor;
-
-const JS_CUM_DIM: Record<string, CumDimFn> = {
-  cumsum: TENSOR_CUMULATIVE.mtoc2_tensor_cumsum_dim as unknown as CumDimFn,
-  cumprod: TENSOR_CUMULATIVE.mtoc2_tensor_cumprod_dim as unknown as CumDimFn,
-  cummax: TENSOR_CUMULATIVE.mtoc2_tensor_cummax_dim as unknown as CumDimFn,
-  cummin: TENSOR_CUMULATIVE.mtoc2_tensor_cummin_dim as unknown as CumDimFn,
-};
-
-const JS_CUM_DIM_COMPLEX: Record<string, CumDimFn> = {
-  cumsum:
-    TENSOR_CUMULATIVE.mtoc2_tensor_cumsum_complex_dim as unknown as CumDimFn,
-  cumprod:
-    TENSOR_CUMULATIVE.mtoc2_tensor_cumprod_complex_dim as unknown as CumDimFn,
-};
 
 export interface CumulativeSpec {
   /** Source-level builtin name (also the runtime helper suffix:
@@ -223,18 +205,6 @@ function resolveCodegenDim(
   );
 }
 
-/** Resolve the dim used in the interpreter `call` hook. Reads the
- *  runtime value directly so non-AOT scripts can pass a computed dim
- *  (mtoc2 keeps the AOT path's static-exact requirement; the
- *  interpreter is more permissive, matching numbl). */
-function resolveCallDim(args: RuntimeValue[], t: RuntimeTensor): number {
-  if (args.length >= 2 && args[1] !== undefined) {
-    const v = args[1];
-    return Math.round(typeof v === "number" ? v : Number(v));
-  }
-  return pickDefaultAxis(t.shape);
-}
-
 export function defineCumulative(spec: CumulativeSpec): Builtin {
   return {
     name: spec.name,
@@ -364,25 +334,6 @@ export function defineCumulative(spec: CumulativeSpec): Builtin {
       const dim = resolveCodegenDim(spec.name, argTypes, ty);
       const suffix = ty.isComplex ? "_complex_dim" : "_dim";
       return `mtoc2_tensor_${spec.name}${suffix}(${argsJs[0]}, ${dim})`;
-    },
-
-    call({ args, argTypes }) {
-      const ty = argTypes[0] as NumericType;
-      if (isScalar(ty)) {
-        const v = args[0];
-        if (ty.isComplex) return [v];
-        return [typeof v === "number" ? v : Number(v)];
-      }
-      const table = ty.isComplex ? JS_CUM_DIM_COMPLEX : JS_CUM_DIM;
-      const kernel = table[spec.name];
-      if (kernel === undefined) {
-        throw new UnsupportedConstruct(
-          `'${spec.name}' tensor 'call' has no JS kernel registered`
-        );
-      }
-      const t = args[0] as RuntimeTensor;
-      const dim = resolveCallDim(args, t);
-      return [kernel(t, dim)];
     },
   };
 }

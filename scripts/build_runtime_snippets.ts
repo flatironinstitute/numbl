@@ -13,11 +13,11 @@
  * unique across the runtime tree (enforced here).
  *
  * .js snippet contract:
- *   - A valid standalone ES module (so the interpreter side can
+ *   - A valid ES module (so builtin defs can
  *     `import { foo } from "./snippets.gen.js"`).
  *   - Cross-snippet imports must use relative paths to another `.js`
  *     under the runtime tree (`./peer.js`, `../topic/peer.js`, …).
- *     The interpreter resolves these via real ESM; the codegen path
+ *     Node resolves these via real ESM; the codegen path
  *     strips them and inlines all snippets together.
  *   - References host hooks (e.g. `$write`) as free variables that
  *     resolve to `globalThis.<name>` at call time.
@@ -202,9 +202,9 @@ function generate(): { js: string; c: string } {
   });
 
   // Re-export every named export from each .js snippet via its
-  // relative path so the interpreter (Phase 3) can `import { foo }
-  // from "./snippets.gen.js"` and call helpers directly — the same
-  // source of truth the emitter inlines.
+  // relative path so builtin defs can `import { foo } from
+  // "./snippets.gen.js"` for compile-time folding — the same source
+  // of truth the emitter inlines.
   const reExports = jsPaths
     .map(p => `export * from ${JSON.stringify("./" + p)};`)
     .join("\n");
@@ -214,9 +214,9 @@ function generate(): { js: string; c: string } {
     "// Re-run `npm run build:snippets` after editing any runtime/*.h",
     "// or runtime/*.js file.",
     "",
-    "// Re-exports of every named export from each .js snippet, so the",
-    "// interpreter / `Builtin.call` definitions can import helpers",
-    "// directly and run the same code the emitters inline.",
+    "// Re-exports of every named export from each .js snippet, so",
+    "// builtin defs can fold constants with the same code the emitters",
+    "// inline.",
     reExports,
     "",
     "/** JS snippet bodies (with `export` keywords stripped), keyed by",
