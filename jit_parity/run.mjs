@@ -198,9 +198,7 @@ async function runPool(jobs, concurrency, worker) {
 function normalize({ stdout, status, timedOut }) {
   if (timedOut) return "<TIMEOUT>";
   if (status !== 0) return "<ERROR>";
-  const kept = stdout
-    .split("\n")
-    .filter(l => !/^\s*warning:/i.test(l));
+  const kept = stdout.split("\n").filter(l => !/^\s*warning:/i.test(l));
   return kept.join("\n").replace(/\s+$/, "");
 }
 

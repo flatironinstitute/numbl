@@ -157,7 +157,7 @@
       "prettier --write",
       "eslint"
     ],
-    "*.{js,jsx}": "prettier --write",
+    "*.{js,jsx,mjs,cjs}": "prettier --write",
     "*.{json,css,md,yml}": "prettier --write"
   },
   "optionalDependencies": {
