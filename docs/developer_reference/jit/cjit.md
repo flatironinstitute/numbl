@@ -10,7 +10,7 @@ C-JIT shares the **same compiler** as JS-JIT — same AST → lowering → IR pi
 - **`cjit-loop`** — outermost `for` / `while` body.
 - **`cjit-call`** — user-function call.
 
-At `--opt 2` both the C-JIT and JS-JIT executors are registered and compete via the dispatcher's cost model: C-JIT proposes only where it can marshal the argument types across the koffi ABI, and its lower per-call/run cost wins there; everything else falls through to JS-JIT, then the interpreter.
+At `--opt 2` both the C-JIT and JS-JIT executors are registered, C-JIT first. C-JIT proposes only where it can marshal the argument types across the koffi ABI and is then always preferred; everything else falls through to JS-JIT, then the interpreter. The two share the shape executors and differ only in their `JitBackend` (`executors/jit/cBackend.ts` vs `jsBackend.ts`).
 
 ## Type marshaling boundary
 
@@ -22,4 +22,4 @@ The `cc`-invoke + koffi `dlopen` step lives in `executors/jit/compileC.node.ts` 
 
 ## When it helps
 
-C-JIT beats JS-JIT for code where dispatch is statically eliminated, leaving raw arithmetic on contiguous memory — scalar numeric loops and dense element-wise tensor work. Outside that regime, V8's inline caches and escape analysis make JS-JIT competitive, and the cost model lets JS-JIT win. The compile + `dlopen` cost is paid once per `(function, arg-type signature, nargout)` and amortized across calls.
+C-JIT beats JS-JIT for code where dispatch is statically eliminated, leaving raw arithmetic on contiguous memory — scalar numeric loops and dense element-wise tensor work. Outside that regime, V8's inline caches and escape analysis make JS-JIT competitive. Note that the registry does not weigh this: whenever C-JIT accepts a unit it is used, so a tiny function called many times from interpreted code pays the koffi marshaling cost on every call. The compile + `dlopen` cost is paid once per `(function, arg-type signature, nargout)` and amortized across calls.

@@ -1,6 +1,6 @@
 /**
  * Per-LoweringContext mtoc2 session state shared between
- * `jitCallExecutor` and `jitTopLevelExecutor`. One `Workspace`
+ * the JIT executors (both backends). One `Workspace`
  * (built from numbl's existing `LoweringContext`) and one `Lowerer`
  * per execution session, so the `Lowerer.specializations` cache
  * persists across whole-scope + per-call dispatches.

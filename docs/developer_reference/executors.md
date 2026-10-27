@@ -1,189 +1,146 @@
 # Executor Registry
 
-Pluggable strategies for handling AST execution. The interpreter delegates each statement (or run of statements) — and each user-function call — to a registry of _executors_. Each executor implements one strategy (JS-JIT top-level/loop/call at `--opt 1`; C-JIT top-level/loop/call at `--opt 2`). The AST-walking interpreter is the dispatcher's hardcoded last-resort fallback — it is not a registered executor.
-
-## Goals
-
-- **Modularity** — each strategy is a self-contained executor with a uniform interface. Adding a strategy means adding one file, not threading a flag through several layers.
-- **Composition** — an outer executor (e.g., JS-JIT loop) can delegate sub-statements to the registry rather than re-implementing them.
-- **Runtime-driven dispatch** — selection happens at the moment of execution, with full live runtime info (shapes, exact values, etc.).
-- **Mode-driven registration** — `--opt 0/1/2` selects which executors get registered. The browser bundle simply omits executors whose dependencies it can't satisfy (the C-JIT path needs `cc` + `koffi`, Node only).
+The interpreter delegates three kinds of unit to a registry of _executors_: a whole script body, a `for`/`while` loop, and a user-function call. Each executor handles one of these _shapes_ with one JIT backend (JS-JIT at `--opt 1`; C-JIT, then JS-JIT, at `--opt 2`). The AST-walking interpreter is the registry's hardcoded last-resort fallback; it is not a registered executor.
 
 ## Concepts
 
-- **Executor** — handles a piece of work. Typically one or more consecutive statements, or a user-function call. Implements the `Executor` interface below.
-- **Registry** — holds executors, dispatches at runtime, owns per-executor caches.
-- **Dispatch context** (`DispatchContext`) — passed to every executor call. Provides env access, the runtime, type-info queries, and runtime callbacks.
-- **LoweredStmt** — the dispatcher's pre-propose lowering pass produces a discriminated union (`top-level` / `loop` / `call` / `synth`) carrying the lowered IR plus pre-computed feasibility flags (`hasReturn`, `hasIO`, ...). Executors filter on the kind in `propose()`.
-- **CacheKey** — per-executor projection of the proposal data into a stable string. Drops volatile bits (e.g., exact scalar values) so unrelated runs of the same code reuse compiled artifacts.
-- **Cost estimate** — three numbers the executor returns with each proposal: estimated compile time (ms, paid once on cache miss), per-call overhead (ns, paid every dispatch), and run time (ns, the actual work).
-- **Bail-risk** — whether a specific proposal's compiled artifact may fail an invariant mid-execution. Per-proposal because a single executor can produce both bail-risky and bail-safe proposals depending on its inputs. The dispatcher refuses bail-risk proposals when the surrounding context has observable side effects that mustn't repeat.
+- **Shape**: the kind of unit, one of `top-level`, `loop`, or `call`. The registry lowers a unit once (`executors/lowering.ts`) into a `LoweredStmt` tagged with its shape and hands it to the executors registered for that shape.
+- **Executor**: one strategy for one shape. Implements the `Executor` interface below.
+- **Registry**: holds an ordered list of executors per shape, dispatches at runtime, and owns the compile cache.
+- **Backend**: what differs between JS-JIT and C-JIT (`executors/jit/backend.ts`). The three shape executors are written once against a `JitBackend` and instantiated per backend.
+- **Cache key**: per-executor projection of the proposal data into a stable string. Drops volatile bits (e.g. exact scalar values) so repeated runs of the same code reuse compiled artifacts.
 
 ## Executor interface
 
 ```ts
-interface Executor<D = unknown, C = unknown> {
-  readonly name: string;
+interface Executor<K extends ShapeKind, D, C> {
+  readonly name: string; // e.g. "cjit-loop"
+  readonly kind: K; // "top-level" | "loop" | "call"
 
-  // Submit a bid to handle this stmt. Runs every dispatch — must be
-  // cheap. Receives the `LoweredStmt` from the dispatcher's pre-propose
-  // lowering pass; filter on `lowered.kind`. For lookahead, use
-  // ctx.peekSibling(offset) or ctx.siblings.
-  // Returns null to decline; on success, returns a Proposal.
-  propose(lowered: LoweredStmt, ctx: DispatchContext): Proposal<D> | null;
+  // Cheap; runs on every dispatch. Returns data for compile/run, or null
+  // to decline.
+  propose(lowered: LoweredOf<K>, interp: Interpreter): D | null;
 
-  // Stable cache key projected from the proposal data.
   cacheKey(data: D): string;
 
-  // Compile to a runnable artifact. Called only on cache miss. Cached
-  // under (executor.name, owner, cacheKey) where owner is the head Stmt
-  // (stmt-shape) or the FunctionDef (call-shape).
-  compile(data: D, ctx: DispatchContext): C;
+  // Called only on cache miss. Cached under (executor.name, owner,
+  // cacheKey), where owner is the head Stmt (top-level, loop) or the
+  // FunctionDef (call).
+  compile(data: D, interp: Interpreter): C;
 
-  // Execute. Stmt-shape success returns `{ ok: true }` and the
-  // dispatcher advances by exactly one stmt. Call-shape success
-  // returns `{ result }`. A bail signals the cache entry should be
-  // invalidated and the next executor (or the interpreter) tried.
-  run(compiled: C, data: D, ctx: DispatchContext): RunResult;
+  // { result } on success (the return value for a call; undefined
+  // otherwise), or null to bail.
+  run(compiled: C, data: D, interp: Interpreter): RunResult;
 }
 
-interface Proposal<D> {
-  data: D; // opaque per-executor payload, flows through compile/run
-  cost: CostEstimate;
-  bailRisk: boolean;
-}
-
-interface CostEstimate {
-  compileMs: number; // paid once per cache entry
-  perCallNs: number; // dispatch overhead (marshaling, frame setup)
-  runNs: number; // estimated work for the proposed input sizes
-}
-
-type RunResult =
-  | { ok: true } // stmt-shape success (advances by one stmt)
-  | { result: unknown } // call-shape success
-  | { bail: BailReason; transient?: boolean };
+type RunResult = { result: unknown } | null;
 ```
 
-## Dispatch flow
+## Dispatch
+
+Each shape has its own entry point; all three share one loop (`Registry.runFirst`):
 
 ```
-dispatch(siblings, i, ctx):
-  lowered = tryLower(siblings, i, ctx)   // null → no specialized shape
-  if lowered is null:
-    interp.execStmt(siblings[i])         // hardcoded fallback
-    return
-
-  candidates = []
-  for executor in registry:
-    p = executor.propose(lowered, ctx)
-    if p is null: continue
-    if ctx.requireNoBail and p.bailRisk: continue
-    candidates.push({ executor, data: p.data, cost: p.cost })
-
-  // Pick best by perCallNs + runNs; backups in cost order.
-  for c in [best, ...backups]:
-    key = c.executor.cacheKey(c.data)
-    compiled = cache.get(c.executor.name, head, key)
-              ?? cache.set(..., c.executor.compile(c.data, ctx))
-    result = c.executor.run(compiled, c.data, ctx)
-    if result.bail:
-      cache.invalidate(...)               // unless transient
-      continue                            // try next candidate
-    return                                // success (advances by one stmt)
-
-  // All candidates bailed: AST interpreter, called directly.
-  interp.execStmt(siblings[i])
+runFirst(executors, lowered, owner):
+  for executor in executors:          // registration order
+    data = executor.propose(lowered)
+    if data is null: continue
+    key = executor.cacheKey(data)
+    compiled = cache.get(executor, owner, key)
+    if compiled is BAILED: continue
+    if compiled is missing: compiled = cache.set(..., executor.compile(data))
+    result = executor.run(compiled, data)   // output captured
+    if result is null:                      // bail
+      discard captured output; cache.markBailed(executor, owner, key)
+      continue
+    commit captured output; return result
+  return null                               // caller falls back to the interpreter
 ```
 
-`dispatchCall(fn, args, nargout, interp)` is parallel: lowering produces a `CallLoweredStmt`, executors filter on `lowered.kind === "call"`, and the result is the call's return value. When all decline or bail, `dispatchCall` returns `null` and the caller falls through to the interpreter's normal call path.
+- `tryRunWholeScope(siblings, interp)`: called once at script start with the script body. On null, the interpreter runs the body statement by statement.
+- `dispatch(siblings, i, interp)`: per statement. A `for`/`while` stmt is lowered and offered to the loop executors; any other stmt (and a loop no executor took) runs on the interpreter.
+- `dispatchCall(fn, args, nargout, interp)`: from `callUserFunction`. On null the interpreter's call path runs.
+
+There is no cost model: the order is fixed by registration (`executors/plugins.ts`), C-JIT before JS-JIT. A C executor declines what it cannot marshal across the koffi ABI, so JS-JIT picks that up, and the interpreter takes whatever both decline.
+
+A compiler rejection (`UnsupportedConstruct` / `JitTypeError`) makes `compile` return null; `run` then bails, and the bail is cached, so the unit is not recompiled on every later dispatch. Runtime bails are cached the same way. Output produced during a run that bails is discarded so the interpreter's re-run does not duplicate it.
 
 ## Lowering
 
-Lowering is shared across all executors. The dispatcher calls `tryLower(siblings, i, ctx)` once per stmt-dispatch (and `tryLowerCall(fn, args, nargout)` once per call-dispatch) and passes the result to every executor's `propose()`. Lowering produces an IR; it does NOT make codegen-feasibility decisions. "Can this be JIT'd?" lives in each executor's `propose`.
+`tryLowerTopLevel`, `tryLowerLoop`, and `tryLowerCall` classify the unit (inputs, outputs, input types, cache key) via `classification.ts`. Lowering makes no codegen-feasibility decisions; those live in each executor's `propose`.
 
-Today's specialized shapes:
+`WideningState` records the most recent input-type signature per owner (and per nargout for calls). Classification widens against it, so a unit invoked with shifting input types converges to a single specialization rather than thrashing the compile cache.
 
-- `top-level` — script body (top-level scope, first stmt). Whole script lowered as a synthetic FunctionDef. Lowered separately via `tryLowerTopLevel` and dispatched through `Registry.tryRunWholeScope` before the per-stmt loop runs, not through `tryLower`.
-- `loop` — for/while loop stmt. Loop body lowered as a synthetic FunctionDef. A capture-free function-handle _input_ (defined before the loop, e.g. `f = @(t) …;` or `f = @name;`) would otherwise be an opaque `function_handle` the JIT can't type. Classification (`classifyLoop`) detects these and, instead of taking them as runtime inputs, emits them as `ConstHandle`s that the loop executors inline as in-scope `<name> = @…` assignments prepended to the synthetic body — reducing the boundary case to the supported in-scope handle case, identically on both backends. The inliner (`handleInline.ts`) reuses the handle's recorded defining AST + env (stored on `RuntimeFunction`) and only fires when capture-free and same-file. It also declines if any free body name (a name that was a function/undefined at definition, not a captured variable) collides with a name that will be in scope at the relocation site (the loop's inputs, assigned locals, or `for` variable) — otherwise re-lowering would re-resolve that name to the loop variable, silently turning `@(t) sq(t)` from a function call into an array index.
-- `call` — user-function call. Lowered via `tryLowerCall` from `dispatchCall`.
-- `synth` — a `Synth` AST stmt produced by a registered AST stmt-list transformer that collapses a contiguous run of stmts into a unit. The `tag` field discriminates among transformers. (No transformer is registered today; the shape remains in the union for future use.)
+The loop shape has one extra step. A capture-free function-handle _input_ (defined before the loop, e.g. `f = @(t) …;` or `f = @name;`) would otherwise be an opaque `function_handle` the JIT can't type. Classification (`classifyLoop`) detects these and, instead of taking them as runtime inputs, emits them as `ConstHandle`s that the loop executor inlines as in-scope `<name> = @…` assignments prepended to the synthetic body, reducing the boundary case to the supported in-scope handle case on both backends. The inliner (`handleInline.ts`) reuses the handle's recorded defining AST and env (stored on `RuntimeFunction`) and only fires when capture-free and same-file. It also declines if any free body name (a name that was a function or undefined at definition, not a captured variable) collides with a name that will be in scope at the relocation site (the loop's inputs, assigned locals, or `for` variable); otherwise re-lowering would re-resolve that name to the loop variable, silently turning `@(t) sq(t)` from a function call into an array index.
 
-Stmts with no shape (e.g. a single Assign at non-top-level) skip the proposal loop and go straight to the hardcoded interpreter fallback — there are no executors that consume "raw" stmts.
+## Shapes and backends
 
-Lowerings are cached in `LoweringCache`, keyed by (head Stmt or FunctionDef, classification cacheKey). The cache also tracks per-owner type-widening state so a callee invoked with shifting input types converges to a single specialization rather than thrashing.
+The shape executors (`executors/jit/topLevelExecutor.ts`, `loopExecutor.ts`, `callExecutor.ts`) are factories, `make<Shape>Executor(backend)`, that produce `<prefix>-top-level`, `<prefix>-loop`, and `<prefix>-call`, where the prefix is `jit` (JS) or `cjit` (C).
+
+- **top-level** wraps the script body in a synthetic function (params = variables read from the env, outputs = variables assigned), and writes the outputs back to the env. It declines scripts with a top-level `return` and scripts with unsuppressed assignments, whose "x = 10" display the emitted code does not reproduce. The C backend applies a stricter display gate (unsuppressed bare expressions decline too) unless the script carries `%!numbl:assert_jit c`.
+- **loop** wraps a single `for`/`while` stmt the same way; outputs are filtered to those live after the loop.
+- **call** compiles the user function itself, specialized on argument types and nargout, and returns its outputs. It declines `nargout === 0`, since the interpreter still binds the first output to `ans`.
+
+A `JitBackend` supplies:
+
+| Member           | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
+| ---------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `available`      | always                                         | `interp.nativeBridge.koffi` present                                      |
+| `mapType`        | `jitTypeToCompilerType`                        | same, and the type must have a C declaration (`compilerTypeToCDecl`)     |
+| `compile`        | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
+| `invoke`         | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
+| grow-bail signal | sentinel exception from the store helper       | flag set in the `.so` (`bindGrowBail`)                                   |
+
+Shared policy lives in `backend.ts`: `compileUnit` (the single place compiler rejections are caught and recorded for `NUMBL_JIT_LOG` and `%!numbl:assert_jit`), `declinedByAssertC` (at `--opt 2` the JS backend declines units marked `%!numbl:assert_jit c`, so they either C-JIT or reach the interpreter, which raises), and `insideCompiledLoop` (the loop-depth gate below).
 
 ## The loop-depth gate
 
-The loop and call executors decline while `interp.loopDepth > 0`: an enclosing loop is the natural JIT entry point, since compiling it captures everything nested inside, and bidding per-iteration underneath it would pay propose / spec-cache overhead for no gain.
+The loop and call executors decline while `interp.loopDepth > 0`: an enclosing loop is the natural JIT entry point, since compiling it captures everything nested inside, and bidding per-iteration underneath it would pay propose and cache-lookup overhead for no gain.
 
-That reasoning holds only while the enclosing loop is going to be compiled. When it is _declined_, the interpreter walks its body statement by statement and nothing above will capture what is nested inside — so the gate lifts. `Registry.interpretFallback` bumps `Interpreter.jitDeclinedLoopDepth` around the interpreter's execution of a declined loop stmt, and the executors gate on `loopDepth > 0 && jitDeclinedLoopDepth === 0`. A nested loop or an expensive callee under a declined loop then gets its own chance; declines are cached (`markBailed`), so a nested unit that also declines costs one cache lookup per iteration rather than a repeated compile.
-
-## Composition
-
-Two patterns, both first-class:
-
-1. **AST stmt-list transformers (Synth)** — each executor handles exactly one stmt, but a registered AST transformer can rewrite a contiguous run of stmts into a single `Synth` stmt before dispatch. The matching `synth`-shape executor then handles that one rewritten stmt as a unit. (No transformer is registered today.) Lookahead at `propose()` time is also available via `ctx.peekSibling(offset)` and `ctx.siblings`.
-2. **Sub-dispatch** — within `compile` or `run`, an executor calls back into the registry to handle sub-stmts. Sub-dispatch can recurse; the dispatcher guards against re-entering the same executor on the same stmt.
+That reasoning holds only while the enclosing loop is going to be compiled. When it is _declined_, the interpreter walks its body statement by statement and nothing above will capture what is nested inside, so the gate lifts. `Registry.interpretFallback` bumps `Interpreter.jitDeclinedLoopDepth` around the interpreter's execution of a declined loop stmt, and the executors gate on `loopDepth > 0 && jitDeclinedLoopDepth === 0`. A nested loop or an expensive callee under a declined loop then gets its own chance; declines are cached, so a nested unit that also declines costs one cache lookup per iteration rather than a repeated compile.
 
 ## Bailouts
 
-The dispatcher supports bailing: a `{ bail }` from `run` invalidates the cache entry (unless `transient: true`) and falls through to the next candidate, and since the AST interpreter always matches and never bails, recovery is guaranteed.
-
-In practice the current JIT executors (`src/numbl-core/jit`) **reject statically** rather than bailing mid-run: the compiler either lowers a spec cleanly or throws `UnsupportedConstruct` / `JitTypeError` at `compile()` time, which the executor catches and declines from. So once `compile()` returns an artifact it runs to completion, and the JIT executors report `bailRisk: false`. The `{ bail }` path is still used for hard runtime errors surfaced by the emitted code (re-routed to the interpreter), but there is no per-operation type-guard bailout.
-
-### Bail-risk and side effects
-
-`bailRisk: true` marks a proposal whose artifact might fail an invariant _after_ it has already emitted observable output (`disp`, `fprintf`, file writes, plot commands, …) — re-running on the interpreter would emit it twice. The dispatcher filters such proposals out of `requireNoBail` contexts. Because the current JIT declines statically, its executors set `bailRisk: false`; the field and the dispatcher filtering remain for executors that need them.
-
-## Telemetry
-
-Every successful `run()` call invokes `interp.onExecutorFired?.(executor.name, kind)`. For stmt-shape and whole-scope success the kind is `lowered.kind` (`top-level`, `loop`, `call`, `synth` — the variants of the `LoweredStmt` union); for call-shape success (via `dispatchCall`) the kind is hardcoded to `"call"`. Use this to track which optimizers fire in a session — a session-wide counter, a log entry per dispatch, etc. The hot path uses an `?.` undefined-check and pays nothing when no telemetry consumer is wired up.
+The JIT rejects statically: the compiler either lowers a spec cleanly or throws at `compile()` time. A compiled spec bails at runtime in two cases. The first is an indexed store past a tensor's current extent, which would grow it (the grow-bail); this also warns through `interp.onJitBail`. The second is any other runtime error raised by the emitted code, which bails silently so the interpreter reproduces numbl's canonical error. In both cases the interpreter re-runs the whole unit.
 
 ## Mode-driven registration
 
-`registerExecutorsForOpt(registry, opt)` in `executors/plugins.ts` is the single switch from an `--opt` level to a set of registered executors. Adding a new mode means extending that function — no other call-site changes.
+`registerExecutorsForOpt(registry, opt)` in `executors/plugins.ts` is the single switch from an `--opt` level to the registered executors.
 
-| `--opt` | Executors registered                                                                                       |
-| ------- | ---------------------------------------------------------------------------------------------------------- |
-| 0       | (none — AST interpreter is the hardcoded fallback)                                                         |
-| 1       | jit-top-level, jit-loop, jit-call (JS-JIT)                                                                 |
-| 2       | cjit-top-level, cjit-loop, cjit-call (C-JIT) + the JS-JIT set as fallback (Node only — needs `cc`+`koffi`) |
+| `--opt` | Executors, in order                                                                      |
+| ------- | ---------------------------------------------------------------------------------------- |
+| 0       | none                                                                                     |
+| 1       | jit-top-level, jit-loop, jit-call                                                        |
+| 2       | cjit-top-level, cjit-loop, cjit-call, then jit-top-level, jit-loop, jit-call (Node only) |
 
-At `--opt 2` both the C-JIT and JS-JIT executors are registered; they compete via the cost model. C-JIT proposes only where it can marshal the argument types and its lower per-call/run cost wins; everything else falls through to JS-JIT, then the interpreter.
-
-The C-JIT native compile/load step (`cc` + `koffi` `dlopen`) lives behind a browser-safe stub: `executors/jit/compileC.ts` exposes `compileAndLoadC` whose implementation is `null` until a Node entry point calls `setCompileAndLoadCImpl(...)`. `cli.ts` does this at bootstrap via `registerNodeCompileC()` (from `executors/jit/compileC.node.ts`, which uses `node:fs`/`node:child_process`). The browser worker bundle never imports `compileC.node.ts`, so those Node modules stay out of the web build's graph; if `--opt 2` runs without the impl wired (or without `koffi`), the C-JIT executors decline and dispatch collapses to JS-JIT.
+The C backend is not imported by `plugins.ts`. `cli.ts` calls `registerNodeCompileC()` (`executors/jit/compileC.node.ts`) at bootstrap, which installs the `cc` + koffi compile/load implementation behind the browser-safe stub in `compileC.ts` and registers `cBackend` with `registerCJitBackend`. The browser worker bundle never imports `compileC.node.ts`, so the Node modules and the C compile graph stay out of the web build; there, and whenever `koffi` is unavailable, `--opt 2` behaves like `--opt 1`.
 
 ## Files
 
-The executor _registry_ and the per-shape JIT/C-JIT _executors_ live under `executors/`; the JIT _compiler_ they call (lowering → IR → JS/C codegen, builtins, runtime snippets) is the self-contained, in-tree subsystem under [`src/numbl-core/jit`](jit/overview.md) — no external dependency.
+The executor registry and the per-shape executors live under `executors/`; the JIT compiler they call (lowering → IR → JS/C codegen, builtins, runtime snippets) is the self-contained subsystem under [`src/numbl-core/jit`](jit/overview.md).
 
 ```
 executors/
-  index.ts          public surface
-  types.ts          Executor / Proposal / RunResult / CostEstimate
-  registry.ts       Registry, dispatch, dispatchCall, makeRootContext
-  context.ts        DispatchContext
+  types.ts          Executor / RunResult / ShapeKind
+  registry.ts       Registry: tryRunWholeScope, dispatch, dispatchCall
   cache.ts          ExecutorCache (WeakMap with BAILED sentinel)
-  lowering.ts       tryLower / tryLowerCall + LoweringCache
-  classification.ts top-level / call classification (backend-independent)
+  lowering.ts       tryLowerTopLevel / tryLowerLoop / tryLowerCall + WideningState
+  classification.ts top-level / loop / call classification (backend-independent)
   handleInline.ts   inlines capture-free function-handle inputs into loop bodies
   plugins.ts        registerExecutorsForOpt (the --opt → executors switch)
   jit/
-    topLevelExecutor.ts  jit-top-level   (JS-JIT, opt 1)
-    loopExecutor.ts      jit-loop        (JS-JIT, opt 1)
-    callExecutor.ts      jit-call        (JS-JIT, opt 1)
-    cJitTopLevelExecutor.ts cjit-top-level (C-JIT, opt 2)
-    cJitLoopExecutor.ts     cjit-loop      (C-JIT, opt 2)
-    cJitCallExecutor.ts     cjit-call      (C-JIT, opt 2)
+    backend.ts           JitBackend interface + shared shape helpers
+    topLevelExecutor.ts  makeTopLevelExecutor(backend)
+    loopExecutor.ts      makeLoopExecutor(backend)
+    callExecutor.ts      makeCallExecutor(backend)
+    jsBackend.ts         JS backend (compileSpec + new Function)
+    cBackend.ts          C backend (compileSpecC + cc + koffi; Node only)
     session.ts           per-context Workspace + Lowerer (the spec cache)
-    typeAdapter.ts       numbl JitType → compiler Type (JS path)
-    valueAdapter.ts      RuntimeValue ↔ emit-JS value shape
-    typeAdapterC.ts      compiler Type → C decl (C path; `compilerTypeToCDecl`)
+    typeAdapter.ts       numbl JitType → compiler Type
+    valueAdapter.ts      RuntimeValue ↔ emitted-JS value shape
+    typeAdapterC.ts      compiler Type → C decl (`compilerTypeToCDecl`)
     valueAdapterC.ts     RuntimeValue ↔ C ABI marshaling (koffi)
-    hostHelpers.ts       the `$h` object the emitted spec receives
+    hostHelpers.ts       the `$h` object the emitted JS receives
     compileC.ts          browser-safe compile/load stub
-    compileC.node.ts     cc-invoke + koffi dlopen (Node only)
+    compileC.node.ts     cc invoke + koffi dlopen; registers cBackend (Node only)
 ```
-
-The compiler invoked by these executors (`compileSpec` for JS, `compileSpecC` for C, plus `Workspace`/`Lowerer`) is imported from `src/numbl-core/jit/index.ts`; see [jit/overview.md](jit/overview.md).

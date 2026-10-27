@@ -32,7 +32,7 @@ import {
 } from "./types.js";
 import type { Stmt, Expr, LValue } from "../parser/types.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
-import { Registry, makeRootContext } from "../executors/registry.js";
+import { Registry } from "../executors/registry.js";
 
 // ── Interpreter ──────────────────────────────────────────────────────────
 
@@ -136,12 +136,6 @@ export class Interpreter {
   /** Bridge for loading native shared libraries. Undefined in browser
    *  contexts. */
   nativeBridge?: import("../workspace/types.js").NativeBridge;
-
-  /** Telemetry: invoked after a registered executor's `run()` succeeds.
-   *  Used to track which optimizers fire in a session. The kind is the
-   *  LoweredStmt kind the executor handled ("top-level", "loop", "call",
-   *  ...). Hot path — keep the callback cheap. */
-  onExecutorFired?: (name: string, kind: string) => void;
 
   /** Verbose log sink (plumbed from ExecOptions.log). */
   log?: (message: string) => void;
@@ -276,19 +270,12 @@ export class Interpreter {
         this.callUserFunction(firstFn, [], 0);
       }
     } else {
-      // Apply registered AST transformers. Cached per input-list
-      // identity, so this is paid once per stmt list per Registry.
-      const transformed = this.registry.transformStmts(nonFuncStmts);
-      // First, try to handle the entire script body as a unit (e.g.
-      // mtoc2 top-level JIT). If a whole-scope executor matches, the
-      // per-stmt loop is skipped.
-      const wholeScope = this.registry.tryRunWholeScope(transformed, this);
-      if (wholeScope === null) {
-        const ctx = makeRootContext(this, this.registry);
-        for (let i = 0; i < transformed.length; i++) {
-          ctx.resetForNextDispatch();
-          const result = this.registry.dispatch(transformed, i, ctx);
-          if (result.signal) break;
+      // First, try to handle the entire script body as a unit (top-level
+      // JIT). If a whole-scope executor takes it, the per-stmt loop is
+      // skipped.
+      if (!this.registry.tryRunWholeScope(nonFuncStmts, this)) {
+        for (let i = 0; i < nonFuncStmts.length; i++) {
+          if (this.registry.dispatch(nonFuncStmts, i, this)) break;
         }
       }
     }
