@@ -8,8 +8,6 @@
 //
 // Comparison rules (deliberately strict — we expect EXACT matches):
 //   * stdout is compared verbatim, except:
-//       - lines containing "using bridge:" are dropped (a one-time native-addon
-//         diagnostic the interpreter prints to stdout; pure noise),
 //       - lines beginning with "warning:" are dropped (JIT bail notices; these
 //         normally go to stderr, filtered here too for safety),
 //       - trailing whitespace/newlines are trimmed.
@@ -200,9 +198,7 @@ async function runPool(jobs, concurrency, worker) {
 function normalize({ stdout, status, timedOut }) {
   if (timedOut) return "<TIMEOUT>";
   if (status !== 0) return "<ERROR>";
-  const kept = stdout
-    .split("\n")
-    .filter(l => !/using bridge:/.test(l) && !/^\s*warning:/i.test(l));
+  const kept = stdout.split("\n").filter(l => !/^\s*warning:/i.test(l));
   return kept.join("\n").replace(/\s+$/, "");
 }
 

@@ -20,8 +20,6 @@ import { dgeqrf } from "./dgeqrf.js";
 import { dorgbr } from "./dorgbr.js";
 import { dorglq } from "./dorglq.js";
 import { dorgqr } from "./dorgqr.js";
-// dormbr not used in this simplified translation (uses dorgbr instead)
-// import { dormbr } from "./dormbr.js";
 import { dbdsqr } from "./dbdsqr.js";
 import { dlacpy } from "./dlacpy.js";
 import { dlascl } from "./dlascl.js";

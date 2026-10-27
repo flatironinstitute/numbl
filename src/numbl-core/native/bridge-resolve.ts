@@ -1,5 +1,6 @@
 /**
- * Centralized LAPACK bridge resolution with fallback and one-time logging.
+ * Centralized LAPACK bridge resolution with fallback and optional one-time
+ * logging (enabled by the CLI under --verbose).
  *
  * Tries the native bridge first; falls back to ts-lapack (pure TypeScript).
  */
@@ -8,6 +9,12 @@ import { getLapackBridge, type LapackBridge } from "./lapack-bridge.js";
 import { getTsLapackBridge } from "./ts-lapack-bridge.js";
 
 const _logged = new Set<string>();
+let _log: ((message: string) => void) | null = null;
+
+/** Set (or clear) the sink for the per-op "using bridge" diagnostic. */
+export function setBridgeLog(log: ((message: string) => void) | null): void {
+  _log = log;
+}
 
 /**
  * Get the effective LAPACK bridge for a given operation.
@@ -27,13 +34,10 @@ export function getEffectiveBridge(
         ? native
         : getTsLapackBridge()
       : (native ?? getTsLapackBridge());
-  if (!_logged.has(opName)) {
+  if (_log && !_logged.has(opName)) {
     _logged.add(opName);
     const name = native ? "native LAPACK addon" : "ts-lapack (TypeScript)";
-    // Diagnostic only — write to stderr so it never pollutes program
-    // stdout. (On stdout it leaked into captured output and diverged
-    // from the JIT, which resolves its own kernels and never logs.)
-    console.error(`[${opName}] using bridge: ${name}`);
+    _log(`[${opName}] using bridge: ${name}`);
   }
   return bridge;
 }

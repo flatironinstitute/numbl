@@ -25,6 +25,7 @@ import {
 } from "../../helpers/erf.js";
 import { lanczosGamma } from "../../helpers/bessel.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { OpUnary } from "../../ops/index.js";
 
 // ── Simple unary registration helper ────────────────────────────────────
 
@@ -120,7 +121,7 @@ defineBuiltin({
       realFn: Math.asin,
       complexFn: cAsin,
       maybeComplex: true,
-      nativeOpCode: 13,
+      nativeOpCode: OpUnary.ASIN,
     },
     "asin"
   ),
@@ -132,7 +133,7 @@ defineBuiltin({
       realFn: Math.acos,
       complexFn: cAcos,
       maybeComplex: true,
-      nativeOpCode: 14,
+      nativeOpCode: OpUnary.ACOS,
     },
     "acos"
   ),
@@ -216,7 +217,7 @@ defineBuiltin({
       realFn: Math.log,
       complexFn: complexLog,
       maybeComplex: true,
-      nativeOpCode: 1,
+      nativeOpCode: OpUnary.LOG,
     },
     "log"
   ),
@@ -280,7 +281,7 @@ defineBuiltin({
         realFn: Math.log2,
         complexFn: complexLog2,
         maybeComplex: true,
-        nativeOpCode: 2,
+        nativeOpCode: OpUnary.LOG2,
       },
       "log2"
     ),
@@ -299,7 +300,7 @@ defineBuiltin({
       realFn: Math.log10,
       complexFn: complexLog10,
       maybeComplex: true,
-      nativeOpCode: 3,
+      nativeOpCode: OpUnary.LOG10,
     },
     "log10"
   ),
@@ -368,7 +369,7 @@ defineBuiltin({
       realFn: x => (x >= 0 ? Math.sqrt(x) : NaN),
       complexFn: complexSqrt,
       maybeComplex: true,
-      nativeOpCode: 4,
+      nativeOpCode: OpUnary.SQRT,
     },
     "sqrt"
   ),

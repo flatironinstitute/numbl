@@ -34,7 +34,7 @@ import {
   getIBuiltinHelp,
 } from "./numbl-core/interpreter/builtins/index.js";
 import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
-import { setLapackBridge as setLapackBridgeNew } from "./numbl-core/native/lapack-bridge.js";
+import { setBridgeLog } from "./numbl-core/native/bridge-resolve.js";
 import {
   diagnoseErrors,
   formatDiagnostics,
@@ -106,7 +106,6 @@ function loadNativeAddon(fastMath: boolean, noNative = false): void {
       return;
     }
     setLapackBridge(addon);
-    setLapackBridgeNew(addon);
   } catch (e) {
     console.error(
       `Warning: failed to load native addon at ${variantPath}: ${(e as Error).message}. Using JS fallbacks.`
@@ -906,6 +905,7 @@ async function executeWithOptions(
       process.exit(0);
     } else if (opts.verbose) {
       const log = (msg: string) => console.error(`[verbose] ${msg}`);
+      setBridgeLog(log);
       const plot = createPlotHandler(!opts.plot || opts.stream);
       const result = executeCode(
         code,
