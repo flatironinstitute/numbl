@@ -26,10 +26,12 @@ import {
   quiver3Call as _quiver3Call,
   fplotCall as _fplotCall,
   fplot3Call as _fplot3Call,
+} from "./instructions.js";
+import {
   streamlineCall as _streamlineCall,
   stream2Call as _stream2Call,
-} from "./instructions.js";
-import { computeContourMatrix } from "./parseArgs.js";
+} from "./streamline.js";
+import { computeContourMatrix } from "./parseArgsSurface.js";
 import { dispatchPlotBuiltin, PLOT_DISPATCH_NAMES } from "./dispatch.js";
 import { applyAxisCommand } from "./axisCommand.js";
 import { isosurfaceFromArgs } from "../helpers/marching-cubes.js";
