@@ -35,7 +35,8 @@ import {
   switchMatch as runtimeSwitchMatch,
   range as runtimeRange,
 } from "../runtime/runtimeOperators.js";
-import type { ResolvedTarget } from "../functionResolve.js";
+import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
+import type { FunctionIndex } from "../lowering/loweringContext.js";
 
 import {
   BreakSignal,
@@ -519,7 +520,7 @@ export function evalExprNargout(
       // function-name reference, evaluated per loop iteration, paid for
       // a thrown-and-immediately-caught exception.
       const c = getConstant(expr.name);
-      if (c !== undefined) return c;
+      if (c !== undefined && !shadowsBuiltin(this, expr.name)) return c;
       return this.callFunction(expr.name, [], nargout);
     }
 
@@ -1000,7 +1001,7 @@ export function evalFuncCall(
   // Constant called as zero-arg function? e.g. eps(), pi(), inf()
   if (args.length === 0) {
     const c = getConstant(expr.name);
-    if (c !== undefined) return c;
+    if (c !== undefined && !shadowsBuiltin(this, expr.name)) return c;
   }
   // Record call-site argument names so the callee's inputname() can read
   // them. Set after evalArgs (which may itself make calls) and consumed at
@@ -1008,6 +1009,40 @@ export function evalFuncCall(
   this.pendingInputNames =
     expr.args.length > 0 ? computeInputNames(expr.args, this.env) : undefined;
   return this.callFunction(expr.name, args, nargout);
+}
+
+/** Names known to be shadowed (true) or not (false) by a user function in
+ *  the scope identified by `index`, `file` and `cls`. */
+let shadowScope: {
+  index: FunctionIndex | null;
+  file: string;
+  cls: string | undefined;
+  names: Map<string, boolean>;
+} = { index: null, file: "", cls: undefined, names: new Map() };
+
+/** True if `name` resolves to a nested, local, workspace or class function
+ *  in the current scope, which takes precedence over a builtin constant such
+ *  as `pi`. */
+function shadowsBuiltin(interp: Interpreter, name: string): boolean {
+  if (interp.env.getNestedFunction(name)) return true;
+  const index = interp.functionIndex;
+  const file = interp.currentFile;
+  const cls = interp.currentClassName;
+  if (
+    shadowScope.index !== index ||
+    shadowScope.file !== file ||
+    shadowScope.cls !== cls
+  ) {
+    shadowScope = { index, file, cls, names: new Map() };
+  }
+  let shadowed = shadowScope.names.get(name);
+  if (shadowed === undefined) {
+    const callSite = { file, ...(cls ? { className: cls } : {}) };
+    const target = resolveFunction(name, [], callSite, index);
+    shadowed = !!target && target.kind !== "builtin";
+    shadowScope.names.set(name, shadowed);
+  }
+  return shadowed;
 }
 
 // ── Member access ────────────────────────────────────────────────────────
