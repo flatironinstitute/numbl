@@ -16,14 +16,18 @@ import {
   isRuntimeClassInstanceArray,
   RuntimeClassInstance,
 } from "../runtime/types.js";
-import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
+import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError, CancellationError } from "../runtime/error.js";
-import { inferJitType } from "./builtins/index.js";
+import { inferDispatchType } from "./builtins/types.js";
 import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
 import { toString, toNumber } from "../runtime/convert.js";
-import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
+import {
+  resolveFunction,
+  resolutionArgType,
+  type ResolvedTarget,
+} from "../functionResolve.js";
 import { parseMFile, type AbstractSyntaxTree } from "../parser/index.js";
 import { SyntaxError } from "../parser/errors.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
@@ -59,9 +63,7 @@ export function callFunction(
   }
 
   // 2. Resolve using function index
-  const argTypes = args.map(a =>
-    getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-  );
+  const argTypes = args.map(resolutionArgType);
   const callSite: CallSite = {
     file: this.currentFile,
     ...(this.currentClassName ? { className: this.currentClassName } : {}),
@@ -289,7 +291,7 @@ export function interpretJsUserFunction(
   }
   const ib = entry.builtin;
   const margs = args.map(a => ensureRuntimeValue(a));
-  const argTypes = margs.map(inferJitType);
+  const argTypes = margs.map(inferDispatchType);
   const resolution = ib.resolve(argTypes, nargout);
   if (!resolution) {
     const typeNames = argTypes.map(t => t.kind);

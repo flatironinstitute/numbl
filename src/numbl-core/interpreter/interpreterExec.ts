@@ -19,7 +19,7 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
 } from "../runtime/types.js";
-import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
+import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError, CancellationError } from "../runtime/error.js";
 import { getLastJitDecline } from "../jitDeclineDiagnostics.js";
@@ -631,9 +631,6 @@ export function evalExprNargout(
             kind: "classMethod",
             className: dottedBase,
             methodName: expr.name,
-            compileArgTypes: args.map(a =>
-              getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-            ),
             stripInstance: false,
           };
           return this.interpretTarget(target, args, nargout);
@@ -643,9 +640,6 @@ export function evalExprNargout(
             kind: "classMethod",
             className: dottedBase,
             methodName: expr.name,
-            compileArgTypes: args.map(a =>
-              getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-            ),
             stripInstance: false,
           };
           return this.interpretTarget(target, args, nargout);
@@ -1076,7 +1070,6 @@ export function evalMember(
             kind: "classMethod",
             className: prefix,
             methodName,
-            compileArgTypes: [],
             stripInstance: false,
           };
           return this.interpretTarget(target, [], nargout);
@@ -1276,9 +1269,6 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
           kind: "classMethod",
           className,
           methodName,
-          compileArgTypes: actualArgs.map(a =>
-            getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-          ),
           stripInstance: false,
         };
         return this.interpretTarget(target, actualArgs, narg);
