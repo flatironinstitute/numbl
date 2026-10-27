@@ -63,16 +63,6 @@ export function registerIBuiltin(b: IBuiltin): void {
   registry.set(b.name, b);
 }
 
-/** Register a dynamic IBuiltin (e.g. .js user functions), replacing any
- *  existing entry with the same name without error. */
-export function registerDynamicIBuiltin(b: IBuiltin): void {
-  registry.set(b.name, b);
-}
-
-export function unregisterIBuiltin(name: string): void {
-  registry.delete(name);
-}
-
 export function getAllIBuiltinNames(): string[] {
   return Array.from(registry.keys());
 }

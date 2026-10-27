@@ -87,7 +87,7 @@ import {
   indexCellStore as _indexCellStore,
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
-import { registerSpecialBuiltins } from "./specialBuiltins.js";
+import "./specialBuiltins.js";
 import { setWarningSink } from "../helpers/warn.js";
 import {
   getMember as _getMember,
@@ -269,6 +269,13 @@ export class Runtime {
   /** Reference to the active search paths (set by executeCode). */
   public searchPaths: string[] = [];
 
+  /** Warning identifiers turned off with warning('off', id); 'all' covers
+   *  identifiers without their own entry. */
+  public warningsOff = new Set<string>();
+
+  /** Counter for uihtml component ids. */
+  public uihtmlSeq = 0;
+
   // File I/O adapter (injected from host environment)
   public fileIO?: FileIOAdapter;
 
@@ -403,9 +410,6 @@ export class Runtime {
   }
 
   private initBuiltins(): void {
-    // Register special builtins
-    registerSpecialBuiltins(this);
-
     // ── Plot builtins (data-bearing + graphics ops) ────────────────────
     // Side-effect-only names route through the shared
     // `dispatchPlotBuiltin` helper. The exceptional ones (pcolor's

@@ -26,11 +26,6 @@ import {
   isNumblJsFile,
   type LoadedJsUserFunction,
 } from "./jsUserFunctions.js";
-import {
-  getIBuiltin,
-  registerDynamicIBuiltin,
-} from "./interpreter/builtins/types.js";
-import type { IBuiltin } from "./interpreter/builtins/types.js";
 import type { NativeBridge } from "./workspace/index.js";
 import { parseMFile, type Stmt } from "./parser/index.js";
 import { SyntaxError } from "./parser/errors.js";
@@ -38,7 +33,6 @@ import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
 import { resetAppdataStore } from "./interpreter/builtins/misc.js";
-import { SPECIAL_BUILTIN_NAMES } from "./runtime/specialBuiltinNames.js";
 import { registerExecutorsForOpt } from "./executors/plugins.js";
 import { pushCurrentRuntime, popCurrentRuntime } from "./runtime/refcount.js";
 import {
@@ -375,19 +369,6 @@ export function executeCode(
   const functionIndex = ctx.buildFunctionIndex();
 
   // ── 3. Create runtime ──────────────────────────────────────────────
-  // Save the existing dynamic IBuiltin entries for SPECIAL_BUILTIN_NAMES
-  // before constructing the new Runtime. registerSpecialBuiltins (called
-  // from the Runtime constructor) replaces these global registry entries
-  // with closures that capture the new rt; if we don't restore them, a
-  // nested executeCode call leaves the parent runtime's special builtins
-  // (e.g. mfilename, disp, fprintf, ...) bound to the *nested* rt, so
-  // subsequent calls in the parent see stale rt.$file/output state.
-  const savedSpecialBuiltins = new Map<string, IBuiltin>();
-  for (const name of SPECIAL_BUILTIN_NAMES) {
-    const existing = getIBuiltin(name);
-    if (existing) savedSpecialBuiltins.set(name, existing);
-  }
-
   const rt = new Runtime(options, options.initialVariableValues);
 
   // Apply custom builtins (both to rt.builtins fallback and to customBuiltins
@@ -848,21 +829,9 @@ export function executeCode(
     };
 
     // If the run registered uihtml reverse-channel callbacks, hand the caller a
-    // session over this still-live runtime. Snapshot this runtime's special
-    // builtins now (still installed globally inside the try, before the finally
-    // restores them) so the session can re-activate them for each callback
-    // without re-registering (which would reset their counters).
+    // session over this still-live runtime.
     if (rt.uihtmlCallbacks.size > 0) {
-      const activeSpecials = new Map<string, IBuiltin>();
-      for (const name of SPECIAL_BUILTIN_NAMES) {
-        const ex = getIBuiltin(name);
-        if (ex) activeSpecials.set(name, ex);
-      }
-      result.uihtmlSession = createUihtmlSession(
-        rt,
-        activeSpecials,
-        options.onDrawnow
-      );
+      result.uihtmlSession = createUihtmlSession(rt, options.onDrawnow);
     }
 
     if (options.profile) {
@@ -925,12 +894,5 @@ export function executeCode(
     throw re;
   } finally {
     popCurrentRuntime(rt);
-    // Restore the parent runtime's special-builtin registrations. Our
-    // Runtime constructor replaced these with closures over our rt; the
-    // parent (or a still-running outer executeCode) needs its own closures
-    // back so its rt.$file/output streams are no longer aliased to ours.
-    for (const [, ib] of savedSpecialBuiltins) {
-      registerDynamicIBuiltin(ib);
-    }
   }
 }

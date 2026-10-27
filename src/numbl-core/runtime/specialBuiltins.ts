@@ -1,9 +1,8 @@
 /**
  * Special builtin functions that require direct runtime access.
  *
- * These builtins are registered as IBuiltins (via registerDynamicIBuiltin)
- * that close over the Runtime instance, unifying them with the standard
- * IBuiltin dispatch path.
+ * They are registered once, at module load, as ordinary IBuiltins; each call
+ * gets the active Runtime from the current-runtime stack.
  */
 
 import {
@@ -30,7 +29,7 @@ import {
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { applyHandleProperty } from "./struct-access.js";
-import { incref, decref } from "./refcount.js";
+import { incref, decref, getCurrentRuntime } from "./refcount.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { scanFormat } from "../helpers/scanFormat.js";
@@ -45,7 +44,7 @@ import {
 } from "./runtimeDispatch.js";
 import type { Runtime } from "./runtime.js";
 import {
-  registerDynamicIBuiltin,
+  registerIBuiltin,
   getIBuiltinHelp,
 } from "../interpreter/builtins/types.js";
 import { getAllBuiltinNames } from "../helpers/registry.js";
@@ -93,17 +92,25 @@ const _solStepData = new WeakMap<object, StepData[]>();
 
 export { SPECIAL_BUILTIN_NAMES } from "./specialBuiltinNames.js";
 
-/** Helper: register a special builtin as an IBuiltin that accepts any args. */
+/** The runtime executing the current call. */
+function currentRuntime(): Runtime {
+  const rt = getCurrentRuntime();
+  if (!rt) throw new RuntimeError("no active runtime");
+  return rt as Runtime;
+}
+
+/** Register a special builtin: an IBuiltin that accepts any args and gets
+ *  the active runtime. */
 function registerSpecial(
   name: string,
-  fn: (nargout: number, args: RuntimeValue[]) => unknown
+  fn: (nargout: number, args: RuntimeValue[], rt: Runtime) => unknown
 ): void {
-  registerDynamicIBuiltin({
+  registerIBuiltin({
     name,
     resolve: () => ({
       outputTypes: [{ kind: "unknown" as const }],
       apply: (args: RuntimeValue[], nargout: number) =>
-        fn(nargout, args) as RuntimeValue | RuntimeValue[],
+        fn(nargout, args, currentRuntime()) as RuntimeValue | RuntimeValue[],
     }),
   });
 }
@@ -113,14 +120,14 @@ function registerSpecial(
  *  set when called as a statement. */
 function registerSpecialVoid(
   name: string,
-  fn: (args: RuntimeValue[]) => void
+  fn: (args: RuntimeValue[], rt: Runtime) => void
 ): void {
-  registerDynamicIBuiltin({
+  registerIBuiltin({
     name,
     resolve: () => ({
       outputTypes: [],
       apply: (args: RuntimeValue[]) => {
-        fn(args);
+        fn(args, currentRuntime());
         return undefined as unknown as RuntimeValue;
       },
     }),
@@ -130,763 +137,778 @@ function registerSpecialVoid(
 /**
  * Register all special builtins as IBuiltins closing over the runtime instance.
  */
-export function registerSpecialBuiltins(rt: Runtime): void {
-  registerSpecial("help", (nargout, args) => {
-    let text = "";
-    const emit = (s: string) => {
-      text += s;
-      if (nargout === 0) rt.output(s);
-    };
-    if (args.length === 0) {
-      const names = getAllBuiltinNames().sort();
-      emit("Available builtins:\n");
-      emit("  " + names.join(", ") + "\n");
-      emit("\nType 'help <name>' for help on a specific builtin.\n");
-    } else {
-      const name = toString(args[0]);
-      const h = getIBuiltinHelp(name);
-      if (!h) {
-        const allNames = getAllBuiltinNames();
-        if (allNames.includes(name)) {
-          emit(`No help available for '${name}'.\n`);
-        } else {
-          emit(`Unknown function '${name}'.\n`);
-        }
+// ── Special builtin registrations ─────────────────────────────────────
+
+registerSpecial("help", (nargout, args, rt) => {
+  let text = "";
+  const emit = (s: string) => {
+    text += s;
+    if (nargout === 0) rt.output(s);
+  };
+  if (args.length === 0) {
+    const names = getAllBuiltinNames().sort();
+    emit("Available builtins:\n");
+    emit("  " + names.join(", ") + "\n");
+    emit("\nType 'help <name>' for help on a specific builtin.\n");
+  } else {
+    const name = toString(args[0]);
+    const h = getIBuiltinHelp(name);
+    if (!h) {
+      const allNames = getAllBuiltinNames();
+      if (allNames.includes(name)) {
+        emit(`No help available for '${name}'.\n`);
       } else {
-        emit(`  ${h.signatures.join("\n  ")}\n\n`);
-        emit(`${h.description}\n`);
+        emit(`Unknown function '${name}'.\n`);
       }
+    } else {
+      emit(`  ${h.signatures.join("\n  ")}\n\n`);
+      emit(`${h.description}\n`);
     }
-    return nargout >= 1 ? RTV.char(text) : undefined;
-  });
+  }
+  return nargout >= 1 ? RTV.char(text) : undefined;
+});
 
-  registerSpecialVoid("disp", args => {
-    if (args.length >= 1) {
-      const mv = ensureRuntimeValue(args[0]);
-      if (isRuntimeTensor(mv) && mv.data.length === 0) return;
-      rt.output(displayValue(mv) + "\n");
+registerSpecialVoid("disp", (args, rt) => {
+  if (args.length >= 1) {
+    const mv = ensureRuntimeValue(args[0]);
+    if (isRuntimeTensor(mv) && mv.data.length === 0) return;
+    rt.output(displayValue(mv) + "\n");
+  }
+});
+
+// toc: registered with proper output types so the JIT can lower it.
+// Only the no-arg assigned form (t = toc) is JIT-able; bare `toc;`
+// (nargout=0, prints elapsed) falls back to the interpreter.
+registerIBuiltin({
+  name: "toc",
+  resolve: argTypes => {
+    // Only support 0-arg toc for JIT (no handle argument)
+    if (argTypes.length > 1) return null;
+    return {
+      outputTypes: [{ kind: "number" as const }],
+      apply: (args: RuntimeValue[], na: number) => {
+        let startSeconds: number;
+        if (args.length === 0) {
+          startSeconds = getTicTime() / 1000;
+        } else {
+          const h = ensureRuntimeValue(args[0]);
+          if (!isRuntimeNumber(h)) {
+            throw new RuntimeError("toc: argument must be a tic handle");
+          }
+          startSeconds = toNumber(h);
+        }
+        const elapsed = performance.now() / 1000 - startSeconds;
+        if (na === 0) {
+          // Bare `toc;` prints and produces nothing — MATLAB does not set
+          // `ans` from it.
+          currentRuntime().output(
+            `Elapsed time is ${elapsed.toFixed(6)} seconds.\n`
+          );
+          return undefined as unknown as RuntimeValue;
+        }
+        return RTV.num(elapsed);
+      },
+    };
+  },
+});
+
+registerSpecial("warning", (nargout, args, rt) => {
+  if (args.length === 0) return nargout >= 1 ? RTV.num(0) : undefined;
+  const warningStateOff = rt.warningsOff;
+  const margs = args.map(a => ensureRuntimeValue(a));
+  const isOff = (id: string) =>
+    warningStateOff.has(id) || warningStateOff.has("all");
+  const stateStruct = (id: string) =>
+    RTV.struct(
+      new Map<string, RuntimeValue>([
+        ["identifier", RTV.char(id)],
+        ["state", RTV.char(isOff(id) ? "off" : "on")],
+      ])
+    );
+  const setState = (mode: string, id: string) => {
+    if (mode === "off") warningStateOff.add(id);
+    else {
+      warningStateOff.delete(id);
+      if (id === "all") warningStateOff.clear();
     }
-  });
+  };
+  // warning(s) — restore state from a struct previously returned by
+  // warning('on'/'off'/'query', id)
+  const restoreFrom = (s: RuntimeValue): boolean => {
+    if (!isRuntimeStruct(s)) return false;
+    const idField = s.fields.get("identifier");
+    const stField = s.fields.get("state");
+    if (idField === undefined || stField === undefined) return false;
+    setState(toString(stField), toString(idField));
+    return true;
+  };
+  if (margs.length === 1 && isRuntimeStruct(margs[0])) {
+    if (restoreFrom(margs[0])) return nargout >= 1 ? RTV.num(0) : undefined;
+  }
+  if (margs.length === 1 && isRuntimeStructArray(margs[0])) {
+    for (const el of margs[0].elements) restoreFrom(el);
+    return nargout >= 1 ? RTV.num(0) : undefined;
+  }
+  // warning('on'/'off') — global toggle
+  if (margs.length === 1 && isRuntimeChar(margs[0])) {
+    const mode = toString(margs[0]);
+    if (mode === "on" || mode === "off") {
+      const prev = stateStruct("all");
+      setState(mode, "all");
+      return nargout >= 1 ? prev : undefined;
+    }
+  }
+  // warning('on'/'off'/'query', id) — state query/set form
+  if (
+    margs.length === 2 &&
+    isRuntimeChar(margs[0]) &&
+    isRuntimeChar(margs[1])
+  ) {
+    const mode = toString(margs[0]);
+    const id = toString(margs[1]);
+    if (mode === "on" || mode === "off") {
+      const prev = stateStruct(id);
+      setState(mode, id);
+      return nargout >= 1 ? prev : undefined;
+    }
+    if (mode === "query") {
+      return stateStruct(id);
+    }
+  }
+  // Detect warning(msgID, msg, ...) form — msgID contains a ':'
+  let fmtIdx = 0;
+  if (
+    margs.length >= 2 &&
+    isRuntimeChar(margs[0]) &&
+    toString(margs[0]).includes(":")
+  ) {
+    fmtIdx = 1;
+  }
+  // Suppress output for disabled warning ids
+  if (isOff(fmtIdx === 1 ? toString(margs[0]) : "all")) {
+    return nargout >= 1 ? RTV.num(0) : undefined;
+  }
+  const fmt = toString(margs[fmtIdx]);
+  const fmtArgs: RuntimeValue[] = [];
+  for (let i = fmtIdx + 1; i < margs.length; i++) {
+    const a = margs[i];
+    if (isRuntimeTensor(a)) {
+      for (let j = 0; j < a.data.length; j++) fmtArgs.push(RTV.num(a.data[j]));
+    } else {
+      fmtArgs.push(a);
+    }
+  }
+  if (fmtArgs.length === 0) {
+    rt.output("Warning: " + fmt + "\n");
+  } else {
+    rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
+  }
+  return nargout >= 1 ? RTV.num(0) : undefined;
+});
 
-  // toc: registered with proper output types so the JIT can lower it.
-  // Only the no-arg assigned form (t = toc) is JIT-able; bare `toc;`
-  // (nargout=0, prints elapsed) falls back to the interpreter.
-  registerDynamicIBuiltin({
-    name: "toc",
-    resolve: argTypes => {
-      // Only support 0-arg toc for JIT (no handle argument)
-      if (argTypes.length > 1) return null;
-      return {
-        outputTypes: [{ kind: "number" as const }],
-        apply: (args: RuntimeValue[], na: number) => {
-          let startSeconds: number;
-          if (args.length === 0) {
-            startSeconds = getTicTime() / 1000;
-          } else {
-            const h = ensureRuntimeValue(args[0]);
-            if (!isRuntimeNumber(h)) {
-              throw new RuntimeError("toc: argument must be a tic handle");
-            }
-            startSeconds = toNumber(h);
-          }
-          const elapsed = performance.now() / 1000 - startSeconds;
-          if (na === 0) {
-            // Bare `toc;` prints and produces nothing — MATLAB does not set
-            // `ans` from it.
-            rt.output(`Elapsed time is ${elapsed.toFixed(6)} seconds.\n`);
-            return undefined as unknown as RuntimeValue;
-          }
-          return RTV.num(elapsed);
-        },
-      };
-    },
-  });
-
-  // Per-id warning enable state ('all' covers ids without their own entry)
-  const warningStateOff = new Set<string>();
-  registerSpecial("warning", (nargout, args) => {
-    if (args.length === 0) return nargout >= 1 ? RTV.num(0) : undefined;
+registerSpecial("fprintf", (nargout, args, rt) => {
+  let output = "";
+  if (args.length >= 1) {
     const margs = args.map(a => ensureRuntimeValue(a));
-    const isOff = (id: string) =>
-      warningStateOff.has(id) || warningStateOff.has("all");
-    const stateStruct = (id: string) =>
-      RTV.struct(
-        new Map<string, RuntimeValue>([
-          ["identifier", RTV.char(id)],
-          ["state", RTV.char(isOff(id) ? "off" : "on")],
-        ])
-      );
-    const setState = (mode: string, id: string) => {
-      if (mode === "off") warningStateOff.add(id);
-      else {
-        warningStateOff.delete(id);
-        if (id === "all") warningStateOff.clear();
-      }
-    };
-    // warning(s) — restore state from a struct previously returned by
-    // warning('on'/'off'/'query', id)
-    const restoreFrom = (s: RuntimeValue): boolean => {
-      if (!isRuntimeStruct(s)) return false;
-      const idField = s.fields.get("identifier");
-      const stField = s.fields.get("state");
-      if (idField === undefined || stField === undefined) return false;
-      setState(toString(stField), toString(idField));
-      return true;
-    };
-    if (margs.length === 1 && isRuntimeStruct(margs[0])) {
-      if (restoreFrom(margs[0])) return nargout >= 1 ? RTV.num(0) : undefined;
-    }
-    if (margs.length === 1 && isRuntimeStructArray(margs[0])) {
-      for (const el of margs[0].elements) restoreFrom(el);
-      return nargout >= 1 ? RTV.num(0) : undefined;
-    }
-    // warning('on'/'off') — global toggle
-    if (margs.length === 1 && isRuntimeChar(margs[0])) {
-      const mode = toString(margs[0]);
-      if (mode === "on" || mode === "off") {
-        const prev = stateStruct("all");
-        setState(mode, "all");
-        return nargout >= 1 ? prev : undefined;
-      }
-    }
-    // warning('on'/'off'/'query', id) — state query/set form
-    if (
-      margs.length === 2 &&
-      isRuntimeChar(margs[0]) &&
-      isRuntimeChar(margs[1])
-    ) {
-      const mode = toString(margs[0]);
-      const id = toString(margs[1]);
-      if (mode === "on" || mode === "off") {
-        const prev = stateStruct(id);
-        setState(mode, id);
-        return nargout >= 1 ? prev : undefined;
-      }
-      if (mode === "query") {
-        return stateStruct(id);
-      }
-    }
-    // Detect warning(msgID, msg, ...) form — msgID contains a ':'
+
+    // Detect optional leading fid argument (numeric first arg with >= 2 args)
+    let fid = 1; // default stdout
     let fmtIdx = 0;
-    if (
-      margs.length >= 2 &&
-      isRuntimeChar(margs[0]) &&
-      toString(margs[0]).includes(":")
-    ) {
+    if (margs.length >= 2 && isRuntimeNumber(margs[0])) {
+      fid = toNumber(margs[0]);
       fmtIdx = 1;
     }
-    // Suppress output for disabled warning ids
-    if (isOff(fmtIdx === 1 ? toString(margs[0]) : "all")) {
-      return nargout >= 1 ? RTV.num(0) : undefined;
-    }
+
     const fmt = toString(margs[fmtIdx]);
-    const fmtArgs: RuntimeValue[] = [];
-    for (let i = fmtIdx + 1; i < margs.length; i++) {
-      const a = margs[i];
-      if (isRuntimeTensor(a)) {
-        for (let j = 0; j < a.data.length; j++)
-          fmtArgs.push(RTV.num(a.data[j]));
-      } else {
-        fmtArgs.push(a);
-      }
-    }
-    if (fmtArgs.length === 0) {
-      rt.output("Warning: " + fmt + "\n");
+    // sprintfFormat handles tensor flattening and format cycling internally,
+    // so we can pass the remaining args through directly. String arrays
+    // supply one text arg per element.
+    const rest = margs
+      .slice(fmtIdx + 1)
+      .flatMap(a =>
+        isRuntimeStringArray(a) ? a.data.map(s => RTV.string(s)) : [a]
+      );
+    output = sprintfFormat(fmt, rest);
+
+    if (fid === 1 || fid === 2) {
+      rt.output(output);
     } else {
-      rt.output("Warning: " + sprintfFormat(fmt, fmtArgs) + "\n");
+      if (!rt.fileIO)
+        throw new RuntimeError("File I/O is not available in this environment");
+      rt.fileIO.fwrite(fid, output);
     }
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
+  }
+  // MATLAB: called as a statement, fprintf does not set `ans`.  Only
+  // surface the byte count when the caller asks for it.
+  return nargout >= 1 ? output.length : undefined;
+});
 
-  registerSpecial("fprintf", (nargout, args) => {
-    let output = "";
-    if (args.length >= 1) {
-      const margs = args.map(a => ensureRuntimeValue(a));
+registerSpecial("arrayfun", (nargout, args, rt) => {
+  return _arrayfunImpl(rt, nargout, args);
+});
 
-      // Detect optional leading fid argument (numeric first arg with >= 2 args)
-      let fid = 1; // default stdout
-      let fmtIdx = 0;
-      if (margs.length >= 2 && isRuntimeNumber(margs[0])) {
-        fid = toNumber(margs[0]);
-        fmtIdx = 1;
-      }
+registerSpecial("cellfun", (nargout, args, rt) => {
+  return _cellfunImpl(rt, nargout, args);
+});
 
-      const fmt = toString(margs[fmtIdx]);
-      // sprintfFormat handles tensor flattening and format cycling internally,
-      // so we can pass the remaining args through directly. String arrays
-      // supply one text arg per element.
-      const rest = margs
-        .slice(fmtIdx + 1)
-        .flatMap(a =>
-          isRuntimeStringArray(a) ? a.data.map(s => RTV.string(s)) : [a]
+registerSpecial("structfun", (nargout, args, rt) => {
+  return _structfunImpl(rt, nargout, args);
+});
+
+registerSpecial("feval", (nargout, args, rt) => {
+  if (args.length < 1)
+    throw new RuntimeError("feval requires at least 1 argument");
+  const fn = ensureRuntimeValue(args[0]);
+  if (isRuntimeFunction(fn)) {
+    if (fn.jsFn) {
+      return fn.jsFnExpectsNargout
+        ? fn.jsFn(nargout, ...args.slice(1))
+        : fn.jsFn(...args.slice(1));
+    }
+    return rt.dispatch(fn.name, nargout, args.slice(1));
+  }
+  if (isRuntimeChar(fn) || isRuntimeString(fn)) {
+    const name = typeof fn === "string" ? fn : fn.value;
+    return rt.dispatch(name, nargout, args.slice(1));
+  }
+  throw new RuntimeError(
+    "feval: first argument must be a function handle or name"
+  );
+});
+
+registerSpecial("bsxfun", (nargout, args, rt) => {
+  return _bsxfunImpl(rt, nargout, args);
+});
+
+registerSpecial("quadgk", (nargout, args, rt) => {
+  if (args.length < 3)
+    throw new RuntimeError("quadgk: requires at least 3 arguments (fun, a, b)");
+  const fnArg = ensureRuntimeValue(args[0]);
+  if (!isRuntimeFunction(fnArg))
+    throw new RuntimeError("quadgk: first argument must be a function");
+  const a = toNumber(ensureRuntimeValue(args[1]));
+  const b = toNumber(ensureRuntimeValue(args[2]));
+
+  // Parse name-value option pairs.  Unknown names are ignored so that
+  // chunkie-style `quadgk(fun, a, b, quadgkparams{:})` spreads that may
+  // include options we don't yet support (Waypoints, etc.) don't error.
+  let relTol: number | undefined;
+  let absTol: number | undefined;
+  let maxIntervalCount: number | undefined;
+  for (let i = 3; i + 1 < args.length; i += 2) {
+    const keyRv = ensureRuntimeValue(args[i]);
+    const key = isRuntimeChar(keyRv)
+      ? keyRv.value
+      : isRuntimeString(keyRv)
+        ? (keyRv as string)
+        : "";
+    const lowerKey = key.toLowerCase();
+    const valRv = ensureRuntimeValue(args[i + 1]);
+    if (lowerKey === "reltol") relTol = toNumber(valRv);
+    else if (lowerKey === "abstol") absTol = toNumber(valRv);
+    else if (lowerKey === "maxintervalcount")
+      maxIntervalCount = toNumber(valRv);
+    // Waypoints and other options are silently ignored for now.
+  }
+
+  // Vectorized integrand: pass the 15 nodes as a 1x15 row vector and
+  // expect a 1x15 (or 15x1) numeric result.
+  const integrand = (pts: number[]): number[] => {
+    const vecData = allocFloat64Array(pts);
+    const vec = RTV.tensor(vecData, [1, pts.length]);
+    const resultRaw = rt.index(fnArg, [vec], 1);
+    const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
+    if (isRuntimeNumber(rv)) {
+      // Scalar result: broadcast (rare — most integrands vectorize).
+      return new Array<number>(pts.length).fill(rv as number);
+    }
+    if (isRuntimeTensor(rv)) {
+      if (rv.data.length !== pts.length) {
+        throw new RuntimeError(
+          `quadgk: integrand returned ${rv.data.length} values for ${pts.length} nodes`
         );
-      output = sprintfFormat(fmt, rest);
-
-      if (fid === 1 || fid === 2) {
-        rt.output(output);
-      } else {
-        if (!rt.fileIO)
-          throw new RuntimeError(
-            "File I/O is not available in this environment"
-          );
-        rt.fileIO.fwrite(fid, output);
       }
+      return Array.from(rv.data);
     }
-    // MATLAB: called as a statement, fprintf does not set `ans`.  Only
-    // surface the byte count when the caller asks for it.
-    return nargout >= 1 ? output.length : undefined;
-  });
-
-  registerSpecial("arrayfun", (nargout, args) => {
-    return _arrayfunImpl(rt, nargout, args);
-  });
-
-  registerSpecial("cellfun", (nargout, args) => {
-    return _cellfunImpl(rt, nargout, args);
-  });
-
-  registerSpecial("structfun", (nargout, args) => {
-    return _structfunImpl(rt, nargout, args);
-  });
-
-  registerSpecial("feval", (nargout, args) => {
-    if (args.length < 1)
-      throw new RuntimeError("feval requires at least 1 argument");
-    const fn = ensureRuntimeValue(args[0]);
-    if (isRuntimeFunction(fn)) {
-      if (fn.jsFn) {
-        return fn.jsFnExpectsNargout
-          ? fn.jsFn(nargout, ...args.slice(1))
-          : fn.jsFn(...args.slice(1));
-      }
-      return rt.dispatch(fn.name, nargout, args.slice(1));
-    }
-    if (isRuntimeChar(fn) || isRuntimeString(fn)) {
-      const name = typeof fn === "string" ? fn : fn.value;
-      return rt.dispatch(name, nargout, args.slice(1));
-    }
-    throw new RuntimeError(
-      "feval: first argument must be a function handle or name"
-    );
-  });
-
-  registerSpecial("bsxfun", (nargout, args) => {
-    return _bsxfunImpl(rt, nargout, args);
-  });
-
-  registerSpecial("quadgk", (nargout, args) => {
-    if (args.length < 3)
-      throw new RuntimeError(
-        "quadgk: requires at least 3 arguments (fun, a, b)"
-      );
-    const fnArg = ensureRuntimeValue(args[0]);
-    if (!isRuntimeFunction(fnArg))
-      throw new RuntimeError("quadgk: first argument must be a function");
-    const a = toNumber(ensureRuntimeValue(args[1]));
-    const b = toNumber(ensureRuntimeValue(args[2]));
-
-    // Parse name-value option pairs.  Unknown names are ignored so that
-    // chunkie-style `quadgk(fun, a, b, quadgkparams{:})` spreads that may
-    // include options we don't yet support (Waypoints, etc.) don't error.
-    let relTol: number | undefined;
-    let absTol: number | undefined;
-    let maxIntervalCount: number | undefined;
-    for (let i = 3; i + 1 < args.length; i += 2) {
-      const keyRv = ensureRuntimeValue(args[i]);
-      const key = isRuntimeChar(keyRv)
-        ? keyRv.value
-        : isRuntimeString(keyRv)
-          ? (keyRv as string)
-          : "";
-      const lowerKey = key.toLowerCase();
-      const valRv = ensureRuntimeValue(args[i + 1]);
-      if (lowerKey === "reltol") relTol = toNumber(valRv);
-      else if (lowerKey === "abstol") absTol = toNumber(valRv);
-      else if (lowerKey === "maxintervalcount")
-        maxIntervalCount = toNumber(valRv);
-      // Waypoints and other options are silently ignored for now.
-    }
-
-    // Vectorized integrand: pass the 15 nodes as a 1x15 row vector and
-    // expect a 1x15 (or 15x1) numeric result.
-    const integrand = (pts: number[]): number[] => {
-      const vecData = allocFloat64Array(pts);
-      const vec = RTV.tensor(vecData, [1, pts.length]);
-      const resultRaw = rt.index(fnArg, [vec], 1);
-      const rv = ensureRuntimeValue(resultRaw as RuntimeValue);
-      if (isRuntimeNumber(rv)) {
-        // Scalar result: broadcast (rare — most integrands vectorize).
-        return new Array<number>(pts.length).fill(rv as number);
-      }
-      if (isRuntimeTensor(rv)) {
-        if (rv.data.length !== pts.length) {
-          throw new RuntimeError(
-            `quadgk: integrand returned ${rv.data.length} values for ${pts.length} nodes`
-          );
-        }
-        return Array.from(rv.data);
-      }
-      throw new RuntimeError("quadgk: integrand must return a numeric vector");
-    };
-
-    const result = quadgkAdaptive(integrand, a, b, {
-      relTol,
-      absTol,
-      maxIntervalCount,
-    });
-
-    if (nargout >= 2) return [result.value, result.errbnd];
-    return result.value;
-  });
-
-  registerSpecial("subsref", (nargout, args) => {
-    return _subsrefBuiltin(rt, nargout, args);
-  });
-
-  registerSpecial("subsasgn", (nargout, args) => {
-    return _subsasgnBuiltin(rt, nargout, args);
-  });
-
-  registerSpecial("builtin", (nargout, args) => {
-    if (args.length < 1)
-      throw new RuntimeError("builtin requires at least 1 argument");
-    const fnNameArg = ensureRuntimeValue(args[0]);
-    let fnName: string;
-    if (isRuntimeFunction(fnNameArg)) {
-      fnName = fnNameArg.name;
-    } else if (isRuntimeChar(fnNameArg) || isRuntimeString(fnNameArg)) {
-      fnName = isRuntimeString(fnNameArg) ? fnNameArg : fnNameArg.value;
-    } else {
-      throw new RuntimeError(
-        "builtin: first argument must be a function name or handle"
-      );
-    }
-    return rt.callBuiltin(fnName, nargout, args.slice(1));
-  });
-
-  // ── File I/O builtins ──────────────────────────────────────────────
-
-  const requireFileIO = () => {
-    if (!rt.fileIO)
-      throw new RuntimeError("File I/O is not available in this environment");
-    return rt.fileIO;
+    throw new RuntimeError("quadgk: integrand must return a numeric vector");
   };
 
-  registerSpecial("fopen", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("fopen requires at least 1 argument");
-    const filename = toString(margs[0]);
-    const permission = margs.length >= 2 ? toString(margs[1]) : "r";
-    return RTV.num(io.fopen(filename, permission));
+  const result = quadgkAdaptive(integrand, a, b, {
+    relTol,
+    absTol,
+    maxIntervalCount,
   });
 
-  registerSpecial("fclose", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("fclose requires 1 argument");
-    const arg = margs[0];
-    if (isRuntimeChar(arg) || isRuntimeString(arg)) {
-      const s = toString(arg);
-      if (s === "all") return RTV.num(io.fclose("all"));
-      throw new RuntimeError("fclose: invalid argument");
-    }
-    return RTV.num(io.fclose(toNumber(arg)));
-  });
+  if (nargout >= 2) return [result.value, result.errbnd];
+  return result.value;
+});
 
-  registerSpecial("fgetl", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("fgetl requires 1 argument");
-    const result = io.fgetl(toNumber(margs[0]));
-    return typeof result === "number" ? RTV.num(result) : RTV.char(result);
-  });
+registerSpecial("subsref", (nargout, args, rt) => {
+  return _subsrefBuiltin(rt, nargout, args);
+});
 
-  registerSpecial("fgets", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("fgets requires 1 argument");
-    const result = io.fgets(toNumber(margs[0]));
-    return typeof result === "number" ? RTV.num(result) : RTV.char(result);
-  });
+registerSpecial("subsasgn", (nargout, args, rt) => {
+  return _subsasgnBuiltin(rt, nargout, args);
+});
 
-  registerSpecial("fscanf", (nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 2)
-      throw new RuntimeError("fscanf requires at least 2 arguments");
-    if (!io.ftell || !io.fseek || !io.freadBytes)
-      throw new RuntimeError("fscanf is not supported in this environment");
-    const fid = toNumber(margs[0]);
-    const fmt = toString(margs[1]);
+registerSpecial("builtin", (nargout, args, rt) => {
+  if (args.length < 1)
+    throw new RuntimeError("builtin requires at least 1 argument");
+  const fnNameArg = ensureRuntimeValue(args[0]);
+  let fnName: string;
+  if (isRuntimeFunction(fnNameArg)) {
+    fnName = fnNameArg.name;
+  } else if (isRuntimeChar(fnNameArg) || isRuntimeString(fnNameArg)) {
+    fnName = isRuntimeString(fnNameArg) ? fnNameArg : fnNameArg.value;
+  } else {
+    throw new RuntimeError(
+      "builtin: first argument must be a function name or handle"
+    );
+  }
+  return rt.callBuiltin(fnName, nargout, args.slice(1));
+});
 
-    // Optional sizeA: scalar count (possibly Inf) or [m, n] (n possibly Inf).
-    let maxCount = Infinity;
-    let rows: number | null = null;
-    if (margs.length >= 3) {
-      const sz = margs[2];
-      if (isRuntimeTensor(sz) && sz.data.length >= 2) {
-        rows = sz.data[0];
-        maxCount = sz.data[0] * sz.data[1];
-      } else {
-        maxCount = toNumber(sz);
-      }
-    }
+// ── File I/O builtins ──────────────────────────────────────────────
 
-    // Read the remainder of the file (latin-1, one char per byte), scan it,
-    // then reposition after the last consumed character.
-    const pos = io.ftell(fid);
-    const CHUNK = 1 << 16;
-    const chunks: string[] = [];
-    for (;;) {
-      const bytes = io.freadBytes(fid, CHUNK);
-      let s = "";
-      for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-      chunks.push(s);
-      if (bytes.length < CHUNK) break;
-    }
-    const { results, consumed } = scanFormat(chunks.join(""), fmt, maxCount);
-    io.fseek(fid, pos + consumed, -1);
+const requireFileIO = () => {
+  const io = currentRuntime().fileIO;
+  if (!io)
+    throw new RuntimeError("File I/O is not available in this environment");
+  return io;
+};
 
-    const n = results.length;
-    let out: RuntimeValue;
-    if (rows !== null && Number.isFinite(rows) && rows > 0) {
-      // Column-major fill with `rows` rows; a partial final column is
-      // zero-padded.
-      const cols = Math.ceil(n / rows);
-      const data = allocFloat64Array(rows * cols);
-      for (let i = 0; i < n; i++) data[i] = results[i];
-      out = RTV.tensor(data, [rows, cols]);
-    } else if (n === 1) {
-      out = RTV.num(results[0]);
+registerSpecial("fopen", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("fopen requires at least 1 argument");
+  const filename = toString(margs[0]);
+  const permission = margs.length >= 2 ? toString(margs[1]) : "r";
+  return RTV.num(io.fopen(filename, permission));
+});
+
+registerSpecial("fclose", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("fclose requires 1 argument");
+  const arg = margs[0];
+  if (isRuntimeChar(arg) || isRuntimeString(arg)) {
+    const s = toString(arg);
+    if (s === "all") return RTV.num(io.fclose("all"));
+    throw new RuntimeError("fclose: invalid argument");
+  }
+  return RTV.num(io.fclose(toNumber(arg)));
+});
+
+registerSpecial("fgetl", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("fgetl requires 1 argument");
+  const result = io.fgetl(toNumber(margs[0]));
+  return typeof result === "number" ? RTV.num(result) : RTV.char(result);
+});
+
+registerSpecial("fgets", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("fgets requires 1 argument");
+  const result = io.fgets(toNumber(margs[0]));
+  return typeof result === "number" ? RTV.num(result) : RTV.char(result);
+});
+
+registerSpecial("fscanf", (nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 2)
+    throw new RuntimeError("fscanf requires at least 2 arguments");
+  if (!io.ftell || !io.fseek || !io.freadBytes)
+    throw new RuntimeError("fscanf is not supported in this environment");
+  const fid = toNumber(margs[0]);
+  const fmt = toString(margs[1]);
+
+  // Optional sizeA: scalar count (possibly Inf) or [m, n] (n possibly Inf).
+  let maxCount = Infinity;
+  let rows: number | null = null;
+  if (margs.length >= 3) {
+    const sz = margs[2];
+    if (isRuntimeTensor(sz) && sz.data.length >= 2) {
+      rows = sz.data[0];
+      maxCount = sz.data[0] * sz.data[1];
     } else {
-      out = RTV.tensor(allocFloat64Array(results), [n, 1]);
+      maxCount = toNumber(sz);
     }
-    if (nargout >= 2) return [out, RTV.num(n)];
-    return out;
-  });
+  }
 
-  registerSpecial("fileread", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("fileread requires 1 argument");
-    return RTV.char(io.fileread(toString(margs[0])));
-  });
+  // Read the remainder of the file (latin-1, one char per byte), scan it,
+  // then reposition after the last consumed character.
+  const pos = io.ftell(fid);
+  const CHUNK = 1 << 16;
+  const chunks: string[] = [];
+  for (;;) {
+    const bytes = io.freadBytes(fid, CHUNK);
+    let s = "";
+    for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+    chunks.push(s);
+    if (bytes.length < CHUNK) break;
+  }
+  const { results, consumed } = scanFormat(chunks.join(""), fmt, maxCount);
+  io.fseek(fid, pos + consumed, -1);
 
-  registerSpecial("feof", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("feof requires 1 argument");
-    return RTV.num(io.feof(toNumber(margs[0])));
-  });
+  const n = results.length;
+  let out: RuntimeValue;
+  if (rows !== null && Number.isFinite(rows) && rows > 0) {
+    // Column-major fill with `rows` rows; a partial final column is
+    // zero-padded.
+    const cols = Math.ceil(n / rows);
+    const data = allocFloat64Array(rows * cols);
+    for (let i = 0; i < n; i++) data[i] = results[i];
+    out = RTV.tensor(data, [rows, cols]);
+  } else if (n === 1) {
+    out = RTV.num(results[0]);
+  } else {
+    out = RTV.tensor(allocFloat64Array(results), [n, 1]);
+  }
+  if (nargout >= 2) return [out, RTV.num(n)];
+  return out;
+});
 
-  registerSpecial("ferror", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("ferror requires 1 argument");
-    return RTV.char(io.ferror(toNumber(margs[0])));
-  });
+registerSpecial("fileread", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("fileread requires 1 argument");
+  return RTV.char(io.fileread(toString(margs[0])));
+});
 
-  // ── Binary fread / fwrite / frewind / fseek / ftell ──────────────
+registerSpecial("feof", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("feof requires 1 argument");
+  return RTV.num(io.feof(toNumber(margs[0])));
+});
 
-  /** Parse a MATLAB precision string into source/output type info. */
-  function parsePrecision(prec: string): {
-    repeat: number;
-    sourceType: string;
-    outputType: string;
-    sourceBytes: number;
-  } {
-    let repeat = 0;
-    let rest = prec;
-    // Handle N*type form
-    const starIdx = rest.indexOf("*");
-    if (starIdx > 0 && /^\d+$/.test(rest.slice(0, starIdx))) {
-      repeat = parseInt(rest.slice(0, starIdx), 10);
-      rest = rest.slice(starIdx + 1);
-    } else if (starIdx === 0) {
-      // *type means source=>source
-      rest = rest.slice(1);
-      const info = precisionBytes(rest);
-      return {
-        repeat: 0,
-        sourceType: rest,
-        outputType: rest,
-        sourceBytes: info,
-      };
-    }
-    // Handle source=>output form
-    const arrowIdx = rest.indexOf("=>");
-    let sourceType: string;
-    let outputType: string;
-    if (arrowIdx !== -1) {
-      sourceType = rest.slice(0, arrowIdx);
-      outputType = rest.slice(arrowIdx + 2);
-    } else {
-      sourceType = rest;
-      outputType = "double";
-    }
+registerSpecial("ferror", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("ferror requires 1 argument");
+  return RTV.char(io.ferror(toNumber(margs[0])));
+});
+
+// ── Binary fread / fwrite / frewind / fseek / ftell ──────────────
+
+/** Parse a MATLAB precision string into source/output type info. */
+function parsePrecision(prec: string): {
+  repeat: number;
+  sourceType: string;
+  outputType: string;
+  sourceBytes: number;
+} {
+  let repeat = 0;
+  let rest = prec;
+  // Handle N*type form
+  const starIdx = rest.indexOf("*");
+  if (starIdx > 0 && /^\d+$/.test(rest.slice(0, starIdx))) {
+    repeat = parseInt(rest.slice(0, starIdx), 10);
+    rest = rest.slice(starIdx + 1);
+  } else if (starIdx === 0) {
+    // *type means source=>source
+    rest = rest.slice(1);
+    const info = precisionBytes(rest);
     return {
-      repeat,
-      sourceType,
-      outputType,
-      sourceBytes: precisionBytes(sourceType),
+      repeat: 0,
+      sourceType: rest,
+      outputType: rest,
+      sourceBytes: info,
     };
   }
-
-  function precisionBytes(type: string): number {
-    switch (type) {
-      case "uint8":
-      case "int8":
-      case "uchar":
-      case "unsigned char":
-      case "schar":
-      case "signed char":
-      case "integer*1":
-      case "char":
-      case "char*1":
-        return 1;
-      case "uint16":
-      case "int16":
-      case "ushort":
-      case "short":
-      case "integer*2":
-        return 2;
-      case "uint32":
-      case "int32":
-      case "uint":
-      case "int":
-      case "ulong":
-      case "long":
-      case "single":
-      case "float":
-      case "float32":
-      case "real*4":
-      case "integer*4":
-        return 4;
-      case "uint64":
-      case "int64":
-      case "double":
-      case "float64":
-      case "real*8":
-      case "integer*8":
-        return 8;
-      default:
-        throw new RuntimeError(`fread: unsupported precision '${type}'`);
-    }
+  // Handle source=>output form
+  const arrowIdx = rest.indexOf("=>");
+  let sourceType: string;
+  let outputType: string;
+  if (arrowIdx !== -1) {
+    sourceType = rest.slice(0, arrowIdx);
+    outputType = rest.slice(arrowIdx + 2);
+  } else {
+    sourceType = rest;
+    outputType = "double";
   }
+  return {
+    repeat,
+    sourceType,
+    outputType,
+    sourceBytes: precisionBytes(sourceType),
+  };
+}
 
-  function readValue(
-    dv: DataView,
-    offset: number,
-    sourceType: string,
-    le: boolean
-  ): number {
-    switch (sourceType) {
-      case "uint8":
-      case "uchar":
-      case "unsigned char":
-      case "char":
-      case "char*1":
-        return dv.getUint8(offset);
-      case "int8":
-      case "schar":
-      case "signed char":
-      case "integer*1":
-        return dv.getInt8(offset);
-      case "uint16":
-      case "ushort":
-        return dv.getUint16(offset, le);
-      case "int16":
-      case "short":
-      case "integer*2":
-        return dv.getInt16(offset, le);
-      case "uint32":
-      case "uint":
-      case "ulong":
-        return dv.getUint32(offset, le);
-      case "int32":
-      case "int":
-      case "long":
-      case "integer*4":
-        return dv.getInt32(offset, le);
-      case "uint64":
-        return Number(dv.getBigUint64(offset, le));
-      case "int64":
-      case "integer*8":
-        return Number(dv.getBigInt64(offset, le));
-      case "single":
-      case "float":
-      case "float32":
-      case "real*4":
-        return dv.getFloat32(offset, le);
-      case "double":
-      case "float64":
-      case "real*8":
-        return dv.getFloat64(offset, le);
-      default:
-        throw new RuntimeError(
-          `fread: unsupported source type '${sourceType}'`
-        );
-    }
+function precisionBytes(type: string): number {
+  switch (type) {
+    case "uint8":
+    case "int8":
+    case "uchar":
+    case "unsigned char":
+    case "schar":
+    case "signed char":
+    case "integer*1":
+    case "char":
+    case "char*1":
+      return 1;
+    case "uint16":
+    case "int16":
+    case "ushort":
+    case "short":
+    case "integer*2":
+      return 2;
+    case "uint32":
+    case "int32":
+    case "uint":
+    case "int":
+    case "ulong":
+    case "long":
+    case "single":
+    case "float":
+    case "float32":
+    case "real*4":
+    case "integer*4":
+      return 4;
+    case "uint64":
+    case "int64":
+    case "double":
+    case "float64":
+    case "real*8":
+    case "integer*8":
+      return 8;
+    default:
+      throw new RuntimeError(`fread: unsupported precision '${type}'`);
   }
+}
 
-  function writeValue(
-    dv: DataView,
-    offset: number,
-    value: number,
-    sourceType: string,
-    le: boolean
-  ): void {
-    switch (sourceType) {
-      case "uint8":
-      case "uchar":
-      case "unsigned char":
-      case "char":
-      case "char*1":
-        dv.setUint8(offset, value);
-        break;
-      case "int8":
-      case "schar":
-      case "signed char":
-      case "integer*1":
-        dv.setInt8(offset, value);
-        break;
-      case "uint16":
-      case "ushort":
-        dv.setUint16(offset, value, le);
-        break;
-      case "int16":
-      case "short":
-      case "integer*2":
-        dv.setInt16(offset, value, le);
-        break;
-      case "uint32":
-      case "uint":
-      case "ulong":
-        dv.setUint32(offset, value, le);
-        break;
-      case "int32":
-      case "int":
-      case "long":
-      case "integer*4":
-        dv.setInt32(offset, value, le);
-        break;
-      case "uint64":
-        dv.setBigUint64(offset, BigInt(Math.round(value)), le);
-        break;
-      case "int64":
-      case "integer*8":
-        dv.setBigInt64(offset, BigInt(Math.round(value)), le);
-        break;
-      case "single":
-      case "float":
-      case "float32":
-      case "real*4":
-        dv.setFloat32(offset, value, le);
-        break;
-      case "double":
-      case "float64":
-      case "real*8":
-        dv.setFloat64(offset, value, le);
-        break;
-      default:
-        throw new RuntimeError(`fwrite: unsupported precision '${sourceType}'`);
-    }
+function readValue(
+  dv: DataView,
+  offset: number,
+  sourceType: string,
+  le: boolean
+): number {
+  switch (sourceType) {
+    case "uint8":
+    case "uchar":
+    case "unsigned char":
+    case "char":
+    case "char*1":
+      return dv.getUint8(offset);
+    case "int8":
+    case "schar":
+    case "signed char":
+    case "integer*1":
+      return dv.getInt8(offset);
+    case "uint16":
+    case "ushort":
+      return dv.getUint16(offset, le);
+    case "int16":
+    case "short":
+    case "integer*2":
+      return dv.getInt16(offset, le);
+    case "uint32":
+    case "uint":
+    case "ulong":
+      return dv.getUint32(offset, le);
+    case "int32":
+    case "int":
+    case "long":
+    case "integer*4":
+      return dv.getInt32(offset, le);
+    case "uint64":
+      return Number(dv.getBigUint64(offset, le));
+    case "int64":
+    case "integer*8":
+      return Number(dv.getBigInt64(offset, le));
+    case "single":
+    case "float":
+    case "float32":
+    case "real*4":
+      return dv.getFloat32(offset, le);
+    case "double":
+    case "float64":
+    case "real*8":
+      return dv.getFloat64(offset, le);
+    default:
+      throw new RuntimeError(`fread: unsupported source type '${sourceType}'`);
   }
+}
 
-  registerSpecial("fread", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.freadBytes)
-      throw new RuntimeError("fread is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("fread requires at least 1 argument");
-    const fid = toNumber(margs[0]);
+function writeValue(
+  dv: DataView,
+  offset: number,
+  value: number,
+  sourceType: string,
+  le: boolean
+): void {
+  switch (sourceType) {
+    case "uint8":
+    case "uchar":
+    case "unsigned char":
+    case "char":
+    case "char*1":
+      dv.setUint8(offset, value);
+      break;
+    case "int8":
+    case "schar":
+    case "signed char":
+    case "integer*1":
+      dv.setInt8(offset, value);
+      break;
+    case "uint16":
+    case "ushort":
+      dv.setUint16(offset, value, le);
+      break;
+    case "int16":
+    case "short":
+    case "integer*2":
+      dv.setInt16(offset, value, le);
+      break;
+    case "uint32":
+    case "uint":
+    case "ulong":
+      dv.setUint32(offset, value, le);
+      break;
+    case "int32":
+    case "int":
+    case "long":
+    case "integer*4":
+      dv.setInt32(offset, value, le);
+      break;
+    case "uint64":
+      dv.setBigUint64(offset, BigInt(Math.round(value)), le);
+      break;
+    case "int64":
+    case "integer*8":
+      dv.setBigInt64(offset, BigInt(Math.round(value)), le);
+      break;
+    case "single":
+    case "float":
+    case "float32":
+    case "real*4":
+      dv.setFloat32(offset, value, le);
+      break;
+    case "double":
+    case "float64":
+    case "real*8":
+      dv.setFloat64(offset, value, le);
+      break;
+    default:
+      throw new RuntimeError(`fwrite: unsupported precision '${sourceType}'`);
+  }
+}
 
-    // Parse arguments: fread(fid), fread(fid,sizeA), fread(fid,precision),
-    // fread(fid,sizeA,precision), fread(...,skip), fread(...,machinefmt)
-    let sizeA: number[] = [Infinity, 1]; // default: column vector, read all
-    let precision = "uint8=>double";
-    let skip = 0;
-    let machinefmt = "n";
-    let argIdx = 1;
+registerSpecial("fread", (nargout, args) => {
+  const io = requireFileIO();
+  if (!io.freadBytes)
+    throw new RuntimeError("fread is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("fread requires at least 1 argument");
+  const fid = toNumber(margs[0]);
 
-    if (argIdx < margs.length) {
-      const a = margs[argIdx];
-      // Could be sizeA (number/tensor) or precision (string/char)
-      if (isRuntimeChar(a) || isRuntimeString(a)) {
-        precision = toString(a);
-        argIdx++;
-      } else {
-        // It's sizeA
-        if (isRuntimeTensor(a)) {
-          sizeA = Array.from(a.data);
-          argIdx++;
-        } else if (isRuntimeNumber(a)) {
-          sizeA = [toNumber(a), 1];
-          argIdx++;
-        }
-        // Check for precision as next arg
-        if (argIdx < margs.length) {
-          const b = margs[argIdx];
-          if (isRuntimeChar(b) || isRuntimeString(b)) {
-            precision = toString(b);
-            argIdx++;
-          }
-        }
-      }
-    }
-    // Optional skip
-    if (argIdx < margs.length) {
-      const a = margs[argIdx];
-      if (isRuntimeNumber(a) || (isRuntimeTensor(a) && a.data.length === 1)) {
-        skip = toNumber(a);
-        argIdx++;
-      }
-    }
-    // Optional machinefmt
-    if (argIdx < margs.length) {
-      const a = margs[argIdx];
-      if (isRuntimeChar(a) || isRuntimeString(a)) {
-        machinefmt = toString(a);
-      }
-    }
+  // Parse arguments: fread(fid), fread(fid,sizeA), fread(fid,precision),
+  // fread(fid,sizeA,precision), fread(...,skip), fread(...,machinefmt)
+  let sizeA: number[] = [Infinity, 1]; // default: column vector, read all
+  let precision = "uint8=>double";
+  let skip = 0;
+  let machinefmt = "n";
+  let argIdx = 1;
 
-    const parsed = parsePrecision(precision);
-    const le =
-      machinefmt === "l" ||
-      machinefmt === "ieee-le" ||
-      machinefmt === "ieee-le.l64" ||
-      machinefmt === "a" ||
-      machinefmt === "n" ||
-      machinefmt === "native"; // assume native = little-endian
-
-    const bytesPerVal = parsed.sourceBytes;
-    const repeatCount = parsed.repeat || 0;
-
-    // Compute total elements to read
-    let totalElems: number;
-    const m = sizeA[0];
-    const n = sizeA.length > 1 ? sizeA[1] : 1;
-    if (m === Infinity && n === 1) {
-      totalElems = Infinity;
-    } else if (n === Infinity) {
-      totalElems = Infinity;
+  if (argIdx < margs.length) {
+    const a = margs[argIdx];
+    // Could be sizeA (number/tensor) or precision (string/char)
+    if (isRuntimeChar(a) || isRuntimeString(a)) {
+      precision = toString(a);
+      argIdx++;
     } else {
-      totalElems = m * n;
+      // It's sizeA
+      if (isRuntimeTensor(a)) {
+        sizeA = Array.from(a.data);
+        argIdx++;
+      } else if (isRuntimeNumber(a)) {
+        sizeA = [toNumber(a), 1];
+        argIdx++;
+      }
+      // Check for precision as next arg
+      if (argIdx < margs.length) {
+        const b = margs[argIdx];
+        if (isRuntimeChar(b) || isRuntimeString(b)) {
+          precision = toString(b);
+          argIdx++;
+        }
+      }
     }
+  }
+  // Optional skip
+  if (argIdx < margs.length) {
+    const a = margs[argIdx];
+    if (isRuntimeNumber(a) || (isRuntimeTensor(a) && a.data.length === 1)) {
+      skip = toNumber(a);
+      argIdx++;
+    }
+  }
+  // Optional machinefmt
+  if (argIdx < margs.length) {
+    const a = margs[argIdx];
+    if (isRuntimeChar(a) || isRuntimeString(a)) {
+      machinefmt = toString(a);
+    }
+  }
 
-    // Read data
-    const values: number[] = [];
-    let count = 0;
+  const parsed = parsePrecision(precision);
+  const le =
+    machinefmt === "l" ||
+    machinefmt === "ieee-le" ||
+    machinefmt === "ieee-le.l64" ||
+    machinefmt === "a" ||
+    machinefmt === "n" ||
+    machinefmt === "native"; // assume native = little-endian
 
-    if (repeatCount > 0 && skip > 0) {
-      // N*type with skip: read N values, skip `skip` bytes, repeat
-      while (count < totalElems) {
-        const batch = Math.min(repeatCount, totalElems - count);
-        const bytes = io.freadBytes(fid, batch * bytesPerVal);
+  const bytesPerVal = parsed.sourceBytes;
+  const repeatCount = parsed.repeat || 0;
+
+  // Compute total elements to read
+  let totalElems: number;
+  const m = sizeA[0];
+  const n = sizeA.length > 1 ? sizeA[1] : 1;
+  if (m === Infinity && n === 1) {
+    totalElems = Infinity;
+  } else if (n === Infinity) {
+    totalElems = Infinity;
+  } else {
+    totalElems = m * n;
+  }
+
+  // Read data
+  const values: number[] = [];
+  let count = 0;
+
+  if (repeatCount > 0 && skip > 0) {
+    // N*type with skip: read N values, skip `skip` bytes, repeat
+    while (count < totalElems) {
+      const batch = Math.min(repeatCount, totalElems - count);
+      const bytes = io.freadBytes(fid, batch * bytesPerVal);
+      if (bytes.length === 0) break;
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const elemsRead = Math.floor(bytes.length / bytesPerVal);
+      for (let i = 0; i < elemsRead; i++) {
+        values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
+        count++;
+      }
+      if (elemsRead < batch) break;
+      // Skip bytes
+      if (count < totalElems) {
+        io.freadBytes(fid, skip);
+      }
+    }
+  } else {
+    // Simple read: read all at once (or in chunks for Inf)
+    if (totalElems === Infinity) {
+      // Read in chunks until EOF
+      const chunkSize = 65536;
+      for (;;) {
+        const bytes = io.freadBytes(fid, chunkSize);
         if (bytes.length === 0) break;
         const dv = new DataView(
           bytes.buffer,
@@ -898,1203 +920,1167 @@ export function registerSpecialBuiltins(rt: Runtime): void {
           values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
           count++;
         }
-        if (elemsRead < batch) break;
-        // Skip bytes
-        if (count < totalElems) {
-          io.freadBytes(fid, skip);
-        }
+        if (bytes.length < chunkSize) break;
       }
     } else {
-      // Simple read: read all at once (or in chunks for Inf)
-      if (totalElems === Infinity) {
-        // Read in chunks until EOF
-        const chunkSize = 65536;
-        for (;;) {
-          const bytes = io.freadBytes(fid, chunkSize);
-          if (bytes.length === 0) break;
-          const dv = new DataView(
-            bytes.buffer,
-            bytes.byteOffset,
-            bytes.byteLength
-          );
-          const elemsRead = Math.floor(bytes.length / bytesPerVal);
-          for (let i = 0; i < elemsRead; i++) {
-            values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
-            count++;
-          }
-          if (bytes.length < chunkSize) break;
-        }
-      } else {
-        const totalBytes = totalElems * bytesPerVal;
-        const bytes = io.freadBytes(fid, totalBytes);
-        const dv = new DataView(
-          bytes.buffer,
-          bytes.byteOffset,
-          bytes.byteLength
-        );
-        const elemsRead = Math.floor(bytes.length / bytesPerVal);
-        for (let i = 0; i < elemsRead; i++) {
-          values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
-          count++;
-        }
+      const totalBytes = totalElems * bytesPerVal;
+      const bytes = io.freadBytes(fid, totalBytes);
+      const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const elemsRead = Math.floor(bytes.length / bytesPerVal);
+      for (let i = 0; i < elemsRead; i++) {
+        values.push(readValue(dv, i * bytesPerVal, parsed.sourceType, le));
+        count++;
       }
     }
-
-    // If output type is char, return a char array instead of numeric tensor
-    const isCharOutput =
-      parsed.outputType === "char" || parsed.outputType === "char*1";
-
-    // Shape the output
-    let result: RuntimeValue;
-    if (isCharOutput) {
-      const str = String.fromCharCode(...values);
-      result = RTV.char(str);
-    } else if (count === 0) {
-      result = RTV.tensor(allocFloat64Array(0), [0, 0]);
-    } else if (count === 1 && m !== Infinity && n !== Infinity) {
-      result = RTV.tensor(allocFloat64Array(values), [m, n]);
-    } else if (m === Infinity || (m !== Infinity && n === Infinity)) {
-      if (m === Infinity) {
-        result = RTV.tensor(allocFloat64Array(values), [count, 1]);
-      } else {
-        const cols = Math.ceil(count / m);
-        while (values.length < m * cols) values.push(0);
-        result = RTV.tensor(allocFloat64Array(values), [m, cols]);
-      }
-    } else {
-      while (values.length < m * n) values.push(0);
-      result = RTV.tensor(allocFloat64Array(values.slice(0, m * n)), [m, n]);
-    }
-
-    if (nargout >= 2) {
-      return [result, RTV.num(count)];
-    }
-    return result;
-  });
-
-  registerSpecial("fwrite", (_nargout, args) => {
-    const io = requireFileIO();
-    if (!io.fwriteBytes)
-      throw new RuntimeError("fwrite is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 2)
-      throw new RuntimeError("fwrite requires at least 2 arguments");
-
-    const fid = toNumber(margs[0]);
-    const data = margs[1];
-    let precision = "uint8";
-    let skip = 0;
-    let machinefmt = "n";
-
-    if (margs.length >= 3) {
-      precision = toString(margs[2]);
-    }
-    if (margs.length >= 4) {
-      skip = toNumber(margs[3]);
-    }
-    if (margs.length >= 5) {
-      machinefmt = toString(margs[4]);
-    }
-
-    const parsed = parsePrecision(precision);
-    const le =
-      machinefmt === "l" ||
-      machinefmt === "ieee-le" ||
-      machinefmt === "ieee-le.l64" ||
-      machinefmt === "a" ||
-      machinefmt === "n" ||
-      machinefmt === "native";
-
-    // Extract values from the data argument
-    let values: number[];
-    if (isRuntimeTensor(data)) {
-      values = Array.from(data.data);
-    } else if (isRuntimeNumber(data)) {
-      values = [toNumber(data)];
-    } else if (isRuntimeChar(data) || isRuntimeString(data)) {
-      const str = toString(data);
-      values = [];
-      for (let i = 0; i < str.length; i++) values.push(str.charCodeAt(i));
-    } else {
-      throw new RuntimeError("fwrite: data must be numeric or char");
-    }
-
-    const bytesPerVal = parsed.sourceBytes;
-    if (skip === 0) {
-      const buf = new Uint8Array(values.length * bytesPerVal);
-      const dv = new DataView(buf.buffer);
-      for (let i = 0; i < values.length; i++) {
-        writeValue(dv, i * bytesPerVal, values[i], parsed.sourceType, le);
-      }
-      io.fwriteBytes(fid, buf);
-    } else {
-      // Write with skip bytes between values
-      const valBuf = new Uint8Array(bytesPerVal);
-      const skipBuf = new Uint8Array(skip);
-      const dv = new DataView(valBuf.buffer);
-      for (let i = 0; i < values.length; i++) {
-        writeValue(dv, 0, values[i], parsed.sourceType, le);
-        io.fwriteBytes(fid, valBuf);
-        if (i < values.length - 1) {
-          io.fwriteBytes(fid, skipBuf);
-        }
-      }
-    }
-    return RTV.num(values.length);
-  });
-
-  registerSpecial("frewind", (_nargout, args) => {
-    const io = requireFileIO();
-    if (!io.fseek)
-      throw new RuntimeError("frewind is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("frewind requires 1 argument");
-    io.fseek(toNumber(margs[0]), 0, -1);
-    return RTV.num(0);
-  });
-
-  registerSpecial("fseek", (_nargout, args) => {
-    const io = requireFileIO();
-    if (!io.fseek)
-      throw new RuntimeError("fseek is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 2)
-      throw new RuntimeError("fseek requires at least 2 arguments");
-    const fid = toNumber(margs[0]);
-    const offset = toNumber(margs[1]);
-    let origin = -1; // default: bof
-    if (margs.length >= 3) {
-      const o = margs[2];
-      if (isRuntimeChar(o) || isRuntimeString(o)) {
-        const s = toString(o);
-        if (s === "bof") origin = -1;
-        else if (s === "cof") origin = 0;
-        else if (s === "eof") origin = 1;
-        else throw new RuntimeError(`fseek: invalid origin '${s}'`);
-      } else {
-        origin = toNumber(o);
-      }
-    }
-    return RTV.num(io.fseek(fid, offset, origin));
-  });
-
-  registerSpecial("ftell", (_nargout, args) => {
-    const io = requireFileIO();
-    if (!io.ftell)
-      throw new RuntimeError("ftell is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1) throw new RuntimeError("ftell requires 1 argument");
-    return RTV.num(io.ftell(toNumber(margs[0])));
-  });
-
-  registerSpecial("mkdir", (nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("mkdir requires at least 1 argument");
-    if (!io.mkdir)
-      throw new RuntimeError("mkdir is not available in this environment");
-    let dirPath: string;
-    if (margs.length === 1) {
-      dirPath = toString(margs[0]);
-    } else {
-      // mkdir(parent, newDir) form
-      dirPath = toString(margs[0]) + "/" + toString(margs[1]);
-    }
-    const ok = io.mkdir(dirPath);
-    if (nargout === 0) {
-      if (!ok)
-        throw new RuntimeError(`mkdir: cannot create directory '${dirPath}'`);
-      return undefined;
-    }
-    return nargout <= 1
-      ? RTV.char(ok ? "true" : "false")
-      : [
-          RTV.char(ok ? "true" : "false"),
-          RTV.char(ok ? "" : `Cannot create directory '${dirPath}'`),
-          RTV.char(""),
-        ];
-  });
-
-  // ── web options helper ──────────────────────────────────────────────
-
-  /** Extract WebOptions from a weboptions struct, or return undefined. */
-  function extractWebOptions(
-    arg: RuntimeValue
-  ): import("../fileIOAdapter.js").WebOptions | undefined {
-    if (!isRuntimeStruct(arg)) return undefined;
-    const s = arg as import("../runtime/types.js").RuntimeStruct;
-    // Detect weboptions struct by checking for the Timeout field
-    if (!s.fields.has("Timeout")) return undefined;
-    const opts: import("../fileIOAdapter.js").WebOptions = {};
-    const t = s.fields.get("Timeout");
-    if (t !== undefined) opts.timeout = toNumber(t);
-    const rm = s.fields.get("RequestMethod");
-    if (rm !== undefined) {
-      const v = toString(rm);
-      if (v !== "auto") opts.requestMethod = v;
-    }
-    const un = s.fields.get("Username");
-    if (un !== undefined) {
-      const v = toString(un);
-      if (v) opts.username = v;
-    }
-    const pw = s.fields.get("Password");
-    if (pw !== undefined) {
-      const v = toString(pw);
-      if (v) opts.password = v;
-    }
-    const kn = s.fields.get("KeyName");
-    if (kn !== undefined) {
-      const v = toString(kn);
-      if (v) opts.keyName = v;
-    }
-    const kv = s.fields.get("KeyValue");
-    if (kv !== undefined) {
-      const v = toString(kv);
-      if (v) opts.keyValue = v;
-    }
-    return opts;
   }
 
-  // ── websave ─────────────────────────────────────────────────────────
+  // If output type is char, return a char array instead of numeric tensor
+  const isCharOutput =
+    parsed.outputType === "char" || parsed.outputType === "char*1";
 
-  registerSpecial("websave", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 2)
-      throw new RuntimeError("websave requires at least 2 arguments");
-    if (!io.websave)
-      throw new RuntimeError("websave is not available in this environment");
-    const filename = toString(margs[0]);
-    let url = toString(margs[1]);
-    // Check if last argument is a weboptions struct
-    let webOpts: import("../fileIOAdapter.js").WebOptions | undefined;
-    let queryEnd = margs.length;
-    if (margs.length > 2) {
-      webOpts = extractWebOptions(margs[margs.length - 1]);
-      if (webOpts) queryEnd = margs.length - 1;
-    }
-    // Append query parameters (name-value pairs)
-    const queryParts: string[] = [];
-    for (let i = 2; i + 1 < queryEnd; i += 2) {
-      const name = encodeURIComponent(toString(margs[i]));
-      const value = encodeURIComponent(toString(margs[i + 1]));
-      queryParts.push(`${name}=${value}`);
-    }
-    if (queryParts.length > 0) {
-      const sep = url.includes("?") ? "&" : "?";
-      url += sep + queryParts.join("&");
-    }
-    io.websave(url, filename, webOpts);
-    return RTV.char(filename);
-  });
-
-  // ── webread ────────────────────────────────────────────────────────
-
-  registerSpecial("webread", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("webread requires at least 1 argument");
-    if (!io.webread)
-      throw new RuntimeError("webread is not available in this environment");
-    let url = toString(margs[0]);
-    // Check if last argument is a weboptions struct
-    let webOpts: import("../fileIOAdapter.js").WebOptions | undefined;
-    let queryEnd = margs.length;
-    if (margs.length > 1) {
-      webOpts = extractWebOptions(margs[margs.length - 1]);
-      if (webOpts) queryEnd = margs.length - 1;
-    }
-    // Append query parameters (name-value pairs)
-    const queryParts: string[] = [];
-    for (let i = 1; i + 1 < queryEnd; i += 2) {
-      const name = encodeURIComponent(toString(margs[i]));
-      const value = encodeURIComponent(toString(margs[i + 1]));
-      queryParts.push(`${name}=${value}`);
-    }
-    if (queryParts.length > 0) {
-      const sep = url.includes("?") ? "&" : "?";
-      url += sep + queryParts.join("&");
-    }
-    const text = io.webread(url, webOpts);
-    // Try to parse as JSON (MATLAB auto-decodes JSON responses)
-    try {
-      const parsed = JSON.parse(text);
-      return convertJsonValue(parsed);
-    } catch {
-      // Not JSON — return as char array
-      return RTV.char(text);
-    }
-  });
-
-  // ── delete (file deletion) ──────────────────────────────────────────
-
-  registerSpecialVoid("delete", args => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("delete requires at least 1 argument");
-    for (const arg of margs) {
-      // delete(handle): remove the graphics object's plot instruction.
-      if (isRuntimeGraphicsHandle(arg)) {
-        const instr = arg._trace.__instruction;
-        if (instr) {
-          const idx = rt.plotInstructions.indexOf(instr as never);
-          if (idx >= 0) rt.plotInstructions.splice(idx, 1);
-        }
-        continue;
-      }
-      // delete(filename): remove a file.
-      const io = requireFileIO();
-      if (!io.deleteFile)
-        throw new RuntimeError("delete is not available in this environment");
-      io.deleteFile(toString(arg));
-    }
-  });
-
-  // ── rmdir (directory removal) ────────────────────────────────────────
-
-  registerSpecial("rmdir", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.rmdir)
-      throw new RuntimeError("rmdir is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("rmdir requires at least 1 argument");
-    const dirPath = toString(margs[0]);
-    const recursive =
-      margs.length >= 2 && toString(margs[1]).toLowerCase() === "s";
-    const ok = io.rmdir(dirPath, recursive);
-    if (nargout === 0) {
-      if (!ok)
-        throw new RuntimeError(`rmdir: cannot remove directory '${dirPath}'`);
-      return undefined;
-    }
-    return nargout <= 1
-      ? RTV.num(ok ? 1 : 0)
-      : [
-          RTV.num(ok ? 1 : 0),
-          RTV.char(ok ? "" : `Cannot remove directory '${dirPath}'`),
-          RTV.char(""),
-        ];
-  });
-
-  // ── movefile (move/rename file or folder) ───────────────────────────
-
-  registerSpecial("movefile", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.movefile)
-      throw new RuntimeError("movefile is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("movefile requires at least 1 argument");
-    const source = toString(margs[0]);
-    // If only one argument, destination is the current folder.
-    const destination =
-      margs.length >= 2 ? toString(margs[1]) : (rt.system?.cwd() ?? ".");
-    let force = false;
-    // Third positional argument can be 'f' to force overwrite.
-    // The MoveLinkBehavior name=value form is not supported here.
-    if (margs.length >= 3) {
-      const third = toString(margs[2]);
-      if (third.toLowerCase() === "f") force = true;
-    }
-    const ok = io.movefile(source, destination, force);
-    if (nargout === 0) {
-      if (!ok)
-        throw new RuntimeError(
-          `movefile: cannot move '${source}' to '${destination}'`
-        );
-      return undefined;
-    }
-    return nargout <= 1
-      ? RTV.num(ok ? 1 : 0)
-      : [
-          RTV.num(ok ? 1 : 0),
-          RTV.char(ok ? "" : `Cannot move '${source}' to '${destination}'`),
-          RTV.char(""),
-        ];
-  });
-
-  // ── copyfile (copy file or folder) ──────────────────────────────────
-
-  registerSpecial("copyfile", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.copyfile)
-      throw new RuntimeError("copyfile is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("copyfile requires at least 1 argument");
-    const source = toString(margs[0]);
-    // If only one argument, destination is the current folder.
-    const destination =
-      margs.length >= 2 ? toString(margs[1]) : (rt.system?.cwd() ?? ".");
-    // Third positional argument can be 'f' to force overwrite of a read-only
-    // destination (the name=value form is not supported here).
-    let force = false;
-    if (margs.length >= 3) {
-      const third = toString(margs[2]);
-      if (third.toLowerCase() === "f") force = true;
-    }
-    const ok = io.copyfile(source, destination, force);
-    if (nargout === 0) {
-      if (!ok)
-        throw new RuntimeError(
-          `copyfile: cannot copy '${source}' to '${destination}'`
-        );
-      return undefined;
-    }
-    return nargout <= 1
-      ? RTV.num(ok ? 1 : 0)
-      : [
-          RTV.num(ok ? 1 : 0),
-          RTV.char(ok ? "" : `Cannot copy '${source}' to '${destination}'`),
-          RTV.char(""),
-        ];
-  });
-
-  // ── fileattrib (resolve absolute path + attributes) ─────────────────
-
-  registerSpecial("fileattrib", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.fileattrib)
-      throw new RuntimeError("fileattrib is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("fileattrib requires at least 1 argument");
-    const p = toString(margs[0]);
-    const info = io.fileattrib(p);
-    if (nargout === 0) {
-      if (!info)
-        throw new RuntimeError(
-          `fileattrib: cannot find '${p}': No such file or directory`
-        );
-      return undefined;
-    }
-    const values: RuntimeValue = info
-      ? RTV.struct(
-          new Map<string, RuntimeValue>([
-            ["Name", RTV.char(info.Name)],
-            ["archive", RTV.num(0)],
-            ["system", RTV.num(0)],
-            ["hidden", RTV.num(0)],
-            ["directory", RTV.num(info.directory ? 1 : 0)],
-            ["UserRead", RTV.num(info.UserRead ? 1 : 0)],
-            ["UserWrite", RTV.num(info.UserWrite ? 1 : 0)],
-            ["UserExecute", RTV.num(info.UserExecute ? 1 : 0)],
-          ])
-        )
-      : RTV.char(`No such file or directory: ${p}`);
-    if (nargout <= 1) return RTV.num(info ? 1 : 0);
-    return [RTV.num(info ? 1 : 0), values, RTV.char("")];
-  });
-
-  // ── unzip (ZIP extraction) ──────────────────────────────────────────
-
-  registerSpecial("unzip", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.unzip)
-      throw new RuntimeError("unzip is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("unzip requires at least 1 argument");
-
-    // Parse name-value pairs (Password=...)
-    let zipfilename = toString(margs[0]);
-    let outputfolder = ".";
-    let nextArg = 1;
-
-    // Second positional arg is outputfolder (if not a name-value pair)
-    if (margs.length >= 2 && toString(margs[1]) !== "Password") {
-      outputfolder = toString(margs[1]);
-      nextArg = 2;
-    }
-
-    // Check for Password name-value pair (not supported, but give clear error)
-    for (let i = nextArg; i < margs.length; i += 2) {
-      const name = toString(margs[i]);
-      if (name === "Password") {
-        throw new RuntimeError(
-          "unzip: Password-protected ZIP files are not supported"
-        );
-      }
-    }
-
-    // If no extension, try appending .zip
-    if (!zipfilename.includes(".")) {
-      zipfilename = zipfilename + ".zip";
-    }
-
-    // Support URL input: download to a temp file first
-    let tempFile: string | null = null;
-    if (
-      zipfilename.startsWith("http://") ||
-      zipfilename.startsWith("https://")
-    ) {
-      if (!io.websave)
-        throw new RuntimeError(
-          "unzip: URL download is not available in this environment"
-        );
-      // Create a temp file path in the output folder
-      if (io.mkdir) io.mkdir(outputfolder);
-      tempFile = outputfolder + "/.numbl_unzip_tmp_" + Date.now() + ".zip";
-      io.websave(zipfilename, tempFile);
-      zipfilename = tempFile;
-    }
-
-    let extracted: string[];
-    try {
-      extracted = io.unzip(zipfilename, outputfolder);
-    } finally {
-      // Clean up temp file
-      if (tempFile && io.deleteFile) {
-        try {
-          io.deleteFile(tempFile);
-        } catch {
-          // ignore cleanup errors
-        }
-      }
-    }
-
-    if (nargout >= 1) {
-      // Return cell array of extracted file names
-      const cellData: RuntimeValue[] = extracted.map(f => RTV.char(f));
-      return RTV.cell(cellData, [1, cellData.length]);
-    }
-    return undefined;
-  });
-
-  // ── zip (ZIP creation) ───────────────────────────────────────────────
-
-  registerSpecial("zip", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.zip)
-      throw new RuntimeError("zip is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 2)
-      throw new RuntimeError("zip requires at least 2 arguments");
-
-    // MATLAB appends .zip when the target filename has no extension
-    let zipfilename = toString(margs[0]);
-    const base = zipfilename.split(/[/\\]/).pop() ?? zipfilename;
-    if (!base.includes(".")) zipfilename += ".zip";
-
-    const fnames = margs[1];
-    const filenames: string[] = isRuntimeCell(fnames)
-      ? fnames.data.map(v => toString(ensureRuntimeValue(v)))
-      : [toString(fnames)];
-    const rootdir = margs.length >= 3 ? toString(margs[2]) : ".";
-
-    const entryNames = io.zip(zipfilename, filenames, rootdir);
-
-    if (nargout >= 1) {
-      const cellData: RuntimeValue[] = entryNames.map(f => RTV.char(f));
-      return RTV.cell(cellData, [1, cellData.length]);
-    }
-    return undefined;
-  });
-
-  // ── dir (directory listing) ──────────────────────────────────────────
-
-  registerSpecial("dir", (nargout, args) => {
-    const io = requireFileIO();
-    if (!io.listDir)
-      throw new RuntimeError("dir is not available in this environment");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    const pattern = margs.length >= 1 ? toString(margs[0]) : ".";
-
-    const entries = io.listDir(pattern);
-
-    if (nargout === 0) {
-      // Display mode: print names separated by spaces
-      const names = entries.map(e => e.name);
-      if (names.length > 0) {
-        rt.output(names.join("  ") + "\n");
-      }
-      return undefined;
-    }
-
-    // Return struct array with fields: name, folder, date, bytes, isdir, datenum
-    const fieldNames = ["name", "folder", "date", "bytes", "isdir", "datenum"];
-    const elements = entries.map(e => {
-      const d = new Date(e.mtimeMs);
-      // Format date like MATLAB: dd-Mon-yyyy HH:MM:SS
-      const months = [
-        "Jan",
-        "Feb",
-        "Mar",
-        "Apr",
-        "May",
-        "Jun",
-        "Jul",
-        "Aug",
-        "Sep",
-        "Oct",
-        "Nov",
-        "Dec",
-      ];
-      const dd = String(d.getDate()).padStart(2, "0");
-      const mon = months[d.getMonth()];
-      const yyyy = d.getFullYear();
-      const HH = String(d.getHours()).padStart(2, "0");
-      const MM = String(d.getMinutes()).padStart(2, "0");
-      const SS = String(d.getSeconds()).padStart(2, "0");
-      const dateStr = `${dd}-${mon}-${yyyy} ${HH}:${MM}:${SS}`;
-      // datenum: MATLAB serial date number (days since 0-Jan-0000)
-      // MATLAB epoch offset: 719529 days from 0-Jan-0000 to 1-Jan-1970.
-      // MATLAB's dir returns datenum as a *local-calendar* serial number
-      // (so converting it back via datetime(...,'ConvertFrom','datenum')
-      // yields the same clock time as the 'date' field). Shift the UTC
-      // epoch-ms by the local TZ offset so that interpreting the result
-      // as UTC calendar recovers the host's local calendar value.
-      const datenum =
-        719529 + (e.mtimeMs - d.getTimezoneOffset() * 60000) / 86400000;
-
-      return RTV.struct(
-        new Map<string, RuntimeValue>([
-          ["name", RTV.char(e.name)],
-          ["folder", RTV.char(e.folder)],
-          ["date", RTV.char(dateStr)],
-          ["bytes", RTV.num(e.bytes)],
-          ["isdir", RTV.logical(e.isdir)],
-          ["datenum", RTV.num(datenum)],
-        ])
-      );
-    });
-
-    if (elements.length === 0) {
-      // Return empty struct array
-      return RTV.structArray(fieldNames, []);
-    }
-    return RTV.structArray(fieldNames, elements);
-  });
-
-  // ── tempdir / tempname ─────────────────────────────────────────────
-
-  registerSpecial("tempdir", () => {
-    const io = requireFileIO();
-    if (!io.tempdir)
-      throw new RuntimeError("tempdir is not available in this environment");
-    return RTV.char(io.tempdir());
-  });
-
-  registerSpecial("userpath", () => {
-    const io = requireFileIO();
-    if (!io.userpath)
-      throw new RuntimeError("userpath is not available in this environment");
-    return RTV.char(io.userpath());
-  });
-
-  registerSpecial("tempname", (_nargout, args) => {
-    const io = requireFileIO();
-    const margs = args.map(a => ensureRuntimeValue(a));
-    let folder: string;
-    if (margs.length >= 1) {
-      folder = toString(margs[0]);
+  // Shape the output
+  let result: RuntimeValue;
+  if (isCharOutput) {
+    const str = String.fromCharCode(...values);
+    result = RTV.char(str);
+  } else if (count === 0) {
+    result = RTV.tensor(allocFloat64Array(0), [0, 0]);
+  } else if (count === 1 && m !== Infinity && n !== Infinity) {
+    result = RTV.tensor(allocFloat64Array(values), [m, n]);
+  } else if (m === Infinity || (m !== Infinity && n === Infinity)) {
+    if (m === Infinity) {
+      result = RTV.tensor(allocFloat64Array(values), [count, 1]);
     } else {
-      if (!io.tempdir)
-        throw new RuntimeError("tempname is not available in this environment");
-      folder = io.tempdir();
+      const cols = Math.ceil(count / m);
+      while (values.length < m * cols) values.push(0);
+      result = RTV.tensor(allocFloat64Array(values), [m, cols]);
     }
-    const name = "tp" + Math.random().toString(36).slice(2, 18);
-    return RTV.char(folder + "/" + name);
-  });
+  } else {
+    while (values.length < m * n) values.push(0);
+    result = RTV.tensor(allocFloat64Array(values.slice(0, m * n)), [m, n]);
+  }
 
-  // ── Plot builtins ────────────────────────────────────────────────
+  if (nargout >= 2) {
+    return [result, RTV.num(count)];
+  }
+  return result;
+});
 
-  registerSpecialVoid("drawnow", () => {
-    rt.drawnow();
-  });
+registerSpecial("fwrite", (_nargout, args) => {
+  const io = requireFileIO();
+  if (!io.fwriteBytes)
+    throw new RuntimeError("fwrite is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 2)
+    throw new RuntimeError("fwrite requires at least 2 arguments");
 
-  registerSpecial("pause", (nargout, args) => {
-    rt.pause(args[0] ?? 0);
-    // MATLAB returns the current pause state when assigned.
-    return nargout >= 1 ? RTV.char("on") : undefined;
-  });
+  const fid = toNumber(margs[0]);
+  const data = margs[1];
+  let precision = "uint8";
+  let skip = 0;
+  let machinefmt = "n";
 
-  // ── mfilename builtin ────────────────────────────────────────────
+  if (margs.length >= 3) {
+    precision = toString(margs[2]);
+  }
+  if (margs.length >= 4) {
+    skip = toNumber(margs[3]);
+  }
+  if (margs.length >= 5) {
+    machinefmt = toString(margs[4]);
+  }
 
-  registerSpecial("mfilename", (_nargout, args) => {
-    const file = rt.$file ?? "";
-    if (args.length > 0) {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      const opt = toString(margs[0]);
-      if (opt === "fullpath") {
-        // Return full path without .m extension
-        return RTV.char(file.replace(/\.m$/, ""));
+  const parsed = parsePrecision(precision);
+  const le =
+    machinefmt === "l" ||
+    machinefmt === "ieee-le" ||
+    machinefmt === "ieee-le.l64" ||
+    machinefmt === "a" ||
+    machinefmt === "n" ||
+    machinefmt === "native";
+
+  // Extract values from the data argument
+  let values: number[];
+  if (isRuntimeTensor(data)) {
+    values = Array.from(data.data);
+  } else if (isRuntimeNumber(data)) {
+    values = [toNumber(data)];
+  } else if (isRuntimeChar(data) || isRuntimeString(data)) {
+    const str = toString(data);
+    values = [];
+    for (let i = 0; i < str.length; i++) values.push(str.charCodeAt(i));
+  } else {
+    throw new RuntimeError("fwrite: data must be numeric or char");
+  }
+
+  const bytesPerVal = parsed.sourceBytes;
+  if (skip === 0) {
+    const buf = new Uint8Array(values.length * bytesPerVal);
+    const dv = new DataView(buf.buffer);
+    for (let i = 0; i < values.length; i++) {
+      writeValue(dv, i * bytesPerVal, values[i], parsed.sourceType, le);
+    }
+    io.fwriteBytes(fid, buf);
+  } else {
+    // Write with skip bytes between values
+    const valBuf = new Uint8Array(bytesPerVal);
+    const skipBuf = new Uint8Array(skip);
+    const dv = new DataView(valBuf.buffer);
+    for (let i = 0; i < values.length; i++) {
+      writeValue(dv, 0, values[i], parsed.sourceType, le);
+      io.fwriteBytes(fid, valBuf);
+      if (i < values.length - 1) {
+        io.fwriteBytes(fid, skipBuf);
       }
     }
-    // Return just the base name without path or extension
-    const lastSep = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
-    const baseName = lastSep >= 0 ? file.slice(lastSep + 1) : file;
-    return RTV.char(baseName.replace(/\.m$/, ""));
-  });
+  }
+  return RTV.num(values.length);
+});
 
-  // ── Path management builtins ──────────────────────────────────────
+registerSpecial("frewind", (_nargout, args) => {
+  const io = requireFileIO();
+  if (!io.fseek)
+    throw new RuntimeError("frewind is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("frewind requires 1 argument");
+  io.fseek(toNumber(margs[0]), 0, -1);
+  return RTV.num(0);
+});
 
-  registerSpecial("addpath", (nargout, args) => {
-    if (!rt.onPathChange) {
-      throw new RuntimeError("addpath is not available in this environment");
+registerSpecial("fseek", (_nargout, args) => {
+  const io = requireFileIO();
+  if (!io.fseek)
+    throw new RuntimeError("fseek is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 2)
+    throw new RuntimeError("fseek requires at least 2 arguments");
+  const fid = toNumber(margs[0]);
+  const offset = toNumber(margs[1]);
+  let origin = -1; // default: bof
+  if (margs.length >= 3) {
+    const o = margs[2];
+    if (isRuntimeChar(o) || isRuntimeString(o)) {
+      const s = toString(o);
+      if (s === "bof") origin = -1;
+      else if (s === "cof") origin = 0;
+      else if (s === "eof") origin = 1;
+      else throw new RuntimeError(`fseek: invalid origin '${s}'`);
+    } else {
+      origin = toNumber(o);
     }
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("addpath requires at least 1 argument");
+  }
+  return RTV.num(io.fseek(fid, offset, origin));
+});
 
-    // Detect '-end' or '-begin' flag as last argument
-    let position: "begin" | "end" = "begin";
-    const lastArg = margs[margs.length - 1];
-    if (isRuntimeChar(lastArg) || isRuntimeString(lastArg)) {
-      const flag = toString(lastArg);
-      if (flag === "-end") {
-        position = "end";
-        margs.pop();
-      } else if (flag === "-begin") {
-        margs.pop();
-      }
-    }
+registerSpecial("ftell", (_nargout, args) => {
+  const io = requireFileIO();
+  if (!io.ftell)
+    throw new RuntimeError("ftell is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1) throw new RuntimeError("ftell requires 1 argument");
+  return RTV.num(io.ftell(toNumber(margs[0])));
+});
 
-    for (const arg of margs) {
-      const dirStr = toString(arg);
-      // MATLAB supports pathsep-separated dirs in a single string
-      const dirs = dirStr.split(";");
-      for (const d of dirs) {
-        const trimmed = d.trim();
-        if (trimmed) {
-          rt.onPathChange("add", trimmed, position);
-        }
-      }
-    }
-
-    if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+registerSpecial("mkdir", (nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("mkdir requires at least 1 argument");
+  if (!io.mkdir)
+    throw new RuntimeError("mkdir is not available in this environment");
+  let dirPath: string;
+  if (margs.length === 1) {
+    dirPath = toString(margs[0]);
+  } else {
+    // mkdir(parent, newDir) form
+    dirPath = toString(margs[0]) + "/" + toString(margs[1]);
+  }
+  const ok = io.mkdir(dirPath);
+  if (nargout === 0) {
+    if (!ok)
+      throw new RuntimeError(`mkdir: cannot create directory '${dirPath}'`);
     return undefined;
-  });
+  }
+  return nargout <= 1
+    ? RTV.char(ok ? "true" : "false")
+    : [
+        RTV.char(ok ? "true" : "false"),
+        RTV.char(ok ? "" : `Cannot create directory '${dirPath}'`),
+        RTV.char(""),
+      ];
+});
 
-  registerSpecial("rmpath", (nargout, args) => {
-    if (!rt.onPathChange) {
-      throw new RuntimeError("rmpath is not available in this environment");
-    }
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("rmpath requires at least 1 argument");
+// ── web options helper ──────────────────────────────────────────────
 
-    for (const arg of margs) {
-      const dirStr = toString(arg);
-      const dirs = dirStr.split(";");
-      for (const d of dirs) {
-        const trimmed = d.trim();
-        if (trimmed) {
-          rt.onPathChange("remove", trimmed, "begin");
-        }
+/** Extract WebOptions from a weboptions struct, or return undefined. */
+function extractWebOptions(
+  arg: RuntimeValue
+): import("../fileIOAdapter.js").WebOptions | undefined {
+  if (!isRuntimeStruct(arg)) return undefined;
+  const s = arg as import("../runtime/types.js").RuntimeStruct;
+  // Detect weboptions struct by checking for the Timeout field
+  if (!s.fields.has("Timeout")) return undefined;
+  const opts: import("../fileIOAdapter.js").WebOptions = {};
+  const t = s.fields.get("Timeout");
+  if (t !== undefined) opts.timeout = toNumber(t);
+  const rm = s.fields.get("RequestMethod");
+  if (rm !== undefined) {
+    const v = toString(rm);
+    if (v !== "auto") opts.requestMethod = v;
+  }
+  const un = s.fields.get("Username");
+  if (un !== undefined) {
+    const v = toString(un);
+    if (v) opts.username = v;
+  }
+  const pw = s.fields.get("Password");
+  if (pw !== undefined) {
+    const v = toString(pw);
+    if (v) opts.password = v;
+  }
+  const kn = s.fields.get("KeyName");
+  if (kn !== undefined) {
+    const v = toString(kn);
+    if (v) opts.keyName = v;
+  }
+  const kv = s.fields.get("KeyValue");
+  if (kv !== undefined) {
+    const v = toString(kv);
+    if (v) opts.keyValue = v;
+  }
+  return opts;
+}
+
+// ── websave ─────────────────────────────────────────────────────────
+
+registerSpecial("websave", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 2)
+    throw new RuntimeError("websave requires at least 2 arguments");
+  if (!io.websave)
+    throw new RuntimeError("websave is not available in this environment");
+  const filename = toString(margs[0]);
+  let url = toString(margs[1]);
+  // Check if last argument is a weboptions struct
+  let webOpts: import("../fileIOAdapter.js").WebOptions | undefined;
+  let queryEnd = margs.length;
+  if (margs.length > 2) {
+    webOpts = extractWebOptions(margs[margs.length - 1]);
+    if (webOpts) queryEnd = margs.length - 1;
+  }
+  // Append query parameters (name-value pairs)
+  const queryParts: string[] = [];
+  for (let i = 2; i + 1 < queryEnd; i += 2) {
+    const name = encodeURIComponent(toString(margs[i]));
+    const value = encodeURIComponent(toString(margs[i + 1]));
+    queryParts.push(`${name}=${value}`);
+  }
+  if (queryParts.length > 0) {
+    const sep = url.includes("?") ? "&" : "?";
+    url += sep + queryParts.join("&");
+  }
+  io.websave(url, filename, webOpts);
+  return RTV.char(filename);
+});
+
+// ── webread ────────────────────────────────────────────────────────
+
+registerSpecial("webread", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("webread requires at least 1 argument");
+  if (!io.webread)
+    throw new RuntimeError("webread is not available in this environment");
+  let url = toString(margs[0]);
+  // Check if last argument is a weboptions struct
+  let webOpts: import("../fileIOAdapter.js").WebOptions | undefined;
+  let queryEnd = margs.length;
+  if (margs.length > 1) {
+    webOpts = extractWebOptions(margs[margs.length - 1]);
+    if (webOpts) queryEnd = margs.length - 1;
+  }
+  // Append query parameters (name-value pairs)
+  const queryParts: string[] = [];
+  for (let i = 1; i + 1 < queryEnd; i += 2) {
+    const name = encodeURIComponent(toString(margs[i]));
+    const value = encodeURIComponent(toString(margs[i + 1]));
+    queryParts.push(`${name}=${value}`);
+  }
+  if (queryParts.length > 0) {
+    const sep = url.includes("?") ? "&" : "?";
+    url += sep + queryParts.join("&");
+  }
+  const text = io.webread(url, webOpts);
+  // Try to parse as JSON (MATLAB auto-decodes JSON responses)
+  try {
+    const parsed = JSON.parse(text);
+    return convertJsonValue(parsed);
+  } catch {
+    // Not JSON — return as char array
+    return RTV.char(text);
+  }
+});
+
+// ── delete (file deletion) ──────────────────────────────────────────
+
+registerSpecialVoid("delete", (args, rt) => {
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("delete requires at least 1 argument");
+  for (const arg of margs) {
+    // delete(handle): remove the graphics object's plot instruction.
+    if (isRuntimeGraphicsHandle(arg)) {
+      const instr = arg._trace.__instruction;
+      if (instr) {
+        const idx = rt.plotInstructions.indexOf(instr as never);
+        if (idx >= 0) rt.plotInstructions.splice(idx, 1);
       }
+      continue;
     }
+    // delete(filename): remove a file.
+    const io = requireFileIO();
+    if (!io.deleteFile)
+      throw new RuntimeError("delete is not available in this environment");
+    io.deleteFile(toString(arg));
+  }
+});
 
-    if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+// ── rmdir (directory removal) ────────────────────────────────────────
+
+registerSpecial("rmdir", (nargout, args) => {
+  const io = requireFileIO();
+  if (!io.rmdir)
+    throw new RuntimeError("rmdir is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("rmdir requires at least 1 argument");
+  const dirPath = toString(margs[0]);
+  const recursive =
+    margs.length >= 2 && toString(margs[1]).toLowerCase() === "s";
+  const ok = io.rmdir(dirPath, recursive);
+  if (nargout === 0) {
+    if (!ok)
+      throw new RuntimeError(`rmdir: cannot remove directory '${dirPath}'`);
     return undefined;
-  });
+  }
+  return nargout <= 1
+    ? RTV.num(ok ? 1 : 0)
+    : [
+        RTV.num(ok ? 1 : 0),
+        RTV.char(ok ? "" : `Cannot remove directory '${dirPath}'`),
+        RTV.char(""),
+      ];
+});
 
-  registerSpecial("savepath", nargout => {
-    rt.output("Warning: savepath is a no-op in numbl\n");
-    // MATLAB returns 0 on success when an output is requested.
-    return nargout >= 1 ? RTV.num(0) : undefined;
-  });
+// ── movefile (move/rename file or folder) ───────────────────────────
 
-  registerSpecial("path", (nargout, args) => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length === 0) {
-      // path() — return current path
-      return RTV.char(rt.searchPaths.join(";"));
+registerSpecial("movefile", (nargout, args, rt) => {
+  const io = requireFileIO();
+  if (!io.movefile)
+    throw new RuntimeError("movefile is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("movefile requires at least 1 argument");
+  const source = toString(margs[0]);
+  // If only one argument, destination is the current folder.
+  const destination =
+    margs.length >= 2 ? toString(margs[1]) : (rt.system?.cwd() ?? ".");
+  let force = false;
+  // Third positional argument can be 'f' to force overwrite.
+  // The MoveLinkBehavior name=value form is not supported here.
+  if (margs.length >= 3) {
+    const third = toString(margs[2]);
+    if (third.toLowerCase() === "f") force = true;
+  }
+  const ok = io.movefile(source, destination, force);
+  if (nargout === 0) {
+    if (!ok)
+      throw new RuntimeError(
+        `movefile: cannot move '${source}' to '${destination}'`
+      );
+    return undefined;
+  }
+  return nargout <= 1
+    ? RTV.num(ok ? 1 : 0)
+    : [
+        RTV.num(ok ? 1 : 0),
+        RTV.char(ok ? "" : `Cannot move '${source}' to '${destination}'`),
+        RTV.char(""),
+      ];
+});
+
+// ── copyfile (copy file or folder) ──────────────────────────────────
+
+registerSpecial("copyfile", (nargout, args, rt) => {
+  const io = requireFileIO();
+  if (!io.copyfile)
+    throw new RuntimeError("copyfile is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("copyfile requires at least 1 argument");
+  const source = toString(margs[0]);
+  // If only one argument, destination is the current folder.
+  const destination =
+    margs.length >= 2 ? toString(margs[1]) : (rt.system?.cwd() ?? ".");
+  // Third positional argument can be 'f' to force overwrite of a read-only
+  // destination (the name=value form is not supported here).
+  let force = false;
+  if (margs.length >= 3) {
+    const third = toString(margs[2]);
+    if (third.toLowerCase() === "f") force = true;
+  }
+  const ok = io.copyfile(source, destination, force);
+  if (nargout === 0) {
+    if (!ok)
+      throw new RuntimeError(
+        `copyfile: cannot copy '${source}' to '${destination}'`
+      );
+    return undefined;
+  }
+  return nargout <= 1
+    ? RTV.num(ok ? 1 : 0)
+    : [
+        RTV.num(ok ? 1 : 0),
+        RTV.char(ok ? "" : `Cannot copy '${source}' to '${destination}'`),
+        RTV.char(""),
+      ];
+});
+
+// ── fileattrib (resolve absolute path + attributes) ─────────────────
+
+registerSpecial("fileattrib", (nargout, args) => {
+  const io = requireFileIO();
+  if (!io.fileattrib)
+    throw new RuntimeError("fileattrib is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("fileattrib requires at least 1 argument");
+  const p = toString(margs[0]);
+  const info = io.fileattrib(p);
+  if (nargout === 0) {
+    if (!info)
+      throw new RuntimeError(
+        `fileattrib: cannot find '${p}': No such file or directory`
+      );
+    return undefined;
+  }
+  const values: RuntimeValue = info
+    ? RTV.struct(
+        new Map<string, RuntimeValue>([
+          ["Name", RTV.char(info.Name)],
+          ["archive", RTV.num(0)],
+          ["system", RTV.num(0)],
+          ["hidden", RTV.num(0)],
+          ["directory", RTV.num(info.directory ? 1 : 0)],
+          ["UserRead", RTV.num(info.UserRead ? 1 : 0)],
+          ["UserWrite", RTV.num(info.UserWrite ? 1 : 0)],
+          ["UserExecute", RTV.num(info.UserExecute ? 1 : 0)],
+        ])
+      )
+    : RTV.char(`No such file or directory: ${p}`);
+  if (nargout <= 1) return RTV.num(info ? 1 : 0);
+  return [RTV.num(info ? 1 : 0), values, RTV.char("")];
+});
+
+// ── unzip (ZIP extraction) ──────────────────────────────────────────
+
+registerSpecial("unzip", (nargout, args) => {
+  const io = requireFileIO();
+  if (!io.unzip)
+    throw new RuntimeError("unzip is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("unzip requires at least 1 argument");
+
+  // Parse name-value pairs (Password=...)
+  let zipfilename = toString(margs[0]);
+  let outputfolder = ".";
+  let nextArg = 1;
+
+  // Second positional arg is outputfolder (if not a name-value pair)
+  if (margs.length >= 2 && toString(margs[1]) !== "Password") {
+    outputfolder = toString(margs[1]);
+    nextArg = 2;
+  }
+
+  // Check for Password name-value pair (not supported, but give clear error)
+  for (let i = nextArg; i < margs.length; i += 2) {
+    const name = toString(margs[i]);
+    if (name === "Password") {
+      throw new RuntimeError(
+        "unzip: Password-protected ZIP files are not supported"
+      );
     }
-    // path(newpath) — set the entire path (not commonly used, but supported)
-    if (margs.length >= 1 && rt.onPathChange) {
-      // Remove all current paths then add the new ones
-      for (const sp of [...rt.searchPaths]) {
-        rt.onPathChange("remove", sp, "begin");
-      }
-      const newPath = toString(margs[0]);
-      const dirs = newPath.split(";");
-      for (const d of dirs) {
-        const trimmed = d.trim();
-        if (trimmed) {
-          rt.onPathChange("add", trimmed, "end");
-        }
-      }
-    }
-    if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
-    return 0;
-  });
+  }
 
-  // ── getenv ──────────────────────────────────────────────────────────────
+  // If no extension, try appending .zip
+  if (!zipfilename.includes(".")) {
+    zipfilename = zipfilename + ".zip";
+  }
 
-  registerSpecial("getenv", (_nargout, args) => {
-    const sys = rt.system;
-    if (args.length === 0) {
-      // getenv() — return dictionary of all env vars
-      const all = sys?.getAllEnv() ?? {};
-      const entries = new Map<
-        string,
-        { key: RuntimeValue; value: RuntimeValue }
-      >();
-      for (const [k, v] of Object.entries(all)) {
-        const key = RTV.string(k);
-        entries.set(hashKey(key), { key, value: RTV.string(v) });
-      }
-      return RTV.dictionary(entries, "string", "string");
-    }
-    // getenv(varname) — return char value (empty if not set)
-    return RTV.char(sys?.getEnv(toString(args[0])) ?? "");
-  });
+  // Support URL input: download to a temp file first
+  let tempFile: string | null = null;
+  if (zipfilename.startsWith("http://") || zipfilename.startsWith("https://")) {
+    if (!io.websave)
+      throw new RuntimeError(
+        "unzip: URL download is not available in this environment"
+      );
+    // Create a temp file path in the output folder
+    if (io.mkdir) io.mkdir(outputfolder);
+    tempFile = outputfolder + "/.numbl_unzip_tmp_" + Date.now() + ".zip";
+    io.websave(zipfilename, tempFile);
+    zipfilename = tempFile;
+  }
 
-  // ── maxNumCompThreads ─────────────────────────────────────────────────────
-
-  // numbl runs single-threaded, so there is always exactly one computational
-  // thread. maxNumCompThreads() reports it; maxNumCompThreads(N) / ('automatic')
-  // would set it in MATLAB and return the PREVIOUS value — here both forms just
-  // report 1 (the set is a no-op).
-  registerSpecial("maxNumCompThreads", () => RTV.num(1));
-
-  // ── setenv ──────────────────────────────────────────────────────────────
-
-  registerSpecialVoid("setenv", args => {
-    const sys = rt.system;
-    if (args.length === 2) {
-      sys?.setEnv(toString(args[0]), toString(args[1]));
-      return;
-    }
-    if (args.length === 1) {
-      const d = args[0];
-      if (isRuntimeDictionary(d)) {
-        // setenv(d) — set all entries from dictionary
-        for (const { key, value } of d.entries.values()) {
-          sys?.setEnv(toString(key), toString(value));
-        }
-        return;
-      }
-      // setenv(varname) — set to empty string
-      sys?.setEnv(toString(d), "");
-      return;
-    }
-    throw new RuntimeError("setenv: invalid arguments");
-  });
-
-  // ── pwd ─────────────────────────────────────────────────────────────────
-
-  registerSpecial("pwd", () => {
-    return RTV.char(rt.system?.cwd() ?? "/");
-  });
-
-  // ── cd ──────────────────────────────────────────────────────────────────
-
-  registerSpecial("cd", (nargout, args) => {
-    const sys = rt.system;
-    const curDir = sys?.cwd() ?? "/";
-    if (args.length === 0) {
-      // `cd` with no args: print current directory, return it only if
-      // assigned (matches MATLAB, which does not set `ans`).
-      if (nargout === 0) {
-        rt.output(curDir + "\n");
-        return undefined;
-      }
-      return RTV.char(curDir);
-    }
-    const target = toString(args[0]);
-    if (sys) {
+  let extracted: string[];
+  try {
+    extracted = io.unzip(zipfilename, outputfolder);
+  } finally {
+    // Clean up temp file
+    if (tempFile && io.deleteFile) {
       try {
-        sys.chdir(target);
+        io.deleteFile(tempFile);
       } catch {
-        throw new RuntimeError(`Cannot change directory to '${target}'`);
-      }
-      // Trigger workspace rebuild for the new cwd (MATLAB semantics:
-      // current directory is the first-priority search path).
-      if (rt.onCwdChange) {
-        rt.onCwdChange(sys.cwd());
+        // ignore cleanup errors
       }
     }
-    // With a destination argument, MATLAB returns the previous directory
-    // only when an output is requested.
-    return nargout >= 1 ? RTV.char(curDir) : undefined;
+  }
+
+  if (nargout >= 1) {
+    // Return cell array of extracted file names
+    const cellData: RuntimeValue[] = extracted.map(f => RTV.char(f));
+    return RTV.cell(cellData, [1, cellData.length]);
+  }
+  return undefined;
+});
+
+// ── zip (ZIP creation) ───────────────────────────────────────────────
+
+registerSpecial("zip", (nargout, args) => {
+  const io = requireFileIO();
+  if (!io.zip)
+    throw new RuntimeError("zip is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 2)
+    throw new RuntimeError("zip requires at least 2 arguments");
+
+  // MATLAB appends .zip when the target filename has no extension
+  let zipfilename = toString(margs[0]);
+  const base = zipfilename.split(/[/\\]/).pop() ?? zipfilename;
+  if (!base.includes(".")) zipfilename += ".zip";
+
+  const fnames = margs[1];
+  const filenames: string[] = isRuntimeCell(fnames)
+    ? fnames.data.map(v => toString(ensureRuntimeValue(v)))
+    : [toString(fnames)];
+  const rootdir = margs.length >= 3 ? toString(margs[2]) : ".";
+
+  const entryNames = io.zip(zipfilename, filenames, rootdir);
+
+  if (nargout >= 1) {
+    const cellData: RuntimeValue[] = entryNames.map(f => RTV.char(f));
+    return RTV.cell(cellData, [1, cellData.length]);
+  }
+  return undefined;
+});
+
+// ── dir (directory listing) ──────────────────────────────────────────
+
+registerSpecial("dir", (nargout, args, rt) => {
+  const io = requireFileIO();
+  if (!io.listDir)
+    throw new RuntimeError("dir is not available in this environment");
+  const margs = args.map(a => ensureRuntimeValue(a));
+  const pattern = margs.length >= 1 ? toString(margs[0]) : ".";
+
+  const entries = io.listDir(pattern);
+
+  if (nargout === 0) {
+    // Display mode: print names separated by spaces
+    const names = entries.map(e => e.name);
+    if (names.length > 0) {
+      rt.output(names.join("  ") + "\n");
+    }
+    return undefined;
+  }
+
+  // Return struct array with fields: name, folder, date, bytes, isdir, datenum
+  const fieldNames = ["name", "folder", "date", "bytes", "isdir", "datenum"];
+  const elements = entries.map(e => {
+    const d = new Date(e.mtimeMs);
+    // Format date like MATLAB: dd-Mon-yyyy HH:MM:SS
+    const months = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec",
+    ];
+    const dd = String(d.getDate()).padStart(2, "0");
+    const mon = months[d.getMonth()];
+    const yyyy = d.getFullYear();
+    const HH = String(d.getHours()).padStart(2, "0");
+    const MM = String(d.getMinutes()).padStart(2, "0");
+    const SS = String(d.getSeconds()).padStart(2, "0");
+    const dateStr = `${dd}-${mon}-${yyyy} ${HH}:${MM}:${SS}`;
+    // datenum: MATLAB serial date number (days since 0-Jan-0000)
+    // MATLAB epoch offset: 719529 days from 0-Jan-0000 to 1-Jan-1970.
+    // MATLAB's dir returns datenum as a *local-calendar* serial number
+    // (so converting it back via datetime(...,'ConvertFrom','datenum')
+    // yields the same clock time as the 'date' field). Shift the UTC
+    // epoch-ms by the local TZ offset so that interpreting the result
+    // as UTC calendar recovers the host's local calendar value.
+    const datenum =
+      719529 + (e.mtimeMs - d.getTimezoneOffset() * 60000) / 86400000;
+
+    return RTV.struct(
+      new Map<string, RuntimeValue>([
+        ["name", RTV.char(e.name)],
+        ["folder", RTV.char(e.folder)],
+        ["date", RTV.char(dateStr)],
+        ["bytes", RTV.num(e.bytes)],
+        ["isdir", RTV.logical(e.isdir)],
+        ["datenum", RTV.num(datenum)],
+      ])
+    );
   });
 
-  // ── Graphics builtins (override IBuiltin stubs in misc.ts) ───────────
-  //
-  // In MATLAB most plotting functions have an *optional* output (a graphics
-  // handle) and do not set `ans` when called as statements.  The numbl
-  // stubs don't track real handles, so they hand back placeholder values
-  // only when an output is explicitly requested.
+  if (elements.length === 0) {
+    // Return empty struct array
+    return RTV.structArray(fieldNames, []);
+  }
+  return RTV.structArray(fieldNames, elements);
+});
 
-  registerSpecial("ishold", () => {
-    return rt.ishold();
+// ── tempdir / tempname ─────────────────────────────────────────────
+
+registerSpecial("tempdir", () => {
+  const io = requireFileIO();
+  if (!io.tempdir)
+    throw new RuntimeError("tempdir is not available in this environment");
+  return RTV.char(io.tempdir());
+});
+
+registerSpecial("userpath", () => {
+  const io = requireFileIO();
+  if (!io.userpath)
+    throw new RuntimeError("userpath is not available in this environment");
+  return RTV.char(io.userpath());
+});
+
+registerSpecial("tempname", (_nargout, args) => {
+  const io = requireFileIO();
+  const margs = args.map(a => ensureRuntimeValue(a));
+  let folder: string;
+  if (margs.length >= 1) {
+    folder = toString(margs[0]);
+  } else {
+    if (!io.tempdir)
+      throw new RuntimeError("tempname is not available in this environment");
+    folder = io.tempdir();
+  }
+  const name = "tp" + Math.random().toString(36).slice(2, 18);
+  return RTV.char(folder + "/" + name);
+});
+
+// ── Plot builtins ────────────────────────────────────────────────
+
+registerSpecialVoid("drawnow", (_args, rt) => {
+  rt.drawnow();
+});
+
+registerSpecial("pause", (nargout, args, rt) => {
+  rt.pause(args[0] ?? 0);
+  // MATLAB returns the current pause state when assigned.
+  return nargout >= 1 ? RTV.char("on") : undefined;
+});
+
+// ── mfilename builtin ────────────────────────────────────────────
+
+registerSpecial("mfilename", (_nargout, args, rt) => {
+  const file = rt.$file ?? "";
+  if (args.length > 0) {
+    const margs = args.map(a => ensureRuntimeValue(a));
+    const opt = toString(margs[0]);
+    if (opt === "fullpath") {
+      // Return full path without .m extension
+      return RTV.char(file.replace(/\.m$/, ""));
+    }
+  }
+  // Return just the base name without path or extension
+  const lastSep = Math.max(file.lastIndexOf("/"), file.lastIndexOf("\\"));
+  const baseName = lastSep >= 0 ? file.slice(lastSep + 1) : file;
+  return RTV.char(baseName.replace(/\.m$/, ""));
+});
+
+// ── Path management builtins ──────────────────────────────────────
+
+registerSpecial("addpath", (nargout, args, rt) => {
+  if (!rt.onPathChange) {
+    throw new RuntimeError("addpath is not available in this environment");
+  }
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("addpath requires at least 1 argument");
+
+  // Detect '-end' or '-begin' flag as last argument
+  let position: "begin" | "end" = "begin";
+  const lastArg = margs[margs.length - 1];
+  if (isRuntimeChar(lastArg) || isRuntimeString(lastArg)) {
+    const flag = toString(lastArg);
+    if (flag === "-end") {
+      position = "end";
+      margs.pop();
+    } else if (flag === "-begin") {
+      margs.pop();
+    }
+  }
+
+  for (const arg of margs) {
+    const dirStr = toString(arg);
+    // MATLAB supports pathsep-separated dirs in a single string
+    const dirs = dirStr.split(";");
+    for (const d of dirs) {
+      const trimmed = d.trim();
+      if (trimmed) {
+        rt.onPathChange("add", trimmed, position);
+      }
+    }
+  }
+
+  if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+  return undefined;
+});
+
+registerSpecial("rmpath", (nargout, args, rt) => {
+  if (!rt.onPathChange) {
+    throw new RuntimeError("rmpath is not available in this environment");
+  }
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length < 1)
+    throw new RuntimeError("rmpath requires at least 1 argument");
+
+  for (const arg of margs) {
+    const dirStr = toString(arg);
+    const dirs = dirStr.split(";");
+    for (const d of dirs) {
+      const trimmed = d.trim();
+      if (trimmed) {
+        rt.onPathChange("remove", trimmed, "begin");
+      }
+    }
+  }
+
+  if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+  return undefined;
+});
+
+registerSpecial("savepath", (nargout, _args, rt) => {
+  rt.output("Warning: savepath is a no-op in numbl\n");
+  // MATLAB returns 0 on success when an output is requested.
+  return nargout >= 1 ? RTV.num(0) : undefined;
+});
+
+registerSpecial("path", (nargout, args, rt) => {
+  const margs = args.map(a => ensureRuntimeValue(a));
+  if (margs.length === 0) {
+    // path() — return current path
+    return RTV.char(rt.searchPaths.join(";"));
+  }
+  // path(newpath) — set the entire path (not commonly used, but supported)
+  if (margs.length >= 1 && rt.onPathChange) {
+    // Remove all current paths then add the new ones
+    for (const sp of [...rt.searchPaths]) {
+      rt.onPathChange("remove", sp, "begin");
+    }
+    const newPath = toString(margs[0]);
+    const dirs = newPath.split(";");
+    for (const d of dirs) {
+      const trimmed = d.trim();
+      if (trimmed) {
+        rt.onPathChange("add", trimmed, "end");
+      }
+    }
+  }
+  if (nargout >= 1) return RTV.char(rt.searchPaths.join(";"));
+  return 0;
+});
+
+// ── getenv ──────────────────────────────────────────────────────────────
+
+registerSpecial("getenv", (_nargout, args, rt) => {
+  const sys = rt.system;
+  if (args.length === 0) {
+    // getenv() — return dictionary of all env vars
+    const all = sys?.getAllEnv() ?? {};
+    const entries = new Map<
+      string,
+      { key: RuntimeValue; value: RuntimeValue }
+    >();
+    for (const [k, v] of Object.entries(all)) {
+      const key = RTV.string(k);
+      entries.set(hashKey(key), { key, value: RTV.string(v) });
+    }
+    return RTV.dictionary(entries, "string", "string");
+  }
+  // getenv(varname) — return char value (empty if not set)
+  return RTV.char(sys?.getEnv(toString(args[0])) ?? "");
+});
+
+// ── maxNumCompThreads ─────────────────────────────────────────────────────
+
+// numbl runs single-threaded, so there is always exactly one computational
+// thread. maxNumCompThreads() reports it; maxNumCompThreads(N) / ('automatic')
+// would set it in MATLAB and return the PREVIOUS value — here both forms just
+// report 1 (the set is a no-op).
+registerSpecial("maxNumCompThreads", () => RTV.num(1));
+
+// ── setenv ──────────────────────────────────────────────────────────────
+
+registerSpecialVoid("setenv", (args, rt) => {
+  const sys = rt.system;
+  if (args.length === 2) {
+    sys?.setEnv(toString(args[0]), toString(args[1]));
+    return;
+  }
+  if (args.length === 1) {
+    const d = args[0];
+    if (isRuntimeDictionary(d)) {
+      // setenv(d) — set all entries from dictionary
+      for (const { key, value } of d.entries.values()) {
+        sys?.setEnv(toString(key), toString(value));
+      }
+      return;
+    }
+    // setenv(varname) — set to empty string
+    sys?.setEnv(toString(d), "");
+    return;
+  }
+  throw new RuntimeError("setenv: invalid arguments");
+});
+
+// ── pwd ─────────────────────────────────────────────────────────────────
+
+registerSpecial("pwd", (_nargout, _args, rt) => {
+  return RTV.char(rt.system?.cwd() ?? "/");
+});
+
+// ── cd ──────────────────────────────────────────────────────────────────
+
+registerSpecial("cd", (nargout, args, rt) => {
+  const sys = rt.system;
+  const curDir = sys?.cwd() ?? "/";
+  if (args.length === 0) {
+    // `cd` with no args: print current directory, return it only if
+    // assigned (matches MATLAB, which does not set `ans`).
+    if (nargout === 0) {
+      rt.output(curDir + "\n");
+      return undefined;
+    }
+    return RTV.char(curDir);
+  }
+  const target = toString(args[0]);
+  if (sys) {
+    try {
+      sys.chdir(target);
+    } catch {
+      throw new RuntimeError(`Cannot change directory to '${target}'`);
+    }
+    // Trigger workspace rebuild for the new cwd (MATLAB semantics:
+    // current directory is the first-priority search path).
+    if (rt.onCwdChange) {
+      rt.onCwdChange(sys.cwd());
+    }
+  }
+  // With a destination argument, MATLAB returns the previous directory
+  // only when an output is requested.
+  return nargout >= 1 ? RTV.char(curDir) : undefined;
+});
+
+// ── Graphics builtins (override IBuiltin stubs in misc.ts) ───────────
+//
+// In MATLAB most plotting functions have an *optional* output (a graphics
+// handle) and do not set `ans` when called as statements.  The numbl
+// stubs don't track real handles, so they hand back placeholder values
+// only when an output is explicitly requested.
+
+registerSpecial("ishold", (_nargout, _args, rt) => {
+  return rt.ishold();
+});
+
+registerSpecial("figure", (nargout, args, rt) => {
+  dispatchPlotBuiltin(
+    "figure",
+    args.map(ensureRuntimeValue),
+    rt.plotInstructions,
+    rt
+  );
+  // dispatchPlotBuiltin set rt.currentFigureHandle to the (possibly newly
+  // allocated) handle; return it so `h = figure` gets the right value.
+  return nargout >= 1 ? RTV.num(rt.currentFigureHandle) : undefined;
+});
+
+// `drawuihtml(html[, dataJson])` — native emit primitive behind the `uihtml`
+// component. Pushes a `uihtml` PlotInstruction (rendered as an iframe by
+// FigureView) onto the current figure. A fresh id per call makes the viewer
+// remount the iframe when HTMLSource or Data changes. `dataJson`, when given,
+// is the `Data` property already JSON-encoded (the shim calls `jsonencode`);
+// the renderer parses it and feeds it to the page's `htmlComponent` so the
+// `setup`/`"DataChanged"` bridge fires.
+registerSpecial("drawuihtml", (nargout, args, rt) => {
+  const html = args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "";
+  const data =
+    args.length > 1 ? toString(ensureRuntimeValue(args[1])) : undefined;
+  rt.uihtmlSeq += 1;
+  const id = "uh" + rt.uihtmlSeq;
+  rt.plotInstructions.push({
+    type: "uihtml",
+    id,
+    html,
+    ...(data !== undefined ? { data } : {}),
   });
+  // Return the component id so the shim can register reverse-channel
+  // callbacks (HTMLEventReceivedFcn / DataChangedFcn) against it.
+  return nargout >= 1 ? RTV.char(id) : undefined;
+});
 
-  registerSpecial("figure", (nargout, args) => {
+// `registeruihtmlcallback(compId, eventType, fcnHandle)` — record a callback
+// for a uihtml component's reverse channel (HTML → MATLAB). `eventType` is
+// "HTMLEventReceived" (from JS `sendEventToMATLAB`) or "DataChanged" (from JS
+// setting `htmlComponent.Data`). The handle is incref'd so it survives after
+// the run while the host keeps this runtime alive to dispatch events. A new
+// registration for the same component replaces (and decrefs) the old one.
+registerSpecial("registeruihtmlcallback", (_nargout, args, rt) => {
+  if (args.length < 3) return undefined;
+  const compId = toString(ensureRuntimeValue(args[0]));
+  const eventType = toString(ensureRuntimeValue(args[1]));
+  const fcn = ensureRuntimeValue(args[2]);
+  if (eventType !== "HTMLEventReceived" && eventType !== "DataChanged") {
+    return undefined;
+  }
+  if (!isRuntimeFunction(fcn)) return undefined;
+  const entry = rt.uihtmlCallbacks.get(compId) ?? {};
+  const prev = entry[eventType];
+  if (prev) decref(rt, prev);
+  incref(fcn);
+  entry[eventType] = fcn;
+  rt.uihtmlCallbacks.set(compId, entry);
+  return undefined;
+});
+
+// `sendEventToHTMLSource(src, name, data)` — push an event from MATLAB back to
+// a uihtml component's page (MATLAB → JS). `src` is the struct passed to the
+// callback (carrying ComponentId); `data` is jsonencode'd and the host
+// forwards it to the iframe, where it fires the page's addEventListener(name).
+registerSpecial("sendEventToHTMLSource", (_nargout, args, rt) => {
+  if (args.length < 2) {
+    throw new RuntimeError("sendEventToHTMLSource requires src and name");
+  }
+  const src = ensureRuntimeValue(args[0]);
+  if (!isRuntimeStruct(src) || !src.fields.has("ComponentId")) {
+    throw new RuntimeError(
+      "sendEventToHTMLSource: src must be the component passed to the callback"
+    );
+  }
+  const compId = toString(src.fields.get("ComponentId")!);
+  const name = toString(ensureRuntimeValue(args[1]));
+  const dataArg = args.length > 2 ? ensureRuntimeValue(args[2]) : RTV.num(0);
+  const dataJson = toString(
+    ensureRuntimeValue(rt.dispatch("jsonencode", 1, [dataArg]))
+  );
+  rt.onHtmlSourceEvent?.(compId, name, dataJson);
+  return undefined;
+});
+
+// MATLAB `uigridlayout` shim so standard layout-wrapped uihtml code runs
+// unchanged in numbl. numbl fills the figure pane regardless of layout, so
+// this is a no-op container handle (parent/sizing args are ignored). Use a
+// plain `figure` as the parent.
+registerSpecial("uigridlayout", nargout =>
+  nargout >= 1 ? RTV.num(0) : undefined
+);
+
+// Bulk register graphics ops that share the simple
+//   "push instruction, return RTV.num(<placeholder>) when nargout>=1"
+// pattern. The push side lives in plotBuiltinDispatch.ts — one source
+// of truth for the (name → set_xxx) mapping.
+const PLOT_RETURNS_ZERO = ["subplot", "tiledlayout", "nexttile", "legend"];
+for (const name of PLOT_RETURNS_ZERO) {
+  registerSpecial(name, (nargout, args, rt) => {
     dispatchPlotBuiltin(
-      "figure",
+      name,
       args.map(ensureRuntimeValue),
       rt.plotInstructions,
       rt
     );
-    // dispatchPlotBuiltin set rt.currentFigureHandle to the (possibly newly
-    // allocated) handle; return it so `h = figure` gets the right value.
-    return nargout >= 1 ? RTV.num(rt.currentFigureHandle) : undefined;
-  });
-
-  // `drawuihtml(html[, dataJson])` — native emit primitive behind the `uihtml`
-  // component. Pushes a `uihtml` PlotInstruction (rendered as an iframe by
-  // FigureView) onto the current figure. A fresh id per call makes the viewer
-  // remount the iframe when HTMLSource or Data changes. `dataJson`, when given,
-  // is the `Data` property already JSON-encoded (the shim calls `jsonencode`);
-  // the renderer parses it and feeds it to the page's `htmlComponent` so the
-  // `setup`/`"DataChanged"` bridge fires.
-  let uihtmlSeq = 0;
-  registerSpecial("drawuihtml", (nargout, args) => {
-    const html = args.length > 0 ? toString(ensureRuntimeValue(args[0])) : "";
-    const data =
-      args.length > 1 ? toString(ensureRuntimeValue(args[1])) : undefined;
-    uihtmlSeq += 1;
-    const id = "uh" + uihtmlSeq;
-    rt.plotInstructions.push({
-      type: "uihtml",
-      id,
-      html,
-      ...(data !== undefined ? { data } : {}),
-    });
-    // Return the component id so the shim can register reverse-channel
-    // callbacks (HTMLEventReceivedFcn / DataChangedFcn) against it.
-    return nargout >= 1 ? RTV.char(id) : undefined;
-  });
-
-  // `registeruihtmlcallback(compId, eventType, fcnHandle)` — record a callback
-  // for a uihtml component's reverse channel (HTML → MATLAB). `eventType` is
-  // "HTMLEventReceived" (from JS `sendEventToMATLAB`) or "DataChanged" (from JS
-  // setting `htmlComponent.Data`). The handle is incref'd so it survives after
-  // the run while the host keeps this runtime alive to dispatch events. A new
-  // registration for the same component replaces (and decrefs) the old one.
-  registerSpecial("registeruihtmlcallback", (_nargout, args) => {
-    if (args.length < 3) return undefined;
-    const compId = toString(ensureRuntimeValue(args[0]));
-    const eventType = toString(ensureRuntimeValue(args[1]));
-    const fcn = ensureRuntimeValue(args[2]);
-    if (eventType !== "HTMLEventReceived" && eventType !== "DataChanged") {
-      return undefined;
-    }
-    if (!isRuntimeFunction(fcn)) return undefined;
-    const entry = rt.uihtmlCallbacks.get(compId) ?? {};
-    const prev = entry[eventType];
-    if (prev) decref(rt, prev);
-    incref(fcn);
-    entry[eventType] = fcn;
-    rt.uihtmlCallbacks.set(compId, entry);
-    return undefined;
-  });
-
-  // `sendEventToHTMLSource(src, name, data)` — push an event from MATLAB back to
-  // a uihtml component's page (MATLAB → JS). `src` is the struct passed to the
-  // callback (carrying ComponentId); `data` is jsonencode'd and the host
-  // forwards it to the iframe, where it fires the page's addEventListener(name).
-  registerSpecial("sendEventToHTMLSource", (_nargout, args) => {
-    if (args.length < 2) {
-      throw new RuntimeError("sendEventToHTMLSource requires src and name");
-    }
-    const src = ensureRuntimeValue(args[0]);
-    if (!isRuntimeStruct(src) || !src.fields.has("ComponentId")) {
-      throw new RuntimeError(
-        "sendEventToHTMLSource: src must be the component passed to the callback"
-      );
-    }
-    const compId = toString(src.fields.get("ComponentId")!);
-    const name = toString(ensureRuntimeValue(args[1]));
-    const dataArg = args.length > 2 ? ensureRuntimeValue(args[2]) : RTV.num(0);
-    const dataJson = toString(
-      ensureRuntimeValue(rt.dispatch("jsonencode", 1, [dataArg]))
-    );
-    rt.onHtmlSourceEvent?.(compId, name, dataJson);
-    return undefined;
-  });
-
-  // MATLAB `uigridlayout` shim so standard layout-wrapped uihtml code runs
-  // unchanged in numbl. numbl fills the figure pane regardless of layout, so
-  // this is a no-op container handle (parent/sizing args are ignored). Use a
-  // plain `figure` as the parent.
-  registerSpecial("uigridlayout", nargout =>
-    nargout >= 1 ? RTV.num(0) : undefined
-  );
-
-  // Bulk register graphics ops that share the simple
-  //   "push instruction, return RTV.num(<placeholder>) when nargout>=1"
-  // pattern. The push side lives in plotBuiltinDispatch.ts — one source
-  // of truth for the (name → set_xxx) mapping.
-  const PLOT_RETURNS_ZERO = ["subplot", "tiledlayout", "nexttile", "legend"];
-  for (const name of PLOT_RETURNS_ZERO) {
-    registerSpecial(name, (nargout, args) => {
-      dispatchPlotBuiltin(
-        name,
-        args.map(ensureRuntimeValue),
-        rt.plotInstructions,
-        rt
-      );
-      return nargout >= 1 ? RTV.num(0) : undefined;
-    });
-  }
-
-  // Text-creating ops (`title`, `xlabel`, …) push their instruction and, when
-  // an output is requested (`tt = title(...)`), return a text handle. The
-  // handle remembers which instruction sets its string so `set(tt,'String',s)`
-  // can re-emit it — letting titles/labels animate across `drawnow`.
-  const TEXT_LABELS: Record<
-    string,
-    "set_title" | "set_xlabel" | "set_ylabel" | "set_zlabel" | "set_sgtitle"
-  > = {
-    title: "set_title",
-    xlabel: "set_xlabel",
-    ylabel: "set_ylabel",
-    zlabel: "set_zlabel",
-    sgtitle: "set_sgtitle",
-  };
-  for (const [name, instrType] of Object.entries(TEXT_LABELS)) {
-    registerSpecial(name, (nargout, args) => {
-      const margs = args.map(ensureRuntimeValue);
-      dispatchPlotBuiltin(name, margs, rt.plotInstructions, rt);
-      if (nargout >= 1) {
-        const text = margs.length > 0 ? toString(margs[0]) : "";
-        return RTV.graphicsHandle(
-          { string: text, __target: instrType },
-          "text"
-        );
-      }
-      return undefined;
-    });
-  }
-
-  // `set(handle, 'Prop', value, ...)` updates graphics-handle properties. For
-  // a live-updatable trace (e.g. a line returned by `line`) it mutates the
-  // wrapped trace AND re-emits an `update_trace` instruction, since plot
-  // batches are serialized to the viewer and an already-flushed instruction
-  // can't be reached by mutation alone. `set` on a dummy handle (gca/gcf) or a
-  // non-handle is accepted as a no-op.
-  registerSpecial("set", (_nargout, args) => {
-    const margs = args.map(ensureRuntimeValue);
-    const handle = margs[0];
-    if (!isRuntimeGraphicsHandle(handle)) return undefined;
-    const props: Record<string, unknown> = {};
-    for (let i = 1; i + 1 < margs.length; i += 2) {
-      const keyArg = margs[i];
-      const key = isRuntimeString(keyArg)
-        ? keyArg
-        : isRuntimeChar(keyArg)
-          ? keyArg.value
-          : null;
-      if (!key) continue;
-      const val = margs[i + 1];
-      if (handle._traceType === "text") {
-        // Title/label handle: 'String' updates the text; re-emit the matching
-        // label instruction. Other text props (FontSize, …) aren't modeled.
-        if (key.toLowerCase() === "string") {
-          const text = toString(val);
-          handle._trace.string = text;
-          const target = handle._trace.__target as
-            | PlotInstruction["type"]
-            | undefined;
-          if (target) {
-            rt.plotInstructions.push({ type: target, text } as PlotInstruction);
-          }
-        }
-        continue;
-      }
-      const { key: tkey, value: stored } = applyHandleProperty(
-        handle._trace,
-        handle._traceType,
-        key,
-        val
-      );
-      props[tkey] = stored;
-    }
-    const id = handle._trace.id;
-    if (typeof id === "number" && Object.keys(props).length > 0) {
-      rt.plotInstructions.push({ type: "update_trace", id, props });
-    }
-    return undefined;
-  });
-
-  const PLOT_RETURNS_ONE = ["close", "clf"];
-  for (const name of PLOT_RETURNS_ONE) {
-    registerSpecial(name, (nargout, args) => {
-      dispatchPlotBuiltin(
-        name,
-        args.map(ensureRuntimeValue),
-        rt.plotInstructions,
-        rt
-      );
-      return nargout >= 1 ? RTV.num(1) : undefined;
-    });
-  }
-
-  // `hold`, `grid`, `shading`, `cla` are truly void in MATLAB (they error
-  // on `r = hold`). registerSpecialVoid surfaces that as
-  // "Too many output arguments." when nargout > 0.
-  const PLOT_VOID = ["hold", "grid", "shading", "cla"];
-  for (const name of PLOT_VOID) {
-    registerSpecialVoid(name, args => {
-      dispatchPlotBuiltin(
-        name,
-        args.map(ensureRuntimeValue),
-        rt.plotInstructions,
-        rt
-      );
-    });
-  }
-
-  // `colorbar` returns a handle-shaped struct when an output is
-  // requested — kept as a custom registration so we can build the
-  // struct from the args we just parsed. The push side still goes
-  // through dispatchPlotBuiltin (which re-parses the args to produce
-  // the same set_colorbar instruction).
-  registerSpecial("colorbar", (nargout, args) => {
-    const margs = args.map(ensureRuntimeValue);
-    dispatchPlotBuiltin("colorbar", margs, rt.plotInstructions, rt);
-    if (nargout >= 1) {
-      const last = rt.plotInstructions[rt.plotInstructions.length - 1];
-      if (last && last.type === "set_colorbar") {
-        return RTV.struct({
-          Location: RTV.char(last.location ?? "eastoutside"),
-          Visible: RTV.char(last.value === "off" ? "off" : "on"),
-        });
-      }
-    }
-    return undefined;
-  });
-
-  // ── ODE solvers ─────────────────────────────────────────────────────
-
-  registerSpecial("ode45", (nargout, args) => {
-    return _ode45Impl(rt, nargout, args, dormandPrince45);
-  });
-
-  registerSpecial("ode23", (nargout, args) => {
-    return _ode45Impl(rt, nargout, args, bogackiShampine23);
-  });
-
-  registerSpecial("deval", (_nargout, args) => {
-    return _devalImpl(args);
-  });
-
-  // ── GMRES ───────────────────────────────────────────────────────────
-  registerSpecial("gmres", (nargout, args) => {
-    return _gmresImpl(rt, nargout, args);
-  });
-
-  // ── eigs (subset of eigenvalues) ────────────────────────────────────
-  registerSpecial("eigs", (nargout, args) => {
-    return _eigsImpl(rt, nargout, args);
-  });
-
-  // ── onCleanup ─────────────────────────────────────────────────────
-  registerSpecial("onCleanup", (_nargout, args) => {
-    if (args.length !== 1 || !isRuntimeFunction(args[0]))
-      throw new RuntimeError("onCleanup requires a function handle argument");
-    rt.registerCleanup(args[0]);
-    return RTV.classInstance("onCleanup", [], false);
+    return nargout >= 1 ? RTV.num(0) : undefined;
   });
 }
+
+// Text-creating ops (`title`, `xlabel`, …) push their instruction and, when
+// an output is requested (`tt = title(...)`), return a text handle. The
+// handle remembers which instruction sets its string so `set(tt,'String',s)`
+// can re-emit it — letting titles/labels animate across `drawnow`.
+const TEXT_LABELS: Record<
+  string,
+  "set_title" | "set_xlabel" | "set_ylabel" | "set_zlabel" | "set_sgtitle"
+> = {
+  title: "set_title",
+  xlabel: "set_xlabel",
+  ylabel: "set_ylabel",
+  zlabel: "set_zlabel",
+  sgtitle: "set_sgtitle",
+};
+for (const [name, instrType] of Object.entries(TEXT_LABELS)) {
+  registerSpecial(name, (nargout, args, rt) => {
+    const margs = args.map(ensureRuntimeValue);
+    dispatchPlotBuiltin(name, margs, rt.plotInstructions, rt);
+    if (nargout >= 1) {
+      const text = margs.length > 0 ? toString(margs[0]) : "";
+      return RTV.graphicsHandle({ string: text, __target: instrType }, "text");
+    }
+    return undefined;
+  });
+}
+
+// `set(handle, 'Prop', value, ...)` updates graphics-handle properties. For
+// a live-updatable trace (e.g. a line returned by `line`) it mutates the
+// wrapped trace AND re-emits an `update_trace` instruction, since plot
+// batches are serialized to the viewer and an already-flushed instruction
+// can't be reached by mutation alone. `set` on a dummy handle (gca/gcf) or a
+// non-handle is accepted as a no-op.
+registerSpecial("set", (_nargout, args, rt) => {
+  const margs = args.map(ensureRuntimeValue);
+  const handle = margs[0];
+  if (!isRuntimeGraphicsHandle(handle)) return undefined;
+  const props: Record<string, unknown> = {};
+  for (let i = 1; i + 1 < margs.length; i += 2) {
+    const keyArg = margs[i];
+    const key = isRuntimeString(keyArg)
+      ? keyArg
+      : isRuntimeChar(keyArg)
+        ? keyArg.value
+        : null;
+    if (!key) continue;
+    const val = margs[i + 1];
+    if (handle._traceType === "text") {
+      // Title/label handle: 'String' updates the text; re-emit the matching
+      // label instruction. Other text props (FontSize, …) aren't modeled.
+      if (key.toLowerCase() === "string") {
+        const text = toString(val);
+        handle._trace.string = text;
+        const target = handle._trace.__target as
+          | PlotInstruction["type"]
+          | undefined;
+        if (target) {
+          rt.plotInstructions.push({ type: target, text } as PlotInstruction);
+        }
+      }
+      continue;
+    }
+    const { key: tkey, value: stored } = applyHandleProperty(
+      handle._trace,
+      handle._traceType,
+      key,
+      val
+    );
+    props[tkey] = stored;
+  }
+  const id = handle._trace.id;
+  if (typeof id === "number" && Object.keys(props).length > 0) {
+    rt.plotInstructions.push({ type: "update_trace", id, props });
+  }
+  return undefined;
+});
+
+const PLOT_RETURNS_ONE = ["close", "clf"];
+for (const name of PLOT_RETURNS_ONE) {
+  registerSpecial(name, (nargout, args, rt) => {
+    dispatchPlotBuiltin(
+      name,
+      args.map(ensureRuntimeValue),
+      rt.plotInstructions,
+      rt
+    );
+    return nargout >= 1 ? RTV.num(1) : undefined;
+  });
+}
+
+// `hold`, `grid`, `shading`, `cla` are truly void in MATLAB (they error
+// on `r = hold`). registerSpecialVoid surfaces that as
+// "Too many output arguments." when nargout > 0.
+const PLOT_VOID = ["hold", "grid", "shading", "cla"];
+for (const name of PLOT_VOID) {
+  registerSpecialVoid(name, (args, rt) => {
+    dispatchPlotBuiltin(
+      name,
+      args.map(ensureRuntimeValue),
+      rt.plotInstructions,
+      rt
+    );
+  });
+}
+
+// `colorbar` returns a handle-shaped struct when an output is
+// requested — kept as a custom registration so we can build the
+// struct from the args we just parsed. The push side still goes
+// through dispatchPlotBuiltin (which re-parses the args to produce
+// the same set_colorbar instruction).
+registerSpecial("colorbar", (nargout, args, rt) => {
+  const margs = args.map(ensureRuntimeValue);
+  dispatchPlotBuiltin("colorbar", margs, rt.plotInstructions, rt);
+  if (nargout >= 1) {
+    const last = rt.plotInstructions[rt.plotInstructions.length - 1];
+    if (last && last.type === "set_colorbar") {
+      return RTV.struct({
+        Location: RTV.char(last.location ?? "eastoutside"),
+        Visible: RTV.char(last.value === "off" ? "off" : "on"),
+      });
+    }
+  }
+  return undefined;
+});
+
+// ── ODE solvers ─────────────────────────────────────────────────────
+
+registerSpecial("ode45", (nargout, args, rt) => {
+  return _ode45Impl(rt, nargout, args, dormandPrince45);
+});
+
+registerSpecial("ode23", (nargout, args, rt) => {
+  return _ode45Impl(rt, nargout, args, bogackiShampine23);
+});
+
+registerSpecial("deval", (_nargout, args) => {
+  return _devalImpl(args);
+});
+
+// ── GMRES ───────────────────────────────────────────────────────────
+registerSpecial("gmres", (nargout, args, rt) => {
+  return _gmresImpl(rt, nargout, args);
+});
+
+// ── eigs (subset of eigenvalues) ────────────────────────────────────
+registerSpecial("eigs", (nargout, args, rt) => {
+  return _eigsImpl(rt, nargout, args);
+});
+
+// ── onCleanup ─────────────────────────────────────────────────────
+registerSpecial("onCleanup", (_nargout, args, rt) => {
+  if (args.length !== 1 || !isRuntimeFunction(args[0]))
+    throw new RuntimeError("onCleanup requires a function handle argument");
+  rt.registerCleanup(args[0]);
+  return RTV.classInstance("onCleanup", [], false);
+});
 
 // ── eigs implementation ───────────────────────────────────────────────
 //

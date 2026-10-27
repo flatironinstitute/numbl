@@ -242,4 +242,11 @@ result = double_it(21);
     expect(result.variableValues["b"]).toBe(1);
     expect(result.variableValues["c"]).toBeUndefined();
   });
+
+  it("keeps warning on/off state per run", () => {
+    executeCode("warning('off', 'my:id');");
+    const result = executeCode("s = warning('query', 'my:id'); st = s.state;");
+    const st = result.variableValues["st"] as { value: string };
+    expect(st.value).toBe("on");
+  });
 });
