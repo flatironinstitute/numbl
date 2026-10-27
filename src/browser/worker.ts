@@ -8,14 +8,7 @@
  * dist-browser/browser.js as a Blob-URL worker, so consumers need no
  * bundler support for dependency workers.
  */
-import { executeCode } from "../numbl-core/executeCode.js";
-import type {
-  ExecResult,
-  FigureHandles,
-  UihtmlSession,
-} from "../numbl-core/executeCode.js";
-import type { RuntimeValue } from "../numbl-core/runtime/index.js";
-import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
+import { ExecSession } from "../numbl-core/execSession.js";
 import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
@@ -41,13 +34,14 @@ setJsGpuHelper(startGpuHelper());
 
 let vfs: VirtualFileSystem | null = null;
 let store: SystemStore | null = null;
-let session: UihtmlSession | null = null;
+// Workspace state carried across `execute` calls (REPL semantics), including
+// the live uihtml session that `dispatch` re-enters.
+const session = new ExecSession();
 const components: UihtmlComponent[] = [];
 // Files written before boot finishes are stashed and applied once the VFS exists.
 const pendingWrites: { path: string; content: string | Uint8Array }[] = [];
 
 // Boot options reused by `execute`.
-let mipEnabled = false;
 let optimization: "0" | "1" = "1";
 let maxIterations = 1e9;
 // Shared cancellation flag from the host (undefined without cross-origin
@@ -59,14 +53,6 @@ let cancelSAB: SharedArrayBuffer | undefined;
 // isolation). workerOnInput blocks on it after posting a `request-input`
 // message, so the host can feed the reply back via provideInput().
 let inputSAB: SharedArrayBuffer | undefined;
-
-// Workspace state carried across `execute` calls (REPL semantics).
-let variableValues: Record<string, RuntimeValue> = {};
-let holdState = false;
-let figureHandles: FigureHandles = { current: 0, max: 0 };
-let persistentWorkspaceFiles: WorkspaceFile[] = [];
-let persistentSearchPaths: string[] | undefined;
-let implicitCwdPath: string | null | undefined;
 
 const enc = new TextEncoder();
 
@@ -104,28 +90,6 @@ function trackUihtml(instructions: PlotInstruction[]) {
   }
 }
 
-/** Carry workspace state forward after a successful executeCode run. */
-function adoptResultState(result: ExecResult) {
-  variableValues = result.variableValues;
-  holdState = result.holdState;
-  figureHandles = result.figureHandles;
-  if (result.searchPaths) {
-    persistentSearchPaths = result.searchPaths;
-    persistentWorkspaceFiles = result.workspaceFiles ?? [];
-  }
-  if (result.implicitCwdPath !== undefined) {
-    implicitCwdPath = result.implicitCwdPath;
-  }
-}
-
-function executeSearchPaths(): string[] {
-  const paths = [...(persistentSearchPaths ?? [])];
-  if (mipEnabled && !paths.includes(MIP_SEARCH_PATH)) {
-    paths.push(MIP_SEARCH_PATH);
-  }
-  return paths;
-}
-
 async function persistSystemChanges() {
   if (!vfs) return;
   const changes = vfs.getChanges();
@@ -135,7 +99,7 @@ async function persistSystemChanges() {
 
 async function boot(msg: BootMessage) {
   vfs = new VirtualFileSystem();
-  mipEnabled = msg.mip;
+  if (msg.mip) session.extraSearchPaths = [MIP_SEARCH_PATH];
   optimization = msg.optimization;
   maxIterations = msg.maxIterations;
   cancelSAB = msg.cancelSAB;
@@ -178,7 +142,7 @@ async function boot(msg: BootMessage) {
   }
 
   const decoder = new TextDecoder("utf-8");
-  persistentWorkspaceFiles = msg.files
+  session.workspaceFiles = msg.files
     .filter(f => f.path.endsWith(".m"))
     .map(f => ({
       name: f.path,
@@ -189,10 +153,10 @@ async function boot(msg: BootMessage) {
   if (mainAbs && msg.mainFile) {
     post({ type: "progress", message: "Running main script…" });
     const mainSource =
-      persistentWorkspaceFiles.find(f => f.name === msg.mainFile)?.source ??
+      session.workspaceFiles.find(f => f.name === msg.mainFile)?.source ??
       decoder.decode(vfs.readFile(mainAbs));
 
-    const result = executeCode(
+    const result = session.execute(
       mainSource,
       {
         onOutput: text => post({ type: "output", text }),
@@ -207,19 +171,15 @@ async function boot(msg: BootMessage) {
         cancelSAB,
         onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
       },
-      persistentWorkspaceFiles,
-      mainAbs,
-      msg.mip ? [MIP_SEARCH_PATH] : []
+      mainAbs
     );
     trackUihtml(result.plotInstructions);
-    session = result.uihtmlSession ?? null;
-    adoptResultState(result);
   }
 
   await persistSystemChanges();
   post({
     type: "ready",
-    hasUihtmlSession: session !== null,
+    hasUihtmlSession: session.uihtmlSession !== null,
     components: [...components],
   });
 }
@@ -239,39 +199,22 @@ function execute(id: number, code: string) {
     return;
   }
 
-  // A new execution supersedes any armed uihtml session.
-  if (session) {
-    session.dispose();
-    session = null;
-  }
-
   try {
-    const result = executeCode(
-      code,
-      {
-        onOutput: text => post({ type: "output", text }),
-        onDrawnow: instructions => trackUihtml(instructions),
-        displayResults: true,
-        maxIterations,
-        optimization,
-        initialVariableValues: variableValues,
-        initialHoldState: holdState,
-        initialFigureHandles: figureHandles,
-        fileIO: new BrowserFileIOAdapter(vfs),
-        system: new BrowserSystemAdapter(vfs),
-        onHtmlSourceEvent: (compId, name, dataJson) =>
-          post({ type: "htmlSourceEvent", compId, name, dataJson }),
-        implicitCwdPath,
-        cancelSAB,
-        onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
-      },
-      persistentWorkspaceFiles,
-      "repl",
-      executeSearchPaths()
-    );
+    // Supersedes any armed uihtml session.
+    const result = session.execute(code, {
+      onOutput: text => post({ type: "output", text }),
+      onDrawnow: instructions => trackUihtml(instructions),
+      displayResults: true,
+      maxIterations,
+      optimization,
+      fileIO: new BrowserFileIOAdapter(vfs),
+      system: new BrowserSystemAdapter(vfs),
+      onHtmlSourceEvent: (compId, name, dataJson) =>
+        post({ type: "htmlSourceEvent", compId, name, dataJson }),
+      cancelSAB,
+      onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+    });
     trackUihtml(result.plotInstructions);
-    session = result.uihtmlSession ?? null;
-    adoptResultState(result);
     post({
       type: "executeResult",
       id,
@@ -345,7 +288,8 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
   }
 
   if (msg.type === "dispatch") {
-    if (!session) {
+    const uihtml = session.uihtmlSession;
+    if (!uihtml) {
       post({
         type: "dispatchResult",
         id: msg.id,
@@ -355,7 +299,7 @@ self.onmessage = (e: MessageEvent<ToWorker>) => {
       return;
     }
     try {
-      session.dispatchEvent(msg.compId, "HTMLEventReceived", {
+      uihtml.dispatchEvent(msg.compId, "HTMLEventReceived", {
         name: msg.name,
         data: msg.data,
       });
