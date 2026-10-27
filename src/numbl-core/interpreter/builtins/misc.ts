@@ -300,12 +300,12 @@ registerIBuiltin({
   },
 });
 
-// ── clc / clf stubs ──────────────────────────────────────────────────────
+// ── clear / clc stubs ────────────────────────────────────────────────────
 // `clear` is handled by interpreterSpecialBuiltins (it needs env access);
 // the no-op IBuiltin only covers reserved-word forms (`clear functions`,
 // `clear global`, …) which fall through from the special handler.
 
-for (const name of ["clear", "clc", "clf"]) {
+for (const name of ["clear", "clc"]) {
   registerIBuiltin({
     name,
     resolve: () => ({
@@ -574,33 +574,6 @@ registerIBuiltin({
 // special builtin in specialBuiltins.ts (it needs to push `update_trace`
 // instructions so live edits reach the serialized plot viewer).
 
-// Graphics stubs that return nothing
-for (const name of [
-  "figure",
-  "hold",
-  "grid",
-  "close",
-  "title",
-  "xlabel",
-  "ylabel",
-  "shading",
-  "subplot",
-  "tiledlayout",
-  "nexttile",
-  "legend",
-  "sgtitle",
-  "zlabel",
-  "colorbar",
-]) {
-  registerIBuiltin({
-    name,
-    resolve: () => ({
-      outputTypes: [],
-      apply: () => undefined as unknown as RuntimeValue,
-    }),
-  });
-}
-
 // pathdef — no-op, returns empty string
 registerIBuiltin({
   name: "pathdef",
@@ -620,15 +593,6 @@ registerIBuiltin({
       apply: () => true,
     };
   },
-});
-
-// ishold — returns false
-registerIBuiltin({
-  name: "ishold",
-  resolve: () => ({
-    outputTypes: [{ kind: "boolean" }],
-    apply: () => RTV.logical(false),
-  }),
 });
 
 // filesep — platform file separator

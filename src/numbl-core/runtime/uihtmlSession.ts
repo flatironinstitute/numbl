@@ -8,23 +8,14 @@
  * when an event arrives from the iframe — mirroring MATLAB, where the script
  * returns but its callbacks keep firing.
  *
- * Dispatch re-activates the run's own special-builtin closures (captured at
- * end-of-run, NOT re-registered — re-registering would reset their counters)
- * and pushes the runtime so `disp`, plotting, and `sendEventToHTMLSource`
- * inside the callback reach this runtime. This mirrors executeCode's own
- * save/restore of SPECIAL_BUILTIN_NAMES.
+ * Dispatch pushes the runtime so `disp`, plotting, and
+ * `sendEventToHTMLSource` inside the callback reach this runtime.
  */
 import type { Runtime } from "./runtime.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import { RTV } from "./constructors.js";
 import { pushCurrentRuntime, popCurrentRuntime, decref } from "./refcount.js";
 import { isRuntimeFunction, type RuntimeFunction } from "./types.js";
-import {
-  getIBuiltin,
-  registerDynamicIBuiltin,
-  type IBuiltin,
-} from "../interpreter/builtins/types.js";
-import { SPECIAL_BUILTIN_NAMES } from "./specialBuiltinNames.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
 
 export interface UihtmlSession {
@@ -44,14 +35,9 @@ export interface UihtmlSession {
   dispose(): void;
 }
 
-/**
- * Build a session over a runtime that registered uihtml callbacks.
- * `activeSpecials` is a snapshot of this runtime's special-builtin closures,
- * captured at end-of-run while they are still installed globally.
- */
+/** Build a session over a runtime that registered uihtml callbacks. */
 export function createUihtmlSession(
   rt: Runtime,
-  activeSpecials: Map<string, IBuiltin>,
   onDrawnow?: (plotInstructions: PlotInstruction[]) => void
 ): UihtmlSession {
   function invokeHandle(fn: RuntimeFunction, args: unknown[]): void {
@@ -71,15 +57,6 @@ export function createUihtmlSession(
     const entry = rt.uihtmlCallbacks.get(compId);
     const fn = entry?.[eventType];
     if (!fn || !isRuntimeFunction(fn)) return;
-
-    // Re-activate this runtime's special builtins for the re-entry, exactly as
-    // executeCode does around a run: save current, install ours, restore after.
-    const saved = new Map<string, IBuiltin>();
-    for (const name of SPECIAL_BUILTIN_NAMES) {
-      const ex = getIBuiltin(name);
-      if (ex) saved.set(name, ex);
-    }
-    for (const ib of activeSpecials.values()) registerDynamicIBuiltin(ib);
 
     pushCurrentRuntime(rt);
     const before = rt.plotInstructions.length;
@@ -103,7 +80,6 @@ export function createUihtmlSession(
       invokeHandle(fn, [src, event]);
     } finally {
       popCurrentRuntime(rt);
-      for (const ib of saved.values()) registerDynamicIBuiltin(ib);
     }
 
     const newInstrs = rt.plotInstructions.slice(before);

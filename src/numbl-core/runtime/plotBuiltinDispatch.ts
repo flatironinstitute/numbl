@@ -588,7 +588,7 @@ function dispatchColormap(
 }
 
 /** Names handled by `dispatchPlotBuiltin`. Useful for registering all
- *  of them in a loop (numbl's `initBuiltins` / `registerSpecialBuiltins`
+ *  of them in a loop (numbl's `initBuiltins` and `specialBuiltins.ts`
  *  do that for the side-effect-only subset). Stays in sync with the
  *  cases above by construction. */
 export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
