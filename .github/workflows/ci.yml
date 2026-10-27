@@ -63,8 +63,12 @@ jobs:
   test-browser:
     name: Test Browser (Playwright)
     needs: test
-    # Playwright's Chromium is not available for ubuntu-latest (26.04) yet.
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    # Browsers and their system libraries come preinstalled in this image, so
+    # there is no slow install step. Keep the tag in sync with the
+    # @playwright/test version in package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -83,9 +87,6 @@ jobs:
 
       - name: Build browser package
         run: npm run build:browser
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
 
       - name: Run browser test-runner
         run: npm run test:browser
