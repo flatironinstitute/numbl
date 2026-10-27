@@ -16,7 +16,7 @@
     "numerical-computing"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=18.7"
   },
   "main": "dist-lib/lib.js",
   "types": "dist-lib/lib.d.ts",
