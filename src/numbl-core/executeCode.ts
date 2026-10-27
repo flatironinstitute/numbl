@@ -21,14 +21,9 @@ import {
   RuntimeError,
   CancellationError,
 } from "../numbl-core/runtime/index.js";
-import {
-  loadJsUserFunctions,
-  isNumblJsFile,
-  type LoadedJsUserFunction,
-} from "./jsUserFunctions.js";
 import type { NativeBridge } from "./workspace/index.js";
+import { Workspace, SHIM_SEARCH_PATH } from "./workspace/workspace.js";
 import { parseMFile, type Stmt } from "./parser/index.js";
-import { SyntaxError } from "./parser/errors.js";
 import { Interpreter } from "./interpreter/interpreter.js";
 import { LoweringContext } from "./lowering/loweringContext.js";
 import { stdlibFiles, shimFiles } from "./stdlib-bundle.js";
@@ -156,9 +151,6 @@ export interface FigureHandles {
 
 // ── Implementation ──────────────────────────────────────────────────────
 
-/** Virtual search path prefix for bundled shim files. */
-const SHIM_SEARCH_PATH = "__numbl_shims__";
-
 export function executeCode(
   source: string,
   options: ExecOptions = {},
@@ -198,172 +190,24 @@ export function executeCode(
   // ── 2. Set up LoweringContext for resolution ────────────────────────
   const ctx = new LoweringContext(source, mainFileName);
 
-  // Separate .m workspace files from .numbl.js / .wasm
-  const mWorkspaceFiles: WorkspaceFile[] = [];
-  const jsWorkspaceFiles: WorkspaceFile[] = [];
-  const wasmWorkspaceFiles: WorkspaceFile[] = [];
-  if (workspaceFiles) {
-    for (const f of workspaceFiles) {
-      if (f.name.endsWith(".m")) {
-        mWorkspaceFiles.push(f);
-      } else if (isNumblJsFile(f.name)) {
-        jsWorkspaceFiles.push(f);
-      } else if (f.name.endsWith(".wasm")) {
-        wasmWorkspaceFiles.push(f);
-      }
-    }
-  }
-
-  // ── Implicit cwd as first-priority search path (MATLAB semantics) ──
-  // Scans both .m and .numbl.js files from cwd. The .numbl.js extension is
-  // unambiguous (no plain .js file would ever be a numbl user function),
-  // so cwd auto-discovery is safe — eslint.config.js / vite.config.js / etc.
-  // are never picked up.
-  let implicitCwdPath: string | null = null;
-  if (
-    options.implicitCwdPath !== null &&
-    options.system &&
-    options.fileIO?.scanDirectory
-  ) {
-    try {
-      const cwd = options.implicitCwdPath ?? options.system.cwd();
-      const absCwd = options.fileIO.resolvePath?.(cwd) ?? cwd;
-      // Skip if this dir is already explicitly on the search path
-      const explicitPaths = searchPaths ?? [];
-      if (!explicitPaths.includes(absCwd)) {
-        implicitCwdPath = absCwd;
-        // Skip scan if we already received files from this dir via the
-        // workspaceFiles argument (REPL persistence path).
-        const prefix = absCwd.endsWith("/") ? absCwd : absCwd + "/";
-        const alreadyHave = mWorkspaceFiles.some(
-          f => f.name === absCwd || f.name.startsWith(prefix)
-        );
-        if (!alreadyHave) {
-          const cwdFiles = options.fileIO.scanDirectory(absCwd);
-          for (const f of cwdFiles) {
-            if (f.name.endsWith(".m")) {
-              mWorkspaceFiles.push(f);
-            } else if (isNumblJsFile(f.name)) {
-              jsWorkspaceFiles.push(f);
-            }
-          }
-        }
-      }
-    } catch {
-      // cwd inaccessible or scan failed — silently disable implicit cwd
-      implicitCwdPath = null;
-    }
-  }
-
-  // ── Explicit search paths: scan their directories for workspace files,
-  // mirroring what a runtime addpath does (previously only addpath triggered
-  // a scan, so initial searchPaths silently resolved nothing unless the
-  // caller also threaded the files through workspaceFiles). Files already
-  // provided via workspaceFiles (matched by name) are not re-added.
-  if (searchPaths && options.fileIO?.scanDirectory) {
-    const haveM = new Set(mWorkspaceFiles.map(f => f.name));
-    for (const dir of searchPaths) {
-      try {
-        const absDir = options.fileIO.resolvePath?.(dir) ?? dir;
-        for (const f of options.fileIO.scanDirectory(absDir)) {
-          if (f.name.endsWith(".m")) {
-            if (!haveM.has(f.name)) {
-              mWorkspaceFiles.push(f);
-              haveM.add(f.name);
-            }
-          } else if (isNumblJsFile(f.name)) {
-            if (!jsWorkspaceFiles.some(e => e.name === f.name)) {
-              jsWorkspaceFiles.push(f);
-            }
-          } else if (f.name.endsWith(".wasm")) {
-            if (!wasmWorkspaceFiles.some(e => e.name === f.name)) {
-              wasmWorkspaceFiles.push(f);
-            }
-          }
-        }
-      } catch {
-        // dir missing or unscannable — same tolerance as addpath and cwd
-      }
-    }
-  }
-
-  // Load .numbl.js user functions
-  const jsUserFunctions: LoadedJsUserFunction[] = loadJsUserFunctions(
-    jsWorkspaceFiles,
-    wasmWorkspaceFiles,
-    nativeBridge
+  const ws = new Workspace(ctx, options.fileIO, nativeBridge);
+  ws.load(
+    workspaceFiles ?? [],
+    searchPaths ?? [],
+    options.implicitCwdPath,
+    options.system,
+    [
+      ...stdlibFiles,
+      ...shimFiles.map(f => ({
+        name: `${SHIM_SEARCH_PATH}/${f.name}`,
+        source: f.source,
+      })),
+    ]
   );
-
-  // Add stdlib and shim files (track names for filtering in ExecResult)
-  const stdlibShimNames = new Set<string>();
-  for (const f of stdlibFiles) {
-    mWorkspaceFiles.push(f);
-    stdlibShimNames.add(f.name);
-  }
-  for (const f of shimFiles) {
-    const shimName = `${SHIM_SEARCH_PATH}/${f.name}`;
-    mWorkspaceFiles.push({ name: shimName, source: f.source });
-    stdlibShimNames.add(shimName);
-  }
-  ctx.registry.searchPaths = [...(searchPaths ?? []), SHIM_SEARCH_PATH];
-
-  // Prepend implicit cwd at position 0 (highest priority).
-  if (implicitCwdPath !== null) {
-    ctx.registry.searchPaths.unshift(implicitCwdPath);
-  }
-
-  // Pre-parse all .m workspace files into the shared AST cache.
-  // Files that fail to parse are skipped with a warning instead of aborting.
   ctx.fileASTCache.set(mainFileName, ast);
-  const skippedFiles = new Set<string>();
-  for (const f of mWorkspaceFiles) {
-    try {
-      ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
-    } catch (e) {
-      skippedFiles.add(f.name);
-      if (e instanceof SyntaxError) {
-        console.warn(
-          `Warning: skipping ${f.name} (syntax error at line ${e.line ?? "?"})`
-        );
-      } else {
-        console.warn(`Warning: skipping ${f.name} (parse error)`);
-      }
-    }
-  }
-  // Remove skipped files so they aren't registered in the workspace
-  if (skippedFiles.size > 0) {
-    for (let i = mWorkspaceFiles.length - 1; i >= 0; i--) {
-      if (skippedFiles.has(mWorkspaceFiles[i].name)) {
-        mWorkspaceFiles.splice(i, 1);
-      }
-    }
-  }
-
-  // Register local functions from main file
-  for (const fn of localFunctions) {
-    ctx.registerLocalFunctionAST(fn);
-  }
-
-  // Register local classes from main file
-  for (const cls of localClasses) {
-    ctx.registerLocalClass(cls);
-  }
-
-  // Register .m workspace files for resolution
-  if (mWorkspaceFiles.length > 0) {
-    ctx.registerWorkspaceFiles(mWorkspaceFiles);
-  }
-
-  // Register .numbl.js user functions on the per-context registry. They are
-  // resolved at workspace priority (after .m, before native builtins).
-  for (const entry of jsUserFunctions) {
-    ctx.registerJsUserFunction(
-      entry.name,
-      entry.fileName,
-      entry.builtin,
-      entry.help
-    );
-  }
+  for (const fn of localFunctions) ctx.registerLocalFunctionAST(fn);
+  for (const cls of localClasses) ctx.registerLocalClass(cls);
+  ws.register();
 
   // Build function index (enables definitive resolution)
   const functionIndex = ctx.buildFunctionIndex();
@@ -387,9 +231,11 @@ export function executeCode(
 
   // Populate file→source map for line number computation in error messages
   interpreter.fileSources.set(mainFileName, source);
-  for (const f of mWorkspaceFiles) {
+  for (const f of ws.mFiles) {
     interpreter.fileSources.set(f.name, f.source);
   }
+  ws.onFileAdded = f => interpreter.fileSources.set(f.name, f.source);
+  ws.onFileRemoved = name => interpreter.fileSources.delete(name);
 
   interpreter.optimization = options.optimization ?? "1";
   interpreter.nativeBridge = nativeBridge;
@@ -426,337 +272,20 @@ export function executeCode(
   // Expose search paths reference on the runtime (for path() builtin)
   rt.searchPaths = ctx.registry.searchPaths;
 
-  // Track whether paths were modified during execution
-  let pathsModified = false;
-
-  // All loaded .numbl.js user function records currently in scope. Mutated
-  // by addpath/rmpath/cd handlers below; sorted by search-path priority on
-  // rebuild so first-wins matches `mWorkspaceFiles` semantics.
-  const loadedJsUserFunctions: LoadedJsUserFunction[] = [...jsUserFunctions];
-
-  // Shared rebuild logic used by both onPathChange and onCwdChange.
-  // Re-sorts mWorkspaceFiles by search path order, then re-registers
-  // and rebuilds the function index.
-  const rebuildWorkspace = () => {
-    const paths = ctx.registry.searchPaths;
-    // Compute file → priority by LONGEST matching prefix.
-    // (A simple findIndex would mis-classify a file in /a/b/c.m as
-    //  belonging to /a if /a is also on the path — when /a is the cwd
-    //  and /a/b is an explicit addpath, the file should belong to /a/b.)
-    const priorityOf = (name: string): number => {
-      let bestIdx = paths.length;
-      let bestLen = -1;
-      for (let i = 0; i < paths.length; i++) {
-        const p = paths[i];
-        const withSep = p.endsWith("/") ? p : p + "/";
-        if (name === p || name.startsWith(withSep)) {
-          if (p.length > bestLen) {
-            bestLen = p.length;
-            bestIdx = i;
-          }
-        }
-      }
-      return bestIdx;
-    };
-    mWorkspaceFiles.sort((a, b) => priorityOf(a.name) - priorityOf(b.name));
-    loadedJsUserFunctions.sort(
-      (a, b) => priorityOf(a.fileName) - priorityOf(b.fileName)
-    );
-
-    ctx.clearWorkspaceRegistrations();
-    ctx.registerWorkspaceFiles(mWorkspaceFiles);
-    for (const entry of loadedJsUserFunctions) {
-      ctx.registerJsUserFunction(
-        entry.name,
-        entry.fileName,
-        entry.builtin,
-        entry.help
-      );
-    }
-    const newIndex = ctx.buildFunctionIndex();
-    interpreter.functionIndex = newIndex;
+  const applyWorkspace = () => {
+    interpreter.functionIndex = ws.rebuild();
     interpreter.clearAllCaches();
-    pathsModified = true;
   };
-
-  // Wire up addpath/rmpath callback
   rt.onPathChange = (action, dir, position) => {
-    const fileIO = options.fileIO;
-    const absDir = fileIO?.resolvePath?.(dir) ?? dir;
-
     if (action === "add") {
-      // Skip if already on the path
-      if (ctx.registry.searchPaths.includes(absDir)) return;
-
-      // Add to search paths (before the shim path for '-end').
-      // The implicit cwd entry, if present, must remain at position 0 — so
-      // a "begin" insertion goes to index 1 when cwd is currently first.
-      if (position === "begin") {
-        const cwdIsFirst =
-          implicitCwdPath !== null &&
-          ctx.registry.searchPaths[0] === implicitCwdPath;
-        ctx.registry.searchPaths.splice(cwdIsFirst ? 1 : 0, 0, absDir);
-      } else {
-        const shimIdx = ctx.registry.searchPaths.indexOf(SHIM_SEARCH_PATH);
-        if (shimIdx >= 0) {
-          ctx.registry.searchPaths.splice(shimIdx, 0, absDir);
-        } else {
-          ctx.registry.searchPaths.push(absDir);
-        }
-      }
-
-      // Scan and parse new files. Match the startup behavior in this file:
-      // a single broken .m file in an addpath'd directory should not abort
-      // the addpath call — warn and skip it instead. (Without this, calling
-      // addpath('dir') from a script throws if any file in dir fails to
-      // parse, which breaks package load_package.m scripts that addpath a
-      // tree containing a few unparseable files.)
-      if (fileIO?.scanDirectory) {
-        const newFiles = fileIO.scanDirectory(absDir);
-        const newJsFiles: WorkspaceFile[] = [];
-        const newWasmFiles: WorkspaceFile[] = [];
-        for (const f of newFiles) {
-          if (f.name.endsWith(".m") && !ctx.fileASTCache.has(f.name)) {
-            try {
-              ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
-            } catch (e) {
-              if (e instanceof SyntaxError) {
-                console.warn(
-                  `Warning: skipping ${f.name} (syntax error at line ${e.line ?? "?"})`
-                );
-              } else {
-                console.warn(`Warning: skipping ${f.name} (parse error)`);
-              }
-              continue;
-            }
-            interpreter.fileSources.set(f.name, f.source);
-            mWorkspaceFiles.push(f);
-          } else if (isNumblJsFile(f.name)) {
-            // Always include in newJsFiles so the loader runs again. The
-            // initial workspaceFiles may have provided this .numbl.js
-            // without proper wasm/native binary data (e.g. the IDE sends
-            // text-only file blobs); a fresh scanDirectory load typically
-            // provides those binaries, and we want the new IBuiltin to
-            // replace the old one.
-            newJsFiles.push(f);
-            if (!jsWorkspaceFiles.some(e => e.name === f.name)) {
-              jsWorkspaceFiles.push(f);
-            }
-          } else if (f.name.endsWith(".wasm")) {
-            newWasmFiles.push(f);
-            if (!wasmWorkspaceFiles.some(e => e.name === f.name)) {
-              wasmWorkspaceFiles.push(f);
-            }
-          }
-        }
-        // Load any new .numbl.js user functions and append to the active
-        // list. Sorting by search-path priority happens in rebuildWorkspace.
-        if (newJsFiles.length > 0) {
-          const loaded = loadJsUserFunctions(
-            newJsFiles,
-            newWasmFiles,
-            nativeBridge
-          );
-          for (const entry of loaded) {
-            // Replace any prior load of this file path so the most recent
-            // (best-bound) version is what subsequent rebuildWorkspace
-            // calls register.
-            const existingIdx = loadedJsUserFunctions.findIndex(
-              e => e.fileName === entry.fileName
-            );
-            if (existingIdx >= 0) {
-              loadedJsUserFunctions[existingIdx] = entry;
-            } else {
-              loadedJsUserFunctions.push(entry);
-            }
-          }
-        }
-      }
+      if (ws.addPath(dir, position)) applyWorkspace();
     } else {
-      // rmpath: remove from search paths
-      const idx = ctx.registry.searchPaths.indexOf(absDir);
-      if (idx >= 0) {
-        ctx.registry.searchPaths.splice(idx, 1);
-      }
-      // Remove files belonging to this path from AST cache and mWorkspaceFiles
-      const prefix = absDir.endsWith("/") ? absDir : absDir + "/";
-      for (let i = mWorkspaceFiles.length - 1; i >= 0; i--) {
-        if (mWorkspaceFiles[i].name.startsWith(prefix)) {
-          ctx.fileASTCache.delete(mWorkspaceFiles[i].name);
-          interpreter.fileSources.delete(mWorkspaceFiles[i].name);
-          mWorkspaceFiles.splice(i, 1);
-        }
-      }
-      // Remove .numbl.js user functions and source files belonging to this path
-      for (let i = loadedJsUserFunctions.length - 1; i >= 0; i--) {
-        if (loadedJsUserFunctions[i].fileName.startsWith(prefix)) {
-          loadedJsUserFunctions.splice(i, 1);
-        }
-      }
-      for (let i = jsWorkspaceFiles.length - 1; i >= 0; i--) {
-        if (jsWorkspaceFiles[i].name.startsWith(prefix)) {
-          jsWorkspaceFiles.splice(i, 1);
-        }
-      }
-      for (let i = wasmWorkspaceFiles.length - 1; i >= 0; i--) {
-        if (wasmWorkspaceFiles[i].name.startsWith(prefix)) {
-          wasmWorkspaceFiles.splice(i, 1);
-        }
-      }
+      ws.removePath(dir);
+      applyWorkspace();
     }
-
-    rebuildWorkspace();
   };
-
-  // Wire up cd callback — updates the implicit cwd entry in searchPaths
-  // and rebuilds the workspace using the same pipeline as addpath/rmpath.
-  rt.onCwdChange = (newCwd: string) => {
-    const fileIO = options.fileIO;
-    const absNewCwd = fileIO?.resolvePath?.(newCwd) ?? newCwd;
-
-    // No-op if cwd is already the implicit path
-    if (implicitCwdPath === absNewCwd) return;
-
-    // Remove files from the OLD implicit cwd (if any). Only remove files
-    // whose CLOSEST search path is the old implicit cwd — files in
-    // addpath'd subdirectories of the old cwd belong to those subdirs and
-    // must survive (e.g. addpath('/a/b/lib') then cd('/a/b') then cd
-    // elsewhere should keep /a/b/lib/foo.m visible via the addpath entry).
-    if (implicitCwdPath !== null) {
-      const oldPrefix = implicitCwdPath.endsWith("/")
-        ? implicitCwdPath
-        : implicitCwdPath + "/";
-      // Collect all explicit search paths that are deeper than the old
-      // implicit cwd; a file under one of those paths "belongs" to it.
-      const deeperPaths = ctx.registry.searchPaths.filter(
-        p =>
-          p !== implicitCwdPath &&
-          p !== SHIM_SEARCH_PATH &&
-          (p === implicitCwdPath || p.startsWith(oldPrefix))
-      );
-      const fileBelongsToDeeperPath = (fname: string): boolean => {
-        for (const p of deeperPaths) {
-          const withSep = p.endsWith("/") ? p : p + "/";
-          if (fname === p || fname.startsWith(withSep)) return true;
-        }
-        return false;
-      };
-      for (let i = mWorkspaceFiles.length - 1; i >= 0; i--) {
-        const fname = mWorkspaceFiles[i].name;
-        if (
-          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
-          !fileBelongsToDeeperPath(fname)
-        ) {
-          ctx.fileASTCache.delete(fname);
-          interpreter.fileSources.delete(fname);
-          mWorkspaceFiles.splice(i, 1);
-        }
-      }
-      // Same logic for .numbl.js user functions in the old implicit cwd.
-      for (let i = loadedJsUserFunctions.length - 1; i >= 0; i--) {
-        const fname = loadedJsUserFunctions[i].fileName;
-        if (
-          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
-          !fileBelongsToDeeperPath(fname)
-        ) {
-          loadedJsUserFunctions.splice(i, 1);
-        }
-      }
-      for (let i = jsWorkspaceFiles.length - 1; i >= 0; i--) {
-        const fname = jsWorkspaceFiles[i].name;
-        if (
-          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
-          !fileBelongsToDeeperPath(fname)
-        ) {
-          jsWorkspaceFiles.splice(i, 1);
-        }
-      }
-      for (let i = wasmWorkspaceFiles.length - 1; i >= 0; i--) {
-        const fname = wasmWorkspaceFiles[i].name;
-        if (
-          (fname === implicitCwdPath || fname.startsWith(oldPrefix)) &&
-          !fileBelongsToDeeperPath(fname)
-        ) {
-          wasmWorkspaceFiles.splice(i, 1);
-        }
-      }
-      const oldIdx = ctx.registry.searchPaths.indexOf(implicitCwdPath);
-      if (oldIdx >= 0) ctx.registry.searchPaths.splice(oldIdx, 1);
-      implicitCwdPath = null;
-    }
-
-    // If new cwd is already an explicit search path, just rebuild — no
-    // need to add it again or scan its files.
-    if (ctx.registry.searchPaths.includes(absNewCwd)) {
-      rebuildWorkspace();
-      return;
-    }
-
-    // Insert new cwd at position 0 (highest priority)
-    ctx.registry.searchPaths.unshift(absNewCwd);
-    implicitCwdPath = absNewCwd;
-
-    // Scan and parse .m and .numbl.js files in the new cwd.
-    if (fileIO?.scanDirectory) {
-      let newFiles: WorkspaceFile[] = [];
-      try {
-        newFiles = fileIO.scanDirectory(absNewCwd);
-      } catch {
-        // cwd inaccessible — leave the entry but skip scanning
-      }
-      const newJsFiles: WorkspaceFile[] = [];
-      const newWasmFiles: WorkspaceFile[] = [];
-      for (const f of newFiles) {
-        if (f.name.endsWith(".m") && !ctx.fileASTCache.has(f.name)) {
-          try {
-            ctx.fileASTCache.set(f.name, parseMFile(f.source, f.name));
-          } catch (e) {
-            // Warn-and-skip (matches startup behavior at the top of executeCode);
-            // a single broken .m file should not make `cd` unusable.
-            if (e instanceof SyntaxError) {
-              console.warn(
-                `Warning: skipping ${f.name} (syntax error at line ${e.line ?? "?"})`
-              );
-            } else {
-              console.warn(`Warning: skipping ${f.name} (parse error)`);
-            }
-            continue;
-          }
-          interpreter.fileSources.set(f.name, f.source);
-          mWorkspaceFiles.push(f);
-        } else if (isNumblJsFile(f.name)) {
-          // Always re-load on cwd change — see addpath handler comment.
-          newJsFiles.push(f);
-          if (!jsWorkspaceFiles.some(e => e.name === f.name)) {
-            jsWorkspaceFiles.push(f);
-          }
-        } else if (f.name.endsWith(".wasm")) {
-          newWasmFiles.push(f);
-          if (!wasmWorkspaceFiles.some(e => e.name === f.name)) {
-            wasmWorkspaceFiles.push(f);
-          }
-        }
-      }
-      if (newJsFiles.length > 0) {
-        const loaded = loadJsUserFunctions(
-          newJsFiles,
-          newWasmFiles,
-          nativeBridge
-        );
-        for (const entry of loaded) {
-          const existingIdx = loadedJsUserFunctions.findIndex(
-            e => e.fileName === entry.fileName
-          );
-          if (existingIdx >= 0) {
-            loadedJsUserFunctions[existingIdx] = entry;
-          } else {
-            loadedJsUserFunctions.push(entry);
-          }
-        }
-      }
-    }
-
-    rebuildWorkspace();
+  rt.onCwdChange = newCwd => {
+    if (ws.changeCwd(newCwd)) applyWorkspace();
   };
 
   // ── 5. Run ─────────────────────────────────────────────────────────
@@ -797,19 +326,13 @@ export function executeCode(
     }
 
     // Propagate path changes so callers (e.g. REPL) can persist them
-    if (pathsModified) {
-      result.searchPaths = ctx.registry.searchPaths.filter(
-        p => p !== SHIM_SEARCH_PATH && p !== implicitCwdPath
-      );
-      result.workspaceFiles = [
-        ...mWorkspaceFiles.filter(f => !stdlibShimNames.has(f.name)),
-        ...jsWorkspaceFiles,
-        ...wasmWorkspaceFiles,
-      ];
+    if (ws.modified) {
+      result.searchPaths = ws.explicitSearchPaths();
+      result.workspaceFiles = ws.userFiles();
     }
     // Always propagate the implicit cwd so REPL callers can persist it
     // across commands (cd inside one command should affect the next).
-    result.implicitCwdPath = implicitCwdPath;
+    result.implicitCwdPath = ws.implicitCwd;
 
     return result;
   } catch (e) {
