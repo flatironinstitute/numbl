@@ -8,7 +8,22 @@ Fusion collapses an element-wise tensor assignment into a single inline per-elem
 
 `emitTensorFused` handles a single `Assign` whose right-hand side is a _pure element-wise_ expression — built only from numeric literals, variables, `Binary`/`Unary` ops, and calls to builtins marked `elementwise` (whose `emitC` also works on scalar arguments) — and whose multi-element operands all share the target's shape. It emits one C loop that computes each output slot directly, allocating only the result tensor.
 
-`emitTensorFused` fuses one `Assign`; it does not merge a sequence of statements. Since lowering puts each tensor sub-expression in its own ANF temp, a chain like `_t1 = a * b; c = _t1 + d` currently fuses as two loops with an intermediate tensor. An IR-to-IR inline pass that folds such chains into a single `c = (a * b) + d` exists (`codegen/inlinePass.ts`, unit-tested in `src/__tests__/inline-pass.test.ts`), but it is not yet called from `compileSpec` or `compileSpecC`.
+`emitTensorFused` fuses one `Assign`; it does not merge a sequence of statements. Since lowering puts each tensor sub-expression in its own ANF temp, a chain like `_t1 = a * b; c = _t1 + d` would fuse as two loops with an intermediate tensor. To avoid that, `compileSpecC` runs an IR-to-IR inline pass (`codegen/inlinePass.ts`) on the program just before emit, which folds the chain into a single `c = (a * b) + d`.
+
+## Inline pass
+
+The pass substitutes a producer `Assign`'s RHS into its consumer and drops the producer when all of the following hold:
+
+- the producer is itself fusable (`isFusableAssign`);
+- its variable is read exactly once in the whole function, nested bodies included, and is not a function output (function-wide counting is what keeps a def inside a loop body that is also read after the loop);
+- the consumer is the next statement in the same body that reads it, is an `Assign`, and reads it as a `Binary`/`Unary`/`Call` operand; statements in between do not write the variable or any operand of the producer and are not control flow (the consumer itself may overwrite an operand, as in `v = v + 0.01 .* (a .* v)`, since the RHS is evaluated before the store);
+- the consumer is still fusable after substitution, so a nested tensor expression never reaches the helper-call path, where its intermediates would not be freed.
+
+Chains of any depth collapse in one forward sweep per body. The pass returns a new program and never mutates its input: the `Lowerer`'s specialization cache is shared with the JS backend, which keeps the ANF form. JS does not run the pass because it does not fuse; nested tensor expressions there would still allocate one array per operation.
+
+When a fused assign needs a runtime shape guard (dynamic extents) and the guard fails, the fallback evaluates the nested RHS through the broadcasting helpers with each interior tensor in a block-local temp that is freed after the assign (`emitFusedFallback` in `emitStmt.ts`).
+
+On a `y = a.*b + c.*d - e` loop over 2M-element vectors (`benchmarks/fused_chain_bench.m`), inlining reduces the per-statement cost at `--opt 2` by roughly 2.5×, mainly by removing the allocation and memory traffic of the intermediate tensors.
 
 ## How it works
 
@@ -25,4 +40,5 @@ If any multi-element operand has a statically-different shape from the target, t
 
 - A right-hand side that isn't purely element-wise: indexing, `reshape`, matrix multiply, **reductions** (`sum`, `prod`, `max`, `min`, …), or any builtin call not marked `elementwise`.
 - Statically-different operand shapes (broadcasting outside the shared fast path — handled by the runtime helper instead).
+- Across statements: an intermediate that is read more than once, is a function output, or whose chain is interrupted by control flow or a write to one of its operands stays materialized (the inline pass leaves it in place).
 - The JS backend (`--opt 1`), which never fuses.

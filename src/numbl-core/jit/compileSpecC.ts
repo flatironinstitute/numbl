@@ -30,6 +30,7 @@ import type { Workspace } from "./workspace/workspace.js";
 import { specializeUserFunction } from "./lowering/specialize.js";
 import { withoutExact, type Type } from "./lowering/types.js";
 import { emitProgram } from "./codegen/emit.js";
+import { inlinePass } from "./codegen/inlinePass.js";
 import type { IRFunc, IRProgram, IRStmt } from "./lowering/ir.js";
 import { UnsupportedConstruct } from "./lowering/errors.js";
 import { assertDefiniteAssignment } from "./lowering/definiteAssign.js";
@@ -148,7 +149,10 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
       if (fn.cName === spec.cName) continue; // already checked above
       assertDefiniteAssignment(fn, { checkOutputs: true });
     }
-    const source = emitProgram(prog, {
+    // Fold single-use element-wise temps into their consumers so chains
+    // fuse into one C loop. Returns a copy; the cached specs (shared
+    // with the JS backend) are untouched.
+    const source = emitProgram(inlinePass(prog), {
       exposeSpec: spec.cName,
     });
     return {

@@ -385,6 +385,44 @@ export function emitBody(
   return out.join("\n");
 }
 
+/** Bcast-aware helper-path statement for a fused Assign whose runtime
+ *  shape guard failed. The RHS may be a nested element-wise tree
+ *  (after `inlinePass`); each tensor-valued interior node goes into a
+ *  block-local temp that is freed after the final assign, since the
+ *  runtime helpers borrow their operands and return fresh tensors. */
+function emitFusedFallback(
+  s: Extract<IRStmt, { kind: "Assign" }>,
+  state: RuntimeState
+): string {
+  const decls: string[] = [];
+  const frees: string[] = [];
+  const hoist = (e: IRExpr, isRoot: boolean): IRExpr => {
+    let r: IRExpr = e;
+    if (e.kind === "Binary") {
+      const left = hoist(e.left, false);
+      const right = hoist(e.right, false);
+      if (left !== e.left || right !== e.right) r = { ...e, left, right };
+    } else if (e.kind === "Unary") {
+      const operand = hoist(e.operand, false);
+      if (operand !== e.operand) r = { ...e, operand };
+    } else if (e.kind === "Call") {
+      const args = e.args.map(a => hoist(a, false));
+      if (args.some((a, i) => a !== e.args[i])) r = { ...e, args };
+    }
+    if (isRoot || r.kind === "Var" || !isOwned(r.ty)) return r;
+    const name = `_mtoc2_fb${decls.length}`;
+    const h = activatedOwnedHelpers(r.ty, state);
+    decls.push(`${cTypeFor(r.ty)} ${name} = ${emitExpr(r, state)};`);
+    frees.push(`${h.free}(&${name});`);
+    return { kind: "Var", name, cName: name, ty: r.ty, span: r.span };
+  };
+  const root = hoist(s.expr, true);
+  const hf = activatedOwnedHelpers(s.ty, state);
+  const assign = `${hf.assign}(&${s.cName}, ${emitOwnedRhs(root, state)});`;
+  if (decls.length === 0) return assign;
+  return `{ ${[...decls, assign, ...frees].join(" ")} }`;
+}
+
 function emitStmt(
   s: IRStmt,
   indent: string,
@@ -401,7 +439,7 @@ function emitStmt(
         // Pure-elementwise same-shape tensor RHS goes through the
         // fused inline-loop emitter — same generated work as the
         // helper-call path for a depth-1 expression, but lets the
-        // (phase-2) inliner produce deeper expressions that share a
+        // inliner (`inlinePass.ts`) produce deeper expressions that share a
         // single iter loop. See `emitTensorFused.ts`.
         if (s.kind === "Assign" && isFusableAssign(s)) {
           activateOwnedRuntime(s.ty, state);
@@ -413,8 +451,7 @@ function emitStmt(
           // this path via tt_kernel). Without it a runtime mismatch read
           // past an operand and silently produced garbage.
           if (fusedAssignNeedsShapeGuard(s)) {
-            const hf = activatedOwnedHelpers(s.ty, state);
-            const fb = `${hf.assign}(&${s.cName}, ${emitOwnedRhs(s.expr, state)});`;
+            const fb = emitFusedFallback(s, state);
             return emitTensorAssignFused(s, indent, state, fb);
           }
           return emitTensorAssignFused(s, indent, state);

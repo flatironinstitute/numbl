@@ -1,6 +1,6 @@
 /**
- * `--inline-temps` IR-to-IR rewrite: substitutes a single-use
- * producer Assign's RHS into its consumer's RHS and removes the
+ * IR-to-IR rewrite for the C backend: substitutes a single-use
+ * producer Assign's RHS into its consumer's RHS and drops the
  * producer.
  *
  * After ANF normalization every owned-producing tensor expression
@@ -13,223 +13,159 @@
  *     r2   = _t10 + 0.01
  *
  * emits four separate fused loops with three intermediate allocs.
- * After inlining (this pass), the chain collapses to
+ * After inlining, the chain collapses to
  *
  *     r2 = (rx .^ 2 + ry .^ 2 + 0.01)
  *
  * which the elementwise-fused emitter (`emitTensorFused.ts`) renders
- * as a single iter loop. No intermediate tensors, no extra passes
- * through memory.
+ * as a single loop.
  *
- * Gates (must all hold to inline producer P into consumer C):
+ * Gates (all must hold to inline producer P into consumer C):
  *
- *   1. P is an Assign producing a real-double multi-element tensor.
- *   2. P's RHS is pure elementwise — only NumLit / Var / Binary /
- *      Unary / Call to a builtin that has `perSlotC`. No
- *      TensorBuild / TensorConcat / IndexLoad / IndexSlice /
- *      MemberLoad / HandleLit / etc.
- *   3. P's LHS cName is used exactly once in the body. Function
- *      output cNames get a `+1` protective bump so the returned
- *      value is never elided.
- *   4. The single use is in another Assign's RHS, in a slot
- *      position (subexpression of Binary / Unary / Call args). NOT
- *      as the base of an IndexLoad / IndexSlice / MemberLoad, NOT
- *      inside a TensorBuild / TensorConcat / StructLit / HandleLit.
- *   5. C is also fusable (same predicate as `isFusableAssign`).
- *   6. P and C are at the same body level (no inlining across
- *      If / While / For — nested bodies are inlined separately).
- *   7. No statement between P and C writes to P's LHS or to any
- *      free Var in P's RHS, and no statement reads P's LHS except
- *      C. Control flow (If / While / For / Break / Continue /
- *      ReturnFromFunction) ends the safe window.
+ *   1. P is a fusable Assign (`isFusableAssign`): real multi-element
+ *      tensor target, pure-elementwise RHS, operand shapes matching
+ *      the target.
+ *   2. P's LHS cName is read exactly once in the whole function
+ *      (nested bodies included). Function outputs get a +1 bump so
+ *      they are never dropped. Counting function-wide, not per body,
+ *      is what makes inlining inside loop / if bodies safe: a
+ *      body-local count misses reads after the loop.
+ *   3. C is the first statement after P in the same body that reads
+ *      P's LHS, and it is an Assign. Statements in between must not
+ *      write P's LHS or any Var P's RHS reads, and must not be
+ *      control flow. C itself may write such a Var: an Assign
+ *      evaluates its whole RHS before storing.
+ *   4. The read in C is in a slot position (Binary / Unary / Call
+ *      operand), and C is still fusable after substitution. The
+ *      latter is an ownership rule: a non-fused consumer would get a
+ *      nested owned operand that nothing frees.
  *
- * Algorithm: per body, iterate `inlineOnePass` to fixed point.
- * Each pass scans producers in source order, finds the first
- * inlinable pair, substitutes, and returns the new body. Chained
- * inlining (`a → b → c`) needs multiple iterations because each
- * substitution can flip a previously-multi-use cName to single-use.
- * Each substitution removes one statement, so the statement count
- * bounds the number of iterations.
+ * Use counts are stable under substitution (a single-use producer's
+ * reads move into its consumer; none is duplicated or dropped), so
+ * one forward sweep per body suffices: a consumer rewritten at index
+ * j is itself considered as a producer when the sweep reaches j,
+ * which collapses chains of any depth.
  *
- * Preserves: post-inlining the IR is still well-typed (each node's
- * `.ty` is unchanged — the substitution copies the producer's RHS
- * subtree verbatim); the ANF invariant for owned producers still
- * holds because we only inline producers whose RHS is NOT itself
- * an owned producer (no TensorBuild / Call-to-direct-owned-builtin
- * / etc.); and the `isFusableAssign` predicate that gates the
- * emit-path routing still accepts the consumer after substitution
- * (shape checks compose under inlining — see the design notes in
- * `emitTensorFused.ts`).
+ * The pass never mutates its input. The Lowerer's specialization
+ * cache is shared by the JS and C backends, so changed functions and
+ * statements are fresh objects; untouched ones are shared.
  */
 
-import type { Assign, IRExpr, IRStmt, IRProgram } from "../lowering/ir.js";
+import type {
+  Assign,
+  IRExpr,
+  IRFunc,
+  IRStmt,
+  IRProgram,
+} from "../lowering/ir.js";
 import { forEachSubExpr, forEachTopLevelExpr } from "../lowering/walk.js";
 import { isFusableAssign } from "./emitTensorFused.js";
 
-/** Top-level entry. Mutates each function's `body` in place when
- *  inlining fires. */
-export function inlinePass(prog: IRProgram): void {
-  for (const fn of prog.functions.values()) {
-    const protectedNames = new Set<string>(fn.cOutputs);
-    fn.body = inlineInBody(fn.body, protectedNames);
-  }
+/** Returns a new program with every function inlined. */
+export function inlinePass(prog: IRProgram): IRProgram {
+  const functions = new Map<string, IRFunc>();
+  for (const [k, fn] of prog.functions) functions.set(k, inlineFunc(fn));
+  return { functions };
 }
 
-/** Iterate `inlineOnePass` to fixed point over a single body.
- *  Recurses into nested control-flow bodies first so each child
- *  stabilizes before its parent re-counts uses. */
+/** Returns `fn` itself when nothing was inlined. */
+export function inlineFunc(fn: IRFunc): IRFunc {
+  const counts = computeUseCounts(fn.body, fn.cOutputs);
+  const body = inlineInBody(fn.body, counts);
+  return body === fn.body ? fn : { ...fn, body };
+}
+
+/** Inline within one body, children first. Returns `stmts` itself
+ *  when nothing changed. */
 function inlineInBody(
   stmts: IRStmt[],
-  protectedNames: ReadonlySet<string>
+  counts: ReadonlyMap<string, number>
 ): IRStmt[] {
-  recurseInlineNested(stmts);
+  let changed = false;
+  const cur: IRStmt[] = stmts.map(s => {
+    const r = inlineNested(s, counts);
+    if (r !== s) changed = true;
+    return r;
+  });
 
-  let cur = stmts;
-  for (;;) {
-    const next = inlineOnePass(cur, protectedNames);
-    if (next === cur) return cur;
-    cur = next;
-  }
-}
-
-/** Recurse into If / While / For body fields and run inlining on
- *  each. Each nested body gets an empty `protectedNames` set —
- *  outputs are at the function-body level. */
-function recurseInlineNested(stmts: IRStmt[]): void {
-  for (const s of stmts) {
-    if (s.kind === "If") {
-      s.thenBody = inlineInBody(s.thenBody, new Set());
-      s.elseBody = inlineInBody(s.elseBody, new Set());
-    } else if (s.kind === "While" || s.kind === "For") {
-      s.body = inlineInBody(s.body, new Set());
-    }
-  }
-}
-
-/** One linear forward sweep. Performs AT MOST ONE substitution per
- *  call: scans for the first inlinable (producer, consumer) pair
- *  and rewrites them. The fixed-point loop iterates this until
- *  quiescent. Single-substitution-per-pass keeps the bookkeeping
- *  trivial; cost is multiple passes for deep chains. */
-function inlineOnePass(
-  stmts: IRStmt[],
-  protectedNames: ReadonlySet<string>
-): IRStmt[] {
-  const useCounts = computeUseCounts(stmts, protectedNames);
-
-  for (let i = 0; i < stmts.length; i++) {
-    const producer = stmts[i];
-    if (!isInlinableProducer(producer)) continue;
-    const prod = producer as Assign;
-    if (protectedNames.has(prod.cName)) continue;
-    if (useCounts.get(prod.cName) !== 1) continue;
+  const removed = new Array<boolean>(cur.length).fill(false);
+  for (let i = 0; i < cur.length; i++) {
+    const prod = cur[i];
+    if (prod.kind !== "Assign") continue;
+    if (counts.get(prod.cName) !== 1) continue;
+    if (!isFusableAssign(prod)) continue;
 
     const prodFreeVars = collectFreeVarCNames(prod.expr);
-
-    // Forward scan for the consumer. Bails on intervening writes or
-    // control flow.
-    let consumer: Assign | null = null;
-    let bail = false;
-    for (let j = i + 1; j < stmts.length; j++) {
-      const s = stmts[j];
-      if (isControlFlow(s)) {
-        bail = true;
-        break;
-      }
-      if (stmtWrites(s, prod.cName, prodFreeVars)) {
-        bail = true;
-        break;
-      }
-      if (stmtReadsAsMultiElemVar(s, prod.cName)) {
-        if (s.kind !== "Assign") {
-          bail = true;
-          break;
+    for (let j = i + 1; j < cur.length; j++) {
+      const s = cur[j];
+      if (isControlFlow(s)) break;
+      if (stmtReadsVar(s, prod.cName)) {
+        if (
+          s.kind === "Assign" &&
+          !appearsInNonSlotPosition(s.expr, prod.cName)
+        ) {
+          const consumer: Assign = {
+            ...s,
+            expr: substituteVar(s.expr, prod.cName, prod.expr),
+          };
+          if (isFusableAssign(consumer)) {
+            cur[j] = consumer;
+            removed[i] = true;
+            changed = true;
+          }
         }
-        consumer = s;
         break;
       }
+      if (stmtWrites(s, prod.cName, prodFreeVars)) break;
     }
-    if (bail || consumer === null) continue;
-
-    if (!isFusableAssign(consumer)) continue;
-    if (appearsInNonSlotPosition(consumer.expr, prod.cName)) continue;
-
-    // Substitute. The pure tree rewrite preserves types (each Var's
-    // `.ty` and the substituted subtree's `.ty` are identical).
-    const newExpr = substituteVar(consumer.expr, prod.cName, prod.expr);
-    const newConsumer: IRStmt = { ...consumer, expr: newExpr };
-
-    const out: IRStmt[] = [];
-    for (const s of stmts) {
-      if (s === producer) continue;
-      out.push(s === consumer ? newConsumer : s);
-    }
-    return out;
   }
 
-  return stmts;
+  if (!changed) return stmts;
+  return cur.filter((_, i) => !removed[i]);
 }
 
-/** Count Var occurrences per cName across the entire body (including
- *  nested control-flow bodies — a Var read inside an `if` still
- *  counts as a use of a top-level Assign's LHS). Function output
- *  cNames in `protectedNames` get a +1 bump so they never reach
- *  count-1 and get inlined out. */
+/** Recurse into an If / While / For body. Returns `s` itself when
+ *  nothing changed. */
+function inlineNested(s: IRStmt, counts: ReadonlyMap<string, number>): IRStmt {
+  if (s.kind === "If") {
+    const thenBody = inlineInBody(s.thenBody, counts);
+    const elseBody = inlineInBody(s.elseBody, counts);
+    if (thenBody === s.thenBody && elseBody === s.elseBody) return s;
+    return { ...s, thenBody, elseBody };
+  }
+  if (s.kind === "While" || s.kind === "For") {
+    const body = inlineInBody(s.body, counts);
+    return body === s.body ? s : { ...s, body };
+  }
+  return s;
+}
+
+/** Var reads per cName across the whole function body, nested bodies
+ *  included. Outputs get a +1 bump so they never reach count 1. */
 function computeUseCounts(
   stmts: ReadonlyArray<IRStmt>,
-  protectedNames: ReadonlySet<string>
+  outputs: ReadonlyArray<string>
 ): Map<string, number> {
   const counts = new Map<string, number>();
   const bump = (cName: string) =>
     counts.set(cName, (counts.get(cName) ?? 0) + 1);
-  for (const cName of protectedNames) bump(cName);
+  for (const cName of outputs) bump(cName);
   for (const s of stmts) countVarRefsInStmt(s, bump);
   return counts;
 }
 
-/** Bump every Var read in `s`'s top-level expressions, recursing
- *  through nested If/While/For bodies. Reuses the shared walkers in
- *  `walk.ts` so any new IR-expr kind (e.g. a new IndexSlice slot
- *  variant) is picked up automatically. */
 function countVarRefsInStmt(s: IRStmt, bump: (cName: string) => void): void {
-  const visitExpr = (e: IRExpr): void => {
+  forEachTopLevelExpr(s, e =>
     forEachSubExpr(e, sub => {
       if (sub.kind === "Var") bump(sub.cName);
-    });
-  };
+    })
+  );
   if (s.kind === "If") {
-    visitExpr(s.cond);
     for (const sub of s.thenBody) countVarRefsInStmt(sub, bump);
     for (const sub of s.elseBody) countVarRefsInStmt(sub, bump);
-    return;
-  }
-  if (s.kind === "While") {
-    visitExpr(s.cond);
+  } else if (s.kind === "While" || s.kind === "For") {
     for (const sub of s.body) countVarRefsInStmt(sub, bump);
-    return;
   }
-  if (s.kind === "For") {
-    visitExpr(s.start);
-    visitExpr(s.end);
-    for (const sub of s.body) countVarRefsInStmt(sub, bump);
-    return;
-  }
-  forEachTopLevelExpr(s, visitExpr);
-}
-
-/** Gate 1+2: producer is a multi-element real-double Assign whose
- *  RHS is pure-elementwise AND every multi-element Var in the RHS
- *  matches the producer's static shape (i.e. P is itself fusable).
- *  The shape check matters: a broadcast Assign like
- *  `rx = col - row` has a pure-elementwise RHS but its operand
- *  shapes don't match its target shape — substituting it into a
- *  consumer would introduce mixed-shape Vars and force the consumer
- *  off the fused path, leaving nested helper calls whose
- *  intermediates leak. `isFusableAssign` already wraps both
- *  predicates. */
-function isInlinableProducer(s: IRStmt): boolean {
-  if (s.kind !== "Assign") return false;
-  return isFusableAssign(s);
 }
 
 function isControlFlow(s: IRStmt): boolean {
@@ -243,8 +179,6 @@ function isControlFlow(s: IRStmt): boolean {
   );
 }
 
-/** Free Var cNames in `e`. Used to detect intervening writes that
- *  would invalidate inlining. */
 function collectFreeVarCNames(e: IRExpr): Set<string> {
   const out = new Set<string>();
   forEachSubExpr(e, sub => {
@@ -253,44 +187,33 @@ function collectFreeVarCNames(e: IRExpr): Set<string> {
   return out;
 }
 
-/** True iff `s` writes to `cName` or to any name in `freeVars`.
- *  "Writes" means LHS of an Assign, base of an IndexStore /
- *  IndexSliceStore / MemberStore, or an output slot of a
+/** True iff `s` writes `cName` or any name in `freeVars`: Assign LHS,
+ *  base of an indexed / member / cell store, or a bound output of a
  *  MultiAssignCall. */
 function stmtWrites(
   s: IRStmt,
   cName: string,
   freeVars: ReadonlySet<string>
 ): boolean {
-  if (s.kind === "Assign") {
-    return s.cName === cName || freeVars.has(s.cName);
+  const hits = (n: string) => n === cName || freeVars.has(n);
+  switch (s.kind) {
+    case "Assign":
+      return hits(s.cName);
+    case "IndexStore":
+    case "IndexSliceStore":
+    case "MemberStore":
+    case "CellIndexStore":
+      return hits(s.base.cName);
+    case "MultiAssignCall":
+      return s.outputs.some(o => o.binding !== null && hits(o.binding.cName));
+    default:
+      return false;
   }
-  if (s.kind === "IndexStore" || s.kind === "IndexSliceStore") {
-    return s.base.cName === cName || freeVars.has(s.base.cName);
-  }
-  if (s.kind === "MemberStore") {
-    return s.base.cName === cName || freeVars.has(s.base.cName);
-  }
-  if (s.kind === "MultiAssignCall") {
-    for (const o of s.outputs) {
-      if (o.binding === null) continue;
-      if (o.binding.cName === cName || freeVars.has(o.binding.cName)) {
-        return true;
-      }
-    }
-    return false;
-  }
-  return false;
 }
 
-/** True iff `s` reads `cName` as a Var anywhere in its top-level
- *  expressions, OR uses `cName` as the base of an IndexStore /
- *  IndexSliceStore / MemberStore (a write to `cName`, conservatively
- *  treated as "consumes" so the forward scan terminates without
- *  inlining). The forward scan is bounded above by `isControlFlow`
- *  so If/While/For/Break/Continue/ReturnFromFunction never reach
- *  here. */
-function stmtReadsAsMultiElemVar(s: IRStmt, cName: string): boolean {
+/** True iff `s` reads `cName` as a Var in its top-level expressions
+ *  (store bases included). */
+function stmtReadsVar(s: IRStmt, cName: string): boolean {
   let found = false;
   forEachTopLevelExpr(s, e => {
     forEachSubExpr(e, sub => {
