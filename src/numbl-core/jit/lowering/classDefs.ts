@@ -134,7 +134,7 @@ export function registerClassDef(
       s.span
     );
   }
-  if (s.superClass !== null) {
+  if (s.superClasses.length > 0) {
     throw new UnsupportedConstruct(
       `classdef '${s.name}' has a superclass; inheritance is not supported in v1`,
       s.span

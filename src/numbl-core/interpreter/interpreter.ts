@@ -226,17 +226,11 @@ export class Interpreter {
         const classInfo = this.ctx.getClassInfo(className);
         if (!classInfo || classInfo.constructorName !== methodName) {
           // Check external method files
-          let found = false;
-          let current: string | null = className;
-          while (current) {
-            const info = this.ctx.getClassInfo(current);
-            if (!info) break;
-            if (info.externalMethodFiles.has(methodName)) {
-              found = true;
-              break;
-            }
-            current = info.superClass;
-          }
+          const found =
+            !!classInfo &&
+            this.ctx
+              .classLineage(classInfo)
+              .some(c => c.externalMethodFiles.has(methodName));
           if (!found) return null;
         }
       }
@@ -260,8 +254,8 @@ export class Interpreter {
       };
     };
 
-    this.rt.getClassParent = (className: string) =>
-      this.ctx.getClassInfo(className)?.superClass ?? null;
+    this.rt.getClassAncestors = (className: string) =>
+      this.ctx.classAncestors(className);
   }
 
   /** Run a complete AST (main script). */

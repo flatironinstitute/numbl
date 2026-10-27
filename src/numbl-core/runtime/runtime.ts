@@ -249,8 +249,8 @@ export class Runtime {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ) => ((...args: any[]) => any) | null)
     | null = null;
-  // getClassParent returns the parent class name (for isa / inheritance).
-  public getClassParent: ((className: string) => string | null) | null = null;
+  // Ancestor class names in method-resolution order (for isa / superclasses).
+  public getClassAncestors: ((className: string) => string[]) | null = null;
   // Cache for resolved class methods: "className.methodName" → fn | null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   public classMethodCache = new Map<string, ((...args: any[]) => any) | null>();
@@ -1615,12 +1615,9 @@ export class Runtime {
     return fn;
   }
 
-  /**
-   * Get the parent class name, using the compiler callback.
-   * Returns null if no parent or no callback registered.
-   */
-  public getClassParentName(className: string): string | null {
-    return this.getClassParent?.(className) ?? null;
+  /** Ancestor class names of a class, or [] if unknown. */
+  public classAncestors(className: string): string[] {
+    return this.getClassAncestors?.(className) ?? [];
   }
 
   /** Get the class name from a runtime value (for dynamic static method dispatch). */

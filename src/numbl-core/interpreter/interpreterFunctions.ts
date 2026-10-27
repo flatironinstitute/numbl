@@ -596,7 +596,7 @@ function enumUnderlyingValue(
 ): RuntimeValue | undefined {
   if (argExprs.length === 0) return undefined;
   const first = ensureRuntimeValue(interp.evalExpr(argExprs[0]));
-  const sc = classInfo.superClass;
+  const sc = classInfo.superClasses[0];
   if (sc && NUMERIC_ENUM_SUPERS.has(sc)) {
     return ensureRuntimeValue(interp.rt.callBuiltin(sc, 1, [first]));
   }
@@ -1283,11 +1283,10 @@ export function findMethodInClass(
     }
   }
 
-  if (classInfo.superClass) {
-    const parentInfo = this.ctx.getClassInfo(classInfo.superClass);
-    if (parentInfo) {
-      return this.findMethodInClass(parentInfo, methodName);
-    }
+  for (const sc of classInfo.superClasses) {
+    const parentInfo = this.ctx.getClassInfo(sc);
+    const fn = parentInfo && this.findMethodInClass(parentInfo, methodName);
+    if (fn) return fn;
   }
 
   return null;
@@ -1300,9 +1299,10 @@ export function findExternalMethod(
 ): FunctionDef | null {
   const mf = classInfo.externalMethodFiles.get(methodName);
   if (!mf) {
-    if (classInfo.superClass) {
-      const parentInfo = this.ctx.getClassInfo(classInfo.superClass);
-      if (parentInfo) return this.findExternalMethod(parentInfo, methodName);
+    for (const sc of classInfo.superClasses) {
+      const parentInfo = this.ctx.getClassInfo(sc);
+      const fn = parentInfo && this.findExternalMethod(parentInfo, methodName);
+      if (fn) return fn;
     }
     return null;
   }
@@ -1334,11 +1334,7 @@ export function collectClassProperties(
   const propertyNames: string[] = [...classInfo.propertyNames];
   const propertyDefaults = new Map(classInfo.propertyDefaults);
 
-  let parentName = classInfo.superClass;
-  while (parentName) {
-    if (parentName === "handle") break;
-    const parentInfo = this.ctx.getClassInfo(parentName);
-    if (!parentInfo) break;
+  for (const parentInfo of this.ctx.classLineage(classInfo).slice(1)) {
     for (const propName of parentInfo.propertyNames) {
       if (!propertyNames.includes(propName)) {
         propertyNames.push(propName);
@@ -1348,7 +1344,6 @@ export function collectClassProperties(
         }
       }
     }
-    parentName = parentInfo.superClass;
   }
   return { propertyNames, propertyDefaults };
 }
@@ -1362,11 +1357,11 @@ function classPublicProperties(
   interp: Interpreter,
   className: string
 ): string[] | undefined {
-  let info = interp.ctx.getClassInfo(className);
-  if (!info) return undefined;
+  const self = interp.ctx.getClassInfo(className);
+  if (!self) return undefined;
   const out: string[] = [];
   const seen = new Set<string>();
-  while (info) {
+  for (const info of interp.ctx.classLineage(self)) {
     const ast = info.ast;
     if (ast) {
       for (const member of ast.members) {
@@ -1386,8 +1381,6 @@ function classPublicProperties(
         }
       }
     }
-    if (!info.superClass || info.superClass === "handle") break;
-    info = interp.ctx.getClassInfo(info.superClass);
   }
   return out;
 }
@@ -1417,13 +1410,11 @@ function classPublicMethods(
   interp: Interpreter,
   className: string
 ): Set<string> | undefined {
-  let info = interp.ctx.getClassInfo(className);
-  if (!info) return undefined;
+  const self = interp.ctx.getClassInfo(className);
+  if (!self) return undefined;
   const out = new Set<string>();
-  if (info.constructorName) out.add(info.constructorName);
-  const seen = new Set<string>();
-  while (info && !seen.has(info.qualifiedName)) {
-    seen.add(info.qualifiedName);
+  if (self.constructorName) out.add(self.constructorName);
+  for (const info of interp.ctx.classLineage(self)) {
     const ast = info.ast;
     if (ast) {
       for (const member of ast.members) {
@@ -1450,14 +1441,9 @@ function classPublicMethods(
     }
     for (const n of info.externalMethodFiles.keys())
       if (n !== info.name || info.qualifiedName === className) out.add(n);
-    const parent: string | null = info.superClass;
-    if (!parent) break;
-    if (parent === "handle") {
-      for (const n of HANDLE_CLASS_METHODS) out.add(n);
-      break;
-    }
-    info = interp.ctx.getClassInfo(parent);
   }
+  if (interp.ctx.isHandleClass(self))
+    for (const n of HANDLE_CLASS_METHODS) out.add(n);
   return out;
 }
 
@@ -1465,14 +1451,7 @@ export function isHandleClass(
   this: Interpreter,
   classInfo: ClassInfo
 ): boolean {
-  let parentName = classInfo.superClass;
-  while (parentName) {
-    if (parentName === "handle") return true;
-    const parentInfo = this.ctx.getClassInfo(parentName);
-    if (!parentInfo) break;
-    parentName = parentInfo.superClass;
-  }
-  return false;
+  return this.ctx.isHandleClass(classInfo);
 }
 
 // ── eval in local scope ──────────────────────────────────────────────────

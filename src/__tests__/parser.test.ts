@@ -777,7 +777,7 @@ describe("parseMFile - classdef", () => {
     expect(stmt.type).toBe("ClassDef");
     if (stmt.type === "ClassDef") {
       expect(stmt.name).toBe("MyClass");
-      expect(stmt.superClass).toBeNull();
+      expect(stmt.superClasses).toEqual([]);
       expect(stmt.members).toHaveLength(1);
       expect(stmt.members[0].type).toBe("Properties");
     }
@@ -788,16 +788,19 @@ describe("parseMFile - classdef", () => {
       "classdef MyClass < BaseClass\n  properties\n    x\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      expect(stmt.superClass).toBe("BaseClass");
+      expect(stmt.superClasses).toEqual(["BaseClass"]);
     }
   });
 
-  it("parses classdef with multiple superclasses, keeping handle", () => {
+  it("parses classdef with multiple superclasses", () => {
     const stmt = parseFirst(
       "classdef MyClass < handle & matlab.mixin.CustomDisplay\n  properties\n    x\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      expect(stmt.superClass).toBe("handle");
+      expect(stmt.superClasses).toEqual([
+        "handle",
+        "matlab.mixin.CustomDisplay",
+      ]);
     }
   });
 
@@ -806,7 +809,7 @@ describe("parseMFile - classdef", () => {
       "classdef MyClass < matlab.mixin.CustomDisplay\n  properties\n    x\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      expect(stmt.superClass).toBe("matlab.mixin.CustomDisplay");
+      expect(stmt.superClasses).toEqual(["matlab.mixin.CustomDisplay"]);
     }
   });
 
@@ -1181,7 +1184,7 @@ describe("parseMFile - classdef advanced", () => {
       "classdef MyClass < pkg.BaseClass\n  properties\n    x\n  end\nend"
     );
     if (stmt.type === "ClassDef") {
-      expect(stmt.superClass).toBe("pkg.BaseClass");
+      expect(stmt.superClasses).toEqual(["pkg.BaseClass"]);
     }
   });
 

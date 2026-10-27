@@ -713,7 +713,7 @@ export function evalExprNargout(
             ({
               propertyNames: [],
               propertyDefaults: new Map(),
-              superClass: null,
+              superClasses: [],
             } as never)
         );
         const defaults = new Map<string, RuntimeValue>();

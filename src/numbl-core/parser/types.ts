@@ -231,7 +231,7 @@ export type Stmt =
       type: "ClassDef";
       name: string;
       classAttributes: Attr[];
-      superClass: string | null;
+      superClasses: string[];
       members: ClassMember[];
       span: Span;
     }

@@ -6,17 +6,6 @@ import { Token } from "../lexer/index.js";
 import { Stmt, Expr, Attr, ClassMember, MethodSignature } from "./types.js";
 import { FunctionParser } from "./FunctionParser.js";
 
-/** Well-known MATLAB base classes that confer handle (reference) semantics.
- *  A class deriving from any of these is a handle class. */
-const HANDLE_BASE_CLASSES = new Set([
-  "handle",
-  "dynamicprops",
-  "matlab.mixin.Copyable",
-  "matlab.mixin.SetGet",
-  "matlab.mixin.SetGetExactNames",
-  "hgsetget",
-]);
-
 export class ClassParser extends FunctionParser {
   // ── Imports & ClassDef ───────────────────────────────────────────────
 
@@ -55,20 +44,13 @@ export class ClassParser extends FunctionParser {
     const classAttributes = this.parseOptionalAttrList();
     const name = this.parseQualifiedName();
 
-    let superClass: string | null = null;
+    // Superclasses are joined by `&` (multiple inheritance).
+    const superClasses: string[] = [];
     if (this.consume(Token.Less)) {
-      // A class may list multiple superclasses joined by `&` (multiple
-      // inheritance), e.g. `handle & matlab.mixin.CustomDisplay`. numbl models
-      // only a single superclass; if any super confers handle (reference)
-      // semantics, normalize to `handle` so downstream handle detection works —
-      // otherwise keep the first.
-      const supers: string[] = [this.parseQualifiedName()];
+      superClasses.push(this.parseQualifiedName());
       while (this.consume(Token.And)) {
-        supers.push(this.parseQualifiedName());
+        superClasses.push(this.parseQualifiedName());
       }
-      superClass = supers.some(s => HANDLE_BASE_CLASSES.has(s))
-        ? "handle"
-        : supers[0];
     }
 
     const members: ClassMember[] = [];
@@ -206,7 +188,7 @@ export class ClassParser extends FunctionParser {
       type: "ClassDef",
       name,
       classAttributes,
-      superClass,
+      superClasses,
       members,
       span: this.spanFrom(start, end),
     };
