@@ -45,6 +45,7 @@ export {
   getAllIBuiltinNames,
   registerBuiltinHelp,
   inferJitType,
+  inferDispatchType,
 } from "./types.js";
 export type { IBuiltin, IBuiltinResolution, BuiltinHelp } from "./types.js";
 export { resetAppdataStore, convertJsonValue } from "./misc.js";

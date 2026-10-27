@@ -92,6 +92,24 @@ export function getIBuiltinNargin(name: string): number | undefined {
 
 // ── Infer JitType from a runtime value ──────────────────────────────────
 
+/** Builtin dispatch only looks at the kind and class of a struct or object
+ *  argument, never its field types, so it skips the walk over the fields
+ *  that the JIT's specialization needs. */
+export function inferDispatchType(value: unknown): JitType {
+  if (isRuntimeStruct(value as RuntimeValue))
+    return { kind: "struct", fields: {} };
+  if (isRuntimeClassInstance(value as RuntimeValue)) {
+    const ci = value as import("../../runtime/types.js").RuntimeClassInstance;
+    return {
+      kind: "class_instance",
+      className: ci.className,
+      isHandleClass: ci.isHandleClass,
+      fields: {},
+    };
+  }
+  return inferJitType(value);
+}
+
 export function inferJitType(value: unknown): JitType {
   if (typeof value === "boolean") return { kind: "boolean", value };
   if (typeof value === "number") {

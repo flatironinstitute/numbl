@@ -8,6 +8,11 @@
 import type { FunctionIndex } from "./lowering/loweringContext.js";
 import type { CallSite } from "./runtime/runtimeHelpers.js";
 import type { ItemType } from "./lowering/itemTypes.js";
+import {
+  type RuntimeValue,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
+} from "./runtime/types.js";
 
 // ── Resolution target types ──────────────────────────────────────────
 // Describes WHAT function to compile, determined by the call site context.
@@ -17,13 +22,11 @@ export type ResolvedTarget =
       kind: "classMethod";
       className: string;
       methodName: string;
-      compileArgTypes: ItemType[];
       stripInstance: boolean;
     }
   | {
       kind: "localFunction";
       name: string;
-      argTypes: ItemType[];
       source:
         | { from: "main" }
         | { from: "classFile"; className: string; methodScope?: string }
@@ -33,23 +36,19 @@ export type ResolvedTarget =
   | {
       kind: "privateFunction";
       name: string;
-      argTypes: ItemType[];
       callerFile: string; // needed to look up the private file from the registry
     }
   | {
       kind: "workspaceFunction";
       name: string;
-      argTypes: ItemType[];
     }
   | {
       kind: "jsUserFunction";
       name: string;
-      argTypes: ItemType[];
     }
   | {
       kind: "workspaceClassConstructor";
       className: string;
-      argTypes: ItemType[];
     }
   | {
       kind: "builtin";
@@ -142,26 +141,23 @@ function makeResolveKey(
   );
 }
 
-/** Return a target carrying the current call's argTypes. The cached
- *  template embeds the first call's argTypes; all other fields (source,
- *  callerFile, className, stripInstance) are fixed by the cache key, so
- *  only the argTypes vary between hits. */
-function rebindArgTypes(
-  t: ResolvedTarget | null,
-  argTypes: ItemType[]
-): ResolvedTarget | null {
-  if (t === null) return null;
-  switch (t.kind) {
-    case "builtin":
-      return t; // no argTypes to rebind
-    case "classMethod":
-      return {
-        ...t,
-        compileArgTypes: t.stripInstance ? argTypes.slice(1) : argTypes,
-      };
-    default:
-      return { ...t, argTypes };
+const UNKNOWN_ARG: ItemType = { kind: "Unknown" };
+
+/** The argument type that resolution needs: only an object's class affects
+ *  which function a name resolves to. */
+export function resolutionArgType(v: unknown): ItemType {
+  if (
+    typeof v === "object" &&
+    v !== null &&
+    (isRuntimeClassInstance(v as RuntimeValue) ||
+      isRuntimeClassInstanceArray(v as RuntimeValue))
+  ) {
+    return {
+      kind: "ClassInstance",
+      className: (v as { className: string }).className,
+    };
   }
+  return UNKNOWN_ARG;
 }
 
 /**
@@ -170,7 +166,6 @@ function rebindArgTypes(
  */
 function resolveViaImports(
   name: string,
-  argTypes: ItemType[],
   callSite: CallSite,
   index: FunctionIndex,
   wildcardOnly: boolean
@@ -185,13 +180,12 @@ function resolveViaImports(
       // import pkg.* → try "pkg.<name>"
       const candidateName = `${imp.namespace}.${name}`;
       if (index.workspaceFunctions.has(candidateName)) {
-        return { kind: "workspaceFunction", name: candidateName, argTypes };
+        return { kind: "workspaceFunction", name: candidateName };
       }
       if (index.workspaceClasses.has(candidateName)) {
         return {
           kind: "workspaceClassConstructor",
           className: candidateName,
-          argTypes,
         };
       }
       // Check if namespace is a class and name is a static method
@@ -200,7 +194,6 @@ function resolveViaImports(
           kind: "classMethod",
           className: imp.namespace,
           methodName: name,
-          compileArgTypes: argTypes,
           stripInstance: false,
         };
       }
@@ -213,7 +206,6 @@ function resolveViaImports(
           kind: "classMethod",
           className: imp.staticMethod.className,
           methodName: imp.staticMethod.methodName,
-          compileArgTypes: argTypes,
           stripInstance: false,
         };
       }
@@ -221,14 +213,12 @@ function resolveViaImports(
         return {
           kind: "workspaceFunction",
           name: imp.qualifiedName,
-          argTypes,
         };
       }
       if (index.workspaceClasses.has(imp.qualifiedName)) {
         return {
           kind: "workspaceClassConstructor",
           className: imp.qualifiedName,
-          argTypes,
         };
       }
     }
@@ -256,7 +246,7 @@ export function resolveFunction(
   // Stored values are `ResolvedTarget | null` (a cached miss), never
   // `undefined`, so `undefined` unambiguously means "not yet cached".
   const cached = cache.get(key);
-  if (cached !== undefined) return rebindArgTypes(cached, argTypes);
+  if (cached !== undefined) return cached;
   const result = resolveFunctionImpl(name, argTypes, callSite, index);
   cache.set(key, result);
   return result;
@@ -278,19 +268,17 @@ function resolveFunctionImpl(
       index.classStaticMethods.get(className)?.has(name) ?? false;
     const stripInstance =
       isStatic && argTypes.length > 0 && argTypes[0]?.kind === "ClassInstance";
-    const compileArgTypes = stripInstance ? argTypes.slice(1) : argTypes;
     return {
       kind: "classMethod",
       className,
       methodName: name,
-      compileArgTypes,
       stripInstance,
     };
   }
 
   // 0.5. Explicit (non-wildcard) imports — higher priority than local functions
   {
-    const imported = resolveViaImports(name, argTypes, callSite, index, false);
+    const imported = resolveViaImports(name, callSite, index, false);
     if (imported) return imported;
   }
 
@@ -312,7 +300,6 @@ function resolveFunctionImpl(
       return {
         kind: "localFunction",
         name,
-        argTypes,
         source: {
           from: "classFile",
           className,
@@ -330,7 +317,6 @@ function resolveFunctionImpl(
       return {
         kind: "localFunction",
         name,
-        argTypes,
         source: { from: "main" },
       };
     }
@@ -348,7 +334,6 @@ function resolveFunctionImpl(
         return {
           kind: "localFunction",
           name,
-          argTypes,
           source: { from: "workspaceFile", wsName },
         };
       }
@@ -364,7 +349,6 @@ function resolveFunctionImpl(
         return {
           kind: "localFunction",
           name,
-          argTypes,
           source: { from: "privateFile", callerFile: callSite.file },
         };
       }
@@ -373,7 +357,7 @@ function resolveFunctionImpl(
 
   // 1.5. Wildcard imports — after local functions, before private functions
   {
-    const imported = resolveViaImports(name, argTypes, callSite, index, true);
+    const imported = resolveViaImports(name, callSite, index, true);
     if (imported) return imported;
   }
 
@@ -385,7 +369,6 @@ function resolveFunctionImpl(
       return {
         kind: "privateFunction",
         name,
-        argTypes,
         callerFile: callSite.file,
       };
     }
@@ -418,7 +401,6 @@ function resolveFunctionImpl(
         kind: "classMethod",
         className: candidates[0],
         methodName: name,
-        compileArgTypes: argTypes,
         stripInstance: false,
       };
     }
@@ -438,7 +420,6 @@ function resolveFunctionImpl(
         kind: "classMethod",
         className: winner,
         methodName: name,
-        compileArgTypes: argTypes,
         stripInstance: false,
       };
     }
@@ -449,14 +430,13 @@ function resolveFunctionImpl(
     return {
       kind: "workspaceFunction",
       name,
-      argTypes,
     };
   }
 
   // 4b. JS user function (.numbl.js) — same priority tier as workspace,
   // but .m wins because it's checked first.
   if (index.jsUserFunctions.has(name)) {
-    return { kind: "jsUserFunction", name, argTypes };
+    return { kind: "jsUserFunction", name };
   }
 
   // 5. Workspace class constructor
@@ -464,7 +444,6 @@ function resolveFunctionImpl(
     return {
       kind: "workspaceClassConstructor",
       className: name,
-      argTypes,
     };
   }
 

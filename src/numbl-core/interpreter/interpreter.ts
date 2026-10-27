@@ -16,8 +16,6 @@
 import type { AbstractSyntaxTree } from "../parser/types.js";
 import type { Runtime } from "../runtime/runtime.js";
 import type { RuntimeValue } from "../runtime/types.js";
-import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
-import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import type {
   LoweringContext,
@@ -242,9 +240,6 @@ export class Interpreter {
           kind: "classMethod",
           className: definingClass,
           methodName,
-          compileArgTypes: args.map(a =>
-            getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-          ),
           stripInstance: false,
         };
         if (isStatic) {

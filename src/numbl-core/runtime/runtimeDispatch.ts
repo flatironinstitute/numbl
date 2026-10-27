@@ -36,7 +36,7 @@ import { incref, decref } from "./refcount.js";
 import {
   getIBuiltin as _getIBuiltin,
   getIBuiltinNargin,
-  inferJitType as _inferJitType,
+  inferDispatchType as _inferDispatchType,
 } from "../interpreter/builtins/index.js";
 import { COLON_SENTINEL } from "./sentinels.js";
 import {
@@ -49,7 +49,7 @@ import {
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
 import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
-import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
+import { resolutionArgType } from "../functionResolve.js";
 import { allocFloat64Array } from "./alloc.js";
 import { coerceToTensor } from "../helpers/shape-utils.js";
 
@@ -72,7 +72,7 @@ export function invokeBuiltin(
   const ib = _getIBuiltin(name);
   if (!ib) return NOT_A_BUILTIN;
   const margs = args.map(a => ensureRuntimeValue(a));
-  const argTypes = margs.map(_inferJitType);
+  const argTypes = margs.map(_inferDispatchType);
   const resolution = ib.resolve(argTypes, nargout);
   if (!resolution) {
     throw new RuntimeError(
@@ -283,9 +283,7 @@ export function dispatch(
     //    This runs BEFORE builtins so that class method overloads
     //    (e.g., horzcat, vertcat, plus) take precedence.
     if (rt.compileSpecialized) {
-      const argTypes = args.map(a =>
-        getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-      );
+      const argTypes = args.map(resolutionArgType);
       const callSite: CallSite = {
         file: callerFile ?? "",
         ...(targetClassName ? { targetClassName } : {}),
