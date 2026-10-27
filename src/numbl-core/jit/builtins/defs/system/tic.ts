@@ -8,7 +8,6 @@
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import { scalarDouble } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import { mtoc2_tic } from "../../runtime/snippets.gen.js";
 
 export const tic: Builtin = {
   name: "tic",
@@ -30,8 +29,5 @@ export const tic: Builtin = {
   emitJs({ useRuntime }) {
     useRuntime("mtoc2_tic_toc");
     return "mtoc2_tic()";
-  },
-  call() {
-    return [mtoc2_tic()];
   },
 };

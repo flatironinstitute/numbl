@@ -71,8 +71,4 @@ export const isfield: Builtin = {
     const name = requireExactName(argTypes[1]);
     return staticHasField(argTypes[0], name) ? `true` : `false`;
   },
-  call({ argTypes }) {
-    const name = requireExactName(argTypes[1]);
-    return [staticHasField(argTypes[0], name)];
-  },
 };

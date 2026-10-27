@@ -1,20 +1,10 @@
 /**
- * Parser re-exports for mtoc2 consumers. The actual cross-import to
- * the sibling numbl checkout lives in `src/numbl/index.ts` — this
- * module is the historic stable path used by ~25 call sites and
- * preserves their import shape unchanged.
- *
- * Structural AST drift is caught at `tsc` time; semantic drift is
- * caught by the cross-runner. The pinned numbl SHA lives in
- * `NUMBL_VERSION`, which CI checks out against.
+ * Parser re-exports for JIT consumers. The actual import from numbl
+ * lives in `../numbl/index.ts`; this module is the stable path the
+ * JIT's call sites import from.
  */
 
-export {
-  parseMFile,
-  SyntaxError,
-  BinaryOperation,
-  UnaryOperation,
-} from "../numbl/index.js";
+export { BinaryOperation, UnaryOperation } from "../numbl/index.js";
 
 export type {
   Span,

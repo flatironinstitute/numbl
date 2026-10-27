@@ -54,14 +54,6 @@ import {
   elemwiseResultShape,
   needsBroadcast,
 } from "./_elemwise.js";
-import { isComplexValue, type RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_cpow,
-  mtoc2_tensor_power_tt,
-  mtoc2_tensor_power_ts,
-  mtoc2_tensor_power_st,
-  mtoc2_tensor_power_bcast_tt,
-} from "../../runtime/snippets.gen.js";
 
 function isExactInteger(t: NumericType): boolean {
   const v = exactDouble(t);
@@ -178,7 +170,7 @@ export const power: Builtin = {
     requireRealOrComplex(argTypes[1], `'.^' arg 2`);
     const a0 = argTypes[0] as NumericType;
     const b0 = argTypes[1] as NumericType;
-    // Complex contamination — scalar path only (Phase 1).
+    // Complex contamination — scalar path only.
     if (a0.isComplex || b0.isComplex) {
       if (isMultiElement(a0) || isMultiElement(b0)) {
         throw new UnsupportedConstruct(
@@ -295,47 +287,6 @@ export const power: Builtin = {
     }
     // scalar .^ tensor — non-commutative.
     return `mtoc2_tensor_power_st(${argsJs[0]}, ${argsJs[1]})`;
-  },
-  call({ args, argTypes }) {
-    const aN = argTypes[0] as NumericType;
-    const bN = argTypes[1] as NumericType;
-    const aMulti = isMultiElement(aN);
-    const bMulti = isMultiElement(bN);
-    if (!aMulti && !bMulti) {
-      if (aN.isComplex || bN.isComplex) {
-        const av = args[0];
-        const bv = args[1];
-        const ax = isComplexValue(av) ? av : { re: Number(av), im: 0 };
-        const bx = isComplexValue(bv) ? bv : { re: Number(bv), im: 0 };
-        const out = mtoc2_cpow(ax, bx);
-        if (out.im === 0 && !aN.isComplex && !bN.isComplex) return [out.re];
-        return [out];
-      }
-      const av = typeof args[0] === "number" ? args[0] : Number(args[0]);
-      const bv = typeof args[1] === "number" ? args[1] : Number(args[1]);
-      return [Math.pow(av, bv)];
-    }
-    if (aN.isComplex || bN.isComplex) {
-      throw new UnsupportedConstruct(
-        `'power' complex-tensor 'call' not yet wired`
-      );
-    }
-    if (aMulti && bMulti) {
-      const at = args[0] as RuntimeTensor;
-      const bt = args[1] as RuntimeTensor;
-      const op = needsBroadcast(aN, bN)
-        ? mtoc2_tensor_power_bcast_tt
-        : mtoc2_tensor_power_tt;
-      return [op(at, bt) as unknown as RuntimeTensor];
-    }
-    if (aMulti) {
-      const at = args[0] as RuntimeTensor;
-      const bv = typeof args[1] === "number" ? args[1] : Number(args[1]);
-      return [mtoc2_tensor_power_ts(at, bv) as unknown as RuntimeTensor];
-    }
-    const av = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    const bt = args[1] as RuntimeTensor;
-    return [mtoc2_tensor_power_st(av, bt) as unknown as RuntimeTensor];
   },
   elementwise: true,
 };

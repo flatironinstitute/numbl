@@ -16,7 +16,6 @@
 import { UnsupportedConstruct } from "../../../lowering/errors.js";
 import { scalarDouble } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import { rngRandom } from "../../../../helpers/prng.js";
 
 export const rand: Builtin = {
   name: "rand",
@@ -39,8 +38,5 @@ export const rand: Builtin = {
   emitJs() {
     // `$rand` is bound to the host PRNG helper by the emit wrapper.
     return "$rand()";
-  },
-  call() {
-    return [rngRandom()];
   },
 };

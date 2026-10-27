@@ -16,8 +16,6 @@ import {
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_tensor_logspace as jsLogspace } from "../../runtime/snippets.gen.js";
 
 const DEFAULT_N = 50;
 
@@ -86,15 +84,5 @@ export const logspace: Builtin = {
     const bJs = argsJs[1];
     const nJs = argTypes.length === 3 ? argsJs[2] : String(DEFAULT_N);
     return `mtoc2_tensor_logspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
-  },
-  call({ args, argTypes }) {
-    const av = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    const bv = typeof args[1] === "number" ? args[1] : Number(args[1]);
-    let n = DEFAULT_N;
-    if (argTypes.length === 3) {
-      const nv = typeof args[2] === "number" ? args[2] : Number(args[2]);
-      n = Math.round(nv);
-    }
-    return [jsLogspace(av, bv, n) as unknown as RuntimeTensor];
   },
 };

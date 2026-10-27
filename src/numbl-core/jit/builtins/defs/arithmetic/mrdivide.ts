@@ -1,11 +1,6 @@
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
 import { isMultiElement } from "../../../lowering/types.js";
-import {
-  type Builtin,
-  requireEmitC,
-  requireEmitJs,
-  requireCall,
-} from "../../registry.js";
+import { type Builtin, requireEmitC, requireEmitJs } from "../../registry.js";
 import { requireRealOrComplex } from "../_shared.js";
 import { rdivide } from "./rdivide.js";
 
@@ -36,9 +31,6 @@ export const mrdivide: Builtin = {
   },
   emitJs(args) {
     return requireEmitJs(rdivide)(args);
-  },
-  call(args) {
-    return requireCall(rdivide)(args);
   },
   // `mrdivide` between two tensors is rejected in `transfer`; the only
   // case reaching emit is at-least-one-scalar — identical to elementwise

@@ -26,7 +26,6 @@ import {
   isScalar,
   EXACT_ARRAY_MAX_ELEMENTS,
   type NumericType,
-  type Type,
 } from "../../../lowering/types.js";
 import {
   requireRealDouble,
@@ -37,11 +36,6 @@ import {
   exactComplexArray,
 } from "../_shared.js";
 import type { Builtin } from "../../registry.js";
-import {
-  isTensor,
-  isComplexValue,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
 
 /** Re-tag a double-typed result as logical (same Float64 buffer, the
  *  values are all 0 / 1). */
@@ -55,9 +49,9 @@ interface ComplexPredSpec {
    *  to `1.0` / `0.0`. */
   cScalarComplex: (re: string, im: string) => string;
   /** JS scalar expression: same shape as `cScalarComplex` but for
-   *  the js-aot path; operates on real-and-imag JS expressions. */
+   *  the JS path; operates on real-and-imag JS expressions. */
   jsScalarComplex: (re: string, im: string) => string;
-  /** JS fold / interpreter rule on a `{re, im}` value. */
+  /** JS fold rule on a `{re, im}` value. */
   jsFnComplex: (re: number, im: number) => boolean;
   /** Runtime tensor helper name (in `tensor_predicate_complex.h`). */
   tensorHelperComplex: string;
@@ -69,7 +63,7 @@ export interface UnaryPredOpts {
   cScalar: (arg: string) => string;
   /** JS scalar expression given the arg's JS text. */
   jsScalar: (arg: string) => string;
-  /** JS fold / interpreter rule. */
+  /** JS fold rule. */
   jsFn: (x: number) => boolean;
   /** Runtime tensor helper name (in `tensor_predicate.h`). */
   tensorHelper: string;
@@ -174,34 +168,6 @@ export function defineUnaryPred(opts: UnaryPredOpts): Builtin {
       // than false/true (e.g. `Number.isFinite(true)` is wrongly false).
       const sArg = a.elem === "double" ? argsJs[0] : `(+(${argsJs[0]}))`;
       return jsScalar(sArg);
-    },
-    call({ args, argTypes }) {
-      const a = argTypes[0] as Type;
-      const v = args[0];
-      if (isMultiElement(a) && isTensor(v)) {
-        const out = new Float64Array(v.data.length);
-        if (v.imag !== undefined && complex !== undefined) {
-          for (let i = 0; i < v.data.length; i++) {
-            out[i] = complex.jsFnComplex(v.data[i], v.imag[i]) ? 1 : 0;
-          }
-        } else {
-          for (let i = 0; i < v.data.length; i++) {
-            out[i] = jsFn(v.data[i]) ? 1 : 0;
-          }
-        }
-        const r: RuntimeValue = {
-          mtoc2Tag: "tensor",
-          shape: v.shape.slice(),
-          data: out,
-          isLogical: true,
-        };
-        return [r];
-      }
-      if (complex !== undefined && isComplexValue(v)) {
-        return [complex.jsFnComplex(v.re, v.im)];
-      }
-      const n = typeof v === "number" ? v : Number(v);
-      return [jsFn(n)];
     },
     elementwise: true,
   };

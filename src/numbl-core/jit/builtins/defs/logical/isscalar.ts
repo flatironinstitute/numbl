@@ -31,12 +31,6 @@ import {
   type Type,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import {
-  isTensor,
-  isChar as isRuntimeChar,
-  isComplexValue,
-  isHandleValue,
-} from "../../../runtime/value.js";
 
 /** Static fold when the answer is determined by the type. Returns
  *  `undefined` for the one shape that needs a runtime check (Numeric
@@ -105,18 +99,5 @@ export const isscalar: Builtin = {
     const v = staticAnswer(t);
     if (v !== undefined) return v ? `true` : `false`;
     return `(${argsJs[0]}.shape.reduce((a,b)=>a*b, 1) === 1)`;
-  },
-  call({ args }) {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return [true];
-    if (isComplexValue(v)) return [true];
-    if (typeof v === "string") return [true];
-    if (isRuntimeChar(v)) return [false];
-    if (isTensor(v)) return [v.data.length === 1];
-    if (isHandleValue(v)) return [false];
-    // Plain JS object → struct or class instance. Numbl returns false
-    // for both. (Class instances carry a non-enumerable `mtoc2Class`
-    // tag; we don't need to distinguish them here.)
-    return [false];
   },
 };

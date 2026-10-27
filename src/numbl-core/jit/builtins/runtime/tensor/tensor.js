@@ -5,10 +5,9 @@
 //   { mtoc2Tag: "tensor", shape: number[], data: Float64Array,
 //     imag?: Float64Array }
 //
-// `mtoc2Tag` lets the interpreter distinguish tensors from plain JS
-// objects (matches the `RuntimeTensor` discriminator in
-// `runtime/value.ts`). `shape` is column-major to match numbl /
-// LAPACK. `imag` is undefined for statically-real tensors.
+// `mtoc2Tag` distinguishes tensors from plain JS objects. `shape` is
+// column-major to match numbl / LAPACK. `imag` is undefined for
+// statically-real tensors.
 //
 // JS has GC, so the C-side ownership protocol's `_free` / `_assign`
 // helpers have no JS counterpart — lifetime is automatic. Value

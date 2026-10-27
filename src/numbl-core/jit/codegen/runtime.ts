@@ -15,8 +15,6 @@
  */
 
 import { JS_SNIPPETS, JS_IMPORTS } from "../builtins/runtime/snippets.gen.js";
-import { getBuiltin } from "../builtins/index.js";
-import type { Builtin } from "../builtins/registry.js";
 
 /**
  * C runtime-snippet table, registered at bootstrap (Node only) rather than
@@ -31,13 +29,6 @@ let cSnippets: Record<string, string> | null = null;
 /** Register the C runtime-snippet table. Called once at Node bootstrap. */
 export function setCSnippets(snippets: Record<string, string>): void {
   cSnippets = snippets;
-}
-
-/** Minimal Workspace shape consulted at emit time. Importing the
- *  concrete Workspace class would create a cycle (workspace ↔ codegen);
- *  the structural type below captures exactly what codegen needs. */
-export interface WorkspaceLike {
-  getUserBuiltin(name: string): Builtin | undefined;
 }
 
 export interface RuntimeSnippet {
@@ -173,8 +164,8 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // instead of using C99's operator overloading or the `I` macro
   // inline. Native cost is zero (the compiler inlines back to the
   // same instructions C99 would have generated); the win is that
-  // the c2js JS backend can ship a matching set of helpers operating
-  // on a `{re, im}` representation without learning to type-track
+  // the JS backend ships a matching set of helpers operating on a
+  // `{re, im}` representation without learning to type-track
   // expressions. Any builtin whose codegen produces scalar-complex
   // C lists `mtoc2_cscalar` in its `runtimeDeps`.
   ["mtoc2_cscalar", loadSnippet("cscalar.h")],
@@ -183,7 +174,7 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // complex scalar path. Packs results with cscalar.h's `mtoc2_cpack`.
   ["mtoc2_cdiv", loadSnippet("cdiv.h", ["mtoc2_cscalar"])],
   // Numbl-compatible complex formatter. Mirrors `formatComplex` byte-
-  // for-byte so cross-runner stdout aligns.
+  // for-byte so stdout matches across --opt levels.
   [
     "mtoc2_format_complex",
     loadSnippet("format_complex.h", ["mtoc2_format_double"]),
@@ -287,12 +278,12 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
     loadSnippet("fprintf.h", ["mtoc2_format_engine", "mtoc2_host_output"]),
   ],
   ["mtoc2_error_fmt", loadSnippet("error_fmt.h", ["mtoc2_format_engine"])],
-  // JS-aot identifier-bearing variant. The C side reuses
-  // `mtoc2_error_fmt` (no identifier in the c-aot path) and ignores
-  // this entry; the JS sibling is what threads the identifier
-  // through to the interpreter's TryCatch handler.
+  // JS identifier-bearing variant. The C side reuses
+  // `mtoc2_error_fmt` (no identifier on the C path) and ignores this
+  // entry; the JS sibling threads the identifier through to the
+  // interpreter's TryCatch handler.
   ["mtoc2_error_fmt_id", loadSnippet("error_fmt.h", ["mtoc2_format_engine"])],
-  // Warning. Same shape as error but the c-aot path is real (no
+  // Warning. Same shape as error but the C path is real (no
   // throw); both runtimes prefix `Warning: ` and append `\n`.
   ["mtoc2_warning_fmt", loadSnippet("warning_fmt.h", ["mtoc2_format_engine"])],
   [
@@ -322,7 +313,7 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // exists so emitJs can activate the JS helpers without bringing
   // the C side along (the .h body is empty).
   ["mtoc2_scalar_index", loadSnippet("scalar_index.h")],
-  // JS-only deep-clone helper (paired with a stub `.h`). The c-aot
+  // JS-only deep-clone helper (paired with a stub `.h`). The C
   // path uses per-typedef `_copy` helpers from emitNamedTypedef for
   // the same purpose; on the JS side, owned-typed Var/MemberLoad/
   // capture-load RHSes wrap through this helper at emit time so a
@@ -620,9 +611,8 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // it's the only entry point for `disp(struct)` on the JS side.
   ["mtoc2_disp_struct", loadSnippet("disp_struct.h")],
 
-  // Cell array runtime. C-aot uses per-shape typedefs emitted from
-  // `emitCellTypedef.ts`; the snippet here is the JS sibling shipped
-  // to js-aot / interpreter. Basename is `cell` so the JS bundle
+  // Cell array runtime. C uses per-shape typedefs emitted from
+  // `emitCellTypedef.ts`; the snippet here is the JS sibling. Basename is `cell` so the JS bundle
   // contains `cell.js`. The `.h` is a topic placeholder (see
   // `cell.h`) — no C registration needed.
   ["mtoc2_cell_make", loadSnippet("cell.h")],
@@ -688,7 +678,7 @@ const REGISTRY: ReadonlyMap<string, RuntimeSnippet> = new Map<
   // Elementwise unary math on complex tensors. Mirrors
   // `tensor_unary_real_math.h` but the per-op kernel routes through
   // `mtoc2_c*` wrappers in `cscalar.h` (rather than bare libm
-  // `c*` calls) so c2js can substitute its `{re, im}` JS impls.
+  // `c*` calls), parallel to the `{re, im}` JS impls.
   // Activated by the per-builtin unary math files (sqrt, exp, log,
   // sin/cos/tan, atan, floor/ceil/round/fix, sign, abs) when the
   // input type carries `isComplex`.
@@ -869,27 +859,20 @@ function lookupGlobalSnippet(name: string): RuntimeSnippet {
   return s;
 }
 
-/** State-aware lookup. Consults the state's `extraSnippets` (registered
- *  by user `.mtoc2.js` builtins via `useRuntime({name, code, ...})`)
- *  first, then falls back to the global mtoc2 registry. */
+/** State-aware lookup. Consults the state's `extraSnippets` (inline
+ *  snippets registered via `useRuntime({name, code, ...})`) first,
+ *  then falls back to the global registry. */
 function lookupSnippet(state: RuntimeState, name: string): RuntimeSnippet {
   const extra = state.extraSnippets.get(name);
   if (extra !== undefined) return extra;
   return lookupGlobalSnippet(name);
 }
 
-/** Public re-export for callers that don't have a `RuntimeState` (the
- *  build-snippets script). Resolves against the global registry only. */
-export function getRuntimeSnippet(name: string): RuntimeSnippet {
-  return lookupGlobalSnippet(name);
-}
-
 // ── Activation state + topological emit ────────────────────────────────
 
-/** Inline snippet definition supplied by a user `.mtoc2.js` builtin's
- *  `emitC` / `emitJs` via `useRuntime({...})`. Once registered on a
- *  `RuntimeState`, subsequent activations of the same `name` are
- *  deduplicated.
+/** Inline snippet definition supplied by an emitter via
+ *  `useRuntime({...})`. Once registered on a `RuntimeState`, subsequent
+ *  activations of the same `name` are deduplicated.
  *
  *  `code` is the C body (required for `emitC` consumers); `jsCode`
  *  is the optional JS body (required for `emitJs` consumers but
@@ -910,14 +893,9 @@ export interface RuntimeState {
    *  multi-output call sites don't collide on `_mtoc2_discard_<N>_<i>`
    *  names. Incremented each time a multi-output call is emitted. */
   multiAssignCallCounter: number;
-  /** Workspace-scoped snippets registered via the user `useRuntime`
-   *  callback. Looked up by name alongside the global registry. */
+  /** Inline snippets registered via `useRuntime({...})`. Looked up
+   *  by name alongside the global registry. */
   extraSnippets: Map<string, RuntimeSnippet>;
-  /** Workspace reference for resolving names to `.mtoc2.js` user
-   *  builtins during emit. Undefined for non-workspace-driven codegen
-   *  (the snippet-build script, vitest unit tests that bypass the
-   *  workspace). */
-  workspace?: WorkspaceLike;
   /** JS-side helper: cName list of the currently-emitting user
    *  function's outputs. Set by `emitFunction` before walking the
    *  body and cleared after so `ReturnFromFunction` can emit a
@@ -934,26 +912,12 @@ export interface RuntimeState {
   usedGrowBail?: boolean;
 }
 
-export function newRuntimeState(workspace?: WorkspaceLike): RuntimeState {
+export function newRuntimeState(): RuntimeState {
   return {
     active: new Set(),
     multiAssignCallCounter: 0,
     extraSnippets: new Map(),
-    ...(workspace !== undefined ? { workspace } : {}),
   };
-}
-
-/** Look up a `Builtin` for an emit-time call. Consults the workspace's
- *  `.mtoc2.js` user builtins first (so a `foo.mtoc2.js` overrides any
- *  identically-named built-in for callers in this workspace), then
- *  falls back to the global registry. */
-export function lookupBuiltin(
-  state: RuntimeState,
-  name: string
-): Builtin | undefined {
-  const user = state.workspace?.getUserBuiltin(name);
-  if (user !== undefined) return user;
-  return getBuiltin(name);
 }
 
 /** Reverse map: `.h` basename → registered snippet name. Built lazily
@@ -999,7 +963,7 @@ export function useRuntimeByName(state: RuntimeState, name: string): void {
   state.active.add(name);
 }
 
-/** Register-and-activate an inline snippet supplied by a user builtin.
+/** Register-and-activate an inline snippet.
  *  First call registers the snippet on the state; subsequent calls
  *  (with the same name) are no-ops at the registration step and just
  *  re-activate through the global pathway. */

@@ -23,15 +23,16 @@
  * For a single-Binary RHS this is equivalent (post-`-O3`) to the
  * existing `mtoc2_tensor_assign(&c, mtoc2_tensor_plus_tt(a, b))`
  * path — the helper's body is literally the same loop. The point of
- * doing the inlining at the IR level is that the `--inline-temps`
- * pass (phase 2) can fold a chain like `_t1 = a * b; c = _t1 + d`
- * into `c = (a * b) + d`, which the fused emitter then renders as
- * one loop with no intermediate tensor allocation.
+ * doing the inlining at the IR level is that an IR-to-IR pass
+ * (`inlinePass.ts`, not yet wired into compileSpec / compileSpecC)
+ * can fold a chain like `_t1 = a * b; c = _t1 + d` into
+ * `c = (a * b) + d`, which the fused emitter then renders as one loop
+ * with no intermediate tensor allocation.
  *
- * Phase 1 (this file) only handles the *same-static-shape* case. If
- * any multi-element operand has a statically-different shape from
- * the target, the Assign falls back to the runtime-helper path
- * (`mtoc2_tensor_<op>_bcast_tt(...)`). Broadcast fusion is phase 3.
+ * Only the *same-static-shape* case is handled. If any multi-element
+ * operand has a statically-different shape from the target, the
+ * Assign falls back to the runtime-helper path
+ * (`mtoc2_tensor_<op>_bcast_tt(...)`).
  */
 
 import type { Assign, IRExpr } from "../lowering/ir.js";
@@ -40,7 +41,6 @@ import { DIM_ONE, isMultiElement, isNumeric } from "../lowering/types.js";
 import { getBuiltin } from "../builtins/index.js";
 import { isElementwiseCall, requireEmitC } from "../builtins/registry.js";
 import {
-  lookupBuiltin,
   makeEmitUseRuntime,
   useRuntimeByName,
   useRuntimeInline,
@@ -308,7 +308,7 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
       }
       return e.cName;
     case "Binary": {
-      const b = lookupBuiltin(state, e.builtin);
+      const b = getBuiltin(e.builtin);
       if (!b || !b.elementwise) {
         throw new Error(
           `emitTensorFused internal: builtin '${e.builtin}' is not elementwise`
@@ -325,7 +325,7 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
       });
     }
     case "Unary": {
-      const b = lookupBuiltin(state, e.builtin);
+      const b = getBuiltin(e.builtin);
       if (!b || !b.elementwise) {
         throw new Error(
           `emitTensorFused internal: builtin '${e.builtin}' is not elementwise`
@@ -339,7 +339,7 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
       });
     }
     case "Call": {
-      const b = lookupBuiltin(state, e.name);
+      const b = getBuiltin(e.name);
       if (
         !b ||
         !isElementwiseCall(

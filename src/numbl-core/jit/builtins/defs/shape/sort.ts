@@ -30,13 +30,6 @@ import {
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { requireRealOrComplex } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import {
-  mtoc2_sort_real as jsSortReal,
-  mtoc2_sort_real_2 as jsSortReal2,
-  mtoc2_sort_complex as jsSortComplex,
-  mtoc2_sort_complex_2 as jsSortComplex2,
-} from "../../runtime/snippets.gen.js";
 
 function requireVectorInput(a: Type): NumericType {
   requireRealOrComplex(a, "'sort' arg 1");
@@ -129,22 +122,5 @@ export const sort: Builtin = {
     const base = isComplex ? "mtoc2_sort_complex" : "mtoc2_sort_real";
     if (nargout === 1) return `${base}(${argsJs[0]}, ${desc})`;
     return `(o => [o.v, o.ix])(${base}_2(${argsJs[0]}, ${desc}))`;
-  },
-  call({ args, argTypes, nargout }) {
-    const a = args[0] as RuntimeTensor;
-    const aN = argTypes[0] as NumericType;
-    const isComplex = isNumeric(aN) && aN.isComplex;
-    const desc = parseMode(argTypes);
-    if (nargout === 1) {
-      const fn = isComplex ? jsSortComplex : jsSortReal;
-      return [fn(a, desc) as unknown as RuntimeTensor];
-    }
-    const out = (isComplex
-      ? jsSortComplex2(a, desc)
-      : jsSortReal2(a, desc)) as unknown as {
-      v: RuntimeTensor;
-      ix: RuntimeTensor;
-    };
-    return [out.v, out.ix];
   },
 };

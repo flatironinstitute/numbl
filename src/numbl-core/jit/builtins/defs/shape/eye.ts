@@ -15,9 +15,7 @@ import {
 import type { DimInfo, NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_eye_rect as jsEyeRect } from "../../runtime/snippets.gen.js";
-import { CHECK_DIM_SNIPPET, checkDimRuntime } from "./_construct.js";
+import { CHECK_DIM_SNIPPET } from "./_construct.js";
 
 interface ResolvedAxis {
   exact: number | undefined;
@@ -159,26 +157,5 @@ export const eye: Builtin = {
       return `mtoc2_eye_square(mtoc2_check_dim(${argsJs[axes[0].argIndex]}))`;
     }
     return `mtoc2_eye_rect(${rowsJs}, ${colsJs})`;
-  },
-  call({ args, argTypes }) {
-    const axes = resolveArgs(argTypes);
-    const rows =
-      axes[0].exact !== undefined
-        ? axes[0].exact
-        : checkDimRuntime(
-            typeof args[axes[0].argIndex] === "number"
-              ? (args[axes[0].argIndex] as number)
-              : Number(args[axes[0].argIndex] as object)
-          );
-    const cols =
-      axes[1].exact !== undefined
-        ? axes[1].exact
-        : checkDimRuntime(
-            typeof args[axes[1].argIndex] === "number"
-              ? (args[axes[1].argIndex] as number)
-              : Number(args[axes[1].argIndex] as object)
-          );
-    if (rows === 1 && cols === 1) return [1];
-    return [jsEyeRect(rows, cols) as unknown as RuntimeTensor];
   },
 };

@@ -60,15 +60,7 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import { CHECK_DIM_SNIPPET, checkDimRuntime } from "./_construct.js";
-import type { RuntimeTensor, RuntimeValue } from "../../../runtime/value.js";
-import { isComplexValue } from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_fill_nd as jsFillNd,
-  mtoc2_tensor_fill_nd_complex as jsFillNdComplex,
-  mtoc2_tensor_repmat as jsRepmat,
-  mtoc2_tensor_repmat_complex as jsRepmatComplex,
-} from "../../runtime/snippets.gen.js";
+import { CHECK_DIM_SNIPPET } from "./_construct.js";
 
 /** Per-axis rep resolution. `argIndex` is the position in the original
  *  argTypes array (i.e. `argsC[axis.argIndex]`) that supplies the rep
@@ -554,69 +546,5 @@ export const repmat: Builtin = {
       return `mtoc2_tensor_repmat_complex(${argsJs[0]}, ${ndim}, [${dimList}])`;
     }
     return `mtoc2_tensor_repmat(${argsJs[0]}, ${ndim}, [${dimList}])`;
-  },
-
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    const resolved = resolveReps(argTypes);
-    const scalarInput = isScalar(a);
-    const reps = scalarInput
-      ? effectiveRepsForScalarInput(resolved)
-      : resolved.reps;
-    const { reps: cgReps } = effectiveCodegenReps(a.dims, reps, scalarInput);
-
-    const repVals: number[] = cgReps.map(r => {
-      if (r.kind === "exact") return r.value;
-      const v = args[r.argIndex] as RuntimeValue;
-      const n = typeof v === "number" ? v : Number(v as unknown);
-      return checkDimRuntime(n);
-    });
-
-    if (scalarInput) {
-      const padReps = repVals.slice();
-      while (padReps.length < 2) padReps.push(1);
-      if (a.isComplex) {
-        const v0 = args[0];
-        const cx = isComplexValue(v0)
-          ? v0
-          : { re: typeof v0 === "number" ? v0 : Number(v0 as unknown), im: 0 };
-        return [
-          jsFillNdComplex(
-            cx.re,
-            cx.im,
-            padReps.length,
-            padReps
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      const scalarVal =
-        typeof args[0] === "number"
-          ? (args[0] as number)
-          : Number(args[0] as unknown);
-      return [
-        jsFillNd(
-          scalarVal,
-          padReps.length,
-          padReps
-        ) as unknown as RuntimeTensor,
-      ];
-    }
-
-    if (a.isComplex) {
-      return [
-        jsRepmatComplex(
-          args[0] as RuntimeTensor,
-          repVals.length,
-          repVals
-        ) as unknown as RuntimeTensor,
-      ];
-    }
-    return [
-      jsRepmat(
-        args[0] as RuntimeTensor,
-        repVals.length,
-        repVals
-      ) as unknown as RuntimeTensor,
-    ];
   },
 };

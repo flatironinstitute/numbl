@@ -66,10 +66,9 @@ import type { Assign, IRExpr, IRStmt, IRProgram } from "../lowering/ir.js";
 import { forEachSubExpr, forEachTopLevelExpr } from "../lowering/walk.js";
 import { isFusableAssign } from "./emitTensorFused.js";
 
-/** Top-level entry. Mutates `prog.topLevelStmts` and each function's
- *  `body` in place when inlining fires. */
+/** Top-level entry. Mutates each function's `body` in place when
+ *  inlining fires. */
 export function inlinePass(prog: IRProgram): void {
-  prog.topLevelStmts = inlineInBody(prog.topLevelStmts, new Set());
   for (const fn of prog.functions.values()) {
     const protectedNames = new Set<string>(fn.cOutputs);
     fn.body = inlineInBody(fn.body, protectedNames);

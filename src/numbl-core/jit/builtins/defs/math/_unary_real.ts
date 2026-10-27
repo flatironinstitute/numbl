@@ -41,101 +41,58 @@ import {
   exactComplex,
   exactComplexArray,
 } from "../_shared.js";
-import {
-  mtoc2_tensor_cos,
-  mtoc2_tensor_sin,
-  mtoc2_tensor_tan,
-  mtoc2_tensor_atan,
-  mtoc2_tensor_sinh,
-  mtoc2_tensor_cosh,
-  mtoc2_tensor_tanh,
-  mtoc2_tensor_asinh,
-  mtoc2_tensor_exp,
-  mtoc2_tensor_log,
-  mtoc2_tensor_log2,
-  mtoc2_tensor_log10,
-  mtoc2_tensor_sqrt,
-  mtoc2_tensor_realsqrt,
-  mtoc2_tensor_abs,
-  mtoc2_tensor_floor,
-  mtoc2_tensor_ceil,
-  mtoc2_tensor_fix,
-  mtoc2_tensor_round,
-  mtoc2_tensor_sign,
-  mtoc2_tensor_cos_complex,
-  mtoc2_tensor_sin_complex,
-  mtoc2_tensor_tan_complex,
-  mtoc2_tensor_atan_complex,
-  mtoc2_tensor_sinh_complex,
-  mtoc2_tensor_cosh_complex,
-  mtoc2_tensor_tanh_complex,
-  mtoc2_tensor_exp_complex,
-  mtoc2_tensor_log_complex,
-  mtoc2_tensor_log2_complex,
-  mtoc2_tensor_log10_complex,
-  mtoc2_tensor_sqrt_complex,
-  mtoc2_tensor_floor_complex,
-  mtoc2_tensor_ceil_complex,
-  mtoc2_tensor_fix_complex,
-  mtoc2_tensor_round_complex,
-  mtoc2_tensor_sign_complex,
-} from "../../runtime/snippets.gen.js";
-import { isComplexValue, type RuntimeTensor } from "../../../runtime/value.js";
+/** Builtin names with JS tensor kernels (`mtoc2_tensor_<name>` in
+ *  `tensor_unary_real_math.js`, `mtoc2_tensor_<name>_complex` in
+ *  `tensor_unary_complex_math.js`). */
+const JS_TENSOR_UNARY = new Set([
+  "cos",
+  "sin",
+  "tan",
+  "atan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "asinh",
+  "exp",
+  "log",
+  "log2",
+  "log10",
+  "sqrt",
+  "realsqrt",
+  "abs",
+  "floor",
+  "ceil",
+  "fix",
+  "round",
+  "sign",
+]);
 
-/** JS-side tensor kernels keyed by builtin name. Matches the C
- *  side's `mtoc2_tensor_<name>` pattern; activations land via the
- *  `mtoc2_tensor_unary_real_math` snippet. */
-type TensorUnary = (t: RuntimeTensor) => RuntimeTensor;
-const JS_TENSOR_UNARY: Record<string, TensorUnary> = {
-  cos: mtoc2_tensor_cos as unknown as TensorUnary,
-  sin: mtoc2_tensor_sin as unknown as TensorUnary,
-  tan: mtoc2_tensor_tan as unknown as TensorUnary,
-  atan: mtoc2_tensor_atan as unknown as TensorUnary,
-  sinh: mtoc2_tensor_sinh as unknown as TensorUnary,
-  cosh: mtoc2_tensor_cosh as unknown as TensorUnary,
-  tanh: mtoc2_tensor_tanh as unknown as TensorUnary,
-  asinh: mtoc2_tensor_asinh as unknown as TensorUnary,
-  exp: mtoc2_tensor_exp as unknown as TensorUnary,
-  log: mtoc2_tensor_log as unknown as TensorUnary,
-  log2: mtoc2_tensor_log2 as unknown as TensorUnary,
-  log10: mtoc2_tensor_log10 as unknown as TensorUnary,
-  sqrt: mtoc2_tensor_sqrt as unknown as TensorUnary,
-  realsqrt: mtoc2_tensor_realsqrt as unknown as TensorUnary,
-  abs: mtoc2_tensor_abs as unknown as TensorUnary,
-  floor: mtoc2_tensor_floor as unknown as TensorUnary,
-  ceil: mtoc2_tensor_ceil as unknown as TensorUnary,
-  fix: mtoc2_tensor_fix as unknown as TensorUnary,
-  round: mtoc2_tensor_round as unknown as TensorUnary,
-  sign: mtoc2_tensor_sign as unknown as TensorUnary,
-};
-
-const JS_TENSOR_UNARY_COMPLEX: Record<string, TensorUnary> = {
-  cos: mtoc2_tensor_cos_complex as unknown as TensorUnary,
-  sin: mtoc2_tensor_sin_complex as unknown as TensorUnary,
-  tan: mtoc2_tensor_tan_complex as unknown as TensorUnary,
-  atan: mtoc2_tensor_atan_complex as unknown as TensorUnary,
-  sinh: mtoc2_tensor_sinh_complex as unknown as TensorUnary,
-  cosh: mtoc2_tensor_cosh_complex as unknown as TensorUnary,
-  tanh: mtoc2_tensor_tanh_complex as unknown as TensorUnary,
-  exp: mtoc2_tensor_exp_complex as unknown as TensorUnary,
-  log: mtoc2_tensor_log_complex as unknown as TensorUnary,
-  log2: mtoc2_tensor_log2_complex as unknown as TensorUnary,
-  log10: mtoc2_tensor_log10_complex as unknown as TensorUnary,
-  sqrt: mtoc2_tensor_sqrt_complex as unknown as TensorUnary,
-  floor: mtoc2_tensor_floor_complex as unknown as TensorUnary,
-  ceil: mtoc2_tensor_ceil_complex as unknown as TensorUnary,
-  fix: mtoc2_tensor_fix_complex as unknown as TensorUnary,
-  round: mtoc2_tensor_round_complex as unknown as TensorUnary,
-  sign: mtoc2_tensor_sign_complex as unknown as TensorUnary,
-};
+const JS_TENSOR_UNARY_COMPLEX = new Set([
+  "cos",
+  "sin",
+  "tan",
+  "atan",
+  "sinh",
+  "cosh",
+  "tanh",
+  "exp",
+  "log",
+  "log2",
+  "log10",
+  "sqrt",
+  "floor",
+  "ceil",
+  "fix",
+  "round",
+  "sign",
+]);
 
 export interface UnaryRealMathOpts {
   /** Source-level builtin name (also the runtime helper suffix). */
   name: string;
   /** C `<math.h>` function name for the scalar path (e.g. `"cos"`). */
   cFnReal: string;
-  /** JS-side scalar fn for compile-time fold (and for the interpreter's
-   *  `call` hook). */
+  /** JS-side scalar fn for compile-time fold. */
   jsFn: (x: number) => number;
   /** Optional JS expression form (textual) for `emitJs`'s scalar real
    *  path. Defaults to `Math.${name}(arg)` which works for most names
@@ -369,7 +326,7 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
       const lifting = liftRealToComplex(ty);
       if ((isNumeric(ty) && ty.isComplex) || lifting) {
         if (isMultiElement(ty)) {
-          if (JS_TENSOR_UNARY_COMPLEX[name] === undefined) {
+          if (!JS_TENSOR_UNARY_COMPLEX.has(name)) {
             throw new UnsupportedConstruct(
               `'${name}' complex-tensor emitJs has no JS kernel registered`
             );
@@ -385,7 +342,7 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
         return `${complex!.cFnComplex}(${arg})`;
       }
       if (isMultiElement(ty)) {
-        if (JS_TENSOR_UNARY[name] === undefined) {
+        if (!JS_TENSOR_UNARY.has(name)) {
           throw new UnsupportedConstruct(
             `'${name}' tensor emitJs has no JS kernel registered`
           );
@@ -398,37 +355,6 @@ export function defineUnaryRealMath(opts: UnaryRealMathOpts): Builtin {
         return `${opts.jsFnReal}(${argsJs[0]})`;
       }
       return jsExpr(argsJs[0]);
-    },
-    call({ args, argTypes }) {
-      const ty = argTypes[0] as NumericType;
-      const lifting = liftRealToComplex(ty);
-      if ((isNumeric(ty) && ty.isComplex) || lifting) {
-        if (isMultiElement(ty)) {
-          const kernel = JS_TENSOR_UNARY_COMPLEX[name];
-          if (kernel === undefined) {
-            throw new UnsupportedConstruct(
-              `'${name}' complex-tensor 'call' has no JS kernel registered`
-            );
-          }
-          return [kernel(args[0] as RuntimeTensor)];
-        }
-        const v = args[0];
-        const cx = isComplexValue(v)
-          ? v
-          : { re: typeof v === "number" ? v : Number(v), im: 0 };
-        return [complex!.jsFnComplex(cx)];
-      }
-      if (isMultiElement(ty)) {
-        const kernel = JS_TENSOR_UNARY[name];
-        if (kernel === undefined) {
-          throw new UnsupportedConstruct(
-            `'${name}' tensor 'call' has no JS kernel registered`
-          );
-        }
-        return [kernel(args[0] as RuntimeTensor)];
-      }
-      const v = typeof args[0] === "number" ? args[0] : Number(args[0]);
-      return [jsFn(v)];
     },
     elementwise: true,
   };

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseMFile } from "../numbl-core/parser/index.js";
+import { LoweringContext } from "../numbl-core/lowering/loweringContext.js";
 import { Workspace, Lowerer, tensorDouble } from "../numbl-core/jit/index.js";
 import { specializeUserFunction } from "../numbl-core/jit/lowering/specialize.js";
 import { inlinePass } from "../numbl-core/jit/codegen/inlinePass.js";
@@ -9,16 +10,19 @@ import type { IRFunc } from "../numbl-core/jit/lowering/ir.js";
 function lowerFn(source: string, shape: number[]): IRFunc {
   const fileName = "f.m";
   const ast = parseMFile(source, fileName);
-  const ws = new Workspace(fileName, []);
-  ws.addFile({ name: fileName, source, ast });
-  ws.finalize();
+  const ctx = new LoweringContext(source, fileName);
+  ctx.fileASTCache.set(fileName, ast);
+  const decl = ast.body.find(s => s.type === "Function");
+  if (decl?.type !== "Function") throw new Error("no function");
+  ctx.registerLocalFunctionAST(decl);
+  ctx.buildFunctionIndex();
+  const ws = Workspace.fromExistingContext(ctx, fileName, [
+    { name: fileName, source, ast },
+  ]);
   const lowerer = new Lowerer(ws);
-  const decl = (ast.body as { type: string }[]).find(
-    s => s.type === "Function"
-  );
   return specializeUserFunction.call(
     lowerer,
-    decl as never,
+    decl,
     [tensorDouble(shape)],
     undefined,
     undefined,
@@ -36,7 +40,7 @@ describe("inlinePass", () => {
     const fn = lowerFn(source, [4, 1]);
     expect(fn.body.length).toBeGreaterThan(33);
 
-    inlinePass({ topLevelStmts: [], functions: new Map([[fn.cName, fn]]) });
+    inlinePass({ functions: new Map([[fn.cName, fn]]) });
     const assigns = fn.body.filter(s => s.kind === "Assign");
     expect(assigns).toHaveLength(1);
   });
@@ -44,7 +48,7 @@ describe("inlinePass", () => {
   it("fuses an elementwise call on an expression into one statement", () => {
     const source = "function y = f(x)\n  y = 1 ./ realsqrt(x .* x + 1);\nend\n";
     const fn = lowerFn(source, [4, 1]);
-    inlinePass({ topLevelStmts: [], functions: new Map([[fn.cName, fn]]) });
+    inlinePass({ functions: new Map([[fn.cName, fn]]) });
     const assigns = fn.body.filter(s => s.kind === "Assign");
     expect(assigns).toHaveLength(1);
   });
@@ -52,7 +56,7 @@ describe("inlinePass", () => {
   it("fuses two-argument max with a tensor into one statement", () => {
     const source = "function y = f(x)\n  y = 2 * max(x .* x - 1, 0);\nend\n";
     const fn = lowerFn(source, [4, 1]);
-    inlinePass({ topLevelStmts: [], functions: new Map([[fn.cName, fn]]) });
+    inlinePass({ functions: new Map([[fn.cName, fn]]) });
     const assigns = fn.body.filter(s => s.kind === "Assign");
     expect(assigns).toHaveLength(1);
   });

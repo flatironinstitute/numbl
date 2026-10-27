@@ -19,8 +19,6 @@ import {
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import { mtoc2_tensor_linspace as jsLinspace } from "../../runtime/snippets.gen.js";
 
 const DEFAULT_N = 100;
 
@@ -149,16 +147,5 @@ export const linspace: Builtin = {
       }
     }
     return `mtoc2_tensor_linspace(${aJs}, ${bJs}, Math.round(${nJs}))`;
-  },
-  call({ args, argTypes }) {
-    const av = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    const bv = typeof args[1] === "number" ? args[1] : Number(args[1]);
-    let n = DEFAULT_N;
-    if (argTypes.length === 3) {
-      const nv = typeof args[2] === "number" ? args[2] : Number(args[2]);
-      n = Math.round(nv);
-      if (n === 1) return [bv];
-    }
-    return [jsLinspace(av, bv, n) as unknown as RuntimeTensor];
   },
 };

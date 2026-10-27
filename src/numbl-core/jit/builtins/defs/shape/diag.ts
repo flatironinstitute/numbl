@@ -46,20 +46,6 @@ import {
   exactDouble,
   exactRealArray,
 } from "../_shared.js";
-import type { RuntimeTensor } from "../../../runtime/value.js";
-import {
-  isComplexValue,
-  isTensor,
-  makeTensor,
-} from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_diag_construct as jsDiagConstruct,
-  mtoc2_tensor_diag_extract as jsDiagExtract,
-  mtoc2_tensor_diag_from_scalar as jsDiagFromScalar,
-  mtoc2_tensor_diag_construct_complex as jsDiagConstructComplex,
-  mtoc2_tensor_diag_extract_complex as jsDiagExtractComplex,
-  mtoc2_tensor_diag_from_scalar_complex as jsDiagFromScalarComplex,
-} from "../../runtime/snippets.gen.js";
 
 /** Resolve the optional `k` argument to a JS integer. Throws on
  *  dynamic / non-integer / non-scalar k. */
@@ -358,60 +344,5 @@ export const diag: Builtin = {
     }
     useRuntime("mtoc2_tensor_diag");
     return `mtoc2_tensor_diag_extract(${argsJs[0]}, ${k})`;
-  },
-
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    const k = resolveK(argTypes);
-
-    if (isScalar(a)) {
-      if (k === 0) return [args[0]];
-      if (a.isComplex) {
-        const v = args[0];
-        const cx = isComplexValue(v)
-          ? v
-          : { re: typeof v === "number" ? v : Number(v), im: 0 };
-        return [
-          jsDiagFromScalarComplex(cx.re, cx.im, k) as unknown as RuntimeTensor,
-        ];
-      }
-      const v = typeof args[0] === "number" ? args[0] : Number(args[0]);
-      return [jsDiagFromScalar(v, k) as unknown as RuntimeTensor];
-    }
-
-    if (!isTensor(args[0])) {
-      throw new TypeError(
-        `'diag' runtime arg has tensor type but runtime value isn't a tensor`
-      );
-    }
-    const t = args[0] as RuntimeTensor;
-    const rows = t.shape[0];
-    const cols = t.shape[1];
-
-    if (rows === 1 || cols === 1) {
-      if (a.isComplex) {
-        return [jsDiagConstructComplex(t, k) as unknown as RuntimeTensor];
-      }
-      return [jsDiagConstruct(t, k) as unknown as RuntimeTensor];
-    }
-
-    const diagLen = diagonalLength(rows, cols, k);
-    if (diagLen === 0) {
-      return [makeTensor([0, 1], new Float64Array(0))];
-    }
-    if (diagLen === 1) {
-      const r = k < 0 ? -k : 0;
-      const c = k > 0 ? k : 0;
-      const idx = r + c * rows;
-      if (a.isComplex) {
-        const im = t.imag !== undefined ? t.imag[idx] : 0;
-        return [{ re: t.data[idx], im }];
-      }
-      return [t.data[idx]];
-    }
-    if (a.isComplex) {
-      return [jsDiagExtractComplex(t, k) as unknown as RuntimeTensor];
-    }
-    return [jsDiagExtract(t, k) as unknown as RuntimeTensor];
   },
 };

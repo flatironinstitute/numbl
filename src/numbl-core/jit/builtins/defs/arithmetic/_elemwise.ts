@@ -28,195 +28,20 @@ import {
   exactRealArray,
   exactScalarAsComplex,
 } from "../_shared.js";
-import {
-  isComplexValue,
-  isTensor,
-  type RuntimeTensor,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
-import {
-  mtoc2_tensor_plus_tt,
-  mtoc2_tensor_plus_ts,
-  mtoc2_tensor_plus_bcast_tt,
-  mtoc2_tensor_minus_tt,
-  mtoc2_tensor_minus_ts,
-  mtoc2_tensor_minus_st,
-  mtoc2_tensor_minus_bcast_tt,
-  mtoc2_tensor_times_tt,
-  mtoc2_tensor_times_ts,
-  mtoc2_tensor_times_bcast_tt,
-  mtoc2_tensor_rdivide_tt,
-  mtoc2_tensor_rdivide_ts,
-  mtoc2_tensor_rdivide_st,
-  mtoc2_tensor_rdivide_bcast_tt,
-  mtoc2_tensor_atan2_tt,
-  mtoc2_tensor_atan2_ts,
-  mtoc2_tensor_atan2_st,
-  mtoc2_tensor_atan2_bcast_tt,
-  mtoc2_tensor_hypot_tt,
-  mtoc2_tensor_hypot_ts,
-  mtoc2_tensor_hypot_bcast_tt,
-  mtoc2_tensor_max_tt,
-  mtoc2_tensor_max_ts,
-  mtoc2_tensor_max_bcast_tt,
-  mtoc2_tensor_min_tt,
-  mtoc2_tensor_min_ts,
-  mtoc2_tensor_min_bcast_tt,
-  mtoc2_tensor_rem_tt,
-  mtoc2_tensor_rem_ts,
-  mtoc2_tensor_rem_st,
-  mtoc2_tensor_rem_bcast_tt,
-  mtoc2_tensor_mod_tt,
-  mtoc2_tensor_mod_ts,
-  mtoc2_tensor_mod_st,
-  mtoc2_tensor_mod_bcast_tt,
-  mtoc2_tensor_plus_complex_tt,
-  mtoc2_tensor_plus_complex_ts,
-  mtoc2_tensor_plus_complex_bcast_tt,
-  mtoc2_tensor_minus_complex_tt,
-  mtoc2_tensor_minus_complex_ts,
-  mtoc2_tensor_minus_complex_st,
-  mtoc2_tensor_minus_complex_bcast_tt,
-  mtoc2_tensor_times_complex_tt,
-  mtoc2_tensor_times_complex_ts,
-  mtoc2_tensor_times_complex_bcast_tt,
-  mtoc2_tensor_rdivide_complex_tt,
-  mtoc2_tensor_rdivide_complex_ts,
-  mtoc2_tensor_rdivide_complex_st,
-  mtoc2_tensor_rdivide_complex_bcast_tt,
-} from "../../runtime/snippets.gen.js";
-
-/** Project a runtime scalar into `{re, im}` form for complex
- *  arithmetic. Real `number` operands pad with `im=0`. Used by every
- *  scalar-complex `call` path. */
-function scalarAsComplexValue(v: RuntimeValue): { re: number; im: number } {
-  if (typeof v === "number") return { re: v, im: 0 };
-  if (typeof v === "boolean") return { re: v ? 1 : 0, im: 0 };
-  if (isTensor(v) && v.data.length === 1) {
-    return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
-  }
-  if (isComplexValue(v)) return { re: v.re, im: v.im };
-  throw new Error(`scalarAsComplexValue: not a scalar (got ${typeof v})`);
-}
-
-type TensorHelper2 = (a: RuntimeTensor, b: RuntimeTensor) => RuntimeTensor;
-type TensorHelperTS = (a: RuntimeTensor, s: number) => RuntimeTensor;
-type TensorHelperST = (s: number, a: RuntimeTensor) => RuntimeTensor;
-
-interface TensorHelperSet {
-  tt: TensorHelper2;
-  ts: TensorHelperTS;
-  /** Non-commutative ops define this. */
-  st?: TensorHelperST;
-  bcast_tt: TensorHelper2;
-}
-
-// `.js` snippet bodies infer their return type as `{ mtoc2Tag: string,
-// ... }` (no literal "tensor" discriminator). Cast through `unknown`
-// at the registration site so the typed dispatch table below stays
-// the source of truth for what these helpers return at runtime.
-// Complex-tensor helper set. Each entry mirrors a `tensor_<base>_complex_*`
-// JS runtime helper that takes / returns RuntimeTensor objects with both
-// `data` (real lane) and `imag` (imaginary lane) populated. Empty today —
-// helpers land alongside the per-builtin tensor-complex `emitJs`/`call`
-// rollout. When a name is missing, the complex-tensor branch in the
-// generated `call` hook raises with a clear "not yet wired" message.
-type TensorHelperComplexScalar = (
-  a: RuntimeTensor,
-  s: { re: number; im: number }
-) => RuntimeTensor;
-type TensorHelperScalarComplex = (
-  s: { re: number; im: number },
-  a: RuntimeTensor
-) => RuntimeTensor;
-interface ComplexTensorHelperSet {
-  tt: TensorHelper2;
-  ts: TensorHelperComplexScalar;
-  st?: TensorHelperScalarComplex;
-  bcast_tt: TensorHelper2;
-}
-const COMPLEX_TENSOR_HELPERS: Record<string, ComplexTensorHelperSet> = {
-  plus: {
-    tt: mtoc2_tensor_plus_complex_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_plus_complex_ts as unknown as TensorHelperComplexScalar,
-    bcast_tt: mtoc2_tensor_plus_complex_bcast_tt as unknown as TensorHelper2,
-  },
-  minus: {
-    tt: mtoc2_tensor_minus_complex_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_minus_complex_ts as unknown as TensorHelperComplexScalar,
-    st: mtoc2_tensor_minus_complex_st as unknown as TensorHelperScalarComplex,
-    bcast_tt: mtoc2_tensor_minus_complex_bcast_tt as unknown as TensorHelper2,
-  },
-  times: {
-    tt: mtoc2_tensor_times_complex_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_times_complex_ts as unknown as TensorHelperComplexScalar,
-    bcast_tt: mtoc2_tensor_times_complex_bcast_tt as unknown as TensorHelper2,
-  },
-  rdivide: {
-    tt: mtoc2_tensor_rdivide_complex_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_rdivide_complex_ts as unknown as TensorHelperComplexScalar,
-    st: mtoc2_tensor_rdivide_complex_st as unknown as TensorHelperScalarComplex,
-    bcast_tt: mtoc2_tensor_rdivide_complex_bcast_tt as unknown as TensorHelper2,
-  },
-};
-
-const TENSOR_HELPERS: Record<string, TensorHelperSet> = {
-  plus: {
-    tt: mtoc2_tensor_plus_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_plus_ts as unknown as TensorHelperTS,
-    bcast_tt: mtoc2_tensor_plus_bcast_tt as unknown as TensorHelper2,
-  },
-  minus: {
-    tt: mtoc2_tensor_minus_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_minus_ts as unknown as TensorHelperTS,
-    st: mtoc2_tensor_minus_st as unknown as TensorHelperST,
-    bcast_tt: mtoc2_tensor_minus_bcast_tt as unknown as TensorHelper2,
-  },
-  times: {
-    tt: mtoc2_tensor_times_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_times_ts as unknown as TensorHelperTS,
-    bcast_tt: mtoc2_tensor_times_bcast_tt as unknown as TensorHelper2,
-  },
-  rdivide: {
-    tt: mtoc2_tensor_rdivide_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_rdivide_ts as unknown as TensorHelperTS,
-    st: mtoc2_tensor_rdivide_st as unknown as TensorHelperST,
-    bcast_tt: mtoc2_tensor_rdivide_bcast_tt as unknown as TensorHelper2,
-  },
-  atan2: {
-    tt: mtoc2_tensor_atan2_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_atan2_ts as unknown as TensorHelperTS,
-    st: mtoc2_tensor_atan2_st as unknown as TensorHelperST,
-    bcast_tt: mtoc2_tensor_atan2_bcast_tt as unknown as TensorHelper2,
-  },
-  hypot: {
-    tt: mtoc2_tensor_hypot_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_hypot_ts as unknown as TensorHelperTS,
-    bcast_tt: mtoc2_tensor_hypot_bcast_tt as unknown as TensorHelper2,
-  },
-  max: {
-    tt: mtoc2_tensor_max_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_max_ts as unknown as TensorHelperTS,
-    bcast_tt: mtoc2_tensor_max_bcast_tt as unknown as TensorHelper2,
-  },
-  min: {
-    tt: mtoc2_tensor_min_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_min_ts as unknown as TensorHelperTS,
-    bcast_tt: mtoc2_tensor_min_bcast_tt as unknown as TensorHelper2,
-  },
-  rem: {
-    tt: mtoc2_tensor_rem_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_rem_ts as unknown as TensorHelperTS,
-    st: mtoc2_tensor_rem_st as unknown as TensorHelperST,
-    bcast_tt: mtoc2_tensor_rem_bcast_tt as unknown as TensorHelper2,
-  },
-  mod: {
-    tt: mtoc2_tensor_mod_tt as unknown as TensorHelper2,
-    ts: mtoc2_tensor_mod_ts as unknown as TensorHelperTS,
-    st: mtoc2_tensor_mod_st as unknown as TensorHelperST,
-    bcast_tt: mtoc2_tensor_mod_bcast_tt as unknown as TensorHelper2,
-  },
-};
+/** `helperBase` values with JS tensor kernels in
+ *  `tensor_elemwise_real.js` / `tensor_elemwise_real_fn.js`. */
+const TENSOR_HELPER_BASES = new Set([
+  "plus",
+  "minus",
+  "times",
+  "rdivide",
+  "atan2",
+  "hypot",
+  "max",
+  "min",
+  "rem",
+  "mod",
+]);
 
 /** Result of broadcast shape resolution for the elementwise binary path.
  *  `outDims` is the output's per-axis dim info (MATLAB-style implicit
@@ -386,8 +211,7 @@ export function broadcastFoldExact(
  *  `complexFold` / `complexScalarExpr` / `complexRuntimeDeps` are
  *  optional; when set, a scalar+scalar op with at least one complex
  *  operand routes through them (and `transfer` returns a complex
- *  result). Phase 1 wires complex scalars; tensor+complex paths are
- *  rejected until Phase 3 lands the runtime helpers.
+ *  result).
  */
 export function defineElemwiseRealBinary(opts: {
   name: string;
@@ -413,11 +237,10 @@ export function defineElemwiseRealBinary(opts: {
 }): Builtin {
   // Default scalar-complex emit: route through the per-op helper from
   // `cscalar.h` instead of relying on C99 operator overloading on
-  // `_Complex` operands. This keeps mtoc2's user-code emission
-  // operator-free for complex, which lets the c2js JS backend ship
-  // matching `{re, im}` helpers without learning to type-track
-  // expressions. The C native path inlines `mtoc2_c*` back to the
-  // same instructions C99 would have generated, so there's no cost.
+  // `_Complex` operands. This keeps the C and JS emission parallel
+  // (JS ships matching `{re, im}` helpers). The C compiler inlines
+  // `mtoc2_c*` back to the same instructions C99 would have
+  // generated, so there's no cost.
   const defaultComplexHelper: Record<string, string | undefined> = {
     "+": "mtoc2_cadd",
     "-": "mtoc2_csub",
@@ -714,8 +537,7 @@ function buildElemwiseRealBinary(opts: {
         }
         return jsScalarExpr(argsJs[0], argsJs[1]);
       }
-      const helpers = TENSOR_HELPERS[helperBase];
-      if (!helpers) {
+      if (!TENSOR_HELPER_BASES.has(helperBase)) {
         throw new UnsupportedConstruct(
           `'${name}' tensor emitJs not yet wired (no helper for helperBase '${helperBase}')`
         );
@@ -758,93 +580,6 @@ function buildElemwiseRealBinary(opts: {
         return `mtoc2_tensor_${helperBase}_ts(${argsJs[1]}, ${argsJs[0]})`;
       }
       return `mtoc2_tensor_${helperBase}_st(${argsJs[0]}, ${argsJs[1]})`;
-    },
-    call({ args, argTypes }) {
-      const aN = argTypes[0] as NumericType;
-      const bN = argTypes[1] as NumericType;
-      const aMulti = isMultiElement(aN);
-      const bMulti = isMultiElement(bN);
-      const anyComplex = aN.isComplex || bN.isComplex;
-      const aVal = args[0] as RuntimeValue;
-      const bVal = args[1] as RuntimeValue;
-      if (!aMulti && !bMulti) {
-        if (anyComplex) {
-          if (complexFold === undefined) {
-            throw new UnsupportedConstruct(
-              `'${name}' is not defined for complex scalars`
-            );
-          }
-          const ax = scalarAsComplexValue(aVal);
-          const bx = scalarAsComplexValue(bVal);
-          const out = complexFold(ax, bx);
-          // Collapse to a real number when the imag lane is zero,
-          // so downstream `disp(...)` and arithmetic stay on the
-          // real path. This matches numbl's runtime collapse rule.
-          if (out.im === 0 && !aN.isComplex && !bN.isComplex) {
-            return [out.re];
-          }
-          return [out];
-        }
-        const av = typeof aVal === "number" ? aVal : Number(aVal);
-        const bv = typeof bVal === "number" ? bVal : Number(bVal);
-        return [fold(av, bv)];
-      }
-      const helpers = TENSOR_HELPERS[helperBase];
-      if (!helpers) {
-        throw new UnsupportedConstruct(
-          `'${name}' tensor 'call' not yet wired (no helper for helperBase '${helperBase}')`
-        );
-      }
-      if (anyComplex) {
-        const cxHelpers = COMPLEX_TENSOR_HELPERS[helperBase];
-        if (!cxHelpers) {
-          throw new UnsupportedConstruct(
-            `'${name}' complex-tensor 'call' not yet wired`
-          );
-        }
-        const promote = (v: RuntimeValue): { re: number; im: number } =>
-          scalarAsComplexValue(v);
-        if (aMulti && bMulti) {
-          const at = aVal as RuntimeTensor;
-          const bt = bVal as RuntimeTensor;
-          const op = needsBroadcast(aN, bN) ? cxHelpers.bcast_tt : cxHelpers.tt;
-          return [op(at, bt)];
-        }
-        if (aMulti) {
-          const at = aVal as RuntimeTensor;
-          return [cxHelpers.ts(at, promote(bVal))];
-        }
-        // scalar OP tensor
-        const bt = bVal as RuntimeTensor;
-        if (commutative) return [cxHelpers.ts(bt, promote(aVal))];
-        if (cxHelpers.st === undefined) {
-          throw new UnsupportedConstruct(
-            `internal: '${name}' is non-commutative but has no _st complex JS helper`
-          );
-        }
-        return [cxHelpers.st(promote(aVal), bt)];
-      }
-      if (aMulti && bMulti) {
-        const at = aVal as RuntimeTensor;
-        const bt = bVal as RuntimeTensor;
-        const op = needsBroadcast(aN, bN) ? helpers.bcast_tt : helpers.tt;
-        return [op(at, bt)];
-      }
-      if (aMulti) {
-        const at = aVal as RuntimeTensor;
-        const bv = typeof bVal === "number" ? bVal : Number(bVal);
-        return [helpers.ts(at, bv)];
-      }
-      // scalar OP tensor
-      const av = typeof aVal === "number" ? aVal : Number(aVal);
-      const bt = bVal as RuntimeTensor;
-      if (commutative) return [helpers.ts(bt, av)];
-      if (helpers.st === undefined) {
-        throw new UnsupportedConstruct(
-          `internal: '${name}' is non-commutative but has no _st JS helper`
-        );
-      }
-      return [helpers.st(av, bt)];
     },
     elementwise: true,
   };

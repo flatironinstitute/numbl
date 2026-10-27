@@ -9,21 +9,12 @@
  * - the surface area between the JIT and the rest of numbl is visible at
  *   a glance.
  *
- * Historically this was mtoc2's cross-repo bridge (resolving the sibling
- * `../../../numbl/` checkout); after vendoring it resolves the same
- * symbols through local `numbl-core` relative paths. `parser/index.ts`
- * re-exports through this module so the vendored files' import shapes
- * stay unchanged.
+ * `parser/index.ts` re-exports through this module.
  */
 
 // ── Parser (AST shape, lexer dispatch, operator enums) ──────────────────
 
-export {
-  parseMFile,
-  SyntaxError,
-  BinaryOperation,
-  UnaryOperation,
-} from "../../parser/index.js";
+export { BinaryOperation, UnaryOperation } from "../../parser/index.js";
 
 export type {
   Span,
@@ -35,25 +26,13 @@ export type {
 
 // ── Resolver / lowering context (workspace function dispatch) ───────────
 
-export { LoweringContext } from "../../lowering/loweringContext.js";
+export type { LoweringContext } from "../../lowering/loweringContext.js";
 export { resolveFunction } from "../../functionResolve.js";
 
 export type { CallSite } from "../../runtime/runtimeHelpers.js";
 export type { ItemType } from "../../lowering/itemTypes.js";
 export type { ClassInfo } from "../../lowering/classInfo.js";
 
-// ── Plot dispatch (cross-runner protocol + accepted name set) ───────────
+// ── Plot builtin names ──────────────────────────────────────────────────
 
 export { PLOT_ALL_NAMES } from "../../runtime/plotBuiltinDispatch.js";
-export {
-  dispatchPlotBuiltin,
-  type PlotDispatchState,
-} from "../../runtime/plotBuiltinDispatch.js";
-
-export type { PlotInstruction } from "../../../graphics/types.js";
-
-// ── Runtime value model (used by the plot adapter) ──────────────────────
-
-export { allocFloat64Array } from "../../runtime/alloc.js";
-export { RTV } from "../../runtime/constructors.js";
-export type { RuntimeValue } from "../../runtime/types.js";

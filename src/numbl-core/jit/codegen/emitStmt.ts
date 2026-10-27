@@ -18,11 +18,11 @@ import {
 } from "../lowering/types.js";
 import { cTypeFor, formatDouble, requireOwnedHelpers } from "./cHelpers.js";
 import {
-  lookupBuiltin,
   makeEmitUseRuntime,
   useRuntimeByName,
   type RuntimeState,
 } from "./runtime.js";
+import { getBuiltin } from "../builtins/index.js";
 import { requireEmitC } from "../builtins/registry.js";
 import {
   computeFutureTouches,
@@ -43,7 +43,7 @@ import { activateOwnedRuntime, activatedOwnedHelpers } from "./emit.js";
  *  types (tensors, structs, classes, handles) route through their
  *  `_empty()` helper instead and never hit this path; everything
  *  reaching here is scalar real numeric, so `0.0` always fits. */
-export function defaultInitFor(): string {
+function defaultInitFor(): string {
   return "0.0";
 }
 
@@ -127,7 +127,7 @@ function collectAllLocals(stmts: IRStmt[]): { cName: string; ty: Type }[] {
  *  first written inside an If / While / For body (reachable via
  *  `mergeBranchEnvs` keeping partial-branch keys) doesn't reference
  *  an out-of-scope C local. */
-export function collectLocals(stmts: IRStmt[]): {
+function collectLocals(stmts: IRStmt[]): {
   owned: { cName: string; ty: Type }[];
   scalars: { cName: string; ty: Type }[];
 } {
@@ -146,19 +146,18 @@ export function collectLocals(stmts: IRStmt[]): {
  *  the function. Single source of truth so the two callers can't
  *  drift on which locals get freed in what order.
  *
- *  Why inline rather than goto-to-a-shared-tail: c2js can't translate
- *  C `goto`, and we want a single C emit that works for both targets.
- *  Inlining produces some duplication when a function has many early
- *  returns and many owned locals, but typical mtoc2 functions are
- *  small and the C compiler dedupes-by-tail-merge anyway. */
-export type EmitReturnTail = (indent: string) => string;
+ *  Inlined rather than goto-to-a-shared-tail, which keeps the C emit
+ *  parallel to the JS one. Inlining produces some duplication when a
+ *  function has many early returns and many owned locals, but typical
+ *  functions are small and the C compiler dedupes-by-tail-merge
+ *  anyway. */
+type EmitReturnTail = (indent: string) => string;
 
 export function emitFunction(
   fn: IRFunc,
   state: RuntimeState,
   /** Storage-class qualifier on the function definition. Default is
-   *  `static` (file-scope, the C-AOT whole-program convention). Pass
-   *  `""` to omit the qualifier — the function then gets external
+   *  `static` (file-scope). Pass `""` to omit the qualifier — the function then gets external
    *  linkage so a JIT host can resolve it via `dlsym` / koffi after
    *  `dlopen`'ing the compiled `.so`. */
   storageClass: "static" | "" = "static"
@@ -621,7 +620,7 @@ function emitStmt(
       // at the call site), matching every other `mtoc2_tensor_*`
       // helper that takes a tensor by value.
       const isBuiltinMA = s.isBuiltin === true;
-      const builtinMA = isBuiltinMA ? lookupBuiltin(state, s.name) : undefined;
+      const builtinMA = isBuiltinMA ? getBuiltin(s.name) : undefined;
       const argStrs = s.args.map((a: IRExpr) =>
         !isBuiltinMA && isOwned(a.ty)
           ? emitOwnedRhs(a, state)

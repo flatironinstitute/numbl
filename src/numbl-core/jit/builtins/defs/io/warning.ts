@@ -21,16 +21,12 @@ import {
   emitTextView,
   validateFormatArgs,
 } from "./_format_args.js";
-import {
-  mtoc2_warning_fmt as jsWarningFmt,
-  mtoc2_warning_fmt_id as jsWarningFmtId,
-} from "../../runtime/snippets.gen.js";
 
 /** Numbl's id-detection for `warning` is intentionally looser than for
  *  `error`: any colon in the first text arg flips it to "first arg is
  *  the identifier" mode, even something like `'count: %d'`. We mirror
  *  byte-for-byte (see numbl `runtime/specialBuiltins.ts:215`) — it's
- *  arguably a numbl design quirk, but the cross-runner contract is
+ *  arguably a numbl design quirk, but cross-mode parity requires an
  *  exact match, and users writing colon-bearing formats just get
  *  numbl's behavior. */
 function warningFirstArgIsId(s: string): boolean {
@@ -122,36 +118,4 @@ export const warningBuiltin: Builtin = {
     useRuntime("mtoc2_warning_fmt");
     return `mtoc2_warning_fmt(${argsJs.slice(fmtIdx).join(", ")})`;
   },
-  call({ args, argTypes, ctx }) {
-    const first = argTypes[0];
-    const firstExact =
-      first.kind === "Char" || first.kind === "String"
-        ? first.exact
-        : undefined;
-    let fmtIdx = 0;
-    if (
-      argTypes.length >= 2 &&
-      firstExact !== undefined &&
-      warningFirstArgIsId(firstExact)
-    ) {
-      fmtIdx = 1;
-    }
-    const unwrapped = args.slice(fmtIdx).map(unwrapFmtArg);
-    const fmt = unwrapped[0] as string;
-    globalThis.$write = ctx.helpers.write;
-    if (fmtIdx === 1 && firstExact !== undefined) {
-      jsWarningFmtId(firstExact, fmt, ...unwrapped.slice(1));
-    } else {
-      jsWarningFmt(fmt, ...unwrapped.slice(1));
-    }
-    return [];
-  },
 };
-
-function unwrapFmtArg(v: unknown): unknown {
-  if (typeof v === "object" && v !== null) {
-    const o = v as { mtoc2Tag?: string; value?: string };
-    if (o.mtoc2Tag === "char" && typeof o.value === "string") return o.value;
-  }
-  return v;
-}

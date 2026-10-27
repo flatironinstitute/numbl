@@ -31,16 +31,6 @@ import {
   exactComplex,
   exactComplexArray,
 } from "../_shared.js";
-import {
-  mtoc2_cnonzero,
-  mtoc2_tensor_not as jsTensorNot,
-  mtoc2_tensor_not_complex as jsTensorNotComplex,
-} from "../../runtime/snippets.gen.js";
-import {
-  isComplexValue,
-  type RuntimeTensor,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
 
 function logicalTensor(
   dims: DimInfo[],
@@ -163,28 +153,5 @@ export const notBuiltin: Builtin = {
     // `true` in JS but numbl's `~NaN` is 0 (NaN is nonzero → not-false).
     if (a.elem === "logical") return `(!(${argsJs[0]}))`;
     return `((${argsJs[0]}) === 0)`;
-  },
-  call({ args, argTypes }) {
-    const a = argTypes[0] as NumericType;
-    if (isMultiElement(a)) {
-      if (a.isComplex) {
-        return [
-          jsTensorNotComplex(
-            args[0] as RuntimeTensor
-          ) as unknown as RuntimeTensor,
-        ];
-      }
-      return [
-        jsTensorNot(args[0] as RuntimeTensor) as unknown as RuntimeTensor,
-      ];
-    }
-    if (a.isComplex) {
-      const v = args[0] as RuntimeValue;
-      const cx = isComplexValue(v) ? v : { re: Number(v), im: 0 };
-      return [!mtoc2_cnonzero(cx)];
-    }
-    const v = typeof args[0] === "number" ? args[0] : Number(args[0]);
-    // `v === 0`, not `!v`: `!NaN` is `true` in JS but `~NaN` is 0.
-    return [v === 0];
   },
 };

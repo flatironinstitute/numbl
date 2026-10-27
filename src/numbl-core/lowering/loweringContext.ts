@@ -39,10 +39,6 @@ interface WorkspaceRegistry {
     string,
     { fileName: string; builtin: IBuiltin; help?: string }
   >;
-  /** mtoc2-only user functions (.mtoc2.js): functionName → { fileName, source }.
-   *  Numbl never executes these — the source text is stored for mtoc2's loader
-   *  to consume. Numbl's interpreter rejects calls to them with a clear error. */
-  mtoc2UserFunctionsByName: Map<string, { fileName: string; source: string }>;
   /** Per-workspace-file lowering contexts (created on demand) */
   fileContexts: Map<string, LoweringContext>;
   /** Workspace classes: qualifiedName → ClassInfo */
@@ -70,7 +66,6 @@ function createWorkspaceRegistry(): WorkspaceRegistry {
   return {
     filesByFuncName: new Map(),
     jsUserFunctionsByName: new Map(),
-    mtoc2UserFunctionsByName: new Map(),
     fileContexts: new Map(),
     classesByName: new Map(),
     localClassesByName: new Map(),
@@ -114,11 +109,6 @@ export interface FunctionIndex {
 
   /** JS user functions (resolved at workspace-function priority, not builtin) */
   jsUserFunctions: Set<string>;
-
-  /** mtoc2-only user functions (.mtoc2.js). Resolved at workspace-function
-   *  priority, like jsUserFunctions. Numbl's interpreter rejects calls to
-   *  these; mtoc2 routes them through its own loader. */
-  mtoc2UserFunctions: Set<string>;
 
   /** Workspace classes (classdef files) */
   workspaceClasses: Set<string>;
@@ -261,10 +251,7 @@ export class LoweringContext {
    * Also handles @ClassName class folders.
    *
    * `.m` files register as workspace functions / classes / private functions
-   * (the regular MATLAB-style discovery). `.mtoc2.js` files register as
-   * mtoc2-only user functions: numbl tracks the name so resolution sees
-   * them, but the body stays unparsed — mtoc2's loader evaluates them.
-   * `.mtoc2.js` files in `@ClassName/` are not yet supported.
+   * (the regular MATLAB-style discovery).
    */
   registerWorkspaceFiles(files: WorkspaceFile[]): void {
     // First pass: collect @folder groups
@@ -278,21 +265,9 @@ export class LoweringContext {
       const relativePath = this.getRelativePath(file.name);
       const parts = relativePath.split("/");
 
-      const isMtoc2Js = file.name.endsWith(".mtoc2.js");
-      const stripExt = (s: string): string =>
-        isMtoc2Js ? s.replace(/\.mtoc2\.js$/, "") : s.replace(/\.m$/, "");
-
       // Check for @ClassName folder
       const atIdx = parts.findIndex(p => p.startsWith("@"));
       if (atIdx >= 0) {
-        if (isMtoc2Js) {
-          // `.mtoc2.js` files inside `@ClassName/` are not yet supported.
-          // Silently skip — surfacing UnsupportedConstruct here would be
-          // wrong (workspace registration is shared by both interpreter
-          // and compiler), and a call to the function will fail-fast at
-          // resolve time with "unknown function" anyway.
-          continue;
-        }
         // Files in @ClassName/private/ are private helper functions,
         // not methods. Register them as private functions scoped to the @ClassName/ dir.
         if (parts.includes("private")) {
@@ -337,10 +312,6 @@ export class LoweringContext {
       // Check for private/ directory
       const privateIdx = parts.indexOf("private");
       if (privateIdx >= 0) {
-        if (isMtoc2Js) {
-          // `.mtoc2.js` files in `private/` are not yet supported.
-          continue;
-        }
         // e.g., "private/helper.m" or "+pkg/private/helper.m"
         const parentDir =
           parts.slice(0, privateIdx).join("/") + (privateIdx > 0 ? "/" : "");
@@ -360,7 +331,7 @@ export class LoweringContext {
       const isNamespace = dirs.length > 0 && dirs.every(d => d.startsWith("+"));
       if (dirs.length > 0 && !isNamespace) continue; // skip non-namespace subdirs
 
-      const baseName = stripExt(parts[parts.length - 1]);
+      const baseName = parts[parts.length - 1].replace(/\.m$/, "");
       let funcName: string;
       if (isNamespace) {
         // +pkg/+sub/func.m → "pkg.sub.func"
@@ -372,15 +343,6 @@ export class LoweringContext {
 
       // Track file → funcName mapping
       this.registry.fileToFuncName.set(file.name, funcName);
-
-      if (isMtoc2Js) {
-        // First-wins, same as the `.m` workspace path. If the same name
-        // is already registered as a `.m` workspace function, the `.m`
-        // entry wins by virtue of having been seen first OR being checked
-        // first in `resolveFunction` (slot 4 beats slot 4c).
-        this.registerMtoc2UserFunction(funcName, file.name, file.source);
-        continue;
-      }
 
       // Semi-eager class detection: if the file starts with 'classdef' (after
       // stripping whitespace and leading comments), register as class
@@ -487,7 +449,6 @@ export class LoweringContext {
   clearWorkspaceRegistrations(): void {
     this.registry.filesByFuncName.clear();
     this.registry.jsUserFunctionsByName.clear();
-    this.registry.mtoc2UserFunctionsByName.clear();
     this.registry.classesByName.clear();
     this.registry.privateFilesByDir.clear();
     this.registry.fileContexts.clear();
@@ -513,21 +474,6 @@ export class LoweringContext {
       builtin,
       help,
     });
-  }
-
-  /**
-   * Register an mtoc2-only user function (.mtoc2.js) in the workspace
-   * registry. Numbl stores the source text verbatim; mtoc2's loader
-   * evaluates it. Uses first-wins semantics so search-path priority is
-   * honored — same as `.numbl.js`.
-   */
-  registerMtoc2UserFunction(
-    funcName: string,
-    fileName: string,
-    source: string
-  ): void {
-    if (this.registry.mtoc2UserFunctionsByName.has(funcName)) return;
-    this.registry.mtoc2UserFunctionsByName.set(funcName, { fileName, source });
   }
 
   // ── Private function management ──────────────────────────────────
@@ -920,12 +866,6 @@ export class LoweringContext {
     const jsUserFunctions = new Set<string>(
       this.registry.jsUserFunctionsByName.keys()
     );
-    // mtoc2-only user functions (.mtoc2.js) resolve at the same priority
-    // tier as .numbl.js: after .m, before builtins. Numbl never executes
-    // them — its interpreter rejects with a clear error pointing at mtoc2.
-    const mtoc2UserFunctions = new Set<string>(
-      this.registry.mtoc2UserFunctionsByName.keys()
-    );
 
     // 2. Main script local functions
     const mainLocalFunctions = new Set(this.localFunctionASTs.keys());
@@ -1177,7 +1117,6 @@ export class LoweringContext {
       mainLocalFunctions,
       workspaceFunctions,
       jsUserFunctions,
-      mtoc2UserFunctions,
       workspaceClasses,
       workspaceFileSubfunctions,
       classFileSubfunctions,

@@ -33,13 +33,6 @@ import {
   type AxisAll,
   type AxisFixed,
 } from "./_shape.js";
-import type { RuntimeTensor, RuntimeValue } from "../../../runtime/value.js";
-import {
-  mtoc2_var_all,
-  mtoc2_var_dim,
-  mtoc2_std_all,
-  mtoc2_std_dim,
-} from "../../runtime/tensor_ops/tensor_var.js";
 
 type AxisChoice = AxisAll | AxisFixed | { kind: "default" };
 
@@ -140,8 +133,6 @@ function varResultType(input: NumericType, axis: AxisAll | AxisFixed): Type {
 }
 
 export function defineVariance(name: "var" | "std"): Builtin {
-  const allKernelJs = name === "std" ? mtoc2_std_all : mtoc2_var_all;
-  const dimKernelJs = name === "std" ? mtoc2_std_dim : mtoc2_var_dim;
   return {
     name,
     transfer(argTypes, nargout) {
@@ -178,17 +169,6 @@ export function defineVariance(name: "var" | "std"): Builtin {
         return `mtoc2_${name}_all(${argsJs[0]}, ${w})`;
       }
       return `mtoc2_${name}_dim(${argsJs[0]}, ${(resolved as AxisFixed).dim}, ${w})`;
-    },
-    call({ args, argTypes }) {
-      const { input, w, axis } = planVar(name, argTypes);
-      if (isScalar(input)) return [0];
-      const resolved =
-        axis.kind === "default" ? chooseDefaultAxis(name, input) : axis;
-      const t = args[0] as RuntimeTensor;
-      if (collapsesToScalar(input, resolved)) {
-        return [allKernelJs(t, w) as RuntimeValue];
-      }
-      return [dimKernelJs(t, (resolved as AxisFixed).dim, w) as RuntimeValue];
     },
   };
 }

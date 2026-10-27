@@ -10,7 +10,7 @@
  * after lowering — useful when debugging the translator.
  */
 
-import type { IRExpr, IRStmt, IRFunc, IRProgram } from "../lowering/ir.js";
+import type { IRExpr, IRStmt, IRFunc } from "../lowering/ir.js";
 import { BinaryOperation, UnaryOperation } from "../parser/index.js";
 import { typeToString } from "../lowering/types.js";
 
@@ -280,74 +280,4 @@ export function irFuncDocComment(fn: IRFunc): string {
   }
   lines.push(" */");
   return lines.join("\n");
-}
-
-function prettyStmtLines(s: IRStmt, indent: string): string[] {
-  const step = "  ";
-  switch (s.kind) {
-    case "If": {
-      const lines: string[] = [`${indent}if ${irExprToString(s.cond)}`];
-      for (const t of s.thenBody)
-        lines.push(...prettyStmtLines(t, indent + step));
-      if (s.elseBody.length > 0) {
-        lines.push(`${indent}else`);
-        for (const e of s.elseBody)
-          lines.push(...prettyStmtLines(e, indent + step));
-      }
-      lines.push(`${indent}end`);
-      return lines;
-    }
-    case "While": {
-      const lines: string[] = [`${indent}while ${irExprToString(s.cond)}`];
-      for (const b of s.body) lines.push(...prettyStmtLines(b, indent + step));
-      lines.push(`${indent}end`);
-      return lines;
-    }
-    case "For": {
-      const stepPart = s.step === 1 ? "" : `${numLitText(s.step)}:`;
-      const lines: string[] = [
-        `${indent}for ${s.varName} = ${irExprToString(s.start)}:${stepPart}${irExprToString(s.end)}`,
-      ];
-      for (const b of s.body) lines.push(...prettyStmtLines(b, indent + step));
-      lines.push(`${indent}end`);
-      return lines;
-    }
-    case "TypeComment": {
-      return s.entries.map(
-        e => `${indent}% type ${e.name} :: ${typeToString(e.ty)}`
-      );
-    }
-    default: {
-      const header = irStmtHeader(s);
-      return header === null ? [] : [`${indent}${header}`];
-    }
-  }
-}
-
-/** Render the whole lowered IR as a numbl-like script with one block
- *  per function specialization plus a trailing top-level body. Used by
- *  the IDE's Internals tab in interpreter mode, where no codegen
- *  artifact exists. */
-export function prettyIRProgram(prog: IRProgram): string {
-  const blocks: string[] = [];
-  for (const fn of prog.functions.values()) {
-    const sigLhs =
-      fn.outputs.length === 0
-        ? ""
-        : fn.outputs.length === 1
-          ? `${fn.outputs[0]} = `
-          : `[${fn.outputs.join(", ")}] = `;
-    const lines: string[] = [];
-    lines.push(irFuncDocComment(fn));
-    lines.push(`function ${sigLhs}${fn.name}(${fn.params.join(", ")})`);
-    for (const s of fn.body) lines.push(...prettyStmtLines(s, "  "));
-    lines.push("end");
-    blocks.push(lines.join("\n"));
-  }
-  if (prog.topLevelStmts.length > 0) {
-    const lines: string[] = ["% --- top level ---"];
-    for (const s of prog.topLevelStmts) lines.push(...prettyStmtLines(s, ""));
-    blocks.push(lines.join("\n"));
-  }
-  return blocks.join("\n\n");
 }

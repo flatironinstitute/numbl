@@ -145,20 +145,5 @@ export function defineShortCircuit(
       // Result is a bare JS bool.
       return `(${lhs} ${cOp} ${rhs})`;
     },
-    call({ args, argTypes }) {
-      const aN = argTypes[0] as NumericType;
-      const bN = argTypes[1] as NumericType;
-      const toBool = (v: unknown, isComplex: boolean): boolean => {
-        if (isComplex) {
-          const cx = v as { re: number; im: number };
-          return cx.re !== 0 || cx.im !== 0;
-        }
-        const n = typeof v === "number" ? v : Number(v);
-        return n !== 0;
-      };
-      const a = toBool(args[0], aN.isComplex);
-      const b = toBool(args[1], bN.isComplex);
-      return [kind === "or" ? a || b : a && b];
-    },
   };
 }

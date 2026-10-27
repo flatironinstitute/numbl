@@ -8,7 +8,6 @@ import {
   type Type,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
-import { isTensor, isChar } from "../../../runtime/value.js";
 
 export const length: Builtin = {
   name: "length",
@@ -22,9 +21,8 @@ export const length: Builtin = {
       );
     }
     const t: Type = argTypes[0];
-    // Cells take the same max-of-shape semantics. Unknown lets the
-    // interpreter's `call` hook compute at runtime; AOT codegen
-    // would need a per-shape branch (deferred).
+    // Cells take the same max-of-shape semantics. A cell of unknown
+    // shape would need a per-shape branch in codegen (deferred).
     if (isCell(t)) {
       if (t.shape !== undefined) {
         const v = t.shape.some(s => s === 0)
@@ -35,9 +33,8 @@ export const length: Builtin = {
       return [scalarDouble("nonneg")];
     }
     if (t.kind === "Unknown") {
-      // The interpreter is the only consumer of an Unknown-typed
-      // value (e.g. `fieldnames(s)` returns Unknown today). Let the
-      // call hook compute the length at runtime.
+      // An Unknown-typed value (e.g. `fieldnames(s)`) can't be
+      // materialized by codegen, so this never reaches an emit hook.
       return [scalarDouble("nonneg")];
     }
     if (!isNumeric(t)) {
@@ -66,27 +63,6 @@ export const length: Builtin = {
     return (
       `(${argsJs[0]}.shape.some(s=>s===0) ? 0 : ` +
       `${argsJs[0]}.shape.reduce((a,b)=>a>b?a:b, 0))`
-    );
-  },
-  call({ args }) {
-    const v = args[0];
-    if (typeof v === "number" || typeof v === "boolean") return [1];
-    if (isTensor(v)) {
-      if (v.shape.some(s => s === 0)) return [0];
-      return [v.shape.reduce((a, b) => (a > b ? a : b), 0)];
-    }
-    if (typeof v === "string") return [1];
-    if (isChar(v)) return [v.value.length];
-    if (v !== null && typeof v === "object") {
-      const tag = (v as { mtoc2Tag?: string }).mtoc2Tag;
-      const shape = (v as { shape?: number[] }).shape;
-      if (tag === "cell" && Array.isArray(shape)) {
-        if (shape.some(s => s === 0)) return [0];
-        return [shape.reduce((a, b) => (a > b ? a : b), 0)];
-      }
-    }
-    throw new TypeError(
-      `'length' got an unsupported runtime value (typeof = ${typeof v})`
     );
   },
 };

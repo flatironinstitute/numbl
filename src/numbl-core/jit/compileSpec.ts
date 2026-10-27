@@ -1,11 +1,8 @@
 /**
- * JIT entry point for sibling consumers (e.g. numbl's executor
- * registry) that want to compile a single user-function
- * specialization on demand instead of running mtoc2 as a whole-program
- * AOT translator.
+ * JS-JIT entry point for numbl's executor registry: compiles a single
+ * user-function specialization on demand.
  *
- * Bypasses the script-level driver (`translate.ts` / `lowerProject`)
- * and produces an emitted JS module that returns a factory
+ * Produces an emitted JS module that returns a factory
  * `($h) => specFn`. The caller evaluates the source with
  * `new Function(source)()`, invokes the factory once per spec to bind
  * its I/O hooks, then calls `specFn(...args)` per dispatch. Per-call
@@ -116,11 +113,9 @@ export function compileSpec(args: CompileSpecArgs): CompileSpecResult {
     );
     assertNoNonVoidBareExprStmts(spec);
     const prog: IRProgram = {
-      topLevelStmts: [],
       functions: new Map(lowerer.specializations),
     };
     const { source, activatedSnippets } = emitJsProgram(prog, {
-      workspace,
       exposeSpec: spec.cName,
     });
     return {

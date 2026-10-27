@@ -32,13 +32,7 @@
  * `UnsupportedConstruct` with a span.
  */
 
-import type {
-  AbstractSyntaxTree,
-  Expr,
-  LValue,
-  Stmt,
-  Span,
-} from "../parser/index.js";
+import type { Expr, LValue, Stmt, Span } from "../parser/index.js";
 import { BinaryOperation, UnaryOperation } from "../parser/index.js";
 import { offsetToLineCol } from "../parser/sourceLoc.js";
 import {
@@ -80,24 +74,10 @@ import type { ClassRegistration } from "./classDefs.js";
 import type { Workspace } from "../workspace/workspace.js";
 import type { CallSite } from "../numbl/index.js";
 
-/** Hook for the `%!numbl:printtype` directive's compile-time output.
- *  Defaults to `console.error` (so emitted lines go to stderr and
- *  don't mix with the cross-runner's stdout comparison). Tests
- *  replace this with a capturing function. */
-export let printTypeSink: (line: string) => void = line => console.error(line);
-export function setPrintTypeSink(sink: (line: string) => void): void {
-  printTypeSink = sink;
-}
-export function resetPrintTypeSink(): void {
-  printTypeSink = line => console.error(line);
-}
-import {
-  type Assign,
-  type IRExpr,
-  type IRStmt,
-  type IRFunc,
-  type IRProgram,
-} from "./ir.js";
+/** Sink for the `%!numbl:printtype` directive's compile-time output
+ *  (stderr, so it doesn't mix with program stdout). */
+const printTypeSink = (line: string): void => console.error(line);
+import { type Assign, type IRExpr, type IRStmt, type IRFunc } from "./ir.js";
 import { rangeCountFromExactEnds } from "./rangeCount.js";
 import { columnMajorOffsetFromIndices } from "./indexFold.js";
 import {
@@ -156,8 +136,7 @@ export class Lowerer {
   // The members below are formally `package-internal` — used by the
   // extracted helpers in `./lower*.ts` and `./specialize.ts` via the
   // same `this: Lowerer` pattern as `lowerIndexLoad` etc. Treat them
-  // as private to the lowering module; external callers should go
-  // through `lowerProgram` / `lowerExpr`.
+  // as private to the lowering module.
   env: Map<string, EnvEntry> = new Map();
   specializations: Map<string, IRFunc> = new Map();
   /** Stack of contexts for resolving the `end` keyword inside an
@@ -269,20 +248,6 @@ export class Lowerer {
     return this.workspace.requireClass(name);
   }
 
-  lowerProgram(ast: AbstractSyntaxTree): IRProgram {
-    // Build numbl's function index + mtoc2's class registry. The
-    // Workspace has already had every file added; `finalize()` is
-    // idempotent so a double-call from a caller that explicitly
-    // finalized first is harmless.
-    this.workspace.finalize();
-    // Lower top-level statements (Function / ClassDef stmts return
-    // null and are filtered out). The active file's top-level body
-    // is the script entry; sibling-file bodies (workspace functions)
-    // are lowered lazily by `specializeUserFunction` from call sites.
-    const topLevelStmts = this.lowerStmts(ast.body);
-    return { topLevelStmts, functions: this.specializations };
-  }
-
   // ── Statement lowering ────────────────────────────────────────────────
 
   lowerStmts(stmts: Stmt[]): IRStmt[] {
@@ -370,8 +335,8 @@ export class Lowerer {
    *    once per function specialization. No IR node, no codegen
    *    interaction.
    *
-   *  Numbl ignores all three directives, so cross-runner output is
-   *  unaffected. */
+   *  The interpreter ignores all three directives, so program output
+   *  is unaffected. */
   private lowerDirective(
     s: Extract<Stmt, { type: "Directive" }>
   ): IRStmt | null {
@@ -2138,7 +2103,7 @@ export class Lowerer {
 /** Reserved words that are legal numbl identifiers but would collide
  *  with a C or JS keyword on the emit side. mtoc2 maps every user
  *  variable / param name through `cIdentForUserName` at declaration
- *  time so the same `cName` is safe in BOTH the C-AOT and JS-AOT emit
+ *  time so the same `cName` is safe in BOTH the C and JS emit
  *  paths (which share the cName — see `emitJs.ts` vs `emit.ts`). A
  *  variable named `struct` (C keyword) or `in` (JS keyword) becomes
  *  `v_struct` / `v_in` and survives `new Function(source)()` plus the
@@ -2242,8 +2207,7 @@ export function cIdentForUserName(name: string): string {
 }
 
 // Re-export so existing call sites (`lowerMethodCall`,
-// `lowerMultiAssign`, and `lowerProgram` itself) keep working without
-// import-path churn.
+// `lowerMultiAssign`) keep working without import-path churn.
 export { tryExtractDottedName } from "../parser/astUtils.js";
 
 /** If the lowered cond's type carries an exact scalar value, return

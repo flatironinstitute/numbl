@@ -22,11 +22,6 @@ import {
   scalarLogical,
   type Type,
 } from "../../../lowering/types.js";
-import {
-  isTensor,
-  isChar as isCharRV,
-  type RuntimeValue,
-} from "../../../runtime/value.js";
 import type { Builtin } from "../../registry.js";
 
 function staticClassNameOf(t: Type): string | null {
@@ -96,43 +91,5 @@ export const isa: Builtin = {
       }
     }
     return `false`;
-  },
-  call({ args }) {
-    const v = args[0];
-    const nameArg = args[1];
-    let name: string;
-    if (typeof nameArg === "string") name = nameArg;
-    else if (
-      nameArg &&
-      typeof nameArg === "object" &&
-      isCharRV(nameArg as RuntimeValue)
-    ) {
-      name = (nameArg as { value: string }).value;
-    } else {
-      name = String(nameArg);
-    }
-    let valueClass = "unknown";
-    if (typeof v === "number") valueClass = "double";
-    else if (typeof v === "boolean") valueClass = "logical";
-    else if (typeof v === "string") valueClass = "string";
-    else if (v !== null && typeof v === "object") {
-      if (isCharRV(v as RuntimeValue)) valueClass = "char";
-      else if (isTensor(v as RuntimeValue)) {
-        const tag = (v as { mtoc2Tag?: string }).mtoc2Tag;
-        valueClass = tag === "tensor" ? "double" : "double";
-      } else if ((v as { mtoc2Tag?: string }).mtoc2Tag === "cell")
-        valueClass = "cell";
-      else if ((v as { mtoc2Handle?: boolean }).mtoc2Handle === true)
-        valueClass = "function_handle";
-      else if ((v as { mtoc2Class?: string }).mtoc2Class !== undefined)
-        valueClass = (v as { mtoc2Class: string }).mtoc2Class;
-      else valueClass = "struct";
-    }
-    if (valueClass === name) return [true];
-    if (name === "numeric") {
-      if (valueClass === "double") return [true];
-      return [false];
-    }
-    return [false];
   },
 };

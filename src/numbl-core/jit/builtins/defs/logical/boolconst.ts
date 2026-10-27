@@ -78,18 +78,6 @@ function boolBuiltin(name: "true" | "false"): Builtin {
       }
       return shape.emitJs(args);
     },
-    call(args) {
-      // A logical scalar is a JS boolean in the interpreter (see
-      // `inferTypeFromValue`), so the 0-arg form returns true / false
-      // rather than 1 / 0 — keeping `islogical` / `class` honest.
-      if (args.argTypes.length === 0) return [value === 1];
-      if (!shape.call) {
-        throw new TypeError(
-          `internal: '${name}' shape constructor has no call`
-        );
-      }
-      return shape.call(args);
-    },
     // The 0-arg scalar slot is a plain literal, so it can appear inside
     // a fused elementwise expression (e.g. `x & true`).
     elementwise: true,

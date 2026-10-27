@@ -22,16 +22,11 @@
  *   <inlined runtime snippet bodies>
  *   function <user-fn-spec-1>(...) { ... }
  *   function <user-fn-spec-2>(...) { ... }
- *   function run($h) {
- *     globalThis.$write = $h.write;
- *     let v1, v2, ...;          // pre-declared locals
- *     ... top-level stmts ...
- *   }
- *   return run;
+ *   return function ($h) { globalThis.$write = $h.write; ...; return <entry-spec>; };
  *   ```
  *
- * The CLI / engine evals the source via `new Function(source)(...)`
- * which returns `run`, then invokes `run(ctx.helpers)`.
+ * The host evals the source via `new Function(source)()`, then calls
+ * the returned factory with its helper hooks to get the entry spec.
  */
 
 import type {
@@ -49,40 +44,27 @@ import {
   isRowVecTy,
   isScalar,
 } from "../lowering/types.js";
+import { getBuiltin } from "../builtins/index.js";
 import { requireEmitJs } from "../builtins/registry.js";
 import {
-  lookupBuiltin,
   newRuntimeState,
   renderJsRuntimeBodies,
   useRuntimeByName,
   type RuntimeState,
-  type WorkspaceLike,
   type InlineSnippet,
 } from "./runtime.js";
 import { emitTensorConcatJs } from "./emitTensorConcatJs.js";
 
 export interface EmitJsOptions {
-  /** Workspace context. Threaded through `RuntimeState` so emit-time
-   *  builtin lookups consult `.mtoc2.js` user builtins. Optional. */
-  workspace?: WorkspaceLike;
-  /** Include the activated runtime helper bodies inline at the top of
-   *  the emitted module. Default true. When false the placeholder
-   *  comment lands instead — useful for the IDE preview. */
-  includeRuntime?: boolean;
-  /** JIT-mode emit. When set, the cName of a single user-function spec
-   *  to expose: the outer module returns a `($h) => specFn` factory
-   *  instead of the script-style `function run($h)` wrapper. Requires
-   *  `prog.topLevelStmts` to be empty and `prog.functions` to contain
-   *  the named spec (which must be reachable along with any specs it
-   *  transitively calls). Used by the numbl JIT bridge. */
-  exposeSpec?: string;
+  /** cName of the entry spec the module's factory returns.
+   *  `prog.functions` must contain it and every spec it transitively
+   *  calls. */
+  exposeSpec: string;
 }
 
 export interface EmitJsResult {
   /** Full module source — runtime snippets, user-function defs, and
-   *  either `function run($h)` + `return run;` (script mode) or
-   *  `return ($h) => specFn;` (when `opts.exposeSpec` is set). Ready
-   *  for `new Function(...)`. */
+   *  `return ($h) => specFn;`. Ready for `new Function(...)`. */
   source: string;
   /** Names of every runtime snippet activated during emit (debug aid;
    *  also useful to gate dependency wiring in tests). */
@@ -93,81 +75,41 @@ export interface EmitJsResult {
 
 export function emitJsProgram(
   prog: IRProgram,
-  opts: EmitJsOptions = {}
+  opts: EmitJsOptions
 ): EmitJsResult {
-  const state = newRuntimeState(opts.workspace);
-  const includeRuntime = opts.includeRuntime ?? true;
+  const state = newRuntimeState();
 
-  if (opts.exposeSpec !== undefined) {
-    if (prog.topLevelStmts.length > 0) {
-      throw new Error(
-        "emitJsProgram: 'exposeSpec' is incompatible with non-empty 'topLevelStmts'"
-      );
-    }
-    if (!prog.functions.has(opts.exposeSpec)) {
-      throw new Error(
-        `emitJsProgram: 'exposeSpec' references unknown spec '${opts.exposeSpec}'`
-      );
-    }
+  if (!prog.functions.has(opts.exposeSpec)) {
+    throw new Error(
+      `emitJsProgram: 'exposeSpec' references unknown spec '${opts.exposeSpec}'`
+    );
   }
 
-  // Function bodies are emitted first so call sites in `main`
-  // reference already-defined functions. (JS hoisting would make this
-  // unnecessary, but the resulting source stays human-readable.)
   const userParts: string[] = [];
   for (const fn of prog.functions.values()) {
     userParts.push(emitFunction(fn, state));
     userParts.push("");
   }
 
-  // Outer wrapper. Script mode (default) emits `function run($h) { ... top-level ... }`
-  // and `return run;`. JIT mode (`opts.exposeSpec` set) emits a factory that
-  // binds `$h.write` and returns the named spec function directly.
-  //
-  // `$h.write` is the only required hook. Other hooks (`$h.plotDispatch`,
-  // `$h.rand`) surface as globals so emitted code / runtime helper snippets can
-  // call them without threading `$h` through every emit site; helper-side
-  // `typeof === "function"` checks gate behavior when a host omits a hook.
-  const wrapperLines: string[] = [];
-  if (opts.exposeSpec !== undefined) {
-    wrapperLines.push(
-      `return function ($h) { globalThis.$write = $h.write; globalThis.$plotDispatch = $h.plotDispatch; globalThis.$rand = $h.rand; return ${opts.exposeSpec}; };`
-    );
-  } else {
-    wrapperLines.push("function run($h) {");
-    wrapperLines.push("  globalThis.$write = $h.write;");
-    wrapperLines.push("  globalThis.$plotDispatch = $h.plotDispatch;");
-    wrapperLines.push("  globalThis.$rand = $h.rand;");
-    const locals = collectAssignedLocals(prog.topLevelStmts);
-    if (locals.length > 0) {
-      wrapperLines.push(`  let ${locals.join(", ")};`);
-    }
-    const bodyLines = emitBody(prog.topLevelStmts, "  ", state);
-    if (bodyLines.length > 0) wrapperLines.push(bodyLines);
-    wrapperLines.push("}");
-    wrapperLines.push("return run;");
-  }
-
+  // The factory binds `$h.write` and returns the entry spec. Other hooks
+  // (`$h.plotDispatch`, `$h.rand`) surface as globals so emitted code /
+  // runtime helper snippets can call them without threading `$h` through
+  // every emit site; helper-side `typeof === "function"` checks gate
+  // behavior when a host omits a hook.
   const out: string[] = [];
   if (state.active.size > 0) {
-    out.push(
-      includeRuntime ? renderJsRuntimeBodies(state) : runtimePlaceholder(state)
-    );
+    out.push(renderJsRuntimeBodies(state));
     out.push("");
   }
   out.push(...userParts);
-  out.push(...wrapperLines);
+  out.push(
+    `return function ($h) { globalThis.$write = $h.write; globalThis.$plotDispatch = $h.plotDispatch; globalThis.$rand = $h.rand; return ${opts.exposeSpec}; };`
+  );
 
   return {
     source: out.join("\n"),
     activatedSnippets: Array.from(state.active),
   };
-}
-
-function runtimePlaceholder(state: RuntimeState): string {
-  if (state.active.size === 0) return "";
-  const names = Array.from(state.active).join(", ");
-  return `/* runtime helpers omitted (${state.active.size}): ${names} */`;
 }
 
 // ── User function specialization ─────────────────────────────────────────
@@ -239,7 +181,7 @@ function emitBody(
 
 /** Emit a JS RHS expression with deep-clone wrapping when the
  *  expression yields an owned-typed value via an alias path (Var,
- *  MemberLoad, HandleCaptureLoad). Mirrors the c-aot
+ *  MemberLoad, HandleCaptureLoad). Mirrors the C
  *  `emitOwnedRhs` shape — without this, `b = a; b.f = rhs` would
  *  mutate `a` because the JS object reference is shared.
  *  Owned-producing expressions (TensorBuild, StructLit, HandleLit,
@@ -749,7 +691,7 @@ function emitMultiAssignCall(
     slot.binding === null ? discardSlotName(i) : slot.binding.cName
   );
 
-  const b = lookupBuiltin(state, s.name);
+  const b = getBuiltin(s.name);
   if (b !== undefined) {
     const emit = requireEmitJs(b);
     // Builtins control the call shape. For JS we don't pass out-pointers
@@ -784,14 +726,11 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
       // `{re, im}` (matching the `mtoc2_cscalar.js` snippet's helpers).
       // Activate it lazily so the call site can rely on it being
       // available; the actual helper functions get inlined alongside.
-      // (Phase 5 will populate `cscalar.js`.)
       return `{re: 0, im: ${formatJsNumber(e.value)}}`;
 
     case "StringLit": {
-      // Match the interpreter's RuntimeValue conventions so JS-side
-      // builtin call hooks (disp, error, fprintf, …) see the same shape
-      // regardless of which backend executes them: `String` → bare JS
-      // string; `Char` → `{mtoc2Tag:"char", value:"..."}` wrapper.
+      // JS runtime value conventions: `String` → bare JS string;
+      // `Char` → `{mtoc2Tag:"char", value:"..."}` wrapper.
       const lit = JSON.stringify(e.value);
       if (e.ty.kind === "Char") {
         return `({mtoc2Tag: "char", value: ${lit}})`;
@@ -803,7 +742,7 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
       return e.cName;
 
     case "Binary": {
-      const b = lookupBuiltin(state, e.builtin);
+      const b = getBuiltin(e.builtin);
       if (!b) {
         throw new Error(`emitJs: builtin '${e.builtin}' not found`);
       }
@@ -816,7 +755,7 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
     }
 
     case "Unary": {
-      const b = lookupBuiltin(state, e.builtin);
+      const b = getBuiltin(e.builtin);
       if (!b) {
         throw new Error(`emitJs: builtin '${e.builtin}' not found`);
       }
@@ -829,7 +768,7 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
     }
 
     case "Call": {
-      const b = lookupBuiltin(state, e.name);
+      const b = getBuiltin(e.name);
       if (b !== undefined) {
         return requireEmitJs(b)({
           argsJs: e.args.map(a => emitExpr(a, state)),
@@ -949,7 +888,7 @@ function emitExpr(e: IRExpr, state: RuntimeState): string {
     case "CellLit": {
       // `{a, b, c}` → fresh `mtoc2_cell_make`-built cell. Slot values
       // are owned-consumed; route owned aliases through deep_clone so
-      // the cell owns its own copy (mirrors the c-aot consume rule).
+      // the cell owns its own copy (mirrors the C consume rule).
       useRuntimeByName(state, "mtoc2_cell_make");
       const slots = e.elements
         .map(el =>
