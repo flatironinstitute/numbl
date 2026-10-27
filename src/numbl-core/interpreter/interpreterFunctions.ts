@@ -49,7 +49,45 @@ export function callFunction(
   nargout: number
 ): unknown {
   this.rt.checkCancel();
-  // 0. Interpreter special builtins (need interpreter context)
+
+  // 1. Nested functions (share parent scope)
+  const nested = this.env.getNestedFunction(name);
+  if (nested) {
+    return this.callNestedFunction(nested.fn, nested.env, args, nargout);
+  }
+
+  // 2. Resolve using function index
+  const argTypes = args.map(a =>
+    getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
+  );
+  const callSite: CallSite = {
+    file: this.currentFile,
+    ...(this.currentClassName ? { className: this.currentClassName } : {}),
+    ...(this.currentMethodName ? { methodName: this.currentMethodName } : {}),
+  };
+  const target = resolveFunction(name, argTypes, callSite, this.functionIndex);
+  // A name that resolves to a builtin (not shadowed by a local, workspace or
+  // class function) may be an interpreter special.
+  if (!target || target.kind === "builtin") {
+    const result = callInterpreterSpecial.call(this, name, args, nargout);
+    if (result !== FALL_THROUGH) return result;
+  }
+  if (target) {
+    return this.interpretTarget(target, args, nargout);
+  }
+
+  throw new RuntimeError(`Undefined function or variable '${name}'`);
+}
+
+/** Run the interpreter special builtin `name` (one that needs the caller's
+ *  scope, such as eval or exist). Returns FALL_THROUGH if there is none or it
+ *  declines, in which case the registered builtin handles the call. */
+function callInterpreterSpecial(
+  this: Interpreter,
+  name: string,
+  args: unknown[],
+  nargout: number
+): unknown {
   const specialHandler = getInterpreterSpecialBuiltin(name);
   if (specialHandler) {
     const ctx: InterpreterContext = {
@@ -101,28 +139,7 @@ export function callFunction(
       return result;
     }
   }
-
-  // 1. Check nested functions (share parent scope)
-  const nested = this.env.getNestedFunction(name);
-  if (nested) {
-    return this.callNestedFunction(nested.fn, nested.env, args, nargout);
-  }
-
-  // 2. Resolve using function index
-  const argTypes = args.map(a =>
-    getItemTypeFromRuntimeValue(ensureRuntimeValue(a))
-  );
-  const callSite: CallSite = {
-    file: this.currentFile,
-    ...(this.currentClassName ? { className: this.currentClassName } : {}),
-    ...(this.currentMethodName ? { methodName: this.currentMethodName } : {}),
-  };
-  const target = resolveFunction(name, argTypes, callSite, this.functionIndex);
-  if (target) {
-    return this.interpretTarget(target, args, nargout);
-  }
-
-  throw new RuntimeError(`Undefined function or variable '${name}'`);
+  return FALL_THROUGH;
 }
 
 // ── nargin of a function handle ──────────────────────────────────────────
