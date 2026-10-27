@@ -25,7 +25,7 @@ These are the canonical place to encode MATLAB compatibility behavior:
 
 Integration scripts are wrapped by a Vitest spec so they participate in the same test run and coverage report as the unit tests.
 
-`npm run test:scripts` runs the same scripts through the CLI at `--opt 0` and `--opt 1`; the Vitest wrapper runs them once on the default path.
+`npm run test:scripts` runs the same scripts through the CLI at `--opt 0` and `--opt 1`; the Vitest wrapper runs them once on the default path. `npm run test:scripts:c` runs them at `--opt 2` (needs a C compiler), which is also what enforces the `%!numbl:assert_jit c` directives.
 
 ## JIT parity
 
@@ -33,7 +33,7 @@ Integration scripts are wrapped by a Vitest spec so they participate in the same
 
 ## Continuous integration
 
-The `test` job runs Vitest; `test-browser` runs Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler).
+The `test` job runs Vitest; `test-browser` runs Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, `npm run test:scripts:c`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler).
 
 ## Running tests in both environments
 
