@@ -72,11 +72,8 @@ import { uploadFigureForViewer } from "../graphics/figureUpload.js";
 import { ReplView } from "./ReplView";
 import { TreeViewer } from "./TreeViewer";
 import { MarkdownView } from "./MarkdownView";
-import {
-  fileText,
-  isBinaryData,
-  type WorkspaceFile,
-} from "../hooks/useProjectFiles";
+import { fileText, isBinaryData } from "../hooks/useProjectFiles";
+import type { FileEntry } from "../hooks/projectFilesState";
 import {
   executeRemoteStream,
   getRemoteServiceUrl,
@@ -99,7 +96,7 @@ import { useSystemFiles } from "../hooks/useSystemFiles";
 import { useMipCorePackage } from "../hooks/useMipCorePackage";
 
 export interface IDEWorkspaceProps {
-  files: WorkspaceFile[];
+  files: FileEntry[];
   activeFileId: string;
   setActiveFileId: (id: string) => void;
   updateFileContent: (content: string) => void;
@@ -127,7 +124,7 @@ export interface IDEWorkspaceProps {
    *  the figure panel below it starts with more room. */
   maxInitialOutputPanelHeight?: number;
   mergeVfsChanges?: (result: {
-    addedFiles: WorkspaceFile[];
+    addedFiles: FileEntry[];
     modifiedFiles: { path: string; data: Uint8Array }[];
     deletedPaths: string[];
   }) => void;
@@ -506,7 +503,7 @@ export function IDEWorkspace({
 
   /** Build VFS + workspace text files for sending to workers. Loads all content from DB. */
   const buildWorkerFiles = useCallback(
-    async (wsFiles: WorkspaceFile[], excludeFileId?: string) => {
+    async (wsFiles: FileEntry[], excludeFileId?: string) => {
       const [projectContents, systemVfs, systemWs] = await Promise.all([
         loadAllContents(),
         getSystemVfsFiles(),

@@ -112,12 +112,6 @@ export async function getProjectFiles(
   return await db.files.where("projectName").equals(projectName).toArray();
 }
 
-export async function getFile(
-  fileId: string
-): Promise<ProjectFile | undefined> {
-  return await db.files.get(fileId);
-}
-
 // File content operations
 
 export async function getFileContent(fileId: string): Promise<Uint8Array> {

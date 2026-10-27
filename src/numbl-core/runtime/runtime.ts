@@ -45,6 +45,7 @@ import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { type ItemType } from "../lowering/itemTypes.js";
 import { BinaryOperation } from "../lowering/index.js";
 import { getConstant } from "../helpers/constants.js";
+import { globToRegExp } from "../helpers/glob.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import type { ExecOptions } from "../executeCode.js";
@@ -704,13 +705,7 @@ export class Runtime {
         const regexps = strArgs.slice(1).map(s => new RegExp(s));
         names = names.filter(name => regexps.some(re => re.test(name)));
       } else {
-        const patterns = strArgs.map(s => {
-          const escaped = s
-            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-            .replace(/\*/g, ".*")
-            .replace(/\?/g, ".");
-          return new RegExp(`^${escaped}$`);
-        });
+        const patterns = strArgs.map(s => globToRegExp(s));
         names = names.filter(name => patterns.some(re => re.test(name)));
       }
     }

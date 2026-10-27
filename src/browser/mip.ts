@@ -1,9 +1,8 @@
 /**
- * mip bootstrap for embedded sessions: fetch the mip core package from its
- * GitHub release and lay it out at the same system prefix the numbl IDE
- * uses, so `mip load --install <pkg>` works inside the session script.
- * (Same semantics as src/hooks/fetchMipCoreFiles.ts, which serves the IDE's
- * IndexedDB-backed system directory; this one is host-framework-free.)
+ * mip bootstrap for browser sessions: fetch the mip core package from its
+ * GitHub release and lay it out under the VFS system prefix, so
+ * `mip load --install <pkg>` works. Used by the IDE (which persists the
+ * files in IndexedDB) and by embedded sessions.
  */
 import { unzipToFiles } from "../vfs/unzipToFiles.js";
 
@@ -18,10 +17,13 @@ export const MIP_SEARCH_PATH = MIP_SYSTEM_PREFIX + "mip";
 /** Present iff mip core is installed in the VFS. */
 export const MIP_MARKER_PATH = MIP_SYSTEM_PREFIX + "mip/mip.m";
 
-function proxiedUrl(url: string): string {
-  // GitHub release assets lack CORS headers — route through the proxy. The
-  // cachebust matters: the mip-numbl release tag is mutable, and without it
-  // the browser/proxy happily serve a stale .mhl for hours.
+/**
+ * Route GitHub release-asset URLs through the CORS proxy (GitHub sends no
+ * CORS headers on them); other URLs pass through. The cachebust matters:
+ * release tags such as mip-numbl are mutable, and without it the browser or
+ * proxy serves a stale .mhl for hours.
+ */
+export function corsProxiedUrl(url: string): string {
   if (/^https:\/\/github\.com\/.+\/releases\/download\/.+/.test(url)) {
     let proxied = url.replace(
       "https://github.com/",
@@ -40,7 +42,7 @@ export interface MipCoreFile {
 }
 
 export async function fetchMipCoreFiles(): Promise<MipCoreFile[]> {
-  const resp = await fetch(proxiedUrl(MHL_URL));
+  const resp = await fetch(corsProxiedUrl(MHL_URL));
   if (!resp.ok) throw new Error(`HTTP ${resp.status} fetching mip core`);
   const extracted = unzipToFiles(new Uint8Array(await resp.arrayBuffer()));
   return extracted.map(f => ({

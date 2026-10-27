@@ -1,5 +1,6 @@
-import pako from "pako";
-import { fileText, type WorkspaceFile } from "../hooks/useProjectFiles";
+import { unzlibSync, zlibSync } from "fflate";
+import { fileText } from "../hooks/useProjectFiles";
+import type { FileEntry } from "../hooks/projectFilesState";
 
 export interface ShareData {
   files: { name: string; content: string }[];
@@ -9,7 +10,7 @@ export interface ShareData {
 const textEncoder = new TextEncoder();
 
 export function encodeShareData(
-  files: WorkspaceFile[],
+  files: FileEntry[],
   contentMap: Map<string, Uint8Array>,
   activeFileId: string
 ): string {
@@ -23,7 +24,7 @@ export function encodeShareData(
   };
 
   const json = JSON.stringify(data);
-  const compressed = pako.deflate(textEncoder.encode(json));
+  const compressed = zlibSync(textEncoder.encode(json));
 
   // Base64url encoding (no padding, URL-safe)
   let base64 = btoa(String.fromCharCode(...compressed));
@@ -39,7 +40,7 @@ export function makeShareHash(name: string, code: string): string {
     activeFileName: `${name}.m`,
   };
   const json = JSON.stringify(data);
-  const compressed = pako.deflate(textEncoder.encode(json));
+  const compressed = zlibSync(textEncoder.encode(json));
   let base64 = btoa(String.fromCharCode(...compressed));
   base64 = base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   return base64;
@@ -57,19 +58,19 @@ export function decodeShareData(encoded: string): ShareData {
     bytes[i] = binary.charCodeAt(i);
   }
 
-  const decompressed = pako.inflate(bytes);
+  const decompressed = unzlibSync(bytes);
   const json = new TextDecoder().decode(decompressed);
   return JSON.parse(json);
 }
 
 export interface ShareFilesResult {
-  files: WorkspaceFile[];
+  files: FileEntry[];
   contentMap: Map<string, Uint8Array>;
   activeFileId: string;
 }
 
 export function shareDataToWorkspaceFiles(data: ShareData): ShareFilesResult {
-  const files: WorkspaceFile[] = [];
+  const files: FileEntry[] = [];
   const contentMap = new Map<string, Uint8Array>();
 
   for (const f of data.files) {

@@ -8,13 +8,17 @@ import {
   saveFileData,
   SYSTEM_PROJECT_NAME,
 } from "../db/operations";
-import type { WorkspaceFile } from "./useProjectFiles";
-import { generateDuplicateName } from "./useProjectFiles";
+import {
+  generateDuplicateName,
+  generateUniqueFolderName,
+  generateUniqueName,
+  type FileEntry,
+} from "./projectFilesState";
 
 const SYSTEM_PREFIX = "system/";
 
 export function useSystemFiles() {
-  const [systemFiles, setSystemFiles] = useState<WorkspaceFile[]>([]);
+  const [systemFiles, setSystemFiles] = useState<FileEntry[]>([]);
   const contentCacheRef = useRef(new Map<string, Uint8Array>());
 
   const loadSystemFiles = useCallback(async () => {
@@ -327,42 +331,4 @@ export function useSystemFiles() {
     getSystemWorkspaceFiles,
     systemContentCache: contentCacheRef,
   };
-}
-
-function generateUniqueName(
-  files: WorkspaceFile[],
-  folderPath?: string
-): string {
-  const existing = new Set(files.map(f => f.name));
-  for (let i = 1; ; i++) {
-    const baseName = `untitled${i === 1 ? "" : i}.m`;
-    const fullName = folderPath ? `${folderPath}/${baseName}` : baseName;
-    if (!existing.has(fullName)) return baseName;
-  }
-}
-
-function generateUniqueFolderName(
-  files: WorkspaceFile[],
-  parentPath?: string
-): string {
-  const existingFolders = new Set<string>();
-  for (const file of files) {
-    if (parentPath) {
-      if (file.name.startsWith(parentPath + "/")) {
-        const relativeParts = file.name.slice(parentPath.length + 1).split("/");
-        if (relativeParts.length > 1) {
-          existingFolders.add(relativeParts[0]);
-        }
-      }
-    } else {
-      const parts = file.name.split("/");
-      if (parts.length > 1) {
-        existingFolders.add(parts[0]);
-      }
-    }
-  }
-  for (let i = 1; ; i++) {
-    const name = `folder${i === 1 ? "" : i}`;
-    if (!existingFolders.has(name)) return name;
-  }
 }

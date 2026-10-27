@@ -11,6 +11,8 @@ import type {
 } from "../numbl-core/fileIOAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";
 import { VirtualFileSystem, type VfsChanges } from "./VirtualFileSystem.js";
+import { globToRegExp } from "../numbl-core/helpers/glob.js";
+import { corsProxiedUrl } from "../browser/mip.js";
 
 interface VFSOpenFile {
   path: string;
@@ -268,14 +270,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
       const lastSlash = norm.lastIndexOf("/");
       const dir = norm.slice(0, lastSlash);
       const globPat = norm.slice(lastSlash + 1);
-      const re = new RegExp(
-        "^" +
-          globPat
-            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-            .replace(/\*/g, ".*")
-            .replace(/\?/g, ".") +
-          "$"
-      );
+      const re = globToRegExp(globPat);
       const entries = this.vfs.listDir(dir);
       for (const entry of entries) {
         if (!entry.isdir && re.test(entry.name)) {
@@ -342,7 +337,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
   }
 
   websave(url: string, filename: string, options?: WebOptions): void {
-    url = filterUrl(url);
+    url = corsProxiedUrl(url);
     const method = options?.requestMethod?.toUpperCase() || "GET";
     const xhr = new XMLHttpRequest();
     xhr.open(method, url, false);
@@ -366,7 +361,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
   }
 
   webread(url: string, options?: WebOptions): string {
-    url = filterUrl(url);
+    url = corsProxiedUrl(url);
     const method = options?.requestMethod?.toUpperCase() || "GET";
     const xhr = new XMLHttpRequest();
     xhr.open(method, url, false);
@@ -388,7 +383,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
   }
 
   unzip(zipfilename: string, outputfolder: string): string[] {
-    zipfilename = filterUrl(zipfilename);
+    zipfilename = corsProxiedUrl(zipfilename);
 
     const zipData = this.vfs.readFile(zipfilename);
     this.vfs.mkdir(outputfolder);
@@ -455,14 +450,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
         // Simple glob in the final path component
         const lastSlash = abs.lastIndexOf("/");
         const dir = lastSlash > 0 ? abs.slice(0, lastSlash) : "/";
-        const re = new RegExp(
-          "^" +
-            last
-              .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-              .replace(/\*/g, ".*")
-              .replace(/\?/g, ".") +
-            "$"
-        );
+        const re = globToRegExp(last);
         if (this.vfs.exists(dir) !== "dir") continue;
         for (const entry of this.vfs.listDir(dir)) {
           if (entry.name === "." || entry.name === "..") continue;
@@ -572,14 +560,7 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     const lastSlash = norm.lastIndexOf("/");
     const dir = lastSlash >= 0 ? norm.slice(0, lastSlash) : "/";
     const globPat = lastSlash >= 0 ? norm.slice(lastSlash + 1) : norm;
-    const re = new RegExp(
-      "^" +
-        globPat
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*/g, ".*")
-          .replace(/\?/g, ".") +
-        "$"
-    );
+    const re = globToRegExp(globPat);
     const entries = this.vfs.listDir(dir);
     return entries.filter(
       e => e.name !== "." && e.name !== ".." && re.test(e.name)
@@ -605,23 +586,8 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     const absBase = this.vfs.normalizePath(baseDir);
     if (this.vfs.exists(absBase) !== "dir") return [];
 
-    // Build a regex from the suffix: `**/` matches zero or more directory
-    // levels, `**` matches anything, `*` / `?` match within one segment.
     const suffix = norm.slice(idx);
-    const DIRS = "\u0000"; // placeholder for `**/` (zero or more dir levels)
-    const ANY = "\u0001"; // placeholder for a bare `**`
-    const re = new RegExp(
-      "^" +
-        suffix
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*\*\//g, DIRS)
-          .replace(/\*\*/g, ANY)
-          .replace(/\*/g, "[^/]*")
-          .replace(/\?/g, "[^/]")
-          .replace(new RegExp(DIRS, "g"), "(?:.*/)?")
-          .replace(new RegExp(ANY, "g"), ".*") +
-        "$"
-    );
+    const re = globToRegExp(suffix, { paths: true });
 
     const results: {
       name: string;
@@ -644,22 +610,4 @@ export class BrowserFileIOAdapter implements FileIOAdapter {
     walkDir(absBase, "");
     return results;
   }
-}
-
-function filterUrl(url: string): string {
-  // If the url is of the form
-  // https://github.com/*/releases/download/*
-  // then we need to route through a CORS proxy since GitHub doesn't send
-  // CORS headers on release assets. Append a per-call cachebust so the
-  // browser / proxy don't serve a stale .mhl when a release tag is
-  // republished (mip-numbl is a moving tag — same URL, new content).
-  if (/^https:\/\/github\.com\/.+\/releases\/download\/.+/.test(url)) {
-    url = url.replace(
-      "https://github.com/",
-      "https://mip-cors-proxy.figurl.workers.dev/gh/"
-    );
-    url += url.includes("?") ? "&" : "?";
-    url += "t=" + Date.now();
-  }
-  return url;
 }

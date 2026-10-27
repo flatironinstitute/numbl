@@ -27,6 +27,7 @@ import { homedir, tmpdir } from "os";
 import { join, resolve, relative, dirname, basename } from "path";
 import type { FileIOAdapter, WebOptions } from "./numbl-core/fileIOAdapter.js";
 import { scanMFiles } from "./cli-scan.js";
+import { globToRegExp } from "./numbl-core/helpers/glob.js";
 
 function expandTilde(filepath: string): string {
   if (filepath.startsWith("~/")) {
@@ -509,15 +510,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       const lastSep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
       const dir = lastSep >= 0 ? p.slice(0, lastSep) : ".";
       const globPat = lastSep >= 0 ? p.slice(lastSep + 1) : p;
-      // Convert glob to regex: * -> .*, ? -> .
-      const re = new RegExp(
-        "^" +
-          globPat
-            .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-            .replace(/\*/g, ".*")
-            .replace(/\?/g, ".") +
-          "$"
-      );
+      const re = globToRegExp(globPat);
       let entries: string[];
       try {
         entries = readdirSync(dir);
@@ -615,14 +608,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       if (last.includes("*") || last.includes("?")) {
         // Simple glob in the final path component
         const dir = dirname(abs);
-        const re = new RegExp(
-          "^" +
-            last
-              .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-              .replace(/\*/g, ".*")
-              .replace(/\?/g, ".") +
-            "$"
-        );
+        const re = globToRegExp(last);
         let dirEntries: string[];
         try {
           dirEntries = readdirSync(dir);
@@ -747,14 +733,7 @@ export class NodeFileIOAdapter implements FileIOAdapter {
     );
     const dir = lastSep >= 0 ? pattern.slice(0, lastSep) : ".";
     const globPat = lastSep >= 0 ? pattern.slice(lastSep + 1) : pattern;
-    const re = new RegExp(
-      "^" +
-        globPat
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*/g, ".*")
-          .replace(/\?/g, ".") +
-        "$"
-    );
+    const re = globToRegExp(globPat);
     const absDir = resolve(dir);
     const results: {
       name: string;
@@ -813,23 +792,8 @@ export class NodeFileIOAdapter implements FileIOAdapter {
       return []; // base does not exist — no matches
     }
 
-    // Build a regex from the suffix: `**/` matches zero or more directory
-    // levels, `**` matches anything, `*` / `?` match within one segment.
     const suffix = norm.slice(idx);
-    const DIRS = "\u0000"; // placeholder for `**/` (zero or more dir levels)
-    const ANY = "\u0001"; // placeholder for a bare `**`
-    const re = new RegExp(
-      "^" +
-        suffix
-          .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-          .replace(/\*\*\//g, DIRS)
-          .replace(/\*\*/g, ANY)
-          .replace(/\*/g, "[^/]*")
-          .replace(/\?/g, "[^/]")
-          .replace(new RegExp(DIRS, "g"), "(?:.*/)?")
-          .replace(new RegExp(ANY, "g"), ".*") +
-        "$"
-    );
+    const re = globToRegExp(suffix, { paths: true });
 
     const results: {
       name: string;

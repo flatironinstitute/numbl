@@ -17,6 +17,7 @@ import { basename, join, relative, resolve, sep } from "path";
 import { createHash } from "crypto";
 import { zipSync } from "fflate";
 import { parseCommandArgs } from "./cli-args.js";
+import { globToRegExp } from "./numbl-core/helpers/glob.js";
 
 const SITE_DEFAULT_IGNORE_DIRS = new Set([".git", ".github", "node_modules"]);
 const SITE_MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -38,15 +39,6 @@ function readNumblIgnore(projectDir: string): string[] {
     .filter(l => l && !l.startsWith("#"));
 }
 
-/** Compile a gitignore-ish glob (`*` = within a segment, `**` = any) to regex. */
-function globToRegExp(glob: string): RegExp {
-  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const expanded = escaped.replace(/\*\*|\*/g, m =>
-    m === "**" ? ".*" : "[^/]*"
-  );
-  return new RegExp("^" + expanded + "$");
-}
-
 /** Walk a project dir collecting files to bundle, applying ignore rules. */
 function collectSiteFiles(
   projectDir: string,
@@ -62,7 +54,7 @@ function collectSiteFiles(
       // Exact path or directory-prefix match.
       if (rel === norm || rel.startsWith(norm + "/")) return true;
       if (pat.includes("*")) {
-        const re = globToRegExp(norm);
+        const re = globToRegExp(norm, { paths: true });
         if (re.test(rel) || re.test(base)) return true;
       } else if (base === norm) {
         return true;

@@ -11,24 +11,20 @@ import InsertDriveFileIcon from "@mui/icons-material/InsertDriveFile";
 import UploadFileIcon from "@mui/icons-material/UploadFile";
 import { Box, IconButton, Menu, MenuItem, Typography } from "@mui/material";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { FileEntry } from "../hooks/projectFilesState";
 
 // --- Types ---
-
-export interface WorkspaceFile {
-  id: string;
-  name: string; // may include '/' for folder paths, e.g. "src/utils/helper.m"
-}
 
 interface TreeNode {
   name: string; // segment name (e.g. "src" or "helper.m")
   path: string; // full path (e.g. "src/utils/helper.m")
   isFolder: boolean;
   children: TreeNode[];
-  file?: WorkspaceFile; // only for leaf files
+  file?: FileEntry; // only for leaf files
 }
 
 interface FileBrowserProps {
-  files: WorkspaceFile[];
+  files: FileEntry[];
   activeFileId: string;
   onSelectFile: (fileId: string) => void;
   onAddFile: (folderPath?: string) => void;
@@ -49,7 +45,7 @@ interface FileBrowserProps {
 
 // --- Tree building ---
 
-function buildTree(files: WorkspaceFile[]): TreeNode[] {
+function buildTree(files: FileEntry[]): TreeNode[] {
   const root: TreeNode[] = [];
 
   for (const file of files) {
