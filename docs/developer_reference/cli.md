@@ -46,6 +46,6 @@ The CLI provides:
 
 ## REPL specifics
 
-The REPL persists variables across inputs by re-invoking `executeCode` for each line and threading a `variableValues` record (`Record<string, RuntimeValue>`) in and out — each call builds a fresh `Environment` seeded from that record, rather than holding one long-lived `Environment` object. It also maintains plot hold state so a sequence of plot commands composes as expected. Errors do not tear down the session; they are formatted by the diagnostics layer and the prompt returns.
+The REPL persists variables across inputs by re-invoking `executeCode` for each line and threading a `variableValues` record (`Record<string, RuntimeValue>`) in and out — each call builds a fresh `Environment` seeded from that record, rather than holding one long-lived `Environment` object. The threading is done by `ExecSession` (`src/numbl-core/execSession.ts`), which also carries plot hold state, figure handles, search paths changed by `addpath`/`rmpath`, the implicit cwd and the live uihtml session; the IDE worker (`src/numbl-worker.ts`) and the `numbl/browser` session worker use the same class. Errors do not tear down the session; they are formatted by the diagnostics layer, the state is left as it was, and the prompt returns.
 
 See `numbl --help` for the current, canonical option list; this file describes roles, not the exact option set.

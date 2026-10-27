@@ -10,10 +10,9 @@ import {
 import { join } from "path";
 import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
-import type { RuntimeValue } from "./numbl-core/runtime/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
 import type { PlotInstruction } from "./graphics/types.js";
-import { executeCode, type FigureHandles } from "./numbl-core/executeCode.js";
+import { ExecSession } from "./numbl-core/execSession.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
 
@@ -71,12 +70,11 @@ export async function runRepl(
   nativeBridge?: NativeBridge,
   optimization?: import("./numbl-core/executors/plugins.js").OptLevel
 ): Promise<void> {
-  let variableValues: Record<string, RuntimeValue> = {};
-  let holdState = false;
-  let figureHandles: FigureHandles = { current: 0, max: 0 };
-  let implicitCwdPath: string | null | undefined;
-  const workspaceFiles = [...initialWorkspaceFiles];
-  const searchPaths = [...(initialSearchPaths ?? [])];
+  const session = new ExecSession({
+    workspaceFiles: [...initialWorkspaceFiles],
+    searchPaths: [...(initialSearchPaths ?? [])],
+    nativeBridge,
+  });
   const fileIO = new NodeFileIOAdapter();
   const system = new NodeSystemAdapter();
 
@@ -102,6 +100,27 @@ export async function runRepl(
     }
   };
 
+  /** Execute one REPL input; errors are reported and leave the state as is. */
+  const runCode = (code: string) => {
+    try {
+      const result = session.execute(code, {
+        displayResults: true,
+        onOutput: (text: string) => process.stdout.write(text),
+        onDrawnow,
+        onInput,
+        optimization,
+        fileIO,
+        system,
+      });
+      if (result.plotInstructions.length > 0 && onDrawnow) {
+        onDrawnow(result.plotInstructions);
+      }
+    } catch (error) {
+      const diags = diagnoseErrors(error, code, "repl", session.workspaceFiles);
+      console.error(formatDiagnostics(diags));
+    }
+  };
+
   console.log(
     "numbl REPL — type 'exit' or press Ctrl+D to quit, Alt+Enter for new line"
   );
@@ -121,46 +140,7 @@ export async function runRepl(
         rl.prompt();
         continue;
       }
-      try {
-        const result = executeCode(
-          trimmed,
-          {
-            displayResults: true,
-            onOutput: (text: string) => process.stdout.write(text),
-            onDrawnow,
-            onInput,
-            initialVariableValues: variableValues,
-            initialHoldState: holdState,
-            initialFigureHandles: figureHandles,
-            optimization,
-            fileIO,
-            system,
-            implicitCwdPath,
-          },
-          workspaceFiles,
-          "repl",
-          searchPaths,
-          nativeBridge
-        );
-        variableValues = result.variableValues;
-        holdState = result.holdState;
-        figureHandles = result.figureHandles;
-        if (result.searchPaths) {
-          searchPaths.length = 0;
-          searchPaths.push(...result.searchPaths);
-          workspaceFiles.length = 0;
-          workspaceFiles.push(...(result.workspaceFiles ?? []));
-        }
-        if (result.implicitCwdPath !== undefined) {
-          implicitCwdPath = result.implicitCwdPath;
-        }
-        if (result.plotInstructions.length > 0 && onDrawnow) {
-          onDrawnow(result.plotInstructions);
-        }
-      } catch (error) {
-        const diags = diagnoseErrors(error, trimmed, "repl", workspaceFiles);
-        console.error(formatDiagnostics(diags));
-      }
+      runCode(trimmed);
       rl.prompt();
     }
     console.log("");
@@ -261,46 +241,7 @@ export async function runRepl(
     busy = true;
     stdin.setRawMode(false); // normal mode so \n → \r\n in output
     stdin.pause(); // stop stream so readSync works for input()
-    try {
-      const result = executeCode(
-        code,
-        {
-          displayResults: true,
-          onOutput: (text: string) => stdout.write(text),
-          onDrawnow,
-          onInput,
-          initialVariableValues: variableValues,
-          initialHoldState: holdState,
-          initialFigureHandles: figureHandles,
-          optimization,
-          fileIO,
-          system,
-          implicitCwdPath,
-        },
-        workspaceFiles,
-        "repl",
-        searchPaths,
-        nativeBridge
-      );
-      variableValues = result.variableValues;
-      holdState = result.holdState;
-      figureHandles = result.figureHandles;
-      if (result.searchPaths) {
-        searchPaths.length = 0;
-        searchPaths.push(...result.searchPaths);
-        workspaceFiles.length = 0;
-        workspaceFiles.push(...(result.workspaceFiles ?? []));
-      }
-      if (result.implicitCwdPath !== undefined) {
-        implicitCwdPath = result.implicitCwdPath;
-      }
-      if (result.plotInstructions.length > 0 && onDrawnow) {
-        onDrawnow(result.plotInstructions);
-      }
-    } catch (error) {
-      const diags = diagnoseErrors(error, code, "repl", workspaceFiles);
-      console.error(formatDiagnostics(diags));
-    }
+    runCode(code);
     stdin.resume(); // resume stream for REPL input
     stdin.setRawMode(true); // back to raw mode
     busy = false;

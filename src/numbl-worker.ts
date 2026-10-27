@@ -24,7 +24,8 @@
  *   Worker -> Main:  { type: "cleared" }
  */
 
-import { executeCode, type FigureHandles } from "./numbl-core/executeCode.js";
+import { executeCode } from "./numbl-core/executeCode.js";
+import { ExecSession } from "./numbl-core/execSession.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { CancellationError } from "./numbl-core/runtime/index.js";
 import type { RuntimeValue } from "./numbl-core/runtime/index.js";
@@ -59,15 +60,14 @@ const wasmBridgeCache = new IdbWasmCache();
 
 // ── Persistent state (used by REPL execute and persistent script runs) ──
 
-let variableValues: Record<string, RuntimeValue> = {};
-let holdState = false;
-// Figure handles after the last run or REPL command. The IDE clears its
-// figures at the start of each script run, so runs start from none; REPL
-// commands continue from here, so a bare `figure` opens a new figure.
-let figureHandles: FigureHandles = { current: 0, max: 0 };
-let persistentWorkspaceFiles: WorkspaceFile[] = [];
-let persistentSearchPaths: string[] | undefined;
-let implicitCwdPath: string | null | undefined;
+const MIP_SEARCH_PATH = "/system/mip/packages/gh/mip-org/core/mip/mip";
+
+// Workspace state carried across REPL commands and persistent runs. Its figure
+// handles are updated after every run too: the IDE clears its figures at the
+// start of each script run, so runs start from none, while REPL commands
+// continue from here, so a bare `figure` opens a new figure.
+const session = new ExecSession();
+session.extraSearchPaths = [MIP_SEARCH_PATH];
 let optimizationLevel: import("./numbl-core/executors/plugins.js").OptLevel =
   "1";
 let vfs: VirtualFileSystem | null = null;
@@ -75,19 +75,10 @@ let inputSAB: SharedArrayBuffer | null = null;
 const systemAdapter = new BrowserSystemAdapter();
 
 // ── uihtml reverse channel (HTML → MATLAB) ──────────────────────────────
-// When a run registers uihtml callbacks, we keep its session (and the live
-// interpreter behind it) so iframe events can re-enter and fire the callbacks.
-// A new run/execute or clear disposes it first (one armed runtime at a time).
-let liveUihtmlSession:
-  | import("./numbl-core/executeCode.js").UihtmlSession
-  | null = null;
-
-function disposeUihtmlSession(): void {
-  if (liveUihtmlSession) {
-    liveUihtmlSession.dispose();
-    liveUihtmlSession = null;
-  }
-}
+// When a run registers uihtml callbacks, the session keeps its UihtmlSession
+// (and the live interpreter behind it) so iframe events can re-enter and fire
+// the callbacks. A new run/execute or clear disposes it first (one armed
+// runtime at a time).
 
 /** ExecOptions hook: forward a `sendEventToHTMLSource` call to the host, which
  *  relays it into the target iframe. */
@@ -134,10 +125,7 @@ self.onmessage = (e: MessageEvent) => {
   // ── Configuration messages ──────────────────────────────────────────
 
   if (type === "clear") {
-    disposeUihtmlSession();
-    variableValues = {};
-    holdState = false;
-    figureHandles = { current: 0, max: 0 };
+    session.clearWorkspace();
     vfs = null;
     self.postMessage({ type: "cleared" });
     return;
@@ -145,6 +133,7 @@ self.onmessage = (e: MessageEvent) => {
 
   // ── uihtml reverse channel: an iframe event re-enters the live runtime ──
   if (type === "html_event") {
+    const liveUihtmlSession = session.uihtmlSession;
     if (!liveUihtmlSession) return;
     const { compId, kind, name, data } = e.data;
     const eventType =
@@ -180,9 +169,9 @@ self.onmessage = (e: MessageEvent) => {
   }
 
   if (type === "update_workspace") {
-    persistentWorkspaceFiles = e.data.workspaceFiles || [];
+    session.workspaceFiles = e.data.workspaceFiles || [];
     if (e.data.searchPaths !== undefined) {
-      persistentSearchPaths = e.data.searchPaths;
+      session.searchPaths = e.data.searchPaths;
     }
     if (e.data.vfsFiles) {
       vfs = new VirtualFileSystem();
@@ -214,7 +203,7 @@ self.onmessage = (e: MessageEvent) => {
     } = e.data;
 
     // A new run supersedes any armed uihtml session from a prior run.
-    disposeUihtmlSession();
+    session.disposeUihtmlSession();
 
     const wsFiles: WorkspaceFile[] = workspaceFiles;
     let activeFileName: string = mainFileName ?? "script.m";
@@ -248,11 +237,10 @@ self.onmessage = (e: MessageEvent) => {
       adapter = new BrowserFileIOAdapter(vfs);
       sysAdapter = systemAdapter;
       runVfs = vfs;
-      useVariableValues = variableValues;
-      useHoldState = holdState;
-      useWorkspaceFiles =
-        wsFiles.length > 0 ? wsFiles : persistentWorkspaceFiles;
-      useSearchPaths = searchPaths ?? persistentSearchPaths;
+      useVariableValues = session.variableValues;
+      useHoldState = session.holdState;
+      useWorkspaceFiles = wsFiles.length > 0 ? wsFiles : session.workspaceFiles;
+      useSearchPaths = searchPaths ?? session.searchPaths;
     } else {
       // Non-persistent mode: fresh state
       const freshVfs = new VirtualFileSystem();
@@ -322,10 +310,7 @@ self.onmessage = (e: MessageEvent) => {
           },
           useWorkspaceFiles,
           runVfs.normalizePath("preamble.m"),
-          [
-            ...(useSearchPaths ?? []),
-            "/system/mip/packages/gh/mip-org/core/mip/mip",
-          ]
+          [...(useSearchPaths ?? []), MIP_SEARCH_PATH]
         );
         // Thread the preamble's resulting state into the main run.
         useVariableValues = pre.variableValues;
@@ -386,28 +371,17 @@ self.onmessage = (e: MessageEvent) => {
         },
         useWorkspaceFiles,
         activeFileName,
-        [
-          ...(useSearchPaths ?? []),
-          "/system/mip/packages/gh/mip-org/core/mip/mip",
-        ]
+        [...(useSearchPaths ?? []), MIP_SEARCH_PATH]
       );
 
-      // Keep the session alive if the run registered uihtml callbacks, so
-      // iframe events can re-enter the interpreter (see "html_event").
-      liveUihtmlSession = result.uihtmlSession ?? null;
-      figureHandles = result.figureHandles;
-
-      // Update persistent state if in persistent mode
+      // A persistent run carries its state into the REPL. Either way, keep
+      // the uihtml session alive if the run registered callbacks, so iframe
+      // events can re-enter the interpreter (see "html_event").
       if (persistent) {
-        variableValues = result.variableValues;
-        holdState = result.holdState;
-        if (result.searchPaths) {
-          persistentSearchPaths = result.searchPaths;
-          persistentWorkspaceFiles = result.workspaceFiles ?? [];
-        }
-        if (result.implicitCwdPath !== undefined) {
-          implicitCwdPath = result.implicitCwdPath;
-        }
+        session.adopt(result);
+      } else {
+        session.uihtmlSession = result.uihtmlSession ?? null;
+        session.figureHandles = result.figureHandles;
       }
 
       // Build workspaceRep for AST display
@@ -494,9 +468,6 @@ self.onmessage = (e: MessageEvent) => {
 
   const { code, cancelSAB } = e.data;
 
-  // A new REPL command supersedes any armed uihtml session.
-  disposeUihtmlSession();
-
   // Create adapter from persistent VFS
   if (!vfs) {
     vfs = new VirtualFileSystem();
@@ -505,50 +476,24 @@ self.onmessage = (e: MessageEvent) => {
   const adapter = new BrowserFileIOAdapter(vfs);
 
   try {
-    const result = executeCode(
-      code,
-      {
-        onOutput: (text: string) => {
-          self.postMessage({ type: "output", text });
-        },
-        onDrawnow: plotInstructions => {
-          self.postMessage({ type: "drawnow", plotInstructions });
-        },
-        displayResults: true,
-        maxIterations: 10000000,
-        optimization: optimizationLevel,
-        initialVariableValues: variableValues,
-        initialHoldState: holdState,
-        initialFigureHandles: figureHandles,
-        fileIO: adapter,
-        system: systemAdapter,
-        onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
-        onHtmlSourceEvent,
-        implicitCwdPath,
-        cancelSAB,
+    // Supersedes any armed uihtml session; keeps the new one if this
+    // command registered uihtml callbacks.
+    const result = session.execute(code, {
+      onOutput: (text: string) => {
+        self.postMessage({ type: "output", text });
       },
-      persistentWorkspaceFiles,
-      "repl",
-      [
-        ...(persistentSearchPaths ?? []),
-        "/system/mip/packages/gh/mip-org/core/mip/mip",
-      ]
-    );
-
-    // Keep the session if this command registered uihtml callbacks.
-    liveUihtmlSession = result.uihtmlSession ?? null;
-
-    // Update persistent state on success
-    variableValues = result.variableValues;
-    holdState = result.holdState;
-    figureHandles = result.figureHandles;
-    if (result.searchPaths) {
-      persistentSearchPaths = result.searchPaths;
-      persistentWorkspaceFiles = result.workspaceFiles ?? [];
-    }
-    if (result.implicitCwdPath !== undefined) {
-      implicitCwdPath = result.implicitCwdPath;
-    }
+      onDrawnow: plotInstructions => {
+        self.postMessage({ type: "drawnow", plotInstructions });
+      },
+      displayResults: true,
+      maxIterations: 10000000,
+      optimization: optimizationLevel,
+      fileIO: adapter,
+      system: systemAdapter,
+      onInput: inputSAB ? workerOnInput(inputSAB) : undefined,
+      onHtmlSourceEvent,
+      cancelSAB,
+    });
 
     const vfsChanges = adapter.getChanges();
     self.postMessage({
