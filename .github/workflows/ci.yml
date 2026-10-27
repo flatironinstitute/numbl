@@ -63,7 +63,8 @@ jobs:
   test-browser:
     name: Test Browser (Playwright)
     needs: test
-    runs-on: ubuntu-latest
+    # Playwright's Chromium is not available for ubuntu-latest (26.04) yet.
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
