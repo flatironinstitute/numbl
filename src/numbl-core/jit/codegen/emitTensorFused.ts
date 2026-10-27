@@ -24,7 +24,7 @@
  * existing `mtoc2_tensor_assign(&c, mtoc2_tensor_plus_tt(a, b))`
  * path — the helper's body is literally the same loop. The point of
  * doing the inlining at the IR level is that an IR-to-IR pass
- * (`inlinePass.ts`, not yet wired into compileSpec / compileSpecC)
+ * (`inlinePass.ts`, run by `compileSpecC` before emit)
  * can fold a chain like `_t1 = a * b; c = _t1 + d` into
  * `c = (a * b) + d`, which the fused emitter then renders as one loop
  * with no intermediate tensor allocation.
