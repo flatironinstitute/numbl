@@ -775,50 +775,29 @@ export function interpretConstructor(
 
 // ── Call user function (core execution) ──────────────────────────────────
 
-export function callUserFunction(
-  this: Interpreter,
-  fn: FunctionDef,
-  args: unknown[],
-  nargout: number,
-  narginOverride?: number
-): unknown {
-  // MATLAB: calling a function with more outputs than it declares is an
-  // error raised before the function body runs.  `varargout` functions can
-  // supply any number.
-  const hasVarargoutDecl =
+/** MATLAB: calling a function with more outputs than it declares is an
+ *  error raised before the body runs. `varargout` functions can supply any
+ *  number. */
+function checkOutputCount(fn: FunctionDef, nargout: number): void {
+  const hasVarargout =
     fn.outputs.length > 0 && fn.outputs[fn.outputs.length - 1] === "varargout";
-  const declaredRegularOutputs = hasVarargoutDecl
-    ? fn.outputs.length - 1
-    : fn.outputs.length;
-  if (!hasVarargoutDecl && nargout > declaredRegularOutputs) {
+  if (!hasVarargout && nargout > fn.outputs.length) {
     throw new RuntimeError("Too many output arguments.");
   }
+}
 
-  // Consume the call-site argument names recorded by evalFuncCall (for
-  // inputname). One-shot: clear immediately so it never leaks to a later
-  // call that did not originate from an interpreted call expression.
-  const callInputNames = this.pendingInputNames;
-  this.pendingInputNames = undefined;
-
-  // Refcount-driven COW handles aliasing across function boundaries:
-  // each arg's incref at parameter binding inflates the count, so any
-  // mutation through the parameter sees rc>1 and copies. Passing
-  // wrappers by reference at the call boundary is safe.
-  const sharedArgs = args;
-
-  // Try the function-call dispatch path. Registered executors
-  // filtering on lowered.kind === "call" compete in cost order; if
-  // all decline or bail, we fall through to the regular interpreter
-  // call path below.
-  if (narginOverride === undefined && this.registry.size > 0) {
-    const r = this.registry.dispatchCall(fn, sharedArgs, nargout, this);
-    if (r) return r.result;
-  }
-
-  const fnEnv = new Environment();
-  fnEnv.rt = this.rt;
-  fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
-
+/** Bind call arguments to `fn`'s parameters in `fnEnv` (positional
+ *  parameters, `varargin`, nargin/nargout and input names), and hoist the
+ *  function's own nested functions. `set` binds a name in `fnEnv`. */
+function bindInputs(
+  fn: FunctionDef,
+  fnEnv: Environment,
+  args: unknown[],
+  nargout: number,
+  nargin: number,
+  inputNames: string[] | undefined,
+  set: (name: string, value: RuntimeValue) => void
+): void {
   // `varargin` is normally last, but name-value struct parameters declared
   // via dotted `arguments` entries may follow it (the parser enforces this).
   const vararginIdx = fn.params.indexOf("varargin");
@@ -829,13 +808,11 @@ export function callUserFunction(
 
   // Count leading positional parameters. Name-value struct parameters
   // declared in an `arguments` block (entries like `opts.method`) are filled
-  // from trailing arguments by processArgumentsBlocks below, not bound
+  // from trailing arguments by processArgumentsBlocks, not bound
   // positionally, so positional binding stops before them.
   let numPositional = regularParams.length;
-  const inputBlocks = (fn.argumentsBlocks ?? []).filter(
-    b => b.kind !== "Output"
-  );
-  for (const block of inputBlocks) {
+  for (const block of fn.argumentsBlocks ?? []) {
+    if (block.kind === "Output") continue;
     for (const e of block.entries) {
       const dot = e.name.indexOf(".");
       if (dot < 0) continue;
@@ -844,13 +821,13 @@ export function callUserFunction(
     }
   }
 
-  for (let i = 0; i < numPositional && i < regularParams.length; i++) {
-    if (i < sharedArgs.length && sharedArgs[i] !== undefined) {
-      fnEnv.set(regularParams[i], ensureRuntimeValue(sharedArgs[i]));
+  for (let i = 0; i < numPositional; i++) {
+    if (i < args.length && args[i] !== undefined) {
+      set(regularParams[i], ensureRuntimeValue(args[i]));
     }
   }
   if (hasVarargin) {
-    let extras = sharedArgs.slice(regularParams.length);
+    let extras = args.slice(regularParams.length);
     // When name-value struct params follow varargin, the repeating section
     // ends at the first argument naming a declared option.
     if (vararginIdx !== fn.params.length - 1) {
@@ -860,13 +837,15 @@ export function callUserFunction(
       );
     }
     const extraArgs = extras.map(a => ensureRuntimeValue(a));
-    fnEnv.set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
+    set("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
   }
-  fnEnv.set("$nargin", narginOverride ?? args.length);
-  fnEnv.set("$nargout", nargout);
-  fnEnv.inputArgNames = callInputNames;
+  set("$nargin", nargin);
+  set("$nargout", nargout);
+  fnEnv.inputArgNames = inputNames;
 
-  // Pre-register nested function definitions (hoisted, like MATLAB)
+  // Pre-register nested function definitions (hoisted, like MATLAB): a
+  // nested function is visible throughout its parent's body regardless of
+  // definition order.
   for (const stmt of fn.body) {
     if (stmt.type === "Function") {
       fnEnv.nestedFunctions.set(stmt.name, {
@@ -875,73 +854,49 @@ export function callUserFunction(
       });
     }
   }
+}
 
-  const savedEnv = this.env;
-  const savedCallerEnv = this.callerEnv;
-  this.callerEnv = savedEnv;
-  this.env = fnEnv;
-  this.rt.pushCallFrame(fn.name);
-  this.rt.pushCleanupScope();
+/** Run a bound function body in `fnEnv` and return its outputs. Shared by
+ *  ordinary and nested function calls. */
+function runFunctionBody(
+  interp: Interpreter,
+  fn: FunctionDef,
+  fnEnv: Environment,
+  args: unknown[],
+  nargout: number
+): unknown {
+  const savedEnv = interp.env;
+  const savedCallerEnv = interp.callerEnv;
+  interp.callerEnv = savedEnv;
+  interp.env = fnEnv;
+  interp.rt.pushCallFrame(fn.name);
+  interp.rt.pushCleanupScope();
 
   try {
     // Apply `arguments`-block defaults / name-value structs now that the
     // function scope is active and provided args are bound, so defaults can
     // reference earlier arguments.
-    this.processArgumentsBlocks(fn, sharedArgs);
+    interp.processArgumentsBlocks(fn, args);
 
-    this.execStmts(fn.body);
+    interp.execStmts(fn.body);
 
     if (fnEnv.persistentFuncId) {
       for (const name of fnEnv.persistentNames) {
         const val = fnEnv.get(name);
         if (val !== undefined) {
-          this.rt.setPersistent(fnEnv.persistentFuncId, name, val);
+          interp.rt.setPersistent(fnEnv.persistentFuncId, name, val);
         }
       }
     }
 
-    const hasVarargout = hasVarargoutDecl;
-    const regularOutputs = hasVarargout ? fn.outputs.slice(0, -1) : fn.outputs;
-
-    // When nargout==0 but the function defines outputs, still collect the
-    // first output so it can be used as `ans`.  The function body already
-    // saw $nargout==0, so guards like `if nargout > 0` behave correctly.
-    const collectCount =
-      nargout === 0 && regularOutputs.length > 0
-        ? 1
-        : Math.min(regularOutputs.length, nargout);
-
-    const outputs: RuntimeValue[] = [];
-    for (let i = 0; i < collectCount; i++) {
-      const val = this.env.get(regularOutputs[i]);
-      if (val === undefined && nargout >= i + 1) {
-        throw new RuntimeError(
-          `Output argument '${regularOutputs[i]}' (and maybe others) not assigned during call to '${fn.name}'`
-        );
-      }
-      outputs.push(val ?? RTV.num(0));
-    }
-
-    if (hasVarargout && nargout > regularOutputs.length) {
-      const varargoutVal = this.env.get("varargout");
-      if (varargoutVal && isRuntimeCell(varargoutVal)) {
-        const remaining = nargout - regularOutputs.length;
-        for (
-          let i = 0;
-          i < Math.min(remaining, varargoutVal.data.length);
-          i++
-        ) {
-          outputs.push(ensureRuntimeValue(varargoutVal.data[i]));
-        }
-      }
-    }
+    const outputs = collectOutputs(fn, fnEnv, nargout);
 
     // Adopt every output into the caller's transient scope so they
     // survive `fnEnv.clearLocals()` below. Without this, an output
     // that's the only ref to a value would drop to rc=0 (and _destroy
     // fire) before the caller could bind it.
-    if (this.rt.currentScope) {
-      for (const v of outputs) this.rt.currentScope.adopt(v);
+    if (interp.rt.currentScope) {
+      for (const v of outputs) interp.rt.currentScope.adopt(v);
     }
 
     // Drop locals after collecting outputs. Skip when a `@nestedFn`
@@ -965,27 +920,106 @@ export function callUserFunction(
       fnEnv.clearLocals();
     }
 
-    if (nargout <= 1) {
-      return outputs[0];
-    }
-    return outputs;
+    return nargout <= 1 ? outputs[0] : outputs;
   } catch (e) {
     if (!fnEnv.nestedHandleCreated) fnEnv.clearLocals();
-    this.rt.annotateError(e);
+    interp.rt.annotateError(e);
     throw e;
   } finally {
-    this.rt.popAndRunCleanups(fn => {
+    interp.rt.popAndRunCleanups(fn => {
       if (fn.jsFn) {
         if (fn.jsFnExpectsNargout) fn.jsFn(0);
         else fn.jsFn();
       } else {
-        this.rt.dispatch(fn.name, 0, []);
+        interp.rt.dispatch(fn.name, 0, []);
       }
     });
-    this.rt.popCallFrame();
-    this.env = savedEnv;
-    this.callerEnv = savedCallerEnv;
+    interp.rt.popCallFrame();
+    interp.env = savedEnv;
+    interp.callerEnv = savedCallerEnv;
   }
+}
+
+/** Read a finished call's outputs from its environment. */
+function collectOutputs(
+  fn: FunctionDef,
+  fnEnv: Environment,
+  nargout: number
+): RuntimeValue[] {
+  const hasVarargout =
+    fn.outputs.length > 0 && fn.outputs[fn.outputs.length - 1] === "varargout";
+  const regularOutputs = hasVarargout ? fn.outputs.slice(0, -1) : fn.outputs;
+
+  // When nargout==0 but the function defines outputs, still collect the
+  // first output so it can be used as `ans`.  The function body already
+  // saw $nargout==0, so guards like `if nargout > 0` behave correctly.
+  const collectCount =
+    nargout === 0 && regularOutputs.length > 0
+      ? 1
+      : Math.min(regularOutputs.length, nargout);
+
+  const outputs: RuntimeValue[] = [];
+  for (let i = 0; i < collectCount; i++) {
+    const val = fnEnv.get(regularOutputs[i]);
+    if (val === undefined && nargout >= i + 1) {
+      throw new RuntimeError(
+        `Output argument '${regularOutputs[i]}' (and maybe others) not assigned during call to '${fn.name}'`
+      );
+    }
+    outputs.push(val ?? RTV.num(0));
+  }
+
+  if (hasVarargout && nargout > regularOutputs.length) {
+    const varargoutVal = fnEnv.get("varargout");
+    if (varargoutVal && isRuntimeCell(varargoutVal)) {
+      const remaining = nargout - regularOutputs.length;
+      for (let i = 0; i < Math.min(remaining, varargoutVal.data.length); i++) {
+        outputs.push(ensureRuntimeValue(varargoutVal.data[i]));
+      }
+    }
+  }
+  return outputs;
+}
+
+export function callUserFunction(
+  this: Interpreter,
+  fn: FunctionDef,
+  args: unknown[],
+  nargout: number,
+  narginOverride?: number
+): unknown {
+  checkOutputCount(fn, nargout);
+
+  // Consume the call-site argument names recorded by evalFuncCall (for
+  // inputname). One-shot: clear immediately so it never leaks to a later
+  // call that did not originate from an interpreted call expression.
+  const callInputNames = this.pendingInputNames;
+  this.pendingInputNames = undefined;
+
+  // Try the function-call dispatch path. Registered executors
+  // filtering on lowered.kind === "call" compete in cost order; if
+  // all decline or bail, we fall through to the regular interpreter
+  // call path below. Refcount-driven COW handles aliasing across the
+  // call boundary: binding a parameter increfs its argument, so a
+  // mutation through the parameter sees rc>1 and copies.
+  if (narginOverride === undefined && this.registry.size > 0) {
+    const r = this.registry.dispatchCall(fn, args, nargout, this);
+    if (r) return r.result;
+  }
+
+  const fnEnv = new Environment();
+  fnEnv.rt = this.rt;
+  fnEnv.persistentFuncId = `${this.currentFile}:${fn.name}`;
+  bindInputs(
+    fn,
+    fnEnv,
+    args,
+    nargout,
+    narginOverride ?? args.length,
+    callInputNames,
+    (name, value) => fnEnv.set(name, value)
+  );
+  return runFunctionBody(this, fn, fnEnv, args, nargout);
 }
 
 // ── Nested function call (shares parent scope) ───────────────────────────
@@ -1000,10 +1034,11 @@ export function callNestedFunction(
   // Nested functions share the parent workspace by reference — JIT compiles
   // functions as pure (parameter-only), so it cannot handle shared state.
   // Always use the interpreter for nested calls.
+  checkOutputCount(fn, nargout);
 
-  // Consume the call-site argument names (for inputname), same as
-  // callUserFunction. Without this a nested function would have no names of
-  // its own (and must not inherit the parent frame's).
+  // Consume the call-site argument names (for inputname). Without this a
+  // nested function would have no names of its own (and must not inherit
+  // the parent frame's).
   const callInputNames = this.pendingInputNames;
   this.pendingInputNames = undefined;
 
@@ -1015,109 +1050,16 @@ export function callNestedFunction(
   // them must never be redirected to a same-named variable in the parent
   // workspace (e.g. an output `s` that shadows the parent's `s`).
   fnEnv.nestedLocalNames = new Set([...fn.params, ...fn.outputs]);
-
-  const hasVarargin =
-    fn.params.length > 0 && fn.params[fn.params.length - 1] === "varargin";
-  const regularParams = hasVarargin ? fn.params.slice(0, -1) : fn.params;
-  for (let i = 0; i < regularParams.length; i++) {
-    if (i < args.length) {
-      fnEnv.setLocal(regularParams[i], ensureRuntimeValue(args[i]));
-    }
-  }
-  if (hasVarargin) {
-    const extraArgs = args
-      .slice(regularParams.length)
-      .map(a => ensureRuntimeValue(a));
-    fnEnv.setLocal("varargin", RTV.cell(extraArgs, [1, extraArgs.length]));
-  }
-  fnEnv.setLocal("$nargin", args.length);
-  fnEnv.setLocal("$nargout", nargout);
-  fnEnv.inputArgNames = callInputNames;
-
-  // Pre-register this nested function's own nested functions (hoisted, like
-  // MATLAB). A function nested inside a nested function is visible throughout
-  // its parent's body regardless of definition order.
-  for (const stmt of fn.body) {
-    if (stmt.type === "Function") {
-      fnEnv.nestedFunctions.set(stmt.name, {
-        fn: funcDefFromStmt(stmt),
-        env: fnEnv,
-      });
-    }
-  }
-
-  const savedEnv = this.env;
-  this.env = fnEnv;
-  this.rt.pushCleanupScope();
-
-  try {
-    this.execStmts(fn.body);
-
-    if (fnEnv.persistentFuncId) {
-      for (const name of fnEnv.persistentNames) {
-        const val = fnEnv.get(name);
-        if (val !== undefined) {
-          this.rt.setPersistent(fnEnv.persistentFuncId, name, val);
-        }
-      }
-    }
-
-    const hasVarargout =
-      fn.outputs.length > 0 &&
-      fn.outputs[fn.outputs.length - 1] === "varargout";
-    const regularOutputs = hasVarargout ? fn.outputs.slice(0, -1) : fn.outputs;
-
-    const outputs: RuntimeValue[] = [];
-    for (let i = 0; i < Math.min(regularOutputs.length, nargout); i++) {
-      const val = this.env.get(regularOutputs[i]);
-      if (val === undefined && nargout >= i + 1) {
-        throw new RuntimeError(
-          `Output argument '${regularOutputs[i]}' (and maybe others) not assigned during call to '${fn.name}'`
-        );
-      }
-      outputs.push(val ?? RTV.num(0));
-    }
-
-    if (hasVarargout && nargout > regularOutputs.length) {
-      const varargoutVal = this.env.get("varargout");
-      if (varargoutVal && isRuntimeCell(varargoutVal)) {
-        const remaining = nargout - regularOutputs.length;
-        for (
-          let i = 0;
-          i < Math.min(remaining, varargoutVal.data.length);
-          i++
-        ) {
-          outputs.push(ensureRuntimeValue(varargoutVal.data[i]));
-        }
-      }
-    }
-
-    // Adopt outputs into the caller's transient scope before locals are
-    // cleared in the finally block.
-    if (this.rt.currentScope) {
-      for (const v of outputs) this.rt.currentScope.adopt(v);
-    }
-
-    if (nargout <= 1) {
-      return outputs[0];
-    }
-    return outputs;
-  } finally {
-    this.rt.popAndRunCleanups(fn => {
-      if (fn.jsFn) {
-        if (fn.jsFnExpectsNargout) fn.jsFn(0);
-        else fn.jsFn();
-      } else {
-        this.rt.dispatch(fn.name, 0, []);
-      }
-    });
-    // Drop locals after collecting outputs. Skip if a nested handle was
-    // created during this call (its closure references fnEnv).
-    if (!fnEnv.nestedHandleCreated) {
-      fnEnv.clearLocals();
-    }
-    this.env = savedEnv;
-  }
+  bindInputs(
+    fn,
+    fnEnv,
+    args,
+    nargout,
+    args.length,
+    callInputNames,
+    (name, value) => fnEnv.setLocal(name, value)
+  );
+  return runFunctionBody(this, fn, fnEnv, args, nargout);
 }
 
 // ── Context management ───────────────────────────────────────────────────
