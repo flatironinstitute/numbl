@@ -29,7 +29,12 @@ import {
   type RuntimeTensor,
 } from "../runtime/types.js";
 import { applyHandleProperty } from "./struct-access.js";
-import { incref, decref, getCurrentRuntime } from "./refcount.js";
+import { incref, decref } from "./refcount.js";
+import {
+  currentRuntime,
+  registerSpecial,
+  registerSpecialVoid,
+} from "./registerSpecial.js";
 import type { PlotInstruction } from "../../graphics/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { scanFormat } from "../helpers/scanFormat.js";
@@ -90,53 +95,6 @@ import { allocFloat64Array } from "./alloc.js";
 /** Map sol structs to their dense output step data for deval. */
 const _solStepData = new WeakMap<object, StepData[]>();
 
-export { SPECIAL_BUILTIN_NAMES } from "./specialBuiltinNames.js";
-
-/** The runtime executing the current call. */
-function currentRuntime(): Runtime {
-  const rt = getCurrentRuntime();
-  if (!rt) throw new RuntimeError("no active runtime");
-  return rt as Runtime;
-}
-
-/** Register a special builtin: an IBuiltin that accepts any args and gets
- *  the active runtime. */
-function registerSpecial(
-  name: string,
-  fn: (nargout: number, args: RuntimeValue[], rt: Runtime) => unknown
-): void {
-  registerIBuiltin({
-    name,
-    resolve: () => ({
-      outputTypes: [{ kind: "unknown" as const }],
-      apply: (args: RuntimeValue[], nargout: number) =>
-        fn(nargout, args, currentRuntime()) as RuntimeValue | RuntimeValue[],
-    }),
-  });
-}
-
-/** Register a void special builtin — produces no outputs.  The call site
- *  raises "Too many output arguments." when nargout > 0, and `ans` is not
- *  set when called as a statement. */
-function registerSpecialVoid(
-  name: string,
-  fn: (args: RuntimeValue[], rt: Runtime) => void
-): void {
-  registerIBuiltin({
-    name,
-    resolve: () => ({
-      outputTypes: [],
-      apply: (args: RuntimeValue[]) => {
-        fn(args, currentRuntime());
-        return undefined as unknown as RuntimeValue;
-      },
-    }),
-  });
-}
-
-/**
- * Register all special builtins as IBuiltins closing over the runtime instance.
- */
 // ── Special builtin registrations ─────────────────────────────────────
 
 registerSpecial("help", (nargout, args, rt) => {

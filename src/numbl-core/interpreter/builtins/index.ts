@@ -49,9 +49,9 @@ export {
 export type { IBuiltin, IBuiltinResolution, BuiltinHelp } from "./types.js";
 export { resetAppdataStore, convertJsonValue } from "./misc.js";
 
-// Register IBuiltin + special builtin names so isBuiltin() recognizes them
+// Register IBuiltin names so isBuiltin() recognizes them. The runtime
+// specials and plot builtins register at module load, so load them first.
+import "../../runtime/plotBuiltins.js";
 import { registerExtraBuiltinNames } from "../../helpers/registry.js";
 import { getAllIBuiltinNames as _getAllIBuiltinNames } from "./types.js";
-import { SPECIAL_BUILTIN_NAMES } from "../../runtime/specialBuiltins.js";
 registerExtraBuiltinNames(_getAllIBuiltinNames());
-registerExtraBuiltinNames(SPECIAL_BUILTIN_NAMES);

@@ -20,7 +20,8 @@ import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
 import { RuntimeError } from "../runtime/error.js";
-import { getIBuiltin, inferJitType } from "./builtins/index.js";
+import { inferJitType } from "./builtins/index.js";
+import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
 import { toString, toNumber } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
@@ -236,43 +237,8 @@ export function interpretTarget(
 ): unknown {
   switch (target.kind) {
     case "builtin": {
-      // Check customBuiltins first — these are execution-specific overrides
-      // that take priority over IBuiltins.
-      const customBuiltin = this.rt.customBuiltins[target.name];
-      if (customBuiltin) return customBuiltin(nargout, args);
-      // Then check IBuiltin (interpreter builtins with JIT-compatible type rules)
-      const ib = getIBuiltin(target.name);
-      if (ib) {
-        const margs = args.map(a => ensureRuntimeValue(a));
-        const argTypes = margs.map(inferJitType);
-        const resolution = ib.resolve(argTypes, nargout);
-        if (resolution) {
-          // MATLAB: a builtin declared with no outputs errors if the call
-          // site expects any.  Detect void builtins via `outputTypes: []`.
-          const isVoid = resolution.outputTypes.length === 0;
-          if (isVoid && nargout > 0) {
-            throw new RuntimeError("Too many output arguments.");
-          }
-          if (this.rt.profilingEnabled) {
-            this.rt.profileEnter("builtin:interp:" + target.name);
-            const result = resolution.apply(margs, nargout);
-            this.rt.profileLeave();
-            return isVoid ? undefined : result;
-          }
-          const result = resolution.apply(margs, nargout);
-          return isVoid ? undefined : result;
-        }
-      }
-      const builtin = this.rt.builtins[target.name];
-      if (builtin) return builtin(nargout, args);
-      if (ib) {
-        const typeNames = args.map(
-          a => inferJitType(ensureRuntimeValue(a)).kind
-        );
-        throw new RuntimeError(
-          `Builtin '${target.name}' does not support these argument types: (${typeNames.join(", ")})`
-        );
-      }
+      const result = invokeBuiltin(this.rt, target.name, nargout, args);
+      if (result !== NOT_A_BUILTIN) return result;
       throw new RuntimeError(`Unknown builtin: '${target.name}'`);
     }
     case "localFunction":

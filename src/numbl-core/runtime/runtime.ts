@@ -87,7 +87,7 @@ import {
   indexCellStore as _indexCellStore,
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
-import "./specialBuiltins.js";
+import "./plotBuiltins.js";
 import { setWarningSink } from "../helpers/warn.js";
 import {
   getMember as _getMember,
@@ -99,28 +99,7 @@ import {
   subsasgnCall as _subsasgnCall,
   memberChainAssign as _memberChainAssign,
 } from "./runtimeMemberAccess.js";
-import {
-  pcolorCall as _pcolorCall,
-  lineCall as _lineCall,
-  patchCall as _patchCall,
-  trimeshCall as _trimeshCall,
-  trisurfCall as _trisurfCall,
-  fillCall as _fillCall,
-  contourCall as _contourCall,
-  quiver3Call as _quiver3Call,
-  fplotCall as _fplotCall,
-  fplot3Call as _fplot3Call,
-  streamlineCall as _streamlineCall,
-  stream2Call as _stream2Call,
-  drawnow as _drawnow,
-  pause as _pause,
-} from "./runtimePlot.js";
-import { computeContourMatrix } from "./plotUtils.js";
-import {
-  dispatchPlotBuiltin,
-  PLOT_DISPATCH_NAMES,
-} from "./plotBuiltinDispatch.js";
-import { applyAxisCommand } from "./axisCommand.js";
+import { drawnow as _drawnow, pause as _pause } from "./runtimePlot.js";
 import {
   figuresReducer,
   initialFiguresState,
@@ -128,7 +107,6 @@ import {
 import { computeAxisLimits } from "../../graphics/axisLimits.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { allocFloat64Array } from "./alloc.js";
-import { isosurfaceFromArgs } from "../helpers/marching-cubes.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -282,12 +260,6 @@ export class Runtime {
   // System adapter (injected from host environment)
   public system?: SystemAdapter;
 
-  // Builtin wrappers
-  public builtins: Record<
-    string,
-    (nargout: number, args: unknown[]) => unknown
-  > = {};
-
   // Custom builtins (execution-specific overrides).
   // These take priority over IBuiltins.
   public customBuiltins: Record<
@@ -372,7 +344,6 @@ export class Runtime {
       this.cancelFlag = new Int32Array(options.cancelSAB);
     }
     setWarningSink(msg => this.output("Warning: " + msg + "\n"));
-    this.initBuiltins();
   }
 
   /** Throw CancellationError if the cancel flag has been set. */
@@ -406,296 +377,6 @@ export class Runtime {
     if (!this.currentFigureHandle) {
       this.currentFigureHandle = 1;
       this.maxFigureHandle = Math.max(this.maxFigureHandle, 1);
-    }
-  }
-
-  private initBuiltins(): void {
-    // ── Plot builtins (data-bearing + graphics ops) ────────────────────
-    // Side-effect-only names route through the shared
-    // `dispatchPlotBuiltin` helper. The exceptional ones (pcolor's
-    // nargout handle return, fplot/fplot3's Runtime-dependent
-    // evaluation, streamline/stream2's return values) keep custom
-    // registrations below.
-    for (const name of PLOT_DISPATCH_NAMES) {
-      this.builtins[name] = (_nargout: number, args: unknown[]) => {
-        dispatchPlotBuiltin(
-          name,
-          args.map(a => ensureRuntimeValue(a)),
-          this.plotInstructions,
-          this
-        );
-      };
-    }
-    // `pcolor` returns a graphics handle when an output is requested —
-    // the dispatch table pushes the instruction, and we read back the
-    // freshly-pushed trace for the handle. Override the loop entry.
-    this.builtins["pcolor"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      _pcolorCall(this.plotInstructions, margs);
-      if (_nargout >= 1) {
-        const last = this.plotInstructions[this.plotInstructions.length - 1];
-        if (last && last.type === "pcolor") {
-          return RTV.graphicsHandle(
-            last.trace as unknown as Record<string, unknown>,
-            "pcolor"
-          );
-        }
-        return RTV.dummyHandle();
-      }
-    };
-    // `line` returns a primitive Line handle when an output is requested
-    // (`pl = line(...)`). Like pcolor, the dispatch table pushes the
-    // instruction and we wrap the freshly-pushed trace so later property
-    // assignments (e.g. `pl.Color = 'green'`) update the rendered line.
-    this.builtins["line"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      _lineCall(this.plotInstructions, margs);
-      if (_nargout >= 1) {
-        const last = this.plotInstructions[this.plotInstructions.length - 1];
-        if (last && (last.type === "line" || last.type === "line3")) {
-          const traces = last.traces;
-          if (traces.length > 0) {
-            // Tag the returned trace so later `set(pl,'XData',...)` calls can
-            // find and live-update it via an `update_trace` instruction.
-            traces[0].id = this.graphicsIdCounter++;
-            return RTV.graphicsHandle(
-              traces[0] as unknown as Record<string, unknown>,
-              "line"
-            );
-          }
-        }
-        return RTV.dummyHandle();
-      }
-    };
-    // `patch` returns a Patch handle when an output is requested
-    // (`p = patch(...)`). Wrap the freshly-pushed trace and tag it with an id
-    // so `set(p,'FaceColor',...)` can live-update the rendered patch.
-    this.builtins["patch"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      _patchCall(this.plotInstructions, margs);
-      if (_nargout >= 1) {
-        const last = this.plotInstructions[this.plotInstructions.length - 1];
-        if (last && last.type === "patch") {
-          last.trace.id = this.graphicsIdCounter++;
-          return RTV.graphicsHandle(
-            last.trace as unknown as Record<string, unknown>,
-            "patch"
-          );
-        }
-        return RTV.dummyHandle();
-      }
-    };
-    // `trimesh` / `trisurf` draw a triangular mesh as a patch; `h = trimesh(...)`
-    // returns the patch handle so later property assignments update the mesh.
-    for (const [name, call] of [
-      ["trimesh", _trimeshCall],
-      ["trisurf", _trisurfCall],
-    ] as const) {
-      this.builtins[name] = (_nargout: number, args: unknown[]) => {
-        const margs = args.map(a => ensureRuntimeValue(a));
-        call(this.plotInstructions, margs);
-        if (_nargout >= 1) {
-          const last = this.plotInstructions[this.plotInstructions.length - 1];
-          if (last && last.type === "patch") {
-            last.trace.id = this.graphicsIdCounter++;
-            return RTV.graphicsHandle(
-              last.trace as unknown as Record<string, unknown>,
-              "patch"
-            );
-          }
-          return RTV.dummyHandle();
-        }
-      };
-    }
-    // `isosurface` extracts a triangulated surface from a 3-D volume via
-    // marching cubes. With no output it draws a 3-D patch (reusing the patch
-    // renderer); otherwise it returns the geometry as a struct `{vertices,
-    // faces}` (nargout 1), `[faces, verts]` (2), or `[faces, verts, colors]`
-    // (3). Faces are 1-based in the returned data (MATLAB convention) but
-    // 0-based in the patch trace.
-    this.builtins["isosurface"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      const mesh = isosurfaceFromArgs(margs);
-      const nv = mesh.vertices.length;
-      const nf = mesh.faces.length;
-      const vertsTensor = (): RuntimeValue => {
-        const d = allocFloat64Array(nv * 3);
-        for (let c = 0; c < 3; c++)
-          for (let r = 0; r < nv; r++) d[c * nv + r] = mesh.vertices[r][c];
-        return RTV.tensor(d, [nv, 3]);
-      };
-      const facesTensor = (): RuntimeValue => {
-        const d = allocFloat64Array(nf * 3);
-        for (let c = 0; c < 3; c++)
-          for (let r = 0; r < nf; r++) d[c * nf + r] = mesh.faces[r][c] + 1;
-        return RTV.tensor(d, [nf, 3]);
-      };
-      const colorsTensor = (): RuntimeValue =>
-        RTV.tensor(allocFloat64Array(mesh.colors ?? []), [
-          mesh.colors?.length ?? 0,
-          mesh.colors && mesh.colors.length > 0 ? 1 : 0,
-        ]);
-
-      if (_nargout === 0) {
-        // Draw: push a 3-D patch trace (0-based faces).
-        const trace: Record<string, unknown> = {
-          vertices: mesh.vertices,
-          faces: mesh.faces,
-          is3D: true,
-          faceColor: [0.8, 0.9, 1] as [number, number, number],
-          edgeColor: "none",
-        };
-        if (mesh.colors) {
-          trace.faceVertexCData = mesh.colors;
-          trace.faceColor = "interp";
-        }
-        this.plotInstructions.push({
-          type: "patch",
-          trace: trace as never,
-        });
-        return undefined;
-      }
-      if (_nargout === 1) {
-        const fields: Record<string, RuntimeValue> = {
-          vertices: vertsTensor(),
-          faces: facesTensor(),
-        };
-        if (mesh.colors) fields.facevertexcdata = colorsTensor();
-        return RTV.struct(fields);
-      }
-      if (_nargout === 2) return [facesTensor(), vertsTensor()];
-      return [facesTensor(), vertsTensor(), colorsTensor()];
-    };
-    // `fill` creates filled 2-D patches (one per X,Y,C group). It reuses the
-    // patch trace/handle machinery; `p = fill(...)` returns the handle of the
-    // first patch created (MATLAB returns a vector when there are several).
-    this.builtins["fill"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      const start = this.plotInstructions.length;
-      _fillCall(this.plotInstructions, margs);
-      if (_nargout >= 1) {
-        let firstHandle: RuntimeValue | undefined;
-        for (let i = start; i < this.plotInstructions.length; i++) {
-          const instr = this.plotInstructions[i];
-          if (instr.type === "patch") {
-            instr.trace.id = this.graphicsIdCounter++;
-            if (!firstHandle) {
-              firstHandle = RTV.graphicsHandle(
-                instr.trace as unknown as Record<string, unknown>,
-                "patch"
-              );
-            }
-          }
-        }
-        return firstHandle ?? RTV.dummyHandle();
-      }
-    };
-    // `contour` / `contourf` push the plot instruction and, when an output
-    // is requested, also return the MATLAB contour matrix `C` (computed via
-    // marching squares) and a contour handle `H` exposing the line
-    // properties / level list. Mirrors `[C,H] = contour(...)`.
-    const contourOverride =
-      (filled: boolean) => (_nargout: number, args: unknown[]) => {
-        const margs = args.map(a => ensureRuntimeValue(a));
-        _contourCall(this.plotInstructions, margs, filled);
-        if (_nargout < 1) return undefined;
-        const last = this.plotInstructions[this.plotInstructions.length - 1];
-        if (!last || last.type !== "contour") return RTV.dummyHandle();
-        const trace = last.trace;
-        const cm = computeContourMatrix(trace);
-        const C = RTV.tensor(allocFloat64Array(cm.data), [2, cm.n] as number[]);
-        if (_nargout < 2) return C;
-        const H = RTV.graphicsHandle(
-          {
-            LineWidth: trace.lineWidth ?? 0.5,
-            LineStyle: trace.lineStyle ?? "-",
-            LineColor: trace.lineColor ?? "flat",
-            LevelList: cm.levelList,
-            __instruction: last,
-          },
-          "contour"
-        );
-        return [C, H];
-      };
-    this.builtins["contour"] = contourOverride(false);
-    this.builtins["contourf"] = contourOverride(true);
-    // `quiver3` returns a Quiver handle when an output is requested. The
-    // handle wraps the pushed trace object directly, so later property
-    // assignments (e.g. `q.ShowArrowHead = 'off'`) update the rendered plot.
-    this.builtins["quiver3"] = (_nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      _quiver3Call(this.plotInstructions, margs);
-      if (_nargout < 1) return undefined;
-      const last = this.plotInstructions[this.plotInstructions.length - 1];
-      if (last && last.type === "quiver3") {
-        return RTV.graphicsHandle(
-          last.trace as unknown as Record<string, unknown>,
-          "quiver3"
-        );
-      }
-      return RTV.dummyHandle();
-    };
-    // `axis` has a query form (`lim = axis` / `lim = axis(ax)`) that returns
-    // the current limits, and an `axis manual` form that freezes the current
-    // limits — both need the runtime's accumulated plot state, so they are
-    // handled here rather than in the generic dispatch.
-    this.builtins["axis"] = (nargout: number, args: unknown[]) => {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      const applied = applyAxisCommand(margs, this.plotInstructions, () =>
-        this.currentAxisLimits()
-      );
-      if (!applied && nargout >= 1) {
-        return RTV.row(this.currentAxisLimits());
-      }
-      return undefined;
-    };
-    // `fplot` / `fplot3` evaluate a user function-handle and so need
-    // the full Runtime context — kept as explicit registrations.
-    this.builtins["fplot"] = (_nargout: number, args: unknown[]) => {
-      _fplotCall(this, this.plotInstructions, args.map(ensureRuntimeValue));
-    };
-    this.builtins["fplot3"] = (_nargout: number, args: unknown[]) => {
-      _fplot3Call(this, this.plotInstructions, args.map(ensureRuntimeValue));
-    };
-    // `streamline` / `stream2` return non-trivial values (handle / matrix).
-    this.builtins["streamline"] = (_nargout: number, args: unknown[]) => {
-      const h = _streamlineCall(
-        this.plotInstructions,
-        args.map(ensureRuntimeValue)
-      );
-      if (_nargout >= 1) return h;
-    };
-    this.builtins["stream2"] = (_nargout: number, args: unknown[]) => {
-      return _stream2Call(args.map(ensureRuntimeValue));
-    };
-    // `cameratoolbar` — accepted as a no-op (numbl has no interactive camera
-    // toolbar). State/SetMode/Get… arguments are ignored. Returns a dummy
-    // handle only when an output is requested, so the bare-statement form
-    // (used by simpplot/distmeshsurface) does not print an `ans`.
-    this.builtins["cameratoolbar"] = (_nargout: number) => {
-      if (_nargout >= 1) return RTV.dummyHandle();
-    };
-
-    // Any graphics op (other than figure/close/clf/cla and the `axis` query
-    // form) implies a current figure: register the implicit figure 1 on first
-    // use so a later no-arg `figure` allocates a NEW handle instead of
-    // colliding with it. Wraps both the dispatch-routed builtins and the
-    // custom overrides above.
-    const NO_AUTO_FIGURE = new Set(["figure", "close", "clf", "cla", "axis"]);
-    for (const name of [
-      ...PLOT_DISPATCH_NAMES,
-      "fplot",
-      "fplot3",
-      "streamline",
-      "stream2",
-    ]) {
-      if (NO_AUTO_FIGURE.has(name)) continue;
-      const orig = this.builtins[name];
-      if (!orig) continue;
-      this.builtins[name] = (n: number, a: unknown[]) => {
-        this.ensureCurrentFigure();
-        return orig(n, a);
-      };
     }
   }
 

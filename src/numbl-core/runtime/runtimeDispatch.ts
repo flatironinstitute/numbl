@@ -52,100 +52,47 @@ import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { allocFloat64Array } from "./alloc.js";
-import { dispatchPlotBuiltin } from "./plotBuiltinDispatch.js";
-import {
-  fplotCall as _fplotCall,
-  fplot3Call as _fplot3Call,
-  streamlineCall as _streamlineCall,
-  stream2Call as _stream2Call,
-} from "./runtimePlot.js";
 
-// ── Plot dispatch helper ─────────────────────────────────────────────────
+// ── Builtin invocation ──────────────────────────────────────────────────
 
-/** Names this dispatcher accepts. Same set as before the refactor — a
- *  superset would be wrong because (a) graphics ops like `figure`,
- *  `title`, `hold`, etc. are also registered as IBuiltins via
- *  `registerSpecial`, and handling them HERE in addition would
- *  double-push; (b) the data-bearing names below are pre-IBuiltin and
- *  bypass that registry on this path. The interpreter path
- *  (`interpreterFunctions.ts → rt.builtins[name]`) and this JIT path
- *  both end up at `dispatchPlotBuiltin` exactly once. */
-const PLOT_DISPATCH_NAMES_JIT: ReadonlySet<string> = new Set([
-  "plot",
-  "plot3",
-  "line",
-  "patch",
-  "fill",
-  "surf",
-  "scatter",
-  "imagesc",
-  "pcolor",
-  "contour",
-  "contourf",
-  "mesh",
-  "waterfall",
-  "bar",
-  "barh",
-  "bar3",
-  "bar3h",
-  "stairs",
-  "errorbar",
-  "semilogx",
-  "semilogy",
-  "loglog",
-  "area",
-  "scatter3",
-  "histogram",
-  "histogram2",
-  "boxchart",
-  "swarmchart",
-  "swarmchart3",
-  "piechart",
-  "donutchart",
-  "heatmap",
-  "quiver",
-  "quiver3",
-]);
+/** Returned by `invokeBuiltin` when `name` is not a builtin. */
+export const NOT_A_BUILTIN: unique symbol = Symbol("NOT_A_BUILTIN");
 
-/**
- * Dispatches plot/graphics function calls used directly by the JIT
- * (`rt.dispatch` / `rt.callBuiltin`). Side-effect-only names route
- * through the shared `dispatchPlotBuiltin` in
- * `plotBuiltinDispatch.ts`; names with non-trivial return values or
- * that need to evaluate a numbl function handle (`fplot`, `fplot3`,
- * `streamline`, `stream2`) keep custom handlers.
- *
- * Returns the result if `name` is a plotting function, or `undefined`
- * otherwise.
- */
-function dispatchPlotCall(
+/** Call the builtin `name`: an execution-specific custom builtin if one is
+ *  set, else the registered IBuiltin. Returns NOT_A_BUILTIN if neither
+ *  exists. A builtin with no outputs errors when outputs are requested. */
+export function invokeBuiltin(
   rt: Runtime,
   name: string,
+  nargout: number,
   args: unknown[]
-): unknown | undefined {
-  if (PLOT_DISPATCH_NAMES_JIT.has(name)) {
-    dispatchPlotBuiltin(
-      name,
-      args.map(a => ensureRuntimeValue(a)),
-      rt.plotInstructions,
-      rt
-    );
-    return undefined;
-  }
+): unknown {
+  const custom = rt.customBuiltins[name];
+  if (custom) return custom(nargout, args);
+  const ib = _getIBuiltin(name);
+  if (!ib) return NOT_A_BUILTIN;
   const margs = args.map(a => ensureRuntimeValue(a));
-  switch (name) {
-    case "fplot":
-      _fplotCall(rt, rt.plotInstructions, margs);
-      return undefined;
-    case "fplot3":
-      _fplot3Call(rt, rt.plotInstructions, margs);
-      return undefined;
-    case "streamline":
-      return _streamlineCall(rt.plotInstructions, margs);
-    case "stream2":
-      return _stream2Call(margs);
-    default:
-      return undefined;
+  const argTypes = margs.map(_inferJitType);
+  const resolution = ib.resolve(argTypes, nargout);
+  if (!resolution) {
+    throw new RuntimeError(
+      `Builtin '${name}' does not support these argument types: (${argTypes.map(t => t.kind).join(", ")})`
+    );
+  }
+  const isVoid = resolution.outputTypes.length === 0;
+  if (isVoid && nargout > 0) {
+    throw new RuntimeError("Too many output arguments.");
+  }
+  if (!rt.profilingEnabled) {
+    const result = resolution.apply(margs, nargout);
+    return isVoid ? undefined : result;
+  }
+  rt.profileEnter("builtin:interp:" + name);
+  try {
+    const result = resolution.apply(margs, nargout);
+    return isVoid ? undefined : result;
+  } finally {
+    rt.profileLeave();
   }
 }
 
@@ -356,13 +303,7 @@ export function dispatch(
   const callerFile = rt.$file;
   const callerLine = rt.$line;
   try {
-    // 1. Special: plot, surf (only for general dispatch, not class method calls)
-    if (!targetClassName) {
-      const plotResult = dispatchPlotCall(rt, name, args);
-      if (plotResult !== undefined) return plotResult;
-    }
-
-    // 2. JIT compile on demand (local → class method → workspace).
+    // 1. JIT compile on demand (local → class method → workspace).
     //    This runs BEFORE builtins so that class method overloads
     //    (e.g., horzcat, vertcat, plus) take precedence.
     if (rt.compileSpecialized) {
@@ -389,18 +330,9 @@ export function dispatch(
       if (rt.profilingEnabled) rt.profileLeave(); // leave jit
     }
 
-    // 3. Builtins (fallback after JIT)
-    const builtin = rt.builtins[name];
-    if (builtin) return builtin(nargout, args);
-
-    // 4. IBuiltin fallback (special builtins + standard IBuiltins)
-    const ib = _getIBuiltin(name);
-    if (ib) {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      const argTypes = margs.map(_inferJitType);
-      const resolution = ib.resolve(argTypes, nargout);
-      if (resolution) return resolution.apply(margs, nargout);
-    }
+    // 2. Builtins
+    const result = invokeBuiltin(rt, name, nargout, args);
+    if (result !== NOT_A_BUILTIN) return result;
 
     if (targetClassName) {
       throw new RuntimeError(
@@ -423,18 +355,8 @@ export function callBuiltin(
   nargout: number,
   args: unknown[]
 ): unknown {
-  const plotResult = dispatchPlotCall(rt, name, args);
-  if (plotResult !== undefined) return plotResult;
-  const builtin = rt.builtins[name];
-  if (builtin) return builtin(nargout, args);
-  // Try IBuiltin (interpreter builtins)
-  const ib = _getIBuiltin(name);
-  if (ib) {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    const argTypes = margs.map(_inferJitType);
-    const resolution = ib.resolve(argTypes, nargout);
-    if (resolution) return resolution.apply(margs, nargout);
-  }
+  const result = invokeBuiltin(rt, name, nargout, args);
+  if (result !== NOT_A_BUILTIN) return result;
   throw new RuntimeError(`'${name}' is not a builtin function`);
 }
 
@@ -608,17 +530,8 @@ export function methodDispatch(
     }
 
     // Builtins
-    const builtin = rt.builtins[name];
-    if (builtin) return builtin(nargout, args);
-
-    // IBuiltin fallback
-    const ib = _getIBuiltin(name);
-    if (ib) {
-      const margs = args.map(a => ensureRuntimeValue(a));
-      const argTypes = margs.map(_inferJitType);
-      const resolution = ib.resolve(argTypes, nargout);
-      if (resolution) return resolution.apply(margs, nargout);
-    }
+    const result = invokeBuiltin(rt, name, nargout, args);
+    if (result !== NOT_A_BUILTIN) return result;
 
     throw new RuntimeError(`No method '${name}' found`);
   } finally {
