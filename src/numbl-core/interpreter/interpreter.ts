@@ -98,6 +98,11 @@ export class Interpreter {
    *  the classifier must then keep every loop-assigned name live-out. */
   condBlockDepth: number = 0;
 
+  /** @internal Number of enclosing `try` bodies being executed, across
+   *  calls. The C-JIT declines while it is non-zero: a runtime error in
+   *  compiled C exits the process, so it can't be caught. */
+  tryDepth: number = 0;
+
   /** @internal */
   functionDefCache = new Map<string, FunctionDef>();
 

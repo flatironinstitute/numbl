@@ -162,19 +162,13 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
 
   out.push(...userParts);
 
-  // Allocator helpers exported as part of the .so so a JIT host
-  // (koffi) can resolve them by name without separately loading
-  // libc. `mtoc2_alloc` is used by the runtime helpers internally;
-  // `mtoc2_jit_free` is the host-side counterpart for releasing
-  // tensor buffers returned across the FFI. Both go through the
-  // same malloc/free in libc that mtoc2's emitted code already
-  // depends on transitively, so there's no allocator-mismatch
-  // risk.
-  out.push("/* JIT-host allocator wrapper. The .so already pulls in");
-  out.push(" * libc's free transitively via <stdlib.h>; this wrapper");
-  out.push(" * exposes it through the .so's own symbol table so the");
-  out.push(" * host's koffi binding doesn't need to dlopen libc");
-  out.push(" * separately. */");
+  // Allocator pair exported from the .so so the JIT host (koffi) can
+  // allocate tensor-param buffers the emitted code frees, and free the
+  // buffers of returned tensors, through the same libc malloc/free.
+  out.push("/* JIT-host allocator wrappers. */");
+  out.push(
+    "void *mtoc2_jit_malloc(long n) { return malloc(n > 0 ? (size_t)n : 1); }"
+  );
   out.push("void mtoc2_jit_free(void *p) { free(p); }");
   out.push("");
   return out.join("\n");

@@ -34,6 +34,10 @@ import { inlinePass } from "./codegen/inlinePass.js";
 import type { IRFunc, IRProgram, IRStmt } from "./lowering/ir.js";
 import { UnsupportedConstruct } from "./lowering/errors.js";
 import { assertDefiniteAssignment } from "./lowering/definiteAssign.js";
+import {
+  addAssignedFlags,
+  type AssignedFlag,
+} from "./lowering/assignedFlags.js";
 
 type FuncStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -106,6 +110,10 @@ export interface CompileSpecCResult {
   activatedSnippets: ReadonlyArray<string>;
   /** Signature description so the host can build the koffi prototype. */
   signature: SpecCSignature;
+  /** Synthetic entries only: outputs that may be left unassigned, each
+   *  paired with a trailing flag output that is 0 when it was. The host
+   *  skips writing such an output back. */
+  assignedFlags: ReadonlyArray<AssignedFlag>;
 }
 
 export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
@@ -144,10 +152,30 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
     // unassigned on a zero-iteration run), so only run the output-assignment
     // check on it for a real user-function entry (the call executor).
     const checkEntryOutputs = args.entrySynthetic !== true;
-    assertDefiniteAssignment(spec, { checkOutputs: checkEntryOutputs });
-    for (const fn of prog.functions.values()) {
-      if (fn.cName === spec.cName) continue; // already checked above
+    const definite = assertDefiniteAssignment(spec, {
+      checkOutputs: checkEntryOutputs,
+    });
+    // Only the entry's transitive callees: the shared spec map also holds
+    // earlier synthetic loop/top-level wrappers (from either backend), whose
+    // pseudo-outputs would fail the output check and decline every later
+    // compile in the session.
+    for (const fn of reachableCallees(prog, spec)) {
       assertDefiniteAssignment(fn, { checkOutputs: true });
+    }
+    // Flag synthetic outputs that may stay unassigned (C would hand back
+    // its predeclared 0). A body with a `return` is flagged wholesale, as
+    // the fall-through analysis doesn't see the early exit.
+    let entry = spec;
+    let assignedFlags: AssignedFlag[] = [];
+    if (args.entrySynthetic === true) {
+      const hasReturn = containsReturn(spec.body);
+      const maybe = new Set(
+        spec.outputs.filter(
+          o => !spec.params.includes(o) && (hasReturn || !definite.has(o))
+        )
+      );
+      ({ fn: entry, flags: assignedFlags } = addAssignedFlags(spec, maybe));
+      prog.functions.set(entry.cName, entry);
     }
     // Fold single-use element-wise temps into their consumers so chains
     // fuse into one C loop. Returns a copy; the cached specs (shared
@@ -162,7 +190,8 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
       // through emitProgram's return; the .so build doesn't need it.
       // Diagnostic field kept for symmetry with `compileSpec` (JS).
       activatedSnippets: [],
-      signature: buildSignature(spec),
+      signature: buildSignature(entry),
+      assignedFlags,
     };
   } catch (err) {
     for (const key of lowerer.specializations.keys()) {
@@ -170,6 +199,46 @@ export function compileSpecC(args: CompileSpecCArgs): CompileSpecCResult {
     }
     throw err;
   }
+}
+
+function containsReturn(stmts: IRStmt[]): boolean {
+  return stmts.some(
+    s =>
+      s.kind === "ReturnFromFunction" ||
+      (s.kind === "If" &&
+        (containsReturn(s.thenBody) || containsReturn(s.elseBody))) ||
+      ((s.kind === "While" || s.kind === "For") && containsReturn(s.body))
+  );
+}
+
+/** Specs transitively called from `entry` (excluding it). Any `cName`
+ *  in the IR that names a spec in `prog` counts as a call edge. */
+function reachableCallees(prog: IRProgram, entry: IRFunc): IRFunc[] {
+  const seen = new Set<string>([entry.cName]);
+  const out: IRFunc[] = [];
+  const visit = (node: unknown): void => {
+    if (node === null || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const el of node) visit(el);
+      return;
+    }
+    const rec = node as Record<string, unknown>;
+    const cName = rec.cName;
+    if (typeof cName === "string" && !seen.has(cName)) {
+      const fn = prog.functions.get(cName);
+      if (fn !== undefined) {
+        seen.add(cName);
+        out.push(fn);
+        visit(fn.body);
+      }
+    }
+    for (const key of Object.keys(rec)) {
+      if (key === "ty" || key === "span") continue;
+      visit(rec[key]);
+    }
+  };
+  visit(entry.body);
+  return out;
 }
 
 function buildSignature(spec: IRFunc): SpecCSignature {
