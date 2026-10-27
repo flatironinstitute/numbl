@@ -4,6 +4,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import { dirname, join, relative } from "path";
+import { findTestScripts } from "../src/cli-scan.js";
 
 export interface TestEntry {
   path: string;
@@ -52,20 +53,7 @@ export function walkAllFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-export function walkMFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir).sort()) {
-    const full = join(dir, entry);
-    const st = statSync(full);
-    if (st.isDirectory()) {
-      if (!entry.startsWith(".")) walkMFiles(full, out);
-    } else if (st.isFile() && entry.endsWith(".m")) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-// Mirrors scanMFiles() in src/__tests__/test-scripts.test.ts — siblings of
+// Mirrors scanMFiles() in src/cli-scan.ts (as file paths) — siblings of
 // the test file in the same directory, plus @-dirs, +-dirs, and `private/`
 // walked recursively. Includes .m, .numbl.js, and .wasm files.
 export function scanWorkspace(
@@ -130,23 +118,20 @@ export function buildManifest(rootDir: string): Manifest {
     }
   }
 
-  const mFiles = all.filter(f => f.endsWith(".m"));
   const skips = readSkipList(rootDir);
 
-  const tests: TestEntry[] = mFiles
-    .filter(f => sources[toPosix(relative(rootDir, f))]?.includes("SUCCESS"))
-    .map(testAbs => {
-      const path = toPosix(relative(rootDir, testAbs));
-      const entry: TestEntry = {
-        path,
-        workspace: scanWorkspace(dirname(testAbs), testAbs).map(f =>
-          toPosix(relative(rootDir, f))
-        ),
-      };
-      const skip = skips.get(path);
-      if (skip) entry.skip = skip;
-      return entry;
-    });
+  const tests: TestEntry[] = findTestScripts(rootDir).map(testAbs => {
+    const path = toPosix(relative(rootDir, testAbs));
+    const entry: TestEntry = {
+      path,
+      workspace: scanWorkspace(dirname(testAbs), testAbs).map(f =>
+        toPosix(relative(rootDir, f))
+      ),
+    };
+    const skip = skips.get(path);
+    if (skip) entry.skip = skip;
+    return entry;
+  });
 
   return { tests, allFiles, sources, binaries };
 }
