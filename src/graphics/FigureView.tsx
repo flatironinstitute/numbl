@@ -203,6 +203,7 @@ function SingleAxesView({ axes }: { axes: AxesState }) {
         colorbar={axes.colorbar}
         colorbarLocation={axes.colorbarLocation}
         colormap={axes.colormap}
+        colormapData={axes.colormapData}
         axisVisible={axes.axisVisible}
       />
     );

@@ -11,7 +11,7 @@ import type {
   Quiver3Trace,
   PatchTrace,
 } from "./types.js";
-import { colormapLookup } from "./surfColormap.js";
+import { colormapLookup, type ColormapSpec } from "./colormaps.js";
 
 // Color order for plot3 traces
 const TRACE_COLORS = [
@@ -36,6 +36,7 @@ interface SurfViewProps {
   colorbar?: boolean;
   colorbarLocation?: string;
   colormap?: string;
+  colormapData?: number[][];
   /** `axis off` hides the axes box/lines (the plotted surfaces remain). */
   axisVisible?: boolean;
 }
@@ -51,6 +52,7 @@ export function SurfView({
   colorbar,
   colorbarLocation,
   colormap,
+  colormapData,
   axisVisible,
 }: SurfViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -127,6 +129,7 @@ export function SurfView({
     const st = stateRef.current;
     if (!st) return;
     const { scene } = st;
+    const cm: ColormapSpec = { name: colormap, data: colormapData };
 
     // Remove old meshes/lines (keep lights)
     const toRemove: THREE.Object3D[] = [];
@@ -338,7 +341,7 @@ export function SurfView({
 
           const cval = trace.c ? trace.c[idx] : z[idx];
           const t = (cval - cMin) / cRange;
-          const [r, g, b] = colormapLookup(t);
+          const [r, g, b] = colormapLookup(t, cm);
           colors[vi * 3] = r;
           colors[vi * 3 + 1] = g;
           colors[vi * 3 + 2] = b;
@@ -508,7 +511,7 @@ export function SurfView({
           if (Array.isArray(c)) {
             [r, g, b] = c;
           } else {
-            [r, g, b] = colormapLookup(((c as number) - lo) / range);
+            [r, g, b] = colormapLookup(((c as number) - lo) / range, cm);
           }
           vertexColors[i * 3] = r;
           vertexColors[i * 3 + 1] = g;
@@ -814,7 +817,7 @@ export function SurfView({
         );
 
         const t = (bz - zMin) / zRangeT;
-        const [cr, cg, cb] = trace.color ?? colormapLookup(t);
+        const [cr, cg, cb] = trace.color ?? colormapLookup(t, cm);
         const mat = new THREE.MeshPhongMaterial({
           color: new THREE.Color(cr, cg, cb),
         });
@@ -860,7 +863,7 @@ export function SurfView({
         );
 
         const t = (len - xMin) / xRangeH;
-        const [cr, cg, cb] = trace.color ?? colormapLookup(t);
+        const [cr, cg, cb] = trace.color ?? colormapLookup(t, cm);
         const mat = new THREE.MeshPhongMaterial({
           color: new THREE.Color(cr, cg, cb),
         });
@@ -909,6 +912,8 @@ export function SurfView({
     patchTraces,
     shading,
     axisVisible,
+    colormap,
+    colormapData,
   ]);
 
   // Compute color range for the colorbar from surf traces (uses C if present,
@@ -948,7 +953,7 @@ export function SurfView({
           location={(colorbarLocation ?? "eastoutside").toLowerCase()}
           dMin={cbMin}
           dMax={cbMax}
-          colormap={colormap}
+          colormap={{ name: colormap, data: colormapData }}
         />
       )}
     </div>
@@ -966,16 +971,14 @@ function ColorbarOverlay({
   location: string;
   dMin: number;
   dMax: number;
-  colormap?: string;
+  colormap: ColormapSpec;
 }) {
   // Build a CSS gradient from N samples of the colormap.
-  // (colormap name is currently unused — surfColormap.colormapLookup uses parula.)
-  void colormap;
   const N = 32;
   const stops: string[] = [];
   for (let i = 0; i < N; i++) {
     const t = i / (N - 1);
-    const [r, g, b] = colormapLookup(t);
+    const [r, g, b] = colormapLookup(t, colormap);
     const rgb = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
     stops.push(`${rgb} ${(t * 100).toFixed(2)}%`);
   }
