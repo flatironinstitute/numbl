@@ -19,18 +19,19 @@ Numbl is organized as a platform-agnostic language core surrounded by thin platf
 
 ## Component map
 
-| Component        | Responsibility                                                                   |
-| ---------------- | -------------------------------------------------------------------------------- |
-| Lexer            | Tokenize `.m` source, handling MATLAB's whitespace- and context-sensitive rules. |
-| Parser           | Produce the AST (statements and expressions).                                    |
-| LoweringContext  | Workspace/function/class resolution; AST cache; directive metadata.              |
-| Interpreter      | AST walker; drives builtin dispatch and JIT triggers.                            |
-| Runtime          | Value constructors, global/persistent stores, plot accumulator, output router.   |
-| JIT              | Type-specializes hot code to JS (`--opt 1`) and to C (`--opt 2`).                |
-| Builtin registry | `IBuiltin` lookup by name; provides type resolution and JIT emission.            |
-| Ops layer        | Dispatches tensor kernels to the native addon or JS fallbacks.                   |
-| Stdlib bundle    | `.m` files loaded into every run's workspace.                                    |
-| Platform adapter | Implements file I/O, system info, and output/plot callbacks for one environment. |
+| Component        | Responsibility                                                                                                             |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Lexer            | Tokenize `.m` source, handling MATLAB's whitespace- and context-sensitive rules.                                           |
+| Parser           | Produce the AST (statements and expressions).                                                                              |
+| Workspace        | The visible file set (caller files, implicit cwd, search path, stdlib); addpath, rmpath and cd (`workspace/workspace.ts`). |
+| LoweringContext  | Workspace/function/class resolution; AST cache; directive metadata.                                                        |
+| Interpreter      | AST walker; drives builtin dispatch and JIT triggers.                                                                      |
+| Runtime          | Value constructors, global/persistent stores, plot accumulator, output router.                                             |
+| JIT              | Type-specializes hot code to JS (`--opt 1`) and to C (`--opt 2`).                                                          |
+| Builtin registry | `IBuiltin` lookup by name; provides type resolution and JIT emission.                                                      |
+| Ops layer        | Dispatches tensor kernels to the native addon or JS fallbacks.                                                             |
+| Stdlib bundle    | `.m` files loaded into every run's workspace.                                                                              |
+| Platform adapter | Implements file I/O, system info, and output/plot callbacks for one environment.                                           |
 
 ## Data flow
 
