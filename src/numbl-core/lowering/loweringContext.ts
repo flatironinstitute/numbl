@@ -13,6 +13,7 @@ import type { IBuiltin } from "../interpreter/builtins/index.js";
 import { SPECIAL_BUILTIN_NAMES } from "../runtime/specialBuiltins.js";
 import type { WorkspaceFile } from "../../numbl-core/workspace/index.js";
 import {
+  HANDLE_BASE_CLASSES,
   type ClassInfo,
   extractClassInfo,
   makeOldStyleClassInfo,
@@ -697,28 +698,65 @@ export class LoweringContext {
     );
   }
 
+  /** Ancestors of a class in method-resolution order: depth-first, left to
+   *  right through each `<` list, each name once. Built-in bases such as
+   *  `handle` are included even though they have no ClassInfo; a built-in
+   *  handle mixin (e.g. `matlab.mixin.Copyable`) is followed by `handle`. */
+  superclassNames(info: ClassInfo): string[] {
+    const out: string[] = [];
+    const seen = new Set([info.qualifiedName]);
+    const visit = (supers: string[]) => {
+      for (const s of supers) {
+        if (seen.has(s)) continue;
+        seen.add(s);
+        out.push(s);
+        const parent = this.getClassInfo(s);
+        if (parent) visit(parent.superClasses);
+        else if (HANDLE_BASE_CLASSES.has(s) && s !== "handle")
+          visit(["handle"]);
+      }
+    };
+    visit(info.superClasses);
+    return out;
+  }
+
+  /** `superclassNames` by class name; empty for an unknown class. */
+  classAncestors(className: string): string[] {
+    const info = this.getClassInfo(className);
+    return info ? this.superclassNames(info) : [];
+  }
+
+  /** A class followed by its ancestors that have class definitions, in
+   *  method-resolution order. */
+  classLineage(info: ClassInfo): ClassInfo[] {
+    const out = [info];
+    for (const name of this.superclassNames(info)) {
+      const parent = this.getClassInfo(name);
+      if (parent) out.push(parent);
+    }
+    return out;
+  }
+
+  /** True if the class derives from a handle base class. */
+  isHandleClass(info: ClassInfo): boolean {
+    return this.superclassNames(info).some(s => HANDLE_BASE_CLASSES.has(s));
+  }
+
   /** Check if a class (or any ancestor) has a given method. */
   classHasMethod(className: string, methodName: string): boolean {
-    let current: string | null = className;
-    while (current) {
-      const info = this.getClassInfo(current);
-      if (!info) return false;
-      if (info.methodNames.has(methodName)) return true;
-      current = info.superClass;
-    }
-    return false;
+    const info = this.getClassInfo(className);
+    return (
+      !!info && this.classLineage(info).some(c => c.methodNames.has(methodName))
+    );
   }
 
   /** Check if a class (or any ancestor) has a given static method. */
   classHasStaticMethod(className: string, methodName: string): boolean {
-    let current: string | null = className;
-    while (current) {
-      const info = this.getClassInfo(current);
-      if (!info) return false;
-      if (info.staticMethodNames.has(methodName)) return true;
-      current = info.superClass;
-    }
-    return false;
+    const info = this.getClassInfo(className);
+    return (
+      !!info &&
+      this.classLineage(info).some(c => c.staticMethodNames.has(methodName))
+    );
   }
 
   /**
@@ -726,19 +764,17 @@ export class LoweringContext {
    * Checks instance methods, external method files, static methods, and constructors.
    */
   findDefiningClass(className: string, methodName: string): string {
-    let current: string | null = className;
-    while (current) {
-      const info = this.getClassInfo(current);
-      if (!info) break;
+    const info = this.getClassInfo(className);
+    if (!info) return className;
+    for (const c of this.classLineage(info)) {
       if (
-        info.methodNames.has(methodName) ||
-        info.externalMethodFiles.has(methodName) ||
-        info.staticMethodNames.has(methodName) ||
-        methodName === info.constructorName
+        c.methodNames.has(methodName) ||
+        c.externalMethodFiles.has(methodName) ||
+        c.staticMethodNames.has(methodName) ||
+        methodName === c.constructorName
       ) {
-        return current;
+        return c === info ? className : c.qualifiedName;
       }
-      current = info.superClass;
     }
     return className;
   }
@@ -971,10 +1007,8 @@ export class LoweringContext {
     for (const [className] of allClasses) {
       const instanceMethods = new Set<string>();
       const staticMethods = new Set<string>();
-      let current: string | null = className;
-      while (current) {
-        const info = this.getClassInfo(current);
-        if (!info) break;
+      const self = this.getClassInfo(className);
+      for (const info of self ? this.classLineage(self) : []) {
         for (const m of info.methodNames) instanceMethods.add(m);
         for (const m of info.staticMethodNames) staticMethods.add(m);
         // Include external method files. For old-style @folder classes the
@@ -986,7 +1020,6 @@ export class LoweringContext {
             instanceMethods.add(m);
           }
         }
-        current = info.superClass;
       }
       if (instanceMethods.size > 0)
         classInstanceMethods.set(className, instanceMethods);

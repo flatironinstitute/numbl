@@ -482,16 +482,7 @@ register("superclasses", (ctx, args) => {
   } else if (isRuntimeChar(v) || isRuntimeString(v)) {
     className = toString(v);
   }
-  const names: string[] = [];
-  if (className) {
-    const seen = new Set<string>([className]);
-    let current = ctx.rt.getClassParentName(className);
-    while (current && !seen.has(current)) {
-      names.push(current);
-      seen.add(current);
-      current = ctx.rt.getClassParentName(current);
-    }
-  }
+  const names = className ? ctx.rt.classAncestors(className) : [];
   return RTV.cell(
     names.map(n => RTV.string(n)),
     [names.length, 1]

@@ -276,11 +276,8 @@ export function isa(
     return RTV.logical(true);
   // Walk the inheritance chain for class instances
   if (isRuntimeClassInstance(mv) || isRuntimeClassInstanceArray(mv)) {
-    let current: string | null = rt.getClassParentName(mv.className);
-    while (current) {
-      if (current === clsName) return RTV.logical(true);
-      current = rt.getClassParentName(current);
-    }
+    if (rt.classAncestors(mv.className).includes(clsName))
+      return RTV.logical(true);
   }
   return RTV.logical(false);
 }

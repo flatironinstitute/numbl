@@ -4,6 +4,16 @@
 
 import { type Expr, type Stmt } from "../parser/index.js";
 
+/** Built-in base classes that confer handle (reference) semantics. */
+export const HANDLE_BASE_CLASSES = new Set([
+  "handle",
+  "dynamicprops",
+  "matlab.mixin.Copyable",
+  "matlab.mixin.SetGet",
+  "matlab.mixin.SetGetExactNames",
+  "hgsetget",
+]);
+
 /**
  * Metadata about a class definition.
  * The ctx field is typed as 'unknown' to avoid circular dependencies with LoweringContext.
@@ -14,7 +24,8 @@ export interface ClassInfo {
   qualifiedName: string; // e.g. "Rectangle_" or "geometry.Circle"
   fileName: string; // e.g. "Rectangle_.m"
   source: string; // raw .m file source
-  superClass: string | null;
+  /** Direct superclasses in declaration order (`classdef A < B & C`). */
+  superClasses: string[];
   propertyNames: string[];
   propertyDefaults: Map<string, Expr>; // property name → default AST expr
   methodNames: Set<string>; // instance method names (non-static, non-constructor)
@@ -123,7 +134,7 @@ export function extractClassInfo(
     qualifiedName,
     fileName,
     source,
-    superClass: classDef.superClass,
+    superClasses: classDef.superClasses,
     propertyNames,
     propertyDefaults,
     methodNames,
@@ -171,7 +182,7 @@ export function makeOldStyleClassInfo(
     qualifiedName,
     fileName: constructorFile.fileName,
     source: constructorFile.source,
-    superClass: null,
+    superClasses: [],
     propertyNames: [],
     propertyDefaults: new Map(),
     methodNames,
