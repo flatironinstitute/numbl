@@ -137,6 +137,14 @@ export function emitProgram(prog: IRProgram, opts: EmitOptions): string {
   out.push("");
   for (const h of headers) out.push(`#include ${h}`);
   out.push("");
+  // No FMA contraction, so results match the JS backend and the
+  // interpreter bit for bit whatever compiler builds this (clang
+  // contracts by default; the host also passes -ffp-contract=off). gcc
+  // ignores the standard pragma (and warns under -Wall), hence the guard.
+  out.push("#if defined(__clang__)");
+  out.push("#pragma STDC FP_CONTRACT OFF");
+  out.push("#endif");
+  out.push("");
 
   if (state.active.size > 0) {
     out.push(renderRuntimeBodies(state));
