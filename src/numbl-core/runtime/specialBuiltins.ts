@@ -1601,32 +1601,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return RTV.char(folder + "/" + name);
   });
 
-  // ── Path utility builtins (pure string operations, no fs needed) ──
-
-  registerSpecial("fileparts", (nargout, args) => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    if (margs.length < 1)
-      throw new RuntimeError("fileparts requires 1 argument");
-    const p = toString(margs[0]);
-    // Find the last path separator
-    const lastSep = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-    const dir = lastSep >= 0 ? p.slice(0, lastSep) : "";
-    const rest = lastSep >= 0 ? p.slice(lastSep + 1) : p;
-    // Find the extension
-    const dotIdx = rest.lastIndexOf(".");
-    const name = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest;
-    const ext = dotIdx >= 0 ? rest.slice(dotIdx) : "";
-    if (nargout <= 1) return RTV.char(dir);
-    if (nargout === 2) return [RTV.char(dir), RTV.char(name)];
-    return [RTV.char(dir), RTV.char(name), RTV.char(ext)];
-  });
-
-  registerSpecial("fullfile", (_nargout, args) => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    const parts = margs.map(a => toString(a));
-    return RTV.char(parts.join("/"));
-  });
-
   // ── Workspace builtins ───────────────────────────────────────────
 
   registerSpecialVoid("assignin", args => {
