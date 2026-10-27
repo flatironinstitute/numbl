@@ -14,6 +14,7 @@ import {
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
   isRuntimeFunction,
+  isRuntimeStruct,
   isRuntimeStructArray,
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
@@ -719,14 +720,10 @@ export function evalExprNargout(
         );
         const defaults = new Map<string, RuntimeValue>();
         for (const [propName, defaultExpr] of propertyDefaults) {
-          try {
-            defaults.set(
-              propName,
-              ensureRuntimeValue(this.evalExpr(defaultExpr))
-            );
-          } catch {
-            /* skip */
-          }
+          defaults.set(
+            propName,
+            this.evalPropertyDefault(expr.superClassName, propName, defaultExpr)
+          );
         }
         const superInstance = RTV.classInstance(
           expr.superClassName,
@@ -1600,26 +1597,33 @@ export function evalLValueBase(
       parentBase = cowed;
       parentRv = cowed;
     }
-    try {
+    // Objects resolve the member themselves (properties, get methods,
+    // subsref); their errors propagate.
+    const isObject =
+      isRuntimeClassInstance(parentRv) || isRuntimeClassInstanceArray(parentRv);
+    const hasField =
+      (isRuntimeStruct(parentRv) && parentRv.fields.has(base.name)) ||
+      (isRuntimeStructArray(parentRv) &&
+        parentRv.fieldNames.includes(base.name));
+    if (isObject || hasField) {
       return this.rt.getMember(parentBase, base.name);
-    } catch {
-      // Field doesn't exist — auto-create using the caller-supplied
-      // default. The default reflects what the next lvalue level needs
-      // (empty struct for `.member`, empty tensor for `(...)` /
-      // `{...}`), so `s.a(3) = 5` initializes `s.a` as an empty tensor
-      // that the subsequent indexStore can grow to `[0 0 5]`, while
-      // `s.a.b = 5` keeps the existing empty-struct path.
-      const newValue = defaultVal;
-      const updatedParent = this.rt.setMemberReturn(
-        parentRv,
-        base.name,
-        newValue
-      );
-      if (base.base.type === "Ident") {
-        this.env.set(base.base.name, ensureRuntimeValue(updatedParent));
-      }
-      return newValue;
     }
+    // Field doesn't exist — auto-create using the caller-supplied
+    // default. The default reflects what the next lvalue level needs
+    // (empty struct for `.member`, empty tensor for `(...)` /
+    // `{...}`), so `s.a(3) = 5` initializes `s.a` as an empty tensor
+    // that the subsequent indexStore can grow to `[0 0 5]`, while
+    // `s.a.b = 5` keeps the existing empty-struct path.
+    const newValue = defaultVal;
+    const updatedParent = this.rt.setMemberReturn(
+      parentRv,
+      base.name,
+      newValue
+    );
+    if (base.base.type === "Ident") {
+      this.env.set(base.base.name, ensureRuntimeValue(updatedParent));
+    }
+    return newValue;
   }
   if (base.type === "Index") {
     let baseVal = this.evalLValueBase(base.base, RTV.struct({}));
@@ -1642,7 +1646,11 @@ export function evalLValueBase(
         }
       }
       return this.rt.index(baseVal, indices, 1, skipSubsref);
-    } catch {
+    } catch (e) {
+      // An index past the end grows the array; an object's own subsref
+      // errors propagate.
+      if (isRuntimeClassInstance(baseRv) || isRuntimeClassInstanceArray(baseRv))
+        throw e;
       return defaultVal;
     }
   }
@@ -1670,7 +1678,9 @@ export function evalLValueBase(
         if (result.length === 0) return defaultVal;
       }
       return result;
-    } catch {
+    } catch (e) {
+      if (isRuntimeClassInstance(baseRv) || isRuntimeClassInstanceArray(baseRv))
+        throw e;
       return defaultVal;
     }
   }

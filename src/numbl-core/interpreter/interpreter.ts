@@ -441,6 +441,11 @@ export class Interpreter {
     propertyDefaults: Map<string, Expr>;
   };
   declare isHandleClass: (classInfo: ClassInfo) => boolean;
+  declare evalPropertyDefault: (
+    className: string,
+    propName: string,
+    defaultExpr: Expr
+  ) => RuntimeValue;
   declare evalInLocalScope: (
     codeArg: unknown,
     fileName?: string,
