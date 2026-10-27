@@ -1601,48 +1601,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     return RTV.char(folder + "/" + name);
   });
 
-  // ── Workspace builtins ───────────────────────────────────────────
-
-  registerSpecialVoid("assignin", args => {
-    if (args.length < 3)
-      throw new RuntimeError("assignin requires 3 arguments");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    const ws = toString(margs[0]);
-    if (ws !== "base" && ws !== "caller" && ws !== "workspace")
-      throw new RuntimeError(
-        "assignin: first argument must be 'base', 'caller', or 'workspace'"
-      );
-    const varName = toString(margs[1]);
-    if (ws === "caller") {
-      rt.setCallerVariable(varName, args[2]);
-    } else {
-      rt.setWorkspaceVariable(varName, args[2]);
-    }
-  });
-
-  registerSpecial("evalin", (_nargout, args) => {
-    if (args.length < 2)
-      throw new RuntimeError("evalin requires at least 2 arguments");
-    const margs = args.map(a => ensureRuntimeValue(a));
-    const ws = toString(margs[0]);
-    if (ws !== "base" && ws !== "caller" && ws !== "workspace")
-      throw new RuntimeError(
-        "evalin: first argument must be 'base', 'caller', or 'workspace'"
-      );
-    const varName = toString(margs[1]);
-    const val =
-      ws === "caller"
-        ? rt.getCallerVariable(varName)
-        : rt.getWorkspaceVariable(varName);
-    if (val === undefined) {
-      if (args.length >= 3) return args[2];
-      throw new RuntimeError(
-        `evalin: variable '${varName}' does not exist in ${ws}`
-      );
-    }
-    return val;
-  });
-
   // ── Plot builtins ────────────────────────────────────────────────
 
   registerSpecialVoid("drawnow", () => {
@@ -1739,46 +1697,6 @@ export function registerSpecialBuiltins(rt: Runtime): void {
     rt.output("Warning: savepath is a no-op in numbl\n");
     // MATLAB returns 0 on success when an output is requested.
     return nargout >= 1 ? RTV.num(0) : undefined;
-  });
-
-  // ── input builtin ────────────────────────────────────────────────
-
-  registerSpecial("input", (_nargout, args) => {
-    const margs = args.map(a => ensureRuntimeValue(a));
-    const prompt = margs.length >= 1 ? toString(margs[0]) : "";
-    const isStringMode =
-      margs.length >= 2 &&
-      (isRuntimeChar(margs[1]) || isRuntimeString(margs[1])) &&
-      toString(margs[1]) === "s";
-
-    const line = rt.readInput(prompt);
-
-    if (isStringMode) {
-      return RTV.char(line);
-    }
-
-    // Numeric/expression mode: empty input returns []
-    if (line.trim() === "") {
-      return RTV.tensor(allocFloat64Array(0), [0, 0]);
-    }
-
-    // Evaluate the expression in the current workspace
-    if (!rt.evalLocalCallback) {
-      throw new RuntimeError(
-        "input: expression evaluation is not available in this environment"
-      );
-    }
-    // Gather current workspace variables for evaluation context
-    const vars: Record<string, RuntimeValue> = {};
-    for (const [name, acc] of rt.workspaceAccessors) {
-      const val = acc.get();
-      if (val !== undefined) vars[name] = ensureRuntimeValue(val);
-    }
-    for (const [name, val] of rt.dynamicWorkspaceVars) {
-      if (val !== undefined) vars[name] = ensureRuntimeValue(val);
-    }
-    const result = rt.evalLocalCallback(line, vars, text => rt.output(text));
-    return ensureRuntimeValue(result.returnValue);
   });
 
   registerSpecial("path", (nargout, args) => {

@@ -127,7 +127,6 @@ import {
 } from "../../graphics/figuresReducer.js";
 import { computeAxisLimits } from "../../graphics/axisLimits.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
-import { toString as _toString } from "./convert.js";
 import { allocFloat64Array } from "./alloc.js";
 import { isosurfaceFromArgs } from "../helpers/marching-cubes.js";
 
@@ -269,28 +268,6 @@ export class Runtime {
 
   /** Reference to the active search paths (set by executeCode). */
   public searchPaths: string[] = [];
-
-  // Workspace accessors: varName → { get, set } closures over script-level vars
-  // Registered by generated code so assignin/evalin can access workspace variables
-  public workspaceAccessors = new Map<
-    string,
-    { get: () => unknown; set: (v: unknown) => void }
-  >();
-
-  // Dynamic workspace variables: for vars NOT declared via % external-access
-  public dynamicWorkspaceVars = new Map<string, unknown>();
-
-  // Caller accessor stack for evalin/assignin('caller', ...)
-  // Each entry is either null (no accessors needed) or a record of var accessors.
-  // Pushed/popped by generated function code.
-  public callerAccessorStack: (Record<
-    string,
-    [() => unknown, (v: unknown) => void]
-  > | null)[] = [];
-
-  // Dynamic caller variable stack: parallel to callerAccessorStack
-  // Each entry is a Map for dynamic vars (or null, lazily allocated)
-  private dynamicCallerVarStack: (Map<string, unknown> | null)[] = [];
 
   // File I/O adapter (injected from host environment)
   public fileIO?: FileIOAdapter;
@@ -1246,123 +1223,6 @@ export class Runtime {
     }
     this.output("\n");
     return 0;
-  }
-
-  // ── Workspace accessors (for assignin/evalin) ──────────────────────
-
-  public setWorkspaceAccessor(
-    name: string,
-    getter: () => unknown,
-    setter: (v: unknown) => void
-  ): void {
-    this.workspaceAccessors.set(name, { get: getter, set: setter });
-  }
-
-  public getWorkspaceVariable(name: string): unknown | undefined {
-    const accessor = this.workspaceAccessors.get(name);
-    if (accessor) return accessor.get();
-    // Dynamic fallback
-    return this.dynamicWorkspaceVars.get(name);
-  }
-
-  public setWorkspaceVariable(name: string, value: unknown): void {
-    const accessor = this.workspaceAccessors.get(name);
-    if (accessor) {
-      accessor.set(value);
-    } else {
-      // Dynamic fallback
-      this.dynamicWorkspaceVars.set(name, value);
-    }
-  }
-
-  // ── Caller accessors (for assignin/evalin('caller', ...)) ──────────
-
-  public pushCallerAccessors(
-    accessors: Record<string, [() => unknown, (v: unknown) => void]> | null
-  ): void {
-    this.callerAccessorStack.push(accessors);
-    this.dynamicCallerVarStack.push(null); // lazily allocated
-  }
-
-  public popCallerAccessors(): void {
-    this.callerAccessorStack.pop();
-    this.dynamicCallerVarStack.pop();
-  }
-
-  public getCallerVariable(name: string): unknown | undefined {
-    if (this.callerAccessorStack.length < 2) return undefined;
-    // Check static accessors first
-    const callerAccessors =
-      this.callerAccessorStack[this.callerAccessorStack.length - 2];
-    if (callerAccessors) {
-      const accessor = callerAccessors[name];
-      if (accessor) return accessor[0]();
-    }
-    // Dynamic fallback
-    const dynamicFrame =
-      this.dynamicCallerVarStack[this.dynamicCallerVarStack.length - 2];
-    return dynamicFrame?.get(name);
-  }
-
-  public setCallerVariable(name: string, value: unknown): void {
-    if (this.callerAccessorStack.length < 2) return;
-    // Check static accessors first
-    const callerAccessors =
-      this.callerAccessorStack[this.callerAccessorStack.length - 2];
-    if (callerAccessors) {
-      const accessor = callerAccessors[name];
-      if (accessor) {
-        accessor[1](value);
-        return;
-      }
-    }
-    // Dynamic fallback
-    let dynamicFrame =
-      this.dynamicCallerVarStack[this.dynamicCallerVarStack.length - 2];
-    if (!dynamicFrame) {
-      dynamicFrame = new Map();
-      this.dynamicCallerVarStack[this.dynamicCallerVarStack.length - 2] =
-        dynamicFrame;
-    }
-    dynamicFrame.set(name, value);
-  }
-
-  // ── eval with local variable access ─────────────────────────────────
-
-  public evalLocal(
-    code: unknown,
-    accessors: Record<string, [() => unknown, (v: unknown) => void]>
-  ): unknown {
-    const codeStr = _toString(ensureRuntimeValue(code));
-
-    // Read current values from accessors
-    const initialValues: Record<string, RuntimeValue> = {};
-    for (const [name, [getter]] of Object.entries(accessors)) {
-      const val = getter();
-      if (val !== undefined && val !== null) {
-        initialValues[name] = ensureRuntimeValue(val);
-      }
-    }
-
-    if (!this.evalLocalCallback) {
-      throw new RuntimeError(
-        "eval: internal error - no eval callback available"
-      );
-    }
-
-    const result = this.evalLocalCallback(codeStr, initialValues, text =>
-      this.output(text)
-    );
-
-    // Write back modified variables
-    for (const [name, value] of Object.entries(result.variableValues)) {
-      const accessor = accessors[name];
-      if (accessor) {
-        accessor[1](value);
-      }
-    }
-
-    return result.returnValue;
   }
 
   // ── Persistent variables ────────────────────────────────────────────

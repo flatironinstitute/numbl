@@ -216,4 +216,30 @@ result = double_it(21);
     );
     expect(result.variableValues["x"]).toBe(1);
   });
+
+  it("input() evaluates the response in the calling scope", () => {
+    let calls = 0;
+    const fnSource = "function y = ask()\nk = 7;\ny = input('? ');\nend\n";
+    const result = executeCode(
+      "x = 5;\ny = input('');\nz = ask();\n",
+      { onInput: () => (calls++ === 0 ? "x + 1" : "k * 2") },
+      [{ name: "ask.m", source: fnSource }]
+    );
+    expect(result.variableValues["y"]).toBe(6);
+    expect(result.variableValues["z"]).toBe(14);
+    expect(result.variableValues["__numbl_input_result__"]).toBeUndefined();
+  });
+
+  it("assignin and evalin reach the base and caller workspaces", () => {
+    const setter =
+      "function setter()\nassignin('base', 'b', 1);\nhelper();\nend\n";
+    const helper =
+      "function helper()\nv = evalin('caller', 'exist(''q'', ''var'')');\nassignin('caller', 'c', v + 2);\nend\n";
+    const result = executeCode("setter();\n", {}, [
+      { name: "setter.m", source: setter },
+      { name: "helper.m", source: helper },
+    ]);
+    expect(result.variableValues["b"]).toBe(1);
+    expect(result.variableValues["c"]).toBeUndefined();
+  });
 });

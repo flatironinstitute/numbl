@@ -88,36 +88,44 @@ register("eval", (ctx, args) => {
   return ctx.evalInLocalScope(args[0]);
 });
 
+/** The environment named by an evalin/assignin scope argument. `'workspace'`
+ *  is accepted as a synonym for `'base'`. At the top level the caller is the
+ *  base workspace. */
+function scopeEnv(
+  ctx: InterpreterContext,
+  fn: string,
+  arg: unknown
+): Environment {
+  const scope = toString(ensureRuntimeValue(arg));
+  if (scope === "caller") return ctx.callerEnv ?? ctx.workspaceEnv ?? ctx.env;
+  if (scope === "base" || scope === "workspace")
+    return ctx.workspaceEnv ?? ctx.env;
+  throw new RuntimeError(`${fn}: first argument must be 'base' or 'caller'`);
+}
+
 register("evalin", (ctx, args) => {
-  if (args.length < 2) return FALL_THROUGH;
+  if (args.length < 2)
+    throw new RuntimeError("evalin requires at least 2 arguments");
   const scope = toString(ensureRuntimeValue(args[0]));
-  const targetEnv =
-    scope === "caller"
-      ? ctx.callerEnv
-      : scope === "workspace"
-        ? ctx.workspaceEnv
-        : undefined;
-  if (targetEnv) {
-    const code = toString(ensureRuntimeValue(args[1]));
-    // Simple variable name — just look it up
-    if (/^[a-zA-Z_]\w*$/.test(code)) {
-      const val = targetEnv.get(code);
-      if (val !== undefined) return val;
-      if (args.length >= 3) return ensureRuntimeValue(args[2]);
-      throw new RuntimeError(
-        `Variable '${code}' does not exist in ${scope} scope`
-      );
-    }
-    // Otherwise evaluate as code in target scope
-    const savedEnv = ctx.env;
-    ctx.setEnv(targetEnv);
-    try {
-      return ctx.evalInLocalScope(args[1]);
-    } finally {
-      ctx.setEnv(savedEnv);
-    }
+  const targetEnv = scopeEnv(ctx, "evalin", args[0]);
+  const code = toString(ensureRuntimeValue(args[1]));
+  // Simple variable name — just look it up
+  if (/^[a-zA-Z_]\w*$/.test(code)) {
+    const val = targetEnv.get(code);
+    if (val !== undefined) return val;
+    if (args.length >= 3) return ensureRuntimeValue(args[2]);
+    throw new RuntimeError(
+      `Variable '${code}' does not exist in ${scope} scope`
+    );
   }
-  return ctx.evalInLocalScope(args[1]);
+  // Otherwise evaluate as code in target scope
+  const savedEnv = ctx.env;
+  ctx.setEnv(targetEnv);
+  try {
+    return ctx.evalInLocalScope(args[1]);
+  } finally {
+    ctx.setEnv(savedEnv);
+  }
 });
 
 register("str2num", (ctx, args) => {
@@ -159,22 +167,32 @@ register("str2num", (ctx, args) => {
 });
 
 register("assignin", (ctx, args) => {
-  if (args.length < 3) return FALL_THROUGH;
-  const scope = toString(ensureRuntimeValue(args[0]));
+  if (args.length < 3) throw new RuntimeError("assignin requires 3 arguments");
   const varName = toString(ensureRuntimeValue(args[1]));
   const val = ensureRuntimeValue(args[2]);
-  const targetEnv =
-    scope === "caller"
-      ? ctx.callerEnv
-      : scope === "workspace"
-        ? ctx.workspaceEnv
-        : undefined;
-  if (targetEnv) {
-    targetEnv.set(varName, val);
-  } else {
-    ctx.env.set(varName, val);
-  }
+  scopeEnv(ctx, "assignin", args[0]).set(varName, val);
   return undefined;
+});
+
+register("input", (ctx, args) => {
+  const prompt = args.length >= 1 ? toString(ensureRuntimeValue(args[0])) : "";
+  const stringMode =
+    args.length >= 2 && toString(ensureRuntimeValue(args[1])) === "s";
+  const line = ctx.rt.readInput(prompt);
+  if (stringMode) return RTV.char(line);
+  if (line.trim() === "") return RTV.tensor(new Float64Array(0), [0, 0]);
+  // Evaluate the response as an expression in the calling scope, through a
+  // temp variable (as str2num does).
+  const tmp = "__numbl_input_result__";
+  try {
+    ctx.evalInLocalScope(`${tmp} = ${line};`);
+    const result = ctx.env.get(tmp);
+    if (result === undefined)
+      throw new RuntimeError("input: the response did not produce a value");
+    return result;
+  } finally {
+    ctx.env.delete(tmp);
+  }
 });
 
 register("clear", (ctx, args) => {
