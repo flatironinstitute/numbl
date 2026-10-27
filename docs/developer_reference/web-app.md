@@ -36,8 +36,10 @@ Figures render in a separate Vite-built bundle that the browser app embeds (and 
 A second Vite entry (`src/site-viewer/`, built to `dist-site-viewer/` via
 `vite.site-viewer.config.ts`) packages the same `IDEWorkspace` as a standalone,
 deployable app. Instead of IndexedDB or the URL hash, it loads files from a
-baked-in `project.zip` through the `useStaticProjectFiles` hook (a binary-safe
-sibling of `useShareProjectFiles` — edits live in memory and reset on reload).
+baked-in `project.zip` through the `useStaticProjectFiles` hook. It and
+`useShareProjectFiles` (the URL-hash share page) both wrap
+`useInMemoryProjectFiles`, so edits live in memory and reset on reload; the
+static hook is binary-safe because it never round-trips content through text.
 It uses a relative asset base (`base: "./"`) so it works under any deploy
 subpath.
 

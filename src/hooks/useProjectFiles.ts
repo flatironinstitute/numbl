@@ -15,15 +15,18 @@ import {
   getFileContent,
   getAllFileContents,
 } from "../db/operations";
+import {
+  debounce,
+  filesReducer,
+  generateDuplicateName,
+  generateUniqueFolderName,
+  generateUniqueName,
+  uploadOverwriteMessage,
+  type FileEntry,
+} from "./projectFilesState";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8");
-
-/** Metadata-only file reference (no content loaded). */
-export interface WorkspaceFile {
-  id: string;
-  name: string;
-}
 
 /** Decode file data as UTF-8 text. */
 export function fileText(data: Uint8Array): string {
@@ -38,75 +41,8 @@ export function isBinaryData(data: Uint8Array): boolean {
   return false;
 }
 
-// Actions for the files reducer
-type FilesAction =
-  | { type: "SET_FILES"; files: WorkspaceFile[] }
-  | { type: "ADD_FILE"; file: WorkspaceFile }
-  | { type: "DELETE_FILE"; fileId: string }
-  | { type: "RENAME_FILE"; fileId: string; newName: string }
-  | { type: "RENAME_FOLDER"; oldPath: string; newPath: string }
-  | { type: "MOVE_FILE"; fileId: string; newName: string }
-  | {
-      type: "MERGE_VFS";
-      added: WorkspaceFile[];
-      deletedPaths: string[];
-    };
-
-// Reducer for managing files state (metadata only)
-function filesReducer(
-  state: WorkspaceFile[],
-  action: FilesAction
-): WorkspaceFile[] {
-  switch (action.type) {
-    case "SET_FILES":
-      return action.files;
-
-    case "ADD_FILE":
-      return [...state, action.file];
-
-    case "DELETE_FILE":
-      return state.filter(f => f.id !== action.fileId);
-
-    case "RENAME_FILE":
-      return state.map(f =>
-        f.id === action.fileId ? { ...f, name: action.newName } : f
-      );
-
-    case "RENAME_FOLDER":
-      return state.map(f => {
-        if (f.name.startsWith(action.oldPath + "/")) {
-          return {
-            ...f,
-            name: action.newPath + f.name.slice(action.oldPath.length),
-          };
-        }
-        return f;
-      });
-
-    case "MOVE_FILE":
-      return state.map(f =>
-        f.id === action.fileId ? { ...f, name: action.newName } : f
-      );
-
-    case "MERGE_VFS": {
-      let result = state;
-      if (action.deletedPaths.length > 0) {
-        const deletedSet = new Set(action.deletedPaths);
-        result = result.filter(f => !deletedSet.has(f.name));
-      }
-      if (action.added.length > 0) {
-        result = [...result, ...action.added];
-      }
-      return result;
-    }
-
-    default:
-      return state;
-  }
-}
-
 export interface UseProjectFilesResult {
-  files: WorkspaceFile[];
+  files: FileEntry[];
   activeFileId: string;
   loading: boolean;
   setActiveFileId: (id: string) => void;
@@ -131,80 +67,10 @@ export interface UseProjectFilesResult {
   /** Content cache — updated on edits and loads. */
   contentCache: React.RefObject<Map<string, Uint8Array>>;
   mergeVfsChanges: (result: {
-    addedFiles: WorkspaceFile[];
+    addedFiles: FileEntry[];
     modifiedFiles: { path: string; data: Uint8Array }[];
     deletedPaths: string[];
   }) => void;
-}
-
-// Debounce helper
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function debounce<T extends (...args: any[]) => any>(
-  fn: T,
-  delay: number
-): (...args: Parameters<T>) => void {
-  let timeoutId: ReturnType<typeof setTimeout>;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => fn(...args), delay);
-  };
-}
-
-function generateUniqueName(
-  files: WorkspaceFile[],
-  folderPath?: string
-): string {
-  const existing = new Set(files.map(f => f.name));
-  for (let i = 1; ; i++) {
-    const baseName = `untitled${i === 1 ? "" : i}.m`;
-    const fullName = folderPath ? `${folderPath}/${baseName}` : baseName;
-    if (!existing.has(fullName)) return baseName;
-  }
-}
-
-export function generateDuplicateName(
-  files: WorkspaceFile[],
-  sourcePath: string
-): string {
-  const slash = sourcePath.lastIndexOf("/");
-  const folder = slash >= 0 ? sourcePath.slice(0, slash) : "";
-  const base = slash >= 0 ? sourcePath.slice(slash + 1) : sourcePath;
-  const dot = base.lastIndexOf(".");
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : "";
-  const existing = new Set(files.map(f => f.name));
-  for (let i = 1; ; i++) {
-    const suffix = i === 1 ? "_copy" : `_copy${i}`;
-    const candidate = `${stem}${suffix}${ext}`;
-    const fullName = folder ? `${folder}/${candidate}` : candidate;
-    if (!existing.has(fullName)) return fullName;
-  }
-}
-
-function generateUniqueFolderName(
-  files: WorkspaceFile[],
-  parentPath?: string
-): string {
-  const existingFolders = new Set<string>();
-  for (const file of files) {
-    const parts = file.name.split("/");
-    if (parentPath) {
-      if (file.name.startsWith(parentPath + "/")) {
-        const relativeParts = file.name.slice(parentPath.length + 1).split("/");
-        if (relativeParts.length > 1) {
-          existingFolders.add(relativeParts[0]);
-        }
-      }
-    } else {
-      if (parts.length > 1) {
-        existingFolders.add(parts[0]);
-      }
-    }
-  }
-  for (let i = 1; ; i++) {
-    const name = `folder${i === 1 ? "" : i}`;
-    if (!existingFolders.has(name)) return name;
-  }
 }
 
 function getStoredActiveFileId(projectName: string): string {
@@ -248,7 +114,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
 
         if (cancelled) return;
 
-        const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
+        const workspaceFiles: FileEntry[] = projectFiles.map(pf => ({
           id: pf.id,
           name: pf.path,
         }));
@@ -286,7 +152,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       setLoading(true);
       const projectFiles = await getProjectFiles(projectName);
 
-      const workspaceFiles: WorkspaceFile[] = projectFiles.map(pf => ({
+      const workspaceFiles: FileEntry[] = projectFiles.map(pf => ({
         id: pf.id,
         name: pf.path,
       }));
@@ -549,13 +415,11 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
       const newEntries = toUpload.filter(e => !existingByPath.has(e.fullPath));
 
       if (duplicates.length > 0) {
-        const names = duplicates.map(d => d.fullPath).join("\n");
         const ok = window.confirm(
-          `The following ${duplicates.length} file(s) already exist and will be overwritten:\n\n${names}\n\n` +
-            (newEntries.length > 0
-              ? `${newEntries.length} new file(s) will also be added.\n\n`
-              : "") +
-            "Click OK to proceed, or Cancel to abort the upload."
+          uploadOverwriteMessage(
+            duplicates.map(d => d.fullPath),
+            newEntries.length
+          )
         );
         if (!ok) return;
       }
@@ -613,7 +477,7 @@ export function useProjectFiles(projectName: string): UseProjectFilesResult {
     contentCache: contentCacheRef,
     mergeVfsChanges: useCallback(
       (result: {
-        addedFiles: WorkspaceFile[];
+        addedFiles: FileEntry[];
         modifiedFiles: { path: string; data: Uint8Array }[];
         deletedPaths: string[];
       }) => {

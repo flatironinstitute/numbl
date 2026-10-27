@@ -5,7 +5,7 @@
 import { db } from "../db/schema.js";
 import { ensureSystemProject, SYSTEM_PROJECT_NAME } from "../db/operations.js";
 import type { VfsChanges } from "./VirtualFileSystem.js";
-import type { WorkspaceFile } from "../hooks/useProjectFiles.js";
+import type { FileEntry } from "../hooks/projectFilesState.js";
 
 const SYSTEM_PREFIX = "/system/";
 
@@ -53,7 +53,7 @@ function splitChanges(changes: VfsChanges): {
 }
 
 export interface VfsSyncResult {
-  addedFiles: WorkspaceFile[];
+  addedFiles: FileEntry[];
   modifiedFiles: { path: string; data: Uint8Array }[];
   deletedPaths: string[];
 }
@@ -63,7 +63,7 @@ async function syncChangesToDb(
   changes: VfsChanges,
   toRelativePath: (vfsPath: string) => string
 ): Promise<VfsSyncResult | null> {
-  const addedFiles: WorkspaceFile[] = [];
+  const addedFiles: FileEntry[] = [];
   const modifiedFiles: { path: string; data: Uint8Array }[] = [];
   const deletedPaths: string[] = [];
 

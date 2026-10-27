@@ -30,11 +30,11 @@ export interface RemoteServiceHealth {
   nativeAddon?: boolean | null;
 }
 
+const DEFAULT_REMOTE_SERVICE_URL = "http://localhost:3001";
+
 /**
  * Get the remote service URL from localStorage or default
  */
-export const DEFAULT_REMOTE_SERVICE_URL = "http://localhost:3001";
-
 export function getRemoteServiceUrl(): string {
   return (
     localStorage.getItem("numbl_remote_service_url") ||
@@ -47,20 +47,6 @@ export function getRemoteServiceUrl(): string {
  */
 export function setRemoteServiceUrl(url: string): void {
   localStorage.setItem("numbl_remote_service_url", url);
-}
-
-/**
- * Get whether remote execution is enabled
- */
-export function isRemoteExecutionEnabled(): boolean {
-  return localStorage.getItem("numbl_remote_execution_enabled") === "true";
-}
-
-/**
- * Set whether remote execution is enabled
- */
-export function setRemoteExecutionEnabled(enabled: boolean): void {
-  localStorage.setItem("numbl_remote_execution_enabled", String(enabled));
 }
 
 /**

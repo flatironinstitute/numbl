@@ -6,7 +6,7 @@ import {
   isMipCoreInstalled,
   SYSTEM_PROJECT_NAME,
 } from "../db/operations.js";
-import { fetchMipCoreFiles } from "./fetchMipCoreFiles.js";
+import { fetchMipCoreFiles } from "../browser/mip.js";
 
 // The system directory (mip core + any packages installed at runtime by
 // `mip load --install`) lives in IndexedDB and persists across reloads. It is
