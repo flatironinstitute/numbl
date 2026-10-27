@@ -32,7 +32,6 @@ import {
   isRuntimeTensor,
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
-  isRuntimeStringArray,
   isRuntimeCell,
   isRuntimeLogical,
   isRuntimeSparseMatrix,
@@ -107,6 +106,7 @@ import {
 import { computeAxisLimits } from "../../graphics/axisLimits.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { allocFloat64Array } from "./alloc.js";
+import { valueShape } from "./utils.js";
 
 // ── Runtime class ────────────────────────────────────────────────────
 
@@ -717,24 +717,6 @@ export class Runtime {
     return { names, values };
   }
 
-  /** Get shape of a runtime value as a number array. */
-  private static varShape(v: unknown): number[] {
-    const rv = ensureRuntimeValue(v);
-    if (isRuntimeNumber(rv) || isRuntimeLogical(rv)) return [1, 1];
-    if (isRuntimeTensor(rv))
-      return rv.shape.length >= 2 ? [...rv.shape] : [1, ...rv.shape];
-    if (isRuntimeSparseMatrix(rv)) return [rv.m, rv.n];
-    if (isRuntimeCell(rv)) return [...rv.shape];
-    if (isRuntimeChar(rv))
-      return (
-        rv.shape ?? (rv.value.length === 0 ? [0, 0] : [1, rv.value.length])
-      );
-    if (isRuntimeString(rv)) return [1, 1];
-    if (isRuntimeStringArray(rv)) return [...rv.shape];
-    if (isRuntimeClassInstance(rv)) return [1, 1];
-    return [1, 1];
-  }
-
   /** Estimate bytes for a runtime value. */
   private static varBytes(v: unknown): number {
     const rv = ensureRuntimeValue(v);
@@ -810,7 +792,7 @@ export class Runtime {
     const rv = ensureRuntimeValue(v);
     return {
       name,
-      shape: Runtime.varShape(v),
+      shape: valueShape(ensureRuntimeValue(v)),
       bytes: Runtime.varBytes(v),
       cls: _numblClass(rv),
       complex: Runtime.varIsComplex(rv),

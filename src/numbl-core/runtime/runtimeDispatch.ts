@@ -8,7 +8,6 @@
 import {
   type RuntimeValue,
   type RuntimeLogical,
-  type RuntimeTensor,
   RuntimeFunction,
   RTV,
   toNumber,
@@ -52,6 +51,7 @@ import type { CallSite } from "./runtimeHelpers.js";
 import type { Runtime } from "./runtime.js";
 import { getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { allocFloat64Array } from "./alloc.js";
+import { coerceToTensor } from "../helpers/shape-utils.js";
 
 // ── Builtin invocation ──────────────────────────────────────────────────
 
@@ -120,30 +120,6 @@ function packResults(results: RuntimeValue[], shape: number[]): RuntimeValue {
 }
 
 // ── Scalar/complex → tensor coercion ─────────────────────────────────────
-
-/** Coerce a scalar number or complex number to a 1x1 tensor, pass tensors through. */
-function coerceToTensor(
-  v: RuntimeValue,
-  fnName: string,
-  which: string
-): RuntimeTensor {
-  if (isRuntimeNumber(v)) {
-    return RTV.tensor(allocFloat64Array([v]), [1, 1]);
-  }
-  if (isRuntimeComplexNumber(v)) {
-    return RTV.tensor(
-      allocFloat64Array([v.re]),
-      [1, 1],
-      allocFloat64Array([v.im])
-    );
-  }
-  if (isRuntimeTensor(v)) {
-    return v;
-  }
-  throw new RuntimeError(
-    `${fnName}: unsupported type for ${which} input argument: ${kstr(v)}`
-  );
-}
 
 // ── Function handles ────────────────────────────────────────────────────
 
@@ -890,8 +866,8 @@ export function bsxfunImpl(
 
   const rawA = ensureRuntimeValue(args[1]);
   const rawB = ensureRuntimeValue(args[2]);
-  const a = coerceToTensor(rawA, "bsxfun", "first");
-  const b = coerceToTensor(rawB, "bsxfun", "second");
+  const a = coerceToTensor(rawA, "bsxfun");
+  const b = coerceToTensor(rawB, "bsxfun");
 
   const outShape = getBroadcastShape(a.shape, b.shape);
   if (!outShape)

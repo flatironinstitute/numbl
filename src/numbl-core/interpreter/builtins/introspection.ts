@@ -30,6 +30,7 @@ import type { JitType } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { incref } from "../../runtime/refcount.js";
+import { valueShape } from "../../runtime/utils.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -44,23 +45,6 @@ function anyToLogicalCase(
     },
     apply: applyFn,
   };
-}
-
-/** Get the effective 2D+ shape of a runtime value. */
-function getShape(v: RuntimeValue): number[] {
-  if (typeof v === "number" || typeof v === "boolean") return [1, 1];
-  if (isRuntimeComplexNumber(v)) return [1, 1];
-  if (isRuntimeTensor(v))
-    return v.shape.length >= 2 ? v.shape : [1, ...v.shape];
-  if (isRuntimeChar(v))
-    return v.shape ?? (v.value.length === 0 ? [0, 0] : [1, v.value.length]);
-  if (isRuntimeString(v)) return [1, 1];
-  if (isRuntimeSparseMatrix(v)) return [v.m, v.n];
-  if (isRuntimeCell(v)) return v.shape;
-  if (isRuntimeStructArray(v)) return [1, v.elements.length];
-  if (isRuntimeClassInstanceArray(v)) return [...v.shape];
-  if (isRuntimeStringArray(v)) return [...v.shape];
-  return [1, 1];
 }
 
 // ── Type predicates ──────────────────────────────────────────────────────
@@ -265,7 +249,7 @@ defineBuiltin({
             answer =
               v.elements.length > 0 && v.elements[0].fields.has(propName);
         }
-        const shape = getShape(v);
+        const shape = valueShape(v);
         const n = shape.reduce((a, b) => a * b, 1);
         if (n === 1) return RTV.logical(answer);
         const data = allocFloat64Array(n);
@@ -327,7 +311,7 @@ defineBuiltin({
     // isscalar is numel(x)==1 for ANY type (cells, structs, strings, ...),
     // not just numeric arrays.
     anyToLogicalCase(
-      args => getShape(args[0]).reduce((a, b) => a * b, 1) === 1
+      args => valueShape(args[0]).reduce((a, b) => a * b, 1) === 1
     ),
   ],
 });
@@ -356,7 +340,7 @@ defineBuiltin({
   name: "isvector",
   cases: [
     anyToLogicalCase(args => {
-      const shape = getShape(args[0]);
+      const shape = valueShape(args[0]);
       return shape.length === 2 && (shape[0] === 1 || shape[1] === 1);
     }),
   ],
@@ -366,7 +350,7 @@ defineBuiltin({
   name: "isrow",
   cases: [
     anyToLogicalCase(args => {
-      const shape = getShape(args[0]);
+      const shape = valueShape(args[0]);
       return shape.length === 2 && shape[0] === 1;
     }),
   ],
@@ -376,7 +360,7 @@ defineBuiltin({
   name: "iscolumn",
   cases: [
     anyToLogicalCase(args => {
-      const shape = getShape(args[0]);
+      const shape = valueShape(args[0]);
       return shape.length === 2 && shape[1] === 1;
     }),
   ],
@@ -384,7 +368,7 @@ defineBuiltin({
 
 defineBuiltin({
   name: "ismatrix",
-  cases: [anyToLogicalCase(args => getShape(args[0]).length <= 2)],
+  cases: [anyToLogicalCase(args => valueShape(args[0]).length <= 2)],
 });
 
 // ── Shape queries ────────────────────────────────────────────────────────
@@ -479,7 +463,7 @@ defineBuiltin({
       },
       apply: args => {
         const v = args[0];
-        const shape = getShape(v);
+        const shape = valueShape(v);
         const dim =
           typeof args[1] === "number" ? Math.round(args[1]) : args[1] ? 1 : 0;
         return dim > 0 && dim <= shape.length ? shape[dim - 1] : 1;
@@ -513,7 +497,7 @@ defineBuiltin({
       },
       apply: (args, nargout) => {
         const v = args[0];
-        const shape = getShape(v);
+        const shape = valueShape(v);
         if (nargout > 1) {
           const result: RuntimeValue[] = [];
           for (let i = 0; i < nargout; i++) {

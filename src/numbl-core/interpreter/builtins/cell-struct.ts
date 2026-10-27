@@ -17,7 +17,6 @@ import {
 } from "../../runtime/types.js";
 import type {
   RuntimeValue,
-  RuntimeTensor,
   RuntimeStruct,
   RuntimeClassInstance,
 } from "../../runtime/types.js";
@@ -25,30 +24,10 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber, toString } from "../../runtime/convert.js";
 import { registerIBuiltin } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { toNumArray } from "../../helpers/reduction-helpers.js";
+import { coerceToTensor } from "../../helpers/shape-utils.js";
 
 // ── helpers ─────────────────────────────────────────────────────────────
-
-function toNumericVector(v: RuntimeValue, name: string): number[] {
-  if (isRuntimeNumber(v)) return [v as number];
-  if (isRuntimeLogical(v)) return [v ? 1 : 0];
-  if (isRuntimeTensor(v)) return Array.from(v.data);
-  throw new RuntimeError(`${name}: argument must be numeric`);
-}
-
-function coerceToTensor(v: RuntimeValue, name: string): RuntimeTensor {
-  if (isRuntimeTensor(v)) return v;
-  if (isRuntimeNumber(v))
-    return RTV.tensor(allocFloat64Array([v as number]), [1, 1]);
-  if (isRuntimeLogical(v))
-    return RTV.tensor(allocFloat64Array([v ? 1 : 0]), [1, 1]);
-  if (isRuntimeComplexNumber(v))
-    return RTV.tensor(
-      allocFloat64Array([v.re]),
-      [1, 1],
-      allocFloat64Array([v.im])
-    );
-  throw new RuntimeError(`${name}: argument must be numeric`);
-}
 
 // ── cell2mat ────────────────────────────────────────────────────────────
 
@@ -190,7 +169,7 @@ registerIBuiltin({
       outputTypes: [{ kind: "unknown" }],
       apply: args => {
         const distVec = (v: RuntimeValue) =>
-          toNumericVector(v, "mat2cell").map(x => Math.round(x));
+          toNumArray(v, "mat2cell").map(x => Math.round(x));
 
         // Handle char arrays
         if (isRuntimeChar(args[0])) {

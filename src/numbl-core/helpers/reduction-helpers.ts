@@ -6,6 +6,7 @@
 import { RuntimeValue, RTV, toString, RuntimeError } from "../runtime/index.js";
 import {
   isRuntimeChar,
+  isRuntimeLogical,
   isRuntimeNumber,
   isRuntimeTensor,
   type RuntimeTensor,
@@ -462,56 +463,6 @@ export function sparseSum(v: RuntimeSparseMatrix, dim: number): RuntimeValue {
   return RTV.tensor(result, [v.m, 1], resultIm);
 }
 
-/** any/all on sparse matrix along a dimension.
- *  Returns sparse for dim=1, dense for dim=2. */
-export function sparseAnyAll(
-  v: RuntimeSparseMatrix,
-  dim: number,
-  mode: "any" | "all"
-): RuntimeValue {
-  if (dim === 1) {
-    const irArr: number[] = [];
-    const prArr: number[] = [];
-    const jc = new Int32Array(v.n + 1);
-    for (let c = 0; c < v.n; c++) {
-      jc[c] = irArr.length;
-      const nnzCol = v.jc[c + 1] - v.jc[c];
-      const val =
-        mode === "any" ? (nnzCol > 0 ? 1 : 0) : nnzCol === v.m ? 1 : 0;
-      if (val !== 0) {
-        irArr.push(0);
-        prArr.push(1);
-      }
-    }
-    jc[v.n] = irArr.length;
-    return RTV.sparseMatrix(
-      1,
-      v.n,
-      new Int32Array(irArr),
-      jc,
-      allocFloat64Array(prArr)
-    );
-  }
-  // dim === 2: Along rows
-  const hasNonzero = new Uint8Array(v.m);
-  let nnzPerRow: Int32Array | undefined;
-  if (mode === "all") nnzPerRow = new Int32Array(v.m);
-  for (let c = 0; c < v.n; c++) {
-    for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
-      hasNonzero[v.ir[k]] = 1;
-      if (nnzPerRow) nnzPerRow[v.ir[k]]++;
-    }
-  }
-  const result = allocFloat64Array(v.m);
-  for (let r = 0; r < v.m; r++) {
-    if (mode === "any") result[r] = hasNonzero[r] ? 1 : 0;
-    else result[r] = nnzPerRow![r] === v.n ? 1 : 0;
-  }
-  const t = RTV.tensor(result, [v.m, 1]) as RuntimeTensor;
-  t._isLogical = true;
-  return t;
-}
-
 // ── Type check helpers ─────────────────────────────────────────────────
 
 /** Type check for reductions that return Num without dim arg, Tensor with dim arg. */
@@ -651,9 +602,11 @@ export function sliceKernelOmitNaN(
   };
 }
 
-/** Helper: extract all numeric values from a RuntimeValue as a plain array. */
+/** The values of a numeric or logical scalar or array as a plain array (real
+ *  parts only). Errors for other types. */
 export function toNumArray(v: RuntimeValue, name: string): number[] {
   if (isRuntimeNumber(v)) return [v];
+  if (isRuntimeLogical(v)) return [v ? 1 : 0];
   if (isRuntimeTensor(v)) return Array.from(v.data);
   throw new RuntimeError(`${name}: arguments must be numeric arrays`);
 }

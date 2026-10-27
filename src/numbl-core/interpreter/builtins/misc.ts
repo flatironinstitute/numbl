@@ -41,6 +41,7 @@ import {
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
 import { stripClassNameArgs } from "./array-construction.js";
+import { parseShapeArgs } from "../../helpers/shape-utils.js";
 
 // ── substruct ────────────────────────────────────────────────────────────
 
@@ -349,17 +350,6 @@ registerIBuiltin({
 
 // ── true/false constructors ─────────────────────────────────────────────
 
-function parseShapeArgs(args: RuntimeValue[]): number[] {
-  const dims: number[] = [];
-  for (const a of args) {
-    if (typeof a === "number") dims.push(Math.round(a));
-    else if (isRuntimeTensor(a)) {
-      for (let i = 0; i < a.data.length; i++) dims.push(Math.round(a.data[i]));
-    } else dims.push(Math.round(toNumber(a)));
-  }
-  return dims;
-}
-
 for (const [name, fillVal] of [
   ["true", 1],
   ["false", 0],
@@ -372,15 +362,11 @@ for (const [name, fillVal] of [
         // true/false accept a trailing 'logical' class spec; numbl ignores it.
         const args = stripClassNameArgs(rawArgs);
         if (args.length === 0) return RTV.logical(fillVal === 1);
-        const shape = parseShapeArgs(args);
-        const rows = shape[0];
-        const cols = shape[1] ?? rows;
-        const t = RTV.tensor(
-          fillVal
-            ? allocFloat64Array(rows * cols).fill(1)
-            : allocFloat64Array(rows * cols),
-          [rows, cols]
-        );
+        let shape = parseShapeArgs(args);
+        if (shape.length === 1) shape = [shape[0], shape[0]];
+        const data = allocFloat64Array(shape.reduce((a, b) => a * b, 1));
+        if (fillVal) data.fill(1);
+        const t = RTV.tensor(data, shape);
         t._isLogical = true;
         return t;
       },

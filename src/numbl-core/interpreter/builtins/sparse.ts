@@ -18,15 +18,12 @@ import { toNumber } from "../../runtime/convert.js";
 import { parseStringArgLower } from "../../helpers/check-helpers.js";
 import { registerIBuiltin } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { toNumArray } from "../../helpers/reduction-helpers.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 function toNumericArray(v: RuntimeValue, name: string): number[] {
-  if (isRuntimeNumber(v)) return [v];
-  if (isRuntimeLogical(v)) return [v ? 1 : 0];
-  if (isRuntimeTensor(v)) return Array.from(v.data);
-  if (isRuntimeComplexNumber(v)) return [v.re];
-  throw new RuntimeError(`${name}: arguments must be numeric`);
+  return isRuntimeComplexNumber(v) ? [v.re] : toNumArray(v, name);
 }
 
 function toImagArray(v: RuntimeValue): number[] | undefined {

@@ -21,7 +21,7 @@ import {
   isRuntimeStructArray,
   type RuntimeValue,
 } from "./types.js";
-import { isShared, type RefcountRuntime } from "./refcount.js";
+import { type RefcountRuntime } from "./refcount.js";
 import { allocFloat64Array } from "./alloc.js";
 
 /** Return a fresh wrapper that shadows `v`'s contents but has rc=0
@@ -67,18 +67,6 @@ export function cowCopy(v: RuntimeValue): RuntimeValue {
   // ...) aren't expected to appear in lvalue chains as containers
   // that can be mutated through. Return as-is.
   return v;
-}
-
-/** If `v` is shared (rc-driven), return a fresh non-shared copy;
- *  otherwise return `v` unchanged. The new wrapper has refcount 0
- *  (or 1 if the active scope adopts it via the constructor); the
- *  caller must bind it into the parent slot to keep it alive.
- *
- *  Returns the original `v` for handle-class instances and primitives —
- *  callers can `result === v` test to detect a no-op. */
-export function cowIfShared(v: RuntimeValue): RuntimeValue {
-  if (!isShared(v)) return v;
-  return cowCopy(v);
 }
 
 // Re-export for convenient access from the runtime surface.

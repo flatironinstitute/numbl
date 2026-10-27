@@ -18,16 +18,13 @@ import {
   getDelaunayBackend,
   getConvexHullBackend,
 } from "../../native/geometry-bridge.js";
+import { toNumArray } from "../../helpers/reduction-helpers.js";
 
 /** Extract a flat list of numbers from a scalar or tensor argument. */
 function toFlatArray(v: RuntimeValue, name: string): number[] {
-  if (typeof v === "number") return [v];
-  if (typeof v === "boolean") return [v ? 1 : 0];
-  if (isRuntimeTensor(v)) {
-    if (v.imag) throw new RuntimeError(`${name}: inputs must be real`);
-    return Array.from(v.data);
-  }
-  throw new RuntimeError(`${name}: inputs must be numeric`);
+  if (isRuntimeTensor(v) && v.imag)
+    throw new RuntimeError(`${name}: inputs must be real`);
+  return toNumArray(v, name);
 }
 
 /** Convert an m-by-d (column-major) tensor into an array of m d-dimensional points. */

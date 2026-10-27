@@ -15,6 +15,7 @@ import {
 } from "../../runtime/types.js";
 import { toNumber, RuntimeError } from "../../runtime/index.js";
 import { defineBuiltin } from "./types.js";
+import { valueShape } from "../../runtime/utils.js";
 import type { JitType } from "../../jitTypes.js";
 
 function isNumeric(v: RuntimeValue): boolean {
@@ -262,34 +263,6 @@ function matchesOneClass(v: RuntimeValue, cls: string): boolean {
   return false;
 }
 
-function getShapeOf(v: RuntimeValue): number[] {
-  if (typeof v === "number" || typeof v === "boolean" || typeof v === "string")
-    return [1, 1];
-  const obj = v as unknown as Record<string, unknown>;
-  switch (obj.kind) {
-    case "tensor":
-      return ((obj.shape as number[]) ?? []).length === 0
-        ? [1, 1]
-        : (obj.shape as number[]);
-    case "complex_number":
-      return [1, 1];
-    case "char":
-      return (obj.shape as number[]) ?? [1, (obj.value as string).length || 0];
-    case "cell":
-      return obj.shape as number[];
-    case "sparse_matrix":
-      return [obj.m as number, obj.n as number];
-    case "struct":
-      return [1, 1];
-    case "struct_array":
-      return [1, (obj.elements as unknown[]).length];
-    case "string_array":
-      return [...(obj.shape as number[])];
-    default:
-      return [1, 1];
-  }
-}
-
 function extractStr(v: RuntimeValue): string {
   if (typeof v === "string") return v;
   if (isRuntimeChar(v)) return v.value;
@@ -396,7 +369,7 @@ defineBuiltin({
           );
         }
 
-        const shape = getShapeOf(A);
+        const shape = valueShape(A);
         // Effective ndims: remove trailing singletons, min 2
         let effNdims = shape.length;
         while (effNdims > 2 && shape[effNdims - 1] === 1) effNdims--;
