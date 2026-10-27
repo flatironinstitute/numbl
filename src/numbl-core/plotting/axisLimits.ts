@@ -3,8 +3,8 @@
  *
  * This is the source of truth for the query form `lim = axis`: the numbl
  * runtime reduces its accumulated plot instructions into an `AxesState` and
- * asks this module for the limit vector. It is deliberately rendering-free
- * (no canvas, no DOM) so numbl-core can import it.
+ * asks this module for the limit vector. It is rendering-free (no canvas, no
+ * DOM); the renderer in src/graphics/ uses it too.
  *
  * For an axis with an explicit limit, that limit is returned verbatim (a
  * `null` bound falls back to the data-derived bound). For a fully automatic

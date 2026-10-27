@@ -27,7 +27,7 @@ import {
   type PlotServer,
   type PlotServerOptions,
 } from "./cli-plot-server.js";
-import type { PlotInstruction } from "./graphics/types.js";
+import type { PlotInstruction } from "./numbl-core/plotting/types.js";
 import type { UihtmlSession } from "./numbl-core/executeCode.js";
 
 export interface PlotHandler {

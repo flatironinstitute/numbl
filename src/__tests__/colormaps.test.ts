@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { colormapLookup, PARULA_ANCHORS } from "../graphics/colormaps.js";
+import {
+  colormapLookup,
+  PARULA_ANCHORS,
+} from "../numbl-core/plotting/colormaps.js";
 
 describe("colormapLookup", () => {
   it("defaults to the parula table used by the parula builtin", () => {

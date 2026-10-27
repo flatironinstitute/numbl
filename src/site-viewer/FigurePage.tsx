@@ -27,12 +27,12 @@ import {
 } from "../hooks/useMipCorePackage";
 import { syncSystemVfsChanges } from "../vfs/syncVfsChanges";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
-} from "../graphics/figuresReducer.js";
+} from "../numbl-core/plotting/figuresReducer.js";
 
 const NUMBL_ORIGIN = "https://numbl.org";
 

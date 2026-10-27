@@ -15,7 +15,10 @@
  * (h5web, Panoply, h5py) render them correctly without numbl conventions.
  */
 
-import type { FigureState, AxesState } from "./figuresReducer.js";
+import type {
+  FigureState,
+  AxesState,
+} from "../numbl-core/plotting/figuresReducer.js";
 import { FIGURE_HDF5_VERSION, GRID_FIELDS } from "./figureHdf5Schema.js";
 
 // ── h5wasm minimal typings (we only use a slice of its API) ────────────────

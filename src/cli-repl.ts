@@ -11,7 +11,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { diagnoseErrors, formatDiagnostics } from "./numbl-core/diagnostics";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
-import type { PlotInstruction } from "./graphics/types.js";
+import type { PlotInstruction } from "./numbl-core/plotting/types.js";
 import { ExecSession } from "./numbl-core/execSession.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";

@@ -20,17 +20,17 @@
  * the `false` return value and computes the limits separately.
  */
 
-import type { RuntimeValue } from "./types.js";
+import type { RuntimeValue } from "../runtime/types.js";
 import {
   isRuntimeTensor,
   isRuntimeNumber,
   isRuntimeLogical,
   isRuntimeDummyHandle,
   isRuntimeGraphicsHandle,
-} from "./types.js";
-import type { PlotInstruction } from "../../graphics/types.js";
-import { toString } from "./convert.js";
-import { RuntimeError } from "./error.js";
+} from "../runtime/types.js";
+import type { PlotInstruction } from "./types.js";
+import { toString } from "../runtime/convert.js";
+import { RuntimeError } from "../runtime/error.js";
 
 /** Style words that select aspect-ratio / limit-method behavior. */
 const STYLE_WORDS = new Set([

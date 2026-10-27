@@ -1,7 +1,10 @@
 import { Component, useRef, useEffect, useCallback } from "react";
 import type { ErrorInfo, ReactNode } from "react";
-import type { PlotTrace, PatchTrace } from "./types.js";
-import type { AxesState, FigureState } from "./figuresReducer.js";
+import type { PlotTrace, PatchTrace } from "../numbl-core/plotting/types.js";
+import type {
+  AxesState,
+  FigureState,
+} from "../numbl-core/plotting/figuresReducer.js";
 import { SurfView } from "./SurfView.js";
 import { drawPlot } from "./drawPlot.js";
 import { buildUihtmlSrcDoc } from "./uihtmlSrcDoc.js";

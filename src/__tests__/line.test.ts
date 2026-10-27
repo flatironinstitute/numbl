@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { executeCode } from "../numbl-core/executeCode.js";
-import type { PlotTrace, Plot3Trace } from "../graphics/types.js";
+import type { PlotTrace, Plot3Trace } from "../numbl-core/plotting/types.js";
 
 type LineInstr = { type: "line"; traces: PlotTrace[] };
 type Line3Instr = { type: "line3"; traces: Plot3Trace[] };

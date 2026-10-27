@@ -1,4 +1,4 @@
-import type { PlotTrace } from "./types.js";
+import type { PlotTrace } from "../numbl-core/plotting/types.js";
 import { rgbToCSS } from "./plotHelpers.js";
 
 export function drawMarkers(

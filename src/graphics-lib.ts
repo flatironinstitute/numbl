@@ -12,16 +12,16 @@ export { FigureView } from "./graphics/FigureView.js";
 export {
   figuresReducer,
   initialFiguresState,
-} from "./graphics/figuresReducer.js";
+} from "./numbl-core/plotting/figuresReducer.js";
 
 export type {
   FigureState,
   AxesState,
   FiguresState,
   FiguresAction,
-} from "./graphics/figuresReducer.js";
+} from "./numbl-core/plotting/figuresReducer.js";
 
-export type * from "./graphics/types.js";
+export type * from "./numbl-core/plotting/types.js";
 
 export { restoreNaNs } from "./graphics/restoreNaNs.js";
 

@@ -7,13 +7,13 @@
 
 // Registers figure, hold, subplot, ... first, so the generic loop at the
 // end of this file skips them.
-import "./specialBuiltins.js";
-import type { Runtime } from "./runtime.js";
-import type { RuntimeValue } from "./types.js";
-import { RTV } from "./constructors.js";
-import { ensureRuntimeValue } from "./runtimeHelpers.js";
-import { allocFloat64Array } from "./alloc.js";
-import { registerSpecial } from "./registerSpecial.js";
+import "../runtime/specialBuiltins.js";
+import type { Runtime } from "../runtime/runtime.js";
+import type { RuntimeValue } from "../runtime/types.js";
+import { RTV } from "../runtime/constructors.js";
+import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
+import { registerSpecial } from "../runtime/registerSpecial.js";
 import { getIBuiltin } from "../interpreter/builtins/types.js";
 import {
   pcolorCall as _pcolorCall,
@@ -28,12 +28,9 @@ import {
   fplot3Call as _fplot3Call,
   streamlineCall as _streamlineCall,
   stream2Call as _stream2Call,
-} from "./runtimePlot.js";
-import { computeContourMatrix } from "./plotUtils.js";
-import {
-  dispatchPlotBuiltin,
-  PLOT_DISPATCH_NAMES,
-} from "./plotBuiltinDispatch.js";
+} from "./instructions.js";
+import { computeContourMatrix } from "./parseArgs.js";
+import { dispatchPlotBuiltin, PLOT_DISPATCH_NAMES } from "./dispatch.js";
 import { applyAxisCommand } from "./axisCommand.js";
 import { isosurfaceFromArgs } from "../helpers/marching-cubes.js";
 

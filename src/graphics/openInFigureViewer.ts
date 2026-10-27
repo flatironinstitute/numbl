@@ -1,4 +1,4 @@
-import type { FigureState } from "./figuresReducer.js";
+import type { FigureState } from "../numbl-core/plotting/figuresReducer.js";
 import { encodeFigureToHash } from "./figureHashTransport.js";
 
 /** Deployed numbl figure viewer (concept-collection). */

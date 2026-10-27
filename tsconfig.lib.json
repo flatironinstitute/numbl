@@ -27,7 +27,6 @@
     "src/cli-fileio.ts",
     "src/cli-system.ts",
     "src/cli-scan.ts",
-    "src/numbl-core/**/*.ts",
-    "src/graphics/types.ts"
+    "src/numbl-core/**/*.ts"
   ]
 }

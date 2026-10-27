@@ -35,7 +35,7 @@ import {
   registerSpecial,
   registerSpecialVoid,
 } from "./registerSpecial.js";
-import type { PlotInstruction } from "../../graphics/types.js";
+import type { PlotInstruction } from "../plotting/types.js";
 import { sprintfFormat } from "../../numbl-core/helpers/string.js";
 import { scanFormat } from "../helpers/scanFormat.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
@@ -56,7 +56,7 @@ import { getAllBuiltinNames } from "../helpers/registry.js";
 import { convertJsonValue } from "../interpreter/builtins/misc.js";
 import { getTicTime } from "../interpreter/builtins/time-system.js";
 import { hashKey } from "../interpreter/builtins/dictionary.js";
-import { dispatchPlotBuiltin } from "./plotBuiltinDispatch.js";
+import { dispatchPlotBuiltin } from "../plotting/dispatch.js";
 import {
   solveRK,
   dormandPrince45,
@@ -1869,7 +1869,7 @@ registerSpecial("uigridlayout", nargout =>
 
 // Bulk register graphics ops that share the simple
 //   "push instruction, return RTV.num(<placeholder>) when nargout>=1"
-// pattern. The push side lives in plotBuiltinDispatch.ts — one source
+// pattern. The push side lives in plotting/dispatch.ts — one source
 // of truth for the (name → set_xxx) mapping.
 const PLOT_RETURNS_ZERO = ["subplot", "tiledlayout", "nexttile", "legend"];
 for (const name of PLOT_RETURNS_ZERO) {

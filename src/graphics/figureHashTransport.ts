@@ -13,7 +13,7 @@
  * sentinels (JSON.stringify would otherwise turn them into null). Encoding is
  * synchronous so the caller can `window.open` within the click gesture.
  */
-import type { FigureState } from "./figuresReducer.js";
+import type { FigureState } from "../numbl-core/plotting/figuresReducer.js";
 import { gzipSync, gunzipSync, strToU8, strFromU8 } from "fflate";
 
 export const FIGURE_HASH_KEY = "fig";

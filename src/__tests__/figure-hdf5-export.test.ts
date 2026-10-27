@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import h5wasm from "h5wasm";
 import { exportFigureHdf5 } from "../graphics/exportFigureHdf5.js";
 import { FIGURE_HDF5_VERSION } from "../graphics/figureHdf5Schema.js";
-import type { FigureState } from "../graphics/figuresReducer.js";
+import type { FigureState } from "../numbl-core/plotting/figuresReducer.js";
 
 /** Minimal shape of an h5wasm read node (group or dataset). */
 interface H5ReadNode {

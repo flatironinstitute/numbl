@@ -33,16 +33,16 @@
  * browser IDE without reimplementing per-builtin logic.
  */
 
-import type { RuntimeValue } from "./types.js";
+import type { RuntimeValue } from "../runtime/types.js";
 import {
   isRuntimeNumber,
   isRuntimeTensor,
   isRuntimeChar,
   isRuntimeString,
-} from "./types.js";
-import type { PlotInstruction } from "../../graphics/types.js";
-import { toNumber, toString } from "./convert.js";
-import { RuntimeError } from "./error.js";
+} from "../runtime/types.js";
+import type { PlotInstruction } from "./types.js";
+import { toNumber, toString } from "../runtime/convert.js";
+import { RuntimeError } from "../runtime/error.js";
 import {
   plotInstr,
   plotCall,
@@ -82,7 +82,7 @@ import {
   quiver3Call,
   viewCall,
   legendCall,
-} from "./runtimePlot.js";
+} from "./instructions.js";
 import { applyAxisCommand } from "./axisCommand.js";
 
 /** State carried by graphics ops that need to remember things between
@@ -123,7 +123,7 @@ export function dispatchPlotBuiltin(
   state: PlotDispatchState
 ): boolean {
   switch (name) {
-    // ── Data-bearing builtins: delegate to runtimePlot.ts ──────────
+    // ── Data-bearing builtins: delegate to instructions.ts ─────────
     case "plot":
       plotCall(instructions, args);
       return true;
@@ -316,7 +316,7 @@ export function dispatchPlotBuiltin(
     case "hold": {
       if (args.length > 0) {
         plotInstr(instructions, { type: "set_hold", value: args[0] });
-        // runtimePlot.plotInstr already parsed args[0] into a boolean
+        // plotInstr already parsed args[0] into a boolean
         // when pushing; mirror that to the dispatch state so an
         // adjacent ishold() returns the right thing.
         const last = instructions[instructions.length - 1];

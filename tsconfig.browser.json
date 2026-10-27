@@ -21,7 +21,6 @@
     "src/browser/**/*.ts",
     "src/browser/text-modules.d.ts",
     "src/numbl-core/**/*.ts",
-    "src/vfs/**/*.ts",
-    "src/graphics/types.ts"
+    "src/vfs/**/*.ts"
   ]
 }

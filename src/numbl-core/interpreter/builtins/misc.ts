@@ -39,7 +39,7 @@ import {
   mNeg,
 } from "../../helpers/arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import { PARULA_ANCHORS } from "../../../graphics/colormaps.js";
+import { PARULA_ANCHORS } from "../../plotting/colormaps.js";
 import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
 import { stripClassNameArgs } from "./array-construction.js";
 import { parseShapeArgs } from "../../helpers/shape-utils.js";

@@ -15,8 +15,8 @@ import {
   isRuntimeString,
   isRuntimeChar,
   isRuntimeStruct,
-} from "./types.js";
-import { toNumber, toString } from "./convert.js";
+} from "../runtime/types.js";
+import { toNumber, toString } from "../runtime/convert.js";
 
 // Re-export trace types from the shared graphics types module.
 export type {
@@ -35,7 +35,7 @@ export type {
   HeatmapTrace,
   QuiverTrace,
   Quiver3Trace,
-} from "../../graphics/types.js";
+} from "./types.js";
 
 import type {
   PlotTrace,
@@ -53,8 +53,8 @@ import type {
   HeatmapTrace,
   QuiverTrace,
   Quiver3Trace,
-} from "../../graphics/types.js";
-import { allocFloat64Array } from "./alloc.js";
+} from "./types.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 // ── Color mapping ───────────────────────────────────────────────────────
 

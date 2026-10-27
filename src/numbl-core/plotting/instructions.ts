@@ -3,8 +3,7 @@
  */
 
 import { type RuntimeValue, toNumber, toString } from "../runtime/index.js";
-import type { PlotInstruction } from "../../graphics/types.js";
-import type { ExecOptions } from "../executeCode.js";
+import type { PlotInstruction } from "./types.js";
 import {
   isRuntimeNumber,
   isRuntimeLogical,
@@ -15,7 +14,7 @@ import {
   type RuntimeCell,
 } from "../runtime/types.js";
 import { RTV } from "../runtime/constructors.js";
-import type { Runtime } from "./runtime.js";
+import type { Runtime } from "../runtime/runtime.js";
 
 /** Convert RuntimeValue to number array for plotting */
 function runtimeValueToNumberArray(v: RuntimeValue): number[] {
@@ -59,10 +58,9 @@ import {
   parseHeatmapArgs,
   parseQuiverArgs,
   parseQuiver3Args,
-} from "../runtime/plotUtils.js";
-import { ensureRuntimeValue } from "./runtimeHelpers.js";
-import { syncSleep } from "./syncChannel.js";
-import { allocFloat64Array } from "./alloc.js";
+} from "./parseArgs.js";
+import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
+import { allocFloat64Array } from "../runtime/alloc.js";
 
 /** Resolve an unknown value (possibly a RuntimeValue) to a string. */
 function resolveStr(val: unknown): string {
@@ -794,24 +792,6 @@ export function legendCall(
   if (labels.length > 0) {
     plotInstructions.push({ type: "set_legend", labels });
   }
-}
-
-export function drawnow(
-  plotInstructions: PlotInstruction[],
-  options: ExecOptions
-): void {
-  if (options.onDrawnow && plotInstructions.length > 0) {
-    options.onDrawnow([...plotInstructions]);
-    plotInstructions.length = 0;
-  }
-}
-
-export function pause(seconds: unknown): void {
-  const s =
-    typeof seconds === "number"
-      ? seconds
-      : toNumber(ensureRuntimeValue(seconds));
-  syncSleep(s * 1000);
 }
 
 // ── Streamline helpers ────────────────────────────────────────────────

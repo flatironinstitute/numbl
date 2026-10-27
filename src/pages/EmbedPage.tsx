@@ -30,12 +30,12 @@ import {
   markSystemActivity,
 } from "../hooks/useMipCorePackage.js";
 import { syncSystemVfsChanges } from "../vfs/syncVfsChanges.js";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
-} from "../graphics/figuresReducer.js";
+} from "../numbl-core/plotting/figuresReducer.js";
 
 const DEFAULT_SCRIPT = `% Welcome to numbl!
 % Try running some code:

@@ -22,7 +22,7 @@
 
 import type { Runtime } from "../../runtime/runtime.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import { dispatchPlotBuiltin } from "../../runtime/plotBuiltinDispatch.js";
+import { dispatchPlotBuiltin } from "../../plotting/dispatch.js";
 import { rngRandom } from "../../helpers/prng.js";
 import { jitToNumbl } from "./valueAdapter.js";
 

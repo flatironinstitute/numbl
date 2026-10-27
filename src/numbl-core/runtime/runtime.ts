@@ -47,7 +47,7 @@ import { BinaryOperation } from "../lowering/index.js";
 import { getConstant } from "../helpers/constants.js";
 import { globToRegExp } from "../helpers/glob.js";
 import { COLON_SENTINEL, END_SENTINEL } from "./sentinels.js";
-import type { PlotInstruction } from "../../graphics/types.js";
+import type { PlotInstruction } from "../plotting/types.js";
 import type { ExecOptions } from "../executeCode.js";
 import type { FileIOAdapter } from "../fileIOAdapter.js";
 import type { SystemAdapter } from "../systemAdapter.js";
@@ -87,7 +87,7 @@ import {
   indexCellStore as _indexCellStore,
   multiOutputCellAssign as _multiOutputCellAssign,
 } from "./runtimeIndexing.js";
-import "./plotBuiltins.js";
+import "../plotting/builtins.js";
 import { setWarningSink } from "../helpers/warn.js";
 import {
   getMember as _getMember,
@@ -99,12 +99,12 @@ import {
   subsasgnCall as _subsasgnCall,
   memberChainAssign as _memberChainAssign,
 } from "./runtimeMemberAccess.js";
-import { drawnow as _drawnow, pause as _pause } from "./runtimePlot.js";
+import { syncSleep } from "./syncChannel.js";
 import {
   figuresReducer,
   initialFiguresState,
-} from "../../graphics/figuresReducer.js";
-import { computeAxisLimits } from "../../graphics/axisLimits.js";
+} from "../plotting/figuresReducer.js";
+import { computeAxisLimits } from "../plotting/axisLimits.js";
 import { isRuntimeChar, isRuntimeString, kstr } from "./types.js";
 import { allocFloat64Array } from "./alloc.js";
 import { valueShape } from "./utils.js";
@@ -1425,11 +1425,18 @@ export class Runtime {
   // ── Drawnow / Pause ─────────────────────────────────────────────────
 
   public drawnow(): void {
-    return _drawnow(this.plotInstructions, this.options);
+    if (this.options.onDrawnow && this.plotInstructions.length > 0) {
+      this.options.onDrawnow([...this.plotInstructions]);
+      this.plotInstructions.length = 0;
+    }
   }
 
   public pause(seconds: unknown): void {
-    return _pause(seconds);
+    const s =
+      typeof seconds === "number"
+        ? seconds
+        : toNumber(ensureRuntimeValue(seconds));
+    syncSleep(s * 1000);
   }
 
   public readInput(prompt: string): string {

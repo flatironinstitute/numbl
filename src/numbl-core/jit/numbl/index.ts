@@ -35,4 +35,4 @@ export type { ClassInfo } from "../../lowering/classInfo.js";
 
 // ── Plot builtin names ──────────────────────────────────────────────────
 
-export { PLOT_ALL_NAMES } from "../../runtime/plotBuiltinDispatch.js";
+export { PLOT_ALL_NAMES } from "../../plotting/dispatch.js";

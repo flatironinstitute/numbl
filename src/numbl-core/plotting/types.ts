@@ -1,12 +1,12 @@
 /**
- * Shared graphics types used by both numbl-core and the rendering layer.
+ * Plot data types: the trace interfaces and `PlotInstruction`, the
+ * serializable contract between numbl-core (which emits instructions) and the
+ * renderer in src/graphics/ (which consumes them). The renderer imports these
+ * from here; numbl-core does not depend on src/graphics/.
  *
- * This file is the single source of truth for plot trace interfaces and
- * PlotInstruction.  numbl-core re-exports these types so that internal
- * runtime code can import them without reaching into src/graphics/.
- *
- * The numbl-vscode extension syncs this file (and the rest of src/graphics/)
- * via devel/sync-graphics.sh.
+ * The numbl-vscode extension syncs src/graphics/ via devel/sync-graphics.sh;
+ * it also needs the core modules the renderer imports (types, figuresReducer,
+ * axisLimits, imagescExtent, colormaps).
  */
 
 // ── PlotTrace type ──────────────────────────────────────────────────────

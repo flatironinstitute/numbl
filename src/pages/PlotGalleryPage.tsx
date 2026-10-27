@@ -11,12 +11,12 @@ import ExpandLessIcon from "@mui/icons-material/ExpandLess";
 import { makeShareHash } from "../utils/shareUrl.js";
 import { usePageMeta } from "../hooks/usePageMeta";
 import { useEffect, useRef, useState, useCallback } from "react";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import {
   figuresReducer,
   initialFiguresState,
   type FiguresState,
-} from "../graphics/figuresReducer.js";
+} from "../numbl-core/plotting/figuresReducer.js";
 import { FigureView } from "../graphics/FigureView.js";
 
 // Import all example .m files as raw text
