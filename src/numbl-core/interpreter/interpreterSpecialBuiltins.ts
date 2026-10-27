@@ -38,8 +38,8 @@ export interface InterpreterContext {
    *  or undefined if no workspace file provides that name.
    *  `kind` distinguishes a regular .m function from a .numbl.js
    *  user function (treated as a MEX-equivalent) or a class file.
-   *  `source` is the raw .m source for "function"/"class" kinds, or empty
-   *  for "jsfunction" (where the implementation is JS, not .m text). */
+   *  `source` is the raw .m source for "function"/"class" kinds, or the
+   *  help text registered by a "jsfunction" (empty if none). */
   lookupWorkspaceFile: (name: string) =>
     | {
         path: string;
@@ -269,8 +269,9 @@ register("help", (ctx, args, nargout) => {
   const ws =
     ctx.lookupWorkspaceFile(lookupName) ??
     (lookupName !== rawName ? ctx.lookupWorkspaceFile(rawName) : undefined);
-  if (ws && ws.kind !== "jsfunction") {
-    const text = extractMHelp(ws.source);
+  if (ws) {
+    const text =
+      ws.kind === "jsfunction" ? ws.source.trimEnd() : extractMHelp(ws.source);
     if (text) {
       const out = text + "\n";
       if (nargout === 0) ctx.rt.output(out);

@@ -164,7 +164,14 @@ register({ resolve: () => ({ outputTypes: [{ kind: 'number' }], apply: (args) =>
         source: `register({ resolve: 42 });`,
       },
     ];
-    expect(() => loadJsUserFunctions(jsFiles)).toThrow(/resolve function/);
+    expect(() => loadJsUserFunctions(jsFiles)).toThrow(
+      /resolve must be a function/
+    );
+  });
+
+  it("throws if register() gets neither a function nor apply", () => {
+    const jsFiles = [{ name: "bad.numbl.js", source: `register({ x: 1 });` }];
+    expect(() => loadJsUserFunctions(jsFiles)).toThrow(/apply function/);
   });
 
   it("throws on JS syntax errors", () => {

@@ -1,8 +1,11 @@
 /**
  * Loader for .numbl.js user functions.
  *
- * Evaluates .numbl.js files that define IBuiltins via
- *   register({ resolve }).
+ * Evaluates .numbl.js files that define a function via
+ *   register(function (args, nargout) { ... })
+ * or register({ apply, help }). The older register({ resolve }) form, whose
+ * resolve(argTypes, nargout) returns { outputTypes, apply }, is still
+ * accepted.
  * Supports optional WASM and native shared library bindings via directives:
  *   // wasm: <name>
  *   // native: <name>
@@ -14,6 +17,7 @@
 
 import type { WorkspaceFile, NativeBridge } from "./workspace/index.js";
 import { RTV, RuntimeError, toNumber } from "./runtime/index.js";
+import type { RuntimeValue } from "./runtime/types.js";
 import { getCurrentRuntime } from "./runtime/refcount.js";
 import type { IBuiltin } from "./interpreter/builtins/types.js";
 
@@ -66,6 +70,49 @@ export interface LoadedJsUserFunction {
   name: string;
   fileName: string;
   builtin: IBuiltin;
+  /** Help text from `register({ help })`, printed by `help name`. */
+  help?: string;
+}
+
+type JsApply = (args: RuntimeValue[], nargout: number) => unknown;
+
+/** What a .numbl.js file may pass to register(). */
+type RegisterSpec =
+  | JsApply
+  | { apply: JsApply; help?: string }
+  | { resolve: IBuiltin["resolve"] };
+
+/** Convert a register() argument to an IBuiltin plus optional help text. */
+function builtinFromSpec(
+  name: string,
+  spec: RegisterSpec
+): { builtin: IBuiltin; help?: string } {
+  if (spec && typeof spec === "object" && "resolve" in spec) {
+    if (typeof spec.resolve !== "function")
+      throw new Error("register(): resolve must be a function");
+    return { builtin: { name, resolve: spec.resolve } };
+  }
+  const fn = typeof spec === "function" ? spec : spec?.apply;
+  if (typeof fn !== "function")
+    throw new Error(
+      "register() expects a function, or an object with an apply function"
+    );
+  const help = typeof spec === "object" ? spec.help : undefined;
+  if (help !== undefined && typeof help !== "string")
+    throw new Error("register(): help must be a string");
+  const apply = (args: RuntimeValue[], nargout: number) => {
+    const result = fn(args, nargout);
+    if (result === undefined && nargout > 0)
+      throw new RuntimeError("Too many output arguments.");
+    return result as RuntimeValue | RuntimeValue[];
+  };
+  return {
+    builtin: {
+      name,
+      resolve: () => ({ outputTypes: [{ kind: "unknown" }], apply }),
+    },
+    help,
+  };
 }
 
 /**
@@ -276,8 +323,8 @@ export function setJsGpuHelper(helper: unknown): void {
  * records. Each loaded record carries the function name, source file name,
  * and the IBuiltin object built from the file's `register()` call.
  *
- * Each .numbl.js file calls register({ resolve }) to define an
- * IBuiltin. resolve(argTypes, nargout) returns { outputTypes, apply } or null.
+ * Each .numbl.js file calls register() once; see builtinFromSpec for the
+ * accepted forms.
  *
  * A .numbl.js file can specify bindings via directives at the top of the file:
  *   // wasm: <name>    — load a WASM module (looked up by name in wasmFiles)
@@ -388,20 +435,15 @@ export function loadJsUserFunctions(
     const funcName = funcNameFromFile(file.name);
     try {
       let builtin: IBuiltin | null = null;
+      let help: string | undefined;
 
-      const registerFn = (spec: { resolve: IBuiltin["resolve"] }) => {
-        if (typeof spec.resolve !== "function") {
-          throw new Error("register(): spec must have a resolve function");
-        }
+      const registerFn = (spec: RegisterSpec) => {
         if (builtin) {
           throw new Error(
             "register() called more than once — only one registration per .numbl.js file"
           );
         }
-        builtin = {
-          name: funcName,
-          resolve: spec.resolve as IBuiltin["resolve"],
-        };
+        ({ builtin, help } = builtinFromSpec(funcName, spec));
       };
 
       // Parse directives from the top of the .js file
@@ -475,7 +517,7 @@ export function loadJsUserFunctions(
         };
       }
 
-      result.push({ name: funcName, fileName: file.name, builtin });
+      result.push({ name: funcName, fileName: file.name, builtin, help });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       throw new Error(

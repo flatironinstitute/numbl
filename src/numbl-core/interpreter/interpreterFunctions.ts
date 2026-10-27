@@ -84,7 +84,7 @@ export function callFunction(
           return {
             path: jsEntry.fileName,
             kind: "jsfunction",
-            source: "",
+            source: jsEntry.help ?? "",
           };
         return undefined;
       },

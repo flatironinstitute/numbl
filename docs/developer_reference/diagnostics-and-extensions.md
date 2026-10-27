@@ -17,11 +17,11 @@ A per-file annotation that marks which workspace variables are externally observ
 
 ## JS user functions
 
-Workspace files with a `.numbl.js` extension can register custom `IBuiltin`s written in TypeScript or JavaScript. They are loaded at startup and participate in builtin dispatch like any other registered builtin. This is the extension point for users who want native-ish performance or access to external APIs without patching numbl itself.
+Workspace files with a `.numbl.js` extension define functions in JavaScript; see [src/docs/js-functions.md](../../src/docs/js-functions.md) for the user-facing API. Each file calls `register` with a function `(args, nargout) => result`, an object `{ apply, help }`, or the older `{ resolve }` form, and the loader (`builtinFromSpec` in `jsUserFunctions.ts`) wraps it as an `IBuiltin`. They are loaded at startup and participate in function resolution like workspace functions. This is the extension point for users who want native-ish performance or access to external APIs without patching numbl itself.
 
 Resolution order for a free function name (after the in-scope checks for nested functions, local subfunctions, imports, private functions, and class-method dispatch on a class-instance arg) is: `.m` workspace functions → `.numbl.js` user functions → workspace class constructors → registered `IBuiltin`s. The stdlib `.m` files are bundled into the workspace at startup, so they live in the same tier as user `.m` files (and shadow same-named builtins). A user `.m` or `.numbl.js` with the same name as a builtin therefore shadows it.
 
-The loader (`jsUserFunctions.ts`) runs each file's body via `new Function(...)`, injecting these globals: `RTV`, `RuntimeError`, `Float64Array`, `register`, `wasm`, `native`, `importJS`, `callHandle`, `toNumber`. A `// wasm: <name>` / `// native: <name>` directive at the top binds a WASM module / native shared library.
+The loader (`jsUserFunctions.ts`) runs each file's body via `new Function(...)`, injecting these globals: `RTV`, `RuntimeError`, `Float64Array`, `register`, `wasm`, `native`, `importJS`, `callHandle`, `toNumber`, `gpu`. A `// wasm: <name>` / `// native: <name>` directive at the top binds a WASM module / native shared library.
 
 ### Function-handle callbacks into WASM
 

@@ -50,6 +50,13 @@ export const docsManifest: DocMeta[] = [
     file: "library.md",
   },
   {
+    slug: "js-functions",
+    title: "JavaScript Functions",
+    description:
+      "Write numbl functions in JavaScript with .numbl.js files, optionally backed by WebAssembly or a native library, much as MEX files extend MATLAB.",
+    file: "js-functions.md",
+  },
+  {
     slug: "deploying",
     title: "Deploying Projects",
     description:

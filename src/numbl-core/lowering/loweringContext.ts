@@ -35,7 +35,10 @@ interface WorkspaceRegistry {
   /** Raw workspace files: functionName → { fileName, source } */
   filesByFuncName: Map<string, { fileName: string; source: string }>;
   /** JS user functions (.numbl.js): functionName → { fileName, builtin } */
-  jsUserFunctionsByName: Map<string, { fileName: string; builtin: IBuiltin }>;
+  jsUserFunctionsByName: Map<
+    string,
+    { fileName: string; builtin: IBuiltin; help?: string }
+  >;
   /** mtoc2-only user functions (.mtoc2.js): functionName → { fileName, source }.
    *  Numbl never executes these — the source text is stored for mtoc2's loader
    *  to consume. Numbl's interpreter rejects calls to them with a clear error. */
@@ -501,10 +504,15 @@ export class LoweringContext {
   registerJsUserFunction(
     funcName: string,
     fileName: string,
-    builtin: IBuiltin
+    builtin: IBuiltin,
+    help?: string
   ): void {
     if (this.registry.jsUserFunctionsByName.has(funcName)) return;
-    this.registry.jsUserFunctionsByName.set(funcName, { fileName, builtin });
+    this.registry.jsUserFunctionsByName.set(funcName, {
+      fileName,
+      builtin,
+      help,
+    });
   }
 
   /**

@@ -3,6 +3,7 @@ import language from "./language.md?raw";
 import builtins from "./builtins.md?raw";
 import plotting from "./plotting.md?raw";
 import library from "./library.md?raw";
+import jsFunctions from "./js-functions.md?raw";
 import deploying from "./deploying.md?raw";
 import differences from "./differences.md?raw";
 import { docsManifest, type DocMeta } from "./manifest";
@@ -17,6 +18,7 @@ const contentByFile: Record<string, string> = {
   "builtins.md": builtins,
   "plotting.md": plotting,
   "library.md": library,
+  "js-functions.md": jsFunctions,
   "deploying.md": deploying,
   "differences.md": differences,
 };

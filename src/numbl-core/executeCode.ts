@@ -363,7 +363,12 @@ export function executeCode(
   // Register .numbl.js user functions on the per-context registry. They are
   // resolved at workspace priority (after .m, before native builtins).
   for (const entry of jsUserFunctions) {
-    ctx.registerJsUserFunction(entry.name, entry.fileName, entry.builtin);
+    ctx.registerJsUserFunction(
+      entry.name,
+      entry.fileName,
+      entry.builtin,
+      entry.help
+    );
   }
 
   // Build function index (enables definitive resolution)
@@ -482,7 +487,12 @@ export function executeCode(
     ctx.clearWorkspaceRegistrations();
     ctx.registerWorkspaceFiles(mWorkspaceFiles);
     for (const entry of loadedJsUserFunctions) {
-      ctx.registerJsUserFunction(entry.name, entry.fileName, entry.builtin);
+      ctx.registerJsUserFunction(
+        entry.name,
+        entry.fileName,
+        entry.builtin,
+        entry.help
+      );
     }
     const newIndex = ctx.buildFunctionIndex();
     interpreter.functionIndex = newIndex;
