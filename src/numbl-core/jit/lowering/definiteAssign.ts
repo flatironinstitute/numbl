@@ -228,18 +228,20 @@ function walk(
  * lists the loop variable (and other loop-body locals) as pseudo-outputs
  * that are legitimately unassigned when the loop runs zero times, so the
  * check would over-decline every loop.
+ *
+ * Returns the names definitely assigned on the fall-through path.
  */
 export function assertDefiniteAssignment(
   fn: IRFunc,
   opts: { checkOutputs: boolean } = { checkOutputs: false }
-): void {
+): ReadonlySet<string> {
   const locals = new Set<string>();
   collectAssignedNames(fn.body, locals);
   // Parameters are always bound; never flag reads of them.
   for (const p of fn.params) locals.delete(p);
   const assigned = new Set<string>(fn.params);
   walk(fn.body, assigned, locals);
-  if (!opts.checkOutputs) return;
+  if (!opts.checkOutputs) return assigned;
   // An output that is not definitely assigned on the fall-through path would
   // be returned as C's predeclared default (0 / empty) instead of raising
   // "Output argument not assigned" like the interpreter. Decline so the
@@ -254,4 +256,5 @@ export function assertDefiniteAssignment(
       );
     }
   }
+  return assigned;
 }

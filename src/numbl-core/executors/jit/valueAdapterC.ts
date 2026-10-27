@@ -5,22 +5,14 @@
  * `RuntimeValue` to / from the C ABI mtoc2 expects across the koffi
  * FFI boundary.
  *
- * **Copy budget** (see CLAUDE memo `feedback-no-silent-bails.md`
- * and the user's "no extra copies" guideline):
+ * **Copy budget**:
  *   - Scalars: zero copies; passed by value in koffi's args array.
- *   - Tensors: one copy in, one copy out. mtoc2's call convention
- *     requires the callee own its tensor params (it frees them at
- *     scope exit), so the input data must be copied into a
- *     `koffi.alloc`'d malloc-backed buffer that mtoc2 can free.
- *     Reused / shared buffer would either (a) get freed under
- *     numbl's still-live Float64Array, or (b) require extending
- *     mtoc2 with borrowed-param semantics — deferred.
- *
- *   - Output tensors arrive as `mtoc2_tensor_t` with mtoc2_alloc'd
- *     `real`/`imag` pointers. Caller (this adapter) copies the data
- *     into a fresh `Float64Array`, then calls `free()` on the
- *     pointers (`koffi`-bound `free` from libc) to release mtoc2's
- *     buffers.
+ *   - Tensors: one copy in, one copy out. The callee owns (and frees at
+ *     scope exit) its tensor params, so input data is copied into
+ *     buffers from the `.so`'s own `mtoc2_jit_malloc`. Output tensors
+ *     arrive with callee-allocated `real`/`imag`; they are copied into
+ *     fresh `Float64Array`s and released with `mtoc2_jit_free`. Both
+ *     copies are bulk `koffi.encode` / `koffi.decode` calls.
  */
 
 import {
@@ -41,14 +33,8 @@ import { JIT_MAX_NDIM } from "./typeAdapterC.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type KoffiAny = any;
 interface Koffi {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  alloc(type: string, count: number): any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  decode(ptr: unknown, type: string, count: number): any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  encode(buf: any, type: string, value: any): void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  address(buf: any): any;
+  encode(ptr: unknown, type: string, value: Float64Array, len: number): void;
+  decode(ptr: unknown, type: string, len: number): Float64Array;
 }
 
 /** A function that frees the `mtoc2_alloc`'d buffer at the given
@@ -56,9 +42,11 @@ interface Koffi {
  *  dlopen pulls in libc anyway, so binding through the same lib is
  *  zero-cost. */
 type FreeFn = (ptr: unknown) => void;
+type MallocFn = (bytes: number) => unknown;
 
 interface MarshalCtx {
   readonly koffi: Koffi;
+  readonly malloc: MallocFn;
   readonly free: FreeFn;
 }
 
@@ -81,48 +69,55 @@ function hostWriteCallbackType(koffi: KoffiAny): unknown {
   return hostWriteCbType;
 }
 
+/** Output sink of the C call in flight. One koffi callback is registered
+ *  per process and forwards here, so binding a `.so` costs no per-call
+ *  registration. */
+let hostWriteSink: ((s: string) => void) | null = null;
+let hostWriteCb: unknown = null;
+function hostWriteCallback(koffi: KoffiAny): unknown {
+  if (hostWriteCb === null) {
+    const decoder = new TextDecoder();
+    hostWriteCb = koffi.register((bytes: unknown, len: number | bigint) => {
+      const n = Number(len);
+      if (n <= 0 || hostWriteSink === null) return;
+      hostWriteSink(decoder.decode(new Uint8Array(koffi.view(bytes, n))));
+    }, hostWriteCallbackType(koffi));
+  }
+  return hostWriteCb;
+}
+
+export interface HostWriteBinding {
+  /** Run `fn` (the C call) with the `.so`'s output routed to `write`. */
+  run<T>(write: (s: string) => void, fn: () => T): T;
+}
+
 /** Bind numbl's output sink into an emitted C `.so` so program output
- *  (disp / fprintf / …) routes through `write` instead of libc stdout
- *  — see `runtime/io/host_output.h`. Returns a `dispose()` the caller
- *  MUST invoke after the C call returns (success or throw) to unbind
- *  and free the koffi callback.
+ *  (disp / fprintf / …) routes through the host instead of libc stdout
+ *  (see `runtime/io/host_output.h`). Done once per loaded `.so`.
  *
  *  When the spec emitted no output, `mtoc2_set_host_write` is absent
  *  from the `.so`; binding then no-ops (the C code never writes). */
 export function bindHostWrite(
   koffi: KoffiAny,
-  lib: KoffiLib,
-  write: (s: string) => void
-): { dispose(): void } {
+  lib: KoffiLib
+): HostWriteBinding {
   let setHostWrite: (cb: unknown) => void;
   try {
     setHostWrite = lib.func("void mtoc2_set_host_write(void *)") as (
       cb: unknown
     ) => void;
   } catch {
-    return { dispose() {} };
+    return { run: (_write, fn) => fn() };
   }
-  const decoder = new TextDecoder();
-  const cb = koffi.register((bytes: unknown, len: number | bigint) => {
-    const n = Number(len);
-    if (n <= 0) return;
-    const arr = koffi.decode(bytes, "uint8_t", n);
-    const u8 = new Uint8Array(n);
-    for (let i = 0; i < n; i++) u8[i] = arr[i];
-    write(decoder.decode(u8));
-  }, hostWriteCallbackType(koffi));
-  setHostWrite(cb);
+  setHostWrite(hostWriteCallback(koffi));
   return {
-    dispose() {
+    run(write, fn) {
+      const prev = hostWriteSink;
+      hostWriteSink = write;
       try {
-        setHostWrite(null);
-      } catch {
-        /* lib gone — nothing to unbind */
-      }
-      try {
-        koffi.unregister(cb);
-      } catch {
-        /* already unregistered */
+        return fn();
+      } finally {
+        hostWriteSink = prev;
       }
     },
   };
@@ -154,65 +149,66 @@ export function bindGrowBail(lib: KoffiLib): {
   return { reset, bailed: () => check() !== 0 };
 }
 
-/** Build a marshaling context from a koffi lib handle. The host
- *  passes the lib it got from `compileAndLoadC`; we resolve `free`
- *  against that same lib (libc symbols are reachable through any
- *  dlopen'd .so). */
+/** Build a marshaling context from a koffi lib handle. `mtoc2_jit_malloc`
+ *  / `mtoc2_jit_free` are exported by every JIT `.so` (see
+ *  `jit/codegen/emit.ts`), so host-side buffers use the same allocator
+ *  the emitted code frees with. */
 export function makeCMarshalCtx(koffi: Koffi, lib: KoffiLib): MarshalCtx {
-  // `mtoc2_jit_free` is a tiny wrapper around libc's `free` that
-  // mtoc2's emit always exports from a JIT-mode .so (see
-  // `mtoc2/src/codegen/emit.ts` exposeSpec branch). Binding through
-  // the .so itself avoids any cross-platform libc loader dance.
+  const malloc = lib.func("void *mtoc2_jit_malloc(long)") as MallocFn;
   const free = lib.func("void mtoc2_jit_free(void *)") as FreeFn;
-  return { koffi, free };
+  return { koffi, malloc, free };
 }
 
-/** Marshaled-input bookkeeping returned by `marshalInputs`. The
- *  caller is responsible for invoking `release()` once the C call
- *  has returned (success or throw). `release` does nothing for
- *  scalar inputs (no allocation); for tensor inputs it's also a
- *  no-op: mtoc2's spec body frees the buffers at its scope exit.
- *  Kept as an explicit handle so a future change to lifetime
- *  semantics has a single place to update. */
+/** Marshaled-input bookkeeping returned by `marshalInputs`. The callee
+ *  takes ownership of tensor buffers once it is called; `release()`
+ *  frees them for a call that never happened (marshaling or koffi
+ *  argument-conversion failure). */
 export interface MarshaledInputs {
   /** The values to splat into the koffi call, in order. */
   readonly args: unknown[];
   release(): void;
 }
 
-/** Convert a numbl `RuntimeValue` to the matching koffi-callable
- *  arg for a parameter of mtoc2 `Type`. */
+/** Convert numbl `RuntimeValue`s to koffi-callable args for parameters of
+ *  the given compiler `Type`s, or null if a value doesn't fit its type. */
 export function marshalInputs(
   ctx: MarshalCtx,
   paramTypes: ReadonlyArray<Type>,
   values: ReadonlyArray<RuntimeValue | undefined>
 ): MarshaledInputs | null {
   const args: unknown[] = [];
+  const owned: unknown[] = [];
+  const release = () => {
+    for (const p of owned) ctx.free(p);
+    owned.length = 0;
+  };
   for (let i = 0; i < paramTypes.length; i++) {
     const ty = paramTypes[i];
     const v = values[i];
-    if (v === undefined) return null;
-    const arg = marshalOneInput(ctx, ty, v);
-    if (arg === undefined) return null;
+    const arg =
+      v === undefined ? undefined : marshalOneInput(ctx, ty, v, owned);
+    if (arg === undefined) {
+      release();
+      return null;
+    }
     args.push(arg);
   }
-  return {
-    args,
-    release: () => {
-      // mtoc2 owns + frees tensor input buffers at scope exit; we
-      // have nothing to do here today. Hook left in place so a
-      // future borrowed-param mode can free our own koffi.alloc
-      // buffers from this site.
-    },
-  };
+  return { args, release };
 }
 
-function marshalOneInput(ctx: MarshalCtx, ty: Type, v: RuntimeValue): unknown {
+function marshalOneInput(
+  ctx: MarshalCtx,
+  ty: Type,
+  v: RuntimeValue,
+  owned: unknown[]
+): unknown {
   if (ty.kind === "Numeric") {
     const nty = ty as NumericType;
     if (isMultiElement(nty)) {
       if (!isRuntimeTensor(v)) return undefined;
-      return marshalTensorInput(ctx, v);
+      // A real-typed param can't carry an imaginary part.
+      if (!nty.isComplex && v.imag !== undefined) return undefined;
+      return marshalTensorInput(ctx, v, nty.isComplex, owned);
     }
     // Complex scalar — the C ABI is `double _Complex`, marshaled via
     // the ABI-identical `{re, im}` koffi struct (see typeAdapterC.ts).
@@ -242,73 +238,77 @@ function marshalOneInput(ctx: MarshalCtx, ty: Type, v: RuntimeValue): unknown {
   return undefined;
 }
 
-/** Build a koffi-allocated `mtoc2_tensor_t` whose `real`/`imag`
- *  pointers point to fresh malloc-backed buffers carrying a copy of
- *  the numbl tensor's data. mtoc2's spec body owns and frees these
- *  buffers at its scope exit. */
-function marshalTensorInput(ctx: MarshalCtx, v: RuntimeTensor): unknown {
-  const n = v.data.length;
-  // `koffi.alloc("double", n)` returns a koffi buffer that's also
-  // an iterable view backed by malloc'd memory. `encode` copies the
-  // Float64Array into it. The C side sees the same byte layout.
-  const realBuf = ctx.koffi.alloc("double", Math.max(n, 1));
-  ctx.koffi.encode(realBuf, "double", v.data);
-  let imagBuf: unknown = null;
-  if (v.imag !== undefined) {
-    imagBuf = ctx.koffi.alloc("double", Math.max(n, 1));
-    ctx.koffi.encode(imagBuf, "double", v.imag);
+/** Copy `src` into a fresh `mtoc2_jit_malloc` buffer (or zero-fill
+ *  `n` doubles when `src` is undefined). */
+function copyIn(
+  ctx: MarshalCtx,
+  src: Float64Array | undefined,
+  n: number,
+  owned: unknown[]
+): unknown {
+  const ptr = ctx.malloc(Math.max(n, 1) * 8);
+  if (ptr === null) throw new Error("mtoc2_jit_malloc: out of memory");
+  owned.push(ptr);
+  if (n > 0) {
+    ctx.koffi.encode(ptr, "double", src ?? new Float64Array(n), n);
   }
-  // Build the struct as a plain JS object — koffi marshals into the
-  // C layout based on the `mtoc2_tensor_t` struct registration.
-  const shape = [...v.shape];
-  while (shape.length < 2) shape.push(1); // mtoc2 minimum ndim is 2.
-  const dims = new Array(JIT_MAX_NDIM).fill(0);
-  for (let k = 0; k < shape.length && k < JIT_MAX_NDIM; k++) {
-    dims[k] = shape[k];
-  }
-  return {
-    real: realBuf,
-    imag: imagBuf,
-    ndim: shape.length,
-    dims,
-  };
+  return ptr;
 }
 
-/** Convert a returned C tensor struct (decoded by koffi into a JS
- *  object with `{real, imag, ndim, dims}`) to a numbl RuntimeTensor.
- *  Reads `n = product(dims[0..ndim])` doubles from each lane, then
- *  frees mtoc2's buffers.
- *
- *  For `Numeric` outputs that aren't multi-element (scalars), the
- *  caller passes the bare value through `unmarshalScalarOutput`
- *  instead — koffi unboxes them automatically.
- */
+/** Build an `mtoc2_tensor_t` whose `real`/`imag` point to fresh buffers
+ *  holding a copy of the numbl tensor's data. A complex-typed param
+ *  always gets an `imag` lane (zeros for a real value), since the
+ *  emitted code reads it unconditionally. */
+function marshalTensorInput(
+  ctx: MarshalCtx,
+  v: RuntimeTensor,
+  isComplex: boolean,
+  owned: unknown[]
+): unknown {
+  const shape = [...v.shape];
+  while (shape.length < 2) shape.push(1); // mtoc2 minimum ndim is 2.
+  if (shape.length > JIT_MAX_NDIM) return undefined;
+  const n = v.data.length;
+  const real = copyIn(ctx, v.data, n, owned);
+  const imag = isComplex ? copyIn(ctx, v.imag, n, owned) : null;
+  const dims = new Array(JIT_MAX_NDIM).fill(0);
+  for (let k = 0; k < shape.length; k++) dims[k] = shape[k];
+  return { real, imag, ndim: shape.length, dims };
+}
+
+/** Copy `n` doubles out of a callee-allocated buffer. */
+function copyOut(ctx: MarshalCtx, ptr: unknown, n: number): Float64Array {
+  if (n === 0) return new Float64Array(0);
+  // A `double` decode with a length copies into a fresh Float64Array.
+  return ctx.koffi.decode(ptr, "double", n);
+}
+
+/** Convert a returned C tensor struct (decoded by koffi into a JS object
+ *  with `{real, imag, ndim, dims}`) to a numbl RuntimeTensor, then free
+ *  the callee's buffers. Scalar outputs go through
+ *  `unmarshalScalarOutput` instead. */
 export function unmarshalTensorOutput(
   ctx: MarshalCtx,
   ret: KoffiAny,
   ty: NumericType
 ): RuntimeTensor {
   const ndim = ret.ndim as number;
-  const dimsArr = ret.dims as number[];
-  const shape = dimsArr.slice(0, ndim);
+  const shape = (ret.dims as number[]).slice(0, ndim).map(Number);
   let n = 1;
   for (const d of shape) n *= d;
   const realPtr = ret.real;
   const imagPtr = ret.imag;
-  const realArr = ctx.koffi.decode(realPtr, "double", Math.max(n, 1));
-  const realData = new Float64Array(n);
-  for (let i = 0; i < n; i++) realData[i] = realArr[i];
-  let imagData: Float64Array | undefined;
-  if (ty.isComplex && imagPtr) {
-    const imagArr = ctx.koffi.decode(imagPtr, "double", Math.max(n, 1));
-    imagData = new Float64Array(n);
-    for (let i = 0; i < n; i++) imagData[i] = imagArr[i];
-  }
-  // Release mtoc2's buffers. mtoc2 alloc'd them with the same
-  // `malloc` that libc's `free` consumes (see runtime/tensor/alloc.h).
-  ctx.free(realPtr);
+  const realData = copyOut(ctx, realPtr, n);
+  const imagData =
+    ty.isComplex && imagPtr ? copyOut(ctx, imagPtr, n) : undefined;
+  if (realPtr) ctx.free(realPtr);
   if (imagPtr) ctx.free(imagPtr);
-  return new RuntimeTensor(realData, shape, imagData);
+  return new RuntimeTensor(
+    realData,
+    shape,
+    imagData,
+    ty.elem === "logical" ? true : undefined
+  );
 }
 
 /** Convert a bare scalar return value to a numbl RuntimeValue.

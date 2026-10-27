@@ -322,7 +322,13 @@ function execStmtInner(this: Interpreter, stmt: Stmt): ControlSignal | null {
 
     case "TryCatch": {
       try {
-        const signal = this.execBlockStmts(stmt.tryBody);
+        this.tryDepth++;
+        let signal: ControlSignal | null;
+        try {
+          signal = this.execBlockStmts(stmt.tryBody);
+        } finally {
+          this.tryDepth--;
+        }
         if (signal) return signal;
       } catch (e) {
         // A cancellation request (Ctrl-C / interrupt) is not catchable by
