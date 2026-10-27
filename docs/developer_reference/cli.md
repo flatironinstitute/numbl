@@ -14,6 +14,17 @@ The `numbl` command-line entry point is a small orchestration layer over `execut
 - **Introspection** — machine-readable system/version info, list of registered builtins.
 - **Execution server** — local HTTP server (`numbl serve`) used by the browser IDE to run code outside the worker sandbox.
 
+## Source layout
+
+`src/cli.ts` is the entry point: native-addon/qhull/mip setup, `--help`, and the command dispatch for `run`, `eval`, `parse`, the REPL and the smaller commands. Larger pieces live in sibling `cli-*.ts` modules:
+
+- `cli-args.ts` — option parsing on `node:util` `parseArgs` (shared run/eval/REPL options, `NUMBL_PATH`).
+- `cli-repl.ts` — the interactive REPL.
+- `cli-run-tests.ts` — `run-tests`; its `runTestScript` is also used by the vitest wrapper (`src/__tests__/test-scripts.test.ts`) and `scripts/annotate_assert_jit.ts`.
+- `cli-scan.ts` — workspace scanning (`scanMFiles`) and test-script discovery (`findTestScripts`).
+- `cli-build-site.ts`, `cli-profile.ts` — `build-site`, and `--profile` output / `show-profile`.
+- `cli-fileio.ts`, `cli-system.ts`, `cli-plot-*.ts` — the adapters below.
+
 ## Adapters
 
 The CLI provides:

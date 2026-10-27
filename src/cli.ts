@@ -3,30 +3,18 @@
 import {
   readFileSync,
   readSync,
-  readdirSync,
-  statSync,
   existsSync,
   writeFileSync,
   appendFileSync,
   mkdirSync,
   rmSync,
   copyFileSync,
-  cpSync,
 } from "fs";
-import {
-  basename,
-  delimiter,
-  dirname,
-  join,
-  relative,
-  resolve,
-  sep,
-} from "path";
+import { delimiter, dirname, join, resolve } from "path";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execSync } from "child_process";
-import { createHash } from "crypto";
 import { type PlotServerOptions } from "./cli-plot-server.js";
 import { createPlotHandler } from "./cli-plot-handler.js";
 import {
@@ -44,15 +32,22 @@ import { NUMBL_VERSION } from "./numbl-core/version.js";
 import { runRepl } from "./cli-repl.js";
 import { NodeFileIOAdapter } from "./cli-fileio.js";
 import { NodeSystemAdapter } from "./cli-system.js";
+import {
+  parseCommandArgs,
+  parseNumberOption,
+  parseRunOptions,
+  type RunOptions,
+} from "./cli-args.js";
+import { runTests } from "./cli-run-tests.js";
+import { cmdBuildSite } from "./cli-build-site.js";
+import { cmdShowProfile, writeProfile } from "./cli-profile.js";
 
 import { executeCode } from "./numbl-core/executeCode.js";
 import { parseMFile } from "./numbl-core/parser/index.js";
 import { WorkspaceFile, NativeBridge } from "./numbl-core/workspace/types.js";
-import { isOptLevel } from "./numbl-core/executors/plugins.js";
 import { registerNodeCompileC } from "./numbl-core/executors/jit/compileC.node.js";
 import { scanMFiles } from "./cli-scan.js";
 import { unzipToFiles } from "./vfs/unzipToFiles.js";
-import { zipSync } from "fflate";
 
 // Install the Node-side koffi C-JIT implementation into the
 // browser-safe stub in `compileC.ts`. Keeping the `node:fs` /
@@ -142,9 +137,6 @@ try {
   // koffi not installed — native shared library support disabled
 }
 
-// scanMFiles is in cli-scan.ts (separate module to avoid circular deps with cli-fileio)
-export { scanMFiles } from "./cli-scan.js";
-
 // ── MIP core package auto-install ───────────────────────────────────────────
 
 const MHL_URL =
@@ -194,141 +186,6 @@ async function ensureMipCorePackage(): Promise<void> {
     if (!installed) console.error("mip core package installed.");
   } catch {
     // silently ignore download / install failures; previous cache (if any) stays intact
-  }
-}
-
-// /** JSON replacer that serializes Maps and Sets as plain objects/arrays. */
-// function jsonReplacer(_key: string, value: unknown): unknown {
-//   if (value instanceof Map) {
-//     return Object.fromEntries(value);
-//   }
-//   if (value instanceof Set) {
-//     return [...value];
-//   }
-//   return value;
-// }
-
-// ── Internal test runner ─────────────────────────────────────────────────────
-
-function findTestFiles(dir: string): string[] {
-  const results: string[] = [];
-
-  function walk(current: string) {
-    let entries: string[];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      return;
-    }
-    entries.sort();
-    for (const entry of entries) {
-      const fullPath = join(current, entry);
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        if (
-          !entry.startsWith("@") &&
-          !entry.startsWith("+") &&
-          entry !== "wasm"
-        ) {
-          walk(fullPath);
-        }
-      } else if (stat.isFile() && entry.endsWith(".m")) {
-        const content = readFileSync(fullPath, "utf-8");
-        if (content.includes("SUCCESS")) {
-          results.push(fullPath);
-        }
-      }
-    }
-  }
-
-  walk(dir);
-  return results;
-}
-
-async function runTests(
-  dir: string,
-  optimization?: import("./numbl-core/executors/plugins.js").OptLevel,
-  fastMath?: boolean,
-  noNative?: boolean
-) {
-  loadNativeAddon(fastMath ?? false, noNative ?? false);
-  await loadQhullBackend();
-  const absDir = resolve(process.cwd(), dir);
-  const testFiles = findTestFiles(absDir);
-
-  if (testFiles.length === 0) {
-    console.error(`No .m test files found in ${dir}`);
-    process.exit(1);
-  }
-
-  let pass = 0;
-  let fail = 0;
-  const failedScripts: string[] = [];
-
-  for (const filepath of testFiles) {
-    const rel = relative(process.cwd(), filepath);
-    const source = readFileSync(filepath, "utf-8");
-    const mainFileName = filepath;
-    const scriptDir = dirname(filepath);
-    const searchPaths = [scriptDir];
-    const workspaceFiles = scanMFiles(scriptDir, filepath);
-
-    try {
-      const result = executeCode(
-        source,
-        {
-          displayResults: true,
-          optimization: optimization ?? "1",
-          fileIO: new NodeFileIOAdapter(),
-          system: new NodeSystemAdapter(),
-        },
-        workspaceFiles,
-        mainFileName,
-        searchPaths,
-        nativeBridge
-      );
-
-      const outputText = result.output.join("");
-      const lines = outputText.split("\n").filter(l => l.length > 0);
-      const lastLine = lines.length > 0 ? lines[lines.length - 1] : "";
-
-      if (lastLine === "SUCCESS") {
-        console.log(`PASS  ${rel}`);
-        pass++;
-      } else {
-        console.log(`FAIL  ${rel}`);
-        console.log(outputText.replace(/^/gm, "      "));
-        fail++;
-        failedScripts.push(rel);
-      }
-    } catch (error) {
-      const diags = diagnoseErrors(error, source, mainFileName, workspaceFiles);
-      const getSource = (file: string) =>
-        getSourceForFile(file, mainFileName, source, workspaceFiles);
-      console.log(`FAIL  ${rel}`);
-      console.log(
-        `      ${formatDiagnostics(diags, getSource).replace(/\n/g, "\n      ")}`
-      );
-      fail++;
-      failedScripts.push(rel);
-    }
-  }
-
-  console.log("");
-  console.log(`Results: ${pass} passed, ${fail} failed`);
-
-  if (fail > 0) {
-    console.log("");
-    console.log("Failed scripts:");
-    for (const s of failedScripts) {
-      console.log(`  ${s}`);
-    }
-    process.exit(1);
   }
 }
 
@@ -409,230 +266,70 @@ Environment variables:
                           position, reason) to stderr`);
 }
 
-// ── Option parsing helpers ───────────────────────────────────────────────────
-
-interface ParsedOptions {
-  dumpJs: string | undefined;
-  dumpC: string | undefined;
-  dumpAst: boolean;
-  verbose: boolean;
-  stream: boolean;
-  plot: boolean;
-  plotPort: number | undefined;
-  extraPaths: string[];
-  positional: string[];
-  profileOutput: string | undefined;
-  optimization: import("./numbl-core/executors/plugins.js").OptLevel;
-  fastMath: boolean;
-  noNative: boolean;
-}
-
-function parseOptions(args: string[]): ParsedOptions {
-  const opts: ParsedOptions = {
-    dumpJs: undefined,
-    dumpC: undefined,
-    dumpAst: false,
-    verbose: false,
-    stream: false,
-    plot: false,
-    plotPort: undefined,
-    extraPaths: [],
-    positional: [],
-    profileOutput: undefined,
-    optimization: "1",
-    // Default OFF: the native addon's -ffast-math reorders reductions
-    // and vectorizes transcendentals, so results drift from the JIT
-    // kernels and diverge across --opt levels. Opt back in with
-    // `--fast-math` (and a matching `build-addon --fast-math`).
-    fastMath: false,
-    noNative: false,
-  };
-
-  // Seed extraPaths from NUMBL_PATH environment variable (platform path separator)
-  const envPath = process.env.NUMBL_PATH;
-  if (envPath) {
-    const home = process.env.HOME || process.env.USERPROFILE || "";
-    for (const p of envPath.split(delimiter)) {
-      let trimmed = p.trim();
-      if (!trimmed) continue;
-      // Expand leading ~ to home directory
-      if (trimmed.startsWith("~/") || trimmed === "~") {
-        trimmed = home + trimmed.slice(1);
-      }
-      opts.extraPaths.push(resolve(process.cwd(), trimmed));
-    }
-  }
-
-  for (let i = 0; i < args.length; i++) {
-    switch (args[i]) {
-      case "--dump-js":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --dump-js requires an output filename");
-          process.exit(1);
-        }
-        opts.dumpJs = resolve(process.cwd(), args[i]);
-        break;
-      case "--dump-c":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --dump-c requires an output filename");
-          process.exit(1);
-        }
-        opts.dumpC = resolve(process.cwd(), args[i]);
-        break;
-      case "--fast-math":
-        opts.fastMath = true;
-        break;
-      case "--no-fast-math":
-        // Accepted for back-compat; this is now the default.
-        opts.fastMath = false;
-        break;
-      case "--no-native":
-        opts.noNative = true;
-        break;
-      case "--dump-ast":
-        opts.dumpAst = true;
-        break;
-      case "--verbose":
-        opts.verbose = true;
-        break;
-      case "--stream":
-        opts.stream = true;
-        break;
-      case "--plot":
-        opts.plot = true;
-        break;
-      case "--plot-port":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --plot-port requires a port number");
-          process.exit(1);
-        }
-        opts.plotPort = parseInt(args[i], 10);
-        if (isNaN(opts.plotPort)) {
-          console.error("Error: --plot-port requires a valid port number");
-          process.exit(1);
-        }
-        opts.plot = true;
-        break;
-      case "--path":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --path requires a directory argument");
-          process.exit(1);
-        }
-        opts.extraPaths.push(resolve(process.cwd(), args[i]));
-        break;
-      case "--profile":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --profile requires an output filename");
-          process.exit(1);
-        }
-        opts.profileOutput = resolve(process.cwd(), args[i]);
-        break;
-      case "--opt":
-        i++;
-        if (i >= args.length) {
-          console.error("Error: --opt requires a value (0 or 1)");
-          process.exit(1);
-        }
-        {
-          const v = args[i];
-          if (!isOptLevel(v)) {
-            console.error(`Error: --opt must be 0 or 1 (got ${v}).`);
-            process.exit(1);
-          }
-          opts.optimization = v;
-        }
-        break;
-      default:
-        if (args[i].startsWith("-")) {
-          console.error(`Unknown option: ${args[i]}`);
-          process.exit(1);
-        }
-        opts.positional.push(args[i]);
-    }
-  }
-
-  return opts;
-}
-
 // ── Command handlers ─────────────────────────────────────────────────────────
 
-async function cmdRun(args: string[]) {
-  const opts = parseOptions(args);
-
-  if (opts.positional.length === 0) {
-    console.error("Error: numbl run requires a file argument");
-    process.exit(1);
-  }
-  if (opts.positional.length > 1) {
-    console.error("Error: numbl run accepts only one file argument");
-    process.exit(1);
-  }
-
+/** Extra --path / NUMBL_PATH directories plus the mip core package (installed
+ *  or refreshed first), with the workspace files found in them. */
+async function prepareSearchPaths(
+  extraPaths: string[]
+): Promise<{ searchPaths: string[]; workspaceFiles: WorkspaceFile[] }> {
   await ensureMipCorePackage();
+  const searchPaths = [...extraPaths];
+  if (existsSync(mipCoreSearchPath)) searchPaths.push(mipCoreSearchPath);
+  return {
+    searchPaths,
+    workspaceFiles: searchPaths.flatMap(d => scanMFiles(d)),
+  };
+}
 
-  const filepath = resolve(process.cwd(), opts.positional[0]);
+/** The single positional argument of `numbl <command>`. */
+function singlePositional(
+  positional: string[],
+  command: string,
+  what: string
+): string {
+  if (positional.length === 0) {
+    console.error(`Error: numbl ${command} requires a ${what} argument`);
+    process.exit(1);
+  }
+  if (positional.length > 1) {
+    console.error(`Error: numbl ${command} accepts only one ${what} argument`);
+    process.exit(1);
+  }
+  return positional[0];
+}
+
+async function cmdRun(args: string[]) {
+  const opts = parseRunOptions(args);
+  const filepath = resolve(
+    process.cwd(),
+    singlePositional(opts.positional, "run", "file")
+  );
   const code = readFileSync(filepath, "utf-8");
-  const mainFileName = filepath;
 
   // Auto-cd into the script's directory before executing (matches MATLAB
   // "F5 in editor" behavior). The script directory then becomes the
   // first-priority implicit search path via the cwd-as-search-path feature.
   process.chdir(dirname(filepath));
 
-  const searchPaths: string[] = [];
-  const workspaceFiles: WorkspaceFile[] = [];
-  for (const p of opts.extraPaths) {
-    searchPaths.push(p);
-    workspaceFiles.push(...scanMFiles(p));
-  }
-  if (existsSync(mipCoreSearchPath)) {
-    searchPaths.push(mipCoreSearchPath);
-    workspaceFiles.push(...scanMFiles(mipCoreSearchPath));
-  }
-
-  await executeWithOptions(
-    code,
-    mainFileName,
-    workspaceFiles,
-    opts,
-    searchPaths
+  const { searchPaths, workspaceFiles } = await prepareSearchPaths(
+    opts.extraPaths
   );
+  await executeWithOptions(code, filepath, workspaceFiles, opts, searchPaths);
 }
 
 async function cmdParse(args: string[]) {
-  let dumpAst: string | undefined;
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--dump-ast") {
-      i++;
-      if (i >= args.length) {
-        console.error("Error: --dump-ast requires an output filename");
-        process.exit(1);
-      }
-      dumpAst = resolve(process.cwd(), args[i]);
-    } else if (args[i].startsWith("-")) {
-      console.error(`Unknown option: ${args[i]}`);
-      process.exit(1);
-    } else {
-      positional.push(args[i]);
-    }
-  }
-
-  if (positional.length === 0) {
-    console.error("Error: numbl parse requires a file argument");
-    process.exit(1);
-  }
-  if (positional.length > 1) {
-    console.error("Error: numbl parse accepts only one file argument");
-    process.exit(1);
-  }
-
-  const filepath = resolve(process.cwd(), positional[0]);
+  const { values, positionals } = parseCommandArgs(args, {
+    "dump-ast": { type: "string" },
+  });
+  const dumpAst =
+    values["dump-ast"] === undefined
+      ? undefined
+      : resolve(process.cwd(), values["dump-ast"]);
+  const filepath = resolve(
+    process.cwd(),
+    singlePositional(positionals, "parse", "file")
+  );
   const code = readFileSync(filepath, "utf-8");
 
   try {
@@ -654,90 +351,51 @@ async function cmdParse(args: string[]) {
 }
 
 async function cmdEval(args: string[]) {
-  const opts = parseOptions(args);
-
-  if (opts.positional.length === 0) {
-    console.error("Error: numbl eval requires a code argument");
-    process.exit(1);
-  }
-  if (opts.positional.length > 1) {
-    console.error("Error: numbl eval accepts only one code argument");
-    process.exit(1);
-  }
-
-  await ensureMipCorePackage();
-
-  const searchPaths: string[] = [];
-  const workspaceFiles: WorkspaceFile[] = [];
-  for (const p of opts.extraPaths) {
-    searchPaths.push(p);
-    workspaceFiles.push(...scanMFiles(p));
-  }
-  if (existsSync(mipCoreSearchPath)) {
-    searchPaths.push(mipCoreSearchPath);
-    workspaceFiles.push(...scanMFiles(mipCoreSearchPath));
-  }
-
-  await executeWithOptions(
-    opts.positional[0],
-    "eval.m",
-    workspaceFiles,
-    opts,
-    searchPaths
+  const opts = parseRunOptions(args);
+  const code = singlePositional(opts.positional, "eval", "code");
+  const { searchPaths, workspaceFiles } = await prepareSearchPaths(
+    opts.extraPaths
   );
+  await executeWithOptions(code, "eval.m", workspaceFiles, opts, searchPaths);
+}
+
+/** NDJSON writer on stdout for --stream. */
+function ndjsonStdout(): (obj: Record<string, unknown>) => void {
+  // Force stdout to blocking mode so large writes (e.g. drawnow events
+  // carrying megabytes of plot data) are fully flushed before
+  // process.exit(0). With the default non-blocking pipe behavior, exit can
+  // drop the tail of a write, which the parent then sees as an unparseable
+  // line and surfaces as raw output text.
+  const stdoutHandle = (
+    process.stdout as unknown as {
+      _handle?: { setBlocking?: (b: boolean) => void };
+    }
+  )._handle;
+  stdoutHandle?.setBlocking?.(true);
+  return obj => {
+    process.stdout.write(JSON.stringify(obj) + "\n");
+  };
+}
+
+/** Plot handler for --plot / --plot-port (disabled without them). */
+function plotHandlerFor(opts: RunOptions) {
+  const serverOpts: PlotServerOptions | undefined =
+    opts.plotPort !== undefined
+      ? { port: opts.plotPort, host: "0.0.0.0" }
+      : undefined;
+  return createPlotHandler(!opts.plot, serverOpts);
 }
 
 async function executeWithOptions(
   code: string,
   mainFileName: string,
   workspaceFiles: WorkspaceFile[],
-  opts: ParsedOptions,
+  opts: RunOptions,
   searchPaths?: string[]
 ) {
   loadNativeAddon(opts.fastMath, opts.noNative);
   await loadQhullBackend();
-  const profiling = !!opts.profileOutput;
   const totalStart = performance.now();
-
-  // Helper to write profile data after execution completes
-  const writeProfileIfNeeded = (result: {
-    profileData?: import("./numbl-core/executeCode.js").ProfileData;
-  }) => {
-    if (!opts.profileOutput || !result.profileData) return;
-    const pd = result.profileData;
-    const totalTimeMs = performance.now() - totalStart;
-    const builtins = Object.entries(pd.builtins)
-      .map(([name, b]) => ({
-        name,
-        fallback: b.fallback,
-        interp: b.interp,
-        jit: b.jit,
-      }))
-      .sort((a, b) => {
-        const aTotal =
-          a.fallback.totalTimeMs + a.interp.totalTimeMs + a.jit.totalTimeMs;
-        const bTotal =
-          b.fallback.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
-        return bTotal - aTotal;
-      });
-    const dispatches = Object.entries(pd.dispatches)
-      .map(([name, b]) => ({
-        name,
-        totalTimeMs: b.totalTimeMs,
-        callCount: b.callCount,
-      }))
-      .sort((a, b) => b.totalTimeMs - a.totalTimeMs);
-    const profile = {
-      totalTimeMs,
-      executionTimeMs: pd.executionTimeMs,
-      jitCompileTimeMs: pd.jitCompileTimeMs,
-      builtins,
-      dispatches,
-      hotLoops: pd.hotLoops ?? [],
-    };
-    writeFileSync(opts.profileOutput, JSON.stringify(profile, null, 2) + "\n");
-    console.error(`Profile written to ${opts.profileOutput}`);
-  };
 
   // If --dump-ast is used alone (without running), just dump and exit
   if (
@@ -834,154 +492,86 @@ async function executeWithOptions(
     process.stderr.write(`warning: JIT bailed to interpreter — ${message}\n`);
   };
 
+  // --stream emits NDJSON on stdout; otherwise output goes to stdout and
+  // figures to the plot handler (a no-op unless --plot).
+  const stream = opts.stream ? ndjsonStdout() : undefined;
+  const plot = stream ? undefined : plotHandlerFor(opts);
+  const log =
+    opts.verbose && !stream
+      ? (msg: string) => console.error(`[verbose] ${msg}`)
+      : undefined;
+  if (log) setBridgeLog(log);
+
   try {
-    if (opts.stream) {
-      // Force stdout to blocking mode so large writes (e.g. drawnow events
-      // carrying megabytes of plot data) are fully flushed before
-      // process.exit(0) below. With the default non-blocking pipe behavior,
-      // exit can drop the tail of a write, which the parent then sees as
-      // an unparseable line and surfaces as raw output text.
-      const stdoutHandle = (
-        process.stdout as unknown as {
-          _handle?: { setBlocking?: (b: boolean) => void };
-        }
-      )._handle;
-      stdoutHandle?.setBlocking?.(true);
-      const streamLine = (obj: Record<string, unknown>) => {
-        process.stdout.write(JSON.stringify(obj) + "\n");
-      };
-      try {
-        const result = executeCode(
-          code,
-          {
-            displayResults: true,
-            profile: profiling,
-            onOutput: (text: string) => {
-              streamLine({ type: "output", text });
-            },
-            onDrawnow: plotInstructions => {
-              streamLine({ type: "drawnow", plotInstructions });
-            },
-            onJitCompile,
-            onJitBail,
-
-            fileIO,
-            system,
-            onInput,
-
-            optimization: opts.optimization,
-          },
-          workspaceFiles,
-          mainFileName,
-          searchPaths,
-          nativeBridge
-        );
-        if (result.plotInstructions.length > 0) {
-          streamLine({
-            type: "drawnow",
-            plotInstructions: result.plotInstructions,
-          });
-        }
-        writeProfileIfNeeded(result);
-        finalizeDumps();
-        streamLine({
-          type: "done",
-          generatedJS: result.generatedJS || undefined,
-          generatedC: result.generatedC || undefined,
-        });
-      } catch (error) {
-        const diags = diagnoseErrors(error, code, mainFileName, workspaceFiles);
-        for (const diag of diags) {
-          streamLine({
-            type: "error",
-            message: diag.message,
-            errorType: diag.errorType,
-            file: diag.file,
-            line: diag.line,
-            snippet: diag.snippet,
-          });
-        }
-      }
-      process.exit(0);
-    } else if (opts.verbose) {
-      const log = (msg: string) => console.error(`[verbose] ${msg}`);
-      setBridgeLog(log);
-      const plot = createPlotHandler(!opts.plot || opts.stream);
-      const result = executeCode(
-        code,
-        {
-          displayResults: true,
-          profile: profiling,
-          onOutput: (text: string) => {
-            process.stdout.write(text);
-          },
-          onDrawnow: plot.onDrawnow,
-          onHtmlSourceEvent: plot.sendUihtmlEvent,
-          log,
-          onJitCompile,
-          onJitBail,
-
-          fileIO,
-          system,
-          onInput,
-          optimization: opts.optimization,
-        },
-        workspaceFiles,
-        mainFileName,
-        searchPaths,
-        nativeBridge
+    const result = executeCode(
+      code,
+      {
+        displayResults: true,
+        profile: !!opts.profileOutput,
+        onOutput: stream
+          ? text => stream({ type: "output", text })
+          : text => process.stdout.write(text),
+        onDrawnow: stream
+          ? plotInstructions => stream({ type: "drawnow", plotInstructions })
+          : plot?.onDrawnow,
+        onHtmlSourceEvent: plot?.sendUihtmlEvent,
+        log,
+        onJitCompile,
+        onJitBail,
+        fileIO,
+        system,
+        onInput,
+        optimization: opts.optimization,
+      },
+      workspaceFiles,
+      mainFileName,
+      searchPaths,
+      nativeBridge
+    );
+    if (opts.profileOutput && result.profileData) {
+      writeProfile(
+        opts.profileOutput,
+        result.profileData,
+        performance.now() - totalStart
       );
-      writeProfileIfNeeded(result);
-      finalizeDumps();
-      plot.setUihtmlSession(result.uihtmlSession ?? null);
-      await plot.flushAndWait(result.plotInstructions);
-    } else {
-      const asyncPlotOpts: PlotServerOptions | undefined =
-        opts.plotPort !== undefined
-          ? { port: opts.plotPort, host: "0.0.0.0" }
-          : undefined;
-      const plot = createPlotHandler(!opts.plot, asyncPlotOpts);
-      const result = executeCode(
-        code,
-        {
-          displayResults: true,
-          profile: profiling,
-          onOutput: (text: string) => {
-            process.stdout.write(text);
-          },
-          onDrawnow: plot.onDrawnow,
-          onHtmlSourceEvent: plot.sendUihtmlEvent,
-          onJitCompile,
-          onJitBail,
-
-          fileIO,
-          system,
-          onInput,
-          optimization: opts.optimization,
-        },
-        workspaceFiles,
-        mainFileName,
-        searchPaths,
-        nativeBridge
-      );
-      writeProfileIfNeeded(result);
-      finalizeDumps();
-      plot.setUihtmlSession(result.uihtmlSession ?? null);
-      await plot.flushAndWait(result.plotInstructions);
     }
-
+    finalizeDumps();
+    if (stream) {
+      if (result.plotInstructions.length > 0) {
+        stream({ type: "drawnow", plotInstructions: result.plotInstructions });
+      }
+      stream({
+        type: "done",
+        generatedJS: result.generatedJS || undefined,
+        generatedC: result.generatedC || undefined,
+      });
+    } else {
+      plot?.setUihtmlSession(result.uihtmlSession ?? null);
+      await plot?.flushAndWait(result.plotInstructions);
+    }
     process.exit(0);
   } catch (error) {
     const diags = diagnoseErrors(error, code, mainFileName, workspaceFiles);
-    const getSource = (file: string) =>
-      getSourceForFile(file, mainFileName, code, workspaceFiles);
-    console.error(formatDiagnostics(diags, getSource));
-
     // The dump files were streamed as each section compiled (see
     // onJitCompile above), so anything generated before the error is
     // already on disk. Just cap off any file that got no sections.
     finalizeDumps();
-
+    if (stream) {
+      for (const diag of diags) {
+        stream({
+          type: "error",
+          message: diag.message,
+          errorType: diag.errorType,
+          file: diag.file,
+          line: diag.line,
+          snippet: diag.snippet,
+        });
+      }
+      process.exit(0);
+    }
+    const getSource = (file: string) =>
+      getSourceForFile(file, mainFileName, code, workspaceFiles);
+    console.error(formatDiagnostics(diags, getSource));
     process.exit(1);
   }
 }
@@ -989,13 +579,15 @@ async function executeWithOptions(
 async function cmdBuildAddon(args: string[]) {
   // Default OFF (deterministic, cross-mode-consistent). `--fast-math`
   // opts in; `--no-fast-math` is accepted for back-compat (now default).
-  const fastMath = args.includes("--fast-math");
-  for (const a of args) {
-    if (a !== "--no-fast-math" && a !== "--fast-math") {
-      console.error(`Unknown option: ${a}`);
-      process.exit(1);
-    }
+  const { values, positionals } = parseCommandArgs(args, {
+    "fast-math": { type: "boolean" },
+    "no-fast-math": { type: "boolean" },
+  });
+  if (positionals.length > 0) {
+    console.error(`Unknown option: ${positionals[0]}`);
+    process.exit(1);
   }
+  const fastMath = values["fast-math"] ?? false;
   const bindingGyp = join(packageDir, "binding.gyp");
   if (!existsSync(bindingGyp)) {
     console.error(
@@ -1044,258 +636,6 @@ async function cmdBuildAddon(args: string[]) {
   }
 }
 
-// ── Build static site ────────────────────────────────────────────────────────
-
-const SITE_DEFAULT_IGNORE_DIRS = new Set([".git", ".github", "node_modules"]);
-const SITE_MAX_FILE_BYTES = 25 * 1024 * 1024;
-
-/** Coding-agent instruction files (CLAUDE.md, AGENTS.md, AGENT*.md, GEMINI.md,
- *  …). These are dev tooling, not project content, so build-site never bundles
- *  them into the rendered site (matched by basename, at any depth). */
-function isAgentInstructionFile(name: string): boolean {
-  return name === "GEMINI.md" || /^(CLAUDE|AGENT)[^/]*\.md$/i.test(name);
-}
-
-/** Read .numblignore (gitignore-ish: blank/`#` lines skipped). */
-function readNumblIgnore(projectDir: string): string[] {
-  const p = join(projectDir, ".numblignore");
-  if (!existsSync(p)) return [];
-  return readFileSync(p, "utf-8")
-    .split("\n")
-    .map(l => l.trim())
-    .filter(l => l && !l.startsWith("#"));
-}
-
-/** Compile a gitignore-ish glob (`*` = within a segment, `**` = any) to regex. */
-function globToRegExp(glob: string): RegExp {
-  const escaped = glob.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-  const expanded = escaped.replace(/\*\*|\*/g, m =>
-    m === "**" ? ".*" : "[^/]*"
-  );
-  return new RegExp("^" + expanded + "$");
-}
-
-/** Walk a project dir collecting files to bundle, applying ignore rules. */
-function collectSiteFiles(
-  projectDir: string,
-  outDirAbs: string,
-  ignore: string[]
-): { path: string; data: Uint8Array }[] {
-  const out: { path: string; data: Uint8Array }[] = [];
-  const matchesIgnore = (rel: string): boolean => {
-    const base = rel.split("/").pop() ?? rel;
-    for (const pat of ignore) {
-      const norm = pat.replace(/\/+$/, "");
-      if (!norm) continue;
-      // Exact path or directory-prefix match.
-      if (rel === norm || rel.startsWith(norm + "/")) return true;
-      if (pat.includes("*")) {
-        const re = globToRegExp(norm);
-        if (re.test(rel) || re.test(base)) return true;
-      } else if (base === norm) {
-        return true;
-      }
-    }
-    return false;
-  };
-  const walk = (dir: string) => {
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const e of entries) {
-      const full = join(dir, e.name);
-      if (resolve(full) === outDirAbs) continue; // never bundle the output dir
-      const rel = relative(projectDir, full).split(sep).join("/");
-      if (matchesIgnore(rel)) continue;
-      if (e.isDirectory()) {
-        if (SITE_DEFAULT_IGNORE_DIRS.has(e.name)) continue;
-        walk(full);
-      } else if (e.isFile()) {
-        if (e.name === ".numblignore" || e.name === ".DS_Store") continue;
-        if (isAgentInstructionFile(e.name)) continue;
-        const st = statSync(full);
-        if (st.size > SITE_MAX_FILE_BYTES) {
-          console.error(
-            `warning: skipping ${rel} (${(st.size / 1048576).toFixed(1)} MB exceeds 25 MB per-file cap)`
-          );
-          continue;
-        }
-        out.push({ path: rel, data: new Uint8Array(readFileSync(full)) });
-      }
-    }
-  };
-  walk(projectDir);
-  return out;
-}
-
-async function cmdBuildSite(args: string[]) {
-  let projectDir = ".";
-  let outDir = "dist";
-  let base: string | undefined;
-  let title: string | undefined;
-  let entry: string | undefined;
-  let repoUrl: string | undefined;
-  let maxInitialOutputPanelHeight: number | undefined;
-  const positional: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === "--out") outDir = args[++i];
-    else if (a === "--base") base = args[++i];
-    else if (a === "--title") title = args[++i];
-    else if (a === "--entry") entry = args[++i];
-    else if (a === "--repo-url") repoUrl = args[++i];
-    else if (a === "--max-initial-output-panel-height") {
-      const n = Number(args[++i]);
-      if (!Number.isFinite(n) || n <= 0) {
-        console.error(
-          "Error: --max-initial-output-panel-height must be a positive number"
-        );
-        process.exit(1);
-      }
-      maxInitialOutputPanelHeight = n;
-    } else if (a.startsWith("-")) {
-      console.error(`Unknown option: ${a}`);
-      process.exit(1);
-    } else positional.push(a);
-  }
-  if (positional.length > 1) {
-    console.error("Error: numbl build-site accepts at most one directory");
-    process.exit(1);
-  }
-  if (positional.length === 1) projectDir = positional[0];
-
-  const projectDirAbs = resolve(process.cwd(), projectDir);
-  const outDirAbs = resolve(process.cwd(), outDir);
-  const siteViewerDir = join(packageDir, "dist-site-viewer");
-
-  if (!existsSync(join(siteViewerDir, "index.html"))) {
-    console.error(`Error: site viewer bundle not found at ${siteViewerDir}.`);
-    console.error(
-      "If running from source, build it first: npm run build:site-viewer"
-    );
-    process.exit(1);
-  }
-  if (!existsSync(projectDirAbs) || !statSync(projectDirAbs).isDirectory()) {
-    console.error(`Error: project directory not found: ${projectDirAbs}`);
-    process.exit(1);
-  }
-
-  // Normalize the base to /…/ form when provided.
-  let normBase: string | undefined;
-  if (base !== undefined) {
-    normBase = base.startsWith("/") ? base : "/" + base;
-    if (!normBase.endsWith("/")) normBase += "/";
-  }
-
-  console.log(`Building numbl site:`);
-  console.log(`  project: ${projectDirAbs}`);
-  console.log(`  viewer:  ${siteViewerDir}`);
-  console.log(`  output:  ${outDirAbs}`);
-  if (normBase) console.log(`  base:    ${normBase}`);
-
-  // 1. Reset output and copy the prebuilt viewer bundle.
-  rmSync(outDirAbs, { recursive: true, force: true });
-  mkdirSync(outDirAbs, { recursive: true });
-  cpSync(siteViewerDir, outDirAbs, { recursive: true });
-
-  // 2. Collect project files (binary-safe), honoring ignore rules.
-  const ignore = readNumblIgnore(projectDirAbs);
-  const collected = collectSiteFiles(projectDirAbs, outDirAbs, ignore);
-  if (collected.length === 0) {
-    console.error("warning: no project files found to bundle");
-  }
-
-  // 3. Manifest = existing numbl-project.json (if any) merged with flags.
-  let manifest: {
-    title?: string;
-    entry?: string;
-    repository?: string;
-    maxInitialOutputPanelHeight?: number;
-  } = {};
-  const existing = collected.find(f => f.path === "numbl-project.json");
-  if (existing) {
-    try {
-      manifest = JSON.parse(new TextDecoder().decode(existing.data));
-    } catch {
-      // ignore malformed manifest in the project tree
-    }
-  }
-  if (title !== undefined) manifest.title = title;
-  if (entry !== undefined) manifest.entry = entry;
-  if (repoUrl !== undefined) manifest.repository = repoUrl;
-  if (maxInitialOutputPanelHeight !== undefined)
-    manifest.maxInitialOutputPanelHeight = maxInitialOutputPanelHeight;
-  if (!manifest.title) manifest.title = basename(projectDirAbs);
-
-  // 4. Build project.zip (manifest replaces any tree copy of itself).
-  const zipEntries: Record<string, Uint8Array> = {};
-  for (const f of collected) {
-    if (f.path === "numbl-project.json") continue;
-    zipEntries[f.path] = f.data;
-  }
-  zipEntries["numbl-project.json"] = new TextEncoder().encode(
-    JSON.stringify(manifest, null, 2)
-  );
-  const zip = zipSync(zipEntries, { level: 6 });
-  writeFileSync(join(outDirAbs, "project.zip"), zip);
-  const totalMb = zip.length / 1048576;
-  console.log(
-    `  bundled ${Object.keys(zipEntries).length} files → project.zip (${totalMb.toFixed(2)} MB)`
-  );
-  if (totalMb > 50) {
-    console.error(
-      "warning: project bundle exceeds 50 MB; GitHub Pages may be slow or reject it"
-    );
-  }
-
-  // A build id derived from the bundle contents. Injected into the page and
-  // used as a cache-busting query on the project.zip fetch: a redeploy changes
-  // the bundle (and thus the id) so clients fetch the new zip, while reloads of
-  // the same build keep the same id and stay cached.
-  const buildId = createHash("sha256").update(zip).digest("hex").slice(0, 16);
-
-  // 5. Inject runtime globals into the page: the build id (always) and the
-  //    deploy base (when set, so project.zip resolves under a subpath).
-  const indexPath = join(outDirAbs, "index.html");
-  let injectJs = `window.__NUMBL_BUILD_ID__=${JSON.stringify(buildId)};`;
-  if (normBase) {
-    injectJs += `window.__NUMBL_BASE__=${JSON.stringify(normBase)};`;
-  }
-  const inject = `<script>${injectJs}</script>`;
-  let indexHtml = readFileSync(indexPath, "utf-8");
-  indexHtml = indexHtml.includes("<!-- numbl:base -->")
-    ? indexHtml.replace("<!-- numbl:base -->", inject)
-    : indexHtml.replace("</head>", `  ${inject}\n  </head>`);
-  // Set the document <title> (browser tab name) to the project title so it
-  // reflects the project rather than the generic placeholder. SiteApp also
-  // keeps document.title in sync at runtime; this avoids a flash on first paint.
-  const escapeHtml = (s: string) =>
-    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  indexHtml = indexHtml.replace(
-    /<title>.*?<\/title>/,
-    `<title>${escapeHtml(manifest.title)}</title>`
-  );
-  writeFileSync(indexPath, indexHtml);
-
-  // 6. A 404 that bounces to the deploy root, plus .nojekyll for GitHub Pages.
-  const redirectTarget = normBase ?? "/";
-  writeFileSync(
-    join(outDirAbs, "404.html"),
-    `<!doctype html><html><head><meta charset="utf-8">` +
-      `<script>location.replace(${JSON.stringify(redirectTarget)});</script>` +
-      `</head><body></body></html>\n`
-  );
-  writeFileSync(join(outDirAbs, ".nojekyll"), "");
-
-  console.log(
-    "Done. Deploy the output directory to a static host (e.g. GitHub Pages)."
-  );
-}
-
 function cmdInfo() {
   const fastMathPath = variantAddonPath(true);
   const noFastMathPath = variantAddonPath(false);
@@ -1314,8 +654,11 @@ function cmdInfo() {
   );
 }
 
-function cmdListBuiltins(flags: string[]) {
-  const noHelp = flags.includes("--no-help");
+function cmdListBuiltins(args: string[]) {
+  const { values } = parseCommandArgs(args, {
+    "no-help": { type: "boolean" },
+  });
+  const noHelp = values["no-help"] ?? false;
   const names = getAllIBuiltinNames().sort();
   for (const name of names) {
     if (noHelp && getIBuiltinHelp(name)) continue;
@@ -1324,197 +667,32 @@ function cmdListBuiltins(flags: string[]) {
 }
 
 async function cmdRepl(args: string[]) {
-  const opts = parseOptions(args);
-
+  const opts = parseRunOptions(args);
   loadNativeAddon(opts.fastMath, opts.noNative);
-  await ensureMipCorePackage();
-
-  const replSearchPaths = [...opts.extraPaths];
-  const replFiles = opts.extraPaths.flatMap(d => scanMFiles(d));
-  if (existsSync(mipCoreSearchPath)) {
-    replSearchPaths.push(mipCoreSearchPath);
-    replFiles.push(...scanMFiles(mipCoreSearchPath));
-  }
-  const replPlotOpts: PlotServerOptions | undefined =
-    opts.plotPort !== undefined
-      ? { port: opts.plotPort, host: "0.0.0.0" }
-      : undefined;
-  const { onDrawnow: replDrawnow } = createPlotHandler(
-    !opts.plot,
-    replPlotOpts
+  const { searchPaths, workspaceFiles } = await prepareSearchPaths(
+    opts.extraPaths
   );
   await runRepl(
-    replFiles,
-    replDrawnow,
-    replSearchPaths,
+    workspaceFiles,
+    plotHandlerFor(opts).onDrawnow,
+    searchPaths,
     nativeBridge,
     opts.optimization
   );
 }
 
-// ── Show Profile ─────────────────────────────────────────────────────────────
-
-function cmdShowProfile(args: string[]) {
-  if (args.length === 0) {
-    console.error("Error: show-profile requires a profile JSON file argument");
-    process.exit(1);
-  }
-  const filepath = resolve(process.cwd(), args[0]);
-  if (!existsSync(filepath)) {
-    console.error(`Error: profile file not found: ${filepath}`);
-    process.exit(1);
-  }
-  const data = JSON.parse(readFileSync(filepath, "utf-8"));
-
-  const fmt = (n: number, decimals = 1) => n.toFixed(decimals);
-  const pad = (s: string, w: number) => s.padStart(w);
-
-  const execTime = data.executionTimeMs || 1;
-  const jitTime = data.jitCompileTimeMs ?? 0;
-
-  // Compute disjoint breakdown of execution time
-  const dispatches: { name: string; totalTimeMs: number; callCount: number }[] =
-    data.dispatches ?? [];
-  const builtins: {
-    name: string;
-    fallback: { totalTimeMs: number; callCount: number };
-    interp: { totalTimeMs: number; callCount: number };
-    jit: { totalTimeMs: number; callCount: number };
-  }[] = data.builtins ?? [];
-  const sumDispatches = dispatches.reduce((s, d) => s + d.totalTimeMs, 0);
-  const sumBuiltins = builtins.reduce(
-    (s, b) =>
-      s + b.fallback.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs,
-    0
-  );
-  const otherTime =
-    data.executionTimeMs - jitTime - sumDispatches - sumBuiltins;
-
-  console.log(`Total time:      ${fmt(data.totalTimeMs)} ms`);
-  console.log(`Execution time:  ${fmt(data.executionTimeMs)} ms`);
-  console.log(
-    `  JIT compile:   ${fmt(jitTime)} ms (${fmt((jitTime / execTime) * 100)}%)`
-  );
-  console.log(
-    `  Dispatches:    ${fmt(sumDispatches)} ms (${fmt((sumDispatches / execTime) * 100)}%)`
-  );
-  console.log(
-    `  Builtins:      ${fmt(sumBuiltins)} ms (${fmt((sumBuiltins / execTime) * 100)}%)`
-  );
-  console.log(
-    `  Other:         ${fmt(otherTime)} ms (${fmt((otherTime / execTime) * 100)}%)`
-  );
-  console.log("\nAll timings are self-time (exclusive) and mutually disjoint.");
-
-  // Dispatched user functions
-  if (dispatches.length > 0) {
-    const nameW = Math.max(20, ...dispatches.map(b => b.name.length)) + 2;
-    const header =
-      "Function".padEnd(nameW) +
-      pad("Calls", 10) +
-      pad("Self (ms)", 13) +
-      pad("Avg (ms)", 11) +
-      pad("% Exec", 9);
-    console.log("\nDispatched functions (user-defined / workspace):");
-    console.log(header);
-    console.log("─".repeat(header.length));
-
-    for (const b of dispatches) {
-      const avg = b.callCount > 0 ? b.totalTimeMs / b.callCount : 0;
-      const pct = (b.totalTimeMs / execTime) * 100;
-      const line =
-        b.name.padEnd(nameW) +
-        pad(String(b.callCount), 10) +
-        pad(fmt(b.totalTimeMs, 2), 13) +
-        pad(fmt(avg, 3), 11) +
-        pad(fmt(pct, 1) + "%", 9);
-      console.log(line);
-    }
-  }
-
-  // Builtin functions
-  if (builtins.length > 0) {
-    const nameW = Math.max(20, ...builtins.map(b => b.name.length)) + 2;
-    const header =
-      "Builtin".padEnd(nameW) +
-      pad("Interp", 10) +
-      pad("Fallback", 10) +
-      pad("JIT", 10) +
-      pad("Self (ms)", 13) +
-      pad("% Exec", 9);
-    console.log("\nBuiltin functions (call counts by source):");
-    console.log(header);
-    console.log("─".repeat(header.length));
-
-    for (const b of builtins) {
-      const totalTime =
-        b.fallback.totalTimeMs + b.interp.totalTimeMs + b.jit.totalTimeMs;
-      const pct = (totalTime / execTime) * 100;
-      const line =
-        b.name.padEnd(nameW) +
-        pad(String(b.interp.callCount), 10) +
-        pad(String(b.fallback.callCount), 10) +
-        pad(String(b.jit.callCount), 10) +
-        pad(fmt(totalTime, 2), 13) +
-        pad(fmt(pct, 1) + "%", 9);
-      console.log(line);
-    }
-  } else {
-    console.log("\nNo builtin functions were called.");
-  }
-
-  // Hot interpreted loops (>1000 iterations)
-  const hotLoops: {
-    file: string;
-    line: number;
-    kind: string;
-    iterations: number;
-    callCount: number;
-    totalTimeMs: number;
-  }[] = data.hotLoops ?? [];
-  if (hotLoops.length > 0) {
-    hotLoops.sort((a, b) => b.totalTimeMs - a.totalTimeMs);
-    const locW =
-      Math.max(20, ...hotLoops.map(l => `${l.file}:${l.line}`.length)) + 2;
-    const header =
-      "Location".padEnd(locW) +
-      pad("Kind", 8) +
-      pad("Calls", 8) +
-      pad("Max Iters", 12) +
-      pad("Total (ms)", 13);
-    console.log("\nInterpreted loops (>1000 iterations):");
-    console.log(header);
-    console.log("─".repeat(header.length));
-
-    for (const l of hotLoops) {
-      const loc = `${l.file}:${l.line}`;
-      const line =
-        loc.padEnd(locW) +
-        pad(l.kind, 8) +
-        pad(String(l.callCount ?? 1), 8) +
-        pad(String(l.iterations), 12) +
-        pad(fmt(l.totalTimeMs ?? 0, 2), 13);
-      console.log(line);
-    }
-  }
-}
-
 // ── Serve ───────────────────────────────────────────────────────────────────
 
 function cmdServe(args: string[]): void {
-  let port = 3001;
-  let passkey: string | undefined;
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--port" && i + 1 < args.length) {
-      port = parseInt(args[++i]);
-      if (isNaN(port)) {
-        console.error("Invalid port number");
-        process.exit(1);
-      }
-    } else if (args[i] === "--passkey" && i + 1 < args.length) {
-      passkey = args[++i];
-    }
-  }
+  const { values } = parseCommandArgs(args, {
+    port: { type: "string" },
+    passkey: { type: "string" },
+  });
+  const port =
+    values.port === undefined
+      ? 3001
+      : parseNumberOption(values.port, parseInt, "Invalid port number");
+  const passkey = values.passkey;
   if (!passkey) {
     console.error("Error: --passkey <key> is required");
     console.error("The passkey is generated by the browser IDE.");
@@ -1528,7 +706,7 @@ function cmdServe(args: string[]): void {
     process.exit(1);
   }
   import("../server/execution-service.js").then(({ startServer }) => {
-    startServer({ port, numblCliPath: bundledCli, passkey: passkey! });
+    startServer({ port, numblCliPath: bundledCli, passkey });
   });
 }
 
@@ -1569,16 +747,13 @@ async function main() {
       await cmdParse(rest);
       break;
     case "run-tests": {
-      const testOpts = parseOptions(rest);
-      const dir =
-        testOpts.positional.length > 0
-          ? testOpts.positional[0]
-          : join(packageDir, "numbl_test_scripts");
-      await runTests(
-        dir,
-        testOpts.optimization,
-        testOpts.fastMath,
-        testOpts.noNative
+      const opts = parseRunOptions(rest);
+      loadNativeAddon(opts.fastMath, opts.noNative);
+      await loadQhullBackend();
+      runTests(
+        opts.positional[0] ?? join(packageDir, "numbl_test_scripts"),
+        opts.optimization,
+        nativeBridge
       );
       break;
     }
@@ -1586,7 +761,7 @@ async function main() {
       await cmdBuildAddon(rest);
       break;
     case "build-site":
-      await cmdBuildSite(rest);
+      await cmdBuildSite(rest, packageDir);
       break;
     case "info":
       cmdInfo();

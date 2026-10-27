@@ -1,5 +1,6 @@
 /**
- * Shared utility for scanning directories for .m/.numbl.js/.wasm workspace files.
+ * Shared utilities for scanning directories for .m/.numbl.js/.wasm workspace
+ * files and for discovering .m test scripts.
  * Extracted from cli.ts to avoid circular imports (cli-fileio → cli → main()).
  */
 
@@ -64,4 +65,48 @@ export function scanMFiles(
   }
 
   return files;
+}
+
+/**
+ * Find integration test scripts under `dir`: `.m` files containing "SUCCESS",
+ * in sorted depth-first order. Skips class (`@`), package (`+`) and `wasm`
+ * directories. Shared by `numbl run-tests`, the vitest wrapper and scripts/.
+ */
+export function findTestScripts(dir: string): string[] {
+  const results: string[] = [];
+
+  function walk(current: string) {
+    let entries: string[];
+    try {
+      entries = readdirSync(current);
+    } catch {
+      return;
+    }
+    entries.sort();
+    for (const entry of entries) {
+      const fullPath = join(current, entry);
+      let stat;
+      try {
+        stat = statSync(fullPath);
+      } catch {
+        continue;
+      }
+      if (stat.isDirectory()) {
+        if (
+          !entry.startsWith("@") &&
+          !entry.startsWith("+") &&
+          entry !== "wasm"
+        ) {
+          walk(fullPath);
+        }
+      } else if (stat.isFile() && entry.endsWith(".m")) {
+        if (readFileSync(fullPath, "utf-8").includes("SUCCESS")) {
+          results.push(fullPath);
+        }
+      }
+    }
+  }
+
+  walk(dir);
+  return results;
 }
