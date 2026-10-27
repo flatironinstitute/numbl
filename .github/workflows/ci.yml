@@ -64,6 +64,11 @@ jobs:
     name: Test Browser (Playwright)
     needs: test
     runs-on: ubuntu-latest
+    # Browsers and their system libraries come preinstalled in this image, so
+    # there is no slow install step. Keep the tag in sync with the
+    # @playwright/test version in package-lock.json.
+    container:
+      image: mcr.microsoft.com/playwright:v1.59.1-noble
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -82,9 +87,6 @@ jobs:
 
       - name: Build browser package
         run: npm run build:browser
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
 
       - name: Run browser test-runner
         run: npm run test:browser
@@ -129,3 +131,11 @@ jobs:
       # plain `test` job — this is the only place they actually run.
       - name: Run addon parity tests (TS twins ↔ C addon)
         run: npx vitest run src/__tests__/op-codes-sync.test.ts src/__tests__/native-ops-parity.test.ts
+
+      # The .m integration suite under --opt 0 and --opt 1, with the addon.
+      - name: Run .m test scripts
+        run: npm run test:scripts
+
+      # Cross-mode parity: --opt 0 / 1 / 2 must produce identical output.
+      - name: Run JIT parity gate
+        run: npm run jit-parity

@@ -1,20 +1,22 @@
 {
-  "extends": "./tsconfig.json",
   "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.cli.tsbuildinfo",
     "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
-    "lib": ["ES2022"],
-    "outDir": "./dist-cli",
-    "rootDir": "./src",
-    "moduleResolution": "node",
+    "types": ["node", "vite/client"],
     "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
     "strict": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "forceConsistentCasingInFileNames": true,
-    "types": ["node"],
-    "noEmit": false
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
   },
-  "include": ["src/cli.ts", "src/numbl-core/**/*"],
-  "exclude": ["node_modules", "dist", "dist-cli"]
+  "include": ["src/cli.ts", "src/cli-repl.ts", "src/**/*.d.ts", "server/*.ts"]
 }

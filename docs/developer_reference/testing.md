@@ -25,6 +25,16 @@ These are the canonical place to encode MATLAB compatibility behavior:
 
 Integration scripts are wrapped by a Vitest spec so they participate in the same test run and coverage report as the unit tests.
 
+`npm run test:scripts` runs the same scripts through the CLI at `--opt 0` and `--opt 1`; the Vitest wrapper runs them once on the default path.
+
+## JIT parity
+
+`jit_parity/` holds scripts that `npm run jit-parity` runs at `--opt 0`, `1` and `2` and compares for byte-identical output. A divergence between modes is a bug in one of them. See `jit_parity/README.md`.
+
+## Continuous integration
+
+The `test` job runs Vitest; `test-browser` runs Playwright. The `test-lapack` job builds the native addon and then runs the addon parity tests, `npm run test:scripts`, and `npm run jit-parity` (including `--opt 2`, which needs a C compiler).
+
 ## Running tests in both environments
 
 An integration test is only meaningful if it is also checked against the MATLAB reference. Running `matlab -batch "run('path/to/test.m')"` on the same file verifies that the expected behavior is actually MATLAB's behavior. A numbl-only pass is not sufficient — it is easy to assert the wrong thing if you have not confirmed what MATLAB does.
