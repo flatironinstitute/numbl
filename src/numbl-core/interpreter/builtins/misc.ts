@@ -539,7 +539,7 @@ registerIBuiltin({
 });
 
 // `set(handle, 'PropName', value, ...)` is registered as a runtime-closured
-// special builtin in specialBuiltins.ts (it needs to push `update_trace`
+// special builtin in plotting/builtins.ts (it needs to push `update_trace`
 // instructions so live edits reach the serialized plot viewer).
 
 // pathdef — no-op, returns empty string

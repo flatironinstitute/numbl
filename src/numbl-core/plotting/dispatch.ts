@@ -3,19 +3,10 @@
  * `(name, args)` → `PlotInstruction[]` mapping that every plotting
  * builtin performs.
  *
- * Historically this logic was scattered across two places:
- *   - `runtime.ts` registered the data-bearing plot names
- *     (`plot`, `surf`, `imagesc`, …) inside `initBuiltins`.
- *   - `specialBuiltins.ts` registered the graphics ops (`figure`,
- *     `title`, `xlabel`, `hold`, `subplot`, `clf`, …) inside
- *     `registerSpecialBuiltins`.
- *
- * Both sites pushed onto `rt.plotInstructions` and (for `hold` /
- * `tiledlayout` / `nexttile`) updated small flags on the Runtime.
- * `dispatchPlotBuiltin` is the consolidation. The Runtime registers
- * each name with a 1-line wrapper that calls this function and then
- * returns the right `nargout`-handle value; the side-effect (the
- * push) lives here.
+ * Registration lives in `builtins.ts`: each name gets a wrapper that
+ * calls this function and returns the right `nargout`-handle value; the
+ * side effect (the push onto `rt.plotInstructions`, plus the small
+ * hold / tiled-layout flags on the Runtime) lives here.
  *
  * Out-of-scope names — kept registered separately because their
  * semantics need the full Runtime context:
@@ -587,10 +578,9 @@ function dispatchColormap(
   }
 }
 
-/** Names handled by `dispatchPlotBuiltin`. Useful for registering all
- *  of them in a loop (numbl's `initBuiltins` and `specialBuiltins.ts`
- *  do that for the side-effect-only subset). Stays in sync with the
- *  cases above by construction. */
+/** Names handled by `dispatchPlotBuiltin`. `builtins.ts` registers all
+ *  of them in a loop (for the side-effect-only subset). Stays in sync
+ *  with the cases above by construction. */
 export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "plot",
   "plot3",
@@ -658,8 +648,8 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
  *  stubs — they don't push plot instructions and don't render, but
  *  numbl accepts them so MATLAB scripts compile and run. Sources:
  *    - `interpreter/builtins/misc.ts` (`groot`, `gcf`, `gca`, `shg`,
- *      `newplot`, `xlim`, `ylim`, `set`, `get`, `ishold`)
- *    - `runtime/specialBuiltins.ts` (`drawnow`, `pause`)
+ *      `newplot`, `xlim`, `ylim`, `get`)
+ *    - `plotting/builtins.ts` (`drawnow`, `pause`, `ishold`, `set`)
  *
  *  These names belong here, alongside `PLOT_DISPATCH_NAMES`, because
  *  downstream consumers (mtoc2's translator, syntax highlighters,
