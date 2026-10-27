@@ -19,7 +19,7 @@ import {
 import { RTV, getItemTypeFromRuntimeValue } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import type { CallSite } from "../runtime/runtimeHelpers.js";
-import { RuntimeError } from "../runtime/error.js";
+import { RuntimeError, CancellationError } from "../runtime/error.js";
 import { inferJitType } from "./builtins/index.js";
 import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
 import { toString, toNumber } from "../runtime/convert.js";
@@ -700,11 +700,10 @@ export function instantiateClass(
 
   const defaults = new Map<string, RuntimeValue>();
   for (const [propName, defaultExpr] of propertyDefaults) {
-    try {
-      defaults.set(propName, ensureRuntimeValue(this.evalExpr(defaultExpr)));
-    } catch {
-      // Default evaluation failed
-    }
+    defaults.set(
+      propName,
+      this.evalPropertyDefault(className, propName, defaultExpr)
+    );
   }
 
   const isHandle = this.isHandleClass(classInfo);
@@ -1240,6 +1239,25 @@ export function findExternalMethod(
     if (!primary) primary = funcDefFromStmt(stmt);
   }
   return primary;
+}
+
+/** Evaluate a property's default value expression. MATLAB reports an
+ *  invalid default as an error rather than leaving the property unset. */
+export function evalPropertyDefault(
+  this: Interpreter,
+  className: string,
+  propName: string,
+  defaultExpr: Expr
+): RuntimeValue {
+  try {
+    return ensureRuntimeValue(this.evalExpr(defaultExpr));
+  } catch (e) {
+    if (e instanceof CancellationError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new RuntimeError(
+      `Invalid default value for property '${propName}' in class '${className}':\n${msg}`
+    );
+  }
 }
 
 // ── Class property helpers ───────────────────────────────────────────────
