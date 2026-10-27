@@ -1,91 +1,45 @@
 /**
- * jit-call — executor that compiles user-function calls via mtoc2's
- * `compileSpec` JIT entry point and runs the emitted JS in-process.
+ * `<prefix>-call` — compiles a user-function call specialized on its
+ * argument types and nargout.
  *
- * Replaces the JS-JIT call executor at `--opt 1`. The shape of the
- * fallback path is the same: on rejection (mtoc2's
- * `UnsupportedConstruct` / `TypeError` during lowering, or a JitType
- * the type adapter can't translate), `propose()` declines and the
- * dispatcher falls through to the next executor / interpreter.
- *
- * Key differences from JS-JIT:
- *
- * - **No mid-run bailouts.** mtoc2 either lowers cleanly or rejects
- *   statically. When `compile()` returns, the artifact will run to
- *   completion. `bailRisk` is `false`.
- * - **Shared `Lowerer.specializations` is the cache.** One Workspace
- *   + Lowerer pair per LoweringContext (i.e. per execution session);
- *   accumulating specs persist across calls so a function called
- *   repeatedly with the same arg signature reuses the prior compile.
- * - **Output-count support.** `nargout >= 1` (single-output and
- *   multi-output `[a, b, ...] = f(x)`). `nargout === 0` (bare-stmt
- *   `f();`) is declined because mtoc2's nargout=0 spec emits a no-
- *   return body, but numbl's interpreter still uses the first
- *   declared output for `ans` binding — let the interpreter handle.
- * - **Loop-depth gate.** Declines when `interp.loopDepth > 0` so a
- *   hot loop iterating function calls doesn't pay per-call JIT
- *   propose / spec-cache overhead. Once an outer call is JIT'd, its
- *   loops run inside mtoc2's compiled code anyway. The gate lifts when
- *   every enclosing loop was itself declined: nothing above will be
- *   compiled then, and an expensive callee would otherwise run
- *   interpreted all the way down (`Interpreter.jitDeclinedLoopDepth`).
+ * Declines `nargout === 0` (bare `f();`): the interpreter still binds the
+ * first declared output to `ans`, but a nargout=0 spec returns nothing.
+ * Declines inside a loop that is itself being compiled (see
+ * `insideCompiledLoop`): the call then runs inside that compiled loop.
  */
 
-import type { Executor, Proposal, RunResult } from "../types.js";
-import type { DispatchContext } from "../context.js";
-import type { LoweredStmt } from "../lowering.js";
-import { jitTypeKey, type JitType } from "../../jitTypes.js";
-import type { Interpreter } from "../../interpreter/interpreter.js";
-import type { Stmt, Span } from "../../parser/index.js";
+import type { Executor } from "../types.js";
+import type { CallClassification } from "../classification.js";
+import { jitTypeKey } from "../../jitTypes.js";
+import type { Span } from "../../parser/index.js";
 import type { FunctionDef } from "../../interpreter/types.js";
+import type { RuntimeValue } from "../../runtime/types.js";
+import type { Type as CompilerType } from "../../jit/index.js";
 import {
-  compileSpec,
-  UnsupportedConstruct,
-  JitTypeError,
-  type Type as CompilerType,
-} from "../../jit/index.js";
-import { recordJitDecline } from "../../jitDeclineDiagnostics.js";
-import { jitTypeToCompilerType } from "./typeAdapter.js";
-import { numblToJit, jitToNumbl, isGrowBail } from "./valueAdapter.js";
-import { getOrCreateSession } from "./session.js";
-import { buildHostHelpers, type JitHostHelpers } from "./hostHelpers.js";
+  compileUnit,
+  declinedByAssertC,
+  insideCompiledLoop,
+  mapTypes,
+  type FuncStmt,
+  type JitBackend,
+} from "./backend.js";
 
-type FuncStmt = Extract<Stmt, { type: "Function" }>;
-
-const COST = { compileMs: 30, perCallNs: 100, runNs: 100 };
-
-interface JitCallData {
-  readonly fn: FunctionDef;
-  readonly nargout: number;
-  readonly argTypes: readonly JitType[];
-  readonly compilerArgTypes: readonly CompilerType[];
+interface CallData {
+  readonly c: CallClassification;
+  readonly argTypes: CompilerType[];
   readonly args: readonly unknown[];
 }
 
-interface CompiledArtifact {
-  readonly specFn: (...args: unknown[]) => unknown;
-  /** The spec's declared output types — needed to convert a returned
-   *  struct back (an untagged JS object otherwise). */
-  readonly outputTypes: ReadonlyArray<CompilerType>;
-}
-
-/** Build a parser-shaped `FuncStmt` from numbl's `FunctionDef`.
+/** Build a parser-shaped `FuncStmt` from a `FunctionDef`.
  *
- *  Numbl drops the span when projecting parsed Function stmts into
- *  `FunctionDef`. mtoc2 keys its spec cache on
- *  `(span.file, argTypes, nargout)`, so we must derive the *real*
- *  defining file — otherwise two functions with the same name from
- *  different files (e.g. when numbl's addpath/rmpath shadows a
- *  workspace function) would collide on a single spec entry and the
- *  old body would be reused after the path change.
- *
- *  The file comes from the first body statement's span. Empty
- *  bodies fall back to `<jit>` (a function with no body has no
- *  shadowing concern). */
-function synthesizeFuncStmt(fd: FunctionDef): FuncStmt {
-  const fromBody = fd.body[0]?.span?.file;
+ *  `FunctionDef` carries no span, but the compiler keys its spec cache on
+ *  the defining file, so derive it from the first body statement —
+ *  otherwise two same-named functions from different files (e.g. after
+ *  addpath/rmpath shadowing) would share one spec. An empty body has no
+ *  shadowing concern and falls back to `<jit>`. */
+function funcStmtFromDef(fd: FunctionDef): FuncStmt {
   const span: Span = {
-    file: fromBody ?? "<jit>",
+    file: fd.body[0]?.span?.file ?? "<jit>",
     start: 0,
     end: 0,
   };
@@ -101,148 +55,55 @@ function synthesizeFuncStmt(fd: FunctionDef): FuncStmt {
   };
 }
 
-export const jitCallExecutor: Executor<JitCallData, CompiledArtifact | null> = {
-  name: "jit-call",
+export function makeCallExecutor<A>(
+  backend: JitBackend<A>
+): Executor<"call", CallData, A | null> {
+  const name = `${backend.prefix}-call`;
+  return {
+    name,
+    kind: "call",
 
-  propose(
-    lowered: LoweredStmt,
-    ctx: DispatchContext
-  ): Proposal<JitCallData> | null {
-    if (lowered.kind !== "call") return null;
-    // Disable JIT inside any enclosing for/while loop body that is itself
-    // being compiled. Once that outer unit is JIT'd its calls run inside
-    // mtoc2's compiled code, so proposing here would only pay per-call
-    // propose / spec-cache overhead. When the enclosing loop was declined
-    // instead, this call is the outermost compilable unit and does bid.
-    if (ctx.interp.loopDepth > 0 && ctx.interp.jitDeclinedLoopDepth === 0)
-      return null;
-    const classification = lowered.classification;
-    // `%!numbl:assert_jit c` requires C-JIT at --opt 2. Decline the JS
-    // path for such units so they either C-JIT or fall through to the
-    // interpreter — which then raises on the directive (see
-    // interpreterExec.ts). Plain `assert_jit` only requires JS-JIT at
-    // --opt 1, so it does not gate here.
-    if (ctx.interp.optimization === "2" && classification.assertsCJit) {
-      return null;
-    }
-    // nargout=0 (bare-statement call like `f();`) is interpreter-only.
-    // numbl's convention is that the function STILL returns its first
-    // declared output for `ans` binding even with nargout=0, but
-    // mtoc2's nargout=0 spec emits a no-return body, dropping the
-    // value. Decline and let the interpreter handle the ans semantics.
-    if (classification.nargout === 0) return null;
+    propose(lowered, interp) {
+      if (!backend.available(interp)) return null;
+      if (insideCompiledLoop(interp)) return null;
+      const c = lowered.classification;
+      if (declinedByAssertC(backend, interp, c.assertsCJit)) return null;
+      if (c.nargout === 0) return null;
+      const argTypes = mapTypes(backend, c.argTypes);
+      return argTypes && { c, argTypes, args: lowered.args };
+    },
 
-    // Map every JitType to mtoc2; any rejection aborts the proposal.
-    const compilerArgTypes: CompilerType[] = [];
-    for (const jt of classification.argTypes) {
-      const mt = jitTypeToCompilerType(jt);
-      if (mt === null) return null;
-      compilerArgTypes.push(mt);
-    }
+    cacheKey: d => d.c.cacheKey,
 
-    return {
-      data: {
-        fn: classification.fn,
-        nargout: classification.nargout,
-        argTypes: classification.argTypes,
-        compilerArgTypes,
-        args: lowered.args,
-      },
-      cost: COST,
-      // mtoc2 rejects statically — once compile() returns, the
-      // artifact runs to completion.
-      bailRisk: false,
-    };
-  },
-
-  cacheKey(d): string {
-    // Include nargout so two calls to the same function with different
-    // output counts (e.g. `[a,b] = f()` then `[a,b,c] = f()`) get
-    // distinct compiled artifacts. mtoc2 specializes on nargout
-    // internally; the executor's cache key has to match or the
-    // artifact from the first call is wrongly reused.
-    return (
-      d.fn.name + "|" + d.argTypes.map(jitTypeKey).join(",") + "|n=" + d.nargout
-    );
-  },
-
-  compile(d, ctx: DispatchContext): CompiledArtifact | null {
-    const { workspace, lowerer } = getOrCreateSession(ctx.interp);
-    try {
-      const { source, cName, outputTypes } = compileSpec({
-        workspace,
-        lowerer,
-        funcDecl: synthesizeFuncStmt(d.fn),
-        argTypes: d.compilerArgTypes as CompilerType[],
-        nargout: d.nargout,
-      });
-      // Surface the emitted JS through the same hook the legacy JS-JIT
-      // used so it shows up in the IDE's "internals" view and the CLI
-      // `--dump-js` flag.
-      const interp = ctx.interp as Interpreter;
-      const typeDesc = d.argTypes.map(jitTypeKey).join(", ");
-      interp.onJitCompile?.(
-        `jit-call:${cName}(${typeDesc}) -> nargout=${d.nargout}`,
-        source,
-        "js"
-      );
-      const factory = new Function(source)() as (
-        $h: JitHostHelpers
-      ) => (...args: unknown[]) => unknown;
-      const specFn = factory(buildHostHelpers(interp.rt));
-      return { specFn, outputTypes };
-    } catch (e) {
-      if (e instanceof UnsupportedConstruct || e instanceof JitTypeError) {
-        recordJitDecline({
-          message: e.message,
-          kind: e.constructor.name,
-          at: e.span ? { file: e.span.file, start: e.span.start } : undefined,
-          where: "jit-call",
-        });
-        return null;
-      }
-      throw e;
-    }
-  },
-
-  run(compiled, d, ctx: DispatchContext): RunResult {
-    if (compiled === null) {
-      return { bail: { message: "jit-call: codegen declined" } };
-    }
-    try {
-      const compilerArgs = d.args.map((v, i) =>
-        numblToJit(v as never, d.compilerArgTypes[i])
-      );
-      const result = compiled.specFn(...compilerArgs);
-      // mtoc2 return-shape convention:
-      //   nargout = 0 → undefined (no value)
-      //   nargout = 1 → bare value
-      //   nargout >= 2 → array of values
-      // numbl's interpreter convention matches at the boundary
-      // (`callUserFunction` returns `outputs[0]` for nargout<=1 else
-      // `outputs`), so we mirror the shape on the way out.
-      if (d.nargout >= 2) {
-        if (!Array.isArray(result)) {
-          throw new Error(
-            `jit-call: expected array for nargout=${d.nargout}, got ${typeof result}`
-          );
-        }
-        return {
-          result: result.map((v, i) => jitToNumbl(v, compiled.outputTypes[i])),
-        };
-      }
-      return { result: jitToNumbl(result, compiled.outputTypes[0]) };
-    } catch (e) {
-      if (isGrowBail(e)) {
-        ctx.interp.onJitBail?.(
-          "jit-call: indexed-store array growth; falling back to interpreter"
-        );
-      }
-      return {
-        bail: {
-          message: `jit-call: runtime error: ${e instanceof Error ? e.message : String(e)}`,
+    compile(d, interp) {
+      const { c } = d;
+      return compileUnit(
+        backend,
+        {
+          where: name,
+          funcDecl: funcStmtFromDef(c.fn),
+          argTypes: d.argTypes,
+          nargout: c.nargout,
+          synthetic: false,
+          describe: `(${c.argTypes.map(jitTypeKey).join(", ")}) -> nargout=${c.nargout}`,
         },
-      };
-    }
-  },
-};
+        interp
+      );
+    },
+
+    run(art, d, interp) {
+      if (art === null) return null;
+      const outs = backend.invoke(
+        art,
+        d.args as readonly RuntimeValue[],
+        interp,
+        name
+      );
+      // An unassigned output bails so the interpreter raises its error.
+      if (outs === null || outs.includes(undefined)) return null;
+      // Same shape as the interpreter's call path: a bare value for
+      // nargout 1, an array otherwise.
+      return { result: d.c.nargout >= 2 ? outs : outs[0] };
+    },
+  };
+}

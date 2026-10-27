@@ -18,11 +18,11 @@ All three share the same lowering pipeline and IR. Specializations are cached ke
 
 - `--opt 0` — interpreter only. No JIT.
 - `--opt 1` — **JS-JIT** (default). Lowers AST → JIT IR → JavaScript source, materialized via `new Function(...)`. Fast to compile, runs in-process.
-- `--opt 2` — **C-JIT** (Node only). Lowers the same IR to C, compiles a `.so` with `cc`, and calls it via koffi. The C-JIT executors (`cjit-top-level`, `cjit-loop`, `cjit-call`) compete with the JS-JIT set via the cost model; C-JIT wins where it can marshal the types, JS-JIT picks up the rest. Requires `cc` + `koffi`; otherwise collapses to JS-JIT. See [executors.md](../executors.md) and [cjit.md](cjit.md).
+- `--opt 2` — **C-JIT** (Node only). Lowers the same IR to C, compiles a `.so` with `cc`, and calls it via koffi. The C-JIT executors (`cjit-top-level`, `cjit-loop`, `cjit-call`) are tried before the JS-JIT set; C-JIT takes what it can marshal, JS-JIT picks up the rest. Requires `cc` + `koffi`; otherwise collapses to JS-JIT. See [executors.md](../executors.md) and [cjit.md](cjit.md).
 
 ## Static decline (vs. runtime bailout)
 
-The compiler decides feasibility at **compile time**: it either lowers a specialization cleanly or throws `UnsupportedConstruct` / `JitTypeError`, which the executor catches and declines — dispatch then falls through to the interpreter. There is no per-operation runtime type-guard bailout; once a spec compiles it runs to completion. (The executor registry still supports a `{ bail }` path for hard runtime errors in emitted code, but the JIT executors report `bailRisk: false`.)
+The compiler decides feasibility at **compile time**: it either lowers a specialization cleanly or throws `UnsupportedConstruct` / `JitTypeError`, which the executor catches and declines — dispatch then falls through to the interpreter. There is no per-operation runtime type-guard bailout. A runtime error raised by the emitted code does bail, and the interpreter re-runs the unit to reproduce numbl's canonical error.
 
 A separate safety pass classifies constructs with observable side effects the JIT cannot faithfully reproduce (interactive input, certain display statements at the top level, etc.) and suppresses JIT for scripts that contain them unsuppressed.
 

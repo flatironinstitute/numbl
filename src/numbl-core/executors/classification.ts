@@ -323,17 +323,9 @@ export interface CallClassification {
   readonly fn: FunctionDef;
   readonly nargout: number;
   readonly argTypes: readonly JitType[];
+  /** Compile-cache key within the FunctionDef owner: arg types + nargout
+   *  (the spec is specialized on both). */
   readonly cacheKey: string;
-  /**
-   * Effective parameter names for this specialization. Mirrors
-   * `fn.params` for non-varargin functions. For varargin functions,
-   * the trailing `varargin` is replaced with one synthetic name per
-   * variadic arg (`$va_0`, `$va_1`, …). argTypes is one-to-one with
-   * effectiveParams.
-   */
-  readonly effectiveParams: readonly string[];
-  /** Number of variadic args (0 when fn has no varargin). */
-  readonly nVarargin: number;
   /** Function body contains a `%!numbl:assert_jit c` directive (C-JIT variant). */
   readonly assertsCJit: boolean;
 }
@@ -370,23 +362,13 @@ export function classifyCall(
 
   widenAgainst(argTypes, prevArgTypes);
 
-  const nVarargin = hasVarargin ? args.length - regularParamCount : 0;
-  const effectiveParams: string[] = hasVarargin
-    ? [
-        ...fn.params.slice(0, regularParamCount),
-        ...Array.from({ length: nVarargin }, (_, k) => `$va_${k}`),
-      ]
-    : fn.params.slice();
-
-  const cacheKey = JSON.stringify({ nargout, argTypes });
+  const cacheKey = argTypes.map(jitTypeKey).join(",") + "|n=" + nargout;
 
   return {
     fn,
     nargout,
     argTypes,
     cacheKey,
-    effectiveParams,
-    nVarargin,
     assertsCJit: containsAssertJitC(fn.body),
   };
 }

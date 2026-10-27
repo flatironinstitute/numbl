@@ -22,7 +22,7 @@ export interface JitDecline {
   message: string;
   /** Error class name: "UnsupportedConstruct" | "JitTypeError". */
   kind: string;
-  /** Which executor declined: "jit-top-level" | "jit-call" | "jit-loop". */
+  /** Which executor declined, e.g. "jit-loop" or "cjit-call". */
   where: string;
   /** Source position of the offending construct, when the thrown error
    *  carried one. Only used for diagnostics. */

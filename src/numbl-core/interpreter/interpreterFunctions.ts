@@ -999,13 +999,12 @@ export function callUserFunction(
   const callInputNames = this.pendingInputNames;
   this.pendingInputNames = undefined;
 
-  // Try the function-call dispatch path. Registered executors
-  // filtering on lowered.kind === "call" compete in cost order; if
-  // all decline or bail, we fall through to the regular interpreter
-  // call path below. Refcount-driven COW handles aliasing across the
-  // call boundary: binding a parameter increfs its argument, so a
-  // mutation through the parameter sees rc>1 and copies.
-  if (narginOverride === undefined && this.registry.size > 0) {
+  // Try the registered call executors in order; if all decline or bail,
+  // fall through to the regular interpreter call path below.
+  // Refcount-driven COW handles aliasing across the call boundary: binding
+  // a parameter increfs its argument, so a mutation through the parameter
+  // sees rc>1 and copies.
+  if (narginOverride === undefined && this.registry.hasCallExecutors) {
     const r = this.registry.dispatchCall(fn, args, nargout, this);
     if (r) return r.result;
   }
