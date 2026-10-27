@@ -32,7 +32,11 @@ export interface InterpreterContext {
   setEnv: (env: Environment) => void;
   callerEnv: Environment | undefined;
   workspaceEnv: Environment | undefined;
-  evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
+  evalInLocalScope: (
+    codeArg: unknown,
+    fileName?: string,
+    nargout?: number
+  ) => unknown;
   callFunction: (name: string, args: unknown[], nargout: number) => unknown;
   rt: Runtime;
   /** Optimization mode: "0" = no JIT, "1" = JS-JIT, "2" = C-JIT. */
@@ -87,9 +91,18 @@ export function getInterpreterSpecialBuiltin(
 
 // ── Handlers ─────────────────────────────────────────────────────────────
 
-register("eval", (ctx, args) => {
-  if (args.length !== 1) return FALL_THROUGH;
-  return ctx.evalInLocalScope(args[0]);
+register("eval", (ctx, args, nargout) => {
+  if (args.length === 1)
+    return ctx.evalInLocalScope(args[0], undefined, nargout);
+  if (args.length === 2) {
+    // eval(try, catch): run the catch text if the try text errors.
+    try {
+      return ctx.evalInLocalScope(args[0], undefined, nargout);
+    } catch {
+      return ctx.evalInLocalScope(args[1], undefined, nargout);
+    }
+  }
+  throw new RuntimeError("eval requires 1 or 2 arguments");
 });
 
 /** The environment named by an evalin/assignin scope argument. `'workspace'`
@@ -107,7 +120,7 @@ function scopeEnv(
   throw new RuntimeError(`${fn}: first argument must be 'base' or 'caller'`);
 }
 
-register("evalin", (ctx, args) => {
+register("evalin", (ctx, args, nargout) => {
   if (args.length < 2)
     throw new RuntimeError("evalin requires at least 2 arguments");
   const scope = toString(ensureRuntimeValue(args[0]));
@@ -126,7 +139,7 @@ register("evalin", (ctx, args) => {
   const savedEnv = ctx.env;
   ctx.setEnv(targetEnv);
   try {
-    return ctx.evalInLocalScope(args[1]);
+    return ctx.evalInLocalScope(args[1], undefined, nargout);
   } finally {
     ctx.setEnv(savedEnv);
   }

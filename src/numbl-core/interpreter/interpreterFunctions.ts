@@ -24,6 +24,8 @@ import { inferJitType } from "./builtins/index.js";
 import { invokeBuiltin, NOT_A_BUILTIN } from "../runtime/runtimeDispatch.js";
 import { toString, toNumber } from "../runtime/convert.js";
 import { resolveFunction, type ResolvedTarget } from "../functionResolve.js";
+import { parseMFile, type AbstractSyntaxTree } from "../parser/index.js";
+import { SyntaxError } from "../parser/errors.js";
 import type { ClassInfo } from "../lowering/classInfo.js";
 import {
   getInterpreterSpecialBuiltin,
@@ -98,8 +100,8 @@ function callInterpreterSpecial(
       },
       callerEnv: this.callerEnv,
       workspaceEnv: this.workspaceEnv,
-      evalInLocalScope: (codeArg, fileName) =>
-        this.evalInLocalScope(codeArg, fileName),
+      evalInLocalScope: (codeArg, fileName, nargout) =>
+        this.evalInLocalScope(codeArg, fileName, nargout),
       callFunction: (n, a, no) => this.callFunction(n, a, no),
       rt: this.rt,
       optimization: this.optimization,
@@ -1374,50 +1376,43 @@ export function isHandleClass(
 
 // ── eval in local scope ──────────────────────────────────────────────────
 
+/** Run MATLAB text in the current scope (eval, evalin, run, input,
+ *  str2num). With `nargout` > 0 the text must be one expression, whose
+ *  value(s) are returned; otherwise its statements run (displaying
+ *  unsuppressed results) and nothing is returned. `fileName` sets the file
+ *  context, e.g. for `run(script)`. */
 export function evalInLocalScope(
   this: Interpreter,
   codeArg: unknown,
-  fileName?: string
+  fileName?: string,
+  nargout = 0
 ): unknown {
   const code = toString(ensureRuntimeValue(codeArg));
-  const initialVars: Record<string, RuntimeValue> = {};
-  for (const name of this.env.localNames()) {
-    if (name.startsWith("$")) continue;
-    const val = this.env.get(name);
-    if (val !== undefined) initialVars[name] = val;
+  let ast: AbstractSyntaxTree;
+  try {
+    ast = parseMFile(code, fileName ?? "eval");
+  } catch (e) {
+    if (e instanceof SyntaxError) throw new RuntimeError(e.message);
+    throw e;
   }
-  for (const name of this.env.globalNames) {
-    const val = this.env.get(name);
-    if (val !== undefined) initialVars[name] = val;
-  }
-
-  const cb = this.rt.evalLocalCallback;
-  if (cb) {
-    const result = cb(
-      code,
-      initialVars,
-      (text: string) => {
-        this.rt.output(text);
-      },
-      fileName
-    );
-    if (result.variableValues) {
-      for (const [name, val] of Object.entries(result.variableValues)) {
-        if (name.startsWith("$")) continue;
-        this.env.set(name, val);
-      }
+  if (nargout > 0) {
+    const [stmt, ...rest] = ast.body;
+    if (!stmt || rest.length > 0 || stmt.type !== "ExprStmt") {
+      throw new RuntimeError(
+        "eval: text must be a single expression when outputs are requested"
+      );
     }
-    // Propagate search path changes (e.g. addpath called inside eval/run)
-    if (result.searchPaths && this.rt.onPathChange) {
-      for (const p of result.searchPaths) {
-        if (!this.rt.searchPaths.includes(p)) {
-          this.rt.onPathChange("add", p, "end");
-        }
-      }
-    }
-    return result.returnValue;
+    return this.evalExprNargout(stmt.expr, nargout);
   }
-  throw new RuntimeError("eval not available in this context");
+  const exec = () => {
+    for (const stmt of ast.body) {
+      if (stmt.type === "Function") continue;
+      if (this.execStmt(stmt) instanceof ReturnSignal) break;
+    }
+  };
+  if (fileName) this.withFileContext(fileName, undefined, undefined, exec);
+  else exec();
+  return undefined;
 }
 
 // ── Arguments block processing ──────────────────────────────────────────
