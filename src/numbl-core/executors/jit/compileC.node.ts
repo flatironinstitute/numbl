@@ -53,7 +53,9 @@ export function compileAndLoadC(
   // semantics). -ffast-math is OFF by default — reduction ordering
   // and signed-zero / NaN handling are observable, and the cross-
   // boundary copy already costs more than libmvec vectorization
-  // typically saves.
+  // typically saves. -ffp-contract=off: gcc in ISO mode never fuses
+  // `a*b + c` into an FMA, but clang does by default, which changes
+  // last-bit results; every --opt level must round each op separately.
   const flags = [
     "-O3",
     "-fPIC",
@@ -62,6 +64,7 @@ export function compileAndLoadC(
     "-march=native",
     "-fopenmp-simd",
     "-fno-math-errno",
+    "-ffp-contract=off",
     "-Wall",
   ];
   const libs = process.platform === "linux" ? ["-lm"] : ["-lm"];

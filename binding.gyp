@@ -51,9 +51,12 @@
         "<!@(pkg-config --libs fftw3 2>/dev/null || echo '-lfftw3')",
         "<!@(pkg-config --libs-only-L fftw3 2>/dev/null | sed 's/-L/-Wl,-rpath,/g' || true)"
       ],
-      "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno" ],
-      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno" ],
-      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno" ],
+      # -ffp-contract=off: gcc fuses a*b+c into an FMA by default outside
+      # ISO C mode (and clang always), changing last-bit results vs the
+      # JS fallbacks and the C-JIT. Keep every op separately rounded.
+      "cflags": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffp-contract=off" ],
+      "cflags_c": [ "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffp-contract=off" ],
+      "cflags_cc": [ "-std=c++17", "-O3", "-march=native", "-fopenmp-simd", "-fno-math-errno", "-ffp-contract=off" ],
       "conditions": [
         ['fast_math == "true"', {
           "cflags": [ "-ffast-math" ],
@@ -70,7 +73,12 @@
           # macOS, so no Homebrew openblas install or keg-only linker path
           # wrangling. The classic Fortran ABI (dgetrf_, etc.) that the
           # native sources declare is provided by Accelerate.
-          "libraries": [ "-framework Accelerate" ]
+          "libraries": [ "-framework Accelerate" ],
+          # gyp ignores cflags on macOS; pass the contraction flag here.
+          "xcode_settings": {
+            "OTHER_CFLAGS": [ "-ffp-contract=off" ],
+            "OTHER_CPLUSPLUSFLAGS": [ "-ffp-contract=off" ]
+          }
         }]
       ]
     }
