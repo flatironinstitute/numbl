@@ -23,8 +23,14 @@ export default defineConfig({
   },
   base: "/",
   test: {
-    // tests-browser/ is driven by Playwright, not Vitest.
-    exclude: ["**/node_modules/**", "**/dist/**", "**/tests-browser/**"],
+    // tests-browser/ is driven by Playwright, not Vitest; .claude/ may hold
+    // agent worktrees.
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/tests-browser/**",
+      "**/.claude/**",
+    ],
     // Install the qhull Delaunay backend (the only delaunay/delaunayn backend)
     // before tests run; see src/test-setup.ts.
     setupFiles: ["./src/test-setup.ts"],
