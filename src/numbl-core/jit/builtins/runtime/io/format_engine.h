@@ -664,7 +664,7 @@ static void mtoc2__format_walk(mtoc2__writer_fn writer, void *ctx,
         long spec_start = i;
         i++;
         while (i < fmt_len &&
-               !strchr("dfigeEsoxXuc%", fmt.data[i])) {
+               !strchr("dfigGeEsoxXuc%", fmt.data[i])) {
           i++;
         }
         if (i >= fmt_len) break;

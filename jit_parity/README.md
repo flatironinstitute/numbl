@@ -8,11 +8,11 @@ three numbl execution modes, plus a runner that checks it:
 - `--opt 2` — C-JIT
 
 All three are the same codebase, so an in-bounds run must be byte-for-byte
-identical. Every script here is a *known divergence* between modes — i.e. a bug.
-As we fix the JIT, scripts flip from `FAIL` to `PASS`; the goal is all `PASS`.
+identical; any divergence is a bug. Scripts were added as divergences were
+found and now pass; CI runs the gate, so a new `FAIL` is a regression.
 
 This is intentionally **separate from `numbl_test_scripts/`** (those are
-MATLAB-conformance integration tests run in CI). This corpus targets cross-mode
+MATLAB-conformance integration tests). This corpus targets cross-mode
 parity specifically.
 
 ## Running

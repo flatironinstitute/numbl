@@ -114,7 +114,7 @@ export function mtoc2_sprintf_format(fmt, args) {
       if (fmt[i] === "%" && i + 1 < fmt.length) {
         i++;
         let spec = "%";
-        while (i < fmt.length && !"dfigeEsoxXuc%".includes(fmt[i])) {
+        while (i < fmt.length && !"dfigGeEsoxXuc%".includes(fmt[i])) {
           if (fmt[i] === "*") {
             if (argIdx >= flat.length) {
               outOfArgs = true;

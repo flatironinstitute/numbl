@@ -129,3 +129,11 @@ jobs:
       # plain `test` job — this is the only place they actually run.
       - name: Run addon parity tests (TS twins ↔ C addon)
         run: npx vitest run src/__tests__/op-codes-sync.test.ts src/__tests__/native-ops-parity.test.ts
+
+      # The .m integration suite under --opt 0 and --opt 1, with the addon.
+      - name: Run .m test scripts
+        run: npm run test:scripts
+
+      # Cross-mode parity: --opt 0 / 1 / 2 must produce identical output.
+      - name: Run JIT parity gate
+        run: npm run jit-parity
