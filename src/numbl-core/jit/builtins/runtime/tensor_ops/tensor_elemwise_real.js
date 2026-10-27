@@ -1,15 +1,36 @@
 // JS sibling of `tensor_elemwise_real.h`. Per-op tensor-tensor /
-// tensor-scalar / scalar-tensor / broadcast helpers. C macros
-// generate these; JS uses a single generic kernel + thin wrappers
-// to preserve the call-site shape the emitter produces.
+// tensor-scalar / scalar-tensor / broadcast helpers.
+//
+// Each op has its own loop with the operator written inline, like the
+// C macros expand to. A shared kernel taking the op as a callback would
+// see a different callback per op, go megamorphic in V8 and stop
+// inlining it, which made large element-wise work several times slower
+// than the interpreter. Only the (rare) broadcast path is shared.
+//
+// Tensors of at least EW_HOST_MIN elements go through the host's kernels
+// (`$elemwise`, the interpreter's native-or-TS kernels) when installed, so
+// large work runs as SIMD C and matches --opt 0. Below it the per-call
+// overhead outweighs the JS loop.
 
 import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
+const EW_HOST_MIN = 1024;
+
+function ew_host(n) {
+  return n >= EW_HOST_MIN && typeof $elemwise === "object" && $elemwise;
+}
+
+function ew_alloc_like(a) {
+  return mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+}
+
 // uminus on a tensor — separate signature (unary). Kept here because
 // the C side groups it with the elemwise file.
-function uminus_kernel(a) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = -a.data[i];
+export function mtoc2_tensor_uminus(a) {
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = -x[i];
   return r;
 }
 
@@ -17,31 +38,6 @@ function shapes_equal(x, y) {
   if (x.length !== y.length) return false;
   for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
   return true;
-}
-
-function tt_kernel(a, b, fn) {
-  // Same-shape fast path. The emitter picks `_tt` whenever it can't
-  // statically prove broadcasting is needed (unknown dims), so the
-  // shapes must be checked at runtime: equal → elementwise; otherwise
-  // defer to the broadcast kernel, which broadcasts compatible shapes
-  // and errors on incompatible ones. Without this, a runtime mismatch
-  // read past `b` and silently produced NaN.
-  if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, fn);
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(a.data[i], b.data[i]);
-  return r;
-}
-
-function ts_kernel(a, s, fn) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(a.data[i], s);
-  return r;
-}
-
-function st_kernel(s, a, fn) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(s, a.data[i]);
-  return r;
 }
 
 // Broadcast helper. Pads the shorter shape with trailing 1s on the
@@ -99,47 +95,115 @@ function bcast_kernel(a, b, fn) {
   return r;
 }
 
-export function mtoc2_tensor_uminus(a) {
-  return uminus_kernel(a);
-}
-
 const opPlus = (x, y) => x + y;
 const opMinus = (x, y) => x - y;
 const opTimes = (x, y) => x * y;
 const opRdivide = (x, y) => x / y;
 
+// `_tt`: the emitter picks it whenever it can't statically prove the
+// shapes match (unknown dims), so the shapes are re-checked at runtime: a
+// mismatch defers to the broadcast kernel, which broadcasts compatible
+// shapes and errors on incompatible ones (instead of reading past `b`).
 export function mtoc2_tensor_plus_tt(a, b) {
-  return tt_kernel(a, b, opPlus);
+  if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opPlus);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.binary("plus", x, y, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] + y[i];
+  return r;
 }
 export function mtoc2_tensor_minus_tt(a, b) {
-  return tt_kernel(a, b, opMinus);
+  if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opMinus);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.binary("minus", x, y, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] - y[i];
+  return r;
 }
 export function mtoc2_tensor_times_tt(a, b) {
-  return tt_kernel(a, b, opTimes);
+  if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opTimes);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.binary("times", x, y, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] * y[i];
+  return r;
 }
 export function mtoc2_tensor_rdivide_tt(a, b) {
-  return tt_kernel(a, b, opRdivide);
+  if (!shapes_equal(a.shape, b.shape)) return bcast_kernel(a, b, opRdivide);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.binary("rdivide", x, y, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] / y[i];
+  return r;
 }
 
 export function mtoc2_tensor_plus_ts(a, s) {
-  return ts_kernel(a, s, opPlus);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.scalarBinary("plus", s, x, false, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] + s;
+  return r;
 }
 export function mtoc2_tensor_minus_ts(a, s) {
-  return ts_kernel(a, s, opMinus);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.scalarBinary("minus", s, x, false, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] - s;
+  return r;
 }
 export function mtoc2_tensor_times_ts(a, s) {
-  return ts_kernel(a, s, opTimes);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.scalarBinary("times", s, x, false, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] * s;
+  return r;
 }
 export function mtoc2_tensor_rdivide_ts(a, s) {
-  return ts_kernel(a, s, opRdivide);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.scalarBinary("rdivide", s, x, false, o);
+  else for (let i = 0; i < o.length; i++) o[i] = x[i] / s;
+  return r;
 }
 
 // Non-commutative ops also need scalar-OP-tensor.
 export function mtoc2_tensor_minus_st(s, a) {
-  return st_kernel(s, a, opMinus);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.scalarBinary("minus", s, x, true, o);
+  else for (let i = 0; i < o.length; i++) o[i] = s - x[i];
+  return r;
 }
 export function mtoc2_tensor_rdivide_st(s, a) {
-  return st_kernel(s, a, opRdivide);
+  const r = ew_alloc_like(a);
+  const x = a.data;
+  const o = r.data;
+  const h = ew_host(o.length);
+  if (h) h.scalarBinary("rdivide", s, x, true, o);
+  else for (let i = 0; i < o.length; i++) o[i] = s / x[i];
+  return r;
 }
 
 export function mtoc2_tensor_plus_bcast_tt(a, b) {

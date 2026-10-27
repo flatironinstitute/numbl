@@ -1,13 +1,21 @@
 // JS sibling of `tensor_unary_real_math.h`. Per-op unary math
 // kernels for tensors (`mtoc2_tensor_sin`, `_cos`, etc.). Matches
-// the per-op function names the codegen emits.
+// the per-op function names the codegen emits. Each op has its own
+// loop (not a shared kernel taking the op as a callback, which goes
+// megamorphic in V8 and stops inlining it). Large tensors go through
+// the host's kernels when installed; see `tensor_elemwise_real.js`.
 
 import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
-function unary_kernel(a, fn) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(a.data[i]);
-  return r;
+const EW_UNARY_HOST_MIN = 1024;
+
+function ew_host_unary(op, x, o) {
+  return (
+    o.length >= EW_UNARY_HOST_MIN &&
+    typeof $elemwise === "object" &&
+    !!$elemwise &&
+    $elemwise.unary(op, x, o)
+  );
 }
 
 function matlabRound(x) {
@@ -22,62 +30,180 @@ export function mtoc2_realsqrt(x) {
 }
 
 export function mtoc2_tensor_cos(a) {
-  return unary_kernel(a, Math.cos);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("cos", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.cos(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_sin(a) {
-  return unary_kernel(a, Math.sin);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("sin", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.sin(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_tan(a) {
-  return unary_kernel(a, Math.tan);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("tan", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.tan(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_atan(a) {
-  return unary_kernel(a, Math.atan);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("atan", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.atan(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_sinh(a) {
-  return unary_kernel(a, Math.sinh);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("sinh", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.sinh(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_cosh(a) {
-  return unary_kernel(a, Math.cosh);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("cosh", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.cosh(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_tanh(a) {
-  return unary_kernel(a, Math.tanh);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("tanh", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.tanh(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_asinh(a) {
-  return unary_kernel(a, Math.asinh);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("asinh", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.asinh(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_exp(a) {
-  return unary_kernel(a, Math.exp);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("exp", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.exp(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_log(a) {
-  return unary_kernel(a, Math.log);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("log", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.log(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_log2(a) {
-  return unary_kernel(a, Math.log2);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("log2", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.log2(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_log10(a) {
-  return unary_kernel(a, Math.log10);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("log10", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.log10(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_sqrt(a) {
-  return unary_kernel(a, Math.sqrt);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("sqrt", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.sqrt(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_realsqrt(a) {
-  return unary_kernel(a, mtoc2_realsqrt);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = mtoc2_realsqrt(x[i]);
+  return r;
 }
 export function mtoc2_tensor_abs(a) {
-  return unary_kernel(a, Math.abs);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("abs", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.abs(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_floor(a) {
-  return unary_kernel(a, Math.floor);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("floor", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.floor(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_ceil(a) {
-  return unary_kernel(a, Math.ceil);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("ceil", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.ceil(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_fix(a) {
-  return unary_kernel(a, Math.trunc);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("fix", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.trunc(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_round(a) {
-  return unary_kernel(a, matlabRound);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("round", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = matlabRound(x[i]);
+  }
+  return r;
 }
 export function mtoc2_tensor_sign(a) {
-  return unary_kernel(a, Math.sign);
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  if (!ew_host_unary("sign", x, o)) {
+    for (let i = 0; i < o.length; i++) o[i] = Math.sign(x[i]);
+  }
+  return r;
 }

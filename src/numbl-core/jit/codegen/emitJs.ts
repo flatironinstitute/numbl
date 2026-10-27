@@ -92,7 +92,7 @@ export function emitJsProgram(
   }
 
   // The factory binds `$h.write` and returns the entry spec. Other hooks
-  // (`$h.plotDispatch`, `$h.rand`) surface as globals so emitted code /
+  // (`$h.plotDispatch`, `$h.rand`, `$h.elemwise`) surface as globals so emitted code /
   // runtime helper snippets can call them without threading `$h` through
   // every emit site; helper-side `typeof === "function"` checks gate
   // behavior when a host omits a hook.
@@ -103,7 +103,7 @@ export function emitJsProgram(
   }
   out.push(...userParts);
   out.push(
-    `return function ($h) { globalThis.$write = $h.write; globalThis.$plotDispatch = $h.plotDispatch; globalThis.$rand = $h.rand; return ${opts.exposeSpec}; };`
+    `return function ($h) { globalThis.$write = $h.write; globalThis.$plotDispatch = $h.plotDispatch; globalThis.$rand = $h.rand; globalThis.$elemwise = $h.elemwise; return ${opts.exposeSpec}; };`
   );
 
   return {

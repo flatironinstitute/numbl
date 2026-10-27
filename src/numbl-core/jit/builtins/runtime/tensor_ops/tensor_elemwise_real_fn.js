@@ -1,25 +1,12 @@
 // JS sibling of `tensor_elemwise_real_fn.h`. Per-op tensor kernels
 // for the function-call binary family (`atan2`, `hypot`, `mod`,
-// `rem`, `power`, two-argument `max`/`min`). Mirrors `tensor_elemwise_real.js`'s structure;
-// only the scalar fn differs.
+// `rem`, `power`, two-argument `max`/`min`). Mirrors
+// `tensor_elemwise_real.js`: each op has its own loop with the scalar
+// function called directly (a shared kernel taking it as a callback
+// goes megamorphic in V8); only the broadcast path is shared.
 
 import { mtoc2_tensor_alloc_nd } from "../tensor/tensor_alloc_nd.js";
 
-function tt(a, b, fn) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(a.data[i], b.data[i]);
-  return r;
-}
-function ts(a, s, fn) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(a.data[i], s);
-  return r;
-}
-function st(s, a, fn) {
-  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
-  for (let i = 0; i < r.data.length; i++) r.data[i] = fn(s, a.data[i]);
-  return r;
-}
 function bcast(a, b, fn) {
   const ndim = Math.max(a.shape.length, b.shape.length);
   const ashape = a.shape.slice();
@@ -69,43 +56,159 @@ function mtoc2_mod_real_js(a, b) {
   return r;
 }
 
-// atan2 / hypot / power
-export const mtoc2_tensor_atan2_tt = (a, b) => tt(a, b, Math.atan2);
-export const mtoc2_tensor_atan2_ts = (a, s) => ts(a, s, Math.atan2);
-export const mtoc2_tensor_atan2_st = (s, a) => st(s, a, Math.atan2);
-export const mtoc2_tensor_atan2_bcast_tt = (a, b) => bcast(a, b, Math.atan2);
-
-export const mtoc2_tensor_hypot_tt = (a, b) => tt(a, b, Math.hypot);
-export const mtoc2_tensor_hypot_ts = (a, s) => ts(a, s, Math.hypot);
-// hypot is commutative — no `_st` in the C side; included for symmetry.
-export const mtoc2_tensor_hypot_bcast_tt = (a, b) => bcast(a, b, Math.hypot);
-
-export const mtoc2_tensor_power_tt = (a, b) => tt(a, b, Math.pow);
-export const mtoc2_tensor_power_ts = (a, s) => ts(a, s, Math.pow);
-export const mtoc2_tensor_power_st = (s, a) => st(s, a, Math.pow);
-export const mtoc2_tensor_power_bcast_tt = (a, b) => bcast(a, b, Math.pow);
-
 // rem: JS `%` matches C `fmod` semantics (sign tracks a).
 const remFn = (a, b) => a % b;
-export const mtoc2_tensor_rem_tt = (a, b) => tt(a, b, remFn);
-export const mtoc2_tensor_rem_ts = (a, s) => ts(a, s, remFn);
-export const mtoc2_tensor_rem_st = (s, a) => st(s, a, remFn);
-export const mtoc2_tensor_rem_bcast_tt = (a, b) => bcast(a, b, remFn);
-
-// mod: MATLAB convention (sign tracks b).
-export const mtoc2_tensor_mod_tt = (a, b) => tt(a, b, mtoc2_mod_real_js);
-export const mtoc2_tensor_mod_ts = (a, s) => ts(a, s, mtoc2_mod_real_js);
-export const mtoc2_tensor_mod_st = (s, a) => st(s, a, mtoc2_mod_real_js);
-export const mtoc2_tensor_mod_bcast_tt = (a, b) =>
-  bcast(a, b, mtoc2_mod_real_js);
 
 // Two-argument max/min: the non-NaN operand wins, as in MATLAB and C99
 // fmax/fmin (JS Math.max/min propagate NaN).
 const maxFn = (a, b) => (a !== a ? b : b !== b ? a : Math.max(a, b));
 const minFn = (a, b) => (a !== a ? b : b !== b ? a : Math.min(a, b));
-export const mtoc2_tensor_max_tt = (a, b) => tt(a, b, maxFn);
-export const mtoc2_tensor_max_ts = (a, s) => ts(a, s, maxFn);
+
+export function mtoc2_tensor_atan2_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.atan2(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_atan2_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.atan2(x[i], s);
+  return r;
+}
+export function mtoc2_tensor_atan2_st(s, a) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.atan2(s, x[i]);
+  return r;
+}
+export const mtoc2_tensor_atan2_bcast_tt = (a, b) => bcast(a, b, Math.atan2);
+
+// hypot is commutative — no `_st` in the C side.
+export function mtoc2_tensor_hypot_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.hypot(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_hypot_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.hypot(x[i], s);
+  return r;
+}
+export const mtoc2_tensor_hypot_bcast_tt = (a, b) => bcast(a, b, Math.hypot);
+
+export function mtoc2_tensor_power_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.pow(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_power_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.pow(x[i], s);
+  return r;
+}
+export function mtoc2_tensor_power_st(s, a) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = Math.pow(s, x[i]);
+  return r;
+}
+export const mtoc2_tensor_power_bcast_tt = (a, b) => bcast(a, b, Math.pow);
+
+export function mtoc2_tensor_rem_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = remFn(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_rem_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = remFn(x[i], s);
+  return r;
+}
+export function mtoc2_tensor_rem_st(s, a) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = remFn(s, x[i]);
+  return r;
+}
+export const mtoc2_tensor_rem_bcast_tt = (a, b) => bcast(a, b, remFn);
+
+export function mtoc2_tensor_mod_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = mtoc2_mod_real_js(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_mod_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = mtoc2_mod_real_js(x[i], s);
+  return r;
+}
+export function mtoc2_tensor_mod_st(s, a) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = mtoc2_mod_real_js(s, x[i]);
+  return r;
+}
+export const mtoc2_tensor_mod_bcast_tt = (a, b) =>
+  bcast(a, b, mtoc2_mod_real_js);
+
+export function mtoc2_tensor_max_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = maxFn(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_max_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = maxFn(x[i], s);
+  return r;
+}
 export const mtoc2_tensor_max_bcast_tt = (a, b) => bcast(a, b, maxFn);
-export const mtoc2_tensor_min_tt = (a, b) => tt(a, b, minFn);
-export const mtoc2_tensor_min_ts = (a, s) => ts(a, s, minFn);
+
+export function mtoc2_tensor_min_tt(a, b) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const y = b.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = minFn(x[i], y[i]);
+  return r;
+}
+export function mtoc2_tensor_min_ts(a, s) {
+  const r = mtoc2_tensor_alloc_nd(a.shape.length, a.shape);
+  const x = a.data;
+  const o = r.data;
+  for (let i = 0; i < o.length; i++) o[i] = minFn(x[i], s);
+  return r;
+}
 export const mtoc2_tensor_min_bcast_tt = (a, b) => bcast(a, b, minFn);

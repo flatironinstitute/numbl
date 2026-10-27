@@ -7,6 +7,30 @@
 // bootstrap, and let snippets reference it by bare name.
 
 declare global {
+  /** Optional host element-wise kernels for real tensors (the numbl JIT
+   *  host installs the interpreter's native-or-TS kernels). `op` is the
+   *  builtin name; `out` has the input's length. `unary` returns false
+   *  for an op it doesn't cover; `minmax` skips NaN. */
+  var $elemwise:
+    | {
+        binary(
+          op: string,
+          a: Float64Array,
+          b: Float64Array,
+          out: Float64Array
+        ): void;
+        scalarBinary(
+          op: string,
+          s: number,
+          a: Float64Array,
+          scalarOnLeft: boolean,
+          out: Float64Array
+        ): void;
+        unary(op: string, a: Float64Array, out: Float64Array): boolean;
+        minmax(op: "min" | "max", a: Float64Array): number;
+      }
+    | undefined;
+
   /** Append text to stdout. No implicit newline. */
   var $write: (s: string) => void;
 
