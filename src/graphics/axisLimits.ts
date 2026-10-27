@@ -62,8 +62,13 @@ export function axesIs3D(axes: AxesState): boolean {
   );
 }
 
-/** Raw data extents (no padding) across every renderable trace type. */
-function dataExtents(axes: AxesState): { x: Extent; y: Extent; z: Extent } {
+/** Raw data extents (no padding) across every renderable trace type.
+ *  Non-finite values are ignored; an empty axis has min > max. */
+export function dataExtents(axes: Partial<AxesState>): {
+  x: Extent;
+  y: Extent;
+  z: Extent;
+} {
   const x: Extent = { ...EMPTY };
   const y: Extent = { ...EMPTY };
   const z: Extent = { ...EMPTY };

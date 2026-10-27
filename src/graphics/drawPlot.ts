@@ -17,6 +17,8 @@ import {
   generateTicks,
   formatTick,
 } from "./plotHelpers.js";
+import { colormapLookup, type ColormapSpec } from "./colormaps.js";
+import { dataExtents } from "./axisLimits.js";
 import { drawMarkers } from "./plotMarkers.js";
 import { imagescColorLimits, imagescExtent } from "./imagescExtent.js";
 import { drawLegend } from "./plotLegend.js";
@@ -86,7 +88,7 @@ export function drawPlot(
   boxOn?: boolean,
   patchTraces?: PatchTrace[]
 ) {
-  _activeColormapData = colormapData;
+  const cmap: ColormapSpec = { name: colormap, data: colormapData };
   const ctx = canvas.getContext("2d");
   const hasContent =
     traces.length > 0 ||
@@ -124,7 +126,7 @@ export function drawPlot(
 
   // Heatmap — completely separate rendering path (categorical axes)
   if (heatmapTrace) {
-    drawHeatmap(ctx, cw, ch, heatmapTrace, title, colormap);
+    drawHeatmap(ctx, cw, ch, heatmapTrace, title, cmap);
     return;
   }
 
@@ -148,221 +150,25 @@ export function drawPlot(
 
   if (plotW <= 0 || plotH <= 0) return;
 
-  // Compute data range across all traces
-  let xMin = Infinity,
-    xMax = -Infinity,
-    yMin = Infinity,
-    yMax = -Infinity;
-  for (const t of traces) {
-    for (const v of t.x) {
-      if (isFinite(v)) {
-        if (v < xMin) xMin = v;
-        if (v > xMax) xMax = v;
-      }
-    }
-    for (const v of t.y) {
-      if (isFinite(v)) {
-        if (v < yMin) yMin = v;
-        if (v > yMax) yMax = v;
-      }
-    }
-  }
-
-  // Include imagesc bounds (pixel edges, half a pixel beyond the centers)
-  if (imagescTrace) {
-    const ext = imagescExtent(imagescTrace);
-    if (ext.x[0] < xMin) xMin = ext.x[0];
-    if (ext.x[1] > xMax) xMax = ext.x[1];
-    if (ext.y[0] < yMin) yMin = ext.y[0];
-    if (ext.y[1] > yMax) yMax = ext.y[1];
-  }
-
-  // Include pcolor bounds
-  if (pcolorTraces) {
-    for (const pt of pcolorTraces) {
-      for (const v of pt.x) {
-        if (isFinite(v)) {
-          if (v < xMin) xMin = v;
-          if (v > xMax) xMax = v;
-        }
-      }
-      for (const v of pt.y) {
-        if (isFinite(v)) {
-          if (v < yMin) yMin = v;
-          if (v > yMax) yMax = v;
-        }
-      }
-    }
-  }
-
-  // Include contour bounds
-  if (contourTraces) {
-    for (const ct of contourTraces) {
-      for (const v of ct.x) {
-        if (isFinite(v)) {
-          if (v < xMin) xMin = v;
-          if (v > xMax) xMax = v;
-        }
-      }
-      for (const v of ct.y) {
-        if (isFinite(v)) {
-          if (v < yMin) yMin = v;
-          if (v > yMax) yMax = v;
-        }
-      }
-    }
-  }
-
-  // Include patch bounds (use the x/y of each vertex)
-  if (patchTraces) {
-    for (const pt of patchTraces) {
-      for (const v of pt.vertices) {
-        if (isFinite(v[0])) {
-          if (v[0] < xMin) xMin = v[0];
-          if (v[0] > xMax) xMax = v[0];
-        }
-        if (isFinite(v[1])) {
-          if (v[1] < yMin) yMin = v[1];
-          if (v[1] > yMax) yMax = v[1];
-        }
-      }
-    }
-  }
-
-  // Include bar bounds
-  if (barTraces) {
-    for (const bt of barTraces) {
-      const halfW = bt.width / 2;
-      for (let i = 0; i < bt.x.length; i++) {
-        const bx = bt.x[i];
-        if (isFinite(bx)) {
-          if (bx - halfW < xMin) xMin = bx - halfW;
-          if (bx + halfW > xMax) xMax = bx + halfW;
-        }
-        const by = bt.y[i];
-        if (isFinite(by)) {
-          if (by < yMin) yMin = by;
-          if (by > yMax) yMax = by;
-        }
-      }
-      // Bars extend to zero
-      if (0 < yMin) yMin = 0;
-      if (0 > yMax) yMax = 0;
-    }
-  }
-
-  // Include barh bounds (horizontal bars: x=positions on y-axis, y=bar lengths on x-axis)
-  if (barhTraces) {
-    for (const bt of barhTraces) {
-      const halfH = bt.width / 2;
-      for (let i = 0; i < bt.x.length; i++) {
-        const pos = bt.x[i]; // position on y-axis
-        if (isFinite(pos)) {
-          if (pos - halfH < yMin) yMin = pos - halfH;
-          if (pos + halfH > yMax) yMax = pos + halfH;
-        }
-        const len = bt.y[i]; // bar length on x-axis
-        if (isFinite(len)) {
-          if (len < xMin) xMin = len;
-          if (len > xMax) xMax = len;
-        }
-      }
-      // Horizontal bars extend to zero on the x-axis
-      if (0 < xMin) xMin = 0;
-      if (0 > xMax) xMax = 0;
-    }
-  }
-
-  // Include errorbar bounds
-  if (errorBarTraces) {
-    for (const et of errorBarTraces) {
-      for (let i = 0; i < et.x.length; i++) {
-        const ex = et.x[i];
-        const ey = et.y[i];
-        if (isFinite(ex)) {
-          const xl = et.xNeg ? ex - et.xNeg[i] : ex;
-          const xr = et.xPos ? ex + et.xPos[i] : ex;
-          if (xl < xMin) xMin = xl;
-          if (xr > xMax) xMax = xr;
-        }
-        if (isFinite(ey)) {
-          const ylo = ey - et.yNeg[i];
-          const yhi = ey + et.yPos[i];
-          if (ylo < yMin) yMin = ylo;
-          if (yhi > yMax) yMax = yhi;
-        }
-      }
-    }
-  }
-
-  // Include boxchart bounds
-  if (boxTraces) {
-    for (const bt of boxTraces) {
-      const halfW = bt.width / 2;
-      if (bt.x - halfW < xMin) xMin = bt.x - halfW;
-      if (bt.x + halfW > xMax) xMax = bt.x + halfW;
-      if (bt.whiskerLow < yMin) yMin = bt.whiskerLow;
-      if (bt.whiskerHigh > yMax) yMax = bt.whiskerHigh;
-      for (const o of bt.outliers) {
-        if (o < yMin) yMin = o;
-        if (o > yMax) yMax = o;
-      }
-    }
-  }
-
-  // Include area bounds (stacked: sum y values for upper bound)
-  if (areaTraces && areaTraces.length > 0) {
-    const base = areaBaseValue ?? 0;
-    if (base < yMin) yMin = base;
-    if (base > yMax) yMax = base;
-    // For stacked areas, the total height is the sum of all traces
-    const n = areaTraces[0].x.length;
-    for (let i = 0; i < n; i++) {
-      let cumY = base;
-      for (const t of areaTraces) {
-        if (i < t.x.length) {
-          const v = t.x[i];
-          if (isFinite(v)) {
-            if (v < xMin) xMin = v;
-            if (v > xMax) xMax = v;
-          }
-          cumY += t.y[i] - base;
-          if (isFinite(cumY)) {
-            if (cumY < yMin) yMin = cumY;
-            if (cumY > yMax) yMax = cumY;
-          }
-        }
-      }
-    }
-  }
-
-  // Include quiver bounds (tail + head positions)
-  if (quiverTraces) {
-    for (const qt of quiverTraces) {
-      for (let i = 0; i < qt.x.length; i++) {
-        const x0 = qt.x[i];
-        const y0 = qt.y[i];
-        const x1 = x0 + qt.u[i];
-        const y1 = y0 + qt.v[i];
-        if (isFinite(x0)) {
-          if (x0 < xMin) xMin = x0;
-          if (x0 > xMax) xMax = x0;
-        }
-        if (isFinite(x1)) {
-          if (x1 < xMin) xMin = x1;
-          if (x1 > xMax) xMax = x1;
-        }
-        if (isFinite(y0)) {
-          if (y0 < yMin) yMin = y0;
-          if (y0 > yMax) yMax = y0;
-        }
-        if (isFinite(y1)) {
-          if (y1 < yMin) yMin = y1;
-          if (y1 > yMax) yMax = y1;
-        }
-      }
-    }
-  }
+  // Data range across all traces (shared with `lim = axis`).
+  const ext = dataExtents({
+    traces,
+    imagescTrace,
+    pcolorTraces,
+    contourTraces,
+    patchTraces,
+    barTraces,
+    barhTraces,
+    errorBarTraces,
+    boxTraces,
+    areaTraces,
+    areaBaseValue,
+    quiverTraces,
+  });
+  let xMin = ext.x.min,
+    xMax = ext.x.max,
+    yMin = ext.y.min,
+    yMax = ext.y.max;
 
   if (!isFinite(xMin)) return;
 
@@ -622,27 +428,27 @@ export function drawPlot(
 
   // Imagesc rendering
   if (imagescTrace) {
-    drawImagesc(ctx, imagescTrace, toCanvasX, toCanvasY, colormap, caxis);
+    drawImagesc(ctx, imagescTrace, toCanvasX, toCanvasY, cmap, caxis);
   }
 
   // Pcolor rendering
   if (pcolorTraces) {
     for (const pt of pcolorTraces) {
-      drawPcolor(ctx, pt, toCanvasX, toCanvasY, colormap, shading, caxis);
+      drawPcolor(ctx, pt, toCanvasX, toCanvasY, cmap, shading, caxis);
     }
   }
 
   // Contour rendering
   if (contourTraces) {
     for (const ct of contourTraces) {
-      drawContour(ctx, ct, toCanvasX, toCanvasY, colormap);
+      drawContour(ctx, ct, toCanvasX, toCanvasY, cmap);
     }
   }
 
   // Patch rendering (filled polygons; drawn under line plots)
   if (patchTraces) {
     for (const pt of patchTraces) {
-      drawPatch(ctx, pt, toCanvasX, toCanvasY, colormap, caxis);
+      drawPatch(ctx, pt, toCanvasX, toCanvasY, cmap, caxis);
     }
   }
 
@@ -1000,7 +806,7 @@ export function drawPlot(
         effPlotH,
         cbRange[0],
         cbRange[1],
-        colormap
+        cmap
       );
     }
   }
@@ -1098,89 +904,6 @@ function drawQuiver(
   }
 }
 
-// ── Colormap helpers ────────────────────────────────────────────────────
-
-/** Module-scoped custom colormap data, set at the start of drawPlot. */
-let _activeColormapData: number[][] | undefined;
-
-function colormapLookup(t: number, name?: string): [number, number, number] {
-  // t is 0..1. Non-finite t would give NaN components, which canvas rejects
-  // as a fillStyle (silently keeping the previous color); use 0 instead.
-  const clamped = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : 0;
-  if (_activeColormapData && _activeColormapData.length > 0) {
-    const data = _activeColormapData;
-    const n = data.length;
-    if (n === 1) return data[0] as [number, number, number];
-    const idx = clamped * (n - 1);
-    const lo = Math.floor(idx);
-    const hi = Math.min(lo + 1, n - 1);
-    const frac = idx - lo;
-    return [
-      data[lo][0] + frac * (data[hi][0] - data[lo][0]),
-      data[lo][1] + frac * (data[hi][1] - data[lo][1]),
-      data[lo][2] + frac * (data[hi][2] - data[lo][2]),
-    ];
-  }
-  if (name === "jet") {
-    return jetColormap(clamped);
-  }
-  if (name === "redblue") {
-    return redblueColormap(clamped);
-  }
-  // Default: parula-like (blue → yellow)
-  return parulaColormap(clamped);
-}
-
-function parulaColormap(t: number): [number, number, number] {
-  // Simplified parula: dark blue → cyan → yellow
-  if (t < 0.5) {
-    const s = t * 2;
-    return [0.2 * (1 - s), 0.1 + 0.6 * s, 0.9 - 0.3 * s];
-  }
-  const s = (t - 0.5) * 2;
-  return [0.2 + 0.8 * s, 0.7 + 0.3 * s, 0.6 - 0.5 * s];
-}
-
-function jetColormap(t: number): [number, number, number] {
-  let r: number, g: number, b: number;
-  if (t < 0.125) {
-    r = 0;
-    g = 0;
-    b = 0.5 + t * 4;
-  } else if (t < 0.375) {
-    r = 0;
-    g = (t - 0.125) * 4;
-    b = 1;
-  } else if (t < 0.625) {
-    r = (t - 0.375) * 4;
-    g = 1;
-    b = 1 - (t - 0.375) * 4;
-  } else if (t < 0.875) {
-    r = 1;
-    g = 1 - (t - 0.625) * 4;
-    b = 0;
-  } else {
-    r = 1 - (t - 0.875) * 4;
-    g = 0;
-    b = 0;
-  }
-  return [
-    Math.max(0, Math.min(1, r)),
-    Math.max(0, Math.min(1, g)),
-    Math.max(0, Math.min(1, b)),
-  ];
-}
-
-function redblueColormap(t: number): [number, number, number] {
-  // Blue (0) → White (0.5) → Red (1)
-  if (t < 0.5) {
-    const s = t * 2; // 0..1
-    return [s, s, 1];
-  }
-  const s = (t - 0.5) * 2; // 0..1
-  return [1, 1 - s, 1 - s];
-}
-
 // ── Imagesc rendering ────────────────────────────────────────────────────
 
 function drawImagesc(
@@ -1188,7 +911,7 @@ function drawImagesc(
   trace: ImagescTrace,
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
-  colormap?: string,
+  colormap: ColormapSpec,
   caxis?: [number, number]
 ) {
   const { rows, cols, z, x, y } = trace;
@@ -1232,7 +955,7 @@ function drawContour(
   trace: ContourTrace,
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
-  colormap?: string
+  colormap: ColormapSpec
 ) {
   const { rows, cols, z, x, y, nLevels, filled } = trace;
   if (rows < 2 || cols < 2) return;
@@ -1519,8 +1242,8 @@ function drawHeatmap(
   cw: number,
   ch: number,
   hm: HeatmapTrace,
-  title?: string,
-  colormap?: string
+  title: string | undefined,
+  colormap: ColormapSpec
 ) {
   const { data, rows, cols } = hm;
   if (rows === 0 || cols === 0) return;
@@ -1685,7 +1408,7 @@ function drawPatch(
   trace: PatchTrace,
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
-  colormap: string | undefined,
+  colormap: ColormapSpec,
   caxis?: [number, number]
 ) {
   const { vertices, faces } = trace;
@@ -1855,7 +1578,7 @@ function drawPcolor(
   trace: PcolorTrace,
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
-  colormap: string | undefined,
+  colormap: ColormapSpec,
   shading: "faceted" | "flat" | "interp" | undefined,
   caxis?: [number, number]
 ) {
@@ -1881,7 +1604,7 @@ function drawPcolorFlat(
   trace: PcolorTrace,
   toCanvasX: (v: number) => number,
   toCanvasY: (v: number) => number,
-  colormap: string | undefined,
+  colormap: ColormapSpec,
   drawEdges: boolean,
   caxis?: [number, number]
 ) {
@@ -2027,7 +1750,7 @@ function drawColorbarAtLocation(
   plotH: number,
   dMin: number,
   dMax: number,
-  colormap: string | undefined
+  colormap: ColormapSpec
 ) {
   const barThickness = 16;
   const inset = 8; // gap between plot edge and colorbar for inside variants
@@ -2165,7 +1888,7 @@ function drawColorbarVertical(
   h: number,
   dMin: number,
   dMax: number,
-  colormap: string | undefined,
+  colormap: ColormapSpec,
   labelSide: "left" | "right"
 ) {
   const nSteps = Math.max(1, Math.round(h));
@@ -2205,7 +1928,7 @@ function drawColorbarHorizontal(
   h: number,
   dMin: number,
   dMax: number,
-  colormap: string | undefined,
+  colormap: ColormapSpec,
   labelSide: "top" | "bottom"
 ) {
   const nSteps = Math.max(1, Math.round(w));
