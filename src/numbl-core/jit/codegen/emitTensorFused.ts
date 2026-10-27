@@ -54,7 +54,7 @@ import { formatDouble } from "./cHelpers.js";
  *  dim PATTERN but carry dynamic dims, so their runtime extents may
  *  differ — `ones(1,n) + ones(1,m)`). C-only: the JS backend never
  *  fuses (it always routes tensor ops through the shape-checking
- *  `tt_kernel`). */
+ *  `_tt` helpers). */
 const FUSED_SHAPE_EQ_SNIPPET: InlineSnippet = {
   name: "mtoc2_fused_shape_eq",
   deps: ["mtoc2_tensor_t"],
@@ -374,7 +374,7 @@ function emitPerSlotExpr(e: IRExpr, state: RuntimeState): string {
  *  operand must match the shape source's runtime shape, else the assign
  *  defers to `fallbackStmt` — the bcast-aware helper path, which
  *  broadcasts compatible shapes and raises "Matrix dimensions must
- *  agree" on incompatible ones. Mirrors the JS `tt_kernel` deferring to
+ *  agree" on incompatible ones. Mirrors the JS `_tt` helpers deferring to
  *  `bcast_kernel`. */
 export function emitTensorAssignFused(
   s: Assign,

@@ -14,16 +14,22 @@ function squeeze_trailing(dims) {
   return dims;
 }
 
-// Accumulator-based reducer (`sum`, `prod`, `mean`). `init` seeds
-// the running value; `accum(a, x)` is the per-element step;
-// `finalize(a, n)` is the post-loop transform.
-function accum_all(t, init, accum, finalize) {
-  let acc = init;
-  for (let i = 0; i < t.data.length; i++) acc = accum(acc, t.data[i]);
-  return finalize(acc, t.data.length);
+// Accumulator-based reducers (`sum`, `prod`, `mean`). The loops add or
+// multiply inline (sequentially, like the C kernel) rather than through
+// an accumulator callback, which went megamorphic in V8.
+function sum_all_seq(x) {
+  let acc = 0;
+  for (let i = 0; i < x.length; i++) acc += x[i];
+  return acc;
 }
 
-function accum_dim(t, dim, init, accum, finalize) {
+function prod_all_seq(x) {
+  let acc = 1;
+  for (let i = 0; i < x.length; i++) acc *= x[i];
+  return acc;
+}
+
+function accum_dim(t, dim, isProd, isMean) {
   if (dim < 1) {
     throw new Error(`reducer _dim: dim must be >= 1 (got ${dim})`);
   }
@@ -49,14 +55,23 @@ function accum_dim(t, dim, init, accum, finalize) {
   // = a.shape.slice(); out_dims[dimIdx] = 1` then squeeze pattern).
   squeeze_trailing(outDims);
   const out = mtoc2_tensor_alloc_nd(outDims.length, outDims);
+  const x = t.data;
   for (let aft = 0; aft < after; aft++) {
     for (let bef = 0; bef < before; bef++) {
       const base = aft * before * axis + bef;
-      let acc = init;
-      for (let k = 0; k < axis; k++) {
-        acc = accum(acc, t.data[base + k * before]);
+      let acc;
+      if (isProd) {
+        acc = 1;
+        for (let k = 0; k < axis; k++) acc *= x[base + k * before];
+      } else {
+        acc = 0;
+        for (let k = 0; k < axis; k++) acc += x[base + k * before];
       }
-      out.data[aft * before + bef] = finalize(acc, axis);
+      out.data[aft * before + bef] = isMean
+        ? axis === 0
+          ? NaN
+          : acc / axis
+        : acc;
     }
   }
   return out;
@@ -68,18 +83,25 @@ function accum_dim(t, dim, init, accum, finalize) {
 // and the C kernel — seeding with data[0] would let a *leading* NaN
 // poison the result (`x < NaN` / `x > NaN` are always false).
 function minmax_all(t, op /* "min" | "max" */) {
-  if (t.data.length === 0) return op === "min" ? Infinity : -Infinity;
-  let best = NaN;
-  let found = false;
-  for (let i = 0; i < t.data.length; i++) {
-    const x = t.data[i];
-    if (x !== x) continue; // skip NaN
-    if (!found || (op === "min" ? x < best : x > best)) {
-      best = x;
-      found = true;
-    }
+  const x = t.data;
+  if (x.length === 0) return op === "min" ? Infinity : -Infinity;
+  // Large inputs use the host's kernel (same as the interpreter) when
+  // installed; see `tensor_elemwise_real.js`.
+  if (x.length >= 1024 && typeof $elemwise === "object" && $elemwise) {
+    return $elemwise.minmax(op, x);
   }
-  return found ? best : NaN;
+  // Seed with the first non-NaN element, then a plain compare loop per op
+  // (a NaN never wins a comparison, so it is skipped).
+  let i = 0;
+  while (i < x.length && x[i] !== x[i]) i++;
+  if (i === x.length) return NaN;
+  let best = x[i];
+  if (op === "min") {
+    for (i++; i < x.length; i++) if (x[i] < best) best = x[i];
+  } else {
+    for (i++; i < x.length; i++) if (x[i] > best) best = x[i];
+  }
+  return best;
 }
 
 function minmax_dim(t, dim, op) {
@@ -165,28 +187,14 @@ function logical_dim(t, dim, emptyResult, shortPredicate) {
   return out;
 }
 
-// ── Sum ─────────────────────────────────────────────────────────────────
-const sumInit = 0;
-const sumAccum = (a, x) => a + x;
-const idFinalize = a => a;
-export const mtoc2_sum_all = t => accum_all(t, sumInit, sumAccum, idFinalize);
-export const mtoc2_sum_dim = (t, d) =>
-  accum_dim(t, d, sumInit, sumAccum, idFinalize);
-
-// ── Prod ────────────────────────────────────────────────────────────────
-const prodInit = 1;
-const prodAccum = (a, x) => a * x;
-export const mtoc2_prod_all = t =>
-  accum_all(t, prodInit, prodAccum, idFinalize);
-export const mtoc2_prod_dim = (t, d) =>
-  accum_dim(t, d, prodInit, prodAccum, idFinalize);
-
-// ── Mean ────────────────────────────────────────────────────────────────
-const meanFinalize = (a, n) => (n === 0 ? NaN : a / n);
+// ── Sum / prod / mean ───────────────────────────────────────────────
+export const mtoc2_sum_all = t => sum_all_seq(t.data);
+export const mtoc2_sum_dim = (t, d) => accum_dim(t, d, false, false);
+export const mtoc2_prod_all = t => prod_all_seq(t.data);
+export const mtoc2_prod_dim = (t, d) => accum_dim(t, d, true, false);
 export const mtoc2_mean_all = t =>
-  accum_all(t, sumInit, sumAccum, meanFinalize);
-export const mtoc2_mean_dim = (t, d) =>
-  accum_dim(t, d, sumInit, sumAccum, meanFinalize);
+  t.data.length === 0 ? NaN : sum_all_seq(t.data) / t.data.length;
+export const mtoc2_mean_dim = (t, d) => accum_dim(t, d, false, true);
 
 // ── Min / max ───────────────────────────────────────────────────────────
 export const mtoc2_min_all = t => minmax_all(t, "min");

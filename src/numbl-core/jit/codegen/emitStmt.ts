@@ -448,7 +448,7 @@ function emitStmt(
           // runtime shape check that falls back to the bcast-aware helper
           // path on mismatch — the helper broadcasts compatible shapes
           // and errors on incompatible ones (the JS twin always takes
-          // this path via tt_kernel). Without it a runtime mismatch read
+          // this path via the `_tt` helpers). Without it a runtime mismatch read
           // past an operand and silently produced garbage.
           if (fusedAssignNeedsShapeGuard(s)) {
             const fb = emitFusedFallback(s, state);

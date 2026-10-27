@@ -2,7 +2,7 @@
 
 Fusion collapses an element-wise tensor assignment into a single inline per-element loop instead of a chain of runtime-helper calls, each of which would allocate an intermediate tensor. The goal is fewer allocations, fewer passes over memory, and better cache behavior.
 
-**Fusion is a C-backend (`--opt 2`) optimization only.** The JS backend never fuses — it always routes tensor ops through the shape-checking `tt_kernel` runtime helpers. The pass lives in the JIT compiler's C codegen (`src/numbl-core/jit/codegen/emitTensorFused.ts`).
+**Fusion is a C-backend (`--opt 2`) optimization only.** The JS backend never fuses — it always routes tensor ops through the per-op runtime helpers (`mtoc2_tensor_<op>_tt` and friends in `tensor_elemwise_real.js`), which hand tensors of 1024 or more elements to the interpreter's element-wise kernels (the `$elemwise` host hook: native addon when loaded) and loop in JS below that. The pass lives in the JIT compiler's C codegen (`src/numbl-core/jit/codegen/emitTensorFused.ts`).
 
 ## What is fused
 
