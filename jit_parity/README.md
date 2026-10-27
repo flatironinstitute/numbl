@@ -31,9 +31,8 @@ Exit code is 0 iff every selected script passes.
 We expect **exact** matches. The runner reduces each mode's run to a comparison
 key and requires all three keys equal:
 
-- stdout, compared verbatim, except: lines containing `using bridge:` (a one-time
-  native-addon diagnostic) and lines starting with `warning:` (JIT bail notices)
-  are dropped, and trailing whitespace is trimmed.
+- stdout, compared verbatim, except: lines starting with `warning:` (JIT bail
+  notices) are dropped, and trailing whitespace is trimmed.
 - a non-zero exit collapses to the token `<ERROR>` — the interpreter and C-JIT
   word their error messages differently, so we test the *outcome* ("it correctly
   refused"), not the message text.

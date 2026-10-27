@@ -16,7 +16,7 @@ import {
   isRuntimeTensor,
   type RuntimeChar,
 } from "../../runtime/types.js";
-import { tensorOps } from "../../ops/index.js";
+import { tensorOps, OpUnary } from "../../ops/index.js";
 import { RTV } from "../../runtime/constructors.js";
 import { type JitType, signFromNumber, unifyJitTypes } from "../../jitTypes.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
@@ -324,28 +324,28 @@ export function binaryNumberOnly(argTypes: JitType[]): JitType[] | null {
 // ── Apply helpers ───────────────────────────────────────────────────────
 
 /** Apply a unary element-wise function with complex support */
-/** Map Math.* functions to native unaryElemwise op codes. */
+/** Map Math.* functions to tensor-ops unary op codes. */
 const nativeUnaryOpCode = new Map<(x: number) => number, number>([
-  [Math.exp, 0],
-  [Math.log, 1],
-  [Math.log2, 2],
-  [Math.log10, 3],
-  [Math.sqrt, 4],
-  [Math.abs, 5],
-  [Math.floor, 6],
-  [Math.ceil, 7],
-  [Math.round, 8],
-  [Math.trunc, 9],
-  [Math.sin, 10],
-  [Math.cos, 11],
-  [Math.tan, 12],
-  [Math.asin, 13],
-  [Math.acos, 14],
-  [Math.atan, 15],
-  [Math.sinh, 16],
-  [Math.cosh, 17],
-  [Math.tanh, 18],
-  [Math.sign, 19],
+  [Math.exp, OpUnary.EXP],
+  [Math.log, OpUnary.LOG],
+  [Math.log2, OpUnary.LOG2],
+  [Math.log10, OpUnary.LOG10],
+  [Math.sqrt, OpUnary.SQRT],
+  [Math.abs, OpUnary.ABS],
+  [Math.floor, OpUnary.FLOOR],
+  [Math.ceil, OpUnary.CEIL],
+  [Math.round, OpUnary.ROUND],
+  [Math.trunc, OpUnary.TRUNC],
+  [Math.sin, OpUnary.SIN],
+  [Math.cos, OpUnary.COS],
+  [Math.tan, OpUnary.TAN],
+  [Math.asin, OpUnary.ASIN],
+  [Math.acos, OpUnary.ACOS],
+  [Math.atan, OpUnary.ATAN],
+  [Math.sinh, OpUnary.SINH],
+  [Math.cosh, OpUnary.COSH],
+  [Math.tanh, OpUnary.TANH],
+  [Math.sign, OpUnary.SIGN],
 ]);
 
 export function applyUnaryElemwise(
@@ -380,10 +380,10 @@ export function applyUnaryElemwise(
     }
     // Complex tensor path.
     const opCode = nativeUnaryOpCode.get(realFn);
-    // tensorOps.complexUnaryElemwise supports all ops except ABS (op 5).
+    // tensorOps.complexUnaryElemwise supports all ops except ABS.
     if (
       opCode !== undefined &&
-      opCode !== 5 &&
+      opCode !== OpUnary.ABS &&
       v.data instanceof Float64Array &&
       v.imag instanceof Float64Array
     ) {
@@ -525,7 +525,7 @@ function applyUnaryRealResult(
     if (realFn === Math.abs && v.data instanceof Float64Array) {
       if (!v.imag) {
         const out = allocFloat64Array(n);
-        tensorOps.realUnaryElemwise(5, n, v.data, out); // OpUnary.ABS
+        tensorOps.realUnaryElemwise(OpUnary.ABS, n, v.data, out);
         return RTV.tensorRaw(out, v.shape.slice());
       }
       if (v.imag instanceof Float64Array) {
@@ -666,9 +666,9 @@ interface UnaryElemwiseSpec {
   complexFn: (re: number, im: number) => { re: number; im: number };
   /** Use applyUnaryElemwiseMaybeComplex instead of applyUnaryElemwise */
   maybeComplex?: boolean;
-  /** Opcode for the native unaryElemwise dispatch (see unary_elemwise.cpp).
-   * Used by the maybeComplex path so that e.g. sqrt/log can run in native C
-   * on the common all-in-domain case, then fall back for NaN entries only. */
+  /** OpUnary code for the tensor-ops dispatch. Used by the maybeComplex path
+   * so that e.g. sqrt/log can run in native C on the common all-in-domain
+   * case, then fall back for NaN entries only. */
   nativeOpCode?: number;
 }
 

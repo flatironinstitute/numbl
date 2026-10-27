@@ -4,8 +4,8 @@
  * All entry points have identical signatures across native and TS impls.
  * Caller owns input AND output memory; functions never allocate output.
  *
- * Selection happens once on first use per category and is cached
- * (the bridge identity is captured at module load via getLapackBridge()).
+ * Selection is not cached: every call reads getLapackBridge() and uses the
+ * native method if present, so a bridge set (or replaced) later takes effect.
  */
 
 import { getLapackBridge } from "../native/lapack-bridge.js";
