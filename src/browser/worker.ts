@@ -12,7 +12,7 @@ import { ExecSession } from "../numbl-core/execSession.js";
 import { VirtualFileSystem } from "../vfs/VirtualFileSystem.js";
 import { BrowserFileIOAdapter } from "../vfs/BrowserFileIOAdapter.js";
 import { BrowserSystemAdapter } from "../vfs/BrowserSystemAdapter.js";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { formatExecuteError } from "../workerErrorFormat.js";
 import { workerOnInput } from "../syncInputChannel.js";
 import { fetchMipCoreFiles, MIP_MARKER_PATH, MIP_SEARCH_PATH } from "./mip.js";

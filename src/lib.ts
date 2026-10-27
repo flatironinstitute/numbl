@@ -42,7 +42,7 @@ export type {
   WorkspaceFile,
   NativeBridge,
 } from "./numbl-core/workspace/index.js";
-export type { PlotInstruction } from "./graphics/types.js";
+export type { PlotInstruction } from "./numbl-core/plotting/types.js";
 
 export type {
   RuntimeValue,

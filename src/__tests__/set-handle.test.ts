@@ -4,8 +4,8 @@ import {
   figuresReducer,
   initialFiguresState,
   type FiguresState,
-} from "../graphics/figuresReducer.js";
-import type { AxesState } from "../graphics/figuresReducer.js";
+} from "../numbl-core/plotting/figuresReducer.js";
+import type { AxesState } from "../numbl-core/plotting/figuresReducer.js";
 
 /** Reduce all emitted plot instructions (as the viewer does) and return the
  *  current axes — the rendered state after the script runs. Without `--plot`,

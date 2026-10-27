@@ -1,6 +1,6 @@
 /** Messages between the NumblSession host and its worker. */
 
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 
 export interface BootFile {
   path: string;

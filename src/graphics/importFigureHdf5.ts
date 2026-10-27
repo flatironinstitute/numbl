@@ -5,7 +5,10 @@
  * writer.
  */
 
-import type { FigureState, AxesState } from "./figuresReducer.js";
+import type {
+  FigureState,
+  AxesState,
+} from "../numbl-core/plotting/figuresReducer.js";
 import {
   GRID_FIELDS,
   KIND_TO_CATEGORY,

@@ -1,10 +1,10 @@
 import { useReducer, useEffect, useRef, useState, useCallback } from "react";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
-} from "../graphics/figuresReducer.js";
+} from "../numbl-core/plotting/figuresReducer.js";
 import { restoreNaNs } from "../graphics/restoreNaNs.js";
 import { downloadFigureHdf5 } from "../graphics/exportFigureHdf5.js";
 import { buildFigureViewerLink } from "../graphics/openInFigureViewer.js";

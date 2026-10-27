@@ -10,8 +10,11 @@ import type {
   Bar3Trace,
   Quiver3Trace,
   PatchTrace,
-} from "./types.js";
-import { colormapLookup, type ColormapSpec } from "./colormaps.js";
+} from "../numbl-core/plotting/types.js";
+import {
+  colormapLookup,
+  type ColormapSpec,
+} from "../numbl-core/plotting/colormaps.js";
 
 // Color order for plot3 traces
 const TRACE_COLORS = [

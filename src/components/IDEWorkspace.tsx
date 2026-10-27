@@ -57,11 +57,11 @@ import {
   createNumblTokensProvider,
 } from "../numblLanguage.js";
 import { parseMFile } from "../numbl-core/parser/index.js";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import {
   figuresReducer,
   initialFiguresState,
-} from "../graphics/figuresReducer.js";
+} from "../numbl-core/plotting/figuresReducer.js";
 import { formatDiagnostic } from "../numbl-core/diagnostics";
 import { Splitter } from "./Splitter";
 import { FileBrowser } from "./FileBrowser";

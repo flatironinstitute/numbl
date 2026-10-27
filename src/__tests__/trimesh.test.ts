@@ -4,9 +4,9 @@ import {
   figuresReducer,
   initialFiguresState,
   type FiguresState,
-} from "../graphics/figuresReducer.js";
-import type { AxesState } from "../graphics/figuresReducer.js";
-import { computeAxisLimits } from "../graphics/axisLimits.js";
+} from "../numbl-core/plotting/figuresReducer.js";
+import type { AxesState } from "../numbl-core/plotting/figuresReducer.js";
+import { computeAxisLimits } from "../numbl-core/plotting/axisLimits.js";
 
 /** Reduce all emitted plot instructions (as the viewer does) and return the
  *  current axes — the rendered state after the script runs. */

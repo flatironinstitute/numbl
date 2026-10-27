@@ -12,7 +12,7 @@
  * setFigureUploader for any service that returns its own download URL. The
  * viewer just fetches whatever URL it's handed.
  */
-import type { FigureState } from "./figuresReducer.js";
+import type { FigureState } from "../numbl-core/plotting/figuresReducer.js";
 import { exportFigureHdf5 } from "./exportFigureHdf5.js";
 import { importFigureHdf5 } from "./importFigureHdf5.js";
 import {

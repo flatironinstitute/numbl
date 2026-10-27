@@ -33,7 +33,7 @@ The JIT sits on top of the interpreter as a registry of named executors (`src/nu
 
 ## Building
 
-After changing any files under `src/graphics/`, rebuild the plot viewer:
+After changing any files under `src/graphics/`, or the core plotting modules the viewer imports (`src/numbl-core/plotting/types.ts`, `figuresReducer.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`), rebuild the plot viewer:
 
 ```bash
 npm run build:plot-viewer

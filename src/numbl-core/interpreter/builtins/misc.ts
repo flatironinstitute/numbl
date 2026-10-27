@@ -39,7 +39,7 @@ import {
   mNeg,
 } from "../../helpers/arithmetic.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
-import { PARULA_ANCHORS } from "../../../graphics/colormaps.js";
+import { PARULA_ANCHORS } from "../../plotting/colormaps.js";
 import { incref, decref, getCurrentRuntime } from "../../runtime/refcount.js";
 import { stripClassNameArgs } from "./array-construction.js";
 import { parseShapeArgs } from "../../helpers/shape-utils.js";
@@ -539,7 +539,7 @@ registerIBuiltin({
 });
 
 // `set(handle, 'PropName', value, ...)` is registered as a runtime-closured
-// special builtin in specialBuiltins.ts (it needs to push `update_trace`
+// special builtin in plotting/builtins.ts (it needs to push `update_trace`
 // instructions so live edits reach the serialized plot viewer).
 
 // pathdef — no-op, returns empty string

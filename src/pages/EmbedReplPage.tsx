@@ -13,8 +13,8 @@ import { FigureView } from "../graphics/FigureView.js";
 import {
   figuresReducer,
   initialFiguresState,
-} from "../graphics/figuresReducer.js";
-import type { PlotInstruction } from "../graphics/types.js";
+} from "../numbl-core/plotting/figuresReducer.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 import { createInputSAB, mainThreadRespond } from "../syncInputChannel";
 import { useSystemFiles } from "../hooks/useSystemFiles.js";
 import { useMipCorePackage } from "../hooks/useMipCorePackage.js";

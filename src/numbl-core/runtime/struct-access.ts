@@ -20,8 +20,9 @@ import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
 import { allocFloat64Array } from "./alloc.js";
 import { horzcat } from "./tensor-construction.js";
-import { resolveColor, applyPatchProp } from "./plotUtils.js";
-import type { PatchTrace } from "../../graphics/types.js";
+import { resolveColor } from "../plotting/parseArgsCommon.js";
+import { applyPatchProp } from "../plotting/parseArgsPatch.js";
+import type { PatchTrace } from "../plotting/types.js";
 
 /** Convert a plain JS value stored on a graphics-handle trace into a runtime
  *  value when read as a property (e.g. `H.LineWidth`). */

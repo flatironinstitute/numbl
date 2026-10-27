@@ -12,7 +12,7 @@
  * `sendEventToHTMLSource` inside the callback reach this runtime.
  */
 import type { Runtime } from "./runtime.js";
-import type { PlotInstruction } from "../../graphics/types.js";
+import type { PlotInstruction } from "../plotting/types.js";
 import { RTV } from "./constructors.js";
 import { pushCurrentRuntime, popCurrentRuntime, decref } from "./refcount.js";
 import { isRuntimeFunction, type RuntimeFunction } from "./types.js";

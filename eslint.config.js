@@ -49,4 +49,23 @@ export default defineConfig([
       "react-refresh/only-export-components": "off",
     },
   },
+  // numbl-core must not depend on the renderer; plot data types and pure
+  // helpers shared with it live in src/numbl-core/plotting/.
+  {
+    files: ["src/numbl-core/**/*.ts"],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              regex: "(^|/)graphics/",
+              message:
+                "numbl-core must not import from src/graphics/; put shared plot code in src/numbl-core/plotting/.",
+            },
+          ],
+        },
+      ],
+    },
+  },
 ]);

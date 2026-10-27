@@ -1,4 +1,4 @@
-import type { PlotTrace } from "./types.js";
+import type { PlotTrace } from "../numbl-core/plotting/types.js";
 import { traceColor, getLineDash } from "./plotHelpers.js";
 
 export function drawLegend(

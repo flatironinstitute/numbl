@@ -5,12 +5,12 @@ import {
   initialFiguresState,
   type AxesState,
   type FiguresState,
-} from "../graphics/figuresReducer.js";
-import { computeAxisLimits } from "../graphics/axisLimits.js";
+} from "../numbl-core/plotting/figuresReducer.js";
+import { computeAxisLimits } from "../numbl-core/plotting/axisLimits.js";
 import {
   imagescColorLimits,
   imagescExtent,
-} from "../graphics/imagescExtent.js";
+} from "../numbl-core/plotting/imagescExtent.js";
 
 function renderedAxes(code: string): AxesState {
   const result = executeCode(code);

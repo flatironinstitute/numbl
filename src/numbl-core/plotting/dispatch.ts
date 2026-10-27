@@ -3,19 +3,10 @@
  * `(name, args)` → `PlotInstruction[]` mapping that every plotting
  * builtin performs.
  *
- * Historically this logic was scattered across two places:
- *   - `runtime.ts` registered the data-bearing plot names
- *     (`plot`, `surf`, `imagesc`, …) inside `initBuiltins`.
- *   - `specialBuiltins.ts` registered the graphics ops (`figure`,
- *     `title`, `xlabel`, `hold`, `subplot`, `clf`, …) inside
- *     `registerSpecialBuiltins`.
- *
- * Both sites pushed onto `rt.plotInstructions` and (for `hold` /
- * `tiledlayout` / `nexttile`) updated small flags on the Runtime.
- * `dispatchPlotBuiltin` is the consolidation. The Runtime registers
- * each name with a 1-line wrapper that calls this function and then
- * returns the right `nargout`-handle value; the side-effect (the
- * push) lives here.
+ * Registration lives in `builtins.ts`: each name gets a wrapper that
+ * calls this function and returns the right `nargout`-handle value; the
+ * side effect (the push onto `rt.plotInstructions`, plus the small
+ * hold / tiled-layout flags on the Runtime) lives here.
  *
  * Out-of-scope names — kept registered separately because their
  * semantics need the full Runtime context:
@@ -33,16 +24,16 @@
  * browser IDE without reimplementing per-builtin logic.
  */
 
-import type { RuntimeValue } from "./types.js";
+import type { RuntimeValue } from "../runtime/types.js";
 import {
   isRuntimeNumber,
   isRuntimeTensor,
   isRuntimeChar,
   isRuntimeString,
-} from "./types.js";
-import type { PlotInstruction } from "../../graphics/types.js";
-import { toNumber, toString } from "./convert.js";
-import { RuntimeError } from "./error.js";
+} from "../runtime/types.js";
+import type { PlotInstruction } from "./types.js";
+import { toNumber, toString } from "../runtime/convert.js";
+import { RuntimeError } from "../runtime/error.js";
 import {
   plotInstr,
   plotCall,
@@ -82,7 +73,7 @@ import {
   quiver3Call,
   viewCall,
   legendCall,
-} from "./runtimePlot.js";
+} from "./instructions.js";
 import { applyAxisCommand } from "./axisCommand.js";
 
 /** State carried by graphics ops that need to remember things between
@@ -123,7 +114,7 @@ export function dispatchPlotBuiltin(
   state: PlotDispatchState
 ): boolean {
   switch (name) {
-    // ── Data-bearing builtins: delegate to runtimePlot.ts ──────────
+    // ── Data-bearing builtins: delegate to instructions.ts ─────────
     case "plot":
       plotCall(instructions, args);
       return true;
@@ -316,7 +307,7 @@ export function dispatchPlotBuiltin(
     case "hold": {
       if (args.length > 0) {
         plotInstr(instructions, { type: "set_hold", value: args[0] });
-        // runtimePlot.plotInstr already parsed args[0] into a boolean
+        // plotInstr already parsed args[0] into a boolean
         // when pushing; mirror that to the dispatch state so an
         // adjacent ishold() returns the right thing.
         const last = instructions[instructions.length - 1];
@@ -587,10 +578,9 @@ function dispatchColormap(
   }
 }
 
-/** Names handled by `dispatchPlotBuiltin`. Useful for registering all
- *  of them in a loop (numbl's `initBuiltins` and `specialBuiltins.ts`
- *  do that for the side-effect-only subset). Stays in sync with the
- *  cases above by construction. */
+/** Names handled by `dispatchPlotBuiltin`. `builtins.ts` registers all
+ *  of them in a loop (for the side-effect-only subset). Stays in sync
+ *  with the cases above by construction. */
 export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
   "plot",
   "plot3",
@@ -658,8 +648,8 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
  *  stubs — they don't push plot instructions and don't render, but
  *  numbl accepts them so MATLAB scripts compile and run. Sources:
  *    - `interpreter/builtins/misc.ts` (`groot`, `gcf`, `gca`, `shg`,
- *      `newplot`, `xlim`, `ylim`, `set`, `get`, `ishold`)
- *    - `runtime/specialBuiltins.ts` (`drawnow`, `pause`)
+ *      `newplot`, `xlim`, `ylim`, `get`)
+ *    - `plotting/builtins.ts` (`drawnow`, `pause`, `ishold`, `set`)
  *
  *  These names belong here, alongside `PLOT_DISPATCH_NAMES`, because
  *  downstream consumers (mtoc2's translator, syntax highlighters,

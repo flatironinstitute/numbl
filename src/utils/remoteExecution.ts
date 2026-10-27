@@ -2,7 +2,7 @@
  * Remote execution service client
  */
 
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "../numbl-core/plotting/types.js";
 
 export interface RemoteExecutionFile {
   name: string;

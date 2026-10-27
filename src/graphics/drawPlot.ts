@@ -10,17 +10,23 @@ import type {
   HeatmapTrace,
   QuiverTrace,
   PatchTrace,
-} from "./types.js";
+} from "../numbl-core/plotting/types.js";
 import {
   traceColor,
   getLineDash,
   generateTicks,
   formatTick,
 } from "./plotHelpers.js";
-import { colormapLookup, type ColormapSpec } from "./colormaps.js";
-import { dataExtents } from "./axisLimits.js";
+import {
+  colormapLookup,
+  type ColormapSpec,
+} from "../numbl-core/plotting/colormaps.js";
+import { dataExtents } from "../numbl-core/plotting/axisLimits.js";
 import { drawMarkers } from "./plotMarkers.js";
-import { imagescColorLimits, imagescExtent } from "./imagescExtent.js";
+import {
+  imagescColorLimits,
+  imagescExtent,
+} from "../numbl-core/plotting/imagescExtent.js";
 import { drawLegend } from "./plotLegend.js";
 
 /** Generate tick values at powers of 10 for log-scale axes. */

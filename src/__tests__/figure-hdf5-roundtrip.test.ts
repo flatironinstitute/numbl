@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { exportFigureHdf5 } from "../graphics/exportFigureHdf5.js";
 import { importFigureHdf5 } from "../graphics/importFigureHdf5.js";
-import type { FigureState } from "../graphics/figuresReducer.js";
+import type { FigureState } from "../numbl-core/plotting/figuresReducer.js";
 
 function sampleFigure(): FigureState {
   return {

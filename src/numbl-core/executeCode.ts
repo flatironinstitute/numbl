@@ -11,7 +11,7 @@
 ).FloatXArray = Float64Array;
 
 import type { RuntimeValue } from "./runtime/index.js";
-import type { PlotInstruction } from "../graphics/types.js";
+import type { PlotInstruction } from "./plotting/types.js";
 import type { FileIOAdapter } from "./fileIOAdapter.js";
 import type { SystemAdapter } from "./systemAdapter.js";
 import type { WorkspaceFile } from "../numbl-core/workspace/index.js";

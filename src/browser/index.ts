@@ -31,4 +31,4 @@ export {
   type NumblSessionOptions,
 } from "./session.js";
 export type { BootFile, ExecuteResult, UihtmlComponent } from "./protocol.js";
-export type { PlotInstruction } from "../graphics/types.js";
+export type { PlotInstruction } from "../numbl-core/plotting/types.js";
