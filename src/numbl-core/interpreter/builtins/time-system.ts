@@ -18,10 +18,6 @@ export function getTicTime(): number {
   return ticTime;
 }
 
-export function setTicTime(ms: number): void {
-  ticTime = ms;
-}
-
 defineBuiltin({
   name: "tic",
   cases: [

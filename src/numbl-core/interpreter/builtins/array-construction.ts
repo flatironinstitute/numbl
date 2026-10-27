@@ -2,21 +2,13 @@
  * Array construction builtins: zeros, ones, nan/NaN, eye, linspace, logspace.
  */
 
-import {
-  isRuntimeTensor,
-  isRuntimeChar,
-  isRuntimeString,
-} from "../../runtime/types.js";
+import { isRuntimeChar, isRuntimeString } from "../../runtime/types.js";
 import type { RuntimeValue } from "../../runtime/types.js";
-import {
-  toNumber,
-  toString,
-  numel,
-  RuntimeError,
-} from "../../runtime/index.js";
+import { toNumber, toString, numel } from "../../runtime/index.js";
 import type { JitType, SignCategory } from "../../jitTypes.js";
 import { defineBuiltin, type BuiltinCase, makeTensor } from "./types.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
+import { parseShapeArgs, validateDim } from "../../helpers/shape-utils.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -58,35 +50,6 @@ export function stripClassNameArgs(args: RuntimeValue[]): RuntimeValue[] {
   }
   if (isStr(args[n - 1])) return args.slice(0, n - 1);
   return args;
-}
-
-/** Validate one dimension value: MATLAB rejects NaN, Inf, and non-integer
- *  sizes; negative integers are silently clamped to 0. */
-function validateDim(x: number): number {
-  if (!Number.isFinite(x) || !Number.isInteger(x))
-    throw new RuntimeError("Size inputs must be nonnegative integers.");
-  return Math.max(0, x);
-}
-
-/** Extract a single scalar dimension. With multiple size args MATLAB requires
- *  each to be a scalar — a 1×1 array counts, but a multi-element vector errors
- *  with "Size inputs must be scalar." */
-function toScalarDim(v: RuntimeValue): number {
-  if (isRuntimeTensor(v) && v.data.length !== 1)
-    throw new RuntimeError("Size inputs must be scalar.");
-  return validateDim(toNumber(v));
-}
-
-/** Parse shape arguments: zeros(2,3) or zeros([2,3]) -> [2, 3].
- *  Negative dimensions are clamped to 0. */
-function parseShapeArgs(args: RuntimeValue[]): number[] {
-  if (args.length === 1 && isRuntimeTensor(args[0])) {
-    const t = args[0];
-    const shape: number[] = [];
-    for (let i = 0; i < t.data.length; i++) shape.push(validateDim(t.data[i]));
-    return shape;
-  }
-  return args.map(toScalarDim);
 }
 
 /** Build cases for array constructors that take shape args and return a real tensor. */

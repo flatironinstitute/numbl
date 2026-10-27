@@ -42,6 +42,7 @@ import { RTV, RuntimeError } from "../../runtime/index.js";
 import { toNumber } from "../../runtime/convert.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { registerIBuiltin } from "./types.js";
+import { toNumArray } from "../../helpers/reduction-helpers.js";
 
 // ── Internal representation ────────────────────────────────────────────────
 
@@ -234,13 +235,6 @@ function isNumericArg(v: RuntimeValue): boolean {
   );
 }
 
-function toNumArray(v: RuntimeValue): number[] {
-  if (isRuntimeNumber(v)) return [v];
-  if (isRuntimeLogical(v)) return [v ? 1 : 0];
-  if (isRuntimeTensor(v)) return Array.from(v.data);
-  throw new RuntimeError("graph: node/weight arguments must be numeric");
-}
-
 function argString(v: RuntimeValue): string | null {
   if (isRuntimeString(v)) return v;
   if (isRuntimeChar(v)) return v.value;
@@ -278,8 +272,8 @@ registerIBuiltin({
 
       // Edge-list form: graph(s, t, ...) where the 2nd arg is numeric.
       if (args.length >= 2 && isNumericArg(args[1])) {
-        const s = toNumArray(args[0]);
-        const t = toNumArray(args[1]);
+        const s = toNumArray(args[0], "graph");
+        const t = toNumArray(args[1], "graph");
         if (s.length !== t.length) {
           throw new RuntimeError("graph: s and t must have the same length");
         }
@@ -288,7 +282,7 @@ registerIBuiltin({
         let num: number | null = null;
         let omitSelfLoops = false;
         if (args.length >= 3 && isNumericArg(args[2])) {
-          w = toNumArray(args[2]);
+          w = toNumArray(args[2], "graph");
           weighted = true;
           if (args.length >= 4 && isNumericArg(args[3])) {
             num = Math.floor(toNumber(args[3]));
@@ -439,14 +433,14 @@ registerIBuiltin({
         throw new RuntimeError("addedge: requires nodes s and t");
       }
       const weighted = graphWeighted(g);
-      const s = toNumArray(args[1]);
-      const t = toNumArray(args[2]);
+      const s = toNumArray(args[1], "graph");
+      const t = toNumArray(args[2], "graph");
       if (s.length !== t.length) {
         throw new RuntimeError("addedge: s and t must have the same length");
       }
       let w: number[] | null = null;
       if (args.length >= 4) {
-        w = toNumArray(args[3]);
+        w = toNumArray(args[3], "graph");
       } else if (weighted) {
         throw new RuntimeError(
           "addedge: Must specify weights when adding an edge to a weighted graph."

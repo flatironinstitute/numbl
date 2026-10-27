@@ -2,74 +2,19 @@
  * Binary scalar builtins: atan2, min, max, mod, rem, power.
  */
 
-import {
-  isRuntimeTensor,
-  type RuntimeTensor,
-  type RuntimeValue,
-} from "../../runtime/types.js";
-import {
-  mElemPow,
-  getBroadcastShape,
-  broadcastIterate,
-} from "../../helpers/arithmetic.js";
+import { type RuntimeValue } from "../../runtime/types.js";
+import { mElemPow } from "../../helpers/arithmetic.js";
 import { minMaxImpl } from "../../helpers/reduction/min-max.js";
-import { type BuiltinCase, defineBuiltin, makeTensor } from "./types.js";
+import {
+  type BuiltinCase,
+  applyBinaryElemwise,
+  defineBuiltin,
+} from "./types.js";
 import {
   type JitType,
   shapeAfterReduction,
   unifySign,
 } from "../../jitTypes.js";
-import { allocFloat64Array } from "../../runtime/alloc.js";
-
-// ── Tensor-capable binary helper ─────────────────────────────────────────
-
-/** Apply a binary function element-wise over two tensors/scalars/mixed. */
-function applyBinaryElemwise(
-  args: RuntimeValue[],
-  fn: (a: number, b: number) => number,
-  name: string
-): RuntimeValue {
-  const a = typeof args[0] === "boolean" ? (args[0] ? 1 : 0) : args[0];
-  const b = typeof args[1] === "boolean" ? (args[1] ? 1 : 0) : args[1];
-  if (typeof a === "number" && typeof b === "number") return fn(a, b);
-
-  const aIsNum = typeof a === "number";
-  const bIsNum = typeof b === "number";
-  const aTensor = aIsNum ? null : (a as RuntimeTensor);
-  const bTensor = bIsNum ? null : (b as RuntimeTensor);
-
-  if (!aIsNum && !isRuntimeTensor(a))
-    throw new Error(`${name}: unsupported argument type`);
-  if (!bIsNum && !isRuntimeTensor(b))
-    throw new Error(`${name}: unsupported argument type`);
-
-  if (aIsNum && bTensor) {
-    const n = bTensor.data.length;
-    const out = allocFloat64Array(n);
-    const av = a as number;
-    for (let i = 0; i < n; i++) out[i] = fn(av, bTensor.data[i]);
-    return makeTensor(out, undefined, bTensor.shape.slice());
-  }
-  if (aTensor && bIsNum) {
-    const n = aTensor.data.length;
-    const out = allocFloat64Array(n);
-    const bv = b as number;
-    for (let i = 0; i < n; i++) out[i] = fn(aTensor.data[i], bv);
-    return makeTensor(out, undefined, aTensor.shape.slice());
-  }
-  if (aTensor && bTensor) {
-    const outShape = getBroadcastShape(aTensor.shape, bTensor.shape);
-    if (outShape === null)
-      throw new Error(`${name}: Matrix dimensions must agree`);
-    const n = outShape.reduce((acc, d) => acc * d, 1);
-    const out = allocFloat64Array(n);
-    broadcastIterate(aTensor.shape, bTensor.shape, outShape, (ai, bi, oi) => {
-      out[oi] = fn(aTensor.data[ai], bTensor.data[bi]);
-    });
-    return makeTensor(out, undefined, outShape);
-  }
-  throw new Error(`${name}: unsupported argument types`);
-}
 
 // ── Binary real element-wise cases ──────────────────────────────────────
 

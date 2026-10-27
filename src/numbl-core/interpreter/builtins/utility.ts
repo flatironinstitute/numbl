@@ -15,33 +15,16 @@ import {
   isRuntimeSparseMatrix,
   isRuntimeStringArray,
 } from "../../runtime/types.js";
-import type {
-  RuntimeValue,
-  RuntimeTensor,
-  RuntimeSparseMatrix,
-} from "../../runtime/types.js";
+import type { RuntimeValue, RuntimeTensor } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import { RuntimeError } from "../../runtime/error.js";
 import { isEnumInstance, enumScalarEquals } from "../../runtime/runtimeEnum.js";
 import { sprintfFormat } from "../../helpers/string.js";
 import { RTV } from "../../runtime/constructors.js";
 import { emptyStackField } from "../../runtime/runtime.js";
-import { allocFloat64Array } from "../../runtime/alloc.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
 
 // ── isequal ──────────────────────────────────────────────────────────────
-
-function sparseToDense(S: RuntimeSparseMatrix): RuntimeTensor {
-  const data = allocFloat64Array(S.m * S.n);
-  const imag = S.pi ? allocFloat64Array(S.m * S.n) : undefined;
-  for (let col = 0; col < S.n; col++) {
-    for (let k = S.jc[col]; k < S.jc[col + 1]; k++) {
-      const idx = col * S.m + S.ir[k];
-      data[idx] = S.pr[k];
-      if (imag && S.pi) imag[idx] = S.pi[k];
-    }
-  }
-  return RTV.tensor(data, [S.m, S.n], imag);
-}
 
 function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
   // Enumeration members compare like `==` (value vs member/number, name vs

@@ -115,12 +115,6 @@ export abstract class Refcounted {
   }
 }
 
-/** True if the value is a container that participates in refcounting.
- *  Primitives (number, boolean, string) return false. */
-export function isRefcountable(v: unknown): v is Refcounted {
-  return v instanceof Refcounted;
-}
-
 /** Increment refcount on a value if it's a container; primitives are noop. */
 export function incref(v: unknown): void {
   if (v instanceof Refcounted) v.incref();

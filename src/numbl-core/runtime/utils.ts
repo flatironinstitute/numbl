@@ -2,9 +2,36 @@
  * Tensor shape/indexing utilities.
  */
 
-import { type RuntimeTensor } from "./types.js";
+import {
+  type RuntimeTensor,
+  type RuntimeValue,
+  isRuntimeCell,
+  isRuntimeChar,
+  isRuntimeClassInstanceArray,
+  isRuntimeSparseMatrix,
+  isRuntimeStringArray,
+  isRuntimeStructArray,
+  isRuntimeTensor,
+} from "./types.js";
 
 // ── Tensor shape utilities ──────────────────────────────────────────────
+
+/** The MATLAB size of any runtime value, with at least two dimensions.
+ *  Scalars, strings, structs and objects are 1×1. */
+export function valueShape(v: RuntimeValue): number[] {
+  if (isRuntimeTensor(v)) {
+    if (v.shape.length >= 2) return v.shape;
+    return v.shape.length === 1 ? [1, v.shape[0]] : [1, 1];
+  }
+  if (isRuntimeChar(v))
+    return v.shape ?? (v.value.length === 0 ? [0, 0] : [1, v.value.length]);
+  if (isRuntimeSparseMatrix(v)) return [v.m, v.n];
+  if (isRuntimeCell(v)) return v.shape;
+  if (isRuntimeStructArray(v)) return [1, v.elements.length];
+  if (isRuntimeClassInstanceArray(v)) return [...v.shape];
+  if (isRuntimeStringArray(v)) return [...v.shape];
+  return [1, 1];
+}
 
 /** Get 2D size (rows, cols) from shape, padding with 1s as needed.
  *  For N-D tensors (N>2), trailing dimensions are collapsed into cols,
