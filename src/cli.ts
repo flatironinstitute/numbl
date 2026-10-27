@@ -21,8 +21,10 @@ import {
   getAllIBuiltinNames,
   getIBuiltinHelp,
 } from "./numbl-core/interpreter/builtins/index.js";
-import { setLapackBridge } from "./numbl-core/native/lapack-bridge.js";
-import { setBridgeLog } from "./numbl-core/native/bridge-resolve.js";
+import {
+  setLapackBridge,
+  setBridgeLog,
+} from "./numbl-core/native/lapack-bridge.js";
 import {
   diagnoseErrors,
   formatDiagnostics,

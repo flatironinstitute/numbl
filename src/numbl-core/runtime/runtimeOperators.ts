@@ -264,7 +264,6 @@ export function binop(op: string, a: unknown, b: unknown): unknown {
         break;
       }
       const X = linsolveLapack(tensorA.data, mA, nA, tensorB.data, nB);
-      if (!X) throw new RuntimeError("LeftDiv (\\): LAPACK bridge unavailable");
       result = RTV.tensor(X, [nA, nB]);
       break;
     }

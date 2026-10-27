@@ -97,7 +97,7 @@ export function fillRandn(data: Float64Array): void {
   // Native fast path: seeded PRNG + addon available
   if (_rngState !== null) {
     const bridge = getLapackBridge();
-    if (bridge?.fillRandn) {
+    if (bridge.fillRandn) {
       const r = bridge.fillRandn(
         _rngState,
         data.length,

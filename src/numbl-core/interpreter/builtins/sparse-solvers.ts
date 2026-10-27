@@ -50,7 +50,7 @@ import {
   type LuResult,
 } from "../../helpers/sparse-direct.js";
 import { emitWarning } from "../../helpers/warn.js";
-import { getEffectiveBridge } from "../../native/bridge-resolve.js";
+import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { registerIBuiltin } from "./types.js";
 
 type Sp = RuntimeSparseMatrix;
@@ -339,9 +339,7 @@ function diagRatio(S: Sp): number {
 
 /** Dense real LU via the LAPACK bridge, returned in the sparse LuResult form. */
 function denseLuFactors(data: Float64Array, n: number): LuResult {
-  const bridge = getEffectiveBridge("lu", "lu");
-  if (!bridge?.lu) throw new RuntimeError("decomposition: LU unavailable");
-  const { LU, ipiv } = bridge.lu(toF64(data), n, n);
+  const { LU, ipiv } = getLapackBridge().lu(toF64(data), n, n);
   const perm = new Int32Array(n);
   for (let i = 0; i < n; i++) perm[i] = i;
   for (let i = 0; i < ipiv.length; i++) {
@@ -372,9 +370,7 @@ function denseLuFactors(data: Float64Array, n: number): LuResult {
 
 /** Dense real Cholesky via the LAPACK bridge; lower factor sparse, or null. */
 function denseCholLower(data: Float64Array, n: number): Sp | null {
-  const bridge = getEffectiveBridge("chol", "chol");
-  if (!bridge?.chol) throw new RuntimeError("decomposition: chol unavailable");
-  const { R, info } = bridge.chol(toF64(data), n, false);
+  const { R, info } = getLapackBridge().chol(toF64(data), n, false);
   if (info > 0) return null;
   return denseDataToSparse(R, n, n);
 }

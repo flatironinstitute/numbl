@@ -141,7 +141,7 @@ function computeFFT1D(
   inverse: boolean
 ): [Float64Array, Float64Array] {
   const bridge = getLapackBridge();
-  if (bridge?.fft1dComplex && inRe.length > 128) {
+  if (bridge.fft1dComplex && inRe.length > 128) {
     const result = bridge.fft1dComplex(inRe, inIm, inRe.length, inverse);
     return [result.re, result.im];
   }
@@ -226,7 +226,7 @@ function applyFFTAlongDim(
 
   // Try native batch FFT
   const bridge = getLapackBridge();
-  if (bridge?.fftAlongDim) {
+  if (bridge.fftAlongDim) {
     const inRe64 =
       inData instanceof Float64Array ? inData : allocFloat64Array(inData);
     const inIm64: Float64Array | null = inImag

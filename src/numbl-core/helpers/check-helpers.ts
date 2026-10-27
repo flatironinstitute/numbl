@@ -130,45 +130,6 @@ export function buildDiagMatrix(
 }
 
 /**
- * In-place Gauss-Jordan elimination with partial pivoting on a column-major
- * augmented matrix [A | B] of size `rows × totalCols`.
- */
-export function gaussJordanEliminate(
-  aug: Float64Array,
-  rows: number,
-  totalCols: number
-): void {
-  for (let col = 0; col < rows; col++) {
-    let maxVal = Math.abs(aug[col * rows + col]);
-    let maxRow = col;
-    for (let row = col + 1; row < rows; row++) {
-      const val = Math.abs(aug[col * rows + row]);
-      if (val > maxVal) {
-        maxVal = val;
-        maxRow = row;
-      }
-    }
-    if (maxRow !== col) {
-      for (let j = 0; j < totalCols; j++) {
-        const tmp = aug[j * rows + col];
-        aug[j * rows + col] = aug[j * rows + maxRow];
-        aug[j * rows + maxRow] = tmp;
-      }
-    }
-    const pivot = aug[col * rows + col];
-    if (Math.abs(pivot) < 1e-14) continue;
-    for (let j = 0; j < totalCols; j++) aug[j * rows + col] /= pivot;
-    for (let row = 0; row < rows; row++) {
-      if (row === col) continue;
-      const factor = aug[col * rows + row];
-      for (let j = 0; j < totalCols; j++) {
-        aug[j * rows + row] -= factor * aug[j * rows + col];
-      }
-    }
-  }
-}
-
-/**
  * Call a registered builtin from within another builtin's apply().
  * Convenience wrapper that includes the caller name in error messages.
  */

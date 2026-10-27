@@ -26,7 +26,7 @@ import {
 } from "../../runtime/types.js";
 import { defineBuiltin } from "./types.js";
 import type { JitType } from "../../jitTypes.js";
-import { getEffectiveBridge } from "../../native/bridge-resolve.js";
+import { getLapackBridge } from "../../native/lapack-bridge.js";
 import { linsolveLapack } from "../../helpers/linsolve.js";
 import { allocFloat64Array, withScratch } from "../../runtime/alloc.js";
 
@@ -482,7 +482,6 @@ defineBuiltin({
         for (let i = 0; i < m; i++) B[i] = yArr[i];
 
         const X = linsolveLapack(V, m, ncols, B, 1);
-        if (!X) throw new RuntimeError("polyfit: LAPACK bridge unavailable");
 
         const result = allocFloat64Array(ncols);
         for (let i = 0; i < ncols; i++) result[i] = X[i];
@@ -976,69 +975,13 @@ defineBuiltin({
         for (let i = 0; i < n - 1; i++) C[(i + 1) * n + i] = 1;
         for (let i = 0; i < n; i++) C[i] = -p[i + 1] / p[0];
 
-        const bridge = getEffectiveBridge("roots", "eig");
-        if (bridge.eig) {
-          const f64 = C instanceof Float64Array ? C : allocFloat64Array(C);
-          const eigResult = bridge.eig(
-            f64 as Float64Array,
-            n,
-            false,
-            false,
-            true
-          );
-          if (eigResult) {
-            let hasComplex = false;
-            for (let i = 0; i < n; i++) {
-              if (Math.abs(eigResult.wi[i]) > 0) {
-                hasComplex = true;
-                break;
-              }
-            }
-            if (hasComplex) {
-              const realPart = allocFloat64Array(n);
-              const imagPart = allocFloat64Array(n);
-              for (let i = 0; i < n; i++) {
-                realPart[i] = eigResult.wr[i];
-                imagPart[i] = eigResult.wi[i];
-              }
-              return RTV.tensor(realPart, [n, 1], imagPart);
-            }
-            const result = allocFloat64Array(n);
-            for (let i = 0; i < n; i++) result[i] = eigResult.wr[i];
-            return RTV.tensor(result, [n, 1]);
-          }
-        }
-
-        if (n === 1) {
-          return RTV.tensor(allocFloat64Array([-p[1] / p[0]]), [1, 1]);
-        }
-        if (n === 2) {
-          const a = p[0],
-            b = p[1],
-            c = p[2];
-          const disc = b * b - 4 * a * c;
-          if (disc >= 0) {
-            return RTV.tensor(
-              allocFloat64Array([
-                (-b + Math.sqrt(disc)) / (2 * a),
-                (-b - Math.sqrt(disc)) / (2 * a),
-              ]),
-              [2, 1]
-            );
-          }
-          return RTV.tensor(
-            allocFloat64Array([-b / (2 * a), -b / (2 * a)]),
-            [2, 1],
-            allocFloat64Array([
-              Math.sqrt(-disc) / (2 * a),
-              -Math.sqrt(-disc) / (2 * a),
-            ])
-          );
-        }
-
-        throw new RuntimeError(
-          "roots: LAPACK required for polynomials of degree > 2"
-        );
+        const { wr, wi } = getLapackBridge().eig(C, n, false, false, true);
+        const realPart = allocFloat64Array(n);
+        for (let i = 0; i < n; i++) realPart[i] = wr[i];
+        if (!wi.some(v => Math.abs(v) > 0)) return RTV.tensor(realPart, [n, 1]);
+        const imagPart = allocFloat64Array(n);
+        for (let i = 0; i < n; i++) imagPart[i] = wi[i];
+        return RTV.tensor(realPart, [n, 1], imagPart);
       },
     },
   ],
@@ -1084,47 +1027,20 @@ defineBuiltin({
 
         if (m !== n) throw new RuntimeError("poly: matrix must be square");
 
-        const bridge = getEffectiveBridge("poly", "eig");
-        if (bridge.eig) {
-          const f64 =
-            A.data instanceof Float64Array ? A.data : allocFloat64Array(A.data);
-          const eigResult = bridge.eig(
-            f64 as Float64Array,
-            n,
-            false,
-            false,
-            true
-          );
-          if (eigResult) {
-            const roots = allocFloat64Array(n);
-            for (let i = 0; i < n; i++) roots[i] = eigResult.wr[i];
-            let coeffs = allocFloat64Array(n + 1);
-            coeffs[0] = 1;
-            for (let i = 0; i < n; i++) {
-              const newCoeffs = allocFloat64Array(n + 1);
-              newCoeffs[0] = coeffs[0];
-              for (let j = 1; j <= i + 1; j++) {
-                newCoeffs[j] = coeffs[j] - roots[i] * coeffs[j - 1];
-              }
-              coeffs = newCoeffs;
-            }
-            return RTV.tensor(coeffs, [1, n + 1]);
+        const f64 =
+          A.data instanceof Float64Array ? A.data : allocFloat64Array(A.data);
+        const { wr } = getLapackBridge().eig(f64, n, false, false, true);
+        let coeffs = allocFloat64Array(n + 1);
+        coeffs[0] = 1;
+        for (let i = 0; i < n; i++) {
+          const newCoeffs = allocFloat64Array(n + 1);
+          newCoeffs[0] = coeffs[0];
+          for (let j = 1; j <= i + 1; j++) {
+            newCoeffs[j] = coeffs[j] - wr[i] * coeffs[j - 1];
           }
+          coeffs = newCoeffs;
         }
-
-        if (n === 2) {
-          const a00 = A.data[0],
-            a10 = A.data[1],
-            a01 = A.data[m],
-            a11 = A.data[m + 1];
-          const tr = a00 + a11;
-          const dt = a00 * a11 - a01 * a10;
-          return RTV.tensor(allocFloat64Array([1, -tr, dt]), [1, 3]);
-        }
-
-        throw new RuntimeError(
-          "poly: matrix input requires LAPACK for matrices > 2x2"
-        );
+        return RTV.tensor(coeffs, [1, n + 1]);
       },
     },
   ],

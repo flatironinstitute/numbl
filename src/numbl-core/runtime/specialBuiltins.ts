@@ -82,7 +82,7 @@ import {
   isRuntimeGraphicsHandle,
 } from "../runtime/types.js";
 import { dgetrf as _dgetrf } from "../../ts-lapack/src/SRC/dgetrf.js";
-import { getEffectiveBridge } from "../native/bridge-resolve.js";
+import { getLapackBridge } from "../native/lapack-bridge.js";
 import { toF64, maybeComplexTensor } from "../helpers/check-helpers.js";
 import {
   selectEigsIndices,
@@ -2791,57 +2791,31 @@ function _gmresImpl(
       const M1cv = _extractComplexMatrix(M1arg, n * n);
       const M2cv = _extractComplexMatrix(M2arg, n * n);
 
-      const bridge = getEffectiveBridge("gmresComplex", "gmresComplex");
-      if (bridge?.gmresComplex) {
-        const r = bridge.gmresComplex(
-          ARe,
-          AIm,
-          n,
-          bCV.re,
-          bCV.im,
-          restart,
-          tol,
-          maxit,
-          M1cv?.re ?? null,
-          M1cv?.im ?? null,
-          M2cv?.re ?? null,
-          M2cv?.im ?? null,
-          x0CV?.re ?? null,
-          x0CV?.im ?? null
-        );
-        flag = r.flag;
-        relres = r.relres;
-        iter = [r.iter[0], r.iter[1]];
-        resvec = r.resvec;
-        xTensor = RTV.tensor(
-          allocFloat64Array(r.xRe),
-          [n, 1],
-          allocFloat64Array(r.xIm)
-        );
-      } else {
-        // Fallback: use gmresCoreComplex with matrix callbacks
-        const matvec = _makeComplexMatvec(rt, Aarg, n);
-        const precSolve = _makeComplexPrecSolve(rt, M1arg, M2arg, n);
-        const r = gmresCoreComplex(
-          matvec,
-          precSolve,
-          bCV,
-          n,
-          restart,
-          tol,
-          maxit,
-          x0CV
-        );
-        flag = r.flag;
-        relres = r.relres;
-        iter = r.iter;
-        resvec = r.resvec;
-        xTensor = RTV.tensor(
-          allocFloat64Array(r.x.re),
-          [n, 1],
-          allocFloat64Array(r.x.im)
-        );
-      }
+      const r = getLapackBridge().gmresComplex(
+        ARe,
+        AIm,
+        n,
+        bCV.re,
+        bCV.im,
+        restart,
+        tol,
+        maxit,
+        M1cv?.re ?? null,
+        M1cv?.im ?? null,
+        M2cv?.re ?? null,
+        M2cv?.im ?? null,
+        x0CV?.re ?? null,
+        x0CV?.im ?? null
+      );
+      flag = r.flag;
+      relres = r.relres;
+      iter = [r.iter[0], r.iter[1]];
+      resvec = r.resvec;
+      xTensor = RTV.tensor(
+        allocFloat64Array(r.xRe),
+        [n, 1],
+        allocFloat64Array(r.xIm)
+      );
     } else {
       // Function handle or mixed: use gmresCoreComplex with JS callbacks
       const matvec = _makeComplexMatvec(rt, Aarg, n);
@@ -2891,42 +2865,22 @@ function _gmresImpl(
       const M1data = _extractMatrix(M1arg);
       const M2data = _extractMatrix(M2arg);
 
-      const bridge = getEffectiveBridge("gmres", "gmres");
-      if (bridge?.gmres) {
-        const result = bridge.gmres(
-          Adata,
-          n,
-          bData,
-          restart,
-          tol,
-          maxit,
-          M1data,
-          M2data,
-          x0
-        );
-        xResult = result.x;
-        flag = result.flag;
-        relres = result.relres;
-        iter = [result.iter[0], result.iter[1]];
-        resvec = result.resvec;
-      } else {
-        const r = _gmresWithCallbacks(
-          Adata,
-          n,
-          bData,
-          restart,
-          tol,
-          maxit,
-          M1data,
-          M2data,
-          x0
-        );
-        xResult = r.x;
-        flag = r.flag;
-        relres = r.relres;
-        iter = r.iter;
-        resvec = r.resvec;
-      }
+      const result = getLapackBridge().gmres(
+        Adata,
+        n,
+        bData,
+        restart,
+        tol,
+        maxit,
+        M1data,
+        M2data,
+        x0
+      );
+      xResult = result.x;
+      flag = result.flag;
+      relres = result.relres;
+      iter = [result.iter[0], result.iter[1]];
+      resvec = result.resvec;
     } else {
       const matvec: MatvecFn = _makeMatvec(rt, Aarg, n);
       const precSolve: PrecSolveFn | null = _makePrecSolve(rt, M1arg, M2arg, n);
@@ -3093,48 +3047,6 @@ function _makeSinglePrecSolve(
     luSolveInPlace(n, LU, ipiv, z);
     return z;
   };
-}
-
-/** gmresCore with matrix-based callbacks (fallback when bridge has no gmres). */
-function _gmresWithCallbacks(
-  A: Float64Array,
-  n: number,
-  b: Float64Array,
-  restart: number,
-  tol: number,
-  maxit: number,
-  M1: Float64Array | null,
-  M2: Float64Array | null,
-  x0: Float64Array | null
-): import("../helpers/gmres.js").GmresResult {
-  const matvec: MatvecFn = (x: Float64Array): Float64Array => {
-    const y = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) {
-      let s = 0;
-      for (let j = 0; j < n; j++) s += A[i + j * n] * x[j];
-      y[i] = s;
-    }
-    return y;
-  };
-
-  let precSolve: PrecSolveFn | null = null;
-  if (M1 || M2) {
-    const m1lu = M1 ? allocFloat64Array(M1) : null;
-    const m1ipiv = M1 ? new Int32Array(n) : null;
-    if (m1lu && m1ipiv) _dgetrf(n, n, m1lu, n, m1ipiv);
-    const m2lu = M2 ? allocFloat64Array(M2) : null;
-    const m2ipiv = M2 ? new Int32Array(n) : null;
-    if (m2lu && m2ipiv) _dgetrf(n, n, m2lu, n, m2ipiv);
-
-    precSolve = (r: Float64Array): Float64Array => {
-      const z = allocFloat64Array(r);
-      if (m1lu && m1ipiv) luSolveInPlace(n, m1lu, m1ipiv, z);
-      if (m2lu && m2ipiv) luSolveInPlace(n, m2lu, m2ipiv, z);
-      return z;
-    };
-  }
-
-  return gmresCore(matvec, precSolve, b, n, restart, tol, maxit, x0);
 }
 
 // ── Complex gmres helpers ─────────────────────────────────────────────────
@@ -3324,62 +3236,12 @@ function _makeSingleComplexPrecSolve(
   }
   // Matrix: pre-factor with complex LU
   const { re: MRe, im: MIm } = _toComplexMatrix(Marg, n * n);
-  const ipiv = new Int32Array(n);
-  _complexLuFactor(n, MRe, MIm, ipiv);
+  const { LURe, LUIm, ipiv } = getLapackBridge().luComplex(MRe, MIm, n, n);
 
   return (r: ComplexVec): ComplexVec => {
     const zRe = allocFloat64Array(r.re);
     const zIm = allocFloat64Array(r.im);
-    complexLuSolveInPlace(n, MRe, MIm, ipiv, zRe, zIm);
+    complexLuSolveInPlace(n, LURe, LUIm, ipiv, zRe, zIm);
     return { re: zRe, im: zIm };
   };
-}
-
-/** Manual complex LU factorization with partial pivoting (in-place). */
-function _complexLuFactor(
-  n: number,
-  re: Float64Array,
-  im: Float64Array,
-  ipiv: Int32Array
-): void {
-  for (let k = 0; k < n; k++) {
-    let maxVal = -1,
-      maxIdx = k;
-    for (let i = k; i < n; i++) {
-      const v = Math.sqrt(
-        re[i + k * n] * re[i + k * n] + im[i + k * n] * im[i + k * n]
-      );
-      if (v > maxVal) {
-        maxVal = v;
-        maxIdx = i;
-      }
-    }
-    ipiv[k] = maxIdx + 1;
-    if (maxIdx !== k) {
-      for (let j = 0; j < n; j++) {
-        let tmp = re[k + j * n];
-        re[k + j * n] = re[maxIdx + j * n];
-        re[maxIdx + j * n] = tmp;
-        tmp = im[k + j * n];
-        im[k + j * n] = im[maxIdx + j * n];
-        im[maxIdx + j * n] = tmp;
-      }
-    }
-    const dR = re[k + k * n],
-      dI = im[k + k * n];
-    const dAbs2 = dR * dR + dI * dI;
-    if (dAbs2 === 0) continue;
-    for (let i = k + 1; i < n; i++) {
-      const aR = re[i + k * n],
-        aI = im[i + k * n];
-      const lR = (aR * dR + aI * dI) / dAbs2;
-      const lI = (aI * dR - aR * dI) / dAbs2;
-      re[i + k * n] = lR;
-      im[i + k * n] = lI;
-      for (let j = k + 1; j < n; j++) {
-        re[i + j * n] -= lR * re[k + j * n] - lI * im[k + j * n];
-        im[i + j * n] -= lR * im[k + j * n] + lI * re[k + j * n];
-      }
-    }
-  }
 }

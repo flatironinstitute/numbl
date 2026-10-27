@@ -30,7 +30,6 @@ import {
   getIBuiltin,
   inferJitType,
 } from "./types.js";
-import { getEffectiveBridge } from "../../native/bridge-resolve.js";
 import { getLapackBridge } from "../../native/lapack-bridge.js";
 import {
   toF64,
@@ -39,7 +38,6 @@ import {
   buildDiagMatrix,
   buildEigenvectorMatrix,
   maybeComplexTensor,
-  gaussJordanEliminate,
 } from "../../helpers/check-helpers.js";
 import { forEachSlice, copyTensor } from "../../helpers/reduction-helpers.js";
 import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
@@ -340,34 +338,29 @@ function normImplTensor(v: RuntimeTensor, args: RuntimeValue[]): RuntimeValue {
     // The matrix 2-norm is the largest singular value. For complex A = X + iY,
     // use the real embedding R = [X -Y; Y X] (2m×2n): its singular values are
     // those of A (each doubled), so max(svd(R)) = ‖A‖₂. This lets the complex
-    // 2-norm use the real SVD (available on both bridges); using only the real
-    // part would be wrong.
-    const bridge = getEffectiveBridge("norm", "svd");
-    if (bridge && bridge.svd) {
-      if (imag) {
-        const R = allocFloat64Array(4 * rows * cols);
-        const tm = 2 * rows;
-        for (let j = 0; j < cols; j++) {
-          for (let i = 0; i < rows; i++) {
-            const a = v.data[j * rows + i];
-            const b = imag[j * rows + i];
-            R[j * tm + i] = a; // top-left   X
-            R[j * tm + (rows + i)] = b; // bottom-left  Y
-            R[(cols + j) * tm + i] = -b; // top-right   -Y
-            R[(cols + j) * tm + (rows + i)] = a; // bottom-right X
-          }
+    // 2-norm use the real SVD (which has no TypeScript gap); using only the
+    // real part would be wrong.
+    const bridge = getLapackBridge();
+    if (imag) {
+      const R = allocFloat64Array(4 * rows * cols);
+      const tm = 2 * rows;
+      for (let j = 0; j < cols; j++) {
+        for (let i = 0; i < rows; i++) {
+          const a = v.data[j * rows + i];
+          const b = imag[j * rows + i];
+          R[j * tm + i] = a; // top-left   X
+          R[j * tm + (rows + i)] = b; // bottom-left  Y
+          R[(cols + j) * tm + i] = -b; // top-right   -Y
+          R[(cols + j) * tm + (rows + i)] = a; // bottom-right X
         }
-        const result = bridge.svd(R, tm, 2 * cols, false, false);
-        return RTV.num(result.S[0]);
       }
-      const f64 =
-        v.data instanceof Float64Array ? v.data : allocFloat64Array(v.data);
-      const result = bridge.svd(f64, rows, cols, false, false);
+      const result = bridge.svd(R, tm, 2 * cols, false, false);
       return RTV.num(result.S[0]);
     }
-    throw new RuntimeError(
-      "norm: matrix 2-norm requires LAPACK (build the native addon)"
-    );
+    const f64 =
+      v.data instanceof Float64Array ? v.data : allocFloat64Array(v.data);
+    const result = bridge.svd(f64, rows, cols, false, false);
+    return RTV.num(result.S[0]);
   }
   throw new RuntimeError("norm: for matrices, p must be 1, 2, Inf, or 'fro'");
 }
@@ -1002,93 +995,16 @@ defineBuiltin({
           throw new RuntimeError("inv: argument must be numeric");
         const [m, n] = tensorSize2D(A);
         if (m !== n) throw new RuntimeError("inv: matrix must be square");
+        const bridge = getLapackBridge();
         if (A.imag !== undefined) {
-          const bridge = getLapackBridge();
-          if (bridge?.invComplex) {
-            const result = bridge.invComplex(toF64(A.data), toF64(A.imag), n);
-            if (result) return RTV.tensor(result.re, [n, n], result.im);
-          }
-          const result = invComplexJS(A.data, A.imag, n);
+          const result = bridge.invComplex(toF64(A.data), toF64(A.imag), n);
           return RTV.tensor(result.re, [n, n], result.im);
         }
-        const bridge = getEffectiveBridge("inv", "inv");
-        return RTV.tensor(bridge.inv!(toF64(A.data), n), [n, n]);
+        return RTV.tensor(bridge.inv(toF64(A.data), n), [n, n]);
       },
     },
   ],
 });
-
-function invComplexJS(
-  dataRe: Float64Array,
-  dataIm: Float64Array,
-  n: number
-): { re: Float64Array; im: Float64Array } {
-  const augRe = allocFloat64Array(n * 2 * n);
-  const augIm = allocFloat64Array(n * 2 * n);
-  for (let row = 0; row < n; row++) {
-    for (let col = 0; col < n; col++) {
-      augRe[row * 2 * n + col] = dataRe[row + col * n];
-      augIm[row * 2 * n + col] = dataIm[row + col * n];
-    }
-    augRe[row * 2 * n + n + row] = 1;
-  }
-  for (let col = 0; col < n; col++) {
-    let maxRow = col;
-    let maxMag = augRe[col * 2 * n + col] ** 2 + augIm[col * 2 * n + col] ** 2;
-    for (let row = col + 1; row < n; row++) {
-      const mag = augRe[row * 2 * n + col] ** 2 + augIm[row * 2 * n + col] ** 2;
-      if (mag > maxMag) {
-        maxMag = mag;
-        maxRow = row;
-      }
-    }
-    if (maxMag < 1e-300)
-      throw new RuntimeError("inv: matrix is singular or nearly singular");
-    if (maxRow !== col) {
-      for (let k = 0; k < 2 * n; k++) {
-        let tmp = augRe[col * 2 * n + k];
-        augRe[col * 2 * n + k] = augRe[maxRow * 2 * n + k];
-        augRe[maxRow * 2 * n + k] = tmp;
-        tmp = augIm[col * 2 * n + k];
-        augIm[col * 2 * n + k] = augIm[maxRow * 2 * n + k];
-        augIm[maxRow * 2 * n + k] = tmp;
-      }
-    }
-    const pivotRe = augRe[col * 2 * n + col],
-      pivotIm = augIm[col * 2 * n + col];
-    const pivotMagSq = pivotRe * pivotRe + pivotIm * pivotIm;
-    const invPivotRe = pivotRe / pivotMagSq,
-      invPivotIm = -pivotIm / pivotMagSq;
-    for (let k = col; k < 2 * n; k++) {
-      const re = augRe[col * 2 * n + k],
-        im = augIm[col * 2 * n + k];
-      augRe[col * 2 * n + k] = re * invPivotRe - im * invPivotIm;
-      augIm[col * 2 * n + k] = re * invPivotIm + im * invPivotRe;
-    }
-    for (let row = 0; row < n; row++) {
-      if (row === col) continue;
-      const factorRe = augRe[row * 2 * n + col],
-        factorIm = augIm[row * 2 * n + col];
-      if (factorRe === 0 && factorIm === 0) continue;
-      for (let k = col; k < 2 * n; k++) {
-        const multRe =
-          factorRe * augRe[col * 2 * n + k] - factorIm * augIm[col * 2 * n + k];
-        const multIm =
-          factorRe * augIm[col * 2 * n + k] + factorIm * augRe[col * 2 * n + k];
-        augRe[row * 2 * n + k] -= multRe;
-        augIm[row * 2 * n + k] -= multIm;
-      }
-    }
-  }
-  const resultRe = allocFloat64Array(n * n);
-  const resultIm = allocFloat64Array(n * n);
-  for (let row = 0; row < n; row++)
-    for (let col = 0; col < n; col++) {
-      resultRe[row + col * n] = augRe[row * 2 * n + n + col];
-      resultIm[row + col * n] = augIm[row * 2 * n + n + col];
-    }
-  return { re: resultRe, im: resultIm };
-}
 
 // ── expm ───────────────────────────────────────────────────────────────────
 
@@ -1237,12 +1153,10 @@ function svdApply(
   const econ = parseEconArgRuntime(args[1]);
   const [m, n] = tensorSize2D(A);
   const k = Math.min(m, n);
+  const bridge = getLapackBridge();
+  const uCols = econ ? k : m;
+  const vCols = econ ? k : n;
   if (A.imag) {
-    const bridge = getLapackBridge();
-    if (!bridge?.svdComplex)
-      throw new RuntimeError(
-        "svd: complex SVD requires LAPACK (build the native addon)"
-      );
     const result = bridge.svdComplex(
       toF64(A.data),
       toF64(A.imag),
@@ -1251,40 +1165,20 @@ function svdApply(
       econ,
       nargout === 3
     );
-    if (!result) throw new RuntimeError("svd: complex SVD failed");
     if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
-    const uCols = econ ? k : m;
-    const vCols = econ ? k : n;
     return [
       RTV.tensor(result.URe!, [m, uCols], result.UIm!),
       buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
       RTV.tensor(result.VRe!, [n, vCols], result.VIm!),
     ];
   }
-  const bridge = getEffectiveBridge("svd", "svd");
-  if (bridge?.svd) {
-    const result = bridge.svd(toF64(A.data), m, n, econ, nargout === 3);
-    if (result) {
-      if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
-      const uCols = econ ? k : m;
-      const vCols = econ ? k : n;
-      return [
-        RTV.tensor(result.U!, [m, uCols]),
-        buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
-        RTV.tensor(result.V!, [n, vCols]),
-      ];
-    }
-  }
-  if (nargout > 1)
-    throw new RuntimeError(
-      "svd: full decomposition requires LAPACK (build the native addon)"
-    );
-  const ATA = computeATA(A.data, m, n);
-  const eigenvalues = powerIterationEigenvalues(ATA, n, k);
-  return RTV.tensor(
-    allocFloat64Array(eigenvalues.map(ev => Math.sqrt(Math.max(0, ev)))),
-    [k, 1]
-  );
+  const result = bridge.svd(toF64(A.data), m, n, econ, nargout === 3);
+  if (nargout <= 1) return RTV.tensor(result.S, [k, 1]);
+  return [
+    RTV.tensor(result.U!, [m, uCols]),
+    buildDiagMatrix(result.S, undefined, econ ? k : [m, n]),
+    RTV.tensor(result.V!, [n, vCols]),
+  ];
 }
 
 // ── null ───────────────────────────────────────────────────────────────────
@@ -1479,58 +1373,6 @@ registerIBuiltin({
   },
 });
 
-function computeATA(A_data: Float64Array, m: number, n: number): Float64Array {
-  const result = allocFloat64Array(n * n);
-  for (let j = 0; j < n; j++)
-    for (let i = 0; i <= j; i++) {
-      let sum = 0;
-      for (let k = 0; k < m; k++)
-        sum += A_data[colMajorIndex(k, i, m)] * A_data[colMajorIndex(k, j, m)];
-      result[colMajorIndex(i, j, n)] = sum;
-      if (i !== j) result[colMajorIndex(j, i, n)] = sum;
-    }
-  return result;
-}
-
-function powerIterationEigenvalues(
-  A_data: Float64Array,
-  n: number,
-  numEigenvalues: number
-): number[] {
-  const eigenvalues: number[] = [];
-  const A_copy = allocFloat64Array(A_data);
-  for (let ev = 0; ev < numEigenvalues; ev++) {
-    const v = allocFloat64Array(n);
-    for (let i = 0; i < n; i++) v[i] = Math.random();
-    let norm = 0;
-    for (let i = 0; i < n; i++) norm += v[i] * v[i];
-    norm = Math.sqrt(norm);
-    for (let i = 0; i < n; i++) v[i] /= norm;
-    let lambda = 0;
-    for (let iter = 0; iter < 100; iter++) {
-      const Av = allocFloat64Array(n);
-      for (let i = 0; i < n; i++) {
-        let sum = 0;
-        for (let j = 0; j < n; j++)
-          sum += A_copy[colMajorIndex(i, j, n)] * v[j];
-        Av[i] = sum;
-      }
-      lambda = 0;
-      for (let i = 0; i < n; i++) lambda += v[i] * Av[i];
-      norm = 0;
-      for (let i = 0; i < n; i++) norm += Av[i] * Av[i];
-      norm = Math.sqrt(norm);
-      if (norm < 1e-14) break;
-      for (let i = 0; i < n; i++) v[i] = Av[i] / norm;
-    }
-    eigenvalues.push(lambda);
-    for (let i = 0; i < n; i++)
-      for (let j = 0; j < n; j++)
-        A_copy[colMajorIndex(i, j, n)] -= lambda * v[i] * v[j];
-  }
-  return eigenvalues;
-}
-
 // ── qr ──────────────────────────────────────────────────────────────────
 
 registerIBuiltin({
@@ -1590,10 +1432,10 @@ function qrApply(
     return qrPivotApply(A, m, n, k, econ);
   }
 
+  const bridge = getLapackBridge();
+  const rRows = econ ? k : m;
+  const qCols = econ ? k : m;
   if (A.imag) {
-    const bridge = getEffectiveBridge("qr", "qrComplex");
-    if (!bridge?.qrComplex)
-      throw new RuntimeError("qr: complex QR requires the native LAPACK addon");
     const result = bridge.qrComplex(
       toF64(A.data),
       toF64(A.imag),
@@ -1602,124 +1444,16 @@ function qrApply(
       econ,
       nargout === 2
     );
-    if (!result) throw new RuntimeError("qr: complex QR failed");
-    if (nargout <= 1) {
-      const rRows = econ ? k : m;
-      return RTV.tensor(result.RRe, [rRows, n], result.RIm);
-    }
-    const qCols = econ ? k : m;
+    if (nargout <= 1) return RTV.tensor(result.RRe, [rRows, n], result.RIm);
     return [
       RTV.tensor(result.QRe!, [m, qCols], result.QIm!),
-      RTV.tensor(result.RRe, [econ ? k : m, n], result.RIm),
+      RTV.tensor(result.RRe, [rRows, n], result.RIm),
     ];
   }
 
-  const bridge = getEffectiveBridge("qr", "qr");
-  if (bridge?.qr) {
-    const result = bridge.qr(toF64(A.data), m, n, econ, nargout === 2);
-    if (result) {
-      if (nargout <= 1) return RTV.tensor(result.R, [econ ? k : m, n]);
-      const qCols = econ ? k : m;
-      return [
-        RTV.tensor(result.Q, [m, qCols]),
-        RTV.tensor(result.R, [econ ? k : m, n]),
-      ];
-    }
-  }
-
-  // JS fallback (Householder)
-  const R_data = allocFloat64Array(A.data);
-  const vecs: Float64Array[] = [];
-  const taus: number[] = [];
-  for (let j = 0; j < k; j++) {
-    const len = m - j;
-    const x = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) x[i] = R_data[colMajorIndex(j + i, j, m)];
-    let normx = 0;
-    for (let i = 0; i < len; i++) normx += x[i] * x[i];
-    normx = Math.sqrt(normx);
-    if (normx === 0) {
-      vecs.push(allocFloat64Array(len));
-      taus.push(0);
-      continue;
-    }
-    const sign = x[0] >= 0 ? 1 : -1;
-    const alpha = -sign * normx;
-    const v = allocFloat64Array(len);
-    v[0] = x[0] - alpha;
-    for (let i = 1; i < len; i++) v[i] = x[i];
-    let vnorm = 0;
-    for (let i = 0; i < len; i++) vnorm += v[i] * v[i];
-    const tau = vnorm === 0 ? 0 : 2.0 / vnorm;
-    vecs.push(v);
-    taus.push(tau);
-    for (let c = j; c < n; c++) {
-      let dot = 0;
-      for (let i = 0; i < len; i++)
-        dot += v[i] * R_data[colMajorIndex(j + i, c, m)];
-      const scale = tau * dot;
-      for (let i = 0; i < len; i++)
-        R_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
-    }
-  }
-
-  if (nargout <= 1) {
-    if (econ) {
-      const R_econ = allocFloat64Array(k * n);
-      for (let r = 0; r < k; r++)
-        for (let c = 0; c < n; c++)
-          R_econ[colMajorIndex(r, c, k)] = R_data[colMajorIndex(r, c, m)];
-      return RTV.tensor(R_econ, [k, n]);
-    }
-    return RTV.tensor(allocFloat64Array(R_data.slice(0, m * n)), [m, n]);
-  }
-
-  if (econ) {
-    const qCols = k;
-    const Q_data = allocFloat64Array(m * qCols);
-    for (let i = 0; i < Math.min(m, qCols); i++)
-      Q_data[colMajorIndex(i, i, m)] = 1;
-    for (let j = k - 1; j >= 0; j--) {
-      const v = vecs[j],
-        tau = taus[j];
-      if (tau === 0) continue;
-      const len = m - j;
-      for (let c = j; c < qCols; c++) {
-        let dot = 0;
-        for (let i = 0; i < len; i++)
-          dot += v[i] * Q_data[colMajorIndex(j + i, c, m)];
-        const scale = tau * dot;
-        for (let i = 0; i < len; i++)
-          Q_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
-      }
-    }
-    const R_econ = allocFloat64Array(k * n);
-    for (let r = 0; r < k; r++)
-      for (let c = 0; c < n; c++)
-        R_econ[colMajorIndex(r, c, k)] = R_data[colMajorIndex(r, c, m)];
-    return [RTV.tensor(Q_data, [m, qCols]), RTV.tensor(R_econ, [k, n])];
-  }
-
-  const Q_data = allocFloat64Array(m * m);
-  for (let i = 0; i < m; i++) Q_data[colMajorIndex(i, i, m)] = 1;
-  for (let j = k - 1; j >= 0; j--) {
-    const v = vecs[j],
-      tau = taus[j];
-    if (tau === 0) continue;
-    const len = m - j;
-    for (let c = j; c < m; c++) {
-      let dot = 0;
-      for (let i = 0; i < len; i++)
-        dot += v[i] * Q_data[colMajorIndex(j + i, c, m)];
-      const scale = tau * dot;
-      for (let i = 0; i < len; i++)
-        Q_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
-    }
-  }
-  return [
-    RTV.tensor(Q_data, [m, m]),
-    RTV.tensor(allocFloat64Array(R_data.slice(0, m * n)), [m, n]),
-  ];
+  const result = bridge.qr(toF64(A.data), m, n, econ, nargout === 2);
+  if (nargout <= 1) return RTV.tensor(result.R, [rRows, n]);
+  return [RTV.tensor(result.Q, [m, qCols]), RTV.tensor(result.R, [rRows, n])];
 }
 
 /** Convert 1-based permutation vector to permutation matrix or keep as vector. */
@@ -1744,12 +1478,10 @@ function qrPivotApply(
   k: number,
   econ: boolean
 ): RuntimeValue[] {
+  const bridge = getLapackBridge();
+  const rRows = econ ? k : m;
+  const qCols = econ ? k : m;
   if (A.imag) {
-    const bridge = getEffectiveBridge("qr", "qrPivotComplex");
-    if (!bridge?.qrPivotComplex)
-      throw new RuntimeError(
-        "qr: complex column-pivoted QR requires the native LAPACK addon"
-      );
     const result = bridge.qrPivotComplex(
       toF64(A.data),
       toF64(A.imag),
@@ -1757,154 +1489,17 @@ function qrPivotApply(
       n,
       econ
     );
-    const rRows = econ ? k : m;
-    const qCols = econ ? k : m;
     return [
       RTV.tensor(result.QRe, [m, qCols], result.QIm),
       RTV.tensor(result.RRe, [rRows, n], result.RIm),
       permResult(result.jpvt, n, econ),
     ];
   }
-
-  const bridge = getEffectiveBridge("qr", "qrPivot");
-  if (bridge?.qrPivot) {
-    const result = bridge.qrPivot(toF64(A.data), m, n, econ);
-    if (result) {
-      const rRows = econ ? k : m;
-      const qCols = econ ? k : m;
-      return [
-        RTV.tensor(result.Q, [m, qCols]),
-        RTV.tensor(result.R, [rRows, n]),
-        permResult(result.jpvt, n, econ),
-      ];
-    }
-  }
-
-  // JS fallback: Householder QR with column pivoting
-  const R_data = allocFloat64Array(A.data);
-  const perm = allocFloat64Array(n);
-  for (let i = 0; i < n; i++) perm[i] = i; // 0-based during computation
-
-  // Compute initial column norms
-  const colNorms = allocFloat64Array(n);
-  for (let j = 0; j < n; j++) {
-    let s = 0;
-    for (let i = 0; i < m; i++) {
-      const v = R_data[colMajorIndex(i, j, m)];
-      s += v * v;
-    }
-    colNorms[j] = s;
-  }
-
-  const vecs: Float64Array[] = [];
-  const taus: number[] = [];
-
-  for (let j = 0; j < k; j++) {
-    // Find column with max remaining norm
-    let maxNorm = colNorms[j];
-    let maxCol = j;
-    for (let c = j + 1; c < n; c++) {
-      if (colNorms[c] > maxNorm) {
-        maxNorm = colNorms[c];
-        maxCol = c;
-      }
-    }
-    // Swap columns j and maxCol in R_data, perm, colNorms
-    if (maxCol !== j) {
-      for (let i = 0; i < m; i++) {
-        const ij = colMajorIndex(i, j, m);
-        const ic = colMajorIndex(i, maxCol, m);
-        const tmp = R_data[ij];
-        R_data[ij] = R_data[ic];
-        R_data[ic] = tmp;
-      }
-      const tmpP = perm[j];
-      perm[j] = perm[maxCol];
-      perm[maxCol] = tmpP;
-      const tmpN = colNorms[j];
-      colNorms[j] = colNorms[maxCol];
-      colNorms[maxCol] = tmpN;
-    }
-
-    // Householder reflector for column j
-    const len = m - j;
-    const x = allocFloat64Array(len);
-    for (let i = 0; i < len; i++) x[i] = R_data[colMajorIndex(j + i, j, m)];
-    let normx = 0;
-    for (let i = 0; i < len; i++) normx += x[i] * x[i];
-    normx = Math.sqrt(normx);
-    if (normx === 0) {
-      vecs.push(allocFloat64Array(len));
-      taus.push(0);
-      // Update remaining column norms
-      for (let c = j + 1; c < n; c++) {
-        const vj = R_data[colMajorIndex(j, c, m)];
-        colNorms[c] -= vj * vj;
-        if (colNorms[c] < 0) colNorms[c] = 0;
-      }
-      continue;
-    }
-    const sign = x[0] >= 0 ? 1 : -1;
-    const alpha = -sign * normx;
-    const v = allocFloat64Array(len);
-    v[0] = x[0] - alpha;
-    for (let i = 1; i < len; i++) v[i] = x[i];
-    let vnorm = 0;
-    for (let i = 0; i < len; i++) vnorm += v[i] * v[i];
-    const tau = vnorm === 0 ? 0 : 2.0 / vnorm;
-    vecs.push(v);
-    taus.push(tau);
-    for (let c = j; c < n; c++) {
-      let dot = 0;
-      for (let i = 0; i < len; i++)
-        dot += v[i] * R_data[colMajorIndex(j + i, c, m)];
-      const scale = tau * dot;
-      for (let i = 0; i < len; i++)
-        R_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
-    }
-    // Update remaining column norms
-    for (let c = j + 1; c < n; c++) {
-      const vj = R_data[colMajorIndex(j, c, m)];
-      colNorms[c] -= vj * vj;
-      if (colNorms[c] < 0) colNorms[c] = 0;
-    }
-  }
-
-  // Build Q
-  const qCols = econ ? k : m;
-  const Q_data = allocFloat64Array(m * qCols);
-  for (let i = 0; i < Math.min(m, qCols); i++)
-    Q_data[colMajorIndex(i, i, m)] = 1;
-  for (let j = k - 1; j >= 0; j--) {
-    const v = vecs[j],
-      tau = taus[j];
-    if (tau === 0) continue;
-    const len = m - j;
-    for (let c = j; c < qCols; c++) {
-      let dot = 0;
-      for (let i = 0; i < len; i++)
-        dot += v[i] * Q_data[colMajorIndex(j + i, c, m)];
-      const scale = tau * dot;
-      for (let i = 0; i < len; i++)
-        Q_data[colMajorIndex(j + i, c, m)] -= scale * v[i];
-    }
-  }
-
-  // Build R
-  const rRows = econ ? k : m;
-  const R_out = allocFloat64Array(rRows * n);
-  for (let r = 0; r < rRows; r++)
-    for (let c = r; c < n; c++)
-      R_out[colMajorIndex(r, c, rRows)] = R_data[colMajorIndex(r, c, m)];
-
-  // Convert perm to 1-based MATLAB convention
-  const permOut = allocFloat64Array(n);
-  for (let i = 0; i < n; i++) permOut[i] = perm[i] + 1;
-
+  const result = bridge.qrPivot(toF64(A.data), m, n, econ);
   return [
-    RTV.tensor(Q_data, [m, qCols]),
-    RTV.tensor(R_out, [rRows, n]),
-    permResult(permOut, n, econ),
+    RTV.tensor(result.Q, [m, qCols]),
+    RTV.tensor(result.R, [rRows, n]),
+    permResult(result.jpvt, n, econ),
   ];
 }
 
@@ -2196,17 +1791,13 @@ function luApply(
   const k = Math.min(m, n);
   const isComplex = A.imag !== undefined;
   let LU_re: Float64Array, LU_im: Float64Array | undefined, ipiv: Int32Array;
+  const bridge = getLapackBridge();
   if (isComplex) {
-    const bridge = getEffectiveBridge("lu", "luComplex");
-    if (!bridge?.luComplex)
-      throw new RuntimeError("lu: complex LU requires the native LAPACK addon");
     const result = bridge.luComplex(toF64(A.data), toF64(A.imag!), m, n);
     LU_re = result.LURe;
     LU_im = result.LUIm;
     ipiv = result.ipiv;
   } else {
-    const bridge = getEffectiveBridge("lu", "lu");
-    if (!bridge?.lu) throw new RuntimeError("lu: LAPACK bridge not available");
     const result = bridge.lu(toF64(A.data), m, n);
     LU_re = result.LU;
     ipiv = result.ipiv;
@@ -2349,16 +1940,10 @@ function eigApply(
   // eigenvector basis across repeated eigenvalues. The test is exact equality,
   // as in MATLAB's isequal(A, A'); a tolerance would make the choice of
   // algorithm depend on how close to symmetric the input happens to be.
-  if (isExactlyHermitian(A, n)) {
-    const symResult = eigSymmetricApply(A, n, nargout, outputForm);
-    if (symResult) return symResult;
-  }
+  if (isExactlyHermitian(A, n))
+    return eigSymmetricApply(A, n, nargout, outputForm);
+  const bridge = getLapackBridge();
   if (A.imag) {
-    const bridge = getEffectiveBridge("eigComplex", "eigComplex");
-    if (!bridge.eigComplex)
-      throw new RuntimeError(
-        "eig: complex eig requires the native LAPACK addon"
-      );
     const result = bridge.eigComplex(
       toF64(A.data),
       toF64(A.imag),
@@ -2366,7 +1951,6 @@ function eigApply(
       computeVL,
       computeVR
     );
-    if (!result) throw new RuntimeError("eig: complex eig failed");
     const { wRe, wIm, VLRe, VLIm, VRRe, VRIm } = result;
     if (nargout <= 1) return maybeComplexTensor(wRe, [n, 1], wIm);
     const Vout =
@@ -2384,10 +1968,7 @@ function eigApply(
         : RTV.tensor(allocFloat64Array(n * n), [n, n]);
     return [Vout, Dout, Wout];
   }
-  const bridge = getEffectiveBridge("eig", "eig");
-  if (!bridge.eig) throw new RuntimeError("eig: LAPACK bridge not available");
   const result = bridge.eig(toF64(A.data), n, computeVL, computeVR, balance);
-  if (!result) throw new RuntimeError("eig: LAPACK eig failed");
   const { wr, wi, VL, VR } = result;
   const hasComplex = wi.some((v: number) => v !== 0);
   if (nargout <= 1) return maybeComplexTensor(wr, [n, 1], wi);
@@ -2427,9 +2008,7 @@ function isExactlyHermitian(A: RuntimeTensor, n: number): boolean {
 }
 
 /**
- * Symmetric / Hermitian path: dsyev (real) or zheev (complex). Returns null if
- * the bridge in use has no symmetric entry point, so the caller falls back to
- * the general dgeev/zgeev path rather than failing.
+ * Symmetric / Hermitian path: dsyev (real) or zheev (complex).
  *
  * For a Hermitian matrix the left and right eigenvectors coincide, so the
  * third output is a copy of the second.
@@ -2439,24 +2018,19 @@ function eigSymmetricApply(
   n: number,
   nargout: number,
   outputForm: "vector" | "matrix"
-): RuntimeValue | RuntimeValue[] | null {
+): RuntimeValue | RuntimeValue[] {
   const computeV = nargout >= 2;
+  const bridge = getLapackBridge();
   let w: Float64Array;
   let VRe: Float64Array | undefined;
   let VIm: Float64Array | undefined;
   if (A.imag) {
-    const bridge = getEffectiveBridge("eigHerm", "eigHerm");
-    if (!bridge.eigHerm) return null;
     const r = bridge.eigHerm(toF64(A.data), toF64(A.imag), n, computeV);
-    if (!r) return null;
     w = r.w;
     VRe = r.VRe;
     VIm = r.VIm;
   } else {
-    const bridge = getEffectiveBridge("eigSym", "eigSym");
-    if (!bridge.eigSym) return null;
     const r = bridge.eigSym(toF64(A.data), n, computeV);
-    if (!r) return null;
     w = r.w;
     VRe = r.V;
   }
@@ -2593,17 +2167,14 @@ function eigGeneralizedApply(
  * positive definite.
  */
 function choleskyFactor(B: SplitMatrix, n: number): SplitMatrix | null {
+  const bridge = getLapackBridge();
   if (B.im) {
-    const bridge = getEffectiveBridge("cholComplex", "cholComplex");
-    if (!bridge.cholComplex) return null;
     const r = bridge.cholComplex(B.re, B.im, n, true);
-    if (!r || r.info !== 0) return null;
+    if (r.info !== 0) return null;
     return { re: r.RRe, im: r.RIm };
   }
-  const bridge = getEffectiveBridge("chol", "chol");
-  if (!bridge.chol) return null;
   const r = bridge.chol(B.re, n, true);
-  if (!r || r.info !== 0) return null;
+  if (r.info !== 0) return null;
   return { re: r.R, im: null };
 }
 
@@ -2633,10 +2204,8 @@ function eigSymmetricDefinite(
   let w: Float64Array;
   let SRe: Float64Array | undefined;
   let SIm: Float64Array | undefined;
+  const bridge = getLapackBridge();
   if (complex) {
-    const bridge = getEffectiveBridge("eigHerm", "eigHerm");
-    if (!bridge.eigHerm)
-      throw new RuntimeError("eig: Hermitian eig bridge not available");
     const r = bridge.eigHerm(
       C.re,
       C.im ?? allocFloat64Array(n * n),
@@ -2647,9 +2216,6 @@ function eigSymmetricDefinite(
     SRe = r.VRe;
     SIm = r.VIm;
   } else {
-    const bridge = getEffectiveBridge("eigSym", "eigSym");
-    if (!bridge.eigSym)
-      throw new RuntimeError("eig: symmetric eig bridge not available");
     const r = bridge.eigSym(C.re, n, computeV);
     w = r.w;
     SRe = r.V;
@@ -2814,8 +2380,8 @@ function complexDivide(
 
 /**
  * General generalized problem via the QZ (generalized Schur) factorization.
- * ts-lapack has no dgges/dggev, so this needs the native addon; throwing is
- * the honest outcome there, rather than answering a different problem.
+ * ts-lapack has no dgges/dggev, so without the native addon the bridge throws
+ * here rather than answering a different problem.
  */
 function eigGeneralizedQz(
   A: SplitMatrix,
@@ -2829,10 +2395,9 @@ function eigGeneralizedQz(
   const wi = allocFloat64Array(n);
   let V: RuntimeValue | null = null;
   let W: RuntimeValue | null = null;
+  const bridge = getLapackBridge();
 
   if (A.im || B.im) {
-    const bridge = getEffectiveBridge("qzComplex", "qzComplex");
-    if (!bridge.qzComplex) throw generalizedUnsupported();
     const r = bridge.qzComplex(
       A.re,
       A.im ?? allocFloat64Array(n * n),
@@ -2841,7 +2406,6 @@ function eigGeneralizedQz(
       n,
       computeEigvecs
     );
-    if (!r) throw new RuntimeError("eig: complex QZ failed");
     for (let i = 0; i < n; i++) {
       const [qr, qi] = complexDivide(
         r.alphaRe[i],
@@ -2869,10 +2433,7 @@ function eigGeneralizedQz(
       );
     }
   } else {
-    const bridge = getEffectiveBridge("qz", "qz");
-    if (!bridge.qz) throw generalizedUnsupported();
     const r = bridge.qz(A.re, B.re, n, computeEigvecs);
-    if (!r) throw new RuntimeError("eig: real QZ failed");
     let hasComplex = false;
     for (let i = 0; i < n; i++) {
       const beta = r.beta[i];
@@ -2897,13 +2458,6 @@ function eigGeneralizedQz(
       : buildDiagMatrix(wr, wi, n);
   if (nargout === 2) return [V as RuntimeValue, Dout];
   return [V as RuntimeValue, Dout, W as RuntimeValue];
-}
-
-function generalizedUnsupported(): RuntimeError {
-  return new RuntimeError(
-    "eig: the generalized eigenvalue problem eig(A, B) with a non " +
-      "symmetric-definite pencil requires the native LAPACK addon"
-  );
 }
 
 // ── chol ────────────────────────────────────────────────────────────────
@@ -3009,20 +2563,13 @@ function cholApply(
   if (m !== n) throw new RuntimeError("chol: Matrix must be square.");
   const isComplex = A.imag !== undefined;
   let R_re: Float64Array, R_im: Float64Array | undefined, info_val: number;
+  const bridge = getLapackBridge();
   if (isComplex) {
-    const bridge = getEffectiveBridge("chol", "cholComplex");
-    if (!bridge?.cholComplex)
-      throw new RuntimeError(
-        "chol: complex Cholesky requires the native LAPACK addon"
-      );
     const result = bridge.cholComplex(toF64(A.data), toF64(A.imag!), n, upper);
     R_re = result.RRe;
     R_im = result.RIm;
     info_val = result.info;
   } else {
-    const bridge = getEffectiveBridge("chol", "chol");
-    if (!bridge?.chol)
-      throw new RuntimeError("chol: LAPACK bridge not available");
     const result = bridge.chol(toF64(A.data), n, upper);
     R_re = result.R;
     info_val = result.info;
@@ -3160,7 +2707,6 @@ defineBuiltin({
           return RTV.tensor(X.re, [n, p], X.im);
         }
         const X = linsolveLapack(A.data, m, n, B.data, p);
-        if (!X) throw new RuntimeError("linsolve: LAPACK bridge unavailable");
         return RTV.tensor(X, [n, p]);
       },
     },
@@ -3368,12 +2914,13 @@ defineBuiltin({
             throw new RuntimeError("pinv: argument must be numeric");
           const [m, n] = tensorSize2D(A);
           const k = Math.min(m, n);
-          const bridge = getLapackBridge();
-          if (!bridge || !bridge.svd) return pinvFallback(A.data, m, n);
-          const svdResult = bridge.svd(toF64(A.data), m, n, true, true);
-          if (!svdResult || !svdResult.U || !svdResult.V)
-            throw new RuntimeError("pinv: SVD computation failed");
-          const { U, S, V } = svdResult;
+          const { U, S, V } = getLapackBridge().svd(
+            toF64(A.data),
+            m,
+            n,
+            true,
+            true
+          ) as { U: Float64Array; S: Float64Array; V: Float64Array };
           const tol =
             args.length >= 2
               ? isRuntimeNumber(args[1])
@@ -3393,67 +2940,6 @@ defineBuiltin({
     },
   ],
 });
-
-function pinvFallback(
-  data: Float64Array,
-  m: number,
-  n: number
-): ReturnType<typeof RTV.tensor> {
-  let allZero = true;
-  for (let i = 0; i < data.length; i++)
-    if (data[i] !== 0) {
-      allZero = false;
-      break;
-    }
-  if (allZero) return RTV.tensor(allocFloat64Array(n * m), [n, m]);
-  const AT = allocFloat64Array(n * m);
-  for (let i = 0; i < m; i++)
-    for (let j = 0; j < n; j++) AT[i * n + j] = data[j * m + i];
-  if (m >= n) {
-    const ATA = allocFloat64Array(n * n);
-    for (let i = 0; i < n; i++)
-      for (let j = 0; j < n; j++) {
-        let sum = 0;
-        for (let k = 0; k < m; k++) sum += data[i * m + k] * data[j * m + k];
-        ATA[j * n + i] = sum;
-      }
-    const augmented = allocFloat64Array(n * (n + m));
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) augmented[j * n + i] = ATA[j * n + i];
-      for (let j = 0; j < m; j++) augmented[(n + j) * n + i] = AT[j * n + i];
-    }
-    gaussJordanEliminate(augmented, n, n + m);
-    const result = allocFloat64Array(n * m);
-    for (let i = 0; i < n; i++)
-      for (let j = 0; j < m; j++)
-        result[j * n + i] = augmented[(n + j) * n + i];
-    return RTV.tensor(result, [n, m]);
-  }
-  const AAT = allocFloat64Array(m * m);
-  for (let i = 0; i < m; i++)
-    for (let j = 0; j < m; j++) {
-      let sum = 0;
-      for (let k = 0; k < n; k++) sum += data[k * m + i] * data[k * m + j];
-      AAT[j * m + i] = sum;
-    }
-  const augmented = allocFloat64Array(m * 2 * m);
-  for (let i = 0; i < m; i++) {
-    for (let j = 0; j < m; j++) augmented[j * m + i] = AAT[j * m + i];
-    augmented[(m + i) * m + i] = 1;
-  }
-  gaussJordanEliminate(augmented, m, 2 * m);
-  const AATinv = allocFloat64Array(m * m);
-  for (let i = 0; i < m; i++)
-    for (let j = 0; j < m; j++) AATinv[j * m + i] = augmented[(m + j) * m + i];
-  const result = allocFloat64Array(n * m);
-  for (let i = 0; i < n; i++)
-    for (let j = 0; j < m; j++) {
-      let sum = 0;
-      for (let k = 0; k < m; k++) sum += AT[k * n + i] * AATinv[j * m + k];
-      result[j * n + i] = sum;
-    }
-  return RTV.tensor(result, [n, m]);
-}
 
 // ── kron ────────────────────────────────────────────────────────────────
 
@@ -3813,19 +3299,14 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
   const n = mA;
   const computeEigvecs = nargout >= 6;
   const isComplex = !!(A.imag || B.imag) || mode === "complex";
+  const bridge = getLapackBridge();
   if (isComplex) {
     const nn = n * n;
     const aRe = toF64(A.data),
       aIm = A.imag ? toF64(A.imag) : allocFloat64Array(nn);
     const bRe = toF64(B.data),
       bIm = B.imag ? toF64(B.imag) : allocFloat64Array(nn);
-    const bridge = getEffectiveBridge("qzComplex", "qzComplex");
-    if (!bridge.qzComplex)
-      throw new RuntimeError(
-        "qz: complex LAPACK bridge not available (requires native addon)"
-      );
     const result = bridge.qzComplex(aRe, aIm, bRe, bIm, n, computeEigvecs);
-    if (!result) throw new RuntimeError("qz: complex QZ failed");
     const AAout = RTV.tensor(result.AARe, [n, n], result.AAIm);
     const BBout = RTV.tensor(result.BBRe, [n, n], result.BBIm);
     const Qout = RTV.tensor(result.QRe, [n, n], result.QIm);
@@ -3843,10 +3324,7 @@ function qzApply(args: RuntimeValue[], nargout: number): RuntimeValue[] {
       RTV.tensor(allocFloat64Array(WRe), [n, n], allocFloat64Array(WIm)),
     ];
   }
-  const bridge = getEffectiveBridge("qz", "qz");
-  if (!bridge.qz) throw new RuntimeError("qz: LAPACK bridge not available");
   const result = bridge.qz(toF64(A.data), toF64(B.data), n, computeEigvecs);
-  if (!result) throw new RuntimeError("qz: real QZ failed");
   const AAout = RTV.tensor(result.AA, [n, n]);
   const BBout = RTV.tensor(result.BB, [n, n]);
   const Qout = RTV.tensor(result.Q, [n, n]);

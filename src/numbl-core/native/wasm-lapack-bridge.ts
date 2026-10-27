@@ -12,9 +12,8 @@
  *
  * Two seams are installed from one instantiated module (see
  * `installWasmLapackBridge`):
- *   1. `setLapackBridge()` — covers the *interpreter* path (opt 0), which
- *      already resolves per-op via `getEffectiveBridge` and falls back to
- *      ts-lapack for any op the bridge omits.
+ *   1. `setLapackBridge()` — covers the *interpreter* path (opt 0);
+ *      `getLapackBridge()` takes ts-lapack for any op the module omits.
  *   2. `globalThis.$matmulAccel` — the hook the JS-JIT matmul runtime
  *      snippet consults (opt 1, the browser IDE default), which otherwise
  *      runs a naive JS triple-loop that never touches the bridge.
@@ -151,13 +150,13 @@ export function makeWasmMatmul(exports: WasmLapackExports): MatmulFn {
 /**
  * Assemble a (partial) `LapackBridge` from an instantiated module, exposing
  * only the ops the manifest advertises. Ops the bridge omits resolve to
- * ts-lapack via `getEffectiveBridge`.
+ * ts-lapack in `getLapackBridge`.
  */
 export function buildLapackBridgeFromWasm(
   exports: WasmLapackExports,
   manifest: AcceleratorManifest
-): LapackBridge {
-  const bridge: LapackBridge = {};
+): Partial<LapackBridge> {
+  const bridge: Partial<LapackBridge> = {};
   if (
     manifest.ops.matmul?.precision?.includes("f64") &&
     typeof exports.numbl_matmul_f64_colmajor === "function"
@@ -227,7 +226,7 @@ export function getMatmulAccelerator():
  *  the interpreter and JS-JIT on ts-lapack / the JS loop. */
 export function uninstallWasmLapackBridge(): void {
   setMatmulAccelerator(null);
-  setLapackBridge(null as unknown as LapackBridge);
+  setLapackBridge(null);
 }
 
 export function installWasmLapackBridge(
