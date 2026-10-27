@@ -281,21 +281,6 @@ export class Runtime {
       ) => ((...args: any[]) => any) | null)
     | null = null;
 
-  // Callback for eval-with-local-variables. Set by executeCode to avoid circular imports.
-  public evalLocalCallback:
-    | ((
-        code: string,
-        initialVars: Record<string, RuntimeValue>,
-        onOutput: (text: string) => void,
-        fileName?: string
-      ) => {
-        returnValue: unknown;
-        variableValues: Record<string, RuntimeValue>;
-        searchPaths?: string[];
-        workspaceFiles?: import("../../numbl-core/workspace/index.js").WorkspaceFile[];
-      })
-    | null = null;
-
   // Per-function JIT-compiled code for debugging: jsId → generated JS
   public jitFunctionCode = new Map<string, string>();
 

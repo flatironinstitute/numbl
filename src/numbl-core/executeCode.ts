@@ -759,52 +759,6 @@ export function executeCode(
     rebuildWorkspace();
   };
 
-  // Wire up eval callback
-  rt.evalLocalCallback = (code, initialVars, onOutput, fileName) => {
-    // Propagate the parent's effective workspace state into the nested call
-    // so functions resolved via addpath remain visible inside eval()/run().
-    // Filter out the SHIM sentinel and the implicit cwd from searchPaths
-    // (the nested call will set up its own implicit cwd from `implicitCwdPath`),
-    // and filter out stdlib/shim files from workspaceFiles (the nested call
-    // re-adds them itself).
-    const nestedSearchPaths = ctx.registry.searchPaths.filter(
-      p => p !== SHIM_SEARCH_PATH && p !== implicitCwdPath
-    );
-    const nestedWorkspaceFiles: WorkspaceFile[] = [
-      ...mWorkspaceFiles.filter(f => !stdlibShimNames.has(f.name)),
-      ...jsWorkspaceFiles,
-      ...wasmWorkspaceFiles,
-    ];
-    const evalResult = executeCode(
-      code,
-      {
-        onOutput,
-        displayResults: false,
-        initialVariableValues: initialVars,
-        fileIO: options.fileIO,
-        system: options.system,
-        onInput: options.onInput,
-        implicitCwdPath,
-      },
-      nestedWorkspaceFiles,
-      fileName,
-      nestedSearchPaths,
-      nativeBridge
-    );
-    // If the nested execution updated its implicit cwd (e.g. cd inside the
-    // evaluated code), reflect it in the parent so subsequent statements see
-    // the same effective search path.
-    if (evalResult.implicitCwdPath !== undefined) {
-      implicitCwdPath = evalResult.implicitCwdPath;
-    }
-    return {
-      returnValue: evalResult.returnValue,
-      variableValues: evalResult.variableValues,
-      searchPaths: evalResult.searchPaths,
-      workspaceFiles: evalResult.workspaceFiles,
-    };
-  };
-
   // ── 5. Run ─────────────────────────────────────────────────────────
   pushCurrentRuntime(rt);
   try {

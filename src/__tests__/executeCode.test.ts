@@ -249,4 +249,9 @@ result = double_it(21);
     const st = result.variableValues["st"] as { value: string };
     expect(st.value).toBe("on");
   });
+
+  it("keeps plots made inside eval", () => {
+    const result = executeCode("eval('plot(1:3)');");
+    expect(result.plotInstructions.some(i => i.type === "plot")).toBe(true);
+  });
 });

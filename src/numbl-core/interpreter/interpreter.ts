@@ -441,7 +441,11 @@ export class Interpreter {
     propertyDefaults: Map<string, Expr>;
   };
   declare isHandleClass: (classInfo: ClassInfo) => boolean;
-  declare evalInLocalScope: (codeArg: unknown, fileName?: string) => unknown;
+  declare evalInLocalScope: (
+    codeArg: unknown,
+    fileName?: string,
+    nargout?: number
+  ) => unknown;
   declare processArgumentsBlocks: (fn: FunctionDef, args: unknown[]) => void;
 }
 
