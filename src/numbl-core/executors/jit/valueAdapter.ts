@@ -57,7 +57,9 @@ import { isMultiElement } from "../../jit/index.js";
  *   2. **real → complex-scalar param.** Type-widening can reuse a complex
  *      specialization for a later real/boolean scalar call; the
  *      complex-typed body reads `.re`/`.im`, so a bare number must be
- *      boxed into `{re, im:0}`. */
+ *      boxed into `{re, im:0}`.
+ *   3. **real → complex-tensor param.** Likewise for a real tensor: it
+ *      gets a zero `imag` lane. */
 export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
   if (paramType?.kind === "Numeric" && !isMultiElement(paramType)) {
     const nty = paramType as NumericType;
@@ -92,6 +94,10 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
       data: new Float64Array(v.data),
     };
     if (v.imag !== undefined) out.imag = new Float64Array(v.imag);
+    // (3) Widening can reuse a complex specialization for a later real
+    // tensor; the complex-typed body reads `.imag`, so give it zeros.
+    else if (paramType?.kind === "Numeric" && paramType.isComplex)
+      out.imag = new Float64Array(v.data.length);
     return out;
   }
   if (isRuntimeChar(v)) {

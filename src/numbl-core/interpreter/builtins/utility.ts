@@ -64,9 +64,9 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
     return b.re === a && b.im === 0;
   if (isRuntimeTensor(a) && isRuntimeTensor(b)) return tensorsEqual(a, b);
   if (isRuntimeTensor(a) && typeof b === "number")
-    return a.data.length === 1 && !a.imag && a.data[0] === b;
+    return a.data.length === 1 && (a.imag?.[0] ?? 0) === 0 && a.data[0] === b;
   if (typeof a === "number" && isRuntimeTensor(b))
-    return b.data.length === 1 && !b.imag && b.data[0] === a;
+    return b.data.length === 1 && (b.imag?.[0] ?? 0) === 0 && b.data[0] === a;
   if (isRuntimeTensor(a) && isRuntimeComplexNumber(b))
     return (
       a.data.length === 1 &&
@@ -161,10 +161,10 @@ function tensorsEqual(a: RuntimeTensor, b: RuntimeTensor): boolean {
   for (let i = 0; i < a.data.length; i++) {
     if (a.data[i] !== b.data[i]) return false;
   }
+  // Like MATLAB, compare values only: a missing imaginary part is zero.
   if (a.imag || b.imag) {
-    if (!a.imag || !b.imag) return false;
-    for (let i = 0; i < a.imag.length; i++) {
-      if (a.imag[i] !== b.imag[i]) return false;
+    for (let i = 0; i < a.data.length; i++) {
+      if ((a.imag?.[i] ?? 0) !== (b.imag?.[i] ?? 0)) return false;
     }
   }
   return true;
