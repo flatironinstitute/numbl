@@ -150,6 +150,11 @@ export function methodAccessError(
   );
 }
 
+/** Using a property of a deleted handle object. */
+export function invalidHandleError(): RuntimeError {
+  return classError("MATLAB:class:InvalidHandle", "Invalid or deleted object.");
+}
+
 /** The error for assigning a Dependent property that has no set method. */
 export function noSetMethodError(prop: PropertyInfo): RuntimeError {
   return classError(

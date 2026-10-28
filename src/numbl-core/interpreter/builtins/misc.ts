@@ -4,6 +4,8 @@
  */
 import {
   isRuntimeCell,
+  isRuntimeClassInstance,
+  isRuntimeClassInstanceArray,
   isRuntimeChar,
   isRuntimeDummyHandle,
   isRuntimeGraphicsHandle,
@@ -368,6 +370,45 @@ const opMap: [string, (a: RuntimeValue, b: RuntimeValue) => RuntimeValue][] = [
   ["ge", mGreaterEqual],
 ];
 
+/** `a == b` / `a ~= b` on handle objects (or object arrays of equal size,
+ *  or one scalar): whether they are the same object. Undefined when the
+ *  operands are not both handles. */
+function handleEquality(
+  a: RuntimeValue,
+  b: RuntimeValue,
+  equal: boolean
+): RuntimeValue | undefined {
+  const handles = (v: RuntimeValue) =>
+    isRuntimeClassInstance(v) && v.isHandleClass
+      ? { elems: [v], shape: [1, 1] }
+      : isRuntimeClassInstanceArray(v) && v.elements.every(e => e.isHandleClass)
+        ? { elems: v.elements, shape: [...v.shape] }
+        : null;
+  const ha = handles(a);
+  const hb = handles(b);
+  if (!ha || !hb) return undefined;
+  const n = Math.max(ha.elems.length, hb.elems.length);
+  if (
+    ha.elems.length !== hb.elems.length &&
+    ha.elems.length !== 1 &&
+    hb.elems.length !== 1
+  )
+    throw new RuntimeError(
+      "Arrays have incompatible sizes for this operation."
+    );
+  if (n === 1 && ha.elems.length === 1 && hb.elems.length === 1)
+    return RTV.logical((ha.elems[0] === hb.elems[0]) === equal);
+  const data = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const x = ha.elems[ha.elems.length === 1 ? 0 : i];
+    const y = hb.elems[hb.elems.length === 1 ? 0 : i];
+    data[i] = (x === y) === equal ? 1 : 0;
+  }
+  const t = RTV.tensor(data, ha.elems.length === n ? ha.shape : hb.shape);
+  t._isLogical = true;
+  return t;
+}
+
 for (const [name, op] of opMap) {
   builtin({
     name,
@@ -375,6 +416,10 @@ for (const [name, op] of opMap) {
     // mpower is an M-file in MATLAB.
     mfile: name === "mpower",
     apply: args => {
+      if (name === "eq" || name === "ne") {
+        const h = handleEquality(args[0], args[1], name === "eq");
+        if (h !== undefined) return h;
+      }
       const dt = tryDatetimeDurationBinop(name, args[0], args[1]);
       if (dt !== undefined) return dt;
       if (name === "mldivide" || name === "mrdivide") {

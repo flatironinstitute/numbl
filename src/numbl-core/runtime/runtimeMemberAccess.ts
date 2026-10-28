@@ -14,6 +14,7 @@ import {
   isRuntimeStruct,
   isRuntimeClassInstance,
   isRuntimeClassInstanceArray,
+  type RuntimeClassInstance,
 } from "../runtime/types.js";
 import { horzcat } from "./tensor-construction.js";
 import { ensureRuntimeValue } from "./runtimeHelpers.js";
@@ -25,6 +26,7 @@ import {
 } from "./mexception.js";
 import type { PropertyInfo } from "../workspace/classInfo.js";
 import {
+  invalidHandleError,
   noSetMethodError,
   propertyGetError,
   propertySetError,
@@ -75,41 +77,22 @@ export function getMember(
   const mv = ensureRuntimeValue(base);
   if (isRuntimeClassInstance(mv)) {
     const prop = readableProperty(rt, mv.className, name);
+    if (mv._deleted && prop) throw invalidHandleError();
     if (prop === "subsref") return subsrefCall(rt, base, [name]);
     if (prop?.constant) return rt.constantPropertyValue!(prop);
-    // Check for property getter method (get.PropertyName)
-    const accessorKey = `${mv.className}.get.${name}`;
-    if (!rt.activeAccessors.has(accessorKey)) {
-      const getter = rt.cachedResolveClassMethod(mv.className, `get.${name}`);
-      if (getter) {
-        rt.activeAccessors.add(accessorKey);
-        try {
-          return getter(1, base);
-        } finally {
-          rt.activeAccessors.delete(accessorKey);
-        }
-      }
+    // A GetObservable property triggers PreGet and PostGet around the read
+    // (not inside its own get method).
+    if (
+      prop?.getObservable &&
+      rt.propertyEvent &&
+      !rt.activeAccessors.has(`${mv.className}.get.${name}`)
+    ) {
+      rt.propertyEvent(mv, prop, "PreGet");
+      const value = classMember(rt, mv, base, name, nargout);
+      rt.propertyEvent(mv, prop, "PostGet");
+      return value;
     }
-    // Check stored field
-    const field = mv.fields.get(name);
-    if (field !== undefined) return field;
-    // Fall back to calling as a no-argument method (walks inheritance chain);
-    // nargout carries through so `[a,b] = obj.method;` binds all outputs
-    const method = rt.cachedResolveClassMethod(mv.className, name);
-    if (method) {
-      return method(nargout, base);
-    }
-    // Runtime fallback: if the class has a subsref method and we're not
-    // already inside one, route through subsref (handles cases where
-    // compile-time type info was unavailable)
-    const guardKey = `${mv.className}.subsref`;
-    if (!rt.activeAccessors.has(guardKey)) {
-      const subsrefFn = rt.cachedResolveClassMethod(mv.className, "subsref");
-      if (subsrefFn) {
-        return subsrefCall(rt, base, [name]);
-      }
-    }
-    throw unrecognizedMemberError(name, mv.className);
+    return classMember(rt, mv, base, name, nargout);
   }
   // Property access on an object array yields a comma-separated list; numbl
   // materializes it by horzcat-ing the per-element values (mirroring struct
@@ -122,6 +105,50 @@ export function getMember(
     return horzcat(...values);
   }
   return mGetField(mv, name);
+}
+
+/** `obj.name` on a classdef object once access is checked: its get method,
+ *  stored value, or a method called without arguments. */
+function classMember(
+  rt: Runtime,
+  mv: RuntimeClassInstance,
+  base: unknown,
+  name: string,
+  nargout: number
+): unknown {
+  // Check for property getter method (get.PropertyName)
+  const accessorKey = `${mv.className}.get.${name}`;
+  if (!rt.activeAccessors.has(accessorKey)) {
+    const getter = rt.cachedResolveClassMethod(mv.className, `get.${name}`);
+    if (getter) {
+      rt.activeAccessors.add(accessorKey);
+      try {
+        return getter(1, base);
+      } finally {
+        rt.activeAccessors.delete(accessorKey);
+      }
+    }
+  }
+  // Check stored field
+  const field = mv.fields.get(name);
+  if (field !== undefined) return field;
+  // Fall back to calling as a no-argument method (walks inheritance chain);
+  // nargout carries through so `[a,b] = obj.method;` binds all outputs
+  const method = rt.cachedResolveClassMethod(mv.className, name);
+  if (method) {
+    return method(nargout, base);
+  }
+  // Runtime fallback: if the class has a subsref method and we're not
+  // already inside one, route through subsref (handles cases where
+  // compile-time type info was unavailable)
+  const guardKey = `${mv.className}.subsref`;
+  if (!rt.activeAccessors.has(guardKey)) {
+    const subsrefFn = rt.cachedResolveClassMethod(mv.className, "subsref");
+    if (subsrefFn) {
+      return subsrefCall(rt, base, [name]);
+    }
+  }
+  throw unrecognizedMemberError(name, mv.className);
 }
 
 export function getMemberDynamic(
@@ -170,6 +197,7 @@ export function setMemberReturn(
     }
     const table = rt.classTable;
     const prop = table?.findProperty(mv.className, name);
+    if (mv._deleted && prop) throw invalidHandleError();
     if (prop) {
       const denied = propertySetError(
         table!,
@@ -196,29 +224,50 @@ export function setMemberReturn(
     // Property validation runs before any set.PropertyName method.
     if (rt.validateProperty)
       rhs = rt.validateProperty(mv.className, name, ensureRuntimeValue(rhs));
-    // Check for property setter method (set.PropertyName)
+    // A SetObservable property triggers PreSet and PostSet around the
+    // assignment (not inside its own set method).
     const accessorKey = `${mv.className}.set.${name}`;
-    if (!rt.activeAccessors.has(accessorKey)) {
-      const setter = rt.cachedResolveClassMethod(mv.className, `set.${name}`);
-      if (!setter && prop?.dependent) throw noSetMethodError(prop);
-      if (setter) {
-        rt.activeAccessors.add(accessorKey);
-        try {
-          // Call with nargout=0: a handle-class setter declares no output
-          // (`set.Prop(obj, v)`), so requesting an output would raise "Too
-          // many output arguments". A value-class setter
-          // (`obj = set.Prop(obj, v)`) still returns its first output even at
-          // nargout=0, so its modified object is captured below.
-          const result = setter(0, base, rhs);
-          return result !== undefined ? result : base;
-        } finally {
-          rt.activeAccessors.delete(accessorKey);
-        }
-      }
+    const inSetter = rt.activeAccessors.has(accessorKey);
+    if (prop?.setObservable && rt.propertyEvent && !inSetter) {
+      rt.propertyEvent(mv, prop, "PreSet");
+      const result = assignProperty(rt, mv, base, name, rhs, prop);
+      rt.propertyEvent(mv, prop, "PostSet");
+      return result;
     }
+    if (!inSetter) return assignProperty(rt, mv, base, name, rhs, prop);
   }
   const rhsMv = ensureRuntimeValue(rhs);
   return mSetField(mv, name, rhsMv, rt);
+}
+
+/** `obj.name = rhs` on a classdef object once access is checked and the
+ *  value validated: through its set method, or stored. */
+function assignProperty(
+  rt: Runtime,
+  mv: RuntimeClassInstance,
+  base: unknown,
+  name: string,
+  rhs: unknown,
+  prop: PropertyInfo | undefined
+): unknown {
+  const accessorKey = `${mv.className}.set.${name}`;
+  const setter = rt.cachedResolveClassMethod(mv.className, `set.${name}`);
+  if (!setter && prop?.dependent) throw noSetMethodError(prop);
+  if (setter) {
+    rt.activeAccessors.add(accessorKey);
+    try {
+      // Call with nargout=0: a handle-class setter declares no output
+      // (`set.Prop(obj, v)`), so requesting an output would raise "Too
+      // many output arguments". A value-class setter
+      // (`obj = set.Prop(obj, v)`) still returns its first output even at
+      // nargout=0, so its modified object is captured below.
+      const result = setter(0, base, rhs);
+      return result !== undefined ? result : base;
+    } finally {
+      rt.activeAccessors.delete(accessorKey);
+    }
+  }
+  return mSetField(mv, name, ensureRuntimeValue(rhs), rt);
 }
 
 export function setMemberDynamicReturn(

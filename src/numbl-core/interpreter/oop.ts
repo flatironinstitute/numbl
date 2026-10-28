@@ -34,12 +34,14 @@ import {
 } from "../runtime/mexception.js";
 import { methodAccessError, propertyGetError } from "../runtime/classAccess.js";
 import { incref } from "../runtime/refcount.js";
+import { HANDLE_CLASS_METHODS } from "../workspace/classTable.js";
 
 import type { Interpreter } from "./interpreter.js";
 import { Environment } from "./types.js";
 import { CallFrame } from "./callFrame.js";
 import { evalArgs, evalExpr } from "./evalExpressions.js";
 import { callBody } from "./callConvention.js";
+import { createListeners, destroyHandle } from "./events.js";
 
 /** Built-in classes a classdef can subclass by value (`classdef Foo <
  *  double`, `enumeration` over `uint32`): the superclass constructor
@@ -91,6 +93,16 @@ export function instantiateClass(
     return callBody(interp, body, args, nargout);
   }
 
+  // `event.listener(src, ...)`: the listener classes' constructor is
+  // numbl's.
+  if (args.length > 0 && LISTENER_CLASSES.has(className))
+    return createListeners(
+      interp,
+      args.map(a => ensureRuntimeValue(a)),
+      false,
+      className
+    );
+
   checkInstantiable(interp, className, classInfo);
   const { propertyNames, defaults } = propertyDefaults(
     interp,
@@ -114,6 +126,11 @@ export function instantiateClass(
   }
   return instance;
 }
+
+const LISTENER_CLASSES: ReadonlySet<string> = new Set([
+  "event.listener",
+  "event.proplistener",
+]);
 
 /** Classes already checked by `checkClassDefinition`. */
 const checkedClasses = new WeakSet<ClassInfo>();
@@ -421,6 +438,16 @@ export function interpretClassMethod(
   if (body) {
     const actualArgs =
       target.stripInstance && args.length > 0 ? args.slice(1) : args;
+    // A handle class's delete method: the object is destroyed around it.
+    const self = actualArgs[0];
+    if (
+      methodName === "delete" &&
+      self instanceof RuntimeClassInstance &&
+      self.isHandleClass
+    )
+      return destroyHandle(interp, self, () =>
+        callBody(interp, body, actualArgs, nargout)
+      );
     return callBody(interp, body, actualArgs, nargout);
   }
   // Implicit static `ClassName.empty(m,n)`: every MATLAB class inherits
@@ -621,6 +648,7 @@ export function classPublicMethods(
   className: string
 ): Set<string> | undefined {
   const classes = interp.code.classes;
+  if (className === "handle") return new Set(HANDLE_CLASS_METHODS);
   const out = classes.publicMethodNames(className);
   if (!out) {
     const builtinMethods = BUILTIN_CLASS_METHODS.get(className);
@@ -642,5 +670,30 @@ export function classStaticMethods(
   const out = new Set<string>();
   for (const n of classes.publicMethodNames(className) ?? [])
     if (classes.findMethod(className, n)?.static) out.add(n);
+  return out;
+}
+
+/** The methods of `handle` a handle class inherits without redefining them
+ *  (empty for other classes). `methods(obj)` lists them, but its display
+ *  leaves them out and points to `methods('handle')`, as MATLAB does. */
+export function inheritedHandleMethods(
+  interp: Interpreter,
+  className: string
+): Set<string> {
+  const classes = interp.code.classes;
+  const info = classes.get(className);
+  const out = new Set<string>();
+  if (!info || !classes.isHandleClass(info)) return out;
+  const lineage = classes.lineage(info);
+  for (const n of HANDLE_CLASS_METHODS)
+    if (
+      !lineage.some(
+        c =>
+          c.methodNames.has(n) ||
+          c.externalMethodFiles.has(n) ||
+          c.staticMethodNames.has(n)
+      )
+    )
+      out.add(n);
   return out;
 }

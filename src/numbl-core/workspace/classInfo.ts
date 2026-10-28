@@ -45,6 +45,22 @@ export interface PropertyInfo {
   abstract: boolean;
   /** Parsed only (numbl does not serialize objects). */
   transient: boolean;
+  /** PreSet/PostSet (SetObservable) and PreGet/PostGet (GetObservable)
+   *  listeners may be attached to the property. */
+  setObservable: boolean;
+  getObservable: boolean;
+}
+
+/** An event declared in a classdef `events` block. */
+export interface EventInfo {
+  name: string;
+  /** Qualified name of the class that declares the event. */
+  definingClass: string;
+  /** Who may add listeners (`addlistener`, `listener`). */
+  listenAccess: MemberAccess;
+  /** Who may trigger the event (`notify`). */
+  notifyAccess: MemberAccess;
+  hidden: boolean;
 }
 
 /** A method declared in a classdef (with a body or as a signature), with its
@@ -81,6 +97,8 @@ export interface ClassInfo {
    *  `@folder` files, without a signature in the classdef, are not listed;
    *  they are public. */
   methods: Map<string, MethodInfo>;
+  /** Every event the class itself declares, in declaration order. */
+  events: Map<string, EventInfo>;
   /** Size/class/validator declarations of properties that have them. */
   propertyValidations: Map<string, ValidationSpec>;
   methodNames: Set<string>; // instance method names (non-static, non-constructor)
@@ -181,6 +199,7 @@ export function extractClassInfo(
   const propertyDefaults = new Map<string, Expr>();
   const properties = new Map<string, PropertyInfo>();
   const methods = new Map<string, MethodInfo>();
+  const events = new Map<string, EventInfo>();
   const propertyValidations = new Map<string, ValidationSpec>();
   const methodNames = new Set<string>();
   const staticMethodNames = new Set<string>();
@@ -214,6 +233,8 @@ export function extractClassInfo(
           hidden: flags.has("hidden"),
           abstract,
           transient: flags.has("transient"),
+          setObservable: flags.has("setobservable"),
+          getObservable: flags.has("getobservable"),
         });
         if (constant || dependent || abstract) continue;
         propertyNames.push(name);
@@ -256,6 +277,24 @@ export function extractClassInfo(
       // abstract methods.
       for (const sig of member.signatures ?? [])
         addMethod(sig.name, sig.params, sig.outputs);
+    } else if (member.type === "Events") {
+      let listenAccess: MemberAccess = "public";
+      let notifyAccess: MemberAccess = "public";
+      let hidden = false;
+      for (const a of member.attributes) {
+        const n = a.name.toLowerCase();
+        if (n === "listenaccess") listenAccess = attrAccess(a.value);
+        else if (n === "notifyaccess") notifyAccess = attrAccess(a.value);
+        else if (n === "hidden") hidden = attrFlag(a.value);
+      }
+      for (const name of member.names)
+        events.set(name, {
+          name,
+          definingClass: qualifiedName,
+          listenAccess,
+          notifyAccess,
+          hidden,
+        });
     } else if (member.type === "Enumeration") {
       enumMembers = member.members.map(m => ({ name: m.name, args: m.args }));
     }
@@ -284,6 +323,7 @@ export function extractClassInfo(
     propertyDefaults,
     properties,
     methods,
+    events,
     propertyValidations,
     methodNames,
     staticMethodNames,
@@ -338,6 +378,7 @@ export function makeOldStyleClassInfo(
     propertyDefaults: new Map(),
     properties: new Map(),
     methods: new Map(),
+    events: new Map(),
     propertyValidations: new Map(),
     methodNames,
     staticMethodNames: new Set(),
