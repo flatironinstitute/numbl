@@ -6,8 +6,8 @@ The interpreter's plotting commands (`plot`, `surf`, `imagesc`, `figure`, `hold`
 
 This keeps numbl-core free of any rendering code and lets every platform surface render however it likes:
 
-- **CLI** — serves the plot viewer bundle from a local HTTP server and pushes instructions to a connected browser.
-- **Web app** — renders directly in-page using the same viewer bundle.
+- **CLI** — with `--plot`, serves the prebuilt plot viewer bundle (`dist-plot-viewer/`) from a local HTTP server and pushes instructions to a connected browser.
+- **Web app** — renders in-page: the IDE, gallery and embed pages (and the static site viewer) import `FigureView` from `src/graphics/` and compile it from source, so they do not use the viewer bundle.
 - **Server** — normally forwards instructions back to the calling client.
 
 ## Code layout
@@ -23,21 +23,23 @@ The core half lives in `src/numbl-core/plotting/`:
 | `streamline.ts`, `axisCommand.ts`                   | `streamline`/`stream2` and the `axis(...)` forms                                          |
 | `dispatch.ts`                                       | `dispatchPlotBuiltin`, the `(name, args)` → instructions mapping, and the plot name lists |
 | `builtins.ts`                                       | Builtin registrations; adds handle return values and the runtime's figure/hold state      |
+| `axesTraces.ts`                                     | The per-kind trace fields of an axes, declared once (see below)                           |
 | `figuresReducer.ts`                                 | Pure reducer from instructions to `FiguresState`                                          |
 | `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts` | Pure helpers used by both the runtime (`lim = axis`, `parula`) and the renderer           |
+
+The renderer half lives in `src/graphics/`. `FigureView.tsx` lays out a figure's axes and routes each one either to `SurfView.tsx` (Three.js, for axes with 3-D content) or to `drawPlot.ts` (Canvas 2D). `drawPlot` draws what all 2-D kinds share (data limits, axis modes and scales, grid, ticks, labels, legend, colorbar) and delegates each kind's drawing to a renderer in `src/graphics/renderers/`, looked up in the `CANVAS_RENDERERS` table in `renderers/index.ts`. A renderer either draws inside the shared data axes or, like the pie chart and heatmap, takes over the whole canvas.
+
+### Trace fields
+
+`AxesState` holds each plot kind's traces in its own field (`barTraces`, `imagescTrace`, ...). These fields are declared once, in `axesTraces.ts`: the `AxesTraces` type and the `TRACE_FIELDS` table give, per field, its HDF5 `kind` names, whether it holds one trace or many, whether it makes the axes 3-D, and its contribution to the data extents. The reducer's empty axes and hold logic, `dataExtents`/`axesIs3D` in `axisLimits.ts`, and the HDF5 writer and reader all iterate this table, and the renderer table is typed over its 2-D fields, so a field missing from any of them is a compile error or a failing unit test (`src/__tests__/plot-trace-fields.test.ts`).
 
 The dependency runs one way. The renderer in `src/graphics/` imports the types, the reducer, and the pure helpers from `src/numbl-core/plotting/`; numbl-core never imports from `src/graphics/`, and an ESLint `no-restricted-imports` rule enforces this.
 
 ## The plot viewer
 
-A separate Vite-built bundle that consumes `PlotInstruction` streams and draws to an HTML canvas. It owns:
+The CLI's plot viewer (`src/plot-viewer/`) is a separate Vite-built bundle in `dist-plot-viewer/`. It receives `PlotInstruction` batches from the CLI over server-sent events, folds them into a `FiguresState` with `figuresReducer`, and renders the current figure with `FigureView`, the same component the web app uses. 2-D axes are static canvases with no interaction; 3-D axes can be rotated and zoomed with the mouse (Three.js `OrbitControls`, panning disabled).
 
-- figure state management (multiple figures, active figure, hold semantics);
-- 2-D plot rendering (lines, scatter, bars, images, contour, colorbar);
-- 3-D plot rendering (surf, mesh, plot3);
-- axes, labels, legends, and interaction (zoom, pan).
-
-Because the viewer is its own bundle, it does not rebuild with the rest of numbl-core. **After changing anything under `src/graphics/`, or a core plotting module it imports (`types.ts`, `figuresReducer.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`), rebuild the viewer explicitly** — unit tests will not catch a stale bundle.
+Because the viewer is its own bundle, it does not rebuild with the rest of numbl-core. **After changing anything under `src/graphics/`, or a core plotting module it imports (`types.ts`, `axesTraces.ts`, `figuresReducer.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`), rebuild the viewer explicitly** — unit tests will not catch a stale bundle. The web app does not need this step, since it compiles the renderer from source.
 
 ## Adding a plot function
 
@@ -45,9 +47,9 @@ The common shape is:
 
 1. Add the trace type and `PlotInstruction` variant in `plotting/types.ts`.
 2. Parse the arguments and emit the instruction (`parseArgs*.ts`, `instructions.ts`), then add the name to `dispatch.ts` so it is registered. Keep the instruction serializable (no functions, no class instances).
-3. Handle the new instruction in `figuresReducer.ts` and render it in the viewer.
+3. Declare the trace field in `axesTraces.ts`, handle the new instruction in `figuresReducer.ts`, and add a renderer to `src/graphics/renderers/` (2-D) or `SurfView.tsx` (3-D).
 4. Rebuild the viewer bundle.
-5. Add tests — preferably integration scripts that exercise the command end-to-end.
+5. Add tests — preferably integration scripts that exercise the command end-to-end — and an example in `examples/plots/`, which the `/gallery` page and its Playwright smoke test (`tests-browser/plot-gallery.spec.ts`) pick up.
 
 See `docs/adding-plot-functions.md` for the specific checklist.
 
@@ -77,7 +79,8 @@ bundle.
 The inverse, [../../src/graphics/importFigureHdf5.ts](../../src/graphics/importFigureHdf5.ts),
 reads such a file back into a `FigureState`. The shared schema tables live in
 [../../src/graphics/figureHdf5Schema.ts](../../src/graphics/figureHdf5Schema.ts)
-so the writer and reader stay in sync.
+so the writer and reader stay in sync; the kind-to-field mapping there is
+derived from `TRACE_FIELDS` in `axesTraces.ts`.
 
 ### `numbl/graphics` package export
 

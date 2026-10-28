@@ -1,6 +1,7 @@
 % histogram - Basic histogram
 % Demonstrates a histogram of normally distributed data
 
+rng(0);
 x = randn(1, 1000);
 
 figure;

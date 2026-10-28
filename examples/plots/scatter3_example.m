@@ -1,6 +1,7 @@
 % scatter3 - Basic 3D scatter plot
 % Demonstrates a 3D scatter plot with random data
 
+rng(0);
 x = randn(1, 100);
 y = randn(1, 100);
 z = x .* y + 0.3 * randn(1, 100);

@@ -1,6 +1,7 @@
 % boxchart - Box plot of grouped data
 % Demonstrates box plots for multiple groups
 
+rng(0);
 groups = [ones(1,50), 2*ones(1,50), 3*ones(1,50)];
 values = [randn(1,50) + 2, randn(1,50) * 1.5, randn(1,50) + 4];
 

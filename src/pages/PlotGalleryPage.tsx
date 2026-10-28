@@ -85,6 +85,9 @@ function GalleryItem({ entry }: { entry: GalleryEntry }) {
 
   return (
     <Box
+      data-testid="gallery-item"
+      data-name={entry.name}
+      data-status={status}
       sx={{
         border: 1,
         borderColor: "divider",

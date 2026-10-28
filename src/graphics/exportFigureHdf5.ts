@@ -19,7 +19,12 @@ import type {
   FigureState,
   AxesState,
 } from "../numbl-core/plotting/figuresReducer.js";
-import { FIGURE_HDF5_VERSION, GRID_FIELDS } from "./figureHdf5Schema.js";
+import { TRACE_FIELD_NAMES } from "../numbl-core/plotting/axesTraces.js";
+import {
+  FIGURE_HDF5_VERSION,
+  GRID_FIELDS,
+  exportKind,
+} from "./figureHdf5Schema.js";
 
 // ── h5wasm minimal typings (we only use a slice of its API) ────────────────
 
@@ -91,35 +96,19 @@ const MATRIX_FIELDS = new Set(["vertices", "faces", "faceVertexCData"]);
 
 const GZIP_LEVEL = 4;
 
-/** Flatten the per-category trace arrays of one axes into an ordered list,
+/** Flatten the per-field trace containers of one axes into an ordered list,
  *  each tagged with its plot `kind`. */
 function collectTraces(
   ax: AxesState
 ): { kind: string; trace: Record<string, unknown> }[] {
   const out: { kind: string; trace: Record<string, unknown> }[] = [];
-  const push = (kind: string, t: unknown) =>
-    out.push({ kind, trace: t as Record<string, unknown> });
-  const each = (kind: string, arr?: unknown[]) =>
-    (arr ?? []).forEach(t => push(kind, t));
-
-  each("plot", ax.traces);
-  each("plot3", ax.plot3Traces);
-  each("area", ax.areaTraces);
-  each("patch", ax.patchTraces);
-  each("surf", ax.surfTraces);
-  if (ax.imagescTrace) push("imagesc", ax.imagescTrace);
-  each("pcolor", ax.pcolorTraces);
-  each("contour", ax.contourTraces);
-  each("bar", ax.barTraces);
-  each("barh", ax.barhTraces);
-  each("bar3", ax.bar3Traces);
-  each("bar3h", ax.bar3hTraces);
-  each("errorbar", ax.errorBarTraces);
-  each("boxchart", ax.boxTraces);
-  if (ax.pieTrace) push("piechart", ax.pieTrace);
-  if (ax.heatmapTrace) push("heatmap", ax.heatmapTrace);
-  each("quiver", ax.quiverTraces);
-  each("quiver3", ax.quiver3Traces);
+  for (const field of TRACE_FIELD_NAMES) {
+    const v = ax[field];
+    if (!v) continue;
+    const kind = exportKind(field);
+    for (const t of Array.isArray(v) ? v : [v])
+      out.push({ kind, trace: t as unknown as Record<string, unknown> });
+  }
   return out;
 }
 

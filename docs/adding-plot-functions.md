@@ -12,23 +12,23 @@ Core (numbl-core/plotting/)             Renderer (graphics/)
 .m script calls bar(x,y)
   → builtins.ts registration            figuresReducer.ts (core)
       routes name "bar"                   AxesState holds barTraces[]
-  → dispatch.ts                           ↓
-      dispatchPlotBuiltin()             FigureView.tsx
-  → instructions.ts                       passes traces to renderer
-      barCall()                           ↓
-  → parseArgsChart.ts                   drawPlot.ts
-      parseBarArgs()                      canvas 2D rendering
-  → pushes PlotInstruction ──────────→
+  → dispatch.ts                           (declared in axesTraces.ts)
+      dispatchPlotBuiltin()               ↓
+  → instructions.ts                     FigureView.tsx
+      barCall()                           passes the AxesState through
+  → parseArgsChart.ts                     ↓
+      parseBarArgs()                    drawPlot.ts + renderers/bar.ts
+  → pushes PlotInstruction ──────────→    canvas 2D rendering
 ```
 
-The **`PlotInstruction`** type (defined in `src/numbl-core/plotting/types.ts`) is the contract between the two halves. The core produces instructions; the renderer consumes them. The dependency runs one way: `src/graphics/` imports the plot types and the pure helpers it shares with the runtime (`figuresReducer.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`) from `src/numbl-core/plotting/`, and numbl-core never imports from `src/graphics/` (an ESLint rule enforces this).
+The **`PlotInstruction`** type (defined in `src/numbl-core/plotting/types.ts`) is the contract between the two halves. The core produces instructions; the renderer consumes them. The dependency runs one way: `src/graphics/` imports the plot types and the pure helpers it shares with the runtime (`figuresReducer.ts`, `axesTraces.ts`, `axisLimits.ts`, `imagescExtent.ts`, `colormaps.ts`) from `src/numbl-core/plotting/`, and numbl-core never imports from `src/graphics/` (an ESLint rule enforces this).
 
 ### 2D vs 3D
 
-- **2D plot types** (plot, bar, scatter, imagesc, contour) render via `drawPlot.ts` using an HTML Canvas 2D context.
-- **3D plot types** (surf, mesh, plot3) render via `SurfView.tsx` using Three.js.
+- **2D plot types** (plot, bar, scatter, imagesc, contour, ...) render via `drawPlot.ts` using an HTML Canvas 2D context. `drawPlot` owns what all 2-D kinds share (data limits, axis modes and scales, grid, ticks, labels, legend, colorbar); each kind's drawing is a renderer in `src/graphics/renderers/`, registered in the table in `renderers/index.ts`.
+- **3D plot types** (surf, mesh, plot3, bar3, quiver3) render via `SurfView.tsx` using Three.js.
 
-If you're adding a 2D plot type, you'll work with `drawPlot.ts`. If 3D, you'll work with `SurfView.tsx`. This guide focuses on 2D since it's more common.
+An axes is drawn by `SurfView` when it holds any 3-D content (`axesIs3D` in `axisLimits.ts`), and by `drawPlot` otherwise. This guide focuses on 2D since it's more common.
 
 ### Key data conventions
 
@@ -44,9 +44,11 @@ If you're adding a 2D plot type, you'll work with `drawPlot.ts`. If 3D, you'll w
 | 2    | `src/numbl-core/plotting/parseArgs*.ts`     | Argument parser (`parseXxxArgs`)                                |
 | 3    | `src/numbl-core/plotting/instructions.ts`   | Call function (`xxxCall`)                                       |
 | 4    | `src/numbl-core/plotting/dispatch.ts`       | Import `*Call`, add `switch` case, add to `PLOT_DISPATCH_NAMES` |
-| 5    | `src/numbl-core/plotting/figuresReducer.ts` | `AxesState`, `defaultAxes`, `addTraces`, reducer case           |
-| 6    | `src/graphics/FigureView.tsx`               | Pass new traces through to the drawing function                 |
-| 7    | `src/graphics/drawPlot.ts`                  | Rendering logic (data bounds + canvas drawing)                  |
+| 5    | `src/numbl-core/plotting/axesTraces.ts`     | Field in `AxesTraces` + entry in `TRACE_FIELDS`                 |
+| 6    | `src/numbl-core/plotting/figuresReducer.ts` | Reducer case                                                    |
+| 7    | `src/graphics/renderers/*.ts`               | 2-D renderer, registered in `renderers/index.ts`                |
+
+The entry in step 5 is the only place the new field is declared. The empty axes, the hold logic, the axis limits (`lim = axis` and the drawn view), the 2-D/3-D routing and the figure HDF5 export and import are all derived from it, and TypeScript rejects a field without an entry, or a 2-D field without a renderer. `FigureView.tsx` passes the whole `AxesState` to `drawPlot`, so it needs no change. For a 3-D kind, step 7 is instead adding the field to `TraceField3D` in `axesTraces.ts` and the drawing code to `SurfView.tsx` (plus its props in `FigureView.tsx`).
 
 ## Step-by-step
 
@@ -269,81 +271,50 @@ export const PLOT_DISPATCH_NAMES: ReadonlyArray<string> = [
 
 Adding the name to `PLOT_DISPATCH_NAMES` is enough to register it: `src/numbl-core/plotting/builtins.ts` registers every name in that list as a builtin that calls `dispatchPlotBuiltin`, which is what makes `bar(...)` resolve from interpreted `.m` code. Only functions that need a custom return value or `nargout` handle (e.g. `pcolor`, `fplot`) get an explicit registration in that file instead.
 
-### 5. Figures reducer — `src/numbl-core/plotting/figuresReducer.ts`
+### 5. Declare the trace field — `src/numbl-core/plotting/axesTraces.ts`
 
-This file manages the state of all figures. It's a React-style reducer: each `PlotInstruction` produces a new immutable state. It lives in the core because the runtime also uses it (to answer `lim = axis`); the renderer imports it from there. There are four places to edit.
-
-**5a. Import** the trace type:
+`AxesState` (in `figuresReducer.ts`) is `AxesTraces` plus labels and appearance settings. Add the field that holds your traces to `AxesTraces`, importing the trace type from `./types.js`:
 
 ```ts
-import type {
-  PlotTrace,
-  Plot3Trace,
-  SurfTrace,
-  ImagescTrace,
-  ContourTrace,
-  BarTrace, // ← add
-  PlotInstruction,
-} from "./types.js";
-```
-
-**5b. AxesState** — add the field to hold your traces:
-
-```ts
-export type AxesState = {
-  holdOn: boolean;
+export type AxesTraces = {
   traces: PlotTrace[];
-  plot3Traces: Plot3Trace[];
-  surfTraces: SurfTrace[];
-  imagescTrace?: ImagescTrace;
-  contourTraces: ContourTrace[];
+  // ...
   barTraces: BarTrace[]; // ← add
-  title?: string;
   // ...
 };
 ```
 
-**5c. defaultAxes** — initialize to empty:
+Then add its entry to `TRACE_FIELDS` (the compiler reports it as missing). The entry's position is the order traces are written to the HDF5 file:
 
 ```ts
-const defaultAxes: AxesState = {
-  holdOn: false,
-  traces: [],
-  plot3Traces: [],
-  surfTraces: [],
-  contourTraces: [],
-  barTraces: [], // ← add
-};
+barTraces: {
+  // `kind` names in the figure HDF5 layout: the first is written on export,
+  // all are accepted on import.
+  kinds: ["bar"],
+  // "many" for an array field, "one" for a single trace per axes.
+  multiplicity: "many",
+  // Whether non-empty content makes the axes 3-D (drawn by SurfView).
+  is3D: () => false,
+  // Grow the data extents (used for `lim = axis` and the drawn limits).
+  extents(bars, { x, y }) {
+    for (const bt of bars) {
+      const hw = bt.width / 2;
+      for (let i = 0; i < bt.x.length; i++) {
+        include(x, bt.x[i] - hw);
+        include(x, bt.x[i] + hw);
+        include(y, bt.y[i]);
+      }
+      include(y, 0); // bars always extend to zero
+    }
+  },
+},
 ```
 
-**5d. addTraces** — this function handles hold-state logic (clearing other trace types when hold is off). Add your field to both the `Pick` type parameter and the object spread:
+`include`/`includeAll` ignore non-finite values. If the field is drawn only in 3-D, also add it to the `TraceField3D` union. If its traces have flat column-major grid fields (`rows × cols`), list them under the kind in `GRID_FIELDS` in `src/graphics/figureHdf5Schema.ts` so they are stored as 2-D datasets, and document the kind in `docs/figure-hdf5-format.md`.
 
-```ts
-function addTraces(
-  state: FiguresState,
-  update: Partial<
-    Pick<
-      AxesState,
-      | "traces"
-      | "plot3Traces"
-      | "surfTraces"
-      | "imagescTrace"
-      | "contourTraces"
-      | "barTraces" // ← add to Pick
-    >
-  >
-): FiguresState {
-  // ...
-  return {
-    // ...
-    contourTraces: update.contourTraces ?? (hold ? axes.contourTraces : []),
-    barTraces: update.barTraces ?? (hold ? axes.barTraces : []), // ← add to spread
-    // ...
-  };
-}
-```
+### 6. Figures reducer — `src/numbl-core/plotting/figuresReducer.ts`
 
-**5e. Reducer switch** — add a case to `figuresReducer`:
+The reducer turns each `PlotInstruction` into a new immutable `FiguresState`. It lives in the core because the runtime also uses it (to answer `lim = axis`); the renderer imports it from there. Add a case for the new instruction. `addTraces` applies the hold logic: with hold off, every trace field it is not given is cleared.
 
 ```ts
 case "bar": {
@@ -356,205 +327,57 @@ case "bar": {
 }
 ```
 
-The hold-on logic: when `hold on` is active, new traces are appended to existing ones. When off (default), they replace.
+### 7. Canvas renderer — `src/graphics/renderers/`
 
-### 6. FigureView — `src/graphics/FigureView.tsx`
-
-This React component connects the state to the renderer. The `SingleAxesView` component decides whether to use 2D or 3D rendering, then `PlotCanvas` calls `drawPlot()`.
-
-There are four changes — all are about threading the new data through:
-
-**6a. PlotCanvas JSX props** (in `SingleAxesView`, add the prop):
-
-```tsx
-<PlotCanvas
-  traces={axes.traces}
-  // ... existing props ...
-  axisMode={axes.axisMode}
-  barTraces={axes.barTraces} // ← add
-/>
-```
-
-**6b. PlotCanvas component props type** (add to the destructured props and type annotation):
-
-```tsx
-function PlotCanvas({
-  traces,
-  // ... existing ...
-  axisMode,
-  barTraces,                         // ← add
-}: {
-  traces: PlotTrace[];
-  // ... existing ...
-  axisMode?: string;
-  barTraces?: AxesState["barTraces"]; // ← add
-}) {
-```
-
-**6c. drawPlot() call** (inside the `useCallback`):
+Write the drawing code in a new file (or next to a related kind, as `bar.ts` holds both `bar` and `barh`). A renderer receives the field's non-empty value; `drawPlot` has already computed the limits, drawn the axes, and clipped the canvas to the plot area:
 
 ```ts
-drawPlot(
-  canvas,
-  traces,
-  title,
-  xlabel,
-  ylabel,
-  legend,
-  gridOn,
-  imagescTrace,
-  contourTraces,
-  colormap,
-  axisMode,
-  barTraces // ← add
-);
+import type { BarTrace } from "../../numbl-core/plotting/types.js";
+import type { DataRenderer } from "./types.js";
+
+export const barRenderer: DataRenderer<"barTraces"> = {
+  layer: "data",
+  draw({ ctx }, bars, { toCanvasX, toCanvasY }) {
+    // ctx: CanvasRenderingContext2D (CSS-pixel coordinates)
+    // toCanvasX/toCanvasY: data → canvas coordinates (handle log axes, axis ij)
+    // The first argument also carries `axes` (the whole AxesState), `cmap`
+    // (the colormap) and `dpr`.
+  },
+};
 ```
 
-**6d. useCallback dependency array**:
+Register it in `CANVAS_RENDERERS` in `renderers/index.ts`. The table's order is the drawing order, so later entries paint over earlier ones (images and filled regions first, lines last). Two optional parts:
 
-```ts
-}, [traces, title, xlabel, ylabel, legend, gridOn,
-    imagescTrace, contourTraces, colormap, axisMode,
-    barTraces]);      // ← add
-```
-
-### 7. Canvas rendering — `src/graphics/drawPlot.ts`
-
-This is where you write the actual drawing code. The `drawPlot` function receives all trace data and renders to a `<canvas>` element using the Canvas 2D API.
-
-**7a. Import** the trace type:
-
-```ts
-import type {
-  PlotTrace,
-  ImagescTrace,
-  ContourTrace,
-  BarTrace,
-} from "../numbl-core/plotting/types.js";
-```
-
-**7b. Function signature** — add the parameter at the end:
-
-```ts
-export function drawPlot(
-  canvas: HTMLCanvasElement,
-  traces: PlotTrace[],
-  title?: string,
-  xlabel?: string,
-  ylabel?: string,
-  legend?: string[],
-  gridOn?: boolean,
-  imagescTrace?: ImagescTrace,
-  contourTraces?: ContourTrace[],
-  colormap?: string,
-  axisMode?: string,
-  barTraces?: BarTrace[]            // ← add
-) {
-```
-
-**7c. hasContent check** — the function exits early if there's nothing to draw:
-
-```ts
-const hasContent =
-  traces.length > 0 ||
-  imagescTrace !== undefined ||
-  (contourTraces && contourTraces.length > 0) ||
-  (barTraces && barTraces.length > 0); // ← add
-```
-
-**7d. Data bounds** — the function computes `xMin/xMax/yMin/yMax` across all traces to set up the coordinate system. Add a block for your trace type. This goes after the existing contour bounds block and before the `if (!isFinite(xMin)) return;` check:
-
-```ts
-// Include bar bounds
-if (barTraces) {
-  for (const bt of barTraces) {
-    const halfW = bt.width / 2;
-    for (let i = 0; i < bt.x.length; i++) {
-      const bx = bt.x[i];
-      if (isFinite(bx)) {
-        if (bx - halfW < xMin) xMin = bx - halfW;
-        if (bx + halfW > xMax) xMax = bx + halfW;
-      }
-      const by = bt.y[i];
-      if (isFinite(by)) {
-        if (by < yMin) yMin = by;
-        if (by > yMax) yMax = by;
-      }
-    }
-    // Bars always extend to zero on the y-axis
-    if (0 < yMin) yMin = 0;
-    if (0 > yMax) yMax = 0;
-  }
-}
-```
-
-**7e. Drawing** — add rendering code inside the clipped region. The clip region is set up earlier with `ctx.clip()`. Your drawing code goes after contour rendering and before the line-trace loop. You have access to:
-
-- `ctx` — the `CanvasRenderingContext2D`
-- `toCanvasX(v)` / `toCanvasY(v)` — convert data coordinates to canvas pixel coordinates
-- `effMarginLeft`, `effMarginTop`, `effPlotW`, `effPlotH` — the plot area bounds in pixels
-
-```ts
-// Bar rendering
-if (barTraces) {
-  const defaultColors: [number, number, number][] = [
-    [0.0, 0.447, 0.741],
-    [0.85, 0.325, 0.098],
-    [0.929, 0.694, 0.125],
-    [0.494, 0.184, 0.556],
-    [0.466, 0.674, 0.188],
-  ];
-  for (let bi = 0; bi < barTraces.length; bi++) {
-    const bt = barTraces[bi];
-    const [r, g, b] = bt.color ?? defaultColors[bi % defaultColors.length];
-    ctx.fillStyle = `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)})`;
-    ctx.strokeStyle = `rgb(${Math.round(r * 180)},${Math.round(g * 180)},${Math.round(b * 180)})`;
-    ctx.lineWidth = 1;
-    const y0 = toCanvasY(0);
-    for (let i = 0; i < bt.x.length; i++) {
-      const cx = toCanvasX(bt.x[i]);
-      const cy = toCanvasY(bt.y[i]);
-      const halfW = (toCanvasX(bt.x[i] + bt.width) - toCanvasX(bt.x[i])) / 2;
-      ctx.fillRect(cx - halfW, Math.min(cy, y0), halfW * 2, Math.abs(cy - y0));
-      ctx.strokeRect(
-        cx - halfW,
-        Math.min(cy, y0),
-        halfW * 2,
-        Math.abs(cy - y0)
-      );
-    }
-  }
-}
-```
-
-The default color palette matches MATLAB's default bar colors. Bars extend from the baseline (y=0) to the data value, correctly handling negative values with `Math.min`/`Math.abs`.
+- `colorValues(value, consume)`: for kinds colored through the colormap, feed the scalar values that should set the automatic colorbar range.
+- `layer: "standalone"` (with `draw(rc, value, width, height)`) instead of `"data"`: the kind takes over the whole canvas with no shared axes, as the pie chart and heatmap do.
 
 ## Testing
 
 After implementation:
 
-1. **Type check**: `npx tsc --noEmit` — must have zero errors
-2. **Unit + integration tests**: `npm test` — all existing tests must still pass
+1. **Type check**: `npm run typecheck` (runs `tsc -b`) — must have zero errors
+2. **Unit + integration tests**: `npm test` and `npm run test:scripts`; prefer integration scripts in `numbl_test_scripts/` that exercise the command end-to-end
 3. **Rebuild the viewer**: `npm run build:plot-viewer` (the renderer bundle also includes the core modules it imports)
 4. **Visual test**: create an example script in `examples/plots/` and run with:
    ```bash
    npx tsx src/cli.ts run examples/plots/bar_example.m --plot
    ```
-   This opens a browser window showing the plot. Kill the process with Ctrl+C when done.
+   This opens a browser window showing the plot. Kill the process with Ctrl+C when done. The example also appears on the web app's `/gallery` page.
+5. **Browser smoke test**: `npm run build`, then `npx playwright test tests-browser/plot-gallery.spec.ts`. It renders every gallery example and fails on script errors, console errors, or blank canvases. With `PLOT_GALLERY_HASHES=<file>` it also writes a hash of each 2-D canvas's pixels; comparing the files from before and after a change (on the same machine) shows whether any rendered output changed.
 
 ## Existing plot functions (for reference)
 
-| Function    | Trace type     | Instruction type | Renderer                           |
-| ----------- | -------------- | ---------------- | ---------------------------------- |
-| `plot`      | `PlotTrace[]`  | `"plot"`         | `drawPlot.ts` (line traces)        |
-| `scatter`   | `PlotTrace[]`  | `"plot"`         | `drawPlot.ts` (marker-only traces) |
-| `plot3`     | `Plot3Trace[]` | `"plot3"`        | `SurfView.tsx` (3D lines)          |
-| `surf`      | `SurfTrace`    | `"surf"`         | `SurfView.tsx` (3D surface)        |
-| `mesh`      | `SurfTrace`    | `"mesh"`         | `SurfView.tsx` (3D wireframe)      |
-| `waterfall` | `SurfTrace`    | `"mesh"`         | `SurfView.tsx` (aliased to mesh)   |
-| `imagesc`   | `ImagescTrace` | `"imagesc"`      | `drawPlot.ts` (pixel grid)         |
-| `contour`   | `ContourTrace` | `"contour"`      | `drawPlot.ts` (marching squares)   |
-| `contourf`  | `ContourTrace` | `"contour"`      | `drawPlot.ts` (filled cells)       |
-| `bar`       | `BarTrace[]`   | `"bar"`          | `drawPlot.ts` (filled rectangles)  |
+| Function    | Trace type     | Instruction type | `AxesState` field | Renderer                               |
+| ----------- | -------------- | ---------------- | ----------------- | -------------------------------------- |
+| `plot`      | `PlotTrace[]`  | `"plot"`         | `traces`          | `renderers/lines.ts`                   |
+| `scatter`   | `PlotTrace[]`  | `"plot"`         | `traces`          | `renderers/lines.ts` (marker-only)     |
+| `plot3`     | `Plot3Trace[]` | `"plot3"`        | `plot3Traces`     | `SurfView.tsx` (3D lines)              |
+| `surf`      | `SurfTrace`    | `"surf"`         | `surfTraces`      | `SurfView.tsx` (3D surface)            |
+| `mesh`      | `SurfTrace`    | `"mesh"`         | `surfTraces`      | `SurfView.tsx` (3D wireframe)          |
+| `waterfall` | `SurfTrace`    | `"mesh"`         | `surfTraces`      | `SurfView.tsx` (aliased to mesh)       |
+| `imagesc`   | `ImagescTrace` | `"imagesc"`      | `imagescTrace`    | `renderers/imagesc.ts` (pixel grid)    |
+| `contour`   | `ContourTrace` | `"contour"`      | `contourTraces`   | `renderers/contour.ts` (line contours) |
+| `contourf`  | `ContourTrace` | `"contour"`      | `contourTraces`   | `renderers/contour.ts` (filled cells)  |
+| `bar`       | `BarTrace[]`   | `"bar"`          | `barTraces`       | `renderers/bar.ts` (filled rectangles) |
 
 Note: `scatter` reuses `PlotTrace` with `lineStyle: "none"` and a marker set. `waterfall` is aliased to `mesh`. When possible, reuse an existing trace type rather than creating a new one.
