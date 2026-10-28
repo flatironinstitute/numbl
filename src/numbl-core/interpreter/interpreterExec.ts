@@ -1098,7 +1098,10 @@ export function evalAnonFunc(
     );
   };
   fn.jsFnExpectsNargout = true;
-  fn.nargin = paramNames.length;
+  // MATLAB reports a varargin parameter as a negative count.
+  fn.nargin = hasVarargin ? -paramNames.length : paramNames.length;
+  // An anonymous function returns whatever its body does.
+  fn.nargout = -1;
   // The snapshot incref'd every captured value; balance that with a
   // matching clearLocals when the function wrapper is destroyed.
   // Without this, captured Float64Array buffers stay in the pool's
@@ -1165,6 +1168,11 @@ export function makeFuncHandle(this: Interpreter, name: string): RuntimeValue {
   }
   if (narg === undefined) narg = getIBuiltinNargin(name);
   if (narg !== undefined) fn.nargin = narg;
+  try {
+    fn.nargout = this.declaredNargout(name);
+  } catch {
+    fn.nargout = undefined;
+  }
   // For nested-function handles, the function-exit cleanup skipped
   // clearLocals (so the closure could keep its captured env alive).
   // When the handle dies, release those captures by clearing the env.

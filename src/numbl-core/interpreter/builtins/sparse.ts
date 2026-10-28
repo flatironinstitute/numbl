@@ -14,16 +14,59 @@ import {
 } from "../../runtime/types.js";
 import type { RuntimeValue, RuntimeSparseMatrix } from "../../runtime/types.js";
 import { RTV, RuntimeError } from "../../runtime/index.js";
-import { toNumber } from "../../runtime/convert.js";
 import { parseStringArgLower } from "../../helpers/check-helpers.js";
-import { registerIBuiltin } from "./types.js";
+import { builtin } from "./builtin.js";
+import { boolToNumber, builtinError, realScalarArg } from "./args.js";
+import { errorFn } from "./linalg-args.js";
 import { allocFloat64Array } from "../../runtime/alloc.js";
 import { toNumArray } from "../../helpers/reduction-helpers.js";
+import { sparseToDense } from "../../helpers/sparse-arithmetic.js";
+import { denseToSparse } from "../../helpers/sparse-direct.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+/** The real values of a numeric array argument (sparse(i, j, v) values). */
 function toNumericArray(v: RuntimeValue, name: string): number[] {
   return isRuntimeComplexNumber(v) ? [v.re] : toNumArray(v, name);
+}
+
+const sparseIndexError = errorFn(
+  "MATLAB:sparsfcn:nonPositiveIndicesOfSparse",
+  "Sparse matrix indices must be positive integers."
+);
+
+/** Row or column indices for sparse(i, j, v): positive integers. */
+function sparseIndices(v: RuntimeValue): number[] {
+  const a = boolToNumber(v);
+  if (
+    isRuntimeComplexNumber(a) ||
+    (isRuntimeTensor(a) && a.imag && a.imag.some(x => x !== 0))
+  )
+    throw sparseIndexError();
+  const out = toNumArray(a, "sparse");
+  for (const x of out)
+    if (!(Number.isInteger(x) && x >= 1)) throw sparseIndexError();
+  return out;
+}
+
+/** A size argument (a real scalar), rounded as numbl always has. */
+function sizeArg(v: RuntimeValue): number {
+  return Math.round(realScalarArg(v));
+}
+
+/** An optional trailing class name ('double') for spalloc / speye. Other
+ *  classes are not supported. */
+function checkTypename(v: RuntimeValue, name: string): void {
+  const err = errorFn(
+    `MATLAB:${name}:invalidTypename`,
+    'Array type argument must be "single", "double", or "logical".'
+  );
+  if (!(isRuntimeChar(v) || isRuntimeString(v))) throw err();
+  const t = parseStringArgLower(v);
+  if (t === "double") return;
+  if (t === "single" || t === "logical")
+    throw new RuntimeError(`${name}: '${t}' sparse matrices are not supported`);
+  throw err();
 }
 
 function toImagArray(v: RuntimeValue): number[] | undefined {
@@ -90,172 +133,106 @@ function buildSparseFromTriplets(
 
 // ── sparse ───────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "sparse",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length === 1) {
-        const v = args[0];
-        if (isRuntimeSparseMatrix(v)) return v;
-        if (isRuntimeNumber(v)) {
-          if (v === 0)
-            return RTV.sparseMatrix(
-              1,
-              1,
-              new Int32Array(0),
-              new Int32Array(2),
-              allocFloat64Array(0)
-            );
+  nargin: [1, 6],
+  apply: args => {
+    if (args.length === 4)
+      throw builtinError("MATLAB:minrhs", "Not enough input arguments.");
+    if (args.length === 1) {
+      const v = args[0];
+      if (isRuntimeSparseMatrix(v)) return v;
+      if (isRuntimeNumber(v)) {
+        if (v === 0)
           return RTV.sparseMatrix(
             1,
             1,
-            new Int32Array([0]),
-            new Int32Array([0, 1]),
-            allocFloat64Array([v])
+            new Int32Array(0),
+            new Int32Array(2),
+            allocFloat64Array(0)
           );
-        }
-        if (isRuntimeLogical(v)) {
-          const nv = v ? 1 : 0;
-          if (nv === 0)
-            return RTV.sparseMatrix(
-              1,
-              1,
-              new Int32Array(0),
-              new Int32Array(2),
-              allocFloat64Array(0)
-            );
-          return RTV.sparseMatrix(
-            1,
-            1,
-            new Int32Array([0]),
-            new Int32Array([0, 1]),
-            allocFloat64Array([nv])
-          );
-        }
-        if (isRuntimeComplexNumber(v)) {
-          if (v.re === 0 && v.im === 0)
-            return RTV.sparseMatrix(
-              1,
-              1,
-              new Int32Array(0),
-              new Int32Array(2),
-              allocFloat64Array(0)
-            );
-          return RTV.sparseMatrix(
-            1,
-            1,
-            new Int32Array([0]),
-            new Int32Array([0, 1]),
-            allocFloat64Array([v.re]),
-            v.im !== 0 ? allocFloat64Array([v.im]) : undefined
-          );
-        }
-        if (!isRuntimeTensor(v))
-          throw new RuntimeError("sparse: argument must be numeric");
-        const rows = v.shape[0] || 1;
-        const cols = v.shape.length >= 2 ? v.shape[1] : 1;
-        const hasImag = v.imag !== undefined;
-        const irList: number[] = [];
-        const prList: number[] = [];
-        const piList: number[] | undefined = hasImag ? [] : undefined;
-        const jcArr = new Int32Array(cols + 1);
-        for (let c = 0; c < cols; c++) {
-          jcArr[c] = irList.length;
-          for (let r = 0; r < rows; r++) {
-            const idx = c * rows + r;
-            const re = v.data[idx];
-            const im = hasImag ? v.imag![idx] : 0;
-            if (re !== 0 || im !== 0) {
-              irList.push(r);
-              prList.push(re);
-              if (piList) piList.push(im);
-            }
-          }
-        }
-        jcArr[cols] = irList.length;
         return RTV.sparseMatrix(
-          rows,
-          cols,
-          new Int32Array(irList),
-          jcArr,
-          allocFloat64Array(prList),
-          piList ? allocFloat64Array(piList) : undefined
+          1,
+          1,
+          new Int32Array([0]),
+          new Int32Array([0, 1]),
+          allocFloat64Array([v])
         );
       }
-      if (args.length === 2) {
-        const m = Math.round(toNumber(args[0]));
-        const n = Math.round(toNumber(args[1]));
+      if (isRuntimeLogical(v)) {
+        const nv = v ? 1 : 0;
+        if (nv === 0)
+          return RTV.sparseMatrix(
+            1,
+            1,
+            new Int32Array(0),
+            new Int32Array(2),
+            allocFloat64Array(0)
+          );
         return RTV.sparseMatrix(
-          m,
-          n,
-          new Int32Array(0),
-          new Int32Array(n + 1),
-          allocFloat64Array(0)
+          1,
+          1,
+          new Int32Array([0]),
+          new Int32Array([0, 1]),
+          allocFloat64Array([nv])
         );
       }
-      if (args.length >= 3) {
-        const iArr = toNumericArray(args[0], "sparse");
-        const jArr = toNumericArray(args[1], "sparse");
-        const len = Math.max(iArr.length, jArr.length);
-        let vArr: number[];
-        let vImag: number[] | undefined;
-        const vArg = args[2];
-        if (isRuntimeNumber(vArg)) {
-          vArr = new Array(len).fill(vArg);
-        } else if (isRuntimeComplexNumber(vArg)) {
-          vArr = new Array(len).fill(vArg.re);
-          vImag = new Array(len).fill(vArg.im);
-        } else if (isRuntimeLogical(vArg)) {
-          vArr = new Array(len).fill(vArg ? 1 : 0);
-        } else {
-          vArr = toNumericArray(vArg, "sparse");
-          vImag = toImagArray(vArg);
-        }
-        if (iArr.length !== jArr.length || iArr.length !== vArr.length) {
-          if (iArr.length === 1 && jArr.length === vArr.length) {
-            const iv = iArr[0];
-            iArr.length = 0;
-            for (let k = 0; k < vArr.length; k++) iArr.push(iv);
-          } else if (jArr.length === 1 && iArr.length === vArr.length) {
-            const jv = jArr[0];
-            jArr.length = 0;
-            for (let k = 0; k < vArr.length; k++) jArr.push(jv);
-          } else {
-            throw new RuntimeError("sparse: i, j, v must have the same length");
-          }
-        }
-        let m: number, n: number;
-        if (args.length >= 5) {
-          m = Math.round(toNumber(args[3]));
-          n = Math.round(toNumber(args[4]));
-        } else {
-          m = 0;
-          n = 0;
-          for (let k = 0; k < iArr.length; k++) {
-            if (iArr[k] > m) m = iArr[k];
-            if (jArr[k] > n) n = jArr[k];
-          }
-        }
-        return buildSparseFromTriplets(iArr, jArr, vArr, m, n, vImag);
+      if (isRuntimeComplexNumber(v)) {
+        if (v.re === 0 && v.im === 0)
+          return RTV.sparseMatrix(
+            1,
+            1,
+            new Int32Array(0),
+            new Int32Array(2),
+            allocFloat64Array(0)
+          );
+        return RTV.sparseMatrix(
+          1,
+          1,
+          new Int32Array([0]),
+          new Int32Array([0, 1]),
+          allocFloat64Array([v.re]),
+          v.im !== 0 ? allocFloat64Array([v.im]) : undefined
+        );
       }
-      throw new RuntimeError("sparse: unsupported call signature");
-    },
-  }),
-});
-
-// ── spalloc ──────────────────────────────────────────────────────────────
-
-// spalloc(m, n, nzmax) allocates an all-zero m×n sparse matrix with space
-// for nzmax nonzeros. numbl's CSC storage grows dynamically, so nzmax is
-// only a hint and is ignored.
-registerIBuiltin({
-  name: "spalloc",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      const m = args.length >= 1 ? Math.round(toNumber(args[0])) : 0;
-      const n = args.length >= 2 ? Math.round(toNumber(args[1])) : 0;
+      if (!isRuntimeTensor(v))
+        throw builtinError(
+          "MATLAB:sparse:invalidMatrix",
+          "Input matrix must be single, double, or logical."
+        );
+      const rows = v.shape[0] || 1;
+      const cols = v.shape.length >= 2 ? v.shape[1] : 1;
+      const hasImag = v.imag !== undefined;
+      const irList: number[] = [];
+      const prList: number[] = [];
+      const piList: number[] | undefined = hasImag ? [] : undefined;
+      const jcArr = new Int32Array(cols + 1);
+      for (let c = 0; c < cols; c++) {
+        jcArr[c] = irList.length;
+        for (let r = 0; r < rows; r++) {
+          const idx = c * rows + r;
+          const re = v.data[idx];
+          const im = hasImag ? v.imag![idx] : 0;
+          if (re !== 0 || im !== 0) {
+            irList.push(r);
+            prList.push(re);
+            if (piList) piList.push(im);
+          }
+        }
+      }
+      jcArr[cols] = irList.length;
+      return RTV.sparseMatrix(
+        rows,
+        cols,
+        new Int32Array(irList),
+        jcArr,
+        allocFloat64Array(prList),
+        piList ? allocFloat64Array(piList) : undefined
+      );
+    }
+    if (args.length === 2) {
+      const m = sizeArg(args[0]);
+      const n = sizeArg(args[1]);
       return RTV.sparseMatrix(
         m,
         n,
@@ -263,336 +240,429 @@ registerIBuiltin({
         new Int32Array(n + 1),
         allocFloat64Array(0)
       );
-    },
-  }),
+    }
+    if (args.length >= 3) {
+      const iArr = sparseIndices(args[0]);
+      const jArr = sparseIndices(args[1]);
+      const len = Math.max(iArr.length, jArr.length);
+      let vArr: number[];
+      let vImag: number[] | undefined;
+      const vArg = args[2];
+      if (isRuntimeNumber(vArg)) {
+        vArr = new Array(len).fill(vArg);
+      } else if (isRuntimeComplexNumber(vArg)) {
+        vArr = new Array(len).fill(vArg.re);
+        vImag = new Array(len).fill(vArg.im);
+      } else if (isRuntimeLogical(vArg)) {
+        vArr = new Array(len).fill(vArg ? 1 : 0);
+      } else {
+        vArr = toNumericArray(vArg, "sparse");
+        vImag = toImagArray(vArg);
+      }
+      if (iArr.length !== jArr.length || iArr.length !== vArr.length) {
+        if (iArr.length === 1 && jArr.length === vArr.length) {
+          const iv = iArr[0];
+          iArr.length = 0;
+          for (let k = 0; k < vArr.length; k++) iArr.push(iv);
+        } else if (jArr.length === 1 && iArr.length === vArr.length) {
+          const jv = jArr[0];
+          jArr.length = 0;
+          for (let k = 0; k < vArr.length; k++) jArr.push(jv);
+        } else {
+          throw new RuntimeError("sparse: i, j, v must have the same length");
+        }
+      }
+      let m: number, n: number;
+      if (args.length >= 5) {
+        m = sizeArg(args[3]);
+        n = sizeArg(args[4]);
+      } else {
+        m = 0;
+        n = 0;
+        for (let k = 0; k < iArr.length; k++) {
+          if (iArr[k] > m) m = iArr[k];
+          if (jArr[k] > n) n = jArr[k];
+        }
+      }
+      return buildSparseFromTriplets(iArr, jArr, vArr, m, n, vImag);
+    }
+    throw new RuntimeError("sparse: unsupported call signature");
+  },
+});
+
+// ── spalloc ──────────────────────────────────────────────────────────────
+
+// spalloc(m, n, nzmax) allocates an all-zero m×n sparse matrix with space
+// for nzmax nonzeros. numbl's CSC storage grows dynamically, so nzmax is
+// only a hint and is ignored.
+builtin({
+  name: "spalloc",
+  nargin: [3, 4],
+  mfile: true,
+  apply: args => {
+    if (args.length === 4) checkTypename(args[3], "spalloc");
+    const m = sizeArg(args[0]);
+    const n = sizeArg(args[1]);
+    realScalarArg(args[2]);
+    return RTV.sparseMatrix(
+      m,
+      n,
+      new Int32Array(0),
+      new Int32Array(n + 1),
+      allocFloat64Array(0)
+    );
+  },
 });
 
 // ── speye ────────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "speye",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      let rows: number, cols: number;
-      if (args.length === 0) {
-        rows = cols = 1;
-      } else if (args.length === 1) {
-        if (isRuntimeTensor(args[0])) {
-          rows = Math.round(args[0].data[0]);
-          cols = args[0].data.length >= 2 ? Math.round(args[0].data[1]) : rows;
-        } else {
-          rows = cols = Math.round(toNumber(args[0]));
-        }
+  nargin: [0, 3],
+  apply: rawArgs => {
+    const args = [...rawArgs];
+    if (
+      args.length > 0 &&
+      (isRuntimeChar(args[args.length - 1]) ||
+        isRuntimeString(args[args.length - 1]))
+    )
+      checkTypename(args.pop()!, "speye");
+    let rows: number, cols: number;
+    if (args.length === 0) {
+      rows = cols = 1;
+    } else if (args.length === 1) {
+      if (isRuntimeTensor(args[0])) {
+        if (args[0].imag && args[0].imag.some(x => x !== 0))
+          throw new RuntimeError("speye: size arguments must be real");
+        rows = Math.round(args[0].data[0]);
+        cols = args[0].data.length >= 2 ? Math.round(args[0].data[1]) : rows;
       } else {
-        rows = Math.round(toNumber(args[0]));
-        cols = Math.round(toNumber(args[1]));
+        rows = cols = sizeArg(args[0]);
       }
-      const k = Math.min(rows, cols);
-      const ir = new Int32Array(k);
-      const pr = allocFloat64Array(k);
-      const jc = new Int32Array(cols + 1);
-      for (let i = 0; i < k; i++) {
-        ir[i] = i;
-        pr[i] = 1;
-      }
-      for (let c = 0; c <= cols; c++) {
-        jc[c] = Math.min(c, k);
-      }
-      return RTV.sparseMatrix(rows, cols, ir, jc, pr);
-    },
-  }),
+    } else if (args.length === 2) {
+      rows = sizeArg(args[0]);
+      cols = sizeArg(args[1]);
+    } else {
+      checkTypename(args[2], "speye");
+      rows = cols = 0;
+    }
+    const k = Math.min(rows, cols);
+    const ir = new Int32Array(k);
+    const pr = allocFloat64Array(k);
+    const jc = new Int32Array(cols + 1);
+    for (let i = 0; i < k; i++) {
+      ir[i] = i;
+      pr[i] = 1;
+    }
+    for (let c = 0; c <= cols; c++) {
+      jc[c] = Math.min(c, k);
+    }
+    return RTV.sparseMatrix(rows, cols, ir, jc, pr);
+  },
 });
 
 // ── spconvert ────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "spconvert",
-  resolve: () => ({
-    outputTypes: [{ kind: "unknown" }],
-    apply: args => {
-      if (args.length !== 1)
-        throw new RuntimeError("spconvert requires 1 argument");
-      const S = args[0];
-      if (!isRuntimeTensor(S))
-        throw new RuntimeError("spconvert: argument must be a matrix");
-      const nrows = S.shape[0];
-      const ncols = S.shape.length >= 2 ? S.shape[1] : 1;
-      if (ncols < 3)
-        throw new RuntimeError("spconvert: input must have at least 3 columns");
+  nargin: 1,
+  mfile: true,
+  apply: args => {
+    const S = args[0];
+    if (isRuntimeSparseMatrix(S)) return S;
+    if (!isRuntimeTensor(S) || S.imag)
+      throw new RuntimeError("spconvert: argument must be a real matrix");
+    const nrows = S.shape[0];
+    const ncols = S.shape.length >= 2 ? S.shape[1] : 1;
+    if (ncols < 3)
+      throw new RuntimeError("spconvert: input must have at least 3 columns");
+    // A fourth column holds the imaginary parts.
+    const complex = ncols >= 4;
 
-      const iArr: number[] = [];
-      const jArr: number[] = [];
-      const vArr: number[] = [];
-      let m = 0;
-      let n = 0;
+    const iArr: number[] = [];
+    const jArr: number[] = [];
+    const vArr: number[] = [];
+    const vIm: number[] = [];
+    let m = 0;
+    let n = 0;
 
-      for (let k = 0; k < nrows; k++) {
-        const i = S.data[k];
-        const j = S.data[k + nrows];
-        const v = S.data[k + 2 * nrows];
-        if (i > m) m = i;
-        if (j > n) n = j;
-        if (v !== 0) {
-          iArr.push(i);
-          jArr.push(j);
-          vArr.push(v);
-        }
+    for (let k = 0; k < nrows; k++) {
+      const i = S.data[k];
+      const j = S.data[k + nrows];
+      const v = S.data[k + 2 * nrows];
+      const vi = complex ? S.data[k + 3 * nrows] : 0;
+      if (i > m) m = i;
+      if (j > n) n = j;
+      if (v !== 0 || vi !== 0) {
+        iArr.push(i);
+        jArr.push(j);
+        vArr.push(v);
+        vIm.push(vi);
       }
-      return buildSparseFromTriplets(iArr, jArr, vArr, m, n);
-    },
-  }),
+    }
+    return buildSparseFromTriplets(
+      iArr,
+      jArr,
+      vArr,
+      m,
+      n,
+      complex ? vIm : undefined
+    );
+  },
 });
 
 // ── spdiags ──────────────────────────────────────────────────────────────
 
-registerIBuiltin({
+builtin({
   name: "spdiags",
-  resolve: (_argTypes, nargout) => ({
-    outputTypes:
-      nargout >= 2
-        ? [{ kind: "unknown" }, { kind: "unknown" }]
-        : [{ kind: "unknown" }],
-    apply: (args, nargout) => {
-      function getDiags(v: RuntimeValue): number[] {
-        if (isRuntimeNumber(v)) return [Math.round(v)];
-        if (isRuntimeTensor(v)) {
-          const res: number[] = [];
-          for (let i = 0; i < v.data.length; i++)
-            res.push(Math.round(v.data[i]));
-          return res;
-        }
-        throw new RuntimeError("spdiags: diagonal indices must be numeric");
+  nargin: [1, 4],
+  nargout: 2,
+  mfile: true,
+  apply: (rawArgs, nargout) => {
+    const args = rawArgs.map(boolToNumber);
+    function getDiags(v: RuntimeValue): number[] {
+      if (isRuntimeNumber(v)) return [Math.round(v)];
+      if (isRuntimeTensor(v)) {
+        const res: number[] = [];
+        for (let i = 0; i < v.data.length; i++) res.push(Math.round(v.data[i]));
+        return res;
       }
+      throw new RuntimeError("spdiags: diagonal indices must be numeric");
+    }
 
-      function matInfo(v: RuntimeValue) {
-        if (isRuntimeNumber(v))
-          return {
-            re: allocFloat64Array([v]),
-            im: undefined as Float64Array | undefined,
-            rows: 1,
-            cols: 1,
-          };
-        if (isRuntimeComplexNumber(v))
-          return {
-            re: allocFloat64Array([v.re]),
-            im: allocFloat64Array([v.im]) as Float64Array | undefined,
-            rows: 1,
-            cols: 1,
-          };
-        if (isRuntimeTensor(v))
-          return {
-            re: v.data,
-            im: v.imag as Float64Array | undefined,
-            rows: v.shape[0] ?? 1,
-            cols: v.shape.length >= 2 ? v.shape[1] : 1,
-          };
-        if (isRuntimeSparseMatrix(v)) {
-          const data = allocFloat64Array(v.m * v.n);
-          const imag = v.pi ? allocFloat64Array(v.m * v.n) : undefined;
-          for (let c = 0; c < v.n; c++) {
-            for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
-              data[c * v.m + v.ir[k]] = v.pr[k];
-              if (imag && v.pi) imag[c * v.m + v.ir[k]] = v.pi[k];
-            }
-          }
-          return {
-            re: data,
-            im: imag as Float64Array | undefined,
-            rows: v.m,
-            cols: v.n,
-          };
-        }
-        throw new RuntimeError("spdiags: argument must be numeric");
-      }
-
-      function elemRow(
-        m: number,
-        n: number,
-        dk: number,
-        diagLen: number,
-        j: number
-      ): number {
-        const minMN = Math.min(m, n);
-        if (m >= n) return dk <= 0 ? j : minMN - diagLen + j;
-        return dk >= 0 ? j : minMN - diagLen + j;
-      }
-
-      // S = spdiags(Bin, d, m, n)
-      if (args.length === 4) {
-        const {
-          re: binRe,
-          im: binIm,
-          rows: binRows,
-          cols: binCols,
-        } = matInfo(args[0]);
-        const diags = getDiags(args[1]);
-        const m = Math.round(toNumber(args[2]));
-        const n = Math.round(toNumber(args[3]));
-        const isComplex = binIm !== undefined;
-
-        const triplets: { row: number; col: number; re: number; im: number }[] =
-          [];
-        for (let k = 0; k < diags.length; k++) {
-          const dk = diags[k];
-          const iStart = Math.max(0, -dk);
-          const jStart = Math.max(0, dk);
-          const diagLen = Math.min(m - iStart, n - jStart);
-          if (diagLen <= 0) continue;
-          const bCol = Math.min(k, binCols - 1);
-          for (let j = 0; j < diagLen; j++) {
-            let br = elemRow(m, n, dk, diagLen, j);
-            if (binRows === 1) br = 0;
-            const binIdx = br + bCol * binRows;
-            const re = binRe[binIdx];
-            const im = isComplex && binIm ? binIm[binIdx] : 0;
-            if (re !== 0 || im !== 0) {
-              triplets.push({ row: iStart + j, col: jStart + j, re, im });
-            }
+    function matInfo(v: RuntimeValue) {
+      if (isRuntimeNumber(v))
+        return {
+          re: allocFloat64Array([v]),
+          im: undefined as Float64Array | undefined,
+          rows: 1,
+          cols: 1,
+        };
+      if (isRuntimeComplexNumber(v))
+        return {
+          re: allocFloat64Array([v.re]),
+          im: allocFloat64Array([v.im]) as Float64Array | undefined,
+          rows: 1,
+          cols: 1,
+        };
+      if (isRuntimeTensor(v))
+        return {
+          re: v.data,
+          im: v.imag as Float64Array | undefined,
+          rows: v.shape[0] ?? 1,
+          cols: v.shape.length >= 2 ? v.shape[1] : 1,
+        };
+      if (isRuntimeSparseMatrix(v)) {
+        const data = allocFloat64Array(v.m * v.n);
+        const imag = v.pi ? allocFloat64Array(v.m * v.n) : undefined;
+        for (let c = 0; c < v.n; c++) {
+          for (let k = v.jc[c]; k < v.jc[c + 1]; k++) {
+            data[c * v.m + v.ir[k]] = v.pr[k];
+            if (imag && v.pi) imag[c * v.m + v.ir[k]] = v.pi[k];
           }
         }
-        triplets.sort((a, b) => a.col - b.col || a.row - b.row);
-        const nnz = triplets.length;
-        const ir = new Int32Array(nnz);
-        const pr = allocFloat64Array(nnz);
-        const pi = isComplex ? allocFloat64Array(nnz) : undefined;
-        const jc = new Int32Array(n + 1);
-        let ti = 0;
-        for (let c = 0; c < n; c++) {
-          jc[c] = ti;
-          while (ti < nnz && triplets[ti].col === c) {
-            ir[ti] = triplets[ti].row;
-            pr[ti] = triplets[ti].re;
-            if (pi) pi[ti] = triplets[ti].im;
-            ti++;
+        return {
+          re: data,
+          im: imag as Float64Array | undefined,
+          rows: v.m,
+          cols: v.n,
+        };
+      }
+      throw new RuntimeError("spdiags: argument must be numeric");
+    }
+
+    function elemRow(
+      m: number,
+      n: number,
+      dk: number,
+      diagLen: number,
+      j: number
+    ): number {
+      const minMN = Math.min(m, n);
+      if (m >= n) return dk <= 0 ? j : minMN - diagLen + j;
+      return dk >= 0 ? j : minMN - diagLen + j;
+    }
+
+    // S = spdiags(Bin, d, m, n)
+    if (args.length === 4) {
+      const {
+        re: binRe,
+        im: binIm,
+        rows: binRows,
+        cols: binCols,
+      } = matInfo(args[0]);
+      const diags = getDiags(args[1]);
+      const m = sizeArg(args[2]);
+      const n = sizeArg(args[3]);
+      const isComplex = binIm !== undefined;
+
+      const triplets: { row: number; col: number; re: number; im: number }[] =
+        [];
+      for (let k = 0; k < diags.length; k++) {
+        const dk = diags[k];
+        const iStart = Math.max(0, -dk);
+        const jStart = Math.max(0, dk);
+        const diagLen = Math.min(m - iStart, n - jStart);
+        if (diagLen <= 0) continue;
+        const bCol = Math.min(k, binCols - 1);
+        for (let j = 0; j < diagLen; j++) {
+          let br = elemRow(m, n, dk, diagLen, j);
+          if (binRows === 1) br = 0;
+          const binIdx = br + bCol * binRows;
+          const re = binRe[binIdx];
+          const im = isComplex && binIm ? binIm[binIdx] : 0;
+          if (re !== 0 || im !== 0) {
+            triplets.push({ row: iStart + j, col: jStart + j, re, im });
           }
         }
-        jc[n] = ti;
-        return RTV.sparseMatrix(m, n, ir, jc, pr, pi);
+      }
+      triplets.sort((a, b) => a.col - b.col || a.row - b.row);
+      const nnz = triplets.length;
+      const ir = new Int32Array(nnz);
+      const pr = allocFloat64Array(nnz);
+      const pi = isComplex ? allocFloat64Array(nnz) : undefined;
+      const jc = new Int32Array(n + 1);
+      let ti = 0;
+      for (let c = 0; c < n; c++) {
+        jc[c] = ti;
+        while (ti < nnz && triplets[ti].col === c) {
+          ir[ti] = triplets[ti].row;
+          pr[ti] = triplets[ti].re;
+          if (pi) pi[ti] = triplets[ti].im;
+          ti++;
+        }
+      }
+      jc[n] = ti;
+      return RTV.sparseMatrix(m, n, ir, jc, pr, pi);
+    }
+
+    // S = spdiags(Bin, d, A)
+    if (args.length === 3) {
+      const {
+        re: binRe,
+        im: binIm,
+        rows: binRows,
+        cols: binCols,
+      } = matInfo(args[0]);
+      const diags = getDiags(args[1]);
+      const A0 = args[2];
+      const A = isRuntimeSparseMatrix(A0)
+        ? sparseToDense(A0)
+        : isRuntimeNumber(A0)
+          ? RTV.tensor(allocFloat64Array([A0]), [1, 1])
+          : A0;
+      if (!isRuntimeTensor(A))
+        throw new RuntimeError("spdiags: third argument must be a matrix");
+      const m = A.shape[0];
+      const n = A.shape.length >= 2 ? A.shape[1] : 1;
+      const data = allocFloat64Array(A.data);
+      const isComplex = binIm !== undefined || A.imag !== undefined;
+      const idata = isComplex
+        ? A.imag
+          ? allocFloat64Array(A.imag)
+          : allocFloat64Array(m * n)
+        : undefined;
+
+      for (let k = 0; k < diags.length; k++) {
+        const dk = diags[k];
+        const iStart = Math.max(0, -dk);
+        const jStart = Math.max(0, dk);
+        const diagLen = Math.min(m - iStart, n - jStart);
+        if (diagLen <= 0) continue;
+        const col = Math.min(k, binCols - 1);
+        for (let j = 0; j < diagLen; j++) {
+          let br = elemRow(m, n, dk, diagLen, j);
+          if (binRows === 1) br = 0;
+          const binIdx = br + col * binRows;
+          const idx = iStart + j + (jStart + j) * m;
+          data[idx] = binRe[binIdx];
+          if (idata) idata[idx] = binIm ? binIm[binIdx] : 0;
+        }
+      }
+      // The result is sparse, as in MATLAB.
+      return denseToSparse(RTV.tensor(data, [m, n], idata));
+    }
+
+    // Bout = spdiags(A, d)
+    if (args.length === 2) {
+      const { re: aRe, im: aIm, rows: m, cols: n } = matInfo(args[0]);
+      const diags = getDiags(args[1]);
+      const minMN = Math.min(m, n);
+      const p = diags.length;
+      const data = allocFloat64Array(minMN * p);
+      const isComplex = aIm !== undefined;
+      const idata = isComplex ? allocFloat64Array(minMN * p) : undefined;
+
+      for (let k = 0; k < p; k++) {
+        const dk = diags[k];
+        const iStart = Math.max(0, -dk);
+        const jStart = Math.max(0, dk);
+        const diagLen = Math.min(m - iStart, n - jStart);
+        for (let j = 0; j < diagLen; j++) {
+          const br = elemRow(m, n, dk, diagLen, j);
+          const aIdx = iStart + j + (jStart + j) * m;
+          const boutIdx = br + k * minMN;
+          data[boutIdx] = aRe[aIdx];
+          if (idata && aIm) idata[boutIdx] = aIm[aIdx];
+        }
+      }
+      return RTV.tensor(data, [minMN, p], idata);
+    }
+
+    // [Bout, id] = spdiags(A)
+    if (args.length === 1) {
+      const { re: aRe, im: aIm, rows: m, cols: n } = matInfo(args[0]);
+      const minMN = Math.min(m, n);
+      const nonzeroDiags: number[] = [];
+      for (let dk = -(m - 1); dk <= n - 1; dk++) {
+        const iStart = Math.max(0, -dk);
+        const jStart = Math.max(0, dk);
+        const diagLen = Math.min(m - iStart, n - jStart);
+        let hasNonzero = false;
+        for (let j = 0; j < diagLen; j++) {
+          const idx = iStart + j + (jStart + j) * m;
+          if (aRe[idx] !== 0 || (aIm && aIm[idx] !== 0)) {
+            hasNonzero = true;
+            break;
+          }
+        }
+        if (hasNonzero) nonzeroDiags.push(dk);
       }
 
-      // S = spdiags(Bin, d, A)
-      if (args.length === 3) {
-        const {
-          re: binRe,
-          im: binIm,
-          rows: binRows,
-          cols: binCols,
-        } = matInfo(args[0]);
-        const diags = getDiags(args[1]);
-        const A = args[2];
-        if (!isRuntimeTensor(A))
-          throw new RuntimeError("spdiags: third argument must be a matrix");
-        const m = A.shape[0];
-        const n = A.shape.length >= 2 ? A.shape[1] : 1;
-        const data = allocFloat64Array(A.data);
-        const isComplex = binIm !== undefined || A.imag !== undefined;
-        const idata = isComplex
-          ? A.imag
-            ? allocFloat64Array(A.imag)
-            : allocFloat64Array(m * n)
-          : undefined;
-
-        for (let k = 0; k < diags.length; k++) {
-          const dk = diags[k];
-          const iStart = Math.max(0, -dk);
-          const jStart = Math.max(0, dk);
-          const diagLen = Math.min(m - iStart, n - jStart);
-          if (diagLen <= 0) continue;
-          const col = Math.min(k, binCols - 1);
-          for (let j = 0; j < diagLen; j++) {
-            let br = elemRow(m, n, dk, diagLen, j);
-            if (binRows === 1) br = 0;
-            const binIdx = br + col * binRows;
-            const idx = iStart + j + (jStart + j) * m;
-            data[idx] = binRe[binIdx];
-            if (idata) idata[idx] = binIm ? binIm[binIdx] : 0;
-          }
-        }
-        return RTV.tensor(data, [m, n], idata);
+      const p = nonzeroDiags.length;
+      if (p === 0) {
+        const empty = RTV.tensor(allocFloat64Array(0), [minMN, 0]);
+        if (nargout <= 1) return empty;
+        return [empty, RTV.tensor(allocFloat64Array(0), [0, 1])];
       }
 
-      // Bout = spdiags(A, d)
-      if (args.length === 2) {
-        const { re: aRe, im: aIm, rows: m, cols: n } = matInfo(args[0]);
-        const diags = getDiags(args[1]);
-        const minMN = Math.min(m, n);
-        const p = diags.length;
-        const data = allocFloat64Array(minMN * p);
-        const isComplex = aIm !== undefined;
-        const idata = isComplex ? allocFloat64Array(minMN * p) : undefined;
+      const data = allocFloat64Array(minMN * p);
+      const isComplex = aIm !== undefined;
+      const idata = isComplex ? allocFloat64Array(minMN * p) : undefined;
 
-        for (let k = 0; k < p; k++) {
-          const dk = diags[k];
-          const iStart = Math.max(0, -dk);
-          const jStart = Math.max(0, dk);
-          const diagLen = Math.min(m - iStart, n - jStart);
-          for (let j = 0; j < diagLen; j++) {
-            const br = elemRow(m, n, dk, diagLen, j);
-            const aIdx = iStart + j + (jStart + j) * m;
-            const boutIdx = br + k * minMN;
-            data[boutIdx] = aRe[aIdx];
-            if (idata && aIm) idata[boutIdx] = aIm[aIdx];
-          }
+      for (let k = 0; k < p; k++) {
+        const dk = nonzeroDiags[k];
+        const iStart = Math.max(0, -dk);
+        const jStart = Math.max(0, dk);
+        const diagLen = Math.min(m - iStart, n - jStart);
+        for (let j = 0; j < diagLen; j++) {
+          const br = elemRow(m, n, dk, diagLen, j);
+          const aIdx = iStart + j + (jStart + j) * m;
+          const boutIdx = br + k * minMN;
+          data[boutIdx] = aRe[aIdx];
+          if (idata && aIm) idata[boutIdx] = aIm[aIdx];
         }
-        return RTV.tensor(data, [minMN, p], idata);
       }
 
-      // [Bout, id] = spdiags(A)
-      if (args.length === 1) {
-        const { re: aRe, im: aIm, rows: m, cols: n } = matInfo(args[0]);
-        const minMN = Math.min(m, n);
-        const nonzeroDiags: number[] = [];
-        for (let dk = -(m - 1); dk <= n - 1; dk++) {
-          const iStart = Math.max(0, -dk);
-          const jStart = Math.max(0, dk);
-          const diagLen = Math.min(m - iStart, n - jStart);
-          let hasNonzero = false;
-          for (let j = 0; j < diagLen; j++) {
-            const idx = iStart + j + (jStart + j) * m;
-            if (aRe[idx] !== 0 || (aIm && aIm[idx] !== 0)) {
-              hasNonzero = true;
-              break;
-            }
-          }
-          if (hasNonzero) nonzeroDiags.push(dk);
-        }
+      const Bout = RTV.tensor(data, [minMN, p], idata);
+      if (nargout <= 1) return Bout;
+      const idData = allocFloat64Array(p);
+      for (let i = 0; i < p; i++) idData[i] = nonzeroDiags[i];
+      return [Bout, RTV.tensor(idData, [p, 1])];
+    }
 
-        const p = nonzeroDiags.length;
-        if (p === 0) {
-          const empty = RTV.tensor(allocFloat64Array(0), [minMN, 0]);
-          if (nargout <= 1) return empty;
-          return [empty, RTV.tensor(allocFloat64Array(0), [0, 1])];
-        }
-
-        const data = allocFloat64Array(minMN * p);
-        const isComplex = aIm !== undefined;
-        const idata = isComplex ? allocFloat64Array(minMN * p) : undefined;
-
-        for (let k = 0; k < p; k++) {
-          const dk = nonzeroDiags[k];
-          const iStart = Math.max(0, -dk);
-          const jStart = Math.max(0, dk);
-          const diagLen = Math.min(m - iStart, n - jStart);
-          for (let j = 0; j < diagLen; j++) {
-            const br = elemRow(m, n, dk, diagLen, j);
-            const aIdx = iStart + j + (jStart + j) * m;
-            const boutIdx = br + k * minMN;
-            data[boutIdx] = aRe[aIdx];
-            if (idata && aIm) idata[boutIdx] = aIm[aIdx];
-          }
-        }
-
-        const Bout = RTV.tensor(data, [minMN, p], idata);
-        if (nargout <= 1) return Bout;
-        const idData = allocFloat64Array(p);
-        for (let i = 0; i < p; i++) idData[i] = nonzeroDiags[i];
-        return [Bout, RTV.tensor(idData, [p, 1])];
-      }
-
-      throw new RuntimeError("spdiags requires 1 to 4 arguments");
-    },
-  }),
+    throw new RuntimeError("spdiags requires 1 to 4 arguments");
+  },
 });
 
 // ── spparms ────────────────────────────────────────────────────────────────
@@ -636,67 +706,68 @@ function spparmsVector(): RuntimeValue {
   ]);
 }
 
-registerIBuiltin({
+builtin({
   name: "spparms",
-  resolve: (argTypes, nargout) => {
-    if (argTypes.length > 2) return null;
-    const tensorOut = { kind: "tensor" as const, isComplex: false };
-    const outputTypes =
-      nargout >= 2 ? [{ kind: "char" as const }, tensorOut] : [tensorOut];
-    return {
-      outputTypes,
-      apply: (args, n) => {
-        if (args.length === 0) {
-          if (n >= 2) {
-            // [keys, vals] = spparms
-            const width = Math.max(...SPPARMS_KEYS.map(k => k.length));
-            const padded = SPPARMS_KEYS.map(k => k.padEnd(width)).join("");
-            return [
-              new RuntimeChar(padded, [SPPARMS_KEYS.length, width]),
-              spparmsVector(),
-            ];
-          }
-          return spparmsVector();
-        }
-        const first = args[0];
-        if (isRuntimeChar(first) || isRuntimeString(first)) {
-          const key = parseStringArgLower(first);
-          if (args.length >= 2) {
-            // spparms('key', value) — store (no solver effect).
-            const idx = SPPARMS_KEYS.indexOf(key);
-            if (idx >= 0) spparmsState[idx] = toNumber(args[1]);
-            return RTV.num(0);
-          }
-          if (key === "default") {
-            spparmsState = Float64Array.from(SPPARMS_DEFAULTS);
-            return RTV.num(0);
-          }
-          if (key === "tight") {
-            // MATLAB's 'tight' preset; numbl ignores the knobs, so leave
-            // the stored values in place.
-            return RTV.num(0);
-          }
-          // spparms('key') — query a single parameter value.
-          const idx = SPPARMS_KEYS.indexOf(key);
-          if (idx >= 0) return RTV.num(spparmsState[idx]);
-          throw new RuntimeError(`spparms: unknown parameter '${key}'`);
-        }
-        // spparms(values) — restore from a vector.
-        const vals = isRuntimeNumber(first)
-          ? [first]
-          : isRuntimeTensor(first)
-            ? Array.from(first.data)
-            : null;
-        if (vals === null)
-          throw new RuntimeError(
-            "spparms: argument must be a parameter name or value vector"
-          );
-        const next = Float64Array.from(spparmsState);
-        for (let i = 0; i < Math.min(vals.length, next.length); i++)
-          next[i] = vals[i];
-        spparmsState = next;
-        return RTV.num(0);
-      },
-    };
+  nargin: [0, 2],
+  nargout: 2,
+  mfile: true,
+  apply: (args, n) => {
+    if (args.length === 0) {
+      if (n >= 2) {
+        // [keys, vals] = spparms
+        const width = Math.max(...SPPARMS_KEYS.map(k => k.length));
+        const padded = SPPARMS_KEYS.map(k => k.padEnd(width)).join("");
+        return [
+          new RuntimeChar(padded, [SPPARMS_KEYS.length, width]),
+          spparmsVector(),
+        ];
+      }
+      return spparmsVector();
+    }
+    const first = args[0];
+    const isText = isRuntimeChar(first) || isRuntimeString(first);
+    const key = isText ? parseStringArgLower(first) : "";
+    // Everything except spparms('key') sets parameters and has no output.
+    const query = isText && args.length === 1 && SPPARMS_KEYS.includes(key);
+    if (!query && n >= 1)
+      throw builtinError(
+        "MATLAB:spparms:TooManyOutputs",
+        "Too many output arguments."
+      );
+    if (isText) {
+      if (args.length >= 2) {
+        // spparms('key', value) — store (no solver effect).
+        const idx = SPPARMS_KEYS.indexOf(key);
+        if (idx >= 0) spparmsState[idx] = realScalarArg(args[1], "Value");
+        return;
+      }
+      if (key === "default") {
+        spparmsState = Float64Array.from(SPPARMS_DEFAULTS);
+        return;
+      }
+      if (key === "tight") {
+        // MATLAB's 'tight' preset; numbl ignores the knobs, so leave
+        // the stored values in place.
+        return;
+      }
+      // spparms('key') — query a single parameter value.
+      const idx = SPPARMS_KEYS.indexOf(key);
+      if (idx >= 0) return RTV.num(spparmsState[idx]);
+      throw new RuntimeError(`spparms: unknown parameter '${key}'`);
+    }
+    // spparms(values) — restore from a vector.
+    const vals = isRuntimeNumber(first)
+      ? [first]
+      : isRuntimeTensor(first) && !first.imag
+        ? Array.from(first.data)
+        : null;
+    if (vals === null)
+      throw new RuntimeError(
+        "spparms: argument must be a parameter name or value vector"
+      );
+    const next = Float64Array.from(spparmsState);
+    for (let i = 0; i < Math.min(vals.length, next.length); i++)
+      next[i] = vals[i];
+    spparmsState = next;
   },
 });
