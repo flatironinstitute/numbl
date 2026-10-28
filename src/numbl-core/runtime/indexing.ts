@@ -1,12 +1,19 @@
 /**
- * Indexing, struct field access, range creation, and tensor concatenation.
+ * Indexing: per-container gather / scatter / resize on top of the
+ * storage-independent planner in `indexPlan.ts`.
+ *
+ * Tensors (real, complex, logical), scalars, char arrays and cell arrays
+ * use the planner for read, store (with growth) and delete. Sparse
+ * matrices, string arrays and struct arrays still have their own
+ * resolution code.
  */
 
 import {
   type RuntimeValue,
   RuntimeTensor,
-  type RuntimeCell,
+  RuntimeCell,
   type RuntimeSparseMatrix,
+  type RuntimeComplexNumber,
   RuntimeChar,
   isRuntimeTensor,
   isRuntimeLogical,
@@ -26,41 +33,36 @@ import {
 } from "./types.js";
 import { RuntimeError } from "./error.js";
 import { RTV } from "./constructors.js";
-import { tensorSize2D, colMajorIndex, sub2ind } from "./utils.js";
 import { toNumber } from "./convert.js";
-import { type RefcountRuntime, decref, isShared } from "./refcount.js";
+import { type RefcountRuntime, isShared } from "./refcount.js";
 import { allocFloat64Array } from "./alloc.js";
+import {
+  COLON_INDEX,
+  type Selection,
+  planIndex,
+  planStore,
+  planDelete,
+  offsetAt,
+  forEachGrowRun,
+  growsInPlace,
+} from "./indexPlan.js";
+
+export { COLON_INDEX };
 
 /** Runtime surface needed by index-store mutations. The full Runtime
  *  class satisfies this structurally. */
 type StoreRuntime = RefcountRuntime;
 
-// ── Colon index sentinel ─────────────────────────────────────────────────
-
-/** Sentinel marker for colon (:) indexing — means "all indices in this dimension" */
-export const COLON_INDEX: RuntimeValue = "__COLON__";
-
 /** Check if an index is a colon sentinel */
 function isColonIndex(v: RuntimeValue): boolean {
-  return isRuntimeString(v) && v === "__COLON__";
+  return v === COLON_INDEX;
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────
 
-/** Extract real and imaginary parts from a value for assignment into a tensor. */
-function toReIm(v: RuntimeValue): { re: number; im: number } {
-  if (isRuntimeNumber(v)) return { re: v, im: 0 };
-  if (isRuntimeLogical(v)) return { re: v ? 1 : 0, im: 0 };
-  if (isRuntimeComplexNumber(v)) return { re: v.re, im: v.im };
-  if (isRuntimeTensor(v) && v.data.length === 1) {
-    return { re: v.data[0], im: v.imag ? v.imag[0] : 0 };
-  }
-  if (isRuntimeSparseMatrix(v) && v.m === 1 && v.n === 1) {
-    const re = v.pr.length > 0 ? v.pr[0] : 0;
-    const im = v.pi && v.pi.length > 0 ? v.pi[0] : 0;
-    return { re, im };
-  }
-  throw new RuntimeError(`Cannot convert ${kstr(v)} to number for assignment`);
+/** Shape of a char array as seen by indexing. */
+function charShape(c: RuntimeChar): readonly number[] {
+  return c.shape ?? (c.value.length === 0 ? [0, 0] : [1, c.value.length]);
 }
 
 /** Convert a char value to a numeric (column-major) tensor of its code
@@ -70,8 +72,7 @@ function toReIm(v: RuntimeValue): { re: number; im: number } {
  *  char array runs on the numeric tensor machinery (MATLAB treats char as
  *  numeric for indexed assignment). */
 export function charToNumericTensor(c: RuntimeChar): RuntimeTensor {
-  const rows = c.shape ? c.shape[0] : 1;
-  const cols = c.shape ? c.shape[1] : c.value.length;
+  const [rows, cols] = charShape(c);
   const data = allocFloat64Array(rows * cols);
   for (let r = 0; r < rows; r++) {
     for (let col = 0; col < cols; col++) {
@@ -92,26 +93,12 @@ export function numericTensorToChar(t: RuntimeTensor): RuntimeChar {
       s += String.fromCharCode(Math.round(t.data[col * rows + r]));
     }
   }
-  return rows > 1 ? new RuntimeChar(s, [rows, cols]) : RTV.char(s);
+  if (rows === 1 && cols > 0) return RTV.char(s);
+  if (rows === 0 && cols === 0) return RTV.char("");
+  return new RuntimeChar(s, [rows, cols]);
 }
 
-/** Ensure a tensor has an imag array (allocate if needed). */
-function ensureImag(t: RuntimeTensor): void {
-  if (!t.imag) {
-    t.imag = allocFloat64Array(t.data.length);
-  }
-}
-
-/** Return a scalar (number or complex) from a tensor at linear index `i`. */
-function extractTensorElement(base: RuntimeTensor, i: number): RuntimeValue {
-  if (base.imag !== undefined) {
-    const im = base.imag[i];
-    return im === 0 ? RTV.num(base.data[i]) : RTV.complex(base.data[i], im);
-  }
-  // Preserve logical class on scalar extraction.
-  if (base._isLogical === true) return base.data[i] !== 0;
-  return RTV.num(base.data[i]);
-}
+// ── Legacy subscript helpers (sparse only) ──────────────────────────────
 
 /** Convert a RuntimeValue index to an array of 0-based numeric indices.
  * Handles: colon (all), logical scalar, logical tensor, numeric tensor, numeric scalar.
@@ -146,123 +133,6 @@ function resolveIndex(
   if (i < 0 || (boundsLimit > 0 && i >= boundsLimit))
     throw new RuntimeError("Index exceeds array bounds");
   return [i];
-}
-
-/** Resolve a pair of row/col indices to 0-based arrays.
- *  Works for tensor, colon, logical, and scalar indices. */
-function resolveIndex2D(
-  rowIdx: RuntimeValue,
-  colIdx: RuntimeValue,
-  rows: number,
-  cols: number
-): { rowIndices: number[]; colIndices: number[] } {
-  return {
-    rowIndices: resolveIndex(rowIdx, rows),
-    colIndices: resolveIndex(colIdx, cols),
-  };
-}
-
-/**
- * Grow a tensor to at least `newRows × newCols`, copying old column-major data.
- * Returns the new tensor. If no growth is needed, returns the original.
- */
-function growTensor2D(
-  base: RuntimeTensor,
-  newRows: number,
-  newCols: number
-): RuntimeTensor {
-  const [curRows, curCols] = tensorSize2D(base);
-  if (newRows <= curRows && newCols <= curCols) return base;
-  const nr = Math.max(curRows, newRows);
-  const nc = Math.max(curCols, newCols);
-  const newData = allocFloat64Array(nr * nc);
-  const hasImag = base.imag !== undefined;
-  const newIm = hasImag ? allocFloat64Array(nr * nc) : undefined;
-  for (let c = 0; c < curCols; c++) {
-    for (let r = 0; r < curRows; r++) {
-      newData[r + c * nr] = base.data[r + c * curRows];
-      if (newIm && base.imag) newIm[r + c * nr] = base.imag[r + c * curRows];
-    }
-  }
-  return RTV.tensor(newData, [nr, nc], newIm);
-}
-
-/**
- * Assign a scalar (re, im) or tensor RHS into a tensor slice defined by
- * resolved 0-based rowIndices and colIndices. Mutates `base` in place.
- */
-function assignSlice(
-  base: RuntimeTensor,
-  rowIndices: number[],
-  colIndices: number[],
-  rhs: RuntimeValue,
-  curRows: number
-): void {
-  if (isRuntimeTensor(rhs)) {
-    const nR = rowIndices.length;
-    const nC = colIndices.length;
-    // A 1-element RHS broadcasts across the whole slice (MATLAB scalar
-    // expansion), regardless of storage. A 1×1 tensor from a 2-D slice
-    // (e.g. x(:,k)) must behave exactly like a scalar number here.
-    if (rhs.data.length === 1) {
-      const re = rhs.data[0];
-      const im = rhs.imag ? rhs.imag[0] : 0;
-      if (im !== 0 || base.imag) ensureImag(base);
-      for (const r of rowIndices) {
-        for (const c of colIndices) {
-          const li = colMajorIndex(r, c, curRows);
-          base.data[li] = re;
-          if (base.imag) base.imag[li] = im;
-        }
-      }
-      return;
-    }
-    const [rhsRows, rhsCols] = tensorSize2D(rhs);
-    const shapeMatches = rhsRows === nR && rhsCols === nC;
-    // MATLAB: when the target slice is a vector (one side is 1), accept
-    // a matching-count RHS regardless of its row/column orientation.
-    // e.g. P(q, 1) = 1:nq  — nq × 1 slice, 1 × nq RHS.
-    // For 2-D slices the shape must match exactly.
-    const sliceIsVector = nR === 1 || nC === 1;
-    const rhsIsVector = rhsRows === 1 || rhsCols === 1;
-    const countMatches = rhs.data.length === nR * nC;
-    if (!shapeMatches && !(sliceIsVector && rhsIsVector && countMatches)) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    if (rhs.imag || base.imag) ensureImag(base);
-    if (shapeMatches) {
-      for (let ri = 0; ri < nR; ri++) {
-        for (let ci = 0; ci < nC; ci++) {
-          const dstLi = colMajorIndex(rowIndices[ri], colIndices[ci], curRows);
-          const srcLi = colMajorIndex(ri, ci, rhsRows);
-          base.data[dstLi] = rhs.data[srcLi];
-          if (base.imag) base.imag[dstLi] = rhs.imag ? rhs.imag[srcLi] : 0;
-        }
-      }
-    } else {
-      // Linearized column-major walk of the slice, pulling from rhs.data
-      // in its natural storage order.
-      let k = 0;
-      for (let ci = 0; ci < nC; ci++) {
-        for (let ri = 0; ri < nR; ri++) {
-          const dstLi = colMajorIndex(rowIndices[ri], colIndices[ci], curRows);
-          base.data[dstLi] = rhs.data[k];
-          if (base.imag) base.imag[dstLi] = rhs.imag ? rhs.imag[k] : 0;
-          k++;
-        }
-      }
-    }
-  } else {
-    const { re, im } = toReIm(rhs);
-    if (im !== 0 || base.imag) ensureImag(base);
-    for (const r of rowIndices) {
-      for (const c of colIndices) {
-        const li = colMajorIndex(r, c, curRows);
-        base.data[li] = re;
-        if (base.imag) base.imag[li] = im;
-      }
-    }
-  }
 }
 
 /** Extract RHS values as individual RuntimeValues for element-wise assignment. */
@@ -656,492 +526,504 @@ function indexIntoSparse(
   throw new RuntimeError("Sparse matrix supports 1 or 2 index dimensions");
 }
 
-// ── Index read: per-type handlers ────────────────────────────────────────
+// ── Gather / scatter primitives ──────────────────────────────────────────
 
-function indexIntoScalar(
-  base: RuntimeValue,
-  indices: RuntimeValue[]
-): RuntimeValue {
-  // If any index is an empty tensor, result is empty
-  if (indices.some(idx => isRuntimeTensor(idx) && idx.data.length === 0)) {
-    if (indices.length === 2) {
-      const dimSize = (idx: RuntimeValue): number => {
-        if (isColonIndex(idx)) return 1;
-        if (isRuntimeTensor(idx)) return idx.data.length;
-        return 1;
-      };
-      return RTV.tensor(allocFloat64Array(0), [
-        dimSize(indices[0]),
-        dimSize(indices[1]),
-      ]);
-    }
-    const idx = indices[0];
-    if (isRuntimeTensor(idx)) {
-      const is0x0 =
-        idx.shape.length === 2 && idx.shape[0] === 0 && idx.shape[1] === 0;
-      const outShape = is0x0 ? [0, 0] : [...idx.shape];
-      return RTV.tensor(allocFloat64Array(0), outShape);
-    }
-  }
-  // Logical indexing on scalar
-  if (indices.length === 1) {
-    const idx = indices[0];
-    if (isRuntimeLogical(idx)) {
-      if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-      return base;
-    }
-    if (isRuntimeTensor(idx) && idx._isLogical) {
-      let count = 0;
-      for (let j = 0; j < idx.data.length; j++) if (idx.data[j]) count++;
-      if (count === 0) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-      const out = allocFloat64Array(count);
-      out.fill(isRuntimeNumber(base) ? base : (base as { re: number }).re);
-      if (isRuntimeComplexNumber(base) && base.im !== 0) {
-        const imOut = allocFloat64Array(count);
-        imOut.fill(base.im);
-        return RTV.tensor(out, [1, count], imOut);
-      }
-      return RTV.tensor(out, [1, count]);
-    }
-  }
-  // Scalar indexed by a non-empty tensor of indices: every index must
-  // be 1 (since the scalar is a 1-element array), and the result
-  // replicates the scalar with the index's shape — MATLAB-style.
-  if (indices.length === 1 && isRuntimeTensor(indices[0])) {
-    const idx = indices[0];
-    for (let i = 0; i < idx.data.length; i++) {
-      const k = Math.round(idx.data[i]);
-      if (k !== 1) throw new RuntimeError("Index exceeds array bounds");
-    }
-    const n = idx.data.length;
-    const scalarRe = isRuntimeNumber(base) ? base : (base as { re: number }).re;
-    const data = allocFloat64Array(n);
-    data.fill(scalarRe);
-    if (isRuntimeComplexNumber(base) && base.im !== 0) {
-      const im = allocFloat64Array(n);
-      im.fill(base.im);
-      return RTV.tensor(data, [...idx.shape], im);
-    }
-    return RTV.tensor(data, [...idx.shape]);
-  }
-  // Scalar indexed with multiple subscripts, e.g. A(i,j) on a 1x1 A. Every
-  // subscript must select position 1; a tensor subscript such as [1;1;1]
-  // replicates the scalar. The result shape is the product of the per-
-  // dimension index lengths (a colon or scalar subscript has length 1).
-  const dimLengths: number[] = [];
-  let anyTensor = false;
-  for (const idx of indices) {
-    if (isColonIndex(idx)) {
-      dimLengths.push(1);
-    } else if (isRuntimeTensor(idx)) {
-      anyTensor = true;
-      for (let i = 0; i < idx.data.length; i++) {
-        if (Math.round(idx.data[i]) !== 1)
-          throw new RuntimeError("Index exceeds array bounds");
-      }
-      dimLengths.push(idx.data.length);
+const SCALAR_SHAPE: readonly number[] = [1, 1];
+
+/** Shape of a tensor or cell as seen by indexing (at least 2-D). */
+function arrayShape(shape: number[]): readonly number[] {
+  if (shape.length >= 2) return shape;
+  return shape.length === 1 ? [1, shape[0]] : SCALAR_SHAPE;
+}
+
+function isScalarShape(shape: readonly number[]): boolean {
+  return shape.length === 2 && shape[0] === 1 && shape[1] === 1;
+}
+
+/** out[k] = src[offset k]. */
+function gatherNumbers(
+  src: Float64Array,
+  sel: Selection,
+  out: Float64Array
+): void {
+  const n = sel.n;
+  if (sel.offsets === null) {
+    const start = sel.start;
+    const step = sel.step;
+    if (step === 1 && n > 16) {
+      out.set(src.subarray(start, start + n));
     } else {
-      if (Math.round(toNumber(idx)) !== 1)
-        throw new RuntimeError("Index exceeds array bounds");
-      dimLengths.push(1);
+      for (let k = 0, o = start; k < n; k++, o += step) out[k] = src[o];
     }
+  } else {
+    const off = sel.offsets;
+    const b = sel.bias;
+    for (let k = 0; k < n; k++) out[k] = src[off[k] - b];
   }
-  // No tensor subscripts → plain scalar reference, e.g. A(1), A(1,1), A(:).
-  if (!anyTensor) return base;
-  const total = dimLengths.reduce((a, b) => a * b, 1);
-  const scalarRe = isRuntimeNumber(base) ? base : (base as { re: number }).re;
-  const data = allocFloat64Array(total);
-  data.fill(scalarRe);
-  const outShape = dimLengths.length >= 2 ? dimLengths : [dimLengths[0], 1];
-  if (isRuntimeComplexNumber(base) && base.im !== 0) {
-    const im = allocFloat64Array(total);
-    im.fill(base.im);
-    return RTV.tensor(data, outShape, im);
+}
+
+/** dst[offset k] = v. */
+function fillNumbers(dst: Float64Array, sel: Selection, v: number): void {
+  const n = sel.n;
+  if (n === 1) {
+    dst[offsetAt(sel, 0)] = v;
+    return;
   }
-  return RTV.tensor(data, outShape);
+  if (sel.offsets === null) {
+    const step = sel.step;
+    if (step === 1) dst.fill(v, sel.start, sel.start + n);
+    else for (let k = 0, o = sel.start; k < n; k++, o += step) dst[o] = v;
+  } else {
+    const off = sel.offsets;
+    const b = sel.bias;
+    for (let k = 0; k < n; k++) dst[off[k] - b] = v;
+  }
+}
+
+/** dst[offset k] = src[k]. */
+function scatterNumbers(
+  dst: Float64Array,
+  sel: Selection,
+  src: Float64Array
+): void {
+  const n = sel.n;
+  if (sel.offsets === null) {
+    const step = sel.step;
+    if (step === 1 && n > 16) dst.set(src.subarray(0, n), sel.start);
+    else for (let k = 0, o = sel.start; k < n; k++, o += step) dst[o] = src[k];
+  } else {
+    const off = sel.offsets;
+    const b = sel.bias;
+    for (let k = 0; k < n; k++) dst[off[k] - b] = src[k];
+  }
+}
+
+/** The selected elements of a generic element array. */
+function gatherElements<T>(data: readonly T[], sel: Selection): T[] {
+  const n = sel.n;
+  const out = new Array<T>(n);
+  if (sel.offsets === null) {
+    const step = sel.step;
+    for (let k = 0, o = sel.start; k < n; k++, o += step) out[k] = data[o];
+  } else {
+    const off = sel.offsets;
+    const b = sel.bias;
+    for (let k = 0; k < n; k++) out[k] = data[off[k] - b];
+  }
+  return out;
+}
+
+function hasNonZero(a: Float64Array): boolean {
+  for (let i = 0; i < a.length; i++) if (a[i] !== 0) return true;
+  return false;
+}
+
+/** A 0x0 RHS (`[]` or `''`) turns an indexed assignment into deletion. */
+function isDeletionRhs(rhs: RuntimeValue): boolean {
+  if (isRuntimeTensor(rhs)) {
+    const s = rhs.shape;
+    return rhs.data.length === 0 && s.length === 2 && s[0] === 0 && s[1] === 0;
+  }
+  if (isRuntimeChar(rhs)) {
+    const s = charShape(rhs);
+    return s[0] === 0 && s[1] === 0;
+  }
+  return false;
+}
+
+// ── Tensors and numeric scalars ──────────────────────────────────────────
+
+/** The selected elements of a tensor. A 1x1 result is returned as a
+ *  scalar; an all-zero imaginary part is dropped (MATLAB). */
+function gatherTensor(
+  base: RuntimeTensor,
+  sel: Selection,
+  shape: number[]
+): RuntimeValue {
+  if (sel.n === 1 && isScalarShape(shape)) {
+    const o = offsetAt(sel, 0);
+    if (base.imag !== undefined && base.imag[o] !== 0)
+      return RTV.complex(base.data[o], base.imag[o]);
+    if (base._isLogical === true) return base.data[o] !== 0;
+    return base.data[o];
+  }
+  const data = allocFloat64Array(sel.n);
+  gatherNumbers(base.data, sel, data);
+  let imag: Float64Array | undefined;
+  if (base.imag !== undefined) {
+    imag = allocFloat64Array(sel.n);
+    gatherNumbers(base.imag, sel, imag);
+    if (!hasNonZero(imag)) imag = undefined;
+  }
+  return new RuntimeTensor(
+    data,
+    shape,
+    imag,
+    base._isLogical === true ? true : undefined
+  );
 }
 
 function indexIntoTensor(
   base: RuntimeTensor,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  if (indices.length === 1) {
-    return indexIntoTensor1D(base, indices[0]);
-  }
-  // MATLAB: when fewer indices are supplied than the tensor's rank, the
-  // last index linearizes all trailing dimensions (column-major).  E.g.
-  // A(i,j) on a [2 16 4] tensor behaves as if A were [2 64].
-  if (base.shape.length > indices.length) {
-    const collapsedShape: number[] = [];
-    for (let d = 0; d < indices.length - 1; d++) {
-      collapsedShape.push(base.shape[d]);
-    }
-    let tail = 1;
-    for (let d = indices.length - 1; d < base.shape.length; d++) {
-      tail *= base.shape[d];
-    }
-    collapsedShape.push(tail);
-    // Swap base.shape for the call duration so the indexing helpers see
-    // the collapsed view without us constructing a new wrapper that
-    // shares base.data (which would tie the buffer's pool-release to
-    // two wrappers).
-    const savedShape = base.shape;
-    base.shape = collapsedShape;
-    try {
-      if (indices.length === 2) {
-        return indexIntoTensor2D(base, indices[0], indices[1]);
-      }
-      return indexIntoTensorND(base, indices);
-    } finally {
-      base.shape = savedShape;
-    }
-  }
-  if (indices.length === 2) {
-    return indexIntoTensor2D(base, indices[0], indices[1]);
-  }
-  // N-dimensional indexing (3+)
-  return indexIntoTensorND(base, indices);
+  const plan = planIndex(arrayShape(base.shape), base.data.length, indices);
+  return gatherTensor(base, plan, plan.shape);
 }
 
-function indexIntoTensor1D(
-  base: RuntimeTensor,
-  idx: RuntimeValue
-): RuntimeValue {
-  // Colon: base(:) → column vector
-  if (isColonIndex(idx)) {
-    const imag = base.imag ? allocFloat64Array(base.imag) : undefined;
-    const result = RTV.tensor(
-      allocFloat64Array(base.data),
-      [base.data.length, 1],
-      imag
-    ) as RuntimeTensor;
-    if (base._isLogical === true) result._isLogical = true;
-    return result;
-  }
-
-  if (isRuntimeLogical(idx)) {
-    if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-    return extractTensorElement(base, 0);
-  }
-
-  if (isRuntimeNumber(idx)) {
-    const i = Math.round(toNumber(idx)) - 1;
-    if (i < 0 || i >= base.data.length) {
-      throw new RuntimeError("Index exceeds array bounds");
-    }
-    return extractTensorElement(base, i);
-  }
-
-  if (isRuntimeTensor(idx)) {
-    return indexIntoTensorWithTensor(base, idx);
-  }
-
-  throw new RuntimeError(`Invalid index type for tensor`);
-}
-
-function indexIntoTensor2D(
-  base: RuntimeTensor,
-  rowIdx: RuntimeValue,
-  colIdx: RuntimeValue
-): RuntimeValue {
-  const [rows, cols] = tensorSize2D(base);
-
-  const baseLogical = base._isLogical === true;
-  const markLogical = (t: RuntimeValue): RuntimeValue => {
-    if (baseLogical && isRuntimeTensor(t)) t._isLogical = true;
-    return t;
-  };
-
-  // Fast path: single-row extraction c(k,:) — avoids allocating a cols-length index array
-  if (isRuntimeNumber(rowIdx) && isColonIndex(colIdx)) {
-    const r = Math.round(rowIdx as number) - 1;
-    if (r < 0 || r >= rows)
-      throw new RuntimeError("Index exceeds array bounds");
-    const resultData = allocFloat64Array(cols);
-    const resultImag = base.imag ? allocFloat64Array(cols) : undefined;
-    for (let ci = 0; ci < cols; ci++) {
-      resultData[ci] = base.data[r + ci * rows];
-      if (resultImag && base.imag) resultImag[ci] = base.imag[r + ci * rows];
-    }
-    return markLogical(RTV.tensor(resultData, [1, cols], resultImag));
-  }
-
-  // Fast path: single-column extraction c(:,k) — column is contiguous in col-major
-  if (isColonIndex(rowIdx) && isRuntimeNumber(colIdx)) {
-    const c = Math.round(colIdx as number) - 1;
-    if (c < 0 || c >= cols)
-      throw new RuntimeError("Index exceeds array bounds");
-    const offset = c * rows;
-    const resultData = allocFloat64Array(rows);
-    for (let ri = 0; ri < rows; ri++) resultData[ri] = base.data[offset + ri];
-    const resultImag = base.imag ? allocFloat64Array(rows) : undefined;
-    if (resultImag && base.imag)
-      for (let ri = 0; ri < rows; ri++) resultImag[ri] = base.imag[offset + ri];
-    return markLogical(RTV.tensor(resultData, [rows, 1], resultImag));
-  }
-
-  const rowIdxArr = resolveIndex(rowIdx, rows);
-  const colIdxArr = resolveIndex(colIdx, cols);
-
-  const numR = rowIdxArr.length;
-  const numC = colIdxArr.length;
-
-  if (numR === 1 && numC === 1) {
-    const linearIdx = colMajorIndex(rowIdxArr[0], colIdxArr[0], rows);
-    return extractTensorElement(base, linearIdx);
-  }
-
-  const resultData = allocFloat64Array(numR * numC);
-  const resultImag = base.imag ? allocFloat64Array(numR * numC) : undefined;
-  for (let ci = 0; ci < numC; ci++) {
-    for (let ri = 0; ri < numR; ri++) {
-      const srcIdx = colMajorIndex(rowIdxArr[ri], colIdxArr[ci], rows);
-      const dstIdx = colMajorIndex(ri, ci, numR);
-      resultData[dstIdx] = base.data[srcIdx];
-      if (resultImag && base.imag) {
-        resultImag[dstIdx] = base.imag[srcIdx];
-      }
-    }
-  }
-  return markLogical(RTV.tensor(resultData, [numR, numC], resultImag));
-}
-
-function indexIntoTensorND(
-  base: RuntimeTensor,
+/** Index a number, logical or complex scalar (a 1x1 array). */
+function indexIntoScalar(
+  base: number | boolean | RuntimeComplexNumber,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  const shape = base.shape;
-  const dimIndices: number[][] = indices.map((idx, dim) => {
-    const dimSize = dim < shape.length ? shape[dim] : 1;
-    return resolveIndex(idx, dimSize);
-  });
-
-  const allScalar = dimIndices.every(d => d.length === 1);
-  if (allScalar) {
-    const subs = dimIndices.map(d => d[0]);
-    const linearIdx = sub2ind(shape, subs);
-    return extractTensorElement(base, linearIdx);
+  const plan = planIndex(SCALAR_SHAPE, 1, indices);
+  if (plan.n === 1 && isScalarShape(plan.shape)) return base;
+  const n = plan.n;
+  const data = allocFloat64Array(n);
+  let imag: Float64Array | undefined;
+  if (typeof base === "number") data.fill(base);
+  else if (typeof base === "boolean") data.fill(base ? 1 : 0);
+  else {
+    data.fill(base.re);
+    if (base.im !== 0) {
+      imag = allocFloat64Array(n);
+      imag.fill(base.im);
+    }
   }
-
-  const resultShape = dimIndices.map(d => d.length);
-  while (resultShape.length > 2 && resultShape[resultShape.length - 1] === 1) {
-    resultShape.pop();
-  }
-  const totalElems = resultShape.reduce((a, b) => a * b, 1);
-  const resultData = allocFloat64Array(totalElems);
-  const resultImag = base.imag ? allocFloat64Array(totalElems) : undefined;
-
-  const ndimIdx = dimIndices.length;
-  const srcStrides = new Array(ndimIdx);
-  srcStrides[0] = 1;
-  for (let d = 1; d < ndimIdx; d++)
-    srcStrides[d] =
-      srcStrides[d - 1] * (d - 1 < shape.length ? shape[d - 1] : 1);
-
-  const dimOffsets: number[][] = dimIndices.map((indices, d) =>
-    indices.map(idx => idx * srcStrides[d])
+  return new RuntimeTensor(
+    data,
+    plan.shape,
+    imag,
+    typeof base === "boolean" ? true : undefined
   );
+}
 
-  const subs = new Array(ndimIdx).fill(0);
-  let srcLinear = 0;
-  for (let d = 0; d < ndimIdx; d++) srcLinear += dimOffsets[d][0];
-  for (let i = 0; i < totalElems; i++) {
-    resultData[i] = base.data[srcLinear];
-    if (resultImag && base.imag) {
-      resultImag[i] = base.imag[srcLinear];
+/** A tensor of `newShape` holding `base`'s elements at their subscripts,
+ *  zero elsewhere. */
+function growTensor(
+  base: RuntimeTensor,
+  oldShape: readonly number[],
+  newShape: number[]
+): RuntimeTensor {
+  let total = 1;
+  for (const d of newShape) total *= d;
+  const data = allocFloat64Array(total);
+  const src = base.data;
+  const srcIm = base.imag;
+  const imag = srcIm ? allocFloat64Array(total) : undefined;
+  if (growsInPlace(oldShape, newShape)) {
+    data.set(src);
+    if (imag) imag.set(srcIm!);
+  } else {
+    forEachGrowRun(oldShape, newShape, (s, d, len) => {
+      data.set(src.subarray(s, s + len), d);
+      if (imag) imag.set(srcIm!.subarray(s, s + len), d);
+    });
+  }
+  return new RuntimeTensor(data, newShape, imag, base._isLogical);
+}
+
+/** Value assigned into a logical array: must be real and not NaN. */
+function toLogicalValue(re: number, im: number): number {
+  if (im !== 0)
+    throw new RuntimeError("Complex values cannot be converted to logicals.");
+  if (re !== re)
+    throw new RuntimeError("NaN values cannot be converted to logicals.");
+  return re !== 0 ? 1 : 0;
+}
+
+/** base(indices) = rhs for a numeric or logical tensor. Mutates `base`
+ *  in place unless it is shared or grows. A logical target stays logical
+ *  (MATLAB converts the assigned values). */
+function storeIntoTensor(
+  base: RuntimeTensor,
+  indices: RuntimeValue[],
+  rhs: RuntimeValue
+): RuntimeValue {
+  let rhsT: RuntimeTensor | null = null;
+  let re = 0;
+  let im = 0;
+  if (typeof rhs === "number") re = rhs;
+  else if (typeof rhs === "boolean") re = rhs ? 1 : 0;
+  else if (isRuntimeComplexNumber(rhs)) {
+    re = rhs.re;
+    im = rhs.im;
+  } else if (isRuntimeTensor(rhs)) {
+    if (rhs.data.length === 1) {
+      re = rhs.data[0];
+      im = rhs.imag ? rhs.imag[0] : 0;
+    } else {
+      rhsT = rhs;
     }
-    for (let d = 0; d < ndimIdx; d++) {
-      const prev = subs[d];
-      subs[d]++;
-      if (subs[d] < dimIndices[d].length) {
-        srcLinear += dimOffsets[d][subs[d]] - dimOffsets[d][prev];
-        break;
+  } else {
+    throw new RuntimeError(
+      `Conversion to ${base._isLogical === true ? "logical" : "double"} from ${className(rhs)} is not possible.`
+    );
+  }
+
+  const shape = arrayShape(base.shape);
+  const plan = rhsT
+    ? planStore(
+        shape,
+        base.data.length,
+        indices,
+        rhsT.data.length,
+        arrayShape(rhsT.shape)
+      )
+    : planStore(shape, base.data.length, indices, 1, SCALAR_SHAPE);
+
+  const logical = base._isLogical === true;
+  let rhsRe: Float64Array | null = rhsT ? rhsT.data : null;
+  let rhsIm: Float64Array | undefined = rhsT ? rhsT.imag : undefined;
+  if (logical) {
+    if (rhsT) {
+      if (rhsT._isLogical !== true) {
+        const conv = allocFloat64Array(rhsT.data.length);
+        for (let i = 0; i < conv.length; i++)
+          conv[i] = toLogicalValue(rhsT.data[i], rhsIm ? rhsIm[i] : 0);
+        rhsRe = conv;
       }
-      srcLinear -= dimOffsets[d][prev] - dimOffsets[d][0];
-      subs[d] = 0;
+      rhsIm = undefined;
+    } else {
+      re = toLogicalValue(re, im);
+      im = 0;
     }
   }
 
-  const result = RTV.tensor(
-    resultData,
-    resultShape,
-    resultImag
-  ) as RuntimeTensor;
-  if (base._isLogical === true) result._isLogical = true;
-  return result;
+  let target: RuntimeTensor;
+  if (plan.grow) target = growTensor(base, shape, plan.grow);
+  else if (isShared(base)) target = base.shallowClone();
+  else target = base;
+  if (plan.n === 0) return target;
+
+  // x(p) = x: the RHS aliases the storage being written.
+  if (rhsRe === target.data) rhsRe = allocFloat64Array(rhsRe);
+  if (rhsIm !== undefined && rhsIm === target.imag)
+    rhsIm = allocFloat64Array(rhsIm);
+
+  const needImag = rhsT ? rhsIm !== undefined : im !== 0;
+  if (needImag && target.imag === undefined)
+    target.imag = allocFloat64Array(target.data.length);
+  if (rhsRe === null) {
+    fillNumbers(target.data, plan, re);
+    if (target.imag) fillNumbers(target.imag, plan, im);
+  } else {
+    scatterNumbers(target.data, plan, rhsRe);
+    if (target.imag) {
+      if (rhsIm) scatterNumbers(target.imag, plan, rhsIm);
+      else fillNumbers(target.imag, plan, 0);
+    }
+  }
+  return target;
 }
 
-function indexIntoCell(
-  base: RuntimeCell,
+/** base(indices) = [] for a tensor. */
+function deleteFromTensor(
+  base: RuntimeTensor,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  if (indices.length === 1) {
-    return indexIntoCell1D(base, indices[0]);
+  const plan = planDelete(arrayShape(base.shape), base.data.length, indices);
+  if (plan.noop) return base;
+  const data = allocFloat64Array(plan.n);
+  gatherNumbers(base.data, plan, data);
+  let imag: Float64Array | undefined;
+  if (base.imag !== undefined) {
+    imag = allocFloat64Array(plan.n);
+    gatherNumbers(base.imag, plan, imag);
+    if (!hasNonZero(imag)) imag = undefined;
   }
-  if (indices.length === 2) {
-    return indexIntoCell2D(base, indices[0], indices[1]);
-  }
-  throw new RuntimeError("Cell indexing supports 1 or 2 dimensions");
+  return new RuntimeTensor(data, plan.shape, imag, base._isLogical);
 }
 
-function indexIntoCell1D(base: RuntimeCell, idx: RuntimeValue): RuntimeValue {
-  if (isColonIndex(idx)) {
-    return RTV.cell([...base.data], [...base.shape]);
-  }
+// ── Char arrays ──────────────────────────────────────────────────────────
 
-  if (isRuntimeTensor(idx)) {
-    const selected: RuntimeValue[] = [];
-    if (idx._isLogical) {
-      for (let k = 0; k < idx.data.length; k++) {
-        if (idx.data[k] !== 0) {
-          if (k >= base.data.length)
-            throw new RuntimeError("Cell index exceeds bounds");
-          selected.push(base.data[k]);
-        }
-      }
-    } else {
-      for (let k = 0; k < idx.data.length; k++) {
-        const i = Math.round(idx.data[k]) - 1;
-        if (i < 0 || i >= base.data.length)
-          throw new RuntimeError("Cell index exceeds bounds");
-        selected.push(base.data[i]);
-      }
-    }
-    const isVector =
-      idx.shape.length <= 2 &&
-      (idx.shape[0] === 1 || (idx.shape.length === 2 && idx.shape[1] === 1));
-    if (idx._isLogical || isVector) {
-      if (base.shape[1] === 1 && base.shape[0] > 1) {
-        return RTV.cell(selected, [selected.length, 1]);
-      }
-      return RTV.cell(selected, [1, selected.length]);
-    }
-    return RTV.cell(selected, [...idx.shape]);
-  }
-
-  // Scalar index — paren indexing on cells returns a 1x1 cell
-  const i = Math.round(toNumber(idx)) - 1;
-  if (i < 0 || i >= base.data.length)
-    throw new RuntimeError("Cell index exceeds bounds");
-  return RTV.cell([base.data[i]], [1, 1]);
+function codesToString(codes: number[]): string {
+  let s = "";
+  for (let i = 0; i < codes.length; i += 8192)
+    s += String.fromCharCode.apply(null, codes.slice(i, i + 8192));
+  return s;
 }
 
-function indexIntoCell2D(
-  base: RuntimeCell,
-  rowIdx: RuntimeValue,
-  colIdx: RuntimeValue
+/** Char result from selected elements. RuntimeChar stores rows
+ *  concatenated (row-major), so offsets map through (row, col). */
+function gatherChar(
+  base: RuntimeChar,
+  sel: Selection,
+  shape: number[]
 ): RuntimeValue {
-  const rows = base.shape[0];
-  const cols = base.shape.length >= 2 ? base.shape[1] : 1;
-
-  const { rowIndices, colIndices } = resolveIndex2D(rowIdx, colIdx, rows, cols);
-
-  // When both indices are plain scalars (no colon/tensor), return a 1x1 cell.
-  if (
-    !isColonIndex(rowIdx) &&
-    !isColonIndex(colIdx) &&
-    !isRuntimeTensor(rowIdx) &&
-    !isRuntimeTensor(colIdx)
-  ) {
-    const linearIdx = colIndices[0] * rows + rowIndices[0];
-    if (linearIdx < 0 || linearIdx >= base.data.length)
-      throw new RuntimeError("Cell index exceeds bounds");
-    return RTV.cell([base.data[linearIdx]], [1, 1]);
+  if (shape.length > 2)
+    throw new RuntimeError("N-dimensional char arrays are not supported");
+  const v = base.value;
+  const n = sel.n;
+  const R = shape[0];
+  const C = shape[1];
+  const rows = base.shape ? base.shape[0] : v.length === 0 ? 0 : 1;
+  const cols = base.shape ? base.shape[1] : v.length;
+  if (n === 1 && R === 1 && C === 1) {
+    const o = offsetAt(sel, 0);
+    if (rows === 1) return RTV.char(v[o]);
+    const r = o % rows;
+    return RTV.char(v[r * cols + (o - r) / rows]);
   }
-
-  const result: RuntimeValue[] = [];
-  for (let cj = 0; cj < colIndices.length; cj++) {
-    for (let ri = 0; ri < rowIndices.length; ri++) {
-      const linearIdx = colIndices[cj] * rows + rowIndices[ri];
-      if (linearIdx < 0 || linearIdx >= base.data.length)
-        throw new RuntimeError("Cell index exceeds bounds");
-      result.push(base.data[linearIdx]);
+  if (n === 0) {
+    if (R === 0 && C === 0) return RTV.char("");
+    return new RuntimeChar("", [R, C]);
+  }
+  let colMajor: string;
+  if (rows === 1 && sel.offsets === null && sel.step === 1) {
+    colMajor = v.substring(sel.start, sel.start + n);
+  } else {
+    const codes = new Array<number>(n);
+    for (let k = 0; k < n; k++) {
+      const o = offsetAt(sel, k);
+      const r = o % rows;
+      codes[k] = v.charCodeAt(r * cols + (o - r) / rows);
     }
+    colMajor = codesToString(codes);
   }
-  return RTV.cell(result, [rowIndices.length, colIndices.length]);
+  if (R === 1) return RTV.char(colMajor);
+  if (C === 1) return new RuntimeChar(colMajor, [R, 1]);
+  const codes = new Array<number>(n);
+  for (let r = 0; r < R; r++)
+    for (let c = 0; c < C; c++)
+      codes[r * C + c] = colMajor.charCodeAt(c * R + r);
+  return new RuntimeChar(codesToString(codes), [R, C]);
 }
 
 function indexIntoChar(
   base: RuntimeChar,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  const charShape =
-    base.shape ?? (base.value.length === 0 ? [0, 0] : [1, base.value.length]);
-  const nRows = charShape[0];
-  const nCols = charShape[1] || 0;
-
-  if (indices.length === 1) {
-    const idx = indices[0];
-    if (isColonIndex(idx)) return base;
-    if (isRuntimeTensor(idx) && idx._isLogical) {
-      // Logical mask: select chars where the mask is true.
-      let result = "";
-      for (let k = 0; k < idx.data.length; k++) {
-        if (idx.data[k] !== 0) {
-          if (k >= base.value.length)
-            throw new RuntimeError("Index exceeds char array length");
-          result += base.value[k];
-        }
-      }
-      return RTV.char(result);
-    }
-    if (isRuntimeTensor(idx)) {
-      let result = "";
-      for (let k = 0; k < idx.data.length; k++) {
-        const i = Math.round(idx.data[k]) - 1;
-        if (i < 0 || i >= base.value.length)
-          throw new RuntimeError("Index exceeds char array length");
-        result += base.value[i];
-      }
-      return RTV.char(result);
-    }
-    const i = Math.round(toNumber(idx)) - 1;
-    if (i < 0 || i >= base.value.length)
-      throw new RuntimeError("Index exceeds char array length");
-    return RTV.char(base.value[i]);
-  }
-
-  if (indices.length === 2) {
-    const rowIdx = indices[0];
-    const colIdx = indices[1];
-
-    // Logical masks select the positions where the mask is true; numeric
-    // indices are 1-based.
-    const toPositions = (idx: RuntimeValue): number[] => {
-      if (isRuntimeTensor(idx) && idx._isLogical) {
-        const out: number[] = [];
-        for (let i = 0; i < idx.data.length; i++)
-          if (idx.data[i] !== 0) out.push(i);
-        return out;
-      }
-      if (isRuntimeTensor(idx))
-        return Array.from(idx.data, (v: number) => Math.round(v) - 1);
-      return [Math.round(toNumber(idx)) - 1];
-    };
-
-    const rows: number[] = isColonIndex(rowIdx)
-      ? Array.from({ length: nRows }, (_, i) => i)
-      : toPositions(rowIdx);
-
-    const cols: number[] = isColonIndex(colIdx)
-      ? Array.from({ length: nCols }, (_, i) => i)
-      : toPositions(colIdx);
-
-    let result = "";
-    for (const r of rows) {
-      for (const c of cols) {
-        if (r < 0 || r >= nRows || c < 0 || c >= nCols)
-          throw new RuntimeError("Index exceeds char array dimensions");
-        result += base.value[r * nCols + c];
-      }
-    }
-
-    if (rows.length <= 1) return RTV.char(result);
-    return new RuntimeChar(result, [rows.length, cols.length]);
-  }
-
-  throw new RuntimeError("Char indexing supports 1 or 2 dimensions");
+  const plan = planIndex(charShape(base), base.value.length, indices);
+  return gatherChar(base, plan, plan.shape);
 }
+
+// ── Cell arrays ──────────────────────────────────────────────────────────
+
+function indexIntoCell(
+  base: RuntimeCell,
+  indices: RuntimeValue[]
+): RuntimeValue {
+  const plan = planIndex(arrayShape(base.shape), base.data.length, indices);
+  return new RuntimeCell(gatherElements(base.data, plan), plan.shape);
+}
+
+/** The elements selected by c{indices} (a comma-separated list). */
+export function cellBraceElements(
+  base: RuntimeCell,
+  indices: RuntimeValue[]
+): RuntimeValue[] {
+  return gatherElements(
+    base.data,
+    planIndex(arrayShape(base.shape), base.data.length, indices)
+  );
+}
+
+/** Replace cell.data[pos] with value, decref-old / incref-new; without a
+ *  runtime, refcount work is skipped (lax mode). */
+function setCellElement(
+  cell: RuntimeCell,
+  pos: number,
+  value: RuntimeValue,
+  rt?: RefcountRuntime
+): void {
+  if (rt) cell.bindElement(rt, pos, value);
+  else cell.data[pos] = value;
+}
+
+/** Resize a cell in place to `newShape`, padding with `[]`. Existing
+ *  elements move without refcount changes. */
+function growCell(
+  cell: RuntimeCell,
+  oldShape: readonly number[],
+  newShape: number[],
+  rt?: RefcountRuntime
+): void {
+  let total = 1;
+  for (const d of newShape) total *= d;
+  const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
+  const data = new Array<RuntimeValue>(total).fill(empty);
+  const src = cell.data;
+  if (growsInPlace(oldShape, newShape)) {
+    for (let j = 0; j < src.length; j++) data[j] = src[j];
+  } else {
+    forEachGrowRun(oldShape, newShape, (s, d, len) => {
+      for (let j = 0; j < len; j++) data[d + j] = src[s + j];
+    });
+  }
+  if (rt) for (let i = src.length; i < total; i++) empty.incref();
+  cell.data = data;
+  cell.shape = newShape;
+}
+
+function className(v: RuntimeValue): string {
+  if (typeof v === "number" || isRuntimeTensor(v) || isRuntimeComplexNumber(v))
+    return isRuntimeTensor(v) && v._isLogical ? "logical" : "double";
+  if (typeof v === "boolean") return "logical";
+  if (isRuntimeChar(v)) return "char";
+  if (isRuntimeStruct(v) || isRuntimeStructArray(v)) return "struct";
+  if (typeof v === "string" || isRuntimeStringArray(v)) return "string";
+  return kstr(v);
+}
+
+/** c(indices) = rhs (paren, `rhs` must be a cell) or c{indices} = rhs
+ *  (brace, exactly one element). */
+function storeIntoCell(
+  base: RuntimeCell,
+  indices: RuntimeValue[],
+  rhs: RuntimeValue,
+  brace: boolean,
+  rt?: StoreRuntime
+): RuntimeValue {
+  let single: RuntimeValue = rhs;
+  let elems: RuntimeValue[] | null = null;
+  const shape = arrayShape(base.shape);
+  let plan;
+  if (brace) {
+    plan = planStore(shape, base.data.length, indices, 1, SCALAR_SHAPE);
+    if (plan.n !== 1) {
+      if (plan.n === 0 && !plan.grow) return base;
+      throw new RuntimeError(
+        `Assigning to ${plan.n} elements using a simple assignment statement is not supported. Consider using comma-separated list assignment.`
+      );
+    }
+  } else {
+    if (!isRuntimeCell(rhs))
+      throw new RuntimeError(
+        `Conversion to cell from ${className(rhs)} is not possible.`
+      );
+    if (rhs.data.length === 1) {
+      single = rhs.data[0];
+      plan = planStore(shape, base.data.length, indices, 1, SCALAR_SHAPE);
+    } else {
+      elems = rhs === base ? rhs.data.slice() : rhs.data;
+      plan = planStore(
+        shape,
+        base.data.length,
+        indices,
+        elems.length,
+        arrayShape(rhs.shape)
+      );
+    }
+  }
+  if (isShared(base)) base = base.shallowClone();
+  if (plan.grow) growCell(base, shape, plan.grow, rt);
+  for (let k = 0; k < plan.n; k++)
+    setCellElement(base, offsetAt(plan, k), elems ? elems[k] : single, rt);
+  return base;
+}
+
+/** c(indices) = [] */
+function deleteFromCell(
+  base: RuntimeCell,
+  indices: RuntimeValue[]
+): RuntimeValue {
+  const plan = planDelete(arrayShape(base.shape), base.data.length, indices);
+  if (plan.noop) return base;
+  return RTV.cell(gatherElements(base.data, plan), plan.shape);
+}
+
+// ── String arrays ────────────────────────────────────────────────────────
 
 /** Resolve one subscript against a dimension of extent `extent` to 0-based
  *  positions. Handles colon, scalars, numeric vectors, and logical masks. */
@@ -1220,160 +1102,6 @@ function indexIntoStringArray(
   return stringArrayValue(out, shape);
 }
 
-function indexIntoLogical(
-  base: boolean,
-  indices: RuntimeValue[]
-): RuntimeValue {
-  if (indices.length === 1) {
-    const idx = indices[0];
-    if (isColonIndex(idx)) return base;
-    if (isRuntimeTensor(idx) && idx.data.length === 0) {
-      return RTV.tensor(allocFloat64Array(0), [0, 0]);
-    }
-    if (isRuntimeTensor(idx)) {
-      for (let i = 0; i < idx.data.length; i++) {
-        const vi = Math.round(idx.data[i]);
-        if (vi !== 1) throw new RuntimeError("Index exceeds array bounds");
-      }
-      const data = allocFloat64Array(idx.data.length);
-      data.fill(base ? 1 : 0);
-      // Result follows the index's shape (e.g. b([1;1;1]) is 3x1).
-      const result = RTV.tensor(data, [...idx.shape]);
-      result._isLogical = true;
-      return result;
-    }
-    if (isRuntimeLogical(idx)) {
-      if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-      return base;
-    }
-    const i = Math.round(toNumber(idx));
-    if (i !== 1) throw new RuntimeError("Index exceeds array bounds");
-    return base;
-  }
-  // Multi-dimensional: every subscript must select position 1; a tensor
-  // subscript such as [1;1;1] replicates the scalar, with result shape the
-  // product of the per-dimension index lengths (colon/scalar count as 1).
-  const dimLengths: number[] = [];
-  let anyTensor = false;
-  for (const idx of indices) {
-    if (isColonIndex(idx)) {
-      dimLengths.push(1);
-    } else if (isRuntimeLogical(idx)) {
-      if (!idx) return RTV.tensor(allocFloat64Array(0), [0, 0]);
-      dimLengths.push(1);
-    } else if (isRuntimeTensor(idx)) {
-      anyTensor = true;
-      for (let i = 0; i < idx.data.length; i++) {
-        if (Math.round(idx.data[i]) !== 1)
-          throw new RuntimeError("Index exceeds array bounds");
-      }
-      dimLengths.push(idx.data.length);
-    } else {
-      if (Math.round(toNumber(idx)) !== 1)
-        throw new RuntimeError("Index exceeds array bounds");
-      dimLengths.push(1);
-    }
-  }
-  if (!anyTensor) return base;
-  const total = dimLengths.reduce((a, b) => a * b, 1);
-  const data = allocFloat64Array(total);
-  data.fill(base ? 1 : 0);
-  const outShape = dimLengths.length >= 2 ? dimLengths : [dimLengths[0], 1];
-  const result = RTV.tensor(data, outShape);
-  result._isLogical = true;
-  return result;
-}
-
-function indexIntoTensorWithTensor(
-  base: RuntimeTensor,
-  idx: RuntimeTensor
-): RuntimeValue {
-  const baseLogical = base._isLogical === true;
-  if (idx._isLogical) {
-    const selected: number[] = [];
-    const selectedIm: number[] = [];
-    const hasImag = base.imag !== undefined;
-    for (let i = 0; i < idx.data.length; i++) {
-      if (idx.data[i] !== 0) {
-        // A truthy mask bit past the end of the base is an error in MATLAB
-        // ("logical indices contain a true value outside of the array
-        // bounds"); reading base.data[i] OOB would silently yield NaN.
-        if (i >= base.data.length)
-          throw new RuntimeError("Index exceeds array bounds");
-        selected.push(base.data[i]);
-        if (hasImag) selectedIm.push(base.imag![i]);
-      }
-    }
-    if (selected.length === 1) {
-      if (hasImag && selectedIm[0] !== 0)
-        return RTV.complex(selected[0], selectedIm[0]);
-      if (baseLogical) return selected[0] !== 0;
-      return RTV.num(selected[0]);
-    }
-    const imOut =
-      hasImag && selectedIm.some(x => x !== 0)
-        ? allocFloat64Array(selectedIm)
-        : undefined;
-    const isRow = base.shape.length === 2 && base.shape[0] === 1;
-    const outShape: number[] = isRow
-      ? [1, selected.length]
-      : [selected.length, 1];
-    const result = RTV.tensor(
-      allocFloat64Array(selected),
-      outShape,
-      imOut
-    ) as RuntimeTensor;
-    if (baseLogical) result._isLogical = true;
-    return result;
-  }
-  // Numeric indexing
-  const resultData: number[] = [];
-  const hasImag = base.imag !== undefined;
-  const imIndices: number[] = [];
-  for (let i = 0; i < idx.data.length; i++) {
-    const k = Math.round(idx.data[i]) - 1;
-    if (k < 0 || k >= base.data.length)
-      throw new RuntimeError("Index exceeds array bounds");
-    resultData.push(base.data[k]);
-    if (hasImag) imIndices.push(base.imag![k]);
-  }
-  const idxIs0x0 =
-    idx.data.length === 0 &&
-    idx.shape.length === 2 &&
-    idx.shape[0] === 0 &&
-    idx.shape[1] === 0;
-  // A 1x1 base is a scalar, not a vector: the orientation override below
-  // must not apply, so x(ones(m,1)) is m-by-1 (Tony's trick), not 1-by-m.
-  const baseIsVector =
-    base.data.length !== 1 &&
-    base.shape.length <= 2 &&
-    (base.shape[0] === 1 || base.shape[1] === 1 || base.shape.length === 1);
-  const idxIsVector =
-    idx.shape.length <= 2 &&
-    (idx.shape[0] === 1 || idx.shape[1] === 1 || idx.shape.length === 1);
-  // MATLAB: A(idx) is shaped like idx, EXCEPT when both A and idx are
-  // vectors — then the result follows A's orientation. A matrix index of a
-  // vector therefore keeps the index's shape (e.g. v([1 2;3 1]) is 2x2).
-  const outShape = idxIs0x0
-    ? [0, 0]
-    : baseIsVector && idxIsVector
-      ? base.shape[0] === 1
-        ? [1, resultData.length]
-        : [resultData.length, 1]
-      : idx.shape;
-  const imOut =
-    hasImag && imIndices.some(x => x !== 0)
-      ? allocFloat64Array(imIndices)
-      : undefined;
-  const result = RTV.tensor(
-    allocFloat64Array(resultData),
-    outShape,
-    imOut
-  ) as RuntimeTensor;
-  if (baseLogical) result._isLogical = true;
-  return result;
-}
-
 // ── Index read: main dispatcher ──────────────────────────────────────────
 
 /** Index into a value: v(i1, i2, ...) */
@@ -1381,7 +1109,11 @@ export function indexIntoRTValue(
   base: RuntimeValue,
   indices: RuntimeValue[]
 ): RuntimeValue {
-  if (isRuntimeNumber(base) || isRuntimeComplexNumber(base)) {
+  if (
+    typeof base === "number" ||
+    typeof base === "boolean" ||
+    isRuntimeComplexNumber(base)
+  ) {
     return indexIntoScalar(base, indices);
   }
   if (isRuntimeTensor(base)) {
@@ -1402,9 +1134,6 @@ export function indexIntoRTValue(
   }
   if (isRuntimeStringArray(base)) {
     return indexIntoStringArray(base, indices);
-  }
-  if (isRuntimeLogical(base)) {
-    return indexIntoLogical(base, indices);
   }
   if (isRuntimeStruct(base) || isRuntimeClassInstance(base)) {
     // A scalar (1x1) struct / object: any all-ones subscripting — s(1),
@@ -1475,963 +1204,11 @@ export function indexIntoRTValue(
   throw new RuntimeError(`Cannot index into ${kstr(base)}`);
 }
 
-// ── Store: per-type handlers ─────────────────────────────────────────────
-
-function storeIntoTensor(
-  base: RuntimeTensor,
-  indices: RuntimeValue[],
-  rhs: RuntimeValue,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _rt?: StoreRuntime
-): RuntimeValue {
-  // Element deletion: base(idx) = []
-  if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 1) {
-    return deleteTensorElements(base, indices[0]);
-  }
-
-  // Row/column deletion: base(idx,:) = [] or base(:,idx) = []
-  if (isRuntimeTensor(rhs) && rhs.data.length === 0 && indices.length === 2) {
-    // If either index selects zero elements, it's a no-op, not a deletion
-    const nrows = base.shape[0] ?? 1;
-    const ncols = base.shape.length >= 2 ? base.shape[1] : 1;
-    const rowCount = isColonIndex(indices[0])
-      ? nrows
-      : resolveIndex(indices[0], nrows).length;
-    const colCount = isColonIndex(indices[1])
-      ? ncols
-      : resolveIndex(indices[1], ncols).length;
-    if (rowCount === 0 || colCount === 0) return base;
-    return deleteTensorRowsOrCols(base, indices);
-  }
-
-  // Refcount-driven COW: copy iff `base` has external holders beyond the
-  // LHS slot. The lvalue chain walker (`evalLValueBase`) has already
-  // ensured every container in the chain from env → base's parent is
-  // uniquely owned, so any sharing detected here is real (held by a
-  // different binding, struct field, cell element, etc.).
-  if (isShared(base)) {
-    const cowImag = base.imag ? allocFloat64Array(base.imag) : undefined;
-    const copy = RTV.tensor(
-      allocFloat64Array(base.data),
-      [...base.shape],
-      cowImag
-    );
-    // Preserve the array's class (e.g. logical) across the copy, matching the
-    // in-place path; an indexed assignment must not silently promote logical
-    // to double just because the array was shared.
-    copy._isLogical = base._isLogical;
-    base = copy;
-  }
-
-  if (indices.length === 1) {
-    return storeIntoTensor1D(base, indices[0], rhs);
-  }
-  if (indices.length === 2) {
-    return storeIntoTensor2D(base, indices, rhs);
-  }
-  if (indices.length >= 3) {
-    return storeIntoTensorND(base, indices, rhs);
-  }
-
-  throw new RuntimeError("Invalid number of indices for tensor assignment");
-}
-
-function deleteTensorElements(
-  base: RuntimeTensor,
-  idx: RuntimeValue
-): RuntimeValue {
-  const toDelete = new Set<number>();
-  if (isRuntimeNumber(idx)) {
-    toDelete.add(Math.round(idx) - 1);
-  } else if (isRuntimeLogical(idx)) {
-    if (idx) toDelete.add(0);
-  } else if (isRuntimeTensor(idx) && idx._isLogical) {
-    for (let i = 0; i < idx.data.length; i++) {
-      if (idx.data[i] !== 0) toDelete.add(i);
-    }
-  } else if (isRuntimeTensor(idx)) {
-    for (let i = 0; i < idx.data.length; i++) {
-      toDelete.add(Math.round(idx.data[i]) - 1);
-    }
-  } else if (isColonIndex(idx)) {
-    const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
-    empty._isLogical = base._isLogical;
-    return empty;
-  }
-  // Deleting an empty index set (`A([]) = []`, `A(j:j-1) = []`) is a no-op:
-  // MATLAB leaves A unchanged, preserving its class and shape. Return base
-  // as-is instead of rebuilding the whole array (which also wrongly
-  // linearized matrices).
-  if (toDelete.size === 0) return base;
-  const newData: number[] = [];
-  const newIm: number[] = [];
-  const hasImag = base.imag !== undefined;
-  for (let i = 0; i < base.data.length; i++) {
-    if (!toDelete.has(i)) {
-      newData.push(base.data[i]);
-      if (hasImag) newIm.push(base.imag![i]);
-    }
-  }
-  const baseIsColVec =
-    base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] !== 1;
-  const outShape = baseIsColVec ? [newData.length, 1] : [1, newData.length];
-  const imOut =
-    hasImag && newIm.some(x => x !== 0) ? allocFloat64Array(newIm) : undefined;
-  // Element deletion preserves the array's class (e.g. logical stays logical).
-  const result = RTV.tensor(allocFloat64Array(newData), outShape, imOut);
-  result._isLogical = base._isLogical;
-  return result;
-}
-
-/** Collect a set of 0-based indices to delete from a dimension. */
-function collectDelIndices(idx: RuntimeValue, dimLen: number): Set<number> {
-  const s = new Set<number>();
-  if (isRuntimeNumber(idx)) {
-    s.add(Math.round(idx) - 1);
-  } else if (isRuntimeLogical(idx)) {
-    if (idx) s.add(0);
-  } else if (isRuntimeTensor(idx) && idx._isLogical) {
-    for (let i = 0; i < idx.data.length; i++) {
-      if (idx.data[i] !== 0) s.add(i);
-    }
-  } else if (isRuntimeTensor(idx)) {
-    for (let i = 0; i < idx.data.length; i++)
-      s.add(Math.round(idx.data[i]) - 1);
-  } else if (isColonIndex(idx)) {
-    for (let i = 0; i < dimLen; i++) s.add(i);
-  }
-  return s;
-}
-
-function deleteTensorRowsOrCols(
-  base: RuntimeTensor,
-  indices: RuntimeValue[]
-): RuntimeValue {
-  const nrows = base.shape[0] ?? 1;
-  const ncols = base.shape.length >= 2 ? base.shape[1] : 1;
-  const hasImag = base.imag !== undefined;
-
-  if (isColonIndex(indices[1])) {
-    // base(rowIdx,:) = [] — delete rows
-    const delRows = collectDelIndices(indices[0], nrows);
-    const keepRows = Array.from({ length: nrows }, (_, i) => i).filter(
-      i => !delRows.has(i)
-    );
-    const newNrows = keepRows.length;
-    const newData = allocFloat64Array(newNrows * ncols);
-    const newIm = hasImag ? allocFloat64Array(newNrows * ncols) : undefined;
-    for (let j = 0; j < ncols; j++) {
-      for (let ki = 0; ki < keepRows.length; ki++) {
-        const srcIdx = keepRows[ki] + j * nrows;
-        const dstIdx = ki + j * newNrows;
-        newData[dstIdx] = base.data[srcIdx];
-        if (newIm && base.imag) newIm[dstIdx] = base.imag[srcIdx];
-      }
-    }
-    const result = RTV.tensor(newData, [newNrows, ncols], newIm);
-    result._isLogical = base._isLogical;
-    return result;
-  }
-  if (isColonIndex(indices[0])) {
-    // base(:,colIdx) = [] — delete columns
-    const delCols = collectDelIndices(indices[1], ncols);
-    const keepCols = Array.from({ length: ncols }, (_, j) => j).filter(
-      j => !delCols.has(j)
-    );
-    const newNcols = keepCols.length;
-    const newData = allocFloat64Array(nrows * newNcols);
-    const newIm = hasImag ? allocFloat64Array(nrows * newNcols) : undefined;
-    for (let ki = 0; ki < keepCols.length; ki++) {
-      const srcCol = keepCols[ki];
-      for (let i = 0; i < nrows; i++) {
-        const srcIdx = i + srcCol * nrows;
-        const dstIdx = i + ki * nrows;
-        newData[dstIdx] = base.data[srcIdx];
-        if (newIm && base.imag) newIm[dstIdx] = base.imag[srcIdx];
-      }
-    }
-    const result = RTV.tensor(newData, [nrows, newNcols], newIm);
-    result._isLogical = base._isLogical;
-    return result;
-  }
-  throw new RuntimeError("Cannot delete from both row and column dimensions");
-}
-
-function storeIntoTensor1D(
-  base: RuntimeTensor,
-  idx: RuntimeValue,
-  rhs: RuntimeValue
-): RuntimeValue {
-  // Colon: base(:) = rhs
-  if (isColonIndex(idx)) {
-    if (isRuntimeTensor(rhs)) {
-      if (rhs.data.length === 1) {
-        // 1×1 tensor acts as scalar — broadcast to all elements
-        rhs =
-          rhs.imag && rhs.imag[0] !== 0
-            ? RTV.complex(rhs.data[0], rhs.imag[0])
-            : RTV.num(rhs.data[0]);
-      } else {
-        if (rhs.data.length !== base.data.length) {
-          throw new RuntimeError("Subscripted assignment dimension mismatch");
-        }
-        base.data.set(rhs.data);
-        if (rhs.imag || base.imag) {
-          ensureImag(base);
-          if (rhs.imag) base.imag!.set(rhs.imag);
-          else base.imag!.fill(0);
-        }
-        return base;
-      }
-    }
-    const { re, im } = toReIm(rhs);
-    base.data.fill(re);
-    if (im !== 0 || base.imag) {
-      ensureImag(base);
-      base.imag!.fill(im);
-    }
-    return base;
-  }
-
-  // Vector index: base(idx) = rhs where idx is a tensor
-  if (isRuntimeTensor(idx)) {
-    return storeIntoTensorByVector(base, idx, rhs);
-  }
-
-  // Logical scalar
-  if (isRuntimeLogical(idx)) {
-    if (!idx) return base;
-    const { re: rhsRe, im: rhsIm } = toReIm(rhs);
-    if (base.data.length < 1)
-      throw new RuntimeError("Index exceeds array bounds");
-    base.data[0] = rhsRe;
-    if (rhsIm !== 0 || base.imag) {
-      ensureImag(base);
-      base.imag![0] = rhsIm;
-    }
-    return base;
-  }
-
-  // Scalar index with auto-grow
-  const { re: rhsRe, im: rhsIm } = toReIm(rhs);
-  const i = Math.round(toNumber(idx)) - 1;
-  if (i < 0) throw new RuntimeError("Index exceeds array bounds");
-  if (i >= base.data.length) {
-    const grown = allocFloat64Array(i + 1);
-    grown.set(base.data);
-    grown[i] = rhsRe;
-    let grownImag: Float64Array | undefined;
-    if (rhsIm !== 0 || base.imag) {
-      grownImag = allocFloat64Array(i + 1);
-      if (base.imag) grownImag.set(base.imag);
-      grownImag[i] = rhsIm;
-    }
-    // Preserve column orientation when growing a column vector (matches the
-    // multi-element vector-store path below).
-    const isColVec =
-      base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
-    return RTV.tensor(grown, isColVec ? [i + 1, 1] : [1, i + 1], grownImag);
-  }
-  base.data[i] = rhsRe;
-  if (rhsIm !== 0 || base.imag) {
-    ensureImag(base);
-    base.imag![i] = rhsIm;
-  }
-  return base;
-}
-
-function storeIntoTensorByVector(
-  base: RuntimeTensor,
-  idx: RuntimeTensor,
-  rhs: RuntimeValue
-): RuntimeValue {
-  // Logical indexing: base(mask) = rhs
-  if (idx._isLogical) {
-    // A 1×1 RHS acts as a scalar and broadcasts to every masked position
-    // (MATLAB: x(mask) = c). Larger RHS must match the count exactly.
-    if (isRuntimeTensor(rhs) && rhs.data.length === 1) {
-      rhs =
-        rhs.imag && rhs.imag[0] !== 0
-          ? RTV.complex(rhs.data[0], rhs.imag[0])
-          : RTV.num(rhs.data[0]);
-    }
-    const { re: rhsRe, im: rhsIm } = isRuntimeTensor(rhs)
-      ? { re: null, im: null }
-      : toReIm(rhs);
-    // A truthy mask bit past the end GROWS the array in MATLAB
-    // (x(logical([0 0 0 1])) = 9 on [1 2 3] -> [1 2 3 9]). Without this
-    // the base.data[i] write is a silent no-op for an out-of-range i.
-    let maxTruthy = -1;
-    for (let i = 0; i < idx.data.length; i++) {
-      if (idx.data[i] !== 0) maxTruthy = i;
-    }
-    if (maxTruthy >= base.data.length) {
-      const newLen = maxTruthy + 1;
-      const grown = allocFloat64Array(newLen);
-      grown.set(base.data);
-      let grownImag: Float64Array | undefined;
-      if (base.imag) {
-        grownImag = allocFloat64Array(newLen);
-        grownImag.set(base.imag);
-      }
-      const isColVec =
-        base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
-      const newShape = isColVec ? [newLen, 1] : [1, newLen];
-      base = RTV.tensor(grown, newShape, grownImag);
-    }
-    let k = 0;
-    for (let i = 0; i < idx.data.length; i++) {
-      if (idx.data[i] !== 0) {
-        if (isRuntimeTensor(rhs)) {
-          base.data[i] = rhs.data[k];
-          if (rhs.imag || base.imag) {
-            ensureImag(base);
-            base.imag![i] = rhs.imag ? rhs.imag[k] : 0;
-          }
-        } else {
-          base.data[i] = rhsRe!;
-          if (rhsIm !== 0 || base.imag) {
-            ensureImag(base);
-            base.imag![i] = rhsIm!;
-          }
-        }
-        k++;
-      }
-    }
-    if (isRuntimeTensor(rhs) && k !== rhs.data.length) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    return base;
-  }
-
-  // Auto-grow if any index exceeds bounds
-  let maxLi = -1;
-  for (let i = 0; i < idx.data.length; i++) {
-    const li = Math.round(idx.data[i]) - 1;
-    if (li < 0) throw new RuntimeError("Index exceeds array bounds");
-    if (li > maxLi) maxLi = li;
-  }
-  if (maxLi >= base.data.length) {
-    const newLen = maxLi + 1;
-    const grown = allocFloat64Array(newLen);
-    grown.set(base.data);
-    let grownImag: Float64Array | undefined;
-    if (base.imag) {
-      grownImag = allocFloat64Array(newLen);
-      grownImag.set(base.imag);
-    }
-    const isColVec =
-      base.shape.length >= 2 && base.shape[1] === 1 && base.shape[0] > 1;
-    const newShape = isColVec ? [newLen, 1] : [1, newLen];
-    base = RTV.tensor(grown, newShape, grownImag);
-  }
-
-  if (isRuntimeTensor(rhs)) {
-    if (idx.data.length !== rhs.data.length) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    if (rhs.imag || base.imag) ensureImag(base);
-    for (let i = 0; i < idx.data.length; i++) {
-      const li = Math.round(idx.data[i]) - 1;
-      base.data[li] = rhs.data[i];
-      if (base.imag) base.imag[li] = rhs.imag ? rhs.imag[i] : 0;
-    }
-    return base;
-  }
-  // Scalar RHS assigned to multiple positions
-  const { re, im } = toReIm(rhs);
-  if (im !== 0 || base.imag) ensureImag(base);
-  for (let i = 0; i < idx.data.length; i++) {
-    const li = Math.round(idx.data[i]) - 1;
-    base.data[li] = re;
-    if (base.imag) base.imag[li] = im;
-  }
-  return base;
-}
-
-function storeIntoTensor2D(
-  base: RuntimeTensor,
-  indices: RuntimeValue[],
-  rhs: RuntimeValue
-): RuntimeValue {
-  const [rows, cols] = tensorSize2D(base);
-  const rowIsColon = isColonIndex(indices[0]);
-  const colIsColon = isColonIndex(indices[1]);
-  const rowIsTensor = isRuntimeTensor(indices[0]);
-  const colIsTensor = isRuntimeTensor(indices[1]);
-
-  if (rowIsColon && colIsColon) {
-    // base(:, :) = rhs — assign entire matrix
-    if (isRuntimeTensor(rhs)) {
-      if (rhs.data.length !== base.data.length) {
-        throw new RuntimeError("Subscripted assignment dimension mismatch");
-      }
-      base.data.set(rhs.data);
-      if (rhs.imag || base.imag) {
-        ensureImag(base);
-        if (rhs.imag) base.imag!.set(rhs.imag);
-        else base.imag!.fill(0);
-      }
-      return base;
-    }
-    const { re, im } = toReIm(rhs);
-    base.data.fill(re);
-    if (im !== 0 || base.imag) {
-      ensureImag(base);
-      base.imag!.fill(im);
-    }
-    return base;
-  }
-
-  if (rowIsColon && !colIsColon && !colIsTensor) {
-    return storeIntoTensorColonRow(base, indices[1], rhs, rows, cols);
-  }
-
-  if (!rowIsColon && !rowIsTensor && colIsColon) {
-    return storeIntoTensorColonCol(base, indices[0], rhs, rows, cols);
-  }
-
-  // Handle tensor indices (ranges): base(rowRange, colRange) = rhs
-  if (rowIsTensor || colIsTensor) {
-    // MATLAB grows-from-empty case: A(rowIdx, :) = rhs where A is empty.
-    // A colon on the "other" axis of an empty target adopts the rhs
-    // extent for that dimension instead of staying at 0.
-    const isEmpty = base.data.length === 0;
-    let effectiveCols = cols;
-    let effectiveRows = rows;
-    if (isEmpty && isRuntimeTensor(rhs)) {
-      const [rhsRowsG, rhsColsG] = tensorSize2D(rhs);
-      if (rowIsColon && !colIsColon) effectiveRows = rhsRowsG;
-      if (colIsColon && !rowIsColon) effectiveCols = rhsColsG;
-    }
-    const rowIndices = rowIsColon
-      ? Array.from({ length: effectiveRows }, (_, i) => i)
-      : resolveIndex(indices[0], rows, 0);
-    const colIndices = colIsColon
-      ? Array.from({ length: effectiveCols }, (_, i) => i)
-      : resolveIndex(indices[1], cols, 0);
-
-    const maxRow =
-      rowIndices.length > 0 ? Math.max(...rowIndices) + 1 : effectiveRows;
-    const maxCol =
-      colIndices.length > 0 ? Math.max(...colIndices) + 1 : effectiveCols;
-    base = growTensor2D(base, maxRow, maxCol);
-    const [curRows] = tensorSize2D(base);
-
-    assignSlice(base, rowIndices, colIndices, rhs, curRows);
-    return base;
-  }
-
-  // Both are scalar indices
-  if (
-    (isRuntimeLogical(indices[0]) && !indices[0]) ||
-    (isRuntimeLogical(indices[1]) && !indices[1])
-  ) {
-    return base;
-  }
-  const { re: rhsRe, im: rhsIm } = toReIm(rhs);
-  const r = isRuntimeLogical(indices[0])
-    ? 0
-    : Math.round(toNumber(indices[0])) - 1;
-  const c = isRuntimeLogical(indices[1])
-    ? 0
-    : Math.round(toNumber(indices[1])) - 1;
-  if (r < 0 || c < 0) throw new RuntimeError("Index exceeds array bounds");
-
-  base = growTensor2D(base, r + 1, c + 1);
-  const [scRows] = tensorSize2D(base);
-  const linearIdx = colMajorIndex(r, c, scRows);
-  base.data[linearIdx] = rhsRe;
-  if (rhsIm !== 0 || base.imag) {
-    ensureImag(base);
-    base.imag![linearIdx] = rhsIm;
-  }
-  return base;
-}
-
-/**
- * Assign a stripe of values along one dimension of a tensor.
- * Unlike assignSlice, this checks element count rather than shape — MATLAB
- * allows `A(:,c) = row_vector` and `A(r,:) = col_vector`.
- * `positions` are the 0-based linear indices into `base.data`.
- */
-function assignStripe(
-  base: RuntimeTensor,
-  positions: number[],
-  rhs: RuntimeValue
-): void {
-  if (isRuntimeTensor(rhs)) {
-    if (rhs.data.length !== positions.length) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    if (rhs.imag || base.imag) ensureImag(base);
-    for (let i = 0; i < positions.length; i++) {
-      base.data[positions[i]] = rhs.data[i];
-      if (base.imag) base.imag[positions[i]] = rhs.imag ? rhs.imag[i] : 0;
-    }
-  } else {
-    const { re, im } = toReIm(rhs);
-    if (im !== 0 || base.imag) ensureImag(base);
-    for (const li of positions) {
-      base.data[li] = re;
-      if (base.imag) base.imag[li] = im;
-    }
-  }
-}
-
-/** base(:, c) = rhs — assign/grow entire column */
-function storeIntoTensorColonRow(
-  base: RuntimeTensor,
-  colIdx: RuntimeValue,
-  rhs: RuntimeValue,
-  rows: number,
-  cols: number
-): RuntimeValue {
-  // Logical scalar column: false → no-op, true → col 1
-  if (isRuntimeLogical(colIdx)) {
-    if (!colIdx) return base;
-    const positions = Array.from({ length: rows }, (_, r) =>
-      colMajorIndex(r, 0, rows)
-    );
-    assignStripe(base, positions, rhs);
-    return base;
-  }
-  const c = Math.round(toNumber(colIdx)) - 1;
-  if (c < 0) throw new RuntimeError("Index exceeds array bounds");
-  let curRows = rows;
-  let curCols = cols;
-  // When base is empty, infer dimensions from RHS
-  if (curRows === 0 && isRuntimeTensor(rhs) && rhs.data.length > 0) {
-    curRows = rhs.data.length;
-    const newCols = c + 1;
-    base = RTV.tensor(allocFloat64Array(curRows * newCols), [curRows, newCols]);
-    curCols = newCols;
-  } else if (curRows === 0 && (isRuntimeNumber(rhs) || isRuntimeLogical(rhs))) {
-    curRows = 1;
-    const newCols = c + 1;
-    base = RTV.tensor(allocFloat64Array(curRows * newCols), [curRows, newCols]);
-    curCols = newCols;
-  }
-  if (c >= curCols) {
-    base = growTensor2D(base, curRows, c + 1);
-  }
-  const [finalRows] = tensorSize2D(base);
-  const positions = Array.from({ length: finalRows }, (_, r) =>
-    colMajorIndex(r, c, finalRows)
-  );
-  assignStripe(base, positions, rhs);
-  return base;
-}
-
-/** base(r, :) = rhs — assign/grow entire row */
-function storeIntoTensorColonCol(
-  base: RuntimeTensor,
-  rowIdx: RuntimeValue,
-  rhs: RuntimeValue,
-  rows: number,
-  cols: number
-): RuntimeValue {
-  // Logical scalar row: false → no-op, true → row 1
-  if (isRuntimeLogical(rowIdx)) {
-    if (!rowIdx) return base;
-    const positions = Array.from({ length: cols }, (_, c) =>
-      colMajorIndex(0, c, rows)
-    );
-    assignStripe(base, positions, rhs);
-    return base;
-  }
-  const r = Math.round(toNumber(rowIdx)) - 1;
-  if (r < 0) throw new RuntimeError("Index exceeds array bounds");
-  let curRows = rows;
-  let curCols = cols;
-  // When base is empty, infer dimensions from RHS
-  if (curCols === 0 && isRuntimeTensor(rhs) && rhs.data.length > 0) {
-    curCols = rhs.data.length;
-    const newRows = r + 1;
-    base = RTV.tensor(allocFloat64Array(newRows * curCols), [newRows, curCols]);
-    curRows = newRows;
-  } else if (curCols === 0 && (isRuntimeNumber(rhs) || isRuntimeLogical(rhs))) {
-    curCols = 1;
-    const newRows = r + 1;
-    base = RTV.tensor(allocFloat64Array(newRows * curCols), [newRows, curCols]);
-    curRows = newRows;
-  }
-  if (r >= curRows) {
-    base = growTensor2D(base, r + 1, curCols);
-  }
-  const [finalRows, finalCols] = tensorSize2D(base);
-  const positions = Array.from({ length: finalCols }, (_, c) =>
-    colMajorIndex(r, c, finalRows)
-  );
-  assignStripe(base, positions, rhs);
-  return base;
-}
-
-function storeIntoTensorND(
-  base: RuntimeTensor,
-  indices: RuntimeValue[],
-  rhs: RuntimeValue
-): RuntimeValue {
-  let shape = [...base.shape];
-
-  const rhsTensor = isRuntimeTensor(rhs) ? rhs : null;
-  const rhsShape = rhsTensor ? rhsTensor.shape : null;
-
-  let rhsDimCursor = 0;
-  const dimIndices: number[][] = indices.map((idx, dim) => {
-    const dimSize = dim < shape.length ? shape[dim] : 1;
-    if (isColonIndex(idx)) {
-      // A colon must size from the RHS when this dimension's extent is
-      // unknown: either the dim is explicitly empty (dimSize === 0) or it is
-      // a trailing dim beyond the base's declared rank (e.g. dim 2 of a [0,0]
-      // base for `a(1,:,:) = reshape(...)` growing from an empty/undefined
-      // array). Otherwise the colon spans the existing dimension.
-      const dimSizeUnknown = dimSize === 0 || dim >= shape.length;
-      if (dimSizeUnknown && rhsShape) {
-        const rDim =
-          rhsDimCursor < rhsShape.length ? rhsShape[rhsDimCursor] : 1;
-        rhsDimCursor++;
-        return Array.from({ length: rDim }, (_, i) => i);
-      }
-      rhsDimCursor++;
-      return Array.from({ length: dimSize }, (_, i) => i);
-    }
-    return resolveIndex(idx, dimSize, 0);
-  });
-
-  // Grow base if any index exceeds current dims
-  const requiredShape = [...shape];
-  while (requiredShape.length < indices.length) requiredShape.push(1);
-  let needGrow = false;
-  for (let d = 0; d < dimIndices.length; d++) {
-    for (const idx of dimIndices[d]) {
-      if (idx >= requiredShape[d]) {
-        requiredShape[d] = idx + 1;
-        needGrow = true;
-      }
-    }
-  }
-  if (needGrow || base.data.length === 0) {
-    const newTotal = requiredShape.reduce((a, b) => a * b, 1);
-    const newData = allocFloat64Array(newTotal);
-    const newImag = base.imag ? allocFloat64Array(newTotal) : undefined;
-    if (base.data.length > 0) {
-      const oldShape = [...shape];
-      while (oldShape.length < requiredShape.length) oldShape.push(1);
-      const oldTotal = base.data.length;
-      const ndimGrow = oldShape.length;
-      const newStrides = new Array(ndimGrow);
-      newStrides[0] = 1;
-      for (let d = 1; d < ndimGrow; d++)
-        newStrides[d] = newStrides[d - 1] * requiredShape[d - 1];
-      const growSubs = new Array(ndimGrow).fill(0);
-      let dstIdx = 0;
-      for (let i = 0; i < oldTotal; i++) {
-        newData[dstIdx] = base.data[i];
-        if (newImag && base.imag) newImag[dstIdx] = base.imag[i];
-        for (let d = 0; d < ndimGrow; d++) {
-          growSubs[d]++;
-          dstIdx += newStrides[d];
-          if (growSubs[d] < oldShape[d]) break;
-          dstIdx -= growSubs[d] * newStrides[d];
-          growSubs[d] = 0;
-        }
-      }
-    }
-    while (
-      requiredShape.length > 2 &&
-      requiredShape[requiredShape.length - 1] === 1
-    ) {
-      requiredShape.pop();
-    }
-    base = RTV.tensor(newData, requiredShape, newImag);
-    shape = requiredShape;
-  }
-
-  const resultShape = dimIndices.map(d => d.length);
-  const totalElems = resultShape.reduce((a, b) => a * b, 1);
-
-  const ndimStore = dimIndices.length;
-  const dstStrides = new Array(ndimStore);
-  dstStrides[0] = 1;
-  for (let d = 1; d < ndimStore; d++)
-    dstStrides[d] =
-      dstStrides[d - 1] * (d - 1 < shape.length ? shape[d - 1] : 1);
-  const dimOffsetsStore: number[][] = dimIndices.map((indices, d) =>
-    indices.map(idx => idx * dstStrides[d])
-  );
-
-  // Iterate through N-D subscripts writing values
-  const iterateND = (writeFn: (dstLinear: number, srcIdx: number) => void) => {
-    const subs = new Array(ndimStore).fill(0);
-    let dstLinear = 0;
-    for (let d = 0; d < ndimStore; d++) dstLinear += dimOffsetsStore[d][0];
-    for (let i = 0; i < totalElems; i++) {
-      writeFn(dstLinear, i);
-      for (let d = 0; d < ndimStore; d++) {
-        const prev = subs[d];
-        subs[d]++;
-        if (subs[d] < dimIndices[d].length) {
-          dstLinear += dimOffsetsStore[d][subs[d]] - dimOffsetsStore[d][prev];
-          break;
-        }
-        dstLinear -= dimOffsetsStore[d][prev] - dimOffsetsStore[d][0];
-        subs[d] = 0;
-      }
-    }
-  };
-
-  if (isRuntimeTensor(rhs)) {
-    if (rhs.data.length !== totalElems) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    const hasRhsImag = rhs.imag !== undefined;
-    if (hasRhsImag || base.imag) ensureImag(base);
-    iterateND((dstLinear, srcIdx) => {
-      base.data[dstLinear] = rhs.data[srcIdx];
-      if (base.imag) base.imag[dstLinear] = hasRhsImag ? rhs.imag![srcIdx] : 0;
-    });
-  } else {
-    const { re, im } = toReIm(rhs);
-    if (im !== 0 || base.imag) ensureImag(base);
-    iterateND(dstLinear => {
-      base.data[dstLinear] = re;
-      if (base.imag) base.imag[dstLinear] = im;
-    });
-  }
-  return base;
-}
-
-function storeIntoCell(
-  base: RuntimeCell,
-  indices: RuntimeValue[],
-  rhs: RuntimeValue,
-  parenAssign = false,
-  rt?: StoreRuntime
-): RuntimeValue {
-  // Refcount-driven COW for the cell wrapper.
-  if (isShared(base)) {
-    base = RTV.cell(base.data.slice(), [...base.shape]);
-  }
-
-  const updateShapeAfterLinearAssign = (oldLen: number) => {
-    const c = base as RuntimeCell;
-    const newLen = c.data.length;
-    if (newLen === oldLen) return;
-    const isColVec = c.shape[0] > 1 && c.shape[1] === 1;
-    c.shape = isColVec ? [newLen, 1] : [1, newLen];
-  };
-
-  if (indices.length === 1) {
-    return storeIntoCell1D(
-      base,
-      indices[0],
-      rhs,
-      updateShapeAfterLinearAssign,
-      parenAssign,
-      rt
-    );
-  }
-  if (indices.length === 2) {
-    return storeIntoCell2D(base, indices, rhs, parenAssign, rt);
-  }
-
-  throw new RuntimeError(`Cannot index-assign into cell`);
-}
-
-/** Append a fresh empty tensor onto cell.data with proper incref so the
- *  cell takes ownership. The empty tensor has rc=0 at construction; after
- *  this helper, it has rc=1 (owned by the cell). */
-function appendEmptyCellSlot(cell: RuntimeCell, rt?: RefcountRuntime): void {
-  const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
-  if (rt) empty.incref();
-  cell.data.push(empty);
-}
-
-/** Replace cell.data[pos] with rhs, decref-old / incref-new. The cell's
- *  data is mutated in place; if rt is unavailable, refcount work is
- *  skipped (lax mode). */
-function setCellElement(
-  cell: RuntimeCell,
-  pos: number,
-  value: RuntimeValue,
-  rt?: RefcountRuntime
-): void {
-  if (rt) {
-    cell.bindElement(rt, pos, value);
-  } else {
-    cell.data[pos] = value;
-  }
-}
-
-function storeIntoCell1D(
-  base: RuntimeCell,
-  idx: RuntimeValue,
-  rhs: RuntimeValue,
-  updateShape: (oldLen: number) => void,
-  parenAssign = false,
-  rt?: RefcountRuntime
-): RuntimeValue {
-  // Colon: c(:) = rhs assigns to every existing slot (no growth). RHS must
-  // be a 1×1 cell (scalar-expanded) or a cell matching the element count.
-  if (isColonIndex(idx)) {
-    const n = base.data.length;
-    if (n === 1 && !isRuntimeCell(rhs)) {
-      setCellElement(base, 0, rhs, rt);
-      return base;
-    }
-    if (
-      !isRuntimeCell(rhs) ||
-      (rhs.data.length !== n && rhs.data.length !== 1)
-    ) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    const scalarExpand = rhs.data.length === 1;
-    for (let j = 0; j < n; j++) {
-      setCellElement(base, j, scalarExpand ? rhs.data[0] : rhs.data[j], rt);
-    }
-    return base;
-  }
-
-  // Vector index
-  if (isRuntimeTensor(idx)) {
-    let positions: number[];
-    if (idx._isLogical) {
-      positions = [];
-      for (let i = 0; i < idx.data.length; i++) {
-        if (idx.data[i] !== 0) positions.push(i);
-      }
-    } else {
-      positions = Array.from(idx.data).map((v: number) => Math.round(v) - 1);
-    }
-
-    // Single-element index with non-cell RHS: treat as scalar assignment
-    if (positions.length === 1 && !isRuntimeCell(rhs)) {
-      const pos = positions[0];
-      if (pos < 0) throw new RuntimeError("Cell index exceeds bounds");
-      const oldLen = base.data.length;
-      while (base.data.length <= pos) appendEmptyCellSlot(base, rt);
-      setCellElement(base, pos, rhs, rt);
-      updateShape(oldLen);
-      return base;
-    }
-    if (
-      !isRuntimeCell(rhs) ||
-      (rhs.data.length !== positions.length && rhs.data.length !== 1)
-    ) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    const scalarExpand = rhs.data.length === 1;
-    const oldLen = base.data.length;
-    let maxIdx = -1;
-    for (let j = 0; j < positions.length; j++) {
-      const pos = positions[j];
-      if (pos < 0) throw new RuntimeError("Cell index exceeds bounds");
-      if (pos > maxIdx) maxIdx = pos;
-    }
-    while (base.data.length <= maxIdx) appendEmptyCellSlot(base, rt);
-    for (let j = 0; j < positions.length; j++) {
-      const pos = positions[j];
-      setCellElement(base, pos, scalarExpand ? rhs.data[0] : rhs.data[j], rt);
-    }
-    updateShape(oldLen);
-    return base;
-  }
-
-  // Scalar index
-  const i = Math.round(toNumber(idx)) - 1;
-  if (i < 0) throw new RuntimeError("Cell index exceeds bounds");
-  const oldLen = base.data.length;
-  if (i >= base.data.length) {
-    while (base.data.length <= i) appendEmptyCellSlot(base, rt);
-  }
-  // Unwrap 1x1 cell RHS only for paren assignment: c(i) = {val} stores val
-  const newVal =
-    parenAssign && isRuntimeCell(rhs) && rhs.data.length === 1
-      ? rhs.data[0]
-      : rhs;
-  setCellElement(base, i, newVal, rt);
-  updateShape(oldLen);
-  return base;
-}
-
-function storeIntoCell2D(
-  base: RuntimeCell,
-  indices: RuntimeValue[],
-  rhs: RuntimeValue,
-  parenAssign = false,
-  rt?: RefcountRuntime
-): RuntimeValue {
-  let rows = base.shape[0];
-  let cols = base.shape.length >= 2 ? base.shape[1] : 1;
-
-  // Resolve with boundsLimit=0 to allow auto-grow beyond current dims
-  const rowIndices = resolveIndex(indices[0], rows, 0);
-  const colIndices = resolveIndex(indices[1], cols, 0);
-
-  // Auto-grow cell if needed
-  const maxRow = Math.max(...rowIndices) + 1;
-  const maxCol = Math.max(...colIndices) + 1;
-  const newRows = Math.max(rows, maxRow);
-  const newCols = Math.max(cols, maxCol);
-  if (newRows > rows || newCols > cols) {
-    const newData: RuntimeValue[] = new Array(newRows * newCols);
-    for (let k = 0; k < newData.length; k++) {
-      const empty = RTV.tensor(allocFloat64Array(0), [0, 0]);
-      if (rt) empty.incref();
-      newData[k] = empty;
-    }
-    // Move existing elements (refcount unchanged — cell already owned them).
-    for (let j = 0; j < cols; j++) {
-      for (let i = 0; i < rows; i++) {
-        const oldEmpty = newData[j * newRows + i];
-        newData[j * newRows + i] = base.data[j * rows + i];
-        if (rt) decref(rt, oldEmpty);
-      }
-    }
-    // Decref the old (smaller) data array's elements that are no longer held.
-    // base.data's elements were either copied above or are now slots in
-    // newData; the "moved" ones are held in newData with the same refcount.
-    // Since we've already replaced their slot in newData (from empty to old),
-    // those old elements' rc is unchanged. The empty placeholders we
-    // overwrote were decref'd above.
-    base.data = newData;
-    base.shape = [newRows, newCols];
-    rows = newRows;
-    cols = newCols;
-  }
-
-  const nSelectedRows = rowIndices.length;
-  const nSelectedCols = colIndices.length;
-  const totalSelected = nSelectedRows * nSelectedCols;
-
-  if (parenAssign && isRuntimeCell(rhs)) {
-    if (rhs.data.length !== totalSelected && rhs.data.length !== 1) {
-      throw new RuntimeError("Subscripted assignment dimension mismatch");
-    }
-    const scalarExpand = rhs.data.length === 1;
-    let k = 0;
-    for (let cj = 0; cj < nSelectedCols; cj++) {
-      for (let ri = 0; ri < nSelectedRows; ri++) {
-        const linearIdx = colIndices[cj] * rows + rowIndices[ri];
-        setCellElement(
-          base,
-          linearIdx,
-          scalarExpand ? rhs.data[0] : rhs.data[k++],
-          rt
-        );
-      }
-    }
-  } else {
-    const linearIdx = colIndices[0] * rows + rowIndices[0];
-    setCellElement(base, linearIdx, rhs, rt);
-  }
-  return base;
-}
-
 // ── Store: main dispatcher ───────────────────────────────────────────────
 
-/** Store into indexed position: base(indices) = rhs — uses copy-on-write for shared data */
+/** Store into indexed position: base(indices) = rhs (or base{indices} = rhs
+ *  for cells when `parenAssign` is false). A 0x0 RHS in a paren store
+ *  deletes. Shared targets are copied before mutation. */
 export function storeIntoRTValueIndex(
   base: RuntimeValue,
   indices: RuntimeValue[],
@@ -2459,11 +1236,13 @@ export function storeIntoRTValueIndex(
   }
 
   if (isRuntimeTensor(base)) {
-    return storeIntoTensor(base, indices, rhs, rt);
+    if (isDeletionRhs(rhs)) return deleteFromTensor(base, indices);
+    return storeIntoTensor(base, indices, rhs);
   }
 
   if (isRuntimeCell(base)) {
-    return storeIntoCell(base, indices, rhs, parenAssign, rt);
+    if (parenAssign && isDeletionRhs(rhs)) return deleteFromCell(base, indices);
+    return storeIntoCell(base, indices, rhs, !parenAssign, rt);
   }
 
   throw new RuntimeError(`Cannot index-assign into ${kstr(base)}`);

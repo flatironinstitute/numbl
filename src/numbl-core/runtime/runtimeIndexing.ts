@@ -37,8 +37,13 @@ import {
   type RuntimeClassInstanceArray,
   type RuntimeClassInstance,
   type RuntimeStruct,
+  type RuntimeTensor,
+  type RuntimeChar,
+  RuntimeCell,
 } from "../runtime/types.js";
-import { stringArraySubscript } from "./indexing.js";
+import { stringArraySubscript, cellBraceElements } from "./indexing.js";
+import { isShared } from "./refcount.js";
+import { scalarSubsOffset } from "./indexPlan.js";
 import { matlabNumToString, numel, valueShape } from "./utils.js";
 import {
   dictLookup,
@@ -135,6 +140,14 @@ function endResolver(
   return (dim: number): number => endOf(rt, mv, dim, numIndices);
 }
 
+/** Linear offset of t(i1, ..., ik) for in-range integer scalar
+ *  subscripts, else -1. */
+function scalarOffset(t: RuntimeTensor, indices: unknown[]): number {
+  return t.shape.length >= 2
+    ? scalarSubsOffset(t.shape, t.data.length, indices)
+    : -1;
+}
+
 /**
  * Index into a runtime value or call a function with arguments.
  */
@@ -145,52 +158,16 @@ export function index(
   nargout: number = 1,
   skipSubsref: boolean | string = false
 ): unknown {
-  // ── Fast path: tensor with scalar numeric indices ──
-  // Avoids resolveIndices, ensureRuntimeValue, mIndex dispatch, and all
-  // intermediate array allocations for the most common indexing pattern.
-  if (
-    typeof base === "object" &&
-    base !== null &&
-    (base as { kind?: string }).kind === "tensor"
-  ) {
-    const t = base as import("../runtime/types.js").RuntimeTensor;
-    const nIdx = indices.length;
-    if (nIdx === 1) {
-      // 1D: linear index
-      const idx = indices[0];
-      if (typeof idx === "number") {
-        const i = Math.round(idx) - 1;
-        if (i < 0 || i >= t.data.length)
-          throw new RuntimeError("Index exceeds array bounds");
-        if (t.imag !== undefined) {
-          const im = t.imag[i];
-          return im === 0 ? t.data[i] : RTV.complex(t.data[i], im);
-        }
-        if (t._isLogical === true) return t.data[i] !== 0;
-        return t.data[i];
-      }
-    } else if (nIdx === 2) {
-      // 2D: row, col
-      const ri = indices[0];
-      const ci = indices[1];
-      if (typeof ri === "number" && typeof ci === "number") {
-        const s = t.shape;
-        const rows = s.length === 0 ? 1 : s.length === 1 ? 1 : s[0];
-        // MATLAB: fewer indices than ndims — the last index linearizes
-        // all trailing dims.  For 2-arg indexing, "col" spans dims 2..end.
-        let cols: number;
-        if (s.length === 0) cols = 1;
-        else if (s.length === 1) cols = s[0];
-        else if (s.length === 2) cols = s[1];
-        else {
-          cols = 1;
-          for (let k = 1; k < s.length; k++) cols *= s[k];
-        }
-        const r = Math.round(ri) - 1;
-        const c = Math.round(ci) - 1;
-        if (r < 0 || r >= rows || c < 0 || c >= cols)
-          throw new RuntimeError("Index exceeds array bounds");
-        const lin = c * rows + r;
+  // ── Fast paths: one or more in-range integer scalar subscripts into a
+  // tensor, or one into a cell (paren) or a single-row char. These skip
+  // resolveIndices and the planner; anything else, including errors,
+  // takes the general path.
+  if (typeof base === "object" && base !== null) {
+    const kind = (base as { kind?: string }).kind;
+    if (kind === "tensor") {
+      const t = base as RuntimeTensor;
+      const lin = scalarOffset(t, indices);
+      if (lin >= 0) {
         if (t.imag !== undefined) {
           const im = t.imag[lin];
           return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
@@ -198,32 +175,21 @@ export function index(
         if (t._isLogical === true) return t.data[lin] !== 0;
         return t.data[lin];
       }
-    } else if (nIdx >= 3) {
-      // N-D: all indices must be scalar numbers
-      let allNumeric = true;
-      for (let k = 0; k < nIdx; k++) {
-        if (typeof indices[k] !== "number") {
-          allNumeric = false;
-          break;
-        }
-      }
-      if (allNumeric) {
-        const s = t.shape;
-        let lin = 0;
-        let stride = 1;
-        for (let k = 0; k < nIdx; k++) {
-          const dimSize = k < s.length ? s[k] : 1;
-          const sub = Math.round(indices[k] as number) - 1;
-          if (sub < 0 || sub >= dimSize)
-            throw new RuntimeError("Index exceeds array bounds");
-          lin += sub * stride;
-          stride *= dimSize;
-        }
-        if (t.imag !== undefined) {
-          const im = t.imag[lin];
-          return im === 0 ? t.data[lin] : RTV.complex(t.data[lin], im);
-        }
-        return t.data[lin];
+    } else if (indices.length === 1 && typeof indices[0] === "number") {
+      const i = indices[0];
+      if (kind === "cell") {
+        const c = base as RuntimeCell;
+        if (Number.isInteger(i) && i >= 1 && i <= c.data.length)
+          return new RuntimeCell([c.data[i - 1]], [1, 1]);
+      } else if (kind === "char") {
+        const c = base as RuntimeChar;
+        if (
+          Number.isInteger(i) &&
+          i >= 1 &&
+          i <= c.value.length &&
+          (c.shape === undefined || c.shape[0] === 1)
+        )
+          return RTV.char(c.value[i - 1]);
       }
     }
   }
@@ -523,31 +489,8 @@ export function indexCell(
 
   if (!isRuntimeCell(mv)) throw new RuntimeError("Cell indexing on non-cell");
   const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
-  // CSL for 1D cell indexing
-  if (idxMvals.length === 1) {
-    const idx = idxMvals[0];
-    if (isRuntimeString(idx) && idx === "__COLON__") {
-      return [...mv.data];
-    }
-    if (isRuntimeTensor(idx)) {
-      const result: unknown[] = [];
-      for (let k = 0; k < idx.data.length; k++) {
-        const i = Math.round(idx.data[k]) - 1;
-        if (i < 0 || i >= mv.data.length)
-          throw new RuntimeError("Cell index exceeds bounds");
-        result.push(mv.data[i]);
-      }
-      return result;
-    }
-  }
-  // Multi-index or scalar cell access: mIndex returns a cell for paren-indexing,
-  // so unwrap to get the contents for curly-brace indexing.
-  const result = mIndex(mv, idxMvals);
-  if (isRuntimeCell(result)) {
-    if (result.data.length === 1) return result.data[0];
-    return [...result.data];
-  }
-  return result;
+  const elems = cellBraceElements(mv, idxMvals);
+  return elems.length === 1 ? elems[0] : elems;
 }
 
 /**
@@ -561,6 +504,37 @@ export function indexStore(
   skipSubsasgn = false,
   storeBack = false
 ): unknown {
+  // ── Fast paths: real tensor, number RHS, scalar subscripts that are in
+  // range (unshared target, written in place) or append to a vector
+  // (`v(end+1) = x`). Everything else takes the general path.
+  if (
+    typeof rhs === "number" &&
+    typeof base === "object" &&
+    base !== null &&
+    (base as { kind?: string }).kind === "tensor"
+  ) {
+    const t = base as RuntimeTensor;
+    if (t.imag === undefined && t._isLogical !== true) {
+      if (!isShared(t)) {
+        const lin = scalarOffset(t, indices);
+        if (lin >= 0) {
+          t.data[lin] = rhs;
+          return t;
+        }
+      }
+      if (indices.length === 1 && indices[0] === t.data.length + 1) {
+        const s = t.shape;
+        const n = t.data.length + 1;
+        const col = s.length === 2 && s[1] === 1 && s[0] !== 1;
+        if (col || n === 1 || (s.length === 2 && s[0] === 1)) {
+          const data = allocFloat64Array(n);
+          data.set(t.data);
+          data[n - 1] = rhs;
+          return RTV.tensorRaw(data, col ? [n, 1] : [1, n]);
+        }
+      }
+    }
+  }
   // Treat undefined/null as an empty tensor (uninitialized variable).
   // Exception: if RHS is a class instance, replace entirely
   // behaviour for `h(k) = obj` when h is an uninitialized output variable).
@@ -684,32 +658,6 @@ export function indexStore(
       }
       const newElements = mv.elements.filter((_, i) => !toDelete.has(i));
       return RTV.structArray(mv.fieldNames, newElements);
-    }
-  }
-  // Cell element deletion
-  if (isRuntimeCell(mv) && indices.length === 1) {
-    const rhsMv = ensureRuntimeValue(rhs);
-    if (isRuntimeTensor(rhsMv) && rhsMv.data.length === 0) {
-      const idx = ensureRuntimeValue(indices[0]);
-      const toDelete = new Set<number>();
-      if (isRuntimeNumber(idx)) {
-        toDelete.add(Math.round(idx) - 1);
-      } else if (isRuntimeTensor(idx)) {
-        if (idx._isLogical) {
-          for (let i = 0; i < idx.data.length; i++) {
-            if (idx.data[i] !== 0) toDelete.add(i);
-          }
-        } else {
-          for (let i = 0; i < idx.data.length; i++)
-            toDelete.add(Math.round(idx.data[i]) - 1);
-        }
-      } else if (isRuntimeLogical(idx)) {
-        if (idx) toDelete.add(0);
-      }
-      const newData = mv.data.filter((_, i) => !toDelete.has(i));
-      if (mv.shape[0] === 1) return RTV.cell(newData, [1, newData.length]);
-      if (mv.shape[1] === 1) return RTV.cell(newData, [newData.length, 1]);
-      return RTV.cell(newData, [1, newData.length]);
     }
   }
   // Cell paren-indexed assignment
@@ -872,26 +820,17 @@ export function indexStore(
   const idxMvals = resolveIndices(indices, endResolver(rt, mv, indices.length));
   let rhsMv = ensureRuntimeValue(rhs);
   // A char RHS assigned into a numeric/char array becomes its code point(s)
-  // (MATLAB: x=[1 2 3]; x(2)='A' -> [1 65 3]).
+  // (MATLAB: x=[1 2 3]; x(2)='A' -> [1 65 3]); '' still deletes.
   if (isRuntimeChar(rhsMv)) rhsMv = charToNumericTensor(rhsMv);
   const result = mIndexStore(mv, idxMvals, rhsMv, false, rt);
   if (wasChar && isRuntimeTensor(result)) {
     return numericTensorToChar(result);
   }
-  // Preserve _isLogical flag when assigning logical values into a logical tensor
-  if (
-    isRuntimeTensor(result) &&
-    mv._isLogical &&
-    (isRuntimeLogical(rhsMv) ||
-      (isRuntimeTensor(rhsMv) && rhsMv._isLogical) ||
-      (isRuntimeNumber(rhsMv) && (rhsMv === 0 || rhsMv === 1)))
-  ) {
-    result._isLogical = true;
-  }
   if (wasScalar && isRuntimeTensor(result) && result.data.length === 1) {
     if (result.imag && result.imag[0] !== 0) {
       return RTV.complex(result.data[0], result.imag[0]);
     }
+    if (result._isLogical === true) return result.data[0] !== 0;
     return result.data[0];
   }
   return result;
