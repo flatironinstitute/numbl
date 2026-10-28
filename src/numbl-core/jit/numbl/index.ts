@@ -8,8 +8,6 @@
  *   rather than scattering across the vendored compiler's call sites;
  * - the surface area between the JIT and the rest of numbl is visible at
  *   a glance.
- *
- * `parser/index.ts` re-exports through this module.
  */
 
 // ── Parser (AST shape, lexer dispatch, operator enums) ──────────────────
@@ -23,6 +21,12 @@ export type {
   LValue,
   AbstractSyntaxTree,
 } from "../../parser/index.js";
+
+export {
+  tryExtractDottedName,
+  unwindMemberChain,
+  unwindMemberLvalue,
+} from "../../parser/astUtils.js";
 
 export { offsetToLineCol } from "../../sourceLoc.js";
 

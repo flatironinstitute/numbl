@@ -5,9 +5,9 @@
  * carries a `Type`.
  */
 
-import type { Span } from "../parser/index.js";
+import type { Span } from "../numbl/index.js";
 import type { NumericType, Type } from "./types.js";
-import { BinaryOperation, UnaryOperation } from "../parser/index.js";
+import { BinaryOperation, UnaryOperation } from "../numbl/index.js";
 
 // ── Expressions ─────────────────────────────────────────────────────────
 

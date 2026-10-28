@@ -24,7 +24,7 @@
  *     overwrites the placeholder.
  */
 
-import type { Expr, Span, Stmt } from "../parser/index.js";
+import type { Expr, Span, Stmt } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {

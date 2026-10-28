@@ -12,7 +12,7 @@ The JIT compiler is the in-tree subsystem under `src/numbl-core/jit`. It lowers 
 
 ## Backends
 
-Both backends walk the same IR program: `compileSpec` → `jit/codegen/emitJs.ts` for JS; `compileSpecC` → `jit/codegen/emit.ts` for C:
+Both backends walk the same IR program, built by the shared pipeline (`compileWith` in `jit/compile.ts`): `compileSpec` → `jit/codegen/emitJs.ts` for JS; `compileSpecC` → `jit/codegen/emit.ts` for C:
 
 - **JS** emits an ES module string returning `($h) => specFn`, materialized with `new Function(...)`. `$h` carries the host hooks (output sink, plot dispatch).
 - **C** emits C source compiled to a `.so` with `cc` and called via koffi; multi-output specs use out-pointer params (see `executors/jit/typeAdapterC.ts`).

@@ -12,7 +12,7 @@
  * explicit.
  */
 
-import type { Expr, LValue, Span } from "../parser/index.js";
+import type { Expr, LValue, Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRStmt, IndexSliceArg } from "./ir.js";
 import {

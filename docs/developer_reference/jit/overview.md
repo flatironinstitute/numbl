@@ -2,7 +2,7 @@
 
 The JIT sits on top of the interpreter. It type-specializes code to JavaScript (run in V8) or, at `--opt 2`, to C compiled to a native `.so` and called via koffi. The interpreter remains authoritative: anything the JIT cannot handle falls back to the interpreter transparently.
 
-The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/jit` (lowering → IR → JS/C codegen, builtins, runtime snippets, workspace) with **no external dependency**. Its per-spec entry points, `compileSpec` for JS ([`jit/compileSpec.ts`](../../../src/numbl-core/jit/compileSpec.ts)) and `compileSpecC` for C ([`jit/compileSpecC.ts`](../../../src/numbl-core/jit/compileSpecC.ts)), both re-exported from `jit/index.ts`, are called by the per-shape executors under `src/numbl-core/executors/jit/`; see [executors.md](../executors.md). The JIT began as a separate project (mtoc2) and was later vendored into numbl. For the IR, the backends, the runtime snippets and the steps for adding a builtin, see [ir-codegen.md](ir-codegen.md).
+The JIT compiler is an in-tree, self-contained subsystem under `src/numbl-core/jit` (lowering → IR → JS/C codegen, builtins, runtime snippets, workspace) with **no external dependency**. Its per-spec entry points, `compileSpec` for JS ([`jit/compileSpec.ts`](../../../src/numbl-core/jit/compileSpec.ts)) and `compileSpecC` for C ([`jit/compileSpecC.ts`](../../../src/numbl-core/jit/compileSpecC.ts)), both re-exported from `jit/index.ts`, are called by the per-shape executors under `src/numbl-core/executors/jit/`; see [executors.md](../executors.md). Both run one pipeline, `compileWith` ([`jit/compile.ts`](../../../src/numbl-core/jit/compile.ts)), with their `CompileTarget`: it specializes the entry, collects the specs it transitively calls (`reachableCallees`), runs the IR passes the target's capability flags ask for (`definiteAssignment`: the definite-assignment check and assigned flags, C only; `fusesElementwise`: the inline pass, C only), and calls the target's emitter. The JIT began as a separate project (mtoc2) and was later vendored into numbl. For the IR, the backends, the runtime snippets and the steps for adding a builtin, see [ir-codegen.md](ir-codegen.md).
 
 ## Trigger points
 
@@ -24,7 +24,7 @@ Indexed **stores** are the exception to "no runtime bailout": an index past a te
 
 ### Decline diagnostics
 
-A failed `compileSpec` rolls back whatever it added to `Lowerer.specializations`. The emitted module contains **every** spec in that map, so a spec that lowers cleanly but throws during emit would otherwise be re-emitted (and rethrow) on every later compile in the session, silently stopping unrelated functions from being JIT'd.
+`Lowerer.specializations` is shared by every compile in the session, from both backends, but an emitted module contains only the entry spec and the specs it reaches, so a spec one compile left behind (say one the C backend emits but the JS emitter rejects) cannot make an unrelated compile fail. A failed compile also rolls back whatever it added to the map.
 
 Set `NUMBL_JIT_LOG=1` to print every decline (executor, source position, message) to stderr, and every runtime error that re-runs on the interpreter (`[jit-rerun]`). `%!numbl:assert_jit` reports only the most recent one; the env var shows them all, which is what you want when a chain of calls declines for several different reasons.
 

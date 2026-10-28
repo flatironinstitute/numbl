@@ -10,7 +10,7 @@
  * appropriate axis size.
  */
 
-import type { Expr, Span } from "../parser/index.js";
+import type { Expr, Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {
@@ -21,6 +21,7 @@ import {
   scalarDouble,
   signFromNumber,
   typeToString,
+  isDoubleOrLogical,
 } from "./types.js";
 import type { NumericType } from "./types.js";
 import type { Lowerer } from "./lower.js";
@@ -66,7 +67,7 @@ export function lowerIndexLoad(
         isNumeric(lowered.ty) &&
         !lowered.ty.isComplex &&
         isMultiElement(lowered.ty) &&
-        (lowered.ty.elem === "double" || lowered.ty.elem === "logical")
+        isDoubleOrLogical(lowered.ty)
       ) {
         return lowerIndexSlice.call(this, name, argExprs, span);
       }

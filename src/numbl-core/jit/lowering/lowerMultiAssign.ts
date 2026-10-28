@@ -12,7 +12,7 @@
  * (which carries the sret out-pointer ABI).
  */
 
-import type { Expr, Span, Stmt, LValue } from "../parser/index.js";
+import type { Expr, Span, Stmt, LValue } from "../numbl/index.js";
 import { UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IRStmt } from "./ir.js";
 import {

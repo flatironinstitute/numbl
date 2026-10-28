@@ -51,6 +51,7 @@ import {
   signFromNumber,
   isNumeric,
   isScalar,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { DimInfo, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
@@ -248,7 +249,7 @@ export const reshape: Builtin = {
         `'reshape' first arg must be numeric (got ${a.kind})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'reshape' first arg must be a double or logical tensor (got ${a.elem})`
       );

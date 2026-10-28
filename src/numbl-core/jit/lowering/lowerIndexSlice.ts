@@ -18,7 +18,7 @@
  *   multi-slot Scalar at axis k         → exact 1
  */
 
-import type { Expr, Span } from "../parser/index.js";
+import type { Expr, Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr, IndexSliceArg } from "./ir.js";
 import {
@@ -35,6 +35,7 @@ import {
   type NumericType,
   type Type,
   typeToString,
+  isDoubleOrLogical,
 } from "./types.js";
 import type { Lowerer } from "./lower.js";
 import { resolveIndexBase } from "./indexResolve.js";
@@ -251,7 +252,7 @@ export function lowerSliceArg(
     if (
       isNumeric(expr.ty) &&
       !expr.ty.isComplex &&
-      (expr.ty.elem === "double" || expr.ty.elem === "logical") &&
+      isDoubleOrLogical(expr.ty) &&
       !isScalarRealNumeric(expr.ty)
     ) {
       if (expr.ty.elem === "logical") {

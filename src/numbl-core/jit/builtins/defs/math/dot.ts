@@ -32,6 +32,7 @@ import {
   type NumericType,
   type Type,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import {
@@ -45,7 +46,7 @@ function requireNumeric(t: Type, what: string): NumericType {
   if (!isNumeric(t)) {
     throw new TypeError(`${what} must be a numeric (got ${typeToString(t)})`);
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(`${what} must be double or logical (got ${t.elem})`);
   }
   return t;

@@ -86,21 +86,23 @@ The loop shape has one extra step. A capture-free function-handle _input_ (defin
 
 The shape executors (`executors/jit/topLevelExecutor.ts`, `loopExecutor.ts`, `callExecutor.ts`) are factories, `make<Shape>Executor(backend)`, that produce `<prefix>-top-level`, `<prefix>-loop`, and `<prefix>-call`, where the prefix is `jit` (JS) or `cjit` (C).
 
-- **top-level** wraps the script body in a synthetic function (params = variables read from the env, outputs = variables assigned), and writes the outputs back to the env. It declines scripts with a top-level `return` and scripts with unsuppressed assignments, whose "x = 10" display the emitted code does not reproduce. The C backend applies a stricter display gate (unsuppressed bare expressions decline too) unless the script carries `%!numbl:assert_jit c`.
+- **top-level** wraps the script body in a synthetic function (params = variables read from the env, outputs = variables assigned), and writes the outputs back to the env. It declines scripts with a top-level `return` and scripts with unsuppressed assignments, whose "x = 10" display the emitted code does not reproduce. A backend with `strictDisplayGate` (C) applies a stricter display gate (unsuppressed bare expressions decline too) unless the script carries `%!numbl:assert_jit c`.
 - **loop** wraps a single `for`/`while` stmt the same way; outputs are filtered to those live after the loop.
 - **call** compiles the user function itself, specialized on argument types and nargout, and returns its outputs. It declines `nargout === 0`, since the interpreter still binds the first output to `ans`.
 
 A `JitBackend` supplies:
 
-| Member        | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
-| ------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
-| `available`   | always                                         | `interp.nativeBridge.koffi` present                                      |
-| `accepts`     | any input type but `Unknown`                   | input types with a C declaration (`compilerTypeToCDecl`)                 |
-| `compile`     | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
-| `invoke`      | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
-| raise channel | tagged `JitRaise` thrown by the emitted code   | `longjmp` to the host-entry guard; status read with `bindRaise`          |
+| Member              | JS (`jsBackend.ts`)                            | C (`cBackend.ts`)                                                        |
+| ------------------- | ---------------------------------------------- | ------------------------------------------------------------------------ |
+| `available`         | always                                         | `interp.nativeBridge.koffi` present                                      |
+| `accepts`           | any input type but `Unknown`                   | input types with a C declaration (`compilerTypeToCDecl`)                 |
+| `compile`           | `compileSpec` → `new Function` → spec function | `compileSpecC` → `cc -shared` → koffi `dlopen`                           |
+| `invoke`            | `numblToJit` / `jitToNumbl` around the JS call | `marshalInputs` / out-pointer buffers / `unmarshal*` around the FFI call |
+| raise channel       | tagged `JitRaise` thrown by the emitted code   | `longjmp` to the host-entry guard; status read with `bindRaise`          |
+| `native`            | false                                          | true: satisfies `%!numbl:assert_jit c`                                   |
+| `strictDisplayGate` | false                                          | true: unsuppressed bare expressions decline the top-level shape          |
 
-Shared policy lives in `backend.ts`: `compileUnit` (the single place compiler rejections are caught and recorded for `NUMBL_JIT_LOG` and `%!numbl:assert_jit`), `declinedByAssertC` (at `--opt 2` the JS backend declines units marked `%!numbl:assert_jit c`, so they either C-JIT or reach the interpreter, which raises), and `insideCompiledLoop` (the loop-depth gate below).
+Shared policy lives in `backend.ts`: `compileUnit` (the single place compiler rejections are caught and recorded for `NUMBL_JIT_LOG` and `%!numbl:assert_jit`), `declinedByAssertC` (at `--opt 2` a non-`native` backend declines units marked `%!numbl:assert_jit c`, so they either C-JIT or reach the interpreter, which raises), and `insideCompiledLoop` (the loop-depth gate below).
 
 ## The loop-depth gate
 
@@ -127,7 +129,7 @@ The IDE's Stop sets word 0 of a `SharedArrayBuffer` (`ExecOptions.cancelSAB`, vi
 - **JS.** The module's `$cancel` (`$h.cancel`: the runtime's flag, or a private zero word) is read through a function-local alias with a plain typed-array load; V8 does not eliminate such loads across iterations, so the other thread's store is seen. A loop tests the flag in its condition and raises after it exits, because a raise call inside the loop body, even one never taken, slows a tight V8 loop severalfold.
 - **C.** `JIT_POLL_CANCEL()` raises a cancel through the raise channel, so the guard frees the call's allocations; see [cjit.md](jit/cjit.md#runtime-errors-the-raise-channel).
 
-On scalar loops of one to three statements the cost is within the run-to-run noise (about 5%) at `--opt 1` and `--opt 2`. The exception is a `while` loop whose body is a single scalar update (`while k < n, k = k + 1; end`, about one cycle per iteration), which runs about 40% slower at `--opt 1`: the chunk counter that strip-mining adds is a large share of such an iteration. Only a host with a cancel buffer can cancel: the IDE worker and embedders that pass `cancelSAB`. The CLI has none; Ctrl-C ends the process, compiled code included.
+On scalar loops of one to three statements the cost is within the run-to-run noise (about 5%) at `--opt 1` and `--opt 2`. The exception is a `while` loop whose body is a single scalar update (`while k < n, k = k + 1; end`, about one cycle per iteration), which runs about 40% slower at `--opt 1`: the chunk counter that strip-mining adds is a large share of such an iteration. Only a host with a cancel buffer can cancel: the IDE worker and embedders that pass `cancelSAB`. Waits in `input()`, `pause` and `gpu.call` check the same flag through the blocking channel ([web-app.md](web-app.md#blocking-waits)). The CLI has none; Ctrl-C ends the process, compiled code included.
 
 ## Output streaming
 

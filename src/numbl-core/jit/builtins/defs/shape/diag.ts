@@ -37,6 +37,7 @@ import {
   tensorComplex,
   tensorDouble,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { NumericType, Type } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
@@ -57,7 +58,7 @@ function resolveK(argTypes: Type[]): number {
       `'diag' second arg must be a scalar real integer (got ${typeToString(t)})`
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `'diag' second arg must be double or logical (got ${t.elem})`
     );
@@ -99,7 +100,7 @@ export const diag: Builtin = {
         `'diag' first arg must be numeric (got ${typeToString(a)})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'diag' first arg must be a double or logical tensor (got ${a.elem})`
       );

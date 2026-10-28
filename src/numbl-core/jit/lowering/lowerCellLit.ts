@@ -12,7 +12,7 @@
  * fresh temps before the `CellLit` becomes an Assign RHS.
  */
 
-import type { Expr } from "../parser/index.js";
+import type { Expr } from "../numbl/index.js";
 import { UnsupportedConstruct } from "./errors.js";
 import type { CellLit, IRExpr } from "./ir.js";
 import {

@@ -8,7 +8,7 @@ Fusion collapses an element-wise tensor assignment into a single inline per-elem
 
 `emitTensorFused` handles a single `Assign` whose right-hand side is a _pure element-wise_ expression, built only from numeric literals, variables, `Binary`/`Unary` ops, and calls to builtins marked `elementwise` (whose `emitC` also works on scalar arguments), and whose multi-element operands all share the target's shape. It emits one C loop that computes each output slot directly, allocating only the result tensor.
 
-`emitTensorFused` fuses one `Assign`; it does not merge a sequence of statements. Since lowering puts each tensor sub-expression in its own ANF temp, a chain like `_t1 = a * b; c = _t1 + d` would fuse as two loops with an intermediate tensor. To avoid that, `compileSpecC` runs an IR-to-IR inline pass (`codegen/inlinePass.ts`) on the program just before emit, which folds the chain into a single `c = (a * b) + d`.
+`emitTensorFused` fuses one `Assign`; it does not merge a sequence of statements. Since lowering puts each tensor sub-expression in its own ANF temp, a chain like `_t1 = a * b; c = _t1 + d` would fuse as two loops with an intermediate tensor. To avoid that, the compile pipeline runs an IR-to-IR inline pass (`codegen/inlinePass.ts`) on the program just before emit for a target with `fusesElementwise` (C), which folds the chain into a single `c = (a * b) + d`.
 
 ## Inline pass
 

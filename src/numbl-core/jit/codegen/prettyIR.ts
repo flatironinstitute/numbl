@@ -11,7 +11,7 @@
  */
 
 import type { IRExpr, IRStmt, IRFunc } from "../lowering/ir.js";
-import { BinaryOperation, UnaryOperation } from "../parser/index.js";
+import { BinaryOperation, UnaryOperation } from "../numbl/index.js";
 import { typeToString } from "../lowering/types.js";
 
 function binaryOpSym(op: BinaryOperation): string {

@@ -31,6 +31,7 @@ import {
   tensorDoubleFromDims,
   type Type,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
@@ -48,7 +49,7 @@ function requireRealInput(t: Type): NumericType {
       `'uniquetol' on complex inputs is not yet supported`
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `'uniquetol' first arg must be double or logical (got ${t.elem})`
     );
@@ -62,7 +63,7 @@ function requireScalarRealTol(t: Type): void {
       `'uniquetol' tol arg must be a real scalar (got ${typeToString(t)})`
     );
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(
       `'uniquetol' tol arg must be double or logical (got ${t.elem})`
     );

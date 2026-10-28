@@ -16,6 +16,7 @@ import {
   type DimInfo,
   type NumericType,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
@@ -31,7 +32,7 @@ function requireScalarReal(t: Type, what: string): void {
   if (t.isComplex) {
     throw new TypeError(`${what} must be real (got complex)`);
   }
-  if (t.elem !== "double" && t.elem !== "logical") {
+  if (!isDoubleOrLogical(t)) {
     throw new TypeError(`${what} must be double or logical (got ${t.elem})`);
   }
   if (!isScalar(t)) {

@@ -1,6 +1,7 @@
 /** Messages between the NumblSession host and its worker. */
 
 import type { PlotInstruction } from "../numbl-core/plotting/types.js";
+import type { ChannelMessage } from "../numbl-core/runtime/blockingChannel.js";
 
 export interface BootFile {
   path: string;
@@ -20,19 +21,13 @@ export interface BootMessage {
   maxIterations: number;
   displayResults: boolean;
   /**
-   * Shared cancellation flag (Int32[0] != 0 ⇒ cancel the running code). The
-   * worker keeps this reference and passes it to every executeCode call, so
-   * the host can interrupt a runaway run cooperatively. Only present when the
-   * page is cross-origin isolated (SharedArrayBuffer available).
+   * Cancel buffer (`createCancelBuffer`; Int32[0] != 0 cancels the running
+   * code). The worker passes it to every executeCode call, so the host can
+   * interrupt a run cooperatively, and `input()` blocks on the channel bound
+   * to it (see inputChannel.ts). Only present when the page is cross-origin
+   * isolated (SharedArrayBuffer available).
    */
   cancelSAB?: SharedArrayBuffer;
-  /**
-   * Shared channel for synchronous `input()` (stdin). The worker blocks on it
-   * (Atomics.wait) after asking the host for a line via a `request-input`
-   * message; the host writes the reply back through it (see syncInputChannel).
-   * Only present when the page is cross-origin isolated.
-   */
-  inputSAB?: SharedArrayBuffer;
 }
 
 export type ToWorker =
@@ -82,9 +77,8 @@ export type FromWorker =
       components: UihtmlComponent[];
     }
   | { type: "bootError"; message: string }
-  // Emitted by workerOnInput when running code calls `input()`: the worker has
-  // already blocked on inputSAB and is waiting for the host to write the reply.
-  | { type: "request-input"; prompt: string }
+  // Blocking-channel traffic: input() requests (see inputChannel.ts).
+  | ChannelMessage
   | { type: "htmlSourceEvent"; compId: string; name: string; dataJson: string }
   | { type: "executeResult"; id: number; result: ExecuteResult }
   | { type: "dispatchResult"; id: number; ok: boolean; message?: string }

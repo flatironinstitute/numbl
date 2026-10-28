@@ -5,8 +5,17 @@
  */
 
 import { TypeError, UnsupportedConstruct } from "../../../lowering/errors.js";
-import { isNumeric, scalarLogical } from "../../../lowering/types.js";
+import {
+  isNumeric,
+  scalarLogical,
+  type Type,
+} from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
+import { numericClassName } from "../_shared.js";
+
+function isNumericClass(t: Type): boolean {
+  return isNumeric(t) && numericClassName(t) === "double";
+}
 
 export const isnumeric: Builtin = {
   name: "isnumeric",
@@ -22,18 +31,15 @@ export const isnumeric: Builtin = {
       );
     }
     const t = argTypes[0];
-    // MATLAB / numbl: logical is NOT numeric; double / complex IS.
-    if (isNumeric(t) && t.elem !== "logical") {
-      return [scalarLogical(true)];
-    }
-    return [scalarLogical(false)];
+    // Logical is not numeric; double (real or complex) is.
+    return [scalarLogical(isNumericClass(t))];
   },
   emitC({ argTypes }) {
     const t = argTypes[0];
-    return isNumeric(t) && t.elem !== "logical" ? `1.0` : `0.0`;
+    return isNumericClass(t) ? `1.0` : `0.0`;
   },
   emitJs({ argTypes }) {
     const t = argTypes[0];
-    return isNumeric(t) && t.elem !== "logical" ? `true` : `false`;
+    return isNumericClass(t) ? `true` : `false`;
   },
 };

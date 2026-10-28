@@ -8,7 +8,7 @@
  * reject anything they cannot handle with UnsupportedConstruct.
  */
 
-import type { Span, Stmt } from "../parser/index.js";
+import type { Span, Stmt } from "../numbl/index.js";
 
 type FunctionStmt = Extract<Stmt, { type: "Function" }>;
 
@@ -624,6 +624,14 @@ export function isScalar(t: Type): boolean {
   return t.dims.every(isDimOne);
 }
 
+/** The element types the JIT compiles: double, and logical (stored as
+ *  double). Code that handles numeric values checks this (or for one of
+ *  the two) rather than excluding logical, so an element type it does not
+ *  model is rejected instead of being treated as double. */
+export function isDoubleOrLogical(t: NumericType): boolean {
+  return t.elem === "double" || t.elem === "logical";
+}
+
 export function isScalarRealDouble(t: Type): boolean {
   return isNumeric(t) && isScalar(t) && t.elem === "double" && !t.isComplex;
 }
@@ -631,12 +639,7 @@ export function isScalarRealDouble(t: Type): boolean {
 /** Scalar real numeric: double or logical. Both are stored as `double`
  *  in emitted C, so anything operating on real values accepts either. */
 export function isScalarRealNumeric(t: Type): boolean {
-  return (
-    isNumeric(t) &&
-    isScalar(t) &&
-    (t.elem === "double" || t.elem === "logical") &&
-    !t.isComplex
-  );
+  return isNumeric(t) && isScalar(t) && isDoubleOrLogical(t) && !t.isComplex;
 }
 
 /** True when any axis is statically known to be ≠ 1 (or unknown).

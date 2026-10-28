@@ -21,6 +21,7 @@ import {
   tensorDouble,
   tensorDoubleFromDims,
   type Type,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import { exactDouble } from "../_shared.js";
@@ -67,7 +68,7 @@ function planDiff(argTypes: Type[]): {
       `'diff' on complex input is not JIT-compiled`
     );
   }
-  if (input.elem !== "double" && input.elem !== "logical") {
+  if (!isDoubleOrLogical(input)) {
     throw new TypeError(
       `'diff' arg must be double or logical (got ${input.elem})`
     );

@@ -36,9 +36,15 @@ export interface CompileRequest {
 }
 
 export interface JitBackend<A = unknown> {
-  readonly lang: "js" | "c";
   /** Executor-name prefix: `jit` or `cjit`. */
   readonly prefix: string;
+  /** Compiles to native code, which `%!numbl:assert_jit c` requires at
+   *  --opt 2 (see `declinedByAssertC`). */
+  readonly native: boolean;
+  /** Decline scripts with unsuppressed bare expressions as well as
+   *  unsuppressed assignments, unless they carry `%!numbl:assert_jit c`
+   *  (see `displayGateOk` in `topLevelExecutor.ts`). */
+  readonly strictDisplayGate: boolean;
   /** Whether the backend can run in this interpreter at all. */
   available(interp: Interpreter): boolean;
   /** Whether the backend can take an input of this type (classified by
@@ -68,8 +74,7 @@ export interface JitBackend<A = unknown> {
  *  interpreter's re-run after a bail, so it may stream (see
  *  `Runtime.beginOutputCapture`). Every JIT builtin computes the same bits
  *  on a re-run (the registry rewinds the PRNG) except `toc`, which reads
- *  the clock. `activated` is every runtime snippet the module uses, the
- *  session's other specs included, which errs on the side of buffering. */
+ *  the clock. `activated` is every runtime snippet the module uses. */
 export function outputIsReproducible(
   activated: ReadonlyArray<string>
 ): boolean {
@@ -112,16 +117,16 @@ export function describeTypes(types: readonly CompilerType[]): string {
   return `(${types.map(typeToString).join(", ")})`;
 }
 
-/** `%!numbl:assert_jit c` requires C-JIT at --opt 2, so the JS backend
- *  declines such units there: they either C-JIT or fall through to the
- *  interpreter, which raises on the directive. Plain `assert_jit` only
+/** `%!numbl:assert_jit c` requires C-JIT at --opt 2, so a non-native
+ *  backend declines such units there: they either C-JIT or fall through to
+ *  the interpreter, which raises on the directive. Plain `assert_jit` only
  *  requires JS-JIT at --opt 1 and does not gate here. */
 export function declinedByAssertC(
   backend: JitBackend,
   interp: Interpreter,
   assertsCJit: boolean
 ): boolean {
-  return assertsCJit && backend.lang === "js" && interp.optimization === "2";
+  return assertsCJit && !backend.native && interp.optimization === "2";
 }
 
 /** The loop-depth gate shared by the loop and call shapes: decline while

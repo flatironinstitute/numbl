@@ -17,7 +17,7 @@
  *     `lowerIndexSlice` path.
  */
 
-import type { Expr, Span } from "../parser/index.js";
+import type { Expr, Span } from "../numbl/index.js";
 import { TypeError, UnsupportedConstruct } from "./errors.js";
 import type { IRExpr } from "./ir.js";
 import {

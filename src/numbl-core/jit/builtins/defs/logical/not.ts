@@ -23,6 +23,7 @@ import {
   scalarLogical,
   shapeNumel,
   typeToString,
+  isDoubleOrLogical,
 } from "../../../lowering/types.js";
 import type { Builtin } from "../../registry.js";
 import {
@@ -66,7 +67,7 @@ export const notBuiltin: Builtin = {
         `'~' / 'not' arg must be numeric (got ${typeToString(a)})`
       );
     }
-    if (a.elem !== "double" && a.elem !== "logical") {
+    if (!isDoubleOrLogical(a)) {
       throw new TypeError(
         `'~' / 'not' arg must be a real double or logical (got ${a.elem})`
       );
