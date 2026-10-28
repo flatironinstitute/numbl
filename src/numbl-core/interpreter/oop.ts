@@ -562,11 +562,85 @@ export function classPublicProperties(
   return out;
 }
 
+/** Methods of the built-in classes that have no classdef: those of MATLAB's
+ *  methods that numbl implements. */
+const BUILTIN_CLASS_METHODS = new Map<string, readonly string[]>([
+  [
+    MEXCEPTION_CLASS,
+    [
+      "MException",
+      "addCause",
+      "addCorrection",
+      "getReport",
+      "isequal",
+      "rethrow",
+      "throw",
+      "throwAsCaller",
+    ],
+  ],
+  [
+    "graph",
+    [
+      "addedge",
+      "conncomp",
+      "degree",
+      "graph",
+      "laplacian",
+      "numedges",
+      "numnodes",
+    ],
+  ],
+  [
+    "dictionary",
+    [
+      "dictionary",
+      "entries",
+      "insert",
+      "isConfigured",
+      "isKey",
+      "keys",
+      "length",
+      "lookup",
+      "ndims",
+      "numEntries",
+      "numel",
+      "remove",
+      "size",
+      "types",
+      "values",
+    ],
+  ],
+]);
+
 /** The methods `methods` and `ismethod` report (see
- *  `ClassTable.publicMethodNames`); undefined for an unknown class. */
+ *  `ClassTable.publicMethodNames`), including those of the built-in classes
+ *  above; a subclass of MException also has MException's methods. Undefined
+ *  for an unknown class. */
 export function classPublicMethods(
   interp: Interpreter,
   className: string
 ): Set<string> | undefined {
-  return interp.code.classes.publicMethodNames(className);
+  const classes = interp.code.classes;
+  const out = classes.publicMethodNames(className);
+  if (!out) {
+    const builtinMethods = BUILTIN_CLASS_METHODS.get(className);
+    return builtinMethods && new Set(builtinMethods);
+  }
+  if (classes.ancestors(className).includes(MEXCEPTION_CLASS))
+    for (const m of BUILTIN_CLASS_METHODS.get(MEXCEPTION_CLASS) ?? [])
+      if (m !== MEXCEPTION_CLASS) out.add(m);
+  return out;
+}
+
+/** The public static methods of a classdef class, including inherited
+ *  ones (a subset of `classPublicMethods`). */
+export function classStaticMethods(
+  interp: Interpreter,
+  className: string
+): Set<string> {
+  const classes = interp.code.classes;
+  const out = new Set<string>();
+  for (const n of classes.publicMethodNames(className) ?? [])
+    if (classes.findMethod(className, n)?.static) out.add(n);
+  return out;
 }

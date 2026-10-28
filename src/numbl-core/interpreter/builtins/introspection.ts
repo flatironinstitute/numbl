@@ -629,6 +629,7 @@ builtin({
 function referencedClass(v: RuntimeValue): string | undefined {
   if (isRuntimeClassInstance(v) || isRuntimeClassInstanceArray(v))
     return v.className;
+  if (isRuntimeDictionary(v)) return "dictionary";
   if (isRuntimeChar(v) || isRuntimeString(v)) return toString(v);
   return undefined;
 }
@@ -677,8 +678,21 @@ builtin({
   },
 });
 
+/** `names` in columns, filled down each column first, as MATLAB lists
+ *  methods; each entry is padded to `width`. */
+function nameColumns(names: string[], width: number): string {
+  const perLine = Math.max(1, Math.floor(80 / width));
+  const rows = Math.ceil(names.length / perLine);
+  let out = "";
+  for (let r = 0; r < rows; r++) {
+    for (let i = r; i < names.length; i += rows) out += names[i].padEnd(width);
+    out += "\n";
+  }
+  return out;
+}
+
 // methods(obj) / methods('ClassName'): the public, non-hidden methods,
-// sorted; listed in columns without an output.
+// sorted; listed in columns without an output, static methods separately.
 builtin({
   name: "methods",
   nargin: 1,
@@ -692,18 +706,23 @@ builtin({
         names.map(n => RTV.char(n)),
         [names.length, 1]
       );
-    if (!found) return undefined;
+    if (!found || !className) return undefined;
+    const statics = scope.classStaticMethods(className);
     const width = Math.max(...names.map(n => n.length)) + 2;
-    const perLine = Math.max(1, Math.floor(80 / width));
-    const lines: string[] = [];
-    for (let i = 0; i < names.length; i += perLine)
-      lines.push(
-        names
-          .slice(i, i + perLine)
-          .map(n => n.padEnd(width))
-          .join("")
-      );
-    rt.output(`\nMethods for class ${className}:\n\n${lines.join("\n")}\n\n`);
+    const regular = names.filter(n => !statics.has(n));
+    let text =
+      `\nMethods for class ${className}:\n\n` +
+      nameColumns(regular, width) +
+      "\n";
+    if (statics.size > 0)
+      text +=
+        "Static methods:\n\n" +
+        nameColumns(
+          names.filter(n => statics.has(n)),
+          width
+        ) +
+        "\n";
+    rt.output(text);
     return undefined;
   },
 });
