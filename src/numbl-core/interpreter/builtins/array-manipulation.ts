@@ -38,7 +38,7 @@ import {
   stringArrayValue,
   structArrayValue,
 } from "../../runtime/types.js";
-import { builtin, type BuiltinSpec } from "./builtin.js";
+import { builtin, type PlainBuiltinSpec } from "./builtin.js";
 import {
   structCat,
   cellCatAlongDim,
@@ -191,7 +191,7 @@ function rejectComplex(v: RuntimeValue, id: string, message: string): void {
 /** Register a shape builtin that also accepts struct arrays: the numeric
  *  operation runs on the linear indices of the elements, and the result
  *  picks the elements at those indices. */
-function structAwareBuiltin(spec: BuiltinSpec): void {
+function structAwareBuiltin(spec: PlainBuiltinSpec): void {
   const apply = spec.apply;
   builtin({
     ...spec,
