@@ -129,7 +129,12 @@ export function numblToJit(v: RuntimeValue, paramType?: Type): unknown {
  *  and anything else untagged is rejected (the executor then bails and the
  *  interpreter, which has full class semantics, re-runs the call). */
 export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
-  if (typeof v === "number") return v;
+  // Logical values ride as plain numbers (and untagged-logical tensors) in
+  // emitted JS, e.g. a logical parameter returned unchanged; the declared
+  // output type restores the class.
+  const logical =
+    retType?.kind === "Numeric" && (retType as NumericType).elem === "logical";
+  if (typeof v === "number") return logical ? v !== 0 : v;
   if (typeof v === "boolean") return v;
   if (typeof v === "string") return v;
   if (typeof v !== "object" || v === null) {
@@ -148,7 +153,12 @@ export function jitToNumbl(v: unknown, retType?: Type): RuntimeValue {
     if (!tagged.shape || !tagged.data) {
       throw new Error(`jitToNumbl: tensor missing shape/data`);
     }
-    return new RuntimeTensor(tagged.data, [...tagged.shape], tagged.imag);
+    return new RuntimeTensor(
+      tagged.data,
+      [...tagged.shape],
+      tagged.imag,
+      logical || undefined
+    );
   }
   if (tagged.jitTag === "char") {
     if (typeof tagged.value !== "string") {

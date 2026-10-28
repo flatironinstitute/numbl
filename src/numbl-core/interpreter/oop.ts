@@ -15,6 +15,7 @@ import {
   isRuntimeClassInstanceArray,
   RuntimeClassInstance,
 } from "../runtime/types.js";
+import { applyPropertyDefaults } from "./propertyValidation.js";
 import { RTV } from "../runtime/constructors.js";
 import { ensureRuntimeValue } from "../runtime/runtimeHelpers.js";
 import { RuntimeError, CancellationError } from "../runtime/error.js";
@@ -273,6 +274,7 @@ function propertyDefaults(
       evalPropertyDefault(interp, className, info, propName, expr)
     );
   }
+  applyPropertyDefaults(interp, classInfo, className, defaults);
   return { propertyNames, defaults };
 }
 

@@ -3,7 +3,14 @@
  */
 
 import { Token } from "../lexer/index.js";
-import { Stmt, Expr, Attr, ClassMember, MethodSignature } from "./types.js";
+import {
+  Stmt,
+  Expr,
+  Attr,
+  ClassMember,
+  MethodSignature,
+  ValidationSpec,
+} from "./types.js";
 import { FunctionParser } from "./FunctionParser.js";
 
 export class ClassParser extends FunctionParser {
@@ -76,6 +83,7 @@ export class ClassParser extends FunctionParser {
           attributes: attrs,
           names: props.map(p => p.name),
           defaultValues: props.map(p => p.defaultValue),
+          validations: props.map(p => p.validation),
         });
       } else if (tok === Token.Methods) {
         this.pos++;
@@ -254,8 +262,13 @@ export class ClassParser extends FunctionParser {
   private parsePropertiesNamesBlock(): {
     name: string;
     defaultValue: Expr | null;
+    validation: ValidationSpec | null;
   }[] {
-    const props: { name: string; defaultValue: Expr | null }[] = [];
+    const props: {
+      name: string;
+      defaultValue: Expr | null;
+      validation: ValidationSpec | null;
+    }[] = [];
     while (this.peekToken() !== undefined) {
       if (this.peekToken() === Token.End) break;
       if (
@@ -268,52 +281,24 @@ export class ClassParser extends FunctionParser {
       if (this.peekToken() === Token.Ident) {
         const name = this.expectIdent();
 
-        // Optional MATLAB property validation syntax (R2019b+):
+        // Optional property validation (R2019b+):
         //   PropName (dims) Type {validators} = default
-        // numbl does not enforce size/type/validators, but it must still
-        // consume them — otherwise a bare type annotation gets mis-read as a
-        // second property (and the real property loses its default) and a
-        // dims/validators clause raises a hard syntax error that drops the
-        // whole class. Parse and discard them; keep name + default.
-
-        // (dims) — e.g. (1,1) or (:,2)
-        if (this.peekToken() === Token.LParen) {
-          this.skipBalanced(Token.LParen, Token.RParen);
-        }
-        // Type — an identifier on the same line, possibly dotted (pkg.Class)
-        if (this.peekToken() === Token.Ident) {
-          this.next();
-          while (this.consume(Token.Dot)) {
-            this.expectIdent();
-          }
-        }
-        // {validators} — e.g. {mustBePositive, mustBeFinite}
-        if (this.peekToken() === Token.LBrace) {
-          this.skipBalanced(Token.LBrace, Token.RBrace);
-        }
+        const spec = this.parseValidationSpec();
+        const validation =
+          spec.dimensions || spec.className || spec.validators.length > 0
+            ? spec
+            : null;
 
         let defaultValue: Expr | null = null;
         if (this.consume(Token.Assign)) {
           defaultValue = this.parseExpr();
         }
-        props.push({ name, defaultValue });
+        props.push({ name, defaultValue, validation });
       } else {
         break;
       }
     }
     return props;
-  }
-
-  /** Consume a balanced `open ... close` run (handling nesting). Assumes the
-   *  next token is `open`; no-op otherwise. */
-  private skipBalanced(open: Token, close: Token): void {
-    if (!this.consume(open)) return;
-    let depth = 1;
-    while (this.peekToken() !== undefined && depth > 0) {
-      const tok = this.next()!;
-      if (tok.token === open) depth++;
-      else if (tok.token === close) depth--;
-    }
   }
 
   private parseOptionalAttrList(): Attr[] {

@@ -302,6 +302,13 @@ export class Runtime {
   // on the interpreter). Set by Interpreter.installRuntimeCallbacks().
   public callerScope: (() => object) | null = null;
 
+  /** Convert and validate a value assigned to a class property against
+   *  the property's size/class/validator declaration (set by the
+   *  interpreter). */
+  public validateProperty:
+    | ((className: string, name: string, value: RuntimeValue) => RuntimeValue)
+    | null = null;
+
   // Resolves a function called by name (`dispatch`) from the running code's
   // scope; with `targetClassName`, the method of that class. Set by
   // Interpreter.installRuntimeCallbacks(). Returns a callable taking
@@ -1006,30 +1013,6 @@ export class Runtime {
   }
   public makeCell(elems: unknown[], shape: number[]): RuntimeCell {
     return _makeCell(elems, shape);
-  }
-  /**
-   * Build a struct from trailing name-value pair arguments.
-   * @param nvArgs  The rest-parameter array of trailing name-value pairs
-   * @param defaults  An object mapping field names to default values
-   */
-  public buildNameValueStruct(
-    nvArgs: unknown[],
-    defaults: Record<string, unknown>
-  ): RuntimeStruct {
-    const fields = new Map<string, RuntimeValue>();
-    // Apply defaults first
-    for (const [k, v] of Object.entries(defaults)) {
-      fields.set(k, ensureRuntimeValue(v));
-    }
-    // Override with passed name-value pairs
-    for (let i = 0; i < nvArgs.length; i += 2) {
-      const rv = ensureRuntimeValue(nvArgs[i]);
-      const key =
-        isRuntimeChar(rv) || isRuntimeString(rv) ? rstr(rv) : String(rv);
-      const val = ensureRuntimeValue(nvArgs[i + 1]);
-      fields.set(key, val);
-    }
-    return RTV.struct(fields);
   }
   public horzcat(elems: unknown[]): unknown {
     // Flatten first, then check for class instances

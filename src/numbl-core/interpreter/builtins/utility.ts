@@ -37,6 +37,9 @@ function valuesEqualSimple(a: RuntimeValue, b: RuntimeValue): boolean {
   // char) — so `isequal(patchtype.tri, 1)` and `isequal(x, 'tri')` hold.
   if (isEnumInstance(a)) return enumScalarEquals(a, b);
   if (isEnumInstance(b)) return enumScalarEquals(b, a);
+  // A logical scalar compares by value with any numeric (a 1x1 tensor too).
+  if (typeof a === "boolean") return valuesEqualSimple(a ? 1 : 0, b);
+  if (typeof b === "boolean") return valuesEqualSimple(a, b ? 1 : 0);
   {
     const aText = textValue(a);
     const bText = textValue(b);

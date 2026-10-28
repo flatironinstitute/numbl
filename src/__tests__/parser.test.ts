@@ -912,6 +912,32 @@ describe("SyntaxError", () => {
 
 // ── Arguments blocks ──────────────────────────────────────────────────
 
+/** Size spec entries as text: a number literal, ':' or an identifier. */
+function dimsText(dims: Expr[] | null): string[] | null {
+  return (
+    dims?.map(d =>
+      d.type === "Colon"
+        ? ":"
+        : d.type === "Number"
+          ? d.value
+          : d.type === "Ident"
+            ? d.name
+            : "?"
+    ) ?? null
+  );
+}
+
+/** Validator function names (bare names and calls). */
+function validatorNames(validators: Expr[]): string[] {
+  return validators.map(v =>
+    v.type === "Ident" || v.type === "FuncCall"
+      ? v.name
+      : v.type === "Index" && v.base.type === "Ident"
+        ? v.base.name
+        : "?"
+  );
+}
+
 describe("parseMFile - arguments blocks", () => {
   it("parses function with arguments block", () => {
     const stmt = parseFirst(
@@ -950,7 +976,7 @@ describe("parseMFile - arguments blocks", () => {
     if (stmt.type === "Function") {
       const entry = stmt.argumentsBlocks[0].entries[0];
       expect(entry.className).toBe("matlab.io.xml.dom.Element");
-      expect(entry.dimensions).toEqual(["1", "1"]);
+      expect(dimsText(entry.dimensions)).toEqual(["1", "1"]);
     }
   });
 
@@ -961,7 +987,13 @@ describe("parseMFile - arguments blocks", () => {
     if (stmt.type === "Function") {
       const entry = stmt.argumentsBlocks[0].entries[0];
       expect(entry.name).toBe("opts.Theme");
-      expect(entry.validators).toContain("mustBeMember");
+      expect(validatorNames(entry.validators)).toEqual(["mustBeMember"]);
+      const v = entry.validators[0];
+      const args =
+        v.type === "FuncCall" ? v.args : v.type === "Index" ? v.indices : [];
+      expect(args).toHaveLength(2);
+      expect(args[0].type).toBe("Member");
+      expect(args[1].type).toBe("Tensor");
       expect(entry.defaultValue).not.toBeNull();
     }
   });
@@ -1009,7 +1041,7 @@ describe("parseMFile - arguments blocks", () => {
     );
     if (stmt.type === "Function") {
       const entry = stmt.argumentsBlocks[0].entries[0];
-      expect(entry.dimensions).toEqual(["1", ":"]);
+      expect(dimsText(entry.dimensions)).toEqual(["1", ":"]);
       expect(entry.className).toBe("double");
     }
   });
@@ -1019,7 +1051,10 @@ describe("parseMFile - arguments blocks", () => {
       "function foo(x)\n  arguments\n    x (m,n)\n  end\nend"
     );
     if (stmt.type === "Function") {
-      expect(stmt.argumentsBlocks[0].entries[0].dimensions).toEqual(["m", "n"]);
+      expect(dimsText(stmt.argumentsBlocks[0].entries[0].dimensions)).toEqual([
+        "m",
+        "n",
+      ]);
     }
   });
 
@@ -1029,7 +1064,10 @@ describe("parseMFile - arguments blocks", () => {
     );
     if (stmt.type === "Function") {
       const entry = stmt.argumentsBlocks[0].entries[0];
-      expect(entry.validators).toEqual(["mustBeNumeric", "mustBePositive"]);
+      expect(validatorNames(entry.validators)).toEqual([
+        "mustBeNumeric",
+        "mustBePositive",
+      ]);
     }
   });
 
@@ -1039,10 +1077,45 @@ describe("parseMFile - arguments blocks", () => {
     );
     if (stmt.type === "Function") {
       const entry = stmt.argumentsBlocks[0].entries[0];
-      expect(entry.dimensions).toEqual(["1", ":"]);
+      expect(dimsText(entry.dimensions)).toEqual(["1", ":"]);
       expect(entry.className).toBe("double");
-      expect(entry.validators).toEqual(["mustBePositive"]);
+      expect(validatorNames(entry.validators)).toEqual(["mustBePositive"]);
       expect(entry.defaultValue).not.toBeNull();
+    }
+  });
+
+  it("parses validators with arguments and nested braces", () => {
+    const stmt = parseFirst(
+      "function foo(x, y)\n  arguments\n    x {mustBeInRange(x,0,10), mustBeMember(x,{1,2})}\n    y (1,1) {mustBeLessThan(y, x)} = 0\n  end\nend"
+    );
+    if (stmt.type === "Function") {
+      const [x, y] = stmt.argumentsBlocks[0].entries;
+      expect(validatorNames(x.validators)).toEqual([
+        "mustBeInRange",
+        "mustBeMember",
+      ]);
+      expect(validatorNames(y.validators)).toEqual(["mustBeLessThan"]);
+      expect(dimsText(y.dimensions)).toEqual(["1", "1"]);
+      expect(y.defaultValue?.type).toBe("Number");
+    }
+  });
+
+  it("parses property size, class and validators", () => {
+    const stmt = parseFirst(
+      "classdef C\n  properties\n    a (1,:) double {mustBePositive} = 1\n    b\n    c string\n  end\nend"
+    );
+    if (stmt.type === "ClassDef") {
+      const props = stmt.members[0];
+      if (props.type === "Properties") {
+        expect(props.names).toEqual(["a", "b", "c"]);
+        const [a, b, c] = props.validations;
+        expect(dimsText(a!.dimensions)).toEqual(["1", ":"]);
+        expect(a!.className).toBe("double");
+        expect(validatorNames(a!.validators)).toEqual(["mustBePositive"]);
+        expect(b).toBeNull();
+        expect(c!.className).toBe("string");
+        expect(props.defaultValues[0]?.type).toBe("Number");
+      }
     }
   });
 

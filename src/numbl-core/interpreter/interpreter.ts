@@ -35,6 +35,7 @@ import {
   functionBodyFor,
 } from "../resolution/index.js";
 
+import { validatePropertyValue } from "./propertyValidation.js";
 import { Environment, type ControlSignal } from "./types.js";
 import { CallFrame } from "./callFrame.js";
 import { Registry } from "../executors/registry.js";
@@ -262,6 +263,9 @@ export class Interpreter {
     this.rt.constantPropertyValue = prop => constantPropertyValue(this, prop);
 
     this.rt.callerScope = () => callerScope(this);
+
+    this.rt.validateProperty = (className, name, value) =>
+      validatePropertyValue(this, className, name, value);
   }
 
   /** False when a call `obj.name(...)` on an instance of `className` is not

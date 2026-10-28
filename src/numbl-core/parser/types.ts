@@ -117,6 +117,8 @@ export type ClassMember =
       attributes: Attr[];
       names: string[];
       defaultValues: (Expr | null)[];
+      /** Per-property size/class/validator constraints (null when none). */
+      validations: (ValidationSpec | null)[];
     }
   | {
       type: "Methods";
@@ -143,11 +145,23 @@ export type ArgumentsBlockKind =
   | "Repeating"
   | "OutputRepeating";
 
-export interface ArgumentEntry {
-  name: string;
-  dimensions: string[] | null;
+/** The size, class and validator constraints of an `arguments` entry or a
+ *  classdef property: `name (dims) class {validators}`. */
+export interface ValidationSpec {
+  /** One expression per dimension (a `Colon` expr for `:`), or null when no
+   *  size is given. */
+  dimensions: Expr[] | null;
+  /** Possibly dotted class name (`double`, `pkg.Cls`), or null. */
   className: string | null;
-  validators: string[];
+  /** Validator functions in order: a bare name (`Ident`) is called with the
+   *  value; a call expression (`mustBeInRange(x,0,10)`) is evaluated with
+   *  the value bound to the argument's name. */
+  validators: Expr[];
+}
+
+export interface ArgumentEntry extends ValidationSpec {
+  /** Argument name, or `opts.Name` for a name-value argument. */
+  name: string;
   defaultValue: Expr | null;
 }
 

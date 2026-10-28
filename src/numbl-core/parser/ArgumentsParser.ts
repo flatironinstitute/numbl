@@ -1,5 +1,11 @@
 import { Token } from "../lexer/index.js";
-import { ArgumentEntry, ArgumentsBlock, ArgumentsBlockKind } from "./types.js";
+import {
+  ArgumentEntry,
+  ArgumentsBlock,
+  ArgumentsBlockKind,
+  Expr,
+  ValidationSpec,
+} from "./types.js";
 import { ControlFlowParser } from "./ControlFlowParser.js";
 
 export class ArgumentsParser extends ControlFlowParser {
@@ -80,21 +86,36 @@ export class ArgumentsParser extends ControlFlowParser {
   }
 
   private parseArgumentEntry(): ArgumentEntry {
-    // Parse argument name (possibly "struct.field" for name-value args)
+    // Argument name, or "struct.field" for a name-value argument.
     let name = this.expectIdent();
     if (this.consume(Token.Dot)) {
       const field = this.expectIdent();
       name = `${name}.${field}`;
     }
+    const spec = this.parseValidationSpec();
 
-    // Parse optional dimensions: (1,:) or (m,n,p) etc.
-    let dimensions: string[] | null = null;
+    // Optional default value: = expr
+    let defaultValue = null;
+    if (this.consume(Token.Assign)) {
+      defaultValue = this.parseExpr();
+    }
+    this.consumeLineEnd();
+    return { name, ...spec, defaultValue };
+  }
+
+  /**
+   * Parse the constraints that follow an argument or property name:
+   * `(dims) className {validators}`, each part optional. Shared by
+   * `arguments` blocks and classdef `properties` blocks.
+   */
+  protected parseValidationSpec(): ValidationSpec {
+    let dimensions: Expr[] | null = null;
     if (this.peekToken() === Token.LParen) {
       dimensions = this.parseArgDimensions();
     }
 
-    // Parse optional class name (an identifier on the same line, not { or =).
-    // May be namespace-qualified, e.g. `matlab.io.xml.dom.Element`.
+    // Class name: an identifier on the same line, possibly dotted
+    // (`matlab.io.xml.dom.Element`).
     let className: string | null = null;
     if (this.peekToken() === Token.Ident) {
       className = this.next()!.lexeme;
@@ -104,94 +125,44 @@ export class ArgumentsParser extends ControlFlowParser {
       }
     }
 
-    // Parse optional validators: {mustBeNumeric, ...}
-    let validators: string[] = [];
+    // Validators: {mustBeNumeric, mustBeInRange(x,0,10)}, parsed as a cell
+    // literal whose elements are the validator expressions.
+    const validators: Expr[] = [];
     if (this.peekToken() === Token.LBrace) {
-      validators = this.parseArgValidators();
+      const cell = this.parseExpr();
+      if (cell.type !== "Cell") {
+        throw this.error("expected a validator list '{...}'");
+      }
+      for (const row of cell.rows) validators.push(...row);
     }
-
-    // Parse optional default value: = expr
-    let defaultValue = null;
-    if (this.consume(Token.Assign)) {
-      defaultValue = this.parseExpr();
-    }
-
-    // Consume end of line
-    this.consumeLineEnd();
-
-    return { name, dimensions, className, validators, defaultValue };
+    return { dimensions, className, validators };
   }
 
-  /**
-   * Parse dimension list: (1,:) → ["1", ":"]
-   */
-  private parseArgDimensions(): string[] {
+  /** Parse a size specification: `(1,:)` → [Number 1, Colon]. */
+  private parseArgDimensions(): Expr[] {
     this.consume(Token.LParen);
-    const dims: string[] = [];
-
-    while (
-      this.peekToken() !== Token.RParen &&
-      this.peekToken() !== undefined
-    ) {
-      if (this.consume(Token.Comma)) continue;
-      if (this.peekToken() === Token.Colon) {
-        this.next();
-        dims.push(":");
-      } else if (
-        this.peekToken() === Token.Integer ||
-        this.peekToken() === Token.Float
-      ) {
-        dims.push(this.next()!.lexeme);
-      } else if (this.peekToken() === Token.Ident) {
-        // Allow named dimension like 'n' (uncommon, treat as string)
-        dims.push(this.next()!.lexeme);
-      } else {
-        break;
-      }
-    }
-
-    this.consume(Token.RParen);
-    return dims;
-  }
-
-  /**
-   * Parse validator list: {mustBeNumeric, mustBePositive}. Validators may be
-   * full function calls with arguments, e.g.
-   * `{mustBeMember(x,["a","b"]), mustBeInRange(x,0,7)}`. The validator bodies
-   * are not enforced at runtime, so we capture the top-level validator name
-   * tokens and skip past any nested `(...)`, `[...]`, `{...}` so parsing
-   * resumes correctly at the default value (`= expr`) or end of line.
-   */
-  private parseArgValidators(): string[] {
-    this.consume(Token.LBrace);
-    const validators: string[] = [];
-    let depth = 0; // nesting depth inside the validator braces
-
-    while (this.peekToken() !== undefined) {
-      const tok = this.peekToken();
-      if (depth === 0 && tok === Token.RBrace) break;
-
+    const dims: Expr[] = [];
+    if (this.consume(Token.RParen)) return dims;
+    while (true) {
+      const tok = this.peek();
+      const after = this.tokens[this.pos + 1]?.token;
       if (
-        tok === Token.LParen ||
-        tok === Token.LBracket ||
-        tok === Token.LBrace
+        tok?.token === Token.Colon &&
+        (after === Token.Comma || after === Token.RParen)
       ) {
-        depth++;
-      } else if (
-        tok === Token.RParen ||
-        tok === Token.RBracket ||
-        tok === Token.RBrace
-      ) {
-        depth--;
-      } else if (depth === 0 && tok === Token.Ident) {
-        // Top-level identifier is a validator function name.
-        validators.push(this.peek()!.lexeme);
+        this.next();
+        dims.push({
+          type: "Colon",
+          span: this.spanFrom(tok.position, tok.end),
+        });
+      } else {
+        dims.push(this.parseExpr());
       }
-      this.next();
+      if (this.consume(Token.Comma)) continue;
+      if (this.consume(Token.RParen)) break;
+      throw this.error("expected ',' or ')' in size specification");
     }
-
-    this.consume(Token.RBrace);
-    return validators;
+    return dims;
   }
 
   /**
