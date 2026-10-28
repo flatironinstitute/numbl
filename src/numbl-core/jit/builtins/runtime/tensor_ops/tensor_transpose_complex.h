@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_transpose_complex deps=jit_tensor_t,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: complex-tensor non-conjugate transpose for
  * 2-D inputs. Sibling of `jit_tensor_transpose` — same shape
  * permutation, but copies BOTH lanes (no conjugation, the `.'`

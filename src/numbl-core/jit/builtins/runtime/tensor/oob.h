@@ -1,3 +1,4 @@
+/* @snippet name=jit_oob_abort deps=jit_raise,jit_tensor_t */
 /* JIT runtime helpers: index bounds checks for tensor access.
  *
  * numbl raises an indexing RuntimeError (runtime/indexPlan.ts) on any

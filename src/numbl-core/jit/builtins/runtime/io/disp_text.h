@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_text deps=jit_text_view_t,jit_host_output */
 /* JIT runtime helper: disp on a text view.
  *
  * Mirrors numbl's `displayValue` for string / char — the raw bytes

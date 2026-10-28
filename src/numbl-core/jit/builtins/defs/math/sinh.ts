@@ -1,5 +1,5 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
-import { cSinh } from "./_complex_fold.js";
+import { jit_csinh } from "../../runtime/snippets.gen.js";
 
 // sinh is odd and monotonic increasing, so it preserves the input's
 // sign. Entire function: real input → real output (no domain miss).
@@ -8,5 +8,5 @@ export const sinh = defineUnaryRealMath({
   cFnReal: "sinh",
   jsFn: Math.sinh,
   signRule: t => t.sign,
-  complex: { cFnComplex: "jit_csinh", jsFnComplex: cSinh },
+  complex: { cFnComplex: "jit_csinh", jsFnComplex: jit_csinh },
 });

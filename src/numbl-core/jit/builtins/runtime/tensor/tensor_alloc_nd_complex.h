@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_alloc_nd_complex deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helper: allocate an uninitialized complex tensor with
  * an arbitrary N-D shape. Sibling of `jit_tensor_alloc_nd` that
  * allocates BOTH lanes. The returned tensor owns both buffers.

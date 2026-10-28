@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_tensor_inline deps=jit_tensor_t,jit_format_double,jit_host_output */
 /* Inline-display sibling of `jit_disp_tensor`. Identical body except
  * the final '\n' is suppressed — used by per-shape cell `_disp`
  * helpers so a tensor slot inside `{...}` renders the same way numbl's

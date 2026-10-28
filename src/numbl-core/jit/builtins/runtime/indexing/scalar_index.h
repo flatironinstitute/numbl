@@ -1,3 +1,4 @@
+/* @snippet name=jit_scalar_index */
 /* JS-only snippet (paired with `scalar_index.js`).
  *
  * The C path has its own bounds-checking helpers (`jit_idx_lin`,

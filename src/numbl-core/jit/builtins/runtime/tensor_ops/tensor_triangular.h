@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_triangular deps=jit_tensor_t,jit_tensor_alloc,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: `triu` / `tril` — extract upper / lower
  * triangular part of a 2-D matrix around the k-th diagonal. Mirrors
  * numbl's `triPart` in `interpreter/builtins/array-extras.ts`.

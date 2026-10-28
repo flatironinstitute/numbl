@@ -1,3 +1,4 @@
+/* @snippet name=jit_dot_real deps=jit_tensor_t,jit_alloc,jit_cscalar,jit_tensor_alloc_nd_complex */
 /* JIT runtime helpers: dot product on real and complex tensors.
  *
  *   jit_dot_real(a, b) → double

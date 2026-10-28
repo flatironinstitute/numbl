@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_logical_real deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helpers: elementwise logical ops on tensors.
  *
  * Same allocate-and-fill pattern as tensor_unary_real_math.h, but the

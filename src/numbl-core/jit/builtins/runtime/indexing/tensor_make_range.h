@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_make_range deps=jit_tensor_t,jit_tensor_alloc_nd,jit_loop_count,jit_range_value */
 /* JIT runtime helper: build a freshly-owned 1×N row tensor for a
  * `start : step : end` range used as a value (outside an index slot
  * and outside a for-loop iterable).

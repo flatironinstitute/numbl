@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_from_matrix deps=jit_tensor_alloc */
 /* mtoc runtime helper: build a rows×cols real tensor from a flat
  * column-major data pointer. Codegen reorders the literal's
  * row-major source cells to column-major when it builds the

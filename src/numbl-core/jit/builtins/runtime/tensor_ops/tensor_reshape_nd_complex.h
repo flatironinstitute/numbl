@@ -1,3 +1,4 @@
+/* @snippet name=jit_reshape_nd_complex deps=jit_tensor_t,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: reshape a complex tensor to an N-D shape.
  *
  * Sibling of `jit_reshape_nd`. Same `-1` auto-infer slot, same

@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_elemwise_real_fn deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helpers: elementwise binary functions on real
  * tensors (`mod`, `rem`, `atan2`, `hypot`, `power`, and two-argument
  * `max`/`min`). Sibling of

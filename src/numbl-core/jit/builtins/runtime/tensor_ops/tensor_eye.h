@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_eye deps=jit_tensor_alloc */
 /* JIT runtime helper: build a real 2-D identity matrix.
  *
  * Two entry points share one snippet:

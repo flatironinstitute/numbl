@@ -1,3 +1,4 @@
+/* @snippet name=jit_char_tensor_copy deps=jit_char_tensor_t */
 /* JIT runtime helper: deep-copy a char tensor into a fresh heap buffer.
  *
  * Returns an owned copy of `src`. Used for `c = d;` where `d` is a

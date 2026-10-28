@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_struct */
 /* JS-only stub. The C path generates per-typedef `<name>_disp`
  * functions via `emitNamedTypedef`, so it never activates this
  * snippet; the JS path uses the `.js` sibling for a generic

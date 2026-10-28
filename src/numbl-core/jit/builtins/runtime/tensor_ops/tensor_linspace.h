@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_linspace deps=jit_tensor_t,jit_tensor_alloc */
 /* JIT runtime helper: build a 1×n row tensor of n linearly-spaced
  * values from `a` to `b` inclusive. Matches numbl's `linspace` byte-
  * for-byte:

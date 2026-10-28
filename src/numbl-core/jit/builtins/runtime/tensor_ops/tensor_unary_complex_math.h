@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_unary_complex_math deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex,jit_cscalar */
 /* JIT runtime helpers: elementwise unary math on complex tensors.
  *
  * Sibling of `tensor_unary_real_math.h`. Each helper allocates a

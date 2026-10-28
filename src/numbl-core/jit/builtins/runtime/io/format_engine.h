@@ -1,3 +1,4 @@
+/* @snippet name=jit_format_engine deps=jit_text_view_t,jit_tensor_t */
 /* JIT runtime: numbl-compatible format engine shared by fprintf and
  * sprintf.
  *

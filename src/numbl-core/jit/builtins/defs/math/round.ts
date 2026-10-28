@@ -1,5 +1,5 @@
 import { defineUnaryRealMath, roundingSignRule } from "./_unary_real.js";
-import { cRound } from "./_complex_fold.js";
+import { jit_cround } from "../../runtime/snippets.gen.js";
 
 /** MATLAB-style `round`: half-away-from-zero (NOT JS `Math.round`, which
  *  rounds half toward +Inf). The compile-time JS fold uses the same
@@ -24,5 +24,5 @@ export const round = defineUnaryRealMath({
   // expression and avoids snippet activation overhead.)
   jsExpr: arg => `(Math.sign(${arg}) * Math.round(Math.abs(${arg})))`,
   signRule: roundingSignRule(true, true),
-  complex: { cFnComplex: "jit_cround", jsFnComplex: cRound },
+  complex: { cFnComplex: "jit_cround", jsFnComplex: jit_cround },
 });

@@ -1,5 +1,5 @@
 import { defineUnaryRealMath, roundingSignRule } from "./_unary_real.js";
-import { cFix } from "./_complex_fold.js";
+import { jit_cfix } from "../../runtime/snippets.gen.js";
 
 /** `fix(x)` truncates toward zero (C99 `trunc`). Complex inputs truncate
  *  each component independently. Both `positive` and `negative` inputs
@@ -11,5 +11,5 @@ export const fix = defineUnaryRealMath({
   // JS has no `Math.fix`; the textual form for emitJs uses `Math.trunc`.
   jsExpr: arg => `Math.trunc(${arg})`,
   signRule: roundingSignRule(true, true),
-  complex: { cFnComplex: "jit_cfix", jsFnComplex: cFix },
+  complex: { cFnComplex: "jit_cfix", jsFnComplex: jit_cfix },
 });

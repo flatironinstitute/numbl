@@ -1,3 +1,4 @@
+/* @snippet name=jit_fprintf deps=jit_format_engine,jit_host_output */
 /* JIT runtime helper: fprintf — write formatted text to stdout.
  *
  * Matches numbl's `fprintf` semantics

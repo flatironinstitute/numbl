@@ -1,5 +1,5 @@
 import { defineUnaryRealMath, roundingSignRule } from "./_unary_real.js";
-import { cCeil } from "./_complex_fold.js";
+import { jit_cceil } from "../../runtime/snippets.gen.js";
 
 /** `ceil(x)` rounds toward +Inf. Complex inputs round each component
  *  independently. Only `negative` inputs may land on 0
@@ -9,5 +9,5 @@ export const ceil = defineUnaryRealMath({
   cFnReal: "ceil",
   jsFn: Math.ceil,
   signRule: roundingSignRule(false, true),
-  complex: { cFnComplex: "jit_cceil", jsFnComplex: cCeil },
+  complex: { cFnComplex: "jit_cceil", jsFnComplex: jit_cceil },
 });

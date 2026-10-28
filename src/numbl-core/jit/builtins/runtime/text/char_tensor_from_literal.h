@@ -1,3 +1,4 @@
+/* @snippet name=jit_char_tensor_from_literal deps=jit_char_tensor_t */
 /* JIT runtime helper: build a non-owning char tensor from a C string
  * literal in .rodata.
  *

@@ -1,3 +1,4 @@
+/* @snippet name=jit_assert_scalar_fmt deps=jit_error_fmt */
 /* JIT runtime helpers: `assert(cond, msg)` with a non-literal message and
  * `assert(cond, [id,] fmt, args...)`: raise a MATLAB error (`raise.h`)
  * when `cond` is not MATLAB-truthy (non-zero and not NaN).

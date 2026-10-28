@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_diff deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd */
 /* JIT runtime helper: first-order difference `diff(A)` / `diff(A, 1, dim)`.
  *
  * Mirrors numbl's `diffOnce` (helpers/reduction/cumulative.ts): a

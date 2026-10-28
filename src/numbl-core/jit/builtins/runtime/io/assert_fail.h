@@ -1,3 +1,4 @@
+/* @snippet name=jit_assert_scalar */
 /* JIT runtime helper: scalar `assert(cond)` / `assert(cond, msg)` with a
  * literal message. Tests `cond` for MATLAB truthiness (non-zero and not
  * NaN) and raises a MATLAB error (`raise.h`) on failure.

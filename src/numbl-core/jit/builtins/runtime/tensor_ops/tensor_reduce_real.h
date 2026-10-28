@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_reduce_real deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd */
 /* JIT runtime helpers: real-tensor reductions.
  *
  * One macro per op generates two helpers:

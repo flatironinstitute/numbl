@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_elemwise_real deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helpers: elementwise binary + unary ops on real
  * tensors.
  *

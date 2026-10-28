@@ -1,3 +1,4 @@
+/* @snippet name=jit_char_tensor_free deps=jit_char_tensor_t */
 /* JIT runtime helper: release a char tensor's backing buffer and reset
  * the struct to the empty state.
  *

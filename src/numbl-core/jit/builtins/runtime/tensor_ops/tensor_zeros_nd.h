@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_zeros_nd deps=jit_tensor_alloc_nd */
 /* JIT runtime helper: build a real N-D tensor filled with zeros.
  *
  * Allocates via `jit_tensor_alloc_nd`, then zero-fills the `real`

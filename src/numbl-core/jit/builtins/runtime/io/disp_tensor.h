@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_tensor deps=jit_tensor_t,jit_format_double,jit_host_output */
 /* mtoc runtime helper: disp(t) for a multi-element real tensor.
  *
  * Mirrors numbl's `format2DSlice` for the 2-D path and numbl's

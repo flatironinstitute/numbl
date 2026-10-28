@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_flip deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: `flip(t, dimIdx)` — return a freshly-owned
  * tensor with `t.real` mirrored along axis `dimIdx` (0-based).
  *

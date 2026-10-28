@@ -1,3 +1,4 @@
+/* @snippet name=jit_grow_bail deps=jit_tensor_t,jit_oob_abort */
 /* JIT runtime: grow-aware indexed-store bounds checks.
  *
  * MATLAB indexed STORES grow the array when the index exceeds the

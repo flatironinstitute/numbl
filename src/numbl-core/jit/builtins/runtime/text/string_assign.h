@@ -1,3 +1,4 @@
+/* @snippet name=jit_string_assign deps=jit_string_t,jit_string_free */
 /* JIT runtime helper: consume-and-replace assignment for strings.
  *
  * Frees `*lhs`'s current backing (only if owned — `jit_string_free`

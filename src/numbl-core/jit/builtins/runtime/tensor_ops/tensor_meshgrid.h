@@ -1,3 +1,4 @@
+/* @snippet name=jit_meshgrid deps=jit_tensor_t,jit_tensor_alloc,jit_tensor_assign */
 /* JIT runtime helper: MATLAB-style coordinate grid (`meshgrid`).
  *
  * Three entry points:

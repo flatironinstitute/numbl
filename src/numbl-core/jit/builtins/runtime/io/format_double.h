@@ -1,3 +1,4 @@
+/* @snippet name=jit_format_double */
 /* mtoc runtime helper: format a double the same way numbl's
  * `formatNumber` does, into a caller-provided buffer.
  *

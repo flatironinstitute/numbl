@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_var deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd */
 /* JIT runtime helpers: variance / standard deviation reductions.
  *
  * Two-pass per fiber (mean, then sum of squared deviations), matching

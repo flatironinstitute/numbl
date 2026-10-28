@@ -1,3 +1,4 @@
+/* @snippet name=jit_char_tensor_assign deps=jit_char_tensor_t,jit_char_tensor_free */
 /* JIT runtime helper: consume-and-replace assignment for char tensors.
  *
  * Frees `*lhs`'s current backing (only if owned — `jit_char_tensor_free`

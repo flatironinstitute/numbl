@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_diag deps=jit_tensor_t,jit_tensor_alloc,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: real-tensor `diag` — construct from a vector
  * (placing it on the k-th diagonal of a square matrix) or extract the
  * k-th diagonal from a 2-D matrix. Mirrors numbl's `diag` tensor

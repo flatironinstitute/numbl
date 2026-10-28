@@ -12,6 +12,19 @@
  * structure is purely for organization. Basenames are globally
  * unique across the runtime tree (enforced here).
  *
+ * It also emits the snippet table (`SNIPPET_DEFS`, `SNIPPET_ALIASES`)
+ * that `codegen/runtime.ts` activates from. Each `.h` declares its entry
+ * in a required first-line header, stripped from the emitted C:
+ *
+ *   /* @snippet name=jit_disp_double deps=jit_format_double,jit_host_output *\/
+ *
+ *   name=     the name emitted code activates (`useRuntime("jit_...")`)
+ *   deps=     snippets the C body needs, activated (emitted) before it
+ *   aliases=  other names that activate the same snippet
+ *
+ * A `.js` twin's dependencies are not declared: the `.h` twins of the
+ * files it imports are appended to `deps`.
+ *
  * .js snippet contract:
  *   - A valid ES module (so builtin defs can
  *     `import { foo } from "./snippets.gen.js"`).
@@ -156,6 +169,51 @@ function assertUniqueBasenames(paths: ReadonlyArray<string>): void {
   }
 }
 
+interface SnippetHeader {
+  name: string;
+  deps: string[];
+  aliases: string[];
+}
+
+const HEADER_RE = /^\/\* @snippet ([^\n]*?) \*\/\r?\n/;
+
+/** Parse and strip the `@snippet` header (the required first line) of a
+ *  `.h` snippet. */
+function parseHeader(
+  src: string,
+  file: string
+): { header: SnippetHeader; body: string } {
+  const m = src.match(HEADER_RE);
+  if (!m) {
+    throw new Error(
+      `${file}: missing snippet header; the first line must be ` +
+        "`/* @snippet name=jit_<name> [deps=a,b] [aliases=c,d] */`"
+    );
+  }
+  const header: SnippetHeader = { name: "", deps: [], aliases: [] };
+  for (const field of m[1].trim().split(/\s+/)) {
+    const kv = field.match(
+      /^(name|deps|aliases)=([A-Za-z0-9_]+(?:,[A-Za-z0-9_]+)*)$/
+    );
+    if (!kv) throw new Error(`${file}: bad snippet header field '${field}'`);
+    if (kv[1] === "name") header.name = kv[2];
+    else header[kv[1] as "deps" | "aliases"] = kv[2].split(",");
+  }
+  if (!/^[A-Za-z0-9_]+$/.test(header.name)) {
+    throw new Error(`${file}: snippet header needs one name=`);
+  }
+  return { header, body: src.slice(m[0].length) };
+}
+
+/** Basenames a `.js` snippet imports, deduplicated and sorted. */
+function jsImportBasenames(src: string): string[] {
+  const imports = new Set<string>();
+  for (const m of src.matchAll(/^\s*import\s+.*?from\s+["']([^"']+)["']/gm)) {
+    imports.add(basename(m[1]));
+  }
+  return Array.from(imports).sort();
+}
+
 function generate(): { js: string; c: string } {
   const allPaths = walkRuntime(runtimeDir);
 
@@ -166,39 +224,75 @@ function generate(): { js: string; c: string } {
   assertUniqueBasenames([...hPaths, ...jsPaths]);
   assertJsSnippetsHaveHTwin(hPaths, jsPaths);
 
-  const cEntries = hPaths.map(p => {
-    const body = readFileSync(join(runtimeDir, p), "utf8");
-    const key = basename(p);
-    return `  ${JSON.stringify(key)}: ${JSON.stringify(body)},`;
+  // Every `.h` carries a header naming its snippet; the C body is the
+  // file without that line.
+  const parsed = hPaths.map(p => {
+    const { header, body } = parseHeader(
+      readFileSync(join(runtimeDir, p), "utf8"),
+      p
+    );
+    return { file: basename(p), header, body };
   });
+  const cEntries = parsed.map(
+    ({ file, body }) => `  ${JSON.stringify(file)}: ${JSON.stringify(body)},`
+  );
 
-  const jsEntries = jsPaths.map(p => {
+  // Names and aliases must be unique; deps must name a declared snippet.
+  const fileToName = new Map<string, string>();
+  const known = new Set<string>();
+  const declare = (name: string, file: string): void => {
+    if (known.has(name)) {
+      throw new Error(`${file}: snippet name '${name}' is declared twice`);
+    }
+    known.add(name);
+  };
+  for (const { file, header } of parsed) {
+    declare(header.name, file);
+    for (const a of header.aliases) declare(a, file);
+    fileToName.set(file, header.name);
+  }
+
+  const jsSources = new Map<string, string>();
+  for (const p of jsPaths) {
     const body = readFileSync(join(runtimeDir, p), "utf8");
     assertRelativeJsImport(body, p);
-    const stripped = stripJsExportsAndImports(body);
-    const key = basename(p);
-    return `  ${JSON.stringify(key)}: ${JSON.stringify(stripped)},`;
-  });
+    jsSources.set(basename(p), body);
+  }
 
-  // Per-file list of imported snippet basenames (e.g.
-  // `tensor_elemwise_real.js` → `["tensor_alloc_nd.js"]`). The codegen
-  // path turns each entry into the corresponding registered snippet
-  // name (`jit_<basename without ext>`) so activation pulls JS deps
-  // in alongside the C deps declared in the registry.
-  const jsImportEntries = jsPaths.map(p => {
-    const body = readFileSync(join(runtimeDir, p), "utf8");
-    const imports = new Set<string>();
-    for (const m of body.matchAll(
-      /^\s*import\s+.*?from\s+["']([^"']+)["']/gm
-    )) {
-      imports.add(basename(m[1]));
+  // The snippet table. A snippet's `deps` are the header's `deps`
+  // followed by the snippets its paired `.js` imports (each import's `.h`
+  // twin), in the order the activator pulls them in.
+  const tableEntries: string[] = [];
+  const aliasEntries: string[] = [];
+  for (const { file, header } of parsed) {
+    for (const d of header.deps) {
+      if (!known.has(d)) {
+        throw new Error(`${file}: unknown snippet dependency '${d}'`);
+      }
     }
-    const key = basename(p);
-    const list = Array.from(imports)
-      .sort()
-      .map(b => JSON.stringify(b))
-      .join(", ");
-    return `  ${JSON.stringify(key)}: [${list}],`;
+    const deps = [...header.deps];
+    const jsSrc = jsSources.get(file.replace(/\.h$/, ".js"));
+    for (const imp of jsSrc === undefined ? [] : jsImportBasenames(jsSrc)) {
+      const depName = fileToName.get(imp.replace(/\.js$/, ".h"));
+      if (depName === undefined) {
+        throw new Error(`${file}: its .js imports '${imp}', which has no .h`);
+      }
+      if (!deps.includes(depName)) deps.push(depName);
+    }
+    tableEntries.push(
+      `  { name: ${JSON.stringify(header.name)}, ` +
+        `file: ${JSON.stringify(file)}, deps: ${JSON.stringify(deps)} },`
+    );
+    for (const a of header.aliases) {
+      aliasEntries.push(
+        `  ${JSON.stringify(a)}: ${JSON.stringify(header.name)},`
+      );
+    }
+  }
+
+  const jsEntries = jsPaths.map(p => {
+    const stripped = stripJsExportsAndImports(jsSources.get(basename(p))!);
+    return `  ${JSON.stringify(basename(p))}: ${JSON.stringify(stripped)},`;
   });
 
   // Re-export every named export from each .js snippet via its
@@ -227,13 +321,24 @@ function generate(): { js: string; c: string } {
     ...jsEntries,
     "};",
     "",
-    "/** Per-JS-snippet list of basenames it imports from sibling JS",
-    " *  snippets (e.g. `tensor_elemwise_real.js` → ",
-    " *  `['tensor_alloc_nd.js']`). The codegen path converts each entry",
-    " *  to a registered snippet name (`jit_<basename without .js>`) so",
-    " *  cross-snippet JS deps activate alongside the explicit C deps. */",
-    "export const JS_IMPORTS: Record<string, string[]> = {",
-    ...jsImportEntries,
+    "/** One runtime snippet: the name emitted code activates, the `.h`",
+    " *  file it is loaded from (a `.js` twin shares its stem), and the",
+    " *  snippets activated before it: the header's `deps`, then the `.h`",
+    " *  twins of the `.js` imports. */",
+    "export interface SnippetDef {",
+    "  name: string;",
+    "  file: string;",
+    "  deps: string[];",
+    "}",
+    "",
+    "/** Every runtime snippet, from the `@snippet` header of each `.h`. */",
+    "export const SNIPPET_DEFS: SnippetDef[] = [",
+    ...tableEntries,
+    "];",
+    "",
+    "/** Extra activation names (header `aliases=`) → snippet name. */",
+    "export const SNIPPET_ALIASES: Record<string, string> = {",
+    ...aliasEntries,
     "};",
     "",
   ].join("\n");

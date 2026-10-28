@@ -1,3 +1,4 @@
+/* @snippet name=jit_cell_make aliases=jit_cell_empty,jit_format_cell */
 /* JIT cell-array runtime — placeholder.
  *
  * Cell helpers in the C-JIT are emitted per-shape via

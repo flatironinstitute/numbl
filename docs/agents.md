@@ -97,7 +97,7 @@ See `predicates.ts`, `logical.ts`, `complex.ts`, and `hash.ts` for converted exa
 
 New builtins should include inline `help`. See [adding-builtin-help.md](adding-builtin-help.md) for guidelines.
 
-To make a builtin JIT-compilable, add a matching definition to the JIT compiler's own builtin set under `src/numbl-core/jit/builtins/defs/` (with `emitJs`/`emitC` hooks); a source builtin with no JIT counterpart simply runs on the interpreter.
+To make a builtin JIT-compilable, add a matching definition to the JIT compiler's own builtin set under `src/numbl-core/jit/builtins/defs/` (with `emitJs`/`emitC` hooks; see [Adding a JIT builtin](developer_reference/jit/ir-codegen.md#adding-a-jit-builtin)); a source builtin with no JIT counterpart simply runs on the interpreter.
 
 Runtime value helpers: `RTV.num()`, `RTV.tensor(data, shape)`, `RTV.complex()`, `RTV.logical()`. Use `toNumber(arg)` to extract a scalar. Check types with `isRuntimeNumber()`, `isRuntimeTensor()`, `isRuntimeChar()`, etc.
 

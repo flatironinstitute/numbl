@@ -1,3 +1,4 @@
+/* @snippet name=jit_loop_count */
 /* JIT runtime helper: compute the iteration count for a numbl-style
  * `start : step : end` range as a non-negative `long`.
  *

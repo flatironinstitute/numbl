@@ -1,3 +1,4 @@
+/* @snippet name=jit_disp_double deps=jit_format_double,jit_host_output */
 /* mtoc runtime helper: disp(x) for a real-scalar double.
  *
  * Mirrors numbl's `formatNumber` (src/numbl-core/runtime/display.ts)

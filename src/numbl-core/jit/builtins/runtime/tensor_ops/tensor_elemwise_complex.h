@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_elemwise_complex deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd_complex,jit_cscalar,jit_cdiv */
 /* JIT runtime helpers: elementwise binary + unary ops on complex
  * tensors. Sibling of `tensor_elemwise_real.h` — same `_tt` /
  * `_ts` / `_st` / `_bcast_tt` naming, the kernel walks both lanes,

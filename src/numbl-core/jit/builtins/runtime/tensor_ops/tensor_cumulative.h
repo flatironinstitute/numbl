@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_cumulative deps=jit_tensor_t,jit_alloc,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex */
 /* JIT runtime helpers: cumulative (prefix-scan) ops on tensors.
  *
  * One macro per op generates a `_dim` helper that scans along the

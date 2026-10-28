@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_cat deps=jit_tensor_t,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: `cat(dim, A, B, ...)` — concatenate N tensors
  * along axis `dim` (1-based, like MATLAB / numbl). dim==1 means
  * vertical (rows), dim==2 means horizontal (cols), dim>=3 grows a new

@@ -1,3 +1,4 @@
+/* @snippet name=jit_char_tensor_t */
 /* JIT char-tensor runtime: the C representation for every numbl char
  * array (single-quoted) value the JIT emits.
  *

@@ -1,3 +1,4 @@
+/* @snippet name=jit_string_empty deps=jit_string_t */
 /* JIT runtime helper: zero-initialized empty string handle.
  *
  * Used at every predeclaration site so a string variable starts in a

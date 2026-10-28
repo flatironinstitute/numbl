@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_free deps=jit_tensor_t */
 /* mtoc runtime helper: release a tensor's backing buffers and reset
  * the struct to the empty/zero state.
  *

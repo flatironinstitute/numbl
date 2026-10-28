@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_zeros_square deps=jit_tensor_zeros_nd */
 /* JIT runtime helper: build an n×n real tensor filled with zeros.
  *
  * Single-eval companion to `jit_tensor_zeros_nd` for the MATLAB

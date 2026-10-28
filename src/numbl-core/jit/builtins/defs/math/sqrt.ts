@@ -1,6 +1,6 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
 import { signIsNonneg, signIsPositive } from "../../../lowering/types.js";
-import { cSqrt } from "./_complex_fold.js";
+import { jit_csqrt } from "../../runtime/snippets.gen.js";
 
 /** `sqrt(x)`: real input that's provably non-negative stays on the
  *  real path; everything else lifts to the complex path
@@ -20,7 +20,7 @@ export const sqrt = defineUnaryRealMath({
   realDomainOk: t => signIsNonneg(t.sign),
   complex: {
     cFnComplex: "jit_csqrt",
-    jsFnComplex: cSqrt,
+    jsFnComplex: jit_csqrt,
     liftOnDomainMiss: true,
   },
 });

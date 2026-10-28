@@ -1,3 +1,4 @@
+/* @snippet name=jit_range_value */
 /* JIT runtime helper: i-th element of a numbl-style `start:step:end`
  * range, with snap-to-end on the last element.
  *

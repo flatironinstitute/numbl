@@ -1,3 +1,4 @@
+/* @snippet name=jit_sort_real deps=jit_tensor_t,jit_alloc,jit_tensor_assign,jit_tensor_alloc_nd,jit_tensor_alloc_nd_complex */
 /* JIT runtime helper: stable sort on a tensor.
  *
  *   jit_sort_real(a, descending)

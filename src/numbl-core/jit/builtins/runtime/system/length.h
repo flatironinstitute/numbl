@@ -1,3 +1,4 @@
+/* @snippet name=jit_length deps=jit_tensor_t */
 /* mtoc runtime helper: MATLAB's `length(t)` on a multi-element tensor.
  *
  * Returns the size of the largest axis as a double, or 0.0 if any axis

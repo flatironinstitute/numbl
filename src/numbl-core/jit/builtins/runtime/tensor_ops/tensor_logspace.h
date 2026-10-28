@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_logspace deps=jit_tensor_t,jit_tensor_alloc */
 /* JIT runtime helper: build a 1×n row tensor of n logarithmically-
  * spaced values from 10^a to 10^b. Matches numbl's `logspace`:
  *

@@ -1,3 +1,4 @@
+/* @snippet name=jit_tensor_unary_real_math deps=jit_tensor_t,jit_alloc */
 /* JIT runtime helpers: elementwise unary math on real tensors.
  *
  * Allocate-and-fill pattern matching `tensor_elemwise_real.h`. The

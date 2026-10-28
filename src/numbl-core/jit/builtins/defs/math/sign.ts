@@ -1,5 +1,5 @@
 import { defineUnaryRealMath } from "./_unary_real.js";
-import { cSign } from "./_complex_fold.js";
+import { jit_csign } from "../../runtime/snippets.gen.js";
 
 /** `sign(x)`:
  *   - Real input ∈ {-1, 0, 1}; the result's sign mirrors the input's.
@@ -10,5 +10,5 @@ export const signBuiltin = defineUnaryRealMath({
   cFnReal: "jit_signum",
   jsFn: Math.sign,
   signRule: t => t.sign,
-  complex: { cFnComplex: "jit_csign", jsFnComplex: cSign },
+  complex: { cFnComplex: "jit_csign", jsFnComplex: jit_csign },
 });

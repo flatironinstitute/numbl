@@ -1,3 +1,4 @@
+/* @snippet name=jit_string_copy deps=jit_string_t */
 /* JIT runtime helper: deep-copy a string handle into a fresh
  * heap buffer.
  *
